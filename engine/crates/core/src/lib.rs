@@ -1,4 +1,5 @@
-//! Data contracts for the simulator. No physics lives here.
+//! Data contracts for the simulator.
+//! `Junction::VT` is the one thermal voltage, shared by the value rule and the solver.
 
 pub mod diagnostic;
 pub mod finite;

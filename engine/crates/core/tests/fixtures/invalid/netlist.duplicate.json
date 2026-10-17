@@ -9,13 +9,15 @@
       "name": "r1",
       "kind": "resistor",
       "pins": { "a": "vin", "b": "gnd" },
-      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" }
+      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
     },
     {
       "name": "r1",
       "kind": "resistor",
       "pins": { "a": "vin", "b": "gnd" },
-      "resistance": { "value": 2000.0, "unit": "ohm", "source": "user" }
+      "resistance": { "value": 2000.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
     }
   ]
 }

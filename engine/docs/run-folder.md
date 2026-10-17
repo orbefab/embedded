@@ -22,7 +22,7 @@ Each file is pretty JSON with a two-space indent and a trailing newline. `manife
   "input": {
     "file": "netlist.json",
     "sha256": "<lowercase hex sha256 of the input bytes>",
-    "bytes": 830
+    "bytes": 902
   },
   "seed": 0,
   "created_at": "2026-10-17T06:38:31Z"
@@ -31,7 +31,7 @@ Each file is pretty JSON with a two-space indent and a trailing newline. `manife
 
 `engine_version` is the workspace package version. The current value is `0.1.0`.
 
-`input.file` is the name inside the folder. `input.sha256` and `input.bytes` describe the input bytes. For `examples/divider/netlist.json` the length is 830.
+`input.file` is the name inside the folder. `input.sha256` and `input.bytes` describe the input bytes. For `examples/divider/netlist.json` the length is 902.
 
 `seed` is the netlist seed. When parsing fails, `seed` is `null`.
 

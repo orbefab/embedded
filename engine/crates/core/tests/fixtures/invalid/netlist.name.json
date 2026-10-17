@@ -9,7 +9,8 @@
       "name": "net",
       "kind": "resistor",
       "pins": { "a": "gnd", "b": "gnd" },
-      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" }
+      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
     }
   ]
 }

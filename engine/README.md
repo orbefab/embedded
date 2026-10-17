@@ -2,7 +2,7 @@
 
 sim-engine reads a resolved netlist and writes a deterministic run folder.
 
-The input is JSON. The folder holds `manifest.json`, `netlist.json`, `diagnostics.json`, and `observations.json`. This tree solves a resistor and a DC voltage source at one operating point.
+The input is JSON. The folder holds `manifest.json`, `netlist.json`, `diagnostics.json`, and `observations.json`. This tree solves resistors, DC voltage sources, diodes, and LEDs at one operating point, and reports parts run past their ratings.
 
 ## Build
 
@@ -57,4 +57,4 @@ The process exits with one of these codes.
 
 Stdout for `run` repeats `diagnostics` in the same order as `diagnostics.json`.
 
-The schema is [docs/netlist.md](docs/netlist.md). The folder is [docs/run-folder.md](docs/run-folder.md). The codes are [docs/diagnostics.md](docs/diagnostics.md).
+The schema is [docs/netlist.md](docs/netlist.md). The folder is [docs/run-folder.md](docs/run-folder.md). The codes are [docs/diagnostics.md](docs/diagnostics.md). The ngspice references are [docs/reference.md](docs/reference.md).

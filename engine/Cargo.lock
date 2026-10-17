@@ -286,6 +286,7 @@ dependencies = [
  "clap",
  "serde",
  "serde_json",
+ "sha2",
  "sim-circuit",
  "sim-core",
 ]

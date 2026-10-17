@@ -18,6 +18,8 @@ pub enum Severity {
 pub enum ValueRule {
     Positive,
     FiniteReciprocal,
+    /// `n*VT` is not normal, or `vcrit` is not finite and positive.
+    FiniteJunction,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -75,6 +77,38 @@ pub enum Diagnostic {
         unknowns: usize,
         limit: usize,
     },
+    /// Newton found no operating point.
+    SolverConvergence {
+        at: Time,
+        /// The junction that failed worst in the last iteration, else the unknown.
+        unknown: Ref,
+        /// Newton iterations over every attempt.
+        iterations: u32,
+        /// Smallest extra node conductance that converged, in siemens.
+        gmin: Option<f64>,
+        /// Largest source scale that converged, from 0 to 1.
+        source_scale: f64,
+    },
+    /// A rated current went over its limit.
+    RatingCurrent(Excursion),
+    /// A rated power went over its limit.
+    RatingPower(Excursion),
+}
+
+/// One rated quantity over its limit, merged over the whole run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Excursion {
+    /// `#<part>.i` or `#<part>.p`, which is also the observation key.
+    pub quantity: Ref,
+    /// The rating, in SI units.
+    pub limit: f64,
+    /// Largest magnitude seen.
+    pub peak: f64,
+    pub peak_at: Time,
+    /// First sample over the limit.
+    pub first: Time,
+    /// Total time over the limit. `None` for an operating point, which has no duration.
+    pub over_ps: Option<u64>,
 }
 
 impl Diagnostic {
@@ -93,12 +127,17 @@ impl Diagnostic {
             Diagnostic::SolverSingular { .. } => "solver.singular",
             Diagnostic::SolverNonFinite { .. } => "solver.nonfinite",
             Diagnostic::SolverTooLarge { .. } => "solver.too_large",
+            Diagnostic::SolverConvergence { .. } => "solver.convergence",
+            Diagnostic::RatingCurrent(_) => "rating.current",
+            Diagnostic::RatingPower(_) => "rating.power",
         }
     }
 
     pub fn severity(&self) -> Severity {
         match self {
-            Diagnostic::NetFloating { .. } => Severity::Warning,
+            Diagnostic::NetFloating { .. }
+            | Diagnostic::RatingCurrent(_)
+            | Diagnostic::RatingPower(_) => Severity::Warning,
             Diagnostic::NetlistSyntax { .. }
             | Diagnostic::NetlistVersion { .. }
             | Diagnostic::NetlistName { .. }
@@ -110,7 +149,8 @@ impl Diagnostic {
             | Diagnostic::NetlistGround { .. }
             | Diagnostic::SolverSingular { .. }
             | Diagnostic::SolverNonFinite { .. }
-            | Diagnostic::SolverTooLarge { .. } => Severity::Error,
+            | Diagnostic::SolverTooLarge { .. }
+            | Diagnostic::SolverConvergence { .. } => Severity::Error,
         }
     }
 
@@ -118,7 +158,11 @@ impl Diagnostic {
         match self {
             Diagnostic::SolverSingular { at, .. }
             | Diagnostic::SolverNonFinite { at, .. }
-            | Diagnostic::SolverTooLarge { at, .. } => Some(*at),
+            | Diagnostic::SolverTooLarge { at, .. }
+            | Diagnostic::SolverConvergence { at, .. } => Some(*at),
+            Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
+                Some(excursion.first)
+            }
             Diagnostic::NetlistSyntax { .. }
             | Diagnostic::NetlistVersion { .. }
             | Diagnostic::NetlistName { .. }
@@ -145,8 +189,12 @@ impl Diagnostic {
             | Diagnostic::NetlistValue { part, .. } => vec![part.clone()],
             Diagnostic::NetFloating { net } => vec![net.clone()],
             Diagnostic::SolverSingular { unknown, .. }
-            | Diagnostic::SolverNonFinite { unknown, .. } => vec![unknown.clone()],
+            | Diagnostic::SolverNonFinite { unknown, .. }
+            | Diagnostic::SolverConvergence { unknown, .. } => vec![unknown.clone()],
             Diagnostic::SolverTooLarge { .. } => Vec::new(),
+            Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
+                vec![excursion.quantity.clone()]
+            }
         }
     }
 
@@ -191,12 +239,20 @@ impl Diagnostic {
                 field,
                 value,
                 rule,
-            } => match rule {
-                ValueRule::Positive => format!("{part} {field} is {value}; it must be positive"),
-                ValueRule::FiniteReciprocal => {
-                    format!("{part} {field} is {value}; its reciprocal must be finite")
+            } => {
+                let value = number_text(*value);
+                match rule {
+                    ValueRule::Positive => {
+                        format!("{part} {field} is {value}; it must be positive")
+                    }
+                    ValueRule::FiniteReciprocal => {
+                        format!("{part} {field} is {value}; its reciprocal must be finite")
+                    }
+                    ValueRule::FiniteJunction => format!(
+                        "{part} {field} is {value}; n*VT must be normal, and vcrit must be finite and positive"
+                    ),
                 }
-            },
+            }
             Diagnostic::NetlistGround { net } => format!("ground `{net}` is not in `nets`"),
             Diagnostic::NetFloating { net } => format!("{net} has no DC path to ground"),
             Diagnostic::SolverSingular { unknown, .. } => format!("singular matrix at {unknown}"),
@@ -206,6 +262,16 @@ impl Diagnostic {
             Diagnostic::SolverTooLarge {
                 unknowns, limit, ..
             } => format!("{unknowns} unknowns exceeds the dense solver limit of {limit}"),
+            Diagnostic::SolverConvergence {
+                unknown,
+                iterations,
+                source_scale,
+                ..
+            } => format!(
+                "Newton did not converge at {unknown} after {iterations} iterations; source stepping reached {source_scale}"
+            ),
+            Diagnostic::RatingCurrent(excursion) => over_rating(excursion, "A"),
+            Diagnostic::RatingPower(excursion) => over_rating(excursion, "W"),
         }
     }
 
@@ -261,8 +327,41 @@ impl Diagnostic {
             Diagnostic::SolverTooLarge {
                 unknowns, limit, ..
             } => serde_json::json!({ "limit": limit, "unknowns": unknowns }),
+            Diagnostic::SolverConvergence {
+                iterations,
+                gmin,
+                source_scale,
+                ..
+            } => serde_json::json!({
+                "gmin": gmin,
+                "iterations": iterations,
+                "source_scale": source_scale,
+            }),
+            Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
+                serde_json::json!({
+                    "limit": excursion.limit,
+                    "over_ps": excursion.over_ps,
+                    "peak": excursion.peak,
+                    "peak_ps": excursion.peak_at,
+                })
+            }
         }
     }
+}
+
+/// The same characters `data.value` uses. `Display` for a subnormal is hundreds of digits.
+fn number_text(value: f64) -> String {
+    serde_json::to_string(&value).expect("a netlist value is a finite number")
+}
+
+fn over_rating(excursion: &Excursion, unit: &str) -> String {
+    let Excursion {
+        quantity,
+        limit,
+        peak,
+        ..
+    } = excursion;
+    format!("{quantity} peaks at {peak} {unit}, over its {limit} {unit} rating")
 }
 
 fn name_problem(problem: NameError) -> &'static str {
@@ -369,6 +468,29 @@ mod tests {
                 unknowns: 4097,
                 limit: 4096,
             },
+            Diagnostic::SolverConvergence {
+                at: Time::ZERO,
+                unknown: part("led1"),
+                iterations: 1310,
+                gmin: None,
+                source_scale: 0.75,
+            },
+            Diagnostic::RatingCurrent(Excursion {
+                quantity: "#led1.i".parse().unwrap(),
+                limit: 0.03,
+                peak: 0.5,
+                peak_at: Time::ZERO,
+                first: Time::ZERO,
+                over_ps: None,
+            }),
+            Diagnostic::RatingPower(Excursion {
+                quantity: "#r1.p".parse().unwrap(),
+                limit: 0.25,
+                peak: 3.0,
+                peak_at: Time::from_ps(7),
+                first: Time::from_ps(5),
+                over_ps: Some(4),
+            }),
         ]
     }
 
@@ -399,7 +521,7 @@ mod tests {
             assert!(is_code(code), "{code}");
             assert!(seen.insert(code), "duplicate code {code}");
         }
-        assert_eq!(seen.len(), 13);
+        assert_eq!(seen.len(), 16);
     }
 
     #[test]
@@ -422,13 +544,19 @@ mod tests {
                 "solver.singular",
                 "solver.nonfinite",
                 "solver.too_large",
+                "solver.convergence",
+                "rating.current",
+                "rating.power",
             ]
         );
         for diagnostic in &found {
-            let warning = diagnostic.code() == "net.floating";
+            let code = diagnostic.code();
+            let warning = code == "net.floating" || code.starts_with("rating.");
             assert_eq!(diagnostic.severity() == Severity::Warning, warning);
-            if diagnostic.code().starts_with("solver.") {
+            if code.starts_with("solver.") || code == "rating.current" {
                 assert_eq!(diagnostic.at(), Some(Time::ZERO));
+            } else if code == "rating.power" {
+                assert_eq!(diagnostic.at(), Some(Time::from_ps(5)));
             } else {
                 assert_eq!(diagnostic.at(), None);
             }
@@ -450,6 +578,27 @@ mod tests {
         assert!(
             too_large.contains(r#""data":{"limit":4096,"unknowns":4097}"#),
             "{too_large}"
+        );
+        assert_eq!(found[13].refs(), vec!["#led1".parse().unwrap()]);
+        let convergence = serde_json::to_string(&found[13]).unwrap();
+        assert!(
+            convergence.contains(r#""data":{"gmin":null,"iterations":1310,"source_scale":0.75}"#),
+            "{convergence}"
+        );
+        assert_eq!(found[14].refs(), vec!["#led1.i".parse().unwrap()]);
+        let current = serde_json::to_string(&found[14]).unwrap();
+        assert!(
+            current.contains(
+                r##""message":"#led1.i peaks at 0.5 A, over its 0.03 A rating","data":{"limit":0.03,"over_ps":null,"peak":0.5,"peak_ps":0}"##
+            ),
+            "{current}"
+        );
+        let power = serde_json::to_string(&found[15]).unwrap();
+        assert!(
+            power.contains(
+                r##""refs":["#r1.p"],"t_ps":5,"message":"#r1.p peaks at 3 W, over its 0.25 W rating","data":{"limit":0.25,"over_ps":4,"peak":3.0,"peak_ps":7}"##
+            ),
+            "{power}"
         );
     }
 
@@ -473,5 +622,30 @@ mod tests {
             r##""message":"#r1 resistance is in `kohm`; it must be in `ohm` (SI base units)""##
         ));
         assert!(text.contains(r#""data":{"expected":"ohm","field":"resistance","found":"kohm"}"#));
+    }
+
+    #[test]
+    fn a_value_message_uses_the_same_characters_as_data_value() {
+        for rule in [
+            ValueRule::Positive,
+            ValueRule::FiniteReciprocal,
+            ValueRule::FiniteJunction,
+        ] {
+            let diagnostic = Diagnostic::NetlistValue {
+                part: part("d1"),
+                field: "saturation_current",
+                value: 1e-308,
+                rule,
+            };
+            let text = serde_json::to_string(&diagnostic).unwrap();
+            let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let number = doc["data"]["value"].to_string();
+            let message = doc["message"].as_str().unwrap();
+            assert!(
+                message.contains(&format!("is {number};")),
+                "{rule:?} {message} vs {number}"
+            );
+            assert!(!message.contains("000000"), "{rule:?} {message}");
+        }
     }
 }

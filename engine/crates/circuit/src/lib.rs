@@ -1,7 +1,10 @@
 mod dense;
 mod element;
+mod ladder;
 mod mna;
+mod newton;
 mod op;
+mod ratings;
 mod topology;
 
 use sim_core::netlist::{Analysis, Netlist};
@@ -13,10 +16,7 @@ pub fn simulate(netlist: &Netlist) -> Results {
     let mut diagnostics = topology::floating_nets(netlist);
     let mut observations = Observations::default();
     match netlist.analysis() {
-        Analysis::Op => match op::solve(netlist) {
-            Ok(point) => observations.op = Some(point),
-            Err(diagnostic) => diagnostics.push(diagnostic),
-        },
+        Analysis::Op => observations.op = op::run(netlist, &mut diagnostics),
     }
     Results::new(observations, diagnostics)
 }

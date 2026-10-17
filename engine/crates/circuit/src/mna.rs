@@ -1,8 +1,11 @@
+use std::ops::Range;
+
 use sim_core::name::Ref;
 use sim_core::netlist::{NetId, Netlist, PartId};
 
 use crate::dense::{Matrix, Singular};
 use crate::element;
+use crate::newton::{Conditions, Iterate};
 
 pub(crate) const GMIN: f64 = 1e-12;
 
@@ -10,18 +13,30 @@ pub(crate) const GMIN: f64 = 1e-12;
 pub(crate) struct Unknowns {
     pub internal_nodes: usize,
     pub branches: usize,
+    /// Junction voltages Newton limits. Slots in `Iterate::junctions`, not matrix rows.
+    pub junctions: usize,
+}
+
+/// Where one part's unknowns start.
+struct PartRows {
+    internal: usize,
+    branch: usize,
+    junctions: Range<usize>,
 }
 
 pub(crate) struct Layout {
     net_rows: usize,
-    part_rows: Vec<(usize, usize)>,
+    part_rows: Vec<PartRows>,
+    /// Ascending.
     node_rows: Vec<usize>,
     size: usize,
+    junctions: usize,
 }
 
 impl Layout {
     pub(crate) fn new(netlist: &Netlist) -> Layout {
         let mut row = 0;
+        let mut junction = 0;
         let mut node_rows = Vec::new();
         let net_rows = netlist.nets().len().saturating_sub(1);
         for _ in 0..net_rows {
@@ -31,25 +46,45 @@ impl Layout {
         let mut part_rows = Vec::with_capacity(netlist.parts().len());
         for (_, part) in netlist.parts() {
             let extra = element::unknowns(&part.model);
-            let internal_at = row;
+            let internal = row;
             for _ in 0..extra.internal_nodes {
                 node_rows.push(row);
                 row += 1;
             }
-            let branch_at = row;
+            let branch = row;
             row += extra.branches;
-            part_rows.push((internal_at, branch_at));
+            let junctions = junction..junction + extra.junctions;
+            junction = junctions.end;
+            part_rows.push(PartRows {
+                internal,
+                branch,
+                junctions,
+            });
         }
         Layout {
             net_rows,
             part_rows,
             node_rows,
             size: row,
+            junctions: junction,
         }
     }
 
     pub(crate) fn size(&self) -> usize {
         self.size
+    }
+
+    pub(crate) fn junctions(&self) -> usize {
+        self.junctions
+    }
+
+    pub(crate) fn junction_slots(&self, part: PartId) -> Range<usize> {
+        self.part_rows[part.index()].junctions.clone()
+    }
+
+    /// Net and internal rows hold volts. Branch rows hold amperes.
+    pub(crate) fn is_node_row(&self, row: usize) -> bool {
+        self.node_rows.binary_search(&row).is_ok()
     }
 
     pub(crate) fn describe(&self, netlist: &Netlist, row: usize) -> Ref {
@@ -62,14 +97,31 @@ impl Layout {
             return Ref::Net(name.clone());
         }
         for (id, part) in netlist.parts() {
-            let (internal_at, branch_at) = self.part_rows[id.index()];
+            let rows = &self.part_rows[id.index()];
             let extra = element::unknowns(&part.model);
-            let end = branch_at + extra.branches;
-            if row >= internal_at && row < end {
+            let end = rows.branch + extra.branches;
+            if row >= rows.internal && row < end {
                 return Ref::Part(part.name.clone());
             }
         }
         panic!("row {row} is outside this layout");
+    }
+}
+
+/// A matrix row, or ground, which has none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Node {
+    Ground,
+    Row(usize),
+}
+
+impl From<NetId> for Node {
+    fn from(net: NetId) -> Node {
+        if net.is_ground() {
+            Node::Ground
+        } else {
+            Node::Row(net.index() - 1)
+        }
     }
 }
 
@@ -79,29 +131,40 @@ pub(crate) struct System {
 }
 
 impl System {
-    pub(crate) fn new(layout: &Layout, gmin: f64) -> System {
-        let mut a = Matrix::zeros(layout.size());
-        for &row in &layout.node_rows {
-            a.add(row, row, gmin);
-        }
+    /// Empty storage. `reset` loads `gmin` before each stamp.
+    pub(crate) fn new(layout: &Layout) -> System {
         System {
-            a,
+            a: Matrix::zeros(layout.size()),
             b: vec![0.0; layout.size()],
         }
     }
 
-    pub(crate) fn solve(self) -> Result<Solution, Singular> {
+    /// Drop the last factorization and stamp `gmin` on every node row.
+    pub(crate) fn reset(&mut self, layout: &Layout, gmin: f64) {
+        self.a.clear();
+        self.b.fill(0.0);
+        for &row in &layout.node_rows {
+            self.a.add(row, row, gmin);
+        }
+    }
+
+    pub(crate) fn solve(&mut self) -> Result<Solution, Singular> {
         Ok(Solution {
-            x: crate::dense::solve(self.a, self.b)?,
+            x: crate::dense::solve(&mut self.a, &mut self.b)?,
         })
     }
 }
 
+#[derive(Clone, Debug)]
 pub(crate) struct Solution {
     x: Vec<f64>,
 }
 
 impl Solution {
+    pub(crate) fn zeros(n: usize) -> Solution {
+        Solution { x: vec![0.0; n] }
+    }
+
     pub(crate) fn get(&self, row: usize) -> f64 {
         self.x[row]
     }
@@ -111,10 +174,13 @@ impl Solution {
     }
 
     pub(crate) fn voltage(&self, net: NetId) -> f64 {
-        if net.is_ground() {
-            0.0
-        } else {
-            self.get(net.index() - 1)
+        self.node(net.into())
+    }
+
+    fn node(&self, node: Node) -> f64 {
+        match node {
+            Node::Ground => 0.0,
+            Node::Row(row) => self.get(row),
         }
     }
 }
@@ -123,43 +189,61 @@ pub(crate) struct Stamp<'a> {
     pub(crate) sys: &'a mut System,
     pub(crate) layout: &'a Layout,
     pub(crate) part: PartId,
+    pub(crate) iterate: &'a Iterate,
+    pub(crate) conditions: &'a Conditions,
 }
 
 impl Stamp<'_> {
-    pub(crate) fn conductance(&mut self, a: NetId, b: NetId, g: f64) {
+    pub(crate) fn internal(&self, k: usize) -> Node {
+        Node::Row(self.rows().internal + k)
+    }
+
+    /// The limited voltage of this part's junction `k`, from the iterate.
+    pub(crate) fn junction(&self, k: usize) -> f64 {
+        self.iterate.junctions[self.rows().junctions.start + k]
+    }
+
+    pub(crate) fn conductance(&mut self, a: impl Into<Node>, b: impl Into<Node>, g: f64) {
+        let (a, b) = (a.into(), b.into());
         self.add_term(a, a, g);
         self.add_term(b, b, g);
         self.add_term(a, b, -g);
         self.add_term(b, a, -g);
     }
 
+    /// `amps` flows out of `from`, through the part, into `to`.
+    pub(crate) fn current(&mut self, from: impl Into<Node>, to: impl Into<Node>, amps: f64) {
+        if let Node::Row(row) = from.into() {
+            self.sys.b[row] -= amps;
+        }
+        if let Node::Row(row) = to.into() {
+            self.sys.b[row] += amps;
+        }
+    }
+
+    /// `volts` is the netlist value. The stamp scales it by `conditions.source_scale`.
     pub(crate) fn voltage_source(&mut self, p: NetId, n: NetId, k: usize, volts: f64) {
-        let (_, branch_at) = self.layout.part_rows[self.part.index()];
-        let row = branch_at + k;
-        if let Some(prow) = self.net_row(p) {
+        let row = self.rows().branch + k;
+        if let Node::Row(prow) = p.into() {
             self.sys.a.add(prow, row, 1.0);
             self.sys.a.add(row, prow, 1.0);
         }
-        if let Some(nrow) = self.net_row(n) {
+        if let Node::Row(nrow) = n.into() {
             self.sys.a.add(nrow, row, -1.0);
             self.sys.a.add(row, nrow, -1.0);
         }
-        self.sys.b[row] += volts;
+        self.sys.b[row] += volts * self.conditions.source_scale;
     }
 
-    fn add_term(&mut self, row: NetId, col: NetId, value: f64) {
-        let (Some(row), Some(col)) = (self.net_row(row), self.net_row(col)) else {
+    fn rows(&self) -> &PartRows {
+        &self.layout.part_rows[self.part.index()]
+    }
+
+    fn add_term(&mut self, row: Node, col: Node, value: f64) {
+        let (Node::Row(row), Node::Row(col)) = (row, col) else {
             return;
         };
         self.sys.a.add(row, col, value);
-    }
-
-    fn net_row(&self, id: NetId) -> Option<usize> {
-        if id.is_ground() {
-            None
-        } else {
-            Some(id.index() - 1)
-        }
     }
 }
 
@@ -174,8 +258,15 @@ impl Probe<'_> {
         self.x.voltage(net)
     }
 
+    pub(crate) fn internal(&self, k: usize) -> f64 {
+        self.x.get(self.rows().internal + k)
+    }
+
     pub(crate) fn branch(&self, k: usize) -> f64 {
-        let (_, branch_at) = self.layout.part_rows[self.part.index()];
-        self.x.get(branch_at + k)
+        self.x.get(self.rows().branch + k)
+    }
+
+    fn rows(&self) -> &PartRows {
+        &self.layout.part_rows[self.part.index()]
     }
 }

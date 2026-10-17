@@ -39,13 +39,17 @@ impl Matrix {
             self.a.swap(i * self.n + col, j * self.n + col);
         }
     }
+
+    pub(crate) fn clear(&mut self) {
+        self.a.fill(0.0);
+    }
 }
 
 fn submul(left: f64, factor: f64, right: f64) -> f64 {
     left - factor * right
 }
 
-pub(crate) fn solve(mut a: Matrix, mut b: Vec<f64>) -> Result<Vec<f64>, Singular> {
+pub(crate) fn solve(a: &mut Matrix, b: &mut [f64]) -> Result<Vec<f64>, Singular> {
     let n = a.n;
     if n == 0 {
         return Ok(Vec::new());

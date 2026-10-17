@@ -74,7 +74,8 @@ const SHUFFLED_DIVIDER: &[u8] = br#"{
       "name": "r2",
       "kind": "resistor",
       "pins": { "b": "gnd", "a": "vout" },
-      "resistance": { "value": 2000.0, "unit": "ohm", "source": "user" }
+      "resistance": { "value": 2000.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
     },
     {
       "name": "v1",
@@ -86,7 +87,8 @@ const SHUFFLED_DIVIDER: &[u8] = br#"{
       "name": "r1",
       "kind": "resistor",
       "pins": { "b": "vout", "a": "vin" },
-      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" }
+      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
     }
   ]
 }"#;
@@ -130,7 +132,8 @@ fn a_resistor_onto_an_otherwise_untouched_net_is_not_floating() {
           "name": "r1",
           "kind": "resistor",
           "pins": { "a": "vin", "b": "lonely" },
-          "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" }
+          "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+          "ratings": { "power": null }
         }
       ]
     }"#,
@@ -166,7 +169,8 @@ fn a_net_with_no_dc_path_to_ground_is_floating() {
           "name": "risle",
           "kind": "resistor",
           "pins": { "a": "isle", "b": "isle2" },
-          "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" }
+          "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+          "ratings": { "power": null }
         }
       ]
     }"#,

@@ -25,13 +25,15 @@
             "typical": false
           }
         }
-      }
+      },
+      "ratings": { "power": null }
     },
     {
       "name": "r2",
       "kind": "resistor",
       "pins": { "a": "vout", "b": "gnd" },
-      "resistance": { "value": 2000.0, "unit": "ohm", "source": "user" }
+      "resistance": { "value": 2000.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
     }
   ]
 }

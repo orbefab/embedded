@@ -25,7 +25,30 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 fn example() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/divider/netlist.json")
+    named_example("divider")
+}
+
+fn named_example(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples")
+        .join(name)
+        .join("netlist.json")
+}
+
+fn codes_and_refs(doc: &serde_json::Value) -> Vec<(String, String)> {
+    doc["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| {
+            let refs = d["refs"].as_array().unwrap();
+            assert_eq!(refs.len(), 1, "{d}");
+            (
+                d["code"].as_str().unwrap().to_string(),
+                refs[0].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
 }
 
 fn assert_four_files(out: &Path) {
@@ -283,4 +306,70 @@ fn two_runs_differ_only_in_created_at() {
     assert_eq!(first, second);
     let _ = fs::remove_dir_all(&first_out);
     let _ = fs::remove_dir_all(&second_out);
+}
+
+#[test]
+fn the_9v_led_breaks_three_ratings_and_still_writes_its_operating_point() {
+    let out = scratch("led-9v");
+    let netlist = named_example("led-9v");
+    let (code, stdout, stderr) = sim(&[
+        "run",
+        netlist.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{stdout}");
+    assert!(stderr.is_empty(), "{stderr}");
+    let doc = json(&stdout);
+    assert_eq!(doc["status"], "ok");
+    assert_eq!(doc["errors"], 0);
+    assert_eq!(doc["warnings"], 3);
+    let found = codes_and_refs(&doc);
+    let expected = [
+        ("rating.current", "#led1.i"),
+        ("rating.power", "#led1.p"),
+        ("rating.power", "#r1.p"),
+    ];
+    let expected: Vec<_> = expected
+        .iter()
+        .map(|(c, r)| (c.to_string(), r.to_string()))
+        .collect();
+    assert_eq!(found, expected);
+
+    let observations: serde_json::Value =
+        serde_json::from_slice(&fs::read(out.join("observations.json")).unwrap()).unwrap();
+    for d in doc["diagnostics"].as_array().unwrap() {
+        assert_eq!(d["severity"], "warning");
+        assert_eq!(d["t_ps"], 0);
+        assert!(d["data"]["over_ps"].is_null(), "{d}");
+        assert_eq!(d["data"]["peak_ps"], 0);
+        let quantity = d["refs"][0].as_str().unwrap();
+        let observed = observations["op"][quantity].as_f64().unwrap();
+        assert_eq!(d["data"]["peak"].as_f64().unwrap(), observed.abs());
+        assert!(observed.abs() > d["data"]["limit"].as_f64().unwrap());
+    }
+    let on_disk: serde_json::Value =
+        serde_json::from_slice(&fs::read(out.join("diagnostics.json")).unwrap()).unwrap();
+    assert_eq!(on_disk, doc["diagnostics"]);
+    let _ = fs::remove_dir_all(&out);
+}
+
+#[test]
+fn the_5v_led_is_within_its_ratings() {
+    let out = scratch("led-5v");
+    let netlist = named_example("led-5v");
+    let (code, stdout, _) = sim(&[
+        "run",
+        netlist.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{stdout}");
+    let doc = json(&stdout);
+    assert_eq!(doc["diagnostics"], serde_json::json!([]));
+    assert_eq!(fs::read(out.join("diagnostics.json")).unwrap(), b"[]\n");
+    let observations: serde_json::Value =
+        serde_json::from_slice(&fs::read(out.join("observations.json")).unwrap()).unwrap();
+    assert!(observations["op"]["#led1.i"].as_f64().unwrap() < 0.03);
+    let _ = fs::remove_dir_all(&out);
 }

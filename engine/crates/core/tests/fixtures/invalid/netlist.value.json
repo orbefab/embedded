@@ -9,7 +9,8 @@
       "name": "r1",
       "kind": "resistor",
       "pins": { "a": "vin", "b": "gnd" },
-      "resistance": { "value": 0.0, "unit": "ohm", "source": "user" }
+      "resistance": { "value": 0.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
     }
   ]
 }

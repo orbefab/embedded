@@ -36,13 +36,15 @@ Values are SI numbers. `unit` must already be the field's unit.
             "typical": false
           }
         }
-      }
+      },
+      "ratings": { "power": null }
     },
     {
       "name": "r2",
       "kind": "resistor",
       "pins": { "a": "vout", "b": "gnd" },
-      "resistance": { "value": 2000.0, "unit": "ohm", "source": "user" }
+      "resistance": { "value": 2000.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
     }
   ]
 }
@@ -80,11 +82,52 @@ Two nets, or two parts, with the same name are `netlist.duplicate`. The ref is `
 
 `resistance.value` is in `ohm`, greater than 0, and its reciprocal must be finite. Zero or a negative value is `netlist.value` with rule `positive`. A positive value whose reciprocal overflows is `netlist.value` with rule `finite_reciprocal`. A different unit is `netlist.unit`. A number outside the f64 range is `netlist.syntax`.
 
+`ratings` holds `power`. See [Ratings](#ratings).
+
 ### Voltage source
 
 `kind` is `voltage_source`. Pins are `p` and `n`. The source sets `V(p) - V(n)` equal to `voltage.value`.
 
 `voltage.value` is in `V` and may be any finite number, including 0 and negative values. A different unit is `netlist.unit`.
+
+A voltage source has no `ratings` field.
+
+### Diode and LED
+
+`kind` is `diode` or `led`. Both take the same fields and solve the same equation. Pins are `anode` and `cathode`.
+
+The part is a junction in series with a resistance. The junction current is `Is * (exp(vj / (N * kT/q)) - 1)`. `V(anode) - V(cathode)` is `vj` plus the current times `Rs`.
+
+| Field | Symbol | Unit |
+| --- | --- | --- |
+| `saturation_current` | `Is` | `A` |
+| `emission_coefficient` | `N` | `1` |
+| `series_resistance` | `Rs` | `ohm` |
+
+Each value must be greater than 0, and its reciprocal must be finite. Those are the resistor's rules. `n*VT` must also be a normal number, and `vcrit` must be finite and positive. `VT` is `k*T/q` at 298.15 K with the exact SI values of `k` and `q`. `vcrit` is `n*VT*ln(n*VT/(sqrt(2)*Is))`, which is positive when `n*VT > sqrt(2)*Is`. A junction that breaks either condition is `netlist.value` with rule `finite_junction`. The field is `emission_coefficient` when `n*VT` is not normal. It is also `emission_coefficient` when `vcrit` is not finite and positive and `Is` is a normal number. The field is `saturation_current` when `vcrit` is not finite and positive and `Is` is not a normal number.
+
+The device is at 25 C, 298.15 K. `k` and `q` are the exact SI values. There is no temperature field and no temperature scaling. A value fitted at another temperature does not describe the part here.
+
+`ratings` holds `current` and `power`.
+
+`examples/led-5v` and `examples/led-9v` use a Kingbright WP7113ID, a red 5 mm LED. Its `Is`, `N`, and `Rs` solve the equation exactly through three points read off the datasheet's forward current figure at 25 C: (1.70 V, 2 mA), (1.90 V, 10 mA), and (2.00 V, 20 mA). The fit gives `Is` = 6.711e-10 A, `N` = 4.427, and `Rs` = 2.115 ohm. Each value's `at` names the figure, the points, and the temperature, so the fit can be redone from the citation.
+
+## Ratings
+
+A rating bounds the stress on a part. Every key of a kind's `ratings` object is required. Each value is a value object, or `null` for a part that is deliberately unrated.
+
+| Kind | Keys | Checked quantity |
+| --- | --- | --- |
+| `resistor` | `power` | `#<part>.p` |
+| `diode`, `led` | `current`, `power` | `#<part>.i`, `#<part>.p` |
+
+`current` is in `A`. `power` is in `W`. A rating must be greater than 0. A missing key, an unknown key, and a missing `ratings` object are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.current` or `ratings.power`. A value of 0 or below is `netlist.value` with the same field.
+
+```json
+"ratings": { "power": { "value": 0.25, "unit": "W", "source": "user" } }
+```
+
+The run compares the magnitude of each rated quantity with its rating. Going over is a warning, `rating.current` or `rating.power`, in [diagnostics.md](diagnostics.md).
 
 ## Sources
 
@@ -105,6 +148,8 @@ For every two-terminal part, pin 0 is the first pin listed above.
 `v` is the voltage of pin 0 minus the voltage of pin 1.
 
 `p` is `v * i`, the power the part absorbs. A source that delivers power has negative `i` and negative `p`.
+
+For a diode or LED, `i` is the current through `Rs`, and `p` includes the power in `Rs`. The junction's internal node is not observed.
 
 On the divider, `#r1.i` and `#r2.i` are positive, `#r1.p` and `#r2.p` are positive, and `#v1.i` and `#v1.p` are negative.
 

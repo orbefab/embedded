@@ -18,7 +18,8 @@ fn source_and_resistor(volts: &str, ohms: &str) -> String {
           "name": "r1",
           "kind": "resistor",
           "pins": {{ "a": "vin", "b": "gnd" }},
-          "resistance": {{ "value": {ohms}, "unit": "ohm", "source": "user" }}
+          "resistance": {{ "value": {ohms}, "unit": "ohm", "source": "user" }},
+          "ratings": {{ "power": null }}
         }},
         {{
           "name": "v1",
@@ -71,7 +72,7 @@ fn chain(signal_nets: usize) -> String {
         let net = format!("n{index}");
         nets.push(format!("\"{net}\""));
         parts.push(format!(
-            r#"{{"name":"r{index}","kind":"resistor","pins":{{"a":"{previous}","b":"{net}"}},"resistance":{{"value":1000.0,"unit":"ohm","source":"user"}}}}"#
+            r#"{{"name":"r{index}","kind":"resistor","pins":{{"a":"{previous}","b":"{net}"}},"resistance":{{"value":1000.0,"unit":"ohm","source":"user"}},"ratings":{{"power":null}}}}"#
         ));
         previous = net;
     }

@@ -4,7 +4,10 @@ use std::fmt;
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
-use super::{Analysis, Model, NetId, Netlist, Part, Resistor, Source, Value, VoltageSource};
+use super::{
+    Analysis, Junction, Model, NetId, Netlist, Part, Resistor, Source, Value, VoltageSource,
+    junction_scale,
+};
 use crate::diagnostic::{Diagnostic, ValueRule};
 use crate::finite::Finite;
 use crate::name::{Name, NameError, Ref};
@@ -42,12 +45,44 @@ enum WirePart {
         name: String,
         pins: PinMap,
         resistance: WireValue,
+        ratings: WireResistorRatings,
     },
     VoltageSource {
         name: String,
         pins: PinMap,
         voltage: WireValue,
     },
+    Diode(WireJunction),
+    Led(WireJunction),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireJunction {
+    name: String,
+    pins: PinMap,
+    saturation_current: WireValue,
+    emission_coefficient: WireValue,
+    series_resistance: WireValue,
+    ratings: WireJunctionRatings,
+}
+
+// `Option::deserialize` makes each key required while its value may be `null`.
+// Plain `Option` would read a missing key as `None`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireResistorRatings {
+    #[serde(deserialize_with = "Option::deserialize")]
+    power: Option<WireValue>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireJunctionRatings {
+    #[serde(deserialize_with = "Option::deserialize")]
+    current: Option<WireValue>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    power: Option<WireValue>,
 }
 
 /// Pin objects reject a repeated key. `BTreeMap` would keep the last one.
@@ -245,25 +280,17 @@ fn resolve_part(
     seen: &mut BTreeSet<String>,
     out: &mut Vec<Diagnostic>,
 ) -> Option<Part> {
-    let (raw_name, pins, kind) = match part {
-        WirePart::Resistor {
-            name,
-            pins,
-            resistance,
-        } => (name, pins, Kind::Resistor(resistance)),
-        WirePart::VoltageSource {
-            name,
-            pins,
-            voltage,
-        } => (name, pins, Kind::Voltage(voltage)),
+    let raw_name = match &part {
+        WirePart::Resistor { name, .. } | WirePart::VoltageSource { name, .. } => name,
+        WirePart::Diode(junction) | WirePart::Led(junction) => &junction.name,
     };
     let path = format!("parts[{index}].name");
-    let name = match Name::new(&raw_name) {
+    let name = match Name::new(raw_name) {
         Ok(name) => name,
         Err(problem) => {
             out.push(Diagnostic::NetlistName {
                 path,
-                name: raw_name,
+                name: raw_name.clone(),
                 problem,
             });
             return None;
@@ -273,7 +300,7 @@ fn resolve_part(
     if reserved {
         out.push(Diagnostic::NetlistName {
             path,
-            name: raw_name,
+            name: raw_name.clone(),
             problem: NameError::Reserved,
         });
     }
@@ -284,36 +311,105 @@ fn resolve_part(
         });
     }
     let part_ref = Ref::Part(name.clone());
-    let built = match kind {
-        Kind::Resistor(resistance) => {
+    let model = match part {
+        WirePart::Resistor {
+            pins,
+            resistance,
+            ratings,
+            ..
+        } => {
             let pins = resolve_pins(&name, Resistor::PINS, &pins.0, nets, out);
             let resistance = resolve_value(&part_ref, "resistance", "ohm", true, resistance, out);
-            match (pins, resistance) {
-                (Some(pins), Some(resistance)) => Some(Part {
-                    name,
-                    model: Model::Resistor(Resistor { pins, resistance }),
-                }),
+            let max_power = resolve_rating(&part_ref, "ratings.power", "W", ratings.power, out);
+            match (pins, resistance, max_power) {
+                (Some(pins), Some(resistance), Some(max_power)) => {
+                    Some(Model::Resistor(Resistor {
+                        pins,
+                        resistance,
+                        max_power,
+                    }))
+                }
                 _ => None,
             }
         }
-        Kind::Voltage(voltage) => {
+        WirePart::VoltageSource { pins, voltage, .. } => {
             let pins = resolve_pins(&name, VoltageSource::PINS, &pins.0, nets, out);
             let voltage = resolve_value(&part_ref, "voltage", "V", false, voltage, out);
             match (pins, voltage) {
-                (Some(pins), Some(voltage)) => Some(Part {
-                    name,
-                    model: Model::VoltageSource(VoltageSource { pins, voltage }),
-                }),
+                (Some(pins), Some(voltage)) => {
+                    Some(Model::VoltageSource(VoltageSource { pins, voltage }))
+                }
                 _ => None,
             }
         }
+        WirePart::Diode(junction) => {
+            resolve_junction(&name, &part_ref, junction, nets, out).map(Model::Diode)
+        }
+        WirePart::Led(junction) => {
+            resolve_junction(&name, &part_ref, junction, nets, out).map(Model::Led)
+        }
     };
-    if duplicate || reserved { None } else { built }
+    if duplicate || reserved {
+        None
+    } else {
+        model.map(|model| Part { name, model })
+    }
 }
 
-enum Kind {
-    Resistor(WireValue),
-    Voltage(WireValue),
+fn resolve_junction(
+    name: &Name,
+    part_ref: &Ref,
+    wire: WireJunction,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Junction> {
+    let pins = resolve_pins(name, Junction::PINS, &wire.pins.0, nets, out);
+    let is = resolve_value(
+        part_ref,
+        "saturation_current",
+        "A",
+        true,
+        wire.saturation_current,
+        out,
+    );
+    let n = resolve_value(
+        part_ref,
+        "emission_coefficient",
+        "1",
+        true,
+        wire.emission_coefficient,
+        out,
+    );
+    let rs = resolve_value(
+        part_ref,
+        "series_resistance",
+        "ohm",
+        true,
+        wire.series_resistance,
+        out,
+    );
+    let ratings = wire.ratings;
+    let max_current = resolve_rating(part_ref, "ratings.current", "A", ratings.current, out);
+    let max_power = resolve_rating(part_ref, "ratings.power", "W", ratings.power, out);
+    if let (Some(is), Some(n)) = (&is, &n)
+        && let Err(fault) = junction_scale(n.si.get(), is.si.get())
+    {
+        out.push(Diagnostic::NetlistValue {
+            part: part_ref.clone(),
+            field: fault.field(),
+            value: fault.value(n.si.get(), is.si.get()),
+            rule: ValueRule::FiniteJunction,
+        });
+        return None;
+    }
+    Some(Junction {
+        pins: pins?,
+        saturation_current: is?,
+        emission_coefficient: n?,
+        series_resistance: rs?,
+        max_current: max_current?,
+        max_power: max_power?,
+    })
 }
 
 fn check_positive(number: f64) -> Option<ValueRule> {
@@ -376,6 +472,20 @@ fn resolve_pins<const N: usize>(
         resolved = false;
     }
     resolved.then_some(ids)
+}
+
+/// `None` when the rating is invalid. `Some(None)` is an explicit `null`.
+fn resolve_rating(
+    part: &Ref,
+    field: &'static str,
+    expected: &'static str,
+    value: Option<WireValue>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Option<Value>> {
+    match value {
+        None => Some(None),
+        Some(value) => resolve_value(part, field, expected, true, value, out).map(Some),
+    }
 }
 
 fn resolve_value(
