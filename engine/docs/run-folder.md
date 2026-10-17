@@ -86,10 +86,10 @@ Two CLI runs of one file differ only in `created_at`.
 
 ## Replacing a directory
 
-`sim run` creates `<dir>`. It replaces an empty directory. It replaces a previous run. A previous run is a non-empty directory whose `manifest.json` has exactly the fields in the example above. `run_format` is 0. `netlist_format` is 0. `input.file` is `netlist.json`. `input.sha256` is 64 lowercase hex characters. `created_at` is `YYYY-MM-DDTHH:MM:SSZ`.
+`sim run` creates `<dir>`. It replaces an empty directory. It replaces a previous run. A previous run is a non-empty directory whose `manifest.json` has exactly the fields in the example above. `run_format` is 0. `netlist_format` is 0. `input.file` is `netlist.json`. `input.sha256` is 64 lowercase hex characters. `created_at` is `YYYY-MM-DDTHH:MM:SSZ`. `seed` is present, as an integer or `null`.
 
 It leaves a non-directory path alone and returns `io_error`. It leaves any other non-empty directory alone and returns `io_error`. A `manifest.json` that only has `{"app":"web"}` is not a previous run.
 
-A crash can leave `<dir>.partial.<digits>` or `<dir>.replacing.<digits>` next to the destination. When `<dir>` is missing, the write moves the newest `<dir>.replacing.<digits>` directory back to `<dir>` before it checks whether `<dir>` may be replaced. A write that leaves `<dir>` in place also leaves those siblings in place. A write that replaces `<dir>` removes each sibling. A directory is removed as a directory. A file or a symlink is removed as a file. The rename of the new folder onto `<dir>` commits the run. A failure while deleting the backup after that rename does not fail the run.
+A crash can leave `<dir>.partial.<digits>` or `<dir>.replacing.<digits>` next to the destination. When `<dir>` is missing, the write moves the newest `<dir>.replacing.<digits>` directory, or symlink to a directory, back to `<dir>` before it checks whether `<dir>` may be replaced. A write that leaves `<dir>` in place also leaves those siblings in place. A write that replaces `<dir>` removes each sibling. A directory is removed as a directory. A file or a symlink is removed as a file. Removal never follows a symlink, so the directory it points to keeps its contents. The rename of the new folder onto `<dir>` commits the run. A failure while deleting the backup after that rename does not fail the run.
 
 `<dir>.partial.<digits>` and `<dir>.replacing.<digits>` belong to the engine. The engine may remove them. Concurrent `sim run` processes that share one `--out` are unsupported.

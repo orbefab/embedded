@@ -101,6 +101,7 @@ struct Manifest {
     netlist_format: u64,
     engine_version: String,
     input: ManifestInput,
+    // Without this, serde reads a missing `seed` as `None`; an owned manifest must name it.
     #[serde(deserialize_with = "Option::deserialize")]
     seed: Option<u64>,
     created_at: String,
@@ -747,6 +748,28 @@ mod tests {
         assert!(!target.join("observations.json").exists());
         let _ = fs::remove_file(&out);
         let _ = fs::remove_file(&replacing);
+        let _ = fs::remove_dir_all(&target);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_previous_run_is_replaced_without_touching_its_target() {
+        let target = scratch("symlink-run-target");
+        let _ = fs::remove_dir_all(&target);
+        rejected_folder(b"{}", 0).write(&target).unwrap();
+        fs::write(target.join("sentinel"), b"keep").unwrap();
+        let out = scratch("symlink-run-out");
+        let _ = fs::remove_dir_all(&out);
+        let replacing = named_sibling(&out, "replacing", 4343);
+        let _ = fs::remove_file(&replacing);
+        std::os::unix::fs::symlink(&target, &replacing).unwrap();
+        rejected_folder(b"[]", 1).write(&out).unwrap();
+        assert!(!fs::symlink_metadata(&out).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read(out.join("netlist.json")).unwrap(), b"[]");
+        assert!(fs::symlink_metadata(&replacing).is_err());
+        assert_eq!(fs::read(target.join("sentinel")).unwrap(), b"keep");
+        assert_eq!(fs::read(target.join("netlist.json")).unwrap(), b"{}");
+        let _ = fs::remove_dir_all(&out);
         let _ = fs::remove_dir_all(&target);
     }
 
