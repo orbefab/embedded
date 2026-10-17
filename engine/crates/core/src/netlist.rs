@@ -2,11 +2,15 @@
 
 use std::f64::consts::SQRT_2;
 
+pub mod bounce;
 mod json;
+
+use serde::{Deserialize, Serialize};
 
 use crate::diagnostic::Diagnostic;
 use crate::finite::Finite;
 use crate::name::{Name, Quantity};
+use crate::time::Time;
 
 /// The netlist `version` this engine reads.
 pub const FORMAT_VERSION: u64 = 0;
@@ -91,6 +95,21 @@ impl PartId {
 pub enum Analysis {
     /// DC operating point.
     Op,
+    /// The operating point at t = 0, then time steps to `stop`.
+    Transient(Transient),
+}
+
+/// Parse enforces `stop >= max_step >= MIN_MAX_STEP_PS`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Transient {
+    pub stop: Time,
+    /// Picoseconds. No step is longer.
+    pub max_step: u64,
+}
+
+impl Transient {
+    /// The engine's first step after a contact edge, which `max_step` may not undercut.
+    pub const MIN_MAX_STEP_PS: u64 = 1_000;
 }
 
 /// One package, modelled at its pins.
@@ -109,6 +128,8 @@ pub enum Model {
     Diode(Junction),
     /// The same device equation as `Diode`. Its own kind, so an LED-only quantity needs no flag.
     Led(Junction),
+    Capacitor(Capacitor),
+    Switch(Switch),
 }
 
 impl Model {
@@ -118,6 +139,8 @@ impl Model {
             Model::Resistor(_) => &Resistor::PINS,
             Model::VoltageSource(_) => &VoltageSource::PINS,
             Model::Diode(_) | Model::Led(_) => &Junction::PINS,
+            Model::Capacitor(_) => &Capacitor::PINS,
+            Model::Switch(_) => &Switch::PINS,
         }
     }
 
@@ -126,6 +149,8 @@ impl Model {
             Model::Resistor(r) => &r.pins,
             Model::VoltageSource(v) => &v.pins,
             Model::Diode(j) | Model::Led(j) => &j.pins,
+            Model::Capacitor(c) => &c.pins,
+            Model::Switch(s) => &s.pins,
         }
     }
 
@@ -133,7 +158,7 @@ impl Model {
     pub fn ratings(&self) -> Vec<(RatingKind, &Value)> {
         let (current, power) = match self {
             Model::Resistor(r) => (None, r.max_power.as_ref()),
-            Model::VoltageSource(_) => (None, None),
+            Model::VoltageSource(_) | Model::Capacitor(_) | Model::Switch(_) => (None, None),
             Model::Diode(j) | Model::Led(j) => (j.max_current.as_ref(), j.max_power.as_ref()),
         };
         let current = current.map(|v| (RatingKind::Current, v));
@@ -167,6 +192,120 @@ pub struct VoltageSource {
 
 impl VoltageSource {
     pub const PINS: [&'static str; 2] = ["p", "n"];
+}
+
+/// An ideal capacitor. Open at the operating point.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Capacitor {
+    /// Nets of pins `a`, `b`.
+    pub pins: [NetId; 2],
+    /// Farad, greater than 0.
+    pub capacitance: Value,
+}
+
+impl Capacitor {
+    pub const PINS: [&'static str; 2] = ["a", "b"];
+}
+
+/// A two-terminal contact: `on_resistance` closed, `off_resistance` open.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Switch {
+    /// Nets of pins `a`, `b`.
+    pub pins: [NetId; 2],
+    /// Ohm, greater than 0.
+    pub on_resistance: Value,
+    /// Ohm, greater than 0.
+    pub off_resistance: Value,
+    /// The netlist's own events, without bounce.
+    pub events: Vec<Edge>,
+    pub bounce: Option<Bounce>,
+    /// `events` with their bounce expanded.
+    pub schedule: Schedule,
+}
+
+impl Switch {
+    pub const PINS: [&'static str; 2] = ["a", "b"];
+
+    pub fn resistance(&self, contact: Contact) -> &Value {
+        match contact {
+            Contact::Open => &self.off_resistance,
+            Contact::Closed => &self.on_resistance,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Contact {
+    Open,
+    Closed,
+}
+
+impl Contact {
+    pub fn flipped(self) -> Contact {
+        match self {
+            Contact::Open => Contact::Closed,
+            Contact::Closed => Contact::Open,
+        }
+    }
+}
+
+/// The contact becomes `to` at `at`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Edge {
+    #[serde(rename = "t_ps")]
+    pub at: Time,
+    #[serde(rename = "state")]
+    pub to: Contact,
+}
+
+/// A contact over time. Only parse builds one, so every edge is after t = 0,
+/// edges are at least `MIN_GAP_PS` apart, and each flips the contact.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Schedule {
+    initial: Contact,
+    edges: Vec<Edge>,
+}
+
+impl Schedule {
+    /// The least time between two edges of one switch.
+    pub const MIN_GAP_PS: u64 = 2_000;
+
+    pub fn initial(&self) -> Contact {
+        self.initial
+    }
+
+    /// Nominal and bounce edges, ascending.
+    pub fn edges(&self) -> &[Edge] {
+        &self.edges
+    }
+
+    /// The contact on the interval that ends at `at`: after every edge strictly
+    /// before `at`. `initial` at t = 0.
+    pub fn before(&self, at: Time) -> Contact {
+        let k = self.edges.partition_point(|edge| edge.at < at);
+        if k == 0 {
+            self.initial
+        } else {
+            self.edges[k - 1].to
+        }
+    }
+}
+
+/// Seeded contact bounce after each event. The expansion is `bounce::expand`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bounce {
+    /// Picoseconds. Every bounce edge lands within this of its event.
+    pub window: IntValue,
+    /// Each event gets 1 to this many extra open and close pairs. 1 to 255.
+    pub max_bounces: IntValue,
+}
+
+/// An integer quantity with where it came from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IntValue {
+    pub value: u64,
+    pub source: Source,
 }
 
 /// A Shockley junction in series with a resistance, at 298.15 K with no temperature scaling.

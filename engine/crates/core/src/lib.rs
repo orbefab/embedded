@@ -8,3 +8,4 @@ pub mod netlist;
 pub mod run_folder;
 pub mod time;
 pub mod timestamp;
+pub mod trace;

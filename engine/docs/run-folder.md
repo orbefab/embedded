@@ -1,6 +1,6 @@
 # Run folder
 
-`sim run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files.
+`sim run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`.
 
 ```text
 <dir>/
@@ -8,9 +8,13 @@
   netlist.json
   diagnostics.json
   observations.json
+  traces/
+    index.json
+    time.u64
+    analog.f64
 ```
 
-Each file is pretty JSON with a two-space indent and a trailing newline. `manifest.json` uses the field order in the example below. Keys inside a diagnostic `data` object are alphabetical. Observation keys follow ref order.
+Each JSON file is pretty JSON with a two-space indent and a trailing newline. `manifest.json` uses the field order in the example below. Keys inside a diagnostic `data` object are alphabetical. Observation keys follow ref order.
 
 ## manifest.json
 
@@ -74,7 +78,73 @@ Numbers are serde_json's shortest round trip of an f64. `-0.0` is written as `0.
 
 The solve stamps 1e-12 S from every node to ground. That term puts `#net.vout` about 2e-9 V under 10/3 V. The test bound is 1e-8 relative. The three part powers sum to 0 within 1e-9 W. The difference is the power in that conductance.
 
+A transient adds `switches` after `op`. `op` is the operating point at t = 0, the same object an `op` run writes. `switches` maps each switch ref to every contact edge before `stop_ps`, nominal and bounce, in time order. A switch with no edges has an empty list. `examples/rc-switch` writes:
+
+```json
+"switches": {
+  "#sw1": [
+    { "t_ps": 1000000000, "state": "closed" },
+    { "t_ps": 31000000000, "state": "open" }
+  ]
+}
+```
+
 A rejected netlist, and a solve that reports an error, write `{}`.
+
+## traces
+
+A transient writes one row per accepted time step, plus row 0 at t = 0. The rows are not evenly spaced. Read the trace as piecewise linear between rows. At a contact edge there is a row at the edge, which holds the old contact, and a row at the earlier of 1 ns later and `stop_ps`, which holds the new one. An edge on another switch inside that nanosecond does not remove either row.
+
+`index.json` for `examples/rc-switch`, with the columns abridged:
+
+```json
+{
+  "format": 0,
+  "rows": 4093,
+  "stop_ps": 81000000000,
+  "end_ps": 81000000000,
+  "time": {
+    "file": "time.u64",
+    "type": "u64le",
+    "unit": "ps"
+  },
+  "analog": {
+    "file": "analog.f64",
+    "type": "f64le",
+    "order": "column_major",
+    "columns": [
+      {
+        "ref": "#net.gnd",
+        "unit": "V"
+      },
+      {
+        "ref": "#c1.i",
+        "unit": "A"
+      }
+    ]
+  }
+}
+```
+
+- `time.u64` holds `rows` unsigned 64-bit little-endian integers, picoseconds from t = 0, strictly increasing. Row 0 is t = 0.
+- `analog.f64` holds `rows` IEEE 754 binary64 little-endian values per column, column after column. Column `j` occupies bytes `j * rows * 8` up to `(j + 1) * rows * 8`.
+- `columns` are the keys of `observations.op`, in the same order. A net or a `.v` is `V`, a `.i` is `A`, and a `.p` is `W`. Row 0 holds exactly the numbers in `op`.
+- Every value is finite. `-0.0` is written as `0.0`.
+- There is no header and no compression.
+
+`end_ps` is the last row's time. It is less than `stop_ps` only when the run reported an error. The rows before the error stay, while `observations.json` is `{}`. A run that fails at t = 0 writes no `traces/`. For `trace.too_large`, `end_ps` is still that last kept row, and the diagnostic's `t_ps` is the step that did not fit.
+
+A run stops with `trace.too_large` at `min(1000000, 67108864 / columns)` rows. 67108864 is 2^26 f64 values, 512 MiB. `columns` is the width of `analog.f64`. A run needs about `stop_ps / max_step_ps` rows, plus `log2(max_step_ps / 1000)` for each edge. `examples/rc-switch` needs 4050 plus 43.
+
+Python with numpy reads one column like this:
+
+```python
+import json, numpy as np
+ix = json.load(open("runs/rc/traces/index.json"))
+t_ps = np.fromfile("runs/rc/traces/time.u64", "<u8")
+refs = [c["ref"] for c in ix["analog"]["columns"]]
+vout = np.fromfile("runs/rc/traces/analog.f64", "<f8").reshape(len(refs), ix["rows"])[refs.index("#net.vout")]
+```
 
 ## Determinism
 
@@ -82,7 +152,7 @@ One binary on one platform writes the same bytes for the same input bytes and th
 
 Reordering `parts` and `nets` in the JSON keeps `observations.json` and `diagnostics.json` identical. The copied `netlist.json` still follows the input, so that file changes when the input bytes change.
 
-Two CLI runs of one file differ only in `created_at`.
+Two CLI runs of one file differ only in `created_at`. That includes every byte of `traces/`. Trace values are the solver's f64 bits, written without a float printer.
 
 ## Replacing a directory
 
@@ -91,5 +161,7 @@ Two CLI runs of one file differ only in `created_at`.
 It leaves a non-directory path alone and returns `io_error`. It leaves any other non-empty directory alone and returns `io_error`. A `manifest.json` that only has `{"app":"web"}` is not a previous run.
 
 A crash can leave `<dir>.partial.<digits>` or `<dir>.replacing.<digits>` next to the destination. When `<dir>` is missing, the write moves the newest `<dir>.replacing.<digits>` directory, or symlink to a directory, back to `<dir>` before it checks whether `<dir>` may be replaced. A write that leaves `<dir>` in place also leaves those siblings in place. A write that replaces `<dir>` removes each sibling. A directory is removed as a directory. A file or a symlink is removed as a file. Removal never follows a symlink, so the directory it points to keeps its contents. The rename of the new folder onto `<dir>` commits the run. A failure while deleting the backup after that rename does not fail the run.
+
+`run_format` stays 0 with `traces/`. Whether a directory is a previous run depends on its manifest alone, so a transient run replaces an operating point run and the other way round. A replaced run's `traces/` goes with it.
 
 `<dir>.partial.<digits>` and `<dir>.replacing.<digits>` belong to the engine. The engine may remove them. Concurrent `sim run` processes that share one `--out` are unsupported.

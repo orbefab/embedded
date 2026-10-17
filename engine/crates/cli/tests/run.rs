@@ -373,3 +373,144 @@ fn the_5v_led_is_within_its_ratings() {
     assert!(observations["op"]["#led1.i"].as_f64().unwrap() < 0.03);
     let _ = fs::remove_dir_all(&out);
 }
+
+/// Every file under `dir`, by path relative to it.
+fn files(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        for entry in fs::read_dir(next).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                let rel = path
+                    .strip_prefix(dir)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                out.insert(rel, fs::read(&path).unwrap());
+            }
+        }
+    }
+    out
+}
+
+fn u64s(bytes: &[u8]) -> Vec<u64> {
+    let (words, rest) = bytes.as_chunks::<8>();
+    assert!(rest.is_empty());
+    words.iter().map(|&word| u64::from_le_bytes(word)).collect()
+}
+
+fn f64s(bytes: &[u8]) -> Vec<f64> {
+    let (words, rest) = bytes.as_chunks::<8>();
+    assert!(rest.is_empty());
+    words.iter().map(|&word| f64::from_le_bytes(word)).collect()
+}
+
+#[test]
+fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
+    for name in ["rc-switch", "button-led"] {
+        let out = scratch(&format!("tran-{name}"));
+        let netlist = named_example(name);
+        let (code, stdout, stderr) = sim(&[
+            "run",
+            netlist.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "{stdout}");
+        assert!(stderr.is_empty(), "{stderr}");
+        assert_eq!(json(&stdout)["diagnostics"], serde_json::json!([]));
+        let found = files(&out);
+        let names: Vec<_> = found.keys().map(String::as_str).collect();
+        assert_eq!(
+            names,
+            [
+                "diagnostics.json",
+                "manifest.json",
+                "netlist.json",
+                "observations.json",
+                "traces/analog.f64",
+                "traces/index.json",
+                "traces/time.u64",
+            ]
+        );
+        let index: serde_json::Value = serde_json::from_slice(&found["traces/index.json"]).unwrap();
+        let input: serde_json::Value = serde_json::from_slice(&found["netlist.json"]).unwrap();
+        let rows = index["rows"].as_u64().unwrap() as usize;
+        let time = u64s(&found["traces/time.u64"]);
+        let analog = f64s(&found["traces/analog.f64"]);
+        let columns = index["analog"]["columns"].as_array().unwrap();
+        assert_eq!(time.len(), rows, "{name}");
+        assert_eq!(analog.len(), rows * columns.len(), "{name}");
+        assert_eq!(time[0], 0);
+        assert!(time.windows(2).all(|pair| pair[0] < pair[1]), "{name}");
+        let stop = &input["analysis"]["transient"]["stop_ps"];
+        assert_eq!(&index["stop_ps"], stop);
+        assert_eq!(&index["end_ps"], stop);
+        assert_eq!(time[rows - 1], stop.as_u64().unwrap());
+
+        // The file's own text: `serde_json::Value` sorts keys and may round a parse by an ulp.
+        let text = std::str::from_utf8(&found["observations.json"]).unwrap();
+        let (op_text, _) = text.split_once("\"switches\"").unwrap();
+        let op: Vec<(&str, &str)> = op_text
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix('"')?.split_once("\": "))
+            .filter(|(key, _)| key.starts_with('#'))
+            .map(|(key, value)| (key, value.trim_end_matches(',')))
+            .collect();
+        let refs: Vec<_> = columns.iter().map(|c| c["ref"].as_str().unwrap()).collect();
+        let keys: Vec<_> = op.iter().map(|(key, _)| *key).collect();
+        assert_eq!(keys, refs, "{name}: columns are the op keys in order");
+        for (j, (key, value)) in op.iter().enumerate() {
+            let row_0 = serde_json::to_string(&analog[j * rows]).unwrap();
+            assert_eq!(row_0, *value, "{name} {key}");
+        }
+        assert!(
+            analog
+                .iter()
+                .all(|v| v.is_finite() && v.to_bits() != (-0.0f64).to_bits())
+        );
+        let _ = fs::remove_dir_all(&out);
+    }
+}
+
+#[test]
+fn two_runs_of_each_transient_example_differ_only_in_created_at() {
+    let names = ["rc-switch", "button-led"];
+    let outs = |round: &str| -> Vec<PathBuf> {
+        names
+            .iter()
+            .map(|name| {
+                let out = scratch(&format!("tran-twice-{name}-{round}"));
+                let netlist = named_example(name);
+                let (code, stdout, _) = sim(&[
+                    "run",
+                    netlist.to_str().unwrap(),
+                    "--out",
+                    out.to_str().unwrap(),
+                ]);
+                assert_eq!(code, 0, "{stdout}");
+                out
+            })
+            .collect()
+    };
+    let first = outs("a");
+    std::thread::sleep(Duration::from_millis(1100));
+    let second = outs("b");
+    for (left, right) in first.iter().zip(&second) {
+        let mut left_files = files(left);
+        let mut right_files = files(right);
+        let manifest = |files: &mut std::collections::BTreeMap<String, Vec<u8>>| {
+            let mut doc: serde_json::Value =
+                serde_json::from_slice(&files.remove("manifest.json").unwrap()).unwrap();
+            doc.as_object_mut().unwrap().remove("created_at").unwrap()
+        };
+        assert_ne!(manifest(&mut left_files), manifest(&mut right_files));
+        assert_eq!(left_files.len(), 6);
+        assert_eq!(left_files, right_files, "{}", left.display());
+        let _ = fs::remove_dir_all(left);
+        let _ = fs::remove_dir_all(right);
+    }
+}

@@ -46,7 +46,7 @@ pub(crate) enum Next {
 }
 
 impl Rung {
-    pub(crate) fn conditions(self) -> Conditions {
+    pub(crate) fn conditions(self) -> Conditions<'static> {
         match self {
             Rung::Plain => Conditions::NOMINAL,
             Rung::Gmin { extra, .. } => Conditions {

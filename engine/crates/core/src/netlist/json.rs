@@ -5,12 +5,13 @@ use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
 use super::{
-    Analysis, Junction, Model, NetId, Netlist, Part, Resistor, Source, Value, VoltageSource,
-    junction_scale,
+    Analysis, Bounce, Capacitor, Contact, Edge, IntValue, Junction, Model, NetId, Netlist, Part,
+    Resistor, Schedule, Source, Switch, Transient, Value, VoltageSource, bounce, junction_scale,
 };
-use crate::diagnostic::{Diagnostic, ValueRule};
+use crate::diagnostic::{AnalysisRule, Diagnostic, ScheduleRule, ValueRule};
 use crate::finite::Finite;
 use crate::name::{Name, NameError, Ref};
+use crate::time::Time;
 
 #[derive(Deserialize)]
 struct VersionProbe {
@@ -32,11 +33,19 @@ struct WireNetlist {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 enum WireAnalysis {
     Op(WireOp),
+    Transient(WireTransient),
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WireOp {}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireTransient {
+    stop_ps: u64,
+    max_step_ps: u64,
+}
 
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -54,6 +63,48 @@ enum WirePart {
     },
     Diode(WireJunction),
     Led(WireJunction),
+    Capacitor {
+        name: String,
+        pins: PinMap,
+        capacitance: WireValue,
+    },
+    Switch(WireSwitch),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireSwitch {
+    name: String,
+    pins: PinMap,
+    on_resistance: WireValue,
+    off_resistance: WireValue,
+    initial: Contact,
+    events: Vec<WireEvent>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    bounce: Option<WireBounce>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireEvent {
+    t_ps: u64,
+    state: Contact,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireBounce {
+    window: WireInt<u64>,
+    max_bounces: WireInt<u8>,
+}
+
+/// `value` must be a JSON integer in `T`'s range. Anything else is `netlist.syntax`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireInt<T> {
+    value: T,
+    unit: String,
+    source: WireSource,
 }
 
 #[derive(Deserialize)]
@@ -191,10 +242,13 @@ fn resolve(wire: WireNetlist) -> Result<Netlist, Vec<Diagnostic>> {
         .map(|(i, name)| (name.as_str().to_string(), NetId(i as u32)))
         .collect();
 
+    let analysis = resolve_analysis(&wire.analysis, &mut out);
     let mut seen_parts = BTreeSet::new();
     let mut parts = Vec::new();
     for (index, part) in wire.parts.into_iter().enumerate() {
-        if let Some(part) = resolve_part(index, part, &net_ids, &mut seen_parts, &mut out) {
+        if let Some(part) =
+            resolve_part(wire.seed, index, part, &net_ids, &mut seen_parts, &mut out)
+        {
             parts.push(part);
         }
     }
@@ -204,15 +258,47 @@ fn resolve(wire: WireNetlist) -> Result<Netlist, Vec<Diagnostic>> {
     }
     debug_assert_eq!(wire.version, super::FORMAT_VERSION);
     parts.sort_by(|a, b| a.name.cmp(&b.name));
-    let analysis = match wire.analysis {
-        WireAnalysis::Op(_) => Analysis::Op,
-    };
     Ok(Netlist {
         seed: wire.seed,
-        analysis,
+        analysis: analysis.expect("an analysis without diagnostics resolved"),
         nets,
         parts,
     })
+}
+
+fn resolve_analysis(wire: &WireAnalysis, out: &mut Vec<Diagnostic>) -> Option<Analysis> {
+    let transient = match wire {
+        WireAnalysis::Op(_) => return Some(Analysis::Op),
+        WireAnalysis::Transient(transient) => transient,
+    };
+    let mut broken = Vec::new();
+    if transient.stop_ps == 0 {
+        broken.push(("stop_ps", transient.stop_ps, AnalysisRule::Positive));
+    }
+    if transient.max_step_ps < Transient::MIN_MAX_STEP_PS {
+        broken.push((
+            "max_step_ps",
+            transient.max_step_ps,
+            AnalysisRule::StepUnder1ns,
+        ));
+    }
+    if transient.max_step_ps > transient.stop_ps {
+        broken.push((
+            "max_step_ps",
+            transient.max_step_ps,
+            AnalysisRule::StepOverStop,
+        ));
+    }
+    let ok = broken.is_empty();
+    out.extend(
+        broken
+            .into_iter()
+            .map(|(field, value, rule)| Diagnostic::NetlistAnalysis { field, value, rule }),
+    );
+    ok.then_some(Analysis::Transient(Transient {
+        stop: Time::from_ps(transient.stop_ps),
+        max_step: transient.max_step_ps,
+    }))
 }
 
 fn resolve_nets(raw_nets: &[String], ground: &str, out: &mut Vec<Diagnostic>) -> Vec<Name> {
@@ -274,6 +360,7 @@ fn canonical_nets(mut valid: Vec<Name>, ground: Option<&Name>) -> Vec<Name> {
 }
 
 fn resolve_part(
+    seed: u64,
     index: usize,
     part: WirePart,
     nets: &BTreeMap<String, NetId>,
@@ -281,8 +368,11 @@ fn resolve_part(
     out: &mut Vec<Diagnostic>,
 ) -> Option<Part> {
     let raw_name = match &part {
-        WirePart::Resistor { name, .. } | WirePart::VoltageSource { name, .. } => name,
+        WirePart::Resistor { name, .. }
+        | WirePart::VoltageSource { name, .. }
+        | WirePart::Capacitor { name, .. } => name,
         WirePart::Diode(junction) | WirePart::Led(junction) => &junction.name,
+        WirePart::Switch(switch) => &switch.name,
     };
     let path = format!("parts[{index}].name");
     let name = match Name::new(raw_name) {
@@ -348,6 +438,21 @@ fn resolve_part(
         WirePart::Led(junction) => {
             resolve_junction(&name, &part_ref, junction, nets, out).map(Model::Led)
         }
+        WirePart::Capacitor {
+            pins, capacitance, ..
+        } => {
+            let pins = resolve_pins(&name, Capacitor::PINS, &pins.0, nets, out);
+            let capacitance = resolve_value(&part_ref, "capacitance", "F", true, capacitance, out);
+            match (pins, capacitance) {
+                (Some(pins), Some(capacitance)) => {
+                    Some(Model::Capacitor(Capacitor { pins, capacitance }))
+                }
+                _ => None,
+            }
+        }
+        WirePart::Switch(switch) => {
+            resolve_switch(seed, &name, &part_ref, switch, nets, out).map(Model::Switch)
+        }
     };
     if duplicate || reserved {
         None
@@ -409,6 +514,170 @@ fn resolve_junction(
         series_resistance: rs?,
         max_current: max_current?,
         max_power: max_power?,
+    })
+}
+
+fn resolve_switch(
+    seed: u64,
+    name: &Name,
+    part_ref: &Ref,
+    wire: WireSwitch,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Switch> {
+    let pins = resolve_pins(name, Switch::PINS, &wire.pins.0, nets, out);
+    let on = resolve_value(
+        part_ref,
+        "on_resistance",
+        "ohm",
+        true,
+        wire.on_resistance,
+        out,
+    );
+    let off = resolve_value(
+        part_ref,
+        "off_resistance",
+        "ohm",
+        true,
+        wire.off_resistance,
+        out,
+    );
+    let bounce = match wire.bounce {
+        None => Some(None),
+        Some(bounce) => resolve_bounce(part_ref, bounce, out).map(Some),
+    };
+    let window = match &bounce {
+        Some(Some(bounce)) => bounce.window.value,
+        _ => 0,
+    };
+    let events: Vec<Edge> = wire
+        .events
+        .iter()
+        .map(|event| Edge {
+            at: Time::from_ps(event.t_ps),
+            to: event.state,
+        })
+        .collect();
+    let events_ok = check_events(part_ref, wire.initial, &events, window, out);
+    let bounce = bounce?;
+    if !events_ok {
+        return None;
+    }
+    let edges = bounce::expand(seed, name, &events, bounce.as_ref());
+    Some(Switch {
+        pins: pins?,
+        on_resistance: on?,
+        off_resistance: off?,
+        events,
+        bounce,
+        schedule: Schedule {
+            initial: wire.initial,
+            edges,
+        },
+    })
+}
+
+fn resolve_bounce(part: &Ref, wire: WireBounce, out: &mut Vec<Diagnostic>) -> Option<Bounce> {
+    let window = resolve_int(part, "bounce.window", "ps", wire.window, out);
+    let max_bounces = resolve_int(part, "bounce.max_bounces", "1", wire.max_bounces, out);
+    let (window, max_bounces) = (window?, max_bounces?);
+    if window.value < 2 * max_bounces.value * Schedule::MIN_GAP_PS {
+        out.push(Diagnostic::NetlistValue {
+            part: part.clone(),
+            field: "bounce.window",
+            value: window.value as f64,
+            rule: ValueRule::BounceRoom,
+        });
+        return None;
+    }
+    Some(Bounce {
+        window,
+        max_bounces,
+    })
+}
+
+/// One diagnostic per event that breaks a rule. True when none did.
+fn check_events(
+    part: &Ref,
+    initial: Contact,
+    events: &[Edge],
+    window: u64,
+    out: &mut Vec<Diagnostic>,
+) -> bool {
+    let mut ok = true;
+    let mut contact = initial;
+    let mut previous: Option<u64> = None;
+    // Earliest legal `t_ps` for the next event.
+    // `None` means this event's window plus the gap does not fit in `u64`, so no later event is legal.
+    let mut earliest = Some(0);
+    for (event, edge) in events.iter().enumerate() {
+        let at = edge.at.as_ps();
+        let end = at.checked_add(window);
+        let rule = if previous.is_some_and(|previous| at <= previous) {
+            Some(ScheduleRule::NotIncreasing)
+        } else if at == 0 {
+            Some(ScheduleRule::AtZero)
+        } else if edge.to == contact {
+            Some(ScheduleRule::SameState)
+        } else if earliest.is_none_or(|earliest| at < earliest) {
+            Some(ScheduleRule::TooClose)
+        } else if end.is_none() {
+            Some(ScheduleRule::Overflow)
+        } else {
+            None
+        };
+        if let Some(rule) = rule {
+            ok = false;
+            out.push(Diagnostic::NetlistSchedule {
+                part: part.clone(),
+                event,
+                rule,
+            });
+            // The window itself ran past the largest time. Later events are not checked.
+            if rule == ScheduleRule::Overflow {
+                break;
+            }
+        }
+        contact = edge.to;
+        previous = Some(at);
+        earliest = match end {
+            Some(end) => end.checked_add(Schedule::MIN_GAP_PS),
+            None => None,
+        };
+    }
+    ok
+}
+
+fn resolve_int<T: Into<u64>>(
+    part: &Ref,
+    field: &'static str,
+    expected: &'static str,
+    value: WireInt<T>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<IntValue> {
+    let number: u64 = value.value.into();
+    let mut ok = true;
+    if value.unit != expected {
+        out.push(Diagnostic::NetlistUnit {
+            part: part.clone(),
+            field,
+            expected,
+            found: value.unit,
+        });
+        ok = false;
+    }
+    if number == 0 {
+        out.push(Diagnostic::NetlistValue {
+            part: part.clone(),
+            field,
+            value: 0.0,
+            rule: ValueRule::Positive,
+        });
+        ok = false;
+    }
+    ok.then(|| IntValue {
+        value: number,
+        source: source(value.source),
     })
 }
 
@@ -521,10 +790,14 @@ fn resolve_value(
     }
     Some(Value {
         si: value.value,
-        source: match value.source {
-            WireSource::User => Source::User,
-            WireSource::ClosedForm { note } => Source::ClosedForm { note },
-            WireSource::Datasheet { doc, at, typical } => Source::Datasheet { doc, at, typical },
-        },
+        source: source(value.source),
     })
+}
+
+fn source(wire: WireSource) -> Source {
+    match wire {
+        WireSource::User => Source::User,
+        WireSource::ClosedForm { note } => Source::ClosedForm { note },
+        WireSource::Datasheet { doc, at, typical } => Source::Datasheet { doc, at, typical },
+    }
 }

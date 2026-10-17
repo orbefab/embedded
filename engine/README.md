@@ -2,7 +2,7 @@
 
 sim-engine reads a resolved netlist and writes a deterministic run folder.
 
-The input is JSON. The folder holds `manifest.json`, `netlist.json`, `diagnostics.json`, and `observations.json`. This tree solves resistors, DC voltage sources, diodes, and LEDs at one operating point, and reports parts run past their ratings.
+The input is JSON. The folder holds `manifest.json`, `netlist.json`, `diagnostics.json`, and `observations.json`, and a transient run adds `traces/`. This tree solves resistors, DC voltage sources, diodes, LEDs, capacitors, and timed switches at one operating point or over time, and reports parts run past their ratings.
 
 ## Build
 
@@ -22,6 +22,7 @@ Run `scripts/check.sh` before every commit. From the repo root it runs:
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
+uv run scripts/ngspice_refs.py --self-test
 ```
 
 ## Run the divider

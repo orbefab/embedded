@@ -33,18 +33,45 @@ impl<'n> Circuit<'n> {
 
 /// What varies between Newton calls on one circuit.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Conditions {
+pub(crate) struct Conditions<'h> {
     /// Siemens from every node row to ground.
     pub(crate) gmin: f64,
     /// Multiplies every independent source.
     pub(crate) source_scale: f64,
+    /// The time this solve is for. A switch takes its contact on the interval ending here.
+    pub(crate) at: Time,
+    /// `None` is the operating point, where capacitors are open.
+    pub(crate) step: Option<Integration<'h>>,
 }
 
-impl Conditions {
-    pub(crate) const NOMINAL: Conditions = Conditions {
+impl Conditions<'static> {
+    pub(crate) const NOMINAL: Conditions<'static> = Conditions {
         gmin: GMIN,
         source_scale: 1.0,
+        at: Time::ZERO,
+        step: None,
     };
+}
+
+/// One time step's view of the past. The last accepted solution is the whole history.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Integration<'h> {
+    pub(crate) method: Method,
+    pub(crate) h_ps: u64,
+    pub(crate) previous: &'h Solution,
+}
+
+impl Integration<'_> {
+    /// The step in seconds.
+    pub(crate) fn h(&self) -> f64 {
+        self.h_ps as f64 / 1e12
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Method {
+    BackwardEuler,
+    Trapezoidal,
 }
 
 /// All of Newton's state. A value: passed in, returned, or dropped.

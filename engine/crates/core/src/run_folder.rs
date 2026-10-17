@@ -6,10 +6,11 @@
 //!   netlist.json
 //!   diagnostics.json
 //!   observations.json
+//!   traces/            transient only, see `trace`
 //! ```
 //!
-//! `observations.json` is `{"op": {ref: number}}`, or `{}` when no operating
-//! point was produced.
+//! `observations.json` is `{"op": {ref: number}}`, plus `switches` for a
+//! transient, or `{}` when the run reported an error.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -23,8 +24,9 @@ use sha2::{Digest, Sha256};
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::finite::Finite;
 use crate::name::Ref;
-use crate::netlist::{self, Netlist};
+use crate::netlist::{self, Edge, Netlist};
 use crate::timestamp::Timestamp;
+use crate::trace::Trace;
 
 pub const FORMAT_VERSION: u64 = 0;
 
@@ -34,28 +36,39 @@ pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Debug)]
 pub struct Results {
     observations: Observations,
+    trace: Option<Trace>,
     diagnostics: Vec<Diagnostic>,
 }
 
 impl Results {
-    pub fn new(observations: Observations, mut diagnostics: Vec<Diagnostic>) -> Results {
+    pub fn new(
+        observations: Observations,
+        trace: Option<Trace>,
+        mut diagnostics: Vec<Diagnostic>,
+    ) -> Results {
         diagnostics.sort_by_cached_key(|diagnostic| {
             let bytes = serde_json::to_vec(diagnostic).expect("diagnostic serializes");
             (diagnostic.sort_key(), bytes)
         });
         Results {
             observations,
+            trace,
             diagnostics,
         }
     }
 
     /// The netlist was rejected. No observations.
     pub fn rejected(diagnostics: Vec<Diagnostic>) -> Results {
-        Results::new(Observations::default(), diagnostics)
+        Results::new(Observations::default(), None, diagnostics)
     }
 
     pub fn observations(&self) -> &Observations {
         &self.observations
+    }
+
+    /// The accepted rows of a transient, kept up to an error.
+    pub fn trace(&self) -> Option<&Trace> {
+        self.trace.as_ref()
     }
 
     pub fn diagnostics(&self) -> &[Diagnostic] {
@@ -75,6 +88,9 @@ impl Results {
 pub struct Observations {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub op: Option<OpPoint>,
+    /// Every contact edge before the transient's stop, per switch. `None` for an operating point.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub switches: Option<BTreeMap<Ref, Vec<Edge>>>,
 }
 
 /// DC operating point. Net voltages and part quantities, keyed by `Ref`.
@@ -145,6 +161,11 @@ pub fn render(
         "observations.json".to_string(),
         to_pretty(results.observations()),
     );
+    if let Some(trace) = results.trace() {
+        for (name, bytes) in trace.files() {
+            files.insert(format!("traces/{name}"), bytes);
+        }
+    }
     RunFolder { files }
 }
 
@@ -508,7 +529,9 @@ mod tests {
         let results = Results::new(
             Observations {
                 op: Some(OpPoint { values }),
+                switches: None,
             },
+            None,
             vec![],
         );
         let folder = render(b"{}", None, &results, Timestamp::from_unix_seconds(0));
@@ -520,6 +543,36 @@ mod tests {
     }
 
     #[test]
+    fn a_trace_lands_under_traces_and_a_rerun_replaces_it() {
+        let mut trace = Trace::new(vec!["#net.a".parse().unwrap()], Time::from_ps(5));
+        trace.push(Time::ZERO, &[Finite::new(1.0).unwrap()]);
+        trace.push(Time::from_ps(5), &[Finite::new(2.0).unwrap()]);
+        let results = Results::new(Observations::default(), Some(trace), vec![]);
+        let folder = render(b"{}", None, &results, Timestamp::from_unix_seconds(0));
+        let paths: Vec<_> = folder.files().map(|(path, _)| path).collect();
+        assert_eq!(
+            paths,
+            [
+                "diagnostics.json",
+                "manifest.json",
+                "netlist.json",
+                "observations.json",
+                "traces/analog.f64",
+                "traces/index.json",
+                "traces/time.u64",
+            ]
+        );
+        assert_eq!(folder.file("traces/time.u64").unwrap().len(), 16);
+
+        let dir = scratch("traces");
+        folder.write(&dir).unwrap();
+        assert_eq!(fs::read(dir.join("traces/analog.f64")).unwrap().len(), 16);
+        rejected_folder(b"{}", 1).write(&dir).unwrap();
+        assert!(!dir.join("traces").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn diagnostic_order_ignores_emission_order() {
         let name = |path: &str, problem| Diagnostic::NetlistName {
             path: path.into(),
@@ -528,8 +581,12 @@ mod tests {
         };
         let bad = name("1", NameError::BadChar);
         let empty = name("", NameError::Empty);
-        let forward = Results::new(Observations::default(), vec![bad.clone(), empty.clone()]);
-        let reverse = Results::new(Observations::default(), vec![empty, bad]);
+        let forward = Results::new(
+            Observations::default(),
+            None,
+            vec![bad.clone(), empty.clone()],
+        );
+        let reverse = Results::new(Observations::default(), None, vec![empty, bad]);
         assert_eq!(
             serde_json::to_vec(forward.diagnostics()).unwrap(),
             serde_json::to_vec(reverse.diagnostics()).unwrap()
@@ -545,7 +602,7 @@ mod tests {
             column: 1,
             detail: "nope".into(),
         };
-        let ordered = Results::new(Observations::default(), vec![singular, syntax]);
+        let ordered = Results::new(Observations::default(), None, vec![singular, syntax]);
         assert_eq!(ordered.diagnostics()[0].code(), "netlist.syntax");
         assert_eq!(ordered.diagnostics()[1].code(), "solver.singular");
     }

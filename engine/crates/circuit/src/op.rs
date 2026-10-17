@@ -1,44 +1,40 @@
-use std::collections::BTreeMap;
-
 use sim_core::diagnostic::Diagnostic;
 use sim_core::finite::Finite;
-use sim_core::name::Ref;
 use sim_core::netlist::Netlist;
 use sim_core::run_folder::OpPoint;
 use sim_core::time::Time;
 
-use crate::element;
 use crate::ladder::{self, Next, Rung};
-use crate::mna::{Probe, Solution};
 use crate::newton::{Circuit, Failure, Iterate, Offender, newton};
-use crate::ratings::Ratings;
+use crate::observe::{self, Columns};
+use crate::ratings::{Ratings, Timing};
 
 pub(crate) const OP_BUDGET: u32 = 100;
 
 /// The operating point, with a finding per rating it breaks.
 pub(crate) fn run(netlist: &Netlist, diagnostics: &mut Vec<Diagnostic>) -> Option<OpPoint> {
-    match solve(netlist) {
-        Ok(point) => {
-            let mut ratings = Ratings::new(netlist);
-            ratings.sample(Time::ZERO, &point.values);
-            diagnostics.extend(ratings.finish());
-            Some(point)
-        }
+    let columns = Columns::new(netlist);
+    let row = match solve(netlist, &columns) {
+        Ok(row) => row,
         Err(diagnostic) => {
             diagnostics.push(diagnostic);
-            None
+            return None;
         }
-    }
+    };
+    let mut ratings = Ratings::new(netlist, &columns, Timing::Point);
+    ratings.sample(Time::ZERO, &row);
+    diagnostics.extend(ratings.finish());
+    Some(observe::op_point(&columns, &row))
 }
 
-fn solve(netlist: &Netlist) -> Result<OpPoint, Diagnostic> {
+fn solve(netlist: &Netlist, columns: &Columns) -> Result<Vec<Finite>, Diagnostic> {
     let circuit = Circuit::new(netlist)?;
     let iterate = operating_point(&circuit)?;
-    observe(&circuit, &iterate.solution)
+    observe::observe(&circuit, columns, &iterate.solution, Time::ZERO)
 }
 
 /// Newton, then the fallback ladder. What comes back converged at `Conditions::NOMINAL`.
-fn operating_point(circuit: &Circuit) -> Result<Iterate, Diagnostic> {
+pub(crate) fn operating_point(circuit: &Circuit) -> Result<Iterate, Diagnostic> {
     climb(circuit, |_| OP_BUDGET)
 }
 
@@ -98,33 +94,11 @@ fn climb(circuit: &Circuit, budget: impl Fn(Rung) -> u32) -> Result<Iterate, Dia
                     iterations,
                     gmin,
                     source_scale,
+                    step_ps: None,
                 });
             }
         }
     }
-}
-
-fn observe(circuit: &Circuit, solution: &Solution) -> Result<OpPoint, Diagnostic> {
-    let netlist = circuit.netlist;
-    let mut values = BTreeMap::new();
-    for (id, name) in netlist.nets() {
-        let finite = Finite::new(solution.voltage(id)).expect("solution components are finite");
-        values.insert(Ref::Net(name.clone()), finite);
-    }
-    for (id, part) in netlist.parts() {
-        let probe = Probe {
-            layout: &circuit.layout,
-            part: id,
-            x: solution,
-        };
-        element::observe(&part.model, &part.name, &probe, &mut values).map_err(|_| {
-            Diagnostic::SolverNonFinite {
-                at: Time::ZERO,
-                unknown: Ref::Part(part.name.clone()),
-            }
-        })?;
-    }
-    Ok(OpPoint { values })
 }
 
 #[cfg(test)]
@@ -134,7 +108,7 @@ mod tests {
     use sim_core::netlist::{self, Netlist};
 
     use super::*;
-    use crate::mna::GMIN;
+    use crate::mna::Solution;
     use crate::newton::Conditions;
 
     fn example(name: &str) -> Vec<u8> {
@@ -240,8 +214,8 @@ mod tests {
         let netlist = parse(&example("divider"));
         let circuit = Circuit::new(&netlist).unwrap();
         let conditions = Conditions {
-            gmin: GMIN,
             source_scale: 0.0,
+            ..Conditions::NOMINAL
         };
         let converged =
             newton(&circuit, &conditions, Iterate::initial(&circuit), OP_BUDGET).unwrap();
@@ -258,7 +232,7 @@ mod tests {
         let gmin = 1e-2;
         let conditions = Conditions {
             gmin,
-            source_scale: 1.0,
+            ..Conditions::NOMINAL
         };
         let converged =
             newton(&circuit, &conditions, Iterate::initial(&circuit), OP_BUDGET).unwrap();

@@ -1,6 +1,7 @@
 use serde::{Serialize, Serializer};
 
 use crate::name::{NameError, Ref};
+use crate::netlist::Schedule;
 use crate::time::Time;
 
 /// `Error` means the engine has no trustworthy result.
@@ -20,6 +21,36 @@ pub enum ValueRule {
     FiniteReciprocal,
     /// `n*VT` is not normal, or `vcrit` is not finite and positive.
     FiniteJunction,
+    /// `bounce.window` is less than `2 * max_bounces * MIN_GAP_PS`.
+    BounceRoom,
+}
+
+/// Which rule a transient analysis broke.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnalysisRule {
+    Positive,
+    /// `max_step_ps` is below 1000, the first step after a contact edge.
+    #[serde(rename = "step_under_1ns")]
+    StepUnder1ns,
+    /// `max_step_ps` is greater than `stop_ps`.
+    StepOverStop,
+}
+
+/// Which rule a switch event broke.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScheduleRule {
+    /// The event is at t = 0, where the operating point already holds `initial`.
+    AtZero,
+    /// The event does not change the contact.
+    SameState,
+    /// The event is not strictly after the previous event.
+    NotIncreasing,
+    /// The event is less than `MIN_GAP_PS` after the previous event's last possible edge.
+    TooClose,
+    /// The event's bounce window ends past the largest `u64` picosecond.
+    Overflow,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -65,6 +96,18 @@ pub enum Diagnostic {
     },
     /// `ground` names a net that is not in `nets`.
     NetlistGround { net: String },
+    /// A transient analysis field breaks a rule.
+    NetlistAnalysis {
+        field: &'static str,
+        value: u64,
+        rule: AnalysisRule,
+    },
+    /// A switch's `events[event]` breaks a schedule rule.
+    NetlistSchedule {
+        part: Ref,
+        event: usize,
+        rule: ScheduleRule,
+    },
     /// The net has no DC path to ground. Its voltage is held only by gmin.
     NetFloating { net: Ref },
     /// The MNA matrix is singular at `unknown`.
@@ -77,6 +120,12 @@ pub enum Diagnostic {
         unknowns: usize,
         limit: usize,
     },
+    /// A transient would store more than `limit` trace rows.
+    TraceTooLarge {
+        at: Time,
+        limit: usize,
+        columns: usize,
+    },
     /// Newton found no operating point.
     SolverConvergence {
         at: Time,
@@ -88,6 +137,8 @@ pub enum Diagnostic {
         gmin: Option<f64>,
         /// Largest source scale that converged, from 0 to 1.
         source_scale: f64,
+        /// The last step tried, for a time step. `None` for the operating point.
+        step_ps: Option<u64>,
     },
     /// A rated current went over its limit.
     RatingCurrent(Excursion),
@@ -123,11 +174,14 @@ impl Diagnostic {
             Diagnostic::NetlistUnit { .. } => "netlist.unit",
             Diagnostic::NetlistValue { .. } => "netlist.value",
             Diagnostic::NetlistGround { .. } => "netlist.ground",
+            Diagnostic::NetlistAnalysis { .. } => "netlist.analysis",
+            Diagnostic::NetlistSchedule { .. } => "netlist.schedule",
             Diagnostic::NetFloating { .. } => "net.floating",
             Diagnostic::SolverSingular { .. } => "solver.singular",
             Diagnostic::SolverNonFinite { .. } => "solver.nonfinite",
             Diagnostic::SolverTooLarge { .. } => "solver.too_large",
             Diagnostic::SolverConvergence { .. } => "solver.convergence",
+            Diagnostic::TraceTooLarge { .. } => "trace.too_large",
             Diagnostic::RatingCurrent(_) => "rating.current",
             Diagnostic::RatingPower(_) => "rating.power",
         }
@@ -147,10 +201,13 @@ impl Diagnostic {
             | Diagnostic::NetlistUnit { .. }
             | Diagnostic::NetlistValue { .. }
             | Diagnostic::NetlistGround { .. }
+            | Diagnostic::NetlistAnalysis { .. }
+            | Diagnostic::NetlistSchedule { .. }
             | Diagnostic::SolverSingular { .. }
             | Diagnostic::SolverNonFinite { .. }
             | Diagnostic::SolverTooLarge { .. }
-            | Diagnostic::SolverConvergence { .. } => Severity::Error,
+            | Diagnostic::SolverConvergence { .. }
+            | Diagnostic::TraceTooLarge { .. } => Severity::Error,
         }
     }
 
@@ -159,7 +216,8 @@ impl Diagnostic {
             Diagnostic::SolverSingular { at, .. }
             | Diagnostic::SolverNonFinite { at, .. }
             | Diagnostic::SolverTooLarge { at, .. }
-            | Diagnostic::SolverConvergence { at, .. } => Some(*at),
+            | Diagnostic::SolverConvergence { at, .. }
+            | Diagnostic::TraceTooLarge { at, .. } => Some(*at),
             Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
                 Some(excursion.first)
             }
@@ -172,6 +230,8 @@ impl Diagnostic {
             | Diagnostic::NetlistUnit { .. }
             | Diagnostic::NetlistValue { .. }
             | Diagnostic::NetlistGround { .. }
+            | Diagnostic::NetlistAnalysis { .. }
+            | Diagnostic::NetlistSchedule { .. }
             | Diagnostic::NetFloating { .. } => None,
         }
     }
@@ -181,17 +241,19 @@ impl Diagnostic {
             Diagnostic::NetlistSyntax { .. }
             | Diagnostic::NetlistVersion { .. }
             | Diagnostic::NetlistName { .. }
-            | Diagnostic::NetlistGround { .. } => Vec::new(),
+            | Diagnostic::NetlistGround { .. }
+            | Diagnostic::NetlistAnalysis { .. } => Vec::new(),
             Diagnostic::NetlistDuplicate { name } => vec![name.clone()],
             Diagnostic::NetlistUnknownNet { pin, .. } => vec![pin.clone()],
             Diagnostic::NetlistPins { part, .. }
             | Diagnostic::NetlistUnit { part, .. }
-            | Diagnostic::NetlistValue { part, .. } => vec![part.clone()],
+            | Diagnostic::NetlistValue { part, .. }
+            | Diagnostic::NetlistSchedule { part, .. } => vec![part.clone()],
             Diagnostic::NetFloating { net } => vec![net.clone()],
             Diagnostic::SolverSingular { unknown, .. }
             | Diagnostic::SolverNonFinite { unknown, .. }
             | Diagnostic::SolverConvergence { unknown, .. } => vec![unknown.clone()],
-            Diagnostic::SolverTooLarge { .. } => Vec::new(),
+            Diagnostic::SolverTooLarge { .. } | Diagnostic::TraceTooLarge { .. } => Vec::new(),
             Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
                 vec![excursion.quantity.clone()]
             }
@@ -251,9 +313,38 @@ impl Diagnostic {
                     ValueRule::FiniteJunction => format!(
                         "{part} {field} is {value}; n*VT must be normal, and vcrit must be finite and positive"
                     ),
+                    ValueRule::BounceRoom => format!(
+                        "{part} {field} is {value}; it must fit 2 * max_bounces edges {} ps apart",
+                        Schedule::MIN_GAP_PS
+                    ),
                 }
             }
             Diagnostic::NetlistGround { net } => format!("ground `{net}` is not in `nets`"),
+            Diagnostic::NetlistAnalysis { field, value, rule } => {
+                let must = match rule {
+                    AnalysisRule::Positive => "it must be positive",
+                    AnalysisRule::StepUnder1ns => "it must be at least 1000",
+                    AnalysisRule::StepOverStop => "it must not exceed stop_ps",
+                };
+                format!("analysis {field} is {value}; {must}")
+            }
+            Diagnostic::NetlistSchedule { part, event, rule } => {
+                let what = match rule {
+                    ScheduleRule::AtZero => {
+                        "is at 0 ps; an event must come after t = 0".to_string()
+                    }
+                    ScheduleRule::SameState => "does not change the contact".to_string(),
+                    ScheduleRule::NotIncreasing => "is not after the previous event".to_string(),
+                    ScheduleRule::TooClose => format!(
+                        "is less than {} ps after the previous event and its bounce window",
+                        Schedule::MIN_GAP_PS
+                    ),
+                    ScheduleRule::Overflow => {
+                        "has a bounce window that ends past the largest time".to_string()
+                    }
+                };
+                format!("{part} events[{event}] {what}")
+            }
             Diagnostic::NetFloating { net } => format!("{net} has no DC path to ground"),
             Diagnostic::SolverSingular { unknown, .. } => format!("singular matrix at {unknown}"),
             Diagnostic::SolverNonFinite { unknown, .. } => {
@@ -266,9 +357,21 @@ impl Diagnostic {
                 unknown,
                 iterations,
                 source_scale,
+                step_ps: None,
                 ..
             } => format!(
                 "Newton did not converge at {unknown} after {iterations} iterations; source stepping reached {source_scale}"
+            ),
+            Diagnostic::SolverConvergence {
+                unknown,
+                iterations,
+                step_ps: Some(step_ps),
+                ..
+            } => format!(
+                "Newton did not converge at {unknown} after {iterations} iterations; the time step halved to {step_ps} ps"
+            ),
+            Diagnostic::TraceTooLarge { limit, .. } => format!(
+                "the trace reached its limit of {limit} rows; a run's rows come from max_step_ps, stop_ps, and the switch edges"
             ),
             Diagnostic::RatingCurrent(excursion) => over_rating(excursion, "A"),
             Diagnostic::RatingPower(excursion) => over_rating(excursion, "W"),
@@ -321,6 +424,12 @@ impl Diagnostic {
                 field, value, rule, ..
             } => serde_json::json!({ "field": field, "value": value, "rule": rule }),
             Diagnostic::NetlistGround { net } => serde_json::json!({ "net": net }),
+            Diagnostic::NetlistAnalysis { field, value, rule } => {
+                serde_json::json!({ "field": field, "rule": rule, "value": value })
+            }
+            Diagnostic::NetlistSchedule { event, rule, .. } => {
+                serde_json::json!({ "event": event, "rule": rule })
+            }
             Diagnostic::SolverSingular { .. } | Diagnostic::SolverNonFinite { .. } => {
                 serde_json::json!({})
             }
@@ -331,12 +440,22 @@ impl Diagnostic {
                 iterations,
                 gmin,
                 source_scale,
+                step_ps,
                 ..
-            } => serde_json::json!({
-                "gmin": gmin,
-                "iterations": iterations,
-                "source_scale": source_scale,
-            }),
+            } => {
+                let mut data = serde_json::json!({
+                    "gmin": gmin,
+                    "iterations": iterations,
+                    "source_scale": source_scale,
+                });
+                if let Some(step_ps) = step_ps {
+                    data["step_ps"] = serde_json::json!(step_ps);
+                }
+                data
+            }
+            Diagnostic::TraceTooLarge { limit, columns, .. } => {
+                serde_json::json!({ "columns": columns, "limit": limit })
+            }
             Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
                 serde_json::json!({
                     "limit": excursion.limit,
@@ -474,6 +593,7 @@ mod tests {
                 iterations: 1310,
                 gmin: None,
                 source_scale: 0.75,
+                step_ps: None,
             },
             Diagnostic::RatingCurrent(Excursion {
                 quantity: "#led1.i".parse().unwrap(),
@@ -491,6 +611,21 @@ mod tests {
                 first: Time::from_ps(5),
                 over_ps: Some(4),
             }),
+            Diagnostic::NetlistSchedule {
+                part: part("sw1"),
+                event: 1,
+                rule: ScheduleRule::TooClose,
+            },
+            Diagnostic::NetlistAnalysis {
+                field: "max_step_ps",
+                value: 999,
+                rule: AnalysisRule::StepUnder1ns,
+            },
+            Diagnostic::TraceTooLarge {
+                at: Time::from_ps(3_000),
+                limit: 4,
+                columns: 2,
+            },
         ]
     }
 
@@ -521,7 +656,7 @@ mod tests {
             assert!(is_code(code), "{code}");
             assert!(seen.insert(code), "duplicate code {code}");
         }
-        assert_eq!(seen.len(), 16);
+        assert_eq!(seen.len(), 19);
     }
 
     #[test]
@@ -547,6 +682,9 @@ mod tests {
                 "solver.convergence",
                 "rating.current",
                 "rating.power",
+                "netlist.schedule",
+                "netlist.analysis",
+                "trace.too_large",
             ]
         );
         for diagnostic in &found {
@@ -557,6 +695,8 @@ mod tests {
                 assert_eq!(diagnostic.at(), Some(Time::ZERO));
             } else if code == "rating.power" {
                 assert_eq!(diagnostic.at(), Some(Time::from_ps(5)));
+            } else if code == "trace.too_large" {
+                assert_eq!(diagnostic.at(), Some(Time::from_ps(3_000)));
             } else {
                 assert_eq!(diagnostic.at(), None);
             }
@@ -593,12 +733,52 @@ mod tests {
             ),
             "{current}"
         );
+        let schedule = serde_json::to_string(&found[16]).unwrap();
+        assert!(
+            schedule.contains(
+                r##""refs":["#sw1"],"t_ps":null,"message":"#sw1 events[1] is less than 2000 ps after the previous event and its bounce window","data":{"event":1,"rule":"too_close"}"##
+            ),
+            "{schedule}"
+        );
+        let analysis = serde_json::to_string(&found[17]).unwrap();
+        assert!(
+            analysis.contains(
+                r#""refs":[],"t_ps":null,"message":"analysis max_step_ps is 999; it must be at least 1000","data":{"field":"max_step_ps","rule":"step_under_1ns","value":999}"#
+            ),
+            "{analysis}"
+        );
+        let rows = serde_json::to_string(&found[18]).unwrap();
+        assert!(
+            rows.contains(
+                r#""severity":"error","refs":[],"t_ps":3000,"message":"the trace reached its limit of 4 rows; a run's rows come from max_step_ps, stop_ps, and the switch edges","data":{"columns":2,"limit":4}"#
+            ),
+            "{rows}"
+        );
         let power = serde_json::to_string(&found[15]).unwrap();
         assert!(
             power.contains(
                 r##""refs":["#r1.p"],"t_ps":5,"message":"#r1.p peaks at 3 W, over its 0.25 W rating","data":{"limit":0.25,"over_ps":4,"peak":3.0,"peak_ps":7}"##
             ),
             "{power}"
+        );
+    }
+
+    #[test]
+    fn a_failed_time_step_adds_its_step_to_the_operating_point_data() {
+        let step = Diagnostic::SolverConvergence {
+            at: Time::from_ps(2_000_000_000),
+            unknown: part("led1"),
+            iterations: 50,
+            gmin: None,
+            source_scale: 1.0,
+            step_ps: Some(1),
+        };
+        let text = serde_json::to_string(&step).unwrap();
+        assert!(
+            text.contains(
+                r##""t_ps":2000000000,"message":"Newton did not converge at #led1 after 50 iterations; the time step halved to 1 ps","data":{"gmin":null,"iterations":50,"source_scale":1.0,"step_ps":1}"##
+            ),
+            "{text}"
         );
     }
 
@@ -630,6 +810,7 @@ mod tests {
             ValueRule::Positive,
             ValueRule::FiniteReciprocal,
             ValueRule::FiniteJunction,
+            ValueRule::BounceRoom,
         ] {
             let diagnostic = Diagnostic::NetlistValue {
                 part: part("d1"),

@@ -2,7 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use sim_core::name::Ref;
-use sim_core::netlist::{self, Analysis, Model, RatingKind, Source};
+use sim_core::netlist::{self, Analysis, Contact, Model, RatingKind, Source, Transient};
+use sim_core::time::Time;
 
 fn fixture(name: &str) -> Vec<u8> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -703,4 +704,325 @@ fn a_junction_just_inside_the_domain_parses() {
         .find(|(_, part)| part.name.as_str() == "d1")
         .unwrap();
     assert!(matches!(diode.model, Model::Diode(_)), "{:?}", diode.model);
+}
+
+fn with_parts(analysis: &str, parts: &str) -> String {
+    format!(
+        r#"{{
+      "version": 0,
+      "seed": 7,
+      "analysis": {analysis},
+      "ground": "gnd",
+      "nets": ["gnd", "a"],
+      "parts": [{parts}]
+    }}"#
+    )
+}
+
+fn switch(events: &str, bounce: &str) -> String {
+    with_parts(
+        r#"{ "op": {} }"#,
+        &format!(
+            r#"{{
+          "name": "sw1",
+          "kind": "switch",
+          "pins": {{ "a": "a", "b": "gnd" }},
+          "on_resistance": {{ "value": 0.1, "unit": "ohm", "source": "user" }},
+          "off_resistance": {{ "value": 1e9, "unit": "ohm", "source": "user" }},
+          "initial": "open",
+          "events": {events},
+          "bounce": {bounce}
+        }}"#
+        ),
+    )
+}
+
+fn bounce(window: &str, max_bounces: &str) -> String {
+    format!(
+        r#"{{
+          "window": {{ "value": {window}, "unit": "ps", "source": "user" }},
+          "max_bounces": {{ "value": {max_bounces}, "unit": "1", "source": "user" }}
+        }}"#
+    )
+}
+
+fn errors(json: &str) -> Vec<String> {
+    let err = netlist::parse(json.as_bytes()).unwrap_err();
+    err.iter()
+        .map(|d| serde_json::to_value(d).unwrap())
+        .map(|d| format!("{} {} {}", d["code"], d["refs"], d["data"]))
+        .collect()
+}
+
+#[test]
+fn a_capacitor_keeps_its_value_and_has_no_ratings() {
+    let part = r#"{
+      "name": "c1",
+      "kind": "capacitor",
+      "pins": { "a": "a", "b": "gnd" },
+      "capacitance": { "value": 1e-6, "unit": "F", "source": "user" }
+    }"#;
+    let netlist = netlist::parse(with_parts(r#"{ "op": {} }"#, part).as_bytes()).unwrap();
+    let (_, c1) = netlist.parts().next().unwrap();
+    let Model::Capacitor(capacitor) = &c1.model else {
+        panic!("{:?}", c1.model);
+    };
+    assert_eq!(capacitor.capacitance.si.get(), 1e-6);
+    assert!(c1.model.ratings().is_empty());
+
+    let zero = part.replace("1e-6", "0.0");
+    assert_eq!(
+        errors(&with_parts(r#"{ "op": {} }"#, &zero)),
+        [r##""netlist.value" ["#c1"] {"field":"capacitance","rule":"positive","value":0.0}"##]
+    );
+    let rated = part.replace(
+        r#""source": "user" }"#,
+        r#""source": "user" }, "ratings": {}"#,
+    );
+    let err = netlist::parse(with_parts(r#"{ "op": {} }"#, &rated).as_bytes()).unwrap_err();
+    assert_eq!(err[0].code(), "netlist.syntax");
+}
+
+#[test]
+fn a_switch_resolves_its_events_and_bounce_into_one_schedule() {
+    let json = switch(
+        r#"[{ "t_ps": 2000000000, "state": "closed" }, { "t_ps": 12000000000, "state": "open" }]"#,
+        &bounce("1000000000", "4"),
+    );
+    let netlist = netlist::parse(json.as_bytes()).unwrap();
+    let (_, sw1) = netlist.parts().next().unwrap();
+    let Model::Switch(switch) = &sw1.model else {
+        panic!("{:?}", sw1.model);
+    };
+    assert_eq!(switch.events.len(), 2);
+    let schedule = &switch.schedule;
+    assert_eq!(schedule.initial(), Contact::Open);
+    assert_eq!(schedule.edges().len(), 14);
+    assert_eq!(
+        schedule.edges(),
+        netlist::bounce::expand(7, &sw1.name, &switch.events, switch.bounce.as_ref())
+    );
+    assert_eq!(schedule.before(Time::ZERO), Contact::Open);
+    assert_eq!(schedule.before(Time::from_ps(2_000_000_000)), Contact::Open);
+    assert_eq!(
+        schedule.before(Time::from_ps(2_000_000_001)),
+        Contact::Closed
+    );
+    assert_eq!(
+        schedule.before(Time::from_ps(20_000_000_000)),
+        Contact::Open
+    );
+    assert!(sw1.model.ratings().is_empty());
+
+    let other_seed = json.replace(r#""seed": 7"#, r#""seed": 8"#);
+    let reseeded = netlist::parse(other_seed.as_bytes()).unwrap();
+    let Model::Switch(moved) = &reseeded.parts().next().unwrap().1.model else {
+        panic!("not a switch");
+    };
+    assert_ne!(moved.schedule.edges(), schedule.edges());
+    assert_eq!(moved.schedule.edges()[0], schedule.edges()[0]);
+}
+
+#[test]
+fn each_broken_event_names_its_index_and_rule() {
+    let cases = [
+        (
+            r#"[{ "t_ps": 0, "state": "closed" }]"#,
+            "null",
+            "at_zero",
+            0,
+        ),
+        (
+            r#"[{ "t_ps": 5, "state": "open" }]"#,
+            "null",
+            "same_state",
+            0,
+        ),
+        (
+            r#"[{ "t_ps": 5000, "state": "closed" }, { "t_ps": 6999, "state": "open" }]"#,
+            "null",
+            "too_close",
+            1,
+        ),
+        (
+            r#"[{ "t_ps": 9000, "state": "closed" }, { "t_ps": 5000, "state": "open" }]"#,
+            "null",
+            "not_increasing",
+            1,
+        ),
+        (
+            r#"[{ "t_ps": 5000, "state": "closed" }, { "t_ps": 5000, "state": "open" }]"#,
+            "null",
+            "not_increasing",
+            1,
+        ),
+        (
+            r#"[{ "t_ps": 5000, "state": "closed" }, { "t_ps": 10999, "state": "open" }]"#,
+            r#"{ "window": { "value": 4000, "unit": "ps", "source": "user" },
+                 "max_bounces": { "value": 1, "unit": "1", "source": "user" } }"#,
+            "too_close",
+            1,
+        ),
+        (
+            r#"[{ "t_ps": 18446744073709550000, "state": "closed" }]"#,
+            r#"{ "window": { "value": 4000, "unit": "ps", "source": "user" },
+                 "max_bounces": { "value": 1, "unit": "1", "source": "user" } }"#,
+            "overflow",
+            0,
+        ),
+        (
+            r#"[{ "t_ps": 18446744073709550000, "state": "closed" }, { "t_ps": 18446744073709551000, "state": "open" }]"#,
+            r#"{ "window": { "value": 4000, "unit": "ps", "source": "user" },
+                 "max_bounces": { "value": 1, "unit": "1", "source": "user" } }"#,
+            "overflow",
+            0,
+        ),
+        (
+            r#"[{ "t_ps": 18446744073709550115, "state": "closed" }, { "t_ps": 18446744073709551115, "state": "open" }]"#,
+            "null",
+            "too_close",
+            1,
+        ),
+        (
+            r#"[{ "t_ps": 18446744073709545616, "state": "closed" }, { "t_ps": 18446744073709545716, "state": "open" }]"#,
+            r#"{ "window": { "value": 4000, "unit": "ps", "source": "user" },
+                 "max_bounces": { "value": 1, "unit": "1", "source": "user" } }"#,
+            "too_close",
+            1,
+        ),
+        (
+            r#"[{ "t_ps": 10000, "state": "closed" }, { "t_ps": 10001, "state": "open" }]"#,
+            r#"{ "window": { "value": 18446744073709540615, "unit": "ps", "source": "user" },
+                 "max_bounces": { "value": 8, "unit": "1", "source": "user" } }"#,
+            "too_close",
+            1,
+        ),
+    ];
+    for (events, bounce, rule, event) in cases {
+        assert_eq!(
+            errors(&switch(events, bounce)),
+            [format!(
+                r##""netlist.schedule" ["#sw1"] {{"event":{event},"rule":"{rule}"}}"##
+            )],
+            "{events}"
+        );
+    }
+    let spaced = r#"[{ "t_ps": 5000, "state": "closed" }, { "t_ps": 7000, "state": "open" }]"#;
+    assert!(netlist::parse(switch(spaced, "null").as_bytes()).is_ok());
+    let after_window =
+        r#"[{ "t_ps": 5000, "state": "closed" }, { "t_ps": 11000, "state": "open" }]"#;
+    assert!(netlist::parse(switch(after_window, &bounce("4000", "1")).as_bytes()).is_ok());
+    let gap_fits_at_the_top = r#"[{ "t_ps": 18446744073709549615, "state": "closed" }, { "t_ps": 18446744073709551615, "state": "open" }]"#;
+    assert!(netlist::parse(switch(gap_fits_at_the_top, "null").as_bytes()).is_ok());
+}
+
+#[test]
+fn bounce_values_follow_the_value_rules() {
+    let events = r#"[{ "t_ps": 5000, "state": "closed" }]"#;
+    assert_eq!(
+        errors(&switch(events, &bounce("0", "1"))),
+        [r##""netlist.value" ["#sw1"] {"field":"bounce.window","rule":"positive","value":0.0}"##]
+    );
+    assert_eq!(
+        errors(&switch(events, &bounce("4000", "0"))),
+        [
+            r##""netlist.value" ["#sw1"] {"field":"bounce.max_bounces","rule":"positive","value":0.0}"##
+        ]
+    );
+    assert_eq!(
+        errors(&switch(events, &bounce("7999", "2"))),
+        [
+            r##""netlist.value" ["#sw1"] {"field":"bounce.window","rule":"bounce_room","value":7999.0}"##
+        ]
+    );
+    assert!(netlist::parse(switch(events, &bounce("8000", "2")).as_bytes()).is_ok());
+    let unit = switch(events, &bounce("4000", "1")).replace(r#""unit": "ps""#, r#""unit": "s""#);
+    assert_eq!(
+        errors(&unit),
+        [r##""netlist.unit" ["#sw1"] {"expected":"ps","field":"bounce.window","found":"s"}"##]
+    );
+    for (window, max_bounces) in [
+        ("4000.0", "1"),
+        ("1e9", "1"),
+        ("4000", "256"),
+        ("4000", "-1"),
+    ] {
+        let err =
+            netlist::parse(switch(events, &bounce(window, max_bounces)).as_bytes()).unwrap_err();
+        assert_eq!(err[0].code(), "netlist.syntax", "{window} {max_bounces}");
+    }
+    let missing = switch(events, "null").replace(",\n          \"bounce\": null", "");
+    assert!(!missing.contains("bounce"), "{missing}");
+    let err = netlist::parse(missing.as_bytes()).unwrap_err();
+    let text = serde_json::to_string(&err[0]).unwrap();
+    assert!(text.contains("missing field `bounce`"), "{text}");
+}
+
+fn transient(stop_ps: &str, max_step_ps: &str) -> String {
+    with_parts(
+        &format!(r#"{{ "transient": {{ "stop_ps": {stop_ps}, "max_step_ps": {max_step_ps} }} }}"#),
+        "",
+    )
+}
+
+#[test]
+fn a_transient_analysis_keeps_its_stop_and_max_step() {
+    let netlist = netlist::parse(transient("81000000000", "20000000").as_bytes()).unwrap();
+    assert_eq!(
+        netlist.analysis(),
+        &Analysis::Transient(Transient {
+            stop: Time::from_ps(81_000_000_000),
+            max_step: 20_000_000,
+        })
+    );
+    assert!(netlist::parse(transient("1000", "1000").as_bytes()).is_ok());
+}
+
+#[test]
+fn a_transient_analysis_breaks_each_rule_with_its_field() {
+    let cases = [
+        (
+            "0",
+            "1000",
+            vec![
+                ("stop_ps", "positive", "0"),
+                ("max_step_ps", "step_over_stop", "1000"),
+            ],
+        ),
+        (
+            "5000",
+            "999",
+            vec![("max_step_ps", "step_under_1ns", "999")],
+        ),
+        ("5000", "0", vec![("max_step_ps", "step_under_1ns", "0")]),
+        (
+            "5000",
+            "5001",
+            vec![("max_step_ps", "step_over_stop", "5001")],
+        ),
+    ];
+    for (stop, max_step, expected) in cases {
+        let expected: Vec<String> = expected
+            .iter()
+            .map(|(field, rule, value)| {
+                format!(
+                    r#""netlist.analysis" [] {{"field":"{field}","rule":"{rule}","value":{value}}}"#
+                )
+            })
+            .collect();
+        assert_eq!(
+            errors(&transient(stop, max_step)),
+            expected,
+            "{stop} {max_step}"
+        );
+    }
+    for shape in [
+        r#"{ "transient": { "stop_ps": 5000 } }"#,
+        r#"{ "transient": { "stop_ps": 5000, "max_step_ps": 1000.5 } }"#,
+        r#"{ "transient": { "stop_ps": 5000, "max_step_ps": 1000, "min_step_ps": 1 } }"#,
+        r#"{ "op": {}, "transient": { "stop_ps": 5000, "max_step_ps": 1000 } }"#,
+    ] {
+        let err = netlist::parse(with_parts(shape, "").as_bytes()).unwrap_err();
+        assert_eq!(err[0].code(), "netlist.syntax", "{shape}");
+    }
 }

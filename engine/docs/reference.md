@@ -1,6 +1,6 @@
 # ngspice references
 
-Each example has an operating point from ngspice next to its netlist. A Rust test compares the engine with it. The Rust tests never run ngspice.
+Each example has an ngspice result next to its netlist. A DC example has an operating point, and a transient example has a waveform. A Rust test compares the engine with it. The Rust tests never run ngspice.
 
 ```text
 examples/<name>/
@@ -20,17 +20,29 @@ uv run scripts/ngspice_refs.py --check            # exit 1 on drift or an unchec
 uv run scripts/ngspice_refs.py --self-test        # skip contract, no ngspice
 ```
 
-Stdout is one JSON document. It lists the examples written or checked, the examples skipped with a reason, and with `--check` the files that drifted. A skipped example that already has `ngspice.json` is a failure under `--check`. Its entry's `failure` is `committed ngspice.json was not checked`, and the process exits 1. A skip with no committed reference exits 0. `--self-test` checks those paths without ngspice. Its stdout is one JSON document.
+Stdout is one JSON document. It lists the examples written or checked, the examples skipped with a reason, and with `--check` the files that drifted. A skipped example that already has `ngspice.json` is a failure under `--check`. Its entry's `failure` is `committed ngspice.json was not checked`, and the process exits 1. A skip with no committed reference exits 0. `--self-test` checks those paths and the bounce generator's test vectors without ngspice. Its stdout is one JSON document.
 
 Run it after any change to a `netlist.json`. The Rust test fails until you do.
 
 ## deck.cir
 
-The script writes `deck.cir` from `netlist.json`. Do not edit it. `ngspice -b deck.cir` in that directory reruns it and writes `op.raw`.
+The script writes `deck.cir` from `netlist.json`. Do not edit it. `ngspice -b deck.cir` in that directory reruns it and writes `op.raw`, or `tran.raw` for a transient.
 
-Parts are written in name order. Names are lowercased, and ground is node `0`. A resistor is `r<name>`, a voltage source is `v<name>`, and a diode or LED is `d<name>` with its own `.model`. Numbers are written so they read back to the same f64.
+Parts are written in name order. Names are lowercased, and ground is node `0`. A resistor is `r<name>`, a voltage source is `v<name>`, a capacitor is `c<name>`, and a diode or LED is `d<name>` with its own `.model`. Numbers are written so they read back to the same f64.
 
 The options are `temp=25 tnom=25 reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-12`. 25 C with `tnom` equal to `temp` matches the engine's 298.15 K with no temperature scaling. The tolerances are tighter than ngspice's defaults, so ngspice's own error stays far under the comparison bound.
+
+## Transient decks
+
+A switch is `s<name>`, a voltage-controlled switch with its own `sw` model, `vt=0.5 vh=0` and the part's `on_resistance` and `off_resistance`. A control source `vctl_<name>` drives it with a PWL waveform. The script expands the switch's events and bounce with the same integer generator as the engine, and each contact edge becomes a 1 ns ramp that starts at the edge's exact picosecond. ngspice has no ideal switch, so the ramp is the smallest change the comparison has to step around.
+
+Each ramp corner also gets a source `vbp<k>` with a PWL corner one picosecond later. It makes that time a breakpoint, because ngspice skips a PWL corner it lands on an ulp early.
+
+The analysis is `tran s p stop p 0 s p` with `s` one thousandth of `stop_ps`. ngspice picks its own points under that cap, which does not depend on the engine's `max_step_ps`. The options are the same as for an operating point.
+
+A switch is translated only for a transient analysis, and a transient deck reserves net and part names starting with `ctl_` or `bp`. Either skips the example.
+
+## Skips
 
 An example is skipped when a part has no `kind`, when it has a kind the script does not translate, when a part has no `pins` or is missing a pin, when two names are equal ignoring case, when a net other than ground is named `gnd`, which ngspice reads as ground, when a pin names an undeclared net, or when `netlist.json` has a shape the engine's parser would reject. The report lists the skip and the reason in the one JSON document.
 
@@ -47,6 +59,24 @@ An example is skipped when a part has no `kind`, when it has a kind the script d
 }
 ```
 
+A transient reference has `tran` in place of `op`.
+
+```json
+"tran": {
+  "edge_ramp_ps": 1000,
+  "switches": { "#sw1": [{ "state": "closed", "t_ps": 2000000000 }] },
+  "t_s": [0.0, 8.1e-07],
+  "values": {
+    "#c1.i": [0.0, 0.0],
+    "#c1.v": [0.0, 0.0],
+    "#net.gnd": [0.0, 0.0],
+    "#net.vout": [5e-05, 5e-05]
+  }
+}
+```
+
+`switches` is every contact edge before the stop, as the script expanded it. `t_s` is ngspice's time points in seconds. `values` holds every net voltage and each part's `i` and `v` at those points. The ground net is 0 on every row. `p` is not in the file.
+
 `op` holds every net voltage and each part's `i` and `v`, under the engine's refs and sign rules. Values come from ngspice's ASCII raw file, which has 16 significant digits. `p` is left out. It is `v * i` on both sides.
 
 ## The comparison
@@ -58,5 +88,22 @@ An example is skipped when a part has no `kind`, when it has a kind the script d
 ```
 
 The floor is 1e-9 for a voltage and 1e-12 for a current. It only matters near 0. The 1 pA floor does not absorb ngspice's junction gmin, `gmin` times `V`, in cutoff. A reverse-biased example needs a different comparison before it is added.
+
+A transient example is checked in four steps.
+
+1. The run has no diagnostics, and `observations.json`'s `switches` equals the reference's `switches`. Both equal `bounce::expand` on the parsed netlist.
+2. The trace has a row at every edge and at the earlier of 1 ns after it and `stop_ps`.
+3. Both waveforms are read as piecewise linear. The grid is the union of both time grids up to the engine's last row, without the open interval from each edge to that later row. The trace stores only the two endpoints. The row at the edge holds the old contact. The step that ends at the later row is already stamped with the new contact. ngspice ramps the switch across the same interval, so the interiors are not comparable.
+4. On that grid, every trace column must satisfy
+
+```text
+max |engine - ngspice| <= 1e-3 * span + floor
+```
+
+The test derives each part's `p` as `v * i` at the samples of each side, then reads that series as piecewise linear. Each stored `p` must also equal that row's `v * i` within 1e-15 W. Every trace column is one of these comparisons.
+
+`span` is the column's maximum minus its minimum in the reference. The floor is 1e-9 for a voltage, 1e-12 for a current, and 1e-15 for a power, so a constant column passes on its floor. The test prints each column's worst error and span when it fails.
+
+The engine restarts at a 1 ns backward Euler step after each edge and doubles it up to `max_step_ps`. A waveform that settles faster than that ramp, a time constant well under a few nanoseconds, is not resolved to 0.1% of its span. Error-controlled stepping is not part of this tree.
 
 The engine and ngspice agree to about 3e-7 relative on the LED examples. That gap is consistent with ngspice 42 using older values of `k` and `q` than the exact SI ones. The engine puts its 1e-12 S gmin from every node to ground, and ngspice puts it across each junction. On the divider that difference is about 4e-9 relative.

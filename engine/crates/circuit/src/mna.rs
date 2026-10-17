@@ -155,7 +155,7 @@ impl System {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Solution {
     x: Vec<f64>,
 }
@@ -190,12 +190,22 @@ pub(crate) struct Stamp<'a> {
     pub(crate) layout: &'a Layout,
     pub(crate) part: PartId,
     pub(crate) iterate: &'a Iterate,
-    pub(crate) conditions: &'a Conditions,
+    pub(crate) conditions: &'a Conditions<'a>,
 }
 
 impl Stamp<'_> {
     pub(crate) fn internal(&self, k: usize) -> Node {
         Node::Row(self.rows().internal + k)
+    }
+
+    /// This part in the last accepted solution. `None` at the operating point.
+    pub(crate) fn previous(&self) -> Option<Probe<'_>> {
+        let step = self.conditions.step?;
+        Some(Probe {
+            layout: self.layout,
+            part: self.part,
+            x: step.previous,
+        })
     }
 
     /// The limited voltage of this part's junction `k`, from the iterate.
@@ -223,16 +233,34 @@ impl Stamp<'_> {
 
     /// `volts` is the netlist value. The stamp scales it by `conditions.source_scale`.
     pub(crate) fn voltage_source(&mut self, p: NetId, n: NetId, k: usize, volts: f64) {
+        self.branch_current(p, n, k);
+        self.branch_row(p, n, k, 0.0, 1.0, volts * self.conditions.source_scale);
+    }
+
+    /// Branch `k` carries a current that enters the part at `p` and leaves at `n`.
+    pub(crate) fn branch_current(&mut self, p: NetId, n: NetId, k: usize) {
         let row = self.rows().branch + k;
         if let Node::Row(prow) = p.into() {
             self.sys.a.add(prow, row, 1.0);
-            self.sys.a.add(row, prow, 1.0);
         }
         if let Node::Row(nrow) = n.into() {
             self.sys.a.add(nrow, row, -1.0);
-            self.sys.a.add(row, nrow, -1.0);
         }
-        self.sys.b[row] += volts * self.conditions.source_scale;
+    }
+
+    /// Branch `k`'s own row: `ci * i_k + cv * (V(p) - V(n)) = rhs`.
+    pub(crate) fn branch_row(&mut self, p: NetId, n: NetId, k: usize, ci: f64, cv: f64, rhs: f64) {
+        let row = self.rows().branch + k;
+        if ci != 0.0 {
+            self.sys.a.add(row, row, ci);
+        }
+        if let Node::Row(prow) = p.into() {
+            self.sys.a.add(row, prow, cv);
+        }
+        if let Node::Row(nrow) = n.into() {
+            self.sys.a.add(row, nrow, -cv);
+        }
+        self.sys.b[row] += rhs;
     }
 
     fn rows(&self) -> &PartRows {

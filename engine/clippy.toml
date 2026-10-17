@@ -5,4 +5,5 @@ disallowed-types = [
 disallowed-methods = [
   { path = "std::time::SystemTime::now", reason = "run output must not depend on wall time; only timestamp::Timestamp::now reads the clock" },
   { path = "std::time::Instant::now", reason = "run output must not depend on wall time" },
+  { path = "f64::mul_add", reason = "a fused multiply-add rounds once, so results would depend on whether the platform fuses" },
 ]
