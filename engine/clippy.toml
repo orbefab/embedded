@@ -1,0 +1,8 @@
+disallowed-types = [
+  { path = "std::collections::HashMap", reason = "iteration order varies per instance; use BTreeMap" },
+  { path = "std::collections::HashSet", reason = "iteration order varies per instance; use BTreeSet" },
+]
+disallowed-methods = [
+  { path = "std::time::SystemTime::now", reason = "run output must not depend on wall time; only timestamp::Timestamp::now reads the clock" },
+  { path = "std::time::Instant::now", reason = "run output must not depend on wall time" },
+]

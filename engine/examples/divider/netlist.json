@@ -1,0 +1,37 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": { "op": {} },
+  "ground": "gnd",
+  "nets": ["gnd", "vin", "vout"],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": { "p": "vin", "n": "gnd" },
+      "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": { "a": "vin", "b": "vout" },
+      "resistance": {
+        "value": 1000.0,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "resistor-nominal",
+            "at": "Table 1, nominal",
+            "typical": false
+          }
+        }
+      }
+    },
+    {
+      "name": "r2",
+      "kind": "resistor",
+      "pins": { "a": "vout", "b": "gnd" },
+      "resistance": { "value": 2000.0, "unit": "ohm", "source": "user" }
+    }
+  ]
+}
