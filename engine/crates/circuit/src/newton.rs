@@ -1,6 +1,6 @@
 use sim_core::diagnostic::Diagnostic;
 use sim_core::name::Ref;
-use sim_core::netlist::{Chip, Model, Netlist, PartId};
+use sim_core::netlist::{Chip, Model, Netlist, PartId, Waveform};
 use sim_core::time::Time;
 
 use crate::chip;
@@ -86,12 +86,28 @@ pub(crate) struct Conditions<'h> {
     pub(crate) gmin: f64,
     /// Multiplies every independent source.
     pub(crate) source_scale: f64,
-    /// The time this solve is for. A switch takes its contact on the interval ending here,
-    /// or on the one starting here under `History::Restart`.
+    /// The time this solve is for. A switch takes its contact, and a source its value, on the
+    /// interval ending here, or on the one starting here under `History::Restart`.
     pub(crate) at: Time,
     pub(crate) history: History<'h>,
     /// Each chip's state, by slot. Only an accepted time changes it.
     pub(crate) chips: &'h [chip::State],
+}
+
+impl Conditions<'_> {
+    /// Whether a timed stamp takes the interval that starts at `at`. Only a restart does.
+    pub(crate) fn after_change(&self) -> bool {
+        matches!(self.history, History::Restart { .. })
+    }
+
+    /// A source's netlist value in this solve, before `source_scale`.
+    pub(crate) fn level(&self, waveform: &Waveform) -> f64 {
+        if self.after_change() {
+            waveform.after(self.at)
+        } else {
+            waveform.before(self.at)
+        }
+    }
 }
 
 impl Conditions<'static> {
@@ -109,8 +125,8 @@ impl Conditions<'static> {
 pub(crate) enum History<'h> {
     /// t = 0. A capacitor with `initial` is held there, and any other is open.
     Start,
-    /// Just after a switch edge or a chip drive change at `at`. Every capacitor is held at its voltage in `previous`,
-    /// and every contact is after the edges at or before `at`. The solve is algebraic. Its
+    /// Just after a switch edge, a source jump or a chip drive change at `at`. Every capacitor is held at its voltage in `previous`,
+    /// and every contact and source is after the changes at or before `at`. The solve is algebraic. Its
     /// capacitor currents are the post-edge currents the next step starts from.
     Restart { previous: &'h Solution },
     /// A time step from the last accepted solution.

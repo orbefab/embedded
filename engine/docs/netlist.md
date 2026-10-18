@@ -79,9 +79,11 @@ The engine stores ground first and sorts the other nets by name. It sorts parts 
 
 Both are JSON integers, like `seed`. They are the scenario's choices, so they carry no unit and no source. A float, a negative number, or a missing field is `netlist.syntax`. `stop_ps` must be greater than 0. `max_step_ps` must be at least 1000 and at most `stop_ps`. A break is `netlist.analysis` with the field and the rule.
 
-The run solves the operating point at t = 0 first, with every capacitor open or held at its `initial` voltage, and every switch at its `initial` contact. That is the initial condition. Then it steps to `stop_ps`. Every switch edge before `stop_ps` is a breakpoint. So is 1 ns after t = 0, and 1 ns after each edge, when that time is before `stop_ps`. A step lands on each breakpoint and on `stop_ps`.
+The run solves the operating point at t = 0 first, with every capacitor open or held at its `initial` voltage, every switch at its `initial` contact, and every source at its value at t = 0, which is a waveform's `initial`. That is the initial condition. Then it steps to `stop_ps`. Every switch edge and every source jump before `stop_ps` is a breakpoint. So is 1 ns after t = 0, and 1 ns after each edge or jump, when that time is before `stop_ps`. A step lands on each breakpoint and on `stop_ps`.
 
-At each switch edge the row holds the old contact. Then the run solves once more at the edge's time, with the new contacts in force and every capacitor held at its voltage, the way an `initial` voltage is held at t = 0. This restart solve gives the currents just after the edge. It is not a row, and the next step starts from it. Each held voltage moves by the capacitor's current times 1 fs over its capacitance.
+At each switch edge or source jump the row holds the old contact or level. Then the run solves once more at that time, with the new contacts and levels in force and every capacitor held at its voltage, the way an `initial` voltage is held at t = 0. This restart solve gives the currents just after the change. It is not a row, and the next step starts from it. Each held voltage moves by the capacitor's current times 1 fs over its capacitance. A jump at `stop_ps` gets the last row and no restart.
+
+Every edge or jump the run reaches writes a row, and a trace holds at most 1,000,000 rows. So the run lists at most that many breakpoint edges, the earliest, and a denser schedule ends in `trace.too_large` before it would reach the ones left out. A 100 MHz pulse over 1 s does.
 
 The step policy is fixed. A segment starts at t = 0 and at every restart. Its first step wants 1 ns and is backward Euler. Every later step in it is trapezoidal, except on a stiff capacitor. Each step's local truncation error comes from the capacitor currents the solve already has. Backward Euler's is `h/2 * |i1 - i0| / C`. The trapezoidal rule's is `h^3 * |DD2(i)| / (6C)`, the second divided difference over the segment's last three points. The tolerance is `1e-6 * max(|v0|, |v1|) + 1e-9` V, Newton's own, on the voltage across each capacitor.
 
@@ -93,7 +95,7 @@ A chip reads its inputs through watches. A watch is a sum of node voltages times
 
 After each accepted step the run reads every watch on the step's solution. If any reads differently than at the last accepted point, the run locates the first picosecond where one does. Each probe re-solves the same step, from the same point with the same method, shortened to the probe time. The probe follows regula falsi on the earliest watch to flip, rounded to a whole picosecond inside the bracket. It turns to bisection once one end has moved twice in a row, and it stops at a 1 ps bracket. The located point is the later end, the first solved picosecond where a watch reads flipped, and it becomes the row. A regula falsi probe whose solve stalls is replaced by the bracket's midpoint. A midpoint that stalls ends the run with `solver.convergence`, and a singular probe ends it with `solver.singular`.
 
-A watch cuts the step; only a stamp change restarts. At the located point each chip reacts to its levels. If a chip's new state stamps differently, or a switch edge falls there, the run restarts at that point the way it does at a switch edge. The row holds the chips' old states, and the held solve after it is not a row. A flip that changes no drive still gets its edge at its picosecond, and the segment, its method and its error history continue across it. In `examples/ne555-led`, THRES drops back under CONT 1 ps after the latch resets, which is such a flip.
+A watch cuts the step; only a stamp change restarts. At the located point each chip reacts to its levels. If a chip's new state stamps differently, or a switch edge or source jump falls there, the run restarts at that point the way it does at a switch edge. The row holds the chips' old states, and the held solve after it is not a row. A flip that changes no drive still gets its edge at its picosecond, and the segment, its method and its error history continue across it. In `examples/ne555-led`, THRES drops back under CONT 1 ps after the latch resets, which is such a flip.
 
 Every watch that flips at one picosecond, on every chip, reacts at once against the levels before it, chips in part order. The run then reads the levels on the solve with the new states and reacts again, up to 8 solves. Chips that still change after the 8th are `chip.unsettled`. The logic levels recorded at the point are the ones the chips reacted to. A watch that flipped on the step keeps its flipped level there, and every other watch takes its level on the solve with the new states. When that solve is back across a flipped watch's threshold, the return is recorded on the next row. A monostable with THRES on DISCH does this, since the discharge pulls THRES back down through the hold. Every located event is at a later whole picosecond, so events cannot pile up at one time. An event located at `stop_ps`, or in the step that ends there, is recorded, and its row is the last. No restart runs at `stop_ps`.
 
@@ -143,11 +145,66 @@ Two nets, or two parts, with the same name are `netlist.duplicate`. The ref is `
 
 ### Voltage source
 
-`kind` is `voltage_source`. Pins are `p` and `n`. The source sets `V(p) - V(n)` equal to `voltage.value`.
+`kind` is `voltage_source`. Pins are `p` and `n`. The source sets `V(p) - V(n)` equal to `voltage`.
 
-`voltage.value` is in `V` and may be any finite number, including 0 and negative values. A different unit is `netlist.unit`.
+`voltage` is a value in `V`, which may be any finite number, including 0 and negative values. Or it is a waveform in `V`, described in [Source waveforms](#source-waveforms). A different unit is `netlist.unit`.
 
 A voltage source has no `ratings` field.
+
+### Current source
+
+`kind` is `current_source`. Pins are `p` and `n`. The source's `current` leaves it at `p`, flows through the circuit, and returns at `n`. `examples/i-divider` drives 1 mA into 1 kohm parallel to 2 kohm.
+
+```json
+{
+  "name": "i1",
+  "kind": "current_source",
+  "pins": { "p": "vt", "n": "gnd" },
+  "current": { "value": 0.001, "unit": "A", "source": "user" }
+}
+```
+
+`current` is a value in `A`, any finite number, or a waveform in `A`. A different unit is `netlist.unit`. Source stepping scales it, as it scales a voltage source.
+
+A current source has no `ratings` field. It joins no DC path. A net reached only through current sources and capacitors without an `initial` voltage is `net.floating`, and only gmin holds it: 1 mA into such a net reads 1e9 V. A resistor to ground closes the loop.
+
+### Source waveforms
+
+A source's `voltage` or `current` is a value object, which holds at every time, or an object with `kind`, which changes. Its levels are values in the source's unit, any finite number. Its times are JSON integers in picoseconds, like `stop_ps`. They are the scenario's choices, so they carry no unit and no source.
+
+A step holds `initial` until `at_ps`, then `final`.
+
+```json
+"voltage": {
+  "kind": "step",
+  "initial": { "value": 0.0, "unit": "V", "source": "user" },
+  "final": { "value": 5.0, "unit": "V", "source": "user" },
+  "at_ps": 1000000000
+}
+```
+
+A pulse holds `initial` until `delay_ps`, then `pulsed` for `width_ps`, then `initial` until the next period, every `period_ps`. `examples/current-pulse` uses this one. A single pulse is one whose next rise is past `stop_ps`.
+
+```json
+"current": {
+  "kind": "pulse",
+  "initial": { "value": 0.0002, "unit": "A", "source": "user" },
+  "pulsed": { "value": 0.001, "unit": "A", "source": "user" },
+  "delay_ps": 1000000000,
+  "width_ps": 2000000000,
+  "period_ps": 5000000000
+}
+```
+
+Every change is an ideal jump. The level on the interval that ends at a jump is the old one, so the trace row at a jump holds it. When the earlier of 1 ns later and `stop_ps` is after the jump, that row holds the new level. A jump at `stop_ps` has one row, which holds the old level. The operating point holds `initial`. An operating point run reads only that.
+
+A time that breaks a rule is `netlist.waveform`, with its dotted field, such as `current.width_ps`, and the rule. Every broken rule is reported.
+
+- `at_zero`: `at_ps` or `delay_ps` is 0. The operating point already holds `initial` there.
+- `too_close`: `width_ps` is under 2000, or `period_ps` is under `width_ps` plus 2000. Two jumps of one source are at least 2 ns apart, as two edges of one switch are.
+- `overflow`: `delay_ps` plus `width_ps` does not fit in an unsigned 64-bit integer.
+
+A jump between equal levels is still a jump. A missing or unknown key, a float or negative time, a `kind` other than `step` or `pulse`, and an object with both `value` and `kind` are `netlist.syntax`. A level in the wrong unit is `netlist.unit` with its dotted field, such as `current.pulsed`.
 
 ### Capacitor
 
@@ -206,7 +263,7 @@ Edges of one switch are always at least 2 ns apart. The oracle's control ramps a
 
 Bounce is a fixed, integer-only expansion. Event `k` of switch `name` draws from SplitMix64 seeded with `mix(mix(seed ^ fnv1a64(name)) ^ k)`, where `mix` is SplitMix64's output function and `fnv1a64` is 64-bit FNV-1a over the name's bytes. It draws a count `n` from 1 to `max_bounces`, then `2n` values from 0 to `window - 2n * 2000`, sorted. Draw `j`, counted from 1, plus `j * 2000` is the offset of the `j`-th flip after the event. So the contact flips `2n` times within `window` and ends at the event's state. A draw below `m` is the high 64 bits of a 64-bit output times `m`. `scripts/ngspice_refs.py` implements the same steps. The offsets are uniform, which is enough to test exact breakpoints and determinism. They are not a contact physics model.
 
-The contact on the interval that ends at time `t` is the state after every edge strictly before `t`. A run's trace row at an edge therefore holds the old contact, and the row at the earlier of 1 ns later and `stop_ps` holds the new one.
+The contact on the interval that ends at time `t` is the state after every edge strictly before `t`. A run's trace row at an edge therefore holds the old contact. When the earlier of 1 ns later and `stop_ps` is after the edge, that row holds the new contact. An edge at `stop_ps` has one row, which holds the old contact.
 
 A switch has no `ratings` field. A switch is a DC path in either state, because its off resistance is finite.
 
@@ -290,7 +347,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | --- | --- | --- |
 | `resistor` | `power` | `#<part>.p` |
 | `diode`, `led` | `current`, `power` | `#<part>.i`, `#<part>.p` |
-| `voltage_source`, `capacitor`, `switch`, `ne555` | none | |
+| `voltage_source`, `current_source`, `capacitor`, `switch`, `ne555` | none | |
 
 `current` is in `A`. `power` is in `W`. A rating must be greater than 0. A missing key, an unknown key, and a missing `ratings` object are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.current` or `ratings.power`. A value of 0 or below is `netlist.value` with the same field.
 
@@ -322,9 +379,9 @@ For every two-terminal part, pin 0 is the first pin listed above.
 
 For a diode or LED, `i` is the current through `Rs`, and `p` includes the power in `Rs`. The junction's internal node is not observed.
 
-For a capacitor, `i` is the solved current into pin `a`. For a switch, `i` is `v` over the resistance of the contact on the interval that ends at that time.
+For a capacitor, `i` is the solved current into pin `a`. For a switch, `i` is `v` over the resistance of the contact on the interval that ends at that time. For a current source, `i` is minus its `current` on the interval that ends at that time, since that current leaves at `p`.
 
-On the divider, `#r1.i` and `#r2.i` are positive, `#r1.p` and `#r2.p` are positive, and `#v1.i` and `#v1.p` are negative.
+On the divider, `#r1.i` and `#r2.i` are positive, `#r1.p` and `#r2.p` are positive, and `#v1.i` and `#v1.p` are negative. On `examples/i-divider`, `#i1.i` is -0.001 and `#i1.p` is negative.
 
 ## Refs
 

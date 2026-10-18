@@ -2,7 +2,7 @@
 
 sim-engine reads a resolved netlist and writes a deterministic run folder.
 
-The input is JSON. The folder holds `manifest.json`, `netlist.json`, `diagnostics.json`, and `observations.json`, and a transient run adds `traces/`. This tree solves resistors, DC voltage sources, diodes, LEDs, capacitors, and timed switches at one operating point or over time, and reports parts run past their ratings.
+The input is JSON. The folder holds `manifest.json`, `netlist.json`, `diagnostics.json`, and `observations.json`, and a transient run adds `traces/`. This tree solves resistors, voltage sources, current sources, diodes, LEDs, capacitors, and timed switches at one operating point or over time, and reports parts run past their ratings. A voltage source or a current source holds a DC value, a step, or a pulse.
 
 ## Build
 

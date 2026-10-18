@@ -410,7 +410,13 @@ fn f64s(bytes: &[u8]) -> Vec<f64> {
 
 #[test]
 fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
-    for name in ["rc-switch", "button-led", "ne555-led"] {
+    for name in [
+        "rc-switch",
+        "button-led",
+        "ne555-led",
+        "v-pulse-rc",
+        "current-pulse",
+    ] {
         let out = scratch(&format!("tran-{name}"));
         let netlist = named_example(name);
         let (code, stdout, stderr) = sim(&[
@@ -482,7 +488,13 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
 
 #[test]
 fn two_runs_of_each_transient_example_differ_only_in_created_at() {
-    let names = ["rc-switch", "button-led", "ne555-led"];
+    let names = [
+        "rc-switch",
+        "button-led",
+        "ne555-led",
+        "v-pulse-rc",
+        "current-pulse",
+    ];
     let outs = |round: &str| -> Vec<PathBuf> {
         names
             .iter()

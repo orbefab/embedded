@@ -1,0 +1,36 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": { "transient": { "stop_ps": 16000000000, "max_step_ps": 20000000 } },
+  "ground": "gnd",
+  "nets": ["gnd", "vout"],
+  "parts": [
+    {
+      "name": "i1",
+      "kind": "current_source",
+      "pins": { "p": "vout", "n": "gnd" },
+      "current": {
+        "kind": "pulse",
+        "initial": { "value": 0.0002, "unit": "A", "source": "user" },
+        "pulsed": { "value": 0.001, "unit": "A", "source": "user" },
+        "delay_ps": 1000000000,
+        "width_ps": 2000000000,
+        "period_ps": 5000000000
+      }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": { "a": "vout", "b": "gnd" },
+      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
+    },
+    {
+      "name": "c1",
+      "kind": "capacitor",
+      "pins": { "a": "vout", "b": "gnd" },
+      "capacitance": { "value": 1e-6, "unit": "F", "source": "user" },
+      "initial": null
+    }
+  ]
+}

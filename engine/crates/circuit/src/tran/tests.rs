@@ -412,6 +412,109 @@ fn breakpoints_list_each_edge_the_nanosecond_after_it_and_after_the_start() {
     assert_eq!(early.next_after(Time::ZERO), Time::from_ps(EDGE_STEP));
 }
 
+/// A 0 to 5 V pulse into 1 kohm, rising every 10 ns from 10 ns and 5 ns wide, over 1 s:
+/// 2e8 jumps.
+fn train_100mhz() -> Netlist {
+    sim_core::netlist::parse(
+        br#"{
+          "version": 0,
+          "seed": 0,
+          "analysis": { "transient": { "stop_ps": 1000000000000, "max_step_ps": 20000000 } },
+          "ground": "gnd",
+          "nets": ["gnd", "vin"],
+          "parts": [
+            {
+              "name": "v1",
+              "kind": "voltage_source",
+              "pins": { "p": "vin", "n": "gnd" },
+              "voltage": {
+                "kind": "pulse",
+                "initial": { "value": 0.0, "unit": "V", "source": "user" },
+                "pulsed": { "value": 5.0, "unit": "V", "source": "user" },
+                "delay_ps": 10000, "width_ps": 5000, "period_ps": 10000
+              }
+            },
+            {
+              "name": "r1",
+              "kind": "resistor",
+              "pins": { "a": "vin", "b": "gnd" },
+              "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+              "ratings": { "power": null }
+            }
+          ]
+        }"#,
+    )
+    .unwrap()
+}
+
+#[test]
+fn breakpoints_list_source_jumps_as_edges_and_stop_at_the_row_cap() {
+    let netlist = train_100mhz();
+    let mut breakpoints = Breakpoints::new(&netlist, transient(&netlist).stop);
+    assert_eq!(breakpoints.edges.len(), Trace::MAX_ROWS);
+    assert_eq!(
+        breakpoints.edges[..3],
+        [10_000, 15_000, 20_000].map(Time::from_ps)
+    );
+    let last = 10_000 + (Trace::MAX_ROWS as u64 - 1) * 5_000;
+    assert_eq!(breakpoints.edges.last(), Some(&Time::from_ps(last)));
+    assert_eq!(breakpoints.points.len(), 2 * Trace::MAX_ROWS + 1);
+    assert!(breakpoints.is_edge(Time::from_ps(15_000)));
+    assert_eq!(
+        breakpoints.next_after(Time::from_ps(10_000)),
+        Time::from_ps(11_000)
+    );
+}
+
+/// The first source jumps only after the second has already filled the cap.
+#[test]
+fn breakpoints_keep_the_earliest_jumps_across_sources() {
+    let late = 3_000_000_000_u64;
+    let pulse = |name: &str, net: &str, delay: u64| {
+        format!(
+            r#"{{"name":"{name}","kind":"voltage_source","pins":{{"p":"{net}","n":"gnd"}},"voltage":{{"kind":"pulse","initial":{{"value":0.0,"unit":"V","source":"user"}},"pulsed":{{"value":1.0,"unit":"V","source":"user"}},"delay_ps":{delay},"width_ps":2000,"period_ps":4000}}}}"#
+        )
+    };
+    let resistor = |name: &str, net: &str| {
+        format!(
+            r#"{{"name":"{name}","kind":"resistor","pins":{{"a":"{net}","b":"gnd"}},"resistance":{{"value":1000.0,"unit":"ohm","source":"user"}},"ratings":{{"power":null}}}}"#
+        )
+    };
+    let json = format!(
+        r#"{{"version":0,"seed":0,"analysis":{{"transient":{{"stop_ps":1000000000000,"max_step_ps":20000000}}}},"ground":"gnd","nets":["gnd","a","b"],"parts":[{},{},{},{}]}}"#,
+        pulse("vlate", "a", late),
+        resistor("ra", "a"),
+        pulse("vearly", "b", 2_000),
+        resistor("rb", "b"),
+    );
+    let netlist = sim_core::netlist::parse(json.as_bytes()).unwrap();
+    let breakpoints = Breakpoints::new(&netlist, transient(&netlist).stop);
+    let last = 2_000 * Trace::MAX_ROWS as u64;
+    assert_eq!(breakpoints.edges.len(), Trace::MAX_ROWS);
+    assert_eq!(breakpoints.edges[0], Time::from_ps(2_000));
+    assert_eq!(breakpoints.edges[1], Time::from_ps(4_000));
+    assert_eq!(*breakpoints.edges.last().unwrap(), Time::from_ps(last));
+    assert!(breakpoints.edges.iter().all(|at| at.as_ps() < late));
+}
+
+#[test]
+fn a_dense_pulse_train_ends_at_the_row_cap() {
+    let netlist = train_100mhz();
+    let mut diagnostics = Vec::new();
+    let columns = Columns::new(&netlist);
+    let outcome = run_with(
+        &netlist,
+        &transient(&netlist),
+        BUDGET,
+        1_000,
+        &columns,
+        &mut diagnostics,
+    );
+    assert_eq!(outcome.trace.unwrap().rows(), 1_000);
+    let codes: Vec<_> = diagnostics.iter().map(|d| d.code()).collect();
+    assert_eq!(codes, ["trace.too_large"]);
+}
+
 fn run_clean(netlist: &Netlist) -> Trace {
     let mut diagnostics = Vec::new();
     let outcome = run(netlist, &transient(netlist), &mut diagnostics);
@@ -529,20 +632,21 @@ fn rc_two_switches(edge_a: u64, edge_b: u64, stop: u64, max_step: u64) -> Netlis
     sim_core::netlist::parse(json.as_bytes()).unwrap()
 }
 
-/// Backward Euler for the RC above, from `v0`. `g_load` is both switches plus gmin.
-fn backward_euler(v0: f64, h_ps: u64, g_load: f64) -> f64 {
+/// Backward Euler for 1 kohm into 1 nF, from `v0`, source at `v_src`. `g_load` is the
+/// load on the capacitor, including gmin.
+fn backward_euler(v_src: f64, v0: f64, h_ps: u64, g_load: f64) -> f64 {
     let h = h_ps as f64 * 1e-12;
     let g_series = 1.0 / 1000.0;
     let c_over_h = 1e-9 / h;
-    (g_series + c_over_h * v0) / (g_series + g_load + c_over_h)
+    (g_series * v_src + c_over_h * v0) / (g_series + g_load + c_over_h)
 }
 
-/// The trapezoidal rule for the RC above, from `v0` and the capacitor current `i0`.
-fn trapezoidal(v0: f64, i0: f64, h_ps: u64, g_load: f64) -> f64 {
+/// The trapezoidal rule for that RC, from `v0` and the capacitor current `i0`.
+fn trapezoidal(v_src: f64, v0: f64, i0: f64, h_ps: u64, g_load: f64) -> f64 {
     let h = h_ps as f64 * 1e-12;
     let g_series = 1.0 / 1000.0;
     let two_c_over_h = 2e-9 / h;
-    (g_series + two_c_over_h * v0 + i0) / (g_series + g_load + two_c_over_h)
+    (g_series * v_src + two_c_over_h * v0 + i0) / (g_series + g_load + two_c_over_h)
 }
 
 #[test]
@@ -573,7 +677,7 @@ fn each_edge_restarts_on_backward_euler_and_the_next_step_is_trapezoidal() {
     // The restart holds c1 through 1e-6 ohm, so it starts within 1e-9 V of the row at the edge.
     for (start, end, g_load) in [(10_000, 10_500, one_closed), (10_500, 11_000, both_closed)] {
         let got = at(vout, end);
-        let want = backward_euler(at(vout, start), end - start, g_load);
+        let want = backward_euler(1.0, at(vout, start), end - start, g_load);
         assert!(
             (got - want).abs() < 1e-8,
             "{start} -> {end}: {got} vs backward Euler {want}"
@@ -582,12 +686,13 @@ fn each_edge_restarts_on_backward_euler_and_the_next_step_is_trapezoidal() {
     let (start, end) = (11_000, 11_500);
     let got = at(vout, end);
     let want = trapezoidal(
+        1.0,
         at(vout, start),
         at(current, start),
         end - start,
         both_closed,
     );
-    let euler = backward_euler(at(vout, start), end - start, both_closed);
+    let euler = backward_euler(1.0, at(vout, start), end - start, both_closed);
     assert!((want - euler).abs() > 1e-7, "{want} vs {euler}");
     assert!(
         (got - want).abs() < 1e-12,
@@ -624,8 +729,8 @@ fn an_edge_at_1_ps_keeps_the_start_point_and_the_edge_point() {
 
 /// 100 kohm and 1 uF from 5 V hold an NE555's RESET low at power-on, and its release at
 /// about 15.1 ms sets the latch. The NE555 has `examples/ne555-led`'s values, as in
-/// `tests/chip.rs`.
-fn reset_release() -> Netlist {
+/// `tests/chip.rs`. `step_ps` adds a 0 to 1 V step into 1 kohm and 1 nF at that time.
+fn reset_release(step_ps: Option<u64>) -> Netlist {
     let value =
         |v: f64, unit: &str| format!(r#"{{ "value": {v:?}, "unit": "{unit}", "source": "user" }}"#);
     let json = format!(
@@ -665,13 +770,36 @@ fn reset_release() -> Netlist {
         value(1.0 / 60.0, "V"),
         value(50.0 / 3.0, "ohm"),
     );
+    let json = match step_ps {
+        None => json,
+        Some(at) => {
+            let json = json.replacen(r#""dis"]"#, r#""dis", "src", "vs"]"#, 1);
+            let side = format!(
+                r#",{{ "name": "vs", "kind": "voltage_source", "pins": {{ "p": "src", "n": "gnd" }},
+                  "voltage": {{ "kind": "step", "initial": {}, "final": {}, "at_ps": {at} }} }},
+                {{ "name": "rs", "kind": "resistor", "pins": {{ "a": "src", "b": "vs" }},
+                  "resistance": {}, "ratings": {{ "power": null }} }},
+                {{ "name": "cs", "kind": "capacitor", "pins": {{ "a": "vs", "b": "gnd" }},
+                  "capacitance": {}, "initial": {} }}"#,
+                value(0.0, "V"),
+                value(1.0, "V"),
+                value(1000.0, "ohm"),
+                value(1e-9, "F"),
+                value(0.0, "V"),
+            );
+            let close = json.rfind(']').unwrap();
+            let mut json = json;
+            json.insert_str(close, &side);
+            json
+        }
+    };
     sim_core::netlist::parse(json.as_bytes()).unwrap()
 }
 
 /// One Newton iteration converges only where nothing moves, and a probe is a shorter step.
 #[test]
 fn a_stalled_probe_ends_the_run_and_names_the_probe() {
-    let netlist = reset_release();
+    let netlist = reset_release(None);
     let mut diagnostics = Vec::new();
     let columns = Columns::new(&netlist);
     let outcome = run_with(
@@ -700,4 +828,172 @@ fn a_stalled_probe_ends_the_run_and_names_the_probe() {
             at - end
         )
     );
+}
+
+/// 1 V to 2 V at `at`, through 1 kohm into 1 nF, and a 1 kohm switch across the capacitor
+/// that closes at the same picosecond.
+fn source_and_switch_at(at: u64) -> Netlist {
+    let json = format!(
+        r#"{{
+          "version": 0,
+          "seed": 0,
+          "analysis": {{ "transient": {{ "stop_ps": 30000, "max_step_ps": 20000 }} }},
+          "ground": "gnd",
+          "nets": ["gnd", "vcc", "vout"],
+          "parts": [
+            {{
+              "name": "v1",
+              "kind": "voltage_source",
+              "pins": {{ "p": "vcc", "n": "gnd" }},
+              "voltage": {{
+                "kind": "step",
+                "initial": {{ "value": 1.0, "unit": "V", "source": "user" }},
+                "final": {{ "value": 2.0, "unit": "V", "source": "user" }},
+                "at_ps": {at}
+              }}
+            }},
+            {{
+              "name": "r1",
+              "kind": "resistor",
+              "pins": {{ "a": "vcc", "b": "vout" }},
+              "resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }},
+              "ratings": {{ "power": null }}
+            }},
+            {{
+              "name": "c1",
+              "kind": "capacitor",
+              "pins": {{ "a": "vout", "b": "gnd" }},
+              "capacitance": {{ "value": 1e-9, "unit": "F", "source": "user" }},
+              "initial": null
+            }},
+            {{
+              "name": "s1",
+              "kind": "switch",
+              "pins": {{ "a": "vout", "b": "gnd" }},
+              "on_resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }},
+              "off_resistance": {{ "value": 1e9, "unit": "ohm", "source": "user" }},
+              "initial": "open",
+              "events": [{{ "t_ps": {at}, "state": "closed" }}],
+              "bounce": null
+            }}
+          ]
+        }}"#
+    );
+    sim_core::netlist::parse(json.as_bytes()).unwrap()
+}
+
+#[test]
+fn a_source_jump_on_a_switch_edge_restarts_once() {
+    let at = 10_000;
+    let netlist = source_and_switch_at(at);
+    let trace = run_clean(&netlist);
+    let rows: Vec<u64> = trace.time().iter().map(|t| t.as_ps()).collect();
+    let k = rows.binary_search(&at).unwrap();
+    assert_eq!(rows[k + 1], at + EDGE_STEP);
+    let column = |name: &str| {
+        let index = trace
+            .columns()
+            .iter()
+            .position(|r| r.to_string() == name)
+            .unwrap();
+        trace.column(index)
+    };
+    let (vout, current) = (column("#net.vout"), column("#c1.i"));
+    let closed = 1.0 / 1000.0 + 1e-12;
+    let open = 1e-9 + 1e-12;
+    let got = vout[k + 1];
+    let both = backward_euler(2.0, vout[k], EDGE_STEP, closed);
+    let source_only = backward_euler(2.0, vout[k], EDGE_STEP, open);
+    let switch_only = backward_euler(1.0, vout[k], EDGE_STEP, closed);
+    assert!((got - both).abs() < 1e-8, "{got} vs {both}");
+    assert!((both - source_only).abs() > 1e-4, "{both} vs {source_only}");
+    assert!((both - switch_only).abs() > 1e-4, "{both} vs {switch_only}");
+    // A second restart would take another 1 ns. This step has already left that.
+    assert!(rows[k + 2] - rows[k + 1] > EDGE_STEP, "{rows:?}");
+    let h = rows[k + 2] - rows[k + 1];
+    let trap = trapezoidal(2.0, got, current[k + 1], h, closed);
+    assert!(
+        (vout[k + 2] - trap).abs() < 1e-8,
+        "{} vs {trap}",
+        vout[k + 2]
+    );
+}
+
+#[test]
+fn a_source_jump_on_a_located_chip_event_restarts_once() {
+    let plain = run_clean(&reset_release(Some(30_000_000_000)));
+    let logic = plain.logic().unwrap();
+    let out = logic
+        .signals()
+        .iter()
+        .position(|signal| signal.to_string() == "#u1.logic.out")
+        .unwrap();
+    let edge = |trace: &Trace| {
+        trace
+            .logic()
+            .unwrap()
+            .changes()
+            .iter()
+            .find(|change| change.signal == out && change.level == sim_core::logic::Level::High)
+            .unwrap()
+            .at
+            .as_ps()
+    };
+    // The jump is a breakpoint, so it moves the located picosecond.
+    let mut at = edge(&plain);
+    let mut trace = plain;
+    let mut landed = false;
+    for _ in 0..6 {
+        trace = run_clean(&reset_release(Some(at)));
+        let found = edge(&trace);
+        if found == at {
+            landed = true;
+            break;
+        }
+        at = found;
+    }
+    assert!(landed, "the step never landed on the OUT edge");
+    let rows: Vec<u64> = trace.time().iter().map(|t| t.as_ps()).collect();
+    let k = rows.binary_search(&at).unwrap();
+    let column = |name: &str| {
+        let index = trace
+            .columns()
+            .iter()
+            .position(|r| r.to_string() == name)
+            .unwrap();
+        trace.column(index)
+    };
+    let (vs, src, out_v, current) = (
+        column("#net.vs"),
+        column("#net.src"),
+        column("#net.out"),
+        column("#cs.i"),
+    );
+    assert!(vs[k].abs() < 1e-6, "#net.vs {vs}", vs = vs[k]);
+    assert_eq!(src[k], 0.0, "old level");
+    assert_eq!(src[k + 1], 1.0, "new level");
+    assert!(out_v[k] < 0.1, "old drive {}", out_v[k]);
+    assert!(out_v[k + 1] > 4.0, "new drive {}", out_v[k + 1]);
+    let h = rows[k + 1] - at;
+    let gmin = 1e-12;
+    let got = vs[k + 1];
+    let euler = backward_euler(1.0, vs[k], h, gmin);
+    let held = backward_euler(0.0, vs[k], h, gmin);
+    assert!((got - euler).abs() < 1e-8, "{got} vs {euler} over {h} ps");
+    assert!((euler - held).abs() > 1e-6, "{euler} vs {held}");
+    // Steps of a few tens of picoseconds do not separate the two rules.
+    let j = (k + 1..rows.len() - 1)
+        .find(|&j| {
+            let h = rows[j + 1] - rows[j];
+            (trapezoidal(1.0, vs[j], current[j], h, gmin) - backward_euler(1.0, vs[j], h, gmin))
+                .abs()
+                > 1e-7
+        })
+        .expect("no later step separates the trapezoidal rule from backward Euler");
+    let h = rows[j + 1] - rows[j];
+    let trap = trapezoidal(1.0, vs[j], current[j], h, gmin);
+    let still = backward_euler(1.0, vs[j], h, gmin);
+    let later = vs[j + 1];
+    assert!((later - trap).abs() < 1e-8, "{later} vs {trap}");
+    assert!((trap - still).abs() > 1e-7, "{trap} vs {still}");
 }

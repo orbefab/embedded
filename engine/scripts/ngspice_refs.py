@@ -17,8 +17,8 @@ unless the run's logic.vcd reads back as its observations.logic. stdout is one
 JSON document.
 
 A part with no kind, an unknown kind, a part with no pins, or a missing pin
-raises Skip. `--self-test` checks that, the bounce test vectors and the VCD
-reader, without ngspice.
+raises Skip. `--self-test` checks that, the source deck lines, the bounce test
+vectors and the VCD reader, without ngspice.
 """
 
 import hashlib
@@ -28,7 +28,10 @@ import re
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
+
+from bounce import bounce_vectors, switch_edges
 
 ROOT = Path(__file__).resolve().parent.parent
 FORMAT = 0
@@ -42,15 +45,23 @@ CHIP_TMAX = 400_000
 CHIP_GRID = 2_000
 # The engine's conductance from every node to ground.
 ENGINE_GMIN = 1e-12
-# The engine's first step after a contact edge. The Rust test pins both.
+# The engine's first step after a contact edge or a source jump. The Rust test pins both.
 EDGE_RAMP_PS = 1000
-# The engine's least time between two edges of one switch.
-MIN_GAP_PS = 2000
-M64 = (1 << 64) - 1
+# Knots strictly before the stop, including the one at t = 0. This bounds the
+# deck's size. The tightest pulse the engine accepts reaches the cap at about a
+# tenth of its 1_000_000 row cap, so a skipped deck can still be a run that finishes.
+KNOT_CAP = 100_000
 
 
 class Skip(Exception):
     """The netlist has something this translator does not write."""
+
+
+@dataclass(frozen=True)
+class Negated:
+    """A vector whose ref reads the other way round, such as a current source's current."""
+
+    ref: str
 
 
 def main(argv):
@@ -294,6 +305,48 @@ def self_test():
             "reason": "a chip is translated only for a transient analysis",
             "failure": None,
         },
+        {
+            "name": "pulse period inside its width",
+            "analysis": {"transient": {"stop_ps": 10000, "max_step_ps": 1000}},
+            "part": {
+                "name": "v1",
+                "kind": "voltage_source",
+                "pins": {"p": "a", "n": "gnd"},
+                "voltage": {
+                    "kind": "pulse",
+                    "initial": {"value": 0.0},
+                    "pulsed": {"value": 1.0},
+                    "delay_ps": 1000,
+                    "width_ps": 2000,
+                    "period_ps": 0,
+                },
+            },
+            "commit": False,
+            "exit": 0,
+            "reason": "a pulse period does not exceed its width",
+            "failure": None,
+        },
+        {
+            "name": "pulse denser than the deck cap",
+            "analysis": {"transient": {"stop_ps": 1000000, "max_step_ps": 1000}},
+            "part": {
+                "name": "v1",
+                "kind": "voltage_source",
+                "pins": {"p": "a", "n": "gnd"},
+                "voltage": {
+                    "kind": "pulse",
+                    "initial": {"value": 0.0},
+                    "pulsed": {"value": 1.0},
+                    "delay_ps": 1,
+                    "width_ps": 0,
+                    "period_ps": 1,
+                },
+            },
+            "commit": False,
+            "exit": 0,
+            "reason": "a waveform has more than 100000 knots before the stop",
+            "failure": None,
+        },
     ]
     cases = []
     with tempfile.TemporaryDirectory() as tmp:
@@ -332,6 +385,7 @@ def self_test():
                 }
             )
     cases.append(initial_conditions())
+    cases.append(source_decks())
     cases.append(bounce_vectors())
     cases.append(vcd_reader())
     document = {"ok": all(case["ok"] for case in cases), "cases": cases}
@@ -364,42 +418,61 @@ def initial_conditions():
     return {"name": "initial conditions", "ok": lines == [".ic v(a)=1.5", ".ic v(a)=-1.5"]}
 
 
-def bounce_vectors():
-    """The Rust unit tests in crates/core/src/netlist/bounce.rs pin the same numbers."""
-    rng = SplitMix64(0)
-    first = [rng.next(), rng.next()]
-    button = {
-        "name": "sw1",
-        "events": [
-            {"t_ps": 2000000000, "state": "closed"},
-            {"t_ps": 12000000000, "state": "open"},
-        ],
-        "bounce": {"window": {"value": 1000000000}, "max_bounces": {"value": 4}},
+def source_decks():
+    """Each source spelling's deck line, corners and saves, at the operating point and in a
+    transient, and the current source's negated current."""
+    step = {"kind": "step", "initial": {"value": 0.0}, "final": {"value": 5.0}, "at_ps": 2000}
+    pulse = {
+        "kind": "pulse",
+        "initial": {"value": 0.5},
+        "pulsed": {"value": 1.0},
+        "delay_ps": 2000,
+        "width_ps": 2000,
+        "period_ps": 5000,
     }
-    edges = [(edge["t_ps"], edge["state"][0]) for edge in switch_edges(7, button)]
-    ok = (
-        first == [0xE220A8397B1DCDAF, 0x6E789E6AA1B965F4]
-        and fnv1a64(b"sw1") == 0x826ADE195D0A12BA
-        and bounce_stream(7, "sw1", 0).state == 0xD65F52CA546DD32E
-        and edges
-        == [
-            (2000000000, "c"),
-            (2040015938, "o"),
-            (2114234716, "c"),
-            (2665597584, "o"),
-            (2854176182, "c"),
-            (12000000000, "o"),
-            (12089763725, "c"),
-            (12337840633, "o"),
-            (12576192418, "c"),
-            (12607405695, "o"),
-            (12637715418, "c"),
-            (12691361990, "o"),
-            (12720009883, "c"),
-            (12727823423, "o"),
-        ]
-    )
-    return {"name": "bounce vectors", "ok": ok}
+    op = {"op": {}}
+    tran = {"transient": {"stop_ps": 9000, "max_step_ps": 1000}}
+
+    def deck(analysis, kind, key, value):
+        part = {"name": "s1", "kind": kind, "pins": {"p": "a", "n": "gnd"}, key: value}
+        netlist = {"analysis": analysis, "ground": "gnd", "nets": ["gnd", "a"], "parts": [part]}
+        text, mapping = translate("sources", netlist)
+        kept = ("vs1", "is1", "vbp", "save")
+        return [line for line in text.splitlines() if line.startswith(kept)], mapping
+
+    corners = [
+        f"vbp{k} bp{k} 0 pwl({at}p 0 {at + 1}p 0)"
+        for k, at in enumerate((2000, 3000, 4000, 5000, 7000, 8000, 9000))
+    ]
+    cases = [
+        (deck(op, "voltage_source", "voltage", {"value": 5.0}), ["vs1 a 0 dc 5.0", "save all"]),
+        (
+            deck(op, "current_source", "current", {"value": 0.001}),
+            ["is1 0 a dc 0.001", "save all @is1[current]"],
+        ),
+        (deck(op, "voltage_source", "voltage", step), ["vs1 a 0 dc 0.0", "save all"]),
+        (
+            deck(tran, "voltage_source", "voltage", step),
+            [
+                "vs1 a 0 dc 0.0 pwl(0p 0.0 2000p 0.0 3000p 5.0)",
+                "vbp0 bp0 0 pwl(2000p 0 2001p 0)",
+                "vbp1 bp1 0 pwl(3000p 0 3001p 0)",
+                "save v(a) i(vs1)",
+            ],
+        ),
+        (
+            deck(tran, "current_source", "current", pulse),
+            [
+                "is1 0 a dc 0.5 pwl(0p 0.5 2000p 0.5 3000p 1.0 4000p 1.0 5000p 0.5 7000p 0.5 "
+                "8000p 1.0 9000p 1.0)",
+                *corners,
+                "save v(a) @is1[current]",
+            ],
+        ),
+    ]
+    ok = all(lines == want for (lines, _), want in cases)
+    ok = ok and cases[1][0][1]["i(@is1[current])"] == Negated("#s1.i")
+    return {"name": "source decks", "ok": ok}
 
 
 def vcd_reader():
@@ -433,55 +506,6 @@ $end
     return {"name": "vcd reader", "ok": ok}
 
 
-def mix(z):
-    z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & M64
-    z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & M64
-    return z ^ (z >> 31)
-
-
-class SplitMix64:
-    def __init__(self, state):
-        self.state = state & M64
-
-    def next(self):
-        self.state = (self.state + 0x9E3779B97F4A7C15) & M64
-        return mix(self.state)
-
-    def below(self, n):
-        """In [0, n): the high 64 bits of the 128-bit product."""
-        return (self.next() * n) >> 64
-
-
-def fnv1a64(data):
-    h = 0xCBF29CE484222325
-    for byte in data:
-        h = ((h ^ byte) * 0x100000001B3) & M64
-    return h
-
-
-def bounce_stream(seed, name, index):
-    return SplitMix64(mix(mix(seed ^ fnv1a64(name.encode())) ^ index))
-
-
-def switch_edges(seed, part):
-    """Every contact edge, nominal and bounce, ascending, as the engine's `bounce::expand`."""
-    edges = []
-    for index, event in enumerate(part["events"]):
-        edges.append({"t_ps": event["t_ps"], "state": event["state"]})
-        bounce = part["bounce"]
-        if bounce is None:
-            continue
-        rng = bounce_stream(seed, part["name"], index)
-        flips = 2 * (1 + rng.below(bounce["max_bounces"]["value"]))
-        slack = bounce["window"]["value"] - flips * MIN_GAP_PS
-        draws = sorted(rng.below(slack + 1) for _ in range(flips))
-        state = event["state"]
-        for j, draw in enumerate(draws, start=1):
-            state = "open" if state == "closed" else "closed"
-            edges.append({"t_ps": event["t_ps"] + draw + j * MIN_GAP_PS, "state": state})
-    return edges
-
-
 def ngspice_version():
     out = subprocess.run(["ngspice", "-v"], capture_output=True, text=True, check=True).stdout
     match = re.search(r"ngspice-\d+", out)
@@ -504,7 +528,11 @@ def generate(example, version):
             continue
         if variable not in mapping:
             raise SystemExit(f"{example.name}: unexpected ngspice vector {variable}")
-        values[mapping[variable]] = column
+        ref = mapping[variable]
+        if isinstance(ref, Negated):
+            values[ref.ref] = [-value for value in column]
+        else:
+            values[ref] = column
     if transient:
         count = len(vectors["time"])
         values[f"#net.{netlist['ground']}"] = [0.0] * count
@@ -586,6 +614,7 @@ def switches(netlist):
 PIN_ORDER = {
     "resistor": ("a", "b"),
     "voltage_source": ("p", "n"),
+    "current_source": ("p", "n"),
     "diode": ("anode", "cathode"),
     "led": ("anode", "cathode"),
     "capacitor": ("a", "b"),
@@ -667,8 +696,15 @@ def translate_shape(title, netlist):
             saves.append(f"@r{name}[i]")
             mapping[f"i(@r{name}[i])"] = ref
         elif kind == "voltage_source":
-            lines.append(f"v{name} {pins} dc {number(part['voltage'])}")
+            lines.append(f"v{name} {pins} {source_value(part['voltage'], transient, corners)}")
             mapping[f"i(v{name})"] = ref
+        elif kind == "current_source":
+            # The engine's current leaves at `p`, and ngspice's flows from its first node
+            # through the source to its second. ngspice reports the value it drives.
+            n, p = (node(net) for net in reversed(pin_list))
+            lines.append(f"i{name} {n} {p} {source_value(part['current'], transient, corners)}")
+            saves.append(f"@i{name}[current]")
+            mapping[f"i(@i{name}[current])"] = Negated(ref)
         elif kind in ("diode", "led"):
             lines.append(f"d{name} {pins} dmod_{name}")
             params = (
@@ -809,6 +845,55 @@ def initial_condition(part, ground, node, transient):
 
 def number(value):
     return repr(float(value["value"]))
+
+
+def source_value(value, transient, corners):
+    """A source's value on its deck line. A waveform holds `initial` at the operating point,
+    and in a transient each jump ramps over EDGE_RAMP_PS. Its knots in (0, stop] are corners."""
+    if "kind" not in value:
+        return f"dc {number(value)}"
+    initial = f"dc {number(value['initial'])}"
+    if not transient:
+        return initial
+    points = knots(value, transient["stop_ps"])
+    corners.update(at for at, _ in points if 0 < at <= transient["stop_ps"])
+    return initial + " pwl(" + " ".join(f"{at}p {level!r}" for at, level in points) + ")"
+
+
+def knots(wave, stop):
+    """`initial` at 0, then each jump from its old level at the jump to its new level
+    EDGE_RAMP_PS later, through the first knot at or past `stop`."""
+    points = [(0, float(wave["initial"]["value"]))]
+    before = 1 if 0 < stop else 0
+    for at, old, new in jumps(wave):
+        for point in ((at, old), (at + EDGE_RAMP_PS, new)):
+            if point[0] < stop:
+                before += 1
+                if before > KNOT_CAP:
+                    raise Skip(f"a waveform has more than {KNOT_CAP} knots before the stop")
+            points.append(point)
+            if point[0] >= stop:
+                return points
+    return points
+
+
+def jumps(wave):
+    """Each jump as (time, old level, new level), ascending."""
+    low = float(wave["initial"]["value"])
+    if wave["kind"] == "step":
+        yield wave["at_ps"], low, float(wave["final"]["value"])
+        return
+    high = float(wave["pulsed"]["value"])
+    period = wave["period_ps"]
+    width = wave["width_ps"]
+    # A period that does not pass the width never moves the next rise forward.
+    if period <= width or period <= 0:
+        raise Skip("a pulse period does not exceed its width")
+    rise = wave["delay_ps"]
+    while True:
+        yield rise, low, high
+        yield rise + width, high, low
+        rise += period
 
 
 def run_ngspice(deck, raw_names):

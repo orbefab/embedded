@@ -4,15 +4,18 @@ use std::fmt;
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
+mod waveform;
+
 use super::{
-    Analysis, Bounce, Capacitor, Chip, Contact, Discharge, Edge, IntValue, Junction, Model, Ne555,
-    NetId, Netlist, OutputStage, Part, Resistor, Schedule, Source, Switch, Transient, Value,
-    VoltageSource, bounce, junction_scale,
+    Analysis, Bounce, Capacitor, Chip, Contact, CurrentSource, Discharge, Edge, IntValue, Junction,
+    Model, Ne555, NetId, Netlist, OutputStage, Part, Resistor, Schedule, Source, Switch, Transient,
+    Value, VoltageSource, bounce, junction_scale,
 };
 use crate::diagnostic::{AnalysisRule, Diagnostic, ScheduleRule, ValueRule};
 use crate::finite::Finite;
 use crate::name::{Name, NameError, Ref};
 use crate::time::Time;
+use waveform::{CURRENT, VOLTAGE, WireWaveform, resolve_waveform};
 
 #[derive(Deserialize)]
 struct VersionProbe {
@@ -60,7 +63,12 @@ enum WirePart {
     VoltageSource {
         name: String,
         pins: PinMap,
-        voltage: WireValue,
+        voltage: WireWaveform,
+    },
+    CurrentSource {
+        name: String,
+        pins: PinMap,
+        current: WireWaveform,
     },
     Diode(WireJunction),
     Led(WireJunction),
@@ -403,6 +411,7 @@ fn resolve_part(
     let raw_name = match &part {
         WirePart::Resistor { name, .. }
         | WirePart::VoltageSource { name, .. }
+        | WirePart::CurrentSource { name, .. }
         | WirePart::Capacitor { name, .. } => name,
         WirePart::Diode(junction) | WirePart::Led(junction) => &junction.name,
         WirePart::Switch(switch) => &switch.name,
@@ -458,10 +467,20 @@ fn resolve_part(
         }
         WirePart::VoltageSource { pins, voltage, .. } => {
             let pins = resolve_pins(&name, VoltageSource::PINS, &pins.0, nets, out);
-            let voltage = resolve_value(&part_ref, "voltage", "V", false, voltage, out);
+            let voltage = resolve_waveform(&part_ref, &VOLTAGE, voltage, out);
             match (pins, voltage) {
                 (Some(pins), Some(voltage)) => {
                     Some(Model::VoltageSource(VoltageSource { pins, voltage }))
+                }
+                _ => None,
+            }
+        }
+        WirePart::CurrentSource { pins, current, .. } => {
+            let pins = resolve_pins(&name, CurrentSource::PINS, &pins.0, nets, out);
+            let current = resolve_waveform(&part_ref, &CURRENT, current, out);
+            match (pins, current) {
+                (Some(pins), Some(current)) => {
+                    Some(Model::CurrentSource(CurrentSource { pins, current }))
                 }
                 _ => None,
             }

@@ -292,7 +292,21 @@ mod tests {
 
     #[test]
     fn source_scale_zero_turns_every_source_off() {
-        let netlist = parse(&example("divider"));
+        let divider = String::from_utf8(example("divider")).unwrap();
+        let netlist = parse(
+            divider
+                .replace(
+                    r#""parts": ["#,
+                    r#""parts": [
+    {
+      "name": "i1",
+      "kind": "current_source",
+      "pins": { "p": "vout", "n": "gnd" },
+      "current": { "value": 0.001, "unit": "A", "source": "user" }
+    },"#,
+                )
+                .as_bytes(),
+        );
         let circuit = Circuit::new(&netlist).unwrap();
         let conditions = Conditions {
             source_scale: 0.0,

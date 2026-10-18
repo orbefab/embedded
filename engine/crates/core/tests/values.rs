@@ -1,4 +1,4 @@
-use sim_core::netlist::{self, Model};
+use sim_core::netlist::{self, Model, Shape};
 
 #[test]
 fn resistance_with_a_non_finite_reciprocal_is_a_value_error() {
@@ -89,7 +89,9 @@ fn negative_voltage_is_legal() {
     let netlist = netlist::parse(json).unwrap();
     let (_, v1) = netlist.parts().next().unwrap();
     match &v1.model {
-        Model::VoltageSource(v) => assert_eq!(v.voltage.si.get(), -5.0),
+        Model::VoltageSource(v) => {
+            assert!(matches!(v.voltage.shape(), Shape::Dc(dc) if dc.si.get() == -5.0))
+        }
         other => panic!("{other:?}"),
     }
 }

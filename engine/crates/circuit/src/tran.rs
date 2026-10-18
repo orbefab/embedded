@@ -1,4 +1,5 @@
-use std::collections::BTreeMap;
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BinaryHeap};
 
 use sim_core::diagnostic::{Diagnostic, Solve};
 use sim_core::finite::Finite;
@@ -269,7 +270,8 @@ fn steps(
                     observe::observe(&circuit, record.columns, &converged.iterate.solution, at)?;
                 record.accept(at, &row)?;
                 iterations = 0;
-                // A watch cuts the step. Only a changed stamp, a chip's or a contact's, restarts.
+                // A watch cuts the step. Only a changed stamp, a chip's, a contact's or a source's,
+                // restarts.
                 let chips = circuit.react(&accepted.chips, &accepted.levels, &levels);
                 let restart =
                     (breakpoints.is_edge(at) || chips != accepted.chips) && at < transient.stop;
@@ -383,8 +385,8 @@ fn attempt(circuit: &Circuit, from: &Accepted, h: u64, budget: u32) -> Result<Co
     newton(circuit, &conditions, from.iterate.clone(), budget)
 }
 
-/// The solve after a switch edge or a chip drive change at `at`: every capacitor held at its
-/// voltage in `step`, the new contacts and `chips` in force, settled on the operating point
+/// The solve after a switch edge, a source jump or a chip drive change at `at`: every capacitor
+/// held at its voltage in `step`, the new contacts, sources and `chips` in force, settled on the operating point
 /// ladder with `budget` per rung. `levels` were read on `step`. It is history for the next
 /// step, not a row.
 fn restart_solve(
@@ -412,11 +414,12 @@ fn restart_solve(
     )
 }
 
-/// Where a step must land. Contact edges, 1 ns after t = 0, and 1 ns after every
-/// edge, then `stop`. The deck ramps each contact over that nanosecond. The cursor
-/// only moves forward.
+/// Where a step must land. Contact edges and source jumps, 1 ns after t = 0, and 1 ns
+/// after every edge, then `stop`. The deck ramps each contact and source over that
+/// nanosecond. The cursor only moves forward.
 struct Breakpoints {
-    /// Contact edges strictly before `stop`, ascending.
+    /// The earliest contact edges and source jumps strictly before `stop`, ascending,
+    /// at most `Trace::MAX_ROWS` of them.
     edges: Vec<Time>,
     /// Landing times strictly before `stop`, ascending.
     points: Vec<Time>,
@@ -426,18 +429,47 @@ struct Breakpoints {
 
 impl Breakpoints {
     fn new(netlist: &Netlist, stop: Time) -> Breakpoints {
-        let mut edges: Vec<Time> = netlist
-            .parts()
-            .filter_map(|(_, part)| match &part.model {
-                Model::Switch(switch) => Some(switch.schedule.edges()),
-                _ => None,
-            })
-            .flatten()
-            .map(|edge| edge.at)
-            .filter(|&at| at < stop)
-            .collect();
-        edges.sort_unstable();
-        edges.dedup();
+        // Every edge the run reaches writes a row, so one past the `MAX_ROWS`-th is never
+        // reached before `trace.too_large`. Each cursor yields in time order, and the merge
+        // keeps the earliest. A dense train is not stored past that.
+        let limit = Trace::MAX_ROWS;
+        let mut streams: Vec<Box<dyn Iterator<Item = Time> + '_>> = Vec::new();
+        let mut heap = BinaryHeap::new();
+        for (_, part) in netlist.parts() {
+            let mut cursor: Box<dyn Iterator<Item = Time> + '_> = match &part.model {
+                Model::Switch(switch) => Box::new(
+                    switch
+                        .schedule
+                        .edges()
+                        .iter()
+                        .map(|edge| edge.at)
+                        .filter(move |&at| at < stop),
+                ),
+                model => {
+                    let Some(waveform) = model.waveform() else {
+                        continue;
+                    };
+                    Box::new(waveform.jumps_before(stop))
+                }
+            };
+            let Some(at) = cursor.next() else {
+                continue;
+            };
+            heap.push(Reverse((at, streams.len())));
+            streams.push(cursor);
+        }
+        let mut edges = Vec::new();
+        while edges.len() < limit {
+            let Some(Reverse((at, index))) = heap.pop() else {
+                break;
+            };
+            if edges.last() != Some(&at) {
+                edges.push(at);
+            }
+            if let Some(next) = streams[index].next() {
+                heap.push(Reverse((next, index)));
+            }
+        }
         let mut points = Vec::with_capacity(edges.len() * 2 + 1);
         push_point(&mut points, EDGE_STEP, stop);
         for &edge in &edges {

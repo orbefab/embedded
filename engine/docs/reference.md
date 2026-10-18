@@ -20,7 +20,7 @@ uv run scripts/ngspice_refs.py --check            # exit 1 on drift or an unchec
 uv run scripts/ngspice_refs.py --self-test        # skip contract, no ngspice
 ```
 
-Stdout is one JSON document. It lists the examples written or checked, the examples skipped with a reason, and with `--check` the files that drifted. For an example with a chip, `--check` also builds and runs the engine, reads the run's `traces/logic.vcd` back with the standard library, and compares it with `observations.logic`. Its `logic` list holds one entry per such example, and one that does not match exits 1. A skipped example that already has `ngspice.json` is a failure under `--check`. Its entry's `failure` is `committed ngspice.json was not checked`, and the process exits 1. A skip with no committed reference exits 0. `--self-test` checks those paths, the bounce generator's test vectors and the VCD reader without ngspice. Its stdout is one JSON document.
+Stdout is one JSON document. It lists the examples written or checked, the examples skipped with a reason, and with `--check` the files that drifted. For an example with a chip, `--check` also builds and runs the engine, reads the run's `traces/logic.vcd` back with the standard library, and compares it with `observations.logic`. Its `logic` list holds one entry per such example, and one that does not match exits 1. A skipped example that already has `ngspice.json` is a failure under `--check`. Its entry's `failure` is `committed ngspice.json was not checked`, and the process exits 1. A skip with no committed reference exits 0. `--self-test` checks those paths, each source spelling's deck line, the bounce generator's test vectors and the VCD reader without ngspice. Its stdout is one JSON document.
 
 Run it after any change to a `netlist.json`. The Rust test fails until you do.
 
@@ -28,7 +28,11 @@ Run it after any change to a `netlist.json`. The Rust test fails until you do.
 
 The script writes `deck.cir` from `netlist.json`. Do not edit it. `ngspice -b deck.cir` in that directory reruns it and writes `op.raw`, or `tran.raw` for a transient, and `edges.raw` too for a chip.
 
-Parts are written in name order. Names are lowercased, and ground is node `0`. A resistor is `r<name>`, a voltage source is `v<name>`, a capacitor is `c<name>`, and a diode or LED is `d<name>` with its own `.model`. Numbers are written so they read back to the same f64.
+Parts are written in name order. Names are lowercased, and ground is node `0`. A resistor is `r<name>`, a voltage source is `v<name>`, a current source is `i<name>`, a capacitor is `c<name>`, and a diode or LED is `d<name>` with its own `.model`. Numbers are written so they read back to the same f64.
+
+A current source is `i<name> <n> <p> dc <current>`, its pins swapped. ngspice's current flows from the first node through the source to the second, and the engine's leaves at `p`. Both an operating point deck and a transient deck save `@i<name>[current]`, the current the source drives, and the script negates it into the engine's `#<name>.i`.
+
+A source with a waveform writes `dc <initial>` in an operating point deck, the value the engine's operating point holds. A transient deck is described below.
 
 The options are `temp=25 tnom=25 reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-12`. 25 C with `tnom` equal to `temp` matches the engine's 298.15 K with no temperature scaling. The tolerances are tighter than ngspice's defaults, so ngspice's own error stays far under the comparison bound.
 
@@ -36,7 +40,9 @@ The options are `temp=25 tnom=25 reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-12
 
 A switch is `s<name>`, a voltage-controlled switch with its own `sw` model, `vt=0.5 vh=0` and the part's `on_resistance` and `off_resistance`. A control source `vctl_<name>` drives it with a PWL waveform. The script expands the switch's events and bounce with the same integer generator as the engine, and each contact edge becomes a 1 ns ramp that starts at the edge's exact picosecond. ngspice has no ideal switch, so the ramp is the smallest change the comparison has to step around.
 
-Each ramp corner also gets a source `vbp<k>` with a PWL corner one picosecond later. It makes that time a breakpoint, because ngspice skips a PWL corner it lands on an ulp early.
+A source waveform is `dc <initial> pwl(...)`. Its PWL starts at `0p <initial>`, and each jump at `J` adds `Jp <old>` and `(J+1000)p <new>`, a 1 ns ramp like a contact's. The knots stop after the first one at or past `stop_ps`. The deck never writes PULSE: ngspice replaces a zero rise or fall with the analysis's time step, so a PULSE edge would ramp over `stop_ps / 1000`, not 1 ns.
+
+Each ramp corner, and each waveform knot in (0, `stop_ps`], also gets a source `vbp<k>` with a PWL corner one picosecond later. It makes that time a breakpoint, because ngspice skips a PWL corner it lands on an ulp early.
 
 The analysis is `tran s p stop p 0 s p` with `s` one thousandth of `stop_ps`. ngspice picks its own points under that cap, which does not depend on the engine's `max_step_ps`. The options are the same as for an operating point.
 
@@ -131,9 +137,9 @@ The floor is 1e-9 for a voltage and 1e-12 for a current. It only matters near 0.
 A transient example is checked in five steps.
 
 1. The run has no diagnostics, and `observations.json`'s `switches` equals the reference's `switches`. Both equal `bounce::expand` on the parsed netlist.
-2. The trace has a row at every edge and at the earlier of 1 ns after it and `stop_ps`.
+2. The trace has a row at every edge and every source jump before `stop_ps`, and at the earlier of 1 ns after it and `stop_ps`. The jumps come from the parsed netlist, so `ngspice.json` has no key for them.
 3. Each signal in the reference's `logic` has the same levels in the same order as in `observations.logic`. The mean time between falling edges is within 1e-3 of ngspice's, and each edge is within 1e-3 of that period of its partner, so the phase is checked as well as the mean.
-4. Both waveforms are read as piecewise linear. The grid is the union of both time grids up to the engine's last row, without the inside of two kinds of window. The first is the open interval from each switch edge to that later row. The row at the edge holds the old contact. Every step after it is stamped with the new contact. ngspice ramps the switch across the same interval, so the interiors are not comparable. The second is around each pair of chip edges, from the earlier minus `grid_ps` to the later plus `grid_ps`. Inside it the linearized reference reads a chord across the edge.
+4. Both waveforms are read as piecewise linear. The grid is the union of both time grids up to the engine's last row, without the inside of two kinds of window. The first is the open interval from each switch edge or source jump to 1 ns later, even when that time is after `stop_ps`. A stop inside the interval is mid-ramp and is not scored. The row at the edge holds the old contact or level. Every step after it is stamped with the new one. ngspice ramps the switch or the source across that nanosecond, so the interiors are not comparable. The second is around each pair of chip edges, from the earlier minus `grid_ps` to the later plus `grid_ps`. Inside it the linearized reference reads a chord across the edge. The deck's 1 ns ramp shifts ngspice from an ideal jump by about `dV * 0.5 ns / tau`. The shift is 5.0e-4 V at a time constant of 1 us. A jump into a time constant under about 1 us is not held to the 1e-3 bound against ngspice.
 5. On that grid, every trace column must satisfy
 
 ```text

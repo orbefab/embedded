@@ -31,7 +31,7 @@ pub enum ValueRule {
 #[serde(rename_all = "snake_case")]
 pub enum AnalysisRule {
     Positive,
-    /// `max_step_ps` is below 1000, the first step after a contact edge.
+    /// `max_step_ps` is below 1000, the first step after a contact edge or a source jump.
     #[serde(rename = "step_under_1ns")]
     StepUnder1ns,
     /// `max_step_ps` is greater than `stop_ps`.
@@ -51,6 +51,18 @@ pub enum ScheduleRule {
     /// The event is less than `MIN_GAP_PS` after the previous event's last possible edge.
     TooClose,
     /// The event's bounce window ends past the largest `u64` picosecond.
+    Overflow,
+}
+
+/// Which rule a source waveform's time broke.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaveformRule {
+    /// The first jump is at t = 0, where the operating point already holds `initial`.
+    AtZero,
+    /// Two jumps are less than `MIN_GAP_PS` apart.
+    TooClose,
+    /// The first fall is past the largest `u64` picosecond.
     Overflow,
 }
 
@@ -108,6 +120,13 @@ pub enum Diagnostic {
         part: Ref,
         event: usize,
         rule: ScheduleRule,
+    },
+    /// A source waveform's time field breaks a rule.
+    NetlistWaveform {
+        part: Ref,
+        field: &'static str,
+        value: u64,
+        rule: WaveformRule,
     },
     /// The net has no DC path to ground. Its voltage is held only by gmin.
     NetFloating { net: Ref },
@@ -193,6 +212,7 @@ impl Diagnostic {
             Diagnostic::NetlistGround { .. } => "netlist.ground",
             Diagnostic::NetlistAnalysis { .. } => "netlist.analysis",
             Diagnostic::NetlistSchedule { .. } => "netlist.schedule",
+            Diagnostic::NetlistWaveform { .. } => "netlist.waveform",
             Diagnostic::NetFloating { .. } => "net.floating",
             Diagnostic::SolverSingular { .. } => "solver.singular",
             Diagnostic::SolverNonFinite { .. } => "solver.nonfinite",
@@ -221,6 +241,7 @@ impl Diagnostic {
             | Diagnostic::NetlistGround { .. }
             | Diagnostic::NetlistAnalysis { .. }
             | Diagnostic::NetlistSchedule { .. }
+            | Diagnostic::NetlistWaveform { .. }
             | Diagnostic::SolverSingular { .. }
             | Diagnostic::SolverNonFinite { .. }
             | Diagnostic::SolverTooLarge { .. }
@@ -252,6 +273,7 @@ impl Diagnostic {
             | Diagnostic::NetlistGround { .. }
             | Diagnostic::NetlistAnalysis { .. }
             | Diagnostic::NetlistSchedule { .. }
+            | Diagnostic::NetlistWaveform { .. }
             | Diagnostic::NetFloating { .. } => None,
         }
     }
@@ -268,7 +290,8 @@ impl Diagnostic {
             Diagnostic::NetlistPins { part, .. }
             | Diagnostic::NetlistUnit { part, .. }
             | Diagnostic::NetlistValue { part, .. }
-            | Diagnostic::NetlistSchedule { part, .. } => vec![part.clone()],
+            | Diagnostic::NetlistSchedule { part, .. }
+            | Diagnostic::NetlistWaveform { part, .. } => vec![part.clone()],
             Diagnostic::NetFloating { net } => vec![net.clone()],
             Diagnostic::SolverSingular { unknown, .. }
             | Diagnostic::SolverNonFinite { unknown, .. }
@@ -369,6 +392,22 @@ impl Diagnostic {
                 };
                 format!("{part} events[{event}] {what}")
             }
+            Diagnostic::NetlistWaveform {
+                part,
+                field,
+                value,
+                rule,
+            } => {
+                let must = match rule {
+                    WaveformRule::AtZero => "a jump must come after t = 0".to_string(),
+                    WaveformRule::TooClose => format!(
+                        "two jumps must be at least {} ps apart",
+                        Schedule::MIN_GAP_PS
+                    ),
+                    WaveformRule::Overflow => "the first fall is past the largest time".to_string(),
+                };
+                format!("{part} {field} is {value}; {must}")
+            }
             Diagnostic::NetFloating { net } => format!("{net} has no DC path to ground"),
             Diagnostic::SolverSingular { unknown, .. } => format!("singular matrix at {unknown}"),
             Diagnostic::SolverNonFinite { unknown, .. } => {
@@ -420,7 +459,7 @@ impl Diagnostic {
                 at.as_ps()
             ),
             Diagnostic::TraceTooLarge { limit, .. } => format!(
-                "the trace reached its limit of {limit} rows; rows come from stop_ps, the switch edges, the chip events and the error control, and max_step_ps only caps the step"
+                "the trace reached its limit of {limit} rows; rows come from stop_ps, the switch edges, the source jumps, the chip events and the error control, and max_step_ps only caps the step"
             ),
             Diagnostic::RatingCurrent(excursion) => over_rating(excursion, "A"),
             Diagnostic::RatingPower(excursion) => over_rating(excursion, "W"),
@@ -479,6 +518,9 @@ impl Diagnostic {
             Diagnostic::NetlistSchedule { event, rule, .. } => {
                 serde_json::json!({ "event": event, "rule": rule })
             }
+            Diagnostic::NetlistWaveform {
+                field, value, rule, ..
+            } => serde_json::json!({ "field": field, "rule": rule, "value": value }),
             Diagnostic::SolverSingular { .. } | Diagnostic::SolverNonFinite { .. } => {
                 serde_json::json!({})
             }
@@ -681,6 +723,12 @@ mod tests {
                 chips: vec![part("u1"), part("u2")],
                 rounds: 8,
             },
+            Diagnostic::NetlistWaveform {
+                part: part("i1"),
+                field: "current.width_ps",
+                value: 1500,
+                rule: WaveformRule::TooClose,
+            },
         ]
     }
 
@@ -711,7 +759,7 @@ mod tests {
             assert!(is_code(code), "{code}");
             assert!(seen.insert(code), "duplicate code {code}");
         }
-        assert_eq!(seen.len(), 20);
+        assert_eq!(seen.len(), 21);
     }
 
     #[test]
@@ -741,6 +789,7 @@ mod tests {
                 "netlist.analysis",
                 "trace.too_large",
                 "chip.unsettled",
+                "netlist.waveform",
             ]
         );
         for diagnostic in &found {
@@ -806,7 +855,7 @@ mod tests {
         let rows = serde_json::to_string(&found[18]).unwrap();
         assert!(
             rows.contains(
-                r#""severity":"error","refs":[],"t_ps":3000,"message":"the trace reached its limit of 4 rows; rows come from stop_ps, the switch edges, the chip events and the error control, and max_step_ps only caps the step","data":{"columns":2,"limit":4}"#
+                r#""severity":"error","refs":[],"t_ps":3000,"message":"the trace reached its limit of 4 rows; rows come from stop_ps, the switch edges, the source jumps, the chip events and the error control, and max_step_ps only caps the step","data":{"columns":2,"limit":4}"#
             ),
             "{rows}"
         );
@@ -814,6 +863,13 @@ mod tests {
         assert_eq!(
             unsettled,
             r##"{"code":"chip.unsettled","severity":"error","refs":["#u1","#u2"],"t_ps":3000,"message":"the chips kept changing state for 8 solves at 3000 ps","data":{"rounds":8}}"##
+        );
+        let waveform = serde_json::to_string(&found[20]).unwrap();
+        assert!(
+            waveform.contains(
+                r##""refs":["#i1"],"t_ps":null,"message":"#i1 current.width_ps is 1500; two jumps must be at least 2000 ps apart","data":{"field":"current.width_ps","rule":"too_close","value":1500}"##
+            ),
+            "{waveform}"
         );
         let power = serde_json::to_string(&found[15]).unwrap();
         assert!(

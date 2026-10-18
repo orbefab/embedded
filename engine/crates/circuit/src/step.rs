@@ -1,7 +1,7 @@
 //! The step policy. Pure, like the ladder: each function sees one outcome and
 //! names the next plan.
 //!
-//! After t = 0 and after every contact edge, the step restarts at `EDGE_STEP`.
+//! After t = 0 and after every contact edge or source jump, the step restarts at `EDGE_STEP`.
 //! From then on the local truncation error sets it. An accepted step grows by
 //! `0.9 * ratio^(-1/(p+1))`, at most 2, and a rejected one shrinks by the same
 //! rule, between 0.25 and 0.9. p is 1 for backward Euler and 2 for trapezoidal.
@@ -27,7 +27,7 @@ pub(crate) struct Plan {
 }
 
 impl Plan {
-    /// After t = 0 or a contact edge.
+    /// After t = 0, a contact edge or a source jump.
     pub(crate) const RESTART: Plan = Plan { h: EDGE_STEP };
 
     /// After an accepted step of `tried` ps whose error was `ratio` of its tolerance.

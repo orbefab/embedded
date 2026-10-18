@@ -4,6 +4,7 @@ use std::f64::consts::SQRT_2;
 
 pub mod bounce;
 mod json;
+mod waveform;
 
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +12,8 @@ use crate::diagnostic::Diagnostic;
 use crate::finite::Finite;
 use crate::name::{Name, Quantity};
 use crate::time::Time;
+
+pub use waveform::{Pulse, Shape, Step, Waveform};
 
 /// The netlist `version` this engine reads.
 pub const FORMAT_VERSION: u64 = 0;
@@ -108,7 +111,8 @@ pub struct Transient {
 }
 
 impl Transient {
-    /// The engine's first step after a contact edge, which `max_step` may not undercut.
+    /// The engine's first step after a contact edge or a source jump, which `max_step` may
+    /// not undercut.
     pub const MIN_MAX_STEP_PS: u64 = 1_000;
 }
 
@@ -125,6 +129,7 @@ pub struct Part {
 pub enum Model {
     Resistor(Resistor),
     VoltageSource(VoltageSource),
+    CurrentSource(CurrentSource),
     Diode(Junction),
     /// The same device equation as `Diode`. Its own kind, so an LED-only quantity needs no flag.
     Led(Junction),
@@ -141,6 +146,7 @@ impl Model {
         match self {
             Model::Resistor(_) => &Resistor::PINS,
             Model::VoltageSource(_) => &VoltageSource::PINS,
+            Model::CurrentSource(_) => &CurrentSource::PINS,
             Model::Diode(_) | Model::Led(_) => &Junction::PINS,
             Model::Capacitor(_) => &Capacitor::PINS,
             Model::Switch(_) => &Switch::PINS,
@@ -152,6 +158,7 @@ impl Model {
         match self {
             Model::Resistor(r) => &r.pins,
             Model::VoltageSource(v) => &v.pins,
+            Model::CurrentSource(c) => &c.pins,
             Model::Diode(j) | Model::Led(j) => &j.pins,
             Model::Capacitor(c) => &c.pins,
             Model::Switch(s) => &s.pins,
@@ -163,14 +170,30 @@ impl Model {
     pub fn ratings(&self) -> Vec<(RatingKind, &Value)> {
         let (current, power) = match self {
             Model::Resistor(r) => (None, r.max_power.as_ref()),
-            Model::VoltageSource(_) | Model::Capacitor(_) | Model::Switch(_) | Model::Chip(_) => {
-                (None, None)
-            }
+            Model::VoltageSource(_)
+            | Model::CurrentSource(_)
+            | Model::Capacitor(_)
+            | Model::Switch(_)
+            | Model::Chip(_) => (None, None),
             Model::Diode(j) | Model::Led(j) => (j.max_current.as_ref(), j.max_power.as_ref()),
         };
         let current = current.map(|v| (RatingKind::Current, v));
         let power = power.map(|v| (RatingKind::Power, v));
         current.into_iter().chain(power).collect()
+    }
+
+    /// The source's value over time. `None` for every kind that is not an independent source.
+    pub fn waveform(&self) -> Option<&Waveform> {
+        match self {
+            Model::VoltageSource(source) => Some(&source.voltage),
+            Model::CurrentSource(source) => Some(&source.current),
+            Model::Resistor(_)
+            | Model::Diode(_)
+            | Model::Led(_)
+            | Model::Capacitor(_)
+            | Model::Switch(_)
+            | Model::Chip(_) => None,
+        }
     }
 }
 
@@ -188,16 +211,31 @@ impl Resistor {
     pub const PINS: [&'static str; 2] = ["a", "b"];
 }
 
-/// Ideal DC voltage source. V(p) - V(n) = voltage.
+/// Ideal voltage source. V(p) - V(n) = voltage.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VoltageSource {
     /// Nets of pins `p`, `n`.
     pub pins: [NetId; 2],
     /// Volt. Any finite value.
-    pub voltage: Value,
+    pub voltage: Waveform,
 }
 
 impl VoltageSource {
+    pub const PINS: [&'static str; 2] = ["p", "n"];
+}
+
+/// Ideal current source. `current` leaves at `p` into the circuit and returns at `n`, so a
+/// source that delivers power has negative `i` and negative `p`, like a voltage source.
+/// It has no DC path.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CurrentSource {
+    /// Nets of pins `p`, `n`.
+    pub pins: [NetId; 2],
+    /// Ampere. Any finite value.
+    pub current: Waveform,
+}
+
+impl CurrentSource {
     pub const PINS: [&'static str; 2] = ["p", "n"];
 }
 

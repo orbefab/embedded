@@ -11,7 +11,8 @@ use sim_core::timestamp::Timestamp;
 /// What `scripts/ngspice_refs.py` writes into `ngspice.json`.
 const NGSPICE: &str = "ngspice-42";
 const OPTIONS: &str = "temp=25 tnom=25 reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-12";
-/// The deck's control ramp at each contact edge, which is also the engine's first step after one.
+/// The deck's ramp at each contact edge and source jump, which is also the engine's first step
+/// after one.
 const EDGE_RAMP_PS: u64 = 1000;
 
 fn examples() -> Vec<PathBuf> {
@@ -68,11 +69,14 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
         names,
         [
             "button-led",
+            "current-pulse",
             "divider",
+            "i-divider",
             "led-5v",
             "led-9v",
             "ne555-led",
-            "rc-switch"
+            "rc-switch",
+            "v-pulse-rc"
         ]
     );
     for example in examples() {
@@ -136,9 +140,9 @@ fn check_op(label: &str, reference: &serde_json::Value, done: &Completed) {
     }
 }
 
-/// The script's bounce expansion must equal the engine's, its edges must be
-/// rows of the trace, its latch edges must pair with the engine's, and each
-/// waveform must be within 1e-3 of its span away from every edge.
+/// The script's bounce expansion must equal the engine's, its edges and every source jump must
+/// be rows of the trace, its latch edges must pair with the engine's, and each waveform must be
+/// within 1e-3 of its span away from every edge and jump.
 fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &Completed) {
     assert!(
         done.results.diagnostics().is_empty(),
@@ -170,8 +174,10 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
         .values()
         .flat_map(|list| list.as_array().unwrap())
         .map(|edge| edge["t_ps"].as_u64().unwrap())
+        .chain(jumps(input))
         .collect();
     edges.sort_unstable();
+    edges.dedup();
     let stop = *rows.last().unwrap();
     for &edge in &edges {
         for at in [edge, ramp_end(edge, stop)] {
@@ -189,7 +195,7 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
         .iter()
         .map(|t| t.as_f64().unwrap() * 1e12)
         .collect();
-    let mut windows = ramps(&edges, stop);
+    let mut windows = ramps(&edges);
     windows.extend(check_logic(label, reference, done));
     let grid = grid(&engine_t, &reference_t, &windows);
     let values = reference["values"].as_object().unwrap();
@@ -401,17 +407,32 @@ fn expanded(input: &[u8]) -> serde_json::Value {
     serde_json::Value::Object(switches)
 }
 
-/// The later endpoint of an edge's ramp. The row there holds the new contact.
+/// Every source jump before the stop, from the parsed netlist. The deck ramps each one like a
+/// contact edge.
+fn jumps(input: &[u8]) -> Vec<u64> {
+    let netlist = netlist::parse(input).unwrap();
+    let Analysis::Transient(transient) = netlist.analysis() else {
+        panic!("not a transient");
+    };
+    netlist
+        .parts()
+        .filter_map(|(_, part)| part.model.waveform())
+        .flat_map(|waveform| waveform.jumps(transient.stop, usize::MAX))
+        .map(|at| at.as_ps())
+        .collect()
+}
+
+/// The required row after an edge. It holds the new contact when it is after the edge.
 fn ramp_end(edge: u64, stop: u64) -> u64 {
     edge.saturating_add(EDGE_RAMP_PS).min(stop)
 }
 
-/// The open ramp after each contact edge. The engine's contact has already changed there, and
-/// ngspice is mid-ramp.
-fn ramps(edges: &[u64], stop: u64) -> Vec<(f64, f64)> {
+/// The open interval `(edge, edge + 1 ns)`. The deck is still ramping there when the end
+/// is past the stop, so that stop is not a comparable sample.
+fn ramps(edges: &[u64]) -> Vec<(f64, f64)> {
     edges
         .iter()
-        .map(|&edge| (edge as f64, ramp_end(edge, stop) as f64))
+        .map(|&edge| (edge as f64, edge.saturating_add(EDGE_RAMP_PS) as f64))
         .collect()
 }
 
@@ -448,7 +469,7 @@ fn the_grid_skips_the_inside_of_each_window_and_keeps_its_ends() {
     let engine = [0.0, 1000.0, 2000.0, 3000.0];
     let reference = [500.0, 1500.0, 2999.5, 4000.0];
     assert_eq!(
-        grid(&engine, &reference, &ramps(&[1000], 3000)),
+        grid(&engine, &reference, &ramps(&[1000])),
         [0.0, 500.0, 1000.0, 2000.0, 2999.5, 3000.0]
     );
     assert_eq!(
@@ -458,13 +479,33 @@ fn the_grid_skips_the_inside_of_each_window_and_keeps_its_ends() {
 }
 
 #[test]
-fn the_grid_keeps_stop_when_the_ramp_runs_into_it() {
+fn the_grid_drops_stop_when_the_ramp_runs_past_it() {
+    // 9900 + 1 ns is 10900, past the stop. The open interval includes the stop, which the
+    // deck has not finished ramping.
     let grid = grid(
         &[0.0, 9900.0, 10_000.0],
         &[9950.0, 10_000.0, 11_000.0],
-        &ramps(&[9900], 10_000),
+        &ramps(&[9900]),
     );
-    assert_eq!(grid, [0.0, 9900.0, 10_000.0]);
+    assert_eq!(grid, [0.0, 9900.0]);
+}
+
+#[test]
+fn the_grid_drops_a_stop_500_ps_after_a_jump() {
+    // A 0 to 1 step at 9500 ps with stop 10000. The deck ramps until 10500 ps.
+    let open = grid(
+        &[0.0, 9_500.0, 10_000.0],
+        &[9_800.0, 10_000.0, 10_500.0],
+        &ramps(&[9_500]),
+    );
+    assert_eq!(open, [0.0, 9_500.0]);
+    // A ramp that finishes on the stop keeps the stop. The interval is open at that end.
+    let finished = grid(
+        &[0.0, 9_000.0, 10_000.0],
+        &[9_500.0, 10_000.0],
+        &ramps(&[9_000]),
+    );
+    assert_eq!(finished, [0.0, 9_000.0, 10_000.0]);
 }
 
 #[test]

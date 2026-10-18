@@ -2,7 +2,6 @@ use sim_core::netlist::{Contact, Switch};
 use sim_core::time::Time;
 
 use crate::mna::{Probe, Stamp};
-use crate::newton::History;
 
 fn conductance(switch: &Switch, contact: Contact) -> f64 {
     1.0 / switch.resistance(contact).si.get()
@@ -11,9 +10,10 @@ fn conductance(switch: &Switch, contact: Contact) -> f64 {
 /// A restart takes the contact after the edge at `at`. Every other solve takes the one before it.
 pub(super) fn stamp(switch: &Switch, stamp: &mut Stamp<'_>) {
     let at = stamp.conditions.at;
-    let contact = match stamp.conditions.history {
-        History::Restart { .. } => switch.schedule.after(at),
-        History::Start | History::Step(_) => switch.schedule.before(at),
+    let contact = if stamp.conditions.after_change() {
+        switch.schedule.after(at)
+    } else {
+        switch.schedule.before(at)
     };
     stamp.conductance(switch.pins[0], switch.pins[1], conductance(switch, contact));
 }

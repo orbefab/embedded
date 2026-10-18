@@ -1,4 +1,5 @@
 mod capacitor;
+mod current_source;
 mod junction;
 mod resistor;
 mod switch;
@@ -12,7 +13,7 @@ use crate::mna::{Probe, Stamp, Unknowns};
 
 pub(crate) fn unknowns(model: &Model) -> Unknowns {
     match model {
-        Model::Resistor(_) | Model::Switch(_) => Unknowns::default(),
+        Model::Resistor(_) | Model::CurrentSource(_) | Model::Switch(_) => Unknowns::default(),
         Model::VoltageSource(_) | Model::Capacitor(_) => Unknowns {
             branches: 1,
             ..Unknowns::default()
@@ -30,6 +31,7 @@ pub(crate) fn stamp(model: &Model, stamp: &mut Stamp<'_>) {
     match model {
         Model::Resistor(resistor) => resistor::stamp(resistor, stamp),
         Model::VoltageSource(source) => voltage_source::stamp(source, stamp),
+        Model::CurrentSource(source) => current_source::stamp(source, stamp),
         Model::Diode(j) | Model::Led(j) => junction::stamp(j, stamp),
         Model::Capacitor(capacitor) => capacitor::stamp(capacitor, stamp),
         Model::Switch(switch) => switch::stamp(switch, stamp),
@@ -42,6 +44,7 @@ pub(crate) fn initial(model: &Model, out: &mut [f64]) {
     match model {
         Model::Resistor(_)
         | Model::VoltageSource(_)
+        | Model::CurrentSource(_)
         | Model::Capacitor(_)
         | Model::Switch(_)
         | Model::Chip(_) => {}
@@ -54,6 +57,7 @@ pub(crate) fn update(model: &Model, probe: &Probe<'_>, prior: &[f64], next: &mut
     match model {
         Model::Resistor(_)
         | Model::VoltageSource(_)
+        | Model::CurrentSource(_)
         | Model::Capacitor(_)
         | Model::Switch(_)
         | Model::Chip(_) => Update::default(),
@@ -74,6 +78,7 @@ pub(crate) struct Update {
 
 /// The pin pairs a part joins at DC. A chain of them is a DC path for `net.floating`.
 /// A capacitor is open unless the operating point holds it at `initial`. A switch is a resistor either way.
+/// A current source joins nothing.
 pub(crate) fn dc_paths(model: &Model) -> &'static [(usize, usize)] {
     match model {
         Model::Resistor(_)
@@ -82,7 +87,7 @@ pub(crate) fn dc_paths(model: &Model) -> &'static [(usize, usize)] {
         | Model::Led(_)
         | Model::Switch(_) => &[(0, 1)],
         Model::Capacitor(capacitor) if capacitor.initial.is_some() => &[(0, 1)],
-        Model::Capacitor(_) => &[],
+        Model::Capacitor(_) | Model::CurrentSource(_) => &[],
         Model::Chip(chip) => chip::dc_paths(chip),
     }
 }
@@ -94,6 +99,7 @@ pub(crate) fn observe(model: &Model, probe: &Probe<'_>, at: Time) -> Option<[f64
         Model::Chip(_) => return None,
         Model::Resistor(resistor) => (resistor.pins, resistor::current(resistor, probe)),
         Model::VoltageSource(source) => (source.pins, voltage_source::current(probe)),
+        Model::CurrentSource(source) => (source.pins, current_source::current(source, at)),
         Model::Diode(j) | Model::Led(j) => (j.pins, junction::current(j, probe)),
         Model::Capacitor(capacitor) => (capacitor.pins, capacitor::current(probe)),
         Model::Switch(switch) => (switch.pins, switch::current(switch, probe, at)),
