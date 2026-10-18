@@ -3,6 +3,7 @@
 
 pub mod diagnostic;
 pub mod finite;
+pub mod logic;
 pub mod name;
 pub mod netlist;
 pub mod run_folder;

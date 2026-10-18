@@ -5,8 +5,9 @@ use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
 use super::{
-    Analysis, Bounce, Capacitor, Contact, Edge, IntValue, Junction, Model, NetId, Netlist, Part,
-    Resistor, Schedule, Source, Switch, Transient, Value, VoltageSource, bounce, junction_scale,
+    Analysis, Bounce, Capacitor, Chip, Contact, Discharge, Edge, IntValue, Junction, Model, Ne555,
+    NetId, Netlist, OutputStage, Part, Resistor, Schedule, Source, Switch, Transient, Value,
+    VoltageSource, bounce, junction_scale,
 };
 use crate::diagnostic::{AnalysisRule, Diagnostic, ScheduleRule, ValueRule};
 use crate::finite::Finite;
@@ -72,6 +73,35 @@ enum WirePart {
         initial: Option<WireValue>,
     },
     Switch(WireSwitch),
+    Ne555(Box<WireNe555>),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireNe555 {
+    name: String,
+    pins: PinMap,
+    ladder_resistance: WireValue,
+    reset_threshold: WireValue,
+    discharge: WireDischarge,
+    supply_resistance: WireValue,
+    output: WireOutputStage,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireDischarge {
+    on_resistance: WireValue,
+    off_resistance: WireValue,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireOutputStage {
+    high_drop: WireValue,
+    high_resistance: WireValue,
+    low_drop: WireValue,
+    low_resistance: WireValue,
 }
 
 #[derive(Deserialize)]
@@ -376,6 +406,7 @@ fn resolve_part(
         | WirePart::Capacitor { name, .. } => name,
         WirePart::Diode(junction) | WirePart::Led(junction) => &junction.name,
         WirePart::Switch(switch) => &switch.name,
+        WirePart::Ne555(chip) => &chip.name,
     };
     let path = format!("parts[{index}].name");
     let name = match Name::new(raw_name) {
@@ -469,6 +500,8 @@ fn resolve_part(
         WirePart::Switch(switch) => {
             resolve_switch(seed, &name, &part_ref, switch, nets, out).map(Model::Switch)
         }
+        WirePart::Ne555(chip) => resolve_ne555(&name, &part_ref, *chip, nets, out)
+            .map(|chip| Model::Chip(Chip::Ne555(Box::new(chip)))),
     };
     if duplicate || reserved {
         None
@@ -530,6 +563,70 @@ fn resolve_junction(
         series_resistance: rs?,
         max_current: max_current?,
         max_power: max_power?,
+    })
+}
+
+fn resolve_ne555(
+    name: &Name,
+    part_ref: &Ref,
+    wire: WireNe555,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Ne555> {
+    let ohm = |field, value, out: &mut Vec<Diagnostic>| {
+        resolve_value(part_ref, field, "ohm", true, value, out)
+    };
+    let drop = |field, value: WireValue, out: &mut Vec<Diagnostic>| {
+        let volts = value.value.get();
+        let value = resolve_value(part_ref, field, "V", false, value, out)?;
+        if volts < 0.0 {
+            out.push(Diagnostic::NetlistValue {
+                part: part_ref.clone(),
+                field,
+                value: volts,
+                rule: ValueRule::NonNegative,
+            });
+            return None;
+        }
+        Some(value)
+    };
+    let pins = resolve_pins(name, Ne555::PINS, &wire.pins.0, nets, out);
+    let ladder = ohm("ladder_resistance", wire.ladder_resistance, out);
+    let reset = resolve_value(
+        part_ref,
+        "reset_threshold",
+        "V",
+        true,
+        wire.reset_threshold,
+        out,
+    );
+    let on = ohm("discharge.on_resistance", wire.discharge.on_resistance, out);
+    let off = ohm(
+        "discharge.off_resistance",
+        wire.discharge.off_resistance,
+        out,
+    );
+    let supply = ohm("supply_resistance", wire.supply_resistance, out);
+    let output = wire.output;
+    let high_drop = drop("output.high_drop", output.high_drop, out);
+    let high_resistance = ohm("output.high_resistance", output.high_resistance, out);
+    let low_drop = drop("output.low_drop", output.low_drop, out);
+    let low_resistance = ohm("output.low_resistance", output.low_resistance, out);
+    Some(Ne555 {
+        pins: pins?,
+        ladder_resistance: ladder?,
+        reset_threshold: reset?,
+        discharge: Discharge {
+            on_resistance: on?,
+            off_resistance: off?,
+        },
+        supply_resistance: supply?,
+        output: OutputStage {
+            high_drop: high_drop?,
+            high_resistance: high_resistance?,
+            low_drop: low_drop?,
+            low_resistance: low_resistance?,
+        },
     })
 }
 

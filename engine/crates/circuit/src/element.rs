@@ -7,6 +7,7 @@ mod voltage_source;
 use sim_core::netlist::Model;
 use sim_core::time::Time;
 
+use crate::chip;
 use crate::mna::{Probe, Stamp, Unknowns};
 
 pub(crate) fn unknowns(model: &Model) -> Unknowns {
@@ -21,6 +22,7 @@ pub(crate) fn unknowns(model: &Model) -> Unknowns {
             branches: 0,
             junctions: 1,
         },
+        Model::Chip(chip) => chip::unknowns(chip),
     }
 }
 
@@ -31,13 +33,18 @@ pub(crate) fn stamp(model: &Model, stamp: &mut Stamp<'_>) {
         Model::Diode(j) | Model::Led(j) => junction::stamp(j, stamp),
         Model::Capacitor(capacitor) => capacitor::stamp(capacitor, stamp),
         Model::Switch(switch) => switch::stamp(switch, stamp),
+        Model::Chip(chip) => chip::stamp(chip, *stamp.chip(), stamp),
     }
 }
 
 /// Start voltages for this part's junction slots.
 pub(crate) fn initial(model: &Model, out: &mut [f64]) {
     match model {
-        Model::Resistor(_) | Model::VoltageSource(_) | Model::Capacitor(_) | Model::Switch(_) => {}
+        Model::Resistor(_)
+        | Model::VoltageSource(_)
+        | Model::Capacitor(_)
+        | Model::Switch(_)
+        | Model::Chip(_) => {}
         Model::Diode(j) | Model::Led(j) => out[0] = junction::initial(j),
     }
 }
@@ -45,9 +52,11 @@ pub(crate) fn initial(model: &Model, out: &mut [f64]) {
 /// After a solve: limit this part's junctions from `prior` into `next`, and check their currents.
 pub(crate) fn update(model: &Model, probe: &Probe<'_>, prior: &[f64], next: &mut [f64]) -> Update {
     match model {
-        Model::Resistor(_) | Model::VoltageSource(_) | Model::Capacitor(_) | Model::Switch(_) => {
-            Update::default()
-        }
+        Model::Resistor(_)
+        | Model::VoltageSource(_)
+        | Model::Capacitor(_)
+        | Model::Switch(_)
+        | Model::Chip(_) => Update::default(),
         Model::Diode(j) | Model::Led(j) => {
             let (limited, update) = junction::update(j, probe, prior[0]);
             next[0] = limited;
@@ -74,12 +83,15 @@ pub(crate) fn dc_paths(model: &Model) -> &'static [(usize, usize)] {
         | Model::Switch(_) => &[(0, 1)],
         Model::Capacitor(capacitor) if capacitor.initial.is_some() => &[(0, 1)],
         Model::Capacitor(_) => &[],
+        Model::Chip(chip) => chip::dc_paths(chip),
     }
 }
 
-/// `i`, `v` and `p` at `at`, in `Quantity` order. Not checked for finiteness.
-pub(crate) fn observe(model: &Model, probe: &Probe<'_>, at: Time) -> [f64; 3] {
+/// `i`, `v` and `p` at `at`, in `Quantity` order, for a two-terminal part. A chip has none.
+/// Not checked for finiteness.
+pub(crate) fn observe(model: &Model, probe: &Probe<'_>, at: Time) -> Option<[f64; 3]> {
     let (pins, i) = match model {
+        Model::Chip(_) => return None,
         Model::Resistor(resistor) => (resistor.pins, resistor::current(resistor, probe)),
         Model::VoltageSource(source) => (source.pins, voltage_source::current(probe)),
         Model::Diode(j) | Model::Led(j) => (j.pins, junction::current(j, probe)),
@@ -87,5 +99,5 @@ pub(crate) fn observe(model: &Model, probe: &Probe<'_>, at: Time) -> [f64; 3] {
         Model::Switch(switch) => (switch.pins, switch::current(switch, probe, at)),
     };
     let v = probe.v(pins[0]) - probe.v(pins[1]);
-    [i, v, v * i]
+    Some([i, v, v * i])
 }

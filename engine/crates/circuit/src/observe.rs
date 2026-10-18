@@ -1,7 +1,7 @@
 use sim_core::diagnostic::Diagnostic;
 use sim_core::finite::Finite;
 use sim_core::name::{Quantity, Ref};
-use sim_core::netlist::{NetId, Netlist};
+use sim_core::netlist::{Model, NetId, Netlist};
 use sim_core::run_folder::OpPoint;
 use sim_core::time::Time;
 
@@ -11,7 +11,7 @@ use crate::newton::Circuit;
 
 const QUANTITIES: [Quantity; 3] = [Quantity::I, Quantity::V, Quantity::P];
 
-/// Every observed ref in `Ref` order: each net, then each part's `i`, `v` and `p`.
+/// Every observed ref in `Ref` order: each net, then each two-terminal part's `i`, `v` and `p`.
 /// Fixed by the netlist. The `op` keys, trace columns and rating watches all index it.
 pub(crate) struct Columns {
     refs: Vec<Ref>,
@@ -29,6 +29,9 @@ impl Columns {
             .map(|(_, name)| Ref::Net((*name).clone()))
             .collect();
         for (_, part) in netlist.parts() {
+            if let Model::Chip(_) = part.model {
+                continue;
+            }
             for quantity in QUANTITIES {
                 refs.push(Ref::Quantity(part.name.clone(), quantity));
             }
@@ -67,7 +70,10 @@ pub(crate) fn observe(
             part: id,
             x,
         };
-        for value in element::observe(&part.model, &probe, at) {
+        for value in element::observe(&part.model, &probe, at)
+            .into_iter()
+            .flatten()
+        {
             row.push(
                 Finite::new(value).ok_or_else(|| Diagnostic::SolverNonFinite {
                     at,

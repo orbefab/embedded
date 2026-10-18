@@ -1,13 +1,15 @@
 use std::collections::BTreeMap;
 
-use sim_core::diagnostic::Diagnostic;
+use sim_core::diagnostic::{Diagnostic, Solve};
 use sim_core::finite::Finite;
-use sim_core::name::Ref;
+use sim_core::logic::Logic;
+use sim_core::name::{Name, Ref};
 use sim_core::netlist::{Edge, Model, Netlist, Transient};
 use sim_core::run_folder::{Observations, OpPoint};
 use sim_core::time::Time;
 use sim_core::trace::Trace;
 
+use crate::chip;
 use crate::lte::{self, Charges, Segment, Verdict};
 use crate::newton::{
     Circuit, Conditions, Converged, Failure, History, Integration, Iterate, Offender, newton,
@@ -16,19 +18,22 @@ use crate::observe::{self, Columns};
 use crate::op;
 use crate::ratings::{Ratings, Timing};
 use crate::step::{EDGE_STEP, Plan};
+use crate::watch::{self, Levels};
 
 pub(crate) const STEP_BUDGET: u32 = 50;
 
-/// Newton's budget for each step, and for each rung of a restart's ladder.
-/// A test lowers one to make that solve fail.
+/// Newton's budget for each step, each probe locating a chip event, and each rung of a
+/// restart's ladder. A test lowers one to make that solve fail.
 #[derive(Clone, Copy)]
 struct Budget {
     step: u32,
+    probe: u32,
     restart: u32,
 }
 
 const BUDGET: Budget = Budget {
     step: STEP_BUDGET,
+    probe: STEP_BUDGET,
     restart: op::OP_BUDGET,
 };
 
@@ -70,24 +75,28 @@ fn run_with(
         ratings: Ratings::new(netlist, columns, Timing::Run),
         columns,
         op: None,
+        logic: None,
     };
-    match steps(netlist, transient, budget, &mut record) {
-        Ok(()) => {
-            diagnostics.extend(record.ratings.finish());
-            Outcome {
-                observations: Observations {
-                    op: record.op,
-                    switches: Some(switches(netlist, transient.stop)),
-                },
-                trace: Some(record.trace),
-            }
-        }
+    let result = steps(netlist, transient, budget, &mut record);
+    diagnostics.extend(record.ratings.finish());
+    let mut trace = record.trace;
+    if let Some(logic) = &record.logic {
+        trace.attach_logic(logic.clone());
+    }
+    match result {
+        Ok(()) => Outcome {
+            observations: Observations {
+                op: record.op,
+                switches: Some(switches(netlist, transient.stop)),
+                logic: record.logic,
+            },
+            trace: Some(trace),
+        },
         Err(diagnostic) => {
-            diagnostics.extend(record.ratings.finish());
             diagnostics.push(diagnostic);
             Outcome {
                 observations: Observations::default(),
-                trace: (record.trace.rows() > 0).then_some(record.trace),
+                trace: (trace.rows() > 0).then_some(trace),
             }
         }
     }
@@ -100,6 +109,8 @@ struct Record<'c> {
     max_rows: usize,
     ratings: Ratings,
     op: Option<OpPoint>,
+    /// `None` without a chip.
+    logic: Option<Logic>,
 }
 
 impl Record<'_> {
@@ -118,14 +129,52 @@ impl Record<'_> {
         self.ratings.sample(at, row);
         Ok(())
     }
+
+    /// Every chip signal's level from `at` on: one `Ref::Logic` per signal, chips in slot order.
+    fn logic(&mut self, at: Time, circuit: &Circuit, chips: &[chip::State], levels: &Levels) {
+        let mut now = Vec::new();
+        for (slot, ((_, chip), state)) in circuit.chips().zip(chips).enumerate() {
+            now.extend(chip::levels(
+                chip,
+                state,
+                levels.of(circuit.watches.of(slot)),
+            ));
+        }
+        match &mut self.logic {
+            Some(logic) => {
+                for (signal, level) in now.into_iter().enumerate() {
+                    logic.set(at, signal, level);
+                }
+            }
+            None if now.is_empty() => {}
+            None => self.logic = Some(Logic::new(signals(circuit), now)),
+        }
+    }
 }
 
-/// The whole state a step starts from. Replaced, never mutated, on accept.
+fn signals(circuit: &Circuit) -> Vec<Ref> {
+    circuit
+        .chips()
+        .flat_map(|(id, chip)| {
+            let part = &circuit.netlist.part(id).name;
+            chip::signals(chip)
+                .iter()
+                .map(|signal| Ref::Logic(part.clone(), Name::new(signal).expect("signal name")))
+        })
+        .collect()
+}
+
+/// The whole state a step starts from. Replaced, never mutated, on accept. A retry, a
+/// rejected step or a probe only reads it.
 struct Accepted {
     at: Time,
-    /// At a switch edge, the restart solve at `at`, not the row at `at`.
+    /// After a restart, the restart solve at `at`, not the row at `at`.
     iterate: Iterate,
     segment: Segment,
+    /// Each chip's state, by slot.
+    chips: Vec<chip::State>,
+    /// Each watch's level at `at`.
+    levels: Levels,
 }
 
 fn steps(
@@ -136,14 +185,30 @@ fn steps(
 ) -> Result<(), Diagnostic> {
     let circuit = Circuit::new(netlist)?;
     let charges = Charges::new(netlist, &circuit.layout);
-    let start = op::operating_point(&circuit, Conditions::NOMINAL, Iterate::initial(&circuit))?;
-    let row = observe::observe(&circuit, record.columns, &start.solution, Time::ZERO)?;
+    let start = Iterate::initial(&circuit);
+    let start = op::settle(
+        &circuit,
+        Conditions::NOMINAL,
+        start,
+        circuit.power_on(),
+        None,
+        op::OP_BUDGET,
+    )?;
+    let row = observe::observe(
+        &circuit,
+        record.columns,
+        &start.iterate.solution,
+        Time::ZERO,
+    )?;
     record.accept(Time::ZERO, &row)?;
+    record.logic(Time::ZERO, &circuit, &start.chips, &start.levels);
     let mut breakpoints = Breakpoints::new(netlist, transient.stop);
     let mut accepted = Accepted {
         at: Time::ZERO,
-        iterate: start,
+        iterate: start.iterate,
         segment: Segment::Start,
+        chips: start.chips,
+        levels: start.levels,
     };
     let mut plan = Plan::RESTART;
     // Newton iterations over every stalled attempt since the last accepted step. An attempt
@@ -177,22 +242,58 @@ fn steps(
                         continue;
                     }
                 }
+                let levels = circuit
+                    .watches
+                    .levels(&converged.iterate.solution, Some(&accepted.levels));
+                let step_end = at;
+                let (at, converged, levels) = if levels == accepted.levels {
+                    (at, converged, levels)
+                } else {
+                    let (located, converged) = watch::locate(
+                        &circuit.watches,
+                        &accepted.levels,
+                        (accepted.at, &accepted.iterate.solution),
+                        (at, converged),
+                        |h| attempt(&circuit, &accepted, h, budget.probe),
+                    )
+                    .map_err(|(probe, failure)| {
+                        probe_failure(&circuit, accepted.at, probe, failure)
+                    })?;
+                    let levels = circuit
+                        .watches
+                        .levels(&converged.iterate.solution, Some(&accepted.levels));
+                    (located, converged, levels)
+                };
+                // The row holds the chip states it was solved with.
                 let row =
                     observe::observe(&circuit, record.columns, &converged.iterate.solution, at)?;
                 record.accept(at, &row)?;
                 iterations = 0;
-                let edge = breakpoints.is_edge(at);
-                // A step cut short by a breakpoint keeps the step it wanted.
-                plan = match (edge, h == plan.h) {
+                // A watch cuts the step. Only a changed stamp, a chip's or a contact's, restarts.
+                let chips = circuit.react(&accepted.chips, &accepted.levels, &levels);
+                let restart =
+                    (breakpoints.is_edge(at) || chips != accepted.chips) && at < transient.stop;
+                // A step cut short by a breakpoint or a watch keeps the step it wanted.
+                plan = match (restart, h == plan.h && at == step_end) {
                     (true, _) => Plan::RESTART,
                     (false, true) => Plan::accepted(h, ratio, method, transient.max_step),
                     (false, false) => plan,
                 };
-                accepted = if edge {
+                let next = if restart {
+                    let held = restart_solve(
+                        &circuit,
+                        at,
+                        converged.iterate,
+                        chips,
+                        &levels,
+                        budget.restart,
+                    )?;
                     Accepted {
                         at,
-                        iterate: restart(&circuit, at, converged.iterate, budget.restart)?,
+                        iterate: held.iterate,
                         segment: Segment::Start,
+                        chips: held.chips,
+                        levels: held.levels,
                     }
                 } else {
                     Accepted {
@@ -200,11 +301,19 @@ fn steps(
                         segment: accepted.segment.advance(
                             accepted.at,
                             accepted.iterate.solution,
-                            h,
+                            at.as_ps() - accepted.at.as_ps(),
                         ),
                         iterate: converged.iterate,
+                        chips,
+                        levels: levels.clone(),
                     }
                 };
+                // A flip the chips reacted to is recorded at `at`, even when the restart's
+                // solve is back across the threshold. The restart's level is the next step's
+                // prior, so the return is recorded on the next row.
+                let recorded = next.levels.with_flips(&accepted.levels, &levels);
+                record.logic(at, &circuit, &next.chips, &recorded);
+                accepted = next;
             }
             Err(Failure::Singular { row }) => {
                 return Err(Diagnostic::SolverSingular {
@@ -229,12 +338,33 @@ fn steps(
                     iterations,
                     gmin: None,
                     source_scale: 1.0,
-                    step_ps: Some(h),
+                    solve: Solve::Step { step_ps: h },
                 })?;
             }
         }
     }
     Ok(())
+}
+
+/// A probe of `locate` that failed at `probe`. It is not retried shorter: the step it
+/// re-solves already converged.
+fn probe_failure(circuit: &Circuit, from: Time, probe: Time, failure: Failure) -> Diagnostic {
+    match failure {
+        Failure::Singular { row } => Diagnostic::SolverSingular {
+            at: probe,
+            unknown: circuit.layout.describe(circuit.netlist, row),
+        },
+        Failure::Stalled(stall) => Diagnostic::SolverConvergence {
+            at: probe,
+            unknown: stall.offender.describe(circuit),
+            iterations: stall.iterations,
+            gmin: None,
+            source_scale: 1.0,
+            solve: Solve::Probe {
+                step_ps: probe.as_ps() - from.as_ps(),
+            },
+        },
+    }
 }
 
 /// One step of `h` ps from `from`. `from` is only read, so a retry calls this again.
@@ -247,15 +377,24 @@ fn attempt(circuit: &Circuit, from: &Accepted, h: u64, budget: u32) -> Result<Co
             h_ps: h,
             previous: &from.iterate.solution,
         }),
+        chips: &from.chips,
         ..Conditions::NOMINAL
     };
     newton(circuit, &conditions, from.iterate.clone(), budget)
 }
 
-/// The solve after a switch edge at `at`: every capacitor held at its voltage in `step`, the
-/// new contacts in force, on the operating point ladder with `budget` per rung. It is history
-/// for the next step, not a row.
-fn restart(circuit: &Circuit, at: Time, step: Iterate, budget: u32) -> Result<Iterate, Diagnostic> {
+/// The solve after a switch edge or a chip drive change at `at`: every capacitor held at its
+/// voltage in `step`, the new contacts and `chips` in force, settled on the operating point
+/// ladder with `budget` per rung. `levels` were read on `step`. It is history for the next
+/// step, not a row.
+fn restart_solve(
+    circuit: &Circuit,
+    at: Time,
+    step: Iterate,
+    chips: Vec<chip::State>,
+    levels: &Levels,
+    budget: u32,
+) -> Result<op::Settled, Diagnostic> {
     let conditions = Conditions {
         at,
         history: History::Restart {
@@ -263,7 +402,14 @@ fn restart(circuit: &Circuit, at: Time, step: Iterate, budget: u32) -> Result<It
         },
         ..Conditions::NOMINAL
     };
-    op::climb(circuit, conditions, step.clone(), |_| budget)
+    op::settle(
+        circuit,
+        conditions,
+        step.clone(),
+        chips,
+        Some(levels),
+        budget,
+    )
 }
 
 /// Where a step must land. Contact edges, 1 ns after t = 0, and 1 ns after every

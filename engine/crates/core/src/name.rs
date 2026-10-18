@@ -1,7 +1,7 @@
 //! Names and refs.
 //!
 //! ```text
-//! ref      = "#" ( "net." name | name [ "." ( quantity | "pin." name ) ] )
+//! ref      = "#" ( "net." name | name [ "." ( quantity | "pin." name | "logic." name ) ] )
 //! quantity = "i" | "v" | "p"
 //! name     = ASCII letter, then ASCII letters, digits or "_"; 1..=64 bytes
 //! ```
@@ -74,7 +74,7 @@ impl Quantity {
 
 /// A stable name for something in a run.
 ///
-/// Derived order is nets, then parts, then pins, then quantities.
+/// Derived order is nets, then parts, then pins, then quantities, then logic signals.
 /// Run-folder maps keyed by `Ref` serialize in that order.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Ref {
@@ -82,6 +82,9 @@ pub enum Ref {
     Part(Name),
     Pin(Name, Name),
     Quantity(Name, Quantity),
+    /// A chip's logic level, such as the level its comparator reads at an input pin.
+    /// Not the physical pin, which is `Pin`.
+    Logic(Name, Name),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -98,6 +101,7 @@ impl fmt::Display for Ref {
             Ref::Quantity(part, quantity) => {
                 write!(f, "#{}.{}", part.as_str(), quantity.as_str())
             }
+            Ref::Logic(part, signal) => write!(f, "#{}.logic.{}", part.as_str(), signal.as_str()),
         }
     }
 }
@@ -125,6 +129,11 @@ impl FromStr for Ref {
             let part = Name::new(part).map_err(|_| fail())?;
             let pin = Name::new(pin).map_err(|_| fail())?;
             return Ok(Ref::Pin(part, pin));
+        }
+        if let Some((part, signal)) = body.split_once(".logic.") {
+            let part = Name::new(part).map_err(|_| fail())?;
+            let signal = Name::new(signal).map_err(|_| fail())?;
+            return Ok(Ref::Logic(part, signal));
         }
         if let Some((part, quant)) = body.split_once('.') {
             let part = Name::new(part).map_err(|_| fail())?;
@@ -178,6 +187,9 @@ mod tests {
             "#r1.v",
             "#r1.p",
             "#led1.p",
+            "#u1.logic.out",
+            "#logic.logic.pin",
+            "#net.logic.out",
         ] {
             let parsed: Ref = text.parse().unwrap();
             assert_eq!(parsed.to_string(), text, "{text}");
@@ -222,9 +234,26 @@ mod tests {
             "#r1.i.v",
             " #r1",
             "#r1.",
+            "#u1.logic",
+            "#u1.logic.",
+            "#u1.logic.1out",
+            "#u1.logic.pin.out",
         ] {
             assert!(text.parse::<Ref>().is_err(), "{text} should be rejected");
         }
+    }
+
+    #[test]
+    fn a_logic_signal_is_not_the_pin_it_reads() {
+        let logic: Ref = "#u1.logic.out".parse().unwrap();
+        let pin: Ref = "#u1.pin.out".parse().unwrap();
+        assert_ne!(logic, pin);
+        assert!(matches!(logic, Ref::Logic(_, _)));
+        let part: Ref = "#net.logic.out".parse().unwrap();
+        assert!(
+            matches!(part, Ref::Logic(_, _)),
+            "a part may be named `net`"
+        );
     }
 
     #[test]
@@ -239,5 +268,7 @@ mod tests {
         assert!(part < pin);
         assert!(pin < i);
         assert!(i < v && v < p);
+        let logic: Ref = "#a1.logic.out".parse().unwrap();
+        assert!(p < logic, "logic signals sort after every quantity");
     }
 }

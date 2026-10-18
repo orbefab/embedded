@@ -10,7 +10,8 @@
 //! ```
 //!
 //! `observations.json` is `{"op": {ref: number}}`, plus `switches` for a
-//! transient, or `{}` when the run reported an error.
+//! transient and `logic` for a transient with a chip, or `{}` when the run
+//! reported an error.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -23,6 +24,7 @@ use sha2::{Digest, Sha256};
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::finite::Finite;
+use crate::logic::Logic;
 use crate::name::Ref;
 use crate::netlist::{self, Edge, Netlist};
 use crate::timestamp::Timestamp;
@@ -91,6 +93,9 @@ pub struct Observations {
     /// Every contact edge before the transient's stop, per switch. `None` for an operating point.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub switches: Option<BTreeMap<Ref, Vec<Edge>>>,
+    /// Every chip's logic levels over a transient. `None` without a chip, and for an operating point.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logic: Option<Logic>,
 }
 
 /// DC operating point. Net voltages and part quantities, keyed by `Ref`.
@@ -530,6 +535,7 @@ mod tests {
             Observations {
                 op: Some(OpPoint { values }),
                 switches: None,
+                logic: None,
             },
             None,
             vec![],

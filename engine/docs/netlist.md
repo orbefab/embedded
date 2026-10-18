@@ -87,6 +87,24 @@ The step policy is fixed. A segment starts at t = 0 and at every restart. Its fi
 
 A step over its tolerance on any capacitor is rejected and retried from the same accepted point. The next try is `0.9 * ratio^(-1/(p+1))` of it, between 0.25 and 0.9, where `ratio` is the worst error over its tolerance and `p` is 1 if that capacitor took backward Euler and 2 if it took the trapezoidal rule. An accepted step grows by the same factor, at most 2, up to `max_step_ps`. When the factor is over 1 it grows by at least 1 ps. A backward Euler step of 1 ps is accepted whatever its error. A capacitor whose trapezoidal step of 1 ps is over its tolerance holds a mode faster than any step, on which the trapezoidal rule rings. It turns stiff, and the step is retried. A stiff capacitor takes backward Euler, which damps that mode. The other capacitors keep the trapezoidal rule. Once a stiff capacitor's accepted step reaches 256 ps, the next step tries it on the trapezoidal rule. The try holds only if each tried capacitor's error is under 1e-3 of its tolerance, because what is left of the mode does not decay on the trapezoidal rule. Otherwise the step is retried with them on backward Euler, and the next try waits for a step twice as long. A restart clears every stiff capacitor. An accepted step cut short by a breakpoint or by `stop_ps` keeps the step it wanted. A rejected one does not, and its retry grows from the shorter step. With no capacitor there is no error, so the step doubles. A step whose Newton solve fails is halved and retried from the same accepted point, down to 1 ps. A failure at 1 ps ends the run with `solver.convergence`.
 
+### Chip events
+
+A chip reads its inputs through watches. A watch is a sum of node voltages times fixed coefficients, minus an offset, and it reads high only above 0. The NE555's are TRIG minus its lower ladder node, THRES minus CONT, and RESET minus GND minus `reset_threshold`.
+
+After each accepted step the run reads every watch on the step's solution. If any reads differently than at the last accepted point, the run locates the first picosecond where one does. Each probe re-solves the same step, from the same point with the same method, shortened to the probe time. The probe follows regula falsi on the earliest watch to flip, rounded to a whole picosecond inside the bracket. It turns to bisection once one end has moved twice in a row, and it stops at a 1 ps bracket. The located point is the later end, the first solved picosecond where a watch reads flipped, and it becomes the row. A regula falsi probe whose solve stalls is replaced by the bracket's midpoint. A midpoint that stalls ends the run with `solver.convergence`, and a singular probe ends it with `solver.singular`.
+
+A watch cuts the step; only a stamp change restarts. At the located point each chip reacts to its levels. If a chip's new state stamps differently, or a switch edge falls there, the run restarts at that point the way it does at a switch edge. The row holds the chips' old states, and the held solve after it is not a row. A flip that changes no drive still gets its edge at its picosecond, and the segment, its method and its error history continue across it. In `examples/ne555-led`, THRES drops back under CONT 1 ps after the latch resets, which is such a flip.
+
+Every watch that flips at one picosecond, on every chip, reacts at once against the levels before it, chips in part order. The run then reads the levels on the solve with the new states and reacts again, up to 8 solves. Chips that still change after the 8th are `chip.unsettled`. The logic levels recorded at the point are the ones the chips reacted to. A watch that flipped on the step keeps its flipped level there, and every other watch takes its level on the solve with the new states. When that solve is back across a flipped watch's threshold, the return is recorded on the next row. A monostable with THRES on DISCH does this, since the discharge pulls THRES back down through the hold. Every located event is at a later whole picosecond, so events cannot pile up at one time. An event located at `stop_ps`, or in the step that ends there, is recorded, and its row is the last. No restart runs at `stop_ps`.
+
+The operating point at t = 0 settles each chip the same way. It starts from the chip's power-on state, the NE555's latch reset, and reacts to the levels it reads. Only the solve that converges at the nominal gmin and source scale is read, never an intermediate rung of the ladder.
+
+Watches are read at accepted steps. A signal that crosses and crosses back inside one step is missed. The error control keeps steps short where a signal curves, and `max_step_ps` caps them.
+
+Every chip kind keeps four rules. A watch reads node voltages, never a branch current. A chip's state holds only what its stamp reads, so every change of state restarts. A chip with memory that leaves its outputs alone would need its own rule for when to restart. A chip's DC paths are the union over its states, so a path that some state opens, such as a high-impedance output, still counts for `net.floating`. Chips have no propagation delay, so two that flip each other at one time can have no states they agree on. Two NE555s, each OUT on the other's TRIG, reset together, then both falling OUTs set both latches while both THRES are still high. That is `chip.unsettled`.
+
+### Accuracy
+
 `max_step_ps` caps the step. It sets how dense the trace is, not how accurate. Each step above the 1 ps floor holds every capacitor's local truncation error under 1e-6 of its voltage plus 1 nV, from a consistent restart after every edge. Error accumulates over steps. The RC example stays under 1e-6 of span of its closed form, and a 10 ns discharge after an edge under 2e-5.
 
 A step at the floor is accepted over its tolerance, so a time constant under about 43 ps is not held to it. A discharge after an edge measures this, as its worst error over its swing:
@@ -212,6 +230,58 @@ The device is at 25 C, 298.15 K. `k` and `q` are the exact SI values. There is n
 
 `examples/led-5v` and `examples/led-9v` use a Kingbright WP7113ID, a red 5 mm LED. Its `Is`, `N`, and `Rs` solve the equation exactly through three points read off the datasheet's forward current figure at 25 C: (1.70 V, 2 mA), (1.90 V, 10 mA), and (2.00 V, 20 mA). The fit gives `Is` = 6.711e-10 A, `N` = 4.427, and `Rs` = 2.115 ohm. Each value's `at` names the figure, the points, and the temperature, so the fit can be redone from the citation.
 
+### NE555
+
+`kind` is `ne555`. Pins are `gnd`, `trig`, `out`, `reset`, `cont`, `thres`, `disch` and `vcc`, in package order. `examples/ne555-led` is the astable of TI SLFS022K Figure 6-5, 10 kohm and 47 kohm with 10 uF, driving an LED through 220 ohm. Its values cite SLFS022K, and its ladder cites the schematic of the pin-compatible LM555, TI SNAS548D.
+
+```json
+{
+  "name": "u1",
+  "kind": "ne555",
+  "pins": {
+    "gnd": "gnd", "trig": "thr", "out": "out", "reset": "vcc",
+    "cont": "cont", "thres": "thr", "disch": "dis", "vcc": "vcc"
+  },
+  "ladder_resistance": { "value": 5000.0, "unit": "ohm", "source": "user" },
+  "reset_threshold": { "value": 0.7, "unit": "V", "source": "user" },
+  "discharge": {
+    "on_resistance": { "value": 18.75, "unit": "ohm", "source": "user" },
+    "off_resistance": { "value": 250000000.0, "unit": "ohm", "source": "user" }
+  },
+  "supply_resistance": { "value": 1875.0, "unit": "ohm", "source": "user" },
+  "output": {
+    "high_drop": { "value": 0.9, "unit": "V", "source": "user" },
+    "high_resistance": { "value": 8.0, "unit": "ohm", "source": "user" },
+    "low_drop": { "value": 0.016666666666666666, "unit": "V", "source": "user" },
+    "low_resistance": { "value": 16.666666666666668, "unit": "ohm", "source": "user" }
+  }
+}
+```
+
+The model is the ladder, three comparators and SLFS022K Table 6-1.
+
+- Three `ladder_resistance` resistors run from VCC to CONT, from CONT to an internal lower node, and from that node to GND. CONT is the pin, so a source or a load on it moves both thresholds. The lower node is not observed.
+- TRIG reads high above the lower node, THRES above CONT, and RESET above GND by more than `reset_threshold`. Each is a watch, described in [Chip events](#chip-events). No comparator has an offset, hysteresis, or input current.
+- RESET low resets the latch. Otherwise TRIG low sets it. Otherwise THRES high resets it. Otherwise it holds. The table is read on levels, not edges.
+- OUT follows the latch. Set, OUT is `output.high_drop` under VCC behind `output.high_resistance`. Reset, OUT is `output.low_drop` over GND behind `output.low_resistance`. Its current flows to the chip's own VCC and GND pins. The drops are sources, so source stepping scales them.
+- DISCH has `discharge.on_resistance` to GND while the latch is reset, and `discharge.off_resistance` while it is set.
+- `supply_resistance` runs from VCC to GND, the chip's quiescent current.
+- There is no propagation delay.
+
+| Field | Unit | Rule |
+| --- | --- | --- |
+| `ladder_resistance`, `supply_resistance` | `ohm` | the resistor's |
+| `discharge.on_resistance`, `discharge.off_resistance` | `ohm` | the resistor's |
+| `output.high_resistance`, `output.low_resistance` | `ohm` | the resistor's |
+| `reset_threshold` | `V` | greater than 0, else rule `positive` |
+| `output.high_drop`, `output.low_drop` | `V` | at least 0, else rule `non_negative` |
+
+A break is `netlist.value` with the dotted field, such as `discharge.off_resistance`. A wrong unit is `netlist.unit` with the same field.
+
+The latch's state is the chip's only state. It is not a netlist field. The operating point settles it, as described in [Chip events](#chip-events).
+
+A chip has no `ratings` field and no `i`, `v`, or `p`. Its logic levels are refs of their own, described in [Refs](#refs). It is a DC path from VCC to CONT, CONT to GND, VCC to GND, OUT to VCC, OUT to GND, and DISCH to GND, in either latch state. A net reached only through TRIG, THRES, or RESET floats.
+
 ## Ratings
 
 A rating bounds the stress on a part. Every key of a kind's `ratings` object is required. Each value is a value object, or `null` for a part that is deliberately unrated.
@@ -220,7 +290,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | --- | --- | --- |
 | `resistor` | `power` | `#<part>.p` |
 | `diode`, `led` | `current`, `power` | `#<part>.i`, `#<part>.p` |
-| `voltage_source`, `capacitor`, `switch` | none | |
+| `voltage_source`, `capacitor`, `switch`, `ne555` | none | |
 
 `current` is in `A`. `power` is in `W`. A rating must be greater than 0. A missing key, an unknown key, and a missing `ratings` object are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.current` or `ratings.power`. A value of 0 or below is `netlist.value` with the same field.
 
@@ -258,10 +328,10 @@ On the divider, `#r1.i` and `#r2.i` are positive, `#r1.p` and `#r2.p` are positi
 
 ## Refs
 
-A ref names one net, part, pin, or quantity.
+A ref names one net, part, pin, quantity, or logic signal.
 
 ```text
-ref      = "#" ( "net." name | name [ "." ( quantity | "pin." name ) ] )
+ref      = "#" ( "net." name | name [ "." ( quantity | "pin." name | "logic." name ) ] )
 quantity = "i" | "v" | "p"
 ```
 
@@ -274,6 +344,7 @@ quantity = "i" | "v" | "p"
 | `#r1.i` | Current of `r1` |
 | `#r1.v` | Voltage of `r1` |
 | `#r1.p` | Power of `r1` |
+| `#u1.logic.out` | Logic level of signal `out` of chip `u1` |
 
 These texts parse and format back to the same text. The following texts are rejected.
 
@@ -282,6 +353,6 @@ These texts parse and format back to the same text. The following texts are reje
 - `#net.1vout`, `#1r`, because the name is illegal
 - `#r1.x`, `#r1.i.v`
 
-`#net.vout` is a net. `#net` is a part named `net`.
+`#net.vout` is a net. `#net` is a part named `net`. `#u1.logic.out` is the level the chip drives on OUT, and `#u1.pin.out` is the pin itself. An NE555's signals are `out`, `reset`, `thres`, and `trig`.
 
-Map keys and diagnostic order use this order: nets, then parts, then pins, then quantities. Quantities sort `i`, then `v`, then `p`. Names sort by byte order inside one group.
+Map keys and diagnostic order use this order: nets, then parts, then pins, then quantities, then logic signals. Quantities sort `i`, then `v`, then `p`. Names sort by byte order inside one group.

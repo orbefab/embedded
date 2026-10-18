@@ -5,11 +5,13 @@
 //!   index.json   the row count, the files, and the columns in ref order
 //!   time.u64     one little-endian u64 per row, picoseconds, strictly increasing
 //!   analog.f64   little-endian f64, column-major: column j is rows j*n to (j+1)*n - 1
+//!   logic.vcd    with a chip only, see `logic`
 //! ```
 
 use serde::Serialize;
 
 use crate::finite::Finite;
+use crate::logic::Logic;
 use crate::name::{Quantity, Ref};
 use crate::time::Time;
 
@@ -21,6 +23,7 @@ pub struct Trace {
     /// `values[column][row]`.
     values: Vec<Vec<f64>>,
     stop: Time,
+    logic: Option<Logic>,
 }
 
 impl Trace {
@@ -44,7 +47,18 @@ impl Trace {
             time: Vec::new(),
             values,
             stop,
+            logic: None,
         }
+    }
+
+    /// The chips' levels over the run, attached once at its end, after an error too.
+    pub fn attach_logic(&mut self, logic: Logic) {
+        assert!(self.logic.is_none(), "logic is attached once");
+        self.logic = Some(logic);
+    }
+
+    pub fn logic(&self) -> Option<&Logic> {
+        self.logic.as_ref()
     }
 
     /// Panics unless `at` is after the last row and `row` has one value per column.
@@ -80,16 +94,20 @@ impl Trace {
     }
 
     /// File names under `traces/`, with their bytes.
-    pub(crate) fn files(&self) -> [(&'static str, Vec<u8>); 3] {
+    pub(crate) fn files(&self) -> Vec<(&'static str, Vec<u8>)> {
         let mut index = serde_json::to_vec_pretty(&self.index()).expect("trace index serializes");
         index.push(b'\n');
         let time = self.time.iter().flat_map(|t| t.as_ps().to_le_bytes());
         let analog = self.values.iter().flatten().flat_map(|v| v.to_le_bytes());
-        [
+        let mut files = vec![
             (INDEX, index),
             (TIME, time.collect()),
             (ANALOG, analog.collect()),
-        ]
+        ];
+        if let Some(logic) = &self.logic {
+            files.push((VCD, logic.vcd()));
+        }
+        files
     }
 
     fn index(&self) -> Index<'_> {
@@ -116,6 +134,20 @@ impl Trace {
                     })
                     .collect(),
             },
+            logic: self.logic.as_ref().map(|logic| LogicIndex {
+                file: VCD,
+                r#type: "vcd",
+                timescale: "1 ps",
+                signals: logic
+                    .vars()
+                    .map(|(reference, scope, var, id)| Signal {
+                        reference,
+                        scope: scope.as_str(),
+                        var: var.as_str(),
+                        id,
+                    })
+                    .collect(),
+            }),
         }
     }
 }
@@ -124,13 +156,16 @@ const FORMAT: u64 = 0;
 const INDEX: &str = "index.json";
 const TIME: &str = "time.u64";
 const ANALOG: &str = "analog.f64";
+const VCD: &str = "logic.vcd";
 
 fn unit(reference: &Ref) -> &'static str {
     match reference {
         Ref::Quantity(_, Quantity::I) => "A",
         Ref::Quantity(_, Quantity::P) => "W",
         Ref::Net(_) | Ref::Quantity(_, Quantity::V) => "V",
-        Ref::Part(_) | Ref::Pin(..) => panic!("{reference} is not an observed quantity"),
+        Ref::Part(_) | Ref::Pin(..) | Ref::Logic(..) => {
+            panic!("{reference} is not an observed quantity")
+        }
     }
 }
 
@@ -142,6 +177,8 @@ struct Index<'a> {
     end_ps: Time,
     time: FileIndex,
     analog: AnalogIndex<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    logic: Option<LogicIndex<'a>>,
 }
 
 #[derive(Serialize)]
@@ -160,6 +197,23 @@ struct AnalogIndex<'a> {
 }
 
 #[derive(Serialize)]
+struct LogicIndex<'a> {
+    file: &'static str,
+    r#type: &'static str,
+    timescale: &'static str,
+    signals: Vec<Signal<'a>>,
+}
+
+#[derive(Serialize)]
+struct Signal<'a> {
+    #[serde(rename = "ref")]
+    reference: &'a Ref,
+    scope: &'a str,
+    var: &'a str,
+    id: String,
+}
+
+#[derive(Serialize)]
 struct Column<'a> {
     #[serde(rename = "ref")]
     reference: &'a Ref,
@@ -169,6 +223,7 @@ struct Column<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::logic::Level;
 
     fn finite(values: &[f64]) -> Vec<Finite> {
         values.iter().map(|&v| Finite::new(v).unwrap()).collect()
@@ -188,7 +243,7 @@ mod tests {
             (index, index_bytes),
             (time, time_bytes),
             (analog, analog_bytes),
-        ] = trace().files();
+        ] = <[_; 3]>::try_from(trace().files()).unwrap();
         assert_eq!(
             (index, time, analog),
             ("index.json", "time.u64", "analog.f64")
@@ -232,6 +287,31 @@ mod tests {
 }
 "##
         );
+    }
+
+    #[test]
+    fn logic_adds_the_vcd_and_maps_each_ref_to_its_scope_var_and_id() {
+        let mut trace = trace();
+        let signals = ["#u1.logic.out", "#u1.logic.trig"].map(|s| s.parse().unwrap());
+        trace.attach_logic(Logic::new(signals.to_vec(), vec![Level::High, Level::Low]));
+        let files = trace.files();
+        let names: Vec<_> = files.iter().map(|(name, _)| *name).collect();
+        assert_eq!(names, ["index.json", "time.u64", "analog.f64", "logic.vcd"]);
+        let index: serde_json::Value = serde_json::from_slice(&files[0].1).unwrap();
+        assert_eq!(
+            index["logic"],
+            serde_json::json!({
+                "file": "logic.vcd",
+                "type": "vcd",
+                "timescale": "1 ps",
+                "signals": [
+                    { "ref": "#u1.logic.out", "scope": "u1", "var": "out", "id": "!" },
+                    { "ref": "#u1.logic.trig", "scope": "u1", "var": "trig", "id": "\"" }
+                ]
+            })
+        );
+        let text = String::from_utf8(files[3].1.clone()).unwrap();
+        assert!(text.contains("$var wire 1 \" trig $end\n"), "{text}");
     }
 
     #[test]

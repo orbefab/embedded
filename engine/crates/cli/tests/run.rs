@@ -410,7 +410,7 @@ fn f64s(bytes: &[u8]) -> Vec<f64> {
 
 #[test]
 fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
-    for name in ["rc-switch", "button-led"] {
+    for name in ["rc-switch", "button-led", "ne555-led"] {
         let out = scratch(&format!("tran-{name}"));
         let netlist = named_example(name);
         let (code, stdout, stderr) = sim(&[
@@ -424,19 +424,23 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
         assert_eq!(json(&stdout)["diagnostics"], serde_json::json!([]));
         let found = files(&out);
         let names: Vec<_> = found.keys().map(String::as_str).collect();
-        assert_eq!(
-            names,
-            [
-                "diagnostics.json",
-                "manifest.json",
-                "netlist.json",
-                "observations.json",
-                "traces/analog.f64",
-                "traces/index.json",
-                "traces/time.u64",
-            ]
-        );
+        let mut expected = vec![
+            "diagnostics.json",
+            "manifest.json",
+            "netlist.json",
+            "observations.json",
+            "traces/analog.f64",
+            "traces/index.json",
+        ];
+        // Only a netlist with a chip has logic levels.
+        let chip = name == "ne555-led";
+        if chip {
+            expected.push("traces/logic.vcd");
+        }
+        expected.push("traces/time.u64");
+        assert_eq!(names, expected);
         let index: serde_json::Value = serde_json::from_slice(&found["traces/index.json"]).unwrap();
+        assert_eq!(index.get("logic").is_some(), chip, "{name}");
         let input: serde_json::Value = serde_json::from_slice(&found["netlist.json"]).unwrap();
         let rows = index["rows"].as_u64().unwrap() as usize;
         let time = u64s(&found["traces/time.u64"]);
@@ -478,7 +482,7 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
 
 #[test]
 fn two_runs_of_each_transient_example_differ_only_in_created_at() {
-    let names = ["rc-switch", "button-led"];
+    let names = ["rc-switch", "button-led", "ne555-led"];
     let outs = |round: &str| -> Vec<PathBuf> {
         names
             .iter()
@@ -499,7 +503,7 @@ fn two_runs_of_each_transient_example_differ_only_in_created_at() {
     let first = outs("a");
     std::thread::sleep(Duration::from_millis(1100));
     let second = outs("b");
-    for (left, right) in first.iter().zip(&second) {
+    for ((left, right), name) in first.iter().zip(&second).zip(names) {
         let mut left_files = files(left);
         let mut right_files = files(right);
         let manifest = |files: &mut std::collections::BTreeMap<String, Vec<u8>>| {
@@ -508,7 +512,8 @@ fn two_runs_of_each_transient_example_differ_only_in_created_at() {
             doc.as_object_mut().unwrap().remove("created_at").unwrap()
         };
         assert_ne!(manifest(&mut left_files), manifest(&mut right_files));
-        assert_eq!(left_files.len(), 6);
+        let logic = usize::from(name == "ne555-led");
+        assert_eq!(left_files.len(), 6 + logic, "{name}");
         assert_eq!(left_files, right_files, "{}", left.display());
         let _ = fs::remove_dir_all(left);
         let _ = fs::remove_dir_all(right);

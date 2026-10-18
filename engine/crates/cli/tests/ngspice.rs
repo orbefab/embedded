@@ -66,7 +66,14 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
         .collect();
     assert_eq!(
         names,
-        ["button-led", "divider", "led-5v", "led-9v", "rc-switch"]
+        [
+            "button-led",
+            "divider",
+            "led-5v",
+            "led-9v",
+            "ne555-led",
+            "rc-switch"
+        ]
     );
     for example in examples() {
         let label = example.display();
@@ -130,7 +137,8 @@ fn check_op(label: &str, reference: &serde_json::Value, done: &Completed) {
 }
 
 /// The script's bounce expansion must equal the engine's, its edges must be
-/// rows of the trace, and each waveform must be within 1e-3 of its span.
+/// rows of the trace, its latch edges must pair with the engine's, and each
+/// waveform must be within 1e-3 of its span away from every edge.
 fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &Completed) {
     assert!(
         done.results.diagnostics().is_empty(),
@@ -164,7 +172,6 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
         .map(|edge| edge["t_ps"].as_u64().unwrap())
         .collect();
     edges.sort_unstable();
-    assert!(!edges.is_empty(), "{label}");
     let stop = *rows.last().unwrap();
     for &edge in &edges {
         for at in [edge, ramp_end(edge, stop)] {
@@ -182,7 +189,9 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
         .iter()
         .map(|t| t.as_f64().unwrap() * 1e12)
         .collect();
-    let grid = grid(&engine_t, &reference_t, &edges);
+    let mut windows = ramps(&edges, stop);
+    windows.extend(check_logic(label, reference, done));
+    let grid = grid(&engine_t, &reference_t, &windows);
     let values = reference["values"].as_object().unwrap();
     let mut compared = SpanCheck {
         failed: false,
@@ -237,6 +246,67 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
     );
 }
 
+/// Each latch signal ngspice records against the engine's: the same levels in order, the mean
+/// period between falling edges within 1e-3, and each edge within 1e-3 of that period of its
+/// partner. Returns the window around each pair, from the earlier minus the reference grid to
+/// the later plus it, where the linearized waveform still straddles the edge.
+fn check_logic(label: &str, reference: &serde_json::Value, done: &Completed) -> Vec<(f64, f64)> {
+    let Some(logic) = reference.get("logic") else {
+        return Vec::new();
+    };
+    let grid_ps = reference["grid_ps"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("{label}: logic needs grid_ps"));
+    let observed = serde_json::to_value(&done.results.observations().logic).unwrap();
+    let mut windows = Vec::new();
+    for (key, list) in logic.as_object().unwrap() {
+        let oracle = logic_edges(list);
+        let engine = logic_edges(&observed[key]["edges"]);
+        let levels = |edges: &[(u64, String)]| -> Vec<String> {
+            edges.iter().map(|(_, level)| level.clone()).collect()
+        };
+        assert_eq!(levels(&engine), levels(&oracle), "{label} {key}: levels");
+        let (got, want) = (mean_period(&engine), mean_period(&oracle));
+        assert!(
+            (got / want - 1.0).abs() <= 1e-3,
+            "{label} {key}: period {got} ps vs ngspice {want} ps"
+        );
+        for ((a, _), (b, _)) in engine.iter().zip(&oracle) {
+            assert!(
+                a.abs_diff(*b) as f64 <= 1e-3 * want,
+                "{label} {key}: edge at {a} ps vs ngspice {b} ps"
+            );
+            windows.push((
+                a.min(b).saturating_sub(grid_ps) as f64,
+                a.max(b).saturating_add(grid_ps) as f64,
+            ));
+        }
+    }
+    windows
+}
+
+fn logic_edges(list: &serde_json::Value) -> Vec<(u64, String)> {
+    list.as_array()
+        .unwrap_or_else(|| panic!("{list} is not a list of edges"))
+        .iter()
+        .map(|edge| {
+            let at = edge["t_ps"].as_u64().unwrap();
+            (at, edge["level"].as_str().unwrap().to_string())
+        })
+        .collect()
+}
+
+/// The mean time between falling edges, the last minus the first over their count less one.
+fn mean_period(edges: &[(u64, String)]) -> f64 {
+    let falls: Vec<u64> = edges
+        .iter()
+        .filter(|(_, level)| level == "low")
+        .map(|&(at, _)| at)
+        .collect();
+    assert!(falls.len() >= 2, "{edges:?} has under two falling edges");
+    (falls[falls.len() - 1] - falls[0]) as f64 / (falls.len() - 1) as f64
+}
+
 struct SpanCheck<'a> {
     failed: bool,
     report: Vec<String>,
@@ -252,14 +322,17 @@ impl SpanCheck<'_> {
     fn record(&mut self, key: &str, got: &[f64], wanted: &[f64]) {
         // Both series and the grid start at t = 0. Dropping that sample, rather than only not
         // scoring at t = 0, keeps ngspice's 0 out of the chord the engine's next rows are read
-        // against.
+        // against. Scoring starts at the reference's next sample, since nothing before it says
+        // what ngspice's current was.
         let from = usize::from(self.held.contains(key));
         let (engine_t, got) = (&self.engine_t[from..], &got[from..]);
         let (reference_t, wanted) = (&self.reference_t[from..], &wanted[from..]);
+        let start = reference_t[0];
         let span = wanted.iter().copied().fold(f64::NEG_INFINITY, f64::max)
             - wanted.iter().copied().fold(f64::INFINITY, f64::min);
         let error = self.grid[from..]
             .iter()
+            .filter(|&&t| t >= start)
             .map(|&t| (interpolate(engine_t, got, t) - interpolate(reference_t, wanted, t)).abs())
             .fold(0.0, f64::max);
         self.failed |= error > 1e-3 * span + floor(key);
@@ -333,9 +406,17 @@ fn ramp_end(edge: u64, stop: u64) -> u64 {
     edge.saturating_add(EDGE_RAMP_PS).min(stop)
 }
 
-/// Both time grids, within the engine's run, without the open ramp after each edge.
-/// The engine's contact has already changed there, and ngspice is mid-ramp.
-fn grid(engine: &[f64], reference: &[f64], edges: &[u64]) -> Vec<f64> {
+/// The open ramp after each contact edge. The engine's contact has already changed there, and
+/// ngspice is mid-ramp.
+fn ramps(edges: &[u64], stop: u64) -> Vec<(f64, f64)> {
+    edges
+        .iter()
+        .map(|&edge| (edge as f64, ramp_end(edge, stop) as f64))
+        .collect()
+}
+
+/// Both time grids, within the engine's run, without the inside of each window.
+fn grid(engine: &[f64], reference: &[f64], windows: &[(f64, f64)]) -> Vec<f64> {
     let end = *engine.last().unwrap();
     let mut grid: Vec<f64> = engine
         .iter()
@@ -345,12 +426,7 @@ fn grid(engine: &[f64], reference: &[f64], edges: &[u64]) -> Vec<f64> {
         .collect();
     grid.sort_by(f64::total_cmp);
     grid.dedup();
-    grid.retain(|&t| {
-        !edges.iter().any(|&edge| {
-            let closed = ramp_end(edge, end as u64) as f64;
-            t > edge as f64 && t < closed
-        })
-    });
+    grid.retain(|&t| !windows.iter().any(|&(from, to)| t > from && t < to));
     grid
 }
 
@@ -368,13 +444,17 @@ fn interpolate(t: &[f64], values: &[f64], at: f64) -> f64 {
 }
 
 #[test]
-fn the_grid_skips_the_inside_of_each_ramp_and_keeps_its_ends() {
-    let grid = grid(
-        &[0.0, 1000.0, 2000.0, 3000.0],
-        &[500.0, 1500.0, 2999.5, 4000.0],
-        &[1000],
+fn the_grid_skips_the_inside_of_each_window_and_keeps_its_ends() {
+    let engine = [0.0, 1000.0, 2000.0, 3000.0];
+    let reference = [500.0, 1500.0, 2999.5, 4000.0];
+    assert_eq!(
+        grid(&engine, &reference, &ramps(&[1000], 3000)),
+        [0.0, 500.0, 1000.0, 2000.0, 2999.5, 3000.0]
     );
-    assert_eq!(grid, [0.0, 500.0, 1000.0, 2000.0, 2999.5, 3000.0]);
+    assert_eq!(
+        grid(&engine, &reference, &[(400.0, 1500.0), (2000.0, 3000.0)]),
+        [0.0, 1500.0, 2000.0, 3000.0]
+    );
 }
 
 #[test]
@@ -382,7 +462,7 @@ fn the_grid_keeps_stop_when_the_ramp_runs_into_it() {
     let grid = grid(
         &[0.0, 9900.0, 10_000.0],
         &[9950.0, 10_000.0, 11_000.0],
-        &[9900],
+        &ramps(&[9900], 10_000),
     );
     assert_eq!(grid, [0.0, 9900.0, 10_000.0]);
 }
@@ -442,6 +522,10 @@ fn a_held_capacitor_drops_only_the_t_0_sample_of_its_current_and_power() {
         held,
     };
     compared.record("#c1.i", &engine, &ngspice);
+    assert!(!compared.failed, "{:?}", compared.report);
+    let mut early = engine;
+    early[1] = 0.0;
+    compared.record("#c1.i", &early, &ngspice);
     assert!(!compared.failed, "{:?}", compared.report);
     compared.record("#c2.i", &engine, &ngspice);
     assert!(compared.failed, "{:?}", compared.report);

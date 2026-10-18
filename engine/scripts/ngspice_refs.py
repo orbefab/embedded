@@ -9,14 +9,16 @@
 
 For every example it translates netlist.json into deck.cir, runs `ngspice -b`
 on it, and writes the operating point, or the transient waveforms, to
-ngspice.json. With no example arguments it takes every
-examples/*/netlist.json. `--check` regenerates in memory and exits 1 if any
-committed byte differs, or if a skipped example already has ngspice.json.
-stdout is one JSON document.
+ngspice.json. A chip's latch edges go to tran.logic. With no example arguments
+it takes every examples/*/netlist.json. `--check` regenerates in memory and
+exits 1 if any committed byte differs, or if a skipped example already has
+ngspice.json. For an example with a chip it also runs the engine and exits 1
+unless the run's logic.vcd reads back as its observations.logic. stdout is one
+JSON document.
 
 A part with no kind, an unknown kind, a part with no pins, or a missing pin
-raises Skip. `--self-test` checks that, and the bounce test vectors, without
-ngspice.
+raises Skip. `--self-test` checks that, the bounce test vectors and the VCD
+reader, without ngspice.
 """
 
 import hashlib
@@ -33,6 +35,13 @@ FORMAT = 0
 OPTIONS = "temp=25 tnom=25 reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-12"
 RAW = "op.raw"
 TRAN_RAW = "tran.raw"
+EDGES_RAW = "edges.raw"
+CHIPS = ("ne555",)
+# A chip deck caps ngspice's step at stop/400000 and linearizes the waveform onto stop/2000.
+CHIP_TMAX = 400_000
+CHIP_GRID = 2_000
+# The engine's conductance from every node to ground.
+ENGINE_GMIN = 1e-12
 # The engine's first step after a contact edge. The Rust test pins both.
 EDGE_RAMP_PS = 1000
 # The engine's least time between two edges of one switch.
@@ -60,6 +69,7 @@ def report_examples(targets, check, version):
     report = {"ngspice": version, "checked" if check else "written": [], "skipped": []}
     if check:
         report["drift"] = []
+        report["logic"] = []
     for example in targets:
         example = example.resolve()
         label = label_of(example)
@@ -77,6 +87,8 @@ def report_examples(targets, check, version):
                 if not path.is_file() or path.read_bytes() != text.encode():
                     report["drift"].append(f"{label}/{name}")
             report["checked"].append(label)
+            if has_chip(json.loads((example / "netlist.json").read_bytes())):
+                report["logic"].append({"example": label, "ok": logic_reads_back(example)})
         else:
             for name, text in files.items():
                 write_atomic(example / name, text)
@@ -93,7 +105,68 @@ def label_of(example):
 
 def exit_code(report):
     unchecked = any("failure" in entry for entry in report["skipped"])
-    return 1 if report.get("drift") or unchecked else 0
+    unread = any(not entry["ok"] for entry in report.get("logic", []))
+    return 1 if report.get("drift") or unchecked or unread else 0
+
+
+def has_chip(netlist):
+    return any(part.get("kind") in CHIPS for part in netlist["parts"])
+
+
+def logic_reads_back(example):
+    """Runs the engine on the example and reads its logic.vcd back against observations.logic."""
+    subprocess.run(
+        ["cargo", "build", "--release", "--locked", "--quiet", "-p", "sim-cli"],
+        cwd=ROOT,
+        check=True,
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp, "run")
+        subprocess.run(
+            [ROOT / "target/release/sim", "run", example / "netlist.json", "--out", out],
+            capture_output=True,
+            check=True,
+        )
+        observations = json.loads((out / "observations.json").read_bytes())
+        return read_vcd((out / "traces/logic.vcd").read_text()) == observations["logic"]
+
+
+def read_vcd(text):
+    """`{ref: {initial, edges}}` from a logic.vcd, as observations.logic writes it."""
+    tokens = text.split()
+    refs = {}
+    scope = None
+    signals = {}
+    at = None
+    k = 0
+    while k < len(tokens):
+        token = tokens[k]
+        if token == "$scope":
+            scope = tokens[k + 2]
+            k += 4
+        elif token == "$upscope":
+            scope = None
+            k += 2
+        elif token == "$var":
+            ident, name = tokens[k + 3], tokens[k + 4]
+            refs[ident] = f"#{scope}.logic.{name}"
+            k += 6
+        elif token == "$timescale":
+            k = tokens.index("$end", k) + 1
+        elif token in ("$enddefinitions", "$dumpvars", "$end"):
+            k += 1
+        elif token.startswith("#"):
+            at = int(token[1:])
+            k += 1
+        else:
+            level = {"0": "low", "1": "high"}[token[0]]
+            ref = refs[token[1:]]
+            if ref not in signals:
+                signals[ref] = {"initial": level, "edges": []}
+            else:
+                signals[ref]["edges"].append({"t_ps": at, "level": level})
+            k += 1
+    return signals
 
 
 def self_test():
@@ -196,7 +269,29 @@ def self_test():
             "part": {"name": "r1", "kind": "resistor", "pins": {"a": "BP1", "b": "gnd"}},
             "commit": False,
             "exit": 0,
-            "reason": "a transient deck reserves names starting with ctl_ or bp",
+            "reason": "a transient deck reserves names starting with ctl_, bp or x_",
+            "failure": None,
+        },
+        {
+            "name": "reserved chip prefix",
+            "analysis": {"transient": {"stop_ps": 5000, "max_step_ps": 1000}},
+            "nets": ["gnd", "X_u1_q"],
+            "part": {"name": "r1", "kind": "resistor", "pins": {"a": "X_u1_q", "b": "gnd"}},
+            "commit": False,
+            "exit": 0,
+            "reason": "a transient deck reserves names starting with ctl_, bp or x_",
+            "failure": None,
+        },
+        {
+            "name": "chip at the operating point",
+            "part": {
+                "name": "u1",
+                "kind": "ne555",
+                "pins": {pin: "a" for pin in PIN_ORDER["ne555"]} | {"gnd": "gnd"},
+            },
+            "commit": False,
+            "exit": 0,
+            "reason": "a chip is translated only for a transient analysis",
             "failure": None,
         },
     ]
@@ -238,6 +333,7 @@ def self_test():
             )
     cases.append(initial_conditions())
     cases.append(bounce_vectors())
+    cases.append(vcd_reader())
     document = {"ok": all(case["ok"] for case in cases), "cases": cases}
     print(json.dumps(document, indent=2))
     return 0 if document["ok"] else 1
@@ -306,6 +402,37 @@ def bounce_vectors():
     return {"name": "bounce vectors", "ok": ok}
 
 
+def vcd_reader():
+    """The VCD the Rust unit test in crates/core/src/logic.rs pins, read back."""
+    text = """$timescale 1 ps $end
+$scope module u1 $end
+$var wire 1 ! out $end
+$var wire 1 " trig $end
+$upscope $end
+$scope module u2 $end
+$var wire 1 # out $end
+$upscope $end
+$enddefinitions $end
+#0
+$dumpvars
+1!
+0"
+0#
+$end
+#231
+1"
+#626
+0!
+1#
+"""
+    ok = read_vcd(text) == {
+        "#u1.logic.out": {"initial": "high", "edges": [{"t_ps": 626, "level": "low"}]},
+        "#u1.logic.trig": {"initial": "low", "edges": [{"t_ps": 231, "level": "high"}]},
+        "#u2.logic.out": {"initial": "low", "edges": [{"t_ps": 626, "level": "high"}]},
+    }
+    return {"name": "vcd reader", "ok": ok}
+
+
 def mix(z):
     z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & M64
     z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & M64
@@ -368,7 +495,9 @@ def generate(example, version):
     netlist = json.loads(netlist_bytes)
     deck, mapping = translate(example.name, netlist)
     transient = "transient" in netlist["analysis"]
-    vectors = run_ngspice(deck, TRAN_RAW if transient else RAW)
+    chips = [part for part in netlist["parts"] if part["kind"] in CHIPS]
+    raws = [TRAN_RAW, EDGES_RAW] if chips else [TRAN_RAW if transient else RAW]
+    vectors, *edges = run_ngspice(deck, raws)
     values = {}
     for variable, column in vectors.items():
         if transient and variable == "time":
@@ -394,10 +523,29 @@ def generate(example, version):
             "t_s": vectors["time"],
             "values": values,
         }
+        if chips:
+            stop = netlist["analysis"]["transient"]["stop_ps"]
+            reference["tran"]["grid_ps"] = stop // CHIP_GRID
+            reference["tran"]["logic"] = {
+                f"#{part['name']}.logic.out": crossings(
+                    edges[0]["time"], edges[0][f"v(x_{part['name'].lower()}_q)"]
+                )
+                for part in chips
+            }
     else:
         reference["op"] = op_point(netlist, values)
     text = json.dumps(reference, indent=2, sort_keys=True) + "\n"
     return {"deck.cir": deck, "ngspice.json": text}
+
+
+def crossings(times, latch):
+    """Each 0.5 crossing of a latch node, linear between ngspice's points, to the picosecond."""
+    edges = []
+    for (t0, v0), (t1, v1) in zip(zip(times, latch), zip(times[1:], latch[1:])):
+        if (v0 - 0.5) * (v1 - 0.5) < 0:
+            at = t0 + (0.5 - v0) * (t1 - t0) / (v1 - v0)
+            edges.append({"level": "high" if v1 > 0.5 else "low", "t_ps": round(at * 1e12)})
+    return edges
 
 
 def op_point(netlist, values):
@@ -410,8 +558,10 @@ def op_point(netlist, values):
 
 
 def part_voltages(label, netlist, values, count):
-    """Each part's `.v` on every transient row, from its pin-order node voltages."""
+    """Each part's `.v` on every transient row, from its pin-order node voltages. A chip has none."""
     for part in netlist["parts"]:
+        if part["kind"] in CHIPS:
+            continue
         try:
             first, second = (values[f"#net.{net}"] for net in pin_nets(part))
         except KeyError as missing:
@@ -440,6 +590,7 @@ PIN_ORDER = {
     "led": ("anode", "cathode"),
     "capacitor": ("a", "b"),
     "switch": ("a", "b"),
+    "ne555": ("gnd", "trig", "out", "reset", "cont", "thres", "disch", "vcc"),
 }
 
 
@@ -489,8 +640,8 @@ def translate_shape(title, netlist):
     if any(n.lower() == "gnd" and n != ground for n in nets):
         raise Skip("a net other than ground is named gnd")
     names = nets + [p["name"] for p in parts]
-    if transient and any(n.lower().startswith(("ctl_", "bp")) for n in names):
-        raise Skip("a transient deck reserves names starting with ctl_ or bp")
+    if transient and any(n.lower().startswith(("ctl_", "bp", "x_")) for n in names):
+        raise Skip("a transient deck reserves names starting with ctl_, bp or x_")
 
     def node(net):
         return "0" if net == ground else net.lower()
@@ -502,6 +653,7 @@ def translate_shape(title, netlist):
     ]
     saves = []
     corners = set()
+    latches = []
     for part in parts:
         pin_list = pin_nets(part)
         if any(net not in nets for net in pin_list):
@@ -554,6 +706,11 @@ def translate_shape(title, netlist):
             lines.append(f"vctl_{name} ctl_{name} 0 pwl({text})")
             saves.append(f"@s{name}[i]")
             mapping[f"i(@s{name}[i])"] = ref
+        elif kind == "ne555":
+            if not transient:
+                raise Skip("a chip is translated only for a transient analysis")
+            lines += ne555_lines(name, part, node)
+            latches.append(f"v(x_{name}_q)")
         else:
             raise Skip(f"kind {kind} has no translation")
     if not transient:
@@ -567,6 +724,14 @@ def translate_shape(title, netlist):
             ".end",
         ]
         return "\n".join(lines) + "\n", mapping
+    if latches:
+        lines.append(
+            "* The engine's gmin on every node. A chip's ladder holds CONT flat, with no span to hide it."
+        )
+        shunted = [node(net) for net in nets if net != ground] + [
+            f"x_{p['name'].lower()}_lo" for p in parts if p["kind"] in CHIPS
+        ]
+        lines += [f"rx_gmin_{n} {n} 0 {1 / ENGINE_GMIN!r}" for n in shunted]
     if corners:
         lines.append(
             "* One source per ramp corner makes it a breakpoint. ngspice skips a PWL corner it lands on an ulp early."
@@ -576,17 +741,57 @@ def translate_shape(title, netlist):
     stop = transient["stop_ps"]
     voltages = [f"v({net.lower()})" for net in nets if net != ground]
     sources = [f"i(v{p['name'].lower()})" for p in parts if p["kind"] == "voltage_source"]
-    lines += [
-        ".control",
-        " ".join(["save", *voltages, *sources, *saves]),
-        # ngspice picks its own points under this cap, which does not depend on the engine's max_step.
-        f"tran {stop // 1000}p {stop}p 0 {stop // 1000}p",
-        "set filetype=ascii",
-        f"write {TRAN_RAW}",
-        ".endc",
-        ".end",
-    ]
+    lines += [".control", " ".join(["save", *voltages, *sources, *saves, *latches])]
+    if latches:
+        # The latch edges keep ngspice's own points. The waveform is linearized, which keeps it
+        # small: the cap that resolves the edges makes some 400000 points.
+        lines += [
+            f"tran {stop // CHIP_GRID}p {stop}p 0 {stop // CHIP_TMAX}p",
+            "set filetype=ascii",
+            " ".join(["write", EDGES_RAW, *latches]),
+            " ".join(["linearize", *voltages, *sources, *saves]),
+        ]
+    else:
+        lines += [
+            # ngspice picks its own points under this cap, which does not depend on the engine's max_step.
+            f"tran {stop // 1000}p {stop}p 0 {stop // 1000}p",
+            "set filetype=ascii",
+        ]
+    lines += [f"write {TRAN_RAW}", ".endc", ".end"]
     return "\n".join(lines) + "\n", mapping
+
+
+def ne555_lines(name, part, node):
+    """The engine's NE555 as B-sources. Each comparator reads high strictly above its threshold,
+    as the engine's watches do. The latch state is a node held on 1 ohm / 1 pF."""
+    gnd, trig, out, reset, cont, thres, disch, vcc = (
+        node(net) for net in pin_nets(part)
+    )
+    q = f"x_{name}_q"
+    lower = f"x_{name}_lo"
+    ladder = number(part["ladder_resistance"])
+    discharge, output = part["discharge"], part["output"]
+    high = f"V({q}) > 0.5"
+    latch = (
+        f"(V({reset},{gnd}) > {number(part['reset_threshold'])}) ? "
+        f"((V({trig},{lower}) > 0) ? ((V({thres},{cont}) > 0) ? 0 : ({high} ? 1 : 0)) : 1) : 0"
+    )
+    return [
+        f"rx_{name}_l1 {vcc} {cont} {ladder}",
+        f"rx_{name}_l2 {cont} {lower} {ladder}",
+        f"rx_{name}_l3 {lower} {gnd} {ladder}",
+        f"rx_{name}_sup {vcc} {gnd} {number(part['supply_resistance'])}",
+        f"* {name} latch: RESET overrides TRIG, TRIG overrides THRES (SLFS022K Table 6-1).",
+        f"bx_{name}_s x_{name}_s 0 v = {latch}",
+        f"rx_{name}_q x_{name}_s {q} 1",
+        f"cx_{name}_q {q} 0 1e-12",
+        f"bx_{name}_oh {vcc} {out} i = ({high}) ? "
+        f"(V({vcc},{out}) - {number(output['high_drop'])}) / {number(output['high_resistance'])} : 0",
+        f"bx_{name}_ol {out} {gnd} i = ({high}) ? 0 : "
+        f"(V({out},{gnd}) - {number(output['low_drop'])}) / {number(output['low_resistance'])}",
+        f"bx_{name}_d {disch} {gnd} i = V({disch},{gnd}) / (({high}) ? "
+        f"{number(discharge['off_resistance'])} : {number(discharge['on_resistance'])})",
+    ]
 
 
 def initial_condition(part, ground, node, transient):
@@ -606,16 +811,17 @@ def number(value):
     return repr(float(value["value"]))
 
 
-def run_ngspice(deck, raw_name):
+def run_ngspice(deck, raw_names):
+    """Each raw file's vectors, in the order named."""
     with tempfile.TemporaryDirectory() as tmp:
         Path(tmp, "deck.cir").write_text(deck)
         done = subprocess.run(
             ["ngspice", "-b", "deck.cir"], cwd=tmp, capture_output=True, text=True
         )
-        raw = Path(tmp, raw_name)
-        if done.returncode != 0 or not raw.is_file():
+        raws = [Path(tmp, name) for name in raw_names]
+        if done.returncode != 0 or not all(raw.is_file() for raw in raws):
             raise SystemExit(f"ngspice failed ({done.returncode}):\n{done.stdout}{done.stderr}")
-        return parse_raw(raw.read_text())
+        return [parse_raw(raw.read_text()) for raw in raws]
 
 
 def parse_raw(text):

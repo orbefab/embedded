@@ -130,6 +130,9 @@ pub enum Model {
     Led(Junction),
     Capacitor(Capacitor),
     Switch(Switch),
+    /// A package modelled as a behavioural black box. A new chip kind is a `Chip` variant,
+    /// not a `Model` variant.
+    Chip(Chip),
 }
 
 impl Model {
@@ -141,6 +144,7 @@ impl Model {
             Model::Diode(_) | Model::Led(_) => &Junction::PINS,
             Model::Capacitor(_) => &Capacitor::PINS,
             Model::Switch(_) => &Switch::PINS,
+            Model::Chip(Chip::Ne555(_)) => &Ne555::PINS,
         }
     }
 
@@ -151,6 +155,7 @@ impl Model {
             Model::Diode(j) | Model::Led(j) => &j.pins,
             Model::Capacitor(c) => &c.pins,
             Model::Switch(s) => &s.pins,
+            Model::Chip(Chip::Ne555(n)) => &n.pins,
         }
     }
 
@@ -158,7 +163,9 @@ impl Model {
     pub fn ratings(&self) -> Vec<(RatingKind, &Value)> {
         let (current, power) = match self {
             Model::Resistor(r) => (None, r.max_power.as_ref()),
-            Model::VoltageSource(_) | Model::Capacitor(_) | Model::Switch(_) => (None, None),
+            Model::VoltageSource(_) | Model::Capacitor(_) | Model::Switch(_) | Model::Chip(_) => {
+                (None, None)
+            }
             Model::Diode(j) | Model::Led(j) => (j.max_current.as_ref(), j.max_power.as_ref()),
         };
         let current = current.map(|v| (RatingKind::Current, v));
@@ -303,6 +310,69 @@ impl Schedule {
             self.edges[k - 1].to
         }
     }
+}
+
+/// The closed set of chip kinds. A chip's internals are model detail, with no refs and no
+/// trace columns.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Chip {
+    Ne555(Box<Ne555>),
+}
+
+/// An NE555 timer, behavioural. Pins in package order, TI SLFS022K's pin functions.
+///
+/// Three equal resistors run VCC to CONT to a lower node to GND. THRES compares with CONT,
+/// TRIG with the lower node, and RESET with GND plus `reset_threshold`. The latch follows
+/// SLFS022K Table 6-1: RESET low resets it, then TRIG low sets it, then THRES high resets it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ne555 {
+    pub pins: [NetId; 8],
+    /// Ohm. Each of the three ladder resistors.
+    pub ladder_resistance: Value,
+    /// Volt, greater than 0. RESET more than this above GND lets the latch run.
+    pub reset_threshold: Value,
+    pub discharge: Discharge,
+    /// Ohm. VCC to GND, the supply current the ladder does not draw.
+    pub supply_resistance: Value,
+    pub output: OutputStage,
+}
+
+impl Ne555 {
+    pub const PINS: [&'static str; 8] = [
+        "gnd", "trig", "out", "reset", "cont", "thres", "disch", "vcc",
+    ];
+    pub const GND: usize = 0;
+    pub const TRIG: usize = 1;
+    pub const OUT: usize = 2;
+    pub const RESET: usize = 3;
+    pub const CONT: usize = 4;
+    pub const THRES: usize = 5;
+    pub const DISCH: usize = 6;
+    pub const VCC: usize = 7;
+}
+
+/// DISCH to GND: `on_resistance` while the latch is reset, `off_resistance` while it is set.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Discharge {
+    /// Ohm.
+    pub on_resistance: Value,
+    /// Ohm.
+    pub off_resistance: Value,
+}
+
+/// A push-pull output to the chip's own rails, linear on each side. The current into OUT is
+/// `(V(vcc) - high_drop - V(out)) / high_resistance` while high and
+/// `(V(gnd) + low_drop - V(out)) / low_resistance` while low.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutputStage {
+    /// Volt, at least 0.
+    pub high_drop: Value,
+    /// Ohm.
+    pub high_resistance: Value,
+    /// Volt, at least 0.
+    pub low_drop: Value,
+    /// Ohm.
+    pub low_resistance: Value,
 }
 
 /// Seeded contact bounce after each event. The expansion is `bounce::expand`.

@@ -621,3 +621,83 @@ fn an_edge_at_1_ps_keeps_the_start_point_and_the_edge_point() {
         [0, 1, 1_000, 1_001, 2_001, 4_001, 8_001, 10_000]
     );
 }
+
+/// 100 kohm and 1 uF from 5 V hold an NE555's RESET low at power-on, and its release at
+/// about 15.1 ms sets the latch. The NE555 has `examples/ne555-led`'s values, as in
+/// `tests/chip.rs`.
+fn reset_release() -> Netlist {
+    let value =
+        |v: f64, unit: &str| format!(r#"{{ "value": {v:?}, "unit": "{unit}", "source": "user" }}"#);
+    let json = format!(
+        r#"{{
+          "version": 0,
+          "seed": 0,
+          "analysis": {{ "transient": {{ "stop_ps": 40000000000, "max_step_ps": 1000000000 }} }},
+          "ground": "gnd",
+          "nets": ["gnd", "vcc", "rst", "out", "cont", "dis"],
+          "parts": [
+            {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "vcc", "n": "gnd" }},
+              "voltage": {} }},
+            {{ "name": "rr", "kind": "resistor", "pins": {{ "a": "vcc", "b": "rst" }},
+              "resistance": {}, "ratings": {{ "power": null }} }},
+            {{ "name": "cr", "kind": "capacitor", "pins": {{ "a": "rst", "b": "gnd" }},
+              "capacitance": {}, "initial": {} }},
+            {{ "name": "u1", "kind": "ne555",
+              "pins": {{ "gnd": "gnd", "trig": "gnd", "out": "out", "reset": "rst",
+                        "cont": "cont", "thres": "gnd", "disch": "dis", "vcc": "vcc" }},
+              "ladder_resistance": {}, "reset_threshold": {},
+              "discharge": {{ "on_resistance": {}, "off_resistance": {} }},
+              "supply_resistance": {},
+              "output": {{ "high_drop": {}, "high_resistance": {}, "low_drop": {}, "low_resistance": {} }} }}
+          ]
+        }}"#,
+        value(5.0, "V"),
+        value(100e3, "ohm"),
+        value(1e-6, "F"),
+        value(0.0, "V"),
+        value(5000.0, "ohm"),
+        value(0.7, "V"),
+        value(18.75, "ohm"),
+        value(2.5e8, "ohm"),
+        value(1875.0, "ohm"),
+        value(0.9, "V"),
+        value(8.0, "ohm"),
+        value(1.0 / 60.0, "V"),
+        value(50.0 / 3.0, "ohm"),
+    );
+    sim_core::netlist::parse(json.as_bytes()).unwrap()
+}
+
+/// One Newton iteration converges only where nothing moves, and a probe is a shorter step.
+#[test]
+fn a_stalled_probe_ends_the_run_and_names_the_probe() {
+    let netlist = reset_release();
+    let mut diagnostics = Vec::new();
+    let columns = Columns::new(&netlist);
+    let outcome = run_with(
+        &netlist,
+        &transient(&netlist),
+        Budget { probe: 1, ..BUDGET },
+        Trace::MAX_ROWS,
+        &columns,
+        &mut diagnostics,
+    );
+    assert!(outcome.observations.logic.is_none());
+    let end = outcome.trace.unwrap().end().unwrap().as_ps();
+    let [failed] = diagnostics.as_slice() else {
+        panic!("{diagnostics:?}");
+    };
+    let at = failed.at().unwrap().as_ps();
+    assert!(
+        at > end,
+        "the probe at {at} ps is after the last row at {end} ps"
+    );
+    let text = serde_json::to_string(failed).unwrap();
+    assert_eq!(
+        text,
+        format!(
+            r##"{{"code":"solver.convergence","severity":"error","refs":["#net.rst"],"t_ps":{at},"message":"Newton did not converge at #net.rst after 1 iterations in the probe at {at} ps locating a chip event","data":{{"gmin":null,"iterations":1,"source_scale":1.0,"step_ps":{}}}}}"##,
+            at - end
+        )
+    );
+}

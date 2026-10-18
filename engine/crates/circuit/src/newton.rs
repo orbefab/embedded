@@ -1,19 +1,23 @@
 use sim_core::diagnostic::Diagnostic;
 use sim_core::name::Ref;
-use sim_core::netlist::{Netlist, PartId};
+use sim_core::netlist::{Chip, Model, Netlist, PartId};
 use sim_core::time::Time;
 
+use crate::chip;
 use crate::element;
 use crate::mna::{GMIN, Layout, Probe, Solution, Stamp, System};
+use crate::watch::{Levels, Watches};
 
 pub(crate) const RELTOL: f64 = 1e-6;
 pub(crate) const VNTOL: f64 = 1e-9;
 pub(crate) const ABSTOL: f64 = 1e-12;
 
-/// A netlist with its rows assigned. Read-only for the whole analysis.
+/// A netlist with its rows assigned and its chips' watches declared. Read-only for the
+/// whole analysis.
 pub(crate) struct Circuit<'n> {
     pub(crate) netlist: &'n Netlist,
     pub(crate) layout: Layout,
+    pub(crate) watches: Watches,
 }
 
 impl<'n> Circuit<'n> {
@@ -27,7 +31,51 @@ impl<'n> Circuit<'n> {
                 limit: crate::dense::MAX_UNKNOWNS,
             });
         }
-        Ok(Circuit { netlist, layout })
+        let mut circuit = Circuit {
+            netlist,
+            layout,
+            watches: Watches::new(Vec::new()),
+        };
+        let watches = circuit
+            .chips()
+            .map(|(id, chip)| chip::watches(chip, id, &circuit.layout))
+            .collect();
+        circuit.watches = Watches::new(watches);
+        Ok(circuit)
+    }
+
+    /// The chips in slot order.
+    pub(crate) fn chips(&self) -> impl Iterator<Item = (PartId, &'n Chip)> + '_ {
+        let netlist = self.netlist;
+        self.layout
+            .chips()
+            .iter()
+            .map(move |&id| match &netlist.part(id).model {
+                Model::Chip(chip) => (id, chip),
+                _ => unreachable!("the layout lists only chips"),
+            })
+    }
+
+    /// Every chip's state at power-on, in slot order.
+    pub(crate) fn power_on(&self) -> Vec<chip::State> {
+        self.chips().map(|(_, chip)| chip::power_on(chip)).collect()
+    }
+
+    /// Every chip's next state, from the levels just before and just after one time.
+    pub(crate) fn react(
+        &self,
+        chips: &[chip::State],
+        before: &Levels,
+        after: &Levels,
+    ) -> Vec<chip::State> {
+        self.chips()
+            .zip(chips)
+            .enumerate()
+            .map(|(slot, ((_, chip), state))| {
+                let watched = self.watches.of(slot);
+                chip::react(chip, state, before.of(watched.clone()), after.of(watched))
+            })
+            .collect()
     }
 }
 
@@ -42,6 +90,8 @@ pub(crate) struct Conditions<'h> {
     /// or on the one starting here under `History::Restart`.
     pub(crate) at: Time,
     pub(crate) history: History<'h>,
+    /// Each chip's state, by slot. Only an accepted time changes it.
+    pub(crate) chips: &'h [chip::State],
 }
 
 impl Conditions<'static> {
@@ -50,6 +100,7 @@ impl Conditions<'static> {
         source_scale: 1.0,
         at: Time::ZERO,
         history: History::Start,
+        chips: &[],
     };
 }
 
@@ -58,7 +109,7 @@ impl Conditions<'static> {
 pub(crate) enum History<'h> {
     /// t = 0. A capacitor with `initial` is held there, and any other is open.
     Start,
-    /// Just after a switch edge at `at`. Every capacitor is held at its voltage in `previous`,
+    /// Just after a switch edge or a chip drive change at `at`. Every capacitor is held at its voltage in `previous`,
     /// and every contact is after the edges at or before `at`. The solve is algebraic. Its
     /// capacitor currents are the post-edge currents the next step starts from.
     Restart { previous: &'h Solution },

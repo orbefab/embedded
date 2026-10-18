@@ -1,8 +1,9 @@
 use std::ops::Range;
 
 use sim_core::name::Ref;
-use sim_core::netlist::{NetId, Netlist, PartId};
+use sim_core::netlist::{Model, NetId, Netlist, PartId};
 
+use crate::chip;
 use crate::dense::{Matrix, Singular};
 use crate::element;
 use crate::newton::{Conditions, Iterate};
@@ -31,6 +32,8 @@ pub(crate) struct Layout {
     node_rows: Vec<usize>,
     size: usize,
     junctions: usize,
+    /// The chips, ascending. A chip's index here is its slot in `Conditions::chips`.
+    chips: Vec<PartId>,
 }
 
 impl Layout {
@@ -44,7 +47,11 @@ impl Layout {
             row += 1;
         }
         let mut part_rows = Vec::with_capacity(netlist.parts().len());
-        for (_, part) in netlist.parts() {
+        let mut chips = Vec::new();
+        for (id, part) in netlist.parts() {
+            if let Model::Chip(_) = part.model {
+                chips.push(id);
+            }
             let extra = element::unknowns(&part.model);
             let internal = row;
             for _ in 0..extra.internal_nodes {
@@ -67,7 +74,18 @@ impl Layout {
             node_rows,
             size: row,
             junctions: junction,
+            chips,
         }
+    }
+
+    /// The chips in slot order.
+    pub(crate) fn chips(&self) -> &[PartId] {
+        &self.chips
+    }
+
+    /// `part`'s internal node `k`.
+    pub(crate) fn internal(&self, part: PartId, k: usize) -> Node {
+        Node::Row(self.part_rows[part.index()].internal + k)
     }
 
     pub(crate) fn size(&self) -> usize {
@@ -208,6 +226,12 @@ pub(crate) struct Stamp<'a> {
 impl Stamp<'_> {
     pub(crate) fn internal(&self, k: usize) -> Node {
         Node::Row(self.rows().internal + k)
+    }
+
+    /// This chip's state in the solve's conditions.
+    pub(crate) fn chip(&self) -> &chip::State {
+        let slot = self.layout.chips.binary_search(&self.part);
+        &self.conditions.chips[slot.expect("only a chip reads its state")]
     }
 
     /// This part in another solution, such as the last accepted one.

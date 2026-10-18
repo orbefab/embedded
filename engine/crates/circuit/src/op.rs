@@ -1,15 +1,23 @@
-use sim_core::diagnostic::Diagnostic;
+use sim_core::diagnostic::{Diagnostic, Solve};
 use sim_core::finite::Finite;
 use sim_core::netlist::Netlist;
 use sim_core::run_folder::OpPoint;
 use sim_core::time::Time;
 
+use sim_core::name::Ref;
+
+use crate::chip;
 use crate::ladder::{self, Next, Rung};
 use crate::newton::{Circuit, Conditions, Failure, Iterate, Offender, newton};
 use crate::observe::{self, Columns};
 use crate::ratings::{Ratings, Timing};
+use crate::watch::Levels;
 
 pub(crate) const OP_BUDGET: u32 = 100;
+
+/// The most solves `settle` runs at one time before the chips are `chip.unsettled`. Chips
+/// have no propagation delay, so two that keep flipping each other at one time never settle.
+const SETTLE_ROUNDS: u32 = 8;
 
 /// The operating point, with a finding per rating it breaks.
 pub(crate) fn run(netlist: &Netlist, diagnostics: &mut Vec<Diagnostic>) -> Option<OpPoint> {
@@ -29,19 +37,73 @@ pub(crate) fn run(netlist: &Netlist, diagnostics: &mut Vec<Diagnostic>) -> Optio
 
 fn solve(netlist: &Netlist, columns: &Columns) -> Result<Vec<Finite>, Diagnostic> {
     let circuit = Circuit::new(netlist)?;
-    let iterate = operating_point(&circuit, Conditions::NOMINAL, Iterate::initial(&circuit))?;
-    observe::observe(&circuit, columns, &iterate.solution, Time::ZERO)
+    let start = Iterate::initial(&circuit);
+    let settled = settle(
+        &circuit,
+        Conditions::NOMINAL,
+        start,
+        circuit.power_on(),
+        None,
+        OP_BUDGET,
+    )?;
+    observe::observe(&circuit, columns, &settled.iterate.solution, Time::ZERO)
 }
 
-/// Newton from `start`, then the fallback ladder, at `base`. Under `History::Start` that is the
-/// operating point. Under `History::Restart` it is the operating point with every capacitor held.
-/// What comes back converged at `base`.
-pub(crate) fn operating_point(
+/// A solve the chips agree with: its chip states, and the levels they read on it.
+pub(crate) struct Settled {
+    pub(crate) iterate: Iterate,
+    pub(crate) chips: Vec<chip::State>,
+    pub(crate) levels: Levels,
+}
+
+/// The ladder at `base` with `chips` in force, from `start`, with `budget` per rung. Under
+/// `History::Start` that is the operating point, and under `History::Restart` the operating
+/// point with every capacitor held. Then every chip reacts to the levels on that solve, and
+/// while any state changed it solves again. `prior` is the levels just before, `None` at
+/// t = 0. Levels are read only on the solve that converged at `base`, never on a fallback
+/// rung. Without a chip it is one climb.
+pub(crate) fn settle(
     circuit: &Circuit,
     base: Conditions<'_>,
     start: Iterate,
-) -> Result<Iterate, Diagnostic> {
-    climb(circuit, base, start, |_| OP_BUDGET)
+    chips: Vec<chip::State>,
+    prior: Option<&Levels>,
+    budget: u32,
+) -> Result<Settled, Diagnostic> {
+    let mut chips = chips;
+    let mut start = start;
+    let mut prior = prior.cloned();
+    let mut changed = Vec::new();
+    for _ in 0..SETTLE_ROUNDS {
+        let conditions = Conditions {
+            chips: &chips,
+            ..base
+        };
+        let iterate = climb(circuit, conditions, start, |_| budget)?;
+        let levels = circuit.watches.levels(&iterate.solution, prior.as_ref());
+        let next = circuit.react(&chips, prior.as_ref().unwrap_or(&levels), &levels);
+        if next == chips {
+            return Ok(Settled {
+                iterate,
+                chips,
+                levels,
+            });
+        }
+        changed = circuit
+            .chips()
+            .zip(next.iter().zip(&chips))
+            .filter(|(_, (new, old))| new != old)
+            .map(|((id, _), _)| Ref::Part(circuit.netlist.part(id).name.clone()))
+            .collect();
+        chips = next;
+        start = iterate;
+        prior = Some(levels);
+    }
+    Err(Diagnostic::ChipUnsettled {
+        at: base.at,
+        chips: changed,
+        rounds: SETTLE_ROUNDS,
+    })
 }
 
 /// The ladder driver. `budget` gives each rung's Newton budget, so a test can make a rung fail.
@@ -105,7 +167,7 @@ pub(crate) fn climb(
                     iterations,
                     gmin,
                     source_scale,
-                    step_ps: None,
+                    solve: Solve::Ladder,
                 });
             }
         }

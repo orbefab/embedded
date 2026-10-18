@@ -23,6 +23,7 @@ pub enum ValueRule {
     FiniteJunction,
     /// `bounce.window` is less than `2 * max_bounces * MIN_GAP_PS`.
     BounceRoom,
+    NonNegative,
 }
 
 /// Which rule a transient analysis broke.
@@ -120,6 +121,12 @@ pub enum Diagnostic {
         unknowns: usize,
         limit: usize,
     },
+    /// The chips kept changing state for `rounds` solves at one time. `chips` changed in the last.
+    ChipUnsettled {
+        at: Time,
+        chips: Vec<Ref>,
+        rounds: u32,
+    },
     /// A transient would store more than `limit` trace rows.
     TraceTooLarge {
         at: Time,
@@ -137,13 +144,23 @@ pub enum Diagnostic {
         gmin: Option<f64>,
         /// Largest source scale that converged, from 0 to 1.
         source_scale: f64,
-        /// The last step tried, for a time step. `None` for the operating point.
-        step_ps: Option<u64>,
+        solve: Solve,
     },
     /// A rated current went over its limit.
     RatingCurrent(Excursion),
     /// A rated power went over its limit.
     RatingPower(Excursion),
+}
+
+/// The solve that did not converge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Solve {
+    /// The operating point, or the restart solve after an edge.
+    Ladder,
+    /// A time step, halved down to `step_ps`.
+    Step { step_ps: u64 },
+    /// A probe locating a chip event, `step_ps` after the last accepted time.
+    Probe { step_ps: u64 },
 }
 
 /// One rated quantity over its limit, merged over the whole run.
@@ -181,6 +198,7 @@ impl Diagnostic {
             Diagnostic::SolverNonFinite { .. } => "solver.nonfinite",
             Diagnostic::SolverTooLarge { .. } => "solver.too_large",
             Diagnostic::SolverConvergence { .. } => "solver.convergence",
+            Diagnostic::ChipUnsettled { .. } => "chip.unsettled",
             Diagnostic::TraceTooLarge { .. } => "trace.too_large",
             Diagnostic::RatingCurrent(_) => "rating.current",
             Diagnostic::RatingPower(_) => "rating.power",
@@ -207,6 +225,7 @@ impl Diagnostic {
             | Diagnostic::SolverNonFinite { .. }
             | Diagnostic::SolverTooLarge { .. }
             | Diagnostic::SolverConvergence { .. }
+            | Diagnostic::ChipUnsettled { .. }
             | Diagnostic::TraceTooLarge { .. } => Severity::Error,
         }
     }
@@ -217,6 +236,7 @@ impl Diagnostic {
             | Diagnostic::SolverNonFinite { at, .. }
             | Diagnostic::SolverTooLarge { at, .. }
             | Diagnostic::SolverConvergence { at, .. }
+            | Diagnostic::ChipUnsettled { at, .. }
             | Diagnostic::TraceTooLarge { at, .. } => Some(*at),
             Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
                 Some(excursion.first)
@@ -253,6 +273,7 @@ impl Diagnostic {
             Diagnostic::SolverSingular { unknown, .. }
             | Diagnostic::SolverNonFinite { unknown, .. }
             | Diagnostic::SolverConvergence { unknown, .. } => vec![unknown.clone()],
+            Diagnostic::ChipUnsettled { chips, .. } => chips.clone(),
             Diagnostic::SolverTooLarge { .. } | Diagnostic::TraceTooLarge { .. } => Vec::new(),
             Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
                 vec![excursion.quantity.clone()]
@@ -313,6 +334,9 @@ impl Diagnostic {
                     ValueRule::FiniteJunction => format!(
                         "{part} {field} is {value}; n*VT must be normal, and vcrit must be finite and positive"
                     ),
+                    ValueRule::NonNegative => {
+                        format!("{part} {field} is {value}; it must not be negative")
+                    }
                     ValueRule::BounceRoom => format!(
                         "{part} {field} is {value}; it must fit 2 * max_bounces edges {} ps apart",
                         Schedule::MIN_GAP_PS
@@ -358,7 +382,7 @@ impl Diagnostic {
                 unknown,
                 iterations,
                 source_scale,
-                step_ps: None,
+                solve: Solve::Ladder,
                 ..
             } if *at > Time::ZERO => format!(
                 "Newton did not converge at {unknown} after {iterations} iterations in the restart solve at {} ps; source stepping reached {source_scale}",
@@ -368,7 +392,7 @@ impl Diagnostic {
                 unknown,
                 iterations,
                 source_scale,
-                step_ps: None,
+                solve: Solve::Ladder,
                 ..
             } => format!(
                 "Newton did not converge at {unknown} after {iterations} iterations; source stepping reached {source_scale}"
@@ -376,13 +400,27 @@ impl Diagnostic {
             Diagnostic::SolverConvergence {
                 unknown,
                 iterations,
-                step_ps: Some(step_ps),
+                solve: Solve::Step { step_ps },
                 ..
             } => format!(
                 "Newton did not converge at {unknown} after {iterations} iterations; the time step halved to {step_ps} ps"
             ),
+            Diagnostic::SolverConvergence {
+                at,
+                unknown,
+                iterations,
+                solve: Solve::Probe { .. },
+                ..
+            } => format!(
+                "Newton did not converge at {unknown} after {iterations} iterations in the probe at {} ps locating a chip event",
+                at.as_ps()
+            ),
+            Diagnostic::ChipUnsettled { at, rounds, .. } => format!(
+                "the chips kept changing state for {rounds} solves at {} ps",
+                at.as_ps()
+            ),
             Diagnostic::TraceTooLarge { limit, .. } => format!(
-                "the trace reached its limit of {limit} rows; rows come from stop_ps, the switch edges and the error control, and max_step_ps only caps the step"
+                "the trace reached its limit of {limit} rows; rows come from stop_ps, the switch edges, the chip events and the error control, and max_step_ps only caps the step"
             ),
             Diagnostic::RatingCurrent(excursion) => over_rating(excursion, "A"),
             Diagnostic::RatingPower(excursion) => over_rating(excursion, "W"),
@@ -451,7 +489,7 @@ impl Diagnostic {
                 iterations,
                 gmin,
                 source_scale,
-                step_ps,
+                solve,
                 ..
             } => {
                 let mut data = serde_json::json!({
@@ -459,11 +497,12 @@ impl Diagnostic {
                     "iterations": iterations,
                     "source_scale": source_scale,
                 });
-                if let Some(step_ps) = step_ps {
+                if let Solve::Step { step_ps } | Solve::Probe { step_ps } = solve {
                     data["step_ps"] = serde_json::json!(step_ps);
                 }
                 data
             }
+            Diagnostic::ChipUnsettled { rounds, .. } => serde_json::json!({ "rounds": rounds }),
             Diagnostic::TraceTooLarge { limit, columns, .. } => {
                 serde_json::json!({ "columns": columns, "limit": limit })
             }
@@ -604,7 +643,7 @@ mod tests {
                 iterations: 1310,
                 gmin: None,
                 source_scale: 0.75,
-                step_ps: None,
+                solve: Solve::Ladder,
             },
             Diagnostic::RatingCurrent(Excursion {
                 quantity: "#led1.i".parse().unwrap(),
@@ -637,6 +676,11 @@ mod tests {
                 limit: 4,
                 columns: 2,
             },
+            Diagnostic::ChipUnsettled {
+                at: Time::from_ps(3_000),
+                chips: vec![part("u1"), part("u2")],
+                rounds: 8,
+            },
         ]
     }
 
@@ -667,7 +711,7 @@ mod tests {
             assert!(is_code(code), "{code}");
             assert!(seen.insert(code), "duplicate code {code}");
         }
-        assert_eq!(seen.len(), 19);
+        assert_eq!(seen.len(), 20);
     }
 
     #[test]
@@ -696,6 +740,7 @@ mod tests {
                 "netlist.schedule",
                 "netlist.analysis",
                 "trace.too_large",
+                "chip.unsettled",
             ]
         );
         for diagnostic in &found {
@@ -706,7 +751,7 @@ mod tests {
                 assert_eq!(diagnostic.at(), Some(Time::ZERO));
             } else if code == "rating.power" {
                 assert_eq!(diagnostic.at(), Some(Time::from_ps(5)));
-            } else if code == "trace.too_large" {
+            } else if code == "trace.too_large" || code == "chip.unsettled" {
                 assert_eq!(diagnostic.at(), Some(Time::from_ps(3_000)));
             } else {
                 assert_eq!(diagnostic.at(), None);
@@ -761,9 +806,14 @@ mod tests {
         let rows = serde_json::to_string(&found[18]).unwrap();
         assert!(
             rows.contains(
-                r#""severity":"error","refs":[],"t_ps":3000,"message":"the trace reached its limit of 4 rows; rows come from stop_ps, the switch edges and the error control, and max_step_ps only caps the step","data":{"columns":2,"limit":4}"#
+                r#""severity":"error","refs":[],"t_ps":3000,"message":"the trace reached its limit of 4 rows; rows come from stop_ps, the switch edges, the chip events and the error control, and max_step_ps only caps the step","data":{"columns":2,"limit":4}"#
             ),
             "{rows}"
+        );
+        let unsettled = serde_json::to_string(&found[19]).unwrap();
+        assert_eq!(
+            unsettled,
+            r##"{"code":"chip.unsettled","severity":"error","refs":["#u1","#u2"],"t_ps":3000,"message":"the chips kept changing state for 8 solves at 3000 ps","data":{"rounds":8}}"##
         );
         let power = serde_json::to_string(&found[15]).unwrap();
         assert!(
@@ -782,7 +832,7 @@ mod tests {
             iterations: 12,
             gmin: None,
             source_scale: 0.0,
-            step_ps: None,
+            solve: Solve::Ladder,
         };
         let text = serde_json::to_string(&restart).unwrap();
         assert!(
@@ -801,7 +851,7 @@ mod tests {
             iterations: 50,
             gmin: None,
             source_scale: 1.0,
-            step_ps: Some(1),
+            solve: Solve::Step { step_ps: 1 },
         };
         let text = serde_json::to_string(&step).unwrap();
         assert!(
@@ -841,6 +891,7 @@ mod tests {
             ValueRule::FiniteReciprocal,
             ValueRule::FiniteJunction,
             ValueRule::BounceRoom,
+            ValueRule::NonNegative,
         ] {
             let diagnostic = Diagnostic::NetlistValue {
                 part: part("d1"),

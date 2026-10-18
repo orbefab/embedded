@@ -1,3 +1,4 @@
+mod chip;
 mod dense;
 mod element;
 mod ladder;
@@ -10,6 +11,7 @@ mod ratings;
 mod step;
 mod topology;
 mod tran;
+mod watch;
 
 use sim_core::netlist::{Analysis, Netlist};
 use sim_core::run_folder::{Observations, Results};
@@ -23,6 +25,7 @@ pub fn simulate(netlist: &Netlist) -> Results {
             let observations = Observations {
                 op: op::run(netlist, &mut diagnostics),
                 switches: None,
+                logic: None,
             };
             Results::new(observations, None, diagnostics)
         }

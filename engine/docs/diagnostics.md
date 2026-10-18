@@ -107,7 +107,9 @@ The message for `finite_junction` is `{ref} {field} is {value}; n*VT must be nor
 
 The message for `bounce_room` is `{ref} {field} is {value}; it must fit 2 * max_bounces edges 2000 ps apart`.
 
-`data` holds `field`, `rule`, and `value`. `rule` is `positive`, `finite_reciprocal`, `finite_junction`, or `bounce_room`. The message prints `value` in the same form as `data.value`. Resistance must be positive, and its reciprocal must be finite. A value that breaks both reports `positive`. Voltage only has to be finite and in `V`. The diode and LED fields follow the resistance rules. `saturation_current` and `emission_coefficient` also follow `finite_junction`, as [netlist.md](netlist.md) defines it. A rating must be positive, with field `ratings.current` or `ratings.power`. Capacitance and a switch's two resistances follow the resistance rules. `bounce.window` and `bounce.max_bounces` must be positive, and `bounce.window` must be at least `2 * max_bounces * 2000`, which breaks `bounce_room`. A number outside the f64 range is `netlist.syntax`, and so is a non-integer `bounce` value.
+The message for `non_negative` is `{ref} {field} is {value}; it must not be negative`.
+
+`data` holds `field`, `rule`, and `value`. `rule` is `positive`, `finite_reciprocal`, `finite_junction`, `bounce_room`, or `non_negative`. The message prints `value` in the same form as `data.value`. Resistance must be positive, and its reciprocal must be finite. A value that breaks both reports `positive`. Voltage only has to be finite and in `V`. The diode and LED fields follow the resistance rules. `saturation_current` and `emission_coefficient` also follow `finite_junction`, as [netlist.md](netlist.md) defines it. A rating must be positive, with field `ratings.current` or `ratings.power`. Capacitance and a switch's two resistances follow the resistance rules. `bounce.window` and `bounce.max_bounces` must be positive, and `bounce.window` must be at least `2 * max_bounces * 2000`, which breaks `bounce_room`. An NE555's resistances follow the resistance rules, with dotted fields such as `discharge.on_resistance`. Its `reset_threshold` must be positive, and `output.high_drop` and `output.low_drop` must not be negative. A number outside the f64 range is `netlist.syntax`, and so is a non-integer `bounce` value.
 
 ## netlist.ground
 
@@ -159,13 +161,13 @@ The message is `{ref} has no DC path to ground`.
 
 `data` is `{}`.
 
-A DC path is a chain of resistors, voltage sources, diodes, LEDs, and switches from the net to ground. Each of those parts joins its two pins. A switch joins them open or closed. A capacitor with `"initial": null` does not join its pins, because it is open at DC. A capacitor with an `initial` voltage joins them, because the operating point holds it. gmin, 1e-12 S from every node to ground, is separate from that chain.
+A DC path is a chain of resistors, voltage sources, diodes, LEDs, and switches from the net to ground. Each of those parts joins its two pins. A switch joins them open or closed. An NE555 joins VCC to CONT, CONT to GND, VCC to GND, OUT to VCC, OUT to GND, and DISCH to GND, in either latch state, and joins nothing to TRIG, THRES, or RESET. A capacitor with `"initial": null` does not join its pins, because it is open at DC. A capacitor with an `initial` voltage joins them, because the operating point holds it. gmin, 1e-12 S from every node to ground, is separate from that chain.
 
 A resistor from `vin` to `lonely`, with a voltage source from `vin` to `gnd`, puts `lonely` on a path to ground. Two LEDs in series from `vled` to `gnd`, with a resistor from `vin` to `vled`, put `mid` on a path to ground. A net that no part names is floating. Two nets whose only part is a resistor between them are floating. The operating point is still written, and `sim run` exits 0.
 
 ## solver.singular
 
-Severity `error`. Refs is the unknown the zero pivot names, a net or a part. `t_ps` is 0 for the operating point. In a transient it is the end of the step that failed, or the edge's time for the restart solve after a switch edge.
+Severity `error`. Refs is the unknown the zero pivot names, a net or a part. `t_ps` is 0 for the operating point. In a transient it is the end of the step that failed, the probe's time for a probe locating a chip event, or the restart's time for the restart solve after a switch edge or a chip drive change.
 
 The message is `singular matrix at {ref}`.
 
@@ -175,7 +177,7 @@ Two voltage sources in parallel, set to different voltages, are singular. With `
 
 ## solver.nonfinite
 
-Severity `error`. Refs is the unknown or the part. `t_ps` is 0 for the operating point. In a transient it is the end of the step that failed, or the edge's time for the restart solve after a switch edge.
+Severity `error`. Refs is the unknown or the part. `t_ps` is 0 for the operating point. In a transient it is the end of the step that failed, or the restart's time for the restart solve after a switch edge or a chip drive change.
 
 The message is `non-finite number at {ref}`.
 
@@ -193,13 +195,14 @@ The message is `{unknowns} unknowns exceeds the dense solver limit of {limit}`.
 
 ## solver.convergence
 
-Severity `error`. Refs is the junction part that failed worst in the last Newton iteration, or else the unknown that moved most against its tolerance. A rung whose solution is not finite names that unknown. `t_ps` is 0 for the operating point, and the edge's time for the restart solve after a switch edge.
+Severity `error`. Refs is the junction part that failed worst in the last Newton iteration, or else the unknown that moved most against its tolerance. A rung whose solution is not finite names that unknown. `t_ps` is 0 for the operating point, and the restart's time for the restart solve after a switch edge or a chip drive change.
 
-The code comes from one of three solves, told apart by `t_ps` and `step_ps`.
+The code comes from one of four solves, told apart by `t_ps` and `step_ps`.
 
 - The operating point. `t_ps` is 0, and `data` has no `step_ps`.
-- The restart solve after a switch edge. `t_ps` is the edge's time, after 0, and `data` has no `step_ps`. The trace ends with the row at that edge.
-- A time step. `data` has `step_ps`, and `t_ps` is the last accepted time.
+- The restart solve after a switch edge or a chip drive change. `t_ps` is the restart's time, after 0, and `data` has no `step_ps`. The trace ends with the row at that time.
+- A time step. `data` has `step_ps`, and `t_ps` is the last accepted time, the trace's `end_ps`.
+- A probe locating a chip event. `data` has `step_ps`, and `t_ps` is the probe's time, after the trace's `end_ps`.
 
 For the operating point the message is:
 
@@ -211,7 +214,7 @@ Newton did not converge at {ref} after {iterations} iterations; source stepping 
 
 The operating point starts with Newton at nominal conditions. If that fails, gmin stepping adds a conductance from every node to ground, from 1e-2 S down by decades, and ends at nominal. If that fails, source stepping scales every source from 0 up to 1. This code means all three failed. `iterations` counts Newton iterations over all of them. `gmin` is the smallest added conductance that converged, in S, or `null`. `source_scale` is the largest scale that converged, or 0.
 
-The restart solve runs the same ladder, with every capacitor held at its voltage and the new contacts in force. Today a restart follows each switch edge, at the edge's time. Its `data` is the same as the operating point's. Its message names the restart and its time:
+The restart solve runs the same ladder, with every capacitor held at its voltage and the new contacts and chip states in force. A restart follows each switch edge, and each chip event whose new state stamps differently, at its time. A flip that changes no drive does not restart. Its `data` is the same as the operating point's. Its message names the restart and its time:
 
 ```text
 Newton did not converge at {ref} after {iterations} iterations in the restart solve at {t_ps} ps; source stepping reached {source_scale}
@@ -227,15 +230,31 @@ Newton did not converge at {ref} after {iterations} iterations; the time step ha
 
 `data` adds `step_ps`, the last step tried. `iterations` counts Newton iterations over every attempt that stalled since the last accepted step, from the first stall down to 1 ps. An attempt rejected for its truncation error converged, so it does not count. `gmin` is `null`, and `source_scale` is 1. The operating point's `data` has no `step_ps` key.
 
+A probe locating a chip event re-solves a step that already converged, so it is not halved. When its midpoint probe stalls, `t_ps` is the probe's time, after the trace's `end_ps`. The message is:
+
+```text
+Newton did not converge at {ref} after {iterations} iterations in the probe at {t_ps} ps locating a chip event
+```
+
+`data` adds `step_ps`, the probe's step from the last accepted time. `iterations` is that probe's.
+
+## chip.unsettled
+
+Severity `error`. Refs are the chips whose state changed on the last solve, in part order. `t_ps` is 0 for the operating point, or the time of the restart solve.
+
+The message is `the chips kept changing state for {rounds} solves at {t_ps} ps`.
+
+`data` holds `rounds`, which is 8. At one time the run solves, lets every chip react to the levels on that solve, and solves again while any state changed. A chip whose output drives its own inputs with nothing to slow it never agrees with its levels. An NE555 with OUT wired to TRIG and THRES is one: low sets the latch and high resets it. So are two NE555s, each OUT on the other's TRIG, that reset at one time. `observations.json` is `{}`.
+
 ## trace.too_large
 
 Severity `error`. No refs. `t_ps` is the end of the step that did not fit. The trace index `end_ps` is still the last kept row.
 
-The message is `the trace reached its limit of {limit} rows; rows come from stop_ps, the switch edges and the error control, and max_step_ps only caps the step`.
+The message is `the trace reached its limit of {limit} rows; rows come from stop_ps, the switch edges, the chip events and the error control, and max_step_ps only caps the step`.
 
 `data` holds `columns` and `limit`. `limit` is the row cap, `min(1000000, 67108864 / columns)`. 67108864 is 2^26, so the stored f64 values stay within 512 MiB. `columns` is the number of trace columns. The run stops when the next row would pass `limit`. The trace keeps its rows, and `observations.json` is `{}`.
 
-The error control shortens the step wherever a waveform moves fast, so a larger `max_step_ps` does not always remove rows. A shorter `stop_ps` does.
+The error control shortens the step wherever a waveform moves fast, so a larger `max_step_ps` does not always remove rows. Neither does it remove a chip event's rows. Each located flip is a row, and one that changes a chip's drive also restarts, like a switch edge. A shorter `stop_ps` removes both.
 
 ## rating.current
 
