@@ -354,6 +354,17 @@ impl Diagnostic {
                 unknowns, limit, ..
             } => format!("{unknowns} unknowns exceeds the dense solver limit of {limit}"),
             Diagnostic::SolverConvergence {
+                at,
+                unknown,
+                iterations,
+                source_scale,
+                step_ps: None,
+                ..
+            } if *at > Time::ZERO => format!(
+                "Newton did not converge at {unknown} after {iterations} iterations in the restart solve at {} ps; source stepping reached {source_scale}",
+                at.as_ps()
+            ),
+            Diagnostic::SolverConvergence {
                 unknown,
                 iterations,
                 source_scale,
@@ -371,7 +382,7 @@ impl Diagnostic {
                 "Newton did not converge at {unknown} after {iterations} iterations; the time step halved to {step_ps} ps"
             ),
             Diagnostic::TraceTooLarge { limit, .. } => format!(
-                "the trace reached its limit of {limit} rows; a run's rows come from max_step_ps, stop_ps, and the switch edges"
+                "the trace reached its limit of {limit} rows; rows come from stop_ps, the switch edges and the error control, and max_step_ps only caps the step"
             ),
             Diagnostic::RatingCurrent(excursion) => over_rating(excursion, "A"),
             Diagnostic::RatingPower(excursion) => over_rating(excursion, "W"),
@@ -750,7 +761,7 @@ mod tests {
         let rows = serde_json::to_string(&found[18]).unwrap();
         assert!(
             rows.contains(
-                r#""severity":"error","refs":[],"t_ps":3000,"message":"the trace reached its limit of 4 rows; a run's rows come from max_step_ps, stop_ps, and the switch edges","data":{"columns":2,"limit":4}"#
+                r#""severity":"error","refs":[],"t_ps":3000,"message":"the trace reached its limit of 4 rows; rows come from stop_ps, the switch edges and the error control, and max_step_ps only caps the step","data":{"columns":2,"limit":4}"#
             ),
             "{rows}"
         );
@@ -760,6 +771,25 @@ mod tests {
                 r##""refs":["#r1.p"],"t_ps":5,"message":"#r1.p peaks at 3 W, over its 0.25 W rating","data":{"limit":0.25,"over_ps":4,"peak":3.0,"peak_ps":7}"##
             ),
             "{power}"
+        );
+    }
+
+    #[test]
+    fn a_failed_restart_names_its_edge_and_keeps_the_operating_point_data() {
+        let restart = Diagnostic::SolverConvergence {
+            at: Time::from_ps(1_000_000),
+            unknown: part("led1"),
+            iterations: 12,
+            gmin: None,
+            source_scale: 0.0,
+            step_ps: None,
+        };
+        let text = serde_json::to_string(&restart).unwrap();
+        assert!(
+            text.contains(
+                r##""t_ps":1000000,"message":"Newton did not converge at #led1 after 12 iterations in the restart solve at 1000000 ps; source stepping reached 0","data":{"gmin":null,"iterations":12,"source_scale":0.0}"##
+            ),
+            "{text}"
         );
     }
 

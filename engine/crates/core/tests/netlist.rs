@@ -760,7 +760,8 @@ fn a_capacitor_keeps_its_value_and_has_no_ratings() {
       "name": "c1",
       "kind": "capacitor",
       "pins": { "a": "a", "b": "gnd" },
-      "capacitance": { "value": 1e-6, "unit": "F", "source": "user" }
+      "capacitance": { "value": 1e-6, "unit": "F", "source": "user" },
+      "initial": null
     }"#;
     let netlist = netlist::parse(with_parts(r#"{ "op": {} }"#, part).as_bytes()).unwrap();
     let (_, c1) = netlist.parts().next().unwrap();
@@ -784,6 +785,46 @@ fn a_capacitor_keeps_its_value_and_has_no_ratings() {
 }
 
 #[test]
+fn a_capacitor_initial_is_required_and_any_finite_voltage() {
+    let part = r#"{
+      "name": "c1",
+      "kind": "capacitor",
+      "pins": { "a": "a", "b": "gnd" },
+      "capacitance": { "value": 1e-6, "unit": "F", "source": "user" },
+      "initial": { "value": -2.5, "unit": "V", "source": "user" }
+    }"#;
+    let netlist = netlist::parse(with_parts(r#"{ "op": {} }"#, part).as_bytes()).unwrap();
+    let (_, c1) = netlist.parts().next().unwrap();
+    let Model::Capacitor(capacitor) = &c1.model else {
+        panic!("{:?}", c1.model);
+    };
+    assert_eq!(capacitor.initial.as_ref().unwrap().si.get(), -2.5);
+
+    let open = part.replace(
+        r#"{ "value": -2.5, "unit": "V", "source": "user" }"#,
+        "null",
+    );
+    let netlist = netlist::parse(with_parts(r#"{ "op": {} }"#, &open).as_bytes()).unwrap();
+    let Model::Capacitor(capacitor) = &netlist.parts().next().unwrap().1.model else {
+        panic!("not a capacitor");
+    };
+    assert_eq!(capacitor.initial, None);
+
+    let millivolts = part.replace(r#""unit": "V""#, r#""unit": "mV""#);
+    assert_eq!(
+        errors(&with_parts(r#"{ "op": {} }"#, &millivolts)),
+        [r##""netlist.unit" ["#c1"] {"expected":"V","field":"initial","found":"mV"}"##]
+    );
+    let missing = part.replace(
+        r#",
+      "initial": { "value": -2.5, "unit": "V", "source": "user" }"#,
+        "",
+    );
+    let err = netlist::parse(with_parts(r#"{ "op": {} }"#, &missing).as_bytes()).unwrap_err();
+    assert_eq!(err[0].code(), "netlist.syntax");
+}
+
+#[test]
 fn a_switch_resolves_its_events_and_bounce_into_one_schedule() {
     let json = switch(
         r#"[{ "t_ps": 2000000000, "state": "closed" }, { "t_ps": 12000000000, "state": "open" }]"#,
@@ -803,6 +844,11 @@ fn a_switch_resolves_its_events_and_bounce_into_one_schedule() {
         netlist::bounce::expand(7, &sw1.name, &switch.events, switch.bounce.as_ref())
     );
     assert_eq!(schedule.before(Time::ZERO), Contact::Open);
+    assert_eq!(schedule.after(Time::ZERO), Contact::Open);
+    assert_eq!(
+        schedule.after(Time::from_ps(2_000_000_000)),
+        Contact::Closed
+    );
     assert_eq!(schedule.before(Time::from_ps(2_000_000_000)), Contact::Open);
     assert_eq!(
         schedule.before(Time::from_ps(2_000_000_001)),

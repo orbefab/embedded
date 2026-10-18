@@ -1,26 +1,39 @@
 use sim_core::netlist::Capacitor;
 
 use crate::mna::{Probe, Stamp};
-use crate::newton::Method;
+use crate::newton::{History, Method};
 
-/// Branch 0 is the current entering pin `a`. At the operating point it is 0.
-/// In a step it follows the companion, with `v0` and `i0` read from the last
-/// accepted solution.
+/// Seconds. A held capacitor sits behind `HOLD / C` ohm, the backward Euler companion
+/// of a step this long. An exact hold would make a capacitor across a voltage source,
+/// or two in parallel, singular. The series resistance shares their current by
+/// capacitance, and moves the held voltage by the current times `HOLD / C`.
+const HOLD: f64 = 1e-15;
+
+/// Branch 0 is the current entering pin `a`. A held voltage scales with the sources.
+/// At t = 0 a capacitor is held at `initial`, or open with 0 current. At a restart it
+/// is held at its voltage in the solution before the edge. In a step it follows the
+/// companion, with `v0` and `i0` read from the last accepted solution.
 pub(super) fn stamp(capacitor: &Capacitor, stamp: &mut Stamp<'_>) {
     let [a, b] = capacitor.pins;
+    let capacitance = capacitor.capacitance.si.get();
+    let scale = stamp.conditions.source_scale;
     stamp.branch_current(a, b, 0);
-    let history = stamp
-        .conditions
-        .step
-        .zip(stamp.previous())
-        .map(|(step, previous)| {
+    let held = |stamp: &mut Stamp<'_>, volts: f64| {
+        stamp.branch_row(a, b, 0, -HOLD / capacitance, 1.0, volts * scale);
+    };
+    match stamp.conditions.history {
+        History::Start => match &capacitor.initial {
+            None => stamp.branch_row(a, b, 0, 1.0, 0.0, 0.0),
+            Some(initial) => held(stamp, initial.si.get()),
+        },
+        History::Restart { previous } => held(stamp, previous.voltage(a) - previous.voltage(b)),
+        History::Step(step) => {
+            let previous = stamp.probe(step.previous);
             let v0 = previous.v(a) - previous.v(b);
-            let capacitance = capacitor.capacitance.si.get();
-            companion(capacitance, step.method, step.h(), v0, previous.branch(0))
-        });
-    match history {
-        None => stamp.branch_row(a, b, 0, 1.0, 0.0, 0.0),
-        Some((g, rhs)) => stamp.branch_row(a, b, 0, 1.0, -g, rhs),
+            let method = step.method_of(stamp.part);
+            let (g, rhs) = companion(capacitance, method, step.h(), v0, previous.branch(0));
+            stamp.branch_row(a, b, 0, 1.0, -g, rhs);
+        }
     }
 }
 

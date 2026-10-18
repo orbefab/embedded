@@ -159,13 +159,13 @@ The message is `{ref} has no DC path to ground`.
 
 `data` is `{}`.
 
-A DC path is a chain of resistors, voltage sources, diodes, LEDs, and switches from the net to ground. Each of those parts joins its two pins. A switch joins them open or closed. A capacitor does not join its pins, because it is open at DC. gmin, 1e-12 S from every node to ground, is separate from that chain.
+A DC path is a chain of resistors, voltage sources, diodes, LEDs, and switches from the net to ground. Each of those parts joins its two pins. A switch joins them open or closed. A capacitor with `"initial": null` does not join its pins, because it is open at DC. A capacitor with an `initial` voltage joins them, because the operating point holds it. gmin, 1e-12 S from every node to ground, is separate from that chain.
 
 A resistor from `vin` to `lonely`, with a voltage source from `vin` to `gnd`, puts `lonely` on a path to ground. Two LEDs in series from `vled` to `gnd`, with a resistor from `vin` to `vled`, put `mid` on a path to ground. A net that no part names is floating. Two nets whose only part is a resistor between them are floating. The operating point is still written, and `sim run` exits 0.
 
 ## solver.singular
 
-Severity `error`. Refs is the unknown the zero pivot names, a net or a part. `t_ps` is 0 for the operating point. In a transient it is the end of the step that failed.
+Severity `error`. Refs is the unknown the zero pivot names, a net or a part. `t_ps` is 0 for the operating point. In a transient it is the end of the step that failed, or the edge's time for the restart solve after a switch edge.
 
 The message is `singular matrix at {ref}`.
 
@@ -175,7 +175,7 @@ Two voltage sources in parallel, set to different voltages, are singular. With `
 
 ## solver.nonfinite
 
-Severity `error`. Refs is the unknown or the part. `t_ps` is 0 for the operating point. In a transient it is the end of the step that failed.
+Severity `error`. Refs is the unknown or the part. `t_ps` is 0 for the operating point. In a transient it is the end of the step that failed, or the edge's time for the restart solve after a switch edge.
 
 The message is `non-finite number at {ref}`.
 
@@ -193,9 +193,15 @@ The message is `{unknowns} unknowns exceeds the dense solver limit of {limit}`.
 
 ## solver.convergence
 
-Severity `error`. Refs is the junction part that failed worst in the last Newton iteration, or else the unknown that moved most against its tolerance. A rung whose solution is not finite names that unknown. `t_ps` is 0 for the operating point.
+Severity `error`. Refs is the junction part that failed worst in the last Newton iteration, or else the unknown that moved most against its tolerance. A rung whose solution is not finite names that unknown. `t_ps` is 0 for the operating point, and the edge's time for the restart solve after a switch edge.
 
-The message is:
+The code comes from one of three solves, told apart by `t_ps` and `step_ps`.
+
+- The operating point. `t_ps` is 0, and `data` has no `step_ps`.
+- The restart solve after a switch edge. `t_ps` is the edge's time, after 0, and `data` has no `step_ps`. The trace ends with the row at that edge.
+- A time step. `data` has `step_ps`, and `t_ps` is the last accepted time.
+
+For the operating point the message is:
 
 ```text
 Newton did not converge at {ref} after {iterations} iterations; source stepping reached {source_scale}
@@ -205,6 +211,12 @@ Newton did not converge at {ref} after {iterations} iterations; source stepping 
 
 The operating point starts with Newton at nominal conditions. If that fails, gmin stepping adds a conductance from every node to ground, from 1e-2 S down by decades, and ends at nominal. If that fails, source stepping scales every source from 0 up to 1. This code means all three failed. `iterations` counts Newton iterations over all of them. `gmin` is the smallest added conductance that converged, in S, or `null`. `source_scale` is the largest scale that converged, or 0.
 
+The restart solve runs the same ladder, with every capacitor held at its voltage and the new contacts in force. Today a restart follows each switch edge, at the edge's time. Its `data` is the same as the operating point's. Its message names the restart and its time:
+
+```text
+Newton did not converge at {ref} after {iterations} iterations in the restart solve at {t_ps} ps; source stepping reached {source_scale}
+```
+
 A fallback that succeeds is not reported. Its answer converged at nominal conditions, the same as plain Newton's. A singular matrix at any step ends the run as `solver.singular`.
 
 In a transient, a step whose Newton solve stalls is halved and retried, down to 1 ps. When the 1 ps step stalls too, the code is reported with `t_ps` at the last accepted time, which is also the trace's `end_ps`. The message is:
@@ -213,15 +225,17 @@ In a transient, a step whose Newton solve stalls is halved and retried, down to 
 Newton did not converge at {ref} after {iterations} iterations; the time step halved to {step_ps} ps
 ```
 
-`data` adds `step_ps`, the last step tried. `iterations` counts Newton iterations over every attempt at that step, from the first try down to 1 ps. `gmin` is `null`, and `source_scale` is 1. The operating point's `data` has no `step_ps` key.
+`data` adds `step_ps`, the last step tried. `iterations` counts Newton iterations over every attempt that stalled since the last accepted step, from the first stall down to 1 ps. An attempt rejected for its truncation error converged, so it does not count. `gmin` is `null`, and `source_scale` is 1. The operating point's `data` has no `step_ps` key.
 
 ## trace.too_large
 
 Severity `error`. No refs. `t_ps` is the end of the step that did not fit. The trace index `end_ps` is still the last kept row.
 
-The message is `the trace reached its limit of {limit} rows; a run's rows come from max_step_ps, stop_ps, and the switch edges`.
+The message is `the trace reached its limit of {limit} rows; rows come from stop_ps, the switch edges and the error control, and max_step_ps only caps the step`.
 
 `data` holds `columns` and `limit`. `limit` is the row cap, `min(1000000, 67108864 / columns)`. 67108864 is 2^26, so the stored f64 values stay within 512 MiB. `columns` is the number of trace columns. The run stops when the next row would pass `limit`. The trace keeps its rows, and `observations.json` is `{}`.
+
+The error control shortens the step wherever a waveform moves fast, so a larger `max_step_ps` does not always remove rows. A shorter `stop_ps` does.
 
 ## rating.current
 

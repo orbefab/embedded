@@ -191,6 +191,7 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
         engine_t: &engine_t,
         reference_t: &reference_t,
         grid: &grid,
+        held: held(input),
     };
     for (key, series) in values {
         let wanted: Vec<f64> = series
@@ -243,19 +244,23 @@ struct SpanCheck<'a> {
     engine_t: &'a [f64],
     reference_t: &'a [f64],
     grid: &'a [f64],
+    /// Columns whose t = 0 sample is dropped from both series.
+    held: BTreeSet<String>,
 }
 
 impl SpanCheck<'_> {
     fn record(&mut self, key: &str, got: &[f64], wanted: &[f64]) {
+        // Both series and the grid start at t = 0. Dropping that sample, rather than only not
+        // scoring at t = 0, keeps ngspice's 0 out of the chord the engine's next rows are read
+        // against.
+        let from = usize::from(self.held.contains(key));
+        let (engine_t, got) = (&self.engine_t[from..], &got[from..]);
+        let (reference_t, wanted) = (&self.reference_t[from..], &wanted[from..]);
         let span = wanted.iter().copied().fold(f64::NEG_INFINITY, f64::max)
             - wanted.iter().copied().fold(f64::INFINITY, f64::min);
-        let error = self
-            .grid
+        let error = self.grid[from..]
             .iter()
-            .map(|&t| {
-                (interpolate(self.engine_t, got, t) - interpolate(self.reference_t, wanted, t))
-                    .abs()
-            })
+            .map(|&t| (interpolate(engine_t, got, t) - interpolate(reference_t, wanted, t)).abs())
             .fold(0.0, f64::max);
         self.failed |= error > 1e-3 * span + floor(key);
         self.report
@@ -281,6 +286,18 @@ fn series(values: &serde_json::Map<String, serde_json::Value>, label: &str, key:
         .unwrap()
         .iter()
         .map(|value| value.as_f64().unwrap())
+        .collect()
+}
+
+/// The current and power of every capacitor with an `initial` voltage. ngspice solves
+/// `.ic` without `uic` and reports their current as 0 at t = 0, where the engine reports
+/// the current the hold takes. So their t = 0 sample is dropped from both series.
+fn held(input: &[u8]) -> BTreeSet<String> {
+    let netlist = netlist::parse(input).unwrap();
+    netlist
+        .parts()
+        .filter(|(_, part)| matches!(&part.model, Model::Capacitor(c) if c.initial.is_some()))
+        .flat_map(|(_, part)| ["i", "p"].map(|q| format!("#{}.{q}", part.name.as_str())))
         .collect()
 }
 
@@ -317,7 +334,7 @@ fn ramp_end(edge: u64, stop: u64) -> u64 {
 }
 
 /// Both time grids, within the engine's run, without the open ramp after each edge.
-/// The trace stores only the ramp's endpoints, and ngspice is mid-ramp inside it.
+/// The engine's contact has already changed there, and ngspice is mid-ramp.
 fn grid(engine: &[f64], reference: &[f64], edges: &[u64]) -> Vec<f64> {
     let end = *engine.last().unwrap();
     let mut grid: Vec<f64> = engine
@@ -368,6 +385,71 @@ fn the_grid_keeps_stop_when_the_ramp_runs_into_it() {
         &[9900],
     );
     assert_eq!(grid, [0.0, 9900.0, 10_000.0]);
+}
+
+#[test]
+fn a_held_capacitor_drops_only_the_t_0_sample_of_its_current_and_power() {
+    let input = br#"{
+      "version": 0,
+      "seed": 0,
+      "analysis": { "transient": { "stop_ps": 10000, "max_step_ps": 1000 } },
+      "ground": "gnd",
+      "nets": ["gnd", "vout"],
+      "parts": [
+        {
+          "name": "c1",
+          "kind": "capacitor",
+          "pins": { "a": "vout", "b": "gnd" },
+          "capacitance": { "value": 1e-6, "unit": "F", "source": "user" },
+          "initial": { "value": 5.0, "unit": "V", "source": "user" }
+        },
+        {
+          "name": "c2",
+          "kind": "capacitor",
+          "pins": { "a": "vout", "b": "gnd" },
+          "capacitance": { "value": 1e-6, "unit": "F", "source": "user" },
+          "initial": null
+        },
+        {
+          "name": "r1",
+          "kind": "resistor",
+          "pins": { "a": "vout", "b": "gnd" },
+          "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+          "ratings": { "power": null }
+        }
+      ]
+    }"#;
+    let held = held(input);
+    assert_eq!(
+        held,
+        BTreeSet::from(["#c1.i".to_string(), "#c1.p".to_string()])
+    );
+    // A 1 ms discharge from 5 mA. ngspice reports 0 at t = 0 and samples next at 50 ns.
+    // The engine reports the hold current at t = 0 and its next row is at 1 ns.
+    let current = |ps: f64| -5e-3 * (-ps * 1e-12 / 1e-3).exp();
+    let engine_t = [0.0, 1e3, 5e4, 1e9, 5e9];
+    let reference_t = [0.0, 5e4, 1e9, 5e9];
+    let engine = engine_t.map(current);
+    let ngspice = [0.0, current(5e4), current(1e9), current(5e9)];
+    let grid = grid(&engine_t, &reference_t, &[]);
+    let mut compared = SpanCheck {
+        failed: false,
+        report: Vec::new(),
+        checked: BTreeSet::new(),
+        engine_t: &engine_t,
+        reference_t: &reference_t,
+        grid: &grid,
+        held,
+    };
+    compared.record("#c1.i", &engine, &ngspice);
+    assert!(!compared.failed, "{:?}", compared.report);
+    compared.record("#c2.i", &engine, &ngspice);
+    assert!(compared.failed, "{:?}", compared.report);
+    compared.failed = false;
+    let mut late = engine;
+    late[2] *= 1.01;
+    compared.record("#c1.i", &late, &ngspice);
+    assert!(compared.failed, "{:?}", compared.report);
 }
 
 #[test]

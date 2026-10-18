@@ -56,7 +56,8 @@ const CAPACITOR: &str = r#"{
   "name": "c1",
   "kind": "capacitor",
   "pins": { "a": "vout", "b": "gnd" },
-  "capacitance": { "value": 1e-6, "unit": "F", "source": "user" }
+  "capacitance": { "value": 1e-6, "unit": "F", "source": "user" },
+  "initial": null
 }"#;
 
 #[test]
@@ -111,4 +112,49 @@ fn a_net_reached_only_through_a_capacitor_floats() {
         .map(|d| (d.code(), d.refs()[0].to_string()))
         .collect();
     assert_eq!(codes, [("net.floating", "#net.top".to_string())]);
+}
+
+#[test]
+fn a_held_capacitor_is_a_voltage_at_the_operating_point() {
+    let held = CAPACITOR.replace(
+        r#""initial": null"#,
+        r#""initial": { "value": 2.0, "unit": "V", "source": "user" }"#,
+    );
+    let results = simulate(&switched("closed", &held));
+    assert!(
+        results.diagnostics().is_empty(),
+        "{:?}",
+        results.diagnostics()
+    );
+    let i = value(&results, "#c1.i");
+    let expect = (5.0 - 2.0) / 0.1;
+    assert!((i - expect).abs() <= 1e-6 * expect, "{i} vs {expect}");
+    // The hold sits behind 1 fs / 1 uF ohm, so 30 A moves it by 30 nV.
+    let vout = value(&results, "#net.vout");
+    assert!((vout - 2.0).abs() <= i * 1e-15 / 1e-6 + 1e-12, "{vout}");
+}
+
+#[test]
+fn a_net_reached_only_through_a_held_capacitor_has_a_dc_path() {
+    let isolated = switched("closed", CAPACITOR)
+        .replace(
+            r#""nets": ["gnd", "vin", "vout"]"#,
+            r#""nets": ["gnd", "vin", "vout", "top"]"#,
+        )
+        .replace(
+            r#""pins": { "a": "vout", "b": "gnd" }"#,
+            r#""pins": { "a": "top", "b": "vout" }"#,
+        )
+        .replace(
+            r#""initial": null"#,
+            r#""initial": { "value": 1.0, "unit": "V", "source": "user" }"#,
+        );
+    let results = simulate(&isolated);
+    assert!(
+        results.diagnostics().is_empty(),
+        "{:?}",
+        results.diagnostics()
+    );
+    let top = value(&results, "#net.top");
+    assert!((top - 6.0).abs() <= 1e-9, "{top}");
 }

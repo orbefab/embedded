@@ -1,6 +1,7 @@
 mod dense;
 mod element;
 mod ladder;
+mod lte;
 mod mna;
 mod newton;
 mod observe;

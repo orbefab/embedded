@@ -42,7 +42,8 @@
       "name": "c1",
       "kind": "capacitor",
       "pins": { "a": "vout", "b": "gnd" },
-      "capacitance": { "value": 1e-6, "unit": "F", "source": "user" }
+      "capacitance": { "value": 1e-6, "unit": "F", "source": "user" },
+      "initial": null
     }
   ]
 }

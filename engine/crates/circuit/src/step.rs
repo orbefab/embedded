@@ -1,10 +1,10 @@
-//! The step policy. Pure, like the ladder: each function sees one plan and
-//! an outcome and names the next plan.
+//! The step policy. Pure, like the ladder: each function sees one outcome and
+//! names the next plan.
 //!
-//! After t = 0 and after every contact edge, the step restarts at
-//! `EDGE_STEP` with backward Euler and doubles per accepted step. Once it
-//! reaches `max_step` it switches to the trapezoidal rule. One backward Euler
-//! step before trapezoidal would leave a stiff mode ringing undamped.
+//! After t = 0 and after every contact edge, the step restarts at `EDGE_STEP`.
+//! From then on the local truncation error sets it. An accepted step grows by
+//! `0.9 * ratio^(-1/(p+1))`, at most 2, and a rejected one shrinks by the same
+//! rule, between 0.25 and 0.9. p is 1 for backward Euler and 2 for trapezoidal.
 
 use sim_core::netlist::Transient;
 use sim_core::time::Time;
@@ -16,44 +16,62 @@ pub(crate) const EDGE_STEP: u64 = 1_000;
 
 const _: () = assert!(EDGE_STEP == Transient::MIN_MAX_STEP_PS);
 
+const SAFETY: f64 = 0.9;
+const MOST_GROWTH: f64 = 2.0;
+const MOST_SHRINK: f64 = 0.25;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Plan {
     /// The step wanted before it is cut to the next breakpoint. 1 to `max_step`.
     pub(crate) h: u64,
-    pub(crate) method: Method,
 }
 
 impl Plan {
     /// After t = 0 or a contact edge.
-    pub(crate) const RESTART: Plan = Plan {
-        h: EDGE_STEP,
-        method: Method::BackwardEuler,
-    };
+    pub(crate) const RESTART: Plan = Plan { h: EDGE_STEP };
 
-    /// After an accepted step: double up to `max_step`. Backward Euler holds until
-    /// the step reaches `max_step`, and the trapezoidal rule holds from then on.
-    pub(crate) fn grow(self, max_step: u64) -> Plan {
-        let h = self.h.saturating_mul(2).min(max_step);
-        let method = match self.method {
-            Method::BackwardEuler if h < max_step => Method::BackwardEuler,
-            _ => Method::Trapezoidal,
-        };
-        Plan { h, method }
+    /// After an accepted step of `tried` ps whose error was `ratio` of its tolerance.
+    /// A ratio of 0 doubles. A factor over 1 grows by at least 1 ps, so a step can leave
+    /// the 1 ps floor. Capped at `max_step`.
+    pub(crate) fn accepted(tried: u64, ratio: f64, method: Method, max_step: u64) -> Plan {
+        let factor = factor(ratio, method).min(MOST_GROWTH);
+        let h = scaled(tried, factor);
+        let h = if factor > 1.0 { h.max(tried + 1) } else { h };
+        Plan { h: h.min(max_step) }
     }
 
-    /// After Newton stalled on a step of `tried` ps: half of it, same method.
+    /// After a step of `tried` ps whose error was `ratio` of its tolerance, over 1.
+    pub(crate) fn rejected(tried: u64, ratio: f64, method: Method) -> Plan {
+        let factor = factor(ratio, method).clamp(MOST_SHRINK, SAFETY);
+        Plan {
+            h: scaled(tried, factor),
+        }
+    }
+
+    /// After Newton stalled on a step of `tried` ps: half of it.
     /// `None` when `tried` was 1 ps.
-    pub(crate) fn halve(self, tried: u64) -> Option<Plan> {
-        (tried > 1).then_some(Plan {
-            h: tried / 2,
-            ..self
-        })
+    pub(crate) fn halve(tried: u64) -> Option<Plan> {
+        (tried > 1).then_some(Plan { h: tried / 2 })
     }
 
     /// The step to take from `now`. `next` is the next breakpoint, after `now`.
     pub(crate) fn clip(self, now: Time, next: Time) -> u64 {
         self.h.min(next.as_ps() - now.as_ps())
     }
+}
+
+/// `SAFETY * ratio^(-1/(p+1))`. Infinite at a ratio of 0.
+fn factor(ratio: f64, method: Method) -> f64 {
+    let root = match method {
+        Method::BackwardEuler => ratio.sqrt(),
+        Method::Trapezoidal => ratio.cbrt(),
+    };
+    SAFETY / root
+}
+
+/// `tried * factor`, floored to whole picoseconds, at least 1.
+fn scaled(tried: u64, factor: f64) -> u64 {
+    ((tried as f64 * factor) as u64).max(1)
 }
 
 #[cfg(test)]
@@ -63,63 +81,67 @@ mod tests {
     const MAX: u64 = 20_000_000;
 
     #[test]
-    fn the_ramp_doubles_with_backward_euler_then_turns_trapezoidal_at_max_step() {
-        let mut plan = Plan::RESTART;
-        let mut steps = vec![(plan.h, plan.method)];
-        while plan.method == Method::BackwardEuler {
-            plan = plan.grow(MAX);
-            steps.push((plan.h, plan.method));
+    fn no_error_doubles_up_to_max_step() {
+        let mut h = EDGE_STEP;
+        let mut steps = vec![h];
+        while h < MAX {
+            h = Plan::accepted(h, 0.0, Method::Trapezoidal, MAX).h;
+            steps.push(h);
         }
         assert_eq!(steps.len(), 16, "{steps:?}");
-        assert_eq!(steps[1], (2_000, Method::BackwardEuler));
-        assert_eq!(steps[14], (16_384_000, Method::BackwardEuler));
-        assert_eq!(steps[15], (MAX, Method::Trapezoidal));
-        assert_eq!(plan.grow(MAX), plan);
+        assert_eq!(steps[14], 16_384_000);
+        assert_eq!(steps[15], MAX);
+        assert_eq!(Plan::accepted(MAX, 0.0, Method::BackwardEuler, MAX).h, MAX);
     }
 
     #[test]
-    fn a_max_step_of_one_edge_step_is_trapezoidal_after_one_step() {
-        let plan = Plan::RESTART.grow(EDGE_STEP);
+    fn an_accepted_step_grows_by_the_root_of_its_order() {
+        // 0.9 / sqrt(0.36) = 1.5, and 0.9 / cbrt(0.125) = 1.8.
         assert_eq!(
-            plan,
-            Plan {
-                h: EDGE_STEP,
-                method: Method::Trapezoidal,
-            }
+            Plan::accepted(1_000, 0.36, Method::BackwardEuler, MAX).h,
+            1_500
         );
+        assert_eq!(
+            Plan::accepted(1_000, 0.125, Method::Trapezoidal, MAX).h,
+            1_800
+        );
+        // A step right at its tolerance shrinks by the safety factor.
+        assert_eq!(Plan::accepted(1_000, 1.0, Method::Trapezoidal, MAX).h, 900);
     }
 
     #[test]
-    fn halving_keeps_the_method_and_stops_at_one_picosecond() {
-        let trapezoidal = Plan {
-            h: MAX,
-            method: Method::Trapezoidal,
-        };
+    fn an_accepted_step_that_may_grow_grows_by_at_least_one_picosecond() {
+        // 0.9 / cbrt(0.5) is about 1.13, and 0.9 / cbrt(0.7) about 1.01.
+        assert_eq!(Plan::accepted(1, 0.5, Method::Trapezoidal, MAX).h, 2);
+        assert_eq!(Plan::accepted(10, 0.7, Method::Trapezoidal, MAX).h, 11);
+        // 0.9 / sqrt(0.9) is under 1, so the step shrinks.
+        assert_eq!(Plan::accepted(10, 0.9, Method::BackwardEuler, MAX).h, 9);
+        assert_eq!(Plan::accepted(1, 1.0, Method::BackwardEuler, MAX).h, 1);
+    }
+
+    #[test]
+    fn a_rejected_step_shrinks_between_a_quarter_and_nine_tenths() {
+        // 0.9 / sqrt(4) = 0.45.
+        assert_eq!(Plan::rejected(1_000, 4.0, Method::BackwardEuler).h, 450);
+        assert_eq!(Plan::rejected(1_000, 1e12, Method::Trapezoidal).h, 250);
         assert_eq!(
-            trapezoidal.halve(3),
-            Some(Plan {
-                h: 1,
-                method: Method::Trapezoidal,
-            })
+            Plan::rejected(1_000, 1.0 + 1e-12, Method::Trapezoidal).h,
+            899
         );
-        assert_eq!(trapezoidal.halve(1), None);
+        assert_eq!(Plan::rejected(3, 1e12, Method::BackwardEuler).h, 1);
+    }
+
+    #[test]
+    fn halving_stops_at_one_picosecond() {
+        assert_eq!(Plan::halve(3), Some(Plan { h: 1 }));
+        assert_eq!(Plan::halve(1), None);
         let mut tried = EDGE_STEP;
         let mut attempts = 1;
-        while let Some(plan) = Plan::RESTART.halve(tried) {
+        while let Some(plan) = Plan::halve(tried) {
             tried = plan.h;
             attempts += 1;
         }
         assert_eq!((tried, attempts), (1, 10));
-    }
-
-    #[test]
-    fn a_trapezoidal_plan_regrows_without_going_back_to_backward_euler() {
-        let halved = Plan {
-            h: MAX / 4,
-            method: Method::Trapezoidal,
-        };
-        assert_eq!(halved.grow(MAX).method, Method::Trapezoidal);
-        assert_eq!(halved.grow(MAX).grow(MAX).h, MAX);
     }
 
     #[test]

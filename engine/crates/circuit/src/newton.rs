@@ -38,10 +38,10 @@ pub(crate) struct Conditions<'h> {
     pub(crate) gmin: f64,
     /// Multiplies every independent source.
     pub(crate) source_scale: f64,
-    /// The time this solve is for. A switch takes its contact on the interval ending here.
+    /// The time this solve is for. A switch takes its contact on the interval ending here,
+    /// or on the one starting here under `History::Restart`.
     pub(crate) at: Time,
-    /// `None` is the operating point, where capacitors are open.
-    pub(crate) step: Option<Integration<'h>>,
+    pub(crate) history: History<'h>,
 }
 
 impl Conditions<'static> {
@@ -49,14 +49,29 @@ impl Conditions<'static> {
         gmin: GMIN,
         source_scale: 1.0,
         at: Time::ZERO,
-        step: None,
+        history: History::Start,
     };
+}
+
+/// How capacitors and contacts see the past.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum History<'h> {
+    /// t = 0. A capacitor with `initial` is held there, and any other is open.
+    Start,
+    /// Just after a switch edge at `at`. Every capacitor is held at its voltage in `previous`,
+    /// and every contact is after the edges at or before `at`. The solve is algebraic. Its
+    /// capacitor currents are the post-edge currents the next step starts from.
+    Restart { previous: &'h Solution },
+    /// A time step from the last accepted solution.
+    Step(Integration<'h>),
 }
 
 /// One time step's view of the past. The last accepted solution is the whole history.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Integration<'h> {
     pub(crate) method: Method,
+    /// Capacitors that take backward Euler whatever `method` is. Ascending.
+    pub(crate) stiff: &'h [PartId],
     pub(crate) h_ps: u64,
     pub(crate) previous: &'h Solution,
 }
@@ -65,6 +80,14 @@ impl Integration<'_> {
     /// The step in seconds.
     pub(crate) fn h(&self) -> f64 {
         self.h_ps as f64 / 1e12
+    }
+
+    pub(crate) fn method_of(&self, part: PartId) -> Method {
+        if self.stiff.binary_search(&part).is_ok() {
+            Method::BackwardEuler
+        } else {
+            self.method
+        }
     }
 }
 

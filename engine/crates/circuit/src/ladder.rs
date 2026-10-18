@@ -2,7 +2,7 @@
 //!
 //! `next` is the whole policy. It sees one rung and whether Newton converged
 //! there, and names the next rung. Every rung that ends the ladder with
-//! `Done` ran at `Conditions::NOMINAL`, so a fallback only finds a starting
+//! `Done` ran at the base conditions, so a fallback only finds a starting
 //! point and never changes the circuit that is reported.
 
 use crate::mna::GMIN;
@@ -46,16 +46,17 @@ pub(crate) enum Next {
 }
 
 impl Rung {
-    pub(crate) fn conditions(self) -> Conditions<'static> {
+    /// `base` with this rung's gmin or source scale.
+    pub(crate) fn conditions(self, base: Conditions<'_>) -> Conditions<'_> {
         match self {
-            Rung::Plain => Conditions::NOMINAL,
+            Rung::Plain => base,
             Rung::Gmin { extra, .. } => Conditions {
-                gmin: GMIN + extra,
-                ..Conditions::NOMINAL
+                gmin: base.gmin + extra,
+                ..base
             },
             Rung::Source { scale, .. } => Conditions {
                 source_scale: scale,
-                ..Conditions::NOMINAL
+                ..base
             },
         }
     }
@@ -164,8 +165,11 @@ mod tests {
     fn plain_newton_falls_back_to_gmin_stepping() {
         assert_eq!(next(Rung::Plain, true), Next::Done);
         assert_eq!(failed(Rung::Plain), Next::Try(GMIN_FIRST));
-        assert_eq!(GMIN_FIRST.conditions().gmin, GMIN + 1e-2);
-        assert_eq!(Rung::Plain.conditions(), Conditions::NOMINAL);
+        assert_eq!(GMIN_FIRST.conditions(Conditions::NOMINAL).gmin, GMIN + 1e-2);
+        assert_eq!(
+            Rung::Plain.conditions(Conditions::NOMINAL),
+            Conditions::NOMINAL
+        );
         assert!(!GMIN_FIRST.warm());
     }
 
@@ -185,7 +189,7 @@ mod tests {
         for pair in extras[..11].windows(2) {
             assert!((pair[0] / pair[1] - 10.0).abs() < 1e-9, "{extras:?}");
         }
-        assert_eq!(rung.conditions(), Conditions::NOMINAL);
+        assert_eq!(rung.conditions(Conditions::NOMINAL), Conditions::NOMINAL);
         assert_eq!(next(rung, true), Next::Done);
     }
 
@@ -248,8 +252,11 @@ mod tests {
         };
         assert_eq!(next(spent, true), Next::Try(SOURCE_FIRST));
         assert!(!SOURCE_FIRST.warm());
-        assert_eq!(SOURCE_FIRST.conditions().source_scale, 0.0);
-        assert_eq!(SOURCE_FIRST.conditions().gmin, GMIN);
+        assert_eq!(
+            SOURCE_FIRST.conditions(Conditions::NOMINAL).source_scale,
+            0.0
+        );
+        assert_eq!(SOURCE_FIRST.conditions(Conditions::NOMINAL).gmin, GMIN);
     }
 
     #[test]
@@ -264,7 +271,7 @@ mod tests {
             rung = tried(rung);
         }
         assert_eq!(scales, [0.0, 0.1, 0.1 + 0.2, 0.1 + 0.2 + 0.4, 1.0]);
-        assert_eq!(rung.conditions(), Conditions::NOMINAL);
+        assert_eq!(rung.conditions(Conditions::NOMINAL), Conditions::NOMINAL);
         assert_eq!(next(rung, true), Next::Done);
     }
 

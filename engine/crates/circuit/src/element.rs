@@ -64,7 +64,7 @@ pub(crate) struct Update {
 }
 
 /// The pin pairs a part joins at DC. A chain of them is a DC path for `net.floating`.
-/// A capacitor is open. A switch is a resistor either way.
+/// A capacitor is open unless the operating point holds it at `initial`. A switch is a resistor either way.
 pub(crate) fn dc_paths(model: &Model) -> &'static [(usize, usize)] {
     match model {
         Model::Resistor(_)
@@ -72,6 +72,7 @@ pub(crate) fn dc_paths(model: &Model) -> &'static [(usize, usize)] {
         | Model::Diode(_)
         | Model::Led(_)
         | Model::Switch(_) => &[(0, 1)],
+        Model::Capacitor(capacitor) if capacitor.initial.is_some() => &[(0, 1)],
         Model::Capacitor(_) => &[],
     }
 }

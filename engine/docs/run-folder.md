@@ -93,7 +93,7 @@ A rejected netlist, and a solve that reports an error, write `{}`.
 
 ## traces
 
-A transient writes one row per accepted time step, plus row 0 at t = 0. The rows are not evenly spaced. Read the trace as piecewise linear between rows. At a contact edge there is a row at the edge, which holds the old contact, and a row at the earlier of 1 ns later and `stop_ps`, which holds the new one. An edge on another switch inside that nanosecond does not remove either row.
+A transient writes one row per accepted time step, plus row 0 at t = 0. The rows are not evenly spaced. Read the trace as piecewise linear between rows. Each row is within the error control's tolerance, which is relative to each capacitor's voltage, so a swing much smaller than its level carries the level's error ([reference.md](reference.md#the-comparison)). Between two rows `h` apart, a linear read can be off by about `h^2/8` times the waveform's second derivative. A smaller `max_step_ps` makes the trace denser. At a contact edge there is a row at the edge, which holds the old contact, and a row at the earlier of 1 ns later and `stop_ps`, which holds the new one. An edge on another switch inside that nanosecond does not remove either row. A fast waveform can add rows between them, where the error control shortens the step.
 
 `index.json` for `examples/rc-switch`, with the columns abridged:
 
@@ -134,7 +134,7 @@ A transient writes one row per accepted time step, plus row 0 at t = 0. The rows
 
 `end_ps` is the last row's time. It is less than `stop_ps` only when the run reported an error. The rows before the error stay, while `observations.json` is `{}`. A run that fails at t = 0 writes no `traces/`. For `trace.too_large`, `end_ps` is still that last kept row, and the diagnostic's `t_ps` is the step that did not fit.
 
-A run stops with `trace.too_large` at `min(1000000, 67108864 / columns)` rows. 67108864 is 2^26 f64 values, 512 MiB. `columns` is the width of `analog.f64`. A run needs about `stop_ps / max_step_ps` rows, plus `log2(max_step_ps / 1000)` for each edge. `examples/rc-switch` needs 4050 plus 43.
+A run stops with `trace.too_large` at `min(1000000, 67108864 / columns)` rows. 67108864 is 2^26 f64 values, 512 MiB. `columns` is the width of `analog.f64`. A run needs at least `stop_ps / max_step_ps` rows, plus about `log2(max_step_ps / 1000)` for each edge, and more where the error control holds the step under `max_step_ps`. `examples/rc-switch` takes 4050 plus 43.
 
 Python with numpy reads one column like this:
 

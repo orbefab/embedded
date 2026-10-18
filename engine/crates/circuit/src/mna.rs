@@ -78,6 +78,11 @@ impl Layout {
         self.junctions
     }
 
+    /// The row of `part`'s branch `k`.
+    pub(crate) fn branch_row(&self, part: PartId, k: usize) -> usize {
+        self.part_rows[part.index()].branch + k
+    }
+
     pub(crate) fn junction_slots(&self, part: PartId) -> Range<usize> {
         self.part_rows[part.index()].junctions.clone()
     }
@@ -149,15 +154,22 @@ impl System {
     }
 
     pub(crate) fn solve(&mut self) -> Result<Solution, Singular> {
-        Ok(Solution {
-            x: crate::dense::solve(&mut self.a, &mut self.b)?,
-        })
+        Ok(Solution::from(crate::dense::solve(
+            &mut self.a,
+            &mut self.b,
+        )?))
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Solution {
     x: Vec<f64>,
+}
+
+impl From<Vec<f64>> for Solution {
+    fn from(x: Vec<f64>) -> Solution {
+        Solution { x }
+    }
 }
 
 impl Solution {
@@ -177,7 +189,7 @@ impl Solution {
         self.node(net.into())
     }
 
-    fn node(&self, node: Node) -> f64 {
+    pub(crate) fn node(&self, node: Node) -> f64 {
         match node {
             Node::Ground => 0.0,
             Node::Row(row) => self.get(row),
@@ -198,14 +210,13 @@ impl Stamp<'_> {
         Node::Row(self.rows().internal + k)
     }
 
-    /// This part in the last accepted solution. `None` at the operating point.
-    pub(crate) fn previous(&self) -> Option<Probe<'_>> {
-        let step = self.conditions.step?;
-        Some(Probe {
+    /// This part in another solution, such as the last accepted one.
+    pub(crate) fn probe<'s>(&'s self, x: &'s Solution) -> Probe<'s> {
+        Probe {
             layout: self.layout,
             part: self.part,
-            x: step.previous,
-        })
+            x,
+        }
     }
 
     /// The limited voltage of this part's junction `k`, from the iterate.

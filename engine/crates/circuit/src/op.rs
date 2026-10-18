@@ -5,7 +5,7 @@ use sim_core::run_folder::OpPoint;
 use sim_core::time::Time;
 
 use crate::ladder::{self, Next, Rung};
-use crate::newton::{Circuit, Failure, Iterate, Offender, newton};
+use crate::newton::{Circuit, Conditions, Failure, Iterate, Offender, newton};
 use crate::observe::{self, Columns};
 use crate::ratings::{Ratings, Timing};
 
@@ -29,17 +29,28 @@ pub(crate) fn run(netlist: &Netlist, diagnostics: &mut Vec<Diagnostic>) -> Optio
 
 fn solve(netlist: &Netlist, columns: &Columns) -> Result<Vec<Finite>, Diagnostic> {
     let circuit = Circuit::new(netlist)?;
-    let iterate = operating_point(&circuit)?;
+    let iterate = operating_point(&circuit, Conditions::NOMINAL, Iterate::initial(&circuit))?;
     observe::observe(&circuit, columns, &iterate.solution, Time::ZERO)
 }
 
-/// Newton, then the fallback ladder. What comes back converged at `Conditions::NOMINAL`.
-pub(crate) fn operating_point(circuit: &Circuit) -> Result<Iterate, Diagnostic> {
-    climb(circuit, |_| OP_BUDGET)
+/// Newton from `start`, then the fallback ladder, at `base`. Under `History::Start` that is the
+/// operating point. Under `History::Restart` it is the operating point with every capacitor held.
+/// What comes back converged at `base`.
+pub(crate) fn operating_point(
+    circuit: &Circuit,
+    base: Conditions<'_>,
+    start: Iterate,
+) -> Result<Iterate, Diagnostic> {
+    climb(circuit, base, start, |_| OP_BUDGET)
 }
 
 /// The ladder driver. `budget` gives each rung's Newton budget, so a test can make a rung fail.
-fn climb(circuit: &Circuit, budget: impl Fn(Rung) -> u32) -> Result<Iterate, Diagnostic> {
+pub(crate) fn climb(
+    circuit: &Circuit,
+    base: Conditions<'_>,
+    start: Iterate,
+    budget: impl Fn(Rung) -> u32,
+) -> Result<Iterate, Diagnostic> {
     let mut rung = Rung::Plain;
     let mut warm: Option<Iterate> = None;
     let mut iterations = 0;
@@ -47,11 +58,11 @@ fn climb(circuit: &Circuit, budget: impl Fn(Rung) -> u32) -> Result<Iterate, Dia
     let mut source_scale = 0.0;
     let mut offender = None;
     loop {
-        let start = match &warm {
+        let from = match &warm {
             Some(iterate) if rung.warm() => iterate.clone(),
-            _ => Iterate::initial(circuit),
+            _ => start.clone(),
         };
-        let converged = match newton(circuit, &rung.conditions(), start, budget(rung)) {
+        let converged = match newton(circuit, &rung.conditions(base), from, budget(rung)) {
             Ok(converged) => {
                 iterations += converged.iterations;
                 match rung {
@@ -64,7 +75,7 @@ fn climb(circuit: &Circuit, budget: impl Fn(Rung) -> u32) -> Result<Iterate, Dia
             }
             Err(Failure::Singular { row }) => {
                 return Err(Diagnostic::SolverSingular {
-                    at: Time::ZERO,
+                    at: base.at,
                     unknown: circuit.layout.describe(circuit.netlist, row),
                 });
             }
@@ -74,7 +85,7 @@ fn climb(circuit: &Circuit, budget: impl Fn(Rung) -> u32) -> Result<Iterate, Dia
                     && circuit.layout.junctions() == 0
                 {
                     return Err(Diagnostic::SolverNonFinite {
-                        at: Time::ZERO,
+                        at: base.at,
                         unknown: stall.offender.describe(circuit),
                     });
                 }
@@ -89,7 +100,7 @@ fn climb(circuit: &Circuit, budget: impl Fn(Rung) -> u32) -> Result<Iterate, Dia
             Next::Exhausted => {
                 let offender = offender.expect("an exhausted ladder had a stalled rung");
                 return Err(Diagnostic::SolverConvergence {
-                    at: Time::ZERO,
+                    at: base.at,
                     unknown: offender.describe(circuit),
                     iterations,
                     gmin,
@@ -109,7 +120,6 @@ mod tests {
 
     use super::*;
     use crate::mna::Solution;
-    use crate::newton::Conditions;
 
     fn example(name: &str) -> Vec<u8> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -131,6 +141,15 @@ mod tests {
         solution.voltage(id)
     }
 
+    fn climb_op(circuit: &Circuit, budget: impl Fn(Rung) -> u32) -> Result<Iterate, Diagnostic> {
+        climb(
+            circuit,
+            Conditions::NOMINAL,
+            Iterate::initial(circuit),
+            budget,
+        )
+    }
+
     fn assert_same_point(left: &Iterate, right: &Iterate) {
         let pairs = left
             .solution
@@ -148,8 +167,8 @@ mod tests {
             let bytes = example(name);
             let netlist = parse(&bytes);
             let circuit = Circuit::new(&netlist).unwrap();
-            let plain = climb(&circuit, |_| OP_BUDGET).unwrap();
-            let stepped = climb(&circuit, |rung| match rung {
+            let plain = climb_op(&circuit, |_| OP_BUDGET).unwrap();
+            let stepped = climb_op(&circuit, |rung| match rung {
                 Rung::Plain | Rung::Source { .. } => 1,
                 Rung::Gmin { .. } => OP_BUDGET,
             })
@@ -164,8 +183,8 @@ mod tests {
             let bytes = example(name);
             let netlist = parse(&bytes);
             let circuit = Circuit::new(&netlist).unwrap();
-            let plain = climb(&circuit, |_| OP_BUDGET).unwrap();
-            let stepped = climb(&circuit, |rung| match rung {
+            let plain = climb_op(&circuit, |_| OP_BUDGET).unwrap();
+            let stepped = climb_op(&circuit, |rung| match rung {
                 Rung::Plain | Rung::Gmin { .. } => 1,
                 Rung::Source { .. } => OP_BUDGET,
             })
@@ -178,7 +197,7 @@ mod tests {
     fn an_exhausted_ladder_names_the_junction() {
         let netlist = parse(&example("led-9v"));
         let circuit = Circuit::new(&netlist).unwrap();
-        let failed = climb(&circuit, |_| 1).unwrap_err();
+        let failed = climb_op(&circuit, |_| 1).unwrap_err();
         let text = serde_json::to_string(&failed).unwrap();
         assert_eq!(
             text,
@@ -204,7 +223,7 @@ mod tests {
                 .into_bytes(),
         );
         let circuit = Circuit::new(&netlist).unwrap();
-        let failed = climb(&circuit, |_| OP_BUDGET).unwrap_err();
+        let failed = climb_op(&circuit, |_| OP_BUDGET).unwrap_err();
         assert_eq!(failed.code(), "solver.singular");
         assert_eq!(failed.refs(), vec!["#v2".parse().unwrap()]);
     }

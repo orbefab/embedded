@@ -172,6 +172,24 @@ def self_test():
             "failure": None,
         },
         {
+            "name": "held capacitor at the operating point",
+            "part": held_capacitor("a", "gnd"),
+            "commit": False,
+            "exit": 0,
+            "reason": "a held capacitor is translated only for a transient analysis",
+            "failure": None,
+        },
+        {
+            "name": "held capacitor off ground",
+            "analysis": {"transient": {"stop_ps": 5000, "max_step_ps": 1000}},
+            "nets": ["gnd", "a", "b"],
+            "part": held_capacitor("a", "b"),
+            "commit": False,
+            "exit": 0,
+            "reason": "a held capacitor needs exactly one pin on ground",
+            "failure": None,
+        },
+        {
             "name": "reserved net",
             "analysis": {"transient": {"stop_ps": 5000, "max_step_ps": 1000}},
             "nets": ["gnd", "BP1"],
@@ -218,10 +236,36 @@ def self_test():
                     "failure": got_failure,
                 }
             )
+    cases.append(initial_conditions())
     cases.append(bounce_vectors())
     document = {"ok": all(case["ok"] for case in cases), "cases": cases}
     print(json.dumps(document, indent=2))
     return 0 if document["ok"] else 1
+
+
+def held_capacitor(a, b):
+    return {
+        "name": "c1",
+        "kind": "capacitor",
+        "pins": {"a": a, "b": b},
+        "capacitance": {"value": 1e-6},
+        "initial": {"value": 1.5},
+    }
+
+
+def initial_conditions():
+    """A held capacitor's `.ic` line, with either pin on ground."""
+    lines = []
+    for a, b in (("a", "gnd"), ("gnd", "a")):
+        netlist = {
+            "analysis": {"transient": {"stop_ps": 5000, "max_step_ps": 1000}},
+            "ground": "gnd",
+            "nets": ["gnd", "a"],
+            "parts": [held_capacitor(a, b)],
+        }
+        deck, _ = translate("held", netlist)
+        lines += [line for line in deck.splitlines() if line.startswith(".ic")]
+    return {"name": "initial conditions", "ok": lines == [".ic v(a)=1.5", ".ic v(a)=-1.5"]}
 
 
 def bounce_vectors():
@@ -485,6 +529,8 @@ def translate_shape(title, netlist):
             mapping[f"i(@d{name}[id])"] = ref
         elif kind == "capacitor":
             lines.append(f"c{name} {pins} {number(part['capacitance'])}")
+            if part["initial"] is not None:
+                lines.append(initial_condition(part, ground, node, transient))
             saves.append(f"@c{name}[i]")
             mapping[f"i(@c{name}[i])"] = ref
         elif kind == "switch":
@@ -541,6 +587,19 @@ def translate_shape(title, netlist):
         ".end",
     ]
     return "\n".join(lines) + "\n", mapping
+
+
+def initial_condition(part, ground, node, transient):
+    """`.ic` holds the node at the operating point before `tran`, as the engine holds `initial`."""
+    if not transient:
+        raise Skip("a held capacitor is translated only for a transient analysis")
+    a, b = (part["pins"][pin] for pin in PIN_ORDER["capacitor"])
+    volts = float(part["initial"]["value"])
+    if b == ground and a != ground:
+        return f".ic v({node(a)})={volts!r}"
+    if a == ground and b != ground:
+        return f".ic v({node(b)})={-volts!r}"
+    raise Skip("a held capacitor needs exactly one pin on ground")
 
 
 def number(value):

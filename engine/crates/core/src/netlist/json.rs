@@ -67,6 +67,9 @@ enum WirePart {
         name: String,
         pins: PinMap,
         capacitance: WireValue,
+        // Required but nullable, like the ratings below.
+        #[serde(deserialize_with = "Option::deserialize")]
+        initial: Option<WireValue>,
     },
     Switch(WireSwitch),
 }
@@ -439,13 +442,26 @@ fn resolve_part(
             resolve_junction(&name, &part_ref, junction, nets, out).map(Model::Led)
         }
         WirePart::Capacitor {
-            pins, capacitance, ..
+            pins,
+            capacitance,
+            initial,
+            ..
         } => {
             let pins = resolve_pins(&name, Capacitor::PINS, &pins.0, nets, out);
             let capacitance = resolve_value(&part_ref, "capacitance", "F", true, capacitance, out);
-            match (pins, capacitance) {
-                (Some(pins), Some(capacitance)) => {
-                    Some(Model::Capacitor(Capacitor { pins, capacitance }))
+            let initial = match initial {
+                None => Some(None),
+                Some(initial) => {
+                    resolve_value(&part_ref, "initial", "V", false, initial, out).map(Some)
+                }
+            };
+            match (pins, capacitance, initial) {
+                (Some(pins), Some(capacitance), Some(initial)) => {
+                    Some(Model::Capacitor(Capacitor {
+                        pins,
+                        capacitance,
+                        initial,
+                    }))
                 }
                 _ => None,
             }

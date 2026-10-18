@@ -79,11 +79,29 @@ The engine stores ground first and sorts the other nets by name. It sorts parts 
 
 Both are JSON integers, like `seed`. They are the scenario's choices, so they carry no unit and no source. A float, a negative number, or a missing field is `netlist.syntax`. `stop_ps` must be greater than 0. `max_step_ps` must be at least 1000 and at most `stop_ps`. A break is `netlist.analysis` with the field and the rule.
 
-The run solves the operating point at t = 0 first, with every capacitor open and every switch at its `initial` contact. That is the initial condition. Then it steps to `stop_ps`. Every switch edge before `stop_ps` is a breakpoint. So is 1 ns after t = 0, and 1 ns after each edge, when that time is before `stop_ps`. A step lands on each breakpoint and on `stop_ps`.
+The run solves the operating point at t = 0 first, with every capacitor open or held at its `initial` voltage, and every switch at its `initial` contact. That is the initial condition. Then it steps to `stop_ps`. Every switch edge before `stop_ps` is a breakpoint. So is 1 ns after t = 0, and 1 ns after each edge, when that time is before `stop_ps`. A step lands on each breakpoint and on `stop_ps`.
 
-The step policy is fixed. After t = 0 and after every switch edge, the step restarts at 1 ns with backward Euler. The trace stores that instant, or `stop_ps` when the stop is sooner. An edge or the stop inside that nanosecond cuts the step, and the cut step stays backward Euler. Overlapping restarts stay backward Euler until the last of their 1 ns points. After that the step doubles on each accepted step. Once it reaches `max_step_ps` the rule becomes trapezoidal until the next edge. A step whose Newton solve fails is halved and retried from the same accepted point, down to 1 ps. A failure at 1 ps ends the run with `solver.convergence`.
+At each switch edge the row holds the old contact. Then the run solves once more at the edge's time, with the new contacts in force and every capacitor held at its voltage, the way an `initial` voltage is held at t = 0. This restart solve gives the currents just after the edge. It is not a row, and the next step starts from it. Each held voltage moves by the capacitor's current times 1 fs over its capacitance.
 
-`max_step_ps` is the accuracy choice. The engine has no truncation error control yet. The RC example uses 1/250 of its shortest time constant and stays within 1e-5 of span of its closed form. A waveform faster than the restart ramp, a few nanoseconds after an edge, is not resolved to 0.1%. Halving `max_step_ps` and comparing the traces is the check for a circuit with no closed form.
+The step policy is fixed. A segment starts at t = 0 and at every restart. Its first step wants 1 ns and is backward Euler. Every later step in it is trapezoidal, except on a stiff capacitor. Each step's local truncation error comes from the capacitor currents the solve already has. Backward Euler's is `h/2 * |i1 - i0| / C`. The trapezoidal rule's is `h^3 * |DD2(i)| / (6C)`, the second divided difference over the segment's last three points. The tolerance is `1e-6 * max(|v0|, |v1|) + 1e-9` V, Newton's own, on the voltage across each capacitor.
+
+A step over its tolerance on any capacitor is rejected and retried from the same accepted point. The next try is `0.9 * ratio^(-1/(p+1))` of it, between 0.25 and 0.9, where `ratio` is the worst error over its tolerance and `p` is 1 if that capacitor took backward Euler and 2 if it took the trapezoidal rule. An accepted step grows by the same factor, at most 2, up to `max_step_ps`. When the factor is over 1 it grows by at least 1 ps. A backward Euler step of 1 ps is accepted whatever its error. A capacitor whose trapezoidal step of 1 ps is over its tolerance holds a mode faster than any step, on which the trapezoidal rule rings. It turns stiff, and the step is retried. A stiff capacitor takes backward Euler, which damps that mode. The other capacitors keep the trapezoidal rule. Once a stiff capacitor's accepted step reaches 256 ps, the next step tries it on the trapezoidal rule. The try holds only if each tried capacitor's error is under 1e-3 of its tolerance, because what is left of the mode does not decay on the trapezoidal rule. Otherwise the step is retried with them on backward Euler, and the next try waits for a step twice as long. A restart clears every stiff capacitor. An accepted step cut short by a breakpoint or by `stop_ps` keeps the step it wanted. A rejected one does not, and its retry grows from the shorter step. With no capacitor there is no error, so the step doubles. A step whose Newton solve fails is halved and retried from the same accepted point, down to 1 ps. A failure at 1 ps ends the run with `solver.convergence`.
+
+`max_step_ps` caps the step. It sets how dense the trace is, not how accurate. Each step above the 1 ps floor holds every capacitor's local truncation error under 1e-6 of its voltage plus 1 nV, from a consistent restart after every edge. Error accumulates over steps. The RC example stays under 1e-6 of span of its closed form, and a 10 ns discharge after an edge under 2e-5.
+
+A step at the floor is accepted over its tolerance, so a time constant under about 43 ps is not held to it. A discharge after an edge measures this, as its worst error over its swing:
+
+| Time constant | Worst error |
+| --- | --- |
+| 1 ps | 0.13 |
+| 10 ps | 1.8e-2 |
+| 30 ps | 6.0e-3 |
+| 50 ps | 1.7e-4 |
+| 100 ps | 3.9e-5 |
+| 300 ps | 1.1e-5 |
+| 1 ns and up | 1.3e-5 |
+
+Under about 43 ps the capacitor turns stiff, and the error is about 0.18 times 1 ps over the time constant. Above it the capacitor stays trapezoidal, and the error comes from its first step. The restart's hold shifts the start of the discharge by 1 fs over the time constant, as a fraction of the swing. A stiff capacitor whose voltage keeps moving after its mode dies goes back to the trapezoidal rule. 10 pF dumped through 2 ohm into 1 nF, then both charged through 1 Mohm, stays under 2e-5 of its closed form. So does a 10 ns discharge beside a 30 ps mode switched in. A capacitor whose step never reaches 256 ps stays stiff to the next restart. It keeps backward Euler's error, which accumulates with one sign to about 2e-4 of its swing over a few of its time constants. It also takes more rows, since that error grows with the square of the step. A capacitor on a separate node keeps its accuracy beside it, and one that shares its slow mode shares its error. Two 10 pF coupled through 1 ohm, with a common mode of 18 ns, take 55 ps steps and are 2e-4 of their swing off once the mode has died. Halving `max_step_ps` and comparing the traces is still a check for a circuit with no closed form.
 
 ## Names
 
@@ -119,7 +137,13 @@ A voltage source has no `ratings` field.
 
 `capacitance.value` is in `F`. It follows the resistance rules. It must be greater than 0, and its reciprocal must be finite.
 
-A capacitor is open at the operating point, so `#c1.i` is 0 there. In a step its current follows from the voltage across it and the last accepted point.
+`initial` is required. It is a value in `V`, any finite number, or `null`.
+
+```json
+"initial": { "value": 0.0, "unit": "V", "source": "user" }
+```
+
+A capacitor with `"initial": null` is open at the operating point, so `#c1.i` is 0 there. A capacitor with a value is held there, behind a series resistance of 1 fs divided by its capacitance. That resistance is the backward Euler companion of a 1 fs step. `V(a) - V(b)` is the value plus `#c1.i` times the resistance, and `#c1.i` is the current the hold takes. For 1 uF and 5 mA the voltage moves by 5 pV. A held capacitor across a voltage source, held capacitors in parallel, and held capacitors in series across a source then solve instead of making the matrix singular. Capacitors in parallel share their current by capacitance. Two in parallel at different values meet at their capacitance-weighted mean, as their charge would. A held value that disagrees with a voltage source across it draws the difference over the resistance, 1e9 A per volt for 1 uF. That current also enters the error estimate of the first steps, so they fall to the 1 ps floor and grow back. A missing key is `netlist.syntax`. A wrong unit is `netlist.unit` with field `initial`. In a step the current follows from the voltage across it and the last accepted point.
 
 A capacitor has no `ratings` field.
 

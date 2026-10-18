@@ -194,13 +194,16 @@ impl VoltageSource {
     pub const PINS: [&'static str; 2] = ["p", "n"];
 }
 
-/// An ideal capacitor. Open at the operating point.
+/// An ideal capacitor.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Capacitor {
     /// Nets of pins `a`, `b`.
     pub pins: [NetId; 2],
     /// Farad, greater than 0.
     pub capacitance: Value,
+    /// Volt, any finite value. The operating point holds `V(a) - V(b)` here and solves the
+    /// current through it. `None` is an explicit `"initial": null`, open at the operating point.
+    pub initial: Option<Value>,
 }
 
 impl Capacitor {
@@ -284,6 +287,16 @@ impl Schedule {
     /// before `at`. `initial` at t = 0.
     pub fn before(&self, at: Time) -> Contact {
         let k = self.edges.partition_point(|edge| edge.at < at);
+        if k == 0 {
+            self.initial
+        } else {
+            self.edges[k - 1].to
+        }
+    }
+
+    /// The contact on the interval that starts at `at`: after every edge at or before `at`.
+    pub fn after(&self, at: Time) -> Contact {
+        let k = self.edges.partition_point(|edge| edge.at <= at);
         if k == 0 {
             self.initial
         } else {

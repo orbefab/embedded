@@ -1,3 +1,5 @@
+mod common;
+
 use std::fs;
 use std::path::PathBuf;
 
@@ -6,10 +8,7 @@ use sim_core::name::Ref;
 use sim_core::run_folder::Results;
 use sim_core::trace::Trace;
 
-fn simulate(json: &str) -> Results {
-    let netlist = sim_core::netlist::parse(json.as_bytes()).unwrap();
-    sim_circuit::simulate(&netlist)
-}
+use common::{column, held_capacitor, resistor, simulate, source, span, trace, transient};
 
 const LED: &str = r#"{
   "name": "led1",
@@ -144,31 +143,6 @@ fn example(name: &str) -> String {
     fs::read_to_string(path).unwrap()
 }
 
-fn trace(results: &Results) -> &Trace {
-    assert!(
-        results.diagnostics().is_empty(),
-        "{:?}",
-        results.diagnostics()
-    );
-    results.trace().unwrap()
-}
-
-fn column<'t>(trace: &'t Trace, reference: &str) -> &'t [f64] {
-    let reference: Ref = reference.parse().unwrap();
-    let index = trace
-        .columns()
-        .iter()
-        .position(|r| *r == reference)
-        .unwrap();
-    trace.column(index)
-}
-
-fn span(values: &[f64]) -> f64 {
-    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let min = values.iter().copied().fold(f64::INFINITY, f64::min);
-    max - min
-}
-
 /// `#net.*` and `*.v` are volts, `*.i` amperes, `*.p` watts.
 fn floor(reference: &Ref) -> f64 {
     match reference.to_string().rsplit_once('.') {
@@ -181,29 +155,29 @@ fn floor(reference: &Ref) -> f64 {
 /// The contact edges of `examples/rc-switch`: closed at 1 ms, open at 31 ms.
 const RC_EDGES: [(f64, bool); 2] = [(1e9, true), (31e9, false)];
 
-/// Thevenin voltage and time constant seen by `c1` with the switch `closed`.
-fn rc_thevenin(closed: bool) -> (f64, f64) {
+/// Thevenin voltage and time constant seen by `farad` on `vout` with the switch `closed`.
+fn rc_thevenin(closed: bool, farad: f64) -> (f64, f64) {
     let series = 10_000.0 + if closed { 0.1 } else { 1e9 };
     let bleeder = 10_000.0;
     let resistance = series * bleeder / (series + bleeder);
-    (5.0 * bleeder / (series + bleeder), resistance * 1e-6)
+    (5.0 * bleeder / (series + bleeder), resistance * farad)
 }
 
-/// `#net.vout` and `#c1.i` at `t_ps`, on the interval that ends there.
-fn rc_closed_form(t_ps: f64) -> (f64, f64) {
+/// `#net.vout` and the current into `farad` at `t_ps`, on the interval that ends there.
+fn rc_closed_form(t_ps: f64, farad: f64) -> (f64, f64) {
     let (mut start, mut closed) = (0.0, false);
-    let mut v0 = rc_thevenin(false).0;
+    let mut v0 = rc_thevenin(false, farad).0;
     for (edge, to) in RC_EDGES {
         if t_ps <= edge {
             break;
         }
-        let (vth, tau) = rc_thevenin(closed);
+        let (vth, tau) = rc_thevenin(closed, farad);
         v0 = vth + (v0 - vth) * (-(edge - start) * 1e-12 / tau).exp();
         (start, closed) = (edge, to);
     }
-    let (vth, tau) = rc_thevenin(closed);
+    let (vth, tau) = rc_thevenin(closed, farad);
     let v = vth + (v0 - vth) * (-(t_ps - start) * 1e-12 / tau).exp();
-    (v, (vth - v) * 1e-6 / tau)
+    (v, (vth - v) * farad / tau)
 }
 
 #[test]
@@ -215,7 +189,7 @@ fn the_rc_example_follows_its_closed_form_at_every_row() {
     let (v_span, i_span) = (span(vout), span(current));
     let mut worst = (0.0f64, 0.0f64);
     for (row, at) in trace.time().iter().enumerate() {
-        let (v, i) = rc_closed_form(at.as_ps() as f64);
+        let (v, i) = rc_closed_form(at.as_ps() as f64, 1e-6);
         worst.0 = worst.0.max((vout[row] - v).abs() / v_span);
         worst.1 = worst.1.max((current[row] - i).abs() / i_span);
     }
@@ -281,7 +255,8 @@ fn stiff_button(max_step: u64) -> String {
           "name": "c2",
           "kind": "capacitor",
           "pins": { "a": "vbtn", "b": "gnd" },
-          "capacitance": { "value": 1e-7, "unit": "F", "source": "user" }
+          "capacitance": { "value": 1e-7, "unit": "F", "source": "user" },
+          "initial": null
         },
         {
           "name": "sw1","#,
@@ -396,7 +371,8 @@ fn cluster_switches() -> String {
           "name": "c1",
           "kind": "capacitor",
           "pins": {{ "a": "vout", "b": "gnd" }},
-          "capacitance": {{ "value": 1e-7, "unit": "F", "source": "user" }}
+          "capacitance": {{ "value": 1e-7, "unit": "F", "source": "user" }},
+          "initial": null
         }}{switches}
       ]
     }}"#
@@ -407,4 +383,162 @@ fn cluster_switches() -> String {
 fn a_cluster_of_edges_inside_one_nanosecond_settles_without_ringing() {
     let last = 200_000 + 50 * 11;
     settles_toward_its_later_value(trace(&simulate(&cluster_switches())), "#net.vout", last);
+}
+
+/// `examples/rc-switch` with 100 nF across the source and 3 uF beside `c1`.
+fn rc_with_loops() -> String {
+    let extra = r#"},
+    {
+      "name": "c2",
+      "kind": "capacitor",
+      "pins": { "a": "vin", "b": "gnd" },
+      "capacitance": { "value": 1e-7, "unit": "F", "source": "user" },
+      "initial": null
+    },
+    {
+      "name": "c3",
+      "kind": "capacitor",
+      "pins": { "a": "vout", "b": "gnd" },
+      "capacitance": { "value": 3e-6, "unit": "F", "source": "user" },
+      "initial": null
+    }
+  ]"#;
+    let json = example("rc-switch");
+    let end = json.rfind("}\n  ]").unwrap();
+    format!("{}{}{}", &json[..end], extra, &json[end + "}\n  ]".len()..])
+}
+
+#[test]
+fn capacitors_across_a_source_or_each_other_run_through_every_edge() {
+    let results = simulate(&rc_with_loops());
+    let trace = trace(&results);
+    assert_eq!(
+        trace.end(),
+        Some(sim_core::time::Time::from_ps(81_000_000_000))
+    );
+    let (c1, c3) = (column(trace, "#c1.i"), column(trace, "#c3.i"));
+    // Within Newton's current tolerance: 1e-6 relative plus 1 pA.
+    for (row, (&one, &three)) in c1.iter().zip(c3).enumerate() {
+        assert!(
+            (three - 3.0 * one).abs() <= 1e-6 * three.abs() + 1e-12,
+            "row {row}: {three} vs 3 x {one}"
+        );
+    }
+    // c1 and c3 are 4 uF on `vout`. c2 sits on the ideal source and carries nothing.
+    // The restart holds each at its voltage, so the rows after each edge start on the curve.
+    let (vout, c2) = (column(trace, "#net.vout"), column(trace, "#c2.i"));
+    let (v_span, i_span) = (span(vout), span(c3));
+    let mut worst = (0.0f64, 0.0f64, 0.0f64);
+    for (row, at) in trace.time().iter().enumerate() {
+        let (v, i) = rc_closed_form(at.as_ps() as f64, 4e-6);
+        worst.0 = worst.0.max((vout[row] - v).abs() / v_span);
+        worst.1 = worst.1.max((c3[row] - 0.75 * i).abs() / i_span);
+        worst.2 = worst.2.max(c2[row].abs());
+    }
+    assert!(
+        worst.0 <= 1e-4 && worst.1 <= 1e-4 && worst.2 <= 1e-12,
+        "{worst:?}"
+    );
+}
+
+/// A 10 us transient of `parts` on `nets`.
+fn held(nets: &str, parts: &[&str]) -> String {
+    transient(10_000_000, 1_000_000, nets, parts)
+}
+
+/// Row 0 of `#{name}.i`, after checking the run reached its stop and held `name`.
+/// The hold sits behind 1 fs / C ohm, so the voltage across moves by i * 1 fs / C.
+fn held_current(trace: &Trace, name: &str, [a, b]: [&str; 2], farad: f64, initial: f64) -> f64 {
+    assert_eq!(trace.end(), Some(sim_core::time::Time::from_ps(10_000_000)));
+    let node = |net: &str| match net {
+        "gnd" => 0.0,
+        net => column(trace, &format!("#net.{net}"))[0],
+    };
+    let across = node(a) - node(b);
+    let current = column(trace, &format!("#{name}.i"))[0];
+    let moved = current.abs() * 1e-15 / farad;
+    assert!(
+        (across - initial).abs() <= moved + 1e-12,
+        "{name}: {across} V held at {initial} V with {current} A"
+    );
+    current
+}
+
+#[test]
+fn a_held_capacitor_across_a_source_at_its_voltage_takes_no_current() {
+    let json = held(
+        r#""gnd", "vcc""#,
+        &[
+            &source(5.0),
+            &held_capacitor("c1", "vcc", "gnd", 1e-6, 5.0),
+            &resistor("r1", "vcc", "gnd", 1000.0),
+        ],
+    );
+    let results = simulate(&json);
+    let current = held_current(trace(&results), "c1", ["vcc", "gnd"], 1e-6, 5.0);
+    assert!(current.abs() <= 1e-12, "{current}");
+}
+
+#[test]
+fn held_capacitors_in_parallel_share_their_current_by_capacitance() {
+    let json = held(
+        r#""gnd", "vout""#,
+        &[
+            &held_capacitor("c1", "vout", "gnd", 1e-6, 5.0),
+            &held_capacitor("c2", "vout", "gnd", 2e-6, 5.0),
+            &resistor("r1", "vout", "gnd", 1000.0),
+        ],
+    );
+    let results = simulate(&json);
+    let trace = trace(&results);
+    let one = held_current(trace, "c1", ["vout", "gnd"], 1e-6, 5.0);
+    let two = held_current(trace, "c2", ["vout", "gnd"], 2e-6, 5.0);
+    // r1 and gmin's 1e-12 S draw 5 mA and 5 pA.
+    let total = -(5e-3 + 5e-12);
+    assert!((one - total / 3.0).abs() <= 1e-9 * total.abs(), "{one}");
+    assert!(
+        (two - 2.0 * total / 3.0).abs() <= 1e-9 * total.abs(),
+        "{two}"
+    );
+}
+
+#[test]
+fn held_capacitors_in_parallel_at_different_voltages_start_from_their_shared_charge() {
+    let json = held(
+        r#""gnd", "vout""#,
+        &[
+            &held_capacitor("c1", "vout", "gnd", 1e-6, 5.0),
+            &held_capacitor("c2", "vout", "gnd", 2e-6, 4.0),
+            &resistor("r1", "vout", "gnd", 1000.0),
+        ],
+    );
+    let results = simulate(&json);
+    let trace = trace(&results);
+    held_current(trace, "c1", ["vout", "gnd"], 1e-6, 5.0);
+    held_current(trace, "c2", ["vout", "gnd"], 2e-6, 4.0);
+    // The two holds meet at the capacitance-weighted mean, as the charge would.
+    let shared = (1.0 * 5.0 + 2.0 * 4.0) / 3.0;
+    let vout = column(trace, "#net.vout")[0];
+    assert!((vout - shared).abs() <= 1e-9, "{vout}");
+}
+
+#[test]
+fn held_capacitors_in_series_across_a_source_split_its_voltage() {
+    let json = held(
+        r#""gnd", "vcc", "mid""#,
+        &[
+            &source(5.0),
+            &held_capacitor("c1", "vcc", "mid", 1e-6, 3.0),
+            &held_capacitor("c2", "mid", "gnd", 1e-6, 2.0),
+            &resistor("r1", "mid", "gnd", 1e6),
+        ],
+    );
+    let results = simulate(&json);
+    let trace = trace(&results);
+    let upper = held_current(trace, "c1", ["vcc", "mid"], 1e-6, 3.0);
+    let lower = held_current(trace, "c2", ["mid", "gnd"], 1e-6, 2.0);
+    // r1 and gmin draw 2 uA and 2 pA from `mid`. Equal capacitors split it evenly.
+    let half = (2e-6 + 2e-12) / 2.0;
+    assert!((upper - half).abs() <= 1e-9 * half, "{upper}");
+    assert!((lower + half).abs() <= 1e-9 * half, "{lower}");
 }
