@@ -199,8 +199,8 @@ fn a_10_ns_discharge_after_an_edge_follows_its_closed_form_from_the_first_row() 
         }
     }
     assert!(early >= 10, "{early} rows in the first 50 ns");
-    // docs/engine.md promises under 2e-5 for this discharge.
-    assert!(worst.0 <= 2e-5 && worst.1 <= 2e-5, "{worst:?}");
+    // docs/engine.md promises under 1e-4 of the swing.
+    assert!(worst.0 <= 1e-4 && worst.1 <= 1e-4, "{worst:?}");
 }
 
 /// 1 uF held at 5 V at the operating point, then discharging through 1 kohm.
@@ -269,8 +269,8 @@ fn a_10_ps_discharge_after_an_edge_is_within_the_documented_floor_error() {
 }
 
 /// Runs `slow`, `fast`, and both side by side, each a list of nets besides ground and its parts.
-/// `#net.{node}` stays within 2e-5 of `closed` beside the fast mode, and the pair takes no more
-/// rows than the two halves alone.
+/// `#net.{node}` stays within docs/engine.md's 1e-4 of its swing from `closed` beside the fast
+/// mode, and the pair takes no more rows than the two halves alone.
 fn assert_a_fast_mode_leaves_a_slow_node_alone(
     run: impl Fn(&str, &[&str]) -> String,
     slow: (&str, &[&str]),
@@ -293,7 +293,7 @@ fn assert_a_fast_mode_leaves_a_slow_node_alone(
             .map(|(at, v)| (v - closed(at.as_ps() as f64 * 1e-12)).abs())
             .fold(0.0, f64::max);
         assert!(
-            worst <= 2e-5 * span(values),
+            worst <= 1e-4 * span(values),
             "{worst} against span {}",
             span(values)
         );
@@ -465,13 +465,17 @@ fn a_stiff_capacitor_whose_own_voltage_keeps_moving_stays_on_its_closed_form() {
     let (smooth, smooth_closed) = full_swing(2e5);
     let (stiff, smooth) = (trace(&stiff), trace(&smooth));
     // Held on backward Euler for the whole charge, the pair is 2.3e-4 of the swing off.
+    // docs/engine.md promises under 1e-4.
     let worst = two_pole_error(stiff, ["va", "m"], 1_000, 1_000, closed, 4.95);
-    assert!(worst <= 2e-5, "{worst}");
+    assert!(worst <= 1e-4, "{worst}");
     let control = two_pole_error(smooth, ["va", "m"], 1_000, 0, smooth_closed, 4.95);
-    assert!(control <= 2e-5, "{control}");
+    assert!(control <= 1e-4, "{control}");
+    // Stiff, c2 takes 1 ps steps until its 20 ps mode is under Newton's tolerance, at most
+    // ln(4.95 V / 1 nV) of its time constants. Then it costs what the smooth pair does.
+    let floor = (4.95f64 / 1e-9).ln() * 20.0;
     assert!(
-        stiff.rows() <= 2 * smooth.rows(),
-        "{} rows against {}",
+        stiff.rows() as f64 <= smooth.rows() as f64 + floor,
+        "{} rows against {} and {floor}",
         stiff.rows(),
         smooth.rows()
     );
@@ -508,12 +512,16 @@ fn stiff_capacitors_that_share_a_slow_mode_stay_on_its_closed_form() {
         [-1.0 / (0.1 * c), 1.0 / (0.1 * c)],
         [1.0 / (0.1 * c), -(1.0 / 0.1 + 1.0 / 2e6) / c],
     ];
-    // Held on backward Euler for the whole discharge, the pair is 2.3e-4 of the swing off.
-    let worst = two_pole_error(pair, ["nf", "ns"], 1_000_000, 1_000, (a, [0.0, 0.0]), 2.5);
-    assert!(worst <= 2e-5, "{worst}");
+    // cf swings from 5 V to near 0 in the segment, and its share of that sets the step.
+    // docs/engine.md promises under 1e-4 of it, which a pair held on backward Euler for the
+    // whole discharge misses.
+    let worst = two_pole_error(pair, ["nf", "ns"], 1_000_000, 1_000, (a, [0.0, 0.0]), 5.0);
+    assert!(worst <= 1e-4, "{worst}");
+    // The 5 ps mode costs 1 ps steps for at most ln(2.5 V / 1 nV) of its time constants.
+    let floor = (2.5f64 / 1e-9).ln() * 5.0;
     assert!(
-        pair.rows() <= 2 * alone.rows(),
-        "{} rows against {}",
+        pair.rows() as f64 <= alone.rows() as f64 + floor,
+        "{} rows against {} and {floor}",
         pair.rows(),
         alone.rows()
     );

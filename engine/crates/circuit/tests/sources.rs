@@ -192,9 +192,11 @@ fn an_aliased_pulse_is_flat_on_the_rows_and_full_swing_in_the_envelope() {
     };
     let (out, vin) = (index("#net.out"), index("#net.vin"));
     let out_rows = column(trace, "#net.out");
-    // Every row lands on a rise and holds the level before it, so the rows read flat 0 V
-    // on a 0 to 3.3 V signal.
-    assert!(span(out_rows) < 1e-9, "rows span {:e}", span(out_rows));
+    // Every row lands on a rise and holds the end of the fall before it. The low half of
+    // the period is 500 ns, 50 time constants of this 10 ns load, so the fall is gone and
+    // the rows sit on the 1 nV floor. The measured span is 6.2e-9 V. The economics test
+    // guards the swing tolerance.
+    assert!(span(out_rows) < 1e-8, "rows span {:e}", span(out_rows));
     // The first interval is flat too: it ends on the first rise. Every later one holds a
     // full rise or a full fall, so the envelope reads the pulse the rows hide.
     let (mins, maxs) = (trace.min_column(out), trace.max_column(out));
@@ -209,6 +211,48 @@ fn an_aliased_pulse_is_flat_on_the_rows_and_full_swing_in_the_envelope() {
         assert_eq!(mins[k], 0.0, "interval {k}");
         assert_eq!(maxs[k], 3.3, "interval {k}");
     }
+}
+
+/// The aliased pulse's circuit with edges from 1 ns, every step a row. 1e-6 of the level took
+/// 362 steps an edge. The swing, not the level, sets the step, so a rise and a fall cost the
+/// same.
+#[test]
+fn a_1_mhz_pin_into_10_ns_takes_under_100_steps_an_edge_within_1e_4_of_its_swing() {
+    let edges = 20;
+    let results = simulate_steps(&transient(
+        10_000_000,
+        1_000_000,
+        r#""gnd", "vin", "out""#,
+        &[
+            &voltage_source(
+                "v1",
+                "vin",
+                &pulse("V", 0.0, 3.3, 1_000, 500_000, 1_000_000),
+            ),
+            &resistor("r1", "vin", "out", 100.0),
+            &capacitor("c1", "out", 100e-12),
+        ],
+    ));
+    let trace = trace(&results);
+    assert!(trace.rows() <= 100 * edges, "{} steps", trace.rows());
+    let (rises, falls): (Vec<u64>, Vec<u64>) = rows(trace)
+        .into_iter()
+        .filter(|&t| t > 1_000)
+        .partition(|&t| (t - 1_001) % 1_000_000 < 500_000);
+    let (rises, falls) = (rises.len() as f64, falls.len() as f64);
+    assert!(
+        (rises - falls).abs() <= 0.1 * rises.min(falls),
+        "{rises} rise steps against {falls} fall steps"
+    );
+    let jumps: Vec<(f64, f64)> = (0..edges)
+        .map(|k| (1e3 + k as f64 * 5e5, if k % 2 == 0 { 3.3 } else { -3.3 }))
+        .collect();
+    let worst = rows(trace)
+        .iter()
+        .zip(column(trace, "#net.out"))
+        .map(|(&t, &v)| (v - charge(0.0, &jumps, 1e4, t as f64)).abs())
+        .fold(0.0, f64::max);
+    assert!(worst <= 1e-4 * 3.3, "{worst:e}");
 }
 
 #[test]
@@ -269,7 +313,7 @@ fn example(name: &str) -> String {
 }
 
 /// An RC's voltage from `start`, each `(t_ps, change)` of its target charging in with time
-/// constant `tau_ps`. Each example below is bounded at its measured worst, rounded up.
+/// constant `tau_ps`.
 fn charge(start: f64, jumps: &[(f64, f64)], tau_ps: f64, t_ps: f64) -> f64 {
     jumps
         .iter()
@@ -277,6 +321,14 @@ fn charge(start: f64, jumps: &[(f64, f64)], tau_ps: f64, t_ps: f64) -> f64 {
         .map(|&(at, change)| change * (1.0 - (-(t_ps - at) / tau_ps).exp()))
         .sum::<f64>()
         + start
+}
+
+/// docs/engine.md's worst error of an exponential whose step is capped at `step_ps`, under
+/// its tolerance: `x^2 / (12e)` of the swing, `x` the step over the time constant. Each
+/// example below lands on a grid that caps its step.
+fn capped(swing: f64, step_ps: f64, tau_ps: f64) -> f64 {
+    let x = step_ps / tau_ps;
+    swing * x * x / (12.0 * std::f64::consts::E)
 }
 
 /// 1 mA into 1 kohm parallel 2 kohm, gmin included. The solve matched the formula exactly.
@@ -310,7 +362,7 @@ fn the_voltage_pulse_example_follows_its_closed_form_at_every_row() {
         .zip(vout)
         .map(|(&t, &v)| (v - charge(0.0, &jumps, 1e8, t as f64)).abs())
         .fold(0.0, f64::max);
-    assert!(worst <= 3e-6, "{worst:e}");
+    assert!(worst <= capped(1.0, 1e6, 1e8), "{worst:e}");
     let vin = column(trace, "#net.vin");
     let at = |t: u64| vin[rows.binary_search(&t).unwrap()];
     for (jump, change) in jumps {
@@ -340,7 +392,7 @@ fn the_current_pulse_example_follows_its_closed_form_at_every_row() {
         .zip(vout)
         .map(|(&t, &v)| (v - charge(0.2, &jumps, 1e9, t as f64)).abs())
         .fold(0.0, f64::max);
-    assert!(worst <= 9e-6, "{worst:e}");
+    assert!(worst <= capped(0.8, 2e7, 1e9), "{worst:e}");
     let netlist = sim_core::netlist::parse(json.as_bytes()).unwrap();
     let waveform = netlist
         .parts()

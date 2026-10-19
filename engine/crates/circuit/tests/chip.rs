@@ -279,15 +279,31 @@ fn driven_astable_with(run: fn(&str) -> Results, cont: f64) -> Results {
     ))
 }
 
-/// High charges C toward VCC through RA and RB, with the 250 Mohm discharge across RA's end.
-/// Low discharges it toward the discharge's divider through RB and RA in parallel with it.
-fn astable_period(ra: f64, rb: f64, c: f64, low: f64, high: f64) -> f64 {
+/// Each half period's asymptote and time constant. High charges C toward VCC through RA and
+/// RB, with the 250 Mohm discharge across RA's end. Low discharges it toward the discharge's
+/// divider through RB and RA in parallel with it.
+fn halves(ra: f64, rb: f64, c: f64) -> [(f64, f64); 2] {
     let (vcc, on, off) = (5.0_f64, 18.75, 2.5e8);
     let (charge_to, charge_r) = (vcc * off / (ra + off), rb + ra * off / (ra + off));
     let (drain_to, drain_r) = (vcc * on / (ra + on), rb + ra * on / (ra + on));
-    let high_time = charge_r * c * ((charge_to - low) / (charge_to - high)).ln();
-    let low_time = drain_r * c * ((high - drain_to) / (low - drain_to)).ln();
+    [(charge_to, charge_r * c), (drain_to, drain_r * c)]
+}
+
+fn astable_period(ra: f64, rb: f64, c: f64, low: f64, high: f64) -> f64 {
+    let [(charge_to, charge_tau), (drain_to, drain_tau)] = halves(ra, rb, c);
+    let high_time = charge_tau * ((charge_to - low) / (charge_to - high)).ln();
+    let low_time = drain_tau * ((high - drain_to) / (low - drain_to)).ln();
     high_time + low_time
+}
+
+/// How far docs/engine.md's 1e-4 of each half period's swing moves the period. At a
+/// threshold that error over the slope there is `1e-4 * tau * swing / left`, `left` being what
+/// is left of the swing.
+fn astable_slack(ra: f64, rb: f64, c: f64, low: f64, high: f64) -> f64 {
+    let [(charge_to, charge_tau), (drain_to, drain_tau)] = halves(ra, rb, c);
+    let high_time = charge_tau * (charge_to - low) / (charge_to - high);
+    let low_time = drain_tau * (high - drain_to) / (low - drain_to);
+    1e-4 * (high_time + low_time)
 }
 
 #[test]
@@ -301,9 +317,10 @@ fn a_driven_cont_moves_both_thresholds() {
     assert!(falls.len() >= 4, "{falls:?}");
     let period = (falls[falls.len() - 1] - falls[0]) as f64 / (falls.len() - 1) as f64 * 1e-12;
     let closed = astable_period(1e3, 10e3, 1e-7, 2.0, 4.0);
+    let slack = astable_slack(1e3, 10e3, 1e-7, 2.0, 4.0);
     assert!(
-        (period / closed - 1.0).abs() <= 1e-4,
-        "{period} vs {closed}"
+        (period - closed).abs() <= slack,
+        "{period} vs {closed} within {slack}"
     );
     // Undriven, the thresholds are 1/3 and 2/3 of VCC and the period is shorter.
     assert!(closed > 1.2 * astable_period(1e3, 10e3, 1e-7, 5.0 / 3.0, 10.0 / 3.0));

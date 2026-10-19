@@ -29,8 +29,8 @@ pub(crate) const STEP_BUDGET: u32 = 50;
 ///
 /// 100000000 sits far above the steps a run whose rows fit needs on ordinary circuits.
 /// A release build reaches it in about 40 s on a resistive pulse and about 70 s on a 1 MHz
-/// pin into a 10 ns load. At this step policy that pin costs about 700000 steps per
-/// simulated ms, so the limit allows about 140 ms of it. The step policy, not this limit,
+/// pin into a 10 ns load. At this step policy that pin costs about 171000 steps per
+/// simulated ms, so the limit allows about 580 ms of it. The step policy, not this limit,
 /// bounds an MCU-rate run.
 pub(crate) const MAX_STEPS: u64 = 100_000_000;
 
@@ -282,10 +282,11 @@ fn steps(
     record.accept(Time::ZERO, row)?;
     record.logic(Time::ZERO, &circuit, &start.chips, &start.levels);
     let mut breakpoints = Breakpoints::new(netlist, *transient);
+    let segment = Segment::start(&charges, &start.iterate.solution);
     let mut accepted = Accepted {
         at: Time::ZERO,
         iterate: start.iterate,
-        segment: Segment::Start,
+        segment,
         chips: start.chips,
         levels: start.levels,
     };
@@ -332,7 +333,8 @@ fn steps(
                     .watches
                     .levels(&converged.iterate.solution, Some(&accepted.levels));
                 let step_end = at;
-                let (at, converged, levels) = if levels == accepted.levels {
+                let cut = levels != accepted.levels;
+                let (at, converged, levels) = if !cut {
                     (at, converged, levels)
                 } else {
                     let (located, converged) = watch::locate(
@@ -376,20 +378,33 @@ fn steps(
                         &levels,
                         budget.restart,
                     )?;
+                    let segment = Segment::start(&charges, &held.iterate.solution);
                     Accepted {
                         at,
                         iterate: held.iterate,
-                        segment: Segment::Start,
+                        segment,
                         chips: held.chips,
                         levels: held.levels,
                     }
                 } else {
+                    let landed = at.as_ps() - accepted.at.as_ps();
+                    let swings = if cut {
+                        accepted.segment.swings(
+                            &charges,
+                            &accepted.iterate.solution,
+                            landed,
+                            &converged.iterate.solution,
+                        )
+                    } else {
+                        error.swings
+                    };
                     Accepted {
                         at,
                         segment: accepted.segment.advance(
                             accepted.at,
                             accepted.iterate.solution,
-                            at.as_ps() - accepted.at.as_ps(),
+                            landed,
+                            swings,
                         ),
                         iterate: converged.iterate,
                         chips,
