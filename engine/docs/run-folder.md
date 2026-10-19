@@ -12,6 +12,7 @@
     index.json
     time.u64
     analog.f64
+    envelope.f64
     logic.vcd
 ```
 
@@ -148,11 +149,11 @@ period_s = (falls[-1] - falls[0]) / (len(falls) - 1) * 1e-12
 
 A transient writes a row at t = 0, at every multiple of `grid_ps` before `stop_ps`, and at `stop_ps`. That is `ceil(stop_ps / grid_ps) + 1` rows, fixed by the netlist before the run starts. The engine lands a step on every row time, so each row is a solved point, not an interpolation. Each row is within the error control's tolerance, which is relative to each capacitor's voltage, so a swing much smaller than its level carries the level's error ([reference.md](reference.md#the-comparison)).
 
-A row is a point sample. Between rows nothing is readable unless the scenario sets a finer grid, and a waveform that repeats with the grid can alias. A 0 to 3.3 V pulse at 1 MHz drives 100 ohm into 100 pF, a 10 ns time constant. On a 1 us grid every row falls on a rise and holds the level before it, so over 2 ms `#net.out0` reads at most 5.2e-13 V. On a 100 ns grid it reads 0 to 3.3 V. The rating diagnostics and `logic.vcd` are read at every accepted step, and `observations.switches` lists every edge at its picosecond. Those are the step-accurate views.
+A row is a point sample, and a waveform that repeats with the grid can alias the rows. The envelope is the between-rows read. Each column's minimum and maximum cover every accepted step in the interval. A 0 to 3.3 V pulse at 1 MHz drives 100 ohm into 100 pF, a 10 ns time constant. On a 1 us grid every row falls on a rise and holds the level before it, so over 2 ms `#net.out0` reads at most 5.2e-13 V. Its envelope reads 0 to 3.3 V on every interval after the first. On a 100 ns grid the rows themselves read 0 to 3.3 V. The rating diagnostics and `logic.vcd` are read at every accepted step, and `observations.switches` lists every edge at its picosecond. Those are the step-accurate views.
 
 To read a waveform between rows as piecewise linear, set `grid_ps` under a tenth of the fastest time constant you read there. A chord across `h` is off by about `h^2/8` times the waveform's second derivative. For an exponential at a tenth of its time constant that is 1.25e-3 of its swing, and the chord's largest miss is 1.19e-3.
 
-A row at the time of a contact edge, a source jump or a chip event holds the state before it. Later rows show the change. An edge, jump or event at `stop_ps` leaves the last row on the old state. Edges, jumps and chip events are landings for the steps, not rows.
+A row at the time of a contact edge, a source jump or a chip event holds the state before it. Later rows show the change. An edge, jump or event at `stop_ps` leaves the last row on the old state. Edges, jumps and chip events are landings for the steps, not rows. A jump at a row time appears in the envelope of the interval that starts at that row. The row holds the old state, and the accepted steps after it hold the new one, so the interval's range spans the jump. The restart solve after an edge is not a sample. The first accepted step after it is, at most 1 ns later. On the committed examples the restart sits at most 1e-5 V outside the accepted steps. On the aliasing case the restart sits about 4 mV outside.
 
 `index.json` for `examples/rc-switch`, with the columns abridged:
 
@@ -182,6 +183,15 @@ A row at the time of a contact edge, a source jump or a chip event holds the sta
         "unit": "A"
       }
     ]
+  },
+  "envelope": {
+    "file": "envelope.f64",
+    "type": "f64le",
+    "order": "column_major",
+    "values": [
+      "min",
+      "max"
+    ]
   }
 }
 ```
@@ -190,12 +200,14 @@ A row at the time of a contact edge, a source jump or a chip event holds the sta
 - `grid_ps` and `stop_ps` are the netlist's.
 - `time.u64` holds `rows` unsigned 64-bit little-endian integers, picoseconds from t = 0, strictly increasing. Row `k` is at `k * grid_ps`, and the last is at `stop_ps`. After an error the last row is at `end_ps`, which need not be on the grid.
 - `analog.f64` holds `rows` IEEE 754 binary64 little-endian values per column, column after column. Column `j` occupies bytes `j * rows * 8` up to `(j + 1) * rows * 8`.
+- `envelope.f64` holds one interval per pair of consecutive rows, `rows - 1` of them, as IEEE 754 binary64 little-endian values per column. The intervals' minima come first, then their maxima. Column `j` occupies bytes `j * (rows - 1) * 16` up to `(j + 1) * (rows - 1) * 16`. The first half of that span is the minima and the second half is the maxima. Interval `k` lies between rows `k` and `k + 1`. `time.u64` gives both boundaries. A trace with one row writes an empty file and still has the `envelope` key.
+- An interval's minimum and maximum cover its two rows and every accepted step strictly between them. A located chip event is an accepted step, so it is a sample. A restart solve is not, and neither is a refused step or a probe. The envelope has no column list. Its columns are `analog.columns`, in that order.
 - `columns` are a subset of the keys of `observations.op`, in ref order. Read them from the index. Today every key of `op` is a column. A net or a `.v` is `V`, a `.i` is `A`, and a `.p` is `W`. Row 0 holds exactly the numbers in `op`.
-- Every value is finite. `-0.0` is written as `0.0`.
+- Every value of `analog.f64` and `envelope.f64` is finite. `-0.0` is written as `0.0`.
 - There is no header and no compression.
 - A chip adds no column. Its pins are nets, which have their columns, and its internal ladder node is not observed.
 
-A netlist with a chip adds a `logic` key after `analog`:
+A netlist with a chip adds a `logic` key after `envelope`:
 
 ```json
 "logic": {
@@ -246,7 +258,7 @@ $end
 
 `end_ps` is the last row's time, and the same number as `observations.end_ps`. It is less than `stop_ps` only when the run reported an error. The grid rows before the error stay, and the last accepted step is the last row. A run that fails at t = 0 writes no `traces/`.
 
-A transient whose grid gives more than `min(1000000, 67108864 / columns)` rows is refused before it solves, with one `trace.too_large`. 67108864 is 2^26 f64 values, 512 MiB. `columns` is the width of `analog.f64`. The refused run writes `{}` to `observations.json` and no `traces/`. The row count depends only on `stop_ps` and `grid_ps`, so a run that is not refused never runs out of rows. Edges, jumps and chip events cost steps, not rows. Those steps can end the run at [`solver.step_limit`](diagnostics.md#solverstep_limit). `examples/rc-switch` writes 4051 rows, `examples/button-led` 2001, `examples/v-pulse-rc` 1401, `examples/current-pulse` 801 and `examples/ne555-led` 401.
+A transient whose grid gives more than `min(1000000, 67108864 / columns)` rows is refused before it solves, with one `trace.too_large`. 67108864 is 2^26 f64 values, 512 MiB. `columns` is the width of `analog.f64`. The cap counts `analog.f64` and not the envelope, which stores at most twice as many values. Writing the folder keeps a second copy of the trace bytes. A run at this cap peaks near 1.02 GiB without the envelope and near 3.02 GiB with it. The refused run writes `{}` to `observations.json` and no `traces/`. The row count depends only on `stop_ps` and `grid_ps`, so a run that is not refused never runs out of rows. Edges, jumps and chip events cost steps, not rows. Those steps can end the run at [`solver.step_limit`](diagnostics.md#solverstep_limit). `examples/rc-switch` writes 4051 rows, `examples/button-led` 2001, `examples/v-pulse-rc` 1401, `examples/current-pulse` 801 and `examples/ne555-led` 401.
 
 Python with numpy reads one column like this:
 
@@ -256,6 +268,8 @@ ix = json.load(open("runs/rc/traces/index.json"))
 t_ps = np.fromfile("runs/rc/traces/time.u64", "<u8")
 refs = [c["ref"] for c in ix["analog"]["columns"]]
 vout = np.fromfile("runs/rc/traces/analog.f64", "<f8").reshape(len(refs), ix["rows"])[refs.index("#net.vout")]
+env = np.fromfile("runs/rc/traces/envelope.f64", "<f8").reshape(len(refs), 2, ix["rows"] - 1)
+lo, hi = env[refs.index("#net.vout")]  # interval k spans t_ps[k] to t_ps[k + 1]
 ```
 
 ## Determinism

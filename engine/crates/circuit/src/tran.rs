@@ -147,8 +147,9 @@ struct Record<'c> {
 }
 
 impl Record<'_> {
-    /// Ratings sample every accepted step. The trace keeps it when it is a row. A row past
-    /// the trace's limit is `trace.too_large`, and the step is not stored.
+    /// Ratings sample every accepted step. A non-row step folds into the open interval, and
+    /// a row closes it. A row past the trace's limit is `trace.too_large`, and the step is
+    /// neither stored nor folded.
     fn accept(&mut self, at: Time, row: Vec<Finite>) -> Result<(), Diagnostic> {
         let kept = self.rows.keeps(&self.transient, at);
         if kept {
@@ -171,6 +172,7 @@ impl Record<'_> {
             self.trace.push(at, &row);
             self.last_step = None;
         } else {
+            self.trace.sample(&row);
             self.last_step = Some((at, row));
         }
         Ok(())

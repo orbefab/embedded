@@ -230,6 +230,101 @@ fn a_dense_pulse_stops_at_the_step_limit_and_keeps_what_it_reached() {
     );
 }
 
+/// Eight steps of the dense pulse end off the 20 ms grid, on a low level after interior
+/// highs. The failed run stores that last accepted step as its last row, so the interval
+/// ending there covers the steps folded after the previous row, and only those steps reach 1 V.
+#[test]
+fn a_failed_runs_last_interval_ends_at_its_off_grid_last_step() {
+    let netlist = dense_pulse();
+    let mut diagnostics = Vec::new();
+    let columns = Columns::new(&netlist);
+    let outcome = run_with(
+        &netlist,
+        &transient(&netlist),
+        Budget { steps: 8, ..BUDGET },
+        Rows::Grid,
+        &columns,
+        &mut diagnostics,
+    );
+    let end = reached(&outcome);
+    let trace = outcome.trace.expect("the run kept its rows");
+    assert_eq!(end, trace.end().unwrap());
+    assert_ne!(end.as_ps() % 20_000_000, 0, "the last step is off the grid");
+    assert_eq!(trace.intervals(), trace.rows() - 1);
+    for j in 0..trace.columns().len() {
+        let (values, mins, maxs) = (trace.column(j), trace.min_column(j), trace.max_column(j));
+        for k in 0..trace.intervals() {
+            assert!(mins[k] <= values[k].min(values[k + 1]));
+            assert!(maxs[k] >= values[k].max(values[k + 1]));
+        }
+    }
+    // The steps run takes the same steps, so its rows are this run's samples.
+    let mut step_diagnostics = Vec::new();
+    let steps = run_with(
+        &netlist,
+        &transient(&netlist),
+        Budget { steps: 8, ..BUDGET },
+        Rows::Steps,
+        &columns,
+        &mut step_diagnostics,
+    );
+    assert_eq!(
+        step_diagnostics, diagnostics,
+        "both runs stop at the same step"
+    );
+    let step_trace = steps.trace.expect("the steps run kept its rows");
+    assert!(step_trace.rows() > trace.rows());
+    let rows: Vec<u64> = trace.time().iter().map(|t| t.as_ps()).collect();
+    let step_t: Vec<u64> = step_trace.time().iter().map(|t| t.as_ps()).collect();
+    for j in 0..trace.columns().len() {
+        let step_values = step_trace.column(j);
+        for (k, &at) in rows.iter().enumerate().skip(1) {
+            let from = step_t.partition_point(|&t| t < rows[k - 1]);
+            let to = step_t.partition_point(|&t| t <= at);
+            let spanned = &step_values[from..to];
+            let low = spanned.iter().copied().fold(f64::INFINITY, f64::min);
+            let high = spanned.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            assert_eq!(trace.min_column(j)[k - 1], low, "interval {k}");
+            assert_eq!(trace.max_column(j)[k - 1], high, "interval {k}");
+        }
+    }
+    // The rows hold the level before each jump. The last interval's samples include the pulse.
+    let last = trace.intervals() - 1;
+    let vin = trace
+        .columns()
+        .iter()
+        .position(|reference| reference.to_string() == "#net.vin")
+        .expect("#net.vin");
+    let (last_min, last_max) = (trace.min_column(vin)[last], trace.max_column(vin)[last]);
+    assert!(last_max - last_min >= 1.0 - 1e-12, "{last_min} {last_max}");
+}
+
+/// In step-rows mode every accepted step is a row, so each interval's samples are exactly
+/// its two rows.
+#[test]
+fn in_step_rows_mode_each_interval_holds_exactly_its_two_rows() {
+    let netlist = pulse_between_rows();
+    let mut diagnostics = Vec::new();
+    let columns = Columns::new(&netlist);
+    let outcome = run_with(
+        &netlist,
+        &transient(&netlist),
+        BUDGET,
+        Rows::Steps,
+        &columns,
+        &mut diagnostics,
+    );
+    let trace = outcome.trace.expect("the steps run keeps its rows");
+    assert_eq!(trace.intervals(), trace.rows() - 1);
+    for j in 0..trace.columns().len() {
+        let (values, mins, maxs) = (trace.column(j), trace.min_column(j), trace.max_column(j));
+        for (k, (low, high)) in values.iter().zip(&values[1..]).enumerate() {
+            assert_eq!(mins[k], low.min(*high));
+            assert_eq!(maxs[k], low.max(*high));
+        }
+    }
+}
+
 #[test]
 fn a_rating_survives_a_convergence_failure() {
     let netlist = fast_discharge(true);

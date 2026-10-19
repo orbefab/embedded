@@ -436,6 +436,7 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
             "netlist.json",
             "observations.json",
             "traces/analog.f64",
+            "traces/envelope.f64",
             "traces/index.json",
         ];
         // Only a netlist with a chip has logic levels.
@@ -485,6 +486,27 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
                 .iter()
                 .all(|v| v.is_finite() && v.to_bits() != (-0.0f64).to_bits())
         );
+
+        // Every interval holds both of its rows: min k <= max(row k, row k + 1) <= max k.
+        let envelope = f64s(&found["traces/envelope.f64"]);
+        assert_eq!(envelope.len(), 2 * (rows - 1) * columns.len(), "{name}");
+        assert!(envelope.iter().all(|v| v.is_finite()), "{name}");
+        let width = rows - 1;
+        for j in 0..columns.len() {
+            let (mins, maxs) = (
+                &envelope[2 * j * width..2 * j * width + width],
+                &envelope[2 * j * width + width..2 * (j + 1) * width],
+            );
+            let values = &analog[j * rows..(j + 1) * rows];
+            for k in 0..width {
+                let (low, high) = (values[k], values[k + 1]);
+                assert!(
+                    mins[k] <= low.min(high) && low.max(high) <= maxs[k],
+                    "{name} {} interval {k}",
+                    columns[j]["ref"].as_str().unwrap()
+                );
+            }
+        }
         let _ = fs::remove_dir_all(&out);
     }
 }
@@ -528,7 +550,7 @@ fn two_runs_of_each_transient_example_differ_only_in_created_at() {
         };
         assert_ne!(manifest(&mut left_files), manifest(&mut right_files));
         let logic = usize::from(name == "ne555-led");
-        assert_eq!(left_files.len(), 6 + logic, "{name}");
+        assert_eq!(left_files.len(), 7 + logic, "{name}");
         assert_eq!(left_files, right_files, "{}", left.display());
         let _ = fs::remove_dir_all(left);
         let _ = fs::remove_dir_all(right);

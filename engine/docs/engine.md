@@ -4,7 +4,7 @@ This page describes the engine at its `engine_version`. It is not part of the ne
 
 ## Transient steps
 
-The run solves the operating point at t = 0, then steps to `stop_ps`. Every switch edge and every source jump before `stop_ps` is a breakpoint. So is 1 ns after t = 0, and 1 ns after each edge or jump, when that time is before `stop_ps`. So is every row time, each multiple of `grid_ps`. A step lands on each breakpoint and on `stop_ps`. Only the row times are written to the trace.
+The run solves the operating point at t = 0, then steps to `stop_ps`. Every switch edge and every source jump before `stop_ps` is a breakpoint. So is 1 ns after t = 0, and 1 ns after each edge or jump, when that time is before `stop_ps`. So is every row time, each multiple of `grid_ps`. A step lands on each breakpoint and on `stop_ps`. Only the row times are written to the trace. Every accepted step also feeds the envelope. A row closes the interval open since the previous row. A step that is not a row folds into that interval. A restart solve, a step the error control refused, and a probe locating a chip event are not samples. The accepted step the probe lands is.
 
 At each switch edge or source jump the step's solution holds the old contact or level. Then the run solves once more at that time, with the new contacts and levels in force and every capacitor held at its voltage, the way an `initial` voltage is held at t = 0. This restart solve gives the currents just after the change. It is never a row, and the next step starts from it. Each held voltage moves by the capacitor's current times 1 fs over its capacitance. A jump at `stop_ps` gets no restart.
 

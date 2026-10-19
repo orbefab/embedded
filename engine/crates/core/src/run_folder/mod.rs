@@ -403,11 +403,13 @@ mod tests {
                 "netlist.json",
                 "observations.json",
                 "traces/analog.f64",
+                "traces/envelope.f64",
                 "traces/index.json",
                 "traces/time.u64",
             ]
         );
         assert_eq!(folder.file("traces/time.u64").unwrap().len(), 16);
+        assert_eq!(folder.file("traces/envelope.f64").unwrap().len(), 16);
 
         let dir = scratch("traces");
         folder.write(&dir).unwrap();

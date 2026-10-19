@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use sim_core::time::Time;
 
-use common::{column, resistor, simulate, simulate_steps, trace, transient};
+use common::{column, resistor, simulate, simulate_steps, span, trace, transient};
 
 fn level(value: f64, unit: &str) -> String {
     format!(r#"{{ "value": {value:?}, "unit": "{unit}", "source": "user" }}"#)
@@ -158,6 +158,57 @@ fn a_source_jump_rows_the_old_value_and_restarts_on_backward_euler() {
         .map(|w| w[1] - w[0])
         .collect();
     assert_eq!(steps, [1_000, 2_000, 4_000, 8_000]);
+}
+
+/// The docs' aliasing case: a 1 MHz 0 to 3.3 V pulse through 100 ohm into 100 pF, on the
+/// pulse's own 1 us grid. Its time constant is 10 ns.
+fn aliased() -> String {
+    transient(
+        4_000_000,
+        1_000_000,
+        r#""gnd", "vin", "out""#,
+        &[
+            &voltage_source(
+                "v1",
+                "vin",
+                &pulse("V", 0.0, 3.3, 1_000_000, 500_000, 1_000_000),
+            ),
+            &resistor("r1", "vin", "out", 100.0),
+            &capacitor("c1", "out", 100e-12),
+        ],
+    )
+}
+
+#[test]
+fn an_aliased_pulse_is_flat_on_the_rows_and_full_swing_in_the_envelope() {
+    let results = simulate(&aliased());
+    let trace = trace(&results);
+    let index = |name: &str| {
+        trace
+            .columns()
+            .iter()
+            .position(|r| r.to_string() == name)
+            .unwrap()
+    };
+    let (out, vin) = (index("#net.out"), index("#net.vin"));
+    let out_rows = column(trace, "#net.out");
+    // Every row lands on a rise and holds the level before it, so the rows read flat 0 V
+    // on a 0 to 3.3 V signal.
+    assert!(span(out_rows) < 1e-9, "rows span {:e}", span(out_rows));
+    // The first interval is flat too: it ends on the first rise. Every later one holds a
+    // full rise or a full fall, so the envelope reads the pulse the rows hide.
+    let (mins, maxs) = (trace.min_column(out), trace.max_column(out));
+    assert!(maxs[0] < 1e-9, "interval 0 max {:e}", maxs[0]);
+    for k in 1..trace.intervals() {
+        assert!(mins[k] <= 1e-3, "interval {k} min {}", mins[k]);
+        assert!(maxs[k] >= 3.29, "interval {k} max {}", maxs[k]);
+    }
+    // The drive jumps between the levels, so its envelope is the exact pulse.
+    let (mins, maxs) = (trace.min_column(vin), trace.max_column(vin));
+    for k in 1..trace.intervals() {
+        assert_eq!(mins[k], 0.0, "interval {k}");
+        assert_eq!(maxs[k], 3.3, "interval {k}");
+    }
 }
 
 #[test]

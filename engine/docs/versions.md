@@ -27,7 +27,7 @@ The engine reads the versions in a list. This engine reads `[0]`. `netlist.versi
 `run_format` versions the whole folder. A reader that knows one `run_format` can read every folder written with it.
 
 - A reader ignores a key it does not know, in every JSON object, and a file it does not know.
-- A new key, a new file, a new diagnostic code and a new severity keep `run_format`.
+- A new key, a new file, a new diagnostic code and a new severity keep `run_format`. `traces/envelope.f64` and the `envelope` key in `traces/index.json` are such additions, and the index `format` stays 0.
 - Removing or renaming a key, or changing a type, a unit, a meaning or a binary layout, bumps it.
 
 `traces/index.json` keeps its own `format`. A change that bumps it also bumps `run_format`, so `run_format` alone answers whether a reader can read the folder.

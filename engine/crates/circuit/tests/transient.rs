@@ -176,12 +176,32 @@ fn every_example_writes_its_grid_and_its_steps_change_nothing_else() {
             );
         }
         let steps = sim_circuit::simulate_steps(&netlist);
-        assert!(steps.trace().unwrap().rows() > trace.rows(), "{name}");
+        let step_trace = steps.trace().unwrap();
+        assert!(step_trace.rows() > trace.rows(), "{name}");
         assert_eq!(results.diagnostics(), steps.diagnostics(), "{name}");
         let (grid, steps) = (results.observations(), steps.observations());
         assert_eq!(grid.end(), steps.end(), "{name}");
         assert_eq!(grid.switches(), steps.switches(), "{name}");
         assert_eq!(grid.logic(), steps.logic(), "{name}");
+
+        // Every interval's envelope is the min and max of the step rows it spans, its two
+        // rows included. The steps run takes the same steps, so its rows are the samples.
+        assert_eq!(trace.intervals(), trace.rows() - 1, "{name}");
+        let step_t: Vec<u64> = step_trace.time().iter().map(|t| t.as_ps()).collect();
+        for j in 0..trace.columns().len() {
+            let (values, step_values) = (trace.column(j), step_trace.column(j));
+            for (k, &at) in rows.iter().enumerate().skip(1) {
+                let from = step_t.partition_point(|&t| t < rows[k - 1]);
+                let to = step_t.partition_point(|&t| t <= at);
+                let spanned = &step_values[from..to];
+                let low = spanned.iter().copied().fold(f64::INFINITY, f64::min);
+                let high = spanned.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                assert_eq!(trace.min_column(j)[k - 1], low, "{name} interval {k}");
+                assert_eq!(trace.max_column(j)[k - 1], high, "{name} interval {k}");
+                assert!(low <= values[k - 1].min(values[k]), "{name} containment");
+                assert!(high >= values[k - 1].max(values[k]), "{name} containment");
+            }
+        }
     }
 }
 
