@@ -10,7 +10,7 @@ fn level(value: f64, unit: &str) -> String {
 
 fn source(kind: &str, key: &str, drive: &str) -> String {
     with_parts(
-        r#"{ "transient": { "stop_ps": 100000, "max_step_ps": 1000 } }"#,
+        r#"{ "transient": { "stop_ps": 100000, "max_step_ps": 1000, "grid_ps": 1000 } }"#,
         &format!(
             r#"{{ "name": "s1", "kind": "{kind}", "pins": {{ "p": "a", "n": "gnd" }}, "{key}": {drive} }}"#
         ),
@@ -43,8 +43,7 @@ fn jumps(netlist: &Netlist) -> Vec<u64> {
     part.model
         .waveform()
         .unwrap()
-        .jumps(Time::from_ps(100_000), usize::MAX)
-        .iter()
+        .jumps_before(Time::from_ps(100_000))
         .map(|t| t.as_ps())
         .collect()
 }

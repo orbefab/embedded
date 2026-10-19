@@ -8,7 +8,9 @@ use sim_core::name::Ref;
 use sim_core::run_folder::Results;
 use sim_core::trace::Trace;
 
-use common::{column, held_capacitor, resistor, simulate, source, span, trace, transient};
+use common::{
+    column, held_capacitor, resistor, simulate, simulate_steps, source, span, trace, transient,
+};
 
 const LED: &str = r#"{
   "name": "led1",
@@ -29,7 +31,7 @@ fn button(series: f64, bounce: &str) -> String {
         r#"{{
       "version": 0,
       "seed": 7,
-      "analysis": {{ "transient": {{ "stop_ps": 20000000000, "max_step_ps": 10000000 }} }},
+      "analysis": {{ "transient": {{ "stop_ps": 20000000000, "max_step_ps": 10000000, "grid_ps": 10000000 }} }},
       "ground": "gnd",
       "nets": ["gnd", "vcc", "vk", "vbtn"],
       "parts": [
@@ -143,6 +145,46 @@ fn example(name: &str) -> String {
     fs::read_to_string(path).unwrap()
 }
 
+#[test]
+fn every_example_writes_its_grid_and_its_steps_change_nothing_else() {
+    for name in [
+        "button-led",
+        "current-pulse",
+        "ne555-led",
+        "rc-switch",
+        "v-pulse-rc",
+    ] {
+        let json = example(name);
+        let netlist = sim_core::netlist::parse(json.as_bytes()).unwrap();
+        let sim_core::netlist::Analysis::Transient(transient) = netlist.analysis() else {
+            panic!("{name} is not a transient");
+        };
+        let (stop, grid) = (transient.stop.as_ps(), transient.grid);
+        let results = simulate(&json);
+        let trace = results.trace().unwrap();
+        let rows: Vec<u64> = trace.time().iter().map(|t| t.as_ps()).collect();
+        assert_eq!(rows.len() as u64, stop.div_ceil(grid) + 1, "{name}");
+        for (k, &at) in rows.iter().enumerate() {
+            assert_eq!(at, (k as u64 * grid).min(stop), "{name} row {k}");
+        }
+        let op = results.observations().op().unwrap();
+        for (index, reference) in trace.columns().iter().enumerate() {
+            assert_eq!(
+                trace.column(index)[0],
+                op.values[reference].get(),
+                "{name} {reference}"
+            );
+        }
+        let steps = sim_circuit::simulate_steps(&netlist);
+        assert!(steps.trace().unwrap().rows() > trace.rows(), "{name}");
+        assert_eq!(results.diagnostics(), steps.diagnostics(), "{name}");
+        let (grid, steps) = (results.observations(), steps.observations());
+        assert_eq!(grid.end(), steps.end(), "{name}");
+        assert_eq!(grid.switches(), steps.switches(), "{name}");
+        assert_eq!(grid.logic(), steps.logic(), "{name}");
+    }
+}
+
 /// `#net.*` and `*.v` are volts, `*.i` amperes, `*.p` watts.
 fn floor(reference: &Ref) -> f64 {
     match reference.to_string().rsplit_once('.') {
@@ -196,7 +238,7 @@ fn the_rc_example_follows_its_closed_form_at_every_row() {
     assert!(worst.0 <= 1e-3 && worst.1 <= 1e-3, "{worst:?}");
 }
 
-/// The run again at half `max_step_ps`, compared on both grids, within `bound` of each column's span.
+/// The run again at half `max_step_ps`, compared on its rows, within `bound` of each column's span.
 fn assert_refines(json: &str, max_step: &str, half: &str, bound: f64) {
     let coarse = simulate(json);
     let fine = simulate(&json.replace(
@@ -204,18 +246,14 @@ fn assert_refines(json: &str, max_step: &str, half: &str, bound: f64) {
         &format!(r#""max_step_ps": {half}"#),
     ));
     let (coarse, fine) = (trace(&coarse), trace(&fine));
-    assert!(fine.rows() > coarse.rows());
-    let times =
-        |trace: &Trace| -> Vec<f64> { trace.time().iter().map(|t| t.as_ps() as f64).collect() };
-    let (coarse_t, fine_t) = (times(coarse), times(fine));
-    let mut grid: Vec<f64> = coarse_t.iter().chain(&fine_t).copied().collect();
-    grid.sort_by(f64::total_cmp);
-    grid.dedup();
+    // The grid sets the rows, so both runs write the same ones.
+    assert_eq!(coarse.time(), fine.time());
     for (index, reference) in coarse.columns().iter().enumerate() {
         let (left, right) = (coarse.column(index), fine.column(index));
-        let worst = grid
+        let worst = left
             .iter()
-            .map(|&t| (interpolate(&coarse_t, left, t) - interpolate(&fine_t, right, t)).abs())
+            .zip(right)
+            .map(|(a, b)| (a - b).abs())
             .fold(0.0, f64::max);
         assert!(
             worst <= bound * span(left) + floor(reference),
@@ -244,8 +282,8 @@ fn halving_max_step_moves_each_example_by_under_1e_4_of_span() {
 fn stiff_button(max_step: u64) -> String {
     button(220.0, "null")
         .replace(
-            r#""stop_ps": 20000000000, "max_step_ps": 10000000"#,
-            &format!(r#""stop_ps": 4000000000, "max_step_ps": {max_step}"#),
+            r#""stop_ps": 20000000000, "max_step_ps": 10000000, "grid_ps": 10000000"#,
+            &format!(r#""stop_ps": 4000000000, "max_step_ps": {max_step}, "grid_ps": {max_step}"#),
         )
         .replace(r#""t_ps": 12000000000"#, r#""t_ps": 3000000000"#)
         .replace(
@@ -265,8 +303,8 @@ fn stiff_button(max_step: u64) -> String {
 
 #[test]
 fn a_stiff_mode_dies_out_after_each_edge_instead_of_ringing() {
-    let coarse = simulate(&stiff_button(1_000_000));
-    let fine = simulate(&stiff_button(500_000));
+    let coarse = simulate_steps(&stiff_button(1_000_000));
+    let fine = simulate_steps(&stiff_button(500_000));
     let (coarse, fine) = (trace(&coarse), trace(&fine));
     let vbtn = column(coarse, "#net.vbtn");
     let fine_vbtn = column(fine, "#net.vbtn");
@@ -350,7 +388,7 @@ fn cluster_switches() -> String {
         r#"{{
       "version": 0,
       "seed": 1,
-      "analysis": {{ "transient": {{ "stop_ps": 52000000, "max_step_ps": 1000000 }} }},
+      "analysis": {{ "transient": {{ "stop_ps": 52000000, "max_step_ps": 1000000, "grid_ps": 1000000 }} }},
       "ground": "gnd",
       "nets": ["gnd", "vcc", "vout"],
       "parts": [
@@ -382,7 +420,11 @@ fn cluster_switches() -> String {
 #[test]
 fn a_cluster_of_edges_inside_one_nanosecond_settles_without_ringing() {
     let last = 200_000 + 50 * 11;
-    settles_toward_its_later_value(trace(&simulate(&cluster_switches())), "#net.vout", last);
+    settles_toward_its_later_value(
+        trace(&simulate_steps(&cluster_switches())),
+        "#net.vout",
+        last,
+    );
 }
 
 /// `examples/rc-switch` with 100 nF across the source and 3 uF beside `c1`.

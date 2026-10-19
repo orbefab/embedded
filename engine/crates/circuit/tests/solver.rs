@@ -35,7 +35,7 @@ fn source_and_resistor(volts: &str, ohms: &str) -> String {
 #[test]
 fn a_huge_voltage_across_one_ohm_is_nonfinite_at_the_resistor() {
     let results = simulate(source_and_resistor("1e200", "1.0").as_bytes());
-    assert!(results.observations().op.is_none());
+    assert!(results.observations().op().is_none());
     assert_eq!(
         results.diagnostics().len(),
         1,
@@ -52,7 +52,7 @@ fn a_huge_voltage_across_one_ohm_is_nonfinite_at_the_resistor() {
 #[test]
 fn a_huge_voltage_across_a_tiny_resistor_is_nonfinite_in_the_solution() {
     let results = simulate(source_and_resistor("1e200", "1e-300").as_bytes());
-    assert!(results.observations().op.is_none());
+    assert!(results.observations().op().is_none());
     assert_eq!(
         results.diagnostics().len(),
         1,
@@ -86,7 +86,7 @@ fn chain(signal_nets: usize) -> String {
 #[test]
 fn a_chain_one_past_the_dense_limit_is_too_large() {
     let results = simulate(chain(4097).as_bytes());
-    assert!(results.observations().op.is_none());
+    assert!(results.observations().op().is_none());
     assert_eq!(
         results.diagnostics().len(),
         1,

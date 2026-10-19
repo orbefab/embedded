@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 use sim_cli::Completed;
+use sim_core::logic::{Level, Logic};
 use sim_core::name::Ref;
 use sim_core::netlist::{self, Analysis, Model, bounce};
 use sim_core::timestamp::Timestamp;
@@ -124,8 +125,7 @@ fn check_op(label: &str, reference: &serde_json::Value, done: &Completed) {
     let op = done
         .results
         .observations()
-        .op
-        .as_ref()
+        .op()
         .unwrap_or_else(|| panic!("{label}: no operating point"));
     let wanted = reference.as_object().unwrap();
     assert!(!wanted.is_empty(), "{label}");
@@ -140,9 +140,9 @@ fn check_op(label: &str, reference: &serde_json::Value, done: &Completed) {
     }
 }
 
-/// The script's bounce expansion must equal the engine's, its edges and every source jump must
-/// be rows of the trace, its latch edges must pair with the engine's, and each waveform must be
-/// within 1e-3 of its span away from every edge and jump.
+/// The script's bounce expansion must equal the engine's, its latch edges must pair with the
+/// engine's, and each waveform must be within 1e-3 of its span at every engine row away from
+/// every edge and jump.
 fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &Completed) {
     assert!(
         done.results.diagnostics().is_empty(),
@@ -155,7 +155,7 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
         "{label}"
     );
     let switches = &reference["switches"];
-    let observed = serde_json::to_value(&done.results.observations().switches).unwrap();
+    let observed = serde_json::to_value(done.results.observations().switches()).unwrap();
     assert_eq!(&observed, switches, "{label}: engine edges vs the script's");
     assert_eq!(
         &expanded(input),
@@ -178,15 +178,6 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
         .collect();
     edges.sort_unstable();
     edges.dedup();
-    let stop = *rows.last().unwrap();
-    for &edge in &edges {
-        for at in [edge, ramp_end(edge, stop)] {
-            assert!(
-                rows.binary_search(&at).is_ok(),
-                "{label}: no row at {at} ps"
-            );
-        }
-    }
 
     let engine_t: Vec<f64> = rows.iter().map(|&t| t as f64).collect();
     let reference_t: Vec<f64> = reference["t_s"]
@@ -197,7 +188,7 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
         .collect();
     let mut windows = ramps(&edges);
     windows.extend(check_logic(label, reference, done));
-    let grid = grid(&engine_t, &reference_t, &windows);
+    let grid = grid(&engine_t, &windows);
     let values = reference["values"].as_object().unwrap();
     let mut compared = SpanCheck {
         failed: false,
@@ -263,11 +254,11 @@ fn check_logic(label: &str, reference: &serde_json::Value, done: &Completed) -> 
     let grid_ps = reference["grid_ps"]
         .as_u64()
         .unwrap_or_else(|| panic!("{label}: logic needs grid_ps"));
-    let observed = serde_json::to_value(&done.results.observations().logic).unwrap();
+    let observed = done.results.trace().unwrap().logic().unwrap();
     let mut windows = Vec::new();
     for (key, list) in logic.as_object().unwrap() {
         let oracle = logic_edges(list);
-        let engine = logic_edges(&observed[key]["edges"]);
+        let engine = engine_edges(observed, key);
         let levels = |edges: &[(u64, String)]| -> Vec<String> {
             edges.iter().map(|(_, level)| level.clone()).collect()
         };
@@ -289,6 +280,27 @@ fn check_logic(label: &str, reference: &serde_json::Value, done: &Completed) -> 
         }
     }
     windows
+}
+
+/// `(t_ps, level)` of every change of `key` the engine recorded.
+fn engine_edges(logic: &Logic, key: &str) -> Vec<(u64, String)> {
+    let signal = logic
+        .signals()
+        .iter()
+        .position(|signal| signal.to_string() == key)
+        .unwrap_or_else(|| panic!("the engine has no {key}"));
+    logic
+        .changes()
+        .iter()
+        .filter(|change| change.signal == signal)
+        .map(|change| {
+            let level = match change.level {
+                Level::Low => "low",
+                Level::High => "high",
+            };
+            (change.at.as_ps(), level.to_string())
+        })
+        .collect()
 }
 
 fn logic_edges(list: &serde_json::Value) -> Vec<(u64, String)> {
@@ -417,14 +429,9 @@ fn jumps(input: &[u8]) -> Vec<u64> {
     netlist
         .parts()
         .filter_map(|(_, part)| part.model.waveform())
-        .flat_map(|waveform| waveform.jumps(transient.stop, usize::MAX))
+        .flat_map(|waveform| waveform.jumps_before(transient.stop))
         .map(|at| at.as_ps())
         .collect()
-}
-
-/// The required row after an edge. It holds the new contact when it is after the edge.
-fn ramp_end(edge: u64, stop: u64) -> u64 {
-    edge.saturating_add(EDGE_RAMP_PS).min(stop)
 }
 
 /// The open interval `(edge, edge + 1 ns)`. The deck is still ramping there when the end
@@ -436,17 +443,9 @@ fn ramps(edges: &[u64]) -> Vec<(f64, f64)> {
         .collect()
 }
 
-/// Both time grids, within the engine's run, without the inside of each window.
-fn grid(engine: &[f64], reference: &[f64], windows: &[(f64, f64)]) -> Vec<f64> {
-    let end = *engine.last().unwrap();
-    let mut grid: Vec<f64> = engine
-        .iter()
-        .chain(reference)
-        .copied()
-        .filter(|&t| t <= end)
-        .collect();
-    grid.sort_by(f64::total_cmp);
-    grid.dedup();
+/// The engine's rows, without the inside of each window.
+fn grid(engine: &[f64], windows: &[(f64, f64)]) -> Vec<f64> {
+    let mut grid = engine.to_vec();
     grid.retain(|&t| !windows.iter().any(|&(from, to)| t > from && t < to));
     grid
 }
@@ -466,14 +465,13 @@ fn interpolate(t: &[f64], values: &[f64], at: f64) -> f64 {
 
 #[test]
 fn the_grid_skips_the_inside_of_each_window_and_keeps_its_ends() {
-    let engine = [0.0, 1000.0, 2000.0, 3000.0];
-    let reference = [500.0, 1500.0, 2999.5, 4000.0];
+    let engine = [0.0, 1000.0, 1500.0, 2000.0, 3000.0];
     assert_eq!(
-        grid(&engine, &reference, &ramps(&[1000])),
-        [0.0, 500.0, 1000.0, 2000.0, 2999.5, 3000.0]
+        grid(&engine, &ramps(&[1000])),
+        [0.0, 1000.0, 2000.0, 3000.0]
     );
     assert_eq!(
-        grid(&engine, &reference, &[(400.0, 1500.0), (2000.0, 3000.0)]),
+        grid(&engine, &[(400.0, 1500.0), (2000.0, 3000.0)]),
         [0.0, 1500.0, 2000.0, 3000.0]
     );
 }
@@ -482,29 +480,17 @@ fn the_grid_skips_the_inside_of_each_window_and_keeps_its_ends() {
 fn the_grid_drops_stop_when_the_ramp_runs_past_it() {
     // 9900 + 1 ns is 10900, past the stop. The open interval includes the stop, which the
     // deck has not finished ramping.
-    let grid = grid(
-        &[0.0, 9900.0, 10_000.0],
-        &[9950.0, 10_000.0, 11_000.0],
-        &ramps(&[9900]),
-    );
+    let grid = grid(&[0.0, 9900.0, 10_000.0], &ramps(&[9900]));
     assert_eq!(grid, [0.0, 9900.0]);
 }
 
 #[test]
 fn the_grid_drops_a_stop_500_ps_after_a_jump() {
     // A 0 to 1 step at 9500 ps with stop 10000. The deck ramps until 10500 ps.
-    let open = grid(
-        &[0.0, 9_500.0, 10_000.0],
-        &[9_800.0, 10_000.0, 10_500.0],
-        &ramps(&[9_500]),
-    );
+    let open = grid(&[0.0, 9_500.0, 10_000.0], &ramps(&[9_500]));
     assert_eq!(open, [0.0, 9_500.0]);
     // A ramp that finishes on the stop keeps the stop. The interval is open at that end.
-    let finished = grid(
-        &[0.0, 9_000.0, 10_000.0],
-        &[9_500.0, 10_000.0],
-        &ramps(&[9_000]),
-    );
+    let finished = grid(&[0.0, 9_000.0, 10_000.0], &ramps(&[9_000]));
     assert_eq!(finished, [0.0, 9_000.0, 10_000.0]);
 }
 
@@ -513,7 +499,7 @@ fn a_held_capacitor_drops_only_the_t_0_sample_of_its_current_and_power() {
     let input = br#"{
       "version": 0,
       "seed": 0,
-      "analysis": { "transient": { "stop_ps": 10000, "max_step_ps": 1000 } },
+      "analysis": { "transient": { "stop_ps": 10000, "max_step_ps": 1000, "grid_ps": 1000 } },
       "ground": "gnd",
       "nets": ["gnd", "vout"],
       "parts": [
@@ -552,7 +538,7 @@ fn a_held_capacitor_drops_only_the_t_0_sample_of_its_current_and_power() {
     let reference_t = [0.0, 5e4, 1e9, 5e9];
     let engine = engine_t.map(current);
     let ngspice = [0.0, current(5e4), current(1e9), current(5e9)];
-    let grid = grid(&engine_t, &reference_t, &[]);
+    let grid = grid(&engine_t, &[]);
     let mut compared = SpanCheck {
         failed: false,
         report: Vec::new(),

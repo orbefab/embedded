@@ -4,7 +4,8 @@
   "analysis": {
     "transient": {
       "stop_ps": 4000000000000,
-      "max_step_ps": 10000000000
+      "max_step_ps": 10000000000,
+      "grid_ps": 10000000000
     }
   },
   "ground": "gnd",
@@ -95,7 +96,7 @@
           "datasheet": {
             "doc": "TI NE555, SLFS022K, March 2026",
             "at": "Figure 6-5, Circuit for Astable Operation, CONT decoupling 0.01 uF",
-            "typical": false
+            "basis": "nominal"
           }
         }
       },
@@ -121,7 +122,7 @@
           "datasheet": {
             "doc": "TI LM555, SNAS548D, January 2015",
             "at": "Schematic Diagram, R3, R4, R5 = 5k (pin-compatible NE555 replacement per Features)",
-            "typical": true
+            "basis": "nominal"
           }
         }
       },
@@ -132,7 +133,7 @@
           "datasheet": {
             "doc": "TI NE555, SLFS022K, March 2026",
             "at": "5.5 Electrical Characteristics, RESET voltage level, typ",
-            "typical": true
+            "basis": "typical"
           }
         }
       },
@@ -144,7 +145,7 @@
             "datasheet": {
               "doc": "TI NE555, SLFS022K, March 2026",
               "at": "5.5 Electrical Characteristics, DISCH switch on-state voltage 0.15 V typ at VCC = 5 V, IO = 8 mA; 0.15 V / 8 mA",
-              "typical": true
+              "basis": "typical"
             }
           }
         },
@@ -155,7 +156,7 @@
             "datasheet": {
               "doc": "TI NE555, SLFS022K, March 2026",
               "at": "5.5 Electrical Characteristics, DISCH switch off-state current 20 nA typ; 5 V / 20 nA at VCC = 5 V",
-              "typical": true
+              "basis": "typical"
             }
           }
         }
@@ -167,7 +168,7 @@
           "datasheet": {
             "doc": "TI NE555, SLFS022K, March 2026",
             "at": "5.5 Electrical Characteristics, supply current 3 mA typ, output low, no load, VCC = 5 V; 5 V / (3 mA - 5 V / 15 kohm ladder)",
-            "typical": true
+            "basis": "typical"
           }
         }
       },
@@ -179,7 +180,7 @@
             "datasheet": {
               "doc": "TI NE555, SLFS022K, March 2026",
               "at": "5.5 Electrical Characteristics, high-level output voltage at VCC = 15 V: 13.3 V typ at IOH = -100 mA, 12.5 V typ at -200 mA; line through both, drop at 0 A",
-              "typical": true
+              "basis": "typical"
             }
           }
         },
@@ -190,7 +191,7 @@
             "datasheet": {
               "doc": "TI NE555, SLFS022K, March 2026",
               "at": "5.5 Electrical Characteristics, high-level output voltage at VCC = 15 V: 13.3 V typ at IOH = -100 mA, 12.5 V typ at -200 mA; slope of that line",
-              "typical": true
+              "basis": "typical"
             }
           }
         },
@@ -201,7 +202,7 @@
             "datasheet": {
               "doc": "TI NE555, SLFS022K, March 2026",
               "at": "5.5 Electrical Characteristics, low-level output voltage at VCC = 5 V: 0.1 V typ at IOL = 5 mA, 0.15 V typ at 8 mA; line through both, voltage at 0 A",
-              "typical": true
+              "basis": "typical"
             }
           }
         },
@@ -212,7 +213,7 @@
             "datasheet": {
               "doc": "TI NE555, SLFS022K, March 2026",
               "at": "5.5 Electrical Characteristics, low-level output voltage at VCC = 5 V: 0.1 V typ at IOL = 5 mA, 0.15 V typ at 8 mA; slope of that line",
-              "typical": true
+              "basis": "typical"
             }
           }
         }
@@ -252,7 +253,7 @@
           "datasheet": {
             "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
             "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
-            "typical": true
+            "basis": "typical"
           }
         }
       },
@@ -263,7 +264,7 @@
           "datasheet": {
             "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
             "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
-            "typical": true
+            "basis": "typical"
           }
         }
       },
@@ -274,7 +275,7 @@
           "datasheet": {
             "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
             "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
-            "typical": true
+            "basis": "typical"
           }
         }
       },
@@ -286,7 +287,7 @@
             "datasheet": {
               "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
               "at": "Absolute Maximum Ratings at Ta = 25 C, DC forward current",
-              "typical": false
+              "basis": "absolute_max"
             }
           }
         },
@@ -297,7 +298,7 @@
             "datasheet": {
               "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
               "at": "Absolute Maximum Ratings at Ta = 25 C, power dissipation",
-              "typical": false
+              "basis": "absolute_max"
             }
           }
         }

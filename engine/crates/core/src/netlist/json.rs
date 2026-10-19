@@ -7,9 +7,9 @@ use serde::{Deserialize, Deserializer};
 mod waveform;
 
 use super::{
-    Analysis, Bounce, Capacitor, Chip, Contact, CurrentSource, Discharge, Edge, IntValue, Junction,
-    Model, Ne555, NetId, Netlist, OutputStage, Part, Resistor, Schedule, Source, Switch, Transient,
-    Value, VoltageSource, bounce, junction_scale,
+    Analysis, Basis, Bounce, Capacitor, Chip, Contact, CurrentSource, Discharge, Edge, IntValue,
+    Junction, Model, Ne555, NetId, Netlist, OutputStage, Part, Resistor, Schedule, Source, Switch,
+    Transient, Value, VoltageSource, bounce, junction_scale,
 };
 use crate::diagnostic::{AnalysisRule, Diagnostic, ScheduleRule, ValueRule};
 use crate::finite::Finite;
@@ -49,6 +49,7 @@ struct WireOp {}
 struct WireTransient {
     stop_ps: u64,
     max_step_ps: u64,
+    grid_ps: u64,
 }
 
 #[derive(Deserialize)]
@@ -224,17 +225,19 @@ enum WireSource {
     Datasheet {
         doc: String,
         at: String,
-        typical: bool,
+        basis: Basis,
     },
 }
 
+/// A later version adds its own wire types here, and a lift into the domain types. Nothing
+/// past this function sees a version.
 pub(super) fn parse(json: &[u8]) -> Result<Netlist, Vec<Diagnostic>> {
     if let Some(found) = probe_version(json)
-        && found != super::FORMAT_VERSION
+        && !super::VERSIONS.contains(&found)
     {
         return Err(vec![Diagnostic::NetlistVersion {
             found,
-            supported: super::FORMAT_VERSION,
+            supported: super::VERSIONS,
         }]);
     }
     let mut de = serde_json::Deserializer::from_slice(json);
@@ -248,7 +251,7 @@ pub(super) fn parse(json: &[u8]) -> Result<Netlist, Vec<Diagnostic>> {
     resolve(wire)
 }
 
-fn probe_version(json: &[u8]) -> Option<u64> {
+pub(super) fn probe_version(json: &[u8]) -> Option<u64> {
     let mut de = serde_json::Deserializer::from_slice(json);
     serde_path_to_error::deserialize::<_, VersionProbe>(&mut de)
         .ok()
@@ -297,9 +300,10 @@ fn resolve(wire: WireNetlist) -> Result<Netlist, Vec<Diagnostic>> {
     if !out.is_empty() {
         return Err(out);
     }
-    debug_assert_eq!(wire.version, super::FORMAT_VERSION);
+    debug_assert!(super::VERSIONS.contains(&wire.version));
     parts.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(Netlist {
+        version: wire.version,
         seed: wire.seed,
         analysis: analysis.expect("an analysis without diagnostics resolved"),
         nets,
@@ -330,6 +334,12 @@ fn resolve_analysis(wire: &WireAnalysis, out: &mut Vec<Diagnostic>) -> Option<An
             AnalysisRule::StepOverStop,
         ));
     }
+    if transient.grid_ps < Transient::MIN_GRID_PS {
+        broken.push(("grid_ps", transient.grid_ps, AnalysisRule::GridUnder1ns));
+    }
+    if transient.grid_ps > transient.stop_ps {
+        broken.push(("grid_ps", transient.grid_ps, AnalysisRule::GridOverStop));
+    }
     let ok = broken.is_empty();
     out.extend(
         broken
@@ -339,6 +349,7 @@ fn resolve_analysis(wire: &WireAnalysis, out: &mut Vec<Diagnostic>) -> Option<An
     ok.then_some(Analysis::Transient(Transient {
         stop: Time::from_ps(transient.stop_ps),
         max_step: transient.max_step_ps,
+        grid: transient.grid_ps,
     }))
 }
 
@@ -930,6 +941,6 @@ fn source(wire: WireSource) -> Source {
     match wire {
         WireSource::User => Source::User,
         WireSource::ClosedForm { note } => Source::ClosedForm { note },
-        WireSource::Datasheet { doc, at, typical } => Source::Datasheet { doc, at, typical },
+        WireSource::Datasheet { doc, at, basis } => Source::Datasheet { doc, at, basis },
     }
 }

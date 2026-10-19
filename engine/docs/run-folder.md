@@ -27,16 +27,18 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
   "input": {
     "file": "netlist.json",
     "sha256": "<lowercase hex sha256 of the input bytes>",
-    "bytes": 902
+    "bytes": 904
   },
   "seed": 0,
   "created_at": "2026-10-17T06:38:31Z"
 }
 ```
 
-`engine_version` is the workspace package version. The current value is `0.1.0`.
+`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.1.0`. [versions.md](versions.md) says which changes move them.
 
-`input.file` is the name inside the folder. `input.sha256` and `input.bytes` describe the input bytes. For `examples/divider/netlist.json` the length is 902.
+`netlist_format` is the input's `version`, when it reads as an unsigned integer. That holds when the engine rejected the input, so `version: 1` records 1. It is `null` when no such integer could be read.
+
+`input.file` is the name inside the folder. `input.sha256` and `input.bytes` describe the input bytes. For `examples/divider/netlist.json` the length is 904.
 
 `seed` is the netlist seed. When parsing fails, `seed` is `null`.
 
@@ -79,7 +81,7 @@ Numbers are serde_json's shortest round trip of an f64. `-0.0` is written as `0.
 
 The solve stamps 1e-12 S from every node to ground. That term puts `#net.vout` about 2e-9 V under 10/3 V. The test bound is 1e-8 relative. The three part powers sum to 0 within 1e-9 W. The difference is the power in that conductance.
 
-A transient adds `switches` after `op`. `op` is the operating point at t = 0, the same object an `op` run writes. `switches` maps each switch ref to every contact edge before `stop_ps`, nominal and bounce, in time order. A switch with no edges has an empty list. `examples/rc-switch` writes:
+A transient writes `end_ps`, then `op`, then `switches`. `end_ps` is the last time the run solved, in picoseconds. It equals `stop_ps` exactly when the run reported no error. `op` is the operating point at t = 0, the same object an `op` run writes. `switches` maps each switch ref to every contact edge before `end_ps`, nominal and bounce, in time order. A switch with no edges has an empty list. `examples/rc-switch` writes:
 
 ```json
 "switches": {
@@ -90,51 +92,75 @@ A transient adds `switches` after `op`. `op` is the operating point at t = 0, th
 }
 ```
 
-A netlist with a chip adds `logic` after `switches`. It maps each logic ref to its level at t = 0 and every change after it, in time order. Every chip signal is listed, inputs included, so an agent can check when each comparator flipped. An input's level is what its comparator reads, and OUT's is the level the latch drives. `examples/ne555-led` writes, abridged:
+A netlist with a chip adds `logic` after `switches`. It maps each logic ref to a summary of that signal up to `end_ps`. Every chip signal is listed, inputs included, so an agent can check whether and when each comparator flipped. An input's level is what its comparator reads, and OUT's is the level the latch drives.
+
+| Key | Meaning |
+| --- | --- |
+| `initial` | The level at t = 0. |
+| `final` | The level after the last change. |
+| `count` | How many changes the signal made after t = 0. |
+| `first_ps` | The time of the first change, or `null` when `count` is 0. |
+| `last_ps` | The time of the last change, or `null` when `count` is 0. |
+
+Levels are `low` and `high`, so the first change is to the level opposite `initial`, and the last is to `final`. Every change is in `traces/logic.vcd`, which the summary is computed from. `examples/ne555-led` writes, abridged:
 
 ```json
 "logic": {
   "#u1.logic.out": {
     "initial": "high",
-    "edges": [
-      { "t_ps": 626237476311, "level": "low" },
-      { "t_ps": 953460598901, "level": "high" }
-    ]
+    "final": "high",
+    "count": 10,
+    "first_ps": 626238067791,
+    "last_ps": 3842818967770
   },
-  "#u1.logic.reset": { "initial": "high", "edges": [] },
-  "#u1.logic.thres": {
-    "initial": "low",
-    "edges": [
-      { "t_ps": 626237476311, "level": "high" },
-      { "t_ps": 626237476312, "level": "low" }
-    ]
-  },
-  "#u1.logic.trig": {
-    "initial": "low",
-    "edges": [{ "t_ps": 231122065116, "level": "high" }]
+  "#u1.logic.reset": {
+    "initial": "high",
+    "final": "high",
+    "count": 0,
+    "first_ps": null,
+    "last_ps": null
   }
 }
 ```
 
-The engine writes no period, duty or frequency. Which edges count, and whether the first cycle does, are the scenario's choice. The mean period over the falling edges of OUT is:
+The engine writes no period, duty or frequency. Which edges count, and whether the first cycle does, are the scenario's choice. The mean period over the falling edges of OUT, read from the VCD, is:
 
 ```python
-falls = [e["t_ps"] for e in obs["logic"]["#u1.logic.out"]["edges"] if e["level"] == "low"]
+def edges(vcd, ref):
+    """[(t_ps, "low" | "high")] after t = 0 for one logic ref."""
+    ids, out, at, scope = {}, [], 0, None
+    for line in open(vcd).read().split("\n"):
+        w = line.split()
+        if w[:2] == ["$scope", "module"]: scope = w[2]
+        elif w[:1] == ["$var"]: ids[w[3]] = f"#{scope}.logic.{w[4]}"
+        elif line.startswith("#"): at = int(line[1:])
+        elif line[:1] in ("0", "1") and ids.get(line[1:]) == ref and at > 0:
+            out.append((at, "high" if line[0] == "1" else "low"))
+    return out
+
+falls = [t for t, level in edges("run/traces/logic.vcd", "#u1.logic.out") if level == "low"]
 period_s = (falls[-1] - falls[0]) / (len(falls) - 1) * 1e-12
 ```
 
-A rejected netlist, and a solve that reports an error, write `{}`.
+`observations.json` holds what the run reached. A rejected netlist, an operating point that failed, and a transient that failed at t = 0 write `{}`. A transient that fails after t = 0 writes `end_ps`, `op`, `switches` and `logic` up to the time it reached, the same keys a run that reaches `stop_ps` writes.
 
 ## traces
 
-A transient writes one row per accepted time step, plus row 0 at t = 0. The rows are not evenly spaced. Read the trace as piecewise linear between rows. Each row is within the error control's tolerance, which is relative to each capacitor's voltage, so a swing much smaller than its level carries the level's error ([reference.md](reference.md#the-comparison)). Between two rows `h` apart, a linear read can be off by about `h^2/8` times the waveform's second derivative. A smaller `max_step_ps` makes the trace denser. At a contact edge before `stop_ps` there is a row at the edge, which holds the old contact, and a row at the earlier of 1 ns later and `stop_ps`, which holds the new contact. An edge at `stop_ps` has one row, which holds the old contact, and there is no later row. A source jump follows the same rule, and its first row holds the old level. An edge on another switch inside that nanosecond does not remove either row. A fast waveform can add rows between them, where the error control shortens the step. At a chip event there is a row at the located picosecond, which holds the chips' old states. The new drive shows from the next row on.
+A transient writes a row at t = 0, at every multiple of `grid_ps` before `stop_ps`, and at `stop_ps`. That is `ceil(stop_ps / grid_ps) + 1` rows, fixed by the netlist before the run starts. The engine lands a step on every row time, so each row is a solved point, not an interpolation. Each row is within the error control's tolerance, which is relative to each capacitor's voltage, so a swing much smaller than its level carries the level's error ([reference.md](reference.md#the-comparison)).
+
+A row is a point sample. Between rows nothing is readable unless the scenario sets a finer grid, and a waveform that repeats with the grid can alias. A 0 to 3.3 V pulse at 1 MHz drives 100 ohm into 100 pF, a 10 ns time constant. On a 1 us grid every row falls on a rise and holds the level before it, so over 2 ms `#net.out0` reads at most 5.2e-13 V. On a 100 ns grid it reads 0 to 3.3 V. The rating diagnostics and `logic.vcd` are read at every accepted step, and `observations.switches` lists every edge at its picosecond. Those are the step-accurate views.
+
+To read a waveform between rows as piecewise linear, set `grid_ps` under a tenth of the fastest time constant you read there. A chord across `h` is off by about `h^2/8` times the waveform's second derivative. For an exponential at a tenth of its time constant that is 1.25e-3 of its swing, and the chord's largest miss is 1.19e-3.
+
+A row at the time of a contact edge, a source jump or a chip event holds the state before it. Later rows show the change. An edge, jump or event at `stop_ps` leaves the last row on the old state. Edges, jumps and chip events are landings for the steps, not rows.
 
 `index.json` for `examples/rc-switch`, with the columns abridged:
 
 ```json
 {
   "format": 0,
-  "rows": 4093,
+  "rows": 4051,
+  "grid_ps": 20000000,
   "stop_ps": 81000000000,
   "end_ps": 81000000000,
   "time": {
@@ -160,9 +186,11 @@ A transient writes one row per accepted time step, plus row 0 at t = 0. The rows
 }
 ```
 
-- `time.u64` holds `rows` unsigned 64-bit little-endian integers, picoseconds from t = 0, strictly increasing. Row 0 is t = 0.
+- `format` is 0. A change that bumps it also bumps `run_format`.
+- `grid_ps` and `stop_ps` are the netlist's.
+- `time.u64` holds `rows` unsigned 64-bit little-endian integers, picoseconds from t = 0, strictly increasing. Row `k` is at `k * grid_ps`, and the last is at `stop_ps`. After an error the last row is at `end_ps`, which need not be on the grid.
 - `analog.f64` holds `rows` IEEE 754 binary64 little-endian values per column, column after column. Column `j` occupies bytes `j * rows * 8` up to `(j + 1) * rows * 8`.
-- `columns` are the keys of `observations.op`, in the same order. A net or a `.v` is `V`, a `.i` is `A`, and a `.p` is `W`. Row 0 holds exactly the numbers in `op`.
+- `columns` are a subset of the keys of `observations.op`, in ref order. Read them from the index. Today every key of `op` is a column. A net or a `.v` is `V`, a `.i` is `A`, and a `.p` is `W`. Row 0 holds exactly the numbers in `op`.
 - Every value is finite. `-0.0` is written as `0.0`.
 - There is no header and no compression.
 - A chip adds no column. Its pins are nets, which have their columns, and its internal ladder node is not observed.
@@ -183,7 +211,7 @@ A netlist with a chip adds a `logic` key after `analog`:
 }
 ```
 
-`logic.vcd` holds the same levels as `observations.logic`, in Value Change Dump text:
+`logic.vcd` holds every change of every chip signal, in Value Change Dump text. `observations.logic` is its summary.
 
 ```text
 $timescale 1 ps $end
@@ -201,12 +229,12 @@ $dumpvars
 0#
 0$
 $end
-#231122065116
+#231122592994
 1$
-#626237476311
+#626238067791
 0!
 1#
-#626237476312
+#626238067792
 0#
 ```
 
@@ -214,11 +242,11 @@ $end
 - Identifiers are base 94 over the printable characters from `!`, by signal index in ref order, least significant first.
 - `#0` with `$dumpvars` holds the levels at t = 0. Then one `#<ps>` line per time with a change, its changes in signal order.
 - Times are integer picoseconds. There is no `$date` and no `$version`, so the file has no clock read and no float.
-- After an error the file keeps the edges up to the last row, like the rest of `traces/`.
+- After an error the file keeps the edges up to `end_ps`, like the rest of `traces/`.
 
-`end_ps` is the last row's time. It is less than `stop_ps` only when the run reported an error. The rows before the error stay, while `observations.json` is `{}`. A run that fails at t = 0 writes no `traces/`. For `trace.too_large`, `end_ps` is still that last kept row, and the diagnostic's `t_ps` is the step that did not fit.
+`end_ps` is the last row's time, and the same number as `observations.end_ps`. It is less than `stop_ps` only when the run reported an error. The grid rows before the error stay, and the last accepted step is the last row. A run that fails at t = 0 writes no `traces/`.
 
-A run stops with `trace.too_large` at `min(1000000, 67108864 / columns)` rows. 67108864 is 2^26 f64 values, 512 MiB. `columns` is the width of `analog.f64`. A run needs at least `stop_ps / max_step_ps` rows, plus about `log2(max_step_ps / 1000)` for each edge or source jump, and more where the error control holds the step under `max_step_ps`. After each one the step doubles from the 1 ns restart step while the error allows. `examples/rc-switch` takes 4050 plus 43. `examples/current-pulse` takes 800 plus 109, about 18 for each of its 6 jumps. Each located chip event is a row. One that changes a chip's drive also restarts, and adds about `log2(max_step_ps / 1000)` rows like a switch edge. `examples/ne555-led` takes 400 plus 277, about 28 for each of its 10 output edges. A chip that switches often fills the trace with event rows whatever `max_step_ps` is.
+A transient whose grid gives more than `min(1000000, 67108864 / columns)` rows is refused before it solves, with one `trace.too_large`. 67108864 is 2^26 f64 values, 512 MiB. `columns` is the width of `analog.f64`. The refused run writes `{}` to `observations.json` and no `traces/`. The row count depends only on `stop_ps` and `grid_ps`, so a run that is not refused never runs out of rows. Edges, jumps and chip events cost steps, not rows. Those steps can end the run at [`solver.step_limit`](diagnostics.md#solverstep_limit). `examples/rc-switch` writes 4051 rows, `examples/button-led` 2001, `examples/v-pulse-rc` 1401, `examples/current-pulse` 801 and `examples/ne555-led` 401.
 
 Python with numpy reads one column like this:
 
@@ -240,12 +268,12 @@ Two CLI runs of one file differ only in `created_at`. That includes every byte o
 
 ## Replacing a directory
 
-`sim run` creates `<dir>`. It replaces an empty directory. It replaces a previous run. A previous run is a non-empty directory whose `manifest.json` has exactly the fields in the example above. `run_format` is 0. `netlist_format` is 0. `input.file` is `netlist.json`. `input.sha256` is 64 lowercase hex characters. `created_at` is `YYYY-MM-DDTHH:MM:SSZ`. `seed` is present, as an integer or `null`.
+`sim run` creates `<dir>`. It replaces an empty directory. It replaces a previous run, from any version of the engine. A previous run is a non-empty directory whose `manifest.json` is an object with three keys of this shape. `run_format` is an unsigned integer, of any value. `input` is an object whose `file` is `netlist.json`. `created_at` is `YYYY-MM-DDTHH:MM:SSZ`. Every other key is ignored.
 
 It leaves a non-directory path alone and returns `io_error`. It leaves any other non-empty directory alone and returns `io_error`. A `manifest.json` that only has `{"app":"web"}` is not a previous run.
 
 A crash can leave `<dir>.partial.<digits>` or `<dir>.replacing.<digits>` next to the destination. When `<dir>` is missing, the write moves the newest `<dir>.replacing.<digits>` directory, or symlink to a directory, back to `<dir>` before it checks whether `<dir>` may be replaced. A write that leaves `<dir>` in place also leaves those siblings in place. A write that replaces `<dir>` removes each sibling. A directory is removed as a directory. A file or a symlink is removed as a file. Removal never follows a symlink, so the directory it points to keeps its contents. The rename of the new folder onto `<dir>` commits the run. A failure while deleting the backup after that rename does not fail the run.
 
-`run_format` stays 0 with `traces/`. Whether a directory is a previous run depends on its manifest alone, so a transient run replaces an operating point run and the other way round. A replaced run's `traces/` goes with it.
+Whether a directory is a previous run depends on its manifest alone, so a transient run replaces an operating point run and the other way round. A replaced run's `traces/` goes with it.
 
 `<dir>.partial.<digits>` and `<dir>.replacing.<digits>` belong to the engine. The engine may remove them. Concurrent `sim run` processes that share one `--out` are unsupported.

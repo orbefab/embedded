@@ -8,8 +8,13 @@ publish.workspace = true
 [dependencies]
 sim-core.workspace = true
 
+[features]
+# Tests only: `simulate_steps`, a row at every accepted step.
+step-rows = []
+
 [dev-dependencies]
 serde_json.workspace = true
+sim-circuit = { path = ".", features = ["step-rows"] }
 
 [lints]
 workspace = true

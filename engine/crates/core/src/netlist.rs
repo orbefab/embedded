@@ -15,8 +15,8 @@ use crate::time::Time;
 
 pub use waveform::{Pulse, Shape, Step, Waveform};
 
-/// The netlist `version` this engine reads.
-pub const FORMAT_VERSION: u64 = 0;
+/// The netlist `version`s this engine reads, ascending. See docs/versions.md.
+pub const VERSIONS: &[u64] = &[0];
 
 /// Parse and validate netlist.json bytes.
 ///
@@ -26,8 +26,15 @@ pub fn parse(json: &[u8]) -> Result<Netlist, Vec<Diagnostic>> {
     json::parse(json)
 }
 
+/// The document's `version`, when it is readable as an unsigned integer, whether or not
+/// the engine reads that version or the rest of the document parses.
+pub fn probe_version(json: &[u8]) -> Option<u64> {
+    json::probe_version(json)
+}
+
 #[derive(Debug)]
 pub struct Netlist {
+    version: u64,
     seed: u64,
     analysis: Analysis,
     nets: Vec<Name>,
@@ -35,6 +42,11 @@ pub struct Netlist {
 }
 
 impl Netlist {
+    /// The `version` the document resolved under.
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
     pub fn seed(&self) -> u64 {
         self.seed
     }
@@ -102,18 +114,39 @@ pub enum Analysis {
     Transient(Transient),
 }
 
-/// Parse enforces `stop >= max_step >= MIN_MAX_STEP_PS`.
+/// Parse enforces `stop >= max_step >= MIN_MAX_STEP_PS` and `stop >= grid >= MIN_GRID_PS`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Transient {
     pub stop: Time,
     /// Picoseconds. No step is longer.
     pub max_step: u64,
+    /// Picoseconds between trace rows. Every row is a step that lands there.
+    pub grid: u64,
 }
 
 impl Transient {
     /// The engine's first step after a contact edge or a source jump, which `max_step` may
     /// not undercut.
     pub const MIN_MAX_STEP_PS: u64 = 1_000;
+    /// The finest grid. A smaller minimum later keeps the netlist version.
+    pub const MIN_GRID_PS: u64 = 1_000;
+
+    /// Rows a run that reaches `stop` writes: t = 0, every multiple of `grid` before `stop`,
+    /// and `stop`.
+    pub fn rows(&self) -> u64 {
+        self.stop.as_ps().div_ceil(self.grid) + 1
+    }
+
+    /// Whether a run writes a row at `at`, which is at most `stop`.
+    pub fn is_row(&self, at: Time) -> bool {
+        at.as_ps().is_multiple_of(self.grid) || at == self.stop
+    }
+
+    /// The first row time after `now`, which is before `stop`.
+    pub fn next_row_after(&self, now: Time) -> Time {
+        let next = (now.as_ps() / self.grid + 1).saturating_mul(self.grid);
+        Time::from_ps(next.min(self.stop.as_ps()))
+    }
 }
 
 /// One package, modelled at its pins.
@@ -543,10 +576,25 @@ pub enum Source {
     /// Derived by a formula. `note` says which.
     ClosedForm { note: String },
     /// Read from a datasheet. `at` locates the cell, row, or figure.
-    /// `typical` marks a value taken from a typical-only curve.
     Datasheet {
         doc: String,
         at: String,
-        typical: bool,
+        basis: Basis,
     },
+}
+
+/// Which figure of a datasheet a value is. A new basis keeps the netlist version.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Basis {
+    /// A typical column, or a typical-only curve.
+    Typical,
+    /// A minimum column.
+    Min,
+    /// A maximum column, recommended operating conditions included.
+    Max,
+    /// A part's stated value, such as a schematic value or a marked resistance.
+    Nominal,
+    /// An absolute maximum rating.
+    AbsoluteMax,
 }

@@ -36,6 +36,11 @@ pub enum AnalysisRule {
     StepUnder1ns,
     /// `max_step_ps` is greater than `stop_ps`.
     StepOverStop,
+    /// `grid_ps` is below 1000.
+    #[serde(rename = "grid_under_1ns")]
+    GridUnder1ns,
+    /// `grid_ps` is greater than `stop_ps`.
+    GridOverStop,
 }
 
 /// Which rule a switch event broke.
@@ -75,8 +80,11 @@ pub enum Diagnostic {
         column: usize,
         detail: String,
     },
-    /// `version` is not one this engine reads.
-    NetlistVersion { found: u64, supported: u64 },
+    /// `version` is not one this engine reads. `supported` is every version it reads.
+    NetlistVersion {
+        found: u64,
+        supported: &'static [u64],
+    },
     /// A name breaks the grammar, or a part is named `net`.
     NetlistName {
         path: String,
@@ -140,17 +148,22 @@ pub enum Diagnostic {
         unknowns: usize,
         limit: usize,
     },
+    /// The run accepted `limit` steps and had not reached its stop.
+    SolverStepLimit { at: Time, limit: u64 },
     /// The chips kept changing state for `rounds` solves at one time. `chips` changed in the last.
     ChipUnsettled {
         at: Time,
         chips: Vec<Ref>,
         rounds: u32,
     },
-    /// A transient would store more than `limit` trace rows.
+    /// The grid gives more rows than the trace holds, found before the first solve, when
+    /// `at` is `None`. The test-only step-rows mode can also fill the trace and refuse the
+    /// next step. Then `at` is that step, and the rows already written stay.
     TraceTooLarge {
-        at: Time,
+        rows: u64,
         limit: usize,
         columns: usize,
+        at: Option<Time>,
     },
     /// Newton found no operating point.
     SolverConvergence {
@@ -217,6 +230,7 @@ impl Diagnostic {
             Diagnostic::SolverSingular { .. } => "solver.singular",
             Diagnostic::SolverNonFinite { .. } => "solver.nonfinite",
             Diagnostic::SolverTooLarge { .. } => "solver.too_large",
+            Diagnostic::SolverStepLimit { .. } => "solver.step_limit",
             Diagnostic::SolverConvergence { .. } => "solver.convergence",
             Diagnostic::ChipUnsettled { .. } => "chip.unsettled",
             Diagnostic::TraceTooLarge { .. } => "trace.too_large",
@@ -245,6 +259,7 @@ impl Diagnostic {
             | Diagnostic::SolverSingular { .. }
             | Diagnostic::SolverNonFinite { .. }
             | Diagnostic::SolverTooLarge { .. }
+            | Diagnostic::SolverStepLimit { .. }
             | Diagnostic::SolverConvergence { .. }
             | Diagnostic::ChipUnsettled { .. }
             | Diagnostic::TraceTooLarge { .. } => Severity::Error,
@@ -256,9 +271,10 @@ impl Diagnostic {
             Diagnostic::SolverSingular { at, .. }
             | Diagnostic::SolverNonFinite { at, .. }
             | Diagnostic::SolverTooLarge { at, .. }
+            | Diagnostic::SolverStepLimit { at, .. }
             | Diagnostic::SolverConvergence { at, .. }
-            | Diagnostic::ChipUnsettled { at, .. }
-            | Diagnostic::TraceTooLarge { at, .. } => Some(*at),
+            | Diagnostic::ChipUnsettled { at, .. } => Some(*at),
+            Diagnostic::TraceTooLarge { at, .. } => *at,
             Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
                 Some(excursion.first)
             }
@@ -297,7 +313,9 @@ impl Diagnostic {
             | Diagnostic::SolverNonFinite { unknown, .. }
             | Diagnostic::SolverConvergence { unknown, .. } => vec![unknown.clone()],
             Diagnostic::ChipUnsettled { chips, .. } => chips.clone(),
-            Diagnostic::SolverTooLarge { .. } | Diagnostic::TraceTooLarge { .. } => Vec::new(),
+            Diagnostic::SolverTooLarge { .. }
+            | Diagnostic::SolverStepLimit { .. }
+            | Diagnostic::TraceTooLarge { .. } => Vec::new(),
             Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
                 vec![excursion.quantity.clone()]
             }
@@ -315,7 +333,11 @@ impl Diagnostic {
                 format!("schema mismatch at `{path}` ({detail})")
             }
             Diagnostic::NetlistVersion { found, supported } => {
-                format!("netlist version {found} is not supported; this engine reads {supported}")
+                let supported: Vec<_> = supported.iter().map(u64::to_string).collect();
+                format!(
+                    "netlist version {found} is not supported; this engine reads {}",
+                    supported.join(", ")
+                )
             }
             Diagnostic::NetlistName {
                 path,
@@ -370,8 +392,12 @@ impl Diagnostic {
             Diagnostic::NetlistAnalysis { field, value, rule } => {
                 let must = match rule {
                     AnalysisRule::Positive => "it must be positive",
-                    AnalysisRule::StepUnder1ns => "it must be at least 1000",
-                    AnalysisRule::StepOverStop => "it must not exceed stop_ps",
+                    AnalysisRule::StepUnder1ns | AnalysisRule::GridUnder1ns => {
+                        "it must be at least 1000"
+                    }
+                    AnalysisRule::StepOverStop | AnalysisRule::GridOverStop => {
+                        "it must not exceed stop_ps"
+                    }
                 };
                 format!("analysis {field} is {value}; {must}")
             }
@@ -416,6 +442,9 @@ impl Diagnostic {
             Diagnostic::SolverTooLarge {
                 unknowns, limit, ..
             } => format!("{unknowns} unknowns exceeds the dense solver limit of {limit}"),
+            Diagnostic::SolverStepLimit { limit, .. } => format!(
+                "the run accepted {limit} steps, its limit; dense switch or source schedules cost steps, not rows"
+            ),
             Diagnostic::SolverConvergence {
                 at,
                 unknown,
@@ -458,8 +487,21 @@ impl Diagnostic {
                 "the chips kept changing state for {rounds} solves at {} ps",
                 at.as_ps()
             ),
-            Diagnostic::TraceTooLarge { limit, .. } => format!(
-                "the trace reached its limit of {limit} rows; rows come from stop_ps, the switch edges, the source jumps, the chip events and the error control, and max_step_ps only caps the step"
+            Diagnostic::TraceTooLarge {
+                rows,
+                limit,
+                columns,
+                at: None,
+            } => format!(
+                "the grid gives {rows} rows; the trace holds {limit} rows of {columns} columns; raise grid_ps or shorten stop_ps"
+            ),
+            Diagnostic::TraceTooLarge {
+                limit,
+                at: Some(at),
+                ..
+            } => format!(
+                "the trace holds {limit} rows; the step at {} ps did not fit",
+                at.as_ps()
             ),
             Diagnostic::RatingCurrent(excursion) => over_rating(excursion, "A"),
             Diagnostic::RatingPower(excursion) => over_rating(excursion, "W"),
@@ -527,6 +569,7 @@ impl Diagnostic {
             Diagnostic::SolverTooLarge {
                 unknowns, limit, ..
             } => serde_json::json!({ "limit": limit, "unknowns": unknowns }),
+            Diagnostic::SolverStepLimit { limit, .. } => serde_json::json!({ "limit": limit }),
             Diagnostic::SolverConvergence {
                 iterations,
                 gmin,
@@ -545,9 +588,12 @@ impl Diagnostic {
                 data
             }
             Diagnostic::ChipUnsettled { rounds, .. } => serde_json::json!({ "rounds": rounds }),
-            Diagnostic::TraceTooLarge { limit, columns, .. } => {
-                serde_json::json!({ "columns": columns, "limit": limit })
-            }
+            Diagnostic::TraceTooLarge {
+                rows,
+                limit,
+                columns,
+                ..
+            } => serde_json::json!({ "columns": columns, "limit": limit, "rows": rows }),
             Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
                 serde_json::json!({
                     "limit": excursion.limit,

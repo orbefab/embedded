@@ -22,7 +22,7 @@ fn samples() -> Vec<Diagnostic> {
         },
         Diagnostic::NetlistVersion {
             found: 1,
-            supported: 0,
+            supported: &[0],
         },
         Diagnostic::NetlistName {
             path: "parts[0].name".into(),
@@ -70,6 +70,10 @@ fn samples() -> Vec<Diagnostic> {
             unknowns: 4097,
             limit: 4096,
         },
+        Diagnostic::SolverStepLimit {
+            at: Time::ZERO,
+            limit: 100_000_000,
+        },
         Diagnostic::SolverConvergence {
             at: Time::ZERO,
             unknown: part("led1"),
@@ -105,9 +109,10 @@ fn samples() -> Vec<Diagnostic> {
             rule: AnalysisRule::StepUnder1ns,
         },
         Diagnostic::TraceTooLarge {
-            at: Time::from_ps(3_000),
+            rows: 5,
             limit: 4,
             columns: 2,
+            at: None,
         },
         Diagnostic::ChipUnsettled {
             at: Time::from_ps(3_000),
@@ -157,7 +162,7 @@ fn codes_are_unique_and_match_the_grammar() {
         assert!(is_code(code), "{code}");
         assert!(seen.insert(code), "duplicate code {code}");
     }
-    assert_eq!(seen.len(), 21);
+    assert_eq!(seen.len(), 22);
 }
 
 #[test]
@@ -180,6 +185,7 @@ fn severity_refs_and_time_follow_the_variant() {
             "solver.singular",
             "solver.nonfinite",
             "solver.too_large",
+            "solver.step_limit",
             "solver.convergence",
             "rating.current",
             "rating.power",
@@ -198,7 +204,7 @@ fn severity_refs_and_time_follow_the_variant() {
             assert_eq!(diagnostic.at(), Some(Time::ZERO));
         } else if code == "rating.power" {
             assert_eq!(diagnostic.at(), Some(Time::from_ps(5)));
-        } else if code == "trace.too_large" || code == "chip.unsettled" {
+        } else if code == "chip.unsettled" {
             assert_eq!(diagnostic.at(), Some(Time::from_ps(3_000)));
         } else {
             assert_eq!(diagnostic.at(), None);
@@ -241,6 +247,14 @@ fn severity_refs_and_time_follow_the_variant() {
         vec!["#r1".parse().unwrap()]
     );
     assert!(by_code(&found, "solver.too_large").refs().is_empty());
+    assert!(by_code(&found, "solver.step_limit").refs().is_empty());
+    let step_limit = serde_json::to_string(by_code(&found, "solver.step_limit")).unwrap();
+    assert!(
+        step_limit.contains(
+            r#""refs":[],"t_ps":0,"message":"the run accepted 100000000 steps, its limit; dense switch or source schedules cost steps, not rows","data":{"limit":100000000}"#
+        ),
+        "{step_limit}"
+    );
     let too_large = serde_json::to_string(by_code(&found, "solver.too_large")).unwrap();
     assert!(
         too_large.contains(r#""data":{"limit":4096,"unknowns":4097}"#),
@@ -283,7 +297,7 @@ fn severity_refs_and_time_follow_the_variant() {
     let rows = serde_json::to_string(by_code(&found, "trace.too_large")).unwrap();
     assert!(
         rows.contains(
-            r#""severity":"error","refs":[],"t_ps":3000,"message":"the trace reached its limit of 4 rows; rows come from stop_ps, the switch edges, the source jumps, the chip events and the error control, and max_step_ps only caps the step","data":{"columns":2,"limit":4}"#
+            r#""severity":"error","refs":[],"t_ps":null,"message":"the grid gives 5 rows; the trace holds 4 rows of 2 columns; raise grid_ps or shorten stop_ps","data":{"columns":2,"limit":4,"rows":5}"#
         ),
         "{rows}"
     );

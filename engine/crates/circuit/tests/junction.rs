@@ -22,7 +22,7 @@ fn example(name: &str) -> Vec<u8> {
 }
 
 fn value(results: &Results, reference: &str) -> f64 {
-    let op = results.observations().op.as_ref().expect("operating point");
+    let op = results.observations().op().expect("operating point");
     op.values[&reference.parse::<Ref>().unwrap()].get()
 }
 

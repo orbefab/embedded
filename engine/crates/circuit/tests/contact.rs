@@ -7,7 +7,7 @@ fn simulate(json: &str) -> Results {
 }
 
 fn value(results: &Results, reference: &str) -> f64 {
-    let op = results.observations().op.as_ref().unwrap();
+    let op = results.observations().op().unwrap();
     op.values[&reference.parse::<Ref>().unwrap()].get()
 }
 

@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use sim_core::name::Ref;
-use sim_core::netlist::{self, Analysis, Model, Source};
+use sim_core::netlist::{self, Analysis, Basis, Model, Source};
 
 fn fixture(name: &str) -> Vec<u8> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -75,6 +75,15 @@ fn future_version_wins_over_a_schema_error() {
     assert_eq!(err.len(), 1);
     assert_eq!(err[0].code(), "netlist.version");
     assert!(err[0].refs().is_empty());
+    let wire = serde_json::to_value(&err[0]).unwrap();
+    assert_eq!(
+        wire["data"],
+        serde_json::json!({"found": 2, "supported": [0]})
+    );
+    assert_eq!(
+        wire["message"],
+        "netlist version 2 is not supported; this engine reads 0"
+    );
 }
 
 #[test]
@@ -120,14 +129,29 @@ fn divider_is_canonical_and_keeps_its_source() {
         .unwrap();
     match &r1.model {
         Model::Resistor(r) => match &r.resistance.source {
-            Source::Datasheet { doc, at, typical } => {
+            Source::Datasheet { doc, at, basis } => {
                 assert_eq!(doc, "resistor-nominal");
                 assert_eq!(at, "Table 1, nominal");
-                assert!(!typical);
+                assert_eq!(*basis, Basis::Nominal);
             }
             other => panic!("r1 source {other:?}"),
         },
         other => panic!("r1 model {other:?}"),
+    }
+}
+
+#[test]
+fn a_basis_outside_the_list_and_the_old_typical_flag_are_syntax() {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/divider/netlist.json");
+    let divider = fs::read_to_string(path).unwrap();
+    for (from, to) in [
+        (r#""basis": "nominal""#, r#""basis": "typ""#),
+        (r#""basis": "nominal""#, r#""typical": false"#),
+    ] {
+        let err = netlist::parse(divider.replace(from, to).as_bytes()).unwrap_err();
+        assert_eq!(err.len(), 1, "{to}");
+        assert_eq!(err[0].code(), "netlist.syntax", "{to}");
     }
 }
 

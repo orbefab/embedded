@@ -29,7 +29,7 @@
           "datasheet": {
             "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
             "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
-            "typical": true
+            "basis": "typical"
           }
         }
       },
@@ -40,7 +40,7 @@
           "datasheet": {
             "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
             "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
-            "typical": true
+            "basis": "typical"
           }
         }
       },
@@ -51,7 +51,7 @@
           "datasheet": {
             "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
             "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
-            "typical": true
+            "basis": "typical"
           }
         }
       },
@@ -63,7 +63,7 @@
             "datasheet": {
               "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
               "at": "Absolute Maximum Ratings at Ta = 25 C, DC forward current",
-              "typical": false
+              "basis": "absolute_max"
             }
           }
         },
@@ -74,7 +74,7 @@
             "datasheet": {
               "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
               "at": "Absolute Maximum Ratings at Ta = 25 C, power dissipation",
-              "typical": false
+              "basis": "absolute_max"
             }
           }
         }

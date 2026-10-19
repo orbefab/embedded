@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BinaryHeap};
+use std::collections::{BTreeMap, BinaryHeap, VecDeque};
 
 use sim_core::diagnostic::{Diagnostic, Solve};
 use sim_core::finite::Finite;
@@ -23,91 +23,123 @@ use crate::watch::{self, Levels};
 
 pub(crate) const STEP_BUDGET: u32 = 50;
 
+/// Accepted steps one transient run may take. The operating point at t = 0 is not one of
+/// them. A dense switch or source schedule spends them on landings, and reaching the limit
+/// before `stop` ends the run with `solver.step_limit`.
+///
+/// 100000000 sits far above the steps a run whose rows fit needs on ordinary circuits.
+/// A release build reaches it in about 40 s on a resistive pulse and about 70 s on a 1 MHz
+/// pin into a 10 ns load. At this step policy that pin costs about 700000 steps per
+/// simulated ms, so the limit allows about 140 ms of it. The step policy, not this limit,
+/// bounds an MCU-rate run.
+pub(crate) const MAX_STEPS: u64 = 100_000_000;
+
 /// Newton's budget for each step, each probe locating a chip event, and each rung of a
-/// restart's ladder. A test lowers one to make that solve fail.
+/// restart's ladder, plus the accepted steps one run may take. A test lowers one to make
+/// that solve fail, or `steps` to end a dense schedule at the step limit.
 #[derive(Clone, Copy)]
 struct Budget {
     step: u32,
     probe: u32,
     restart: u32,
+    steps: u64,
 }
 
 const BUDGET: Budget = Budget {
     step: STEP_BUDGET,
     probe: STEP_BUDGET,
     restart: op::OP_BUDGET,
+    steps: MAX_STEPS,
 };
 
-/// After an error `observations` is empty, and the trace keeps the rows before it.
+/// After an error `observations` hold what the run reached, and the trace keeps the rows
+/// before it.
 pub(crate) struct Outcome {
     pub(crate) observations: Observations,
     pub(crate) trace: Option<Trace>,
 }
 
-/// The operating point, then steps to `stop`. Rating findings and any solver
-/// error go to `diagnostics`.
+/// Which accepted steps the trace keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Rows {
+    /// t = 0, every multiple of the grid, and `stop`.
+    Grid,
+    /// Every accepted step, for the solver's tests. The steps are the same as `Grid`'s. A run
+    /// with more steps than the row limit ends with `trace.too_large` and keeps the rows
+    /// it wrote. `t_ps` is the step that did not fit.
+    #[cfg(any(test, feature = "step-rows"))]
+    Steps,
+}
+
+impl Rows {
+    fn keeps(self, transient: &Transient, at: Time) -> bool {
+        match self {
+            Rows::Grid => transient.is_row(at),
+            #[cfg(any(test, feature = "step-rows"))]
+            Rows::Steps => true,
+        }
+    }
+}
+
+/// The grid is checked against the trace's row limit first, before any solve. Then the
+/// operating point, then steps to `stop`. Rating findings and any solver error go to
+/// `diagnostics`.
 pub(crate) fn run(
     netlist: &Netlist,
     transient: &Transient,
+    rows: Rows,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Outcome {
     let columns = Columns::new(netlist);
-    run_with(
-        netlist,
-        transient,
-        BUDGET,
-        Trace::row_limit(columns.refs().len()),
-        &columns,
-        diagnostics,
-    )
+    let limit = Trace::row_limit(columns.refs().len());
+    if transient.rows() > limit as u64 {
+        diagnostics.push(Diagnostic::TraceTooLarge {
+            rows: transient.rows(),
+            limit,
+            columns: columns.refs().len(),
+            at: None,
+        });
+        return Outcome {
+            observations: Observations::Nothing,
+            trace: None,
+        };
+    }
+    run_with(netlist, transient, BUDGET, rows, &columns, diagnostics)
 }
 
 fn run_with(
     netlist: &Netlist,
     transient: &Transient,
     budget: Budget,
-    max_rows: usize,
+    rows: Rows,
     columns: &Columns,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Outcome {
     let mut record = Record {
-        trace: Trace::new(columns.refs().to_vec(), transient.stop),
-        max_rows,
+        trace: Trace::new(columns.refs().to_vec(), transient),
+        transient: *transient,
+        rows,
+        last_step: None,
         ratings: Ratings::new(netlist, columns, Timing::Run),
         columns,
         op: None,
         logic: None,
     };
     let result = steps(netlist, transient, budget, &mut record);
-    diagnostics.extend(record.ratings.finish());
-    let mut trace = record.trace;
-    if let Some(logic) = &record.logic {
-        trace.attach_logic(logic.clone());
-    }
-    match result {
-        Ok(()) => Outcome {
-            observations: Observations {
-                op: record.op,
-                switches: Some(switches(netlist, transient.stop)),
-                logic: record.logic,
-            },
-            trace: Some(trace),
-        },
-        Err(diagnostic) => {
-            diagnostics.push(diagnostic);
-            Outcome {
-                observations: Observations::default(),
-                trace: (trace.rows() > 0).then_some(trace),
-            }
-        }
-    }
+    let outcome = record.finish(netlist, diagnostics);
+    diagnostics.extend(result.err());
+    outcome
 }
 
-/// Everything an accepted row feeds.
+/// Everything an accepted step feeds.
 struct Record<'c> {
     columns: &'c Columns,
     trace: Trace,
-    max_rows: usize,
+    transient: Transient,
+    rows: Rows,
+    /// The last accepted step, when it is not a row. A run that fails stores it as its last
+    /// row.
+    last_step: Option<(Time, Vec<Finite>)>,
     ratings: Ratings,
     op: Option<OpPoint>,
     /// `None` without a chip.
@@ -115,20 +147,64 @@ struct Record<'c> {
 }
 
 impl Record<'_> {
-    fn accept(&mut self, at: Time, row: &[Finite]) -> Result<(), Diagnostic> {
-        if self.trace.rows() == self.max_rows {
-            return Err(Diagnostic::TraceTooLarge {
-                at,
-                limit: self.max_rows,
-                columns: self.columns.refs().len(),
-            });
+    /// Ratings sample every accepted step. The trace keeps it when it is a row. A row past
+    /// the trace's limit is `trace.too_large`, and the step is not stored.
+    fn accept(&mut self, at: Time, row: Vec<Finite>) -> Result<(), Diagnostic> {
+        let kept = self.rows.keeps(&self.transient, at);
+        if kept {
+            let columns = self.columns.refs().len();
+            let limit = Trace::row_limit(columns);
+            if self.trace.rows() >= limit {
+                return Err(Diagnostic::TraceTooLarge {
+                    rows: self.trace.rows() as u64 + 1,
+                    limit,
+                    columns,
+                    at: Some(at),
+                });
+            }
         }
-        self.trace.push(at, row);
+        self.ratings.sample(at, &row);
         if at == Time::ZERO {
-            self.op = Some(observe::op_point(self.columns, row));
+            self.op = Some(observe::op_point(self.columns, &row));
         }
-        self.ratings.sample(at, row);
+        if kept {
+            self.trace.push(at, &row);
+            self.last_step = None;
+        } else {
+            self.last_step = Some((at, row));
+        }
         Ok(())
+    }
+
+    /// The one constructor of a transient's observations, after success and after an error.
+    /// `Nothing` when t = 0 never solved. Otherwise the last accepted step is the last row,
+    /// `end` is its time, the switches are the edges before it, and the logic summary comes
+    /// from the `Logic` the trace keeps.
+    fn finish(self, netlist: &Netlist, diagnostics: &mut Vec<Diagnostic>) -> Outcome {
+        diagnostics.extend(self.ratings.finish());
+        let (mut trace, Some(op)) = (self.trace, self.op) else {
+            return Outcome {
+                observations: Observations::Nothing,
+                trace: None,
+            };
+        };
+        if let Some((at, row)) = self.last_step {
+            trace.push(at, &row);
+        }
+        let end = trace.end().expect("the operating point is row 0");
+        let summary = self.logic.as_ref().map(Logic::summary);
+        if let Some(logic) = self.logic {
+            trace.attach_logic(logic);
+        }
+        Outcome {
+            observations: Observations::Transient {
+                end,
+                op,
+                switches: switches(netlist, end),
+                logic: summary,
+            },
+            trace: Some(trace),
+        }
     }
 
     /// Every chip signal's level from `at` on: one `Ref::Logic` per signal, chips in slot order.
@@ -201,9 +277,9 @@ fn steps(
         &start.iterate.solution,
         Time::ZERO,
     )?;
-    record.accept(Time::ZERO, &row)?;
+    record.accept(Time::ZERO, row)?;
     record.logic(Time::ZERO, &circuit, &start.chips, &start.levels);
-    let mut breakpoints = Breakpoints::new(netlist, transient.stop);
+    let mut breakpoints = Breakpoints::new(netlist, *transient);
     let mut accepted = Accepted {
         at: Time::ZERO,
         iterate: start.iterate,
@@ -215,7 +291,14 @@ fn steps(
     // Newton iterations over every stalled attempt since the last accepted step. An attempt
     // rejected for its error converged, and does not count.
     let mut iterations = 0;
+    let mut accepted_steps = 0u64;
     while accepted.at < transient.stop {
+        if accepted_steps >= budget.steps {
+            return Err(Diagnostic::SolverStepLimit {
+                at: accepted.at,
+                limit: budget.steps,
+            });
+        }
         let h = plan.clip(accepted.at, breakpoints.next_after(accepted.at));
         let at = Time::from_ps(accepted.at.as_ps() + h);
         match attempt(&circuit, &accepted, h, budget.step) {
@@ -268,7 +351,8 @@ fn steps(
                 // The row holds the chip states it was solved with.
                 let row =
                     observe::observe(&circuit, record.columns, &converged.iterate.solution, at)?;
-                record.accept(at, &row)?;
+                record.accept(at, row)?;
+                accepted_steps += 1;
                 iterations = 0;
                 // A watch cuts the step. Only a changed stamp, a chip's, a contact's or a source's,
                 // restarts.
@@ -414,36 +498,33 @@ fn restart_solve(
     )
 }
 
-/// Where a step must land. Contact edges and source jumps, 1 ns after t = 0, and 1 ns
-/// after every edge, then `stop`. The deck ramps each contact and source over that
-/// nanosecond. The cursor only moves forward.
-struct Breakpoints {
-    /// The earliest contact edges and source jumps strictly before `stop`, ascending,
-    /// at most `Trace::MAX_ROWS` of them.
-    edges: Vec<Time>,
-    /// Landing times strictly before `stop`, ascending.
-    points: Vec<Time>,
-    stop: Time,
-    cursor: usize,
+/// Where a step must land: every row time, every contact edge and source jump, and 1 ns after
+/// t = 0 and after each edge. The deck ramps each contact and source over that nanosecond. A
+/// lazy merge of one cursor per part, so no edge list is built and none is capped. Time only
+/// moves forward.
+struct Breakpoints<'n> {
+    transient: Transient,
+    /// Each cursor's next edge before `stop`, earliest first, with the cursor's index.
+    edges: BinaryHeap<Reverse<(Time, usize)>>,
+    cursors: Vec<Box<dyn Iterator<Item = Time> + 'n>>,
+    /// 1 ns after t = 0 and after each edge passed, before `stop`, ascending.
+    ramp_ends: VecDeque<Time>,
 }
 
-impl Breakpoints {
-    fn new(netlist: &Netlist, stop: Time) -> Breakpoints {
-        // Every edge the run reaches writes a row, so one past the `MAX_ROWS`-th is never
-        // reached before `trace.too_large`. Each cursor yields in time order, and the merge
-        // keeps the earliest. A dense train is not stored past that.
-        let limit = Trace::MAX_ROWS;
-        let mut streams: Vec<Box<dyn Iterator<Item = Time> + '_>> = Vec::new();
-        let mut heap = BinaryHeap::new();
+impl<'n> Breakpoints<'n> {
+    fn new(netlist: &'n Netlist, transient: Transient) -> Breakpoints<'n> {
+        let stop = transient.stop;
+        let mut cursors: Vec<Box<dyn Iterator<Item = Time> + 'n>> = Vec::new();
+        let mut edges = BinaryHeap::new();
         for (_, part) in netlist.parts() {
-            let mut cursor: Box<dyn Iterator<Item = Time> + '_> = match &part.model {
+            let mut cursor: Box<dyn Iterator<Item = Time> + 'n> = match &part.model {
                 Model::Switch(switch) => Box::new(
                     switch
                         .schedule
                         .edges()
                         .iter()
                         .map(|edge| edge.at)
-                        .filter(move |&at| at < stop),
+                        .take_while(move |&at| at < stop),
                 ),
                 model => {
                     let Some(waveform) = model.waveform() else {
@@ -452,67 +533,62 @@ impl Breakpoints {
                     Box::new(waveform.jumps_before(stop))
                 }
             };
-            let Some(at) = cursor.next() else {
-                continue;
-            };
-            heap.push(Reverse((at, streams.len())));
-            streams.push(cursor);
-        }
-        let mut edges = Vec::new();
-        while edges.len() < limit {
-            let Some(Reverse((at, index))) = heap.pop() else {
-                break;
-            };
-            if edges.last() != Some(&at) {
-                edges.push(at);
-            }
-            if let Some(next) = streams[index].next() {
-                heap.push(Reverse((next, index)));
+            if let Some(at) = cursor.next() {
+                edges.push(Reverse((at, cursors.len())));
+                cursors.push(cursor);
             }
         }
-        let mut points = Vec::with_capacity(edges.len() * 2 + 1);
-        push_point(&mut points, EDGE_STEP, stop);
-        for &edge in &edges {
-            push_point(&mut points, edge.as_ps(), stop);
-            if let Some(end) = edge.as_ps().checked_add(EDGE_STEP) {
-                push_point(&mut points, end, stop);
-            }
-        }
-        points.sort_unstable();
-        points.dedup();
-        Breakpoints {
+        let mut breakpoints = Breakpoints {
+            transient,
             edges,
-            points,
-            stop,
-            cursor: 0,
-        }
+            cursors,
+            ramp_ends: VecDeque::new(),
+        };
+        breakpoints.ramp_after(Time::ZERO);
+        breakpoints
     }
 
+    /// The earliest landing after `now`, which is before `stop`.
     fn next_after(&mut self, now: Time) -> Time {
-        while self
-            .points
-            .get(self.cursor)
-            .is_some_and(|&point| point <= now)
+        while let Some(&Reverse((at, index))) = self.edges.peek()
+            && at <= now
         {
-            self.cursor += 1;
+            self.edges.pop();
+            self.ramp_after(at);
+            if let Some(next) = self.cursors[index].next() {
+                self.edges.push(Reverse((next, index)));
+            }
         }
-        self.points.get(self.cursor).copied().unwrap_or(self.stop)
+        while self.ramp_ends.front().is_some_and(|&end| end <= now) {
+            self.ramp_ends.pop_front();
+        }
+        let row = self.transient.next_row_after(now);
+        let edge = self.edges.peek().map_or(row, |&Reverse((at, _))| at);
+        let ramp_end = self.ramp_ends.front().copied().unwrap_or(row);
+        row.min(edge).min(ramp_end)
     }
 
+    /// Whether a contact edge or a source jump falls at `at`, a time `next_after` returned.
     fn is_edge(&self, at: Time) -> bool {
-        self.edges.binary_search(&at).is_ok()
+        self.edges
+            .peek()
+            .is_some_and(|&Reverse((edge, _))| edge == at)
+    }
+
+    fn ramp_after(&mut self, edge: Time) {
+        let Some(end) = edge.as_ps().checked_add(EDGE_STEP) else {
+            return;
+        };
+        if end < self.transient.stop.as_ps()
+            && self.ramp_ends.back().is_none_or(|back| back.as_ps() < end)
+        {
+            self.ramp_ends.push_back(Time::from_ps(end));
+        }
     }
 }
 
-/// A landing time strictly before `stop`. `stop` itself is the cursor's end.
-fn push_point(points: &mut Vec<Time>, at: u64, stop: Time) {
-    if at > 0 && at < stop.as_ps() {
-        points.push(Time::from_ps(at));
-    }
-}
-
-/// Every contact edge before `stop`, per switch.
-fn switches(netlist: &Netlist, stop: Time) -> BTreeMap<Ref, Vec<Edge>> {
+/// Every contact edge before `end`, per switch.
+fn switches(netlist: &Netlist, end: Time) -> BTreeMap<Ref, Vec<Edge>> {
     netlist
         .parts()
         .filter_map(|(_, part)| match &part.model {
@@ -522,7 +598,7 @@ fn switches(netlist: &Netlist, stop: Time) -> BTreeMap<Ref, Vec<Edge>> {
                     .schedule
                     .edges()
                     .iter()
-                    .filter(|edge| edge.at < stop)
+                    .filter(|edge| edge.at < end)
                     .copied()
                     .collect(),
             )),

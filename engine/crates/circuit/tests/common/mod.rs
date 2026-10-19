@@ -7,6 +7,12 @@ pub fn simulate(json: &str) -> Results {
     sim_circuit::simulate(&netlist)
 }
 
+/// Like `simulate`, with a row at every accepted step.
+pub fn simulate_steps(json: &str) -> Results {
+    let netlist = sim_core::netlist::parse(json.as_bytes()).unwrap();
+    sim_circuit::simulate_steps(&netlist)
+}
+
 pub fn trace(results: &Results) -> &Trace {
     assert!(
         results.diagnostics().is_empty(),
@@ -37,7 +43,7 @@ pub fn transient(stop_ps: u64, max_step_ps: u64, nets: &str, parts: &[&str]) -> 
         r#"{{
       "version": 0,
       "seed": 0,
-      "analysis": {{ "transient": {{ "stop_ps": {stop_ps}, "max_step_ps": {max_step_ps} }} }},
+      "analysis": {{ "transient": {{ "stop_ps": {stop_ps}, "max_step_ps": {max_step_ps}, "grid_ps": {max_step_ps} }} }},
       "ground": "gnd",
       "nets": [{nets}],
       "parts": [{}]

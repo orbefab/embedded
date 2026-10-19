@@ -286,7 +286,7 @@ mod tests {
             br#"{
               "version": 0,
               "seed": 0,
-              "analysis": { "transient": { "stop_ps": 1000, "max_step_ps": 1000 } },
+              "analysis": { "transient": { "stop_ps": 1000, "max_step_ps": 1000, "grid_ps": 1000 } },
               "ground": "gnd",
               "nets": ["gnd", "a"],
               "parts": [

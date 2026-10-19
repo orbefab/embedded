@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use sim_core::time::Time;
 
-use common::{column, resistor, simulate, trace, transient};
+use common::{column, resistor, simulate, simulate_steps, trace, transient};
 
 fn level(value: f64, unit: &str) -> String {
     format!(r#"{{ "value": {value:?}, "unit": "{unit}", "source": "user" }}"#)
@@ -77,7 +77,7 @@ fn a_dc_current_source_delivers_negative_current_and_power() {
         "{:?}",
         results.diagnostics()
     );
-    let op = results.observations().op.as_ref().unwrap();
+    let op = results.observations().op().unwrap();
     let value = |key: &str| op.values[&key.parse().unwrap()].get();
     let gmin = 1e-12;
     let vt = 1e-3 / (1e-3 + gmin);
@@ -128,7 +128,7 @@ fn pulse_rc(stop: u64) -> String {
 
 #[test]
 fn a_source_jump_rows_the_old_value_and_restarts_on_backward_euler() {
-    let results = simulate(&pulse_rc(45_000_000));
+    let results = simulate_steps(&pulse_rc(45_000_000));
     let trace = trace(&results);
     let rows = rows(trace);
     let jumps = [2_000_000u64, 12_000_000, 22_000_000, 32_000_000, 42_000_000];
@@ -176,13 +176,18 @@ fn a_jump_at_stop_gets_a_row_with_the_old_value() {
         ],
     ));
     let trace = trace(&results);
-    let rows = rows(trace);
     assert_eq!(trace.end(), Some(Time::from_ps(6_000_000)));
-    assert_eq!(*rows.last().unwrap(), 6_000_000);
-    let current = column(trace, "#i1.i");
-    assert_eq!(*current.last().unwrap(), -2e-4);
-    assert_eq!(current[rows.binary_search(&3_000_000).unwrap()], -1e-3);
-    assert_eq!(current[rows.binary_search(&3_001_000).unwrap()], -2e-4);
+    assert_eq!(
+        rows(trace),
+        [
+            0, 1_000_000, 2_000_000, 3_000_000, 4_000_000, 5_000_000, 6_000_000
+        ]
+    );
+    // The rows at 1, 3 and 6 ms are on an edge, so each holds the value before it.
+    assert_eq!(
+        column(trace, "#i1.i"),
+        [-2e-4, -2e-4, -1e-3, -1e-3, -2e-4, -2e-4, -2e-4]
+    );
 }
 
 #[test]
@@ -232,7 +237,7 @@ fn the_current_divider_example_matches_its_closed_form() {
         "{:?}",
         results.diagnostics()
     );
-    let op = results.observations().op.as_ref().unwrap();
+    let op = results.observations().op().unwrap();
     let value = |key: &str| op.values[&key.parse().unwrap()].get();
     let want = 1e-3 / (1.0 / 1000.0 + 1.0 / 2000.0 + 1e-12);
     let error = (value("#net.vt") - want).abs();
@@ -254,14 +259,14 @@ fn the_voltage_pulse_example_follows_its_closed_form_at_every_row() {
         .zip(vout)
         .map(|(&t, &v)| (v - charge(0.0, &jumps, 1e8, t as f64)).abs())
         .fold(0.0, f64::max);
-    assert!(worst <= 2e-5, "{worst:e}");
+    assert!(worst <= 3e-6, "{worst:e}");
     let vin = column(trace, "#net.vin");
     let at = |t: u64| vin[rows.binary_search(&t).unwrap()];
     for (jump, change) in jumps {
         let jump = jump as u64;
         let old = if change > 0.0 { 0.0 } else { 1.0 };
         assert_eq!(at(jump), old, "the row at {jump} holds the old value");
-        assert_eq!(at(jump + 1_000), old + change, "{jump}");
+        assert_eq!(at(jump + 1_000_000), old + change, "{jump}");
     }
 }
 

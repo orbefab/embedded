@@ -11,7 +11,7 @@ const DIVIDER: &str = include_str!("../../../examples/divider/netlist.json");
 #[derive(Serialize)]
 pub struct DoctorReport {
     pub engine_version: &'static str,
-    pub netlist_format: u64,
+    pub netlist_versions: &'static [u64],
     pub run_format: u64,
     pub checks: Vec<Check>,
 }
@@ -40,7 +40,7 @@ pub fn doctor() -> DoctorReport {
     let at = Timestamp::from_unix_seconds(0);
     DoctorReport {
         engine_version: run_folder::ENGINE_VERSION,
-        netlist_format: netlist::FORMAT_VERSION,
+        netlist_versions: netlist::VERSIONS,
         run_format: run_folder::FORMAT_VERSION,
         checks: vec![divider_check(at), determinism_check(at)],
     }
@@ -54,8 +54,7 @@ fn divider_check(at: Timestamp) -> Check {
     let Some(vout) = done
         .results
         .observations()
-        .op
-        .as_ref()
+        .op()
         .and_then(|op| op.values.get(&vout_ref))
     else {
         return Check {

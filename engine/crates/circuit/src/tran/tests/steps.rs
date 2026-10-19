@@ -4,7 +4,7 @@ use super::super::*;
 use super::fixtures::*;
 
 fn times(netlist: &Netlist) -> Vec<u64> {
-    run_clean(netlist)
+    run_steps(netlist)
         .time()
         .iter()
         .map(|t| t.as_ps())
@@ -17,7 +17,7 @@ fn divider_switch(edge: u64, stop: u64, max_step: u64) -> Netlist {
         r#"{{
           "version": 0,
           "seed": 0,
-          "analysis": {{ "transient": {{ "stop_ps": {stop}, "max_step_ps": {max_step} }} }},
+          "analysis": {{ "transient": {{ "stop_ps": {stop}, "max_step_ps": {max_step}, "grid_ps": {stop} }} }},
           "ground": "gnd",
           "nets": ["gnd", "vcc", "vout"],
           "parts": [
@@ -63,7 +63,7 @@ fn rc_two_switches(edge_a: u64, edge_b: u64, stop: u64, max_step: u64) -> Netlis
         r#"{{
           "version": 0,
           "seed": 0,
-          "analysis": {{ "transient": {{ "stop_ps": {stop}, "max_step_ps": {max_step} }} }},
+          "analysis": {{ "transient": {{ "stop_ps": {stop}, "max_step_ps": {max_step}, "grid_ps": {stop} }} }},
           "ground": "gnd",
           "nets": ["gnd", "vcc", "vout"],
           "parts": [
@@ -116,7 +116,7 @@ fn rc_two_switches(edge_a: u64, edge_b: u64, stop: u64, max_step: u64) -> Netlis
 #[test]
 fn each_edge_restarts_on_backward_euler_and_the_next_step_is_trapezoidal() {
     let netlist = rc_two_switches(10_000, 10_500, 20_000, EDGE_STEP);
-    let trace = run_clean(&netlist);
+    let trace = run_steps(&netlist);
     let rows: Vec<u64> = trace.time().iter().map(|t| t.as_ps()).collect();
     assert_eq!(
         rows,
@@ -167,7 +167,7 @@ fn each_edge_restarts_on_backward_euler_and_the_next_step_is_trapezoidal() {
 #[test]
 fn an_edge_100_ps_before_stop_rows_at_the_edge_and_at_stop() {
     let netlist = divider_switch(9_900, 10_000, 10_000);
-    let trace = run_clean(&netlist);
+    let trace = run_steps(&netlist);
     let rows: Vec<u64> = trace.time().iter().map(|t| t.as_ps()).collect();
     assert_eq!(rows, [0, 1_000, 3_000, 7_000, 9_900, 10_000]);
     let index = trace

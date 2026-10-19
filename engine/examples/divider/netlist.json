@@ -22,7 +22,7 @@
           "datasheet": {
             "doc": "resistor-nominal",
             "at": "Table 1, nominal",
-            "typical": false
+            "basis": "nominal"
           }
         }
       },

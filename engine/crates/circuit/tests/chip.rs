@@ -1,7 +1,8 @@
 mod common;
 
 use common::{
-    column, held_capacitor, resistor, simulate, source, source_on, span, trace, transient,
+    column, held_capacitor, resistor, simulate, simulate_steps, source, source_on, span, trace,
+    transient,
 };
 use sim_core::logic::Level;
 use sim_core::name::Ref;
@@ -10,7 +11,7 @@ use sim_core::run_folder::Results;
 const LOW_DROP: f64 = 1.0 / 60.0;
 
 fn op_value(results: &Results, reference: &str) -> f64 {
-    let op = results.observations().op.as_ref().unwrap();
+    let op = results.observations().op().unwrap();
     op.values[&reference.parse::<Ref>().unwrap()].get()
 }
 
@@ -132,7 +133,7 @@ fn a_chip_with_no_state_it_agrees_with_is_unsettled() {
         serde_json::to_string(found).unwrap(),
         r##"{"code":"chip.unsettled","severity":"error","refs":["#u1"],"t_ps":0,"message":"the chips kept changing state for 8 solves at 0 ps","data":{"rounds":8}}"##
     );
-    assert!(results.observations().op.is_none());
+    assert!(results.observations().op().is_none());
 }
 
 #[test]
@@ -159,8 +160,7 @@ fn a_chip_adds_no_columns_and_a_net_on_its_input_alone_floats() {
     );
     let keys: Vec<String> = results
         .observations()
-        .op
-        .as_ref()
+        .op()
         .unwrap()
         .values
         .keys()
@@ -184,7 +184,7 @@ fn a_chip_adds_no_columns_and_a_net_on_its_input_alone_floats() {
 
 /// `signal`'s edges, as `(t_ps, level)`.
 fn edges(results: &Results, signal: &str) -> Vec<(u64, Level)> {
-    let logic = results.observations().logic.as_ref().unwrap();
+    let logic = trace(results).logic().unwrap();
     let signal: Ref = signal.parse().unwrap();
     let index = logic.signals().iter().position(|s| *s == signal).unwrap();
     logic
@@ -203,8 +203,9 @@ fn row(results: &Results, at: u64) -> usize {
 }
 
 /// 100 kohm and 1 uF from 5 V hold RESET low at power-on. TRIG and THRES are on ground.
+/// Its rows are its steps, so each located edge has a row.
 fn power_on_reset(stop_ps: u64) -> Results {
-    simulate(&transient(
+    simulate_steps(&transient(
         stop_ps,
         1_000_000_000,
         r#""gnd", "vcc", "rst", "out", "cont", "dis""#,
@@ -256,7 +257,11 @@ fn reset_release_is_located_on_its_closed_form() {
 
 /// RA, RB and C, with CONT driven to `cont` volts and every pin's level traced.
 fn driven_astable(cont: f64) -> Results {
-    simulate(&transient(
+    driven_astable_with(simulate_steps, cont)
+}
+
+fn driven_astable_with(run: fn(&str) -> Results, cont: f64) -> Results {
+    run(&transient(
         10_000_000_000,
         100_000_000,
         r#""gnd", "vcc", "dis", "thr", "cont", "out""#,
@@ -311,6 +316,19 @@ fn a_driven_cont_moves_both_thresholds() {
 }
 
 #[test]
+fn the_rows_written_change_no_edge_and_no_end() {
+    let grid = driven_astable_with(simulate, 4.0);
+    let steps = driven_astable_with(simulate_steps, 4.0);
+    assert!(trace(&grid).rows() < trace(&steps).rows());
+    assert_eq!(trace(&grid).logic(), trace(&steps).logic());
+    assert_eq!(grid.diagnostics(), steps.diagnostics());
+    let (grid, steps) = (grid.observations(), steps.observations());
+    assert_eq!(grid.end(), steps.end());
+    assert_eq!(grid.logic(), steps.logic());
+    assert_eq!(grid.switches(), steps.switches());
+}
+
+#[test]
 fn a_flip_that_changes_no_drive_cuts_the_step_without_a_restart() {
     let results = driven_astable(10.0 / 3.0);
     let trace = trace(&results);
@@ -340,7 +358,7 @@ fn a_flip_that_changes_no_drive_cuts_the_step_without_a_restart() {
 #[test]
 fn flips_at_one_picosecond_on_two_chips_react_together_on_one_row() {
     // Both chips read one THRES against one CONT, so their resets flip at the same picosecond.
-    let results = simulate(&transient(
+    let results = simulate_steps(&transient(
         10_000_000_000,
         100_000_000,
         r#""gnd", "vcc", "dis", "thr", "cont", "out1", "out2""#,
@@ -405,7 +423,7 @@ fn a_crossing_the_restart_pulls_back_is_recorded_at_the_edge() {
     // A monostable: TRIG starts low and sets the latch, then THRES on DIS resets it. The
     // discharge's 0.18 A through the hold of 1 fs over 1 nF pulls DIS 1.8e-7 V back, far more
     // than the located row sits past the threshold, so the restart's solve is under it again.
-    let results = simulate(&transient(
+    let results = simulate_steps(&transient(
         2_000_000_000,
         100_000_000,
         r#""gnd", "vcc", "trig", "dis", "cont", "out""#,

@@ -1,6 +1,8 @@
 # Netlist v0
 
-A netlist is fully resolved JSON. `version` is 0. Every field is required, and an unknown field is an error. Nothing is filled in by default.
+A netlist is fully resolved JSON. `version` is 0. [versions.md](versions.md) says which changes keep it. Every field is required, and an unknown field is an error. Nothing is filled in by default.
+
+The netlist is the engine's only input. Data a part needs, such as firmware, lives inside the document.
 
 Values are SI numbers. `unit` must already be the field's unit. Integer values are the exception. A time in `ps` sits on the engine's picosecond timeline, and a count is in `1`.
 
@@ -33,7 +35,7 @@ Values are SI numbers. `unit` must already be the field's unit. Integer values a
           "datasheet": {
             "doc": "resistor-nominal",
             "at": "Table 1, nominal",
-            "typical": false
+            "basis": "nominal"
           }
         }
       },
@@ -52,7 +54,7 @@ Values are SI numbers. `unit` must already be the field's unit. Integer values a
 
 ## Fields
 
-`version` is `0`. Any other number yields only `netlist.version`, even when the rest of the document is valid.
+`version` is `0`. Any number this engine does not read yields only `netlist.version`, even when the rest of the document is valid.
 
 `seed` is an unsigned integer. The manifest records it. It moves switch bounce edges and nothing else. An operating point, and a run whose every `bounce` is `null`, do not depend on it.
 
@@ -69,59 +71,20 @@ The engine stores ground first and sorts the other nets by name. It sorts parts 
 `examples/rc-switch/netlist.json` charges a 1 uF capacitor through a switch and 10 kohm, with a 10 kohm bleeder, then lets it discharge.
 
 ```json
-"analysis": { "transient": { "stop_ps": 81000000000, "max_step_ps": 20000000 } }
+"analysis": { "transient": { "stop_ps": 81000000000, "max_step_ps": 20000000, "grid_ps": 20000000 } }
 ```
 
 | Field | Meaning |
 | --- | --- |
 | `stop_ps` | The run ends at this time, in picoseconds. |
 | `max_step_ps` | No time step is longer, in picoseconds. |
+| `grid_ps` | The trace has a row at every multiple of it, in picoseconds. |
 
-Both are JSON integers, like `seed`. They are the scenario's choices, so they carry no unit and no source. A float, a negative number, or a missing field is `netlist.syntax`. `stop_ps` must be greater than 0. `max_step_ps` must be at least 1000 and at most `stop_ps`. A break is `netlist.analysis` with the field and the rule.
+All three are JSON integers, like `seed`. They are the scenario's choices, so they carry no unit and no source. A float, a negative number, or a missing field is `netlist.syntax`. `stop_ps` must be greater than 0. `max_step_ps` must be at least 1000 and at most `stop_ps`. `grid_ps` must be at least 1000 and at most `stop_ps`. A break is `netlist.analysis` with the field and the rule.
 
-The run solves the operating point at t = 0 first, with every capacitor open or held at its `initial` voltage, every switch at its `initial` contact, and every source at its value at t = 0, which is a waveform's `initial`. That is the initial condition. Then it steps to `stop_ps`. Every switch edge and every source jump before `stop_ps` is a breakpoint. So is 1 ns after t = 0, and 1 ns after each edge or jump, when that time is before `stop_ps`. A step lands on each breakpoint and on `stop_ps`.
+The rows are t = 0, every multiple of `grid_ps` before `stop_ps`, and `stop_ps`. That is `ceil(stop_ps / grid_ps) + 1` rows. `stop_ps` need not be a multiple of `grid_ps`. The engine lands a step on every row time, so the longest step is at most the smaller of `max_step_ps` and `grid_ps`. A row is a point sample of the solution at its time. Between rows the trace says nothing. [run-folder.md](run-folder.md#traces) says how to pick `grid_ps`. A dense switch or source schedule costs steps, not rows, and can hit the run's step limit.
 
-At each switch edge or source jump the row holds the old contact or level. Then the run solves once more at that time, with the new contacts and levels in force and every capacitor held at its voltage, the way an `initial` voltage is held at t = 0. This restart solve gives the currents just after the change. It is not a row, and the next step starts from it. Each held voltage moves by the capacitor's current times 1 fs over its capacitance. A jump at `stop_ps` gets the last row and no restart.
-
-Every edge or jump the run reaches writes a row, and a trace holds at most 1,000,000 rows. So the run lists at most that many breakpoint edges, the earliest, and a denser schedule ends in `trace.too_large` before it would reach the ones left out. A 100 MHz pulse over 1 s does.
-
-The step policy is fixed. A segment starts at t = 0 and at every restart. Its first step wants 1 ns and is backward Euler. Every later step in it is trapezoidal, except on a stiff capacitor. Each step's local truncation error comes from the capacitor currents the solve already has. Backward Euler's is `h/2 * |i1 - i0| / C`. The trapezoidal rule's is `h^3 * |DD2(i)| / (6C)`, the second divided difference over the segment's last three points. The tolerance is `1e-6 * max(|v0|, |v1|) + 1e-9` V, Newton's own, on the voltage across each capacitor.
-
-A step over its tolerance on any capacitor is rejected and retried from the same accepted point. The next try is `0.9 * ratio^(-1/(p+1))` of it, between 0.25 and 0.9, where `ratio` is the worst error over its tolerance and `p` is 1 if that capacitor took backward Euler and 2 if it took the trapezoidal rule. An accepted step grows by the same factor, at most 2, up to `max_step_ps`. When the factor is over 1 it grows by at least 1 ps. A backward Euler step of 1 ps is accepted whatever its error. A capacitor whose trapezoidal step of 1 ps is over its tolerance holds a mode faster than any step, on which the trapezoidal rule rings. It turns stiff, and the step is retried. A stiff capacitor takes backward Euler, which damps that mode. The other capacitors keep the trapezoidal rule. Once a stiff capacitor's accepted step reaches 256 ps, the next step tries it on the trapezoidal rule. The try holds only if each tried capacitor's error is under 1e-3 of its tolerance, because what is left of the mode does not decay on the trapezoidal rule. Otherwise the step is retried with them on backward Euler, and the next try waits for a step twice as long. A restart clears every stiff capacitor. An accepted step cut short by a breakpoint or by `stop_ps` keeps the step it wanted. A rejected one does not, and its retry grows from the shorter step. With no capacitor there is no error, so the step doubles. A step whose Newton solve fails is halved and retried from the same accepted point, down to 1 ps. A failure at 1 ps ends the run with `solver.convergence`.
-
-### Chip events
-
-A chip reads its inputs through watches. A watch is a sum of node voltages times fixed coefficients, minus an offset, and it reads high only above 0. The NE555's are TRIG minus its lower ladder node, THRES minus CONT, and RESET minus GND minus `reset_threshold`.
-
-After each accepted step the run reads every watch on the step's solution. If any reads differently than at the last accepted point, the run locates the first picosecond where one does. Each probe re-solves the same step, from the same point with the same method, shortened to the probe time. The probe follows regula falsi on the earliest watch to flip, rounded to a whole picosecond inside the bracket. It turns to bisection once one end has moved twice in a row, and it stops at a 1 ps bracket. The located point is the later end, the first solved picosecond where a watch reads flipped, and it becomes the row. A regula falsi probe whose solve stalls is replaced by the bracket's midpoint. A midpoint that stalls ends the run with `solver.convergence`, and a singular probe ends it with `solver.singular`.
-
-A watch cuts the step; only a stamp change restarts. At the located point each chip reacts to its levels. If a chip's new state stamps differently, or a switch edge or source jump falls there, the run restarts at that point the way it does at a switch edge. The row holds the chips' old states, and the held solve after it is not a row. A flip that changes no drive still gets its edge at its picosecond, and the segment, its method and its error history continue across it. In `examples/ne555-led`, THRES drops back under CONT 1 ps after the latch resets, which is such a flip.
-
-Every watch that flips at one picosecond, on every chip, reacts at once against the levels before it, chips in part order. The run then reads the levels on the solve with the new states and reacts again, up to 8 solves. Chips that still change after the 8th are `chip.unsettled`. The logic levels recorded at the point are the ones the chips reacted to. A watch that flipped on the step keeps its flipped level there, and every other watch takes its level on the solve with the new states. When that solve is back across a flipped watch's threshold, the return is recorded on the next row. A monostable with THRES on DISCH does this, since the discharge pulls THRES back down through the hold. Every located event is at a later whole picosecond, so events cannot pile up at one time. An event located at `stop_ps`, or in the step that ends there, is recorded, and its row is the last. No restart runs at `stop_ps`.
-
-The operating point at t = 0 settles each chip the same way. It starts from the chip's power-on state, the NE555's latch reset, and reacts to the levels it reads. Only the solve that converges at the nominal gmin and source scale is read, never an intermediate rung of the ladder.
-
-Watches are read at accepted steps. A signal that crosses and crosses back inside one step is missed. The error control keeps steps short where a signal curves, and `max_step_ps` caps them.
-
-Every chip kind keeps four rules. A watch reads node voltages, never a branch current. A chip's state holds only what its stamp reads, so every change of state restarts. A chip with memory that leaves its outputs alone would need its own rule for when to restart. A chip's DC paths are the union over its states, so a path that some state opens, such as a high-impedance output, still counts for `net.floating`. Chips have no propagation delay, so two that flip each other at one time can have no states they agree on. Two NE555s, each OUT on the other's TRIG, reset together, then both falling OUTs set both latches while both THRES are still high. That is `chip.unsettled`.
-
-### Accuracy
-
-`max_step_ps` caps the step. It sets how dense the trace is, not how accurate. Each step above the 1 ps floor holds every capacitor's local truncation error under 1e-6 of its voltage plus 1 nV, from a consistent restart after every edge. Error accumulates over steps. The RC example stays under 1e-6 of span of its closed form, and a 10 ns discharge after an edge under 2e-5.
-
-A step at the floor is accepted over its tolerance, so a time constant under about 43 ps is not held to it. A discharge after an edge measures this, as its worst error over its swing:
-
-| Time constant | Worst error |
-| --- | --- |
-| 1 ps | 0.13 |
-| 10 ps | 1.8e-2 |
-| 30 ps | 6.0e-3 |
-| 50 ps | 1.7e-4 |
-| 100 ps | 3.9e-5 |
-| 300 ps | 1.1e-5 |
-| 1 ns and up | 1.3e-5 |
-
-Under about 43 ps the capacitor turns stiff, and the error is about 0.18 times 1 ps over the time constant. Above it the capacitor stays trapezoidal, and the error comes from its first step. The restart's hold shifts the start of the discharge by 1 fs over the time constant, as a fraction of the swing. A stiff capacitor whose voltage keeps moving after its mode dies goes back to the trapezoidal rule. 10 pF dumped through 2 ohm into 1 nF, then both charged through 1 Mohm, stays under 2e-5 of its closed form. So does a 10 ns discharge beside a 30 ps mode switched in. A capacitor whose step never reaches 256 ps stays stiff to the next restart. It keeps backward Euler's error, which accumulates with one sign to about 2e-4 of its swing over a few of its time constants. It also takes more rows, since that error grows with the square of the step. A capacitor on a separate node keeps its accuracy beside it, and one that shares its slow mode shares its error. Two 10 pF coupled through 1 ohm, with a common mode of 18 ns, take 55 ps steps and are 2e-4 of their swing off once the mode has died. Halving `max_step_ps` and comparing the traces is still a check for a circuit with no closed form.
+The run solves the operating point at t = 0 first, with every capacitor open or held at its `initial` voltage, every switch at its `initial` contact, and every source at its value at t = 0, which is a waveform's `initial`. That is the initial condition. Then it steps to `stop_ps`. Every switch edge and every source jump before `stop_ps` takes effect at its picosecond. [engine.md](engine.md) describes how the engine steps there, how it finds chip events, and how accurate it is.
 
 ## Names
 
@@ -196,7 +159,7 @@ A pulse holds `initial` until `delay_ps`, then `pulsed` for `width_ps`, then `in
 }
 ```
 
-Every change is an ideal jump. The level on the interval that ends at a jump is the old one, so the trace row at a jump holds it. When the earlier of 1 ns later and `stop_ps` is after the jump, that row holds the new level. A jump at `stop_ps` has one row, which holds the old level. The operating point holds `initial`. An operating point run reads only that.
+Every change is an ideal jump. The level on the interval that ends at a jump is the old one, so a trace row at the time of a jump holds it. A jump at `stop_ps` leaves the last row on the old level. The operating point holds `initial`. An operating point run reads only that.
 
 A time that breaks a rule is `netlist.waveform`, with its dotted field, such as `current.width_ps`, and the rule. Every broken rule is reported.
 
@@ -263,7 +226,7 @@ Edges of one switch are always at least 2 ns apart. The oracle's control ramps a
 
 Bounce is a fixed, integer-only expansion. Event `k` of switch `name` draws from SplitMix64 seeded with `mix(mix(seed ^ fnv1a64(name)) ^ k)`, where `mix` is SplitMix64's output function and `fnv1a64` is 64-bit FNV-1a over the name's bytes. It draws a count `n` from 1 to `max_bounces`, then `2n` values from 0 to `window - 2n * 2000`, sorted. Draw `j`, counted from 1, plus `j * 2000` is the offset of the `j`-th flip after the event. So the contact flips `2n` times within `window` and ends at the event's state. A draw below `m` is the high 64 bits of a 64-bit output times `m`. `scripts/ngspice_refs.py` implements the same steps. The offsets are uniform, which is enough to test exact breakpoints and determinism. They are not a contact physics model.
 
-The contact on the interval that ends at time `t` is the state after every edge strictly before `t`. A run's trace row at an edge therefore holds the old contact. When the earlier of 1 ns later and `stop_ps` is after the edge, that row holds the new contact. An edge at `stop_ps` has one row, which holds the old contact.
+The contact on the interval that ends at time `t` is the state after every edge strictly before `t`. A trace row at the time of an edge therefore holds the old contact. An edge at `stop_ps` leaves the last row on the old contact. `observations.json` lists every edge at its picosecond.
 
 A switch has no `ratings` field. A switch is a DC path in either state, because its off resistance is finite.
 
@@ -318,7 +281,7 @@ The device is at 25 C, 298.15 K. `k` and `q` are the exact SI values. There is n
 The model is the ladder, three comparators and SLFS022K Table 6-1.
 
 - Three `ladder_resistance` resistors run from VCC to CONT, from CONT to an internal lower node, and from that node to GND. CONT is the pin, so a source or a load on it moves both thresholds. The lower node is not observed.
-- TRIG reads high above the lower node, THRES above CONT, and RESET above GND by more than `reset_threshold`. Each is a watch, described in [Chip events](#chip-events). No comparator has an offset, hysteresis, or input current.
+- TRIG reads high above the lower node, THRES above CONT, and RESET above GND by more than `reset_threshold`. Each is a watch, described in [Chip events](engine.md#chip-events). No comparator has an offset, hysteresis, or input current.
 - RESET low resets the latch. Otherwise TRIG low sets it. Otherwise THRES high resets it. Otherwise it holds. The table is read on levels, not edges.
 - OUT follows the latch. Set, OUT is `output.high_drop` under VCC behind `output.high_resistance`. Reset, OUT is `output.low_drop` over GND behind `output.low_resistance`. Its current flows to the chip's own VCC and GND pins. The drops are sources, so source stepping scales them.
 - DISCH has `discharge.on_resistance` to GND while the latch is reset, and `discharge.off_resistance` while it is set.
@@ -335,7 +298,7 @@ The model is the ladder, three comparators and SLFS022K Table 6-1.
 
 A break is `netlist.value` with the dotted field, such as `discharge.off_resistance`. A wrong unit is `netlist.unit` with the same field.
 
-The latch's state is the chip's only state. It is not a netlist field. The operating point settles it, as described in [Chip events](#chip-events).
+The latch's state is the chip's only state. It is not a netlist field. The operating point settles it, as described in [Chip events](engine.md#chip-events).
 
 A chip has no `ratings` field and no `i`, `v`, or `p`. Its logic levels are refs of their own, described in [Refs](#refs). It is a DC path from VCC to CONT, CONT to GND, VCC to GND, OUT to VCC, OUT to GND, and DISCH to GND, in either latch state. A net reached only through TRIG, THRES, or RESET floats.
 
@@ -363,9 +326,19 @@ The run compares the magnitude of each rated quantity with its rating. Going ove
 
 - `"user"`
 - `{"closed_form": {"note": "<text>"}}`
-- `{"datasheet": {"doc": "<id>", "at": "<place>", "typical": false}}`
+- `{"datasheet": {"doc": "<id>", "at": "<place>", "basis": "<basis>"}}`
 
-`note`, `doc`, and `at` are strings. `typical` is a boolean. The solve uses `value` alone.
+`note`, `doc`, and `at` are strings. `basis` says which figure of the datasheet the value is. Any other string is `netlist.syntax`.
+
+| `basis` | The value is |
+| --- | --- |
+| `typical` | a typical column, or read off a typical-only curve |
+| `min` | a minimum column |
+| `max` | a maximum column, recommended operating conditions included |
+| `nominal` | the part's stated value, such as a schematic value or a marked resistance |
+| `absolute_max` | an absolute maximum rating |
+
+The solve uses `value` alone.
 
 ## Sign rules
 

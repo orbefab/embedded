@@ -146,11 +146,6 @@ impl Waveform {
         self.level(high)
     }
 
-    /// Jump times in `(0, stop)`, ascending, at most `limit` of them.
-    pub fn jumps(&self, stop: Time, limit: usize) -> Vec<Time> {
-        self.jumps_before(stop).take(limit).collect()
-    }
-
     /// Jump times in `(0, stop)`, ascending, one at a time. A long pulse train is not stored.
     pub fn jumps_before(&self, stop: Time) -> impl Iterator<Item = Time> + '_ {
         Jumps {
@@ -239,8 +234,8 @@ mod tests {
         Time::from_ps(ps)
     }
 
-    fn ps(times: &[Time]) -> Vec<u64> {
-        times.iter().map(|t| t.as_ps()).collect()
+    fn jumps(wave: &Waveform, stop: Time) -> Vec<u64> {
+        wave.jumps_before(stop).map(|t| t.as_ps()).collect()
     }
 
     /// 1 to 4, delay 10 ns, width 5 ns, period 20 ns.
@@ -270,9 +265,8 @@ mod tests {
         assert_eq!(sides(6), (0.5, 0.5));
         assert_eq!(sides(7), (0.5, -2.0));
         assert_eq!(sides(u64::MAX), (-2.0, -2.0));
-        assert_eq!(ps(&wave.jumps(at(8), 10)), [7]);
-        assert_eq!(ps(&wave.jumps(at(7), 10)), [] as [u64; 0]);
-        assert_eq!(ps(&wave.jumps(at(8), 0)), [] as [u64; 0]);
+        assert_eq!(jumps(&wave, at(8)), [7]);
+        assert_eq!(jumps(&wave, at(7)), [] as [u64; 0]);
     }
 
     #[test]
@@ -280,36 +274,25 @@ mod tests {
         let wave = Waveform::dc(level(3.0));
         assert_eq!(wave.before(at(0)), 3.0);
         assert_eq!(wave.after(at(u64::MAX)), 3.0);
-        assert!(wave.jumps(at(u64::MAX), usize::MAX).is_empty());
+        assert!(jumps(&wave, at(u64::MAX)).is_empty());
     }
 
     #[test]
     fn a_pulse_jumps_twice_a_period_strictly_before_stop() {
         let wave = train();
+        assert_eq!(jumps(&wave, at(50_000)), [10_000, 15_000, 30_000, 35_000]);
         assert_eq!(
-            ps(&wave.jumps(at(50_000), usize::MAX)),
-            [10_000, 15_000, 30_000, 35_000]
-        );
-        assert_eq!(
-            ps(&wave.jumps(at(50_001), usize::MAX)),
+            jumps(&wave, at(50_001)),
             [10_000, 15_000, 30_000, 35_000, 50_000]
         );
-        assert_eq!(ps(&wave.jumps(at(10_000), usize::MAX)), [] as [u64; 0]);
-    }
-
-    #[test]
-    fn jumps_stop_at_the_limit() {
-        assert_eq!(
-            ps(&train().jumps(at(u64::MAX), 3)),
-            [10_000, 15_000, 30_000]
-        );
+        assert_eq!(jumps(&wave, at(10_000)), [] as [u64; 0]);
     }
 
     #[test]
     fn a_pulse_near_the_largest_time_stops_without_overflow() {
         let wave = Waveform::pulse(level(0.0), level(1.0), at(u64::MAX - 5_000), 2_000, 4_000);
         assert_eq!(
-            ps(&wave.jumps(at(u64::MAX), usize::MAX)),
+            jumps(&wave, at(u64::MAX)),
             [u64::MAX - 5_000, u64::MAX - 3_000, u64::MAX - 1_000]
         );
         assert_eq!(wave.before(at(u64::MAX)), 1.0);

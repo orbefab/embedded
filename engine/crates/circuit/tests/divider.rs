@@ -17,7 +17,7 @@ fn simulate_bytes(bytes: &[u8]) -> sim_core::run_folder::Results {
 }
 
 fn value(results: &sim_core::run_folder::Results, reference: &str) -> f64 {
-    let op = results.observations().op.as_ref().unwrap();
+    let op = results.observations().op().unwrap();
     op.values[&reference.parse::<Ref>().unwrap()].get()
 }
 
@@ -146,7 +146,7 @@ fn a_resistor_onto_an_otherwise_untouched_net_is_not_floating() {
         "{:?}",
         results.diagnostics()
     );
-    assert!(results.observations().op.is_some());
+    assert!(results.observations().op().is_some());
 }
 
 #[test]
@@ -188,7 +188,7 @@ fn a_net_with_no_dc_path_to_ground_is_floating() {
             .iter()
             .all(|d| d.severity() == Severity::Warning)
     );
-    assert!(results.observations().op.is_some());
+    assert!(results.observations().op().is_some());
     assert!((value(&results, "#net.vin") - 5.0).abs() <= 1e-8 * 5.0);
 }
 
@@ -217,7 +217,7 @@ fn parallel_voltage_sources_are_singular_at_the_second_source() {
       ]
     }"#,
     );
-    assert!(results.observations().op.is_none());
+    assert!(results.observations().op().is_none());
     let singular: Vec<_> = results
         .diagnostics()
         .iter()

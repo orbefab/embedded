@@ -13,12 +13,12 @@ ngspice.json. A chip's latch edges go to tran.logic. With no example arguments
 it takes every examples/*/netlist.json. `--check` regenerates in memory and
 exits 1 if any committed byte differs, or if a skipped example already has
 ngspice.json. For an example with a chip it also runs the engine and exits 1
-unless the run's logic.vcd reads back as its observations.logic. stdout is one
+unless the run's logic.vcd reads back as its observations.logic summary. stdout is one
 JSON document.
 
 A part with no kind, an unknown kind, a part with no pins, or a missing pin
 raises Skip. `--self-test` checks that, the source deck lines, the bounce test
-vectors and the VCD reader, without ngspice.
+vectors, and the VCD reader and its summary, without ngspice.
 """
 
 import hashlib
@@ -48,8 +48,8 @@ ENGINE_GMIN = 1e-12
 # The engine's first step after a contact edge or a source jump. The Rust test pins both.
 EDGE_RAMP_PS = 1000
 # Knots strictly before the stop, including the one at t = 0. This bounds the
-# deck's size. The tightest pulse the engine accepts reaches the cap at about a
-# tenth of its 1_000_000 row cap, so a skipped deck can still be a run that finishes.
+# deck's size. The engine's rows come from its grid, not from the knots, so a
+# skipped deck can still be a run that finishes.
 KNOT_CAP = 100_000
 
 
@@ -125,7 +125,7 @@ def has_chip(netlist):
 
 
 def logic_reads_back(example):
-    """Runs the engine on the example and reads its logic.vcd back against observations.logic."""
+    """Runs the engine on the example and reads its logic.vcd back as observations.logic."""
     subprocess.run(
         ["cargo", "build", "--release", "--locked", "--quiet", "-p", "sim-cli"],
         cwd=ROOT,
@@ -139,11 +139,26 @@ def logic_reads_back(example):
             check=True,
         )
         observations = json.loads((out / "observations.json").read_bytes())
-        return read_vcd((out / "traces/logic.vcd").read_text()) == observations["logic"]
+        return summary(read_vcd((out / "traces/logic.vcd").read_text())) == observations["logic"]
+
+
+def summary(signals):
+    """observations.logic from `read_vcd`'s edges: each signal's levels, count and times."""
+    out = {}
+    for ref, signal in signals.items():
+        edges = signal["edges"]
+        out[ref] = {
+            "initial": signal["initial"],
+            "final": edges[-1]["level"] if edges else signal["initial"],
+            "count": len(edges),
+            "first_ps": edges[0]["t_ps"] if edges else None,
+            "last_ps": edges[-1]["t_ps"] if edges else None,
+        }
+    return out
 
 
 def read_vcd(text):
-    """`{ref: {initial, edges}}` from a logic.vcd, as observations.logic writes it."""
+    """`{ref: {initial, edges: [{t_ps, level}]}}` from a logic.vcd."""
     tokens = text.split()
     refs = {}
     scope = None
@@ -265,7 +280,7 @@ def self_test():
         },
         {
             "name": "held capacitor off ground",
-            "analysis": {"transient": {"stop_ps": 5000, "max_step_ps": 1000}},
+            "analysis": {"transient": {"stop_ps": 5000, "max_step_ps": 1000, "grid_ps": 1000}},
             "nets": ["gnd", "a", "b"],
             "part": held_capacitor("a", "b"),
             "commit": False,
@@ -275,7 +290,7 @@ def self_test():
         },
         {
             "name": "reserved net",
-            "analysis": {"transient": {"stop_ps": 5000, "max_step_ps": 1000}},
+            "analysis": {"transient": {"stop_ps": 5000, "max_step_ps": 1000, "grid_ps": 1000}},
             "nets": ["gnd", "BP1"],
             "part": {"name": "r1", "kind": "resistor", "pins": {"a": "BP1", "b": "gnd"}},
             "commit": False,
@@ -285,7 +300,7 @@ def self_test():
         },
         {
             "name": "reserved chip prefix",
-            "analysis": {"transient": {"stop_ps": 5000, "max_step_ps": 1000}},
+            "analysis": {"transient": {"stop_ps": 5000, "max_step_ps": 1000, "grid_ps": 1000}},
             "nets": ["gnd", "X_u1_q"],
             "part": {"name": "r1", "kind": "resistor", "pins": {"a": "X_u1_q", "b": "gnd"}},
             "commit": False,
@@ -307,7 +322,7 @@ def self_test():
         },
         {
             "name": "pulse period inside its width",
-            "analysis": {"transient": {"stop_ps": 10000, "max_step_ps": 1000}},
+            "analysis": {"transient": {"stop_ps": 10000, "max_step_ps": 1000, "grid_ps": 1000}},
             "part": {
                 "name": "v1",
                 "kind": "voltage_source",
@@ -328,7 +343,7 @@ def self_test():
         },
         {
             "name": "pulse denser than the deck cap",
-            "analysis": {"transient": {"stop_ps": 1000000, "max_step_ps": 1000}},
+            "analysis": {"transient": {"stop_ps": 1000000, "max_step_ps": 1000, "grid_ps": 1000}},
             "part": {
                 "name": "v1",
                 "kind": "voltage_source",
@@ -408,7 +423,7 @@ def initial_conditions():
     lines = []
     for a, b in (("a", "gnd"), ("gnd", "a")):
         netlist = {
-            "analysis": {"transient": {"stop_ps": 5000, "max_step_ps": 1000}},
+            "analysis": {"transient": {"stop_ps": 5000, "max_step_ps": 1000, "grid_ps": 1000}},
             "ground": "gnd",
             "nets": ["gnd", "a"],
             "parts": [held_capacitor(a, b)],
@@ -431,7 +446,7 @@ def source_decks():
         "period_ps": 5000,
     }
     op = {"op": {}}
-    tran = {"transient": {"stop_ps": 9000, "max_step_ps": 1000}}
+    tran = {"transient": {"stop_ps": 9000, "max_step_ps": 1000, "grid_ps": 1000}}
 
     def deck(analysis, kind, key, value):
         part = {"name": "s1", "kind": kind, "pins": {"p": "a", "n": "gnd"}, key: value}
@@ -498,10 +513,21 @@ $end
 0!
 1#
 """
-    ok = read_vcd(text) == {
+    edges = read_vcd(text)
+    ok = edges == {
         "#u1.logic.out": {"initial": "high", "edges": [{"t_ps": 626, "level": "low"}]},
         "#u1.logic.trig": {"initial": "low", "edges": [{"t_ps": 231, "level": "high"}]},
         "#u2.logic.out": {"initial": "low", "edges": [{"t_ps": 626, "level": "high"}]},
+    }
+    one = {"count": 1, "first_ps": 626, "last_ps": 626}
+    ok = ok and summary(edges) == {
+        "#u1.logic.out": {"initial": "high", "final": "low", **one},
+        "#u1.logic.trig": {"initial": "low", "final": "high", "count": 1, "first_ps": 231, "last_ps": 231},
+        "#u2.logic.out": {"initial": "low", "final": "high", **one},
+    }
+    quiet = {"#u1.logic.reset": {"initial": "high", "edges": []}}
+    ok = ok and summary(quiet) == {
+        "#u1.logic.reset": {"initial": "high", "final": "high", "count": 0, "first_ps": None, "last_ps": None},
     }
     return {"name": "vcd reader", "ok": ok}
 

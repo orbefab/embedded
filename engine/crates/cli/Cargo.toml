@@ -22,6 +22,7 @@ clap.workspace = true
 [dev-dependencies]
 serde_json.workspace = true
 sha2.workspace = true
+sim-circuit = { workspace = true, features = ["step-rows"] }
 
 [lints]
 workspace = true

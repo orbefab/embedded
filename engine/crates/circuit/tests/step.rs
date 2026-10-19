@@ -1,7 +1,8 @@
 mod common;
 
 use common::{
-    column, held_capacitor, resistor, simulate, source, source_on, span, trace, transient,
+    column, held_capacitor, resistor, simulate, simulate_steps, source, source_on, span, trace,
+    transient,
 };
 
 /// 5 V through 1 kohm into 10 fF, and a 0.1 ohm switch across it that closes at 1 us.
@@ -9,7 +10,7 @@ use common::{
 const FEMTOSECOND_EDGE: &str = r#"{
   "version": 0,
   "seed": 0,
-  "analysis": { "transient": { "stop_ps": 20000000000, "max_step_ps": 100000 } },
+  "analysis": { "transient": { "stop_ps": 20000000000, "max_step_ps": 100000, "grid_ps": 100000 } },
   "ground": "gnd",
   "nets": ["gnd", "vcc", "vout"],
   "parts": [
@@ -67,7 +68,7 @@ fn a_mode_faster_than_the_step_floor_dies_out_instead_of_ringing() {
 const PICOSECOND_EDGE: &str = r#"{
   "version": 0,
   "seed": 0,
-  "analysis": { "transient": { "stop_ps": 15000, "max_step_ps": 1000 } },
+  "analysis": { "transient": { "stop_ps": 15000, "max_step_ps": 1000, "grid_ps": 1000 } },
   "ground": "gnd",
   "nets": ["gnd", "vcc", "vout"],
   "parts": [
@@ -126,7 +127,7 @@ fn a_100_ps_discharge_after_an_edge_stays_on_its_closed_form() {
 const FAST_EDGE: &str = r#"{
   "version": 0,
   "seed": 0,
-  "analysis": { "transient": { "stop_ps": 2000000, "max_step_ps": 10000 } },
+  "analysis": { "transient": { "stop_ps": 2000000, "max_step_ps": 10000, "grid_ps": 10000 } },
   "ground": "gnd",
   "nets": ["gnd", "vcc", "vout"],
   "parts": [
@@ -182,7 +183,7 @@ fn fast_edge_closed_form(t_ps: u64) -> (f64, f64) {
 
 #[test]
 fn a_10_ns_discharge_after_an_edge_follows_its_closed_form_from_the_first_row() {
-    let results = simulate(FAST_EDGE);
+    let results = simulate_steps(FAST_EDGE);
     let trace = trace(&results);
     let (vout, current) = (column(trace, "#net.vout"), column(trace, "#c1.i"));
     let (v_span, i_span) = (span(vout), span(current));
@@ -198,7 +199,7 @@ fn a_10_ns_discharge_after_an_edge_follows_its_closed_form_from_the_first_row() 
         }
     }
     assert!(early >= 10, "{early} rows in the first 50 ns");
-    // docs/netlist.md promises under 2e-5 for this discharge.
+    // docs/engine.md promises under 2e-5 for this discharge.
     assert!(worst.0 <= 2e-5 && worst.1 <= 2e-5, "{worst:?}");
 }
 
@@ -206,7 +207,7 @@ fn a_10_ns_discharge_after_an_edge_follows_its_closed_form_from_the_first_row() 
 const HELD_DISCHARGE: &str = r#"{
   "version": 0,
   "seed": 0,
-  "analysis": { "transient": { "stop_ps": 5000000000, "max_step_ps": 10000000 } },
+  "analysis": { "transient": { "stop_ps": 5000000000, "max_step_ps": 10000000, "grid_ps": 10000000 } },
   "ground": "gnd",
   "nets": ["gnd", "vout"],
   "parts": [
@@ -263,7 +264,7 @@ fn a_10_ps_discharge_after_an_edge_is_within_the_documented_floor_error() {
         let v = after + (before - after) * (-t / 1e-11).exp();
         worst = worst.max((vout[row] - v).abs() / (before - after));
     }
-    // docs/netlist.md gives 1.8e-2 for a 10 ps time constant.
+    // docs/engine.md gives 1.8e-2 for a 10 ps time constant.
     assert!(worst <= 1.8e-2, "{worst}");
 }
 
@@ -437,7 +438,7 @@ fn two_pole_error(
 /// 10 pF charged to 5 V through 1 Mohm, switched at 1 ns through `share` ohm onto 1 nF at 0 V.
 /// Then both charge through the 1 Mohm, with a time constant near 1 ms.
 fn full_swing(share: f64) -> (sim_core::run_folder::Results, ([[f64; 2]; 2], [f64; 2])) {
-    let results = simulate(&transient(
+    let results = simulate_steps(&transient(
         5_000_000_000,
         5_000_000_000,
         r#""gnd", "vcc", "va", "m""#,
@@ -480,7 +481,7 @@ fn a_stiff_capacitor_whose_own_voltage_keeps_moving_stays_on_its_closed_form() {
 fn stiff_capacitors_that_share_a_slow_mode_stay_on_its_closed_form() {
     // Two 100 pF at 5 V and 0 V join through 0.1 ohm at 1 us, a 5 ps mode that makes both
     // stiff. Then the pair discharges through 2 Mohm with a 400 us time constant.
-    let pair = simulate(&transient(
+    let pair = simulate_steps(&transient(
         2_000_000_000,
         2_000_000_000,
         r#""gnd", "nf", "ns""#,
@@ -492,7 +493,7 @@ fn stiff_capacitors_that_share_a_slow_mode_stay_on_its_closed_form() {
         ],
     ));
     // The same discharge on one 200 pF from 2.5 V.
-    let alone = simulate(&transient(
+    let alone = simulate_steps(&transient(
         2_000_000_000,
         2_000_000_000,
         r#""gnd", "n""#,

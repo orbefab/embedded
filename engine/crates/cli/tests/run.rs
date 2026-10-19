@@ -167,7 +167,7 @@ fn doctor_exits_zero() {
     let doc = json(&stdout);
     assert_eq!(doc["status"], "ok");
     assert_eq!(doc["engine_version"], "0.1.0");
-    assert_eq!(doc["netlist_format"], 0);
+    assert_eq!(doc["netlist_versions"], serde_json::json!([0]));
     assert_eq!(doc["run_format"], 0);
     assert_eq!(doc["checks"][0]["name"], "self_test.divider");
     assert_eq!(doc["checks"][0]["ok"], true);
@@ -454,12 +454,15 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
         let columns = index["analog"]["columns"].as_array().unwrap();
         assert_eq!(time.len(), rows, "{name}");
         assert_eq!(analog.len(), rows * columns.len(), "{name}");
-        assert_eq!(time[0], 0);
-        assert!(time.windows(2).all(|pair| pair[0] < pair[1]), "{name}");
         let stop = &input["analysis"]["transient"]["stop_ps"];
+        let grid = &input["analysis"]["transient"]["grid_ps"];
         assert_eq!(&index["stop_ps"], stop);
+        assert_eq!(&index["grid_ps"], grid);
         assert_eq!(&index["end_ps"], stop);
-        assert_eq!(time[rows - 1], stop.as_u64().unwrap());
+        let (stop, grid) = (stop.as_u64().unwrap(), grid.as_u64().unwrap());
+        assert_eq!(rows as u64, stop.div_ceil(grid) + 1, "{name}");
+        let want: Vec<u64> = (0..rows as u64).map(|k| (k * grid).min(stop)).collect();
+        assert_eq!(time, want, "{name}");
 
         // The file's own text: `serde_json::Value` sorts keys and may round a parse by an ulp.
         let text = std::str::from_utf8(&found["observations.json"]).unwrap();

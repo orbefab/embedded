@@ -5,15 +5,17 @@ A diagnostic is one JSON object. The fields are written in this order.
 | Field | Meaning |
 | --- | --- |
 | `code` | Stable id, `word.word` with lowercase letters and `_` in the tail. |
-| `severity` | `error` or `warning`. |
+| `severity` | `error` or `warning`. A reader accepts others. |
 | `refs` | Refs into the netlist. Empty when the code names no net, part, or pin. |
 | `t_ps` | Picoseconds from t = 0, or `null` when the finding is about the input. |
 | `message` | One sentence for a person. |
 | `data` | Extra fields. Keys are alphabetical. |
 
+`code`, the condition it names, the shape of `refs`, the meaning of `t_ps`, and the keys and types of `data` are stable. A condition never moves to another code. `message` is for people and its text can change, so match on `code` and `data`. New codes, severities and `data` keys can appear, and a reader accepts them. [versions.md](versions.md#diagnostics) has the whole policy.
+
 The run sorts diagnostics by `t_ps`, then `code`, then `refs`, then the JSON bytes of the whole object. A `null` time sorts before a number, so every input finding precedes a solver finding.
 
-A run whose diagnostics are all warnings still writes the operating point. A run with any error writes `{}` for `observations.json`. A transient keeps the trace rows it accepted before the error. A warning found before that error is kept, including a rating sampled on one of those rows.
+A run whose diagnostics are all warnings still writes the operating point. A run with an error writes the observations it reached, as [run-folder.md](run-folder.md#observationsjson) says. That is `{}` when nothing solved, as at t = 0. A transient keeps its grid rows before the error, and its last accepted step is the last row. Its observations end there. A warning found before that error is kept, including a rating sampled on any accepted step before it.
 
 Stdout of `sim run` lists the same objects in the same order.
 
@@ -39,7 +41,7 @@ The message is:
 netlist version {found} is not supported; this engine reads {supported}
 ```
 
-`data` holds `found` and `supported`. `supported` is 0.
+`data` holds `found` and `supported`. `supported` lists every version this engine reads, `[0]`. The message joins that list with `, `.
 
 ## netlist.name
 
@@ -133,11 +135,13 @@ The message is `analysis {field} is {value}; {requirement}`, for example:
 analysis max_step_ps is 999; it must be at least 1000
 ```
 
-`data` holds `field`, `rule`, and `value`. `field` is `stop_ps` or `max_step_ps`. `rule` is one of these.
+`data` holds `field`, `rule`, and `value`. `field` is `stop_ps`, `max_step_ps` or `grid_ps`. `rule` is one of these.
 
 - `positive`: `stop_ps` is 0.
 - `step_under_1ns`: `max_step_ps` is under 1000, the first step after a switch edge or a source jump.
 - `step_over_stop`: `max_step_ps` is greater than `stop_ps`.
+- `grid_under_1ns`: `grid_ps` is under 1000.
+- `grid_over_stop`: `grid_ps` is greater than `stop_ps`.
 
 One analysis can break more than one rule.
 
@@ -175,6 +179,8 @@ The message is `{ref} has no DC path to ground`.
 
 A DC path is a chain of resistors, voltage sources, diodes, LEDs, and switches from the net to ground. Each of those parts joins its two pins. A switch joins them open or closed. An NE555 joins VCC to CONT, CONT to GND, VCC to GND, OUT to VCC, OUT to GND, and DISCH to GND, in either latch state, and joins nothing to TRIG, THRES, or RESET. A capacitor with `"initial": null` does not join its pins, because it is open at DC. Neither does a current source. A capacitor with an `initial` voltage joins them, because the operating point holds it. gmin, 1e-12 S from every node to ground, is separate from that chain.
 
+`net.floating` is a static check on the netlist's topology. It never depends on a solve, so its `t_ps` is always `null`. A run that reads an input nothing drives will report that under a code of its own.
+
 A resistor from `vin` to `lonely`, with a voltage source from `vin` to `gnd`, puts `lonely` on a path to ground. Two LEDs in series from `vled` to `gnd`, with a resistor from `vin` to `vled`, put `mid` on a path to ground. A net that no part names is floating. Two nets whose only part is a resistor between them are floating. The operating point is still written, and `sim run` exits 0.
 
 ## solver.singular
@@ -183,7 +189,7 @@ Severity `error`. Refs is the unknown the zero pivot names, a net or a part. `t_
 
 The message is `singular matrix at {ref}`.
 
-`data` is `{}`. `observations.json` is `{}`.
+`data` is `{}`.
 
 Two voltage sources in parallel, set to different voltages, are singular. With `v1` at 5 V and `v2` at 3 V, both from `vin` to `gnd`, the ref is `#v2`.
 
@@ -193,7 +199,7 @@ Severity `error`. Refs is the unknown or the part. `t_ps` is 0 for the operating
 
 The message is `non-finite number at {ref}`.
 
-`data` is `{}`. `observations.json` is `{}`.
+`data` is `{}`.
 
 In a circuit with no diode or LED, a solution component that is not finite names that unknown. With one, the fallback ladder retries instead, and a ladder that runs out reports `solver.convergence`. An observed `i`, `v`, or `p` that is not finite names the part. A 1e200 V source across 1 ohm overflows `p` on the resistor.
 
@@ -203,7 +209,7 @@ Severity `error`. No refs. `t_ps` is 0 for the operating point.
 
 The message is `{unknowns} unknowns exceeds the dense solver limit of {limit}`.
 
-`data` holds `limit` and `unknowns`. `limit` is 4096. The solver checks the count before it allocates the dense matrix. `observations.json` is `{}`.
+`data` holds `limit` and `unknowns`. `limit` is 4096. The solver checks the count before it allocates the dense matrix, at t = 0, so `observations.json` is `{}`.
 
 ## solver.convergence
 
@@ -222,7 +228,7 @@ For the operating point the message is:
 Newton did not converge at {ref} after {iterations} iterations; source stepping reached {source_scale}
 ```
 
-`data` holds `gmin`, `iterations`, and `source_scale`. `observations.json` is `{}`.
+`data` holds `gmin`, `iterations`, and `source_scale`. Nothing solved, so `observations.json` is `{}`.
 
 The operating point starts with Newton at nominal conditions. If that fails, gmin stepping adds a conductance from every node to ground, from 1e-2 S down by decades, and ends at nominal. If that fails, source stepping scales every source from 0 up to 1. This code means all three failed. `iterations` counts Newton iterations over all of them. `gmin` is the smallest added conductance that converged, in S, or `null`. `source_scale` is the largest scale that converged, or 0.
 
@@ -250,23 +256,37 @@ Newton did not converge at {ref} after {iterations} iterations in the probe at {
 
 `data` adds `step_ps`, the probe's step from the last accepted time. `iterations` is that probe's.
 
+## solver.step_limit
+
+Severity `error`. No refs. `t_ps` is the last accepted time, which is the trace's `end_ps`.
+
+The message is:
+
+```text
+the run accepted {limit} steps, its limit; dense switch or source schedules cost steps, not rows
+```
+
+`data` holds `limit`. The limit is 100000000 accepted steps. The operating point at t = 0 does not count. The run keeps the observations and the last row up to that time.
+
+A grid that fits in the trace can still ask for more steps than the limit. Edges and jumps are landings, not rows, so a dense switch or source schedule reaches the limit on steps.
+
 ## chip.unsettled
 
 Severity `error`. Refs are the chips whose state changed on the last solve, in part order. `t_ps` is 0 for the operating point, or the time of the restart solve.
 
 The message is `the chips kept changing state for {rounds} solves at {t_ps} ps`.
 
-`data` holds `rounds`, which is 8. At one time the run solves, lets every chip react to the levels on that solve, and solves again while any state changed. A chip whose output drives its own inputs with nothing to slow it never agrees with its levels. An NE555 with OUT wired to TRIG and THRES is one: low sets the latch and high resets it. So are two NE555s, each OUT on the other's TRIG, that reset at one time. `observations.json` is `{}`.
+`data` holds `rounds`, which is 8. At one time the run solves, lets every chip react to the levels on that solve, and solves again while any state changed. A chip whose output drives its own inputs with nothing to slow it never agrees with its levels. An NE555 with OUT wired to TRIG and THRES is one: low sets the latch and high resets it. So are two NE555s, each OUT on the other's TRIG, that reset at one time. At t = 0 `observations.json` is `{}`.
 
 ## trace.too_large
 
-Severity `error`. No refs. `t_ps` is the end of the step that did not fit. The trace index `end_ps` is still the last kept row.
+Severity `error`. No refs. For a `sim` build, `t_ps` is `null`.
 
-The message is `the trace reached its limit of {limit} rows; rows come from stop_ps, the switch edges, the source jumps, the chip events and the error control, and max_step_ps only caps the step`.
+The message is `the grid gives {rows} rows; the trace holds {limit} rows of {columns} columns; raise grid_ps or shorten stop_ps`.
 
-`data` holds `columns` and `limit`. `limit` is the row cap, `min(1000000, 67108864 / columns)`. 67108864 is 2^26, so the stored f64 values stay within 512 MiB. `columns` is the number of trace columns. The run stops when the next row would pass `limit`. The trace keeps its rows, and `observations.json` is `{}`.
+`data` holds `columns`, `limit` and `rows`. `rows` is `ceil(stop_ps / grid_ps) + 1`, the rows the grid gives. `limit` is the row cap, `min(1000000, 67108864 / columns)`. 67108864 is 2^26, so the stored f64 values stay within 512 MiB. `columns` is the number of trace columns.
 
-The error control shortens the step wherever a waveform moves fast, so a larger `max_step_ps` does not always remove rows. Neither does it remove a chip event's or a source jump's rows. Each located flip is a row, and one that changes a chip's drive also restarts, like a switch edge. Each source jump is a row and a restart. A shorter `stop_ps` removes them.
+The run checks the count before it solves anything, so a refused run writes `{}` to `observations.json` and no `traces/`. The rows depend only on `stop_ps` and `grid_ps`. Edges, jumps, chip events and the error control add steps, not rows, so a `sim` build that passes the check never runs out of rows. The test-only step-rows mode can also stop mid-run with `t_ps` the step that did not fit, keeping its rows.
 
 ## rating.current
 
@@ -280,7 +300,7 @@ The message is:
 
 `data` holds `limit`, `over_ps`, `peak`, and `peak_ps`. `limit` is the rating. `peak` is the largest magnitude of the quantity. `peak_ps` is when it peaked. `over_ps` is `null` for an operating point, which has no duration.
 
-A transient checks every trace row. Each row's value holds until the next row. `t_ps` is the first row over the rating, and `over_ps` adds the time to the next row for every row over it. The last row adds nothing. At a switch edge the row at the edge holds the old contact. With 22 ohm in place of 220 ohm in `examples/button-led`, `#led1.i` is first over 1 ns after the press, and `over_ps` is exactly the time the contact was closed.
+A transient checks every accepted step, not only the rows. Each step's value holds until the next accepted step. `t_ps` is the first step over the rating, and `over_ps` adds the time to the next step for every step over it. The last step adds nothing. So `t_ps` and `peak_ps` can fall between rows. At a switch edge the solve at the edge holds the old contact. With 22 ohm in place of 220 ohm in `examples/button-led`, `#led1.i` is first over 1 ns after the press, and `over_ps` is exactly the time the contact was closed.
 
 A quantity is over when its magnitude is above the rating. Equal is not over. `peak` is the largest magnitude. For an operating point it equals `abs(observations.op[ref])`. The operating point is still written, and `sim run` exits 0.
 

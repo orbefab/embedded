@@ -8,7 +8,7 @@ pub(super) fn led_switch() -> Netlist {
         br#"{
           "version": 0,
           "seed": 0,
-          "analysis": { "transient": { "stop_ps": 2000000, "max_step_ps": 100000 } },
+          "analysis": { "transient": { "stop_ps": 2000000, "max_step_ps": 100000, "grid_ps": 100000 } },
           "ground": "gnd",
           "nets": ["gnd", "vcc", "vk", "vbtn"],
           "parts": [
@@ -76,7 +76,7 @@ pub(super) fn fast_discharge(bleed: bool) -> Netlist {
         r#"{{
           "version": 0,
           "seed": 0,
-          "analysis": {{ "transient": {{ "stop_ps": 2000000, "max_step_ps": 100000 }} }},
+          "analysis": {{ "transient": {{ "stop_ps": 2000000, "max_step_ps": 100000, "grid_ps": 100000 }} }},
           "ground": "gnd",
           "nets": ["gnd", "vcc", "vout"],
           "parts": [
@@ -117,9 +117,37 @@ pub(super) fn fast_discharge(bleed: bool) -> Netlist {
     sim_core::netlist::parse(json.as_bytes()).unwrap()
 }
 
-pub(super) fn run_clean(netlist: &Netlist) -> Trace {
+/// The observations of a run that ended early hold what it reached: `end` is the last row,
+/// `op` is row 0, every switch edge is before `end`, and the logic summary is the trace's.
+/// Returns `end`.
+pub(super) fn reached(outcome: &Outcome) -> Time {
+    let trace = outcome.trace.as_ref().unwrap();
+    let Observations::Transient {
+        end,
+        op,
+        switches,
+        logic,
+    } = &outcome.observations
+    else {
+        panic!("{:?}", outcome.observations);
+    };
+    assert_eq!(Some(*end), trace.end());
+    for (column, quantity) in trace.columns().iter().enumerate() {
+        assert_eq!(
+            op.values[quantity].get(),
+            trace.column(column)[0],
+            "{quantity}"
+        );
+    }
+    assert!(switches.values().flatten().all(|edge| edge.at < *end));
+    assert_eq!(logic.as_ref(), trace.logic().map(Logic::summary).as_ref());
+    *end
+}
+
+/// A clean run with a row at every accepted step.
+pub(super) fn run_steps(netlist: &Netlist) -> Trace {
     let mut diagnostics = Vec::new();
-    let outcome = run(netlist, &transient(netlist), &mut diagnostics);
+    let outcome = run(netlist, &transient(netlist), Rows::Steps, &mut diagnostics);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     outcome.trace.unwrap()
 }

@@ -13,7 +13,7 @@ fn reset_release(step_ps: Option<u64>) -> Netlist {
         r#"{{
           "version": 0,
           "seed": 0,
-          "analysis": {{ "transient": {{ "stop_ps": 40000000000, "max_step_ps": 1000000000 }} }},
+          "analysis": {{ "transient": {{ "stop_ps": 40000000000, "max_step_ps": 1000000000, "grid_ps": 1000000000 }} }},
           "ground": "gnd",
           "nets": ["gnd", "vcc", "rst", "out", "cont", "dis"],
           "parts": [
@@ -82,12 +82,12 @@ fn a_stalled_probe_ends_the_run_and_names_the_probe() {
         &netlist,
         &transient(&netlist),
         Budget { probe: 1, ..BUDGET },
-        Trace::MAX_ROWS,
+        Rows::Grid,
         &columns,
         &mut diagnostics,
     );
-    assert!(outcome.observations.logic.is_none());
-    let end = outcome.trace.unwrap().end().unwrap().as_ps();
+    let end = reached(&outcome).as_ps();
+    assert!(outcome.observations.logic().is_some());
     let [failed] = diagnostics.as_slice() else {
         panic!("{diagnostics:?}");
     };
@@ -113,7 +113,7 @@ fn source_and_switch_at(at: u64) -> Netlist {
         r#"{{
           "version": 0,
           "seed": 0,
-          "analysis": {{ "transient": {{ "stop_ps": 30000, "max_step_ps": 20000 }} }},
+          "analysis": {{ "transient": {{ "stop_ps": 30000, "max_step_ps": 20000, "grid_ps": 20000 }} }},
           "ground": "gnd",
           "nets": ["gnd", "vcc", "vout"],
           "parts": [
@@ -162,7 +162,7 @@ fn source_and_switch_at(at: u64) -> Netlist {
 fn a_source_jump_on_a_switch_edge_restarts_once() {
     let at = 10_000;
     let netlist = source_and_switch_at(at);
-    let trace = run_clean(&netlist);
+    let trace = run_steps(&netlist);
     let rows: Vec<u64> = trace.time().iter().map(|t| t.as_ps()).collect();
     let k = rows.binary_search(&at).unwrap();
     assert_eq!(rows[k + 1], at + EDGE_STEP);
@@ -197,7 +197,7 @@ fn a_source_jump_on_a_switch_edge_restarts_once() {
 
 #[test]
 fn a_source_jump_on_a_located_chip_event_restarts_once() {
-    let plain = run_clean(&reset_release(Some(30_000_000_000)));
+    let plain = run_steps(&reset_release(Some(30_000_000_000)));
     let logic = plain.logic().unwrap();
     let out = logic
         .signals()
@@ -220,7 +220,7 @@ fn a_source_jump_on_a_located_chip_event_restarts_once() {
     let mut trace = plain;
     let mut landed = false;
     for _ in 0..6 {
-        trace = run_clean(&reset_release(Some(at)));
+        trace = run_steps(&reset_release(Some(at)));
         let found = edge(&trace);
         if found == at {
             landed = true;

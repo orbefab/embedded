@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! traces/
-//!   index.json   the row count, the files, and the columns in ref order
+//!   index.json   the row count, the grid, the files, and the columns in ref order
 //!   time.u64     one little-endian u64 per row, picoseconds, strictly increasing
 //!   analog.f64   little-endian f64, column-major: column j is rows j*n to (j+1)*n - 1
 //!   logic.vcd    with a chip only, see `logic`
@@ -13,9 +13,11 @@ use serde::Serialize;
 use crate::finite::Finite;
 use crate::logic::Logic;
 use crate::name::{Quantity, Ref};
+use crate::netlist::Transient;
 use crate::time::Time;
 
-/// Every observed quantity at every accepted time.
+/// Every observed quantity at each row: t = 0, every multiple of the grid, and the stop, or
+/// the last time a failed run solved.
 #[derive(Debug, PartialEq)]
 pub struct Trace {
     columns: Vec<Ref>,
@@ -23,11 +25,12 @@ pub struct Trace {
     /// `values[column][row]`.
     values: Vec<Vec<f64>>,
     stop: Time,
+    grid: u64,
     logic: Option<Logic>,
 }
 
 impl Trace {
-    /// A transient run that would store more rows ends with `trace.too_large`.
+    /// A transient whose grid gives more rows is refused with `trace.too_large`.
     pub const MAX_ROWS: usize = 1_000_000;
     /// 2^26 f64 values, 512 MiB.
     pub const MAX_VALUES: usize = 1 << 26;
@@ -39,14 +42,17 @@ impl Trace {
         Self::MAX_ROWS.min(Self::MAX_VALUES / columns)
     }
 
-    /// `columns` in ref order, the same keys as the operating point.
-    pub fn new(columns: Vec<Ref>, stop: Time) -> Trace {
-        let values = vec![Vec::new(); columns.len()];
+    /// `columns` in ref order, the same keys as the operating point. Room for the rows a run
+    /// of `transient` writes, up to the row limit.
+    pub fn new(columns: Vec<Ref>, transient: &Transient) -> Trace {
+        let rows = transient.rows().min(Self::row_limit(columns.len()) as u64) as usize;
+        let values = columns.iter().map(|_| Vec::with_capacity(rows)).collect();
         Trace {
             columns,
-            time: Vec::new(),
+            time: Vec::with_capacity(rows),
             values,
-            stop,
+            stop: transient.stop,
+            grid: transient.grid,
             logic: None,
         }
     }
@@ -61,10 +67,11 @@ impl Trace {
         self.logic.as_ref()
     }
 
-    /// Panics unless `at` is after the last row and `row` has one value per column.
-    /// Either is an engine bug, never an input problem.
+    /// Panics unless `at` is after the last row, the trace is under its row limit, and `row`
+    /// has one value per column. Each is an engine bug, never an input problem.
     pub fn push(&mut self, at: Time, row: &[Finite]) {
         assert!(self.time.last().is_none_or(|&last| last < at));
+        assert!(self.rows() < Self::row_limit(self.columns.len()));
         assert_eq!(row.len(), self.columns.len());
         self.time.push(at);
         for (column, value) in self.values.iter_mut().zip(row) {
@@ -114,6 +121,7 @@ impl Trace {
         Index {
             format: FORMAT,
             rows: self.rows(),
+            grid_ps: self.grid,
             stop_ps: self.stop,
             end_ps: self.end().unwrap_or(Time::ZERO),
             time: FileIndex {
@@ -152,6 +160,7 @@ impl Trace {
     }
 }
 
+/// A bump of this also bumps `run_folder::FORMAT_VERSION`.
 const FORMAT: u64 = 0;
 const INDEX: &str = "index.json";
 const TIME: &str = "time.u64";
@@ -173,6 +182,7 @@ fn unit(reference: &Ref) -> &'static str {
 struct Index<'a> {
     format: u64,
     rows: usize,
+    grid_ps: u64,
     stop_ps: Time,
     end_ps: Time,
     time: FileIndex,
@@ -231,7 +241,12 @@ mod tests {
 
     fn trace() -> Trace {
         let columns = vec!["#net.a".parse().unwrap(), "#r1.i".parse().unwrap()];
-        let mut trace = Trace::new(columns, Time::from_ps(30));
+        let transient = Transient {
+            stop: Time::from_ps(30),
+            max_step: 10,
+            grid: 10,
+        };
+        let mut trace = Trace::new(columns, &transient);
         trace.push(Time::ZERO, &finite(&[1.0, -0.0]));
         trace.push(Time::from_ps(10), &finite(&[2.5, 0.25]));
         trace
@@ -262,6 +277,7 @@ mod tests {
             r##"{
   "format": 0,
   "rows": 2,
+  "grid_ps": 10,
   "stop_ps": 30,
   "end_ps": 10,
   "time": {

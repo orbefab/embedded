@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use sim_cli::Completed;
 use sim_core::logic::Level;
+use sim_core::run_folder::Results;
 use sim_core::timestamp::Timestamp;
 
 /// The engine's conductance from every node to ground.
@@ -28,6 +29,18 @@ fn run(netlist: &serde_json::Value) -> Completed {
         done.results.diagnostics()
     );
     done
+}
+
+/// Like `run`, with a row at every accepted step, for the tests that read the trace at an edge.
+fn run_steps(netlist: &serde_json::Value) -> Results {
+    let netlist = sim_core::netlist::parse(&serde_json::to_vec(netlist).unwrap()).unwrap();
+    let results = sim_circuit::simulate_steps(&netlist);
+    assert!(
+        results.diagnostics().is_empty(),
+        "{:?}",
+        results.diagnostics()
+    );
+    results
 }
 
 fn part<'a>(netlist: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
@@ -100,8 +113,8 @@ impl Astable {
 }
 
 /// `(t_ps, level)` of every `#u1.logic.out` edge.
-fn out_edges(done: &Completed) -> Vec<(u64, Level)> {
-    let logic = done.results.observations().logic.as_ref().unwrap();
+fn out_edges(results: &Results) -> Vec<(u64, Level)> {
+    let logic = results.trace().unwrap().logic().unwrap();
     let out = logic
         .signals()
         .iter()
@@ -126,8 +139,8 @@ fn steady_period(edges: &[(u64, Level)]) -> f64 {
     (falls[falls.len() - 1] - falls[0]) as f64 * 1e-12 / (falls.len() - 1) as f64
 }
 
-fn column<'a>(done: &'a Completed, key: &str) -> &'a [f64] {
-    let trace = done.results.trace().unwrap();
+fn column<'a>(results: &'a Results, key: &str) -> &'a [f64] {
+    let trace = results.trace().unwrap();
     let index = trace
         .columns()
         .iter()
@@ -136,8 +149,8 @@ fn column<'a>(done: &'a Completed, key: &str) -> &'a [f64] {
     trace.column(index)
 }
 
-fn rows(done: &Completed) -> Vec<u64> {
-    done.results
+fn rows(results: &Results) -> Vec<u64> {
+    results
         .trace()
         .unwrap()
         .time()
@@ -150,7 +163,7 @@ fn rows(done: &Completed) -> Vec<u64> {
 fn the_period_is_within_the_formula_budget_and_its_own_closed_form() {
     let netlist = netlist();
     let astable = Astable::of(&netlist);
-    let edges = out_edges(&run(&netlist));
+    let edges = out_edges(&run(&netlist).results);
     let period = steady_period(&edges);
     let Astable { ra, rb, c, .. } = astable;
 
@@ -197,14 +210,14 @@ fn past(ladder: f64, level: Level, thr: f64, cont: f64) -> f64 {
 #[test]
 fn every_output_edge_is_a_located_crossing_and_never_a_step_late() {
     let netlist = netlist();
-    let done = run(&netlist);
+    let results = run_steps(&netlist);
     let ladder = value(&part(&netlist, "u1")["ladder_resistance"]);
     let (time, thr, cont) = (
-        rows(&done),
-        column(&done, "#net.thr"),
-        column(&done, "#net.cont"),
+        rows(&results),
+        column(&results, "#net.thr"),
+        column(&results, "#net.cont"),
     );
-    let edges = out_edges(&done);
+    let edges = out_edges(&results);
     assert_eq!(edges.len(), 10);
     for (at, level) in edges {
         let row = time
@@ -228,12 +241,12 @@ fn every_output_edge_is_a_located_crossing_and_never_a_step_late() {
 /// the largest difference on any row. That difference, plus how far the edge row sits past the
 /// nominal threshold, over the closed form's slope there, bounds the half period's error. Edge
 /// `n` carries the sum over the half periods before it.
-fn edge_bounds(done: &Completed, astable: &Astable) -> Vec<f64> {
-    let (time, thr) = (rows(done), column(done, "#net.thr"));
+fn edge_bounds(results: &Results, astable: &Astable) -> Vec<f64> {
+    let (time, thr) = (rows(results), column(results, "#net.thr"));
     let mut start = (0, 0.0);
     let mut sum = 0.0;
     let mut bounds = Vec::new();
-    for (at, level) in out_edges(done) {
+    for (at, level) in out_edges(results) {
         let (discharge, threshold) = match level {
             Level::Low => (astable.off, astable.upper()),
             Level::High => (astable.on, astable.lower()),
@@ -267,8 +280,8 @@ fn the_edges_do_not_move_with_max_step_beyond_the_measured_trajectory_error() {
         .map(|step| {
             let mut netlist = committed.clone();
             netlist["analysis"]["transient"]["max_step_ps"] = step.into();
-            let done = run(&netlist);
-            (step, out_edges(&done), edge_bounds(&done, &astable))
+            let results = run_steps(&netlist);
+            (step, out_edges(&results), edge_bounds(&results, &astable))
         })
         .collect();
     for (a, b) in [(0, 1), (0, 2), (1, 2)] {
@@ -292,7 +305,7 @@ fn the_edges_do_not_move_with_max_step_beyond_the_measured_trajectory_error() {
     }
 }
 
-/// `{ref: {initial, edges}}` read from a logic.vcd, as `observations.logic` writes it.
+/// `{ref: {initial, edges: [{t_ps, level}]}}` read from a logic.vcd.
 fn read_vcd(text: &str) -> serde_json::Value {
     let mut tokens = text.split_whitespace();
     let mut scope = "";
@@ -334,16 +347,36 @@ fn read_vcd(text: &str) -> serde_json::Value {
     serde_json::Value::Object(signals)
 }
 
+/// `observations.logic` computed from `read_vcd`'s edges.
+fn summary(signals: &serde_json::Value) -> serde_json::Value {
+    let signals = signals.as_object().unwrap().iter().map(|(key, signal)| {
+        let edges = signal["edges"].as_array().unwrap();
+        let initial = &signal["initial"];
+        let time = |edge: Option<&serde_json::Value>| edge.map(|edge| edge["t_ps"].clone());
+        let summary = serde_json::json!({
+            "initial": initial,
+            "final": edges.last().map_or(initial, |edge| &edge["level"]),
+            "count": edges.len(),
+            "first_ps": time(edges.first()),
+            "last_ps": time(edges.last()),
+        });
+        (key.clone(), summary)
+    });
+    serde_json::Value::Object(signals.collect())
+}
+
 #[test]
-fn logic_vcd_reads_back_as_the_observations_and_two_runs_write_the_same_bytes() {
+fn logic_vcd_reads_back_as_the_summary_and_two_runs_write_the_same_bytes() {
     let netlist = netlist();
     let first = run(&netlist);
     let vcd = first.folder.file("traces/logic.vcd").unwrap();
     let observations: serde_json::Value =
         serde_json::from_slice(first.folder.file("observations.json").unwrap()).unwrap();
+    let edges = read_vcd(std::str::from_utf8(vcd).unwrap());
+    assert_eq!(summary(&edges), observations["logic"]);
     assert_eq!(
-        read_vcd(std::str::from_utf8(vcd).unwrap()),
-        observations["logic"]
+        edges["#u1.logic.out"]["edges"].as_array().unwrap().len(),
+        10
     );
     let signals: Vec<_> = observations["logic"]
         .as_object()

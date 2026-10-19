@@ -1,10 +1,9 @@
-//! Logic levels of a transient run: `traces/logic.vcd`, and `observations.logic` on success.
-//! Both are written from one `Logic`.
+//! Logic levels of a transient run: every change in `traces/logic.vcd`, and one summary per
+//! signal in `observations.logic`. Both are written from one `Logic`.
 
 use std::collections::BTreeMap;
 
-use serde::ser::SerializeMap;
-use serde::{Serialize, Serializer};
+use serde::Serialize;
 
 use crate::name::{Name, Ref};
 use crate::time::Time;
@@ -29,7 +28,8 @@ impl Level {
     }
 }
 
-/// Every logic signal's initial level and its changes, in time order.
+/// Every logic signal's initial level and its changes, in time order. It has no `Serialize`:
+/// observations hold its summary.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Logic {
     /// `Ref::Logic`, in ref order. A signal's index is its VCD identifier's index.
@@ -42,13 +42,32 @@ pub struct Logic {
 }
 
 /// `signal` reads `level` from `at` on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Change {
-    #[serde(rename = "t_ps")]
     pub at: Time,
-    #[serde(skip)]
     pub signal: usize,
     pub level: Level,
+}
+
+/// `observations.logic`: `{ref: {initial, final, count, first_ps, last_ps}}`, keys in ref order.
+#[derive(Debug, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct LogicSummary(pub BTreeMap<Ref, SignalSummary>);
+
+/// One signal over a run. Levels are binary, so the first change is to the level opposite
+/// `initial`, and the last is to `end`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct SignalSummary {
+    pub initial: Level,
+    /// The level after the last change.
+    #[serde(rename = "final")]
+    pub end: Level,
+    pub count: usize,
+    /// `None` when `count` is 0.
+    #[serde(rename = "first_ps")]
+    pub first: Option<Time>,
+    #[serde(rename = "last_ps")]
+    pub last: Option<Time>,
 }
 
 impl Logic {
@@ -98,6 +117,30 @@ impl Logic {
 
     pub fn changes(&self) -> &[Change] {
         &self.changes
+    }
+
+    /// One entry per signal: its initial and final level, how many changes, and when the
+    /// first and the last were.
+    pub fn summary(&self) -> LogicSummary {
+        let mut summaries: Vec<SignalSummary> = self
+            .initial
+            .iter()
+            .zip(&self.now)
+            .map(|(&initial, &end)| SignalSummary {
+                initial,
+                end,
+                count: 0,
+                first: None,
+                last: None,
+            })
+            .collect();
+        for change in &self.changes {
+            let summary = &mut summaries[change.signal];
+            summary.count += 1;
+            summary.first.get_or_insert(change.at);
+            summary.last = Some(change.at);
+        }
+        LogicSummary(self.signals.iter().cloned().zip(summaries).collect())
     }
 
     /// Each signal's `$scope`, `$var` name and identifier, in signal order.
@@ -160,30 +203,6 @@ fn identifier(index: usize) -> String {
         if rest == 0 {
             return id;
         }
-    }
-}
-
-/// `{"#u1.logic.out": {"initial": "high", "edges": [{"t_ps": .., "level": ..}]}}`, keys in ref order.
-impl Serialize for Logic {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        #[derive(Serialize)]
-        struct Signal<'a> {
-            initial: Level,
-            edges: Vec<&'a Change>,
-        }
-        let mut edges: BTreeMap<usize, Vec<&Change>> = BTreeMap::new();
-        for change in &self.changes {
-            edges.entry(change.signal).or_default().push(change);
-        }
-        let mut map = serializer.serialize_map(Some(self.signals.len()))?;
-        for (index, (signal, initial)) in self.signals.iter().zip(&self.initial).enumerate() {
-            let entry = Signal {
-                initial: *initial,
-                edges: edges.remove(&index).unwrap_or_default(),
-            };
-            map.serialize_entry(signal, &entry)?;
-        }
-        map.end()
     }
 }
 
@@ -308,11 +327,47 @@ $end
     }
 
     #[test]
-    fn observations_list_every_signal_in_ref_order_with_its_edges() {
-        let text = serde_json::to_string(&two_chips()).unwrap();
+    fn the_summary_counts_each_signals_changes_in_ref_order() {
+        let text = serde_json::to_string(&two_chips().summary()).unwrap();
         assert_eq!(
             text,
-            r##"{"#u1.logic.out":{"initial":"high","edges":[{"t_ps":626,"level":"low"}]},"#u1.logic.trig":{"initial":"low","edges":[{"t_ps":231,"level":"high"}]},"#u2.logic.out":{"initial":"low","edges":[{"t_ps":626,"level":"high"}]}}"##
+            r##"{"#u1.logic.out":{"initial":"high","final":"low","count":1,"first_ps":626,"last_ps":626},"#u1.logic.trig":{"initial":"low","final":"high","count":1,"first_ps":231,"last_ps":231},"#u2.logic.out":{"initial":"low","final":"high","count":1,"first_ps":626,"last_ps":626}}"##
+        );
+    }
+
+    #[test]
+    fn a_cancelled_glitch_leaves_the_summary_and_a_quiet_signal_has_no_times() {
+        let mut logic = logic(&["#u1.logic.out", "#u1.logic.reset"]);
+        logic.set(at(3), 0, Level::High);
+        logic.set(at(5), 0, Level::Low);
+        logic.set(at(9), 0, Level::High);
+        logic.set(at(9), 0, Level::Low);
+        let summary = logic.summary();
+        let [out, reset] =
+            ["#u1.logic.out", "#u1.logic.reset"].map(|s| summary.0[&s.parse().unwrap()]);
+        assert_eq!(
+            out,
+            SignalSummary {
+                initial: Level::Low,
+                end: Level::Low,
+                count: 2,
+                first: Some(at(3)),
+                last: Some(at(5)),
+            }
+        );
+        assert_eq!(
+            reset,
+            SignalSummary {
+                initial: Level::Low,
+                end: Level::Low,
+                count: 0,
+                first: None,
+                last: None,
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(reset).unwrap(),
+            serde_json::json!({"initial": "low", "final": "low", "count": 0, "first_ps": null, "last_ps": null})
         );
     }
 }
