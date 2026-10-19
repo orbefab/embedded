@@ -10,6 +10,7 @@ use sim_core::run_folder::{Observations, OpPoint};
 use sim_core::time::Time;
 use sim_core::trace::Trace;
 
+use crate::active::{self, Actives};
 use crate::chip;
 use crate::lte::{self, Charges, Segment, Verdict};
 use crate::newton::{
@@ -104,12 +105,21 @@ pub(crate) fn run(
             trace: None,
         };
     }
-    run_with(netlist, transient, BUDGET, rows, &columns, diagnostics)
+    run_with(
+        netlist,
+        transient,
+        Vec::new(),
+        BUDGET,
+        rows,
+        &columns,
+        diagnostics,
+    )
 }
 
 fn run_with(
     netlist: &Netlist,
     transient: &Transient,
+    actives: Vec<active::Chip>,
     budget: Budget,
     rows: Rows,
     columns: &Columns,
@@ -125,7 +135,7 @@ fn run_with(
         op: None,
         logic: None,
     };
-    let result = steps(netlist, transient, budget, &mut record);
+    let result = steps(netlist, transient, actives, budget, &mut record);
     let outcome = record.finish(netlist, diagnostics);
     diagnostics.extend(result.err());
     outcome
@@ -259,10 +269,11 @@ struct Accepted {
 fn steps(
     netlist: &Netlist,
     transient: &Transient,
+    actives: Vec<active::Chip>,
     budget: Budget,
     record: &mut Record<'_>,
 ) -> Result<(), Diagnostic> {
-    let circuit = Circuit::new(netlist)?;
+    let circuit = Circuit::with_actives(netlist, actives)?;
     let charges = Charges::new(netlist, &circuit.layout);
     let start = Iterate::initial(&circuit);
     let start = op::settle(
@@ -270,6 +281,7 @@ fn steps(
         Conditions::NOMINAL,
         start,
         circuit.power_on(),
+        &Actives::power_on(&circuit),
         None,
         op::OP_BUDGET,
     )?;
@@ -281,6 +293,7 @@ fn steps(
     )?;
     record.accept(Time::ZERO, row)?;
     record.logic(Time::ZERO, &circuit, &start.chips, &start.levels);
+    let mut actives = Actives::new(&circuit, &start.levels);
     let mut breakpoints = Breakpoints::new(netlist, *transient);
     let segment = Segment::start(&charges, &start.iterate.solution);
     let mut accepted = Accepted {
@@ -303,8 +316,9 @@ fn steps(
             });
         }
         let h = plan.clip(accepted.at, breakpoints.next_after(accepted.at));
-        let at = Time::from_ps(accepted.at.as_ps() + h);
-        match attempt(&circuit, &accepted, h, budget.step) {
+        let at = actives.horizon(Time::from_ps(accepted.at.as_ps() + h));
+        let h = at.as_ps() - accepted.at.as_ps();
+        match attempt(&circuit, &accepted, actives.cores(), h, budget.step) {
             Ok(converged) => {
                 let error = lte::error(
                     &charges,
@@ -342,7 +356,7 @@ fn steps(
                         &accepted.levels,
                         (accepted.at, &accepted.iterate.solution),
                         (at, converged),
-                        |h| attempt(&circuit, &accepted, h, budget.probe),
+                        |h| attempt(&circuit, &accepted, actives.cores(), h, budget.probe),
                     )
                     .map_err(|(probe, failure)| {
                         probe_failure(&circuit, accepted.at, probe, failure)
@@ -358,11 +372,18 @@ fn steps(
                 record.accept(at, row)?;
                 accepted_steps += 1;
                 iterations = 0;
-                // A watch cuts the step. Only a changed stamp, a chip's, a contact's or a source's,
-                // restarts.
+                // A watch cuts the step. Only a changed stamp, a chip's, an active chip's image, a
+                // contact's or a source's, restarts.
                 let chips = circuit.react(&accepted.chips, &accepted.levels, &levels);
-                let restart =
-                    (breakpoints.is_edge(at) || chips != accepted.chips) && at < transient.stop;
+                let driven = actives.land(
+                    &circuit,
+                    at,
+                    &converged.iterate.solution,
+                    &accepted.levels,
+                    &levels,
+                );
+                let restart = (breakpoints.is_edge(at) || chips != accepted.chips || driven)
+                    && at < transient.stop;
                 // A step cut short by a breakpoint or a watch keeps the step it wanted.
                 plan = match (restart, h == plan.h && at == step_end) {
                     (true, _) => Plan::RESTART,
@@ -375,9 +396,11 @@ fn steps(
                         at,
                         converged.iterate,
                         chips,
+                        actives.cores(),
                         &levels,
                         budget.restart,
                     )?;
+                    actives.input(&circuit, at, &levels, &held.levels);
                     let segment = Segment::start(&charges, &held.iterate.solution);
                     Accepted {
                         at,
@@ -471,7 +494,13 @@ fn probe_failure(circuit: &Circuit, from: Time, probe: Time, failure: Failure) -
 }
 
 /// One step of `h` ps from `from`. `from` is only read, so a retry calls this again.
-fn attempt(circuit: &Circuit, from: &Accepted, h: u64, budget: u32) -> Result<Converged, Failure> {
+fn attempt(
+    circuit: &Circuit,
+    from: &Accepted,
+    cores: &[active::Core],
+    h: u64,
+    budget: u32,
+) -> Result<Converged, Failure> {
     let conditions = Conditions {
         at: Time::from_ps(from.at.as_ps() + h),
         history: History::Step(Integration {
@@ -481,6 +510,7 @@ fn attempt(circuit: &Circuit, from: &Accepted, h: u64, budget: u32) -> Result<Co
             previous: &from.iterate.solution,
         }),
         chips: &from.chips,
+        cores,
         ..Conditions::NOMINAL
     };
     newton(circuit, &conditions, from.iterate.clone(), budget)
@@ -495,6 +525,7 @@ fn restart_solve(
     at: Time,
     step: Iterate,
     chips: Vec<chip::State>,
+    cores: &[active::Core],
     levels: &Levels,
     budget: u32,
 ) -> Result<op::Settled, Diagnostic> {
@@ -510,6 +541,7 @@ fn restart_solve(
         conditions,
         step.clone(),
         chips,
+        cores,
         Some(levels),
         budget,
     )

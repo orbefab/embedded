@@ -81,6 +81,7 @@ fn a_stalled_probe_ends_the_run_and_names_the_probe() {
     let outcome = run_with(
         &netlist,
         &transient(&netlist),
+        Vec::new(),
         Budget { probe: 1, ..BUDGET },
         Rows::Grid,
         &columns,

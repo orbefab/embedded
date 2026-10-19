@@ -206,6 +206,7 @@ fn a_dense_pulse_stops_at_the_step_limit_and_keeps_what_it_reached() {
     let outcome = run_with(
         &netlist,
         &transient(&netlist),
+        Vec::new(),
         Budget {
             steps: 30,
             ..BUDGET
@@ -241,6 +242,7 @@ fn a_failed_runs_last_interval_ends_at_its_off_grid_last_step() {
     let outcome = run_with(
         &netlist,
         &transient(&netlist),
+        Vec::new(),
         Budget { steps: 8, ..BUDGET },
         Rows::Grid,
         &columns,
@@ -263,6 +265,7 @@ fn a_failed_runs_last_interval_ends_at_its_off_grid_last_step() {
     let steps = run_with(
         &netlist,
         &transient(&netlist),
+        Vec::new(),
         Budget { steps: 8, ..BUDGET },
         Rows::Steps,
         &columns,
@@ -309,6 +312,7 @@ fn in_step_rows_mode_each_interval_holds_exactly_its_two_rows() {
     let outcome = run_with(
         &netlist,
         &transient(&netlist),
+        Vec::new(),
         BUDGET,
         Rows::Steps,
         &columns,
@@ -333,6 +337,7 @@ fn a_rating_survives_a_convergence_failure() {
     let outcome = run_with(
         &netlist,
         &transient(&netlist),
+        Vec::new(),
         Budget { step: 1, ..BUDGET },
         Rows::Grid,
         &columns,

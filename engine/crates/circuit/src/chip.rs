@@ -9,10 +9,10 @@ use sim_core::netlist::{Chip, PartId};
 use crate::mna::{Layout, Stamp, Unknowns};
 use crate::watch::Watch;
 
-/// A chip's discrete state. A value, replaced at an accepted time and never mutated. The loop
-/// restarts whenever a state changes, so it holds only what the stamp reads. A chip with memory
-/// that leaves its drive alone, such as a register, needs a drive view for the restart to
-/// compare instead.
+/// A passive chip's discrete state. A value, replaced at an accepted time and never mutated.
+/// The loop restarts whenever a state changes, so it holds only what the stamp reads. A chip
+/// with memory that leaves its drive alone is an active chip, `active::Chip`, whose restart
+/// compares only its drive image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum State {
     Ne555(ne555::State),

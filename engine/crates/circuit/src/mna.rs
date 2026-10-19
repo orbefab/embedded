@@ -171,6 +171,31 @@ impl System {
         }
     }
 
+    pub(crate) fn conductance(&mut self, a: impl Into<Node>, b: impl Into<Node>, g: f64) {
+        let (a, b) = (a.into(), b.into());
+        self.add_term(a, a, g);
+        self.add_term(b, b, g);
+        self.add_term(a, b, -g);
+        self.add_term(b, a, -g);
+    }
+
+    /// `amps` flows out of `from`, through the element, into `to`.
+    pub(crate) fn current(&mut self, from: impl Into<Node>, to: impl Into<Node>, amps: f64) {
+        if let Node::Row(row) = from.into() {
+            self.b[row] -= amps;
+        }
+        if let Node::Row(row) = to.into() {
+            self.b[row] += amps;
+        }
+    }
+
+    fn add_term(&mut self, row: Node, col: Node, value: f64) {
+        let (Node::Row(row), Node::Row(col)) = (row, col) else {
+            return;
+        };
+        self.a.add(row, col, value);
+    }
+
     pub(crate) fn solve(&mut self) -> Result<Solution, Singular> {
         Ok(Solution::from(crate::dense::solve(
             &mut self.a,
@@ -249,21 +274,12 @@ impl Stamp<'_> {
     }
 
     pub(crate) fn conductance(&mut self, a: impl Into<Node>, b: impl Into<Node>, g: f64) {
-        let (a, b) = (a.into(), b.into());
-        self.add_term(a, a, g);
-        self.add_term(b, b, g);
-        self.add_term(a, b, -g);
-        self.add_term(b, a, -g);
+        self.sys.conductance(a, b, g);
     }
 
     /// `amps` flows out of `from`, through the part, into `to`.
     pub(crate) fn current(&mut self, from: impl Into<Node>, to: impl Into<Node>, amps: f64) {
-        if let Node::Row(row) = from.into() {
-            self.sys.b[row] -= amps;
-        }
-        if let Node::Row(row) = to.into() {
-            self.sys.b[row] += amps;
-        }
+        self.sys.current(from, to, amps);
     }
 
     /// `volts` is the netlist value. The stamp scales it by `conditions.source_scale`.
@@ -300,13 +316,6 @@ impl Stamp<'_> {
 
     fn rows(&self) -> &PartRows {
         &self.layout.part_rows[self.part.index()]
-    }
-
-    fn add_term(&mut self, row: Node, col: Node, value: f64) {
-        let (Node::Row(row), Node::Row(col)) = (row, col) else {
-            return;
-        };
-        self.sys.a.add(row, col, value);
     }
 }
 

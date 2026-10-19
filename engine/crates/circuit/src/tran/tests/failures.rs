@@ -12,6 +12,7 @@ fn a_step_that_fails_down_to_one_picosecond_ends_the_run_at_the_last_accepted_ti
     let outcome = run_with(
         &netlist,
         &transient(&netlist),
+        Vec::new(),
         Budget { step: 1, ..BUDGET },
         Rows::Grid,
         &columns,
@@ -92,6 +93,7 @@ fn a_junction_step_that_fails_down_to_one_picosecond_names_the_junction() {
     let outcome = run_with(
         &netlist,
         &transient(&netlist),
+        Vec::new(),
         Budget { step: 2, ..BUDGET },
         Rows::Grid,
         &columns,
@@ -130,6 +132,7 @@ fn a_restart_that_fails_keeps_the_edge_row_and_names_the_edge() {
     let outcome = run_with(
         &netlist,
         &transient(&netlist),
+        Vec::new(),
         Budget {
             restart: 1,
             ..BUDGET

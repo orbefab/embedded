@@ -3,6 +3,7 @@ use sim_core::name::Ref;
 use sim_core::netlist::{Chip, Model, Netlist, PartId, Waveform};
 use sim_core::time::Time;
 
+use crate::active;
 use crate::chip;
 use crate::element;
 use crate::mna::{GMIN, Layout, Probe, Solution, Stamp, System};
@@ -17,12 +18,22 @@ pub(crate) const ABSTOL: f64 = 1e-12;
 pub(crate) struct Circuit<'n> {
     pub(crate) netlist: &'n Netlist,
     pub(crate) layout: Layout,
+    /// The netlist's chips' watches by slot, then each active chip's.
     pub(crate) watches: Watches,
+    /// By active slot.
+    pub(crate) actives: Vec<active::Chip>,
 }
 
 impl<'n> Circuit<'n> {
     /// Fails with `solver.too_large` before the matrix is allocated.
     pub(crate) fn new(netlist: &'n Netlist) -> Result<Circuit<'n>, Diagnostic> {
+        Circuit::with_actives(netlist, Vec::new())
+    }
+
+    pub(crate) fn with_actives(
+        netlist: &'n Netlist,
+        actives: Vec<active::Chip>,
+    ) -> Result<Circuit<'n>, Diagnostic> {
         let layout = Layout::new(netlist);
         if layout.size() > crate::dense::MAX_UNKNOWNS {
             return Err(Diagnostic::SolverTooLarge {
@@ -35,13 +46,19 @@ impl<'n> Circuit<'n> {
             netlist,
             layout,
             watches: Watches::new(Vec::new()),
+            actives,
         };
         let watches = circuit
             .chips()
             .map(|(id, chip)| chip::watches(chip, id, &circuit.layout))
+            .chain(circuit.actives.iter().map(|chip| chip.watches.clone()))
             .collect();
         circuit.watches = Watches::new(watches);
         Ok(circuit)
+    }
+
+    pub(crate) fn active_watches(&self, k: usize) -> std::ops::Range<usize> {
+        self.watches.of(self.layout.chips().len() + k)
     }
 
     /// The chips in slot order.
@@ -80,7 +97,7 @@ impl<'n> Circuit<'n> {
 }
 
 /// What varies between Newton calls on one circuit.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Conditions<'h> {
     /// Siemens from every node row to ground.
     pub(crate) gmin: f64,
@@ -92,6 +109,8 @@ pub(crate) struct Conditions<'h> {
     pub(crate) history: History<'h>,
     /// Each chip's state, by slot. Only an accepted time changes it.
     pub(crate) chips: &'h [chip::State],
+    /// Each active chip's core in force, by active slot.
+    pub(crate) cores: &'h [active::Core],
 }
 
 impl Conditions<'_> {
@@ -117,6 +136,7 @@ impl Conditions<'static> {
         at: Time::ZERO,
         history: History::Start,
         chips: &[],
+        cores: &[],
     };
 }
 
@@ -257,6 +277,14 @@ pub(crate) fn newton(
                     iterate: &iterate,
                     conditions,
                 },
+            );
+        }
+        for (k, chip) in circuit.actives.iter().enumerate() {
+            active::stamp(
+                chip,
+                &conditions.cores[k],
+                &mut system,
+                conditions.source_scale,
             );
         }
         let solution = system

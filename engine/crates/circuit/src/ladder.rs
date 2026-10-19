@@ -157,6 +157,17 @@ mod tests {
         }
     }
 
+    /// The rung leaves every condition at nominal.
+    fn nominal(rung: Rung) -> bool {
+        let conditions = rung.conditions(Conditions::NOMINAL);
+        let base = Conditions::NOMINAL;
+        (conditions.gmin, conditions.source_scale, conditions.at)
+            == (base.gmin, base.source_scale, base.at)
+            && conditions.history == base.history
+            && conditions.chips == base.chips
+            && conditions.cores.is_empty()
+    }
+
     fn failed(rung: Rung) -> Next {
         next(rung, false)
     }
@@ -166,10 +177,7 @@ mod tests {
         assert_eq!(next(Rung::Plain, true), Next::Done);
         assert_eq!(failed(Rung::Plain), Next::Try(GMIN_FIRST));
         assert_eq!(GMIN_FIRST.conditions(Conditions::NOMINAL).gmin, GMIN + 1e-2);
-        assert_eq!(
-            Rung::Plain.conditions(Conditions::NOMINAL),
-            Conditions::NOMINAL
-        );
+        assert!(nominal(Rung::Plain));
         assert!(!GMIN_FIRST.warm());
     }
 
@@ -189,7 +197,7 @@ mod tests {
         for pair in extras[..11].windows(2) {
             assert!((pair[0] / pair[1] - 10.0).abs() < 1e-9, "{extras:?}");
         }
-        assert_eq!(rung.conditions(Conditions::NOMINAL), Conditions::NOMINAL);
+        assert!(nominal(rung));
         assert_eq!(next(rung, true), Next::Done);
     }
 
@@ -271,7 +279,7 @@ mod tests {
             rung = tried(rung);
         }
         assert_eq!(scales, [0.0, 0.1, 0.1 + 0.2, 0.1 + 0.2 + 0.4, 1.0]);
-        assert_eq!(rung.conditions(Conditions::NOMINAL), Conditions::NOMINAL);
+        assert!(nominal(rung));
         assert_eq!(next(rung, true), Next::Done);
     }
 

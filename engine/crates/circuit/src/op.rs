@@ -6,6 +6,7 @@ use sim_core::time::Time;
 
 use sim_core::name::Ref;
 
+use crate::active::{self, Actives};
 use crate::chip;
 use crate::ladder::{self, Next, Rung};
 use crate::newton::{Circuit, Conditions, Failure, Iterate, Offender, newton};
@@ -43,6 +44,7 @@ fn solve(netlist: &Netlist, columns: &Columns) -> Result<Vec<Finite>, Diagnostic
         Conditions::NOMINAL,
         start,
         circuit.power_on(),
+        &Actives::power_on(&circuit),
         None,
         OP_BUDGET,
     )?;
@@ -67,6 +69,7 @@ pub(crate) fn settle(
     base: Conditions<'_>,
     start: Iterate,
     chips: Vec<chip::State>,
+    cores: &[active::Core],
     prior: Option<&Levels>,
     budget: u32,
 ) -> Result<Settled, Diagnostic> {
@@ -77,6 +80,7 @@ pub(crate) fn settle(
     for _ in 0..SETTLE_ROUNDS {
         let conditions = Conditions {
             chips: &chips,
+            cores,
             ..base
         };
         let iterate = climb(circuit, conditions, start, |_| budget)?;

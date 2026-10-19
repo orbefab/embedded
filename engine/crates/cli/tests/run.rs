@@ -166,7 +166,7 @@ fn doctor_exits_zero() {
     assert!(stderr.is_empty(), "{stderr}");
     let doc = json(&stdout);
     assert_eq!(doc["status"], "ok");
-    assert_eq!(doc["engine_version"], "0.2.0");
+    assert_eq!(doc["engine_version"], sim_core::run_folder::ENGINE_VERSION);
     assert_eq!(doc["netlist_versions"], serde_json::json!([0]));
     assert_eq!(doc["run_format"], 0);
     assert_eq!(doc["checks"][0]["name"], "self_test.divider");
