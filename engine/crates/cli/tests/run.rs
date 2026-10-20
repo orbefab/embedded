@@ -1,7 +1,12 @@
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
+
+use common::examples::transient_examples;
+use common::{files, transient_folder};
 
 fn sim(args: &[&str]) -> (i32, String, String) {
     let output = Command::new(env!("CARGO_BIN_EXE_sim"))
@@ -374,51 +379,11 @@ fn the_5v_led_is_within_its_ratings() {
     let _ = fs::remove_dir_all(&out);
 }
 
-/// Every file under `dir`, by path relative to it.
-fn files(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
-    let mut out = std::collections::BTreeMap::new();
-    let mut pending = vec![dir.to_path_buf()];
-    while let Some(next) = pending.pop() {
-        for entry in fs::read_dir(next).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                pending.push(path);
-            } else {
-                let rel = path
-                    .strip_prefix(dir)
-                    .unwrap()
-                    .to_string_lossy()
-                    .into_owned();
-                out.insert(rel, fs::read(&path).unwrap());
-            }
-        }
-    }
-    out
-}
-
-fn u64s(bytes: &[u8]) -> Vec<u64> {
-    let (words, rest) = bytes.as_chunks::<8>();
-    assert!(rest.is_empty());
-    words.iter().map(|&word| u64::from_le_bytes(word)).collect()
-}
-
-fn f64s(bytes: &[u8]) -> Vec<f64> {
-    let (words, rest) = bytes.as_chunks::<8>();
-    assert!(rest.is_empty());
-    words.iter().map(|&word| f64::from_le_bytes(word)).collect()
-}
-
 #[test]
 fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
-    for name in [
-        "rc-switch",
-        "button-led",
-        "ne555-led",
-        "v-pulse-rc",
-        "current-pulse",
-    ] {
+    for name in transient_examples() {
         let out = scratch(&format!("tran-{name}"));
-        let netlist = named_example(name);
+        let netlist = named_example(&name);
         let (code, stdout, stderr) = sim(&[
             "run",
             netlist.to_str().unwrap(),
@@ -428,98 +393,14 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
         assert_eq!(code, 0, "{stdout}");
         assert!(stderr.is_empty(), "{stderr}");
         assert_eq!(json(&stdout)["diagnostics"], serde_json::json!([]));
-        let found = files(&out);
-        let names: Vec<_> = found.keys().map(String::as_str).collect();
-        let mut expected = vec![
-            "diagnostics.json",
-            "manifest.json",
-            "netlist.json",
-            "observations.json",
-            "traces/analog.f64",
-            "traces/envelope.f64",
-            "traces/index.json",
-        ];
-        // Only a netlist with a chip has logic levels.
-        let chip = name == "ne555-led";
-        if chip {
-            expected.push("traces/logic.vcd");
-        }
-        expected.push("traces/time.u64");
-        assert_eq!(names, expected);
-        let index: serde_json::Value = serde_json::from_slice(&found["traces/index.json"]).unwrap();
-        assert_eq!(index.get("logic").is_some(), chip, "{name}");
-        let input: serde_json::Value = serde_json::from_slice(&found["netlist.json"]).unwrap();
-        let rows = index["rows"].as_u64().unwrap() as usize;
-        let time = u64s(&found["traces/time.u64"]);
-        let analog = f64s(&found["traces/analog.f64"]);
-        let columns = index["analog"]["columns"].as_array().unwrap();
-        assert_eq!(time.len(), rows, "{name}");
-        assert_eq!(analog.len(), rows * columns.len(), "{name}");
-        let stop = &input["analysis"]["transient"]["stop_ps"];
-        let grid = &input["analysis"]["transient"]["grid_ps"];
-        assert_eq!(&index["stop_ps"], stop);
-        assert_eq!(&index["grid_ps"], grid);
-        assert_eq!(&index["end_ps"], stop);
-        let (stop, grid) = (stop.as_u64().unwrap(), grid.as_u64().unwrap());
-        assert_eq!(rows as u64, stop.div_ceil(grid) + 1, "{name}");
-        let want: Vec<u64> = (0..rows as u64).map(|k| (k * grid).min(stop)).collect();
-        assert_eq!(time, want, "{name}");
-
-        // The file's own text: `serde_json::Value` sorts keys and may round a parse by an ulp.
-        let text = std::str::from_utf8(&found["observations.json"]).unwrap();
-        let (op_text, _) = text.split_once("\"switches\"").unwrap();
-        let op: Vec<(&str, &str)> = op_text
-            .lines()
-            .filter_map(|line| line.trim().strip_prefix('"')?.split_once("\": "))
-            .filter(|(key, _)| key.starts_with('#'))
-            .map(|(key, value)| (key, value.trim_end_matches(',')))
-            .collect();
-        let refs: Vec<_> = columns.iter().map(|c| c["ref"].as_str().unwrap()).collect();
-        let keys: Vec<_> = op.iter().map(|(key, _)| *key).collect();
-        assert_eq!(keys, refs, "{name}: columns are the op keys in order");
-        for (j, (key, value)) in op.iter().enumerate() {
-            let row_0 = serde_json::to_string(&analog[j * rows]).unwrap();
-            assert_eq!(row_0, *value, "{name} {key}");
-        }
-        assert!(
-            analog
-                .iter()
-                .all(|v| v.is_finite() && v.to_bits() != (-0.0f64).to_bits())
-        );
-
-        // Every interval holds both of its rows: min k <= max(row k, row k + 1) <= max k.
-        let envelope = f64s(&found["traces/envelope.f64"]);
-        assert_eq!(envelope.len(), 2 * (rows - 1) * columns.len(), "{name}");
-        assert!(envelope.iter().all(|v| v.is_finite()), "{name}");
-        let width = rows - 1;
-        for j in 0..columns.len() {
-            let (mins, maxs) = (
-                &envelope[2 * j * width..2 * j * width + width],
-                &envelope[2 * j * width + width..2 * (j + 1) * width],
-            );
-            let values = &analog[j * rows..(j + 1) * rows];
-            for k in 0..width {
-                let (low, high) = (values[k], values[k + 1]);
-                assert!(
-                    mins[k] <= low.min(high) && low.max(high) <= maxs[k],
-                    "{name} {} interval {k}",
-                    columns[j]["ref"].as_str().unwrap()
-                );
-            }
-        }
+        transient_folder(&name, &out);
         let _ = fs::remove_dir_all(&out);
     }
 }
 
 #[test]
 fn two_runs_of_each_transient_example_differ_only_in_created_at() {
-    let names = [
-        "rc-switch",
-        "button-led",
-        "ne555-led",
-        "v-pulse-rc",
-        "current-pulse",
-    ];
+    let names = transient_examples();
     let outs = |round: &str| -> Vec<PathBuf> {
         names
             .iter()
@@ -549,7 +430,9 @@ fn two_runs_of_each_transient_example_differ_only_in_created_at() {
             doc.as_object_mut().unwrap().remove("created_at").unwrap()
         };
         assert_ne!(manifest(&mut left_files), manifest(&mut right_files));
-        let logic = usize::from(name == "ne555-led");
+        let observations: serde_json::Value =
+            serde_json::from_slice(&left_files["observations.json"]).unwrap();
+        let logic = usize::from(observations.get("logic").is_some());
         assert_eq!(left_files.len(), 7 + logic, "{name}");
         assert_eq!(left_files, right_files, "{}", left.display());
         let _ = fs::remove_dir_all(left);

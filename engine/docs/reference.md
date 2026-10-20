@@ -1,6 +1,6 @@
 # ngspice references
 
-Each example has an ngspice result next to its netlist, except one with an `atmega328p` part, which [Skips](#skips) covers. A DC example has an operating point, and a transient example has a waveform. A Rust test compares the engine with it. The Rust tests never run ngspice.
+Each example has an ngspice result next to its netlist, except `examples/atmega-blink` and any other example with an `atmega328p` part, which [Skips](#skips) covers. A DC example has an operating point, and a transient example has a waveform. A Rust test compares the engine with it. The Rust tests never run ngspice.
 
 ```text
 examples/<name>/
@@ -20,7 +20,7 @@ uv run scripts/ngspice_refs.py --check            # exit 1 on drift or an unchec
 uv run scripts/ngspice_refs.py --self-test        # skip contract, no ngspice
 ```
 
-Stdout is one JSON document. It lists the examples written or checked, the examples skipped with a reason, and with `--check` the files that drifted. For an example with a chip, `--check` also builds and runs the engine, reads the run's `traces/logic.vcd` back with the standard library, summarises each signal, and compares that with `observations.logic`. Its `logic` list holds one entry per such example, and one that does not match exits 1. A skipped example that already has `ngspice.json` is a failure under `--check`. Its entry's `failure` is `committed ngspice.json was not checked`, and the process exits 1. A skip with no committed reference exits 0. `--self-test` checks those paths, each source spelling's deck line, the bounce generator's test vectors, and the VCD reader and its summary, without ngspice. Its stdout is one JSON document.
+Stdout is one JSON document. It lists the examples written or checked, the examples skipped with a reason, and with `--check` the files that drifted. For an example with a chip, `--check` also builds and runs the engine, reads the run's `traces/logic.vcd` back with the standard library, summarises each signal, and compares that with `observations.logic`. Its `logic` list holds one entry per such example, and one that does not match exits 1. A skipped example that already has `deck.cir` or `ngspice.json` is a failure under `--check`. Its entry's `failure` names them, as in `committed ngspice.json was not checked`, and the process exits 1. A skip with neither file exits 0. `--self-test` checks those paths, each source spelling's deck line, the bounce generator's test vectors, and the VCD reader and its summary, without ngspice. Its stdout is one JSON document.
 
 Run it after any change to a `netlist.json`. The Rust test fails until you do.
 
@@ -78,6 +78,8 @@ The analysis is `tran g p stop p 0 m p`, with `g` one two-thousandth of `stop_ps
 ## Skips
 
 An example is skipped when a part has no `kind`, when it has a kind the script does not translate, when a part is an `atmega328p`, which runs firmware that a deck has no CPU for, when a part has no `pins` or is missing a pin, when two names are equal ignoring case, when a net other than ground is named `gnd`, which ngspice reads as ground, when a pin names an undeclared net, when a held capacitor is in an operating point deck or has no pin on ground, when a chip is in an operating point deck, when a transient deck has a name starting with `ctl_`, `bp` or `x_`, or when `netlist.json` has a shape the engine's parser would reject. The report lists the skip and the reason in the one JSON document.
+
+A firmware example has no ngspice reference. ngspice has no CPU to run its firmware, so it cannot say where the pin edges fall. So `examples/atmega-blink` has no `deck.cir` or `ngspice.json`, and both `--check` and `crates/cli/tests/ngspice.rs` fail if an example with an `atmega328p` part has either. `crates/cli/tests/blink.rs` checks it instead. Its PB5 edges sit at the picoseconds its firmware's cycle counts give, and its LED current is the closed form of the output stage, the resistor and the LED within Newton's 1e-6.
 
 ## ngspice.json
 

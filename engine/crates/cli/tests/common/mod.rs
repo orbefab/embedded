@@ -1,4 +1,171 @@
-//! `logic.vcd` read back, and the `observations.logic` summary it should agree with.
+//! The repo's files, run folders read back and held to their contract, and `logic.vcd` with the
+//! `observations.logic` summary it should agree with.
+#![allow(dead_code)]
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+// The scanner the circuit's tests use, so both crates see the same examples.
+#[path = "../../../circuit/tests/common/examples.rs"]
+pub mod examples;
+
+pub fn repo(path: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(path)
+}
+
+/// The records of Intel HEX `text`, whatever its line endings.
+pub fn records(text: &str) -> Vec<String> {
+    text.lines().map(str::to_string).collect()
+}
+
+/// Every file under `dir`, by path relative to it.
+pub fn files(dir: &Path) -> BTreeMap<String, Vec<u8>> {
+    let mut out = BTreeMap::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        for entry in fs::read_dir(next).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                let rel = path
+                    .strip_prefix(dir)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                out.insert(rel, fs::read(&path).unwrap());
+            }
+        }
+    }
+    out
+}
+
+pub fn u64s(bytes: &[u8]) -> Vec<u64> {
+    let (words, rest) = bytes.as_chunks::<8>();
+    assert!(rest.is_empty());
+    words.iter().map(|&word| u64::from_le_bytes(word)).collect()
+}
+
+pub fn f64s(bytes: &[u8]) -> Vec<f64> {
+    let (words, rest) = bytes.as_chunks::<8>();
+    assert!(rest.is_empty());
+    words.iter().map(|&word| f64::from_le_bytes(word)).collect()
+}
+
+/// A transient run folder read back. `analog` holds one column of `time.len()` rows per ref in
+/// `refs`. `envelope` holds each column's interval minimums, then its maximums.
+pub struct TransientFolder {
+    pub files: BTreeMap<String, Vec<u8>>,
+    pub time: Vec<u64>,
+    pub refs: Vec<String>,
+    pub analog: Vec<f64>,
+    pub envelope: Vec<f64>,
+}
+
+impl TransientFolder {
+    /// `(minimums, maximums)` of `reference` over each interval between rows.
+    pub fn bounds(&self, reference: &str) -> (&[f64], &[f64]) {
+        let j = self.refs.iter().position(|r| r == reference).unwrap();
+        let width = self.time.len() - 1;
+        let column = &self.envelope[2 * j * width..2 * (j + 1) * width];
+        column.split_at(width)
+    }
+}
+
+/// Reads the run folder `out` of the transient example `name` and asserts what every one keeps:
+/// its files, with `traces/logic.vcd` exactly when its observations have logic, a row at each
+/// `grid_ps` to `stop_ps`, row 0 equal to `observations.op`, and an envelope that holds both rows
+/// of each interval.
+pub fn transient_folder(name: &str, out: &Path) -> TransientFolder {
+    let found = files(out);
+    let names: Vec<_> = found.keys().map(String::as_str).collect();
+    let observations: serde_json::Value =
+        serde_json::from_slice(&found["observations.json"]).unwrap();
+    let logic = observations.get("logic").is_some();
+    let mut expected = vec![
+        "diagnostics.json",
+        "manifest.json",
+        "netlist.json",
+        "observations.json",
+        "traces/analog.f64",
+        "traces/envelope.f64",
+        "traces/index.json",
+    ];
+    if logic {
+        expected.push("traces/logic.vcd");
+    }
+    expected.push("traces/time.u64");
+    assert_eq!(names, expected, "{name}");
+    let index: serde_json::Value = serde_json::from_slice(&found["traces/index.json"]).unwrap();
+    assert_eq!(index.get("logic").is_some(), logic, "{name}");
+    let input: serde_json::Value = serde_json::from_slice(&found["netlist.json"]).unwrap();
+    let rows = index["rows"].as_u64().unwrap() as usize;
+    let time = u64s(&found["traces/time.u64"]);
+    let analog = f64s(&found["traces/analog.f64"]);
+    let columns = index["analog"]["columns"].as_array().unwrap();
+    assert_eq!(time.len(), rows, "{name}");
+    assert_eq!(analog.len(), rows * columns.len(), "{name}");
+    let stop = &input["analysis"]["transient"]["stop_ps"];
+    let grid = &input["analysis"]["transient"]["grid_ps"];
+    assert_eq!(&index["stop_ps"], stop);
+    assert_eq!(&index["grid_ps"], grid);
+    assert_eq!(&index["end_ps"], stop);
+    let (stop, grid) = (stop.as_u64().unwrap(), grid.as_u64().unwrap());
+    assert_eq!(rows as u64, stop.div_ceil(grid) + 1, "{name}");
+    let want: Vec<u64> = (0..rows as u64).map(|k| (k * grid).min(stop)).collect();
+    assert_eq!(time, want, "{name}");
+
+    // The file's own text: `serde_json::Value` sorts keys and may round a parse by an ulp.
+    let text = std::str::from_utf8(&found["observations.json"]).unwrap();
+    let (op_text, _) = text.split_once("\"switches\"").unwrap();
+    let op: Vec<(&str, &str)> = op_text
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix('"')?.split_once("\": "))
+        .filter(|(key, _)| key.starts_with('#'))
+        .map(|(key, value)| (key, value.trim_end_matches(',')))
+        .collect();
+    let refs: Vec<String> = columns
+        .iter()
+        .map(|c| c["ref"].as_str().unwrap().to_string())
+        .collect();
+    let keys: Vec<_> = op.iter().map(|(key, _)| *key).collect();
+    assert_eq!(keys, refs, "{name}: columns are the op keys in order");
+    for (j, (key, value)) in op.iter().enumerate() {
+        let row_0 = serde_json::to_string(&analog[j * rows]).unwrap();
+        assert_eq!(row_0, *value, "{name} {key}");
+    }
+    assert!(
+        analog
+            .iter()
+            .all(|v| v.is_finite() && v.to_bits() != (-0.0f64).to_bits())
+    );
+
+    let envelope = f64s(&found["traces/envelope.f64"]);
+    assert_eq!(envelope.len(), 2 * (rows - 1) * columns.len(), "{name}");
+    assert!(envelope.iter().all(|v| v.is_finite()), "{name}");
+    let folder = TransientFolder {
+        files: found,
+        time,
+        refs,
+        analog,
+        envelope,
+    };
+    for (j, reference) in folder.refs.iter().enumerate() {
+        let (mins, maxs) = folder.bounds(reference);
+        let values = &folder.analog[j * rows..(j + 1) * rows];
+        for k in 0..rows - 1 {
+            let (low, high) = (values[k], values[k + 1]);
+            assert!(
+                mins[k] <= low.min(high) && low.max(high) <= maxs[k],
+                "{name} {reference} interval {k}"
+            );
+        }
+    }
+    folder
+}
 
 /// `{ref: {initial, edges: [{t_ps, level}]}}` read from a logic.vcd.
 pub fn read_vcd(text: &str) -> serde_json::Value {

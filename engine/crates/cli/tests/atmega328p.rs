@@ -1,26 +1,20 @@
 mod common;
 
 use std::fs;
-use std::path::PathBuf;
 
-use common::{read_vcd, summary};
+use common::{read_vcd, records, repo, summary};
 use sim_core::name::Ref;
 use sim_core::timestamp::Timestamp;
 
 /// A cycle of the document's 16 MHz crystal.
 const CYCLE_PS: u64 = 62_500;
 
-fn repo(path: &str) -> String {
-    fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join(path),
-    )
-    .unwrap()
+fn read(path: &str) -> String {
+    fs::read_to_string(repo(path)).unwrap()
 }
 
 fn documented() -> String {
-    let doc = repo("docs/netlist.md");
+    let doc = read("docs/netlist.md");
     let section = &doc[doc.find("### ATmega328P").unwrap()..];
     let start = section.find("```json\n").unwrap() + "```json\n".len();
     let end = start + section[start..].find("\n```").unwrap();
@@ -85,7 +79,7 @@ fn probe(
 fn the_documented_part_is_the_tests_fixture() {
     let mut netlist: serde_json::Value = serde_json::from_str(&documented()).unwrap();
     let fixture: serde_json::Value =
-        serde_json::from_str(&repo("crates/core/tests/fixtures/atmega328p.json")).unwrap();
+        serde_json::from_str(&read("crates/core/tests/fixtures/atmega328p.json")).unwrap();
     assert_eq!(*chip(&mut netlist), fixture);
 }
 
@@ -93,10 +87,9 @@ fn the_documented_part_is_the_tests_fixture() {
 fn the_documented_firmware_is_toggle_hex() {
     let mut netlist: serde_json::Value = serde_json::from_str(&documented()).unwrap();
     let chip = chip(&mut netlist);
-    let records = |text: &str| text.lines().map(str::to_string).collect::<Vec<_>>();
     assert_eq!(
         records(chip["firmware"].as_str().unwrap()),
-        records(&repo("firmware/toggle.hex"))
+        records(&read("firmware/toggle.hex"))
     );
 }
 
@@ -233,7 +226,7 @@ fn an_ne555_and_an_atmega328p_in_one_netlist_both_write_their_signals() {
     let mut netlist: serde_json::Value = serde_json::from_str(&documented()).unwrap();
     netlist["analysis"]["transient"]["stop_ps"] = 100_000_000.into();
     let astable: serde_json::Value =
-        serde_json::from_str(&repo("examples/ne555-led/netlist.json")).unwrap();
+        serde_json::from_str(&read("examples/ne555-led/netlist.json")).unwrap();
     let rename = |net: &serde_json::Value| -> serde_json::Value {
         match net.as_str().unwrap() {
             "gnd" => "gnd".into(),

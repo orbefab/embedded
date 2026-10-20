@@ -1,3 +1,6 @@
+#[allow(dead_code)]
+pub mod examples;
+
 use sim_core::name::Ref;
 use sim_core::run_folder::Results;
 use sim_core::trace::Trace;

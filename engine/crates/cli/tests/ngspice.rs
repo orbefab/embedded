@@ -1,7 +1,10 @@
+mod common;
+
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+use common::examples::{examples, runs_firmware};
 use sha2::{Digest, Sha256};
 use sim_cli::Completed;
 use sim_core::logic::{Level, Logic};
@@ -15,17 +18,6 @@ const OPTIONS: &str = "temp=25 tnom=25 reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin
 /// The deck's ramp at each contact edge and source jump, which is also the engine's first step
 /// after one.
 const EDGE_RAMP_PS: u64 = 1000;
-
-fn examples() -> Vec<PathBuf> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
-    let mut found: Vec<_> = fs::read_dir(root)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.join("netlist.json").is_file())
-        .collect();
-    found.sort();
-    found
-}
 
 fn json(path: &Path) -> serde_json::Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
@@ -69,6 +61,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
     assert_eq!(
         names,
         [
+            "atmega-blink",
             "button-led",
             "current-pulse",
             "divider",
@@ -83,6 +76,14 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
     for example in examples() {
         let label = example.display();
         let reference_path = example.join("ngspice.json");
+        let input = fs::read(example.join("netlist.json")).unwrap();
+        if runs_firmware(&netlist::parse(&input).unwrap()) {
+            assert!(
+                !reference_path.exists() && !example.join("deck.cir").exists(),
+                "{label} runs firmware, which a deck has no CPU for, so it has no reference"
+            );
+            continue;
+        }
         assert!(
             reference_path.is_file(),
             "{label} has no ngspice.json; run `uv run scripts/ngspice_refs.py {label}`"
@@ -105,7 +106,6 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             Some(OPTIONS),
             "{label} options"
         );
-        let input = fs::read(example.join("netlist.json")).unwrap();
         let done = sim_cli::run(&input, Timestamp::from_unix_seconds(0));
         let manifest: serde_json::Value =
             serde_json::from_slice(done.folder.file("manifest.json").unwrap()).unwrap();

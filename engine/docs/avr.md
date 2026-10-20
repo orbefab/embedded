@@ -66,6 +66,8 @@ The tests run firmware written for the repo. `firmware/*.S` is the source, and t
 
 Ten seconds of `firmware/blink.S` at 16 MHz are 21 stops and 20 edges on PB5. The first stop, at cycle 2, is `SBI DDRB,5` turning PB5 from off to driven low. It changes the image, and on a pin its load already holds low it does not change the level. On the build machine, release, the bare core runs those 160e6 cycles at about 79e6 cycles a second and the adapter at about 75e6 (`blink_throughput`, ignored, in `crates/circuit/src/tran/tests/avr.rs`).
 
+`examples/atmega-blink` runs `firmware/blink.S` for 4 s with an LED on PB5, and `crates/cli/tests/blink.rs` checks its edges and the LED's current. On the build machine a release `sim run` of it takes 0.83 to 0.92 s over seven runs. At the bare core's 79e6 cycles a second its 64e6 cycles take 0.81 s, so the core is most of the run.
+
 ## Fuses
 
 Parse keeps only the fuse settings the model runs, and [netlist.md](netlist.md#atmega328p) lists the rejected ones and why. The core reads these.

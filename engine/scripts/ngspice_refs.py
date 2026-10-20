@@ -12,7 +12,7 @@ on it, and writes the operating point, or the transient waveforms, to
 ngspice.json. A chip's latch edges go to tran.logic. With no example arguments
 it takes every examples/*/netlist.json. `--check` regenerates in memory and
 exits 1 if any committed byte differs, or if a skipped example already has
-ngspice.json. For an example with a chip it also runs the engine and exits 1
+deck.cir or ngspice.json. For an example with a chip it also runs the engine and exits 1
 unless the run's logic.vcd reads back as its observations.logic summary. stdout is one
 JSON document.
 
@@ -89,8 +89,10 @@ def report_examples(targets, check, version):
             files = generate(example, version)
         except Skip as skip:
             entry = {"example": label, "reason": str(skip)}
-            if check and (example / "ngspice.json").is_file():
-                entry["failure"] = "committed ngspice.json was not checked"
+            committed = [n for n in ("deck.cir", "ngspice.json") if (example / n).is_file()]
+            if check and committed:
+                verb = "was" if len(committed) == 1 else "were"
+                entry["failure"] = f"committed {' and '.join(committed)} {verb} not checked"
             report["skipped"].append(entry)
             continue
         if check:
@@ -202,7 +204,7 @@ def self_test():
         {
             "name": "unknown kind",
             "part": {"name": "l1", "kind": "inductor", "pins": {"a": "a", "b": "gnd"}},
-            "commit": False,
+            "commit": [],
             "exit": 0,
             "reason": "kind inductor has no translation",
             "failure": None,
@@ -210,7 +212,7 @@ def self_test():
         {
             "name": "firmware kind",
             "part": {"name": "u1", "kind": "atmega328p", "pins": {"PB5": "a", "GND_8": "gnd"}},
-            "commit": False,
+            "commit": [],
             "exit": 0,
             "reason": "kind atmega328p runs firmware, which a deck cannot",
             "failure": None,
@@ -218,7 +220,7 @@ def self_test():
         {
             "name": "missing pin",
             "part": {"name": "r1", "kind": "resistor", "pins": {"a": "a"}},
-            "commit": False,
+            "commit": [],
             "exit": 0,
             "reason": "kind resistor is missing pin b",
             "failure": None,
@@ -226,7 +228,7 @@ def self_test():
         {
             "name": "no kind",
             "part": {"name": "r1", "pins": {"a": "a", "b": "gnd"}},
-            "commit": False,
+            "commit": [],
             "exit": 0,
             "reason": "part has no kind",
             "failure": None,
@@ -234,7 +236,7 @@ def self_test():
         {
             "name": "no pins",
             "part": {"name": "r1", "kind": "resistor"},
-            "commit": False,
+            "commit": [],
             "exit": 0,
             "reason": "kind resistor has no pins",
             "failure": None,
@@ -242,7 +244,7 @@ def self_test():
         {
             "name": "list kind",
             "part": {"name": "r1", "kind": ["resistor"], "pins": {"a": "a", "b": "gnd"}},
-            "commit": False,
+            "commit": [],
             "exit": 0,
             "reason": "netlist.json is not a netlist the engine accepts (TypeError)",
             "failure": None,
@@ -250,7 +252,7 @@ def self_test():
         {
             "name": "no name",
             "part": {"kind": "resistor", "pins": {"a": "a", "b": "gnd"}},
-            "commit": False,
+            "commit": [],
             "exit": 0,
             "reason": "netlist.json is not a netlist the engine accepts (KeyError)",
             "failure": None,
@@ -258,7 +260,7 @@ def self_test():
         {
             "name": "undeclared net",
             "part": {"name": "r1", "kind": "resistor", "pins": {"a": "a", "b": "ghost"}},
-            "commit": False,
+            "commit": [],
             "exit": 0,
             "reason": "part r1 pins a net that is not declared",
             "failure": None,
@@ -266,15 +268,31 @@ def self_test():
         {
             "name": "committed reference",
             "part": {"name": "l1", "kind": "inductor", "pins": {"a": "a", "b": "gnd"}},
-            "commit": True,
+            "commit": ["ngspice.json"],
             "exit": 1,
             "reason": "kind inductor has no translation",
             "failure": "committed ngspice.json was not checked",
         },
         {
+            "name": "committed firmware deck",
+            "part": {"name": "u1", "kind": "atmega328p", "pins": {"PB5": "a", "GND_8": "gnd"}},
+            "commit": ["deck.cir"],
+            "exit": 1,
+            "reason": "kind atmega328p runs firmware, which a deck cannot",
+            "failure": "committed deck.cir was not checked",
+        },
+        {
+            "name": "committed firmware deck and reference",
+            "part": {"name": "u1", "kind": "atmega328p", "pins": {"PB5": "a", "GND_8": "gnd"}},
+            "commit": ["deck.cir", "ngspice.json"],
+            "exit": 1,
+            "reason": "kind atmega328p runs firmware, which a deck cannot",
+            "failure": "committed deck.cir and ngspice.json were not checked",
+        },
+        {
             "name": "switch at the operating point",
             "part": {"name": "sw1", "kind": "switch", "pins": {"a": "a", "b": "gnd"}},
-            "commit": False,
+            "commit": [],
             "exit": 0,
             "reason": "a switch is translated only for a transient analysis",
             "failure": None,
@@ -282,7 +300,7 @@ def self_test():
         {
             "name": "held capacitor at the operating point",
             "part": held_capacitor("a", "gnd"),
-            "commit": False,
+            "commit": [],
             "exit": 0,
             "reason": "a held capacitor is translated only for a transient analysis",
             "failure": None,
@@ -292,7 +310,7 @@ def self_test():
             "analysis": {"transient": {"stop_ps": 5000, "max_step_ps": 1000, "grid_ps": 1000}},
             "nets": ["gnd", "a", "b"],
             "part": held_capacitor("a", "b"),
-            "commit": False,
+            "commit": [],
             "exit": 0,
             "reason": "a held capacitor needs exactly one pin on ground",
             "failure": None,
@@ -302,7 +320,7 @@ def self_test():
             "analysis": {"transient": {"stop_ps": 5000, "max_step_ps": 1000, "grid_ps": 1000}},
             "nets": ["gnd", "BP1"],
             "part": {"name": "r1", "kind": "resistor", "pins": {"a": "BP1", "b": "gnd"}},
-            "commit": False,
+            "commit": [],
             "exit": 0,
             "reason": "a transient deck reserves names starting with ctl_, bp or x_",
             "failure": None,
@@ -312,7 +330,7 @@ def self_test():
             "analysis": {"transient": {"stop_ps": 5000, "max_step_ps": 1000, "grid_ps": 1000}},
             "nets": ["gnd", "X_u1_q"],
             "part": {"name": "r1", "kind": "resistor", "pins": {"a": "X_u1_q", "b": "gnd"}},
-            "commit": False,
+            "commit": [],
             "exit": 0,
             "reason": "a transient deck reserves names starting with ctl_, bp or x_",
             "failure": None,
@@ -324,7 +342,7 @@ def self_test():
                 "kind": "ne555",
                 "pins": {pin: "a" for pin in PIN_ORDER["ne555"]} | {"gnd": "gnd"},
             },
-            "commit": False,
+            "commit": [],
             "exit": 0,
             "reason": "a chip is translated only for a transient analysis",
             "failure": None,
@@ -345,7 +363,7 @@ def self_test():
                     "period_ps": 0,
                 },
             },
-            "commit": False,
+            "commit": [],
             "exit": 0,
             "reason": "a pulse period does not exceed its width",
             "failure": None,
@@ -366,7 +384,7 @@ def self_test():
                     "period_ps": 1,
                 },
             },
-            "commit": False,
+            "commit": [],
             "exit": 0,
             "reason": "a waveform has more than 100000 knots before the stop",
             "failure": None,
@@ -385,8 +403,8 @@ def self_test():
                 "parts": [spec["part"]],
             }
             (example / "netlist.json").write_text(json.dumps(netlist))
-            if spec["commit"]:
-                (example / "ngspice.json").write_text("{}\n")
+            for name in spec["commit"]:
+                (example / name).write_text("{}\n")
             report = report_examples([example], True, "ngspice-42")
             code = exit_code(report)
             skipped = report["skipped"]

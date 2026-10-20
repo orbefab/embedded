@@ -8,6 +8,7 @@ use sim_core::name::Ref;
 use sim_core::run_folder::Results;
 use sim_core::trace::Trace;
 
+use common::examples::transient_examples;
 use common::{
     column, held_capacitor, resistor, simulate, simulate_steps, source, span, trace, transient,
 };
@@ -147,14 +148,8 @@ fn example(name: &str) -> String {
 
 #[test]
 fn every_example_writes_its_grid_and_its_steps_change_nothing_else() {
-    for name in [
-        "button-led",
-        "current-pulse",
-        "ne555-led",
-        "rc-switch",
-        "v-pulse-rc",
-    ] {
-        let json = example(name);
+    for name in transient_examples() {
+        let json = example(&name);
         let netlist = sim_core::netlist::parse(json.as_bytes()).unwrap();
         let sim_core::netlist::Analysis::Transient(transient) = netlist.analysis() else {
             panic!("{name} is not a transient");

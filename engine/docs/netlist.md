@@ -424,6 +424,8 @@ This document runs `firmware/toggle.S` at 16 MHz into 1 kohm on PB5. `cx1` and `
 
 `firmware/toggle.S` drives PB5 low at cycle 2, high at cycle 4, and toggles it every 100 cycles after that. A cycle of a 16 MHz crystal is 62,500 ps, so PB5 rises at 250,000 ps, falls at 6,500,000 ps, and rises again at 12,750,000 ps. Each edge lands at its picosecond, as [engine.md](engine.md#active-chips) says, and `#u1.logic.PB5` changes there.
 
+`examples/atmega-blink` is this part with these values running `firmware/blink.S`, which toggles PB5 at cycle 4 and every 8,000,000 cycles after, 0.5 s. PB5 drives the WP7113ID of `examples/led-5v` through 220 ohm to ground, so the LED blinks at 1 Hz with 12.5 mA on. Its 4 s run is four blinks, on a 10 ms grid.
+
 | Field | Unit | Rule |
 | --- | --- | --- |
 | `firmware` | Intel HEX text | records 00 to 05, an end record, every byte inside the 32 KB flash |
