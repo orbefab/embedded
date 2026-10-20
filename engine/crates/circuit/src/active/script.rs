@@ -55,6 +55,7 @@ pub(crate) fn chip(
         offset: 0.0,
     };
     Chip {
+        part: None,
         outputs: vec![Output {
             pin: out,
             vcc,
@@ -62,6 +63,7 @@ pub(crate) fn chip(
             high: stage,
             low: stage,
             pull_up: None,
+            leakage: None,
         }],
         watches: vec![Watch::comparator(Signal {
             offset: 2.5,

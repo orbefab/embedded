@@ -1,17 +1,8 @@
 //! The ATmega328P behind the seam. Its package pins become outputs, watches, and samples
 //! around `sim_avr::Timeline`, and its oscillator converts between picoseconds and cycles.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the netlist kind that builds this chip comes next"
-    )
-)]
 
-use std::sync::Arc;
-
-use sim_avr::{Cpu, FuseBytes, PinDrive, Port, Timeline};
-use sim_core::netlist::NetId;
+use sim_avr::{Cpu, PinDrive, Port, Timeline};
+use sim_core::netlist::{Atmega328p, PartId, Value};
 use sim_core::time::Time;
 
 use super::{Chip, Drive, Output, Stage, Stop};
@@ -34,36 +25,37 @@ pub(crate) enum Pad {
     Agnd,
 }
 
-/// The package pins in DIP order. Pin 1 is `PC6`, which is `RESET` while the fuses keep it so.
-pub(crate) const PACKAGE: [(&str, Pad); 28] = [
-    ("PC6", Pad::Port(Port::C, 6)),
-    ("PD0", Pad::Port(Port::D, 0)),
-    ("PD1", Pad::Port(Port::D, 1)),
-    ("PD2", Pad::Port(Port::D, 2)),
-    ("PD3", Pad::Port(Port::D, 3)),
-    ("PD4", Pad::Port(Port::D, 4)),
-    ("VCC", Pad::Vcc),
-    ("GND_8", Pad::Gnd),
-    ("PB6", Pad::Xtal),
-    ("PB7", Pad::Xtal),
-    ("PD5", Pad::Port(Port::D, 5)),
-    ("PD6", Pad::Port(Port::D, 6)),
-    ("PD7", Pad::Port(Port::D, 7)),
-    ("PB0", Pad::Port(Port::B, 0)),
-    ("PB1", Pad::Port(Port::B, 1)),
-    ("PB2", Pad::Port(Port::B, 2)),
-    ("PB3", Pad::Port(Port::B, 3)),
-    ("PB4", Pad::Port(Port::B, 4)),
-    ("PB5", Pad::Port(Port::B, 5)),
-    ("AVCC", Pad::Avcc),
-    ("AREF", Pad::Aref),
-    ("GND_22", Pad::Agnd),
-    ("PC0", Pad::Port(Port::C, 0)),
-    ("PC1", Pad::Port(Port::C, 1)),
-    ("PC2", Pad::Port(Port::C, 2)),
-    ("PC3", Pad::Port(Port::C, 3)),
-    ("PC4", Pad::Port(Port::C, 4)),
-    ("PC5", Pad::Port(Port::C, 5)),
+/// What each package pin is, in `Atmega328p::PINS` order, the DIP's. Pin 1 is `PC6`, which is
+/// `RESET` while the fuses keep it so.
+pub(crate) const PACKAGE: [Pad; 28] = [
+    Pad::Port(Port::C, 6),
+    Pad::Port(Port::D, 0),
+    Pad::Port(Port::D, 1),
+    Pad::Port(Port::D, 2),
+    Pad::Port(Port::D, 3),
+    Pad::Port(Port::D, 4),
+    Pad::Vcc,
+    Pad::Gnd,
+    Pad::Xtal,
+    Pad::Xtal,
+    Pad::Port(Port::D, 5),
+    Pad::Port(Port::D, 6),
+    Pad::Port(Port::D, 7),
+    Pad::Port(Port::B, 0),
+    Pad::Port(Port::B, 1),
+    Pad::Port(Port::B, 2),
+    Pad::Port(Port::B, 3),
+    Pad::Port(Port::B, 4),
+    Pad::Port(Port::B, 5),
+    Pad::Avcc,
+    Pad::Aref,
+    Pad::Agnd,
+    Pad::Port(Port::C, 0),
+    Pad::Port(Port::C, 1),
+    Pad::Port(Port::C, 2),
+    Pad::Port(Port::C, 3),
+    Pad::Port(Port::C, 4),
+    Pad::Port(Port::C, 5),
 ];
 
 /// `RESET` while `RSTDISBL` is unprogrammed.
@@ -75,7 +67,7 @@ const PORT_PINS: [(usize, u32); 21] = {
     let mut pins = [(0, 0); 21];
     let (mut k, mut n) = (0, 0);
     while k < PACKAGE.len() {
-        if let Pad::Port(port, bit) = PACKAGE[k].1 {
+        if let Pad::Port(port, bit) = PACKAGE[k] {
             pins[n] = (k, port.pin_id(bit));
             n += 1;
         }
@@ -85,11 +77,32 @@ const PORT_PINS: [(usize, u32); 21] = {
     pins
 };
 
+const VCC: usize = 6;
+const GND_8: usize = 7;
+const _: () = assert!(matches!(PACKAGE[VCC], Pad::Vcc));
+const _: () = assert!(matches!(PACKAGE[GND_8], Pad::Gnd));
+
+/// The pin pairs the chip joins at DC, for `net.floating`, by package index: each port pin to
+/// VCC and to `GND_8` through its leakage, which every drive state stamps. The crystal pins and
+/// `AREF` join nothing. Neither does `AVCC`: every stage draws from VCC, and `AVCC` is read only
+/// at a sample. Parse puts `GND_22` on `GND_8`'s net.
+pub(crate) const DC_PATHS: [(usize, usize); 42] = {
+    let mut paths = [(0, 0); 42];
+    let mut k = 0;
+    while k < PORT_PINS.len() {
+        let pin = PORT_PINS[k].0;
+        paths[2 * k] = (pin, VCC);
+        paths[2 * k + 1] = (pin, GND_8);
+        k += 1;
+    }
+    paths
+};
+
 /// The package index of `pad`.
 fn package_pin(pad: Pad) -> usize {
     PACKAGE
         .iter()
-        .position(|&(_, p)| p == pad)
+        .position(|&p| p == pad)
         .expect("a pad of the package")
 }
 
@@ -97,67 +110,8 @@ fn package_pin(pad: Pad) -> usize {
 pub(crate) fn port_index(pad: Pad) -> usize {
     PORT_PINS
         .iter()
-        .position(|&(k, _)| PACKAGE[k].1 == pad)
+        .position(|&(k, _)| PACKAGE[k] == pad)
         .expect("a port pin")
-}
-
-/// The output stage on each side: no drop, and 25 ohm. Figures 31-353 and 31-355 at 5 V and
-/// 25 C read about 0.45 V at 20 mA sunk and 0.55 V below VCC at 20 mA sourced, 22.5 and
-/// 27.5 ohm by eye. Both sides take 25 ohm, between the two, so an eye reading is not frozen
-/// as a measured difference.
-pub(crate) const STAGE: Stage = Stage {
-    drop: 0.0,
-    resistance: 25.0,
-};
-
-/// Ohm. Figure 31-348 at 5 V, typical: about 140 uA at 0 V, falling straight to 0 at 5 V.
-pub(crate) const PULL_UP: f64 = 35_714.0;
-
-/// Ohm. Figure 31-351 at 5 V, typical: about 108 uA at 0 V.
-pub(crate) const RESET_PULL_UP: f64 = 46_296.0;
-
-/// Where an input pin reads low and high, as fractions of the chip's VCC. Figures 31-357 and
-/// 31-356 at 5 V, typical: about 2.1 V falling and 2.6 V rising.
-pub(crate) const THRESHOLD: Threshold = Threshold {
-    low: 0.42,
-    high: 0.52,
-};
-
-/// Where `RESET` reads low and high, as fractions of the chip's VCC. Figures 31-360 and 31-359
-/// at 5 V, typical: about 2.1 V falling and 2.2 V rising.
-pub(crate) const RESET_THRESHOLD: Threshold = Threshold {
-    low: 0.42,
-    high: 0.44,
-};
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Threshold {
-    /// A high input reads low at or below this fraction of VCC.
-    pub(crate) low: f64,
-    /// A low input reads high above this fraction of VCC.
-    pub(crate) high: f64,
-}
-
-/// One ATmega328P, in plain values.
-#[derive(Clone, Debug)]
-pub(crate) struct Atmega328p {
-    /// By package pin, in [`PACKAGE`] order.
-    pub(crate) pins: [NetId; 28],
-    pub(crate) high: Stage,
-    pub(crate) low: Stage,
-    /// Ohm, for every port pin but `RESET`.
-    pub(crate) pull_up: f64,
-    /// Ohm, for `PC6` while it is `RESET`.
-    pub(crate) reset_pull_up: f64,
-    /// For every port pin but `RESET`.
-    pub(crate) threshold: Threshold,
-    /// For `PC6` while it is `RESET`.
-    pub(crate) reset_threshold: Threshold,
-    /// The crystal, in hertz.
-    pub(crate) clock_hz: u32,
-    pub(crate) fuses: FuseBytes,
-    /// The program, from flash address 0.
-    pub(crate) flash: Arc<[u8]>,
 }
 
 #[derive(Clone, Debug)]
@@ -169,30 +123,25 @@ pub(crate) struct Core {
     levels: Vec<bool>,
 }
 
-/// The fuses pick a clock other than a crystal or ceramic resonator, which the adapter does
-/// not run: `PB6` and `PB7` would be port pins, and the clock not the crystal's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct NotACrystal {
-    /// The low fuse byte's `CKSEL3..0`.
-    pub(crate) cksel: u8,
-}
-
-/// The chip at power-on.
-pub(crate) fn chip(mcu: &Atmega328p) -> Result<Chip, NotACrystal> {
-    if !mcu.fuses.has_crystal() {
-        return Err(NotACrystal {
-            cksel: mcu.fuses.low & 0x0F,
-        });
-    }
+pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
     let node = |pad: Pad| Node::from(mcu.pins[package_pin(pad)]);
     let (vcc, gnd) = (node(Pad::Vcc), node(Pad::Gnd));
+    let clock_hz = u32::try_from(mcu.clock_hz.value).expect("parse keeps the clock in u32");
+    let fuses = mcu.fuses;
     let mut cpu = Cpu::new();
-    cpu.set_clock_hz(mcu.clock_hz);
-    cpu.set_fuses(mcu.fuses.low, mcu.fuses.high, mcu.fuses.extended);
-    cpu.load_flash(&mcu.flash);
+    cpu.set_clock_hz(clock_hz);
+    cpu.set_fuses(fuses.low(), fuses.high(), fuses.extended());
+    cpu.load_flash(mcu.firmware.flash());
+
+    let stage = |drop: &Value, resistance: &Value| Stage {
+        drop: drop.si.get(),
+        resistance: resistance.si.get(),
+    };
+    let high = stage(&mcu.output.high_drop, &mcu.output.high_resistance);
+    let low = stage(&mcu.output.low_drop, &mcu.output.low_resistance);
 
     // `RSTDISBL` unprogrammed: `PC6` is `RESET`, with its own pull-up and thresholds.
-    let reset = (mcu.fuses.high & 0x80 != 0).then(|| port_index(RESET));
+    let reset = fuses.has_reset().then(|| port_index(RESET));
     let outputs = PORT_PINS
         .iter()
         .enumerate()
@@ -200,13 +149,14 @@ pub(crate) fn chip(mcu: &Atmega328p) -> Result<Chip, NotACrystal> {
             pin: mcu.pins[k],
             vcc: mcu.pins[package_pin(Pad::Vcc)],
             gnd: mcu.pins[package_pin(Pad::Gnd)],
-            high: mcu.high,
-            low: mcu.low,
+            high,
+            low,
             pull_up: Some(if reset == Some(n) {
-                mcu.reset_pull_up
+                mcu.reset_pull_up_resistance.si.get()
             } else {
-                mcu.pull_up
+                mcu.pull_up_resistance.si.get()
             }),
+            leakage: Some(mcu.leakage_resistance.si.get()),
         })
         .collect();
 
@@ -224,13 +174,13 @@ pub(crate) fn chip(mcu: &Atmega328p) -> Result<Chip, NotACrystal> {
         .enumerate()
         .map(|(n, &(k, _))| {
             let threshold = if reset == Some(n) {
-                mcu.reset_threshold
+                &mcu.reset_threshold
             } else {
-                mcu.threshold
+                &mcu.input_threshold
             };
             Watch {
-                rise: against(k, threshold.high),
-                fall: against(k, threshold.low),
+                rise: against(k, threshold.high.si.get()),
+                fall: against(k, threshold.low.si.get()),
             }
         })
         .collect();
@@ -258,17 +208,18 @@ pub(crate) fn chip(mcu: &Atmega328p) -> Result<Chip, NotACrystal> {
 
     let mut core = Core {
         timeline: Timeline::new(cpu),
-        clock_hz: u64::from(mcu.clock_hz),
+        clock_hz: u64::from(clock_hz),
         image: [Drive::Off; PORT_PINS.len()],
         levels: Vec::new(),
     };
     core.refresh();
-    Ok(Chip {
+    Chip {
+        part: Some(part),
         outputs,
         watches,
         samples,
         core: super::Core::Avr(Box::new(core)),
-    })
+    }
 }
 
 impl Core {

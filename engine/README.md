@@ -58,4 +58,4 @@ The process exits with one of these codes.
 
 Stdout for `run` repeats `diagnostics` in the same order as `diagnostics.json`.
 
-The schema is [docs/netlist.md](docs/netlist.md). How the engine steps, and how accurate it is, is [docs/engine.md](docs/engine.md). The folder is [docs/run-folder.md](docs/run-folder.md). The codes are [docs/diagnostics.md](docs/diagnostics.md). Which changes keep or bump each version is [docs/versions.md](docs/versions.md). The ngspice references are [docs/reference.md](docs/reference.md). The ATmega328P core, which no run uses yet, is [docs/avr.md](docs/avr.md).
+The schema is [docs/netlist.md](docs/netlist.md). How the engine steps, and how accurate it is, is [docs/engine.md](docs/engine.md). The folder is [docs/run-folder.md](docs/run-folder.md). The codes are [docs/diagnostics.md](docs/diagnostics.md). Which changes keep or bump each version is [docs/versions.md](docs/versions.md). The ngspice references are [docs/reference.md](docs/reference.md). The ATmega328P core behind the `atmega328p` kind is [docs/avr.md](docs/avr.md).

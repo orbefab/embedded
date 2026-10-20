@@ -1,6 +1,6 @@
 # Run folder
 
-`sim run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when the netlist has a chip.
+`sim run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and an ATmega328P has none yet.
 
 ```text
 <dir>/
@@ -24,7 +24,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 {
   "run_format": 0,
   "netlist_format": 0,
-  "engine_version": "0.3.0",
+  "engine_version": "0.4.0",
   "input": {
     "file": "netlist.json",
     "sha256": "<lowercase hex sha256 of the input bytes>",
@@ -35,7 +35,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 }
 ```
 
-`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.3.0`. [versions.md](versions.md) says which changes move them.
+`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.4.0`. [versions.md](versions.md) says which changes move them.
 
 `netlist_format` is the input's `version`, when it reads as an unsigned integer. That holds when the engine rejected the input, so `version: 1` records 1. It is `null` when no such integer could be read.
 
@@ -93,7 +93,7 @@ A transient writes `end_ps`, then `op`, then `switches`. `end_ps` is the last ti
 }
 ```
 
-A netlist with a chip adds `logic` after `switches`. It maps each logic ref to a summary of that signal up to `end_ps`. Every chip signal is listed, inputs included, so an agent can check whether and when each comparator flipped. An input's level is what its comparator reads, and OUT's is the level the latch drives.
+A netlist whose chips have logic signals adds `logic` after `switches`. It maps each logic ref to a summary of that signal up to `end_ps`. Every chip signal is listed, inputs included, so an agent can check whether and when each comparator flipped. An input's level is what its comparator reads, and OUT's is the level the latch drives.
 
 | Key | Meaning |
 | --- | --- |
@@ -207,7 +207,7 @@ A row at the time of a contact edge, a source jump or a chip event holds the sta
 - There is no header and no compression.
 - A chip adds no column. Its pins are nets, which have their columns, and its internal ladder node is not observed.
 
-A netlist with a chip adds a `logic` key after `envelope`:
+A netlist whose chips have logic signals adds a `logic` key after `envelope`:
 
 ```json
 "logic": {

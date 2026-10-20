@@ -111,7 +111,43 @@ The message for `bounce_room` is `{ref} {field} is {value}; it must fit 2 * max_
 
 The message for `non_negative` is `{ref} {field} is {value}; it must not be negative`.
 
-`data` holds `field`, `rule`, and `value`. `rule` is `positive`, `finite_reciprocal`, `finite_junction`, `bounce_room`, or `non_negative`. The message prints `value` in the same form as `data.value`. Resistance must be positive, and its reciprocal must be finite. A value that breaks both reports `positive`. A source's voltage or current, and each level of its waveform, only has to be finite and in its unit. The diode and LED fields follow the resistance rules. `saturation_current` and `emission_coefficient` also follow `finite_junction`, as [netlist.md](netlist.md) defines it. A rating must be positive, with field `ratings.current` or `ratings.power`. Capacitance and a switch's two resistances follow the resistance rules. `bounce.window` and `bounce.max_bounces` must be positive, and `bounce.window` must be at least `2 * max_bounces * 2000`, which breaks `bounce_room`. An NE555's resistances follow the resistance rules, with dotted fields such as `discharge.on_resistance`. Its `reset_threshold` must be positive, and `output.high_drop` and `output.low_drop` must not be negative. A number outside the f64 range is `netlist.syntax`, and so is a non-integer `bounce` value.
+The message for `fraction` is `{ref} {field} is {value}; it must be between 0 and 1`.
+
+The message for `above_high` is `{ref} {field} is {value}; it must not be above high`.
+
+The message for `unsupported` is `{ref} {field} is {byte}; the model does not run that mode`, with the byte in hex, such as `0x62`.
+
+`data` holds `field`, `rule`, and `value`. `rule` is `positive`, `finite_reciprocal`, `finite_junction`, `bounce_room`, `non_negative`, `fraction`, `above_high`, or `unsupported`. The message prints `value` in the same form as `data.value`, but for `unsupported`. Resistance must be positive, and its reciprocal must be finite. A value that breaks both reports `positive`. A source's voltage or current, and each level of its waveform, only has to be finite and in its unit. The diode and LED fields follow the resistance rules. `saturation_current` and `emission_coefficient` also follow `finite_junction`, as [netlist.md](netlist.md) defines it. A rating must be positive, with field `ratings.current` or `ratings.power`. Capacitance and a switch's two resistances follow the resistance rules. `bounce.window` and `bounce.max_bounces` must be positive, and `bounce.window` must be at least `2 * max_bounces * 2000`, which breaks `bounce_room`. An NE555's resistances follow the resistance rules, with dotted fields such as `discharge.on_resistance`. Its `reset_threshold` must be positive, and `output.high_drop` and `output.low_drop` must not be negative. An ATmega328P's output stage follows the NE555's, and its two pull-ups the resistance rules. `clock_hz` must be positive. Each of `input_threshold.low`, `input_threshold.high`, `reset_threshold.low` and `reset_threshold.high` must be inside (0, 1), which breaks `fraction`, and a `low` above its `high` breaks `above_high` on `low`. A fuse byte that selects a clock other than a crystal or ceramic resonator, or programs `CKOUT`, is `unsupported` on `fuses.low`. One that programs `DWEN` or `BOOTRST` is `unsupported` on `fuses.high`, and one with a reserved `BODLEVEL` is `unsupported` on `fuses.extended`. [netlist.md](netlist.md#atmega328p) says why. `value` is then the byte. Its `leakage_resistance` follows the resistance rules. A number outside the f64 range is `netlist.syntax`, and so is a non-integer `bounce` value, a non-integer or oversized `clock_hz`, and a fuse byte that is not an integer from 0 to 255.
+
+## netlist.firmware
+
+Severity `error`. Refs is the part. `t_ps` is `null`.
+
+The message is `{ref} firmware line {line} {what}`, or `{ref} firmware {what}` when `line` is `null`. `{what}` says the rule.
+
+`data` holds `field`, `line`, and `rule`. `field` is `firmware`. `line` is the 1-based line of the Intel HEX text at fault, or `null` when no one line is. `rule` is one of these.
+
+- `record`: the line is not an Intel HEX record. It has no `:`, a digit that is not hexadecimal, an odd number of digits, or a length that does not match its byte count, or an address record is not the length its type takes, or an end-of-file record has data.
+- `checksum`: the record's bytes do not sum to 0.
+- `record_type`: the type is not 00 to 05.
+- `after_end`: a record follows the end-of-file record.
+- `no_end`: the text has no end-of-file record. `line` is `null`.
+- `past_flash`: a data byte lands at or past byte 32768, the end of the ATmega328P's flash.
+- `overlap`: a data byte lands where an earlier record placed one. `line` is the later record's.
+
+Parse stops at the first fault, so a part has at most one. [netlist.md](netlist.md#atmega328p) says how the text becomes flash.
+
+## netlist.same_net
+
+Severity `error`. Refs are two pins of one part, in order: the pin at fault, then the pin its kind ties it to, for example `#u1.pin.GND_22` and `#u1.pin.GND_8`. `t_ps` is `null`.
+
+The message is:
+
+```text
+pin #u1.pin.GND_22 is on `agnd`; it must be on `gnd`, as #u1.pin.GND_8 is
+```
+
+`data` holds `expected` and `found`, both strings. `found` is the net the first pin names, and `expected` the net of the second. An ATmega328P's `GND_22` must be on the net of its `GND_8`, as [netlist.md](netlist.md#atmega328p) says.
 
 ## netlist.ground
 
@@ -177,7 +213,7 @@ The message is `{ref} has no DC path to ground`.
 
 `data` is `{}`.
 
-A DC path is a chain of resistors, voltage sources, diodes, LEDs, and switches from the net to ground. Each of those parts joins its two pins. A switch joins them open or closed. An NE555 joins VCC to CONT, CONT to GND, VCC to GND, OUT to VCC, OUT to GND, and DISCH to GND, in either latch state, and joins nothing to TRIG, THRES, or RESET. A capacitor with `"initial": null` does not join its pins, because it is open at DC. Neither does a current source. A capacitor with an `initial` voltage joins them, because the operating point holds it. gmin, 1e-12 S from every node to ground, is separate from that chain.
+A DC path is a chain of resistors, voltage sources, diodes, LEDs, and switches from the net to ground. Each of those parts joins its two pins. A switch joins them open or closed. An NE555 joins VCC to CONT, CONT to GND, VCC to GND, OUT to VCC, OUT to GND, and DISCH to GND, in either latch state, and joins nothing to TRIG, THRES, or RESET. An ATmega328P joins each port pin, `PC6` included, to VCC and to `GND_8`, through the leakage it stamps in every drive state. Its `GND_22` is on the net of its `GND_8`. It joins nothing to `PB6`, `PB7`, `AREF`, or `AVCC`, as [netlist.md](netlist.md#atmega328p) explains. A capacitor with `"initial": null` does not join its pins, because it is open at DC. Neither does a current source. A capacitor with an `initial` voltage joins them, because the operating point holds it. gmin, 1e-12 S from every node to ground, is separate from that chain.
 
 `net.floating` is a static check on the netlist's topology. It never depends on a solve, so its `t_ps` is always `null`. A run that reads an input nothing drives will report that under a code of its own.
 

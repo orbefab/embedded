@@ -48,3 +48,5 @@ These are stable within a `run_format`:
 ## Engine version
 
 `engine_version` covers everything [engine.md](engine.md) describes: the step policy, how chip events are found, and the accuracy the engine reaches. A change there can move trace values within the documented accuracy without changing either format.
+
+This engine is `0.4.0`, which runs the `atmega328p` kind. A new part kind keeps the netlist version at 0, and its new diagnostic codes, `netlist.firmware` and `netlist.same_net`, keep `run_format` at 0. A netlist without the kind runs as it did under `0.3.0`.

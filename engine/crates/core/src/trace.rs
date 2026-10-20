@@ -7,7 +7,7 @@
 //!   analog.f64    little-endian f64, column-major: column j is rows j*n to (j+1)*n - 1
 //!   envelope.f64  little-endian f64, column-major: per column the minima then the maxima
 //!                 of the rows - 1 intervals between the rows
-//!   logic.vcd     with a chip only, see `logic`
+//!   logic.vcd     when a chip in the netlist has logic signals, see `logic`
 //! ```
 
 use serde::Serialize;

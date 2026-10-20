@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use sim_core::name::Ref;
-use sim_core::netlist::{Model, NetId, Netlist, PartId};
+use sim_core::netlist::{NetId, Netlist, PartId};
 
 use crate::chip;
 use crate::dense::{Matrix, Singular};
@@ -25,19 +25,20 @@ struct PartRows {
     junctions: Range<usize>,
 }
 
-pub(crate) struct Layout {
+pub(crate) struct Layout<'n> {
     net_rows: usize,
     part_rows: Vec<PartRows>,
     /// Ascending.
     node_rows: Vec<usize>,
     size: usize,
     junctions: usize,
-    /// The chips, ascending. A chip's index here is its slot in `Conditions::chips`.
-    chips: Vec<PartId>,
+    /// The passive chips, ascending. A chip's index here is its slot in `Conditions::chips`.
+    chips: Vec<(PartId, chip::Passive<'n>)>,
 }
 
-impl Layout {
-    pub(crate) fn new(netlist: &Netlist) -> Layout {
+impl<'n> Layout<'n> {
+    /// `chips` are the passive chips in part order.
+    pub(crate) fn new(netlist: &Netlist, chips: Vec<(PartId, chip::Passive<'n>)>) -> Layout<'n> {
         let mut row = 0;
         let mut junction = 0;
         let mut node_rows = Vec::new();
@@ -47,11 +48,7 @@ impl Layout {
             row += 1;
         }
         let mut part_rows = Vec::with_capacity(netlist.parts().len());
-        let mut chips = Vec::new();
-        for (id, part) in netlist.parts() {
-            if let Model::Chip(_) = part.model {
-                chips.push(id);
-            }
+        for (_, part) in netlist.parts() {
             let extra = element::unknowns(&part.model);
             let internal = row;
             for _ in 0..extra.internal_nodes {
@@ -78,8 +75,8 @@ impl Layout {
         }
     }
 
-    /// The chips in slot order.
-    pub(crate) fn chips(&self) -> &[PartId] {
+    /// The passive chips in slot order.
+    pub(crate) fn chips(&self) -> &[(PartId, chip::Passive<'n>)] {
         &self.chips
     }
 
@@ -242,7 +239,7 @@ impl Solution {
 
 pub(crate) struct Stamp<'a> {
     pub(crate) sys: &'a mut System,
-    pub(crate) layout: &'a Layout,
+    pub(crate) layout: &'a Layout<'a>,
     pub(crate) part: PartId,
     pub(crate) iterate: &'a Iterate,
     pub(crate) conditions: &'a Conditions<'a>,
@@ -255,7 +252,10 @@ impl Stamp<'_> {
 
     /// This chip's state in the solve's conditions.
     pub(crate) fn chip(&self) -> &chip::State {
-        let slot = self.layout.chips.binary_search(&self.part);
+        let slot = self
+            .layout
+            .chips
+            .binary_search_by_key(&self.part, |&(id, _)| id);
         &self.conditions.chips[slot.expect("only a chip reads its state")]
     }
 
@@ -320,7 +320,7 @@ impl Stamp<'_> {
 }
 
 pub(crate) struct Probe<'a> {
-    pub(crate) layout: &'a Layout,
+    pub(crate) layout: &'a Layout<'a>,
     pub(crate) part: PartId,
     pub(crate) x: &'a Solution,
 }

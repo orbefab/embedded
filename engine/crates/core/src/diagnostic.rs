@@ -1,6 +1,6 @@
 use serde::{Serialize, Serializer};
 
-use crate::name::{NameError, Ref};
+use crate::name::{Name, NameError, Ref};
 use crate::netlist::Schedule;
 use crate::time::Time;
 
@@ -24,6 +24,33 @@ pub enum ValueRule {
     /// `bounce.window` is less than `2 * max_bounces * MIN_GAP_PS`.
     BounceRoom,
     NonNegative,
+    /// Not inside `(0, 1)`.
+    Fraction,
+    /// A threshold's `low` is above its `high`.
+    AboveHigh,
+    /// A fuse byte selects a mode the model does not run.
+    Unsupported,
+}
+
+/// Why `firmware` is not a program for the part's flash.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FirmwareRule {
+    /// The line is not an Intel HEX record: no `:`, a digit that is not hexadecimal, or a
+    /// length that does not match its byte count or its type.
+    Record,
+    /// The record's bytes do not sum to 0.
+    Checksum,
+    /// A record type other than 00 to 05.
+    RecordType,
+    /// A record after the end-of-file record.
+    AfterEnd,
+    /// No end-of-file record.
+    NoEnd,
+    /// A data byte at or past the end of the flash.
+    PastFlash,
+    /// A data byte an earlier record already placed.
+    Overlap,
 }
 
 /// Which rule a transient analysis broke.
@@ -114,6 +141,20 @@ pub enum Diagnostic {
         field: &'static str,
         value: f64,
         rule: ValueRule,
+    },
+    /// A part's `firmware` is not a program for its flash. `line` is 1-based, `None` when no
+    /// one line is at fault.
+    NetlistFirmware {
+        part: Ref,
+        line: Option<usize>,
+        rule: FirmwareRule,
+    },
+    /// `pin` is on net `found`, and its kind ties it to `with`, on net `expected`.
+    NetlistSameNet {
+        pin: Ref,
+        with: Ref,
+        found: Name,
+        expected: Name,
     },
     /// `ground` names a net that is not in `nets`.
     NetlistGround { net: String },
@@ -222,6 +263,8 @@ impl Diagnostic {
             Diagnostic::NetlistPins { .. } => "netlist.pins",
             Diagnostic::NetlistUnit { .. } => "netlist.unit",
             Diagnostic::NetlistValue { .. } => "netlist.value",
+            Diagnostic::NetlistFirmware { .. } => "netlist.firmware",
+            Diagnostic::NetlistSameNet { .. } => "netlist.same_net",
             Diagnostic::NetlistGround { .. } => "netlist.ground",
             Diagnostic::NetlistAnalysis { .. } => "netlist.analysis",
             Diagnostic::NetlistSchedule { .. } => "netlist.schedule",
@@ -252,6 +295,8 @@ impl Diagnostic {
             | Diagnostic::NetlistPins { .. }
             | Diagnostic::NetlistUnit { .. }
             | Diagnostic::NetlistValue { .. }
+            | Diagnostic::NetlistFirmware { .. }
+            | Diagnostic::NetlistSameNet { .. }
             | Diagnostic::NetlistGround { .. }
             | Diagnostic::NetlistAnalysis { .. }
             | Diagnostic::NetlistSchedule { .. }
@@ -286,6 +331,8 @@ impl Diagnostic {
             | Diagnostic::NetlistPins { .. }
             | Diagnostic::NetlistUnit { .. }
             | Diagnostic::NetlistValue { .. }
+            | Diagnostic::NetlistFirmware { .. }
+            | Diagnostic::NetlistSameNet { .. }
             | Diagnostic::NetlistGround { .. }
             | Diagnostic::NetlistAnalysis { .. }
             | Diagnostic::NetlistSchedule { .. }
@@ -303,9 +350,11 @@ impl Diagnostic {
             | Diagnostic::NetlistAnalysis { .. } => Vec::new(),
             Diagnostic::NetlistDuplicate { name } => vec![name.clone()],
             Diagnostic::NetlistUnknownNet { pin, .. } => vec![pin.clone()],
+            Diagnostic::NetlistSameNet { pin, with, .. } => vec![pin.clone(), with.clone()],
             Diagnostic::NetlistPins { part, .. }
             | Diagnostic::NetlistUnit { part, .. }
             | Diagnostic::NetlistValue { part, .. }
+            | Diagnostic::NetlistFirmware { part, .. }
             | Diagnostic::NetlistSchedule { part, .. }
             | Diagnostic::NetlistWaveform { part, .. } => vec![part.clone()],
             Diagnostic::NetFloating { net } => vec![net.clone()],
@@ -368,6 +417,7 @@ impl Diagnostic {
                 value,
                 rule,
             } => {
+                let byte = *value as u8;
                 let value = number_text(*value);
                 match rule {
                     ValueRule::Positive => {
@@ -386,8 +436,42 @@ impl Diagnostic {
                         "{part} {field} is {value}; it must fit 2 * max_bounces edges {} ps apart",
                         Schedule::MIN_GAP_PS
                     ),
+                    ValueRule::Fraction => {
+                        format!("{part} {field} is {value}; it must be between 0 and 1")
+                    }
+                    ValueRule::AboveHigh => {
+                        format!("{part} {field} is {value}; it must not be above high")
+                    }
+                    ValueRule::Unsupported => {
+                        format!("{part} {field} is 0x{byte:02X}; the model does not run that mode")
+                    }
                 }
             }
+            Diagnostic::NetlistFirmware { part, line, rule } => {
+                let what = match rule {
+                    FirmwareRule::Record => "is not an Intel HEX record",
+                    FirmwareRule::Checksum => "has a bad checksum",
+                    FirmwareRule::RecordType => "has a record type other than 00 to 05",
+                    FirmwareRule::AfterEnd => "comes after the end-of-file record",
+                    FirmwareRule::NoEnd => "has no end-of-file record",
+                    FirmwareRule::PastFlash => "puts a byte past the end of the flash",
+                    FirmwareRule::Overlap => "places a byte an earlier record placed",
+                };
+                match line {
+                    Some(line) => format!("{part} firmware line {line} {what}"),
+                    None => format!("{part} firmware {what}"),
+                }
+            }
+            Diagnostic::NetlistSameNet {
+                pin,
+                with,
+                found,
+                expected,
+            } => format!(
+                "pin {pin} is on `{}`; it must be on `{}`, as {with} is",
+                found.as_str(),
+                expected.as_str()
+            ),
             Diagnostic::NetlistGround { net } => format!("ground `{net}` is not in `nets`"),
             Diagnostic::NetlistAnalysis { field, value, rule } => {
                 let must = match rule {
@@ -553,6 +637,12 @@ impl Diagnostic {
             Diagnostic::NetlistValue {
                 field, value, rule, ..
             } => serde_json::json!({ "field": field, "value": value, "rule": rule }),
+            Diagnostic::NetlistFirmware { line, rule, .. } => {
+                serde_json::json!({ "field": "firmware", "line": line, "rule": rule })
+            }
+            Diagnostic::NetlistSameNet {
+                found, expected, ..
+            } => serde_json::json!({ "expected": expected.as_str(), "found": found.as_str() }),
             Diagnostic::NetlistGround { net } => serde_json::json!({ "net": net }),
             Diagnostic::NetlistAnalysis { field, value, rule } => {
                 serde_json::json!({ "field": field, "rule": rule, "value": value })

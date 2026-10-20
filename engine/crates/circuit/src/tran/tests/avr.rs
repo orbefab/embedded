@@ -1,16 +1,16 @@
 //! The ATmega328P through the seam, running the repo's firmware in `firmware/`.
 
-use std::sync::Arc;
-
 use sim_avr::{FuseBytes, Port};
-use sim_core::netlist::Netlist;
+use sim_core::netlist::{Atmega328p, Netlist};
 
-use super::active::{US, at, capacitor, circuit, net, resistor, restarted, run_active, volts};
-use crate::active::avr::{
-    self, Atmega328p, NotACrystal, PACKAGE, PULL_UP, Pad, RESET_PULL_UP, RESET_THRESHOLD, STAGE,
-    THRESHOLD, port_index,
+use super::active::{
+    NS, US, at, capacitor, circuit, resistor, restarted, run_active, scripted, volts,
 };
+use crate::active::avr::{self, PACKAGE, Pad, port_index};
 use crate::active::{self, Drive};
+use crate::newton::Circuit;
+use sim_core::diagnostic::Diagnostic;
+use sim_core::trace::Trace;
 
 const BLINK: &str = include_str!("../../../../../firmware/blink.hex");
 const TOGGLE: &str = include_str!("../../../../../firmware/toggle.hex");
@@ -32,48 +32,60 @@ const FUSES: FuseBytes = FuseBytes {
     extended: 0xFD,
 };
 
+const PART: &str = include_str!("../../../../core/tests/fixtures/atmega328p.json");
+
+fn documented(pointer: &str) -> f64 {
+    let part: serde_json::Value = serde_json::from_str(PART).unwrap();
+    part.pointer(pointer)
+        .and_then(serde_json::Value::as_f64)
+        .unwrap()
+}
+
+/// The volts a pin sits at with `up` siemens to `supply` and `down` to ground.
+fn share(supply: f64, up: f64, down: f64) -> f64 {
+    supply * up / (up + down)
+}
+
 /// The net of each package pin that is not a supply: the pin's name in lowercase.
 fn pin_nets() -> impl Iterator<Item = (String, Pad)> {
-    PACKAGE
+    Atmega328p::PINS
         .iter()
+        .zip(PACKAGE)
         .filter(|(_, pad)| matches!(pad, Pad::Port(..) | Pad::Xtal))
-        .map(|&(name, pad)| (name.to_lowercase(), pad))
+        .map(|(name, pad)| (name.to_lowercase(), pad))
 }
 
-fn atmega(netlist: &Netlist, vdd: &str, hex: &str, clock_hz: u32, fuses: FuseBytes) -> Atmega328p {
-    let pins = PACKAGE.map(|(name, pad)| match pad {
-        Pad::Vcc | Pad::Avcc | Pad::Aref => net(netlist, vdd),
-        Pad::Gnd | Pad::Agnd => net(netlist, "gnd"),
-        Pad::Port(..) | Pad::Xtal => net(netlist, &name.to_lowercase()),
-    });
-    Atmega328p {
-        pins,
-        high: STAGE,
-        low: STAGE,
-        pull_up: PULL_UP,
-        reset_pull_up: RESET_PULL_UP,
-        threshold: THRESHOLD,
-        reset_threshold: RESET_THRESHOLD,
-        clock_hz,
-        fuses,
-        flash: Arc::from(sim_avr::parse_hex(hex).unwrap().bytes()),
+fn atmega(vdd: &str, hex: &str, clock_hz: u32, fuses: FuseBytes) -> String {
+    let mut part: serde_json::Value = serde_json::from_str(PART).unwrap();
+    for (name, pad) in Atmega328p::PINS.iter().zip(PACKAGE) {
+        part["pins"][*name] = match pad {
+            Pad::Vcc | Pad::Avcc | Pad::Aref => vdd.to_string(),
+            Pad::Gnd | Pad::Agnd => "gnd".to_string(),
+            Pad::Port(..) | Pad::Xtal => name.to_lowercase(),
+        }
+        .into();
     }
-}
-
-fn mcu(netlist: &Netlist, vdd: &str, hex: &str, clock_hz: u32) -> active::Chip {
-    avr::chip(&atmega(netlist, vdd, hex, clock_hz, FUSES)).unwrap()
+    part["firmware"] = hex.into();
+    part["clock_hz"]["value"] = clock_hz.into();
+    part["fuses"] =
+        serde_json::json!({ "low": fuses.low, "high": fuses.high, "extended": fuses.extended });
+    part.to_string()
 }
 
 #[test]
-fn the_factory_internal_rc_fuses_are_no_chip() {
-    let netlist = board(US, &[], &[resistor("rl", "pb5", "gnd", 1000.0)]);
-    let factory = FuseBytes {
-        low: 0x62,
-        high: 0xD9,
-        extended: 0xFF,
-    };
-    let chip = avr::chip(&atmega(&netlist, "vcc", TOGGLE, MHZ_16, factory));
-    assert_eq!(chip.err(), Some(NotACrystal { cksel: 0b0010 }));
+fn each_pad_is_the_pin_its_name_says() {
+    for (name, pad) in Atmega328p::PINS.iter().zip(PACKAGE) {
+        let names = match pad {
+            Pad::Port(port, bit) => vec![format!("P{port:?}{bit}")],
+            Pad::Xtal => vec!["PB6".to_string(), "PB7".to_string()],
+            Pad::Vcc => vec!["VCC".to_string()],
+            Pad::Gnd => vec!["GND_8".to_string()],
+            Pad::Avcc => vec!["AVCC".to_string()],
+            Pad::Aref => vec!["AREF".to_string()],
+            Pad::Agnd => vec!["GND_22".to_string()],
+        };
+        assert!(names.iter().any(|n| n == name), "{name} {pad:?}");
+    }
 }
 
 /// `RESET` holds the chip from power-on, then rises to about 2.45 V at 1 us: above its own
@@ -92,16 +104,14 @@ fn reset_releases_at_its_own_threshold() {
             resistor("rs", "src", "pc6", 1000.0),
             resistor("rl", "vcc", "pb5", 10e3),
         ],
+        atmega("vcc", TOGGLE, MHZ_16, FuseBytes { low: 0xDF, ..FUSES }),
     );
-    let fuses = FuseBytes { low: 0xDF, ..FUSES };
-    let chip = avr::chip(&atmega(&netlist, "vcc", TOGGLE, MHZ_16, fuses)).unwrap();
-    let (trace, diagnostics) = run_active(&netlist, vec![chip]);
+    let (trace, diagnostics) = run(&netlist);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let pc6 = volts(&trace, "pc6").last().unwrap().1;
-    assert!(
-        pc6 > RESET_THRESHOLD.high * 5.0 && pc6 < THRESHOLD.high * 5.0,
-        "{pc6}"
-    );
+    let reset_high = documented("/reset_threshold/high/value");
+    let input_high = documented("/input_threshold/high/value");
+    assert!(pc6 > reset_high * 5.0 && pc6 < input_high * 5.0, "{pc6}");
     let pb5 = volts(&trace, "pb5");
     assert!(
         pb5.iter().filter(|&&(t, _)| t < US).all(|&(_, v)| v > 4.9),
@@ -113,14 +123,31 @@ fn reset_releases_at_its_own_threshold() {
     );
 }
 
-fn board(stop_ps: u64, nets: &[&str], parts: &[String]) -> Netlist {
+fn board(stop_ps: u64, nets: &[&str], parts: &[String], mcu: String) -> Netlist {
     let pins: Vec<String> = pin_nets().map(|(net, _)| net).collect();
     let nets: Vec<&str> = pins
         .iter()
         .map(String::as_str)
         .chain(nets.iter().copied())
         .collect();
-    circuit(stop_ps, &nets, parts)
+    let mut parts = parts.to_vec();
+    parts.push(mcu);
+    circuit(stop_ps, &nets, &parts)
+}
+
+fn run(netlist: &Netlist) -> (Trace, Vec<Diagnostic>) {
+    run_active(netlist, Vec::new())
+}
+
+fn core(netlist: &Netlist) -> avr::Core {
+    let circuit = Circuit::new(netlist).unwrap();
+    let [chip] = &circuit.actives[..] else {
+        unreachable!("one ATmega328P");
+    };
+    let active::Core::Avr(core) = &chip.core else {
+        unreachable!("an ATmega328P");
+    };
+    (**core).clone()
 }
 
 fn ps(cycle: u64, clock_hz: u32) -> u64 {
@@ -137,9 +164,9 @@ fn a_pin_edge_lands_at_its_cycles_picosecond_into_an_rc() {
             resistor("r1", "pb5", "cap", 1000.0),
             capacitor("c1", "cap", 1e-9),
         ],
+        atmega("vcc", TOGGLE, MHZ_14_7456, FUSES),
     );
-    let chip = mcu(&netlist, "vcc", TOGGLE, MHZ_14_7456);
-    let (trace, diagnostics) = run_active(&netlist, vec![chip]);
+    let (trace, diagnostics) = run(&netlist);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let pb5 = volts(&trace, "pb5");
     let cap = volts(&trace, "cap");
@@ -153,25 +180,65 @@ fn a_pin_edge_lands_at_its_cycles_picosecond_into_an_rc() {
     for &edge in &edges {
         assert!(restarted(&pb5, edge), "a restart at {edge} ps");
     }
-    let first_high = edges[1];
+    assert!(
+        (at(&cap, 0) - 2.5).abs() < 1e-4,
+        "an off pin and its open RC rest on the leakage"
+    );
     assert!(
         cap.iter()
-            .filter(|&&(t, _)| t <= first_high)
-            .all(|&(_, v)| v.abs() < 1e-9)
+            .filter(|&&(t, _)| t <= edges[0])
+            .all(|&(_, v)| (v - 2.5).abs() < 1e-3),
+        "held until PB5 drives low"
     );
-    assert!(at(&cap, edges[2]) > 1.0, "{}", at(&cap, edges[2]));
+    assert!(at(&cap, edges[1]) < 2.4, "{}", at(&cap, edges[1]));
+    assert!(at(&cap, edges[2]) > 4.9, "{}", at(&cap, edges[2]));
+}
+
+#[test]
+fn a_script_chip_runs_beside_an_atmega() {
+    let netlist = board(
+        20 * US,
+        &["echo"],
+        &[
+            resistor("rl", "pb5", "gnd", 1000.0),
+            resistor("re", "echo", "gnd", 1000.0),
+        ],
+        atmega("vcc", TOGGLE, MHZ_16, FUSES),
+    );
+    let script = scripted(&netlist, "echo", "pb5", &[], Some(US));
+    let (trace, diagnostics) = run_active(&netlist, vec![script]);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let (pb5, echo) = (volts(&trace, "pb5"), volts(&trace, "echo"));
+    let high = 5.0 * 1000.0 / 1025.0;
+    for (cycle, level) in [(4, high), (104, 0.0), (204, high)] {
+        let edge = cycle * 62_500;
+        assert!(restarted(&pb5, edge), "PB5 at cycle {cycle}");
+        assert!(restarted(&echo, edge + US), "the echo of cycle {cycle}");
+        assert!((at(&echo, edge + US + NS) - level).abs() < 1e-6);
+    }
 }
 
 /// `pullup.S` turns PB5's pull-up on at cycle 2. Into its own resistance to ground, the pin
 /// sits at half the supply.
 #[test]
 fn a_pull_up_pin_is_read_by_the_circuit() {
-    let netlist = board(2 * US, &[], &[resistor("rg", "pb5", "gnd", PULL_UP)]);
-    let chip = mcu(&netlist, "vcc", PULL, MHZ_16);
-    let (trace, diagnostics) = run_active(&netlist, vec![chip]);
+    let pull_up = documented("/pull_up_resistance/value");
+    let leak = 1.0 / documented("/leakage_resistance/value");
+    let netlist = board(
+        2 * US,
+        &[],
+        &[resistor("rg", "pb5", "gnd", pull_up)],
+        atmega("vcc", PULL, MHZ_16, FUSES),
+    );
+    let (trace, diagnostics) = run(&netlist);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let pb5 = volts(&trace, "pb5");
-    assert!(at(&pb5, 125_000).abs() < 1e-6, "{}", at(&pb5, 125_000));
+    let off = share(5.0, leak, leak + 1.0 / pull_up);
+    assert!(
+        (at(&pb5, 125_000) - off).abs() < 1e-6,
+        "{}",
+        at(&pb5, 125_000)
+    );
     assert!(restarted(&pb5, 125_000));
     assert!((pb5.last().unwrap().1 - 2.5).abs() < 1e-6);
 }
@@ -185,17 +252,18 @@ fn a_pull_up_that_leaves_the_level_still_stops() {
             resistor("ru", "vcc", "pb5", 100e3),
             resistor("rd", "pb5", "gnd", 1e6),
         ],
+        atmega("vcc", PULL, MHZ_16, FUSES),
     );
-    let chip = mcu(&netlist, "vcc", PULL, MHZ_16);
-    let (trace, diagnostics) = run_active(&netlist, vec![chip]);
+    let (trace, diagnostics) = run(&netlist);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let pb5 = volts(&trace, "pb5");
-    let before = 5.0 * 1e6 / 1.1e6;
-    assert!(before > THRESHOLD.high * 5.0);
+    let leak = 1.0 / documented("/leakage_resistance/value");
+    let before = share(5.0, 1.0 / 100e3 + leak, 1.0 / 1e6 + leak);
+    assert!(before > documented("/input_threshold/high/value") * 5.0);
     assert!((at(&pb5, 125_000) - before).abs() < 1e-6);
     assert!(restarted(&pb5, 125_000));
-    let up = 1.0 / (1.0 / 100e3 + 1.0 / PULL_UP);
-    let after = 5.0 * 1e6 / (1e6 + up);
+    let up = 1.0 / 100e3 + 1.0 / documented("/pull_up_resistance/value") + leak;
+    let after = share(5.0, up, 1.0 / 1e6 + leak);
     assert!((pb5.last().unwrap().1 - after).abs() < 1e-6);
 }
 
@@ -213,17 +281,18 @@ fn an_input_flip_reaches_the_core_and_comes_back_on_an_output() {
             capacitor("cs", "pd2", 1e-9),
             resistor("rl", "pb5", "gnd", 1000.0),
         ],
+        atmega("vcc", ECHO, MHZ_16, FUSES),
     );
-    let chip = mcu(&netlist, "vcc", ECHO, MHZ_16);
-    let (trace, diagnostics) = run_active(&netlist, vec![chip]);
+    let (trace, diagnostics) = run(&netlist);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let pd2 = volts(&trace, "pd2");
-    let crossing = pd2
-        .iter()
-        .find(|&&(_, v)| v > THRESHOLD.high * 5.0)
-        .unwrap()
-        .0;
-    let expected = US as f64 * (1.0 - (1.0 - THRESHOLD.high).ln());
+    let input_high = documented("/input_threshold/high/value");
+    let crossing = pd2.iter().find(|&&(_, v)| v > input_high * 5.0).unwrap().0;
+    let leak = 1.0 / documented("/leakage_resistance/value");
+    let tau_ps = 1e-9 / (1e-3 + 2.0 * leak) * 1e12;
+    let start = share(5.0, leak, leak + 1e-3);
+    let end = share(5.0, 1e-3 + leak, leak);
+    let expected = US as f64 + tau_ps * ((end - start) / (end - input_high * 5.0)).ln();
     assert!((crossing as f64 - expected).abs() < 200.0, "{crossing}");
     let pb5 = volts(&trace, "pb5");
     let rise = pb5.iter().find(|&&(_, v)| v > 2.5).unwrap().0;
@@ -247,9 +316,9 @@ fn an_adc_sample_reads_a_known_divider() {
             resistor("rt", "vcc", "pc0", 3300.0),
             resistor("rb", "pc0", "gnd", 6800.0),
         ],
+        atmega("vcc", ADC, MHZ_16, FUSES),
     );
-    let chip = mcu(&netlist, "vcc", ADC, MHZ_16);
-    let (trace, diagnostics) = run_active(&netlist, vec![chip]);
+    let (trace, diagnostics) = run(&netlist);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let code: u8 = (0..8)
         .map(|bit| {
@@ -262,9 +331,13 @@ fn an_adc_sample_reads_a_known_divider() {
 
 /// PB5's edges at 16 MHz, one oscillator cycle every 62,500 ps.
 fn clkpr_edges(hex: &str, fuses: FuseBytes) -> Vec<(u64, f64)> {
-    let netlist = board(40 * US, &[], &[resistor("rl", "pb5", "gnd", 1000.0)]);
-    let chip = avr::chip(&atmega(&netlist, "vcc", hex, MHZ_16, fuses)).unwrap();
-    let (trace, diagnostics) = run_active(&netlist, vec![chip]);
+    let netlist = board(
+        40 * US,
+        &[],
+        &[resistor("rl", "pb5", "gnd", 1000.0)],
+        atmega("vcc", hex, MHZ_16, fuses),
+    );
+    let (trace, diagnostics) = run(&netlist);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     volts(&trace, "pb5")
 }
@@ -302,7 +375,8 @@ fn a_clkpr_division_keeps_edges_on_the_crystals_cycles() {
     );
 }
 
-/// `ports.S` drives every port pin high, and 2 V is under `VBOT-`.
+/// `ports.S` drives every port pin high, and 2 V is under `VBOT-`. An off pin then sits where
+/// its leakage and its load put it.
 #[test]
 fn a_brown_out_holds_every_pin_off() {
     let supply = r#"{ "name": "vd", "kind": "voltage_source", "pins": { "p": "vdd", "n": "gnd" },
@@ -312,9 +386,9 @@ fn a_brown_out_holds_every_pin_off() {
         30 * US,
         &["vdd"],
         &[supply.to_string(), resistor("rl", "pb5", "gnd", 10e3)],
+        atmega("vdd", PORTS, MHZ_16, FUSES),
     );
-    let chip = mcu(&netlist, "vdd", PORTS, MHZ_16);
-    let (trace, diagnostics) = run_active(&netlist, vec![chip]);
+    let (trace, diagnostics) = run(&netlist);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let pb5 = volts(&trace, "pb5");
     assert!(at(&pb5, 20 * US) > 4.9, "{}", at(&pb5, 20 * US));
@@ -322,21 +396,18 @@ fn a_brown_out_holds_every_pin_off() {
         restarted(&pb5, 20 * US + 62_500),
         "off one cycle after VCC fell"
     );
+    let leak = 1.0 / documented("/leakage_resistance/value");
+    let reset_up = 1.0 / documented("/reset_pull_up_resistance/value");
     for (name, pad) in pin_nets() {
         let v = volts(&trace, &name).last().unwrap().1;
-        match pad {
-            Pad::Port(Port::C, 6) => assert!((v - 2.0).abs() < 1e-3, "RESET pulls up: {v}"),
-            Pad::Xtal => {}
-            _ => assert!(v.abs() < 1e-6, "{name} is off: {v}"),
-        }
+        let expected = match pad {
+            Pad::Port(Port::C, 6) => share(2.0, reset_up + leak, leak),
+            Pad::Port(Port::B, 5) => share(2.0, leak, leak + 1.0 / 10e3),
+            Pad::Xtal => continue,
+            _ => 1.0,
+        };
+        assert!((v - expected).abs() < 1e-5, "{name} is off: {v}");
     }
-}
-
-fn core(chip: active::Chip) -> avr::Core {
-    let active::Core::Avr(core) = chip.core else {
-        unreachable!("an ATmega328P");
-    };
-    *core
 }
 
 fn stops(core: &mut avr::Core, limit: u64) -> Vec<(u64, Drive)> {
@@ -351,11 +422,15 @@ fn stops(core: &mut avr::Core, limit: u64) -> Vec<(u64, Drive)> {
 /// Across `CLKPR` switches too: `clkpr.S` slows down and `speedup.S` under `CKDIV8` speeds up.
 #[test]
 fn a_run_split_at_any_picosecond_is_the_same_run() {
-    let netlist = board(US, &[], &[resistor("rl", "pb5", "gnd", 1000.0)]);
     let ckdiv8 = FuseBytes { low: 0x7F, ..FUSES };
     for (hex, fuses, edges) in [(TOGGLE, FUSES, 4), (CLKPR, FUSES, 3), (SPEED_UP, ckdiv8, 4)] {
-        let chip = avr::chip(&atmega(&netlist, "vcc", hex, MHZ_14_7456, fuses)).unwrap();
-        let start = core(chip);
+        let load = [resistor("rl", "pb5", "gnd", 1000.0)];
+        let start = core(&board(
+            US,
+            &[],
+            &load,
+            atmega("vcc", hex, MHZ_14_7456, fuses),
+        ));
         let limit = ps(300, MHZ_14_7456);
         let run = |split: Option<u64>| {
             let mut core = start.clone();
@@ -380,8 +455,8 @@ fn a_run_split_at_any_picosecond_is_the_same_run() {
 /// changes the image but not the level its load already holds.
 #[test]
 fn blink_stops_once_for_its_output_and_once_per_edge() {
-    let netlist = board(US, &[], &[resistor("rl", "pb5", "gnd", 1000.0)]);
-    let mut core = core(mcu(&netlist, "vcc", BLINK, MHZ_16));
+    let load = [resistor("rl", "pb5", "gnd", 1000.0)];
+    let mut core = core(&board(US, &[], &load, atmega("vcc", BLINK, MHZ_16, FUSES)));
     let stops = stops(&mut core, ps(24_000_004, MHZ_16));
     let cycles: Vec<(u64, Drive)> = stops
         .iter()
@@ -420,8 +495,8 @@ fn blink_throughput() {
         }
     }
     let raw = start.elapsed().as_secs_f64();
-    let netlist = board(US, &[], &[resistor("rl", "pb5", "gnd", 1000.0)]);
-    let mut core = core(mcu(&netlist, "vcc", BLINK, MHZ_16));
+    let load = [resistor("rl", "pb5", "gnd", 1000.0)];
+    let mut core = core(&board(US, &[], &load, atmega("vcc", BLINK, MHZ_16, FUSES)));
     let start = std::time::Instant::now();
     let stops = stops(&mut core, ps(CYCLES, MHZ_16)).len();
     let seam = start.elapsed().as_secs_f64();

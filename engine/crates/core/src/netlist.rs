@@ -184,6 +184,7 @@ impl Model {
             Model::Capacitor(_) => &Capacitor::PINS,
             Model::Switch(_) => &Switch::PINS,
             Model::Chip(Chip::Ne555(_)) => &Ne555::PINS,
+            Model::Chip(Chip::Atmega328p(_)) => &Atmega328p::PINS,
         }
     }
 
@@ -196,6 +197,7 @@ impl Model {
             Model::Capacitor(c) => &c.pins,
             Model::Switch(s) => &s.pins,
             Model::Chip(Chip::Ne555(n)) => &n.pins,
+            Model::Chip(Chip::Atmega328p(m)) => &m.pins,
         }
     }
 
@@ -388,6 +390,101 @@ impl Schedule {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Chip {
     Ne555(Box<Ne555>),
+    Atmega328p(Box<Atmega328p>),
+}
+
+/// An ATmega328P in its 28-pin DIP, running `firmware` from power-on. Microchip DS40002061B.
+///
+/// Each I/O pin drives through `output` from VCC and into `GND_8`, pulls up through
+/// `pull_up_resistance`, or is off, as the firmware sets it, leaks to VCC and to `GND_8` through
+/// `leakage_resistance`, and reads its level through `input_threshold`. `PC6` is `RESET` while
+/// `RSTDISBL` is unprogrammed, with its own pull-up and thresholds. `PB6` and `PB7` hold the
+/// crystal or resonator the fuses select, and `clock_hz` is its frequency. Only parse builds
+/// one, so `GND_8` and `GND_22` name one net.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Atmega328p {
+    pub pins: [NetId; 28],
+    pub firmware: Firmware,
+    /// Hertz, greater than 0, at most `u32::MAX`.
+    pub clock_hz: IntValue,
+    pub fuses: Fuses,
+    pub output: OutputStage,
+    /// Ohm. Every I/O pin's pull-up.
+    pub pull_up_resistance: Value,
+    /// Ohm. `PC6`'s pull-up while it is `RESET`.
+    pub reset_pull_up_resistance: Value,
+    /// Ohm. Every port pin's to VCC and again to `GND_8`, in every drive state, `PC6` as
+    /// `RESET` included.
+    pub leakage_resistance: Value,
+    /// Every I/O pin's.
+    pub input_threshold: Threshold,
+    /// `PC6`'s while it is `RESET`.
+    pub reset_threshold: Threshold,
+}
+
+impl Atmega328p {
+    /// DIP order, DS40002061B Figure 1-1. The two ground pins carry their pin numbers.
+    pub const PINS: [&'static str; 28] = [
+        "PC6", "PD0", "PD1", "PD2", "PD3", "PD4", "VCC", "GND_8", "PB6", "PB7", "PD5", "PD6",
+        "PD7", "PB0", "PB1", "PB2", "PB3", "PB4", "PB5", "AVCC", "AREF", "GND_22", "PC0", "PC1",
+        "PC2", "PC3", "PC4", "PC5",
+    ];
+    /// The flash, 32 KB, DS40002061B Table 2-1.
+    pub const FLASH_BYTES: usize = 32 * 1024;
+}
+
+/// A program image from flash address 0. Only parse builds one, so it fits the flash.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Firmware {
+    flash: Vec<u8>,
+}
+
+impl Firmware {
+    /// At most `Atmega328p::FLASH_BYTES`. A gap between records is erased flash, `0xFF`.
+    pub fn flash(&self) -> &[u8] {
+        &self.flash
+    }
+}
+
+/// The three fuse bytes as programmed, DS40002061B Tables 28-6, 28-8 and 28-9, where a
+/// programmed bit is 0. Only parse builds one, so `CKSEL` selects a crystal or ceramic
+/// resonator (Table 9-1, `0110` to `1111`), `CKOUT`, `DWEN` and `BOOTRST` are unprogrammed,
+/// and `BODLEVEL` is a level of Table 29-12 or disabled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Fuses {
+    low: u8,
+    high: u8,
+    extended: u8,
+}
+
+impl Fuses {
+    pub fn low(self) -> u8 {
+        self.low
+    }
+
+    pub fn high(self) -> u8 {
+        self.high
+    }
+
+    pub fn extended(self) -> u8 {
+        self.extended
+    }
+
+    /// `RSTDISBL` unprogrammed: `PC6` is `RESET`.
+    pub fn has_reset(self) -> bool {
+        self.high & 0x80 != 0
+    }
+}
+
+/// Where an input reads high and low, as fractions of `V(VCC) - V(GND_8)` over `GND_8`. A low
+/// input reads high above `high`, and a high one reads low at or below `low`. Each is in
+/// `(0, 1)`, and `low` is at most `high`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Threshold {
+    /// Unit `1`.
+    pub low: Value,
+    /// Unit `1`.
+    pub high: Value,
 }
 
 /// An NE555 timer, behavioural. Pins in package order, TI SLFS022K's pin functions.

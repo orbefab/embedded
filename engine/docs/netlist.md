@@ -302,6 +302,174 @@ The latch's state is the chip's only state. It is not a netlist field. The opera
 
 A chip has no `ratings` field and no `i`, `v`, or `p`. Its logic levels are refs of their own, described in [Refs](#refs). It is a DC path from VCC to CONT, CONT to GND, VCC to GND, OUT to VCC, OUT to GND, and DISCH to GND, in either latch state. A net reached only through TRIG, THRES, or RESET floats.
 
+### ATmega328P
+
+`kind` is `atmega328p`, an ATmega328P in its 28-pin DIP running firmware, Microchip DS40002061B. Pins are the package's 28, named as Figure 1-1 prints them and listed in package order: `PC6`, `PD0` to `PD4`, `VCC`, `GND_8`, `PB6`, `PB7`, `PD5` to `PD7`, `PB0` to `PB5`, `AVCC`, `AREF`, `GND_22`, and `PC0` to `PC5`. The two ground pins carry their pin numbers, because a pin name is unique. Every pin is required, so an unused pin sits on a net of its own. `GND_8` and `GND_22` name one net: Figure 1-1 names both pins `GND`, and §1.1.2 gives that pin one function, ground. A part that puts them on two nets is `netlist.same_net` on its `GND_22` pin.
+
+This document runs `firmware/toggle.S` at 16 MHz into 1 kohm on PB5. `cx1` and `cx2` are the crystal's load capacitors and `cref` decouples `AREF`. Each is held at 0 V at the operating point, which gives its net a DC path.
+
+```json
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": { "transient": { "stop_ps": 20000000, "max_step_ps": 1000000, "grid_ps": 1000000 } },
+  "ground": "gnd",
+  "nets": [
+    "gnd", "aref", "pb0", "pb1", "pb2", "pb3", "pb4", "pb5", "pc0", "pc1", "pc2", "pc3", "pc4",
+    "pc5", "pc6", "pd0", "pd1", "pd2", "pd3", "pd4", "pd5", "pd6", "pd7", "vcc", "xtal1",
+    "xtal2"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": { "p": "vcc", "n": "gnd" },
+      "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": { "a": "pb5", "b": "gnd" },
+      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
+    },
+    {
+      "name": "cx1",
+      "kind": "capacitor",
+      "pins": { "a": "xtal1", "b": "gnd" },
+      "capacitance": { "value": 2.2e-11, "unit": "F", "source": "user" },
+      "initial": { "value": 0.0, "unit": "V", "source": "user" }
+    },
+    {
+      "name": "cx2",
+      "kind": "capacitor",
+      "pins": { "a": "xtal2", "b": "gnd" },
+      "capacitance": { "value": 2.2e-11, "unit": "F", "source": "user" },
+      "initial": { "value": 0.0, "unit": "V", "source": "user" }
+    },
+    {
+      "name": "cref",
+      "kind": "capacitor",
+      "pins": { "a": "aref", "b": "gnd" },
+      "capacitance": { "value": 1e-07, "unit": "F", "source": "user" },
+      "initial": { "value": 0.0, "unit": "V", "source": "user" }
+    },
+    {
+      "name": "u1",
+      "kind": "atmega328p",
+      "pins": {
+        "PC6": "pc6", "PD0": "pd0", "PD1": "pd1", "PD2": "pd2", "PD3": "pd3", "PD4": "pd4",
+        "VCC": "vcc", "GND_8": "gnd", "PB6": "xtal1", "PB7": "xtal2", "PD5": "pd5",
+        "PD6": "pd6", "PD7": "pd7", "PB0": "pb0", "PB1": "pb1", "PB2": "pb2", "PB3": "pb3",
+        "PB4": "pb4", "PB5": "pb5", "AVCC": "vcc", "AREF": "aref", "GND_22": "gnd",
+        "PC0": "pc0", "PC1": "pc1", "PC2": "pc2", "PC3": "pc3", "PC4": "pc4", "PC5": "pc5"
+      },
+      "firmware": ":10000000259A1D9A0FE10A95F1F700000000000003\n:02001000F8CF27\n:00000001FF\n",
+      "clock_hz": { "value": 16000000, "unit": "Hz", "source": "user" },
+      "fuses": { "low": 255, "high": 217, "extended": 253 },
+      "output": {
+        "high_drop": {
+          "value": 0.0, "unit": "V",
+          "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-355", "basis": "typical" } }
+        },
+        "high_resistance": {
+          "value": 25.0, "unit": "ohm",
+          "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-355", "basis": "typical" } }
+        },
+        "low_drop": {
+          "value": 0.0, "unit": "V",
+          "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-353", "basis": "typical" } }
+        },
+        "low_resistance": {
+          "value": 25.0, "unit": "ohm",
+          "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-353", "basis": "typical" } }
+        }
+      },
+      "pull_up_resistance": {
+        "value": 35714.0, "unit": "ohm",
+        "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-348", "basis": "typical" } }
+      },
+      "reset_pull_up_resistance": {
+        "value": 46296.0, "unit": "ohm",
+        "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-351", "basis": "typical" } }
+      },
+      "leakage_resistance": {
+        "value": 5500000.0, "unit": "ohm",
+        "source": { "closed_form": { "note": "DS40002061B Table 30-1: IIL and IIH at most 1 uA at VCC = 5.5 V, so 5.5 V / 1 uA" } }
+      },
+      "input_threshold": {
+        "low": {
+          "value": 0.42, "unit": "1",
+          "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-357", "basis": "typical" } }
+        },
+        "high": {
+          "value": 0.52, "unit": "1",
+          "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-356", "basis": "typical" } }
+        }
+      },
+      "reset_threshold": {
+        "low": {
+          "value": 0.42, "unit": "1",
+          "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-360", "basis": "typical" } }
+        },
+        "high": {
+          "value": 0.44, "unit": "1",
+          "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-359", "basis": "typical" } }
+        }
+      }
+    }
+  ]
+}
+```
+
+`firmware/toggle.S` drives PB5 low at cycle 2, high at cycle 4, and toggles it every 100 cycles after that. A cycle of a 16 MHz crystal is 62,500 ps, so PB5 rises at 250,000 ps, falls at 6,500,000 ps, and rises again at 12,750,000 ps. Each edge lands at its picosecond, as [engine.md](engine.md#active-chips) says.
+
+| Field | Unit | Rule |
+| --- | --- | --- |
+| `firmware` | Intel HEX text | records 00 to 05, an end record, every byte inside the 32 KB flash |
+| `clock_hz` | `Hz`, a JSON integer | greater than 0 and at most 4294967295, else rule `positive` or `netlist.syntax` |
+| `fuses.low`, `fuses.high`, `fuses.extended` | a JSON integer from 0 to 255 | the clock and mode rules below, else rule `unsupported` |
+| `output.high_drop`, `output.low_drop` | `V` | at least 0, else rule `non_negative` |
+| `output.high_resistance`, `output.low_resistance` | `ohm` | the resistor's |
+| `pull_up_resistance`, `reset_pull_up_resistance` | `ohm` | the resistor's |
+| `leakage_resistance` | `ohm` | the resistor's |
+| `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+| `reset_threshold.low`, `reset_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+
+A break is `netlist.value` with the dotted field, such as `input_threshold.high`, and a wrong unit is `netlist.unit` with the same field. A threshold's `low` must be at most its `high`. Above it is rule `above_high` on `low`.
+
+`firmware` is the program as Intel HEX text, one record a line, in one JSON string. Parse reads it into flash from address 0. Record 00 places data, 01 ends the file, 02 and 04 move the base address, and 03 and 05 name a start address, which a part at reset does not use. The address field of record 01 is ignored the same way. A gap between records is erased flash, `0xFF`. Each byte is placed once. A line that is not a record, an end record with data, a bad checksum, any other record type, a record after the end, no end record, a byte at or past 32768, and a byte an earlier record placed are each `netlist.firmware` with the line and the rule. `scripts/firmware.sh` builds the repo's own programs.
+
+`fuses` are the three bytes as programmed, so a programmed bit is 0 (Tables 28-6, 28-8 and 28-9). The model runs a crystal or ceramic resonator on `PB6` and `PB7`, `CKSEL` 0110 to 1111 in Table 9-1, and `clock_hz` is its frequency. A fuse setting the model does not run is `netlist.value` rule `unsupported` with the byte's field and its value:
+
+- on `fuses.low`, any other `CKSEL`, because the model's only clock is the crystal at `clock_hz`. The factory low fuse, `0x62`, selects the internal RC oscillator and is `unsupported`.
+- on `fuses.low`, a programmed `CKOUT`, because the model drives no clock on `PB0`.
+- on `fuses.high`, a programmed `DWEN`, because the model has no debugWIRE on `RESET`.
+- on `fuses.high`, a programmed `BOOTRST`, because the core always starts at word 0, and a real part would start in the boot section (Table 12-7).
+- on `fuses.extended`, a reserved `BODLEVEL`, 000 to 011 in Table 29-12, which names no level.
+
+`CKSEL0` with `SUT`, `CKDIV8`, `RSTDISBL`, `WDTON`, and `BODLEVEL` act as [avr.md](avr.md#fuses) says. The model reads nothing of `SPIEN`, `EESAVE`, or `BOOTSZ`.
+
+The model is the core and its adapter in [avr.md](avr.md#behind-the-seam). Each port pin drives high through `output.high_resistance` from `VCC`, drives low through `output.low_resistance` into `GND_8`, pulls up through `pull_up_resistance` to `VCC`, or is off, as the firmware sets it. In each of those states it also leaks through `leakage_resistance` to `VCC` and through another to `GND_8`. It reads high above `input_threshold.high` times `V(VCC) - V(GND_8)` over `GND_8`, and low at or below `input_threshold.low` times it. `PC6` is `RESET` while `RSTDISBL` is unprogrammed. It then pulls up through `reset_pull_up_resistance`, leaks as an I/O pin does, and reads through `reset_threshold`, and a low level holds the chip in reset. The ADC samples `PC0` to `PC5`, `AVCC` and `AREF` against `GND_22`.
+
+The example's values but one are typical curves at VCC = 5 V, read by eye, not digitized. `leakage_resistance` is derived from a bound. All are the documented defaults to copy.
+
+| Field | Value | Reading |
+| --- | --- | --- |
+| `output.*_resistance` | 25 ohm | Figures 31-353 and 31-355 at 25 C: about 0.45 V at 20 mA sunk and 0.55 V under VCC at 20 mA sourced, 22.5 and 27.5 ohm. Both sides take 25 ohm, between the two, which also matches a bench fit, so an eye reading is not frozen as a measured difference. |
+| `output.*_drop` | 0 V | Both curves start at their rail at 0 mA. |
+| `pull_up_resistance` | 35,714 ohm | Figure 31-348, about 140 uA at 0 V, straight to 0 at 5 V. |
+| `reset_pull_up_resistance` | 46,296 ohm | Figure 31-351, about 108 uA at 0 V. |
+| `input_threshold` | 0.42 and 0.52 | Figures 31-357 and 31-356, about 2.1 V falling and 2.6 V rising. |
+| `reset_threshold` | 0.42 and 0.44 | Figures 31-360 and 31-359, about 2.1 V falling and 2.2 V rising. |
+| `leakage_resistance` | 5.5 Mohm | Derived from Table 30-1, which bounds `IIL` and `IIH` at 1 uA at VCC = 5.5 V. With the pin at one rail, 5.5 V across 5.5 Mohm to the other is that 1 uA. It is an approximation: the leakage at its bound, written as a resistance. Table 30-1 gives `RESET` no bound of its own, and `PC6` takes the I/O pin's. |
+
+Table 30-1's limits are wider. The pull-up there is 20 to 50 kohm and the reset pull-up 30 to 60 kohm. `VIL` is at most 0.3 VCC and `VIH` at least 0.6 VCC, where a read is ensured, not where it trips, and `RESET`'s are at most 0.1 VCC and at least 0.9 VCC. A corner is that value written with basis `min` or `max`.
+
+Each port pin, `PC6` included, is a DC path to `VCC` and to `GND_8` in every drive state, through its leakage, and the solve stamps that leakage in every state. An output stage beside it moves the pin by about 5 ppm of the supply. A net that only an off pin holds solves on that leakage, not on gmin. `PB6`, `PB7` and `AREF` join nothing, so a net reached only through them is `net.floating`. So is a net reached only through `AVCC`. §1.1.7 makes `AVCC` the supply of the ADC and of `PC3` to `PC0`, and says it must be connected to `VCC` even when the ADC is unused. The model draws every pin's stages, `PC3` to `PC0` included, from `VCC`, and reads `AVCC` only at an ADC sample, so it joins nothing. That is the datasheet's circuit while `AVCC` is wired to `VCC`, and an `AVCC` left on a net of its own is reported. An unused port pin on a net of its own is not. An off pin with no load sits at half the supply, inside the band between the defaults' `input_threshold.low` and `input_threshold.high`, so it reads low from power-on and then keeps its last level. Thresholds that put half the supply outside the band read it as that side.
+
+An ATmega328P has no `ratings` object. [avr.md](avr.md#ratings) names its ratings, and a later PR checks them. It has no `i`, `v`, or `p`, and no logic signals yet.
+
 ## Ratings
 
 A rating bounds the stress on a part. Every key of a kind's `ratings` object is required. Each value is a value object, or `null` for a part that is deliberately unrated.
@@ -310,7 +478,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | --- | --- | --- |
 | `resistor` | `power` | `#<part>.p` |
 | `diode`, `led` | `current`, `power` | `#<part>.i`, `#<part>.p` |
-| `voltage_source`, `current_source`, `capacitor`, `switch`, `ne555` | none | |
+| `voltage_source`, `current_source`, `capacitor`, `switch`, `ne555`, `atmega328p` | none | |
 
 `current` is in `A`. `power` is in `W`. A rating must be greater than 0. A missing key, an unknown key, and a missing `ratings` object are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.current` or `ratings.power`. A value of 0 or below is `netlist.value` with the same field.
 

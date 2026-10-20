@@ -4,6 +4,7 @@ use std::fmt;
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
+mod atmega328p;
 mod waveform;
 
 use super::{
@@ -15,6 +16,7 @@ use crate::diagnostic::{AnalysisRule, Diagnostic, ScheduleRule, ValueRule};
 use crate::finite::Finite;
 use crate::name::{Name, NameError, Ref};
 use crate::time::Time;
+use atmega328p::{WireAtmega328p, resolve_atmega328p};
 use waveform::{CURRENT, VOLTAGE, WireWaveform, resolve_waveform};
 
 #[derive(Deserialize)]
@@ -83,6 +85,7 @@ enum WirePart {
     },
     Switch(WireSwitch),
     Ne555(Box<WireNe555>),
+    Atmega328p(Box<WireAtmega328p>),
 }
 
 #[derive(Deserialize)]
@@ -427,6 +430,7 @@ fn resolve_part(
         WirePart::Diode(junction) | WirePart::Led(junction) => &junction.name,
         WirePart::Switch(switch) => &switch.name,
         WirePart::Ne555(chip) => &chip.name,
+        WirePart::Atmega328p(chip) => &chip.name,
     };
     let path = format!("parts[{index}].name");
     let name = match Name::new(raw_name) {
@@ -532,6 +536,8 @@ fn resolve_part(
         }
         WirePart::Ne555(chip) => resolve_ne555(&name, &part_ref, *chip, nets, out)
             .map(|chip| Model::Chip(Chip::Ne555(Box::new(chip)))),
+        WirePart::Atmega328p(chip) => resolve_atmega328p(&name, &part_ref, *chip, nets, out)
+            .map(|chip| Model::Chip(Chip::Atmega328p(Box::new(chip)))),
     };
     if duplicate || reserved {
         None
@@ -606,20 +612,6 @@ fn resolve_ne555(
     let ohm = |field, value, out: &mut Vec<Diagnostic>| {
         resolve_value(part_ref, field, "ohm", true, value, out)
     };
-    let drop = |field, value: WireValue, out: &mut Vec<Diagnostic>| {
-        let volts = value.value.get();
-        let value = resolve_value(part_ref, field, "V", false, value, out)?;
-        if volts < 0.0 {
-            out.push(Diagnostic::NetlistValue {
-                part: part_ref.clone(),
-                field,
-                value: volts,
-                rule: ValueRule::NonNegative,
-            });
-            return None;
-        }
-        Some(value)
-    };
     let pins = resolve_pins(name, Ne555::PINS, &wire.pins.0, nets, out);
     let ladder = ohm("ladder_resistance", wire.ladder_resistance, out);
     let reset = resolve_value(
@@ -637,11 +629,7 @@ fn resolve_ne555(
         out,
     );
     let supply = ohm("supply_resistance", wire.supply_resistance, out);
-    let output = wire.output;
-    let high_drop = drop("output.high_drop", output.high_drop, out);
-    let high_resistance = ohm("output.high_resistance", output.high_resistance, out);
-    let low_drop = drop("output.low_drop", output.low_drop, out);
-    let low_resistance = ohm("output.low_resistance", output.low_resistance, out);
+    let output = resolve_output_stage(part_ref, wire.output, out);
     Some(Ne555 {
         pins: pins?,
         ladder_resistance: ladder?,
@@ -651,12 +639,41 @@ fn resolve_ne555(
             off_resistance: off?,
         },
         supply_resistance: supply?,
-        output: OutputStage {
-            high_drop: high_drop?,
-            high_resistance: high_resistance?,
-            low_drop: low_drop?,
-            low_resistance: low_resistance?,
-        },
+        output: output?,
+    })
+}
+
+fn resolve_output_stage(
+    part_ref: &Ref,
+    wire: WireOutputStage,
+    out: &mut Vec<Diagnostic>,
+) -> Option<OutputStage> {
+    let ohm = |field, value, out: &mut Vec<Diagnostic>| {
+        resolve_value(part_ref, field, "ohm", true, value, out)
+    };
+    let drop = |field, value: WireValue, out: &mut Vec<Diagnostic>| {
+        let volts = value.value.get();
+        let value = resolve_value(part_ref, field, "V", false, value, out)?;
+        if volts < 0.0 {
+            out.push(Diagnostic::NetlistValue {
+                part: part_ref.clone(),
+                field,
+                value: volts,
+                rule: ValueRule::NonNegative,
+            });
+            return None;
+        }
+        Some(value)
+    };
+    let high_drop = drop("output.high_drop", wire.high_drop, out);
+    let high_resistance = ohm("output.high_resistance", wire.high_resistance, out);
+    let low_drop = drop("output.low_drop", wire.low_drop, out);
+    let low_resistance = ohm("output.low_resistance", wire.low_resistance, out);
+    Some(OutputStage {
+        high_drop: high_drop?,
+        high_resistance: high_resistance?,
+        low_drop: low_drop?,
+        low_resistance: low_resistance?,
     })
 }
 

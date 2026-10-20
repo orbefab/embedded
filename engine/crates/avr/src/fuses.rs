@@ -41,12 +41,6 @@ impl FuseBytes {
         high: 0xDA,
         extended: 0xFD,
     };
-
-    /// `CKSEL` picks a low-power or full-swing crystal or ceramic resonator on `XTAL1` and
-    /// `XTAL2` (Table 9-1), the only clocks with their own start-up rows here.
-    pub fn has_crystal(self) -> bool {
-        is_crystal(self.low & 0x0F)
-    }
 }
 
 /// What the model needs from the three bytes.

@@ -7,9 +7,10 @@ pub(crate) mod avr;
 #[cfg(test)]
 pub(crate) mod script;
 
-use sim_core::netlist::NetId;
+use sim_core::netlist::{NetId, PartId};
 use sim_core::time::Time;
 
+use crate::chip::Active;
 use crate::mna::{Solution, System};
 use crate::newton::Circuit;
 use crate::watch::{Levels, Signal, Watch};
@@ -24,7 +25,7 @@ pub(crate) enum Drive {
     Low,
     /// Through the output's pull-up from the chip's own VCC pin.
     PullUp,
-    /// No stamp.
+    /// No stage, only the leakage every drive state stamps.
     Off,
 }
 
@@ -48,11 +49,17 @@ pub(crate) struct Output {
     pub(crate) low: Stage,
     /// Ohm, greater than 0. `None` on a pin whose core never drives [`Drive::PullUp`].
     pub(crate) pull_up: Option<f64>,
+    /// Ohm, greater than 0, to VCC and again to GND in every drive state. `None` on a pin that
+    /// leaks nothing.
+    pub(crate) leakage: Option<f64>,
 }
 
 /// An active chip as the circuit sees it. Read-only for the whole analysis.
 #[derive(Clone, Debug)]
 pub(crate) struct Chip {
+    /// `None` only on a test's script chip, which no netlist part builds.
+    #[expect(dead_code, reason = "the logic signals that name the part come next")]
+    pub(crate) part: Option<PartId>,
     /// In the order of its core's image.
     pub(crate) outputs: Vec<Output>,
     /// The levels its core reads, in the order its core reads them.
@@ -84,13 +91,6 @@ pub(crate) struct Stop {
 /// - `sample` and `input` never change the image. What they cause comes at least 1 ps later.
 #[derive(Clone, Debug)]
 pub(crate) enum Core {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the netlist kind that builds this chip comes next"
-        )
-    )]
     Avr(Box<avr::Core>),
     #[cfg(test)]
     Script(script::Core),
@@ -132,11 +132,21 @@ impl Core {
     }
 }
 
+pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
+    match kind {
+        Active::Atmega328p(mcu) => avr::chip(part, mcu),
+    }
+}
+
 /// The drops are sources, so they scale.
 pub(crate) fn stamp(chip: &Chip, core: &Core, sys: &mut System, source_scale: f64) {
     let drive = core.drive();
     debug_assert_eq!(drive.len(), chip.outputs.len());
     for (output, drive) in chip.outputs.iter().zip(drive) {
+        if let Some(ohm) = output.leakage {
+            sys.conductance(output.pin, output.vcc, 1.0 / ohm);
+            sys.conductance(output.pin, output.gnd, 1.0 / ohm);
+        }
         match drive {
             Drive::High => {
                 let g = 1.0 / output.high.resistance;

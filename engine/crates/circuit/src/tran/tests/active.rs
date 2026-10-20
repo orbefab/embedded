@@ -75,7 +75,7 @@ pub(super) fn net(netlist: &Netlist, name: &str) -> NetId {
         .unwrap()
 }
 
-fn scripted(
+pub(super) fn scripted(
     netlist: &Netlist,
     out: &str,
     input: &str,

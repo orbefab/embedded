@@ -35,7 +35,12 @@ pub(crate) fn stamp(model: &Model, stamp: &mut Stamp<'_>) {
         Model::Diode(j) | Model::Led(j) => junction::stamp(j, stamp),
         Model::Capacitor(capacitor) => capacitor::stamp(capacitor, stamp),
         Model::Switch(switch) => switch::stamp(switch, stamp),
-        Model::Chip(chip) => chip::stamp(chip, *stamp.chip(), stamp),
+        // An active chip stamps its core's drive image, in `active::stamp`.
+        Model::Chip(chip) => {
+            if let chip::Kind::Passive(passive) = chip::kind(chip) {
+                chip::stamp(passive, *stamp.chip(), stamp);
+            }
+        }
     }
 }
 

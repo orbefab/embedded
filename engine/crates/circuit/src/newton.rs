@@ -1,6 +1,6 @@
 use sim_core::diagnostic::Diagnostic;
 use sim_core::name::Ref;
-use sim_core::netlist::{Chip, Model, Netlist, PartId, Waveform};
+use sim_core::netlist::{Model, Netlist, PartId, Waveform};
 use sim_core::time::Time;
 
 use crate::active;
@@ -17,7 +17,7 @@ pub(crate) const ABSTOL: f64 = 1e-12;
 /// whole analysis.
 pub(crate) struct Circuit<'n> {
     pub(crate) netlist: &'n Netlist,
-    pub(crate) layout: Layout,
+    pub(crate) layout: Layout<'n>,
     /// The netlist's chips' watches by slot, then each active chip's.
     pub(crate) watches: Watches,
     /// By active slot.
@@ -30,11 +30,24 @@ impl<'n> Circuit<'n> {
         Circuit::with_actives(netlist, Vec::new())
     }
 
+    /// The netlist's active chips, then `extra`. Only a test passes `extra`, a script chip with
+    /// no netlist kind.
     pub(crate) fn with_actives(
         netlist: &'n Netlist,
-        actives: Vec<active::Chip>,
+        extra: Vec<active::Chip>,
     ) -> Result<Circuit<'n>, Diagnostic> {
-        let layout = Layout::new(netlist);
+        let mut passives = Vec::new();
+        let mut actives = Vec::new();
+        for (id, part) in netlist.parts() {
+            if let Model::Chip(chip) = &part.model {
+                match chip::kind(chip) {
+                    chip::Kind::Passive(passive) => passives.push((id, passive)),
+                    chip::Kind::Active(kind) => actives.push(active::chip(id, kind)),
+                }
+            }
+        }
+        actives.extend(extra);
+        let layout = Layout::new(netlist, passives);
         if layout.size() > crate::dense::MAX_UNKNOWNS {
             return Err(Diagnostic::SolverTooLarge {
                 at: Time::ZERO,
@@ -61,16 +74,9 @@ impl<'n> Circuit<'n> {
         self.watches.of(self.layout.chips().len() + k)
     }
 
-    /// The chips in slot order.
-    pub(crate) fn chips(&self) -> impl Iterator<Item = (PartId, &'n Chip)> + '_ {
-        let netlist = self.netlist;
-        self.layout
-            .chips()
-            .iter()
-            .map(move |&id| match &netlist.part(id).model {
-                Model::Chip(chip) => (id, chip),
-                _ => unreachable!("the layout lists only chips"),
-            })
+    /// The passive chips in slot order.
+    pub(crate) fn chips(&self) -> impl Iterator<Item = (PartId, chip::Passive<'n>)> + '_ {
+        self.layout.chips().iter().copied()
     }
 
     /// Every chip's state at power-on, in slot order.

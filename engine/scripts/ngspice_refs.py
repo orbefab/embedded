@@ -16,8 +16,8 @@ ngspice.json. For an example with a chip it also runs the engine and exits 1
 unless the run's logic.vcd reads back as its observations.logic summary. stdout is one
 JSON document.
 
-A part with no kind, an unknown kind, a part with no pins, or a missing pin
-raises Skip. `--self-test` checks that, the source deck lines, the bounce test
+A part with no kind, an unknown kind, a kind that runs firmware, a part with no
+pins, or a missing pin raises Skip. `--self-test` checks that, the source deck lines, the bounce test
 vectors, and the VCD reader and its summary, without ngspice.
 """
 
@@ -40,6 +40,7 @@ RAW = "op.raw"
 TRAN_RAW = "tran.raw"
 EDGES_RAW = "edges.raw"
 CHIPS = ("ne555",)
+FIRMWARE = ("atmega328p",)
 # A chip deck caps ngspice's step at stop/400000 and linearizes the waveform onto stop/2000.
 CHIP_TMAX = 400_000
 CHIP_GRID = 2_000
@@ -204,6 +205,14 @@ def self_test():
             "commit": False,
             "exit": 0,
             "reason": "kind inductor has no translation",
+            "failure": None,
+        },
+        {
+            "name": "firmware kind",
+            "part": {"name": "u1", "kind": "atmega328p", "pins": {"PB5": "a", "GND_8": "gnd"}},
+            "commit": False,
+            "exit": 0,
+            "reason": "kind atmega328p runs firmware, which a deck cannot",
             "failure": None,
         },
         {
@@ -653,6 +662,8 @@ def pin_nets(part):
     if "kind" not in part:
         raise Skip("part has no kind")
     kind = part["kind"]
+    if kind in FIRMWARE:
+        raise Skip(f"kind {kind} runs firmware, which a deck cannot")
     try:
         order = PIN_ORDER[kind]
     except KeyError:

@@ -1,6 +1,6 @@
 # ATmega328P core
 
-`crates/avr`, package `sim-avr`, is a cycle-counted model of the ATmega328P. The circuit crate holds it behind the active chip seam, and no netlist kind builds it yet. It has no dependencies.
+`crates/avr`, package `sim-avr`, is a cycle-counted model of the ATmega328P. The circuit crate holds it behind the active chip seam, and each `atmega328p` part of a netlist runs one. It has no dependencies.
 
 The sources are two documents. DS40002061B is the datasheet, written DS here. DS40002198B is the instruction set manual, written ISM, and its AVRe column gives the cycle counts. A comment in the crate cites one of them, by section, table, or figure.
 
@@ -29,17 +29,16 @@ The documents leave four timing points open or spread across figures. The core f
 3. **The prescaler counts 0 at the first instruction.** §17.2 makes the prescaler free running and puts the first count 1 to N+1 cycles after the timer is enabled, but gives no phase. The core starts the count at cycle 0, and again at the cycle a reset releases. So the first /64 count is cycle 64.
 4. **The OC pin changes on the clock where TCNT reaches OCR, and the flag one timer clock later.** §15.5 sets the compare flag "at the next timer clock cycle" after the match, and Table 15-3 drives the pin from the match itself. Timer1 and Timer2 follow the same rule (§16.7, §18.5). In CTC with OCR0A = 99 at /1, OC0A toggles on the 99th count. In fast PWM a non-inverting OC0A is high while TCNT0 runs 0 to 98, which is 99 counts. The two extremes follow the datasheet's own cases. OCR0A = BOTTOM is the narrow spike of §15.7.3, one timer clock high each period. OCR0A = MAX is a constant output (§15.7.3, Table 15-3 note 1): the match is ignored and the pin sets at BOTTOM. So OCR0A = 0 and OCR0A = 1 give the same waveform, one clock high, and OCR0A = 254 is 254 clocks high while 255 never falls.
 
-Other choices that the documents do not settle are written beside the code that makes them. The watchdog count starts at the store that sets `WDE`. SRAM is zero at power-on. The SPI clock's first edge is half a period after the `SPDR` store.
+Other choices that the documents do not settle are written beside the code that makes them. The watchdog count starts at the store that sets `WDE`. SRAM is zero at power-on. The SPI clock's first edge is half a period after the `SPDR` store. The adapter writes Table 30-1's 1 uA leakage bound as a resistance from each port pin to each rail, so the pin leaks to both rails alike.
 
 ## Not yet modelled
 
 - **TWI on the pins.** The TWI is the transaction, with the status codes of Tables 22-2 and 22-3 and the timing of §22.5.2. SDA and SCL show only their pull-up level, and no edge leaves the pads. Slave mode is not modelled.
 - **SPI with a part on a net.** SPI drives SCK, MOSI, and MISO, but its peer is inside the crate: a byte queue that answers a master, or a host master that clocks a slave. So are the serial and I2C peers. They stand in as the test host until the adapter to the engine's nets replaces them.
-- **The netlist kind.** The adapter below is built from plain values. No netlist part builds it yet.
 - **The analog comparator through the seam.** The adapter hands the core each pin as a level from its watch, so `AIN0`, `AIN1`, and an ADC channel the comparator reads through `ACME` compare 0 V or VCC, not the pins' voltages.
 - **`tRST`.** Table 29-11 (§29) gives `RESET` a minimum pulse width of 2.5 us. The adapter does not filter it and resets on a low of any length.
 - Timer2's asynchronous clock from a TOSC crystal. `ASSR.AS2` is stored and logged, and Timer2 counts `clkI/O`.
-- The boot section. The image runs from word 0, and `SPM` is logged but does not write flash.
+- The boot section. The image runs from word 0, so parse rejects a programmed `BOOTRST`, and `SPM` is logged but does not write flash.
 
 ## Behind the seam
 
@@ -51,29 +50,34 @@ The ADC asks the host for its volts at sample-and-hold. The timeline halts there
 
 Two inputs still land where the core sits, up to an instruction's length later. A read inside the instruction that ran past the input's cycle, of `PINx` or of a flag, has already read the old value. A low on `RESET` and a brown-out reset the chip at the instruction boundary the core is on.
 
-`crates/circuit/src/active/avr.rs` is the adapter, `active::Core::Avr`. Its chip is built from plain values: the 28 package pins in DIP order, the output stages, both pull-ups, the I/O and `RESET` input thresholds, the crystal in hertz, the fuse bytes, and the flash image. `PACKAGE` names each package pin and its kind, and every lookup derives from it. The fuses must pick a crystal or ceramic resonator (Table 9-1, `CKSEL` 0110 to 1111), or the constructor returns `NotACrystal`. The crystal holds `PB6` and `PB7`. The other 21 port pins, `PC6` among them, are each an output in the image and a watch, in package order.
+`crates/circuit/src/active/avr.rs` is the adapter, `active::Core::Avr`. It builds its chip from a netlist's `atmega328p` part, which [netlist.md](netlist.md#atmega328p) defines: the 28 package pins in DIP order, the output stages, both pull-ups, the I/O and `RESET` input thresholds, the crystal in hertz, the fuse bytes, and the flash image. `PACKAGE` gives each package pin's kind in the order of the part's pin names, and every lookup derives from it. Parse admits only the fuse settings the model runs, as [Fuses](#fuses) says, so the clock is a crystal or ceramic resonator (Table 9-1, `CKSEL` 0110 to 1111), and the crystal holds `PB6` and `PB7`. The other 21 port pins, `PC6` among them, are each an output in the image and a watch, in package order.
 
 - A drive maps to the seam's drive one for one. `PullUp` stamps the pin's pull-up to the chip's own VCC pin, the reset pull-up on `PC6` while it is `RESET`.
+- Every port pin, `PC6` as `RESET` included, stamps its leakage to the chip's own VCC pin and again to its GND pin in every drive state. So each port pin's DC paths to both rails, which `net.floating` counts, are in every solve.
 - A watch reads its pin against fractions of the chip's own supply, `V(pin) - f * V(VCC) - (1 - f) * V(GND_8)`. It rises above the high fraction and falls at or below the low one. A flip drives the pad at the CPU cycle of its picosecond, as above. `PC6` while it is `RESET` reads against `RESET`'s own thresholds, and low holds the chip in reset and high releases it.
 - With brown-out fused on, one more watch reads `VCC - GND_8` against the fuse's `VBOT+` rising and `VBOT-` falling (Tables 29-11 and 29-12). Below the window the chip holds in reset and every port pin is off.
 - The samples are ADC0 to ADC5, `AVCC`, and `AREF`, each against `GND_22`, read on the step's solution at the stop, before any change there.
 - A run to `limit_ps` runs the timeline to oscillator cycle `floor(limit_ps * f / 1e12)`, and a halt at cycle `c` is a stop at `ceil(c * 1e12 / f)` ps.
 
-The typical values, each a named constant beside the adapter:
-
-| Value | Constant | Source |
-| --- | --- | --- |
-| Output stage, each side | drop 0 V, 25 ohm | Figures 31-353 and 31-355 at 5 V and 25 C read about 0.45 V at 20 mA sunk and 0.55 V under VCC at 20 mA sourced, 22.5 and 27.5 ohm. Both sides take 25 ohm, between the two, so an eye reading is not frozen as a measured difference. |
-| Pull-up | 35,714 ohm | Figure 31-348 at 5 V, about 140 uA at 0 V, straight to 0 at 5 V. |
-| `RESET` pull-up | 46,296 ohm | Figure 31-351 at 5 V, about 108 uA at 0 V. |
-| Input thresholds | 0.42 and 0.52 of VCC | Figures 31-357 and 31-356 at 5 V, about 2.1 V falling and 2.6 V rising. |
-| `RESET` thresholds | 0.42 and 0.44 of VCC | Figures 31-360 and 31-359 at 5 V, about 2.1 V falling and 2.2 V rising. |
-
-These are eye readings of typical curves, not digitized ones. Table 30-1's limits are wider. The pull-up there is 20 to 50 kohm, the reset pull-up 30 to 60 kohm, and `VIL` at most 0.3 VCC and `VIH` at least 0.6 VCC, which are where a read is ensured, not where it trips. `RESET`'s are at most 0.1 VCC and at least 0.9 VCC.
+The values are the part's own fields. [netlist.md](netlist.md#atmega328p) gives their defaults and Table 30-1's wider limits. Each default is a typical eye reading of a DS figure but `leakage_resistance`, which is derived from a bound.
 
 The tests run firmware written for the repo. `firmware/*.S` is the source, and the committed `firmware/*.hex` is what they read. `scripts/firmware.sh` rebuilds the hex with `avr-gcc` and `avr-objcopy`, and a build of the engine never needs them.
 
 Ten seconds of `firmware/blink.S` at 16 MHz are 21 stops and 20 edges on PB5. The first stop, at cycle 2, is `SBI DDRB,5` turning PB5 from off to driven low. It changes the image, and on a pin its load already holds low it does not change the level. On the build machine, release, the bare core runs those 160e6 cycles at about 79e6 cycles a second and the adapter at about 75e6 (`blink_throughput`, ignored, in `crates/circuit/src/tran/tests/avr.rs`).
+
+## Fuses
+
+Parse keeps only the fuse settings the model runs, and [netlist.md](netlist.md#atmega328p) lists the rejected ones and why. The core reads these.
+
+- `CKSEL0` and `SUT` pick the crystal's row of Table 9-4 or 9-6: the delay after a reset, and the start-up from power-down and power-save. `CKSEL3:1` picks among the crystal rows of Table 9-1, which the model runs alike. Power-on start-up is over at cycle 0.
+- `CKDIV8` programmed starts `CLKPS` at /8 (§9.12.2), so the CPU runs at an eighth of the crystal until the firmware writes `CLKPR`.
+- `RSTDISBL` programmed makes `PC6` a port pin (§14.3.2).
+- `WDTON` programmed holds the watchdog in system reset mode (Table 11-1).
+- `BODLEVEL` 110, 101, or 100 enables brown-out at Table 29-12's typical `VBOT`, 1.8, 2.7, or 4.3 V, with `VBOT-` and `VBOT+` 25 mV either side, half of Table 29-11's typical `VHYST`. 111 disables it.
+
+## Ratings
+
+§29.1 rates the part at 40 mA DC through any one I/O pin and 200 mA DC through the `VCC` and `GND` pins, as absolute maxima. It limits the voltage on any pin but `RESET` to -0.5 V to VCC + 0.5 V with respect to ground, and on `RESET` to -0.5 V to 13.0 V. The netlist kind has no `ratings` object yet, and the run does not check these. A later change checks them.
 
 ## The timing set
 
