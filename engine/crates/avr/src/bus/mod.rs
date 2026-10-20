@@ -1,0 +1,1147 @@
+//! Data-space dispatch.
+//!
+//! Addresses `0x0000`–`0x001F` are the register file. `0x0020`–`0x00FF` is I/O.
+//! An address the chip table assigns is `{ device, register id }`, decoded once
+//! when the bus is built. Anything else is a logged byte. SRAM runs from
+//! `0x0100` through RAMEND. `SREG`, `SPL`, and `SPH` are the core's.
+//!
+//! `next_event` is the soonest [`crate::periph::Device::next_event`].
+//! An instruction that ends before that event
+//! does no device work. An event inside the instruction still runs on that cycle.
+//! [`index::Index`] is the device list resolved once at construction, including
+//! the flag, comparator, and capture slots.
+//! [`hostside::HostSide`]
+//! is the host SPI master, the MISO queue, and the host I2C device, not a
+//! device on the die.
+
+pub(crate) mod hostside;
+mod index;
+mod power;
+mod record;
+
+use std::collections::VecDeque;
+
+use hostside::HostSide;
+use index::Index;
+
+use crate::Port;
+use crate::analog::{HostAnalog, Sense, adc_code};
+use crate::chip::{ClockDomain, DEVICES, DeviceSpec, ModuleGate, RAMEND, SPH, SPL, SREG};
+use crate::core::Core;
+use crate::mux::PinMux;
+use crate::periph::{Device, IoWrite, Notice, StoreAt, Touch, push_pin, rows_of};
+use crate::regs::OwnedReg;
+use crate::{Level, PIN_QUEUE_CAP, PinLevels, PinOrigin, PinReport};
+
+/// Data-space address of I/O register 0.
+pub(crate) const IO_BASE: u16 = 0x0020;
+
+const IO_END: u16 = 0x00FF;
+const SRAM_BASE: u16 = 0x0100;
+const IO_LEN: usize = 0xE0;
+const NO_DEV: u8 = 0xFF;
+
+#[derive(Debug, Clone, Copy)]
+struct Slot {
+    dev: u8,
+    reg: u8,
+}
+
+/// Pin reports and the I/O-write log.
+#[derive(Debug, Clone)]
+struct HostQueues {
+    io_writes: Vec<IoWrite>,
+    io_drops: u64,
+    pins: VecDeque<PinReport>,
+    pending: Vec<PinReport>,
+    pin_overflow: u64,
+}
+
+impl HostQueues {
+    fn ctx(&mut self) -> crate::periph::Ctx<'_> {
+        crate::periph::Ctx::new(
+            &mut self.pins,
+            &mut self.pending,
+            &mut self.pin_overflow,
+            &mut self.io_writes,
+            &mut self.io_drops,
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Bus {
+    /// Soonest event. Read on every instruction, so it stays at the front
+    /// with the other bytes `tick` touches. `u64::MAX` when nothing is scheduled.
+    next_event: u64,
+    /// Cycles completed. Edges are stamped against this.
+    cycle: u64,
+    /// OR of device interrupt requests. Test sources are separate.
+    device_irq: u64,
+    /// A `TCNT` write is waiting for its instruction's clocks to finish.
+    hold_any: bool,
+    /// A byte queued during this instruction still has `cycle = None`.
+    needs_stamp: bool,
+    /// An enable window is waiting for the instruction to retire.
+    windows: bool,
+    /// Stall cycles the current instruction still has to add (§8.4.1).
+    cpu_halt: u8,
+    io: [u8; IO_LEN],
+    sram: Vec<u8>,
+    strobe: [u8; IO_LEN],
+    unmodeled: [u8; IO_LEN],
+    owners: [Slot; IO_LEN],
+    devices: Vec<Device>,
+    /// Kind of each `devices[i]`, resolved when the chip is built.
+    index: Index,
+    /// Level of each Table 24-6 trigger flag. Bit 0 is unused.
+    trigger_level: u8,
+    /// `PRR` bit and sleep clock of `devices[i]`, copied from the die row.
+    row_gate: Vec<ModuleGate>,
+    mux: PinMux,
+    analog: HostAnalog,
+    host: HostQueues,
+    /// `SLEEP` ran with `SE` set. The facade calls [`Self::begin_sleep`].
+    /// Not read on the fetch path: `SLEEP` sets `Core::sleeping` first.
+    sleep_armed: bool,
+    /// Watchdog timeout asked for a system reset. Set only when an event
+    /// fires, and returned from that slow path. Not read on the fetch path.
+    wdt_reset: bool,
+    /// Host SPI master, the host slave's MISO queue, and the host I2C device.
+    host_side: HostSide,
+    /// Oscillator hertz. `cpu_hz` is this divided by `div`.
+    osc_hz: u32,
+    /// `CLKPR` division. CPU cycles stay 1; wall time scales.
+    div: u32,
+    /// Oscillator cycles accumulated up to `osc_cycle`.
+    osc_base: u64,
+    osc_cycle: u64,
+    /// Schedule-and-ack source for the `irq` tests. Not a device, and not on `tick`.
+    #[cfg(test)]
+    test_irq: crate::periph::probe::Probe,
+}
+
+impl Bus {
+    pub(crate) fn new() -> Self {
+        let specs = DEVICES;
+        let mut owners = [Slot {
+            dev: NO_DEV,
+            reg: 0,
+        }; IO_LEN];
+        let mut strobe = [0u8; IO_LEN];
+        let mut unmodeled = [0u8; IO_LEN];
+        let mut devices = Vec::with_capacity(specs.len());
+        let mut row_gate = Vec::with_capacity(specs.len());
+        let mut timer_index = 0u8;
+        let index = Index::from_specs(specs);
+        let mut rows: Vec<OwnedReg> = Vec::new();
+        for spec in specs {
+            let dev_index = u8::try_from(devices.len()).expect("device index fits in a byte");
+            let index = timer_index;
+            if matches!(spec, DeviceSpec::Timer(_)) {
+                timer_index = timer_index.saturating_add(1);
+            }
+            devices.push(Device::from_spec(spec, index));
+            row_gate.push(spec.gate());
+            rows_of(spec, &mut rows);
+            for row in &rows {
+                let slot = usize::from(row.addr - IO_BASE);
+                owners[slot] = Slot {
+                    dev: dev_index,
+                    reg: row.id,
+                };
+                strobe[slot] = row.strobe;
+                unmodeled[slot] = row.unmodeled;
+            }
+        }
+        let sram_len = usize::from(RAMEND - SRAM_BASE) + 1;
+        let mut bus = Self {
+            next_event: u64::MAX,
+            cycle: 0,
+            device_irq: 0,
+            hold_any: false,
+            needs_stamp: false,
+            windows: false,
+            cpu_halt: 0,
+            io: [0; IO_LEN],
+            sram: vec![0; sram_len],
+            strobe,
+            unmodeled,
+            owners,
+            devices,
+            index,
+            trigger_level: 0,
+            row_gate,
+            mux: PinMux::new(),
+            analog: HostAnalog::new(),
+            host: HostQueues {
+                io_writes: Vec::new(),
+                io_drops: 0,
+                pins: VecDeque::with_capacity(PIN_QUEUE_CAP),
+                pending: Vec::with_capacity(crate::periph::PENDING_PIN_CAP),
+                pin_overflow: 0,
+            },
+            sleep_armed: false,
+            wdt_reset: false,
+            host_side: HostSide::idle(),
+            osc_hz: 16_000_000,
+            div: 1,
+            osc_base: 0,
+            osc_cycle: 0,
+            #[cfg(test)]
+            test_irq: crate::periph::probe::Probe::new(),
+        };
+        bus.note_schedule();
+        bus
+    }
+
+    /// Drive `pin` from the host at the current cycle. [`Level::Released`] is high-Z.
+    ///
+    /// A later [`Self::set_pin_voltage`] replaces this drive, and a later
+    /// `drive_pin` replaces a voltage. The ADC reads a digital high as 5.0 V
+    /// and a digital low or a float as 0.
+    pub(crate) fn drive_pin(&mut self, pin: u32, level: Level) {
+        self.analog.set_pin_level(pin, level);
+        self.drive_mux(pin, level);
+        self.refresh_acmp();
+        self.note_schedule();
+    }
+
+    /// Analog voltage on a GPIO pin, in microvolts. The Schmitt trigger updates
+    /// the digital input (Table 30-1). Between `VIL` and `VIH` the previous
+    /// level holds.
+    pub(crate) fn set_pin_voltage(&mut self, pin: u32, uv: i32) {
+        let Some(level) = self.analog.set_pin_voltage(pin, uv) else {
+            return;
+        };
+        self.drive_mux(pin, level);
+        self.refresh_acmp();
+        self.note_schedule();
+    }
+
+    /// Voltage on an ADC channel. A channel with a pad uses that pin, so the
+    /// last of `set_pin_voltage` and this call wins.
+    pub(crate) fn set_channel_voltage(&mut self, channel: u8, uv: i32) {
+        let pin = self.adc().and_then(|adc| adc.channel_pin(channel));
+        if let Some(pin) = pin {
+            self.set_pin_voltage(u32::from(pin), uv);
+            return;
+        }
+        self.analog.set_only(channel, uv);
+        self.refresh_acmp();
+        self.note_schedule();
+    }
+
+    pub(crate) fn set_avcc(&mut self, uv: i32) {
+        self.analog.set_avcc(uv);
+    }
+
+    pub(crate) fn set_aref(&mut self, uv: i32) {
+        self.analog.set_aref(uv);
+    }
+
+    pub(crate) fn set_temperature_milli(&mut self, milli: i32) {
+        self.analog.set_temperature_milli(milli);
+    }
+
+    /// §24.6. Sleep in ADC noise reduction calls this once the CPU has halted.
+    pub(crate) fn adc_noise_reduction(&mut self) {
+        let cycle = self.cycle;
+        let started = self.adc_mut().is_some_and(|adc| adc.noise_reduction(cycle));
+        if started {
+            self.note_schedule();
+        }
+    }
+
+    fn drive_mux(&mut self, pin: u32, level: Level) {
+        let at = self.cycle;
+        let Bus { mux, host, .. } = self;
+        let mut ctx = host.ctx();
+        mux.drive(pin, level, &mut ctx, at);
+        self.dispatch_edges();
+        self.deliver_notices(at);
+    }
+
+    /// Stop or start `clkI/O` outside a sleep mode. Sleep uses [`Self::apply_sleep_clocks`].
+    pub(crate) fn set_io_clock_running(&mut self, running: bool) {
+        let cycle = self.cycle;
+        let clock = self.clock_view();
+        for dev in &mut self.devices {
+            dev.gate(Some(running), None, None, cycle, &clock);
+        }
+        self.note_schedule();
+    }
+
+    /// Advance every device whose event falls in the cycles just spent.
+    ///
+    /// `true` when that walk fired a watchdog reset. The fast path, an
+    /// instruction that ends before `next_event`, does not read `wdt_reset`.
+    #[inline(always)]
+    pub(crate) fn tick(&mut self, cycles: u64) -> bool {
+        if cycles == 0 {
+            if self.windows {
+                self.finish_windows();
+            }
+            return false;
+        }
+        let end = self.cycle.wrapping_add(cycles);
+        if !self.hold_any && end < self.next_event {
+            self.cycle = end;
+            self.finish_host(end);
+            if self.windows {
+                self.finish_windows();
+            }
+            if !self.hold_any && end < self.next_event {
+                return false;
+            }
+        }
+        self.advance_to(end);
+        if self.windows {
+            self.finish_windows();
+        }
+        self.wdt_reset
+    }
+
+    pub(crate) fn next_event(&self) -> u64 {
+        self.next_event
+    }
+
+    pub(crate) fn pending_irq(&self) -> u64 {
+        self.device_irq
+    }
+
+    pub(crate) fn ack_irq(&mut self, vector: u8) {
+        for dev in &mut self.devices {
+            dev.ack(vector);
+        }
+        #[cfg(test)]
+        self.test_irq.ack_vector(vector);
+        // A cleared trigger flag is a falling edge. Deliver it here so the
+        // level does not stay high until the next timer tick.
+        let cycle = self.cycle;
+        self.deliver_notices(cycle);
+        self.recompute_irq();
+    }
+
+    /// Every timer clock calls `step`. Projection tests use this as the reference.
+    #[cfg(test)]
+    pub(crate) fn arm_stepped_timers(&mut self) {
+        let clock = self.clock_view();
+        for slot in self.index.timers[..usize::from(self.index.timer_n)]
+            .iter()
+            .flatten()
+        {
+            if let Device::Timer(timer) = &mut self.devices[usize::from(*slot)] {
+                timer.arm_stepped(&clock);
+            }
+        }
+        self.note_schedule();
+    }
+
+    /// `(TCNT, flag byte)` for each timer, in die order.
+    #[cfg(test)]
+    pub(crate) fn timer_observe(&self) -> Vec<(u16, u8)> {
+        let clock = self.clock_view();
+        let cycle = self.cycle;
+        self.index.timers[..usize::from(self.index.timer_n)]
+            .iter()
+            .flatten()
+            .filter_map(|slot| match &self.devices[usize::from(*slot)] {
+                Device::Timer(timer) => Some(timer.observe(cycle, &clock)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn raise_irq_at(&mut self, vector: u8, at_cycle: u64) {
+        let now = self.cycle;
+        self.test_irq.raise_at(vector, at_cycle, now);
+        self.recompute_irq();
+        self.note_schedule();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clear_irq(&mut self, vector: u8) {
+        self.test_irq.clear(vector);
+        self.recompute_irq();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn irq_acked(&self, vector: u8) -> bool {
+        self.test_irq.acked(vector)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn peripheral_cycles(&self) -> u64 {
+        self.cycle
+    }
+
+    pub(crate) fn io_writes(&self) -> &[IoWrite] {
+        &self.host.io_writes
+    }
+
+    pub(crate) fn io_write_drops(&self) -> u64 {
+        self.host.io_drops
+    }
+
+    pub(crate) fn take_pin(&mut self) -> Option<PinReport> {
+        self.host.pins.pop_front()
+    }
+
+    pub(crate) fn pin_overflow(&self) -> u64 {
+        self.host.pin_overflow
+    }
+
+    pub(crate) fn pin_levels(&self) -> PinLevels {
+        PinLevels::from_array(self.mux.levels())
+    }
+
+    /// Ports return to their reset state immediately (§11.1). Report every pin
+    /// whose level changed. The new queue is empty; these are its first edges.
+    pub(crate) fn note_reset_pins(&mut self, before: PinLevels, at: u64) {
+        let after = self.mux.levels();
+        for pin in 0..crate::PIN_COUNT as u32 {
+            let next = after[pin as usize];
+            if before.get(pin) == next {
+                continue;
+            }
+            let Some(level) = next else {
+                continue;
+            };
+            push_pin(
+                &mut self.host.pins,
+                &mut self.host.pin_overflow,
+                PinReport {
+                    pin,
+                    level,
+                    cycle: at,
+                    origin: PinOrigin::Gpio,
+                },
+            );
+        }
+    }
+
+    /// Drive `RXD` with `bytes` at the host baud and arm the scheduler.
+    pub(crate) fn supply_usart(&mut self, index: u8, bytes: &[u8]) {
+        let at = self.cycle;
+        let slot = self.index.usart.get(usize::from(index)).copied().flatten();
+        {
+            let Bus {
+                devices, mux, host, ..
+            } = self;
+            let mut ctx = host.ctx();
+            if let Some(slot) = slot
+                && let Some(Device::Usart(usart)) = devices.get_mut(usize::from(slot))
+            {
+                usart.host_supply(bytes, at, mux, &mut ctx);
+            }
+        }
+        self.dispatch_edges();
+        self.note_schedule();
+    }
+
+    /// Queue bytes the host slave returns on `MISO`. An empty queue is `0xFF`.
+    pub(crate) fn supply_spi(&mut self, bytes: &[u8]) {
+        self.host_side.push_miso(bytes);
+    }
+
+    /// The next MOSI byte from a master chip, at the cycle `SPIF` was set.
+    pub(crate) fn take_spi(&mut self) -> Option<(u8, u64)> {
+        self.spi_mut()?.take_mosi()
+    }
+
+    pub(crate) fn take_i2c_across_reset(&mut self) -> crate::bus::hostside::I2cKept {
+        self.host_side.take_i2c_across_reset()
+    }
+
+    pub(crate) fn restore_i2c_across_reset(&mut self, kept: crate::bus::hostside::I2cKept) {
+        self.host_side.restore_i2c_across_reset(kept);
+    }
+
+    /// Attach, replace, or detach the host I2C device. Applied at the next address phase.
+    pub(crate) fn queue_i2c(&mut self, update: crate::bus::hostside::I2cAttach) {
+        self.host_side.queue_i2c(update);
+    }
+
+    /// The next TWI phase, stamped when `TWINT` sets or `TWSTO` clears.
+    pub(crate) fn take_i2c(&mut self) -> Option<crate::periph::twi::I2cStamp> {
+        let slot = self.index.twi?;
+        match self.devices.get_mut(usize::from(slot)) {
+            Some(Device::Twi(twi)) => twi.take(),
+            _ => None,
+        }
+    }
+
+    /// The next MISO byte a host master sampled, at that frame's last SCK edge.
+    pub(crate) fn take_spi_host_master(&mut self) -> Option<(u8, u64)> {
+        self.host_side.master.take_one()
+    }
+
+    fn spi_mut(&mut self) -> Option<&mut crate::periph::Spi> {
+        let slot = self.index.spi?;
+        match &mut self.devices[usize::from(slot)] {
+            Device::Spi(spi) => Some(spi),
+            _ => None,
+        }
+    }
+
+    /// Arm a host master. The first pad event is `at`. `SS` rises one cycle
+    /// after the last SCK edge. `false` when `bytes` is empty or a transfer is
+    /// already active, and nothing changes. This does
+    /// not advance the CPU.
+    pub(crate) fn arm_host_spi(
+        &mut self,
+        at: u64,
+        bytes: &[u8],
+        period: u32,
+        mode: u8,
+        lsb: bool,
+    ) -> bool {
+        if bytes.is_empty() || self.host_side.master.is_active() {
+            return false;
+        }
+        let Some(pins) = self.spi_pins() else {
+            return false;
+        };
+        self.host_side
+            .master
+            .arm(pins, bytes, u64::from(period), mode, lsb, at);
+        self.note_schedule();
+        true
+    }
+
+    pub(crate) fn set_host_serial(
+        &mut self,
+        index: u8,
+        bit_cycles: u64,
+        data_bits: u8,
+        parity: u8,
+        stop_bits: u8,
+    ) {
+        if let Some(usart) = self.usart_mut(index) {
+            usart.set_host_timing(bit_cycles, data_bits, parity, stop_bits);
+        }
+    }
+
+    fn spi_pins(&self) -> Option<(u8, u8, u8, u8)> {
+        let slot = self.index.spi?;
+        match &self.devices[usize::from(slot)] {
+            Device::Spi(spi) => Some(spi.pins()),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn usart_mut(&mut self, index: u8) -> Option<&mut crate::periph::Usart> {
+        let slot = self
+            .index
+            .usart
+            .get(usize::from(index))
+            .copied()
+            .flatten()?;
+        match &mut self.devices[usize::from(slot)] {
+            Device::Usart(usart) => Some(usart),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn peek(&self, core: &Core, addr: u16) -> u8 {
+        if (SRAM_BASE..=RAMEND).contains(&addr) {
+            return self.sram[usize::from(addr - SRAM_BASE)];
+        }
+        if addr <= 0x001F {
+            return core.reg(addr as u8);
+        }
+        if addr == SREG {
+            return core.sreg();
+        }
+        if let Some(byte) = self.sp_byte(core, addr) {
+            return byte;
+        }
+        if let Some(index) = io_index(addr) {
+            return self.peek_io(index);
+        }
+        0
+    }
+
+    #[inline]
+    pub(crate) fn load(&mut self, core: &Core, addr: u16) -> u8 {
+        if (SRAM_BASE..=RAMEND).contains(&addr) {
+            return self.sram[usize::from(addr - SRAM_BASE)];
+        }
+        if addr <= 0x001F {
+            return core.reg(addr as u8);
+        }
+        if addr == SREG {
+            return core.sreg();
+        }
+        if let Some(byte) = self.sp_byte(core, addr) {
+            return byte;
+        }
+        if let Some(index) = io_index(addr) {
+            return self.load_io(index);
+        }
+        0
+    }
+
+    /// `cycles` is the storing instruction's length. A device write sees the
+    /// edge that ends it, and the timers' `TCCRnB` and `GTCCR` take effect
+    /// there (Figure 14-4).
+    #[inline]
+    pub(crate) fn store(&mut self, core: &mut Core, addr: u16, value: u8, cycles: u64) {
+        if (SRAM_BASE..=RAMEND).contains(&addr) {
+            self.sram[usize::from(addr - SRAM_BASE)] = value;
+            return;
+        }
+        if addr <= 0x001F {
+            core.set_reg(addr as u8, value);
+            return;
+        }
+        if addr == SREG {
+            core.set_sreg(value);
+            return;
+        }
+        if self.write_sp(core, addr, value) {
+            return;
+        }
+        if let Some(index) = io_index(addr) {
+            self.store_io(index, addr, value, cycles);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn poke(&mut self, core: &mut Core, addr: u16, value: u8) {
+        if (SRAM_BASE..=RAMEND).contains(&addr) {
+            self.sram[usize::from(addr - SRAM_BASE)] = value;
+            return;
+        }
+        if addr <= 0x001F {
+            core.set_reg(addr as u8, value);
+            return;
+        }
+        if addr == SREG {
+            core.set_sreg(value);
+            return;
+        }
+        if self.write_sp(core, addr, value) {
+            return;
+        }
+        if let Some(index) = io_index(addr) {
+            self.poke_io(index, value);
+        }
+    }
+
+    /// `SBI` writes a one into one bit. `CBI` writes a zero.
+    ///
+    /// Bits in the strobe mask are not copied from the current value, so a
+    /// write-one-to-clear flag register keeps its other flags (DS40002061B §7.4).
+    pub(crate) fn write_bit(&mut self, core: &mut Core, addr: u16, bit: u8, set: bool) {
+        let current = self.peek(core, addr);
+        let w1c = self.strobe_at(addr);
+        let bit_mask = 1u8 << (bit & 7);
+        let written = if set {
+            (current & !w1c) | bit_mask
+        } else {
+            (current & !w1c) & !bit_mask
+        };
+        self.store(core, addr, written, 2);
+    }
+
+    #[inline(never)]
+    fn advance_to(&mut self, end: u64) {
+        loop {
+            let at = self.next_event;
+            if at > end || at == u64::MAX {
+                break;
+            }
+            self.fire_devices(at);
+            self.note_schedule();
+        }
+        let clock = self.clock_view();
+        for dev in &mut self.devices {
+            dev.release_hold(end, &clock);
+        }
+        self.hold_any = false;
+        self.cycle = end;
+        self.finish_host(end);
+        self.recompute_irq();
+        self.note_schedule();
+    }
+
+    fn fire_devices(&mut self, at: u64) {
+        // One pass. A notice that arms another device at this same cycle
+        // (comparator → Timer1 capture, then `ICF1` → ADC) is fired by
+        // `advance_to` after `note_schedule` sees the new event.
+        self.latch_samples(at);
+        if self.host_side.master.due(at) {
+            self.fire_host_spi(at);
+        }
+        let clock = self.clock_view();
+        {
+            let Bus {
+                devices, mux, host, ..
+            } = self;
+            let mut ctx = host.ctx();
+            for dev in devices.iter_mut() {
+                if dev.next_event() == at {
+                    dev.fire(at, &clock, mux, &mut ctx);
+                }
+            }
+        }
+        if let Some(slot) = self.index.prescaler
+            && let Device::Prescaler(pre) = &mut self.devices[usize::from(slot)]
+            && let Some(value) = pre.take_due(at)
+        {
+            self.apply_prescaler(value, at);
+        }
+        #[cfg(test)]
+        self.test_irq.fire_at(at);
+        // A notice must not skip the pad walk. OC compare can raise a Table
+        // 24-6 flag and drive the pin on the same fire (§13 alternate
+        // function, §14.3.3 pin change).
+        self.dispatch_edges();
+        self.deliver_notices(at);
+        if self.poll_wdt_reset() {
+            self.wdt_reset = true;
+        }
+    }
+
+    fn fire_host_spi(&mut self, at: u64) {
+        let miso = self.host_side.master.miso_pin();
+        let miso_high =
+            Port::from_pin(u32::from(miso)).is_some_and(|(port, bit)| self.mux.pad_high(port, bit));
+        let drives = self.host_side.master.advance(at, miso_high);
+        let Bus { mux, host, .. } = self;
+        let mut ctx = host.ctx();
+        for (pin, level) in drives.iter() {
+            mux.drive(u32::from(pin), level, &mut ctx, at);
+        }
+    }
+
+    /// A CPU store to `GTCCR` resets the divider on the edge that ends its
+    /// instruction, the edge a `TCCRnB` store selects its clock on (model
+    /// parameter 1). The store lands on that edge (Figure 14-4) and the divider
+    /// counts `clkI/O` like the timer it feeds (§17.2), so a timer clock on that
+    /// edge still has the old phase. A `PSRSYNC` store that ends at edge E
+    /// gives a /N timer its next count at E + N (§17.2, §17.4.1). A poke resets
+    /// at once.
+    fn apply_prescaler(&mut self, value: u8, now: u64) {
+        let old = self.clock_view();
+        for dev in &mut self.devices {
+            dev.materialize(now, &old);
+        }
+        if let Some(slot) = self.index.prescaler
+            && let Device::Prescaler(pre) = &mut self.devices[usize::from(slot)]
+        {
+            pre.write(value, now);
+        }
+        let new_clock = self.clock_view();
+        for dev in &mut self.devices {
+            dev.reschedule(&new_clock);
+        }
+        self.note_schedule();
+    }
+
+    /// Dispatch a queued pad edge. Notices are delivered either
+    /// way. The schedule updates when the store, the queue, or a notice asked
+    /// for it.
+    fn finish_store(&mut self, touch: Touch) {
+        self.finish_touch(touch);
+        let pending = self.mux.has_pending_edges();
+        if pending {
+            self.dispatch_edges();
+        }
+        let delivered = self.deliver_notices(self.cycle);
+        if touch.div {
+            self.absorb_div();
+        }
+        if touch.prr {
+            self.absorb_prr();
+        }
+        if touch.schedule || pending || delivered || touch.div || touch.prr {
+            self.note_schedule();
+        }
+    }
+
+    fn finish_touch(&mut self, touch: Touch) {
+        if touch.hold {
+            self.hold_any = true;
+        }
+        if touch.stamp {
+            self.needs_stamp = true;
+        }
+        if touch.halt > 0 {
+            self.cpu_halt = self.cpu_halt.saturating_add(touch.halt);
+        }
+        if touch.windows {
+            self.windows = true;
+        }
+        if touch.irq {
+            self.recompute_irq();
+        }
+    }
+
+    fn finish_host(&mut self, cycle: u64) {
+        if self.needs_stamp {
+            self.stamp_all(cycle);
+            self.needs_stamp = false;
+            self.dispatch_edges();
+            self.deliver_notices(cycle);
+            self.recompute_irq();
+            self.note_schedule();
+        }
+        self.flush(cycle);
+    }
+
+    fn note_schedule(&mut self) {
+        let mut next = u64::MAX;
+        for dev in &self.devices {
+            next = next.min(dev.next_event());
+        }
+        next = next.min(self.host_side.master.next());
+        #[cfg(test)]
+        {
+            next = next.min(self.test_irq.next_event());
+        }
+        self.next_event = next;
+    }
+
+    fn recompute_irq(&mut self) {
+        let mut bits = 0u64;
+        for dev in &self.devices {
+            bits |= dev.irq_bits();
+        }
+        #[cfg(test)]
+        {
+            bits |= self.test_irq.pending_bits();
+        }
+        self.device_irq = bits;
+    }
+
+    fn clock_view(&self) -> crate::periph::ClockView {
+        let Some(slot) = self.index.prescaler else {
+            return crate::periph::ClockView::origin_zero();
+        };
+        match &self.devices[usize::from(slot)] {
+            Device::Prescaler(pre) => pre.view(),
+            _ => crate::periph::ClockView::origin_zero(),
+        }
+    }
+
+    fn stamp_all(&mut self, cycle: u64) {
+        let Bus {
+            devices,
+            mux,
+            host,
+            host_side,
+            ..
+        } = self;
+        let mut ctx = host.ctx();
+        for dev in devices.iter_mut() {
+            dev.stamp(cycle, mux, &mut ctx, host_side);
+        }
+    }
+
+    fn flush(&mut self, cycle: u64) {
+        if self.host.pending.is_empty() {
+            return;
+        }
+        let HostQueues {
+            pins,
+            pending,
+            pin_overflow,
+            ..
+        } = &mut self.host;
+        for mut report in pending.drain(..) {
+            report.cycle = cycle;
+            push_pin(pins, pin_overflow, report);
+        }
+    }
+
+    fn strobe_at(&self, addr: u16) -> u8 {
+        io_index(addr).map(|index| self.strobe[index]).unwrap_or(0)
+    }
+
+    fn sp_byte(&self, core: &Core, addr: u16) -> Option<u8> {
+        if addr == SPL {
+            Some(core.sp() as u8)
+        } else if addr == SPH {
+            Some((core.sp() >> 8) as u8)
+        } else {
+            None
+        }
+    }
+
+    fn write_sp(&self, core: &mut Core, addr: u16, value: u8) -> bool {
+        if addr == SPL {
+            core.set_sp_lo(value);
+            true
+        } else if addr == SPH {
+            core.set_sp_hi(value);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn peek_io(&self, index: usize) -> u8 {
+        let slot = self.owners[index];
+        if slot.dev == NO_DEV {
+            return self.io[index];
+        }
+        let clock = self.clock_view();
+        self.devices[usize::from(slot.dev)].peek(slot.reg, &self.mux, self.cycle, &clock)
+    }
+
+    fn load_io(&mut self, index: usize) -> u8 {
+        let slot = self.owners[index];
+        if slot.dev == NO_DEV {
+            return self.io[index];
+        }
+        let cycle = self.cycle;
+        let clock = self.clock_view();
+        let (value, irq) =
+            self.devices[usize::from(slot.dev)].read(slot.reg, &self.mux, cycle, &clock);
+        if irq {
+            self.recompute_irq();
+        }
+        value
+    }
+
+    fn store_io(&mut self, index: usize, addr: u16, value: u8, cycles: u64) {
+        let slot = self.owners[index];
+        if slot.dev == NO_DEV {
+            self.io[index] = value;
+            self.log(addr, value);
+            return;
+        }
+        if self.unmodeled[index] & value != 0 {
+            self.log(addr, value);
+        }
+        let at = StoreAt {
+            cycle: self.cycle,
+            end: self.cycle + cycles,
+        };
+        let clock = self.clock_view();
+        let touch = {
+            let Bus {
+                devices, mux, host, ..
+            } = self;
+            let mut ctx = host.ctx();
+            devices[usize::from(slot.dev)].write(slot.reg, value, &mut ctx, mux, at, &clock, addr)
+        };
+        self.finish_store(touch);
+    }
+
+    fn poke_io(&mut self, index: usize, value: u8) {
+        let slot = self.owners[index];
+        if slot.dev == NO_DEV {
+            self.io[index] = value;
+            return;
+        }
+        if self.index.prescaler == Some(slot.dev) {
+            self.apply_prescaler(value, self.cycle);
+            return;
+        }
+        let cycle = self.cycle;
+        let clock = self.clock_view();
+        let touch = {
+            let Bus {
+                devices,
+                mux,
+                host,
+                host_side,
+                ..
+            } = self;
+            let mut ctx = host.ctx();
+            devices[usize::from(slot.dev)]
+                .poke(slot.reg, value, mux, cycle, &clock, &mut ctx, host_side)
+        };
+        self.finish_store(touch);
+    }
+
+    fn latch_samples(&mut self, at: u64) {
+        let Some(index) = self.index.adc else {
+            return;
+        };
+        let request = match self.devices.get(usize::from(index)) {
+            Some(Device::Adc(adc)) if adc.sample_due(at) => Some(adc.latched_sense()),
+            _ => None,
+        };
+        let Some((sense, refs)) = request else {
+            return;
+        };
+        let vin = self.resolve(sense);
+        let vref = self.analog.vref(refs);
+        let code = adc_code(vin, vref);
+        if let Some(adc) = self.adc_mut() {
+            adc.hold(code);
+        }
+    }
+
+    fn resolve(&self, sense: Sense) -> i32 {
+        match sense {
+            Sense::Mux(channel) => {
+                let pin = self.adc().and_then(|adc| adc.channel_pin(channel));
+                if let Some(pin) = pin {
+                    self.analog.resolve(Sense::Pin(pin))
+                } else {
+                    self.analog.resolve(Sense::Only(channel))
+                }
+            }
+            other => self.analog.resolve(other),
+        }
+    }
+
+    /// Forward flag edges and comparator output through the index slots.
+    /// `true` when a notice was delivered.
+    fn deliver_notices(&mut self, at: u64) -> bool {
+        let mut note = Notice::default();
+        let n = usize::from(self.index.notice_n);
+        let sources = self.index.notices;
+        for slot in sources[..n].iter().copied().flatten() {
+            note.absorb(self.devices[usize::from(slot)].take_notice());
+        }
+        if note.is_empty() {
+            return false;
+        }
+        self.trigger_level = (self.trigger_level | note.rose) & !note.fell;
+        let level = self.trigger_level;
+        let aco_now = self.aco_high();
+        if note.acic
+            && let Some(slot) = self.index.acic
+            && let Device::Timer(timer) = &mut self.devices[usize::from(slot)]
+        {
+            // Enabling copies the level and does not detect an edge.
+            timer.set_acic(note.acic_on, aco_now);
+        }
+        if note.aco
+            && let Some(slot) = self.index.acic
+            && let Device::Timer(timer) = &mut self.devices[usize::from(slot)]
+            && timer.on_aco(note.aco_high, at)
+        {
+            let clock = self.clock_view();
+            for dev in &mut self.devices {
+                dev.reschedule(&clock);
+            }
+        }
+        if note.mux
+            && let Some(acmp) = self.acmp_mut()
+        {
+            acmp.set_mux(note.acme, note.aden, note.channel);
+        }
+        if (note.rose != 0 || note.fell != 0 || note.retarget)
+            && let Some(slot) = self.index.adc
+            && let Device::Adc(adc) = &mut self.devices[usize::from(slot)]
+        {
+            if note.rose != 0 || note.fell != 0 {
+                adc.on_edges(note.rose, at);
+            }
+            if note.retarget {
+                adc.retarget(level, at, note.synthesize, note.old_adts);
+            }
+        }
+        if note.mux || note.refresh {
+            self.refresh_acmp();
+        }
+        true
+    }
+
+    fn aco_high(&self) -> bool {
+        match self.slot_dev(self.index.acmp) {
+            Some(Device::Acmp(acmp)) => acmp.output_high(),
+            _ => false,
+        }
+    }
+
+    fn acmp_mut(&mut self) -> Option<&mut crate::periph::Acmp> {
+        match self.slot_dev_mut(self.index.acmp)? {
+            Device::Acmp(acmp) => Some(acmp),
+            _ => None,
+        }
+    }
+
+    fn refresh_acmp(&mut self) {
+        let cycle = self.cycle;
+        let query = match self.slot_dev(self.index.acmp) {
+            Some(Device::Acmp(acmp)) => Some(acmp.compare()),
+            _ => None,
+        };
+        let Some(query) = query else {
+            return;
+        };
+        let high = if query.disabled {
+            false
+        } else {
+            self.resolve(query.pos) > self.resolve(query.neg)
+        };
+        let schedule = self
+            .acmp_mut()
+            .is_some_and(|acmp| acmp.consider(high, cycle));
+        if schedule {
+            self.note_schedule();
+        }
+    }
+
+    /// Deliver pad edges, in device order.
+    ///
+    /// A device may drive a pin in `after_pad`. Those edges are delivered
+    /// in the same cycle, up to four passes. Idle SPI does not enter this path.
+    fn dispatch_edges(&mut self) {
+        let mut schedule = false;
+        let mut irq = false;
+        for _ in 0..4 {
+            let edges = self.mux.take_edges();
+            if edges.is_empty() {
+                break;
+            }
+            let mut at = self.cycle;
+            for edge in edges {
+                at = edge.at;
+                for dev in self.devices.iter_mut() {
+                    let touch = dev.on_pad(edge.pin, edge.level, edge.at);
+                    schedule |= touch.schedule;
+                    irq |= touch.irq;
+                }
+            }
+            let Bus {
+                devices, mux, host, ..
+            } = self;
+            let mut ctx = host.ctx();
+            for dev in devices.iter_mut() {
+                let touch = dev.after_pad(mux, &mut ctx, at);
+                schedule |= touch.schedule;
+                irq |= touch.irq;
+            }
+        }
+        if schedule {
+            let clock = self.clock_view();
+            for dev in &mut self.devices {
+                dev.reschedule(&clock);
+            }
+            self.note_schedule();
+        }
+        if irq {
+            self.recompute_irq();
+        }
+    }
+}
+
+/// `None` for `clkCPU`: sleep halts the core and the row has no other gate.
+/// `clkASY` follows `clkI/O` because Timer2's async oscillator is unmodeled.
+fn domain_running(domain: ClockDomain, io: bool, adc: bool) -> Option<bool> {
+    match domain {
+        ClockDomain::Io | ClockDomain::Asy => Some(io),
+        ClockDomain::Adc => Some(adc),
+        ClockDomain::Cpu => None,
+    }
+}
+
+fn io_index(addr: u16) -> Option<usize> {
+    if (IO_BASE..=IO_END).contains(&addr) {
+        Some(usize::from(addr - IO_BASE))
+    } else {
+        None
+    }
+}

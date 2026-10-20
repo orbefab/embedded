@@ -1,0 +1,71 @@
+//! One GPIO port: `PINx`, `DDRx`, and `PORTx`.
+//!
+//! A write of one to `PINx` toggles the matching `PORTx` bit. The chip-table
+//! strobe mask makes `SBI` write a one in only that bit. A read of `PINx` is
+//! the synchronizer's view of the pad: the compare override while `DDR` is
+//! set, otherwise the host level or the pull-up (DS40002061B §14.2.4, Table
+//! 14-1). Clearing `DDR` reports the level the pin settles to.
+
+use crate::Port;
+use crate::mux::PinMux;
+use crate::regs::{GPIO_DDR, GPIO_PIN, GPIO_PORT};
+
+use super::Ctx;
+
+#[derive(Debug, Clone)]
+pub(crate) struct GpioPort {
+    port: Port,
+}
+
+impl GpioPort {
+    pub(crate) fn new(port: Port) -> Self {
+        Self { port }
+    }
+
+    pub(crate) fn read(&mut self, reg: u8, mux: &PinMux, cycle: u64) -> u8 {
+        self.peek(reg, mux, cycle)
+    }
+
+    pub(crate) fn write(
+        &mut self,
+        reg: u8,
+        value: u8,
+        mux: &mut PinMux,
+        ctx: &mut Ctx<'_>,
+        at: u64,
+    ) {
+        let (ddr, port) = mux.ddr_port(self.port);
+        match reg {
+            GPIO_PIN => mux.toggle_gpio(self.port, value, ctx, at),
+            GPIO_DDR => mux.set_gpio(self.port, value, port, ctx, None, at, true),
+            GPIO_PORT => mux.set_gpio(self.port, ddr, value, ctx, None, at, true),
+            _ => {}
+        }
+    }
+
+    pub(crate) fn peek(&self, reg: u8, mux: &PinMux, cycle: u64) -> u8 {
+        let (ddr, port) = mux.ddr_port(self.port);
+        match reg {
+            GPIO_PIN => mux.pin_bits(self.port, cycle),
+            GPIO_DDR => ddr,
+            GPIO_PORT => port,
+            _ => 0,
+        }
+    }
+
+    pub(crate) fn poke(
+        &mut self,
+        reg: u8,
+        value: u8,
+        mux: &mut PinMux,
+        ctx: &mut Ctx<'_>,
+        at: u64,
+    ) {
+        let (ddr, port) = mux.ddr_port(self.port);
+        match reg {
+            GPIO_DDR => mux.set_gpio(self.port, value, port, ctx, None, at, false),
+            GPIO_PORT => mux.set_gpio(self.port, ddr, value, ctx, None, at, false),
+            _ => {}
+        }
+    }
+}
