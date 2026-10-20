@@ -22,9 +22,9 @@
 //! External interrupt, pin change, input capture, and `T0`/`T1` read them.
 //! ADC auto-trigger is a flag event on the bus.
 
-use crate::Level;
 use crate::Port;
 use crate::periph::Ctx;
+use crate::{Level, PinDrive};
 
 /// Cycles from a pad change until `PINx` and the on-chip edge sample see it.
 ///
@@ -169,8 +169,9 @@ impl Wire {
 struct PortState {
     ddr: u8,
     port: u8,
-    /// Last level handed to the host. Starts released so reset emits nothing.
-    reported: [Level; 8],
+    /// Last level and drive handed to the host. Starts released and off, so reset emits
+    /// nothing.
+    reported: [(Level, PinDrive); 8],
     wires: [Wire; 8],
     over: [[Option<Drive>; 4]; 8],
     /// Bit set: the USART receiver forces this pin to an input (`RXEN`).
@@ -186,7 +187,7 @@ impl PortState {
         Self {
             ddr: 0,
             port: 0,
-            reported: [Level::Released; 8],
+            reported: [(Level::Released, PinDrive::Off); 8],
             wires: [Wire::released(); 8],
             over: [[None; 4]; 8],
             force_in: 0,
@@ -207,11 +208,17 @@ pub(crate) struct PinMux {
     edge_len: u8,
     /// A host drive on a TWI pin while `TWEN` is set has already been logged.
     twi_host_logged: bool,
+    /// `RSTDISBL` is unprogrammed, so `PC6` is `RESET`: an input with its own pull-up that
+    /// `DDRC6`, `PORTC6`, and `PUD` do not move, and `PINC6` reads 0 (Table 14-7, §14.3.2).
+    reset_pin: bool,
 }
+
+const RESET_PORT: Port = Port::C;
+const RESET_BIT: u8 = 6;
 
 impl PinMux {
     pub(crate) fn new() -> Self {
-        Self {
+        let mut mux = Self {
             ports: [PortState::new(); 3],
             pud: false,
             edges: [PadEdge {
@@ -221,7 +228,35 @@ impl PinMux {
             }; EDGE_CAP],
             edge_len: 0,
             twi_host_logged: false,
-        }
+            reset_pin: false,
+        };
+        mux.set_reset_pin(true);
+        mux
+    }
+
+    /// Whether `PC6` is `RESET`, from the fuses. The pin takes its new state silently, as
+    /// at power-on.
+    pub(crate) fn set_reset_pin(&mut self, on: bool) {
+        self.reset_pin = on;
+        let level = self.electrical(RESET_PORT, RESET_BIT);
+        let drive = self.drive_of(RESET_PORT, RESET_BIT);
+        let digital = self.digital(RESET_PORT, RESET_BIT, level);
+        let state = &mut self.ports[RESET_PORT.index()];
+        state.wires[usize::from(RESET_BIT)].plant_level(digital);
+        state.reported[usize::from(RESET_BIT)] = (level, drive);
+    }
+
+    /// The level the host drives on each pin, [`Level::Released`] where it drives none.
+    pub(crate) fn host_levels(&self) -> [Level; crate::PIN_COUNT] {
+        std::array::from_fn(|id| {
+            Port::from_pin(id as u32).map_or(Level::Released, |(port, bit)| {
+                self.ports[port.index()].wires[usize::from(bit)].host
+            })
+        })
+    }
+
+    pub(crate) fn is_reset_pin(&self, pin: u32) -> bool {
+        self.reset_pin && pin == RESET_PORT.pin_id(RESET_BIT)
     }
 
     pub(crate) fn has_pending_edges(&self) -> bool {
@@ -442,20 +477,52 @@ impl PinMux {
         self.electrical(port, bit & 7)
     }
 
-    /// Current driven level of every pin. `None` is not driven by the MCU.
-    /// A pull-up is [`Level::High`]. A floating pin is [`Level::Released`].
-    pub(crate) fn levels(&self) -> [Option<Level>; crate::PIN_COUNT] {
+    /// Current level and drive of every pin. A pull-up is [`Level::High`]. A floating pin
+    /// is [`Level::Released`].
+    pub(crate) fn levels(&self) -> [Option<(Level, PinDrive)>; crate::PIN_COUNT] {
         let mut out = [None; crate::PIN_COUNT];
         for port in [Port::B, Port::C, Port::D] {
             for bit in 0..8 {
                 let id = port.pin_id(bit) as usize;
                 if id < out.len() {
-                    let level = self.electrical(port, bit);
-                    out[id] = Some(level);
+                    out[id] = Some((self.electrical(port, bit), self.drive_of(port, bit)));
                 }
             }
         }
         out
+    }
+
+    /// The pin's own stage, never the host's level.
+    fn drive_of(&self, port: Port, bit: u8) -> PinDrive {
+        if self.is_reset_pin(port.pin_id(bit)) {
+            return PinDrive::PullUp;
+        }
+        let state = &self.ports[port.index()];
+        let mask = 1u8 << bit;
+        let input = state.twi & mask != 0
+            || state.force_in & mask != 0
+            || (state.ddr & mask == 0 && !self.usart_driven(port, bit));
+        if !input {
+            return match self.output_level(port, bit) {
+                Level::High => PinDrive::High,
+                Level::Low | Level::Released => PinDrive::Low,
+            };
+        }
+        if state.port & mask != 0 && !self.pud {
+            PinDrive::PullUp
+        } else {
+            PinDrive::Off
+        }
+    }
+
+    /// What `PINx` and the edge detectors see of `level`.
+    fn digital(&self, port: Port, bit: u8, level: Level) -> Level {
+        if self.ports[port.index()].buf_off & (1 << bit) != 0 || self.is_reset_pin(port.pin_id(bit))
+        {
+            Level::Low
+        } else {
+            level
+        }
     }
 
     /// Poke path: the registers already changed. Settle the pad so a following
@@ -463,7 +530,11 @@ impl PinMux {
     /// emits.
     fn plant(&mut self, port: Port, _at: u64) {
         for bit in 0..8 {
-            let level = self.electrical(port, bit);
+            let level = if self.is_reset_pin(port.pin_id(bit)) {
+                Level::Low
+            } else {
+                self.electrical(port, bit)
+            };
             self.ports[port.index()].wires[usize::from(bit)].plant_level(level);
         }
     }
@@ -479,23 +550,20 @@ impl PinMux {
     ) {
         for bit in 0..8 {
             let level = self.electrical(port, bit);
-            let digital = if self.ports[port.index()].buf_off & (1 << bit) != 0 {
-                Level::Low
-            } else {
-                level
-            };
+            let digital = self.digital(port, bit, level);
             let pin = port.pin_id(bit);
             let changed = self.ports[port.index()].wires[usize::from(bit)].latch(digital, at);
             if changed && notify {
                 self.push_edge(pin as u8, digital, at);
             }
+            let now = (level, self.drive_of(port, bit));
             let reported = &mut self.ports[port.index()].reported[usize::from(bit)];
-            if *reported == level {
+            if *reported == now {
                 continue;
             }
-            *reported = level;
+            *reported = now;
             if emit {
-                ctx.emit_pin(pin, level, report_at, self.origin_of(port, bit));
+                ctx.emit_pin(pin, now, report_at, self.origin_of(port, bit));
             }
         }
     }
@@ -539,6 +607,12 @@ impl PinMux {
     fn electrical(&self, port: Port, bit: u8) -> Level {
         let state = &self.ports[port.index()];
         let mask = 1u8 << bit;
+        if self.is_reset_pin(port.pin_id(bit)) {
+            return match state.wires[usize::from(bit)].host {
+                Level::Released => Level::High,
+                host => host,
+            };
+        }
         // `PUOE` = `TWEN`, `PUOV` = `PORTCn`·¬`PUD`, `PVOE` = `TWEN`, `PVOV` = 0.
         if state.twi & mask != 0 {
             return self.input_level(port, bit);

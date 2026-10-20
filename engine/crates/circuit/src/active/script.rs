@@ -61,6 +61,7 @@ pub(crate) fn chip(
             gnd,
             high: stage,
             low: stage,
+            pull_up: None,
         }],
         watches: vec![Watch::comparator(Signal {
             offset: 2.5,
@@ -160,7 +161,9 @@ impl Core {
 }
 
 pub(crate) fn eager(mut chip: Chip) -> Chip {
-    let super::Core::Script(core) = &mut chip.core;
+    let super::Core::Script(core) = &mut chip.core else {
+        unreachable!("a script chip");
+    };
     core.eager = true;
     chip
 }

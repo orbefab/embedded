@@ -280,6 +280,7 @@ name = "sim-circuit"
 version = "0.3.0"
 dependencies = [
  "serde_json",
+ "sim-avr",
  "sim-circuit",
  "sim-core",
 ]

@@ -18,11 +18,14 @@ pub(crate) mod hostside;
 mod index;
 mod power;
 mod record;
+mod seam;
 
 use std::collections::VecDeque;
 
 use hostside::HostSide;
 use index::Index;
+use power::Epoch;
+use seam::Samples;
 
 use crate::Port;
 use crate::analog::{HostAnalog, Sense, adc_code};
@@ -82,6 +85,7 @@ pub(crate) struct Bus {
     hold_any: bool,
     /// A byte queued during this instruction still has `cycle = None`.
     needs_stamp: bool,
+    samples: Samples,
     /// An enable window is waiting for the instruction to retire.
     windows: bool,
     /// Stall cycles the current instruction still has to add (§8.4.1).
@@ -111,11 +115,11 @@ pub(crate) struct Bus {
     host_side: HostSide,
     /// Oscillator hertz. `cpu_hz` is this divided by `div`.
     osc_hz: u32,
-    /// `CLKPR` division. CPU cycles stay 1; wall time scales.
-    div: u32,
-    /// Oscillator cycles accumulated up to `osc_cycle`.
-    osc_base: u64,
-    osc_cycle: u64,
+    /// The `CLKPR` division from its CPU cycle on, which can be a cycle past the core's. CPU
+    /// cycles stay 1; wall time scales.
+    epoch: Epoch,
+    /// The division before `epoch`.
+    before: Epoch,
     /// Schedule-and-ack source for the `irq` tests. Not a device, and not on `tick`.
     #[cfg(test)]
     test_irq: crate::periph::probe::Probe,
@@ -161,6 +165,7 @@ impl Bus {
             device_irq: 0,
             hold_any: false,
             needs_stamp: false,
+            samples: Samples::Store,
             windows: false,
             cpu_halt: 0,
             io: [0; IO_LEN],
@@ -185,9 +190,8 @@ impl Bus {
             wdt_reset: false,
             host_side: HostSide::idle(),
             osc_hz: 16_000_000,
-            div: 1,
-            osc_base: 0,
-            osc_cycle: 0,
+            epoch: Epoch::START,
+            before: Epoch::START,
             #[cfg(test)]
             test_irq: crate::periph::probe::Probe::new(),
         };
@@ -201,8 +205,14 @@ impl Bus {
     /// `drive_pin` replaces a voltage. The ADC reads a digital high as 5.0 V
     /// and a digital low or a float as 0.
     pub(crate) fn drive_pin(&mut self, pin: u32, level: Level) {
+        self.drive_pin_at(pin, level, self.cycle);
+    }
+
+    /// [`Self::drive_pin`] from `at`, a cycle at or before this one. The synchronizer and every
+    /// edge detector count from `at`.
+    pub(crate) fn drive_pin_at(&mut self, pin: u32, level: Level, at: u64) {
         self.analog.set_pin_level(pin, level);
-        self.drive_mux(pin, level);
+        self.drive_mux(pin, level, at);
         self.refresh_acmp();
         self.note_schedule();
     }
@@ -214,7 +224,7 @@ impl Bus {
         let Some(level) = self.analog.set_pin_voltage(pin, uv) else {
             return;
         };
-        self.drive_mux(pin, level);
+        self.drive_mux(pin, level, self.cycle);
         self.refresh_acmp();
         self.note_schedule();
     }
@@ -253,8 +263,7 @@ impl Bus {
         }
     }
 
-    fn drive_mux(&mut self, pin: u32, level: Level) {
-        let at = self.cycle;
+    fn drive_mux(&mut self, pin: u32, level: Level, at: u64) {
         let Bus { mux, host, .. } = self;
         let mut ctx = host.ctx();
         mux.drive(pin, level, &mut ctx, at);
@@ -304,6 +313,13 @@ impl Bus {
 
     pub(crate) fn next_event(&self) -> u64 {
         self.next_event
+    }
+
+    /// Fire every event at or before this cycle, which a pad driven from an earlier one leaves.
+    pub(crate) fn fire_overdue(&mut self) {
+        if self.next_event <= self.cycle {
+            self.advance_to(self.cycle);
+        }
     }
 
     pub(crate) fn pending_irq(&self) -> u64 {
@@ -398,15 +414,15 @@ impl Bus {
     }
 
     /// Ports return to their reset state immediately (§11.1). Report every pin
-    /// whose level changed. The new queue is empty; these are its first edges.
+    /// whose level or drive changed. The new queue is empty; these are its first edges.
     pub(crate) fn note_reset_pins(&mut self, before: PinLevels, at: u64) {
         let after = self.mux.levels();
         for pin in 0..crate::PIN_COUNT as u32 {
             let next = after[pin as usize];
-            if before.get(pin) == next {
+            if before.both(pin) == next {
                 continue;
             }
-            let Some(level) = next else {
+            let Some((level, drive)) = next else {
                 continue;
             };
             push_pin(
@@ -415,6 +431,7 @@ impl Bus {
                 PinReport {
                     pin,
                     level,
+                    drive,
                     cycle: at,
                     origin: PinOrigin::Gpio,
                 },
@@ -745,8 +762,8 @@ impl Bus {
 
     /// Dispatch a queued pad edge. Notices are delivered either
     /// way. The schedule updates when the store, the queue, or a notice asked
-    /// for it.
-    fn finish_store(&mut self, touch: Touch) {
+    /// for it. A new `CLKPR` division counts from CPU cycle `div_from`.
+    fn finish_store(&mut self, touch: Touch, div_from: u64) {
         self.finish_touch(touch);
         let pending = self.mux.has_pending_edges();
         if pending {
@@ -754,7 +771,7 @@ impl Bus {
         }
         let delivered = self.deliver_notices(self.cycle);
         if touch.div {
-            self.absorb_div();
+            self.absorb_div(div_from);
         }
         if touch.prr {
             self.absorb_prr();
@@ -931,7 +948,10 @@ impl Bus {
             let mut ctx = host.ctx();
             devices[usize::from(slot.dev)].write(slot.reg, value, &mut ctx, mux, at, &clock, addr)
         };
-        self.finish_store(touch);
+        // §9.11 puts the new division in force `T1 + T2` to `T1 + 2·T2` after the write.
+        // One more cycle at the old division after the store retires, then the new one, lands
+        // the second edge on `T1 + T2` whichever way the clock changes.
+        self.finish_store(touch, at.end + 1);
     }
 
     fn poke_io(&mut self, index: usize, value: u8) {
@@ -958,7 +978,7 @@ impl Bus {
             devices[usize::from(slot.dev)]
                 .poke(slot.reg, value, mux, cycle, &clock, &mut ctx, host_side)
         };
-        self.finish_store(touch);
+        self.finish_store(touch, cycle);
     }
 
     fn latch_samples(&mut self, at: u64) {
@@ -972,6 +992,10 @@ impl Bus {
         let Some((sense, refs)) = request else {
             return;
         };
+        if let Samples::Asked { due } = &mut self.samples {
+            *due = Some(at);
+            return;
+        }
         let vin = self.resolve(sense);
         let vref = self.analog.vref(refs);
         let code = adc_code(vin, vref);

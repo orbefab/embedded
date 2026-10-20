@@ -41,6 +41,12 @@ impl FuseBytes {
         high: 0xDA,
         extended: 0xFD,
     };
+
+    /// `CKSEL` picks a low-power or full-swing crystal or ceramic resonator on `XTAL1` and
+    /// `XTAL2` (Table 9-1), the only clocks with their own start-up rows here.
+    pub fn has_crystal(self) -> bool {
+        is_crystal(self.low & 0x0F)
+    }
 }
 
 /// What the model needs from the three bytes.
@@ -55,6 +61,8 @@ pub struct Fuses {
     pub boot_word: u16,
     /// `WDTON` programmed. The watchdog stays in system-reset mode.
     pub wdton: bool,
+    /// `RSTDISBL` programmed. `PC6` is an I/O pin, not `RESET` (§14.3.2).
+    pub rstdisbl: bool,
     /// Typical `VBOT` in millivolts. `None` when BOD is disabled.
     pub bod_typ_mv: Option<u16>,
     pub startup: Startup,
@@ -84,6 +92,7 @@ impl Fuses {
             bootrst: bytes.high & 1 == 0,
             boot_word: boot_word(bootsz),
             wdton: bytes.high & (1 << 4) == 0,
+            rstdisbl: bytes.high & (1 << 7) == 0,
             bod_typ_mv: bod_typical_mv(bodlevel),
             startup: startup_of(cksel, sut),
         }
@@ -183,13 +192,18 @@ impl Startup {
 /// Start-up rows from §9. `CKSEL` selects the table. `SUT` selects the row.
 /// A reserved `SUT` uses the longest defined row of that table.
 fn startup_of(cksel: u8, sut: u8) -> Startup {
-    match cksel {
+    if is_crystal(cksel) {
         // Tables 9-4 and 9-6. `CKSEL0` picks the row.
-        0b0110..=0b1111 => crystal_row(cksel & 1, sut),
+        crystal_row(cksel & 1, sut)
+    } else {
         // Table 9-12. The external clock (Table 9-16) has the same rows. The
         // 128 kHz and low-frequency crystal rows are not modelled and use it too.
-        _ => rc_like(sut),
+        rc_like(sut)
     }
+}
+
+fn is_crystal(cksel: u8) -> bool {
+    matches!(cksel, 0b0110..=0b1111)
 }
 
 /// Table 9-12 and Table 9-16. `SUT = 11` is reserved; use the slow row.

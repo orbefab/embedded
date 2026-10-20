@@ -59,7 +59,8 @@ pub(crate) struct Core {
     stopped: bool,
     unknown: Option<u16>,
     cycles: u64,
-    /// `SEI` and `RETI` suppress the interrupt check that follows them.
+    /// `SEI` and `RETI` suppress interrupts at the boundary that follows them, until the next
+    /// instruction starts.
     irq_delay: bool,
 }
 
@@ -197,13 +198,6 @@ impl Core {
         self.irq_delay
     }
 
-    /// One instruction boundary passes with no interrupt. `SEI` and `RETI` set this.
-    pub(crate) fn take_irq_delay(&mut self) -> bool {
-        let delayed = self.irq_delay;
-        self.irq_delay = false;
-        delayed
-    }
-
     pub(crate) fn unknown(&self) -> Option<u16> {
         self.unknown
     }
@@ -219,6 +213,7 @@ impl Core {
         }
         let pc = self.pc;
         let word = self.fetch(pc);
+        self.irq_delay = false;
         self.execute(bus, pc, word);
         // The store that clears a halt is rare. Skipping it keeps the bus line
         // clean on the ordinary instruction.

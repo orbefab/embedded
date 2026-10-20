@@ -8,6 +8,22 @@ use super::domain_running;
 use crate::chip::{ASSR_ADDR, ClockDomain, WAKE_CLASS, WAKE_MASK, WakeClass};
 use crate::periph::Device;
 
+/// CPU cycles to oscillator cycles from one `CLKPR` division on.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Epoch {
+    cycle: u64,
+    osc: u64,
+    div: u32,
+}
+
+impl Epoch {
+    pub(super) const START: Epoch = Epoch {
+        cycle: 0,
+        osc: 0,
+        div: 1,
+    };
+}
+
 impl Bus {
     #[inline]
     pub(crate) fn cpu_halt(&self) -> u8 {
@@ -141,6 +157,7 @@ impl Bus {
 
     pub(crate) fn set_fuses(&mut self, bytes: crate::fuses::FuseBytes) {
         let decoded = crate::fuses::Fuses::decode(bytes);
+        self.mux.set_reset_pin(!decoded.rstdisbl);
         let osc = self.osc_hz;
         // Cycle 0 is before the first instruction, including the rebuilt die
         // inside a reset. A later override keeps the running `CLKPS`.
@@ -150,16 +167,17 @@ impl Bus {
             let div = sys.div().max(1);
             sys.set_cpu_hz(osc / div);
         }
-        self.div = self.system().map(|sys| sys.div().max(1)).unwrap_or(1);
+        self.epoch.div = self.system().map(|sys| sys.div().max(1)).unwrap_or(1);
+        if self.cycle == 0 {
+            self.epoch.cycle = 0;
+            self.epoch.osc = 0;
+            self.before = self.epoch;
+        }
         let hz = self.cpu_hz();
         if let Some(ee) = self.eeprom_mut() {
             ee.set_cpu_hz(hz);
         }
         self.set_twi_hz(hz);
-        if self.cycle == 0 {
-            self.osc_base = 0;
-            self.osc_cycle = 0;
-        }
     }
 
     pub(crate) fn set_osc_hz(&mut self, hz: u32) {
@@ -175,17 +193,38 @@ impl Bus {
     }
 
     pub(crate) fn cpu_hz(&self) -> u32 {
-        self.osc_hz / self.div.max(1)
+        self.osc_hz / self.clock_div()
     }
 
     pub(crate) fn clock_div(&self) -> u32 {
-        self.div.max(1)
+        self.epoch.div
     }
 
+    /// The oscillator cycle of CPU cycle `cpu_cycles`, on either side of the last `CLKPR`
+    /// division.
     pub(crate) fn oscillator_cycles(&self, cpu_cycles: u64) -> u64 {
-        let stepped = cpu_cycles.saturating_sub(self.osc_cycle);
-        self.osc_base
-            .saturating_add(stepped.saturating_mul(u64::from(self.div.max(1))))
+        let epoch = if cpu_cycles >= self.epoch.cycle {
+            self.epoch
+        } else {
+            self.before
+        };
+        debug_assert!(cpu_cycles >= self.before.cycle);
+        let stepped = cpu_cycles.saturating_sub(epoch.cycle);
+        epoch
+            .osc
+            .saturating_add(stepped.saturating_mul(u64::from(epoch.div)))
+    }
+
+    /// The last CPU cycle at or before oscillator cycle `osc`, on either side of the last
+    /// `CLKPR` division.
+    pub(crate) fn cpu_cycle(&self, osc: u64) -> u64 {
+        let epoch = if osc >= self.epoch.osc {
+            self.epoch
+        } else {
+            self.before
+        };
+        debug_assert!(osc >= self.before.osc);
+        epoch.cycle + osc.saturating_sub(epoch.osc) / u64::from(epoch.div)
     }
 
     pub(crate) fn set_wdt_hz(&mut self, hz: u32) {
@@ -227,9 +266,31 @@ impl Bus {
         self.cycle = cycle;
     }
 
-    pub(crate) fn restore_osc(&mut self, base: u64, cycle: u64) {
-        self.osc_base = base;
-        self.osc_cycle = cycle;
+    /// The last two divisions, which a reset keeps for [`Self::restore_epochs`].
+    pub(crate) fn epochs(&self) -> [Epoch; 2] {
+        [self.before, self.epoch]
+    }
+
+    /// `epochs` from before a reset at CPU cycle `now`, then the fuses' division from `now`.
+    pub(crate) fn restore_epochs(&mut self, [before, epoch]: [Epoch; 2], now: u64) {
+        let div = self.clock_div();
+        self.before = before;
+        self.epoch = epoch;
+        self.begin_epoch(now, div);
+    }
+
+    /// Division `div` from CPU cycle `from` on. A division that has not begun before `from`
+    /// never does.
+    fn begin_epoch(&mut self, from: u64, div: u32) {
+        let osc = self.oscillator_cycles(from);
+        if from > self.epoch.cycle {
+            self.before = self.epoch;
+        }
+        self.epoch = Epoch {
+            cycle: from,
+            osc,
+            div,
+        };
     }
 
     pub(crate) fn bod_off_in_sleep(&self) -> bool {
@@ -269,20 +330,19 @@ impl Bus {
         self.system_mut().is_some_and(|sys| sys.take_wdt_reset())
     }
 
-    pub(super) fn absorb_div(&mut self) {
+    /// The new `CLKPR` division counts from CPU cycle `from`.
+    pub(super) fn absorb_div(&mut self, from: u64) {
         let new = self.system().map(|sys| sys.div().max(1)).unwrap_or(1);
-        let old = self.div.max(1);
-        let now = self.cycle;
-        self.osc_base = self.oscillator_cycles(now);
-        self.osc_cycle = now;
-        self.div = new;
+        let old = self.clock_div();
+        self.begin_epoch(from, new);
         let hz = self.cpu_hz();
         if let Some(ee) = self.eeprom_mut() {
             ee.set_cpu_hz(hz);
-            ee.rescale(now, old, new);
+            ee.rescale(from, old, new);
         }
         if let Some(sys) = self.system_mut() {
             sys.set_cpu_hz(hz);
+            sys.rescale(from, old, new);
         }
         self.set_twi_hz(hz);
     }

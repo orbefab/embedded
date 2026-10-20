@@ -10,6 +10,7 @@ mod oc_pin;
 mod portb;
 mod spi;
 mod system;
+mod timeline;
 mod timers;
 mod timing;
 mod twi;

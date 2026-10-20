@@ -8,12 +8,12 @@ use super::fixtures::*;
 use crate::active::Drive;
 use crate::active::script::{self, Op, Sample, eager};
 
-const US: u64 = 1_000_000;
-const NS: u64 = 1_000;
+pub(super) const US: u64 = 1_000_000;
+pub(super) const NS: u64 = 1_000;
 
 /// A 5 V `vcc` and the parts in `parts`, over `nets` besides `gnd` and `vcc`. 1 us steps at
 /// most and a 1 us grid.
-fn circuit(stop_ps: u64, nets: &[&str], parts: &[String]) -> Netlist {
+pub(super) fn circuit(stop_ps: u64, nets: &[&str], parts: &[String]) -> Netlist {
     let nets: Vec<String> = ["gnd", "vcc"]
         .iter()
         .chain(nets)
@@ -38,7 +38,7 @@ fn circuit(stop_ps: u64, nets: &[&str], parts: &[String]) -> Netlist {
     sim_core::netlist::parse(json.as_bytes()).unwrap()
 }
 
-fn resistor(name: &str, a: &str, b: &str, ohm: f64) -> String {
+pub(super) fn resistor(name: &str, a: &str, b: &str, ohm: f64) -> String {
     format!(
         r#"{{ "name": "{name}", "kind": "resistor", "pins": {{ "a": "{a}", "b": "{b}" }},
               "resistance": {{ "value": {ohm:?}, "unit": "ohm", "source": "user" }},
@@ -46,7 +46,7 @@ fn resistor(name: &str, a: &str, b: &str, ohm: f64) -> String {
     )
 }
 
-fn capacitor(name: &str, a: &str, farad: f64) -> String {
+pub(super) fn capacitor(name: &str, a: &str, farad: f64) -> String {
     format!(
         r#"{{ "name": "{name}", "kind": "capacitor", "pins": {{ "a": "{a}", "b": "gnd" }},
               "capacitance": {{ "value": {farad:?}, "unit": "F", "source": "user" }},
@@ -67,7 +67,7 @@ fn pin_into_rc(stop_ps: u64) -> Netlist {
 
 const TAU_US: f64 = (25.0 + 1000.0) * 1e-9 * 1e6;
 
-fn net(netlist: &Netlist, name: &str) -> NetId {
+pub(super) fn net(netlist: &Netlist, name: &str) -> NetId {
     netlist
         .nets()
         .find(|(_, net)| net.as_str() == name)
@@ -95,7 +95,7 @@ fn scripted(
     script::chip(pins, script, echo)
 }
 
-fn run_active(netlist: &Netlist, chips: Vec<active::Chip>) -> (Trace, Vec<Diagnostic>) {
+pub(super) fn run_active(netlist: &Netlist, chips: Vec<active::Chip>) -> (Trace, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
     let columns = Columns::new(netlist);
     let outcome = run_with(
@@ -110,7 +110,7 @@ fn run_active(netlist: &Netlist, chips: Vec<active::Chip>) -> (Trace, Vec<Diagno
     (outcome.trace.unwrap(), diagnostics)
 }
 
-fn volts(trace: &Trace, net: &str) -> Vec<(u64, f64)> {
+pub(super) fn volts(trace: &Trace, net: &str) -> Vec<(u64, f64)> {
     let column = trace
         .columns()
         .iter()
@@ -124,7 +124,7 @@ fn volts(trace: &Trace, net: &str) -> Vec<(u64, f64)> {
         .collect()
 }
 
-fn at(rows: &[(u64, f64)], ps: u64) -> f64 {
+pub(super) fn at(rows: &[(u64, f64)], ps: u64) -> f64 {
     rows.iter()
         .find(|&&(at, _)| at == ps)
         .unwrap_or_else(|| panic!("no step at {ps} ps"))
@@ -132,7 +132,7 @@ fn at(rows: &[(u64, f64)], ps: u64) -> f64 {
 }
 
 /// Whether a restart at `ps` seeded the next segment: the next step is exactly 1 ns.
-fn restarted(rows: &[(u64, f64)], ps: u64) -> bool {
+pub(super) fn restarted(rows: &[(u64, f64)], ps: u64) -> bool {
     let k = rows
         .iter()
         .position(|&(at, _)| at == ps)

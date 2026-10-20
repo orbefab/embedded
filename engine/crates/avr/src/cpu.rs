@@ -16,6 +16,8 @@ use crate::irq;
 use crate::periph::system::{BORF, EXTRF, PORF, WDRF};
 use crate::{IoWrite, Level, PinLevels, PinReport, SpmNote};
 
+mod seam;
+
 /// Parity bit on a host serial frame (DS40002061B §20.4.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Parity {
@@ -130,6 +132,9 @@ pub struct Cpu {
     reset_held: bool,
     /// VCC is below `VBOT-`.
     bod_held: bool,
+    /// The host's own reading of `VCC` against the brown-out window, from
+    /// [`Self::set_brown_out`]: `true` below it. `None` reads `vcc_mv`.
+    bod_low: Option<bool>,
 }
 
 /// Why [`Cpu::reset_as`] ran.
@@ -164,6 +169,7 @@ impl Cpu {
             vcc_mv: 5_000,
             reset_held: false,
             bod_held: false,
+            bod_low: None,
         }
     }
 
@@ -200,6 +206,9 @@ impl Cpu {
     /// Release `RESET`. If `VCC` is also above the brown-out threshold, the
     /// start-up time-out runs and then the reset vector is fetched.
     pub fn release_reset(&mut self) {
+        if !self.reset_held {
+            return;
+        }
         self.reset_held = false;
         if !self.bod_held {
             self.begin_reset_delay();
@@ -241,6 +250,7 @@ impl Cpu {
     /// `VBOT` and Table 29-11's 50 mV hysteresis.
     pub fn set_vcc(&mut self, volts: f32) {
         self.vcc_mv = (f64::from(volts) * 1000.0).round() as i32;
+        self.bod_low = None;
         self.consider_bod();
     }
 
@@ -450,23 +460,30 @@ impl Cpu {
     /// While sleeping with nothing pending, time jumps to the next device
     /// event, or to `limit` when that event is sooner.
     pub fn run_until(&mut self, limit: u64) {
-        while self.cycles() < limit {
-            if self.core.is_stopped() {
+        self.run(limit, false);
+    }
+
+    fn run(&mut self, limit: u64, until_news: bool) {
+        let div = self.clock_div();
+        if self.take_boundary_interrupt(limit) && until_news && self.has_news(div) {
+            return;
+        }
+        while self.cycles() < limit && !self.core.is_stopped() {
+            if self.core.can_fetch() {
+                self.step();
+            } else if self.core.is_held() {
+                self.advance_held(limit);
                 break;
-            }
-            if !self.core.can_fetch() {
-                if self.core.is_held() {
-                    self.advance_held(limit);
-                    break;
-                }
+            } else {
                 let before = self.cycles();
                 self.coast(limit);
                 if !self.core.can_fetch() && self.cycles() == before {
                     break;
                 }
-                continue;
             }
-            self.step();
+            if until_news && self.has_news(div) {
+                break;
+            }
         }
     }
 
@@ -487,16 +504,7 @@ impl Cpu {
             Activity::Startup { until, .. } => until,
             _ => u64::MAX,
         };
-        // §11.1. Internal reset stays held through the time-out. Only the
-        // global cycle counter runs; free-running counters restart at release.
-        let counters_held = self.core.is_held()
-            || matches!(
-                self.core.activity(),
-                Activity::Startup {
-                    from_reset: true,
-                    ..
-                }
-            );
+        let counters_held = self.counters_held();
         let next = if counters_held {
             u64::MAX
         } else {
@@ -525,6 +533,19 @@ impl Cpu {
         if matches!(self.core.activity(), Activity::Sleep) && self.bus.sleep_wake_pending() {
             self.start_wake();
         }
+    }
+
+    /// §11.1. Internal reset stays held through the time-out. Only the global cycle counter
+    /// runs; free-running counters restart at release.
+    fn counters_held(&self) -> bool {
+        self.core.is_held()
+            || matches!(
+                self.core.activity(),
+                Activity::Startup {
+                    from_reset: true,
+                    ..
+                }
+            )
     }
 
     fn advance_held(&mut self, limit: u64) {
@@ -578,10 +599,9 @@ impl Cpu {
         if kind == ResetKind::BrownOut {
             return false;
         }
-        match self.bus.bod_window() {
-            Some((low, _)) => self.vcc_mv >= i32::from(low),
-            None => true,
-        }
+        self.bus
+            .bod_window()
+            .is_none_or(|window| self.below_bod(window) != Some(true))
     }
 
     fn perform_reset(&mut self, kind: ResetKind, when: ResetWhen) {
@@ -601,22 +621,29 @@ impl Cpu {
         let old_flags = self.bus.mcusr();
         let fuses = self.bus.fuses().bytes;
         let vcc = self.vcc_mv;
+        let bod_low = self.bod_low;
         let reset_held = self.reset_held;
         let bod_held = self.bod_held;
         let wdrs = self.core.wdr_executions();
-        let osc = self.bus.oscillator_cycles(now);
+        let epochs = self.bus.epochs();
         let flash = self.core.flash();
         let clock = self.clock_hz;
         let host = self.host_serial;
+        let asks = self.bus.asks_for_samples();
         let pins = self.bus.pin_levels();
+        let pads = self.bus.host_levels();
         let i2c = self.bus.take_i2c_across_reset();
         *self = Self::new();
         self.clock_hz = clock;
         self.bus.set_osc_hz(clock);
         self.vcc_mv = vcc;
+        self.bod_low = bod_low;
         self.reset_held = reset_held;
         self.bod_held = bod_held;
         self.host_serial = host;
+        if asks {
+            self.bus.ask_for_samples();
+        }
         self.bus.restore_i2c_across_reset(i2c);
         self.bus.set_fuses(fuses);
         self.bus.set_eeprom(&eeprom);
@@ -632,20 +659,26 @@ impl Cpu {
                 self.core.set_cycles(now);
                 self.bus.set_cycle(now);
                 self.core.set_wdr_executions(wdrs);
-                self.bus.restore_osc(osc, now);
+                self.bus.restore_epochs(epochs, now);
                 self.begin_reset_delay();
             }
             ResetWhen::Hold => {
                 self.core.set_cycles(now);
                 self.bus.set_cycle(now);
                 self.core.set_wdr_executions(wdrs);
-                self.bus.restore_osc(osc, now);
+                self.bus.restore_epochs(epochs, now);
                 self.core.set_activity(Activity::Held);
             }
         }
-        // A timeline restart has no previous host. An in-run reset does:
-        // ports are back at their reset level on this cycle (§11.1).
+        // A timeline restart has no previous host. An in-run reset does: what the host
+        // drives stays on the pads, and ports are back at their reset level on this
+        // cycle (§11.1).
         if !matches!(when, ResetWhen::Restart) {
+            for (pin, level) in pads.into_iter().enumerate() {
+                if level != Level::Released {
+                    self.bus.drive_pin(pin as u32, level);
+                }
+            }
             self.bus.note_reset_pins(pins, now);
         }
     }
@@ -654,18 +687,32 @@ impl Cpu {
         if self.core.is_sleeping() && self.bus.bod_off_in_sleep() {
             return;
         }
-        let Some((low, high)) = self.bus.bod_window() else {
+        let Some(window) = self.bus.bod_window() else {
             return;
         };
-        if !self.bod_held && self.vcc_mv < i32::from(low) {
-            self.bod_held = true;
-            self.perform_reset(ResetKind::BrownOut, ResetWhen::Hold);
-        } else if self.bod_held && self.vcc_mv > i32::from(high) {
-            self.bod_held = false;
-            if !self.reset_held {
-                self.begin_reset_delay();
+        match (self.bod_held, self.below_bod(window)) {
+            (false, Some(true)) => {
+                self.bod_held = true;
+                self.perform_reset(ResetKind::BrownOut, ResetWhen::Hold);
             }
+            (true, Some(false)) => {
+                self.bod_held = false;
+                if !self.reset_held {
+                    self.begin_reset_delay();
+                }
+            }
+            _ => {}
         }
+    }
+
+    /// `VCC` against `VBOT-` and `VBOT+`: `Some(true)` below the window, `Some(false)` above
+    /// it, `None` inside it.
+    fn below_bod(&self, (low, high): (u16, u16)) -> Option<bool> {
+        self.bod_low.or_else(|| match self.vcc_mv {
+            mv if mv < i32::from(low) => Some(true),
+            mv if mv > i32::from(high) => Some(false),
+            _ => None,
+        })
     }
 
     fn begin_reset_delay(&mut self) {
@@ -696,7 +743,7 @@ impl Cpu {
             self.finish_step();
             return;
         }
-        if !self.core.irq_delay_pending() && self.bus.pending_irq() == 0 {
+        if self.bus.pending_irq() == 0 {
             return;
         }
         if self.service_interrupt(false) {
@@ -736,7 +783,7 @@ impl Cpu {
             }
             return;
         }
-        if !self.core.irq_delay_pending() && self.bus.pending_irq() == 0 {
+        if self.bus.pending_irq() == 0 {
             return;
         }
         if self.service_interrupt(false) {
@@ -747,10 +794,7 @@ impl Cpu {
     /// `true` when the entry cycles fired a watchdog reset.
     #[inline]
     fn service_interrupt(&mut self, from_sleep: bool) -> bool {
-        if self.core.take_irq_delay() {
-            return false;
-        }
-        if !self.core.interrupts_enabled() {
+        if self.core.irq_delay_pending() || !self.core.interrupts_enabled() {
             return false;
         }
         let lines = self.bus.pending_irq();

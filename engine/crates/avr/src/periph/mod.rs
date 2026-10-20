@@ -47,7 +47,7 @@ use std::collections::VecDeque;
 use crate::chip::DeviceSpec;
 use crate::mux::PinMux;
 use crate::regs::OwnedReg;
-use crate::{Level, PIN_QUEUE_CAP, PinOrigin, PinReport};
+use crate::{Level, PIN_QUEUE_CAP, PinDrive, PinOrigin, PinReport};
 
 /// A store into I/O space (data addresses 0x0020 through 0x00FF).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,7 +232,7 @@ impl Ctx<'_> {
     pub(crate) fn emit_pin(
         &mut self,
         pin: u32,
-        level: Level,
+        (level, drive): (Level, PinDrive),
         cycle: Option<u64>,
         origin: PinOrigin,
     ) {
@@ -241,6 +241,7 @@ impl Ctx<'_> {
                 self.pending.push(PinReport {
                     pin,
                     level,
+                    drive,
                     cycle: 0,
                     origin,
                 });
@@ -255,6 +256,7 @@ impl Ctx<'_> {
             PinReport {
                 pin,
                 level,
+                drive,
                 cycle,
                 origin,
             },

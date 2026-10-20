@@ -1,4 +1,5 @@
 mod active;
+mod avr;
 mod breakpoints;
 mod events;
 mod failures;

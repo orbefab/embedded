@@ -9,7 +9,8 @@
 //! table. `cpu` is the core a host steps. `fuses` holds the three fuse bytes
 //! and the start-up, `CLKPR`, watchdog, and brown-out values read out of them.
 //! `MCUCR.IVSEL` does not move the vectors. `image` parses Intel HEX and ELF
-//! into flash bytes.
+//! into flash bytes. `timeline` runs the core on a host's clock, in oscillator
+//! cycles, and stops it at each change of a pin's drive.
 
 mod analog;
 mod bus;
@@ -22,6 +23,7 @@ mod irq;
 mod mux;
 mod periph;
 mod regs;
+mod timeline;
 
 pub use core::SpmNote;
 pub use cpu::{Channel, Cpu, LoadError, Parity, ResetKind, SerialFrame, SpiClock, SupplyChannel};
@@ -29,6 +31,7 @@ pub use fuses::FuseBytes;
 pub use image::{IgnoredRegion, IgnoredSegment, Image, ImageError, parse_elf, parse_hex};
 pub use periph::twi::{I2cNote, I2cStamp};
 pub use periph::{IO_LOG_CAP, IoWrite};
+pub use timeline::{Halt, Timeline};
 
 /// Ports B, C, and D, eight pins each. [`Port::pin_id`] values are `0..PIN_COUNT`.
 pub const PIN_COUNT: usize = 24;
@@ -87,6 +90,20 @@ pub enum Level {
     Released,
 }
 
+/// What a pin's own stage does, apart from anything outside the chip.
+///
+/// [`PinDrive::High`] and [`PinDrive::Low`] are the output driver: `DDRxn` set, or a
+/// peripheral that makes the pin an output. [`PinDrive::PullUp`] is an input with its pull-up
+/// on, `PORTxn` set and `MCUCR.PUD` clear (DS40002061B Table 14-1), and `PC6` while it is
+/// `RESET` (Table 14-7). [`PinDrive::Off`] is an input with no pull-up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinDrive {
+    High,
+    Low,
+    PullUp,
+    Off,
+}
+
 /// Who drove a pin edge.
 ///
 /// [`PinOrigin::Usart`] is the transmitter override (`TXD`). [`PinOrigin::Spi`]
@@ -112,23 +129,33 @@ pub enum PinOrigin {
 pub struct PinReport {
     pub pin: u32,
     pub level: Level,
+    /// The pin's own stage from `cycle` on. A report goes out when this or `level` changes.
+    pub drive: PinDrive,
     pub cycle: u64,
     pub origin: PinOrigin,
 }
 
-/// Level of each pin id. [`PinLevels::get`] is `None` for an id this die does
+/// Level and drive of each pin id. [`PinLevels::get`] is `None` for an id this die does
 /// not have. [`Level::Released`] is a floating input. A pull-up is [`Level::High`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PinLevels {
-    levels: [Option<Level>; PIN_COUNT],
+    levels: [Option<(Level, PinDrive)>; PIN_COUNT],
 }
 
 impl PinLevels {
-    pub(crate) fn from_array(levels: [Option<Level>; PIN_COUNT]) -> Self {
+    pub(crate) fn from_array(levels: [Option<(Level, PinDrive)>; PIN_COUNT]) -> Self {
         Self { levels }
     }
 
     pub fn get(self, pin: u32) -> Option<Level> {
+        self.both(pin).map(|(level, _)| level)
+    }
+
+    pub fn drive(self, pin: u32) -> Option<PinDrive> {
+        self.both(pin).map(|(_, drive)| drive)
+    }
+
+    pub(crate) fn both(self, pin: u32) -> Option<(Level, PinDrive)> {
         self.levels.get(pin as usize).copied().flatten()
     }
 }

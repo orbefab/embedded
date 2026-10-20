@@ -4,7 +4,7 @@ use crate::common;
 use common::Instructions;
 use common::{imm, out, sbi};
 
-use sim_avr::{Channel, Cpu, Level};
+use sim_avr::{Channel, Cpu, Level, PinDrive};
 
 #[test]
 fn image_toggles_pin_5() {
@@ -195,11 +195,16 @@ fn poke_of_spi_is_quiet() {
 /// The host already holds PB0 low, so turning the pin into an output low
 /// does not change the pad.
 #[test]
-fn an_output_at_the_host_level_reports_no_edge() {
+fn an_output_at_the_host_level_reports_its_drive_at_the_same_level() {
     let mut cpu = Cpu::new();
     cpu.drive_pin(0, Level::Low);
     let _ = cpu.take_pin();
     cpu.load_words(&[imm(0xE000, 16, 0x01), out(16, 0x04)]);
     cpu.insns(2);
+    let report = cpu.take_pin().expect("the drive changed");
+    assert_eq!(
+        (report.level, report.drive, report.cycle),
+        (Level::Low, PinDrive::Low, 2)
+    );
     assert_eq!(cpu.take_pin(), None);
 }

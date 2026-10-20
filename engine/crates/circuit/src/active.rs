@@ -3,6 +3,7 @@
 //! picks. The circuit sees only its drive image, one `Drive` per output pin. `docs/engine.md`,
 //! Active chips, holds the loop's protocol.
 
+pub(crate) mod avr;
 #[cfg(test)]
 pub(crate) mod script;
 
@@ -16,12 +17,13 @@ use crate::watch::{Levels, Signal, Watch};
 /// What one output pin does. The image, one per output pin, is all the stamp reads, and the
 /// only thing the restart test compares.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), expect(dead_code, reason = "no netlist kind is active yet"))]
 pub(crate) enum Drive {
     /// Through the high stage from the chip's own VCC pin.
     High,
     /// Through the low stage into the chip's own GND pin.
     Low,
+    /// Through the output's pull-up from the chip's own VCC pin.
+    PullUp,
     /// No stamp.
     Off,
 }
@@ -44,6 +46,8 @@ pub(crate) struct Output {
     pub(crate) gnd: NetId,
     pub(crate) high: Stage,
     pub(crate) low: Stage,
+    /// Ohm, greater than 0. `None` on a pin whose core never drives [`Drive::PullUp`].
+    pub(crate) pull_up: Option<f64>,
 }
 
 /// An active chip as the circuit sees it. Read-only for the whole analysis.
@@ -80,17 +84,22 @@ pub(crate) struct Stop {
 /// - `sample` and `input` never change the image. What they cause comes at least 1 ps later.
 #[derive(Clone, Debug)]
 pub(crate) enum Core {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the netlist kind that builds this chip comes next"
+        )
+    )]
+    Avr(Box<avr::Core>),
     #[cfg(test)]
     Script(script::Core),
 }
 
-#[cfg_attr(
-    not(test),
-    expect(unused_variables, reason = "no netlist kind is active yet")
-)]
 impl Core {
     fn run_until(&mut self, limit: Time) -> Option<Stop> {
         match *self {
+            Core::Avr(ref mut core) => core.run_until(limit),
             #[cfg(test)]
             Core::Script(ref mut core) => core.run_until(limit),
         }
@@ -98,6 +107,7 @@ impl Core {
 
     fn drive(&self) -> &[Drive] {
         match *self {
+            Core::Avr(ref core) => core.drive(),
             #[cfg(test)]
             Core::Script(ref core) => core.drive(),
         }
@@ -106,6 +116,7 @@ impl Core {
     /// The volts of each of its samples at its stop at `at`.
     fn sample(&mut self, at: Time, volts: &[f64]) {
         match *self {
+            Core::Avr(ref mut core) => core.sample(at, volts),
             #[cfg(test)]
             Core::Script(ref mut core) => core.sample(at, volts),
         }
@@ -114,6 +125,7 @@ impl Core {
     /// Its watches' levels from `at` on.
     fn input(&mut self, at: Time, levels: &[bool]) {
         match *self {
+            Core::Avr(ref mut core) => core.input(at, levels),
             #[cfg(test)]
             Core::Script(ref mut core) => core.input(at, levels),
         }
@@ -135,6 +147,12 @@ pub(crate) fn stamp(chip: &Chip, core: &Core, sys: &mut System, source_scale: f6
                 let g = 1.0 / output.low.resistance;
                 sys.conductance(output.pin, output.gnd, g);
                 sys.current(output.gnd, output.pin, output.low.drop * g * source_scale);
+            }
+            Drive::PullUp => {
+                let ohm = output
+                    .pull_up
+                    .expect("a pull-up drive on a pin that has one");
+                sys.conductance(output.pin, output.vcc, 1.0 / ohm);
             }
             Drive::Off => {}
         }
@@ -180,10 +198,6 @@ impl Ahead {
 
 impl Actives {
     /// The power-on cores, given their levels on the operating point at t = 0.
-    #[cfg_attr(
-        not(test),
-        expect(unused_variables, unused_mut, reason = "no netlist kind is active yet")
-    )]
     pub(crate) fn new(circuit: &Circuit, levels: &Levels) -> Actives {
         let committed: Vec<Core> = circuit
             .actives

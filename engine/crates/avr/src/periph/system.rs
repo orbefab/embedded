@@ -399,14 +399,18 @@ impl System {
         if fuses::clkps_reserved(code) || code == self.clkpr & CLKPS_MASK {
             return false;
         }
-        let old = self.div.max(1);
         self.clkpr = code;
         self.div = fuses::clkps_div(code);
-        self.wdt_at = scale(self.wdt_at, now, old, self.div);
-        if self.wdce_until != 0 {
-            self.wdce_until = scale(self.wdce_until, now, old, self.div);
-        }
         true
+    }
+
+    /// The watchdog's deadlines in CPU cycles, for a division of `old` replaced by `new`
+    /// from CPU cycle `from`.
+    pub(crate) fn rescale(&mut self, from: u64, old: u32, new: u32) {
+        self.wdt_at = scale(self.wdt_at, from, old, new);
+        if self.wdce_until != 0 {
+            self.wdce_until = scale(self.wdce_until, from, old, new);
+        }
     }
 
     pub(crate) fn commit_windows(&mut self, retire: u64) {
