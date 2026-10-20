@@ -5,6 +5,7 @@ use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
 mod atmega328p;
+mod potentiometer;
 mod waveform;
 
 use super::{
@@ -62,6 +63,12 @@ enum WirePart {
         pins: PinMap,
         resistance: WireValue,
         ratings: WireResistorRatings,
+    },
+    Potentiometer {
+        name: String,
+        pins: PinMap,
+        resistance: WireValue,
+        position: WireValue,
     },
     VoltageSource {
         name: String,
@@ -424,6 +431,7 @@ fn resolve_part(
 ) -> Option<Part> {
     let raw_name = match &part {
         WirePart::Resistor { name, .. }
+        | WirePart::Potentiometer { name, .. }
         | WirePart::VoltageSource { name, .. }
         | WirePart::CurrentSource { name, .. }
         | WirePart::Capacitor { name, .. } => name,
@@ -480,6 +488,14 @@ fn resolve_part(
                 _ => None,
             }
         }
+        WirePart::Potentiometer {
+            pins,
+            resistance,
+            position,
+            ..
+        } => potentiometer::resolve_potentiometer(
+            &name, &part_ref, pins, resistance, position, nets, out,
+        ),
         WirePart::VoltageSource { pins, voltage, .. } => {
             let pins = resolve_pins(&name, VoltageSource::PINS, &pins.0, nets, out);
             let voltage = resolve_waveform(&part_ref, &VOLTAGE, voltage, out);
@@ -952,6 +968,26 @@ fn resolve_value(
         si: value.value,
         source: source(value.source),
     })
+}
+
+fn resolve_fraction(
+    part: &Ref,
+    field: &'static str,
+    value: WireValue,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Value> {
+    let number = value.value.get();
+    let resolved = resolve_value(part, field, "1", false, value, out);
+    if !(number > 0.0 && number < 1.0) {
+        out.push(Diagnostic::NetlistValue {
+            part: part.clone(),
+            field,
+            value: number,
+            rule: ValueRule::Fraction,
+        });
+        return None;
+    }
+    resolved
 }
 
 fn source(wire: WireSource) -> Source {

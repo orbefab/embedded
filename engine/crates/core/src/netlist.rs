@@ -161,6 +161,7 @@ pub struct Part {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Model {
     Resistor(Resistor),
+    Potentiometer(Potentiometer),
     VoltageSource(VoltageSource),
     CurrentSource(CurrentSource),
     Diode(Junction),
@@ -178,6 +179,7 @@ impl Model {
     pub fn pin_names(&self) -> &'static [&'static str] {
         match self {
             Model::Resistor(_) => &Resistor::PINS,
+            Model::Potentiometer(_) => &Potentiometer::PINS,
             Model::VoltageSource(_) => &VoltageSource::PINS,
             Model::CurrentSource(_) => &CurrentSource::PINS,
             Model::Diode(_) | Model::Led(_) => &Junction::PINS,
@@ -188,9 +190,24 @@ impl Model {
         }
     }
 
+    /// `i`, `v` and `p`. A chip and a potentiometer have none.
+    pub fn has_quantities(&self) -> bool {
+        match self {
+            Model::Resistor(_)
+            | Model::VoltageSource(_)
+            | Model::CurrentSource(_)
+            | Model::Diode(_)
+            | Model::Led(_)
+            | Model::Capacitor(_)
+            | Model::Switch(_) => true,
+            Model::Potentiometer(_) | Model::Chip(_) => false,
+        }
+    }
+
     pub fn pins(&self) -> &[NetId] {
         match self {
             Model::Resistor(r) => &r.pins,
+            Model::Potentiometer(p) => &p.pins,
             Model::VoltageSource(v) => &v.pins,
             Model::CurrentSource(c) => &c.pins,
             Model::Diode(j) | Model::Led(j) => &j.pins,
@@ -205,7 +222,8 @@ impl Model {
     pub fn ratings(&self) -> Vec<(RatingKind, &Value)> {
         let (current, power) = match self {
             Model::Resistor(r) => (None, r.max_power.as_ref()),
-            Model::VoltageSource(_)
+            Model::Potentiometer(_)
+            | Model::VoltageSource(_)
             | Model::CurrentSource(_)
             | Model::Capacitor(_)
             | Model::Switch(_)
@@ -223,6 +241,7 @@ impl Model {
             Model::VoltageSource(source) => Some(&source.voltage),
             Model::CurrentSource(source) => Some(&source.current),
             Model::Resistor(_)
+            | Model::Potentiometer(_)
             | Model::Diode(_)
             | Model::Led(_)
             | Model::Capacitor(_)
@@ -244,6 +263,21 @@ pub struct Resistor {
 
 impl Resistor {
     pub const PINS: [&'static str; 2] = ["a", "b"];
+}
+
+/// `a` to `wiper` is `position * resistance`. `wiper` to `b` is the rest.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Potentiometer {
+    /// Nets of pins `a`, `wiper`, `b`.
+    pub pins: [NetId; 3],
+    /// Ohm, greater than 0.
+    pub resistance: Value,
+    /// Fraction of `resistance` from `a` to the wiper, in `(0, 1)`.
+    pub position: Value,
+}
+
+impl Potentiometer {
+    pub const PINS: [&'static str; 3] = ["a", "wiper", "b"];
 }
 
 /// Ideal voltage source. V(p) - V(n) = voltage.

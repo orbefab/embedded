@@ -230,6 +230,16 @@ fn a_threshold_is_a_fraction_of_the_supply_with_low_at_most_high() {
     );
     let equal = chip(|part| part["reset_threshold"]["high"] = value(0.42)).unwrap();
     assert_eq!(values(&equal).reset_threshold.high.si.get(), 0.42);
+    assert_eq!(
+        errors(|part| {
+            part["reset_threshold"]["high"] =
+                serde_json::json!({ "value": 0, "unit": "V", "source": "user" });
+        }),
+        [
+            r##""netlist.unit" ["#u1"] {"expected":"1","field":"reset_threshold.high","found":"V"}"##,
+            r##""netlist.value" ["#u1"] {"field":"reset_threshold.high","rule":"fraction","value":0.0}"##,
+        ]
+    );
 }
 
 #[test]

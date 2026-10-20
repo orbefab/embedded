@@ -13,6 +13,7 @@ Each example has `viewer.json` beside `netlist.json`. The file names the 3D mode
 | `dip-8` | An NE555 in an 8-pin DIP. |
 | `dip-28` | An ATmega328P in a 28-pin DIP. |
 | `led-5mm-red` | A 5 mm red LED, the Kingbright WP7113ID the LED examples cite. |
+| `potentiometer-rotary` | A rotary potentiometer. |
 | `resistor-axial` | An axial resistor. |
 | `tactile-switch-6mm` | A 6 mm tactile push button. The switches in the examples are momentary contacts, so they share this id. |
 

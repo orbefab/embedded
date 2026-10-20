@@ -70,6 +70,8 @@ Ten seconds of `firmware/blink.S` at 16 MHz are 21 stops and 20 edges on PB5. Th
 
 `examples/atmega-button` runs `firmware/button.S` for 1 s with that LED and a push button from PD2 to ground. The pin's pull-up holds PD2 high while the button is open, and the loop copies the inverse of PIND2 to PB5. `crates/cli/tests/button.rs` checks those edges and the LED's current. The bare core runs `button.hex` at about 32e6 cycles a second, against 70e6 to 79e6 for `firmware/blink.S` (`button_throughput`, ignored, beside `blink_throughput`). The seam adds about nothing. The cost is the loop's I/O. Each pass reads two ports and writes `PORTB`. An `OUT`-to-`NOP` swap in loop variants outside the tree takes the button loop from about 32e6 to about 71e6 cycles a second. The `OUT PORTB` of an unchanged value is most of that cost.
 
+`examples/atmega-analog-serial` runs `firmware/analog_serial.S` for 19 ms. A 10 kohm potentiometer sits across VCC and ground with its wiper on PC0. The firmware reads ADC0 against AVCC and prints the code as decimal on TXD, one line per reading. `U2X0` stays clear and `UBRR0` is 103, so a bit is 16 * (103 + 1) cycles, 104 us at 16 MHz (Table 20-1 and Table 20-6). The run prints three lines. `crates/cli/tests/analog_serial.rs` checks the wiper voltage and those frames. On the build machine a release `sim run` takes 0.028 to 0.033 s over seven runs, alternating with `examples/divider`, which takes 0.0015 to 0.0023 s. This run's time is user CPU. Serial output is the TXD waveform in `logic.vcd`. A decoded serial file is not part of the run folder.
+
 ## Fuses
 
 Parse keeps only the fuse settings the model runs, and [netlist.md](netlist.md#atmega328p) lists the rejected ones and why. The core reads these.

@@ -1,6 +1,7 @@
 mod capacitor;
 mod current_source;
 mod junction;
+mod potentiometer;
 mod resistor;
 mod switch;
 mod voltage_source;
@@ -13,7 +14,10 @@ use crate::mna::{Probe, Stamp, Unknowns};
 
 pub(crate) fn unknowns(model: &Model) -> Unknowns {
     match model {
-        Model::Resistor(_) | Model::CurrentSource(_) | Model::Switch(_) => Unknowns::default(),
+        Model::Resistor(_)
+        | Model::Potentiometer(_)
+        | Model::CurrentSource(_)
+        | Model::Switch(_) => Unknowns::default(),
         Model::VoltageSource(_) | Model::Capacitor(_) => Unknowns {
             branches: 1,
             ..Unknowns::default()
@@ -30,6 +34,7 @@ pub(crate) fn unknowns(model: &Model) -> Unknowns {
 pub(crate) fn stamp(model: &Model, stamp: &mut Stamp<'_>) {
     match model {
         Model::Resistor(resistor) => resistor::stamp(resistor, stamp),
+        Model::Potentiometer(pot) => potentiometer::stamp(pot, stamp),
         Model::VoltageSource(source) => voltage_source::stamp(source, stamp),
         Model::CurrentSource(source) => current_source::stamp(source, stamp),
         Model::Diode(j) | Model::Led(j) => junction::stamp(j, stamp),
@@ -48,6 +53,7 @@ pub(crate) fn stamp(model: &Model, stamp: &mut Stamp<'_>) {
 pub(crate) fn initial(model: &Model, out: &mut [f64]) {
     match model {
         Model::Resistor(_)
+        | Model::Potentiometer(_)
         | Model::VoltageSource(_)
         | Model::CurrentSource(_)
         | Model::Capacitor(_)
@@ -61,6 +67,7 @@ pub(crate) fn initial(model: &Model, out: &mut [f64]) {
 pub(crate) fn update(model: &Model, probe: &Probe<'_>, prior: &[f64], next: &mut [f64]) -> Update {
     match model {
         Model::Resistor(_)
+        | Model::Potentiometer(_)
         | Model::VoltageSource(_)
         | Model::CurrentSource(_)
         | Model::Capacitor(_)
@@ -91,17 +98,21 @@ pub(crate) fn dc_paths(model: &Model) -> &'static [(usize, usize)] {
         | Model::Diode(_)
         | Model::Led(_)
         | Model::Switch(_) => &[(0, 1)],
+        Model::Potentiometer(_) => &[(0, 1), (1, 2)],
         Model::Capacitor(capacitor) if capacitor.initial.is_some() => &[(0, 1)],
         Model::Capacitor(_) | Model::CurrentSource(_) => &[],
         Model::Chip(chip) => chip::dc_paths(chip),
     }
 }
 
-/// `i`, `v` and `p` at `at`, in `Quantity` order, for a two-terminal part. A chip has none.
+/// `i`, `v` and `p` at `at`, in `Quantity` order, for a part that `has_quantities`.
 /// Not checked for finiteness.
 pub(crate) fn observe(model: &Model, probe: &Probe<'_>, at: Time) -> Option<[f64; 3]> {
+    if !model.has_quantities() {
+        return None;
+    }
     let (pins, i) = match model {
-        Model::Chip(_) => return None,
+        Model::Chip(_) | Model::Potentiometer(_) => unreachable!("has_quantities returned true"),
         Model::Resistor(resistor) => (resistor.pins, resistor::current(resistor, probe)),
         Model::VoltageSource(source) => (source.pins, voltage_source::current(probe)),
         Model::CurrentSource(source) => (source.pins, current_source::current(source, at)),

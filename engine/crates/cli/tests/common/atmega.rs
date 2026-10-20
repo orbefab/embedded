@@ -1,5 +1,6 @@
-//! The LED closed form, the fixture check, the side-by-side run, and the check that the
-//! LED follows PB5, shared by the ATmega328P firmware examples.
+//! The LED closed form, the potentiometer wiper, the fixture check, the side-by-side run,
+//! the check that the LED follows PB5, and `assert_holds`, shared by the ATmega328P
+//! firmware examples.
 
 use std::fs;
 use std::process::Command;
@@ -91,6 +92,22 @@ struct Levels {
     pub off: f64,
     pub low: f64,
     pub high: f64,
+}
+
+/// The wiper voltage of `rv1` across `v1`, and that supply.
+/// Leakage of `u1` loads the wiper to both rails, and gmin loads the lower leg.
+pub fn wiper_volts(netlist: &serde_json::Value) -> (f64, f64) {
+    let pot = part(netlist, "rv1");
+    assert_eq!(pot["pins"]["a"], "vcc");
+    assert_eq!(pot["pins"]["wiper"], "pc0");
+    assert_eq!(pot["pins"]["b"], "gnd");
+    let x = value(&pot["position"]);
+    let ohms = value(&pot["resistance"]);
+    let leak = value(&part(netlist, "u1")["leakage_resistance"]);
+    let vcc = value(&part(netlist, "v1")["voltage"]);
+    let g_hi = 1.0 / (x * ohms) + 1.0 / leak;
+    let g_lo = 1.0 / ((1.0 - x) * ohms) + 1.0 / leak + GMIN;
+    (vcc * g_hi / (g_hi + g_lo), vcc)
 }
 
 /// Both drops are 0 V, so each stage is a resistance to its rail.
@@ -243,6 +260,46 @@ pub fn assert_led_follows(beside: &Beside, pb5: &[(u64, bool)], driven_ps: u64) 
             rows[k + 1].0,
             edge + RESTART_PS,
             "the restart after {edge} ps"
+        );
+    }
+}
+
+fn near_relative(got: f64, want: f64) -> bool {
+    (got - want).abs() <= 1e-8 * want.abs()
+}
+
+/// Every grid sample, envelope bound, and step of `reference` is `want` within 1e-8 relative,
+/// the divider bound in docs/run-folder.md.
+pub fn assert_holds(beside: &Beside, reference: &str, want: f64) {
+    let (mins, maxs) = beside.folder.bounds(reference);
+    for (k, (&low, &high)) in mins.iter().zip(maxs).enumerate() {
+        assert!(
+            near_relative(low, want) && near_relative(high, want),
+            "{reference} interval {k}: {low}..{high}, not {want}"
+        );
+    }
+    let rows = beside.folder.time.len();
+    let j = beside
+        .folder
+        .refs
+        .iter()
+        .position(|item| item == reference)
+        .unwrap();
+    for (k, &got) in beside.folder.analog[j * rows..(j + 1) * rows]
+        .iter()
+        .enumerate()
+    {
+        assert!(
+            near_relative(got, want),
+            "{reference} row {k}: {got}, not {want}"
+        );
+    }
+    let step_trace = beside.steps.trace().unwrap();
+    for (at, &got) in step_trace.time().iter().zip(step_trace.column(j)) {
+        assert!(
+            near_relative(got, want),
+            "{reference} at {} ps: {got}, not {want}",
+            at.as_ps()
         );
     }
 }

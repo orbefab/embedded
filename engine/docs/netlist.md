@@ -106,6 +106,16 @@ Two nets, or two parts, with the same name are `netlist.duplicate`. The ref is `
 
 `ratings` holds `power`. See [Ratings](#ratings).
 
+### Potentiometer
+
+`kind` is `potentiometer`. Pins are `a`, `wiper`, and `b`, in that order. `a` to `wiper` is `position * resistance`. `wiper` to `b` is `(1 - position) * resistance`.
+
+`resistance` follows the resistor's rules, unit `ohm`. `position` is in `1`, greater than 0 and less than 1. A value at 0 or 1, or outside that range, is `netlist.value` with rule `fraction`. A different unit is `netlist.unit`.
+
+Each leg must be positive, and its reciprocal must be finite, the same check as `resistance`. A leg that breaks it is `netlist.value` on field `resistance`, and `value` is that leg.
+
+A potentiometer has no `ratings` field. It has no `i`, `v`, or `p`. Both legs are DC paths.
+
 ### Voltage source
 
 `kind` is `voltage_source`. Pins are `p` and `n`. The source sets `V(p) - V(n)` equal to `voltage`.
@@ -428,6 +438,8 @@ This document runs `firmware/toggle.S` at 16 MHz into 1 kohm on PB5. `cx1` and `
 
 `examples/atmega-button` is this part with these values running `firmware/button.S`. A push button connects PD2 to ground. PD2's pull-up holds the pin high while the button is open, and the loop copies the inverse of PIND2 onto PB5, so the LED is on while the button is held. The contact bounces and the firmware does not debounce, so the LED follows the bounces a pass of the loop can sample. Seed 26 is the smallest seed that leaves one closed level shorter than a pass, and the LED does not follow that level. Its 1 s run is three presses of 200 ms, on a 10 ms grid.
 
+`examples/atmega-analog-serial` is this part with these values running `firmware/analog_serial.S`. A 10 kohm potentiometer sits across VCC and ground with its wiper on PC0, which is ADC0. Its position is 1023/2048, so the wiper is in the middle of ADC step 512. The firmware prints that code as decimal on TXD, one line per reading. The 19 ms run prints three lines, on a 20 us grid.
+
 | Field | Unit | Rule |
 | --- | --- | --- |
 | `firmware` | Intel HEX text | records 00 to 05, an end record, every byte inside the 32 KB flash |
@@ -482,7 +494,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | --- | --- | --- |
 | `resistor` | `power` | `#<part>.p` |
 | `diode`, `led` | `current`, `power` | `#<part>.i`, `#<part>.p` |
-| `voltage_source`, `current_source`, `capacitor`, `switch`, `ne555`, `atmega328p` | none | |
+| `voltage_source`, `current_source`, `capacitor`, `switch`, `ne555`, `atmega328p`, `potentiometer` | none | |
 
 `current` is in `A`. `power` is in `W`. A rating must be greater than 0. A missing key, an unknown key, and a missing `ratings` object are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.current` or `ratings.power`. A value of 0 or below is `netlist.value` with the same field.
 
@@ -527,6 +539,8 @@ For a diode or LED, `i` is the current through `Rs`, and `p` includes the power 
 For a capacitor, `i` is the solved current into pin `a`. For a switch, `i` is `v` over the resistance of the contact on the interval that ends at that time. For a current source, `i` is minus its `current` on the interval that ends at that time, since that current leaves at `p`.
 
 On the divider, `#r1.i` and `#r2.i` are positive, `#r1.p` and `#r2.p` are positive, and `#v1.i` and `#v1.p` are negative. On `examples/i-divider`, `#i1.i` is -0.001 and `#i1.p` is negative.
+
+A potentiometer has no `i`, `v`, or `p`. Its pins and nets are observed as every part's are.
 
 ## Refs
 

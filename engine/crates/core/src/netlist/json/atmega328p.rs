@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 
 use super::{
-    PinMap, WireInt, WireOutputStage, WireValue, resolve_int, resolve_output_stage, resolve_pins,
-    resolve_value,
+    PinMap, WireInt, WireOutputStage, WireValue, resolve_fraction, resolve_int,
+    resolve_output_stage, resolve_pins, resolve_value,
 };
 use crate::diagnostic::{Diagnostic, FirmwareRule, ValueRule};
 use crate::name::{Name, Ref};
@@ -171,22 +171,8 @@ fn resolve_threshold(
     wire: WireThreshold,
     out: &mut Vec<Diagnostic>,
 ) -> Option<Threshold> {
-    let fraction = |field, value: WireValue, out: &mut Vec<Diagnostic>| {
-        let number = value.value.get();
-        let value = resolve_value(part, field, "1", false, value, out)?;
-        if !(number > 0.0 && number < 1.0) {
-            out.push(Diagnostic::NetlistValue {
-                part: part.clone(),
-                field,
-                value: number,
-                rule: ValueRule::Fraction,
-            });
-            return None;
-        }
-        Some(value)
-    };
-    let low = fraction(low_field, wire.low, out);
-    let high = fraction(high_field, wire.high, out);
+    let low = resolve_fraction(part, low_field, wire.low, out);
+    let high = resolve_fraction(part, high_field, wire.high, out);
     let (low, high) = (low?, high?);
     if low.si.get() > high.si.get() {
         out.push(Diagnostic::NetlistValue {
