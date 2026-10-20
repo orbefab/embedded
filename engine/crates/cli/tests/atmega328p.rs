@@ -1,6 +1,9 @@
+mod common;
+
 use std::fs;
 use std::path::PathBuf;
 
+use common::{read_vcd, summary};
 use sim_core::name::Ref;
 use sim_core::timestamp::Timestamp;
 
@@ -97,11 +100,8 @@ fn the_documented_firmware_is_toggle_hex() {
     );
 }
 
-/// `toggle.S` drives PB5 low at cycle 2, onto a pin its load already holds at 0 V, then toggles
-/// it at cycle 4 and every 100 cycles. Each edge is a row on the old level at its cycle's
-/// picosecond, and the restart's 1 ns step after it holds the new one.
-#[test]
-fn pb5_switches_at_the_picosecond_of_each_cycle_the_firmware_implies() {
+/// Every accepted step of the documented example, with PB5's volts.
+fn pb5_steps() -> Vec<(u64, f64)> {
     let netlist = sim_core::netlist::parse(documented().as_bytes()).unwrap();
     let results = sim_circuit::simulate_steps(&netlist);
     assert!(
@@ -112,12 +112,20 @@ fn pb5_switches_at_the_picosecond_of_each_cycle_the_firmware_implies() {
     let trace = results.trace().unwrap();
     let pb5: Ref = "#net.pb5".parse().unwrap();
     let column = trace.columns().iter().position(|r| *r == pb5).unwrap();
-    let rows: Vec<(u64, f64)> = trace
+    trace
         .time()
         .iter()
         .map(|at| at.as_ps())
         .zip(trace.column(column).iter().copied())
-        .collect();
+        .collect()
+}
+
+/// `toggle.S` drives PB5 low at cycle 2, onto a pin its load already holds at 0 V, then toggles
+/// it at cycle 4 and every 100 cycles. Each edge is a row on the old level at its cycle's
+/// picosecond, and the restart's 1 ns step after it holds the new one.
+#[test]
+fn pb5_switches_at_the_picosecond_of_each_cycle_the_firmware_implies() {
+    let rows = pb5_steps();
     let edges: Vec<(u64, bool)> = rows
         .windows(2)
         .filter(|pair| (pair[0].1 > 2.5) != (pair[1].1 > 2.5))
@@ -152,6 +160,131 @@ fn pb5_switches_at_the_picosecond_of_each_cycle_the_firmware_implies() {
             (304 * CYCLE_PS, false),
         ]
     );
+}
+
+/// The run folder's `logic.vcd` read back, and its `observations.json`.
+fn logic(done: &sim_cli::Completed) -> (serde_json::Value, serde_json::Value) {
+    let vcd = done.folder.file("traces/logic.vcd").unwrap();
+    let vcd = read_vcd(std::str::from_utf8(vcd).unwrap());
+    let observations = done.folder.file("observations.json").unwrap();
+    (vcd, serde_json::from_slice(observations).unwrap())
+}
+
+/// `(t_ps, high)` of each change `read_vcd` found on `signal`.
+fn vcd_edges(vcd: &serde_json::Value, signal: &str) -> Vec<(u64, bool)> {
+    vcd[signal]["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|edge| (edge["t_ps"].as_u64().unwrap(), edge["level"] == "high"))
+        .collect()
+}
+
+/// In `toggle.S`, `SBI DDRB,5` and the first `SBI PINB,5` take two cycles each, and a pass of
+/// its loop takes 2 + 1 + 3 * 31 - 1 + 3 + 2 (DS40002198B, AVRe column).
+#[test]
+fn the_documented_logic_vcd_has_pb5_change_where_its_node_crosses() {
+    let (first, pass) = (2 + 2, 2 + 1 + 3 * 31 - 1 + 3 + 2);
+    let edges: Vec<(u64, bool)> = (0..4)
+        .map(|k| (first + pass * k) * CYCLE_PS)
+        .zip([true, false, true, false])
+        .collect();
+    let crossings: Vec<(u64, bool)> = pb5_steps()
+        .windows(2)
+        .filter(|pair| (pair[0].1 > 2.5) != (pair[1].1 > 2.5))
+        .map(|pair| (pair[0].0, pair[1].1 > 2.5))
+        .collect();
+    assert_eq!(crossings, edges);
+
+    let done = sim_cli::run(documented().as_bytes(), Timestamp::from_unix_seconds(0));
+    let (vcd, observations) = logic(&done);
+    assert_eq!(vcd_edges(&vcd, "#u1.logic.PB5"), edges);
+    assert_eq!(summary(&vcd), observations["logic"]);
+    let quiet = observations["logic"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(_, signal)| signal["count"] == 0)
+        .count();
+    assert_eq!(quiet, 21, "every signal but PB5 holds its level");
+    let index: serde_json::Value =
+        serde_json::from_slice(done.folder.file("traces/index.json").unwrap()).unwrap();
+    let signals: Vec<&str> = index["logic"]["signals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|signal| signal["ref"].as_str().unwrap())
+        .collect();
+    let keys: Vec<&str> = observations["logic"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(signals, keys);
+    assert_eq!(signals.len(), 22);
+}
+
+/// examples/ne555-led beside the documented ATmega328P, each of its parts and nets but ground
+/// renamed with an `x` in front, and its timing capacitor 1e4 times smaller, so its OUT turns
+/// within the run. `xu1` sorts after `u1`, so the passive chip's signals follow the active one's.
+#[test]
+fn an_ne555_and_an_atmega328p_in_one_netlist_both_write_their_signals() {
+    let mut netlist: serde_json::Value = serde_json::from_str(&documented()).unwrap();
+    netlist["analysis"]["transient"]["stop_ps"] = 100_000_000.into();
+    let astable: serde_json::Value =
+        serde_json::from_str(&repo("examples/ne555-led/netlist.json")).unwrap();
+    let rename = |net: &serde_json::Value| -> serde_json::Value {
+        match net.as_str().unwrap() {
+            "gnd" => "gnd".into(),
+            net => format!("x{net}").into(),
+        }
+    };
+    for net in astable["nets"].as_array().unwrap() {
+        if net != "gnd" {
+            netlist["nets"].as_array_mut().unwrap().push(rename(net));
+        }
+    }
+    for part in astable["parts"].as_array().unwrap() {
+        let mut part = part.clone();
+        part["name"] = format!("x{}", part["name"].as_str().unwrap()).into();
+        for net in part["pins"].as_object_mut().unwrap().values_mut() {
+            *net = rename(net);
+        }
+        if part["name"] == "xc1" {
+            part["capacitance"]["value"] = 1e-9.into();
+        }
+        netlist["parts"].as_array_mut().unwrap().push(part);
+    }
+    let done = sim_cli::run(
+        netlist.to_string().as_bytes(),
+        Timestamp::from_unix_seconds(0),
+    );
+    assert!(
+        done.results.diagnostics().is_empty(),
+        "{:?}",
+        done.results.diagnostics()
+    );
+    let (vcd, observations) = logic(&done);
+    assert_eq!(summary(&vcd), observations["logic"]);
+    let keys: Vec<&String> = observations["logic"].as_object().unwrap().keys().collect();
+    assert_eq!(keys.len(), 26);
+    assert_eq!(
+        keys[21..],
+        [
+            "#u1.logic.VCC",
+            "#xu1.logic.out",
+            "#xu1.logic.reset",
+            "#xu1.logic.thres",
+            "#xu1.logic.trig"
+        ]
+    );
+    assert_eq!(vcd_edges(&vcd, "#u1.logic.PB5").len(), 16);
+    assert!(vcd_edges(&vcd, "#xu1.logic.out").len() >= 2);
+    let text = std::str::from_utf8(done.folder.file("traces/logic.vcd").unwrap()).unwrap();
+    let u1 = text.find("$scope module u1 $end").unwrap();
+    let xu1 = text.find("$scope module xu1 $end").unwrap();
+    assert!(u1 < xu1);
 }
 
 /// 1 uA, the leakage bound of Table 30-1, into an off pin through 1 kohm. The pin's leakage to

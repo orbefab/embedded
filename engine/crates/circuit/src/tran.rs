@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BinaryHeap, VecDeque};
 use sim_core::diagnostic::{Diagnostic, Solve};
 use sim_core::finite::Finite;
 use sim_core::logic::Logic;
-use sim_core::name::{Name, Ref};
+use sim_core::name::Ref;
 use sim_core::netlist::{Edge, Model, Netlist, Transient};
 use sim_core::run_folder::{Observations, OpPoint};
 use sim_core::time::Time;
@@ -219,16 +219,9 @@ impl Record<'_> {
         }
     }
 
-    /// Every chip signal's level from `at` on: one `Ref::Logic` per signal, chips in slot order.
+    /// Every chip signal's level from `at` on: one `Ref::Logic` per signal, chips in part order.
     fn logic(&mut self, at: Time, circuit: &Circuit, chips: &[chip::State], levels: &Levels) {
-        let mut now = Vec::new();
-        for (slot, ((_, chip), state)) in circuit.chips().zip(chips).enumerate() {
-            now.extend(chip::levels(
-                chip,
-                state,
-                levels.of(circuit.watches.of(slot)),
-            ));
-        }
+        let now = circuit.logic_levels(chips, levels);
         match &mut self.logic {
             Some(logic) => {
                 for (signal, level) in now.into_iter().enumerate() {
@@ -236,21 +229,9 @@ impl Record<'_> {
                 }
             }
             None if now.is_empty() => {}
-            None => self.logic = Some(Logic::new(signals(circuit), now)),
+            None => self.logic = Some(Logic::new(circuit.logic_refs(), now)),
         }
     }
-}
-
-fn signals(circuit: &Circuit) -> Vec<Ref> {
-    circuit
-        .chips()
-        .flat_map(|(id, chip)| {
-            let part = &circuit.netlist.part(id).name;
-            chip::signals(chip)
-                .iter()
-                .map(|signal| Ref::Logic(part.clone(), Name::new(signal).expect("signal name")))
-        })
-        .collect()
 }
 
 /// The whole state a step starts from. Replaced, never mutated, on accept. A retry, a

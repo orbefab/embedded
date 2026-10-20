@@ -422,7 +422,7 @@ This document runs `firmware/toggle.S` at 16 MHz into 1 kohm on PB5. `cx1` and `
 }
 ```
 
-`firmware/toggle.S` drives PB5 low at cycle 2, high at cycle 4, and toggles it every 100 cycles after that. A cycle of a 16 MHz crystal is 62,500 ps, so PB5 rises at 250,000 ps, falls at 6,500,000 ps, and rises again at 12,750,000 ps. Each edge lands at its picosecond, as [engine.md](engine.md#active-chips) says.
+`firmware/toggle.S` drives PB5 low at cycle 2, high at cycle 4, and toggles it every 100 cycles after that. A cycle of a 16 MHz crystal is 62,500 ps, so PB5 rises at 250,000 ps, falls at 6,500,000 ps, and rises again at 12,750,000 ps. Each edge lands at its picosecond, as [engine.md](engine.md#active-chips) says, and `#u1.logic.PB5` changes there.
 
 | Field | Unit | Rule |
 | --- | --- | --- |
@@ -468,7 +468,7 @@ Table 30-1's limits are wider. The pull-up there is 20 to 50 kohm and the reset 
 
 Each port pin, `PC6` included, is a DC path to `VCC` and to `GND_8` in every drive state, through its leakage, and the solve stamps that leakage in every state. An output stage beside it moves the pin by about 5 ppm of the supply. A net that only an off pin holds solves on that leakage, not on gmin. `PB6`, `PB7` and `AREF` join nothing, so a net reached only through them is `net.floating`. So is a net reached only through `AVCC`. §1.1.7 makes `AVCC` the supply of the ADC and of `PC3` to `PC0`, and says it must be connected to `VCC` even when the ADC is unused. The model draws every pin's stages, `PC3` to `PC0` included, from `VCC`, and reads `AVCC` only at an ADC sample, so it joins nothing. That is the datasheet's circuit while `AVCC` is wired to `VCC`, and an `AVCC` left on a net of its own is reported. An unused port pin on a net of its own is not. An off pin with no load sits at half the supply, inside the band between the defaults' `input_threshold.low` and `input_threshold.high`, so it reads low from power-on and then keeps its last level. Thresholds that put half the supply outside the band read it as that side.
 
-An ATmega328P has no `ratings` object. [avr.md](avr.md#ratings) names its ratings, and a later PR checks them. It has no `i`, `v`, or `p`, and no logic signals yet.
+An ATmega328P has no `ratings` object. [avr.md](avr.md#ratings) names its ratings, and a later PR checks them. It has no `i`, `v`, or `p`. Its logic signals are its watched pins, described in [Refs](#refs).
 
 ## Ratings
 
@@ -551,6 +551,6 @@ These texts parse and format back to the same text. The following texts are reje
 - `#net.1vout`, `#1r`, because the name is illegal
 - `#r1.x`, `#r1.i.v`
 
-`#net.vout` is a net. `#net` is a part named `net`. `#u1.logic.out` is the level the chip drives on OUT, and `#u1.pin.out` is the pin itself. An NE555's signals are `out`, `reset`, `thres`, and `trig`.
+`#net.vout` is a net. `#net` is a part named `net`. `#u1.logic.out` is the level the chip drives on OUT, and `#u1.pin.out` is the pin itself. An NE555's signals are `out`, `reset`, `thres`, and `trig`. An ATmega328P's are named for its package pins: `PB0` to `PB5`, `PC0` to `PC6`, and `PD0` to `PD7`, each the level that pin reads, and `VCC` while `BODLEVEL` enables brown-out, the level its brown-out detector reads on the supply. `PB6` and `PB7` hold the crystal and have none. `#u1.logic.PB5` is the level PB5 reads, and `#u1.pin.PB5` is the pin itself.
 
 Map keys and diagnostic order use this order: nets, then parts, then pins, then quantities, then logic signals. Quantities sort `i`, then `v`, then `p`. Names sort by byte order inside one group.

@@ -69,6 +69,7 @@ pub(crate) fn chip(
             offset: 2.5,
             ..v_in.clone()
         })],
+        signals: Vec::new(),
         samples: vec![v_in],
         core: super::Core::Script(Core::new(script, echo)),
     }

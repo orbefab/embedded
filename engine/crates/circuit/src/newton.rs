@@ -1,5 +1,6 @@
 use sim_core::diagnostic::Diagnostic;
-use sim_core::name::Ref;
+use sim_core::logic::Level;
+use sim_core::name::{Name, Ref};
 use sim_core::netlist::{Model, Netlist, PartId, Waveform};
 use sim_core::time::Time;
 
@@ -22,6 +23,14 @@ pub(crate) struct Circuit<'n> {
     pub(crate) watches: Watches,
     /// By active slot.
     pub(crate) actives: Vec<active::Chip>,
+    /// Every chip a netlist part builds, sorted by part, which is the order of the logic refs.
+    logic: Vec<(PartId, Slot)>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Slot {
+    Passive(usize),
+    Active(usize),
 }
 
 impl<'n> Circuit<'n> {
@@ -55,11 +64,25 @@ impl<'n> Circuit<'n> {
                 limit: crate::dense::MAX_UNKNOWNS,
             });
         }
+        let mut logic: Vec<(PartId, Slot)> = layout
+            .chips()
+            .iter()
+            .enumerate()
+            .map(|(slot, &(id, _))| (id, Slot::Passive(slot)))
+            .chain(
+                actives
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(k, chip)| Some((chip.part?, Slot::Active(k)))),
+            )
+            .collect();
+        logic.sort_unstable_by_key(|&(id, _)| id);
         let mut circuit = Circuit {
             netlist,
             layout,
             watches: Watches::new(Vec::new()),
             actives,
+            logic,
         };
         let watches = circuit
             .chips()
@@ -72,6 +95,56 @@ impl<'n> Circuit<'n> {
 
     pub(crate) fn active_watches(&self, k: usize) -> std::ops::Range<usize> {
         self.watches.of(self.layout.chips().len() + k)
+    }
+
+    pub(crate) fn logic_refs(&self) -> Vec<Ref> {
+        let mut refs = Vec::new();
+        for &(id, slot) in &self.logic {
+            let part = &self.netlist.part(id).name;
+            let signal =
+                |name: &str| Ref::Logic(part.clone(), Name::new(name).expect("signal name"));
+            match slot {
+                Slot::Passive(slot) => {
+                    refs.extend(
+                        chip::signals(self.layout.chips()[slot].1)
+                            .iter()
+                            .map(|name| signal(name)),
+                    );
+                }
+                Slot::Active(k) => {
+                    refs.extend(
+                        self.actives[k]
+                            .signals
+                            .iter()
+                            .map(|&(name, _)| signal(name)),
+                    );
+                }
+            }
+        }
+        refs
+    }
+
+    pub(crate) fn logic_levels(&self, chips: &[chip::State], levels: &Levels) -> Vec<Level> {
+        let mut now = Vec::new();
+        for &(_, slot) in &self.logic {
+            match slot {
+                Slot::Passive(slot) => {
+                    let (_, chip) = self.layout.chips()[slot];
+                    let watched = levels.of(self.watches.of(slot));
+                    now.extend(chip::levels(chip, &chips[slot], watched));
+                }
+                Slot::Active(k) => {
+                    let watched = levels.of(self.active_watches(k));
+                    now.extend(
+                        self.actives[k]
+                            .signals
+                            .iter()
+                            .map(|&(_, watch)| Level::from_bool(watched[watch])),
+                    );
+                }
+            }
+        }
+        now
     }
 
     /// The passive chips in slot order.

@@ -58,12 +58,13 @@ pub(crate) struct Output {
 #[derive(Clone, Debug)]
 pub(crate) struct Chip {
     /// `None` only on a test's script chip, which no netlist part builds.
-    #[expect(dead_code, reason = "the logic signals that name the part come next")]
     pub(crate) part: Option<PartId>,
     /// In the order of its core's image.
     pub(crate) outputs: Vec<Output>,
     /// The levels its core reads, in the order its core reads them.
     pub(crate) watches: Vec<Watch>,
+    /// Its logic signals in name order, each with the index of the watch whose level it shows.
+    pub(crate) signals: Vec<(&'static str, usize)>,
     /// The voltages its core reads at a sample, in the order it reads them.
     pub(crate) samples: Vec<Signal>,
     /// The core at power-on.

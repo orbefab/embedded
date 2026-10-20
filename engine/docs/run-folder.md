@@ -1,6 +1,6 @@
 # Run folder
 
-`sim run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and an ATmega328P has none yet.
+`sim run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and so does an ATmega328P.
 
 ```text
 <dir>/
@@ -93,7 +93,7 @@ A transient writes `end_ps`, then `op`, then `switches`. `end_ps` is the last ti
 }
 ```
 
-A netlist whose chips have logic signals adds `logic` after `switches`. It maps each logic ref to a summary of that signal up to `end_ps`. Every chip signal is listed, inputs included, so an agent can check whether and when each comparator flipped. An input's level is what its comparator reads, and OUT's is the level the latch drives.
+A netlist whose chips have logic signals adds `logic` after `switches`. It maps each logic ref to a summary of that signal up to `end_ps`. Every chip signal is listed, inputs included, so an agent can check whether and when each comparator flipped. An NE555 input's level is what its comparator reads, and OUT's is the level the latch drives. An ATmega328P's signals are its watched pins, each the level that pin reads, and `VCC` while brown-out is fused on, which is low while the supply holds the chip in brown-out reset ([netlist.md](netlist.md#refs)). A pin the firmware drives reads the level its drive makes, from the picosecond of the drive's stop. An input reads its level from the picosecond its threshold is crossed, which is where the core takes it. A drive change or a source jump at exactly `stop_ps` is not in the run, since no restart runs there ([engine.md](engine.md#chip-events)).
 
 | Key | Meaning |
 | --- | --- |
@@ -115,6 +115,27 @@ Levels are `low` and `high`, so the first change is to the level opposite `initi
     "last_ps": 3842818967770
   },
   "#u1.logic.reset": {
+    "initial": "high",
+    "final": "high",
+    "count": 0,
+    "first_ps": null,
+    "last_ps": null
+  }
+}
+```
+
+The ATmega328P example in [netlist.md](netlist.md#atmega328p) toggles PB5 at cycles 4, 104, 204 and 304 of its 16 MHz crystal, 62,500 ps each, and writes, abridged:
+
+```json
+"logic": {
+  "#u1.logic.PB5": {
+    "initial": "low",
+    "final": "low",
+    "count": 4,
+    "first_ps": 250000,
+    "last_ps": 19000000
+  },
+  "#u1.logic.PC6": {
     "initial": "high",
     "final": "high",
     "count": 0,
@@ -250,7 +271,31 @@ $end
 0#
 ```
 
-- One `$scope module` per chip, in part order. Each signal's `$var` name is its bare name, in name order.
+The same example's `logic.vcd`, abridged to PB5 and the `$var` lines around it:
+
+```text
+$timescale 1 ps $end
+$scope module u1 $end
+$var wire 1 % PB4 $end
+$var wire 1 & PB5 $end
+$var wire 1 ' PC0 $end
+$upscope $end
+$enddefinitions $end
+#0
+$dumpvars
+0&
+$end
+#250000
+1&
+#6500000
+0&
+#12750000
+1&
+#19000000
+0&
+```
+
+- One `$scope module` per chip, in part order. Each signal's `$var` name is its bare name, in name order. An ATmega328P's run `PB0` to `PD7`, then `VCC` while brown-out is fused on.
 - Identifiers are base 94 over the printable characters from `!`, by signal index in ref order, least significant first.
 - `#0` with `$dumpvars` holds the levels at t = 0. Then one `#<ps>` line per time with a change, its changes in signal order.
 - Times are integer picoseconds. There is no `$date` and no `$version`, so the file has no clock read and no float.

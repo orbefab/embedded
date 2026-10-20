@@ -10,6 +10,8 @@ use crate::active::avr::{self, PACKAGE, Pad, port_index};
 use crate::active::{self, Drive};
 use crate::newton::Circuit;
 use sim_core::diagnostic::Diagnostic;
+use sim_core::logic::Level;
+use sim_core::name::Ref;
 use sim_core::trace::Trace;
 
 const BLINK: &str = include_str!("../../../../../firmware/blink.hex");
@@ -121,6 +123,9 @@ fn reset_releases_at_its_own_threshold() {
         pb5.iter().any(|&(t, v)| t > US && v < 0.1),
         "released and running"
     );
+    let logic = trace.logic().unwrap();
+    assert_eq!(logic.initial()[signal(&trace, "PC6")], Level::Low);
+    assert_eq!(edges(&trace, "PC6"), [(US, true)]);
 }
 
 fn board(stop_ps: u64, nets: &[&str], parts: &[String], mcu: String) -> Netlist {
@@ -390,6 +395,7 @@ fn a_brown_out_holds_every_pin_off() {
     );
     let (trace, diagnostics) = run(&netlist);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    assert_eq!(edges(&trace, "VCC"), [(20 * US, false)]);
     let pb5 = volts(&trace, "pb5");
     assert!(at(&pb5, 20 * US) > 4.9, "{}", at(&pb5, 20 * US));
     assert!(
@@ -408,6 +414,255 @@ fn a_brown_out_holds_every_pin_off() {
         };
         assert!((v - expected).abs() < 1e-5, "{name} is off: {v}");
     }
+}
+
+fn signal(trace: &Trace, pin: &str) -> usize {
+    let signal: Ref = format!("#u1.logic.{pin}").parse().unwrap();
+    let logic = trace.logic().expect("an ATmega328P has logic signals");
+    logic.signals().iter().position(|s| *s == signal).unwrap()
+}
+
+/// Each change of `#u1.logic.<pin>` after t = 0: its picosecond, and whether it reads high.
+fn edges(trace: &Trace, pin: &str) -> Vec<(u64, bool)> {
+    let index = signal(trace, pin);
+    trace
+        .logic()
+        .unwrap()
+        .changes()
+        .iter()
+        .filter(|change| change.signal == index)
+        .map(|change| (change.at.as_ps(), change.level == Level::High))
+        .collect()
+}
+
+/// Every port pin but the crystal's, then `VCC` while brown-out is fused on.
+#[test]
+fn each_watched_pin_is_a_signal_in_name_order() {
+    let signals = |fuses: FuseBytes| {
+        let netlist = board(US, &[], &[], atmega("vcc", TOGGLE, MHZ_16, fuses));
+        let (trace, diagnostics) = run(&netlist);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let logic = trace.logic().unwrap();
+        logic
+            .signals()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    };
+    let pins: Vec<String> = [("B", 6), ("C", 7), ("D", 8)]
+        .into_iter()
+        .flat_map(|(port, bits)| (0..bits).map(move |bit| format!("#u1.logic.P{port}{bit}")))
+        .collect();
+    let mut with_vcc = pins.clone();
+    with_vcc.push("#u1.logic.VCC".to_string());
+    assert_eq!(signals(FUSES), with_vcc);
+    let no_brown_out = FuseBytes {
+        extended: 0xFF,
+        ..FUSES
+    };
+    assert_eq!(signals(no_brown_out), pins);
+}
+
+/// `toggle.S` drives PB5 low at cycle 2, onto the low its load already holds, then high at 4,
+/// and toggles it every 100 cycles. The pin reads each level its drive makes at the drive's
+/// stop, which the restart's solve holds.
+#[test]
+fn a_driven_pin_reads_its_own_drive_at_its_stop() {
+    let netlist = board(
+        40 * US,
+        &[],
+        &[resistor("rl", "pb5", "gnd", 1000.0)],
+        atmega("vcc", TOGGLE, MHZ_14_7456, FUSES),
+    );
+    let (trace, diagnostics) = run(&netlist);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let expected: Vec<(u64, bool)> = (0..)
+        .map(|k| ps(4 + 100 * k, MHZ_14_7456))
+        .take_while(|&at| at < 40 * US)
+        .zip([true, false].into_iter().cycle())
+        .collect();
+    assert_eq!(expected[..2], [(271_268, true), (7_052_952, false)]);
+    assert_eq!(edges(&trace, "PB5"), expected);
+    let pb5 = volts(&trace, "pb5");
+    for &(at, _) in &expected {
+        assert!(restarted(&pb5, at), "a restart at {at} ps");
+    }
+    let pb5 = signal(&trace, "PB5");
+    let logic = trace.logic().unwrap();
+    assert!(logic.changes().iter().all(|change| change.signal == pb5));
+}
+
+/// A pulse straight onto PD2 reads high and low at its jumps, which the restart's solve holds.
+#[test]
+fn an_input_on_a_source_reads_the_sources_jumps() {
+    let pulse = r#"{ "name": "vs", "kind": "voltage_source", "pins": { "p": "pd2", "n": "gnd" },
+          "voltage": { "kind": "pulse", "initial": { "value": 0.0, "unit": "V", "source": "user" },
+                       "pulsed": { "value": 5.0, "unit": "V", "source": "user" },
+                       "delay_ps": 2000000, "width_ps": 3000000, "period_ps": 10000000 } }"#;
+    let netlist = board(
+        24 * US,
+        &[],
+        &[pulse.to_string()],
+        atmega("vcc", TOGGLE, MHZ_16, FUSES),
+    );
+    let (trace, diagnostics) = run(&netlist);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    assert_eq!(
+        edges(&trace, "PD2"),
+        [
+            (2 * US, true),
+            (5 * US, false),
+            (12 * US, true),
+            (15 * US, false),
+            (22 * US, true),
+        ]
+    );
+}
+
+/// A pulse through 10 kohm into 1 nF ramps PD2 up and down over about 10 us. It reads high at
+/// the first picosecond above the high fraction of VCC and low at the first at or under the
+/// low one, once each. `echo.S` copies PD2 to PB5, which follows each flip on a cycle.
+#[test]
+fn a_slow_input_flips_once_at_each_threshold() {
+    let pulse = r#"{ "name": "vs", "kind": "voltage_source", "pins": { "p": "src", "n": "gnd" },
+          "voltage": { "kind": "pulse", "initial": { "value": 0.0, "unit": "V", "source": "user" },
+                       "pulsed": { "value": 5.0, "unit": "V", "source": "user" },
+                       "delay_ps": 1000000, "width_ps": 40000000, "period_ps": 200000000 } }"#;
+    let netlist = board(
+        80 * US,
+        &["src"],
+        &[
+            pulse.to_string(),
+            resistor("rs", "src", "pd2", 10e3),
+            capacitor("cs", "pd2", 1e-9),
+            resistor("rl", "pb5", "gnd", 1000.0),
+        ],
+        atmega("vcc", ECHO, MHZ_16, FUSES),
+    );
+    let (trace, diagnostics) = run(&netlist);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let pd2 = edges(&trace, "PD2");
+    let [(rise, true), (fall, false)] = pd2[..] else {
+        panic!("{pd2:?}");
+    };
+    let v = volts(&trace, "pd2");
+    let high = documented("/input_threshold/high/value") * 5.0;
+    let low = documented("/input_threshold/low/value") * 5.0;
+    let slope = 5.0 / 10e6;
+    assert!(
+        at(&v, rise) > high && at(&v, rise) - high < slope,
+        "{}",
+        at(&v, rise)
+    );
+    assert!(
+        at(&v, fall) <= low && low - at(&v, fall) < slope,
+        "{}",
+        at(&v, fall)
+    );
+    let pb5 = edges(&trace, "PB5");
+    let [(up, true), (down, false)] = pb5[..] else {
+        panic!("{pb5:?}");
+    };
+    for (flip, follow) in [(rise, up), (fall, down)] {
+        assert_eq!(follow % 62_500, 0, "a stop on a cycle: {follow}");
+        assert!(
+            follow > flip && follow <= flip + 12 * 62_500,
+            "{flip} {follow}"
+        );
+    }
+}
+
+fn supply(initial: f64, pulsed: f64) -> String {
+    format!(
+        r#"{{ "name": "vd", "kind": "voltage_source", "pins": {{ "p": "vdd", "n": "gnd" }},
+          "voltage": {{ "kind": "pulse", "initial": {{ "value": {initial:?}, "unit": "V", "source": "user" }},
+                       "pulsed": {{ "value": {pulsed:?}, "unit": "V", "source": "user" }},
+                       "delay_ps": 10000000, "width_ps": 10000000, "period_ps": 100000000 }} }}"#
+    )
+}
+
+#[test]
+fn vcc_reads_the_supply_against_the_brown_out_window() {
+    let vcc = |initial: f64, pulsed: f64| {
+        let netlist = board(
+            30 * US,
+            &["vdd"],
+            &[supply(initial, pulsed)],
+            atmega("vdd", TOGGLE, MHZ_16, FUSES),
+        );
+        let (trace, diagnostics) = run(&netlist);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let initial = trace.logic().unwrap().initial()[signal(&trace, "VCC")];
+        (initial, edges(&trace, "VCC"))
+    };
+    assert_eq!(
+        vcc(5.0, 2.0),
+        (Level::High, vec![(10 * US, false), (20 * US, true)])
+    );
+    assert_eq!(
+        vcc(2.0, 5.0),
+        (Level::Low, vec![(10 * US, true), (20 * US, false)])
+    );
+}
+
+#[test]
+fn a_flip_the_restart_undoes_returns_at_the_next_step() {
+    let (start, stop, jump) = (NS, 9 * NS, 6_201);
+    let volts_per_ps = 1.0 / 2e-9 * 1e-12;
+    let high = documented("/input_threshold/high/value") * 5.0;
+    let low = documented("/input_threshold/low/value") * 5.0;
+    let crossing = jump as f64 - 0.5;
+    let initial = high - volts_per_ps * (crossing - start as f64);
+    let ramp = format!(
+        r#"{{ "name": "is", "kind": "current_source", "pins": {{ "p": "cap", "n": "gnd" }},
+          "current": {{ "kind": "pulse", "initial": {{ "value": 0.0, "unit": "A", "source": "user" }},
+                       "pulsed": {{ "value": 1.0, "unit": "A", "source": "user" }},
+                       "delay_ps": {start}, "width_ps": {}, "period_ps": {} }} }}"#,
+        stop - start,
+        2 * US,
+    );
+    let cap = format!(
+        r#"{{ "name": "cs", "kind": "capacitor", "pins": {{ "a": "cap", "b": "gnd" }},
+          "capacitance": {{ "value": 2e-9, "unit": "F", "source": "user" }},
+          "initial": {{ "value": {initial:?}, "unit": "V", "source": "user" }} }}"#
+    );
+    let back = format!(
+        r#"{{ "name": "vb", "kind": "voltage_source", "pins": {{ "p": "pd2", "n": "cap" }},
+          "voltage": {{ "kind": "step", "initial": {{ "value": 0.0, "unit": "V", "source": "user" }},
+                       "final": {{ "value": -2.0, "unit": "V", "source": "user" }}, "at_ps": {jump} }} }}"#
+    );
+    let netlist = board(
+        US,
+        &["cap"],
+        &[ramp, cap, back],
+        atmega("vcc", TOGGLE, MHZ_16, FUSES),
+    );
+    let (trace, diagnostics) = run(&netlist);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let pd2 = volts(&trace, "pd2");
+    let before = pd2.iter().rfind(|&&(t, _)| t < jump).unwrap();
+    assert!(before.1 < high, "{before:?}");
+    assert!(at(&pd2, jump) > high, "{}", at(&pd2, jump));
+    assert!(restarted(&pd2, jump), "a restart at the jump");
+    assert!(at(&pd2, US) < low, "{}", at(&pd2, US));
+    assert_eq!(edges(&trace, "PD2"), [(jump, true), (jump + NS, false)]);
+}
+
+#[test]
+fn a_drive_at_stop_ps_is_not_in_the_run() {
+    let pb5 = |stop_ps: u64| {
+        let netlist = board(
+            stop_ps,
+            &[],
+            &[resistor("rl", "pb5", "gnd", 1000.0)],
+            atmega("vcc", TOGGLE, MHZ_16, FUSES),
+        );
+        let (trace, diagnostics) = run(&netlist);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        edges(&trace, "PB5")
+    };
+    assert_eq!(pb5(6_500_000), [(250_000, true)]);
+    assert_eq!(pb5(6_500_001), [(250_000, true), (6_500_000, false)]);
 }
 
 fn stops(core: &mut avr::Core, limit: u64) -> Vec<(u64, Drive)> {

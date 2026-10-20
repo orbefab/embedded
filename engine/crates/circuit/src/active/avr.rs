@@ -184,7 +184,13 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
             }
         })
         .collect();
+    let mut signals: Vec<(&'static str, usize)> = PORT_PINS
+        .iter()
+        .enumerate()
+        .map(|(n, &(k, _))| (Atmega328p::PINS[k], n))
+        .collect();
     if let Some((below, above)) = cpu.brown_out_window() {
+        signals.push((Atmega328p::PINS[VCC], watches.len()));
         let supply = |millivolts: u16| Signal {
             terms: vec![(vcc, 1.0), (gnd, -1.0)],
             offset: f64::from(millivolts) / 1000.0,
@@ -194,6 +200,7 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
             fall: supply(below),
         });
     }
+    signals.sort_unstable();
 
     // ADC0 to ADC5 are `PC0` to `PC5`. The DIP has no ADC6 or ADC7.
     let to_agnd = |pad: Pad| Signal {
@@ -217,6 +224,7 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
         part: Some(part),
         outputs,
         watches,
+        signals,
         samples,
         core: super::Core::Avr(Box::new(core)),
     }
