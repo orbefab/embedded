@@ -1,13 +1,16 @@
 # ngspice references
 
-Each example has an ngspice result next to its netlist, except `examples/atmega-blink` and any other example with an `atmega328p` part, which [Skips](#skips) covers. A DC example has an operating point, and a transient example has a waveform. A Rust test compares the engine with it. The Rust tests never run ngspice.
+Each example has an ngspice result next to its netlist, except `examples/atmega-blink`, `examples/atmega-button`, and any other example with an `atmega328p` part, which [Skips](#skips) covers. A DC example has an operating point, and a transient example has a waveform. A Rust test compares the engine with it. The Rust tests never run ngspice.
 
 ```text
 examples/<name>/
   netlist.json
+  viewer.json
   deck.cir
   ngspice.json
 ```
+
+`viewer.json` names a placeholder 3D model for each part. [viewer.md](viewer.md) defines it. The engine never reads it. A firmware example still has no `deck.cir` and no `ngspice.json`.
 
 ## Regenerate
 
@@ -79,7 +82,7 @@ The analysis is `tran g p stop p 0 m p`, with `g` one two-thousandth of `stop_ps
 
 An example is skipped when a part has no `kind`, when it has a kind the script does not translate, when a part is an `atmega328p`, which runs firmware that a deck has no CPU for, when a part has no `pins` or is missing a pin, when two names are equal ignoring case, when a net other than ground is named `gnd`, which ngspice reads as ground, when a pin names an undeclared net, when a held capacitor is in an operating point deck or has no pin on ground, when a chip is in an operating point deck, when a transient deck has a name starting with `ctl_`, `bp` or `x_`, or when `netlist.json` has a shape the engine's parser would reject. The report lists the skip and the reason in the one JSON document.
 
-A firmware example has no ngspice reference. ngspice has no CPU to run its firmware, so it cannot say where the pin edges fall. So `examples/atmega-blink` has no `deck.cir` or `ngspice.json`, and both `--check` and `crates/cli/tests/ngspice.rs` fail if an example with an `atmega328p` part has either. `crates/cli/tests/blink.rs` checks it instead. Its PB5 edges sit at the picoseconds its firmware's cycle counts give, and its LED current is the closed form of the output stage, the resistor and the LED within Newton's 1e-6.
+A firmware example has no ngspice reference. ngspice has no CPU to run its firmware, so it cannot say where the pin edges fall. So `examples/atmega-blink` and `examples/atmega-button` have no `deck.cir` or `ngspice.json`, and both `--check` and `crates/cli/tests/ngspice.rs` fail if an example with an `atmega328p` part has either. `crates/cli/tests/blink.rs` checks the blink example. Its PB5 edges sit at the picoseconds its firmware's cycle counts give, and its LED current is the closed form of the output stage, the resistor and the LED within Newton's 1e-6. `crates/cli/tests/button.rs` checks the button example. PD2 follows the switch, PB5 follows it a synchronizer and a loop later, and the LED current is that same closed form.
 
 ## ngspice.json
 

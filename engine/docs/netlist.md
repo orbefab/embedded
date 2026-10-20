@@ -426,6 +426,8 @@ This document runs `firmware/toggle.S` at 16 MHz into 1 kohm on PB5. `cx1` and `
 
 `examples/atmega-blink` is this part with these values running `firmware/blink.S`, which toggles PB5 at cycle 4 and every 8,000,000 cycles after, 0.5 s. PB5 drives the WP7113ID of `examples/led-5v` through 220 ohm to ground, so the LED blinks at 1 Hz with 12.5 mA on. Its 4 s run is four blinks, on a 10 ms grid.
 
+`examples/atmega-button` is this part with these values running `firmware/button.S`. A push button connects PD2 to ground. PD2's pull-up holds the pin high while the button is open, and the loop copies the inverse of PIND2 onto PB5, so the LED is on while the button is held. The contact bounces and the firmware does not debounce, so the LED follows the bounces a pass of the loop can sample. Seed 26 is the smallest seed that leaves one closed level shorter than a pass, and the LED does not follow that level. Its 1 s run is three presses of 200 ms, on a 10 ms grid.
+
 | Field | Unit | Rule |
 | --- | --- | --- |
 | `firmware` | Intel HEX text | records 00 to 05, an end record, every byte inside the 32 KB flash |

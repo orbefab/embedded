@@ -15,6 +15,7 @@ use sim_core::name::Ref;
 use sim_core::trace::Trace;
 
 const BLINK: &str = include_str!("../../../../../firmware/blink.hex");
+const BUTTON: &str = include_str!("../../../../../firmware/button.hex");
 const TOGGLE: &str = include_str!("../../../../../firmware/toggle.hex");
 const PULL: &str = include_str!("../../../../../firmware/pullup.hex");
 const ECHO: &str = include_str!("../../../../../firmware/echo.hex");
@@ -752,6 +753,40 @@ fn blink_throughput() {
     let raw = start.elapsed().as_secs_f64();
     let load = [resistor("rl", "pb5", "gnd", 1000.0)];
     let mut core = core(&board(US, &[], &load, atmega("vcc", BLINK, MHZ_16, FUSES)));
+    let start = std::time::Instant::now();
+    let stops = stops(&mut core, ps(CYCLES, MHZ_16)).len();
+    let seam = start.elapsed().as_secs_f64();
+    println!(
+        "bare core {raw:.3} s, {:.1}e6 cycles/s, {edges} reports; through the seam {seam:.3} s, \
+         {:.1}e6 cycles/s, {stops} stops",
+        CYCLES as f64 / raw / 1e6,
+        CYCLES as f64 / seam / 1e6,
+    );
+}
+
+/// Wall time of 32e6 cycles of `button.S` on the bare core and through the seam.
+/// The example runs 16e6 cycles.
+/// `cargo test --release -p sim-circuit --lib button_throughput -- --ignored --nocapture`.
+#[test]
+#[ignore = "a measurement, not a check"]
+#[expect(clippy::disallowed_methods, reason = "the clock is the measurement")]
+fn button_throughput() {
+    const CYCLES: u64 = 32_000_000;
+    let mut cpu = sim_avr::Cpu::new();
+    cpu.set_fuses(FUSES.low, FUSES.high, FUSES.extended);
+    cpu.load_image(&sim_avr::parse_hex(BUTTON).unwrap())
+        .unwrap();
+    let start = std::time::Instant::now();
+    let mut edges = 0;
+    while cpu.cycles() < CYCLES {
+        cpu.run_until(CYCLES);
+        while cpu.take_pin().is_some() {
+            edges += 1;
+        }
+    }
+    let raw = start.elapsed().as_secs_f64();
+    let load = [resistor("rl", "pb5", "gnd", 1000.0)];
+    let mut core = core(&board(US, &[], &load, atmega("vcc", BUTTON, MHZ_16, FUSES)));
     let start = std::time::Instant::now();
     let stops = stops(&mut core, ps(CYCLES, MHZ_16)).len();
     let seam = start.elapsed().as_secs_f64();

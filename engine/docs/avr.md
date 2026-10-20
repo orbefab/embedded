@@ -64,9 +64,11 @@ The values are the part's own fields. [netlist.md](netlist.md#atmega328p) gives 
 
 The tests run firmware written for the repo. `firmware/*.S` is the source, and the committed `firmware/*.hex` is what they read. `scripts/firmware.sh` rebuilds the hex with `avr-gcc` and `avr-objcopy`, and a build of the engine never needs them.
 
-Ten seconds of `firmware/blink.S` at 16 MHz are 21 stops and 20 edges on PB5. The first stop, at cycle 2, is `SBI DDRB,5` turning PB5 from off to driven low. It changes the image, and on a pin its load already holds low it does not change the level. On the build machine, release, the bare core runs those 160e6 cycles at about 79e6 cycles a second and the adapter at about 75e6 (`blink_throughput`, ignored, in `crates/circuit/src/tran/tests/avr.rs`).
+Ten seconds of `firmware/blink.S` at 16 MHz are 21 stops and 20 edges on PB5. The first stop, at cycle 2, is `SBI DDRB,5` turning PB5 from off to driven low. It changes the image, and on a pin its load already holds low it does not change the level. On the build machine, release, the bare core runs those 160e6 cycles at 70e6 to 79e6 cycles a second (`blink_throughput`, ignored, in `crates/circuit/src/tran/tests/avr.rs`). Those runs measure a bare-core median of 75.4e6 against an adapter median of 72.8e6.
 
-`examples/atmega-blink` runs `firmware/blink.S` for 4 s with an LED on PB5, and `crates/cli/tests/blink.rs` checks its edges and the LED's current. On the build machine a release `sim run` of it takes 0.83 to 0.92 s over seven runs. At the bare core's 79e6 cycles a second its 64e6 cycles take 0.81 s, so the core is most of the run.
+`examples/atmega-blink` runs `firmware/blink.S` for 4 s with an LED on PB5, and `crates/cli/tests/blink.rs` checks its edges and the LED's current. On the build machine a release `sim run` of it takes 0.83 to 0.92 s over seven runs. At 79e6 cycles a second its 64e6 cycles take 0.81 s, so the core is most of the run. At 70e6 cycles a second the same cycles take 0.91 s.
+
+`examples/atmega-button` runs `firmware/button.S` for 1 s with that LED and a push button from PD2 to ground. The pin's pull-up holds PD2 high while the button is open, and the loop copies the inverse of PIND2 to PB5. `crates/cli/tests/button.rs` checks those edges and the LED's current. The bare core runs `button.hex` at about 32e6 cycles a second, against 70e6 to 79e6 for `firmware/blink.S` (`button_throughput`, ignored, beside `blink_throughput`). The seam adds about nothing. The cost is the loop's I/O. Each pass reads two ports and writes `PORTB`. An `OUT`-to-`NOP` swap in loop variants outside the tree takes the button loop from about 32e6 to about 71e6 cycles a second. The `OUT PORTB` of an unchanged value is most of that cost.
 
 ## Fuses
 

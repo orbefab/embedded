@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 #[path = "../../../circuit/tests/common/examples.rs"]
 pub mod examples;
 
+pub mod atmega;
+
 pub fn repo(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
