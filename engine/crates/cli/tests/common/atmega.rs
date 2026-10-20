@@ -1,6 +1,6 @@
 //! The LED closed form, the potentiometer wiper, the fixture check, the side-by-side run,
-//! the check that the LED follows PB5, and `assert_holds`, shared by the ATmega328P
-//! firmware examples.
+//! the check that the LED follows the pin that drives it, and `assert_holds`, shared by the
+//! ATmega328P firmware examples.
 
 use std::fs;
 use std::process::Command;
@@ -59,7 +59,7 @@ pub fn cycle_ps(netlist: &serde_json::Value) -> u64 {
     1_000_000_000_000 / hz
 }
 
-/// The LED's current, through its `Rs`, while PB5's stage pulls up through `up` siemens and down
+/// The LED's current, through its `Rs`, while the pin's stage pulls up through `up` siemens and down
 /// through `down`. The stage is a Thevenin source into `r1`, the LED's `Rs`, and its junction,
 /// with gmin from the anode and from the junction's inner node to ground. Bisects on the
 /// junction's voltage.
@@ -87,7 +87,7 @@ fn led_current(netlist: &serde_json::Value, up: f64, down: f64) -> f64 {
     current(low)
 }
 
-/// The LED's current in each state of PB5, with the pin's leakage to both rails and gmin on PB5.
+/// The LED's current in each state of the pin, with the pin's leakage to both rails and gmin on the pin.
 struct Levels {
     pub off: f64,
     pub low: f64,
@@ -218,13 +218,13 @@ pub fn logic_vcd(beside: &Beside, changing: &[&str]) -> serde_json::Value {
     vcd
 }
 
-/// `#led1.i` follows `pb5`. The step at an edge's picosecond still holds the previous level,
-/// and the next step is `RESTART_PS` later. Before any edge, steps through `driven_ps` are off
-/// and later steps are low.
-pub fn assert_led_follows(beside: &Beside, pb5: &[(u64, bool)], driven_ps: u64) {
+/// `#led1.i` follows `pin`, the edges of the output that drives the LED. The step at an edge's
+/// picosecond still holds the previous level, and the next step is `RESTART_PS` later. Before
+/// any edge, steps through `driven_ps` are off and later steps are low.
+pub fn assert_led_follows(beside: &Beside, pin: &[(u64, bool)], driven_ps: u64) {
     let Levels { off, low, high } = led_levels(&beside.netlist);
     let (mins, maxs) = beside.folder.bounds("#led1.i");
-    for &(edge, _) in pb5 {
+    for &(edge, _) in pin {
         let k = beside.folder.time.partition_point(|&at| at <= edge) - 1;
         assert!(
             near(mins[k], low) && near(maxs[k], high),
@@ -246,7 +246,7 @@ pub fn assert_led_follows(beside: &Beside, pb5: &[(u64, bool)], driven_ps: u64) 
         .zip(step_trace.column(column).iter().copied())
         .collect();
     for &(at, i) in &rows {
-        let want = match pb5.iter().rfind(|&&(edge, _)| edge < at) {
+        let want = match pin.iter().rfind(|&&(edge, _)| edge < at) {
             Some(&(_, true)) => high,
             Some(&(_, false)) => low,
             None if at <= driven_ps => off,
@@ -254,7 +254,7 @@ pub fn assert_led_follows(beside: &Beside, pb5: &[(u64, bool)], driven_ps: u64) 
         };
         assert!(near(i, want), "{i} A at {at} ps, not {want} A");
     }
-    for &(edge, _) in pb5 {
+    for &(edge, _) in pin {
         let k = rows.iter().position(|&(at, _)| at == edge).unwrap();
         assert_eq!(
             rows[k + 1].0,

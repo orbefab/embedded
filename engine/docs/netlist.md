@@ -440,6 +440,8 @@ This document runs `firmware/toggle.S` at 16 MHz into 1 kohm on PB5. `cx1` and `
 
 `examples/atmega-analog-serial` is this part with these values running `firmware/analog_serial.S`. A 10 kohm potentiometer sits across VCC and ground with its wiper on PC0, which is ADC0. Its position is 1023/2048, so the wiper is in the middle of ADC step 512. The firmware prints that code as decimal on TXD, one line per reading. The 19 ms run prints three lines, on a 20 us grid.
 
+`examples/atmega-fade` is this part with these values running `firmware/fade.S`. PB1, which is OC1A, drives the WP7113ID of `examples/led-5v` through 220 ohm to ground. Timer1 is 8-bit phase-correct PWM with prescaler 64, about 490 Hz, and OC1A is non-inverting. `OCR1A` steps by 5 every 30 ms and reverses at 0 and 255. Its 1.57 s run climbs from off to full on and starts back down, on a 100 us grid.
+
 | Field | Unit | Rule |
 | --- | --- | --- |
 | `firmware` | Intel HEX text | records 00 to 05, an end record, every byte inside the 32 KB flash |
