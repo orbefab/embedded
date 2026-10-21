@@ -24,24 +24,42 @@ const SERIAL_EXAMPLE: &str = "atmega-analog-serial";
 
 const SERIAL_SECS: [u64; 3] = [4, 8, 16];
 
+const PS_PER_S: u64 = 1_000_000_000_000;
+
+const LIVE_MAX_STEP_PS: u64 = PS_PER_S / 100;
+
+const LIVE: &str = "live";
+
 /// One millisecond, in picoseconds.
 const CORE_SLICE_PS: u64 = 1_000_000_000;
 
 const ADC_VOLTS: f32 = 2.5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LiveStop {
+    Committed,
+    Secs(u64),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Variant {
     Committed,
-    Gridless,
-    Serial(u64),
+    Live(LiveStop),
 }
 
 impl Variant {
+    fn secs(self) -> Option<u64> {
+        match self {
+            Variant::Live(LiveStop::Secs(secs)) => Some(secs),
+            Variant::Committed | Variant::Live(LiveStop::Committed) => None,
+        }
+    }
+
     fn label(self) -> Cow<'static, str> {
         match self {
             Variant::Committed => Cow::Borrowed("committed"),
-            Variant::Gridless => Cow::Borrowed("gridless"),
-            Variant::Serial(secs) => Cow::Owned(format!("serial-{secs}s")),
+            Variant::Live(LiveStop::Committed) => Cow::Borrowed(LIVE),
+            Variant::Live(LiveStop::Secs(secs)) => Cow::Owned(format!("{LIVE}-{secs}s")),
         }
     }
 }
@@ -69,6 +87,8 @@ pub struct Spread {
 pub struct Row {
     pub example: String,
     pub variant: Variant,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secs: Option<u64>,
     pub simulated_ps: u64,
     pub end_ps: Option<u64>,
     pub errors: usize,
@@ -160,7 +180,7 @@ pub fn markdown(report: &Report) -> String {
         lines.push(markdown_row(row));
     }
     for row in &report.workloads {
-        let Variant::Serial(secs) = row.variant else {
+        let Some(secs) = row.secs else {
             continue;
         };
         let rate = wall_per_sim(row.wall_ns.median, row.simulated_ps);
@@ -199,21 +219,28 @@ fn jobs(examples: &[Example]) -> Result<Vec<Job>, String> {
     for example in examples {
         let value: serde_json::Value = serde_json::from_slice(&example.json)
             .map_err(|err| format!("{}: {err}", example.name))?;
-        let stop = json_u64(&value, "stop_ps")?;
         jobs.push(job(&example.name, Variant::Committed, &value)?);
-        let mut gridless = value.clone();
-        gridless["analysis"]["transient"]["grid_ps"] = serde_json::json!(stop);
-        jobs.push(job(&example.name, Variant::Gridless, &gridless)?);
+        jobs.push(live_job(&example.name, &value, LiveStop::Committed)?);
         if example.name == SERIAL_EXAMPLE {
             for secs in SERIAL_SECS {
-                let mut serial = value.clone();
-                serial["analysis"]["transient"]["stop_ps"] =
-                    serde_json::json!(secs * 1_000_000_000_000);
-                jobs.push(job(&example.name, Variant::Serial(secs), &serial)?);
+                jobs.push(live_job(&example.name, &value, LiveStop::Secs(secs))?);
             }
         }
     }
     Ok(jobs)
+}
+
+fn live_job(example: &str, value: &serde_json::Value, stop: LiveStop) -> Result<Job, String> {
+    let stop_ps = match stop {
+        LiveStop::Secs(secs) => secs * PS_PER_S,
+        LiveStop::Committed => json_u64(value, "stop_ps")?,
+    };
+    let mut live = value.clone();
+    let transient = &mut live["analysis"]["transient"];
+    transient["stop_ps"] = serde_json::json!(stop_ps);
+    transient["grid_ps"] = serde_json::json!(stop_ps);
+    transient["max_step_ps"] = serde_json::json!(LIVE_MAX_STEP_PS.min(stop_ps));
+    job(example, Variant::Live(stop), &live)
 }
 
 fn job(example: &str, variant: Variant, value: &serde_json::Value) -> Result<Job, String> {
@@ -268,6 +295,7 @@ fn time_job(job: &Job, runs: usize, now_ns: &mut impl FnMut() -> u64) -> Result<
     Ok(Row {
         example: job.example.clone(),
         variant: job.variant,
+        secs: job.variant.secs(),
         simulated_ps: first.simulated_ps,
         end_ps: first.end_ps,
         errors: first.errors,
@@ -349,7 +377,7 @@ fn bare_core(netlist: &Netlist, now_ns: &mut impl FnMut() -> u64) -> Result<Opti
 }
 
 fn cycles_at(ps: u64, hz: u32) -> u64 {
-    let cycles = u128::from(ps) * u128::from(hz) / 1_000_000_000_000;
+    let cycles = u128::from(ps) * u128::from(hz) / u128::from(PS_PER_S);
     u64::try_from(cycles).expect("cycle count fits in u64")
 }
 
@@ -523,18 +551,28 @@ mod tests {
 
     #[test]
     fn a_short_rc_reaches_its_stop_with_no_chip() {
+        let examples = [Example {
+            name: "rc".to_string(),
+            json: RC.as_bytes().to_vec(),
+        }];
+        let jobs = jobs(&examples).unwrap();
+        let live = jobs
+            .iter()
+            .find(|job| job.variant == Variant::Live(LiveStop::Committed))
+            .unwrap();
+        let Analysis::Transient(transient) = live.netlist.analysis() else {
+            panic!("rc live is not a transient");
+        };
+        let stop = transient.stop.as_ps();
+        assert_eq!(stop, 1_000_000);
+        assert_eq!(transient.max_step, stop);
+        assert_eq!(transient.grid, stop);
+
         let mut ticks = 0u64;
-        let report = bench(
-            &[Example {
-                name: "rc".to_string(),
-                json: RC.as_bytes().to_vec(),
-            }],
-            1,
-            || {
-                ticks += 1_000_000;
-                ticks
-            },
-        )
+        let report = bench(&examples, 1, || {
+            ticks += 1_000_000;
+            ticks
+        })
         .unwrap();
         let row = report
             .workloads
@@ -548,5 +586,111 @@ mod tests {
         assert_eq!(row.stops, 0);
         assert!(row.bare_core_ns.is_none());
         assert!(row.wall_ns.median >= 1_000_000);
+        let live_row = report
+            .workloads
+            .iter()
+            .find(|row| row.variant == Variant::Live(LiveStop::Committed))
+            .unwrap();
+        assert_eq!(live_row.simulated_ps, stop);
+        assert_eq!(live_row.end_ps, Some(stop));
+        assert_eq!(live_row.errors, 0);
+        assert_eq!(live_row.stops, 0);
+        assert!(live_row.bare_core_ns.is_none());
+        assert!(live_row.secs.is_none());
+    }
+
+    #[test]
+    fn a_live_job_sets_grid_to_the_stop_and_max_step_to_10_ms() {
+        let examples =
+            load_examples(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples")).unwrap();
+        let jobs = jobs(&examples).unwrap();
+        let mut live = 0;
+        for job in &jobs {
+            let Variant::Live(stop_kind) = job.variant else {
+                continue;
+            };
+            live += 1;
+            let Analysis::Transient(transient) = job.netlist.analysis() else {
+                panic!("{} is not a transient", job.variant.label());
+            };
+            let stop = transient.stop.as_ps();
+            assert_eq!(transient.grid, stop, "{}", job.variant.label());
+            assert_eq!(
+                transient.max_step,
+                stop.min(10_000_000_000),
+                "{}",
+                job.variant.label()
+            );
+            match (job.example.as_str(), stop_kind) {
+                (_, LiveStop::Committed) => {
+                    assert_eq!(job.variant.label(), "live");
+                    let committed = jobs
+                        .iter()
+                        .find(|other| {
+                            other.example == job.example && other.variant == Variant::Committed
+                        })
+                        .unwrap();
+                    let Analysis::Transient(committed_transient) = committed.netlist.analysis()
+                    else {
+                        panic!("{} committed is not a transient", job.example);
+                    };
+                    assert_eq!(stop, committed_transient.stop.as_ps());
+                }
+                ("atmega-analog-serial", LiveStop::Secs(secs)) => {
+                    assert_eq!(job.variant.label(), format!("live-{secs}s"));
+                    assert_eq!(stop, secs * PS_PER_S);
+                }
+                (example, LiveStop::Secs(_)) => panic!("{example} has a long live row"),
+            }
+        }
+        assert_eq!(live, EXAMPLES.len() + SERIAL_SECS.len());
+    }
+
+    fn spread_one(ns: u64) -> Spread {
+        Spread {
+            median: ns,
+            min: ns,
+            max: ns,
+        }
+    }
+
+    fn serial_row(variant: Variant, secs: Option<u64>, simulated_ps: u64) -> Row {
+        Row {
+            example: "atmega-analog-serial".to_string(),
+            variant,
+            secs,
+            simulated_ps,
+            end_ps: Some(simulated_ps),
+            errors: 0,
+            landings: 1,
+            stops: 0,
+            wall_ns: spread_one(2_000_000_000),
+            bare_core_ns: None,
+        }
+    }
+
+    #[test]
+    fn markdown_rate_lines_follow_row_secs() {
+        let report = Report {
+            target: "native".to_string(),
+            runs: 1,
+            workloads: vec![serial_row(
+                Variant::Live(LiveStop::Secs(4)),
+                Some(4),
+                4 * PS_PER_S,
+            )],
+        };
+        let text = markdown(&report);
+        assert!(text.contains("4 s takes 0.500 wall seconds per simulated second on native."));
+        let hidden = Report {
+            target: "native".to_string(),
+            runs: 1,
+            workloads: vec![serial_row(
+                Variant::Live(LiveStop::Committed),
+                None,
+                19_000_000_000,
+            )],
+        };
+        assert!(!markdown(&hidden).contains("wall seconds"));
     }
 }

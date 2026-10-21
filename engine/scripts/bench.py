@@ -72,6 +72,31 @@ def cpu_model() -> str:
     return "unknown"
 
 
+def read_load() -> list[float]:
+    parts = Path("/proc/loadavg").read_text().split()
+    if len(parts) < 3:
+        sys.exit("/proc/loadavg has fewer than three numbers")
+    return [float(part) for part in parts[:3]]
+
+
+def load_text(sample: list[float]) -> str:
+    return f"{sample[0]:.2f} {sample[1]:.2f} {sample[2]:.2f}"
+
+
+def load_sentence(
+    native: list[float],
+    wasi: list[float],
+    worker: list[float],
+    after: list[float],
+) -> str:
+    return (
+        "Load before native was "
+        f"{load_text(native)}, before WASI was {load_text(wasi)}, "
+        f"before the Worker was {load_text(worker)}, "
+        f"and after the last target was {load_text(after)}."
+    )
+
+
 def cpu_governor() -> str:
     path = Path("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
     if path.exists():
@@ -265,9 +290,11 @@ def combined_table(native: dict, wasi: dict, worker: dict) -> str:
             )
         )
     for label, report in reports:
+        found = 0
         for row in report["workloads"]:
-            if not str(row["variant"]).startswith("serial-"):
+            if row.get("secs") is None:
                 continue
+            found += 1
             block = row["wall_ns"]
             med = wall_per_sim(block["median"], row["simulated_ps"])
             lo = wall_per_sim(block["min"], row["simulated_ps"])
@@ -275,6 +302,8 @@ def combined_table(native: dict, wasi: dict, worker: dict) -> str:
             notes.append(
                 f"{row['example']} {row['variant']} takes {med:.3f} wall seconds per simulated second on {label} ({lo:.3f} to {hi:.3f})."
             )
+        if found == 0:
+            sys.exit(f"{label} report has no row with secs")
     return "\n".join(lines + notes)
 
 
@@ -359,11 +388,7 @@ def main() -> None:
         native_out = scratch / "native.json"
         wasi_out = scratch / "wasi.json"
         worker_out = scratch / "worker.json"
-        load_before = os.getloadavg()
-        print(
-            f"before: load {load_before[0]:.2f} {load_before[1]:.2f} {load_before[2]:.2f}",
-            flush=True,
-        )
+        load_native = read_load()
         run(
             [
                 str(native_bin),
@@ -396,6 +421,7 @@ const code = wasi.start(inst);
 if (code !== 0) process.exit(code);
 """
         )
+        load_wasi = read_load()
         run(
             [
                 "node",
@@ -411,7 +437,9 @@ if (code !== 0) process.exit(code);
         shutil.copy(wasi_dir / "wasi.json", wasi_out)
         stage = scratch / "stage"
         stage_web(stage, worker_wasm, names)
+        load_worker = read_load()
         browser_version, playwright_version, isolated = run_worker(stage, runs, worker_out)
+        load_after = read_load()
         native = json.loads(native_out.read_text())
         wasi = json.loads(wasi_out.read_text())
         worker = json.loads(worker_out.read_text())
@@ -422,13 +450,17 @@ if (code !== 0) process.exit(code);
                 if row["errors"]:
                     sys.exit(f"{label} {row['example']} {row['variant']} reported errors")
         require_same(native, wasi, worker)
-        load_after = os.getloadavg()
+        recorded_load = load_sentence(load_native, load_wasi, load_worker, load_after)
         machine = {
             "cpu": cpu_model(),
             "cores": os.cpu_count(),
             "governor": cpu_governor(),
-            "load_before": list(load_before),
-            "load_after": list(load_after),
+            "load": {
+                "native": load_native,
+                "wasi": load_wasi,
+                "worker": load_worker,
+                "after": load_after,
+            },
             "rustc": text_version(["rustc", "--version"]),
             "cargo": text_version(["cargo", "--version"]),
             "node": text_version(["node", "--version"]),
@@ -437,8 +469,9 @@ if (code !== 0) process.exit(code);
             "cross_origin_isolated": isolated,
         }
         print(
-            f"cpu {machine['cpu']}, cores {machine['cores']}, governor {machine['governor']}, load before {load_before[0]:.2f} {load_before[1]:.2f} {load_before[2]:.2f}"
+            f"cpu {machine['cpu']}, cores {machine['cores']}, governor {machine['governor']}"
         )
+        print(recorded_load)
         print(f"rustc {machine['rustc']}")
         print(f"cargo {machine['cargo']}")
         print(f"node {machine['node']}")
