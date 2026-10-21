@@ -24,7 +24,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 {
   "run_format": 0,
   "netlist_format": 0,
-  "engine_version": "0.4.0",
+  "engine_version": "0.5.0",
   "input": {
     "file": "netlist.json",
     "sha256": "<lowercase hex sha256 of the input bytes>",
@@ -35,7 +35,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 }
 ```
 
-`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.4.0`. [versions.md](versions.md) says which changes move them.
+`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.5.0`. [versions.md](versions.md) says which changes move them.
 
 `netlist_format` is the input's `version`, when it reads as an unsigned integer. That holds when the engine rejected the input, so `version: 1` records 1. It is `null` when no such integer could be read.
 
@@ -168,9 +168,9 @@ period_s = (falls[-1] - falls[0]) / (len(falls) - 1) * 1e-12
 
 ## traces
 
-A transient writes a row at t = 0, at every multiple of `grid_ps` before `stop_ps`, and at `stop_ps`. That is `ceil(stop_ps / grid_ps) + 1` rows, fixed by the netlist before the run starts. The engine lands a step on every row time, so each row is a solved point, not an interpolation. Each row is an accepted step. Its tolerance is 1e-5 of each capacitor's swing plus 1 nV, so a small swing is held to its own size ([engine.md](engine.md#accuracy)).
+A transient writes a row at t = 0, at every multiple of `grid_ps` before `stop_ps`, and at `stop_ps`. That is `ceil(stop_ps / grid_ps) + 1` rows, fixed by the netlist before the run starts. A row is a probe: one solve from the last accepted step to the row time, which the run never accepts ([engine.md](engine.md#rows)). A row at a time a step lands on is that step. Each row is a solved point. The one exception is a row whose probe fails twice. It is the straight line between the accepted steps around it, and `trace.row_interpolated` names it. The grid never changes the accepted steps, the core stops, `logic.vcd`, `observations.json`, or the `solver.*` and `rating.*` diagnostics. Only two things depend on it. A grid past the row cap is refused with `trace.too_large` before the run solves. A row whose probe fails twice adds a `trace.row_interpolated` warning. The steps' tolerance is 1e-5 of each capacitor's swing plus 1 nV, so a small swing is held to its own size ([engine.md](engine.md#accuracy)).
 
-A row is a point sample, and a waveform that repeats with the grid can alias the rows. The envelope is the between-rows read. Each column's minimum and maximum cover every accepted step in the interval. A 0 to 3.3 V pulse at 1 MHz drives 100 ohm into 100 pF, a 10 ns time constant. On a 1 us grid every row falls on a rise and holds the level before it, so over 2 ms `#net.out0` spans 6.2e-9 V. Its envelope reads 0 to 3.3 V on every interval after the first. On a 100 ns grid the rows themselves read 0 to 3.3 V. The rating diagnostics and `logic.vcd` are read at every accepted step, and `observations.switches` lists every edge at its picosecond. Those are the step-accurate views.
+A row is a point sample, and a waveform that repeats with the grid can alias the rows. The envelope is the between-rows read. Each column's minimum and maximum cover the two rows and every accepted step between them. A 0 to 3.3 V pulse at 1 MHz drives 100 ohm into 100 pF, a 10 ns time constant. On a 1 us grid every row falls on a rise and holds the level before it, so over 2 ms `#net.out0` spans 6.2e-9 V. Its envelope reads 0 to 3.3 V on every interval after the first. On a 100 ns grid the rows themselves read 0 to 3.3 V. The rating diagnostics and `logic.vcd` are read at every accepted step and never at a row's probe. `observations.switches` lists every edge at its picosecond. Those are the step-accurate views.
 
 To read a waveform between rows as piecewise linear, set `grid_ps` under a tenth of the fastest time constant you read there. A chord across `h` is off by about `h^2/8` times the waveform's second derivative. For an exponential at a tenth of its time constant that is 1.25e-3 of its swing, and the chord's largest miss is 1.19e-3.
 
@@ -222,7 +222,7 @@ A row at the time of a contact edge, a source jump or a chip event holds the sta
 - `time.u64` holds `rows` unsigned 64-bit little-endian integers, picoseconds from t = 0, strictly increasing. Row `k` is at `k * grid_ps`, and the last is at `stop_ps`. After an error the last row is at `end_ps`, which need not be on the grid.
 - `analog.f64` holds `rows` IEEE 754 binary64 little-endian values per column, column after column. Column `j` occupies bytes `j * rows * 8` up to `(j + 1) * rows * 8`.
 - `envelope.f64` holds one interval per pair of consecutive rows, `rows - 1` of them, as IEEE 754 binary64 little-endian values per column. The intervals' minima come first, then their maxima. Column `j` occupies bytes `j * (rows - 1) * 16` up to `(j + 1) * (rows - 1) * 16`. The first half of that span is the minima and the second half is the maxima. Interval `k` lies between rows `k` and `k + 1`. `time.u64` gives both boundaries. A trace with one row writes an empty file and still has the `envelope` key.
-- An interval's minimum and maximum cover its two rows and every accepted step strictly between them. A located chip event is an accepted step, so it is a sample. A restart solve is not, and neither is a refused step or a probe. The envelope has no column list. Its columns are `analog.columns`, in that order.
+- An interval's minimum and maximum cover its two rows and every accepted step strictly between them. A row's probe is one of those rows, so it is a sample. A located chip event is an accepted step, so it is a sample. A restart solve is not, and neither is a refused step or a probe locating a chip event. The envelope has no column list. Its columns are `analog.columns`, in that order.
 - `columns` are a subset of the keys of `observations.op`, in ref order. Read them from the index. Today every key of `op` is a column. A net or a `.v` is `V`, a `.i` is `A`, and a `.p` is `W`. Row 0 holds exactly the numbers in `op`.
 - Every value of `analog.f64` and `envelope.f64` is finite. `-0.0` is written as `0.0`.
 - There is no header and no compression.

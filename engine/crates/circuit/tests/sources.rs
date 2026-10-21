@@ -324,11 +324,16 @@ fn charge(start: f64, jumps: &[(f64, f64)], tau_ps: f64, t_ps: f64) -> f64 {
 }
 
 /// docs/engine.md's worst error of an exponential whose step is capped at `step_ps`, under
-/// its tolerance: `x^2 / (12e)` of the swing, `x` the step over the time constant. Each
-/// example below lands on a grid that caps its step.
+/// its tolerance: `x^2 / (12e)` of the swing, `x` the step over the time constant.
 fn capped(swing: f64, step_ps: f64, tau_ps: f64) -> f64 {
     let x = step_ps / tau_ps;
     swing * x * x / (12.0 * std::f64::consts::E)
+}
+
+/// docs/engine.md's worst error of one exponential whose steps ride its tolerance: 9.5e-5 of
+/// the swing.
+fn riding(swing: f64) -> f64 {
+    9.5e-5 * swing
 }
 
 /// 1 mA into 1 kohm parallel 2 kohm, gmin included. The solve matched the formula exactly.
@@ -349,7 +354,7 @@ fn the_current_divider_example_matches_its_closed_form() {
 }
 
 /// 0 to 1 V at 200 us, back at 400 us, every 600 us, through 1 kohm into 100 nF: tau is
-/// 100 us.
+/// 100 us. `max_step_ps` is the time constant, so the tolerance sets the steps.
 #[test]
 fn the_voltage_pulse_example_follows_its_closed_form_at_every_row() {
     let results = simulate(&example("v-pulse-rc"));
@@ -362,7 +367,7 @@ fn the_voltage_pulse_example_follows_its_closed_form_at_every_row() {
         .zip(vout)
         .map(|(&t, &v)| (v - charge(0.0, &jumps, 1e8, t as f64)).abs())
         .fold(0.0, f64::max);
-    assert!(worst <= capped(1.0, 1e6, 1e8), "{worst:e}");
+    assert!(worst <= riding(1.0), "{worst:e}");
     let vin = column(trace, "#net.vin");
     let at = |t: u64| vin[rows.binary_search(&t).unwrap()];
     for (jump, change) in jumps {
@@ -374,7 +379,7 @@ fn the_voltage_pulse_example_follows_its_closed_form_at_every_row() {
 }
 
 /// 0.2 mA to 1 mA at 1 ms for 2 ms, every 5 ms, into 1 kohm parallel 1 uF: tau is 1 ms.
-/// The rise at 16 ms is the stop.
+/// The rise at 16 ms is the stop. Its 20 us `max_step_ps` caps the step.
 #[test]
 fn the_current_pulse_example_follows_its_closed_form_at_every_row() {
     let json = example("current-pulse");

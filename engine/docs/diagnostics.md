@@ -251,7 +251,7 @@ The message is `{unknowns} unknowns exceeds the dense solver limit of {limit}`.
 
 Severity `error`. Refs is the junction part that failed worst in the last Newton iteration, or else the unknown that moved most against its tolerance. A rung whose solution is not finite names that unknown. `t_ps` is 0 for the operating point, and the restart's time for the restart solve after a switch edge, a source jump or a chip drive change.
 
-The code comes from one of four solves, told apart by `t_ps` and `step_ps`.
+The code comes from one of four solves, told apart by `t_ps`, `step_ps` and the message.
 
 - The operating point. `t_ps` is 0, and `data` has no `step_ps`.
 - The restart solve after a switch edge, a source jump or a chip drive change. `t_ps` is the restart's time, after 0, and `data` has no `step_ps`. The trace ends with the row at that time.
@@ -323,6 +323,14 @@ The message is `the grid gives {rows} rows; the trace holds {limit} rows of {col
 `data` holds `columns`, `limit` and `rows`. `rows` is `ceil(stop_ps / grid_ps) + 1`, the rows the grid gives. `limit` is the row cap, `min(1000000, 67108864 / columns)`. 67108864 is 2^26, so the stored f64 values of `analog.f64` stay within 512 MiB. `envelope.f64` adds at most twice that again, and writing the folder keeps a second copy of both. `columns` is the number of trace columns.
 
 The run checks the count before it solves anything, so a refused run writes `{}` to `observations.json` and no `traces/`. The rows depend only on `stop_ps` and `grid_ps`. Edges, jumps, chip events and the error control add steps, not rows, so a `sim` build that passes the check never runs out of rows. The test-only step-rows mode can also stop mid-run with `t_ps` the step that did not fit, keeping its rows.
+
+## trace.row_interpolated
+
+Severity `warning`. No refs. `t_ps` is the row's time.
+
+The message is `the row at {t_ps} ps did not solve; it is the line between the steps at {from_ps} ps and {to_ps} ps`.
+
+`data` holds `from_ps` and `to_ps`, the accepted steps on either side of the row. A row no step lands on is a probe from the last accepted step, as [engine.md](engine.md#rows) says. When its solve fails, it is solved once more with Newton started from the step after it. When that fails too, every column of the row is the straight line from the state the probe was solved from at `from_ps` to the step at `to_ps`, read at `t_ps`. After a restart at `from_ps` that state is the restart's solve, not the step's row. Every column of it takes the new source levels and contacts, a current source's and a switch's included. The run goes on. No step, stop, edge or other diagnostic changes, and a grid with no row between those two steps has no such warning.
 
 ## rating.current
 

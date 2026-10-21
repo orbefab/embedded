@@ -107,6 +107,234 @@ fn a_stalled_probe_ends_the_run_and_names_the_probe() {
     );
 }
 
+/// `netlist` on a grid of `grid` ps with each row's solve held to `row` Newton iterations.
+fn with_row_budget(netlist: &Netlist, grid: u64, row: u32) -> (Outcome, Vec<Diagnostic>) {
+    let transient = Transient {
+        grid,
+        ..transient(netlist)
+    };
+    let mut diagnostics = Vec::new();
+    let outcome = run_with(
+        netlist,
+        &transient,
+        Vec::new(),
+        Budget { row, ..BUDGET },
+        Rows::Grid,
+        &Columns::new(netlist),
+        &mut diagnostics,
+    );
+    (outcome, diagnostics)
+}
+
+/// In this fixture no row is within Newton's tolerance of either start after one iteration, so
+/// every row no step lands on fails twice. Each is the line between the accepted steps around
+/// it, with a warning, and the run reaches `stop`.
+/// A grid with no row inside a step takes the same steps and warns of nothing.
+#[test]
+fn a_row_that_fails_twice_is_the_line_between_its_steps() {
+    let netlist = reset_release(None);
+    let committed = transient(&netlist);
+    let (gridded, lines) = with_row_budget(&netlist, committed.grid, 1);
+    let (gridless, none) = with_row_budget(&netlist, committed.stop.as_ps(), 1);
+    assert_eq!(none, []);
+    assert_eq!(gridded.stats, gridless.stats);
+    assert_eq!(
+        serde_json::to_value(&gridded.observations).unwrap(),
+        serde_json::to_value(&gridless.observations).unwrap()
+    );
+    assert_eq!(reached(&gridded), committed.stop);
+
+    let steps = run_steps(&netlist);
+    assert_eq!(gridded.stats.landings, steps.rows() as u64 - 1);
+    let trace = gridded.trace.unwrap();
+    let off_steps = trace
+        .time()
+        .iter()
+        .filter(|at| steps.time().binary_search(at).is_err())
+        .count();
+    assert_eq!(lines.len(), off_steps);
+    for line in &lines {
+        let at = line.at().unwrap();
+        let k = steps.time().partition_point(|&t| t < at) - 1;
+        let (from, to) = (steps.time()[k], steps.time()[k + 1]);
+        assert_eq!(
+            serde_json::to_value(line).unwrap(),
+            serde_json::json!({
+                "code": "trace.row_interpolated",
+                "severity": "warning",
+                "refs": [],
+                "t_ps": at,
+                "message": format!(
+                    "the row at {} ps did not solve; it is the line between the steps at {} ps and {} ps",
+                    at.as_ps(),
+                    from.as_ps(),
+                    to.as_ps()
+                ),
+                "data": { "from_ps": from, "to_ps": to },
+            })
+        );
+        let share = (at.as_ps() - from.as_ps()) as f64 / (to.as_ps() - from.as_ps()) as f64;
+        let row = trace.time().binary_search(&at).unwrap();
+        for (j, quantity) in trace.columns().iter().enumerate() {
+            let (a, b) = (steps.column(j)[k], steps.column(j)[k + 1]);
+            let want = a + (b - a) * share;
+            let got = trace.column(j)[row];
+            assert!(
+                (got - want).abs() <= 1e-15 * a.abs().max(b.abs()),
+                "{quantity} at {at:?}: {got}, not {want}"
+            );
+        }
+    }
+}
+
+/// `voltage` through 1 kohm into 1 nF from `initial` V, with `current` into the capacitor
+/// and a switch `sw` across it, 1 kohm closed, on `contact`. Over 20 ns with a row at 10.5 ns.
+fn source_into_rc(voltage: &str, current: &str, contact: &str, initial: f64) -> Netlist {
+    let json = format!(
+        r#"{{
+          "version": 0,
+          "seed": 0,
+          "analysis": {{ "transient": {{ "stop_ps": 20000, "max_step_ps": 20000, "grid_ps": 10500 }} }},
+          "ground": "gnd",
+          "nets": ["gnd", "src", "vout"],
+          "parts": [
+            {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "src", "n": "gnd" }},
+              "voltage": {voltage} }},
+            {{ "name": "i1", "kind": "current_source", "pins": {{ "p": "vout", "n": "gnd" }},
+              "current": {current} }},
+            {{ "name": "r1", "kind": "resistor", "pins": {{ "a": "src", "b": "vout" }},
+              "resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }}, "ratings": {{ "power": null }} }},
+            {{ "name": "c1", "kind": "capacitor", "pins": {{ "a": "vout", "b": "gnd" }},
+              "capacitance": {{ "value": 1e-9, "unit": "F", "source": "user" }},
+              "initial": {{ "value": {initial:?}, "unit": "V", "source": "user" }} }},
+            {{ "name": "sw", "kind": "switch", "pins": {{ "a": "vout", "b": "gnd" }},
+              "on_resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }},
+              "off_resistance": {{ "value": 1e9, "unit": "ohm", "source": "user" }},
+              {contact}, "bounce": null }}
+          ]
+        }}"#
+    );
+    sim_core::netlist::parse(json.as_bytes()).unwrap()
+}
+
+/// A row inside the step after an edge that fails twice is the line from the restart, with the
+/// current source and the switch read after the edge. The restart is the operating point of the
+/// circuit after the edge with the capacitor held at its voltage at the edge.
+#[test]
+fn a_row_after_a_restart_is_the_line_from_the_restart() {
+    let step = |unit: &str, last: f64| {
+        format!(
+            r#"{{ "kind": "step", "initial": {{ "value": 0.0, "unit": "{unit}", "source": "user" }},
+            "final": {{ "value": {last:?}, "unit": "{unit}", "source": "user" }}, "at_ps": 10000 }}"#
+        )
+    };
+    let dc = |unit: &str, value: f64| {
+        format!(r#"{{ "value": {value:?}, "unit": "{unit}", "source": "user" }}"#)
+    };
+    let netlist = source_into_rc(
+        &step("V", 5.0),
+        &step("A", 1e-3),
+        r#""initial": "open", "events": [{ "t_ps": 10000, "state": "closed" }]"#,
+        2.0,
+    );
+    let steps = run_steps(&netlist);
+    let edge = steps.time().binary_search(&Time::from_ps(10_000)).unwrap();
+    let (edge_at, to) = (steps.time()[edge], steps.time()[edge + 1]);
+    assert_eq!(to, Time::from_ps(10_000 + EDGE_STEP));
+    let column = |name: &str| {
+        steps
+            .columns()
+            .iter()
+            .position(|r| r.to_string() == name)
+            .unwrap()
+    };
+    let vout = steps.column(column("#net.vout"))[edge];
+    let restart = run_steps(&source_into_rc(
+        &dc("V", 5.0),
+        &dc("A", 1e-3),
+        r#""initial": "closed", "events": []"#,
+        vout,
+    ));
+
+    let (outcome, lines) = with_row_budget(&netlist, 10_500, 1);
+    let [line] = lines.as_slice() else {
+        panic!("{lines:?}");
+    };
+    let at = Time::from_ps(10_500);
+    assert_eq!(line.at(), Some(at));
+    assert_eq!(
+        serde_json::to_value(line).unwrap()["data"],
+        serde_json::json!({ "from_ps": edge_at, "to_ps": to })
+    );
+    let trace = outcome.trace.unwrap();
+    let row = trace.time().binary_search(&at).unwrap();
+    assert_eq!(trace.column(column("#net.src"))[row], 5.0);
+    assert_eq!(trace.column(column("#i1.i"))[row], -1e-3);
+    for (j, quantity) in trace.columns().iter().enumerate() {
+        let want = (restart.column(j)[0] + steps.column(j)[edge + 1]) / 2.0;
+        assert_eq!(trace.column(j)[row], want, "{quantity}");
+    }
+}
+
+/// 5 V through 220 ohm into 1 uF from 0 V, with an LED across the capacitor, over 2 ms in
+/// steps of up to 100 us, with a row every 1 us.
+fn led_charge() -> Netlist {
+    let json = r#"{
+      "version": 0,
+      "seed": 0,
+      "analysis": { "transient": { "stop_ps": 2000000000, "max_step_ps": 100000000, "grid_ps": 1000000 } },
+      "ground": "gnd",
+      "nets": ["gnd", "vcc", "x"],
+      "parts": [
+        { "name": "v1", "kind": "voltage_source", "pins": { "p": "vcc", "n": "gnd" },
+          "voltage": { "value": 5.0, "unit": "V", "source": "user" } },
+        { "name": "r1", "kind": "resistor", "pins": { "a": "vcc", "b": "x" },
+          "resistance": { "value": 220.0, "unit": "ohm", "source": "user" }, "ratings": { "power": null } },
+        { "name": "c1", "kind": "capacitor", "pins": { "a": "x", "b": "gnd" },
+          "capacitance": { "value": 1e-6, "unit": "F", "source": "user" },
+          "initial": { "value": 0.0, "unit": "V", "source": "user" } },
+        { "name": "led1", "kind": "led", "pins": { "anode": "x", "cathode": "gnd" },
+          "saturation_current": { "value": 6.711e-10, "unit": "A", "source": "user" },
+          "emission_coefficient": { "value": 4.427, "unit": "1", "source": "user" },
+          "series_resistance": { "value": 2.115, "unit": "ohm", "source": "user" },
+          "ratings": { "current": null, "power": null } }
+      ]
+    }"#;
+    sim_core::netlist::parse(json.as_bytes()).unwrap()
+}
+
+/// With three iterations some rows do not converge from the last accepted step and do from the
+/// step's end, and the trace stores that second solve.
+#[test]
+fn a_row_whose_second_solve_converges_is_solved() {
+    let netlist = led_charge();
+    let (outcome, none) = with_row_budget(&netlist, transient(&netlist).grid, 3);
+    assert_eq!(none, []);
+    let trace = outcome.trace.unwrap();
+    let retried: Vec<_> = outcome
+        .row_solves
+        .iter()
+        .filter(|solves| solves.from_accepted.is_err())
+        .collect();
+    assert!(!retried.is_empty());
+    for RowSolves {
+        at, from_step_end, ..
+    } in retried
+    {
+        let Some(Ok(solved)) = from_step_end else {
+            panic!("the row at {at:?} did not solve from the step's end: {from_step_end:?}");
+        };
+        let row = trace.time().binary_search(at).unwrap();
+        for (j, quantity) in trace.columns().iter().enumerate() {
+            assert_eq!(
+                trace.column(j)[row].to_bits(),
+                solved[j].get().to_bits(),
+                "{quantity} at {at:?}"
+            );
+        }
+    }
+}
+
 /// 1 V to 2 V at `at`, through 1 kohm into 1 nF, and a 1 kohm switch across the capacitor
 /// that closes at the same picosecond.
 fn source_and_switch_at(at: u64) -> Netlist {

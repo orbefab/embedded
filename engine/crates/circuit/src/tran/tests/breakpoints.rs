@@ -3,20 +3,10 @@ use sim_core::netlist::Netlist;
 use super::super::*;
 use super::fixtures::*;
 
-/// `netlist`'s transient with its stop at `stop` and one grid interval, so that the only rows
-/// are t = 0 and `stop`.
-fn coarse(netlist: &Netlist, stop: u64) -> Transient {
-    Transient {
-        stop: Time::from_ps(stop),
-        grid: stop,
-        ..transient(netlist)
-    }
-}
-
 #[test]
 fn breakpoints_list_each_edge_the_nanosecond_after_it_and_after_the_start() {
     let netlist = led_switch();
-    let mut breakpoints = Breakpoints::new(&netlist, coarse(&netlist, 2_000_000));
+    let mut breakpoints = Breakpoints::new(&netlist, Time::from_ps(2_000_000));
     assert_eq!(breakpoints.next_after(Time::ZERO), Time::from_ps(EDGE_STEP));
     assert!(!breakpoints.is_edge(Time::from_ps(EDGE_STEP)));
     assert_eq!(
@@ -33,30 +23,13 @@ fn breakpoints_list_each_edge_the_nanosecond_after_it_and_after_the_start() {
         breakpoints.next_after(Time::from_ps(1_000_000 + EDGE_STEP)),
         Time::from_ps(2_000_000)
     );
-    let mut early = Breakpoints::new(&netlist, coarse(&netlist, 1_000_000));
+    let mut early = Breakpoints::new(&netlist, Time::from_ps(1_000_000));
     assert_eq!(early.next_after(Time::ZERO), Time::from_ps(EDGE_STEP));
     assert_eq!(
         early.next_after(Time::from_ps(EDGE_STEP)),
         Time::from_ps(1_000_000)
     );
     assert!(!early.is_edge(Time::from_ps(1_000_000)));
-}
-
-#[test]
-fn every_row_time_is_a_landing_and_the_last_is_stop() {
-    let netlist = led_switch();
-    let transient = Transient {
-        stop: Time::from_ps(1_250_000),
-        grid: 400_000,
-        ..transient(&netlist)
-    };
-    let mut breakpoints = Breakpoints::new(&netlist, transient);
-    assert_eq!(
-        landings(&mut breakpoints, 0, 1_250_000),
-        [
-            1_000, 400_000, 800_000, 1_000_000, 1_001_000, 1_200_000, 1_250_000
-        ]
-    );
 }
 
 /// A 0 to 5 V pulse into 1 kohm, rising every 10 ns from 10 ns and 5 ns wide, over 1 s:
@@ -108,7 +81,7 @@ fn landings(breakpoints: &mut Breakpoints<'_>, from: u64, to: u64) -> Vec<u64> {
 #[test]
 fn breakpoints_list_every_source_jump_past_a_million_without_a_cap() {
     let netlist = train_100mhz();
-    let mut breakpoints = Breakpoints::new(&netlist, coarse(&netlist, 1_000_000_000_000));
+    let mut breakpoints = Breakpoints::new(&netlist, Time::from_ps(1_000_000_000_000));
     assert_eq!(
         landings(&mut breakpoints, 0, 21_000),
         [1_000, 10_000, 11_000, 15_000, 16_000, 20_000, 21_000]
@@ -145,7 +118,7 @@ fn breakpoints_merge_jumps_across_sources_in_time_order() {
         resistor("rb", "b"),
     );
     let netlist = sim_core::netlist::parse(json.as_bytes()).unwrap();
-    let mut breakpoints = Breakpoints::new(&netlist, coarse(&netlist, 1_000_000_000_000));
+    let mut breakpoints = Breakpoints::new(&netlist, Time::from_ps(1_000_000_000_000));
     assert_eq!(
         landings(&mut breakpoints, 0, 9_000),
         [

@@ -28,13 +28,13 @@ pub fn runs_firmware(netlist: &Netlist) -> bool {
     })
 }
 
-/// The examples the scans of every example leave out, by name. A debug run of `atmega-blink`
-/// takes about 6.6 s, a debug `sim run` of `atmega-button` takes about 8.5 s, and a debug
-/// `sim run` of `atmega-fade` takes about 18 s, so `crates/cli/tests/blink.rs`,
-/// `crates/cli/tests/button.rs`, and `crates/cli/tests/fade.rs` each run that example's grid and
-/// its steps once, side by side, and assert what `transient_folder` and
-/// `every_example_writes_its_grid_and_its_steps_change_nothing_else` assert. No test runs any of
-/// them twice to compare the folders byte for byte.
+/// The examples the scans of every example leave out, by name. A debug `sim run` of
+/// `atmega-blink` takes about 7 s, of `atmega-button` about 9 s, and of `atmega-fade` about
+/// 20 s. So `crates/cli/tests/blink.rs`, `crates/cli/tests/button.rs` and
+/// `crates/cli/tests/fade.rs` each run that example once through `sim run`, with its steps, its
+/// grid and a grid with no row before `stop_ps` beside it, all at once. They hold the envelope
+/// to the steps, and the gridless run's stats, diagnostics, observations and `logic.vcd` to the
+/// grid's.
 pub const CHECKED_ON_THEIR_OWN: &[&str] = &["atmega-blink", "atmega-button", "atmega-fade"];
 
 pub fn transient_examples() -> Vec<String> {

@@ -171,31 +171,104 @@ fn every_example_writes_its_grid_and_its_steps_change_nothing_else() {
             );
         }
         let steps = sim_circuit::simulate_steps(&netlist);
-        let step_trace = steps.trace().unwrap();
-        assert!(step_trace.rows() > trace.rows(), "{name}");
         assert_eq!(results.diagnostics(), steps.diagnostics(), "{name}");
         let (grid, steps) = (results.observations(), steps.observations());
         assert_eq!(grid.end(), steps.end(), "{name}");
         assert_eq!(grid.switches(), steps.switches(), "{name}");
         assert_eq!(grid.logic(), steps.logic(), "{name}");
+    }
+}
 
-        // Every interval's envelope is the min and max of the step rows it spans, its two
-        // rows included. The steps run takes the same steps, so its rows are the samples.
-        assert_eq!(trace.intervals(), trace.rows() - 1, "{name}");
-        let step_t: Vec<u64> = step_trace.time().iter().map(|t| t.as_ps()).collect();
-        for j in 0..trace.columns().len() {
-            let (values, step_values) = (trace.column(j), step_trace.column(j));
-            for (k, &at) in rows.iter().enumerate().skip(1) {
-                let from = step_t.partition_point(|&t| t < rows[k - 1]);
-                let to = step_t.partition_point(|&t| t <= at);
-                let spanned = &step_values[from..to];
-                let low = spanned.iter().copied().fold(f64::INFINITY, f64::min);
-                let high = spanned.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                assert_eq!(trace.min_column(j)[k - 1], low, "{name} interval {k}");
-                assert_eq!(trace.max_column(j)[k - 1], high, "{name} interval {k}");
-                assert!(low <= values[k - 1].min(values[k]), "{name} containment");
-                assert!(high >= values[k - 1].max(values[k]), "{name} containment");
+/// Each interval's envelope is the steps run's samples strictly inside it plus its two rows,
+/// and a row at the time of an accepted step is that step, bit for bit.
+fn assert_rows_read_the_steps(run: &str, trace: &Trace, steps: &Trace) {
+    assert_eq!(trace.intervals(), trace.rows() - 1, "{run}");
+    let (rows, step_t) = (trace.time(), steps.time());
+    for (j, reference) in trace.columns().iter().enumerate() {
+        let (values, step_values) = (trace.column(j), steps.column(j));
+        for (k, at) in rows.iter().enumerate() {
+            if let Ok(step) = step_t.binary_search(at) {
+                assert_eq!(
+                    values[k].to_bits(),
+                    step_values[step].to_bits(),
+                    "{run} {reference} row {k}"
+                );
             }
+            if k == 0 {
+                continue;
+            }
+            let from = step_t.partition_point(|t| t <= &rows[k - 1]);
+            let to = step_t.partition_point(|t| t < at);
+            let samples = step_values[from..to]
+                .iter()
+                .chain([&values[k - 1], &values[k]]);
+            let low = samples.clone().copied().fold(f64::INFINITY, f64::min);
+            let high = samples.copied().fold(f64::NEG_INFINITY, f64::max);
+            assert_eq!(
+                trace.min_column(j)[k - 1],
+                low,
+                "{run} {reference} interval {k}"
+            );
+            assert_eq!(
+                trace.max_column(j)[k - 1],
+                high,
+                "{run} {reference} interval {k}"
+            );
+        }
+    }
+}
+
+/// `json` with its `grid_ps` set to `grid`.
+fn with_grid(json: &str, grid: u64) -> sim_core::netlist::Netlist {
+    let mut doc: serde_json::Value = serde_json::from_str(json).unwrap();
+    doc["analysis"]["transient"]["grid_ps"] = grid.into();
+    sim_core::netlist::parse(doc.to_string().as_bytes()).unwrap()
+}
+
+/// A row is a probe. On the committed grid, a grid four times finer, a grid off every
+/// breakpoint, and a grid with no row between t = 0 and `stop_ps`, every row and interval
+/// reads the steps run, and the runs take the same steps and stops and write the same
+/// diagnostics, observations and logic.
+#[test]
+fn a_grid_never_changes_the_run() {
+    for name in transient_examples() {
+        let json = example(&name);
+        let netlist = sim_core::netlist::parse(json.as_bytes()).unwrap();
+        let sim_core::netlist::Analysis::Transient(transient) = netlist.analysis() else {
+            panic!("{name} is not a transient");
+        };
+        let (grid, stop) = (transient.grid, transient.stop.as_ps());
+        let (steps, runs) = std::thread::scope(|scope| {
+            let steps = scope.spawn(|| sim_circuit::simulate_steps(&netlist));
+            let runs: Vec<_> = [grid, grid / 4, 3 * grid + 7, stop]
+                .into_iter()
+                .map(|grid| {
+                    let json = &json;
+                    scope.spawn(move || (grid, sim_circuit::simulate_stats(&with_grid(json, grid))))
+                })
+                .collect();
+            let runs: Vec<_> = runs.into_iter().map(|run| run.join().unwrap()).collect();
+            (steps.join().unwrap(), runs)
+        });
+        for (grid, (results, _)) in &runs {
+            let run = format!("{name} on a {grid} ps grid");
+            assert_rows_read_the_steps(&run, results.trace().unwrap(), steps.trace().unwrap());
+        }
+        let (_, (first, first_stats)) = &runs[0];
+        for (grid, (results, stats)) in &runs[1..] {
+            let run = format!("{name} on a {grid} ps grid");
+            assert_eq!(stats, first_stats, "{run}");
+            assert_eq!(results.diagnostics(), first.diagnostics(), "{run}");
+            assert_eq!(
+                serde_json::to_value(results.observations()).unwrap(),
+                serde_json::to_value(first.observations()).unwrap(),
+                "{run}"
+            );
+            assert_eq!(
+                results.trace().unwrap().logic(),
+                first.trace().unwrap().logic(),
+                "{run}"
+            );
         }
     }
 }
@@ -237,20 +310,29 @@ fn rc_closed_form(t_ps: f64, farad: f64) -> (f64, f64) {
     (v, (vth - v) * farad / tau)
 }
 
+/// On the committed grid and on one off every step, every row of `examples/rc-switch` follows
+/// the closed form, and so does each row no step lands on, which is a probe.
 #[test]
 fn the_rc_example_follows_its_closed_form_at_every_row() {
-    let results = simulate(&example("rc-switch"));
-    let trace = trace(&results);
-    let vout = column(trace, "#net.vout");
-    let current = column(trace, "#c1.i");
-    let (v_span, i_span) = (span(vout), span(current));
-    let mut worst = (0.0f64, 0.0f64);
-    for (row, at) in trace.time().iter().enumerate() {
-        let (v, i) = rc_closed_form(at.as_ps() as f64, 1e-6);
-        worst.0 = worst.0.max((vout[row] - v).abs() / v_span);
-        worst.1 = worst.1.max((current[row] - i).abs() / i_span);
+    let json = example("rc-switch");
+    let steps = simulate_steps(&json);
+    let steps = trace(&steps).time();
+    for grid in [20_000_000, 60_000_007] {
+        let results = sim_circuit::simulate(&with_grid(&json, grid));
+        let trace = trace(&results);
+        let vout = column(trace, "#net.vout");
+        let current = column(trace, "#c1.i");
+        let (v_span, i_span) = (span(vout), span(current));
+        let (mut worst, mut probes) = ((0.0f64, 0.0f64), 0);
+        for (row, at) in trace.time().iter().enumerate() {
+            probes += usize::from(steps.binary_search(at).is_err());
+            let (v, i) = rc_closed_form(at.as_ps() as f64, 1e-6);
+            worst.0 = worst.0.max((vout[row] - v).abs() / v_span);
+            worst.1 = worst.1.max((current[row] - i).abs() / i_span);
+        }
+        assert!(probes > trace.rows() / 2, "{grid} ps: {probes} probes");
+        assert!(worst.0 <= 1e-3 && worst.1 <= 1e-3, "{grid} ps: {worst:?}");
     }
-    assert!(worst.0 <= 1e-3 && worst.1 <= 1e-3, "{worst:?}");
 }
 
 /// The run again at half `max_step_ps`, compared on its rows, within `bound` of each column's span.

@@ -15,7 +15,7 @@ use crate::active::{self, Actives};
 use crate::chip;
 use crate::lte::{self, Charges, Segment, Verdict};
 use crate::newton::{
-    Circuit, Conditions, Converged, Failure, History, Integration, Iterate, Offender, newton,
+    Circuit, Conditions, Converged, Failure, History, Integration, Iterate, Offender, Side, newton,
 };
 use crate::observe::{self, Columns};
 use crate::op;
@@ -36,13 +36,14 @@ pub(crate) const STEP_BUDGET: u32 = 50;
 /// bounds an MCU-rate run.
 pub(crate) const MAX_STEPS: u64 = 100_000_000;
 
-/// Newton's budget for each step, each probe locating a chip event, and each rung of a
-/// restart's ladder, plus the accepted steps one run may take. A test lowers one to make
-/// that solve fail, or `steps` to end a dense schedule at the step limit.
+/// Newton's budget for each step, each probe locating a chip event, each solve of a row, and
+/// each rung of a restart's ladder, plus the accepted steps one run may take. A test lowers one
+/// to make that solve fail, or `steps` to end a dense schedule at the step limit.
 #[derive(Clone, Copy)]
 struct Budget {
     step: u32,
     probe: u32,
+    row: u32,
     restart: u32,
     steps: u64,
 }
@@ -50,6 +51,7 @@ struct Budget {
 const BUDGET: Budget = Budget {
     step: STEP_BUDGET,
     probe: STEP_BUDGET,
+    row: STEP_BUDGET,
     restart: op::OP_BUDGET,
     steps: MAX_STEPS,
 };
@@ -60,12 +62,21 @@ pub(crate) struct Outcome {
     pub(crate) observations: Observations,
     pub(crate) trace: Option<Trace>,
     pub(crate) stats: RunStats,
+    #[cfg(test)]
+    pub(crate) row_solves: Vec<RowSolves>,
+}
+
+#[cfg(test)]
+pub(crate) struct RowSolves {
+    pub(crate) at: Time,
+    pub(crate) from_accepted: Result<Vec<Finite>, Ref>,
+    pub(crate) from_step_end: Option<Result<Vec<Finite>, Ref>>,
 }
 
 /// Which accepted steps the trace keeps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Rows {
-    /// t = 0, every multiple of the grid, and `stop`.
+    /// t = 0, every multiple of the grid, and `stop`. A row time no step lands on is a probe.
     Grid,
     /// Every accepted step, for the solver's tests. The steps are the same as `Grid`'s. A run
     /// with more steps than the row limit ends with `trace.too_large` and keeps the rows
@@ -81,6 +92,17 @@ impl Rows {
             #[cfg(any(test, feature = "step-rows"))]
             Rows::Steps => true,
         }
+    }
+
+    /// The row times in `(from, to)`, which no accepted step lands on.
+    fn rows_in(self, transient: Transient, from: Time, to: Time) -> impl Iterator<Item = Time> {
+        let first = match self {
+            Rows::Grid => Some(transient.next_row_after(from)),
+            #[cfg(any(test, feature = "step-rows"))]
+            Rows::Steps => None,
+        };
+        std::iter::successors(first, move |&row| Some(transient.next_row_after(row)))
+            .take_while(move |&row| row < to)
     }
 }
 
@@ -106,6 +128,8 @@ pub(crate) fn run(
             observations: Observations::Nothing,
             trace: None,
             stats: RunStats::default(),
+            #[cfg(test)]
+            row_solves: Vec::new(),
         };
     }
     run_with(
@@ -132,12 +156,15 @@ fn run_with(
         trace: Trace::new(columns.refs().to_vec(), transient),
         transient: *transient,
         rows,
-        last_step: None,
+        last: None,
+        interpolated: Vec::new(),
         ratings: Ratings::new(netlist, columns, Timing::Run),
         columns,
         op: None,
         logic: None,
         stats: RunStats::default(),
+        #[cfg(test)]
+        row_solves: Vec::new(),
     };
     let result = steps(netlist, transient, actives, budget, &mut record);
     let outcome = record.finish(netlist, diagnostics);
@@ -151,21 +178,36 @@ struct Record<'c> {
     trace: Trace,
     transient: Transient,
     rows: Rows,
-    /// The last accepted step, when it is not a row. A run that fails stores it as its last
-    /// row.
-    last_step: Option<(Time, Vec<Finite>)>,
+    /// The last accepted step. A run that fails stores it as its last row when it is not one.
+    last: Option<Last>,
+    /// `trace.row_interpolated` for each row whose solve failed twice.
+    interpolated: Vec<Diagnostic>,
     ratings: Ratings,
     op: Option<OpPoint>,
     /// `None` without a chip.
     logic: Option<Logic>,
     stats: RunStats,
+    #[cfg(test)]
+    row_solves: Vec<RowSolves>,
+}
+
+struct Last {
+    at: Time,
+    row: Vec<Finite>,
+    kept: bool,
 }
 
 impl Record<'_> {
-    /// Ratings sample every accepted step. A non-row step folds into the open interval, and
-    /// a row closes it. A row past the trace's limit is `trace.too_large`, and the step is
+    /// Ratings sample every accepted step. `probes` are the rows before it, which close
+    /// intervals and sample nothing else. A non-row step folds into the open interval, and a
+    /// row closes it. A row past the trace's limit is `trace.too_large`, and the step is
     /// neither stored nor folded.
-    fn accept(&mut self, at: Time, row: Vec<Finite>) -> Result<(), Diagnostic> {
+    fn accept(
+        &mut self,
+        probes: Vec<(Time, Vec<Finite>)>,
+        at: Time,
+        row: Vec<Finite>,
+    ) -> Result<(), Diagnostic> {
         let kept = self.rows.keeps(&self.transient, at);
         if kept {
             let columns = self.columns.refs().len();
@@ -179,17 +221,19 @@ impl Record<'_> {
                 });
             }
         }
+        for (probe_at, probe) in probes {
+            self.trace.push(probe_at, &probe);
+        }
         self.ratings.sample(at, &row);
         if at == Time::ZERO {
             self.op = Some(observe::op_point(self.columns, &row));
         }
         if kept {
             self.trace.push(at, &row);
-            self.last_step = None;
         } else {
             self.trace.sample(&row);
-            self.last_step = Some((at, row));
         }
+        self.last = Some(Last { at, row, kept });
         Ok(())
     }
 
@@ -199,16 +243,19 @@ impl Record<'_> {
     /// from the `Logic` the trace keeps.
     fn finish(self, netlist: &Netlist, diagnostics: &mut Vec<Diagnostic>) -> Outcome {
         diagnostics.extend(self.ratings.finish());
+        diagnostics.extend(self.interpolated);
         let stats = self.stats;
         let (mut trace, Some(op)) = (self.trace, self.op) else {
             return Outcome {
                 observations: Observations::Nothing,
                 trace: None,
                 stats,
+                #[cfg(test)]
+                row_solves: self.row_solves,
             };
         };
-        if let Some((at, row)) = self.last_step {
-            trace.push(at, &row);
+        if let Some(last) = self.last.filter(|last| !last.kept) {
+            trace.push(last.at, &last.row);
         }
         let end = trace.end().expect("the operating point is row 0");
         let summary = self.logic.as_ref().map(Logic::summary);
@@ -224,6 +271,8 @@ impl Record<'_> {
             },
             trace: Some(trace),
             stats,
+            #[cfg(test)]
+            row_solves: self.row_solves,
         }
     }
 
@@ -244,10 +293,12 @@ impl Record<'_> {
 
 /// The whole state a step starts from. Replaced, never mutated, on accept. A retry, a
 /// rejected step or a probe only reads it.
-struct Accepted {
+pub(crate) struct Accepted {
     at: Time,
     /// After a restart, the restart solve at `at`, not the row at `at`.
     iterate: Iterate,
+    /// After a restart, `iterate` read on the interval that starts at `at`.
+    restart_row: Option<Vec<Finite>>,
     segment: Segment,
     /// Each chip's state, by slot.
     chips: Vec<chip::State>,
@@ -279,15 +330,17 @@ fn steps(
         record.columns,
         &start.iterate.solution,
         Time::ZERO,
+        Side::Before,
     )?;
-    record.accept(Time::ZERO, row)?;
+    record.accept(Vec::new(), Time::ZERO, row)?;
     record.logic(Time::ZERO, &circuit, &start.chips, &start.levels);
     let mut actives = Actives::new(&circuit, &start.levels);
-    let mut breakpoints = Breakpoints::new(netlist, *transient);
+    let mut breakpoints = Breakpoints::new(netlist, transient.stop);
     let segment = Segment::start(&charges, &start.iterate.solution);
     let mut accepted = Accepted {
         at: Time::ZERO,
         iterate: start.iterate,
+        restart_row: None,
         segment,
         chips: start.chips,
         levels: start.levels,
@@ -306,7 +359,14 @@ fn steps(
         let h = plan.clip(accepted.at, breakpoints.next_after(accepted.at));
         let at = actives.horizon(Time::from_ps(accepted.at.as_ps() + h));
         let h = at.as_ps() - accepted.at.as_ps();
-        match attempt(&circuit, &accepted, actives.cores(), h, budget.step) {
+        match attempt(
+            &circuit,
+            &accepted,
+            actives.cores(),
+            h,
+            &accepted.iterate,
+            budget.step,
+        ) {
             Ok(converged) => {
                 let error = lte::error(
                     &charges,
@@ -344,7 +404,16 @@ fn steps(
                         &accepted.levels,
                         (accepted.at, &accepted.iterate.solution),
                         (at, converged),
-                        |h| attempt(&circuit, &accepted, actives.cores(), h, budget.probe),
+                        |h| {
+                            attempt(
+                                &circuit,
+                                &accepted,
+                                actives.cores(),
+                                h,
+                                &accepted.iterate,
+                                budget.probe,
+                            )
+                        },
                     )
                     .map_err(|(probe, failure)| {
                         probe_failure(&circuit, accepted.at, probe, failure)
@@ -355,9 +424,54 @@ fn steps(
                     (located, converged, levels)
                 };
                 // The row holds the chip states it was solved with.
-                let row =
-                    observe::observe(&circuit, record.columns, &converged.iterate.solution, at)?;
-                record.accept(at, row)?;
+                let row = observe::observe(
+                    &circuit,
+                    record.columns,
+                    &converged.iterate.solution,
+                    at,
+                    Side::Before,
+                )?;
+                let columns = record.columns;
+                let mut probes = Vec::new();
+                // The step converged, so a row that fails both solves never rejects it.
+                for probe_at in record.rows.rows_in(*transient, accepted.at, at) {
+                    let solve = |start: &Iterate| {
+                        probe_row(
+                            &circuit,
+                            columns,
+                            &accepted,
+                            actives.cores(),
+                            probe_at,
+                            start,
+                            budget.row,
+                        )
+                    };
+                    let first = solve(&accepted.iterate);
+                    let retry = first.is_err().then(|| solve(&converged.iterate));
+                    #[cfg(test)]
+                    record.row_solves.push(RowSolves {
+                        at: probe_at,
+                        from_accepted: first.clone(),
+                        from_step_end: retry.clone(),
+                    });
+                    let probe = match retry.unwrap_or(first) {
+                        Ok(probe) => probe,
+                        Err(_) => {
+                            let from = match &accepted.restart_row {
+                                Some(from) => from,
+                                None => &record.last.as_ref().expect("t = 0 is a step").row,
+                            };
+                            record.interpolated.push(Diagnostic::TraceRowInterpolated {
+                                at: probe_at,
+                                from: accepted.at,
+                                to: at,
+                            });
+                            line((accepted.at, from), (at, &row), probe_at)
+                        }
+                    };
+                    probes.push((probe_at, probe));
+                }
+                record.accept(probes, at, row)?;
                 record.stats.landings += 1;
                 iterations = 0;
                 // A watch cuts the step. Only a changed stamp, a chip's, an active chip's image, a
@@ -389,11 +503,19 @@ fn steps(
                         &levels,
                         budget.restart,
                     )?;
+                    let restart_row = observe::observe(
+                        &circuit,
+                        record.columns,
+                        &held.iterate.solution,
+                        at,
+                        Side::After,
+                    )?;
                     actives.input(&circuit, at, &levels, &held.levels);
                     let segment = Segment::start(&charges, &held.iterate.solution);
                     Accepted {
                         at,
                         iterate: held.iterate,
+                        restart_row: Some(restart_row),
                         segment,
                         chips: held.chips,
                         levels: held.levels,
@@ -419,6 +541,7 @@ fn steps(
                             swings,
                         ),
                         iterate: converged.iterate,
+                        restart_row: None,
                         chips,
                         levels: levels.clone(),
                     }
@@ -482,12 +605,55 @@ fn probe_failure(circuit: &Circuit, from: Time, probe: Time, failure: Failure) -
     }
 }
 
+/// The row at `at`, solved from `from` the way the next step would be and never accepted.
+/// `at` is after `from.at`. The caller keeps it no later than the next accepted step, so no
+/// breakpoint falls between them. An error names the unknown or the part the solve failed at.
+/// A live read will report it to that reader alone and leave the run as it is.
+pub(crate) fn probe_row(
+    circuit: &Circuit,
+    columns: &Columns,
+    from: &Accepted,
+    cores: &[active::Core],
+    at: Time,
+    start: &Iterate,
+    budget: u32,
+) -> Result<Vec<Finite>, Ref> {
+    debug_assert!(at > from.at, "a row at {at:?} is not after {:?}", from.at);
+    let h = at.as_ps() - from.at.as_ps();
+    let converged =
+        attempt(circuit, from, cores, h, start, budget).map_err(|failure| match failure {
+            Failure::Singular { row } => circuit.layout.describe(circuit.netlist, row),
+            Failure::Stalled(stall) => stall.offender.describe(circuit),
+        })?;
+    observe::row(
+        circuit,
+        columns,
+        &converged.iterate.solution,
+        at,
+        Side::Before,
+    )
+}
+
+/// The straight line from the row `from` to the row `to`, read at `at` between them.
+fn line(from: (Time, &[Finite]), to: (Time, &[Finite]), at: Time) -> Vec<Finite> {
+    let share = (at.as_ps() - from.0.as_ps()) as f64 / (to.0.as_ps() - from.0.as_ps()) as f64;
+    from.1
+        .iter()
+        .zip(to.1)
+        .map(|(a, b)| {
+            Finite::new(a.get() * (1.0 - share) + b.get() * share)
+                .expect("between two finite values")
+        })
+        .collect()
+}
+
 /// One step of `h` ps from `from`. `from` is only read, so a retry calls this again.
 fn attempt(
     circuit: &Circuit,
     from: &Accepted,
     cores: &[active::Core],
     h: u64,
+    start: &Iterate,
     budget: u32,
 ) -> Result<Converged, Failure> {
     let conditions = Conditions {
@@ -502,7 +668,7 @@ fn attempt(
         cores,
         ..Conditions::NOMINAL
     };
-    newton(circuit, &conditions, from.iterate.clone(), budget)
+    newton(circuit, &conditions, start.clone(), budget)
 }
 
 /// The solve after a switch edge, a source jump or a chip drive change at `at`: every capacitor
@@ -536,12 +702,12 @@ fn restart_solve(
     )
 }
 
-/// Where a step must land: every row time, every contact edge and source jump, and 1 ns after
-/// t = 0 and after each edge. The deck ramps each contact and source over that nanosecond. A
-/// lazy merge of one cursor per part, so no edge list is built and none is capped. Time only
-/// moves forward.
+/// Where a step must land: every contact edge and source jump, 1 ns after t = 0 and after each
+/// edge, and `stop`. The deck ramps each contact and source over that nanosecond. A lazy merge
+/// of one cursor per part, so no edge list is built and none is capped. Time only moves
+/// forward.
 struct Breakpoints<'n> {
-    transient: Transient,
+    stop: Time,
     /// Each cursor's next edge before `stop`, earliest first, with the cursor's index.
     edges: BinaryHeap<Reverse<(Time, usize)>>,
     cursors: Vec<Box<dyn Iterator<Item = Time> + 'n>>,
@@ -550,8 +716,7 @@ struct Breakpoints<'n> {
 }
 
 impl<'n> Breakpoints<'n> {
-    fn new(netlist: &'n Netlist, transient: Transient) -> Breakpoints<'n> {
-        let stop = transient.stop;
+    fn new(netlist: &'n Netlist, stop: Time) -> Breakpoints<'n> {
         let mut cursors: Vec<Box<dyn Iterator<Item = Time> + 'n>> = Vec::new();
         let mut edges = BinaryHeap::new();
         for (_, part) in netlist.parts() {
@@ -577,7 +742,7 @@ impl<'n> Breakpoints<'n> {
             }
         }
         let mut breakpoints = Breakpoints {
-            transient,
+            stop,
             edges,
             cursors,
             ramp_ends: VecDeque::new(),
@@ -586,7 +751,7 @@ impl<'n> Breakpoints<'n> {
         breakpoints
     }
 
-    /// The earliest landing after `now`, which is before `stop`.
+    /// The earliest landing after `now`, which is at most `stop`.
     fn next_after(&mut self, now: Time) -> Time {
         while let Some(&Reverse((at, index))) = self.edges.peek()
             && at <= now
@@ -600,10 +765,9 @@ impl<'n> Breakpoints<'n> {
         while self.ramp_ends.front().is_some_and(|&end| end <= now) {
             self.ramp_ends.pop_front();
         }
-        let row = self.transient.next_row_after(now);
-        let edge = self.edges.peek().map_or(row, |&Reverse((at, _))| at);
-        let ramp_end = self.ramp_ends.front().copied().unwrap_or(row);
-        row.min(edge).min(ramp_end)
+        let edge = self.edges.peek().map_or(self.stop, |&Reverse((at, _))| at);
+        let ramp_end = self.ramp_ends.front().copied().unwrap_or(self.stop);
+        edge.min(ramp_end)
     }
 
     /// Whether a contact edge or a source jump falls at `at`, a time `next_after` returned.
@@ -617,9 +781,7 @@ impl<'n> Breakpoints<'n> {
         let Some(end) = edge.as_ps().checked_add(EDGE_STEP) else {
             return;
         };
-        if end < self.transient.stop.as_ps()
-            && self.ramp_ends.back().is_none_or(|back| back.as_ps() < end)
-        {
+        if end < self.stop.as_ps() && self.ramp_ends.back().is_none_or(|back| back.as_ps() < end) {
             self.ramp_ends.push_back(Time::from_ps(end));
         }
     }

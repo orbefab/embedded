@@ -1,7 +1,7 @@
 use sim_core::diagnostic::Diagnostic;
 use sim_core::logic::Level;
 use sim_core::name::{Name, Ref};
-use sim_core::netlist::{Model, Netlist, PartId, Waveform};
+use sim_core::netlist::{Contact, Model, Netlist, PartId, Schedule, Waveform};
 use sim_core::time::Time;
 
 use crate::active;
@@ -182,8 +182,7 @@ pub(crate) struct Conditions<'h> {
     pub(crate) gmin: f64,
     /// Multiplies every independent source.
     pub(crate) source_scale: f64,
-    /// The time this solve is for. A switch takes its contact, and a source its value, on the
-    /// interval ending here, or on the one starting here under `History::Restart`.
+    /// The time this solve is for.
     pub(crate) at: Time,
     pub(crate) history: History<'h>,
     /// Each chip's state, by slot. Only an accepted time changes it.
@@ -193,17 +192,39 @@ pub(crate) struct Conditions<'h> {
 }
 
 impl Conditions<'_> {
-    /// Whether a timed stamp takes the interval that starts at `at`. Only a restart does.
-    pub(crate) fn after_change(&self) -> bool {
-        matches!(self.history, History::Restart { .. })
+    pub(crate) fn side(&self) -> Side {
+        match self.history {
+            History::Restart { .. } => Side::After,
+            History::Start | History::Step(_) => Side::Before,
+        }
     }
 
     /// A source's netlist value in this solve, before `source_scale`.
     pub(crate) fn level(&self, waveform: &Waveform) -> f64 {
-        if self.after_change() {
-            waveform.after(self.at)
-        } else {
-            waveform.before(self.at)
+        self.side().level(waveform, self.at)
+    }
+}
+
+/// Which interval at a time a timed part is read on: the one that ends there or the one that
+/// starts there.
+#[derive(Clone, Copy)]
+pub(crate) enum Side {
+    Before,
+    After,
+}
+
+impl Side {
+    pub(crate) fn level(self, waveform: &Waveform, at: Time) -> f64 {
+        match self {
+            Side::Before => waveform.before(at),
+            Side::After => waveform.after(at),
+        }
+    }
+
+    pub(crate) fn contact(self, schedule: &Schedule, at: Time) -> Contact {
+        match self {
+            Side::Before => schedule.before(at),
+            Side::After => schedule.after(at),
         }
     }
 }

@@ -9,7 +9,7 @@ use sim_core::name::Ref;
 use crate::active::{self, Actives};
 use crate::chip;
 use crate::ladder::{self, Next, Rung};
-use crate::newton::{Circuit, Conditions, Failure, Iterate, Offender, newton};
+use crate::newton::{Circuit, Conditions, Failure, Iterate, Offender, Side, newton};
 use crate::observe::{self, Columns};
 use crate::ratings::{Ratings, Timing};
 use crate::watch::Levels;
@@ -48,7 +48,13 @@ fn solve(netlist: &Netlist, columns: &Columns) -> Result<Vec<Finite>, Diagnostic
         None,
         OP_BUDGET,
     )?;
-    observe::observe(&circuit, columns, &settled.iterate.solution, Time::ZERO)
+    observe::observe(
+        &circuit,
+        columns,
+        &settled.iterate.solution,
+        Time::ZERO,
+        Side::Before,
+    )
 }
 
 /// A solve the chips agree with: its chip states, and the levels they read on it.

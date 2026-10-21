@@ -207,8 +207,8 @@ fn an_off_grid_failure_keeps_that_accepted_step_as_its_last_row() {
         panic!("{grid_diagnostics:?}");
     };
     assert_eq!(failed.code(), "solver.nonfinite");
-    assert_eq!(failed.refs(), vec!["#v1".parse().unwrap()]);
-    assert_eq!(failed.at(), Some(Time::from_ps(5_001)));
+    assert_eq!(failed.refs(), vec!["#c1".parse().unwrap()]);
+    assert_eq!(failed.at(), Some(end));
     assert_eq!(step_diagnostics[0].code(), failed.code());
     assert_eq!(step_diagnostics[0].at(), failed.at());
     let trace = grid.trace.unwrap();

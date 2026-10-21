@@ -11,6 +11,7 @@ use sim_core::time::Time;
 
 use crate::chip;
 use crate::mna::{Probe, Stamp, Unknowns};
+use crate::newton::Side;
 
 pub(crate) fn unknowns(model: &Model) -> Unknowns {
     match model {
@@ -107,7 +108,7 @@ pub(crate) fn dc_paths(model: &Model) -> &'static [(usize, usize)] {
 
 /// `i`, `v` and `p` at `at`, in `Quantity` order, for a part that `has_quantities`.
 /// Not checked for finiteness.
-pub(crate) fn observe(model: &Model, probe: &Probe<'_>, at: Time) -> Option<[f64; 3]> {
+pub(crate) fn observe(model: &Model, probe: &Probe<'_>, at: Time, side: Side) -> Option<[f64; 3]> {
     if !model.has_quantities() {
         return None;
     }
@@ -115,10 +116,10 @@ pub(crate) fn observe(model: &Model, probe: &Probe<'_>, at: Time) -> Option<[f64
         Model::Chip(_) | Model::Potentiometer(_) => unreachable!("has_quantities returned true"),
         Model::Resistor(resistor) => (resistor.pins, resistor::current(resistor, probe)),
         Model::VoltageSource(source) => (source.pins, voltage_source::current(probe)),
-        Model::CurrentSource(source) => (source.pins, current_source::current(source, at)),
+        Model::CurrentSource(source) => (source.pins, current_source::current(source, at, side)),
         Model::Diode(j) | Model::Led(j) => (j.pins, junction::current(j, probe)),
         Model::Capacitor(capacitor) => (capacitor.pins, capacitor::current(probe)),
-        Model::Switch(switch) => (switch.pins, switch::current(switch, probe, at)),
+        Model::Switch(switch) => (switch.pins, switch::current(switch, probe, at, side)),
     };
     let v = probe.v(pins[0]) - probe.v(pins[1]);
     Some([i, v, v * i])

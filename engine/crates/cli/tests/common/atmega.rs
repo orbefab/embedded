@@ -125,7 +125,8 @@ fn led_levels(netlist: &serde_json::Value) -> Levels {
     }
 }
 
-/// One `sim run` beside `simulate_steps` of the same netlist, so a test pays for one run.
+/// One `sim run` beside `simulate_steps` and a run of the same netlist with no row before
+/// `stop_ps`, all at once.
 pub struct Beside {
     pub netlist: serde_json::Value,
     pub parsed: sim_core::netlist::Netlist,
@@ -141,14 +142,20 @@ pub fn run_beside_steps(example: &str) -> Beside {
     let parsed = sim_core::netlist::parse(&bytes).unwrap();
     let out = std::env::temp_dir().join(format!("sim-cli-{example}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&out);
-    let (output, steps) = std::thread::scope(|scope| {
+    let mut gridless = netlist.clone();
+    let stop = gridless["analysis"]["transient"]["stop_ps"].clone();
+    gridless["analysis"]["transient"]["grid_ps"] = stop;
+    let gridless = serde_json::to_vec(&gridless).unwrap();
+    let gridless_parsed = sim_core::netlist::parse(&gridless).unwrap();
+    let (output, steps, (gridless_results, gridless_stats)) = std::thread::scope(|scope| {
         let steps = scope.spawn(|| sim_circuit::simulate_steps(&parsed));
+        let gridless = scope.spawn(|| sim_circuit::simulate_stats(&gridless_parsed));
         let output = Command::new(env!("CARGO_BIN_EXE_sim"))
             .args(["run".as_ref(), path.as_os_str()])
             .args(["--out".as_ref(), out.as_os_str()])
             .output()
             .unwrap();
-        (output, steps.join().unwrap())
+        (output, steps.join().unwrap(), gridless.join().unwrap())
     });
     assert_eq!(output.status.code(), Some(0), "{example}");
     assert!(output.stderr.is_empty(), "{example}");
@@ -158,6 +165,24 @@ pub fn run_beside_steps(example: &str) -> Beside {
 
     let folder = transient_folder(example, &out);
     fs::remove_dir_all(&out).unwrap();
+    assert_eq!(
+        gridless_stats.landings,
+        steps.trace().unwrap().rows() as u64 - 1,
+        "{example} with no row before stop_ps"
+    );
+    let gridless_folder = sim_core::run_folder::render(
+        &gridless,
+        Some(&gridless_parsed),
+        &gridless_results,
+        sim_core::timestamp::Timestamp::from_unix_seconds(0),
+    );
+    for file in ["diagnostics.json", "observations.json", "traces/logic.vcd"] {
+        assert_eq!(
+            gridless_folder.file(file),
+            Some(folder.files[file].as_slice()),
+            "{example} {file} with no row before stop_ps"
+        );
+    }
     let observations: serde_json::Value =
         serde_json::from_slice(&folder.files["observations.json"]).unwrap();
     assert_eq!(
@@ -173,16 +198,21 @@ pub fn run_beside_steps(example: &str) -> Beside {
     let step_refs: Vec<String> = step_trace.columns().iter().map(|r| r.to_string()).collect();
     assert_eq!(step_refs, folder.refs);
     let step_t: Vec<u64> = step_trace.time().iter().map(|at| at.as_ps()).collect();
-    assert!(step_t.len() > folder.time.len(), "{example}");
+    let rows = folder.time.len();
     for (j, reference) in folder.refs.iter().enumerate() {
         let (mins, maxs) = folder.bounds(reference);
-        let step_values = step_trace.column(j);
-        for k in 0..folder.time.len() - 1 {
-            let from = step_t.partition_point(|&at| at < folder.time[k]);
-            let to = step_t.partition_point(|&at| at <= folder.time[k + 1]);
-            let spanned = &step_values[from..to];
-            let low = spanned.iter().copied().fold(f64::INFINITY, f64::min);
-            let high = spanned.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let (values, step_values) = (
+            &folder.analog[j * rows..(j + 1) * rows],
+            step_trace.column(j),
+        );
+        for k in 0..rows - 1 {
+            let from = step_t.partition_point(|&at| at <= folder.time[k]);
+            let to = step_t.partition_point(|&at| at < folder.time[k + 1]);
+            let samples = step_values[from..to]
+                .iter()
+                .chain([&values[k], &values[k + 1]]);
+            let low = samples.clone().copied().fold(f64::INFINITY, f64::min);
+            let high = samples.copied().fold(f64::NEG_INFINITY, f64::max);
             assert_eq!((mins[k], maxs[k]), (low, high), "{reference} interval {k}");
         }
     }
@@ -220,9 +250,17 @@ pub fn logic_vcd(beside: &Beside, changing: &[&str]) -> serde_json::Value {
 
 /// `#led1.i` follows `pin`, the edges of the output that drives the LED. The step at an edge's
 /// picosecond still holds the previous level, and the next step is `RESTART_PS` later. Before
-/// any edge, steps through `driven_ps` are off and later steps are low.
+/// any edge, steps through `driven_ps` are off and later steps are low. A row reads the level
+/// before the next edge, so a row's solve stamps the image the core has committed, not the
+/// one it has run ahead to.
 pub fn assert_led_follows(beside: &Beside, pin: &[(u64, bool)], driven_ps: u64) {
     let Levels { off, low, high } = led_levels(&beside.netlist);
+    let want = |at: u64| match pin.iter().rfind(|&&(edge, _)| edge < at) {
+        Some(&(_, true)) => high,
+        Some(&(_, false)) => low,
+        None if at <= driven_ps => off,
+        None => low,
+    };
     let (mins, maxs) = beside.folder.bounds("#led1.i");
     for &(edge, _) in pin {
         let k = beside.folder.time.partition_point(|&at| at <= edge) - 1;
@@ -239,6 +277,15 @@ pub fn assert_led_follows(beside: &Beside, pin: &[(u64, bool)], driven_ps: u64) 
         .iter()
         .position(|reference| reference == "#led1.i")
         .unwrap();
+    let count = beside.folder.time.len();
+    let values = &beside.folder.analog[column * count..(column + 1) * count];
+    for (k, (&at, &i)) in beside.folder.time.iter().zip(values).enumerate() {
+        assert!(
+            near(i, want(at)),
+            "row {k}: {i} A at {at} ps, not {} A",
+            want(at)
+        );
+    }
     let rows: Vec<(u64, f64)> = step_trace
         .time()
         .iter()
@@ -246,13 +293,7 @@ pub fn assert_led_follows(beside: &Beside, pin: &[(u64, bool)], driven_ps: u64) 
         .zip(step_trace.column(column).iter().copied())
         .collect();
     for &(at, i) in &rows {
-        let want = match pin.iter().rfind(|&&(edge, _)| edge < at) {
-            Some(&(_, true)) => high,
-            Some(&(_, false)) => low,
-            None if at <= driven_ps => off,
-            None => low,
-        };
-        assert!(near(i, want), "{i} A at {at} ps, not {want} A");
+        assert!(near(i, want(at)), "{i} A at {at} ps, not {} A", want(at));
     }
     for &(edge, _) in pin {
         let k = rows.iter().position(|&(at, _)| at == edge).unwrap();

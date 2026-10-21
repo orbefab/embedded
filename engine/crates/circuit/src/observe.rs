@@ -7,7 +7,7 @@ use sim_core::time::Time;
 
 use crate::element;
 use crate::mna::{Probe, Solution};
-use crate::newton::Circuit;
+use crate::newton::{Circuit, Side};
 
 const QUANTITIES: [Quantity; 3] = [Quantity::I, Quantity::V, Quantity::P];
 
@@ -60,7 +60,20 @@ pub(crate) fn observe(
     columns: &Columns,
     x: &Solution,
     at: Time,
+    side: Side,
 ) -> Result<Vec<Finite>, Diagnostic> {
+    row(circuit, columns, x, at, side)
+        .map_err(|unknown| Diagnostic::SolverNonFinite { at, unknown })
+}
+
+/// `observe`, with the part whose quantity is not finite as the error.
+pub(crate) fn row(
+    circuit: &Circuit,
+    columns: &Columns,
+    x: &Solution,
+    at: Time,
+    side: Side,
+) -> Result<Vec<Finite>, Ref> {
     let mut row = Vec::with_capacity(columns.refs.len());
     for &net in &columns.nets {
         row.push(Finite::new(x.voltage(net)).expect("solution components are finite"));
@@ -71,16 +84,11 @@ pub(crate) fn observe(
             part: id,
             x,
         };
-        for value in element::observe(&part.model, &probe, at)
+        for value in element::observe(&part.model, &probe, at, side)
             .into_iter()
             .flatten()
         {
-            row.push(
-                Finite::new(value).ok_or_else(|| Diagnostic::SolverNonFinite {
-                    at,
-                    unknown: Ref::Part(part.name.clone()),
-                })?,
-            );
+            row.push(Finite::new(value).ok_or_else(|| Ref::Part(part.name.clone()))?);
         }
     }
     Ok(row)

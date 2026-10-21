@@ -206,6 +206,9 @@ pub enum Diagnostic {
         columns: usize,
         at: Option<Time>,
     },
+    /// The row at `at` did not solve, twice, so it is the line between the accepted steps at
+    /// `from` and `to`.
+    TraceRowInterpolated { at: Time, from: Time, to: Time },
     /// Newton found no operating point.
     SolverConvergence {
         at: Time,
@@ -277,6 +280,7 @@ impl Diagnostic {
             Diagnostic::SolverConvergence { .. } => "solver.convergence",
             Diagnostic::ChipUnsettled { .. } => "chip.unsettled",
             Diagnostic::TraceTooLarge { .. } => "trace.too_large",
+            Diagnostic::TraceRowInterpolated { .. } => "trace.row_interpolated",
             Diagnostic::RatingCurrent(_) => "rating.current",
             Diagnostic::RatingPower(_) => "rating.power",
         }
@@ -285,6 +289,7 @@ impl Diagnostic {
     pub fn severity(&self) -> Severity {
         match self {
             Diagnostic::NetFloating { .. }
+            | Diagnostic::TraceRowInterpolated { .. }
             | Diagnostic::RatingCurrent(_)
             | Diagnostic::RatingPower(_) => Severity::Warning,
             Diagnostic::NetlistSyntax { .. }
@@ -318,7 +323,8 @@ impl Diagnostic {
             | Diagnostic::SolverTooLarge { at, .. }
             | Diagnostic::SolverStepLimit { at, .. }
             | Diagnostic::SolverConvergence { at, .. }
-            | Diagnostic::ChipUnsettled { at, .. } => Some(*at),
+            | Diagnostic::ChipUnsettled { at, .. }
+            | Diagnostic::TraceRowInterpolated { at, .. } => Some(*at),
             Diagnostic::TraceTooLarge { at, .. } => *at,
             Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
                 Some(excursion.first)
@@ -364,7 +370,8 @@ impl Diagnostic {
             Diagnostic::ChipUnsettled { chips, .. } => chips.clone(),
             Diagnostic::SolverTooLarge { .. }
             | Diagnostic::SolverStepLimit { .. }
-            | Diagnostic::TraceTooLarge { .. } => Vec::new(),
+            | Diagnostic::TraceTooLarge { .. }
+            | Diagnostic::TraceRowInterpolated { .. } => Vec::new(),
             Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
                 vec![excursion.quantity.clone()]
             }
@@ -587,6 +594,12 @@ impl Diagnostic {
                 "the trace holds {limit} rows; the step at {} ps did not fit",
                 at.as_ps()
             ),
+            Diagnostic::TraceRowInterpolated { at, from, to } => format!(
+                "the row at {} ps did not solve; it is the line between the steps at {} ps and {} ps",
+                at.as_ps(),
+                from.as_ps(),
+                to.as_ps()
+            ),
             Diagnostic::RatingCurrent(excursion) => over_rating(excursion, "A"),
             Diagnostic::RatingPower(excursion) => over_rating(excursion, "W"),
         }
@@ -684,6 +697,9 @@ impl Diagnostic {
                 columns,
                 ..
             } => serde_json::json!({ "columns": columns, "limit": limit, "rows": rows }),
+            Diagnostic::TraceRowInterpolated { from, to, .. } => {
+                serde_json::json!({ "from_ps": from, "to_ps": to })
+            }
             Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
                 serde_json::json!({
                     "limit": excursion.limit,

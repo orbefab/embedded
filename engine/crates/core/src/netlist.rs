@@ -120,7 +120,7 @@ pub struct Transient {
     pub stop: Time,
     /// Picoseconds. No step is longer.
     pub max_step: u64,
-    /// Picoseconds between trace rows. Every row is a step that lands there.
+    /// Picoseconds between trace rows. A row is a probe, so the grid never moves a step.
     pub grid: u64,
 }
 
