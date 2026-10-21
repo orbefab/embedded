@@ -277,7 +277,7 @@ impl Actives {
     /// A step landed at `at`, no later than the last `horizon`, with `after` read on `x` and
     /// `before` in force until then. Each core that stops at `at` takes its sample from `x`,
     /// each core whose watches flipped takes them, and each such core is committed at `at`.
-    /// Whether an image changed, which restarts.
+    /// Returns whether an image changed, and how many cores stopped at `at`.
     pub(crate) fn land(
         &mut self,
         circuit: &Circuit,
@@ -285,8 +285,9 @@ impl Actives {
         x: &Solution,
         before: &Levels,
         after: &Levels,
-    ) -> bool {
+    ) -> (bool, u64) {
         let mut changed = false;
+        let mut stops = 0u64;
         for (k, (committed, ahead)) in self.committed.iter_mut().zip(&mut self.ahead).enumerate() {
             let watched = circuit.active_watches(k);
             let levels = after.of(watched.clone());
@@ -297,6 +298,9 @@ impl Actives {
             };
             if stop.is_none() && !flipped {
                 continue;
+            }
+            if stop.is_some() {
+                stops += 1;
             }
             ahead.rewind(committed, at);
             let image = ahead.core.drive().to_vec();
@@ -319,7 +323,7 @@ impl Actives {
             );
             committed.clone_from(&ahead.core);
         }
-        changed
+        (changed, stops)
     }
 
     /// After a restart at `at`, with `after` read on the held solve and `before` read on the

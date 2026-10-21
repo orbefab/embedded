@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<pre id="log">starting</pre>
+<script>
+const log = document.getElementById("log");
+const worker = new Worker("worker.js");
+window.__bench = {
+  crossOriginIsolated,
+  start() {
+    const runs = Number(new URLSearchParams(location.search).get("runs") || "3");
+    worker.postMessage({ runs });
+  },
+};
+worker.onmessage = (event) => {
+  const data = event.data;
+  if (data.error) {
+    log.textContent = data.error;
+    window.__bench = { done: true, error: data.error };
+    return;
+  }
+  log.textContent = "done";
+  window.__bench = { done: true, report: data.report };
+};
+worker.onerror = (event) => {
+  const message = event.message || "worker failed";
+  log.textContent = message;
+  window.__bench = { done: true, error: message };
+};
+</script>

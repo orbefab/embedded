@@ -19,9 +19,25 @@ use sim_core::run_folder::{Observations, Results};
 
 use crate::tran::Rows;
 
+/// Accepted steps after t = 0, and chip stops on those steps, summed over chips.
+///
+/// t = 0 is the operating point and is not a landing. A stop is counted on the accepted
+/// step that reaches it. Two chips stopped on one landing count as two stops. Neither
+/// number is written into the run folder.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RunStats {
+    pub landings: u64,
+    pub stops: u64,
+}
+
 /// Simulate a validated netlist. A transient writes its rows on the grid it sets.
 /// A circuit the solver cannot handle comes back as an error diagnostic.
 pub fn simulate(netlist: &Netlist) -> Results {
+    simulate_stats(netlist).0
+}
+
+/// [`simulate`] plus the landing and stop counts. The `Results` are the same bytes.
+pub fn simulate_stats(netlist: &Netlist) -> (Results, RunStats) {
     simulate_with(netlist, Rows::Grid)
 }
 
@@ -30,10 +46,10 @@ pub fn simulate(netlist: &Netlist) -> Results {
 /// dev-dependency on this crate, so no build of `sim` has it.
 #[cfg(feature = "step-rows")]
 pub fn simulate_steps(netlist: &Netlist) -> Results {
-    simulate_with(netlist, Rows::Steps)
+    simulate_with(netlist, Rows::Steps).0
 }
 
-fn simulate_with(netlist: &Netlist, rows: Rows) -> Results {
+fn simulate_with(netlist: &Netlist, rows: Rows) -> (Results, RunStats) {
     let mut diagnostics = topology::floating_nets(netlist);
     match netlist.analysis() {
         Analysis::Op => {
@@ -41,11 +57,17 @@ fn simulate_with(netlist: &Netlist, rows: Rows) -> Results {
                 Some(op) => Observations::Op(op),
                 None => Observations::Nothing,
             };
-            Results::new(observations, None, diagnostics)
+            (
+                Results::new(observations, None, diagnostics),
+                RunStats::default(),
+            )
         }
         Analysis::Transient(transient) => {
             let outcome = tran::run(netlist, transient, rows, &mut diagnostics);
-            Results::new(outcome.observations, outcome.trace, diagnostics)
+            (
+                Results::new(outcome.observations, outcome.trace, diagnostics),
+                outcome.stats,
+            )
         }
     }
 }

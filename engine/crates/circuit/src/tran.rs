@@ -10,6 +10,7 @@ use sim_core::run_folder::{Observations, OpPoint};
 use sim_core::time::Time;
 use sim_core::trace::Trace;
 
+use crate::RunStats;
 use crate::active::{self, Actives};
 use crate::chip;
 use crate::lte::{self, Charges, Segment, Verdict};
@@ -58,6 +59,7 @@ const BUDGET: Budget = Budget {
 pub(crate) struct Outcome {
     pub(crate) observations: Observations,
     pub(crate) trace: Option<Trace>,
+    pub(crate) stats: RunStats,
 }
 
 /// Which accepted steps the trace keeps.
@@ -103,6 +105,7 @@ pub(crate) fn run(
         return Outcome {
             observations: Observations::Nothing,
             trace: None,
+            stats: RunStats::default(),
         };
     }
     run_with(
@@ -134,6 +137,7 @@ fn run_with(
         columns,
         op: None,
         logic: None,
+        stats: RunStats::default(),
     };
     let result = steps(netlist, transient, actives, budget, &mut record);
     let outcome = record.finish(netlist, diagnostics);
@@ -154,6 +158,7 @@ struct Record<'c> {
     op: Option<OpPoint>,
     /// `None` without a chip.
     logic: Option<Logic>,
+    stats: RunStats,
 }
 
 impl Record<'_> {
@@ -194,10 +199,12 @@ impl Record<'_> {
     /// from the `Logic` the trace keeps.
     fn finish(self, netlist: &Netlist, diagnostics: &mut Vec<Diagnostic>) -> Outcome {
         diagnostics.extend(self.ratings.finish());
+        let stats = self.stats;
         let (mut trace, Some(op)) = (self.trace, self.op) else {
             return Outcome {
                 observations: Observations::Nothing,
                 trace: None,
+                stats,
             };
         };
         if let Some((at, row)) = self.last_step {
@@ -216,6 +223,7 @@ impl Record<'_> {
                 logic: summary,
             },
             trace: Some(trace),
+            stats,
         }
     }
 
@@ -288,9 +296,8 @@ fn steps(
     // Newton iterations over every stalled attempt since the last accepted step. An attempt
     // rejected for its error converged, and does not count.
     let mut iterations = 0;
-    let mut accepted_steps = 0u64;
     while accepted.at < transient.stop {
-        if accepted_steps >= budget.steps {
+        if record.stats.landings >= budget.steps {
             return Err(Diagnostic::SolverStepLimit {
                 at: accepted.at,
                 limit: budget.steps,
@@ -351,18 +358,19 @@ fn steps(
                 let row =
                     observe::observe(&circuit, record.columns, &converged.iterate.solution, at)?;
                 record.accept(at, row)?;
-                accepted_steps += 1;
+                record.stats.landings += 1;
                 iterations = 0;
                 // A watch cuts the step. Only a changed stamp, a chip's, an active chip's image, a
                 // contact's or a source's, restarts.
                 let chips = circuit.react(&accepted.chips, &accepted.levels, &levels);
-                let driven = actives.land(
+                let (driven, stopped) = actives.land(
                     &circuit,
                     at,
                     &converged.iterate.solution,
                     &accepted.levels,
                     &levels,
                 );
+                record.stats.stops += stopped;
                 let restart = (breakpoints.is_edge(at) || chips != accepted.chips || driven)
                     && at < transient.stop;
                 // A step cut short by a breakpoint or a watch keeps the step it wanted.

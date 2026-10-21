@@ -1,6 +1,7 @@
 //! The ATmega328P through the seam, running the repo's firmware in `firmware/`.
 
 use sim_avr::{FuseBytes, Port};
+use sim_core::diagnostic::Severity;
 use sim_core::netlist::{Atmega328p, Netlist};
 
 use super::active::{
@@ -198,6 +199,85 @@ fn a_pin_edge_lands_at_its_cycles_picosecond_into_an_rc() {
     );
     assert!(at(&cap, edges[1]) < 2.4, "{}", at(&cap, edges[1]));
     assert!(at(&cap, edges[2]) > 4.9, "{}", at(&cap, edges[2]));
+}
+
+/// 5_760_000 puts the crossing in a step that has already run the core to the 6.5 µs stop.
+#[test]
+fn toggle_stops_follow_the_firmware_when_a_watch_is_located() {
+    let edge_ps = 5_760_000;
+    let step = format!(
+        r#"{{ "name": "vs", "kind": "voltage_source", "pins": {{ "p": "src", "n": "gnd" }},
+          "voltage": {{ "kind": "step", "initial": {{ "value": 0.0, "unit": "V", "source": "user" }},
+                       "final": {{ "value": 5.0, "unit": "V", "source": "user" }}, "at_ps": {edge_ps} }} }}"#
+    );
+    let stop = 20 * US;
+    let netlist = board(
+        stop,
+        &["src"],
+        &[
+            step,
+            resistor("rs", "src", "pd2", 1000.0),
+            capacitor("cs", "pd2", 1e-9),
+            resistor("rl", "pb5", "gnd", 1000.0),
+        ],
+        atmega("vcc", TOGGLE, MHZ_16, FUSES),
+    );
+    let (results, stats) = crate::simulate_stats(&netlist);
+    assert_eq!(results.count(Severity::Error), 0);
+    let firmware: Vec<u64> = [2u64, 4]
+        .into_iter()
+        .chain((1..).map(|k| 4 + 100 * k))
+        .map(|cycle| cycle * 62_500)
+        .take_while(|&at| at <= stop)
+        .collect();
+    assert_eq!(stats.stops, firmware.len() as u64, "{firmware:?}");
+    let trace = results.trace().expect("a transient keeps a trace");
+    let pd2 = edges(trace, "PD2");
+    assert_eq!(pd2.len(), 1, "{pd2:?}");
+    let crossing = pd2[0].0;
+    assert!(
+        !firmware.contains(&crossing),
+        "the located input is not a firmware stop: {crossing}"
+    );
+    let input_high = documented("/input_threshold/high/value");
+    let leak = 1.0 / documented("/leakage_resistance/value");
+    let tau_ps = 1e-9 / (1e-3 + 2.0 * leak) * 1e12;
+    let start = share(5.0, leak, leak + 1e-3);
+    let end = share(5.0, 1e-3 + leak, leak);
+    let expected = edge_ps as f64 + tau_ps * ((end - start) / (end - input_high * 5.0)).ln();
+    assert!(
+        (crossing as f64 - expected).abs() < 200.0,
+        "located at {crossing}, formula {expected}"
+    );
+    let next_stop = firmware
+        .iter()
+        .copied()
+        .find(|&at| at > crossing)
+        .expect("a firmware stop after the crossing");
+    let (step_trace, step_diagnostics) = run(&netlist);
+    assert!(step_diagnostics.is_empty(), "{step_diagnostics:?}");
+    let times: Vec<u64> = volts(&step_trace, "pd2")
+        .into_iter()
+        .map(|(at, _)| at)
+        .collect();
+    let located = times
+        .iter()
+        .position(|&at| at == crossing)
+        .unwrap_or_else(|| panic!("crossing {crossing} is not an accepted step"));
+    assert!(located >= 2, "the crossing needs a full step before it");
+    assert_eq!(
+        times[located + 1],
+        next_stop,
+        "the accepted step after the crossing is the firmware stop"
+    );
+    let predecessor_step = times[located - 1] - times[located - 2];
+    let crossing_step_start = times[located - 1];
+    let start_to_stop = next_stop - crossing_step_start;
+    assert!(
+        start_to_stop <= predecessor_step,
+        "the crossing's step starts {start_to_stop} ps before {next_stop}, past the {predecessor_step} ps predecessor"
+    );
+    assert!(stats.landings > stats.stops);
 }
 
 #[test]

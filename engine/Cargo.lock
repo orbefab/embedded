@@ -276,6 +276,17 @@ name = "sim-avr"
 version = "0.4.0"
 
 [[package]]
+name = "sim-bench"
+version = "0.4.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sim-avr",
+ "sim-circuit",
+ "sim-core",
+]
+
+[[package]]
 name = "sim-circuit"
 version = "0.4.0"
 dependencies = [

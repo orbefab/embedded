@@ -12,6 +12,7 @@ Private notes live in `~/notes/orbefab` (Orbefab/notes). Follow the `notes` skil
 - `crates/circuit`, package `sim-circuit`, solves the DC operating point.
 - `crates/cli`, package `sim-cli`, is the `sim` binary.
 - `crates/avr`, package `sim-avr`, models the ATmega328P core. `sim-circuit` runs it for each `atmega328p` part.
+- `crates/bench`, package `sim-bench`, times native, WASI and browser Worker runs. It is not published.
 
 ## Before every commit
 
