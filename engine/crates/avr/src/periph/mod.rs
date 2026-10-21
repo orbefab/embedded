@@ -400,7 +400,7 @@ impl Device {
     ) -> Touch {
         match self {
             Device::Port(port) => {
-                port.poke(reg, value, mux, ctx, cycle);
+                port.poke(reg, value, mux);
                 Touch::default()
             }
             Device::ExtInt(ext) => ext.poke(reg, value, mux, ctx, cycle),

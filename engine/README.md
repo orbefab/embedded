@@ -21,9 +21,13 @@ Run `scripts/check.sh` before every commit. From the repo root it runs:
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
+cargo clippy -p sim-avr --all-targets --locked --features port-skip-check -- -D warnings
+cargo test --workspace --locked --exclude sim-avr
+cargo test -p sim-avr --locked --features port-skip-check
 uv run scripts/ngspice_refs.py --self-test
 ```
+
+The `sim-avr` lines turn on `port-skip-check` so the skip check runs, and the other crates leave the feature off.
 
 ## Run the divider
 

@@ -37,8 +37,8 @@ impl GpioPort {
         let (ddr, port) = mux.ddr_port(self.port);
         match reg {
             GPIO_PIN => mux.toggle_gpio(self.port, value, ctx, at),
-            GPIO_DDR => mux.set_gpio(self.port, value, port, ctx, None, at, true),
-            GPIO_PORT => mux.set_gpio(self.port, ddr, value, ctx, None, at, true),
+            GPIO_DDR => mux.store_gpio(self.port, value, port, ctx, at),
+            GPIO_PORT => mux.store_gpio(self.port, ddr, value, ctx, at),
             _ => {}
         }
     }
@@ -53,18 +53,11 @@ impl GpioPort {
         }
     }
 
-    pub(crate) fn poke(
-        &mut self,
-        reg: u8,
-        value: u8,
-        mux: &mut PinMux,
-        ctx: &mut Ctx<'_>,
-        at: u64,
-    ) {
+    pub(crate) fn poke(&mut self, reg: u8, value: u8, mux: &mut PinMux) {
         let (ddr, port) = mux.ddr_port(self.port);
         match reg {
-            GPIO_DDR => mux.set_gpio(self.port, value, port, ctx, None, at, false),
-            GPIO_PORT => mux.set_gpio(self.port, ddr, value, ctx, None, at, false),
+            GPIO_DDR => mux.poke_gpio(self.port, value, port),
+            GPIO_PORT => mux.poke_gpio(self.port, ddr, value),
             _ => {}
         }
     }

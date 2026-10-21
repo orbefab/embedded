@@ -169,6 +169,11 @@ impl Wire {
 struct PortState {
     ddr: u8,
     port: u8,
+    /// Clear means `reported` and the pads match the registers and every override.
+    /// A change to a pin's inputs reconciles this port or sets this. `plant` sets it.
+    /// `set_reset_pin` writes the wire and `reported` together, so the port stays clear.
+    /// A store of the same DDR and PORT skips pin work while this is clear.
+    stale: bool,
     /// Last level and drive handed to the host. Starts released and off, so reset emits
     /// nothing.
     reported: [(Level, PinDrive); 8],
@@ -187,6 +192,7 @@ impl PortState {
         Self {
             ddr: 0,
             port: 0,
+            stale: false,
             reported: [(Level::Released, PinDrive::Off); 8],
             wires: [Wire::released(); 8],
             over: [[None; 4]; 8],
@@ -299,27 +305,42 @@ impl PinMux {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn set_gpio(
+    pub(crate) fn store_gpio(
         &mut self,
         port: Port,
         ddr: u8,
         value: u8,
         ctx: &mut Ctx<'_>,
-        report_at: Option<u64>,
         at: u64,
-        emit: bool,
     ) {
+        let state = &self.ports[port.index()];
+        if !state.stale && state.ddr == ddr && state.port == value {
+            #[cfg(feature = "port-skip-check")]
+            debug_assert!(
+                (0..8u8).all(|bit| {
+                    let (digital, reported) = self.target(port, bit);
+                    state.wires[usize::from(bit)].pad == digital
+                        && state.reported[usize::from(bit)] == reported
+                }),
+                "skipped store on {port:?} would change a pin"
+            );
+            return;
+        }
         {
             let state = &mut self.ports[port.index()];
             state.ddr = ddr;
             state.port = value;
         }
-        if emit {
-            self.reconcile(port, ctx, report_at, at, true, true);
-        } else {
-            self.plant(port, at);
+        self.reconcile(port, ctx, None, at, true, true);
+    }
+
+    pub(crate) fn poke_gpio(&mut self, port: Port, ddr: u8, value: u8) {
+        {
+            let state = &mut self.ports[port.index()];
+            state.ddr = ddr;
+            state.port = value;
         }
+        self.plant(port);
     }
 
     pub(crate) fn toggle_gpio(&mut self, port: Port, mask: u8, ctx: &mut Ctx<'_>, at: u64) {
@@ -528,7 +549,7 @@ impl PinMux {
     /// Poke path: the registers already changed. Settle the pad so a following
     /// peek sees it, and leave `reported` alone so the next real write still
     /// emits.
-    fn plant(&mut self, port: Port, _at: u64) {
+    fn plant(&mut self, port: Port) {
         for bit in 0..8 {
             let level = if self.is_reset_pin(port.pin_id(bit)) {
                 Level::Low
@@ -537,6 +558,16 @@ impl PinMux {
             };
             self.ports[port.index()].wires[usize::from(bit)].plant_level(level);
         }
+        self.ports[port.index()].stale = true;
+    }
+
+    /// Digital level for the pad, and the level and drive for `reported`.
+    fn target(&self, port: Port, bit: u8) -> (Level, (Level, PinDrive)) {
+        let level = self.electrical(port, bit);
+        (
+            self.digital(port, bit, level),
+            (level, self.drive_of(port, bit)),
+        )
     }
 
     fn reconcile(
@@ -549,14 +580,12 @@ impl PinMux {
         notify: bool,
     ) {
         for bit in 0..8 {
-            let level = self.electrical(port, bit);
-            let digital = self.digital(port, bit, level);
+            let (digital, now) = self.target(port, bit);
             let pin = port.pin_id(bit);
             let changed = self.ports[port.index()].wires[usize::from(bit)].latch(digital, at);
             if changed && notify {
                 self.push_edge(pin as u8, digital, at);
             }
-            let now = (level, self.drive_of(port, bit));
             let reported = &mut self.ports[port.index()].reported[usize::from(bit)];
             if *reported == now {
                 continue;
@@ -566,6 +595,7 @@ impl PinMux {
                 ctx.emit_pin(pin, now, report_at, self.origin_of(port, bit));
             }
         }
+        self.ports[port.index()].stale = false;
     }
 
     fn push_edge(&mut self, pin: u8, level: Level, at: u64) {

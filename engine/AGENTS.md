@@ -16,4 +16,15 @@ Private notes live in `~/notes/orbefab` (Orbefab/notes). Follow the `notes` skil
 
 ## Before every commit
 
-Run `scripts/check.sh` from the repo root. It runs `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`, and `uv run scripts/ngspice_refs.py --self-test`.
+Run `scripts/check.sh` from the repo root. It runs:
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy -p sim-avr --all-targets --locked --features port-skip-check -- -D warnings
+cargo test --workspace --locked --exclude sim-avr
+cargo test -p sim-avr --locked --features port-skip-check
+uv run scripts/ngspice_refs.py --self-test
+```
+
+The `sim-avr` lines turn on `port-skip-check` so the skip check runs, and the other crates leave the feature off.

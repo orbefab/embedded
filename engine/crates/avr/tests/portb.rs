@@ -2,7 +2,7 @@
 
 use crate::common;
 use common::Instructions;
-use common::{imm, out, sbi};
+use common::{imm, in_io, ldi, out, sbi};
 
 use sim_avr::{Channel, Cpu, Level, PinDrive};
 
@@ -207,4 +207,146 @@ fn an_output_at_the_host_level_reports_its_drive_at_the_same_level() {
         (Level::Low, PinDrive::Low, 2)
     );
     assert_eq!(cpu.take_pin(), None);
+}
+
+/// Table 14-1. PB0 alternates a repeated store with a store that changes the
+/// pin, as an output and as an input with its pull-up. `LDI` and `OUT` are
+/// one cycle (DS40002198B, AVRe). The pin follows on the edge that ends the
+/// `OUT` (DS40002061B Figure 14-4). A store of the value already held is not
+/// an edge. A poke leaves that edge for the next store of the same bytes.
+#[test]
+fn an_unchanged_store_is_not_an_edge() {
+    // Cycle 0 starts the first instruction. Each word below is one cycle.
+    //  2 out PORTB=1, DDR=0  pull-up
+    //  5 out PORTB=0         released
+    //  8 out DDRB=1, PORT=0  output low
+    // 11 out PORTB=1         output high
+    // 14 out DDRB=0, PORT=1  pull-up, level stays high
+    // 17 out PORTB=0         released
+    // The out on the following cycle repeats the register and is not an edge.
+    let program = [
+        ldi(16, 0x01),
+        out(16, 0x05),
+        out(16, 0x05),
+        ldi(16, 0x00),
+        out(16, 0x05),
+        out(16, 0x05),
+        ldi(16, 0x01),
+        out(16, 0x04),
+        out(16, 0x04),
+        ldi(16, 0x01),
+        out(16, 0x05),
+        out(16, 0x05),
+        ldi(16, 0x00),
+        out(16, 0x04),
+        out(16, 0x04),
+        ldi(16, 0x00),
+        out(16, 0x05),
+        out(16, 0x05),
+    ];
+    let mut cpu = Cpu::new();
+    cpu.load_words(&program);
+    cpu.insns(program.len() as u32);
+    assert!(!cpu.is_stopped());
+    assert_eq!(cpu.cycles(), program.len() as u64);
+    let reports: Vec<_> = std::iter::from_fn(|| cpu.take_pin())
+        .map(|report| (report.pin, report.level, report.drive, report.cycle))
+        .collect();
+    assert_eq!(
+        reports,
+        vec![
+            (0, Level::High, PinDrive::PullUp, 2),
+            (0, Level::Released, PinDrive::Off, 5),
+            (0, Level::Low, PinDrive::Low, 8),
+            (0, Level::High, PinDrive::High, 11),
+            (0, Level::High, PinDrive::PullUp, 14),
+            (0, Level::Released, PinDrive::Off, 17),
+        ]
+    );
+
+    // §14.2.4. DDR then PORT drive PB0 high. The OUT of PORT retires at cycle
+    // 3, and the IN in the next cycle still reads 0. The repeated OUT is not
+    // a second edge. The IN after that repeat reads the driven pin. A low
+    // output would not show: a floating pin also reads 0.
+    let delayed = [
+        ldi(16, 0x01),
+        out(16, 0x04),
+        out(16, 0x05),
+        in_io(17, 0x03),
+        out(16, 0x05),
+        in_io(18, 0x03),
+    ];
+    let mut cpu = Cpu::new();
+    cpu.load_words(&delayed);
+    cpu.insns(delayed.len() as u32);
+    assert_eq!(
+        cpu.reg(17) & 1,
+        0,
+        "the cycle after the OUT still reads the old pin"
+    );
+    assert_eq!(
+        cpu.reg(18) & 1,
+        1,
+        "visible once the repeated store has retired"
+    );
+    let edges: Vec<_> = std::iter::from_fn(|| cpu.take_pin())
+        .map(|report| (report.pin, report.level, report.drive, report.cycle))
+        .collect();
+    assert_eq!(
+        edges,
+        vec![
+            (0, Level::Low, PinDrive::Low, 2),
+            (0, Level::High, PinDrive::High, 3),
+        ]
+    );
+
+    // A poke of PORTB=1 plants the pull-up and does not report it. The OUT of
+    // that same value is the store that does.
+    let mut poked = Cpu::new();
+    poked.poke(common::PORTB, 0x01);
+    assert_eq!(poked.take_pin(), None);
+    poked.load_words(&[ldi(16, 0x01), out(16, 0x05)]);
+    poked.insns(2);
+    let report = poked.take_pin().expect("poked pull-up");
+    assert_eq!(
+        (report.pin, report.level, report.drive, report.cycle),
+        (0, Level::High, PinDrive::PullUp, 2)
+    );
+    assert_eq!(poked.take_pin(), None);
+
+    // A poke of DDRB=1 plants an output low. PORTB is still 0, so the OUT
+    // writes the byte already held and still publishes the drive.
+    let mut poked = Cpu::new();
+    poked.poke(common::DDRB, 0x01);
+    assert_eq!(poked.take_pin(), None);
+    poked.load_words(&[ldi(16, 0x00), out(16, 0x05)]);
+    poked.insns(2);
+    let report = poked.take_pin().expect("poked output");
+    assert_eq!(
+        (report.pin, report.level, report.drive, report.cycle),
+        (0, Level::Low, PinDrive::Low, 2)
+    );
+    assert_eq!(poked.take_pin(), None);
+}
+
+/// A same-value poke inside the synchronizer window plants the pad, so `PINx`
+/// shows the new level before the two-cycle delay.
+#[test]
+fn a_same_value_poke_shows_the_pin_during_the_synchronizer_delay() {
+    // `LDI`, `OUT DDRB`, `OUT PORTB` retire at cycles 1, 2, and 3. The high
+    // output is first visible to an instruction that starts at cycle 5.
+    let program = [ldi(16, 0x01), out(16, 0x04), out(16, 0x05)];
+    let mut cpu = Cpu::new();
+    cpu.load_words(&program);
+    cpu.insns(3);
+    assert_eq!(cpu.cycles(), 3);
+    while cpu.take_pin().is_some() {}
+    assert_eq!(cpu.peek(common::PINB) & 1, 0, "still inside the delay");
+    cpu.poke(common::PORTB, 0x01);
+    assert_eq!(
+        cpu.peek(common::PINB) & 1,
+        1,
+        "the poke plants the level before the delay ends"
+    );
+    assert_eq!(cpu.take_pin(), None, "a poke does not report");
 }
