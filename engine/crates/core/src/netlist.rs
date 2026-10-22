@@ -9,7 +9,7 @@ mod waveform;
 
 use serde::{Deserialize, Serialize, Serializer};
 
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, ValueRule};
 use crate::finite::Finite;
 use crate::name::{Name, Quantity};
 use crate::time::Time;
@@ -89,15 +89,24 @@ impl Netlist {
         Some(PartId(k as u32))
     }
 
-    /// Appends `edge` to switch `id`'s events, with the bounce parse draws for an event at
-    /// that index. `edge.at` is a time `Switch::earliest` returned, and `edge` flips the
-    /// contact. Panics when `id` is not a switch.
-    pub fn append(&mut self, id: PartId, edge: Edge) {
+    /// Appends one event to part `id` at `at`. A contact goes on a switch, with the bounce
+    /// parse draws for an event at that index. A level goes on a `steps` source or a
+    /// potentiometer. `at` is a time `Schedule::earliest` returned for that part, and the
+    /// event changes the value in force. Panics when the part cannot take that event.
+    pub fn append(&mut self, id: PartId, at: Time, to: Appended) {
+        match to {
+            Appended::Contact(to) => self.append_contact(id, at, to),
+            Appended::Level(level) => self.append_level(id, at, level),
+        }
+    }
+
+    fn append_contact(&mut self, id: PartId, at: Time, to: Contact) {
         let seed = self.seed;
         let part = &mut self.parts[id.index()];
         let Model::Switch(switch) = &mut part.model else {
             panic!("{} is not a switch", part.name.as_str());
         };
+        let edge = Edge { at, to };
         debug_assert_eq!(switch.earliest(edge.at), Some(edge.at));
         debug_assert_ne!(*switch.schedule.after(edge.at), edge.to);
         let index = switch.events.events().len() as u64;
@@ -105,6 +114,14 @@ impl Netlist {
         let bounce = switch.bounce.as_ref();
         let edges = bounce::expand_event(seed, &part.name, index, edge, bounce);
         switch.schedule.events.extend(edges);
+    }
+
+    fn append_level(&mut self, id: PartId, at: Time, level: Finite) {
+        let part = &mut self.parts[id.index()];
+        let Some(schedule) = part.model.level_mut() else {
+            panic!("{} takes no level", part.name.as_str());
+        };
+        schedule.append_level(at, level);
     }
 }
 
@@ -276,6 +293,63 @@ impl Model {
             | Model::Chip(_) => None,
         }
     }
+
+    /// The settable level schedule, with the document field that holds it and that field's unit.
+    /// A `steps` voltage, a `steps` current, or a potentiometer position. A `step` or `pulse`
+    /// source has none.
+    pub fn level(&self) -> Option<LevelField<'_>> {
+        match self {
+            Model::VoltageSource(source) => {
+                level_field(source.voltage.as_steps(), "voltage", json::VOLT)
+            }
+            Model::CurrentSource(source) => {
+                level_field(source.current.as_steps(), "current", json::AMPERE)
+            }
+            Model::Potentiometer(pot) => {
+                level_field(Some(&pot.position), "position", json::FRACTION_UNIT)
+            }
+            Model::Resistor(_)
+            | Model::Diode(_)
+            | Model::Led(_)
+            | Model::Capacitor(_)
+            | Model::Switch(_)
+            | Model::Chip(_) => None,
+        }
+    }
+
+    /// [`level`](Self::level)'s schedule, for appending one event.
+    pub fn level_mut(&mut self) -> Option<&mut Schedule<Value>> {
+        match self {
+            Model::VoltageSource(source) => source.voltage.steps_mut(),
+            Model::CurrentSource(source) => source.current.steps_mut(),
+            Model::Potentiometer(pot) => Some(&mut pot.position),
+            Model::Resistor(_)
+            | Model::Diode(_)
+            | Model::Led(_)
+            | Model::Capacitor(_)
+            | Model::Switch(_)
+            | Model::Chip(_) => None,
+        }
+    }
+}
+
+fn level_field<'a>(
+    schedule: Option<&'a Schedule<Value>>,
+    field: &'static str,
+    unit: &'static str,
+) -> Option<LevelField<'a>> {
+    schedule.map(|schedule| LevelField {
+        schedule,
+        field,
+        unit,
+    })
+}
+
+/// A part's settable level: its schedule, the document field, and the unit parse accepts there.
+pub struct LevelField<'a> {
+    pub schedule: &'a Schedule<Value>,
+    pub field: &'static str,
+    pub unit: &'static str,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -305,6 +379,65 @@ pub struct Potentiometer {
 
 impl Potentiometer {
     pub const PINS: [&'static str; 3] = ["a", "wiper", "b"];
+}
+
+/// A potentiometer position that breaks a rule, in the order parse reports them.
+/// The fraction is outside `(0, 1)`. Otherwise each leg is checked: `position * resistance`,
+/// then `(1 - position) * resistance`. A leg that is not positive is [`ValueRule::Positive`].
+/// A leg whose reciprocal is not finite is [`ValueRule::FiniteReciprocal`].
+pub struct PositionRule {
+    kind: PositionKind,
+}
+
+enum PositionKind {
+    Fraction,
+    Legs([(f64, Option<ValueRule>); 2]),
+}
+
+impl PositionRule {
+    /// The first broken rule. `None` when the position holds.
+    pub fn first(self) -> Option<ValueRule> {
+        match self.kind {
+            PositionKind::Fraction => Some(ValueRule::Fraction),
+            PositionKind::Legs(legs) => legs.into_iter().find_map(|(_, rule)| rule),
+        }
+    }
+
+    /// Both legs when the fraction holds. Each entry is the leg's ohms and the rule it breaks.
+    /// `None` when the fraction breaks, because the legs are not checked then.
+    pub fn legs(self) -> Option<[(f64, Option<ValueRule>); 2]> {
+        match self.kind {
+            PositionKind::Fraction => None,
+            PositionKind::Legs(legs) => Some(legs),
+        }
+    }
+}
+
+pub fn position_rule(position: f64, resistance: f64) -> PositionRule {
+    if broken_fraction(position).is_some() {
+        return PositionRule {
+            kind: PositionKind::Fraction,
+        };
+    }
+    let legs = [position * resistance, (1.0 - position) * resistance]
+        .map(|ohms| (ohms, broken_positive(ohms)));
+    PositionRule {
+        kind: PositionKind::Legs(legs),
+    }
+}
+
+pub(crate) fn broken_fraction(number: f64) -> Option<ValueRule> {
+    (!(number > 0.0 && number < 1.0)).then_some(ValueRule::Fraction)
+}
+
+pub(crate) fn broken_positive(number: f64) -> Option<ValueRule> {
+    if number <= 0.0 {
+        Some(ValueRule::Positive)
+    } else if !(1.0 / number).is_finite() {
+        Some(ValueRule::FiniteReciprocal)
+    } else {
+        None
+    }
 }
 
 /// Ideal voltage source. V(p) - V(n) = voltage.
@@ -377,22 +510,11 @@ impl Switch {
         }
     }
 
-    /// The first time at or after `from` that one more event passes the schedule rules: after
-    /// t = 0, and after the last event's bounce window and `MIN_GAP_PS` more. `None` when
-    /// that time or its own window would pass the largest time.
+    /// The first time at or after `from` that one more event passes the schedule rules.
+    /// The bounce window is this switch's addition to [`Schedule::earliest`].
     pub fn earliest(&self, from: Time) -> Option<Time> {
         let window = self.bounce.as_ref().map_or(0, |bounce| bounce.window.value);
-        let first = match self.events.events().last() {
-            None => 1,
-            Some(last) => last
-                .at
-                .as_ps()
-                .checked_add(window)?
-                .checked_add(MIN_GAP_PS)?,
-        };
-        let at = from.as_ps().max(first);
-        at.checked_add(window)?;
-        Some(Time::from_ps(at))
+        self.events.earliest(from, window)
     }
 }
 
@@ -421,6 +543,15 @@ pub struct Event<T> {
 
 /// A switch event, serialized as the netlist writes one: `t_ps` and `state`.
 pub type Edge = Event<Contact>;
+
+/// One event [`Netlist::append`] adds.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Appended {
+    /// A switch contact.
+    Contact(Contact),
+    /// A source level or a potentiometer position, in the field's SI unit.
+    Level(Finite),
+}
 
 impl Serialize for Edge {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -471,6 +602,14 @@ impl<T> Schedule<T> {
         }
     }
 
+    /// The value after the last event. `initial` when the schedule has none.
+    pub fn after_last(&self) -> &T {
+        match self.events.last() {
+            Some(event) => &event.to,
+            None => &self.initial,
+        }
+    }
+
     /// The value on the interval that starts at `at`: after every event at or before `at`.
     pub fn after(&self, at: Time) -> &T {
         let k = self.events.partition_point(|event| event.at <= at);
@@ -485,6 +624,37 @@ impl<T> Schedule<T> {
     pub fn next_change_after(&self, at: Time) -> Option<Time> {
         let k = self.events.partition_point(|event| event.at <= at);
         self.events.get(k).map(|event| event.at)
+    }
+
+    /// The first time at or after `from` that one more event passes the schedule rules.
+    /// With no event that is 1 ps. After one it is that event plus `window` plus
+    /// [`MIN_GAP_PS`]. `None` when that time, or `window` after it, does not fit in a time.
+    pub fn earliest(&self, from: Time, window: u64) -> Option<Time> {
+        let first = match self.events.last() {
+            None => 1,
+            Some(last) => last
+                .at
+                .as_ps()
+                .checked_add(window)?
+                .checked_add(MIN_GAP_PS)?,
+        };
+        let at = from.as_ps().max(first);
+        at.checked_add(window)?;
+        Some(Time::from_ps(at))
+    }
+}
+
+impl Schedule<Value> {
+    fn append_level(&mut self, at: Time, level: Finite) {
+        debug_assert_eq!(self.earliest(at, 0), Some(at));
+        debug_assert_ne!(self.after(at).si, level);
+        self.events.push(Event {
+            at,
+            to: Value {
+                si: level,
+                source: Source::User,
+            },
+        });
     }
 }
 

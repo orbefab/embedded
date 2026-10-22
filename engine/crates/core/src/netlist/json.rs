@@ -21,6 +21,9 @@ use crate::time::Time;
 use atmega328p::{WireAtmega328p, resolve_atmega328p};
 use waveform::{CURRENT, VOLTAGE, WireWaveform, resolve_waveform};
 
+pub(crate) use waveform::{AMPERE, VOLT};
+pub(crate) const FRACTION_UNIT: &str = "1";
+
 #[derive(Deserialize)]
 struct VersionProbe {
     version: u64,
@@ -907,16 +910,6 @@ fn resolve_int<T: Into<u64>>(
     })
 }
 
-fn check_positive(number: f64) -> Option<ValueRule> {
-    if number <= 0.0 {
-        Some(ValueRule::Positive)
-    } else if !(1.0 / number).is_finite() {
-        Some(ValueRule::FiniteReciprocal)
-    } else {
-        None
-    }
-}
-
 fn resolve_pins<const N: usize>(
     part: &Name,
     names: [&'static str; N],
@@ -1003,7 +996,7 @@ fn resolve_value(
         ok = false;
     }
     let number = value.value.get();
-    if positive && let Some(broken) = check_positive(number) {
+    if positive && let Some(broken) = super::broken_positive(number) {
         ok = false;
         out.push(Diagnostic::NetlistValue {
             part: part.clone(),
@@ -1029,8 +1022,8 @@ fn resolve_fraction(
 ) -> Option<Value> {
     let field = field.into();
     let number = value.value.get();
-    let resolved = resolve_value(part, field.clone(), "1", false, value, out);
-    if !(number > 0.0 && number < 1.0) {
+    let resolved = resolve_value(part, field.clone(), FRACTION_UNIT, false, value, out);
+    if super::broken_fraction(number).is_some() {
         out.push(Diagnostic::NetlistValue {
             part: part.clone(),
             field,

@@ -355,7 +355,7 @@ fn an_appended_event_bounces_as_parse_bounces_it() {
         let from = Time::from_ps(5_000_000_000 * (k as u64 + 1));
         let at = only_switch(&appended).earliest(from).unwrap();
         let id = appended.parts().next().unwrap().0;
-        appended.append(id, netlist::Edge { at, to });
+        appended.append(id, at, netlist::Appended::Contact(to));
         let state = if to == Contact::Open {
             "open"
         } else {

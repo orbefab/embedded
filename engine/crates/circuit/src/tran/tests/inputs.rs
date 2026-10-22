@@ -1,8 +1,15 @@
 use std::collections::BTreeMap;
 
-use sim_core::diagnostic::Diagnostic;
+use sim_core::diagnostic::{Diagnostic, ValueRule};
+use sim_core::finite::Finite;
+use sim_core::logic::Level;
 use sim_core::name::Name;
-use sim_core::netlist::{self, Contact, Document, Model, Netlist, Part, Switch};
+use sim_core::name::Ref;
+use sim_core::netlist::{
+    self, Chip, Contact, Document, Model, Netlist, Part, Schedule, Switch, Value, position_rule,
+};
+use sim_core::run_folder::Results;
+use sim_core::trace::Trace;
 
 use super::super::*;
 use super::fixtures::*;
@@ -64,6 +71,172 @@ const RC_SWITCHES: &[u8] = br#"{
     }
   ]
 }"#;
+
+const RC_LEVELS: &[u8] = br#"{
+  "version": 0,
+  "seed": 4,
+  "analysis": { "transient": { "stop_ps": 1000000, "max_step_ps": 5000, "grid_ps": 1000 } },
+  "ground": "gnd",
+  "nets": ["gnd", "vcc", "vout"],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": { "p": "vcc", "n": "gnd" },
+      "voltage": {
+        "kind": "steps",
+        "initial": { "value": 1.0, "unit": "V", "source": "user" },
+        "events": []
+      }
+    },
+    {
+      "name": "i1",
+      "kind": "current_source",
+      "pins": { "p": "vout", "n": "gnd" },
+      "current": {
+        "kind": "steps",
+        "initial": { "value": 0.0002, "unit": "A", "source": "user" },
+        "events": []
+      }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": { "a": "vcc", "b": "vout" },
+      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
+    },
+    {
+      "name": "c1",
+      "kind": "capacitor",
+      "pins": { "a": "vout", "b": "gnd" },
+      "capacitance": { "value": 1e-9, "unit": "F", "source": "user" },
+      "initial": null
+    }
+  ]
+}"#;
+
+const KINDS: &[u8] = br#"{
+  "version": 0,
+  "seed": 5,
+  "analysis": { "transient": { "stop_ps": 100000, "max_step_ps": 1000, "grid_ps": 1000 } },
+  "ground": "gnd",
+  "nets": ["gnd", "ns", "np", "nv", "nw"],
+  "parts": [
+    {
+      "name": "vs",
+      "kind": "voltage_source",
+      "pins": { "p": "ns", "n": "gnd" },
+      "voltage": {
+        "kind": "step",
+        "initial": { "value": 0.0, "unit": "V", "source": "user" },
+        "final": { "value": 1.0, "unit": "V", "source": "user" },
+        "at_ps": 5000
+      }
+    },
+    {
+      "name": "vp",
+      "kind": "voltage_source",
+      "pins": { "p": "np", "n": "gnd" },
+      "voltage": {
+        "kind": "pulse",
+        "initial": { "value": 0.0, "unit": "V", "source": "user" },
+        "pulsed": { "value": 1.0, "unit": "V", "source": "user" },
+        "delay_ps": 5000,
+        "width_ps": 2000,
+        "period_ps": 4000
+      }
+    },
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": { "p": "nv", "n": "gnd" },
+      "voltage": {
+        "kind": "steps",
+        "initial": { "value": 1.0, "unit": "V", "source": "user" },
+        "events": []
+      }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": { "a": "nv", "b": "gnd" },
+      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
+    },
+    {
+      "name": "sw1",
+      "kind": "switch",
+      "pins": { "a": "nv", "b": "gnd" },
+      "on_resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "off_resistance": { "value": 1e9, "unit": "ohm", "source": "user" },
+      "initial": "open",
+      "events": [],
+      "bounce": null
+    },
+    {
+      "name": "rv1",
+      "kind": "potentiometer",
+      "pins": { "a": "nv", "wiper": "nw", "b": "gnd" },
+      "resistance": { "value": 10000.0, "unit": "ohm", "source": "user" },
+      "position": { "value": 0.5, "unit": "1", "source": "user" }
+    }
+  ]
+}"#;
+
+/// 12 ms. The second line is on TXD after the first line, a 1 ms pause and five more frames.
+const ANALOG_STOP_PS: u64 = 12_000_000_000;
+/// 25 ns of the 200 ns stiff row.
+const STIFF_LEVEL_STOP_PS: u64 = 25_000;
+
+struct PartSpec {
+    name: &'static str,
+    draw: Draw,
+}
+
+enum Draw {
+    Contact,
+    Level { low: f64, high: f64 },
+}
+
+const ANALOG_PARTS: &[PartSpec] = &[PartSpec {
+    name: "rv1",
+    draw: Draw::Level {
+        low: 0.05,
+        high: 0.95,
+    },
+}];
+
+const LEVEL_PARTS: &[PartSpec] = &[
+    PartSpec {
+        name: "v1",
+        draw: Draw::Level {
+            low: 0.0,
+            high: 2.0,
+        },
+    },
+    PartSpec {
+        name: "i1",
+        draw: Draw::Level {
+            low: 0.0,
+            high: 0.001,
+        },
+    },
+];
+
+const STIFF_PARTS: &[PartSpec] = &[
+    PartSpec {
+        name: "v1",
+        draw: Draw::Level {
+            low: 0.0,
+            high: 2.0,
+        },
+    },
+    PartSpec {
+        name: "sw1",
+        draw: Draw::Contact,
+    },
+];
 
 fn without_events(input: &[u8]) -> Vec<u8> {
     let mut json: serde_json::Value = serde_json::from_slice(input).unwrap();
@@ -132,6 +305,35 @@ fn set(part: &str, at: u64, to: Contact) -> Input {
     }
 }
 
+fn level(part: &str, at: u64, si: f64) -> Input {
+    Input {
+        part: Name::new(part).unwrap(),
+        at: Time::from_ps(at),
+        setting: Setting::Level(Finite::new(si).unwrap()),
+    }
+}
+
+fn stiff_level_input() -> Vec<u8> {
+    let mut json: serde_json::Value = serde_json::from_slice(&stiff_steps()).unwrap();
+    json["analysis"]["transient"]["stop_ps"] = STIFF_LEVEL_STOP_PS.into();
+    serde_json::to_vec(&json).unwrap()
+}
+
+fn stiff_steps() -> Vec<u8> {
+    let mut json: serde_json::Value = serde_json::from_slice(STIFF_ROW).unwrap();
+    for part in json["parts"].as_array_mut().unwrap() {
+        if part["name"] == "v1" {
+            let voltage = part["voltage"].clone();
+            part["voltage"] = serde_json::json!({
+                "kind": "steps",
+                "initial": voltage,
+                "events": []
+            });
+        }
+    }
+    serde_json::to_vec(&json).unwrap()
+}
+
 fn accepted_at(session: &Session) -> Time {
     let State::Running { accepted, .. } = &session.state else {
         panic!("the session ended");
@@ -146,17 +348,16 @@ fn expected(session: &Session, input: &Input) -> Result<Time, Rejected> {
         return Err(Rejected::Ended);
     };
     let switch = switch(netlist_of(session), &input.part);
-    let Setting::Contact(to) = input.setting;
+    let Setting::Contact(to) = input.setting else {
+        panic!("a switch input");
+    };
     let after = Time::from_ps(accepted.at.as_ps() + 1);
     let floor = input.at.max(*now).max(after).max(accepted.reach);
+    if to == last_contact(switch) {
+        return Err(Rejected::NoChange);
+    }
     match switch.earliest(floor) {
-        Some(at) if at < transient(netlist_of(session)).stop => {
-            if to == last_contact(switch) {
-                Err(Rejected::NoChange)
-            } else {
-                Ok(at)
-            }
-        }
+        Some(at) if at < transient(netlist_of(session)).stop => Ok(at),
         _ => Err(Rejected::PastStop),
     }
 }
@@ -197,6 +398,174 @@ fn random_input(session: &Session, switches: &[Name], rng: &mut Rng) -> Input {
     }
 }
 
+fn random_at(session: &Session, rng: &mut Rng) -> Time {
+    let State::Running {
+        accepted,
+        now,
+        next,
+    } = &session.state
+    else {
+        panic!("the session ended");
+    };
+    let stop = transient(netlist_of(session)).stop.as_ps();
+    let now = now.as_ps();
+    let at = match rng.below(6) {
+        0 => now,
+        1 => now.saturating_sub(1 + rng.below(1_000)),
+        2 => now + 1,
+        3 => accepted.reach.as_ps().saturating_sub(rng.below(1_000)),
+        4 => next.at.as_ps(),
+        _ => now + 1 + rng.below(stop / 20),
+    };
+    Time::from_ps(at)
+}
+
+fn level_now(session: &Session, name: &str) -> f64 {
+    let netlist = netlist_of(session);
+    let id = netlist.part_id(&Name::new(name).unwrap()).unwrap();
+    let at = session.now();
+    let Some(level) = netlist.part(id).model.level() else {
+        panic!("{name} takes no level");
+    };
+    level.schedule.after(at).si.get()
+}
+
+fn draw_level(rng: &mut Rng, low: f64, high: f64, in_force: f64) -> f64 {
+    if rng.below(4) == 0 {
+        return in_force;
+    }
+    let mut level = in_force;
+    for _ in 0..8 {
+        let unit = (rng.below(1_000_000) + 1) as f64 / 1_000_001.0;
+        level = low + (high - low) * unit;
+        if level != in_force {
+            return level;
+        }
+    }
+    level
+}
+
+fn random_spec(session: &Session, specs: &[PartSpec], rng: &mut Rng) -> Input {
+    let spec = &specs[rng.below(specs.len() as u64) as usize];
+    let at = random_at(session, rng);
+    let setting = match spec.draw {
+        Draw::Contact => {
+            let name = Name::new(spec.name).unwrap();
+            let last = last_contact(switch(netlist_of(session), &name));
+            let to = if rng.below(4) == 0 {
+                last
+            } else {
+                last.flipped()
+            };
+            Setting::Contact(to)
+        }
+        Draw::Level { low, high } => {
+            let si = draw_level(rng, low, high, level_now(session, spec.name));
+            Setting::Level(Finite::new(si).unwrap())
+        }
+    };
+    Input {
+        part: Name::new(spec.name).unwrap(),
+        at,
+        setting,
+    }
+}
+
+fn ruling(session: &Session, input: &Input) -> Result<Time, Rejected> {
+    let State::Running { accepted, now, .. } = &session.state else {
+        return Err(Rejected::Ended);
+    };
+    let netlist = netlist_of(session);
+    let Some(id) = netlist.part_id(&input.part) else {
+        return Err(Rejected::UnknownPart);
+    };
+    let after = Time::from_ps(accepted.at.as_ps() + 1);
+    let from = input.at.max(*now).max(after).max(accepted.reach);
+    let stop = transient(netlist).stop;
+    let model = &netlist.part(id).model;
+    match (model, input.setting) {
+        (Model::Switch(switch), Setting::Contact(to)) => {
+            if *switch.schedule.after_last() == to {
+                Err(Rejected::NoChange)
+            } else {
+                landing(switch.earliest(from), stop)
+            }
+        }
+        (Model::Switch(_), Setting::Level(_)) => Err(Rejected::WrongSetting),
+        (Model::Potentiometer(pot), Setting::Level(level)) => {
+            if let Some(rule) = position_rule(level.get(), pot.resistance.si.get()).first() {
+                return Err(Rejected::Value(rule));
+            }
+            level_ruling(&pot.position, level, from, stop)
+        }
+        (Model::Potentiometer(_), Setting::Contact(_)) => Err(Rejected::WrongSetting),
+        (_, Setting::Contact(_)) => {
+            if model.level().is_some() {
+                Err(Rejected::WrongSetting)
+            } else {
+                Err(Rejected::NotSettable)
+            }
+        }
+        (_, Setting::Level(level)) => {
+            let Some(field) = model.level() else {
+                return Err(Rejected::NotSettable);
+            };
+            level_ruling(field.schedule, level, from, stop)
+        }
+    }
+}
+
+fn level_ruling(
+    schedule: &Schedule<Value>,
+    level: Finite,
+    from: Time,
+    stop: Time,
+) -> Result<Time, Rejected> {
+    if schedule.after_last().si == level {
+        Err(Rejected::NoChange)
+    } else {
+        landing(schedule.earliest(from, 0), stop)
+    }
+}
+
+fn landing(at: Option<Time>, stop: Time) -> Result<Time, Rejected> {
+    match at {
+        Some(at) if at < stop => Ok(at),
+        _ => Err(Rejected::PastStop),
+    }
+}
+
+fn apply_checked(
+    name: &str,
+    session: &mut Session,
+    input: &Input,
+    want: Result<Time, Rejected>,
+) -> bool {
+    let State::Running { accepted, now, .. } = &session.state else {
+        panic!("{name} ended");
+    };
+    let (accepted_at, now_at, reach) = (accepted.at, *now, accepted.reach);
+    let before = session.export();
+    let got = session.apply(input);
+    match (&got, &want) {
+        (Ok(got), Ok(want_at)) => {
+            assert_eq!(got.at, *want_at, "{name} {input:?}");
+            assert!(got.at >= input.at.max(now_at), "{name} {input:?}");
+            assert!(got.at > accepted_at, "{name} {input:?}");
+            assert!(got.at >= reach, "{name} {input:?}");
+            assert_eq!(got.status, session.status(), "{name} {input:?}");
+        }
+        (Err(got_err), Err(want_err)) => {
+            assert_eq!(got_err, want_err, "{name} {input:?}");
+            if *got_err == Rejected::NoChange {
+                assert_eq!(session.export(), before, "{name} {input:?}");
+            }
+        }
+        _ => panic!("{name} {input:?}: {got:?} vs {want:?}"),
+    }
+    got.is_ok()
+}
+
 /// Advances `session` to its end and checks that a batch run of its export writes the run
 /// folder the session recorded, with the export as the input bytes.
 fn ends_as_its_export(mut session: Session) {
@@ -220,7 +589,13 @@ fn inside_the_reach(session: &Session) -> bool {
 /// accepted step's reach. Each input lands where the landing rule says. A batch run of the
 /// export writes the folder the session recorded, and each probe at a row time after the last
 /// input before it is that row, bit for bit.
-fn inputs_in_chunks_write_the_export_folder(name: &str, input: &[u8], budget: Budget, seed: u64) {
+fn inputs_in_chunks_write_the_export_folder(
+    name: &str,
+    input: &[u8],
+    budget: Budget,
+    seed: u64,
+    specs: Option<&[PartSpec]>,
+) -> Results {
     let mut session = open_document(input, Rows::Grid, budget);
     let transient = transient(netlist_of(&session));
     let switches = switches(netlist_of(&session));
@@ -239,19 +614,31 @@ fn inputs_in_chunks_write_the_export_folder(name: &str, input: &[u8], budget: Bu
         };
         session.advance_to(Time::from_ps(to));
         if inside_the_reach(&session) || session.status() == Status::Running && rng.below(3) == 0 {
-            let input = random_input(&session, &switches, &mut rng);
-            let want = expected(&session, &input);
+            let input = match specs {
+                Some(specs) => random_spec(&session, specs, &mut rng),
+                None => random_input(&session, &switches, &mut rng),
+            };
             let accepted = accepted_at(&session);
-            let got = session.apply(&input);
-            match (&got, &want) {
-                (Ok(got), Ok(want)) => {
-                    assert_eq!(got.at, *want, "{name} {input:?}");
-                    assert_eq!(got.status, session.status(), "{name} {input:?}");
+            let landed_ok = match specs {
+                Some(_) => {
+                    let want = ruling(&session, &input);
+                    apply_checked(name, &mut session, &input, want)
                 }
-                (Err(got), Err(want)) => assert_eq!(got, want, "{name} {input:?}"),
-                _ => panic!("{name} {input:?}: {got:?} vs {want:?}"),
-            }
-            if got.is_ok() {
+                None => {
+                    let want = expected(&session, &input);
+                    let got = session.apply(&input);
+                    match (&got, &want) {
+                        (Ok(got), Ok(want)) => {
+                            assert_eq!(got.at, *want, "{name} {input:?}");
+                            assert_eq!(got.status, session.status(), "{name} {input:?}");
+                        }
+                        (Err(got), Err(want)) => assert_eq!(got, want, "{name} {input:?}"),
+                        _ => panic!("{name} {input:?}: {got:?} vs {want:?}"),
+                    }
+                    got.is_ok()
+                }
+            };
+            if landed_ok {
                 landed += 1;
                 probes.retain(|&(at, _)| at <= accepted);
             }
@@ -281,31 +668,32 @@ fn inputs_in_chunks_write_the_export_folder(name: &str, input: &[u8], budget: Bu
     }
     assert!(on_rows > 0, "{name}: no probe fell on a row");
     assert_same_folder(&export, &exported, &finish(session, &exported), &batch);
+    batch
 }
 
 #[test]
 fn atmega_button_with_inputs_writes_the_export_folder() {
     let input = without_events(&example("atmega-button", AVR_STOP_PS));
-    inputs_in_chunks_write_the_export_folder("atmega-button", &input, BUDGET, 0x5eed_1001);
+    inputs_in_chunks_write_the_export_folder("atmega-button", &input, BUDGET, 0x5eed_1001, None);
 }
 
 #[test]
 fn button_led_with_inputs_writes_the_export_folder() {
     let input = without_events(&example("button-led", u64::MAX));
-    inputs_in_chunks_write_the_export_folder("button-led", &input, BUDGET, 0x5eed_1002);
+    inputs_in_chunks_write_the_export_folder("button-led", &input, BUDGET, 0x5eed_1002, None);
 }
 
 /// `rc-switch` keeps its own events, so an input lands after the last of them.
 #[test]
 fn rc_switch_with_inputs_writes_the_export_folder() {
     let input = example("rc-switch", u64::MAX);
-    inputs_in_chunks_write_the_export_folder("rc-switch", &input, BUDGET, 0x5eed_1003);
+    inputs_in_chunks_write_the_export_folder("rc-switch", &input, BUDGET, 0x5eed_1003, None);
 }
 
 #[test]
 fn rc_switches_with_inputs_write_the_export_folder() {
     for seed in [0x5eed_1004, 0x5eed_1005] {
-        inputs_in_chunks_write_the_export_folder("rc-switches", RC_SWITCHES, BUDGET, seed);
+        inputs_in_chunks_write_the_export_folder("rc-switches", RC_SWITCHES, BUDGET, seed, None);
     }
 }
 
@@ -314,12 +702,12 @@ fn rc_switches_with_inputs_write_the_export_folder() {
 #[test]
 fn stiff_row_with_inputs_writes_the_export_folder() {
     let input = without_events(STIFF_ROW);
-    inputs_in_chunks_write_the_export_folder("stiff-row", &input, BUDGET, 0x5eed_1006);
+    inputs_in_chunks_write_the_export_folder("stiff-row", &input, BUDGET, 0x5eed_1006, None);
 }
 
 #[test]
 fn stiff_row_with_its_event_and_inputs_writes_the_export_folder() {
-    inputs_in_chunks_write_the_export_folder("stiff-row", STIFF_ROW, BUDGET, 0x5eed_1008);
+    inputs_in_chunks_write_the_export_folder("stiff-row", STIFF_ROW, BUDGET, 0x5eed_1008, None);
 }
 
 #[test]
@@ -329,7 +717,7 @@ fn a_session_with_inputs_that_reaches_the_step_limit_writes_the_export_folder() 
         ..BUDGET
     };
     let input = example("rc-switch", u64::MAX);
-    inputs_in_chunks_write_the_export_folder("rc-switch", &input, budget, 0x5eed_1009);
+    inputs_in_chunks_write_the_export_folder("rc-switch", &input, budget, 0x5eed_1009, None);
 }
 
 /// Ok when a batch run of the session's export, with a row at every step, holds every step the
@@ -372,7 +760,12 @@ fn export_takes_the_steps(session: &Session) -> Result<(), String> {
 
 /// `input` advanced in seeded chunks with seeded inputs to a seeded time in the middle of the
 /// run, then exported there.
-fn an_export_mid_run_takes_every_step_the_session_took(name: &str, input: &[u8], seed: u64) {
+fn an_export_mid_run_takes_every_step_the_session_took(
+    name: &str,
+    input: &[u8],
+    seed: u64,
+    specs: Option<&[PartSpec]>,
+) {
     let mut session = open_document(input, Rows::Steps, BUDGET);
     let stop = transient(netlist_of(&session)).stop.as_ps();
     let switches = switches(netlist_of(&session));
@@ -383,8 +776,18 @@ fn an_export_mid_run_takes_every_step_the_session_took(name: &str, input: &[u8],
         let now = session.now().as_ps();
         session.advance_to(Time::from_ps(now + 1 + rng.below(stop / 50)).min(until));
         assert_eq!(session.status(), Status::Running, "{name}");
-        let input = random_input(&session, &switches, &mut rng);
-        if session.apply(&input).is_ok() {
+        let input = match specs {
+            Some(specs) => random_spec(&session, specs, &mut rng),
+            None => random_input(&session, &switches, &mut rng),
+        };
+        let landed_ok = match specs {
+            Some(_) => {
+                let want = ruling(&session, &input);
+                apply_checked(name, &mut session, &input, want)
+            }
+            None => session.apply(&input).is_ok(),
+        };
+        if landed_ok {
             landed += 1;
         }
     }
@@ -395,24 +798,29 @@ fn an_export_mid_run_takes_every_step_the_session_took(name: &str, input: &[u8],
 #[test]
 fn stiff_row_exported_mid_run_takes_every_step() {
     let input = without_events(STIFF_ROW);
-    an_export_mid_run_takes_every_step_the_session_took("stiff-row", &input, 0x5eed_1011);
+    an_export_mid_run_takes_every_step_the_session_took("stiff-row", &input, 0x5eed_1011, None);
 }
 
 #[test]
 fn rc_switches_exported_mid_run_take_every_step() {
-    an_export_mid_run_takes_every_step_the_session_took("rc-switches", RC_SWITCHES, 0x5eed_1013);
+    an_export_mid_run_takes_every_step_the_session_took(
+        "rc-switches",
+        RC_SWITCHES,
+        0x5eed_1013,
+        None,
+    );
 }
 
 #[test]
 fn rc_switch_exported_mid_run_takes_every_step() {
     let input = example("rc-switch", u64::MAX);
-    an_export_mid_run_takes_every_step_the_session_took("rc-switch", &input, 0x5eed_1014);
+    an_export_mid_run_takes_every_step_the_session_took("rc-switch", &input, 0x5eed_1014, None);
 }
 
 #[test]
 fn atmega_button_exported_mid_run_takes_every_step() {
     let input = without_events(&example("atmega-button", AVR_STOP_PS));
-    an_export_mid_run_takes_every_step_the_session_took("atmega-button", &input, 0x5eed_1015);
+    an_export_mid_run_takes_every_step_the_session_took("atmega-button", &input, 0x5eed_1015, None);
 }
 
 #[test]
@@ -667,6 +1075,12 @@ fn an_input_on_no_switch_is_refused() {
 fn an_input_at_or_past_stop_is_refused() {
     let mut session = open_document(RC_SWITCHES, Rows::Grid, BUDGET);
     let stop = transient(netlist_of(&session)).stop.as_ps();
+    let before = session.export();
+    assert_eq!(
+        session.apply(&set("sw1", stop, Contact::Open)),
+        Err(Rejected::NoChange)
+    );
+    assert_eq!(session.export(), before);
     for at in [stop, stop + 5] {
         assert_eq!(
             session.apply(&set("sw1", at, Contact::Closed)),
@@ -772,4 +1186,464 @@ fn a_switch_with_inputs_waits_on_one_breakpoint() {
     }
     assert_eq!(restarts, [at, at + 2_000, at + 4_000]);
     ends_as_its_export(session);
+}
+
+#[test]
+fn atmega_analog_serial_with_level_inputs_writes_the_export_folder() {
+    let input = example("atmega-analog-serial", ANALOG_STOP_PS);
+    let batch = inputs_in_chunks_write_the_export_folder(
+        "atmega-analog-serial",
+        &input,
+        BUDGET,
+        0x5eed_2001,
+        Some(ANALOG_PARTS),
+    );
+    let netlist = netlist::parse(&input).unwrap();
+    assert_a_sample_read_a_moved_level(&netlist, batch.trace().unwrap());
+}
+
+#[test]
+fn rc_levels_with_inputs_write_the_export_folder() {
+    inputs_in_chunks_write_the_export_folder(
+        "rc-levels",
+        RC_LEVELS,
+        BUDGET,
+        0x5eed_2002,
+        Some(LEVEL_PARTS),
+    );
+}
+
+#[test]
+fn rc_levels_exported_mid_run_take_every_step() {
+    an_export_mid_run_takes_every_step_the_session_took(
+        "rc-levels",
+        RC_LEVELS,
+        0x5eed_2003,
+        Some(LEVEL_PARTS),
+    );
+}
+
+#[test]
+fn stiff_row_with_level_inputs_writes_the_export_folder() {
+    let input = stiff_level_input();
+    inputs_in_chunks_write_the_export_folder(
+        "stiff-row",
+        &input,
+        BUDGET,
+        0x5eed_2004,
+        Some(STIFF_PARTS),
+    );
+}
+
+#[test]
+fn stiff_row_with_level_inputs_exported_mid_run_takes_every_step() {
+    let input = stiff_steps();
+    an_export_mid_run_takes_every_step_the_session_took(
+        "stiff-row",
+        &input,
+        0x5eed_2005,
+        Some(STIFF_PARTS),
+    );
+}
+
+#[test]
+fn a_level_inside_a_rejected_attempt_lands_at_the_reach() {
+    let mut session = open_document(&stiff_steps(), Rows::Grid, BUDGET);
+    let State::Running { next, .. } = &session.state else {
+        panic!("the session ended");
+    };
+    let first = next.at;
+    session.advance_to(first);
+    let State::Running { accepted, .. } = &session.state else {
+        panic!("the session ended");
+    };
+    assert_eq!(
+        (accepted.at, accepted.reach),
+        (Time::from_ps(40), Time::from_ps(1_000))
+    );
+    assert_eq!(
+        session.apply(&level("v1", 41, 1.5)),
+        Ok(Applied {
+            at: Time::from_ps(1_000),
+            status: Status::Running,
+        })
+    );
+    session.advance_to(Time::from_ps(1_000));
+    let State::Running { accepted, .. } = &session.state else {
+        panic!("the session ended");
+    };
+    assert_eq!(accepted.at, Time::from_ps(1_000));
+    assert!(accepted.restart_row.is_some(), "the level restarts");
+    ends_as_its_export(session);
+}
+
+#[test]
+fn a_second_level_on_one_part_waits_2_ns() {
+    let mut session = open_document(RC_SWITCHES, Rows::Grid, BUDGET);
+    assert_eq!(
+        session.apply(&level("v1", 0, 1.5)),
+        Ok(Applied {
+            at: Time::from_ps(1),
+            status: Status::Running,
+        })
+    );
+    assert_eq!(
+        session.apply(&level("v1", 0, 0.5)),
+        Ok(Applied {
+            at: Time::from_ps(1 + 2_000),
+            status: Status::Running,
+        })
+    );
+    session.advance_to(Time::from_ps(1));
+    let State::Running { accepted, next, .. } = &session.state else {
+        panic!("the session ended");
+    };
+    assert_eq!(accepted.at, Time::from_ps(1));
+    assert!(accepted.restart_row.is_some(), "the level restarts");
+    assert!(next.at > accepted.at);
+    ends_as_its_export(session);
+}
+
+#[test]
+fn a_level_and_a_contact_at_one_time_take_one_restart() {
+    let mut session = open_document(RC_SWITCHES, Rows::Grid, BUDGET);
+    let at = Time::from_ps(5_000_000);
+    for input in [
+        level("v1", at.as_ps(), 1.5),
+        set("sw1", at.as_ps(), Contact::Closed),
+    ] {
+        assert_eq!(
+            session.apply(&input),
+            Ok(Applied {
+                at,
+                status: Status::Running,
+            })
+        );
+    }
+    session.advance_to(at);
+    let State::Running { accepted, next, .. } = &session.state else {
+        panic!("the session ended");
+    };
+    assert_eq!(accepted.at, at);
+    assert!(accepted.restart_row.is_some(), "the edges restart");
+    assert!(next.at > at);
+    ends_as_its_export(session);
+}
+
+#[test]
+fn a_level_already_in_force_is_refused() {
+    let mut session = open_document(RC_LEVELS, Rows::Grid, BUDGET);
+    let before = session.export();
+    assert_eq!(session.apply(&level("v1", 0, 1.0)), Err(Rejected::NoChange));
+    assert_eq!(session.export(), before);
+    session.apply(&level("v1", 4_000, 1.5)).unwrap();
+    let pending = session.export();
+    assert_ne!(pending, before);
+    assert_eq!(
+        session.apply(&level("v1", 9_000, 1.5)),
+        Err(Rejected::NoChange)
+    );
+    assert_eq!(session.export(), pending);
+    ends_as_its_export(session);
+}
+
+#[test]
+fn a_contact_on_a_level_part_and_a_level_on_a_switch_are_refused() {
+    let mut session = open_document(KINDS, Rows::Grid, BUDGET);
+    let stop = transient(netlist_of(&session)).stop.as_ps();
+    let before = session.export();
+    for at in [0, stop] {
+        assert_eq!(
+            session.apply(&set("v1", at, Contact::Closed)),
+            Err(Rejected::WrongSetting)
+        );
+        assert_eq!(
+            session.apply(&set("rv1", at, Contact::Closed)),
+            Err(Rejected::WrongSetting)
+        );
+        assert_eq!(
+            session.apply(&level("sw1", at, 0.5)),
+            Err(Rejected::WrongSetting)
+        );
+    }
+    assert_eq!(session.export(), before);
+}
+
+#[test]
+fn a_position_of_0_1_or_above_1_is_refused() {
+    let mut session = open_document(KINDS, Rows::Grid, BUDGET);
+    let stop = transient(netlist_of(&session)).stop.as_ps();
+    let before = session.export();
+    for position in [0.0, 1.0, 1.5] {
+        for at in [0, stop] {
+            assert_eq!(
+                session.apply(&level("rv1", at, position)),
+                Err(Rejected::Value(ValueRule::Fraction)),
+                "{position} at {at}"
+            );
+        }
+    }
+    assert_eq!(
+        session.apply(&level("rv1", 0, 1e-320)),
+        Err(Rejected::Value(ValueRule::FiniteReciprocal))
+    );
+    assert_eq!(session.export(), before);
+}
+
+#[test]
+fn a_step_a_pulse_and_a_resistor_take_no_setting() {
+    let mut session = open_document(KINDS, Rows::Grid, BUDGET);
+    let stop = transient(netlist_of(&session)).stop.as_ps();
+    let before = session.export();
+    for part in ["vs", "vp", "r1"] {
+        for at in [0, stop] {
+            assert_eq!(
+                session.apply(&level(part, at, 1.5)),
+                Err(Rejected::NotSettable),
+                "{part} at {at}"
+            );
+            assert_eq!(
+                session.apply(&set(part, at, Contact::Closed)),
+                Err(Rejected::NotSettable),
+                "{part} at {at}"
+            );
+        }
+    }
+    assert_eq!(session.export(), before);
+}
+
+#[test]
+fn a_level_at_or_past_stop_is_refused() {
+    let mut session = open_document(RC_LEVELS, Rows::Grid, BUDGET);
+    let stop = transient(netlist_of(&session)).stop.as_ps();
+    for at in [stop, stop + 5] {
+        assert_eq!(
+            session.apply(&level("v1", at, 1.5)),
+            Err(Rejected::PastStop)
+        );
+    }
+    assert_eq!(
+        session.apply(&level("v1", stop - 1, 1.5)),
+        Ok(Applied {
+            at: Time::from_ps(stop - 1),
+            status: Status::Running,
+        })
+    );
+    assert_eq!(session.apply(&level("v1", 0, 0.5)), Err(Rejected::PastStop));
+    ends_as_its_export(session);
+}
+
+#[test]
+fn a_level_already_in_force_at_stop_is_no_change() {
+    let mut session = open_document(RC_LEVELS, Rows::Grid, BUDGET);
+    let stop = transient(netlist_of(&session)).stop.as_ps();
+    let before = session.export();
+    assert_eq!(
+        session.apply(&level("v1", stop, 1.0)),
+        Err(Rejected::NoChange)
+    );
+    assert_eq!(session.export(), before);
+    assert_eq!(
+        session.apply(&level("v1", stop - 1, 1.5)),
+        Ok(Applied {
+            at: Time::from_ps(stop - 1),
+            status: Status::Running,
+        })
+    );
+    let pending = session.export();
+    assert_eq!(
+        session.apply(&level("v1", stop, 1.5)),
+        Err(Rejected::NoChange)
+    );
+    assert_eq!(session.export(), pending);
+    ends_as_its_export(session);
+}
+
+#[test]
+fn two_levels_at_one_time_take_one_restart() {
+    let mut session = open_document(RC_LEVELS, Rows::Grid, BUDGET);
+    let at = Time::from_ps(5_000);
+    for input in [
+        level("v1", at.as_ps(), 1.5),
+        level("i1", at.as_ps(), 0.0004),
+    ] {
+        assert_eq!(
+            session.apply(&input),
+            Ok(Applied {
+                at,
+                status: Status::Running,
+            })
+        );
+    }
+    session.advance_to(at);
+    let State::Running { accepted, next, .. } = &session.state else {
+        panic!("the session ended");
+    };
+    assert_eq!(accepted.at, at);
+    assert!(accepted.restart_row.is_some(), "the levels restart");
+    assert!(next.at > at);
+    ends_as_its_export(session);
+}
+
+/// `1e-30 * 1e-300` underflows to 0, so the leg from `a` is not positive.
+#[test]
+fn a_position_whose_leg_underflows_is_refused() {
+    let input = br#"{
+      "version": 0,
+      "seed": 6,
+      "analysis": { "transient": { "stop_ps": 1000, "max_step_ps": 1000, "grid_ps": 1000 } },
+      "ground": "gnd",
+      "nets": ["gnd", "n"],
+      "parts": [
+        {
+          "name": "v1",
+          "kind": "voltage_source",
+          "pins": { "p": "n", "n": "gnd" },
+          "voltage": { "value": 0.0, "unit": "V", "source": "user" }
+        },
+        {
+          "name": "rv1",
+          "kind": "potentiometer",
+          "pins": { "a": "n", "wiper": "gnd", "b": "gnd" },
+          "resistance": { "value": 1e-300, "unit": "ohm", "source": "user" },
+          "position": { "value": 0.5, "unit": "1", "source": "user" }
+        }
+      ]
+    }"#;
+    let mut session = open_document(input, Rows::Grid, BUDGET);
+    let before = session.export();
+    assert_eq!(
+        session.apply(&level("rv1", 0, 1e-30)),
+        Err(Rejected::Value(ValueRule::Positive))
+    );
+    assert_eq!(session.export(), before);
+}
+
+/// `analog_serial.S` leaves `U2X0` clear and writes `UBRR0` = 103. A bit is 16 baud ticks,
+/// and a tick is `UBRR0 + 1` cycles.
+fn bit_ps(netlist: &Netlist) -> u64 {
+    let hz = netlist
+        .parts()
+        .find_map(|(_, part)| match &part.model {
+            Model::Chip(Chip::Atmega328p(mcu)) => Some(mcu.clock_hz.value),
+            _ => None,
+        })
+        .expect("an ATmega328P");
+    assert_eq!(1_000_000_000_000 % hz, 0);
+    16 * (103 + 1) * (1_000_000_000_000 / hz)
+}
+
+fn assert_a_sample_read_a_moved_level(netlist: &Netlist, trace: &Trace) {
+    let resting = adc_code(
+        column_at(trace, "#net.pc0", 0),
+        column_at(trace, "#net.vcc", 0),
+    );
+    let until = trace.time().last().expect("a row").as_ps();
+    let lines = decode_lines(&pd1_edges(trace), bit_ps(netlist), until);
+    assert!(
+        lines.len() >= 2,
+        "the run printed {} adc line(s), want two conversions",
+        lines.len()
+    );
+    assert_eq!(
+        lines[0], resting,
+        "the first conversion samples before the first move, want the resting code {resting}, got {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|&code| code != resting),
+        "every sample read the resting code {resting}: {lines:?}"
+    );
+}
+
+fn column_at(trace: &Trace, key: &str, row: usize) -> f64 {
+    let want: Ref = key.parse().unwrap();
+    let index = trace
+        .columns()
+        .iter()
+        .position(|column| *column == want)
+        .unwrap_or_else(|| panic!("no {key}"));
+    trace.column(index)[row]
+}
+
+fn pd1_edges(trace: &Trace) -> Vec<(u64, bool)> {
+    let signal: Ref = "#u1.logic.PD1".parse().unwrap();
+    let logic = trace.logic().expect("logic");
+    let index = logic
+        .signals()
+        .iter()
+        .position(|s| *s == signal)
+        .expect("PD1");
+    logic
+        .changes()
+        .iter()
+        .filter(|change| change.signal == index)
+        .map(|change| (change.at.as_ps(), change.level == Level::High))
+        .collect()
+}
+
+/// §24.7. `floor(Vin * 1024 / Vref)`.
+fn adc_code(vin: f64, vref: f64) -> u16 {
+    let code = (vin * 1024.0 / vref).floor();
+    assert!(
+        (0.0..1024.0).contains(&code),
+        "ADC code {code} is outside 0..1024"
+    );
+    code as u16
+}
+
+/// 8N1 frames whose stop bit is inside the trace. Each later fall is a start bit.
+fn decode_lines(edges: &[(u64, bool)], bit_ps: u64, until: u64) -> Vec<u16> {
+    let text: String = decode_txd(edges, bit_ps, until)
+        .into_iter()
+        .map(|(_, byte)| byte as char)
+        .collect();
+    text.split_inclusive('\n')
+        .filter(|line| line.ends_with('\n'))
+        .map(|line| {
+            let line = line.trim_end_matches(['\r', '\n']);
+            line.parse()
+                .unwrap_or_else(|err| panic!("{line:?} is not an adc code: {err}"))
+        })
+        .collect()
+}
+
+fn decode_txd(edges: &[(u64, bool)], bit_ps: u64, until: u64) -> Vec<(u64, u8)> {
+    let (at, level) = edges[0];
+    assert!(level, "TXD rises to idle at {at} ps");
+    let mut i = 1;
+    let mut high = true;
+    let mut frames = Vec::new();
+    while i < edges.len() {
+        let (start, level) = edges[i];
+        if start + 9 * bit_ps > until {
+            break;
+        }
+        assert!(!level && high, "start bit at {start} ps");
+        i += 1;
+        high = false;
+        let mut bits = [false; 9];
+        for (k, bit) in bits.iter_mut().enumerate() {
+            let boundary = start + (k as u64 + 1) * bit_ps;
+            if i < edges.len() && edges[i].0 == boundary {
+                high = edges[i].1;
+                i += 1;
+            } else if i < edges.len() && edges[i].0 < boundary {
+                panic!(
+                    "edge at {} ps is off the bit grid of the frame at {start} ps",
+                    edges[i].0
+                );
+            }
+            *bit = high;
+        }
+        assert!(bits[8], "stop bit of the frame at {start} ps");
+        let mut byte = 0u8;
+        for (bit, &level) in bits[..8].iter().enumerate() {
+            if level {
+                byte |= 1 << bit;
+            }
+        }
+        frames.push((start, byte));
+        high = true;
+    }
+    frames
 }

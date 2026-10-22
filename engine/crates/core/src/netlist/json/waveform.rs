@@ -131,9 +131,12 @@ pub(super) struct Fields {
     events: &'static str,
 }
 
+pub(crate) const VOLT: &str = "V";
+pub(crate) const AMPERE: &str = "A";
+
 pub(super) const VOLTAGE: Fields = Fields {
     key: "voltage",
-    unit: "V",
+    unit: VOLT,
     initial: "voltage.initial",
     final_level: "voltage.final",
     pulsed: "voltage.pulsed",
@@ -146,7 +149,7 @@ pub(super) const VOLTAGE: Fields = Fields {
 
 pub(super) const CURRENT: Fields = Fields {
     key: "current",
-    unit: "A",
+    unit: AMPERE,
     initial: "current.initial",
     final_level: "current.final",
     pulsed: "current.pulsed",

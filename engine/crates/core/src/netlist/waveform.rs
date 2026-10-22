@@ -128,6 +128,20 @@ impl Waveform {
         &self.shape
     }
 
+    pub(super) fn as_steps(&self) -> Option<&Schedule<Value>> {
+        match &self.shape {
+            Shape::Steps(schedule) => Some(schedule),
+            Shape::Step(_) | Shape::Pulse(_) => None,
+        }
+    }
+
+    pub(super) fn steps_mut(&mut self) -> Option<&mut Schedule<Value>> {
+        match &mut self.shape {
+            Shape::Steps(schedule) => Some(schedule),
+            Shape::Step(_) | Shape::Pulse(_) => None,
+        }
+    }
+
     /// The value on the interval that ends at `at`. `initial` at t = 0.
     pub fn before(&self, at: Time) -> f64 {
         let at_ps = at.as_ps();

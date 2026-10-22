@@ -3,10 +3,12 @@
 use std::collections::BTreeMap;
 
 use super::waveform::{WirePosition, WireSteps};
-use super::{PinMap, WireValue, check_positive, resolve_fraction, resolve_pins, resolve_value};
-use crate::diagnostic::Diagnostic;
+use super::{FRACTION_UNIT, PinMap, WireValue, resolve_pins, resolve_value};
+use crate::diagnostic::{Diagnostic, ValueRule};
 use crate::name::{Name, Ref};
-use crate::netlist::{Model, NetId, Potentiometer, Schedule, Source, Value};
+use crate::netlist::{
+    Model, NetId, Potentiometer, Schedule, Source, Value, broken_fraction, position_rule,
+};
 
 pub(super) fn resolve_potentiometer(
     name: &Name,
@@ -76,36 +78,51 @@ fn level_with_legs(
     out: &mut Vec<Diagnostic>,
 ) -> (bool, Value) {
     let si = wire.value;
-    let resolved = resolve_fraction(part, field, wire, out);
-    let Some(position) = resolved else {
-        return (
-            false,
-            Value {
-                si,
-                source: Source::User,
-            },
-        );
-    };
-    let legs = match resistance {
-        Some(resistance) => leg_reciprocals(part, position.si.get(), resistance.si.get(), out),
-        None => true,
-    };
-    (legs, position)
+    let number = si.get();
+    let field = field.into();
+    let resolved = resolve_value(part, field.clone(), FRACTION_UNIT, false, wire, out);
+    let mut ok = resolved.is_some();
+    let value = resolved.unwrap_or(Value {
+        si,
+        source: Source::User,
+    });
+    if let Some(resistance) = resistance {
+        let Some(legs) = position_rule(number, resistance.si.get()).legs() else {
+            refuse_fraction(part, field, number, out);
+            return (false, value);
+        };
+        if !ok {
+            return (false, value);
+        }
+        for (ohms, rule) in legs {
+            let Some(rule) = rule else {
+                continue;
+            };
+            ok = false;
+            out.push(Diagnostic::NetlistValue {
+                part: part.clone(),
+                field: "resistance".into(),
+                value: ohms,
+                rule,
+            });
+        }
+    } else if broken_fraction(number).is_some() {
+        refuse_fraction(part, field, number, out);
+        return (false, value);
+    }
+    (ok, value)
 }
 
-fn leg_reciprocals(part: &Ref, position: f64, resistance: f64, out: &mut Vec<Diagnostic>) -> bool {
-    let mut ok = true;
-    for leg in [position * resistance, (1.0 - position) * resistance] {
-        let Some(rule) = check_positive(leg) else {
-            continue;
-        };
-        ok = false;
-        out.push(Diagnostic::NetlistValue {
-            part: part.clone(),
-            field: "resistance".into(),
-            value: leg,
-            rule,
-        });
-    }
-    ok
+fn refuse_fraction(
+    part: &Ref,
+    field: std::borrow::Cow<'static, str>,
+    number: f64,
+    out: &mut Vec<Diagnostic>,
+) {
+    out.push(Diagnostic::NetlistValue {
+        part: part.clone(),
+        field,
+        value: number,
+        rule: ValueRule::Fraction,
+    });
 }

@@ -3,7 +3,8 @@
 mod common;
 
 use common::with_parts;
-use sim_core::netlist::{self, Analysis, Contact, Document, Edge, Model};
+use sim_core::finite::Finite;
+use sim_core::netlist::{self, Analysis, Appended, Contact, Document, Model};
 use sim_core::time::Time;
 
 const ANALYSIS: &str =
@@ -139,7 +140,7 @@ fn an_export_appends_each_switch_event_and_ends_at_its_stop() {
         (sw2, Contact::Closed),
     ] {
         let at = earliest(&netlist, id);
-        netlist.append(id, Edge { at, to });
+        netlist.append(id, at, Appended::Contact(to));
     }
     let stop = Time::from_ps(3_000_000);
     let export = document.export(&netlist, stop);
@@ -164,4 +165,161 @@ fn an_export_appends_each_switch_event_and_ends_at_its_stop() {
         events(2),
         serde_json::json!([{ "t_ps": 1, "state": "open" }])
     );
+}
+
+fn levels() -> String {
+    with_parts(
+        ANALYSIS,
+        r#"{
+          "name": "v1",
+          "kind": "voltage_source",
+          "pins": { "p": "a", "n": "gnd" },
+          "voltage": {
+            "value": 4.99995000345103e-09,
+            "unit": "V",
+            "source": { "closed_form": { "note": "kept" } }
+          }
+        },
+        {
+          "name": "i0",
+          "kind": "current_source",
+          "pins": { "p": "a", "n": "gnd" },
+          "current": { "value": 0.0002, "unit": "A", "source": "user" }
+        },
+        {
+          "name": "i1",
+          "kind": "current_source",
+          "pins": { "p": "a", "n": "gnd" },
+          "current": {
+            "kind": "steps",
+            "initial": { "value": 0.0002, "unit": "A", "source": "user" },
+            "events": [
+              { "t_ps": 5000, "level": { "value": 0.0001, "unit": "A", "source": "user" } }
+            ]
+          }
+        },
+        {
+          "name": "rv1",
+          "kind": "potentiometer",
+          "pins": { "a": "a", "wiper": "a", "b": "gnd" },
+          "resistance": { "value": 10000.0, "unit": "ohm", "source": "user" },
+          "position": { "value": 0.49951171875, "unit": "1", "source": "user" }
+        },
+        {
+          "name": "r1",
+          "kind": "resistor",
+          "pins": { "a": "a", "b": "gnd" },
+          "resistance": { "value": 0.30000000000000004, "unit": "ohm", "source": "user" },
+          "ratings": { "power": null }
+        },
+        {
+          "name": "sw1",
+          "kind": "switch",
+          "pins": { "a": "a", "b": "gnd" },
+          "on_resistance": { "value": 1, "unit": "ohm", "source": "user" },
+          "off_resistance": { "value": 1e9, "unit": "ohm", "source": "user" },
+          "initial": "closed",
+          "events": [],
+          "bounce": null
+        }"#,
+    )
+}
+
+fn part_json<'a>(json: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+    json["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|part| part["name"] == name)
+        .unwrap_or_else(|| panic!("no {name}"))
+}
+
+fn earliest_level(netlist: &netlist::Netlist, name: &str) -> Time {
+    let id = switch_id(netlist, name);
+    let Some(level) = netlist.part(id).model.level() else {
+        panic!("{name} takes no level");
+    };
+    level.schedule.earliest(Time::ZERO, 0).unwrap()
+}
+
+fn append_level(netlist: &mut netlist::Netlist, name: &str, si: f64) -> Time {
+    let at = earliest_level(netlist, name);
+    let id = switch_id(netlist, name);
+    netlist.append(id, at, Appended::Level(Finite::new(si).unwrap()));
+    at
+}
+
+fn round_trip(document: &Document, netlist: &netlist::Netlist) -> serde_json::Value {
+    let export = document.export(netlist, Time::from_ps(10_000_000));
+    let exported = netlist::parse(&export).unwrap();
+    assert_eq!(parts(&exported), parts(netlist));
+    assert_eq!(exported.analysis(), netlist.analysis());
+    assert_eq!(exported.seed(), netlist.seed());
+    serde_json::from_slice(&export).unwrap()
+}
+
+#[test]
+fn an_export_of_a_plain_level_keeps_its_initial_and_writes_the_event_at_1_ps() {
+    let json = levels();
+    let original: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let (document, mut netlist) = Document::parse(json.as_bytes()).unwrap();
+    let voltage_at = append_level(&mut netlist, "v1", 1.0);
+    let position_at = append_level(&mut netlist, "rv1", 0.25);
+    assert_eq!(
+        (voltage_at, position_at),
+        (Time::from_ps(1), Time::from_ps(1))
+    );
+    let exported = round_trip(&document, &netlist);
+    for (name, unit, field) in [("v1", "V", "voltage"), ("rv1", "1", "position")] {
+        let wrapped = part_json(&exported, name);
+        assert_eq!(wrapped[field]["kind"], "steps");
+        assert_eq!(wrapped[field]["initial"], part_json(&original, name)[field]);
+        assert_eq!(
+            wrapped[field]["events"],
+            serde_json::json!([{
+                "t_ps": 1,
+                "level": { "value": if name == "v1" { 1.0 } else { 0.25 }, "unit": unit, "source": "user" }
+            }])
+        );
+    }
+}
+
+#[test]
+fn an_export_of_a_steps_level_appends_the_event_at_its_gap() {
+    let json = levels();
+    let original: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let (document, mut netlist) = Document::parse(json.as_bytes()).unwrap();
+    let at = append_level(&mut netlist, "i1", 0.0003);
+    assert_eq!(at, Time::from_ps(7_000));
+    let exported = round_trip(&document, &netlist);
+    let events = &part_json(&exported, "i1")["current"]["events"];
+    assert_eq!(
+        events[0],
+        part_json(&original, "i1")["current"]["events"][0]
+    );
+    assert_eq!(
+        events[1],
+        serde_json::json!({
+            "t_ps": 7000,
+            "level": { "value": 0.0003, "unit": "A", "source": "user" }
+        })
+    );
+}
+
+#[test]
+fn an_export_leaves_an_unset_part_byte_for_byte() {
+    let json = levels();
+    let original: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let (document, mut netlist) = Document::parse(json.as_bytes()).unwrap();
+    append_level(&mut netlist, "v1", 1.0);
+    let export = document.export(&netlist, Time::from_ps(10_000_000));
+    let parsed: serde_json::Value = serde_json::from_slice(&export).unwrap();
+    for name in ["r1", "sw1", "i0", "rv1", "i1"] {
+        assert_eq!(
+            part_json(&parsed, name),
+            part_json(&original, name),
+            "{name}"
+        );
+    }
+    assert!(part_json(&parsed, "i0")["current"].get("kind").is_none());
 }

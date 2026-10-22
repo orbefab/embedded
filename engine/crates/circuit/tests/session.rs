@@ -5,6 +5,7 @@ mod common;
 use common::{resistor, source_on, transient};
 use sim_circuit::{Input, Refused, Session, Setting, Status};
 use sim_core::diagnostic::Diagnostic;
+use sim_core::finite::Finite;
 use sim_core::name::Name;
 use sim_core::netlist::{self, Contact, Model, Netlist};
 use sim_core::time::Time;
@@ -115,6 +116,54 @@ fn reads_are_the_batch(name: &str, stop_ps: u64, seed: u64) {
         rows.len()
     );
     assert_eq!(session.level(&trace.columns()[0]), None);
+}
+
+#[test]
+fn a_live_potentiometer_sets_the_divider_voltage() {
+    let json = r#"{
+      "version": 0,
+      "seed": 0,
+      "analysis": { "transient": { "stop_ps": 10000, "max_step_ps": 1000, "grid_ps": 1000 } },
+      "ground": "gnd",
+      "nets": ["gnd", "vin", "mid"],
+      "parts": [
+        {
+          "name": "v1",
+          "kind": "voltage_source",
+          "pins": { "p": "vin", "n": "gnd" },
+          "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+        },
+        {
+          "name": "rv1",
+          "kind": "potentiometer",
+          "pins": { "a": "vin", "wiper": "mid", "b": "gnd" },
+          "resistance": { "value": 10000.0, "unit": "ohm", "source": "user" },
+          "position": { "value": 0.25, "unit": "1", "source": "user" }
+        }
+      ]
+    }"#;
+    let mut session = opened(json);
+    let mid = "#net.mid".parse().unwrap();
+    let close = |got: f64, position: f64| {
+        let expect = 5.0 * (1.0 - position);
+        assert!(
+            (got - expect).abs() <= 1e-8 * expect.abs(),
+            "{got} vs {expect}"
+        );
+    };
+    close(session.probe().get(&mid).unwrap().get(), 0.25);
+    let applied = session
+        .apply(&Input {
+            part: Name::new("rv1").unwrap(),
+            at: Time::ZERO,
+            setting: Setting::Level(Finite::new(0.75).unwrap()),
+        })
+        .unwrap();
+    assert_eq!(applied.at, Time::from_ps(1));
+    assert_eq!(session.advance_to(applied.at), Status::Running);
+    close(session.probe().get(&mid).unwrap().get(), 0.25);
+    assert_eq!(session.advance_to(Time::from_ps(2)), Status::Running);
+    close(session.probe().get(&mid).unwrap().get(), 0.75);
 }
 
 /// The session leaves the scope that parsed its netlist, so a session that borrowed it would

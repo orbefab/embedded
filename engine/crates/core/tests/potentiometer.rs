@@ -342,6 +342,44 @@ fn a_position_level_uses_its_own_field_for_unit_and_fraction() {
 }
 
 #[test]
+fn a_wrong_position_unit_reports_no_leg() {
+    let unit = |field: &str| {
+        format!(r##""netlist.unit" ["#rv1"] {{"expected":"1","field":"{field}","found":"V"}}"##)
+    };
+    let plain = |resistance: &str, position: &str| {
+        document(&fields(&value(resistance, "ohm"), &value(position, "V")))
+    };
+    let cases = [
+        (plain("10000.0", "1e-320"), vec![unit("position")]),
+        (plain("1e-300", "1e-30"), vec![unit("position")]),
+        (
+            pot_position(
+                "10000.0",
+                &format!(
+                    r#"{{ "kind": "steps", "initial": {}, "events": [] }}"#,
+                    value("1e-320", "V")
+                ),
+            ),
+            vec![unit("position.initial")],
+        ),
+        (
+            pot_position(
+                "1e-300",
+                &format!(
+                    r#"{{ "kind": "steps", "initial": {}, "events": [{}] }}"#,
+                    value("0.5", "1"),
+                    level_event("2000", "1e-30", "V"),
+                ),
+            ),
+            vec![unit("position.events[0].level")],
+        ),
+    ];
+    for (json, want) in cases {
+        assert_eq!(errors(&json), want, "{json}");
+    }
+}
+
+#[test]
 fn a_steps_level_leg_uses_the_resistor_rule_on_field_resistance() {
     let tiny = steps_position("0.5", &level_event("2000", "1e-320", "1"));
     let reciprocal = netlist::parse(pot_position("1.0", &tiny).as_bytes()).unwrap_err();
