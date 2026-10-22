@@ -149,7 +149,7 @@ fn run(netlist: &Netlist) -> (Trace, Vec<Diagnostic>) {
 }
 
 fn core(netlist: &Netlist) -> avr::Core {
-    let circuit = Circuit::new(netlist).unwrap();
+    let circuit = Circuit::new(netlist.clone()).unwrap();
     let [chip] = &circuit.actives[..] else {
         unreachable!("one ATmega328P");
     };
@@ -453,7 +453,7 @@ fn a_landed_core_holds_no_byte_it_sent() {
     }
     assert_eq!(untaken(&alone)[..10], *b"689\r\n689\r\n");
 
-    let circuit = Circuit::new(&netlist).unwrap();
+    let circuit = Circuit::new(netlist.clone()).unwrap();
     let start = op::settle(
         &circuit,
         Conditions::NOMINAL,

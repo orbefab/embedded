@@ -5,7 +5,7 @@ use sim_core::diagnostic::Diagnostic;
 use sim_core::finite::Finite;
 use sim_core::logic::{Level, Logic};
 use sim_core::name::Ref;
-use sim_core::netlist::{Edge, Model, Netlist, Transient};
+use sim_core::netlist::{Edge, Model, Netlist, PartId, Transient};
 use sim_core::run_folder::{Observations, OpPoint};
 use sim_core::time::Time;
 use sim_core::trace::Trace;
@@ -102,7 +102,7 @@ fn run_with(
     columns: Columns,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Outcome {
-    match Session::open_recorded(netlist, transient, actives, budget, columns, rows) {
+    match Session::open_recorded(netlist.clone(), transient, actives, budget, columns, rows) {
         Ok(mut session) => {
             session.advance_to(transient.stop);
             session.finish(diagnostics)
@@ -253,48 +253,29 @@ impl Record {
 }
 
 /// Where a step must land: every contact edge and source jump, 1 ns after t = 0 and after each
-/// edge, and `stop`. The deck ramps each contact and source over that nanosecond. A lazy merge
-/// of one cursor per part, so no edge list is built and none is capped. Time only moves
-/// forward.
-pub(crate) struct Breakpoints<'n> {
+/// edge, and `stop`. The deck ramps each contact and source over that nanosecond. Each part keeps
+/// its next edge only, so no edge list is built and none is capped. Time only moves forward.
+pub(crate) struct Breakpoints {
     stop: Time,
-    /// Each cursor's next edge before `stop`, earliest first, with the cursor's index.
-    edges: BinaryHeap<Reverse<(Time, usize)>>,
-    cursors: Vec<Box<dyn Iterator<Item = Time> + 'n>>,
+    /// Each part's next edge before `stop`, earliest first.
+    edges: BinaryHeap<Reverse<(Time, PartId)>>,
     /// 1 ns after t = 0 and after each edge passed, before `stop`, ascending.
     ramp_ends: VecDeque<Time>,
 }
 
-impl<'n> Breakpoints<'n> {
-    pub(crate) fn new(netlist: &'n Netlist, stop: Time) -> Breakpoints<'n> {
-        let mut cursors: Vec<Box<dyn Iterator<Item = Time> + 'n>> = Vec::new();
+impl Breakpoints {
+    pub(crate) fn new(netlist: &Netlist, stop: Time) -> Breakpoints {
         let mut edges = BinaryHeap::new();
-        for (_, part) in netlist.parts() {
-            let mut cursor: Box<dyn Iterator<Item = Time> + 'n> = match &part.model {
-                Model::Switch(switch) => Box::new(
-                    switch
-                        .schedule
-                        .edges()
-                        .iter()
-                        .map(|edge| edge.at)
-                        .take_while(move |&at| at < stop),
-                ),
-                model => {
-                    let Some(waveform) = model.waveform() else {
-                        continue;
-                    };
-                    Box::new(waveform.jumps_before(stop))
-                }
-            };
-            if let Some(at) = cursor.next() {
-                edges.push(Reverse((at, cursors.len())));
-                cursors.push(cursor);
+        for (id, part) in netlist.parts() {
+            if let Some(at) = part.model.next_change_after(Time::ZERO)
+                && at < stop
+            {
+                edges.push(Reverse((at, id)));
             }
         }
         let mut breakpoints = Breakpoints {
             stop,
             edges,
-            cursors,
             ramp_ends: VecDeque::new(),
         };
         breakpoints.ramp_after(Time::ZERO);
@@ -302,14 +283,16 @@ impl<'n> Breakpoints<'n> {
     }
 
     /// The earliest landing after `now`, which is at most `stop`.
-    pub(crate) fn next_after(&mut self, now: Time) -> Time {
-        while let Some(&Reverse((at, index))) = self.edges.peek()
+    pub(crate) fn next_after(&mut self, netlist: &Netlist, now: Time) -> Time {
+        while let Some(&Reverse((at, id))) = self.edges.peek()
             && at <= now
         {
             self.edges.pop();
             self.ramp_after(at);
-            if let Some(next) = self.cursors[index].next() {
-                self.edges.push(Reverse((next, index)));
+            if let Some(next) = netlist.part(id).model.next_change_after(at)
+                && next < self.stop
+            {
+                self.edges.push(Reverse((next, id)));
             }
         }
         while self.ramp_ends.front().is_some_and(|&end| end <= now) {

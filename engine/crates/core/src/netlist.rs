@@ -32,7 +32,7 @@ pub fn probe_version(json: &[u8]) -> Option<u64> {
     json::probe_version(json)
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Netlist {
     version: u64,
     seed: u64,
@@ -234,17 +234,17 @@ impl Model {
         current.into_iter().chain(power).collect()
     }
 
-    /// The source's value over time. `None` for every kind that is not an independent source.
-    pub fn waveform(&self) -> Option<&Waveform> {
+    /// The next contact edge or source jump strictly after `at`.
+    pub fn next_change_after(&self, at: Time) -> Option<Time> {
         match self {
-            Model::VoltageSource(source) => Some(&source.voltage),
-            Model::CurrentSource(source) => Some(&source.current),
+            Model::VoltageSource(source) => source.voltage.next_change_after(at),
+            Model::CurrentSource(source) => source.current.next_change_after(at),
+            Model::Switch(switch) => switch.schedule.next_change_after(at),
             Model::Resistor(_)
             | Model::Potentiometer(_)
             | Model::Diode(_)
             | Model::Led(_)
             | Model::Capacitor(_)
-            | Model::Switch(_)
             | Model::Chip(_) => None,
         }
     }
@@ -415,6 +415,12 @@ impl Schedule {
         } else {
             self.edges[k - 1].to
         }
+    }
+
+    /// The next edge strictly after `at`.
+    pub fn next_change_after(&self, at: Time) -> Option<Time> {
+        let k = self.edges.partition_point(|edge| edge.at <= at);
+        self.edges.get(k).map(|edge| edge.at)
     }
 }
 

@@ -5,6 +5,7 @@ mod common;
 use std::fs;
 use std::path::PathBuf;
 
+use sim_core::netlist::Model;
 use sim_core::time::Time;
 
 use common::{column, resistor, simulate, simulate_steps, span, trace, transient};
@@ -399,13 +400,16 @@ fn the_current_pulse_example_follows_its_closed_form_at_every_row() {
         .fold(0.0, f64::max);
     assert!(worst <= capped(0.8, 2e7, 1e9), "{worst:e}");
     let netlist = sim_core::netlist::parse(json.as_bytes()).unwrap();
-    let waveform = netlist
+    let source = netlist
         .parts()
-        .find_map(|(_, part)| part.model.waveform())
+        .find_map(|(_, part)| match &part.model {
+            Model::CurrentSource(source) => Some(source),
+            _ => None,
+        })
         .unwrap();
     let current = column(trace, "#i1.i");
     for (&t, &i) in rows.iter().zip(current) {
-        assert_eq!(i, -waveform.before(Time::from_ps(t)), "{t}");
+        assert_eq!(i, -source.current.before(Time::from_ps(t)), "{t}");
     }
     assert_eq!(*rows.last().unwrap(), 16_000_000_000);
     assert_eq!(*current.last().unwrap(), -2e-4);

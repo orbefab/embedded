@@ -37,7 +37,7 @@ pub(crate) fn run(netlist: &Netlist, diagnostics: &mut Vec<Diagnostic>) -> Optio
 }
 
 fn solve(netlist: &Netlist, columns: &Columns) -> Result<Vec<Finite>, Diagnostic> {
-    let circuit = Circuit::new(netlist)?;
+    let circuit = Circuit::new(netlist.clone())?;
     let start = Iterate::initial(&circuit);
     let settled = settle(
         &circuit,
@@ -148,7 +148,7 @@ pub(crate) fn climb(
             Err(Failure::Singular { row }) => {
                 return Err(Diagnostic::SolverSingular {
                     at: base.at,
-                    unknown: circuit.layout.describe(circuit.netlist, row),
+                    unknown: circuit.layout.describe(&circuit.netlist, row),
                 });
             }
             Err(Failure::Stalled(stall)) => {
@@ -238,7 +238,7 @@ mod tests {
         for name in ["led-5v", "led-9v"] {
             let bytes = example(name);
             let netlist = parse(&bytes);
-            let circuit = Circuit::new(&netlist).unwrap();
+            let circuit = Circuit::new(netlist.clone()).unwrap();
             let plain = climb_op(&circuit, |_| OP_BUDGET).unwrap();
             let stepped = climb_op(&circuit, |rung| match rung {
                 Rung::Plain | Rung::Source { .. } => 1,
@@ -254,7 +254,7 @@ mod tests {
         for name in ["led-5v", "led-9v"] {
             let bytes = example(name);
             let netlist = parse(&bytes);
-            let circuit = Circuit::new(&netlist).unwrap();
+            let circuit = Circuit::new(netlist.clone()).unwrap();
             let plain = climb_op(&circuit, |_| OP_BUDGET).unwrap();
             let stepped = climb_op(&circuit, |rung| match rung {
                 Rung::Plain | Rung::Gmin { .. } => 1,
@@ -268,7 +268,7 @@ mod tests {
     #[test]
     fn an_exhausted_ladder_names_the_junction() {
         let netlist = parse(&example("led-9v"));
-        let circuit = Circuit::new(&netlist).unwrap();
+        let circuit = Circuit::new(netlist.clone()).unwrap();
         let failed = climb_op(&circuit, |_| 1).unwrap_err();
         let text = serde_json::to_string(&failed).unwrap();
         assert_eq!(
@@ -294,7 +294,7 @@ mod tests {
                 )
                 .into_bytes(),
         );
-        let circuit = Circuit::new(&netlist).unwrap();
+        let circuit = Circuit::new(netlist.clone()).unwrap();
         let failed = climb_op(&circuit, |_| OP_BUDGET).unwrap_err();
         assert_eq!(failed.code(), "solver.singular");
         assert_eq!(failed.refs(), vec!["#v2".parse().unwrap()]);
@@ -317,7 +317,7 @@ mod tests {
                 )
                 .as_bytes(),
         );
-        let circuit = Circuit::new(&netlist).unwrap();
+        let circuit = Circuit::new(netlist.clone()).unwrap();
         let conditions = Conditions {
             source_scale: 0.0,
             ..Conditions::NOMINAL
@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn gmin_pulls_a_divider_toward_ground() {
         let netlist = parse(&example("divider"));
-        let circuit = Circuit::new(&netlist).unwrap();
+        let circuit = Circuit::new(netlist.clone()).unwrap();
         let gmin = 1e-2;
         let conditions = Conditions {
             gmin,

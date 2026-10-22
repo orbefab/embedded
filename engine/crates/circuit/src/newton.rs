@@ -16,9 +16,9 @@ pub(crate) const ABSTOL: f64 = 1e-12;
 
 /// A netlist with its rows assigned and its chips' watches declared. Read-only for the
 /// whole analysis.
-pub(crate) struct Circuit<'n> {
-    pub(crate) netlist: &'n Netlist,
-    pub(crate) layout: Layout<'n>,
+pub(crate) struct Circuit {
+    pub(crate) netlist: Netlist,
+    pub(crate) layout: Layout,
     /// The netlist's chips' watches by slot, then each active chip's.
     pub(crate) watches: Watches,
     /// By active slot.
@@ -33,30 +33,30 @@ enum Slot {
     Active(usize),
 }
 
-impl<'n> Circuit<'n> {
+impl Circuit {
     /// Fails with `solver.too_large` before the matrix is allocated.
-    pub(crate) fn new(netlist: &'n Netlist) -> Result<Circuit<'n>, Diagnostic> {
+    pub(crate) fn new(netlist: Netlist) -> Result<Circuit, Diagnostic> {
         Circuit::with_actives(netlist, Vec::new())
     }
 
     /// The netlist's active chips, then `extra`. Only a test passes `extra`, a script chip with
     /// no netlist kind.
     pub(crate) fn with_actives(
-        netlist: &'n Netlist,
+        netlist: Netlist,
         extra: Vec<active::Chip>,
-    ) -> Result<Circuit<'n>, Diagnostic> {
+    ) -> Result<Circuit, Diagnostic> {
         let mut passives = Vec::new();
         let mut actives = Vec::new();
         for (id, part) in netlist.parts() {
             if let Model::Chip(chip) = &part.model {
                 match chip::kind(chip) {
-                    chip::Kind::Passive(passive) => passives.push((id, passive)),
+                    chip::Kind::Passive(_) => passives.push(id),
                     chip::Kind::Active(kind) => actives.push(active::chip(id, kind)),
                 }
             }
         }
         actives.extend(extra);
-        let layout = Layout::new(netlist, passives);
+        let layout = Layout::new(&netlist, passives);
         if layout.size() > crate::dense::MAX_UNKNOWNS {
             return Err(Diagnostic::SolverTooLarge {
                 at: Time::ZERO,
@@ -68,7 +68,7 @@ impl<'n> Circuit<'n> {
             .chips()
             .iter()
             .enumerate()
-            .map(|(slot, &(id, _))| (id, Slot::Passive(slot)))
+            .map(|(slot, &id)| (id, Slot::Passive(slot)))
             .chain(
                 actives
                     .iter()
@@ -105,8 +105,9 @@ impl<'n> Circuit<'n> {
                 |name: &str| Ref::Logic(part.clone(), Name::new(name).expect("signal name"));
             match slot {
                 Slot::Passive(slot) => {
+                    let id = self.layout.chips()[slot];
                     refs.extend(
-                        chip::signals(self.layout.chips()[slot].1)
+                        chip::signals(self.passive(id))
                             .iter()
                             .map(|name| signal(name)),
                     );
@@ -129,7 +130,8 @@ impl<'n> Circuit<'n> {
         for &(_, slot) in &self.logic {
             match slot {
                 Slot::Passive(slot) => {
-                    let (_, chip) = self.layout.chips()[slot];
+                    let id = self.layout.chips()[slot];
+                    let chip = self.passive(id);
                     let watched = levels.of(self.watches.of(slot));
                     now.extend(chip::levels(chip, &chips[slot], watched));
                 }
@@ -148,8 +150,18 @@ impl<'n> Circuit<'n> {
     }
 
     /// The passive chips in slot order.
-    pub(crate) fn chips(&self) -> impl Iterator<Item = (PartId, chip::Passive<'n>)> + '_ {
-        self.layout.chips().iter().copied()
+    pub(crate) fn chips(&self) -> impl Iterator<Item = (PartId, chip::Passive<'_>)> + '_ {
+        self.layout.chips().iter().map(|&id| (id, self.passive(id)))
+    }
+
+    fn passive(&self, id: PartId) -> chip::Passive<'_> {
+        let Model::Chip(chip) = &self.netlist.part(id).model else {
+            unreachable!("a passive slot is a chip");
+        };
+        let chip::Kind::Passive(passive) = chip::kind(chip) else {
+            unreachable!("a passive slot is passive");
+        };
+        passive
     }
 
     /// Every chip's state at power-on, in slot order.
@@ -344,7 +356,7 @@ impl Offender {
         match self {
             Offender::Junction(part) => Ref::Part(circuit.netlist.part(part).name.clone()),
             Offender::Row(row) | Offender::NonFinite(row) => {
-                circuit.layout.describe(circuit.netlist, row)
+                circuit.layout.describe(&circuit.netlist, row)
             }
         }
     }

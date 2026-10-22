@@ -146,17 +146,12 @@ impl Waveform {
         self.level(high)
     }
 
-    /// Jump times in `(0, stop)`, ascending, one at a time. A long pulse train is not stored.
-    pub fn jumps_before(&self, stop: Time) -> impl Iterator<Item = Time> + '_ {
-        Jumps {
-            shape: &self.shape,
-            stop: stop.as_ps(),
-            rise: match &self.shape {
-                Shape::Pulse(pulse) => Some(pulse.delay.as_ps()),
-                Shape::Dc(_) | Shape::Step(_) => None,
-            },
-            fall: false,
-            yielded_step: false,
+    /// The next jump strictly after `at`.
+    pub fn next_change_after(&self, at: Time) -> Option<Time> {
+        match &self.shape {
+            Shape::Dc(_) => None,
+            Shape::Step(step) => (at < step.at).then_some(step.at),
+            Shape::Pulse(pulse) => pulse_edge_after(pulse, at.as_ps()).map(Time::from_ps),
         }
     }
 
@@ -171,50 +166,32 @@ impl Waveform {
     }
 }
 
-/// One jump of `jumps_before` at a time.
-struct Jumps<'a> {
-    shape: &'a Shape,
-    stop: u64,
-    /// The rise under consideration. `None` once a pulse cannot advance.
-    rise: Option<u64>,
-    /// The next yield of a pulse is its fall.
-    fall: bool,
-    yielded_step: bool,
+fn pulse_edge_after(pulse: &Pulse, at: u64) -> Option<u64> {
+    let delay = pulse.delay.as_ps();
+    let period = pulse.period;
+    let width = pulse.width;
+    let rise_after = |periods: u64| offset(delay, periods, period, 0);
+    let fall_after = |periods: u64| offset(delay, periods, period, width);
+    if at < delay {
+        return earliest(Some(delay), fall_after(0));
+    }
+    let periods = (at - delay) / period;
+    let next = periods.checked_add(1)?;
+    let fall = match fall_after(periods) {
+        Some(fall) if fall > at => Some(fall),
+        _ => fall_after(next),
+    };
+    earliest(rise_after(next), fall)
 }
 
-impl Iterator for Jumps<'_> {
-    type Item = Time;
+fn offset(delay: u64, periods: u64, period: u64, extra: u64) -> Option<u64> {
+    delay
+        .checked_add(periods.checked_mul(period)?)?
+        .checked_add(extra)
+}
 
-    fn next(&mut self) -> Option<Time> {
-        match self.shape {
-            Shape::Dc(_) => None,
-            Shape::Step(step) => {
-                if self.yielded_step || step.at.as_ps() >= self.stop {
-                    return None;
-                }
-                self.yielded_step = true;
-                Some(step.at)
-            }
-            Shape::Pulse(pulse) => {
-                let at = self.rise?;
-                let jump = if self.fall {
-                    self.fall = false;
-                    self.rise = at.checked_add(pulse.period);
-                    at.checked_add(pulse.width)
-                } else {
-                    self.fall = true;
-                    Some(at)
-                };
-                match jump {
-                    Some(jump) if jump < self.stop => Some(Time::from_ps(jump)),
-                    _ => {
-                        self.rise = None;
-                        None
-                    }
-                }
-            }
-        }
-    }
+fn earliest(rise: Option<u64>, fall: Option<u64>) -> Option<u64> {
+    rise.into_iter().chain(fall).min()
 }
 
 #[cfg(test)]
@@ -235,7 +212,12 @@ mod tests {
     }
 
     fn jumps(wave: &Waveform, stop: Time) -> Vec<u64> {
-        wave.jumps_before(stop).map(|t| t.as_ps()).collect()
+        std::iter::successors(wave.next_change_after(Time::ZERO), |&at| {
+            wave.next_change_after(at)
+        })
+        .take_while(|&at| at < stop)
+        .map(Time::as_ps)
+        .collect()
     }
 
     /// 1 to 4, delay 10 ns, width 5 ns, period 20 ns.
@@ -296,5 +278,47 @@ mod tests {
             [u64::MAX - 5_000, u64::MAX - 3_000, u64::MAX - 1_000]
         );
         assert_eq!(wave.before(at(u64::MAX)), 1.0);
+    }
+
+    #[test]
+    fn next_change_after_is_the_next_jump() {
+        let step = Waveform::step(level(0.5), level(-2.0), at(7));
+        assert_eq!(step.next_change_after(at(0)), Some(at(7)));
+        assert_eq!(step.next_change_after(at(6)), Some(at(7)));
+        assert_eq!(step.next_change_after(at(7)), None);
+        assert_eq!(step.next_change_after(at(u64::MAX)), None);
+
+        let dc = Waveform::dc(level(3.0));
+        assert_eq!(dc.next_change_after(at(0)), None);
+        assert_eq!(dc.next_change_after(at(u64::MAX)), None);
+
+        let wave = train();
+        assert_eq!(wave.next_change_after(at(0)), Some(at(10_000)));
+        assert_eq!(wave.next_change_after(at(10_000)), Some(at(15_000)));
+        assert_eq!(wave.next_change_after(at(12_000)), Some(at(15_000)));
+        assert_eq!(wave.next_change_after(at(15_000)), Some(at(30_000)));
+        assert_eq!(wave.next_change_after(at(29_999)), Some(at(30_000)));
+        assert_eq!(wave.next_change_after(at(35_000)), Some(at(50_000)));
+        assert_eq!(wave.next_change_after(at(50_000)), Some(at(55_000)));
+
+        let late = Waveform::pulse(level(0.0), level(1.0), at(u64::MAX - 5_000), 2_000, 4_000);
+        assert_eq!(late.next_change_after(at(0)), Some(at(u64::MAX - 5_000)));
+        assert_eq!(
+            late.next_change_after(at(u64::MAX - 5_000)),
+            Some(at(u64::MAX - 3_000))
+        );
+        assert_eq!(
+            late.next_change_after(at(u64::MAX - 4_000)),
+            Some(at(u64::MAX - 3_000))
+        );
+        assert_eq!(
+            late.next_change_after(at(u64::MAX - 3_000)),
+            Some(at(u64::MAX - 1_000))
+        );
+        assert_eq!(
+            late.next_change_after(at(u64::MAX - 2_000)),
+            Some(at(u64::MAX - 1_000))
+        );
+        assert_eq!(late.next_change_after(at(u64::MAX - 1_000)), None);
     }
 }

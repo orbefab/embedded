@@ -170,10 +170,10 @@ pub(super) fn trapezoidal(v_src: f64, v0: f64, i0: f64, h_ps: u64, g_load: f64) 
 }
 
 /// A session on the grid, opened with `chips` beside the netlist's.
-pub(super) fn open(netlist: &Netlist, chips: Vec<active::Chip>, budget: Budget) -> Session<'_> {
+pub(super) fn open(netlist: &Netlist, chips: Vec<active::Chip>, budget: Budget) -> Session {
     let columns = Columns::new(netlist);
     Session::open_recorded(
-        netlist,
+        netlist.clone(),
         &transient(netlist),
         chips,
         budget,

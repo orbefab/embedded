@@ -54,7 +54,7 @@ fn batch(netlist: &Netlist, budget: Budget) -> Results {
     Results::new(outcome.observations, outcome.trace, diagnostics)
 }
 
-fn finish(session: Session<'_>, netlist: &Netlist) -> Results {
+fn finish(session: Session, netlist: &Netlist) -> Results {
     let mut diagnostics = topology::floating_nets(netlist);
     let outcome = session.finish(&mut diagnostics);
     Results::new(outcome.observations, outcome.trace, diagnostics)
@@ -345,7 +345,7 @@ fn a_session_that_reaches_the_step_limit_in_chunks_writes_the_batch_folder() {
 }
 
 /// The accepted step's time, `now`, the next landing's time and the landings so far.
-fn standing(session: &Session<'_>) -> (Time, Time, Time, u64) {
+fn standing(session: &Session) -> (Time, Time, Time, u64) {
     let State::Running {
         accepted,
         now,

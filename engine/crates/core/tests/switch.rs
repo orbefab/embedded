@@ -77,6 +77,59 @@ fn a_switch_resolves_its_events_and_bounce_into_one_schedule() {
 }
 
 #[test]
+fn the_next_edge_is_the_first_one_strictly_after_the_time() {
+    let json = switch(
+        r#"[{ "t_ps": 5000, "state": "closed" }, { "t_ps": 12000, "state": "open" }]"#,
+        "null",
+    );
+    let netlist = netlist::parse(json.as_bytes()).unwrap();
+    let Model::Switch(switch) = &netlist.parts().next().unwrap().1.model else {
+        panic!("not a switch");
+    };
+    let next = |t| switch.schedule.next_change_after(Time::from_ps(t));
+    assert_eq!(next(0), Some(Time::from_ps(5_000)));
+    assert_eq!(next(4_999), Some(Time::from_ps(5_000)));
+    assert_eq!(next(5_000), Some(Time::from_ps(12_000)));
+    assert_eq!(next(5_001), Some(Time::from_ps(12_000)));
+    assert_eq!(next(11_999), Some(Time::from_ps(12_000)));
+    assert_eq!(next(12_000), None);
+    assert_eq!(next(12_001), None);
+    assert_eq!(next(u64::MAX), None);
+}
+
+/// `max_bounces` 1 and a 4 ns window leave no slack, so the two flips are 2 ns and 4 ns
+/// after the event. Those times are the schedule, not the one event.
+#[test]
+fn the_next_edge_of_a_bounce_is_the_expanded_flip() {
+    let json = switch(
+        r#"[{ "t_ps": 10000, "state": "closed" }]"#,
+        &bounce("4000", "1"),
+    );
+    let netlist = netlist::parse(json.as_bytes()).unwrap();
+    let Model::Switch(switch) = &netlist.parts().next().unwrap().1.model else {
+        panic!("not a switch");
+    };
+    let edges: Vec<u64> = switch
+        .schedule
+        .edges()
+        .iter()
+        .map(|edge| edge.at.as_ps())
+        .collect();
+    assert_eq!(edges, [10_000, 12_000, 14_000]);
+    let next = |t| {
+        switch
+            .schedule
+            .next_change_after(Time::from_ps(t))
+            .map(|t| t.as_ps())
+    };
+    assert_eq!(next(0), Some(10_000));
+    assert_eq!(next(10_000), Some(12_000));
+    assert_eq!(next(12_000), Some(14_000));
+    assert_eq!(next(13_999), Some(14_000));
+    assert_eq!(next(14_000), None);
+}
+
+#[test]
 fn each_broken_event_names_its_index_and_rule() {
     let cases = [
         (

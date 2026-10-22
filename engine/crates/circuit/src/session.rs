@@ -95,13 +95,13 @@ pub(crate) struct Landing {
 /// The step after the last one it accepted is solved and waits. A call never cuts that step
 /// and never accepts it early, so a session advanced in any chunks takes the steps of one
 /// advanced to `stop` at once. A read at `now` changes nothing.
-pub struct Session<'n> {
-    pub(crate) circuit: Circuit<'n>,
+pub struct Session {
+    pub(crate) circuit: Circuit,
     pub(crate) columns: Columns,
     transient: Transient,
     budget: Budget,
     charges: Charges,
-    breakpoints: Breakpoints<'n>,
+    breakpoints: Breakpoints,
     pub(crate) actives: Actives,
     /// The plan for the step after the last accepted one, before any reject or stall.
     pub(crate) plan: Plan,
@@ -212,41 +212,42 @@ impl Probe<'_> {
     }
 }
 
-impl<'n> Session<'n> {
+impl Session {
     /// Solves the operating point at t = 0 and the step after it, and keeps no trace. The step
     /// after t = 0 can fail, and then the session it returns has faulted.
-    pub fn open(netlist: &'n Netlist) -> Result<Session<'n>, Refused> {
-        let Analysis::Transient(transient) = netlist.analysis() else {
-            return Err(Refused::Op);
+    pub fn open(netlist: Netlist) -> Result<Session, Refused> {
+        let transient = match netlist.analysis() {
+            Analysis::Transient(transient) => *transient,
+            Analysis::Op => return Err(Refused::Op),
         };
-        let columns = Columns::new(netlist);
-        Session::start(netlist, transient, Vec::new(), BUDGET, columns, None)
+        let columns = Columns::new(&netlist);
+        Session::start(netlist, &transient, Vec::new(), BUDGET, columns, None)
             .map_err(Refused::Failed)
     }
 
     pub(crate) fn open_recorded(
-        netlist: &'n Netlist,
+        netlist: Netlist,
         transient: &Transient,
         actives: Vec<active::Chip>,
         budget: Budget,
         columns: Columns,
         rows: Rows,
-    ) -> Result<Session<'n>, Diagnostic> {
+    ) -> Result<Session, Diagnostic> {
         Session::start(netlist, transient, actives, budget, columns, Some(rows))
     }
 
     /// Solves t = 0 and records it when `rows` is set, then solves the step after it. Fails only
     /// when t = 0 fails.
     fn start(
-        netlist: &'n Netlist,
+        netlist: Netlist,
         transient: &Transient,
         actives: Vec<active::Chip>,
         budget: Budget,
         columns: Columns,
         rows: Option<Rows>,
-    ) -> Result<Session<'n>, Diagnostic> {
+    ) -> Result<Session, Diagnostic> {
         let circuit = Circuit::with_actives(netlist, actives)?;
-        let charges = Charges::new(netlist, &circuit.layout);
+        let charges = Charges::new(&circuit.netlist, &circuit.layout);
         let start = Iterate::initial(&circuit);
         let start = op::settle(
             &circuit,
@@ -267,10 +268,20 @@ impl<'n> Session<'n> {
         let signals = circuit.logic_refs();
         let logic = circuit.logic_levels(&start.chips, &start.levels);
         let record = rows
-            .map(|rows| Record::start(netlist, transient, &columns, rows, &row, &signals, &logic))
+            .map(|rows| {
+                Record::start(
+                    &circuit.netlist,
+                    transient,
+                    &columns,
+                    rows,
+                    &row,
+                    &signals,
+                    &logic,
+                )
+            })
             .transpose()?;
         let actives = Actives::new(&circuit, &start.levels);
-        let breakpoints = Breakpoints::new(netlist, transient.stop);
+        let breakpoints = Breakpoints::new(&circuit.netlist, transient.stop);
         let segment = Segment::start(&charges, &start.iterate.solution);
         let accepted = Accepted {
             at: Time::ZERO,
@@ -397,7 +408,7 @@ impl<'n> Session<'n> {
         let (State::Ended { at, row, end }, Some(record)) = (self.state, self.record) else {
             unreachable!("a recorded run finishes once it has ended");
         };
-        let (observations, trace) = record.finish(self.circuit.netlist, at, &row, diagnostics);
+        let (observations, trace) = record.finish(&self.circuit.netlist, at, &row, diagnostics);
         if let End::Fault(fault) = end {
             diagnostics.push(fault);
         }
@@ -432,7 +443,7 @@ impl<'n> Session<'n> {
         }
     }
 
-    /// The step after `accepted`. It writes back only the breakpoint cursor and the cores run
+    /// The step after `accepted`. It writes back only the breakpoints and the cores run
     /// ahead, which a second call from the same accepted step leaves where they are.
     fn next_landing(&mut self, accepted: &Accepted) -> Result<Landing, Diagnostic> {
         if self.stats.landings >= self.budget.steps {
@@ -449,7 +460,10 @@ impl<'n> Session<'n> {
         let mut iterations = 0;
         loop {
             let segment = stiffened.as_ref().unwrap_or(&accepted.segment);
-            let h = plan.clip(accepted.at, self.breakpoints.next_after(accepted.at));
+            let h = plan.clip(
+                accepted.at,
+                self.breakpoints.next_after(&circuit.netlist, accepted.at),
+            );
             let at = self.actives.horizon(Time::from_ps(accepted.at.as_ps() + h));
             let h = at.as_ps() - accepted.at.as_ps();
             let cores = self.actives.cores();
@@ -539,7 +553,7 @@ impl<'n> Session<'n> {
                 Err(Failure::Singular { row }) => {
                     return Err(Diagnostic::SolverSingular {
                         at,
-                        unknown: circuit.layout.describe(circuit.netlist, row),
+                        unknown: circuit.layout.describe(&circuit.netlist, row),
                     });
                 }
                 Err(Failure::Stalled(stall)) => {
@@ -718,7 +732,7 @@ impl<'n> Session<'n> {
 
 /// From an accepted step to the landing after it, which no breakpoint falls inside.
 pub(crate) struct Span<'s> {
-    circuit: &'s Circuit<'s>,
+    circuit: &'s Circuit,
     columns: &'s Columns,
     cores: &'s [active::Core],
     /// Newton's budget for each solve.
@@ -768,7 +782,7 @@ impl Span<'_> {
             self.budget,
         )
         .map_err(|failure| match failure {
-            Failure::Singular { row } => self.circuit.layout.describe(self.circuit.netlist, row),
+            Failure::Singular { row } => self.circuit.layout.describe(&self.circuit.netlist, row),
             Failure::Stalled(stall) => stall.offender.describe(self.circuit),
         })?;
         observe::row(
@@ -787,7 +801,7 @@ fn probe_failure(circuit: &Circuit, from: Time, probe: Time, failure: Failure) -
     match failure {
         Failure::Singular { row } => Diagnostic::SolverSingular {
             at: probe,
-            unknown: circuit.layout.describe(circuit.netlist, row),
+            unknown: circuit.layout.describe(&circuit.netlist, row),
         },
         Failure::Stalled(stall) => Diagnostic::SolverConvergence {
             at: probe,

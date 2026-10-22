@@ -9,7 +9,8 @@ use sha2::{Digest, Sha256};
 use sim_cli::Completed;
 use sim_core::logic::{Level, Logic};
 use sim_core::name::Ref;
-use sim_core::netlist::{self, Analysis, Model, bounce};
+use sim_core::netlist::{self, Analysis, Model, Waveform, bounce};
+use sim_core::time::Time;
 use sim_core::timestamp::Timestamp;
 
 /// What `scripts/ngspice_refs.py` writes into `ngspice.json`.
@@ -429,12 +430,25 @@ fn jumps(input: &[u8]) -> Vec<u64> {
     let Analysis::Transient(transient) = netlist.analysis() else {
         panic!("not a transient");
     };
-    netlist
-        .parts()
-        .filter_map(|(_, part)| part.model.waveform())
-        .flat_map(|waveform| waveform.jumps_before(transient.stop))
-        .map(|at| at.as_ps())
-        .collect()
+    let mut jumps = Vec::new();
+    for (_, part) in netlist.parts() {
+        let wave = match &part.model {
+            Model::VoltageSource(source) => &source.voltage,
+            Model::CurrentSource(source) => &source.current,
+            _ => continue,
+        };
+        jumps.extend(jumps_before(wave, transient.stop));
+    }
+    jumps
+}
+
+fn jumps_before(wave: &Waveform, stop: Time) -> Vec<u64> {
+    std::iter::successors(wave.next_change_after(Time::ZERO), |&at| {
+        wave.next_change_after(at)
+    })
+    .take_while(|&at| at < stop)
+    .map(Time::as_ps)
+    .collect()
 }
 
 /// The open interval `(edge, edge + 1 ns)`. The deck is still ramping there when the end

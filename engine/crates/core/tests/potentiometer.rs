@@ -4,6 +4,7 @@ mod common;
 
 use common::errors;
 use sim_core::netlist::{self, Model};
+use sim_core::time::Time;
 
 fn document(body: &str) -> String {
     format!(
@@ -47,7 +48,7 @@ fn a_potentiometer_parses_its_pins_resistance_and_position() {
     };
     assert_eq!(part.model.pin_names(), ["a", "wiper", "b"]);
     assert!(part.model.ratings().is_empty());
-    assert!(part.model.waveform().is_none());
+    assert!(part.model.next_change_after(Time::ZERO).is_none());
     assert_eq!(netlist.net_name(pot.pins[0]).as_str(), "top");
     assert_eq!(netlist.net_name(pot.pins[1]).as_str(), "mid");
     assert_eq!(netlist.net_name(pot.pins[2]).as_str(), "gnd");

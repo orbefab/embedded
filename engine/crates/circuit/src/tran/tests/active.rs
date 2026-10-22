@@ -640,7 +640,7 @@ fn an_output_stages_drop_scales_with_the_sources() {
     chip.outputs[0].high.drop = 1.0;
     chip.outputs[0].low.drop = 0.4;
     let load = 1000.0 / 1025.0;
-    let model = Circuit::with_actives(&netlist, vec![chip.clone()]).unwrap();
+    let model = Circuit::with_actives(netlist.clone(), vec![chip.clone()]).unwrap();
     let cores = Actives::power_on(&model);
     let half = Conditions {
         source_scale: 0.5,

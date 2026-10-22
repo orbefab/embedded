@@ -225,7 +225,7 @@ mod tests {
         assert!(slope.is_finite() && slope > 0.0);
 
         let netlist = diode();
-        let circuit = Circuit::new(&netlist).unwrap();
+        let circuit = Circuit::new(netlist.clone()).unwrap();
         let solution = Solution::zeros(circuit.layout.size());
         let (id, part) = netlist
             .parts()

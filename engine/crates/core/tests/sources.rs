@@ -1,7 +1,7 @@
 mod common;
 
 use common::{errors, with_parts};
-use sim_core::netlist::{self, Model, Netlist, Shape};
+use sim_core::netlist::{self, Model, Netlist, Shape, Waveform};
 use sim_core::time::Time;
 
 fn level(value: f64, unit: &str) -> String {
@@ -38,14 +38,23 @@ fn parse(json: &str) -> Netlist {
     netlist::parse(json.as_bytes()).unwrap()
 }
 
+fn drive(model: &Model) -> &Waveform {
+    match model {
+        Model::VoltageSource(source) => &source.voltage,
+        Model::CurrentSource(source) => &source.current,
+        other => panic!("not a source: {other:?}"),
+    }
+}
+
 fn jumps(netlist: &Netlist) -> Vec<u64> {
     let (_, part) = netlist.parts().next().unwrap();
-    part.model
-        .waveform()
-        .unwrap()
-        .jumps_before(Time::from_ps(100_000))
-        .map(|t| t.as_ps())
-        .collect()
+    let wave = drive(&part.model);
+    std::iter::successors(wave.next_change_after(Time::ZERO), |&at| {
+        wave.next_change_after(at)
+    })
+    .take_while(|&at| at < Time::from_ps(100_000))
+    .map(Time::as_ps)
+    .collect()
 }
 
 #[test]
@@ -74,7 +83,7 @@ fn a_step_and_a_pulse_resolve_on_both_kinds() {
         let stepped = parse(&source(kind, key, &step(unit, "3000")));
         assert_eq!(jumps(&stepped), [3000], "{kind}");
         let (_, part) = stepped.parts().next().unwrap();
-        let Shape::Step(step) = part.model.waveform().unwrap().shape() else {
+        let Shape::Step(step) = drive(&part.model).shape() else {
             panic!("{kind}");
         };
         assert_eq!(
@@ -89,7 +98,7 @@ fn a_step_and_a_pulse_resolve_on_both_kinds() {
         let pulsed = parse(&source(kind, key, &pulse(unit, "10000", "5000", "40000")));
         assert_eq!(jumps(&pulsed), [10000, 15000, 50000, 55000, 90000, 95000]);
         let (_, part) = pulsed.parts().next().unwrap();
-        let Shape::Pulse(pulse) = part.model.waveform().unwrap().shape() else {
+        let Shape::Pulse(pulse) = drive(&part.model).shape() else {
             panic!("{kind}");
         };
         assert_eq!(
@@ -104,14 +113,23 @@ fn a_step_and_a_pulse_resolve_on_both_kinds() {
 }
 
 #[test]
-fn only_sources_have_a_waveform() {
+fn a_resistor_has_no_next_change() {
     let json = with_parts(
         r#"{ "op": {} }"#,
         r#"{ "name": "r1", "kind": "resistor", "pins": { "a": "a", "b": "gnd" },
              "resistance": { "value": 1.0, "unit": "ohm", "source": "user" }, "ratings": { "power": null } }"#,
     );
     let netlist = parse(&json);
-    assert!(netlist.parts().next().unwrap().1.model.waveform().is_none());
+    assert!(
+        netlist
+            .parts()
+            .next()
+            .unwrap()
+            .1
+            .model
+            .next_change_after(Time::ZERO)
+            .is_none()
+    );
 }
 
 #[test]

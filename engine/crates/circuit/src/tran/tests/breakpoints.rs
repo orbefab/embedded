@@ -7,26 +7,32 @@ use super::fixtures::*;
 fn breakpoints_list_each_edge_the_nanosecond_after_it_and_after_the_start() {
     let netlist = led_switch();
     let mut breakpoints = Breakpoints::new(&netlist, Time::from_ps(2_000_000));
-    assert_eq!(breakpoints.next_after(Time::ZERO), Time::from_ps(EDGE_STEP));
+    assert_eq!(
+        breakpoints.next_after(&netlist, Time::ZERO),
+        Time::from_ps(EDGE_STEP)
+    );
     assert!(!breakpoints.is_edge(Time::from_ps(EDGE_STEP)));
     assert_eq!(
-        breakpoints.next_after(Time::from_ps(EDGE_STEP)),
+        breakpoints.next_after(&netlist, Time::from_ps(EDGE_STEP)),
         Time::from_ps(1_000_000)
     );
     assert!(breakpoints.is_edge(Time::from_ps(1_000_000)));
     assert_eq!(
-        breakpoints.next_after(Time::from_ps(1_000_000)),
+        breakpoints.next_after(&netlist, Time::from_ps(1_000_000)),
         Time::from_ps(1_000_000 + EDGE_STEP)
     );
     assert!(!breakpoints.is_edge(Time::from_ps(1_000_000 + EDGE_STEP)));
     assert_eq!(
-        breakpoints.next_after(Time::from_ps(1_000_000 + EDGE_STEP)),
+        breakpoints.next_after(&netlist, Time::from_ps(1_000_000 + EDGE_STEP)),
         Time::from_ps(2_000_000)
     );
     let mut early = Breakpoints::new(&netlist, Time::from_ps(1_000_000));
-    assert_eq!(early.next_after(Time::ZERO), Time::from_ps(EDGE_STEP));
     assert_eq!(
-        early.next_after(Time::from_ps(EDGE_STEP)),
+        early.next_after(&netlist, Time::ZERO),
+        Time::from_ps(EDGE_STEP)
+    );
+    assert_eq!(
+        early.next_after(&netlist, Time::from_ps(EDGE_STEP)),
         Time::from_ps(1_000_000)
     );
     assert!(!early.is_edge(Time::from_ps(1_000_000)));
@@ -68,11 +74,11 @@ fn train_100mhz() -> Netlist {
 }
 
 /// Every landing from `from` up to `to`, as `steps` reaches them.
-fn landings(breakpoints: &mut Breakpoints<'_>, from: u64, to: u64) -> Vec<u64> {
+fn landings(netlist: &Netlist, breakpoints: &mut Breakpoints, from: u64, to: u64) -> Vec<u64> {
     let mut now = Time::from_ps(from);
     let mut out = Vec::new();
     while now.as_ps() < to {
-        now = breakpoints.next_after(now);
+        now = breakpoints.next_after(netlist, now);
         out.push(now.as_ps());
     }
     out
@@ -83,18 +89,21 @@ fn breakpoints_list_every_source_jump_past_a_million_without_a_cap() {
     let netlist = train_100mhz();
     let mut breakpoints = Breakpoints::new(&netlist, Time::from_ps(1_000_000_000_000));
     assert_eq!(
-        landings(&mut breakpoints, 0, 21_000),
+        landings(&netlist, &mut breakpoints, 0, 21_000),
         [1_000, 10_000, 11_000, 15_000, 16_000, 20_000, 21_000]
     );
     // The jump after the millionth: 10 ns, then every 5 ns.
     let past = 10_000 + Trace::MAX_ROWS as u64 * 5_000;
     let mut now = Time::from_ps(21_000);
     while now.as_ps() < past {
-        now = breakpoints.next_after(now);
+        now = breakpoints.next_after(&netlist, now);
     }
     assert_eq!(now, Time::from_ps(past));
     assert!(breakpoints.is_edge(now));
-    assert_eq!(breakpoints.next_after(now), Time::from_ps(past + EDGE_STEP));
+    assert_eq!(
+        breakpoints.next_after(&netlist, now),
+        Time::from_ps(past + EDGE_STEP)
+    );
 }
 
 /// Two sources whose jumps interleave, one of them half a nanosecond off the other's grid.
@@ -120,18 +129,18 @@ fn breakpoints_merge_jumps_across_sources_in_time_order() {
     let netlist = sim_core::netlist::parse(json.as_bytes()).unwrap();
     let mut breakpoints = Breakpoints::new(&netlist, Time::from_ps(1_000_000_000_000));
     assert_eq!(
-        landings(&mut breakpoints, 0, 9_000),
+        landings(&netlist, &mut breakpoints, 0, 9_000),
         [
             1_000, 2_000, 3_000, 4_000, 5_000, 6_000, 7_000, 8_000, 9_000
         ]
     );
     assert_eq!(
-        breakpoints.next_after(Time::from_ps(9_000)),
+        breakpoints.next_after(&netlist, Time::from_ps(9_000)),
         Time::from_ps(9_500)
     );
     assert!(breakpoints.is_edge(Time::from_ps(9_500)));
     assert_eq!(
-        landings(&mut breakpoints, 9_500, 12_000),
+        landings(&netlist, &mut breakpoints, 9_500, 12_000),
         [10_000, 10_500, 11_000, 11_500, 12_000]
     );
     assert!(breakpoints.is_edge(Time::from_ps(12_000)));

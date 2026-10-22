@@ -58,7 +58,7 @@ fn reads_are_the_batch(name: &str, stop_ps: u64, seed: u64) {
     let rows = trace.time();
     let mut levels = logic.initial().to_vec();
     let mut changes = logic.changes().iter().peekable();
-    let mut session = Session::open(&netlist).unwrap();
+    let mut session = Session::open(netlist.clone()).unwrap();
     let signals = session.signals().to_vec();
     assert_eq!(signals, logic.signals());
     let mut rng = Rng(seed);
@@ -116,6 +116,30 @@ fn reads_are_the_batch(name: &str, stop_ps: u64, seed: u64) {
     assert_eq!(session.level(&trace.columns()[0]), None);
 }
 
+/// The session leaves the scope that parsed its netlist, so a session that borrowed it would
+/// not compile.
+fn opened(json: &str) -> Session {
+    Session::open(netlist::parse(json.as_bytes()).unwrap()).unwrap()
+}
+
+#[test]
+fn the_session_outlives_the_callers_netlist() {
+    let json = transient(
+        1_000,
+        1_000,
+        r#""gnd","vin""#,
+        &[
+            &source_on("v1", "vin", 5.0),
+            &resistor("r1", "vin", "gnd", 1000.0),
+        ],
+    );
+    let mut session = opened(&json);
+    assert_eq!(session.advance_to(Time::from_ps(1_000)), Status::Stopped);
+    assert_eq!(session.now(), Time::from_ps(1_000));
+    let vin = "#net.vin".parse().unwrap();
+    assert_eq!(session.probe().get(&vin).unwrap().get(), 5.0);
+}
+
 #[test]
 fn atmega_analog_serial_reads_are_the_batch() {
     reads_are_the_batch("atmega-analog-serial", 10_000_000_000, 0x5eed_1001);
@@ -129,7 +153,7 @@ fn ne555_led_reads_are_the_batch() {
 /// The diagnostic `open` refuses `json` with, which is the one `simulate` reports.
 fn refused(json: &str) -> Diagnostic {
     let netlist = netlist::parse(json.as_bytes()).unwrap();
-    let Err(Refused::Failed(diagnostic)) = Session::open(&netlist) else {
+    let Err(Refused::Failed(diagnostic)) = Session::open(netlist.clone()) else {
         panic!("a session opens");
     };
     assert_eq!(
@@ -142,7 +166,7 @@ fn refused(json: &str) -> Diagnostic {
 #[test]
 fn an_op_analysis_opens_no_session() {
     let netlist = netlist::parse(&std::fs::read(example_path("divider")).unwrap()).unwrap();
-    assert!(matches!(Session::open(&netlist), Err(Refused::Op)));
+    assert!(matches!(Session::open(netlist), Err(Refused::Op)));
 }
 
 #[test]
@@ -210,7 +234,7 @@ fn a_grid_past_the_row_limit_still_opens_a_session() {
     let netlist = netlist::parse(json.as_bytes()).unwrap();
     let batch = sim_circuit::simulate(&netlist);
     assert_eq!(batch.diagnostics()[0].code(), "trace.too_large");
-    let mut session = Session::open(&netlist).unwrap();
+    let mut session = Session::open(netlist.clone()).unwrap();
     let at = Time::from_ps(10_500);
     assert_eq!(session.advance_to(at), Status::Running);
     let probe = session.probe();
