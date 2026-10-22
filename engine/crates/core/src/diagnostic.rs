@@ -58,7 +58,7 @@ pub enum FirmwareRule {
 #[serde(rename_all = "snake_case")]
 pub enum AnalysisRule {
     Positive,
-    /// `max_step_ps` is below 1000, the first step after a contact edge or a source jump.
+    /// `max_step_ps` is below 1000, the first step of a segment.
     #[serde(rename = "step_under_1ns")]
     StepUnder1ns,
     /// `max_step_ps` is greater than `stop_ps`.

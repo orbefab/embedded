@@ -11,8 +11,6 @@ use super::{TransientFolder, records, repo, transient_folder};
 const VT: f64 = 1.380649e-23 * 298.15 / 1.602176634e-19;
 /// The engine's conductance from every node to ground.
 const GMIN: f64 = 1e-12;
-/// The engine's first step after a stop.
-const RESTART_PS: u64 = 1_000;
 
 /// Within Newton's 1e-6 plus the 1 pA floor of docs/reference.md.
 fn near(got: f64, want: f64) -> bool {
@@ -249,7 +247,7 @@ pub fn logic_vcd(beside: &Beside, changing: &[&str]) -> serde_json::Value {
 }
 
 /// `#led1.i` follows `pin`, the edges of the output that drives the LED. The step at an edge's
-/// picosecond still holds the previous level, and the next step is `RESTART_PS` later. Before
+/// picosecond still holds the previous level, and the next step holds the new one. Before
 /// any edge, steps through `driven_ps` are off and later steps are low. A row reads the level
 /// before the next edge, so a row's solve stamps the image the core has committed, not the
 /// one it has run ahead to.
@@ -296,11 +294,9 @@ pub fn assert_led_follows(beside: &Beside, pin: &[(u64, bool)], driven_ps: u64) 
         assert!(near(i, want(at)), "{i} A at {at} ps, not {} A", want(at));
     }
     for &(edge, _) in pin {
-        let k = rows.iter().position(|&(at, _)| at == edge).unwrap();
-        assert_eq!(
-            rows[k + 1].0,
-            edge + RESTART_PS,
-            "the restart after {edge} ps"
+        assert!(
+            rows.iter().any(|&(at, _)| at == edge),
+            "a step at the edge at {edge} ps"
         );
     }
 }

@@ -5,7 +5,7 @@ use sim_core::diagnostic::Severity;
 use sim_core::netlist::{Atmega328p, Netlist};
 
 use super::active::{
-    NS, US, at, capacitor, circuit, resistor, restarted, run_active, scripted, volts,
+    NS, US, after, at, capacitor, circuit, resistor, restarted, run_active, scripted, volts,
 };
 use crate::active::avr::{self, PACKAGE, Pad, port_index};
 use crate::active::{self, Drive};
@@ -298,9 +298,11 @@ fn a_script_chip_runs_beside_an_atmega() {
     let high = 5.0 * 1000.0 / 1025.0;
     for (cycle, level) in [(4, high), (104, 0.0), (204, high)] {
         let edge = cycle * 62_500;
-        assert!(restarted(&pb5, edge), "PB5 at cycle {cycle}");
-        assert!(restarted(&echo, edge + US), "the echo of cycle {cycle}");
-        assert!((at(&echo, edge + US + NS) - level).abs() < 1e-6);
+        assert_eq!(after(&pb5, edge) > 2.5, level > 2.5, "PB5 at cycle {cycle}");
+        assert!(
+            (after(&echo, edge + US) - level).abs() < 1e-6,
+            "the echo of cycle {cycle}"
+        );
     }
 }
 
@@ -325,7 +327,7 @@ fn a_pull_up_pin_is_read_by_the_circuit() {
         "{}",
         at(&pb5, 125_000)
     );
-    assert!(restarted(&pb5, 125_000));
+    assert!((after(&pb5, 125_000) - 2.5).abs() < 1e-6);
     assert!((pb5.last().unwrap().1 - 2.5).abs() < 1e-6);
 }
 
@@ -347,10 +349,10 @@ fn a_pull_up_that_leaves_the_level_still_stops() {
     let before = share(5.0, 1.0 / 100e3 + leak, 1.0 / 1e6 + leak);
     assert!(before > documented("/input_threshold/high/value") * 5.0);
     assert!((at(&pb5, 125_000) - before).abs() < 1e-6);
-    assert!(restarted(&pb5, 125_000));
     let up = 1.0 / 100e3 + 1.0 / documented("/pull_up_resistance/value") + leak;
-    let after = share(5.0, up, 1.0 / 1e6 + leak);
-    assert!((pb5.last().unwrap().1 - after).abs() < 1e-6);
+    let pulled = share(5.0, up, 1.0 / 1e6 + leak);
+    assert!((after(&pb5, 125_000) - pulled).abs() < 1e-6);
+    assert!((pb5.last().unwrap().1 - pulled).abs() < 1e-6);
 }
 
 #[test]
@@ -384,7 +386,7 @@ fn an_input_flip_reaches_the_core_and_comes_back_on_an_output() {
     let rise = pb5.iter().find(|&&(_, v)| v > 2.5).unwrap().0;
     let landed = pb5.iter().rev().find(|&&(t, _)| t < rise).unwrap().0;
     assert_eq!(landed % 62_500, 0, "a stop on a cycle: {landed}");
-    assert!(restarted(&pb5, landed));
+    assert_eq!(edges(&trace, "PB5").first(), Some(&(landed, true)));
     assert!(
         landed > crossing && landed <= crossing + 12 * 62_500,
         "{crossing} {landed}"
@@ -415,8 +417,9 @@ fn an_adc_sample_reads_a_known_divider() {
     assert_eq!(code, 0b1010_1100);
 }
 
-/// PB5's edges at 16 MHz, one oscillator cycle every 62,500 ps.
-fn clkpr_edges(hex: &str, fuses: FuseBytes) -> Vec<(u64, f64)> {
+/// PB5's logic edges and its voltage at 16 MHz, one oscillator cycle every 62,500 ps, up to
+/// 40 us.
+fn clkpr_run(hex: &str, fuses: FuseBytes) -> (Vec<u64>, Vec<(u64, f64)>) {
     let netlist = board(
         40 * US,
         &[],
@@ -425,7 +428,15 @@ fn clkpr_edges(hex: &str, fuses: FuseBytes) -> Vec<(u64, f64)> {
     );
     let (trace, diagnostics) = run(&netlist);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    volts(&trace, "pb5")
+    let edges = edges(&trace, "PB5").into_iter().map(|(at, _)| at).collect();
+    (edges, volts(&trace, "pb5"))
+}
+
+fn osc_cycles(first: u64, every: u64) -> Vec<u64> {
+    (0..)
+        .map(|k| (first + every * k) * 62_500)
+        .take_while(|&at| at < 40 * US)
+        .collect()
 }
 
 /// §9.11 puts a new division in force `T1 + T2` to `T1 + 2 * T2` after the `STS` that writes
@@ -435,30 +446,28 @@ fn clkpr_edges(hex: &str, fuses: FuseBytes) -> Vec<(u64, f64)> {
 /// `clkpr.S` goes from /1 to /2 with its store retiring at oscillator cycle 8: the window is 11
 /// to 13 and the toggle at 11. `speedup.S`, under `CKDIV8`, goes from /8 to /1 with its store
 /// retiring at oscillator cycle 64: the window is 73 to 74 and the toggle at 73.
+///
+/// Both first set `DDRB`, at CPU cycle 2, oscillator cycle 2 undivided and 16 under `CKDIV8`.
+/// That turns PB5 from off to low into its load, a landing and no logic edge.
 #[test]
 fn a_clkpr_division_keeps_edges_on_the_crystals_cycles() {
-    let slower = clkpr_edges(CLKPR, FUSES);
-    for osc in [2, 11, 211, 411, 611] {
+    for (hex, fuses, ddr, toggles) in [
+        (CLKPR, FUSES, 2, osc_cycles(11, 200)),
+        (
+            SPEED_UP,
+            FuseBytes { low: 0x7F, ..FUSES },
+            16,
+            osc_cycles(73, 100),
+        ),
+    ] {
+        let (edges, pb5) = clkpr_run(hex, fuses);
+        assert_eq!(edges, toggles);
+        let low = after(&pb5, ddr * 62_500);
         assert!(
-            restarted(&slower, osc * 62_500),
-            "an edge at oscillator cycle {osc}"
+            low.abs() < 1e-3,
+            "PB5 low after oscillator cycle {ddr}: {low}"
         );
     }
-    assert!(
-        slower.iter().all(|&(ps, _)| ps != 111 * 62_500),
-        "no edge at the undivided rate"
-    );
-    let faster = clkpr_edges(SPEED_UP, FuseBytes { low: 0x7F, ..FUSES });
-    for osc in [16, 73, 173, 273, 373] {
-        assert!(
-            restarted(&faster, osc * 62_500),
-            "an edge at oscillator cycle {osc}"
-        );
-    }
-    assert!(
-        faster.iter().all(|&(ps, _)| ps != 66 * 62_500),
-        "no edge two new periods after the store"
-    );
 }
 
 /// `ports.S` drives every port pin high, and 2 V is under `VBOT-`. An off pin then sits where
@@ -479,11 +488,18 @@ fn a_brown_out_holds_every_pin_off() {
     assert_eq!(edges(&trace, "VCC"), [(20 * US, false)]);
     let pb5 = volts(&trace, "pb5");
     assert!(at(&pb5, 20 * US) > 4.9, "{}", at(&pb5, 20 * US));
+    let leak = 1.0 / documented("/leakage_resistance/value");
+    let fell = 20 * US + 62_500;
+    let off = share(2.0, leak, leak + 1.0 / 10e3);
     assert!(
-        restarted(&pb5, 20 * US + 62_500),
+        at(&pb5, fell) > 1.9,
+        "driven until {fell} ps: {}",
+        at(&pb5, fell)
+    );
+    assert!(
+        (after(&pb5, fell) - off).abs() < 1e-5,
         "off one cycle after VCC fell"
     );
-    let leak = 1.0 / documented("/leakage_resistance/value");
     let reset_up = 1.0 / documented("/reset_pull_up_resistance/value");
     for (name, pad) in pin_nets() {
         let v = volts(&trace, &name).last().unwrap().1;
@@ -565,8 +581,8 @@ fn a_driven_pin_reads_its_own_drive_at_its_stop() {
     assert_eq!(expected[..2], [(271_268, true), (7_052_952, false)]);
     assert_eq!(edges(&trace, "PB5"), expected);
     let pb5 = volts(&trace, "pb5");
-    for &(at, _) in &expected {
-        assert!(restarted(&pb5, at), "a restart at {at} ps");
+    for &(edge, high) in &expected {
+        assert_eq!(after(&pb5, edge) > 2.5, high, "the drive after {edge} ps");
     }
     let pb5 = signal(&trace, "PB5");
     let logic = trace.logic().unwrap();

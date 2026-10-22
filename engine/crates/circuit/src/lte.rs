@@ -100,8 +100,8 @@ impl Swing {
     /// `v'^2 / |v''|` further, `h * i0^2 / (C * |i1 - i0|)`, which an exponential's distance to
     /// its asymptote equals at every point. From no current it is heading nowhere yet, and with
     /// a steady one as far as the circuit reaches. The least reading counts. Where two modes
-    /// cancel the curvature at a restart, the first step reads past the swing, and a later one
-    /// does not.
+    /// cancel the curvature at a segment's start, the first step reads past the swing, and a
+    /// later one does not.
     fn step(self, v: f64, i: [f64; 2], h: f64, farad: f64) -> Swing {
         let [i0, i1] = i;
         let heading = match i0 {
@@ -120,10 +120,10 @@ impl Swing {
     }
 }
 
-/// The accepted points since t = 0 or the last restart, as far as the next step needs them.
+/// The accepted points since the segment started, as far as the next step needs them.
 pub(crate) enum Segment {
-    /// One point, the restart. The next step is backward Euler. `span` is the circuit's
-    /// span at that point, and it caps the first step's look-ahead.
+    /// One point. The next step is backward Euler. `span` is the circuit's span at that
+    /// point, and it caps the first step's look-ahead.
     Start { span: f64 },
     /// The accepted point before the last one. The next step is trapezoidal, except on the
     /// stiff capacitors.
@@ -132,6 +132,9 @@ pub(crate) enum Segment {
         stiff: Stiff,
         /// Each capacitor's swing up to the last point, in `Charges` order.
         swings: Vec<Swing>,
+        /// Each capacitor's `max_step * 2|di| / 2C`, summed over the edges that kept the segment,
+        /// in `Charges` order.
+        ringing: Vec<f64>,
     },
 }
 
@@ -143,8 +146,10 @@ pub(crate) enum Stiff {
     /// On backward Euler, ascending. After an accepted step of `retry` ps or more, the next
     /// step tries them on the trapezoidal rule.
     Held { parts: Vec<PartId>, retry: u64 },
-    /// This step tries them on the trapezoidal rule.
-    Trying(Vec<PartId>),
+    /// This step tries them on the trapezoidal rule. Only an accepted step of `retry` ps or
+    /// more passes the try. A shorter accepted step, cut or not, is one a mode still alive
+    /// passes too, so the next step tries them again.
+    Trying { parts: Vec<PartId>, retry: u64 },
 }
 
 /// The accepted backward Euler step, in ps, after which a stiff capacitor first tries the
@@ -167,16 +172,18 @@ impl Stiff {
     fn parts(&self) -> &[PartId] {
         match self {
             Stiff::Held { parts, .. } => parts,
-            Stiff::Trying(_) => &[],
+            Stiff::Trying { .. } => &[],
         }
     }
 
     /// After an accepted step of `h` ps.
     fn advance(self, h: u64) -> Stiff {
         match self {
-            Stiff::Held { parts, retry } if !parts.is_empty() && h >= retry => Stiff::Trying(parts),
-            Stiff::Trying(_) => Stiff::NONE,
-            held => held,
+            Stiff::Held { parts, retry } if !parts.is_empty() && h >= retry => {
+                Stiff::Trying { parts, retry }
+            }
+            Stiff::Trying { retry, .. } if h >= retry => Stiff::NONE,
+            stiff => stiff,
         }
     }
 
@@ -185,7 +192,7 @@ impl Stiff {
     fn with(self, more: &[PartId], h: u64) -> Stiff {
         let (mut parts, retry) = match self {
             Stiff::Held { parts, retry } => (parts, retry),
-            Stiff::Trying(parts) => (parts, h.saturating_mul(2).max(RETRY)),
+            Stiff::Trying { parts, .. } => (parts, h.saturating_mul(2).max(RETRY)),
         };
         parts.extend_from_slice(more);
         parts.sort_unstable();
@@ -195,7 +202,7 @@ impl Stiff {
 }
 
 impl Segment {
-    /// A segment at a restart. The span cap is this solution's span, read once here.
+    /// The span cap is this solution's span, read once here.
     pub(crate) fn start(charges: &Charges, solution: &Solution) -> Segment {
         Segment::Start {
             span: charges.span(solution),
@@ -206,15 +213,61 @@ impl Segment {
     /// new one. `swings` is that step's, from `error` when the accepted step is the one it
     /// judged.
     pub(crate) fn advance(self, at: Time, last: Solution, h: u64, swings: Vec<Swing>) -> Segment {
-        let stiff = match self {
-            Segment::Start { .. } => Stiff::NONE,
-            Segment::Smooth { stiff, .. } => stiff.advance(h),
+        let (stiff, ringing) = match self {
+            Segment::Start { .. } => (Stiff::NONE, vec![0.0; swings.len()]),
+            Segment::Smooth { stiff, ringing, .. } => (stiff.advance(h), ringing),
         };
         Segment::Smooth {
             before: (at, last),
             stiff,
             swings,
+            ringing,
         }
+    }
+
+    /// The segment across a restart solve `held` at `step`, the solution this segment ends at.
+    /// Each capacitor's current differs between them by `di`, the start of a mode the new drive
+    /// excites. The point before moves by `di`, so the next trapezoidal estimate reads the slope
+    /// before the edge and not a kink of `di` over the step that landed on it. The estimate
+    /// still accepts or refuses every step after the edge.
+    ///
+    /// Backward Euler damps the mode, so it moves the current by at most `|di|` a step. The
+    /// trapezoidal rule's factor on a mode much faster than the step is
+    /// `(1 - h/2tau) / (1 + h/2tau)`, near -1, so the computed current swings from `di` to
+    /// about `-di`, a move of `2|di|`, and it rings until the next segment start. A later
+    /// edge's mode adds to it. So each capacitor sums `max_step * 2|di| / 2C`, backward Euler's
+    /// estimate of that move over the longest step, across the edges that keep the segment. The
+    /// segment goes on while every sum is at most `VNTOL`, and starts at `held` otherwise.
+    pub(crate) fn across(
+        self,
+        charges: &Charges,
+        step: &Solution,
+        held: &Solution,
+        max_step: u64,
+    ) -> Segment {
+        if let Segment::Smooth {
+            before: (then, mut before),
+            stiff,
+            swings,
+            mut ringing,
+        } = self
+        {
+            let h = seconds(max_step);
+            for (cap, sum) in charges.caps.iter().zip(&mut ringing) {
+                let di = held.get(cap.branch) - step.get(cap.branch);
+                before.add(cap.branch, di);
+                *sum += h * di.abs() / cap.farad;
+            }
+            if ringing.iter().all(|&sum| sum <= VNTOL) {
+                return Segment::Smooth {
+                    before: (then, before),
+                    stiff,
+                    swings,
+                    ringing,
+                };
+            }
+        }
+        Segment::start(charges, held)
     }
 
     /// Each capacitor's swing with a step of `h` ps from `last` to `next`.
@@ -255,10 +308,12 @@ impl Segment {
                 before,
                 stiff,
                 swings,
+                ringing,
             } => Segment::Smooth {
                 before,
                 stiff: stiff.with(more, h),
                 swings,
+                ringing,
             },
         }
     }
@@ -283,7 +338,7 @@ impl Segment {
     fn tried(&self) -> &[PartId] {
         match self {
             Segment::Smooth {
-                stiff: Stiff::Trying(parts),
+                stiff: Stiff::Trying { parts, .. },
                 ..
             } => parts,
             _ => &[],
@@ -515,6 +570,7 @@ mod tests {
             before,
             stiff: Stiff::NONE,
             swings: vec![Swing { lo, hi, ahead: 0.0 }],
+            ringing: vec![0.0],
         }
     }
 
@@ -743,6 +799,31 @@ mod tests {
         assert_eq!(short.stiff(), [second]);
         let again = advanced(short, at, Solution::zeros(3), 2 * (RETRY + 44));
         assert_eq!(again.tried(), [second]);
+    }
+
+    /// A try accepted short of `RETRY` has not shown that the fast mode died. The next step
+    /// still tries it, and an error over `TRY` of Newton's tolerance puts it back on backward
+    /// Euler, while the slow capacitor beside it keeps the trapezoidal rule.
+    #[test]
+    fn a_try_cut_short_of_its_step_tries_again() {
+        let [first, second] = ids();
+        let last = Solution::from(vec![1.0, 0.0, 0.0]);
+        let (cut, h, farad) = (40, RETRY, 1e-9);
+        let segment = advanced(trying(), Time::from_ps(RETRY + 1), last.clone(), cut);
+        assert_eq!(segment.tried(), [second]);
+        // From no current, the trapezoidal error is `h^2 * amps / (6C * (h + cut))`.
+        let (hs, cs) = (seconds(h), seconds(cut));
+        let amps = 1e-2 * (RELTOL + VNTOL) * 6.0 * farad * (hs + cs) / (hs * hs);
+        let next = Solution::from(vec![1.0, 0.0, amps]);
+        let at = Time::from_ps(RETRY + 1 + cut);
+        let got = error(&two(farad), &segment, at, &last, h, &next);
+        assert!(
+            matches!(got.verdict(h), Verdict::Stiffen(ref parts) if parts.is_empty()),
+            "{got:?}"
+        );
+        let retried = segment.stiffen(&[], h);
+        assert_eq!(retried.method_of(first), Method::Trapezoidal);
+        assert_eq!(retried.method_of(second), Method::BackwardEuler);
     }
 
     #[test]

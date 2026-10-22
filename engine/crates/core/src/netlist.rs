@@ -125,8 +125,7 @@ pub struct Transient {
 }
 
 impl Transient {
-    /// The engine's first step after a contact edge or a source jump, which `max_step` may
-    /// not undercut.
+    /// The engine's first step of a segment, which `max_step` may not undercut.
     pub const MIN_MAX_STEP_PS: u64 = 1_000;
     /// The finest grid. A smaller minimum later keeps the netlist version.
     pub const MIN_GRID_PS: u64 = 1_000;

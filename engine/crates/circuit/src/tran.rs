@@ -14,6 +14,7 @@ use crate::RunStats;
 use crate::active::{self, Actives};
 use crate::chip;
 use crate::lte::{self, Charges, Segment, Verdict};
+use crate::mna::Solution;
 use crate::newton::{
     Circuit, Conditions, Converged, Failure, History, Integration, Iterate, Offender, Side, newton,
 };
@@ -474,8 +475,8 @@ fn steps(
                 record.accept(probes, at, row)?;
                 record.stats.landings += 1;
                 iterations = 0;
-                // A watch cuts the step. Only a changed stamp, a chip's, an active chip's image, a
-                // contact's or a source's, restarts.
+                // A watch cuts the step. A changed stamp, a chip's, an active chip's image, a
+                // contact's or a source's, takes a restart solve.
                 let chips = circuit.react(&accepted.chips, &accepted.levels, &levels);
                 let (driven, stopped) = actives.land(
                     &circuit,
@@ -487,17 +488,20 @@ fn steps(
                 record.stats.stops += stopped;
                 let restart = (breakpoints.is_edge(at) || chips != accepted.chips || driven)
                     && at < transient.stop;
-                // A step cut short by a breakpoint or a watch keeps the step it wanted.
-                plan = match (restart, h == plan.h && at == step_end) {
-                    (true, _) => Plan::RESTART,
-                    (false, true) => Plan::accepted(h, ratio, method, transient.max_step),
-                    (false, false) => plan,
+                let landed = at.as_ps() - accepted.at.as_ps();
+                let continued = |segment: Segment, last: Solution, next: &Solution| {
+                    let swings = if cut {
+                        segment.swings(&charges, &last, landed, next)
+                    } else {
+                        error.swings
+                    };
+                    segment.advance(accepted.at, last, landed, swings)
                 };
                 let next = if restart {
                     let held = restart_solve(
                         &circuit,
                         at,
-                        converged.iterate,
+                        &converged.iterate,
                         chips,
                         actives.cores(),
                         &levels,
@@ -511,7 +515,9 @@ fn steps(
                         Side::After,
                     )?;
                     actives.input(&circuit, at, &levels, &held.levels);
-                    let segment = Segment::start(&charges, &held.iterate.solution);
+                    let step = &converged.iterate.solution;
+                    let segment = continued(accepted.segment, accepted.iterate.solution, step)
+                        .across(&charges, step, &held.iterate.solution, transient.max_step);
                     Accepted {
                         at,
                         iterate: held.iterate,
@@ -521,30 +527,24 @@ fn steps(
                         levels: held.levels,
                     }
                 } else {
-                    let landed = at.as_ps() - accepted.at.as_ps();
-                    let swings = if cut {
-                        accepted.segment.swings(
-                            &charges,
-                            &accepted.iterate.solution,
-                            landed,
-                            &converged.iterate.solution,
-                        )
-                    } else {
-                        error.swings
-                    };
                     Accepted {
                         at,
-                        segment: accepted.segment.advance(
-                            accepted.at,
+                        segment: continued(
+                            accepted.segment,
                             accepted.iterate.solution,
-                            landed,
-                            swings,
+                            &converged.iterate.solution,
                         ),
                         iterate: converged.iterate,
                         restart_row: None,
                         chips,
                         levels: levels.clone(),
                     }
+                };
+                // A step cut short by a breakpoint or a watch keeps the step it wanted.
+                plan = match (&next.segment, h == plan.h && at == step_end) {
+                    (Segment::Start { .. }, _) => Plan::RESTART,
+                    (_, true) => Plan::accepted(h, ratio, method, transient.max_step),
+                    (_, false) => plan,
                 };
                 // A flip the chips reacted to is recorded at `at`, even when the restart's
                 // solve is back across the threshold. The restart's level is the next step's
@@ -678,7 +678,7 @@ fn attempt(
 fn restart_solve(
     circuit: &Circuit,
     at: Time,
-    step: Iterate,
+    step: &Iterate,
     chips: Vec<chip::State>,
     cores: &[active::Core],
     levels: &Levels,

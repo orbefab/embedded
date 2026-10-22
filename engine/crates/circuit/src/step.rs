@@ -1,9 +1,9 @@
 //! The step policy. Pure, like the ladder: each function sees one outcome and
 //! names the next plan.
 //!
-//! After t = 0 and after every contact edge or source jump, the step restarts at `EDGE_STEP`.
-//! From then on the local truncation error sets it. An accepted step grows by
-//! `0.9 * ratio^(-1/(p+1))`, at most 2, and a rejected one shrinks by the same
+//! A segment starts at t = 0 and at every restart solve that moves a capacitor, and its
+//! first step is `EDGE_STEP`. From then on the local truncation error sets it. An accepted
+//! step grows by `0.9 * ratio^(-1/(p+1))`, at most 2, and a rejected one shrinks by the same
 //! rule, between 0.25 and 0.9. p is 1 for backward Euler and 2 for trapezoidal.
 
 use sim_core::netlist::Transient;
@@ -11,7 +11,7 @@ use sim_core::time::Time;
 
 use crate::newton::Method;
 
-/// The first step after a discontinuity, in ps. It must equal `Transient::MIN_MAX_STEP_PS`.
+/// The first step of a segment, in ps. It must equal `Transient::MIN_MAX_STEP_PS`.
 pub(crate) const EDGE_STEP: u64 = 1_000;
 
 const _: () = assert!(EDGE_STEP == Transient::MIN_MAX_STEP_PS);
@@ -27,7 +27,6 @@ pub(crate) struct Plan {
 }
 
 impl Plan {
-    /// After t = 0, a contact edge or a source jump.
     pub(crate) const RESTART: Plan = Plan { h: EDGE_STEP };
 
     /// After an accepted step of `tried` ps whose error was `ratio` of its tolerance.

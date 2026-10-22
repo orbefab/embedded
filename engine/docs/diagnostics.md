@@ -174,7 +174,7 @@ analysis max_step_ps is 999; it must be at least 1000
 `data` holds `field`, `rule`, and `value`. `field` is `stop_ps`, `max_step_ps` or `grid_ps`. `rule` is one of these.
 
 - `positive`: `stop_ps` is 0.
-- `step_under_1ns`: `max_step_ps` is under 1000, the first step after a switch edge or a source jump.
+- `step_under_1ns`: `max_step_ps` is under 1000, the first step of a segment.
 - `step_over_stop`: `max_step_ps` is greater than `stop_ps`.
 - `grid_under_1ns`: `grid_ps` is under 1000.
 - `grid_over_stop`: `grid_ps` is greater than `stop_ps`.
@@ -268,7 +268,7 @@ Newton did not converge at {ref} after {iterations} iterations; source stepping 
 
 The operating point starts with Newton at nominal conditions. If that fails, gmin stepping adds a conductance from every node to ground, from 1e-2 S down by decades, and ends at nominal. If that fails, source stepping scales every source from 0 up to 1. This code means all three failed. `iterations` counts Newton iterations over all of them. `gmin` is the smallest added conductance that converged, in S, or `null`. `source_scale` is the largest scale that converged, or 0.
 
-The restart solve runs the same ladder, with every capacitor held at its voltage and the new contacts, source levels and chip states in force. A restart follows each switch edge and source jump, and each chip event whose new state stamps differently, at its time. A flip that changes no drive does not restart. Its `data` is the same as the operating point's. Its message names the restart and its time:
+The restart solve runs the same ladder, with every capacitor held at its voltage and the new contacts, source levels and chip states in force. A restart solve follows each switch edge and source jump, and each chip event whose new state stamps differently, at its time. A flip that changes no drive takes none. Its `data` is the same as the operating point's. Its message names the restart and its time:
 
 ```text
 Newton did not converge at {ref} after {iterations} iterations in the restart solve at {t_ps} ps; source stepping reached {source_scale}

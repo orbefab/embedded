@@ -24,7 +24,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 {
   "run_format": 0,
   "netlist_format": 0,
-  "engine_version": "0.5.0",
+  "engine_version": "0.6.0",
   "input": {
     "file": "netlist.json",
     "sha256": "<lowercase hex sha256 of the input bytes>",
@@ -35,7 +35,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 }
 ```
 
-`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.5.0`. [versions.md](versions.md) says which changes move them.
+`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.6.0`. [versions.md](versions.md) says which changes move them.
 
 `netlist_format` is the input's `version`, when it reads as an unsigned integer. That holds when the engine rejected the input, so `version: 1` records 1. It is `null` when no such integer could be read.
 
@@ -174,7 +174,7 @@ A row is a point sample, and a waveform that repeats with the grid can alias the
 
 To read a waveform between rows as piecewise linear, set `grid_ps` under a tenth of the fastest time constant you read there. A chord across `h` is off by about `h^2/8` times the waveform's second derivative. For an exponential at a tenth of its time constant that is 1.25e-3 of its swing, and the chord's largest miss is 1.19e-3.
 
-A row at the time of a contact edge, a source jump or a chip event holds the state before it. Later rows show the change. An edge, jump or event at `stop_ps` leaves the last row on the old state. Edges, jumps and chip events are landings for the steps, not rows. A jump at a row time appears in the envelope of the interval that starts at that row. The row holds the old state, and the accepted steps after it hold the new one, so the interval's range spans the jump. The restart solve after an edge is not a sample. The first accepted step after it is, at most 1 ns later. On the committed examples the restart sits at most 1e-5 V outside the accepted steps. On the aliasing case the restart sits about 4 mV outside.
+A row at the time of a contact edge, a source jump or a chip event holds the state before it. Later rows show the change. An edge, jump or event at `stop_ps` leaves the last row on the old state. Edges, jumps and chip events are landings for the steps, not rows. A jump at a row time appears in the envelope of the interval that starts at that row. The row holds the old state, and the accepted steps after it hold the new one, so the interval's range spans the jump. The restart solve after an edge is not a sample. The first accepted step after it is. That step is at most 1 ns after a switch edge, a source jump, or a chip's change that moves a capacitor. After a chip's drive change that moves none, it is the step the segment wanted, up to `max_step_ps` later, as [engine.md](engine.md#transient-steps) says. On the committed examples the restart sits at most 3e-13 V outside the step at the edge and the first step after it. On the aliasing case the restart sits about 4 mV outside.
 
 `index.json` for `examples/rc-switch`, with the columns abridged:
 

@@ -14,6 +14,11 @@ pub(super) const NS: u64 = 1_000;
 /// A 5 V `vcc` and the parts in `parts`, over `nets` besides `gnd` and `vcc`. 1 us steps at
 /// most and a 1 us grid.
 pub(super) fn circuit(stop_ps: u64, nets: &[&str], parts: &[String]) -> Netlist {
+    stepped(stop_ps, US, nets, parts)
+}
+
+/// `circuit` with steps of at most `max_step_ps` and a grid of the same.
+fn stepped(stop_ps: u64, max_step_ps: u64, nets: &[&str], parts: &[String]) -> Netlist {
     let nets: Vec<String> = ["gnd", "vcc"]
         .iter()
         .chain(nets)
@@ -23,7 +28,7 @@ pub(super) fn circuit(stop_ps: u64, nets: &[&str], parts: &[String]) -> Netlist 
         r#"{{
           "version": 0,
           "seed": 0,
-          "analysis": {{ "transient": {{ "stop_ps": {stop_ps}, "max_step_ps": 1000000, "grid_ps": 1000000 }} }},
+          "analysis": {{ "transient": {{ "stop_ps": {stop_ps}, "max_step_ps": {max_step_ps}, "grid_ps": {max_step_ps} }} }},
           "ground": "gnd",
           "nets": [{}],
           "parts": [
@@ -138,6 +143,158 @@ pub(super) fn restarted(rows: &[(u64, f64)], ps: u64) -> bool {
         .position(|&(at, _)| at == ps)
         .unwrap_or_else(|| panic!("no step at {ps} ps"));
     rows.get(k + 1).is_some_and(|&(next, _)| next == ps + NS)
+}
+
+pub(super) fn after(rows: &[(u64, f64)], ps: u64) -> f64 {
+    let k = rows
+        .iter()
+        .position(|&(at, _)| at == ps)
+        .unwrap_or_else(|| panic!("no step at {ps} ps"));
+    rows[k + 1].1
+}
+
+const HIGH_AT: u64 = 2 * US + 333;
+
+/// Every accepted step's time and `net`, with the pin turned high at `HIGH_AT`, and with a write
+/// there that leaves it off. The chip reads `idle`.
+fn high_and_still(netlist: &Netlist, net: &str) -> [Vec<(u64, f64)>; 2] {
+    [Drive::High, Drive::Off].map(|drive| {
+        let chip = scripted(netlist, "out", "idle", &[(HIGH_AT, Op::Drive(drive))], None);
+        let (trace, diagnostics) = run_active(netlist, vec![chip]);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        volts(&trace, net)
+    })
+}
+
+/// `c1` sits on `idle`, which the pin does not reach, at rest at 0 V through `ri` to ground or
+/// at 5 V through `ri` to `vcc`. At 5 V the step and the restart solve give it currents that
+/// differ in their last bits, far under what moves it by 1 nV over a step. Either way the
+/// segment goes on, with its step, as across a write that leaves the pin off. The step after
+/// `HIGH_AT` already has the drive in force.
+#[test]
+fn a_drive_that_moves_no_capacitor_keeps_the_segment() {
+    for rest in ["gnd", "vcc"] {
+        let netlist = circuit(
+            4 * US,
+            &["out", "idle"],
+            &[
+                resistor("rl", "out", "gnd", 1000.0),
+                resistor("ri", "idle", rest, 1000.0),
+                capacitor("c1", "idle", 1e-9),
+            ],
+        );
+        let [high, still] = high_and_still(&netlist, "out");
+        let times = |rows: &[(u64, f64)]| rows.iter().map(|&(at, _)| at).collect::<Vec<_>>();
+        assert_eq!(times(&high), times(&still), "c1 on {rest}");
+        assert!(!restarted(&high, HIGH_AT));
+        assert!(at(&high, HIGH_AT).abs() < 1e-6, "{}", at(&high, HIGH_AT));
+        let driven = 5.0 * 1000.0 / 1025.0;
+        assert!(
+            (after(&high, HIGH_AT) - driven).abs() < 1e-6,
+            "{}",
+            after(&high, HIGH_AT)
+        );
+    }
+}
+
+/// Every accepted step's time and `net`, with a write at `cut` that leaves the pin off, and
+/// the pin turned high at `edge` or left off there by a second write.
+fn cut_then_high(netlist: &Netlist, net: &str, cut: u64, edge: u64) -> [Vec<(u64, f64)>; 2] {
+    [Drive::High, Drive::Off].map(|drive| {
+        let script = [(cut, Op::Drive(Drive::Off)), (edge, Op::Drive(drive))];
+        let chip = scripted(netlist, "out", "idle", &script, None);
+        let (trace, diagnostics) = run_active(netlist, vec![chip]);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        volts(&trace, net)
+    })
+}
+
+/// `c1` sits at rest, and `rc` couples the pin into it, so the drive changes its current by
+/// `di`, with `max_step * 2|di| / 2C` under 1 nV. A write `landed` ps before the edge cuts the
+/// step, and the segment still wants `max_step`. The point before the edge moves by `di`, so
+/// the next estimate reads no kink of `di` over the landed step. From rest the edge's mode is
+/// all that moves `c1`'s current, by at most `2|di|` a step, so the step after the edge is
+/// `max_step`, and every step is the one it is with the pin left off.
+#[test]
+fn a_kept_edge_into_a_capacitor_at_rest_takes_the_wanted_step_after_a_short_landing() {
+    // `c1` at 5 V, 0.49 pA over 1 nF, 0.49 nV over 1 us, 300 ps landed.
+    let near = (4 * US, US, "vcc", 1e-9, 1e13, 300);
+    // `c1` at 0 V, 9.8 fA over 100 nF, 0.98 nV over 10 ms, 1 us landed.
+    let far = (60_000 * US, 10_000 * US, "gnd", 1e-7, 5e14, US);
+    for (stop, max_step, rest, farad, coupling, landed) in [near, far] {
+        let edge = stop / 2 + 333;
+        let netlist = stepped(
+            stop,
+            max_step,
+            &["out", "idle"],
+            &[
+                resistor("rl", "out", "gnd", 1000.0),
+                resistor("ri", "idle", rest, 1000.0),
+                resistor("rc", "out", "idle", coupling),
+                capacitor("c1", "idle", farad),
+            ],
+        );
+        let [high, still] = cut_then_high(&netlist, "idle", edge - landed, edge);
+        let times = |rows: &[(u64, f64)]| rows.iter().map(|&(at, _)| at).collect::<Vec<_>>();
+        let next = high.iter().position(|&(at, _)| at == edge).unwrap() + 1;
+        assert_eq!(high[next].0, edge + max_step, "{rest}");
+        assert_eq!(times(&high), times(&still), "{rest}");
+    }
+}
+
+/// `c1` and `ri` make a 1 ns mode, far faster than the 1 us step, on which the trapezoidal rule
+/// rings, so each kept edge adds its mode to the ones before it. The pin flips every 1 us, and
+/// `rc` couples each flip into `c1` by the same `|di|`. The first `n` edges keep the segment,
+/// `n` being how many of `max_step * 2|di| / 2C` fit in 1 nV. The next one starts a segment,
+/// which clears the sum, and so on. Without `rc` no edge moves `c1`, and every edge keeps the
+/// segment.
+#[test]
+fn kept_edges_into_a_fast_mode_start_a_segment_once_their_sum_passes_the_floor() {
+    let (edges, farad, coupling) = (45, 1e-12, 1e17);
+    let flips: Vec<u64> = (0..edges).map(|k| HIGH_AT + k * US).collect();
+    let script: Vec<(u64, Op)> = flips
+        .iter()
+        .zip([Drive::High, Drive::Off].iter().cycle())
+        .map(|(&at, &drive)| (at, Op::Drive(drive)))
+        .collect();
+    let starts = |rc: &[String]| {
+        let parts = [
+            resistor("rl", "out", "gnd", 1000.0),
+            resistor("ri", "idle", "gnd", 1000.0),
+            capacitor("c1", "idle", farad),
+        ];
+        let netlist = circuit((edges + 3) * US, &["out", "idle"], &[&parts, rc].concat());
+        let chip = scripted(&netlist, "out", "idle", &script, None);
+        let (trace, diagnostics) = run_active(&netlist, vec![chip]);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let rows = volts(&trace, "idle");
+        (0..flips.len())
+            .filter(|&k| restarted(&rows, flips[k]))
+            .collect::<Vec<_>>()
+    };
+    let di = 5.0 * 1000.0 / 1025.0 / coupling;
+    let n = (crate::newton::VNTOL / (1e-6 * di / farad)) as usize;
+    let every: Vec<usize> = (n..flips.len()).step_by(n + 1).collect();
+    assert_eq!(every.len(), 2);
+    assert_eq!(starts(&[resistor("rc", "out", "idle", coupling)]), every);
+    assert_eq!(starts(&[]), Vec::<usize>::new());
+}
+
+/// The same drive into `c1` through 1 kohm changes its current by about 5 mA, which moves it
+/// by volts over a 1 us step. A segment starts at `HIGH_AT` and takes 1 ns.
+#[test]
+fn a_drive_that_feeds_a_capacitor_starts_a_segment() {
+    let netlist = circuit(
+        4 * US,
+        &["out", "idle"],
+        &[
+            resistor("r1", "out", "idle", 1000.0),
+            capacitor("c1", "idle", 1e-9),
+        ],
+    );
+    let [high, still] = high_and_still(&netlist, "idle");
+    assert!(restarted(&high, HIGH_AT));
+    assert!(!restarted(&still, HIGH_AT));
 }
 
 /// The pin is off until `ON`, high to `OFF`, low to 8 us, and high at `stop_ps`. None of these
@@ -376,10 +533,11 @@ fn one_active_chip_reads_another_through_the_restart() {
     let (trace, diagnostics) = run_active(&netlist, vec![a, b]);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let b_out = volts(&trace, "b_out");
-    assert!(restarted(&b_out, US));
-    assert!(restarted(&b_out, US + 100 * NS));
+    assert!(at(&b_out, US).abs() < 1e-9);
     assert!(at(&b_out, US + 100 * NS).abs() < 1e-9);
-    assert!((b_out.last().unwrap().1 - 5.0 * 1000.0 / 1025.0).abs() < 1e-9);
+    let high = 5.0 * 1000.0 / 1025.0;
+    assert!((after(&b_out, US + 100 * NS) - high).abs() < 1e-9);
+    assert!((b_out.last().unwrap().1 - high).abs() < 1e-9);
 }
 
 /// A sample that acts 0 ps later puts its drive at the stop the core already reached.
@@ -456,12 +614,11 @@ fn an_open_pin_leaves_its_net_to_the_pull_up() {
     let low = 5.0 * 25.0 / 1025.0;
     assert!((at(&out, 0) - low).abs() < 1e-9, "{}", at(&out, 0));
     assert!((at(&out, OFF) - low).abs() < 1e-9, "{}", at(&out, OFF));
-    assert!(restarted(&out, OFF));
     // GMIN on `out` holds it 5 nV under VCC.
     assert!(
-        (at(&out, OFF + NS) - 5.0).abs() < 1e-8,
+        (after(&out, OFF) - 5.0).abs() < 1e-8,
         "{}",
-        at(&out, OFF + NS)
+        after(&out, OFF)
     );
 }
 
@@ -495,11 +652,10 @@ fn an_output_stages_drop_scales_with_the_sources() {
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let out = volts(&trace, "out");
     assert!((at(&out, 0) - 4.0 * load).abs() < 1e-9, "{}", at(&out, 0));
-    assert!(restarted(&out, US));
     assert!(
-        (at(&out, US + NS) - 0.4 * load).abs() < 1e-9,
+        (after(&out, US) - 0.4 * load).abs() < 1e-9,
         "{}",
-        at(&out, US + NS)
+        after(&out, US)
     );
 }
 

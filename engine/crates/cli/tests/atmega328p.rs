@@ -115,22 +115,14 @@ fn pb5_steps() -> Vec<(u64, f64)> {
 
 /// `toggle.S` drives PB5 low at cycle 2, onto a pin its load already holds at 0 V, then toggles
 /// it at cycle 4 and every 100 cycles. Each edge is a row on the old level at its cycle's
-/// picosecond, and the restart's 1 ns step after it holds the new one.
+/// picosecond, and the step after it holds the new one.
 #[test]
 fn pb5_switches_at_the_picosecond_of_each_cycle_the_firmware_implies() {
     let rows = pb5_steps();
     let edges: Vec<(u64, bool)> = rows
         .windows(2)
         .filter(|pair| (pair[0].1 > 2.5) != (pair[1].1 > 2.5))
-        .map(|pair| {
-            assert_eq!(
-                pair[1].0,
-                pair[0].0 + 1_000,
-                "a restart at {} ps",
-                pair[0].0
-            );
-            (pair[0].0, pair[1].1 > 2.5)
-        })
+        .map(|pair| (pair[0].0, pair[1].1 > 2.5))
         .collect();
     let leak = 1.0 / leakage();
     let share = |up: f64, down: f64| 5.0 * up / (up + down);

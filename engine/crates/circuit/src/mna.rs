@@ -221,6 +221,10 @@ impl Solution {
         self.x[row]
     }
 
+    pub(crate) fn add(&mut self, row: usize, by: f64) {
+        self.x[row] += by;
+    }
+
     pub(crate) fn components(&self) -> &[f64] {
         &self.x
     }

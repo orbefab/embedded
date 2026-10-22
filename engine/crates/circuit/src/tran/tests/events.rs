@@ -5,8 +5,9 @@ use super::fixtures::*;
 
 /// 100 kohm and 1 uF from 5 V hold an NE555's RESET low at power-on, and its release at
 /// about 15.1 ms sets the latch. The NE555 has `examples/ne555-led`'s values, as in
-/// `tests/chip.rs`. `step_ps` adds a 0 to 1 V step into 1 kohm and 1 nF at that time.
-fn reset_release(step_ps: Option<u64>) -> Netlist {
+/// `tests/chip.rs`. `cr` starts at `rst` V. `step_ps` adds a 0 to 1 V step into 1 kohm and
+/// 1 nF at that time.
+fn reset_release(step_ps: Option<u64>, rst: f64) -> Netlist {
     let value =
         |v: f64, unit: &str| format!(r#"{{ "value": {v:?}, "unit": "{unit}", "source": "user" }}"#);
     let json = format!(
@@ -35,7 +36,7 @@ fn reset_release(step_ps: Option<u64>) -> Netlist {
         value(5.0, "V"),
         value(100e3, "ohm"),
         value(1e-6, "F"),
-        value(0.0, "V"),
+        value(rst, "V"),
         value(5000.0, "ohm"),
         value(0.7, "V"),
         value(18.75, "ohm"),
@@ -75,7 +76,7 @@ fn reset_release(step_ps: Option<u64>) -> Netlist {
 /// One Newton iteration converges only where nothing moves, and a probe is a shorter step.
 #[test]
 fn a_stalled_probe_ends_the_run_and_names_the_probe() {
-    let netlist = reset_release(None);
+    let netlist = reset_release(None, 0.0);
     let mut diagnostics = Vec::new();
     let columns = Columns::new(&netlist);
     let outcome = run_with(
@@ -130,9 +131,12 @@ fn with_row_budget(netlist: &Netlist, grid: u64, row: u32) -> (Outcome, Vec<Diag
 /// every row no step lands on fails twice. Each is the line between the accepted steps around
 /// it, with a warning, and the run reaches `stop`.
 /// A grid with no row inside a step takes the same steps and warns of nothing.
+/// The latch's set feeds no capacitor, so the step from it is long and one row falls inside. That
+/// line starts at the restart solve, which is the operating point with the latch set and `cr`
+/// held where the step left it.
 #[test]
 fn a_row_that_fails_twice_is_the_line_between_its_steps() {
-    let netlist = reset_release(None);
+    let netlist = reset_release(None, 0.0);
     let committed = transient(&netlist);
     let (gridded, lines) = with_row_budget(&netlist, committed.grid, 1);
     let (gridless, none) = with_row_budget(&netlist, committed.stop.as_ps(), 1);
@@ -146,6 +150,14 @@ fn a_row_that_fails_twice_is_the_line_between_its_steps() {
 
     let steps = run_steps(&netlist);
     assert_eq!(gridded.stats.landings, steps.rows() as u64 - 1);
+    let column = |name: &str| {
+        steps
+            .columns()
+            .iter()
+            .position(|r| r.to_string() == name)
+            .unwrap()
+    };
+    let (out, rst) = (column("#net.out"), column("#net.rst"));
     let trace = gridded.trace.unwrap();
     let off_steps = trace
         .time()
@@ -153,6 +165,7 @@ fn a_row_that_fails_twice_is_the_line_between_its_steps() {
         .filter(|at| steps.time().binary_search(at).is_err())
         .count();
     assert_eq!(lines.len(), off_steps);
+    let mut from_restart = 0;
     for line in &lines {
         let at = line.at().unwrap();
         let k = steps.time().partition_point(|&t| t < at) - 1;
@@ -175,8 +188,15 @@ fn a_row_that_fails_twice_is_the_line_between_its_steps() {
         );
         let share = (at.as_ps() - from.as_ps()) as f64 / (to.as_ps() - from.as_ps()) as f64;
         let row = trace.time().binary_search(&at).unwrap();
+        let set = steps.column(out)[k] < 2.5 && steps.column(out)[k + 1] > 2.5;
+        let restart = set.then(|| run_steps(&reset_release(None, steps.column(rst)[k])));
+        from_restart += usize::from(set);
         for (j, quantity) in trace.columns().iter().enumerate() {
-            let (a, b) = (steps.column(j)[k], steps.column(j)[k + 1]);
+            let a = match &restart {
+                Some(restart) => restart.column(j)[0],
+                None => steps.column(j)[k],
+            };
+            let b = steps.column(j)[k + 1];
             let want = a + (b - a) * share;
             let got = trace.column(j)[row];
             assert!(
@@ -185,6 +205,7 @@ fn a_row_that_fails_twice_is_the_line_between_its_steps() {
             );
         }
     }
+    assert_eq!(from_restart, 1);
 }
 
 /// `voltage` through 1 kohm into 1 nF from `initial` V, with `current` into the capacitor
@@ -426,7 +447,7 @@ fn a_source_jump_on_a_switch_edge_restarts_once() {
 
 #[test]
 fn a_source_jump_on_a_located_chip_event_restarts_once() {
-    let plain = run_steps(&reset_release(Some(30_000_000_000)));
+    let plain = run_steps(&reset_release(Some(30_000_000_000), 0.0));
     let logic = plain.logic().unwrap();
     let out = logic
         .signals()
@@ -449,7 +470,7 @@ fn a_source_jump_on_a_located_chip_event_restarts_once() {
     let mut trace = plain;
     let mut landed = false;
     for _ in 0..6 {
-        trace = run_steps(&reset_release(Some(at)));
+        trace = run_steps(&reset_release(Some(at), 0.0));
         let found = edge(&trace);
         if found == at {
             landed = true;
