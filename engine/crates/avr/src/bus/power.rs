@@ -46,6 +46,11 @@ impl Bus {
         self.sleep_armed = true;
     }
 
+    #[cfg(test)]
+    pub(crate) fn sleep_armed(&self) -> bool {
+        self.sleep_armed
+    }
+
     pub(crate) fn take_sleep_arm(&mut self) -> bool {
         let armed = self.sleep_armed;
         self.sleep_armed = false;

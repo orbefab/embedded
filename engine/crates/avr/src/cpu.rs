@@ -626,7 +626,7 @@ impl Cpu {
         let bod_held = self.bod_held;
         let wdrs = self.core.wdr_executions();
         let epochs = self.bus.epochs();
-        let flash = self.core.flash();
+        let program = self.core.program();
         let clock = self.clock_hz;
         let host = self.host_serial;
         let asks = self.bus.asks_for_samples();
@@ -652,7 +652,7 @@ impl Cpu {
         }
         self.bus.set_mcusr(merged_status(kind, old_flags));
         self.apply_host_serial();
-        self.core.set_flash(flash);
+        self.core.set_program(program);
         match when {
             ResetWhen::Restart => {}
             ResetWhen::Delay => {
@@ -979,8 +979,6 @@ impl Default for Cpu {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::{Cpu, ResetKind};
 
     #[test]
@@ -988,8 +986,8 @@ mod tests {
         let mut cpu = Cpu::new();
         cpu.load_flash(&[0; 2048]);
         let copy = cpu.clone();
-        assert!(Arc::ptr_eq(&cpu.core.flash(), &copy.core.flash()));
+        assert!(cpu.core.shares_image(&copy.core));
         cpu.reset_as(ResetKind::Watchdog);
-        assert!(Arc::ptr_eq(&cpu.core.flash(), &copy.core.flash()));
+        assert!(cpu.core.shares_image(&copy.core));
     }
 }

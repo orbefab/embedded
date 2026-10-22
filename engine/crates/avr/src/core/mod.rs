@@ -8,11 +8,15 @@
 //! the bus. Interrupt entry is not an instruction; the facade runs it between
 //! instructions.
 
+#[cfg(test)]
+mod check;
+mod decode;
 mod execute;
 
 use std::sync::Arc;
 
 use crate::bus::Bus;
+use decode::Op;
 
 /// What the core does between instructions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,12 +40,20 @@ pub struct SpmNote {
     pub word: u16,
 }
 
+/// An image and its op table, carried across a reset so the image is not decoded again.
+pub(crate) struct Program {
+    flash: Arc<[u16]>,
+    ops: Arc<[Op]>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct Core {
     r: [u8; 32],
     sreg: u8,
     pc: u16,
     flash: Arc<[u16]>,
+    /// `flash` decoded, one op per word up to the program counter's reach.
+    ops: Arc<[Op]>,
     /// Flash size in words, minus one.
     pc_mask: u16,
     /// Stack pointer. `SPL`/`SPH` on the bus read and write this word.
@@ -71,6 +83,7 @@ impl Core {
             sreg: 0,
             pc: 0,
             flash: Arc::from([]),
+            ops: Arc::from([]),
             pc_mask,
             sp,
             spm: Vec::new(),
@@ -90,7 +103,21 @@ impl Core {
     }
 
     pub(crate) fn set_flash(&mut self, flash: Arc<[u16]>) {
+        self.ops = Arc::from(decode::table(&flash, self.pc_mask));
         self.flash = flash;
+        self.pc = 0;
+    }
+
+    pub(crate) fn program(&self) -> Program {
+        Program {
+            flash: Arc::clone(&self.flash),
+            ops: Arc::clone(&self.ops),
+        }
+    }
+
+    pub(crate) fn set_program(&mut self, program: Program) {
+        self.flash = program.flash;
+        self.ops = program.ops;
         self.pc = 0;
     }
 
@@ -140,8 +167,9 @@ impl Core {
         self.cycles = cycles;
     }
 
-    pub(crate) fn flash(&self) -> Arc<[u16]> {
-        Arc::clone(&self.flash)
+    #[cfg(test)]
+    pub(crate) fn shares_image(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.flash, &other.flash) && Arc::ptr_eq(&self.ops, &other.ops)
     }
 
     pub(crate) fn spm_notes(&self) -> &[SpmNote] {
@@ -212,9 +240,9 @@ impl Core {
             return;
         }
         let pc = self.pc;
-        let word = self.fetch(pc);
+        let op = self.op(pc);
         self.irq_delay = false;
-        self.execute(bus, pc, word);
+        self.execute_op(bus, pc, op);
         // The store that clears a halt is rare. Skipping it keeps the bus line
         // clean on the ordinary instruction.
         let halt = bus.cpu_halt();
@@ -222,6 +250,11 @@ impl Core {
             bus.clear_cpu_halt();
             self.cycles = self.cycles.wrapping_add(u64::from(halt));
         }
+    }
+
+    #[inline(always)]
+    fn op(&self, pc: u16) -> Op {
+        self.ops.get(usize::from(pc)).copied().unwrap_or(Op::Nop)
     }
 
     fn fetch(&self, pc: u16) -> u16 {
