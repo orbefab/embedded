@@ -48,28 +48,38 @@ The example names live in one Rust list. The runner reads them from the binary, 
 
 ## This run
 
-The build laptop has 6 cores and 12 threads, and the governor is `powersave`. Load before native was 4.40 3.06 2.88, before WASI was 2.65 2.82 2.80, before the Worker was 7.87 4.26 3.30, and after the last target was 8.84 6.00 4.09. Other work on the machine held about six threads through the Worker run. rustc 1.98.1, cargo 1.98.1, node v24.21.0, Chromium 156.0.8078.4, playwright 1.64.0.
+The build laptop has 6 cores and 12 threads, and the governor is `powersave`. Load before native was 1.78 1.31 1.80, before WASI was 1.38 1.27 1.76, before the Worker was 4.60 2.20 2.03, and after the last target was 4.09 2.61 2.19. The owner said the machine was otherwise idle. rustc 1.98.1, cargo 1.98.1, node v24.21.0, Chromium 156.0.8078.4, playwright 1.64.0.
 
-Numbers are 3 repeats of this build. Errors were 0. Landings and stops match across native, WASI, and the Worker. Every row's `end_ps` equals its stop.
+Numbers are 3 repeats of this build, engine `0.6.0`. Errors were 0. Landings and stops match across native, WASI, and the Worker. Every row's `end_ps` equals its stop.
 
 | example | variant | simulated | native | WASI | Worker | native x | WASI x | Worker x | native core | WASI core | Worker core | landings | stops |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| atmega-blink | committed | 4.000 | 0.848 (0.846 to 0.868) | 1.023 (1.016 to 1.027) | 1.941 (1.892 to 2.049) | 4.72 | 3.91 | 2.06 | 0.796 | 0.925 | 1.727 | 425 | 9 |
-| atmega-blink | live | 4.000 | 0.944 (0.928 to 1.033) | 1.110 (1.055 to 1.181) | 1.698 (1.171 to 1.705) | 4.24 | 3.60 | 2.36 | 0.826 | 1.070 | 1.611 | 425 | 9 |
-| atmega-button | committed | 1.000 | 0.379 (0.364 to 0.426) | 0.956 (0.846 to 0.960) | 1.011 (0.978 to 1.013) | 2.64 | 1.05 | 0.99 | 0.374 | 0.910 | 0.891 | 219 | 34 |
-| atmega-button | live | 1.000 | 0.408 (0.376 to 0.458) | 0.869 (0.466 to 0.939) | 1.036 (0.854 to 1.079) | 2.45 | 1.15 | 0.96 | 0.370 | 0.642 | 1.002 | 219 | 34 |
-| atmega-fade | committed | 1.570 | 0.559 (0.532 to 0.579) | 1.208 (0.831 to 1.222) | 1.340 (1.189 to 1.375) | 2.81 | 1.30 | 1.17 | 0.337 | 0.664 | 0.732 | 1511 | 1482 |
-| atmega-fade | live | 1.570 | 0.431 (0.425 to 0.437) | 0.660 (0.606 to 0.957) | 0.626 (0.564 to 0.652) | 3.65 | 2.38 | 2.51 | 0.340 | 0.451 | 0.451 | 1511 | 1482 |
-| atmega-analog-serial | committed | 0.019 | 0.017 (0.016 to 0.017) | 0.025 (0.025 to 0.026) | 0.029 (0.029 to 0.030) | 1.14 | 0.75 | 0.66 | 0.003 | 0.004 | 0.005 | 1033 | 100 |
-| atmega-analog-serial | live | 0.019 | 0.005 (0.005 to 0.005) | 0.008 (0.008 to 0.008) | 0.009 (0.009 to 0.016) | 3.70 | 2.42 | 2.03 | 0.003 | 0.004 | 0.005 | 122 | 100 |
-| atmega-analog-serial | live-4s | 4.000 | 1.140 (1.044 to 1.155) | 2.733 (1.847 to 2.924) | 3.010 (2.555 to 3.113) | 3.51 | 1.46 | 1.33 | 0.617 | 1.598 | 1.778 | 20834 | 20812 |
-| atmega-analog-serial | live-8s | 8.000 | 2.204 (2.156 to 2.229) | 5.196 (3.428 to 5.810) | 6.209 (4.531 to 6.211) | 3.63 | 1.54 | 1.29 | 1.212 | 2.331 | 3.579 | 41637 | 41615 |
-| atmega-analog-serial | live-16s | 16.000 | 4.334 (4.220 to 4.384) | 11.147 (9.453 to 12.009) | 12.713 (11.461 to 12.992) | 3.69 | 1.44 | 1.26 | 2.184 | 6.688 | 7.087 | 83252 | 83230 |
+| atmega-blink | committed | 4.000 | 0.891 (0.869 to 0.898) | 1.040 (1.032 to 1.052) | 1.157 (1.042 to 1.194) | 4.49 | 3.84 | 3.46 | 0.831 | 0.966 | 0.989 | 425 | 9 |
+| atmega-blink | live | 4.000 | 0.860 (0.843 to 0.915) | 1.043 (1.028 to 1.058) | 1.048 (1.037 to 1.099) | 4.65 | 3.84 | 3.82 | 0.799 | 0.985 | 0.957 | 425 | 9 |
+| atmega-button | committed | 1.000 | 0.342 (0.342 to 0.343) | 0.488 (0.487 to 0.494) | 0.459 (0.458 to 0.460) | 2.93 | 2.05 | 2.18 | 0.338 | 0.468 | 0.429 | 219 | 34 |
+| atmega-button | live | 1.000 | 0.342 (0.342 to 0.343) | 0.463 (0.451 to 0.483) | 0.456 (0.455 to 0.470) | 2.92 | 2.16 | 2.19 | 0.338 | 0.436 | 0.434 | 219 | 34 |
+| atmega-fade | committed | 1.570 | 0.512 (0.512 to 0.512) | 0.702 (0.696 to 0.708) | 0.723 (0.719 to 1.135) | 3.07 | 2.24 | 2.17 | 0.325 | 0.398 | 0.400 | 1511 | 1482 |
+| atmega-fade | live | 1.570 | 0.408 (0.408 to 0.409) | 0.544 (0.537 to 0.553) | 0.569 (0.548 to 0.577) | 3.84 | 2.89 | 2.76 | 0.326 | 0.409 | 0.402 | 1511 | 1482 |
+| atmega-analog-serial | committed | 0.019 | 0.015 (0.015 to 0.015) | 0.026 (0.025 to 0.026) | 0.025 (0.025 to 0.026) | 1.26 | 0.74 | 0.75 | 0.003 | 0.004 | 0.004 | 1033 | 100 |
+| atmega-analog-serial | live | 0.019 | 0.005 (0.005 to 0.005) | 0.008 (0.008 to 0.008) | 0.008 (0.008 to 0.008) | 4.09 | 2.45 | 2.46 | 0.003 | 0.004 | 0.004 | 122 | 100 |
+| atmega-analog-serial | live-4s | 4.000 | 0.961 (0.960 to 0.961) | 1.493 (1.492 to 1.837) | 1.898 (1.817 to 2.426) | 4.16 | 2.68 | 2.11 | 0.541 | 0.900 | 1.156 | 20834 | 20812 |
+| atmega-analog-serial | live-8s | 8.000 | 1.985 (1.981 to 1.986) | 3.092 (3.021 to 3.652) | 4.043 (3.884 to 4.064) | 4.03 | 2.59 | 1.98 | 1.082 | 1.759 | 2.161 | 41637 | 41615 |
+| atmega-analog-serial | live-16s | 16.000 | 4.244 (4.237 to 4.247) | 7.949 (7.656 to 8.036) | 6.749 (6.620 to 7.745) | 3.77 | 2.01 | 2.37 | 2.159 | 4.327 | 3.548 | 83252 | 83230 |
+
+atmega-analog-serial live-4s takes 0.240 wall seconds per simulated second on native (0.240 to 0.240).
+atmega-analog-serial live-8s takes 0.248 wall seconds per simulated second on native (0.248 to 0.248).
+atmega-analog-serial live-16s takes 0.265 wall seconds per simulated second on native (0.265 to 0.265).
+atmega-analog-serial live-4s takes 0.373 wall seconds per simulated second on WASI (0.373 to 0.459).
+atmega-analog-serial live-8s takes 0.387 wall seconds per simulated second on WASI (0.378 to 0.456).
+atmega-analog-serial live-16s takes 0.497 wall seconds per simulated second on WASI (0.479 to 0.502).
+atmega-analog-serial live-4s takes 0.474 wall seconds per simulated second on Worker (0.454 to 0.607).
+atmega-analog-serial live-8s takes 0.505 wall seconds per simulated second on Worker (0.486 to 0.508).
+atmega-analog-serial live-16s takes 0.422 wall seconds per simulated second on Worker (0.414 to 0.484).
 
 The machine is shared, the load is recorded, and fine differences between rows are inside the noise.
 
-The Worker ratios of this run do not read the bar. The bare core does not change with the step policy, and the Worker's `live-16s` core took 7.087 s here against 3.459 s in the run before, at a load near 8. The same core took 2.184 s on native, where the earlier run took 2.305 s. A Worker reading of the bar needs a run at a quieter load.
+All four examples clear the bar. The `live` Worker ratios are 3.82 for `atmega-blink`, 2.19 for `atmega-button`, and 2.76 for `atmega-fade`. `atmega-analog-serial`'s `live-16s` Worker ratio is 2.37, and its slowest repeat, 7.745 s, is 2.07.
 
-The landings are the same on every target and under any load. `live-16s` accepts 83252 landings and 83230 stops, so every stop but 22 is one landing. Engine `0.5.0` accepted 1424993 landings there, because each pin edge started a segment at 1 ns and grew the step back. `atmega-blink` accepts 425 landings for 9 stops, `atmega-button` 219 for 34, and `atmega-fade` 1511 for 1482, on the committed row and the `live` row.
+The landings are the same on every target and under any load. `live-16s` accepts 83252 landings and 83230 stops, so every stop but 22 is one landing. `atmega-blink` accepts 425 landings for 9 stops, `atmega-button` 219 for 34, and `atmega-fade` 1511 for 1482, on the committed row and the `live` row.
 
-On native, `live-16s` takes 4.334 s, 3.69 times real time, and the bare core is 2.184 s of it. The other 2.150 s is about 26 µs a landing.
+On native, `live-16s` takes 4.244 s and the bare core is 2.159 s of it. In the Worker it takes 6.749 s and the bare core is 3.548 s of it. The rest is about 25 µs a landing on native and 38 µs in the Worker.
