@@ -1,7 +1,7 @@
 //! Execute a decoded [`Op`]. Data-space operands go through the bus.
 
 use super::Core;
-use super::decode::Op;
+use super::decode::{Op, bus_op, free_op};
 use crate::SpmNote;
 use crate::bus::Bus;
 
@@ -31,136 +31,220 @@ impl Core {
     /// Runs `op`, the decoded word at `pc`.
     #[inline(always)]
     pub(super) fn execute_op(&mut self, bus: &mut Bus, pc: u16, op: Op) {
+        if op.is_free() {
+            self.execute_free(pc, op);
+        } else {
+            self.execute_bus(bus, pc, op);
+        }
+    }
+
+    /// Runs `op`, which [`Op::is_free`].
+    #[inline(always)]
+    pub(super) fn execute_free(&mut self, pc: u16, op: Op) {
         let next = pc.wrapping_add(1);
         match op {
             Op::Nop => self.finish(next, 1),
             Op::Add(d, r) => {
-                let (rd, rr) = (self.reg(d), self.reg(r));
+                let (rd, rr) = (self.at(d), self.at(r));
                 let result = rd.wrapping_add(rr);
-                self.set_reg(d, result);
+                self.put(d, result);
                 self.add_flags(rd, rr, result);
                 self.finish(next, 1);
             }
             Op::Adc(d, r) => {
-                let (rd, rr) = (self.reg(d), self.reg(r));
+                let (rd, rr) = (self.at(d), self.at(r));
                 let result = rd.wrapping_add(rr).wrapping_add(u8::from(self.flag(0)));
-                self.set_reg(d, result);
+                self.put(d, result);
                 self.add_flags(rd, rr, result);
                 self.finish(next, 1);
             }
-            Op::Sub(d, r) => self.subtract(next, d, self.reg(r), false, true),
-            Op::Sbc(d, r) => self.subtract(next, d, self.reg(r), true, true),
-            Op::Cp(d, r) => self.subtract(next, d, self.reg(r), false, false),
-            Op::Cpc(d, r) => self.subtract(next, d, self.reg(r), true, false),
+            Op::Sub(d, r) => self.subtract(next, d, self.at(r), false, true),
+            Op::Sbc(d, r) => self.subtract(next, d, self.at(r), true, true),
+            Op::Cp(d, r) => self.subtract(next, d, self.at(r), false, false),
+            Op::Cpc(d, r) => self.subtract(next, d, self.at(r), true, false),
             Op::Subi(d, k) => self.subtract(next, d, k, false, true),
             Op::Sbci(d, k) => self.subtract(next, d, k, true, true),
             Op::Cpi(d, k) => self.subtract(next, d, k, false, false),
-            Op::And(d, r) => self.logic(next, d, self.reg(d) & self.reg(r)),
-            Op::Or(d, r) => self.logic(next, d, self.reg(d) | self.reg(r)),
-            Op::Eor(d, r) => self.logic(next, d, self.reg(d) ^ self.reg(r)),
-            Op::Andi(d, k) => self.logic(next, d, self.reg(d) & k),
-            Op::Ori(d, k) => self.logic(next, d, self.reg(d) | k),
+            Op::And(d, r) => self.logic(next, d, self.at(d) & self.at(r)),
+            Op::Or(d, r) => self.logic(next, d, self.at(d) | self.at(r)),
+            Op::Eor(d, r) => self.logic(next, d, self.at(d) ^ self.at(r)),
+            Op::Andi(d, k) => self.logic(next, d, self.at(d) & k),
+            Op::Ori(d, k) => self.logic(next, d, self.at(d) | k),
             Op::Mov(d, r) => {
-                self.set_reg(d, self.reg(r));
+                self.put(d, self.at(r));
                 self.finish(next, 1);
             }
             Op::Ldi(d, k) => {
-                self.set_reg(d, k);
+                self.put(d, k);
                 self.finish(next, 1);
             }
-            Op::Cpse { d, r, skip } => self.skip_if(self.reg(d) == self.reg(r), next, skip),
+            Op::Cpse { d, r, skip } => self.skip_if(self.at(d) == self.at(r), next, skip),
             Op::Adiw(lo, k) => self.word_imm(next, lo, k, true),
             Op::Sbiw(lo, k) => self.word_imm(next, lo, k, false),
             Op::Movw(d, r) => {
-                self.set_reg(d, self.reg(r));
-                self.set_reg(d + 1, self.reg(r + 1));
+                self.put(d, self.at(r));
+                self.put(d + 1, self.at(r + 1));
                 self.finish(next, 1);
             }
             Op::Mul(d, r) => {
-                self.set_product(u16::from(self.reg(d)) * u16::from(self.reg(r)));
+                self.set_product(u16::from(self.at(d)) * u16::from(self.at(r)));
                 self.finish(next, 2);
             }
             Op::Muls(d, r) => {
-                self.set_product(signed_pair(self.reg(d), self.reg(r)));
+                self.set_product(signed_pair(self.at(d), self.at(r)));
                 self.finish(next, 2);
             }
             Op::Mulsu(d, r) => {
-                self.set_product(signed_unsigned(self.reg(d), self.reg(r)));
+                self.set_product(signed_unsigned(self.at(d), self.at(r)));
                 self.finish(next, 2);
             }
             Op::Fmul(d, r) => {
-                self.mul_flags_shifted(u16::from(self.reg(d)) * u16::from(self.reg(r)));
+                self.mul_flags_shifted(u16::from(self.at(d)) * u16::from(self.at(r)));
                 self.finish(next, 2);
             }
             Op::Fmuls(d, r) => {
-                self.mul_flags_shifted(signed_pair(self.reg(d), self.reg(r)));
+                self.mul_flags_shifted(signed_pair(self.at(d), self.at(r)));
                 self.finish(next, 2);
             }
             Op::Fmulsu(d, r) => {
-                self.mul_flags_shifted(signed_unsigned(self.reg(d), self.reg(r)));
+                self.mul_flags_shifted(signed_unsigned(self.at(d), self.at(r)));
                 self.finish(next, 2);
             }
+            Op::Lpm { d, post } => {
+                self.lpm_into(d, post);
+                self.finish(next, 3);
+            }
+            Op::Rjmp(to) => self.finish(to, 2),
+            Op::Brbs { s, to } => self.branch_if(self.flag(s), next, to),
+            Op::Brbc { s, to } => self.branch_if(!self.flag(s), next, to),
+            Op::Jmp(to) => self.finish(to, 3),
+            Op::Ijmp => self.finish(self.z(), 2),
+            Op::Bst { d, b } => {
+                self.set_flag_bit(6, (self.at(d) >> b) & 1 == 1);
+                self.finish(next, 1);
+            }
+            Op::Bld { d, b } => {
+                let value = if self.flag(6) {
+                    self.at(d) | (1 << b)
+                } else {
+                    self.at(d) & !(1 << b)
+                };
+                self.put(d, value);
+                self.finish(next, 1);
+            }
+            Op::Sbrc { r, b, skip } => self.skip_if((self.at(r) >> b) & 1 == 0, next, skip),
+            Op::Sbrs { r, b, skip } => self.skip_if((self.at(r) >> b) & 1 == 1, next, skip),
+            Op::Bset(s) => {
+                self.set_flag_bit(s, true);
+                self.finish(next, 1);
+            }
+            Op::Bclr(s) => {
+                self.set_flag_bit(s, false);
+                self.finish(next, 1);
+            }
+            Op::Com(d) => {
+                let result = !self.at(d);
+                self.put(d, result);
+                let n = result >> 7;
+                let z = u8::from(result == 0);
+                let keep = self.sreg & (I | T | H);
+                self.sreg = keep | (n << 4) | (n << 2) | (z << 1) | C;
+                self.finish(next, 1);
+            }
+            Op::Neg(d) => {
+                let rd = self.at(d);
+                let result = 0u8.wrapping_sub(rd);
+                self.put(d, result);
+                let h = ((result >> 3) & 1) | ((rd >> 3) & 1);
+                let n = result >> 7;
+                let v = u8::from(result == 0x80);
+                let z = u8::from(result == 0);
+                let c = u8::from(result != 0);
+                self.write_arith(h, n ^ v, v, n, z, c);
+                self.finish(next, 1);
+            }
+            Op::Swap(d) => {
+                self.put(d, self.at(d).rotate_left(4));
+                self.finish(next, 1);
+            }
+            Op::Inc(d) => self.step_by_one(next, d, self.at(d).wrapping_add(1), 0x80),
+            Op::Dec(d) => self.step_by_one(next, d, self.at(d).wrapping_sub(1), 0x7F),
+            Op::Asr(d) => {
+                let rd = self.at(d);
+                self.shift(next, d, (rd >> 1) | (rd & 0x80), rd & 1);
+            }
+            Op::Lsr(d) => {
+                let rd = self.at(d);
+                self.shift(next, d, rd >> 1, rd & 1);
+            }
+            Op::Ror(d) => {
+                let rd = self.at(d);
+                self.shift(next, d, (rd >> 1) | (u8::from(self.flag(0)) << 7), rd & 1);
+            }
+            Op::Unknown(word) => {
+                self.unknown = Some(word);
+                self.finish(next, 1);
+            }
+            bus_op!() => unreachable!("{op:?} is not free"),
+        }
+    }
+
+    #[inline(always)]
+    fn execute_bus(&mut self, bus: &mut Bus, pc: u16, op: Op) {
+        let next = pc.wrapping_add(1);
+        match op {
             Op::Ldd { d, ptr, q } => {
                 let addr = self.ptr_val(ptr).wrapping_add(u16::from(q));
                 let value = bus.load(self, addr);
-                self.set_reg(d, value);
+                self.put(d, value);
                 self.finish(next, 2);
             }
             Op::Std { r, ptr, q } => {
                 let addr = self.ptr_val(ptr).wrapping_add(u16::from(q));
-                let value = self.reg(r);
+                let value = self.at(r);
                 bus.store(self, addr, value, 2);
                 self.finish(next, 2);
             }
             Op::In { d, addr } => {
                 let value = bus.load(self, addr);
-                self.set_reg(d, value);
+                self.put(d, value);
                 self.finish(next, 1);
             }
             Op::Out { r, addr } => {
-                let value = self.reg(r);
+                let value = self.at(r);
                 bus.store(self, addr, value, 1);
                 self.finish(next, 1);
             }
             Op::Lds { d, addr } => {
                 let value = bus.load(self, addr);
-                self.set_reg(d, value);
+                self.put(d, value);
                 self.finish(pc.wrapping_add(2), 2);
             }
             Op::Sts { r, addr } => {
-                let value = self.reg(r);
+                let value = self.at(r);
                 bus.store(self, addr, value, 2);
                 self.finish(pc.wrapping_add(2), 2);
             }
             Op::Ld { d, ptr, update } => self.load_ptr(bus, pc, d, ptr, update),
             Op::St { r, ptr, update } => self.store_ptr(bus, pc, r, ptr, update),
-            Op::Lpm { d, post } => {
-                self.lpm_into(d, post);
-                self.finish(next, 3);
-            }
             Op::Pop(d) => {
                 let value = self.pop(bus);
-                self.set_reg(d, value);
+                self.put(d, value);
                 self.finish(next, 2);
             }
             Op::Push(r) => {
-                let value = self.reg(r);
+                let value = self.at(r);
                 self.push(bus, value, 2);
                 self.finish(next, 2);
             }
-            Op::Rjmp(to) => self.finish(to, 2),
             Op::Rcall(to) => {
                 self.push_pc(bus, next, 3);
                 self.finish(to, 3);
             }
-            Op::Brbs { s, to } => self.branch_if(self.flag(s), next, to),
-            Op::Brbc { s, to } => self.branch_if(!self.flag(s), next, to),
-            Op::Jmp(to) => self.finish(to, 3),
             Op::Call(to) => {
                 self.push_pc(bus, pc.wrapping_add(2), 4);
                 self.finish(to, 4);
             }
-            Op::Ijmp => self.finish(self.z(), 2),
             Op::Icall => {
                 self.push_pc(bus, next, 3);
                 self.finish(self.z(), 3);
@@ -176,21 +260,6 @@ impl Core {
                 self.irq_delay = true;
                 self.finish(addr, 4);
             }
-            Op::Bst { d, b } => {
-                self.set_flag_bit(6, (self.reg(d) >> b) & 1 == 1);
-                self.finish(next, 1);
-            }
-            Op::Bld { d, b } => {
-                let value = if self.flag(6) {
-                    self.reg(d) | (1 << b)
-                } else {
-                    self.reg(d) & !(1 << b)
-                };
-                self.set_reg(d, value);
-                self.finish(next, 1);
-            }
-            Op::Sbrc { r, b, skip } => self.skip_if((self.reg(r) >> b) & 1 == 0, next, skip),
-            Op::Sbrs { r, b, skip } => self.skip_if((self.reg(r) >> b) & 1 == 1, next, skip),
             Op::Sbi { addr, b } => {
                 bus.write_bit(self, addr, b, true);
                 self.finish(next, 2);
@@ -210,60 +279,9 @@ impl Core {
                 let set = bus.peek(self, addr) & (1 << b) != 0;
                 self.skip_if(set, next, skip);
             }
-            Op::Bset(s) => {
-                self.set_flag_bit(s, true);
-                // SEI is BSET 7. The following instruction runs before a pending interrupt.
-                if s == 7 {
-                    self.irq_delay = true;
-                }
-                self.finish(next, 1);
-            }
-            Op::Bclr(s) => {
-                self.set_flag_bit(s, false);
-                self.finish(next, 1);
-            }
-            Op::Com(d) => {
-                let result = !self.reg(d);
-                self.set_reg(d, result);
-                let n = result >> 7;
-                let z = u8::from(result == 0);
-                let keep = self.sreg & (I | T | H);
-                self.sreg = keep | (n << 4) | (n << 2) | (z << 1) | C;
-                self.finish(next, 1);
-            }
-            Op::Neg(d) => {
-                let rd = self.reg(d);
-                let result = 0u8.wrapping_sub(rd);
-                self.set_reg(d, result);
-                let h = ((result >> 3) & 1) | ((rd >> 3) & 1);
-                let n = result >> 7;
-                let v = u8::from(result == 0x80);
-                let z = u8::from(result == 0);
-                let c = u8::from(result != 0);
-                self.write_arith(h, n ^ v, v, n, z, c);
-                self.finish(next, 1);
-            }
-            Op::Swap(d) => {
-                self.set_reg(d, self.reg(d).rotate_left(4));
-                self.finish(next, 1);
-            }
-            Op::Inc(d) => self.step_by_one(next, d, self.reg(d).wrapping_add(1), 0x80),
-            Op::Dec(d) => self.step_by_one(next, d, self.reg(d).wrapping_sub(1), 0x7F),
-            Op::Asr(d) => {
-                let rd = self.reg(d);
-                self.shift(next, d, (rd >> 1) | (rd & 0x80), rd & 1);
-            }
-            Op::Lsr(d) => {
-                let rd = self.reg(d);
-                self.shift(next, d, rd >> 1, rd & 1);
-            }
-            Op::Ror(d) => {
-                let rd = self.reg(d);
-                self.shift(next, d, (rd >> 1) | (u8::from(self.flag(0)) << 7), rd & 1);
-            }
             Op::Spm => {
                 let z = self.z();
-                let data = u16::from(self.reg(0)) | (u16::from(self.reg(1)) << 8);
+                let data = u16::from(self.at(0)) | (u16::from(self.at(1)) << 8);
                 self.spm.push(SpmNote { z, word: data });
                 self.finish(next, 1);
             }
@@ -284,36 +302,50 @@ impl Core {
                 self.stopped = true;
                 self.finish(next, 1);
             }
-            Op::Unknown(word) => {
-                self.unknown = Some(word);
+            Op::Sei => {
+                self.set_flag_bit(7, true);
+                // The following instruction runs before a pending interrupt.
+                self.irq_delay = true;
                 self.finish(next, 1);
             }
+            free_op!() => unreachable!("{op:?} is free"),
         }
+    }
+
+    /// Register `d` of a decoded op, which is under 32.
+    #[inline(always)]
+    fn at(&self, d: u8) -> u8 {
+        self.r[usize::from(d & 31)]
+    }
+
+    #[inline(always)]
+    fn put(&mut self, d: u8, value: u8) {
+        self.r[usize::from(d & 31)] = value;
     }
 
     /// `SUB`, `SBC`, `CP`, `CPC` and their immediate forms. `carry` takes `C` in, and keeps `Z`
     /// only if it was set.
     fn subtract(&mut self, next: u16, d: u8, rr: u8, carry: bool, store: bool) {
-        let rd = self.reg(d);
+        let rd = self.at(d);
         let result = rd
             .wrapping_sub(rr)
             .wrapping_sub(u8::from(carry && self.flag(0)));
         if store {
-            self.set_reg(d, result);
+            self.put(d, result);
         }
         self.sub_flags(rd, rr, result, carry);
         self.finish(next, 1);
     }
 
     fn logic(&mut self, next: u16, d: u8, result: u8) {
-        self.set_reg(d, result);
+        self.put(d, result);
         self.logic_flags(result);
         self.finish(next, 1);
     }
 
     /// `INC` and `DEC`. `V` is set when the result is `overflow`. `C` and `H` are kept.
     fn step_by_one(&mut self, next: u16, d: u8, result: u8, overflow: u8) {
-        self.set_reg(d, result);
+        self.put(d, result);
         let n = result >> 7;
         let v = u8::from(result == overflow);
         let z = u8::from(result == 0);
@@ -324,7 +356,7 @@ impl Core {
     }
 
     fn shift(&mut self, next: u16, d: u8, result: u8, carry: u8) {
-        self.set_reg(d, result);
+        self.put(d, result);
         self.shift_flags(result, carry, result >> 7);
         self.finish(next, 1);
     }
@@ -374,7 +406,7 @@ impl Core {
         if update != Update::None {
             self.set_ptr(ptr, addr);
         }
-        self.set_reg(d, value);
+        self.put(d, value);
         if update == Update::Post {
             self.set_ptr(ptr, addr.wrapping_add(1));
         }
@@ -382,7 +414,7 @@ impl Core {
     }
 
     fn store_ptr(&mut self, bus: &mut Bus, pc: u16, r: u8, ptr: Ptr, update: Update) {
-        let value = self.reg(r);
+        let value = self.at(r);
         let addr = self.ptr_addr(ptr, update);
         bus.store(self, addr, value, 2);
         if update == Update::Post {
@@ -427,7 +459,7 @@ impl Core {
         } else {
             (word >> 8) as u8
         };
-        self.set_reg(d, byte);
+        self.put(d, byte);
         if post {
             self.set_pair(30, z.wrapping_add(1));
         }
@@ -554,15 +586,15 @@ impl Core {
     }
 
     fn set_product(&mut self, product: u16) {
-        self.set_reg(0, product as u8);
-        self.set_reg(1, (product >> 8) as u8);
+        self.put(0, product as u8);
+        self.put(1, (product >> 8) as u8);
         self.mul_flags(product);
     }
 
     fn mul_flags_shifted(&mut self, unshifted: u16) {
         let shifted = unshifted << 1;
-        self.set_reg(0, shifted as u8);
-        self.set_reg(1, (shifted >> 8) as u8);
+        self.put(0, shifted as u8);
+        self.put(1, (shifted >> 8) as u8);
         let c = u8::from((unshifted >> 15) & 1 == 1);
         let z = u8::from(shifted == 0);
         let keep = self.sreg & (I | T | H | S | V | N);

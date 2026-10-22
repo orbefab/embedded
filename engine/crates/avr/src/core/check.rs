@@ -257,6 +257,7 @@ fn reaches_bus(op: Op) -> bool {
             | Op::Sbrc { .. }
             | Op::Sbrs { .. }
             | Op::Bset(_)
+            | Op::Sei
             | Op::Bclr(_)
             | Op::Com(_)
             | Op::Neg(_)

@@ -3,6 +3,7 @@ mod alu_flags;
 mod clock_select;
 mod common;
 mod cycles;
+mod free_runs;
 mod gpio_in;
 mod instructions;
 mod mspim;

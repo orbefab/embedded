@@ -470,7 +470,9 @@ impl Cpu {
         }
         while self.cycles() < limit && !self.core.is_stopped() {
             if self.core.can_fetch() {
-                self.step();
+                if !self.run_free(limit, until_news, div) {
+                    self.step();
+                }
             } else if self.core.is_held() {
                 self.advance_held(limit);
                 break;
@@ -736,6 +738,40 @@ impl Cpu {
         let before = self.core.cycles();
         self.core.step(&mut self.bus);
         let spent = self.core.cycles().wrapping_sub(before);
+        self.retire(spent);
+    }
+
+    /// Runs free ops from here while the bus is quiet and no interrupt can be taken. Returns
+    /// `true` when it retired an op that reached `limit` or the next event, and `false` before an
+    /// op that is not free, which the caller steps.
+    #[inline(always)]
+    fn run_free(&mut self, limit: u64, until_news: bool, div: u32) -> bool {
+        let irq_open = self.bus.pending_irq() != 0 && self.core.interrupts_enabled();
+        if irq_open || !self.bus.quiet() || (until_news && self.has_news(div)) {
+            return false;
+        }
+        let start = self.core.cycles();
+        let room = self.bus.next_event().saturating_sub(self.bus.cycle());
+        let bound = limit.min(start.saturating_add(room));
+        let last = self.core.run_free(bound);
+        let passed = self.core.cycles().wrapping_sub(start);
+        match last {
+            None => {
+                self.bus.pass(passed);
+                false
+            }
+            Some(spent) => {
+                self.bus.pass(passed.wrapping_sub(spent));
+                self.retire(spent);
+                true
+            }
+        }
+    }
+
+    /// The bus side of an instruction that took `spent` cycles: the devices, then a `SLEEP`, a
+    /// watchdog reset, or an interrupt.
+    #[inline(always)]
+    fn retire(&mut self, spent: u64) {
         // `SLEEP` has already set `Core::sleeping`. A watchdog reset is
         // reported only when `tick` took its slow path and fired the event.
         let watchdog = self.bus.tick(spent);

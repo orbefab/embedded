@@ -252,6 +252,29 @@ impl Core {
         }
     }
 
+    /// Runs free ops while each ends before cycle `bound`. Returns the cycles of the op that
+    /// reached `bound`, which the caller still retires through the bus, or `None` before an op
+    /// that is not free.
+    #[inline(always)]
+    pub(crate) fn run_free(&mut self, bound: u64) -> Option<u64> {
+        let mut op = self.op(self.pc);
+        if !op.is_free() {
+            return None;
+        }
+        self.irq_delay = false;
+        loop {
+            let before = self.cycles;
+            self.execute_free(self.pc, op);
+            if self.cycles >= bound {
+                return Some(self.cycles.wrapping_sub(before));
+            }
+            op = self.op(self.pc);
+            if !op.is_free() {
+                return None;
+            }
+        }
+    }
+
     #[inline(always)]
     fn op(&self, pc: u16) -> Op {
         self.ops.get(usize::from(pc)).copied().unwrap_or(Op::Nop)

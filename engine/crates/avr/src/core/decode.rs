@@ -67,6 +67,7 @@ pub(super) enum Op {
     Sbic { addr: u16, b: u8, skip: u8 },
     Sbis { addr: u16, b: u8, skip: u8 },
     Bset(u8),
+    Sei,
     Bclr(u8),
     Com(u8),
     Neg(u8),
@@ -116,7 +117,103 @@ fn group(word: u16, following: u16, next: u16, pc_mask: u16, skip: u8) -> Op {
         .unwrap_or(Op::Unknown(word))
 }
 
+/// The ops that read and write only registers, `SREG` other than setting `I`, `PC` and the cycle
+/// count. They reach neither the bus nor the stack, and they do not stop or sleep the core.
+macro_rules! free_op {
+    () => {
+        Op::Nop
+            | Op::Add(..)
+            | Op::Adc(..)
+            | Op::Sub(..)
+            | Op::Sbc(..)
+            | Op::And(..)
+            | Op::Or(..)
+            | Op::Eor(..)
+            | Op::Mov(..)
+            | Op::Cp(..)
+            | Op::Cpc(..)
+            | Op::Cpse { .. }
+            | Op::Subi(..)
+            | Op::Sbci(..)
+            | Op::Andi(..)
+            | Op::Ori(..)
+            | Op::Ldi(..)
+            | Op::Cpi(..)
+            | Op::Adiw(..)
+            | Op::Sbiw(..)
+            | Op::Movw(..)
+            | Op::Mul(..)
+            | Op::Muls(..)
+            | Op::Mulsu(..)
+            | Op::Fmul(..)
+            | Op::Fmuls(..)
+            | Op::Fmulsu(..)
+            | Op::Lpm { .. }
+            | Op::Rjmp(_)
+            | Op::Brbs { .. }
+            | Op::Brbc { .. }
+            | Op::Jmp(_)
+            | Op::Ijmp
+            | Op::Bst { .. }
+            | Op::Bld { .. }
+            | Op::Sbrc { .. }
+            | Op::Sbrs { .. }
+            | Op::Bset(_)
+            | Op::Bclr(_)
+            | Op::Com(_)
+            | Op::Neg(_)
+            | Op::Swap(_)
+            | Op::Inc(_)
+            | Op::Asr(_)
+            | Op::Lsr(_)
+            | Op::Ror(_)
+            | Op::Dec(_)
+            | Op::Unknown(_)
+    };
+}
+
+/// Every op that is not [`free_op`].
+macro_rules! bus_op {
+    () => {
+        Op::Ldd { .. }
+            | Op::Std { .. }
+            | Op::In { .. }
+            | Op::Out { .. }
+            | Op::Lds { .. }
+            | Op::Sts { .. }
+            | Op::Ld { .. }
+            | Op::St { .. }
+            | Op::Pop(_)
+            | Op::Push(_)
+            | Op::Rcall(_)
+            | Op::Call(_)
+            | Op::Icall
+            | Op::Ret
+            | Op::Reti
+            | Op::Sbi { .. }
+            | Op::Cbi { .. }
+            | Op::Sbic { .. }
+            | Op::Sbis { .. }
+            | Op::Sei
+            | Op::Spm
+            | Op::Sleep
+            | Op::Wdr
+            | Op::Break
+    };
+}
+
+pub(super) use {bus_op, free_op};
+
 impl Op {
+    /// The op is a [`free_op`].
+    #[inline(always)]
+    pub(super) fn is_free(self) -> bool {
+        match self {
+            free_op!() => true,
+            bus_op!() => false,
+        }
+    }
+
     /// The instruction's length in flash words.
     fn words(self) -> u8 {
         match self {
@@ -330,10 +427,12 @@ fn bitop(word: u16, skip: u8) -> Option<Op> {
     }
     if (word & 0xFF0F) == 0x9408 {
         let s = ((word >> 4) & 0x7) as u8;
-        return Some(if (word & 0x0080) == 0 {
-            Op::Bset(s)
-        } else {
+        return Some(if (word & 0x0080) != 0 {
             Op::Bclr(s)
+        } else if s == 7 {
+            Op::Sei
+        } else {
+            Op::Bset(s)
         });
     }
     if (word & 0xFE00) != 0x9400 {
@@ -696,7 +795,7 @@ mod tests {
                 },
             ),
             (0x9468, 0x0000, 0x0010, Op::Bset(6)),
-            (0x9478, 0x0000, 0x0010, Op::Bset(7)),
+            (0x9478, 0x0000, 0x0010, Op::Sei),
             (0x94A8, 0x0000, 0x0010, Op::Bclr(2)),
             (0x9410, 0x0000, 0x0010, Op::Com(1)),
             (0x9421, 0x0000, 0x0010, Op::Neg(2)),

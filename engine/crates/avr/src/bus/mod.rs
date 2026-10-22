@@ -296,7 +296,9 @@ impl Bus {
         let end = self.cycle.wrapping_add(cycles);
         if !self.hold_any && end < self.next_event {
             self.cycle = end;
-            self.finish_host(end);
+            if self.needs_stamp || !self.host.pending.is_empty() {
+                self.finish_host(end);
+            }
             if self.windows {
                 self.finish_windows();
             }
@@ -309,6 +311,28 @@ impl Bus {
             self.finish_windows();
         }
         self.wdt_reset
+    }
+
+    /// Nothing waits on the next instruction to retire: no `TCNT` hold, no unstamped byte, no
+    /// enable window, no unflushed pin report and no halt. [`Self::tick`]'s fast path then only
+    /// moves the cycle.
+    #[inline(always)]
+    pub(crate) fn quiet(&self) -> bool {
+        !self.hold_any
+            && !self.needs_stamp
+            && !self.windows
+            && self.cpu_halt == 0
+            && self.host.pending.is_empty()
+    }
+
+    /// [`Self::tick`]'s fast path for `cycles` spent on a quiet bus that end before the next event.
+    #[inline(always)]
+    pub(crate) fn pass(&mut self, cycles: u64) {
+        self.cycle = self.cycle.wrapping_add(cycles);
+    }
+
+    pub(crate) fn cycle(&self) -> u64 {
+        self.cycle
     }
 
     pub(crate) fn next_event(&self) -> u64 {
