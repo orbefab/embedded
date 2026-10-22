@@ -14,8 +14,8 @@ pub(crate) const RELTOL: f64 = 1e-6;
 pub(crate) const VNTOL: f64 = 1e-9;
 pub(crate) const ABSTOL: f64 = 1e-12;
 
-/// A netlist with its rows assigned and its chips' watches declared. Read-only for the
-/// whole analysis.
+/// A netlist with its rows assigned and its chips' watches declared. Its schedules only grow,
+/// and only past the furthest time a step attempt has reached.
 pub(crate) struct Circuit {
     pub(crate) netlist: Netlist,
     pub(crate) layout: Layout,

@@ -102,7 +102,15 @@ fn run_with(
     columns: Columns,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Outcome {
-    match Session::open_recorded(netlist.clone(), transient, actives, budget, columns, rows) {
+    match Session::open_recorded(
+        netlist.clone(),
+        transient,
+        actives,
+        budget,
+        columns,
+        rows,
+        None,
+    ) {
         Ok(mut session) => {
             session.advance_to(transient.stop);
             session.finish(diagnostics)
@@ -257,7 +265,8 @@ impl Record {
 /// its next edge only, so no edge list is built and none is capped. Time only moves forward.
 pub(crate) struct Breakpoints {
     stop: Time,
-    /// Each part's next edge before `stop`, earliest first.
+    /// Each part's next edge before `stop`, earliest first. A part has at most one entry, so
+    /// no part is walked twice.
     edges: BinaryHeap<Reverse<(Time, PartId)>>,
     /// 1 ns after t = 0 and after each edge passed, before `stop`, ascending.
     ramp_ends: VecDeque<Time>,
@@ -301,6 +310,14 @@ impl Breakpoints {
         let edge = self.edges.peek().map_or(self.stop, |&Reverse((at, _))| at);
         let ramp_end = self.ramp_ends.front().copied().unwrap_or(self.stop);
         edge.min(ramp_end)
+    }
+
+    /// Part `id`'s edge at `at`, appended after every change it had, which is before `stop`. A
+    /// part with an entry waits on an earlier change, and its walk reaches `at` in turn.
+    pub(crate) fn arm(&mut self, id: PartId, at: Time) {
+        if !self.edges.iter().any(|&Reverse((_, part))| part == id) {
+            self.edges.push(Reverse((at, id)));
+        }
     }
 
     /// Whether a contact edge or a source jump falls at `at`, a time `next_after` returned.

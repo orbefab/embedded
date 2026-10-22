@@ -179,6 +179,7 @@ pub(super) fn open(netlist: &Netlist, chips: Vec<active::Chip>, budget: Budget) 
         budget,
         columns,
         Rows::Grid,
+        None,
     )
     .unwrap()
 }

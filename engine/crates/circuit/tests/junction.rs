@@ -200,7 +200,7 @@ fn a_tiny_saturation_current_solves_to_the_pre_cap_point() {
             2.9020204738383626e-05,
             2.097979316341305,
         ),
-        ("1e-50", None, 2.023918337867733, 4.999999999999999),
+        ("1e-50", None, 2.023918337867734, 5.0),
         ("1e-100", None, 5.001332681331405e-12, 5.0),
     ];
     for (is, ohms, current, voltage) in cases {

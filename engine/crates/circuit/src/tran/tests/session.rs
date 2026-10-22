@@ -13,10 +13,10 @@ use crate::session::{State, Status, attempt};
 use crate::topology;
 
 /// A seeded xorshift, so a failing chunking replays.
-struct Rng(u64);
+pub(super) struct Rng(pub(super) u64);
 
 impl Rng {
-    fn below(&mut self, n: u64) -> u64 {
+    pub(super) fn below(&mut self, n: u64) -> u64 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
@@ -25,7 +25,7 @@ impl Rng {
 }
 
 /// `examples/<name>`, its stop, step and grid cut to `stop_ps` at most.
-fn example(name: &str, stop_ps: u64) -> Vec<u8> {
+pub(super) fn example(name: &str, stop_ps: u64) -> Vec<u8> {
     let path = format!(
         "{}/../../examples/{name}/netlist.json",
         env!("CARGO_MANIFEST_DIR")
@@ -40,7 +40,7 @@ fn example(name: &str, stop_ps: u64) -> Vec<u8> {
 }
 
 /// The results `simulate` gives, with each step's Newton budget and the step limit from `budget`.
-fn batch(netlist: &Netlist, budget: Budget) -> Results {
+pub(super) fn batch(netlist: &Netlist, budget: Budget) -> Results {
     let mut diagnostics = topology::floating_nets(netlist);
     let outcome = run_with(
         netlist,
@@ -54,14 +54,19 @@ fn batch(netlist: &Netlist, budget: Budget) -> Results {
     Results::new(outcome.observations, outcome.trace, diagnostics)
 }
 
-fn finish(session: Session, netlist: &Netlist) -> Results {
+pub(super) fn finish(session: Session, netlist: &Netlist) -> Results {
     let mut diagnostics = topology::floating_nets(netlist);
     let outcome = session.finish(&mut diagnostics);
     Results::new(outcome.observations, outcome.trace, diagnostics)
 }
 
 /// Each run folder file is the same bytes, rendered at timestamp 0.
-fn assert_same_folder(input: &[u8], netlist: &Netlist, session: &Results, batch: &Results) {
+pub(super) fn assert_same_folder(
+    input: &[u8],
+    netlist: &Netlist,
+    session: &Results,
+    batch: &Results,
+) {
     let render = |results| {
         run_folder::render(
             input,
@@ -132,7 +137,7 @@ fn input_in_chunks_writes_the_batch_folder(
     batch
 }
 
-const AVR_STOP_PS: u64 = 50_000_000_000;
+pub(super) const AVR_STOP_PS: u64 = 50_000_000_000;
 
 #[test]
 fn atmega_analog_serial_in_chunks_writes_the_batch_folder() {
@@ -182,7 +187,7 @@ fn v_pulse_rc_in_chunks_writes_the_batch_folder() {
 /// 1 V through 1 kohm into 30 pF, which a 1 ohm switch shorts at 5.5 ns into a 30 ps mode,
 /// beside 10 pF held at 1 V that discharges through 1 kohm. The steps after the edge stiffen
 /// `cf`, and the 1 ns grid puts rows inside them.
-const STIFF_ROW: &[u8] = br#"{
+pub(super) const STIFF_ROW: &[u8] = br#"{
   "version": 0,
   "seed": 0,
   "analysis": { "transient": { "stop_ps": 200000, "max_step_ps": 5000, "grid_ps": 1000 } },

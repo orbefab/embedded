@@ -3,6 +3,7 @@
 use std::f64::consts::SQRT_2;
 
 pub mod bounce;
+mod document;
 mod json;
 mod waveform;
 
@@ -13,6 +14,7 @@ use crate::finite::Finite;
 use crate::name::{Name, Quantity};
 use crate::time::Time;
 
+pub use document::Document;
 pub use waveform::{Pulse, Shape, Step, Waveform};
 
 /// The netlist `version`s this engine reads, ascending. See docs/versions.md.
@@ -77,6 +79,32 @@ impl Netlist {
 
     pub fn part(&self, id: PartId) -> &Part {
         &self.parts[id.index()]
+    }
+
+    pub fn part_id(&self, name: &Name) -> Option<PartId> {
+        let k = self
+            .parts
+            .binary_search_by(|part| part.name.cmp(name))
+            .ok()?;
+        Some(PartId(k as u32))
+    }
+
+    /// Appends `edge` to switch `id`'s events, with the bounce parse draws for an event at
+    /// that index. `edge.at` is a time `Switch::earliest` returned, and `edge` flips the
+    /// contact. Panics when `id` is not a switch.
+    pub fn append(&mut self, id: PartId, edge: Edge) {
+        let seed = self.seed;
+        let part = &mut self.parts[id.index()];
+        let Model::Switch(switch) = &mut part.model else {
+            panic!("{} is not a switch", part.name.as_str());
+        };
+        debug_assert_eq!(switch.earliest(edge.at), Some(edge.at));
+        debug_assert_ne!(switch.schedule.after(edge.at), edge.to);
+        let index = switch.events.len() as u64;
+        switch.events.push(edge);
+        let bounce = switch.bounce.as_ref();
+        let edges = bounce::expand_event(seed, &part.name, index, edge, bounce);
+        switch.schedule.edges.extend(edges);
     }
 }
 
@@ -348,6 +376,24 @@ impl Switch {
             Contact::Closed => &self.on_resistance,
         }
     }
+
+    /// The first time at or after `from` that one more event passes the schedule rules: after
+    /// t = 0, and after the last event's bounce window and `MIN_GAP_PS` more. `None` when
+    /// that time or its own window would pass the largest time.
+    pub fn earliest(&self, from: Time) -> Option<Time> {
+        let window = self.bounce.as_ref().map_or(0, |bounce| bounce.window.value);
+        let first = match self.events.last() {
+            None => 1,
+            Some(last) => last
+                .at
+                .as_ps()
+                .checked_add(window)?
+                .checked_add(Schedule::MIN_GAP_PS)?,
+        };
+        let at = from.as_ps().max(first);
+        at.checked_add(window)?;
+        Some(Time::from_ps(at))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -375,8 +421,8 @@ pub struct Edge {
     pub to: Contact,
 }
 
-/// A contact over time. Only parse builds one, so every edge is after t = 0,
-/// edges are at least `MIN_GAP_PS` apart, and each flips the contact.
+/// A contact over time. Only parse and `Netlist::append` build one, so every edge is after
+/// t = 0, edges are at least `MIN_GAP_PS` apart, and each flips the contact.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Schedule {
     initial: Contact,

@@ -4,6 +4,7 @@ mod breakpoints;
 mod events;
 mod failures;
 mod fixtures;
+mod inputs;
 mod limits;
 mod session;
 mod steps;

@@ -20,7 +20,7 @@ use sim_core::run_folder::{Observations, Results};
 
 use crate::tran::Rows;
 
-pub use session::{Probe, Refused, Session, Status};
+pub use session::{Applied, Input, Probe, Refused, Rejected, Session, Setting, Status};
 
 /// Accepted steps after t = 0, and chip stops on those steps, summed over chips.
 ///

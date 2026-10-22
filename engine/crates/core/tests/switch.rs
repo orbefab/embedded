@@ -263,3 +263,83 @@ fn bounce_values_follow_the_value_rules() {
     let text = serde_json::to_string(&err[0]).unwrap();
     assert!(text.contains("missing field `bounce`"), "{text}");
 }
+
+fn only_switch(netlist: &netlist::Netlist) -> &netlist::Switch {
+    let Model::Switch(switch) = &netlist.parts().next().unwrap().1.model else {
+        panic!("not a switch");
+    };
+    switch
+}
+
+/// A switch with no events takes one at 1 ps. After an event the next waits out its bounce
+/// window and the gap, and one picosecond sooner is `too_close`.
+#[test]
+fn the_earliest_next_event_is_the_first_one_parse_accepts() {
+    let none = netlist::parse(switch("[]", &bounce("1000000", "4")).as_bytes()).unwrap();
+    let earliest = |netlist: &netlist::Netlist, from| {
+        only_switch(netlist)
+            .earliest(Time::from_ps(from))
+            .map(Time::as_ps)
+    };
+    assert_eq!(earliest(&none, 0), Some(1));
+    assert_eq!(earliest(&none, 5), Some(5));
+    assert_eq!(
+        earliest(&none, u64::MAX - 1_000_000),
+        Some(u64::MAX - 1_000_000)
+    );
+    assert_eq!(earliest(&none, u64::MAX - 999_999), None);
+
+    let one = r#"{ "t_ps": 2000000000, "state": "closed" }"#;
+    let bounced = switch(&format!("[{one}]"), &bounce("1000000", "4"));
+    let first = 2_000_000_000 + 1_000_000 + 2_000;
+    assert_eq!(
+        earliest(&netlist::parse(bounced.as_bytes()).unwrap(), 0),
+        Some(first)
+    );
+    let at = |t_ps: u64| {
+        switch(
+            &format!(r#"[{one}, {{ "t_ps": {t_ps}, "state": "open" }}]"#),
+            &bounce("1000000", "4"),
+        )
+    };
+    assert!(netlist::parse(at(first).as_bytes()).is_ok());
+    assert_eq!(
+        errors(&at(first - 1)),
+        [r##""netlist.schedule" ["#sw1"] {"event":1,"rule":"too_close"}"##]
+    );
+}
+
+/// Each appended event draws the bounce parse draws for an event at its index, so the
+/// netlist equals the parse of a document that lists every event.
+#[test]
+fn an_appended_event_bounces_as_parse_bounces_it() {
+    let event = |t_ps: u64, state: &str| format!(r#"{{ "t_ps": {t_ps}, "state": "{state}" }}"#);
+    let document =
+        |events: &[String]| switch(&format!("[{}]", events.join(", ")), &bounce("1000000", "4"));
+    let mut appended =
+        netlist::parse(document(&[event(2_000_000_000, "closed")]).as_bytes()).unwrap();
+    let mut events = vec![event(2_000_000_000, "closed")];
+    for (k, to) in [Contact::Open, Contact::Closed, Contact::Open]
+        .into_iter()
+        .enumerate()
+    {
+        let from = Time::from_ps(5_000_000_000 * (k as u64 + 1));
+        let at = only_switch(&appended).earliest(from).unwrap();
+        let id = appended.parts().next().unwrap().0;
+        appended.append(id, netlist::Edge { at, to });
+        let state = if to == Contact::Open {
+            "open"
+        } else {
+            "closed"
+        };
+        events.push(event(at.as_ps(), state));
+        let parsed = netlist::parse(document(&events).as_bytes()).unwrap();
+        assert!(only_switch(&parsed).schedule.edges().len() > 2 * events.len());
+        assert_eq!(
+            only_switch(&appended),
+            only_switch(&parsed),
+            "event {}",
+            k + 1
+        );
+    }
+}

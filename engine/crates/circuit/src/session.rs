@@ -2,7 +2,7 @@ use sim_core::diagnostic::{Diagnostic, Solve};
 use sim_core::finite::Finite;
 use sim_core::logic::Level;
 use sim_core::name::Ref;
-use sim_core::netlist::{Analysis, Netlist, Transient};
+use sim_core::netlist::{Analysis, Document, Netlist, Transient};
 use sim_core::time::Time;
 
 use crate::RunStats;
@@ -18,6 +18,10 @@ use crate::op;
 use crate::step::Plan;
 use crate::tran::{Breakpoints, Outcome, Record, Rows};
 use crate::watch::{self, Levels};
+
+mod input;
+
+pub use input::{Applied, Input, Rejected, Setting};
 
 const STEP_BUDGET: u32 = 50;
 
@@ -67,6 +71,9 @@ pub(crate) struct Accepted {
     chips: Vec<chip::State>,
     /// Each watch's level at `at`.
     levels: Levels,
+    /// The furthest end of any attempt toward this step or one before it, rejected, stalled,
+    /// stiffened or cut by a watch. An edge there or later cuts none of them.
+    pub(crate) reach: Time,
 }
 
 /// A step from an accepted one that converged, passed its error check, is located at its
@@ -89,6 +96,9 @@ pub(crate) struct Landing {
     pub(crate) plan: Plan,
     /// The accepted segment with the capacitors a stiffen holds on backward Euler, when one did.
     pub(crate) stiffened: Option<Segment>,
+    /// The accepted step's reach, or the furthest end of an attempt toward this landing when
+    /// that is later.
+    pub(crate) reach: Time,
 }
 
 /// A transient run held between calls. `advance_to` accepts every step that lands by its time.
@@ -99,9 +109,9 @@ pub struct Session {
     pub(crate) circuit: Circuit,
     pub(crate) columns: Columns,
     transient: Transient,
-    budget: Budget,
+    pub(crate) budget: Budget,
     charges: Charges,
-    breakpoints: Breakpoints,
+    pub(crate) breakpoints: Breakpoints,
     pub(crate) actives: Actives,
     /// The plan for the step after the last accepted one, before any reject or stall.
     pub(crate) plan: Plan,
@@ -110,7 +120,9 @@ pub struct Session {
     signals: Vec<Ref>,
     /// The level of each signal at `now`, in the order of `signals`.
     logic: Vec<Level>,
-    record: Option<Record>,
+    pub(crate) record: Option<Record>,
+    /// The JSON the session opened from, which `export` writes back.
+    document: Option<Document>,
     pub(crate) state: State,
 }
 
@@ -167,6 +179,8 @@ pub enum Refused {
     /// `solver.too_large`, or the operating point at t = 0 failed to settle or gave a quantity
     /// that is not finite.
     Failed(Diagnostic),
+    /// The document `open_document` read is not a valid netlist.
+    Invalid(Vec<Diagnostic>),
 }
 
 /// Every analog column at one time, read in one call: each net's voltage, then each part's `i`,
@@ -216,13 +230,31 @@ impl Session {
     /// Solves the operating point at t = 0 and the step after it, and keeps no trace. The step
     /// after t = 0 can fail, and then the session it returns has faulted.
     pub fn open(netlist: Netlist) -> Result<Session, Refused> {
+        Session::open_with(netlist, None)
+    }
+
+    /// `open` on the netlist `json` parses to, keeping `json` so `export` can write it back.
+    pub fn open_document(json: &[u8]) -> Result<Session, Refused> {
+        let (document, netlist) = Document::parse(json).map_err(Refused::Invalid)?;
+        Session::open_with(netlist, Some(document))
+    }
+
+    fn open_with(netlist: Netlist, document: Option<Document>) -> Result<Session, Refused> {
         let transient = match netlist.analysis() {
             Analysis::Transient(transient) => *transient,
             Analysis::Op => return Err(Refused::Op),
         };
         let columns = Columns::new(&netlist);
-        Session::start(netlist, &transient, Vec::new(), BUDGET, columns, None)
-            .map_err(Refused::Failed)
+        Session::start(
+            netlist,
+            &transient,
+            Vec::new(),
+            BUDGET,
+            columns,
+            None,
+            document,
+        )
+        .map_err(Refused::Failed)
     }
 
     pub(crate) fn open_recorded(
@@ -232,8 +264,17 @@ impl Session {
         budget: Budget,
         columns: Columns,
         rows: Rows,
+        document: Option<Document>,
     ) -> Result<Session, Diagnostic> {
-        Session::start(netlist, transient, actives, budget, columns, Some(rows))
+        Session::start(
+            netlist,
+            transient,
+            actives,
+            budget,
+            columns,
+            Some(rows),
+            document,
+        )
     }
 
     /// Solves t = 0 and records it when `rows` is set, then solves the step after it. Fails only
@@ -245,6 +286,7 @@ impl Session {
         budget: Budget,
         columns: Columns,
         rows: Option<Rows>,
+        document: Option<Document>,
     ) -> Result<Session, Diagnostic> {
         let circuit = Circuit::with_actives(netlist, actives)?;
         let charges = Charges::new(&circuit.netlist, &circuit.layout);
@@ -291,6 +333,7 @@ impl Session {
             segment,
             chips: start.chips,
             levels: start.levels,
+            reach: Time::ZERO,
         };
         let mut session = Session {
             circuit,
@@ -305,6 +348,7 @@ impl Session {
             signals,
             logic,
             record,
+            document,
             state: State::TAKEN,
         };
         session.state = session.solved(accepted);
@@ -458,6 +502,7 @@ impl Session {
         // Newton iterations over every stalled attempt since the last accepted step. An attempt
         // rejected for its error converged, and does not count.
         let mut iterations = 0;
+        let mut reach = accepted.reach;
         loop {
             let segment = stiffened.as_ref().unwrap_or(&accepted.segment);
             let h = plan.clip(
@@ -465,6 +510,7 @@ impl Session {
                 self.breakpoints.next_after(&circuit.netlist, accepted.at),
             );
             let at = self.actives.horizon(Time::from_ps(accepted.at.as_ps() + h));
+            reach = reach.max(at);
             let h = at.as_ps() - accepted.at.as_ps();
             let cores = self.actives.cores();
             match attempt(
@@ -548,6 +594,7 @@ impl Session {
                         row,
                         plan,
                         stiffened,
+                        reach,
                     });
                 }
                 Err(Failure::Singular { row }) => {
@@ -611,6 +658,7 @@ impl Session {
             row,
             plan,
             stiffened,
+            reach,
         } = landing;
         let circuit = &self.circuit;
         let charges = &self.charges;
@@ -685,6 +733,7 @@ impl Session {
                 segment,
                 chips: held.chips,
                 levels: held.levels,
+                reach,
             }
         } else {
             Accepted {
@@ -699,6 +748,7 @@ impl Session {
                 restart_row: None,
                 chips,
                 levels: levels.clone(),
+                reach,
             }
         };
         // A step cut short by a breakpoint or a watch keeps the step it wanted.

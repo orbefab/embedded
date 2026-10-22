@@ -6,37 +6,46 @@ use crate::name::Name;
 use crate::time::Time;
 
 /// Every event with its bounce edges, ascending. `events` and `bounce` passed parse.
+pub fn expand(seed: u64, name: &Name, events: &[Edge], bounce: Option<&Bounce>) -> Vec<Edge> {
+    (0..)
+        .zip(events)
+        .flat_map(|(index, &event)| expand_event(seed, name, index, event, bounce))
+        .collect()
+}
+
+/// Event `index` with its bounce edges, ascending. No other event moves them.
 /// `window` is at least `2 * max_bounces * MIN_GAP_PS`.
 ///
-/// Event `k` draws from `stream(seed, name, k)`: a count `n` in `1..=max_bounces`,
+/// It draws from `stream(seed, name, index)`: a count `n` in `1..=max_bounces`,
 /// then `2n` values in `0..=slack` with `slack = window - 2n * MIN_GAP_PS`, sorted.
 /// The `j`-th value plus `j * MIN_GAP_PS` is the offset of the `j`-th flip, so
 /// flips are `MIN_GAP_PS` apart, the first is `MIN_GAP_PS` after the event, and
 /// the last lands within `window`.
-pub fn expand(seed: u64, name: &Name, events: &[Edge], bounce: Option<&Bounce>) -> Vec<Edge> {
-    if let Some(bounce) = bounce {
-        debug_assert!(bounce.window.value >= 2 * bounce.max_bounces.value * Schedule::MIN_GAP_PS);
-    }
-    let mut edges = Vec::new();
-    for (index, event) in events.iter().enumerate() {
-        edges.push(*event);
-        let Some(bounce) = bounce else {
-            continue;
-        };
-        let mut rng = stream(seed, name, index as u64);
-        let flips = 2 * (1 + rng.below(bounce.max_bounces.value));
-        let slack = bounce.window.value - flips * Schedule::MIN_GAP_PS;
-        let mut draws: Vec<u64> = (0..flips).map(|_| rng.below(slack + 1)).collect();
-        draws.sort_unstable();
-        let mut contact = event.to;
-        for (j, draw) in (1..).zip(draws) {
-            contact = contact.flipped();
-            let offset = draw + j * Schedule::MIN_GAP_PS;
-            edges.push(Edge {
-                at: Time::from_ps(event.at.as_ps() + offset),
-                to: contact,
-            });
-        }
+pub fn expand_event(
+    seed: u64,
+    name: &Name,
+    index: u64,
+    event: Edge,
+    bounce: Option<&Bounce>,
+) -> Vec<Edge> {
+    let mut edges = vec![event];
+    let Some(bounce) = bounce else {
+        return edges;
+    };
+    debug_assert!(bounce.window.value >= 2 * bounce.max_bounces.value * Schedule::MIN_GAP_PS);
+    let mut rng = stream(seed, name, index);
+    let flips = 2 * (1 + rng.below(bounce.max_bounces.value));
+    let slack = bounce.window.value - flips * Schedule::MIN_GAP_PS;
+    let mut draws: Vec<u64> = (0..flips).map(|_| rng.below(slack + 1)).collect();
+    draws.sort_unstable();
+    let mut contact = event.to;
+    for (j, draw) in (1..).zip(draws) {
+        contact = contact.flipped();
+        let offset = draw + j * Schedule::MIN_GAP_PS;
+        edges.push(Edge {
+            at: Time::from_ps(event.at.as_ps() + offset),
+            to: contact,
+        });
     }
     edges
 }

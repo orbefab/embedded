@@ -3,9 +3,10 @@
 mod common;
 
 use common::{resistor, source_on, transient};
-use sim_circuit::{Refused, Session, Status};
+use sim_circuit::{Input, Refused, Session, Setting, Status};
 use sim_core::diagnostic::Diagnostic;
-use sim_core::netlist::{self, Netlist};
+use sim_core::name::Name;
+use sim_core::netlist::{self, Contact, Model, Netlist};
 use sim_core::time::Time;
 
 /// A seeded xorshift, so a failing run of calls replays.
@@ -240,4 +241,32 @@ fn a_grid_past_the_row_limit_still_opens_a_session() {
     let probe = session.probe();
     assert_eq!(probe.at(), at);
     assert_eq!(probe.get(&"#net.vin".parse().unwrap()).unwrap().get(), 5.0);
+}
+
+/// A session opened on a document exports it with each input in its switch's events. One
+/// opened on a netlist has no document to export.
+#[test]
+fn a_session_opened_on_a_document_exports_its_inputs() {
+    let json = std::fs::read(example_path("rc-switch")).unwrap();
+    let mut session = Session::open_document(&json).unwrap();
+    session.advance_to(Time::from_ps(40_000_000_000));
+    let input = Input {
+        part: Name::new("sw1").unwrap(),
+        at: Time::ZERO,
+        setting: Setting::Contact(Contact::Closed),
+    };
+    let landed = session.apply(&input).unwrap().at;
+    assert_eq!(session.advance_to(Time::from_ps(u64::MAX)), Status::Stopped);
+    let exported = netlist::parse(&session.export().unwrap()).unwrap();
+    let id = exported.part_id(&input.part).unwrap();
+    let Model::Switch(switch) = &exported.part(id).model else {
+        panic!("sw1 is a switch");
+    };
+    let last = switch.events.last().unwrap();
+    assert_eq!((last.at, last.to), (landed, Contact::Closed));
+    assert_eq!(Session::open(exported).unwrap().export(), None);
+    assert!(matches!(
+        Session::open_document(b"{}"),
+        Err(Refused::Invalid(_))
+    ));
 }
