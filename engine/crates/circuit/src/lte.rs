@@ -121,6 +121,7 @@ impl Swing {
 }
 
 /// The accepted points since the segment started, as far as the next step needs them.
+#[derive(Clone)]
 pub(crate) enum Segment {
     /// One point. The next step is backward Euler. `span` is the circuit's span at that
     /// point, and it caps the first step's look-ahead.
@@ -142,6 +143,7 @@ pub(crate) enum Segment {
 /// mode faster than any step, on which the trapezoidal rule rings, so it takes backward
 /// Euler. Backward Euler damps that mode by `1 + h/tau` a step, so once the step has grown
 /// they try the trapezoidal rule again.
+#[derive(Clone)]
 pub(crate) enum Stiff {
     /// On backward Euler, ascending. After an accepted step of `retry` ps or more, the next
     /// step tries them on the trapezoidal rule.

@@ -109,7 +109,7 @@ pub(super) fn run_active(netlist: &Netlist, chips: Vec<active::Chip>) -> (Trace,
         chips,
         BUDGET,
         Rows::Steps,
-        &columns,
+        columns,
         &mut diagnostics,
     );
     (outcome.trace.unwrap(), diagnostics)

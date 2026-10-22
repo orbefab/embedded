@@ -5,4 +5,5 @@ mod events;
 mod failures;
 mod fixtures;
 mod limits;
+mod session;
 mod steps;

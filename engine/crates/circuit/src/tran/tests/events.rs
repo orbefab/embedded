@@ -85,7 +85,7 @@ fn a_stalled_probe_ends_the_run_and_names_the_probe() {
         Vec::new(),
         Budget { probe: 1, ..BUDGET },
         Rows::Grid,
-        &columns,
+        columns,
         &mut diagnostics,
     );
     let end = reached(&outcome).as_ps();
@@ -121,7 +121,7 @@ fn with_row_budget(netlist: &Netlist, grid: u64, row: u32) -> (Outcome, Vec<Diag
         Vec::new(),
         Budget { row, ..BUDGET },
         Rows::Grid,
-        &Columns::new(netlist),
+        Columns::new(netlist),
         &mut diagnostics,
     );
     (outcome, diagnostics)
@@ -329,23 +329,26 @@ fn led_charge() -> Netlist {
 #[test]
 fn a_row_whose_second_solve_converges_is_solved() {
     let netlist = led_charge();
-    let (outcome, none) = with_row_budget(&netlist, transient(&netlist).grid, 3);
+    let mut session = open(&netlist, Vec::new(), Budget { row: 3, ..BUDGET });
+    let mut retried = Vec::new();
+    while let Some(span) = session.span() {
+        for at in Rows::Grid.rows_in(transient(&netlist), span.from.at, span.to.at) {
+            if span.solve(at, &span.from.iterate).is_err() {
+                retried.push((at, span.solve(at, &span.to.converged.iterate)));
+            }
+        }
+        let landing = span.to.at;
+        session.advance_to(landing);
+    }
+    let mut none = Vec::new();
+    let trace = session.finish(&mut none).trace.unwrap();
     assert_eq!(none, []);
-    let trace = outcome.trace.unwrap();
-    let retried: Vec<_> = outcome
-        .row_solves
-        .iter()
-        .filter(|solves| solves.from_accepted.is_err())
-        .collect();
     assert!(!retried.is_empty());
-    for RowSolves {
-        at, from_step_end, ..
-    } in retried
-    {
-        let Some(Ok(solved)) = from_step_end else {
+    for (at, from_step_end) in retried {
+        let Ok(solved) = from_step_end else {
             panic!("the row at {at:?} did not solve from the step's end: {from_step_end:?}");
         };
-        let row = trace.time().binary_search(at).unwrap();
+        let row = trace.time().binary_search(&at).unwrap();
         for (j, quantity) in trace.columns().iter().enumerate() {
             assert_eq!(
                 trace.column(j)[row].to_bits(),

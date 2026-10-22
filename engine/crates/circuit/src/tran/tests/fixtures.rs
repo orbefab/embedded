@@ -168,3 +168,34 @@ pub(super) fn trapezoidal(v_src: f64, v0: f64, i0: f64, h_ps: u64, g_load: f64) 
     let two_c_over_h = 2e-9 / h;
     (g_series * v_src + two_c_over_h * v0 + i0) / (g_series + g_load + two_c_over_h)
 }
+
+/// A session on the grid, opened with `chips` beside the netlist's.
+pub(super) fn open(netlist: &Netlist, chips: Vec<active::Chip>, budget: Budget) -> Session<'_> {
+    let columns = Columns::new(netlist);
+    Session::open_recorded(
+        netlist,
+        &transient(netlist),
+        chips,
+        budget,
+        columns,
+        Rows::Grid,
+    )
+    .unwrap()
+}
+
+impl Session<'_> {
+    /// From the last accepted step to the step after it, while the session runs.
+    pub(super) fn span(&self) -> Option<Span<'_>> {
+        let State::Running { accepted, next, .. } = &self.state else {
+            return None;
+        };
+        Some(Span {
+            circuit: &self.circuit,
+            columns: &self.columns,
+            cores: self.actives.cores(),
+            budget: self.budget.row,
+            from: accepted,
+            to: next,
+        })
+    }
+}

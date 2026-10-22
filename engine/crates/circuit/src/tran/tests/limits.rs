@@ -212,7 +212,7 @@ fn a_dense_pulse_stops_at_the_step_limit_and_keeps_what_it_reached() {
             ..BUDGET
         },
         Rows::Grid,
-        &columns,
+        columns,
         &mut diagnostics,
     );
     let end = reached(&outcome);
@@ -245,7 +245,7 @@ fn a_failed_runs_last_interval_ends_at_its_off_grid_last_step() {
         Vec::new(),
         Budget { steps: 8, ..BUDGET },
         Rows::Grid,
-        &columns,
+        columns,
         &mut diagnostics,
     );
     let end = reached(&outcome);
@@ -268,7 +268,7 @@ fn a_failed_runs_last_interval_ends_at_its_off_grid_last_step() {
         Vec::new(),
         Budget { steps: 8, ..BUDGET },
         Rows::Steps,
-        &columns,
+        Columns::new(&netlist),
         &mut step_diagnostics,
     );
     assert_eq!(
@@ -315,7 +315,7 @@ fn in_step_rows_mode_each_interval_holds_exactly_its_two_rows() {
         Vec::new(),
         BUDGET,
         Rows::Steps,
-        &columns,
+        columns,
         &mut diagnostics,
     );
     let trace = outcome.trace.expect("the steps run keeps its rows");
@@ -340,7 +340,7 @@ fn a_rating_survives_a_convergence_failure() {
         Vec::new(),
         Budget { step: 1, ..BUDGET },
         Rows::Grid,
-        &columns,
+        columns,
         &mut diagnostics,
     );
     assert!(reached(&outcome) < transient(&netlist).stop);
