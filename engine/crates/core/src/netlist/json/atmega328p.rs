@@ -152,7 +152,7 @@ fn resolve_fuses(part: &Ref, wire: &WireFuses, out: &mut Vec<Diagnostic>) -> Opt
             ok = false;
             out.push(Diagnostic::NetlistValue {
                 part: part.clone(),
-                field,
+                field: field.into(),
                 value: f64::from(byte),
                 rule: ValueRule::Unsupported,
             });
@@ -177,7 +177,7 @@ fn resolve_threshold(
     if low.si.get() > high.si.get() {
         out.push(Diagnostic::NetlistValue {
             part: part.clone(),
-            field: low_field,
+            field: low_field.into(),
             value: low.si.get(),
             rule: ValueRule::AboveHigh,
         });

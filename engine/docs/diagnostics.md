@@ -183,15 +183,19 @@ One analysis can break more than one rule.
 
 ## netlist.schedule
 
-Severity `error`. Refs is the switch. `t_ps` is `null`.
+Severity `error`. Refs is the part. `t_ps` is `null`.
 
-The message names the event by its index in `events`, for example:
+The message names the event by its index in `field`. `field` is `events` for a switch, `voltage.events` or `current.events` for a `steps` source, and `position.events` for a potentiometer. Only the message reads `field`. `data` holds `event` and `rule`.
+
+A switch that is too close says, for example:
 
 ```text
 #sw1 events[1] is less than 2000 ps after the previous event and its bounce window
 ```
 
-`data` holds `event` and `rule`. `rule` is `at_zero`, `same_state`, `not_increasing`, `too_close`, or `overflow`, as [netlist.md](netlist.md#switch) defines them. Each broken event is one diagnostic. After `overflow`, later events of that switch are not checked. An event that is not after the previous one says `#sw1 events[1] is not after the previous event`.
+A source level that is too close says `#v1 voltage.events[1] is less than 2000 ps after the previous event`. A potentiometer position uses that sentence on `position.events`. A level that does not change says `#v1 voltage.events[1] does not change the level`. A switch that does not change says the contact does not change. `at_zero`, `not_increasing`, and `overflow` use the same sentence for every field.
+
+`rule` is `at_zero`, `same_state`, `not_increasing`, `too_close`, or `overflow`, as [netlist.md](netlist.md#switch) defines them for a switch and [netlist.md](netlist.md#source-waveforms) defines them for a level. Each broken event is one diagnostic. After `overflow`, later events of that part are not checked. An event that is not after the previous one says `#sw1 events[1] is not after the previous event`.
 
 ## netlist.waveform
 

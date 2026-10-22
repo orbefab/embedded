@@ -233,7 +233,11 @@ impl Side {
         }
     }
 
-    pub(crate) fn contact(self, schedule: &Schedule, at: Time) -> Contact {
+    pub(crate) fn contact(self, schedule: &Schedule<Contact>, at: Time) -> Contact {
+        *self.read(schedule, at)
+    }
+
+    pub(crate) fn read<T>(self, schedule: &Schedule<T>, at: Time) -> &T {
         match self {
             Side::Before => schedule.before(at),
             Side::After => schedule.after(at),

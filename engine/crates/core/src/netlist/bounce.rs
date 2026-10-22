@@ -1,7 +1,7 @@
 //! Seeded contact bounce. Integer arithmetic only, so the reference script
 //! reproduces it exactly. The constants are SplitMix64's and FNV-1a's.
 
-use super::{Bounce, Edge, Schedule};
+use super::{Bounce, Edge, MIN_GAP_PS};
 use crate::name::Name;
 use crate::time::Time;
 
@@ -32,16 +32,16 @@ pub fn expand_event(
     let Some(bounce) = bounce else {
         return edges;
     };
-    debug_assert!(bounce.window.value >= 2 * bounce.max_bounces.value * Schedule::MIN_GAP_PS);
+    debug_assert!(bounce.window.value >= 2 * bounce.max_bounces.value * MIN_GAP_PS);
     let mut rng = stream(seed, name, index);
     let flips = 2 * (1 + rng.below(bounce.max_bounces.value));
-    let slack = bounce.window.value - flips * Schedule::MIN_GAP_PS;
+    let slack = bounce.window.value - flips * MIN_GAP_PS;
     let mut draws: Vec<u64> = (0..flips).map(|_| rng.below(slack + 1)).collect();
     draws.sort_unstable();
     let mut contact = event.to;
     for (j, draw) in (1..).zip(draws) {
         contact = contact.flipped();
-        let offset = draw + j * Schedule::MIN_GAP_PS;
+        let offset = draw + j * MIN_GAP_PS;
         edges.push(Edge {
             at: Time::from_ps(event.at.as_ps() + offset),
             to: contact,
@@ -153,7 +153,7 @@ mod tests {
         }];
         let bounce = Bounce {
             window: IntValue {
-                value: 2 * Schedule::MIN_GAP_PS,
+                value: 2 * MIN_GAP_PS,
                 source: Source::User,
             },
             max_bounces: IntValue {

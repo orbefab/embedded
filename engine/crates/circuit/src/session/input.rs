@@ -67,7 +67,7 @@ impl Session {
             .earliest(from)
             .filter(|&at| at < self.transient.stop)
             .ok_or(Rejected::PastStop)?;
-        if switch.schedule.after(at) == to {
+        if *switch.schedule.after(at) == to {
             return Err(Rejected::NoChange);
         }
         self.circuit.netlist.append(id, Edge { at, to });

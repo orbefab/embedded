@@ -53,7 +53,8 @@ fn a_potentiometer_parses_its_pins_resistance_and_position() {
     assert_eq!(netlist.net_name(pot.pins[1]).as_str(), "mid");
     assert_eq!(netlist.net_name(pot.pins[2]).as_str(), "gnd");
     assert_eq!(pot.resistance.si.get(), 10000.0);
-    assert_eq!(pot.position.si.get(), 0.3);
+    assert!(pot.position.events().is_empty());
+    assert_eq!(pot.position.initial().si.get(), 0.3);
 }
 
 #[test]
@@ -160,4 +161,244 @@ fn each_leg_uses_the_resistor_rule_on_field_resistance() {
         errors(&pot("1e-10", "1e-320")),
         [r##""netlist.value" ["#rv1"] {"field":"resistance","rule":"positive","value":0.0}"##]
     );
+}
+
+fn steps_position(initial: &str, events: &str) -> String {
+    format!(
+        r#"{{ "kind": "steps", "initial": {initial}, "events": [{events}] }}"#,
+        initial = value(initial, "1"),
+        events = events,
+    )
+}
+
+fn level_event(t_ps: &str, number: &str, unit: &str) -> String {
+    format!(r#"{{ "t_ps": {t_ps}, "level": {} }}"#, value(number, unit))
+}
+
+fn pot_position(resistance: &str, position: &str) -> String {
+    document(&fields(&value(resistance, "ohm"), position))
+}
+
+#[test]
+fn a_steps_position_moves_at_each_event_and_an_empty_list_stays_put() {
+    let moving = pot_position(
+        "10000.0",
+        &steps_position("0.25", &level_event("5000", "0.75", "1")),
+    );
+    let netlist = netlist::parse(moving.as_bytes()).unwrap();
+    let (_, part) = netlist.parts().next().unwrap();
+    let Model::Potentiometer(pot) = &part.model else {
+        panic!("{:?}", part.model);
+    };
+    assert_eq!(pot.position.initial().si.get(), 0.25);
+    assert_eq!(pot.position.events().len(), 1);
+    assert_eq!(pot.position.events()[0].at, Time::from_ps(5_000));
+    assert_eq!(pot.position.events()[0].to.si.get(), 0.75);
+    assert_eq!(
+        part.model.next_change_after(Time::ZERO),
+        Some(Time::from_ps(5_000))
+    );
+
+    let fixed = pot_position("10000.0", &steps_position("0.3", ""));
+    let netlist = netlist::parse(fixed.as_bytes()).unwrap();
+    let (_, part) = netlist.parts().next().unwrap();
+    let Model::Potentiometer(pot) = &part.model else {
+        panic!("{:?}", part.model);
+    };
+    assert!(pot.position.events().is_empty());
+    assert_eq!(pot.position.initial().si.get(), 0.3);
+    assert!(part.model.next_change_after(Time::ZERO).is_none());
+}
+
+#[test]
+fn each_position_rule_names_its_event_and_the_largest_time_does_not_overflow() {
+    let schedule = |event: usize, rule: &str| {
+        format!(r##""netlist.schedule" ["#rv1"] {{"event":{event},"rule":"{rule}"}}"##)
+    };
+    let cases = [
+        (
+            steps_position("0.25", &level_event("0", "0.75", "1")),
+            vec![schedule(0, "at_zero")],
+        ),
+        (
+            steps_position("0.25", &level_event("2000", "0.25", "1")),
+            vec![schedule(0, "same_state")],
+        ),
+        (
+            steps_position(
+                "0.25",
+                &format!(
+                    "{}, {}",
+                    level_event("4000", "0.5", "1"),
+                    level_event("4000", "0.75", "1")
+                ),
+            ),
+            vec![schedule(1, "not_increasing")],
+        ),
+        (
+            steps_position(
+                "0.25",
+                &format!(
+                    "{}, {}",
+                    level_event("2000", "0.5", "1"),
+                    level_event("3999", "0.75", "1")
+                ),
+            ),
+            vec![schedule(1, "too_close")],
+        ),
+    ];
+    for (position, want) in cases {
+        assert_eq!(
+            errors(&pot_position("10000.0", &position)),
+            want,
+            "{position}"
+        );
+    }
+
+    let largest = steps_position("0.25", &level_event("18446744073709551615", "0.75", "1"));
+    let netlist = netlist::parse(pot_position("10000.0", &largest).as_bytes()).unwrap();
+    let Model::Potentiometer(pot) = &netlist.parts().next().unwrap().1.model else {
+        panic!("not a potentiometer");
+    };
+    assert_eq!(pot.position.events()[0].at, Time::from_ps(u64::MAX));
+}
+
+#[test]
+fn a_position_level_message_says_the_level_does_not_change() {
+    let json = pot_position(
+        "10000.0",
+        &steps_position("0.25", &level_event("2000", "0.25", "1")),
+    );
+    let doc = serde_json::to_value(&netlist::parse(json.as_bytes()).unwrap_err()[0]).unwrap();
+    assert_eq!(doc["data"]["rule"], "same_state");
+    assert_eq!(doc["data"]["event"], 0);
+    assert!(doc["data"].get("field").is_none());
+    assert_eq!(
+        doc["message"],
+        "#rv1 position.events[0] does not change the level"
+    );
+}
+
+#[test]
+fn a_position_too_close_names_no_bounce_window() {
+    let json = pot_position(
+        "10000.0",
+        &steps_position(
+            "0.25",
+            &format!(
+                "{}, {}",
+                level_event("2000", "0.5", "1"),
+                level_event("3999", "0.75", "1")
+            ),
+        ),
+    );
+    let doc = serde_json::to_value(&netlist::parse(json.as_bytes()).unwrap_err()[0]).unwrap();
+    assert_eq!(doc["data"]["event"], 1);
+    assert_eq!(doc["data"]["rule"], "too_close");
+    assert!(doc["data"].get("field").is_none());
+    assert_eq!(
+        doc["message"],
+        "#rv1 position.events[1] is less than 2000 ps after the previous event"
+    );
+}
+
+#[test]
+fn a_position_level_uses_its_own_field_for_unit_and_fraction() {
+    assert_eq!(
+        errors(&pot_position(
+            "10000.0",
+            &steps_position("0.3", &level_event("2000", "0.6", "V")),
+        )),
+        [
+            r##""netlist.unit" ["#rv1"] {"expected":"1","field":"position.events[0].level","found":"V"}"##
+        ]
+    );
+    assert_eq!(
+        errors(&pot_position("10000.0", &steps_position("0", ""),)),
+        [
+            r##""netlist.value" ["#rv1"] {"field":"position.initial","rule":"fraction","value":0.0}"##
+        ]
+    );
+    for (number, text) in [("0", "0.0"), ("1", "1.0"), ("2", "2.0")] {
+        assert_eq!(
+            errors(&pot_position(
+                "10000.0",
+                &steps_position("0.3", &level_event("2000", number, "1")),
+            )),
+            [format!(
+                r##""netlist.value" ["#rv1"] {{"field":"position.events[0].level","rule":"fraction","value":{text}}}"##
+            )],
+            "{number}"
+        );
+    }
+    let at_zero = steps_position("0.3", &level_event("0", "0.6", "V"));
+    assert_eq!(
+        errors(&pot_position("10000.0", &at_zero)),
+        [
+            r##""netlist.unit" ["#rv1"] {"expected":"1","field":"position.events[0].level","found":"V"}"##,
+            r##""netlist.schedule" ["#rv1"] {"event":0,"rule":"at_zero"}"##,
+        ]
+    );
+}
+
+#[test]
+fn a_steps_level_leg_uses_the_resistor_rule_on_field_resistance() {
+    let tiny = steps_position("0.5", &level_event("2000", "1e-320", "1"));
+    let reciprocal = netlist::parse(pot_position("1.0", &tiny).as_bytes()).unwrap_err();
+    assert_eq!(reciprocal.len(), 1, "{reciprocal:?}");
+    let text = serde_json::to_value(&reciprocal[0]).unwrap();
+    assert_eq!(text["code"], "netlist.value");
+    assert_eq!(text["data"]["field"], "resistance");
+    assert_eq!(text["data"]["rule"], "finite_reciprocal");
+    assert_eq!(text["data"]["value"].as_f64().unwrap(), 1e-320);
+
+    assert_eq!(
+        errors(&pot_position("1e-10", &tiny)),
+        [r##""netlist.value" ["#rv1"] {"field":"resistance","rule":"positive","value":0.0}"##]
+    );
+}
+
+#[test]
+fn a_step_or_pulse_position_is_a_syntax_error() {
+    let level = value("0.3", "1");
+    let cases = [
+        (
+            format!(
+                r#"{{ "kind": "step", "initial": {level}, "final": {level}, "at_ps": 2000 }}"#,
+                level = level,
+            ),
+            "unknown variant `step`",
+        ),
+        (
+            format!(
+                r#"{{ "kind": "pulse", "initial": {level}, "pulsed": {level}, "delay_ps": 2000, "width_ps": 2000, "period_ps": 5000 }}"#,
+                level = level,
+            ),
+            "unknown variant `pulse`",
+        ),
+        (
+            format!(
+                r#"{{ "value": 0.3, "kind": "steps", "initial": {level}, "events": [] }}"#,
+                level = level,
+            ),
+            "unknown field `value`",
+        ),
+        (
+            steps_position(
+                "0.3",
+                r#"{ "t_ps": 2000.5, "level": { "value": 0.4, "unit": "1", "source": "user" } }"#,
+            ),
+            "invalid type: floating point `2000.5`",
+        ),
+    ];
+    for (position, detail) in cases {
+        let found = netlist::parse(pot_position("10000.0", &position).as_bytes()).unwrap_err();
+        let [diagnostic] = found.as_slice() else {
+            panic!("{position} {found:?}");
+        };
+        let doc = serde_json::to_value(diagnostic).unwrap();
+        assert_eq!(doc["code"], "netlist.syntax", "{position}");
+        let found = doc["data"]["detail"].as_str().unwrap();
+        assert!(found.contains(detail), "{found} lacks {detail}");
+    }
 }

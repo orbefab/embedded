@@ -84,7 +84,7 @@ All three are JSON integers, like `seed`. They are the scenario's choices, so th
 
 The rows are t = 0, every multiple of `grid_ps` before `stop_ps`, and `stop_ps`. That is `ceil(stop_ps / grid_ps) + 1` rows. `stop_ps` need not be a multiple of `grid_ps`. The grid never changes the steps, and the longest step is at most `max_step_ps`. A row is a point sample of the solution at its time, solved from the last accepted step and never accepted, as [engine.md](engine.md#rows) says. Between the rows, `envelope.f64` holds each column's minimum and maximum over the two rows and every accepted step between them. [run-folder.md](run-folder.md#traces) says how to read them and how to pick `grid_ps`. A dense switch or source schedule costs steps, not rows, and can hit the run's step limit.
 
-The run solves the operating point at t = 0 first, with every capacitor open or held at its `initial` voltage, every switch at its `initial` contact, and every source at its value at t = 0, which is a waveform's `initial`. That is the initial condition. Then it steps to `stop_ps`. Every switch edge and every source jump before `stop_ps` takes effect at its picosecond. [engine.md](engine.md) describes how the engine steps there, how it finds chip events, and how accurate it is.
+The run solves the operating point at t = 0 first, with every capacitor open or held at its `initial` voltage, every switch at its `initial` contact, and every source at its value at t = 0, which is a waveform's `initial`. That is the initial condition. Then it steps to `stop_ps`. Every switch edge, every source jump, and every potentiometer move before `stop_ps` takes effect at its picosecond. [engine.md](engine.md) describes how the engine steps there, how it finds chip events, and how accurate it is.
 
 ## Names
 
@@ -110,7 +110,9 @@ Two nets, or two parts, with the same name are `netlist.duplicate`. The ref is `
 
 `kind` is `potentiometer`. Pins are `a`, `wiper`, and `b`, in that order. `a` to `wiper` is `position * resistance`. `wiper` to `b` is `(1 - position) * resistance`.
 
-`resistance` follows the resistor's rules, unit `ohm`. `position` is in `1`, greater than 0 and less than 1. A value at 0 or 1, or outside that range, is `netlist.value` with rule `fraction`. A different unit is `netlist.unit`.
+`resistance` follows the resistor's rules, unit `ohm`. `position` is a value in `1`, greater than 0 and less than 1, or a `steps` waveform in `1`, described in [Source waveforms](#source-waveforms). A value at 0 or 1, or outside that range, is `netlist.value` with rule `fraction` on field `position`. A `steps` level that breaks it uses that level's field, such as `position.initial` or `position.events[0].level`. A different unit is `netlist.unit` on that field. A `kind` of `step` or `pulse`, or any other kind, is `netlist.syntax`.
+
+A `steps` position follows the `steps` schedule rules on field `position.events`. An event moves the wiper, and the row at that time holds the position from before it.
 
 Each leg must be positive, and its reciprocal must be finite, the same check as `resistance`. A leg that breaks it is `netlist.value` on field `resistance`, and `value` is that leg.
 
@@ -156,6 +158,21 @@ A step holds `initial` until `at_ps`, then `final`.
 }
 ```
 
+A `steps` waveform holds `initial`, then each event's `level` from its `t_ps` on. `events` may be empty, and then the waveform holds `initial` at every time, the same as a value object. `examples/v-steps` steps from 0 V to 5 V at 99.5 ns and to 1 V at 9.9995 us.
+
+```json
+"voltage": {
+  "kind": "steps",
+  "initial": { "value": 0.0, "unit": "V", "source": "user" },
+  "events": [
+    { "t_ps": 2000, "level": { "value": 5.0, "unit": "V", "source": "user" } },
+    { "t_ps": 4000, "level": { "value": 1.0, "unit": "V", "source": "user" } }
+  ]
+}
+```
+
+An event that breaks a schedule rule is `netlist.schedule` on field `voltage.events` or `current.events`. The rules are the switch's, and a level has no bounce window. `same_state` means the event's SI value equals the level in force. `too_close` means the event is less than 2000 ps after the previous one. `overflow` does not fire: adding no window to a time cannot pass the largest time.
+
 A pulse holds `initial` until `delay_ps`, then `pulsed` for `width_ps`, then `initial` until the next period, every `period_ps`. `examples/current-pulse` uses this one. A single pulse is one whose next rise is past `stop_ps`.
 
 ```json
@@ -171,13 +188,13 @@ A pulse holds `initial` until `delay_ps`, then `pulsed` for `width_ps`, then `in
 
 Every change is an ideal jump. The level on the interval that ends at a jump is the old one, so a trace row at the time of a jump holds it. A jump at `stop_ps` leaves the last row on the old level. The operating point holds `initial`. An operating point run reads only that.
 
-A time that breaks a rule is `netlist.waveform`, with its dotted field, such as `current.width_ps`, and the rule. Every broken rule is reported.
+A `step` or `pulse` time that breaks a rule is `netlist.waveform`, with its dotted field, such as `current.width_ps`, and the rule. Every broken rule is reported.
 
 - `at_zero`: `at_ps` or `delay_ps` is 0. The operating point already holds `initial` there.
 - `too_close`: `width_ps` is under 2000, or `period_ps` is under `width_ps` plus 2000. Two jumps of one source are at least 2 ns apart, as two edges of one switch are.
 - `overflow`: `delay_ps` plus `width_ps` does not fit in an unsigned 64-bit integer.
 
-A jump between equal levels is still a jump. A missing or unknown key, a float or negative time, a `kind` other than `step` or `pulse`, and an object with both `value` and `kind` are `netlist.syntax`. A level in the wrong unit is `netlist.unit` with its dotted field, such as `current.pulsed`.
+A `step` or a `pulse` jump between equal levels is still a jump. A `steps` event whose level equals the level in force is `netlist.schedule` with `same_state`. A missing or unknown key, a float or negative time, a `kind` other than `step`, `pulse`, or `steps`, and an object with both `value` and `kind` are `netlist.syntax`. A level in the wrong unit is `netlist.unit` with its dotted field, such as `current.pulsed` or `voltage.events[2].level`. `steps` times are `netlist.schedule`, not `netlist.waveform`.
 
 ### Capacitor
 

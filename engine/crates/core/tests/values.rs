@@ -90,7 +90,11 @@ fn negative_voltage_is_legal() {
     let (_, v1) = netlist.parts().next().unwrap();
     match &v1.model {
         Model::VoltageSource(v) => {
-            assert!(matches!(v.voltage.shape(), Shape::Dc(dc) if dc.si.get() == -5.0))
+            assert!(matches!(
+                v.voltage.shape(),
+                Shape::Steps(schedule)
+                    if schedule.events().is_empty() && schedule.initial().si.get() == -5.0
+            ))
         }
         other => panic!("{other:?}"),
     }

@@ -1,6 +1,7 @@
-//! A source's `voltage` or `current`: today's value object for DC, or an object with
-//! `kind` for a timed shape.
+//! A source's `voltage` or `current`: a value object, or an object with `kind`.
+//! A value object is a `steps` waveform with no events.
 
+use std::borrow::Cow;
 use std::fmt;
 
 use serde::Deserialize;
@@ -9,7 +10,7 @@ use serde::de::{self, Deserializer, MapAccess, Visitor};
 use super::{WireValue, resolve_value};
 use crate::diagnostic::{Diagnostic, WaveformRule};
 use crate::name::Ref;
-use crate::netlist::{Schedule, Waveform};
+use crate::netlist::{MIN_GAP_PS, Source, Value, Waveform};
 use crate::time::Time;
 
 pub(super) enum WireWaveform {
@@ -33,6 +34,49 @@ pub(super) enum WireShape {
         width_ps: u64,
         period_ps: u64,
     },
+    Steps(WireSteps),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct WireSteps {
+    pub(super) initial: WireValue,
+    pub(super) events: Vec<WireLevel>,
+}
+
+/// One `steps` event. `level` is a value object. `t_ps` is a JSON integer.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct WireLevel {
+    pub(super) t_ps: u64,
+    pub(super) level: WireValue,
+}
+
+/// A potentiometer `position`: a value object, or `steps` and nothing else.
+/// `step` and `pulse` stay unknown variants, so they are `netlist.syntax`.
+pub(super) enum WirePosition {
+    Value(WireValue),
+    Steps(WireSteps),
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum StepsOnly {
+    Steps(WireSteps),
+}
+
+impl<'de> Deserialize<'de> for WirePosition {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let object = deserializer.deserialize_map(ObjectVisitor)?;
+        let shaped = object.contains_key("kind");
+        let object = serde_json::Value::Object(object);
+        if shaped {
+            StepsOnly::deserialize(object).map(|StepsOnly::Steps(steps)| WirePosition::Steps(steps))
+        } else {
+            WireValue::deserialize(object).map(WirePosition::Value)
+        }
+        .map_err(de::Error::custom)
+    }
 }
 
 /// The object is read whole and split on `kind`, so either spelling keeps serde's own
@@ -84,6 +128,7 @@ pub(super) struct Fields {
     delay: &'static str,
     width: &'static str,
     period: &'static str,
+    events: &'static str,
 }
 
 pub(super) const VOLTAGE: Fields = Fields {
@@ -96,6 +141,7 @@ pub(super) const VOLTAGE: Fields = Fields {
     delay: "voltage.delay_ps",
     width: "voltage.width_ps",
     period: "voltage.period_ps",
+    events: "voltage.events",
 };
 
 pub(super) const CURRENT: Fields = Fields {
@@ -108,6 +154,7 @@ pub(super) const CURRENT: Fields = Fields {
     delay: "current.delay_ps",
     width: "current.width_ps",
     period: "current.period_ps",
+    events: "current.events",
 };
 
 pub(super) fn resolve_waveform(
@@ -139,6 +186,7 @@ pub(super) fn resolve_waveform(
                 Waveform::step(initial, final_level, Time::from_ps(at_ps))
             })
         }
+        WireShape::Steps(steps) => resolve_steps(part, fields, steps, out),
         WireShape::Pulse {
             initial,
             pulsed,
@@ -146,7 +194,7 @@ pub(super) fn resolve_waveform(
             width_ps,
             period_ps,
         } => {
-            let gap = Schedule::MIN_GAP_PS;
+            let gap = MIN_GAP_PS;
             if delay_ps == 0 {
                 broken.push((fields.delay, delay_ps, WaveformRule::AtZero));
             }
@@ -184,4 +232,45 @@ pub(super) fn resolve_waveform(
             }),
     );
     waveform.filter(|_| ok)
+}
+
+fn resolve_steps(
+    part: &Ref,
+    fields: &Fields,
+    steps: WireSteps,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Waveform> {
+    let unit = fields.unit;
+    super::resolve_schedule(
+        part,
+        fields.events,
+        fields.initial,
+        steps.initial,
+        steps.events,
+        |field, wire, out| taken_level(part, field, unit, wire, out),
+        out,
+    )
+    .map(|(initial, events)| Waveform::steps(initial, events))
+}
+
+/// `resolve_value`, or the SI number alone when the unit is wrong, so a later
+/// schedule check can still compare levels.
+fn taken_level(
+    part: &Ref,
+    field: impl Into<Cow<'static, str>>,
+    unit: &'static str,
+    wire: WireValue,
+    out: &mut Vec<Diagnostic>,
+) -> (bool, Value) {
+    let si = wire.value;
+    match resolve_value(part, field, unit, false, wire, out) {
+        Some(value) => (true, value),
+        None => (
+            false,
+            Value {
+                si,
+                source: Source::User,
+            },
+        ),
+    }
 }

@@ -7,7 +7,7 @@ mod document;
 mod json;
 mod waveform;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::diagnostic::Diagnostic;
 use crate::finite::Finite;
@@ -99,12 +99,12 @@ impl Netlist {
             panic!("{} is not a switch", part.name.as_str());
         };
         debug_assert_eq!(switch.earliest(edge.at), Some(edge.at));
-        debug_assert_ne!(switch.schedule.after(edge.at), edge.to);
-        let index = switch.events.len() as u64;
-        switch.events.push(edge);
+        debug_assert_ne!(*switch.schedule.after(edge.at), edge.to);
+        let index = switch.events.events().len() as u64;
+        switch.events.events.push(edge);
         let bounce = switch.bounce.as_ref();
         let edges = bounce::expand_event(seed, &part.name, index, edge, bounce);
-        switch.schedule.edges.extend(edges);
+        switch.schedule.events.extend(edges);
     }
 }
 
@@ -262,14 +262,14 @@ impl Model {
         current.into_iter().chain(power).collect()
     }
 
-    /// The next contact edge or source jump strictly after `at`.
+    /// The next contact edge, source jump, or potentiometer move strictly after `at`.
     pub fn next_change_after(&self, at: Time) -> Option<Time> {
         match self {
             Model::VoltageSource(source) => source.voltage.next_change_after(at),
             Model::CurrentSource(source) => source.current.next_change_after(at),
             Model::Switch(switch) => switch.schedule.next_change_after(at),
+            Model::Potentiometer(pot) => pot.position.next_change_after(at),
             Model::Resistor(_)
-            | Model::Potentiometer(_)
             | Model::Diode(_)
             | Model::Led(_)
             | Model::Capacitor(_)
@@ -300,7 +300,7 @@ pub struct Potentiometer {
     /// Ohm, greater than 0.
     pub resistance: Value,
     /// Fraction of `resistance` from `a` to the wiper, in `(0, 1)`.
-    pub position: Value,
+    pub position: Schedule<Value>,
 }
 
 impl Potentiometer {
@@ -361,10 +361,10 @@ pub struct Switch {
     /// Ohm, greater than 0.
     pub off_resistance: Value,
     /// The netlist's own events, without bounce.
-    pub events: Vec<Edge>,
+    pub events: Schedule<Contact>,
     pub bounce: Option<Bounce>,
     /// `events` with their bounce expanded.
-    pub schedule: Schedule,
+    pub schedule: Schedule<Contact>,
 }
 
 impl Switch {
@@ -382,13 +382,13 @@ impl Switch {
     /// that time or its own window would pass the largest time.
     pub fn earliest(&self, from: Time) -> Option<Time> {
         let window = self.bounce.as_ref().map_or(0, |bounce| bounce.window.value);
-        let first = match self.events.last() {
+        let first = match self.events.events().last() {
             None => 1,
             Some(last) => last
                 .at
                 .as_ps()
                 .checked_add(window)?
-                .checked_add(Schedule::MIN_GAP_PS)?,
+                .checked_add(MIN_GAP_PS)?,
         };
         let at = from.as_ps().max(first);
         at.checked_add(window)?;
@@ -412,61 +412,79 @@ impl Contact {
     }
 }
 
-/// The contact becomes `to` at `at`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub struct Edge {
-    #[serde(rename = "t_ps")]
+/// The value becomes `to` at `at`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Event<T> {
     pub at: Time,
-    #[serde(rename = "state")]
-    pub to: Contact,
+    pub to: T,
 }
 
-/// A contact over time. Only parse and `Netlist::append` build one, so every edge is after
-/// t = 0, edges are at least `MIN_GAP_PS` apart, and each flips the contact.
+/// A switch event, serialized as the netlist writes one: `t_ps` and `state`.
+pub type Edge = Event<Contact>;
+
+impl Serialize for Edge {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Wire<'a> {
+            #[serde(rename = "t_ps")]
+            at: Time,
+            state: &'a Contact,
+        }
+        Wire {
+            at: self.at,
+            state: &self.to,
+        }
+        .serialize(serializer)
+    }
+}
+
+/// The least time between two events of one schedule.
+pub const MIN_GAP_PS: u64 = 2_000;
+
+/// `initial`, then each event's value from its time on. Only parse and `Netlist::append`
+/// build one, so every event is after t = 0, changes the value, and is at least
+/// [`MIN_GAP_PS`] after the previous event.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Schedule {
-    initial: Contact,
-    edges: Vec<Edge>,
+pub struct Schedule<T> {
+    initial: T,
+    events: Vec<Event<T>>,
 }
 
-impl Schedule {
-    /// The least time between two edges of one switch.
-    pub const MIN_GAP_PS: u64 = 2_000;
-
-    pub fn initial(&self) -> Contact {
-        self.initial
+impl<T> Schedule<T> {
+    pub fn initial(&self) -> &T {
+        &self.initial
     }
 
-    /// Nominal and bounce edges, ascending.
-    pub fn edges(&self) -> &[Edge] {
-        &self.edges
+    /// Events, ascending.
+    pub fn events(&self) -> &[Event<T>] {
+        &self.events
     }
 
-    /// The contact on the interval that ends at `at`: after every edge strictly
-    /// before `at`. `initial` at t = 0.
-    pub fn before(&self, at: Time) -> Contact {
-        let k = self.edges.partition_point(|edge| edge.at < at);
+    /// The value on the interval that ends at `at`: after every event strictly before `at`.
+    /// `initial` at t = 0.
+    pub fn before(&self, at: Time) -> &T {
+        let k = self.events.partition_point(|event| event.at < at);
         if k == 0 {
-            self.initial
+            &self.initial
         } else {
-            self.edges[k - 1].to
+            &self.events[k - 1].to
         }
     }
 
-    /// The contact on the interval that starts at `at`: after every edge at or before `at`.
-    pub fn after(&self, at: Time) -> Contact {
-        let k = self.edges.partition_point(|edge| edge.at <= at);
+    /// The value on the interval that starts at `at`: after every event at or before `at`.
+    pub fn after(&self, at: Time) -> &T {
+        let k = self.events.partition_point(|event| event.at <= at);
         if k == 0 {
-            self.initial
+            &self.initial
         } else {
-            self.edges[k - 1].to
+            &self.events[k - 1].to
         }
     }
 
-    /// The next edge strictly after `at`.
+    /// The next event strictly after `at`.
     pub fn next_change_after(&self, at: Time) -> Option<Time> {
-        let k = self.edges.partition_point(|edge| edge.at <= at);
-        self.edges.get(k).map(|edge| edge.at)
+        let k = self.events.partition_point(|event| event.at <= at);
+        self.events.get(k).map(|event| event.at)
     }
 }
 

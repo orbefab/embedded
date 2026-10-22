@@ -56,10 +56,10 @@ fn switch_edges(parsed: &netlist::Netlist) -> Vec<(u64, bool)> {
     let Model::Switch(switch) = &part.model else {
         panic!("sw1 is a switch");
     };
-    assert_eq!(switch.schedule.initial(), Contact::Open);
+    assert_eq!(*switch.schedule.initial(), Contact::Open);
     switch
         .schedule
-        .edges()
+        .events()
         .iter()
         .map(|edge| (edge.at.as_ps(), edge.to == Contact::Open))
         .collect()

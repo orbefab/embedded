@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -9,9 +10,9 @@ mod potentiometer;
 mod waveform;
 
 use super::{
-    Analysis, Basis, Bounce, Capacitor, Chip, Contact, CurrentSource, Discharge, Edge, IntValue,
-    Junction, Model, Ne555, NetId, Netlist, OutputStage, Part, Resistor, Schedule, Source, Switch,
-    Transient, Value, VoltageSource, bounce, junction_scale,
+    Analysis, Basis, Bounce, Capacitor, Chip, Contact, CurrentSource, Discharge, Edge, Event,
+    IntValue, Junction, MIN_GAP_PS, Model, Ne555, NetId, Netlist, OutputStage, Part, Resistor,
+    Schedule, Source, Switch, Transient, Value, VoltageSource, bounce, junction_scale,
 };
 use crate::diagnostic::{AnalysisRule, Diagnostic, ScheduleRule, ValueRule};
 use crate::finite::Finite;
@@ -68,7 +69,7 @@ enum WirePart {
         name: String,
         pins: PinMap,
         resistance: WireValue,
-        position: WireValue,
+        position: waveform::WirePosition,
     },
     VoltageSource {
         name: String,
@@ -602,7 +603,7 @@ fn resolve_junction(
     {
         out.push(Diagnostic::NetlistValue {
             part: part_ref.clone(),
-            field: fault.field(),
+            field: fault.field().into(),
             value: fault.value(n.si.get(), is.si.get()),
             rule: ValueRule::FiniteJunction,
         });
@@ -667,13 +668,13 @@ fn resolve_output_stage(
     let ohm = |field, value, out: &mut Vec<Diagnostic>| {
         resolve_value(part_ref, field, "ohm", true, value, out)
     };
-    let drop = |field, value: WireValue, out: &mut Vec<Diagnostic>| {
+    let drop = |field: &'static str, value: WireValue, out: &mut Vec<Diagnostic>| {
         let volts = value.value.get();
         let value = resolve_value(part_ref, field, "V", false, value, out)?;
         if volts < 0.0 {
             out.push(Diagnostic::NetlistValue {
                 part: part_ref.clone(),
-                field,
+                field: field.into(),
                 value: volts,
                 rule: ValueRule::NonNegative,
             });
@@ -734,7 +735,15 @@ fn resolve_switch(
             to: event.state,
         })
         .collect();
-    let events_ok = check_events(part_ref, wire.initial, &events, window, out);
+    let events_ok = check_events(
+        part_ref,
+        "events",
+        wire.initial,
+        &events,
+        window,
+        |left, right| left == right,
+        out,
+    );
     let bounce = bounce?;
     if !events_ok {
         return None;
@@ -744,11 +753,14 @@ fn resolve_switch(
         pins: pins?,
         on_resistance: on?,
         off_resistance: off?,
-        events,
+        events: Schedule {
+            initial: wire.initial,
+            events,
+        },
         bounce,
         schedule: Schedule {
             initial: wire.initial,
-            edges,
+            events: edges,
         },
     })
 }
@@ -757,10 +769,10 @@ fn resolve_bounce(part: &Ref, wire: WireBounce, out: &mut Vec<Diagnostic>) -> Op
     let window = resolve_int(part, "bounce.window", "ps", wire.window, out);
     let max_bounces = resolve_int(part, "bounce.max_bounces", "1", wire.max_bounces, out);
     let (window, max_bounces) = (window?, max_bounces?);
-    if window.value < 2 * max_bounces.value * Schedule::MIN_GAP_PS {
+    if window.value < 2 * max_bounces.value * MIN_GAP_PS {
         out.push(Diagnostic::NetlistValue {
             part: part.clone(),
-            field: "bounce.window",
+            field: "bounce.window".into(),
             value: window.value as f64,
             rule: ValueRule::BounceRoom,
         });
@@ -772,16 +784,52 @@ fn resolve_bounce(part: &Ref, wire: WireBounce, out: &mut Vec<Diagnostic>) -> Op
     })
 }
 
-/// One diagnostic per event that breaks a rule. True when none did.
-fn check_events(
+fn resolve_schedule(
     part: &Ref,
-    initial: Contact,
-    events: &[Edge],
+    events_field: &'static str,
+    initial_field: &'static str,
+    initial_wire: WireValue,
+    events: Vec<waveform::WireLevel>,
+    mut level: impl FnMut(Cow<'static, str>, WireValue, &mut Vec<Diagnostic>) -> (bool, Value),
+    out: &mut Vec<Diagnostic>,
+) -> Option<(Value, Vec<Event<Value>>)> {
+    let (mut ok, initial) = level(Cow::Borrowed(initial_field), initial_wire, out);
+    let mut resolved = Vec::with_capacity(events.len());
+    for (index, event) in events.into_iter().enumerate() {
+        let field = format!("{events_field}[{index}].level");
+        let (level_ok, value) = level(Cow::Owned(field), event.level, out);
+        ok &= level_ok;
+        resolved.push(Event {
+            at: Time::from_ps(event.t_ps),
+            to: value,
+        });
+    }
+    let events_ok = check_events(
+        part,
+        events_field,
+        initial.clone(),
+        &resolved,
+        0,
+        |left, right| left.si == right.si,
+        out,
+    );
+    (ok && events_ok).then_some((initial, resolved))
+}
+
+/// One diagnostic per event that breaks a rule. True when none did.
+/// `same` says the event does not change the value in force. A switch compares contacts.
+/// A level compares the SI value.
+fn check_events<T: Clone>(
+    part: &Ref,
+    field: &'static str,
+    initial: T,
+    events: &[Event<T>],
     window: u64,
+    same: impl Fn(&T, &T) -> bool,
     out: &mut Vec<Diagnostic>,
 ) -> bool {
     let mut ok = true;
-    let mut contact = initial;
+    let mut current = initial;
     let mut previous: Option<u64> = None;
     // Earliest legal `t_ps` for the next event.
     // `None` means this event's window plus the gap does not fit in `u64`, so no later event is legal.
@@ -793,7 +841,7 @@ fn check_events(
             Some(ScheduleRule::NotIncreasing)
         } else if at == 0 {
             Some(ScheduleRule::AtZero)
-        } else if edge.to == contact {
+        } else if same(&edge.to, &current) {
             Some(ScheduleRule::SameState)
         } else if earliest.is_none_or(|earliest| at < earliest) {
             Some(ScheduleRule::TooClose)
@@ -806,6 +854,7 @@ fn check_events(
             ok = false;
             out.push(Diagnostic::NetlistSchedule {
                 part: part.clone(),
+                field,
                 event,
                 rule,
             });
@@ -814,10 +863,10 @@ fn check_events(
                 break;
             }
         }
-        contact = edge.to;
+        current = edge.to.clone();
         previous = Some(at);
         earliest = match end {
-            Some(end) => end.checked_add(Schedule::MIN_GAP_PS),
+            Some(end) => end.checked_add(MIN_GAP_PS),
             None => None,
         };
     }
@@ -826,17 +875,18 @@ fn check_events(
 
 fn resolve_int<T: Into<u64>>(
     part: &Ref,
-    field: &'static str,
+    field: impl Into<Cow<'static, str>>,
     expected: &'static str,
     value: WireInt<T>,
     out: &mut Vec<Diagnostic>,
 ) -> Option<IntValue> {
+    let field = field.into();
     let number: u64 = value.value.into();
     let mut ok = true;
     if value.unit != expected {
         out.push(Diagnostic::NetlistUnit {
             part: part.clone(),
-            field,
+            field: field.clone(),
             expected,
             found: value.unit,
         });
@@ -935,17 +985,18 @@ fn resolve_rating(
 
 fn resolve_value(
     part: &Ref,
-    field: &'static str,
+    field: impl Into<Cow<'static, str>>,
     expected: &'static str,
     positive: bool,
     value: WireValue,
     out: &mut Vec<Diagnostic>,
 ) -> Option<Value> {
+    let field = field.into();
     let mut ok = true;
     if value.unit != expected {
         out.push(Diagnostic::NetlistUnit {
             part: part.clone(),
-            field,
+            field: field.clone(),
             expected,
             found: value.unit,
         });
@@ -956,7 +1007,7 @@ fn resolve_value(
         ok = false;
         out.push(Diagnostic::NetlistValue {
             part: part.clone(),
-            field,
+            field: field.clone(),
             value: number,
             rule: broken,
         });
@@ -972,12 +1023,13 @@ fn resolve_value(
 
 fn resolve_fraction(
     part: &Ref,
-    field: &'static str,
+    field: impl Into<Cow<'static, str>>,
     value: WireValue,
     out: &mut Vec<Diagnostic>,
 ) -> Option<Value> {
+    let field = field.into();
     let number = value.value.get();
-    let resolved = resolve_value(part, field, "1", false, value, out);
+    let resolved = resolve_value(part, field.clone(), "1", false, value, out);
     if !(number > 0.0 && number < 1.0) {
         out.push(Diagnostic::NetlistValue {
             part: part.clone(),

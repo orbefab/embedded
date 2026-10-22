@@ -36,7 +36,7 @@ impl Document {
                 panic!("{part} is not a switch of the netlist");
             };
             let events = part["events"].as_array_mut().expect("parsed events");
-            let appended = &switch.events[events.len()..];
+            let appended = &switch.events.events()[events.len()..];
             events.extend(
                 appended
                     .iter()

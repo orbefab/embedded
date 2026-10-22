@@ -42,27 +42,30 @@ fn a_switch_resolves_its_events_and_bounce_into_one_schedule() {
     let Model::Switch(switch) = &sw1.model else {
         panic!("{:?}", sw1.model);
     };
-    assert_eq!(switch.events.len(), 2);
+    assert_eq!(switch.events.events().len(), 2);
     let schedule = &switch.schedule;
-    assert_eq!(schedule.initial(), Contact::Open);
-    assert_eq!(schedule.edges().len(), 14);
+    assert_eq!(*schedule.initial(), Contact::Open);
+    assert_eq!(schedule.events().len(), 14);
     assert_eq!(
-        schedule.edges(),
-        netlist::bounce::expand(7, &sw1.name, &switch.events, switch.bounce.as_ref())
+        schedule.events(),
+        netlist::bounce::expand(7, &sw1.name, switch.events.events(), switch.bounce.as_ref())
     );
-    assert_eq!(schedule.before(Time::ZERO), Contact::Open);
-    assert_eq!(schedule.after(Time::ZERO), Contact::Open);
+    assert_eq!(*schedule.before(Time::ZERO), Contact::Open);
+    assert_eq!(*schedule.after(Time::ZERO), Contact::Open);
     assert_eq!(
-        schedule.after(Time::from_ps(2_000_000_000)),
-        Contact::Closed
-    );
-    assert_eq!(schedule.before(Time::from_ps(2_000_000_000)), Contact::Open);
-    assert_eq!(
-        schedule.before(Time::from_ps(2_000_000_001)),
+        *schedule.after(Time::from_ps(2_000_000_000)),
         Contact::Closed
     );
     assert_eq!(
-        schedule.before(Time::from_ps(20_000_000_000)),
+        *schedule.before(Time::from_ps(2_000_000_000)),
+        Contact::Open
+    );
+    assert_eq!(
+        *schedule.before(Time::from_ps(2_000_000_001)),
+        Contact::Closed
+    );
+    assert_eq!(
+        *schedule.before(Time::from_ps(20_000_000_000)),
         Contact::Open
     );
     assert!(sw1.model.ratings().is_empty());
@@ -72,8 +75,8 @@ fn a_switch_resolves_its_events_and_bounce_into_one_schedule() {
     let Model::Switch(moved) = &reseeded.parts().next().unwrap().1.model else {
         panic!("not a switch");
     };
-    assert_ne!(moved.schedule.edges(), schedule.edges());
-    assert_eq!(moved.schedule.edges()[0], schedule.edges()[0]);
+    assert_ne!(moved.schedule.events(), schedule.events());
+    assert_eq!(moved.schedule.events()[0], schedule.events()[0]);
 }
 
 #[test]
@@ -97,6 +100,32 @@ fn the_next_edge_is_the_first_one_strictly_after_the_time() {
     assert_eq!(next(u64::MAX), None);
 }
 
+#[test]
+fn same_state_still_says_the_contact_does_not_change() {
+    let json = switch(r#"[{ "t_ps": 5, "state": "open" }]"#, "null");
+    let doc = serde_json::to_value(&netlist::parse(json.as_bytes()).unwrap_err()[0]).unwrap();
+    assert_eq!(
+        doc["data"],
+        serde_json::json!({"event": 0, "rule": "same_state"})
+    );
+    assert_eq!(doc["message"], "#sw1 events[0] does not change the contact");
+}
+
+#[test]
+fn too_close_still_names_the_bounce_window() {
+    let json = switch(
+        r#"[{ "t_ps": 5000, "state": "closed" }, { "t_ps": 6999, "state": "open" }]"#,
+        "null",
+    );
+    let doc = serde_json::to_value(&netlist::parse(json.as_bytes()).unwrap_err()[0]).unwrap();
+    assert_eq!(doc["data"]["event"], 1);
+    assert_eq!(doc["data"]["rule"], "too_close");
+    assert_eq!(
+        doc["message"],
+        "#sw1 events[1] is less than 2000 ps after the previous event and its bounce window"
+    );
+}
+
 /// `max_bounces` 1 and a 4 ns window leave no slack, so the two flips are 2 ns and 4 ns
 /// after the event. Those times are the schedule, not the one event.
 #[test]
@@ -111,7 +140,7 @@ fn the_next_edge_of_a_bounce_is_the_expanded_flip() {
     };
     let edges: Vec<u64> = switch
         .schedule
-        .edges()
+        .events()
         .iter()
         .map(|edge| edge.at.as_ps())
         .collect();
@@ -334,7 +363,7 @@ fn an_appended_event_bounces_as_parse_bounces_it() {
         };
         events.push(event(at.as_ps(), state));
         let parsed = netlist::parse(document(&events).as_bytes()).unwrap();
-        assert!(only_switch(&parsed).schedule.edges().len() > 2 * events.len());
+        assert!(only_switch(&parsed).schedule.events().len() > 2 * events.len());
         assert_eq!(
             only_switch(&appended),
             only_switch(&parsed),

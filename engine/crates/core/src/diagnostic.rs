@@ -1,7 +1,9 @@
+use std::borrow::Cow;
+
 use serde::{Serialize, Serializer};
 
 use crate::name::{Name, NameError, Ref};
-use crate::netlist::Schedule;
+use crate::netlist::MIN_GAP_PS;
 use crate::time::Time;
 
 /// `Error` means the engine has no trustworthy result.
@@ -70,13 +72,13 @@ pub enum AnalysisRule {
     GridOverStop,
 }
 
-/// Which rule a switch event broke.
+/// Which rule a schedule event broke. A switch, a `steps` source, and a potentiometer share it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScheduleRule {
     /// The event is at t = 0, where the operating point already holds `initial`.
     AtZero,
-    /// The event does not change the contact.
+    /// The event does not change the value in force.
     SameState,
     /// The event is not strictly after the previous event.
     NotIncreasing,
@@ -131,14 +133,14 @@ pub enum Diagnostic {
     /// A value's `unit` is not the unit its field is measured in.
     NetlistUnit {
         part: Ref,
-        field: &'static str,
+        field: Cow<'static, str>,
         expected: &'static str,
         found: String,
     },
     /// A value is outside its field's domain.
     NetlistValue {
         part: Ref,
-        field: &'static str,
+        field: Cow<'static, str>,
         value: f64,
         rule: ValueRule,
     },
@@ -164,9 +166,11 @@ pub enum Diagnostic {
         value: u64,
         rule: AnalysisRule,
     },
-    /// A switch's `events[event]` breaks a schedule rule.
+    /// `field[event]` breaks a schedule rule. `field` is `events`, `voltage.events`,
+    /// `current.events`, or `position.events`. Only the message reads it.
     NetlistSchedule {
         part: Ref,
+        field: &'static str,
         event: usize,
         rule: ScheduleRule,
     },
@@ -441,7 +445,7 @@ impl Diagnostic {
                     }
                     ValueRule::BounceRoom => format!(
                         "{part} {field} is {value}; it must fit 2 * max_bounces edges {} ps apart",
-                        Schedule::MIN_GAP_PS
+                        MIN_GAP_PS
                     ),
                     ValueRule::Fraction => {
                         format!("{part} {field} is {value}; it must be between 0 and 1")
@@ -492,22 +496,33 @@ impl Diagnostic {
                 };
                 format!("analysis {field} is {value}; {must}")
             }
-            Diagnostic::NetlistSchedule { part, event, rule } => {
+            Diagnostic::NetlistSchedule {
+                part,
+                field,
+                event,
+                rule,
+            } => {
                 let what = match rule {
                     ScheduleRule::AtZero => {
                         "is at 0 ps; an event must come after t = 0".to_string()
                     }
-                    ScheduleRule::SameState => "does not change the contact".to_string(),
+                    ScheduleRule::SameState if *field == "events" => {
+                        "does not change the contact".to_string()
+                    }
+                    ScheduleRule::SameState => "does not change the level".to_string(),
                     ScheduleRule::NotIncreasing => "is not after the previous event".to_string(),
-                    ScheduleRule::TooClose => format!(
+                    ScheduleRule::TooClose if *field == "events" => format!(
                         "is less than {} ps after the previous event and its bounce window",
-                        Schedule::MIN_GAP_PS
+                        MIN_GAP_PS
                     ),
+                    ScheduleRule::TooClose => {
+                        format!("is less than {} ps after the previous event", MIN_GAP_PS)
+                    }
                     ScheduleRule::Overflow => {
                         "has a bounce window that ends past the largest time".to_string()
                     }
                 };
-                format!("{part} events[{event}] {what}")
+                format!("{part} {field}[{event}] {what}")
             }
             Diagnostic::NetlistWaveform {
                 part,
@@ -517,10 +532,9 @@ impl Diagnostic {
             } => {
                 let must = match rule {
                     WaveformRule::AtZero => "a jump must come after t = 0".to_string(),
-                    WaveformRule::TooClose => format!(
-                        "two jumps must be at least {} ps apart",
-                        Schedule::MIN_GAP_PS
-                    ),
+                    WaveformRule::TooClose => {
+                        format!("two jumps must be at least {} ps apart", MIN_GAP_PS)
+                    }
                     WaveformRule::Overflow => "the first fall is past the largest time".to_string(),
                 };
                 format!("{part} {field} is {value}; {must}")

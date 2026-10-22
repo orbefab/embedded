@@ -304,11 +304,43 @@ def source_decks(refs):
         ),
         (deck(op, "voltage_source", "voltage", step), ["vs1 a 0 dc 0.0", "save all"]),
         (
+            deck(
+                op,
+                "voltage_source",
+                "voltage",
+                {"kind": "steps", "initial": {"value": 1.5}, "events": []},
+            ),
+            ["vs1 a 0 dc 1.5", "save all"],
+        ),
+        (
             deck(tran, "voltage_source", "voltage", step),
             [
                 "vs1 a 0 dc 0.0 pwl(0p 0.0 2000p 0.0 3000p 5.0)",
                 "vbp0 bp0 0 pwl(2000p 0 2001p 0)",
                 "vbp1 bp1 0 pwl(3000p 0 3001p 0)",
+                "save v(a) i(vs1)",
+            ],
+        ),
+        (
+            deck(
+                tran,
+                "voltage_source",
+                "voltage",
+                {
+                    "kind": "steps",
+                    "initial": {"value": 0.0},
+                    "events": [
+                        {"t_ps": 2000, "level": {"value": 5.0}},
+                        {"t_ps": 5000, "level": {"value": 1.0}},
+                    ],
+                },
+            ),
+            [
+                "vs1 a 0 dc 0.0 pwl(0p 0.0 2000p 0.0 3000p 5.0 5000p 5.0 6000p 1.0)",
+                "vbp0 bp0 0 pwl(2000p 0 2001p 0)",
+                "vbp1 bp1 0 pwl(3000p 0 3001p 0)",
+                "vbp2 bp2 0 pwl(5000p 0 5001p 0)",
+                "vbp3 bp3 0 pwl(6000p 0 6001p 0)",
                 "save v(a) i(vs1)",
             ],
         ),
@@ -372,6 +404,27 @@ def potentiometer_deck(refs):
         refs.translate("pot", missing)
     except refs.Skip as skip:
         ok = ok and str(skip) == "kind potentiometer is missing pin wiper"
+    else:
+        ok = False
+    fixed = {
+        **part,
+        "position": {"kind": "steps", "initial": {"value": 0.3}, "events": []},
+    }
+    text, _mapping = refs.translate("pot", {**netlist, "parts": [fixed]})
+    lines = [line for line in text.splitlines() if line.startswith("rrv1")]
+    ok = ok and lines == ["rrv1_a vcc mid 3000.0", "rrv1_b mid 0 7000.0"]
+    moving = {
+        **part,
+        "position": {
+            "kind": "steps",
+            "initial": {"value": 0.25},
+            "events": [{"t_ps": 2000, "level": {"value": 0.75}}],
+        },
+    }
+    try:
+        refs.translate("pot", {**netlist, "parts": [moving]})
+    except refs.Skip as skip:
+        ok = ok and str(skip) == "a moving potentiometer has one position in a deck"
     else:
         ok = False
     return {"name": "potentiometer deck", "ok": ok}

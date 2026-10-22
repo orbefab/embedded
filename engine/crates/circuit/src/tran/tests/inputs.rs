@@ -119,8 +119,9 @@ fn switch<'n>(netlist: &'n Netlist, name: &Name) -> &'n Switch {
 fn last_contact(switch: &Switch) -> Contact {
     switch
         .events
+        .events()
         .last()
-        .map_or(switch.schedule.initial(), |event| event.to)
+        .map_or(*switch.schedule.initial(), |event| event.to)
 }
 
 fn set(part: &str, at: u64, to: Contact) -> Input {
@@ -716,6 +717,7 @@ fn a_fault_on_the_re_solve_ends_at_the_accepted_step() {
     );
     let landed = switch(netlist_of(&session), &Name::new("sw1").unwrap())
         .events
+        .events()
         .last()
         .unwrap()
         .at;

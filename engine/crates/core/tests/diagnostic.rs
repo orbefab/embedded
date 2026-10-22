@@ -41,13 +41,13 @@ fn samples() -> Vec<Diagnostic> {
         },
         Diagnostic::NetlistUnit {
             part: part("r1"),
-            field: "resistance",
+            field: "resistance".into(),
             expected: "ohm",
             found: "kohm".into(),
         },
         Diagnostic::NetlistValue {
             part: part("r1"),
-            field: "resistance",
+            field: "resistance".into(),
             value: 0.0,
             rule: ValueRule::Positive,
         },
@@ -100,6 +100,7 @@ fn samples() -> Vec<Diagnostic> {
         }),
         Diagnostic::NetlistSchedule {
             part: part("sw1"),
+            field: "events",
             event: 1,
             rule: ScheduleRule::TooClose,
         },
@@ -392,7 +393,7 @@ fn a_value_message_uses_the_same_characters_as_data_value() {
     ] {
         let diagnostic = Diagnostic::NetlistValue {
             part: part("d1"),
-            field: "saturation_current",
+            field: "saturation_current".into(),
             value: 1e-308,
             rule,
         };

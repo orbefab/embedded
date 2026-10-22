@@ -398,7 +398,12 @@ def translate_shape(title, netlist):
             mapping[f"i(@r{name}[i])"] = ref
         elif kind == "potentiometer":
             a, wiper, b = (node(net) for net in pin_list)
-            position = float(part["position"]["value"])
+            position = part["position"]
+            if position.get("kind") == "steps":
+                if position["events"]:
+                    raise Skip("a moving potentiometer has one position in a deck")
+                position = position["initial"]
+            position = float(position["value"])
             ohms = float(part["resistance"]["value"])
             lines.append(f"r{name}_a {a} {wiper} {position * ohms!r}")
             lines.append(f"r{name}_b {wiper} {b} {(1.0 - position) * ohms!r}")
@@ -571,6 +576,8 @@ def source_value(value, transient, corners):
     and in a transient each jump ramps over EDGE_RAMP_PS. Its knots in (0, stop] are corners."""
     if "kind" not in value:
         return f"dc {number(value)}"
+    if value["kind"] == "steps" and not value["events"]:
+        return f"dc {number(value['initial'])}"
     initial = f"dc {number(value['initial'])}"
     if not transient:
         return initial
@@ -601,6 +608,12 @@ def jumps(wave):
     low = float(wave["initial"]["value"])
     if wave["kind"] == "step":
         yield wave["at_ps"], low, float(wave["final"]["value"])
+        return
+    if wave["kind"] == "steps":
+        for event in wave["events"]:
+            new = float(event["level"]["value"])
+            yield event["t_ps"], low, new
+            low = new
         return
     high = float(wave["pulsed"]["value"])
     period = wave["period_ps"]

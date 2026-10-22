@@ -1,14 +1,14 @@
-//! A source's value over time: DC, a step, or a pulse train.
+//! A source's value over time: a step list, one step, or a pulse train.
 //!
-//! Every query is arithmetic on integer picoseconds, so a pulse train of any length is
-//! stored as its five numbers.
+//! A plain value is a step list with no events. A pulse train of any length is stored as
+//! its five numbers, and every query on it is arithmetic on integer picoseconds.
 
 use crate::time::Time;
 
-use super::Value;
+use super::{Event, Schedule, Value};
 
 /// A source's value over time. Only parse builds one, so its rules hold: every jump is
-/// after t = 0, and two jumps of one waveform are at least `Schedule::MIN_GAP_PS` apart.
+/// after t = 0, and two jumps of one waveform are at least [`super::MIN_GAP_PS`] apart.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Waveform {
     shape: Shape,
@@ -16,7 +16,8 @@ pub struct Waveform {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Shape {
-    Dc(Value),
+    /// `initial`, then each event's level from its time on. No events is one level at every time.
+    Steps(Schedule<Value>),
     Step(Step),
     Pulse(Pulse),
 }
@@ -79,9 +80,19 @@ impl Pulse {
 }
 
 impl Waveform {
+    /// One level at every time: a `steps` waveform with no events.
     pub(super) fn dc(value: Value) -> Waveform {
         Waveform {
-            shape: Shape::Dc(value),
+            shape: Shape::Steps(Schedule {
+                initial: value,
+                events: Vec::new(),
+            }),
+        }
+    }
+
+    pub(super) fn steps(initial: Value, events: Vec<Event<Value>>) -> Waveform {
+        Waveform {
+            shape: Shape::Steps(Schedule { initial, events }),
         }
     }
 
@@ -119,51 +130,46 @@ impl Waveform {
 
     /// The value on the interval that ends at `at`. `initial` at t = 0.
     pub fn before(&self, at: Time) -> f64 {
-        let at = at.as_ps();
-        let high = match &self.shape {
-            Shape::Dc(value) => return value.si.get(),
-            Shape::Step(step) => at > step.at.as_ps(),
+        let at_ps = at.as_ps();
+        match &self.shape {
+            Shape::Steps(schedule) => schedule.before(at).si.get(),
+            Shape::Step(step) => pick(&step.initial, &step.final_level, at_ps > step.at.as_ps()),
             Shape::Pulse(pulse) => {
-                at > pulse.delay.as_ps() && {
-                    let within = (at - pulse.delay.as_ps()) % pulse.period;
+                let high = at_ps > pulse.delay.as_ps() && {
+                    let within = (at_ps - pulse.delay.as_ps()) % pulse.period;
                     0 < within && within <= pulse.width
-                }
+                };
+                pick(&pulse.initial, &pulse.pulsed, high)
             }
-        };
-        self.level(high)
+        }
     }
 
     /// The value on the interval that starts at `at`. Differs from `before` only at a jump.
     pub fn after(&self, at: Time) -> f64 {
-        let at = at.as_ps();
-        let high = match &self.shape {
-            Shape::Dc(value) => return value.si.get(),
-            Shape::Step(step) => at >= step.at.as_ps(),
+        let at_ps = at.as_ps();
+        match &self.shape {
+            Shape::Steps(schedule) => schedule.after(at).si.get(),
+            Shape::Step(step) => pick(&step.initial, &step.final_level, at_ps >= step.at.as_ps()),
             Shape::Pulse(pulse) => {
-                at >= pulse.delay.as_ps() && (at - pulse.delay.as_ps()) % pulse.period < pulse.width
+                let high = at_ps >= pulse.delay.as_ps()
+                    && (at_ps - pulse.delay.as_ps()) % pulse.period < pulse.width;
+                pick(&pulse.initial, &pulse.pulsed, high)
             }
-        };
-        self.level(high)
+        }
     }
 
     /// The next jump strictly after `at`.
     pub fn next_change_after(&self, at: Time) -> Option<Time> {
         match &self.shape {
-            Shape::Dc(_) => None,
+            Shape::Steps(schedule) => schedule.next_change_after(at),
             Shape::Step(step) => (at < step.at).then_some(step.at),
             Shape::Pulse(pulse) => pulse_edge_after(pulse, at.as_ps()).map(Time::from_ps),
         }
     }
+}
 
-    /// The pulsed or final level when `high`, else `initial`.
-    fn level(&self, high: bool) -> f64 {
-        let (low, high_level) = match &self.shape {
-            Shape::Dc(value) => (value, value),
-            Shape::Step(step) => (&step.initial, &step.final_level),
-            Shape::Pulse(pulse) => (&pulse.initial, &pulse.pulsed),
-        };
-        if high { high_level } else { low }.si.get()
-    }
+fn pick(low: &Value, high: &Value, high_side: bool) -> f64 {
+    if high_side { high } else { low }.si.get()
 }
 
 fn pulse_edge_after(pulse: &Pulse, at: u64) -> Option<u64> {
@@ -198,7 +204,7 @@ fn earliest(rise: Option<u64>, fall: Option<u64>) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::finite::Finite;
-    use crate::netlist::Source;
+    use crate::netlist::{Event, Source};
 
     fn level(v: f64) -> Value {
         Value {
@@ -252,11 +258,36 @@ mod tests {
     }
 
     #[test]
-    fn dc_never_jumps() {
+    fn a_fixed_level_never_jumps() {
         let wave = Waveform::dc(level(3.0));
         assert_eq!(wave.before(at(0)), 3.0);
         assert_eq!(wave.after(at(u64::MAX)), 3.0);
         assert!(jumps(&wave, at(u64::MAX)).is_empty());
+    }
+
+    #[test]
+    fn steps_hold_the_level_in_force_and_jump_at_each_event() {
+        let wave = Waveform::steps(
+            level(1.0),
+            vec![
+                Event {
+                    at: at(4_000),
+                    to: level(5.0),
+                },
+                Event {
+                    at: at(9_000),
+                    to: level(2.0),
+                },
+            ],
+        );
+        let sides = |t| (wave.before(at(t)), wave.after(at(t)));
+        assert_eq!(sides(0), (1.0, 1.0));
+        assert_eq!(sides(4_000), (1.0, 5.0));
+        assert_eq!(sides(8_999), (5.0, 5.0));
+        assert_eq!(sides(9_000), (5.0, 2.0));
+        assert_eq!(sides(u64::MAX), (2.0, 2.0));
+        assert_eq!(jumps(&wave, at(9_000)), [4_000]);
+        assert_eq!(jumps(&wave, at(9_001)), [4_000, 9_000]);
     }
 
     #[test]
@@ -288,9 +319,19 @@ mod tests {
         assert_eq!(step.next_change_after(at(7)), None);
         assert_eq!(step.next_change_after(at(u64::MAX)), None);
 
-        let dc = Waveform::dc(level(3.0));
-        assert_eq!(dc.next_change_after(at(0)), None);
-        assert_eq!(dc.next_change_after(at(u64::MAX)), None);
+        let fixed = Waveform::dc(level(3.0));
+        assert_eq!(fixed.next_change_after(at(0)), None);
+        assert_eq!(fixed.next_change_after(at(u64::MAX)), None);
+
+        let steps = Waveform::steps(
+            level(0.0),
+            vec![Event {
+                at: at(4_000),
+                to: level(1.0),
+            }],
+        );
+        assert_eq!(steps.next_change_after(at(0)), Some(at(4_000)));
+        assert_eq!(steps.next_change_after(at(4_000)), None);
 
         let wave = train();
         assert_eq!(wave.next_change_after(at(0)), Some(at(10_000)));

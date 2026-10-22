@@ -262,7 +262,7 @@ fn a_session_opened_on_a_document_exports_its_inputs() {
     let Model::Switch(switch) = &exported.part(id).model else {
         panic!("sw1 is a switch");
     };
-    let last = switch.events.last().unwrap();
+    let last = switch.events.events().last().unwrap();
     assert_eq!((last.at, last.to), (landed, Contact::Closed));
     assert_eq!(Session::open(exported).unwrap().export(), None);
     assert!(matches!(

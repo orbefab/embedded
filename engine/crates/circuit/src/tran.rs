@@ -260,9 +260,10 @@ impl Record {
     }
 }
 
-/// Where a step must land: every contact edge and source jump, 1 ns after t = 0 and after each
-/// edge, and `stop`. The deck ramps each contact and source over that nanosecond. Each part keeps
-/// its next edge only, so no edge list is built and none is capped. Time only moves forward.
+/// Where a step must land: every contact edge, source jump, and potentiometer move,
+/// 1 ns after t = 0 and after each one, and `stop`. The deck ramps a contact or a
+/// source over that nanosecond. It skips a moving potentiometer. Each part keeps its
+/// next edge only, so no edge list is built and none is capped. Time only moves forward.
 pub(crate) struct Breakpoints {
     stop: Time,
     /// Each part's next edge before `stop`, earliest first. A part has at most one entry, so
@@ -320,7 +321,7 @@ impl Breakpoints {
         }
     }
 
-    /// Whether a contact edge or a source jump falls at `at`, a time `next_after` returned.
+    /// Whether an edge, a jump, or a move falls at `at`, a time `next_after` returned.
     pub(crate) fn is_edge(&self, at: Time) -> bool {
         self.edges
             .peek()
@@ -346,7 +347,7 @@ fn switches(netlist: &Netlist, end: Time) -> BTreeMap<Ref, Vec<Edge>> {
                 Ref::Part(part.name.clone()),
                 switch
                     .schedule
-                    .edges()
+                    .events()
                     .iter()
                     .filter(|edge| edge.at < end)
                     .copied()

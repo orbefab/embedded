@@ -74,7 +74,8 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "led-9v",
             "ne555-led",
             "rc-switch",
-            "v-pulse-rc"
+            "v-pulse-rc",
+            "v-steps"
         ]
     );
     for example in examples() {
@@ -408,7 +409,7 @@ fn expanded(input: &[u8]) -> serde_json::Value {
             let edges: Vec<_> = bounce::expand(
                 netlist.seed(),
                 &part.name,
-                &switch.events,
+                switch.events.events(),
                 switch.bounce.as_ref(),
             )
             .into_iter()
