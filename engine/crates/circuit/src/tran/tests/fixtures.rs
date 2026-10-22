@@ -182,20 +182,3 @@ pub(super) fn open(netlist: &Netlist, chips: Vec<active::Chip>, budget: Budget) 
     )
     .unwrap()
 }
-
-impl Session<'_> {
-    /// From the last accepted step to the step after it, while the session runs.
-    pub(super) fn span(&self) -> Option<Span<'_>> {
-        let State::Running { accepted, next, .. } = &self.state else {
-            return None;
-        };
-        Some(Span {
-            circuit: &self.circuit,
-            columns: &self.columns,
-            cores: self.actives.cores(),
-            budget: self.budget.row,
-            from: accepted,
-            to: next,
-        })
-    }
-}

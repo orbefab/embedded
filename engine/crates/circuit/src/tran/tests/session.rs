@@ -7,6 +7,9 @@ use super::active::{NS, US, capacitor, circuit, resistor, scripted};
 use super::fixtures::*;
 use crate::active::Drive;
 use crate::active::script::Op;
+use crate::lte::Segment;
+use crate::newton::Side;
+use crate::session::{State, Status, attempt};
 use crate::topology;
 
 /// A seeded xorshift, so a failing chunking replays.
@@ -77,17 +80,6 @@ fn assert_same_folder(input: &[u8], netlist: &Netlist, session: &Results, batch:
     }
 }
 
-/// The row at the time the session stands at.
-fn read(session: &Session<'_>) -> (Time, Vec<Finite>) {
-    match &session.state {
-        State::Running { accepted, now, .. } if *now == accepted.at => (*now, accepted.row.clone()),
-        State::Running { now, .. } => match session.span().unwrap().probe(*now) {
-            Probed::Solved(row) | Probed::Interpolated(row) => (*now, row),
-        },
-        State::Ended { at, row, .. } => (*at, row.clone()),
-    }
-}
-
 /// `examples/<name>` cut to `stop_ps` advanced in seeded chunks writes the batch's run folder.
 fn chunks_write_the_batch_folder(name: &str, stop_ps: u64, budget: Budget, seed: u64) -> Results {
     input_in_chunks_writes_the_batch_folder(name, &example(name, stop_ps), budget, seed)
@@ -95,7 +87,7 @@ fn chunks_write_the_batch_folder(name: &str, stop_ps: u64, budget: Budget, seed:
 
 /// `input` advanced in seeded chunks to its end writes the batch's run folder. A chunk ends on
 /// the step about to land, 1 ps either side of it, on the next grid time, or a short or long
-/// stride on. The read at each chunk end that falls on a row is that row, bit for bit.
+/// stride on. The probe at each chunk end that falls on a row is that row, bit for bit.
 fn input_in_chunks_writes_the_batch_folder(
     name: &str,
     input: &[u8],
@@ -120,9 +112,11 @@ fn input_in_chunks_writes_the_batch_folder(
             _ => now + 1 + rng.below(transient.stop.as_ps() / 100),
         };
         session.advance_to(Time::from_ps(to));
-        let (at, row) = read(&session);
+        let probe = session.probe();
+        let at = probe.at();
+        assert_eq!(at, session.now());
         if let Ok(k) = trace.time().binary_search(&at) {
-            for (j, value) in row.iter().enumerate() {
+            for (j, value) in probe.values().iter().enumerate() {
                 assert_eq!(
                     value.get().to_bits(),
                     trace.column(j)[k].to_bits(),
@@ -389,17 +383,84 @@ fn a_target_past_stop_ends_at_stop() {
     let netlist = led_switch();
     let stop = transient(&netlist).stop;
     let mut session = open(&netlist, Vec::new(), BUDGET);
-    session.advance_to(Time::from_ps(stop.as_ps() + 1_000_000));
-    assert!(
-        matches!(session.state, State::Ended { at, end: End::Stop, .. } if at == stop),
-        "the session ends at stop"
-    );
+    let status = session.advance_to(Time::from_ps(stop.as_ps() + 1_000_000));
+    assert_eq!(status, Status::Stopped);
+    assert_eq!(session.now(), stop);
     assert_same_folder(
         &[],
         &netlist,
         &finish(session, &netlist),
         &batch(&netlist, BUDGET),
     );
+}
+
+/// A step limit of 0 fails the step after t = 0, so the session has faulted at t = 0 before
+/// any call.
+#[test]
+fn a_session_can_end_as_it_opens() {
+    let netlist = led_switch();
+    let session = open(&netlist, Vec::new(), Budget { steps: 0, ..BUDGET });
+    assert_eq!(session.status(), Status::Faulted);
+    assert_eq!(session.now(), Time::ZERO);
+    assert_eq!(
+        session.fault(),
+        Some(&Diagnostic::SolverStepLimit {
+            at: Time::ZERO,
+            limit: 0,
+        })
+    );
+}
+
+/// A step limit of 3 fails the step after the third as soon as the third is accepted. Calls
+/// 137 ps apart reach it, and the call that accepts the third returns the fault. Each call's
+/// status stays bound while the session is read.
+#[test]
+fn the_call_that_accepts_the_last_good_step_returns_the_fault() {
+    let netlist = led_switch();
+    let mut session = open(&netlist, Vec::new(), Budget { steps: 3, ..BUDGET });
+    let mut to = Time::ZERO;
+    loop {
+        let before = session.now();
+        to = Time::from_ps(to.as_ps() + 137);
+        let status = session.advance_to(to);
+        let (now, probe, fault) = (session.now(), session.probe(), session.fault());
+        assert_eq!(probe.at(), now);
+        match status {
+            Status::Running => assert_eq!((now, fault), (to, None)),
+            Status::Faulted => {
+                assert!(before < now && now <= to, "{before:?} {now:?} {to:?}");
+                assert_eq!(
+                    fault,
+                    Some(&Diagnostic::SolverStepLimit { at: now, limit: 3 })
+                );
+                assert_eq!(session.stats.landings, 3);
+                return;
+            }
+            Status::Stopped => panic!("the run reaches stop"),
+        }
+    }
+}
+
+/// A session that faulted stays at its last accepted step. Every later call returns the same
+/// fault and moves nothing.
+#[test]
+fn now_stays_put_after_a_fault() {
+    let netlist = led_switch();
+    let stop = transient(&netlist).stop;
+    let mut session = open(&netlist, Vec::new(), Budget { steps: 3, ..BUDGET });
+    assert_eq!(session.advance_to(stop), Status::Faulted);
+    let (at, values, fault) = (
+        session.now(),
+        session.probe().values().to_vec(),
+        session.fault().cloned(),
+    );
+    assert!(at < stop, "{at:?}");
+    for to in [Time::from_ps(at.as_ps() + 1), stop, Time::ZERO] {
+        assert_eq!(session.advance_to(to), Status::Faulted);
+        assert_eq!(session.now(), at);
+        assert_eq!(session.probe().values(), values);
+        assert_eq!(session.fault().cloned(), fault);
+    }
 }
 
 /// The switch closes at 1 us. A chunk that ends 1 ps before it stands in front of the edge, and

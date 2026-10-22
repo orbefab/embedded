@@ -5,8 +5,10 @@ use sim_core::netlist::{NetId, Netlist};
 
 use super::super::*;
 use super::fixtures::*;
-use crate::active::Drive;
 use crate::active::script::{self, Op, Sample, eager};
+use crate::active::{Actives, Drive};
+use crate::newton::{Circuit, Conditions, Iterate, newton};
+use crate::op;
 
 pub(super) const US: u64 = 1_000_000;
 pub(super) const NS: u64 = 1_000;

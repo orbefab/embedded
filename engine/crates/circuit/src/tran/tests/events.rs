@@ -2,6 +2,7 @@ use sim_core::netlist::Netlist;
 
 use super::super::*;
 use super::fixtures::*;
+use crate::session::State;
 
 /// 100 kohm and 1 uF from 5 V hold an NE555's RESET low at power-on, and its release at
 /// about 15.1 ms sets the latch. The NE555 has `examples/ne555-led`'s values, as in
@@ -208,6 +209,32 @@ fn a_row_that_fails_twice_is_the_line_between_its_steps() {
     assert_eq!(from_restart, 1);
 }
 
+/// Every probe is the run's row at its time, and only a probe between steps can be the line.
+#[test]
+fn a_probe_that_fails_twice_is_the_line_and_says_so() {
+    let netlist = reset_release(None, 0.0);
+    let (outcome, lines) = with_row_budget(&netlist, transient(&netlist).grid, 1);
+    let trace = outcome.trace.unwrap();
+    let mut session = open(&netlist, Vec::new(), Budget { row: 1, ..BUDGET });
+    let mut interpolated = 0;
+    for (k, &at) in trace.time().iter().enumerate() {
+        session.advance_to(at);
+        let probe = session.probe();
+        let line = lines.iter().any(|line| line.at() == Some(at));
+        assert_eq!(probe.interpolated(), line, "{at:?}");
+        interpolated += usize::from(line);
+        for (j, value) in probe.values().iter().enumerate() {
+            assert_eq!(
+                value.get().to_bits(),
+                trace.column(j)[k].to_bits(),
+                "{} at {at:?}",
+                trace.columns()[j]
+            );
+        }
+    }
+    assert!(interpolated > 0 && interpolated < trace.rows());
+}
+
 /// `voltage` through 1 kohm into 1 nF from `initial` V, with `current` into the capacitor
 /// and a switch `sw` across it, 1 kohm closed, on `contact`. Over 20 ns with a row at 10.5 ns.
 fn source_into_rc(voltage: &str, current: &str, contact: &str, initial: f64) -> Netlist {
@@ -331,13 +358,14 @@ fn a_row_whose_second_solve_converges_is_solved() {
     let netlist = led_charge();
     let mut session = open(&netlist, Vec::new(), Budget { row: 3, ..BUDGET });
     let mut retried = Vec::new();
-    while let Some(span) = session.span() {
-        for at in Rows::Grid.rows_in(transient(&netlist), span.from.at, span.to.at) {
-            if span.solve(at, &span.from.iterate).is_err() {
-                retried.push((at, span.solve(at, &span.to.converged.iterate)));
+    while let State::Running { accepted, next, .. } = &session.state {
+        let span = session.span(accepted, next);
+        for at in Rows::Grid.rows_in(transient(&netlist), accepted.at, next.at) {
+            if span.solve(at, &accepted.iterate).is_err() {
+                retried.push((at, span.solve(at, &next.converged.iterate)));
             }
         }
-        let landing = span.to.at;
+        let landing = next.at;
         session.advance_to(landing);
     }
     let mut none = Vec::new();

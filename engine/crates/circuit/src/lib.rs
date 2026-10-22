@@ -9,6 +9,7 @@ mod newton;
 mod observe;
 mod op;
 mod ratings;
+mod session;
 mod step;
 mod topology;
 mod tran;
@@ -18,6 +19,8 @@ use sim_core::netlist::{Analysis, Netlist};
 use sim_core::run_folder::{Observations, Results};
 
 use crate::tran::Rows;
+
+pub use session::{Probe, Refused, Session, Status};
 
 /// Accepted steps after t = 0, and chip stops on those steps, summed over chips.
 ///
