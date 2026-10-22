@@ -6,7 +6,7 @@
 //! only once the host has reached that cycle, and a pad the host drives changes at the cycle the
 //! host reached.
 
-use crate::{Cpu, Level, PIN_COUNT, PinDrive};
+use crate::{Channel, Cpu, I2cStamp, Level, PIN_COUNT, PinDrive};
 
 /// Where [`Timeline::run_until`] stopped: at oscillator cycle `at` a drive changed, or the ADC
 /// samples, or both.
@@ -119,6 +119,16 @@ impl Timeline {
 
     pub fn cpu(&self) -> &Cpu {
         &self.cpu
+    }
+
+    /// See [`Cpu::take`].
+    pub fn take(&mut self, channel: Channel) -> Option<(u8, u64)> {
+        self.cpu.take(channel)
+    }
+
+    /// See [`Cpu::take_i2c`].
+    pub fn take_i2c(&mut self) -> Option<I2cStamp> {
+        self.cpu.take_i2c()
     }
 
     /// The oscillator cycle at and before which the core has made every report.

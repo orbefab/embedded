@@ -131,6 +131,15 @@ impl Core {
             Core::Script(ref mut core) => core.input(at, levels),
         }
     }
+
+    /// Drops every byte and bus phase it has delivered. No output reads them yet.
+    fn drop_delivered(&mut self) {
+        match *self {
+            Core::Avr(ref mut core) => core.drop_delivered(),
+            #[cfg(test)]
+            Core::Script(_) => {}
+        }
+    }
 }
 
 pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
@@ -205,6 +214,12 @@ impl Ahead {
         }
         self.reach = Reach::Done(at);
     }
+
+    /// Commits the copy without what it delivered, so no later copy of either core carries it.
+    fn commit(&mut self, committed: &mut Core) {
+        self.core.drop_delivered();
+        committed.clone_from(&self.core);
+    }
 }
 
 impl Actives {
@@ -246,6 +261,12 @@ impl Actives {
 
     pub(crate) fn cores(&self) -> &[Core] {
         &self.committed
+    }
+
+    /// The copies each core runs ahead on. The next kept copy is cloned from these.
+    #[cfg(test)]
+    pub(crate) fn ahead_cores(&self) -> impl Iterator<Item = &Core> {
+        self.ahead.iter().map(|ahead| &ahead.core)
     }
 
     /// The first stop of any core up to `limit`, or `limit`. A step from the accepted time to
@@ -321,7 +342,7 @@ impl Actives {
                 image,
                 "a sample or an input at a landing never changes an image"
             );
-            committed.clone_from(&ahead.core);
+            ahead.commit(committed);
         }
         (changed, stops)
     }
@@ -343,7 +364,7 @@ impl Actives {
                 committed.drive(),
                 "an input on the held solve never changes an image"
             );
-            committed.clone_from(&ahead.core);
+            ahead.commit(committed);
         }
     }
 }

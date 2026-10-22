@@ -1,7 +1,7 @@
 //! The ATmega328P behind the seam. Its package pins become outputs, watches, and samples
 //! around `sim_avr::Timeline`, and its oscillator converts between picoseconds and cycles.
 
-use sim_avr::{Cpu, PinDrive, Port, Timeline};
+use sim_avr::{Channel, Cpu, PinDrive, Port, Timeline};
 use sim_core::netlist::{Atmega328p, PartId, Value};
 use sim_core::time::Time;
 
@@ -268,6 +268,18 @@ impl Core {
             }
         }
         self.levels = levels.to_vec();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cpu(&self) -> &Cpu {
+        self.timeline.cpu()
+    }
+
+    pub(crate) fn drop_delivered(&mut self) {
+        for channel in [Channel::Usart0, Channel::Spi, Channel::SpiHostMaster] {
+            while self.timeline.take(channel).is_some() {}
+        }
+        while self.timeline.take_i2c().is_some() {}
     }
 
     fn refresh(&mut self) {
