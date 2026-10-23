@@ -149,6 +149,7 @@ impl Core {
             Op::Rjmp(to) => self.finish(to, 2),
             Op::Brbs { s, to } => self.branch_if(self.flag(s), next, to),
             Op::Brbc { s, to } => self.branch_if(!self.flag(s), next, to),
+            Op::Countdown(c) => self.branch_if(!self.flag(1), next, c.head(pc)),
             Op::Jmp(to) => self.finish(to, 3),
             Op::Ijmp => self.finish(self.z(), 2),
             Op::Bst { d, b } => {

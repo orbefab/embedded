@@ -2,6 +2,7 @@ mod adc;
 mod alu_flags;
 mod clock_select;
 mod common;
+mod counted_runs;
 mod cycles;
 mod free_runs;
 mod gpio_in;

@@ -7,7 +7,8 @@ use super::execute::{Ptr, Update};
 use crate::bus::IO_BASE;
 
 /// One instruction with its operands extracted. A target is the absolute word address. `skip` is
-/// the length, in words, of the instruction a skip passes over.
+/// the length, in words, of the instruction a skip passes over. `Countdown` is the `BRNE` that
+/// closes a [`Countdown`] loop. It is last, so every other op keeps its tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Op {
     Nop,
@@ -82,18 +83,79 @@ pub(super) enum Op {
     Wdr,
     Break,
     Unknown(u16),
+    Countdown(Countdown),
 }
+
+// `Countdown` carries its loop's shape in the op without growing the table.
+const _: () = assert!(size_of::<Op>() == 6);
 
 /// The op at each word of `flash` a program counter reaches. A word past the image reads as 0,
 /// which is `NOP`, so the table stops at the image.
 pub(super) fn table(flash: &[u16], pc_mask: u16) -> Vec<Op> {
     let words = flash.len().min(usize::from(pc_mask) + 1);
-    (0..words)
+    let mut ops: Vec<Op> = (0..words)
         .map(|pc| {
             let following = flash.get(pc + 1).copied().unwrap_or(0);
             decode(flash[pc], following, pc as u16, pc_mask)
         })
-        .collect()
+        .collect();
+    for at in 0..ops.len() {
+        if let Op::Brbc { s: 1, to } = ops[at]
+            && usize::from(to) < at
+            && let Some(countdown) = Countdown::parse(&ops[usize::from(to)..at])
+        {
+            ops[at] = Op::Countdown(countdown);
+        }
+    }
+    ops
+}
+
+/// A loop of `NOP`s and one counter decrement, closed by a `BRNE` `back` words after its first
+/// op. The counter is `bytes` registers from `lo` up, low byte first, and each pass subtracts `k`
+/// from it. The decrement is `SBIW`, `DEC`, or `SUBI` and up to three `SBCI` of 0. The loop exits
+/// on the pass that leaves the counter zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Countdown {
+    pub(super) back: u8,
+    /// Cycles of a pass that branches back.
+    pub(super) pass: u8,
+    pub(super) lo: u8,
+    pub(super) bytes: u8,
+    pub(super) k: u8,
+}
+
+impl Countdown {
+    /// `body` is the loop's ops before its `BRNE`.
+    fn parse(body: &[Op]) -> Option<Self> {
+        let mut chain = body.iter().filter(|op| **op != Op::Nop);
+        let first = *chain.next()?;
+        let (lo, k, mut bytes) = match first {
+            Op::Sbiw(lo, k) => (lo, k, 2),
+            Op::Dec(d) => (d, 1, 1),
+            Op::Subi(d, k) => (d, k, 1),
+            _ => return None,
+        };
+        for op in chain {
+            if !matches!(first, Op::Subi(..)) || bytes == 4 || *op != Op::Sbci(lo + bytes, 0) {
+                return None;
+            }
+            bytes += 1;
+        }
+        // A backward `BRNE` reaches at most 63 words, so `back` fits and `pass` is at most 66.
+        let back = body.len() as u8;
+        (k != 0).then_some(Self {
+            back,
+            pass: back + 2 + u8::from(matches!(first, Op::Sbiw(..))),
+            lo,
+            bytes,
+            k,
+        })
+    }
+
+    /// The loop's first op, with the `BRNE` at `at`.
+    pub(super) fn head(self, at: u16) -> u16 {
+        at - u16::from(self.back)
+    }
 }
 
 /// `word` at `pc`, with `following` the word after it, or 0 past the image.
@@ -152,6 +214,7 @@ macro_rules! free_op {
             | Op::Rjmp(_)
             | Op::Brbs { .. }
             | Op::Brbc { .. }
+            | Op::Countdown(_)
             | Op::Jmp(_)
             | Op::Ijmp
             | Op::Bst { .. }

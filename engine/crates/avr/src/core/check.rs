@@ -250,6 +250,7 @@ fn reaches_bus(op: Op) -> bool {
             | Op::Rjmp(_)
             | Op::Brbs { .. }
             | Op::Brbc { .. }
+            | Op::Countdown(_)
             | Op::Jmp(_)
             | Op::Ijmp
             | Op::Bst { .. }

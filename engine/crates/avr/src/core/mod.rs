@@ -16,7 +16,7 @@ mod execute;
 use std::sync::Arc;
 
 use crate::bus::Bus;
-use decode::Op;
+use decode::{Countdown, Op};
 
 /// What the core does between instructions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,7 +275,7 @@ impl Core {
         if op.is_free() {
             loop {
                 let before = self.cycles;
-                self.execute_free(self.pc, op);
+                self.execute_in_run(self.pc, op, bound);
                 if self.cycles >= bound {
                     return Some(self.cycles.wrapping_sub(before));
                 }
@@ -320,7 +320,7 @@ impl Core {
                     break;
                 }
                 before = self.cycles;
-                self.execute_free(self.pc, op);
+                self.execute_in_run(self.pc, op, bound);
             }
             if self.cycles >= bound {
                 return Some(self.cycles.wrapping_sub(before));
@@ -338,6 +338,56 @@ impl Core {
                 return None;
             }
         }
+    }
+
+    /// Runs `op`, which [`Op::is_free`], in a run that ends at cycle `bound`. When a
+    /// [`Countdown`]'s `BRNE` branches back to the head before `bound`, it jumps all but the last
+    /// of the passes that end before `bound` and leave the counter above zero, and the last one
+    /// runs. With fewer than two passes before `bound` it refuses before it reads the counter. The
+    /// jump sits in this op's arm so that no other op pays for it.
+    #[inline(always)]
+    fn execute_in_run(&mut self, pc: u16, op: Op, bound: u64) {
+        match op {
+            Op::Countdown(countdown) => {
+                self.execute_free(pc, op);
+                let pass = u64::from(countdown.pass);
+                if self.pc == countdown.head(pc)
+                    && self.cycles < bound
+                    && bound - 1 - self.cycles >= 2 * pass
+                {
+                    self.jump_passes(countdown, (bound - 1 - self.cycles) / pass);
+                }
+            }
+            _ => self.execute_free(pc, op),
+        }
+    }
+
+    /// [`Self::execute_in_run`] at the head of `countdown`, with `room` passes before the bound.
+    #[inline(never)]
+    fn jump_passes(&mut self, countdown: Countdown, room: u64) {
+        let (lo, bytes) = (usize::from(countdown.lo), usize::from(countdown.bytes));
+        let counter = &mut self.r[lo..lo + bytes];
+        let n = counter
+            .iter()
+            .rev()
+            .fold(0u64, |n, &byte| (n << 8) | u64::from(byte));
+        let k = u64::from(countdown.k);
+        let passes = room.min(n.saturating_sub(1) / k);
+        if passes < 2 {
+            return;
+        }
+        // A jumped pass leaves `SREG` as it was at the head. The pass that runs next rewrites
+        // every flag the loop writes before any is read: `SUBI`, `SBIW` and `DEC` read no flag,
+        // each `SBCI` reads only the `C` and `Z` the op before it wrote, and `BRNE` reads the `Z`
+        // the decrement wrote. That pass ends before `bound` and before the exit, so no run
+        // returns, takes an interrupt, or leaves the loop with the stale flags.
+        let skip = passes - 1;
+        let mut left = n - skip * k;
+        for byte in counter {
+            *byte = left as u8;
+            left >>= 8;
+        }
+        self.cycles = self.cycles.wrapping_add(skip * u64::from(countdown.pass));
     }
 
     #[inline(always)]
