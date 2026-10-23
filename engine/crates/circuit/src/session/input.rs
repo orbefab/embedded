@@ -86,6 +86,12 @@ impl Session {
         Ok(Applied { at, status })
     }
 
+    /// Whether the session has a document for `export` to write, as `open_document` and
+    /// `record_document` keep.
+    pub fn has_document(&self) -> bool {
+        self.document.is_some()
+    }
+
     /// The document `open_document` read, with every applied input in its part. A switch event
     /// is appended to `events`. A plain `voltage`, `current` or `position` becomes `steps`, and
     /// a `steps` field gains the new levels. A part with nothing applied is unchanged.

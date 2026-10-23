@@ -4,30 +4,10 @@ use std::path::Path;
 
 use serde::Serialize;
 use sim_core::diagnostic::{Diagnostic, Severity};
-use sim_core::netlist;
-use sim_core::run_folder::{self, Results, RunFolder};
-use sim_core::timestamp::Timestamp;
+use sim_core::run_folder::Results;
 
 pub use doctor::{Check, DoctorReport, doctor};
-
-pub struct Completed {
-    pub results: Results,
-    pub folder: RunFolder,
-}
-
-/// netlist.json bytes to a run folder. Never fails. A rejected netlist is a
-/// folder whose diagnostics say why.
-pub fn run(input: &[u8], created_at: Timestamp) -> Completed {
-    let (netlist, results) = match netlist::parse(input) {
-        Ok(n) => {
-            let r = sim_circuit::simulate(&n);
-            (Some(n), r)
-        }
-        Err(d) => (None, Results::rejected(d)),
-    };
-    let folder = run_folder::render(input, netlist.as_ref(), &results, created_at);
-    Completed { results, folder }
-}
+pub use sim_circuit::{Completed, run};
 
 /// Every `sim` invocation ends in exactly one of these. The JSON `status`
 /// field and the process exit code both come from this value.

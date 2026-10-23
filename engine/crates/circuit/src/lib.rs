@@ -15,8 +15,9 @@ mod topology;
 mod tran;
 mod watch;
 
-use sim_core::netlist::{Analysis, Netlist};
-use sim_core::run_folder::{Observations, Results};
+use sim_core::netlist::{self, Analysis, Netlist};
+use sim_core::run_folder::{self, Observations, Results, RunFolder};
+use sim_core::timestamp::Timestamp;
 
 use crate::tran::Rows;
 
@@ -34,6 +35,26 @@ pub use sim_core::serial::SerialByte;
 pub struct RunStats {
     pub landings: u64,
     pub stops: u64,
+}
+
+/// What `sim run` makes of netlist.json bytes: the results and the folder they render to.
+pub struct Completed {
+    pub results: Results,
+    pub folder: RunFolder,
+}
+
+/// netlist.json bytes to a run folder, as `sim run` writes it. Never fails. A rejected netlist is
+/// a folder whose diagnostics say why.
+pub fn run(input: &[u8], created_at: Timestamp) -> Completed {
+    let (netlist, results) = match netlist::parse(input) {
+        Ok(n) => {
+            let r = simulate(&n);
+            (Some(n), r)
+        }
+        Err(d) => (None, Results::rejected(d)),
+    };
+    let folder = run_folder::render(input, netlist.as_ref(), &results, created_at);
+    Completed { results, folder }
 }
 
 /// Simulate a validated netlist. A transient writes its rows on the grid it sets.

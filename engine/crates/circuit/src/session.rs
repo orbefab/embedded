@@ -267,13 +267,21 @@ impl Session {
     /// Solves the operating point at t = 0 and the step after it, and keeps no trace. The step
     /// after t = 0 can fail, and then the session it returns has faulted.
     pub fn open(netlist: Netlist) -> Result<Session, Refused> {
-        Session::open_with(netlist, None)
+        Session::open_with(netlist, None, BUDGET)
     }
 
     /// `open` on the netlist `json` parses to, keeping `json` so `export` can write it back.
     pub fn open_document(json: &[u8]) -> Result<Session, Refused> {
         let (document, netlist) = Document::parse(json).map_err(Refused::Invalid)?;
-        Session::open_with(netlist, Some(document))
+        Session::open_with(netlist, Some(document), BUDGET)
+    }
+
+    /// Tests only: `open_document` with Newton's budget for each row and each probe between
+    /// steps lowered to `row`, so a test outside this crate can see a probe that fails twice.
+    #[cfg(feature = "row-budget")]
+    pub fn open_document_with_row_budget(json: &[u8], row: u32) -> Result<Session, Refused> {
+        let (document, netlist) = Document::parse(json).map_err(Refused::Invalid)?;
+        Session::open_with(netlist, Some(document), Budget { row, ..BUDGET })
     }
 
     /// `open_document` with the trace, logic history and rating findings `sim run` keeps, so
@@ -288,14 +296,18 @@ impl Session {
         Ok(session)
     }
 
-    fn open_with(netlist: Netlist, document: Option<Document>) -> Result<Session, Refused> {
+    fn open_with(
+        netlist: Netlist,
+        document: Option<Document>,
+        budget: Budget,
+    ) -> Result<Session, Refused> {
         let transient = transient(&netlist)?;
         let columns = Columns::new(&netlist);
         Session::start(
             netlist,
             &transient,
             Vec::new(),
-            BUDGET,
+            budget,
             columns,
             None,
             document,
