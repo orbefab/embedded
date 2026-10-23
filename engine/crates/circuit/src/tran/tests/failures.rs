@@ -2,20 +2,19 @@ use sim_core::netlist::Netlist;
 
 use super::super::*;
 use super::fixtures::*;
+use crate::session::Budget;
 
 /// One Newton iteration per step converges only where nothing moves: before the edge.
 #[test]
 fn a_step_that_fails_down_to_one_picosecond_ends_the_run_at_the_last_accepted_time() {
     let netlist = fast_discharge(false);
     let mut diagnostics = Vec::new();
-    let columns = Columns::new(&netlist);
     let outcome = run_with(
         &netlist,
         &transient(&netlist),
         Vec::new(),
         Budget { step: 1, ..BUDGET },
         Rows::Grid,
-        columns,
         &mut diagnostics,
     );
     assert_eq!(reached(&outcome), Time::from_ps(1_000_000));
@@ -89,14 +88,12 @@ fn led_discharge() -> Netlist {
 fn a_junction_step_that_fails_down_to_one_picosecond_names_the_junction() {
     let netlist = led_discharge();
     let mut diagnostics = Vec::new();
-    let columns = Columns::new(&netlist);
     let outcome = run_with(
         &netlist,
         &transient(&netlist),
         Vec::new(),
         Budget { step: 2, ..BUDGET },
         Rows::Grid,
-        columns,
         &mut diagnostics,
     );
     assert_eq!(outcome.trace.unwrap().end(), Some(Time::from_ps(1_000_000)));
@@ -128,7 +125,6 @@ fn the_same_circuit_converges_with_the_step_budget() {
 fn a_restart_that_fails_keeps_the_edge_row_and_names_the_edge() {
     let netlist = led_switch();
     let mut diagnostics = Vec::new();
-    let columns = Columns::new(&netlist);
     let outcome = run_with(
         &netlist,
         &transient(&netlist),
@@ -138,7 +134,6 @@ fn a_restart_that_fails_keeps_the_edge_row_and_names_the_edge() {
             ..BUDGET
         },
         Rows::Grid,
-        columns,
         &mut diagnostics,
     );
     assert_eq!(reached(&outcome), Time::from_ps(1_000_000));

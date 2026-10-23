@@ -2,6 +2,7 @@ use sim_core::netlist::Netlist;
 
 use super::super::*;
 use super::fixtures::*;
+use crate::session::Budget;
 
 /// 5 V pulsed onto 10 ohm rated 1 mW, from 3 ns for 2 ns, on a 10 ns grid. No row sees it.
 fn pulse_between_rows() -> Netlist {
@@ -202,7 +203,6 @@ fn dense_pulse() -> Netlist {
 fn a_dense_pulse_stops_at_the_step_limit_and_keeps_what_it_reached() {
     let netlist = dense_pulse();
     let mut diagnostics = Vec::new();
-    let columns = Columns::new(&netlist);
     let outcome = run_with(
         &netlist,
         &transient(&netlist),
@@ -212,7 +212,6 @@ fn a_dense_pulse_stops_at_the_step_limit_and_keeps_what_it_reached() {
             ..BUDGET
         },
         Rows::Grid,
-        columns,
         &mut diagnostics,
     );
     let end = reached(&outcome);
@@ -238,14 +237,12 @@ fn a_dense_pulse_stops_at_the_step_limit_and_keeps_what_it_reached() {
 fn a_failed_runs_last_interval_ends_at_its_off_grid_last_step() {
     let netlist = dense_pulse();
     let mut diagnostics = Vec::new();
-    let columns = Columns::new(&netlist);
     let outcome = run_with(
         &netlist,
         &transient(&netlist),
         Vec::new(),
         Budget { steps: 8, ..BUDGET },
         Rows::Grid,
-        columns,
         &mut diagnostics,
     );
     let end = reached(&outcome);
@@ -268,7 +265,6 @@ fn a_failed_runs_last_interval_ends_at_its_off_grid_last_step() {
         Vec::new(),
         Budget { steps: 8, ..BUDGET },
         Rows::Steps,
-        Columns::new(&netlist),
         &mut step_diagnostics,
     );
     assert_eq!(
@@ -308,14 +304,12 @@ fn a_failed_runs_last_interval_ends_at_its_off_grid_last_step() {
 fn in_step_rows_mode_each_interval_holds_exactly_its_two_rows() {
     let netlist = pulse_between_rows();
     let mut diagnostics = Vec::new();
-    let columns = Columns::new(&netlist);
     let outcome = run_with(
         &netlist,
         &transient(&netlist),
         Vec::new(),
         BUDGET,
         Rows::Steps,
-        columns,
         &mut diagnostics,
     );
     let trace = outcome.trace.expect("the steps run keeps its rows");
@@ -333,14 +327,12 @@ fn in_step_rows_mode_each_interval_holds_exactly_its_two_rows() {
 fn a_rating_survives_a_convergence_failure() {
     let netlist = fast_discharge(true);
     let mut diagnostics = Vec::new();
-    let columns = Columns::new(&netlist);
     let outcome = run_with(
         &netlist,
         &transient(&netlist),
         Vec::new(),
         Budget { step: 1, ..BUDGET },
         Rows::Grid,
-        columns,
         &mut diagnostics,
     );
     assert!(reached(&outcome) < transient(&netlist).stop);

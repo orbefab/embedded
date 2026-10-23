@@ -5,17 +5,17 @@ use sim_core::diagnostic::Diagnostic;
 use sim_core::finite::Finite;
 use sim_core::logic::{Level, Logic};
 use sim_core::name::Ref;
-use sim_core::netlist::{Edge, Model, Netlist, PartId, Transient};
+use sim_core::netlist::{Document, Edge, Model, Netlist, PartId, Transient};
 use sim_core::run_folder::{Observations, OpPoint};
 use sim_core::time::Time;
 use sim_core::trace::Trace;
 
 use crate::RunStats;
-use crate::active;
 use crate::observe::{self, Columns};
 use crate::ratings::{Ratings, Timing};
-use crate::session::{BUDGET, Budget, Probed, Session, Span};
+use crate::session::{BUDGET, Probed, Session, Span};
 use crate::step::EDGE_STEP;
+use crate::topology;
 
 /// After an error `observations` hold what the run reached, and the trace keeps the rows
 /// before it.
@@ -58,65 +58,86 @@ impl Rows {
     }
 }
 
-/// The grid is checked against the trace's row limit first, before any solve. Then the
-/// operating point, then steps to `stop`. Rating findings and any solver error go to
-/// `diagnostics`.
+/// The recorded session on a transient, and the one way `simulate` and
+/// `Session::record_document` open one. The session holds the netlist's floating-net warnings,
+/// which its run reports. A grid with more rows than a trace holds is `trace.too_large`, before
+/// any solve. Then the operating point and the step after it.
+#[expect(
+    clippy::result_large_err,
+    reason = "the session in Ok is larger than the error, so boxing it saves nothing"
+)]
+pub(crate) fn record(
+    netlist: Netlist,
+    transient: &Transient,
+    rows: Rows,
+    document: Option<Document>,
+) -> Result<Session, Unopened> {
+    let warnings = topology::floating_nets(&netlist);
+    let columns = Columns::new(&netlist);
+    let limit = Trace::row_limit(columns.refs().len());
+    if transient.rows() > limit as u64 {
+        return Err(Unopened {
+            error: Diagnostic::TraceTooLarge {
+                rows: transient.rows(),
+                limit,
+                columns: columns.refs().len(),
+                at: None,
+            },
+            warnings,
+        });
+    }
+    match Session::start(
+        netlist,
+        transient,
+        Vec::new(),
+        BUDGET,
+        columns,
+        Some(rows),
+        document,
+    ) {
+        Ok(mut session) => {
+            session.warnings = warnings;
+            Ok(session)
+        }
+        Err(error) => Err(Unopened { error, warnings }),
+    }
+}
+
+/// The error that kept `record` from opening a session, and the warnings a run reports with it.
+#[derive(Debug)]
+pub(crate) struct Unopened {
+    pub(crate) error: Diagnostic,
+    pub(crate) warnings: Vec<Diagnostic>,
+}
+
+/// `record`, then steps to `stop`. The run's diagnostics go to `diagnostics`.
 pub(crate) fn run(
     netlist: &Netlist,
     transient: &Transient,
     rows: Rows,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Outcome {
-    let columns = Columns::new(netlist);
-    let limit = Trace::row_limit(columns.refs().len());
-    if transient.rows() > limit as u64 {
-        diagnostics.push(Diagnostic::TraceTooLarge {
-            rows: transient.rows(),
-            limit,
-            columns: columns.refs().len(),
-            at: None,
-        });
-        return Outcome {
-            observations: Observations::Nothing,
-            trace: None,
-            stats: RunStats::default(),
-        };
-    }
-    run_with(
-        netlist,
+    to_stop(
+        record(netlist.clone(), transient, rows, None),
         transient,
-        Vec::new(),
-        BUDGET,
-        rows,
-        columns,
         diagnostics,
     )
 }
 
-fn run_with(
-    netlist: &Netlist,
+/// A recorded session stepped to `stop`, or the warnings and error of one `record` did not open.
+fn to_stop(
+    recorded: Result<Session, Unopened>,
     transient: &Transient,
-    actives: Vec<active::Chip>,
-    budget: Budget,
-    rows: Rows,
-    columns: Columns,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Outcome {
-    match Session::open_recorded(
-        netlist.clone(),
-        transient,
-        actives,
-        budget,
-        columns,
-        rows,
-        None,
-    ) {
+    match recorded {
         Ok(mut session) => {
             session.advance_to(transient.stop);
-            session.finish(diagnostics)
+            session.outcome(diagnostics)
         }
-        Err(failed) => {
-            diagnostics.push(failed);
+        Err(unopened) => {
+            diagnostics.extend(unopened.warnings);
+            diagnostics.push(unopened.error);
             Outcome {
                 observations: Observations::Nothing,
                 trace: None,

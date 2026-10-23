@@ -1,6 +1,8 @@
 use sim_core::netlist::{Analysis, Netlist};
 
 use super::super::*;
+use crate::active;
+use crate::session::Budget;
 
 /// A 5 V source, 220 ohm and an LED onto a switch that closes at 1 us.
 pub(super) fn led_switch() -> Netlist {
@@ -144,10 +146,44 @@ pub(super) fn reached(outcome: &Outcome) -> Time {
     *end
 }
 
+/// `run` with `actives` beside the netlist's chips and each solve held to `budget`.
+/// It checks no row limit and reports no floating net, because a test chip drives nets the
+/// netlist leaves floating.
+pub(super) fn run_with(
+    netlist: &Netlist,
+    transient: &Transient,
+    actives: Vec<active::Chip>,
+    budget: Budget,
+    rows: Rows,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Outcome {
+    let recorded = Session::start(
+        netlist.clone(),
+        transient,
+        actives,
+        budget,
+        Columns::new(netlist),
+        Some(rows),
+        None,
+    )
+    .map_err(|error| Unopened {
+        error,
+        warnings: Vec::new(),
+    });
+    to_stop(recorded, transient, diagnostics)
+}
+
 /// A clean run with a row at every accepted step.
 pub(super) fn run_steps(netlist: &Netlist) -> Trace {
     let mut diagnostics = Vec::new();
-    let outcome = run(netlist, &transient(netlist), Rows::Steps, &mut diagnostics);
+    let outcome = run_with(
+        netlist,
+        &transient(netlist),
+        Vec::new(),
+        BUDGET,
+        Rows::Steps,
+        &mut diagnostics,
+    );
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     outcome.trace.unwrap()
 }
@@ -171,14 +207,13 @@ pub(super) fn trapezoidal(v_src: f64, v0: f64, i0: f64, h_ps: u64, g_load: f64) 
 
 /// A session on the grid, opened with `chips` beside the netlist's.
 pub(super) fn open(netlist: &Netlist, chips: Vec<active::Chip>, budget: Budget) -> Session {
-    let columns = Columns::new(netlist);
-    Session::open_recorded(
+    Session::start(
         netlist.clone(),
         &transient(netlist),
         chips,
         budget,
-        columns,
-        Rows::Grid,
+        Columns::new(netlist),
+        Some(Rows::Grid),
         None,
     )
     .unwrap()

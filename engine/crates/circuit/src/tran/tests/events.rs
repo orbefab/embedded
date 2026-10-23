@@ -2,6 +2,7 @@ use sim_core::netlist::Netlist;
 
 use super::super::*;
 use super::fixtures::*;
+use crate::session::Budget;
 use crate::session::State;
 
 /// 100 kohm and 1 uF from 5 V hold an NE555's RESET low at power-on, and its release at
@@ -79,14 +80,12 @@ fn reset_release(step_ps: Option<u64>, rst: f64) -> Netlist {
 fn a_stalled_probe_ends_the_run_and_names_the_probe() {
     let netlist = reset_release(None, 0.0);
     let mut diagnostics = Vec::new();
-    let columns = Columns::new(&netlist);
     let outcome = run_with(
         &netlist,
         &transient(&netlist),
         Vec::new(),
         Budget { probe: 1, ..BUDGET },
         Rows::Grid,
-        columns,
         &mut diagnostics,
     );
     let end = reached(&outcome).as_ps();
@@ -122,7 +121,6 @@ fn with_row_budget(netlist: &Netlist, grid: u64, row: u32) -> (Outcome, Vec<Diag
         Vec::new(),
         Budget { row, ..BUDGET },
         Rows::Grid,
-        Columns::new(netlist),
         &mut diagnostics,
     );
     (outcome, diagnostics)
@@ -369,7 +367,7 @@ fn a_row_whose_second_solve_converges_is_solved() {
         session.advance_to(landing);
     }
     let mut none = Vec::new();
-    let trace = session.finish(&mut none).trace.unwrap();
+    let trace = session.outcome(&mut none).trace.unwrap();
     assert_eq!(none, []);
     assert!(!retried.is_empty());
     for (at, from_step_end) in retried {

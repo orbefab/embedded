@@ -5,6 +5,7 @@ use sim_core::netlist::{NetId, Netlist};
 
 use super::super::*;
 use super::fixtures::*;
+use crate::active;
 use crate::active::script::{self, Op, Sample, eager};
 use crate::active::{Actives, Drive};
 use crate::newton::{Circuit, Conditions, Iterate, newton};
@@ -104,14 +105,12 @@ pub(super) fn scripted(
 
 pub(super) fn run_active(netlist: &Netlist, chips: Vec<active::Chip>) -> (Trace, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
-    let columns = Columns::new(netlist);
     let outcome = run_with(
         netlist,
         &transient(netlist),
         chips,
         BUDGET,
         Rows::Steps,
-        columns,
         &mut diagnostics,
     );
     (outcome.trace.unwrap(), diagnostics)

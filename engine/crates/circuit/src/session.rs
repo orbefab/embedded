@@ -3,8 +3,10 @@ use sim_core::finite::Finite;
 use sim_core::logic::Level;
 use sim_core::name::{Name, Ref};
 use sim_core::netlist::{Analysis, Document, Netlist, Transient};
+use sim_core::run_folder::{self, Results, RunFolder};
 use sim_core::serial::{Serial, SerialByte};
 use sim_core::time::Time;
+use sim_core::timestamp::Timestamp;
 
 use crate::RunStats;
 use crate::active::{self, Actives};
@@ -17,7 +19,7 @@ use crate::newton::{
 use crate::observe::{self, Columns};
 use crate::op;
 use crate::step::Plan;
-use crate::tran::{Breakpoints, Outcome, Record, Rows};
+use crate::tran::{self, Breakpoints, Outcome, Record, Rows};
 use crate::watch::{self, Levels};
 
 mod input;
@@ -130,6 +132,10 @@ pub struct Session {
     pub(crate) record: Option<Record>,
     /// The JSON the session opened from, which `export` writes back.
     document: Option<Document>,
+    /// The bytes `record_document` read, until an input changes the netlist they hold.
+    opened: Option<Vec<u8>>,
+    /// The floating-net warnings a recorded run reports.
+    pub(crate) warnings: Vec<Diagnostic>,
     pub(crate) state: State,
 }
 
@@ -171,6 +177,18 @@ pub(crate) enum End {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SerialCursor(u64);
 
+impl From<u64> for SerialCursor {
+    fn from(read: u64) -> SerialCursor {
+        SerialCursor(read)
+    }
+}
+
+impl From<SerialCursor> for u64 {
+    fn from(cursor: SerialCursor) -> u64 {
+        cursor.0
+    }
+}
+
 /// Where a session stands after a call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -188,10 +206,18 @@ pub enum Refused {
     /// An `op` analysis has no time to advance.
     Op,
     /// `solver.too_large`, or the operating point at t = 0 failed to settle or gave a quantity
-    /// that is not finite.
+    /// that is not finite. For `record_document`, also `trace.too_large`.
     Failed(Diagnostic),
-    /// The document `open_document` read is not a valid netlist.
+    /// The document `open_document` or `record_document` read is not a valid netlist.
     Invalid(Vec<Diagnostic>),
+}
+
+/// The transient a session runs. An `op` analysis has no time to advance.
+fn transient(netlist: &Netlist) -> Result<Transient, Refused> {
+    match netlist.analysis() {
+        Analysis::Transient(transient) => Ok(*transient),
+        Analysis::Op => Err(Refused::Op),
+    }
 }
 
 /// Every analog column at one time, read in one call: each net's voltage, then each part's `i`,
@@ -250,11 +276,20 @@ impl Session {
         Session::open_with(netlist, Some(document))
     }
 
+    /// `open_document` with the trace, logic history and rating findings `sim run` keeps, so
+    /// `finish` can write its run folder. It also refuses a grid with more rows than a trace
+    /// holds, with `trace.too_large`.
+    pub fn record_document(json: &[u8]) -> Result<Session, Refused> {
+        let (document, netlist) = Document::parse(json).map_err(Refused::Invalid)?;
+        let transient = transient(&netlist)?;
+        let mut session = tran::record(netlist, &transient, Rows::Grid, Some(document))
+            .map_err(|unopened| Refused::Failed(unopened.error))?;
+        session.opened = Some(json.to_vec());
+        Ok(session)
+    }
+
     fn open_with(netlist: Netlist, document: Option<Document>) -> Result<Session, Refused> {
-        let transient = match netlist.analysis() {
-            Analysis::Transient(transient) => *transient,
-            Analysis::Op => return Err(Refused::Op),
-        };
+        let transient = transient(&netlist)?;
         let columns = Columns::new(&netlist);
         Session::start(
             netlist,
@@ -268,29 +303,9 @@ impl Session {
         .map_err(Refused::Failed)
     }
 
-    pub(crate) fn open_recorded(
-        netlist: Netlist,
-        transient: &Transient,
-        actives: Vec<active::Chip>,
-        budget: Budget,
-        columns: Columns,
-        rows: Rows,
-        document: Option<Document>,
-    ) -> Result<Session, Diagnostic> {
-        Session::start(
-            netlist,
-            transient,
-            actives,
-            budget,
-            columns,
-            Some(rows),
-            document,
-        )
-    }
-
     /// Solves t = 0 and records it when `rows` is set, then solves the step after it. Fails only
     /// when t = 0 fails.
-    fn start(
+    pub(crate) fn start(
         netlist: Netlist,
         transient: &Transient,
         actives: Vec<active::Chip>,
@@ -364,6 +379,8 @@ impl Session {
             serial: Vec::new(),
             record,
             document,
+            opened: None,
+            warnings: Vec::new(),
             state: State::TAKEN,
         };
         session.state = session.solved(accepted);
@@ -484,7 +501,7 @@ impl Session {
     /// most one step after its stop bit ends, and once the session has ended every byte that
     /// ended by `now` is here. The bytes are in the order their stop bits ended, then in
     /// `usarts` order. On one USART that is the order they started. Solves nothing. A cursor
-    /// past the end, which only another session can give, reads nothing and stays.
+    /// past the end, from another session or a count the caller made, reads nothing and stays.
     pub fn serial_since(&self, cursor: SerialCursor) -> (&[SerialByte], SerialCursor) {
         let Some(bytes) = usize::try_from(cursor.0)
             .ok()
@@ -495,12 +512,37 @@ impl Session {
         (bytes, SerialCursor(self.serial.len() as u64))
     }
 
-    /// The observations and trace of a recorded session advanced to its end. The trace holds the
-    /// serial log when a chip has a USART.
-    pub(crate) fn finish(self, diagnostics: &mut Vec<Diagnostic>) -> Outcome {
+    /// Advances to `stop` and returns the run folder `sim run` writes for the netlist this
+    /// session ran, stamped `created_at`. Its `netlist.json` is the bytes `record_document` read
+    /// when no input was applied, and otherwise the export of the ended session. `None` for a
+    /// session `open` or `open_document` made, which records nothing.
+    pub fn finish(mut self, created_at: Timestamp) -> Option<RunFolder> {
+        self.record.as_ref()?;
+        self.advance_to(self.transient.stop);
+        let json = match self.opened.take() {
+            Some(json) => json,
+            None => self.export()?,
+        };
+        // `outcome` consumes the session, and `render` reads the netlist's version and seed.
+        let netlist = self.circuit.netlist.clone();
+        let mut diagnostics = Vec::new();
+        let outcome = self.outcome(&mut diagnostics);
+        let results = Results::new(outcome.observations, outcome.trace, diagnostics);
+        Some(run_folder::render(
+            &json,
+            Some(&netlist),
+            &results,
+            created_at,
+        ))
+    }
+
+    /// The observations and trace of a recorded session advanced to its end, and its warnings,
+    /// ratings and fault in `diagnostics`. The trace holds the serial log when a chip has a USART.
+    pub(crate) fn outcome(self, diagnostics: &mut Vec<Diagnostic>) -> Outcome {
         let (State::Ended { at, row, end }, Some(record)) = (self.state, self.record) else {
             unreachable!("a recorded run finishes once it has ended");
         };
+        diagnostics.extend(self.warnings);
         let (observations, mut trace) = record.finish(&self.circuit.netlist, at, &row, diagnostics);
         let usarts = self.actives.usarts();
         if !usarts.is_empty() {

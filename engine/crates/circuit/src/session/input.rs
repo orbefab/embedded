@@ -75,6 +75,7 @@ impl Session {
             .filter(|&at| at < self.transient.stop)
             .ok_or(Rejected::PastStop)?;
         self.circuit.netlist.append(id, at, appended);
+        self.opened = None;
         self.breakpoints.arm(id, at);
         let State::Running { accepted, now, .. } = std::mem::replace(&mut self.state, State::TAKEN)
         else {

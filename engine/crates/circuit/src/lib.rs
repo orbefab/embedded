@@ -56,9 +56,9 @@ pub fn simulate_steps(netlist: &Netlist) -> Results {
 }
 
 fn simulate_with(netlist: &Netlist, rows: Rows) -> (Results, RunStats) {
-    let mut diagnostics = topology::floating_nets(netlist);
     match netlist.analysis() {
         Analysis::Op => {
+            let mut diagnostics = topology::floating_nets(netlist);
             let observations = match op::run(netlist, &mut diagnostics) {
                 Some(op) => Observations::Op(op),
                 None => Observations::Nothing,
@@ -69,6 +69,7 @@ fn simulate_with(netlist: &Netlist, rows: Rows) -> (Results, RunStats) {
             )
         }
         Analysis::Transient(transient) => {
+            let mut diagnostics = Vec::new();
             let outcome = tran::run(netlist, transient, rows, &mut diagnostics);
             (
                 Results::new(outcome.observations, outcome.trace, diagnostics),

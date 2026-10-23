@@ -6,12 +6,13 @@ use sim_core::timestamp::Timestamp;
 use super::super::*;
 use super::active::{NS, US, capacitor, circuit, resistor, scripted};
 use super::fixtures::*;
+use crate::active;
 use crate::active::Drive;
 use crate::active::script::Op;
 use crate::lte::Segment;
 use crate::newton::Side;
+use crate::session::Budget;
 use crate::session::{SerialCursor, State, Status, attempt};
-use crate::topology;
 
 /// A seeded xorshift, so a failing chunking replays.
 pub(super) struct Rng(pub(super) u64);
@@ -42,22 +43,21 @@ pub(super) fn example(name: &str, stop_ps: u64) -> Vec<u8> {
 
 /// The results `simulate` gives, with each step's Newton budget and the step limit from `budget`.
 pub(super) fn batch(netlist: &Netlist, budget: Budget) -> Results {
-    let mut diagnostics = topology::floating_nets(netlist);
+    let mut diagnostics = Vec::new();
     let outcome = run_with(
         netlist,
         &transient(netlist),
         Vec::new(),
         budget,
         Rows::Grid,
-        Columns::new(netlist),
         &mut diagnostics,
     );
     Results::new(outcome.observations, outcome.trace, diagnostics)
 }
 
-pub(super) fn finish(session: Session, netlist: &Netlist) -> Results {
-    let mut diagnostics = topology::floating_nets(netlist);
-    let outcome = session.finish(&mut diagnostics);
+pub(super) fn finish(session: Session) -> Results {
+    let mut diagnostics = Vec::new();
+    let outcome = session.outcome(&mut diagnostics);
     Results::new(outcome.observations, outcome.trace, diagnostics)
 }
 
@@ -147,7 +147,7 @@ fn input_in_chunks_writes_the_batch_folder(
     }
     assert!(on_rows > 0, "{name}: no chunk ended on a row");
     assert_eq!(serial, serial_of_one_call(&netlist, budget), "{name}");
-    assert_same_folder(input, &netlist, &finish(session, &netlist), &batch);
+    assert_same_folder(input, &netlist, &finish(session), &batch);
     batch
 }
 
@@ -284,7 +284,7 @@ fn a_call_inside_a_stiffened_step_holds_it() {
     );
     assert!(accepted.at < inside && inside < next.at && *now == inside);
     session.advance_to(transient(&netlist).stop);
-    assert_same_folder(STIFF_ROW, &netlist, &finish(session, &netlist), &batch);
+    assert_same_folder(STIFF_ROW, &netlist, &finish(session), &batch);
 }
 
 /// A row inside a step that a stiffen retried is solved on the stiffened segment, the one the
@@ -331,7 +331,7 @@ fn a_row_inside_a_stiffened_step_is_solved_on_the_stiffened_segment() {
         session.advance_to(at);
     }
     assert!(!rows.is_empty(), "a grid row falls inside a stiffened step");
-    let results = finish(session, &netlist);
+    let results = finish(session);
     let trace = results.trace().unwrap();
     for (at, want) in rows {
         let k = trace.time().binary_search(&at).unwrap();
@@ -390,12 +390,7 @@ fn a_target_inside_the_first_step_accepts_nothing_and_a_second_call_there_change
     session.advance_to(Time::ZERO);
     assert_eq!(standing(&session), there);
     session.advance_to(transient(&netlist).stop);
-    assert_same_folder(
-        &[],
-        &netlist,
-        &finish(session, &netlist),
-        &batch(&netlist, BUDGET),
-    );
+    assert_same_folder(&[], &netlist, &finish(session), &batch(&netlist, BUDGET));
 }
 
 #[test]
@@ -406,12 +401,7 @@ fn a_target_past_stop_ends_at_stop() {
     let status = session.advance_to(Time::from_ps(stop.as_ps() + 1_000_000));
     assert_eq!(status, Status::Stopped);
     assert_eq!(session.now(), stop);
-    assert_same_folder(
-        &[],
-        &netlist,
-        &finish(session, &netlist),
-        &batch(&netlist, BUDGET),
-    );
+    assert_same_folder(&[], &netlist, &finish(session), &batch(&netlist, BUDGET));
 }
 
 /// A step limit of 0 fails the step after t = 0, so the session has faulted at t = 0 before
@@ -504,12 +494,7 @@ fn chunks_that_end_beside_a_switch_edge_land_on_it_once() {
     assert_eq!((accepted.at, *now), (edge, edge));
     assert!(accepted.restart_row.is_some(), "the edge restarts");
     session.advance_to(transient(&netlist).stop);
-    assert_same_folder(
-        &[],
-        &netlist,
-        &finish(session, &netlist),
-        &batch(&netlist, BUDGET),
-    );
+    assert_same_folder(&[], &netlist, &finish(session), &batch(&netlist, BUDGET));
 }
 
 /// 0 to 5 V at 1 us through 1 kohm into 0.3 nF on `in`, which 2 kohm and an LED load. The chip

@@ -17,6 +17,7 @@ use super::fixtures::*;
 use super::session::{
     AVR_STOP_PS, Rng, STIFF_ROW, assert_same_folder, batch, example, finish, serial_of_one_call,
 };
+use crate::session::Budget;
 use crate::session::{Applied, Input, Rejected, SerialCursor, Setting, State, Status};
 
 /// 1 V through 1 kohm into 5 pF, a 5 ns time constant, so the 1 ns first step after an edge is
@@ -255,13 +256,13 @@ fn open_document(input: &[u8], rows: Rows, budget: Budget) -> Session {
     let (document, netlist) = Document::parse(input).unwrap();
     let transient = transient(&netlist);
     let columns = Columns::new(&netlist);
-    Session::open_recorded(
+    Session::start(
         netlist,
         &transient,
         Vec::new(),
         budget,
         columns,
-        rows,
+        Some(rows),
         Some(document),
     )
     .unwrap()
@@ -578,7 +579,7 @@ fn ends_as_its_export(mut session: Session) {
     let exported = netlist::parse(&export).unwrap();
     assert_eq!(parts(&exported), parts(netlist_of(&session)));
     let batch = batch(&exported, session.budget);
-    assert_same_folder(&export, &exported, &finish(session, &exported), &batch);
+    assert_same_folder(&export, &exported, &finish(session), &batch);
 }
 
 /// Whether `now` is before the accepted step's reach, where an input at `now` would cut an
@@ -690,7 +691,7 @@ fn inputs_in_chunks_write_the_export_folder(
         }
     }
     assert!(on_rows > 0, "{name}: no probe fell on a row");
-    assert_same_folder(&export, &exported, &finish(session, &exported), &batch);
+    assert_same_folder(&export, &exported, &finish(session), &batch);
     (batch, bytes)
 }
 

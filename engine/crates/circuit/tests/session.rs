@@ -3,12 +3,13 @@
 mod common;
 
 use common::{resistor, source_on, transient};
-use sim_circuit::{Input, Refused, Session, Setting, Status};
+use sim_circuit::{Input, Refused, SerialCursor, Session, Setting, Status};
 use sim_core::diagnostic::Diagnostic;
 use sim_core::finite::Finite;
 use sim_core::name::Name;
 use sim_core::netlist::{self, Contact, Model, Netlist};
 use sim_core::time::Time;
+use sim_core::timestamp::Timestamp;
 
 /// A seeded xorshift, so a failing run of calls replays.
 struct Rng(u64);
@@ -318,4 +319,65 @@ fn a_session_opened_on_a_document_exports_its_inputs() {
         Session::open_document(b"{}"),
         Err(Refused::Invalid(_))
     ));
+}
+
+/// `record_document` refuses what `open_document` refuses, and a grid with more rows than a
+/// trace holds, with the diagnostic `simulate` reports.
+#[test]
+fn a_recorded_session_refuses_an_op_an_invalid_document_and_a_grid_past_the_row_limit() {
+    let divider = std::fs::read(example_path("divider")).unwrap();
+    assert!(matches!(
+        Session::record_document(&divider),
+        Err(Refused::Op)
+    ));
+    assert!(matches!(
+        Session::record_document(b"{}"),
+        Err(Refused::Invalid(_))
+    ));
+    let json = transient(
+        1_000_000_000_000,
+        1_000,
+        r#""gnd","vin""#,
+        &[
+            &source_on("v1", "vin", 5.0),
+            &resistor("r1", "vin", "gnd", 1000.0),
+        ],
+    );
+    let Err(Refused::Failed(diagnostic)) = Session::record_document(json.as_bytes()) else {
+        panic!("a session opens");
+    };
+    assert_eq!(diagnostic.code(), "trace.too_large");
+    let netlist = netlist::parse(json.as_bytes()).unwrap();
+    assert_eq!(
+        sim_circuit::simulate(&netlist).diagnostics(),
+        std::slice::from_ref(&diagnostic)
+    );
+}
+
+#[test]
+fn a_session_that_records_nothing_finishes_to_no_folder() {
+    let json = std::fs::read(example_path("v-steps")).unwrap();
+    let at = Timestamp::from_unix_seconds(0);
+    assert!(Session::open_document(&json).unwrap().finish(at).is_none());
+    let netlist = netlist::parse(&json).unwrap();
+    assert!(Session::open(netlist).unwrap().finish(at).is_none());
+}
+
+/// A cursor is the count of bytes read, so a count read back resumes the log there.
+#[test]
+fn a_serial_cursor_is_the_count_of_bytes_read() {
+    assert_eq!(SerialCursor::from(0), SerialCursor::default());
+    let mut session = Session::open(example("atmega-analog-serial", u64::MAX)).unwrap();
+    assert_eq!(session.advance_to(Time::from_ps(u64::MAX)), Status::Stopped);
+    let (all, end) = session.serial_since(SerialCursor::default());
+    let all = all.to_vec();
+    assert!(!all.is_empty());
+    assert_eq!(u64::from(end), all.len() as u64);
+    for read in 0..=all.len() as u64 {
+        let (bytes, cursor) = session.serial_since(SerialCursor::from(read));
+        assert_eq!(bytes, &all[read as usize..]);
+        assert_eq!(cursor, end);
+    }
+    let past = SerialCursor::from(all.len() as u64 + 1);
+    assert_eq!(session.serial_since(past), (&[][..], past));
 }
