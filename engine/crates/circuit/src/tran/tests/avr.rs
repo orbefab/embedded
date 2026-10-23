@@ -456,6 +456,7 @@ fn a_landed_core_holds_no_byte_it_sent() {
     let circuit = Circuit::new(netlist.clone()).unwrap();
     let start = op::settle(
         &circuit,
+        None,
         Conditions::NOMINAL,
         Iterate::initial(&circuit),
         circuit.power_on(),

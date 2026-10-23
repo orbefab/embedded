@@ -57,6 +57,15 @@ pub(crate) fn unknowns(chip: &Chip) -> Unknowns {
     }
 }
 
+/// Whether its stamp reads the Newton iterate. The NE555 stamps from its held state, and an
+/// active chip from its core's drive image. A Newton call changes neither.
+pub(crate) fn reads_iterate(chip: &Chip) -> bool {
+    match kind(chip) {
+        Kind::Passive(Passive::Ne555(_)) => false,
+        Kind::Active(Active::Atmega328p(_)) => false,
+    }
+}
+
 /// Before the operating point settles it.
 pub(crate) fn power_on(chip: Passive<'_>) -> State {
     match chip {

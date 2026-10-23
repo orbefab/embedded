@@ -291,6 +291,7 @@ fn a_row_inside_a_stiffened_step_is_solved_on_the_stiffened_segment() {
                 let cores = session.actives.cores();
                 let converged = attempt(
                     &session.circuit,
+                    None,
                     accepted,
                     segment,
                     cores,

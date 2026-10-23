@@ -23,6 +23,11 @@ impl Matrix {
         self.a[row * self.n + col] += value;
     }
 
+    /// Row by row.
+    pub(crate) fn entries(&self) -> &[f64] {
+        &self.a
+    }
+
     pub(crate) fn clear(&mut self) {
         self.a.fill(0.0);
     }

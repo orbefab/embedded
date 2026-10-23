@@ -50,6 +50,23 @@ pub(crate) fn stamp(model: &Model, stamp: &mut Stamp<'_>) {
     }
 }
 
+/// Whether this part's stamp reads the Newton iterate. Only a junction's does, through
+/// `Stamp::junction`, the one reader of the iterate. Every other stamp reads only the call's
+/// conditions, so on a circuit where no part reads it every iteration of one call stamps the
+/// same system.
+pub(crate) fn reads_iterate(model: &Model) -> bool {
+    match model {
+        Model::Resistor(_)
+        | Model::Potentiometer(_)
+        | Model::VoltageSource(_)
+        | Model::CurrentSource(_)
+        | Model::Capacitor(_)
+        | Model::Switch(_) => false,
+        Model::Diode(_) | Model::Led(_) => true,
+        Model::Chip(chip) => chip::reads_iterate(chip),
+    }
+}
+
 /// Start voltages for this part's junction slots.
 pub(crate) fn initial(model: &Model, out: &mut [f64]) {
     match model {

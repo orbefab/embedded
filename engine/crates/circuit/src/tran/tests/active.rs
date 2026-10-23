@@ -647,7 +647,7 @@ fn an_output_stages_drop_scales_with_the_sources() {
         cores: &cores,
         ..Conditions::NOMINAL
     };
-    let solved = newton(&model, &half, Iterate::initial(&model), op::OP_BUDGET).unwrap();
+    let solved = newton(&model, None, &half, Iterate::initial(&model), op::OP_BUDGET).unwrap();
     let pin = solved.iterate.solution.voltage(net(&netlist, "out"));
     assert!((pin - 0.5 * 4.0 * load).abs() < 1e-9, "{pin}");
     let (trace, diagnostics) = run_active(&netlist, vec![chip]);

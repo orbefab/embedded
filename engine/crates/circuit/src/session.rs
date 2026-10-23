@@ -9,7 +9,7 @@ use crate::RunStats;
 use crate::active::{self, Actives};
 use crate::chip;
 use crate::lte::{self, Charges, Segment, Verdict};
-use crate::mna::Solution;
+use crate::mna::{Memo, Solution};
 use crate::newton::{
     Circuit, Conditions, Converged, Failure, History, Integration, Iterate, Offender, Side, newton,
 };
@@ -116,6 +116,9 @@ pub struct Session {
     /// The plan for the step after the last accepted one, before any reject or stall.
     pub(crate) plan: Plan,
     pub(crate) stats: RunStats,
+    /// The latest systems the run's steps, restarts and event probes solved. A row inside a span
+    /// and `Session::probe` solve without it, because both only read the session.
+    memo: Memo,
     /// Each chip signal, `Ref::Logic`, chips in part order.
     signals: Vec<Ref>,
     /// The level of each signal at `now`, in the order of `signals`.
@@ -291,8 +294,10 @@ impl Session {
         let circuit = Circuit::with_actives(netlist, actives)?;
         let charges = Charges::new(&circuit.netlist, &circuit.layout);
         let start = Iterate::initial(&circuit);
+        let mut memo = Memo::default();
         let start = op::settle(
             &circuit,
+            Some(&mut memo),
             Conditions::NOMINAL,
             start,
             circuit.power_on(),
@@ -345,6 +350,7 @@ impl Session {
             actives,
             plan: Plan::RESTART,
             stats: RunStats::default(),
+            memo,
             signals,
             logic,
             record,
@@ -515,6 +521,7 @@ impl Session {
             let cores = self.actives.cores();
             match attempt(
                 circuit,
+                Some(&mut self.memo),
                 accepted,
                 segment,
                 cores,
@@ -558,6 +565,7 @@ impl Session {
                             |h| {
                                 attempt(
                                     circuit,
+                                    Some(&mut self.memo),
                                     accepted,
                                     segment,
                                     cores,
@@ -604,9 +612,9 @@ impl Session {
                     });
                 }
                 Err(Failure::Stalled(stall)) => {
-                    // Without a junction the system is linear, and a shorter step does not make it finite.
+                    // A linear circuit stays non-finite at any step length.
                     if let Offender::NonFinite(_) = stall.offender
-                        && circuit.layout.junctions() == 0
+                        && circuit.linear
                     {
                         return Err(Diagnostic::SolverNonFinite {
                             at,
@@ -690,6 +698,7 @@ impl Session {
         let next = if restart {
             let held = restart_solve(
                 circuit,
+                &mut self.memo,
                 at,
                 &converged.iterate,
                 chips,
@@ -824,6 +833,7 @@ impl Span<'_> {
         let segment = self.to.stiffened.as_ref().unwrap_or(&self.from.segment);
         let converged = attempt(
             self.circuit,
+            None,
             self.from,
             segment,
             self.cores,
@@ -881,8 +891,10 @@ fn line(from: (Time, &[Finite]), to: (Time, &[Finite]), at: Time) -> Vec<Finite>
 
 /// One step of `h` ps from `from`, each capacitor on its method in `segment`. Both are only
 /// read, so a retry calls this again.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn attempt(
     circuit: &Circuit,
+    memo: Option<&mut Memo>,
     from: &Accepted,
     segment: &Segment,
     cores: &[active::Core],
@@ -902,15 +914,17 @@ pub(crate) fn attempt(
         cores,
         ..Conditions::NOMINAL
     };
-    newton(circuit, &conditions, start.clone(), budget)
+    newton(circuit, memo, &conditions, start.clone(), budget)
 }
 
 /// The solve after a switch edge, a source jump or a chip drive change at `at`: every capacitor
 /// held at its voltage in `step`, the new contacts, sources and `chips` in force, settled on the operating point
 /// ladder with `budget` per rung. `levels` were read on `step`. It is history for the next
 /// step, not a row.
+#[allow(clippy::too_many_arguments)]
 fn restart_solve(
     circuit: &Circuit,
+    memo: &mut Memo,
     at: Time,
     step: &Iterate,
     chips: Vec<chip::State>,
@@ -927,6 +941,7 @@ fn restart_solve(
     };
     op::settle(
         circuit,
+        Some(memo),
         conditions,
         step.clone(),
         chips,

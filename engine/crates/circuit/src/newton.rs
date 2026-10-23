@@ -7,7 +7,7 @@ use sim_core::time::Time;
 use crate::active;
 use crate::chip;
 use crate::element;
-use crate::mna::{GMIN, Layout, Probe, Solution, Stamp, System};
+use crate::mna::{GMIN, Layout, Memo, Probe, Solution, Stamp, System};
 use crate::watch::{Levels, Watches};
 
 pub(crate) const RELTOL: f64 = 1e-6;
@@ -25,6 +25,9 @@ pub(crate) struct Circuit {
     pub(crate) actives: Vec<active::Chip>,
     /// Every chip a netlist part builds, sorted by part, which is the order of the logic refs.
     logic: Vec<(PartId, Slot)>,
+    /// No part's stamp reads the iterate, so one Newton call stamps one system. A test's `extra`
+    /// actives do not count, because `active::stamp` never sees the iterate.
+    pub(crate) linear: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -77,12 +80,16 @@ impl Circuit {
             )
             .collect();
         logic.sort_unstable_by_key(|&(id, _)| id);
+        let linear = netlist
+            .parts()
+            .all(|(_, part)| !element::reads_iterate(&part.model));
         let mut circuit = Circuit {
             netlist,
             layout,
             watches: Watches::new(Vec::new()),
             actives,
             logic,
+            linear,
         };
         let watches = circuit
             .chips()
@@ -366,13 +373,19 @@ impl Offender {
     }
 }
 
-/// Newton with junction limiting, at most `budget` solves.
+/// Newton with junction limiting, at most `budget` solves. On a linear circuit `memo`, when
+/// there is one, answers a system it kept.
 ///
 /// Converged means three checks pass in one iteration: no unknown moved more
 /// than its tolerance, every junction's current check passed, and no junction
 /// was limited.
+///
+/// On a linear circuit the second iteration would stamp the first one's system, solve it to the
+/// same bits and pass every check, so the call returns after one solve with that iteration's
+/// count.
 pub(crate) fn newton(
     circuit: &Circuit,
+    mut memo: Option<&mut Memo>,
     conditions: &Conditions,
     start: Iterate,
     budget: u32,
@@ -386,13 +399,7 @@ pub(crate) fn newton(
         for (id, part) in circuit.netlist.parts() {
             element::stamp(
                 &part.model,
-                &mut Stamp {
-                    sys: &mut system,
-                    layout,
-                    part: id,
-                    iterate: &iterate,
-                    conditions,
-                },
+                &mut Stamp::new(&mut system, layout, id, &iterate, conditions),
             );
         }
         for (k, chip) in circuit.actives.iter().enumerate() {
@@ -403,9 +410,13 @@ pub(crate) fn newton(
                 conditions.source_scale,
             );
         }
-        let solution = system
-            .solve()
-            .map_err(|singular| Failure::Singular { row: singular.row })?;
+        // A linear circuit's systems repeat whenever its sources, contacts, drives, step and
+        // held voltages do. With a junction they seldom repeat, and a miss copies the system.
+        let solved = match memo.as_deref_mut() {
+            Some(memo) if circuit.linear => memo.solve(&mut system),
+            _ => system.solve(),
+        };
+        let solution = solved.map_err(|singular| Failure::Singular { row: singular.row })?;
         if let Some(row) = solution.components().iter().position(|x| !x.is_finite()) {
             return Err(Failure::Stalled(Stall {
                 iterations: iteration,
@@ -449,6 +460,12 @@ pub(crate) fn newton(
                 return Ok(Converged {
                     iterate,
                     iterations: iteration,
+                });
+            }
+            None if circuit.linear && iteration < budget => {
+                return Ok(Converged {
+                    iterate,
+                    iterations: iteration + 1,
                 });
             }
             None => Offender::Row(worst_row),
