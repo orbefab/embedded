@@ -427,6 +427,52 @@ fn untaken(core: &avr::Core) -> Vec<u8> {
         .collect()
 }
 
+/// `clone_from` over an earlier state of the same run, and back, leaves the state `clone` does.
+/// The two states differ in their levels, their image, and the core under them.
+#[test]
+fn a_clone_from_leaves_the_state_a_clone_does() {
+    let netlist = board(
+        20_000 * US,
+        &[],
+        &[
+            resistor("rt", "vcc", "pc0", 3300.0),
+            resistor("rb", "pc0", "gnd", 6800.0),
+        ],
+        atmega("vcc", ANALOG_SERIAL, MHZ_16, FUSES),
+    );
+    let txd = port_index(Pad::Port(Port::D, 1));
+    let mut core = core(&netlist);
+    let mut states = Vec::new();
+    for (k, (from, drive)) in [(3_000 * US, Drive::High), (11_000 * US, Drive::Low)]
+        .into_iter()
+        .enumerate()
+    {
+        let at = loop {
+            let halt = core
+                .run_until(sim_core::time::Time::from_ps(20_000 * US))
+                .expect("a stop before the end");
+            if halt.sample {
+                core.sample(halt.at, &[3.3, 0.0, 0.0, 0.0, 0.0, 0.0, 5.0, 5.0]);
+            }
+            if halt.at.as_ps() >= from && core.drive()[txd] == drive {
+                break halt.at;
+            }
+        };
+        let levels: Vec<bool> = (0..PACKAGE.len()).map(|n| (n + k) % 3 == 0).collect();
+        core.input(at, &levels[..21]);
+        states.push(core.clone());
+    }
+    let [early, late] = &states[..] else {
+        unreachable!("two states");
+    };
+    assert_ne!(early.drive(), late.drive());
+    for (onto, from) in [(early, late), (late, early)] {
+        let mut copy = onto.clone();
+        copy.clone_from(from);
+        assert_eq!(format!("{copy:?}"), format!("{:?}", from.clone()));
+    }
+}
+
 /// `analog_serial.S` prints ADC0 on TXD as one line per reading, and ADC0 is 3.3663 V, code
 /// 689. The core run alone still holds the lines it sent. Every landing that keeps a copy of
 /// the same core in `Actives` drops them, so neither that copy nor the one the next landing

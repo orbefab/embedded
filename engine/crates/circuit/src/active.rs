@@ -90,11 +90,34 @@ pub(crate) struct Stop {
 /// - A clocked kind runs to cycle `floor(limit_ps * f / 1e12)` and puts a stop at cycle `c` at
 ///   `ceil(c * 1e12 / f)` ps, counting from its clock domain's last frequency change.
 /// - `sample` and `input` never change the image. What they cause comes at least 1 ps later.
-#[derive(Clone, Debug)]
+/// - `input` and `drop_delivered` read nothing but the core and their arguments, so they take
+///   two equal cores to two equal cores. A clone shares only what no call writes: the AVR
+///   core's flash and decoded ops behind an `Arc`, and a script core's script.
+#[derive(Debug)]
 pub(crate) enum Core {
     Avr(Box<avr::Core>),
     #[cfg(test)]
     Script(script::Core),
+}
+
+impl Clone for Core {
+    fn clone(&self) -> Self {
+        match self {
+            Core::Avr(core) => Core::Avr(core.clone()),
+            #[cfg(test)]
+            Core::Script(core) => Core::Script(core.clone()),
+        }
+    }
+
+    /// Reuses the buffers of a core of the same kind. Every landing copies each core it commits
+    /// over that core's last commit.
+    fn clone_from(&mut self, source: &Self) {
+        match (self, source) {
+            (Core::Avr(core), Core::Avr(source)) => core.clone_from(source),
+            #[cfg(test)]
+            (core, source) => *core = source.clone(),
+        }
+    }
 }
 
 impl Core {
@@ -197,6 +220,9 @@ enum Reach {
     Done(Time),
     /// Everything before its stop is done, and the stop is not yet landed.
     Stopped(Stop),
+    /// Everything up to here is done, and the copy equals the committed core: `commit` made it
+    /// here and nothing has run or changed either since. Running the copy leaves this state.
+    Twin(Time),
 }
 
 impl Ahead {
@@ -204,7 +230,7 @@ impl Ahead {
     /// copy that ran past a flip at `at` runs again from the committed core.
     fn rewind(&mut self, committed: &Core, at: Time) {
         let reached = match self.reach {
-            Reach::Done(reached) => reached,
+            Reach::Done(reached) | Reach::Twin(reached) => reached,
             Reach::Stopped(stop) => stop.at,
         };
         if reached > at {
@@ -217,8 +243,37 @@ impl Ahead {
 
     /// Commits the copy without what it delivered, so no later copy of either core carries it.
     fn commit(&mut self, committed: &mut Core) {
+        let Reach::Done(at) = self.reach else {
+            panic!("a copy commits only where it was rewound");
+        };
         self.core.drop_delivered();
         committed.clone_from(&self.core);
+        self.reach = Reach::Twin(at);
+    }
+
+    /// Its watches' levels from `at` on, after the landing at `at`, then committed. A twin of
+    /// the committed core takes them on both cores, which leaves the state a fresh copy would.
+    fn input(&mut self, committed: &mut Core, at: Time, levels: &[bool]) {
+        if !matches!(self.reach, Reach::Twin(twin) if twin == at) {
+            self.rewind(committed, at);
+            self.core.input(at, levels);
+            assert_eq!(
+                self.core.drive(),
+                committed.drive(),
+                "an input on the held solve never changes an image"
+            );
+            self.commit(committed);
+            return;
+        }
+        committed.input(at, levels);
+        assert_eq!(
+            committed.drive(),
+            self.core.drive(),
+            "an input on the held solve never changes an image"
+        );
+        committed.drop_delivered();
+        self.core.input(at, levels);
+        self.core.drop_delivered();
     }
 }
 
@@ -274,7 +329,7 @@ impl Actives {
     pub(crate) fn horizon(&mut self, limit: Time) -> Time {
         let mut horizon = limit;
         for ahead in &mut self.ahead {
-            if let Reach::Done(reached) = ahead.reach
+            if let Reach::Done(reached) | Reach::Twin(reached) = ahead.reach
                 && reached < limit
             {
                 ahead.reach = match ahead.core.run_until(limit) {
@@ -357,14 +412,7 @@ impl Actives {
             if before.of(watched) == levels {
                 continue;
             }
-            ahead.rewind(committed, at);
-            ahead.core.input(at, levels);
-            assert_eq!(
-                ahead.core.drive(),
-                committed.drive(),
-                "an input on the held solve never changes an image"
-            );
-            ahead.commit(committed);
+            ahead.input(committed, at, levels);
         }
     }
 }

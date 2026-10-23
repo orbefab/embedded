@@ -72,7 +72,7 @@ impl HostQueues {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct Bus {
     /// Soonest event. Read on every instruction, so it stays at the front
     /// with the other bytes `tick` touches. `u64::MAX` when nothing is scheduled.
@@ -124,6 +124,37 @@ pub(crate) struct Bus {
     #[cfg(test)]
     test_irq: crate::periph::probe::Probe,
 }
+
+clone_fields!(Bus {
+    next_event,
+    cycle,
+    device_irq,
+    hold_any,
+    needs_stamp,
+    samples,
+    windows,
+    cpu_halt,
+    io,
+    sram,
+    strobe,
+    unmodeled,
+    owners,
+    devices,
+    index,
+    trigger_level,
+    row_gate,
+    mux,
+    analog,
+    host,
+    sleep_armed,
+    wdt_reset,
+    host_side,
+    osc_hz,
+    epoch,
+    before,
+    #[cfg(test)]
+    test_irq
+});
 
 impl Bus {
     pub(crate) fn new() -> Self {

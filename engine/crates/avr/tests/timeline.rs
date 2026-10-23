@@ -1,8 +1,8 @@
 //! The drive on a pin report, `run_to_news`, and the core on a host's timeline.
 
-use crate::common::{Instructions, cbi, in_io, ldi, lds, out, sbi, spin, sts};
+use crate::common::{Instructions, UCSR0B, UDR0, cbi, in_io, ldi, lds, out, sbi, spin, sts};
 
-use sim_avr::{Cpu, Halt, Level, PinDrive, Timeline};
+use sim_avr::{Channel, Cpu, Halt, Level, PinDrive, Timeline};
 
 const PINB: u16 = 0x03;
 const DDRB: u16 = 0x04;
@@ -24,11 +24,20 @@ const EIFR: u16 = 0x1C;
 const EIMSK: u16 = 0x1D;
 const EICRA: u16 = 0x0069;
 
+const PCICR: u16 = 0x0068;
+const PCMSK0: u16 = 0x006B;
+const EECR: u16 = 0x1F;
+const EEDR: u16 = 0x20;
+const EEARL: u16 = 0x21;
+
 const PB0: u32 = 0;
 const PB5: u32 = 5;
 const PC6: u32 = 14;
 const PD0: u32 = 16;
 const PD2: u32 = 18;
+const PD3: u32 = 19;
+const PD4: u32 = 20;
+const PD5: u32 = 21;
 const PD6: u32 = 22;
 
 const fn sbis(io: u16, bit: u16) -> u16 {
@@ -682,4 +691,81 @@ fn an_overdue_interrupt_entry_stops_for_its_own_news() {
         overdue > 0,
         "no pad left INTF0 overdue at the start of a run"
     );
+}
+
+/// Timer 1 captures on `ICP1` and counts `T1`, timer 0 counts `T0`, `INT0`, `INT1` and `PCINT0`
+/// are armed with no interrupt enabled, and one EEPROM write is in flight. The loop counts in
+/// SRAM, sends the count on the USART, and toggles PB5.
+fn every_queue() -> Vec<u16> {
+    let mut words = vec![sbi(DDRB, 5), ldi(16, 0x47)];
+    words.extend(sts(16, TCCR1B));
+    words.extend([ldi(16, 0x07), out(16, TCCR0B), ldi(16, 0x05)]);
+    words.extend(sts(16, EICRA));
+    words.extend([ldi(16, 0x03), out(16, EIMSK), ldi(16, 0x01)]);
+    words.extend(sts(16, PCICR));
+    words.extend(sts(16, PCMSK0));
+    words.push(ldi(16, 0x08));
+    words.extend(sts(16, UCSR0B));
+    words.extend([ldi(16, 0x5A), out(16, EEDR), ldi(16, 3), out(16, EEARL)]);
+    words.extend([sbi(EECR, 2), sbi(EECR, 1)]);
+    let top = words.len();
+    words.extend(lds(17, 0x0100));
+    words.push(inc(17));
+    words.extend(sts(17, 0x0100));
+    words.extend(sts(17, UDR0));
+    words.push(sbi(PINB, 5));
+    words.push(rjmp(top as i16 - words.len() as i16 - 1));
+    words
+}
+
+/// The pins `every_queue` arms: `ICP1`, `INT0`, `INT1`, `T0` and `T1`.
+const ARMED: [u32; 5] = [PB0, PD2, PD3, PD4, PD5];
+
+/// `clone_from` over an earlier state of the same run, and back, leaves the state `clone` does.
+fn assert_clone_from<T: Clone + std::fmt::Debug>(early: &T, late: &T) {
+    for (onto, from) in [(early, late), (late, early)] {
+        let mut copy = onto.clone();
+        copy.clone_from(from);
+        assert_eq!(format!("{copy:?}"), format!("{:?}", from.clone()));
+    }
+}
+
+/// On a timeline, which takes each pin report as it runs. Each state has a rising edge waiting
+/// on every armed pin, and the EEPROM write lands between the two.
+#[test]
+fn a_clone_from_leaves_the_state_a_clone_does() {
+    let mut timeline = Timeline::new(cpu(&every_queue()));
+    let mut states = Vec::new();
+    for until in [2_000, 70_000] {
+        for (high, at) in [(false, until - 8), (true, until)] {
+            while timeline.run_until(at).is_some() {}
+            for pin in ARMED {
+                timeline.set_pad(pin, high);
+            }
+        }
+        states.push(timeline.clone());
+    }
+    assert_ne!(states[0].cpu().eeprom(), states[1].cpu().eeprom());
+    assert_clone_from(&states[0], &states[1]);
+}
+
+/// On a bare core, whose pin reports and serial bytes wait for the host.
+#[test]
+fn a_clone_from_over_untaken_reports_leaves_the_state_a_clone_does() {
+    let mut cpu = cpu(&every_queue());
+    let mut states = Vec::new();
+    for until in [2_000, 70_000] {
+        for (level, at) in [(Level::Low, until - 8), (Level::High, until)] {
+            cpu.run_until(at);
+            for pin in ARMED {
+                cpu.drive_pin(pin, level);
+            }
+        }
+        states.push(cpu.clone());
+    }
+    for state in &states {
+        let mut state = state.clone();
+        assert!(state.take_pin().is_some() && state.take(Channel::Usart0).is_some());
+    }
+    assert_clone_from(&states[0], &states[1]);
 }

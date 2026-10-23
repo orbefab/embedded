@@ -41,7 +41,7 @@ pub(crate) struct EepromCfg {
     pub regs: crate::regs::RegBlock,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct Eeprom {
     vec: u8,
     data: Box<[u8]>,
@@ -59,6 +59,20 @@ pub(crate) struct Eeprom {
     done_at: u64,
     pending: Option<u8>,
 }
+
+clone_fields!(Eeprom {
+    vec,
+    data,
+    addr,
+    edr,
+    eecr,
+    cpu_hz,
+    eempe_until,
+    arm_window,
+    arm_len,
+    done_at,
+    pending
+});
 
 impl Eeprom {
     pub(crate) fn new(cfg: EepromCfg) -> Self {

@@ -76,7 +76,7 @@ struct Due {
     at: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct ExtInt {
     cfg: ExtIntCfg,
     mcucr: u8,
@@ -105,6 +105,29 @@ pub(crate) struct ExtInt {
     bods_until: u64,
     arm_bods: bool,
 }
+
+clone_fields!(ExtInt {
+    cfg,
+    mcucr,
+    eicra,
+    eicrb,
+    eimsk,
+    eifr,
+    pcicr,
+    pcifr,
+    pcmsk,
+    seen,
+    due,
+    due_len,
+    next,
+    io_clock,
+    rose,
+    fell,
+    bodse_until,
+    arm_bodse,
+    bods_until,
+    arm_bods
+});
 
 impl ExtInt {
     pub(crate) fn new(cfg: ExtIntCfg) -> Self {

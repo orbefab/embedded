@@ -114,13 +114,44 @@ pub(crate) fn port_index(pad: Pad) -> usize {
         .expect("a port pin")
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct Core {
     timeline: Timeline,
     clock_hz: u64,
     image: [Drive; PORT_PINS.len()],
     /// The levels it last took, in watch order. Empty before the power-on input.
     levels: Vec<bool>,
+}
+
+/// By hand for `clone_from`, which reuses the timeline's buffers. The patterns name every field.
+impl Clone for Core {
+    fn clone(&self) -> Self {
+        let Core {
+            timeline,
+            clock_hz,
+            image,
+            levels,
+        } = self;
+        Core {
+            timeline: timeline.clone(),
+            clock_hz: *clock_hz,
+            image: *image,
+            levels: levels.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        let Core {
+            timeline,
+            clock_hz,
+            image,
+            levels,
+        } = self;
+        timeline.clone_from(&source.timeline);
+        *clock_hz = source.clock_hz;
+        *image = source.image;
+        levels.clone_from(&source.levels);
+    }
 }
 
 pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {

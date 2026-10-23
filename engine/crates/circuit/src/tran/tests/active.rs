@@ -542,6 +542,77 @@ fn one_active_chip_reads_another_through_the_restart() {
     assert!((b_out.last().unwrap().1 - high).abs() < 1e-9);
 }
 
+/// `a_out` with `a` echoing `b_out` onto it 100 ns after it takes it. `a` and `b` drive low
+/// from power-on and run `a_ops` and `b_ops` after that. A source steps at 1 us, so a step ends
+/// there.
+fn echoed(a_ops: &[(u64, Op)], b_ops: &[(u64, Op)]) -> Vec<(u64, f64)> {
+    let step = r#"{ "name": "vs", "kind": "voltage_source", "pins": { "p": "src", "n": "gnd" },
+          "voltage": { "kind": "step", "initial": { "value": 0.0, "unit": "V", "source": "user" },
+                       "final": { "value": 5.0, "unit": "V", "source": "user" }, "at_ps": 1000000 } }"#;
+    let netlist = circuit(
+        2 * US,
+        &["a_out", "b_out", "b_in", "src"],
+        &[
+            resistor("ra", "a_out", "gnd", 1000.0),
+            resistor("rb", "b_out", "gnd", 10e3),
+            resistor("rin", "b_in", "gnd", 1000.0),
+            step.to_string(),
+            resistor("rs", "src", "gnd", 1000.0),
+        ],
+    );
+    let ops = |more: &[(u64, Op)]| [&[(0, Op::Drive(Drive::Low))], more].concat();
+    let a = scripted(&netlist, "a_out", "b_out", &ops(a_ops), Some(100 * NS));
+    let b = scripted(&netlist, "b_out", "b_in", &ops(b_ops), None);
+    let (trace, diagnostics) = run_active(&netlist, vec![a, b]);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    volts(&trace, "a_out")
+}
+
+const A_HIGH: f64 = 5.0 * 1000.0 / 1025.0;
+
+/// `a` lands at 1 us on a write that keeps its image, where `b` turns `b_out` high. `a` takes
+/// the flip on `b`'s restart solve, so its echo comes out at 1.1 us.
+#[test]
+fn a_flip_at_a_cores_own_landing_echoes_on_time() {
+    let a_out = echoed(
+        &[(US, Op::Drive(Drive::Low))],
+        &[(US, Op::Drive(Drive::High))],
+    );
+    assert!(at(&a_out, US + 100 * NS).abs() < 1e-9);
+    assert!((after(&a_out, US + 100 * NS) - A_HIGH).abs() < 1e-9);
+    assert!((a_out.last().unwrap().1 - A_HIGH).abs() < 1e-9);
+}
+
+/// As above, and `b` turns low again at 1.05 us. `a` takes that flip from the core committed at
+/// 1 us, whose copy already ran to the first echo, so `a_out` is high from 1.1 to 1.15 us.
+#[test]
+fn a_flip_at_a_cores_own_landing_echoes_after_a_rewind() {
+    let a_out = echoed(
+        &[(US, Op::Drive(Drive::Low))],
+        &[
+            (US, Op::Drive(Drive::High)),
+            (US + 50 * NS, Op::Drive(Drive::Low)),
+        ],
+    );
+    assert!((after(&a_out, US + 100 * NS) - A_HIGH).abs() < 1e-9);
+    assert!(at(&a_out, US + 150 * NS) > A_HIGH - 1e-9);
+    assert!(after(&a_out, US + 150 * NS).abs() < 1e-9);
+    assert!(a_out.last().unwrap().1.abs() < 1e-9);
+}
+
+/// `a` lands at 0.5 us, and its copy runs on to 1 us without a stop. `b` turns `b_out` high
+/// there, so `a` takes the flip at a landing it did not stop at.
+#[test]
+fn a_flip_at_a_landing_a_core_ran_through_echoes_on_time() {
+    let a_out = echoed(
+        &[(US / 2, Op::Drive(Drive::Low))],
+        &[(US, Op::Drive(Drive::High))],
+    );
+    assert!(at(&a_out, US + 100 * NS).abs() < 1e-9);
+    assert!((after(&a_out, US + 100 * NS) - A_HIGH).abs() < 1e-9);
+    assert!((a_out.last().unwrap().1 - A_HIGH).abs() < 1e-9);
+}
+
 /// A sample that acts 0 ps later puts its drive at the stop the core already reached.
 #[test]
 #[should_panic(expected = "a core stops only after where it reached")]

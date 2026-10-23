@@ -114,7 +114,7 @@ struct Wave {
     toggle_a: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct Timer {
     cfg: TimerCfg,
     index: u8,
@@ -180,6 +180,49 @@ pub(crate) struct Timer {
     #[cfg(test)]
     stepped: bool,
 }
+
+clone_fields!(Timer {
+    cfg,
+    index,
+    tccra,
+    tccrb,
+    tcnt,
+    icr,
+    ocr,
+    buf,
+    timsk,
+    tifr,
+    assr,
+    temp,
+    up,
+    div,
+    external,
+    t_prev,
+    icp_prev,
+    acic,
+    aco_level,
+    filtered,
+    filter_level,
+    filter_due,
+    filter_extra,
+    edges,
+    cap_len,
+    ext_len,
+    gate,
+    count_next,
+    select,
+    block,
+    hold_write,
+    ocf_due,
+    oc,
+    linked,
+    anchor,
+    next,
+    rose,
+    fell,
+    #[cfg(test)]
+    stepped
+});
 
 impl Timer {
     fn io_clock(&self) -> bool {

@@ -119,7 +119,7 @@ impl fmt::Display for LoadError {
 impl std::error::Error for LoadError {}
 
 /// One programmed ATmega328P.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Cpu {
     core: Core,
     bus: Bus,
@@ -136,6 +136,17 @@ pub struct Cpu {
     /// [`Self::set_brown_out`]: `true` below it. `None` reads `vcc_mv`.
     bod_low: Option<bool>,
 }
+
+clone_fields!(Cpu {
+    core,
+    bus,
+    clock_hz,
+    host_serial,
+    vcc_mv,
+    reset_held,
+    bod_held,
+    bod_low
+});
 
 /// Why [`Cpu::reset_as`] ran.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

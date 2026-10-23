@@ -17,7 +17,7 @@ pub struct Halt {
     pub sample: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Timeline {
     cpu: Cpu,
     /// Oscillator cycles. Everything up to here is done.
@@ -30,6 +30,14 @@ pub struct Timeline {
     /// The oscillator cycle of a sample-and-hold the host has not answered.
     sample: Option<u64>,
 }
+
+clone_fields!(Timeline {
+    cpu,
+    reached,
+    drives,
+    pending,
+    sample
+});
 
 impl Timeline {
     /// A programmed, powered core at oscillator cycle 0. Its ADC asks [`Timeline::sample`] for

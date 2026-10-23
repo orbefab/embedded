@@ -12,6 +12,25 @@
 //! into flash bytes. `timeline` runs the core on a host's clock, in oscillator
 //! cycles, and stops it at each change of a pin's drive.
 
+/// `Clone` for a struct, field by field, with a `clone_from` that reuses each field's buffers.
+/// The derived `clone_from` clones a fresh value and drops the old one. The patterns name every
+/// field with no `..`, so a field missing from the list does not build.
+macro_rules! clone_fields {
+    ($ty:ident { $($(#[$attr:meta])* $field:ident),* $(,)? }) => {
+        impl Clone for $ty {
+            fn clone(&self) -> Self {
+                let $ty { $($(#[$attr])* $field),* } = self;
+                $ty { $($(#[$attr])* $field: Clone::clone($field)),* }
+            }
+
+            fn clone_from(&mut self, source: &Self) {
+                let $ty { $($(#[$attr])* $field),* } = self;
+                $($(#[$attr])* $field.clone_from(&source.$field);)*
+            }
+        }
+    };
+}
+
 mod analog;
 mod bus;
 mod chip;

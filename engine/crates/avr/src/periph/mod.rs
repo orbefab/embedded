@@ -280,7 +280,7 @@ pub(crate) fn push_pin(pins: &mut VecDeque<PinReport>, overflow: &mut u64, repor
 /// stays the size of the timer and the USART. A tick does not follow that
 /// pointer unless an edge is actually waiting.
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) enum Device {
     Port(GpioPort),
     ExtInt(ExtInt),
@@ -293,6 +293,34 @@ pub(crate) enum Device {
     Acmp(Acmp),
     Eeprom(Eeprom),
     System(System),
+}
+
+impl Clone for Device {
+    fn clone(&self) -> Self {
+        match self {
+            Device::Port(device) => Device::Port(device.clone()),
+            Device::ExtInt(device) => Device::ExtInt(device.clone()),
+            Device::Timer(device) => Device::Timer(device.clone()),
+            Device::Prescaler(device) => Device::Prescaler(device.clone()),
+            Device::Usart(device) => Device::Usart(device.clone()),
+            Device::Spi(device) => Device::Spi(device.clone()),
+            Device::Twi(device) => Device::Twi(device.clone()),
+            Device::Adc(device) => Device::Adc(device.clone()),
+            Device::Acmp(device) => Device::Acmp(device.clone()),
+            Device::Eeprom(device) => Device::Eeprom(device.clone()),
+            Device::System(device) => Device::System(device.clone()),
+        }
+    }
+
+    /// The boxed queues and the EEPROM stay where they are.
+    fn clone_from(&mut self, source: &Self) {
+        match (self, source) {
+            (Device::ExtInt(device), Device::ExtInt(source)) => device.clone_from(source),
+            (Device::Timer(device), Device::Timer(source)) => device.clone_from(source),
+            (Device::Eeprom(device), Device::Eeprom(source)) => device.clone_from(source),
+            (device, source) => *device = source.clone(),
+        }
+    }
 }
 
 impl Device {
