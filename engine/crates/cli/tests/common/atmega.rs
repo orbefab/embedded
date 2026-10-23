@@ -174,7 +174,12 @@ pub fn run_beside_steps(example: &str) -> Beside {
         &gridless_results,
         sim_core::timestamp::Timestamp::from_unix_seconds(0),
     );
-    for file in ["diagnostics.json", "observations.json", "traces/logic.vcd"] {
+    for file in [
+        "diagnostics.json",
+        "observations.json",
+        "traces/logic.vcd",
+        "traces/serial.csv",
+    ] {
         assert_eq!(
             gridless_folder.file(file),
             Some(folder.files[file].as_slice()),
@@ -221,6 +226,11 @@ pub fn run_beside_steps(example: &str) -> Beside {
         observations,
         steps,
     }
+}
+
+/// `traces/serial.csv`.
+pub fn serial_csv(beside: &Beside) -> &[u8] {
+    &beside.folder.files["traces/serial.csv"]
 }
 
 /// `(t_ps, high)` of one signal in `logic.vcd`.

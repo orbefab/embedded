@@ -7,6 +7,7 @@ mod common;
 
 use common::atmega::{
     assert_led_follows, chip_matches_fixture, cycle_ps, logic_edges, logic_vcd, run_beside_steps,
+    serial_csv,
 };
 use sim_core::netlist::{self, Contact, Model};
 
@@ -141,6 +142,11 @@ fn sampled_pb5(pd2: &[(u64, bool)], cycle_ps: u64, stop_ps: u64) -> Sampled {
 #[test]
 fn sim_run_writes_pd2_and_pb5_at_the_picoseconds_the_loop_adds_up_to() {
     let beside = run_beside_steps("atmega-button");
+    assert_eq!(
+        serial_csv(&beside),
+        b"t_ps,part,usart,byte\n",
+        "the USART sends nothing"
+    );
     let netlist = &beside.netlist;
     let observations = &beside.observations;
 

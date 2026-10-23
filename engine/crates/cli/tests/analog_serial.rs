@@ -1,12 +1,13 @@
 //! examples/atmega-analog-serial, `firmware/analog_serial.S` on an ATmega328P at 16 MHz.
 //! The wiper of a 10 kohm potentiometer is ADC0. The firmware prints that code on TXD.
-//! The trace holds the divider's closed form, and `logic.vcd` holds the 8N1 frames.
+//! The trace holds the divider's closed form, `logic.vcd` holds the 8N1 frames, and
+//! `serial.csv` holds each frame's start and byte.
 
 mod common;
 
 use common::atmega::{
     assert_holds, chip_matches_fixture, cycle_ps, logic_edges, logic_vcd, run_beside_steps,
-    wiper_volts,
+    serial_csv, wiper_volts,
 };
 
 /// `analog_serial.S` leaves `U2X0` clear and writes `UBRR0` = 103. Table 20-1: a bit is
@@ -30,7 +31,8 @@ fn sim_run_prints_the_adc_code_of_the_wiper_on_txd() {
     let bit_ps = TXCLK_DIV * (UBRR + 1) * cycle_ps(&beside.netlist);
     let vcd = logic_vcd(&beside, &["#u1.logic.PD1"]);
     assert_eq!(vcd["#u1.logic.PD1"]["initial"], "low");
-    let frames = decode_txd(&logic_edges(&vcd, "#u1.logic.PD1"), bit_ps);
+    let pd1 = logic_edges(&vcd, "#u1.logic.PD1");
+    let frames = decode_txd(&pd1, bit_ps);
     let line = format!("{code}\r\n");
     let line_bytes = line.len();
     assert_eq!(
@@ -56,6 +58,13 @@ fn sim_run_prints_the_adc_code_of_the_wiper_on_txd() {
             assert_eq!(gap, 10 * bit_ps, "frame at {start} ps");
         }
     }
+
+    let mut csv = String::from("t_ps,part,usart,byte\n");
+    for &(start, byte) in &frames {
+        assert!(pd1.contains(&(start, false)), "PD1 falls at {start} ps");
+        csv += &format!("{start},u1,USART0,{byte}\n");
+    }
+    assert_eq!(std::str::from_utf8(serial_csv(&beside)).unwrap(), csv);
 }
 
 /// §24.7. `floor(Vin * 1024 / Vref)`.

@@ -8,6 +8,7 @@
 //!   envelope.f64  little-endian f64, column-major: per column the minima then the maxima
 //!                 of the rows - 1 intervals between the rows
 //!   logic.vcd     when a chip in the netlist has logic signals, see `logic`
+//!   serial.csv    when a chip in the netlist has a USART, see `serial`
 //! ```
 
 use serde::Serialize;
@@ -16,6 +17,7 @@ use crate::finite::Finite;
 use crate::logic::Logic;
 use crate::name::{Quantity, Ref};
 use crate::netlist::Transient;
+use crate::serial::Serial;
 use crate::time::Time;
 
 /// Every observed quantity at each row: t = 0, every multiple of the grid, and the stop, or
@@ -39,6 +41,7 @@ pub struct Trace {
     stop: Time,
     grid: u64,
     logic: Option<Logic>,
+    serial: Option<Serial>,
 }
 
 /// Running minimum and maximum of the interval open since the last row, one pair per column.
@@ -95,6 +98,7 @@ impl Trace {
             stop: transient.stop,
             grid: transient.grid,
             logic: None,
+            serial: None,
         }
     }
 
@@ -106,6 +110,13 @@ impl Trace {
 
     pub fn logic(&self) -> Option<&Logic> {
         self.logic.as_ref()
+    }
+
+    /// The bytes the chips' USARTs sent over the run, attached once at its end, after an error
+    /// too.
+    pub fn attach_serial(&mut self, serial: Serial) {
+        assert!(self.serial.is_none(), "serial is attached once");
+        self.serial = Some(serial);
     }
 
     /// Folds a non-row accepted step into the interval open since the last row. The engine
@@ -215,6 +226,9 @@ impl Trace {
         if let Some(logic) = &self.logic {
             files.push((VCD, logic.vcd()));
         }
+        if let Some(serial) = &self.serial {
+            files.push((SERIAL, serial.csv()));
+        }
         files
     }
 
@@ -274,6 +288,7 @@ const TIME: &str = "time.u64";
 const ANALOG: &str = "analog.f64";
 const ENVELOPE: &str = "envelope.f64";
 const VCD: &str = "logic.vcd";
+const SERIAL: &str = "serial.csv";
 
 fn unit(reference: &Ref) -> &'static str {
     match reference {
@@ -352,6 +367,8 @@ struct Column<'a> {
 mod tests {
     use super::*;
     use crate::logic::Level;
+    use crate::name::Name;
+    use crate::serial::SerialByte;
 
     fn finite(values: &[f64]) -> Vec<Finite> {
         values.iter().map(|&v| Finite::new(v).unwrap()).collect()
@@ -534,6 +551,36 @@ mod tests {
         );
         let text = String::from_utf8(files[4].1.clone()).unwrap();
         assert!(text.contains("$var wire 1 \" trig $end\n"), "{text}");
+    }
+
+    #[test]
+    fn serial_comes_after_the_vcd_and_leaves_the_index_as_it_was() {
+        let mut trace = trace();
+        let signals = ["#u1.logic.PD1".parse().unwrap()];
+        trace.attach_logic(Logic::new(signals.to_vec(), vec![Level::High]));
+        let index = trace.files().swap_remove(0).1;
+        let bytes = vec![SerialByte {
+            at: Time::from_ps(5),
+            usart: 0,
+            byte: 72,
+        }];
+        let usarts = vec![(Name::new("u1").unwrap(), "USART0")];
+        trace.attach_serial(Serial::new(usarts, bytes));
+        let files = trace.files();
+        let names: Vec<_> = files.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            names,
+            [
+                "index.json",
+                "time.u64",
+                "analog.f64",
+                "envelope.f64",
+                "logic.vcd",
+                "serial.csv"
+            ]
+        );
+        assert_eq!(files[0].1, index);
+        assert_eq!(files[5].1, b"t_ps,part,usart,byte\n5,u1,USART0,72\n");
     }
 
     #[test]

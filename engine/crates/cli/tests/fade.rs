@@ -5,6 +5,7 @@ mod common;
 
 use common::atmega::{
     assert_led_follows, chip_matches_fixture, cycle_ps, logic_edges, logic_vcd, run_beside_steps,
+    serial_csv,
 };
 
 /// Countdown trips in `fade.S`.
@@ -120,6 +121,11 @@ fn edges(cycle_ps: u64, limit_cycles: u64) -> Vec<(u64, bool)> {
 #[test]
 fn sim_run_writes_pb1_and_the_led_at_the_picoseconds_fade_adds_up_to() {
     let beside = run_beside_steps("atmega-fade");
+    assert_eq!(
+        serial_csv(&beside),
+        b"t_ps,part,usart,byte\n",
+        "the USART sends nothing"
+    );
     let netlist = &beside.netlist;
     let cycle_ps = cycle_ps(netlist);
     let limit = netlist["analysis"]["transient"]["stop_ps"]

@@ -4,19 +4,25 @@ use sim_core::finite::Finite;
 use sim_core::logic::Level;
 use sim_core::name::{Name, Ref};
 use sim_core::netlist::{Contact, Netlist};
-use sim_core::serial::SerialByte;
+use sim_core::run_folder;
+use sim_core::serial::{Serial, SerialByte};
 use sim_core::time::Time;
+use sim_core::timestamp::Timestamp;
 
 use super::active::{US, circuit, resistor};
 use super::avr::{ANALOG_SERIAL, FUSES, MHZ_14_7456, MHZ_16, atmega, ps};
 use super::fixtures::*;
-use super::session::{Rng, example, serial_of_one_call};
+use super::session::{Rng, batch, example, serial_of_one_call};
 use crate::active::{self, Actives};
 use crate::newton::{Circuit, Conditions, Iterate};
 use crate::op;
 use crate::session::{BUDGET, Budget, Input, SerialCursor, Session, Setting, State, Status};
 
 const MHZ_8: u32 = 8_000_000;
+const MHZ_3_2: u32 = 3_200_000;
+/// `analog_serial.S` leaves `U2X0` clear and writes `UBRR0` = 103, so a bit is 16 * 104 cycles,
+/// and an 8N1 frame is 10 bits.
+const FRAME_CYCLES: u64 = 10 * 16 * 104;
 
 /// A byte a core sent, and the picosecond its stop bit ended.
 #[derive(Clone, Copy, Debug)]
@@ -89,6 +95,40 @@ fn ended_by(frames: &[Frame], at: Time) -> usize {
 
 fn log(session: &Session) -> Vec<SerialByte> {
     session.serial_since(SerialCursor::default()).0.to_vec()
+}
+
+/// `traces/serial.csv` of a batch run on `netlist` under the step limit of `budget`.
+fn batch_csv(netlist: &Netlist, budget: Budget) -> Option<Vec<u8>> {
+    let results = batch(netlist, budget);
+    let folder = run_folder::render(
+        b"{}",
+        Some(netlist),
+        &results,
+        Timestamp::from_unix_seconds(0),
+    );
+    folder.file("traces/serial.csv").map(<[u8]>::to_vec)
+}
+
+/// The rows of a `serial.csv`, each naming its USART by its index in `usarts`.
+fn read_csv(csv: &[u8], usarts: &[(Name, &'static str)]) -> Vec<SerialByte> {
+    let text = std::str::from_utf8(csv).unwrap();
+    let rows = text.strip_prefix("t_ps,part,usart,byte\n").unwrap();
+    assert!(rows.is_empty() || rows.ends_with('\n'));
+    rows.lines()
+        .map(|row| {
+            let [at, part, usart, byte] =
+                <[&str; 4]>::try_from(row.split(',').collect::<Vec<_>>()).unwrap();
+            let index = usarts
+                .iter()
+                .position(|(p, u)| p.as_str() == part && *u == usart)
+                .unwrap();
+            SerialByte {
+                at: Time::from_ps(at.parse().unwrap()),
+                usart: u16::try_from(index).unwrap(),
+                byte: byte.parse().unwrap(),
+            }
+        })
+        .collect()
 }
 
 fn analog_serial() -> Netlist {
@@ -217,6 +257,8 @@ fn a_fault_ends_the_bytes_at_now() {
     let ended = ended_by(&want, session.now());
     assert!(0 < ended && ended < want.len(), "{ended} of {}", want.len());
     assert_eq!(log(&session), rows(&want[..ended]));
+    let csv = batch_csv(&netlist, budget).expect("a faulted run writes serial.csv");
+    assert_eq!(read_csv(&csv, session.usarts()), log(&session));
 }
 
 /// A call that ends where the first line's `\n` ends does not read it, because no step lands
@@ -469,7 +511,12 @@ fn renamed(part: &str, prefix: &str) -> (String, Vec<String>) {
 /// `<prefix>1` on nets prefixed `<prefix>_`. `sw<prefix>` closes `PD2`, which `analog_serial.S`
 /// never reads, to GND, and 10 kohm pulls it up.
 fn boards(stop: u64, chips: &[(&str, u32)]) -> Netlist {
-    let mut parts = Vec::new();
+    boards_with(stop, chips, Vec::new())
+}
+
+/// `boards` with `extra` parts, on its nets.
+fn boards_with(stop: u64, chips: &[(&str, u32)], extra: Vec<String>) -> Netlist {
+    let mut parts = extra;
     let mut nets = Vec::new();
     for &(prefix, clock) in chips {
         let (part, pins) = renamed(&atmega("vcc", ANALOG_SERIAL, clock, FUSES), prefix);
@@ -516,6 +563,83 @@ fn two_chips_interleave_by_stop_bit_end_then_part() {
     );
     session.advance_to(Time::from_ps(stop));
     assert_eq!(log(&session), rows(&want));
+}
+
+/// `sim run`'s `serial.csv` on two chips at 16 MHz and 8 MHz is the log of a session advanced to
+/// `stop` through the writer, byte for byte, and its rows are the log's, which a later start
+/// can end ahead of.
+#[test]
+fn the_batch_writes_the_log_of_a_session_advanced_to_stop() {
+    let stop = 19_000 * US;
+    let netlist = boards(stop, &[("u", MHZ_16), ("w", MHZ_8)]);
+    let mut session = Session::open(netlist.clone()).unwrap();
+    assert_eq!(session.advance_to(Time::from_ps(stop)), Status::Stopped);
+    let csv = batch_csv(&netlist, BUDGET).unwrap();
+    let log = log(&session);
+    assert_eq!(
+        csv,
+        Serial::new(session.usarts().to_vec(), log.clone()).csv()
+    );
+    assert_eq!(read_csv(&csv, session.usarts()), log);
+    assert!(!log.is_sorted_by_key(|byte| byte.at));
+}
+
+/// Two ATmega328Ps print ADC0 at 16 MHz and at 3.2 MHz, whose frames are five times as long.
+/// `swrw` holds `w` in reset until 24,979,375,000 ps, which a search chose so that a byte of
+/// each ends at 96,454,062,500 ps. `w`'s started first, and part order puts `u`'s first.
+#[test]
+fn a_tie_goes_in_part_order_whichever_byte_started_first() {
+    let stop = 97_000 * US;
+    let release = serde_json::json!({
+        "name": "swrw", "kind": "switch", "pins": { "a": "w_pc6", "b": "gnd" },
+        "on_resistance": { "value": 1.0, "unit": "ohm", "source": "user" },
+        "off_resistance": { "value": 1e9, "unit": "ohm", "source": "user" },
+        "initial": "closed", "events": [{ "t_ps": 24_979_375_000u64, "state": "open" }],
+        "bounce": null
+    });
+    let extra = vec![resistor("rrw", "vcc", "w_pc6", 10e3), release.to_string()];
+    let clocks = [MHZ_16, MHZ_3_2];
+    let netlist = boards_with(stop, &[("u", clocks[0]), ("w", clocks[1])], extra);
+    let mut session = Session::open(netlist).unwrap();
+    assert_eq!(session.advance_to(Time::from_ps(stop)), Status::Stopped);
+    let ended: Vec<(u64, SerialByte)> = log(&session)
+        .into_iter()
+        .map(|byte| {
+            let clock = clocks[usize::from(byte.usart)];
+            (byte.at.as_ps() + ps(FRAME_CYCLES, clock), byte)
+        })
+        .collect();
+    let tie = ended
+        .windows(2)
+        .position(|pair| pair[0].0 == pair[1].0)
+        .expect("two bytes end together");
+    let ((end, u), (_, w)) = (ended[tie], ended[tie + 1]);
+    assert_eq!(end, 96_454_062_500);
+    assert!(w.at < u.at, "w's byte started first");
+    assert_eq!((u.usart, w.usart), (0, 1));
+    assert!(ended.is_sorted_by_key(|&(end, byte)| (end, byte.usart)));
+}
+
+/// Three ATmega328Ps print ADC0 at 16 MHz, so each byte ends on all three at once, and the log
+/// holds the three in part order.
+#[test]
+fn three_bytes_that_end_together_go_in_part_order() {
+    let stop = 2_000 * US;
+    let netlist = boards(stop, &[("u", MHZ_16), ("w", MHZ_16), ("x", MHZ_16)]);
+    let mut session = Session::open(netlist).unwrap();
+    assert_eq!(session.advance_to(Time::from_ps(stop)), Status::Stopped);
+    let got: Vec<_> = log(&session)
+        .iter()
+        .map(|byte| (byte.at.as_ps(), byte.usart, byte.byte))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (254_062_500, 0, b'6'),
+            (254_062_500, 1, b'6'),
+            (254_062_500, 2, b'6')
+        ]
+    );
 }
 
 /// Two ATmega328Ps print ADC0 at 16 MHz, so their bytes end on the same picoseconds, and part

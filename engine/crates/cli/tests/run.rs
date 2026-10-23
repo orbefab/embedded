@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use common::examples::transient_examples;
-use common::{files, transient_folder};
+use common::{files, has_usart, repo, transient_folder};
 
 fn sim(args: &[&str]) -> (i32, String, String) {
     let output = Command::new(env!("CARGO_BIN_EXE_sim"))
@@ -162,6 +162,17 @@ fn bad_argv_exits_two() {
     assert_eq!(doc["status"], "usage_error");
     assert!(!doc["message"].as_str().unwrap().is_empty());
     assert!(doc.get("path").is_none());
+}
+
+/// The pages that state the version state this one.
+#[test]
+fn the_docs_name_the_engine_version() {
+    let version = sim_core::run_folder::ENGINE_VERSION;
+    let page = |name: &str| fs::read_to_string(repo(&format!("docs/{name}"))).unwrap();
+    let run_folder = page("run-folder.md");
+    assert!(run_folder.contains(&format!("\"engine_version\": \"{version}\"")));
+    assert!(run_folder.contains(&format!("The current values are 0 and `{version}`.")));
+    assert!(page("versions.md").contains(&format!("This engine is `{version}`.")));
 }
 
 #[test]
@@ -433,7 +444,10 @@ fn two_runs_of_each_transient_example_differ_only_in_created_at() {
         let observations: serde_json::Value =
             serde_json::from_slice(&left_files["observations.json"]).unwrap();
         let logic = usize::from(observations.get("logic").is_some());
-        assert_eq!(left_files.len(), 7 + logic, "{name}");
+        let netlist: serde_json::Value =
+            serde_json::from_slice(&left_files["netlist.json"]).unwrap();
+        let serial = usize::from(has_usart(&netlist));
+        assert_eq!(left_files.len(), 7 + logic + serial, "{name}");
         assert_eq!(left_files, right_files, "{}", left.display());
         let _ = fs::remove_dir_all(left);
         let _ = fs::remove_dir_all(right);

@@ -1,6 +1,6 @@
 # Run folder
 
-`sim run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and so does an ATmega328P.
+`sim run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and so does an ATmega328P. It adds `traces/serial.csv` when a chip has a USART, as an ATmega328P does.
 
 ```text
 <dir>/
@@ -14,6 +14,7 @@
     analog.f64
     envelope.f64
     logic.vcd
+    serial.csv
 ```
 
 Each JSON file is pretty JSON with a two-space indent and a trailing newline. `manifest.json` uses the field order in the example below. Keys inside a diagnostic `data` object are alphabetical. Observation keys follow ref order.
@@ -24,7 +25,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 {
   "run_format": 0,
   "netlist_format": 0,
-  "engine_version": "0.7.0",
+  "engine_version": "0.8.0",
   "input": {
     "file": "netlist.json",
     "sha256": "<lowercase hex sha256 of the input bytes>",
@@ -35,7 +36,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 }
 ```
 
-`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.7.0`. [versions.md](versions.md) says which changes move them.
+`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.8.0`. [versions.md](versions.md) says which changes move them.
 
 `netlist_format` is the input's `version`, when it reads as an unsigned integer. That holds when the engine rejected the input, so `version: 1` records 1. It is `null` when no such integer could be read.
 
@@ -168,7 +169,7 @@ period_s = (falls[-1] - falls[0]) / (len(falls) - 1) * 1e-12
 
 ## traces
 
-A transient writes a row at t = 0, at every multiple of `grid_ps` before `stop_ps`, and at `stop_ps`. That is `ceil(stop_ps / grid_ps) + 1` rows, fixed by the netlist before the run starts. A row is a probe: one solve from the last accepted step to the row time, which the run never accepts ([engine.md](engine.md#rows)). A row at a time a step lands on is that step. Each row is a solved point. The one exception is a row whose probe fails twice. It is the straight line between the accepted steps around it, and `trace.row_interpolated` names it. The grid never changes the accepted steps, the core stops, `logic.vcd`, `observations.json`, or the `solver.*` and `rating.*` diagnostics. Only two things depend on it. A grid past the row cap is refused with `trace.too_large` before the run solves. A row whose probe fails twice adds a `trace.row_interpolated` warning. The steps' tolerance is 1e-5 of each capacitor's swing plus 1 nV, so a small swing is held to its own size ([engine.md](engine.md#accuracy)).
+A transient writes a row at t = 0, at every multiple of `grid_ps` before `stop_ps`, and at `stop_ps`. That is `ceil(stop_ps / grid_ps) + 1` rows, fixed by the netlist before the run starts. A row is a probe: one solve from the last accepted step to the row time, which the run never accepts ([engine.md](engine.md#rows)). A row at a time a step lands on is that step. Each row is a solved point. The one exception is a row whose probe fails twice. It is the straight line between the accepted steps around it, and `trace.row_interpolated` names it. The grid never changes the accepted steps, the core stops, `logic.vcd`, `serial.csv`, `observations.json`, or the `solver.*` and `rating.*` diagnostics. Only two things depend on it. A grid past the row cap is refused with `trace.too_large` before the run solves. A row whose probe fails twice adds a `trace.row_interpolated` warning. The steps' tolerance is 1e-5 of each capacitor's swing plus 1 nV, so a small swing is held to its own size ([engine.md](engine.md#accuracy)).
 
 A row is a point sample, and a waveform that repeats with the grid can alias the rows. The envelope is the between-rows read. Each column's minimum and maximum cover the two rows and every accepted step between them. A 0 to 3.3 V pulse at 1 MHz drives 100 ohm into 100 pF, a 10 ns time constant. On a 1 us grid every row falls on a rise and holds the level before it, so over 2 ms `#net.out0` spans 6.2e-9 V. Its envelope reads 0 to 3.3 V on every interval after the first. On a 100 ns grid the rows themselves read 0 to 3.3 V. The rating diagnostics and `logic.vcd` are read at every accepted step and never at a row's probe. `observations.switches` lists every edge at its picosecond. Those are the step-accurate views.
 
@@ -300,6 +301,34 @@ $end
 - `#0` with `$dumpvars` holds the levels at t = 0. Then one `#<ps>` line per time with a change, its changes in signal order.
 - Times are integer picoseconds. There is no `$date` and no `$version`, so the file has no clock read and no float.
 - After an error the file keeps the edges up to `end_ps`, like the rest of `traces/`.
+
+A netlist with a chip that has a USART adds `serial.csv`. An ATmega328P has one, `USART0`. The file holds every serial frame a USART finished, one row per byte, as ASCII with `\n` line ends. `index.json` has no key for it, because its header names its columns. `examples/atmega-analog-serial` prints `512\r\n` three times, and its file starts:
+
+```text
+t_ps,part,usart,byte
+254062500,u1,USART0,53
+1294062500,u1,USART0,49
+2334062500,u1,USART0,50
+3374062500,u1,USART0,13
+4414062500,u1,USART0,10
+6598062500,u1,USART0,53
+```
+
+- `t_ps` is the start-bit time in integer picoseconds. It is the first picosecond at or after the oscillator cycle the start bit began, the time the core drove `TXD` low. When `TXD` read high before the start bit and nothing else loads it, that is the fall in `logic.vcd`. [avr.md](avr.md#sent-bytes) says when there is no fall at that time.
+- `part` is the chip's part name and `usart` the USART's datasheet name. Neither needs quoting.
+- `byte` is decimal, 0 to 255.
+- Rows are in the order stop bits ended, then in part order, then in the chip's USART order. On one USART that is also the order bytes started. With two USARTs at different bauds, `t_ps` can step back between rows of different USARTs.
+- A frame still on the wire at `stop_ps` is not in the file. After an error the file keeps the bytes whose stop bit ended by `end_ps`, like the rest of `traces/`.
+- A chip with a USART writes the file even when it sent nothing, as the header alone. So a reader can tell a circuit with no USART from a USART that sent nothing.
+
+Python reads the bytes each USART sent like this. The comment is what it prints for the whole file of `examples/atmega-analog-serial`. On a file that is the header alone it prints `{}`, and with no file `open` raises `FileNotFoundError`.
+
+```python
+import csv, collections
+text = collections.defaultdict(bytearray)
+for r in csv.DictReader(open("run/traces/serial.csv")): text[r["part"], r["usart"]].append(int(r["byte"]))
+print({key: bytes(data) for key, data in text.items()})  # {('u1', 'USART0'): b'512\r\n512\r\n512\r\n'}
+```
 
 `end_ps` is the last row's time, and the same number as `observations.end_ps`. It is less than `stop_ps` only when the run reported an error. The grid rows before the error stay, and the last accepted step is the last row. A run that fails at t = 0 writes no `traces/`.
 

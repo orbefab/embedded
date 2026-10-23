@@ -33,8 +33,8 @@ pub fn runs_firmware(netlist: &Netlist) -> bool {
 /// 20 s. So `crates/cli/tests/blink.rs`, `crates/cli/tests/button.rs` and
 /// `crates/cli/tests/fade.rs` each run that example once through `sim run`, with its steps, its
 /// grid and a grid with no row before `stop_ps` beside it, all at once. They hold the envelope
-/// to the steps, and the gridless run's stats, diagnostics, observations and `logic.vcd` to the
-/// grid's.
+/// to the steps, and the gridless run's stats, diagnostics, observations, `logic.vcd` and
+/// `serial.csv` to the grid's.
 pub const CHECKED_ON_THEIR_OWN: &[&str] = &["atmega-blink", "atmega-button", "atmega-fade"];
 
 pub fn transient_examples() -> Vec<String> {

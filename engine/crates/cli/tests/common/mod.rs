@@ -57,6 +57,16 @@ pub fn f64s(bytes: &[u8]) -> Vec<f64> {
     words.iter().map(|&word| f64::from_le_bytes(word)).collect()
 }
 
+/// Whether a chip in `netlist` has a USART. Today only an ATmega328P has one, `USART0`, so a new
+/// chip with a USART adds its kind here.
+pub fn has_usart(netlist: &serde_json::Value) -> bool {
+    netlist["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|part| part["kind"] == "atmega328p")
+}
+
 /// A transient run folder read back. `analog` holds one column of `time.len()` rows per ref in
 /// `refs`. `envelope` holds each column's interval minimums, then its maximums.
 pub struct TransientFolder {
@@ -78,7 +88,8 @@ impl TransientFolder {
 }
 
 /// Reads the run folder `out` of the transient example `name` and asserts what every one keeps:
-/// its files, with `traces/logic.vcd` exactly when its observations have logic, a row at each
+/// its files, with `traces/logic.vcd` exactly when its observations have logic and
+/// `traces/serial.csv` exactly when it has an ATmega328P, which has a USART, a row at each
 /// `grid_ps` to `stop_ps`, row 0 equal to `observations.op`, and an envelope that holds both rows
 /// of each interval.
 pub fn transient_folder(name: &str, out: &Path) -> TransientFolder {
@@ -87,6 +98,8 @@ pub fn transient_folder(name: &str, out: &Path) -> TransientFolder {
     let observations: serde_json::Value =
         serde_json::from_slice(&found["observations.json"]).unwrap();
     let logic = observations.get("logic").is_some();
+    let input: serde_json::Value = serde_json::from_slice(&found["netlist.json"]).unwrap();
+    let usart = has_usart(&input);
     let mut expected = vec![
         "diagnostics.json",
         "manifest.json",
@@ -99,11 +112,13 @@ pub fn transient_folder(name: &str, out: &Path) -> TransientFolder {
     if logic {
         expected.push("traces/logic.vcd");
     }
+    if usart {
+        expected.push("traces/serial.csv");
+    }
     expected.push("traces/time.u64");
     assert_eq!(names, expected, "{name}");
     let index: serde_json::Value = serde_json::from_slice(&found["traces/index.json"]).unwrap();
     assert_eq!(index.get("logic").is_some(), logic, "{name}");
-    let input: serde_json::Value = serde_json::from_slice(&found["netlist.json"]).unwrap();
     let rows = index["rows"].as_u64().unwrap() as usize;
     let time = u64s(&found["traces/time.u64"]);
     let analog = f64s(&found["traces/analog.f64"]);

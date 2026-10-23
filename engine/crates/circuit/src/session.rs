@@ -3,7 +3,7 @@ use sim_core::finite::Finite;
 use sim_core::logic::Level;
 use sim_core::name::{Name, Ref};
 use sim_core::netlist::{Analysis, Document, Netlist, Transient};
-use sim_core::serial::SerialByte;
+use sim_core::serial::{Serial, SerialByte};
 use sim_core::time::Time;
 
 use crate::RunStats;
@@ -495,12 +495,17 @@ impl Session {
         (bytes, SerialCursor(self.serial.len() as u64))
     }
 
-    /// The observations and trace of a recorded session advanced to its end.
+    /// The observations and trace of a recorded session advanced to its end. The trace holds the
+    /// serial log when a chip has a USART.
     pub(crate) fn finish(self, diagnostics: &mut Vec<Diagnostic>) -> Outcome {
         let (State::Ended { at, row, end }, Some(record)) = (self.state, self.record) else {
             unreachable!("a recorded run finishes once it has ended");
         };
-        let (observations, trace) = record.finish(&self.circuit.netlist, at, &row, diagnostics);
+        let (observations, mut trace) = record.finish(&self.circuit.netlist, at, &row, diagnostics);
+        let usarts = self.actives.usarts();
+        if !usarts.is_empty() {
+            trace.attach_serial(Serial::new(usarts.to_vec(), self.serial));
+        }
         if let End::Fault(fault) = end {
             diagnostics.push(fault);
         }
