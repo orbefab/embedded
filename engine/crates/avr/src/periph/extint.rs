@@ -31,7 +31,6 @@ pub(crate) const REG_PCMSK1: u8 = 8;
 pub(crate) const REG_PCMSK2: u8 = 9;
 
 const PUD: u8 = 1 << 4;
-const DUE_CAP: usize = 40;
 
 /// One external interrupt line. `bit` is the `EIMSK`/`EIFR` bit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,10 +88,18 @@ pub(crate) struct ExtInt {
     pcmsk: [u8; 3],
     /// Sampled digital level, one bit per pin id. High is 1.
     seen: u64,
-    /// Waiting edges. Allocated once in [`ExtInt::new`]; the tick path only
-    /// follows the pointer while `due_len` is non-zero.
-    due: Box<[Due; DUE_CAP]>,
-    due_len: u8,
+    /// Samples waiting out the synchronizer. DS40002061B §14.2.4 Figure 14-3
+    /// samples the pad once a clock, and Figure 13-1 takes a pin change
+    /// through the same clocked latch. A level shorter than a clock is never
+    /// seen, and every level that lasts one reaches the edge detector. §13.2.1
+    /// promises an edge `INT` for a pulse longer than a clock and does not
+    /// ensure one for a shorter pulse, which this model never flags. A pin
+    /// holds one sample per cycle, the last level driven in it, and no sample
+    /// is dropped. At most two per pin wait, one per synchronizer stage.
+    /// [`ExtInt::new`] reserves three per pin. While reset holds the core,
+    /// [`ExtInt::settle`] takes them with no flag, a model choice that
+    /// `Bus::set_cycle` explains.
+    due: Vec<Due>,
     next: u64,
     /// False while a sleep mode has stopped the I/O clock.
     io_clock: bool,
@@ -118,7 +125,6 @@ clone_fields!(ExtInt {
     pcmsk,
     seen,
     due,
-    due_len,
     next,
     io_clock,
     rose,
@@ -142,14 +148,7 @@ impl ExtInt {
             pcifr: 0,
             pcmsk: [0; 3],
             seen: 0,
-            due: Box::new(
-                [Due {
-                    pin: 0,
-                    high: false,
-                    at: 0,
-                }; DUE_CAP],
-            ),
-            due_len: 0,
+            due: Vec::with_capacity(crate::PIN_COUNT * (PIN_SYNC_DELAY as usize + 1)),
             next: u64::MAX,
             io_clock: true,
             rose: 0,
@@ -404,17 +403,33 @@ impl ExtInt {
 
     pub(crate) fn fire(&mut self, at: u64) {
         let mut index = 0;
-        while index < usize::from(self.due_len) {
+        while index < self.due.len() {
             if self.due[index].at != at {
                 index += 1;
                 continue;
             }
-            let due = self.due[index];
-            self.due[index] = self.due[usize::from(self.due_len) - 1];
-            self.due_len -= 1;
+            // The replace leaves one sample per pin and cycle, so these samples have distinct
+            // pins. Commit order cannot matter because each commit writes only its own pin's
+            // `seen` bit and line flag and ORs into `PCIFR`, `rose` and `fell`. While the I/O
+            // clock is stopped it also runs `hold_level_flags`, which only lowers level-mode
+            // flags and leaves them down when run again.
+            let due = self.due.swap_remove(index);
             self.commit(due);
         }
         self.expire_bod(at);
+        self.recompute_next();
+    }
+
+    /// Take every sample due by `cycle` as the sampled level, with no flag. `Bus::set_cycle`
+    /// calls this while reset holds the core.
+    pub(crate) fn settle(&mut self, cycle: u64) {
+        self.due.sort_unstable_by_key(|due| due.at);
+        let ready = self.due.partition_point(|due| due.at <= cycle);
+        for index in 0..ready {
+            let due = self.due[index];
+            self.set_seen(due.pin, due.high);
+        }
+        self.due.drain(..ready);
         self.recompute_next();
     }
 
@@ -575,31 +590,31 @@ impl ExtInt {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn waiting(&self) -> usize {
+        self.due.len()
+    }
+
     fn drop_due(&mut self, pin: u8) {
-        let mut index = 0;
-        while index < usize::from(self.due_len) {
-            if self.due[index].pin == pin {
-                self.due[index] = self.due[usize::from(self.due_len) - 1];
-                self.due_len -= 1;
-            } else {
-                index += 1;
-            }
-        }
+        self.due.retain(|due| due.pin != pin);
         self.recompute_next();
     }
 
     fn push_due(&mut self, due: Due) {
-        if usize::from(self.due_len) >= DUE_CAP {
-            return;
+        match self
+            .due
+            .iter_mut()
+            .find(|waiting| waiting.pin == due.pin && waiting.at == due.at)
+        {
+            Some(waiting) => waiting.high = due.high,
+            None => self.due.push(due),
         }
-        self.due[usize::from(self.due_len)] = due;
-        self.due_len += 1;
         self.recompute_next();
     }
 
     fn recompute_next(&mut self) {
         let mut next = u64::MAX;
-        for due in &self.due[..usize::from(self.due_len)] {
+        for due in &self.due {
             next = next.min(due.at);
         }
         if self.bodse_until != 0 {

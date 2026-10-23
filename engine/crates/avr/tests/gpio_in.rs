@@ -8,7 +8,7 @@ use crate::common;
 use common::Instructions;
 use common::{PINB, TCCR0B, TCNT0, TIFR1, imm, in_io, ldi, lds, out, sbi, sts};
 
-use sim_avr::{Cpu, Level};
+use sim_avr::{Cpu, FuseBytes, Level};
 
 const DDRD: u16 = 0x002A;
 const PORTD: u16 = 0x002B;
@@ -337,7 +337,8 @@ fn each_328p_pcint_group_sets_its_own_flag() {
     }
 }
 
-/// §13. Edge detection while the I/O clock is stopped.
+/// §13. Edge detection while the I/O clock is stopped. Once it runs, a low that lasts a cycle and
+/// the rise after it set `INTF0`.
 #[test]
 fn edges_wait_while_the_io_clock_is_stopped() {
     let mut cpu = Cpu::new();
@@ -353,6 +354,8 @@ fn edges_wait_while_the_io_clock_is_stopped() {
     );
     sim_avr::test_hooks::set_io_clock_running(&mut cpu, true);
     cpu.drive_pin(18, Level::Low);
+    cpu.load_words(&nops(1));
+    cpu.insns(1);
     cpu.drive_pin(18, Level::High);
     cpu.load_words(&nops(2));
     cpu.insns(2);
@@ -756,4 +759,271 @@ fn a_queued_edge_does_not_flag_after_the_io_clock_stops() {
         0,
         "the dropped sample does not arrive later"
     );
+}
+
+const PB0: u32 = 0;
+const PD2: u32 = 18;
+
+/// `INT0` armed with `isc` and no `EIMSK`, `PD2` high, `INTF0` clear, at cycle 30 of a flash of
+/// `NOP`s, so every run limit lands on its cycle.
+fn int0_on_nops(isc: u8) -> Cpu {
+    let mut cpu = Cpu::new();
+    cpu.load_words(&nops(1));
+    cpu.poke(EICRA, isc);
+    cpu.drive_pin(PD2, Level::High);
+    cpu.run_until(20);
+    cpu.poke(EIFR, 0);
+    cpu.run_until(30);
+    cpu
+}
+
+/// Figure 14-3. Forty drives of `PB1` in one cycle are one sample, so a fall of `PD2` a cycle
+/// later still reaches `INT0`.
+#[test]
+fn an_int0_fall_after_forty_drives_of_another_pin_sets_intf0() {
+    let mut cpu = int0_on_nops(0x02);
+    for n in 0..40 {
+        cpu.drive_pin(1, if n % 2 == 0 { Level::Low } else { Level::High });
+    }
+    let c = cpu.cycles();
+    cpu.run_until(c + 1);
+    cpu.drive_pin(PD2, Level::Low);
+    cpu.run_until(c + 20);
+    assert_eq!(cpu.peek(EIFR) & 1, 1, "the fall reaches INTF0");
+}
+
+/// Figure 14-3. Every level that lasts a cycle reaches the edge detector, however many pins
+/// change. Every watched pin but `PC6`, which is `RESET`, moves on two cycles in a row, the most
+/// samples that can wait at once. Each run watches one pin in its group, so a flag after each
+/// cycle shows that pin's sample arrived. `PD2` moves last, and `INT0` flags any change.
+#[test]
+fn every_pin_changing_on_two_cycles_reaches_its_flags() {
+    let pins: Vec<u32> = (0..14)
+        .chain(16..24)
+        .filter(|&pin| pin != PD2)
+        .chain([PD2])
+        .collect();
+    for &watched in &pins {
+        let mut cpu = Cpu::new();
+        cpu.load_words(&nops(1));
+        cpu.poke(EICRA, 0x01);
+        cpu.poke(PCICR, 0x07);
+        cpu.poke(PCMSK0 + (watched / 8) as u16, 1 << (watched % 8));
+        cpu.run_until(30);
+        let group = 1 << (watched / 8);
+        for (c, level) in [(30, Level::High), (31, Level::Low)] {
+            for &pin in &pins {
+                cpu.drive_pin(pin, level);
+            }
+            cpu.run_until(c + 1);
+        }
+        assert_eq!(cpu.peek(EIFR) & 1, 1, "the rise of PD2 reaches INTF0");
+        assert_eq!(
+            cpu.peek(PCIFR),
+            group,
+            "the rise of pin {watched} sets its flag"
+        );
+        cpu.poke(EIFR, 0);
+        cpu.poke(PCIFR, 0);
+        cpu.run_until(50);
+        assert_eq!(cpu.peek(EIFR) & 1, 1, "the fall of PD2 reaches INTF0");
+        assert_eq!(
+            cpu.peek(PCIFR),
+            group,
+            "the fall of pin {watched} sets its flag"
+        );
+    }
+}
+
+/// Figure 14-3. A low that lasts a cycle, then high, low and high in the next. Both levels last
+/// a cycle, so `INT0` on a rising edge flags.
+#[test]
+fn a_return_to_the_sampled_level_behind_a_waiting_sample_sets_intf0() {
+    let mut cpu = int0_on_nops(0x03);
+    let c = cpu.cycles();
+    cpu.drive_pin(PD2, Level::Low);
+    cpu.run_until(c + 1);
+    for level in [Level::High, Level::Low, Level::High] {
+        cpu.drive_pin(PD2, level);
+    }
+    cpu.run_until(c + 20);
+    assert_eq!(cpu.peek(EIFR) & 1, 1, "the rise reaches INTF0");
+}
+
+/// Figure 14-3. Low, high and low in one cycle is one sample, the last low. `INT0` on a rising
+/// edge sees a fall and no rise, and the next rise sets `INTF0`.
+#[test]
+fn three_drives_in_one_cycle_keep_the_last_level() {
+    let mut cpu = int0_on_nops(0x03);
+    for level in [Level::Low, Level::High, Level::Low] {
+        cpu.drive_pin(PD2, level);
+    }
+    let c = cpu.cycles();
+    cpu.run_until(c + 20);
+    assert_eq!(cpu.peek(EIFR) & 1, 0, "a net fall flags no rise");
+    cpu.drive_pin(PD2, Level::High);
+    cpu.run_until(c + 40);
+    assert_eq!(cpu.peek(EIFR) & 1, 1, "the rise reaches INTF0");
+}
+
+/// Figure 14-3. A low shorter than a cycle never reaches the synchronizer, so neither `INT0` on
+/// a falling edge nor `PCINT18` flags it. A low that lasts one cycle sets both.
+#[test]
+fn a_pulse_shorter_than_a_cycle_sets_no_flag() {
+    for (cycles, flagged) in [(0, 0), (1, 1)] {
+        let mut cpu = int0_on_nops(0x02);
+        cpu.poke(PCICR, 1 << 2);
+        cpu.poke(PCMSK2, 1 << 2);
+        let c = cpu.cycles();
+        cpu.drive_pin(PD2, Level::Low);
+        cpu.run_until(c + cycles);
+        cpu.drive_pin(PD2, Level::High);
+        cpu.run_until(c + 20);
+        assert_eq!(
+            cpu.peek(EIFR) & 1,
+            flagged,
+            "INTF0 after a low of {cycles} cycles"
+        );
+        assert_eq!(
+            cpu.peek(PCIFR) & (1 << 2),
+            flagged << 2,
+            "PCIF2 after a low of {cycles} cycles"
+        );
+    }
+}
+
+/// §11.1. While `RESET` is held the flags keep their reset value of 0, and a pin that moves
+/// leaves only its last level in the synchronizer. Release flags nothing, even with `INT0` on a
+/// rising edge and `PCINT18` armed by the host during the hold. The next rise sets both.
+#[test]
+fn a_pin_that_moves_while_reset_is_held_sets_no_flag_at_release() {
+    for armed in [false, true] {
+        let mut cpu = Cpu::new();
+        cpu.set_fuses(
+            FuseBytes::CRYSTAL.low,
+            FuseBytes::CRYSTAL.high,
+            FuseBytes::CRYSTAL.extended,
+        );
+        cpu.load_words(&nops(1));
+        cpu.run_until(30);
+        cpu.pull_reset();
+        if armed {
+            cpu.poke(EICRA, 0x03);
+            cpu.poke(PCICR, 1 << 2);
+            cpu.poke(PCMSK2, 1 << 2);
+        }
+        for n in 0..40 {
+            cpu.drive_pin(PD2, if n % 2 == 0 { Level::High } else { Level::Low });
+        }
+        for n in 0..80 {
+            cpu.run_until(cpu.cycles() + 1);
+            cpu.drive_pin(PD2, if n % 2 == 0 { Level::High } else { Level::Low });
+        }
+        cpu.release_reset();
+        let start = cpu.cycles() + 14 + 1_040_000;
+        cpu.run_until(start + 20);
+        assert_ne!(cpu.pc(), 0, "the core runs");
+        assert_eq!(cpu.peek(EIFR), 0, "release sets no INTF, armed {armed}");
+        assert_eq!(cpu.peek(PCIFR), 0, "release sets no PCIF, armed {armed}");
+        if armed {
+            cpu.drive_pin(PD2, Level::High);
+            cpu.run_until(start + 40);
+            assert_eq!(cpu.peek(EIFR) & 1, 1, "the next rise reaches INTF0");
+            assert_eq!(cpu.peek(PCIFR), 1 << 2, "the next rise sets PCIF2");
+        }
+    }
+}
+
+/// §11.1. A pad the host holds high across a held reset is the sampled level at release, so a
+/// fall after release sets `INTF0` on a falling edge.
+#[test]
+fn a_high_held_across_reset_falls_to_intf0() {
+    let mut cpu = Cpu::new();
+    cpu.load_words(&nops(1));
+    cpu.drive_pin(PD2, Level::High);
+    cpu.run_until(30);
+    cpu.pull_reset();
+    cpu.run_until(cpu.cycles() + 10);
+    cpu.release_reset();
+    cpu.run_until(cpu.cycles() + 2_000_000);
+    assert_ne!(cpu.pc(), 0, "the core runs");
+    cpu.poke(EICRA, 0x02);
+    let c = cpu.cycles();
+    cpu.drive_pin(PD2, Level::Low);
+    cpu.run_until(c + 10);
+    assert_eq!(cpu.peek(EIFR) & 1, 1, "the fall reaches INTF0");
+}
+
+/// §11.1. A rise driven during a held reset is the sampled level from the cycle its sample comes
+/// due, so a fall after release sets `INTF0` on a falling edge.
+#[test]
+fn a_rise_due_on_the_last_cycle_of_a_held_reset_falls_to_intf0() {
+    let mut cpu = Cpu::new();
+    cpu.load_words(&nops(1));
+    cpu.run_until(30);
+    cpu.pull_reset();
+    cpu.run_until(cpu.cycles() + 10);
+    let rise = cpu.cycles();
+    cpu.drive_pin(PD2, Level::High);
+    cpu.run_until(rise + 2);
+    cpu.release_reset();
+    cpu.run_until(cpu.cycles() + 2_000_000);
+    assert_ne!(cpu.pc(), 0, "the core runs");
+    cpu.poke(EICRA, 0x02);
+    let c = cpu.cycles();
+    cpu.drive_pin(PD2, Level::Low);
+    cpu.run_until(c + 10);
+    assert_eq!(cpu.peek(EIFR) & 1, 1, "the fall reaches INTF0");
+}
+
+/// §11.1. A pad the host holds high across a held reset is the sampled level at release on a
+/// pin-change pin too, so a fall of `PB0` after release sets `PCIF0`.
+#[test]
+fn a_high_held_across_reset_falls_to_pcif0() {
+    let mut cpu = Cpu::new();
+    cpu.load_words(&nops(1));
+    cpu.drive_pin(PB0, Level::High);
+    cpu.run_until(30);
+    cpu.pull_reset();
+    cpu.run_until(cpu.cycles() + 10);
+    cpu.release_reset();
+    cpu.run_until(cpu.cycles() + 2_000_000);
+    assert_ne!(cpu.pc(), 0, "the core runs");
+    cpu.poke(PCICR, 1);
+    cpu.poke(PCMSK0, 1);
+    let c = cpu.cycles();
+    cpu.drive_pin(PB0, Level::Low);
+    cpu.run_until(c + 10);
+    assert_eq!(cpu.peek(PCIFR) & 1, 1, "the fall reaches PCIF0");
+}
+
+/// Figure 14-3. A rise on the last cycle of the start-up time-out reaches the edge detector one
+/// cycle after the core starts. An `STS EICRA` at the reset vector has armed a rising edge by
+/// then, so the rise sets `INTF0`. Reset clears the register file, so the host sets `r16`.
+#[test]
+fn a_rise_on_the_last_cycle_of_the_time_out_reaches_a_first_sts_to_eicra() {
+    let mut cpu = Cpu::new();
+    let fuses = cpu.fuses();
+    // Internal RC, `CKDIV8` unprogrammed, `SUT = 00`. The time-out is 14 CK (Table 9-12).
+    cpu.set_fuses(0xC2, fuses.high, fuses.extended);
+    let mut program = sts(16, EICRA).to_vec();
+    program.extend(nops(4));
+    cpu.load_words(&program);
+    cpu.drive_pin(PD2, Level::Low);
+    cpu.pull_reset();
+    cpu.run_until(cpu.cycles() + 10);
+    cpu.release_reset();
+    let start = cpu.cycles() + 14;
+    cpu.set_reg(16, 0x03);
+    cpu.run_until(start - 1);
+    cpu.drive_pin(PD2, Level::High);
+    cpu.run_until(start);
+    assert_eq!(cpu.pc(), 0, "the time-out holds the core until {start}");
+    cpu.run_until(start + 4);
+    assert_eq!(
+        cpu.peek(EICRA),
+        0x03,
+        "the first instruction armed a rising edge"
+    );
+    assert_eq!(cpu.peek(EIFR) & 1, 1, "the rise reaches INTF0");
 }

@@ -285,9 +285,8 @@ pub(crate) fn push_pin(pins: &mut VecDeque<PinReport>, overflow: &mut u64, repor
 
 /// Static dispatch over the peripherals on this part.
 ///
-/// `ExtInt`'s edge queue is allocated once in [`ExtInt::new`] so this enum
-/// stays the size of the timer and the USART. A tick does not follow that
-/// pointer unless an edge is actually waiting.
+/// `ExtInt`'s edge queue is on the heap, so this enum stays the size of the
+/// timer and the USART. A tick reads it only when an edge is waiting.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum Device {
@@ -715,7 +714,7 @@ mod size {
     use super::*;
 
     /// USART is the largest variant at 296 bytes, 8 of them the start-bit stamp of the frame on
-    /// the wire. ExtInt's edge queue is boxed.
+    /// the wire. ExtInt's edge queue is on the heap.
     #[test]
     fn device_stays_within_bound() {
         let size = std::mem::size_of::<Device>();

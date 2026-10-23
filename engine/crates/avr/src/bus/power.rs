@@ -308,8 +308,19 @@ impl Bus {
         self.note_schedule();
     }
 
+    /// Move to `cycle` while reset holds the core, where no device event fires. §11.1 holds the
+    /// registers at their reset values, so no flag sets. It does not say whether the pin
+    /// synchronizer samples meanwhile. This model lets it, so `ExtInt` takes the levels that came
+    /// through it and sets no flag. A first `IN` from `PINx` reads them. A change on the last
+    /// cycle of the start-up time-out reaches the edge detector after the first instruction. A
+    /// first `STS` to `EICRA` or `PCMSK2` arms an edge for it only when the host has set the
+    /// stored register, since reset clears the register file.
     pub(crate) fn set_cycle(&mut self, cycle: u64) {
         self.cycle = cycle;
+        if let Some(Device::ExtInt(ext)) = self.slot_dev_mut(self.index.extint) {
+            ext.settle(cycle);
+        }
+        self.note_schedule();
     }
 
     /// The last two divisions, which a reset keeps for [`Self::restore_epochs`].

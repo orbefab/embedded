@@ -1040,6 +1040,7 @@ impl Default for Cpu {
 #[cfg(test)]
 mod tests {
     use super::{Cpu, ResetKind};
+    use crate::Level;
 
     #[test]
     fn a_clone_and_a_reset_share_the_flash() {
@@ -1049,5 +1050,26 @@ mod tests {
         assert!(cpu.core.shares_image(&copy.core));
         cpu.reset_as(ResetKind::Watchdog);
         assert!(cpu.core.shares_image(&copy.core));
+    }
+
+    /// §11.1. No device event fires while reset holds the core, through the hold and the
+    /// start-up time-out after it. A pin that moves every cycle keeps exactly two samples
+    /// waiting, the synchronizer's two stages, and a sample not yet due stays.
+    #[test]
+    fn a_pin_that_moves_while_reset_is_held_keeps_two_samples_waiting() {
+        let mut cpu = Cpu::new();
+        cpu.pull_reset();
+        for held in [true, false] {
+            if !held {
+                cpu.release_reset();
+            }
+            for n in 0..80 {
+                cpu.run_until(cpu.cycles() + 1);
+                cpu.drive_pin(18, if n % 2 == 0 { Level::High } else { Level::Low });
+            }
+            assert!(cpu.counters_held(), "reset holds the core, held {held}");
+            let waiting = cpu.bus.extint_waiting();
+            assert_eq!(waiting, 2, "samples wait, held {held}");
+        }
     }
 }

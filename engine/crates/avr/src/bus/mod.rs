@@ -443,6 +443,14 @@ impl Bus {
     }
 
     #[cfg(test)]
+    pub(crate) fn extint_waiting(&self) -> usize {
+        match self.slot_dev(self.index.extint) {
+            Some(Device::ExtInt(ext)) => ext.waiting(),
+            _ => 0,
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn peripheral_cycles(&self) -> u64 {
         self.cycle
     }
