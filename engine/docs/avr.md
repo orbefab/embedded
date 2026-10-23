@@ -116,3 +116,21 @@ Parse keeps only the fuse settings the model runs, and [netlist.md](netlist.md#a
 Every row carries its citation and is exact. There are 107 rows. The interrupt periods and the compare-to-interrupt lags are worked out from each program's loop phase under parameter 2, in `IsrLoop`. A model change that moves a row fails the suite, and a row's expected value moves only when the document reading behind it does.
 
 `cargo run --release -p sim-avr --example throughput` reports how fast the core runs a timing-set program on the build machine. `scripts/check.sh` does not run it.
+
+## Compiled sketches
+
+Every other test runs firmware written in assembly for the repo. `firmware/sketch` holds programs written the way a user writes them, in C++ against the standard AVR runtime, which supplies `main()`, `millis()` and `delay()` on Timer0, `analogWrite` on the three timers, `digitalWrite` through its pin tables, `tone()` on Timer2, and an interrupt-driven `Serial`. Each sketch is `firmware/sketch/<name>/<name>.ino`, and the committed `firmware/sketch/<name>.hex` is its build for the ATmega328P at 16 MHz with the flags the standard IDE uses: `-Os`, link-time optimization, and the runtime's core compiled into an archive and linked with the sketch.
+
+`scripts/sketches.sh TOOLS_DIR` rebuilds every image. It pins a GCC 7.3.0 toolchain for Linux x86-64 and the runtime's 1.8.6 release by URL and SHA-256, fetches each archive once, and unpacks it under `TOOLS_DIR`. A rebuild is byte-identical to the committed hex. The engine and its tests read only the hex, so neither needs the toolchain. `firmware/sketch/NOTICE` gives the runtime's license and its source.
+
+`crates/avr/tests/sketches.rs` runs each image on the bare core and checks what a user would see on the pins, with every expected time worked out from the runtime's own timer and USART setup.
+
+- `blink` holds PB5 high and low for `delay(1000)` each, 16e6 cycles to within one 4 us `micros()` step and the code around it.
+- `blink_without_delay` toggles PB5 at the Timer0 overflow where `millis()` reaches each second. An overflow is 1.024 ms, and `millis()` carries the 24 us remainder as a fraction, so it reaches 1000 at overflow 977, 2000 at 1954, and 3000 at 2930.
+- `button` copies PD2 to PB5 within a pass of `loop()`.
+- `fade` steps the duty on PB1, Timer1's OC1A, by 5 every 30 ms. A pulse is `2 * OCR1A` timer clocks of 510, centered on BOTTOM. At 255 the runtime calls `digitalWrite`, which disconnects OC1A before it sets `PORTB1`, so the pulse it lands in drops low between the two stores before the pin holds high. Hardware does the same.
+- `analog_read_serial` prints `analogRead(A0)` at 9600 baud. The runtime sets `U2X0` and `UBRR0` = 207, so a bit is 1664 cycles, 0.16 % fast. The 64-byte transmit buffer keeps every frame back to back.
+- `serial_counter` prints a counter at 115200 baud with `UBRR0` = 16, a bit of 136 cycles, 2.1 % fast.
+- `tone` plays `tone(8, 440, 500)` once a second. Timer2 runs CTC at /128 with `OCR2A` = 141, and the compare ISR toggles PB0 440 times, each within 128 cycles of an 18176-cycle grid.
+
+The timing windows are hundreds of cycles wide, and the serial tests also check frame spacing to the cycle. They catch a wrong timer, prescaler, `millis()` or baud, which moves an edge by hundreds to thousands of cycles. An interrupt entry one cycle late moves edges a few dozen cycles and stays inside the windows. The unit tests in `crates/avr/src/irq.rs` and the `oc_pin`, `system`, `timeline`, `timers` and `timing` suites in `crates/avr/tests` are cycle-exact and catch that.
