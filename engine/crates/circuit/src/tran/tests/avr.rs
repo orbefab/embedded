@@ -1,6 +1,6 @@
 //! The ATmega328P through the seam, running the repo's firmware in `firmware/`.
 
-use sim_avr::{Channel, FuseBytes, Port};
+use sim_avr::{FuseBytes, Port};
 use sim_core::diagnostic::Severity;
 use sim_core::netlist::{Atmega328p, Netlist};
 
@@ -8,9 +8,8 @@ use super::active::{
     NS, US, after, at, capacitor, circuit, resistor, restarted, run_active, scripted, volts,
 };
 use crate::active::avr::{self, PACKAGE, Pad, port_index};
-use crate::active::{self, Actives, Drive};
-use crate::newton::{Circuit, Conditions, Iterate};
-use crate::op;
+use crate::active::{self, Drive};
+use crate::newton::Circuit;
 use sim_core::diagnostic::Diagnostic;
 use sim_core::logic::Level;
 use sim_core::name::Ref;
@@ -25,14 +24,14 @@ const ADC: &str = include_str!("../../../../../firmware/adc.hex");
 const CLKPR: &str = include_str!("../../../../../firmware/clkpr.hex");
 const SPEED_UP: &str = include_str!("../../../../../firmware/speedup.hex");
 const PORTS: &str = include_str!("../../../../../firmware/ports.hex");
-const ANALOG_SERIAL: &str = include_str!("../../../../../firmware/analog_serial.hex");
+pub(super) const ANALOG_SERIAL: &str = include_str!("../../../../../firmware/analog_serial.hex");
 
-const MHZ_16: u32 = 16_000_000;
+pub(super) const MHZ_16: u32 = 16_000_000;
 /// A crystal whose cycle is no whole number of picoseconds, so every stop rounds up.
-const MHZ_14_7456: u32 = 14_745_600;
+pub(super) const MHZ_14_7456: u32 = 14_745_600;
 
 /// A crystal, `RESET` on `PC6`, and brown-out at 2.7 V.
-const FUSES: FuseBytes = FuseBytes {
+pub(super) const FUSES: FuseBytes = FuseBytes {
     low: 0xFF,
     high: 0xD9,
     extended: 0xFD,
@@ -61,7 +60,7 @@ fn pin_nets() -> impl Iterator<Item = (String, Pad)> {
         .map(|(name, pad)| (name.to_lowercase(), pad))
 }
 
-fn atmega(vdd: &str, hex: &str, clock_hz: u32, fuses: FuseBytes) -> String {
+pub(super) fn atmega(vdd: &str, hex: &str, clock_hz: u32, fuses: FuseBytes) -> String {
     let mut part: serde_json::Value = serde_json::from_str(PART).unwrap();
     for (name, pad) in Atmega328p::PINS.iter().zip(PACKAGE) {
         part["pins"][*name] = match pad {
@@ -159,7 +158,7 @@ fn core(netlist: &Netlist) -> avr::Core {
     (**core).clone()
 }
 
-fn ps(cycle: u64, clock_hz: u32) -> u64 {
+pub(super) fn ps(cycle: u64, clock_hz: u32) -> u64 {
     (u128::from(cycle) * 1_000_000_000_000).div_ceil(u128::from(clock_hz)) as u64
 }
 
@@ -419,14 +418,6 @@ fn an_adc_sample_reads_a_known_divider() {
     assert_eq!(code, 0b1010_1100);
 }
 
-/// The USART0 bytes `core` has delivered and nothing has taken.
-fn untaken(core: &avr::Core) -> Vec<u8> {
-    let mut cpu = core.cpu().clone();
-    std::iter::from_fn(|| cpu.take(Channel::Usart0))
-        .map(|(byte, _)| byte)
-        .collect()
-}
-
 /// `clone_from` over an earlier state of the same run, and back, leaves the state `clone` does.
 /// The two states differ in their levels, their image, and the core under them.
 #[test]
@@ -471,68 +462,6 @@ fn a_clone_from_leaves_the_state_a_clone_does() {
         copy.clone_from(from);
         assert_eq!(format!("{copy:?}"), format!("{:?}", from.clone()));
     }
-}
-
-/// `analog_serial.S` prints ADC0 on TXD as one line per reading, and ADC0 is 3.3663 V, code
-/// 689. The core run alone still holds the lines it sent. Every landing that keeps a copy of
-/// the same core in `Actives` drops them, so neither that copy nor the one the next landing
-/// clones from carries them. A coast at `stop` keeps no copy, and a byte it sent stays on the
-/// run-ahead copy.
-#[test]
-fn a_landed_core_holds_no_byte_it_sent() {
-    let stop = sim_core::time::Time::from_ps(20_000 * US);
-    let netlist = board(
-        stop.as_ps(),
-        &[],
-        &[
-            resistor("rt", "vcc", "pc0", 3300.0),
-            resistor("rb", "pc0", "gnd", 6800.0),
-        ],
-        atmega("vcc", ANALOG_SERIAL, MHZ_16, FUSES),
-    );
-    let pc0 = 5.0 * 6800.0 / (3300.0 + 6800.0);
-    let mut alone = core(&netlist);
-    while let Some(halt) = alone.run_until(stop) {
-        if halt.sample {
-            alone.sample(halt.at, &[pc0, 0.0, 0.0, 0.0, 0.0, 0.0, 5.0, 5.0]);
-        }
-    }
-    assert_eq!(untaken(&alone)[..10], *b"689\r\n689\r\n");
-
-    let circuit = Circuit::new(netlist.clone()).unwrap();
-    let start = op::settle(
-        &circuit,
-        None,
-        Conditions::NOMINAL,
-        Iterate::initial(&circuit),
-        circuit.power_on(),
-        &Actives::power_on(&circuit),
-        None,
-        op::OP_BUDGET,
-    )
-    .unwrap();
-    let (x, levels) = (&start.iterate.solution, &start.levels);
-    let mut actives = Actives::new(&circuit, levels);
-    let mut at = sim_core::time::Time::ZERO;
-    while at < stop {
-        at = actives.horizon(stop);
-        let (_, stops) = actives.land(&circuit, at, x, levels, levels);
-        if stops == 0 {
-            continue;
-        }
-        let Some(active::Core::Avr(ahead)) = actives.ahead_cores().next() else {
-            unreachable!("one ATmega328P");
-        };
-        assert_eq!(
-            untaken(ahead),
-            b"",
-            "the copy the next landing clones, at {at:?}"
-        );
-    }
-    let [active::Core::Avr(committed)] = actives.cores() else {
-        unreachable!("one ATmega328P");
-    };
-    assert_eq!(untaken(committed), b"");
 }
 
 /// PB5's logic edges and its voltage at 16 MHz, one oscillator cycle every 62,500 ps, up to

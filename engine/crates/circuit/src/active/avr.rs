@@ -5,7 +5,7 @@ use sim_avr::{Channel, Cpu, PinDrive, Port, Timeline};
 use sim_core::netlist::{Atmega328p, PartId, Value};
 use sim_core::time::Time;
 
-use super::{Chip, Drive, Output, Stage, Stop};
+use super::{Chip, Drive, Frame, Output, Stage, Stop};
 use crate::mna::Node;
 use crate::watch::{Signal, Watch};
 
@@ -257,22 +257,31 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
         watches,
         signals,
         samples,
+        usarts: &["USART0"],
         core: super::Core::Avr(Box::new(core)),
     }
 }
 
 impl Core {
     pub(crate) fn run_until(&mut self, limit: Time) -> Option<Stop> {
-        let f = u128::from(self.clock_hz);
-        let limit = u64::try_from(u128::from(limit.as_ps()) * f / 1_000_000_000_000)
-            .expect("an oscillator cycle count fits in u64");
-        let halt = self.timeline.run_until(limit)?;
+        let halt = self.timeline.run_until(self.cycle(limit))?;
         self.refresh();
-        let at = (u128::from(halt.at) * 1_000_000_000_000).div_ceil(f);
         Some(Stop {
-            at: Time::from_ps(u64::try_from(at).expect("a stop inside the run")),
+            at: self.time(halt.at),
             sample: halt.sample,
         })
+    }
+
+    /// The last oscillator cycle at or before `at`.
+    fn cycle(&self, at: Time) -> u64 {
+        u64::try_from(u128::from(at.as_ps()) * u128::from(self.clock_hz) / 1_000_000_000_000)
+            .expect("an oscillator cycle count fits in u64")
+    }
+
+    /// The first picosecond at or after oscillator cycle `cycle`.
+    fn time(&self, cycle: u64) -> Time {
+        let at = (u128::from(cycle) * 1_000_000_000_000).div_ceil(u128::from(self.clock_hz));
+        Time::from_ps(u64::try_from(at).expect("a cycle inside the run"))
     }
 
     pub(crate) fn drive(&self) -> &[Drive] {
@@ -306,8 +315,19 @@ impl Core {
         self.timeline.cpu()
     }
 
-    pub(crate) fn drop_delivered(&mut self) {
-        for channel in [Channel::Usart0, Channel::Spi, Channel::SpiHostMaster] {
+    /// Takes the frames whose stop bit ended on a cycle at or before `through`'s last, which is
+    /// the same as that cycle's first picosecond being at or before `through`.
+    pub(crate) fn deliver(&mut self, through: Time, mut sent: impl FnMut(Frame)) {
+        let through = self.cycle(through);
+        while let Some(frame) = self.timeline.take_sent(through) {
+            sent(Frame {
+                usart: frame.usart,
+                byte: frame.byte,
+                start: self.time(frame.start),
+                end: self.time(frame.end),
+            });
+        }
+        for channel in [Channel::Spi, Channel::SpiHostMaster] {
             while self.timeline.take(channel).is_some() {}
         }
         while self.timeline.take_i2c().is_some() {}

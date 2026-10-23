@@ -9,12 +9,15 @@ use sim_core::netlist::{
     self, Chip, Contact, Document, Model, Netlist, Part, Schedule, Switch, Value, position_rule,
 };
 use sim_core::run_folder::Results;
+use sim_core::serial::SerialByte;
 use sim_core::trace::Trace;
 
 use super::super::*;
 use super::fixtures::*;
-use super::session::{AVR_STOP_PS, Rng, STIFF_ROW, assert_same_folder, batch, example, finish};
-use crate::session::{Applied, Input, Rejected, Setting, State, Status};
+use super::session::{
+    AVR_STOP_PS, Rng, STIFF_ROW, assert_same_folder, batch, example, finish, serial_of_one_call,
+};
+use crate::session::{Applied, Input, Rejected, SerialCursor, Setting, State, Status};
 
 /// 1 V through 1 kohm into 5 pF, a 5 ns time constant, so the 1 ns first step after an edge is
 /// rejected. `sw1` puts 1 kohm across the capacitor and `sw2` puts 10 kohm across it, with up
@@ -584,24 +587,31 @@ fn inside_the_reach(session: &Session) -> bool {
     matches!(&session.state, State::Running { accepted, now, .. } if accepted.reach > *now)
 }
 
+fn serial(session: &Session) -> Vec<SerialByte> {
+    session.serial_since(SerialCursor::default()).0.to_vec()
+}
+
 /// `input` advanced in chunks ended as `input_in_chunks_writes_the_batch_folder` ends them,
 /// with a seeded input after one chunk in three and after each chunk that ends inside the
 /// accepted step's reach. Each input lands where the landing rule says. A batch run of the
 /// export writes the folder the session recorded, and each probe at a row time after the last
-/// input before it is that row, bit for bit.
+/// input before it is that row, bit for bit. Past half the run, the session's serial bytes are
+/// the first bytes of one call on its export. Once it has ended they are all of them. Returns
+/// the batch and those bytes.
 fn inputs_in_chunks_write_the_export_folder(
     name: &str,
     input: &[u8],
     budget: Budget,
     seed: u64,
     specs: Option<&[PartSpec]>,
-) -> Results {
+) -> (Results, Vec<SerialByte>) {
     let mut session = open_document(input, Rows::Grid, budget);
     let transient = transient(netlist_of(&session));
     let switches = switches(netlist_of(&session));
     let mut rng = Rng(seed);
     let mut probes = Vec::new();
     let mut landed = 0;
+    let mut halfway = false;
     while let State::Running { now, next, .. } = &session.state {
         let (now, landing) = (now.as_ps(), next.at.as_ps());
         let to = match rng.below(6) {
@@ -645,11 +655,24 @@ fn inputs_in_chunks_write_the_export_folder(
         }
         let probe = session.probe();
         probes.push((probe.at(), probe.values().to_vec()));
+        if !halfway
+            && session.status() == Status::Running
+            && session.now().as_ps() > transient.stop.as_ps() / 2
+        {
+            halfway = true;
+            let exported = netlist::parse(&session.export().unwrap()).unwrap();
+            let whole = serial_of_one_call(&exported, budget);
+            let now = session.now();
+            assert!(whole.starts_with(&serial(&session)), "{name} at {now:?}");
+        }
     }
     assert!(landed > 0, "{name}: no input landed");
+    assert!(halfway || session.status() == Status::Faulted, "{name}");
     let export = session.export().unwrap();
     let exported = netlist::parse(&export).unwrap();
     assert_eq!(parts(&exported), parts(netlist_of(&session)));
+    let bytes = serial(&session);
+    assert_eq!(bytes, serial_of_one_call(&exported, budget), "{name}");
     let batch = batch(&exported, budget);
     let trace = batch.trace().unwrap();
     let mut on_rows = 0;
@@ -668,7 +691,7 @@ fn inputs_in_chunks_write_the_export_folder(
     }
     assert!(on_rows > 0, "{name}: no probe fell on a row");
     assert_same_folder(&export, &exported, &finish(session, &exported), &batch);
-    batch
+    (batch, bytes)
 }
 
 #[test]
@@ -1191,7 +1214,7 @@ fn a_switch_with_inputs_waits_on_one_breakpoint() {
 #[test]
 fn atmega_analog_serial_with_level_inputs_writes_the_export_folder() {
     let input = example("atmega-analog-serial", ANALOG_STOP_PS);
-    let batch = inputs_in_chunks_write_the_export_folder(
+    let (batch, bytes) = inputs_in_chunks_write_the_export_folder(
         "atmega-analog-serial",
         &input,
         BUDGET,
@@ -1200,6 +1223,7 @@ fn atmega_analog_serial_with_level_inputs_writes_the_export_folder() {
     );
     let netlist = netlist::parse(&input).unwrap();
     assert_a_sample_read_a_moved_level(&netlist, batch.trace().unwrap());
+    assert_eq!(bytes.iter().filter(|byte| byte.byte == b'\n').count(), 2);
 }
 
 #[test]

@@ -1,5 +1,6 @@
 use sim_core::netlist::Netlist;
 use sim_core::run_folder::{self, Results};
+use sim_core::serial::SerialByte;
 use sim_core::timestamp::Timestamp;
 
 use super::super::*;
@@ -9,7 +10,7 @@ use crate::active::Drive;
 use crate::active::script::Op;
 use crate::lte::Segment;
 use crate::newton::Side;
-use crate::session::{State, Status, attempt};
+use crate::session::{SerialCursor, State, Status, attempt};
 use crate::topology;
 
 /// A seeded xorshift, so a failing chunking replays.
@@ -90,9 +91,17 @@ fn chunks_write_the_batch_folder(name: &str, stop_ps: u64, budget: Budget, seed:
     input_in_chunks_writes_the_batch_folder(name, &example(name, stop_ps), budget, seed)
 }
 
+/// The serial bytes of a session on `netlist` advanced to its end in one call.
+pub(super) fn serial_of_one_call(netlist: &Netlist, budget: Budget) -> Vec<SerialByte> {
+    let mut session = open(netlist, Vec::new(), budget);
+    session.advance_to(transient(netlist).stop);
+    session.serial_since(SerialCursor::default()).0.to_vec()
+}
+
 /// `input` advanced in seeded chunks to its end writes the batch's run folder. A chunk ends on
 /// the step about to land, 1 ps either side of it, on the next grid time, or a short or long
-/// stride on. The probe at each chunk end that falls on a row is that row, bit for bit.
+/// stride on. The probe at each chunk end that falls on a row is that row, bit for bit. The
+/// serial bytes read after each chunk, joined, are the bytes of one call.
 fn input_in_chunks_writes_the_batch_folder(
     name: &str,
     input: &[u8],
@@ -106,6 +115,7 @@ fn input_in_chunks_writes_the_batch_folder(
     let mut session = open(&netlist, Vec::new(), budget);
     let mut rng = Rng(seed);
     let mut on_rows = 0;
+    let (mut cursor, mut serial) = (SerialCursor::default(), Vec::new());
     while let State::Running { now, next, .. } = &session.state {
         let (now, landing) = (now.as_ps(), next.at.as_ps());
         let to = match rng.below(6) {
@@ -117,6 +127,9 @@ fn input_in_chunks_writes_the_batch_folder(
             _ => now + 1 + rng.below(transient.stop.as_ps() / 100),
         };
         session.advance_to(Time::from_ps(to));
+        let (bytes, after) = session.serial_since(cursor);
+        serial.extend_from_slice(bytes);
+        cursor = after;
         let probe = session.probe();
         let at = probe.at();
         assert_eq!(at, session.now());
@@ -133,6 +146,7 @@ fn input_in_chunks_writes_the_batch_folder(
         }
     }
     assert!(on_rows > 0, "{name}: no chunk ended on a row");
+    assert_eq!(serial, serial_of_one_call(&netlist, budget), "{name}");
     assert_same_folder(input, &netlist, &finish(session, &netlist), &batch);
     batch
 }

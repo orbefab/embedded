@@ -1,8 +1,9 @@
 use sim_core::diagnostic::{Diagnostic, Solve};
 use sim_core::finite::Finite;
 use sim_core::logic::Level;
-use sim_core::name::Ref;
+use sim_core::name::{Name, Ref};
 use sim_core::netlist::{Analysis, Document, Netlist, Transient};
+use sim_core::serial::SerialByte;
 use sim_core::time::Time;
 
 use crate::RunStats;
@@ -123,6 +124,9 @@ pub struct Session {
     signals: Vec<Ref>,
     /// The level of each signal at `now`, in the order of `signals`.
     logic: Vec<Level>,
+    /// Every byte a USART sent whose stop bit ended at or before the last accepted step, in the
+    /// order stop bits ended, then in `usarts` order.
+    serial: Vec<SerialByte>,
     pub(crate) record: Option<Record>,
     /// The JSON the session opened from, which `export` writes back.
     document: Option<Document>,
@@ -162,6 +166,10 @@ pub(crate) enum End {
     /// session also ends on `trace.too_large`.
     Fault(Diagnostic),
 }
+
+/// How many serial bytes a reader has read. `SerialCursor::default()` has read none.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SerialCursor(u64);
 
 /// Where a session stands after a call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -353,6 +361,7 @@ impl Session {
             memo,
             signals,
             logic,
+            serial: Vec::new(),
             record,
             document,
             state: State::TAKEN,
@@ -366,6 +375,14 @@ impl Session {
     pub fn now(&self) -> Time {
         match &self.state {
             State::Running { now, .. } => *now,
+            State::Ended { at, .. } => *at,
+        }
+    }
+
+    /// The last accepted step, which is `now` once the session has ended.
+    pub(crate) fn accepted(&self) -> Time {
+        match &self.state {
+            State::Running { accepted, .. } => accepted.at,
             State::Ended { at, .. } => *at,
         }
     }
@@ -393,7 +410,8 @@ impl Session {
 
     /// Accepts every step that lands at or before `to`, and `stop` caps `to`. A running session
     /// then stands at `to`, and a time at or before `now` does nothing. A fault ends the session
-    /// at its last accepted step.
+    /// at its last accepted step. Then the log holds every byte whose stop bit ended by the last
+    /// accepted step, and no other.
     pub fn advance_to(&mut self, to: Time) -> Status {
         let to = to.min(self.transient.stop);
         let mut state = std::mem::replace(&mut self.state, State::TAKEN);
@@ -409,6 +427,8 @@ impl Session {
             *now = (*now).max(to);
         }
         self.state = state;
+        let accepted = self.accepted();
+        self.serial.extend(self.actives.deliver(accepted));
         self.status()
     }
 
@@ -451,6 +471,28 @@ impl Session {
     pub fn level(&self, signal: &Ref) -> Option<Level> {
         let k = self.signals.iter().position(|s| s == signal)?;
         Some(self.logic[k])
+    }
+
+    /// Each USART, chips in part order, then each chip's in datasheet order: the part's name and
+    /// the USART's, such as `USART0`. A `SerialByte`'s `usart` indexes this.
+    pub fn usarts(&self) -> &[(Name, &'static str)] {
+        self.actives.usarts()
+    }
+
+    /// Every byte a USART sent after the ones `cursor` has read, up to the last whose stop bit
+    /// ended at or before the last accepted step, and the cursor past them. So a byte appears at
+    /// most one step after its stop bit ends, and once the session has ended every byte that
+    /// ended by `now` is here. The bytes are in the order their stop bits ended, then in
+    /// `usarts` order. On one USART that is the order they started. Solves nothing. A cursor
+    /// past the end, which only another session can give, reads nothing and stays.
+    pub fn serial_since(&self, cursor: SerialCursor) -> (&[SerialByte], SerialCursor) {
+        let Some(bytes) = usize::try_from(cursor.0)
+            .ok()
+            .and_then(|read| self.serial.get(read..))
+        else {
+            return (&[], cursor);
+        };
+        (bytes, SerialCursor(self.serial.len() as u64))
     }
 
     /// The observations and trace of a recorded session advanced to its end.

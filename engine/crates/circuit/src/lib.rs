@@ -20,7 +20,10 @@ use sim_core::run_folder::{Observations, Results};
 
 use crate::tran::Rows;
 
-pub use session::{Applied, Input, Probe, Refused, Rejected, Session, Setting, Status};
+pub use session::{
+    Applied, Input, Probe, Refused, Rejected, SerialCursor, Session, Setting, Status,
+};
+pub use sim_core::serial::SerialByte;
 
 /// Accepted steps after t = 0, and chip stops on those steps, summed over chips.
 ///

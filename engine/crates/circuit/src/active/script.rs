@@ -71,6 +71,7 @@ pub(crate) fn chip(
         })],
         signals: Vec::new(),
         samples: vec![v_in],
+        usarts: &[],
         core: super::Core::Script(Core::new(script, echo)),
     }
 }

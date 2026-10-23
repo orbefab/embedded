@@ -7,7 +7,9 @@ pub(crate) mod avr;
 #[cfg(test)]
 pub(crate) mod script;
 
+use sim_core::name::Name;
 use sim_core::netlist::{NetId, PartId};
+use sim_core::serial::SerialByte;
 use sim_core::time::Time;
 
 use crate::chip::Active;
@@ -67,6 +69,8 @@ pub(crate) struct Chip {
     pub(crate) signals: Vec<(&'static str, usize)>,
     /// The voltages its core reads at a sample, in the order it reads them.
     pub(crate) samples: Vec<Signal>,
+    /// The datasheet name of each USART its core sends on, in its core's order.
+    pub(crate) usarts: &'static [&'static str],
     /// The core at power-on.
     pub(crate) core: Core,
 }
@@ -90,8 +94,8 @@ pub(crate) struct Stop {
 /// - A clocked kind runs to cycle `floor(limit_ps * f / 1e12)` and puts a stop at cycle `c` at
 ///   `ceil(c * 1e12 / f)` ps, counting from its clock domain's last frequency change.
 /// - `sample` and `input` never change the image. What they cause comes at least 1 ps later.
-/// - `input` and `drop_delivered` read nothing but the core and their arguments, so they take
-///   two equal cores to two equal cores. A clone shares only what no call writes: the AVR
+/// - `input` and `deliver` read nothing but the core and their arguments, so they take two
+///   equal cores to two equal cores. A clone shares only what no call writes: the AVR
 ///   core's flash and decoded ops behind an `Arc`, and a script core's script.
 #[derive(Debug)]
 pub(crate) enum Core {
@@ -155,14 +159,25 @@ impl Core {
         }
     }
 
-    /// Drops every byte and bus phase it has delivered. No output reads them yet.
-    fn drop_delivered(&mut self) {
+    /// Takes each byte a USART sent whose stop bit ended at or before `through`, in the order
+    /// they ended on each USART, and drops every SPI byte and bus phase, which no output reads.
+    fn deliver(&mut self, through: Time, sent: impl FnMut(Frame)) {
         match *self {
-            Core::Avr(ref mut core) => core.drop_delivered(),
+            Core::Avr(ref mut core) => core.deliver(through, sent),
             #[cfg(test)]
             Core::Script(_) => {}
         }
     }
+}
+
+/// A byte one of a core's USARTs sent, its start bit and the end of its stop bit on the run's
+/// clock.
+pub(crate) struct Frame {
+    /// The index in its chip's `usarts`.
+    pub(crate) usart: u8,
+    pub(crate) byte: u8,
+    pub(crate) start: Time,
+    pub(crate) end: Time,
 }
 
 pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
@@ -207,11 +222,67 @@ pub(crate) fn stamp(chip: &Chip, core: &Core, sys: &mut System, source_scale: f6
 pub(crate) struct Actives {
     committed: Vec<Core>,
     ahead: Vec<Ahead>,
+    /// The bytes landings delivered since the last `deliver`, in no order.
+    staged: Vec<Staged>,
+    /// Each USART, chips in part order, then each chip's in its core's order: the part's name
+    /// and the USART's. A `SerialByte`'s `usart` indexes this.
+    usarts: Vec<(Name, &'static str)>,
 }
 
 struct Ahead {
     core: Core,
     reach: Reach,
+    delivered: Delivered,
+}
+
+/// A delivered byte and the end of its stop bit, which orders it.
+struct Staged {
+    end: Time,
+    byte: SerialByte,
+}
+
+/// Every byte of one chip whose stop bit ended at or before `through` was staged, once.
+///
+/// `through` is never past the session's last accepted step. A commit is at a step being
+/// accepted, and the session's delivery from the copies is through the accepted step. Nothing
+/// accepted is undone, so a staged byte comes only from accepted history. A re-solve after an
+/// input can move steps and watch flips anywhere after the accepted step, and none of that
+/// span is delivered yet.
+///
+/// A byte is staged only when its end is in `(through, to]`, and `through` then becomes `to`,
+/// so none is staged twice. `to` is never before `through`, because each delivery is through
+/// the step being accepted or the last accepted one, and neither moves back. A byte leaves a
+/// core only here, and one at or below `through` was staged from the copy that held it then. The committed core is the copy
+/// as it was delivered at its commit. A rewind, a restart's input and a live input all go to a
+/// time after the accepted step, so the core runs again from its commit on the accepted inputs
+/// and sends the same bytes up to `through`, which are dropped. A twin was delivered through
+/// its time by its commit and has not run, and an input ends no frame, so an input on a twin
+/// delivers nothing. A stop and a run that idles after its last byte are the session's
+/// delivery through the accepted step, which every copy has done.
+struct Delivered {
+    through: Time,
+    /// The index in `Actives::usarts` of the chip's first USART.
+    usart: u16,
+}
+
+impl Delivered {
+    fn deliver(&mut self, core: &mut Core, to: Time, staged: &mut Vec<Staged>) {
+        let (through, usart) = (self.through, self.usart);
+        core.deliver(to, |frame| {
+            if frame.end > through {
+                staged.push(Staged {
+                    end: frame.end,
+                    byte: SerialByte {
+                        at: frame.start,
+                        usart: usart + u16::from(frame.usart),
+                        byte: frame.byte,
+                    },
+                });
+            }
+        });
+        debug_assert!(through <= to, "a delivery never goes back");
+        self.through = to;
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -241,19 +312,20 @@ impl Ahead {
         self.reach = Reach::Done(at);
     }
 
-    /// Commits the copy without what it delivered, so no later copy of either core carries it.
-    fn commit(&mut self, committed: &mut Core) {
+    /// Delivers the copy through its time and commits it, so no later copy of either core
+    /// carries what it delivered.
+    fn commit(&mut self, committed: &mut Core, staged: &mut Vec<Staged>) {
         let Reach::Done(at) = self.reach else {
             panic!("a copy commits only where it was rewound");
         };
-        self.core.drop_delivered();
+        self.delivered.deliver(&mut self.core, at, staged);
         committed.clone_from(&self.core);
         self.reach = Reach::Twin(at);
     }
 
     /// Its watches' levels from `at` on, after the landing at `at`, then committed. A twin of
     /// the committed core takes them on both cores, which leaves the state a fresh copy would.
-    fn input(&mut self, committed: &mut Core, at: Time, levels: &[bool]) {
+    fn input(&mut self, committed: &mut Core, at: Time, levels: &[bool], staged: &mut Vec<Staged>) {
         if !matches!(self.reach, Reach::Twin(twin) if twin == at) {
             self.rewind(committed, at);
             self.core.input(at, levels);
@@ -262,7 +334,7 @@ impl Ahead {
                 committed.drive(),
                 "an input on the held solve never changes an image"
             );
-            self.commit(committed);
+            self.commit(committed, staged);
             return;
         }
         committed.input(at, levels);
@@ -271,15 +343,22 @@ impl Ahead {
             self.core.drive(),
             "an input on the held solve never changes an image"
         );
-        committed.drop_delivered();
         self.core.input(at, levels);
-        self.core.drop_delivered();
+    }
+
+    /// Whether the copy has done everything up to `at`.
+    fn has_done(&self, at: Time) -> bool {
+        match self.reach {
+            Reach::Done(reached) | Reach::Twin(reached) => reached >= at,
+            Reach::Stopped(stop) => stop.at > at,
+        }
     }
 }
 
 impl Actives {
     /// The power-on cores, given their levels on the operating point at t = 0.
     pub(crate) fn new(circuit: &Circuit, levels: &Levels) -> Actives {
+        let mut usarts = Vec::new();
         let committed: Vec<Core> = circuit
             .actives
             .iter()
@@ -297,12 +376,29 @@ impl Actives {
             .collect();
         let ahead = committed
             .iter()
-            .map(|core| Ahead {
-                core: core.clone(),
-                reach: Reach::Done(Time::ZERO),
+            .zip(&circuit.actives)
+            .map(|(core, chip)| {
+                let delivered = Delivered {
+                    through: Time::ZERO,
+                    usart: u16::try_from(usarts.len()).expect("a run has few USARTs"),
+                };
+                for &usart in chip.usarts {
+                    let part = chip.part.expect("a chip with a USART is a part");
+                    usarts.push((circuit.netlist.part(part).name.clone(), usart));
+                }
+                Ahead {
+                    core: core.clone(),
+                    reach: Reach::Done(Time::ZERO),
+                    delivered,
+                }
             })
             .collect();
-        Actives { committed, ahead }
+        Actives {
+            committed,
+            ahead,
+            staged: Vec::new(),
+            usarts,
+        }
     }
 
     /// The power-on cores, for the operating point that comes before `new`.
@@ -312,6 +408,10 @@ impl Actives {
             .iter()
             .map(|chip| chip.core.clone())
             .collect()
+    }
+
+    pub(crate) fn usarts(&self) -> &[(Name, &'static str)] {
+        &self.usarts
     }
 
     pub(crate) fn cores(&self) -> &[Core] {
@@ -397,7 +497,7 @@ impl Actives {
                 image,
                 "a sample or an input at a landing never changes an image"
             );
-            ahead.commit(committed);
+            ahead.commit(committed, &mut self.staged);
         }
         (changed, stops)
     }
@@ -412,7 +512,22 @@ impl Actives {
             if before.of(watched) == levels {
                 continue;
             }
-            ahead.input(committed, at, levels);
+            ahead.input(committed, at, levels, &mut self.staged);
         }
+    }
+
+    /// Delivers each copy through `through`, which every copy has done everything up to. Returns
+    /// every byte delivered since the last call, in the order stop bits ended, then in `usarts`
+    /// order.
+    pub(crate) fn deliver(&mut self, through: Time) -> impl Iterator<Item = SerialByte> {
+        for ahead in &mut self.ahead {
+            assert!(ahead.has_done(through), "a copy delivers only what it did");
+            ahead
+                .delivered
+                .deliver(&mut ahead.core, through, &mut self.staged);
+        }
+        self.staged
+            .sort_unstable_by_key(|staged| (staged.end, staged.byte.usart));
+        self.staged.drain(..).map(|staged| staged.byte)
     }
 }
