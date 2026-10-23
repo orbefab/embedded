@@ -32,7 +32,7 @@ impl Params {
     /// Largest `exp` argument whose current and slope stay finite and under `G_CAP`.
     fn arg_cap(&self) -> f64 {
         // In log space, so a tiny `Is` cannot overflow the quotient.
-        ARG_MAX.min(G_CAP.ln() + self.nvt.ln() - self.is.ln())
+        ARG_MAX.min(libm::log(G_CAP) + libm::log(self.nvt) - libm::log(self.is))
     }
 
     /// Current, slope, whether the argument was clamped, and the voltage that was evaluated.
@@ -41,7 +41,7 @@ impl Params {
         let arg = vj / self.nvt;
         let limited = arg > cap;
         let used = if limited { cap } else { arg };
-        let e = used.exp();
+        let e = libm::exp(used);
         let voltage = if limited { used * self.nvt } else { vj };
         (
             self.is * (e - 1.0),
@@ -107,12 +107,12 @@ pub(crate) fn pnjlim(vnew: f64, vold: f64, nvt: f64, vcrit: f64) -> (f64, bool) 
         let limited = if vold > 0.0 {
             let arg = 1.0 + (vnew - vold) / nvt;
             if arg > 0.0 {
-                vold + nvt * arg.ln()
+                vold + nvt * libm::log(arg)
             } else {
                 vcrit
             }
         } else {
-            nvt * (vnew / nvt).ln()
+            nvt * libm::log(vnew / nvt)
         };
         return (limited, true);
     }
@@ -155,7 +155,7 @@ mod tests {
     fn a_long_forward_step_from_a_forward_voltage_grows_logarithmically() {
         let (v, limited) = pnjlim(5.0, 2.0, NVT, VCRIT);
         assert!(limited);
-        assert_eq!(v, 2.0 + NVT * (1.0 + 3.0 / NVT).ln());
+        assert_eq!(v, 2.0 + NVT * libm::log(1.0 + 3.0 / NVT));
         assert!(v < 2.5, "{v}");
     }
 
@@ -163,7 +163,7 @@ mod tests {
     fn a_long_forward_step_from_reverse_lands_on_the_log_curve() {
         let (v, limited) = pnjlim(5.0, -1.0, NVT, VCRIT);
         assert!(limited);
-        assert_eq!(v, NVT * (5.0 / NVT).ln());
+        assert_eq!(v, NVT * libm::log(5.0 / NVT));
     }
 
     #[test]
@@ -213,14 +213,14 @@ mod tests {
         let (below, _, open, voltage) = params.evaluate(params.nvt * 100.0);
         assert!(!open);
         assert_eq!(voltage, params.nvt * 100.0);
-        let full = params.is * (100.0_f64.exp() - 1.0);
+        let full = params.is * (libm::exp(100.0) - 1.0);
         assert!((below - full).abs() <= full * 1e-12);
 
         let over_v = params.nvt * (cap + 1.0);
         let (current, slope, over, clamped) = params.evaluate(over_v);
         assert!(over);
         assert_eq!(clamped, cap * params.nvt);
-        let expected = params.is * (cap.exp() - 1.0);
+        let expected = params.is * (libm::exp(cap) - 1.0);
         assert!((current - expected).abs() <= expected * 1e-12);
         assert!(slope.is_finite() && slope > 0.0);
 

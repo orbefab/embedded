@@ -233,7 +233,7 @@ fn reset_release_is_located_on_its_closed_form() {
     };
     assert_eq!(edges(&results, "#u1.logic.reset"), [(at, Level::High)]);
     let tau = 100e3 * 1e-6;
-    let closed = tau * (5.0_f64 / (5.0 - 0.7)).ln() * 1e12;
+    let closed = tau * libm::log(5.0 / (5.0 - 0.7)) * 1e12;
     assert!(
         (at as f64 / closed - 1.0).abs() <= 1e-5,
         "{at} ps vs {closed} ps"
@@ -247,7 +247,7 @@ fn reset_release_is_located_on_its_closed_form() {
     assert!(column(trace, "#net.out")[k] < 0.1);
     assert!(column(trace, "#net.out")[k + 1] > 4.0);
     for (k, (&v, t)) in reset.iter().zip(trace.time()).enumerate() {
-        let want = 5.0 * (1.0 - (-(t.as_ps() as f64) * 1e-12 / tau).exp());
+        let want = 5.0 * (1.0 - libm::exp(-(t.as_ps() as f64) * 1e-12 / tau));
         assert!(
             (v - want).abs() <= 1e-4 * span(reset),
             "row {k}: {v} vs {want}"
@@ -291,8 +291,8 @@ fn halves(ra: f64, rb: f64, c: f64) -> [(f64, f64); 2] {
 
 fn astable_period(ra: f64, rb: f64, c: f64, low: f64, high: f64) -> f64 {
     let [(charge_to, charge_tau), (drain_to, drain_tau)] = halves(ra, rb, c);
-    let high_time = charge_tau * ((charge_to - low) / (charge_to - high)).ln();
-    let low_time = drain_tau * ((high - drain_to) / (low - drain_to)).ln();
+    let high_time = charge_tau * libm::log((charge_to - low) / (charge_to - high));
+    let low_time = drain_tau * libm::log((high - drain_to) / (low - drain_to));
     high_time + low_time
 }
 

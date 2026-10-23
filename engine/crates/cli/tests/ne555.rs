@@ -101,13 +101,13 @@ impl Astable {
     /// OUT high, DISCH off. The capacitor charges from `from` to `to`.
     fn high(&self, from: f64, to: f64) -> f64 {
         let (asymptote, tau) = self.phase(self.off);
-        tau * ((asymptote - from) / (asymptote - to)).ln()
+        tau * libm::log((asymptote - from) / (asymptote - to))
     }
 
     /// OUT low, DISCH on. The capacitor discharges from the upper to the lower threshold.
     fn low(&self) -> f64 {
         let (asymptote, tau) = self.phase(self.on);
-        tau * ((self.upper() - asymptote) / (self.lower() - asymptote)).ln()
+        tau * libm::log((self.upper() - asymptote) / (self.lower() - asymptote))
     }
 
     fn period(&self) -> f64 {
@@ -175,7 +175,7 @@ fn the_period_is_within_the_formula_budget_and_its_own_closed_form() {
     let ln2 = std::f64::consts::LN_2;
     let rounding = (ra + 2.0 * rb) * c * ln2 / formula - 1.0;
     let (asymptote, tau) = astable.phase(astable.on);
-    let ratio = ((astable.upper() - asymptote) / (astable.lower() - asymptote)).ln();
+    let ratio = libm::log((astable.upper() - asymptote) / (astable.lower() - asymptote));
     let discharge_asymptote = (rb * c * ratio - rb * c * ln2) / formula;
     let discharge_resistance = (tau - rb * c) * ratio / formula;
     let leakage = (astable.high(astable.lower(), astable.upper()) - (ra + rb) * c * ln2) / formula;
@@ -257,7 +257,7 @@ fn edge_bounds(results: &Results, astable: &Astable) -> Vec<f64> {
         let (asymptote, tau) = astable.phase(discharge);
         let (from, v0) = start;
         let closed =
-            |t: u64| asymptote + (v0 - asymptote) * (-((t - from) as f64) * 1e-12 / tau).exp();
+            |t: u64| asymptote + (v0 - asymptote) * libm::exp(-((t - from) as f64) * 1e-12 / tau);
         let first = time.partition_point(|&t| t < from);
         let last = time.binary_search(&at).unwrap();
         let error = (first..=last)

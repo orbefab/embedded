@@ -71,7 +71,7 @@ fn led_current(netlist: &serde_json::Value, up: f64, down: f64) -> f64 {
         value(&led["series_resistance"]),
     );
     let (source, behind) = (vcc * up / (up + down), 1.0 / (up + down));
-    let current = |vj: f64| is * (vj / (n * VT)).exp_m1() + GMIN * vj;
+    let current = |vj: f64| is * libm::expm1(vj / (n * VT)) + GMIN * vj;
     let (mut low, mut high) = (0.0, source);
     for _ in 0..200 {
         let vj = (low + high) / 2.0;

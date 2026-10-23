@@ -177,6 +177,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
+name = "libm"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -273,11 +279,11 @@ dependencies = [
 
 [[package]]
 name = "sim-avr"
-version = "0.8.0"
+version = "0.9.0"
 
 [[package]]
 name = "sim-bench"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -288,8 +294,9 @@ dependencies = [
 
 [[package]]
 name = "sim-circuit"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
+ "libm",
  "serde_json",
  "sim-avr",
  "sim-circuit",
@@ -298,9 +305,10 @@ dependencies = [
 
 [[package]]
 name = "sim-cli"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "clap",
+ "libm",
  "serde",
  "serde_json",
  "sha2",
@@ -310,8 +318,9 @@ dependencies = [
 
 [[package]]
 name = "sim-core"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
+ "libm",
  "serde",
  "serde_json",
  "serde_path_to_error",

@@ -329,8 +329,8 @@ fn a_scripted_drive_lands_on_its_picosecond_and_restarts() {
     );
     assert!(restarted(&cap, ON) && restarted(&cap, OFF));
     let us = |ps: u64| ps as f64 / US as f64;
-    let high = 5.0 * (1.0 - (-us(OFF - ON) / TAU_US).exp());
-    let low = high * (-us(8 * US - OFF) / TAU_US).exp();
+    let high = 5.0 * (1.0 - libm::exp(-us(OFF - ON) / TAU_US));
+    let low = high * libm::exp(-us(8 * US - OFF) / TAU_US);
     assert!(
         (at(&cap, OFF) - high).abs() < 1e-4 * 5.0,
         "{}",
@@ -374,7 +374,7 @@ fn a_write_that_leaves_the_image_lands_without_a_restart() {
 #[test]
 fn a_sample_at_the_chips_time_sets_a_later_drive() {
     let netlist = pin_into_rc(4 * US);
-    let v = 5.0 * (1.0 - (-1.0 / TAU_US).exp());
+    let v = 5.0 * (1.0 - libm::exp(-1.0 / TAU_US));
     let run = |threshold: f64| {
         let script = [
             (US, Op::Drive(Drive::High)),
@@ -438,7 +438,7 @@ fn an_input_flip_reaches_the_core_at_its_located_picosecond() {
     let input = volts(&trace, "in");
     let crossing = input.iter().find(|&&(_, v)| v > 2.5).unwrap().0;
     // `docs/engine.md` bounds the shift by `1e-4 * tau * swing / left`, 200 ps here.
-    let expected = US as f64 * (1.0 + 2f64.ln());
+    let expected = US as f64 * (1.0 + std::f64::consts::LN_2);
     assert!((crossing as f64 - expected).abs() < 200.0, "{crossing}");
     let out = volts(&trace, "out");
     let rise = crossing + 200 * NS;

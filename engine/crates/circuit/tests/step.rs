@@ -115,7 +115,7 @@ fn a_100_ps_discharge_after_an_edge_stays_on_its_closed_form() {
     let mut worst = 0.0f64;
     for (row, at) in trace.time().iter().enumerate() {
         let t = at.as_ps().saturating_sub(10_000) as f64 * 1e-12;
-        let v = after + (before - after) * (-t / 1e-10).exp();
+        let v = after + (before - after) * libm::exp(-t / 1e-10);
         worst = worst.max((vout[row] - v).abs() / (before - after));
     }
     // The trapezoidal rule holds it within 1e-4 of span. Backward Euler alone is near 2e-3.
@@ -177,7 +177,7 @@ fn fast_edge_closed_form(t_ps: u64) -> (f64, f64) {
         return (before, 0.0);
     }
     let (vth, rth) = thevenin(0.1);
-    let decay = (-((t_ps - 1_000_000) as f64 * 1e-12) / (rth * 1e-7)).exp();
+    let decay = libm::exp(-((t_ps - 1_000_000) as f64 * 1e-12) / (rth * 1e-7));
     (vth + (before - vth) * decay, -(before - vth) / rth * decay)
 }
 
@@ -244,7 +244,7 @@ fn a_held_capacitor_discharges_along_its_closed_form() {
     let (v_span, i_span) = (span(vout), span(current));
     let mut worst = (0.0f64, 0.0f64);
     for (row, at) in trace.time().iter().enumerate() {
-        let decay = (-(at.as_ps() as f64 * 1e-12) / 1e-3).exp();
+        let decay = libm::exp(-(at.as_ps() as f64 * 1e-12) / 1e-3);
         worst.0 = worst.0.max((vout[row] - 5.0 * decay).abs() / v_span);
         worst.1 = worst.1.max((current[row] + 5e-3 * decay).abs() / i_span);
     }
@@ -261,7 +261,7 @@ fn a_10_ps_discharge_after_an_edge_is_within_the_documented_floor_error() {
     let mut worst = 0.0f64;
     for (row, at) in trace.time().iter().enumerate() {
         let t = at.as_ps().saturating_sub(10_000) as f64 * 1e-12;
-        let v = after + (before - after) * (-t / 1e-11).exp();
+        let v = after + (before - after) * libm::exp(-t / 1e-11);
         worst = worst.max((vout[row] - v).abs() / (before - after));
     }
     // docs/engine.md gives 1.8e-2 for a 10 ps time constant.
@@ -329,7 +329,7 @@ fn a_30_ps_mode_switched_in_beside_a_10_ns_discharge_leaves_it_on_its_closed_for
             ],
         ),
         "vs",
-        |t| (-t / 1e-8).exp(),
+        |t| libm::exp(-t / 1e-8),
     );
 }
 
@@ -355,7 +355,7 @@ fn a_1_fs_mode_switched_in_beside_a_1_ms_charge_leaves_it_on_its_closed_form() {
             ],
         ),
         "vslow",
-        |t| 5.0 * (1.0 - (-t / 1e-3).exp()),
+        |t| 5.0 * (1.0 - libm::exp(-t / 1e-3)),
     );
 }
 
@@ -397,7 +397,7 @@ fn two_poles(a: [[f64; 2]; 2], b: [f64; 2], x0: [f64; 2]) -> impl Fn(f64) -> [f6
         (p[0] * w[1] - w[0] * p[1]) / cross,
     ];
     move |t| {
-        let [e0, e1] = poles.map(|pole| (pole * t).exp());
+        let [e0, e1] = poles.map(|pole| libm::exp(pole * t));
         [
             settled[0] + k[0] * p[0] * e0 + k[1] * q[0] * e1,
             settled[1] + k[0] * p[1] * e0 + k[1] * q[1] * e1,
@@ -472,7 +472,7 @@ fn a_stiff_capacitor_whose_own_voltage_keeps_moving_stays_on_its_closed_form() {
     assert!(control <= 1e-4, "{control}");
     // Stiff, c2 takes 1 ps steps until its 20 ps mode is under Newton's tolerance, at most
     // ln(4.95 V / 1 nV) of its time constants. Then it costs what the smooth pair does.
-    let floor = (4.95f64 / 1e-9).ln() * 20.0;
+    let floor = libm::log(4.95 / 1e-9) * 20.0;
     assert!(
         stiff.rows() as f64 <= smooth.rows() as f64 + floor,
         "{} rows against {} and {floor}",
@@ -518,7 +518,7 @@ fn stiff_capacitors_that_share_a_slow_mode_stay_on_its_closed_form() {
     let worst = two_pole_error(pair, ["nf", "ns"], 1_000_000, 1_000, (a, [0.0, 0.0]), 5.0);
     assert!(worst <= 1e-4, "{worst}");
     // The 5 ps mode costs 1 ps steps for at most ln(2.5 V / 1 nV) of its time constants.
-    let floor = (2.5f64 / 1e-9).ln() * 5.0;
+    let floor = libm::log(2.5 / 1e-9) * 5.0;
     assert!(
         pair.rows() as f64 <= alone.rows() as f64 + floor,
         "{} rows against {} and {floor}",

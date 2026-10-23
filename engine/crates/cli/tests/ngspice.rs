@@ -551,7 +551,7 @@ fn a_held_capacitor_drops_only_the_t_0_sample_of_its_current_and_power() {
     );
     // A 1 ms discharge from 5 mA. ngspice reports 0 at t = 0 and samples next at 50 ns.
     // The engine reports the hold current at t = 0 and its next row is at 1 ns.
-    let current = |ps: f64| -5e-3 * (-ps * 1e-12 / 1e-3).exp();
+    let current = |ps: f64| -5e-3 * libm::exp(-ps * 1e-12 / 1e-3);
     let engine_t = [0.0, 1e3, 5e4, 1e9, 5e9];
     let reference_t = [0.0, 5e4, 1e9, 5e9];
     let engine = engine_t.map(current);

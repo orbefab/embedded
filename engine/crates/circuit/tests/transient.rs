@@ -302,11 +302,11 @@ fn rc_closed_form(t_ps: f64, farad: f64) -> (f64, f64) {
             break;
         }
         let (vth, tau) = rc_thevenin(closed, farad);
-        v0 = vth + (v0 - vth) * (-(edge - start) * 1e-12 / tau).exp();
+        v0 = vth + (v0 - vth) * libm::exp(-(edge - start) * 1e-12 / tau);
         (start, closed) = (edge, to);
     }
     let (vth, tau) = rc_thevenin(closed, farad);
-    let v = vth + (v0 - vth) * (-(t_ps - start) * 1e-12 / tau).exp();
+    let v = vth + (v0 - vth) * libm::exp(-(t_ps - start) * 1e-12 / tau);
     (v, (vth - v) * farad / tau)
 }
 

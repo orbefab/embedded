@@ -896,7 +896,7 @@ pub fn junction_scale(emission: f64, saturation: f64) -> Result<JunctionScale, J
     if !nvt.is_normal() {
         return Err(JunctionFault::EmissionCoefficient);
     }
-    let vcrit = nvt * (nvt / (SQRT_2 * saturation)).ln();
+    let vcrit = nvt * libm::log(nvt / (SQRT_2 * saturation));
     if !(vcrit.is_finite() && vcrit > 0.0) {
         return Err(if saturation.is_normal() {
             JunctionFault::EmissionCoefficient

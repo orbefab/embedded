@@ -312,7 +312,10 @@ mod tests {
 
     #[test]
     fn a_rising_crossing_is_the_first_picosecond_past_its_threshold() {
-        let v = |t: u64| (t as f64 / 1000.0).powi(2);
+        let v = |t: u64| {
+            let x = t as f64 / 1000.0;
+            x * x
+        };
         let watches = Watches::new(vec![vec![above(2.0)]]);
         let (found, probes) = run(&watches, v, 10_000, &[]);
         assert_eq!(found, Ok(first_past(v, |v| v > 2.0)));
@@ -324,7 +327,10 @@ mod tests {
     #[test]
     fn a_nearly_straight_crossing_takes_few_probes() {
         // Bent by 1e-3 of its rise over the step, about as much as a 555 step bends.
-        let v = |t: u64| 1.0 + t as f64 * 1e-6 + 1e-3 * (t as f64 * 1e-6).powi(2);
+        let v = |t: u64| {
+            let x = t as f64 * 1e-6;
+            1.0 + x + 1e-3 * (x * x)
+        };
         let watches = Watches::new(vec![vec![above(1.0123456)]]);
         let (found, probes) = run(&watches, v, 1_000_000, &[]);
         assert_eq!(found, Ok(first_past(v, |v| v > 1.0123456)));
@@ -333,7 +339,7 @@ mod tests {
 
     #[test]
     fn a_falling_crossing_is_the_first_picosecond_at_or_under_its_threshold() {
-        let v = |t: u64| 5.0 * (-(t as f64) / 3000.0).exp();
+        let v = |t: u64| 5.0 * libm::exp(-(t as f64) / 3000.0);
         let watches = Watches::new(vec![vec![above(1.0)]]);
         let (found, _) = run(&watches, v, 20_000, &[]);
         assert_eq!(found, Ok(first_past(v, |v| v <= 1.0)));
@@ -350,7 +356,7 @@ mod tests {
     #[test]
     fn a_stuck_end_turns_to_bisection() {
         // Regula falsi on this curve keeps moving the early end by a picosecond or two.
-        let v = |t: u64| (t as f64 / 1e6).powi(40);
+        let v = |t: u64| libm::pow(t as f64 / 1e6, 40.0);
         let watches = Watches::new(vec![vec![above(0.5)]]);
         let (found, probes) = run(&watches, v, 1_000_000, &[]);
         assert_eq!(found, Ok(first_past(v, |v| v > 0.5)));

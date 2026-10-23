@@ -319,7 +319,7 @@ fn charge(start: f64, jumps: &[(f64, f64)], tau_ps: f64, t_ps: f64) -> f64 {
     jumps
         .iter()
         .filter(|&&(at, _)| at < t_ps)
-        .map(|&(at, change)| change * (1.0 - (-(t_ps - at) / tau_ps).exp()))
+        .map(|&(at, change)| change * (1.0 - libm::exp(-(t_ps - at) / tau_ps)))
         .sum::<f64>()
         + start
 }

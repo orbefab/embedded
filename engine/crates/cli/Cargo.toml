@@ -20,6 +20,7 @@ serde_json.workspace = true
 clap.workspace = true
 
 [dev-dependencies]
+libm.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sim-circuit = { workspace = true, features = ["step-rows"] }

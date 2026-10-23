@@ -63,7 +63,7 @@ impl Plan {
 fn factor(ratio: f64, method: Method) -> f64 {
     let root = match method {
         Method::BackwardEuler => ratio.sqrt(),
-        Method::Trapezoidal => ratio.cbrt(),
+        Method::Trapezoidal => libm::cbrt(ratio),
     };
     SAFETY / root
 }

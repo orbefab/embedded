@@ -234,7 +234,7 @@ fn wiper_closed_form(t_ps: u64) -> (f64, f64) {
     }
     let (v_th, before) = (volts(0.75), volts(0.25));
     let tau = r_th(0.75) * FARAD;
-    let decay = (-((t_ps - EVENT_PS) as f64 * 1e-12) / tau).exp();
+    let decay = libm::exp(-((t_ps - EVENT_PS) as f64 * 1e-12) / tau);
     let v = v_th + (before - v_th) * decay;
     (v, (v_th - v) / r_th(0.75))
 }

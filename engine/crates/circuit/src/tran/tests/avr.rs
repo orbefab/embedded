@@ -245,7 +245,7 @@ fn toggle_stops_follow_the_firmware_when_a_watch_is_located() {
     let tau_ps = 1e-9 / (1e-3 + 2.0 * leak) * 1e12;
     let start = share(5.0, leak, leak + 1e-3);
     let end = share(5.0, 1e-3 + leak, leak);
-    let expected = edge_ps as f64 + tau_ps * ((end - start) / (end - input_high * 5.0)).ln();
+    let expected = edge_ps as f64 + tau_ps * libm::log((end - start) / (end - input_high * 5.0));
     assert!(
         (crossing as f64 - expected).abs() < 200.0,
         "located at {crossing}, formula {expected}"
@@ -381,7 +381,7 @@ fn an_input_flip_reaches_the_core_and_comes_back_on_an_output() {
     let tau_ps = 1e-9 / (1e-3 + 2.0 * leak) * 1e12;
     let start = share(5.0, leak, leak + 1e-3);
     let end = share(5.0, 1e-3 + leak, leak);
-    let expected = US as f64 + tau_ps * ((end - start) / (end - input_high * 5.0)).ln();
+    let expected = US as f64 + tau_ps * libm::log((end - start) / (end - input_high * 5.0));
     assert!((crossing as f64 - expected).abs() < 200.0, "{crossing}");
     let pb5 = volts(&trace, "pb5");
     let rise = pb5.iter().find(|&&(_, v)| v > 2.5).unwrap().0;
