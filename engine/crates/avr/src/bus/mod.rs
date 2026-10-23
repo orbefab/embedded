@@ -24,7 +24,7 @@ use std::collections::VecDeque;
 
 use hostside::HostSide;
 use index::Index;
-use power::Epoch;
+pub(crate) use power::Epochs;
 use seam::Samples;
 
 use crate::Port;
@@ -32,6 +32,7 @@ use crate::analog::{HostAnalog, Sense, adc_code};
 use crate::chip::{ClockDomain, DEVICES, DeviceSpec, ModuleGate, RAMEND, SPH, SPL, SREG};
 use crate::core::Core;
 use crate::mux::PinMux;
+use crate::periph::usart::{Sent, Shifted};
 use crate::periph::{Device, IoWrite, Notice, StoreAt, Touch, push_pin, rows_of};
 use crate::regs::OwnedReg;
 use crate::{Level, PIN_QUEUE_CAP, PinLevels, PinOrigin, PinReport};
@@ -61,13 +62,14 @@ struct HostQueues {
 }
 
 impl HostQueues {
-    fn ctx(&mut self) -> crate::periph::Ctx<'_> {
+    fn ctx<'a>(&'a mut self, epochs: &'a Epochs) -> crate::periph::Ctx<'a> {
         crate::periph::Ctx::new(
             &mut self.pins,
             &mut self.pending,
             &mut self.pin_overflow,
             &mut self.io_writes,
             &mut self.io_drops,
+            epochs,
         )
     }
 }
@@ -115,11 +117,8 @@ pub(crate) struct Bus {
     host_side: HostSide,
     /// Oscillator hertz. `cpu_hz` is this divided by `div`.
     osc_hz: u32,
-    /// The `CLKPR` division from its CPU cycle on, which can be a cycle past the core's. CPU
-    /// cycles stay 1; wall time scales.
-    epoch: Epoch,
-    /// The division before `epoch`.
-    before: Epoch,
+    /// The last two `CLKPR` divisions. CPU cycles stay 1; wall time scales.
+    epochs: Epochs,
     /// Schedule-and-ack source for the `irq` tests. Not a device, and not on `tick`.
     #[cfg(test)]
     test_irq: crate::periph::probe::Probe,
@@ -150,8 +149,7 @@ clone_fields!(Bus {
     wdt_reset,
     host_side,
     osc_hz,
-    epoch,
-    before,
+    epochs,
     #[cfg(test)]
     test_irq
 });
@@ -221,8 +219,7 @@ impl Bus {
             wdt_reset: false,
             host_side: HostSide::idle(),
             osc_hz: 16_000_000,
-            epoch: Epoch::START,
-            before: Epoch::START,
+            epochs: Epochs::START,
             #[cfg(test)]
             test_irq: crate::periph::probe::Probe::new(),
         };
@@ -295,8 +292,10 @@ impl Bus {
     }
 
     fn drive_mux(&mut self, pin: u32, level: Level, at: u64) {
-        let Bus { mux, host, .. } = self;
-        let mut ctx = host.ctx();
+        let Bus {
+            mux, host, epochs, ..
+        } = self;
+        let mut ctx = host.ctx(epochs);
         mux.drive(pin, level, &mut ctx, at);
         self.dispatch_edges();
         self.deliver_notices(at);
@@ -500,9 +499,13 @@ impl Bus {
         let slot = self.index.usart.get(usize::from(index)).copied().flatten();
         {
             let Bus {
-                devices, mux, host, ..
+                devices,
+                mux,
+                host,
+                epochs,
+                ..
             } = self;
-            let mut ctx = host.ctx();
+            let mut ctx = host.ctx(epochs);
             if let Some(slot) = slot
                 && let Some(Device::Usart(usart)) = devices.get_mut(usize::from(slot))
             {
@@ -601,6 +604,32 @@ impl Bus {
         match &self.devices[usize::from(slot)] {
             Device::Spi(spi) => Some(spi.pins()),
             _ => None,
+        }
+    }
+
+    /// The next asynchronous frame whose last bit ended at or before oscillator cycle `through`,
+    /// from the first USART that has one.
+    pub(crate) fn take_sent(&mut self, through: u64) -> Option<Sent> {
+        (0..self.index.usart.len() as u8)
+            .find_map(|usart| self.usart_mut(usart)?.take_sent(usart, through))
+    }
+
+    /// Each USART's finished bytes, which an in-run reset keeps.
+    pub(crate) fn take_sent_across_reset(&mut self) -> Vec<Vec<Shifted>> {
+        (0..self.index.usart.len() as u8)
+            .map(|usart| {
+                self.usart_mut(usart)
+                    .map(|usart| usart.take_all_sent())
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    pub(crate) fn restore_sent_across_reset(&mut self, kept: Vec<Vec<Shifted>>) {
+        for (usart, sent) in (0..).zip(kept) {
+            if let Some(usart) = self.usart_mut(usart) {
+                usart.restore_sent(sent);
+            }
         }
     }
 
@@ -799,9 +828,13 @@ impl Bus {
         let clock = self.clock_view();
         {
             let Bus {
-                devices, mux, host, ..
+                devices,
+                mux,
+                host,
+                epochs,
+                ..
             } = self;
-            let mut ctx = host.ctx();
+            let mut ctx = host.ctx(epochs);
             for dev in devices.iter_mut() {
                 if dev.next_event() == at {
                     dev.fire(at, &clock, mux, &mut ctx);
@@ -831,8 +864,10 @@ impl Bus {
         let miso_high =
             Port::from_pin(u32::from(miso)).is_some_and(|(port, bit)| self.mux.pad_high(port, bit));
         let drives = self.host_side.master.advance(at, miso_high);
-        let Bus { mux, host, .. } = self;
-        let mut ctx = host.ctx();
+        let Bus {
+            mux, host, epochs, ..
+        } = self;
+        let mut ctx = host.ctx(epochs);
         for (pin, level) in drives.iter() {
             mux.drive(u32::from(pin), level, &mut ctx, at);
         }
@@ -954,9 +989,10 @@ impl Bus {
             mux,
             host,
             host_side,
+            epochs,
             ..
         } = self;
-        let mut ctx = host.ctx();
+        let mut ctx = host.ctx(epochs);
         for dev in devices.iter_mut() {
             dev.stamp(cycle, mux, &mut ctx, host_side);
         }
@@ -1045,9 +1081,13 @@ impl Bus {
         let clock = self.clock_view();
         let touch = {
             let Bus {
-                devices, mux, host, ..
+                devices,
+                mux,
+                host,
+                epochs,
+                ..
             } = self;
-            let mut ctx = host.ctx();
+            let mut ctx = host.ctx(epochs);
             devices[usize::from(slot.dev)].write(slot.reg, value, &mut ctx, mux, at, &clock, addr)
         };
         // §9.11 puts the new division in force `T1 + T2` to `T1 + 2·T2` after the write.
@@ -1074,9 +1114,10 @@ impl Bus {
                 mux,
                 host,
                 host_side,
+                epochs,
                 ..
             } = self;
-            let mut ctx = host.ctx();
+            let mut ctx = host.ctx(epochs);
             devices[usize::from(slot.dev)]
                 .poke(slot.reg, value, mux, cycle, &clock, &mut ctx, host_side)
         };
@@ -1232,9 +1273,13 @@ impl Bus {
                 }
             }
             let Bus {
-                devices, mux, host, ..
+                devices,
+                mux,
+                host,
+                epochs,
+                ..
             } = self;
-            let mut ctx = host.ctx();
+            let mut ctx = host.ctx(epochs);
             for dev in devices.iter_mut() {
                 let touch = dev.after_pad(mux, &mut ctx, at);
                 schedule |= touch.schedule;

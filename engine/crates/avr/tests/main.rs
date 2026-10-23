@@ -9,6 +9,7 @@ mod instructions;
 mod mspim;
 mod oc_pin;
 mod portb;
+mod sent;
 mod sketches;
 mod spi;
 mod steady_runs;

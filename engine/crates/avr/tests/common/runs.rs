@@ -1,7 +1,7 @@
 //! The reference for the run tests: `run_until` and `run_to_news` against a loop of single
 //! `Cpu::step` calls, compared on every state the host can read.
 
-use sim_avr::{Channel, Cpu, I2cStamp, PinReport};
+use sim_avr::{Channel, Cpu, I2cStamp, PinReport, Sent};
 
 pub const MAIN: usize = 0x34;
 
@@ -30,11 +30,15 @@ pub struct Seen {
     pub unknown: Option<u16>,
     pub pins: Vec<PinReport>,
     pub serial: Vec<(u8, u64)>,
+    /// The same queue as `serial`, read from a copy through [`Cpu::take_sent`].
+    pub sent: Vec<Sent>,
     pub i2c: Vec<I2cStamp>,
 }
 
 pub fn seen(cpu: &mut Cpu) -> Seen {
+    let mut copy = cpu.clone();
     Seen {
+        sent: std::iter::from_fn(|| copy.take_sent(u64::MAX)).collect(),
         cycles: cpu.cycles(),
         pc: cpu.pc(),
         sreg: cpu.sreg(),

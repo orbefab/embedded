@@ -39,6 +39,7 @@ use std::collections::VecDeque;
 
 use crate::Level;
 use crate::Port;
+use crate::bus::Epochs;
 use crate::chip::SpiCfg;
 use crate::mux::{DriveSource, PinMux};
 use crate::periph::{Ctx, Gate, IoWrite, Touch};
@@ -380,6 +381,8 @@ impl Spi {
             &mut overflow,
             &mut logs,
             &mut drops,
+            // Nothing on this path stamps a USART frame, so these divisions are never read.
+            &Epochs::START,
         );
         if present {
             self.present_slave_bit(0, cycle, mux, &mut ctx);

@@ -44,6 +44,7 @@ pub(crate) use usart::Usart;
 
 use std::collections::VecDeque;
 
+use crate::bus::Epochs;
 use crate::chip::DeviceSpec;
 use crate::mux::PinMux;
 use crate::regs::OwnedReg;
@@ -194,13 +195,14 @@ impl Notice {
     }
 }
 
-/// Queues a device can push while it handles a read or a write.
+/// Queues a device can push while it handles a read or a write, and the bus's `CLKPR` divisions.
 pub(crate) struct Ctx<'a> {
     pins: &'a mut VecDeque<PinReport>,
     pending: &'a mut Vec<PinReport>,
     overflow: &'a mut u64,
     io_writes: &'a mut Vec<IoWrite>,
     io_drops: &'a mut u64,
+    epochs: &'a Epochs,
 }
 
 impl Ctx<'_> {
@@ -210,6 +212,7 @@ impl Ctx<'_> {
         overflow: &'a mut u64,
         io_writes: &'a mut Vec<IoWrite>,
         io_drops: &'a mut u64,
+        epochs: &'a Epochs,
     ) -> Ctx<'a> {
         Ctx {
             pins,
@@ -217,7 +220,13 @@ impl Ctx<'_> {
             overflow,
             io_writes,
             io_drops,
+            epochs,
         }
+    }
+
+    /// The oscillator cycle of `cpu_cycle`, the cycle a device is handling now.
+    pub(crate) fn oscillator_cycles(&self, cpu_cycle: u64) -> u64 {
+        self.epochs.oscillator_cycles(cpu_cycle)
     }
 
     pub(crate) fn log(&mut self, addr: u16, value: u8) {
@@ -705,10 +714,11 @@ pub(crate) fn rows_of(spec: &DeviceSpec, out: &mut Vec<OwnedReg>) {
 mod size {
     use super::*;
 
-    /// USART is the largest variant at 288 bytes. ExtInt's edge queue is boxed.
+    /// USART is the largest variant at 296 bytes, 8 of them the start-bit stamp of the frame on
+    /// the wire. ExtInt's edge queue is boxed.
     #[test]
     fn device_stays_within_bound() {
         let size = std::mem::size_of::<Device>();
-        assert!(size <= 288, "Device is {size} bytes");
+        assert!(size <= 296, "Device is {size} bytes");
     }
 }

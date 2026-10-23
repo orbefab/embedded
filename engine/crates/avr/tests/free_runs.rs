@@ -13,7 +13,7 @@ use crate::common::runs::{
     step_until,
 };
 use crate::common::{UCSR0B, UDR0, adiw, brbc, imm, in_io, ldi, out, rr, sts};
-use sim_avr::{Channel, Cpu, parse_hex};
+use sim_avr::{Channel, Cpu, Sent, parse_hex};
 
 const EECR: u16 = 0x3F;
 const SMCR: u16 = 0x33;
@@ -333,8 +333,16 @@ fn a_byte_stored_before_a_free_run_is_stamped_at_its_store() {
     let mut cpu = Cpu::new();
     cpu.load_words(&words);
     cpu.run_until(400);
+    let sent = Sent {
+        usart: 0,
+        byte: 0x5A,
+        start: stored,
+        end: stored + 10 * 16,
+    };
+    assert_eq!(cpu.clone().take_sent(u64::MAX), Some(sent));
     assert_eq!(cpu.take(Channel::Usart0), Some((0x5A, stored + 10 * 16)));
-    matches_stepping(&words, &[5, 9, 40, 200, 400], "UDR0 before a free loop");
+    let every: Vec<u64> = (1..=400).collect();
+    matches_stepping(&words, &every, "UDR0 before a free loop");
 }
 
 /// Each shipped firmware image and the interrupt-heavy timing programs, compared with stepping

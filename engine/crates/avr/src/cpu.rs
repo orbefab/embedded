@@ -14,6 +14,7 @@ use crate::fuses::FuseBytes;
 use crate::image::Image;
 use crate::irq;
 use crate::periph::system::{BORF, EXTRF, PORF, WDRF};
+use crate::periph::usart::Sent;
 use crate::{IoWrite, Level, PinLevels, PinReport, SpmNote};
 
 mod seam;
@@ -646,6 +647,7 @@ impl Cpu {
         let pins = self.bus.pin_levels();
         let pads = self.bus.host_levels();
         let i2c = self.bus.take_i2c_across_reset();
+        let sent = self.bus.take_sent_across_reset();
         *self = Self::new();
         self.clock_hz = clock;
         self.bus.set_osc_hz(clock);
@@ -673,6 +675,7 @@ impl Cpu {
                 self.bus.set_cycle(now);
                 self.core.set_wdr_executions(wdrs);
                 self.bus.restore_epochs(epochs, now);
+                self.bus.restore_sent_across_reset(sent);
                 self.begin_reset_delay();
             }
             ResetWhen::Hold => {
@@ -680,6 +683,7 @@ impl Cpu {
                 self.bus.set_cycle(now);
                 self.core.set_wdr_executions(wdrs);
                 self.bus.restore_epochs(epochs, now);
+                self.bus.restore_sent_across_reset(sent);
                 self.core.set_activity(Activity::Held);
             }
         }
@@ -973,6 +977,15 @@ impl Cpu {
             Channel::Spi => self.bus.take_spi(),
             Channel::SpiHostMaster => self.bus.take_spi_host_master(),
         }
+    }
+
+    /// The next asynchronous frame a USART sent whose last stop bit ended at or before
+    /// oscillator cycle `through`. [`Self::take`] on [`Channel::Usart0`] pops the same queue.
+    /// This one drops each Master SPI mode byte ahead of the frame, and stops at the first entry
+    /// that ended after `through`. An in-run reset keeps the frames that ended at or before its
+    /// cycle and drops the one on the wire. A power-on reset keeps none.
+    pub fn take_sent(&mut self, through: u64) -> Option<Sent> {
+        self.bus.take_sent(through)
     }
 
     /// Queue a host I2C device change. It applies at the next address phase.

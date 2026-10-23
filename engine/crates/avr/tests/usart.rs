@@ -1160,7 +1160,8 @@ fn ubrrl_write_moves_the_next_baud_tick_by_at_most_one_period() {
     assert!(!edges.iter().any(|(_, at)| *at == 49));
 }
 
-/// `reset` drops the shifter, the host waveform, the queues, and the divider.
+/// A power-on reset drops the shifter, the host waveform, the queues, and the divider. An in-run
+/// reset keeps the bytes already sent, which `tests/sent.rs` checks.
 #[test]
 fn reset_clears_usart_state_waveform_queues_and_phase() {
     let mut cpu = Cpu::new();

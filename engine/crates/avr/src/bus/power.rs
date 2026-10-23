@@ -10,18 +10,74 @@ use crate::periph::Device;
 
 /// CPU cycles to oscillator cycles from one `CLKPR` division on.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Epoch {
+struct Epoch {
     cycle: u64,
     osc: u64,
     div: u32,
 }
 
 impl Epoch {
-    pub(super) const START: Epoch = Epoch {
+    const START: Epoch = Epoch {
         cycle: 0,
         osc: 0,
         div: 1,
     };
+}
+
+/// The last two `CLKPR` divisions. They convert a cycle at or after the start of the first one.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Epochs {
+    /// The division before `last`.
+    before: Epoch,
+    /// The division from its CPU cycle on, which can be a cycle past the core's.
+    last: Epoch,
+}
+
+impl Epochs {
+    pub(crate) const START: Epochs = Epochs {
+        before: Epoch::START,
+        last: Epoch::START,
+    };
+
+    /// The oscillator cycle of CPU cycle `cpu_cycles`, on either side of the last division.
+    pub(crate) fn oscillator_cycles(&self, cpu_cycles: u64) -> u64 {
+        let epoch = if cpu_cycles >= self.last.cycle {
+            self.last
+        } else {
+            self.before
+        };
+        debug_assert!(cpu_cycles >= self.before.cycle);
+        let stepped = cpu_cycles.saturating_sub(epoch.cycle);
+        epoch
+            .osc
+            .saturating_add(stepped.saturating_mul(u64::from(epoch.div)))
+    }
+
+    /// The last CPU cycle at or before oscillator cycle `osc`, on either side of the last
+    /// division.
+    fn cpu_cycle(&self, osc: u64) -> u64 {
+        let epoch = if osc >= self.last.osc {
+            self.last
+        } else {
+            self.before
+        };
+        debug_assert!(osc >= self.before.osc);
+        epoch.cycle + osc.saturating_sub(epoch.osc) / u64::from(epoch.div)
+    }
+
+    /// Division `div` from CPU cycle `from` on. A division that has not begun before `from`
+    /// never does.
+    fn begin(&mut self, from: u64, div: u32) {
+        let osc = self.oscillator_cycles(from);
+        if from > self.last.cycle {
+            self.before = self.last;
+        }
+        self.last = Epoch {
+            cycle: from,
+            osc,
+            div,
+        };
+    }
 }
 
 impl Bus {
@@ -172,11 +228,11 @@ impl Bus {
             let div = sys.div().max(1);
             sys.set_cpu_hz(osc / div);
         }
-        self.epoch.div = self.system().map(|sys| sys.div().max(1)).unwrap_or(1);
+        self.epochs.last.div = self.system().map(|sys| sys.div().max(1)).unwrap_or(1);
         if self.cycle == 0 {
-            self.epoch.cycle = 0;
-            self.epoch.osc = 0;
-            self.before = self.epoch;
+            self.epochs.last.cycle = 0;
+            self.epochs.last.osc = 0;
+            self.epochs.before = self.epochs.last;
         }
         let hz = self.cpu_hz();
         if let Some(ee) = self.eeprom_mut() {
@@ -202,34 +258,19 @@ impl Bus {
     }
 
     pub(crate) fn clock_div(&self) -> u32 {
-        self.epoch.div
+        self.epochs.last.div
     }
 
     /// The oscillator cycle of CPU cycle `cpu_cycles`, on either side of the last `CLKPR`
     /// division.
     pub(crate) fn oscillator_cycles(&self, cpu_cycles: u64) -> u64 {
-        let epoch = if cpu_cycles >= self.epoch.cycle {
-            self.epoch
-        } else {
-            self.before
-        };
-        debug_assert!(cpu_cycles >= self.before.cycle);
-        let stepped = cpu_cycles.saturating_sub(epoch.cycle);
-        epoch
-            .osc
-            .saturating_add(stepped.saturating_mul(u64::from(epoch.div)))
+        self.epochs.oscillator_cycles(cpu_cycles)
     }
 
     /// The last CPU cycle at or before oscillator cycle `osc`, on either side of the last
     /// `CLKPR` division.
     pub(crate) fn cpu_cycle(&self, osc: u64) -> u64 {
-        let epoch = if osc >= self.epoch.osc {
-            self.epoch
-        } else {
-            self.before
-        };
-        debug_assert!(osc >= self.before.osc);
-        epoch.cycle + osc.saturating_sub(epoch.osc) / u64::from(epoch.div)
+        self.epochs.cpu_cycle(osc)
     }
 
     pub(crate) fn set_wdt_hz(&mut self, hz: u32) {
@@ -272,30 +313,15 @@ impl Bus {
     }
 
     /// The last two divisions, which a reset keeps for [`Self::restore_epochs`].
-    pub(crate) fn epochs(&self) -> [Epoch; 2] {
-        [self.before, self.epoch]
+    pub(crate) fn epochs(&self) -> Epochs {
+        self.epochs
     }
 
     /// `epochs` from before a reset at CPU cycle `now`, then the fuses' division from `now`.
-    pub(crate) fn restore_epochs(&mut self, [before, epoch]: [Epoch; 2], now: u64) {
+    pub(crate) fn restore_epochs(&mut self, epochs: Epochs, now: u64) {
         let div = self.clock_div();
-        self.before = before;
-        self.epoch = epoch;
-        self.begin_epoch(now, div);
-    }
-
-    /// Division `div` from CPU cycle `from` on. A division that has not begun before `from`
-    /// never does.
-    fn begin_epoch(&mut self, from: u64, div: u32) {
-        let osc = self.oscillator_cycles(from);
-        if from > self.epoch.cycle {
-            self.before = self.epoch;
-        }
-        self.epoch = Epoch {
-            cycle: from,
-            osc,
-            div,
-        };
+        self.epochs = epochs;
+        self.epochs.begin(now, div);
     }
 
     pub(crate) fn bod_off_in_sleep(&self) -> bool {
@@ -339,7 +365,7 @@ impl Bus {
     pub(super) fn absorb_div(&mut self, from: u64) {
         let new = self.system().map(|sys| sys.div().max(1)).unwrap_or(1);
         let old = self.clock_div();
-        self.begin_epoch(from, new);
+        self.epochs.begin(from, new);
         let hz = self.cpu_hz();
         if let Some(ee) = self.eeprom_mut() {
             ee.set_cpu_hz(hz);

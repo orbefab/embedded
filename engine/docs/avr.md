@@ -95,6 +95,16 @@ Ten seconds of `firmware/blink.S` at 16 MHz are 21 stops and 20 edges on PB5. Th
 
 `examples/atmega-fade` runs `firmware/fade.S` for 1.57 s with the WP7113ID of `examples/led-5v` on PB1. Timer1 is 8-bit phase-correct PWM, prescaler 64, a period of 32640 cycles, 2.04 ms at 16 MHz (§16.9.4). `OCR1A` steps by 5 every 480,000 cycles, 30 ms, and reverses at 0 and 255. `crates/cli/tests/fade.rs` checks the PB1 edges and the LED's current. The run writes 15701 rows and 1481 PB1 edges. Release time is user CPU on one core. On the build machine a release `sim run` takes 0.82 to 0.83 s over five runs. [bench.md](bench.md) times the committed run and the `live` run of this example.
 
+## Sent bytes
+
+`Cpu::take(Channel::Usart0)` returns each byte the USART finished, with the CPU cycle its last bit ended. `Cpu::take_sent(through)` pops the same queue and returns a `Sent`: the USART's index, the byte, the oscillator cycle its start bit drove `TXD` low, and the oscillator cycle its last stop bit ended. It returns only asynchronous frames whose end is at or before oscillator cycle `through`. A Master SPI mode byte has no start bit and is not serial output, so `take_sent` drops each one ahead of a frame and keeps scanning. `Timeline::take_sent` is the same call on the timeline's clock.
+
+The USART stamps both cycles on the oscillator when they happen, through the bus's last two `CLKPR` divisions. Those two convert only a cycle at or after the start of the earlier one, and a slow frame can start before both divisions of two `CLKPR` writes, so a stamp converted later could be wrong. A stamp taken on its own cycle is always inside the window. A gated USART clock, from sleep or `PRUSART0`, moves the shifter's deadlines and leaves the start where it is, because that time has passed.
+
+A host on a fixed oscillator of `f` hertz puts a frame's start at `ceil(start * 1e12 / f)` ps. That is the time of the core's stop for the `TXD` drive change on that cycle. A fall shows in `logic.vcd` at that time only when it is the pin's net level change in that picosecond on a pin nothing else loads. A start bit driven on the cycle the transmitter takes a `TXD` that already reads low has no fall, and a capacitor on `TXD` moves the crossing past the drive.
+
+A watchdog, brown-out or `RESET` reset keeps the bytes the USART had already finished, as on hardware. The frame still in the shifter or the buffer is cut off and dropped. A byte whose stop bit ends on the reset's own cycle is kept. A watchdog reset comes after every event up to its cycle has fired. A brown-out and `RESET` reset at the instruction boundary the core is on, which can be a few cycles past the host's time, the same skew a pin's reset level has. A power-on reset restarts the timeline and keeps nothing. `tests/sent.rs` checks each case: two `CLKPR` writes inside a frame, a sleep before a frame and during one, each reset kind on the cycles around a frame's end with several frames sent and one waiting, a power-on reset after two finished frames, and a Master SPI mode byte queued ahead of a frame.
+
 ## Fuses
 
 Parse keeps only the fuse settings the model runs, and [netlist.md](netlist.md#atmega328p) lists the rejected ones and why. The core reads these.

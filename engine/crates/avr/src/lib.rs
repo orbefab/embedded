@@ -49,6 +49,7 @@ pub use cpu::{Channel, Cpu, LoadError, Parity, ResetKind, SerialFrame, SpiClock,
 pub use fuses::FuseBytes;
 pub use image::{IgnoredRegion, IgnoredSegment, Image, ImageError, parse_elf, parse_hex};
 pub use periph::twi::{I2cNote, I2cStamp};
+pub use periph::usart::Sent;
 pub use periph::{IO_LOG_CAP, IoWrite};
 pub use timeline::{Halt, Timeline};
 

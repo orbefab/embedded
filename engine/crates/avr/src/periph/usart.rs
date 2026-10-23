@@ -125,6 +125,49 @@ struct TxLive {
     bit: Option<u8>,
     /// Cycle the current bit began. Meaningful once `bit` is `Some`.
     started: u64,
+    /// Oscillator cycle the start bit began. Meaningful once `bit` is `Some`. A gated clock
+    /// does not move it, because it is a time that has passed, not a deadline.
+    start: u64,
+}
+
+impl TxLive {
+    fn waiting(bits: FrameBits) -> Self {
+        Self {
+            bits,
+            bit: None,
+            started: 0,
+            start: 0,
+        }
+    }
+}
+
+/// A byte the shifter finished, in the order the shifter finished them.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Shifted {
+    byte: u8,
+    /// CPU cycle its last bit ended, which `Cpu::take` returns.
+    cycle: u64,
+    /// Oscillator cycle its start bit began. `None` for a Master SPI mode byte, which has none.
+    start: Option<u64>,
+    /// Oscillator cycle its last bit ended.
+    end: u64,
+}
+
+/// An asynchronous frame a USART sent, on the oscillator's cycle count from power-on.
+///
+/// `start` is the oscillator cycle its start bit drove `TXD` low, and `end` the one its last
+/// stop bit ended. The core stamps both as they happen, so a later `CLKPR` write, a sleep, or a
+/// reset does not move them. A host on a fixed oscillator of `f` hertz puts the start at
+/// `ceil(start * 1e12 / f)` ps, the time a host stops for a `TXD` drive change on that cycle. The
+/// net falls at that time only when that drive is the pin's net level change in that picosecond
+/// and nothing else loads the pin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sent {
+    /// The USART's index on the chip, 0 for `USART0`.
+    pub usart: u8,
+    pub byte: u8,
+    pub start: u64,
+    pub end: u64,
 }
 
 /// MSPIM shifter. The half-period is snapshotted when the bit boundary arrives.
@@ -249,7 +292,7 @@ pub(crate) struct Usart {
     /// The one-byte transmit buffer. `UDRE` is clear while this is `Some`.
     tx_buf: Option<FrameBits>,
     pending_tx: Option<FrameBits>,
-    tx_out: Vec<(u8, u64)>,
+    tx_out: Vec<Shifted>,
     rx_buf: VecDeque<RxByte>,
     /// Completed frame that could not enter the two-deep buffer.
     rx_held: Option<RxByte>,
@@ -430,7 +473,35 @@ impl Usart {
     }
 
     pub(crate) fn take_at(&mut self) -> Option<(u8, u64)> {
-        pop_front(&mut self.tx_out)
+        pop_front(&mut self.tx_out).map(|out| (out.byte, out.cycle))
+    }
+
+    /// The next asynchronous frame whose last bit ended at or before oscillator cycle `through`,
+    /// labelled with `usart`, this USART's index on the chip. A Master SPI mode byte in that
+    /// prefix is dropped on the way and does not end the scan.
+    pub(crate) fn take_sent(&mut self, usart: u8, through: u64) -> Option<Sent> {
+        while self.tx_out.first().is_some_and(|out| out.end <= through) {
+            let out = self.tx_out.remove(0);
+            if let Some(start) = out.start {
+                return Some(Sent {
+                    usart,
+                    byte: out.byte,
+                    start,
+                    end: out.end,
+                });
+            }
+        }
+        None
+    }
+
+    /// The bytes the shifter finished. A reset keeps them for [`Self::restore_sent`], and the
+    /// frame still in the shifter or the buffer is not among them.
+    pub(crate) fn take_all_sent(&mut self) -> Vec<Shifted> {
+        std::mem::take(&mut self.tx_out)
+    }
+
+    pub(crate) fn restore_sent(&mut self, sent: Vec<Shifted>) {
+        self.tx_out = sent;
     }
 
     /// `(byte, recompute interrupts)`. Reading `UDRn` pops the receive buffer.
@@ -701,11 +772,7 @@ impl Usart {
             // The idle shifter takes the byte now, so the next instruction
             // sees UDRE set (§20.6.3). The start bit waits for txclk (§20.6.1).
             self.udre = true;
-            self.tx = Some(TxLive {
-                bits,
-                bit: None,
-                started: 0,
-            });
+            self.tx = Some(TxLive::waiting(bits));
             let tick = self.next_txclk(at);
             if tick == at {
                 self.begin_bit(at, mux, ctx);
@@ -735,6 +802,7 @@ impl Usart {
         if let Some(live) = self.tx.as_mut() {
             live.bit = Some(0);
             live.started = at;
+            live.start = ctx.oscillator_cycles(at);
         }
         self.drive_tx(false, at, mux, ctx);
         self.next_tx = self.next_txclk_after(at);
@@ -752,14 +820,15 @@ impl Usart {
         let high_next = live.bits.high_at(bit.saturating_add(1));
         if bit + 1 >= n_bits {
             self.tx = None;
-            self.tx_out.push((data, at));
+            self.tx_out.push(Shifted {
+                byte: data,
+                cycle: at,
+                start: Some(live.start),
+                end: ctx.oscillator_cycles(at),
+            });
             if let Some(next) = self.tx_buf.take() {
                 self.udre = true;
-                self.tx = Some(TxLive {
-                    bits: next,
-                    bit: None,
-                    started: 0,
-                });
+                self.tx = Some(TxLive::waiting(next));
                 self.begin_bit(at, mux, ctx);
             } else {
                 self.udre = true;
@@ -1241,7 +1310,12 @@ impl Usart {
             self.next_tx = u64::MAX;
             return;
         };
-        self.tx_out.push((byte, at));
+        self.tx_out.push(Shifted {
+            byte,
+            cycle: at,
+            start: None,
+            end: ctx.oscillator_cycles(at),
+        });
         self.push_slot(RxByte {
             data: rx,
             ninth: false,

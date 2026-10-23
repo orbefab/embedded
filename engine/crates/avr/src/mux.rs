@@ -733,6 +733,7 @@ fn rank(source: DriveSource) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bus::Epochs;
     use crate::periph::Ctx;
     use std::collections::VecDeque;
 
@@ -743,7 +744,7 @@ mod tests {
         logs: &'a mut Vec<crate::IoWrite>,
         drops: &'a mut u64,
     ) -> Ctx<'a> {
-        Ctx::new(pins, pending, overflow, logs, drops)
+        Ctx::new(pins, pending, overflow, logs, drops, &Epochs::START)
     }
 
     #[test]
