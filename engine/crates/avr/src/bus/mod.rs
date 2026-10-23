@@ -606,6 +606,53 @@ impl Bus {
         0
     }
 
+    /// A [`Self::load`] of `addr` changes nothing and reads what [`Self::peek`] reads. What it
+    /// reads changes only at the next event, on a store, or on a host call.
+    #[inline]
+    pub(crate) fn steady(&self, addr: u16) -> bool {
+        let Some(index) = io_index(addr) else {
+            return true;
+        };
+        if addr == SREG || addr == SPL || addr == SPH {
+            return true;
+        }
+        let slot = self.owners[index];
+        slot.dev == NO_DEV
+            || self.devices[usize::from(slot.dev)].steady(slot.reg, &self.mux, self.cycle)
+    }
+
+    /// A [`Self::store`] of `value` to `addr` would change no state, pin, log entry, notice, or
+    /// schedule.
+    pub(crate) fn store_idle(&self, core: &Core, addr: u16, value: u8) -> bool {
+        if (SRAM_BASE..=RAMEND).contains(&addr)
+            || addr <= 0x001F
+            || addr == SREG
+            || addr == SPL
+            || addr == SPH
+        {
+            return self.peek(core, addr) == value;
+        }
+        let Some(index) = io_index(addr) else {
+            return true;
+        };
+        let slot = self.owners[index];
+        // A stepped store also logs unmodeled bits and delivers waiting edges and notices.
+        slot.dev != NO_DEV
+            && self.devices[usize::from(slot.dev)].store_idle(slot.reg, value, &self.mux)
+            && self.unmodeled[index] & value == 0
+            && !self.mux.has_pending_edges()
+            && !self.notices_wait()
+    }
+
+    fn notices_wait(&self) -> bool {
+        let n = usize::from(self.index.notice_n);
+        self.index.notices[..n]
+            .iter()
+            .copied()
+            .flatten()
+            .any(|slot| self.devices[usize::from(slot)].notice_waits())
+    }
+
     #[inline]
     pub(crate) fn load(&mut self, core: &Core, addr: u16) -> u8 {
         if (SRAM_BASE..=RAMEND).contains(&addr) {

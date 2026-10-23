@@ -97,6 +97,14 @@ impl Wire {
         }
     }
 
+    /// No level waits out the synchronizer past `cycle`, so [`Self::visible`] is the same from
+    /// `cycle` on.
+    fn settled(&self, cycle: u64) -> bool {
+        self.pending_at[..usize::from(self.pending_len)]
+            .iter()
+            .all(|&at| at <= cycle)
+    }
+
     /// `PINx` at `cycle`. A level is visible only once its own `T + 2` has
     /// arrived. A later change does not publish the earlier one early, and
     /// does not replace it before that deadline.
@@ -280,6 +288,14 @@ impl PinMux {
         (state.ddr, state.port)
     }
 
+    /// [`Self::pin_bits`] is the same at `cycle` and every later cycle, until the next pad change.
+    pub(crate) fn settled(&self, port: Port, cycle: u64) -> bool {
+        self.ports[port.index()]
+            .wires
+            .iter()
+            .all(|wire| wire.settled(cycle))
+    }
+
     /// `PINx` after the synchronizer, at `cycle`.
     pub(crate) fn pin_bits(&self, port: Port, cycle: u64) -> u8 {
         let state = &self.ports[port.index()];
@@ -313,17 +329,7 @@ impl PinMux {
         ctx: &mut Ctx<'_>,
         at: u64,
     ) {
-        let state = &self.ports[port.index()];
-        if !state.stale && state.ddr == ddr && state.port == value {
-            #[cfg(feature = "port-skip-check")]
-            debug_assert!(
-                (0..8u8).all(|bit| {
-                    let (digital, reported) = self.target(port, bit);
-                    state.wires[usize::from(bit)].pad == digital
-                        && state.reported[usize::from(bit)] == reported
-                }),
-                "skipped store on {port:?} would change a pin"
-            );
+        if self.store_skips(port, ddr, value) {
             return;
         }
         {
@@ -332,6 +338,24 @@ impl PinMux {
             state.port = value;
         }
         self.reconcile(port, ctx, None, at, true, true);
+    }
+
+    /// A store of `ddr` and `value` to `port` changes no pin, so [`Self::store_gpio`] returns
+    /// before it does anything.
+    pub(crate) fn store_skips(&self, port: Port, ddr: u8, value: u8) -> bool {
+        let state = &self.ports[port.index()];
+        let skips = !state.stale && state.ddr == ddr && state.port == value;
+        #[cfg(feature = "port-skip-check")]
+        debug_assert!(
+            !skips
+                || (0..8u8).all(|bit| {
+                    let (digital, reported) = self.target(port, bit);
+                    state.wires[usize::from(bit)].pad == digital
+                        && state.reported[usize::from(bit)] == reported
+                }),
+            "skipped store on {port:?} would change a pin"
+        );
+        skips
     }
 
     pub(crate) fn poke_gpio(&mut self, port: Port, ddr: u8, value: u8) {

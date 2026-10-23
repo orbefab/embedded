@@ -113,6 +113,11 @@ impl Eeprom {
         (self.peek(reg), false)
     }
 
+    /// `EEPE` falls when the program's event fires, and `EEMPE` when its window's does.
+    pub(crate) fn steady(&self, reg: u8) -> bool {
+        matches!(reg, REG_EEARH | REG_EEARL | REG_EEDR | REG_EECR)
+    }
+
     pub(crate) fn peek(&self, reg: u8) -> u8 {
         match reg {
             REG_EEARH => (self.addr >> 8) as u8 & 0x03,

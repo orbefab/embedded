@@ -76,6 +76,15 @@ pub(crate) struct Core {
     irq_delay: bool,
 }
 
+/// The program counter, registers, `SREG` and cycle count at a visit of a steady run's anchor.
+#[derive(Clone, Copy)]
+struct Visit {
+    pc: u16,
+    r: [u8; 32],
+    sreg: u8,
+    cycles: u64,
+}
+
 impl Core {
     pub(crate) fn new(sp: u16, pc_mask: u16) -> Self {
         Self {
@@ -252,24 +261,80 @@ impl Core {
         }
     }
 
-    /// Runs free ops while each ends before cycle `bound`. Returns the cycles of the op that
-    /// reached `bound`, which the caller still retires through the bus, or `None` before an op
-    /// that is not free.
+    /// Runs free ops, and the [`Self::execute_steady`] ops among them, while each ends before
+    /// cycle `bound`. Returns the cycles of the op that reached `bound`, which the caller still
+    /// retires through the bus, or `None` before any other op.
     #[inline(always)]
-    pub(crate) fn run_free(&mut self, bound: u64) -> Option<u64> {
+    pub(crate) fn run_free(&mut self, bus: &Bus, bound: u64) -> Option<u64> {
+        // When `SEI` or `RETI` set the delay, the first op this runs is the one it delays, and
+        // stepping clears it before that op too. A `None` goes to `step`, which clears it.
+        self.irq_delay = false;
         let mut op = self.op(self.pc);
-        if !op.is_free() {
+        // An `if` and a `loop`, not `while op.is_free()`. The `while` form measured about 50%
+        // slower on a `delay()` loop.
+        if op.is_free() {
+            loop {
+                let before = self.cycles;
+                self.execute_free(self.pc, op);
+                if self.cycles >= bound {
+                    return Some(self.cycles.wrapping_sub(before));
+                }
+                op = self.op(self.pc);
+                if !op.is_free() {
+                    break;
+                }
+            }
+        }
+        if !op.may_be_steady() {
             return None;
         }
-        self.irq_delay = false;
+        let last = self.visit();
+        if self.execute_steady(bus, self.pc, op) {
+            self.run_steady(bus, bound, last)
+        } else {
+            None
+        }
+    }
+
+    fn visit(&self) -> Visit {
+        Visit {
+            pc: self.pc,
+            r: self.r,
+            sreg: self.sreg,
+            cycles: self.cycles,
+        }
+    }
+
+    /// The rest of [`Self::run_free`] after its first steady op, which ran from `last`. That op
+    /// is the anchor. Each time the program counter is back at the anchor with the same registers
+    /// and `SREG` as on the last visit, the stretch between the visits was a loop that changed
+    /// nothing. Every later pass reads the same values and takes the same path, so the passes
+    /// that end before `bound` are skipped by their cycles.
+    #[inline(never)]
+    fn run_steady(&mut self, bus: &Bus, bound: u64, mut last: Visit) -> Option<u64> {
+        let mut before = last.cycles;
         loop {
-            let before = self.cycles;
-            self.execute_free(self.pc, op);
+            while self.cycles < bound {
+                let op = self.op(self.pc);
+                if !op.is_free() {
+                    break;
+                }
+                before = self.cycles;
+                self.execute_free(self.pc, op);
+            }
             if self.cycles >= bound {
                 return Some(self.cycles.wrapping_sub(before));
             }
-            op = self.op(self.pc);
-            if !op.is_free() {
+            if self.pc == last.pc {
+                if (self.r, self.sreg) == (last.r, last.sreg) {
+                    let pass = self.cycles.wrapping_sub(last.cycles);
+                    let passes = (bound - 1 - self.cycles) / pass;
+                    self.cycles = self.cycles.wrapping_add(passes * pass);
+                }
+                last = self.visit();
+            }
+            before = self.cycles;
+            if !self.execute_steady(bus, self.pc, self.op(self.pc)) {
                 return None;
             }
         }

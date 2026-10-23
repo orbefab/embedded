@@ -6,6 +6,7 @@
 //! per-cycle work.
 
 use crate::chip::TimerClock;
+use crate::regs::GTCCR;
 
 /// `GTCCR.TSM`. Holds a prescaler-reset bit until it is written zero.
 const TSM: u8 = 1 << 7;
@@ -123,6 +124,11 @@ impl Prescaler {
             value |= PSRSYNC;
         }
         value
+    }
+
+    /// A store lands at its retiring edge, which is an event.
+    pub(crate) fn steady(&self, reg: u8) -> bool {
+        reg == GTCCR
     }
 
     pub(crate) fn defer(&mut self, value: u8, at: u64) {

@@ -206,6 +206,12 @@ impl Adc {
         }
     }
 
+    /// `ADSC` and `ADIF` change at the conversion event. Not `ADCL` or `ADCH`, whose reads lock and
+    /// unlock the data pair (§24.9.3).
+    pub(crate) fn steady(&self, reg: u8) -> bool {
+        matches!(reg, REG_ADCSRA | REG_ADCSRB | REG_ADMUX | REG_DIDR0)
+    }
+
     pub(crate) fn peek(&self, reg: u8) -> u8 {
         match reg {
             REG_ADCL => self.present(self.shown()).0,
@@ -265,6 +271,10 @@ impl Adc {
             self.complete(at);
         }
         self.recompute_next();
+    }
+
+    pub(crate) fn notice_waits(&self) -> bool {
+        !self.notice.is_empty()
     }
 
     pub(crate) fn take_notice(&mut self) -> Notice {

@@ -214,6 +214,14 @@ impl Twi {
         }
     }
 
+    /// `TWINT`, the status and a received `TWDR` change when the phase fires.
+    pub(crate) fn steady(&self, reg: u8) -> bool {
+        matches!(
+            reg,
+            REG_TWBR | REG_TWSR | REG_TWAR | REG_TWDR | REG_TWCR | REG_TWAMR
+        )
+    }
+
     fn twsr(&self) -> u8 {
         let prescale = self.twps & 0x03;
         if self.twint {

@@ -155,6 +155,10 @@ impl ExtInt {
         self.recompute_next();
     }
 
+    pub(crate) fn notice_waits(&self) -> bool {
+        self.rose != 0 || self.fell != 0
+    }
+
     pub(crate) fn take_notice(&mut self) -> Notice {
         let notice = Notice {
             rose: self.rose,
@@ -209,6 +213,23 @@ impl ExtInt {
 
     pub(crate) fn read(&mut self, reg: u8) -> u8 {
         self.peek(reg)
+    }
+
+    /// Flags rise when a queued sample fires, and `BODS` falls at its window's event.
+    pub(crate) fn steady(&self, reg: u8) -> bool {
+        matches!(
+            reg,
+            REG_MCUCR
+                | REG_EICRA
+                | REG_EICRB
+                | REG_EIMSK
+                | REG_EIFR
+                | REG_PCICR
+                | REG_PCIFR
+                | REG_PCMSK0
+                | REG_PCMSK1
+                | REG_PCMSK2
+        )
     }
 
     pub(crate) fn peek(&self, reg: u8) -> u8 {

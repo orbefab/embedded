@@ -741,9 +741,9 @@ impl Cpu {
         self.retire(spent);
     }
 
-    /// Runs free ops from here while the bus is quiet and no interrupt can be taken. Returns
-    /// `true` when it retired an op that reached `limit` or the next event, and `false` before an
-    /// op that is not free, which the caller steps.
+    /// Runs free ops, steady loads and idle stores from here while the bus is quiet and no
+    /// interrupt can be taken. Returns `true` when it retired an op that reached `limit` or the
+    /// next event, and `false` before any other op, which the caller steps.
     #[inline(always)]
     fn run_free(&mut self, limit: u64, until_news: bool, div: u32) -> bool {
         let irq_open = self.bus.pending_irq() != 0 && self.core.interrupts_enabled();
@@ -753,7 +753,7 @@ impl Cpu {
         let start = self.core.cycles();
         let room = self.bus.next_event().saturating_sub(self.bus.cycle());
         let bound = limit.min(start.saturating_add(room));
-        let last = self.core.run_free(bound);
+        let last = self.core.run_free(&self.bus, bound);
         let passed = self.core.cycles().wrapping_sub(start);
         match last {
             None => {

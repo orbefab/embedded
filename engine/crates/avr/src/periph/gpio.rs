@@ -53,6 +53,25 @@ impl GpioPort {
         }
     }
 
+    /// `DDRx` and `PORTx` change only at a store. `PINx` is steady once no pad change waits out the
+    /// synchronizer, because `pin_bits` reads the cycle until then.
+    pub(crate) fn steady(&self, reg: u8, mux: &PinMux, cycle: u64) -> bool {
+        match reg {
+            GPIO_DDR | GPIO_PORT => true,
+            GPIO_PIN => mux.settled(self.port, cycle),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn store_idle(&self, reg: u8, value: u8, mux: &PinMux) -> bool {
+        let (ddr, port) = mux.ddr_port(self.port);
+        match reg {
+            GPIO_DDR => mux.store_skips(self.port, value, port),
+            GPIO_PORT => mux.store_skips(self.port, ddr, value),
+            _ => false,
+        }
+    }
+
     pub(crate) fn poke(&mut self, reg: u8, value: u8, mux: &mut PinMux) {
         let (ddr, port) = mux.ddr_port(self.port);
         match reg {

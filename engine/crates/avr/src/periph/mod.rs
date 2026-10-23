@@ -387,6 +387,44 @@ impl Device {
         }
     }
 
+    /// A read of `reg` changes nothing and returns [`Self::peek`] at any cycle from `cycle` up
+    /// to the next event, while no store or host call reaches the device. Each device names its
+    /// steady registers, so a register it does not name is not steady.
+    pub(crate) fn steady(&self, reg: u8, mux: &PinMux, cycle: u64) -> bool {
+        match self {
+            Device::Port(port) => port.steady(reg, mux, cycle),
+            Device::Timer(timer) => timer.steady(reg),
+            Device::Usart(usart) => usart.steady(reg),
+            Device::Spi(spi) => spi.steady(reg),
+            Device::Adc(adc) => adc.steady(reg),
+            Device::ExtInt(ext) => ext.steady(reg),
+            Device::Prescaler(pre) => pre.steady(reg),
+            Device::Twi(twi) => twi.steady(reg),
+            Device::Acmp(acmp) => acmp.steady(reg),
+            Device::Eeprom(eeprom) => eeprom.steady(reg),
+            Device::System(sys) => sys.steady(reg),
+        }
+    }
+
+    /// A store of `value` to `reg` would change no state, pin, log entry, or schedule.
+    pub(crate) fn store_idle(&self, reg: u8, value: u8, mux: &PinMux) -> bool {
+        match self {
+            Device::Port(port) => port.store_idle(reg, value, mux),
+            _ => false,
+        }
+    }
+
+    /// [`Self::take_notice`] would return a notice.
+    pub(crate) fn notice_waits(&self) -> bool {
+        match self {
+            Device::Timer(timer) => timer.notice_waits(),
+            Device::ExtInt(ext) => ext.notice_waits(),
+            Device::Adc(adc) => adc.notice_waits(),
+            Device::Acmp(acmp) => acmp.notice_waits(),
+            _ => false,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn poke(
         &mut self,

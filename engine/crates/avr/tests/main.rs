@@ -10,6 +10,7 @@ mod mspim;
 mod oc_pin;
 mod portb;
 mod spi;
+mod steady_runs;
 mod system;
 mod timeline;
 mod timers;

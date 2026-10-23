@@ -531,6 +531,11 @@ impl Usart {
         touch
     }
 
+    /// `UDRE`, `TXC` and `RXC` change at a frame event. Not `UDR`, whose read pops the receive FIFO.
+    pub(crate) fn steady(&self, reg: u8) -> bool {
+        matches!(reg, UCSRA | UCSRB | UCSRC | UBRRL | UBRRH)
+    }
+
     pub(crate) fn peek(&self, reg: u8) -> u8 {
         match reg {
             UCSRA => self.read_ucsra(),

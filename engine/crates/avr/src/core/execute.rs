@@ -38,6 +38,38 @@ impl Core {
         }
     }
 
+    /// Runs `op` when it is a load of a [`Bus::steady`] address or a [`Bus::store_idle`] store,
+    /// reading through [`Bus::peek`] and leaving the bus as it is. Otherwise runs nothing and
+    /// returns `false`.
+    #[inline(always)]
+    pub(super) fn execute_steady(&mut self, bus: &Bus, pc: u16, op: Op) -> bool {
+        let next = pc.wrapping_add(1);
+        match op {
+            Op::In { d, addr } if bus.steady(addr) => {
+                self.put(d, bus.peek(self, addr));
+                self.finish(next, 1);
+            }
+            Op::Lds { d, addr } if bus.steady(addr) => {
+                self.put(d, bus.peek(self, addr));
+                self.finish(pc.wrapping_add(2), 2);
+            }
+            Op::Sbic { addr, b, skip } if bus.steady(addr) => {
+                let set = bus.peek(self, addr) & (1 << b) != 0;
+                self.skip_if(!set, next, skip);
+            }
+            Op::Sbis { addr, b, skip } if bus.steady(addr) => {
+                let set = bus.peek(self, addr) & (1 << b) != 0;
+                self.skip_if(set, next, skip);
+            }
+            Op::Out { r, addr } if bus.store_idle(self, addr, self.at(r)) => self.finish(next, 1),
+            Op::Sts { r, addr } if bus.store_idle(self, addr, self.at(r)) => {
+                self.finish(pc.wrapping_add(2), 2);
+            }
+            _ => return false,
+        }
+        true
+    }
+
     /// Runs `op`, which [`Op::is_free`].
     #[inline(always)]
     pub(super) fn execute_free(&mut self, pc: u16, op: Op) {

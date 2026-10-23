@@ -277,6 +277,26 @@ impl Timer {
         self.peek(reg, cycle, clock)
     }
 
+    /// Flags rise only when the timer fires, and `TCNTnH` and `ICRnH` read `TEMP`. Not `TCNTnL`,
+    /// which counts with the cycle, or `ICRnL`, whose 16-bit read latches `TEMP`.
+    pub(crate) fn steady(&self, reg: u8) -> bool {
+        matches!(
+            reg,
+            TCCR_A
+                | TCCR_B
+                | TCCR_C
+                | TCNT_H
+                | ICR_H
+                | OCR_A
+                | OCR_AH
+                | OCR_B
+                | OCR_BH
+                | TIMSK
+                | TIFR
+                | ASSR
+        )
+    }
+
     pub(crate) fn peek(&self, reg: u8, cycle: u64, clock: &ClockView) -> u8 {
         match reg {
             TCCR_A => self.tccra_view(),
@@ -464,6 +484,10 @@ impl Timer {
         if self.cfg.capt_vec != 0 && vector == self.cfg.capt_vec {
             self.lower_flags(ICF);
         }
+    }
+
+    pub(crate) fn notice_waits(&self) -> bool {
+        self.rose != 0 || self.fell != 0
     }
 
     pub(crate) fn take_notice(&mut self) -> Notice {

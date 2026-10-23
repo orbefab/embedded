@@ -282,6 +282,14 @@ impl System {
         (self.peek(reg), false)
     }
 
+    /// `WDIF` rises at the watchdog's event, and `WDCE` and `CLKPCE` fall at their windows' events.
+    pub(crate) fn steady(&self, reg: u8) -> bool {
+        matches!(
+            reg,
+            REG_SMCR | REG_MCUSR | REG_WDTCSR | REG_CLKPR | REG_PRR | REG_OSCCAL
+        )
+    }
+
     pub(crate) fn peek(&self, reg: u8) -> u8 {
         match reg {
             REG_SMCR => self.smcr,

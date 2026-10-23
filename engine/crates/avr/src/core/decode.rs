@@ -214,6 +214,20 @@ impl Op {
         }
     }
 
+    /// [`Core::execute_steady`](super::Core::execute_steady) may run the op.
+    #[inline(always)]
+    pub(super) fn may_be_steady(self) -> bool {
+        matches!(
+            self,
+            Op::In { .. }
+                | Op::Lds { .. }
+                | Op::Sbic { .. }
+                | Op::Sbis { .. }
+                | Op::Out { .. }
+                | Op::Sts { .. }
+        )
+    }
+
     /// The instruction's length in flash words.
     fn words(self) -> u8 {
         match self {

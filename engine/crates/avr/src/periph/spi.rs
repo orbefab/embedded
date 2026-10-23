@@ -266,6 +266,16 @@ impl Spi {
         }
     }
 
+    /// `SPIF` and `WCOL` change at the byte's event. Not `SPSR` with a flag it would arm, or
+    /// `SPDR`, whose read completes the clear.
+    pub(crate) fn steady(&self, reg: u8) -> bool {
+        match reg {
+            REG_SPCR => true,
+            REG_SPSR => !self.running() || self.flags & (SPIF | WCOL) & !self.armed == 0,
+            _ => false,
+        }
+    }
+
     pub(crate) fn peek(&self, reg: u8) -> u8 {
         match reg {
             REG_SPCR => self.spcr,

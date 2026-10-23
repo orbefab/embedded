@@ -138,6 +138,11 @@ impl Acmp {
         self.peek(reg)
     }
 
+    /// `ACO` and `ACI` change when the synchronized output fires.
+    pub(crate) fn steady(&self, reg: u8) -> bool {
+        matches!(reg, REG_ACSR | REG_DIDR1)
+    }
+
     pub(crate) fn peek(&self, reg: u8) -> u8 {
         match reg {
             REG_ACSR => {
@@ -209,6 +214,10 @@ impl Acmp {
         if trip {
             self.raise_aci();
         }
+    }
+
+    pub(crate) fn notice_waits(&self) -> bool {
+        !self.notice.is_empty()
     }
 
     pub(crate) fn take_notice(&mut self) -> Notice {

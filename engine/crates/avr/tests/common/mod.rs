@@ -6,6 +6,8 @@
 //!
 //! Addresses are the data-space addresses in DS40002061B Table 31-1.
 
+pub mod runs;
+
 pub const SPL: u16 = 0x005D;
 pub const SPH: u16 = 0x005E;
 pub const SREG: u16 = 0x005F;
@@ -54,6 +56,18 @@ pub const fn sbi(io: u16, bit: u16) -> u16 {
 
 pub const fn cbi(io: u16, bit: u16) -> u16 {
     0x9800 | ((io & 0x1F) << 3) | (bit & 7)
+}
+
+pub const fn sbrc(reg: u16, bit: u16) -> u16 {
+    0xFC00 | (reg << 4) | bit
+}
+
+pub const fn sbis(io: u16, bit: u16) -> u16 {
+    0x9B00 | (io << 3) | bit
+}
+
+pub const fn sbic(io: u16, bit: u16) -> u16 {
+    0x9900 | (io << 3) | bit
 }
 
 pub const fn sbrs(reg: u16, bit: u16) -> u16 {
