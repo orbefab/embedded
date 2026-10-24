@@ -5,7 +5,7 @@
 
 use crate::common;
 use common::Instructions;
-use common::{UCSR0B, UDR0, ldi, lds, read_reg, sbrs, sts};
+use common::{UCSR0B, UDR0, ldi, lds, out, read_reg, sbrs, sts};
 
 use sim_avr::{Channel, Cpu, Level, Port, SerialFrame, SupplyChannel};
 
@@ -36,6 +36,16 @@ const MPCM: u8 = 1 << 0;
 
 const PD0: u32 = 16;
 const PD1: u32 = 17;
+
+/// Table 12-6. USART RX is vector 19. The word address is `2 * (19 - 1)`.
+const USART_RX_WORD: u16 = 2 * (19 - 1);
+/// §7.7.1 gives four cycles until the vector instruction is ready, and four
+/// more when the request wakes the core. §10.1 also halts wake-up for the
+/// mode's start-up time. Table 10-1 shows the main clock source enabled in
+/// idle. It states no start-up time, so this count adds none.
+const IDLE_ENTRY: u64 = 4 + 4;
+/// `SMCR` is data address `0x53`, so its I/O address is `0x33`.
+const SMCR_IO: u16 = 0x33;
 
 fn pins(cpu: &mut Cpu) -> Vec<(u32, Level, u64)> {
     std::iter::from_fn(|| cpu.take_pin())
@@ -90,6 +100,110 @@ fn txclk_at_or_after(ubrr: u16, u2x: bool, at: u64) -> u64 {
         k += div - rem;
     }
     k * period
+}
+
+/// Figure 20-2. One baud tick is `UBRR + 1` cycles.
+fn baud_period(ubrr: u16) -> u64 {
+    u64::from(ubrr) + 1
+}
+
+/// Sample 1 on the grid the last `UBRR0L` store loaded.
+///
+/// §20.8.1 calls sample 1 the first zero-sample. It does not say how many
+/// cycles fall between the pad edge and that sample. A tick on the edge
+/// cycle counts as sample 1 here, and otherwise the next tick does. That
+/// is this model's rule.
+///
+/// §20.3.1 loads the down-counter when it reaches zero or when `UBRRnL` is
+/// written. §20.11.5 says the `UBRRnL` write updates the prescaler then.
+/// Reset loads it at cycle 0, and cycle 0 is not a tick, so tick `k` from 1
+/// is at `k * (UBRR + 1)` (Figure 20-2). A later store at `stored` reloads
+/// the counter on that cycle. Ticks after the load are
+/// `stored + k * (UBRR + 1)`.
+fn sample1_cycle(stored: u64, ubrr: u16, edge: u64) -> u64 {
+    let period = baud_period(ubrr);
+    let steps = edge.saturating_sub(stored).div_ceil(period).max(1);
+    stored + steps * period
+}
+
+/// §20.8.2 and Figure 20-7. An 8N1 stop bit is bit 9. Its last vote is
+/// sample 10 of 16, or sample 6 of 8 when `U2X` is set.
+///
+/// 153 counts 8 data bits and no parity. The start bit and those 8 bits are
+/// 9 groups of 16, and sample 10 of the stop bit adds 9. A parity bit would
+/// add another 16 before that vote. `U2X` uses 8 samples per bit, so the
+/// same vote is 77.
+fn stop_vote_offset(u2x: bool) -> u64 {
+    let samples = if u2x { 8 } else { 16 };
+    let last = if u2x { 6 } else { 10 };
+    9 * samples + (last - 1)
+}
+
+/// `RXC` cycle. Sample 1's cycle plus 153 periods, or 77 when `U2X` is set.
+fn stop_vote_cycle(stored: u64, ubrr: u16, u2x: bool, edge: u64) -> u64 {
+    sample1_cycle(stored, ubrr, edge) + stop_vote_offset(u2x) * baud_period(ubrr)
+}
+
+/// On a tick, one cycle after it, and one cycle before the next tick.
+/// `UBRR` 0 has a one-cycle tick, so the three edges are three successive ticks.
+fn start_edges(ubrr: u16) -> [u64; 3] {
+    let period = baud_period(ubrr);
+    let on_tick = period * 4;
+    if period == 1 {
+        [on_tick, on_tick + 1, on_tick + 2]
+    } else {
+        [on_tick, on_tick + 1, on_tick + period - 1]
+    }
+}
+
+/// Same three phases, on the grid the store at `stored` set. The on-tick
+/// edge is four periods after that store, after the load and after sleep.
+fn edges_after_store(stored: u64, ubrr: u16) -> [u64; 3] {
+    let period = baud_period(ubrr);
+    let on_tick = stored + period * 4;
+    [on_tick, on_tick + 1, on_tick + period - 1]
+}
+
+/// `LDI` is 1 cycle and `STS` is 2, so the `UBRR0L` store ends at `nops + 3`.
+///
+/// `prior` is poked into `UBRR0L` at cycle 0 before the sled. Zero leaves
+/// the reset value. Idle sleep after the store keeps `clkI/O` running.
+/// Table 10-1 shows that clock enabled in idle. Sleep stops the fetch, so
+/// the frame cannot wrap the program counter back onto this store and
+/// reload the counter again.
+fn store_ubrr0l(cpu: &mut Cpu, prior: u16, ubrr: u16, stored: u64) {
+    assert!(stored >= 3, "LDI plus STS needs 3 cycles");
+    assert!(ubrr <= 0x00FF, "the row stores UBRR0L only");
+    assert!(prior <= 0x00FF, "the prior value is UBRR0L only");
+    assert_eq!(cpu.cycles(), 0);
+    if prior != 0 {
+        cpu.poke(UBRR0L, prior as u8);
+        assert_eq!(cpu.peek(UBRR0L), prior as u8);
+        assert_eq!(cpu.cycles(), 0, "the prior UBRR0L load stays at cycle 0");
+    }
+    let nops = usize::try_from(stored - 3).unwrap();
+    let mut words = vec![0u16; nops];
+    words.push(ldi(16, u16::from(ubrr as u8)));
+    words.extend(sts(16, UBRR0L));
+    words.push(ldi(16, 1));
+    words.push(out(16, SMCR_IO));
+    words.push(0x9588);
+    cpu.load_words(&words);
+    cpu.insns(u32::try_from(nops + 2).unwrap());
+    assert_eq!(cpu.cycles(), stored, "the STS to UBRR0L ends at {stored}");
+    assert_eq!(cpu.peek(UBRR0L), ubrr as u8);
+    cpu.insns(3);
+    assert!(cpu.is_sleeping(), "idle sleep after the UBRR0L store");
+    assert_eq!(cpu.cycles(), stored + 3, "LDI, OUT, and SLEEP");
+}
+
+fn step_until(cpu: &mut Cpu, limit: u64) {
+    while cpu.cycles() < limit {
+        let before = cpu.cycles();
+        cpu.step();
+        assert_eq!(cpu.cycles(), before + 1, "a NOP advances one cycle");
+    }
+    assert_eq!(cpu.cycles(), limit);
 }
 
 fn arm_baud(cpu: &mut Cpu, ubrr: u16, u2x: bool, ucsrc: u8) {
@@ -147,9 +261,404 @@ fn image_accepts_a_supplied_byte_after_rxen() {
     cpu.run_until(edge + 400);
     assert_eq!(cpu.reg(17), 0x55);
     assert_eq!(cpu.peek(UCSR0A) & RXC, 0);
-    // Stop vote is sample 10 of bit 9: (9×16 + 9) × 1 after the edge.
-    // The byte is in UDR once that sample has run; the poll observes it after.
-    assert!(cpu.cycles() > edge + 153);
+}
+
+/// §20.7.1. The received byte moves into the buffer when the first stop bit
+/// is received. The receiver decides that bit on its last vote, sample 10
+/// of 16, or sample 6 of 8 when `U2X` is set (§20.8.2). `RXC` is first set
+/// on that cycle.
+///
+/// The cycle is sample 1's cycle plus 153 periods for 8N1 with parity off,
+/// or 77 periods when `U2X` is set. 153 counts 8 data bits and no parity.
+/// The reset rows poke `UBRR0L` at cycle 0. The other rows store it with
+/// `LDI` and `STS` at a cycle that is not a multiple of the period. One row
+/// runs at `UBRR0` 207, then stores `UBRR0L` 16 at cycle 50.
+#[test]
+fn rxc_rises_on_the_stop_bit_s_last_vote() {
+    for ubrr in [0u16, 16, 103, 207] {
+        for u2x in [false, true] {
+            for edge in start_edges(ubrr) {
+                let got = first_rxc_cycle(0, 0, ubrr, u2x, edge);
+                let expect = stop_vote_cycle(0, ubrr, u2x, edge);
+                assert_eq!(got, expect, "UBRR {ubrr} U2X {u2x} edge {edge}");
+            }
+        }
+    }
+    // Period 1 has no cycle that is off the reset grid.
+    for ubrr in [16u16, 103, 207] {
+        for stored in [3u64, 50] {
+            let period = baud_period(ubrr);
+            assert_ne!(stored % period, 0, "UBRR {ubrr} store {stored}");
+            for u2x in [false, true] {
+                for edge in edges_after_store(stored, ubrr) {
+                    let got = first_rxc_cycle(0, stored, ubrr, u2x, edge);
+                    let expect = stop_vote_cycle(stored, ubrr, u2x, edge);
+                    assert_eq!(
+                        got, expect,
+                        "UBRR {ubrr} U2X {u2x} store {stored} edge {edge}"
+                    );
+                }
+            }
+        }
+    }
+    // §20.3.1. The counter is already counting a period of 208. Cycle 50 is
+    // not one of its zeros, so a load on the store and a load at the next
+    // zero are different grids. The new period is 17. Sample 1 is
+    // `50 + 4 * 17`, and the stop vote is that cycle plus `153 * 17`.
+    let prior = 207u16;
+    let ubrr = 16u16;
+    let stored = 50u64;
+    assert_ne!(
+        stored % baud_period(prior),
+        0,
+        "store 50 is not a zero of 208"
+    );
+    let edge = stored + baud_period(ubrr) * 4;
+    let expect = stop_vote_cycle(stored, ubrr, false, edge);
+    assert_eq!(
+        expect, 2719,
+        "datasheet stop vote after the mid-count store"
+    );
+    let got = first_rxc_cycle(prior, stored, ubrr, false, edge);
+    assert_eq!(
+        got, expect,
+        "UBRR {ubrr} prior {prior} U2X false store {stored} edge {edge}"
+    );
+}
+
+fn first_rxc_cycle(prior: u16, stored: u64, ubrr: u16, u2x: bool, edge: u64) -> u64 {
+    let mut cpu = Cpu::new();
+    if stored == 0 {
+        arm_baud(&mut cpu, ubrr, u2x, 0x06);
+    } else {
+        store_ubrr0l(&mut cpu, prior, ubrr, stored);
+        cpu.poke(UCSR0A, if u2x { U2X } else { 0 });
+        cpu.poke(UCSR0C, 0x06);
+    }
+    cpu.poke(UCSR0B, RXEN);
+    let label = if stored == 0 {
+        format!("UBRR {ubrr} U2X {u2x} edge {edge}")
+    } else if prior == 0 {
+        format!("UBRR {ubrr} U2X {u2x} store {stored} edge {edge}")
+    } else {
+        format!("UBRR {ubrr} prior {prior} U2X {u2x} store {stored} edge {edge}")
+    };
+    cpu.run_until(edge);
+    assert_eq!(cpu.cycles(), edge, "{label}");
+    cpu.supply(SupplyChannel::Usart0, &[0x55]);
+    let expect = stop_vote_cycle(stored, ubrr, u2x, edge);
+    let period = baud_period(ubrr);
+    let window = expect - 4 * period;
+    cpu.run_until(window);
+    assert_eq!(cpu.cycles(), window, "{label}");
+    assert_eq!(
+        cpu.peek(UCSR0A) & RXC,
+        0,
+        "{label} set RXC before the stop vote"
+    );
+    let limit = expect + 8 * period;
+    while cpu.cycles() < limit {
+        let before = cpu.cycles();
+        cpu.step();
+        assert_eq!(cpu.cycles(), before + 1, "{label}");
+        if cpu.peek(UCSR0A) & RXC != 0 {
+            return cpu.cycles();
+        }
+    }
+    panic!("{label} left RXC clear through {limit}");
+}
+
+/// §7.7.1. Idle sleep with `RXCIE` enters the RX vector eight cycles after
+/// `RXC`, and `UDR` reads the byte that arrived. Table 10-1 shows the main
+/// clock source enabled in idle and states no start-up time.
+#[test]
+fn rx_complete_wakes_idle_and_enters_its_vector() {
+    for ubrr in [0u16, 16] {
+        idle_rx_entry(ubrr);
+    }
+}
+
+fn idle_rx_image() -> Vec<u16> {
+    let mut words = vec![0u16; 0x30];
+    // Word 0 jumps past the vector table to the setup at word 0x28.
+    words[0] = rjmp_to(0, 0x28);
+    let read = lds(17, UDR0);
+    let vector = usize::from(USART_RX_WORD);
+    words[vector] = read[0];
+    words[vector + 1] = read[1];
+    let init = 0x28;
+    words[init] = ldi(16, u16::from(RXEN | RXCIE));
+    let enable = sts(16, UCSR0B);
+    words[init + 1] = enable[0];
+    words[init + 2] = enable[1];
+    words[init + 3] = ldi(16, 1);
+    words[init + 4] = out(16, SMCR_IO);
+    words[init + 5] = 0x9478;
+    words[init + 6] = 0x9588;
+    words[init + 7] = 0xCFFF;
+    words
+}
+
+fn idle_rx_entry(ubrr: u16) {
+    let mut cpu = Cpu::new();
+    arm_baud(&mut cpu, ubrr, false, 0x06);
+    cpu.load_words(&idle_rx_image());
+    let mut steps = 0u32;
+    while !cpu.is_sleeping() {
+        cpu.step();
+        steps += 1;
+        assert!(steps < 20, "UBRR {ubrr} did not reach SLEEP");
+    }
+    let edge = cpu.cycles();
+    cpu.supply(SupplyChannel::Usart0, &[0x5A]);
+    let rxc_at = stop_vote_cycle(0, ubrr, false, edge);
+    let expect = rxc_at + IDLE_ENTRY;
+    let limit = expect + baud_period(ubrr);
+    let mut entered = None;
+    while cpu.cycles() < limit {
+        cpu.step();
+        if cpu.pc() == USART_RX_WORD {
+            entered = Some(cpu.cycles());
+            break;
+        }
+    }
+    assert_eq!(
+        entered,
+        Some(expect),
+        "UBRR {ubrr} edge {edge} RXC at {rxc_at}"
+    );
+    assert_eq!(cpu.pc(), 0x0024, "UBRR {ubrr}");
+    assert_eq!(cpu.peek(UCSR0A) & RXC, RXC, "UBRR {ubrr}");
+    cpu.step();
+    assert_eq!(cpu.reg(17), 0x5A, "UBRR {ubrr}");
+}
+
+/// §20.7.6 and §20.7.7. Clearing `RXEN` drops the FIFO and the frame in
+/// progress at that instruction. The next frame is a new reception.
+#[test]
+fn clearing_rxen_mid_frame_drops_the_frame() {
+    let ubrr = 0u16;
+    let mut cpu = Cpu::new();
+    arm_baud(&mut cpu, ubrr, false, 0x06);
+    cpu.poke(UCSR0B, RXEN);
+    let edge = baud_period(ubrr) * 4;
+    step_until(&mut cpu, edge);
+    // Four bytes fill the two-deep buffer and the shifter. The fourth start
+    // latches the overrun that clearing RXEN has to drop.
+    cpu.supply(SupplyChannel::Usart0, &[0x11, 0x22, 0x33, 0x44]);
+    let frame = 10 * bit_clocks(ubrr, false);
+    let fourth = edge + 3 * frame;
+    let mid = fourth + 4 * bit_clocks(ubrr, false);
+    step_until(&mut cpu, mid);
+    assert_eq!(cpu.peek(UCSR0A) & RXC, RXC, "earlier frames are buffered");
+
+    let mut clear = vec![ldi(16, 0)];
+    clear.extend(sts(16, UCSR0B));
+    cpu.load_words(&clear);
+    cpu.insns(2);
+    assert_eq!(cpu.cycles(), mid + 3, "LDI plus STS");
+    assert_eq!(cpu.peek(UCSR0B) & RXEN, 0);
+    assert_eq!(cpu.peek(UCSR0A) & RXC, 0, "the STS leaves RXC clear");
+
+    let vote = stop_vote_cycle(0, ubrr, false, fourth);
+    step_until(&mut cpu, vote);
+    assert_eq!(
+        cpu.peek(UCSR0A) & RXC,
+        0,
+        "the dropped frame does not set RXC"
+    );
+    let stop_end = sample1_cycle(0, ubrr, fourth) + (9 * 16 + 15) * baud_period(ubrr);
+    step_until(&mut cpu, stop_end);
+    assert_eq!(
+        cpu.peek(UCSR0A) & (RXC | FE | DOR),
+        0,
+        "RXC stays clear through the end of the stop bit"
+    );
+
+    let wire_end = edge + 4 * frame;
+    step_until(&mut cpu, wire_end);
+    let mut enable = vec![ldi(16, u16::from(RXEN))];
+    enable.extend(sts(16, UCSR0B));
+    cpu.load_words(&enable);
+    cpu.insns(2);
+    assert_eq!(cpu.peek(UCSR0B) & RXEN, RXEN);
+    let again = cpu.cycles();
+    cpu.supply(SupplyChannel::Usart0, &[0xA5]);
+    let again_vote = stop_vote_cycle(0, ubrr, false, again);
+    step_until(&mut cpu, again_vote);
+    assert_eq!(
+        cpu.peek(UCSR0A) & (RXC | UDRE | FE | DOR | UPE),
+        RXC | UDRE,
+        "the next frame has no FE or DOR"
+    );
+    assert_eq!(read_reg(&mut cpu, UDR0), 0xA5);
+}
+
+/// §20.11.3. Disabling the receiver flushes the buffer. That includes a
+/// frame held in the shifter because the two-deep FIFO is already full.
+/// The next byte has no `FE`, `DOR`, or `UPE`, and one `UDR` read clears
+/// `RXC`.
+#[test]
+fn clearing_rxen_drops_the_held_frame() {
+    let ubrr = 0u16;
+    let mut cpu = Cpu::new();
+    arm_baud(&mut cpu, ubrr, false, 0x06);
+    cpu.poke(UCSR0B, RXEN);
+    let edge = baud_period(ubrr) * 4;
+    step_until(&mut cpu, edge);
+    cpu.supply(SupplyChannel::Usart0, &[0x11, 0x22, 0x33]);
+    let frame = 10 * bit_clocks(ubrr, false);
+    let third = edge + 2 * frame;
+    let vote = stop_vote_cycle(0, ubrr, false, third);
+    // Three supplied bytes and no fourth start. Clear RXEN after the third
+    // stop vote, while that byte is still the held frame.
+    let clear_at = edge + 3 * frame + 4;
+    assert!(clear_at > vote, "RXEN clears after the third stop vote");
+    step_until(&mut cpu, clear_at);
+    let mut program = vec![ldi(16, 0)];
+    program.extend(sts(16, UCSR0B));
+    program.push(ldi(16, u16::from(RXEN)));
+    program.extend(sts(16, UCSR0B));
+    cpu.load_words(&program);
+    cpu.insns(4);
+    assert_eq!(cpu.cycles(), clear_at + 6, "clear RXEN, then set it");
+    assert_eq!(cpu.peek(UCSR0B) & RXEN, RXEN);
+    assert_eq!(cpu.peek(UCSR0A) & RXC, 0, "the flush clears RXC");
+    let again = cpu.cycles();
+    cpu.supply(SupplyChannel::Usart0, &[0xA5]);
+    let again_vote = stop_vote_cycle(0, ubrr, false, again);
+    step_until(&mut cpu, again_vote);
+    assert_eq!(
+        cpu.peek(UCSR0A) & (RXC | UDRE | FE | DOR | UPE),
+        RXC | UDRE,
+        "the byte after the flush has no FE, DOR, or UPE"
+    );
+    assert_eq!(read_reg(&mut cpu, UDR0), 0xA5, "the held byte was dropped");
+    assert_eq!(cpu.peek(UCSR0A) & RXC, 0, "one UDR read clears RXC");
+}
+
+/// §20.7.6. Clearing `RXEN` aborts the frame in the shifter. Data from that
+/// reception is lost. Setting `RXEN` again before the stop vote does not
+/// revive the frame.
+#[test]
+fn clearing_rxen_aborts_the_frame_in_progress() {
+    let ubrr = 0u16;
+    let byte = 0xA5u8;
+    let mut cpu = Cpu::new();
+    arm_baud(&mut cpu, ubrr, false, 0x06);
+    cpu.poke(UCSR0B, RXEN);
+    let edge = baud_period(ubrr) * 4;
+    step_until(&mut cpu, edge);
+    cpu.supply(SupplyChannel::Usart0, &[byte]);
+
+    let clear_at = 33u64;
+    step_until(&mut cpu, clear_at - 3);
+    let mut clear = vec![ldi(16, 0)];
+    clear.extend(sts(16, UCSR0B));
+    cpu.load_words(&clear);
+    cpu.insns(2);
+    assert_eq!(cpu.cycles(), clear_at, "the STS that clears RXEN");
+    assert_eq!(cpu.peek(UCSR0B) & RXEN, 0);
+    assert_eq!(cpu.peek(UCSR0A) & RXC, 0, "RXC is clear at the disable");
+
+    let enable_at = 83u64;
+    step_until(&mut cpu, enable_at - 3);
+    let mut enable = vec![ldi(16, u16::from(RXEN))];
+    enable.extend(sts(16, UCSR0B));
+    cpu.load_words(&enable);
+    cpu.insns(2);
+    assert_eq!(cpu.cycles(), enable_at, "the STS that sets RXEN");
+    assert_eq!(cpu.peek(UCSR0B) & RXEN, RXEN);
+    assert!(enable_at < stop_vote_cycle(0, ubrr, false, edge));
+    assert_eq!(
+        cpu.peek(UCSR0A) & RXC,
+        0,
+        "RXC is still clear when RXEN returns"
+    );
+
+    let vote = stop_vote_cycle(0, ubrr, false, edge);
+    assert_eq!(vote, 157, "stop vote of the interrupted frame");
+    step_until(&mut cpu, vote);
+    assert_eq!(
+        cpu.peek(UCSR0A) & RXC,
+        0,
+        "RXC stays clear through the interrupted stop vote"
+    );
+    let stop_end = sample1_cycle(0, ubrr, edge) + (9 * 16 + 15) * baud_period(ubrr);
+    step_until(&mut cpu, stop_end);
+    assert_eq!(
+        cpu.peek(UCSR0A) & RXC,
+        0,
+        "RXC stays clear through the end of the interrupted stop bit"
+    );
+    assert_ne!(
+        read_reg(&mut cpu, UDR0),
+        byte,
+        "the interrupted byte never appears in UDR"
+    );
+    assert_eq!(cpu.peek(UCSR0A) & RXC, 0, "UDR held no buffered byte");
+}
+
+/// Figure 20-7 and §20.8.2. Normal mode receives a start edge one cycle
+/// after the stop bit's last vote, which is point A. Under `U2X` the first
+/// low sample waits for point B, the next sample after sample 6.
+#[test]
+fn a_start_right_after_the_stop_vote_is_heard() {
+    let ubrr = 15u16;
+    hear_next_start(ubrr, false, 1);
+    hear_next_start(ubrr, true, baud_period(ubrr));
+}
+
+fn hear_next_start(ubrr: u16, u2x: bool, gap: u64) {
+    let mut cpu = Cpu::new();
+    arm_baud(&mut cpu, ubrr, u2x, 0x06);
+    cpu.poke(UCSR0B, RXEN);
+    cpu.drive_pin(PD0, Level::High);
+    let edge = baud_period(ubrr) * 4;
+    let bit = bit_clocks(ubrr, u2x);
+    drive_rx_frame(&mut cpu, edge, 0x55, bit);
+    let vote = stop_vote_cycle(0, ubrr, u2x, edge);
+    let second = vote + gap;
+    assert!(
+        second > edge + 9 * bit,
+        "U2X {u2x} the next start falls during the stop bit"
+    );
+    drive_rx_frame(&mut cpu, second, 0xA3, bit);
+    let second_vote = stop_vote_cycle(0, ubrr, u2x, second);
+    cpu.run_until(second_vote);
+    assert_eq!(cpu.cycles(), second_vote, "U2X {u2x}");
+    let flags = RXC | UDRE | FE | DOR | UPE;
+    assert_eq!(
+        cpu.peek(UCSR0A) & flags,
+        RXC | UDRE,
+        "U2X {u2x} the first byte has no FE, DOR, or UPE"
+    );
+    assert_eq!(
+        read_reg(&mut cpu, UDR0),
+        0x55,
+        "U2X {u2x} bytes stay in order"
+    );
+    assert_eq!(
+        cpu.peek(UCSR0A) & flags,
+        RXC | UDRE,
+        "U2X {u2x} the second byte has no FE, DOR, or UPE"
+    );
+    assert_eq!(read_reg(&mut cpu, UDR0), 0xA3, "U2X {u2x} the second byte");
+    assert_eq!(cpu.peek(UCSR0A) & RXC, 0, "U2X {u2x} both bytes were read");
+}
+
+/// Drive an 8N1 frame on `PD0`. `at` is the start edge. Each bit lasts `bit`
+/// cycles. The stop level stays until the next drive.
+fn drive_rx_frame(cpu: &mut Cpu, at: u64, byte: u8, bit: u64) {
+    let mut levels = vec![false];
+    levels.extend((0..8).map(|i| (byte >> i) & 1 != 0));
+    levels.push(true);
+    for (i, high) in levels.into_iter().enumerate() {
+        let cycle = at + i as u64 * bit;
+        cpu.run_until(cycle);
+        assert_eq!(cpu.cycles(), cycle, "frame bit {i} at {cycle}");
+        cpu.drive_pin(PD0, if high { Level::High } else { Level::Low });
+    }
 }
 
 #[test]
