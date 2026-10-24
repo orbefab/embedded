@@ -2,11 +2,11 @@
 
 use std::fs;
 
-use sim_circuit::{Input, Setting};
+use sim_circuit::{Input, Serial as SerialSend, Setting};
 use sim_core::finite::Finite;
 use sim_core::logic::Level;
 use sim_core::name::Name;
-use sim_core::netlist::Contact;
+use sim_core::netlist::{Baud, Contact, Frame};
 use sim_core::time::Time;
 use sim_wasm::{Code, Folder, Session, SimError, Status, run};
 
@@ -414,4 +414,64 @@ fn each_byte_names_its_usart() {
     for usart in [0, 1] {
         assert_eq!(serial.usart.iter().filter(|u| **u == usart).count(), 15);
     }
+}
+
+fn serial_send(bytes: &[u8], baud: u32) -> Setting {
+    Setting::Serial(SerialSend {
+        baud: Baud::new(baud).unwrap(),
+        frame: Frame::EightN1,
+        bytes: bytes.to_vec(),
+    })
+}
+
+/// `applySerial` lands where the session lands the same send, and the exports match.
+#[test]
+fn a_serial_send_lands_where_the_session_lands_it() {
+    let json = example("v-serial");
+    let mut binding = Session::open(&json).unwrap();
+    let mut inner = sim_circuit::Session::open_document(&json).unwrap();
+    let bytes = [0x32, 0x33];
+    let applied = binding.apply_serial("v1", 0, 115_200.0, &bytes).unwrap();
+    let want = inner
+        .apply(&Input {
+            part: Name::new("v1").unwrap(),
+            at: Time::from_ps(0),
+            setting: serial_send(&bytes, 115_200),
+        })
+        .unwrap();
+    assert_eq!(
+        (applied.at, applied.status),
+        (want.at.as_ps(), status(want.status))
+    );
+    assert_eq!(binding.export(), inner.export().unwrap());
+    assert_same_reads(&binding, &inner);
+}
+
+#[test]
+fn a_bad_baud_throws_bad_baud() {
+    let mut session = Session::open(&example("v-serial")).unwrap();
+    let before = session.export();
+    for rate in [0.0, 0.5, 1.5, -1.0, 500_000_001.0, f64::NAN, f64::INFINITY] {
+        let error = rejected(session.apply_serial("v1", 0, rate, &[0x31]));
+        assert_eq!((error.code, error.rule), (Code::BadBaud, None), "{rate}");
+    }
+    assert_eq!(session.export(), before);
+}
+
+#[test]
+fn bytes_on_a_steps_source_throw_wrong_setting() {
+    let mut session = Session::open(&example("v-steps")).unwrap();
+    let before = session.export();
+    let error = rejected(session.apply_serial("v1", 0, 9600.0, &[0x31]));
+    assert_eq!(error.code, Code::WrongSetting);
+    assert_eq!(session.export(), before);
+}
+
+#[test]
+fn an_empty_serial_send_throws_no_change() {
+    let mut session = Session::open(&example("v-serial")).unwrap();
+    let before = session.export();
+    let error = rejected(session.apply_serial("v1", 0, 9600.0, &[]));
+    assert_eq!(error.code, Code::NoChange);
+    assert_eq!(session.export(), before);
 }

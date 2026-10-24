@@ -7,11 +7,11 @@ use std::fs;
 use std::path::Path;
 
 use common::examples::examples;
-use sim_circuit::{Input, Refused, Rejected, SerialCursor, Session, Setting, Status};
+use sim_circuit::{Input, Refused, Rejected, Serial, SerialCursor, Session, Setting, Status};
 use sim_core::diagnostic::ValueRule;
 use sim_core::finite::Finite;
 use sim_core::name::Name;
-use sim_core::netlist::{self, Analysis, Contact};
+use sim_core::netlist::{self, Analysis, Baud, Contact, Frame};
 use sim_core::run_folder::RunFolder;
 use sim_core::time::Time;
 use sim_core::timestamp::Timestamp;
@@ -50,10 +50,10 @@ fn stop_ps(json: &[u8]) -> u64 {
 }
 
 /// Advances `session` on `json` in seeded calls until it ends or stands at `until`. A call moves
-/// 1 ps, a 60 Hz frame at 1x, a 60th of the run, or up to an eighth of it, and stops at `until`.
-/// After each call it reads the probe, the levels and the new serial bytes, and those reads change
-/// nothing. Then `input` may apply an input at `now`. Returns the serial bytes read, as rows of
-/// `serial.csv`.
+/// 1 ps, a 60 Hz frame at 1x or a 60th of a run shorter than one frame, a 60th of the run, or up
+/// to an eighth of it, and stops at `until`. After each call it reads the probe, the levels and
+/// the new serial bytes, and those reads change nothing. Then `input` may apply an input at
+/// `now`. Returns the serial bytes read, as rows of `serial.csv`.
 fn advance_in_chunks(
     session: &mut Session,
     json: &[u8],
@@ -62,12 +62,17 @@ fn advance_in_chunks(
     mut input: impl FnMut(&mut Session, &mut Rng),
 ) -> Vec<String> {
     let stop = stop_ps(json);
+    let frame = if stop >= FRAME_PS {
+        FRAME_PS
+    } else {
+        stop / 60 + 1
+    };
     let mut cursor = SerialCursor::default();
     let mut rows = Vec::new();
     loop {
         let stride = match rng.below(8) {
             0 | 1 => 1,
-            2 => FRAME_PS,
+            2 => frame,
             3..=5 => (stop / 60).max(1),
             _ => 1 + rng.below((stop / 8).max(1)),
         };
@@ -268,13 +273,13 @@ fn a_running_session_with_no_input_finishes_to_the_folder_sim_run_writes() {
 
 /// Applies each input, at `now` unless it names a time, and asserts it is refused.
 fn refuse_each(session: &mut Session, refusals: &[(&str, Option<Time>, Setting, Rejected)]) {
-    for &(part, at, setting, why) in refusals {
+    for (part, at, setting, why) in refusals {
         let input = Input {
             part: Name::new(part).unwrap(),
             at: at.unwrap_or(session.now()),
-            setting,
+            setting: setting.clone(),
         };
-        assert_eq!(session.apply(&input), Err(why), "{part}");
+        assert_eq!(session.apply(&input), Err(*why), "{part}");
     }
 }
 
@@ -331,30 +336,48 @@ fn an_input_after_the_end_finishes_to_the_folder_sim_run_writes_for_the_opened_b
     assert_same_folder("v-steps", &folder, &batch, "2023-11-15T22:13:20Z");
 }
 
-/// The part each example takes inputs on, and whether they are contacts or volts.
-const INPUTS: &[(&str, &str, bool)] = &[
-    ("atmega-button", "sw1", true),
-    ("button-led", "sw1", true),
-    ("rc-switch", "sw1", true),
-    ("v-steps", "v1", false),
+/// What a seeded input writes.
+#[derive(Clone, Copy)]
+enum Seed {
+    Contact,
+    Level,
+    Serial,
+}
+
+/// The part each example takes inputs on, and which setting a seeded input writes.
+const INPUTS: &[(&str, &str, Seed)] = &[
+    ("atmega-button", "sw1", Seed::Contact),
+    ("button-led", "sw1", Seed::Contact),
+    ("rc-switch", "sw1", Seed::Contact),
+    ("v-steps", "v1", Seed::Level),
+    ("v-serial", "v1", Seed::Serial),
 ];
 
-/// One seeded input on `part` at `now`, a contact or a level from 0 V to 5 V. A contact equal to
-/// the last is moved to the other one. Whether it landed.
-fn apply_seeded(session: &mut Session, rng: &mut Rng, part: &Name, contact: bool) -> bool {
-    let settings = if contact {
-        let closed = rng.below(2) == 0;
-        [closed, !closed].map(|closed| {
-            Setting::Contact(if closed {
-                Contact::Closed
-            } else {
-                Contact::Open
-            })
-        })
-    } else {
-        let volts = Finite::new(rng.below(11) as f64 / 2.0).unwrap();
-        [Setting::Level(volts); 2]
-    };
+/// One seeded input on `part` at `now`. A contact or a level from 0 V to 5 V, or one 8N1 byte
+/// at 9600 baud. A contact equal to the last is moved to the other one. Whether it landed.
+fn apply_seeded(session: &mut Session, rng: &mut Rng, part: &Name, seed: Seed) -> bool {
+    let mut settings = Vec::new();
+    match seed {
+        Seed::Contact => {
+            let closed = rng.below(2) == 0;
+            for closed in [closed, !closed] {
+                settings.push(Setting::Contact(if closed {
+                    Contact::Closed
+                } else {
+                    Contact::Open
+                }));
+            }
+        }
+        Seed::Level => {
+            let volts = Finite::new(rng.below(11) as f64 / 2.0).unwrap();
+            settings.push(Setting::Level(volts));
+        }
+        Seed::Serial => settings.push(Setting::Serial(Serial {
+            baud: Baud::new(9600).unwrap(),
+            frame: Frame::EightN1,
+            bytes: vec![u8::try_from(rng.below(256)).unwrap()],
+        })),
+    }
     for setting in settings {
         let input = Input {
             part: part.clone(),
@@ -379,7 +402,7 @@ fn apply_seeded(session: &mut Session, rng: &mut Rng, part: &Name, contact: bool
 fn with_inputs(
     name: &str,
     part: &str,
-    contact: bool,
+    seed_kind: Seed,
     until: Time,
     seed: u64,
 ) -> (Session, Vec<String>) {
@@ -393,7 +416,7 @@ fn with_inputs(
         until,
         &mut Rng(seed),
         |session, rng| {
-            if (applied == 0 || rng.below(2) == 1) && apply_seeded(session, rng, &part, contact) {
+            if (applied == 0 || rng.below(2) == 1) && apply_seeded(session, rng, &part, seed_kind) {
                 applied += 1;
             }
         },
@@ -405,8 +428,8 @@ fn with_inputs(
 
 /// The example with inputs, advanced to its end, exported, then finished, is `sim run`'s folder
 /// for that ended export, and the serial rows read are its `serial.csv`.
-fn finishes_as_sim_run_on_the_export(name: &str, part: &str, contact: bool, seed: u64) {
-    let (session, rows) = with_inputs(name, part, contact, END, seed);
+fn finishes_as_sim_run_on_the_export(name: &str, part: &str, seed_kind: Seed, seed: u64) {
+    let (session, rows) = with_inputs(name, part, seed_kind, END, seed);
     let batch = sim_cli::run(&session.export().unwrap(), created_at()).folder;
     let folder = session.finish(created_at()).unwrap();
     assert_same_folder(name, &folder, &batch, CREATED_AT);
@@ -416,9 +439,9 @@ fn finishes_as_sim_run_on_the_export(name: &str, part: &str, contact: bool, seed
 #[test]
 fn inputs_finish_to_the_folder_sim_run_writes_for_the_export() {
     std::thread::scope(|scope| {
-        for (k, &(name, part, contact)) in INPUTS.iter().enumerate() {
+        for (k, &(name, part, seed_kind)) in INPUTS.iter().enumerate() {
             scope.spawn(move || {
-                finishes_as_sim_run_on_the_export(name, part, contact, 0x5eed_8300 + k as u64)
+                finishes_as_sim_run_on_the_export(name, part, seed_kind, 0x5eed_8300 + k as u64)
             });
         }
     });
@@ -430,13 +453,13 @@ fn inputs_finish_to_the_folder_sim_run_writes_for_the_export() {
 fn a_running_session_finishes_as_its_ended_export(
     name: &str,
     part: &str,
-    contact: bool,
+    seed_kind: Seed,
     seed: u64,
 ) {
     let json = fs::read(common::repo(&format!("examples/{name}/netlist.json"))).unwrap();
     let until = Time::from_ps(stop_ps(&json) / 2);
-    let (session, _) = with_inputs(name, part, contact, until, seed);
-    let (mut twin, _) = with_inputs(name, part, contact, until, seed);
+    let (session, _) = with_inputs(name, part, seed_kind, until, seed);
+    let (mut twin, _) = with_inputs(name, part, seed_kind, until, seed);
     assert_eq!(session.status(), Status::Running, "{name}");
     let running = twin.export().unwrap();
     assert_eq!(twin.advance_to(END), Status::Stopped, "{name}");
@@ -450,12 +473,12 @@ fn a_running_session_finishes_as_its_ended_export(
 #[test]
 fn a_running_session_with_inputs_finishes_to_the_folder_of_its_ended_export() {
     std::thread::scope(|scope| {
-        for (k, &(name, part, contact)) in INPUTS.iter().enumerate() {
+        for (k, &(name, part, seed_kind)) in INPUTS.iter().enumerate() {
             scope.spawn(move || {
                 a_running_session_finishes_as_its_ended_export(
                     name,
                     part,
-                    contact,
+                    seed_kind,
                     0x5eed_8400 + k as u64,
                 )
             });

@@ -185,6 +185,14 @@ pub struct SerialSend {
     pub bytes: Vec<u8>,
 }
 
+impl SerialSend {
+    /// The first idle time after these frames start at `at`.
+    /// `None` when that time does not fit in a `u64`.
+    pub fn end(&self, at: Time) -> Option<Time> {
+        serial_end(at.as_ps(), u64::from(self.baud.get()), self.bytes.len()).map(Time::from_ps)
+    }
+}
+
 impl Serial {
     pub fn mark(&self) -> &Value {
         &self.mark

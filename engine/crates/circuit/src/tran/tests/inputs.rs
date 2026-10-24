@@ -6,8 +6,8 @@ use sim_core::logic::Level;
 use sim_core::name::Name;
 use sim_core::name::Ref;
 use sim_core::netlist::{
-    self, Appended, Chip, Contact, Document, Model, Netlist, Part, Schedule, Switch, Value,
-    position_rule,
+    self, Appended, Baud, Chip, Contact, Document, Frame, Model, Netlist, Part, Schedule,
+    SerialSend, Switch, Value, position_rule,
 };
 use sim_core::run_folder::Results;
 use sim_core::serial::SerialByte;
@@ -19,7 +19,7 @@ use super::session::{
     AVR_STOP_PS, Rng, STIFF_ROW, assert_same_folder, batch, example, finish, serial_of_one_call,
 };
 use crate::session::Budget;
-use crate::session::{Applied, Input, Rejected, SerialCursor, Setting, State, Status};
+use crate::session::{Applied, Input, Rejected, Serial, SerialCursor, Setting, State, Status};
 
 /// 1 V through 1 kohm into 5 pF, a 5 ns time constant, so the 1 ns first step after an edge is
 /// rejected. `sw1` puts 1 kohm across the capacitor and `sw2` puts 10 kohm across it, with up
@@ -202,7 +202,19 @@ struct PartSpec {
 enum Draw {
     Contact,
     Level { low: f64, high: f64 },
+    Serial,
 }
+
+const SERIAL_PARTS: &[PartSpec] = &[
+    PartSpec {
+        name: "v1",
+        draw: Draw::Serial,
+    },
+    PartSpec {
+        name: "sw1",
+        draw: Draw::Contact,
+    },
+];
 
 const ANALOG_PARTS: &[PartSpec] = &[PartSpec {
     name: "rv1",
@@ -353,12 +365,12 @@ fn expected(session: &Session, input: &Input) -> Result<Time, Rejected> {
         return Err(Rejected::Ended);
     };
     let switch = switch(netlist_of(session), &input.part);
-    let Setting::Contact(to) = input.setting else {
+    let Setting::Contact(to) = &input.setting else {
         panic!("a switch input");
     };
     let after = Time::from_ps(accepted.at.as_ps() + 1);
     let floor = input.at.max(*now).max(after).max(accepted.reach);
-    if to == last_contact(switch) {
+    if *to == last_contact(switch) {
         return Err(Rejected::NoChange);
     }
     match switch.earliest(floor) {
@@ -468,6 +480,19 @@ fn random_spec(session: &Session, specs: &[PartSpec], rng: &mut Rng) -> Input {
             let si = draw_level(rng, low, high, level_now(session, spec.name));
             Setting::Level(Finite::new(si).unwrap())
         }
+        Draw::Serial => {
+            let bauds = [500_000_000, 333_333_333, 100_000_000, 499_999_999];
+            let baud = bauds[rng.below(4) as usize];
+            let n = rng.below(4);
+            let bytes = (0..n)
+                .map(|_| u8::try_from(rng.below(256)).unwrap())
+                .collect();
+            Setting::Serial(Serial {
+                baud: Baud::new(baud).unwrap(),
+                frame: Frame::EightN1,
+                bytes,
+            })
+        }
     };
     Input {
         part: Name::new(spec.name).unwrap(),
@@ -488,9 +513,9 @@ fn ruling(session: &Session, input: &Input) -> Result<Time, Rejected> {
     let from = input.at.max(*now).max(after).max(accepted.reach);
     let stop = transient(netlist).stop;
     let model = &netlist.part(id).model;
-    match (model, input.setting) {
+    match (model, &input.setting) {
         (Model::Switch(switch), Setting::Contact(to)) => {
-            if *switch.schedule.after_last() == to {
+            if *switch.schedule.after_last() == *to {
                 Err(Rejected::NoChange)
             } else {
                 landing(switch.earliest(from), stop)
@@ -501,22 +526,56 @@ fn ruling(session: &Session, input: &Input) -> Result<Time, Rejected> {
             if let Some(rule) = position_rule(level.get(), pot.resistance.si.get()).first() {
                 return Err(Rejected::Value(rule));
             }
-            level_ruling(&pot.position, level, from, stop)
+            level_ruling(&pot.position, *level, from, stop)
         }
         (Model::Potentiometer(_), Setting::Contact(_)) => Err(Rejected::WrongSetting),
+        (_, Setting::Serial(send)) => serial_ruling(model, send, from, stop),
         (_, Setting::Contact(_)) => {
-            if model.level().is_some() {
+            if model.serial().is_some() || model.level().is_some() {
                 Err(Rejected::WrongSetting)
             } else {
                 Err(Rejected::NotSettable)
             }
         }
         (_, Setting::Level(level)) => {
+            if model.serial().is_some() {
+                return Err(Rejected::WrongSetting);
+            }
             let Some(field) = model.level() else {
                 return Err(Rejected::NotSettable);
             };
-            level_ruling(field.schedule, level, from, stop)
+            level_ruling(field.schedule, *level, from, stop)
         }
+    }
+}
+
+fn serial_ruling(model: &Model, send: &Serial, from: Time, stop: Time) -> Result<Time, Rejected> {
+    let Some(field) = model.serial() else {
+        return Err(
+            if matches!(model, Model::Switch(_) | Model::Potentiometer(_))
+                || model.level().is_some()
+            {
+                Rejected::WrongSetting
+            } else {
+                Rejected::NotSettable
+            },
+        );
+    };
+    if send.bytes.is_empty() {
+        return Err(Rejected::NoChange);
+    }
+    let at = match field.waveform.events().last() {
+        Some(event) => from.max(event.end()),
+        None => from,
+    };
+    let wire = SerialSend {
+        baud: send.baud,
+        frame: send.frame,
+        bytes: send.bytes.clone(),
+    };
+    match wire.end(at) {
+        Some(_) if at < stop => Ok(at),
+        _ => Err(Rejected::PastStop),
     }
 }
 
@@ -571,12 +630,41 @@ fn apply_checked(
     got.ok().map(|applied| applied.at)
 }
 
+/// A serial send that starts at the previous event's end, after the time it asked for.
+fn waited_for_frames(landings: &Netlist, input: &Input, at: Time) -> bool {
+    let Setting::Serial(_) = &input.setting else {
+        return false;
+    };
+    let id = landings.part_id(&input.part).unwrap();
+    let Some(last) = landings
+        .part(id)
+        .model
+        .serial()
+        .unwrap()
+        .waveform
+        .events()
+        .last()
+    else {
+        return false;
+    };
+    last.end() == at && at > input.at
+}
+
+fn draws_serial(specs: Option<&[PartSpec]>) -> bool {
+    specs.is_some_and(|specs| specs.iter().any(|spec| matches!(&spec.draw, Draw::Serial)))
+}
+
 /// Appends `input` to `landings` at `at`, where the session said it landed.
 fn land(landings: &mut Netlist, input: &Input, at: Time) {
     let id = landings.part_id(&input.part).unwrap();
-    let to = match input.setting {
-        Setting::Contact(to) => Appended::Contact(to),
-        Setting::Level(level) => Appended::Level(level),
+    let to = match &input.setting {
+        Setting::Contact(to) => Appended::Contact(*to),
+        Setting::Level(level) => Appended::Level(*level),
+        Setting::Serial(send) => Appended::Serial(SerialSend {
+            baud: send.baud,
+            frame: send.frame,
+            bytes: send.bytes.clone(),
+        }),
     };
     landings.append(id, at, to);
 }
@@ -624,6 +712,8 @@ fn inputs_in_chunks_write_the_export_folder(
     let mut probes = Vec::new();
     let mut landings = netlist_of(&session).clone();
     let mut landed = 0;
+    let mut serial_landed = 0;
+    let mut serial_queued = 0;
     let mut halfway = false;
     while let State::Running { now, next, .. } = &session.state {
         let (now, landing) = (now.as_ps(), next.at.as_ps());
@@ -662,6 +752,12 @@ fn inputs_in_chunks_write_the_export_folder(
                 }
             };
             if let Some(at) = landing {
+                if matches!(input.setting, Setting::Serial(_)) {
+                    serial_landed += 1;
+                    if waited_for_frames(&landings, &input, at) {
+                        serial_queued += 1;
+                    }
+                }
                 land(&mut landings, &input, at);
                 landed += 1;
                 probes.retain(|&(at, _)| at <= accepted);
@@ -681,6 +777,13 @@ fn inputs_in_chunks_write_the_export_folder(
         }
     }
     assert!(landed > 0, "{name}: no input landed");
+    if draws_serial(specs) {
+        assert!(serial_landed > 0, "{name}: no serial send landed");
+        assert!(
+            serial_queued > 0,
+            "{name}: no serial send waited for frames still on the wire"
+        );
+    }
     assert!(halfway || session.status() == Status::Faulted, "{name}");
     let export = session.export().unwrap();
     let exported = netlist::parse(&export).unwrap();
@@ -811,6 +914,8 @@ fn an_export_mid_run_takes_every_step_the_session_took(
     let until = Time::from_ps(stop / 4 + rng.below(stop / 2));
     let mut landings = netlist_of(&session).clone();
     let mut landed = 0;
+    let mut serial_landed = 0;
+    let mut serial_queued = 0;
     while session.now() < until {
         let now = session.now().as_ps();
         session.advance_to(Time::from_ps(now + 1 + rng.below(stop / 50)).min(until));
@@ -827,11 +932,24 @@ fn an_export_mid_run_takes_every_step_the_session_took(
             None => session.apply(&input).ok().map(|applied| applied.at),
         };
         if let Some(at) = landing {
+            if matches!(input.setting, Setting::Serial(_)) {
+                serial_landed += 1;
+                if waited_for_frames(&landings, &input, at) {
+                    serial_queued += 1;
+                }
+            }
             land(&mut landings, &input, at);
             landed += 1;
         }
     }
     assert!(landed > 0, "{name}: no input landed");
+    if draws_serial(specs) {
+        assert!(serial_landed > 0, "{name}: no serial send landed");
+        assert!(
+            serial_queued > 0,
+            "{name}: no serial send waited for frames still on the wire"
+        );
+    }
     let exported = netlist::parse(&session.export().unwrap()).unwrap();
     assert_eq!(parts(&exported), parts(&landings), "{name}: each landing");
     assert_eq!(export_takes_the_steps(&session), Ok(()), "{name}");
@@ -1289,6 +1407,37 @@ fn stiff_row_with_level_inputs_exported_mid_run_takes_every_step() {
     );
 }
 
+/// `v1` sends 0 to 3 bytes at a few bauds, and `sw1` takes a contact, on the stiff row.
+/// A send asked for while frames are still on the wire starts at the previous event's end.
+#[test]
+fn stiff_serial_with_inputs_writes_the_export_folder() {
+    let input = stiff_serial();
+    for seed in [0x5eed_9000, 0x5eed_9001] {
+        inputs_in_chunks_write_the_export_folder(
+            "stiff-serial",
+            &input,
+            BUDGET,
+            seed,
+            Some(SERIAL_PARTS),
+        );
+    }
+}
+
+/// The same draws, exported while the session still runs. The export holds each landing,
+/// and a batch run of it takes every step the session took.
+#[test]
+fn stiff_serial_exported_mid_run_takes_every_step() {
+    let input = stiff_serial();
+    for seed in [0x5eed_9100, 0x5eed_9101] {
+        an_export_mid_run_takes_every_step_the_session_took(
+            "stiff-serial",
+            &input,
+            seed,
+            Some(SERIAL_PARTS),
+        );
+    }
+}
+
 #[test]
 fn a_level_inside_a_rejected_attempt_lands_at_the_reach() {
     let mut session = open_document(&stiff_steps(), Rows::Grid, BUDGET);
@@ -1689,4 +1838,334 @@ fn decode_txd(edges: &[(u64, bool)], bit_ps: u64, until: u64) -> Vec<(u64, u8)> 
         high = true;
     }
     frames
+}
+
+/// Bit boundary `i` is `start + floor(i * 10^12 / baud)`, the same rule a serial event stores.
+fn frame_end(start: u64, baud: u64, nbytes: u64) -> u64 {
+    let bits = nbytes * 10;
+    start + u64::try_from(u128::from(bits) * 1_000_000_000_000 / u128::from(baud)).unwrap()
+}
+
+fn send(part: &str, at: u64, baud: u32, bytes: &[u8]) -> Input {
+    Input {
+        part: Name::new(part).unwrap(),
+        at: Time::from_ps(at),
+        setting: Setting::Serial(Serial {
+            baud: Baud::new(baud).unwrap(),
+            frame: Frame::EightN1,
+            bytes: bytes.to_vec(),
+        }),
+    }
+}
+
+fn v_serial_bytes() -> Vec<u8> {
+    example("v-serial", u64::MAX)
+}
+
+fn with_stop(input: &[u8], stop_ps: u64) -> Vec<u8> {
+    let mut json: serde_json::Value = serde_json::from_slice(input).unwrap();
+    json["analysis"]["transient"]["stop_ps"] = stop_ps.into();
+    serde_json::to_vec(&json).unwrap()
+}
+
+fn without_serial_events(input: &[u8]) -> Vec<u8> {
+    let mut json: serde_json::Value = serde_json::from_slice(input).unwrap();
+    for part in json["parts"].as_array_mut().unwrap() {
+        if part["name"] == "v1" {
+            part["voltage"]["events"] = serde_json::json!([]);
+        }
+    }
+    serde_json::to_vec(&json).unwrap()
+}
+
+fn stiff_serial() -> Vec<u8> {
+    let mut json: serde_json::Value = serde_json::from_slice(STIFF_ROW).unwrap();
+    for part in json["parts"].as_array_mut().unwrap() {
+        if part["name"] == "v1" {
+            part["voltage"] = serde_json::json!({
+                "kind": "serial",
+                "mark": { "value": 1.0, "unit": "V", "source": "user" },
+                "space": { "value": 0.0, "unit": "V", "source": "user" },
+                "events": []
+            });
+        }
+    }
+    serde_json::to_vec(&json).unwrap()
+}
+
+fn serial_rows(session: &Session, name: &str) -> Vec<(u64, u32, Vec<u8>)> {
+    let netlist = netlist_of(session);
+    let id = netlist.part_id(&Name::new(name).unwrap()).unwrap();
+    let field = netlist.part(id).model.serial().expect("a serial source");
+    field
+        .waveform
+        .events()
+        .iter()
+        .map(|event| {
+            assert_eq!(event.frame(), Frame::EightN1);
+            (
+                event.at().as_ps(),
+                event.baud().get(),
+                event.bytes().to_vec(),
+            )
+        })
+        .collect()
+}
+
+/// The source's one event has ended, so the line is idle. A send asked for before `now`
+/// lands at `now`.
+#[test]
+fn a_serial_send_asked_before_now_lands_at_now() {
+    let mut session = open_document(&v_serial_bytes(), Rows::Grid, BUDGET);
+    let now = 2_600_000_000;
+    let asked = 2_200_000_000;
+    session.advance_to(Time::from_ps(now));
+    assert_eq!(session.now().as_ps(), now);
+    assert!(asked > frame_end(1_000_000_000, 9600, 1) && asked < now);
+    assert_eq!(
+        session.apply(&send("v1", asked, 9600, &[0x32])),
+        Ok(Applied {
+            at: Time::from_ps(now),
+            status: Status::Running,
+        })
+    );
+    assert_eq!(
+        serial_rows(&session, "v1"),
+        vec![(1_000_000_000, 9600, vec![0x31]), (now, 9600, vec![0x32]),]
+    );
+}
+
+/// The source's one event ends at 2041666666 ps. A send asked for at open lands there.
+#[test]
+fn a_serial_send_lands_at_the_end_of_the_source_s_last_event() {
+    let mut session = open_document(&v_serial_bytes(), Rows::Grid, BUDGET);
+    let end = frame_end(1_000_000_000, 9600, 1);
+    assert_eq!(end, 2_041_666_666);
+    assert_eq!(
+        session.apply(&send("v1", 0, 9600, &[0x32])),
+        Ok(Applied {
+            at: Time::from_ps(end),
+            status: Status::Running,
+        })
+    );
+    assert_eq!(
+        serial_rows(&session, "v1"),
+        vec![(1_000_000_000, 9600, vec![0x31]), (end, 9600, vec![0x32]),]
+    );
+    ends_as_its_export(session);
+}
+
+/// A second send asked for while the first send's frames are still on the wire starts at
+/// that send's end. A later ask lands at the time it asks for. Three bytes are one event.
+#[test]
+fn a_second_send_during_the_first_s_frames_starts_at_its_end() {
+    let stop = 9_000_000_000;
+    let input = with_stop(&v_serial_bytes(), stop);
+    let mut session = open_document(&input, Rows::Grid, BUDGET);
+    let first = frame_end(1_000_000_000, 9600, 1);
+    assert_eq!(
+        session.apply(&send("v1", 0, 9600, &[0x41, 0x42, 0x43])),
+        Ok(Applied {
+            at: Time::from_ps(first),
+            status: Status::Running,
+        })
+    );
+    let during = first + 10_000;
+    session.advance_to(Time::from_ps(during));
+    assert!(session.now().as_ps() < frame_end(first, 9600, 3));
+    let second = frame_end(first, 9600, 3);
+    assert_eq!(
+        session.apply(&send("v1", 0, 9600, &[0x44])),
+        Ok(Applied {
+            at: Time::from_ps(second),
+            status: Status::Running,
+        })
+    );
+    let idle = frame_end(second, 9600, 1);
+    let asked = 7_000_000_000;
+    assert!(asked > idle && asked < stop);
+    assert_eq!(
+        session.apply(&send("v1", asked, 9600, &[0x45])),
+        Ok(Applied {
+            at: Time::from_ps(asked),
+            status: Status::Running,
+        })
+    );
+    assert_eq!(
+        serial_rows(&session, "v1"),
+        vec![
+            (1_000_000_000, 9600, vec![0x31]),
+            (first, 9600, vec![0x41, 0x42, 0x43]),
+            (second, 9600, vec![0x44]),
+            (asked, 9600, vec![0x45]),
+        ]
+    );
+    ends_as_its_export(session);
+}
+
+/// An idle serial source has no event end to wait for. The first send lands at 1 ps.
+#[test]
+fn the_first_send_on_an_idle_source_lands_at_1_ps() {
+    let mut session = open_document(
+        &without_serial_events(&v_serial_bytes()),
+        Rows::Grid,
+        BUDGET,
+    );
+    assert_eq!(
+        session.apply(&send("v1", 0, 9600, &[0x31])),
+        Ok(Applied {
+            at: Time::from_ps(1),
+            status: Status::Running,
+        })
+    );
+    assert_eq!(serial_rows(&session, "v1"), vec![(1, 9600, vec![0x31])]);
+    ends_as_its_export(session);
+}
+
+/// The stiff row's first step is rejected, so the reach is 1000 ps. The send lands there.
+#[test]
+fn a_serial_send_inside_a_rejected_attempt_lands_at_the_reach() {
+    let mut session = open_document(&stiff_serial(), Rows::Grid, BUDGET);
+    let State::Running { next, .. } = &session.state else {
+        panic!("the session ended");
+    };
+    let first = next.at;
+    session.advance_to(first);
+    let State::Running { accepted, .. } = &session.state else {
+        panic!("the session ended");
+    };
+    assert_eq!(
+        (accepted.at, accepted.reach),
+        (Time::from_ps(40), Time::from_ps(1_000))
+    );
+    assert_eq!(
+        session.apply(&send("v1", 41, 9600, &[0x31])),
+        Ok(Applied {
+            at: Time::from_ps(1_000),
+            status: Status::Running,
+        })
+    );
+    ends_as_its_export(session);
+}
+
+#[test]
+fn a_serial_send_is_refused_when_it_changes_nothing_or_lands_too_late() {
+    let mut session = open_document(&v_serial_bytes(), Rows::Grid, BUDGET);
+    let stop = transient(netlist_of(&session)).stop.as_ps();
+    let before = session.export();
+    assert_eq!(
+        session.apply(&send("v1", 0, 9600, &[])),
+        Err(Rejected::NoChange)
+    );
+    assert_eq!(
+        session.apply(&send("v1", stop, 9600, &[])),
+        Err(Rejected::NoChange)
+    );
+    assert_eq!(session.export(), before);
+    assert_eq!(
+        session.apply(&send("v9", 0, 9600, &[0x31])),
+        Err(Rejected::UnknownPart)
+    );
+    assert_eq!(
+        session.apply(&send("v1", stop, 9600, &[0x31])),
+        Err(Rejected::PastStop)
+    );
+    assert_eq!(session.export(), before);
+    let overflow = vec![0u8; 1_844_675];
+    assert_eq!(
+        session.apply(&send("v1", 0, 1, &overflow)),
+        Err(Rejected::PastStop)
+    );
+    assert_eq!(session.export(), before);
+    session.advance_to(transient(netlist_of(&session)).stop);
+    assert_eq!(
+        session.apply(&send("v1", 0, 9600, &[0x31])),
+        Err(Rejected::Ended)
+    );
+}
+
+#[test]
+fn a_serial_send_on_the_wrong_part_is_refused() {
+    let cases: &[(&str, &[u8], &str, Rejected)] = &[
+        ("kinds", KINDS, "vs", Rejected::NotSettable),
+        ("kinds", KINDS, "vp", Rejected::NotSettable),
+        ("kinds", KINDS, "r1", Rejected::NotSettable),
+        ("kinds", KINDS, "v1", Rejected::WrongSetting),
+        ("kinds", KINDS, "sw1", Rejected::WrongSetting),
+        ("kinds", KINDS, "rv1", Rejected::WrongSetting),
+        ("levels", RC_LEVELS, "i1", Rejected::WrongSetting),
+        ("levels", RC_LEVELS, "c1", Rejected::NotSettable),
+        ("plain", RC_SWITCHES, "v1", Rejected::WrongSetting),
+        ("plain", RC_SWITCHES, "c1", Rejected::NotSettable),
+    ];
+    for (name, input, part, why) in cases {
+        let mut session = open_document(input, Rows::Grid, BUDGET);
+        let before = session.export();
+        assert_eq!(
+            session.apply(&send(part, 0, 9600, &[0x31])),
+            Err(*why),
+            "{name} {part}"
+        );
+        assert_eq!(session.export(), before, "{name} {part}");
+    }
+    let diode = br#"{
+      "version": 0,
+      "seed": 0,
+      "analysis": { "transient": { "stop_ps": 1000, "max_step_ps": 1000, "grid_ps": 1000 } },
+      "ground": "gnd",
+      "nets": ["gnd", "a"],
+      "parts": [
+        {
+          "name": "v1",
+          "kind": "voltage_source",
+          "pins": { "p": "a", "n": "gnd" },
+          "voltage": { "value": 0.0, "unit": "V", "source": "user" }
+        },
+        {
+          "name": "d1",
+          "kind": "diode",
+          "pins": { "anode": "a", "cathode": "gnd" },
+          "saturation_current": { "value": 1e-14, "unit": "A", "source": "user" },
+          "emission_coefficient": { "value": 1.0, "unit": "1", "source": "user" },
+          "series_resistance": { "value": 1.0, "unit": "ohm", "source": "user" },
+          "ratings": { "current": null, "power": null }
+        }
+      ]
+    }"#;
+    let mut session = open_document(diode, Rows::Grid, BUDGET);
+    let before = session.export();
+    assert_eq!(
+        session.apply(&send("d1", 0, 9600, &[0x31])),
+        Err(Rejected::NotSettable)
+    );
+    assert_eq!(session.export(), before);
+
+    let chip = example("ne555-led", 1_000_000);
+    let mut session = open_document(&chip, Rows::Grid, BUDGET);
+    let before = session.export();
+    assert_eq!(
+        session.apply(&send("u1", 0, 9600, &[0x31])),
+        Err(Rejected::NotSettable)
+    );
+    assert_eq!(
+        session.apply(&send("led1", 0, 9600, &[0x31])),
+        Err(Rejected::NotSettable)
+    );
+    assert_eq!(session.export(), before);
+}
+
+/// A contact or a level on the serial source is the wrong setting, and the events stay.
+#[test]
+fn a_level_or_a_contact_on_a_serial_source_is_refused() {
+    let mut session = open_document(&v_serial_bytes(), Rows::Grid, BUDGET);
+    let before = session.export();
+    assert_eq!(
+        session.apply(&level("v1", 0, 1.0)),
+        Err(Rejected::WrongSetting)
+    );
+    assert_eq!(
+        session.apply(&set("v1", 0, Contact::Closed)),
+        Err(Rejected::WrongSetting)
+    );
+    assert_eq!(session.export(), before);
 }

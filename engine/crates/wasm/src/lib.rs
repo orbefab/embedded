@@ -5,12 +5,12 @@
 //! text the run folder writes, for the caller to parse. Every failure the engine or the binding
 //! detects throws a `SimError`.
 
-use sim_circuit::{Input, Refused, Rejected, Setting};
+use sim_circuit::{Input, Refused, Rejected, Serial as SerialSend, Setting};
 use sim_core::diagnostic::Diagnostic;
 use sim_core::finite::Finite;
 use sim_core::logic::Level;
 use sim_core::name::Name;
-use sim_core::netlist::Contact;
+use sim_core::netlist::{Baud, Contact, Frame};
 use sim_core::run_folder::RunFolder;
 use sim_core::time::Time;
 use sim_core::timestamp::Timestamp;
@@ -37,7 +37,7 @@ impl From<sim_circuit::Status> for Status {
 
 /// Why a call failed. The first three are why `open` or `record` made no session, the next seven
 /// why an input changed nothing, then the binding's own checks of an argument's type, a part
-/// name, a level and a `bigint`, and `finish` on a session `open` made.
+/// name, a level, a baud and a `bigint`, and `finish` on a session `open` made.
 #[wasm_bindgen]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Code {
@@ -54,6 +54,7 @@ pub enum Code {
     Type = "type",
     BadName = "bad_name",
     NotFinite = "not_finite",
+    BadBaud = "bad_baud",
     Range = "range",
     Unrecorded = "unrecorded",
 }
@@ -218,6 +219,18 @@ fn name(part: &str) -> Result<Name, SimError> {
 
 fn level(si: f64) -> Result<Finite, SimError> {
     Finite::new(si).ok_or(SimError::new(Code::NotFinite))
+}
+
+fn parse_baud(rate: f64) -> Result<Baud, SimError> {
+    let whole = rate as u32;
+    if rate.is_finite()
+        && rate >= 1.0
+        && f64::from(whole) == rate
+        && let Some(baud) = Baud::new(whole)
+    {
+        return Ok(baud);
+    }
+    Err(SimError::new(Code::BadBaud))
 }
 
 fn json(value: &(impl serde::Serialize + ?Sized)) -> String {
@@ -436,6 +449,31 @@ impl Session {
     ) -> Result<Applied, SimError> {
         let (part, at) = (name(&str_of(part)?)?, u64_of(ps)?);
         self.apply(part, at, Setting::Level(level(f64_of(si)?)?))
+    }
+
+    /// Sends 8N1 frames on a `serial` source from `ps` on, at `baud`.
+    /// `bytes` is copied before this returns.
+    #[wasm_bindgen(js_name = applySerial)]
+    pub fn apply_serial(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "string")] part: &Text,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] ps: Bigint,
+        #[wasm_bindgen(unchecked_param_type = "number")] baud: Number,
+        #[wasm_bindgen(unchecked_param_type = "Uint8Array")] bytes: &Netlist,
+    ) -> Result<Applied, SimError> {
+        let part = name(&str_of(part)?)?;
+        let at = u64_of(ps)?;
+        let baud = parse_baud(f64_of(baud)?)?;
+        let bytes = bytes_of(bytes)?;
+        self.apply(
+            part,
+            at,
+            Setting::Serial(SerialSend {
+                baud,
+                frame: Frame::EightN1,
+                bytes,
+            }),
+        )
     }
 
     fn apply(&mut self, part: Name, at: u64, setting: Setting) -> Result<Applied, SimError> {

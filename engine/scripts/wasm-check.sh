@@ -44,6 +44,7 @@ for line in \
   'serialSince(cursor: bigint): Serial;' \
   'applyContact(part: string, ps: bigint, closed: boolean): Applied;' \
   'applyLevel(part: string, ps: bigint, si: number): Applied;' \
+  'applySerial(part: string, ps: bigint, baud: number, bytes: Uint8Array): Applied;' \
   'finish(createdAtSeconds: bigint): Folder;' \
   'export function run(netlist: Uint8Array, createdAtSeconds: bigint): Folder;' \
   'file(path: string): Uint8Array | undefined;'; do

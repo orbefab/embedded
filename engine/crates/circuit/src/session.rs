@@ -4,7 +4,7 @@ use sim_core::logic::Level;
 use sim_core::name::{Name, Ref};
 use sim_core::netlist::{Analysis, Document, Netlist, Transient};
 use sim_core::run_folder::{self, Results, RunFolder};
-use sim_core::serial::{Serial, SerialByte};
+use sim_core::serial::{Serial as Delivered, SerialByte};
 use sim_core::time::Time;
 use sim_core::timestamp::Timestamp;
 
@@ -24,7 +24,7 @@ use crate::watch::{self, Levels};
 
 mod input;
 
-pub use input::{Applied, Input, Rejected, Setting};
+pub use input::{Applied, Input, Rejected, Serial, Setting};
 
 const STEP_BUDGET: u32 = 50;
 
@@ -557,7 +557,7 @@ impl Session {
         let (observations, mut trace) = record.finish(&self.circuit.netlist, at, &row, diagnostics);
         let usarts = self.actives.usarts();
         if !usarts.is_empty() {
-            trace.attach_serial(Serial::new(usarts.to_vec(), self.serial));
+            trace.attach_serial(Delivered::new(usarts.to_vec(), self.serial));
         }
         if let End::Fault(fault) = end {
             diagnostics.push(fault);

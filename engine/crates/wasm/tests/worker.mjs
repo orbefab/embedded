@@ -16,10 +16,11 @@ import { Worker, isMainThread, parentPort, workerData } from 'node:worker_thread
 // One 60 Hz frame of a run paced at 1x.
 const FRAME_PS = 16_666_666_667n;
 
-// The input cases: the part each takes inputs on, and whether they are contacts or positions.
+// The input cases: the part each takes inputs on, and which setting a seeded input writes.
 const INPUTS = [
-  { name: 'atmega-button', part: 'sw1', contact: true },
-  { name: 'atmega-analog-serial', part: 'rv1', contact: false },
+  { name: 'atmega-button', part: 'sw1', setting: 'contact' },
+  { name: 'atmega-analog-serial', part: 'rv1', setting: 'level' },
+  { name: 'v-serial', part: 'v1', setting: 'serial' },
 ];
 
 // `bigint` arguments the binding takes exactly, and the `created_at` each stamps as seconds.
@@ -199,24 +200,66 @@ function example(wasm, job, json, native) {
   return `run and finish are sim run, ${counts}`;
 }
 
-// The setting `part` holds after its last event in `session.export()`, a contact as `true` for
-// closed or a position, and that event's time, or none for the document's initial setting.
-function lastSetting(session, { part, contact }) {
+// The setting `part` holds after its last event in `session.export()`, and that event's time.
+// A contact is `true` for closed. A level is the position. A serial send is its baud, frame
+// and bytes. None of those is the document's initial setting when the part has no event yet.
+function lastSetting(session, { part, setting }) {
   const found = JSON.parse(Buffer.from(session.export())).parts.find((item) => item.name === part);
-  if (contact) {
+  if (setting === 'contact') {
     const last = found.events.at(-1);
     return { at: last && BigInt(last.t_ps), value: (last?.state ?? found.initial) === 'closed' };
   }
-  const { kind, initial, events, value } = found.position;
-  const last = kind === 'steps' ? events.at(-1) : undefined;
+  if (setting === 'serial') {
+    const last = found.voltage.events.at(-1);
+    return {
+      at: last && BigInt(last.t_ps),
+      value: { baud: last.baud, frame: last.frame, bytes: last.bytes },
+    };
+  }
+  const { kind: shape, initial, events, value } = found.position;
+  const last = shape === 'steps' ? events.at(-1) : undefined;
   return { at: last && BigInt(last.t_ps), value: last?.level.value ?? initial?.value ?? value };
 }
 
-// One seeded input on `part` at `now`, a contact or a position from 0.1 to 0.9. A setting equal
-// to the part's last throws `no_change`, and then a contact is moved to the other one. An input
-// that lands is in the export at `Applied.at` with the setting passed. Whether it landed.
+// Rates other than 9600. A binding that stores 9600 for every accepted rate fails the export.
+const SERIAL_BAUDS = [115200, 500_000_000, 1, 333_333_333];
+
+// One 8N1 byte at a drawn baud on `part` at `now`. It lands in the export at `Applied.at`.
+// Whether it landed.
+function applySeededSerial(wasm, session, rng, input) {
+  const { part } = input;
+  const bytes = [Number(rng.below(256n))];
+  const baud = SERIAL_BAUDS[Number(rng.below(BigInt(SERIAL_BAUDS.length)))];
+  const before = lastSetting(session, input);
+  let applied;
+  try {
+    applied = session.applySerial(part, session.now(), baud, new Uint8Array(bytes));
+  } catch (error) {
+    assert.ok(error instanceof wasm.SimError, `${part} throws a SimError`);
+    assert.equal(error.code, 'past_stop', `${part} lands or is past the stop`);
+    assert.deepEqual(lastSetting(session, input), before, `${part} past the stop is unchanged`);
+    return false;
+  }
+  const at = applied.at;
+  applied.free();
+  assert.deepEqual(
+    lastSetting(session, input),
+    { at, value: { baud, frame: '8N1', bytes } },
+    `${part} holds the byte from Applied.at`,
+  );
+  return true;
+}
+
+// One seeded input on `part` at `now`, a contact, a position from 0.1 to 0.9, or one serial
+// byte. A setting equal to the part's last throws `no_change`, and then a contact is moved to
+// the other one. An input that lands is in the export at `Applied.at` with the setting passed.
+// Whether it landed.
 function applySeeded(wasm, session, rng, input) {
-  const { part, contact } = input;
+  if (input.setting === 'serial') {
+    return applySeededSerial(wasm, session, rng, input);
+  }
+  const { part } = input;
+  const contact = input.setting === 'contact';
   const apply = (setting) =>
     contact
       ? session.applyContact(part, session.now(), setting)
@@ -305,6 +348,10 @@ function argumentChecks(wasm, examples) {
     ['applyContact part', 'string', (v) => serial.applyContact(v, 0n, true)],
     ['applyContact ps', 'bigint', (v) => serial.applyContact('rv1', v, true)],
     ['applyContact closed', 'boolean', (v) => serial.applyContact('rv1', 0n, v)],
+    ['applySerial part', 'string', (v) => serial.applySerial(v, 0n, 9600, new Uint8Array([1]))],
+    ['applySerial ps', 'bigint', (v) => serial.applySerial('rv1', v, 9600, new Uint8Array([1]))],
+    ['applySerial baud', 'number', (v) => serial.applySerial('rv1', 0n, v, new Uint8Array([1]))],
+    ['applySerial bytes', 'Uint8Array', (v) => serial.applySerial('rv1', 0n, 9600, v)],
     ['finish', 'bigint', (v) => wasm.Session.record(steps).finish(v)],
     ['Folder.file', 'string', (v) => folder.file(v)],
   ];
@@ -323,12 +370,39 @@ function argumentChecks(wasm, examples) {
   }
   refuses('applyLevel part', (part) => serial.applyLevel(part, 0n, 0.5), BAD_NAMES, 'bad_name');
   refuses('applyContact part', (part) => serial.applyContact(part, 0n, true), BAD_NAMES, 'bad_name');
+  refuses(
+    'applySerial part',
+    (part) => serial.applySerial(part, 0n, 9600, new Uint8Array([1])),
+    BAD_NAMES,
+    'bad_name',
+  );
   refuses('applyLevel si', (si) => serial.applyLevel('rv1', 0n, si), [NaN, Infinity], 'not_finite');
+  refuses(
+    'applySerial baud',
+    (rate) => serial.applySerial('rv1', 0n, rate, new Uint8Array([1])),
+    [0, 0.5, 1.5, -1, 500_000_001, NaN, Infinity],
+    'bad_baud',
+  );
   const firstWrong = [
     ['applyContact("1rv", -1n, "x")', () => serial.applyContact('1rv', -1n, 'x'), 'bad_name'],
     ['applyContact("rv1", -1n, "x")', () => serial.applyContact('rv1', -1n, 'x'), 'range'],
     ['applyLevel("1rv", -1n, "x")', () => serial.applyLevel('1rv', -1n, 'x'), 'bad_name'],
     ['applyLevel("rv1", -1n, NaN)', () => serial.applyLevel('rv1', -1n, NaN), 'range'],
+    [
+      'applySerial("1rv", -1n, 9600, bytes)',
+      () => serial.applySerial('1rv', -1n, 9600, new Uint8Array([1])),
+      'bad_name',
+    ],
+    [
+      'applySerial("rv1", -1n, "x", bytes)',
+      () => serial.applySerial('rv1', -1n, 'x', new Uint8Array([1])),
+      'range',
+    ],
+    [
+      'applySerial("rv1", 0n, 0, "x")',
+      () => serial.applySerial('rv1', 0n, 0, 'x'),
+      'bad_baud',
+    ],
     ['run("x", -1n)', () => wasm.run('x', -1n), 'type'],
   ];
   for (const [what, call, code] of firstWrong) {
@@ -343,10 +417,28 @@ function argumentChecks(wasm, examples) {
   for (const [what, , call] of calls.slice(0, 3)) {
     refuses(what, call, [detached()], 'type');
   }
+  refuses(
+    'applySerial bytes',
+    (bytes) => serial.applySerial('rv1', 0n, 9600, bytes),
+    [detached()],
+    'type',
+  );
   for (let k = 0; k < 1100; k += 1) {
     assert.throws(() => wasm.run(detached(), 0n), isCode('type'), `detached netlist ${k} throws type`);
   }
   assert.throws(() => serial.applyContact('rv1', 0n, false), isCode('wrong_setting'), 'a boolean is a contact');
+  const stepsSession = wasm.Session.open(steps);
+  assert.throws(
+    () => stepsSession.applySerial('v1', 0n, 9600, new Uint8Array([1])),
+    isCode('wrong_setting'),
+    'bytes on a steps source throw wrong_setting',
+  );
+  const serialSource = wasm.Session.open(read('v-serial'));
+  assert.throws(
+    () => serialSource.applySerial('v1', 0n, 9600, new Uint8Array()),
+    isCode('no_change'),
+    'an empty send throws no_change',
+  );
   assert.equal(serial.now(), 0n, 'a refused argument moves nothing');
   assert.equal(JSON.parse(Buffer.from(serial.export())).parts[1].position.value, 0.49951171875);
   assert.equal(folder.file('nothing'), undefined, 'a missing file is undefined');
@@ -403,7 +495,7 @@ if (isMainThread) {
   assert.ok(names.length >= 14, 'every example is here');
   const jobs = [
     ...names.map((name, k) => ({ kind: 'example', name, seed: 0x5eed_c000n + BigInt(k) })),
-    ...INPUTS.map((input, k) => ({ kind: 'inputs', ...input, seed: 0x5eed_c100n + BigInt(k) })),
+    ...INPUTS.map((input, k) => ({ ...input, kind: 'inputs', seed: 0x5eed_c100n + BigInt(k) })),
     { kind: 'arguments', name: 'arguments' },
   ];
   const results = await Promise.all(
@@ -420,7 +512,24 @@ if (isMainThread) {
     ),
   );
   let failed = 0;
+  let inputPosts = 0;
   for (const { job, checked, error } of results) {
+    const inputRow = INPUTS.find((row) => row.name === job.name && row.part === job.part);
+    if (inputRow) {
+      inputPosts += 1;
+      const text = typeof checked === 'string' ? checked : '';
+      const posted =
+        job.kind === 'inputs' &&
+        !error &&
+        text.startsWith('finish is sim run on the ended export');
+      if (!posted) {
+        failed += 1;
+        console.log(
+          `FAIL ${inputRow.name} with inputs: kind ${job.kind}, ${error?.stack ?? error ?? checked}`,
+        );
+        continue;
+      }
+    }
     const label = job.kind === 'inputs' ? `${job.name} with inputs` : job.name;
     if (error) {
       failed += 1;
@@ -428,6 +537,10 @@ if (isMainThread) {
     } else {
       console.log(`ok   ${label}: ${checked}`);
     }
+  }
+  if (inputPosts !== INPUTS.length) {
+    failed += 1;
+    console.log(`FAIL inputs: ${inputPosts} results, want ${INPUTS.length}`);
   }
   console.log(`${results.length - failed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
