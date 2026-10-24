@@ -145,6 +145,15 @@ def self_test(refs):
             "failure": None,
         },
         {
+            "name": "reserved transistor prefix at the operating point",
+            "nets": ["gnd", "a", "x_q1_c"],
+            "part": bjt("q1", "npn", "x_q1_c", "a", "gnd"),
+            "commit": [],
+            "exit": 0,
+            "reason": "a deck with a transistor reserves names starting with x_",
+            "failure": None,
+        },
+        {
             "name": "chip at the operating point",
             "part": {
                 "name": "u1",
@@ -240,6 +249,7 @@ def self_test(refs):
     cases.append(serial_boundaries(refs))
     cases.append(source_jump_times(refs))
     cases.append(potentiometer_deck(refs))
+    cases.append(transistor_deck(refs))
     cases.append(bounce_vectors())
     cases.append(vcd_reader(refs))
     document = {"ok": all(case["ok"] for case in cases), "cases": cases}
@@ -548,6 +558,61 @@ def potentiometer_deck(refs):
     else:
         ok = False
     return {"name": "potentiometer deck", "ok": ok}
+
+
+def bjt(name, kind, c, b, e):
+    part = {"name": name, "kind": kind, "pins": {"collector": c, "base": b, "emitter": e}}
+    for k, (_, field) in enumerate(refs_card()):
+        part[field] = {"value": float(k + 1)}
+    return part
+
+
+def refs_card():
+    from ngspice_refs import BJT_CARD
+
+    return BJT_CARD
+
+
+def transistor_deck(refs):
+    """Each BJT's ammeters, device line and model card, the shunt on every node, and the refs
+    its vectors map to. The ammeter nodes' voltages map to nothing."""
+    netlist = {
+        "analysis": {"op": {}},
+        "ground": "gnd",
+        "nets": ["gnd", "C", "b", "e"],
+        "parts": [bjt("Q1", "npn", "C", "b", "gnd"), bjt("q2", "pnp", "gnd", "b", "e")],
+    }
+    text, mapping = refs.translate("bjt", netlist)
+    card = (
+        "is=1.0 bf=2.0 br=3.0 nf=4.0 nr=5.0 vaf=6.0 rb=7.0 rc=8.0 re=9.0 cje=10.0 cjc=11.0 "
+        "mje=0 mjc=0"
+    )
+    want = [
+        "vx_q1_c c x_q1_c dc 0",
+        "vx_q1_b b x_q1_b dc 0",
+        "qq1 x_q1_c x_q1_b 0 qmod_q1",
+        f".model qmod_q1 npn ({card})",
+        "vx_q2_c 0 x_q2_c dc 0",
+        "vx_q2_b b x_q2_b dc 0",
+        "qq2 x_q2_c x_q2_b e qmod_q2",
+        f".model qmod_q2 pnp ({card})",
+        "* The engine's gmin on every node, beside the gmin ngspice puts across each junction.",
+        "rx_gmin_c c 0 1000000000000.0",
+        "rx_gmin_b b 0 1000000000000.0",
+        "rx_gmin_e e 0 1000000000000.0",
+        ".control",
+        "save all i(vx_q1_c) i(vx_q1_b) i(vx_q2_c) i(vx_q2_b)",
+    ]
+    ok = text.splitlines()[2 : 2 + len(want)] == want
+    ok = ok and mapping["i(vx_q1_c)"] == "#Q1.ic" and mapping["i(vx_q1_b)"] == "#Q1.ib"
+    ok = ok and mapping["i(vx_q2_c)"] == "#q2.ic" and mapping["v(x_q2_b)"] is None
+    values = {"#net.C": [5.0], "#net.b": [0.7], "#net.e": [2.0], "#Q1.ic": [0.01], "#Q1.ib": [1e-4]}
+    values |= {"#q2.ic": [-0.02], "#q2.ib": [-2e-4]}
+    op = refs.op_point(netlist, values)
+    ok = ok and op["#Q1.p"] == 5.0 * 0.01 + 0.7 * 1e-4
+    ok = ok and op["#q2.p"] == (0.0 - 2.0) * -0.02 + (0.7 - 2.0) * -2e-4
+    ok = ok and not any(key.endswith(".v") for key in op)
+    return {"name": "transistor deck", "ok": ok}
 
 
 def vcd_reader(refs):

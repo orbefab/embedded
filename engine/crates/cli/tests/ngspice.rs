@@ -24,11 +24,15 @@ fn json(path: &Path) -> serde_json::Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
 
-/// `#net.*` and `*.v` are volts. `*.i` is amperes. `*.p` is watts. `#net.i` is a voltage.
+/// `#net.*` and `*.v` are volts. `*.i`, `*.ib` and `*.ic` are amperes. `*.p` is watts.
+/// `#net.i` is a voltage.
 fn floor(reference: &str) -> f64 {
     if reference.starts_with("#net.") || reference.ends_with(".v") {
         1e-9
-    } else if reference.ends_with(".i") {
+    } else if [".i", ".ib", ".ic"]
+        .iter()
+        .any(|end| reference.ends_with(end))
+    {
         1e-12
     } else if reference.ends_with(".p") {
         1e-15
@@ -50,6 +54,8 @@ fn floor_is_one_nanovolt_one_picoampere_or_one_femtowatt() {
     assert_eq!(floor("#net.i"), 1e-9);
     assert_eq!(floor("#r1.v"), 1e-9);
     assert_eq!(floor("#led1.i"), 1e-12);
+    assert_eq!(floor("#q1.ib"), 1e-12);
+    assert_eq!(floor("#q1.ic"), 1e-12);
     assert_eq!(floor("#r1.p"), 1e-15);
 }
 
@@ -68,12 +74,15 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "atmega-fade",
             "atmega-serial-echo",
             "button-led",
+            "ce-amp",
             "current-pulse",
             "divider",
             "i-divider",
             "led-5v",
             "led-9v",
             "ne555-led",
+            "npn-led",
+            "pnp-load",
             "rc-switch",
             "v-pulse-rc",
             "v-serial",
@@ -81,50 +90,76 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
         ]
     );
     for example in examples() {
-        let label = example.display();
-        let reference_path = example.join("ngspice.json");
-        let input = fs::read(example.join("netlist.json")).unwrap();
-        if runs_firmware(&netlist::parse(&input).unwrap()) {
-            assert!(
-                !reference_path.exists() && !example.join("deck.cir").exists(),
-                "{label} runs firmware, which a deck has no CPU for, so it has no reference"
-            );
-            continue;
-        }
+        matches_its_reference(&example);
+    }
+}
+
+/// Circuits only this test runs. `npn-off` and `pnp-off` hold the leakage on each kind's
+/// internal nodes, and `npn-pulse` drives the junction capacitors through 1 Mohm, slow next to
+/// the deck's ramp.
+#[test]
+fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let mut fixtures: Vec<_> = fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    fixtures.sort();
+    let names: Vec<_> = fixtures
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["npn-off", "npn-pulse", "pnp-off"]);
+    for fixture in fixtures {
+        matches_its_reference(&fixture);
+    }
+}
+
+/// `example` holds netlist.json, and deck.cir and ngspice.json unless it runs firmware.
+fn matches_its_reference(example: &Path) {
+    let label = example.display();
+    let reference_path = example.join("ngspice.json");
+    let input = fs::read(example.join("netlist.json")).unwrap();
+    if runs_firmware(&netlist::parse(&input).unwrap()) {
         assert!(
-            reference_path.is_file(),
-            "{label} has no ngspice.json; run `uv run scripts/ngspice_refs.py {label}`"
+            !reference_path.exists() && !example.join("deck.cir").exists(),
+            "{label} runs firmware, which a deck has no CPU for, so it has no reference"
         );
-        let reference = json(&reference_path);
-        let deck = fs::read(example.join("deck.cir")).unwrap();
-        assert_eq!(
-            sha256_hex(&deck),
-            reference["deck_sha256"].as_str().unwrap(),
-            "{label}/deck.cir does not match deck_sha256"
-        );
-        assert_eq!(reference["format"].as_u64(), Some(0), "{label} format");
-        assert_eq!(
-            reference["ngspice"].as_str(),
-            Some(NGSPICE),
-            "{label} ngspice"
-        );
-        assert_eq!(
-            reference["options"].as_str(),
-            Some(OPTIONS),
-            "{label} options"
-        );
-        let done = sim_cli::run(&input, Timestamp::from_unix_seconds(0));
-        let manifest: serde_json::Value =
-            serde_json::from_slice(done.folder.file("manifest.json").unwrap()).unwrap();
-        assert_eq!(
-            manifest["input"]["sha256"], reference["netlist_sha256"],
-            "{label}/netlist.json changed; run `uv run scripts/ngspice_refs.py {label}`"
-        );
-        match (reference.get("op"), reference.get("tran")) {
-            (Some(op), None) => check_op(&label.to_string(), op, &done),
-            (None, Some(tran)) => check_tran(&label.to_string(), tran, &input, &done),
-            _ => panic!("{label}: ngspice.json needs exactly one of op and tran"),
-        }
+        return;
+    }
+    assert!(
+        reference_path.is_file(),
+        "{label} has no ngspice.json; run `uv run scripts/ngspice_refs.py {label}`"
+    );
+    let reference = json(&reference_path);
+    let deck = fs::read(example.join("deck.cir")).unwrap();
+    assert_eq!(
+        sha256_hex(&deck),
+        reference["deck_sha256"].as_str().unwrap(),
+        "{label}/deck.cir does not match deck_sha256"
+    );
+    assert_eq!(reference["format"].as_u64(), Some(0), "{label} format");
+    assert_eq!(
+        reference["ngspice"].as_str(),
+        Some(NGSPICE),
+        "{label} ngspice"
+    );
+    assert_eq!(
+        reference["options"].as_str(),
+        Some(OPTIONS),
+        "{label} options"
+    );
+    let done = sim_cli::run(&input, Timestamp::from_unix_seconds(0));
+    let manifest: serde_json::Value =
+        serde_json::from_slice(done.folder.file("manifest.json").unwrap()).unwrap();
+    assert_eq!(
+        manifest["input"]["sha256"], reference["netlist_sha256"],
+        "{label}/netlist.json changed; run `uv run scripts/ngspice_refs.py {label}`"
+    );
+    match (reference.get("op"), reference.get("tran")) {
+        (Some(op), None) => check_op(&label.to_string(), op, &done),
+        (None, Some(tran)) => check_tran(&label.to_string(), tran, &input, &done),
+        _ => panic!("{label}: ngspice.json needs exactly one of op and tran"),
     }
 }
 
@@ -229,28 +264,27 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
             .collect();
         compared.record(key, column(trace, label, key), &wanted);
     }
-    for quantity in trace.columns() {
-        let name = quantity.to_string();
-        let Some(stem) = name.strip_suffix(".p") else {
+    let netlist = netlist::parse(input).unwrap();
+    for (_, part) in netlist.parts() {
+        let name = format!("#{}.p", part.name.as_str());
+        if !trace
+            .columns()
+            .iter()
+            .any(|column| column.to_string() == name)
+        {
             continue;
-        };
-        let voltage = format!("{stem}.v");
-        let current = format!("{stem}.i");
-        let wanted_v = series(values, label, &voltage);
-        let wanted_i = series(values, label, &current);
-        let got_v = column(trace, label, &voltage);
-        let got_i = column(trace, label, &current);
-        let got_p = column(trace, label, &name);
-        for (row, ((&v, &i), &p)) in got_v.iter().zip(got_i).zip(got_p).enumerate() {
-            let derived = v * i;
+        }
+        let got = |key: &str| column(trace, label, key).to_vec();
+        let wanted = |key: &str| series(values, label, key);
+        let (got_p, wanted_p) = power(&netlist, &part.model, &name, got, wanted);
+        let stored = column(trace, label, &name);
+        for (row, (&p, &derived)) in stored.iter().zip(&got_p).enumerate() {
             assert!(
                 (p - derived).abs() <= 1e-15,
-                "{label} {name} row {row}: stored {p} vs v*i {derived}"
+                "{label} {name} row {row}: stored {p} vs the pin formula {derived}"
             );
         }
-        let wanted: Vec<f64> = wanted_v.iter().zip(&wanted_i).map(|(v, i)| v * i).collect();
-        let derived: Vec<f64> = got_v.iter().zip(got_i).map(|(v, i)| v * i).collect();
-        compared.record(&name, &derived, &wanted);
+        compared.record(&name, &got_p, &wanted_p);
     }
     let engine_columns: BTreeSet<_> = trace.columns().iter().map(|r| r.to_string()).collect();
     assert_eq!(
@@ -379,6 +413,38 @@ impl SpanCheck<'_> {
             .push(format!("{key} error {error:e} span {span:e}"));
         self.checked.insert(key.to_string());
     }
+}
+
+/// A part's power on every row from its other columns, read once through `got` and once
+/// through `wanted`. A two-pin part's is `v * i`. A transistor's is
+/// `(V(c) - V(e)) * ic + (V(b) - V(e)) * ib`, from its pin nets.
+fn power(
+    netlist: &netlist::Netlist,
+    model: &Model,
+    name: &str,
+    got: impl Fn(&str) -> Vec<f64>,
+    wanted: impl Fn(&str) -> Vec<f64>,
+) -> (Vec<f64>, Vec<f64>) {
+    let stem = name.strip_suffix(".p").unwrap();
+    let derive = |read: &dyn Fn(&str) -> Vec<f64>| -> Vec<f64> {
+        match model {
+            Model::Npn(_) | Model::Pnp(_) => {
+                let [c, b, e] = [0, 1, 2].map(|k| {
+                    let net = netlist.net_name(model.pins()[k]);
+                    read(&format!("#net.{}", net.as_str()))
+                });
+                let (ib, ic) = (read(&format!("{stem}.ib")), read(&format!("{stem}.ic")));
+                (0..ic.len())
+                    .map(|row| (c[row] - e[row]) * ic[row] + (b[row] - e[row]) * ib[row])
+                    .collect()
+            }
+            _ => {
+                let (v, i) = (read(&format!("{stem}.v")), read(&format!("{stem}.i")));
+                v.iter().zip(&i).map(|(v, i)| v * i).collect()
+            }
+        }
+    };
+    (derive(&got), derive(&wanted))
 }
 
 fn column<'a>(trace: &'a sim_core::trace::Trace, label: &str, key: &str) -> &'a [f64] {

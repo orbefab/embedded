@@ -302,6 +302,73 @@ The device is at 25 C, 298.15 K. `k` and `q` are the exact SI values. There is n
 
 `examples/led-5v` and `examples/led-9v` use a Kingbright WP7113ID, a red 5 mm LED. Its `Is`, `N`, and `Rs` solve the equation exactly through three points read off the datasheet's forward current figure at 25 C: (1.70 V, 2 mA), (1.90 V, 10 mA), and (2.00 V, 20 mA). The fit gives `Is` = 6.711e-10 A, `N` = 4.427, and `Rs` = 2.115 ohm. Each value's `at` names the figure, the points, and the temperature, so the fit can be redone from the citation.
 
+### NPN and PNP transistors
+
+`kind` is `npn` or `pnp`. Both take the same fields and solve the same equations. The kind is the polarity. Pins are `collector`, `base` and `emitter`, in SPICE order.
+
+The part is ngspice's Gummel-Poon bipolar transistor at its defaults, which is the transport form of Ebers-Moll with a forward Early voltage. `RB`, `RC` and `RE` join the base, collector and emitter pins to internal nodes `b'`, `c'` and `e'`. The junction voltages are inside them. `vbe = s * (V(b') - V(e'))` and `vbc = s * (V(b') - V(c'))`, where `s` is +1 for `npn` and -1 for `pnp`. `VT` is the diode's.
+
+```text
+ibe = IS * (exp(vbe / (NF*VT)) - 1)
+ibc = IS * (exp(vbc / (NR*VT)) - 1)
+ic  = (ibe - ibc) * (1 - vbc/VAF) - ibc/BR - GMIN*vbc
+ib  = ibe/BF + ibc/BR + GMIN*(vbe + vbc)
+```
+
+`s * ic` enters `c'` and `s * ib` enters `b'`. `GMIN` is 1e-12 S across each junction, where ngspice puts it. `CJE` is a constant capacitance from `b'` to `e'`, and `CJC` one from `b'` to `c'`. The step's error control holds both as it holds a capacitor part.
+
+| Field | Symbol | ngspice | Unit |
+| --- | --- | --- | --- |
+| `saturation_current` | `IS` | `is` | `A` |
+| `forward_beta` | `BF` | `bf` | `1` |
+| `reverse_beta` | `BR` | `br` | `1` |
+| `forward_emission` | `NF` | `nf` | `1` |
+| `reverse_emission` | `NR` | `nr` | `1` |
+| `early_voltage` | `VAF` | `vaf` | `V` |
+| `base_resistance` | `RB` | `rb` | `ohm` |
+| `collector_resistance` | `RC` | `rc` | `ohm` |
+| `emitter_resistance` | `RE` | `re` | `ohm` |
+| `base_emitter_capacitance` | `CJE` | `cje` with `mje=0` | `F` |
+| `base_collector_capacitance` | `CJC` | `cjc` with `mjc=0` | `F` |
+
+Each value must be greater than 0, and its reciprocal must be finite. Those are the resistor's rules. A PNP takes the same positive values as an NPN. `saturation_current` with `forward_emission`, and `saturation_current` with `reverse_emission`, must each keep the diode's `finite_junction` rule. A pair that breaks it names `forward_emission` or `reverse_emission` where the diode names `emission_coefficient`. When both pairs break it on `saturation_current`, that field is reported once.
+
+`ratings` holds `current` and `power`. `current` bounds `|ic|`.
+
+The model leaves out these effects.
+
+- Beta does not fall at high or low current. 2N3903/D Rev. 8 Figure 15 shows hFE at 100 mA at about 0.45 of its peak, so a 100 mA switch needs about twice the base current the model says. A design that saturates with the datasheet's minimum hFE still saturates here.
+- There is no reverse Early voltage. Only reverse-active operation sees it.
+- The capacitances do not depend on voltage, and there is no transit time. So a saturated switch has no storage time and turns off early, by up to 200 ns for the 2N3904 row of 2N3903/D and 225 ns for 2N3906/D. At MCU and relay timescales that does not show.
+- The device is at 25 C, as the diode is.
+- A junction does not break down. A b-e junction reversed past `VEBO`, 6 V for the 2N3904 and 5 V for the 2N3906, conducts nothing more, and `VCEO` is not checked.
+
+The engine's 1e-12 S from every net to ground is not on `c'`, `b'` and `e'`. As in ngspice-42, whose default substrate junction is vertical for an `npn` and lateral for a `pnp`, `GMIN` runs from ground to `c'` in an `npn` and to `b'` in a `pnp`. With the junction `GMIN`, an off NPN with 5 V on its collector takes 10 pA into the collector, as ngspice's does, and an off PNP draws what ngspice's does from its emitter supply.
+
+Three examples use a small-signal NPN and a small-signal PNP. `examples/npn-led` drives the base from a 5 V pin through 1 kohm and saturates the transistor, which sinks the LED of `examples/led-5v` through 220 ohm. `examples/pnp-load` pulls a PNP's base to 0 V through 1 kohm, against a 10 kohm pull-up, and the PNP feeds 100 ohm from 5 V. `examples/ce-amp` is a common-emitter stage at 12 V, biased by 47 kohm and 10 kohm, with 4.7 kohm on the collector and 1 kohm on the emitter. It sits in the active region, where the Early voltage sets the collector current's slope.
+
+The NPN is the 2N3904 row of 2N3903/D Rev. 8, and the PNP is 2N3906/D Rev. 4. `NF` and `NR` are 1. `BF` is 173.2, the geometric mean of the guaranteed hFE of 100 to 300 at 10 mA and 1 V, because the typical gain figure is normalised. `VAF` is 100 V, which puts `hoe` at 9.1 umhos at 1 mA and 10 V, inside both datasheets' ranges. `CJE` and `CJC` are the datasheets' maximum `Cibo` and `Cobo`. `scripts/fit_transistor.py` fits `IS`, `BR`, `RB`, `RC` and `RE` from each datasheet's "ON" voltages figure at 25 C. `BR` comes from `VCE(sat)` at 1 mA, `IS` and `RE` from `VBE` at 1 V at 1 mA and 100 mA, `RB` from `VBE(sat)` at 100 mA, and `RC` from `VCE(sat)` at 100 mA, iterated to a fixed point. It prints the model's voltages at 10 mA and 50 mA beside the readings and the table limits. Each model value is inside the table limits. Figure 15 of 2N3906/D draws 1 to 10 mA narrower than 10 to 100 mA, so the PNP fit reads its points at the labelled 1 mA and 100 mA lines, and its `VBE` at 10 mA is 0.747 V against the curve's 0.728 V. Each value's `at` or `note` names the row or figure and the readings.
+
+```json
+{
+  "name": "q1",
+  "kind": "npn",
+  "pins": { "collector": "c", "base": "b", "emitter": "gnd" },
+  "saturation_current": { "value": 8.095e-15, "unit": "A", "source": "user" },
+  "forward_beta": { "value": 173.2, "unit": "1", "source": "user" },
+  "reverse_beta": { "value": 0.2704, "unit": "1", "source": "user" },
+  "forward_emission": { "value": 1.0, "unit": "1", "source": "user" },
+  "reverse_emission": { "value": 1.0, "unit": "1", "source": "user" },
+  "early_voltage": { "value": 100.0, "unit": "V", "source": "user" },
+  "base_resistance": { "value": 5.707, "unit": "ohm", "source": "user" },
+  "collector_resistance": { "value": 1.531, "unit": "ohm", "source": "user" },
+  "emitter_resistance": { "value": 0.867, "unit": "ohm", "source": "user" },
+  "base_emitter_capacitance": { "value": 8e-12, "unit": "F", "source": "user" },
+  "base_collector_capacitance": { "value": 4e-12, "unit": "F", "source": "user" },
+  "ratings": { "current": null, "power": null }
+}
+```
+
 ### NE555
 
 `kind` is `ne555`. Pins are `gnd`, `trig`, `out`, `reset`, `cont`, `thres`, `disch` and `vcc`, in package order. `examples/ne555-led` is the astable of TI SLFS022K Figure 6-5, 10 kohm and 47 kohm with 10 uF, driving an LED through 220 ohm. Its values cite SLFS022K, and its ladder cites the schematic of the pin-compatible LM555, TI SNAS548D.
@@ -540,6 +607,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | --- | --- | --- |
 | `resistor` | `power` | `#<part>.p` |
 | `diode`, `led` | `current`, `power` | `#<part>.i`, `#<part>.p` |
+| `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
 | `voltage_source`, `current_source`, `capacitor`, `switch`, `ne555`, `atmega328p`, `potentiometer` | none | |
 
 `current` is in `A`. `power` is in `W`. A rating must be greater than 0. A missing key, an unknown key, and a missing `ratings` object are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.current` or `ratings.power`. A value of 0 or below is `netlist.value` with the same field.
@@ -586,6 +654,8 @@ For a capacitor, `i` is the solved current into pin `a`. For a switch, `i` is `v
 
 On the divider, `#r1.i` and `#r2.i` are positive, `#r1.p` and `#r2.p` are positive, and `#v1.i` and `#v1.p` are negative. On `examples/i-divider`, `#i1.i` is -0.001 and `#i1.p` is negative.
 
+For a transistor, `ib` is the current entering the base pin and `ic` the current entering the collector pin. Each flows through its series resistance, so it includes the capacitors' current. `p` is `(V(collector) - V(emitter)) * ic + (V(base) - V(emitter)) * ib`, the power entering the part at its pins. A transistor has no `v`, and its internal nodes are not observed. A conducting PNP has negative `ib` and `ic`. On `examples/npn-led`, `#q1.ib` and `#q1.ic` are positive. On `examples/pnp-load` they are negative, and `#q1.p` is positive on both.
+
 A potentiometer has no `i`, `v`, or `p`. Its pins and nets are observed as every part's are.
 
 ## Refs
@@ -594,7 +664,7 @@ A ref names one net, part, pin, quantity, or logic signal.
 
 ```text
 ref      = "#" ( "net." name | name [ "." ( quantity | "pin." name | "logic." name ) ] )
-quantity = "i" | "v" | "p"
+quantity = "ib" | "ic" | "i" | "v" | "p"
 ```
 
 | Text | Meaning |
@@ -606,6 +676,8 @@ quantity = "i" | "v" | "p"
 | `#r1.i` | Current of `r1` |
 | `#r1.v` | Voltage of `r1` |
 | `#r1.p` | Power of `r1` |
+| `#q1.ib` | Base current of transistor `q1` |
+| `#q1.ic` | Collector current of transistor `q1` |
 | `#u1.logic.out` | Logic level of signal `out` of chip `u1` |
 
 These texts parse and format back to the same text. The following texts are rejected.
@@ -617,4 +689,4 @@ These texts parse and format back to the same text. The following texts are reje
 
 `#net.vout` is a net. `#net` is a part named `net`. `#u1.logic.out` is the level the chip drives on OUT, and `#u1.pin.out` is the pin itself. An NE555's signals are `out`, `reset`, `thres`, and `trig`. An ATmega328P's are named for its package pins: `PB0` to `PB5`, `PC0` to `PC6`, and `PD0` to `PD7`, each the level that pin reads, and `VCC` while `BODLEVEL` enables brown-out, the level its brown-out detector reads on the supply. `PB6` and `PB7` hold the crystal and have none. `#u1.logic.PB5` is the level PB5 reads, and `#u1.pin.PB5` is the pin itself.
 
-Map keys and diagnostic order use this order: nets, then parts, then pins, then quantities, then logic signals. Quantities sort `i`, then `v`, then `p`. Names sort by byte order inside one group.
+Map keys and diagnostic order use this order: nets, then parts, then pins, then quantities, then logic signals. Quantities sort `ib`, `ic`, `i`, `v`, then `p`. Names sort by byte order inside one group.

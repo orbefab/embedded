@@ -25,7 +25,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 {
   "run_format": 0,
   "netlist_format": 0,
-  "engine_version": "0.10.0",
+  "engine_version": "0.11.0",
   "input": {
     "file": "netlist.json",
     "sha256": "<lowercase hex sha256 of the input bytes>",
@@ -36,7 +36,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 }
 ```
 
-`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.10.0`. [versions.md](versions.md) says which changes move them.
+`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.11.0`. [versions.md](versions.md) says which changes move them.
 
 `netlist_format` is the input's `version`, when it reads as an unsigned integer. That holds when the engine rejected the input, so `version: 1` records 1. It is `null` when no such integer could be read.
 
@@ -81,7 +81,7 @@ The divider in [netlist.md](netlist.md) writes:
 
 Numbers are serde_json's shortest round trip of an f64. `-0.0` is written as `0.0`.
 
-The solve stamps 1e-12 S from every node to ground. That term puts `#net.vout` about 2e-9 V under 10/3 V. The test bound is 1e-8 relative. The three part powers sum to 0 within 1e-9 W. The difference is the power in that conductance.
+The solve stamps 1e-12 S from every net to ground. That term puts `#net.vout` about 2e-9 V under 10/3 V. The test bound is 1e-8 relative. The three part powers sum to 0 within 1e-9 W. The difference is the power in that conductance.
 
 A transient writes `end_ps`, then `op`, then `switches`. `end_ps` is the last time the run solved, in picoseconds. It equals `stop_ps` exactly when the run reported no error. `op` is the operating point at t = 0, the same object an `op` run writes. `switches` maps each switch ref to every contact edge before `end_ps`, nominal and bounce, in time order. A switch with no edges has an empty list. `examples/rc-switch` writes:
 
@@ -224,7 +224,7 @@ A row at the time of a contact edge, a source jump or a chip event holds the sta
 - `analog.f64` holds `rows` IEEE 754 binary64 little-endian values per column, column after column. Column `j` occupies bytes `j * rows * 8` up to `(j + 1) * rows * 8`.
 - `envelope.f64` holds one interval per pair of consecutive rows, `rows - 1` of them, as IEEE 754 binary64 little-endian values per column. The intervals' minima come first, then their maxima. Column `j` occupies bytes `j * (rows - 1) * 16` up to `(j + 1) * (rows - 1) * 16`. The first half of that span is the minima and the second half is the maxima. Interval `k` lies between rows `k` and `k + 1`. `time.u64` gives both boundaries. A trace with one row writes an empty file and still has the `envelope` key.
 - An interval's minimum and maximum cover its two rows and every accepted step strictly between them. A row's probe is one of those rows, so it is a sample. A located chip event is an accepted step, so it is a sample. A restart solve is not, and neither is a refused step or a probe locating a chip event. The envelope has no column list. Its columns are `analog.columns`, in that order.
-- `columns` are a subset of the keys of `observations.op`, in ref order. Read them from the index. Today every key of `op` is a column. A net or a `.v` is `V`, a `.i` is `A`, and a `.p` is `W`. Row 0 holds exactly the numbers in `op`.
+- `columns` are a subset of the keys of `observations.op`, in ref order. Read them from the index. Today every key of `op` is a column. A net or a `.v` is `V`, a `.i`, `.ib` or `.ic` is `A`, and a `.p` is `W`. Row 0 holds exactly the numbers in `op`.
 - Every value of `analog.f64` and `envelope.f64` is finite. `-0.0` is written as `0.0`.
 - There is no header and no compression.
 - A chip adds no column. Its pins are nets, which have their columns, and its internal ladder node is not observed.

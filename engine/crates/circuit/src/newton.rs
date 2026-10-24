@@ -197,7 +197,7 @@ impl Circuit {
 /// What varies between Newton calls on one circuit.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Conditions<'h> {
-    /// Siemens from every node row to ground.
+    /// Siemens to ground from every net row and each internal row that is not bare.
     pub(crate) gmin: f64,
     /// Multiplies every independent source.
     pub(crate) source_scale: f64,

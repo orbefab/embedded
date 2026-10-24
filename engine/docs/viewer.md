@@ -15,6 +15,7 @@ Each example has `viewer.json` beside `netlist.json`. The file names the 3D mode
 | `led-5mm-red` | A 5 mm red LED, the Kingbright WP7113ID the LED examples cite. |
 | `potentiometer-rotary` | A rotary potentiometer. |
 | `resistor-axial` | An axial resistor. |
+| `to-92` | A three-lead TO-92 package. Used for every transistor. |
 | `tactile-switch-6mm` | A 6 mm tactile push button. The switches in the examples are momentary contacts, so they share this id. |
 
 `crates/cli/tests/viewer.rs` scans every `examples/*/netlist.json` and checks the file.

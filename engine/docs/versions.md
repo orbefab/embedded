@@ -49,7 +49,9 @@ These are stable within a `run_format`:
 
 `engine_version` covers everything [engine.md](engine.md) describes: the step policy, how chip events are found, and the accuracy the engine reaches. A change there can move trace values within the documented accuracy without changing either format.
 
-This engine is `0.10.0`. A voltage or current source can hold a `serial` waveform, as [netlist.md](netlist.md#source-waveforms) says. The netlist version stays 0 and `run_format` stays 0. No new file, key, or code. No example run folder moves apart from `engine_version`.
+This engine is `0.11.0`. A part can be an `npn` or a `pnp` transistor, as [netlist.md](netlist.md#npn-and-pnp-transistors) says. A new kind keeps the netlist version at 0. Its refs `#<part>.ib` and `#<part>.ic` are new values, so `run_format` stays 0. No new file, key, or code. `examples/npn-led`, `examples/pnp-load` and `examples/ce-amp` are new. No other example's run folder moves apart from `engine_version`, because no existing part's stamp changes.
+
+Engine `0.10.0` is the version in which a voltage or current source can hold a `serial` waveform, as [netlist.md](netlist.md#source-waveforms) says. The netlist version stays 0 and `run_format` stays 0. No new file, key, or code. No example run folder moves apart from `engine_version`.
 
 Engine `0.9.0` computes `exp`, `ln` and `cbrt` with the `libm` crate, so a run folder does not depend on the platform's math library, as [engine.md](engine.md) says. Under `0.8.0` they came from the platform's math library, and a `wasm32` run folder differed from a native one in the last bits of its analog traces. Every example's run folder is now the same on x86-64 Linux and on `wasm32-unknown-unknown`. On x86-64 Linux, `traces/analog.f64` and `traces/envelope.f64` of `examples/atmega-blink`, `examples/atmega-button` and `examples/atmega-fade` move by at most 6 units in the last place, a relative 1e-15. Those of `examples/ne555-led` move by at most 61, a relative 1.1e-14. No logic edge and no observation moves, and no other file of any example moves apart from the version. The netlist version stays 0 and `run_format` stays 0.
 

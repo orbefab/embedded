@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! ref      = "#" ( "net." name | name [ "." ( quantity | "pin." name | "logic." name ) ] )
-//! quantity = "i" | "v" | "p"
+//! quantity = "ib" | "ic" | "i" | "v" | "p"
 //! name     = ASCII letter, then ASCII letters, digits or "_"; 1..=64 bytes
 //! ```
 
@@ -55,8 +55,12 @@ impl Name {
 /// A per-part quantity. One sign rule for every two-terminal part.
 /// `i` enters at the first pin, `v` is V(first) - V(second), and `p = v * i`
 /// is absorbed power, so a source that delivers power reads negative.
+/// A transistor's `ib` and `ic` enter at its base and collector, and its `p` is the power
+/// entering at every pin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Quantity {
+    Ib,
+    Ic,
     I,
     V,
     P,
@@ -65,6 +69,8 @@ pub enum Quantity {
 impl Quantity {
     pub fn as_str(self) -> &'static str {
         match self {
+            Quantity::Ib => "ib",
+            Quantity::Ic => "ic",
             Quantity::I => "i",
             Quantity::V => "v",
             Quantity::P => "p",
@@ -138,6 +144,8 @@ impl FromStr for Ref {
         if let Some((part, quant)) = body.split_once('.') {
             let part = Name::new(part).map_err(|_| fail())?;
             let quantity = match quant {
+                "ib" => Quantity::Ib,
+                "ic" => Quantity::Ic,
                 "i" => Quantity::I,
                 "v" => Quantity::V,
                 "p" => Quantity::P,
@@ -187,6 +195,8 @@ mod tests {
             "#r1.v",
             "#r1.p",
             "#led1.p",
+            "#q1.ib",
+            "#q1.ic",
             "#u1.logic.out",
             "#logic.logic.pin",
             "#net.logic.out",
@@ -232,6 +242,7 @@ mod tests {
             "#r1.x",
             "#1r",
             "#r1.i.v",
+            "#q1.ie",
             " #r1",
             "#r1.",
             "#u1.logic",
@@ -268,6 +279,12 @@ mod tests {
         assert!(part < pin);
         assert!(pin < i);
         assert!(i < v && v < p);
+        let ib: Ref = "#r1.ib".parse().unwrap();
+        let ic: Ref = "#r1.ic".parse().unwrap();
+        assert!(
+            pin < ib && ib < ic && ic < p,
+            "a transistor's columns sort ib, ic, p"
+        );
         let logic: Ref = "#a1.logic.out".parse().unwrap();
         assert!(p < logic, "logic signals sort after every quantity");
     }

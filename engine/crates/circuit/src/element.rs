@@ -4,6 +4,7 @@ mod junction;
 mod potentiometer;
 mod resistor;
 mod switch;
+mod transistor;
 mod voltage_source;
 
 use sim_core::netlist::{Model, NetId, PartId};
@@ -12,6 +13,7 @@ use sim_core::time::Time;
 use crate::chip;
 use crate::mna::{Layout, Node, Probe, Stamp, Unknowns};
 use crate::newton::Side;
+use transistor::Polarity;
 
 /// What the layout and the stamp read from a part. A netlist `Model` is one. A test
 /// passes its own value through the same functions.
@@ -29,8 +31,6 @@ pub(crate) fn unknowns(model: &impl Device) -> Unknowns {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum CapacitorEnd {
     Net(NetId),
-    /// No netlist kind builds an internal end yet. Tests do.
-    #[cfg_attr(not(test), allow(dead_code))]
     Internal(usize),
 }
 
@@ -79,8 +79,15 @@ impl Device for Model {
             },
             Model::Diode(_) | Model::Led(_) => Unknowns {
                 internal_nodes: 1,
+                bare_internal: false,
                 branches: 0,
                 junctions: 1,
+            },
+            Model::Npn(_) | Model::Pnp(_) => Unknowns {
+                internal_nodes: 3,
+                bare_internal: true,
+                branches: 2,
+                junctions: 2,
             },
             Model::Chip(chip) => chip::unknowns(chip),
         }
@@ -93,6 +100,7 @@ impl Device for Model {
                 ends: capacitor.pins.map(CapacitorEnd::Net),
                 farad: capacitor.capacitance.si.get(),
             }],
+            Model::Npn(bjt) | Model::Pnp(bjt) => transistor::charges(bjt),
             Model::Resistor(_)
             | Model::Potentiometer(_)
             | Model::VoltageSource(_)
@@ -111,6 +119,8 @@ impl Device for Model {
             Model::VoltageSource(source) => voltage_source::stamp(source, stamp),
             Model::CurrentSource(source) => current_source::stamp(source, stamp),
             Model::Diode(j) | Model::Led(j) => junction::stamp(j, stamp),
+            Model::Npn(bjt) => transistor::stamp(bjt, Polarity::Npn, stamp),
+            Model::Pnp(bjt) => transistor::stamp(bjt, Polarity::Pnp, stamp),
             Model::Capacitor(capacitor) => capacitor::stamp(capacitor, stamp),
             Model::Switch(switch) => switch::stamp(switch, stamp),
             // An active chip stamps its core's drive image, in `active::stamp`.
@@ -123,7 +133,8 @@ impl Device for Model {
     }
 }
 
-/// Whether this part's stamp reads the Newton iterate. Only a junction's does, through
+/// Whether this part's stamp reads the Newton iterate. Only a junction's does, a diode's or a
+/// transistor's, through
 /// `Stamp::junction`, the one reader of the iterate. Every other stamp reads only the call's
 /// conditions, so on a circuit where no part reads it every iteration of one call stamps the
 /// same system.
@@ -135,7 +146,7 @@ pub(crate) fn reads_iterate(model: &Model) -> bool {
         | Model::CurrentSource(_)
         | Model::Capacitor(_)
         | Model::Switch(_) => false,
-        Model::Diode(_) | Model::Led(_) => true,
+        Model::Diode(_) | Model::Led(_) | Model::Npn(_) | Model::Pnp(_) => true,
         Model::Chip(chip) => chip::reads_iterate(chip),
     }
 }
@@ -151,6 +162,7 @@ pub(crate) fn initial(model: &Model, out: &mut [f64]) {
         | Model::Switch(_)
         | Model::Chip(_) => {}
         Model::Diode(j) | Model::Led(j) => out[0] = junction::initial(j),
+        Model::Npn(bjt) | Model::Pnp(bjt) => transistor::initial(bjt, out),
     }
 }
 
@@ -169,6 +181,8 @@ pub(crate) fn update(model: &Model, probe: &Probe<'_>, prior: &[f64], next: &mut
             next[0] = limited;
             update
         }
+        Model::Npn(bjt) => transistor::update(bjt, Polarity::Npn, probe, prior, next),
+        Model::Pnp(bjt) => transistor::update(bjt, Polarity::Pnp, probe, prior, next),
     }
 }
 
@@ -181,7 +195,8 @@ pub(crate) struct Update {
 
 /// The pin pairs a part joins at DC. A chain of them is a DC path for `net.floating`.
 /// A capacitor is open unless the operating point holds it at `initial`. A switch is a resistor either way.
-/// A current source joins nothing.
+/// A current source joins nothing. A transistor joins its base to each other pin, because each
+/// junction conducts.
 pub(crate) fn dc_paths(model: &Model) -> &'static [(usize, usize)] {
     match model {
         Model::Resistor(_)
@@ -189,21 +204,19 @@ pub(crate) fn dc_paths(model: &Model) -> &'static [(usize, usize)] {
         | Model::Diode(_)
         | Model::Led(_)
         | Model::Switch(_) => &[(0, 1)],
-        Model::Potentiometer(_) => &[(0, 1), (1, 2)],
+        Model::Potentiometer(_) | Model::Npn(_) | Model::Pnp(_) => &[(0, 1), (1, 2)],
         Model::Capacitor(capacitor) if capacitor.initial.is_some() => &[(0, 1)],
         Model::Capacitor(_) | Model::CurrentSource(_) => &[],
         Model::Chip(chip) => chip::dc_paths(chip),
     }
 }
 
-/// `i`, `v` and `p` at `at`, in `Quantity` order, for a part that `has_quantities`.
+/// `model.quantities()` at `at`, in that order. `None` for a part with none.
 /// Not checked for finiteness.
 pub(crate) fn observe(model: &Model, probe: &Probe<'_>, at: Time, side: Side) -> Option<[f64; 3]> {
-    if !model.has_quantities() {
-        return None;
-    }
     let (pins, i) = match model {
-        Model::Chip(_) | Model::Potentiometer(_) => unreachable!("has_quantities returned true"),
+        Model::Chip(_) | Model::Potentiometer(_) => return None,
+        Model::Npn(bjt) | Model::Pnp(bjt) => return Some(transistor::observe(bjt, probe)),
         Model::Resistor(resistor) => (resistor.pins, resistor::current(resistor, probe)),
         Model::VoltageSource(source) => (source.pins, voltage_source::current(probe)),
         Model::CurrentSource(source) => (source.pins, current_source::current(source, at, side)),
@@ -231,6 +244,7 @@ impl Device for Pair {
     fn unknowns(&self) -> Unknowns {
         Unknowns {
             internal_nodes: self.internal_nodes,
+            bare_internal: false,
             branches: self.branches,
             junctions: 0,
         }

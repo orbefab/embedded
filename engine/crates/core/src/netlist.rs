@@ -222,6 +222,9 @@ pub enum Model {
     Diode(Junction),
     /// The same device equation as `Diode`. Its own kind, so an LED-only quantity needs no flag.
     Led(Junction),
+    Npn(Bjt),
+    /// The same device equations as `Npn`, with every junction voltage and pin current negated.
+    Pnp(Bjt),
     Capacitor(Capacitor),
     Switch(Switch),
     /// A package modelled as a behavioural black box. A new chip kind is a `Chip` variant,
@@ -238,6 +241,7 @@ impl Model {
             Model::VoltageSource(_) => &VoltageSource::PINS,
             Model::CurrentSource(_) => &CurrentSource::PINS,
             Model::Diode(_) | Model::Led(_) => &Junction::PINS,
+            Model::Npn(_) | Model::Pnp(_) => &Bjt::PINS,
             Model::Capacitor(_) => &Capacitor::PINS,
             Model::Switch(_) => &Switch::PINS,
             Model::Chip(Chip::Ne555(_)) => &Ne555::PINS,
@@ -245,8 +249,9 @@ impl Model {
         }
     }
 
-    /// `i`, `v` and `p`. A chip and a potentiometer have none.
-    pub fn has_quantities(&self) -> bool {
+    /// The quantities a run observes on this part, in `Quantity` order. A two-pin part has
+    /// `i`, `v` and `p`, a transistor `ib`, `ic` and `p`, and a chip and a potentiometer none.
+    pub fn quantities(&self) -> &'static [Quantity] {
         match self {
             Model::Resistor(_)
             | Model::VoltageSource(_)
@@ -254,8 +259,19 @@ impl Model {
             | Model::Diode(_)
             | Model::Led(_)
             | Model::Capacitor(_)
-            | Model::Switch(_) => true,
-            Model::Potentiometer(_) | Model::Chip(_) => false,
+            | Model::Switch(_) => &[Quantity::I, Quantity::V, Quantity::P],
+            Model::Npn(_) | Model::Pnp(_) => &[Quantity::Ib, Quantity::Ic, Quantity::P],
+            Model::Potentiometer(_) | Model::Chip(_) => &[],
+        }
+    }
+
+    /// The quantity a rating of `kind` bounds by magnitude. A current rating bounds `ic` on a
+    /// transistor and `i` on every other part.
+    pub fn rated(&self, kind: RatingKind) -> Quantity {
+        match (kind, self) {
+            (RatingKind::Current, Model::Npn(_) | Model::Pnp(_)) => Quantity::Ic,
+            (RatingKind::Current, _) => Quantity::I,
+            (RatingKind::Power, _) => Quantity::P,
         }
     }
 
@@ -266,6 +282,7 @@ impl Model {
             Model::VoltageSource(v) => &v.pins,
             Model::CurrentSource(c) => &c.pins,
             Model::Diode(j) | Model::Led(j) => &j.pins,
+            Model::Npn(b) | Model::Pnp(b) => &b.pins,
             Model::Capacitor(c) => &c.pins,
             Model::Switch(s) => &s.pins,
             Model::Chip(Chip::Ne555(n)) => &n.pins,
@@ -284,6 +301,7 @@ impl Model {
             | Model::Switch(_)
             | Model::Chip(_) => (None, None),
             Model::Diode(j) | Model::Led(j) => (j.max_current.as_ref(), j.max_power.as_ref()),
+            Model::Npn(b) | Model::Pnp(b) => (b.max_current.as_ref(), b.max_power.as_ref()),
         };
         let current = current.map(|v| (RatingKind::Current, v));
         let power = power.map(|v| (RatingKind::Power, v));
@@ -300,6 +318,8 @@ impl Model {
             Model::Resistor(_)
             | Model::Diode(_)
             | Model::Led(_)
+            | Model::Npn(_)
+            | Model::Pnp(_)
             | Model::Capacitor(_)
             | Model::Chip(_) => None,
         }
@@ -322,6 +342,8 @@ impl Model {
             Model::Resistor(_)
             | Model::Diode(_)
             | Model::Led(_)
+            | Model::Npn(_)
+            | Model::Pnp(_)
             | Model::Capacitor(_)
             | Model::Switch(_)
             | Model::Chip(_) => None,
@@ -337,6 +359,8 @@ impl Model {
             Model::Resistor(_)
             | Model::Diode(_)
             | Model::Led(_)
+            | Model::Npn(_)
+            | Model::Pnp(_)
             | Model::Capacitor(_)
             | Model::Switch(_)
             | Model::Chip(_) => None,
@@ -352,6 +376,8 @@ impl Model {
             | Model::Potentiometer(_)
             | Model::Diode(_)
             | Model::Led(_)
+            | Model::Npn(_)
+            | Model::Pnp(_)
             | Model::Capacitor(_)
             | Model::Switch(_)
             | Model::Chip(_) => None,
@@ -366,6 +392,8 @@ impl Model {
             | Model::Potentiometer(_)
             | Model::Diode(_)
             | Model::Led(_)
+            | Model::Npn(_)
+            | Model::Pnp(_)
             | Model::Capacitor(_)
             | Model::Switch(_)
             | Model::Chip(_) => None,
@@ -909,6 +937,58 @@ impl Junction {
     pub const VT: f64 = 1.380649e-23 * 298.15 / 1.602176634e-19;
 }
 
+/// A bipolar transistor. `npn` and `pnp` share it, and the kind is the polarity.
+///
+/// SPICE's Gummel-Poon model at its defaults, which is the transport form of Ebers-Moll with a
+/// forward Early voltage, at 298.15 K with no temperature scaling. `RB`, `RC` and `RE` join
+/// each pin to its internal node `b'`, `c'` or `e'`. With `vbe = s * (V(b') - V(e'))`,
+/// `vbc = s * (V(b') - V(c'))`, `s` +1 for `npn` and -1 for `pnp`, and `VT` the junction's:
+///
+/// ```text
+/// ibe = IS * (exp(vbe / (NF*VT)) - 1)
+/// ibc = IS * (exp(vbc / (NR*VT)) - 1)
+/// ic  = (ibe - ibc) * (1 - vbc/VAF) - ibc/BR - GMIN*vbc
+/// ib  = ibe/BF + ibc/BR + GMIN*(vbe + vbc)
+/// ```
+///
+/// `s * ic` enters `c'` and `s * ib` enters `b'`. `CJE` is a constant capacitance from `b'` to
+/// `e'`, and `CJC` from `b'` to `c'`. Every value is positive, as in a SPICE model card.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bjt {
+    /// Nets of pins `collector`, `base`, `emitter`.
+    pub pins: [NetId; 3],
+    /// Ampere. `IS`.
+    pub saturation_current: Value,
+    /// Unit `1`. `BF`.
+    pub forward_beta: Value,
+    /// Unit `1`. `BR`.
+    pub reverse_beta: Value,
+    /// Unit `1`. `NF`.
+    pub forward_emission: Value,
+    /// Unit `1`. `NR`.
+    pub reverse_emission: Value,
+    /// Volt. `VAF`.
+    pub early_voltage: Value,
+    /// Ohm. `RB`.
+    pub base_resistance: Value,
+    /// Ohm. `RC`.
+    pub collector_resistance: Value,
+    /// Ohm. `RE`.
+    pub emitter_resistance: Value,
+    /// Farad. `CJE`.
+    pub base_emitter_capacitance: Value,
+    /// Farad. `CJC`.
+    pub base_collector_capacitance: Value,
+    /// Ampere, greater than 0. Bounds `|ic|`. `None` is an explicit `"current": null`.
+    pub max_current: Option<Value>,
+    /// Watt, greater than 0. `None` is an explicit `"power": null`.
+    pub max_power: Option<Value>,
+}
+
+impl Bjt {
+    pub const PINS: [&'static str; 3] = ["collector", "base", "emitter"];
+}
+
 /// `n*VT` and `vcrit` for a junction whose parameters are inside the domain.
 pub struct JunctionScale {
     pub nvt: f64,
@@ -923,9 +1003,12 @@ pub enum JunctionFault {
 }
 
 impl JunctionFault {
-    pub fn field(self) -> &'static str {
+    /// The field that breaks the rule. `emission` names the emission field, which is
+    /// `emission_coefficient` on a diode and `forward_emission` or `reverse_emission` on a
+    /// transistor.
+    pub fn field(self, emission: &'static str) -> &'static str {
         match self {
-            JunctionFault::EmissionCoefficient => "emission_coefficient",
+            JunctionFault::EmissionCoefficient => emission,
             JunctionFault::SaturationCurrent => "saturation_current",
         }
     }
@@ -967,13 +1050,6 @@ pub enum RatingKind {
 }
 
 impl RatingKind {
-    pub fn quantity(self) -> Quantity {
-        match self {
-            RatingKind::Current => Quantity::I,
-            RatingKind::Power => Quantity::P,
-        }
-    }
-
     pub fn unit(self) -> &'static str {
         match self {
             RatingKind::Current => "A",

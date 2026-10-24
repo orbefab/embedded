@@ -10,7 +10,7 @@ mod potentiometer;
 mod waveform;
 
 use super::{
-    Analysis, Basis, Bounce, Capacitor, Chip, Contact, CurrentSource, Discharge, Edge, Event,
+    Analysis, Basis, Bjt, Bounce, Capacitor, Chip, Contact, CurrentSource, Discharge, Edge, Event,
     IntValue, Junction, MIN_GAP_PS, Model, Ne555, NetId, Netlist, OutputStage, Part, Resistor,
     Schedule, Source, Switch, Transient, Value, VoltageSource, bounce, junction_scale,
 };
@@ -86,6 +86,8 @@ enum WirePart {
     },
     Diode(WireJunction),
     Led(WireJunction),
+    Npn(Box<WireBjt>),
+    Pnp(Box<WireBjt>),
     Capacitor {
         name: String,
         pins: PinMap,
@@ -171,6 +173,25 @@ struct WireJunction {
     saturation_current: WireValue,
     emission_coefficient: WireValue,
     series_resistance: WireValue,
+    ratings: WireJunctionRatings,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireBjt {
+    name: String,
+    pins: PinMap,
+    saturation_current: WireValue,
+    forward_beta: WireValue,
+    reverse_beta: WireValue,
+    forward_emission: WireValue,
+    reverse_emission: WireValue,
+    early_voltage: WireValue,
+    base_resistance: WireValue,
+    collector_resistance: WireValue,
+    emitter_resistance: WireValue,
+    base_emitter_capacitance: WireValue,
+    base_collector_capacitance: WireValue,
     ratings: WireJunctionRatings,
 }
 
@@ -440,6 +461,7 @@ fn resolve_part(
         | WirePart::CurrentSource { name, .. }
         | WirePart::Capacitor { name, .. } => name,
         WirePart::Diode(junction) | WirePart::Led(junction) => &junction.name,
+        WirePart::Npn(bjt) | WirePart::Pnp(bjt) => &bjt.name,
         WirePart::Switch(switch) => &switch.name,
         WirePart::Ne555(chip) => &chip.name,
         WirePart::Atmega328p(chip) => &chip.name,
@@ -526,6 +548,8 @@ fn resolve_part(
         WirePart::Led(junction) => {
             resolve_junction(&name, &part_ref, junction, nets, out).map(Model::Led)
         }
+        WirePart::Npn(bjt) => resolve_bjt(&name, &part_ref, *bjt, nets, out).map(Model::Npn),
+        WirePart::Pnp(bjt) => resolve_bjt(&name, &part_ref, *bjt, nets, out).map(Model::Pnp),
         WirePart::Capacitor {
             pins,
             capacitance,
@@ -606,7 +630,7 @@ fn resolve_junction(
     {
         out.push(Diagnostic::NetlistValue {
             part: part_ref.clone(),
-            field: fault.field().into(),
+            field: fault.field("emission_coefficient").into(),
             value: fault.value(n.si.get(), is.si.get()),
             rule: ValueRule::FiniteJunction,
         });
@@ -617,6 +641,82 @@ fn resolve_junction(
         saturation_current: is?,
         emission_coefficient: n?,
         series_resistance: rs?,
+        max_current: max_current?,
+        max_power: max_power?,
+    })
+}
+
+fn resolve_bjt(
+    name: &Name,
+    part_ref: &Ref,
+    wire: WireBjt,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Bjt> {
+    let pins = resolve_pins(name, Bjt::PINS, &wire.pins.0, nets, out);
+    let mut positive =
+        |field: &'static str, unit, value| resolve_value(part_ref, field, unit, true, value, out);
+    let is = positive("saturation_current", "A", wire.saturation_current);
+    let bf = positive("forward_beta", "1", wire.forward_beta);
+    let br = positive("reverse_beta", "1", wire.reverse_beta);
+    let nf = positive("forward_emission", "1", wire.forward_emission);
+    let nr = positive("reverse_emission", "1", wire.reverse_emission);
+    let vaf = positive("early_voltage", "V", wire.early_voltage);
+    let rb = positive("base_resistance", "ohm", wire.base_resistance);
+    let rc = positive("collector_resistance", "ohm", wire.collector_resistance);
+    let re = positive("emitter_resistance", "ohm", wire.emitter_resistance);
+    let cje = positive(
+        "base_emitter_capacitance",
+        "F",
+        wire.base_emitter_capacitance,
+    );
+    let cjc = positive(
+        "base_collector_capacitance",
+        "F",
+        wire.base_collector_capacitance,
+    );
+    let ratings = wire.ratings;
+    let max_current = resolve_rating(part_ref, "ratings.current", "A", ratings.current, out);
+    let max_power = resolve_rating(part_ref, "ratings.power", "W", ratings.power, out);
+    let mut faults = Vec::new();
+    if let Some(is) = &is {
+        for (field, n) in [("forward_emission", &nf), ("reverse_emission", &nr)] {
+            if let Some(n) = n
+                && let Err(fault) = junction_scale(n.si.get(), is.si.get())
+            {
+                let at = (fault.field(field), fault.value(n.si.get(), is.si.get()));
+                // Both junctions share `saturation_current`, which breaks the rule once.
+                if !faults.contains(&at) {
+                    faults.push(at);
+                }
+            }
+        }
+    }
+    let junctions = faults.is_empty();
+    for (field, value) in faults {
+        out.push(Diagnostic::NetlistValue {
+            part: part_ref.clone(),
+            field: field.into(),
+            value,
+            rule: ValueRule::FiniteJunction,
+        });
+    }
+    if !junctions {
+        return None;
+    }
+    Some(Bjt {
+        pins: pins?,
+        saturation_current: is?,
+        forward_beta: bf?,
+        reverse_beta: br?,
+        forward_emission: nf?,
+        reverse_emission: nr?,
+        early_voltage: vaf?,
+        base_resistance: rb?,
+        collector_resistance: rc?,
+        emitter_resistance: re?,
+        base_emitter_capacitance: cje?,
+        base_collector_capacitance: cjc?,
         max_current: max_current?,
         max_power: max_power?,
     })

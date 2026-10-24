@@ -1,6 +1,6 @@
 use sim_core::diagnostic::Diagnostic;
 use sim_core::finite::Finite;
-use sim_core::name::{Quantity, Ref};
+use sim_core::name::Ref;
 use sim_core::netlist::{NetId, Netlist};
 use sim_core::run_folder::OpPoint;
 use sim_core::time::Time;
@@ -9,10 +9,7 @@ use crate::element;
 use crate::mna::{Probe, Solution};
 use crate::newton::{Circuit, Side};
 
-const QUANTITIES: [Quantity; 3] = [Quantity::I, Quantity::V, Quantity::P];
-
-/// Every observed ref in `Ref` order: each net, then each part that `has_quantities`,
-/// its `i`, `v` and `p`.
+/// Every observed ref in `Ref` order: each net, then each part's `quantities`.
 /// Fixed by the netlist. The `op` keys, trace columns and rating watches all index it.
 pub(crate) struct Columns {
     refs: Vec<Ref>,
@@ -30,10 +27,7 @@ impl Columns {
             .map(|(_, name)| Ref::Net((*name).clone()))
             .collect();
         for (_, part) in netlist.parts() {
-            if !part.model.has_quantities() {
-                continue;
-            }
-            for quantity in QUANTITIES {
+            for &quantity in part.model.quantities() {
                 refs.push(Ref::Quantity(part.name.clone(), quantity));
             }
         }

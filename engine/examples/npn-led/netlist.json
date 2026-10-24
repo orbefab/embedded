@@ -1,0 +1,231 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": { "op": {} },
+  "ground": "gnd",
+  "nets": ["gnd", "b", "c", "pin", "vcc", "vled"],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": { "p": "vcc", "n": "gnd" },
+      "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+    },
+    {
+      "name": "vpin",
+      "kind": "voltage_source",
+      "pins": { "p": "pin", "n": "gnd" },
+      "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+    },
+    {
+      "name": "rb",
+      "kind": "resistor",
+      "pins": { "a": "pin", "b": "b" },
+      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": { "a": "vcc", "b": "vled" },
+      "resistance": { "value": 220.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": { "value": 0.25, "unit": "W", "source": "user" } }
+    },
+    {
+      "name": "led1",
+      "kind": "led",
+      "pins": { "anode": "vled", "cathode": "c" },
+      "saturation_current": {
+        "value": 6.711e-10,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical"
+          }
+        }
+      },
+      "emission_coefficient": {
+        "value": 4.427,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical"
+          }
+        }
+      },
+      "series_resistance": {
+        "value": 2.115,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical"
+          }
+        }
+      },
+      "ratings": {
+        "current": {
+          "value": 0.03,
+          "unit": "A",
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+              "at": "Absolute Maximum Ratings at Ta = 25 C, DC forward current",
+              "basis": "absolute_max"
+            }
+          }
+        },
+        "power": {
+          "value": 0.075,
+          "unit": "W",
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+              "at": "Absolute Maximum Ratings at Ta = 25 C, power dissipation",
+              "basis": "absolute_max"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "q1",
+      "kind": "npn",
+      "pins": { "collector": "c", "base": "b", "emitter": "gnd" },
+      "saturation_current": {
+        "value": 8.095e-15,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "2N3903/D Rev. 8",
+            "at": "Figure 17, typical for the 2N3903 and the 2N3904 at TJ = 25 C, VBE at VCE = 1.0 V through (1 mA, 0.657 V) and (100 mA, 0.865 V), fitted by scripts/fit_transistor.py with NF = NR = 1",
+            "basis": "typical"
+          }
+        }
+      },
+      "forward_beta": {
+        "value": 173.2,
+        "unit": "1",
+        "source": {
+          "closed_form": {
+            "note": "geometric mean of the 2N3904 row's hFE, minimum 100 and maximum 300, at IC = 10 mA and VCE = 1.0 V, 2N3903/D Rev. 8 ON CHARACTERISTICS"
+          }
+        }
+      },
+      "reverse_beta": {
+        "value": 0.2704,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "2N3903/D Rev. 8",
+            "at": "Figure 17, typical for the 2N3903 and the 2N3904 at TJ = 25 C, VCE(sat) 0.100 V at IC = 1 mA, IC/IB = 10, fitted by scripts/fit_transistor.py with NF = NR = 1",
+            "basis": "typical"
+          }
+        }
+      },
+      "forward_emission": {
+        "value": 1.0,
+        "unit": "1",
+        "source": { "closed_form": { "note": "ideal junction" } }
+      },
+      "reverse_emission": {
+        "value": 1.0,
+        "unit": "1",
+        "source": { "closed_form": { "note": "ideal junction" } }
+      },
+      "early_voltage": {
+        "value": 100.0,
+        "unit": "V",
+        "source": {
+          "closed_form": {
+            "note": "puts hoe at 9.1 umhos at IC = 1 mA and VCE = 10 V, inside the 1 to 40 umhos of 2N3903/D Rev. 8"
+          }
+        }
+      },
+      "base_resistance": {
+        "value": 5.707,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "2N3903/D Rev. 8",
+            "at": "Figure 17, typical for the 2N3903 and the 2N3904 at TJ = 25 C, VBE(sat) 0.93 V at IC = 100 mA, IC/IB = 10, fitted by scripts/fit_transistor.py with NF = NR = 1",
+            "basis": "typical"
+          }
+        }
+      },
+      "collector_resistance": {
+        "value": 1.531,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "2N3903/D Rev. 8",
+            "at": "Figure 17, typical for the 2N3903 and the 2N3904 at TJ = 25 C, VCE(sat) 0.346 V at IC = 100 mA, IC/IB = 10, fitted by scripts/fit_transistor.py with NF = NR = 1",
+            "basis": "typical"
+          }
+        }
+      },
+      "emitter_resistance": {
+        "value": 0.867,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "2N3903/D Rev. 8",
+            "at": "Figure 17, typical for the 2N3903 and the 2N3904 at TJ = 25 C, VBE at VCE = 1.0 V through (1 mA, 0.657 V) and (100 mA, 0.865 V), fitted by scripts/fit_transistor.py with NF = NR = 1",
+            "basis": "typical"
+          }
+        }
+      },
+      "base_emitter_capacitance": {
+        "value": 8e-12,
+        "unit": "F",
+        "source": {
+          "datasheet": {
+            "doc": "2N3903/D Rev. 8",
+            "at": "Cibo at VEB = 0.5 V, IC = 0, f = 1.0 MHz",
+            "basis": "max"
+          }
+        }
+      },
+      "base_collector_capacitance": {
+        "value": 4e-12,
+        "unit": "F",
+        "source": {
+          "datasheet": {
+            "doc": "2N3903/D Rev. 8",
+            "at": "Cobo at VCB = 5.0 V, IE = 0, f = 1.0 MHz",
+            "basis": "max"
+          }
+        }
+      },
+      "ratings": {
+        "current": {
+          "value": 0.2,
+          "unit": "A",
+          "source": {
+            "datasheet": {
+              "doc": "2N3903/D Rev. 8",
+              "at": "MAXIMUM RATINGS, IC continuous",
+              "basis": "absolute_max"
+            }
+          }
+        },
+        "power": {
+          "value": 0.625,
+          "unit": "W",
+          "source": {
+            "datasheet": {
+              "doc": "2N3903/D Rev. 8",
+              "at": "MAXIMUM RATINGS, PD at TA = 25 C",
+              "basis": "absolute_max"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

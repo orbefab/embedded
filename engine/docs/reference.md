@@ -12,12 +12,14 @@ examples/<name>/
 
 `viewer.json` names a placeholder 3D model for each part. [viewer.md](viewer.md) defines it. The engine never reads it. A firmware example still has no `deck.cir` and no `ngspice.json`.
 
+`crates/cli/tests/fixtures/<name>/` holds circuits only the ngspice test runs, in the same layout without `viewer.json`. They are not examples. `npn-off` and `pnp-off` hold a transistor off with its internal nodes away from 0 V. `npn-pulse` switches a transistor through 1 Mohm, so its edges are slow next to the deck's ramp and the junction capacitors set them.
+
 ## Regenerate
 
 The script needs ngspice 42 on `PATH` and uv. On Debian and Ubuntu, `apt install ngspice` installs it.
 
 ```sh
-uv run scripts/ngspice_refs.py                    # every examples/*/netlist.json
+uv run scripts/ngspice_refs.py                    # every example, then every fixture
 uv run scripts/ngspice_refs.py examples/led-9v    # one example
 uv run scripts/ngspice_refs.py --check            # exit 1 on drift or an unchecked reference
 uv run scripts/ngspice_refs.py --self-test        # skip contract, no ngspice
@@ -31,9 +33,22 @@ Run it after any change to a `netlist.json`. The Rust test fails until you do.
 
 The script writes `deck.cir` from `netlist.json`. Do not edit it. `ngspice -b deck.cir` in that directory reruns it and writes `op.raw`, or `tran.raw` for a transient, and `edges.raw` too for a chip.
 
-Parts are written in name order. Names are lowercased, and ground is node `0`. A resistor is `r<name>`, a voltage source is `v<name>`, a current source is `i<name>`, a capacitor is `c<name>`, and a diode or LED is `d<name>` with its own `.model`. A potentiometer is two resistors, `r<name>_a` from `a` to `wiper` of `position * resistance`, and `r<name>_b` from `wiper` to `b` of `(1 - position) * resistance`. It has no `#<name>.i` and no `#<name>.v`. A `steps` position with no events is the fixed `initial`. A position with events is skipped: a moving potentiometer has one position in a deck. Numbers are written so they read back to the same f64.
+Parts are written in name order. Names are lowercased, and ground is node `0`. A resistor is `r<name>`, a voltage source is `v<name>`, a current source is `i<name>`, a capacitor is `c<name>`, a diode or LED is `d<name>` with its own `.model`, and a transistor is `q<name>` with its own `.model`. A potentiometer is two resistors, `r<name>_a` from `a` to `wiper` of `position * resistance`, and `r<name>_b` from `wiper` to `b` of `(1 - position) * resistance`. It has no `#<name>.i` and no `#<name>.v`. A `steps` position with no events is the fixed `initial`. A position with events is skipped: a moving potentiometer has one position in a deck. Numbers are written so they read back to the same f64.
 
 A current source is `i<name> <n> <p> dc <current>`, its pins swapped. ngspice's current flows from the first node through the source to the second, and the engine's leaves at `p`. Both an operating point deck and a transient deck save `@i<name>[current]`, the current the source drives, and the script negates it into the engine's `#<name>.i`.
+
+A transistor is written behind two 0 V ammeters, under names starting with `x_<name>`:
+
+```text
+vx_q1_c c x_q1_c dc 0
+vx_q1_b b x_q1_b dc 0
+qq1 x_q1_c x_q1_b 0 qmod_q1
+.model qmod_q1 npn (is=8.095e-15 bf=173.2 br=0.2704 nf=1.0 nr=1.0 vaf=100.0 rb=5.707 rc=1.531 re=0.867 cje=8e-12 cjc=4e-12 mje=0 mjc=0)
+```
+
+The ammeters' currents are the engine's `#<name>.ic` and `#<name>.ib`, and the nodes between them and the device are not compared. `p` is `(V(collector) - V(emitter)) * ic + (V(base) - V(emitter)) * ib` from the saved values, as the engine computes it. `mje=0` and `mjc=0` make `cje` and `cjc` constant, as the engine's are. Every model parameter the netlist does not name keeps its ngspice default, which is the engine's equation. A deck with a transistor reserves net and part names starting with `x_`, in an operating point deck too. Such a name skips the example.
+
+A deck with a transistor also shunts every net but ground to ground with 1e12 ohm, `rx_gmin_<net>`. The engine puts its node gmin on every net, so the shunts give ngspice the engine's. Inside the transistor both put gmin in the same places, and the shunts play no part there. Each puts it across each junction. ngspice-42's default substrate junction, vertical for an `npn` and lateral for a `pnp`, adds gmin from ground to `c'` in an NPN and to `b'` in a PNP, and the engine stamps the same term. The engine puts no node gmin on a transistor's internal nodes. An off NPN with 5 V on its collector takes 10 pA in both, 5 pA across `b'` to `c'` and 5 pA from `c'` to ground, and the two agree to 7e-6 relative. The fixtures `npn-off` and `pnp-off` are within 0.009 of their bound. The three transistor examples agree to at most 3.2e-7 relative, the gap the LED examples show.
 
 A source with a waveform writes `dc <initial>` in an operating point deck, the value the engine's operating point holds. A transient deck is described below.
 
@@ -74,13 +89,13 @@ bx_u1_d dis 0 i = V(dis,0) / ((V(x_u1_q) > 0.5) ? 250000000.0 : 18.75)
 - The ladder and the supply resistance are resistors. The lower ladder node is `x_<name>_lo`.
 - The latch is a B-source whose next state is SLFS022K Table 6-1 over the three comparisons. Each comparison reads high strictly above its threshold, as the engine's watches do. The state is node `x_<name>_q`, held on 1 ohm and 1 pF, a 1 ps time constant, so the B-source reads its own last state.
 - The output stage and DISCH are B current sources with the engine's formulas, to the chip's own VCC and GND pins.
-- Every node is shunted to ground with 1e12 ohm, the engine's gmin. The ladder holds CONT flat at 2/3 of the supply behind 3.3 kohm, where gmin moves it by 1.4e-8 V. A flat column has no span, so its bound is the 1 nV floor, and the shunts put the same gmin on both sides. Decks without a chip have no shunts.
+- Every node is shunted to ground with 1e12 ohm, the engine's gmin. The ladder holds CONT flat at 2/3 of the supply behind 3.3 kohm, where gmin moves it by 1.4e-8 V. A flat column has no span, so its bound is the 1 nV floor, and the shunts put the same gmin on both sides. Decks with neither a chip nor a transistor have no shunts.
 
 The analysis is `tran g p stop p 0 m p`, with `g` one two-thousandth of `stop_ps` and `m` one four-hundred-thousandth. The cap `m` resolves the latch edges: ngspice converges linearly in it, and at 10 us its period is 2.4e-5 under the closed form of the same behaviour. That run has about 400000 points. `write edges.raw` keeps the latch nodes at ngspice's own points, and `linearize` puts every other saved vector on the `g` grid, 2001 points, before `write tran.raw`. The script takes each 0.5 crossing of a latch node, linear between ngspice's points and rounded to the picosecond, as an edge of that chip's `out`.
 
 ## Skips
 
-An example is skipped when a part has no `kind`, when it has a kind the script does not translate, when a part is an `atmega328p`, which runs firmware that a deck has no CPU for, when a potentiometer's `position` has events, when a part has no `pins` or is missing a pin, when two part names, two net names or two device names are equal ignoring case, when a net other than ground is named `gnd`, which ngspice reads as ground, when a pin names an undeclared net, when a held capacitor is in an operating point deck or has no pin on ground, when a chip is in an operating point deck, when a transient deck has a name starting with `ctl_`, `bp` or `x_`, or when `netlist.json` has a shape the engine's parser would reject. The report lists the skip and the reason in the one JSON document.
+An example is skipped when a part has no `kind`, when it has a kind the script does not translate, when a part is an `atmega328p`, which runs firmware that a deck has no CPU for, when a potentiometer's `position` has events, when a part has no `pins` or is missing a pin, when two part names, two net names or two device names are equal ignoring case, when a net other than ground is named `gnd`, which ngspice reads as ground, when a pin names an undeclared net, when a held capacitor is in an operating point deck or has no pin on ground, when a chip is in an operating point deck, when a transient deck has a name starting with `ctl_`, `bp` or `x_`, when a deck with a transistor has a name starting with `x_`, or when `netlist.json` has a shape the engine's parser would reject. The report lists the skip and the reason in the one JSON document.
 
 A firmware example has no ngspice reference. ngspice has no CPU to run its firmware, so it cannot say where the pin edges fall. So `examples/atmega-analog-serial`, `examples/atmega-blink`, `examples/atmega-button`, `examples/atmega-fade`, and `examples/atmega-serial-echo` have no `deck.cir` or `ngspice.json`, and both `--check` and `crates/cli/tests/ngspice.rs` fail if an example with an `atmega328p` part has either. `crates/cli/tests/blink.rs` checks the blink example. Its PB5 edges sit at the picoseconds its firmware's cycle counts give, and its LED current is the closed form of the output stage, the resistor and the LED within Newton's 1e-6. `crates/cli/tests/button.rs` checks the button example. PD2 follows the switch, PB5 follows it a synchronizer and a loop later, and the LED current is that same closed form. `crates/cli/tests/analog_serial.rs` checks the analog-serial example. The wiper voltage is the potentiometer's closed form with the pin's leakage, within the divider's 1e-8, and TXD is 8N1 frames of the code §24.7 gives for that voltage. `crates/cli/tests/fade.rs` checks the fade example. Its PB1 edges sit at the picoseconds its firmware's cycle counts and docs/avr.md parameter 4 give, and its LED current is that same closed form. `crates/cli/tests/serial_echo.rs` checks the serial-echo example. Each echo in `traces/serial.csv` is the byte the host sent, and it starts after that frame's `RXC0` and within the vector plus one bit. PB5 rises after `'1'` and falls after `'0'`, and the LED current is that same closed form. The same netlist with the host at 115200 never raises PB5.
 
@@ -138,7 +153,7 @@ A transient reference has `tran` in place of `op`.
 |engine - ngspice| <= 1e-3 * |ngspice| + floor
 ```
 
-The floor is 1e-9 for a voltage and 1e-12 for a current. It only matters near 0. The 1 pA floor does not absorb ngspice's junction gmin, `gmin` times `V`, in cutoff. A reverse-biased example needs a different comparison before it is added.
+The floor is 1e-9 for a voltage and 1e-12 for a current. It only matters near 0. The 1 pA floor does not absorb ngspice's junction gmin, `gmin` times `V`, in cutoff. A reverse-biased example needs a different comparison before it is added. A diode or LED keeps the engine's node gmin on its internal node, where ngspice's diode has none. An off LED with that node at 5 V draws 5 pA more than ngspice, five times the floor.
 
 A transient example is checked in four steps.
 
@@ -161,7 +176,7 @@ The tolerance is relative to how far each capacitor's voltage moves in its segme
 
 The comparison does not read the engine between rows. A row is a point sample, and [run-folder.md](run-folder.md#traces) says what a read between rows needs. ngspice's points are far denser than the rows, so reading it as piecewise linear adds little. In another probe, 12 V feeds a rail through 2 ohm, 4.7 uF on the rail is held at 12 V, and a switch puts 470 ohm on the rail at 50 us. The rail sags 51 mV. On a 5 us grid every column is within its bound at the engine's 101 rows. The worst is `#c1.p`, 4.2e-5 W from ngspice against a bound of 3.1e-4 W.
 
-The engine and ngspice agree to about 3e-7 relative on the LED examples. That gap is consistent with ngspice 42 using older values of `k` and `q` than the exact SI ones. The engine puts its 1e-12 S gmin from every node to ground, and ngspice puts it across each junction. On the divider that difference is about 4e-9 relative. A chip deck shunts every node with the same gmin.
+The engine and ngspice agree to about 3e-7 relative on the LED examples. That gap is consistent with ngspice 42 using older values of `k` and `q` than the exact SI ones. The engine puts its 1e-12 S gmin from every net and every diode's internal node to ground, and ngspice puts it across each junction. On the divider that difference is about 4e-9 relative. A chip deck shunts every node with the same gmin.
 
 ## The astable
 

@@ -9,22 +9,21 @@ const ARG_MAX: f64 = 700.0;
 /// A conductance no operating point reaches. The cap keeps `Is*exp(arg)/nvt` under this.
 const G_CAP: f64 = 1e100;
 
-struct Params {
+/// `Is * (exp(vj / nvt) - 1)`, one junction's exponential. A diode has one, and a
+/// transistor one per junction.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Shockley {
     is: f64,
-    nvt: f64,
-    rs: f64,
-    vcrit: f64,
+    pub(super) nvt: f64,
+    pub(super) vcrit: f64,
 }
 
-impl Params {
-    fn new(junction: &Junction) -> Params {
-        let is = junction.saturation_current.si.get();
-        let scale = junction_scale(junction.emission_coefficient.si.get(), is)
-            .expect("parse accepts only a finite junction");
-        Params {
+impl Shockley {
+    pub(super) fn new(emission: f64, is: f64) -> Shockley {
+        let scale = junction_scale(emission, is).expect("parse accepts only a finite junction");
+        Shockley {
             is,
             nvt: scale.nvt,
-            rs: junction.series_resistance.si.get(),
             vcrit: scale.vcrit,
         }
     }
@@ -36,7 +35,7 @@ impl Params {
     }
 
     /// Current, slope, whether the argument was clamped, and the voltage that was evaluated.
-    fn evaluate(&self, vj: f64) -> (f64, f64, bool, f64) {
+    pub(super) fn evaluate(&self, vj: f64) -> (f64, f64, bool, f64) {
         let cap = self.arg_cap();
         let arg = vj / self.nvt;
         let limited = arg > cap;
@@ -52,13 +51,20 @@ impl Params {
     }
 }
 
+fn shockley(junction: &Junction) -> Shockley {
+    Shockley::new(
+        junction.emission_coefficient.si.get(),
+        junction.saturation_current.si.get(),
+    )
+}
+
 /// Rs from the anode to internal node 0, then the junction from there to the
 /// cathode, linearised at the voltage `evaluate` used.
 pub(super) fn stamp(junction: &Junction, stamp: &mut Stamp<'_>) {
-    let params = Params::new(junction);
+    let params = shockley(junction);
     let [anode, cathode] = junction.pins;
     let inner = stamp.internal(0);
-    stamp.conductance(anode, inner, 1.0 / params.rs);
+    stamp.conductance(anode, inner, 1.0 / junction.series_resistance.si.get());
     let vj = stamp.junction(0);
     let (id, gd, _, voltage) = params.evaluate(vj);
     stamp.conductance(inner, cathode, gd);
@@ -67,33 +73,38 @@ pub(super) fn stamp(junction: &Junction, stamp: &mut Stamp<'_>) {
 }
 
 pub(super) fn initial(junction: &Junction) -> f64 {
-    Params::new(junction).vcrit
+    shockley(junction).vcrit
 }
 
 /// Limits the solved junction voltage against `prior` and checks the
 /// linearised current against the device equation at the solved voltage.
 pub(super) fn update(junction: &Junction, probe: &Probe<'_>, prior: f64) -> (f64, Update) {
-    let params = Params::new(junction);
+    let params = shockley(junction);
     let solved = probe.internal(0) - probe.v(junction.pins[1]);
     let (next, mut limited) = pnjlim(solved, prior, params.nvt, params.vcrit);
     let (id, gd, cap_prior, voltage) = params.evaluate(prior);
     let linear = id + gd * (solved - voltage);
     let (actual, _, cap_solved, _) = params.evaluate(solved);
     limited |= cap_prior || cap_solved;
+    let mismatch = mismatch(linear, actual);
+    (next, Update { limited, mismatch })
+}
+
+/// How far a linearised current is from the device equation, over Newton's tolerance on it.
+/// At most 1 passes. A ratio that is not finite is infinite.
+pub(super) fn mismatch(linear: f64, actual: f64) -> f64 {
     let tolerance = RELTOL * linear.abs().max(actual.abs()) + ABSTOL;
     let mismatch = (linear - actual).abs() / tolerance;
-    let mismatch = if mismatch.is_finite() {
+    if mismatch.is_finite() {
         mismatch
     } else {
         f64::INFINITY
-    };
-    (next, Update { limited, mismatch })
+    }
 }
 
 /// The current through Rs, entering the anode.
 pub(super) fn current(junction: &Junction, probe: &Probe<'_>) -> f64 {
-    let params = Params::new(junction);
-    (probe.v(junction.pins[0]) - probe.internal(0)) / params.rs
+    (probe.v(junction.pins[0]) - probe.internal(0)) / junction.series_resistance.si.get()
 }
 
 /// Junction voltage limiting. Returns the voltage to stamp next and whether it differs from `vnew`.
@@ -133,7 +144,7 @@ pub(crate) fn pnjlim(vnew: f64, vold: f64, nvt: f64, vcrit: f64) -> (f64, bool) 
 mod tests {
     use sim_core::netlist::{Model, Netlist};
 
-    use super::{Params, pnjlim, update};
+    use super::{Shockley, pnjlim, update};
     use crate::mna::{Probe, Solution};
     use crate::newton::Circuit;
 
@@ -185,10 +196,9 @@ mod tests {
 
     #[test]
     fn the_cap_holds_the_slope_bound_for_a_tiny_saturation_current() {
-        let params = Params {
+        let params = Shockley {
             is: 1e-308,
             nvt: 1e-300,
-            rs: 1.0,
             vcrit: 1e-299,
         };
         let cap = params.arg_cap();
@@ -202,10 +212,9 @@ mod tests {
 
     #[test]
     fn evaluate_caps_only_past_the_overflow_bound_and_the_iteration_is_limited() {
-        let params = Params {
+        let params = Shockley {
             is: 1e-14,
             nvt: 0.026,
-            rs: 1.0,
             vcrit: 0.7,
         };
         let cap = params.arg_cap();

@@ -20,6 +20,8 @@ thread_local! {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Unknowns {
     pub internal_nodes: usize,
+    /// The internal nodes take no node gmin. The part stamps the leakage its ngspice model has.
+    pub bare_internal: bool,
     pub branches: usize,
     /// Junction voltages Newton limits. Slots in `Iterate::junctions`, not matrix rows.
     pub junctions: usize,
@@ -41,6 +43,8 @@ pub(crate) struct Layout {
     part_rows: Vec<PartRows>,
     /// Ascending.
     node_rows: Vec<usize>,
+    /// The node rows that take gmin, ascending.
+    gmin_rows: Vec<usize>,
     size: usize,
     junctions: usize,
     /// The passive chips, ascending. A chip's index here is its slot in `Conditions::chips`.
@@ -80,9 +84,11 @@ fn assemble<T: Device>(
     let mut junction = 0;
     let mut charge = 0;
     let mut node_rows = Vec::new();
+    let mut gmin_rows = Vec::new();
     let net_rows = netlist.nets().len().saturating_sub(1);
     for _ in 0..net_rows {
         node_rows.push(row);
+        gmin_rows.push(row);
         row += 1;
     }
     let mut part_rows = Vec::with_capacity(netlist.parts().len());
@@ -98,6 +104,9 @@ fn assemble<T: Device>(
         let internal = row;
         for _ in 0..extra.internal_nodes {
             node_rows.push(row);
+            if !extra.bare_internal {
+                gmin_rows.push(row);
+            }
             row += 1;
         }
         let branch = row;
@@ -118,6 +127,7 @@ fn assemble<T: Device>(
         net_rows,
         part_rows,
         node_rows,
+        gmin_rows,
         size: row,
         junctions: junction,
         chips,
@@ -217,11 +227,12 @@ impl System {
         }
     }
 
-    /// Drop the last factorization and stamp `gmin` on every node row.
+    /// Drop the last factorization and stamp `gmin` on every net row and on each internal row
+    /// that is not bare.
     pub(crate) fn reset(&mut self, layout: &Layout, gmin: f64) {
         self.a.clear();
         self.b.fill(0.0);
-        for &row in &layout.node_rows {
+        for &row in &layout.gmin_rows {
             self.a.add(row, row, gmin);
         }
     }
@@ -456,6 +467,12 @@ impl<'a> Stamp<'a> {
 
     pub(crate) fn conductance(&mut self, a: impl Into<Node>, b: impl Into<Node>, g: f64) {
         self.sys.conductance(a, b, g);
+    }
+
+    /// One matrix term, the slope of the current leaving `row` on the voltage at `col`. A
+    /// controlled source's current depends on nodes it does not flow between.
+    pub(crate) fn add(&mut self, row: impl Into<Node>, col: impl Into<Node>, g: f64) {
+        self.sys.add_term(row.into(), col.into(), g);
     }
 
     /// `amps` flows out of `from`, through the part, into `to`.

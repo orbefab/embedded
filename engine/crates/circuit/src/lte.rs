@@ -1002,6 +1002,66 @@ mod tests {
         }
     }
 
+    /// A capacitor's charge is on its pins. A transistor's two are on its internal nodes,
+    /// `CJE` from `b'` to `e'` and `CJC` from `b'` to `c'`, each on its own branch.
+    #[test]
+    fn charges_are_the_parts_capacitors() {
+        let netlist = sim_core::netlist::parse(
+            br#"{
+              "version": 0,
+              "seed": 0,
+              "analysis": { "transient": { "stop_ps": 1000, "max_step_ps": 1000, "grid_ps": 1000 } },
+              "ground": "gnd",
+              "nets": ["gnd", "b", "c"],
+              "parts": [
+                { "name": "c1", "kind": "capacitor", "pins": { "a": "c", "b": "gnd" },
+                  "capacitance": { "value": 1e-9, "unit": "F", "source": "user" }, "initial": null },
+                { "name": "q1", "kind": "npn",
+                  "pins": { "collector": "c", "base": "b", "emitter": "gnd" },
+                  "saturation_current": { "value": 1e-14, "unit": "A", "source": "user" },
+                  "forward_beta": { "value": 100.0, "unit": "1", "source": "user" },
+                  "reverse_beta": { "value": 1.0, "unit": "1", "source": "user" },
+                  "forward_emission": { "value": 1.0, "unit": "1", "source": "user" },
+                  "reverse_emission": { "value": 1.0, "unit": "1", "source": "user" },
+                  "early_voltage": { "value": 100.0, "unit": "V", "source": "user" },
+                  "base_resistance": { "value": 10.0, "unit": "ohm", "source": "user" },
+                  "collector_resistance": { "value": 1.0, "unit": "ohm", "source": "user" },
+                  "emitter_resistance": { "value": 1.0, "unit": "ohm", "source": "user" },
+                  "base_emitter_capacitance": { "value": 8e-12, "unit": "F", "source": "user" },
+                  "base_collector_capacitance": { "value": 4e-12, "unit": "F", "source": "user" },
+                  "ratings": { "current": null, "power": null } }
+              ]
+            }"#,
+        )
+        .unwrap();
+        let layout = Layout::new(&netlist, Vec::new());
+        let charges = Charges::new(&netlist, &layout);
+        let id = |name| {
+            netlist
+                .part_id(&sim_core::name::Name::new(name).unwrap())
+                .unwrap()
+        };
+        let (cap, q) = (id("c1"), id("q1"));
+        let [c, b, e] = [0, 1, 2].map(|k| layout.internal(q, k));
+        let want = [
+            (
+                layout.branch_row(cap, 0),
+                [Node::Row(1), Node::Ground],
+                1e-9,
+            ),
+            (layout.branch_row(q, 0), [b, e], 8e-12),
+            (layout.branch_row(q, 1), [b, c], 4e-12),
+        ];
+        let got: Vec<_> = charges
+            .caps
+            .iter()
+            .map(|charge| (charge.branch, charge.pins, charge.farad))
+            .collect();
+        assert_eq!(got, want);
+        let indices: Vec<_> = charges.caps.iter().map(|charge| charge.index).collect();
+        assert_eq!(indices, [ix(0), ix(1), ix(2)]);
+    }
+
     #[test]
     #[should_panic(expected = "a part's charge count exceeds its branches")]
     fn a_part_with_a_charge_and_no_branch_panics() {

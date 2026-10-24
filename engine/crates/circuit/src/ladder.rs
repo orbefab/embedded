@@ -20,7 +20,7 @@ const SOURCE_RUNGS: u32 = 100;
 pub(crate) enum Rung {
     /// Nominal conditions from the initial iterate.
     Plain,
-    /// `extra` siemens on every node on top of GMIN. `good` is the last extra
+    /// `extra` siemens on every node that takes gmin, on top of GMIN. `good` is the last extra
     /// that converged. `tried` counts gmin rungs, this one included.
     Gmin {
         extra: f64,

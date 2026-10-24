@@ -4,13 +4,15 @@
 # ///
 """Write each example's ngspice reference from its netlist.json.
 
-    uv run scripts/ngspice_refs.py [--check] [examples/<name> ...]
+    uv run scripts/ngspice_refs.py [--check] [examples/<name> | crates/cli/tests/fixtures/<name> ...]
     uv run scripts/ngspice_refs.py --self-test
 
 For every example it translates netlist.json into deck.cir, runs `ngspice -b`
 on it, and writes the operating point, or the transient waveforms, to
 ngspice.json. A chip's latch edges go to tran.logic. With no example arguments
-it takes every examples/*/netlist.json. `--check` regenerates in memory and
+it takes every examples/*/netlist.json, then every
+crates/cli/tests/fixtures/*/netlist.json, the circuits only the ngspice test
+runs. `--check` regenerates in memory and
 exits 1 if any committed byte differs, or if a skipped example already has
 deck.cir or ngspice.json. For an example with a chip it also runs the engine and exits 1
 unless the run's logic.vcd reads back as its observations.logic summary. stdout is one
@@ -41,10 +43,25 @@ TRAN_RAW = "tran.raw"
 EDGES_RAW = "edges.raw"
 CHIPS = ("ne555",)
 FIRMWARE = ("atmega328p",)
+TRANSISTORS = ("npn", "pnp")
+# Each BJT field's .model parameter. `mje=0 mjc=0` makes the depletion capacitances constant.
+BJT_CARD = (
+    ("is", "saturation_current"),
+    ("bf", "forward_beta"),
+    ("br", "reverse_beta"),
+    ("nf", "forward_emission"),
+    ("nr", "reverse_emission"),
+    ("vaf", "early_voltage"),
+    ("rb", "base_resistance"),
+    ("rc", "collector_resistance"),
+    ("re", "emitter_resistance"),
+    ("cje", "base_emitter_capacitance"),
+    ("cjc", "base_collector_capacitance"),
+)
 # A chip deck caps ngspice's step at stop/400000 and linearizes the waveform onto stop/2000.
 CHIP_TMAX = 400_000
 CHIP_GRID = 2_000
-# The engine's conductance from every node to ground.
+# The engine's conductance from every net to ground.
 ENGINE_GMIN = 1e-12
 # The engine's first step after a contact edge or a source jump. The Rust test pins both.
 EDGE_RAMP_PS = 1000
@@ -73,7 +90,11 @@ def main(argv):
     check = "--check" in argv
     targets = [Path(a) for a in argv if a != "--check"]
     if not targets:
-        targets = sorted(p.parent for p in (ROOT / "examples").glob("*/netlist.json"))
+        targets = [
+            p.parent
+            for folder in ("examples", "crates/cli/tests/fixtures")
+            for p in sorted((ROOT / folder).glob("*/netlist.json"))
+        ]
     report = report_examples(targets, check, ngspice_version())
     print(json.dumps(report, indent=2))
     return exit_code(report)
@@ -223,6 +244,8 @@ def generate(example, version):
         if variable not in mapping:
             raise SystemExit(f"{example.name}: unexpected ngspice vector {variable}")
         ref = mapping[variable]
+        if ref is None:
+            continue
         if isinstance(ref, Negated):
             values[ref.ref] = [-value for value in column]
         else:
@@ -277,15 +300,20 @@ def op_point(netlist, values):
     for part in netlist["parts"]:
         if part["kind"] in NO_QUANTITIES:
             continue
+        name = part["name"]
+        if part["kind"] in TRANSISTORS:
+            c, b, e = (net_voltage(op, net) for net in pin_nets(part))
+            op[f"#{name}.p"] = (c - e) * op[f"#{name}.ic"] + (b - e) * op[f"#{name}.ib"]
+            continue
         first, second = (net_voltage(op, net) for net in pin_nets(part))
-        op[f"#{part['name']}.v"] = first - second
+        op[f"#{name}.v"] = first - second
     return op
 
 
 def part_voltages(label, netlist, values, count):
-    """Each part's `.v` on every transient row, from its pin-order node voltages."""
+    """Each two-pin part's `.v` on every transient row, from its pin-order node voltages."""
     for part in netlist["parts"]:
-        if part["kind"] in NO_QUANTITIES:
+        if part["kind"] in NO_QUANTITIES or part["kind"] in TRANSISTORS:
             continue
         try:
             first, second = (values[f"#net.{net}"] for net in pin_nets(part))
@@ -331,6 +359,8 @@ PIN_ORDER = {
     "current_source": ("p", "n"),
     "diode": ("anode", "cathode"),
     "led": ("anode", "cathode"),
+    "npn": ("collector", "base", "emitter"),
+    "pnp": ("collector", "base", "emitter"),
     "capacitor": ("a", "b"),
     "switch": ("a", "b"),
     "ne555": ("gnd", "trig", "out", "reset", "cont", "thres", "disch", "vcc"),
@@ -389,6 +419,9 @@ def translate_shape(title, netlist):
     names = nets + [p["name"] for p in parts]
     if transient and any(n.lower().startswith(("ctl_", "bp", "x_")) for n in names):
         raise Skip("a transient deck reserves names starting with ctl_, bp or x_")
+    transistors = any(p.get("kind") in TRANSISTORS for p in parts)
+    if transistors and any(n.lower().startswith("x_") for n in names):
+        raise Skip("a deck with a transistor reserves names starting with x_")
 
     def node(net):
         return "0" if net == ground else net.lower()
@@ -444,6 +477,17 @@ def translate_shape(title, netlist):
             lines.append(f".model dmod_{name} d ({params})")
             saves.append(f"@d{name}[id]")
             mapping[f"i(@d{name}[id])"] = ref
+        elif kind in TRANSISTORS:
+            # A 0 V source in series with the collector and the base reads each whole pin current.
+            c, b, e = (node(net) for net in pin_list)
+            for pin, at in (("c", c), ("b", b)):
+                lines.append(f"vx_{name}_{pin} {at} x_{name}_{pin} dc 0")
+                saves.append(f"i(vx_{name}_{pin})")
+                mapping[f"i(vx_{name}_{pin})"] = f"#{part['name']}.i{pin}"
+                mapping[f"v(x_{name}_{pin})"] = None
+            lines.append(f"q{name} x_{name}_c x_{name}_b {e} qmod_{name}")
+            params = " ".join(f"{key}={number(part[field])}" for key, field in BJT_CARD)
+            lines.append(f".model qmod_{name} {kind} ({params} mje=0 mjc=0)")
         elif kind == "capacitor":
             lines.append(f"c{name} {pins} {number(part['capacitance'])}")
             if part["initial"] is not None:
@@ -478,6 +522,18 @@ def translate_shape(title, netlist):
             latches.append(f"v(x_{name}_q)")
         else:
             raise Skip(f"kind {kind} has no translation")
+    if latches:
+        lines.append(
+            "* The engine's gmin on every node. A chip's ladder holds CONT flat, with no span to hide it."
+        )
+        shunted = [node(net) for net in nets if net != ground] + [
+            f"x_{p['name'].lower()}_lo" for p in parts if p["kind"] in CHIPS
+        ]
+        lines += [f"rx_gmin_{n} {n} 0 {1 / ENGINE_GMIN!r}" for n in shunted]
+    elif transistors:
+        lines.append("* The engine's gmin on every node, beside the gmin ngspice puts across each junction.")
+        shunted = [node(net) for net in nets if net != ground]
+        lines += [f"rx_gmin_{n} {n} 0 {1 / ENGINE_GMIN!r}" for n in shunted]
     if not transient:
         reject_duplicate_devices(lines)
         lines += [
@@ -490,14 +546,6 @@ def translate_shape(title, netlist):
             ".end",
         ]
         return "\n".join(lines) + "\n", mapping
-    if latches:
-        lines.append(
-            "* The engine's gmin on every node. A chip's ladder holds CONT flat, with no span to hide it."
-        )
-        shunted = [node(net) for net in nets if net != ground] + [
-            f"x_{p['name'].lower()}_lo" for p in parts if p["kind"] in CHIPS
-        ]
-        lines += [f"rx_gmin_{n} {n} 0 {1 / ENGINE_GMIN!r}" for n in shunted]
     if corners:
         lines.append(
             "* One source per ramp corner makes it a breakpoint. ngspice skips a PWL corner it lands on an ulp early."
