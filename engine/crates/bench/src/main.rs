@@ -7,6 +7,7 @@ struct Args {
     examples: PathBuf,
     out: Option<PathBuf>,
     list: bool,
+    live_netlists: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -31,6 +32,13 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    if let Some(dir) = &args.live_netlists {
+        if let Err(err) = sim_bench::write_live_netlists(&examples, dir) {
+            eprintln!("{err}");
+            return ExitCode::from(1);
+        }
+        return ExitCode::SUCCESS;
+    }
     let report = match sim_bench::bench(&examples, args.runs, sim_bench::host_now_ns) {
         Ok(report) => report,
         Err(err) => {
@@ -60,6 +68,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut examples = PathBuf::from("examples");
     let mut out = None;
     let mut list = false;
+    let mut live_netlists = None;
     let mut args = args;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -67,6 +76,9 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Args, String> {
             "--examples" => examples = PathBuf::from(value(&mut args, "--examples")?),
             "--out" => out = Some(PathBuf::from(value(&mut args, "--out")?)),
             "--list" => list = true,
+            "--live-netlists" => {
+                live_netlists = Some(PathBuf::from(value(&mut args, "--live-netlists")?))
+            }
             "--help" => return Err(HELP.to_string()),
             other => return Err(format!("unknown argument {other}")),
         }
@@ -79,6 +91,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Args, String> {
         examples,
         out,
         list,
+        live_netlists,
     })
 }
 
@@ -92,4 +105,7 @@ fn number(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<usize, 
         .map_err(|_| format!("{flag} needs a positive integer"))
 }
 
-const HELP: &str = "sim-bench [--runs N] [--examples DIR] [--out FILE] [--list]";
+const HELP: &str = "\
+sim-bench [--runs N] [--examples DIR] [--out FILE] [--list] [--live-netlists DIR]
+
+--live-netlists DIR writes each live netlist and exits. --out and --runs do nothing with it.";

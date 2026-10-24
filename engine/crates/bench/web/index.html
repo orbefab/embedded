@@ -3,11 +3,15 @@
 <pre id="log">starting</pre>
 <script>
 const log = document.getElementById("log");
-const worker = new Worker("worker.js");
+const params = new URLSearchParams(location.search);
+const worker =
+  params.get("job") === "session"
+    ? new Worker("session.js", { type: "module" })
+    : new Worker("worker.js");
 window.__bench = {
   crossOriginIsolated,
   start() {
-    const runs = Number(new URLSearchParams(location.search).get("runs") || "3");
+    const runs = Number(params.get("runs") || "3");
     worker.postMessage({ runs });
   },
 };

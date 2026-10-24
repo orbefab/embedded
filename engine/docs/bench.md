@@ -1,6 +1,6 @@
 # Benchmark
 
-`scripts/bench.py` times the four committed chip examples. It builds `sim-bench` for native, WASI, and `wasm32-unknown-unknown`, runs each build, and writes one JSON report.
+`scripts/bench.py` times the four committed chip examples. It builds `sim-bench` for native, WASI, and `wasm32-unknown-unknown`, runs each build, and writes one JSON report. It also builds the `sim-wasm` package and times that package's session in the browser on the `live` rows and on `live-16s`.
 
 ```sh
 uv run --with playwright scripts/bench.py [report.json]
@@ -8,7 +8,7 @@ uv run --with playwright scripts/bench.py [report.json]
 
 The default report is `.scratch/bench/report.json` next to the repo, and it is not committed. `--runs N` sets the repeat count and can sit anywhere on the command line. A missing value is an error. The default is 3.
 
-The builds use `CARGO_BUILD_JOBS=4`. `CARGO_TARGET_DIR` is used when it is set. Otherwise the target directory is under `.scratch/bench` next to the repo, named `target-` plus a digest of this checkout's path, so another checkout does not share it. Intermediates go in a fresh directory under `.scratch/bench` and are removed when the run ends. The script stops when the filesystem that holds the target directory has under 20 GiB free. `rustup target add` runs for `wasm32-wasip1` and `wasm32-unknown-unknown` only when that target is missing.
+The builds use `CARGO_BUILD_JOBS=4`. `CARGO_TARGET_DIR` is used when it is set. Otherwise the target directory is under `.scratch/bench` next to the repo, named `target-` plus a digest of this checkout's path, so another checkout does not share it. Intermediates go in a fresh directory under `.scratch/bench` and are removed when the run ends. The script stops when the filesystem that holds the target directory has under 20 GiB free. `rustup target add` runs for `wasm32-wasip1` and `wasm32-unknown-unknown` only when that target is missing. Every bench run calls `scripts/wasm.sh`. That script builds the session package into the fresh directory, and the page serves that package beside `sim_bench.wasm`. `scripts/wasm.sh` honors the same job count and target directory. On first use, when no matching `wasm-bindgen` is installed, `scripts/wasm.sh` installs `wasm-bindgen-cli` from the network. If that install fails, the bench run fails.
 
 ## What a run times
 
@@ -17,7 +17,9 @@ Each workload is one parsed netlist. The repeat count times two regions.
 - The full `simulate` call, after the netlist is parsed.
 - For a netlist with one `atmega328p`, the bare core over the same simulated time. The core runs in slices of at most 1 ms. Pins and `Channel::Usart0` are drained after each slice. ADC channel 0 is held at 2.5 V. A nonzero `pin_overflow` fails the run.
 
-Parsing, JSON editing, and writing the report are outside the clock. The clock is the caller's. Native and WASI use `Instant`. The Worker uses `performance.now` through one imported function. The page is served with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`, so that clock is not coarsened. After the page loads, and before the first job, the runner reads `crossOriginIsolated` from the page and stores that value. It stops when the value is missing or false. `sim-bench` does not depend on `wasm-bindgen`.
+Parsing, JSON editing, and writing the report are outside the clock. The clock is the caller's. Native and WASI use `Instant`. The Worker uses `performance.now` through one imported function. The page is served with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`, so that clock is not coarsened. After the page loads, and before the first job, the runner reads `crossOriginIsolated` from the page and stores that value. It stops when the value is missing or false. The raw `sim_bench.wasm` build does not depend on `wasm-bindgen`. The session job loads the package `scripts/wasm.sh` builds, and that package does.
+
+The session job is a second Worker. It does not replace the Worker column, and the bar stays on that column. `sim-bench --live-netlists DIR` writes every live netlist and exits. `--out` and `--runs` do nothing with that flag. The bytes are the document the timing parses, and the page opens those bytes. The runner serves the `live` and `live-16s` files. `crates/bench/web/session.js` opens each file with `Session.open`, so the session records nothing. It reads `stop_ps` from the digits in the netlist text. It advances in frames of 16666666667 ps, one 60 Hz frame at 1x, and the last frame lands on `stop_ps`. After each frame it reads `refs()`, `probe()`, `levels()` and `serialSince()`, then frees the probe and the serial view. `performance.now` times that open and those frames together. After `init()` and before the timed repeats, the worker opens the first netlist once and frees it, so a repeat does not pay for the module's first open. Fetching the files and loading the module sit outside the clock. The job fails unless the frame count is the ceiling of `stop_ps / 16666666667`, the serial bytes equal the final cursor, each frame's probe has one column per ref, and each `levels` call has one entry per signal. `atmega-analog-serial` also fails when that serial read is empty. The job fails when the last status is not `stopped` or when `now()` is not `stop_ps`. `live-4s`, `live-8s`, and the committed rows have no session time. The runner reads `/proc/loadavg` before native, before WASI, before the Worker, before the Worker session, and after the last target.
 
 A `live` row keeps the committed circuit, sets `grid_ps` to `stop_ps`, and sets `max_step_ps` to the smaller of 10 ms and `stop_ps`. Every example in this set stops at 19 ms or later, so the step is 10 ms. `atmega-blink`, `atmega-button`, and `atmega-fade` already use a 10 ms step, so a `live` row of those examples removes the output grid. `atmega-analog-serial`'s committed step is 20 µs, so its `live` row also lengthens the step. `live-4s`, `live-8s`, and `live-16s` stop that example at 4 s, 8 s, and 16 s and use the same grid and step. The committed row stays at 19 ms. Each job is timed whole, from t = 0.
 
@@ -34,17 +36,19 @@ A row is a probe, so a grid change does not move a step. On `atmega-blink`, `atm
 | simulated | `stop_ps` of that variant, in seconds |
 | native, WASI, Worker | Median wall time of `simulate`, with the min and max across repeats |
 | native x, WASI x, Worker x | Simulated seconds divided by that median |
+| Worker session | Median wall time of the session job, on a `live` row or `live-16s`, with the min and max across repeats. Any other row is `-` |
+| Worker session x | Simulated seconds divided by the Worker session median. Any other row is `-` |
 | native core, WASI core, Worker core | That target's own bare-core median |
 | landings | Accepted steps after t = 0 |
 | stops | Chip stops on those steps, summed over chips |
 
 A landing is an accepted step after t = 0. t = 0 is not a landing. Landings and stops stay out of the run folder. The runner exits nonzero when `landings`, `stops`, `end_ps`, or `simulated_ps` differ across native, WASI, and Worker, and a row missing on one target is the same error. A repeat whose counts differ from the first exits with an error.
 
-The example names live in one Rust list. The runner reads them from the binary, and the Worker reads the file the runner wrote from that list. The target name comes from the build.
+The example names live in one Rust list. The runner reads them from the binary, and the Worker reads the file the runner wrote from that list. The session job reads the live netlists `sim-bench --live-netlists` wrote from that same list. The target name comes from the build.
 
 ## The bar
 
-`atmega-blink`, `atmega-button`, `atmega-fade`, and `atmega-analog-serial` need to run at 1.5 times real time or better in the browser Worker on the build machine. The ratio column is simulated time divided by wall time. The bar is a Worker ratio of 1.5 or more on each example's `live` row, and for `atmega-analog-serial` on `live-16s`. On 2026-10-21 the owner decided to measure the bar the way a live session runs each circuit, with no output grid and a 10 ms `max_step_ps`, while the committed netlists keep their fine settings for batch accuracy.
+`atmega-blink`, `atmega-button`, `atmega-fade`, and `atmega-analog-serial` need to run at 1.5 times real time or better in the browser Worker on the build machine. The ratio column is simulated time divided by wall time. The bar is a Worker ratio of 1.5 or more on each example's `live` row, and for `atmega-analog-serial` on `live-16s`. The Worker session column is not that bar. On 2026-10-21 the owner decided to measure the bar the way a live session runs each circuit, with no output grid and a 10 ms `max_step_ps`, while the committed netlists keep their fine settings for batch accuracy.
 
 ## This run
 
