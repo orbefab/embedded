@@ -33,7 +33,14 @@ pub fn runs_firmware(netlist: &Netlist) -> bool {
 /// through `sim run`, with its steps, its grid and a grid with no row before `stop_ps`
 /// beside it, all at once. They hold the envelope to the steps, and the gridless run's stats,
 /// diagnostics, observations, `logic.vcd` and `serial.csv` to the grid's.
-pub const CHECKED_ON_THEIR_OWN: &[&str] = &["atmega-blink", "atmega-button", "atmega-fade"];
+/// `examples/npn-blinker` is here too. One run of it accepts on the order of 2e5 steps, and
+/// `crates/cli/tests/blinker.rs` is the check. A scan that also keeps every step repeats that cost.
+pub const CHECKED_ON_THEIR_OWN: &[&str] = &[
+    "atmega-blink",
+    "atmega-button",
+    "atmega-fade",
+    "npn-blinker",
+];
 
 pub fn transient_examples() -> Vec<String> {
     examples()

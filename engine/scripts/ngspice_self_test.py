@@ -27,6 +27,14 @@ def self_test(refs):
             "failure": None,
         },
         {
+            "name": "npn blinker",
+            "part": {"name": "r1", "kind": "resistor", "pins": {"a": "a", "b": "gnd"}},
+            "commit": [],
+            "exit": 0,
+            "reason": "ngspice aborts this deck at the deck's options with Timestep too small",
+            "failure": None,
+        },
+        {
             "name": "missing pin",
             "part": {"name": "r1", "kind": "resistor", "pins": {"a": "a"}},
             "commit": [],
