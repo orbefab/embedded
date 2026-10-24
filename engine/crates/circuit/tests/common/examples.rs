@@ -28,13 +28,11 @@ pub fn runs_firmware(netlist: &Netlist) -> bool {
     })
 }
 
-/// The examples the scans of every example leave out, by name. A debug `sim run` of
-/// `atmega-blink` takes about 7 s, of `atmega-button` about 3.8 s, and of `atmega-fade` about
-/// 20 s. So `crates/cli/tests/blink.rs`, `crates/cli/tests/button.rs` and
-/// `crates/cli/tests/fade.rs` each run that example once through `sim run`, with its steps, its
-/// grid and a grid with no row before `stop_ps` beside it, all at once. They hold the envelope
-/// to the steps, and the gridless run's stats, diagnostics, observations, `logic.vcd` and
-/// `serial.csv` to the grid's.
+/// The examples the scans of every example leave out, by name. `crates/cli/tests/blink.rs`,
+/// `crates/cli/tests/button.rs` and `crates/cli/tests/fade.rs` each run that example once
+/// through `sim run`, with its steps, its grid and a grid with no row before `stop_ps`
+/// beside it, all at once. They hold the envelope to the steps, and the gridless run's stats,
+/// diagnostics, observations, `logic.vcd` and `serial.csv` to the grid's.
 pub const CHECKED_ON_THEIR_OWN: &[&str] = &["atmega-blink", "atmega-button", "atmega-fade"];
 
 pub fn transient_examples() -> Vec<String> {

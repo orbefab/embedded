@@ -33,9 +33,8 @@ const STEP_BUDGET: u32 = 50;
 /// before `stop` ends the run with `solver.step_limit`.
 ///
 /// 100000000 sits far above the steps a run whose rows fit needs on ordinary circuits.
-/// A release build reaches it in about 40 s on a resistive pulse and about 70 s on a 1 MHz
-/// pin into a 10 ns load. At this step policy that pin costs about 171000 steps per
-/// simulated ms, so the limit allows about 580 ms of it. The step policy, not this limit,
+/// At this step policy a 1 MHz pin into a 10 ns load costs about 170000 steps per
+/// simulated ms, so the limit allows about 590 ms of it. The step policy, not this limit,
 /// bounds an MCU-rate run.
 const MAX_STEPS: u64 = 100_000_000;
 

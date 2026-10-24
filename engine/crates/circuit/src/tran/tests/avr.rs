@@ -419,7 +419,8 @@ fn an_adc_sample_reads_a_known_divider() {
 }
 
 /// `clone_from` over an earlier state of the same run, and back, leaves the state `clone` does.
-/// The two states differ in their levels, their image, and the core under them.
+/// The two states differ in their levels, their image, and the core under them. A fresh core on
+/// another crystal, copied over either and back, does too.
 #[test]
 fn a_clone_from_leaves_the_state_a_clone_does() {
     let netlist = board(
@@ -457,7 +458,18 @@ fn a_clone_from_leaves_the_state_a_clone_does() {
         unreachable!("two states");
     };
     assert_ne!(early.drive(), late.drive());
-    for (onto, from) in [(early, late), (late, early)] {
+    let other = self::core(&board(
+        20_000 * US,
+        &[],
+        &[],
+        atmega("vcc", ANALOG_SERIAL, MHZ_14_7456, FUSES),
+    ));
+    for (onto, from) in [
+        (early, late),
+        (late, early),
+        (&other, early),
+        (late, &other),
+    ] {
         let mut copy = onto.clone();
         copy.clone_from(from);
         assert_eq!(format!("{copy:?}"), format!("{:?}", from.clone()));

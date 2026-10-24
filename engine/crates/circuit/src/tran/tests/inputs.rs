@@ -6,7 +6,8 @@ use sim_core::logic::Level;
 use sim_core::name::Name;
 use sim_core::name::Ref;
 use sim_core::netlist::{
-    self, Chip, Contact, Document, Model, Netlist, Part, Schedule, Switch, Value, position_rule,
+    self, Appended, Chip, Contact, Document, Model, Netlist, Part, Schedule, Switch, Value,
+    position_rule,
 };
 use sim_core::run_folder::Results;
 use sim_core::serial::SerialByte;
@@ -544,7 +545,7 @@ fn apply_checked(
     session: &mut Session,
     input: &Input,
     want: Result<Time, Rejected>,
-) -> bool {
+) -> Option<Time> {
     let State::Running { accepted, now, .. } = &session.state else {
         panic!("{name} ended");
     };
@@ -567,7 +568,17 @@ fn apply_checked(
         }
         _ => panic!("{name} {input:?}: {got:?} vs {want:?}"),
     }
-    got.is_ok()
+    got.ok().map(|applied| applied.at)
+}
+
+/// Appends `input` to `landings` at `at`, where the session said it landed.
+fn land(landings: &mut Netlist, input: &Input, at: Time) {
+    let id = landings.part_id(&input.part).unwrap();
+    let to = match input.setting {
+        Setting::Contact(to) => Appended::Contact(to),
+        Setting::Level(level) => Appended::Level(level),
+    };
+    landings.append(id, at, to);
 }
 
 /// Advances `session` to its end and checks that a batch run of its export writes the run
@@ -594,11 +605,11 @@ fn serial(session: &Session) -> Vec<SerialByte> {
 
 /// `input` advanced in chunks ended as `input_in_chunks_writes_the_batch_folder` ends them,
 /// with a seeded input after one chunk in three and after each chunk that ends inside the
-/// accepted step's reach. Each input lands where the landing rule says. A batch run of the
-/// export writes the folder the session recorded, and each probe at a row time after the last
-/// input before it is that row, bit for bit. Past half the run, the session's serial bytes are
-/// the first bytes of one call on its export. Once it has ended they are all of them. Returns
-/// the batch and those bytes.
+/// accepted step's reach. Each input lands where the landing rule says, and the export holds
+/// each landing at its time. A batch run of the export writes the folder the session recorded,
+/// and each probe at a row time after the last input before it is that row, bit for bit. Past
+/// half the run, the session's serial bytes are the first bytes of one call on its export. Once
+/// it has ended they are all of them. Returns the batch and those bytes.
 fn inputs_in_chunks_write_the_export_folder(
     name: &str,
     input: &[u8],
@@ -611,6 +622,7 @@ fn inputs_in_chunks_write_the_export_folder(
     let switches = switches(netlist_of(&session));
     let mut rng = Rng(seed);
     let mut probes = Vec::new();
+    let mut landings = netlist_of(&session).clone();
     let mut landed = 0;
     let mut halfway = false;
     while let State::Running { now, next, .. } = &session.state {
@@ -630,7 +642,7 @@ fn inputs_in_chunks_write_the_export_folder(
                 None => random_input(&session, &switches, &mut rng),
             };
             let accepted = accepted_at(&session);
-            let landed_ok = match specs {
+            let landing = match specs {
                 Some(_) => {
                     let want = ruling(&session, &input);
                     apply_checked(name, &mut session, &input, want)
@@ -646,10 +658,11 @@ fn inputs_in_chunks_write_the_export_folder(
                         (Err(got), Err(want)) => assert_eq!(got, want, "{name} {input:?}"),
                         _ => panic!("{name} {input:?}: {got:?} vs {want:?}"),
                     }
-                    got.is_ok()
+                    got.ok().map(|applied| applied.at)
                 }
             };
-            if landed_ok {
+            if let Some(at) = landing {
+                land(&mut landings, &input, at);
                 landed += 1;
                 probes.retain(|&(at, _)| at <= accepted);
             }
@@ -672,6 +685,7 @@ fn inputs_in_chunks_write_the_export_folder(
     let export = session.export().unwrap();
     let exported = netlist::parse(&export).unwrap();
     assert_eq!(parts(&exported), parts(netlist_of(&session)));
+    assert_eq!(parts(&exported), parts(&landings), "{name}: each landing");
     let bytes = serial(&session);
     assert_eq!(bytes, serial_of_one_call(&exported, budget), "{name}");
     let batch = batch(&exported, budget);
@@ -783,7 +797,7 @@ fn export_takes_the_steps(session: &Session) -> Result<(), String> {
 }
 
 /// `input` advanced in seeded chunks with seeded inputs to a seeded time in the middle of the
-/// run, then exported there.
+/// run, then exported there. The export holds each landing at its time.
 fn an_export_mid_run_takes_every_step_the_session_took(
     name: &str,
     input: &[u8],
@@ -795,6 +809,7 @@ fn an_export_mid_run_takes_every_step_the_session_took(
     let switches = switches(netlist_of(&session));
     let mut rng = Rng(seed);
     let until = Time::from_ps(stop / 4 + rng.below(stop / 2));
+    let mut landings = netlist_of(&session).clone();
     let mut landed = 0;
     while session.now() < until {
         let now = session.now().as_ps();
@@ -804,18 +819,21 @@ fn an_export_mid_run_takes_every_step_the_session_took(
             Some(specs) => random_spec(&session, specs, &mut rng),
             None => random_input(&session, &switches, &mut rng),
         };
-        let landed_ok = match specs {
+        let landing = match specs {
             Some(_) => {
                 let want = ruling(&session, &input);
                 apply_checked(name, &mut session, &input, want)
             }
-            None => session.apply(&input).is_ok(),
+            None => session.apply(&input).ok().map(|applied| applied.at),
         };
-        if landed_ok {
+        if let Some(at) = landing {
+            land(&mut landings, &input, at);
             landed += 1;
         }
     }
     assert!(landed > 0, "{name}: no input landed");
+    let exported = netlist::parse(&session.export().unwrap()).unwrap();
+    assert_eq!(parts(&exported), parts(&landings), "{name}: each landing");
     assert_eq!(export_takes_the_steps(&session), Ok(()), "{name}");
 }
 

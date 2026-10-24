@@ -39,6 +39,7 @@ const PD3: u32 = 19;
 const PD4: u32 = 20;
 const PD5: u32 = 21;
 const PD6: u32 = 22;
+const PD7: u32 = 23;
 
 const fn sbis(io: u16, bit: u16) -> u16 {
     0x9B00 | ((io & 0x1F) << 3) | (bit & 7)
@@ -768,4 +769,238 @@ fn a_clone_from_over_untaken_reports_leaves_the_state_a_clone_does() {
         assert!(state.take_pin().is_some() && state.take(Channel::Usart0).is_some());
     }
     assert_clone_from(&states[0], &states[1]);
+}
+
+/// Each pass counts in r17 and writes the count to `GPIOR0`, the EEPROM address and data, the
+/// three timers, the comparator, the external and pin-change interrupts, and `PRR`. Two states
+/// of one run differ in each.
+fn every_register() -> Vec<u16> {
+    const SET: [u16; 28] = [
+        0x3E, 0x41, 0x40, 0x44, 0x45, 0x47, 0x48, 0x6E, 0x80, 0x81, 0x89, 0x88, 0x87, 0x86, 0x6F,
+        0xB0, 0xB1, 0xB3, 0xB6, 0x70, 0x50, 0x69, 0x3D, 0x68, 0x6B, 0x6C, 0x6D, 0x64,
+    ];
+    let mut words = vec![inc(17)];
+    for addr in SET {
+        words.extend(sts(17, addr));
+    }
+    words.push(rjmp(-(words.len() as i16) - 1));
+    words
+}
+
+/// Runs `cpu` to oscillator cycle `until` in eight chunks. Each chunk answers the samples it
+/// halts on with its own levels, then flips `pads`.
+fn ran(cpu: Cpu, until: u64, pads: &[u32]) -> Timeline {
+    let mut timeline = Timeline::new(cpu);
+    for k in 1..=8u64 {
+        while let Some(halt) = timeline.run_until(until * k / 8) {
+            if halt.sample {
+                timeline.sample([0.4 * k as f32; 8], 5.0, 5.0);
+            }
+        }
+        for &pad in pads {
+            timeline.set_pad(pad, k % 2 == 0);
+        }
+    }
+    timeline
+}
+
+/// Runs `words` on the 2.7 V brown-out fuses to oscillator cycle `until`. A pad in `pads`
+/// rises at `until - 2`.
+fn stopped(words: &[u16], until: u64, pads: &[u32]) -> Timeline {
+    let mut timeline = Timeline::new(cpu(words));
+    while timeline.run_until(until - 2).is_some() {}
+    for &pad in pads {
+        timeline.set_pad(pad, true);
+    }
+    while timeline.run_until(until).is_some() {}
+    timeline
+}
+
+/// States a host stops in for a few cycles at most: inside the `BODSE`, `BODS` and `EEMPE`
+/// windows, asleep in power-down, timer 0 counting down past a compare in phase-correct PWM, a
+/// compare blocked by a `TCNT0` write, a compare flag waiting for the next timer clock, `OC0A`
+/// toggled by a compare, and the `ICP1` noise canceler before and after its four samples.
+fn corners() -> Vec<Timeline> {
+    const MCUCR: u16 = 0x35;
+    const SMCR: u16 = 0x33;
+    const TCNT0: u16 = 0x26;
+    const SLEEP: u16 = 0x9588;
+    let bods = [
+        ldi(16, 0x60),
+        out(16, MCUCR),
+        ldi(16, 0x40),
+        out(16, MCUCR),
+        rjmp(-1),
+    ];
+    let eempe = [ldi(16, 0x04), out(16, EECR), rjmp(-1)];
+    let power_down = [ldi(16, 0x05), out(16, SMCR), SLEEP, rjmp(-1)];
+    let phase = [
+        ldi(16, 100),
+        out(16, OCR0A),
+        ldi(16, 1),
+        out(16, TCCR0A),
+        out(16, TCCR0B),
+        rjmp(-1),
+    ];
+    let blocked = [ldi(16, 5), out(16, TCCR0B), out(16, TCNT0), rjmp(-1)];
+    let due = [
+        ldi(16, 1),
+        out(16, OCR0A),
+        ldi(16, 5),
+        out(16, TCCR0B),
+        rjmp(-1),
+    ];
+    let toggle = [
+        ldi(16, 0x42),
+        out(16, TCCR0A),
+        ldi(16, 3),
+        out(16, OCR0A),
+        ldi(16, 1),
+        out(16, TCCR0B),
+        rjmp(-1),
+    ];
+    let mut canceler = vec![ldi(16, 0x81)];
+    canceler.extend(sts(16, TCCR1B));
+    canceler.push(rjmp(-1));
+    let mut settled = stopped(&canceler, 100, &[PB0]);
+    while settled.run_until(200).is_some() {}
+    vec![
+        stopped(&bods, 3, &[]),
+        stopped(&bods, 5, &[]),
+        stopped(&eempe, 3, &[]),
+        stopped(&power_down, 50, &[]),
+        stopped(&phase, 450, &[]),
+        stopped(&blocked, 100, &[]),
+        stopped(&due, 1_500, &[]),
+        stopped(&toggle, 101, &[]),
+        stopped(&toggle, 105, &[]),
+        stopped(&canceler, 100, &[PB0]),
+        settled,
+    ]
+}
+
+fn image(path: &str) -> Cpu {
+    let path = format!("{}/../../firmware/{path}.hex", env!("CARGO_MANIFEST_DIR"));
+    let image = sim_avr::parse_hex(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let mut cpu = Cpu::new();
+    cpu.load_image(&image).unwrap();
+    cpu
+}
+
+/// `clone_from` between any two of: a fresh core, the shipped and compiled firmwares,
+/// [`every_register`] at three times with comparator volts and host SPI and I2C queued,
+/// [`every_queue`] with an edge waiting on each armed pin, the [`corners`], an ADC sample the
+/// host has not answered, a slower, lower, brown-out core with a host baud, a core whose `EECR`
+/// a host poked, and a core stopped one instruction short of a pin write. Each pair leaves the
+/// state `clone` does. A host may copy any core over any other.
+#[test]
+fn a_clone_from_across_runs_leaves_the_state_a_clone_does() {
+    const MS: u64 = 16_000;
+    let mut states = vec![Timeline::new(Cpu::new())];
+    for (name, pads) in [
+        ("sketch/analog_read_serial", &[][..]),
+        ("sketch/blink", &[]),
+        ("sketch/blink_without_delay", &[]),
+        ("sketch/button", &[PD2]),
+        ("sketch/fade", &[]),
+        ("sketch/serial_counter", &[PD0]),
+        ("sketch/tone", &[]),
+        ("adc", &[]),
+        ("echo", &[PD0]),
+        ("speedup", &[]),
+    ] {
+        states.push(ran(image(name), 3 * MS, pads));
+    }
+    for until in [700, 1_900, 4_100] {
+        let mut cpu = cpu(&every_register());
+        cpu.set_voltage(PD6, 3.0);
+        cpu.set_voltage(PD7, 1.0);
+        let clock = sim_avr::SpiClock {
+            period: 8,
+            mode: 0,
+            lsb_first: false,
+        };
+        assert!(cpu.queue_spi_master(until / 2, &[0xA5], clock));
+        cpu.queue_i2c(0x50, true, vec![1, 2], false, None);
+        states.push(ran(cpu, until, &[PB0, PD4, PD5]));
+    }
+    states.push(ran(cpu(&every_queue()), 70_000, &ARMED));
+    states.extend(corners());
+    let mut asked = Timeline::new(image("adc"));
+    while !asked.run_until(MS).is_some_and(|halt| halt.sample) {}
+    states.push(asked);
+    let mut slow = cpu(&every_queue());
+    slow.set_clock_hz(8_000_000);
+    slow.set_vcc(3.3);
+    slow.set_host_serial(Channel::Usart0, 9_600, sim_avr::SerialFrame::EIGHT_N_1);
+    let mut slow = ran(slow, 2 * MS, &ARMED);
+    slow.set_brown_out(true);
+    while slow.run_until(3 * MS).is_some() {}
+    states.push(slow);
+    states.extend(eeprom_pokes());
+    states.push(short_of_a_pin_write());
+    let want: Vec<String> = states
+        .iter()
+        .map(|state| format!("{:?}", state.clone()))
+        .collect();
+    for (i, onto) in states.iter().enumerate() {
+        for (j, from) in states.iter().enumerate() {
+            let mut copy = onto.clone();
+            copy.clone_from(from);
+            assert!(format!("{copy:?}") == want[j], "state {j} over state {i}");
+        }
+    }
+}
+
+/// Data-space `EECR`. `0x01` is `EERE`. `0xFF` is the other poke that leaves the four-cycle
+/// halt set. Both also leave the register window set until the next instruction.
+fn eeprom_pokes() -> Vec<Timeline> {
+    const EECR_DATA: u16 = 0x003F;
+    [0x01, 0xFF]
+        .map(|value| {
+            let mut cpu = cpu(&[0x0000]);
+            cpu.run_until(4);
+            cpu.poke(EECR_DATA, value);
+            Timeline::new(cpu)
+        })
+        .into()
+}
+
+/// A host pokes `EECR`, copies that core over a fresh one, and steps both. The copy takes the
+/// halt the poke left, so the two cores match after the step as well as before it.
+#[test]
+fn a_clone_from_after_an_eeprom_poke_leaves_the_state_a_clone_does() {
+    for poked in eeprom_pokes() {
+        let mut copy = Timeline::new(Cpu::new());
+        copy.clone_from(&poked);
+        assert_eq!(format!("{copy:?}"), format!("{:?}", poked.clone()));
+        let mut stepped = poked.clone();
+        let halt = stepped.run_until(stepped.cpu().cycles() + 1);
+        let copied = copy.run_until(copy.cpu().cycles() + 1);
+        assert_eq!(
+            (copied, format!("{copy:?}")),
+            (halt, format!("{stepped:?}"))
+        );
+    }
+}
+
+/// `SBI DDRB,5` drives PB5 at cycle 2. The host stops at cycle 1, so that drive waits past
+/// the cycle it reached.
+fn short_of_a_pin_write() -> Timeline {
+    let mut timeline = Timeline::new(cpu(&[sbi(DDRB, 5), rjmp(-1)]));
+    assert!(
+        timeline.run_until(1).is_none(),
+        "PB5's drive is still ahead of the cycle the host reached"
+    );
+    timeline
+}
+
+/// Stopped one instruction short of a pin write, `clone_from` over a core that has not run
+/// leaves the state `clone` does. The waiting drive is in this crate.
+#[test]
+fn a_clone_from_short_of_a_pin_write_leaves_the_state_a_clone_does() {
+    let waiting = short_of_a_pin_write();
+    let fresh = Timeline::new(Cpu::new());
+    assert_ne!(format!("{waiting:?}"), format!("{fresh:?}"));
+    assert_clone_from(&fresh, &waiting);
 }

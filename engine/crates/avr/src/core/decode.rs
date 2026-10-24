@@ -926,6 +926,91 @@ mod tests {
         assert_eq!((core.pc, core.cycles), (6, 1));
     }
 
+    /// The closing `BRNE` of a countdown with room before the bound jumps to the last pass that
+    /// leaves the counter above zero. `DEC` covers every register. `SUBI` covers r16 and up,
+    /// alone and followed by one, two or three `SBCI` of 0, and one `SUBI` subtracts 3. `SBIW`
+    /// covers the four pairs from r24, once with the high byte clear and once with it set. A
+    /// loop run pass by pass still holds its counter here.
+    #[test]
+    fn a_countdown_jumps_on_every_register() {
+        let dec = (0..32u16).map(|d| vec![0x940A | d << 4, brne(1), 0xCFFF]);
+        let one = (16..32u16).map(|d| vec![subi(d, 1), brne(1), 0xCFFF]);
+        let sbiw = (0..4u16).map(|pair| vec![0x9701 | pair << 4, brne(1), 0xCFFF]);
+        for words in dec.chain(one).chain(sbiw) {
+            jumped(&words, 200, 1);
+        }
+        jumped(&[subi(24, 3), brne(1), 0xCFFF], 200, 3);
+        for pair in 0..4u16 {
+            jumped(&[0x9701 | pair << 4, brne(1), 0xCFFF], 0x01C8, 1);
+        }
+        for extra in 1..=3u16 {
+            for d in 16..=(31 - extra) {
+                let mut words = vec![subi(d, 1)];
+                for n in 1..=extra {
+                    words.push(sbci(d + n, 0));
+                }
+                words.push(brne(words.len() as u16));
+                words.push(0xCFFF);
+                jumped(&words, 200, 1);
+            }
+        }
+    }
+
+    /// `SUBI` or `SBCI` of `k` into r`d`.
+    fn subi(d: u16, k: u16) -> u16 {
+        imm(0x5000, d, k)
+    }
+
+    fn sbci(d: u16, k: u16) -> u16 {
+        imm(0x4000, d, k)
+    }
+
+    fn imm(op: u16, d: u16, k: u16) -> u16 {
+        op | ((k & 0xF0) << 4) | ((d - 16) << 4) | (k & 0x0F)
+    }
+
+    /// `BRNE` back over `back` words.
+    fn brne(back: u16) -> u16 {
+        let k = (-1 - back as i16) as u16 & 0x7F;
+        0xF401 | (k << 3)
+    }
+
+    /// Starts at the `BRNE` with `counter` already in the loop's registers. The jump leaves the
+    /// last pass that keeps the counter above zero still to run.
+    fn jumped(words: &[u16], counter: u64, k: u64) {
+        let mut core = Core::new(RAMEND, MASK);
+        core.load_words(words);
+        let at = u16::try_from(words.len() - 2).unwrap();
+        let countdown = match core.op(at) {
+            Op::Countdown(countdown) => countdown,
+            other => panic!("word at {at} is {other:?}, not a countdown"),
+        };
+        assert_eq!(u64::from(countdown.k), k, "{words:?}");
+        let mut rest = counter;
+        for offset in 0..countdown.bytes {
+            core.set_reg(countdown.lo + offset, rest as u8);
+            rest >>= 8;
+        }
+        core.pc = at;
+        core.execute_in_run(at, core.op(at), u64::MAX);
+        let passes = (counter - 1) / k;
+        let skip = passes - 1;
+        let mut left = counter - skip * k;
+        let back = words.len() - 2;
+        let wide = matches!(core.op(0), Op::Sbiw(..));
+        let pass = back as u64 + 2 + u64::from(wide);
+        assert_eq!(core.pc, countdown.head(at), "{words:?}");
+        for offset in 0..countdown.bytes {
+            assert_eq!(
+                core.reg(countdown.lo + offset),
+                left as u8,
+                "{words:?} byte {offset}"
+            );
+            left >>= 8;
+        }
+        assert_eq!(core.cycles, 2 + skip * pass, "{words:?}");
+    }
+
     #[test]
     fn spm_leaves_the_table_on_the_loaded_image() {
         let image = [0x95E8, 0xE50A];

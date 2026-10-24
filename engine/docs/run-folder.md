@@ -112,8 +112,8 @@ Levels are `low` and `high`, so the first change is to the level opposite `initi
     "initial": "high",
     "final": "high",
     "count": 10,
-    "first_ps": 626238067791,
-    "last_ps": 3842818967770
+    "first_ps": 626234627965,
+    "last_ps": 3842809045627
   },
   "#u1.logic.reset": {
     "initial": "high",
@@ -263,12 +263,12 @@ $dumpvars
 0#
 0$
 $end
-#231122592994
+#231119312840
 1$
-#626238067791
+#626234627965
 0!
 1#
-#626238067792
+#626234627966
 0#
 ```
 
