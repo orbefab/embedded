@@ -326,6 +326,301 @@ fn rxc_rises_on_the_stop_bit_s_last_vote() {
     );
 }
 
+/// §20.11.5. A store of `UBRR0H` does not reload the prescaler. §20.3.1 keeps
+/// the running count on its old period until that count reaches zero, and
+/// that zero loads the new `UBRR0`.
+///
+/// `UBRR0` is 103 from cycle 0, so the period is 104 and tick `k` is at
+/// `k * 104`. Cycle 0 is not a tick. An `STS` of 1 ends at cycle 5003, and
+/// `UBRR0` becomes 0x167, period 360. The old count reaches zero at
+/// `49 * 104 = 5096`. An edge at 6536 raises `RXC0` at 61616. A grid dated
+/// from cycle 104 raises it at 61664.
+///
+/// The store at 105 ends one cycle after the zero at 104, so the new period
+/// starts at 208. The store at 208 lands on a zero. `reload` counts that
+/// zero before the store lands, so the load keeps the old period and the
+/// new period starts at the next zero. `U2X0` changes the stop vote to 77
+/// periods and leaves the baud grid.
+#[test]
+fn ubrrh_store_waits_for_the_old_count_s_next_zero() {
+    let rows = [
+        (5003u64, false, 6536u64, 61616u64),
+        (105, false, 1648, 56728),
+        (208, false, 1752, 56832),
+        (5003, true, 6536, 34256),
+    ];
+    for (stored, u2x, edge, vote) in rows {
+        assert_eq!(
+            ubrrh_vote(103, 1, stored, u2x),
+            (edge, vote),
+            "store {stored} U2X {u2x}"
+        );
+        let got = ubrrh_rxc(103, 1, stored, u2x, edge, vote);
+        assert_eq!(got, vote, "store {stored} U2X {u2x} edge {edge}");
+    }
+}
+
+/// Reset `UBRR0` is 0, so the period is 1. `UBRR0H` = 1 retires at 3 and
+/// `UBRR0L` = 4 retires at 6. The zeros at 1, 2, and 3 stay on period 1.
+/// The zero at 3 is the high-byte store, so the zero at 4 loads `0x100`.
+/// The reload at 6 keeps those four ticks and loads period 261. `txclk`
+/// index 16 is twelve of those periods after the reload.
+#[test]
+fn ubrrh_then_ubrrl_from_reset_puts_the_start_bit_on_txclk_16() {
+    let reload_at = 6u64;
+    let ticks_before = 4u64;
+    let period = baud_period(0x104);
+    assert_eq!(period, 261);
+    let start = reload_at + (16 - ticks_before) * period;
+    assert_eq!(start, 3138);
+
+    let mut cpu = Cpu::new();
+    let mut words = vec![ldi(16, 1)];
+    words.extend(sts(16, UBRR0H));
+    words.push(ldi(17, 4));
+    words.extend(sts(17, UBRR0L));
+    words.push(ldi(18, u16::from(TXEN)));
+    words.extend(sts(18, UCSR0B));
+    words.push(ldi(19, 0x55));
+    words.extend(sts(19, UDR0));
+    words.push(0xCFFF);
+    cpu.load_words(&words);
+    cpu.run_until(start + period);
+    let edges = tx_edges(&mut cpu);
+    let got = edges
+        .iter()
+        .find(|(level, _)| *level == Level::Low)
+        .map(|edge| edge.1);
+    assert_eq!(got, Some(start), "{edges:?}");
+}
+
+/// `UBRR0` 103. `0x55` commits at cycle 6. The start bit is `txclk` index
+/// 16 at 1664, bit 0 is at 3328, and bit 1 is at 4992. `UBRR0H` = 1 retires
+/// at 5003. The zero at 5096 is index 49 and loads period 360. Bit 2 is
+/// index 64, fifteen periods later.
+#[test]
+fn ubrrh_store_moves_a_bit_in_the_frame_being_sent() {
+    let zero = 49u64 * baud_period(103);
+    assert_eq!(zero, 5096);
+    let bit2 = zero + 15 * baud_period(0x167);
+    assert_eq!(bit2, 10496);
+
+    let mut cpu = Cpu::new();
+    arm_baud(&mut cpu, 103, false, 0x06);
+    let mut words = vec![ldi(16, u16::from(TXEN))];
+    words.extend(sts(16, UCSR0B));
+    words.push(ldi(17, 0x55));
+    words.extend(sts(17, UDR0));
+    words.extend(vec![0u16; 4994]);
+    words.push(ldi(18, 1));
+    words.extend(sts(18, UBRR0H));
+    words.push(0xCFFF);
+    cpu.load_words(&words);
+    cpu.run_until(5003);
+    assert_eq!(cpu.cycles(), 5003, "the STS to UBRR0H ends at 5003");
+    assert_eq!(cpu.peek(UBRR0H), 1);
+    cpu.run_until(bit2 + baud_period(103));
+    let edges = tx_edges(&mut cpu);
+    assert!(
+        edges.contains(&(Level::High, bit2)),
+        "bit 2 rises at {bit2}, got {edges:?}"
+    );
+}
+
+/// A poke of `UBRR0H` follows the same next-zero rule as a store.
+#[test]
+fn ubrrh_poke_waits_for_the_old_count_s_next_zero() {
+    let (edge, vote) = ubrrh_vote(103, 1, 5003, false);
+    assert_eq!((edge, vote), (6536, 61616));
+
+    let mut cpu = Cpu::new();
+    arm_baud(&mut cpu, 103, false, 0x06);
+    cpu.poke(UCSR0B, RXEN);
+    let mut words = vec![0u16; 5003];
+    words.push(ldi(16, 1));
+    words.push(out(16, SMCR_IO));
+    words.push(0x9588);
+    cpu.load_words(&words);
+    cpu.run_until(5003);
+    assert_eq!(cpu.cycles(), 5003);
+    cpu.poke(UBRR0H, 1);
+    assert_eq!(cpu.peek(UBRR0H), 1);
+    let period = baud_period(0x167);
+    let got = rxc_after_supply(&mut cpu, edge, vote, period, "poke UBRR0H at 5003");
+    assert_eq!(got, vote);
+}
+
+/// Two stores of `UBRR0H`, with `UBRR0` 103 from cycle 0. The first retires
+/// at 5003, so the zero at 5096 loads period 360. The second retires at
+/// 5503. The zero at 5456 is the last one at or before that store, so the
+/// zero at 5816 loads period 616. Sample 1 is four periods after that zero.
+#[test]
+fn second_ubrrh_store_anchors_on_the_running_period() {
+    let first_zero = 49u64 * baud_period(103);
+    assert_eq!(first_zero, 5096);
+    let after_first = baud_period(0x167);
+    assert_eq!(after_first, 360);
+    let anchor = first_zero + after_first;
+    assert_eq!(anchor, 5456);
+    let loaded = anchor + after_first;
+    assert_eq!(loaded, 5816);
+    let period = baud_period(0x267);
+    assert_eq!(period, 616);
+    let edge = loaded + 4 * period;
+    assert_eq!(edge, 8280);
+    let vote = edge + stop_vote_offset(false) * period;
+    assert_eq!(vote, 102528);
+
+    let mut cpu = Cpu::new();
+    arm_baud(&mut cpu, 103, false, 0x06);
+    cpu.poke(UCSR0B, RXEN);
+    let mut words = vec![0u16; 5000];
+    words.push(ldi(16, 1));
+    words.extend(sts(16, UBRR0H));
+    words.extend(vec![0u16; 497]);
+    words.push(ldi(16, 2));
+    words.extend(sts(16, UBRR0H));
+    words.push(ldi(16, 1));
+    words.push(out(16, SMCR_IO));
+    words.push(0x9588);
+    cpu.load_words(&words);
+    cpu.run_until(5503);
+    assert_eq!(cpu.cycles(), 5503, "the second STS to UBRR0H ends at 5503");
+    assert_eq!(cpu.peek(UBRR0H), 2);
+    let got = rxc_after_supply(&mut cpu, edge, vote, period, "two UBRR0H stores");
+    assert_eq!(got, vote);
+}
+
+/// An `STS` of `UBRR0H` that ends on a zero of a grid `UBRR0L` set at cycle
+/// 50. The store of 103 reloads at 50, so the next zero is 154, and 154 is
+/// not a multiple of 104. That zero stays on period 104. Period 360 starts
+/// at 258. Sample 1 is four periods later, and the stop vote is 153 periods
+/// after sample 1.
+#[test]
+fn ubrrh_store_on_a_reloaded_grid_keeps_that_zero() {
+    let anchor = 50u64;
+    let low = 103u16;
+    let old = baud_period(low);
+    let stored = anchor + old;
+    assert_eq!(stored, 154);
+    assert_ne!(stored % old, 0, "154 is not on the cycle-0 grid");
+    let loaded = stored + old;
+    assert_eq!(loaded, 258);
+    let period = baud_period((1u16 << 8) | low);
+    assert_eq!(period, 360);
+    let edge = loaded + 4 * period;
+    assert_eq!(edge, 1698);
+    let vote = edge + stop_vote_offset(false) * period;
+    assert_eq!(vote, 56778);
+
+    let mut cpu = Cpu::new();
+    cpu.poke(UCSR0B, RXEN);
+    cpu.poke(UCSR0C, 0x06);
+    let mut words = vec![0u16; usize::try_from(anchor - 3).unwrap()];
+    words.push(ldi(16, low));
+    words.extend(sts(16, UBRR0L));
+    let gap = usize::try_from(stored - anchor - 3).unwrap();
+    words.extend(vec![0u16; gap]);
+    words.push(ldi(17, 1));
+    words.extend(sts(17, UBRR0H));
+    words.push(ldi(16, 1));
+    words.push(out(16, SMCR_IO));
+    words.push(0x9588);
+    cpu.load_words(&words);
+    cpu.run_until(stored);
+    assert_eq!(cpu.cycles(), stored, "the STS to UBRR0H ends on the zero");
+    assert_eq!(cpu.peek(UBRR0L), low as u8);
+    assert_eq!(cpu.peek(UBRR0H), 1);
+    let got = rxc_after_supply(&mut cpu, edge, vote, period, "reloaded grid");
+    assert_eq!(got, vote);
+}
+
+fn rxc_after_supply(cpu: &mut Cpu, edge: u64, vote: u64, period: u64, label: &str) -> u64 {
+    cpu.run_until(edge);
+    assert_eq!(cpu.cycles(), edge, "{label}");
+    cpu.supply(SupplyChannel::Usart0, &[0x55]);
+    let window = vote - 4 * period;
+    cpu.run_until(window);
+    assert_eq!(cpu.cycles(), window, "{label}");
+    assert_eq!(
+        cpu.peek(UCSR0A) & RXC,
+        0,
+        "{label} set RXC before the stop vote"
+    );
+    let limit = vote + 8 * period;
+    while cpu.cycles() < limit {
+        let before = cpu.cycles();
+        cpu.step();
+        assert_eq!(cpu.cycles(), before + 1, "{label}");
+        if cpu.peek(UCSR0A) & RXC != 0 {
+            return cpu.cycles();
+        }
+    }
+    panic!("{label} left RXC clear through {limit}");
+}
+
+/// `(edge, RXC cycle)` after an `UBRR0H` store on the cycle-0 grid.
+fn ubrrh_vote(prior: u16, high: u8, stored: u64, u2x: bool) -> (u64, u64) {
+    let old = baud_period(prior);
+    let period = baud_period((u16::from(high) << 8) | prior);
+    let start = if stored != 0 && stored.is_multiple_of(old) {
+        stored + old
+    } else {
+        stored.div_ceil(old) * old
+    };
+    let edge = start + 4 * period;
+    (edge, edge + stop_vote_offset(u2x) * period)
+}
+
+/// `LDI` plus `STS` to `UBRR0H`, then idle sleep. The store ends at `stored`.
+fn store_ubrr0h(cpu: &mut Cpu, high: u8, stored: u64) {
+    assert!(stored >= 3, "LDI plus STS needs 3 cycles");
+    assert_eq!(cpu.cycles(), 0);
+    let nops = usize::try_from(stored - 3).unwrap();
+    let mut words = vec![0u16; nops];
+    words.push(ldi(16, u16::from(high)));
+    words.extend(sts(16, UBRR0H));
+    words.push(ldi(16, 1));
+    words.push(out(16, SMCR_IO));
+    words.push(0x9588);
+    cpu.load_words(&words);
+    cpu.insns(u32::try_from(nops + 2).unwrap());
+    assert_eq!(cpu.cycles(), stored, "the STS to UBRR0H ends at {stored}");
+    assert_eq!(cpu.peek(UBRR0H), high & 0x0F);
+    cpu.insns(3);
+    assert!(cpu.is_sleeping(), "idle sleep after the UBRR0H store");
+}
+
+fn ubrrh_rxc(prior: u16, high: u8, stored: u64, u2x: bool, edge: u64, expect: u64) -> u64 {
+    let mut cpu = Cpu::new();
+    arm_baud(&mut cpu, prior, u2x, 0x06);
+    cpu.poke(UCSR0B, RXEN);
+    store_ubrr0h(&mut cpu, high, stored);
+    let label = format!("high {high} U2X {u2x} store {stored} edge {edge}");
+    cpu.run_until(edge);
+    assert_eq!(cpu.cycles(), edge, "{label}");
+    cpu.supply(SupplyChannel::Usart0, &[0x55]);
+    let period = baud_period((u16::from(high) << 8) | prior);
+    let window = expect - 4 * period;
+    cpu.run_until(window);
+    assert_eq!(cpu.cycles(), window, "{label}");
+    assert_eq!(
+        cpu.peek(UCSR0A) & RXC,
+        0,
+        "{label} set RXC before the stop vote"
+    );
+    let limit = expect + 8 * period;
+    while cpu.cycles() < limit {
+        let before = cpu.cycles();
+        cpu.step();
+        assert_eq!(cpu.cycles(), before + 1, "{label}");
+        if cpu.peek(UCSR0A) & RXC != 0 {
+            return cpu.cycles();
+        }
+    }
+    panic!("{label} left RXC clear through {limit}");
+}
+
 fn first_rxc_cycle(prior: u16, stored: u64, ubrr: u16, u2x: bool, edge: u64) -> u64 {
     let mut cpu = Cpu::new();
     if stored == 0 {

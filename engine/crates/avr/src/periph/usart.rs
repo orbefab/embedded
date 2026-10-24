@@ -8,6 +8,14 @@
 //! ticks from reset and is not cleared by an `UBRRnL` write. Its power-on
 //! phase is not in the manual. The model starts the count at 0.
 //!
+//! `UBRRnH` does not reload the counter (§20.11.5). The count keeps the
+//! loaded period until its next zero, and that zero loads the new `UBRRn`.
+//! `reload` counts a zero on the store's own cycle before the store lands.
+//! A `UBRRnH` store uses that same order. The zero on the retiring cycle
+//! loaded the old period, and the new period starts at the following zero.
+//! A later `UBRRnL` store syncs with the low byte from before that store,
+//! so a zero between the two stores is counted on the old low byte.
+//!
 //! An idle shifter loads on the next `txclk` at or after the buffer commit
 //! and then sends one bit per `txclk` (§20.6.1). The receiver's start bit is
 //! the first baud tick that sees `RXD` low. Majority samples 8/9/10 (4/5/6
@@ -317,6 +325,11 @@ pub(crate) struct Usart {
     defer_rx_pin: bool,
     /// `UBRRnL` reloads the down-counter at the instruction boundary.
     defer_reload: bool,
+    /// Low byte of `ubrr` before this `UBRRnL` store. The stamp syncs with
+    /// it, because `write` has already replaced the byte.
+    prior_low: u8,
+    /// `UBRRnH` nibble waiting for the retiring edge.
+    pending_ubrrh: Option<u8>,
     /// `U2X` changes the `txclk` divisor without reloading the counter.
     defer_divisor: bool,
     defer_flush_rx: bool,
@@ -388,6 +401,8 @@ impl Usart {
             defer_tx_pin: false,
             defer_rx_pin: false,
             defer_reload: false,
+            prior_low: 0,
+            pending_ubrrh: None,
             defer_divisor: false,
             defer_flush_rx: false,
             clock_on: true,
@@ -408,6 +423,7 @@ impl Usart {
         self.brg_ticks = 0;
         self.brg_tick = false;
         self.brg_period = self.reg_period();
+        self.pending_ubrrh = None;
         self.next_tx = u64::MAX;
         self.next_rx = u64::MAX;
         self.next_host = u64::MAX;
@@ -580,12 +596,14 @@ impl Usart {
                 }
             }
             UBRRL => {
+                self.prior_low = self.ubrr as u8;
                 self.ubrr = (self.ubrr & 0x0F00) | u16::from(value);
                 self.defer_reload = true;
                 touch.stamp = true;
             }
             UBRRH => {
-                self.ubrr = (self.ubrr & 0x00FF) | (u16::from(value & 0x0F) << 8);
+                self.pending_ubrrh = Some(value & 0x0F);
+                touch.stamp = true;
             }
             UDR => {
                 let mspim = self.mspim();
@@ -619,7 +637,7 @@ impl Usart {
             }
             UCSRC => self.ucsrc,
             UBRRL => self.ubrr as u8,
-            UBRRH => (self.ubrr >> 8) as u8,
+            UBRRH => self.pending_ubrrh.unwrap_or((self.ubrr >> 8) as u8),
             UDR => self.last_rx,
             _ => 0,
         }
@@ -628,7 +646,8 @@ impl Usart {
     /// Plants the register. Does not start a frame, move a pin, or log.
     ///
     /// `UBRRnL` still reloads the down-counter, which is what a store does
-    /// (Figure 20-2). The divider count is left as it is.
+    /// (Figure 20-2). `UBRRnH` anchors the running count, then changes `ubrr`.
+    /// The divider count is left as it is.
     pub(crate) fn poke(&mut self, reg: u8, value: u8, cycle: u64) {
         if !self.running() {
             return;
@@ -638,10 +657,12 @@ impl Usart {
             UCSRB => self.ucsrb = value & !RXB8,
             UCSRC => self.ucsrc = value,
             UBRRL => {
+                // The register still holds the low byte the counter is on.
+                self.sync_period(cycle);
                 self.ubrr = (self.ubrr & 0x0F00) | u16::from(value);
                 self.reload(cycle);
             }
-            UBRRH => self.ubrr = (self.ubrr & 0x00FF) | (u16::from(value & 0x0F) << 8),
+            UBRRH => self.apply_ubrrh(value & 0x0F, cycle),
             _ => {}
         }
     }
@@ -718,9 +739,19 @@ impl Usart {
             self.flush_rx();
             self.defer_flush_rx = false;
         }
+        if let Some(high) = self.pending_ubrrh.take() {
+            self.apply_ubrrh(high, cycle);
+            if self.tx.is_some() || !matches!(self.rx, Rx::Hunt) {
+                self.resync(cycle, mux, ctx);
+            }
+        }
         if self.defer_reload {
-            // Count ticks with the period that was actually running. The new
-            // UBRR is already in the register, but it was not in the counter.
+            // The new low byte is already in the register. Count the ticks
+            // with the low byte the counter still had, then reload.
+            let low = self.ubrr & 0x00FF;
+            self.ubrr = (self.ubrr & 0x0F00) | u16::from(self.prior_low);
+            self.sync_period(cycle);
+            self.ubrr = (self.ubrr & 0x0F00) | low;
             self.reload(cycle);
             self.defer_reload = false;
             self.resync(cycle, mux, ctx);
@@ -1437,6 +1468,36 @@ impl Usart {
 
     fn divisor(&self) -> u64 {
         if self.ctrl & U2X != 0 { 8 } else { 16 }
+    }
+
+    /// Retire an `UBRRnH` store at `now`.
+    ///
+    /// The period is brought up to `now` before `ubrr` changes, so the new
+    /// period starts at the next zero of the count that was running.
+    /// `reload` counts a zero on the store's own cycle before the store
+    /// lands. This store follows that order, so a zero on `now` stays in
+    /// the old count.
+    fn apply_ubrrh(&mut self, high: u8, now: u64) {
+        self.sync_period(now);
+        if let Some(last) = self.last_tick_through(now) {
+            self.brg_ticks = self.ticks_loaded(last);
+            self.brg_tick = true;
+            self.brg_at = last;
+        }
+        self.ubrr = (self.ubrr & 0x00FF) | (u16::from(high) << 8);
+    }
+
+    /// Last baud tick at or before `now` on the period that is running.
+    fn last_tick_through(&self, now: u64) -> Option<u64> {
+        if now < self.brg_at {
+            return None;
+        }
+        let steps = (now - self.brg_at) / self.brg_period;
+        if steps == 0 {
+            self.brg_tick.then_some(self.brg_at)
+        } else {
+            Some(self.brg_at + steps * self.brg_period)
+        }
     }
 
     /// Collapse a `UBRRnH`-only change once the running count has hit zero.
