@@ -237,6 +237,8 @@ def self_test(refs):
             )
     cases.append(initial_conditions(refs))
     cases.append(source_decks(refs))
+    cases.append(serial_boundaries(refs))
+    cases.append(source_jump_times(refs))
     cases.append(potentiometer_deck(refs))
     cases.append(bounce_vectors())
     cases.append(vcd_reader(refs))
@@ -345,6 +347,43 @@ def source_decks(refs):
             ],
         ),
         (
+            deck(
+                {"transient": {"stop_ps": 30000, "max_step_ps": 1000, "grid_ps": 1000}},
+                "voltage_source",
+                "voltage",
+                {
+                    "kind": "serial",
+                    "mark": {"value": 5.0},
+                    "space": {"value": 0.0},
+                    "events": [
+                        {"t_ps": 2000, "baud": 500000000, "frame": "8N1", "bytes": [0]}
+                    ],
+                },
+            ),
+            [
+                "vs1 a 0 dc 5.0 pwl(0p 5.0 2000p 5.0 3000p 0.0 20000p 0.0 21000p 5.0)",
+                "vbp0 bp0 0 pwl(2000p 0 2001p 0)",
+                "vbp1 bp1 0 pwl(3000p 0 3001p 0)",
+                "vbp2 bp2 0 pwl(20000p 0 20001p 0)",
+                "vbp3 bp3 0 pwl(21000p 0 21001p 0)",
+                "save v(a) i(vs1)",
+            ],
+        ),
+        (
+            deck(
+                op,
+                "voltage_source",
+                "voltage",
+                {
+                    "kind": "serial",
+                    "mark": {"value": 5.0},
+                    "space": {"value": 0.0},
+                    "events": [],
+                },
+            ),
+            ["vs1 a 0 dc 5.0", "save all"],
+        ),
+        (
             deck(tran, "current_source", "current", pulse),
             [
                 "is1 0 a dc 0.5 pwl(0p 0.5 2000p 0.5 3000p 1.0 4000p 1.0 5000p 0.5 7000p 0.5 "
@@ -357,6 +396,87 @@ def source_decks(refs):
     ok = all(lines == want for (lines, _), want in cases)
     ok = ok and cases[1][0][1]["i(@is1[current])"] == refs.Negated("#s1.i")
     return {"name": "source decks", "ok": ok}
+
+
+def serial_boundaries(refs):
+    """Serial jump times and levels, computed here and not by the engine."""
+    byte = {
+        "kind": "serial",
+        "mark": {"value": 5.0},
+        "space": {"value": 0.0},
+        "events": [{"t_ps": 1000000000, "baud": 9600, "frame": "8N1", "bytes": [0x31]}],
+    }
+    jumps = list(refs.jumps(byte))
+    want = [
+        (1000000000, 5.0, 0.0),
+        (1104166666, 0.0, 5.0),
+        (1208333333, 5.0, 0.0),
+        (1520833333, 0.0, 5.0),
+        (1729166666, 5.0, 0.0),
+        (1937500000, 0.0, 5.0),
+    ]
+    ok = jumps == want
+
+    def counted(data):
+        wave = {
+            "kind": "serial",
+            "mark": {"value": 5.0},
+            "space": {"value": 0.0},
+            "events": [{"t_ps": 10000, "baud": 500000000, "frame": "8N1", "bytes": data}],
+        }
+        return len(list(refs.jumps(wave)))
+
+    ok = ok and counted([0x00]) == 2 and counted([0xFF]) == 2 and counted([0x55]) == 10
+    text = {
+        "kind": "serial",
+        "mark": {"value": 5.0},
+        "space": {"value": 0.0},
+        "events": [
+            {"t_ps": 5000000000, "baud": 9600, "frame": "8N1", "bytes": [0x30, 0x68, 0x69]}
+        ],
+    }
+    times = [at for at, _, _ in refs.jumps(text)]
+    ok = ok and 7083333333 in times
+    try:
+        list(refs.jumps({**byte, "events": [{**byte["events"][0], "frame": "8E1"}]}))
+    except refs.Skip:
+        pass
+    else:
+        ok = False
+    return {"name": "serial boundaries", "ok": ok}
+
+
+def source_jump_times(refs):
+    """`source_jumps` stops at the stop and keeps the floor times."""
+    serial = {
+        "kind": "serial",
+        "mark": {"value": 5.0},
+        "space": {"value": 0.0},
+        "events": [{"t_ps": 1000000000, "baud": 9600, "frame": "8N1", "bytes": [0x31]}],
+    }
+    netlist = {
+        "analysis": {"transient": {"stop_ps": 1_600_000_000}},
+        "parts": [{"voltage": serial}],
+    }
+    pulse = {
+        "kind": "pulse",
+        "initial": {"value": 0.0},
+        "pulsed": {"value": 1.0},
+        "delay_ps": 1000,
+        "width_ps": 2000,
+        "period_ps": 5000,
+    }
+    pulsed = {
+        "analysis": {"transient": {"stop_ps": 12000}},
+        "parts": [{"voltage": pulse}, {"current": serial}],
+    }
+    ok = refs.source_jumps(netlist) == [
+        1000000000,
+        1104166666,
+        1208333333,
+        1520833333,
+    ] and refs.source_jumps(pulsed) == [1000, 3000, 6000, 8000, 11000]
+    return {"name": "source jump times", "ok": ok}
 
 
 def potentiometer_deck(refs):

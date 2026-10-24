@@ -514,3 +514,317 @@ fn a_malformed_steps_waveform_is_one_syntax_error() {
         assert!(found.contains(detail), "{found} lacks {detail}");
     }
 }
+
+fn serial(unit: &str, mark: f64, space: f64, events: &str) -> String {
+    format!(
+        r#"{{ "kind": "serial", "mark": {mark}, "space": {space}, "events": [{events}] }}"#,
+        mark = level(mark, unit),
+        space = level(space, unit),
+    )
+}
+
+fn frame(t_ps: &str, baud: &str, bytes: &str) -> String {
+    format!(r#"{{ "t_ps": {t_ps}, "baud": {baud}, "frame": "8N1", "bytes": [{bytes}] }}"#)
+}
+
+#[test]
+fn a_serial_source_sends_bytes_on_both_kinds() {
+    for (kind, key, unit) in [
+        ("voltage_source", "voltage", "V"),
+        ("current_source", "current", "A"),
+    ] {
+        let body = serial(
+            unit,
+            5.0,
+            0.0,
+            &format!(
+                "{}, {}",
+                frame("10000", "500000000", "49"),
+                frame("30000", "500000000", "0")
+            ),
+        );
+        let netlist = parse(&source(kind, key, &body));
+        assert_eq!(
+            jumps(&netlist),
+            [10000, 12000, 14000, 20000, 24000, 28000, 30000, 48000],
+            "{kind}"
+        );
+        let (_, part) = netlist.parts().next().unwrap();
+        let Shape::Serial(serial) = drive(&part.model).shape() else {
+            panic!("{kind}");
+        };
+        assert_eq!(
+            (serial.mark().si.get(), serial.space().si.get()),
+            (5.0, 0.0)
+        );
+        assert_eq!(serial.events()[0].bytes(), &[49]);
+        assert_eq!(serial.events()[0].end(), Time::from_ps(30_000));
+        assert_eq!(serial.events()[1].baud().get(), 500_000_000);
+        assert_eq!(serial.events()[1].frame().as_str(), "8N1");
+    }
+}
+
+#[test]
+fn each_serial_rule_names_its_event() {
+    let waveform = |field: &str, rule: &str, value: u64| {
+        format!(
+            r##""netlist.waveform" ["#s1"] {{"field":"{field}","rule":"{rule}","value":{value}}}"##
+        )
+    };
+    let one = frame("1000", "500000000", "0");
+    let rules = [
+        (
+            serial("V", 5.0, 0.0, &frame("0", "9600", "49")),
+            vec![schedule_line(0, "at_zero")],
+        ),
+        (
+            serial(
+                "V",
+                5.0,
+                0.0,
+                &format!("{}, {}", one, frame("1000", "9600", "1")),
+            ),
+            vec![schedule_line(1, "not_increasing")],
+        ),
+        (
+            serial(
+                "V",
+                5.0,
+                0.0,
+                &format!("{}, {}", one, frame("500", "9600", "1")),
+            ),
+            vec![schedule_line(1, "not_increasing")],
+        ),
+        (
+            serial("V", 5.0, 0.0, &frame("2000", "9600", "")),
+            vec![schedule_line(0, "same_state")],
+        ),
+        (
+            serial(
+                "V",
+                5.0,
+                0.0,
+                &format!("{}, {}", one, frame("20999", "500000000", "255")),
+            ),
+            vec![schedule_line(1, "overlap")],
+        ),
+        (
+            serial(
+                "V",
+                5.0,
+                0.0,
+                &format!("{}, {}", one, frame("20999", "500000001", "255")),
+            ),
+            vec![
+                schedule_line(1, "overlap"),
+                waveform("voltage.events[1].baud", "too_close", 500_000_001),
+            ],
+        ),
+        (
+            serial(
+                "V",
+                5.0,
+                0.0,
+                &frame("18446744073709541615", "500000000", "0"),
+            ),
+            vec![schedule_line(0, "overflow")],
+        ),
+        (
+            serial(
+                "V",
+                5.0,
+                0.0,
+                &format!(
+                    "{}, {}",
+                    frame("18446744073709541615", "500000000", "0"),
+                    frame("1", "9600", "1"),
+                ),
+            ),
+            vec![schedule_line(0, "overflow")],
+        ),
+        (
+            serial("V", 5.0, 0.0, &frame("1000", "500000001", "49")),
+            vec![waveform("voltage.events[0].baud", "too_close", 500_000_001)],
+        ),
+    ];
+    for (drive, want) in rules {
+        assert_eq!(
+            errors(&source("voltage_source", "voltage", &drive)),
+            want,
+            "{drive}"
+        );
+    }
+    let joined = serial(
+        "V",
+        5.0,
+        0.0,
+        &format!("{}, {}", one, frame("21000", "500000000", "255")),
+    );
+    let netlist = parse(&source("voltage_source", "voltage", &joined));
+    assert_eq!(jumps(&netlist), [1000, 19000, 21000, 23000]);
+}
+
+#[test]
+fn a_serial_rule_message_names_the_previous_end_and_not_a_bounce() {
+    let overlap = source(
+        "voltage_source",
+        "voltage",
+        &serial(
+            "V",
+            5.0,
+            0.0,
+            &format!(
+                "{}, {}",
+                frame("1000", "500000000", "0"),
+                frame("20999", "500000000", "1")
+            ),
+        ),
+    );
+    let doc = serde_json::to_value(&netlist::parse(overlap.as_bytes()).unwrap_err()[0]).unwrap();
+    assert_eq!(doc["data"]["rule"], "overlap");
+    assert!(doc["data"].get("end_ps").is_none());
+    assert_eq!(
+        doc["message"],
+        "#s1 voltage.events[1] starts before the previous event ends at 21000 ps"
+    );
+
+    let empty = source(
+        "voltage_source",
+        "voltage",
+        &serial("V", 5.0, 0.0, &frame("2000", "9600", "")),
+    );
+    let doc = serde_json::to_value(&netlist::parse(empty.as_bytes()).unwrap_err()[0]).unwrap();
+    assert_eq!(
+        doc["message"],
+        "#s1 voltage.events[0] does not change the level"
+    );
+
+    let past = source(
+        "voltage_source",
+        "voltage",
+        &serial(
+            "V",
+            5.0,
+            0.0,
+            &frame("18446744073709541615", "500000000", "0"),
+        ),
+    );
+    let doc = serde_json::to_value(&netlist::parse(past.as_bytes()).unwrap_err()[0]).unwrap();
+    assert_eq!(
+        doc["message"],
+        "#s1 voltage.events[0] ends past the largest time"
+    );
+    assert!(!doc["message"].as_str().unwrap().contains("bounce"));
+}
+
+#[test]
+fn equal_mark_and_space_are_refused() {
+    let waveform = |field: &str| {
+        format!(r##""netlist.waveform" ["#s1"] {{"field":"{field}","rule":"equal","value":0}}"##)
+    };
+    let same = serial("V", 5.0, 5.0, &frame("0", "9600", "49"));
+    assert_eq!(
+        errors(&source("voltage_source", "voltage", &same)),
+        [waveform("voltage.space"), schedule_line(0, "at_zero")]
+    );
+    let doc = serde_json::to_value(
+        &netlist::parse(source("voltage_source", "voltage", &same).as_bytes()).unwrap_err()[0],
+    )
+    .unwrap();
+    assert_eq!(
+        doc["message"],
+        "#s1 voltage.mark and voltage.space are equal"
+    );
+    let folded = serial("A", -0.0, 0.0, &frame("2000", "9600", "1"));
+    assert_eq!(
+        errors(&source("current_source", "current", &folded)),
+        [waveform("current.space")]
+    );
+}
+
+#[test]
+fn an_overflow_stops_the_scan_when_the_event_also_overlaps() {
+    let max = u64::MAX;
+    // One byte at 500000000 ends 20000 ps later. The second event starts 1 ps early and its end is past u64::MAX.
+    let early = format!(
+        "{}, {}, {}",
+        frame(&(max - 20_000).to_string(), "500000000", "0"),
+        frame(&(max - 19_999).to_string(), "500000000", "0"),
+        frame("30000", "9600", "1"),
+    );
+    // A baud of 1 makes one byte 10^13 ps. The second event overlaps that frame and its own end does not fit.
+    let a = max - 10_000_000_000_000;
+    let wide = format!(
+        "{}, {}, {}",
+        frame(&a.to_string(), "1", "0"),
+        frame(&(a + 1).to_string(), "1", "0"),
+        frame(&(a + 2).to_string(), "500000000", "1"),
+    );
+    for (kind, key, unit, events) in [
+        ("voltage_source", "voltage", "V", early.as_str()),
+        ("voltage_source", "voltage", "V", wide.as_str()),
+        ("current_source", "current", "A", early.as_str()),
+        ("current_source", "current", "A", wide.as_str()),
+    ] {
+        let json = source(kind, key, &serial(unit, 5.0, 0.0, events));
+        assert_eq!(errors(&json), [schedule_line(1, "overflow")], "{kind}");
+        let doc = serde_json::to_value(&netlist::parse(json.as_bytes()).unwrap_err()[0]).unwrap();
+        assert_eq!(doc["data"]["event"], 1);
+        assert_eq!(doc["data"]["rule"], "overflow");
+        assert_eq!(
+            doc["message"],
+            format!("#s1 {key}.events[1] ends past the largest time")
+        );
+    }
+}
+
+#[test]
+fn a_wrong_unit_on_a_serial_level_is_reported_and_the_schedule_is_still_checked() {
+    let drive = serial("A", 5.0, 0.0, &frame("0", "9600", "49"));
+    assert_eq!(
+        errors(&source("voltage_source", "voltage", &drive)),
+        [
+            r##""netlist.unit" ["#s1"] {"expected":"V","field":"voltage.mark","found":"A"}"##,
+            r##""netlist.unit" ["#s1"] {"expected":"V","field":"voltage.space","found":"A"}"##,
+            r##""netlist.schedule" ["#s1"] {"event":0,"rule":"at_zero"}"##,
+        ]
+    );
+}
+
+#[test]
+fn a_malformed_serial_waveform_is_one_syntax_error() {
+    let good = serial("V", 5.0, 0.0, &frame("1000", "9600", "49"));
+    let cases = [
+        (
+            good.replace(r#""baud": 9600"#, r#""baud": 0"#),
+            "invalid value: integer `0`",
+        ),
+        (
+            good.replace(r#""baud": 9600"#, r#""baud": 9600.5"#),
+            "invalid type: floating point `9600.5`",
+        ),
+        (
+            good.replace("49", "256"),
+            "invalid value: integer `256`, expected u8",
+        ),
+        (
+            good.replace(r#""8N1""#, r#""8E1""#),
+            "unknown variant `8E1`, expected `8N1`",
+        ),
+        (
+            good.replace(r#""mark""#, r#""initial""#),
+            "unknown field `initial`",
+        ),
+    ];
+    for (drive, detail) in cases {
+        let json = source("voltage_source", "voltage", &drive);
+        let found = netlist::parse(json.as_bytes()).unwrap_err();
+        let [diagnostic] = found.as_slice() else {
+            panic!("{drive} {found:?}");
+        };
+        let doc = serde_json::to_value(diagnostic).unwrap();
+        assert_eq!(doc["code"], "netlist.syntax", "{drive}");
+        let found = doc["data"]["detail"].as_str().unwrap();
+        assert!(found.contains(detail), "{found} lacks {detail}");
+    }
+}

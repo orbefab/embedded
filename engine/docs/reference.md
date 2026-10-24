@@ -102,6 +102,7 @@ A transient reference has `tran` in place of `op`.
 ```json
 "tran": {
   "edge_ramp_ps": 1000,
+  "jumps": [1000000000],
   "switches": { "#sw1": [{ "state": "closed", "t_ps": 2000000000 }] },
   "t_s": [0.0, 8.1e-07],
   "values": {
@@ -113,7 +114,7 @@ A transient reference has `tran` in place of `op`.
 }
 ```
 
-`switches` is every contact edge before the stop, as the script expanded it. `t_s` is ngspice's time points in seconds, or the linearized grid in a chip deck. A chip deck adds two keys:
+`switches` is every contact edge before the stop, as the script expanded it. `jumps` is every source jump before the stop, in part order. The script computes each time itself. A `serial` boundary is `t_ps` plus the floor of `i * 10^12 / baud` picoseconds. `t_s` is ngspice's time points in seconds, or the linearized grid in a chip deck. A chip deck adds two keys:
 
 ```json
 "grid_ps": 2000000000,
@@ -141,9 +142,9 @@ The floor is 1e-9 for a voltage and 1e-12 for a current. It only matters near 0.
 
 A transient example is checked in four steps.
 
-1. The run has no diagnostics, and `observations.json`'s `switches` equals the reference's `switches`. Both equal `bounce::expand` on the parsed netlist.
+1. The run has no diagnostics, and `observations.json`'s `switches` equals the reference's `switches`. Both equal `bounce::expand` on the parsed netlist. The reference's `jumps` equal the source jumps of the parsed netlist, picosecond for picosecond.
 2. Each signal in the reference's `logic` has the same levels in the same order as the engine's `logic.vcd`. The mean time between falling edges is within 1e-3 of ngspice's, and each edge is within 1e-3 of that period of its partner, so the phase is checked as well as the mean.
-3. The reference is read as piecewise linear between its points. It is scored at the engine's rows, without the rows inside two kinds of window. The first is the open interval from each switch edge or source jump to 1 ns later, even when that time is after `stop_ps`. A stop inside the interval is mid-ramp and is not scored. The jumps come from the parsed netlist, so `ngspice.json` has no key for them. A row at the edge holds the old contact or level. Every step after it is stamped with the new one. ngspice ramps the switch or the source across that nanosecond, so the interiors are not comparable. The second is around each pair of chip edges, from the earlier minus `grid_ps` to the later plus `grid_ps`. Inside it the linearized reference reads a chord across the edge. The deck's 1 ns ramp shifts ngspice from an ideal jump by about `dV * 0.5 ns / tau`. The shift is 5.0e-4 V at a time constant of 1 us. A jump into a time constant under about 1 us is not held to the 1e-3 bound against ngspice.
+3. The reference is read as piecewise linear between its points. It is scored at the engine's rows, without the rows inside two kinds of window. The first is the open interval from each switch edge or source jump to 1 ns later, even when that time is after `stop_ps`. A stop inside the interval is mid-ramp and is not scored. Those source jumps are the reference's `jumps`. A row at the edge holds the old contact or level. Every step after it is stamped with the new one. ngspice ramps the switch or the source across that nanosecond, so the interiors are not comparable. The second is around each pair of chip edges, from the earlier minus `grid_ps` to the later plus `grid_ps`. Inside it the linearized reference reads a chord across the edge. The deck's 1 ns ramp shifts ngspice from an ideal jump by about `dV * 0.5 ns / tau`. The shift is 5.0e-4 V at a time constant of 1 us. A jump into a time constant under about 1 us is not held to the 1e-3 bound against ngspice.
 4. At those rows, every trace column must satisfy
 
 ```text

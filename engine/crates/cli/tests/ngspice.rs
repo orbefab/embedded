@@ -75,6 +75,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "ne555-led",
             "rc-switch",
             "v-pulse-rc",
+            "v-serial",
             "v-steps"
         ]
     );
@@ -166,6 +167,20 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
         &expanded(input),
         switches,
         "{label}: bounce::expand vs the script's"
+    );
+    let scripted: Vec<u64> = reference["jumps"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{label}: tran has no jumps"))
+        .iter()
+        .map(|time| {
+            time.as_u64()
+                .unwrap_or_else(|| panic!("{label}: a jump is not an integer"))
+        })
+        .collect();
+    assert_eq!(
+        jumps(input),
+        scripted,
+        "{label}: engine jumps vs the script's"
     );
 
     let trace = done

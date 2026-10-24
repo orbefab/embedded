@@ -4,7 +4,9 @@ mod common;
 
 use common::with_parts;
 use sim_core::finite::Finite;
-use sim_core::netlist::{self, Analysis, Appended, Contact, Document, Model};
+use sim_core::netlist::{
+    self, Analysis, Appended, Baud, Contact, Document, Frame, Model, SerialSend,
+};
 use sim_core::time::Time;
 
 const ANALYSIS: &str =
@@ -303,6 +305,63 @@ fn an_export_of_a_steps_level_appends_the_event_at_its_gap() {
             "t_ps": 7000,
             "level": { "value": 0.0003, "unit": "A", "source": "user" }
         })
+    );
+}
+
+#[test]
+fn an_export_of_a_serial_source_appends_the_event_and_reparses() {
+    let event = r#"{ "t_ps": 10000, "baud": 500000000, "frame": "8N1", "bytes": [0] }"#;
+    let json = with_parts(
+        ANALYSIS,
+        &format!(
+            r#"{{
+              "name": "v1",
+              "kind": "voltage_source",
+              "pins": {{ "p": "a", "n": "gnd" }},
+              "voltage": {{
+                "kind": "serial",
+                "mark": {{ "value": 5.0, "unit": "V", "source": "user" }},
+                "space": {{ "value": 0.0, "unit": "V", "source": "user" }},
+                "events": [{event}]
+              }}
+            }}"#
+        ),
+    );
+    let original: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let (document, mut netlist) = Document::parse(json.as_bytes()).unwrap();
+    let untouched = document.export(&netlist, Time::from_ps(10_000_000));
+    let untouched: serde_json::Value = serde_json::from_slice(&untouched).unwrap();
+    assert_eq!(
+        part_json(&untouched, "v1")["voltage"]["events"],
+        part_json(&original, "v1")["voltage"]["events"]
+    );
+    netlist.append(
+        switch_id(&netlist, "v1"),
+        Time::from_ps(30_000),
+        Appended::Serial(SerialSend {
+            baud: Baud::new(500_000_000).unwrap(),
+            frame: Frame::EightN1,
+            bytes: vec![0xff],
+        }),
+    );
+    let exported = round_trip(&document, &netlist);
+    let events = &part_json(&exported, "v1")["voltage"]["events"];
+    assert_eq!(
+        events[0],
+        part_json(&original, "v1")["voltage"]["events"][0]
+    );
+    assert_eq!(
+        events[1],
+        serde_json::json!({
+            "t_ps": 30000,
+            "baud": 500000000,
+            "frame": "8N1",
+            "bytes": [255]
+        })
+    );
+    assert_eq!(
+        part_json(&exported, "v1")["voltage"]["mark"],
+        part_json(&original, "v1")["voltage"]["mark"]
     );
 }
 

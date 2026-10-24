@@ -185,7 +185,7 @@ One analysis can break more than one rule.
 
 Severity `error`. Refs is the part. `t_ps` is `null`.
 
-The message names the event by its index in `field`. `field` is `events` for a switch, `voltage.events` or `current.events` for a `steps` source, and `position.events` for a potentiometer. Only the message reads `field`. `data` holds `event` and `rule`.
+The message names the event by its index in `field`. `field` is `events` for a switch, `voltage.events` or `current.events` for a `steps` or `serial` source, and `position.events` for a potentiometer. Only the message reads `field`. `data` holds `event` and `rule`.
 
 A switch that is too close says, for example:
 
@@ -193,9 +193,9 @@ A switch that is too close says, for example:
 #sw1 events[1] is less than 2000 ps after the previous event and its bounce window
 ```
 
-A source level that is too close says `#v1 voltage.events[1] is less than 2000 ps after the previous event`. A potentiometer position uses that sentence on `position.events`. A level that does not change says `#v1 voltage.events[1] does not change the level`. A switch that does not change says the contact does not change. `at_zero`, `not_increasing`, and `overflow` use the same sentence for every field.
+A source level that is too close says `#v1 voltage.events[1] is less than 2000 ps after the previous event`. A potentiometer position uses that sentence on `position.events`. A level that does not change says `#v1 voltage.events[1] does not change the level`. A switch that does not change says the contact does not change. A `serial` event with no bytes uses that level sentence. `at_zero` and `not_increasing` use the same sentence for every field. A switch `overflow` says the bounce window ends past the largest time. A `serial` `overflow` says the event ends past the largest time, for example `#s1 voltage.events[0] ends past the largest time`. A `serial` `overlap` says the event starts before the previous event ends, and names that end, for example `#s1 voltage.events[1] starts before the previous event ends at 21000 ps`. `data` does not hold the end.
 
-`rule` is `at_zero`, `same_state`, `not_increasing`, `too_close`, or `overflow`, as [netlist.md](netlist.md#switch) defines them for a switch and [netlist.md](netlist.md#source-waveforms) defines them for a level. Each broken event is one diagnostic. After `overflow`, later events of that part are not checked. An event that is not after the previous one says `#sw1 events[1] is not after the previous event`.
+`rule` is `at_zero`, `same_state`, `not_increasing`, `too_close`, `overflow`, or `overlap`, as [netlist.md](netlist.md#switch) defines them for a switch and [netlist.md](netlist.md#source-waveforms) defines them for a level and a serial event. Each broken event is one diagnostic. After `overflow`, later events of that part are not checked. An event whose end does not fit is `overflow` even when it also starts before the previous event ends. An event that is not after the previous one says `#sw1 events[1] is not after the previous event`.
 
 ## netlist.waveform
 
@@ -207,7 +207,9 @@ The message is `{ref} {field} is {value}; {requirement}`, for example:
 #i1 current.width_ps is 1500; two jumps must be at least 2000 ps apart
 ```
 
-`data` holds `field`, `rule`, and `value`. `field` is the time's dotted field, such as `voltage.at_ps` or `current.period_ps`. `rule` is `at_zero`, `too_close`, or `overflow`, as [netlist.md](netlist.md#source-waveforms) defines them. Each broken rule is one diagnostic, and one waveform can break more than one. An `at_zero` message ends `a jump must come after t = 0`, and an `overflow` message ends `the first fall is past the largest time`.
+`data` holds `field`, `rule`, and `value`. `field` is the time's dotted field, such as `voltage.at_ps` or `current.period_ps`. `rule` is `at_zero`, `too_close`, `overflow`, or `equal`, as [netlist.md](netlist.md#source-waveforms) defines them. Each broken rule is one diagnostic, and one waveform can break more than one. An `at_zero` message ends `a jump must come after t = 0`, and an `overflow` message ends `the first fall is past the largest time`.
+
+`equal` says the two levels are equal, for example `#s1 voltage.mark and voltage.space are equal`. Its `field` is `voltage.space` or `current.space`, and `value` is 0. A `baud` above 500000000 uses `too_close` on field `voltage.events[k].baud` or `current.events[k].baud`, and `value` is that baud.
 
 ## net.floating
 

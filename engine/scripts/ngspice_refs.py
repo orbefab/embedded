@@ -241,6 +241,7 @@ def generate(example, version):
     if transient:
         reference["tran"] = {
             "edge_ramp_ps": EDGE_RAMP_PS,
+            "jumps": source_jumps(netlist),
             "switches": switches(netlist),
             "t_s": vectors["time"],
             "values": values,
@@ -293,6 +294,22 @@ def part_voltages(label, netlist, values, count):
         if len(first) != count or len(second) != count:
             raise SystemExit(f"{label}: {part['name']} voltage has the wrong length")
         values[f"#{part['name']}.v"] = [a - b for a, b in zip(first, second)]
+
+
+def source_jumps(netlist):
+    """Every source jump before the stop, in part order, from `jumps`."""
+    stop = netlist["analysis"]["transient"]["stop_ps"]
+    times = []
+    for part in netlist["parts"]:
+        for key in ("voltage", "current"):
+            wave = part.get(key)
+            if not isinstance(wave, dict) or "kind" not in wave:
+                continue
+            for at, _old, _new in jumps(wave):
+                if at >= stop:
+                    break
+                times.append(at)
+    return times
 
 
 def switches(netlist):
@@ -572,13 +589,17 @@ def number(value):
 
 
 def source_value(value, transient, corners):
-    """A source's value on its deck line. A waveform holds `initial` at the operating point,
-    and in a transient each jump ramps over EDGE_RAMP_PS. Its knots in (0, stop] are corners."""
+    """A source's value on its deck line. A waveform holds its idle level at the operating
+    point, and in a transient each jump ramps over EDGE_RAMP_PS. Its knots in (0, stop] are
+    corners. A serial line idles at `mark`."""
     if "kind" not in value:
         return f"dc {number(value)}"
+    if value["kind"] == "serial" and not value["events"]:
+        return f"dc {number(value['mark'])}"
     if value["kind"] == "steps" and not value["events"]:
         return f"dc {number(value['initial'])}"
-    initial = f"dc {number(value['initial'])}"
+    held = value["mark"] if value["kind"] == "serial" else value["initial"]
+    initial = f"dc {number(held)}"
     if not transient:
         return initial
     points = knots(value, transient["stop_ps"])
@@ -587,9 +608,9 @@ def source_value(value, transient, corners):
 
 
 def knots(wave, stop):
-    """`initial` at 0, then each jump from its old level at the jump to its new level
+    """The idle level at 0, then each jump from its old level at the jump to its new level
     EDGE_RAMP_PS later, through the first knot at or past `stop`."""
-    points = [(0, float(wave["initial"]["value"]))]
+    points = [(0, idle_level(wave))]
     before = 1 if 0 < stop else 0
     for at, old, new in jumps(wave):
         for point in ((at, old), (at + EDGE_RAMP_PS, new)):
@@ -603,8 +624,52 @@ def knots(wave, stop):
     return points
 
 
+def idle_level(wave):
+    """The level at t = 0. A serial line idles at `mark`."""
+    if wave["kind"] == "serial":
+        return float(wave["mark"]["value"])
+    return float(wave["initial"]["value"])
+
+
+def serial_bits(data):
+    """Start at space, eight data bits least significant first, stop at mark."""
+    for byte in data:
+        yield False
+        for shift in range(8):
+            yield (byte >> shift) & 1 == 1
+        yield True
+
+
+def serial_jumps(wave):
+    """Each 8N1 jump. A boundary is `t_ps + floor(i * 10**12 / baud)` from that event."""
+    mark = float(wave["mark"]["value"])
+    space = float(wave["space"]["value"])
+    level = mark
+    span = 1_000_000_000_000
+    for event in wave["events"]:
+        if event["frame"] != "8N1":
+            raise Skip(f"frame {event['frame']} is not 8N1")
+        baud = event["baud"]
+        if type(baud) is not int or baud < 1:
+            raise Skip("baud is not an integer of at least 1")
+        start = event["t_ps"]
+        data = event["bytes"]
+        for index, bit in enumerate(serial_bits(data)):
+            new = mark if bit else space
+            if new != level:
+                yield start + (index * span) // baud, level, new
+                level = new
+        end = start + (10 * len(data) * span) // baud
+        if level != mark:
+            yield end, level, mark
+            level = mark
+
+
 def jumps(wave):
     """Each jump as (time, old level, new level), ascending."""
+    if wave["kind"] == "serial":
+        yield from serial_jumps(wave)
+        return
     low = float(wave["initial"]["value"])
     if wave["kind"] == "step":
         yield wave["at_ps"], low, float(wave["final"]["value"])

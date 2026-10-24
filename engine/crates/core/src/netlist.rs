@@ -15,7 +15,7 @@ use crate::name::{Name, Quantity};
 use crate::time::Time;
 
 pub use document::Document;
-pub use waveform::{Pulse, Shape, Step, Waveform};
+pub use waveform::{Baud, Frame, Pulse, Serial, SerialEvent, SerialSend, Shape, Step, Waveform};
 
 /// The netlist `version`s this engine reads, ascending. See docs/versions.md.
 pub const VERSIONS: &[u64] = &[0];
@@ -91,12 +91,15 @@ impl Netlist {
 
     /// Appends one event to part `id` at `at`. A contact goes on a switch, with the bounce
     /// parse draws for an event at that index. A level goes on a `steps` source or a
-    /// potentiometer. `at` is a time `Schedule::earliest` returned for that part, and the
-    /// event changes the value in force. Panics when the part cannot take that event.
+    /// potentiometer. A serial send goes on a `serial` source. For a contact or a level,
+    /// `at` is a time `Schedule::earliest` returned for that part, and the event changes
+    /// the value in force. A serial send does not use that helper. Panics when the part
+    /// cannot take that event.
     pub fn append(&mut self, id: PartId, at: Time, to: Appended) {
         match to {
             Appended::Contact(to) => self.append_contact(id, at, to),
             Appended::Level(level) => self.append_level(id, at, level),
+            Appended::Serial(send) => self.append_serial(id, at, send),
         }
     }
 
@@ -122,6 +125,14 @@ impl Netlist {
             panic!("{} takes no level", part.name.as_str());
         };
         schedule.append_level(at, level);
+    }
+
+    fn append_serial(&mut self, id: PartId, at: Time, send: SerialSend) {
+        let part = &mut self.parts[id.index()];
+        let Some(serial) = part.model.serial_mut() else {
+            panic!("{} takes no serial event", part.name.as_str());
+        };
+        serial.push(at, send);
     }
 }
 
@@ -295,8 +306,8 @@ impl Model {
     }
 
     /// The settable level schedule, with the document field that holds it and that field's unit.
-    /// A `steps` voltage, a `steps` current, or a potentiometer position. A `step` or `pulse`
-    /// source has none.
+    /// A `steps` voltage, a `steps` current, or a potentiometer position. A `step`, `pulse`, or
+    /// `serial` source has none.
     pub fn level(&self) -> Option<LevelField<'_>> {
         match self {
             Model::VoltageSource(source) => {
@@ -331,6 +342,39 @@ impl Model {
             | Model::Chip(_) => None,
         }
     }
+
+    /// The serial waveform, with the document field that holds it. A `serial` voltage or current.
+    pub fn serial(&self) -> Option<SerialField<'_>> {
+        match self {
+            Model::VoltageSource(source) => serial_field(source.voltage.as_serial(), "voltage"),
+            Model::CurrentSource(source) => serial_field(source.current.as_serial(), "current"),
+            Model::Resistor(_)
+            | Model::Potentiometer(_)
+            | Model::Diode(_)
+            | Model::Led(_)
+            | Model::Capacitor(_)
+            | Model::Switch(_)
+            | Model::Chip(_) => None,
+        }
+    }
+
+    fn serial_mut(&mut self) -> Option<&mut waveform::Serial> {
+        match self {
+            Model::VoltageSource(source) => source.voltage.serial_mut(),
+            Model::CurrentSource(source) => source.current.serial_mut(),
+            Model::Resistor(_)
+            | Model::Potentiometer(_)
+            | Model::Diode(_)
+            | Model::Led(_)
+            | Model::Capacitor(_)
+            | Model::Switch(_)
+            | Model::Chip(_) => None,
+        }
+    }
+}
+
+fn serial_field<'a>(waveform: Option<&'a Serial>, field: &'static str) -> Option<SerialField<'a>> {
+    waveform.map(|waveform| SerialField { waveform, field })
 }
 
 fn level_field<'a>(
@@ -350,6 +394,12 @@ pub struct LevelField<'a> {
     pub schedule: &'a Schedule<Value>,
     pub field: &'static str,
     pub unit: &'static str,
+}
+
+/// A part's serial waveform and the document field that holds it.
+pub struct SerialField<'a> {
+    pub waveform: &'a Serial,
+    pub field: &'static str,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -545,12 +595,14 @@ pub struct Event<T> {
 pub type Edge = Event<Contact>;
 
 /// One event [`Netlist::append`] adds.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Appended {
     /// A switch contact.
     Contact(Contact),
     /// A source level or a potentiometer position, in the field's SI unit.
     Level(Finite),
+    /// Bytes a `serial` source sends from the appended time.
+    Serial(SerialSend),
 }
 
 impl Serialize for Edge {

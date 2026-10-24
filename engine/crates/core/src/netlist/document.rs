@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::{Event, Model, Netlist, Switch, Value as Level};
+use super::{Event, Model, Netlist, SerialEvent, Switch, Value as Level};
 use crate::diagnostic::Diagnostic;
 use crate::name::Name;
 use crate::time::Time;
@@ -21,8 +21,9 @@ impl Document {
     /// This document with every event of `netlist` past the document's own written back,
     /// `stop_ps` set to `stop`, and `grid_ps` cut to `stop`. A switch event is appended to
     /// `events`. A plain `voltage`, `current` or `position` becomes `steps`, with that value
-    /// object as `initial`. A `steps` field gains the new levels. A part with nothing appended
-    /// is left as it was. `netlist` parsed from this document and has only had events appended,
+    /// object as `initial`. A `steps` field gains the new levels. A `serial` field gains the new
+    /// frames on `events`. A part with nothing appended is left as it was. `netlist` parsed from
+    /// this document and has only had events appended,
     /// and `stop` is from `max_step_ps` to `stop_ps`. Keys come out sorted and numbers reprinted.
     pub fn export(&self, netlist: &Netlist, stop: Time) -> Vec<u8> {
         let mut json = self.0.clone();
@@ -41,6 +42,9 @@ impl Document {
                 model => {
                     if let Some(level) = model.level() {
                         append_levels(&mut part[level.field], level.schedule.events(), level.unit);
+                    }
+                    if let Some(serial) = model.serial() {
+                        append_serial(&mut part[serial.field], serial.waveform.events());
                     }
                 }
             }
@@ -84,6 +88,31 @@ fn append_levels(field: &mut Value, events: &[Event<Level>], unit: &str) {
             .expect("parsed events")
             .extend(extra);
     }
+}
+
+fn append_serial(field: &mut Value, events: &[SerialEvent]) {
+    let kind = field.get("kind").and_then(|kind| kind.as_str());
+    if kind != Some("serial") {
+        panic!("a serial field is serial, not {}", kind.unwrap_or("plain"));
+    }
+    let own = field["events"].as_array().expect("parsed events").len();
+    let appended = &events[own..];
+    if appended.is_empty() {
+        return;
+    }
+    field["events"]
+        .as_array_mut()
+        .expect("parsed events")
+        .extend(appended.iter().map(serial_event));
+}
+
+fn serial_event(event: &SerialEvent) -> Value {
+    serde_json::json!({
+        "t_ps": event.at().as_ps(),
+        "baud": event.baud().get(),
+        "frame": event.frame().as_str(),
+        "bytes": event.bytes(),
+    })
 }
 
 fn level_event(event: &Event<Level>, unit: &str) -> Value {

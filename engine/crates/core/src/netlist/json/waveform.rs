@@ -8,8 +8,9 @@ use serde::Deserialize;
 use serde::de::{self, Deserializer, MapAccess, Visitor};
 
 use super::{WireValue, resolve_value};
-use crate::diagnostic::{Diagnostic, WaveformRule};
+use crate::diagnostic::{Diagnostic, ScheduleRule, WaveformRule};
 use crate::name::Ref;
+use crate::netlist::waveform::{Baud, Frame, SerialEvent, serial_end};
 use crate::netlist::{MIN_GAP_PS, Source, Value, Waveform};
 use crate::time::Time;
 
@@ -35,6 +36,43 @@ pub(super) enum WireShape {
         period_ps: u64,
     },
     Steps(WireSteps),
+    Serial(WireSerial),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct WireSerial {
+    mark: WireValue,
+    space: WireValue,
+    events: Vec<WireSerialEvent>,
+}
+
+/// One `serial` event. `bytes` holds each byte as a JSON integer from 0 to 255.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireSerialEvent {
+    t_ps: u64,
+    #[serde(deserialize_with = "baud_at_least_one")]
+    baud: u64,
+    frame: WireFrame,
+    bytes: Vec<u8>,
+}
+
+#[derive(Deserialize)]
+enum WireFrame {
+    #[serde(rename = "8N1")]
+    EightN1,
+}
+
+fn baud_at_least_one<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+    let baud = u64::deserialize(deserializer)?;
+    if baud == 0 {
+        return Err(de::Error::invalid_value(
+            de::Unexpected::Unsigned(0),
+            &"an integer from 1 to 500000000",
+        ));
+    }
+    Ok(baud)
 }
 
 #[derive(Deserialize)]
@@ -129,6 +167,8 @@ pub(super) struct Fields {
     width: &'static str,
     period: &'static str,
     events: &'static str,
+    mark: &'static str,
+    space: &'static str,
 }
 
 pub(crate) const VOLT: &str = "V";
@@ -145,6 +185,8 @@ pub(super) const VOLTAGE: Fields = Fields {
     width: "voltage.width_ps",
     period: "voltage.period_ps",
     events: "voltage.events",
+    mark: "voltage.mark",
+    space: "voltage.space",
 };
 
 pub(super) const CURRENT: Fields = Fields {
@@ -158,6 +200,8 @@ pub(super) const CURRENT: Fields = Fields {
     width: "current.width_ps",
     period: "current.period_ps",
     events: "current.events",
+    mark: "current.mark",
+    space: "current.space",
 };
 
 pub(super) fn resolve_waveform(
@@ -190,6 +234,7 @@ pub(super) fn resolve_waveform(
             })
         }
         WireShape::Steps(steps) => resolve_steps(part, fields, steps, out),
+        WireShape::Serial(serial) => return resolve_serial(part, fields, serial, out),
         WireShape::Pulse {
             initial,
             pulsed,
@@ -229,7 +274,7 @@ pub(super) fn resolve_waveform(
             .into_iter()
             .map(|(field, value, rule)| Diagnostic::NetlistWaveform {
                 part: part.clone(),
-                field,
+                field: Cow::Borrowed(field),
                 value,
                 rule,
             }),
@@ -275,5 +320,101 @@ fn taken_level(
                 source: Source::User,
             },
         ),
+    }
+}
+
+fn resolve_serial(
+    part: &Ref,
+    fields: &Fields,
+    wire: WireSerial,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Waveform> {
+    let (mark_ok, mark) = taken_level(part, fields.mark, fields.unit, wire.mark, out);
+    let (space_ok, space) = taken_level(part, fields.space, fields.unit, wire.space, out);
+    let mut ok = mark_ok && space_ok;
+    if mark.si == space.si {
+        ok = false;
+        out.push(Diagnostic::NetlistWaveform {
+            part: part.clone(),
+            field: Cow::Borrowed(fields.space),
+            value: 0,
+            rule: WaveformRule::Equal,
+        });
+    }
+    let mut events = Vec::new();
+    let mut previous_start = None;
+    let mut previous_end = None;
+    for (index, event) in wire.events.into_iter().enumerate() {
+        let at = event.t_ps;
+        let baud = event.baud;
+        let WireFrame::EightN1 = event.frame;
+        let span = serial_end(at, baud, event.bytes.len());
+        let rule = serial_schedule(
+            at,
+            event.bytes.is_empty(),
+            previous_start,
+            previous_end,
+            span,
+        );
+        if let Some(rule) = rule {
+            ok = false;
+            out.push(Diagnostic::NetlistSchedule {
+                part: part.clone(),
+                field: fields.events,
+                event: index,
+                rule,
+                end_ps: if rule == ScheduleRule::Overlap {
+                    previous_end.unwrap_or(0)
+                } else {
+                    0
+                },
+            });
+        }
+        if baud > u64::from(Baud::MAX) {
+            ok = false;
+            out.push(Diagnostic::NetlistWaveform {
+                part: part.clone(),
+                field: Cow::Owned(format!("{}.events[{index}].baud", fields.key)),
+                value: baud,
+                rule: WaveformRule::TooClose,
+            });
+        }
+        if rule == Some(ScheduleRule::Overflow) {
+            break;
+        }
+        if ok {
+            let rate = u32::try_from(baud).expect("a baud within Baud::MAX fits in u32");
+            events.push(SerialEvent::new(
+                Time::from_ps(at),
+                Baud::new(rate).expect("a baud within Baud::MAX is a baud"),
+                Frame::EightN1,
+                event.bytes,
+            ));
+        }
+        previous_start = Some(at);
+        previous_end = span;
+    }
+    ok.then(|| Waveform::serial(mark, space, events))
+}
+
+fn serial_schedule(
+    at: u64,
+    bytes_empty: bool,
+    previous_start: Option<u64>,
+    previous_end: Option<u64>,
+    span: Option<u64>,
+) -> Option<ScheduleRule> {
+    if previous_start.is_some_and(|previous| at <= previous) {
+        Some(ScheduleRule::NotIncreasing)
+    } else if at == 0 {
+        Some(ScheduleRule::AtZero)
+    } else if bytes_empty {
+        Some(ScheduleRule::SameState)
+    } else if span.is_none() {
+        Some(ScheduleRule::Overflow)
+    } else if previous_end.is_some_and(|end| at < end) {
+        Some(ScheduleRule::Overlap)
+    } else {
+        None
     }
 }

@@ -860,6 +860,7 @@ fn check_events<T: Clone>(
                 field,
                 event,
                 rule,
+                end_ps: 0,
             });
             // The window itself ran past the largest time. Later events are not checked.
             if rule == ScheduleRule::Overflow {

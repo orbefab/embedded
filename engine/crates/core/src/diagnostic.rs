@@ -72,7 +72,8 @@ pub enum AnalysisRule {
     GridOverStop,
 }
 
-/// Which rule a schedule event broke. A switch, a `steps` source, and a potentiometer share it.
+/// Which rule a schedule event broke. A switch, a `steps` source, a potentiometer, and a
+/// `serial` source share it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScheduleRule {
@@ -84,8 +85,11 @@ pub enum ScheduleRule {
     NotIncreasing,
     /// The event is less than `MIN_GAP_PS` after the previous event's last possible edge.
     TooClose,
-    /// The event's bounce window ends past the largest `u64` picosecond.
+    /// The event ends past the largest `u64` picosecond. For a switch that is the end of its
+    /// bounce window.
     Overflow,
+    /// The event starts before the previous serial event ends.
+    Overlap,
 }
 
 /// Which rule a source waveform's time broke.
@@ -98,6 +102,8 @@ pub enum WaveformRule {
     TooClose,
     /// The first fall is past the largest `u64` picosecond.
     Overflow,
+    /// `mark` and `space` are the same SI value, so the line never changes.
+    Equal,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -167,17 +173,19 @@ pub enum Diagnostic {
         rule: AnalysisRule,
     },
     /// `field[event]` breaks a schedule rule. `field` is `events`, `voltage.events`,
-    /// `current.events`, or `position.events`. Only the message reads it.
+    /// `current.events`, or `position.events`. `end_ps` is the previous event's end. Only an
+    /// `overlap` message reads either one. `data` does not hold them.
     NetlistSchedule {
         part: Ref,
         field: &'static str,
         event: usize,
         rule: ScheduleRule,
+        end_ps: u64,
     },
-    /// A source waveform's time field breaks a rule.
+    /// A source waveform's time field breaks a rule. `field` is owned when it names one event.
     NetlistWaveform {
         part: Ref,
-        field: &'static str,
+        field: Cow<'static, str>,
         value: u64,
         rule: WaveformRule,
     },
@@ -501,6 +509,7 @@ impl Diagnostic {
                 field,
                 event,
                 rule,
+                end_ps,
             } => {
                 let what = match rule {
                     ScheduleRule::AtZero => {
@@ -518,8 +527,12 @@ impl Diagnostic {
                     ScheduleRule::TooClose => {
                         format!("is less than {} ps after the previous event", MIN_GAP_PS)
                     }
-                    ScheduleRule::Overflow => {
+                    ScheduleRule::Overflow if *field == "events" => {
                         "has a bounce window that ends past the largest time".to_string()
+                    }
+                    ScheduleRule::Overflow => "ends past the largest time".to_string(),
+                    ScheduleRule::Overlap => {
+                        format!("starts before the previous event ends at {end_ps} ps")
                     }
                 };
                 format!("{part} {field}[{event}] {what}")
@@ -529,16 +542,22 @@ impl Diagnostic {
                 field,
                 value,
                 rule,
-            } => {
-                let must = match rule {
-                    WaveformRule::AtZero => "a jump must come after t = 0".to_string(),
-                    WaveformRule::TooClose => {
-                        format!("two jumps must be at least {} ps apart", MIN_GAP_PS)
-                    }
-                    WaveformRule::Overflow => "the first fall is past the largest time".to_string(),
-                };
-                format!("{part} {field} is {value}; {must}")
-            }
+            } => match rule {
+                WaveformRule::Equal => {
+                    let source = field.strip_suffix(".space").unwrap_or(field.as_ref());
+                    format!("{part} {source}.mark and {source}.space are equal")
+                }
+                WaveformRule::AtZero => {
+                    format!("{part} {field} is {value}; a jump must come after t = 0")
+                }
+                WaveformRule::TooClose => format!(
+                    "{part} {field} is {value}; two jumps must be at least {} ps apart",
+                    MIN_GAP_PS
+                ),
+                WaveformRule::Overflow => {
+                    format!("{part} {field} is {value}; the first fall is past the largest time")
+                }
+            },
             Diagnostic::NetFloating { net } => format!("{net} has no DC path to ground"),
             Diagnostic::SolverSingular { unknown, .. } => format!("singular matrix at {unknown}"),
             Diagnostic::SolverNonFinite { unknown, .. } => {

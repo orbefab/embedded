@@ -393,7 +393,6 @@ mod tests {
             .replace(r#""stop_ps": 20000000,"#, r#""stop_ps": 20000000000,"#);
         let mut circuit = Circuit::new(parse(netlist.as_bytes())).unwrap();
         let v1 = circuit.netlist.part_id(&Name::new("v1").unwrap()).unwrap();
-        let level = Appended::Level(Finite::new(3.0).unwrap());
         let h_ps = 100_000_000;
         let mut memo = Memo::default();
         let mut previous = Solution::zeros(circuit.layout.size());
@@ -401,9 +400,11 @@ mod tests {
         let mut memo_solves = [0; 3];
         for k in 1..=200 {
             if k == 150 {
-                circuit
-                    .netlist
-                    .append(v1, Time::from_ps(14_950_000_000), level);
+                circuit.netlist.append(
+                    v1,
+                    Time::from_ps(14_950_000_000),
+                    Appended::Level(Finite::new(3.0).unwrap()),
+                );
             }
             let at = Time::from_ps(k * h_ps);
             let step = Conditions {

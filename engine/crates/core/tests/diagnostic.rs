@@ -103,6 +103,7 @@ fn samples() -> Vec<Diagnostic> {
             field: "events",
             event: 1,
             rule: ScheduleRule::TooClose,
+            end_ps: 0,
         },
         Diagnostic::NetlistAnalysis {
             field: "max_step_ps",
@@ -122,7 +123,7 @@ fn samples() -> Vec<Diagnostic> {
         },
         Diagnostic::NetlistWaveform {
             part: part("i1"),
-            field: "current.width_ps",
+            field: "current.width_ps".into(),
             value: 1500,
             rule: WaveformRule::TooClose,
         },

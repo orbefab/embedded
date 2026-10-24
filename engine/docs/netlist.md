@@ -186,7 +186,32 @@ A pulse holds `initial` until `delay_ps`, then `pulsed` for `width_ps`, then `in
 }
 ```
 
-Every change is an ideal jump. The level on the interval that ends at a jump is the old one, so a trace row at the time of a jump holds it. A jump at `stop_ps` leaves the last row on the old level. The operating point holds `initial`. An operating point run reads only that.
+A `serial` waveform holds `mark` while idle and for a 1 bit, and `space` for a start bit and a 0 bit. Each event sends `bytes` back to back from `t_ps`, in frame `8N1`, at `baud` bits per second. `examples/v-serial` sends the byte 49 at 9600 baud from 1 ms.
+
+```json
+"voltage": {
+  "kind": "serial",
+  "mark": { "value": 5.0, "unit": "V", "source": "user" },
+  "space": { "value": 0.0, "unit": "V", "source": "user" },
+  "events": [
+    { "t_ps": 1000000000, "baud": 9600, "frame": "8N1", "bytes": [49] }
+  ]
+}
+```
+
+Bit boundary `i` of an event is `t_ps + floor(i * 10^12 / baud)` picoseconds, computed in 128-bit arithmetic. Boundary 0 is the event's `t_ps`. Frame `j` of the event occupies boundaries `10j` through `10j + 10`. Bit 0 of a frame is the start bit, at `space`. Bits 1 to 8 are the data byte, least significant bit first, `mark` for a 1 and `space` for a 0. Bit 9 is the stop bit, at `mark`. The line holds `mark` at t = 0 and between events. A jump is drawn only where the level changes, so two equal bits in a row are one held level, and the frame end is not a jump. The stop bit and the idle line are both `mark`.
+
+An event that breaks a schedule rule is `netlist.schedule` on field `voltage.events` or `current.events`.
+
+- `at_zero`: `t_ps` is 0.
+- `not_increasing`: `t_ps` is not after the previous event's `t_ps`.
+- `same_state`: `bytes` is empty, so the event does not change the level.
+- `overlap`: `t_ps` is before the previous event ends. The message names that end in picoseconds. An event that starts exactly when the previous one ends is legal.
+- `overflow`: the event's end does not fit in an unsigned 64-bit integer. Later events of that source are not checked. An event whose end does not fit is `overflow` even when its `t_ps` is also before the previous end, and `overlap` is not also reported.
+
+`baud` above 500000000 is `netlist.waveform` with rule `too_close` on field `voltage.events[k].baud` or `current.events[k].baud`. A bit at 500000000 baud is 2000 ps, and a shorter bit is under the gap two jumps of one source must keep. `mark` and `space` with the same SI value are `netlist.waveform` with rule `equal` on field `voltage.space` or `current.space`. The message says the two levels are equal, and `data.value` is 0. A `baud` of 0, a byte above 255, a float `baud`, and a `frame` other than `8N1` are `netlist.syntax`.
+
+Every change is an ideal jump. The level on the interval that ends at a jump is the old one, so a trace row at the time of a jump holds it. A jump at `stop_ps` leaves the last row on the old level. The operating point holds `initial` for a `step`, a `pulse`, or `steps`, and `mark` for `serial`. An operating point run reads only that.
 
 A `step` or `pulse` time that breaks a rule is `netlist.waveform`, with its dotted field, such as `current.width_ps`, and the rule. Every broken rule is reported.
 
@@ -194,7 +219,7 @@ A `step` or `pulse` time that breaks a rule is `netlist.waveform`, with its dott
 - `too_close`: `width_ps` is under 2000, or `period_ps` is under `width_ps` plus 2000. Two jumps of one source are at least 2 ns apart, as two edges of one switch are.
 - `overflow`: `delay_ps` plus `width_ps` does not fit in an unsigned 64-bit integer.
 
-A `step` or a `pulse` jump between equal levels is still a jump. A `steps` event whose level equals the level in force is `netlist.schedule` with `same_state`. A missing or unknown key, a float or negative time, a `kind` other than `step`, `pulse`, or `steps`, and an object with both `value` and `kind` are `netlist.syntax`. A level in the wrong unit is `netlist.unit` with its dotted field, such as `current.pulsed` or `voltage.events[2].level`. `steps` times are `netlist.schedule`, not `netlist.waveform`.
+A `step` or a `pulse` jump between equal levels is still a jump. A `serial` waveform whose `mark` and `space` are equal is `netlist.waveform` with `equal`. A `steps` event whose level equals the level in force is `netlist.schedule` with `same_state`, and so is a `serial` event with no bytes. A missing or unknown key, a float or negative time, a `kind` other than `step`, `pulse`, `steps`, or `serial`, and an object with both `value` and `kind` are `netlist.syntax`. A level in the wrong unit is `netlist.unit` with its dotted field, such as `current.pulsed` or `voltage.events[2].level`. `steps` times and `serial` event times are `netlist.schedule`, not `netlist.waveform`.
 
 ### Capacitor
 
