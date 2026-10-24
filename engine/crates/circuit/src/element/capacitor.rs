@@ -1,5 +1,6 @@
 use sim_core::netlist::Capacitor;
 
+use super::CapacitorEnd;
 use crate::mna::{Probe, Stamp};
 use crate::newton::{History, Method};
 
@@ -9,30 +10,49 @@ use crate::newton::{History, Method};
 /// capacitance, and moves the held voltage by the current times `HOLD / C`.
 const HOLD: f64 = 1e-15;
 
-/// Branch 0 is the current entering pin `a`. A held voltage scales with the sources.
-/// At t = 0 a capacitor is held at `initial`, or open with 0 current. At a restart it
-/// is held at its voltage in the solution before the edge. In a step it follows the
-/// companion, with `v0` and `i0` read from the last accepted solution.
+/// The element's only capacitor is branch 0.
 pub(super) fn stamp(capacitor: &Capacitor, stamp: &mut Stamp<'_>) {
-    let [a, b] = capacitor.pins;
-    let capacitance = capacitor.capacitance.si.get();
+    let initial = capacitor.initial.as_ref().map(|initial| initial.si.get());
+    stamp_capacitor(
+        stamp,
+        0,
+        capacitor.pins.map(CapacitorEnd::Net),
+        capacitor.capacitance.si.get(),
+        initial,
+    );
+}
+
+/// Stamp capacitor `k` from `ends[0]` to `ends[1]`. Branch `k` is the current entering
+/// `ends[0]`. A held voltage scales with the sources. `initial` is the voltage held at
+/// t = 0, and `None` leaves the capacitor open. A restart holds the voltage in the
+/// solution before the edge. A step follows the companion. `v0` and `i0` come from the
+/// last accepted solution on branch `k`.
+pub(crate) fn stamp_capacitor(
+    stamp: &mut Stamp<'_>,
+    k: usize,
+    ends: [CapacitorEnd; 2],
+    capacitance: f64,
+    initial: Option<f64>,
+) {
+    let [a, b] = ends.map(|end| end.node(stamp.layout, stamp.part));
     let scale = stamp.conditions.source_scale;
-    stamp.branch_current(a, b, 0);
+    stamp.branch_current(a, b, k);
     let held = |stamp: &mut Stamp<'_>, volts: f64| {
-        stamp.branch_row(a, b, 0, -HOLD / capacitance, 1.0, volts * scale);
+        stamp.branch_row(a, b, k, -HOLD / capacitance, 1.0, volts * scale);
     };
     match stamp.conditions.history {
-        History::Start => match &capacitor.initial {
-            None => stamp.branch_row(a, b, 0, 1.0, 0.0, 0.0),
-            Some(initial) => held(stamp, initial.si.get()),
+        History::Start => match initial {
+            None => stamp.branch_row(a, b, k, 1.0, 0.0, 0.0),
+            Some(volts) => held(stamp, volts),
         },
-        History::Restart { previous } => held(stamp, previous.voltage(a) - previous.voltage(b)),
+        History::Restart { previous } => held(stamp, previous.node(a) - previous.node(b)),
         History::Step(step) => {
             let previous = stamp.probe(step.previous);
             let v0 = previous.v(a) - previous.v(b);
-            let method = step.method_of(stamp.part);
-            let (g, rhs) = companion(capacitance, method, step.h(), v0, previous.branch(0));
-            stamp.branch_row(a, b, 0, 1.0, -g, rhs);
+            let index = stamp.layout.charge_index(stamp.part, k);
+            let method = step.method_of(index);
+            let (g, rhs) = companion(capacitance, method, step.h(), v0, previous.branch(k));
+            stamp.branch_row(a, b, k, 1.0, -g, rhs);
         }
     }
 }
@@ -75,5 +95,83 @@ mod tests {
         assert!((mean - 1e-6 * (3.0 - 2.0) / 1e-3).abs() <= 1e-18, "{mean}");
         let held = g * 2.0 + rhs;
         assert!((held + 5e-4).abs() <= 1e-15, "{held}");
+    }
+
+    /// `a_r` then `b_v` then `c_c`, so the capacitor's part index is not its charge index.
+    /// A stiff charge takes backward Euler. Stiffening the part index leaves trapezoidal.
+    #[test]
+    fn a_step_stiffens_the_charge_index_and_not_the_part_index() {
+        use sim_core::name::Name;
+        use sim_core::netlist::{self};
+
+        use crate::mna::{Solution, System};
+        use crate::newton::{ChargeIndex, Circuit, Conditions, Integration, Iterate};
+
+        let netlist = netlist::parse(
+            br#"{
+              "version": 0,
+              "seed": 0,
+              "analysis": { "op": {} },
+              "ground": "gnd",
+              "nets": ["gnd", "n"],
+              "parts": [
+                { "name": "a_r", "kind": "resistor", "pins": { "a": "n", "b": "gnd" },
+                  "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+                  "ratings": { "power": null } },
+                { "name": "b_v", "kind": "voltage_source", "pins": { "p": "n", "n": "gnd" },
+                  "voltage": { "value": 2.0, "unit": "V", "source": "user" } },
+                { "name": "c_c", "kind": "capacitor", "pins": { "a": "n", "b": "gnd" },
+                  "capacitance": { "value": 1e-6, "unit": "F", "source": "user" },
+                  "initial": null }
+              ]
+            }"#,
+        )
+        .unwrap();
+        let circuit = Circuit::new(netlist).unwrap();
+        let cap = circuit.netlist.part_id(&Name::new("c_c").unwrap()).unwrap();
+        let charge = circuit.layout.charge_index(cap, 0);
+        assert_ne!(charge, ChargeIndex::new(cap.index()));
+        let previous = Solution::from(vec![2.0, 0.0, 5e-4]);
+
+        let solved = |stiff: &[ChargeIndex]| -> f64 {
+            let conditions = Conditions {
+                history: History::Step(Integration {
+                    method: Method::Trapezoidal,
+                    stiff,
+                    h_ps: 1_000_000_000,
+                    previous: &previous,
+                }),
+                ..Conditions::NOMINAL
+            };
+            let iterate = Iterate::initial(&circuit);
+            let mut system = System::new(&circuit.layout);
+            system.reset(&circuit.layout, conditions.gmin);
+            for (id, part) in circuit.netlist.parts() {
+                super::super::stamp(
+                    &part.model,
+                    &mut Stamp::new(&mut system, &circuit.layout, id, &iterate, &conditions),
+                );
+            }
+            let solution = system.solve().expect("the held source is nonsingular");
+            solution.get(circuit.layout.branch_row(cap, 0))
+        };
+
+        let at_v0 = |method: Method| {
+            let (g, rhs) = companion(1e-6, method, 1e-3, 2.0, 5e-4);
+            g * 2.0 + rhs
+        };
+        let backward = solved(&[charge]);
+        let trapezoidal = solved(&[]);
+        let by_part = solved(&[ChargeIndex::new(cap.index())]);
+        assert!(
+            (backward - at_v0(Method::BackwardEuler)).abs() < 1e-9,
+            "{backward}"
+        );
+        assert!(
+            (trapezoidal - at_v0(Method::Trapezoidal)).abs() < 1e-9,
+            "{trapezoidal}"
+        );
+        assert!((by_part - trapezoidal).abs() < 1e-12, "{by_part}");
+        assert!((backward - trapezoidal).abs() > 1e-4);
     }
 }

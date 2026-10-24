@@ -9,11 +9,12 @@
 //! a small swing on a large level is held to its own size, and a full swing is not held to
 //! a millionth of the level it passes through.
 
-use sim_core::netlist::{Model, Netlist, PartId};
+use sim_core::netlist::{Netlist, PartId};
 use sim_core::time::Time;
 
+use crate::element;
 use crate::mna::{Layout, Node, Solution};
-use crate::newton::{Method, RELTOL, VNTOL};
+use crate::newton::{ChargeIndex, Method, RELTOL, VNTOL, method_on};
 
 /// Each capacitor's branch row, pins and capacitance, and the circuit's net rows. Built once
 /// with the layout.
@@ -24,7 +25,8 @@ pub(crate) struct Charges {
 }
 
 struct Charge {
-    part: PartId,
+    /// In the circuit's charge list. Stiffness keys on it.
+    index: ChargeIndex,
     branch: usize,
     pins: [Node; 2],
     farad: f64,
@@ -32,22 +34,30 @@ struct Charge {
 
 impl Charges {
     pub(crate) fn new(netlist: &Netlist, layout: &Layout) -> Charges {
-        let caps = netlist
-            .parts()
-            .filter_map(|(id, part)| match &part.model {
-                Model::Capacitor(capacitor) => Some(Charge {
-                    part: id,
-                    branch: layout.branch_row(id, 0),
-                    pins: capacitor.pins.map(Node::from),
-                    farad: capacitor.capacitance.si.get(),
-                }),
-                _ => None,
+        let mut owned = Vec::new();
+        for (id, part) in netlist.parts() {
+            for cap in element::charges(&part.model) {
+                owned.push((id, cap));
+            }
+        }
+        Self::from_owned(&owned, layout, netlist.nets().len() - 1)
+    }
+
+    fn from_owned(
+        owned: &[(PartId, element::OwnedCapacitor)],
+        layout: &Layout,
+        nets: usize,
+    ) -> Charges {
+        let caps = owned
+            .iter()
+            .map(|(id, cap)| Charge {
+                index: layout.charge_index(*id, cap.k),
+                branch: layout.branch_row(*id, cap.k),
+                pins: cap.ends.map(|end| end.node(layout, *id)),
+                farad: cap.farad,
             })
             .collect();
-        Charges {
-            caps,
-            nets: netlist.nets().len() - 1,
-        }
+        Charges { caps, nets }
     }
 
     /// The highest net voltage minus the lowest, ground's 0 V included.
@@ -145,13 +155,19 @@ pub(crate) enum Segment {
 /// they try the trapezoidal rule again.
 #[derive(Clone)]
 pub(crate) enum Stiff {
-    /// On backward Euler, ascending. After an accepted step of `retry` ps or more, the next
-    /// step tries them on the trapezoidal rule.
-    Held { parts: Vec<PartId>, retry: u64 },
+    /// On backward Euler, ascending charge indices. After an accepted step of `retry` ps or
+    /// more, the next step tries them on the trapezoidal rule.
+    Held {
+        indices: Vec<ChargeIndex>,
+        retry: u64,
+    },
     /// This step tries them on the trapezoidal rule. Only an accepted step of `retry` ps or
     /// more passes the try. A shorter accepted step, cut or not, is one a mode still alive
     /// passes too, so the next step tries them again.
-    Trying { parts: Vec<PartId>, retry: u64 },
+    Trying {
+        indices: Vec<ChargeIndex>,
+        retry: u64,
+    },
 }
 
 /// The accepted backward Euler step, in ps, after which a stiff capacitor first tries the
@@ -166,14 +182,14 @@ const TRY: f64 = 1e-3;
 
 impl Stiff {
     const NONE: Stiff = Stiff::Held {
-        parts: Vec::new(),
+        indices: Vec::new(),
         retry: RETRY,
     };
 
     /// The capacitors on backward Euler this step.
-    fn parts(&self) -> &[PartId] {
+    fn indices(&self) -> &[ChargeIndex] {
         match self {
-            Stiff::Held { parts, .. } => parts,
+            Stiff::Held { indices, .. } => indices,
             Stiff::Trying { .. } => &[],
         }
     }
@@ -181,8 +197,8 @@ impl Stiff {
     /// After an accepted step of `h` ps.
     fn advance(self, h: u64) -> Stiff {
         match self {
-            Stiff::Held { parts, retry } if !parts.is_empty() && h >= retry => {
-                Stiff::Trying { parts, retry }
+            Stiff::Held { indices, retry } if !indices.is_empty() && h >= retry => {
+                Stiff::Trying { indices, retry }
             }
             Stiff::Trying { retry, .. } if h >= retry => Stiff::NONE,
             stiff => stiff,
@@ -191,15 +207,15 @@ impl Stiff {
 
     /// For a retry of the same step of `h` ps: `more` on backward Euler too, and the tried
     /// capacitors back on it until the step reaches twice `h`.
-    fn with(self, more: &[PartId], h: u64) -> Stiff {
-        let (mut parts, retry) = match self {
-            Stiff::Held { parts, retry } => (parts, retry),
-            Stiff::Trying { parts, .. } => (parts, h.saturating_mul(2).max(RETRY)),
+    fn with(self, more: &[ChargeIndex], h: u64) -> Stiff {
+        let (mut indices, retry) = match self {
+            Stiff::Held { indices, retry } => (indices, retry),
+            Stiff::Trying { indices, .. } => (indices, h.saturating_mul(2).max(RETRY)),
         };
-        parts.extend_from_slice(more);
-        parts.sort_unstable();
-        parts.dedup();
-        Stiff::Held { parts, retry }
+        indices.extend_from_slice(more);
+        indices.sort_unstable();
+        indices.dedup();
+        Stiff::Held { indices, retry }
     }
 }
 
@@ -302,7 +318,7 @@ impl Segment {
     }
 
     /// The same point and step of `h` ps, with `more` stiff too.
-    pub(crate) fn stiffen(self, more: &[PartId], h: u64) -> Segment {
+    pub(crate) fn stiffen(self, more: &[ChargeIndex], h: u64) -> Segment {
         match self {
             // Every capacitor takes backward Euler on the first step, so none turns stiff on it.
             Segment::Start { span } => Segment::Start { span },
@@ -329,30 +345,28 @@ impl Segment {
     }
 
     /// The stiff capacitors on backward Euler this step.
-    pub(crate) fn stiff(&self) -> &[PartId] {
+    pub(crate) fn stiff(&self) -> &[ChargeIndex] {
         match self {
             Segment::Start { .. } => &[],
-            Segment::Smooth { stiff, .. } => stiff.parts(),
+            Segment::Smooth { stiff, .. } => stiff.indices(),
         }
     }
 
     /// The stiff capacitors this step tries on the trapezoidal rule.
-    fn tried(&self) -> &[PartId] {
+    fn tried(&self) -> &[ChargeIndex] {
         match self {
             Segment::Smooth {
-                stiff: Stiff::Trying { parts, .. },
+                stiff: Stiff::Trying { indices, .. },
                 ..
-            } => parts,
+            } => indices,
             _ => &[],
         }
     }
 
-    fn method_of(&self, part: PartId) -> Method {
+    fn method_of(&self, charge: ChargeIndex) -> Method {
         match self {
-            Segment::Smooth { stiff, .. } if stiff.parts().binary_search(&part).is_err() => {
-                Method::Trapezoidal
-            }
-            _ => Method::BackwardEuler,
+            Segment::Smooth { stiff, .. } => method_on(stiff.indices(), self.method(), charge),
+            Segment::Start { .. } => Method::BackwardEuler,
         }
     }
 }
@@ -366,8 +380,8 @@ pub(crate) struct Error {
     pub(crate) method: Method,
     /// Each capacitor's swing with this step folded in. `advance` stores it on accept.
     pub(crate) swings: Vec<Swing>,
-    /// The trapezoidal capacitors over Newton's tolerance, ascending.
-    over: Vec<PartId>,
+    /// The trapezoidal capacitors over Newton's tolerance, ascending charge indices.
+    over: Vec<ChargeIndex>,
     /// The worst error over Newton's tolerance of the capacitors the step tried on the
     /// trapezoidal rule. 0 when it tried none.
     tried: f64,
@@ -381,7 +395,7 @@ pub(crate) enum Verdict {
     Reject,
     /// Retry the same step from the same point, with these capacitors stiff too, and the
     /// ones it tried back on backward Euler.
-    Stiffen(Vec<PartId>),
+    Stiffen(Vec<ChargeIndex>),
 }
 
 impl Error {
@@ -425,7 +439,7 @@ pub(crate) fn error(
     let mut tried = 0.0f64;
     for (cap, swing) in charges.caps.iter().zip(&swings) {
         let (i0, i1) = (last.get(cap.branch), next.get(cap.branch));
-        let cap_method = segment.method_of(cap.part);
+        let cap_method = segment.method_of(cap.index);
         let error = match (cap_method, segment) {
             (
                 Method::Trapezoidal,
@@ -451,9 +465,9 @@ pub(crate) fn error(
             _ => error / (SHARE * swing.volts() + VNTOL),
         };
         if newton > 1.0 && cap_method == Method::Trapezoidal {
-            over.push(cap.part);
+            over.push(cap.index);
         }
-        if segment.tried().binary_search(&cap.part).is_ok() {
+        if segment.tried().binary_search(&cap.index).is_ok() {
             tried = tried.max(newton);
         }
         if ratio > ratio_worst {
@@ -478,32 +492,11 @@ mod tests {
     use super::*;
 
     /// The ids of two capacitors, `c1` and `c2`, in that order.
-    fn ids() -> [PartId; 2] {
-        let netlist = sim_core::netlist::parse(
-            br#"{
-              "version": 0,
-              "seed": 0,
-              "analysis": { "transient": { "stop_ps": 1000, "max_step_ps": 1000, "grid_ps": 1000 } },
-              "ground": "gnd",
-              "nets": ["gnd", "a"],
-              "parts": [
-                { "name": "c1", "kind": "capacitor", "pins": { "a": "a", "b": "gnd" },
-                  "capacitance": { "value": 1e-6, "unit": "F", "source": "user" }, "initial": null },
-                { "name": "c2", "kind": "capacitor", "pins": { "a": "a", "b": "gnd" },
-                  "capacitance": { "value": 1e-6, "unit": "F", "source": "user" }, "initial": null }
-              ]
-            }"#,
-        )
-        .unwrap();
-        let ids: Vec<PartId> = netlist.parts().map(|(id, _)| id).collect();
-        [ids[0], ids[1]]
-    }
-
     /// One capacitor of `farad` from row 0 to ground, its current in row 1.
     fn one(farad: f64) -> Charges {
         Charges {
             caps: vec![Charge {
-                part: ids()[0],
+                index: ChargeIndex::new(0),
                 branch: 1,
                 pins: [Node::Row(0), Node::Ground],
                 farad,
@@ -514,17 +507,16 @@ mod tests {
 
     /// Two capacitors of `farad` from row 0 to ground, their currents in rows 1 and 2.
     fn two(farad: f64) -> Charges {
-        let [first, second] = ids();
         Charges {
             caps: vec![
                 Charge {
-                    part: first,
+                    index: ChargeIndex::new(0),
                     branch: 1,
                     pins: [Node::Row(0), Node::Ground],
                     farad,
                 },
                 Charge {
-                    part: second,
+                    index: ChargeIndex::new(1),
                     branch: 2,
                     pins: [Node::Row(0), Node::Ground],
                     farad,
@@ -559,8 +551,12 @@ mod tests {
         accept(segment, &charges, at, last, h, &next)
     }
 
+    fn ix(index: usize) -> ChargeIndex {
+        ChargeIndex::new(index)
+    }
+
     /// A trapezoidal segment from 0 V and 0 A at t = 0, with `stiff` stiff.
-    fn smooth(stiff: &[PartId]) -> Segment {
+    fn smooth(stiff: &[ChargeIndex]) -> Segment {
         let last = Solution::zeros(3);
         advanced(Segment::start(&two(1e-9), &last), Time::ZERO, last, 1).stiffen(stiff, 1)
     }
@@ -587,7 +583,7 @@ mod tests {
         // A stiff capacitor keeps Newton's tolerance.
         let charges = one(farad);
         let first = (Segment::start(&charges, &last), SHARE * exact + VNTOL);
-        let stiff = (smooth(&[ids()[0]]), RELTOL * (1.0 + exact) + VNTOL);
+        let stiff = (smooth(&[ix(0)]), RELTOL * (1.0 + exact) + VNTOL);
         for (segment, tolerance) in [first, stiff] {
             let got = error(
                 &charges,
@@ -629,7 +625,7 @@ mod tests {
         let after =
             |segment: Segment| accept(segment, &charges, Time::ZERO, point(0.5, 5e-3), 100, &last);
         let trapezoidal = after(Segment::start(&charges, &point(0.5, 5e-3)));
-        let stiff = after(Segment::start(&charges, &point(0.5, 5e-3))).stiffen(&[ids()[0]], 100);
+        let stiff = after(Segment::start(&charges, &point(0.5, 5e-3))).stiffen(&[ix(0)], 100);
         for segment in [Segment::start(&charges, &last), trapezoidal, stiff] {
             let got = error(&charges, &segment, Time::from_ps(100), &last, 100, &next);
             assert_eq!(got.ratio, 0.0);
@@ -638,17 +634,16 @@ mod tests {
 
     #[test]
     fn the_ratio_is_the_worst_capacitor_against_its_swing() {
-        let [first, second] = ids();
         let charges = Charges {
             caps: vec![
                 Charge {
-                    part: first,
+                    index: ChargeIndex::new(0),
                     branch: 2,
                     pins: [Node::Row(0), Node::Ground],
                     farad: 1e-6,
                 },
                 Charge {
-                    part: second,
+                    index: ChargeIndex::new(1),
                     branch: 3,
                     pins: [Node::Row(0), Node::Row(1)],
                     farad: 1e-6,
@@ -697,30 +692,28 @@ mod tests {
 
     #[test]
     fn a_stiff_capacitor_stays_on_backward_euler_and_the_others_do_not() {
-        let [first, second] = ids();
-        let segment = advanced(smooth(&[second]), Time::from_ps(1), Solution::zeros(3), 1);
-        assert_eq!(segment.stiff(), [second]);
-        assert_eq!(segment.method_of(first), Method::Trapezoidal);
-        assert_eq!(segment.method_of(second), Method::BackwardEuler);
-        let both = segment.stiffen(&[second, first], 1);
-        assert_eq!(both.stiff(), [first, second]);
+        let segment = advanced(smooth(&[ix(1)]), Time::from_ps(1), Solution::zeros(3), 1);
+        assert_eq!(segment.stiff(), [ix(1)]);
+        assert_eq!(segment.method_of(ix(0)), Method::Trapezoidal);
+        assert_eq!(segment.method_of(ix(1)), Method::BackwardEuler);
+        let both = segment.stiffen(&[ix(1), ix(0)], 1);
+        assert_eq!(both.stiff(), [ix(0), ix(1)]);
     }
 
     #[test]
     fn only_a_trapezoidal_capacitor_over_its_tolerance_at_1_ps_turns_stiff() {
-        let [first, second] = ids();
         // Both currents jump by 1 mA into 1 fF: far over 1 nV on either rule.
         let last = Solution::from(vec![1.0, 0.0, 0.0]);
         let next = Solution::from(vec![1.0, 1e-3, 1e-3]);
         let at = Time::from_ps(1);
-        let one_stiff = error(&two(1e-15), &smooth(&[second]), at, &last, 1, &next);
-        assert!(matches!(one_stiff.verdict(1), Verdict::Stiffen(parts) if parts == [first]));
-        let longer = error(&two(1e-15), &smooth(&[second]), at, &last, 2, &next);
+        let one_stiff = error(&two(1e-15), &smooth(&[ix(1)]), at, &last, 1, &next);
+        assert!(matches!(one_stiff.verdict(1), Verdict::Stiffen(indices) if indices == [ix(0)]));
+        let longer = error(&two(1e-15), &smooth(&[ix(1)]), at, &last, 2, &next);
         assert!(matches!(longer.verdict(2), Verdict::Reject));
-        let both_stiff = error(&two(1e-15), &smooth(&[first, second]), at, &last, 1, &next);
+        let both_stiff = error(&two(1e-15), &smooth(&[ix(0), ix(1)]), at, &last, 1, &next);
         assert_eq!(both_stiff.method, Method::BackwardEuler);
         assert!(matches!(both_stiff.verdict(1), Verdict::Accept));
-        let calm = error(&two(1e-15), &smooth(&[second]), at, &last, 1, &last);
+        let calm = error(&two(1e-15), &smooth(&[ix(1)]), at, &last, 1, &last);
         assert!(matches!(calm.verdict(1), Verdict::Accept));
     }
 
@@ -735,7 +728,7 @@ mod tests {
         let next = point(1.0, amps);
         let got = error(&one(1e-9), &segment, Time::from_ps(1), &last, 1, &next);
         assert!((got.ratio - 2e-6 / (SHARE + VNTOL)).abs() < 1e-9, "{got:?}");
-        assert!(matches!(got.verdict(1), Verdict::Stiffen(parts) if parts == [ids()[0]]));
+        assert!(matches!(got.verdict(1), Verdict::Stiffen(indices) if indices == [ix(0)]));
         // The same error on a longer step accepts: only the floor decides stiffness.
         let got = error(&one(1e-9), &segment, Time::from_ps(1), &last, 1, &next);
         assert!(matches!(got.verdict(2), Verdict::Accept));
@@ -744,24 +737,23 @@ mod tests {
     /// `second` stiff, after an accepted step of `RETRY` ps at 1 V and no current.
     fn trying() -> Segment {
         let last = Solution::from(vec![1.0, 0.0, 0.0]);
-        advanced(smooth(&[ids()[1]]), Time::from_ps(1), last, RETRY)
+        advanced(smooth(&[ix(1)]), Time::from_ps(1), last, RETRY)
     }
 
     #[test]
     fn a_stiff_capacitor_tries_the_trapezoidal_rule_once_its_step_reaches_256_ps() {
-        let [_, second] = ids();
         let short = advanced(
-            smooth(&[second]),
+            smooth(&[ix(1)]),
             Time::from_ps(1),
             Solution::zeros(3),
             RETRY - 1,
         );
-        assert_eq!(short.stiff(), [second]);
+        assert_eq!(short.stiff(), [ix(1)]);
         assert_eq!(short.tried(), []);
         let trying = trying();
         assert_eq!(trying.stiff(), []);
-        assert_eq!(trying.tried(), [second]);
-        assert_eq!(trying.method_of(second), Method::Trapezoidal);
+        assert_eq!(trying.tried(), [ix(1)]);
+        assert_eq!(trying.method_of(ix(1)), Method::Trapezoidal);
         let kept = advanced(trying, Time::from_ps(RETRY + 1), Solution::zeros(3), RETRY);
         assert_eq!(kept.stiff(), []);
         assert_eq!(kept.tried(), []);
@@ -769,7 +761,6 @@ mod tests {
 
     #[test]
     fn a_try_stays_only_well_under_the_tolerance_and_a_failed_one_waits_for_twice_the_step() {
-        let [first, second] = ids();
         let at = Time::from_ps(RETRY + 1);
         let last = Solution::from(vec![1.0, 0.0, 0.0]);
         // The error of the tried capacitor grows with its current, the other's with its own.
@@ -795,12 +786,12 @@ mod tests {
         let failed = step(0.0, 1e-2 / per_amp).verdict(RETRY);
         assert!(matches!(&failed, Verdict::Stiffen(parts) if parts.is_empty()));
         let held = trying().stiffen(&[], RETRY + 44);
-        assert_eq!(held.stiff(), [second]);
-        assert_eq!(held.method_of(first), Method::Trapezoidal);
+        assert_eq!(held.stiff(), [ix(1)]);
+        assert_eq!(held.method_of(ix(0)), Method::Trapezoidal);
         let short = advanced(held, at, Solution::zeros(3), 2 * (RETRY + 44) - 1);
-        assert_eq!(short.stiff(), [second]);
+        assert_eq!(short.stiff(), [ix(1)]);
         let again = advanced(short, at, Solution::zeros(3), 2 * (RETRY + 44));
-        assert_eq!(again.tried(), [second]);
+        assert_eq!(again.tried(), [ix(1)]);
     }
 
     /// A try accepted short of `RETRY` has not shown that the fast mode died. The next step
@@ -808,11 +799,10 @@ mod tests {
     /// Euler, while the slow capacitor beside it keeps the trapezoidal rule.
     #[test]
     fn a_try_cut_short_of_its_step_tries_again() {
-        let [first, second] = ids();
         let last = Solution::from(vec![1.0, 0.0, 0.0]);
         let (cut, h, farad) = (40, RETRY, 1e-9);
         let segment = advanced(trying(), Time::from_ps(RETRY + 1), last.clone(), cut);
-        assert_eq!(segment.tried(), [second]);
+        assert_eq!(segment.tried(), [ix(1)]);
         // From no current, the trapezoidal error is `h^2 * amps / (6C * (h + cut))`.
         let (hs, cs) = (seconds(h), seconds(cut));
         let amps = 1e-2 * (RELTOL + VNTOL) * 6.0 * farad * (hs + cs) / (hs * hs);
@@ -824,8 +814,8 @@ mod tests {
             "{got:?}"
         );
         let retried = segment.stiffen(&[], h);
-        assert_eq!(retried.method_of(first), Method::Trapezoidal);
-        assert_eq!(retried.method_of(second), Method::BackwardEuler);
+        assert_eq!(retried.method_of(ix(0)), Method::Trapezoidal);
+        assert_eq!(retried.method_of(ix(1)), Method::BackwardEuler);
     }
 
     #[test]
@@ -962,5 +952,327 @@ mod tests {
         assert_eq!(ahead[0], 1.0);
         assert!((ahead[1] - 0.01).abs() < 1e-12, "{ahead:?}");
         assert_eq!(ahead[2], ahead[1]);
+    }
+
+    /// A resistor, then two capacitors. The resistor owns no charge, so each capacitor's
+    /// part index differs from its charge index.
+    fn split() -> (sim_core::netlist::Netlist, Layout) {
+        let netlist = sim_core::netlist::parse(
+            br#"{
+              "version": 0,
+              "seed": 0,
+              "analysis": { "transient": { "stop_ps": 1000, "max_step_ps": 1000, "grid_ps": 1000 } },
+              "ground": "gnd",
+              "nets": ["gnd", "a", "b"],
+              "parts": [
+                { "name": "m1", "kind": "resistor", "pins": { "a": "a", "b": "gnd" },
+                  "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+                  "ratings": { "power": null } },
+                { "name": "n1", "kind": "capacitor", "pins": { "a": "a", "b": "gnd" },
+                  "capacitance": { "value": 1e-9, "unit": "F", "source": "user" }, "initial": null },
+                { "name": "o1", "kind": "capacitor", "pins": { "a": "b", "b": "gnd" },
+                  "capacitance": { "value": 2e-9, "unit": "F", "source": "user" }, "initial": null }
+              ]
+            }"#,
+        )
+        .unwrap();
+        let layout = Layout::new(&netlist, Vec::new());
+        (netlist, layout)
+    }
+
+    #[test]
+    fn every_capacitor_joins_the_charge_list_on_its_own_branch() {
+        let (netlist, layout) = split();
+        let charges = Charges::new(&netlist, &layout);
+        let mut owned = Vec::new();
+        for (id, part) in netlist.parts() {
+            for cap in element::charges(&part.model) {
+                owned.push((id, cap.k, part.name.as_str()));
+            }
+        }
+        assert_eq!(charges.caps.len(), owned.len());
+        let names: Vec<_> = owned.iter().map(|(_, _, name)| *name).collect();
+        assert_eq!(names, ["n1", "o1"]);
+        for (index, ((id, k, _), cap)) in owned.iter().zip(&charges.caps).enumerate() {
+            assert_eq!(*k, 0);
+            assert_eq!(cap.branch, layout.branch_row(*id, *k));
+            assert_eq!(cap.index, layout.charge_index(*id, *k));
+            assert_eq!(cap.index, ix(index));
+            assert_ne!(ChargeIndex::new(id.index()), cap.index);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "a part's charge count exceeds its branches")]
+    fn a_part_with_a_charge_and_no_branch_panics() {
+        let (netlist, pair, cn, _) = two_internal();
+        let mut open = pair;
+        open.branches = 0;
+        Layout::with_stand_in(&netlist, Vec::new(), cn, &open);
+    }
+
+    #[test]
+    #[should_panic(expected = "branch 1 is past this part's branches")]
+    fn a_branch_past_the_reservation_panics() {
+        let (netlist, layout) = split();
+        let id = netlist
+            .part_id(&sim_core::name::Name::new("n1").unwrap())
+            .unwrap();
+        layout.branch_row(id, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "charge 1 is past this part's charges")]
+    fn a_charge_past_the_reservation_panics() {
+        let (netlist, layout) = split();
+        let id = netlist
+            .part_id(&sim_core::name::Name::new("n1").unwrap())
+            .unwrap();
+        layout.charge_index(id, 1);
+    }
+
+    /// `c_n` owns two capacitors. The second sits on `c_n`'s internal nodes. `d_o` is the
+    /// next part's capacitor, so a charge cursor that advances by one collides with it.
+    fn two_internal() -> (sim_core::netlist::Netlist, element::Pair, PartId, PartId) {
+        use sim_core::netlist::NetId;
+
+        let netlist = sim_core::netlist::parse(
+            br#"{
+              "version": 0,
+              "seed": 0,
+              "analysis": { "op": {} },
+              "ground": "gnd",
+              "nets": ["gnd", "a", "b"],
+              "parts": [
+                { "name": "a_r", "kind": "resistor", "pins": { "a": "a", "b": "gnd" },
+                  "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+                  "ratings": { "power": null } },
+                { "name": "b_r", "kind": "resistor", "pins": { "a": "b", "b": "gnd" },
+                  "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+                  "ratings": { "power": null } },
+                { "name": "c_n", "kind": "capacitor", "pins": { "a": "a", "b": "gnd" },
+                  "capacitance": { "value": 1e-6, "unit": "F", "source": "user" },
+                  "initial": null },
+                { "name": "d_o", "kind": "capacitor", "pins": { "a": "b", "b": "gnd" },
+                  "capacitance": { "value": 1e-9, "unit": "F", "source": "user" },
+                  "initial": null },
+                { "name": "e_s", "kind": "voltage_source", "pins": { "p": "a", "n": "gnd" },
+                  "voltage": { "value": 2.0, "unit": "V", "source": "user" } },
+                { "name": "f_s", "kind": "voltage_source", "pins": { "p": "b", "n": "gnd" },
+                  "voltage": { "value": 3.0, "unit": "V", "source": "user" } },
+                { "name": "g_s", "kind": "voltage_source", "pins": { "p": "b", "n": "gnd" },
+                  "voltage": { "value": 2.5, "unit": "V", "source": "user" } }
+              ]
+            }"#,
+        )
+        .unwrap();
+        let (cn, later) = {
+            let id = |name: &str| {
+                netlist
+                    .part_id(&sim_core::name::Name::new(name).unwrap())
+                    .unwrap()
+            };
+            (id("c_n"), id("d_o"))
+        };
+        let net_a = netlist
+            .nets()
+            .find(|(_, name)| name.as_str() == "a")
+            .unwrap()
+            .0;
+        let pair = element::Pair {
+            ends: [
+                [
+                    element::CapacitorEnd::Net(net_a),
+                    element::CapacitorEnd::Net(NetId::GROUND),
+                ],
+                [
+                    element::CapacitorEnd::Internal(0),
+                    element::CapacitorEnd::Internal(1),
+                ],
+            ],
+            farad: [1e-6, 2e-6],
+            internal_nodes: 2,
+            branches: 2,
+        };
+        (netlist, pair, cn, later)
+    }
+
+    /// Capacitor 1 is between two internal nodes. Stiffening only its charge uses backward
+    /// Euler there, and capacitor 0 stays trapezoidal. The truncation error judges each
+    /// capacitor by that same method. An unstiffened step uses each capacitor's own previous
+    /// current.
+    #[test]
+    fn a_second_capacitor_between_internal_nodes_follows_its_own_charge() {
+        use crate::mna::{Stamp, System};
+        use crate::newton::{Conditions, History, Integration, Iterate};
+
+        let (netlist, pair, cn, later) = two_internal();
+        let reserved = element::unknowns(&pair);
+        assert_eq!(reserved.internal_nodes, 2);
+        assert_eq!(reserved.branches, 2);
+        let fs = netlist
+            .part_id(&sim_core::name::Name::new("f_s").unwrap())
+            .unwrap();
+        let gs = netlist
+            .part_id(&sim_core::name::Name::new("g_s").unwrap())
+            .unwrap();
+        let layout = Layout::with_stand_in(&netlist, Vec::new(), cn, &pair);
+        let owned: Vec<_> = element::charges(&pair)
+            .into_iter()
+            .map(|cap| (cn, cap))
+            .collect();
+        let charges = Charges::from_owned(&owned, &layout, netlist.nets().len() - 1);
+        assert_eq!(charges.caps.len(), 2);
+        // `Charges::new` reads the netlist models. `c_n` and `d_o` each own one capacitor.
+        assert_eq!(Charges::new(&netlist, &layout).caps.len(), 2);
+        assert_eq!(charges.caps[0].branch, layout.branch_row(cn, 0));
+        assert_eq!(charges.caps[1].branch, layout.branch_row(cn, 1));
+        assert_ne!(charges.caps[0].branch, charges.caps[1].branch);
+        assert_eq!(
+            charges.caps[1].pins,
+            [layout.internal(cn, 0), layout.internal(cn, 1)]
+        );
+        assert_eq!(layout.charge_index(cn, 0), ix(0));
+        assert_eq!(layout.charge_index(cn, 1), ix(1));
+        assert_eq!(layout.charge_index(later, 0), ix(2));
+        assert_ne!(ix(cn.index()), layout.charge_index(cn, 1));
+        assert_eq!(layout.branch_row(cn, 1), layout.branch_row(cn, 0) + 1);
+        assert_ne!(layout.branch_row(cn, 1), layout.branch_row(later, 0));
+
+        let mut prev = vec![0.0; layout.size()];
+        let place = |node: Node| match node {
+            Node::Row(row) => row,
+            Node::Ground => panic!("this end is ground"),
+        };
+        prev[place(charges.caps[0].pins[0])] = 2.0;
+        prev[place(layout.internal(cn, 0))] = 3.0;
+        prev[place(layout.internal(cn, 1))] = 2.5;
+        prev[layout.branch_row(cn, 0)] = 1e-4;
+        prev[layout.branch_row(cn, 1)] = 4e-4;
+        let previous = Solution::from(prev);
+        let i0 = [1e-4, 4e-4];
+        let farad = [1e-6, 2e-6];
+        let volts = [2.0, 0.5];
+
+        let solved = |stiff: &[ChargeIndex], restart: bool| -> [f64; 2] {
+            let step = Integration {
+                method: Method::Trapezoidal,
+                stiff,
+                h_ps: 1_000_000_000,
+                previous: &previous,
+            };
+            let history = if restart {
+                History::Restart {
+                    previous: &previous,
+                }
+            } else {
+                History::Step(step)
+            };
+            let conditions = Conditions {
+                history,
+                ..Conditions::NOMINAL
+            };
+            let scale = conditions.source_scale;
+            let iterate = Iterate {
+                solution: Solution::zeros(layout.size()),
+                junctions: vec![0.0; layout.junctions()],
+            };
+            let mut system = System::new(&layout);
+            system.reset(&layout, conditions.gmin);
+            for (id, part) in netlist.parts() {
+                let mut stamp = Stamp::new(&mut system, &layout, id, &iterate, &conditions);
+                if id == cn {
+                    element::stamp(&pair, &mut stamp);
+                } else if id == fs {
+                    let node = layout.internal(cn, 0);
+                    stamp.branch_current(node, Node::Ground, 0);
+                    stamp.branch_row(node, Node::Ground, 0, 0.0, 1.0, 3.0 * scale);
+                } else if id == gs {
+                    let node = layout.internal(cn, 1);
+                    stamp.branch_current(node, Node::Ground, 0);
+                    stamp.branch_row(node, Node::Ground, 0, 0.0, 1.0, 2.5 * scale);
+                } else {
+                    element::stamp(&part.model, &mut stamp);
+                }
+            }
+            let solution = system.solve().expect("the held nodes are nonsingular");
+            assert!((solution.node(layout.internal(cn, 0)) - 3.0).abs() < 1e-9);
+            assert!((solution.node(layout.internal(cn, 1)) - 2.5).abs() < 1e-9);
+            [
+                solution.get(layout.branch_row(cn, 0)),
+                solution.get(layout.branch_row(cn, 1)),
+            ]
+        };
+        let at_v0 = |k: usize, method: Method| -> f64 {
+            let (c, h, v, v0, i) = (farad[k], 1e-3, volts[k], volts[k], i0[k]);
+            match method {
+                Method::BackwardEuler => c / h * (v - v0),
+                Method::Trapezoidal => 2.0 * c / h * (v - v0) - i,
+            }
+        };
+        let near = |got: f64, expect: f64| (got - expect).abs() < 1e-9;
+
+        let restart = solved(&[], true);
+        assert!(near(restart[0], 0.0), "{restart:?}");
+        assert!(near(restart[1], 0.0), "{restart:?}");
+
+        let both = solved(&[], false);
+        assert!(near(both[0], at_v0(0, Method::Trapezoidal)), "{both:?}");
+        assert!(near(both[1], at_v0(1, Method::Trapezoidal)), "{both:?}");
+
+        let stiff = solved(&[ix(1)], false);
+        assert!(near(stiff[0], at_v0(0, Method::Trapezoidal)), "{stiff:?}");
+        assert!(near(stiff[1], at_v0(1, Method::BackwardEuler)), "{stiff:?}");
+        assert!((stiff[1] - both[1]).abs() > 1e-4, "{stiff:?} {both:?}");
+
+        let by_part = solved(&[ix(cn.index())], false);
+        assert!(near(by_part[0], both[0]), "{by_part:?}");
+        assert!(near(by_part[1], both[1]), "{by_part:?}");
+
+        // Capacitor 1 carries 4 A, capacitor 0 carries 1 A, and the next capacitor carries
+        // 1.2 mA. Backward Euler on capacitor 1 is the largest error. The trapezoidal
+        // errors of the other two clear Newton's tolerance and stay smaller.
+        let later_model = &netlist
+            .parts()
+            .find(|(id, _)| *id == later)
+            .expect("d_o")
+            .1
+            .model;
+        let mut judged_owned = owned;
+        judged_owned.extend(
+            element::charges(later_model)
+                .into_iter()
+                .map(|cap| (later, cap)),
+        );
+        let judged = Charges::from_owned(&judged_owned, &layout, netlist.nets().len() - 1);
+        let zeros = Solution::zeros(layout.size());
+        let smooth = accept(
+            Segment::start(&judged, &zeros),
+            &judged,
+            Time::ZERO,
+            zeros.clone(),
+            1,
+            &zeros,
+        )
+        .stiffen(&[layout.charge_index(cn, 1)], 1);
+        let mut stepped = vec![0.0; layout.size()];
+        stepped[layout.branch_row(cn, 0)] = 1.0;
+        stepped[layout.branch_row(cn, 1)] = 4.0;
+        stepped[layout.branch_row(later, 0)] = 1.2e-3;
+        let got = error(
+            &judged,
+            &smooth,
+            Time::from_ps(1),
+            &zeros,
+            1,
+            &Solution::from(stepped),
+        );
+        let want = seconds(1) * 4.0 / (2.0 * 2e-6) / VNTOL;
+        assert_eq!(got.method, Method::BackwardEuler);
+        assert!((got.ratio - want).abs() <= 1e-9 * want, "{got:?} {want}");
+        assert!(
+            matches!(got.verdict(1), Verdict::Stiffen(indices) if indices == [ix(0), ix(2)]),
+            "{got:?}"
+        );
     }
 }

@@ -6,45 +6,118 @@ mod resistor;
 mod switch;
 mod voltage_source;
 
-use sim_core::netlist::Model;
+use sim_core::netlist::{Model, NetId, PartId};
 use sim_core::time::Time;
 
 use crate::chip;
-use crate::mna::{Probe, Stamp, Unknowns};
+use crate::mna::{Layout, Node, Probe, Stamp, Unknowns};
 use crate::newton::Side;
 
-pub(crate) fn unknowns(model: &Model) -> Unknowns {
-    match model {
-        Model::Resistor(_)
-        | Model::Potentiometer(_)
-        | Model::CurrentSource(_)
-        | Model::Switch(_) => Unknowns::default(),
-        Model::VoltageSource(_) | Model::Capacitor(_) => Unknowns {
-            branches: 1,
-            ..Unknowns::default()
-        },
-        Model::Diode(_) | Model::Led(_) => Unknowns {
-            internal_nodes: 1,
-            branches: 0,
-            junctions: 1,
-        },
-        Model::Chip(chip) => chip::unknowns(chip),
+/// What the layout and the stamp read from a part. A netlist `Model` is one. A test
+/// passes its own value through the same functions.
+pub(crate) trait Device {
+    fn unknowns(&self) -> Unknowns;
+    fn charges(&self) -> Vec<OwnedCapacitor>;
+    fn stamp(&self, stamp: &mut Stamp<'_>);
+}
+
+pub(crate) fn unknowns(model: &impl Device) -> Unknowns {
+    Device::unknowns(model)
+}
+
+/// One end of a capacitor. A net, or internal node `k` of this part.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum CapacitorEnd {
+    Net(NetId),
+    /// No netlist kind builds an internal end yet. Tests do.
+    #[cfg_attr(not(test), allow(dead_code))]
+    Internal(usize),
+}
+
+impl CapacitorEnd {
+    pub(crate) fn node(self, layout: &Layout, part: PartId) -> Node {
+        match self {
+            CapacitorEnd::Net(net) => Node::from(net),
+            CapacitorEnd::Internal(k) => layout.internal(part, k),
+        }
     }
 }
 
-pub(crate) fn stamp(model: &Model, stamp: &mut Stamp<'_>) {
-    match model {
-        Model::Resistor(resistor) => resistor::stamp(resistor, stamp),
-        Model::Potentiometer(pot) => potentiometer::stamp(pot, stamp),
-        Model::VoltageSource(source) => voltage_source::stamp(source, stamp),
-        Model::CurrentSource(source) => current_source::stamp(source, stamp),
-        Model::Diode(j) | Model::Led(j) => junction::stamp(j, stamp),
-        Model::Capacitor(capacitor) => capacitor::stamp(capacitor, stamp),
-        Model::Switch(switch) => switch::stamp(switch, stamp),
-        // An active chip stamps its core's drive image, in `active::stamp`.
-        Model::Chip(chip) => {
-            if let chip::Kind::Passive(passive) = chip::kind(chip) {
-                chip::stamp(passive, *stamp.chip(), stamp);
+/// One capacitor a part owns. `k` is its index in that part's charge list, and branch
+/// `k` carries its current. Capacitors take the part's first branches. An inductor is
+/// not this type.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct OwnedCapacitor {
+    pub(crate) k: usize,
+    pub(crate) ends: [CapacitorEnd; 2],
+    pub(crate) farad: f64,
+}
+
+/// The capacitors `model` owns, in index order. A part with none returns an empty list.
+pub(crate) fn charges(model: &impl Device) -> Vec<OwnedCapacitor> {
+    Device::charges(model)
+}
+
+pub(crate) fn stamp(model: &impl Device, stamp: &mut Stamp<'_>) {
+    Device::stamp(model, stamp);
+}
+
+impl Device for Model {
+    fn unknowns(&self) -> Unknowns {
+        match self {
+            Model::Resistor(_)
+            | Model::Potentiometer(_)
+            | Model::CurrentSource(_)
+            | Model::Switch(_) => Unknowns::default(),
+            Model::VoltageSource(_) => Unknowns {
+                branches: 1,
+                ..Unknowns::default()
+            },
+            Model::Capacitor(_) => Unknowns {
+                branches: 1,
+                ..Unknowns::default()
+            },
+            Model::Diode(_) | Model::Led(_) => Unknowns {
+                internal_nodes: 1,
+                branches: 0,
+                junctions: 1,
+            },
+            Model::Chip(chip) => chip::unknowns(chip),
+        }
+    }
+
+    fn charges(&self) -> Vec<OwnedCapacitor> {
+        match self {
+            Model::Capacitor(capacitor) => vec![OwnedCapacitor {
+                k: 0,
+                ends: capacitor.pins.map(CapacitorEnd::Net),
+                farad: capacitor.capacitance.si.get(),
+            }],
+            Model::Resistor(_)
+            | Model::Potentiometer(_)
+            | Model::VoltageSource(_)
+            | Model::CurrentSource(_)
+            | Model::Diode(_)
+            | Model::Led(_)
+            | Model::Switch(_)
+            | Model::Chip(_) => Vec::new(),
+        }
+    }
+
+    fn stamp(&self, stamp: &mut Stamp<'_>) {
+        match self {
+            Model::Resistor(resistor) => resistor::stamp(resistor, stamp),
+            Model::Potentiometer(pot) => potentiometer::stamp(pot, stamp),
+            Model::VoltageSource(source) => voltage_source::stamp(source, stamp),
+            Model::CurrentSource(source) => current_source::stamp(source, stamp),
+            Model::Diode(j) | Model::Led(j) => junction::stamp(j, stamp),
+            Model::Capacitor(capacitor) => capacitor::stamp(capacitor, stamp),
+            Model::Switch(switch) => switch::stamp(switch, stamp),
+            // An active chip stamps its core's drive image, in `active::stamp`.
+            Model::Chip(chip) => {
+                if let chip::Kind::Passive(passive) = chip::kind(chip) {
+                    chip::stamp(passive, *stamp.chip(), stamp);
+                }
             }
         }
     }
@@ -140,4 +213,45 @@ pub(crate) fn observe(model: &Model, probe: &Probe<'_>, at: Time, side: Side) ->
     };
     let v = probe.v(pins[0]) - probe.v(pins[1]);
     Some([i, v, v * i])
+}
+
+/// Two capacitors on one part. Tests only. Not a netlist kind. `branches` is the count
+/// `unknowns` reserves, so a port that leaves it at 0 fails when the layout is built.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Pair {
+    pub(crate) ends: [[CapacitorEnd; 2]; 2],
+    pub(crate) farad: [f64; 2],
+    pub(crate) internal_nodes: usize,
+    pub(crate) branches: usize,
+}
+
+#[cfg(test)]
+impl Device for Pair {
+    fn unknowns(&self) -> Unknowns {
+        Unknowns {
+            internal_nodes: self.internal_nodes,
+            branches: self.branches,
+            junctions: 0,
+        }
+    }
+
+    fn charges(&self) -> Vec<OwnedCapacitor> {
+        self.ends
+            .iter()
+            .zip(self.farad)
+            .enumerate()
+            .map(|(k, (ends, farad))| OwnedCapacitor {
+                k,
+                ends: *ends,
+                farad,
+            })
+            .collect()
+    }
+
+    fn stamp(&self, stamp: &mut Stamp<'_>) {
+        for cap in self.charges() {
+            capacitor::stamp_capacitor(stamp, cap.k, cap.ends, cap.farad, None);
+        }
+    }
 }

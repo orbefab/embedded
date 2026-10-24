@@ -6,7 +6,8 @@ use sim_core::netlist::{NetId, Netlist, PartId};
 use crate::chip;
 use crate::dense::{Matrix, Singular};
 use crate::element;
-use crate::newton::{Conditions, Iterate};
+use crate::element::Device;
+use crate::newton::{ChargeIndex, Conditions, Iterate};
 
 pub(crate) const GMIN: f64 = 1e-12;
 
@@ -28,7 +29,11 @@ pub(crate) struct Unknowns {
 struct PartRows {
     internal: usize,
     branch: usize,
+    branches: usize,
     junctions: Range<usize>,
+    /// Index of this part's first capacitor in the circuit's charge list.
+    charge: usize,
+    charges: usize,
 }
 
 pub(crate) struct Layout {
@@ -42,45 +47,84 @@ pub(crate) struct Layout {
     chips: Vec<PartId>,
 }
 
+fn shape(model: &impl Device) -> (Unknowns, usize) {
+    let extra = element::unknowns(model);
+    let owned = element::charges(model).len();
+    (extra, owned)
+}
+
 impl Layout {
     /// `chips` are the passive chips in part order.
     pub(crate) fn new(netlist: &Netlist, chips: Vec<PartId>) -> Layout {
-        let mut row = 0;
-        let mut junction = 0;
-        let mut node_rows = Vec::new();
-        let net_rows = netlist.nets().len().saturating_sub(1);
-        for _ in 0..net_rows {
+        assemble::<sim_core::netlist::Model>(netlist, chips, None)
+    }
+
+    /// `part` takes `model` in place of its netlist model. Tests only.
+    #[cfg(test)]
+    pub(crate) fn with_stand_in(
+        netlist: &Netlist,
+        chips: Vec<PartId>,
+        part: PartId,
+        model: &impl Device,
+    ) -> Layout {
+        assemble(netlist, chips, Some((part, model)))
+    }
+}
+
+fn assemble<T: Device>(
+    netlist: &Netlist,
+    chips: Vec<PartId>,
+    stand: Option<(PartId, &T)>,
+) -> Layout {
+    let mut row = 0;
+    let mut junction = 0;
+    let mut charge = 0;
+    let mut node_rows = Vec::new();
+    let net_rows = netlist.nets().len().saturating_sub(1);
+    for _ in 0..net_rows {
+        node_rows.push(row);
+        row += 1;
+    }
+    let mut part_rows = Vec::with_capacity(netlist.parts().len());
+    for (id, part) in netlist.parts() {
+        let (extra, owned) = match stand {
+            Some((part_id, model)) if part_id == id => shape(model),
+            _ => shape(&part.model),
+        };
+        debug_assert!(
+            owned <= extra.branches,
+            "a part's charge count exceeds its branches"
+        );
+        let internal = row;
+        for _ in 0..extra.internal_nodes {
             node_rows.push(row);
             row += 1;
         }
-        let mut part_rows = Vec::with_capacity(netlist.parts().len());
-        for (_, part) in netlist.parts() {
-            let extra = element::unknowns(&part.model);
-            let internal = row;
-            for _ in 0..extra.internal_nodes {
-                node_rows.push(row);
-                row += 1;
-            }
-            let branch = row;
-            row += extra.branches;
-            let junctions = junction..junction + extra.junctions;
-            junction = junctions.end;
-            part_rows.push(PartRows {
-                internal,
-                branch,
-                junctions,
-            });
-        }
-        Layout {
-            net_rows,
-            part_rows,
-            node_rows,
-            size: row,
-            junctions: junction,
-            chips,
-        }
+        let branch = row;
+        row += extra.branches;
+        let junctions = junction..junction + extra.junctions;
+        junction = junctions.end;
+        part_rows.push(PartRows {
+            internal,
+            branch,
+            branches: extra.branches,
+            junctions,
+            charge,
+            charges: owned,
+        });
+        charge += owned;
     }
+    Layout {
+        net_rows,
+        part_rows,
+        node_rows,
+        size: row,
+        junctions: junction,
+        chips,
+    }
+}
 
+impl Layout {
     /// The passive chips in slot order.
     pub(crate) fn chips(&self) -> &[PartId] {
         &self.chips
@@ -101,7 +145,16 @@ impl Layout {
 
     /// The row of `part`'s branch `k`.
     pub(crate) fn branch_row(&self, part: PartId, k: usize) -> usize {
-        self.part_rows[part.index()].branch + k
+        let rows = &self.part_rows[part.index()];
+        debug_assert!(k < rows.branches, "branch {k} is past this part's branches");
+        rows.branch + k
+    }
+
+    /// The charge-list index of `part`'s capacitor `k`.
+    pub(crate) fn charge_index(&self, part: PartId, k: usize) -> ChargeIndex {
+        let rows = &self.part_rows[part.index()];
+        debug_assert!(k < rows.charges, "charge {k} is past this part's charges");
+        ChargeIndex::new(rows.charge + k)
     }
 
     pub(crate) fn junction_slots(&self, part: PartId) -> Range<usize> {
@@ -124,8 +177,7 @@ impl Layout {
         }
         for (id, part) in netlist.parts() {
             let rows = &self.part_rows[id.index()];
-            let extra = element::unknowns(&part.model);
-            let end = rows.branch + extra.branches;
+            let end = rows.branch + rows.branches;
             if row >= rows.internal && row < end {
                 return Ref::Part(part.name.clone());
             }
@@ -418,7 +470,7 @@ impl<'a> Stamp<'a> {
     }
 
     /// Branch `k` carries a current that enters the part at `p` and leaves at `n`.
-    pub(crate) fn branch_current(&mut self, p: NetId, n: NetId, k: usize) {
+    pub(crate) fn branch_current(&mut self, p: impl Into<Node>, n: impl Into<Node>, k: usize) {
         let row = self.rows().branch + k;
         if let Node::Row(prow) = p.into() {
             self.sys.a.add(prow, row, 1.0);
@@ -429,7 +481,15 @@ impl<'a> Stamp<'a> {
     }
 
     /// Branch `k`'s own row: `ci * i_k + cv * (V(p) - V(n)) = rhs`.
-    pub(crate) fn branch_row(&mut self, p: NetId, n: NetId, k: usize, ci: f64, cv: f64, rhs: f64) {
+    pub(crate) fn branch_row(
+        &mut self,
+        p: impl Into<Node>,
+        n: impl Into<Node>,
+        k: usize,
+        ci: f64,
+        cv: f64,
+        rhs: f64,
+    ) {
         let row = self.rows().branch + k;
         if ci != 0.0 {
             self.sys.a.add(row, row, ci);
@@ -455,8 +515,8 @@ pub(crate) struct Probe<'a> {
 }
 
 impl Probe<'_> {
-    pub(crate) fn v(&self, net: NetId) -> f64 {
-        self.x.voltage(net)
+    pub(crate) fn v(&self, node: impl Into<Node>) -> f64 {
+        self.x.node(node.into())
     }
 
     pub(crate) fn internal(&self, k: usize) -> f64 {

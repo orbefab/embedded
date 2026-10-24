@@ -276,12 +276,32 @@ pub(crate) enum History<'h> {
     Step(Integration<'h>),
 }
 
+/// One capacitor in the circuit's charge list. Stiffness keys on this, so two capacitors of
+/// one part can take different rules.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ChargeIndex(usize);
+
+impl ChargeIndex {
+    pub(crate) const fn new(index: usize) -> ChargeIndex {
+        ChargeIndex(index)
+    }
+}
+
+/// Backward Euler when `charge` is in `stiff`, which is ascending. Otherwise `method`.
+pub(crate) fn method_on(stiff: &[ChargeIndex], method: Method, charge: ChargeIndex) -> Method {
+    if stiff.binary_search(&charge).is_ok() {
+        Method::BackwardEuler
+    } else {
+        method
+    }
+}
+
 /// One time step's view of the past. The last accepted solution is the whole history.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Integration<'h> {
     pub(crate) method: Method,
-    /// Capacitors that take backward Euler whatever `method` is. Ascending.
-    pub(crate) stiff: &'h [PartId],
+    /// Capacitors that take backward Euler whatever `method` is. Ascending charge indices.
+    pub(crate) stiff: &'h [ChargeIndex],
     pub(crate) h_ps: u64,
     pub(crate) previous: &'h Solution,
 }
@@ -292,12 +312,8 @@ impl Integration<'_> {
         self.h_ps as f64 / 1e12
     }
 
-    pub(crate) fn method_of(&self, part: PartId) -> Method {
-        if self.stiff.binary_search(&part).is_ok() {
-            Method::BackwardEuler
-        } else {
-            self.method
-        }
+    pub(crate) fn method_of(&self, charge: ChargeIndex) -> Method {
+        method_on(self.stiff, self.method, charge)
     }
 }
 
