@@ -286,7 +286,7 @@ A switch has no `ratings` field. A switch is a DC path in either state, because 
 
 `kind` is `diode` or `led`. Both take the same fields and solve the same equation. Pins are `anode` and `cathode`.
 
-The part is a junction in series with a resistance. The junction current is `Is * (exp(vj / (N * kT/q)) - 1)`. `V(anode) - V(cathode)` is `vj` plus the current times `Rs`.
+The part is a junction in series with a resistance. The junction current is `Is * (exp(vj / (N * kT/q)) - 1) + GMIN * vj` down to `vj = -3 * N * kT/q`. Below that it is `-Is * (1 + (3 * N * kT/q / (e * vj))^3) + GMIN * vj`, ngspice-42's reverse law with no breakdown voltage. The two meet at `-3 * N * kT/q` in current and slope. `GMIN` is 1e-12 S across the junction, from the internal node to the cathode, where ngspice-42 puts `CKTgmin`. The engine puts no node gmin on that internal node. `V(anode) - V(cathode)` is `vj` plus the current times `Rs`.
 
 | Field | Symbol | Unit |
 | --- | --- | --- |

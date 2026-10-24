@@ -102,11 +102,15 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
     }
 }
 
-/// Circuits only this test runs. `npn-off` and `pnp-off` hold the leakage on each kind's
-/// internal nodes, and `nmos-off` holds an off MOSFET so its drain current is the drain-source
-/// gmin. `npn-slow-edge` drives the junction capacitors through 1 Mohm, and `nmos-pulse` does the
-/// same for the gate capacitances, slow next to the deck's ramp. `nmos-regions` biases the
-/// drain through reverse, linear and saturation. `nmos-follower` holds the source off ground.
+/// Circuits only this test runs. `diode-off` holds a diode with its anode at 5 V and its
+/// cathode at 8 V. `led-off` holds an LED with both pins at 5 V. `diode-reverse` and
+/// `led-reverse` hold a diode at 0.3 V and an LED at 0.5 V reverse, below `-3 * n * VT`, where
+/// ngspice's reverse law leaves the exponential. `npn-off` and `pnp-off` hold
+/// the leakage on each kind's internal nodes, and `nmos-off` holds an off MOSFET so its drain
+/// current is the drain-source gmin. `npn-slow-edge` drives the junction capacitors through
+/// 1 Mohm, and `nmos-pulse` does the same for the gate capacitances, slow next to the deck's
+/// ramp. `nmos-regions` biases the drain through reverse, linear and saturation.
+/// `nmos-follower` holds the source off ground.
 #[test]
 fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
@@ -122,6 +126,10 @@ fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
     assert_eq!(
         names,
         [
+            "diode-off",
+            "diode-reverse",
+            "led-off",
+            "led-reverse",
             "nmos-follower",
             "nmos-off",
             "nmos-pulse",

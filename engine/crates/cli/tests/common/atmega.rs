@@ -59,8 +59,8 @@ pub fn cycle_ps(netlist: &serde_json::Value) -> u64 {
 
 /// The LED's current, through its `Rs`, while the pin's stage pulls up through `up` siemens and down
 /// through `down`. The stage is a Thevenin source into `r1`, the LED's `Rs`, and its junction,
-/// with gmin from the anode and from the junction's inner node to ground. Bisects on the
-/// junction's voltage.
+/// with gmin across the junction and from the anode to ground. Bisects on the junction's
+/// voltage.
 fn led_current(netlist: &serde_json::Value, up: f64, down: f64) -> f64 {
     let vcc = value(&part(netlist, "v1")["voltage"]);
     let r = value(&part(netlist, "r1")["resistance"]);

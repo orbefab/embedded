@@ -1,7 +1,7 @@
 use sim_core::netlist::{Junction, junction_scale};
 
 use crate::element::Update;
-use crate::mna::{Probe, Stamp};
+use crate::mna::{GMIN, Probe, Stamp};
 use crate::newton::{ABSTOL, RELTOL};
 
 /// `exp` overflows near 709.78. Stay under that.
@@ -49,6 +49,18 @@ impl Shockley {
             voltage,
         )
     }
+
+    /// ngspice-42's diode law, `dioload` with no breakdown voltage. Below `-3 * nvt` the
+    /// current is `-Is * (1 + (3 * nvt / (e * vj))^3)`, which meets the exponential there in
+    /// current and slope.
+    fn diode(&self, vj: f64) -> (f64, f64, bool, f64) {
+        if vj >= -3.0 * self.nvt {
+            return self.evaluate(vj);
+        }
+        let arg = 3.0 * self.nvt / (vj * std::f64::consts::E);
+        let arg = arg * arg * arg;
+        (-self.is * (1.0 + arg), self.is * 3.0 * arg / vj, false, vj)
+    }
 }
 
 fn shockley(junction: &Junction) -> Shockley {
@@ -59,16 +71,19 @@ fn shockley(junction: &Junction) -> Shockley {
 }
 
 /// Rs from the anode to internal node 0, then the junction from there to the
-/// cathode, linearised at the voltage `evaluate` used.
+/// cathode, linearised at the voltage `diode` used. `GMIN` is across that
+/// junction. ngspice-42's `dioload` adds `CKTgmin` to `gd` and `CKTgmin * vd`
+/// to the current, and it puts no conductance from the internal node to ground.
 pub(super) fn stamp(junction: &Junction, stamp: &mut Stamp<'_>) {
     let params = shockley(junction);
     let [anode, cathode] = junction.pins;
     let inner = stamp.internal(0);
     stamp.conductance(anode, inner, 1.0 / junction.series_resistance.si.get());
     let vj = stamp.junction(0);
-    let (id, gd, _, voltage) = params.evaluate(vj);
-    stamp.conductance(inner, cathode, gd);
+    let (id, gd, _, voltage) = params.diode(vj);
+    stamp.conductance(inner, cathode, gd + GMIN);
     // The companion is the derivative at the clamped voltage, not at an argument `exp` never saw.
+    // ngspice's is `cd - gd * vd` with `GMIN` in `cd` and `gd`, and `GMIN * vd` cancels there.
     stamp.current(inner, cathode, id - gd * voltage);
 }
 
@@ -82,9 +97,9 @@ pub(super) fn update(junction: &Junction, probe: &Probe<'_>, prior: f64) -> (f64
     let params = shockley(junction);
     let solved = probe.internal(0) - probe.v(junction.pins[1]);
     let (next, mut limited) = pnjlim(solved, prior, params.nvt, params.vcrit);
-    let (id, gd, cap_prior, voltage) = params.evaluate(prior);
+    let (id, gd, cap_prior, voltage) = params.diode(prior);
     let linear = id + gd * (solved - voltage);
-    let (actual, _, cap_solved, _) = params.evaluate(solved);
+    let (actual, _, cap_solved, _) = params.diode(solved);
     limited |= cap_prior || cap_solved;
     let mismatch = mismatch(linear, actual);
     (next, Update { limited, mismatch })
@@ -192,6 +207,26 @@ mod tests {
     fn a_long_reverse_step_from_a_reverse_voltage_doubles_at_most() {
         assert_eq!(pnjlim(-10.0, -3.0, NVT, VCRIT), (-7.0, true));
         assert_eq!(pnjlim(-10.0, -7.0, NVT, VCRIT), (-10.0, false));
+    }
+
+    #[test]
+    fn the_reverse_law_meets_the_exponential_at_three_nvt() {
+        let params = Shockley {
+            is: 6.711e-10,
+            nvt: 0.114,
+            vcrit: 2.0,
+        };
+        let edge = -3.0 * params.nvt;
+        let (above, above_slope, _, _) = params.diode(edge);
+        let (below, below_slope, _, _) = params.diode(edge * (1.0 + 1e-12));
+        assert!(
+            (above - below).abs() <= 1e-9 * above.abs(),
+            "{above} {below}"
+        );
+        assert!(
+            (above_slope - below_slope).abs() <= 1e-9 * above_slope,
+            "{above_slope} {below_slope}"
+        );
     }
 
     #[test]

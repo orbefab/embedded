@@ -483,6 +483,7 @@ def translate_shape(title, netlist):
     if transient and any(n.lower().startswith(("ctl_", "bp", "x_")) for n in names):
         raise Skip("a transient deck reserves names starting with ctl_, bp or x_")
     transistors = any(p.get("kind") in TRANSISTORS for p in parts)
+    junctions = any(p.get("kind") in ("diode", "led") for p in parts)
     if transistors and any(n.lower().startswith("x_") for n in names):
         raise Skip("a deck with a transistor reserves names starting with x_")
 
@@ -615,7 +616,7 @@ def translate_shape(title, netlist):
             f"x_{p['name'].lower()}_lo" for p in parts if p["kind"] in CHIPS
         ]
         lines += [f"rx_gmin_{n} {n} 0 {1 / ENGINE_GMIN!r}" for n in shunted]
-    elif transistors:
+    elif transistors or junctions:
         lines.append("* The engine's gmin on every node, beside the gmin ngspice puts across each junction.")
         shunted = [node(net) for net in nets if net != ground]
         lines += [f"rx_gmin_{n} {n} 0 {1 / ENGINE_GMIN!r}" for n in shunted]

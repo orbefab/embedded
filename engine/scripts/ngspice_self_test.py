@@ -286,6 +286,7 @@ def self_test(refs):
     cases.append(serial_boundaries(refs))
     cases.append(source_jump_times(refs))
     cases.append(potentiometer_deck(refs))
+    cases.append(diode_deck(refs))
     cases.append(transistor_deck(refs))
     cases.append(nmos_deck(refs))
     cases.append(bounce_vectors())
@@ -877,6 +878,41 @@ def refs_card():
     from ngspice_refs import BJT_CARD
 
     return BJT_CARD
+
+
+def diode_deck(refs):
+    """A diode's device line, its model card, and the shunt on every external net, in an
+    operating point deck and in a transient one."""
+    netlist = {
+        "analysis": {"op": {}},
+        "ground": "gnd",
+        "nets": ["gnd", "a", "c"],
+        "parts": [
+            {
+                "name": "D1",
+                "kind": "diode",
+                "pins": {"anode": "a", "cathode": "c"},
+                "saturation_current": {"value": 1e-14},
+                "emission_coefficient": {"value": 1.0},
+                "series_resistance": {"value": 1.0},
+            }
+        ],
+    }
+    text, mapping = refs.translate("diode", netlist)
+    want = [
+        "dd1 a c dmod_d1",
+        ".model dmod_d1 d (is=1e-14 n=1.0 rs=1.0)",
+        "* The engine's gmin on every node, beside the gmin ngspice puts across each junction.",
+        "rx_gmin_a a 0 1000000000000.0",
+        "rx_gmin_c c 0 1000000000000.0",
+    ]
+    lines = text.splitlines()
+    ok = lines[2 : 2 + len(want)] == want
+    ok = ok and mapping["i(@dd1[id])"] == "#D1.i"
+    transient = dict(netlist, analysis={"transient": {"stop_ps": 1_000_000, "max_step_ps": 1000, "grid_ps": 1000}})
+    text, _ = refs.translate("diode", transient)
+    ok = ok and all(line in text.splitlines() for line in want[2:])
+    return {"name": "diode deck", "ok": ok}
 
 
 def transistor_deck(refs):

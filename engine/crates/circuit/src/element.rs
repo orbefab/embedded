@@ -79,7 +79,7 @@ impl Device for Model {
             },
             Model::Diode(_) | Model::Led(_) => Unknowns {
                 internal_nodes: 1,
-                bare_internal: false,
+                bare_internal: true,
                 branches: 0,
                 junctions: 1,
             },

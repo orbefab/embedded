@@ -926,7 +926,8 @@ pub struct IntValue {
 }
 
 /// A Shockley junction in series with a resistance, at 298.15 K with no temperature scaling.
-/// `i = Is * (exp(vj / (N * kT/q)) - 1)` and `V(anode) - V(cathode) = vj + i * Rs`.
+/// `i = Is * (exp(vj / (N * kT/q)) - 1)` down to `vj = -3 * N * kT/q`, ngspice-42's reverse law
+/// `i = -Is * (1 + (3 * N * kT/q / (e * vj))^3)` below it, and `V(anode) - V(cathode) = vj + i * Rs`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Junction {
     /// Nets of pins `anode`, `cathode`.
