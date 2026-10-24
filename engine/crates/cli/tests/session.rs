@@ -351,6 +351,7 @@ const INPUTS: &[(&str, &str, Seed)] = &[
     ("rc-switch", "sw1", Seed::Contact),
     ("v-steps", "v1", Seed::Level),
     ("v-serial", "v1", Seed::Serial),
+    ("atmega-serial-echo", "vrx", Seed::Serial),
 ];
 
 /// One seeded input on `part` at `now`. A contact or a level from 0 V to 5 V, or one 8N1 byte

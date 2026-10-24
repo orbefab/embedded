@@ -21,6 +21,7 @@ const INPUTS = [
   { name: 'atmega-button', part: 'sw1', setting: 'contact' },
   { name: 'atmega-analog-serial', part: 'rv1', setting: 'level' },
   { name: 'v-serial', part: 'v1', setting: 'serial' },
+  { name: 'atmega-serial-echo', part: 'vrx', setting: 'serial' },
 ];
 
 // `bigint` arguments the binding takes exactly, and the `created_at` each stamps as seconds.

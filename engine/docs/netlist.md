@@ -186,7 +186,7 @@ A pulse holds `initial` until `delay_ps`, then `pulsed` for `width_ps`, then `in
 }
 ```
 
-A `serial` waveform holds `mark` while idle and for a 1 bit, and `space` for a start bit and a 0 bit. Each event sends `bytes` back to back from `t_ps`, in frame `8N1`, at `baud` bits per second. `examples/v-serial` sends the byte 49 at 9600 baud from 1 ms.
+A `serial` waveform holds `mark` while idle and for a 1 bit, and `space` for a start bit and a 0 bit. Each event sends `bytes` back to back from `t_ps`, in frame `8N1`, at `baud` bits per second. `examples/v-serial` sends the byte 49 at 9600 baud from 1 ms. `examples/atmega-serial-echo` is the chip example that uses this source.
 
 ```json
 "voltage": {
@@ -481,6 +481,8 @@ This document runs `firmware/toggle.S` at 16 MHz into 1 kohm on PB5. `cx1` and `
 `examples/atmega-button` is this part with these values running `firmware/button.S`. A push button connects PD2 to ground. PD2's pull-up holds the pin high while the button is open, and the loop copies the inverse of PIND2 onto PB5, so the LED is on while the button is held. The contact bounces and the firmware does not debounce, so the LED follows the bounces a pass of the loop can sample. Seed 26 is the smallest seed that leaves one closed level shorter than a pass, and the LED does not follow that level. Its 1 s run is three presses of 200 ms, on a 10 ms grid.
 
 `examples/atmega-analog-serial` is this part with these values running `firmware/analog_serial.S`. A 10 kohm potentiometer sits across VCC and ground with its wiper on PC0, which is ADC0. Its position is 1023/2048, so the wiper is in the middle of ADC step 512. The firmware prints that code as decimal on TXD, one line per reading. The 19 ms run prints three lines on a 20 us grid, and its `traces/serial.csv` holds their bytes.
+
+`examples/atmega-serial-echo` is this part with these values running `firmware/serial_echo.S`. A `serial` source named `vrx` drives PD0 through 1 kohm. Its events send the byte `"1"` at 1 ms and the bytes `"0hi"` at 5 ms, both at 9600 baud. The firmware echoes each byte on TXD and drives PB5 from `'1'` and `'0'`. PB5 drives the WP7113ID of `examples/led-5v` through 220 ohm. The 12 ms run is on a 100 us grid, and its `traces/serial.csv` holds the four echoes.
 
 `examples/atmega-fade` is this part with these values running `firmware/fade.S`. PB1, which is OC1A, drives the WP7113ID of `examples/led-5v` through 220 ohm to ground. Timer1 is 8-bit phase-correct PWM with prescaler 64, about 490 Hz, and OC1A is non-inverting. `OCR1A` steps by 5 every 30 ms and reverses at 0 and 255. Its 1.57 s run climbs from off to full on and starts back down, on a 100 us grid.
 

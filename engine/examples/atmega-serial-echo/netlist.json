@@ -1,0 +1,423 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": {
+    "transient": {
+      "stop_ps": 12000000000,
+      "max_step_ps": 20000000,
+      "grid_ps": 100000000
+    }
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "aref",
+    "pb0",
+    "pb1",
+    "pb2",
+    "pb3",
+    "pb4",
+    "pb5",
+    "pc0",
+    "pc1",
+    "pc2",
+    "pc3",
+    "pc4",
+    "pc5",
+    "pc6",
+    "pd0",
+    "pd1",
+    "pd2",
+    "pd3",
+    "pd4",
+    "pd5",
+    "pd6",
+    "pd7",
+    "vcc",
+    "xtal1",
+    "xtal2",
+    "rx",
+    "vled"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vcc",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 5.0,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "vrx",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "rx",
+        "n": "gnd"
+      },
+      "voltage": {
+        "kind": "serial",
+        "mark": {
+          "value": 5.0,
+          "unit": "V",
+          "source": "user"
+        },
+        "space": {
+          "value": 0.0,
+          "unit": "V",
+          "source": "user"
+        },
+        "events": [
+          {
+            "t_ps": 1000000000,
+            "baud": 9600,
+            "frame": "8N1",
+            "bytes": [
+              49
+            ]
+          },
+          {
+            "t_ps": 5000000000,
+            "baud": 9600,
+            "frame": "8N1",
+            "bytes": [
+              48,
+              104,
+              105
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "rrx",
+      "kind": "resistor",
+      "pins": {
+        "a": "rx",
+        "b": "pd0"
+      },
+      "resistance": {
+        "value": 1000.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": {
+        "a": "pb5",
+        "b": "vled"
+      },
+      "resistance": {
+        "value": 220.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": {
+          "value": 0.25,
+          "unit": "W",
+          "source": "user"
+        }
+      }
+    },
+    {
+      "name": "led1",
+      "kind": "led",
+      "pins": {
+        "anode": "vled",
+        "cathode": "gnd"
+      },
+      "saturation_current": {
+        "value": 6.711e-10,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical"
+          }
+        }
+      },
+      "emission_coefficient": {
+        "value": 4.427,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical"
+          }
+        }
+      },
+      "series_resistance": {
+        "value": 2.115,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical"
+          }
+        }
+      },
+      "ratings": {
+        "current": {
+          "value": 0.03,
+          "unit": "A",
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+              "at": "Absolute Maximum Ratings at Ta = 25 C, DC forward current",
+              "basis": "absolute_max"
+            }
+          }
+        },
+        "power": {
+          "value": 0.075,
+          "unit": "W",
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+              "at": "Absolute Maximum Ratings at Ta = 25 C, power dissipation",
+              "basis": "absolute_max"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "cx1",
+      "kind": "capacitor",
+      "pins": {
+        "a": "xtal1",
+        "b": "gnd"
+      },
+      "capacitance": {
+        "value": 2.2e-11,
+        "unit": "F",
+        "source": "user"
+      },
+      "initial": {
+        "value": 0.0,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "cx2",
+      "kind": "capacitor",
+      "pins": {
+        "a": "xtal2",
+        "b": "gnd"
+      },
+      "capacitance": {
+        "value": 2.2e-11,
+        "unit": "F",
+        "source": "user"
+      },
+      "initial": {
+        "value": 0.0,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "cref",
+      "kind": "capacitor",
+      "pins": {
+        "a": "aref",
+        "b": "gnd"
+      },
+      "capacitance": {
+        "value": 1e-07,
+        "unit": "F",
+        "source": "user"
+      },
+      "initial": {
+        "value": 0.0,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "u1",
+      "kind": "atmega328p",
+      "pins": {
+        "PC6": "pc6",
+        "PD0": "pd0",
+        "PD1": "pd1",
+        "PD2": "pd2",
+        "PD3": "pd3",
+        "PD4": "pd4",
+        "VCC": "vcc",
+        "GND_8": "gnd",
+        "PB6": "xtal1",
+        "PB7": "xtal2",
+        "PD5": "pd5",
+        "PD6": "pd6",
+        "PD7": "pd7",
+        "PB0": "pb0",
+        "PB1": "pb1",
+        "PB2": "pb2",
+        "PB3": "pb3",
+        "PB4": "pb4",
+        "PB5": "pb5",
+        "AVCC": "vcc",
+        "AREF": "aref",
+        "GND_22": "gnd",
+        "PC0": "pc0",
+        "PC1": "pc1",
+        "PC2": "pc2",
+        "PC3": "pc3",
+        "PC4": "pc4",
+        "PC5": "pc5"
+      },
+      "firmware": ":1000000034C0000031C000002FC000002DC000002F\n:100010002BC0000029C0000027C0000025C0000040\n:1000200023C0000021C000001FC000001DC0000050\n:100030001BC0000019C0000017C0000015C0000060\n:1000400013C0000011C0000022C000000DC000005D\n:100050000BC0000009C0000007C0000005C0000080\n:1000600003C0000001C00000189500E00093C0002C\n:1000700006E00093C20000E00093C50007E600938D\n:10008000C40008E90093C100259A7894FFCF00913D\n:10009000C600013309F42D9A003309F42D9810910C\n:0C00A000C00015FFFCCF0093C6001895AF\n:00000001FF\n",
+      "clock_hz": {
+        "value": 16000000,
+        "unit": "Hz",
+        "source": "user"
+      },
+      "fuses": {
+        "low": 255,
+        "high": 217,
+        "extended": 253
+      },
+      "output": {
+        "high_drop": {
+          "value": 0.0,
+          "unit": "V",
+          "source": {
+            "datasheet": {
+              "doc": "DS40002061B",
+              "at": "Figure 31-355",
+              "basis": "typical"
+            }
+          }
+        },
+        "high_resistance": {
+          "value": 25.0,
+          "unit": "ohm",
+          "source": {
+            "datasheet": {
+              "doc": "DS40002061B",
+              "at": "Figure 31-355",
+              "basis": "typical"
+            }
+          }
+        },
+        "low_drop": {
+          "value": 0.0,
+          "unit": "V",
+          "source": {
+            "datasheet": {
+              "doc": "DS40002061B",
+              "at": "Figure 31-353",
+              "basis": "typical"
+            }
+          }
+        },
+        "low_resistance": {
+          "value": 25.0,
+          "unit": "ohm",
+          "source": {
+            "datasheet": {
+              "doc": "DS40002061B",
+              "at": "Figure 31-353",
+              "basis": "typical"
+            }
+          }
+        }
+      },
+      "pull_up_resistance": {
+        "value": 35714.0,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "DS40002061B",
+            "at": "Figure 31-348",
+            "basis": "typical"
+          }
+        }
+      },
+      "reset_pull_up_resistance": {
+        "value": 46296.0,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "DS40002061B",
+            "at": "Figure 31-351",
+            "basis": "typical"
+          }
+        }
+      },
+      "leakage_resistance": {
+        "value": 5500000.0,
+        "unit": "ohm",
+        "source": {
+          "closed_form": {
+            "note": "DS40002061B Table 30-1: IIL and IIH at most 1 uA at VCC = 5.5 V, so 5.5 V / 1 uA"
+          }
+        }
+      },
+      "input_threshold": {
+        "low": {
+          "value": 0.42,
+          "unit": "1",
+          "source": {
+            "datasheet": {
+              "doc": "DS40002061B",
+              "at": "Figure 31-357",
+              "basis": "typical"
+            }
+          }
+        },
+        "high": {
+          "value": 0.52,
+          "unit": "1",
+          "source": {
+            "datasheet": {
+              "doc": "DS40002061B",
+              "at": "Figure 31-356",
+              "basis": "typical"
+            }
+          }
+        }
+      },
+      "reset_threshold": {
+        "low": {
+          "value": 0.42,
+          "unit": "1",
+          "source": {
+            "datasheet": {
+              "doc": "DS40002061B",
+              "at": "Figure 31-360",
+              "basis": "typical"
+            }
+          }
+        },
+        "high": {
+          "value": 0.44,
+          "unit": "1",
+          "source": {
+            "datasheet": {
+              "doc": "DS40002061B",
+              "at": "Figure 31-359",
+              "basis": "typical"
+            }
+          }
+        }
+      }
+    }
+  ]
+}
