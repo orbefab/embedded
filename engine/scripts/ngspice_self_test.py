@@ -1,14 +1,43 @@
-"""Self-test cases for scripts/ngspice_refs.py. No ngspice."""
+"""Self-test cases for scripts/ngspice_refs.py.
+
+The self-test needs ngspice-42 on PATH. The operating-point cases run decks.
+The rest do not.
+"""
 
 import json
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
 from bounce import bounce_vectors
 
 
+def ngspice_requirement(refs):
+    """None when ngspice-42 is on PATH. Otherwise the reason the self-test stops."""
+    if shutil.which("ngspice") is None:
+        return "ngspice is not on PATH"
+    try:
+        version = refs.ngspice_version()
+    except OSError as exc:
+        return f"ngspice --version failed ({exc})"
+    except subprocess.CalledProcessError as exc:
+        return f"ngspice --version failed with exit {exc.returncode}"
+    except SystemExit as exc:
+        text = exc.code if isinstance(exc.code, str) else "ngspice --version failed"
+        return text
+    if version != "ngspice-42":
+        return f"ngspice --version is {version}, not ngspice-42"
+    return None
+
+
 def self_test(refs):
-    """Skip paths, with no ngspice. stdout is one JSON document."""
+    """Skip paths and the operating-point refusal. stdout is one JSON document."""
+    reason = ngspice_requirement(refs)
+    if reason is not None:
+        document = {"ok": False, "cases": [{"name": "ngspice 42", "ok": False, "reason": reason}]}
+        print(json.dumps(document, indent=2))
+        return 1
     specs = [
         {
             "name": "unknown kind",
@@ -262,6 +291,7 @@ def self_test(refs):
     cases.append(bounce_vectors())
     cases.append(vcd_reader(refs))
     cases.append(engine_grid(refs))
+    cases.extend(operating_point_fallback(refs))
     document = {"ok": all(case["ok"] for case in cases), "cases": cases}
     print(json.dumps(document, indent=2))
     return 0 if document["ok"] else 1
@@ -317,6 +347,220 @@ def engine_grid(refs):
         and refused
     )
     return {"name": "engine grid", "ok": ok, "time": t_s, "v": rows["#r1.v"], "span": spans}
+
+
+def quantity(value):
+    return {"value": value}
+
+
+def npn_led_netlist(voltage, transient=False):
+    """`examples/npn-led` with the pin source at `voltage`. The part values are that netlist's.
+
+    A transient run stops at 1 us. Its operating point is the same circuit.
+    """
+    led = {
+        "name": "led1",
+        "kind": "led",
+        "pins": {"anode": "vled", "cathode": "c"},
+        "saturation_current": quantity(6.711e-10),
+        "emission_coefficient": quantity(4.427),
+        "series_resistance": quantity(2.115),
+    }
+    q1 = {
+        "name": "q1",
+        "kind": "npn",
+        "pins": {"collector": "c", "base": "b", "emitter": "gnd"},
+        "saturation_current": quantity(8.095e-15),
+        "forward_beta": quantity(173.2),
+        "reverse_beta": quantity(0.2704),
+        "forward_emission": quantity(1.0),
+        "reverse_emission": quantity(1.0),
+        "early_voltage": quantity(100.0),
+        "base_resistance": quantity(5.707),
+        "collector_resistance": quantity(1.531),
+        "emitter_resistance": quantity(0.867),
+        "base_emitter_capacitance": quantity(8e-12),
+        "base_collector_capacitance": quantity(4e-12),
+    }
+    analysis = {"op": {}}
+    if transient:
+        analysis = {"transient": {"stop_ps": 1_000_000, "max_step_ps": 1000, "grid_ps": 1000}}
+    return {
+        "analysis": analysis,
+        "ground": "gnd",
+        "nets": ["gnd", "b", "c", "pin", "vcc", "vled"],
+        "parts": [
+            {
+                "name": "v1",
+                "kind": "voltage_source",
+                "pins": {"p": "vcc", "n": "gnd"},
+                "voltage": quantity(5.0),
+            },
+            {
+                "name": "vpin",
+                "kind": "voltage_source",
+                "pins": {"p": "pin", "n": "gnd"},
+                "voltage": quantity(voltage),
+            },
+            {
+                "name": "rb",
+                "kind": "resistor",
+                "pins": {"a": "pin", "b": "b"},
+                "resistance": quantity(1000.0),
+            },
+            {
+                "name": "r1",
+                "kind": "resistor",
+                "pins": {"a": "vcc", "b": "vled"},
+                "resistance": quantity(220.0),
+            },
+            led,
+            q1,
+        ],
+    }
+
+
+def divider_netlist():
+    return {
+        "analysis": {"op": {}},
+        "ground": "gnd",
+        "nets": ["gnd", "mid"],
+        "parts": [
+            {
+                "name": "v1",
+                "kind": "voltage_source",
+                "pins": {"p": "mid", "n": "gnd"},
+                "voltage": quantity(5.0),
+            },
+            {
+                "name": "r1",
+                "kind": "resistor",
+                "pins": {"a": "mid", "b": "gnd"},
+                "resistance": quantity(1000.0),
+            },
+        ],
+    }
+
+
+def exit_message(refs, example, check):
+    try:
+        refs.report_examples([example], check, "ngspice-42")
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, str) else None
+    return None
+
+
+def write_netlist(folder, netlist):
+    folder.mkdir()
+    (folder / "netlist.json").write_text(json.dumps(netlist))
+
+
+def refusal_matches(refs, folder, lines):
+    """Both modes raise the same message, and the folder keeps only netlist.json."""
+    generation = exit_message(refs, folder, False)
+    check = exit_message(refs, folder, True)
+    written = sorted(path.name for path in folder.iterdir())
+    expected = (
+        f"{folder.resolve().as_posix()}: ngspice operating point did not converge: "
+        f"{'; '.join(lines)}"
+    )
+    ok = generation == expected and check == expected and written == ["netlist.json"]
+    return ok, generation, check, written
+
+
+def shown(name, ok, detail):
+    case = {"name": name, "ok": ok}
+    if not ok:
+        case.update(detail)
+    return case
+
+
+def operating_point_fallback(refs):
+    """A pin at 0 V on the npn-led circuit is refused. A plain divider is not.
+
+    A start line paired with its completed line is still a refusal, and the
+    start line comes back. The same circuit as a transient is refused. A pin
+    at 1e-12 V that completes dynamic gmin stepping is refused.
+    """
+    pin_lines = (
+        "Note: Starting dynamic gmin stepping",
+        "Warning: Dynamic gmin stepping failed",
+        "Note: Starting true gmin stepping",
+        "Warning: True gmin stepping failed",
+        "Note: Starting source stepping",
+        "Warning: source stepping failed",
+        "Note: Transient op started",
+    )
+    pairs = (
+        ("Note: Starting dynamic gmin stepping", "Note: Dynamic gmin stepping completed"),
+        ("Note: Starting true gmin stepping", "Note: True gmin stepping completed"),
+        ("Note: Starting spice3 gmin stepping", "Note: spice3 gmin stepping completed"),
+        ("Note: Starting source stepping", "Note: Source stepping completed"),
+        ("Note: Transient op started", "Note: Transient op finished successfully"),
+    )
+    gmin_line = ("Note: Starting dynamic gmin stepping",)
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        pin = root / "npn-led-pin-0"
+        write_netlist(pin, npn_led_netlist(0.0))
+        plain = root / "divider"
+        write_netlist(plain, divider_netlist())
+        pin_ok, generation, check, written = refusal_matches(refs, pin, pin_lines)
+        plain_files = refs.generate(plain, "ngspice-42")
+        recovered = root / "npn-led-pin-1e-12"
+        write_netlist(recovered, npn_led_netlist(1e-12))
+        recovered_ok, recovered_generation, recovered_check, recovered_written = refusal_matches(
+            refs, recovered, gmin_line
+        )
+        transient = root / "npn-led-pin-0-tran"
+        write_netlist(transient, npn_led_netlist(0.0, transient=True))
+        transient_ok, transient_generation, transient_check, transient_written = refusal_matches(
+            refs, transient, pin_lines
+        )
+    paired = refs.op_fallback_lines("\n".join(line for pair in pairs for line in pair))
+    other_lines = [
+        "Note: Starting spice3 gmin stepping",
+        "Warning: spice3 gmin stepping failed",
+        "Error: Transient op failed, timestep too small",
+        "Error: The operating point could not be simulated successfully.",
+    ]
+    other = refs.op_fallback_lines("\n".join(other_lines))
+    starts = [start for start, _completed in pairs]
+    plain_ok = "op" in json.loads(plain_files["ngspice.json"])
+    paired_ok = paired == starts
+    other_ok = other == other_lines
+    return [
+        shown(
+            "operating point fallback",
+            pin_ok and plain_ok and paired_ok and other_ok,
+            {
+                "generation": generation,
+                "check": check,
+                "written": written,
+                "paired": paired,
+                "other": other,
+                "plain": plain_ok,
+            },
+        ),
+        shown(
+            "completed gmin stepping",
+            recovered_ok,
+            {
+                "generation": recovered_generation,
+                "check": recovered_check,
+                "written": recovered_written,
+            },
+        ),
+        shown(
+            "transient operating point fallback",
+            transient_ok,
+            {
+                "generation": transient_generation,
+                "check": transient_check,
+                "written": transient_written,
+            },
+        ),
+    ]
 
 
 def held_capacitor(a, b):

@@ -21,8 +21,12 @@ JSON document.
 A part with no kind, an unknown kind, a kind that runs firmware, a part with no
 pins, or a missing pin raises Skip. The example `npn-blinker` raises Skip too,
 because ngspice aborts that deck at the deck's options with Timestep too small.
-`--self-test` checks that, the source deck lines, the bounce test
-vectors, and the VCD reader and its summary, without ngspice.
+The script exits when ngspice's log shows the operating point left the plain
+Newton iteration, and `--check` exits the same way. The message names the
+example and ngspice's lines. `--self-test` checks the skip paths, the source
+deck lines, the bounce test vectors, the VCD reader and its summary, and that
+refusal. The refusal case runs ngspice. The rest do not. Without ngspice-42
+on PATH, `--self-test` prints one failed case and exits 1.
 """
 
 import hashlib
@@ -88,6 +92,21 @@ KNOT_CAP = 100_000
 # each column's span over ngspice's own points. The largest dense reference is
 # the nmos-pulse fixture at 2745 points. docs/reference.md names this number.
 POINT_CAP = 3000
+# ngspice-42 prints these in cktop.c and optran.c only after the plain Newton
+# operating point failed or was skipped. The `noopiter` help text is not a log line.
+OP_FALLBACKS = (
+    "Starting dynamic gmin stepping",
+    "Dynamic gmin stepping failed",
+    "Starting true gmin stepping",
+    "True gmin stepping failed",
+    "Starting spice3 gmin stepping",
+    "spice3 gmin stepping failed",
+    "Starting source stepping",
+    "source stepping failed",
+    "Transient op started",
+    "Transient op failed",
+    "The operating point could not be simulated successfully.",
+)
 
 
 class Skip(Exception):
@@ -262,7 +281,7 @@ def generate(example, version):
     transient = "transient" in netlist["analysis"]
     chips = [part for part in netlist["parts"] if part["kind"] in CHIPS]
     raws = [TRAN_RAW, EDGES_RAW] if chips else [TRAN_RAW if transient else RAW]
-    vectors, *edges = run_ngspice(deck, raws)
+    vectors, *edges = run_ngspice(deck, raws, label_of(example))
     values = {}
     gate = {}
     for variable, column in vectors.items():
@@ -904,16 +923,32 @@ def interpolate_series(at, times, values):
     return v0 + (v1 - v0) * (at - t0) / (t1 - t0)
 
 
-def run_ngspice(deck, raw_names):
+def op_fallback_lines(log):
+    """Lines that say the operating point left the plain Newton iteration."""
+    found = []
+    for raw in log.splitlines():
+        line = raw.strip()
+        if line and any(phrase in line for phrase in OP_FALLBACKS):
+            found.append(line)
+    return found
+
+
+def run_ngspice(deck, raw_names, label):
     """Each raw file's vectors, in the order named."""
     with tempfile.TemporaryDirectory() as tmp:
         Path(tmp, "deck.cir").write_text(deck)
         done = subprocess.run(
             ["ngspice", "-b", "deck.cir"], cwd=tmp, capture_output=True, text=True
         )
+        log = f"{done.stdout}{done.stderr}"
+        fallback = op_fallback_lines(log)
+        if fallback:
+            raise SystemExit(
+                f"{label}: ngspice operating point did not converge: {'; '.join(fallback)}"
+            )
         raws = [Path(tmp, name) for name in raw_names]
         if done.returncode != 0 or not all(raw.is_file() for raw in raws):
-            raise SystemExit(f"ngspice failed ({done.returncode}):\n{done.stdout}{done.stderr}")
+            raise SystemExit(f"ngspice failed ({done.returncode}):\n{log}")
         return [parse_raw(raw.read_text()) for raw in raws]
 
 

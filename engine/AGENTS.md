@@ -28,6 +28,8 @@ cargo test -p sim-avr --locked --features port-skip-check
 uv run scripts/ngspice_refs.py --self-test
 ```
 
+The commit check needs ngspice-42 on `PATH`.
+
 The `sim-avr` lines turn on `port-skip-check` so the skip check runs, and the other crates leave the feature off.
 
 Also run `scripts/wasm-check.sh` before a commit that touches `crates/wasm`, `crates/circuit/src/session*`, `scripts/wasm.sh`, or the math in `crates/circuit/src/element/junction.rs`, `crates/circuit/src/step.rs` and `crates/core/src/netlist.rs` that goes through `libm`. It needs node 22.7 or later and rustup, and checks the wasm package against native `sim run` in node Workers.
