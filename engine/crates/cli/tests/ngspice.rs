@@ -24,12 +24,12 @@ fn json(path: &Path) -> serde_json::Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
 
-/// `#net.*` and `*.v` are volts. `*.i`, `*.ib`, `*.ic` and `*.id` are amperes. `*.p` is watts.
-/// `#net.i` is a voltage.
+/// `#net.*` and `*.v` are volts. `*.i`, `*.ib`, `*.ic`, `*.id` and `*.ig` are amperes. `*.p` is
+/// watts. `#net.i` is a voltage.
 fn floor(reference: &str) -> f64 {
     if reference.starts_with("#net.") || reference.ends_with(".v") {
         1e-9
-    } else if [".i", ".ib", ".ic", ".id"]
+    } else if [".i", ".ib", ".ic", ".id", ".ig"]
         .iter()
         .any(|end| reference.ends_with(end))
     {
@@ -57,6 +57,7 @@ fn floor_is_one_nanovolt_one_picoampere_or_one_femtowatt() {
     assert_eq!(floor("#q1.ib"), 1e-12);
     assert_eq!(floor("#q1.ic"), 1e-12);
     assert_eq!(floor("#m1.id"), 1e-12);
+    assert_eq!(floor("#m1.ig"), 1e-12);
     assert_eq!(floor("#r1.p"), 1e-15);
 }
 
@@ -83,8 +84,12 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "led-9v",
             "ne555-led",
             "nmos-led",
+            "nmos-sweep",
             "npn-led",
+            "npn-pulse",
+            "npn-sweep",
             "pnp-load",
+            "pnp-sweep",
             "rc-switch",
             "v-pulse-rc",
             "v-serial",
@@ -98,7 +103,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
 
 /// Circuits only this test runs. `npn-off` and `pnp-off` hold the leakage on each kind's
 /// internal nodes, and `nmos-off` holds an off MOSFET so its drain current is the drain-source
-/// gmin. `npn-pulse` drives the junction capacitors through 1 Mohm, and `nmos-pulse` does the
+/// gmin. `npn-slow-edge` drives the junction capacitors through 1 Mohm, and `nmos-pulse` does the
 /// same for the gate capacitances, slow next to the deck's ramp. `nmos-regions` biases the
 /// drain through reverse, linear and saturation. `nmos-follower` holds the source off ground.
 #[test]
@@ -121,7 +126,7 @@ fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "nmos-pulse",
             "nmos-regions",
             "npn-off",
-            "npn-pulse",
+            "npn-slow-edge",
             "pnp-off"
         ]
     );
@@ -269,6 +274,9 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
         reference_t: &reference_t,
         grid: &grid,
         held: held(input),
+        spans: reference
+            .get("span")
+            .map(|spans| spans.as_object().unwrap()),
     };
     for (key, series) in values {
         let wanted: Vec<f64> = series
@@ -281,6 +289,7 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
     }
     let netlist = netlist::parse(input).unwrap();
     let gate = reference.get("gate").and_then(|value| value.as_object());
+    let mut gates = BTreeSet::new();
     for (_, part) in netlist.parts() {
         let name = format!("#{}.p", part.name.as_str());
         if !trace
@@ -308,12 +317,32 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
             }
         }
         compared.record(&name, &got_p, &wanted_p);
+        if let (Model::Nmos(_), Some(ig)) = (&part.model, &ig) {
+            let pins = part.model.pins();
+            let [d, g, s] = [0, 1, 2].map(|k| {
+                column(
+                    trace,
+                    label,
+                    &format!("#net.{}", netlist.net_name(pins[k]).as_str()),
+                )
+            });
+            let id = column(trace, label, &format!("{stem}.id"));
+            let (got_ig, rows) = gate_current(&engine_t, &grid, stored, [d, g, s], id);
+            let key = format!("{stem}.ig");
+            compared.record_on(&key, &got_ig, ig, &rows);
+            gates.insert(key);
+        }
     }
     let engine_columns: BTreeSet<_> = trace.columns().iter().map(|r| r.to_string()).collect();
     assert_eq!(
-        compared.checked, engine_columns,
+        compared.checked,
+        &engine_columns | &gates,
         "{label}: compared columns"
     );
+    if let Some(spans) = compared.spans {
+        let stored: BTreeSet<_> = spans.keys().cloned().collect();
+        assert_eq!(stored, compared.checked, "{label}: stored spans");
+    }
     assert!(
         !compared.failed,
         "{label} span error:\n{}",
@@ -412,10 +441,16 @@ struct SpanCheck<'a> {
     grid: &'a [f64],
     /// Columns whose t = 0 sample is dropped from both series.
     held: BTreeSet<String>,
+    /// Each column's span over ngspice's own points, when the reference stores the engine's rows.
+    spans: Option<&'a serde_json::Map<String, serde_json::Value>>,
 }
 
 impl SpanCheck<'_> {
     fn record(&mut self, key: &str, got: &[f64], wanted: &[f64]) {
+        self.record_on(key, got, wanted, self.grid);
+    }
+
+    fn record_on(&mut self, key: &str, got: &[f64], wanted: &[f64], grid: &[f64]) {
         // Both series and the grid start at t = 0. Dropping that sample, rather than only not
         // scoring at t = 0, keeps ngspice's 0 out of the chord the engine's next rows are read
         // against. Scoring starts at the reference's next sample, since nothing before it says
@@ -424,9 +459,17 @@ impl SpanCheck<'_> {
         let (engine_t, got) = (&self.engine_t[from..], &got[from..]);
         let (reference_t, wanted) = (&self.reference_t[from..], &wanted[from..]);
         let start = reference_t[0];
-        let span = wanted.iter().copied().fold(f64::NEG_INFINITY, f64::max)
-            - wanted.iter().copied().fold(f64::INFINITY, f64::min);
-        let error = self.grid[from..]
+        let span = match self.spans {
+            Some(spans) => spans
+                .get(key)
+                .and_then(|span| span.as_f64())
+                .unwrap_or_else(|| panic!("no stored span for {key}")),
+            None => {
+                wanted.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+                    - wanted.iter().copied().fold(f64::INFINITY, f64::min)
+            }
+        };
+        let error = grid[from..]
             .iter()
             .filter(|&&t| t >= start)
             .map(|&t| (interpolate(engine_t, got, t) - interpolate(reference_t, wanted, t)).abs())
@@ -486,6 +529,34 @@ fn power(
         Model::Nmos(_) => (got(name), derive(&wanted)),
         _ => (derive(&got), derive(&wanted)),
     }
+}
+
+/// The engine's gate current on every row, `(p - (V(d) - V(s)) * id) / (V(g) - V(s))` from its
+/// stored pin power, and the rows of `grid` where it is scored. A row with the gate within 1 mV of
+/// the source does not fix the current. There the series holds 0 and the row is not scored.
+fn gate_current(
+    engine_t: &[f64],
+    grid: &[f64],
+    p: &[f64],
+    [d, g, s]: [&[f64]; 3],
+    id: &[f64],
+) -> (Vec<f64>, Vec<f64>) {
+    let fixed = |row: usize| (g[row] - s[row]).abs() >= 1e-3;
+    let current = (0..p.len())
+        .map(|row| {
+            if fixed(row) {
+                (p[row] - (d[row] - s[row]) * id[row]) / (g[row] - s[row])
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    let rows = grid
+        .iter()
+        .copied()
+        .filter(|&t| fixed(engine_t.partition_point(|&x| x < t)))
+        .collect();
+    (current, rows)
 }
 
 fn series_of(label: &str, series: &serde_json::Value) -> Vec<f64> {
@@ -697,6 +768,7 @@ fn a_held_capacitor_drops_only_the_t_0_sample_of_its_current_and_power() {
         reference_t: &reference_t,
         grid: &grid,
         held,
+        spans: None,
     };
     compared.record("#c1.i", &engine, &ngspice);
     assert!(!compared.failed, "{:?}", compared.report);
@@ -711,6 +783,43 @@ fn a_held_capacitor_drops_only_the_t_0_sample_of_its_current_and_power() {
     late[2] *= 1.01;
     compared.record("#c1.i", &late, &ngspice);
     assert!(compared.failed, "{:?}", compared.report);
+}
+
+#[test]
+fn a_stored_span_sets_the_bound_in_place_of_the_rows() {
+    // ngspice spiked to 1 A between the rows. The stored rows hold 0, so their own span is 0.
+    let t = [0.0, 1e3, 2e3];
+    let engine = [0.0, 1e-6, 0.0];
+    let reference = [0.0; 3];
+    let spans = serde_json::json!({ "#r1.i": 1.0 });
+    let mut compared = SpanCheck {
+        failed: false,
+        report: Vec::new(),
+        checked: BTreeSet::new(),
+        engine_t: &t,
+        reference_t: &t,
+        grid: &t,
+        held: BTreeSet::new(),
+        spans: None,
+    };
+    compared.record("#r1.i", &engine, &reference);
+    assert!(compared.failed, "{:?}", compared.report);
+    compared.failed = false;
+    compared.spans = spans.as_object();
+    compared.record("#r1.i", &engine, &reference);
+    assert!(!compared.failed, "{:?}", compared.report);
+}
+
+#[test]
+fn the_gate_current_comes_from_the_pin_power_where_the_gate_is_off_the_source() {
+    let t = [0.0, 1e3, 2e3];
+    let (d, g, s) = ([2.0, 2.0, 2.0], [0.0, 5e-4, 4.0], [0.0; 3]);
+    let id = [0.0, 1e-3, 1e-3];
+    let p = [0.0, 2e-3, 2e-3 + 4.0 * 1e-6];
+    let (current, rows) = gate_current(&t, &t, &p, [&d, &g, &s], &id);
+    assert_eq!(rows, [2e3]);
+    assert_eq!(current[0], 0.0);
+    assert!((current[2] - 1e-6).abs() < 1e-18, "{current:?}");
 }
 
 #[test]

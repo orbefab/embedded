@@ -1,0 +1,23 @@
+{
+  "version": 0,
+  "parts": {
+    "v1": {
+      "model": "placeholder:dc-supply"
+    },
+    "vpin": {
+      "model": "placeholder:dc-supply"
+    },
+    "rb": {
+      "model": "placeholder:resistor-axial"
+    },
+    "re": {
+      "model": "placeholder:resistor-axial"
+    },
+    "q1": {
+      "model": "placeholder:to-92"
+    },
+    "rl": {
+      "model": "placeholder:resistor-axial"
+    }
+  }
+}

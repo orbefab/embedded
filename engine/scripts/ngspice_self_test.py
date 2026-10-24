@@ -253,9 +253,62 @@ def self_test(refs):
     cases.append(nmos_deck(refs))
     cases.append(bounce_vectors())
     cases.append(vcd_reader(refs))
+    cases.append(engine_grid(refs))
     document = {"ok": all(case["ok"] for case in cases), "cases": cases}
     print(json.dumps(document, indent=2))
     return 0 if document["ok"] else 1
+
+
+def engine_grid(refs):
+    """The engine's rows keep what the comparison scores.
+
+    The row on a jump reads ngspice's point there, the level before the ramp.
+    A spike between rows still sets the stored span, `p` included. A held
+    capacitor's span skips t = 0. 2745 points stays dense, because that is the
+    nmos-pulse fixture. A chip stays on the deck's own linearize. A grid that
+    does not divide the stop is refused.
+    """
+    netlist = {
+        "analysis": {"transient": {"stop_ps": 2_000_000_000, "grid_ps": 1_000_000_000}},
+        "parts": [
+            {"name": "r1", "kind": "resistor", "pins": {"a": "a", "b": "gnd"}},
+            {"name": "c1", "kind": "capacitor", "pins": {"a": "a", "b": "gnd"}, "initial": {"value": 0.0}},
+        ],
+    }
+    times = [0.0, 1e-3, 1e-3 + 1e-9, 1.5e-3, 2e-3]
+    volts = [0.0, 0.0, 1.0, 3.0, 1.0]
+    values = {
+        "#net.a": volts,
+        "#net.gnd": [0.0] * 5,
+        "#r1.v": volts,
+        "#r1.i": [v / 1000 for v in volts],
+        "#c1.v": volts,
+        "#c1.i": [5.0, 0.0, 2.0, 0.0, 0.0],
+    }
+    spans = refs.dense_spans(netlist, values, {})
+    t_s, rows, _ = refs.on_engine_grid(netlist, times, values, {})
+    refused = False
+    try:
+        refs.on_engine_grid(
+            {"analysis": {"transient": {"stop_ps": 3, "grid_ps": 2}}, "parts": []}, times, {}, {}
+        )
+    except SystemExit:
+        refused = True
+    ok = (
+        refs.POINT_CAP == 3000
+        and not refs.store_on_engine_grid(2745, False)
+        and not refs.store_on_engine_grid(3000, False)
+        and refs.store_on_engine_grid(3001, False)
+        and not refs.store_on_engine_grid(10000, True)
+        and t_s == [0.0, 1e-3, 2e-3]
+        and rows["#r1.v"] == [0.0, 0.0, 1.0]
+        and spans["#r1.v"] == 3.0
+        and spans["#r1.p"] == 3.0 * (3.0 / 1000)
+        and spans["#c1.i"] == 2.0
+        and set(spans) == set(values) | {"#r1.p", "#c1.p"}
+        and refused
+    )
+    return {"name": "engine grid", "ok": ok, "time": t_s, "v": rows["#r1.v"], "span": spans}
 
 
 def held_capacitor(a, b):

@@ -82,6 +82,10 @@ EDGE_RAMP_PS = 1000
 # deck's size. The engine's rows come from its grid, not from the knots, so a
 # skipped deck can still be a run that finishes.
 KNOT_CAP = 100_000
+# A transient with more saved points than this stores the engine's grid and
+# each column's span over ngspice's own points. The largest dense reference is
+# the nmos-pulse fixture at 2745 points. docs/reference.md names this number.
+POINT_CAP = 3000
 
 
 class Skip(Exception):
@@ -277,6 +281,10 @@ def generate(example, version):
         count = len(vectors["time"])
         values[f"#net.{netlist['ground']}"] = [0.0] * count
         part_voltages(example.name, netlist, values, count)
+        times, spans = vectors["time"], None
+        if store_on_engine_grid(count, bool(chips)):
+            spans = dense_spans(netlist, values, gate)
+            times, values, gate = on_engine_grid(netlist, times, values, gate)
     reference = {
         "format": FORMAT,
         "netlist_sha256": hashlib.sha256(netlist_bytes).hexdigest(),
@@ -289,11 +297,13 @@ def generate(example, version):
             "edge_ramp_ps": EDGE_RAMP_PS,
             "jumps": source_jumps(netlist),
             "switches": switches(netlist),
-            "t_s": vectors["time"],
+            "t_s": times,
             "values": values,
         }
         if gate:
             reference["tran"]["gate"] = gate
+        if spans:
+            reference["tran"]["span"] = spans
         if chips:
             stop = netlist["analysis"]["transient"]["stop_ps"]
             reference["tran"]["grid_ps"] = stop // CHIP_GRID
@@ -791,6 +801,103 @@ def jumps(wave):
         yield rise, low, high
         yield rise + width, high, low
         rise += period
+
+
+def store_on_engine_grid(point_count, chips):
+    """A chip already linearizes in the deck. A short run keeps ngspice's points."""
+    return not chips and point_count > POINT_CAP
+
+
+def on_engine_grid(netlist, times, values, gate):
+    """`t_s`, `values` and `gate` at the engine's rows.
+
+    Each row reads ngspice's points in picoseconds the way the Rust comparison
+    does, so a row scores the same error as against ngspice's own points. A held
+    capacitor's columns skip ngspice's t = 0 point, as the comparison does.
+    """
+    tran = netlist["analysis"]["transient"]
+    stop = tran["stop_ps"]
+    step = tran["grid_ps"]
+    if step <= 0 or stop % step != 0:
+        raise SystemExit(f"grid_ps {step} does not divide stop_ps {stop}")
+    at_ps = [t * 1e12 for t in times]
+    rows = [float(k * step) for k in range(stop // step + 1)]
+    held = held_columns(netlist)
+
+    def resample(key, series):
+        if len(series) != len(times):
+            raise SystemExit(f"{key} has {len(series)} points, time has {len(times)}")
+        skip = int(key in held)
+        return [series[0]] * skip + [
+            interpolate_series(row, at_ps[skip:], series[skip:]) for row in rows[skip:]
+        ]
+
+    return (
+        [row / 1e12 for row in rows],
+        {key: resample(key, series) for key, series in values.items()},
+        {key: resample(key, series) for key, series in gate.items()},
+    )
+
+
+def dense_spans(netlist, values, gate):
+    """Each scored column's maximum minus its minimum over ngspice's own points.
+
+    That is every value, each part's `p` as the Rust comparison derives it, and
+    each nmos gate current under `<ref>.ig`.
+    """
+    series = dict(values)
+    for part in netlist["parts"]:
+        if part["kind"] not in NO_QUANTITIES:
+            series[f"#{part['name']}.p"] = transient_power(part, values, gate)
+    series.update({f"{ref}.ig": current for ref, current in gate.items()})
+    held = held_columns(netlist)
+    spans = {}
+    for key, column in series.items():
+        column = column[int(key in held) :]
+        spans[key] = max(column) - min(column)
+    return spans
+
+
+def transient_power(part, values, gate):
+    """The part's power at each point, by the Rust comparison's formula."""
+    ref = f"#{part['name']}"
+    if part["kind"] in BJT_KINDS:
+        c, b, e = (values[f"#net.{net}"] for net in pin_nets(part))
+        ic, ib = values[f"{ref}.ic"], values[f"{ref}.ib"]
+        return [(c[k] - e[k]) * ic[k] + (b[k] - e[k]) * ib[k] for k in range(len(ic))]
+    if part["kind"] == "nmos":
+        d, g, s = (values[f"#net.{net}"] for net in pin_nets(part))
+        i_d, ig = values[f"{ref}.id"], gate[ref]
+        return [(d[k] - s[k]) * i_d[k] + (g[k] - s[k]) * ig[k] for k in range(len(i_d))]
+    return [v * i for v, i in zip(values[f"{ref}.v"], values[f"{ref}.i"])]
+
+
+def held_columns(netlist):
+    """The `i` and `p` of each capacitor with an `initial` voltage."""
+    return {
+        f"#{part['name']}.{quantity}"
+        for part in netlist["parts"]
+        if part["kind"] == "capacitor" and part["initial"] is not None
+        for quantity in ("i", "p")
+    }
+
+
+def interpolate_series(at, times, values):
+    """The value at `at`, held flat past either end, by the Rust comparison's formula."""
+    lo, hi = 0, len(times)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if times[mid] <= at:
+            lo = mid + 1
+        else:
+            hi = mid
+    if lo == 0:
+        return values[0]
+    if lo == len(times):
+        return values[-1]
+    t0, t1 = times[lo - 1], times[lo]
+    v0, v1 = values[lo - 1], values[lo]
+    return v0 + (v1 - v0) * (at - t0) / (t1 - t0)
 
 
 def run_ngspice(deck, raw_names):

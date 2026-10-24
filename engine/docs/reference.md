@@ -12,7 +12,7 @@ examples/<name>/
 
 `viewer.json` names a placeholder 3D model for each part. [viewer.md](viewer.md) defines it. The engine never reads it. A firmware example still has no `deck.cir` and no `ngspice.json`.
 
-`crates/cli/tests/fixtures/<name>/` holds circuits only the ngspice test runs, in the same layout without `viewer.json`. They are not examples. `npn-off` and `pnp-off` hold a transistor off with its internal nodes away from 0 V. `nmos-off` holds an `nmos` off, so its drain current is the drain-source gmin. `npn-pulse` switches a transistor through 1 Mohm, so its edges are slow next to the deck's ramp and the junction capacitors set them. `nmos-pulse` drives an `nmos` gate through 1 Mohm, so the gate capacitances set the edge. `nmos-regions` steps the drain through reverse, linear and saturation. `nmos-follower` holds the source off ground, with the drain at 12 V, the gate at 5 V, and 1 kohm from the source to ground.
+`crates/cli/tests/fixtures/<name>/` holds circuits only the ngspice test runs, in the same layout without `viewer.json`. They are not examples. `npn-off` and `pnp-off` hold a transistor off with its internal nodes away from 0 V. `nmos-off` holds an `nmos` off, so its drain current is the drain-source gmin. `npn-slow-edge` switches a transistor through 1 Mohm, so its edges are slow next to the deck's ramp and the junction capacitors set them. The example `examples/npn-pulse` is a different circuit, a 1 kHz pin with 100 nF on the collector. `nmos-pulse` drives an `nmos` gate through 1 Mohm, so the gate capacitances set the edge. `nmos-regions` steps the drain through reverse, linear and saturation. `nmos-follower` holds the source off ground, with the drain at 12 V, the gate at 5 V, and 1 kohm from the source to ground.
 
 ## Regenerate
 
@@ -60,7 +60,7 @@ cm1_gd x_m1_g x_m1_d 5e-12
 cm1_ds x_m1_d 0 2e-11
 ```
 
-The drain ammeter is `#<name>.id`. The gate ammeter is not an engine column. A transient reference keeps it under `tran.gate`, keyed by `#<name>`, and the power check reads it there. `p` is `(V(drain) - V(source)) * id + (V(gate) - V(source)) * ig`. At an operating point the capacitors are open, `ig` is 0, and `p` is `(V(drain) - V(source)) * id`.
+The drain ammeter is `#<name>.id`. The gate ammeter is not an engine column. A transient reference keeps it under `tran.gate`, keyed by `#<name>`, and the power check and the gate current check read it there. `p` is `(V(drain) - V(source)) * id + (V(gate) - V(source)) * ig`. At an operating point the capacitors are open, `ig` is 0, and `p` is `(V(drain) - V(source)) * id`.
 
 A deck with a transistor also shunts every net but ground to ground with 1e12 ohm, `rx_gmin_<net>`. The engine puts its node gmin on every net, so the shunts give ngspice the engine's. Inside the transistor both put gmin in the same places, and the shunts play no part there. Each puts it across each junction. ngspice-42's default substrate junction, vertical for an `npn` and lateral for a `pnp`, adds gmin from ground to `c'` in an NPN and to `b'` in a PNP, and the engine stamps the same term. The engine puts no node gmin on a bipolar transistor's internal nodes. An off NPN with 5 V on its collector takes 10 pA in both, 5 pA across `b'` to `c'` and 5 pA from `c'` to ground, and the two agree to 7e-6 relative. The fixtures `npn-off` and `pnp-off` are within 0.009 of their bound. The three transistor examples agree to at most 3.2e-7 relative, the gap the LED examples show. An `nmos` has no internal node. Its device `GMIN` is only from drain to source, inside the stamp, and the shunts put the engine's node gmin on the external nets. An off MOSFET with 5 V from drain to source takes 5 pA into the drain in both. `nmos-off` is that circuit.
 
@@ -77,6 +77,8 @@ A source waveform is `dc <initial> pwl(...)`. Its PWL starts at `0p <initial>`, 
 Each ramp corner, and each waveform knot in (0, `stop_ps`], also gets a source `vbp<k>` with a PWL corner one picosecond later. It makes that time a breakpoint, because ngspice skips a PWL corner it lands on an ulp early.
 
 The analysis is `tran s p stop p 0 s p` with `s` one thousandth of `stop_ps`. ngspice picks its own points under that cap, which does not depend on the engine's `max_step_ps` or `grid_ps`. The options are the same as for an operating point.
+
+A run with more than 3000 points, and no chip, stores its waveforms on the engine's grid. The deck is unchanged. Each row's sample is ngspice's waveform read in picoseconds at that row, as the comparison reads ngspice's own points, so every row scores the same error either way. A row on a jump reads ngspice's point there, which is the level from before the 1 ns ramp. When ngspice lands that point one rounding unit before the jump, the row reads a few millionths of the way up the ramp, on both sides alike. The file also stores `span`, each scored column's maximum minus its minimum over ngspice's own points, so a swing between rows still sets the bound. The derived `p` columns score the product of two stored samples, where ngspice's own points give the line through their products. On the transistor examples that moves a `p` column's worst error by under 0.04 of its bound. The largest reference that keeps ngspice's points is the `nmos-pulse` fixture, at 2745.
 
 A capacitor with an `initial` voltage adds `.ic v(<node>)=<initial>` for the pin that is not ground, negated when that pin is `b`. Without `uic`, ngspice holds the node there while it solves the operating point, then releases it. The node's voltage at t = 0 then matches the engine's. Its current does not. ngspice reports the capacitor's current at t = 0 as 0, and the engine reports the current the hold takes. So the transient comparison drops the t = 0 sample of that capacitor's `i` and `p` from both series before it reads them as piecewise linear. ngspice's 0 then does not enter the line the engine's first rows are compared against. Those columns are scored from the reference's next sample on, since nothing before it says what ngspice's current was. On a linearized grid that is `grid_ps`. A capacitor with `"initial": null` writes no line.
 
@@ -143,7 +145,7 @@ A transient reference has `tran` in place of `op`.
 }
 ```
 
-`switches` is every contact edge before the stop, as the script expanded it. `jumps` is every source jump before the stop, in part order. The script computes each time itself. A `serial` boundary is `t_ps` plus the floor of `i * 10^12 / baud` picoseconds. `t_s` is ngspice's time points in seconds, or the linearized grid in a chip deck. A chip deck adds two keys:
+`switches` is every contact edge before the stop, as the script expanded it. `jumps` is every source jump before the stop, in part order. The script computes each time itself. A `serial` boundary is `t_ps` plus the floor of `i * 10^12 / baud` picoseconds. `t_s` is ngspice's time points in seconds, the engine's grid when a run has more than 3000 points, or the linearized grid in a chip deck. A run on the engine's grid adds `span`, which maps every scored column to its span over ngspice's own points. Its keys are the `values` keys, each part's `p`, and each `nmos` gate current as `<ref>.ig`. A chip deck adds two keys:
 
 ```json
 "grid_ps": 2000000000,
@@ -182,7 +184,9 @@ max |engine - ngspice| <= 1e-3 * span + floor
 
 The test derives each part's `p` as `v * i` at the samples of each side, and reads the reference's series as piecewise linear. Each stored `p` must also equal that row's `v * i` within 1e-15 W. Every trace column is one of these comparisons.
 
-`span` is the column's maximum minus its minimum in the reference. The floor is 1e-9 for a voltage, 1e-12 for a current, and 1e-15 for a power, so a constant column passes on its floor. The test prints each column's worst error and span when it fails.
+An `nmos` adds one comparison that is not a trace column. Its gate current on each engine row is `(p - (V(drain) - V(source)) * id) / (V(gate) - V(source))`, from the stored `p`, and it is held to `tran.gate` with the 1 pA floor. A row whose gate is within 1 mV of its source does not fix that current and is not scored.
+
+`span` is the column's maximum minus its minimum in the reference, or the reference's stored `span` when it has one. The floor is 1e-9 for a voltage, 1e-12 for a current, and 1e-15 for a power, so a constant column passes on its floor. The test prints each column's worst error and span when it fails.
 
 Each trapezoidal engine step above the 1 ps floor holds every capacitor's local truncation error under 1e-5 of its swing plus 1 nV. The step after every edge starts from the edge's restart solve, and an edge that moves a capacitor starts a segment there. On one mode, error accumulates over steps to under 9.5e-5 of the swing on an exponential, and the examples measure it. Where modes couple, the accumulated error on a capacitor measured 1.2e-4 of its own swing. rc-switch's rows are 1.2e-6 V from its closed form, 4.9e-7 of the 2.5 V span. v-pulse-rc's rows, nearly all of them probes between steps the tolerance sets, are 7.1e-5 V from its closed form, 8.2e-5 of the 0.87 V span. A step at the floor is accepted over its tolerance, so a time constant under about 43 ps is not held to the 1e-3 bound above. [engine.md](engine.md#accuracy) gives the threshold and the measured error.
 
