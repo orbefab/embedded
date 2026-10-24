@@ -1610,6 +1610,33 @@ fn a_transistor_takes_no_input() {
 }
 
 #[test]
+fn an_nmos_takes_no_input() {
+    let path = format!(
+        "{}/../../examples/nmos-led/netlist.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    json["analysis"] = serde_json::json!({
+        "transient": { "stop_ps": 1000, "max_step_ps": 1000, "grid_ps": 1000 }
+    });
+    let mut session = open_document(&serde_json::to_vec(&json).unwrap(), Rows::Grid, BUDGET);
+    let before = session.export();
+    for input in [
+        level("m1", 0, 1.0),
+        set("m1", 0, Contact::Closed),
+        send("m1", 0, 9600, &[0x31]),
+    ] {
+        assert_eq!(
+            session.apply(&input),
+            Err(Rejected::NotSettable),
+            "{input:?}"
+        );
+    }
+    assert_eq!(session.export(), before);
+}
+
+#[test]
 fn a_step_a_pulse_and_a_resistor_take_no_setting() {
     let mut session = open_document(KINDS, Rows::Grid, BUDGET);
     let stop = transient(netlist_of(&session)).stop.as_ps();

@@ -17,9 +17,15 @@ and the four fits repeat to a fixed point.
 
 It prints each fit, rounded to the four figures the netlists carry, and the model's voltages at
 points it was not fitted to, beside the datasheet's readings and table limits.
+
+It also prints the `nmos` values `examples/nmos-led` carries. Beside them it prints the exact
+two-point solution through (4.0 V, 0.20 A) and (5.0 V, 0.36 A), and the currents the carried
+values give at those gates.
 """
 
+import json
 import math
+from pathlib import Path
 
 VT = 1.380649e-23 * 298.15 / 1.602176634e-19
 VAF = 100.0
@@ -98,6 +104,24 @@ def fit(r):
     return p
 
 
+def print_nmos():
+    """The level-1 `VTO` and `KP` that `examples/nmos-led` carries, and the exact two-point line."""
+    root = Path(__file__).resolve().parents[1]
+    netlist = json.loads((root / "examples/nmos-led/netlist.json").read_text())
+    part = next(item for item in netlist["parts"] if item["kind"] == "nmos")
+    vto = part["threshold_voltage"]["value"]
+    kp = part["transconductance_parameter"]["value"]
+    # id = KP/2 * (vgs - VTO)^2 through (4 V, 0.20 A) and (5 V, 0.36 A).
+    ratio = math.sqrt(0.36 / 0.20)
+    exact_vto = (ratio * 4.0 - 5.0) / (ratio - 1.0)
+    exact_kp = 2.0 * 0.20 / (4.0 - exact_vto) ** 2
+    print(f"nmos: examples/nmos-led carries VTO {vto} V and KP {kp} A/V^2")
+    print(f"  two-point solution VTO {exact_vto:.6f} V and KP {exact_kp:.6f} A/V^2")
+    for vgs, point in ((4.0, 0.20), (5.0, 0.36)):
+        got = kp / 2.0 * (vgs - vto) ** 2
+        print(f"  carried at {vgs:g} V gives {got:.6g} A, point {point:g} A")
+
+
 def main():
     for kind, r in PARTS.items():
         p = fit(r)
@@ -110,6 +134,7 @@ def main():
             vbe, vce = saturated(ic, ic / 10, rounded)
             print(f"  VBE(sat) and VCE(sat) at {ic * 1e3:g} mA, {ic * 1e2:g} mA: {vbe:.3f} V and {vce:.3f} V")
         print(f"  table {r['table']}")
+    print_nmos()
 
 
 if __name__ == "__main__":

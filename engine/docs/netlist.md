@@ -369,6 +369,65 @@ The NPN is the 2N3904 row of 2N3903/D Rev. 8, and the PNP is 2N3906/D Rev. 4. `N
 }
 ```
 
+### N-channel MOSFET
+
+`kind` is `nmos`. Pins are `drain`, `gate` and `source`. The bulk is the source pin.
+
+The part is ngspice's level 1 MOSFET with the bulk on the source, no body diode, and `W/L` folded into `KP`. `vgs` is `V(gate) - V(source)` and `vds` is `V(drain) - V(source)`. For `vds >= 0`:
+
+```text
+cutoff     vgs - VTO <= 0     id = 0
+saturation vds >= vgs - VTO   id = KP/2 * (vgs - VTO)^2 * (1 + LAMBDA*vds)
+linear     otherwise          id = KP * vds * (vgs - VTO - vds/2) * (1 + LAMBDA*vds)
+```
+
+For `vds < 0` the drain and source swap roles, so `id = -f(vgs - vds, -vds)`, where `f` is the table above. `GMIN * vds` is then added to `id`. `GMIN` is 1e-12 S. The gate draws no DC current.
+
+`CGS`, `CGD` and `CDS` are constant capacitances from gate to source, gate to drain, and drain to source. The step's error control holds each one as it holds a capacitor part. The part has no internal node.
+
+| Field | Symbol | Unit |
+| --- | --- | --- |
+| `transconductance_parameter` | `KP` | `A/V^2` |
+| `threshold_voltage` | `VTO` | `V` |
+| `channel_length_modulation` | `LAMBDA` | `1/V` |
+| `gate_source_capacitance` | `CGS` | `F` |
+| `gate_drain_capacitance` | `CGD` | `F` |
+| `drain_source_capacitance` | `CDS` | `F` |
+
+`transconductance_parameter` and the three capacitances must be greater than 0, and each reciprocal must be finite. Those are the resistor's rules. `threshold_voltage` must be finite, and it may be negative or zero. `channel_length_modulation` must be at least 0. A wrong unit on it reports `netlist.unit` and does not also report `non_negative`.
+
+`ratings` holds `current` and `power`. `current` bounds `|id|`.
+
+The model leaves out these effects.
+
+- The body diode. A discrete MOSFET conducts from source to drain when the drain goes below the source. This part does not. A circuit that needs that path adds a `diode` from source to drain.
+- Body effect. The bulk is the source pin.
+- Series resistance at the drain and the source. The fit folds it into `KP`.
+- Subthreshold conduction. Below `VTO` the current is `GMIN * vds`.
+- Mobility degradation. The square law fitted at 4 V and 5 V gives 1.86 A at `VGS` = 10 V, where Figure 1 shows about 1.5 A.
+- Voltage-dependent capacitances. The gate charge is approximate.
+
+The part has no internal node. The engine's 1e-12 S from every net to ground is on the drain, gate and source nets. The device's own `GMIN` is only from drain to source, which is where ngspice-42 leaves it when `is` is 0 and the bulk is the source. An off device with 5 V from drain to source takes 5 pA into the drain.
+
+`examples/nmos-led` is a 5 V pin through 100 ohm driving a small-signal N-channel MOSFET that sinks the LED of `examples/led-5v` and 560 ohm from 12 V. The gate is at 5 V, inside the fit. A 3.3 V gate overstates the drain current. The fit gives 0.115 A at 3.3 V, where Figure 2 reads about 0.07 A. The model conducts from 1.08 V. Figure 2's typical curve starts near 2.5 V. At a 2.5 V gate the model gives about 47 mA, where a typical part passes almost nothing.
+
+The values are from 2N7000/D Rev. 5. `VTO` is 1.08 V and `KP` is 0.0468 A/V^2. The netlist rounds the two-point solution through Figure 2 at 25 C at (4.0 V, 0.20 A) and (5.0 V, 0.36 A) to those two values. The rounded values give 0.1995 A and 0.3596 A at those gates. `VTO` sits inside the table's 0.8 V to 3.0 V. `LAMBDA` is 0, because Figure 1 draws flat saturation lines. `rDS(on)` at `VGS` = 4.5 V is 6.25 ohm by the model, against the table's 6.0 ohm maximum at 75 mA. `gm` at 200 mA is 0.137 S. The ON CHARACTERISTICS row prints `gfs` as 100 µmhos at `VDS` = 10 V and `ID` = 200 mA. The glyph is a Symbol mu. 2N7000 Rev. C1 states 100 millimhos at those biases, and NDS7002A/D Rev. 11 lists the 2N7000 row as `gFS` minimum 100 mS. Those sheets state 0.1 S. The model is not refit. Its `gm` at 200 mA is above that 0.1 S minimum. `CGD` is the maximum `Crss`, 5 pF. `CGS` is the maximum `Ciss` minus that, 55 pF. `CDS` is the maximum `Coss` minus that, 20 pF. The current rating is 0.2 A and the power rating is 0.35 W, the table's continuous drain current and total dissipation at TC = 25 C.
+
+```json
+{
+  "name": "m1",
+  "kind": "nmos",
+  "pins": { "drain": "d", "gate": "g", "source": "gnd" },
+  "transconductance_parameter": { "value": 0.0468, "unit": "A/V^2", "source": "user" },
+  "threshold_voltage": { "value": 1.08, "unit": "V", "source": "user" },
+  "channel_length_modulation": { "value": 0.0, "unit": "1/V", "source": "user" },
+  "gate_source_capacitance": { "value": 55e-12, "unit": "F", "source": "user" },
+  "gate_drain_capacitance": { "value": 5e-12, "unit": "F", "source": "user" },
+  "drain_source_capacitance": { "value": 20e-12, "unit": "F", "source": "user" },
+  "ratings": { "current": null, "power": null }
+}
+```
+
 ### NE555
 
 `kind` is `ne555`. Pins are `gnd`, `trig`, `out`, `reset`, `cont`, `thres`, `disch` and `vcc`, in package order. `examples/ne555-led` is the astable of TI SLFS022K Figure 6-5, 10 kohm and 47 kohm with 10 uF, driving an LED through 220 ohm. Its values cite SLFS022K, and its ladder cites the schematic of the pin-compatible LM555, TI SNAS548D.
@@ -608,6 +667,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `resistor` | `power` | `#<part>.p` |
 | `diode`, `led` | `current`, `power` | `#<part>.i`, `#<part>.p` |
 | `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
+| `nmos` | `current`, `power` | `#<part>.id`, `#<part>.p` |
 | `voltage_source`, `current_source`, `capacitor`, `switch`, `ne555`, `atmega328p`, `potentiometer` | none | |
 
 `current` is in `A`. `power` is in `W`. A rating must be greater than 0. A missing key, an unknown key, and a missing `ratings` object are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.current` or `ratings.power`. A value of 0 or below is `netlist.value` with the same field.
@@ -654,7 +714,9 @@ For a capacitor, `i` is the solved current into pin `a`. For a switch, `i` is `v
 
 On the divider, `#r1.i` and `#r2.i` are positive, `#r1.p` and `#r2.p` are positive, and `#v1.i` and `#v1.p` are negative. On `examples/i-divider`, `#i1.i` is -0.001 and `#i1.p` is negative.
 
-For a transistor, `ib` is the current entering the base pin and `ic` the current entering the collector pin. Each flows through its series resistance, so it includes the capacitors' current. `p` is `(V(collector) - V(emitter)) * ic + (V(base) - V(emitter)) * ib`, the power entering the part at its pins. A transistor has no `v`, and its internal nodes are not observed. A conducting PNP has negative `ib` and `ic`. On `examples/npn-led`, `#q1.ib` and `#q1.ic` are positive. On `examples/pnp-load` they are negative, and `#q1.p` is positive on both.
+For a bipolar transistor, `ib` is the current entering the base pin and `ic` the current entering the collector pin. Each flows through its series resistance, so it includes the capacitors' current. `p` is `(V(collector) - V(emitter)) * ic + (V(base) - V(emitter)) * ib`, the power entering the part at its pins. A bipolar transistor has no `v`, and its internal nodes are not observed. A conducting PNP has negative `ib` and `ic`. On `examples/npn-led`, `#q1.ib` and `#q1.ic` are positive. On `examples/pnp-load` they are negative, and `#q1.p` is positive on both.
+
+For an `nmos`, `id` is the current entering the drain pin. It includes the drain-source capacitor and the gate-drain capacitor. `p` is `(V(drain) - V(source)) * id + (V(gate) - V(source)) * ig`, where `ig` is the current entering the gate pin. The gate current is not a separate ref. At DC the capacitors are open, so `ig` is 0 and `p` is `(V(drain) - V(source)) * id`. An `nmos` has no `v` and no internal node. On `examples/nmos-led`, `#m1.id` and `#m1.p` are positive.
 
 A potentiometer has no `i`, `v`, or `p`. Its pins and nets are observed as every part's are.
 
@@ -664,7 +726,7 @@ A ref names one net, part, pin, quantity, or logic signal.
 
 ```text
 ref      = "#" ( "net." name | name [ "." ( quantity | "pin." name | "logic." name ) ] )
-quantity = "ib" | "ic" | "i" | "v" | "p"
+quantity = "ib" | "ic" | "id" | "i" | "v" | "p"
 ```
 
 | Text | Meaning |
@@ -678,6 +740,7 @@ quantity = "ib" | "ic" | "i" | "v" | "p"
 | `#r1.p` | Power of `r1` |
 | `#q1.ib` | Base current of transistor `q1` |
 | `#q1.ic` | Collector current of transistor `q1` |
+| `#m1.id` | Drain current of MOSFET `m1` |
 | `#u1.logic.out` | Logic level of signal `out` of chip `u1` |
 
 These texts parse and format back to the same text. The following texts are rejected.

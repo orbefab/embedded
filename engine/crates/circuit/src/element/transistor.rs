@@ -1,4 +1,4 @@
-use sim_core::netlist::Bjt;
+use sim_core::netlist::{Bjt, Mosfet};
 
 use super::capacitor::stamp_capacitor;
 use super::junction::{Shockley, mismatch, pnjlim};
@@ -198,6 +198,160 @@ pub(super) fn observe(bjt: &Bjt, probe: &Probe<'_>) -> [f64; 3] {
     let ib = (b - probe.internal(B)) / bjt.base_resistance.si.get();
     let ic = (c - probe.internal(C)) / bjt.collector_resistance.si.get();
     [ib, ic, (c - e) * ic + (b - e) * ib]
+}
+
+/// Which square-law region `forward` is in. `vds` is non-negative there.
+enum Region {
+    Cutoff,
+    Linear,
+    Saturation,
+}
+
+fn region(vov: f64, vds: f64) -> Region {
+    if vov <= 0.0 {
+        Region::Cutoff
+    } else if vds >= vov {
+        Region::Saturation
+    } else {
+        Region::Linear
+    }
+}
+
+/// Level-1 parameters. `vds < 0` is a terminal swap in `id`, then one `GMIN` from drain to source.
+struct Level1 {
+    kp: f64,
+    vto: f64,
+    lambda: f64,
+}
+
+impl Level1 {
+    fn new(mosfet: &Mosfet) -> Level1 {
+        Level1 {
+            kp: mosfet.transconductance_parameter.si.get(),
+            vto: mosfet.threshold_voltage.si.get(),
+            lambda: mosfet.channel_length_modulation.si.get(),
+        }
+    }
+
+    /// Drain current and its partials on `vgs` and `vds`, for `vds >= 0`, before `GMIN`.
+    fn forward(&self, vgs: f64, vds: f64) -> (f64, f64, f64) {
+        let vov = vgs - self.vto;
+        match region(vov, vds) {
+            Region::Cutoff => (0.0, 0.0, 0.0),
+            Region::Saturation => {
+                let half = self.kp * vov * vov / 2.0;
+                let k = 1.0 + self.lambda * vds;
+                (half * k, self.kp * vov * k, half * self.lambda)
+            }
+            Region::Linear => {
+                let k = 1.0 + self.lambda * vds;
+                let core = self.kp * vds * (vov - vds / 2.0);
+                (
+                    core * k,
+                    self.kp * vds * k,
+                    self.kp * (vov - vds) * k + core * self.lambda,
+                )
+            }
+        }
+    }
+
+    /// Current into the drain, `gm = d/dvgs` and `gds = d/dvds`.
+    ///
+    /// ngspice-42's `mos1load` puts `CKTgmin` on the drain-bulk diode. With the bulk on the
+    /// source and `is = 0` that diode is `GMIN` from drain to source, and the source-bulk term
+    /// cancels. There is no internal node, so nothing else is added.
+    fn id(&self, vgs: f64, vds: f64) -> (f64, f64, f64) {
+        let (id, gm, gds) = if vds >= 0.0 {
+            self.forward(vgs, vds)
+        } else {
+            let (f, gm_s, gds_s) = self.forward(vgs - vds, -vds);
+            (-f, -gm_s, gm_s + gds_s)
+        };
+        (id + GMIN * vds, gm, gds + GMIN)
+    }
+}
+
+/// Slots `vgs`, then `vds`.
+const VGS: usize = 0;
+const VDS: usize = 1;
+
+/// `CGS` on branch 0, `CGD` on branch 1, `CDS` on branch 2. The branch current enters the first end.
+fn mos_capacitors(mosfet: &Mosfet) -> [OwnedCapacitor; 3] {
+    let [d, g, s] = mosfet.pins;
+    let between = |k, a, b, farad| OwnedCapacitor {
+        k,
+        ends: [CapacitorEnd::Net(a), CapacitorEnd::Net(b)],
+        farad,
+    };
+    [
+        between(0, g, s, mosfet.gate_source_capacitance.si.get()),
+        between(1, g, d, mosfet.gate_drain_capacitance.si.get()),
+        between(2, d, s, mosfet.drain_source_capacitance.si.get()),
+    ]
+}
+
+pub(super) fn mos_charges(mosfet: &Mosfet) -> Vec<OwnedCapacitor> {
+    mos_capacitors(mosfet).to_vec()
+}
+
+/// The channel linearised at the slot voltages, then the three pin capacitors.
+pub(super) fn mos_stamp(mosfet: &Mosfet, stamp: &mut Stamp<'_>) {
+    let model = Level1::new(mosfet);
+    let (vgs, vds) = (stamp.junction(VGS), stamp.junction(VDS));
+    let (id, gm, gds) = model.id(vgs, vds);
+    let [d, g, s] = mosfet.pins.map(Node::from);
+    stamp.add(d, g, gm);
+    stamp.add(d, s, -gm - gds);
+    stamp.add(d, d, gds);
+    stamp.add(s, g, -gm);
+    stamp.add(s, s, gm + gds);
+    stamp.add(s, d, -gds);
+    stamp.current(d, s, id - gm * vgs - gds * vds);
+    for cap in mos_capacitors(mosfet) {
+        stamp_capacitor(stamp, cap.k, cap.ends, cap.farad, None);
+    }
+}
+
+/// Both slots start at 0. The square law needs no `vcrit`.
+pub(super) fn mos_initial(out: &mut [f64]) {
+    out[VGS] = 0.0;
+    out[VDS] = 0.0;
+}
+
+/// Writes the solved terminal voltages through, and checks the drain current.
+///
+/// No limiter. A pass that rebuilt `vds` as `vgs - vgd` moved the last bit and never converged.
+pub(super) fn mos_update(
+    mosfet: &Mosfet,
+    probe: &Probe<'_>,
+    prior: &[f64],
+    next: &mut [f64],
+) -> Update {
+    let model = Level1::new(mosfet);
+    let vs = probe.v(mosfet.pins[2]);
+    let vgs = probe.v(mosfet.pins[1]) - vs;
+    let vds = probe.v(mosfet.pins[0]) - vs;
+    next[VGS] = vgs;
+    next[VDS] = vds;
+    let (id, gm, gds) = model.id(prior[VGS], prior[VDS]);
+    let linear = id + gm * (vgs - prior[VGS]) + gds * (vds - prior[VDS]);
+    let (actual, _, _) = model.id(vgs, vds);
+    Update {
+        limited: false,
+        mismatch: mismatch(linear, actual),
+    }
+}
+
+/// `id` and `p`. `id` is the channel current plus the capacitor currents into the drain pin.
+pub(super) fn mos_observe(mosfet: &Mosfet, probe: &Probe<'_>) -> [f64; 2] {
+    let [vd, vg, vs] = mosfet.pins.map(|pin| probe.v(pin));
+    let id_channel = Level1::new(mosfet).id(vg - vs, vd - vs).0;
+    let i_cgs = probe.branch(0);
+    let i_cgd = probe.branch(1);
+    let i_cds = probe.branch(2);
+    let id = id_channel + i_cds - i_cgd;
+    let ig = i_cgs + i_cgd;
+    [id, (vd - vs) * id + (vg - vs) * ig]
 }
 
 #[cfg(test)]
@@ -460,6 +614,20 @@ mod tests {
                 assert_eq!(report.mismatch, 0.0, "{v:?}");
             }
         }
+        // `0.2 - (1.08 - 0.0)` and `vgs - (vgs - vds)` at `(0.01, 1.08, 0.1)` each move a bit.
+        let mosfet = Circuit::new(open_mos(0.0)).unwrap();
+        for v in [
+            [0.2, 1.08, 0.0],
+            [0.01, 1.08, 0.1],
+            [5.0, 3.3, 0.0],
+            [4.95, 2.53, 0.01],
+        ] {
+            let prior = [v[1] - v[2], v[0] - v[2]];
+            let (next, report) = mos_update_at(&mosfet, v, prior);
+            assert_eq!(next.map(f64::to_bits), prior.map(f64::to_bits), "{v:?}");
+            assert!(!report.limited, "{v:?}");
+            assert_eq!(report.mismatch, 0.0, "{v:?}");
+        }
     }
 
     #[test]
@@ -473,6 +641,23 @@ mod tests {
         assert!(junctions < 1e-13, "{junctions}");
         assert!((p.ic - junctions - 5.0 * GMIN).abs() <= 1e-25, "{}", p.ic);
         assert!((p.ib - ibc / BR + 5.0 * GMIN).abs() <= 1e-25, "{}", p.ib);
+        let model = Level1::new(m1(&open_mos(0.0)).1);
+        for vds in [5.0, -0.2] {
+            let (id, gm, gds) = model.id(0.0, vds);
+            assert!((id - GMIN * vds).abs() <= 1e-25, "{id} at vds {vds}");
+            assert_eq!(gm, 0.0, "{vds}");
+            assert!((gds - GMIN).abs() <= 1e-25, "{gds} at vds {vds}");
+        }
+    }
+
+    #[test]
+    fn an_nmos_iterate_whose_id_misses_its_linearisation_is_not_converged() {
+        let circuit = Circuit::new(open_mos(0.0)).unwrap();
+        // Saturation. The solved gate is 0.1 V above the prior, so the square law
+        // misses the linearised drain current by more than the tolerance.
+        let (_, report) = mos_update_at(&circuit, [5.0, 3.1, 0.0], [3.0, 5.0]);
+        assert!(!report.limited);
+        assert!(report.mismatch > 1.0, "{}", report.mismatch);
     }
 
     #[test]
@@ -546,5 +731,354 @@ mod tests {
             }
             assert!(worst <= 1e-3, "pin {tied} on the base: {worst} V off");
         }
+    }
+
+    const KP: f64 = 0.0468;
+    const VTO: f64 = 1.08;
+    const CGS: f64 = 55e-12;
+    const CGD: f64 = 5e-12;
+    const CDS: f64 = 20e-12;
+
+    fn mos_part(pins: [&str; 3], lambda: f64) -> String {
+        let [d, g, s] = pins;
+        format!(
+            r#"{{ "name": "m1", "kind": "nmos",
+                "pins": {{ "drain": "{d}", "gate": "{g}", "source": "{s}" }},
+                "transconductance_parameter": {kp}, "threshold_voltage": {vto},
+                "channel_length_modulation": {lambda},
+                "gate_source_capacitance": {cgs}, "gate_drain_capacitance": {cgd},
+                "drain_source_capacitance": {cds},
+                "ratings": {{ "current": null, "power": null }} }}"#,
+            kp = value(KP, "A/V^2"),
+            vto = value(VTO, "V"),
+            lambda = value(lambda, "1/V"),
+            cgs = value(CGS, "F"),
+            cgd = value(CGD, "F"),
+            cds = value(CDS, "F"),
+        )
+    }
+
+    fn resistor(name: &str, a: &str, b: &str, ohm: f64) -> String {
+        format!(
+            r#"{{ "name": "{name}", "kind": "resistor", "pins": {{ "a": "{a}", "b": "{b}" }},
+                "resistance": {}, "ratings": {{ "power": null }} }}"#,
+            value(ohm, "ohm")
+        )
+    }
+
+    fn capacitor(name: &str, a: &str, b: &str, farad: f64) -> String {
+        format!(
+            r#"{{ "name": "{name}", "kind": "capacitor", "pins": {{ "a": "{a}", "b": "{b}" }},
+                "capacitance": {}, "initial": null }}"#,
+            value(farad, "F")
+        )
+    }
+
+    fn source(name: &str, net: &str, volts: f64) -> String {
+        format!(
+            r#"{{ "name": "{name}", "kind": "voltage_source",
+                "pins": {{ "p": "{net}", "n": "gnd" }}, "voltage": {} }}"#,
+            value(volts, "V")
+        )
+    }
+
+    /// `d`, `g` and `s` each have a DC path, so the gate is not floating.
+    fn open_mos(lambda: f64) -> Netlist {
+        let parts = [
+            mos_part(["d", "g", "s"], lambda),
+            resistor("rd", "d", "gnd", 1e6),
+            resistor("rg", "g", "gnd", 1e6),
+            resistor("rs", "s", "gnd", 1e6),
+        ];
+        assemble(r#"{ "op": {} }"#, &["d", "g", "s"], &parts)
+    }
+
+    fn m1(netlist: &Netlist) -> (PartId, &Mosfet) {
+        let id = netlist.part_id(&Name::new("m1").unwrap()).unwrap();
+        let (_, part) = netlist.parts().nth(id.index()).unwrap();
+        match &part.model {
+            Model::Nmos(mosfet) => (id, mosfet),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn mos_update_at(circuit: &Circuit, v: [f64; 3], prior: [f64; 2]) -> ([f64; 2], Update) {
+        let (id, mosfet) = m1(&circuit.netlist);
+        let mut x = Solution::zeros(circuit.layout.size());
+        for (pin, volts) in mosfet.pins.into_iter().zip(v) {
+            if let Node::Row(row) = Node::from(pin) {
+                x.add(row, volts);
+            }
+        }
+        let probe = Probe {
+            layout: &circuit.layout,
+            part: id,
+            x: &x,
+        };
+        let mut next = [f64::NAN; 2];
+        let report = mos_update(mosfet, &probe, &prior, &mut next);
+        (next, report)
+    }
+
+    fn within(got: f64, want: f64, slack: f64, what: &str) {
+        assert!(
+            (got - want).abs() <= slack,
+            "{what}: {got} vs {want}, off by {}",
+            (got - want).abs()
+        );
+    }
+
+    /// `id`, `gm` and `gds` meet across cutoff, across saturation, and across `vds = 0`.
+    /// Reverse mode is the terminal swap, so it equals `-f(vgs - vds, -vds)` plus `GMIN`.
+    #[test]
+    fn regions_meet_at_their_boundaries() {
+        let lambda = 0.05;
+        let model = Level1::new(m1(&open_mos(lambda)).1);
+        let meet = |left: (f64, f64, f64), right: (f64, f64, f64), what: &str| {
+            for (name, a, b) in [
+                ("id", left.0, right.0),
+                ("gm", left.1, right.1),
+                ("gds", left.2, right.2),
+            ] {
+                within(a, b, 1e-6, &format!("{what} {name}"));
+            }
+        };
+        for vds in [0.0, 0.4, 2.0, 8.0] {
+            meet(
+                model.id(VTO - 1e-6, vds),
+                model.id(VTO + 1e-6, vds),
+                "vgs = VTO",
+            );
+            let (id, gm, gds) = model.id(VTO, vds);
+            within(id, GMIN * vds, 1e-18, "cutoff id");
+            assert_eq!(gm, 0.0);
+            within(gds, GMIN, 1e-18, "cutoff gds");
+        }
+        let vgs = 3.0;
+        let vov = vgs - VTO;
+        meet(
+            model.id(vgs, vov - 1e-6),
+            model.id(vgs, vov + 1e-6),
+            "vds = vgs - VTO",
+        );
+        meet(model.id(vgs, -1e-6), model.id(vgs, 1e-6), "vds = 0");
+        let (id, gm, gds) = model.id(vgs, 0.0);
+        assert_eq!(id, 0.0);
+        assert_eq!(gm, 0.0);
+        within(gds, KP * vov + GMIN, 1e-12, "gds at vds = 0");
+
+        for (vgs, vds) in [(3.0, 1.5), (2.0, 0.2), (0.5, 4.0), (4.0, 0.05)] {
+            let neg = -vds;
+            let (got_id, got_gm, got_gds) = model.id(vgs, neg);
+            let (f, fg, fd) = model.forward(vgs - neg, -neg);
+            assert_eq!(
+                (got_id, got_gm, got_gds),
+                (-f + GMIN * neg, -fg, fg + fd + GMIN),
+                "reverse at vgs {vgs}, vds {neg}"
+            );
+        }
+
+        let h = 1e-6;
+        for (vgs, vds) in [
+            (0.0, 4.0),
+            (3.0, 0.4),
+            (3.0, 6.0),
+            (1.0, -2.0),
+            (2.2, -0.3),
+            (0.0, -0.2),
+        ] {
+            let (id, gm, gds) = model.id(vgs, vds);
+            let gm_d = (model.id(vgs + h, vds).0 - model.id(vgs - h, vds).0) / (2.0 * h);
+            let gds_d = (model.id(vgs, vds + h).0 - model.id(vgs, vds - h).0) / (2.0 * h);
+            let rounding = 4.0 * f64::EPSILON * id.abs() / h;
+            within(gm, gm_d, 1e-6 * gm_d.abs() + rounding + 1e-9, "gm");
+            within(gds, gds_d, 1e-6 * gds_d.abs() + rounding + 1e-9, "gds");
+        }
+    }
+
+    fn solved_op(netlist: &Netlist) -> std::collections::BTreeMap<String, f64> {
+        let results = crate::simulate(netlist);
+        assert!(
+            results.diagnostics().is_empty(),
+            "{:?}",
+            results.diagnostics()
+        );
+        results
+            .observations()
+            .op()
+            .unwrap()
+            .values
+            .iter()
+            .map(|(reference, value)| (reference.to_string(), value.get()))
+            .collect()
+    }
+
+    /// A voltage source on the drain sinks `id` plus the node `GMIN`.
+    #[test]
+    fn drain_current_matches_the_square_law() {
+        let model = Level1::new(m1(&open_mos(0.0)).1);
+        for (vd, vg, name) in [
+            (5.0, 0.0, "cutoff"),
+            (1.0, 5.0, "linear"),
+            (5.0, 5.0, "saturation"),
+            (-2.0, 0.0, "reverse"),
+        ] {
+            let want = model.id(vg, vd).0;
+            let parts = [
+                mos_part(["d", "g", "gnd"], 0.0),
+                source("vd", "d", vd),
+                source("vg", "g", vg),
+            ];
+            let op = solved_op(&assemble(r#"{ "op": {} }"#, &["d", "g"], &parts));
+            let (id, p) = (op["#m1.id"], op["#m1.p"]);
+            within(id, want, 1e-9 * want.abs() + 1e-15, name);
+            within(p, vd * id, 1e-15, name);
+            within(op["#vd.i"] + id + GMIN * vd, 0.0, 1e-12, name);
+            within(op["#vg.i"] + GMIN * vg, 0.0, 1e-15, name);
+        }
+    }
+
+    /// Drain at 12 V, gate at 5 V, 1 kohm from the source to ground.
+    /// Those two readings are ngspice-42's operating point for this fit.
+    #[test]
+    fn a_source_follower_holds_the_source_off_ground() {
+        let parts = [
+            mos_part(["d", "g", "s"], 0.0),
+            source("vd", "d", 12.0),
+            source("vg", "g", 5.0),
+            resistor("rs", "s", "gnd", 1e3),
+        ];
+        let op = solved_op(&assemble(r#"{ "op": {} }"#, &["d", "g", "s"], &parts));
+        within(op["#net.s"], 3.531516, 1e-5, "source");
+        within(op["#m1.id"], 3.531516e-3, 1e-8, "id");
+    }
+
+    fn floating_nets(netlist: &Netlist) -> Vec<String> {
+        crate::simulate(netlist)
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code() == "net.floating")
+            .map(|d| d.refs()[0].to_string())
+            .collect()
+    }
+
+    /// A gate on a capacitor and on nothing else has no DC path. A resistor to ground closes it.
+    #[test]
+    fn a_gate_reached_only_through_a_capacitor_is_floating() {
+        let open = [
+            mos_part(["d", "g", "gnd"], 0.0),
+            source("vdd", "vdd", 5.0),
+            resistor("rd", "vdd", "d", 1e3),
+            capacitor("cg", "g", "gnd", CGS),
+        ];
+        assert_eq!(
+            floating_nets(&assemble(r#"{ "op": {} }"#, &["d", "g", "vdd"], &open)),
+            ["#net.g"]
+        );
+        let held = [
+            mos_part(["d", "g", "gnd"], 0.0),
+            source("vdd", "vdd", 5.0),
+            resistor("rd", "vdd", "d", 1e3),
+            capacitor("cg", "g", "gnd", CGS),
+            resistor("rg", "g", "gnd", 1e6),
+        ];
+        assert_eq!(
+            floating_nets(&assemble(r#"{ "op": {} }"#, &["d", "g", "vdd"], &held)),
+            Vec::<String>::new()
+        );
+    }
+
+    /// Drain tied to the gate leaves `CGS + CDS`. Source tied to the gate leaves `CGD + CDS`.
+    /// A swap of `CGS` and `CGD` moves each time constant to the other.
+    fn gate_step(drain_tied: bool) -> Netlist {
+        let pins = if drain_tied {
+            ["g", "g", "gnd"]
+        } else {
+            ["gnd", "g", "g"]
+        };
+        let parts = [
+            mos_part(pins, 0.0),
+            format!(
+                r#"{{ "name": "vin", "kind": "voltage_source", "pins": {{ "p": "in", "n": "gnd" }},
+                    "voltage": {{ "kind": "pulse", "initial": {}, "pulsed": {},
+                        "delay_ps": 1000000, "width_ps": 100000000, "period_ps": 200000000 }} }}"#,
+                value(0.0, "V"),
+                value(-1.0, "V")
+            ),
+            resistor("rs", "in", "g", 100e3),
+        ];
+        let analysis = r#"{ "transient": { "stop_ps": 40000000, "max_step_ps": 1000000, "grid_ps": 100000 } }"#;
+        assemble(analysis, &["g", "in"], &parts)
+    }
+
+    #[test]
+    fn a_gate_step_charges_cgs_and_cgd_each_with_its_own_time_constant() {
+        let ohm = 100e3;
+        for (drain_tied, tau) in [(true, ohm * (CGS + CDS)), (false, ohm * (CGD + CDS))] {
+            let results = crate::simulate(&gate_step(drain_tied));
+            assert!(
+                results.diagnostics().is_empty(),
+                "{:?}",
+                results.diagnostics()
+            );
+            let trace = results.trace().unwrap();
+            let g = "#net.g".parse::<Ref>().unwrap();
+            let column = trace.columns().iter().position(|r| *r == g).unwrap();
+            let mut worst = 0.0f64;
+            for (at, v) in trace.time().iter().zip(trace.column(column)) {
+                let since = (at.as_ps() as f64 - 1e6).max(0.0) * 1e-12;
+                let want = -(1.0 - libm::exp(-since / tau));
+                worst = worst.max((v - want).abs());
+            }
+            assert!(
+                worst <= 1e-3,
+                "drain tied {drain_tied}: {worst} V off, tau {tau}"
+            );
+        }
+    }
+
+    /// `p` keeps the gate current. The trace has no `ig` column, so the resistor supplies it.
+    #[test]
+    fn pin_power_includes_the_gate_current() {
+        let ohm = 1e6;
+        let parts = [
+            mos_part(["d", "g", "gnd"], 0.0),
+            format!(
+                r#"{{ "name": "vin", "kind": "voltage_source", "pins": {{ "p": "in", "n": "gnd" }},
+                    "voltage": {{ "kind": "pulse", "initial": {}, "pulsed": {},
+                        "delay_ps": 1000000, "width_ps": 500000000, "period_ps": 1000000000 }} }}"#,
+                value(0.0, "V"),
+                value(5.0, "V")
+            ),
+            resistor("rg", "in", "g", ohm),
+            source("vdd", "vdd", 5.0),
+            resistor("rd", "vdd", "d", 1e3),
+        ];
+        let analysis = r#"{ "transient": { "stop_ps": 200000000, "max_step_ps": 1000000, "grid_ps": 1000000 } }"#;
+        let results = crate::simulate(&assemble(analysis, &["d", "g", "in", "vdd"], &parts));
+        assert!(
+            results.diagnostics().is_empty(),
+            "{:?}",
+            results.diagnostics()
+        );
+        let trace = results.trace().unwrap();
+        let column = |key: &str| {
+            let reference = key.parse::<Ref>().unwrap();
+            let index = trace
+                .columns()
+                .iter()
+                .position(|r| *r == reference)
+                .unwrap();
+            trace.column(index)
+        };
+        let (id, p) = (column("#m1.id"), column("#m1.p"));
+        let (vd, vg, vin) = (column("#net.d"), column("#net.g"), column("#net.in"));
+        let mut gate_power = 0.0f64;
+        for row in 0..id.len() {
+            let ig = (vin[row] - vg[row]) / ohm - GMIN * vg[row];
+            gate_power = gate_power.max((vg[row] * ig).abs());
+            within(p[row], vd[row] * id[row] + vg[row] * ig, 1e-15, "p");
+        }
+        assert!(gate_power > 1e-9, "{gate_power}");
     }
 }

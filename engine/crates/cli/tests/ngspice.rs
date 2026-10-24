@@ -24,12 +24,12 @@ fn json(path: &Path) -> serde_json::Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
 
-/// `#net.*` and `*.v` are volts. `*.i`, `*.ib` and `*.ic` are amperes. `*.p` is watts.
+/// `#net.*` and `*.v` are volts. `*.i`, `*.ib`, `*.ic` and `*.id` are amperes. `*.p` is watts.
 /// `#net.i` is a voltage.
 fn floor(reference: &str) -> f64 {
     if reference.starts_with("#net.") || reference.ends_with(".v") {
         1e-9
-    } else if [".i", ".ib", ".ic"]
+    } else if [".i", ".ib", ".ic", ".id"]
         .iter()
         .any(|end| reference.ends_with(end))
     {
@@ -56,6 +56,7 @@ fn floor_is_one_nanovolt_one_picoampere_or_one_femtowatt() {
     assert_eq!(floor("#led1.i"), 1e-12);
     assert_eq!(floor("#q1.ib"), 1e-12);
     assert_eq!(floor("#q1.ic"), 1e-12);
+    assert_eq!(floor("#m1.id"), 1e-12);
     assert_eq!(floor("#r1.p"), 1e-15);
 }
 
@@ -81,6 +82,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "led-5v",
             "led-9v",
             "ne555-led",
+            "nmos-led",
             "npn-led",
             "pnp-load",
             "rc-switch",
@@ -95,8 +97,10 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
 }
 
 /// Circuits only this test runs. `npn-off` and `pnp-off` hold the leakage on each kind's
-/// internal nodes, and `npn-pulse` drives the junction capacitors through 1 Mohm, slow next to
-/// the deck's ramp.
+/// internal nodes, and `nmos-off` holds an off MOSFET so its drain current is the drain-source
+/// gmin. `npn-pulse` drives the junction capacitors through 1 Mohm, and `nmos-pulse` does the
+/// same for the gate capacitances, slow next to the deck's ramp. `nmos-regions` biases the
+/// drain through reverse, linear and saturation. `nmos-follower` holds the source off ground.
 #[test]
 fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
@@ -109,7 +113,18 @@ fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
         .iter()
         .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(names, ["npn-off", "npn-pulse", "pnp-off"]);
+    assert_eq!(
+        names,
+        [
+            "nmos-follower",
+            "nmos-off",
+            "nmos-pulse",
+            "nmos-regions",
+            "npn-off",
+            "npn-pulse",
+            "pnp-off"
+        ]
+    );
     for fixture in fixtures {
         matches_its_reference(&fixture);
     }
@@ -265,6 +280,7 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
         compared.record(key, column(trace, label, key), &wanted);
     }
     let netlist = netlist::parse(input).unwrap();
+    let gate = reference.get("gate").and_then(|value| value.as_object());
     for (_, part) in netlist.parts() {
         let name = format!("#{}.p", part.name.as_str());
         if !trace
@@ -274,15 +290,22 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
         {
             continue;
         }
+        let stem = format!("#{}", part.name.as_str());
+        let ig = gate.and_then(|table| table.get(&stem).map(|series| series_of(label, series)));
         let got = |key: &str| column(trace, label, key).to_vec();
         let wanted = |key: &str| series(values, label, key);
-        let (got_p, wanted_p) = power(&netlist, &part.model, &name, got, wanted);
+        let (got_p, wanted_p) = power(&netlist, &part.model, &name, got, wanted, ig.as_deref());
         let stored = column(trace, label, &name);
-        for (row, (&p, &derived)) in stored.iter().zip(&got_p).enumerate() {
-            assert!(
-                (p - derived).abs() <= 1e-15,
-                "{label} {name} row {row}: stored {p} vs the pin formula {derived}"
-            );
+        // An nmos pin formula needs the gate current, which is not an engine column. The
+        // circuit test `pin_power_includes_the_gate_current` pins that identity. Here the
+        // stored column is what the span check reads.
+        if !matches!(part.model, Model::Nmos(_)) {
+            for (row, (&p, &derived)) in stored.iter().zip(&got_p).enumerate() {
+                assert!(
+                    (p - derived).abs() <= 1e-15,
+                    "{label} {name} row {row}: stored {p} vs the pin formula {derived}"
+                );
+            }
         }
         compared.record(&name, &got_p, &wanted_p);
     }
@@ -416,14 +439,17 @@ impl SpanCheck<'_> {
 }
 
 /// A part's power on every row from its other columns, read once through `got` and once
-/// through `wanted`. A two-pin part's is `v * i`. A transistor's is
-/// `(V(c) - V(e)) * ic + (V(b) - V(e)) * ib`, from its pin nets.
+/// through `wanted`. A two-pin part's is `v * i`. A bipolar transistor's is
+/// `(V(c) - V(e)) * ic + (V(b) - V(e)) * ib`, from its pin nets. An nmos engine series is
+/// the stored `.p` column. Its ngspice series is `(V(d) - V(s)) * id + (V(g) - V(s)) * ig`,
+/// with `ig` from the gate ammeter in `tran.gate`.
 fn power(
     netlist: &netlist::Netlist,
     model: &Model,
     name: &str,
     got: impl Fn(&str) -> Vec<f64>,
     wanted: impl Fn(&str) -> Vec<f64>,
+    gate: Option<&[f64]>,
 ) -> (Vec<f64>, Vec<f64>) {
     let stem = name.strip_suffix(".p").unwrap();
     let derive = |read: &dyn Fn(&str) -> Vec<f64>| -> Vec<f64> {
@@ -438,13 +464,37 @@ fn power(
                     .map(|row| (c[row] - e[row]) * ic[row] + (b[row] - e[row]) * ib[row])
                     .collect()
             }
+            Model::Nmos(_) => {
+                let [d, g, s] = [0, 1, 2].map(|k| {
+                    let net = netlist.net_name(model.pins()[k]);
+                    read(&format!("#net.{}", net.as_str()))
+                });
+                let id = read(&format!("{stem}.id"));
+                let ig = gate.unwrap_or(&[]);
+                assert_eq!(ig.len(), id.len(), "{stem} gate current");
+                (0..id.len())
+                    .map(|row| (d[row] - s[row]) * id[row] + (g[row] - s[row]) * ig[row])
+                    .collect()
+            }
             _ => {
                 let (v, i) = (read(&format!("{stem}.v")), read(&format!("{stem}.i")));
                 v.iter().zip(&i).map(|(v, i)| v * i).collect()
             }
         }
     };
-    (derive(&got), derive(&wanted))
+    match model {
+        Model::Nmos(_) => (got(name), derive(&wanted)),
+        _ => (derive(&got), derive(&wanted)),
+    }
+}
+
+fn series_of(label: &str, series: &serde_json::Value) -> Vec<f64> {
+    series
+        .as_array()
+        .unwrap_or_else(|| panic!("{label}: gate current is not an array"))
+        .iter()
+        .map(|value| value.as_f64().unwrap())
+        .collect()
 }
 
 fn column<'a>(trace: &'a sim_core::trace::Trace, label: &str, key: &str) -> &'a [f64] {

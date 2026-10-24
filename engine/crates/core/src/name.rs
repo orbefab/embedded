@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! ref      = "#" ( "net." name | name [ "." ( quantity | "pin." name | "logic." name ) ] )
-//! quantity = "ib" | "ic" | "i" | "v" | "p"
+//! quantity = "ib" | "ic" | "id" | "i" | "v" | "p"
 //! name     = ASCII letter, then ASCII letters, digits or "_"; 1..=64 bytes
 //! ```
 
@@ -55,12 +55,13 @@ impl Name {
 /// A per-part quantity. One sign rule for every two-terminal part.
 /// `i` enters at the first pin, `v` is V(first) - V(second), and `p = v * i`
 /// is absorbed power, so a source that delivers power reads negative.
-/// A transistor's `ib` and `ic` enter at its base and collector, and its `p` is the power
-/// entering at every pin.
+/// A BJT's `ib` and `ic` enter at its base and collector. A MOSFET's `id` enters at its drain.
+/// `p` is the power entering at every pin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Quantity {
     Ib,
     Ic,
+    Id,
     I,
     V,
     P,
@@ -71,6 +72,7 @@ impl Quantity {
         match self {
             Quantity::Ib => "ib",
             Quantity::Ic => "ic",
+            Quantity::Id => "id",
             Quantity::I => "i",
             Quantity::V => "v",
             Quantity::P => "p",
@@ -146,6 +148,7 @@ impl FromStr for Ref {
             let quantity = match quant {
                 "ib" => Quantity::Ib,
                 "ic" => Quantity::Ic,
+                "id" => Quantity::Id,
                 "i" => Quantity::I,
                 "v" => Quantity::V,
                 "p" => Quantity::P,
@@ -197,6 +200,7 @@ mod tests {
             "#led1.p",
             "#q1.ib",
             "#q1.ic",
+            "#m1.id",
             "#u1.logic.out",
             "#logic.logic.pin",
             "#net.logic.out",

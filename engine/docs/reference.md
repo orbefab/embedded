@@ -12,7 +12,7 @@ examples/<name>/
 
 `viewer.json` names a placeholder 3D model for each part. [viewer.md](viewer.md) defines it. The engine never reads it. A firmware example still has no `deck.cir` and no `ngspice.json`.
 
-`crates/cli/tests/fixtures/<name>/` holds circuits only the ngspice test runs, in the same layout without `viewer.json`. They are not examples. `npn-off` and `pnp-off` hold a transistor off with its internal nodes away from 0 V. `npn-pulse` switches a transistor through 1 Mohm, so its edges are slow next to the deck's ramp and the junction capacitors set them.
+`crates/cli/tests/fixtures/<name>/` holds circuits only the ngspice test runs, in the same layout without `viewer.json`. They are not examples. `npn-off` and `pnp-off` hold a transistor off with its internal nodes away from 0 V. `nmos-off` holds an `nmos` off, so its drain current is the drain-source gmin. `npn-pulse` switches a transistor through 1 Mohm, so its edges are slow next to the deck's ramp and the junction capacitors set them. `nmos-pulse` drives an `nmos` gate through 1 Mohm, so the gate capacitances set the edge. `nmos-regions` steps the drain through reverse, linear and saturation. `nmos-follower` holds the source off ground, with the drain at 12 V, the gate at 5 V, and 1 kohm from the source to ground.
 
 ## Regenerate
 
@@ -33,7 +33,7 @@ Run it after any change to a `netlist.json`. The Rust test fails until you do.
 
 The script writes `deck.cir` from `netlist.json`. Do not edit it. `ngspice -b deck.cir` in that directory reruns it and writes `op.raw`, or `tran.raw` for a transient, and `edges.raw` too for a chip.
 
-Parts are written in name order. Names are lowercased, and ground is node `0`. A resistor is `r<name>`, a voltage source is `v<name>`, a current source is `i<name>`, a capacitor is `c<name>`, a diode or LED is `d<name>` with its own `.model`, and a transistor is `q<name>` with its own `.model`. A potentiometer is two resistors, `r<name>_a` from `a` to `wiper` of `position * resistance`, and `r<name>_b` from `wiper` to `b` of `(1 - position) * resistance`. It has no `#<name>.i` and no `#<name>.v`. A `steps` position with no events is the fixed `initial`. A position with events is skipped: a moving potentiometer has one position in a deck. Numbers are written so they read back to the same f64.
+Parts are written in name order. Names are lowercased, and ground is node `0`. A resistor is `r<name>`, a voltage source is `v<name>`, a current source is `i<name>`, a capacitor is `c<name>`, a diode or LED is `d<name>` with its own `.model`, a bipolar transistor is `q<name>` with its own `.model`, and an `nmos` is `m<name>` with its own `.model`. A potentiometer is two resistors, `r<name>_a` from `a` to `wiper` of `position * resistance`, and `r<name>_b` from `wiper` to `b` of `(1 - position) * resistance`. It has no `#<name>.i` and no `#<name>.v`. A `steps` position with no events is the fixed `initial`. A position with events is skipped: a moving potentiometer has one position in a deck. Numbers are written so they read back to the same f64.
 
 A current source is `i<name> <n> <p> dc <current>`, its pins swapped. ngspice's current flows from the first node through the source to the second, and the engine's leaves at `p`. Both an operating point deck and a transient deck save `@i<name>[current]`, the current the source drives, and the script negates it into the engine's `#<name>.i`.
 
@@ -48,7 +48,21 @@ qq1 x_q1_c x_q1_b 0 qmod_q1
 
 The ammeters' currents are the engine's `#<name>.ic` and `#<name>.ib`, and the nodes between them and the device are not compared. `p` is `(V(collector) - V(emitter)) * ic + (V(base) - V(emitter)) * ib` from the saved values, as the engine computes it. `mje=0` and `mjc=0` make `cje` and `cjc` constant, as the engine's are. Every model parameter the netlist does not name keeps its ngspice default, which is the engine's equation. A deck with a transistor reserves net and part names starting with `x_`, in an operating point deck too. Such a name skips the example.
 
-A deck with a transistor also shunts every net but ground to ground with 1e12 ohm, `rx_gmin_<net>`. The engine puts its node gmin on every net, so the shunts give ngspice the engine's. Inside the transistor both put gmin in the same places, and the shunts play no part there. Each puts it across each junction. ngspice-42's default substrate junction, vertical for an `npn` and lateral for a `pnp`, adds gmin from ground to `c'` in an NPN and to `b'` in a PNP, and the engine stamps the same term. The engine puts no node gmin on a transistor's internal nodes. An off NPN with 5 V on its collector takes 10 pA in both, 5 pA across `b'` to `c'` and 5 pA from `c'` to ground, and the two agree to 7e-6 relative. The fixtures `npn-off` and `pnp-off` are within 0.009 of their bound. The three transistor examples agree to at most 3.2e-7 relative, the gap the LED examples show.
+An `nmos` is written the same way, with the bulk node equal to the source and `l=100u w=100u` on the device line. `l` and `w` are equal, so `kp` alone sets the current. The card is level 1 with `is=0`, which leaves no body diode. With `tox` unset, ngspice-42's level 1 has no Meyer capacitance. The three capacitances are plain capacitors on the device side of the ammeters:
+
+```text
+vx_m1_d d x_m1_d dc 0
+vx_m1_g g x_m1_g dc 0
+mm1 x_m1_d x_m1_g 0 0 mmod_m1 l=100u w=100u
+.model mmod_m1 nmos (level=1 vto=1.08 kp=0.0468 lambda=0.0 is=0)
+cm1_gs x_m1_g 0 5.5e-11
+cm1_gd x_m1_g x_m1_d 5e-12
+cm1_ds x_m1_d 0 2e-11
+```
+
+The drain ammeter is `#<name>.id`. The gate ammeter is not an engine column. A transient reference keeps it under `tran.gate`, keyed by `#<name>`, and the power check reads it there. `p` is `(V(drain) - V(source)) * id + (V(gate) - V(source)) * ig`. At an operating point the capacitors are open, `ig` is 0, and `p` is `(V(drain) - V(source)) * id`.
+
+A deck with a transistor also shunts every net but ground to ground with 1e12 ohm, `rx_gmin_<net>`. The engine puts its node gmin on every net, so the shunts give ngspice the engine's. Inside the transistor both put gmin in the same places, and the shunts play no part there. Each puts it across each junction. ngspice-42's default substrate junction, vertical for an `npn` and lateral for a `pnp`, adds gmin from ground to `c'` in an NPN and to `b'` in a PNP, and the engine stamps the same term. The engine puts no node gmin on a bipolar transistor's internal nodes. An off NPN with 5 V on its collector takes 10 pA in both, 5 pA across `b'` to `c'` and 5 pA from `c'` to ground, and the two agree to 7e-6 relative. The fixtures `npn-off` and `pnp-off` are within 0.009 of their bound. The three transistor examples agree to at most 3.2e-7 relative, the gap the LED examples show. An `nmos` has no internal node. Its device `GMIN` is only from drain to source, inside the stamp, and the shunts put the engine's node gmin on the external nets. An off MOSFET with 5 V from drain to source takes 5 pA into the drain in both. `nmos-off` is that circuit.
 
 A source with a waveform writes `dc <initial>` in an operating point deck, the value the engine's operating point holds. A transient deck is described below.
 

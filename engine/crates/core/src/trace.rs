@@ -292,7 +292,7 @@ const SERIAL: &str = "serial.csv";
 
 fn unit(reference: &Ref) -> &'static str {
     match reference {
-        Ref::Quantity(_, Quantity::Ib | Quantity::Ic | Quantity::I) => "A",
+        Ref::Quantity(_, Quantity::Ib | Quantity::Ic | Quantity::Id | Quantity::I) => "A",
         Ref::Quantity(_, Quantity::P) => "W",
         Ref::Net(_) | Ref::Quantity(_, Quantity::V) => "V",
         Ref::Part(_) | Ref::Pin(..) | Ref::Logic(..) => {

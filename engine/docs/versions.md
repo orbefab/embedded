@@ -49,7 +49,9 @@ These are stable within a `run_format`:
 
 `engine_version` covers everything [engine.md](engine.md) describes: the step policy, how chip events are found, and the accuracy the engine reaches. A change there can move trace values within the documented accuracy without changing either format.
 
-This engine is `0.11.0`. A part can be an `npn` or a `pnp` transistor, as [netlist.md](netlist.md#npn-and-pnp-transistors) says. A new kind keeps the netlist version at 0. Its refs `#<part>.ib` and `#<part>.ic` are new values, so `run_format` stays 0. No new file, key, or code. `examples/npn-led`, `examples/pnp-load` and `examples/ce-amp` are new. No other example's run folder moves apart from `engine_version`, because no existing part's stamp changes.
+This engine is `0.12.0`. A part can be an `nmos` MOSFET, as [netlist.md](netlist.md#n-channel-mosfet) says. A new kind keeps the netlist version at 0. Its ref `#<part>.id` is a new value, so `run_format` stays 0. No new file, key, or code. `examples/nmos-led` is new. No other example's run folder moves apart from `engine_version`, because no existing part's stamp changes.
+
+Engine `0.11.0` is the version in which a part can be an `npn` or a `pnp` transistor, as [netlist.md](netlist.md#npn-and-pnp-transistors) says. A new kind keeps the netlist version at 0. Its refs `#<part>.ib` and `#<part>.ic` are new values, so `run_format` stays 0. No new file, key, or code. `examples/npn-led`, `examples/pnp-load` and `examples/ce-amp` are new. No other example's run folder moves apart from `engine_version`, because no existing part's stamp changes.
 
 Engine `0.10.0` is the version in which a voltage or current source can hold a `serial` waveform, as [netlist.md](netlist.md#source-waveforms) says. The netlist version stays 0 and `run_format` stays 0. No new file, key, or code. No example run folder moves apart from `engine_version`.
 

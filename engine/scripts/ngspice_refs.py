@@ -43,7 +43,8 @@ TRAN_RAW = "tran.raw"
 EDGES_RAW = "edges.raw"
 CHIPS = ("ne555",)
 FIRMWARE = ("atmega328p",)
-TRANSISTORS = ("npn", "pnp")
+TRANSISTORS = ("npn", "pnp", "nmos")
+BJT_KINDS = ("npn", "pnp")
 # Each BJT field's .model parameter. `mje=0 mjc=0` makes the depletion capacitances constant.
 BJT_CARD = (
     ("is", "saturation_current"),
@@ -57,6 +58,18 @@ BJT_CARD = (
     ("re", "emitter_resistance"),
     ("cje", "base_emitter_capacitance"),
     ("cjc", "base_collector_capacitance"),
+)
+# Level 1 parameters the netlist names. `l=w` and `is=0` are written on the device line and the card.
+# Capacitances are plain elements, so a default `tox` cannot add Meyer caps.
+MOS_CARD = (
+    ("vto", "threshold_voltage"),
+    ("kp", "transconductance_parameter"),
+    ("lambda", "channel_length_modulation"),
+)
+MOS_CAPS = (
+    ("gs", "gate_source_capacitance"),
+    ("gd", "gate_drain_capacitance"),
+    ("ds", "drain_source_capacitance"),
 )
 # A chip deck caps ngspice's step at stop/400000 and linearizes the waveform onto stop/2000.
 CHIP_TMAX = 400_000
@@ -78,6 +91,13 @@ class Skip(Exception):
 @dataclass(frozen=True)
 class Negated:
     """A vector whose ref reads the other way round, such as a current source's current."""
+
+    ref: str
+
+
+@dataclass(frozen=True)
+class GateCurrent:
+    """A MOSFET gate ammeter. It is not an engine column. Pin power reads it."""
 
     ref: str
 
@@ -238,6 +258,7 @@ def generate(example, version):
     raws = [TRAN_RAW, EDGES_RAW] if chips else [TRAN_RAW if transient else RAW]
     vectors, *edges = run_ngspice(deck, raws)
     values = {}
+    gate = {}
     for variable, column in vectors.items():
         if transient and variable == "time":
             continue
@@ -248,6 +269,8 @@ def generate(example, version):
             continue
         if isinstance(ref, Negated):
             values[ref.ref] = [-value for value in column]
+        elif isinstance(ref, GateCurrent):
+            gate[ref.ref] = column
         else:
             values[ref] = column
     if transient:
@@ -269,6 +292,8 @@ def generate(example, version):
             "t_s": vectors["time"],
             "values": values,
         }
+        if gate:
+            reference["tran"]["gate"] = gate
         if chips:
             stop = netlist["analysis"]["transient"]["stop_ps"]
             reference["tran"]["grid_ps"] = stop // CHIP_GRID
@@ -301,9 +326,13 @@ def op_point(netlist, values):
         if part["kind"] in NO_QUANTITIES:
             continue
         name = part["name"]
-        if part["kind"] in TRANSISTORS:
+        if part["kind"] in BJT_KINDS:
             c, b, e = (net_voltage(op, net) for net in pin_nets(part))
             op[f"#{name}.p"] = (c - e) * op[f"#{name}.ic"] + (b - e) * op[f"#{name}.ib"]
+            continue
+        if part["kind"] == "nmos":
+            d, _g, s = (net_voltage(op, net) for net in pin_nets(part))
+            op[f"#{name}.p"] = (d - s) * op[f"#{name}.id"]
             continue
         first, second = (net_voltage(op, net) for net in pin_nets(part))
         op[f"#{name}.v"] = first - second
@@ -361,6 +390,7 @@ PIN_ORDER = {
     "led": ("anode", "cathode"),
     "npn": ("collector", "base", "emitter"),
     "pnp": ("collector", "base", "emitter"),
+    "nmos": ("drain", "gate", "source"),
     "capacitor": ("a", "b"),
     "switch": ("a", "b"),
     "ne555": ("gnd", "trig", "out", "reset", "cont", "thres", "disch", "vcc"),
@@ -477,7 +507,7 @@ def translate_shape(title, netlist):
             lines.append(f".model dmod_{name} d ({params})")
             saves.append(f"@d{name}[id]")
             mapping[f"i(@d{name}[id])"] = ref
-        elif kind in TRANSISTORS:
+        elif kind in BJT_KINDS:
             # A 0 V source in series with the collector and the base reads each whole pin current.
             c, b, e = (node(net) for net in pin_list)
             for pin, at in (("c", c), ("b", b)):
@@ -488,6 +518,28 @@ def translate_shape(title, netlist):
             lines.append(f"q{name} x_{name}_c x_{name}_b {e} qmod_{name}")
             params = " ".join(f"{key}={number(part[field])}" for key, field in BJT_CARD)
             lines.append(f".model qmod_{name} {kind} ({params} mje=0 mjc=0)")
+        elif kind == "nmos":
+            # Ammeters read the whole drain and gate pin currents, capacitors included.
+            # The three capacitances are plain elements on the device side of the ammeters.
+            # `l=w` so `kp` alone sets the current. `is=0` leaves no body diode.
+            d, g, s = (node(net) for net in pin_list)
+            for pin, at in (("d", d), ("g", g)):
+                lines.append(f"vx_{name}_{pin} {at} x_{name}_{pin} dc 0")
+                saves.append(f"i(vx_{name}_{pin})")
+                mapping[f"v(x_{name}_{pin})"] = None
+            mapping[f"i(vx_{name}_d)"] = f"#{part['name']}.id"
+            mapping[f"i(vx_{name}_g)"] = GateCurrent(f"#{part['name']}")
+            lines.append(f"m{name} x_{name}_d x_{name}_g {s} {s} mmod_{name} l=100u w=100u")
+            params = " ".join(f"{key}={number(part[field])}" for key, field in MOS_CARD)
+            lines.append(f".model mmod_{name} nmos (level=1 {params} is=0)")
+            cap_nodes = {
+                "gs": (f"x_{name}_g", s),
+                "gd": (f"x_{name}_g", f"x_{name}_d"),
+                "ds": (f"x_{name}_d", s),
+            }
+            for suffix, field in MOS_CAPS:
+                a, b = cap_nodes[suffix]
+                lines.append(f"c{name}_{suffix} {a} {b} {number(part[field])}")
         elif kind == "capacitor":
             lines.append(f"c{name} {pins} {number(part['capacitance'])}")
             if part["initial"] is not None:

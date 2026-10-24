@@ -225,6 +225,8 @@ pub enum Model {
     Npn(Bjt),
     /// The same device equations as `Npn`, with every junction voltage and pin current negated.
     Pnp(Bjt),
+    /// An N-channel MOSFET. Level 1, bulk tied to the source.
+    Nmos(Mosfet),
     Capacitor(Capacitor),
     Switch(Switch),
     /// A package modelled as a behavioural black box. A new chip kind is a `Chip` variant,
@@ -242,6 +244,7 @@ impl Model {
             Model::CurrentSource(_) => &CurrentSource::PINS,
             Model::Diode(_) | Model::Led(_) => &Junction::PINS,
             Model::Npn(_) | Model::Pnp(_) => &Bjt::PINS,
+            Model::Nmos(_) => &Mosfet::PINS,
             Model::Capacitor(_) => &Capacitor::PINS,
             Model::Switch(_) => &Switch::PINS,
             Model::Chip(Chip::Ne555(_)) => &Ne555::PINS,
@@ -250,7 +253,8 @@ impl Model {
     }
 
     /// The quantities a run observes on this part, in `Quantity` order. A two-pin part has
-    /// `i`, `v` and `p`, a transistor `ib`, `ic` and `p`, and a chip and a potentiometer none.
+    /// `i`, `v` and `p`. A BJT has `ib`, `ic` and `p`. An `nmos` has `id` and `p`. A chip and a
+    /// potentiometer have none.
     pub fn quantities(&self) -> &'static [Quantity] {
         match self {
             Model::Resistor(_)
@@ -261,15 +265,17 @@ impl Model {
             | Model::Capacitor(_)
             | Model::Switch(_) => &[Quantity::I, Quantity::V, Quantity::P],
             Model::Npn(_) | Model::Pnp(_) => &[Quantity::Ib, Quantity::Ic, Quantity::P],
+            Model::Nmos(_) => &[Quantity::Id, Quantity::P],
             Model::Potentiometer(_) | Model::Chip(_) => &[],
         }
     }
 
     /// The quantity a rating of `kind` bounds by magnitude. A current rating bounds `ic` on a
-    /// transistor and `i` on every other part.
+    /// BJT, `id` on an `nmos`, and `i` on every other part.
     pub fn rated(&self, kind: RatingKind) -> Quantity {
         match (kind, self) {
             (RatingKind::Current, Model::Npn(_) | Model::Pnp(_)) => Quantity::Ic,
+            (RatingKind::Current, Model::Nmos(_)) => Quantity::Id,
             (RatingKind::Current, _) => Quantity::I,
             (RatingKind::Power, _) => Quantity::P,
         }
@@ -283,6 +289,7 @@ impl Model {
             Model::CurrentSource(c) => &c.pins,
             Model::Diode(j) | Model::Led(j) => &j.pins,
             Model::Npn(b) | Model::Pnp(b) => &b.pins,
+            Model::Nmos(m) => &m.pins,
             Model::Capacitor(c) => &c.pins,
             Model::Switch(s) => &s.pins,
             Model::Chip(Chip::Ne555(n)) => &n.pins,
@@ -302,6 +309,7 @@ impl Model {
             | Model::Chip(_) => (None, None),
             Model::Diode(j) | Model::Led(j) => (j.max_current.as_ref(), j.max_power.as_ref()),
             Model::Npn(b) | Model::Pnp(b) => (b.max_current.as_ref(), b.max_power.as_ref()),
+            Model::Nmos(m) => (m.max_current.as_ref(), m.max_power.as_ref()),
         };
         let current = current.map(|v| (RatingKind::Current, v));
         let power = power.map(|v| (RatingKind::Power, v));
@@ -320,6 +328,7 @@ impl Model {
             | Model::Led(_)
             | Model::Npn(_)
             | Model::Pnp(_)
+            | Model::Nmos(_)
             | Model::Capacitor(_)
             | Model::Chip(_) => None,
         }
@@ -344,6 +353,7 @@ impl Model {
             | Model::Led(_)
             | Model::Npn(_)
             | Model::Pnp(_)
+            | Model::Nmos(_)
             | Model::Capacitor(_)
             | Model::Switch(_)
             | Model::Chip(_) => None,
@@ -361,6 +371,7 @@ impl Model {
             | Model::Led(_)
             | Model::Npn(_)
             | Model::Pnp(_)
+            | Model::Nmos(_)
             | Model::Capacitor(_)
             | Model::Switch(_)
             | Model::Chip(_) => None,
@@ -378,6 +389,7 @@ impl Model {
             | Model::Led(_)
             | Model::Npn(_)
             | Model::Pnp(_)
+            | Model::Nmos(_)
             | Model::Capacitor(_)
             | Model::Switch(_)
             | Model::Chip(_) => None,
@@ -394,6 +406,7 @@ impl Model {
             | Model::Led(_)
             | Model::Npn(_)
             | Model::Pnp(_)
+            | Model::Nmos(_)
             | Model::Capacitor(_)
             | Model::Switch(_)
             | Model::Chip(_) => None,
@@ -987,6 +1000,46 @@ pub struct Bjt {
 
 impl Bjt {
     pub const PINS: [&'static str; 3] = ["collector", "base", "emitter"];
+}
+
+/// An N-channel MOSFET. Level 1 with the bulk tied to the source, so `W/L` is folded into `KP`
+/// and there is no body effect. No temperature scaling.
+///
+/// With `vgs = V(gate) - V(source)` and `vds = V(drain) - V(source)`, and `vds >= 0`:
+///
+/// ```text
+/// cutoff, vgs <= VTO:                 id = 0
+/// saturation, vds >= vgs - VTO:       id = KP/2 * (vgs - VTO)^2 * (1 + LAMBDA*vds)
+/// linear:                             id = KP * vds * (vgs - VTO - vds/2) * (1 + LAMBDA*vds)
+/// ```
+///
+/// `vds < 0` swaps the terminals, `id = -f(vgs - vds, -vds)`. `id` then gains `GMIN * vds`,
+/// which is ngspice-42's drain-bulk `gmin` once the bulk sits on the source and `is` is 0.
+/// The gate draws no DC current. `CGS`, `CGD` and `CDS` are constant capacitances between the pins.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Mosfet {
+    /// Nets of pins `drain`, `gate`, `source`.
+    pub pins: [NetId; 3],
+    /// Ampere per volt squared. `KP`. Greater than 0.
+    pub transconductance_parameter: Value,
+    /// Volt. `VTO`. Any finite value, so a depletion device can state a negative threshold.
+    pub threshold_voltage: Value,
+    /// Per volt. `LAMBDA`. Zero is a flat saturation current.
+    pub channel_length_modulation: Value,
+    /// Farad. From gate to source.
+    pub gate_source_capacitance: Value,
+    /// Farad. From gate to drain.
+    pub gate_drain_capacitance: Value,
+    /// Farad. From drain to source.
+    pub drain_source_capacitance: Value,
+    /// Ampere, greater than 0. Bounds `|id|`. `None` is an explicit `"current": null`.
+    pub max_current: Option<Value>,
+    /// Watt, greater than 0. `None` is an explicit `"power": null`.
+    pub max_power: Option<Value>,
+}
+
+impl Mosfet {
+    pub const PINS: [&'static str; 3] = ["drain", "gate", "source"];
 }
 
 /// `n*VT` and `vcrit` for a junction whose parameters are inside the domain.

@@ -1002,8 +1002,9 @@ mod tests {
         }
     }
 
-    /// A capacitor's charge is on its pins. A transistor's two are on its internal nodes,
-    /// `CJE` from `b'` to `e'` and `CJC` from `b'` to `c'`, each on its own branch.
+    /// A capacitor's charge is on its pins. A BJT's two are on its internal nodes, `CJE` from
+    /// `b'` to `e'` and `CJC` from `b'` to `c'`. An `nmos` adds three on its pins, `CGS`, `CGD`
+    /// and `CDS`, each on its own branch.
     #[test]
     fn charges_are_the_parts_capacitors() {
         let netlist = sim_core::netlist::parse(
@@ -1029,6 +1030,15 @@ mod tests {
                   "emitter_resistance": { "value": 1.0, "unit": "ohm", "source": "user" },
                   "base_emitter_capacitance": { "value": 8e-12, "unit": "F", "source": "user" },
                   "base_collector_capacitance": { "value": 4e-12, "unit": "F", "source": "user" },
+                  "ratings": { "current": null, "power": null } },
+                { "name": "m1", "kind": "nmos",
+                  "pins": { "drain": "c", "gate": "b", "source": "gnd" },
+                  "transconductance_parameter": { "value": 0.0468, "unit": "A/V^2", "source": "user" },
+                  "threshold_voltage": { "value": 1.08, "unit": "V", "source": "user" },
+                  "channel_length_modulation": { "value": 0.0, "unit": "1/V", "source": "user" },
+                  "gate_source_capacitance": { "value": 55e-12, "unit": "F", "source": "user" },
+                  "gate_drain_capacitance": { "value": 5e-12, "unit": "F", "source": "user" },
+                  "drain_source_capacitance": { "value": 20e-12, "unit": "F", "source": "user" },
                   "ratings": { "current": null, "power": null } }
               ]
             }"#,
@@ -1041,13 +1051,24 @@ mod tests {
                 .part_id(&sim_core::name::Name::new(name).unwrap())
                 .unwrap()
         };
-        let (cap, q) = (id("c1"), id("q1"));
+        let (cap, q, m) = (id("c1"), id("q1"), id("m1"));
         let [c, b, e] = [0, 1, 2].map(|k| layout.internal(q, k));
         let want = [
             (
                 layout.branch_row(cap, 0),
                 [Node::Row(1), Node::Ground],
                 1e-9,
+            ),
+            (
+                layout.branch_row(m, 0),
+                [Node::Row(0), Node::Ground],
+                55e-12,
+            ),
+            (layout.branch_row(m, 1), [Node::Row(0), Node::Row(1)], 5e-12),
+            (
+                layout.branch_row(m, 2),
+                [Node::Row(1), Node::Ground],
+                20e-12,
             ),
             (layout.branch_row(q, 0), [b, e], 8e-12),
             (layout.branch_row(q, 1), [b, c], 4e-12),
@@ -1059,7 +1080,7 @@ mod tests {
             .collect();
         assert_eq!(got, want);
         let indices: Vec<_> = charges.caps.iter().map(|charge| charge.index).collect();
-        assert_eq!(indices, [ix(0), ix(1), ix(2)]);
+        assert_eq!(indices, [ix(0), ix(1), ix(2), ix(3), ix(4), ix(5)]);
     }
 
     #[test]

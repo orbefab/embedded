@@ -11,8 +11,8 @@ mod waveform;
 
 use super::{
     Analysis, Basis, Bjt, Bounce, Capacitor, Chip, Contact, CurrentSource, Discharge, Edge, Event,
-    IntValue, Junction, MIN_GAP_PS, Model, Ne555, NetId, Netlist, OutputStage, Part, Resistor,
-    Schedule, Source, Switch, Transient, Value, VoltageSource, bounce, junction_scale,
+    IntValue, Junction, MIN_GAP_PS, Model, Mosfet, Ne555, NetId, Netlist, OutputStage, Part,
+    Resistor, Schedule, Source, Switch, Transient, Value, VoltageSource, bounce, junction_scale,
 };
 use crate::diagnostic::{AnalysisRule, Diagnostic, ScheduleRule, ValueRule};
 use crate::finite::Finite;
@@ -88,6 +88,7 @@ enum WirePart {
     Led(WireJunction),
     Npn(Box<WireBjt>),
     Pnp(Box<WireBjt>),
+    Nmos(Box<WireMosfet>),
     Capacitor {
         name: String,
         pins: PinMap,
@@ -192,6 +193,20 @@ struct WireBjt {
     emitter_resistance: WireValue,
     base_emitter_capacitance: WireValue,
     base_collector_capacitance: WireValue,
+    ratings: WireJunctionRatings,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireMosfet {
+    name: String,
+    pins: PinMap,
+    transconductance_parameter: WireValue,
+    threshold_voltage: WireValue,
+    channel_length_modulation: WireValue,
+    gate_source_capacitance: WireValue,
+    gate_drain_capacitance: WireValue,
+    drain_source_capacitance: WireValue,
     ratings: WireJunctionRatings,
 }
 
@@ -462,6 +477,7 @@ fn resolve_part(
         | WirePart::Capacitor { name, .. } => name,
         WirePart::Diode(junction) | WirePart::Led(junction) => &junction.name,
         WirePart::Npn(bjt) | WirePart::Pnp(bjt) => &bjt.name,
+        WirePart::Nmos(mosfet) => &mosfet.name,
         WirePart::Switch(switch) => &switch.name,
         WirePart::Ne555(chip) => &chip.name,
         WirePart::Atmega328p(chip) => &chip.name,
@@ -550,6 +566,9 @@ fn resolve_part(
         }
         WirePart::Npn(bjt) => resolve_bjt(&name, &part_ref, *bjt, nets, out).map(Model::Npn),
         WirePart::Pnp(bjt) => resolve_bjt(&name, &part_ref, *bjt, nets, out).map(Model::Pnp),
+        WirePart::Nmos(mosfet) => {
+            resolve_mosfet(&name, &part_ref, *mosfet, nets, out).map(Model::Nmos)
+        }
         WirePart::Capacitor {
             pins,
             capacitance,
@@ -717,6 +736,79 @@ fn resolve_bjt(
         emitter_resistance: re?,
         base_emitter_capacitance: cje?,
         base_collector_capacitance: cjc?,
+        max_current: max_current?,
+        max_power: max_power?,
+    })
+}
+
+fn resolve_mosfet(
+    name: &Name,
+    part_ref: &Ref,
+    wire: WireMosfet,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Mosfet> {
+    let pins = resolve_pins(name, Mosfet::PINS, &wire.pins.0, nets, out);
+    let lambda_number = wire.channel_length_modulation.value.get();
+    let (kp, cgs, cgd, cds) = {
+        let mut positive = |field: &'static str, unit, value| {
+            resolve_value(part_ref, field, unit, true, value, out)
+        };
+        (
+            positive(
+                "transconductance_parameter",
+                "A/V^2",
+                wire.transconductance_parameter,
+            ),
+            positive("gate_source_capacitance", "F", wire.gate_source_capacitance),
+            positive("gate_drain_capacitance", "F", wire.gate_drain_capacitance),
+            positive(
+                "drain_source_capacitance",
+                "F",
+                wire.drain_source_capacitance,
+            ),
+        )
+    };
+    let vto = resolve_value(
+        part_ref,
+        "threshold_voltage",
+        "V",
+        false,
+        wire.threshold_voltage,
+        out,
+    );
+    let lambda = resolve_value(
+        part_ref,
+        "channel_length_modulation",
+        "1/V",
+        false,
+        wire.channel_length_modulation,
+        out,
+    )
+    .and_then(|value| {
+        if lambda_number < 0.0 {
+            out.push(Diagnostic::NetlistValue {
+                part: part_ref.clone(),
+                field: "channel_length_modulation".into(),
+                value: lambda_number,
+                rule: ValueRule::NonNegative,
+            });
+            None
+        } else {
+            Some(value)
+        }
+    });
+    let ratings = wire.ratings;
+    let max_current = resolve_rating(part_ref, "ratings.current", "A", ratings.current, out);
+    let max_power = resolve_rating(part_ref, "ratings.power", "W", ratings.power, out);
+    Some(Mosfet {
+        pins: pins?,
+        transconductance_parameter: kp?,
+        threshold_voltage: vto?,
+        channel_length_modulation: lambda?,
+        gate_source_capacitance: cgs?,
+        gate_drain_capacitance: cgd?,
+        drain_source_capacitance: cds?,
         max_current: max_current?,
         max_power: max_power?,
     })

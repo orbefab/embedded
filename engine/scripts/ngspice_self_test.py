@@ -250,6 +250,7 @@ def self_test(refs):
     cases.append(source_jump_times(refs))
     cases.append(potentiometer_deck(refs))
     cases.append(transistor_deck(refs))
+    cases.append(nmos_deck(refs))
     cases.append(bounce_vectors())
     cases.append(vcd_reader(refs))
     document = {"ok": all(case["ok"] for case in cases), "cases": cases}
@@ -613,6 +614,55 @@ def transistor_deck(refs):
     ok = ok and op["#q2.p"] == (0.0 - 2.0) * -0.02 + (0.7 - 2.0) * -2e-4
     ok = ok and not any(key.endswith(".v") for key in op)
     return {"name": "transistor deck", "ok": ok}
+
+
+def nmos_part(name, d, g, s):
+    part = {"name": name, "kind": "nmos", "pins": {"drain": d, "gate": g, "source": s}}
+    for field, value in (
+        ("threshold_voltage", 1.08),
+        ("transconductance_parameter", 0.0468),
+        ("channel_length_modulation", 0.0),
+        ("gate_source_capacitance", 55e-12),
+        ("gate_drain_capacitance", 5e-12),
+        ("drain_source_capacitance", 20e-12),
+    ):
+        part[field] = {"value": value}
+    return part
+
+
+def nmos_deck(refs):
+    """An nmos ammeter pair, level-1 card, three capacitors on the device side, and drain power."""
+    netlist = {
+        "analysis": {"op": {}},
+        "ground": "gnd",
+        "nets": ["gnd", "d", "g"],
+        "parts": [nmos_part("m1", "d", "g", "gnd")],
+    }
+    text, mapping = refs.translate("nmos", netlist)
+    want = [
+        "vx_m1_d d x_m1_d dc 0",
+        "vx_m1_g g x_m1_g dc 0",
+        "mm1 x_m1_d x_m1_g 0 0 mmod_m1 l=100u w=100u",
+        ".model mmod_m1 nmos (level=1 vto=1.08 kp=0.0468 lambda=0.0 is=0)",
+        "cm1_gs x_m1_g 0 5.5e-11",
+        "cm1_gd x_m1_g x_m1_d 5e-12",
+        "cm1_ds x_m1_d 0 2e-11",
+        "* The engine's gmin on every node, beside the gmin ngspice puts across each junction.",
+        "rx_gmin_d d 0 1000000000000.0",
+        "rx_gmin_g g 0 1000000000000.0",
+        ".control",
+        "save all i(vx_m1_d) i(vx_m1_g)",
+    ]
+    ok = text.splitlines()[2 : 2 + len(want)] == want
+    ok = ok and mapping["i(vx_m1_d)"] == "#m1.id"
+    ok = ok and mapping["i(vx_m1_g)"] == refs.GateCurrent("#m1")
+    ok = ok and mapping["v(x_m1_d)"] is None and mapping["v(x_m1_g)"] is None
+    values = {"#net.d": [5.0], "#net.g": [2.0], "#m1.id": [0.01]}
+    op = refs.op_point(netlist, values)
+    ok = ok and op["#m1.p"] == 5.0 * 0.01
+    ok = ok and not any(key.endswith(".v") for key in op)
+    ok = ok and "#m1.ig" not in op
+    return {"name": "nmos deck", "ok": ok}
 
 
 def vcd_reader(refs):

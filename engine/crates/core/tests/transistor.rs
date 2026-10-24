@@ -190,3 +190,156 @@ fn finite_junction_names_the_emission_of_the_junction_that_breaks_it() {
         );
     assert_eq!(rejected(&tiny), [junction("saturation_current")]);
 }
+
+const MOS_FIELDS: [(&str, &str, f64); 6] = [
+    ("transconductance_parameter", "A/V^2", 0.0468),
+    ("threshold_voltage", "V", 1.08),
+    ("channel_length_modulation", "1/V", 0.0),
+    ("gate_source_capacitance", "F", 55e-12),
+    ("gate_drain_capacitance", "F", 5e-12),
+    ("drain_source_capacitance", "F", 20e-12),
+];
+
+fn mosfet(changed: Option<(&str, &str, &str)>) -> String {
+    let fields: Vec<String> = MOS_FIELDS
+        .iter()
+        .map(|&(field, unit, value)| {
+            let (unit, value) = match changed {
+                Some((name, unit, value)) if name == field => (unit.to_string(), value.to_string()),
+                _ => (unit.to_string(), format!("{value:?}")),
+            };
+            format!(r#""{field}": {{ "value": {value}, "unit": "{unit}", "source": "user" }}"#)
+        })
+        .collect();
+    format!(
+        r#"{{
+      "version": 0,
+      "seed": 0,
+      "analysis": {{ "op": {{}} }},
+      "ground": "gnd",
+      "nets": ["gnd", "d", "g"],
+      "parts": [
+        {{
+          "name": "m1",
+          "kind": "nmos",
+          "pins": {{ "drain": "d", "gate": "g", "source": "gnd" }},
+          {},
+          "ratings": {{
+            "current": {{ "value": 0.2, "unit": "A", "source": "user" }},
+            "power": {{ "value": 0.35, "unit": "W", "source": "user" }}
+          }}
+        }}
+      ]
+    }}"#,
+        fields.join(",\n          ")
+    )
+}
+
+#[test]
+fn an_nmos_keeps_every_field_and_rates_id_and_p() {
+    let netlist = netlist::parse(mosfet(None).as_bytes()).unwrap();
+    let (_, part) = netlist.parts().next().unwrap();
+    let Model::Nmos(mosfet) = &part.model else {
+        panic!("{:?}", part.model);
+    };
+    let got = [
+        mosfet.transconductance_parameter.si.get(),
+        mosfet.threshold_voltage.si.get(),
+        mosfet.channel_length_modulation.si.get(),
+        mosfet.gate_source_capacitance.si.get(),
+        mosfet.gate_drain_capacitance.si.get(),
+        mosfet.drain_source_capacitance.si.get(),
+    ];
+    assert_eq!(got, MOS_FIELDS.map(|(_, _, value)| value));
+    assert_eq!(part.model.pin_names(), ["drain", "gate", "source"]);
+    assert_eq!(part.model.quantities(), [Quantity::Id, Quantity::P]);
+    let ratings: Vec<_> = part
+        .model
+        .ratings()
+        .into_iter()
+        .map(|(kind, value)| (kind, part.model.rated(kind), value.si.get()))
+        .collect();
+    assert_eq!(
+        ratings,
+        [
+            (RatingKind::Current, Quantity::Id, 0.2),
+            (RatingKind::Power, Quantity::P, 0.35)
+        ]
+    );
+}
+
+#[test]
+fn mosfet_fields_name_their_units_and_rules() {
+    for (field, _, _) in MOS_FIELDS {
+        assert_eq!(
+            rejected(&mosfet(Some((field, "mA", "1.0")))),
+            [("netlist.unit".to_string(), field.to_string(), String::new())],
+            "{field}"
+        );
+    }
+    for field in [
+        "transconductance_parameter",
+        "gate_source_capacitance",
+        "gate_drain_capacitance",
+        "drain_source_capacitance",
+    ] {
+        let unit = MOS_FIELDS
+            .iter()
+            .find(|(name, _, _)| *name == field)
+            .unwrap()
+            .1;
+        for (value, rule) in [
+            ("0.0", "positive"),
+            ("-1.0", "positive"),
+            ("1e-320", "finite_reciprocal"),
+        ] {
+            assert_eq!(
+                rejected(&mosfet(Some((field, unit, value)))),
+                [(
+                    "netlist.value".to_string(),
+                    field.to_string(),
+                    rule.to_string()
+                )],
+                "{field} {value}"
+            );
+        }
+    }
+    let negative =
+        netlist::parse(mosfet(Some(("threshold_voltage", "V", "-1.5"))).as_bytes()).unwrap();
+    let Model::Nmos(device) = &negative.parts().next().unwrap().1.model else {
+        panic!("not an nmos");
+    };
+    assert_eq!(device.threshold_voltage.si.get(), -1.5);
+    assert!(netlist::parse(mosfet_text_with_infinite_threshold().as_bytes()).is_err());
+    assert_eq!(
+        rejected(&mosfet(Some(("channel_length_modulation", "1/V", "-0.1")))),
+        [(
+            "netlist.value".to_string(),
+            "channel_length_modulation".to_string(),
+            "non_negative".to_string()
+        )]
+    );
+    assert!(
+        netlist::parse(mosfet(Some(("channel_length_modulation", "1/V", "0.0"))).as_bytes())
+            .is_ok()
+    );
+    let ratings = mosfet(None).replace(
+        r#""current": { "value": 0.2, "unit": "A""#,
+        r#""current": { "value": 0.2, "unit": "mA""#,
+    );
+    assert_eq!(
+        rejected(&ratings),
+        [(
+            "netlist.unit".to_string(),
+            "ratings.current".to_string(),
+            String::new()
+        )]
+    );
+}
+
+fn mosfet_text_with_infinite_threshold() -> String {
+    mosfet(None).replace(
+        r#""threshold_voltage": { "value": 1.08"#,
+        r#""threshold_voltage": { "value": 1e309"#,
+    )
+}

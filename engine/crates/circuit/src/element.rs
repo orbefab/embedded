@@ -89,6 +89,12 @@ impl Device for Model {
                 branches: 2,
                 junctions: 2,
             },
+            Model::Nmos(_) => Unknowns {
+                internal_nodes: 0,
+                bare_internal: false,
+                branches: 3,
+                junctions: 2,
+            },
             Model::Chip(chip) => chip::unknowns(chip),
         }
     }
@@ -101,6 +107,7 @@ impl Device for Model {
                 farad: capacitor.capacitance.si.get(),
             }],
             Model::Npn(bjt) | Model::Pnp(bjt) => transistor::charges(bjt),
+            Model::Nmos(mosfet) => transistor::mos_charges(mosfet),
             Model::Resistor(_)
             | Model::Potentiometer(_)
             | Model::VoltageSource(_)
@@ -121,6 +128,7 @@ impl Device for Model {
             Model::Diode(j) | Model::Led(j) => junction::stamp(j, stamp),
             Model::Npn(bjt) => transistor::stamp(bjt, Polarity::Npn, stamp),
             Model::Pnp(bjt) => transistor::stamp(bjt, Polarity::Pnp, stamp),
+            Model::Nmos(mosfet) => transistor::mos_stamp(mosfet, stamp),
             Model::Capacitor(capacitor) => capacitor::stamp(capacitor, stamp),
             Model::Switch(switch) => switch::stamp(switch, stamp),
             // An active chip stamps its core's drive image, in `active::stamp`.
@@ -133,11 +141,10 @@ impl Device for Model {
     }
 }
 
-/// Whether this part's stamp reads the Newton iterate. Only a junction's does, a diode's or a
-/// transistor's, through
-/// `Stamp::junction`, the one reader of the iterate. Every other stamp reads only the call's
-/// conditions, so on a circuit where no part reads it every iteration of one call stamps the
-/// same system.
+/// Whether this part's stamp reads the Newton iterate. Only a junction's does, a diode's, a
+/// BJT's or an `nmos`'s, through `Stamp::junction`, the one reader of the iterate. Every other
+/// stamp reads only the call's conditions, so on a circuit where no part reads it every iteration
+/// of one call stamps the same system.
 pub(crate) fn reads_iterate(model: &Model) -> bool {
     match model {
         Model::Resistor(_)
@@ -146,7 +153,7 @@ pub(crate) fn reads_iterate(model: &Model) -> bool {
         | Model::CurrentSource(_)
         | Model::Capacitor(_)
         | Model::Switch(_) => false,
-        Model::Diode(_) | Model::Led(_) | Model::Npn(_) | Model::Pnp(_) => true,
+        Model::Diode(_) | Model::Led(_) | Model::Npn(_) | Model::Pnp(_) | Model::Nmos(_) => true,
         Model::Chip(chip) => chip::reads_iterate(chip),
     }
 }
@@ -163,6 +170,7 @@ pub(crate) fn initial(model: &Model, out: &mut [f64]) {
         | Model::Chip(_) => {}
         Model::Diode(j) | Model::Led(j) => out[0] = junction::initial(j),
         Model::Npn(bjt) | Model::Pnp(bjt) => transistor::initial(bjt, out),
+        Model::Nmos(_) => transistor::mos_initial(out),
     }
 }
 
@@ -183,6 +191,7 @@ pub(crate) fn update(model: &Model, probe: &Probe<'_>, prior: &[f64], next: &mut
         }
         Model::Npn(bjt) => transistor::update(bjt, Polarity::Npn, probe, prior, next),
         Model::Pnp(bjt) => transistor::update(bjt, Polarity::Pnp, probe, prior, next),
+        Model::Nmos(mosfet) => transistor::mos_update(mosfet, probe, prior, next),
     }
 }
 
@@ -195,8 +204,8 @@ pub(crate) struct Update {
 
 /// The pin pairs a part joins at DC. A chain of them is a DC path for `net.floating`.
 /// A capacitor is open unless the operating point holds it at `initial`. A switch is a resistor either way.
-/// A current source joins nothing. A transistor joins its base to each other pin, because each
-/// junction conducts.
+/// A current source joins nothing. A BJT joins its base to each other pin, because each junction
+/// conducts. An `nmos` joins its drain to its source. Its gate does not.
 pub(crate) fn dc_paths(model: &Model) -> &'static [(usize, usize)] {
     match model {
         Model::Resistor(_)
@@ -205,18 +214,49 @@ pub(crate) fn dc_paths(model: &Model) -> &'static [(usize, usize)] {
         | Model::Led(_)
         | Model::Switch(_) => &[(0, 1)],
         Model::Potentiometer(_) | Model::Npn(_) | Model::Pnp(_) => &[(0, 1), (1, 2)],
+        Model::Nmos(_) => &[(0, 2)],
         Model::Capacitor(capacitor) if capacitor.initial.is_some() => &[(0, 1)],
         Model::Capacitor(_) | Model::CurrentSource(_) => &[],
         Model::Chip(chip) => chip::dc_paths(chip),
     }
 }
 
+/// The values `observe` contributes, in `quantities` order.
+/// `len` is `model.quantities().len()`. The third slot pads an `nmos`.
+pub(crate) struct Observed {
+    values: [f64; 3],
+    len: usize,
+}
+
+impl IntoIterator for Observed {
+    type Item = f64;
+    type IntoIter = std::iter::Take<std::array::IntoIter<f64, 3>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.values.into_iter().take(self.len)
+    }
+}
+
 /// `model.quantities()` at `at`, in that order. `None` for a part with none.
 /// Not checked for finiteness.
-pub(crate) fn observe(model: &Model, probe: &Probe<'_>, at: Time, side: Side) -> Option<[f64; 3]> {
+pub(crate) fn observe(model: &Model, probe: &Probe<'_>, at: Time, side: Side) -> Option<Observed> {
     let (pins, i) = match model {
         Model::Chip(_) | Model::Potentiometer(_) => return None,
-        Model::Npn(bjt) | Model::Pnp(bjt) => return Some(transistor::observe(bjt, probe)),
+        Model::Npn(bjt) | Model::Pnp(bjt) => {
+            return Some(Observed {
+                values: transistor::observe(bjt, probe),
+                len: 3,
+            });
+        }
+        Model::Nmos(mosfet) => {
+            let [id, p] = transistor::mos_observe(mosfet, probe);
+            let len = model.quantities().len();
+            debug_assert_eq!(len, 2);
+            return Some(Observed {
+                values: [id, p, 0.0],
+                len,
+            });
+        }
         Model::Resistor(resistor) => (resistor.pins, resistor::current(resistor, probe)),
         Model::VoltageSource(source) => (source.pins, voltage_source::current(probe)),
         Model::CurrentSource(source) => (source.pins, current_source::current(source, at, side)),
@@ -225,7 +265,10 @@ pub(crate) fn observe(model: &Model, probe: &Probe<'_>, at: Time, side: Side) ->
         Model::Switch(switch) => (switch.pins, switch::current(switch, probe, at, side)),
     };
     let v = probe.v(pins[0]) - probe.v(pins[1]);
-    Some([i, v, v * i])
+    Some(Observed {
+        values: [i, v, v * i],
+        len: 3,
+    })
 }
 
 /// Two capacitors on one part. Tests only. Not a netlist kind. `branches` is the count
