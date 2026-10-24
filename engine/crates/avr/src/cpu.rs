@@ -477,9 +477,6 @@ impl Cpu {
 
     fn run(&mut self, limit: u64, until_news: bool) {
         let div = self.clock_div();
-        if self.take_boundary_interrupt(limit) && until_news && self.has_news(div) {
-            return;
-        }
         while self.cycles() < limit && !self.core.is_stopped() {
             if self.core.can_fetch() {
                 if !self.run_free(limit, until_news, div) {
@@ -741,6 +738,11 @@ impl Cpu {
         });
     }
 
+    /// Runs one instruction, or enters the interrupt pending at the boundary the core sits on.
+    ///
+    /// A flag a host [`Self::poke`] raised between two steps is pending at that boundary, so the
+    /// entry comes first, as in a run (§7.7.1). After `SEI` or `RETI` one instruction still runs
+    /// before it (§7.7).
     #[inline(always)]
     pub fn step(&mut self) {
         if self.core.is_stopped() {
@@ -748,6 +750,9 @@ impl Cpu {
         }
         if !self.core.can_fetch() {
             self.step_halted();
+            return;
+        }
+        if self.bus.pending_irq() != 0 && self.take_boundary_interrupt() {
             return;
         }
         let before = self.core.cycles();
@@ -840,6 +845,15 @@ impl Cpu {
         if self.service_interrupt(false) {
             self.finish_step();
         }
+    }
+
+    /// Enters the interrupt pending at this boundary, by vector. Whether the core advanced.
+    fn take_boundary_interrupt(&mut self) -> bool {
+        let before = self.cycles();
+        if self.service_interrupt(false) {
+            self.finish_step();
+        }
+        self.cycles() != before
     }
 
     /// `true` when the entry cycles fired a watchdog reset.

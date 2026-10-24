@@ -12,10 +12,12 @@ use crate::common::runs::{
     MAIN, NOP, RETI, Runner, SEI, image, inc, matches_stepping, matches_stepping_from, rjmp, seen,
     step_until,
 };
-use crate::common::{UCSR0B, UDR0, adiw, brbc, imm, in_io, ldi, out, rr, sts};
+use crate::common::{SREG, UCSR0B, UDR0, adiw, brbc, imm, in_io, ldi, out, rr, sts};
 use sim_avr::{Channel, Cpu, Sent, parse_hex};
 
 const EECR: u16 = 0x3F;
+const EIMSK: u16 = 0x3D;
+const TIFR0: u16 = 0x35;
 const SMCR: u16 = 0x33;
 const TCCR0A: u16 = 0x24;
 const TCCR0B: u16 = 0x25;
@@ -29,8 +31,12 @@ const UBRR0L: u16 = 0xC4;
 
 const EERE: u8 = 1 << 0;
 
+const INT0: usize = 0x02;
+const INT1: usize = 0x04;
 const TIMER0_COMPA: usize = 0x1C;
 const TIMER0_OVF: usize = 0x20;
+const USART_UDRE: usize = 0x26;
+const EE_READY: usize = 0x2C;
 
 const SLEEP: u16 = 0x9588;
 const LPM_R0_Z: u16 = 0x95C8;
@@ -92,19 +98,47 @@ fn free_loop(at: usize) -> Vec<u16> {
 /// the stack.
 const STAMP_ISR: [u16; 3] = [in_io(28, TCNT0), inc(29), RETI];
 
+/// `TOIE0` and `I` set, Timer0 at clk/1 from `preset`, then the free loop.
+fn awake(preset: u16) -> Vec<u16> {
+    let mut main = vec![ldi(16, preset), out(16, TCNT0), ldi(16, 1)];
+    main.extend(sts(16, TIMSK0));
+    main.extend([SEI, out(16, TCCR0B)]);
+    let at = MAIN + main.len();
+    main.extend(free_loop(at));
+    image(&main, &[TIMER0_OVF], &STAMP_ISR)
+}
+
+/// `TOIE0` and `I` set, Timer0 at clk/1, then `SLEEP` in idle until each overflow. The ISR opens
+/// with `NOP`s.
+fn asleep() -> Vec<u16> {
+    let mut main = vec![ldi(16, 1), out(16, SMCR), ldi(16, 1)];
+    main.extend(sts(16, TIMSK0));
+    main.extend([SEI, out(16, TCCR0B)]);
+    let sleep = MAIN + main.len();
+    main.extend([SLEEP, rjmp(sleep + 1, sleep)]);
+    let isr = [NOP, NOP, NOP, in_io(28, TCNT0), inc(29), RETI];
+    image(&main, &[TIMER0_OVF], &isr)
+}
+
+/// The return address the last interrupt entry pushed.
+fn stacked_return(cpu: &Cpu) -> u16 {
+    let sp = u16::from(cpu.peek(0x5D)) | (u16::from(cpu.peek(0x5E)) << 8);
+    (u16::from(cpu.peek(sp + 1)) << 8) | u16::from(cpu.peek(sp + 2))
+}
+
+/// The cycle count, `PC`, `SREG` and the registers.
+fn core_state(cpu: &Cpu) -> (u64, u16, u8, [u8; 32]) {
+    let regs = std::array::from_fn(|r| cpu.reg(r as u8));
+    (cpu.cycles(), cpu.pc(), cpu.sreg(), regs)
+}
+
 /// `TOV0` sets at every offset of the free loop: `TCNT0` starts at each value, and the loop
 /// length does not divide 256.
 #[test]
 fn an_overflow_interrupt_at_every_offset_enters_as_stepped() {
     for preset in 0..=255u16 {
-        let mut main = vec![ldi(16, preset), out(16, TCNT0), ldi(16, 1)];
-        main.extend(sts(16, TIMSK0));
-        main.extend([SEI, out(16, TCCR0B)]);
-        let at = MAIN + main.len();
-        main.extend(free_loop(at));
-        let words = image(&main, &[TIMER0_OVF], &STAMP_ISR);
         matches_stepping(
-            &words,
+            &awake(preset),
             &[97, 300, 777, 1501, 3000],
             &format!("TCNT0 from {preset}"),
         );
@@ -165,10 +199,8 @@ fn sei_with_a_pending_interrupt_runs_one_instruction_first() {
         (1, 0, 0),
         "one instruction ran after SEI"
     );
-    let sp = u16::from(cpu.peek(0x5D)) | (u16::from(cpu.peek(0x5E)) << 8);
-    let ret = (u16::from(cpu.peek(sp + 1)) << 8) | u16::from(cpu.peek(sp + 2));
     assert_eq!(
-        usize::from(ret),
+        usize::from(stacked_return(&cpu)),
         after_first,
         "it returns to the second INC"
     );
@@ -247,13 +279,7 @@ fn a_host_eeprom_read_halts_the_next_instruction() {
 /// run, so its `TCNT0` read sees the halt.
 #[test]
 fn a_halt_from_a_host_poke_outlives_a_wake_and_an_entry() {
-    let mut main = vec![ldi(16, 1), out(16, SMCR), ldi(16, 1)];
-    main.extend(sts(16, TIMSK0));
-    main.extend([SEI, out(16, TCCR0B)]);
-    let sleep = MAIN + main.len();
-    main.extend([SLEEP, rjmp(sleep + 1, sleep)]);
-    let isr = [NOP, NOP, NOP, in_io(28, TCNT0), inc(29), RETI];
-    let words = image(&main, &[TIMER0_OVF], &isr);
+    let words = asleep();
     let mut limits: Vec<u64> = (250..=290).collect();
     limits.extend([700, 1_200]);
     for first in [40, 120, 200] {
@@ -377,4 +403,145 @@ fn shipped_and_interrupt_heavy_images_run_as_stepped() {
             &path.display().to_string(),
         );
     }
+}
+
+/// DS40002061B §7.7. A host poke between runs lands at the boundary the core sits on. An
+/// interrupt it makes takeable is entered there, before the next instruction, by a run and by a
+/// step alike. Every I/O register gets ten values, awake and asleep. The core state is compared at
+/// five limits, and everything the host can read at the last.
+#[test]
+fn a_poke_of_any_io_register_runs_as_stepped() {
+    let values = [0x00, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0xFF];
+    let mut differ = Vec::new();
+    for (name, words, firsts) in [
+        ("awake", awake(0), [37, 101]),
+        ("asleep", asleep(), [40, 200]),
+    ] {
+        for first in firsts {
+            for runner in [Runner::Until, Runner::ToNews] {
+                let mut run_at = Cpu::new();
+                run_at.load_words(&words);
+                let mut stepped_at = run_at.clone();
+                runner.run(&mut run_at, first);
+                step_until(&mut stepped_at, first);
+                for addr in 0x20..=0xFF {
+                    for value in values {
+                        let mut run = run_at.clone();
+                        let mut stepped = stepped_at.clone();
+                        run.poke(addr, value);
+                        stepped.poke(addr, value);
+                        let split = [1, 3, 5, 9, 60].into_iter().find(|&gap| {
+                            runner.run(&mut run, first + gap);
+                            step_until(&mut stepped, first + gap);
+                            core_state(&run) != core_state(&stepped)
+                        });
+                        if split.is_some() || seen(&mut run) != seen(&mut stepped) {
+                            differ.push(format!(
+                                "{name} {addr:#04x} {value:#04x} {first} {runner:?} {split:?}"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        differ.is_empty(),
+        "{} differ:\n{}",
+        differ.len(),
+        differ.join("\n")
+    );
+}
+
+/// DS40002061B §7.7.1. Each poke the sweep finds raising an interrupt, one per kind. The next
+/// `step` is the four-cycle entry, and the stacked return is where the core sat, so no
+/// instruction of the loop ran first. A run to the next cycle ends in the same state.
+#[test]
+fn a_step_after_a_poke_that_raises_an_interrupt_enters_it_first() {
+    for (kind, addr, value, vector) in [
+        ("INT0 at low level", EIMSK, 0x01, INT0),
+        ("INT1 at low level", EIMSK, 0x02, INT1),
+        ("TOV0", TIFR0, 0x01, TIMER0_OVF),
+        ("UDRE0 with UDRIE0", UCSR0B, 0x20, USART_UDRE),
+        ("EEPROM ready with EERIE", EECR, 0x08, EE_READY),
+    ] {
+        let mut stepped = Cpu::new();
+        stepped.load_words(&awake(0));
+        step_until(&mut stepped, 37);
+        let (pc, at) = (stepped.pc(), stepped.cycles());
+        stepped.poke(addr, value);
+        let mut run = stepped.clone();
+        stepped.step();
+        assert_eq!(
+            (
+                usize::from(stepped.pc()),
+                stepped.cycles(),
+                stacked_return(&stepped)
+            ),
+            (vector, at + 4, pc),
+            "{kind}"
+        );
+        run.run_until(at + 1);
+        assert_eq!(
+            seen(&mut run),
+            seen(&mut stepped),
+            "{kind}: run to {}",
+            at + 1
+        );
+    }
+}
+
+/// DS40002061B §7.7. A host poke that sets `I` is not `SEI`. `TOV0` and `TOIE0` are already
+/// pending and the image is `INC r16`, so the next step is the four-cycle `TIMER0_OVF` entry.
+/// The `INC` does not run, and the stacked return is the word the core sat on.
+#[test]
+fn a_poke_of_sreg_that_sets_i_enters_before_the_instruction() {
+    let mut cpu = Cpu::new();
+    cpu.load_words(&[inc(16)]);
+    cpu.poke(TIMSK0, 0x01);
+    cpu.poke(TIFR0, 0x01);
+    cpu.poke(SREG, 0x80);
+    cpu.step();
+    assert_eq!(
+        (
+            usize::from(cpu.pc()),
+            cpu.cycles(),
+            cpu.reg(16),
+            stacked_return(&cpu)
+        ),
+        (TIMER0_OVF, 4, 0, 0)
+    );
+}
+
+/// DS40002061B §7.7. After `RETI` the main program runs one more instruction before a pending
+/// interrupt, and that holds for a flag a host poke raised after it. An `EERIE` poke enters
+/// `EE_READY`, whose ISR clears `EERIE`. A `UDRIE0` poke after its `RETI` waits for one `INC`.
+#[test]
+fn a_poke_after_reti_waits_for_one_instruction() {
+    let mut main = vec![SEI];
+    main.extend([inc(20); 32]);
+    let words = image(&main, &[EE_READY], &[out(0, EECR - 0x20), RETI]);
+    let mut stepped = Cpu::new();
+    stepped.load_words(&words);
+    step_until(&mut stepped, 10);
+    let counted = stepped.reg(20);
+    stepped.poke(EECR, 0x08);
+    stepped.step();
+    assert_eq!(usize::from(stepped.pc()), EE_READY, "EE_READY entered");
+    for _ in 0..3 {
+        stepped.step();
+    }
+    assert_eq!(stepped.reg(20), counted, "back from RETI, no INC yet");
+    stepped.poke(UCSR0B, 0x20);
+    let (pc, at) = (stepped.pc(), stepped.cycles());
+    let mut run = stepped.clone();
+    stepped.step();
+    assert_eq!(
+        (stepped.reg(20), usize::from(stepped.pc()), stepped.cycles()),
+        (counted + 1, USART_UDRE, at + 1 + 4),
+        "one INC, then USART_UDRE"
+    );
+    assert_eq!(stacked_return(&stepped), pc + 1, "it returns past that INC");
+    run.run_until(at + 1);
+    assert_eq!(seen(&mut run), seen(&mut stepped), "a run to {}", at + 1);
 }

@@ -551,15 +551,15 @@ fn a_low_level_that_ends_during_startup_does_not_interrupt() {
     cpu.poke(EICRA, 0x00);
     cpu.poke(EIMSK, 0x01);
     cpu.drive_pin(18, Level::Low);
-    cpu.set_sreg(0x80);
-    cpu.load_words(&[0x9588, 0x0000]);
+    cpu.load_words(&[0x9478, 0x9588, 0x0000]);
     cpu.step();
-    assert!(cpu.is_sleeping());
+    cpu.step();
+    assert!(cpu.is_sleeping(), "SEI lets SLEEP run before INT0");
     let slept = cpu.cycles();
     cpu.drive_pin(18, Level::High);
     cpu.run_until(slept + 16_384);
     assert!(!cpu.is_sleeping());
-    assert_eq!(cpu.pc(), 1, "the instruction after SLEEP, not INT0");
+    assert_eq!(cpu.pc(), 2, "the instruction after SLEEP, not INT0");
 }
 
 #[test]
@@ -865,8 +865,8 @@ fn table_10_1_wake_mask_filters_pending_sources() {
     down.poke(SMCR, 0x05);
     arm_wdt(&mut down, WDIE, 0);
     let armed = down.cycles();
-    down.set_sreg(0x80);
-    down.load_words(&[0x9588, 0x0000]);
+    down.load_words(&[0x9478, 0x9588, 0x0000]);
+    down.step();
     down.step();
     assert!(down.is_sleeping(), "TOV0, EE READY, and UDRIE stay pending");
     down.run_until(armed + 2_048 - 1);
@@ -892,7 +892,7 @@ fn table_10_1_wake_mask_filters_pending_sources() {
 
     // ADC noise reduction: other I/O does not wake. EEPROM ready and the
     // ADC do. ADC is vector 22, word 0x002A.
-    assert!(stays_asleep(0x03, |cpu| cpu.poke(UCSR0B, UCSR0B_UDRIE)));
+    stays_asleep(0x03, |cpu| cpu.poke(UCSR0B, UCSR0B_UDRIE));
     let ee = sleep_in(0x03, |cpu| cpu.poke(EECR, EERIE));
     assert_eq!(ee.pc(), 0x002C, "EE READY wakes ADC noise reduction");
     let mut adc = fresh();
@@ -916,8 +916,8 @@ fn table_10_1_wake_mask_filters_pending_sources() {
     // Idle wakes on other I/O. A flag with its enable clear does not.
     let idle = sleep_in(0x01, |cpu| cpu.poke(UCSR0B, UCSR0B_UDRIE));
     assert_eq!(idle.pc(), 0x0026, "Idle wakes on USART UDRE");
-    assert_eq!(idle.cycles(), 9, "SLEEP plus the 8-cycle entry");
-    assert!(stays_asleep(0x01, |cpu| cpu.poke(TIFR0, 0x01)));
+    assert_eq!(idle.cycles(), 10, "SEI, SLEEP, and the 8-cycle entry");
+    stays_asleep(0x01, |cpu| cpu.poke(TIFR0, 0x01));
 
     // Power-save and extended standby take a pending Timer2 request.
     // Power-down and standby do not. Timer2's async clock is unmodeled, so
@@ -928,24 +928,24 @@ fn table_10_1_wake_mask_filters_pending_sources() {
         cpu.poke(TIFR2, 0x01);
         cpu.poke(TIMSK2, 0x01);
     });
-    assert_eq!(save.0, 1 + 16_384 + 8);
+    assert_eq!(save.0, 2 + 16_384 + 8);
     assert_eq!(save.1, 0x0012, "TIMER2_OVF wakes power-save");
-    assert!(stays_asleep(0x07, |cpu| cpu.poke(UCSR0B, UCSR0B_UDRIE)));
-    assert!(stays_asleep(0x05, |cpu| {
+    stays_asleep(0x07, |cpu| cpu.poke(UCSR0B, UCSR0B_UDRIE));
+    stays_asleep(0x05, |cpu| {
         cpu.poke(TIFR2, 0x01);
         cpu.poke(TIMSK2, 0x01);
-    }));
+    });
     let extended = wake_on(0x0F, 6, |cpu| {
         cpu.poke(TIFR2, 0x01);
         cpu.poke(TIMSK2, 0x01);
     });
-    assert_eq!(extended.0, 1 + 6 + 8, "extended standby is 6 CK");
+    assert_eq!(extended.0, 2 + 6 + 8, "extended standby is 6 CK");
     assert_eq!(extended.1, 0x0012);
-    assert!(stays_asleep(0x0F, |cpu| cpu.poke(UCSR0B, UCSR0B_UDRIE)));
-    assert!(stays_asleep(0x0D, |cpu| {
+    stays_asleep(0x0F, |cpu| cpu.poke(UCSR0B, UCSR0B_UDRIE));
+    stays_asleep(0x0D, |cpu| {
         cpu.poke(TIFR2, 0x01);
         cpu.poke(TIMSK2, 0x01);
-    }));
+    });
     let standby = wake_on_wdt(0x0D, 6);
     assert_eq!(
         standby.0,
@@ -955,22 +955,49 @@ fn table_10_1_wake_mask_filters_pending_sources() {
     assert_eq!(standby.1, 0x000C);
 
     // Power-down: a low level wakes, an edge does not (§10.5, §13.2.1).
-    let mut level = fresh();
-    level.poke(SMCR, 0x05);
-    level.poke(EICRA, 0x00);
-    level.poke(EIMSK, 0x01);
-    level.drive_pin(18, Level::Low);
-    level.set_sreg(0x80);
-    level.load_words(&[0x9588]);
-    level.step();
+    let mut level = sleep_in(0x05, |cpu| {
+        cpu.poke(EICRA, 0x00);
+        cpu.poke(EIMSK, 0x01);
+        cpu.drive_pin(18, Level::Low);
+    });
+    assert!(level.is_sleeping(), "SLEEP ran before INT0");
     let at = level.cycles();
     level.run_until(at + 16_384 + 8);
     assert_eq!(level.pc(), 0x0002, "level INT0 wakes power-down");
-    assert!(stays_asleep(0x05, |cpu| {
+    stays_asleep(0x05, |cpu| {
         cpu.poke(EICRA, 0x02);
         cpu.poke(EIMSK, 0x01);
         cpu.poke(EIFR, 0x01);
-    }));
+    });
+}
+
+/// Table 11-2. A watchdog time-out that falls inside the four-cycle entry a poke of `UDRIE0`
+/// raised resets in that step. A run to the same cycle ends on the reset vector with `WDRF` set.
+#[test]
+fn a_watchdog_reset_inside_a_boundary_entry() {
+    for back in 1..=4u64 {
+        let mut cpu = fresh();
+        cpu.set_wdt_hz(16_000_000);
+        arm_wdt(&mut cpu, WDE, 0);
+        let timeout = cpu.cycles() + 2_048;
+        cpu.set_sreg(0x80);
+        let image = vec![0u16; 4096];
+        cpu.load_words(&image);
+        cpu.run_until(timeout - back);
+        assert_eq!(cpu.peek(MCUSR) & WDRF, 0, "back {back}");
+        cpu.poke(UCSR0B, UCSR0B_UDRIE);
+        let mut run = cpu.clone();
+        cpu.step();
+        let after = cpu.cycles();
+        run.run_until(after);
+        assert_eq!(cpu.pc(), 0, "reset in the entry, back {back}");
+        assert_eq!(cpu.peek(MCUSR) & WDRF, WDRF, "back {back}");
+        assert_eq!(
+            (run.pc(), run.cycles(), run.peek(MCUSR) & WDRF),
+            (0, cpu.cycles(), WDRF),
+            "back {back}"
+        );
+    }
 }
 
 #[test]
@@ -1135,21 +1162,25 @@ fn crystal_reset_delay() -> u64 {
 
 /// Sleep in `smcr`. `plant` runs before `SLEEP`. Returns after the step that
 /// enters sleep, which has already taken a zero-delay wake.
+/// `SEI` then `SLEEP`, so the sleep starts before a planted request is served (§7.7).
 fn sleep_in(smcr: u8, plant: impl FnOnce(&mut Cpu)) -> Cpu {
     let mut cpu = fresh();
     plant(&mut cpu);
     cpu.poke(SMCR, smcr);
-    cpu.set_sreg(0x80);
-    cpu.load_words(&[0x9588, 0x0000]);
+    cpu.load_words(&[0x9478, 0x9588, 0x0000]);
+    cpu.step();
     cpu.step();
     cpu
 }
 
-fn stays_asleep(smcr: u8, plant: impl FnOnce(&mut Cpu)) -> bool {
+fn stays_asleep(smcr: u8, plant: impl FnOnce(&mut Cpu)) {
     let mut cpu = sleep_in(smcr, plant);
+    assert!(cpu.is_sleeping(), "asleep after SLEEP");
+    assert_eq!(cpu.pc(), 2, "pc is the word after SLEEP");
     let at = cpu.cycles();
     cpu.run_until(at + 20_000);
-    cpu.is_sleeping()
+    assert!(cpu.is_sleeping(), "asleep after 20000 cycles");
+    assert_eq!(cpu.pc(), 2, "pc is the word after SLEEP");
 }
 
 /// `(cycles, pc)` once a pre-set source has finished the mode's start-up.

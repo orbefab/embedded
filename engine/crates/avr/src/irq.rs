@@ -84,9 +84,25 @@ mod tests {
         u16::from(pcl) | (u16::from(pch) << 8)
     }
 
+    /// Sets `I` and raises `vector` on the edge that ends the first instruction, so it is served
+    /// at that instruction's boundary.
     fn arm(cpu: &mut Cpu, vector: u8) {
         cpu.set_sreg(0x80);
-        cpu.raise_irq_at(vector, 0);
+        cpu.raise_irq_at(vector, 1);
+    }
+
+    /// DS40002061B §7.7.1. A request already pending at the boundary is served before the next
+    /// instruction.
+    #[test]
+    fn a_request_pending_at_the_boundary_enters_before_the_next_instruction() {
+        let mut cpu = Cpu::new();
+        cpu.load_words(&[0x9503]);
+        cpu.set_sreg(0x80);
+        cpu.raise_irq_at(2, 0);
+        cpu.step();
+        assert_eq!((cpu.pc(), cpu.cycles(), return_pc(&cpu)), (0x0002, 4, 0));
+        assert_eq!(cpu.reg(16), 0, "the INC did not run");
+        assert!(cpu.irq_acked(2));
     }
 
     #[test]
@@ -94,9 +110,9 @@ mod tests {
         let mut cpu = Cpu::new();
         cpu.load_words(&[0x0000]);
         arm(&mut cpu, 5);
-        cpu.raise_irq_at(2, 0);
+        cpu.raise_irq_at(2, 1);
         cpu.step();
-        assert_eq!(cpu.pc(), 0x0002);
+        assert_eq!((cpu.pc(), return_pc(&cpu)), (0x0002, 1));
         assert!(cpu.irq_acked(2));
         assert!(!cpu.irq_acked(5));
         assert_eq!(cpu.sreg() & 0x80, 0);
@@ -171,7 +187,8 @@ mod tests {
     fn a_cleared_line_is_not_served() {
         let mut cpu = Cpu::new();
         cpu.load_words(&[0x0000]);
-        arm(&mut cpu, 2);
+        cpu.set_sreg(0x80);
+        cpu.raise_irq_at(2, 0);
         cpu.clear_irq(2);
         cpu.step();
         assert_eq!(cpu.pc(), 1);
@@ -308,7 +325,7 @@ mod tests {
         cpu.set_reg(16, 0x02);
         cpu.load_words(&[0xBF05]);
         cpu.set_sreg(0x80);
-        cpu.raise_irq_at(2, 0);
+        cpu.raise_irq_at(2, 1);
         cpu.step();
         assert_eq!(cpu.peek(0x0055), 0x02);
         assert_eq!(cpu.pc(), 2, "IVSEL did not move the vector");

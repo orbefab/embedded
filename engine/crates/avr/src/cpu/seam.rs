@@ -58,17 +58,6 @@ impl Cpu {
         }
     }
 
-    /// Before a run to `limit`, enters the interrupt pending at the boundary the core sits on,
-    /// by vector (§7.7.1). Whether the core advanced.
-    pub(super) fn take_boundary_interrupt(&mut self, limit: u64) -> bool {
-        let before = self.cycles();
-        let boundary = before < limit && self.core.can_fetch() && !self.core.is_stopped();
-        if boundary && self.bus.pending_irq() != 0 && self.service_interrupt(false) {
-            self.finish_step();
-        }
-        self.cycles() != before
-    }
-
     /// A pin report, a sample-and-hold the host must answer, or a division other than `div`.
     pub(super) fn has_news(&self, div: u32) -> bool {
         self.bus.has_pin_reports() || self.bus.sample_due().is_some() || self.clock_div() != div
