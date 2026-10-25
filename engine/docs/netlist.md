@@ -315,7 +315,7 @@ ic  = (ibe - ibc) * (1 - vbc/VAF) - ibc/BR - GMIN*vbc
 ib  = ibe/BF + ibc/BR + GMIN*(vbe + vbc)
 ```
 
-`s * ic` enters `c'` and `s * ib` enters `b'`. `GMIN` is 1e-12 S across each junction, where ngspice puts it. `CJE` is a constant capacitance from `b'` to `e'`, and `CJC` one from `b'` to `c'`. The step's error control holds both as it holds a capacitor part.
+Below `vbe = -3 * NF*VT`, `ibe` is `-IS * (1 + (3 * NF*VT / (e * vbe))^3)` in place of the exponential, and below `vbc = -3 * NR*VT`, `ibc` is `-IS * (1 + (3 * NR*VT / (e * vbc))^3)`. That is the diode's reverse law, which ngspice-42's `bjtload` takes on each junction. `s * ic` enters `c'` and `s * ib` enters `b'`. `GMIN` is 1e-12 S across each junction, where ngspice puts it. `CJE` is a constant capacitance from `b'` to `e'`, and `CJC` one from `b'` to `c'`. The step's error control holds both as it holds a capacitor part.
 
 | Field | Symbol | ngspice | Unit |
 | --- | --- | --- | --- |

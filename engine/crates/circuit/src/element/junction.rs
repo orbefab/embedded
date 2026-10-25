@@ -9,8 +9,7 @@ const ARG_MAX: f64 = 700.0;
 /// A conductance no operating point reaches. The cap keeps `Is*exp(arg)/nvt` under this.
 const G_CAP: f64 = 1e100;
 
-/// `Is * (exp(vj / nvt) - 1)`, one junction's exponential. A diode has one, and a
-/// transistor one per junction.
+/// One junction's current law. A diode has one, and a transistor one per junction.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Shockley {
     is: f64,
@@ -34,8 +33,9 @@ impl Shockley {
         ARG_MAX.min(libm::log(G_CAP) + libm::log(self.nvt) - libm::log(self.is))
     }
 
-    /// Current, slope, whether the argument was clamped, and the voltage that was evaluated.
-    pub(super) fn evaluate(&self, vj: f64) -> (f64, f64, bool, f64) {
+    /// `Is * (exp(vj / nvt) - 1)`. Current, slope, whether the argument was clamped, and the
+    /// voltage that was evaluated.
+    fn exponential(&self, vj: f64) -> (f64, f64, bool, f64) {
         let cap = self.arg_cap();
         let arg = vj / self.nvt;
         let limited = arg > cap;
@@ -50,12 +50,12 @@ impl Shockley {
         )
     }
 
-    /// ngspice-42's diode law, `dioload` with no breakdown voltage. Below `-3 * nvt` the
-    /// current is `-Is * (1 + (3 * nvt / (e * vj))^3)`, which meets the exponential there in
-    /// current and slope.
-    fn diode(&self, vj: f64) -> (f64, f64, bool, f64) {
+    /// ngspice-42's junction law, `dioload` with no breakdown voltage and each junction of
+    /// `bjtload`. Below `-3 * nvt` the current is `-Is * (1 + (3 * nvt / (e * vj))^3)`, which
+    /// meets the exponential there in current and slope. Returns what `exponential` does.
+    pub(super) fn evaluate(&self, vj: f64) -> (f64, f64, bool, f64) {
         if vj >= -3.0 * self.nvt {
-            return self.evaluate(vj);
+            return self.exponential(vj);
         }
         let arg = 3.0 * self.nvt / (vj * std::f64::consts::E);
         let arg = arg * arg * arg;
@@ -71,7 +71,7 @@ fn shockley(junction: &Junction) -> Shockley {
 }
 
 /// Rs from the anode to internal node 0, then the junction from there to the
-/// cathode, linearised at the voltage `diode` used. `GMIN` is across that
+/// cathode, linearised at the voltage `evaluate` used. `GMIN` is across that
 /// junction. ngspice-42's `dioload` adds `CKTgmin` to `gd` and `CKTgmin * vd`
 /// to the current, and it puts no conductance from the internal node to ground.
 pub(super) fn stamp(junction: &Junction, stamp: &mut Stamp<'_>) {
@@ -80,7 +80,7 @@ pub(super) fn stamp(junction: &Junction, stamp: &mut Stamp<'_>) {
     let inner = stamp.internal(0);
     stamp.conductance(anode, inner, 1.0 / junction.series_resistance.si.get());
     let vj = stamp.junction(0);
-    let (id, gd, _, voltage) = params.diode(vj);
+    let (id, gd, _, voltage) = params.evaluate(vj);
     stamp.conductance(inner, cathode, gd + GMIN);
     // The companion is the derivative at the clamped voltage, not at an argument `exp` never saw.
     // ngspice's is `cd - gd * vd` with `GMIN` in `cd` and `gd`, and `GMIN * vd` cancels there.
@@ -97,9 +97,9 @@ pub(super) fn update(junction: &Junction, probe: &Probe<'_>, prior: f64) -> (f64
     let params = shockley(junction);
     let solved = probe.internal(0) - probe.v(junction.pins[1]);
     let (next, mut limited) = pnjlim(solved, prior, params.nvt, params.vcrit);
-    let (id, gd, cap_prior, voltage) = params.diode(prior);
+    let (id, gd, cap_prior, voltage) = params.evaluate(prior);
     let linear = id + gd * (solved - voltage);
-    let (actual, _, cap_solved, _) = params.diode(solved);
+    let (actual, _, cap_solved, _) = params.evaluate(solved);
     limited |= cap_prior || cap_solved;
     let mismatch = mismatch(linear, actual);
     (next, Update { limited, mismatch })
@@ -217,8 +217,8 @@ mod tests {
             vcrit: 2.0,
         };
         let edge = -3.0 * params.nvt;
-        let (above, above_slope, _, _) = params.diode(edge);
-        let (below, below_slope, _, _) = params.diode(edge * (1.0 + 1e-12));
+        let (above, above_slope, _, _) = params.evaluate(edge);
+        let (below, below_slope, _, _) = params.evaluate(edge * (1.0 + 1e-12));
         assert!(
             (above - below).abs() <= 1e-9 * above.abs(),
             "{above} {below}"

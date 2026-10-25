@@ -445,8 +445,9 @@ mod tests {
         circuit("npn", ["c", "b", "gnd"], 1.0, &[])
     }
 
-    /// Active, saturated, reverse active, cut off and in between.
-    const BIASES: [(f64, f64); 12] = [
+    /// Active, saturated, reverse active, cut off and in between, and each junction alone below
+    /// `-3 * VT`.
+    const BIASES: [(f64, f64); 14] = [
         (0.65, -5.0),
         (0.72, -0.2),
         (0.75, -1.0),
@@ -459,20 +460,79 @@ mod tests {
         (0.0, 0.0),
         (0.0, -5.0),
         (-1.0, -10.0),
+        (-0.13, 0.0),
+        (0.0, -0.13),
     ];
+
+    /// One junction's current at `IS`. The exponential down to `-3 * nvt`, and ngspice-42's
+    /// `bjtload` cubic below it.
+    fn law(v: f64, nvt: f64) -> f64 {
+        if v >= -3.0 * nvt {
+            IS * (libm::exp(v / nvt) - 1.0)
+        } else {
+            let arg = 3.0 * nvt / (v * std::f64::consts::E);
+            -IS * (1.0 + arg * arg * arg)
+        }
+    }
+
+    /// `ic` and `ib` of the closed form, with `NF` at 1 and `NR` at `nr`.
+    fn closed_form(vbe: f64, vbc: f64, nr: f64) -> (f64, f64) {
+        let ibe = law(vbe, Junction::VT);
+        let ibc = law(vbc, nr * Junction::VT);
+        (
+            (ibe - ibc) * (1.0 - vbc / VAF) - ibc / BR - GMIN * vbc,
+            ibe / BF + ibc / BR + GMIN * (vbe + vbc),
+        )
+    }
 
     #[test]
     fn currents_match_the_closed_form() {
-        let netlist = npn();
-        let params = Params::new(q1(&netlist).1);
-        let nvt = Junction::VT;
-        for (vbe, vbc) in BIASES {
-            let ibe = IS * (libm::exp(vbe / nvt) - 1.0);
-            let ibc = IS * (libm::exp(vbc / nvt) - 1.0);
-            let ic = (ibe - ibc) * (1.0 - vbc / VAF) - ibc / BR - GMIN * vbc;
-            let ib = ibe / BF + ibc / BR + GMIN * (vbe + vbc);
-            let p = params.point(vbe, vbc);
-            assert_eq!((p.ic, p.ib), (ic, ib), "at vbe {vbe} V, vbc {vbc} V");
+        for nr in [1.0, 2.0] {
+            let netlist = circuit("npn", ["c", "b", "gnd"], nr, &[]);
+            let params = Params::new(q1(&netlist).1);
+            for (vbe, vbc) in BIASES {
+                let p = params.point(vbe, vbc);
+                assert_eq!(
+                    (p.ic, p.ib),
+                    closed_form(vbe, vbc, nr),
+                    "at vbe {vbe} V, vbc {vbc} V, nr {nr}"
+                );
+            }
+        }
+    }
+
+    /// `point` at `vbe` and `vbc` against the closed form, at a bias where the cubic is at least
+    /// 1e-3 away from the exponential, so the exponential would fail.
+    fn follows_the_reverse_law(vbe: f64, vbc: f64, nr: f64, junction: f64, nvt: f64) {
+        let netlist = circuit("npn", ["c", "b", "gnd"], nr, &[]);
+        let p = Params::new(q1(&netlist).1).point(vbe, vbc);
+        let exponential = IS * (libm::exp(junction / nvt) - 1.0);
+        let cubic = law(junction, nvt);
+        assert!(
+            (cubic - exponential).abs() > 1e-3 * cubic.abs(),
+            "at {junction} V the laws agree"
+        );
+        assert_eq!(
+            (p.ic, p.ib),
+            closed_form(vbe, vbc, nr),
+            "at vbe {vbe} V, vbc {vbc} V, nr {nr}"
+        );
+    }
+
+    /// `NR` is 2, so `-0.1 V` to `-0.13 V` are below `-3 * NF*VT` and above `-3 * NR*VT`. A
+    /// junction on the other's emission coefficient fails here or in the next test.
+    #[test]
+    fn a_reversed_base_emitter_junction_follows_ngspice_below_three_nf_vt() {
+        for vbe in [-0.1, -0.12, -0.13, -0.2] {
+            follows_the_reverse_law(vbe, 0.0, 2.0, vbe, Junction::VT);
+        }
+    }
+
+    #[test]
+    fn a_reversed_base_collector_junction_follows_ngspice_below_three_nr_vt() {
+        let nvt = 2.0 * Junction::VT;
+        for vbc in [-0.2, -0.25, -0.3, -0.4] {
+            follows_the_reverse_law(0.0, vbc, 2.0, vbc, nvt);
         }
     }
 
@@ -635,7 +695,7 @@ mod tests {
         let netlist = npn();
         let params = Params::new(q1(&netlist).1);
         let (vbe, vbc) = (0.0, -5.0);
-        let ibc = IS * (libm::exp(vbc / Junction::VT) - 1.0);
+        let ibc = law(vbc, Junction::VT);
         let p = params.point(vbe, vbc);
         let junctions = -ibc * (1.0 - vbc / VAF) - ibc / BR;
         assert!(junctions < 1e-13, "{junctions}");

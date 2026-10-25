@@ -106,10 +106,15 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
 /// cathode at 8 V. `led-off` holds an LED with both pins at 5 V. `diode-reverse` and
 /// `led-reverse` hold a diode at 0.3 V and an LED at 0.5 V reverse, below `-3 * n * VT`, where
 /// ngspice's reverse law leaves the exponential. `npn-off` and `pnp-off` hold
-/// the leakage on each kind's internal nodes, and `nmos-off` holds an off MOSFET so its drain
-/// current is the drain-source gmin. `npn-slow-edge` drives the junction capacitors through
-/// 1 Mohm, and `nmos-pulse` does the same for the gate capacitances, slow next to the deck's
-/// ramp. `nmos-regions` biases the drain through reverse, linear and saturation.
+/// the leakage on each kind's internal nodes. `npn-held-off` and `pnp-held-off` hold the
+/// base-emitter junction 0.13 V reverse and the collector 12 V away, and `npn-reverse` and
+/// `pnp-reverse` hold the base-collector junction 0.13 V reverse. `npn-nf-nr` and `pnp-nf-nr`
+/// set `NF` to 1.5 and `NR` to 2, with the emitter 0.13 V from the base and the collector
+/// 0.27 V from it. Each transistor there has an `IS` of 1e-8 A, so the reverse law shows
+/// above the floor. `nmos-off` holds an off MOSFET
+/// so its drain current is the drain-source gmin. `npn-slow-edge` drives the junction
+/// capacitors through 1 Mohm, and `nmos-pulse` does the same for the gate capacitances, slow
+/// next to the deck's ramp. `nmos-regions` biases the drain through reverse, linear and saturation.
 /// `nmos-follower` holds the source off ground.
 #[test]
 fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
@@ -134,9 +139,15 @@ fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "nmos-off",
             "nmos-pulse",
             "nmos-regions",
+            "npn-held-off",
+            "npn-nf-nr",
             "npn-off",
+            "npn-reverse",
             "npn-slow-edge",
-            "pnp-off"
+            "pnp-held-off",
+            "pnp-nf-nr",
+            "pnp-off",
+            "pnp-reverse"
         ]
     );
     for fixture in fixtures {

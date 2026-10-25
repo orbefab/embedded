@@ -965,6 +965,9 @@ impl Junction {
 /// ib  = ibe/BF + ibc/BR + GMIN*(vbe + vbc)
 /// ```
 ///
+/// Below `vbe = -3 * NF*VT`, `ibe` takes a `Junction`'s reverse law.
+/// Below `vbc = -3 * NR*VT`, `ibc` does.
+///
 /// `s * ic` enters `c'` and `s * ib` enters `b'`. `CJE` is a constant capacitance from `b'` to
 /// `e'`, and `CJC` from `b'` to `c'`. Every value is positive, as in a SPICE model card.
 #[derive(Clone, Debug, PartialEq)]
