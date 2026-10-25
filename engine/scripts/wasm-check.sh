@@ -43,6 +43,10 @@ for line in \
   'static record(netlist: Uint8Array): Session;' \
   'advanceTo(ps: bigint): Status;' \
   'serialSince(cursor: bigint): Serial;' \
+  'edgesSince(cursor: bigint): Edges;' \
+  'edgeCursor(): bigint;' \
+  'forgetEdges(cursor: bigint): void;' \
+  'forgetSerial(cursor: bigint): void;' \
   'applyContact(part: string, ps: bigint, closed: boolean): Applied;' \
   'applyLevel(part: string, ps: bigint, si: number): Applied;' \
   'applySerial(part: string, ps: bigint, baud: number, bytes: Uint8Array): Applied;' \
@@ -51,6 +55,21 @@ for line in \
   'file(path: string): Uint8Array | undefined;'; do
   if ! grep -qF "$line" "$scratch/pkg/sim_wasm.d.ts"; then
     echo "sim_wasm.d.ts lacks $line" >&2
+    exit 1
+  fi
+done
+edges=$(sed -n '/^export class Edges {$/,/^}$/p' "$scratch/pkg/sim_wasm.d.ts")
+if [[ -z "$edges" ]]; then
+  echo "sim_wasm.d.ts has no Edges class" >&2
+  exit 1
+fi
+for line in \
+  'readonly at: BigUint64Array;' \
+  'readonly signal: Uint32Array;' \
+  'readonly level: Uint8Array;' \
+  'readonly cursor: bigint;'; do
+  if ! grep -qF "$line" <<<"$edges"; then
+    echo "Edges in sim_wasm.d.ts lacks $line" >&2
     exit 1
   fi
 done

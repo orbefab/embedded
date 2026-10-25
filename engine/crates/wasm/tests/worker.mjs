@@ -105,6 +105,46 @@ function floatBits(values) {
   return [...new BigUint64Array(copy.buffer)];
 }
 
+// The VCD identifier is base 94 from `!`, least significant character first.
+function vcdIndex(id) {
+  let index = 0;
+  let place = 1;
+  for (let k = 0; k < id.length; k += 1) {
+    index += (id.charCodeAt(k) - 33) * place;
+    place *= 94;
+  }
+  return index;
+}
+
+// The value changes in `traces/logic.vcd`, after `$dumpvars`. None when the folder has no file.
+function logicChanges(dir) {
+  let text;
+  try {
+    text = readFileSync(join(dir, 'traces', 'logic.vcd'), 'utf8');
+  } catch {
+    return [];
+  }
+  const changes = [];
+  let time = 0n;
+  let dump = false;
+  let body = false;
+  for (const line of text.split('\n')) {
+    if (!body) {
+      if (line === '$dumpvars') dump = true;
+      else if (dump && line === '$end') body = true;
+      continue;
+    }
+    if (line.startsWith('#')) {
+      time = BigInt(line.slice(1));
+      continue;
+    }
+    const bit = line.charCodeAt(0);
+    if (bit !== 48 && bit !== 49) continue;
+    changes.push({ at: time, signal: vcdIndex(line.slice(1)), level: bit - 48 });
+  }
+  return changes;
+}
+
 // The rows of `serial.csv` in the native folder in `dir`, and none without one.
 function serialRows(dir) {
   try {
@@ -134,7 +174,7 @@ function assertProbesOnRows(label, { refs, probes }, dir) {
 // time, or up to an eighth of the run. A frame is 60 Hz at 1x, or a 60th of a shorter run.
 // After each call it reads the probe, the levels and the new serial bytes, and keeps the probes
 // at row times. Then `input` may apply an input at `now`. Returns the refs, the probes kept, the
-// serial bytes as `serial.csv` rows, and the integrals when the session ends.
+// serial bytes as `serial.csv` rows, the logic changes, and the integrals when the session ends.
 function advanceInChunks(session, json, rng, input = () => {}) {
   const { stop_ps, grid_ps } = JSON.parse(json).analysis.transient;
   const [stop, grid] = [BigInt(stop_ps), BigInt(grid_ps)];
@@ -145,8 +185,10 @@ function advanceInChunks(session, json, rng, input = () => {}) {
   const usarts = JSON.parse(session.usarts());
   const probes = [];
   const rows = [];
+  const edges = [];
   let integrals;
   let cursor = 0n;
+  let edgeCursor = 0n;
   for (;;) {
     const now = session.now();
     let stride;
@@ -184,8 +226,14 @@ function advanceInChunks(session, json, rng, input = () => {}) {
     });
     cursor = serial.cursor;
     serial.free();
+    const readEdges = session.edgesSince(edgeCursor);
+    for (let k = 0; k < readEdges.at.length; k += 1) {
+      edges.push({ at: readEdges.at[k], signal: readEdges.signal[k], level: readEdges.level[k] });
+    }
+    edgeCursor = readEdges.cursor;
+    readEdges.free();
     if (status !== 'running') {
-      return { refs, probes, rows, integrals };
+      return { refs, probes, rows, edges, integrals };
     }
     input(session, rng);
   }
@@ -209,6 +257,11 @@ function example(wasm, job, json, native) {
   assertSameFolder(`${job.name} finish`, session.finish(0n), native);
   assertProbesOnRows(job.name, read, native);
   assert.deepEqual(read.rows, serialRows(native), `${job.name}: the serial rows are serial.csv's`);
+  assert.deepEqual(
+    read.edges,
+    logicChanges(native),
+    `${job.name}: the edges are the changes in traces/logic.vcd`,
+  );
   const stop = BigInt(JSON.parse(json).analysis.transient.stop_ps);
   const once = wasm.Session.open(json);
   assert.equal(once.advanceTo(stop), 'stopped');
@@ -219,8 +272,19 @@ function example(wasm, job, json, native) {
     `${job.name}: integrals at the stop`,
   );
   probe.free();
+  const openEdges = once.edgesSince(0n);
+  const openList = [];
+  for (let k = 0; k < openEdges.at.length; k += 1) {
+    openList.push({ at: openEdges.at[k], signal: openEdges.signal[k], level: openEdges.level[k] });
+  }
+  openEdges.free();
+  assert.deepEqual(
+    openList,
+    logicChanges(native),
+    `${job.name}: an open session's edges are the changes in traces/logic.vcd`,
+  );
   once.free();
-  const counts = `${read.probes.length} probes on rows, ${read.rows.length} serial rows`;
+  const counts = `${read.probes.length} probes on rows, ${read.rows.length} serial rows, ${read.edges.length} logic changes`;
   return `run and finish are sim run, ${counts}`;
 }
 
@@ -338,7 +402,12 @@ function withInputs(wasm, job, json, work) {
   assertSameFolder(label, session.finish(0n), native);
   assertProbesOnRows(label, read, native);
   assert.deepEqual(read.rows, serialRows(native), `${label}: the serial rows are serial.csv's`);
-  const counts = `${read.probes.length} probes on rows, ${read.rows.length} serial rows`;
+  assert.deepEqual(
+    read.edges,
+    logicChanges(native),
+    `${label}: the edges are the changes in traces/logic.vcd`,
+  );
+  const counts = `${read.probes.length} probes on rows, ${read.rows.length} serial rows, ${read.edges.length} logic changes`;
   return `finish is sim run on the ended export after ${applied} inputs, ${counts}`;
 }
 
@@ -366,6 +435,9 @@ function argumentChecks(wasm, examples) {
     ['run createdAtSeconds', 'bigint', (v) => wasm.run(steps, v)],
     ['advanceTo', 'bigint', (v) => serial.advanceTo(v)],
     ['serialSince', 'bigint', (v) => serial.serialSince(v)],
+    ['edgesSince', 'bigint', (v) => serial.edgesSince(v)],
+    ['forgetEdges', 'bigint', (v) => serial.forgetEdges(v)],
+    ['forgetSerial', 'bigint', (v) => serial.forgetSerial(v)],
     ['applyLevel part', 'string', (v) => serial.applyLevel(v, 0n, 0.5)],
     ['applyLevel ps', 'bigint', (v) => serial.applyLevel('rv1', v, 0.5)],
     ['applyLevel si', 'number', (v) => serial.applyLevel('rv1', 0n, v)],
@@ -480,6 +552,24 @@ function argumentChecks(wasm, examples) {
     const next = serial.serialSince(cursor).cursor;
     assert.equal(next, cursor === 0n ? sent : cursor, `serialSince(${cursor}n) keeps the cursor`);
   }
+  const edgeEnd = serial.edgeCursor();
+  assert.ok(edgeEnd > 1n, 'the session changed a chip signal');
+  serial.forgetEdges(1n);
+  assert.throws(() => serial.edgesSince(0n), isCode('forgotten'), 'edgesSince(0n) is forgotten');
+  const keptEdges = serial.edgesSince(1n);
+  assert.equal(keptEdges.cursor, edgeEnd);
+  assert.equal(keptEdges.at.length, Number(edgeEnd - 1n));
+  keptEdges.free();
+  const pastEdges = serial.edgesSince(edgeEnd + 1n);
+  assert.equal(pastEdges.at.length, 0);
+  assert.equal(pastEdges.cursor, edgeEnd + 1n);
+  pastEdges.free();
+  serial.forgetSerial(sent);
+  assert.throws(() => serial.serialSince(0n), isCode('forgotten'), 'serialSince(0n) is forgotten');
+  const keptSerial = serial.serialSince(sent);
+  assert.equal(keptSerial.byte.length, 0);
+  assert.equal(keptSerial.cursor, sent);
+  keptSerial.free();
 
   const stop = 2n ** 64n - 1n;
   const far = Buffer.from(

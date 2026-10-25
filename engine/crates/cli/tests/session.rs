@@ -81,7 +81,7 @@ fn advance_in_chunks(
         let now = session.now();
         assert_eq!(session.probe().at(), now);
         assert_eq!(session.levels().len(), session.signals().len());
-        let (bytes, next) = session.serial_since(cursor);
+        let (bytes, next) = session.serial_since(cursor).expect("cursor still held");
         let usarts = session.usarts();
         rows.extend(bytes.iter().map(|byte| {
             let (part, usart) = &usarts[usize::from(byte.usart)];

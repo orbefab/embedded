@@ -1,6 +1,8 @@
+use std::mem::size_of;
+
 use sim_core::diagnostic::{Diagnostic, Solve};
 use sim_core::finite::Finite;
-use sim_core::logic::Level;
+use sim_core::logic::{Change, Level};
 use sim_core::name::{Name, Ref};
 use sim_core::netlist::{Analysis, Document, Netlist, Transient};
 use sim_core::run_folder::{self, Results, RunFolder};
@@ -125,12 +127,22 @@ pub struct Session {
     signals: Vec<Ref>,
     /// The level of each signal at `now`, in the order of `signals`.
     logic: Vec<Level>,
+    /// Chip-signal changes on accepted steps when the session records nothing, in signal order
+    /// within one time. The levels at t = 0 are not changes. A recorded session leaves this
+    /// empty and reads the recorder's changes, which `logic.vcd` is written from.
+    /// `edges_forgotten` is the first change a reader may still see, counting from the first
+    /// change. On an unrecorded session `edges[0]` is that change.
+    edges: Vec<Change>,
+    edges_forgotten: u64,
     /// Integral of each analog column from t = 0 through the last accepted step, in `refs`
     /// order. The unit is the column's unit times picoseconds.
     integrals: Vec<f64>,
-    /// Every byte a USART sent whose stop bit ended at or before the last accepted step, in the
-    /// order stop bits ended, then in `usarts` order.
+    /// Bytes a USART sent whose stop bit ended at or before the last accepted step, in the
+    /// order stop bits ended, then in `usarts` order. `serial_forgotten` is the first byte a
+    /// reader may still see, counting from the first byte. An unrecorded session drains the
+    /// bytes before that, so `serial[0]` is that byte. A recorded session keeps every byte.
     serial: Vec<SerialByte>,
+    serial_forgotten: u64,
     pub(crate) record: Option<Record>,
     /// The JSON the session opened from, which `export` writes back.
     document: Option<Document>,
@@ -187,6 +199,22 @@ impl From<u64> for SerialCursor {
 
 impl From<SerialCursor> for u64 {
     fn from(cursor: SerialCursor) -> u64 {
+        cursor.0
+    }
+}
+
+/// How many chip-signal changes a reader has read. `EdgeCursor::default()` has read none.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EdgeCursor(u64);
+
+impl From<u64> for EdgeCursor {
+    fn from(read: u64) -> EdgeCursor {
+        EdgeCursor(read)
+    }
+}
+
+impl From<EdgeCursor> for u64 {
+    fn from(cursor: EdgeCursor) -> u64 {
         cursor.0
     }
 }
@@ -400,8 +428,11 @@ impl Session {
             memo,
             signals,
             logic,
+            edges: Vec::new(),
+            edges_forgotten: 0,
             integrals,
             serial: Vec::new(),
+            serial_forgotten: 0,
             record,
             document,
             opened: None,
@@ -529,6 +560,43 @@ impl Session {
         Some(self.logic[k])
     }
 
+    /// The cursor past every chip-signal change so far. `levels` at the same time is the t = 0
+    /// levels with every change before this cursor applied.
+    pub fn edge_cursor(&self) -> EdgeCursor {
+        let count = match &self.record {
+            Some(record) => record.changes().len() as u64,
+            None => self.edges_forgotten + self.edges.len() as u64,
+        };
+        EdgeCursor(count)
+    }
+
+    /// Every chip-signal change after the ones `cursor` has read, up to the last accepted step,
+    /// and the cursor past them. The changes are the ones `logic.vcd` holds, in signal order
+    /// within one time. The levels at t = 0 are not changes. Solves nothing. A cursor past the
+    /// end reads nothing and stays. `None` when `cursor` is before a change `forget_edges` forgot.
+    pub fn edges_since(&self, cursor: EdgeCursor) -> Option<(&[Change], EdgeCursor)> {
+        let cursor = u64::from(cursor);
+        let read = match &self.record {
+            Some(record) => read_retained(record.changes(), self.edges_forgotten, cursor),
+            None => read_drained(&self.edges, self.edges_forgotten, cursor),
+        };
+        read.map(|(changes, end)| (changes, EdgeCursor(end)))
+    }
+
+    /// Forgets the chip-signal changes before `cursor`. An unrecorded session drains them. A
+    /// recorded session only raises the read floor, because `logic.vcd` is written from the
+    /// same list. Cursors keep counting from the first change. A later `edges_since` is
+    /// unchanged except on a cursor before `cursor`.
+    pub fn forget_edges(&mut self, cursor: EdgeCursor) {
+        let cursor = u64::from(cursor);
+        let len = self.record.as_ref().map(|record| record.changes().len());
+        if let Some(len) = len {
+            raise_floor(&mut self.edges_forgotten, len, cursor);
+        } else {
+            forget_prefix(&mut self.edges, &mut self.edges_forgotten, cursor);
+        }
+    }
+
     /// Each USART, chips in part order, then each chip's in datasheet order: the part's name and
     /// the USART's, such as `USART0`. A `SerialByte`'s `usart` indexes this.
     pub fn usarts(&self) -> &[(Name, &'static str)] {
@@ -541,14 +609,29 @@ impl Session {
     /// ended by `now` is here. The bytes are in the order their stop bits ended, then in
     /// `usarts` order. On one USART that is the order they started. Solves nothing. A cursor
     /// past the end, from another session or a count the caller made, reads nothing and stays.
-    pub fn serial_since(&self, cursor: SerialCursor) -> (&[SerialByte], SerialCursor) {
-        let Some(bytes) = usize::try_from(cursor.0)
-            .ok()
-            .and_then(|read| self.serial.get(read..))
-        else {
-            return (&[], cursor);
+    /// `None` when `cursor` is before a byte `forget_serial` dropped.
+    pub fn serial_since(&self, cursor: SerialCursor) -> Option<(&[SerialByte], SerialCursor)> {
+        let cursor = u64::from(cursor);
+        let read = if self.record.is_some() {
+            read_retained(&self.serial, self.serial_forgotten, cursor)
+        } else {
+            read_drained(&self.serial, self.serial_forgotten, cursor)
         };
-        (bytes, SerialCursor(self.serial.len() as u64))
+        read.map(|(bytes, end)| (bytes, SerialCursor(end)))
+    }
+
+    /// Forgets the serial bytes before `cursor`. An unrecorded session drains them. A recorded
+    /// session only raises the read floor over the one list. Cursors keep counting from the
+    /// first byte. A later `serial_since` is unchanged except on a cursor before `cursor`. A
+    /// recorded finish still writes every delivered byte to `serial.csv`.
+    pub fn forget_serial(&mut self, cursor: SerialCursor) {
+        let cursor = u64::from(cursor);
+        if self.record.is_some() {
+            let len = self.serial.len();
+            raise_floor(&mut self.serial_forgotten, len, cursor);
+        } else {
+            forget_prefix(&mut self.serial, &mut self.serial_forgotten, cursor);
+        }
     }
 
     /// Advances to `stop` and returns the run folder `sim run` writes for the netlist this
@@ -906,8 +989,23 @@ impl Session {
         // solve is back across the threshold. The restart's level is the next step's
         // prior, so the return is recorded on the next row.
         let recorded = next.levels.with_flips(&accepted.levels, &levels);
-        self.logic = circuit.logic_levels(&next.chips, &recorded);
+        let logic = circuit.logic_levels(&next.chips, &recorded);
+        debug_assert_eq!(logic.len(), self.logic.len());
+        if self.record.is_none() {
+            for (signal, (&was, &is)) in self.logic.iter().zip(&logic).enumerate() {
+                if was != is {
+                    self.edges.push(Change {
+                        at,
+                        signal,
+                        level: is,
+                    });
+                }
+            }
+        }
+        self.logic = logic;
         if let Some(record) = &mut self.record {
+            // Logic::set merges a same-time change, which would move a count cursor.
+            debug_assert!(record.changes().last().is_none_or(|change| change.at < at));
             record.logic(at, &self.logic);
         }
         self.solved(next)
@@ -1010,6 +1108,69 @@ fn probe_failure(circuit: &Circuit, from: Time, probe: Time, failure: Failure) -
             },
         },
     }
+}
+
+/// A drained log, whose first item is absolute index `forgotten`.
+fn read_drained<T>(items: &[T], forgotten: u64, cursor: u64) -> Option<(&[T], u64)> {
+    read_window(items, forgotten, forgotten, cursor)
+}
+
+/// A log that still holds every entry. `forgotten` is only the read floor.
+fn read_retained<T>(items: &[T], forgotten: u64, cursor: u64) -> Option<(&[T], u64)> {
+    read_window(items, 0, forgotten, cursor)
+}
+
+/// The items from absolute index `cursor` on, and the index past the log. `items[0]` is
+/// absolute index `base`. `None` when `cursor` is before `forgotten`. A `cursor` past the end
+/// reads nothing and stays.
+fn read_window<T>(items: &[T], base: u64, forgotten: u64, cursor: u64) -> Option<(&[T], u64)> {
+    if cursor < forgotten {
+        return None;
+    }
+    debug_assert!(cursor >= base);
+    let end = base + items.len() as u64;
+    match usize::try_from(cursor - base)
+        .ok()
+        .and_then(|start| items.get(start..))
+    {
+        Some(tail) => Some((tail, end)),
+        None => Some((&[], cursor)),
+    }
+}
+
+/// How many items `cursor` drops from the front of a drained log. `cursor` is clamped to the
+/// end of the log. `None` when that point is at or before the forgotten count.
+fn prefix_len(len: usize, forgotten: u64, cursor: u64) -> Option<usize> {
+    let end = forgotten + len as u64;
+    let drop_to = cursor.min(end);
+    if drop_to <= forgotten {
+        return None;
+    }
+    Some((drop_to - forgotten) as usize)
+}
+
+/// Moves the read floor of a log that still holds every entry. `len` is that log's length.
+/// A `cursor` at or before the forgotten count changes nothing.
+fn raise_floor(forgotten: &mut u64, len: usize, cursor: u64) {
+    let drop_to = cursor.min(len as u64);
+    if drop_to > *forgotten {
+        *forgotten = drop_to;
+    }
+}
+
+/// `docs/engine.md` states these sizes.
+const _: () = assert!(match size_of::<usize>() {
+    8 => size_of::<Change>() == 24 && size_of::<SerialByte>() == 16,
+    4 => size_of::<Change>() == 16 && size_of::<SerialByte>() == 16,
+    _ => false,
+});
+
+fn forget_prefix<T>(items: &mut Vec<T>, forgotten: &mut u64, cursor: u64) {
+    let Some(n) = prefix_len(items.len(), *forgotten, cursor) else {
+        return;
+    };
+    drop(items.drain(..n));
+    *forgotten += n as u64;
 }
 
 /// The width is picoseconds, so the unit is the column's unit times picoseconds.

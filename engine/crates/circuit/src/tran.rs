@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BinaryHeap, VecDeque};
 
 use sim_core::diagnostic::Diagnostic;
 use sim_core::finite::Finite;
-use sim_core::logic::{Level, Logic};
+use sim_core::logic::{Change, Level, Logic};
 use sim_core::name::Ref;
 use sim_core::netlist::{Document, Edge, Model, Netlist, PartId, Transient};
 use sim_core::run_folder::{Observations, OpPoint};
@@ -281,6 +281,15 @@ impl Record {
             for (signal, &level) in levels.iter().enumerate() {
                 logic.set(at, signal, level);
             }
+        }
+    }
+
+    /// The changes `logic.vcd` is written from, in signal order within one time. Empty when
+    /// the netlist has no chip.
+    pub(crate) fn changes(&self) -> &[Change] {
+        match &self.logic {
+            Some(logic) => logic.changes(),
+            None => &[],
         }
     }
 }

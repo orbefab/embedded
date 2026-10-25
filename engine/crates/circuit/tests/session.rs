@@ -3,7 +3,7 @@
 mod common;
 
 use common::{held_capacitor, resistor, source_on, trace, transient};
-use sim_circuit::{Input, Refused, SerialCursor, Session, Setting, Status};
+use sim_circuit::{EdgeCursor, Input, Refused, SerialCursor, Session, Setting, Status};
 use sim_core::diagnostic::Diagnostic;
 use sim_core::finite::Finite;
 use sim_core::name::Name;
@@ -45,7 +45,8 @@ fn example(name: &str, stop_ps: u64) -> Netlist {
 /// calls. A call ends on one of the next four row times, or at a random time before it. At a
 /// row time the probe is that row of `simulate`'s trace, bit for bit. The session lists the chip
 /// signals `logic.vcd` holds, and after every call each one's level is the one `logic.vcd` holds
-/// at `now`. Each probe has one integral per ref.
+/// at `now`. Each probe has one integral per ref. The changes read since the previous call are
+/// the ones `logic.vcd` holds in `(previous now, now]`, and the whole log is `logic.changes()`.
 fn reads_are_the_batch(name: &str, stop_ps: u64, seed: u64) {
     let netlist = example(name, stop_ps);
     let results = sim_circuit::simulate(&netlist);
@@ -66,6 +67,7 @@ fn reads_are_the_batch(name: &str, stop_ps: u64, seed: u64) {
     assert_eq!(signals, logic.signals());
     let mut rng = Rng(seed);
     let mut on_rows = 0;
+    let mut edge_cursor = EdgeCursor::default();
     loop {
         let now = session.now();
         let next = rows.partition_point(|&row| row <= now);
@@ -104,6 +106,20 @@ fn reads_are_the_batch(name: &str, stop_ps: u64, seed: u64) {
                 probe.at()
             );
         }
+        let (changes, next_cursor) = session.edges_since(edge_cursor).expect("cursor still held");
+        let expect: Vec<_> = logic
+            .changes()
+            .iter()
+            .copied()
+            .filter(|change| change.at > now && change.at <= probe.at())
+            .collect();
+        assert_eq!(
+            changes,
+            &expect[..],
+            "{name} edges in ({now:?}, {:?}]",
+            probe.at()
+        );
+        edge_cursor = next_cursor;
         if !running {
             break;
         }
@@ -112,6 +128,11 @@ fn reads_are_the_batch(name: &str, stop_ps: u64, seed: u64) {
     assert_eq!(session.fault(), None);
     assert_eq!(session.now(), *rows.last().unwrap());
     assert!(changes.next().is_none(), "{name}: a change after stop");
+    let (edges, end) = session
+        .edges_since(EdgeCursor::default())
+        .expect("cursor still held");
+    assert_eq!(edges, logic.changes(), "{name}: the edge log");
+    assert_eq!(end, edge_cursor);
     assert!(
         on_rows > rows.len() / 4,
         "{name}: {on_rows} of {} rows",
@@ -370,17 +391,33 @@ fn a_serial_cursor_is_the_count_of_bytes_read() {
     assert_eq!(SerialCursor::from(0), SerialCursor::default());
     let mut session = Session::open(example("atmega-analog-serial", u64::MAX)).unwrap();
     assert_eq!(session.advance_to(Time::from_ps(u64::MAX)), Status::Stopped);
-    let (all, end) = session.serial_since(SerialCursor::default());
+    let (all, end) = session
+        .serial_since(SerialCursor::default())
+        .expect("cursor still held");
     let all = all.to_vec();
     assert!(!all.is_empty());
     assert_eq!(u64::from(end), all.len() as u64);
     for read in 0..=all.len() as u64 {
-        let (bytes, cursor) = session.serial_since(SerialCursor::from(read));
+        let (bytes, cursor) = session
+            .serial_since(SerialCursor::from(read))
+            .expect("cursor still held");
         assert_eq!(bytes, &all[read as usize..]);
         assert_eq!(cursor, end);
     }
     let past = SerialCursor::from(all.len() as u64 + 1);
-    assert_eq!(session.serial_since(past), (&[][..], past));
+    assert_eq!(session.serial_since(past), Some((&[][..], past)));
+    let kept = SerialCursor::from(4);
+    session.forget_serial(kept);
+    assert!(session.serial_since(SerialCursor::default()).is_none());
+    assert!(session.serial_since(SerialCursor::from(3)).is_none());
+    let (tail, cursor) = session.serial_since(kept).expect("cursor still held");
+    assert_eq!(tail, &all[4..]);
+    assert_eq!(cursor, end);
+    assert_eq!(session.serial_since(past), Some((&[][..], past)));
+    session.forget_serial(SerialCursor::default());
+    assert!(session.serial_since(SerialCursor::from(3)).is_none());
+    let (tail, _) = session.serial_since(kept).expect("an earlier forget stays");
+    assert_eq!(tail, &all[4..]);
 }
 
 const FRAME_PS: u64 = 16_666_666_667;
@@ -556,7 +593,7 @@ fn integrals_match_across_splits(name: &str, stop: u64) {
         framed_reads.push((at, integral_bits(&framed)));
     }
 
-    let mut split = Session::open(netlist).unwrap();
+    let mut split = Session::open(netlist.clone()).unwrap();
     let mut split_at = std::collections::BTreeMap::new();
     for &at in &dense {
         split.advance_to(Time::from_ps(at));
@@ -569,6 +606,28 @@ fn integrals_match_across_splits(name: &str, stop: u64) {
     }
     assert_eq!(framed_reads.last().map(|(_, bits)| bits), Some(&at_stop));
     assert_eq!(split_at.get(&stop), Some(&at_stop), "{name} at stop");
+    for at in [held - 1, held, held + 1] {
+        assert!(dense.contains(&at), "{name}: no sample at {at}");
+        let mut fresh = Session::open(netlist.clone()).unwrap();
+        fresh.advance_to(Time::from_ps(at));
+        assert_eq!(fresh.now().as_ps(), at, "{name}");
+        assert_eq!(
+            split_at.get(&at),
+            Some(&integral_bits(&fresh)),
+            "{name} integrals at {at}"
+        );
+    }
+    let whole_edges = edge_list(&whole);
+    assert_eq!(edge_list(&framed), whole_edges, "{name} edges");
+    assert_eq!(edge_list(&split), whole_edges, "{name} edges");
+}
+
+fn edge_list(session: &Session) -> Vec<sim_core::logic::Change> {
+    session
+        .edges_since(EdgeCursor::default())
+        .expect("cursor still held")
+        .0
+        .to_vec()
 }
 
 #[test]
@@ -579,6 +638,242 @@ fn integrals_match_across_splits_of_atmega_fade() {
 #[test]
 fn integrals_match_across_splits_of_rc_switch() {
     integrals_match_across_splits("rc-switch", 50_000_000_000);
+}
+
+fn advance_at(session: &mut Session, times: &[u64]) {
+    for &ps in times {
+        session.advance_to(Time::from_ps(ps));
+        assert_eq!(session.now().as_ps(), ps);
+    }
+}
+
+/// `open` and `record_document` on one chip netlist, each advanced in its own splits after the
+/// same position input, return the same `edges_since(0)`. The recorded list is what `logic.vcd`
+/// is written from.
+#[test]
+fn an_open_edge_log_matches_a_recorded_one() {
+    let bytes = std::fs::read(example_path("atmega-analog-serial")).unwrap();
+    let document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let stop = document["analysis"]["transient"]["stop_ps"]
+        .as_u64()
+        .unwrap();
+    let input_at = 1_000_000_000;
+    let mut opened = Session::open(netlist::parse(&bytes).unwrap()).unwrap();
+    let mut recorded = Session::record_document(&bytes).unwrap();
+    advance_at(&mut opened, &[400_000_000, input_at]);
+    advance_at(&mut recorded, &[input_at]);
+    let input = Input {
+        part: Name::new("rv1").unwrap(),
+        at: Time::from_ps(input_at),
+        setting: Setting::Level(Finite::new(0.2).unwrap()),
+    };
+    let open_landed = opened.apply(&input).unwrap().at;
+    let recorded_landed = recorded.apply(&input).unwrap().at;
+    assert_eq!(open_landed, recorded_landed);
+    advance_at(&mut opened, &[3_000_000_000, 9_000_000_000, stop]);
+    advance_at(&mut recorded, &[stop]);
+    assert_eq!(opened.status(), Status::Stopped);
+    assert_eq!(recorded.status(), Status::Stopped);
+    let opened_edges = edge_list(&opened);
+    let recorded_edges = edge_list(&recorded);
+    assert_eq!(opened_edges, recorded_edges);
+    assert!(opened_edges.len() >= 3);
+    assert!(
+        opened_edges.iter().any(|change| change.at >= open_landed),
+        "an edge after the input"
+    );
+}
+
+fn edges_floor(session: &mut Session, which: &str) {
+    let all = edge_list(session);
+    let end = all.len() as u64;
+    assert!(all.len() >= 3, "{which}");
+    let floor = 1u64;
+    session.forget_edges(EdgeCursor::from(floor));
+    let (tail, cursor) = session
+        .edges_since(EdgeCursor::from(floor))
+        .expect("floor held");
+    assert_eq!(tail, &all[floor as usize..], "{which} edges from {floor}");
+    assert_eq!(u64::from(cursor), end, "{which}");
+    let between = floor + 1;
+    let (tail, cursor) = session
+        .edges_since(EdgeCursor::from(between))
+        .expect("cursor between the floor and the end");
+    assert_eq!(
+        tail,
+        &all[between as usize..],
+        "{which} edges from {between}"
+    );
+    assert_eq!(u64::from(cursor), end, "{which}");
+    let past = end + 1;
+    session.forget_edges(EdgeCursor::from(past));
+    let (tail, cursor) = session
+        .edges_since(EdgeCursor::from(past))
+        .expect("cursor past the end");
+    assert!(tail.is_empty(), "{which}");
+    assert_eq!(u64::from(cursor), past, "{which}");
+    let (tail, cursor) = session
+        .edges_since(EdgeCursor::from(end))
+        .expect("cursor at the end");
+    assert!(tail.is_empty(), "{which}");
+    assert_eq!(u64::from(cursor), end, "{which}");
+    assert_eq!(u64::from(session.edge_cursor()), end, "{which}");
+}
+
+fn serial_floor(session: &mut Session, which: &str) {
+    let (all, end_cursor) = session
+        .serial_since(SerialCursor::default())
+        .expect("cursor still held");
+    let all = all.to_vec();
+    let end = u64::from(end_cursor);
+    assert!(all.len() >= 3, "{which}");
+    assert_eq!(end, all.len() as u64, "{which}");
+    let floor = 1u64;
+    session.forget_serial(SerialCursor::from(floor));
+    let (tail, cursor) = session
+        .serial_since(SerialCursor::from(floor))
+        .expect("floor held");
+    assert_eq!(tail, &all[floor as usize..], "{which} serial from {floor}");
+    assert_eq!(u64::from(cursor), end, "{which}");
+    let between = floor + 1;
+    let (tail, cursor) = session
+        .serial_since(SerialCursor::from(between))
+        .expect("cursor between the floor and the end");
+    assert_eq!(
+        tail,
+        &all[between as usize..],
+        "{which} serial from {between}"
+    );
+    assert_eq!(u64::from(cursor), end, "{which}");
+    let past = end + 1;
+    session.forget_serial(SerialCursor::from(past));
+    let (tail, cursor) = session
+        .serial_since(SerialCursor::from(past))
+        .expect("cursor past the end");
+    assert!(tail.is_empty(), "{which}");
+    assert_eq!(u64::from(cursor), past, "{which}");
+    let (tail, cursor) = session
+        .serial_since(SerialCursor::from(end))
+        .expect("cursor at the end");
+    assert!(tail.is_empty(), "{which}");
+    assert_eq!(u64::from(cursor), end, "{which}");
+}
+
+/// On a recorded session and on an unrecorded one, `forget_edges(f)` and `forget_serial(f)`
+/// leave `[f..]` readable, a cursor between `f` and the end reads that tail, and a forget past
+/// the end reads nothing and keeps the cursor.
+#[test]
+fn a_forget_reads_the_tail_through_the_floor() {
+    let bytes = std::fs::read(example_path("atmega-analog-serial")).unwrap();
+    for recorded in [true, false] {
+        let mut session = if recorded {
+            Session::record_document(&bytes).unwrap()
+        } else {
+            Session::open(netlist::parse(&bytes).unwrap()).unwrap()
+        };
+        assert_eq!(session.advance_to(Time::from_ps(u64::MAX)), Status::Stopped);
+        let which = if recorded { "recorded" } else { "open" };
+        edges_floor(&mut session, which);
+        serial_floor(&mut session, which);
+    }
+}
+
+/// Two readers, a forget, and `levels` as the fold of the changes before `edge_cursor`.
+#[test]
+fn an_edge_cursor_is_the_count_of_changes_read() {
+    let mut session = Session::open(example("atmega-blink", 1_000_000_000_000)).unwrap();
+    let initial = session.levels().to_vec();
+    assert_eq!(session.edge_cursor(), EdgeCursor::default());
+    assert_eq!(
+        session.edges_since(EdgeCursor::default()),
+        Some((&[][..], EdgeCursor::default()))
+    );
+    session.advance_to(Time::from_ps(300_000_000_000));
+    let (early, mid) = session
+        .edges_since(EdgeCursor::default())
+        .expect("cursor still held");
+    let early = early.to_vec();
+    assert!(!early.is_empty());
+    assert_eq!(u64::from(mid), early.len() as u64);
+    let slow = EdgeCursor::default();
+    session.forget_edges(mid);
+    assert!(session.edges_since(slow).is_none());
+    assert_eq!(session.edges_since(mid), Some((&[][..], mid)));
+    session.advance_to(Time::from_ps(1_000_000_000_000));
+    assert!(session.edges_since(slow).is_none());
+    let (later, end) = session.edges_since(mid).expect("cursor still held");
+    let later = later.to_vec();
+    assert!(!later.is_empty());
+    assert!(
+        session
+            .edges_since(EdgeCursor::from(u64::from(mid) - 1))
+            .is_none()
+    );
+    let (kept, again) = session.edges_since(mid).expect("cursor still held");
+    assert_eq!(kept, &later[..]);
+    assert_eq!(again, end);
+    assert_eq!(session.edge_cursor(), end);
+    let mut folded = initial;
+    for change in early.iter().chain(&later) {
+        folded[change.signal] = change.level;
+    }
+    assert_eq!(
+        session.levels(),
+        folded,
+        "levels are the fold through edge_cursor"
+    );
+    let past = EdgeCursor::from(u64::from(end) + 1);
+    assert_eq!(session.edges_since(past), Some((&[][..], past)));
+    session.forget_edges(past);
+    assert!(
+        session
+            .edges_since(EdgeCursor::from(u64::from(end) - 1))
+            .is_none()
+    );
+    assert_eq!(session.edges_since(end), Some((&[][..], end)));
+    assert_eq!(session.edges_since(past), Some((&[][..], past)));
+    session.forget_edges(mid);
+    assert!(session.edges_since(slow).is_none());
+    assert_eq!(session.edge_cursor(), end);
+}
+
+/// `forget_serial` and `forget_edges` leave the folder `finish` writes unchanged.
+#[test]
+fn a_recorded_finish_keeps_what_a_forget_dropped() {
+    let stop = 5_000_000_000u64;
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(example_path("atmega-analog-serial")).unwrap())
+            .unwrap();
+    let transient = &mut json["analysis"]["transient"];
+    for key in ["stop_ps", "max_step_ps", "grid_ps"] {
+        transient[key] = transient[key].as_u64().unwrap().min(stop).into();
+    }
+    let bytes = serde_json::to_vec(&json).unwrap();
+    let at = Timestamp::from_unix_seconds(0);
+    let mut plain = Session::record_document(&bytes).unwrap();
+    assert_eq!(plain.advance_to(Time::from_ps(stop)), Status::Stopped);
+    let plain = plain.finish(at).unwrap();
+    let mut forgotten = Session::record_document(&bytes).unwrap();
+    assert_eq!(forgotten.advance_to(Time::from_ps(stop)), Status::Stopped);
+    let (serial, _) = forgotten
+        .serial_since(SerialCursor::default())
+        .expect("cursor still held");
+    assert!(serial.len() >= 2);
+    let (edges, _) = forgotten
+        .edges_since(EdgeCursor::default())
+        .expect("cursor still held");
+    assert!(!edges.is_empty());
+    forgotten.forget_serial(SerialCursor::from(1));
+    forgotten.forget_edges(EdgeCursor::from(1));
+    assert!(forgotten.serial_since(SerialCursor::default()).is_none());
+    assert!(forgotten.edges_since(EdgeCursor::default()).is_none());
+    let folder = forgotten.finish(at).unwrap();
+    let plain_paths: Vec<String> = plain.files().map(|(path, _)| path.to_string()).collect();
+    let folder_paths: Vec<String> = folder.files().map(|(path, _)| path.to_string()).collect();
+    assert_eq!(folder_paths, plain_paths);
+    for path in &plain_paths {
+        assert_eq!(folder.file(path), plain.file(path), "{path}");
+    }
 }
 
 fn column_integral(session: &Session, reference: &str) -> f64 {

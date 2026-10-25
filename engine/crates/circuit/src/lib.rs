@@ -22,7 +22,8 @@ use sim_core::timestamp::Timestamp;
 use crate::tran::Rows;
 
 pub use session::{
-    Applied, Input, Probe, Refused, Rejected, Serial, SerialCursor, Session, Setting, Status,
+    Applied, EdgeCursor, Input, Probe, Refused, Rejected, Serial, SerialCursor, Session, Setting,
+    Status,
 };
 pub use sim_core::serial::SerialByte;
 

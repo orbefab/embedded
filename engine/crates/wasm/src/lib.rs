@@ -37,7 +37,8 @@ impl From<sim_circuit::Status> for Status {
 
 /// Why a call failed. The first three are why `open` or `record` made no session, the next seven
 /// why an input changed nothing, then the binding's own checks of an argument's type, a part
-/// name, a level, a baud and a `bigint`, and `finish` on a session `open` made.
+/// name, a level, a baud and a `bigint`, a cursor before a dropped log entry, and `finish` on a
+/// session `open` made.
 #[wasm_bindgen]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Code {
@@ -56,6 +57,7 @@ pub enum Code {
     NotFinite = "not_finite",
     BadBaud = "bad_baud",
     Range = "range",
+    Forgotten = "forgotten",
     Unrecorded = "unrecorded",
 }
 
@@ -252,6 +254,22 @@ pub struct Probe {
     pub integrals: Vec<f64>,
 }
 
+/// Logic changes, one per index across the three arrays, and the cursor past them.
+#[wasm_bindgen(getter_with_clone)]
+pub struct Edges {
+    /// The change time in picoseconds.
+    #[wasm_bindgen(readonly)]
+    pub at: Vec<u64>,
+    /// An index into `signals()`.
+    #[wasm_bindgen(readonly)]
+    pub signal: Vec<u32>,
+    /// 0 low, 1 high.
+    #[wasm_bindgen(readonly)]
+    pub level: Vec<u8>,
+    #[wasm_bindgen(readonly)]
+    pub cursor: u64,
+}
+
 /// Serial bytes, one per index across the three arrays, and the cursor past them.
 #[wasm_bindgen(getter_with_clone)]
 pub struct Serial {
@@ -416,13 +434,66 @@ impl Session {
         &self,
         #[wasm_bindgen(unchecked_param_type = "bigint")] cursor: Bigint,
     ) -> Result<Serial, SimError> {
-        let (bytes, next) = self.inner.serial_since(u64_of(cursor)?.into());
+        let (bytes, next) = self
+            .inner
+            .serial_since(u64_of(cursor)?.into())
+            .ok_or_else(|| SimError::new(Code::Forgotten))?;
         Ok(Serial {
             at: bytes.iter().map(|b| b.at.as_ps()).collect(),
             usart: bytes.iter().map(|b| b.usart).collect(),
             byte: bytes.iter().map(|b| b.byte).collect(),
             cursor: next.into(),
         })
+    }
+
+    /// Drops the serial bytes before `cursor`. Cursors keep counting from the first byte.
+    #[wasm_bindgen(js_name = forgetSerial)]
+    pub fn forget_serial(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] cursor: Bigint,
+    ) -> Result<(), SimError> {
+        self.inner.forget_serial(u64_of(cursor)?.into());
+        Ok(())
+    }
+
+    /// The cursor past every chip-signal change so far.
+    #[wasm_bindgen(js_name = edgeCursor)]
+    pub fn edge_cursor(&self) -> u64 {
+        self.inner.edge_cursor().into()
+    }
+
+    /// The chip-signal changes after the first `cursor`, and the cursor past them.
+    #[wasm_bindgen(js_name = edgesSince)]
+    pub fn edges_since(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] cursor: Bigint,
+    ) -> Result<Edges, SimError> {
+        let (changes, next) = self
+            .inner
+            .edges_since(u64_of(cursor)?.into())
+            .ok_or_else(|| SimError::new(Code::Forgotten))?;
+        Ok(Edges {
+            at: changes.iter().map(|change| change.at.as_ps()).collect(),
+            signal: changes
+                .iter()
+                .map(|change| u32::try_from(change.signal).expect("a signal index fits u32"))
+                .collect(),
+            level: changes
+                .iter()
+                .map(|change| u8::from(change.level == Level::High))
+                .collect(),
+            cursor: next.into(),
+        })
+    }
+
+    /// Drops the chip-signal changes before `cursor`. Cursors keep counting from the first change.
+    #[wasm_bindgen(js_name = forgetEdges)]
+    pub fn forget_edges(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] cursor: Bigint,
+    ) -> Result<(), SimError> {
+        self.inner.forget_edges(u64_of(cursor)?.into());
+        Ok(())
     }
 
     /// Sets a switch's contact from `ps` on.

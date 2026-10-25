@@ -94,7 +94,11 @@ fn ended_by(frames: &[Frame], at: Time) -> usize {
 }
 
 fn log(session: &Session) -> Vec<SerialByte> {
-    session.serial_since(SerialCursor::default()).0.to_vec()
+    session
+        .serial_since(SerialCursor::default())
+        .expect("cursor still held")
+        .0
+        .to_vec()
 }
 
 /// `traces/serial.csv` of a batch run on `netlist` under the step limit of `budget`.
@@ -211,7 +215,7 @@ fn each_call_reads_the_bytes_that_ended_by_the_accepted_step() {
             _ => now.as_ps() + 1 + rng.below(stop.as_ps() / 50),
         };
         session.advance_to(Time::from_ps(to));
-        let (bytes, after) = session.serial_since(cursor);
+        let (bytes, after) = session.serial_since(cursor).expect("cursor still held");
         read.extend_from_slice(bytes);
         cursor = after;
         let accepted = session.accepted();
@@ -220,11 +224,21 @@ fn each_call_reads_the_bytes_that_ended_by_the_accepted_step() {
             rows(&want[..ended_by(&want, accepted)]),
             "at {accepted:?}"
         );
-        assert_eq!(session.serial_since(cursor), (&[][..], cursor));
+        assert_eq!(
+            session.serial_since(cursor),
+            Some((&[][..], cursor)),
+            "at {accepted:?}"
+        );
     }
     assert_eq!(session.status(), Status::Stopped);
     assert_eq!(read, rows(&want));
-    assert_eq!(session.serial_since(SerialCursor::default()).0, &read[..]);
+    assert_eq!(
+        session
+            .serial_since(SerialCursor::default())
+            .expect("cursor still held")
+            .0,
+        &read[..]
+    );
 }
 
 /// A cursor from a session with more bytes reads nothing on one with fewer, and stays.
@@ -233,10 +247,12 @@ fn a_cursor_past_the_end_reads_nothing() {
     let netlist = analog_serial();
     let mut longer = Session::open(netlist.clone()).unwrap();
     longer.advance_to(Time::from_ps(12_000 * US));
-    let (bytes, past) = longer.serial_since(SerialCursor::default());
+    let (bytes, past) = longer
+        .serial_since(SerialCursor::default())
+        .expect("cursor still held");
     assert!(!bytes.is_empty());
     let shorter = Session::open(netlist).unwrap();
-    assert_eq!(shorter.serial_since(past), (&[][..], past));
+    assert_eq!(shorter.serial_since(past), Some((&[][..], past)));
 }
 
 /// The step limit ends the run partway, and the bytes are the ones whose stop bit ended by
@@ -276,7 +292,9 @@ fn a_fault_on_a_re_solve_keeps_the_log() {
     session.advance_to(want[newline].end);
     let accepted = session.accepted();
     assert!(accepted < want[newline].end, "{accepted:?}");
-    let (bytes, cursor) = session.serial_since(SerialCursor::default());
+    let (bytes, cursor) = session
+        .serial_since(SerialCursor::default())
+        .expect("cursor still held");
     assert_eq!(bytes, rows(&want[..newline]));
     session.budget.steps = session.stats.landings;
     let input = Input {
@@ -287,7 +305,7 @@ fn a_fault_on_a_re_solve_keeps_the_log() {
     assert_eq!(session.apply(&input).unwrap().status, Status::Faulted);
     assert_eq!(session.now(), accepted);
     assert_eq!(log(&session), rows(&want[..newline]));
-    assert_eq!(session.serial_since(cursor), (&[][..], cursor));
+    assert_eq!(session.serial_since(cursor), Some((&[][..], cursor)));
 }
 
 /// `examples/atmega-analog-serial` with 10 kohm from `PD2` to VCC and a switch from `PD2` to GND,

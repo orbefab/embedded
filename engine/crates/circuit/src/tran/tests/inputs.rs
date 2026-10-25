@@ -688,7 +688,11 @@ fn inside_the_reach(session: &Session) -> bool {
 }
 
 fn serial(session: &Session) -> Vec<SerialByte> {
-    session.serial_since(SerialCursor::default()).0.to_vec()
+    session
+        .serial_since(SerialCursor::default())
+        .expect("cursor still held")
+        .0
+        .to_vec()
 }
 
 /// `input` advanced in chunks ended as `input_in_chunks_writes_the_batch_folder` ends them,

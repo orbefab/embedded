@@ -95,7 +95,11 @@ fn chunks_write_the_batch_folder(name: &str, stop_ps: u64, budget: Budget, seed:
 pub(super) fn serial_of_one_call(netlist: &Netlist, budget: Budget) -> Vec<SerialByte> {
     let mut session = open(netlist, Vec::new(), budget);
     session.advance_to(transient(netlist).stop);
-    session.serial_since(SerialCursor::default()).0.to_vec()
+    session
+        .serial_since(SerialCursor::default())
+        .expect("cursor still held")
+        .0
+        .to_vec()
 }
 
 /// `input` advanced in seeded chunks to its end writes the batch's run folder. A chunk ends on
@@ -127,7 +131,7 @@ fn input_in_chunks_writes_the_batch_folder(
             _ => now + 1 + rng.below(transient.stop.as_ps() / 100),
         };
         session.advance_to(Time::from_ps(to));
-        let (bytes, after) = session.serial_since(cursor);
+        let (bytes, after) = session.serial_since(cursor).expect("cursor still held");
         serial.extend_from_slice(bytes);
         cursor = after;
         let probe = session.probe();

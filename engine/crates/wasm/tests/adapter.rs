@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use sim_circuit::{Input, Serial as SerialSend, Setting};
+use sim_circuit::{EdgeCursor, Input, Serial as SerialSend, Setting};
 use sim_core::finite::Finite;
 use sim_core::logic::Level;
 use sim_core::name::Name;
@@ -142,6 +142,15 @@ fn the_serial_cursor_counts_bytes_read() {
     let past = session.serial_since(99).unwrap();
     assert!(past.byte.is_empty());
     assert_eq!(past.cursor, 99);
+    session.forget_serial(4).unwrap();
+    assert_eq!(rejected(session.serial_since(0)).code, Code::Forgotten);
+    assert_eq!(rejected(session.serial_since(3)).code, Code::Forgotten);
+    let tail = session.serial_since(4).unwrap();
+    assert_eq!(tail.byte, b"\n512\r\n512\r\n");
+    assert_eq!(tail.cursor, 15);
+    let stayed = session.serial_since(99).unwrap();
+    assert!(stayed.byte.is_empty());
+    assert_eq!(stayed.cursor, 99);
 }
 
 #[test]
@@ -228,6 +237,36 @@ fn assert_same_reads(binding: &Session, inner: &sim_circuit::Session) -> (Vec<u8
         })
         .collect();
     assert_eq!(binding.levels(), levels, "levels at {at} ps");
+    let got = binding.edges_since(0).expect("nothing forgotten");
+    let (want_edges, cursor) = inner
+        .edges_since(EdgeCursor::default())
+        .expect("nothing forgotten");
+    assert_eq!(got.cursor, u64::from(cursor), "edge cursor at {at} ps");
+    assert_eq!(binding.edge_cursor(), u64::from(inner.edge_cursor()));
+    assert_eq!(
+        got.at,
+        want_edges
+            .iter()
+            .map(|change| change.at.as_ps())
+            .collect::<Vec<_>>(),
+        "edge times at {at} ps"
+    );
+    assert_eq!(
+        got.signal,
+        want_edges
+            .iter()
+            .map(|change| u32::try_from(change.signal).unwrap())
+            .collect::<Vec<_>>(),
+        "edge signals at {at} ps"
+    );
+    assert_eq!(
+        got.level,
+        want_edges
+            .iter()
+            .map(|change| u8::from(change.level == Level::High))
+            .collect::<Vec<_>>(),
+        "edge levels at {at} ps"
+    );
     (levels, probe.interpolated)
 }
 
@@ -260,6 +299,14 @@ fn the_reads_are_the_sessions_on_atmega_blink() {
     assert!(seen.iter().flatten().any(|level| *level == 1));
     seen.dedup();
     assert!(seen.len() > 2, "a pin moved twice: {seen:?}");
+    let cursor = binding.edge_cursor();
+    assert!(cursor > 0);
+    binding.forget_edges(cursor).unwrap();
+    assert_eq!(rejected(binding.edges_since(0)).code, Code::Forgotten);
+    let empty = binding.edges_since(cursor).unwrap();
+    assert!(empty.at.is_empty());
+    assert_eq!(empty.cursor, cursor);
+    assert_eq!(binding.edge_cursor(), cursor);
 }
 
 #[test]
@@ -410,7 +457,7 @@ fn each_byte_names_its_usart() {
     binding.advance_to(u64::MAX).unwrap();
     inner.advance_to(Time::from_ps(u64::MAX));
     let serial = binding.serial_since(0).unwrap();
-    let (want, cursor) = inner.serial_since(0u64.into());
+    let (want, cursor) = inner.serial_since(0u64.into()).expect("cursor still held");
     assert_eq!(
         serial.usart,
         want.iter().map(|b| b.usart).collect::<Vec<_>>()
