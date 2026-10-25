@@ -77,7 +77,8 @@ impl Session {
     /// sends. A batch run of the export takes every accepted step there. The held step is solved
     /// again with the new edge, and every step that then lands by `now` is accepted. A level or a
     /// serial start is a jump, so that solve restarts. The status is the session's after that
-    /// re-solve. A fault ends the session at the accepted step.
+    /// re-solve. A failed restart ends the session at the landing. Any other fault ends it at the
+    /// accepted step.
     pub fn apply(&mut self, input: &Input) -> Result<Applied, Rejected> {
         let State::Running { accepted, now, .. } = &self.state else {
             return Err(Rejected::Ended);

@@ -8,7 +8,7 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
@@ -596,7 +596,46 @@ function argumentChecks(wasm, examples) {
   return `${refused} refused arguments across ${calls.length} arguments, 1100 detached netlists, ${EDGES.length} edges cross exactly`;
 }
 
-if (isMainThread) {
+// True only for `node worker.mjs`. A named-import runner imports this file for `example`.
+const invokedDirectly = process.argv[1] !== undefined
+  && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+function importByName(pkg, examples, native, work) {
+  const name = 'v-steps';
+  const root = join(work, 'by-name');
+  const link = join(root, 'node_modules', 'sim-wasm');
+  mkdirSync(join(root, 'node_modules'), { recursive: true });
+  if (existsSync(link)) unlinkSync(link);
+  symlinkSync(pkg, link);
+  const runner = join(root, 'run.mjs');
+  const wasmFile = join(pkg, 'sim_wasm_bg.wasm');
+  const netlist = join(examples, name, 'netlist.json');
+  const folder = join(native, name);
+  writeFileSync(
+    runner,
+    `import assert from 'node:assert/strict';
+import { readFileSync, realpathSync } from 'node:fs';
+import init, { Session } from 'sim-wasm';
+import * as wasm from 'sim-wasm';
+import { example } from ${JSON.stringify(import.meta.url)};
+
+const wasmUrl = import.meta.resolve('sim-wasm/sim_wasm_bg.wasm');
+assert.equal(realpathSync(new URL(wasmUrl)), realpathSync(${JSON.stringify(wasmFile)}));
+await init({ module_or_path: readFileSync(new URL(wasmUrl)) });
+assert.equal(Session, wasm.Session);
+const checked = example(
+  wasm,
+  { name: ${JSON.stringify(name)}, seed: 1n },
+  readFileSync(${JSON.stringify(netlist)}),
+  ${JSON.stringify(folder)},
+);
+console.log('ok   ' + ${JSON.stringify(name)} + ' by name: ' + checked);
+`,
+  );
+  execFileSync(process.execPath, [runner], { stdio: 'inherit' });
+}
+
+if (isMainThread && invokedDirectly) {
   const [pkg, examples, native, sim, work] = process.argv.slice(2);
   if (!work) {
     console.error('usage: worker.mjs PKG_DIR EXAMPLES_DIR NATIVE_DIR SIM WORK_DIR');
@@ -656,9 +695,15 @@ if (isMainThread) {
     failed += 1;
     console.log(`FAIL inputs: ${inputPosts} results, want ${INPUTS.length}`);
   }
-  console.log(`${results.length - failed} passed, ${failed} failed`);
+  try {
+    importByName(pkg, examples, native, work);
+  } catch (error) {
+    failed += 1;
+    console.log(`FAIL v-steps by name: ${error.stack ?? error}`);
+  }
+  console.log(`${results.length + 1 - failed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
-} else {
+} else if (!isMainThread) {
   const { job, pkg, examples, native, work } = workerData;
   const wasm = await import(pathToFileURL(join(pkg, 'sim_wasm.js')));
   wasm.initSync({ module: readFileSync(join(pkg, 'sim_wasm_bg.wasm')) });
@@ -670,3 +715,5 @@ if (isMainThread) {
   };
   parentPort.postMessage(checks[job.kind]());
 }
+
+export { example };
