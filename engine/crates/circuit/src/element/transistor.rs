@@ -2,7 +2,7 @@ use sim_core::netlist::{Bjt, Mosfet};
 
 use super::capacitor::stamp_capacitor;
 use super::junction::{Shockley, mismatch, pnjlim};
-use super::{CapacitorEnd, OwnedCapacitor, Update};
+use super::{OwnedCapacitor, StoreEnd, Update};
 use crate::mna::{GMIN, Node, Probe, Stamp};
 
 /// A `Bjt`'s kind. It sets the sign of every junction voltage and pin current.
@@ -96,7 +96,7 @@ impl Params {
 
 /// `CJE` from `b'` to `e'`, then `CJC` from `b'` to `c'`, on branches 0 and 1.
 fn capacitors(bjt: &Bjt) -> [OwnedCapacitor; 2] {
-    let internal = |a, b| [CapacitorEnd::Internal(a), CapacitorEnd::Internal(b)];
+    let internal = |a, b| [StoreEnd::Internal(a), StoreEnd::Internal(b)];
     [
         OwnedCapacitor {
             k: 0,
@@ -280,7 +280,7 @@ fn mos_capacitors(mosfet: &Mosfet) -> [OwnedCapacitor; 3] {
     let [d, g, s] = mosfet.pins;
     let between = |k, a, b, farad| OwnedCapacitor {
         k,
-        ends: [CapacitorEnd::Net(a), CapacitorEnd::Net(b)],
+        ends: [StoreEnd::Net(a), StoreEnd::Net(b)],
         farad,
     };
     [

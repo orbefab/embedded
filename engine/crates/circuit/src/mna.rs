@@ -7,7 +7,7 @@ use crate::chip;
 use crate::dense::{Matrix, Singular};
 use crate::element;
 use crate::element::Device;
-use crate::newton::{ChargeIndex, Conditions, Iterate};
+use crate::newton::{ChargeIndex, Conditions, FluxIndex, Iterate};
 
 pub(crate) const GMIN: f64 = 1e-12;
 
@@ -36,6 +36,9 @@ struct PartRows {
     /// Index of this part's first capacitor in the circuit's charge list.
     charge: usize,
     charges: usize,
+    /// Index of this part's first inductor in the circuit's flux list.
+    flux: usize,
+    fluxes: usize,
 }
 
 pub(crate) struct Layout {
@@ -51,10 +54,14 @@ pub(crate) struct Layout {
     chips: Vec<PartId>,
 }
 
-fn shape(model: &impl Device) -> (Unknowns, usize) {
+/// A part's unknowns, and how many capacitors and inductors it owns.
+fn shape(model: &impl Device) -> (Unknowns, usize, usize) {
     let extra = element::unknowns(model);
-    let owned = element::charges(model).len();
-    (extra, owned)
+    (
+        extra,
+        element::charges(model).len(),
+        element::inductors(model).len(),
+    )
 }
 
 impl Layout {
@@ -83,6 +90,7 @@ fn assemble<T: Device>(
     let mut row = 0;
     let mut junction = 0;
     let mut charge = 0;
+    let mut flux = 0;
     let mut node_rows = Vec::new();
     let mut gmin_rows = Vec::new();
     let net_rows = netlist.nets().len().saturating_sub(1);
@@ -93,13 +101,13 @@ fn assemble<T: Device>(
     }
     let mut part_rows = Vec::with_capacity(netlist.parts().len());
     for (id, part) in netlist.parts() {
-        let (extra, owned) = match stand {
+        let (extra, charges, fluxes) = match stand {
             Some((part_id, model)) if part_id == id => shape(model),
             _ => shape(&part.model),
         };
         debug_assert!(
-            owned <= extra.branches,
-            "a part's charge count exceeds its branches"
+            charges + fluxes <= extra.branches,
+            "a part's capacitors and inductors exceed its branches"
         );
         let internal = row;
         for _ in 0..extra.internal_nodes {
@@ -119,9 +127,12 @@ fn assemble<T: Device>(
             branches: extra.branches,
             junctions,
             charge,
-            charges: owned,
+            charges,
+            flux,
+            fluxes,
         });
-        charge += owned;
+        charge += charges;
+        flux += fluxes;
     }
     Layout {
         net_rows,
@@ -165,6 +176,20 @@ impl Layout {
         let rows = &self.part_rows[part.index()];
         debug_assert!(k < rows.charges, "charge {k} is past this part's charges");
         ChargeIndex::new(rows.charge + k)
+    }
+
+    /// The flux-list index of `part`'s inductor `k`.
+    pub(crate) fn flux_index(&self, part: PartId, k: usize) -> FluxIndex {
+        let rows = &self.part_rows[part.index()];
+        debug_assert!(k < rows.fluxes, "flux {k} is past this part's inductors");
+        FluxIndex::new(rows.flux + k)
+    }
+
+    /// The branch of `part`'s inductor `k`, after the part's capacitors.
+    pub(crate) fn flux_branch(&self, part: PartId, k: usize) -> usize {
+        let rows = &self.part_rows[part.index()];
+        debug_assert!(k < rows.fluxes, "flux {k} is past this part's inductors");
+        rows.charges + k
     }
 
     pub(crate) fn junction_slots(&self, part: PartId) -> Range<usize> {

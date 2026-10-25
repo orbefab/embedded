@@ -23,10 +23,14 @@ pins, or a missing pin raises Skip. The example `npn-blinker` raises Skip too,
 because ngspice aborts that deck at the deck's options with Timestep too small.
 The script exits when ngspice's log shows the operating point left the plain
 Newton iteration, and `--check` exits the same way. The message names the
-example and ngspice's lines. `--self-test` checks the skip paths, the source
-deck lines, the bounce test vectors, the VCD reader and its summary, and that
-refusal. The refusal case runs ngspice. The rest do not. Without ngspice-42
-on PATH, `--self-test` prints one failed case and exits 1.
+example and ngspice's lines. A transient deck with an inductor takes
+reltol=1e-5, a breakpoint source per corner held to the stop, and a step cap of
+stop/60000, and the script exits when ngspice has no point at one of the
+netlist's corners. `--self-test` checks the skip paths, the source deck lines,
+the inductor deck lines, the corner check, the bounce test vectors, the VCD
+reader and its summary, and that refusal. The refusal case runs ngspice. The
+rest do not. Without ngspice-42 on PATH, `--self-test` prints one failed case
+and exits 1.
 """
 
 import hashlib
@@ -44,6 +48,11 @@ from bounce import switch_edges
 ROOT = Path(__file__).resolve().parent.parent
 FORMAT = 0
 OPTIONS = "temp=25 tnom=25 reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-12"
+# A transient deck with an inductor. At reltol=1e-9 ngspice crawls on a coil that carries
+# almost no current, and at 1e-6 or 1e-7 it stops at a transistor's turn-off. Its step is
+# capped at stop/60000, and its points are read at the engine's rows.
+INDUCTOR_OPTIONS = "temp=25 tnom=25 reltol=1e-5 abstol=1e-15 vntol=1e-12 gmin=1e-12"
+INDUCTOR_TMAX = 60_000
 RAW = "op.raw"
 TRAN_RAW = "tran.raw"
 EDGES_RAW = "edges.raw"
@@ -282,6 +291,10 @@ def generate(example, version):
     chips = [part for part in netlist["parts"] if part["kind"] in CHIPS]
     raws = [TRAN_RAW, EDGES_RAW] if chips else [TRAN_RAW if transient else RAW]
     vectors, *edges = run_ngspice(deck, raws, label_of(example))
+    if transient and has_inductor(netlist):
+        # A chip deck's waveform raw is linearized. Its edge raw keeps ngspice's own points.
+        points = edges[0]["time"] if chips else vectors["time"]
+        missed_corners(label_of(example), corner_times(netlist), points)
     values = {}
     gate = {}
     for variable, column in vectors.items():
@@ -311,7 +324,7 @@ def generate(example, version):
         "netlist_sha256": hashlib.sha256(netlist_bytes).hexdigest(),
         "deck_sha256": hashlib.sha256(deck.encode()).hexdigest(),
         "ngspice": version,
-        "options": OPTIONS,
+        "options": deck_options(netlist),
     }
     if transient:
         reference["tran"] = {
@@ -338,6 +351,34 @@ def generate(example, version):
         reference["op"] = op_point(netlist, values)
     text = json.dumps(reference, indent=2, sort_keys=True) + "\n"
     return {"deck.cir": deck, "ngspice.json": text}
+
+
+def has_inductor(netlist):
+    return any(part.get("kind") == "inductor" for part in netlist["parts"])
+
+
+def deck_options(netlist):
+    if "transient" in netlist["analysis"] and has_inductor(netlist):
+        return INDUCTOR_OPTIONS
+    return OPTIONS
+
+
+def corner_times(netlist):
+    """Each ramp corner in (0, stop], read from the netlist and not from the deck. A source jump
+    or a contact edge ramps over EDGE_RAMP_PS from its picosecond."""
+    stop = netlist["analysis"]["transient"]["stop_ps"]
+    starts = source_jumps(netlist) + [
+        edge["t_ps"] for edges in switches(netlist).values() for edge in edges
+    ]
+    return sorted({at for start in starts for at in (start, start + EDGE_RAMP_PS) if 0 < at <= stop})
+
+
+def missed_corners(label, corners, times):
+    """Exits unless ngspice has a point at every corner."""
+    points = {round(t * 1e12) for t in times}
+    missed = [at for at in corners if at not in points]
+    if missed:
+        raise SystemExit(f"{label}: ngspice has no point at corners {missed[:6]} ps of {len(corners)}")
 
 
 def crossings(times, latch):
@@ -423,6 +464,7 @@ PIN_ORDER = {
     "pnp": ("collector", "base", "emitter"),
     "nmos": ("drain", "gate", "source"),
     "capacitor": ("a", "b"),
+    "inductor": ("a", "b"),
     "switch": ("a", "b"),
     "ne555": ("gnd", "trig", "out", "reset", "cont", "thres", "disch", "vcc"),
 }
@@ -483,9 +525,10 @@ def translate_shape(title, netlist):
     if transient and any(n.lower().startswith(("ctl_", "bp", "x_")) for n in names):
         raise Skip("a transient deck reserves names starting with ctl_, bp or x_")
     transistors = any(p.get("kind") in TRANSISTORS for p in parts)
+    coils = transient and has_inductor(netlist)
     junctions = any(p.get("kind") in ("diode", "led") for p in parts)
-    if transistors and any(n.lower().startswith("x_") for n in names):
-        raise Skip("a deck with a transistor reserves names starting with x_")
+    if (transistors or has_inductor(netlist)) and any(n.lower().startswith("x_") for n in names):
+        raise Skip("a deck with a transistor or an inductor reserves names starting with x_")
 
     def node(net):
         return "0" if net == ground else net.lower()
@@ -493,7 +536,7 @@ def translate_shape(title, netlist):
     mapping = {f"v({net.lower()})": f"#net.{net}" for net in nets if net != ground}
     lines = [
         f"* {title}: generated by scripts/ngspice_refs.py from netlist.json. Do not edit.",
-        f".options {OPTIONS}",
+        f".options {deck_options(netlist)}",
     ]
     saves = []
     corners = set()
@@ -580,6 +623,14 @@ def translate_shape(title, netlist):
                 lines.append(initial_condition(part, ground, node, transient))
             saves.append(f"@c{name}[i]")
             mapping[f"i(@c{name}[i])"] = ref
+        elif kind == "inductor":
+            # The series resistance, then the inductance, the engine's topology line for line.
+            a, b = (node(net) for net in pin_list)
+            lines.append(f"rx_{name}_s {a} x_{name} {number(part['series_resistance'])}")
+            lines.append(f"l{name} x_{name} {b} {number(part['inductance'])}")
+            saves.append(f"i(l{name})")
+            mapping[f"i(l{name})"] = ref
+            mapping[f"v(x_{name})"] = None
         elif kind == "switch":
             if not transient:
                 raise Skip("a switch is translated only for a transient analysis")
@@ -632,12 +683,18 @@ def translate_shape(title, netlist):
             ".end",
         ]
         return "\n".join(lines) + "\n", mapping
-    if corners:
+    if corners and coils:
+        lines.append(
+            "* A corner is a source's first PWL point, a breakpoint from t = 0. A second point 1 ps later stops ngspice on an inductor."
+        )
+        held = [at for at in sorted(corners) if at < transient["stop_ps"]]
+        lines += [f"vbp{k} bp{k} 0 pwl({at}p 0 {transient['stop_ps']}p 0)" for k, at in enumerate(held)]
+    elif corners:
         lines.append(
             "* One source per ramp corner makes it a breakpoint. ngspice skips a PWL corner it lands on an ulp early."
         )
-    for k, at in enumerate(sorted(corners)):
-        lines.append(f"vbp{k} bp{k} 0 pwl({at}p 0 {at + 1}p 0)")
+        for k, at in enumerate(sorted(corners)):
+            lines.append(f"vbp{k} bp{k} 0 pwl({at}p 0 {at + 1}p 0)")
     reject_duplicate_devices(lines)
     stop = transient["stop_ps"]
     voltages = [f"v({net.lower()})" for net in nets if net != ground]
@@ -653,11 +710,9 @@ def translate_shape(title, netlist):
             " ".join(["linearize", *voltages, *sources, *saves]),
         ]
     else:
-        lines += [
-            # ngspice picks its own points under this cap, which does not depend on the engine's max_step.
-            f"tran {stop // 1000}p {stop}p 0 {stop // 1000}p",
-            "set filetype=ascii",
-        ]
+        # ngspice picks its own points under this cap, which does not depend on the engine's max_step.
+        cap = stop // INDUCTOR_TMAX if coils else stop // 1000
+        lines += [f"tran {stop // 1000}p {stop}p 0 {cap}p", "set filetype=ascii"]
     lines += [f"write {TRAN_RAW}", ".endc", ".end"]
     return "\n".join(lines) + "\n", mapping
 

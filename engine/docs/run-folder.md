@@ -25,7 +25,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 {
   "run_format": 0,
   "netlist_format": 0,
-  "engine_version": "0.14.0",
+  "engine_version": "0.15.0",
   "input": {
     "file": "netlist.json",
     "sha256": "<lowercase hex sha256 of the input bytes>",
@@ -36,7 +36,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 }
 ```
 
-`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.14.0`. [versions.md](versions.md) says which changes move them.
+`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.15.0`. [versions.md](versions.md) says which changes move them.
 
 `netlist_format` is the input's `version`, when it reads as an unsigned integer. That holds when the engine rejected the input, so `version: 1` records 1. It is `null` when no such integer could be read.
 
@@ -169,7 +169,7 @@ period_s = (falls[-1] - falls[0]) / (len(falls) - 1) * 1e-12
 
 ## traces
 
-A transient writes a row at t = 0, at every multiple of `grid_ps` before `stop_ps`, and at `stop_ps`. That is `ceil(stop_ps / grid_ps) + 1` rows, fixed by the netlist before the run starts. A row is a probe: one solve from the last accepted step to the row time, which the run never accepts ([engine.md](engine.md#rows)). A row at a time a step lands on is that step. Each row is a solved point. The one exception is a row whose probe fails twice. It is the straight line between the accepted steps around it, and `trace.row_interpolated` names it. The grid never changes the accepted steps, the core stops, `logic.vcd`, `serial.csv`, `observations.json`, or the `solver.*` and `rating.*` diagnostics. Only two things depend on it. A grid past the row cap is refused with `trace.too_large` before the run solves. A row whose probe fails twice adds a `trace.row_interpolated` warning. The steps' tolerance is 1e-5 of each capacitor's swing plus 1 nV, so a small swing is held to its own size ([engine.md](engine.md#accuracy)).
+A transient writes a row at t = 0, at every multiple of `grid_ps` before `stop_ps`, and at `stop_ps`. That is `ceil(stop_ps / grid_ps) + 1` rows, fixed by the netlist before the run starts. A row is a probe: one solve from the last accepted step to the row time, which the run never accepts ([engine.md](engine.md#rows)). A row at a time a step lands on is that step. Each row is a solved point. The one exception is a row whose probe fails twice. It is the straight line between the accepted steps around it, and `trace.row_interpolated` names it. The grid never changes the accepted steps, the core stops, `logic.vcd`, `serial.csv`, `observations.json`, or the `solver.*` and `rating.*` diagnostics. Only two things depend on it. A grid past the row cap is refused with `trace.too_large` before the run solves. A row whose probe fails twice adds a `trace.row_interpolated` warning. The steps' tolerance is 1e-5 of each capacitor's swing plus 1 nV, and 1e-5 of each inductor's current swing plus 1e-12 A. The voltage an inductor's current error implies is held to 1e-5 of that voltage's swing plus 1 nV. So a small swing is held to its own size ([engine.md](engine.md#accuracy)).
 
 A row is a point sample, and a waveform that repeats with the grid can alias the rows. The envelope is the between-rows read. Each column's minimum and maximum cover the two rows and every accepted step between them. A 0 to 3.3 V pulse at 1 MHz drives 100 ohm into 100 pF, a 10 ns time constant. On a 1 us grid every row falls on a rise and holds the level before it, so over 2 ms `#net.out0` spans 6.2e-9 V. Its envelope reads 0 to 3.3 V on every interval after the first. On a 100 ns grid the rows themselves read 0 to 3.3 V. The rating diagnostics and `logic.vcd` are read at every accepted step and never at a row's probe. `observations.switches` lists every edge at its picosecond. Those are the step-accurate views.
 

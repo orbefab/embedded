@@ -1,8 +1,8 @@
 use sim_core::netlist::Capacitor;
 
-use super::CapacitorEnd;
+use super::StoreEnd;
 use crate::mna::{Probe, Stamp};
-use crate::newton::{History, Method};
+use crate::newton::{History, Method, Store};
 
 /// Seconds. A held capacitor sits behind `HOLD / C` ohm, the backward Euler companion
 /// of a step this long. An exact hold would make a capacitor across a voltage source,
@@ -16,7 +16,7 @@ pub(super) fn stamp(capacitor: &Capacitor, stamp: &mut Stamp<'_>) {
     stamp_capacitor(
         stamp,
         0,
-        capacitor.pins.map(CapacitorEnd::Net),
+        capacitor.pins.map(StoreEnd::Net),
         capacitor.capacitance.si.get(),
         initial,
     );
@@ -30,7 +30,7 @@ pub(super) fn stamp(capacitor: &Capacitor, stamp: &mut Stamp<'_>) {
 pub(crate) fn stamp_capacitor(
     stamp: &mut Stamp<'_>,
     k: usize,
-    ends: [CapacitorEnd; 2],
+    ends: [StoreEnd; 2],
     capacitance: f64,
     initial: Option<f64>,
 ) {
@@ -50,7 +50,7 @@ pub(crate) fn stamp_capacitor(
             let previous = stamp.probe(step.previous);
             let v0 = previous.v(a) - previous.v(b);
             let index = stamp.layout.charge_index(stamp.part, k);
-            let method = step.method_of(index);
+            let method = step.method_of(Store::Charge(index));
             let (g, rhs) = companion(capacitance, method, step.h(), v0, previous.branch(k));
             stamp.branch_row(a, b, k, 1.0, -g, rhs);
         }
@@ -105,7 +105,7 @@ mod tests {
         use sim_core::netlist::{self};
 
         use crate::mna::{Solution, System};
-        use crate::newton::{ChargeIndex, Circuit, Conditions, Integration, Iterate};
+        use crate::newton::{ChargeIndex, Circuit, Conditions, Integration, Iterate, Store};
 
         let netlist = netlist::parse(
             br#"{
@@ -133,7 +133,7 @@ mod tests {
         assert_ne!(charge, ChargeIndex::new(cap.index()));
         let previous = Solution::from(vec![2.0, 0.0, 5e-4]);
 
-        let solved = |stiff: &[ChargeIndex]| -> f64 {
+        let solved = |stiff: &[Store]| -> f64 {
             let conditions = Conditions {
                 history: History::Step(Integration {
                     method: Method::Trapezoidal,
@@ -160,9 +160,9 @@ mod tests {
             let (g, rhs) = companion(1e-6, method, 1e-3, 2.0, 5e-4);
             g * 2.0 + rhs
         };
-        let backward = solved(&[charge]);
+        let backward = solved(&[Store::Charge(charge)]);
         let trapezoidal = solved(&[]);
-        let by_part = solved(&[ChargeIndex::new(cap.index())]);
+        let by_part = solved(&[Store::Charge(ChargeIndex::new(cap.index()))]);
         assert!(
             (backward - at_v0(Method::BackwardEuler)).abs() < 1e-9,
             "{backward}"

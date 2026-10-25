@@ -237,6 +237,21 @@ A capacitor with `"initial": null` is open at the operating point, so `#c1.i` is
 
 A capacitor has no `ratings` field.
 
+### Inductor
+
+`kind` is `inductor`. Pins are `a` and `b`.
+
+`inductance.value` is in `H` and `series_resistance.value` is in `ohm`. Each follows the resistance rules. It must be greater than 0, and its reciprocal must be finite.
+
+```json
+"inductance": { "value": 0.505, "unit": "H", "source": "user" },
+"series_resistance": { "value": 70.0, "unit": "ohm", "source": "user" }
+```
+
+The series resistance runs from `a` to an internal node, and the inductance runs from that node to `b`. The internal node is not observed. A coil's winding resistance is its series resistance. The resistance must be greater than 0, so an ideal inductor is a small resistance. At the operating point the inductance is a short, and the part is its series resistance. An inductor has no `initial`. Its current at t = 0 is the operating point's. In a step the current follows from the voltage across the inductance and the last accepted point. `examples/rl-step` steps 5 V across 0.505 H and 70 ohm.
+
+An inductor has no `ratings` field.
+
 ### Switch
 
 `kind` is `switch`. Pins are `a` and `b`. It is a resistor whose value follows a contact over time.
@@ -680,7 +695,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `diode`, `led` | `current`, `power` | `#<part>.i`, `#<part>.p` |
 | `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
 | `nmos` | `current`, `power` | `#<part>.id`, `#<part>.p` |
-| `voltage_source`, `current_source`, `capacitor`, `switch`, `ne555`, `atmega328p`, `potentiometer` | none | |
+| `voltage_source`, `current_source`, `capacitor`, `inductor`, `switch`, `ne555`, `atmega328p`, `potentiometer` | none | |
 
 `current` is in `A`. `power` is in `W`. A rating must be greater than 0. A missing key, an unknown key, and a missing `ratings` object are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.current` or `ratings.power`. A value of 0 or below is `netlist.value` with the same field.
 
@@ -722,7 +737,7 @@ For every two-terminal part, pin 0 is the first pin listed above.
 
 For a diode or LED, `i` is the current through `Rs`, and `p` includes the power in `Rs`. The junction's internal node is not observed.
 
-For a capacitor, `i` is the solved current into pin `a`. For a switch, `i` is `v` over the resistance of the contact on the interval that ends at that time. For a current source, `i` is minus its `current` on the interval that ends at that time, since that current leaves at `p`.
+For a capacitor, `i` is the solved current into pin `a`. For an inductor, `i` is the solved current into pin `a`, through its series resistance and its inductance, and `v` is across both. For a switch, `i` is `v` over the resistance of the contact on the interval that ends at that time. For a current source, `i` is minus its `current` on the interval that ends at that time, since that current leaves at `p`.
 
 On the divider, `#r1.i` and `#r2.i` are positive, `#r1.p` and `#r2.p` are positive, and `#v1.i` and `#v1.p` are negative. On `examples/i-divider`, `#i1.i` is -0.001 and `#i1.p` is negative.
 

@@ -5,21 +5,26 @@
 //! which is `h^2/2 * v''`. The trapezoidal rule is `h^3 * |DD2(i)| / (6C)`, which is
 //! `h^3/12 * v'''`, over the point before the last, the last, and the candidate.
 //!
-//! The tolerance is a share of each capacitor's swing in its segment, not of its level, so
-//! a small swing on a large level is held to its own size, and a full swing is not held to
-//! a millionth of the level it passes through.
+//! An inductor is the dual. Its state is its current, a branch unknown, and its derivative is
+//! the voltage across it, so the same estimates read `v` and `L` in place of `i` and `C`, in
+//! amperes.
+//!
+//! The tolerance is a share of each store's swing in its segment, not of its level, so a small
+//! swing on a large level is held to its own size, and a full swing is not held to a millionth
+//! of the level it passes through.
 
 use sim_core::netlist::{Netlist, PartId};
 use sim_core::time::Time;
 
 use crate::element;
 use crate::mna::{Layout, Node, Solution};
-use crate::newton::{ChargeIndex, Method, RELTOL, VNTOL, method_on};
+use crate::newton::{ABSTOL, ChargeIndex, FluxIndex, Method, RELTOL, Store, VNTOL, method_on};
 
-/// Each capacitor's branch row, pins and capacitance, and the circuit's net rows. Built once
-/// with the layout.
+/// Each capacitor's branch row, pins and capacitance, each inductor's, and the circuit's net
+/// rows. Built once with the layout.
 pub(crate) struct Charges {
     caps: Vec<Charge>,
+    fluxes: Vec<Flux>,
     /// The net rows are the first rows of a solution. Ground has none.
     nets: usize,
 }
@@ -32,23 +37,40 @@ struct Charge {
     farad: f64,
 }
 
+struct Flux {
+    /// In the circuit's flux list. Stiffness keys on it.
+    index: FluxIndex,
+    /// The inductor's current.
+    branch: usize,
+    /// The nodes its voltage is across.
+    ends: [Node; 2],
+    henry: f64,
+    /// The resistance in series, so the most current it carries is the circuit's span over it.
+    ohm: f64,
+}
+
 impl Charges {
     pub(crate) fn new(netlist: &Netlist, layout: &Layout) -> Charges {
-        let mut owned = Vec::new();
+        let mut caps = Vec::new();
+        let mut fluxes = Vec::new();
         for (id, part) in netlist.parts() {
             for cap in element::charges(&part.model) {
-                owned.push((id, cap));
+                caps.push((id, cap));
+            }
+            for inductor in element::inductors(&part.model) {
+                fluxes.push((id, inductor));
             }
         }
-        Self::from_owned(&owned, layout, netlist.nets().len() - 1)
+        Self::from_owned(&caps, &fluxes, layout, netlist.nets().len() - 1)
     }
 
     fn from_owned(
-        owned: &[(PartId, element::OwnedCapacitor)],
+        caps: &[(PartId, element::OwnedCapacitor)],
+        fluxes: &[(PartId, element::OwnedInductor)],
         layout: &Layout,
         nets: usize,
     ) -> Charges {
-        let caps = owned
+        let caps = caps
             .iter()
             .map(|(id, cap)| Charge {
                 index: layout.charge_index(*id, cap.k),
@@ -57,7 +79,17 @@ impl Charges {
                 farad: cap.farad,
             })
             .collect();
-        Charges { caps, nets }
+        let fluxes = fluxes
+            .iter()
+            .map(|(id, inductor)| Flux {
+                index: layout.flux_index(*id, inductor.k),
+                branch: layout.branch_row(*id, layout.flux_branch(*id, inductor.k)),
+                ends: inductor.ends.map(|end| end.node(layout, *id)),
+                henry: inductor.henry,
+                ohm: inductor.ohm,
+            })
+            .collect();
+        Charges { caps, fluxes, nets }
     }
 
     /// The highest net voltage minus the lowest, ground's 0 V included.
@@ -75,6 +107,13 @@ impl Charge {
     }
 }
 
+impl Flux {
+    fn volts(&self, solution: &Solution) -> f64 {
+        let [a, b] = self.ends;
+        solution.node(a) - solution.node(b)
+    }
+}
+
 /// The share of its swing a trapezoidal step may be off by. On an exponential the error over
 /// what is left of the swing grows by `x^3 / 12` a step, `x` the step over the time constant.
 /// A step that rides `SHARE` of the whole swing has `x = 0.9 * (12 * SHARE * e^(t/tau))^(1/3)`,
@@ -82,51 +121,101 @@ impl Charge {
 /// swing, 9.5e-5 here. A step never reads more than the whole swing, so this bounds it.
 const SHARE: f64 = 1e-5;
 
-/// How far a capacitor's voltage moves in its segment. Its tolerance is `SHARE` of this,
-/// plus `VNTOL`.
+/// How far a store's state moves in its segment, a capacitor's voltage or an inductor's
+/// current. Its tolerance is `SHARE` of this, plus `VNTOL` or `ABSTOL`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Swing {
-    /// The lowest and the highest voltage at the segment's points, the step's end included.
+    /// The lowest and the highest state at the segment's points, the step's end included.
     lo: f64,
     hi: f64,
     /// The least distance to its asymptote that a step of the segment has read, at most the
-    /// circuit's span.
+    /// circuit's reach.
     ahead: f64,
 }
 
 impl Swing {
-    /// A segment's start at `v`. The first step's reading is the segment's swing before the
-    /// voltage has moved, so that step is held to a share of the change in its current,
-    /// `(i1 - i0)^2 / (2 * SHARE * i0^2)`, and not cut to the floor.
-    fn start(v: f64, span: f64) -> Swing {
+    /// A segment's start at `x`, with `reach` the furthest the state can go. The first step's
+    /// reading is the segment's swing before the state has moved, so that step is held to a
+    /// share of the change in its slope, `(i1 - i0)^2 / (2 * SHARE * i0^2)` on a capacitor,
+    /// and not cut to the floor.
+    fn start(x: f64, reach: f64) -> Swing {
         Swing {
-            lo: v,
-            hi: v,
-            ahead: span,
+            lo: x,
+            hi: x,
+            ahead: reach,
         }
     }
 
-    /// A step of `h` s to `v`, its current going from `i0` to `i1`. The voltage is heading
-    /// `v'^2 / |v''|` further, `h * i0^2 / (C * |i1 - i0|)`, which an exponential's distance to
-    /// its asymptote equals at every point. From no current it is heading nowhere yet, and with
-    /// a steady one as far as the circuit reaches. The least reading counts. Where two modes
-    /// cancel the curvature at a segment's start, the first step reads past the swing, and a
-    /// later one does not.
-    fn step(self, v: f64, i: [f64; 2], h: f64, farad: f64) -> Swing {
-        let [i0, i1] = i;
-        let heading = match i0 {
+    /// A step of `h` s to `x`, its slope times `size` going from `d[0]` to `d[1]`: a
+    /// capacitor's voltage, its current and its capacitance, or an inductor's current, its
+    /// voltage and its inductance. The state is heading `x'^2 / |x''|` further,
+    /// `h * d0^2 / (size * |d1 - d0|)`, which an exponential's distance to its asymptote equals
+    /// at every point. From no slope it is heading nowhere yet, and with a steady one as far as
+    /// the circuit reaches. The least reading counts. Where two modes cancel the curvature at a
+    /// segment's start, the first step reads past the swing, and a later one does not.
+    fn step(self, x: f64, d: [f64; 2], h: f64, size: f64) -> Swing {
+        let [d0, d1] = d;
+        let heading = match d0 {
             0.0 => 0.0,
-            _ => h * i0 * i0 / (farad * (i1 - i0).abs()),
+            _ => h * d0 * d0 / (size * (d1 - d0).abs()),
         };
         Swing {
-            lo: self.lo.min(v),
-            hi: self.hi.max(v),
             ahead: self.ahead.min(heading),
+            ..self.within(x)
         }
     }
 
-    fn volts(self) -> f64 {
+    /// The range widened to `x`.
+    fn within(self, x: f64) -> Swing {
+        Swing {
+            lo: self.lo.min(x),
+            hi: self.hi.max(x),
+            ahead: self.ahead,
+        }
+    }
+
+    fn size(self) -> f64 {
         (self.hi - self.lo).max(self.ahead)
+    }
+}
+
+/// An inductor's two swings. The current's is a capacitor voltage's dual. The voltage's reach
+/// is read once, at the segment's start. An inductor's voltage heads to 0 V at DC, so the reach
+/// is its distance to 0 V there, or the circuit's span if that is larger, for a coil at rest
+/// beside an edge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct FluxSwing {
+    amps: Swing,
+    volts: Swing,
+}
+
+/// Every store's swing up to a point, in `Charges` order.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Swings {
+    caps: Vec<Swing>,
+    fluxes: Vec<FluxSwing>,
+}
+
+/// Each store's sum of what the edges that kept the segment may have left ringing, in `Charges`
+/// order. A capacitor's in volts, an inductor's in amperes.
+#[derive(Clone, Debug)]
+pub(crate) struct Ringing {
+    caps: Vec<f64>,
+    fluxes: Vec<f64>,
+}
+
+impl Ringing {
+    /// None yet on any of the stores `swings` covers.
+    fn none(swings: &Swings) -> Ringing {
+        Ringing {
+            caps: vec![0.0; swings.caps.len()],
+            fluxes: vec![0.0; swings.fluxes.len()],
+        }
+    }
+
+    /// Whether every capacitor's sum is at most `VNTOL` and every inductor's at most `ABSTOL`.
+    fn quiet(&self) -> bool {
+        self.caps.iter().all(|&sum| sum <= VNTOL) && self.fluxes.iter().all(|&sum| sum <= ABSTOL)
     }
 }
 
@@ -137,59 +226,51 @@ pub(crate) enum Segment {
     /// point, and it caps the first step's look-ahead.
     Start { span: f64 },
     /// The accepted point before the last one. The next step is trapezoidal, except on the
-    /// stiff capacitors.
+    /// stiff stores.
     Smooth {
         before: (Time, Solution),
         stiff: Stiff,
-        /// Each capacitor's swing up to the last point, in `Charges` order.
-        swings: Vec<Swing>,
-        /// Each capacitor's `max_step * 2|di| / 2C`, summed over the edges that kept the segment,
-        /// in `Charges` order.
-        ringing: Vec<f64>,
+        /// Each store's swing up to the last point.
+        swings: Swings,
+        ringing: Ringing,
     },
 }
 
-/// Capacitors whose trapezoidal step failed Newton's tolerance at the 1 ps floor. Each holds a
+/// Stores whose trapezoidal step failed Newton's tolerance at the 1 ps floor. Each holds a
 /// mode faster than any step, on which the trapezoidal rule rings, so it takes backward
 /// Euler. Backward Euler damps that mode by `1 + h/tau` a step, so once the step has grown
 /// they try the trapezoidal rule again.
 #[derive(Clone)]
 pub(crate) enum Stiff {
-    /// On backward Euler, ascending charge indices. After an accepted step of `retry` ps or
-    /// more, the next step tries them on the trapezoidal rule.
-    Held {
-        indices: Vec<ChargeIndex>,
-        retry: u64,
-    },
+    /// On backward Euler, ascending. After an accepted step of `retry` ps or more, the next
+    /// step tries them on the trapezoidal rule.
+    Held { stores: Vec<Store>, retry: u64 },
     /// This step tries them on the trapezoidal rule. Only an accepted step of `retry` ps or
     /// more passes the try. A shorter accepted step, cut or not, is one a mode still alive
     /// passes too, so the next step tries them again.
-    Trying {
-        indices: Vec<ChargeIndex>,
-        retry: u64,
-    },
+    Trying { stores: Vec<Store>, retry: u64 },
 }
 
-/// The accepted backward Euler step, in ps, after which a stiff capacitor first tries the
+/// The accepted backward Euler step, in ps, after which a stiff store first tries the
 /// trapezoidal rule. Tried at 16 or 32 ps, a 1 ps mode is still alive, and the trapezoidal
 /// rule keeps it.
 const RETRY: u64 = 256;
 
-/// A tried capacitor stays on the trapezoidal rule only under this share of Newton's tolerance.
+/// A tried store stays on the trapezoidal rule only under this share of Newton's tolerance.
 /// What is left of the fast mode does not decay on the trapezoidal rule, and its error grows
 /// with the step, so a try that passes near 1 holds the step near the length it was tried at.
 const TRY: f64 = 1e-3;
 
 impl Stiff {
     const NONE: Stiff = Stiff::Held {
-        indices: Vec::new(),
+        stores: Vec::new(),
         retry: RETRY,
     };
 
-    /// The capacitors on backward Euler this step.
-    fn indices(&self) -> &[ChargeIndex] {
+    /// The stores on backward Euler this step.
+    fn stores(&self) -> &[Store] {
         match self {
-            Stiff::Held { indices, .. } => indices,
+            Stiff::Held { stores, .. } => stores,
             Stiff::Trying { .. } => &[],
         }
     }
@@ -197,8 +278,8 @@ impl Stiff {
     /// After an accepted step of `h` ps.
     fn advance(self, h: u64) -> Stiff {
         match self {
-            Stiff::Held { indices, retry } if !indices.is_empty() && h >= retry => {
-                Stiff::Trying { indices, retry }
+            Stiff::Held { stores, retry } if !stores.is_empty() && h >= retry => {
+                Stiff::Trying { stores, retry }
             }
             Stiff::Trying { retry, .. } if h >= retry => Stiff::NONE,
             stiff => stiff,
@@ -206,16 +287,16 @@ impl Stiff {
     }
 
     /// For a retry of the same step of `h` ps: `more` on backward Euler too, and the tried
-    /// capacitors back on it until the step reaches twice `h`.
-    fn with(self, more: &[ChargeIndex], h: u64) -> Stiff {
-        let (mut indices, retry) = match self {
-            Stiff::Held { indices, retry } => (indices, retry),
-            Stiff::Trying { indices, .. } => (indices, h.saturating_mul(2).max(RETRY)),
+    /// stores back on it until the step reaches twice `h`.
+    fn with(self, more: &[Store], h: u64) -> Stiff {
+        let (mut stores, retry) = match self {
+            Stiff::Held { stores, retry } => (stores, retry),
+            Stiff::Trying { stores, .. } => (stores, h.saturating_mul(2).max(RETRY)),
         };
-        indices.extend_from_slice(more);
-        indices.sort_unstable();
-        indices.dedup();
-        Stiff::Held { indices, retry }
+        stores.extend_from_slice(more);
+        stores.sort_unstable();
+        stores.dedup();
+        Stiff::Held { stores, retry }
     }
 }
 
@@ -230,9 +311,9 @@ impl Segment {
     /// Once a step of `h` ps from `(at, last)` is accepted, `last` is the point before the
     /// new one. `swings` is that step's, from `error` when the accepted step is the one it
     /// judged.
-    pub(crate) fn advance(self, at: Time, last: Solution, h: u64, swings: Vec<Swing>) -> Segment {
+    pub(crate) fn advance(self, at: Time, last: Solution, h: u64, swings: Swings) -> Segment {
         let (stiff, ringing) = match self {
-            Segment::Start { .. } => (Stiff::NONE, vec![0.0; swings.len()]),
+            Segment::Start { .. } => (Stiff::NONE, Ringing::none(&swings)),
             Segment::Smooth { stiff, ringing, .. } => (stiff.advance(h), ringing),
         };
         Segment::Smooth {
@@ -254,8 +335,12 @@ impl Segment {
     /// `(1 - h/2tau) / (1 + h/2tau)`, near -1, so the computed current swings from `di` to
     /// about `-di`, a move of `2|di|`, and it rings until the next segment start. A later
     /// edge's mode adds to it. So each capacitor sums `max_step * 2|di| / 2C`, backward Euler's
-    /// estimate of that move over the longest step, across the edges that keep the segment. The
-    /// segment goes on while every sum is at most `VNTOL`, and starts at `held` otherwise.
+    /// estimate of that move over the longest step, across the edges that keep the segment.
+    ///
+    /// An inductor's voltage jumps by `dv` in the same way, and it sums `max_step * |dv| / L`.
+    /// Its point before does not move, because its voltage is a difference of node rows that
+    /// other parts share. The segment goes on while every capacitor's sum is at most `VNTOL`
+    /// and every inductor's at most `ABSTOL`, and starts at `held` otherwise.
     pub(crate) fn across(
         self,
         charges: &Charges,
@@ -271,12 +356,16 @@ impl Segment {
         } = self
         {
             let h = seconds(max_step);
-            for (cap, sum) in charges.caps.iter().zip(&mut ringing) {
+            for (cap, sum) in charges.caps.iter().zip(&mut ringing.caps) {
                 let di = held.get(cap.branch) - step.get(cap.branch);
                 before.add(cap.branch, di);
                 *sum += h * di.abs() / cap.farad;
             }
-            if ringing.iter().all(|&sum| sum <= VNTOL) {
+            for (flux, sum) in charges.fluxes.iter().zip(&mut ringing.fluxes) {
+                let dv = flux.volts(held) - flux.volts(step);
+                *sum += h * dv.abs() / flux.henry;
+            }
+            if ringing.quiet() {
                 return Segment::Smooth {
                     before: (then, before),
                     stiff,
@@ -288,39 +377,57 @@ impl Segment {
         Segment::start(charges, held)
     }
 
-    /// Each capacitor's swing with a step of `h` ps from `last` to `next`.
+    /// Each store's swing with a step of `h` ps from `last` to `next`.
     pub(crate) fn swings(
         &self,
         charges: &Charges,
         last: &Solution,
         h: u64,
         next: &Solution,
-    ) -> Vec<Swing> {
+    ) -> Swings {
         let h = seconds(h);
+        let cap_step = |swing: Swing, cap: &Charge| {
+            let i = [last.get(cap.branch), next.get(cap.branch)];
+            swing.step(cap.volts(next), i, h, cap.farad)
+        };
+        let flux_step = |swing: FluxSwing, flux: &Flux| {
+            let v = [flux.volts(last), flux.volts(next)];
+            FluxSwing {
+                amps: swing.amps.step(next.get(flux.branch), v, h, flux.henry),
+                volts: swing.volts.within(v[1]),
+            }
+        };
         match self {
-            Segment::Start { span } => charges
-                .caps
-                .iter()
-                .map(|cap| {
-                    let i = [last.get(cap.branch), next.get(cap.branch)];
-                    Swing::start(cap.volts(last), *span).step(cap.volts(next), i, h, cap.farad)
-                })
-                .collect(),
-            Segment::Smooth { swings, .. } => swings
-                .iter()
-                .zip(&charges.caps)
-                .map(|(swing, cap)| {
-                    let i = [last.get(cap.branch), next.get(cap.branch)];
-                    swing.step(cap.volts(next), i, h, cap.farad)
-                })
-                .collect(),
+            Segment::Start { span } => Swings {
+                caps: (charges.caps.iter())
+                    .map(|cap| cap_step(Swing::start(cap.volts(last), *span), cap))
+                    .collect(),
+                fluxes: (charges.fluxes.iter())
+                    .map(|flux| {
+                        let v = flux.volts(last);
+                        let start = FluxSwing {
+                            amps: Swing::start(last.get(flux.branch), *span / flux.ohm),
+                            volts: Swing::start(v, v.abs().max(*span)),
+                        };
+                        flux_step(start, flux)
+                    })
+                    .collect(),
+            },
+            Segment::Smooth { swings, .. } => Swings {
+                caps: (swings.caps.iter().zip(&charges.caps))
+                    .map(|(swing, cap)| cap_step(*swing, cap))
+                    .collect(),
+                fluxes: (swings.fluxes.iter().zip(&charges.fluxes))
+                    .map(|(swing, flux)| flux_step(*swing, flux))
+                    .collect(),
+            },
         }
     }
 
     /// The same point and step of `h` ps, with `more` stiff too.
-    pub(crate) fn stiffen(self, more: &[ChargeIndex], h: u64) -> Segment {
+    pub(crate) fn stiffen(self, more: &[Store], h: u64) -> Segment {
         match self {
-            // Every capacitor takes backward Euler on the first step, so none turns stiff on it.
+            // Every store takes backward Euler on the first step, so none turns stiff on it.
             Segment::Start { span } => Segment::Start { span },
             Segment::Smooth {
                 before,
@@ -336,7 +443,7 @@ impl Segment {
         }
     }
 
-    /// The method of every capacitor that is not stiff.
+    /// The method of every store that is not stiff.
     pub(crate) fn method(&self) -> Method {
         match self {
             Segment::Start { .. } => Method::BackwardEuler,
@@ -344,28 +451,28 @@ impl Segment {
         }
     }
 
-    /// The stiff capacitors on backward Euler this step.
-    pub(crate) fn stiff(&self) -> &[ChargeIndex] {
+    /// The stiff stores on backward Euler this step.
+    pub(crate) fn stiff(&self) -> &[Store] {
         match self {
             Segment::Start { .. } => &[],
-            Segment::Smooth { stiff, .. } => stiff.indices(),
+            Segment::Smooth { stiff, .. } => stiff.stores(),
         }
     }
 
-    /// The stiff capacitors this step tries on the trapezoidal rule.
-    fn tried(&self) -> &[ChargeIndex] {
+    /// The stiff stores this step tries on the trapezoidal rule.
+    fn tried(&self) -> &[Store] {
         match self {
             Segment::Smooth {
-                stiff: Stiff::Trying { indices, .. },
+                stiff: Stiff::Trying { stores, .. },
                 ..
-            } => indices,
+            } => stores,
             _ => &[],
         }
     }
 
-    fn method_of(&self, charge: ChargeIndex) -> Method {
+    fn method_of(&self, store: Store) -> Method {
         match self {
-            Segment::Smooth { stiff, .. } => method_on(stiff.indices(), self.method(), charge),
+            Segment::Smooth { stiff, .. } => method_on(stiff.stores(), self.method(), store),
             Segment::Start { .. } => Method::BackwardEuler,
         }
     }
@@ -374,15 +481,15 @@ impl Segment {
 /// A step's local truncation error.
 #[derive(Debug)]
 pub(crate) struct Error {
-    /// The worst capacitor's error over its tolerance. At most 1 accepts.
+    /// The worst store's error over its tolerance. At most 1 accepts.
     pub(crate) ratio: f64,
-    /// That capacitor's method, which sets how the next step grows or shrinks.
+    /// That store's method, which sets how the next step grows or shrinks.
     pub(crate) method: Method,
-    /// Each capacitor's swing with this step folded in. `advance` stores it on accept.
-    pub(crate) swings: Vec<Swing>,
-    /// The trapezoidal capacitors over Newton's tolerance, ascending charge indices.
-    over: Vec<ChargeIndex>,
-    /// The worst error over Newton's tolerance of the capacitors the step tried on the
+    /// Each store's swing with this step folded in. `advance` stores it on accept.
+    pub(crate) swings: Swings,
+    /// The trapezoidal stores over Newton's tolerance, ascending.
+    over: Vec<Store>,
+    /// The worst error over Newton's tolerance of the stores the step tried on the
     /// trapezoidal rule. 0 when it tried none.
     tried: f64,
 }
@@ -393,17 +500,17 @@ pub(crate) enum Verdict {
     Accept,
     /// Retry it shorter, from the same point.
     Reject,
-    /// Retry the same step from the same point, with these capacitors stiff too, and the
-    /// ones it tried back on backward Euler.
-    Stiffen(Vec<ChargeIndex>),
+    /// Retry the same step from the same point, with these stores stiff too, and the ones it
+    /// tried back on backward Euler.
+    Stiffen(Vec<Store>),
 }
 
 impl Error {
     /// A step of `h` ps. A step of 1 ps over its tolerance is accepted whatever its error,
-    /// unless a trapezoidal capacitor is over Newton's tolerance there, which makes it stiff.
+    /// unless a trapezoidal store is over Newton's tolerance there, which makes it stiff.
     /// Stiffness is judged on Newton's tolerance. A 20 to 43 ps mode that the swing's share
     /// would let through at 1 ps would be left ringing once the step grew past it. A step that
-    /// tried stiff capacitors keeps them on the trapezoidal rule only if their error is under
+    /// tried stiff stores keeps them on the trapezoidal rule only if their error is under
     /// `TRY` of Newton's tolerance.
     pub(crate) fn verdict(&self, h: u64) -> Verdict {
         match (
@@ -420,9 +527,21 @@ impl Error {
     }
 }
 
-/// The error of a step of `h` ps from `(at, last)` to `next`, each capacitor on its method
-/// in `segment`. The tolerance is `SHARE` of the capacitor's swing plus `VNTOL`, or Newton's on
-/// a stiff capacitor.
+/// One store's error on one step.
+struct Judged {
+    store: Store,
+    method: Method,
+    /// Over the tolerance the step is held to.
+    ratio: f64,
+    /// Over Newton's tolerance.
+    newton: f64,
+}
+
+/// The error of a step of `h` ps from `(at, last)` to `next`, each store on its method in
+/// `segment`. A capacitor's tolerance is `SHARE` of its swing plus `VNTOL`. An inductor's
+/// current is held to `SHARE` of its swing plus `ABSTOL`, and the voltage that error implies,
+/// `L * error / h`, to `SHARE` of the voltage's swing plus `VNTOL`. A stiff store keeps
+/// Newton's tolerance.
 pub(crate) fn error(
     charges: &Charges,
     segment: &Segment,
@@ -433,14 +552,11 @@ pub(crate) fn error(
 ) -> Error {
     let swings = segment.swings(charges, last, h, next);
     let h = seconds(h);
-    let mut ratio_worst = 0.0;
-    let mut method = segment.method();
-    let mut over = Vec::new();
-    let mut tried = 0.0f64;
-    for (cap, swing) in charges.caps.iter().zip(&swings) {
-        let (i0, i1) = (last.get(cap.branch), next.get(cap.branch));
-        let cap_method = segment.method_of(cap.index);
-        let error = match (cap_method, segment) {
+    // The state's error from its slope times `size`, read at the point before the last, the
+    // last and the candidate.
+    let truncation = |method: Method, slope: &dyn Fn(&Solution) -> f64, size: f64| {
+        let (d0, d1) = (slope(last), slope(next));
+        match (method, segment) {
             (
                 Method::Trapezoidal,
                 Segment::Smooth {
@@ -449,29 +565,76 @@ pub(crate) fn error(
                 },
             ) => {
                 let hp = seconds(at.as_ps() - then.as_ps());
-                let im = before.get(cap.branch);
-                let dd2 = ((i1 - i0) / h - (i0 - im) / hp) / (h + hp);
-                h * h * h * dd2.abs() / (6.0 * cap.farad)
+                let dd2 = ((d1 - d0) / h - (d0 - slope(before)) / hp) / (h + hp);
+                h * h * h * dd2.abs() / (6.0 * size)
             }
-            _ => h / 2.0 * (i1 - i0).abs() / cap.farad,
-        };
+            _ => h / 2.0 * (d1 - d0).abs() / size,
+        }
+    };
+    // A stiff store's backward Euler error accumulates with one sign, so it keeps Newton's
+    // tolerance. The swing's share holds only for a trapezoidal segment, and for the one
+    // backward Euler step that starts a segment.
+    let stiff = |method: Method| {
+        matches!(
+            (segment, method),
+            (Segment::Smooth { .. }, Method::BackwardEuler)
+        )
+    };
+    let caps = charges.caps.iter().zip(&swings.caps).map(|(cap, swing)| {
+        let store = Store::Charge(cap.index);
+        let method = segment.method_of(store);
+        let error = truncation(method, &|x: &Solution| x.get(cap.branch), cap.farad);
         let level = cap.volts(last).abs().max(cap.volts(next).abs());
         let newton = error / (RELTOL * level + VNTOL);
-        // A stiff capacitor's backward Euler error accumulates with one sign, so it keeps
-        // Newton's tolerance. The swing's share holds only for a trapezoidal segment, and for
-        // the one backward Euler step that starts a segment.
-        let ratio = match (segment, cap_method) {
-            (Segment::Smooth { .. }, Method::BackwardEuler) => newton,
-            _ => error / (SHARE * swing.volts() + VNTOL),
+        let ratio = match stiff(method) {
+            true => newton,
+            false => error / (SHARE * swing.size() + VNTOL),
         };
-        if newton > 1.0 && cap_method == Method::Trapezoidal {
-            over.push(cap.index);
+        Judged {
+            store,
+            method,
+            ratio,
+            newton,
         }
-        if segment.tried().binary_search(&cap.index).is_ok() {
-            tried = tried.max(newton);
+    });
+    let fluxes = charges
+        .fluxes
+        .iter()
+        .zip(&swings.fluxes)
+        .map(|(flux, swing)| {
+            let store = Store::Flux(flux.index);
+            let method = segment.method_of(store);
+            let error = truncation(method, &|x: &Solution| flux.volts(x), flux.henry);
+            let level = last.get(flux.branch).abs().max(next.get(flux.branch).abs());
+            let newton = error / (RELTOL * level + ABSTOL);
+            let ratio = match stiff(method) {
+                true => newton,
+                false => {
+                    let amps = error / (SHARE * swing.amps.size() + ABSTOL);
+                    let volts = flux.henry * error / h / (SHARE * swing.volts.size() + VNTOL);
+                    amps.max(volts)
+                }
+            };
+            Judged {
+                store,
+                method,
+                ratio,
+                newton,
+            }
+        });
+    let mut ratio_worst = 0.0;
+    let mut method = segment.method();
+    let mut over = Vec::new();
+    let mut tried = 0.0f64;
+    for judged in caps.chain(fluxes) {
+        if judged.newton > 1.0 && judged.method == Method::Trapezoidal {
+            over.push(judged.store);
         }
-        if ratio > ratio_worst {
-            (ratio_worst, method) = (ratio, cap_method);
+        if segment.tried().binary_search(&judged.store).is_ok() {
+            tried = tried.max(judged.newton);
+        }
+        if judged.ratio > ratio_worst {
+            (ratio_worst, method) = (judged.ratio, judged.method);
         }
     }
     Error {
@@ -501,6 +664,7 @@ mod tests {
                 pins: [Node::Row(0), Node::Ground],
                 farad,
             }],
+            fluxes: Vec::new(),
             nets: 1,
         }
     }
@@ -522,6 +686,7 @@ mod tests {
                     farad,
                 },
             ],
+            fluxes: Vec::new(),
             nets: 1,
         }
     }
@@ -551,12 +716,12 @@ mod tests {
         accept(segment, &charges, at, last, h, &next)
     }
 
-    fn ix(index: usize) -> ChargeIndex {
-        ChargeIndex::new(index)
+    fn ix(index: usize) -> Store {
+        Store::Charge(ChargeIndex::new(index))
     }
 
     /// A trapezoidal segment from 0 V and 0 A at t = 0, with `stiff` stiff.
-    fn smooth(stiff: &[ChargeIndex]) -> Segment {
+    fn smooth(stiff: &[Store]) -> Segment {
         let last = Solution::zeros(3);
         advanced(Segment::start(&two(1e-9), &last), Time::ZERO, last, 1).stiffen(stiff, 1)
     }
@@ -567,8 +732,14 @@ mod tests {
         Segment::Smooth {
             before,
             stiff: Stiff::NONE,
-            swings: vec![Swing { lo, hi, ahead: 0.0 }],
-            ringing: vec![0.0],
+            swings: Swings {
+                caps: vec![Swing { lo, hi, ahead: 0.0 }],
+                fluxes: Vec::new(),
+            },
+            ringing: Ringing {
+                caps: vec![0.0],
+                fluxes: Vec::new(),
+            },
         }
     }
 
@@ -649,6 +820,7 @@ mod tests {
                     farad: 1e-6,
                 },
             ],
+            fluxes: Vec::new(),
             nets: 2,
         };
         // Over 1 ns the first sees 1 mA more from none, 0.5 uV against its move of 1 V. The
@@ -667,6 +839,7 @@ mod tests {
         assert_eq!(got.ratio, worst / (SHARE * 2.0 + VNTOL));
         let none = Charges {
             caps: Vec::new(),
+            fluxes: Vec::new(),
             nets: 2,
         };
         let got = error(
@@ -829,6 +1002,7 @@ mod tests {
                 branch: 2,
                 ..one(farad).caps.remove(0)
             }],
+            fluxes: Vec::new(),
             nets: 2,
         };
         let last = Solution::from(vec![0.0, 3.3, amps]);
@@ -905,10 +1079,10 @@ mod tests {
         let Segment::Smooth { swings, .. } = &held else {
             panic!("the first step starts a smooth segment");
         };
-        assert_eq!(swings[0].lo, first.get(0));
+        assert_eq!(swings.caps[0].lo, first.get(0));
         let heading = 0.02 * 1e-5 / 22e-6;
         assert!(
-            (swings[0].ahead - heading).abs() < 1e-6 * heading,
+            (swings.caps[0].ahead - heading).abs() < 1e-6 * heading,
             "{swings:?}"
         );
     }
@@ -928,7 +1102,7 @@ mod tests {
         let Segment::Smooth { swings, .. } = &segment else {
             panic!("an accepted step makes a smooth segment");
         };
-        assert_eq!(swings[0].volts(), 1.0);
+        assert_eq!(swings.caps[0].size(), 1.0);
     }
 
     #[test]
@@ -947,7 +1121,7 @@ mod tests {
             let Segment::Smooth { swings, .. } = &segment else {
                 panic!("an accepted step makes a smooth segment");
             };
-            ahead.push(swings[0].ahead);
+            ahead.push(swings.caps[0].ahead);
         }
         assert_eq!(ahead[0], 1.0);
         assert!((ahead[1] - 0.01).abs() < 1e-12, "{ahead:?}");
@@ -997,7 +1171,7 @@ mod tests {
             assert_eq!(*k, 0);
             assert_eq!(cap.branch, layout.branch_row(*id, *k));
             assert_eq!(cap.index, layout.charge_index(*id, *k));
-            assert_eq!(cap.index, ix(index));
+            assert_eq!(Store::Charge(cap.index), ix(index));
             assert_ne!(ChargeIndex::new(id.index()), cap.index);
         }
     }
@@ -1079,12 +1253,16 @@ mod tests {
             .map(|charge| (charge.branch, charge.pins, charge.farad))
             .collect();
         assert_eq!(got, want);
-        let indices: Vec<_> = charges.caps.iter().map(|charge| charge.index).collect();
+        let indices: Vec<_> = charges
+            .caps
+            .iter()
+            .map(|charge| Store::Charge(charge.index))
+            .collect();
         assert_eq!(indices, [ix(0), ix(1), ix(2), ix(3), ix(4), ix(5)]);
     }
 
     #[test]
-    #[should_panic(expected = "a part's charge count exceeds its branches")]
+    #[should_panic(expected = "a part's capacitors and inductors exceed its branches")]
     fn a_part_with_a_charge_and_no_branch_panics() {
         let (netlist, pair, cn, _) = two_internal();
         let mut open = pair;
@@ -1163,12 +1341,12 @@ mod tests {
         let pair = element::Pair {
             ends: [
                 [
-                    element::CapacitorEnd::Net(net_a),
-                    element::CapacitorEnd::Net(NetId::GROUND),
+                    element::StoreEnd::Net(net_a),
+                    element::StoreEnd::Net(NetId::GROUND),
                 ],
                 [
-                    element::CapacitorEnd::Internal(0),
-                    element::CapacitorEnd::Internal(1),
+                    element::StoreEnd::Internal(0),
+                    element::StoreEnd::Internal(1),
                 ],
             ],
             farad: [1e-6, 2e-6],
@@ -1202,7 +1380,7 @@ mod tests {
             .into_iter()
             .map(|cap| (cn, cap))
             .collect();
-        let charges = Charges::from_owned(&owned, &layout, netlist.nets().len() - 1);
+        let charges = Charges::from_owned(&owned, &[], &layout, netlist.nets().len() - 1);
         assert_eq!(charges.caps.len(), 2);
         // `Charges::new` reads the netlist models. `c_n` and `d_o` each own one capacitor.
         assert_eq!(Charges::new(&netlist, &layout).caps.len(), 2);
@@ -1213,10 +1391,10 @@ mod tests {
             charges.caps[1].pins,
             [layout.internal(cn, 0), layout.internal(cn, 1)]
         );
-        assert_eq!(layout.charge_index(cn, 0), ix(0));
-        assert_eq!(layout.charge_index(cn, 1), ix(1));
-        assert_eq!(layout.charge_index(later, 0), ix(2));
-        assert_ne!(ix(cn.index()), layout.charge_index(cn, 1));
+        assert_eq!(Store::Charge(layout.charge_index(cn, 0)), ix(0));
+        assert_eq!(Store::Charge(layout.charge_index(cn, 1)), ix(1));
+        assert_eq!(Store::Charge(layout.charge_index(later, 0)), ix(2));
+        assert_ne!(ix(cn.index()), Store::Charge(layout.charge_index(cn, 1)));
         assert_eq!(layout.branch_row(cn, 1), layout.branch_row(cn, 0) + 1);
         assert_ne!(layout.branch_row(cn, 1), layout.branch_row(later, 0));
 
@@ -1235,7 +1413,7 @@ mod tests {
         let farad = [1e-6, 2e-6];
         let volts = [2.0, 0.5];
 
-        let solved = |stiff: &[ChargeIndex], restart: bool| -> [f64; 2] {
+        let solved = |stiff: &[Store], restart: bool| -> [f64; 2] {
             let step = Integration {
                 method: Method::Trapezoidal,
                 stiff,
@@ -1325,7 +1503,7 @@ mod tests {
                 .into_iter()
                 .map(|cap| (later, cap)),
         );
-        let judged = Charges::from_owned(&judged_owned, &layout, netlist.nets().len() - 1);
+        let judged = Charges::from_owned(&judged_owned, &[], &layout, netlist.nets().len() - 1);
         let zeros = Solution::zeros(layout.size());
         let smooth = accept(
             Segment::start(&judged, &zeros),
@@ -1335,7 +1513,7 @@ mod tests {
             1,
             &zeros,
         )
-        .stiffen(&[layout.charge_index(cn, 1)], 1);
+        .stiffen(&[Store::Charge(layout.charge_index(cn, 1))], 1);
         let mut stepped = vec![0.0; layout.size()];
         stepped[layout.branch_row(cn, 0)] = 1.0;
         stepped[layout.branch_row(cn, 1)] = 4.0;
@@ -1355,5 +1533,447 @@ mod tests {
             matches!(got.verdict(1), Verdict::Stiffen(indices) if indices == [ix(0), ix(2)]),
             "{got:?}"
         );
+    }
+
+    /// One inductor of `henry` from row 0 to ground behind `ohm`, its current in row 1.
+    fn coil(henry: f64, ohm: f64) -> Charges {
+        Charges {
+            caps: Vec::new(),
+            fluxes: vec![Flux {
+                index: FluxIndex::new(0),
+                branch: 1,
+                ends: [Node::Row(0), Node::Ground],
+                henry,
+                ohm,
+            }],
+            nets: 1,
+        }
+    }
+
+    fn fx(index: usize) -> Store {
+        Store::Flux(FluxIndex::new(index))
+    }
+
+    /// A trapezoidal segment on one inductor whose current has covered `amps` and whose voltage
+    /// has covered `volts`, with `before` the point before the last.
+    fn coiled(before: (Time, Solution), amps: [f64; 2], volts: [f64; 2]) -> Segment {
+        let range = |[lo, hi]: [f64; 2]| Swing { lo, hi, ahead: 0.0 };
+        Segment::Smooth {
+            before,
+            stiff: Stiff::NONE,
+            swings: Swings {
+                caps: Vec::new(),
+                fluxes: vec![FluxSwing {
+                    amps: range(amps),
+                    volts: range(volts),
+                }],
+            },
+            ringing: Ringing {
+                caps: Vec::new(),
+                fluxes: vec![0.0],
+            },
+        }
+    }
+
+    #[test]
+    fn backward_euler_is_exact_for_a_voltage_ramp() {
+        // v = k*t across 0.5 H gives i'' = k/L, so the error of a 1 us step is h^2/2 * k/L.
+        let (k, henry, h) = (2.0, 0.5, 1e-6);
+        let exact = h * h / 2.0 * k / henry;
+        let charges = coil(henry, 70.0);
+        let last = point(0.0, 1e-3);
+        let next = point(k * h, 1e-3 + exact);
+        // A stiff inductor keeps Newton's tolerance.
+        let zeros = Solution::zeros(2);
+        let stiff = accept(
+            Segment::start(&charges, &zeros),
+            &charges,
+            Time::ZERO,
+            zeros.clone(),
+            1,
+            &zeros,
+        )
+        .stiffen(&[fx(0)], 1);
+        let got = error(&charges, &stiff, Time::from_ps(1), &last, 1_000_000, &next);
+        assert_eq!(got.method, Method::BackwardEuler);
+        let want = exact / (RELTOL * (1e-3 + exact) + ABSTOL);
+        assert!((got.ratio - want).abs() <= 1e-12 * want, "{got:?}");
+        // From no voltage the current is heading nowhere yet, so the first step's current swing
+        // is its own move. The voltage that error implies is half the step's move.
+        let first = Segment::start(&charges, &last);
+        let got = error(&charges, &first, Time::ZERO, &last, 1_000_000, &next);
+        assert_eq!(got.method, Method::BackwardEuler);
+        let amps = exact / (SHARE * exact + ABSTOL);
+        let volts = henry * exact / h / (SHARE * k * h + VNTOL);
+        let want = amps.max(volts);
+        assert!((got.ratio - want).abs() <= 1e-9 * want, "{got:?}");
+    }
+
+    #[test]
+    fn trapezoidal_is_exact_for_a_quadratic_voltage_on_an_uneven_grid() {
+        // v = k*t^2 has DD2 = k on any grid, and i''' = 2k/L.
+        let (k, henry) = (3e9, 1e-3);
+        let volts = |ps: u64| k * seconds(ps) * seconds(ps);
+        let segment = coiled(
+            (Time::from_ps(1_000), point(volts(1_000), 0.5)),
+            [0.0, 1.0],
+            [0.0, 1.0],
+        );
+        let last = point(volts(4_000), 0.5);
+        let next = point(volts(9_000), 0.5);
+        let got = error(
+            &coil(henry, 70.0),
+            &segment,
+            Time::from_ps(4_000),
+            &last,
+            5_000,
+            &next,
+        );
+        let h = seconds(5_000);
+        let exact = h * h * h / 12.0 * (2.0 * k / henry);
+        let amps = exact / (SHARE + ABSTOL);
+        let implied = henry * exact / h / (SHARE + VNTOL);
+        assert_eq!(got.method, Method::Trapezoidal);
+        let want = amps.max(implied);
+        assert!((got.ratio - want).abs() <= 1e-9 * want, "{got:?}");
+    }
+
+    /// A coil behind an open switch rings on the trapezoidal rule, its voltage flipping sign
+    /// each step. The current's error is under its tolerance, and the voltage it implies is not.
+    #[test]
+    fn the_voltage_ratio_rejects_ringing() {
+        let (henry, swing, a, h) = (0.5, 5.0 / 70.0, 5e-3, 50_000_000);
+        let segment = coiled((Time::ZERO, point(a, 0.01)), [0.0, swing], [0.0, 5.0]);
+        let last = point(-a, 0.01);
+        let next = point(a, 0.01);
+        let got = error(
+            &coil(henry, 70.0),
+            &segment,
+            Time::from_ps(h),
+            &last,
+            h,
+            &next,
+        );
+        // DD2 is `2a / h^2`, so the error is `h * a / 3L`, and the voltage it implies `a / 3`.
+        let error = seconds(h) * a / (3.0 * henry);
+        let amps = error / (SHARE * swing + ABSTOL);
+        assert!(amps < 1.0, "{amps}");
+        let want = (a / 3.0) / (SHARE * 5.0 + VNTOL);
+        assert!((got.ratio - want).abs() <= 1e-6 * want, "{got:?}");
+        assert!(matches!(got.verdict(h), Verdict::Reject), "{got:?}");
+    }
+
+    /// One inductor of `henry` and 70 ohm from row 1 to ground, its current in row 2, and one
+    /// net, row 0.
+    fn behind_a_net(henry: f64) -> Charges {
+        Charges {
+            fluxes: vec![Flux {
+                ends: [Node::Row(1), Node::Ground],
+                branch: 2,
+                ..coil(henry, 70.0).fluxes.remove(0)
+            }],
+            nets: 1,
+            ..coil(henry, 70.0)
+        }
+    }
+
+    /// A segment's first step holds the voltage its current's error implies to a share of the
+    /// voltage's reach, the larger of its distance to 0 V and the circuit's span. A coil
+    /// switched off from 5 V has its 5 V on the inductance and no net away from 0 V. A coil at
+    /// 0 V beside a 5 V net can move as far as the span.
+    #[test]
+    fn a_coil_s_first_step_reads_its_voltage_reach() {
+        let charges = behind_a_net(0.505);
+        // 2^-20 V, so the move off 5 V is exact.
+        let (amps, h, dv) = (5.0 / 70.0, 1_000, 9.5367431640625e-7);
+        for (net, coil) in [(0.0, -5.0), (5.0, 0.0)] {
+            let last = Solution::from(vec![net, coil, amps]);
+            let next = Solution::from(vec![net, coil - dv, amps]);
+            let first = Segment::start(&charges, &last);
+            let got = error(&charges, &first, Time::ZERO, &last, h, &next);
+            let want = (dv / 2.0) / (SHARE * 5.0 + VNTOL);
+            assert!((got.ratio - want).abs() <= 1e-9 * want, "net {net} {got:?}");
+        }
+    }
+
+    /// The first step caps how far the current reads it is heading at the span over the series
+    /// resistance. A 1 uH coil at 0.1 V beside a 5 V net, its voltage moving by 0.1 mV over a
+    /// 100 ns step, reads 10 A ahead, and 5 V can drive 71 mA through 70 ohm.
+    #[test]
+    fn a_coil_s_first_step_caps_its_current_s_reach_at_the_span_over_its_resistance() {
+        let (henry, h, dv) = (1e-6, 100_000, 1e-4);
+        let charges = behind_a_net(henry);
+        let last = Solution::from(vec![5.0, 0.1, 0.0]);
+        let next = Solution::from(vec![5.0, 0.1 - dv, seconds(h) * (0.1 - dv) / henry]);
+        let got = error(
+            &charges,
+            &Segment::start(&charges, &last),
+            Time::ZERO,
+            &last,
+            h,
+            &next,
+        );
+        let error = seconds(h) / 2.0 * dv / henry;
+        let want = error / (SHARE * 5.0 / 70.0 + ABSTOL);
+        assert!((got.ratio - want).abs() <= 1e-9 * want, "{got:?}");
+    }
+
+    /// Each edge that keeps the segment adds `max_step * |dv| / L` to the coil's sum. A sum
+    /// over 1e-12 A starts a segment, whose first step is backward Euler.
+    #[test]
+    fn a_coil_s_edges_start_a_segment_once_their_sum_passes_its_floor() {
+        let (henry, max_step) = (0.5, 1_000_000_000);
+        let charges = coil(henry, 70.0);
+        let smooth = || coiled((Time::ZERO, point(0.0, 0.0)), [0.0, 0.1], [0.0, 5.0]);
+        let edge = |segment: Segment, dv: f64| {
+            segment.across(
+                &charges,
+                &point(1.0, 0.01),
+                &point(1.0 + dv, 0.01),
+                max_step,
+            )
+        };
+        let over = ABSTOL * henry / seconds(max_step) * 1.01;
+        assert_eq!(edge(smooth(), over).method(), Method::BackwardEuler);
+        assert_eq!(edge(smooth(), -over).method(), Method::BackwardEuler);
+        let kept = edge(smooth(), over / 2.0);
+        assert_eq!(kept.method(), Method::Trapezoidal);
+        assert_eq!(edge(kept, -over / 2.0).method(), Method::BackwardEuler);
+    }
+
+    /// `c_m` owns a capacitor from `a` to ground and an inductor from `b` to ground. `d_c` is
+    /// the next part's capacitor, and `g_l` a later inductor across `a`. `e_s` and `f_s` hold
+    /// `a` and `b`.
+    fn shared() -> (sim_core::netlist::Netlist, element::Mixed, [PartId; 3]) {
+        use element::StoreEnd;
+        use sim_core::netlist::NetId;
+
+        let netlist = sim_core::netlist::parse(
+            br#"{
+              "version": 0,
+              "seed": 0,
+              "analysis": { "op": {} },
+              "ground": "gnd",
+              "nets": ["gnd", "a", "b"],
+              "parts": [
+                { "name": "a_r", "kind": "resistor", "pins": { "a": "a", "b": "gnd" },
+                  "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+                  "ratings": { "power": null } },
+                { "name": "b_r", "kind": "resistor", "pins": { "a": "b", "b": "gnd" },
+                  "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+                  "ratings": { "power": null } },
+                { "name": "c_m", "kind": "resistor", "pins": { "a": "a", "b": "b" },
+                  "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+                  "ratings": { "power": null } },
+                { "name": "d_c", "kind": "capacitor", "pins": { "a": "a", "b": "gnd" },
+                  "capacitance": { "value": 1e-9, "unit": "F", "source": "user" },
+                  "initial": null },
+                { "name": "e_s", "kind": "voltage_source", "pins": { "p": "a", "n": "gnd" },
+                  "voltage": { "value": 2.0, "unit": "V", "source": "user" } },
+                { "name": "f_s", "kind": "voltage_source", "pins": { "p": "b", "n": "gnd" },
+                  "voltage": { "value": 3.0, "unit": "V", "source": "user" } },
+                { "name": "g_l", "kind": "inductor", "pins": { "a": "a", "b": "gnd" },
+                  "inductance": { "value": 1.0, "unit": "H", "source": "user" },
+                  "series_resistance": { "value": 10.0, "unit": "ohm", "source": "user" } }
+              ]
+            }"#,
+        )
+        .unwrap();
+        let net = |name: &str| {
+            netlist
+                .nets()
+                .find(|(_, net)| net.as_str() == name)
+                .unwrap()
+                .0
+        };
+        let id = |name: &str| {
+            netlist
+                .part_id(&sim_core::name::Name::new(name).unwrap())
+                .unwrap()
+        };
+        let mixed = element::Mixed {
+            capacitor: [StoreEnd::Net(net("a")), StoreEnd::Net(NetId::GROUND)],
+            farad: 1e-6,
+            inductor: [StoreEnd::Net(net("b")), StoreEnd::Net(NetId::GROUND)],
+            henry: 1e-3,
+            ohm: 1.0,
+            internal_nodes: 0,
+            branches: 2,
+        };
+        let parts = [id("c_m"), id("d_c"), id("g_l")];
+        (netlist, mixed, parts)
+    }
+
+    /// The stores `Charges::new` would collect with `mixed` standing in for `part`.
+    fn with_stand_in(
+        netlist: &sim_core::netlist::Netlist,
+        layout: &Layout,
+        part: PartId,
+        mixed: &element::Mixed,
+    ) -> Charges {
+        let (mut caps, mut fluxes) = (Vec::new(), Vec::new());
+        for (id, model) in netlist.parts() {
+            let (charges, inductors) = if id == part {
+                (element::charges(mixed), element::inductors(mixed))
+            } else {
+                (
+                    element::charges(&model.model),
+                    element::inductors(&model.model),
+                )
+            };
+            caps.extend(charges.into_iter().map(|cap| (id, cap)));
+            fluxes.extend(inductors.into_iter().map(|inductor| (id, inductor)));
+        }
+        Charges::from_owned(&caps, &fluxes, layout, netlist.nets().len() - 1)
+    }
+
+    /// The shared part's inductor is flux 0 and the later one flux 1. Each current sits on a
+    /// branch of its own, the shared part's after its capacitor's, apart from the next part's
+    /// capacitor.
+    #[test]
+    fn an_inductor_takes_the_branch_after_its_part_s_capacitors() {
+        let (netlist, mixed, [cm, dc, gl]) = shared();
+        let layout = Layout::with_stand_in(&netlist, Vec::new(), cm, &mixed);
+        let charges = with_stand_in(&netlist, &layout, cm, &mixed);
+        let caps: Vec<_> = charges.caps.iter().map(|c| (c.index, c.branch)).collect();
+        let fluxes: Vec<_> = charges.fluxes.iter().map(|f| (f.index, f.branch)).collect();
+        assert_eq!(
+            caps,
+            [
+                (ChargeIndex::new(0), layout.branch_row(cm, 0)),
+                (ChargeIndex::new(1), layout.branch_row(dc, 0)),
+            ]
+        );
+        assert_eq!(
+            fluxes,
+            [
+                (FluxIndex::new(0), layout.branch_row(cm, 1)),
+                (FluxIndex::new(1), layout.branch_row(gl, 0)),
+            ]
+        );
+        assert_eq!(layout.branch_row(dc, 0), layout.branch_row(cm, 1) + 1);
+        assert_eq!(charges.fluxes[0].ends, [Node::Row(1), Node::Ground]);
+        assert_eq!(
+            charges.fluxes[1].ends,
+            [layout.internal(gl, 0), Node::Ground]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "a part's capacitors and inductors exceed its branches")]
+    fn a_part_with_a_capacitor_and_an_inductor_on_one_branch_panics() {
+        let (netlist, mut mixed, [cm, ..]) = shared();
+        mixed.branches = 1;
+        Layout::with_stand_in(&netlist, Vec::new(), cm, &mixed);
+    }
+
+    #[test]
+    #[should_panic(expected = "flux 1 is past this part's inductors")]
+    fn a_flux_past_the_reservation_panics() {
+        let (netlist, mixed, [cm, ..]) = shared();
+        let layout = Layout::with_stand_in(&netlist, Vec::new(), cm, &mixed);
+        layout.flux_index(cm, 1);
+    }
+
+    /// At 1 ps the shared part's inductor voltage jumps by 1 V, over Newton's tolerance on its
+    /// current, while every capacitor's current and the other inductor's voltage stay put. Only
+    /// the inductor turns stiff. Its step takes backward Euler and the capacitor on its part
+    /// keeps the trapezoidal rule, in the error and in the stamps. A part's index keys nothing.
+    #[test]
+    fn an_inductor_turns_stiff_alone() {
+        use crate::mna::{Stamp, System};
+        use crate::newton::{Conditions, History, Integration, Iterate};
+
+        let (netlist, mixed, [cm, ..]) = shared();
+        assert_ne!(cm.index(), 0);
+        let layout = Layout::with_stand_in(&netlist, Vec::new(), cm, &mixed);
+        let charges = with_stand_in(&netlist, &layout, cm, &mixed);
+        let zeros = Solution::zeros(layout.size());
+        let smooth = accept(
+            Segment::start(&charges, &zeros),
+            &charges,
+            Time::ZERO,
+            zeros.clone(),
+            1,
+            &zeros,
+        );
+        let mut jumped = vec![0.0; layout.size()];
+        jumped[1] = 1.0;
+        let got = error(
+            &charges,
+            &smooth,
+            Time::from_ps(1),
+            &zeros,
+            1,
+            &Solution::from(jumped),
+        );
+        assert!(
+            matches!(got.verdict(1), Verdict::Stiffen(ref stores) if stores == &[fx(0)]),
+            "{got:?}"
+        );
+        let stiff = smooth.stiffen(&[fx(0)], 1);
+        assert_eq!(stiff.method_of(fx(0)), Method::BackwardEuler);
+        assert_eq!(stiff.method_of(ix(0)), Method::Trapezoidal);
+
+        // `a` and `b` move from 1.5 V and 2.5 V to the sources' 2 V and 3 V over 1 ms.
+        let mut prev = vec![0.0; layout.size()];
+        prev[0] = 1.5;
+        prev[1] = 2.5;
+        prev[layout.branch_row(cm, 0)] = 1e-4;
+        prev[layout.branch_row(cm, 1)] = 4e-4;
+        let previous = Solution::from(prev);
+        let solved = |stiff: &[Store]| -> [f64; 2] {
+            let conditions = Conditions {
+                history: History::Step(Integration {
+                    method: Method::Trapezoidal,
+                    stiff,
+                    h_ps: 1_000_000_000,
+                    previous: &previous,
+                }),
+                ..Conditions::NOMINAL
+            };
+            let iterate = Iterate {
+                solution: Solution::zeros(layout.size()),
+                junctions: Vec::new(),
+            };
+            let mut system = System::new(&layout);
+            system.reset(&layout, conditions.gmin);
+            for (id, part) in netlist.parts() {
+                let mut stamp = Stamp::new(&mut system, &layout, id, &iterate, &conditions);
+                if id == cm {
+                    element::stamp(&mixed, &mut stamp);
+                } else {
+                    element::stamp(&part.model, &mut stamp);
+                }
+            }
+            let solution = system.solve().expect("the held nets are nonsingular");
+            [
+                solution.get(layout.branch_row(cm, 0)),
+                solution.get(layout.branch_row(cm, 1)),
+            ]
+        };
+        let h = 1e-3;
+        let cap = |method| match method {
+            Method::BackwardEuler => 1e-6 / h * 0.5,
+            Method::Trapezoidal => 2e-6 / h * 0.5 - 1e-4,
+        };
+        let coil = |method| match method {
+            Method::BackwardEuler => 4e-4 + h / 1e-3 * 3.0,
+            Method::Trapezoidal => 4e-4 + h / 2e-3 * (3.0 + 2.5),
+        };
+        let near = |got: [f64; 2], want: [f64; 2]| {
+            (got[0] - want[0]).abs() < 1e-9 && (got[1] - want[1]).abs() < 1e-9
+        };
+        let (be, tr) = (Method::BackwardEuler, Method::Trapezoidal);
+        for (stiff, want) in [
+            (vec![], [cap(tr), coil(tr)]),
+            (vec![fx(0)], [cap(tr), coil(be)]),
+            (vec![ix(0)], [cap(be), coil(tr)]),
+            (vec![fx(cm.index())], [cap(tr), coil(tr)]),
+            (vec![ix(cm.index())], [cap(tr), coil(tr)]),
+        ] {
+            let got = solved(&stiff);
+            assert!(near(got, want), "{stiff:?}: {got:?} against {want:?}");
+        }
     }
 }

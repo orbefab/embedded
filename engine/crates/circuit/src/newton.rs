@@ -263,14 +263,16 @@ impl Conditions<'static> {
     };
 }
 
-/// How capacitors and contacts see the past.
+/// How capacitors, inductors and contacts see the past.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum History<'h> {
-    /// t = 0. A capacitor with `initial` is held there, and any other is open.
+    /// t = 0. A capacitor with `initial` is held there, and any other is open. An inductor is a
+    /// short.
     Start,
-    /// Just after a switch edge, a source jump or a chip drive change at `at`. Every capacitor is held at its voltage in `previous`,
-    /// and every contact and source is after the changes at or before `at`. The solve is algebraic. Its
-    /// capacitor currents are the post-edge currents the next step starts from.
+    /// Just after a switch edge, a source jump or a chip drive change at `at`. Every capacitor is
+    /// held at its voltage in `previous`, every inductor at its current there, and every contact
+    /// and source is after the changes at or before `at`. The solve is algebraic. Its capacitor
+    /// currents and inductor voltages are the post-edge values the next step starts from.
     Restart { previous: &'h Solution },
     /// A time step from the last accepted solution.
     Step(Integration<'h>),
@@ -287,9 +289,27 @@ impl ChargeIndex {
     }
 }
 
-/// Backward Euler when `charge` is in `stiff`, which is ascending. Otherwise `method`.
-pub(crate) fn method_on(stiff: &[ChargeIndex], method: Method, charge: ChargeIndex) -> Method {
-    if stiff.binary_search(&charge).is_ok() {
+/// One inductor in the circuit's flux list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct FluxIndex(usize);
+
+impl FluxIndex {
+    pub(crate) const fn new(index: usize) -> FluxIndex {
+        FluxIndex(index)
+    }
+}
+
+/// A capacitor or an inductor. Stiffness keys on this. Every capacitor orders before every
+/// inductor, which is the order of every per-store list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Store {
+    Charge(ChargeIndex),
+    Flux(FluxIndex),
+}
+
+/// Backward Euler when `store` is in `stiff`, which is ascending. Otherwise `method`.
+pub(crate) fn method_on(stiff: &[Store], method: Method, store: Store) -> Method {
+    if stiff.binary_search(&store).is_ok() {
         Method::BackwardEuler
     } else {
         method
@@ -300,8 +320,8 @@ pub(crate) fn method_on(stiff: &[ChargeIndex], method: Method, charge: ChargeInd
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Integration<'h> {
     pub(crate) method: Method,
-    /// Capacitors that take backward Euler whatever `method` is. Ascending charge indices.
-    pub(crate) stiff: &'h [ChargeIndex],
+    /// Stores that take backward Euler whatever `method` is. Ascending.
+    pub(crate) stiff: &'h [Store],
     pub(crate) h_ps: u64,
     pub(crate) previous: &'h Solution,
 }
@@ -312,8 +332,8 @@ impl Integration<'_> {
         self.h_ps as f64 / 1e12
     }
 
-    pub(crate) fn method_of(&self, charge: ChargeIndex) -> Method {
-        method_on(self.stiff, self.method, charge)
+    pub(crate) fn method_of(&self, store: Store) -> Method {
+        method_on(self.stiff, self.method, store)
     }
 }
 

@@ -335,6 +335,44 @@ fn the_rc_example_follows_its_closed_form_at_every_row() {
     }
 }
 
+/// `#l1.i` of `examples/rl-step` at `t_ps`: 5 V onto 0.505 H behind 70 ohm at 1 ms, then 0 V
+/// at 30 ms.
+fn rl_closed_form(t_ps: f64) -> f64 {
+    let (tau, top, on, off) = (0.505 / 70.0, 5.0 / 70.0, 1e9, 30e9);
+    let rise = |ps: f64| top * (1.0 - libm::exp(-(ps - on) * 1e-12 / tau));
+    if t_ps <= on {
+        0.0
+    } else if t_ps <= off {
+        rise(t_ps)
+    } else {
+        rise(off) * libm::exp(-(t_ps - off) * 1e-12 / tau)
+    }
+}
+
+/// On the committed grid and on one off every step, every row of `examples/rl-step` follows
+/// the closed form within 1e-4 of its swing, and so does each row no step lands on, which is a
+/// probe. The current is held across the fall at 30 ms, so a coil that reset there would miss.
+#[test]
+fn the_rl_example_follows_its_closed_form_at_every_row() {
+    let json = example("rl-step");
+    let steps = simulate_steps(&json);
+    let steps = trace(&steps).time();
+    for grid in [50_000_000, 60_000_007] {
+        let results = sim_circuit::simulate(&with_grid(&json, grid));
+        let trace = trace(&results);
+        let current = column(trace, "#l1.i");
+        let swing = span(current);
+        let (mut worst, mut probes) = (0.0f64, 0);
+        for (row, at) in trace.time().iter().enumerate() {
+            probes += usize::from(steps.binary_search(at).is_err());
+            let want = rl_closed_form(at.as_ps() as f64);
+            worst = worst.max((current[row] - want).abs() / swing);
+        }
+        assert!(probes > trace.rows() / 2, "{grid} ps: {probes} probes");
+        assert!(worst <= 1e-4, "{grid} ps: {worst:e} of the swing");
+    }
+}
+
 /// The run again at half `max_step_ps`, compared on its rows, within `bound` of each column's span.
 fn assert_refines(json: &str, max_step: &str, half: &str, bound: f64) {
     let coarse = simulate(json);

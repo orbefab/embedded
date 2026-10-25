@@ -1,5 +1,6 @@
 mod capacitor;
 mod current_source;
+mod inductor;
 mod junction;
 mod potentiometer;
 mod resistor;
@@ -20,6 +21,7 @@ use transistor::Polarity;
 pub(crate) trait Device {
     fn unknowns(&self) -> Unknowns;
     fn charges(&self) -> Vec<OwnedCapacitor>;
+    fn inductors(&self) -> Vec<OwnedInductor>;
     fn stamp(&self, stamp: &mut Stamp<'_>);
 }
 
@@ -27,18 +29,18 @@ pub(crate) fn unknowns(model: &impl Device) -> Unknowns {
     Device::unknowns(model)
 }
 
-/// One end of a capacitor. A net, or internal node `k` of this part.
+/// One end of a capacitor or an inductor. A net, or internal node `k` of this part.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum CapacitorEnd {
+pub(crate) enum StoreEnd {
     Net(NetId),
     Internal(usize),
 }
 
-impl CapacitorEnd {
+impl StoreEnd {
     pub(crate) fn node(self, layout: &Layout, part: PartId) -> Node {
         match self {
-            CapacitorEnd::Net(net) => Node::from(net),
-            CapacitorEnd::Internal(k) => layout.internal(part, k),
+            StoreEnd::Net(net) => Node::from(net),
+            StoreEnd::Internal(k) => layout.internal(part, k),
         }
     }
 }
@@ -49,13 +51,29 @@ impl CapacitorEnd {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OwnedCapacitor {
     pub(crate) k: usize,
-    pub(crate) ends: [CapacitorEnd; 2],
+    pub(crate) ends: [StoreEnd; 2],
     pub(crate) farad: f64,
 }
 
 /// The capacitors `model` owns, in index order. A part with none returns an empty list.
 pub(crate) fn charges(model: &impl Device) -> Vec<OwnedCapacitor> {
     Device::charges(model)
+}
+
+/// One inductor a part owns. `k` is its index in that part's inductor list, and its current is
+/// branch `charges + k`, after the part's capacitors. `ohm` is the resistance in series with
+/// it, which bounds the current it can carry.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct OwnedInductor {
+    pub(crate) k: usize,
+    pub(crate) ends: [StoreEnd; 2],
+    pub(crate) henry: f64,
+    pub(crate) ohm: f64,
+}
+
+/// The inductors `model` owns, in index order. A part with none returns an empty list.
+pub(crate) fn inductors(model: &impl Device) -> Vec<OwnedInductor> {
+    Device::inductors(model)
 }
 
 pub(crate) fn stamp(model: &impl Device, stamp: &mut Stamp<'_>) {
@@ -74,6 +92,11 @@ impl Device for Model {
                 ..Unknowns::default()
             },
             Model::Capacitor(_) => Unknowns {
+                branches: 1,
+                ..Unknowns::default()
+            },
+            Model::Inductor(_) => Unknowns {
+                internal_nodes: 1,
                 branches: 1,
                 ..Unknowns::default()
             },
@@ -103,7 +126,7 @@ impl Device for Model {
         match self {
             Model::Capacitor(capacitor) => vec![OwnedCapacitor {
                 k: 0,
-                ends: capacitor.pins.map(CapacitorEnd::Net),
+                ends: capacitor.pins.map(StoreEnd::Net),
                 farad: capacitor.capacitance.si.get(),
             }],
             Model::Npn(bjt) | Model::Pnp(bjt) => transistor::charges(bjt),
@@ -114,6 +137,25 @@ impl Device for Model {
             | Model::CurrentSource(_)
             | Model::Diode(_)
             | Model::Led(_)
+            | Model::Inductor(_)
+            | Model::Switch(_)
+            | Model::Chip(_) => Vec::new(),
+        }
+    }
+
+    fn inductors(&self) -> Vec<OwnedInductor> {
+        match self {
+            Model::Inductor(inductor) => vec![inductor::owned(inductor)],
+            Model::Resistor(_)
+            | Model::Potentiometer(_)
+            | Model::VoltageSource(_)
+            | Model::CurrentSource(_)
+            | Model::Diode(_)
+            | Model::Led(_)
+            | Model::Npn(_)
+            | Model::Pnp(_)
+            | Model::Nmos(_)
+            | Model::Capacitor(_)
             | Model::Switch(_)
             | Model::Chip(_) => Vec::new(),
         }
@@ -130,6 +172,7 @@ impl Device for Model {
             Model::Pnp(bjt) => transistor::stamp(bjt, Polarity::Pnp, stamp),
             Model::Nmos(mosfet) => transistor::mos_stamp(mosfet, stamp),
             Model::Capacitor(capacitor) => capacitor::stamp(capacitor, stamp),
+            Model::Inductor(inductor) => inductor::stamp(inductor, stamp),
             Model::Switch(switch) => switch::stamp(switch, stamp),
             // An active chip stamps its core's drive image, in `active::stamp`.
             Model::Chip(chip) => {
@@ -152,6 +195,7 @@ pub(crate) fn reads_iterate(model: &Model) -> bool {
         | Model::VoltageSource(_)
         | Model::CurrentSource(_)
         | Model::Capacitor(_)
+        | Model::Inductor(_)
         | Model::Switch(_) => false,
         Model::Diode(_) | Model::Led(_) | Model::Npn(_) | Model::Pnp(_) | Model::Nmos(_) => true,
         Model::Chip(chip) => chip::reads_iterate(chip),
@@ -166,6 +210,7 @@ pub(crate) fn initial(model: &Model, out: &mut [f64]) {
         | Model::VoltageSource(_)
         | Model::CurrentSource(_)
         | Model::Capacitor(_)
+        | Model::Inductor(_)
         | Model::Switch(_)
         | Model::Chip(_) => {}
         Model::Diode(j) | Model::Led(j) => out[0] = junction::initial(j),
@@ -182,6 +227,7 @@ pub(crate) fn update(model: &Model, probe: &Probe<'_>, prior: &[f64], next: &mut
         | Model::VoltageSource(_)
         | Model::CurrentSource(_)
         | Model::Capacitor(_)
+        | Model::Inductor(_)
         | Model::Switch(_)
         | Model::Chip(_) => Update::default(),
         Model::Diode(j) | Model::Led(j) => {
@@ -203,7 +249,8 @@ pub(crate) struct Update {
 }
 
 /// The pin pairs a part joins at DC. A chain of them is a DC path for `net.floating`.
-/// A capacitor is open unless the operating point holds it at `initial`. A switch is a resistor either way.
+/// A capacitor is open unless the operating point holds it at `initial`. An inductor is a short
+/// behind its resistance. A switch is a resistor either way.
 /// A current source joins nothing. A BJT joins its base to each other pin, because each junction
 /// conducts. An `nmos` joins its drain to its source. Its gate does not.
 pub(crate) fn dc_paths(model: &Model) -> &'static [(usize, usize)] {
@@ -212,6 +259,7 @@ pub(crate) fn dc_paths(model: &Model) -> &'static [(usize, usize)] {
         | Model::VoltageSource(_)
         | Model::Diode(_)
         | Model::Led(_)
+        | Model::Inductor(_)
         | Model::Switch(_) => &[(0, 1)],
         Model::Potentiometer(_) | Model::Npn(_) | Model::Pnp(_) => &[(0, 1), (1, 2)],
         Model::Nmos(_) => &[(0, 2)],
@@ -262,6 +310,7 @@ pub(crate) fn observe(model: &Model, probe: &Probe<'_>, at: Time, side: Side) ->
         Model::CurrentSource(source) => (source.pins, current_source::current(source, at, side)),
         Model::Diode(j) | Model::Led(j) => (j.pins, junction::current(j, probe)),
         Model::Capacitor(capacitor) => (capacitor.pins, capacitor::current(probe)),
+        Model::Inductor(inductor) => (inductor.pins, inductor::current(probe)),
         Model::Switch(switch) => (switch.pins, switch::current(switch, probe, at, side)),
     };
     let v = probe.v(pins[0]) - probe.v(pins[1]);
@@ -276,7 +325,7 @@ pub(crate) fn observe(model: &Model, probe: &Probe<'_>, at: Time, side: Side) ->
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Pair {
-    pub(crate) ends: [[CapacitorEnd; 2]; 2],
+    pub(crate) ends: [[StoreEnd; 2]; 2],
     pub(crate) farad: [f64; 2],
     pub(crate) internal_nodes: usize,
     pub(crate) branches: usize,
@@ -306,9 +355,62 @@ impl Device for Pair {
             .collect()
     }
 
+    fn inductors(&self) -> Vec<OwnedInductor> {
+        Vec::new()
+    }
+
     fn stamp(&self, stamp: &mut Stamp<'_>) {
         for cap in self.charges() {
             capacitor::stamp_capacitor(stamp, cap.k, cap.ends, cap.farad, None);
         }
+    }
+}
+
+/// One capacitor and one inductor on one part, so its charge 0 and its flux 0 share a part.
+/// Tests only. Not a netlist kind. The capacitor takes branch 0 and the inductor branch 1, and
+/// `branches` is the count `unknowns` reserves.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Mixed {
+    pub(crate) capacitor: [StoreEnd; 2],
+    pub(crate) farad: f64,
+    pub(crate) inductor: [StoreEnd; 2],
+    pub(crate) henry: f64,
+    pub(crate) ohm: f64,
+    pub(crate) internal_nodes: usize,
+    pub(crate) branches: usize,
+}
+
+#[cfg(test)]
+impl Device for Mixed {
+    fn unknowns(&self) -> Unknowns {
+        Unknowns {
+            internal_nodes: self.internal_nodes,
+            bare_internal: false,
+            branches: self.branches,
+            junctions: 0,
+        }
+    }
+
+    fn charges(&self) -> Vec<OwnedCapacitor> {
+        vec![OwnedCapacitor {
+            k: 0,
+            ends: self.capacitor,
+            farad: self.farad,
+        }]
+    }
+
+    fn inductors(&self) -> Vec<OwnedInductor> {
+        vec![OwnedInductor {
+            k: 0,
+            ends: self.inductor,
+            henry: self.henry,
+            ohm: self.ohm,
+        }]
+    }
+
+    fn stamp(&self, stamp: &mut Stamp<'_>) {
+        capacitor::stamp_capacitor(stamp, 0, self.capacitor, self.farad, None);
+        inductor::stamp_inductor(stamp, 0, self.inductor, self.henry);
     }
 }

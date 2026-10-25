@@ -16,6 +16,8 @@ use sim_core::timestamp::Timestamp;
 /// What `scripts/ngspice_refs.py` writes into `ngspice.json`.
 const NGSPICE: &str = "ngspice-42";
 const OPTIONS: &str = "temp=25 tnom=25 reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-12";
+/// A transient deck with an inductor, which crawls at the reltol above.
+const INDUCTOR_OPTIONS: &str = "temp=25 tnom=25 reltol=1e-5 abstol=1e-15 vntol=1e-12 gmin=1e-12";
 /// The deck's ramp at each contact edge and source jump, which is also the engine's first step
 /// after one.
 const EDGE_RAMP_PS: u64 = 1000;
@@ -92,6 +94,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "pnp-load",
             "pnp-sweep",
             "rc-switch",
+            "rl-step",
             "v-pulse-rc",
             "v-serial",
             "v-steps"
@@ -193,7 +196,7 @@ fn matches_its_reference(example: &Path) {
     );
     assert_eq!(
         reference["options"].as_str(),
-        Some(OPTIONS),
+        Some(options(&netlist::parse(&input).unwrap())),
         "{label} options"
     );
     let done = sim_cli::run(&input, Timestamp::from_unix_seconds(0));
@@ -207,6 +210,16 @@ fn matches_its_reference(example: &Path) {
         (Some(op), None) => check_op(&label.to_string(), op, &done),
         (None, Some(tran)) => check_tran(&label.to_string(), tran, &input, &done),
         _ => panic!("{label}: ngspice.json needs exactly one of op and tran"),
+    }
+}
+
+fn options(netlist: &netlist::Netlist) -> &'static str {
+    let coil = netlist
+        .parts()
+        .any(|(_, part)| matches!(part.model, Model::Inductor(_)));
+    match netlist.analysis() {
+        Analysis::Transient(_) if coil => INDUCTOR_OPTIONS,
+        _ => OPTIONS,
     }
 }
 

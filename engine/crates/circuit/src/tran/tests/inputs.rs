@@ -1637,6 +1637,24 @@ fn an_nmos_takes_no_input() {
 }
 
 #[test]
+fn an_inductor_takes_no_input() {
+    let mut session = open_document(&example("rl-step", 1_000), Rows::Grid, BUDGET);
+    let before = session.export();
+    for input in [
+        level("l1", 0, 1.0),
+        set("l1", 0, Contact::Closed),
+        send("l1", 0, 9600, &[0x31]),
+    ] {
+        assert_eq!(
+            session.apply(&input),
+            Err(Rejected::NotSettable),
+            "{input:?}"
+        );
+    }
+    assert_eq!(session.export(), before);
+}
+
+#[test]
 fn a_step_a_pulse_and_a_resistor_take_no_setting() {
     let mut session = open_document(KINDS, Rows::Grid, BUDGET);
     let stop = transient(netlist_of(&session)).stop.as_ps();

@@ -100,7 +100,7 @@ One failure throws from the `wasm-bindgen` glue instead. A call on an object tha
 | `invalid` | `open`, `record` | the bytes are not a valid netlist, and `diagnostics` holds why |
 | `ended` | `applyContact`, `applyLevel`, `applySerial` | the session has stopped or faulted |
 | `unknown_part` | the same | no part has that name |
-| `not_settable` | the same | the part takes no input of that kind. A serial send on a resistor, a capacitor, a junction, a chip, or a `step` or `pulse` source |
+| `not_settable` | the same | the part takes no input of that kind. A serial send on a resistor, a capacitor, an inductor, a junction, a chip, or a `step` or `pulse` source |
 | `wrong_setting` | the same | a contact on a source or a potentiometer, a level on a switch, a serial send on a switch, a potentiometer, or a plain or `steps` source, or a contact or a level on a `serial` source |
 | `value` | `applyLevel` | the level breaks a rule, and `rule` names it as `diagnostics.json` does, such as `fraction` for a position outside (0, 1) |
 | `past_stop` | `applyContact`, `applyLevel`, `applySerial` | the input would land at or after `stop_ps`, or a serial send's frames would not end inside a time the engine can store |

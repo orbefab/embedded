@@ -228,6 +228,7 @@ pub enum Model {
     /// An N-channel MOSFET. Level 1, bulk tied to the source.
     Nmos(Mosfet),
     Capacitor(Capacitor),
+    Inductor(Inductor),
     Switch(Switch),
     /// A package modelled as a behavioural black box. A new chip kind is a `Chip` variant,
     /// not a `Model` variant.
@@ -246,6 +247,7 @@ impl Model {
             Model::Npn(_) | Model::Pnp(_) => &Bjt::PINS,
             Model::Nmos(_) => &Mosfet::PINS,
             Model::Capacitor(_) => &Capacitor::PINS,
+            Model::Inductor(_) => &Inductor::PINS,
             Model::Switch(_) => &Switch::PINS,
             Model::Chip(Chip::Ne555(_)) => &Ne555::PINS,
             Model::Chip(Chip::Atmega328p(_)) => &Atmega328p::PINS,
@@ -263,6 +265,7 @@ impl Model {
             | Model::Diode(_)
             | Model::Led(_)
             | Model::Capacitor(_)
+            | Model::Inductor(_)
             | Model::Switch(_) => &[Quantity::I, Quantity::V, Quantity::P],
             Model::Npn(_) | Model::Pnp(_) => &[Quantity::Ib, Quantity::Ic, Quantity::P],
             Model::Nmos(_) => &[Quantity::Id, Quantity::P],
@@ -291,6 +294,7 @@ impl Model {
             Model::Npn(b) | Model::Pnp(b) => &b.pins,
             Model::Nmos(m) => &m.pins,
             Model::Capacitor(c) => &c.pins,
+            Model::Inductor(l) => &l.pins,
             Model::Switch(s) => &s.pins,
             Model::Chip(Chip::Ne555(n)) => &n.pins,
             Model::Chip(Chip::Atmega328p(m)) => &m.pins,
@@ -305,6 +309,7 @@ impl Model {
             | Model::VoltageSource(_)
             | Model::CurrentSource(_)
             | Model::Capacitor(_)
+            | Model::Inductor(_)
             | Model::Switch(_)
             | Model::Chip(_) => (None, None),
             Model::Diode(j) | Model::Led(j) => (j.max_current.as_ref(), j.max_power.as_ref()),
@@ -330,6 +335,7 @@ impl Model {
             | Model::Pnp(_)
             | Model::Nmos(_)
             | Model::Capacitor(_)
+            | Model::Inductor(_)
             | Model::Chip(_) => None,
         }
     }
@@ -355,6 +361,7 @@ impl Model {
             | Model::Pnp(_)
             | Model::Nmos(_)
             | Model::Capacitor(_)
+            | Model::Inductor(_)
             | Model::Switch(_)
             | Model::Chip(_) => None,
         }
@@ -373,6 +380,7 @@ impl Model {
             | Model::Pnp(_)
             | Model::Nmos(_)
             | Model::Capacitor(_)
+            | Model::Inductor(_)
             | Model::Switch(_)
             | Model::Chip(_) => None,
         }
@@ -391,6 +399,7 @@ impl Model {
             | Model::Pnp(_)
             | Model::Nmos(_)
             | Model::Capacitor(_)
+            | Model::Inductor(_)
             | Model::Switch(_)
             | Model::Chip(_) => None,
         }
@@ -408,6 +417,7 @@ impl Model {
             | Model::Pnp(_)
             | Model::Nmos(_)
             | Model::Capacitor(_)
+            | Model::Inductor(_)
             | Model::Switch(_)
             | Model::Chip(_) => None,
         }
@@ -572,6 +582,22 @@ pub struct Capacitor {
 }
 
 impl Capacitor {
+    pub const PINS: [&'static str; 2] = ["a", "b"];
+}
+
+/// An ideal inductance in series with a resistance. `a` reaches the inductance through the
+/// resistance. A short behind the resistance at the operating point.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Inductor {
+    /// Nets of pins `a`, `b`.
+    pub pins: [NetId; 2],
+    /// Henry, greater than 0.
+    pub inductance: Value,
+    /// Ohm, greater than 0.
+    pub series_resistance: Value,
+}
+
+impl Inductor {
     pub const PINS: [&'static str; 2] = ["a", "b"];
 }
 

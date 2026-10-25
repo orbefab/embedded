@@ -51,7 +51,7 @@ pub enum Rejected {
     Ended,
     /// No part has the input's name.
     UnknownPart,
-    /// A resistor, a capacitor, a junction, a chip, or a `step` or `pulse` source.
+    /// A resistor, a capacitor, an inductor, a junction, a chip, or a `step` or `pulse` source.
     NotSettable,
     /// A contact on a source or a potentiometer, a level on a switch, a serial send on a
     /// switch, a potentiometer, or a plain or `steps` source, or a contact or a level on a

@@ -64,6 +64,15 @@ cm1_ds x_m1_d 0 2e-11
 
 The drain ammeter is `#<name>.id`. The gate ammeter is not an engine column. A transient reference keeps it under `tran.gate`, keyed by `#<name>`, and the power check and the gate current check read it there. `p` is `(V(drain) - V(source)) * id + (V(gate) - V(source)) * ig`. At an operating point the capacitors are open, `ig` is 0, and `p` is `(V(drain) - V(source)) * id`.
 
+An inductor is its series resistance and its inductance, under the name `x_<name>` for the node between them:
+
+```text
+rx_l1_s vin x_l1 70.0
+ll1 x_l1 0 0.505
+```
+
+That is the engine's topology line for line. ngspice's `L` is a short at the operating point, as the engine's is. The deck saves `i(l<name>)`, the engine's `#<name>.i`, and does not compare the node between the two. The deck sets no `ic=` and no `uic`, because the engine has no initial current.
+
 A deck with a transistor also shunts every net but ground to ground with 1e12 ohm, `rx_gmin_<net>`. The engine puts its node gmin on every net, so the shunts give ngspice the engine's. Inside the transistor both put gmin in the same places, and the shunts play no part there. Each puts it across each junction. ngspice-42's default substrate junction, vertical for an `npn` and lateral for a `pnp`, adds gmin from ground to `c'` in an NPN and to `b'` in a PNP, and the engine stamps the same term. The engine puts no node gmin on a bipolar transistor's internal nodes. An off NPN with 5 V on its collector takes 10 pA in both, 5 pA across `b'` to `c'` and 5 pA from `c'` to ground, and the two agree to 7e-6 relative. The fixtures `npn-off` and `pnp-off` are within 0.009 of their bound. The three transistor examples agree to at most 3.2e-7 relative, the gap the LED examples show. An `nmos` has no internal node. Its device `GMIN` is only from drain to source, inside the stamp, and the shunts put the engine's node gmin on the external nets. An off MOSFET with 5 V from drain to source takes 5 pA into the drain in both. `nmos-off` is that circuit. A deck with a diode or an LED shunts every net but ground the same way, in either analysis.
 
 A source with a waveform writes `dc <initial>` in an operating point deck, the value the engine's operating point holds. A transient deck is described below.
@@ -78,13 +87,17 @@ A source waveform is `dc <initial> pwl(...)`. Its PWL starts at `0p <initial>`, 
 
 Each ramp corner, and each waveform knot in (0, `stop_ps`], also gets a source `vbp<k>` with a PWL corner one picosecond later. It makes that time a breakpoint, because ngspice skips a PWL corner it lands on an ulp early.
 
+A deck with an inductor writes each corner as its own source, `vbp<k> bp<k> 0 pwl(<corner>p 0 <stop>p 0)`. ngspice-42 keeps one pending breakpoint per PWL source. At each accepted point within its minimum breakpoint gap of the pending one, or past it, the source sets its first point after the current time as the next breakpoint. So a source's first point is a breakpoint from t = 0. A later point becomes one only after the time has passed the point before it, and a step that crosses both never stops at the later one. So a source with a second corner can lose it. At `reltol=1e-9`, a corner 1 ps later stops ngspice on `examples/rl-step` at 1 ms with "Timestep too small". One source per ramp, its start and end as the first two points, misses the end of the 30 ms ramp on a coil switched off into a diode. One source per corner lands every corner on both. The script reads the corners from the netlist's source jumps and contact edges, not from the deck, and refuses an inductor deck where ngspice has no point at one. It names the missing corners. A chip deck's waveform raw is linearized onto a grid, so a chip deck is checked on its edge raw, which keeps ngspice's own points.
+
+A deck with an inductor also sets `reltol=1e-5` and caps ngspice's step at `stop_ps / 60000`. At `reltol=1e-9` ngspice crawls on a coil whose current sits near zero, and at `1e-6` and `1e-7` it can stop at a transistor's turn-off. At `1e-5` the cap holds ngspice's own error far under the bound. That makes 60000 points or more, so the reference stores its waveforms on the engine's grid, as a run with more than 3000 points does. A deck with no inductor keeps every setting above, and its reference stays byte for byte.
+
 The analysis is `tran s p stop p 0 s p` with `s` one thousandth of `stop_ps`. ngspice picks its own points under that cap, which does not depend on the engine's `max_step_ps` or `grid_ps`. The options are the same as for an operating point.
 
 A run with more than 3000 points, and no chip, stores its waveforms on the engine's grid. The deck is unchanged. Each row's sample is ngspice's waveform read in picoseconds at that row, as the comparison reads ngspice's own points, so every row scores the same error either way. A row on a jump reads ngspice's point there, which is the level from before the 1 ns ramp. When ngspice lands that point one rounding unit before the jump, the row reads a few millionths of the way up the ramp, on both sides alike. The file also stores `span`, each scored column's maximum minus its minimum over ngspice's own points, so a swing between rows still sets the bound. The derived `p` columns score the product of two stored samples, where ngspice's own points give the line through their products. On the transistor examples that moves a `p` column's worst error by under 0.04 of its bound. The largest reference that keeps ngspice's points is the `nmos-pulse` fixture, at 2745.
 
 A capacitor with an `initial` voltage adds `.ic v(<node>)=<initial>` for the pin that is not ground, negated when that pin is `b`. Without `uic`, ngspice holds the node there while it solves the operating point, then releases it. The node's voltage at t = 0 then matches the engine's. Its current does not. ngspice reports the capacitor's current at t = 0 as 0, and the engine reports the current the hold takes. So the transient comparison drops the t = 0 sample of that capacitor's `i` and `p` from both series before it reads them as piecewise linear. ngspice's 0 then does not enter the line the engine's first rows are compared against. Those columns are scored from the reference's next sample on, since nothing before it says what ngspice's current was. On a linearized grid that is `grid_ps`. A capacitor with `"initial": null` writes no line.
 
-A switch, a held capacitor and a chip are translated only for a transient analysis. A held capacitor needs exactly one pin on ground. A transient deck reserves net and part names starting with `ctl_`, `bp` or `x_`. Each of these skips the example.
+A switch, a held capacitor and a chip are translated only for a transient analysis. A held capacitor needs exactly one pin on ground. A transient deck reserves net and part names starting with `ctl_`, `bp` or `x_`. A deck with a transistor or an inductor reserves names starting with `x_` in an operating point deck too. Each of these skips the example.
 
 ## Chip decks
 
@@ -199,6 +212,8 @@ The tolerance is relative to how far each capacitor's voltage moves in its segme
 The comparison does not read the engine between rows. A row is a point sample, and [run-folder.md](run-folder.md#traces) says what a read between rows needs. ngspice's points are far denser than the rows, so reading it as piecewise linear adds little. In another probe, 12 V feeds a rail through 2 ohm, 4.7 uF on the rail is held at 12 V, and a switch puts 470 ohm on the rail at 50 us. The rail sags 51 mV. On a 5 us grid every column is within its bound at the engine's 101 rows. The worst is `#c1.p`, 4.2e-5 W from ngspice against a bound of 3.1e-4 W.
 
 The engine and ngspice agree to about 3.2e-7 relative on `examples/led-5v`. That gap is consistent with ngspice 42 using older values of `k` and `q` than the exact SI ones. Both put 1e-12 S across the LED junction. The engine also puts 1e-12 S from every external net to ground. On the divider, whose deck has no such shunt, that node gmin is about 4e-9 relative. A chip deck shunts every node with the same gmin.
+
+`examples/rl-step` also has a closed form, checked in `crates/circuit/tests/transient.rs`. Its rows are at most 4.3e-7 A from `5 V / 70 ohm * (1 - exp(-t / tau))` and its decay, 6.1e-6 of the 71 mA swing, at 29.9 ms. Against ngspice its worst column is 0.0062 of its bound.
 
 ## The astable
 

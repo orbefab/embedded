@@ -11,8 +11,9 @@ mod waveform;
 
 use super::{
     Analysis, Basis, Bjt, Bounce, Capacitor, Chip, Contact, CurrentSource, Discharge, Edge, Event,
-    IntValue, Junction, MIN_GAP_PS, Model, Mosfet, Ne555, NetId, Netlist, OutputStage, Part,
-    Resistor, Schedule, Source, Switch, Transient, Value, VoltageSource, bounce, junction_scale,
+    Inductor, IntValue, Junction, MIN_GAP_PS, Model, Mosfet, Ne555, NetId, Netlist, OutputStage,
+    Part, Resistor, Schedule, Source, Switch, Transient, Value, VoltageSource, bounce,
+    junction_scale,
 };
 use crate::diagnostic::{AnalysisRule, Diagnostic, ScheduleRule, ValueRule};
 use crate::finite::Finite;
@@ -96,6 +97,12 @@ enum WirePart {
         // Required but nullable, like the ratings below.
         #[serde(deserialize_with = "Option::deserialize")]
         initial: Option<WireValue>,
+    },
+    Inductor {
+        name: String,
+        pins: PinMap,
+        inductance: WireValue,
+        series_resistance: WireValue,
     },
     Switch(WireSwitch),
     Ne555(Box<WireNe555>),
@@ -474,7 +481,8 @@ fn resolve_part(
         | WirePart::Potentiometer { name, .. }
         | WirePart::VoltageSource { name, .. }
         | WirePart::CurrentSource { name, .. }
-        | WirePart::Capacitor { name, .. } => name,
+        | WirePart::Capacitor { name, .. }
+        | WirePart::Inductor { name, .. } => name,
         WirePart::Diode(junction) | WirePart::Led(junction) => &junction.name,
         WirePart::Npn(bjt) | WirePart::Pnp(bjt) => &bjt.name,
         WirePart::Nmos(mosfet) => &mosfet.name,
@@ -589,6 +597,33 @@ fn resolve_part(
                         pins,
                         capacitance,
                         initial,
+                    }))
+                }
+                _ => None,
+            }
+        }
+        WirePart::Inductor {
+            pins,
+            inductance,
+            series_resistance,
+            ..
+        } => {
+            let pins = resolve_pins(&name, Inductor::PINS, &pins.0, nets, out);
+            let inductance = resolve_value(&part_ref, "inductance", "H", true, inductance, out);
+            let series_resistance = resolve_value(
+                &part_ref,
+                "series_resistance",
+                "ohm",
+                true,
+                series_resistance,
+                out,
+            );
+            match (pins, inductance, series_resistance) {
+                (Some(pins), Some(inductance), Some(series_resistance)) => {
+                    Some(Model::Inductor(Inductor {
+                        pins,
+                        inductance,
+                        series_resistance,
                     }))
                 }
                 _ => None,

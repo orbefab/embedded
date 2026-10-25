@@ -1,0 +1,11 @@
+{
+  "version": 0,
+  "parts": {
+    "v1": {
+      "model": "placeholder:dc-supply"
+    },
+    "l1": {
+      "model": "placeholder:inductor-radial"
+    }
+  }
+}
