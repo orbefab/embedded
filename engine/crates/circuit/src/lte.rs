@@ -341,6 +341,22 @@ impl Segment {
     /// Its point before does not move, because its voltage is a difference of node rows that
     /// other parts share. The segment goes on while every capacitor's sum is at most `VNTOL`
     /// and every inductor's at most `ABSTOL`, and starts at `held` otherwise.
+    ///
+    /// Newton settles each row of `step` and of `held` only to its own tolerance. The restart
+    /// solve holds each capacitor at its voltage and solves the rest. On an edge that changes
+    /// nothing, the jump is the step's companion current against the current the circuit draws
+    /// at that voltage, plus what Newton leaves. Two settled solves can differ by about twice
+    /// the row tolerance. The floor is that residual. A coil's relative
+    /// term is `RELTOL` times the voltage across the coil, and that term is small when the
+    /// coil's ends sit at volts. The floor stays the row tolerance. A jump inside it adds
+    /// nothing to a sum. The edge started no mode. The point before still moves by the raw
+    /// `di`. Every step's history already carries a residual of that size.
+    ///
+    /// A kept edge ends the stiff hold. The stores take the trapezoidal rule on the step the
+    /// segment wanted. A segment start's next step is 1 ns of backward Euler, and a kept edge
+    /// does not take that step. A switch edge or a source jump that keeps the segment is still
+    /// cut at its breakpoint 1 ns later. A stiff store otherwise leaves backward Euler only
+    /// through a try after a step of `RETRY` ps or more.
     pub(crate) fn across(
         self,
         charges: &Charges,
@@ -350,25 +366,25 @@ impl Segment {
     ) -> Segment {
         if let Segment::Smooth {
             before: (then, mut before),
-            stiff,
             swings,
             mut ringing,
+            ..
         } = self
         {
             let h = seconds(max_step);
             for (cap, sum) in charges.caps.iter().zip(&mut ringing.caps) {
-                let di = held.get(cap.branch) - step.get(cap.branch);
-                before.add(cap.branch, di);
-                *sum += h * di.abs() / cap.farad;
+                let (from, to) = (step.get(cap.branch), held.get(cap.branch));
+                before.add(cap.branch, to - from);
+                *sum += h * resolved(from, to, ABSTOL) / cap.farad;
             }
             for (flux, sum) in charges.fluxes.iter().zip(&mut ringing.fluxes) {
-                let dv = flux.volts(held) - flux.volts(step);
-                *sum += h * dv.abs() / flux.henry;
+                let (from, to) = (flux.volts(step), flux.volts(held));
+                *sum += h * resolved(from, to, VNTOL) / flux.henry;
             }
             if ringing.quiet() {
                 return Segment::Smooth {
                     before: (then, before),
-                    stiff,
+                    stiff: Stiff::NONE,
                     swings,
                     ringing,
                 };
@@ -643,6 +659,17 @@ pub(crate) fn error(
         swings,
         over,
         tried,
+    }
+}
+
+/// The jump from `from` to `to`, or 0 when it is within Newton's tolerance on that row.
+/// `floor` is that tolerance's absolute part.
+fn resolved(from: f64, to: f64, floor: f64) -> f64 {
+    let jump = (to - from).abs();
+    if jump <= RELTOL * from.abs().max(to.abs()) + floor {
+        0.0
+    } else {
+        jump
     }
 }
 
@@ -1718,27 +1745,96 @@ mod tests {
         assert!((got.ratio - want).abs() <= 1e-9 * want, "{got:?}");
     }
 
-    /// Each edge that keeps the segment adds `max_step * |dv| / L` to the coil's sum. A sum
-    /// over 1e-12 A starts a segment, whose first step is backward Euler.
+    /// Each edge that keeps the segment adds `max_step * |dv| / L` to the coil's sum, for a
+    /// jump Newton resolves on the voltage row. A sum over 1e-12 A starts a segment, whose
+    /// first step is backward Euler. The row sits at 0 V, so Newton's tolerance is 1 nV. 3 H
+    /// and a 1 ms cap put one 1 pA of sum at 3 nV, above that tolerance and under ten times it,
+    /// so one edge over the floor restarts and two halves of it restart only on the second.
     #[test]
     fn a_coil_s_edges_start_a_segment_once_their_sum_passes_its_floor() {
-        let (henry, max_step) = (0.5, 1_000_000_000);
+        let (henry, max_step) = (3.0, 1_000_000_000);
         let charges = coil(henry, 70.0);
-        let smooth = || coiled((Time::ZERO, point(0.0, 0.0)), [0.0, 0.1], [0.0, 5.0]);
+        let smooth = || coiled((Time::ZERO, point(0.0, 0.0)), [0.0, 0.1], [0.0, 0.0]);
         let edge = |segment: Segment, dv: f64| {
-            segment.across(
-                &charges,
-                &point(1.0, 0.01),
-                &point(1.0 + dv, 0.01),
-                max_step,
-            )
+            segment.across(&charges, &point(0.0, 0.0), &point(dv, 0.0), max_step)
         };
-        let over = ABSTOL * henry / seconds(max_step) * 1.01;
+        let floor = ABSTOL * henry / seconds(max_step);
+        let over = floor * 1.01;
+        let newton = RELTOL * over.abs() + VNTOL;
+        assert!(over > newton && over < 10.0 * newton, "{over} {newton}");
+        assert!(over / 2.0 > newton, "{}", over / 2.0);
         assert_eq!(edge(smooth(), over).method(), Method::BackwardEuler);
         assert_eq!(edge(smooth(), -over).method(), Method::BackwardEuler);
         let kept = edge(smooth(), over / 2.0);
         assert_eq!(kept.method(), Method::Trapezoidal);
         assert_eq!(edge(kept, -over / 2.0).method(), Method::BackwardEuler);
+    }
+
+    /// An edge that keeps the segment ends a stiff hold. The capacitor jump is 0.5 pA and the
+    /// coil jump is 0.5 nV, both under Newton's floor and neither one bitwise zero, so a rule
+    /// that clears the hold only for a zero jump fails. The stores take the trapezoidal rule.
+    /// A segment start's next step is backward Euler, and this edge does not take that step.
+    #[test]
+    fn a_kept_edge_puts_the_stiff_capacitors_back_on_the_trapezoidal_rule() {
+        let held = smooth(&[ix(1)]);
+        assert_eq!(held.stiff(), [ix(1)]);
+        let from = Solution::zeros(3);
+        let mut to = Solution::zeros(3);
+        to.add(2, 0.5 * ABSTOL);
+        let kept = held.across(&two(1e-9), &from, &to, 1_000_000);
+        assert_ne!(from.get(2), to.get(2));
+        assert_eq!(kept.method(), Method::Trapezoidal);
+        assert_eq!(kept.stiff(), []);
+        assert_eq!(kept.method_of(ix(1)), Method::Trapezoidal);
+
+        let held =
+            coiled((Time::ZERO, point(0.0, 0.0)), [0.0, 0.1], [0.0, 0.0]).stiffen(&[fx(0)], 1);
+        assert_eq!(held.stiff(), [fx(0)]);
+        let from = point(0.0, 0.0);
+        let to = point(0.5 * VNTOL, 0.0);
+        let kept = held.across(&coil(1.0, 70.0), &from, &to, 1_000);
+        assert_ne!(from.get(0), to.get(0));
+        assert_eq!(kept.method(), Method::Trapezoidal);
+        assert_eq!(kept.stiff(), []);
+        assert_eq!(kept.method_of(fx(0)), Method::Trapezoidal);
+    }
+
+    /// `resolved` is 0 at or under `RELTOL` times the larger of the two levels, plus the row's
+    /// floor, and it is the jump past that. A capacitor row uses `ABSTOL`, 1e-12 A. A coil's
+    /// voltage uses `VNTOL`, 1e-9 V. The coil case goes through `across`, so the floor is the
+    /// one that call passes.
+    #[test]
+    fn a_jump_inside_the_larger_level_s_floor_adds_nothing() {
+        for floor in [ABSTOL, VNTOL] {
+            let under = 0.75 * floor;
+            assert_eq!(resolved(0.0, under, floor), 0.0, "under {floor}");
+            let over = 1.5 * floor;
+            assert_eq!(resolved(0.0, over, floor), over, "over {floor}");
+            let from = 1.0;
+            let tol_from = RELTOL * from + floor;
+            let jump = tol_from * (1.0 + 0.5 * RELTOL);
+            let to = from + jump;
+            assert!(jump > RELTOL * from.abs() + floor, "{floor}");
+            assert!(jump <= RELTOL * to.abs() + floor, "{floor}");
+            assert_eq!(resolved(from, to, floor), 0.0, "larger level {floor}");
+        }
+
+        let (henry, max_step) = (0.1, 1_000_000_000);
+        let charges = coil(henry, 70.0);
+        let edge = |dv: f64| {
+            coiled((Time::ZERO, point(0.0, 0.0)), [0.0, 0.1], [0.0, 0.0]).across(
+                &charges,
+                &point(0.0, 0.0),
+                &point(dv, 0.0),
+                max_step,
+            )
+        };
+        assert_eq!(
+            edge(0.75 * VNTOL).method(),
+            Method::Trapezoidal,
+            "a coil at 0 V under VNTOL keeps the segment"
+        );
+        assert_eq!(edge(1.5 * VNTOL).method(), Method::BackwardEuler);
     }
 
     /// `c_m` owns a capacitor from `a` to ground and an inductor from `b` to ground. `d_c` is

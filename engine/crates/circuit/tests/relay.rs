@@ -337,3 +337,47 @@ fn a_net_reached_only_through_the_coil_has_a_dc_path() {
         results.diagnostics()
     );
 }
+
+/// Accepted steps after t = 0. An error diagnostic is a failed solve, and a run with no
+/// landings is hollow, so neither one can pass a step bound.
+fn accepted_steps(rel: &str) -> u64 {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+    let bytes = std::fs::read(&path).unwrap();
+    let netlist = sim_core::netlist::parse(&bytes).unwrap();
+    let (results, stats) = sim_circuit::simulate_stats(&netlist);
+    assert!(
+        results
+            .diagnostics()
+            .iter()
+            .all(|d| d.severity() != sim_core::diagnostic::Severity::Error),
+        "{:?}",
+        results.diagnostics()
+    );
+    assert!(stats.landings > 0, "no accepted step after t = 0");
+    stats.landings
+}
+
+/// Measured 34290 accepted steps. The bound is 10 percent above that count, in integer math.
+#[test]
+fn relay_flyback_stays_near_its_step_count() {
+    let measured = 34_290;
+    let steps = accepted_steps("../../examples/relay-flyback/netlist.json");
+    assert!(
+        steps <= measured + measured / 10,
+        "{steps} steps, bound {}",
+        measured + measured / 10
+    );
+}
+
+/// Measured 35801 accepted steps. The bound is 10 percent above that count, in integer math.
+/// The fixture can carry a power warning, so the run check is the absence of an error.
+#[test]
+fn the_bare_relay_stays_near_its_step_count() {
+    let measured = 35_801;
+    let steps = accepted_steps("../cli/tests/fixtures/p-relay-npn-bare/netlist.json");
+    assert!(
+        steps <= measured + measured / 10,
+        "{steps} steps, bound {}",
+        measured + measured / 10
+    );
+}

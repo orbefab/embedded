@@ -1,11 +1,11 @@
 //! The step policy. Pure, like the ladder: each function sees one outcome and
 //! names the next plan.
 //!
-//! A segment starts at t = 0 and at every restart solve that moves a capacitor or an
-//! inductor, and its first step is `EDGE_STEP`. From then on the local truncation error sets
-//! it. An accepted step grows by `0.9 * ratio^(-1/(p+1))`, at most 2, and a rejected one
-//! shrinks by the same rule, between 0.25 and 0.9. p is 1 for backward Euler and 2 for
-//! trapezoidal.
+//! A segment starts at t = 0 and at every restart solve whose jump on a capacitor or an
+//! inductor exceeds Newton's tolerance on that row, and its first step is `EDGE_STEP`.
+//! From then on the local truncation error sets it. An accepted step grows by
+//! `0.9 * ratio^(-1/(p+1))`, at most 2, and a rejected one shrinks by the same rule,
+//! between 0.25 and 0.9. p is 1 for backward Euler and 2 for trapezoidal.
 
 use sim_core::netlist::Transient;
 use sim_core::time::Time;

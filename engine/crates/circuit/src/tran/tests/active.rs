@@ -245,13 +245,16 @@ fn a_kept_edge_into_a_capacitor_at_rest_takes_the_wanted_step_after_a_short_land
 
 /// `c1` and `ri` make a 1 ns mode, far faster than the 1 us step, on which the trapezoidal rule
 /// rings, so each kept edge adds its mode to the ones before it. The pin flips every 1 us, and
-/// `rc` couples each flip into `c1` by the same `|di|`. The first `n` edges keep the segment,
-/// `n` being how many of `max_step * 2|di| / 2C` fit in 1 nV. The next one starts a segment,
-/// which clears the sum, and so on. Without `rc` no edge moves `c1`, and every edge keeps the
-/// segment.
+/// `rc` couples each flip into `c1` by 2.3 pA, above the 1 pA Newton settles a quiet
+/// current to. The first `n` edges keep the segment, `n` being how many of
+/// `max_step * |di| / C` fit in 1 nV, and that quotient is not an integer. The next one starts
+/// a segment, which clears the sum, and so on. Without `rc` no edge moves `c1`, and every
+/// edge keeps the segment.
 #[test]
 fn kept_edges_into_a_fast_mode_start_a_segment_once_their_sum_passes_the_floor() {
-    let (edges, farad, coupling) = (45, 1e-12, 1e17);
+    let (edges, farad) = (15, 10e-9);
+    let di = 2.3 * crate::newton::ABSTOL;
+    let coupling = 5.0 * 1000.0 / 1025.0 / di;
     let flips: Vec<u64> = (0..edges).map(|k| HIGH_AT + k * US).collect();
     let script: Vec<(u64, Op)> = flips
         .iter()
@@ -261,7 +264,7 @@ fn kept_edges_into_a_fast_mode_start_a_segment_once_their_sum_passes_the_floor()
     let starts = |rc: &[String]| {
         let parts = [
             resistor("rl", "out", "gnd", 1000.0),
-            resistor("ri", "idle", "gnd", 1000.0),
+            resistor("ri", "idle", "gnd", 1e-9 / farad),
             capacitor("c1", "idle", farad),
         ];
         let netlist = circuit((edges + 3) * US, &["out", "idle"], &[&parts, rc].concat());
@@ -276,7 +279,7 @@ fn kept_edges_into_a_fast_mode_start_a_segment_once_their_sum_passes_the_floor()
     let di = 5.0 * 1000.0 / 1025.0 / coupling;
     let n = (crate::newton::VNTOL / (1e-6 * di / farad)) as usize;
     let every: Vec<usize> = (n..flips.len()).step_by(n + 1).collect();
-    assert_eq!(every.len(), 2);
+    assert_eq!(every.len(), 3);
     assert_eq!(starts(&[resistor("rc", "out", "idle", coupling)]), every);
     assert_eq!(starts(&[]), Vec::<usize>::new());
 }
@@ -441,12 +444,52 @@ fn an_input_flip_reaches_the_core_at_its_located_picosecond() {
     assert!((crossing as f64 - expected).abs() < 200.0, "{crossing}");
     let out = volts(&trace, "out");
     let rise = crossing + 200 * NS;
-    assert!(restarted(&out, rise));
+    assert!(
+        out.iter().any(|&(t, _)| t == rise),
+        "a step lands on the drive edge"
+    );
     assert!(
         out.iter()
             .filter(|&&(t, _)| t <= rise)
             .all(|&(_, v)| v.abs() < 1e-9)
     );
+    let high = 5.0 * 1000.0 / 1025.0;
+    assert!((out.last().unwrap().1 - high).abs() < 1e-9);
+}
+
+/// The echo drives `out`, a net with no capacitor, 200 ns after `in` crosses 2.5 V. The only
+/// store is the 1 nF on `in`. That edge moves its current by less than Newton settles, so the
+/// segment and its swings stay. The echo of the level at power-on also lands 200 ns later.
+/// The accepted steps of `in` match a run that lands at both of those picoseconds and leaves
+/// the drive low. The row at the drive edge still holds the old drive.
+#[test]
+fn a_drive_edge_that_moves_no_store_above_newtons_tolerance_keeps_the_segment() {
+    let (netlist, chip) = echo();
+    let (trace, diagnostics) = run_active(&netlist, vec![chip]);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let crossing = volts(&trace, "in")
+        .iter()
+        .find(|&&(_, v)| v > 2.5)
+        .unwrap()
+        .0;
+    let out = volts(&trace, "out");
+    let rise = crossing + 200 * NS;
+    assert!(at(&out, rise).abs() < 1e-9, "{}", at(&out, rise));
+    let still = scripted(
+        &netlist,
+        "out",
+        "in",
+        &[
+            (100 * NS, Op::Drive(Drive::Low)),
+            (200 * NS, Op::Drive(Drive::Low)),
+            (rise, Op::Drive(Drive::Low)),
+        ],
+        None,
+    );
+    let (twin, diagnostics) = run_active(&netlist, vec![still]);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let times = |rows: &[(u64, f64)]| rows.iter().map(|&(at, _)| at).collect::<Vec<_>>();
+    assert_eq!(times(&volts(&trace, "in")), times(&volts(&twin, "in")));
     let high = 5.0 * 1000.0 / 1025.0;
     assert!((out.last().unwrap().1 - high).abs() < 1e-9);
 }
