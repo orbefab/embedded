@@ -20,6 +20,7 @@ use crate::newton::{
 };
 use crate::observe::{self, Columns};
 use crate::op;
+use crate::ratings::{Ratings, Timing};
 use crate::step::Plan;
 use crate::tran::{self, Breakpoints, Outcome, Record, Rows};
 use crate::watch::{self, Levels};
@@ -148,8 +149,10 @@ pub struct Session {
     document: Option<Document>,
     /// The bytes `record_document` read, until an input changes the netlist they hold.
     opened: Option<Vec<u8>>,
-    /// The floating-net warnings a recorded run reports.
+    /// `net.floating` warnings. `start` fills this from the netlist.
     pub(crate) warnings: Vec<Diagnostic>,
+    /// Rated quantities, sampled at t = 0 and on each accepted step.
+    ratings: Ratings,
     pub(crate) state: State,
 }
 
@@ -302,6 +305,14 @@ impl Probe<'_> {
     }
 }
 
+/// Why `start` returned no session. `warnings` are the floating-net warnings a run reports
+/// beside `error`.
+#[derive(Debug)]
+pub(crate) struct StartFailure {
+    pub(crate) error: Diagnostic,
+    pub(crate) warnings: Vec<Diagnostic>,
+}
+
 impl Session {
     /// Solves the operating point at t = 0 and the step after it, and keeps no trace. The step
     /// after t = 0 can fail, and then the session it returns has faulted.
@@ -323,9 +334,9 @@ impl Session {
         Session::open_with(netlist, Some(document), Budget { row, ..BUDGET })
     }
 
-    /// `open_document` with the trace, logic history and rating findings `sim run` keeps, so
-    /// `finish` can write its run folder. It also refuses a grid with more rows than a trace
-    /// holds, with `trace.too_large`.
+    /// `open_document` with the trace and logic history `sim run` keeps, so `finish` can write
+    /// its run folder. It also refuses a grid with more rows than a trace holds, with
+    /// `trace.too_large`.
     pub fn record_document(json: &[u8]) -> Result<Session, Refused> {
         let (document, netlist) = Document::parse(json).map_err(Refused::Invalid)?;
         let transient = transient(&netlist)?;
@@ -351,11 +362,11 @@ impl Session {
             None,
             document,
         )
-        .map_err(Refused::Failed)
+        .map_err(|failure| Refused::Failed(failure.error))
     }
 
     /// Solves t = 0 and records it when `rows` is set, then solves the step after it. Fails only
-    /// when t = 0 fails.
+    /// when t = 0 fails. The error carries the netlist's floating-net warnings.
     pub(crate) fn start(
         netlist: Netlist,
         transient: &Transient,
@@ -364,8 +375,15 @@ impl Session {
         columns: Columns,
         rows: Option<Rows>,
         document: Option<Document>,
-    ) -> Result<Session, Diagnostic> {
-        let circuit = Circuit::with_actives(netlist, actives)?;
+    ) -> Result<Session, Box<StartFailure>> {
+        let warnings = crate::topology::floating_nets(&netlist);
+        let fail = |error| {
+            Box::new(StartFailure {
+                error,
+                warnings: warnings.clone(),
+            })
+        };
+        let circuit = Circuit::with_actives(netlist, actives).map_err(fail)?;
         let charges = Charges::new(&circuit.netlist, &circuit.layout);
         let start = Iterate::initial(&circuit);
         let mut memo = Memo::default();
@@ -378,30 +396,25 @@ impl Session {
             &Actives::power_on(&circuit),
             None,
             op::OP_BUDGET,
-        )?;
+        )
+        .map_err(fail)?;
         let row = observe::observe(
             &circuit,
             &columns,
             &start.iterate.solution,
             Time::ZERO,
             Side::Before,
-        )?;
+        )
+        .map_err(fail)?;
         let signals = circuit.logic_refs();
         let logic = circuit.logic_levels(&start.chips, &start.levels);
         let integrals = vec![0.0; columns.refs().len()];
+        let mut ratings = Ratings::new(&circuit.netlist, &columns, Timing::Run);
+        ratings.sample(Time::ZERO, &row);
         let record = rows
-            .map(|rows| {
-                Record::start(
-                    &circuit.netlist,
-                    transient,
-                    &columns,
-                    rows,
-                    &row,
-                    &signals,
-                    &logic,
-                )
-            })
-            .transpose()?;
+            .map(|rows| Record::start(transient, &columns, rows, &row, &signals, &logic))
+            .transpose()
+            .map_err(fail)?;
         let actives = Actives::new(&circuit, &start.levels);
         let breakpoints = Breakpoints::new(&circuit.netlist, transient.stop);
         let segment = Segment::start(&charges, &start.iterate.solution);
@@ -436,7 +449,8 @@ impl Session {
             record,
             document,
             opened: None,
-            warnings: Vec::new(),
+            warnings,
+            ratings,
             state: State::TAKEN,
         };
         session.state = session.solved(accepted);
@@ -468,6 +482,23 @@ impl Session {
                 end: End::Fault(_), ..
             } => Status::Faulted,
         }
+    }
+
+    /// The warnings `diagnostics.json` would list if the session ended now.
+    ///
+    /// Static warnings come first in that file's order, each with `t_ps` null. One
+    /// `rating.current` or `rating.power` follows for each rated quantity that has gone
+    /// over. Its `t_ps` is the first accepted step over. `peak` and `peak_ps` run through the
+    /// last accepted step. `over_ps` runs through that step, not to `now`. A step that is over
+    /// adds its time when the next step is accepted, so a quantity first over on the last
+    /// accepted step reads 0. The fault that ends a run is [`Self::fault`].
+    /// `trace.row_interpolated` is absent. It names a grid row, and only a recorded trace
+    /// has those rows.
+    pub fn diagnostics(&self) -> Vec<Diagnostic> {
+        let mut found = self.warnings.clone();
+        found.extend(self.ratings.findings());
+        sim_core::run_folder::sort_diagnostics(&mut found);
+        found
     }
 
     /// The error that ended a faulted session. `None` while it runs and once it stops.
@@ -665,6 +696,7 @@ impl Session {
             unreachable!("a recorded run finishes once it has ended");
         };
         diagnostics.extend(self.warnings);
+        diagnostics.extend(self.ratings.findings());
         let (observations, mut trace) = record.finish(&self.circuit.netlist, at, &row, diagnostics);
         let usarts = self.actives.usarts();
         if !usarts.is_empty() {
@@ -865,6 +897,7 @@ impl Session {
                 end: End::Fault(fault),
             };
         }
+        self.ratings.sample(landing.at, &landing.row);
         // A refused step ends on the accepted row, so it is not counted. The count is before
         // the restart solve, so a failed restart still includes the landing it ends on.
         let left = accepted.restart_row.as_ref().unwrap_or(&accepted.row);

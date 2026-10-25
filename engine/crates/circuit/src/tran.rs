@@ -12,7 +12,6 @@ use sim_core::trace::Trace;
 
 use crate::RunStats;
 use crate::observe::{self, Columns};
-use crate::ratings::{Ratings, Timing};
 use crate::session::{BUDGET, Probed, Session, Span};
 use crate::step::EDGE_STEP;
 use crate::topology;
@@ -76,10 +75,10 @@ pub(crate) fn record(
     rows: Rows,
     document: Option<Document>,
 ) -> Result<Session, Unopened> {
-    let warnings = topology::floating_nets(&netlist);
     let columns = Columns::new(&netlist);
     let limit = Trace::row_limit(columns.refs().len());
     if transient.rows() > limit as u64 {
+        // `start` is not called, so the floating-net warnings are read here.
         return Err(Unopened {
             error: Diagnostic::TraceTooLarge {
                 rows: transient.rows(),
@@ -87,10 +86,10 @@ pub(crate) fn record(
                 columns: columns.refs().len(),
                 at: None,
             },
-            warnings,
+            warnings: topology::floating_nets(&netlist),
         });
     }
-    match Session::start(
+    Session::start(
         netlist,
         transient,
         Vec::new(),
@@ -98,13 +97,11 @@ pub(crate) fn record(
         columns,
         Some(rows),
         document,
-    ) {
-        Ok(mut session) => {
-            session.warnings = warnings;
-            Ok(session)
-        }
-        Err(error) => Err(Unopened { error, warnings }),
-    }
+    )
+    .map_err(|failure| Unopened {
+        error: failure.error,
+        warnings: failure.warnings,
+    })
 }
 
 /// The error that kept `record` from opening a session, and the warnings a run reports with it.
@@ -158,7 +155,6 @@ pub(crate) struct Record {
     rows: Rows,
     /// `trace.row_interpolated` for each row whose solve failed twice.
     interpolated: Vec<Diagnostic>,
-    ratings: Ratings,
     op: OpPoint,
     /// `None` without a chip.
     logic: Option<Logic>,
@@ -167,7 +163,6 @@ pub(crate) struct Record {
 impl Record {
     /// A record whose first step is the operating point at t = 0, read as `row`.
     pub(crate) fn start(
-        netlist: &Netlist,
         transient: &Transient,
         columns: &Columns,
         rows: Rows,
@@ -180,7 +175,6 @@ impl Record {
             transient: *transient,
             rows,
             interpolated: Vec::new(),
-            ratings: Ratings::new(netlist, columns, Timing::Run),
             op: observe::op_point(columns, row),
             logic: (!signals.is_empty()).then(|| Logic::new(signals.to_vec(), levels.to_vec())),
         };
@@ -209,10 +203,10 @@ impl Record {
         self.accept(probes, span.to.at, &span.to.row)
     }
 
-    /// Ratings sample every accepted step. `probes` are the rows before it, which close
-    /// intervals and sample nothing else. A non-row step folds into the open interval, and a
-    /// row closes it. A row past the trace's limit is `trace.too_large`, and the step is
-    /// neither stored nor folded.
+    /// `probes` are the rows before the step. They close intervals. They are not accepted
+    /// steps, so the session does not sample a rating on them. A non-row step folds into the
+    /// open interval, and a row closes it. A row past the trace's limit is `trace.too_large`,
+    /// and the step is neither stored nor folded.
     fn accept(
         &mut self,
         probes: Vec<(Time, Vec<Finite>)>,
@@ -235,7 +229,6 @@ impl Record {
         for (probe_at, probe) in probes {
             self.trace.push(probe_at, &probe);
         }
-        self.ratings.sample(at, row);
         if kept {
             self.trace.push(at, row);
         } else {
@@ -255,7 +248,6 @@ impl Record {
         row: &[Finite],
         diagnostics: &mut Vec<Diagnostic>,
     ) -> (Observations, Trace) {
-        diagnostics.extend(self.ratings.finish());
         diagnostics.extend(self.interpolated);
         let mut trace = self.trace;
         if !self.rows.keeps(&self.transient, at) {

@@ -129,6 +129,7 @@ for line in \
   'static open(netlist: Uint8Array): Session;' \
   'static record(netlist: Uint8Array): Session;' \
   'advanceTo(ps: bigint): Status;' \
+  'diagnostics(): string;' \
   'serialSince(cursor: bigint): Serial;' \
   'edgesSince(cursor: bigint): Edges;' \
   'edgeCursor(): bigint;' \

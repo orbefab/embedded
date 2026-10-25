@@ -99,12 +99,12 @@ impl Ratings {
         self.last = Some(at);
     }
 
-    /// One `rating.*` diagnostic per quantity that went over.
-    pub(crate) fn finish(self) -> Vec<Diagnostic> {
+    /// One `rating.*` diagnostic per quantity that went over, through the last sample.
+    pub(crate) fn findings(&self) -> Vec<Diagnostic> {
         self.watches
-            .into_iter()
+            .iter()
             .filter_map(|watch| {
-                let excursion = watch.excursion?;
+                let excursion = watch.excursion.clone()?;
                 Some(match watch.kind {
                     RatingKind::Current => Diagnostic::RatingCurrent(excursion),
                     RatingKind::Power => Diagnostic::RatingPower(excursion),
@@ -171,7 +171,7 @@ mod tests {
         let values = |current| row(&columns, current);
         ratings.sample(Time::ZERO, &values(0.03));
         ratings.sample(Time::from_ps(1), &values(-0.03));
-        assert!(ratings.finish().is_empty());
+        assert!(ratings.findings().is_empty());
     }
 
     #[test]
@@ -182,7 +182,7 @@ mod tests {
         ratings.sample(Time::from_ps(10), &values(-0.04));
         ratings.sample(Time::from_ps(20), &values(0.05));
         ratings.sample(Time::from_ps(30), &values(0.045));
-        let found = ratings.finish();
+        let found = ratings.findings();
         assert_eq!(
             found,
             [Diagnostic::RatingCurrent(Excursion {
@@ -206,7 +206,7 @@ mod tests {
         ratings.sample(Time::from_ps(30), &values(0.02));
         ratings.sample(Time::from_ps(70), &values(0.035));
         ratings.sample(Time::from_ps(75), &values(0.031));
-        let found = ratings.finish();
+        let found = ratings.findings();
         let [Diagnostic::RatingCurrent(excursion)] = found.as_slice() else {
             panic!("not one current finding");
         };
@@ -220,7 +220,7 @@ mod tests {
         let (mut ratings, columns) = ratings(Timing::Run);
         ratings.sample(Time::ZERO, &row(&columns, 0.0));
         ratings.sample(Time::from_ps(9), &row(&columns, 0.5));
-        let found = ratings.finish();
+        let found = ratings.findings();
         let [Diagnostic::RatingCurrent(excursion)] = found.as_slice() else {
             panic!("not one current finding");
         };

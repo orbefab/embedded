@@ -237,6 +237,11 @@ fn assert_same_reads(binding: &Session, inner: &sim_circuit::Session) -> (Vec<u8
         })
         .collect();
     assert_eq!(binding.levels(), levels, "levels at {at} ps");
+    assert_eq!(
+        binding.diagnostics(),
+        serde_json::to_string(&inner.diagnostics()).unwrap(),
+        "diagnostics at {at} ps"
+    );
     let got = binding.edges_since(0).expect("nothing forgotten");
     let (want_edges, cursor) = inner
         .edges_since(EdgeCursor::default())

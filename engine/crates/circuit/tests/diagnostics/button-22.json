@@ -1,0 +1,51 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": { "transient": { "stop_ps": 2000000, "max_step_ps": 1000000, "grid_ps": 1000000 } },
+  "ground": "gnd",
+  "nets": ["gnd", "vcc", "vk", "vbtn"],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": { "p": "vcc", "n": "gnd" },
+      "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": { "a": "vcc", "b": "vbtn" },
+      "resistance": { "value": 10000.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
+    },
+    {
+      "name": "r2",
+      "kind": "resistor",
+      "pins": { "a": "vcc", "b": "vk" },
+      "resistance": { "value": 22.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
+    },
+    {
+      "name": "led1",
+      "kind": "led",
+      "pins": { "anode": "vk", "cathode": "vbtn" },
+      "saturation_current": { "value": 6.711e-10, "unit": "A", "source": "user" },
+      "emission_coefficient": { "value": 4.427, "unit": "1", "source": "user" },
+      "series_resistance": { "value": 2.115, "unit": "ohm", "source": "user" },
+      "ratings": {
+        "current": { "value": 0.03, "unit": "A", "source": "user" },
+        "power": { "value": 0.075, "unit": "W", "source": "user" }
+      }
+    },
+    {
+      "name": "sw1",
+      "kind": "switch",
+      "pins": { "a": "vbtn", "b": "gnd" },
+      "on_resistance": { "value": 0.1, "unit": "ohm", "source": "user" },
+      "off_resistance": { "value": 1000000000.0, "unit": "ohm", "source": "user" },
+      "initial": "open",
+      "events": [{ "t_ps": 1000000, "state": "closed" }],
+      "bounce": null
+    }
+  ]
+}

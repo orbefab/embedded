@@ -157,7 +157,7 @@ pub(super) fn run_with(
     rows: Rows,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Outcome {
-    let recorded = Session::start(
+    let recorded = match Session::start(
         netlist.clone(),
         transient,
         actives,
@@ -165,11 +165,16 @@ pub(super) fn run_with(
         Columns::new(netlist),
         Some(rows),
         None,
-    )
-    .map_err(|error| Unopened {
-        error,
-        warnings: Vec::new(),
-    });
+    ) {
+        Ok(mut session) => {
+            session.warnings.clear();
+            Ok(session)
+        }
+        Err(failure) => Err(Unopened {
+            error: failure.error,
+            warnings: Vec::new(),
+        }),
+    };
     to_stop(recorded, transient, diagnostics)
 }
 

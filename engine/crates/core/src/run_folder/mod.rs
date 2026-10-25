@@ -34,6 +34,14 @@ pub const FORMAT_VERSION: u64 = 0;
 
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The order `diagnostics.json` uses. `t_ps`, then `code`, then `refs`, then the JSON bytes.
+pub fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {
+    diagnostics.sort_by_cached_key(|diagnostic| {
+        let bytes = serde_json::to_vec(diagnostic).expect("diagnostic serializes");
+        (diagnostic.sort_key(), bytes)
+    });
+}
+
 /// What a simulation produced. Diagnostics are sorted on construction.
 #[derive(Debug)]
 pub struct Results {
@@ -48,10 +56,7 @@ impl Results {
         trace: Option<Trace>,
         mut diagnostics: Vec<Diagnostic>,
     ) -> Results {
-        diagnostics.sort_by_cached_key(|diagnostic| {
-            let bytes = serde_json::to_vec(diagnostic).expect("diagnostic serializes");
-            (diagnostic.sort_key(), bytes)
-        });
+        sort_diagnostics(&mut diagnostics);
         Results {
             observations,
             trace,

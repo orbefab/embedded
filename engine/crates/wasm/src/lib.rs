@@ -388,6 +388,11 @@ impl Session {
         self.inner.fault().map(json)
     }
 
+    /// The warnings `diagnostics.json` would list if the session ended now, as JSON.
+    pub fn diagnostics(&self) -> String {
+        json(&self.inner.diagnostics())
+    }
+
     /// The analog columns `probe()` reads, in ref grammar.
     pub fn refs(&self) -> Vec<String> {
         self.refs.clone()
@@ -513,8 +518,9 @@ impl Session {
         self.apply(part, at, Setting::Contact(contact))
     }
 
-    /// Sets a `steps` source or a potentiometer from `ps` on, in volts, amperes or the position
-    /// fraction.
+    /// Sets a plain or `steps` voltage or current source, or a potentiometer, from `ps` on,
+    /// in volts, amperes or the position fraction. A plain source is exported as a `steps`
+    /// waveform.
     #[wasm_bindgen(js_name = applyLevel)]
     pub fn apply_level(
         &mut self,

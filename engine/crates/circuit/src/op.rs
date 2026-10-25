@@ -33,7 +33,7 @@ pub(crate) fn run(netlist: &Netlist, diagnostics: &mut Vec<Diagnostic>) -> Optio
     };
     let mut ratings = Ratings::new(netlist, &columns, Timing::Point);
     ratings.sample(Time::ZERO, &row);
-    diagnostics.extend(ratings.finish());
+    diagnostics.extend(ratings.findings());
     Some(observe::op_point(&columns, &row))
 }
 

@@ -1,8 +1,11 @@
+use sim_core::diagnostic::Diagnostic;
 use sim_core::netlist::Netlist;
+use sim_core::time::Time;
 
 use super::super::*;
 use super::fixtures::*;
 use crate::session::Budget;
+use crate::{Session, Status};
 
 /// One Newton iteration per step converges only where nothing moves: before the edge.
 #[test]
@@ -235,4 +238,123 @@ fn an_off_grid_failure_keeps_that_accepted_step_as_its_last_row() {
     let observations: serde_json::Value =
         serde_json::from_slice(folder.file("observations.json").unwrap()).unwrap();
     assert_eq!(observations["end_ps"], end.as_ps());
+}
+
+/// `led_switch` plus 10 ohm from `vcc` to ground, rated 1 mW. That resistor is over at t = 0.
+/// The switch still closes at 1 us.
+fn led_switch_over_from_the_start() -> Netlist {
+    sim_core::netlist::parse(
+        br#"{
+          "version": 0,
+          "seed": 0,
+          "analysis": { "transient": { "stop_ps": 2000000, "max_step_ps": 100000, "grid_ps": 100000 } },
+          "ground": "gnd",
+          "nets": ["gnd", "vcc", "vk", "vbtn"],
+          "parts": [
+            {
+              "name": "v1",
+              "kind": "voltage_source",
+              "pins": { "p": "vcc", "n": "gnd" },
+              "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+            },
+            {
+              "name": "rbleed",
+              "kind": "resistor",
+              "pins": { "a": "vcc", "b": "gnd" },
+              "resistance": { "value": 10.0, "unit": "ohm", "source": "user" },
+              "ratings": { "power": { "value": 0.001, "unit": "W", "source": "user" } }
+            },
+            {
+              "name": "r1",
+              "kind": "resistor",
+              "pins": { "a": "vcc", "b": "vk" },
+              "resistance": { "value": 220.0, "unit": "ohm", "source": "user" },
+              "ratings": { "power": null }
+            },
+            {
+              "name": "led1",
+              "kind": "led",
+              "pins": { "anode": "vk", "cathode": "vbtn" },
+              "saturation_current": { "value": 6.711e-10, "unit": "A", "source": "user" },
+              "emission_coefficient": { "value": 4.427, "unit": "1", "source": "user" },
+              "series_resistance": { "value": 2.115, "unit": "ohm", "source": "user" },
+              "ratings": { "current": null, "power": null }
+            },
+            {
+              "name": "sw1",
+              "kind": "switch",
+              "pins": { "a": "vbtn", "b": "gnd" },
+              "on_resistance": { "value": 0.1, "unit": "ohm", "source": "user" },
+              "off_resistance": { "value": 1e9, "unit": "ohm", "source": "user" },
+              "initial": "open",
+              "events": [{ "t_ps": 1000000, "state": "closed" }],
+              "bounce": null
+            }
+          ]
+        }"#,
+    )
+    .unwrap()
+}
+
+fn rated_power(session: &Session) -> sim_core::diagnostic::Excursion {
+    session
+        .diagnostics()
+        .into_iter()
+        .find_map(|diagnostic| match diagnostic {
+            Diagnostic::RatingPower(excursion) => Some(excursion),
+            _ => None,
+        })
+        .expect("rating.power")
+}
+
+#[test]
+fn a_faulted_session_keeps_ratings_sampled_before_the_fault() {
+    let netlist = led_switch_over_from_the_start();
+    let limited = open(&netlist, Vec::new(), Budget { steps: 0, ..BUDGET });
+    assert_eq!(limited.status(), Status::Faulted);
+    assert_eq!(limited.now(), Time::ZERO);
+    assert_eq!(limited.fault().unwrap().code(), "solver.step_limit");
+    let power = rated_power(&limited);
+    assert_eq!(power.quantity.to_string(), "#rbleed.p");
+    assert_eq!(power.first, Time::ZERO);
+    assert_eq!(power.over_ps, Some(0));
+    assert!(power.peak > power.limit);
+    assert!(
+        limited
+            .diagnostics()
+            .iter()
+            .all(|diagnostic| diagnostic.code() != "solver.step_limit")
+    );
+
+    let mut restarted = open(
+        &netlist,
+        Vec::new(),
+        Budget {
+            restart: 1,
+            ..BUDGET
+        },
+    );
+    assert_eq!(restarted.status(), Status::Running);
+    let at_open = rated_power(&restarted);
+    assert_eq!(at_open.first, Time::ZERO);
+    assert_eq!(at_open.over_ps, Some(0));
+    let edge = Time::from_ps(1_000_000);
+    assert_eq!(
+        restarted.advance_to(transient(&netlist).stop),
+        Status::Faulted
+    );
+    assert_eq!(restarted.now(), edge);
+    let fault = restarted.fault().unwrap();
+    assert_eq!(fault.code(), "solver.convergence");
+    assert_eq!(fault.at(), Some(edge));
+    let power = rated_power(&restarted);
+    assert_eq!(power.first, Time::ZERO);
+    assert_eq!(power.over_ps, Some(edge.as_ps()));
+    assert!(power.peak > power.limit);
+    assert!(
+        restarted
+            .diagnostics()
+            .iter()
+            .all(|diagnostic| diagnostic.code() != "solver.convergence")
+    );
 }

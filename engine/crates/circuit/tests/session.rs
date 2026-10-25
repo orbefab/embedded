@@ -2,12 +2,14 @@
 #[allow(dead_code)]
 mod common;
 
+use std::fs;
+
 use common::{held_capacitor, resistor, source_on, trace, transient};
 use sim_circuit::{EdgeCursor, Input, Refused, SerialCursor, Session, Setting, Status};
-use sim_core::diagnostic::Diagnostic;
+use sim_core::diagnostic::{Diagnostic, Severity};
 use sim_core::finite::Finite;
-use sim_core::name::Name;
-use sim_core::netlist::{self, Contact, Model, Netlist};
+use sim_core::name::{Name, Ref};
+use sim_core::netlist::{self, Analysis, Contact, Model, Netlist};
 use sim_core::time::Time;
 use sim_core::timestamp::Timestamp;
 
@@ -1041,4 +1043,400 @@ fn a_capacitor_integrates_its_charge() {
     let got = column_integral(&session, "#c1.i");
     let error = relative(got, expect);
     assert!(error <= 1e-4, "{got} vs {expect}, relative {error}");
+}
+
+const LED: &str = r#"{
+  "name": "led1",
+  "kind": "led",
+  "pins": { "anode": "vled", "cathode": "gnd" },
+  "saturation_current": { "value": 6.711e-10, "unit": "A", "source": "user" },
+  "emission_coefficient": { "value": 4.427, "unit": "1", "source": "user" },
+  "series_resistance": { "value": 2.115, "unit": "ohm", "source": "user" },
+  "ratings": {
+    "current": { "value": 0.03, "unit": "A", "source": "user" },
+    "power": { "value": 0.075, "unit": "W", "source": "user" }
+  }
+}"#;
+
+fn session_warnings(diagnostics: &[Diagnostic]) -> Vec<Diagnostic> {
+    diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.severity() == Severity::Warning
+                && diagnostic.code() != "trace.row_interpolated"
+        })
+        .cloned()
+        .collect()
+}
+
+fn kept(diagnostic: &Diagnostic) -> (String, Vec<Ref>, Option<u64>) {
+    (
+        diagnostic.code().to_string(),
+        diagnostic.refs(),
+        diagnostic.at().map(Time::as_ps),
+    )
+}
+
+fn rating_at(diagnostics: &[Diagnostic], code: &str) -> Option<u64> {
+    diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code() == code)
+        .and_then(Diagnostic::at)
+        .map(Time::as_ps)
+}
+
+fn peak(diagnostics: &[Diagnostic], code: &str) -> f64 {
+    let found = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code() == code)
+        .unwrap_or_else(|| panic!("{code} is absent"));
+    serde_json::to_value(found).unwrap()["data"]["peak"]
+        .as_f64()
+        .unwrap()
+}
+
+/// Warnings in `diagnostics.json` other than `trace.row_interpolated` and the fault.
+fn folder_warnings(which: &str, bytes: &[u8], stop: Time) -> Vec<Diagnostic> {
+    let netlist = netlist::parse(bytes).unwrap();
+    let results = sim_circuit::simulate(&netlist);
+    let from_run = session_warnings(results.diagnostics());
+    drop(results);
+    let mut opened = Session::open_document(bytes).expect(which);
+    opened.advance_to(stop);
+    let open_found = opened.diagnostics();
+    drop(opened);
+    let mut recorded = Session::record_document(bytes).expect(which);
+    recorded.advance_to(stop);
+    let recorded_found = recorded.diagnostics();
+    let folder = recorded
+        .finish(Timestamp::from_unix_seconds(0))
+        .expect(which);
+    let parsed: serde_json::Value =
+        serde_json::from_slice(folder.file("diagnostics.json").unwrap()).unwrap();
+    let from_file: Vec<serde_json::Value> = parsed
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["severity"] == "warning" && item["code"] != "trace.row_interpolated")
+        .cloned()
+        .collect();
+    assert_eq!(open_found, from_run, "{which} open");
+    assert_eq!(recorded_found, from_run, "{which} recorded");
+    assert_eq!(
+        serde_json::to_value(&from_run).unwrap(),
+        serde_json::Value::Array(from_file),
+        "{which} diagnostics.json"
+    );
+    from_run
+}
+
+#[test]
+fn a_floating_net_is_listed_when_the_session_opens() {
+    let json = transient(
+        1_000_000,
+        1_000_000,
+        r#""gnd","vin","lonely""#,
+        &[
+            &source_on("v1", "vin", 5.0),
+            &resistor("r1", "vin", "gnd", 1000.0),
+            r#"{ "name": "c1", "kind": "capacitor", "pins": { "a": "lonely", "b": "gnd" },
+              "capacitance": { "value": 1e-9, "unit": "F", "source": "user" }, "initial": null }"#,
+        ],
+    );
+    let bytes = json.as_bytes();
+    let mut session = opened(&json);
+    let at_open = session.diagnostics();
+    assert_eq!(at_open.len(), 1, "{at_open:?}");
+    assert_eq!(at_open[0].code(), "net.floating");
+    assert_eq!(at_open[0].at(), None);
+    assert_eq!(at_open[0].refs(), vec!["#net.lonely".parse().unwrap()]);
+    assert_eq!(
+        session.advance_to(Time::from_ps(1_000_000)),
+        Status::Stopped
+    );
+    assert_eq!(session.diagnostics(), at_open);
+    assert_eq!(
+        folder_warnings("floating", bytes, Time::from_ps(1_000_000)),
+        at_open
+    );
+}
+
+/// 5 V pulses, 0.5 ms wide every 20 ms, through 22 ohm into a 30 mA LED.
+/// Three 60 Hz frames. The pulses are over the rating and the mean of a frame is under it.
+fn pulsed_led() -> String {
+    let stop = 3 * FRAME_PS;
+    let step = 1_000_000_000u64;
+    format!(
+        r#"{{
+      "version": 0,
+      "seed": 0,
+      "analysis": {{ "transient": {{ "stop_ps": {stop}, "max_step_ps": {step}, "grid_ps": {step} }} }},
+      "ground": "gnd",
+      "nets": ["gnd", "vin", "vled"],
+      "parts": [
+        {{
+          "name": "v1",
+          "kind": "voltage_source",
+          "pins": {{ "p": "vin", "n": "gnd" }},
+          "voltage": {{
+            "kind": "pulse",
+            "initial": {{ "value": 0.0, "unit": "V", "source": "user" }},
+            "pulsed": {{ "value": 5.0, "unit": "V", "source": "user" }},
+            "delay_ps": 2000000000,
+            "width_ps": 500000000,
+            "period_ps": 20000000000
+          }}
+        }},
+        {{
+          "name": "r1",
+          "kind": "resistor",
+          "pins": {{ "a": "vin", "b": "vled" }},
+          "resistance": {{ "value": 22.0, "unit": "ohm", "source": "user" }},
+          "ratings": {{ "power": null }}
+        }},
+        {LED}
+      ]
+    }}"#
+    )
+}
+
+#[test]
+fn a_pulsed_over_current_is_the_same_for_one_call_frames_and_1_ps_calls_around_the_crossing() {
+    let json = pulsed_led();
+    let bytes = json.as_bytes();
+    let stop = Time::from_ps(3 * FRAME_PS);
+    let mut once = opened(&json);
+    assert!(
+        once.diagnostics()
+            .iter()
+            .all(|d| d.code() != "rating.current")
+    );
+    assert_eq!(once.advance_to(stop), Status::Stopped);
+    let found = once.diagnostics();
+    assert_eq!(once.advance_to(stop), Status::Stopped);
+    assert_eq!(once.diagnostics(), found);
+    let crossing = rating_at(&found, "rating.current").expect("rating.current");
+    assert!(
+        (2_000_000_000..3_000_000_000).contains(&crossing),
+        "first over at {crossing} ps"
+    );
+    assert!(peak(&found, "rating.current") > 0.03);
+
+    let mut frames = opened(&json);
+    assert_eq!(frames.advance_to(Time::from_ps(FRAME_PS)), Status::Running);
+    let mean = column_integral(&frames, "#led1.i") / FRAME_PS as f64;
+    assert!(mean < 0.03, "mean over the first frame is {mean} A");
+    assert_eq!(
+        rating_at(&frames.diagnostics(), "rating.current"),
+        Some(crossing)
+    );
+    assert_eq!(
+        frames.advance_to(Time::from_ps(2 * FRAME_PS)),
+        Status::Running
+    );
+    assert_eq!(frames.advance_to(stop), Status::Stopped);
+    assert_eq!(frames.diagnostics(), found);
+
+    let mut fine = opened(&json);
+    assert_eq!(
+        fine.advance_to(Time::from_ps(crossing - 1)),
+        Status::Running
+    );
+    assert!(
+        fine.diagnostics()
+            .iter()
+            .all(|d| d.code() != "rating.current"),
+        "{:?}",
+        fine.diagnostics()
+    );
+    for ps in crossing..=crossing + 4 {
+        fine.advance_to(Time::from_ps(ps));
+    }
+    assert_eq!(
+        rating_at(&fine.diagnostics(), "rating.current"),
+        Some(crossing)
+    );
+    assert_eq!(fine.advance_to(stop), Status::Stopped);
+    assert_eq!(fine.diagnostics(), found);
+    assert_eq!(folder_warnings("pulsed-led", bytes, stop), found);
+}
+
+#[test]
+fn an_input_keeps_a_rating_and_its_first_time() {
+    let stop = 5_000_000u64;
+    let json = transient(
+        stop,
+        1_000_000,
+        r#""gnd","vin","vled""#,
+        &[
+            &source_on("v1", "vin", 5.0),
+            &resistor("r1", "vin", "vled", 22.0),
+            LED,
+        ],
+    );
+    let mut session = opened(&json);
+    let before = session.diagnostics();
+    let crossing = rating_at(&before, "rating.current").expect("over at t = 0");
+    assert_eq!(crossing, 0);
+    assert!(peak(&before, "rating.current") > 0.03);
+    assert_eq!(
+        session.advance_to(Time::from_ps(1_000_000)),
+        Status::Running
+    );
+    let running = session.diagnostics();
+    for stamp in before.iter().map(kept) {
+        assert!(running.iter().map(kept).any(|later| later == stamp));
+    }
+    session
+        .apply(&Input {
+            part: Name::new("v1").unwrap(),
+            at: session.now(),
+            setting: Setting::Level(Finite::new(0.0).unwrap()),
+        })
+        .unwrap();
+    let landed = session.diagnostics();
+    for stamp in running.iter().map(kept) {
+        assert!(
+            landed.iter().map(kept).any(|later| later == stamp),
+            "lost {stamp:?} after the input"
+        );
+    }
+    assert_eq!(session.advance_to(Time::from_ps(stop)), Status::Stopped);
+    let ended = session.diagnostics();
+    for stamp in landed.iter().map(kept) {
+        assert!(ended.iter().map(kept).any(|later| later == stamp));
+    }
+    assert_eq!(rating_at(&ended, "rating.current"), Some(0));
+}
+
+fn diagnostic_fixture(name: &str) -> Vec<u8> {
+    fs::read(format!(
+        "{}/tests/diagnostics/{name}.json",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap()
+}
+
+/// `examples/led-9v` run as a 1 us transient.
+fn nine_volt_led_transient() -> Vec<u8> {
+    let path = format!(
+        "{}/../../examples/led-9v/netlist.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let mut json: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    json["analysis"] = serde_json::json!({
+        "transient": { "stop_ps": 1_000_000, "max_step_ps": 1_000_000, "grid_ps": 1_000_000 }
+    });
+    serde_json::to_vec(&json).unwrap()
+}
+
+fn notes_reporting(name: &str, found: &[Diagnostic], reporting: &mut Vec<String>) {
+    if found
+        .iter()
+        .any(|d| d.code() == "net.floating" || d.code().starts_with("rating."))
+    {
+        let codes: Vec<_> = found.iter().map(Diagnostic::code).collect();
+        eprintln!("reports {name}: {}", codes.join(" "));
+        reporting.push(name.to_string());
+    }
+}
+
+#[test]
+fn diagnostics_at_the_stop_match_the_folder() {
+    let mut reporting = Vec::new();
+    let mut transient_rating = false;
+    let mut transient_floating = false;
+    let mut mark_transient = |found: &[Diagnostic]| {
+        for diagnostic in found {
+            if diagnostic.code().starts_with("rating.") {
+                transient_rating = true;
+            }
+            if diagnostic.code() == "net.floating" {
+                transient_floating = true;
+            }
+        }
+    };
+    for example in common::examples::examples() {
+        let name = example.file_name().unwrap().to_string_lossy().into_owned();
+        let bytes = fs::read(example.join("netlist.json")).unwrap();
+        let netlist = netlist::parse(&bytes).unwrap();
+        match netlist.analysis() {
+            Analysis::Op => {
+                assert!(
+                    matches!(Session::open_document(&bytes), Err(Refused::Op)),
+                    "{name}"
+                );
+                assert!(
+                    matches!(Session::record_document(&bytes), Err(Refused::Op)),
+                    "{name}"
+                );
+                let results = sim_circuit::simulate(&netlist);
+                notes_reporting(&name, results.diagnostics(), &mut reporting);
+            }
+            Analysis::Transient(transient) => {
+                let stop = transient.stop;
+                drop(netlist);
+                let found = folder_warnings(&name, &bytes, stop);
+                mark_transient(&found);
+                notes_reporting(&name, &found, &mut reporting);
+            }
+        }
+    }
+    let press = 1_000_000u64;
+    let fixtures = [
+        ("button-22", diagnostic_fixture("button-22")),
+        ("pwm-led", diagnostic_fixture("pwm-led")),
+        ("floating-net", diagnostic_fixture("floating-net")),
+        ("led-9v-transient", nine_volt_led_transient()),
+    ];
+    for (name, bytes) in fixtures {
+        let netlist = netlist::parse(&bytes).unwrap();
+        let Analysis::Transient(transient) = netlist.analysis() else {
+            panic!("{name} is not a transient");
+        };
+        let stop = transient.stop;
+        drop(netlist);
+        let found = folder_warnings(name, &bytes, stop);
+        mark_transient(&found);
+        notes_reporting(name, &found, &mut reporting);
+        match name {
+            "button-22" => assert_eq!(
+                rating_at(&found, "rating.current"),
+                Some(press + 1_000),
+                "{name} first over {found:?}"
+            ),
+            "pwm-led" | "led-9v-transient" => assert!(
+                found.iter().any(|d| d.code().starts_with("rating.")),
+                "{name} {found:?}"
+            ),
+            "floating-net" => assert!(
+                found.iter().any(|d| d.code() == "net.floating"),
+                "{name} {found:?}"
+            ),
+            _ => {}
+        }
+    }
+    assert!(
+        reporting.iter().any(|name| name == "led-9v"),
+        "reporting examples: {reporting:?}"
+    );
+    assert!(
+        transient_rating,
+        "no transient reported a rating: {reporting:?}"
+    );
+    assert!(
+        transient_floating,
+        "no transient reported net.floating: {reporting:?}"
+    );
+}
+
+#[test]
+fn a_nine_volt_led_transient_matches_its_folder() {
+    let bytes = nine_volt_led_transient();
+    let found = folder_warnings("led-9v-transient", &bytes, Time::from_ps(1_000_000));
+    let codes: Vec<_> = found.iter().map(Diagnostic::code).collect();
+    assert!(codes.contains(&"rating.current"), "{codes:?}");
+    assert!(codes.contains(&"rating.power"), "{codes:?}");
+    assert!(found.iter().all(|d| d.code() != "trace.row_interpolated"));
+    assert!(found.iter().all(|d| d.severity() == Severity::Warning));
 }

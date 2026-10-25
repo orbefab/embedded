@@ -239,6 +239,13 @@ function advanceInChunks(session, json, rng, input = () => {}) {
   }
 }
 
+// Warnings `diagnostics.json` holds except `trace.row_interpolated` and every error. That is
+// the list `diagnostics()` returns at the stop.
+function sessionWarnings(dir) {
+  const found = JSON.parse(readFileSync(join(dir, 'diagnostics.json'), 'utf8'));
+  return found.filter((item) => item.severity === 'warning' && item.code !== 'trace.row_interpolated');
+}
+
 // `run` is the native folder. A transient recorded, advanced in chunks and finished is that
 // folder too, and its serial rows are those of `serial.csv`. `record` refuses an `op` analysis.
 function example(wasm, job, json, native) {
@@ -254,6 +261,11 @@ function example(wasm, job, json, native) {
   const session = wasm.Session.record(json);
   const read = advanceInChunks(session, json, new Rng(job.seed));
   assert.equal(session.status(), 'stopped');
+  assert.deepEqual(
+    JSON.parse(session.diagnostics()),
+    sessionWarnings(native),
+    `${job.name}: diagnostics() at the stop`,
+  );
   assertSameFolder(`${job.name} finish`, session.finish(0n), native);
   assertProbesOnRows(job.name, read, native);
   assert.deepEqual(read.rows, serialRows(native), `${job.name}: the serial rows are serial.csv's`);
@@ -265,6 +277,11 @@ function example(wasm, job, json, native) {
   const stop = BigInt(JSON.parse(json).analysis.transient.stop_ps);
   const once = wasm.Session.open(json);
   assert.equal(once.advanceTo(stop), 'stopped');
+  assert.deepEqual(
+    JSON.parse(once.diagnostics()),
+    sessionWarnings(native),
+    `${job.name}: an open session's diagnostics() at the stop`,
+  );
   const probe = once.probe();
   assert.deepEqual(
     floatBits(read.integrals),
