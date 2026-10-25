@@ -12,7 +12,9 @@ examples/<name>/
 
 `viewer.json` names a placeholder 3D model for each part. [viewer.md](viewer.md) defines it. The engine never reads it. A firmware example still has no `deck.cir` and no `ngspice.json`, and neither does `examples/npn-blinker`.
 
-`crates/cli/tests/fixtures/<name>/` holds circuits only the ngspice test runs, in the same layout without `viewer.json`. They are not examples. `diode-off` holds a diode with its anode at 5 V and its cathode at 8 V. `led-off` holds an LED with both pins at 5 V. `diode-reverse` holds a diode with 0.3 V of reverse bias, and `led-reverse` an LED with 0.5 V. `npn-off` and `pnp-off` hold a transistor off with its internal nodes away from 0 V. `npn-held-off` holds an NPN off with its base 0.13 V below its emitter and its collector at 12 V behind 100 ohm. `pnp-held-off` is the PNP mirror. `npn-reverse` and `pnp-reverse` hold the base-collector junction 0.13 V reverse, with the base-emitter junction at 0 V. `npn-nf-nr` and `pnp-nf-nr` set `NF` to 1.5 and `NR` to 2. The emitter is 0.13 V from the base and the collector is 0.27 V from the base, so `vbe` is below `-3 * NF*VT` and above `-3 * NR*VT`, and `vbc` is below `-3 * NR*VT`. Each of those six has an `IS` of 1e-8 A. `nmos-off` holds an `nmos` off, so its drain current is the drain-source gmin. `npn-slow-edge` switches a transistor through 1 Mohm, so its edges are slow next to the deck's ramp and the junction capacitors set them. The example `examples/npn-pulse` is a different circuit, a 1 kHz pin with 100 nF on the collector. `nmos-pulse` drives an `nmos` gate through 1 Mohm, so the gate capacitances set the edge. `nmos-regions` steps the drain through reverse, linear and saturation. `nmos-follower` holds the source off ground, with the drain at 12 V, the gate at 5 V, and 1 kohm from the source to ground.
+`crates/cli/tests/fixtures/<name>/` holds circuits the reference tests run, in the same layout without `viewer.json`. They are not examples. `diode-off` holds a diode with its anode at 5 V and its cathode at 8 V. `led-off` holds an LED with both pins at 5 V. `diode-reverse` holds a diode with 0.3 V of reverse bias, and `led-reverse` an LED with 0.5 V. `npn-off` and `pnp-off` hold a transistor off with its internal nodes away from 0 V. `npn-held-off` holds an NPN off with its base 0.13 V below its emitter and its collector at 12 V behind 100 ohm. `pnp-held-off` is the PNP mirror. `npn-reverse` and `pnp-reverse` hold the base-collector junction 0.13 V reverse, with the base-emitter junction at 0 V. `npn-nf-nr` and `pnp-nf-nr` set `NF` to 1.5 and `NR` to 2. The emitter is 0.13 V from the base and the collector is 0.27 V from the base, so `vbe` is below `-3 * NF*VT` and above `-3 * NR*VT`, and `vbc` is below `-3 * NR*VT`. Each of those six has an `IS` of 1e-8 A. `nmos-off` holds an `nmos` off, so its drain current is the drain-source gmin. `npn-slow-edge` switches a transistor through 1 Mohm, so its edges are slow next to the deck's ramp and the junction capacitors set them. The example `examples/npn-pulse` is a different circuit, a 1 kHz pin with 100 nF on the collector. `nmos-pulse` drives an `nmos` gate through 1 Mohm, so the gate capacitances set the edge. `nmos-regions` steps the drain through reverse, linear and saturation. `nmos-follower` holds the source off ground, with the drain at 12 V, the gate at 5 V, and 1 kohm from the source to ground.
+
+`p-relay-npn-bare` is a 5 V relay coil switched by the 2N3904 `npn` of `examples/npn-led`, with no diode across the coil. A pin through 1 kohm drives the base high from 5 ms to 30 ms. The contact feeds the 220 ohm LED load of `examples/relay-switch`. The run stops at 60 ms on a 50 us grid with a 1 ms maximum step. The coil rings with the transistor's junction capacitances at about 9 us, and that ring sits on the 50 us grid, so the rows are not compared. The directory contains `rows-skipped`. `scripts/ngspice_refs.py` and `crates/cli/tests/ngspice.rs` both read that file, and a fixture without it keeps its rows. `crates/cli/tests/relay.rs` checks three numbers in `ngspice.json`. The envelope peak of `#net.k` and the envelope minimum of `#net.k` each stay within 1e-3 of ngspice's peak. The contact's release stays within the relay edge rule, on ngspice's own points around that edge. The model has no breakdown. A real 2N3904 breaks down far below this peak. [netlist.md](netlist.md) says a junction does not break down and `VCEO` is not checked.
 
 ## Regenerate
 
@@ -25,7 +27,7 @@ uv run scripts/ngspice_refs.py --check            # exit 1 on drift or an unchec
 uv run scripts/ngspice_refs.py --self-test        # skip contract, and the operating-point refusal
 ```
 
-Stdout is one JSON document. It lists the examples written or checked, the examples skipped with a reason, and with `--check` the files that drifted. For an example with a chip, `--check` also builds and runs the engine, reads the run's `traces/logic.vcd` back with the standard library, summarises each signal, and compares that with `observations.logic`. Its `logic` list holds one entry per such example, and one that does not match exits 1. A skipped example that already has `deck.cir` or `ngspice.json` is a failure under `--check`. Its entry's `failure` names them, as in `committed ngspice.json was not checked`, and the process exits 1. A skip with neither file exits 0. `--self-test` checks those paths, each source spelling's deck line, the bounce generator's test vectors, the VCD reader and its summary, and the operating-point refusal below. Its stdout is one JSON document.
+Stdout is one JSON document. It lists the examples written or checked, the examples skipped with a reason, and with `--check` the files that drifted. For an example with a chip, `--check` also builds and runs the engine, reads the run's `traces/logic.vcd` back with the standard library, summarises each signal, and compares that with `observations.logic`. Its `logic` list holds one entry per such example, and one that does not match exits 1. A skipped example that already has `deck.cir` or `ngspice.json` is a failure under `--check`. Its entry's `failure` names them, as in `committed ngspice.json was not checked`, and the process exits 1. A skip with neither file exits 0. `--self-test` checks those paths, each source spelling's deck line, the bounce generator's test vectors, the VCD reader and its summary, and the operating-point refusal below. It also checks the bare flyback summary. That summary keeps a collector peak, a collector minimum and a release edge, and it does not keep the rows. Its stdout is one JSON document.
 
 A generation and `--check` both exit 1 when ngspice's log shows the operating point did not converge on the plain iteration. The message names the example and the lines ngspice-42 prints for that, `Starting dynamic gmin stepping`, `Dynamic gmin stepping failed`, `Starting true gmin stepping`, `True gmin stepping failed`, `Starting spice3 gmin stepping`, `spice3 gmin stepping failed`, `Starting source stepping`, `source stepping failed`, `Transient op started`, `Transient op failed`, and `The operating point could not be simulated successfully.` `--self-test` expects that refusal from `npn-led` with its pin at 0 V, from the same circuit as a transient, and from a pin at 1e-12 V whose dynamic gmin step completes. Without ngspice-42 on `PATH`, `--self-test` prints one failed case with the reason and exits 1.
 
@@ -191,6 +193,27 @@ A transient reference has `tran` in place of `op`.
 
 `grid_ps` is the spacing of the reference's points. A chip deck uses its linearized grid. A relay deck stored on the engine's grid uses that grid. Any other deck uses ngspice's step cap. `logic` maps each chip's `out` ref to its edges from `edges.raw`, and each relay's `contact` ref to its edges from its coil current. `values` holds every net voltage and each part's `i` and `v` at those points. The ground net is 0 on every row. `p` is not in the file.
 
+A fixture with a `rows-skipped` file stores no `tran` and no `op`. `p-relay-npn-bare` is that fixture. It stores the collector extreme and the release.
+
+```json
+{
+  "collector": "#net.k",
+  "minimum": -10.22129921450732,
+  "peak": 3384.041225390629,
+  "release": {
+    "coil": "#k1.i",
+    "i": [0.01041058231947246, 0.006877074114825975],
+    "ref": "#k1.logic.contact",
+    "span": 0.07515176667522583,
+    "t_ps": 30017287835,
+    "t_s": [0.03001677043193246, 0.03001732991798663]
+  },
+  "rows_skipped": "ringing at about 9 us sits on a 50 us grid"
+}
+```
+
+`collector` is the coil node. `peak` and `minimum` are ngspice's own extremes of that voltage. `rows_skipped` is the text of the fixture's `rows-skipped` file, and it says why the rows are absent. `release.ref` is the contact. `release.t_ps` is the release in picoseconds. `release.t_s` and `release.i` are ngspice's two raw points around that edge, not grid rows. `release.coil` is the coil current. `release.span` is that current's maximum minus its minimum over the raw file. The file also keeps `format`, `netlist_sha256`, `deck_sha256`, `ngspice` and `options`.
+
 `op` holds every net voltage and each part's `i` and `v`, under the engine's refs and sign rules. Values come from ngspice's ASCII raw file, which has 16 significant digits. `p` is left out. It is `v * i` on both sides.
 
 ## The comparison
@@ -229,6 +252,8 @@ The comparison does not read the engine between rows. A row is a point sample, a
 The engine and ngspice agree to about 3.2e-7 relative on `examples/led-5v`. That gap is consistent with ngspice 42 using older values of `k` and `q` than the exact SI ones. Both put 1e-12 S across the LED junction. The engine also puts 1e-12 S from every external net to ground. On the divider, whose deck has no such shunt, that node gmin is about 4e-9 relative. A chip deck shunts every node with the same gmin.
 
 `examples/relay-switch` is within 0.0168 of its bound on every column, the worst being the coil's switched end, `#net.coil`. Its contact closes 0.153 us and opens 0.161 us before ngspice's, against bounds of 28.4 us and 32.0 us. Its reference has 1201 rows on the engine's grid from about 60000 ngspice points.
+
+`p-relay-npn-bare` compares the envelope of `#net.k`, not the rows. The engine peak is 3383.74 V against ngspice's 3384.04 V, a miss of 0.298 V inside a bound of 3.384 V. The engine minimum is -10.218 V against ngspice's -10.221 V, inside the same bound. The contact opens 2.675 ns after ngspice's edge, inside a bound of 11.9 ns.
 
 `examples/rl-step` also has a closed form, checked in `crates/circuit/tests/transient.rs`. Its rows are at most 4.3e-7 A from `5 V / 70 ohm * (1 - exp(-t / tau))` and its decay, 6.1e-6 of the 71 mA swing, at 29.9 ms. Against ngspice its worst column is 0.0062 of its bound.
 

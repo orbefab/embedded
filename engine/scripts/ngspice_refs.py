@@ -11,8 +11,8 @@ For every example it translates netlist.json into deck.cir, runs `ngspice -b`
 on it, and writes the operating point, or the transient waveforms, to
 ngspice.json. A chip's latch edges and a relay's contact edges go to tran.logic. With no example arguments
 it takes every examples/*/netlist.json, then every
-crates/cli/tests/fixtures/*/netlist.json, the circuits only the ngspice test
-runs. `--check` regenerates in memory and
+crates/cli/tests/fixtures/*/netlist.json, the circuits the reference tests
+run. `--check` regenerates in memory and
 exits 1 if any committed byte differs, or if a skipped example already has
 deck.cir or ngspice.json. For an example with a chip it also runs the engine and exits 1
 or a relay unless the run's logic.vcd reads back as its observations.logic summary. stdout is one
@@ -28,9 +28,11 @@ reltol=1e-5, a breakpoint source per corner held to the stop, and a step cap of
 stop/60000, and the script exits when ngspice has no point at one of the
 netlist's corners. `--self-test` checks the skip paths, the source deck lines,
 the inductor and relay deck lines, the corner check, the contact edges, the bounce test vectors, the VCD
-reader and its summary, and that refusal. The refusal case runs ngspice. The
+reader and its summary, the bare flyback summary, and that refusal. The refusal case runs ngspice. The
 rest do not. Without ngspice-42 on PATH, `--self-test` prints one failed case
-and exits 1.
+and exits 1. A fixture directory that contains `rows-skipped` keeps the collector
+peak, the collector minimum and the release edge. `p-relay-npn-bare` is that
+fixture. Its rows are not stored. A fixture without that file keeps its rows.
 """
 
 import hashlib
@@ -103,6 +105,9 @@ KNOT_CAP = 100_000
 # each column's span over ngspice's own points. The largest dense reference is
 # the nmos-pulse fixture at 2745 points. docs/reference.md names this number.
 POINT_CAP = 3000
+# A fixture with this file keeps the collector peak, the minimum and the release.
+# `p-relay-npn-bare` is the one that has it. The text is `ngspice.json`'s `rows_skipped`.
+ROWS_SKIPPED_FILE = "rows-skipped"
 # ngspice-42 prints these in cktop.c and optran.c only after the plain Newton
 # operating point failed or was skipped. The `noopiter` help text is not a log line.
 OP_FALLBACKS = (
@@ -289,9 +294,110 @@ def ngspice_version():
     return match.group(0)
 
 
+def bare_fixture(example):
+    """The directory contains `rows-skipped`. Its rows are not stored.
+
+    `p-relay-npn-bare` is that fixture. A directory without the file keeps its
+    rows, including one with an LED across the coil.
+    """
+    return (example / ROWS_SKIPPED_FILE).is_file()
+
+
+def rows_skipped_reason(example):
+    """The `rows_skipped` sentence, from the fixture's `rows-skipped` file."""
+    return (example / ROWS_SKIPPED_FILE).read_text().strip()
+
+
+def narrow_save(deck, voltage, current):
+    """The deck saves the collector voltage and the coil current, and nothing else."""
+    found = 0
+    lines = []
+    for line in deck.splitlines():
+        if line.startswith("save "):
+            found += 1
+            line = f"save {voltage} {current}"
+        lines.append(line)
+    if found != 1:
+        raise SystemExit(f"a bare flyback deck has {found} save lines")
+    return "\n".join(lines) + "\n"
+
+
+def bare_interval(times, current, at_ps):
+    """The ngspice interval whose chord holds `at_ps`, in the comparison's indexing."""
+    picoseconds = [time * 1e12 for time in times]
+    after = next((index for index, time in enumerate(picoseconds) if time > at_ps), len(picoseconds))
+    index = min(max(after, 1), len(picoseconds) - 1)
+    return times[index - 1], times[index], current[index - 1], current[index]
+
+
+def bare_summary(times, voltage, current, pull_in, drop_out):
+    """The collector extreme and the one release, from ngspice's own points."""
+    release = [edge for edge in contact_edges(times, current, pull_in, drop_out) if edge["level"] == "low"]
+    if len(release) != 1:
+        raise SystemExit(f"a bare flyback has {len(release)} release edges")
+    at = release[0]["t_ps"]
+    start, stop, left, right = bare_interval(times, current, at)
+    if stop == start or right == left:
+        raise SystemExit("a bare flyback coil current is flat around the release")
+    return {
+        "peak": max(voltage),
+        "minimum": min(voltage),
+        "t_ps": at,
+        "span": max(current) - min(current),
+        "t_s": [start, stop],
+        "i": [left, right],
+    }
+
+
+def bare_files(example, netlist, netlist_bytes, version):
+    """`deck.cir` and a `ngspice.json` of the three compared numbers."""
+    deck, _mapping = translate(example.name, netlist)
+    transistor = next(part for part in netlist["parts"] if part["kind"] in BJT_KINDS)
+    relay = next(part for part in netlist["parts"] if part["kind"] == "relay")
+    collector = transistor["pins"]["collector"]
+    if collector not in (relay["pins"]["coil_a"], relay["pins"]["coil_b"]):
+        raise SystemExit(f"{example.name}: the collector is not a coil pin")
+    voltage = f"v({collector.lower()})"
+    current = f"i(vx_{relay['name'].lower()}_am)"
+    deck = narrow_save(deck, voltage, current)
+    label = label_of(example)
+    vectors = run_ngspice(deck, [TRAN_RAW], label)[0]
+    missed_corners(label, corner_times(netlist), vectors["time"])
+    summary = bare_summary(
+        vectors["time"],
+        vectors[voltage],
+        vectors[current],
+        float(relay["pull_in_current"]["value"]),
+        float(relay["drop_out_current"]["value"]),
+    )
+    reference = {
+        "format": FORMAT,
+        "netlist_sha256": hashlib.sha256(netlist_bytes).hexdigest(),
+        "deck_sha256": hashlib.sha256(deck.encode()).hexdigest(),
+        "ngspice": version,
+        "options": deck_options(netlist),
+        "rows_skipped": rows_skipped_reason(example),
+        "collector": f"#net.{collector}",
+        "peak": summary["peak"],
+        "minimum": summary["minimum"],
+        "release": {
+            "ref": f"#{relay['name']}.logic.contact",
+            "t_ps": summary["t_ps"],
+            "coil": f"#{relay['name']}.i",
+            "span": summary["span"],
+            "t_s": summary["t_s"],
+            "i": summary["i"],
+        },
+    }
+    text = json.dumps(reference, indent=2, sort_keys=True) + "\n"
+    return {"deck.cir": deck, "ngspice.json": text}
+
+
 def generate(example, version):
     netlist_bytes = (example / "netlist.json").read_bytes()
     netlist = json.loads(netlist_bytes)
+    if bare_fixture(example):
+        return bare_files(example, netlist, netlist_bytes, version)
     deck, mapping = translate(example.name, netlist)
     transient = "transient" in netlist["analysis"]
     chips = [part for part in netlist["parts"] if part["kind"] in CHIPS]
@@ -1095,7 +1201,10 @@ def run_ngspice(deck, raw_names, label):
     with tempfile.TemporaryDirectory() as tmp:
         Path(tmp, "deck.cir").write_text(deck)
         done = subprocess.run(
-            ["ngspice", "-b", "deck.cir"], cwd=tmp, capture_output=True, text=True
+            ["ngspice", "-b", "deck.cir"],
+            cwd=tmp,
+            capture_output=True,
+            text=True,
         )
         log = f"{done.stdout}{done.stderr}"
         fallback = op_fallback_lines(log)

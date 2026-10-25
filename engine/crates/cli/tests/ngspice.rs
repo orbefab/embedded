@@ -119,7 +119,8 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
 /// so its drain current is the drain-source gmin. `npn-slow-edge` drives the junction
 /// capacitors through 1 Mohm, and `nmos-pulse` does the same for the gate capacitances, slow
 /// next to the deck's ramp. `nmos-regions` biases the drain through reverse, linear and saturation.
-/// `nmos-follower` holds the source off ground.
+/// `nmos-follower` holds the source off ground. `p-relay-npn-bare` has a `rows-skipped`
+/// file. `relay.rs` checks its collector envelope and its release. The rows are not compared.
 #[test]
 fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
@@ -148,6 +149,7 @@ fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "npn-off",
             "npn-reverse",
             "npn-slow-edge",
+            "p-relay-npn-bare",
             "pnp-held-off",
             "pnp-nf-nr",
             "pnp-off",
@@ -155,6 +157,9 @@ fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
         ]
     );
     for fixture in fixtures {
+        if common::skips_reference_rows(&fixture) {
+            continue;
+        }
         matches_its_reference(&fixture);
     }
 }
@@ -444,10 +449,8 @@ fn check_logic(label: &str, reference: &serde_json::Value, done: &Completed) -> 
 /// ngspice's slope over the reference interval that holds the edge at `at`. The value bound,
 /// read as time.
 fn contact_bound(label: &str, reference: &serde_json::Value, coil: &str, at: u64) -> f64 {
-    let t: Vec<f64> = series_of(label, &reference["t_s"])
-        .iter()
-        .map(|t| t * 1e12)
-        .collect();
+    let times = series_of(label, &reference["t_s"]);
+    let t: Vec<f64> = times.iter().map(|time| time * 1e12).collect();
     let i = series(reference["values"].as_object().unwrap(), label, coil);
     let span = match reference.get("span") {
         Some(spans) => spans[coil].as_f64().unwrap(),
@@ -457,17 +460,7 @@ fn contact_bound(label: &str, reference: &serde_json::Value, coil: &str, at: u64
         }
     };
     let k = t.partition_point(|&x| x <= at as f64).clamp(1, t.len() - 1);
-    let slope = ((i[k] - i[k - 1]) / (t[k] - t[k - 1])).abs();
-    assert!(
-        slope.is_finite() && slope > 0.0,
-        "{label} {coil}: flat coil current around {at} ps"
-    );
-    let bound = (1e-3 * span + floor(coil)) / slope;
-    assert!(
-        bound.is_finite(),
-        "{label} {coil}: contact bound at {at} ps is not finite"
-    );
-    bound
+    common::coil_edge_bound_ps(span, &times[k - 1..k + 1], &i[k - 1..k + 1])
 }
 
 /// A coil current that crosses a threshold and comes back inside one reference interval can

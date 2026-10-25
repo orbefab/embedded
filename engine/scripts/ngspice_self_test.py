@@ -293,6 +293,7 @@ def self_test(refs):
     cases.append(corner_check(refs))
     cases.append(relay_deck(refs))
     cases.append(contact_edges(refs))
+    cases.append(bare_flyback(refs))
     cases.append(bounce_vectors())
     cases.append(vcd_reader(refs))
     cases.append(engine_grid(refs))
@@ -1154,6 +1155,71 @@ def contact_edges(refs):
         {"level": "low", "t_ps": 750000}
     ]
     return {"name": "contact edges", "ok": ok}
+
+
+def led_coil_without_marker(refs):
+    """An LED across the coil, with no `rows-skipped` file, is not a bare fixture.
+
+    The same directory with that file is bare.
+    """
+    parts = [
+        {"kind": "relay", "name": "k1", "pins": {"coil_a": "vcc", "coil_b": "k"}},
+        {"kind": "npn", "name": "q1", "pins": {"collector": "k", "base": "b", "emitter": "0"}},
+        {"kind": "led", "name": "led1", "pins": {"anode": "vcc", "cathode": "k"}},
+        {"kind": "resistor", "name": "r1"},
+    ]
+    netlist = {
+        "analysis": {"transient": {"stop_ps": 10, "max_step_ps": 1, "grid_ps": 1}},
+        "parts": parts,
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp)
+        (path / "netlist.json").write_text(json.dumps(netlist))
+        unmarked = not refs.bare_fixture(path)
+        (path / refs.ROWS_SKIPPED_FILE).write_text("ringing at about 9 us sits on a 50 us grid\n")
+        marked = refs.bare_fixture(path)
+    return unmarked and marked
+
+
+def bare_flyback(refs):
+    """`p-relay-npn-bare` has `rows-skipped`, so its reference keeps three numbers.
+
+    An example keeps its rows. An LED across the coil keeps its rows when the
+    file is absent. The summary reads the collector extreme and the one release
+    from ngspice's own points.
+    """
+    fixture = Path("crates/cli/tests/fixtures/p-relay-npn-bare")
+    ok = refs.bare_fixture(fixture)
+    ok = ok and refs.rows_skipped_reason(fixture) == "ringing at about 9 us sits on a 50 us grid"
+    ok = ok and not refs.bare_fixture(Path("examples/relay-switch"))
+    ok = ok and led_coil_without_marker(refs)
+    times = [0.0, 1e-6, 2e-6, 3e-6]
+    current = [0.0, 0.06, 0.02, 0.0]
+    voltage = [1.0, 5.0, -2.0, 3.0]
+    got = refs.bare_summary(times, voltage, current, 0.05, 0.01)
+    ok = ok and got == {
+        "peak": 5.0,
+        "minimum": -2.0,
+        "t_ps": 2_500_000,
+        "span": 0.06,
+        "t_s": [2e-6, 3e-6],
+        "i": [0.02, 0.0],
+    }
+    deck = "save v(a) v(b) i(vx_k1_am)\ntran 1p 10p 0 1p\n"
+    ok = ok and refs.narrow_save(deck, "v(k)", "i(vx_k1_am)") == "save v(k) i(vx_k1_am)\ntran 1p 10p 0 1p\n"
+    try:
+        refs.narrow_save("tran 1p 10p\n", "v(k)", "i(vx_k1_am)")
+    except SystemExit as stop:
+        ok = ok and str(stop) == "a bare flyback deck has 0 save lines"
+    else:
+        ok = False
+    try:
+        refs.bare_summary([0.0, 1e-6], [1.0, 1.0], [0.06, 0.06], 0.05, 0.01)
+    except SystemExit as stop:
+        ok = ok and str(stop) == "a bare flyback has 0 release edges"
+    else:
+        ok = False
+    return {"name": "bare flyback", "ok": ok}
 
 
 def vcd_reader(refs):

@@ -57,6 +57,26 @@ pub fn f64s(bytes: &[u8]) -> Vec<f64> {
     words.iter().map(|&word| f64::from_le_bytes(word)).collect()
 }
 
+/// `scripts/ngspice_refs.py` reads this same file. A fixture that has it keeps no waveform rows.
+pub const ROWS_SKIPPED_FILE: &str = "rows-skipped";
+
+pub fn skips_reference_rows(fixture: &Path) -> bool {
+    fixture.join(ROWS_SKIPPED_FILE).is_file()
+}
+
+/// Picoseconds a coil current takes to move 1e-3 of `span` plus 1 pA, at the slope from
+/// `(t_s[0], current[0])` to `(t_s[1], current[1])`. `t_s` is seconds.
+pub fn coil_edge_bound_ps(span: f64, t_s: &[f64], current: &[f64]) -> f64 {
+    let slope = ((current[1] - current[0]) / (t_s[1] * 1e12 - t_s[0] * 1e12)).abs();
+    assert!(
+        slope.is_finite() && slope > 0.0,
+        "flat coil current around the edge"
+    );
+    let bound = (1e-3 * span + 1e-12) / slope;
+    assert!(bound.is_finite(), "coil edge bound is not finite");
+    bound
+}
+
 /// Whether a chip in `netlist` has a USART. Today only an ATmega328P has one, `USART0`, so a new
 /// chip with a USART adds its kind here.
 pub fn has_usart(netlist: &serde_json::Value) -> bool {
