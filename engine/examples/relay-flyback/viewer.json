@@ -1,0 +1,32 @@
+{
+  "version": 0,
+  "parts": {
+    "v1": {
+      "model": "placeholder:dc-supply"
+    },
+    "vpin": {
+      "model": "placeholder:dc-supply"
+    },
+    "rb": {
+      "model": "placeholder:resistor-axial"
+    },
+    "q1": {
+      "model": "placeholder:to-92"
+    },
+    "k1": {
+      "model": "placeholder:relay-pcb-5pin"
+    },
+    "d1": {
+      "model": "placeholder:diode-axial"
+    },
+    "rl": {
+      "model": "placeholder:resistor-axial"
+    },
+    "led1": {
+      "model": "placeholder:led-5mm-red"
+    },
+    "rnc": {
+      "model": "placeholder:resistor-axial"
+    }
+  }
+}

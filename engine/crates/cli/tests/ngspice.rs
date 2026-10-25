@@ -94,6 +94,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "pnp-load",
             "pnp-sweep",
             "rc-switch",
+            "relay-flyback",
             "relay-switch",
             "rl-step",
             "v-pulse-rc",
