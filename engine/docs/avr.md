@@ -101,6 +101,8 @@ Ten seconds of `firmware/blink.S` at 16 MHz are 21 stops and 20 edges on PB5. Th
 
 `examples/atmega-fade` runs `firmware/fade.S` for 1.57 s with the WP7113ID of `examples/led-5v` on PB1. Timer1 is 8-bit phase-correct PWM, prescaler 64, a period of 32640 cycles, 2.04 ms at 16 MHz (§16.9.4). `OCR1A` steps by 5 every 480,000 cycles, 30 ms, and reverses at 0 and 255. `crates/cli/tests/fade.rs` checks the PB1 edges and the LED's current. The run writes 15701 rows and 1481 PB1 edges. [bench.md](bench.md) times the committed run and the `live` run of this example. The table there is from engine 0.6.0.
 
+`examples/atmega-board-blink` is the development board fragment. It runs `firmware/sketch/blink.hex` for 4 s. Header nets use the pin names `d0` to `d13` and `a0` to `a5`. [board.md](board.md) lists the parts and what the fragment leaves out. `crates/cli/tests/board.rs` checks the fragment.
+
 ## Sent bytes
 
 `Cpu::take(Channel::Usart0)` returns each byte the USART finished, with the CPU cycle its last bit ended. `Cpu::take_sent(through)` pops the same queue and returns a `Sent`: the USART's index, the byte, the oscillator cycle its start bit drove `TXD` low, and the oscillator cycle its last stop bit ended. It returns only asynchronous frames whose end is at or before oscillator cycle `through`. A Master SPI mode byte has no start bit and is not serial output, so `take_sent` drops each one ahead of a frame and keeps scanning. `Timeline::take_sent` is the same call on the timeline's clock.

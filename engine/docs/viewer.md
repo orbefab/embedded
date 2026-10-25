@@ -10,11 +10,13 @@ Each example has `viewer.json` beside `netlist.json`. The file names the 3D mode
 | `capacitor-electrolytic` | An electrolytic capacitor. Used for every capacitor of 1 uF or more. |
 | `current-source` | A DC current source. |
 | `dc-supply` | A DC voltage source. |
+| `dev-board-328p` | An ATmega328P on a common ATmega328P development board, revision 3, drawn as the whole board. |
 | `diode-axial` | An axial leaded rectifier diode, the 1N4001 class the relay example cites. |
 | `dip-8` | An NE555 in an 8-pin DIP. |
 | `dip-28` | An ATmega328P in a 28-pin DIP. |
 | `inductor-radial` | A radial leaded inductor. |
 | `led-5mm-red` | A 5 mm red LED, the Kingbright WP7113ID the LED examples cite. |
+| `on-board` | A part of the development board model. The board model draws it, so the example does not name a package. |
 | `potentiometer-rotary` | A rotary potentiometer. |
 | `relay-pcb-5pin` | A 5-pin PCB relay with one changeover contact. |
 | `resistor-axial` | An axial resistor. |

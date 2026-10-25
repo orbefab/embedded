@@ -717,6 +717,8 @@ Each port pin, `PC6` included, is a DC path to `VCC` and to `GND_8` in every dri
 
 An ATmega328P has no `ratings` object. [avr.md](avr.md#ratings) names its ratings, and a later PR checks them. It has no `i`, `v`, or `p`. Its logic signals are its watched pins, described in [Refs](#refs).
 
+`examples/atmega-board-blink` places this part on the development board fragment and runs `firmware/sketch/blink.hex`. [board.md](board.md) lists the parts, the nets, and what that fragment leaves out.
+
 ## Ratings
 
 A rating bounds the stress on a part. Every key of a kind's `ratings` object is required. Each value is a value object, or `null` for a part that is deliberately unrated.
