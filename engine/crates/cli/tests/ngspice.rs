@@ -16,7 +16,7 @@ use sim_core::timestamp::Timestamp;
 /// What `scripts/ngspice_refs.py` writes into `ngspice.json`.
 const NGSPICE: &str = "ngspice-42";
 const OPTIONS: &str = "temp=25 tnom=25 reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-12";
-/// A transient deck with an inductor, which crawls at the reltol above.
+/// A transient deck with an inductor or a relay, which crawls at the reltol above.
 const INDUCTOR_OPTIONS: &str = "temp=25 tnom=25 reltol=1e-5 abstol=1e-15 vntol=1e-12 gmin=1e-12";
 /// The deck's ramp at each contact edge and source jump, which is also the engine's first step
 /// after one.
@@ -94,6 +94,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "pnp-load",
             "pnp-sweep",
             "rc-switch",
+            "relay-switch",
             "rl-step",
             "v-pulse-rc",
             "v-serial",
@@ -216,7 +217,7 @@ fn matches_its_reference(example: &Path) {
 fn options(netlist: &netlist::Netlist) -> &'static str {
     let coil = netlist
         .parts()
-        .any(|(_, part)| matches!(part.model, Model::Inductor(_)));
+        .any(|(_, part)| matches!(part.model, Model::Inductor(_) | Model::Relay(_)));
     match netlist.analysis() {
         Analysis::Transient(_) if coil => INDUCTOR_OPTIONS,
         _ => OPTIONS,
@@ -390,10 +391,11 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
     );
 }
 
-/// Each latch signal ngspice records against the engine's: the same levels in order, the mean
-/// period between falling edges within 1e-3, and each edge within 1e-3 of that period of its
-/// partner. Returns the window around each pair, from the earlier minus the reference grid to
-/// the later plus it, where the linearized waveform still straddles the edge.
+/// Each logic signal ngspice records against the engine's, with the same levels in order. A
+/// latch's mean period between falling edges is within 1e-3, and each edge is within 1e-3 of
+/// that period of its partner. A relay contact's edge is within `contact_bound` of its partner.
+/// Returns the window around each pair, from the earlier minus the reference grid to the later
+/// plus it, where the reference still straddles the edge.
 fn check_logic(label: &str, reference: &serde_json::Value, done: &Completed) -> Vec<(f64, f64)> {
     let Some(logic) = reference.get("logic") else {
         return Vec::new();
@@ -410,15 +412,24 @@ fn check_logic(label: &str, reference: &serde_json::Value, done: &Completed) -> 
             edges.iter().map(|(_, level)| level.clone()).collect()
         };
         assert_eq!(levels(&engine), levels(&oracle), "{label} {key}: levels");
-        let (got, want) = (mean_period(&engine), mean_period(&oracle));
-        assert!(
-            (got / want - 1.0).abs() <= 1e-3,
-            "{label} {key}: period {got} ps vs ngspice {want} ps"
-        );
-        for ((a, _), (b, _)) in engine.iter().zip(&oracle) {
+        let bounds: Vec<f64> = match key.strip_suffix(".logic.contact") {
+            Some(part) => oracle
+                .iter()
+                .map(|&(at, _)| contact_bound(label, reference, &format!("{part}.i"), at))
+                .collect(),
+            None => {
+                let (got, want) = (mean_period(&engine), mean_period(&oracle));
+                assert!(
+                    (got / want - 1.0).abs() <= 1e-3,
+                    "{label} {key}: period {got} ps vs ngspice {want} ps"
+                );
+                vec![1e-3 * want; oracle.len()]
+            }
+        };
+        for (((a, _), (b, _)), bound) in engine.iter().zip(&oracle).zip(bounds) {
             assert!(
-                a.abs_diff(*b) as f64 <= 1e-3 * want,
-                "{label} {key}: edge at {a} ps vs ngspice {b} ps"
+                a.abs_diff(*b) as f64 <= bound,
+                "{label} {key}: edge at {a} ps vs ngspice {b} ps, bound {bound} ps"
             );
             windows.push((
                 a.min(b).saturating_sub(grid_ps) as f64,
@@ -427,6 +438,48 @@ fn check_logic(label: &str, reference: &serde_json::Value, done: &Completed) -> 
         }
     }
     windows
+}
+
+/// Picoseconds the coil current `coil` takes to move 1e-3 of its span plus its floor, at
+/// ngspice's slope over the reference interval that holds the edge at `at`. The value bound,
+/// read as time.
+fn contact_bound(label: &str, reference: &serde_json::Value, coil: &str, at: u64) -> f64 {
+    let t: Vec<f64> = series_of(label, &reference["t_s"])
+        .iter()
+        .map(|t| t * 1e12)
+        .collect();
+    let i = series(reference["values"].as_object().unwrap(), label, coil);
+    let span = match reference.get("span") {
+        Some(spans) => spans[coil].as_f64().unwrap(),
+        None => {
+            i.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+                - i.iter().copied().fold(f64::INFINITY, f64::min)
+        }
+    };
+    let k = t.partition_point(|&x| x <= at as f64).clamp(1, t.len() - 1);
+    let slope = ((i[k] - i[k - 1]) / (t[k] - t[k - 1])).abs();
+    assert!(
+        slope.is_finite() && slope > 0.0,
+        "{label} {coil}: flat coil current around {at} ps"
+    );
+    let bound = (1e-3 * span + floor(coil)) / slope;
+    assert!(
+        bound.is_finite(),
+        "{label} {coil}: contact bound at {at} ps is not finite"
+    );
+    bound
+}
+
+/// A coil current that crosses a threshold and comes back inside one reference interval can
+/// leave a flat chord. An infinite bound would let any engine edge pass.
+#[test]
+#[should_panic(expected = "flat coil current")]
+fn contact_bound_rejects_a_flat_coil_current() {
+    let reference = serde_json::json!({
+        "t_s": [0.0, 1e-6],
+        "values": { "#k1.i": [0.05, 0.05] },
+    });
+    contact_bound("flat", &reference, "#k1.i", 500_000);
 }
 
 /// `(t_ps, level)` of every change of `key` the engine recorded.

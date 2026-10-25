@@ -12,7 +12,7 @@ mod waveform;
 use super::{
     Analysis, Basis, Bjt, Bounce, Capacitor, Chip, Contact, CurrentSource, Discharge, Edge, Event,
     Inductor, IntValue, Junction, MIN_GAP_PS, Model, Mosfet, Ne555, NetId, Netlist, OutputStage,
-    Part, Resistor, Schedule, Source, Switch, Transient, Value, VoltageSource, bounce,
+    Part, Relay, Resistor, Schedule, Source, Switch, Transient, Value, VoltageSource, bounce,
     junction_scale,
 };
 use crate::diagnostic::{AnalysisRule, Diagnostic, ScheduleRule, ValueRule};
@@ -104,9 +104,23 @@ enum WirePart {
         inductance: WireValue,
         series_resistance: WireValue,
     },
+    Relay(Box<WireRelay>),
     Switch(WireSwitch),
     Ne555(Box<WireNe555>),
     Atmega328p(Box<WireAtmega328p>),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireRelay {
+    name: String,
+    pins: PinMap,
+    inductance: WireValue,
+    coil_resistance: WireValue,
+    pull_in_current: WireValue,
+    drop_out_current: WireValue,
+    on_resistance: WireValue,
+    off_resistance: WireValue,
 }
 
 #[derive(Deserialize)]
@@ -486,6 +500,7 @@ fn resolve_part(
         WirePart::Diode(junction) | WirePart::Led(junction) => &junction.name,
         WirePart::Npn(bjt) | WirePart::Pnp(bjt) => &bjt.name,
         WirePart::Nmos(mosfet) => &mosfet.name,
+        WirePart::Relay(relay) => &relay.name,
         WirePart::Switch(switch) => &switch.name,
         WirePart::Ne555(chip) => &chip.name,
         WirePart::Atmega328p(chip) => &chip.name,
@@ -628,6 +643,9 @@ fn resolve_part(
                 }
                 _ => None,
             }
+        }
+        WirePart::Relay(relay) => {
+            resolve_relay(&name, &part_ref, *relay, nets, out).map(Model::Relay)
         }
         WirePart::Switch(switch) => {
             resolve_switch(seed, &name, &part_ref, switch, nets, out).map(Model::Switch)
@@ -921,6 +939,44 @@ fn resolve_output_stage(
         high_resistance: high_resistance?,
         low_drop: low_drop?,
         low_resistance: low_resistance?,
+    })
+}
+
+fn resolve_relay(
+    name: &Name,
+    part_ref: &Ref,
+    wire: WireRelay,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Relay> {
+    let pins = resolve_pins(name, Relay::PINS, &wire.pins.0, nets, out);
+    let mut positive =
+        |field: &'static str, unit, value| resolve_value(part_ref, field, unit, true, value, out);
+    let inductance = positive("inductance", "H", wire.inductance);
+    let coil_resistance = positive("coil_resistance", "ohm", wire.coil_resistance);
+    let pull_in_current = positive("pull_in_current", AMPERE, wire.pull_in_current);
+    let drop_out_current = positive("drop_out_current", AMPERE, wire.drop_out_current);
+    let on_resistance = positive("on_resistance", "ohm", wire.on_resistance);
+    let off_resistance = positive("off_resistance", "ohm", wire.off_resistance);
+    if let (Some(pull), Some(drop)) = (&pull_in_current, &drop_out_current)
+        && drop.si.get() >= pull.si.get()
+    {
+        out.push(Diagnostic::NetlistValue {
+            part: part_ref.clone(),
+            field: "drop_out_current".into(),
+            value: drop.si.get(),
+            rule: ValueRule::Hysteresis,
+        });
+        return None;
+    }
+    Some(Relay {
+        pins: pins?,
+        inductance: inductance?,
+        coil_resistance: coil_resistance?,
+        pull_in_current: pull_in_current?,
+        drop_out_current: drop_out_current?,
+        on_resistance: on_resistance?,
+        off_resistance: off_resistance?,
     })
 }
 

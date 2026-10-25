@@ -3,7 +3,7 @@
 rx_l1_s vin x_l1 70.0
 ll1 x_l1 0 0.505
 vv1 vin 0 dc 0.0 pwl(0p 0.0 1000000000p 0.0 1000001000p 5.0 30000000000p 5.0 30000001000p 0.0)
-* A corner is a source's first PWL point, a breakpoint from t = 0. A second point 1 ps later stops ngspice on an inductor.
+* One source per corner. Its first point is the corner, a breakpoint from t = 0, and its second point is the stop.
 vbp0 bp0 0 pwl(1000000000p 0 50000000000p 0)
 vbp1 bp1 0 pwl(1000001000p 0 50000000000p 0)
 vbp2 bp2 0 pwl(30000000000p 0 50000000000p 0)

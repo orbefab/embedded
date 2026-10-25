@@ -229,6 +229,8 @@ pub enum Model {
     Nmos(Mosfet),
     Capacitor(Capacitor),
     Inductor(Inductor),
+    /// A coil and a contact that follows the coil current. Passive, with one state.
+    Relay(Relay),
     Switch(Switch),
     /// A package modelled as a behavioural black box. A new chip kind is a `Chip` variant,
     /// not a `Model` variant.
@@ -248,6 +250,7 @@ impl Model {
             Model::Nmos(_) => &Mosfet::PINS,
             Model::Capacitor(_) => &Capacitor::PINS,
             Model::Inductor(_) => &Inductor::PINS,
+            Model::Relay(_) => &Relay::PINS,
             Model::Switch(_) => &Switch::PINS,
             Model::Chip(Chip::Ne555(_)) => &Ne555::PINS,
             Model::Chip(Chip::Atmega328p(_)) => &Atmega328p::PINS,
@@ -255,8 +258,8 @@ impl Model {
     }
 
     /// The quantities a run observes on this part, in `Quantity` order. A two-pin part has
-    /// `i`, `v` and `p`. A BJT has `ib`, `ic` and `p`. An `nmos` has `id` and `p`. A chip and a
-    /// potentiometer have none.
+    /// `i`, `v` and `p`, and so does a relay, of its coil. A BJT has `ib`, `ic` and `p`. An `nmos`
+    /// has `id` and `p`. A chip and a potentiometer have none.
     pub fn quantities(&self) -> &'static [Quantity] {
         match self {
             Model::Resistor(_)
@@ -266,6 +269,7 @@ impl Model {
             | Model::Led(_)
             | Model::Capacitor(_)
             | Model::Inductor(_)
+            | Model::Relay(_)
             | Model::Switch(_) => &[Quantity::I, Quantity::V, Quantity::P],
             Model::Npn(_) | Model::Pnp(_) => &[Quantity::Ib, Quantity::Ic, Quantity::P],
             Model::Nmos(_) => &[Quantity::Id, Quantity::P],
@@ -295,6 +299,7 @@ impl Model {
             Model::Nmos(m) => &m.pins,
             Model::Capacitor(c) => &c.pins,
             Model::Inductor(l) => &l.pins,
+            Model::Relay(k) => &k.pins,
             Model::Switch(s) => &s.pins,
             Model::Chip(Chip::Ne555(n)) => &n.pins,
             Model::Chip(Chip::Atmega328p(m)) => &m.pins,
@@ -310,6 +315,7 @@ impl Model {
             | Model::CurrentSource(_)
             | Model::Capacitor(_)
             | Model::Inductor(_)
+            | Model::Relay(_)
             | Model::Switch(_)
             | Model::Chip(_) => (None, None),
             Model::Diode(j) | Model::Led(j) => (j.max_current.as_ref(), j.max_power.as_ref()),
@@ -336,6 +342,7 @@ impl Model {
             | Model::Nmos(_)
             | Model::Capacitor(_)
             | Model::Inductor(_)
+            | Model::Relay(_)
             | Model::Chip(_) => None,
         }
     }
@@ -362,6 +369,7 @@ impl Model {
             | Model::Nmos(_)
             | Model::Capacitor(_)
             | Model::Inductor(_)
+            | Model::Relay(_)
             | Model::Switch(_)
             | Model::Chip(_) => None,
         }
@@ -381,6 +389,7 @@ impl Model {
             | Model::Nmos(_)
             | Model::Capacitor(_)
             | Model::Inductor(_)
+            | Model::Relay(_)
             | Model::Switch(_)
             | Model::Chip(_) => None,
         }
@@ -400,6 +409,7 @@ impl Model {
             | Model::Nmos(_)
             | Model::Capacitor(_)
             | Model::Inductor(_)
+            | Model::Relay(_)
             | Model::Switch(_)
             | Model::Chip(_) => None,
         }
@@ -418,6 +428,7 @@ impl Model {
             | Model::Nmos(_)
             | Model::Capacitor(_)
             | Model::Inductor(_)
+            | Model::Relay(_)
             | Model::Switch(_)
             | Model::Chip(_) => None,
         }
@@ -599,6 +610,38 @@ pub struct Inductor {
 
 impl Inductor {
     pub const PINS: [&'static str; 2] = ["a", "b"];
+}
+
+/// A coil and an SPDT contact. The coil is `coil_a` through `coil_resistance`, then
+/// `inductance` to `coil_b`, as an `Inductor`. `com` meets `no` through `on_resistance` while
+/// the contact is closed, and `nc` while it is open. Each other pair takes `off_resistance`. The
+/// contact closes when the coil current's magnitude rises above `pull_in_current` and opens when
+/// it falls to `drop_out_current` or below.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Relay {
+    /// Nets of pins `coil_a`, `coil_b`, `com`, `no`, `nc`.
+    pub pins: [NetId; 5],
+    /// Henry, greater than 0.
+    pub inductance: Value,
+    /// Ohm, greater than 0.
+    pub coil_resistance: Value,
+    /// Ampere, greater than 0 and above `drop_out_current`.
+    pub pull_in_current: Value,
+    /// Ampere, greater than 0.
+    pub drop_out_current: Value,
+    /// Ohm, greater than 0.
+    pub on_resistance: Value,
+    /// Ohm, greater than 0.
+    pub off_resistance: Value,
+}
+
+impl Relay {
+    pub const PINS: [&'static str; 5] = ["coil_a", "coil_b", "com", "no", "nc"];
+    pub const COIL_A: usize = 0;
+    pub const COIL_B: usize = 1;
+    pub const COM: usize = 2;
+    pub const NO: usize = 3;
+    pub const NC: usize = 4;
 }
 
 /// A two-terminal contact: `on_resistance` closed, `off_resistance` open.

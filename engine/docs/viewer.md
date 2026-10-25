@@ -10,11 +10,13 @@ Each example has `viewer.json` beside `netlist.json`. The file names the 3D mode
 | `capacitor-electrolytic` | An electrolytic capacitor. Used for every capacitor of 1 uF or more. |
 | `current-source` | A DC current source. |
 | `dc-supply` | A DC voltage source. |
+| `diode-axial` | An axial leaded rectifier diode, the 1N4001 class the relay example cites. |
 | `dip-8` | An NE555 in an 8-pin DIP. |
 | `dip-28` | An ATmega328P in a 28-pin DIP. |
 | `inductor-radial` | A radial leaded inductor. |
 | `led-5mm-red` | A 5 mm red LED, the Kingbright WP7113ID the LED examples cite. |
 | `potentiometer-rotary` | A rotary potentiometer. |
+| `relay-pcb-5pin` | A 5-pin PCB relay with one changeover contact. |
 | `resistor-axial` | An axial resistor. |
 | `to-92` | A three-lead TO-92 package. Used for every transistor. |
 | `tactile-switch-6mm` | A 6 mm tactile push button. The switches in the examples are momentary contacts, so they share this id. |

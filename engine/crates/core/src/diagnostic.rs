@@ -30,6 +30,8 @@ pub enum ValueRule {
     Fraction,
     /// A threshold's `low` is above its `high`.
     AboveHigh,
+    /// A relay's `drop_out_current` is at or above its `pull_in_current`.
+    Hysteresis,
     /// A fuse byte selects a mode the model does not run.
     Unsupported,
 }
@@ -460,6 +462,9 @@ impl Diagnostic {
                     }
                     ValueRule::AboveHigh => {
                         format!("{part} {field} is {value}; it must not be above high")
+                    }
+                    ValueRule::Hysteresis => {
+                        format!("{part} {field} is {value}; it must be below pull_in_current")
                     }
                     ValueRule::Unsupported => {
                         format!("{part} {field} is 0x{byte:02X}; the model does not run that mode")

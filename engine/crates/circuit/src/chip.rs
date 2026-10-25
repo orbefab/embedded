@@ -1,13 +1,17 @@
 //! The chip seam: each question the loop asks a chip. `kind` alone says whether a netlist chip
-//! is passive or active, and every kind answers `unknowns` and `dc_paths` through it. A passive
-//! kind adds a `Passive` variant, a `chip/<kind>.rs`, and an arm in each function that takes
-//! `Passive`. An active kind adds an `Active` variant, its arm in `active::chip`, and an
-//! `active::Core` variant.
+//! is passive or active, and every `Chip` answers `unknowns` and `dc_paths` here. A passive
+//! kind adds a `Passive` variant, a `chip/<kind>.rs`, an arm in `passive`, and an arm in each
+//! function that takes `Passive`. An active kind adds an `Active` variant, its arm in
+//! `active::chip`, and an `active::Core` variant. A relay is a passive chip that is its own
+//! netlist kind, not a `Chip`, so it answers `unknowns` and `dc_paths` as an element.
 
 mod ne555;
+mod relay;
+
+pub(crate) use relay::coil as relay_coil;
 
 use sim_core::logic::Level;
-use sim_core::netlist::{Atmega328p, Chip, Ne555, PartId};
+use sim_core::netlist::{Atmega328p, Chip, Model, Ne555, PartId, Relay};
 
 use crate::mna::{Layout, Stamp, Unknowns};
 use crate::watch::Watch;
@@ -19,6 +23,7 @@ use crate::watch::Watch;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum State {
     Ne555(ne555::State),
+    Relay(relay::State),
 }
 
 pub(crate) enum Kind<'n> {
@@ -30,6 +35,7 @@ pub(crate) enum Kind<'n> {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Passive<'n> {
     Ne555(&'n Ne555),
+    Relay(&'n Relay),
 }
 
 /// A chip whose core runs on the circuit's clock, as an `active::Chip`.
@@ -45,24 +51,35 @@ pub(crate) fn kind(chip: &Chip) -> Kind<'_> {
     }
 }
 
+/// The passive chip a part is, a passive `Chip` or a relay. The layout gives each one a slot.
+pub(crate) fn passive(model: &Model) -> Option<Passive<'_>> {
+    match model {
+        Model::Chip(chip) => match kind(chip) {
+            Kind::Passive(passive) => Some(passive),
+            Kind::Active(_) => None,
+        },
+        Model::Relay(relay) => Some(Passive::Relay(relay)),
+        _ => None,
+    }
+}
+
 /// The 555's one internal node is its lower ladder node. An active chip stamps only between
 /// its own pins, so it has none.
 pub(crate) fn unknowns(chip: &Chip) -> Unknowns {
-    match kind(chip) {
-        Kind::Passive(Passive::Ne555(_)) => Unknowns {
+    match chip {
+        Chip::Ne555(_) => Unknowns {
             internal_nodes: 1,
             ..Unknowns::default()
         },
-        Kind::Active(_) => Unknowns::default(),
+        Chip::Atmega328p(_) => Unknowns::default(),
     }
 }
 
 /// Whether its stamp reads the Newton iterate. The NE555 stamps from its held state, and an
 /// active chip from its core's drive image. A Newton call changes neither.
 pub(crate) fn reads_iterate(chip: &Chip) -> bool {
-    match kind(chip) {
-        Kind::Passive(Passive::Ne555(_)) => false,
-        Kind::Active(Active::Atmega328p(_)) => false,
+    match chip {
+        Chip::Ne555(_) | Chip::Atmega328p(_) => false,
     }
 }
 
@@ -70,6 +87,7 @@ pub(crate) fn reads_iterate(chip: &Chip) -> bool {
 pub(crate) fn power_on(chip: Passive<'_>) -> State {
     match chip {
         Passive::Ne555(_) => State::Ne555(ne555::POWER_ON),
+        Passive::Relay(_) => State::Relay(relay::POWER_ON),
     }
 }
 
@@ -77,12 +95,15 @@ pub(crate) fn power_on(chip: Passive<'_>) -> State {
 pub(crate) fn watches(chip: Passive<'_>, part: PartId, layout: &Layout) -> Vec<Watch> {
     match chip {
         Passive::Ne555(ne555) => ne555::watches(ne555, layout.internal(part, 0)),
+        Passive::Relay(relay) => relay::watches(relay, layout.internal(part, 0)),
     }
 }
 
 pub(crate) fn stamp(chip: Passive<'_>, state: State, stamp: &mut Stamp<'_>) {
     match (chip, state) {
         (Passive::Ne555(ne555), State::Ne555(state)) => ne555::stamp(ne555, state, stamp),
+        (Passive::Relay(relay), State::Relay(state)) => relay::stamp(relay, state, stamp),
+        _ => unreachable!("a chip's state is its own kind's"),
     }
 }
 
@@ -91,6 +112,8 @@ pub(crate) fn stamp(chip: Passive<'_>, state: State, stamp: &mut Stamp<'_>) {
 pub(crate) fn react(chip: Passive<'_>, state: &State, _before: &[bool], after: &[bool]) -> State {
     match (chip, state) {
         (Passive::Ne555(_), State::Ne555(state)) => State::Ne555(ne555::react(*state, after)),
+        (Passive::Relay(_), State::Relay(_)) => State::Relay(relay::react(after)),
+        _ => unreachable!("a chip's state is its own kind's"),
     }
 }
 
@@ -98,6 +121,7 @@ pub(crate) fn react(chip: Passive<'_>, state: &State, _before: &[bool], after: &
 pub(crate) fn signals(chip: Passive<'_>) -> &'static [&'static str] {
     match chip {
         Passive::Ne555(_) => &ne555::SIGNALS,
+        Passive::Relay(_) => &relay::SIGNALS,
     }
 }
 
@@ -105,6 +129,8 @@ pub(crate) fn signals(chip: Passive<'_>) -> &'static [&'static str] {
 pub(crate) fn levels(chip: Passive<'_>, state: &State, watched: &[bool]) -> Vec<Level> {
     match (chip, state) {
         (Passive::Ne555(_), State::Ne555(state)) => ne555::levels(*state, watched).to_vec(),
+        (Passive::Relay(_), State::Relay(state)) => relay::levels(*state).to_vec(),
+        _ => unreachable!("a chip's state is its own kind's"),
     }
 }
 
@@ -112,8 +138,8 @@ pub(crate) fn levels(chip: Passive<'_>, state: &State, watched: &[bool]) -> Vec<
 /// some state opens, such as a high-impedance output, is still listed, so a net reached only
 /// through it is not reported floating while it is open.
 pub(crate) fn dc_paths(chip: &Chip) -> &'static [(usize, usize)] {
-    match kind(chip) {
-        Kind::Passive(Passive::Ne555(_)) => &ne555::DC_PATHS,
-        Kind::Active(Active::Atmega328p(_)) => &crate::active::avr::DC_PATHS,
+    match chip {
+        Chip::Ne555(_) => &ne555::DC_PATHS,
+        Chip::Atmega328p(_) => &crate::active::avr::DC_PATHS,
     }
 }

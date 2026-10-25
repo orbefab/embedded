@@ -8,12 +8,13 @@ mod switch;
 mod transistor;
 mod voltage_source;
 
-use sim_core::netlist::{Model, NetId, PartId};
+use sim_core::netlist::{Model, NetId, PartId, Relay};
 use sim_core::time::Time;
 
 use crate::chip;
 use crate::mna::{Layout, Node, Probe, Stamp, Unknowns};
 use crate::newton::Side;
+pub(crate) use inductor::{coil, stamp_coil};
 use transistor::Polarity;
 
 /// What the layout and the stamp read from a part. A netlist `Model` is one. A test
@@ -95,7 +96,7 @@ impl Device for Model {
                 branches: 1,
                 ..Unknowns::default()
             },
-            Model::Inductor(_) => Unknowns {
+            Model::Inductor(_) | Model::Relay(_) => Unknowns {
                 internal_nodes: 1,
                 branches: 1,
                 ..Unknowns::default()
@@ -138,6 +139,7 @@ impl Device for Model {
             | Model::Diode(_)
             | Model::Led(_)
             | Model::Inductor(_)
+            | Model::Relay(_)
             | Model::Switch(_)
             | Model::Chip(_) => Vec::new(),
         }
@@ -146,6 +148,7 @@ impl Device for Model {
     fn inductors(&self) -> Vec<OwnedInductor> {
         match self {
             Model::Inductor(inductor) => vec![inductor::owned(inductor)],
+            Model::Relay(relay) => vec![chip::relay_coil(relay)],
             Model::Resistor(_)
             | Model::Potentiometer(_)
             | Model::VoltageSource(_)
@@ -175,8 +178,8 @@ impl Device for Model {
             Model::Inductor(inductor) => inductor::stamp(inductor, stamp),
             Model::Switch(switch) => switch::stamp(switch, stamp),
             // An active chip stamps its core's drive image, in `active::stamp`.
-            Model::Chip(chip) => {
-                if let chip::Kind::Passive(passive) = chip::kind(chip) {
+            Model::Chip(_) | Model::Relay(_) => {
+                if let Some(passive) = chip::passive(self) {
                     chip::stamp(passive, *stamp.chip(), stamp);
                 }
             }
@@ -196,6 +199,7 @@ pub(crate) fn reads_iterate(model: &Model) -> bool {
         | Model::CurrentSource(_)
         | Model::Capacitor(_)
         | Model::Inductor(_)
+        | Model::Relay(_)
         | Model::Switch(_) => false,
         Model::Diode(_) | Model::Led(_) | Model::Npn(_) | Model::Pnp(_) | Model::Nmos(_) => true,
         Model::Chip(chip) => chip::reads_iterate(chip),
@@ -211,6 +215,7 @@ pub(crate) fn initial(model: &Model, out: &mut [f64]) {
         | Model::CurrentSource(_)
         | Model::Capacitor(_)
         | Model::Inductor(_)
+        | Model::Relay(_)
         | Model::Switch(_)
         | Model::Chip(_) => {}
         Model::Diode(j) | Model::Led(j) => out[0] = junction::initial(j),
@@ -228,6 +233,7 @@ pub(crate) fn update(model: &Model, probe: &Probe<'_>, prior: &[f64], next: &mut
         | Model::CurrentSource(_)
         | Model::Capacitor(_)
         | Model::Inductor(_)
+        | Model::Relay(_)
         | Model::Switch(_)
         | Model::Chip(_) => Update::default(),
         Model::Diode(j) | Model::Led(j) => {
@@ -252,7 +258,8 @@ pub(crate) struct Update {
 /// A capacitor is open unless the operating point holds it at `initial`. An inductor is a short
 /// behind its resistance. A switch is a resistor either way.
 /// A current source joins nothing. A BJT joins its base to each other pin, because each junction
-/// conducts. An `nmos` joins its drain to its source. Its gate does not.
+/// conducts. An `nmos` joins its drain to its source. Its gate does not. A relay joins its coil's
+/// ends, and `com` to `no` and to `nc` in either state.
 pub(crate) fn dc_paths(model: &Model) -> &'static [(usize, usize)] {
     match model {
         Model::Resistor(_)
@@ -263,6 +270,11 @@ pub(crate) fn dc_paths(model: &Model) -> &'static [(usize, usize)] {
         | Model::Switch(_) => &[(0, 1)],
         Model::Potentiometer(_) | Model::Npn(_) | Model::Pnp(_) => &[(0, 1), (1, 2)],
         Model::Nmos(_) => &[(0, 2)],
+        Model::Relay(_) => &[
+            (Relay::COIL_A, Relay::COIL_B),
+            (Relay::COM, Relay::NO),
+            (Relay::COM, Relay::NC),
+        ],
         Model::Capacitor(capacitor) if capacitor.initial.is_some() => &[(0, 1)],
         Model::Capacitor(_) | Model::CurrentSource(_) => &[],
         Model::Chip(chip) => chip::dc_paths(chip),
@@ -311,6 +323,10 @@ pub(crate) fn observe(model: &Model, probe: &Probe<'_>, at: Time, side: Side) ->
         Model::Diode(j) | Model::Led(j) => (j.pins, junction::current(j, probe)),
         Model::Capacitor(capacitor) => (capacitor.pins, capacitor::current(probe)),
         Model::Inductor(inductor) => (inductor.pins, inductor::current(probe)),
+        Model::Relay(relay) => (
+            [relay.pins[Relay::COIL_A], relay.pins[Relay::COIL_B]],
+            inductor::current(probe),
+        ),
         Model::Switch(switch) => (switch.pins, switch::current(switch, probe, at, side)),
     };
     let v = probe.v(pins[0]) - probe.v(pins[1]);

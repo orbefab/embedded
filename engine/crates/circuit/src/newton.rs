@@ -51,11 +51,12 @@ impl Circuit {
         let mut passives = Vec::new();
         let mut actives = Vec::new();
         for (id, part) in netlist.parts() {
-            if let Model::Chip(chip) = &part.model {
-                match chip::kind(chip) {
-                    chip::Kind::Passive(_) => passives.push(id),
-                    chip::Kind::Active(kind) => actives.push(active::chip(id, kind)),
-                }
+            if chip::passive(&part.model).is_some() {
+                passives.push(id);
+            } else if let Model::Chip(chip) = &part.model
+                && let chip::Kind::Active(kind) = chip::kind(chip)
+            {
+                actives.push(active::chip(id, kind));
             }
         }
         actives.extend(extra);
@@ -162,13 +163,7 @@ impl Circuit {
     }
 
     fn passive(&self, id: PartId) -> chip::Passive<'_> {
-        let Model::Chip(chip) = &self.netlist.part(id).model else {
-            unreachable!("a passive slot is a chip");
-        };
-        let chip::Kind::Passive(passive) = chip::kind(chip) else {
-            unreachable!("a passive slot is passive");
-        };
-        passive
+        chip::passive(&self.netlist.part(id).model).expect("a passive slot is a passive chip")
     }
 
     /// Every chip's state at power-on, in slot order.

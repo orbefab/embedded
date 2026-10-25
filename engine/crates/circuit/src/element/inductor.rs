@@ -1,4 +1,4 @@
-use sim_core::netlist::Inductor;
+use sim_core::netlist::{Inductor, NetId};
 
 use super::{OwnedInductor, StoreEnd};
 use crate::mna::{Probe, Stamp};
@@ -9,22 +9,35 @@ use crate::newton::{History, Method, Store};
 /// inductors in series with nothing but gmin to share a difference in their currents.
 const HOLD: f64 = 1e-15;
 
-/// `a` through the series resistance to internal node 0, then the inductance to `b`.
-pub(super) fn owned(inductor: &Inductor) -> OwnedInductor {
+/// A coil that ends at `b`, the part's only store, so its branch is 0. `stamp_coil` puts `ohm`
+/// from the coil's other end to internal node 0, and the inductance from there to `b`. An
+/// inductor is one, and so is a relay's coil.
+pub(crate) fn coil(b: NetId, henry: f64, ohm: f64) -> OwnedInductor {
     OwnedInductor {
         k: 0,
-        ends: [StoreEnd::Internal(0), StoreEnd::Net(inductor.pins[1])],
-        henry: inductor.inductance.si.get(),
-        ohm: inductor.series_resistance.si.get(),
+        ends: [StoreEnd::Internal(0), StoreEnd::Net(b)],
+        henry,
+        ohm,
     }
 }
 
-/// The element's only inductor is branch 0, since it owns no capacitor.
+pub(super) fn owned(inductor: &Inductor) -> OwnedInductor {
+    coil(
+        inductor.pins[1],
+        inductor.inductance.si.get(),
+        inductor.series_resistance.si.get(),
+    )
+}
+
 pub(super) fn stamp(inductor: &Inductor, stamp: &mut Stamp<'_>) {
-    let owned = owned(inductor);
+    stamp_coil(stamp, inductor.pins[0], owned(inductor));
+}
+
+/// `coil`'s resistance from `a` to internal node 0, and its inductance.
+pub(crate) fn stamp_coil(stamp: &mut Stamp<'_>, a: NetId, coil: OwnedInductor) {
     let x = stamp.internal(0);
-    stamp.conductance(inductor.pins[0], x, 1.0 / owned.ohm);
-    stamp_inductor(stamp, owned.k, owned.ends, owned.henry);
+    stamp.conductance(a, x, 1.0 / coil.ohm);
+    stamp_inductor(stamp, coil.k, coil.ends, coil.henry);
 }
 
 /// Stamp inductor `k` from `ends[0]` to `ends[1]`. Its branch, the part's after its capacitors',

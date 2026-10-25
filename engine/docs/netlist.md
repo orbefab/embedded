@@ -252,6 +252,36 @@ The series resistance runs from `a` to an internal node, and the inductance runs
 
 An inductor has no `ratings` field.
 
+### Relay
+
+`kind` is `relay`. Pins are `coil_a`, `coil_b`, `com`, `no` and `nc`. It is a coil and one changeover contact.
+
+```json
+{
+  "name": "k1",
+  "kind": "relay",
+  "pins": { "coil_a": "vcc", "coil_b": "coil", "com": "vcc", "no": "no", "nc": "nc" },
+  "inductance": { "value": 0.505, "unit": "H", "source": "user" },
+  "coil_resistance": { "value": 70.0, "unit": "ohm", "source": "user" },
+  "pull_in_current": { "value": 0.05357142857142857, "unit": "A", "source": "user" },
+  "drop_out_current": { "value": 0.007142857142857143, "unit": "A", "source": "user" },
+  "on_resistance": { "value": 0.1, "unit": "ohm", "source": "user" },
+  "off_resistance": { "value": 100000000.0, "unit": "ohm", "source": "user" }
+}
+```
+
+`inductance.value` is in `H`. `coil_resistance.value`, `on_resistance.value` and `off_resistance.value` are in `ohm`. `pull_in_current.value` and `drop_out_current.value` are in `A`. Each follows the resistance rules. It must be greater than 0, and its reciprocal must be finite. `drop_out_current` must also be below `pull_in_current`. At or above it is rule `hysteresis` on `drop_out_current`.
+
+The coil is an inductor from `coil_a` to `coil_b`, with `coil_resistance` as its series resistance, as [Inductor](#inductor) describes. The contact joins `com` to `no` through `on_resistance` while it is closed and through `off_resistance` while it is open. It joins `com` to `nc` the other way round. A normally open relay leaves `nc` on a net of its own. The contact closes when the magnitude of the coil current rises above `pull_in_current`, and it opens when the magnitude falls to `drop_out_current` or below. A current of either sign closes it. The engine reads the current across the coil resistance and locates each crossing to the picosecond, as [Chip events](engine.md#chip-events) says. The contact moves there, and the coil current is held across the move.
+
+The contact starts open, and the operating point closes it when the coil current at t = 0 is above `pull_in_current`. A coil current between the two starts open. A contact that moves its own coil current from above pull-in to drop-out or below has no state that agrees with its solve. When its `nc` feeds its own coil and the coil is powered at t = 0, the operating point reports `chip.unsettled`. When the coil is powered later, it holds its current across each move and the contact buzzes.
+
+The model has no armature travel and no contact bounce. Its operate time is the coil current's rise to pull-in, and its release time is the current's fall to drop-out. A real relay adds the armature's travel, a few milliseconds, and its contact bounces. A coil released with no diode across it opens the contact as soon as its current collapses, where a relay sheet gives a release time of milliseconds. The inductance does not change with the armature's position. There is no contact rating, no coil temperature, and no arcing. Breaking a coil current through the contact puts that current times `off_resistance` across the coil.
+
+`examples/relay-switch` is the 5 V high-sensitivity coil of a common 10 A hobby relay. Its sheet gives 70 ohm, a pull-in voltage of at most 75 % of 5 V and a drop-out voltage of at least 10 %, so pull-in is 53.6 mA and drop-out 7.14 mA. The sheet gives no inductance. At 70 ohm with no travel, 0.504943 H reaches pull-in in exactly its 10 ms operate time, and the example rounds that to 0.505 H. A switch grounds the coil at 2 ms and opens at 30 ms. A diode across the coil then carries its current. The contact lights an LED from 12.017 ms to 41.320 ms.
+
+A relay has no `ratings` field. It has `i`, `v` and `p` of its coil, as [Sign rules](#sign-rules) says. Its logic signal is `contact`, described in [Refs](#refs). It is a DC path from `coil_a` to `coil_b`, from `com` to `no`, and from `com` to `nc`, in either state.
+
 ### Switch
 
 `kind` is `switch`. Pins are `a` and `b`. It is a resistor whose value follows a contact over time.
@@ -695,7 +725,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `diode`, `led` | `current`, `power` | `#<part>.i`, `#<part>.p` |
 | `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
 | `nmos` | `current`, `power` | `#<part>.id`, `#<part>.p` |
-| `voltage_source`, `current_source`, `capacitor`, `inductor`, `switch`, `ne555`, `atmega328p`, `potentiometer` | none | |
+| `voltage_source`, `current_source`, `capacitor`, `inductor`, `relay`, `switch`, `ne555`, `atmega328p`, `potentiometer` | none | |
 
 `current` is in `A`. `power` is in `W`. A rating must be greater than 0. A missing key, an unknown key, and a missing `ratings` object are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.current` or `ratings.power`. A value of 0 or below is `netlist.value` with the same field.
 
@@ -737,7 +767,7 @@ For every two-terminal part, pin 0 is the first pin listed above.
 
 For a diode or LED, `i` is the current through `Rs`, and `p` includes the power in `Rs`. The junction's internal node is not observed.
 
-For a capacitor, `i` is the solved current into pin `a`. For an inductor, `i` is the solved current into pin `a`, through its series resistance and its inductance, and `v` is across both. For a switch, `i` is `v` over the resistance of the contact on the interval that ends at that time. For a current source, `i` is minus its `current` on the interval that ends at that time, since that current leaves at `p`.
+For a capacitor, `i` is the solved current into pin `a`. For an inductor, `i` is the solved current into pin `a`, through its series resistance and its inductance, and `v` is across both. For a relay, `i` is the coil's current into `coil_a`, and `v` is from `coil_a` to `coil_b`. For a switch, `i` is `v` over the resistance of the contact on the interval that ends at that time. For a current source, `i` is minus its `current` on the interval that ends at that time, since that current leaves at `p`.
 
 On the divider, `#r1.i` and `#r2.i` are positive, `#r1.p` and `#r2.p` are positive, and `#v1.i` and `#v1.p` are negative. On `examples/i-divider`, `#i1.i` is -0.001 and `#i1.p` is negative.
 
@@ -769,6 +799,7 @@ quantity = "ib" | "ic" | "id" | "i" | "v" | "p"
 | `#q1.ic` | Collector current of transistor `q1` |
 | `#m1.id` | Drain current of MOSFET `m1` |
 | `#u1.logic.out` | Logic level of signal `out` of chip `u1` |
+| `#k1.logic.contact` | Logic level of the contact of relay `k1` |
 
 These texts parse and format back to the same text. The following texts are rejected.
 
@@ -777,6 +808,6 @@ These texts parse and format back to the same text. The following texts are reje
 - `#net.1vout`, `#1r`, because the name is illegal
 - `#r1.x`, `#r1.i.v`
 
-`#net.vout` is a net. `#net` is a part named `net`. `#u1.logic.out` is the level the chip drives on OUT, and `#u1.pin.out` is the pin itself. An NE555's signals are `out`, `reset`, `thres`, and `trig`. An ATmega328P's are named for its package pins: `PB0` to `PB5`, `PC0` to `PC6`, and `PD0` to `PD7`, each the level that pin reads, and `VCC` while `BODLEVEL` enables brown-out, the level its brown-out detector reads on the supply. `PB6` and `PB7` hold the crystal and have none. `#u1.logic.PB5` is the level PB5 reads, and `#u1.pin.PB5` is the pin itself.
+`#net.vout` is a net. `#net` is a part named `net`. `#u1.logic.out` is the level the chip drives on OUT, and `#u1.pin.out` is the pin itself. An NE555's signals are `out`, `reset`, `thres`, and `trig`. A relay's one signal is `contact`, high while the contact is closed. An ATmega328P's are named for its package pins: `PB0` to `PB5`, `PC0` to `PC6`, and `PD0` to `PD7`, each the level that pin reads, and `VCC` while `BODLEVEL` enables brown-out, the level its brown-out detector reads on the supply. `PB6` and `PB7` hold the crystal and have none. `#u1.logic.PB5` is the level PB5 reads, and `#u1.pin.PB5` is the pin itself.
 
 Map keys and diagnostic order use this order: nets, then parts, then pins, then quantities, then logic signals. Quantities sort `ib`, `ic`, `i`, `v`, then `p`. Names sort by byte order inside one group.

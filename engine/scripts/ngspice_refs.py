@@ -9,13 +9,13 @@
 
 For every example it translates netlist.json into deck.cir, runs `ngspice -b`
 on it, and writes the operating point, or the transient waveforms, to
-ngspice.json. A chip's latch edges go to tran.logic. With no example arguments
+ngspice.json. A chip's latch edges and a relay's contact edges go to tran.logic. With no example arguments
 it takes every examples/*/netlist.json, then every
 crates/cli/tests/fixtures/*/netlist.json, the circuits only the ngspice test
 runs. `--check` regenerates in memory and
 exits 1 if any committed byte differs, or if a skipped example already has
 deck.cir or ngspice.json. For an example with a chip it also runs the engine and exits 1
-unless the run's logic.vcd reads back as its observations.logic summary. stdout is one
+or a relay unless the run's logic.vcd reads back as its observations.logic summary. stdout is one
 JSON document.
 
 A part with no kind, an unknown kind, a kind that runs firmware, a part with no
@@ -23,11 +23,11 @@ pins, or a missing pin raises Skip. The example `npn-blinker` raises Skip too,
 because ngspice aborts that deck at the deck's options with Timestep too small.
 The script exits when ngspice's log shows the operating point left the plain
 Newton iteration, and `--check` exits the same way. The message names the
-example and ngspice's lines. A transient deck with an inductor takes
+example and ngspice's lines. A transient deck with an inductor or a relay takes
 reltol=1e-5, a breakpoint source per corner held to the stop, and a step cap of
 stop/60000, and the script exits when ngspice has no point at one of the
 netlist's corners. `--self-test` checks the skip paths, the source deck lines,
-the inductor deck lines, the corner check, the bounce test vectors, the VCD
+the inductor and relay deck lines, the corner check, the contact edges, the bounce test vectors, the VCD
 reader and its summary, and that refusal. The refusal case runs ngspice. The
 rest do not. Without ngspice-42 on PATH, `--self-test` prints one failed case
 and exits 1.
@@ -57,6 +57,8 @@ RAW = "op.raw"
 TRAN_RAW = "tran.raw"
 EDGES_RAW = "edges.raw"
 CHIPS = ("ne555",)
+# A relay's coil is an inductor, so a relay deck takes the inductor deck's settings.
+COILS = ("inductor", "relay")
 FIRMWARE = ("atmega328p",)
 TRANSISTORS = ("npn", "pnp", "nmos")
 BJT_KINDS = ("npn", "pnp")
@@ -178,7 +180,7 @@ def report_examples(targets, check, version):
                 if not path.is_file() or path.read_bytes() != text.encode():
                     report["drift"].append(f"{label}/{name}")
             report["checked"].append(label)
-            if has_chip(json.loads((example / "netlist.json").read_bytes())):
+            if has_logic(json.loads((example / "netlist.json").read_bytes())):
                 report["logic"].append({"example": label, "ok": logic_reads_back(example)})
         else:
             for name, text in files.items():
@@ -202,6 +204,10 @@ def exit_code(report):
 
 def has_chip(netlist):
     return any(part.get("kind") in CHIPS for part in netlist["parts"])
+
+
+def has_logic(netlist):
+    return has_chip(netlist) or any(part.get("kind") == "relay" for part in netlist["parts"])
 
 
 def logic_reads_back(example):
@@ -289,12 +295,13 @@ def generate(example, version):
     deck, mapping = translate(example.name, netlist)
     transient = "transient" in netlist["analysis"]
     chips = [part for part in netlist["parts"] if part["kind"] in CHIPS]
+    relays = [part for part in netlist["parts"] if part["kind"] == "relay"]
     raws = [TRAN_RAW, EDGES_RAW] if chips else [TRAN_RAW if transient else RAW]
     vectors, *edges = run_ngspice(deck, raws, label_of(example))
+    # A chip deck's waveform raw is linearized. Its edge raw keeps ngspice's own points.
+    dense = edges[0] if chips else vectors
     if transient and has_inductor(netlist):
-        # A chip deck's waveform raw is linearized. Its edge raw keeps ngspice's own points.
-        points = edges[0]["time"] if chips else vectors["time"]
-        missed_corners(label_of(example), corner_times(netlist), points)
+        missed_corners(label_of(example), corner_times(netlist), dense["time"])
     values = {}
     gate = {}
     for variable, column in vectors.items():
@@ -338,15 +345,22 @@ def generate(example, version):
             reference["tran"]["gate"] = gate
         if spans:
             reference["tran"]["span"] = spans
-        if chips:
-            stop = netlist["analysis"]["transient"]["stop_ps"]
-            reference["tran"]["grid_ps"] = stop // CHIP_GRID
-            reference["tran"]["logic"] = {
+        if chips or relays:
+            reference["tran"]["grid_ps"] = reference_grid(netlist, bool(chips), spans is not None)
+            logic = {
                 f"#{part['name']}.logic.out": crossings(
-                    edges[0]["time"], edges[0][f"v(x_{part['name'].lower()}_q)"]
+                    dense["time"], dense[f"v(x_{part['name'].lower()}_q)"]
                 )
                 for part in chips
             }
+            for part in relays:
+                logic[f"#{part['name']}.logic.contact"] = contact_edges(
+                    dense["time"],
+                    dense[f"i(vx_{part['name'].lower()}_am)"],
+                    float(part["pull_in_current"]["value"]),
+                    float(part["drop_out_current"]["value"]),
+                )
+            reference["tran"]["logic"] = logic
     else:
         reference["op"] = op_point(netlist, values)
     text = json.dumps(reference, indent=2, sort_keys=True) + "\n"
@@ -354,7 +368,18 @@ def generate(example, version):
 
 
 def has_inductor(netlist):
-    return any(part.get("kind") == "inductor" for part in netlist["parts"])
+    return any(part.get("kind") in COILS for part in netlist["parts"])
+
+
+def reference_grid(netlist, chips, on_engine_grid):
+    """The spacing of the reference's points around a logic edge. A chip deck's linearized grid,
+    else the engine's grid, else ngspice's step cap."""
+    transient = netlist["analysis"]["transient"]
+    if chips:
+        return transient["stop_ps"] // CHIP_GRID
+    if on_engine_grid:
+        return transient["grid_ps"]
+    return transient["stop_ps"] // INDUCTOR_TMAX
 
 
 def deck_options(netlist):
@@ -391,6 +416,44 @@ def crossings(times, latch):
     return edges
 
 
+def contact_edges(times, current, pull_in, drop_out):
+    """Each change of a relay's contact from its coil current at ngspice's own points.
+
+    Two watches, one per sign, as the engine's. A watch closes when its signed current rises
+    above `pull_in` and opens when that current falls to `drop_out` or below. The contact is
+    closed while either watch is high. A linear interval that changes sign can hold both edges.
+    Each crossing is linear between points, to the picosecond.
+    """
+    pos = current[0] > pull_in
+    neg = current[0] < -pull_in
+    closed = pos or neg
+    edges = []
+    for (t0, i0), (t1, i1) in zip(zip(times, current), zip(times[1:], current[1:])):
+        flips = []
+        for sign, high in ((1.0, pos), (-1.0, neg)):
+            s0, s1 = sign * i0, sign * i1
+            if s0 == s1:
+                continue
+            if high and s1 <= drop_out < s0:
+                level = drop_out
+            elif not high and s1 > pull_in >= s0:
+                level = pull_in
+            else:
+                continue
+            at = t0 + (level - s0) * (t1 - t0) / (s1 - s0)
+            flips.append((at, sign, not high))
+        for at, sign, high in sorted(flips):
+            if sign > 0:
+                pos = high
+            else:
+                neg = high
+            now = pos or neg
+            if now != closed:
+                closed = now
+                edges.append({"level": "high" if closed else "low", "t_ps": round(at * 1e12)})
+    return edges
+
+
 def op_point(netlist, values):
     op = {ref: column[0] for ref, column in values.items()}
     op[f"#net.{netlist['ground']}"] = 0.0
@@ -406,7 +469,7 @@ def op_point(netlist, values):
             d, _g, s = (net_voltage(op, net) for net in pin_nets(part))
             op[f"#{name}.p"] = (d - s) * op[f"#{name}.id"]
             continue
-        first, second = (net_voltage(op, net) for net in pin_nets(part))
+        first, second = (net_voltage(op, net) for net in voltage_nets(part))
         op[f"#{name}.v"] = first - second
     return op
 
@@ -417,7 +480,7 @@ def part_voltages(label, netlist, values, count):
         if part["kind"] in NO_QUANTITIES or part["kind"] in TRANSISTORS:
             continue
         try:
-            first, second = (values[f"#net.{net}"] for net in pin_nets(part))
+            first, second = (values[f"#net.{net}"] for net in voltage_nets(part))
         except KeyError as missing:
             raise SystemExit(f"{label}: no node voltage {missing}") from None
         if len(first) != count or len(second) != count:
@@ -465,6 +528,7 @@ PIN_ORDER = {
     "nmos": ("drain", "gate", "source"),
     "capacitor": ("a", "b"),
     "inductor": ("a", "b"),
+    "relay": ("coil_a", "coil_b", "com", "no", "nc"),
     "switch": ("a", "b"),
     "ne555": ("gnd", "trig", "out", "reset", "cont", "thres", "disch", "vcc"),
 }
@@ -492,6 +556,12 @@ def pin_nets(part):
         raise Skip(f"kind {kind} is missing pin {name}") from None
     except TypeError:
         raise Skip(f"kind {kind} has no pins") from None
+
+
+def voltage_nets(part):
+    """The two nets a part's `.v` is across. A relay's is its coil's."""
+    nets = pin_nets(part)
+    return nets[:2] if part["kind"] == "relay" else nets
 
 
 def net_voltage(op, net):
@@ -541,6 +611,7 @@ def translate_shape(title, netlist):
     saves = []
     corners = set()
     latches = []
+    contacts = []
     for part in parts:
         pin_list = pin_nets(part)
         if any(net not in nets for net in pin_list):
@@ -631,6 +702,15 @@ def translate_shape(title, netlist):
             saves.append(f"i(l{name})")
             mapping[f"i(l{name})"] = ref
             mapping[f"v(x_{name})"] = None
+        elif kind == "relay":
+            if not transient:
+                raise Skip("a relay is translated only for a transient analysis")
+            lines += relay_lines(name, part, node)
+            saves.append(f"i(vx_{name}_am)")
+            mapping[f"i(vx_{name}_am)"] = ref
+            for internal in (f"x_{name}", f"x_{name}_c", f"x_{name}_m"):
+                mapping[f"v({internal})"] = None
+            contacts.append(f"i(vx_{name}_am)")
         elif kind == "switch":
             if not transient:
                 raise Skip("a switch is translated only for a transient analysis")
@@ -685,7 +765,7 @@ def translate_shape(title, netlist):
         return "\n".join(lines) + "\n", mapping
     if corners and coils:
         lines.append(
-            "* A corner is a source's first PWL point, a breakpoint from t = 0. A second point 1 ps later stops ngspice on an inductor."
+            "* One source per corner. Its first point is the corner, a breakpoint from t = 0, and its second point is the stop."
         )
         held = [at for at in sorted(corners) if at < transient["stop_ps"]]
         lines += [f"vbp{k} bp{k} 0 pwl({at}p 0 {transient['stop_ps']}p 0)" for k, at in enumerate(held)]
@@ -706,7 +786,7 @@ def translate_shape(title, netlist):
         lines += [
             f"tran {stop // CHIP_GRID}p {stop}p 0 {stop // CHIP_TMAX}p",
             "set filetype=ascii",
-            " ".join(["write", EDGES_RAW, *latches]),
+            " ".join(["write", EDGES_RAW, *latches, *contacts]),
             " ".join(["linearize", *voltages, *sources, *saves]),
         ]
     else:
@@ -757,6 +837,27 @@ def ne555_lines(name, part, node):
         f"(V({out},{gnd}) - {number(output['low_drop'])}) / {number(output['low_resistance'])}",
         f"bx_{name}_d {disch} {gnd} i = V({disch},{gnd}) / (({high}) ? "
         f"{number(discharge['off_resistance'])} : {number(discharge['on_resistance'])})",
+    ]
+
+
+def relay_lines(name, part, node):
+    """The coil as an inductor's lines, with a 0 V ammeter on its `coil_b` end. Each contact is
+    an `sw` switch on the coil current's magnitude, on above `pull_in_current` and off below
+    `drop_out_current`. The NC switch swaps its two resistances."""
+    a, b, com, no, nc = (node(net) for net in pin_nets(part))
+    pull_in = float(part["pull_in_current"]["value"])
+    drop_out = float(part["drop_out_current"]["value"])
+    on, off = number(part["on_resistance"]), number(part["off_resistance"])
+    hysteresis = f"vt={(pull_in + drop_out) / 2!r} vh={(pull_in - drop_out) / 2!r}"
+    return [
+        f"rx_{name}_s {a} x_{name} {number(part['coil_resistance'])}",
+        f"l{name} x_{name} x_{name}_c {number(part['inductance'])}",
+        f"vx_{name}_am x_{name}_c {b} dc 0",
+        f"bx_{name}_m x_{name}_m 0 v = abs(i(vx_{name}_am))",
+        f"sx_{name}_no {com} {no} x_{name}_m 0 swno_{name}",
+        f".model swno_{name} sw ({hysteresis} ron={on} roff={off})",
+        f"sx_{name}_nc {com} {nc} x_{name}_m 0 swnc_{name}",
+        f".model swnc_{name} sw ({hysteresis} ron={off} roff={on})",
     ]
 
 
