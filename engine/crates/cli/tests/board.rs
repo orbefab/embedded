@@ -1,5 +1,7 @@
 //! The development board fragment in `examples/atmega-board-blink`.
 //! The LED, D0, the reset release, and the pin-13 pull-up are closed forms.
+//! `examples/atmega-board-button` adds a switch and a pull-down. Its LED lags are recorded.
+//! A live session advances, then sets `usb_dtr` to 0 V, and the blink sketch restarts.
 
 mod common;
 
@@ -9,6 +11,11 @@ use std::fs;
 use common::examples::examples;
 use common::read_vcd;
 use common::{records, repo};
+use sim_circuit::{Input, Session, Setting, Status};
+use sim_core::finite::Finite;
+use sim_core::name::{Name, Ref};
+use sim_core::run_folder::RunFolder;
+use sim_core::time::Time;
 use sim_core::timestamp::Timestamp;
 
 /// `k * T / q` at 298.15 K, with the exact SI values.
@@ -21,6 +28,10 @@ const RELEASE_WINDOW_PS: u64 = 200_000;
 const RESET_CYCLES: u64 = 14;
 /// Recorded from the engine. First PB5 rise of `firmware/sketch/blink.hex`, in cycles. Not derived.
 const SKETCH_CYCLES: u64 = 233;
+/// Recorded from the engine at these switch times. Cycles from this example's switch close to the PB5 rise. Not derived.
+const PRESS_LAG_CYCLES: u64 = 137;
+/// Recorded from the engine at these switch times. Cycles from this example's switch open to the PB5 fall. Not derived.
+const RELEASE_LAG_CYCLES: u64 = 85;
 /// Recorded from the engine on the DTR rise. Not derived. The run peaked at 6.001514 V.
 const CLAMP_V: f64 = 6.002;
 const CLAMP_V_WINDOW: f64 = 0.002;
@@ -211,8 +222,8 @@ fn cycle_ps(netlist: &serde_json::Value) -> u64 {
     1_000_000_000_000 / hz
 }
 
-fn logic(done: &sim_circuit::Completed, key: &str) -> Vec<(u64, bool)> {
-    let text = std::str::from_utf8(done.folder.file("traces/logic.vcd").unwrap()).unwrap();
+fn logic(folder: &RunFolder, key: &str) -> Vec<(u64, bool)> {
+    let text = std::str::from_utf8(folder.file("traces/logic.vcd").unwrap()).unwrap();
     let vcd = read_vcd(text);
     vcd[key]["edges"]
         .as_array()
@@ -290,6 +301,13 @@ fn same_json(got: &serde_json::Value, want: &serde_json::Value) -> bool {
     }
 }
 
+/// `#led_l.i` while the pin sources. The stage and the leakage come from [`CITED`], not the netlist under test.
+fn led_on_current(v5: f64) -> f64 {
+    let leak = 1.0 / cited("mcu", "leakage_resistance.value");
+    let stage = 1.0 / cited("mcu", "output.high_resistance.value");
+    led_current(v5, leak + stage, leak + GMIN)
+}
+
 fn led_current(v5: f64, up: f64, down: f64) -> f64 {
     let r = 1000.0;
     let (is, n, rs) = (6.711e-10, 4.427, 2.115);
@@ -343,15 +361,13 @@ fn assert_quiet(done: &sim_circuit::Completed) {
 
 /// PC6 falls at `fall_ps`, then rises `want_ps` after `charge_ps`, within the window.
 /// The next PB5 rise is the fuse delay plus the sketch offset, within one cycle.
-fn assert_restart(
-    done: &sim_circuit::Completed,
-    fall_ps: u64,
-    charge_ps: u64,
-    cycle: u64,
-    want_ps: u64,
-) {
-    let pc6 = logic(done, "#mcu.logic.PC6");
-    assert_eq!(pc6[0], (fall_ps, false), "PC6 did not fall at the input");
+fn assert_restart(folder: &RunFolder, fall_ps: u64, charge_ps: u64, cycle: u64, want_ps: u64) {
+    let pc6 = logic(folder, "#mcu.logic.PC6");
+    assert_eq!(
+        pc6.first().copied(),
+        Some((fall_ps, false)),
+        "PC6 did not fall at the input"
+    );
     let release = pc6
         .iter()
         .find(|(at, high)| *high && *at >= charge_ps)
@@ -362,7 +378,7 @@ fn assert_restart(
         got.abs_diff(want_ps) <= RELEASE_WINDOW_PS,
         "release {got} ps, closed form {want_ps} ps"
     );
-    let pb5 = logic(done, "#mcu.logic.PB5");
+    let pb5 = logic(folder, "#mcu.logic.PB5");
     let offset = pb5.iter().find(|(_, high)| *high).unwrap().0;
     assert_eq!(offset, SKETCH_CYCLES * cycle);
     let (restart, high) = pb5.iter().find(|(at, _)| *at > release).copied().unwrap();
@@ -442,10 +458,8 @@ fn the_blink_run_matches_the_led_and_d0() {
     let trace = done.results.trace().unwrap();
     let high_ps = 500_000_000_000;
     let v5 = sample(trace, "#net.v5", high_ps);
-    let leak = 1.0 / 5.5e6;
-    let stage = 1.0 / 25.0;
     let got = sample(trace, "#led_l.i", high_ps);
-    let want = led_current(v5, leak + stage, leak + GMIN);
+    let want = led_on_current(v5);
     assert!(
         near(got, want),
         "LED {got} A, closed form {want} A at {v5} V"
@@ -485,7 +499,7 @@ fn a_dtr_fall_resets_within_the_window() {
     let fall = 1_500_000_000_000;
     let trace = done.results.trace().unwrap();
     let want = dtr_release_ps(sample(trace, "#net.v5", fall));
-    assert_restart(&done, fall, fall, cycle, want);
+    assert_restart(&done.folder, fall, fall, cycle, want);
     let rise = 2_500_000_000_000;
     let interval = row_at(trace, rise);
     let volts = trace.max_column(column_index(trace, "#net.reset"))[interval];
@@ -515,7 +529,7 @@ fn the_reset_button_restarts_within_the_window() {
     let open = 1_600_000_000_000;
     let trace = done.results.trace().unwrap();
     let want = button_release_ps(sample(trace, "#net.v5", open));
-    assert_restart(&done, 1_500_000_000_000, open, cycle, want);
+    assert_restart(&done.folder, 1_500_000_000_000, open, cycle, want);
 }
 
 #[test]
@@ -585,4 +599,111 @@ fn the_serial_host_is_echoed() {
         })
         .collect();
     assert_eq!(bytes, vec![49, 48, 104, 105]);
+}
+
+#[test]
+fn the_led_follows_the_button() {
+    let netlist = read_json(&repo("examples/atmega-board-button/netlist.json"));
+    assert_eq!(
+        records(part(&netlist, "mcu")["firmware"].as_str().unwrap()),
+        records(&fs::read_to_string(repo("firmware/sketch/button.hex")).unwrap())
+    );
+    assert_eq!(
+        netlist["analysis"]["transient"]["stop_ps"],
+        20_000_000_000_u64
+    );
+    assert_eq!(
+        netlist["analysis"]["transient"]["grid_ps"],
+        1_000_000_000_u64
+    );
+    let events = part(&netlist, "sw1")["events"].as_array().unwrap();
+    assert_eq!(events.len(), 2, "sw1 has no closed interval");
+    assert_eq!(events[0]["state"], "closed");
+    assert_eq!(events[1]["state"], "open");
+    let close = events[0]["t_ps"].as_u64().unwrap();
+    let open = events[1]["t_ps"].as_u64().unwrap();
+    assert!(close < open, "sw1 has no closed interval");
+    let cycle = cycle_ps(&netlist);
+    let done = run(&netlist);
+    assert_quiet(&done);
+    assert_eq!(
+        logic(&done.folder, "#mcu.logic.PB5"),
+        vec![
+            (close + PRESS_LAG_CYCLES * cycle, true),
+            (open + RELEASE_LAG_CYCLES * cycle, false),
+        ]
+    );
+    assert_eq!(
+        logic(&done.folder, "#mcu.logic.PD2"),
+        vec![(close, true), (open, false)]
+    );
+    let trace = done.results.trace().unwrap();
+    let on_ps = 10_000_000_000;
+    let off_ps = 18_000_000_000;
+    assert!(
+        close < on_ps && on_ps < open,
+        "{on_ps} is outside the press"
+    );
+    assert!(open < off_ps, "{off_ps} is not after the release");
+    let v5 = sample(trace, "#net.v5", on_ps);
+    let got = sample(trace, "#led_l.i", on_ps);
+    let want = led_on_current(v5);
+    assert!(
+        near(got, want),
+        "LED {got} A, closed form {want} A at {v5} V"
+    );
+    let off = sample(trace, "#led_l.i", off_ps);
+    assert!(off < 1e-9, "LED {off} A while the button is open");
+}
+
+/// The apply lands at the time the session already stands at. A future apply is only a scheduled event.
+fn live_dtr_fall(target_ps: u64, grid_ps: u64, on_row: bool) {
+    assert_eq!(
+        target_ps.is_multiple_of(grid_ps),
+        on_row,
+        "fall {target_ps} grid {grid_ps}"
+    );
+    let mut json = fragment();
+    json["analysis"]["transient"]["stop_ps"] = serde_json::Value::from(2_000_000_000_000_u64);
+    json["analysis"]["transient"]["grid_ps"] = serde_json::Value::from(grid_ps);
+    let bytes = serde_json::to_vec(&json).unwrap();
+    let mut session = Session::record_document(&bytes).unwrap();
+    let fall = Time::from_ps(target_ps);
+    assert_eq!(
+        session.advance_to(fall),
+        Status::Running,
+        "the session did not advance"
+    );
+    assert_eq!(session.now(), fall, "the session was not at the fall");
+    let applied = session
+        .apply(&Input {
+            part: Name::new("usb_dtr").unwrap(),
+            at: session.now(),
+            setting: Setting::Level(Finite::new(0.0).unwrap()),
+        })
+        .unwrap();
+    assert_eq!(applied.at, fall, "DTR did not land at the current time");
+    let probe = session.probe();
+    assert_eq!(probe.at(), fall, "v5 is not the row at the fall");
+    assert!(!probe.interpolated(), "v5 was interpolated");
+    let column: Ref = "#net.v5".parse().unwrap();
+    let v5 = probe.get(&column).expect("missing #net.v5").get();
+    let folder = session.finish(Timestamp::from_unix_seconds(0)).unwrap();
+    let diagnostics: serde_json::Value =
+        serde_json::from_slice(folder.file("diagnostics.json").unwrap()).unwrap();
+    assert_eq!(diagnostics.as_array().unwrap().len(), 0);
+    assert_restart(
+        &folder,
+        fall.as_ps(),
+        fall.as_ps(),
+        cycle_ps(&json),
+        dtr_release_ps(v5),
+    );
+}
+
+#[test]
+fn a_live_dtr_fall_restarts_the_sketch() {
+    let grid = 1_000_000_000;
+    live_dtr_fall(1_500_000_000_000, grid, true);
+    live_dtr_fall(1_234_567_890_123, grid, false);
 }

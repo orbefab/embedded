@@ -75,6 +75,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "atmega-analog-serial",
             "atmega-blink",
             "atmega-board-blink",
+            "atmega-board-button",
             "atmega-button",
             "atmega-fade",
             "atmega-serial-echo",

@@ -4,7 +4,7 @@
 
 The schematic is [https://www.arduino.cc/en/uploads/Main/Arduino_Uno_Rev3-schematic.pdf](https://www.arduino.cc/en/uploads/Main/Arduino_Uno_Rev3-schematic.pdf). Its SHA-256 is `665fe3c80f913f0e4a39752bd03a5ec3c4c7e50bf122be781b2571e8ef4d0e2d`. Values that come off that sheet cite `development board schematic, revision 3`.
 
-The example runs `firmware/sketch/blink.hex` for 4 s on a 10 ms grid and writes 401 rows. `mcu` uses the viewer id `dev-board-328p`. Every other part uses `on-board`. A session drives the reset button with `applyContact` on `sw_reset`, drives DTR with `applyLevel` on `usb_dtr`, and sends host bytes with `applySerial` on `usb_tx`.
+The example runs `firmware/sketch/blink.hex` for 4 s on a 10 ms grid and writes 401 rows. `mcu` uses the viewer id `dev-board-328p`. Every other part uses `on-board`. A session drives the reset button with `applyContact` on `sw_reset`, drives DTR with `applyLevel` on `usb_dtr`, and sends host bytes with `applySerial` on `usb_tx`. `crates/cli/tests/board.rs` opens this example, advances to the input, sets `usb_dtr` to 0 V through that level input, and checks that the sketch restarts.
 
 ## Parts
 
@@ -48,6 +48,10 @@ With `dtr_out` and RN2D in place, a rising DTR edge peaks RESET at 6.002 V and t
 The host VBUS is exactly 5.0 V. The rail has no bulk capacitance, so a load step moves `v5` at once, by the step times 0.21 ohm. D1, the TX pin, is left unconnected. The chip's TX bytes are already in `traces/serial.csv`.
 
 Left out on purpose are the 1 Mohm resistor across the resonator, the 16U2 and its crystal and LEDs, the op-amp, the ICSP header, the fuse's trip, the barrel jack, VIN, the 5 V regulator, and the power-path comparator. Rail capacitors PC2, C2, and C6 are out. C3 sits across the ideal 3.3 V source, so it is out too.
+
+## A button on the board
+
+`examples/atmega-board-button` is the fragment with `firmware/sketch/button.hex` and two parts added after it. `sw1` joins `d2` to `v5`. It starts open, closes at 5 ms, and opens at 15 ms. `r1` is 10 kohm from `d2` to `gnd`. The sketch reads pin 2 with the pull-up off and drives the pin-13 LED high only while that read is high. The run stops at 20 ms. The grid is 1 ms, and the run writes 21 rows. On a release run, PD2 rises at the close and falls at the open. At these switch times, PB5 rises 137 cycles after the close and falls 85 cycles after the open. A cycle is 62.5 ns, so those lags are 8.5625 us and 5.3125 us. The loop is 103 cycles. Other switch times give 61 to 262 cycles, because the lag follows that loop and the timer interrupt can land in the window. `crates/cli/tests/board.rs` pins the 137 and 85 cycle lags recorded at these switch times. The viewer draws `sw1` as `tactile-switch-6mm` and `r1` as `resistor-axial`. The fragment parts keep their ids.
 
 ## Later
 
