@@ -98,6 +98,13 @@ function assertSameFolder(label, folder, dir) {
   }
 }
 
+// The f64 bits of `values`, so -0 and a NaN payload stay distinct.
+function floatBits(values) {
+  const copy = new Float64Array(values.length);
+  copy.set(values);
+  return [...new BigUint64Array(copy.buffer)];
+}
+
 // The rows of `serial.csv` in the native folder in `dir`, and none without one.
 function serialRows(dir) {
   try {
@@ -126,8 +133,8 @@ function assertProbesOnRows(label, { refs, probes }, dir) {
 // Advances `session` in seeded calls until it ends. A call moves 1 ps, a frame, to the next row
 // time, or up to an eighth of the run. A frame is 60 Hz at 1x, or a 60th of a shorter run.
 // After each call it reads the probe, the levels and the new serial bytes, and keeps the probes
-// at row times. Then `input` may apply an input at `now`. Returns the refs, the probes kept, and
-// the serial bytes as `serial.csv` rows.
+// at row times. Then `input` may apply an input at `now`. Returns the refs, the probes kept, the
+// serial bytes as `serial.csv` rows, and the integrals when the session ends.
 function advanceInChunks(session, json, rng, input = () => {}) {
   const { stop_ps, grid_ps } = JSON.parse(json).analysis.transient;
   const [stop, grid] = [BigInt(stop_ps), BigInt(grid_ps)];
@@ -138,6 +145,7 @@ function advanceInChunks(session, json, rng, input = () => {}) {
   const usarts = JSON.parse(session.usarts());
   const probes = [];
   const rows = [];
+  let integrals;
   let cursor = 0n;
   for (;;) {
     const now = session.now();
@@ -163,6 +171,10 @@ function advanceInChunks(session, json, rng, input = () => {}) {
     if (isRow(at)) {
       probes.push({ at, values: Array.from(probe.values) });
     }
+    if (status !== 'running') {
+      integrals = new Float64Array(probe.integrals.length);
+      integrals.set(probe.integrals);
+    }
     probe.free();
     assert.equal(session.levels().length, signals.length, 'a level for each signal');
     const serial = session.serialSince(cursor);
@@ -173,7 +185,7 @@ function advanceInChunks(session, json, rng, input = () => {}) {
     cursor = serial.cursor;
     serial.free();
     if (status !== 'running') {
-      return { refs, probes, rows };
+      return { refs, probes, rows, integrals };
     }
     input(session, rng);
   }
@@ -197,6 +209,17 @@ function example(wasm, job, json, native) {
   assertSameFolder(`${job.name} finish`, session.finish(0n), native);
   assertProbesOnRows(job.name, read, native);
   assert.deepEqual(read.rows, serialRows(native), `${job.name}: the serial rows are serial.csv's`);
+  const stop = BigInt(JSON.parse(json).analysis.transient.stop_ps);
+  const once = wasm.Session.open(json);
+  assert.equal(once.advanceTo(stop), 'stopped');
+  const probe = once.probe();
+  assert.deepEqual(
+    floatBits(read.integrals),
+    floatBits(probe.integrals),
+    `${job.name}: integrals at the stop`,
+  );
+  probe.free();
+  once.free();
   const counts = `${read.probes.length} probes on rows, ${read.rows.length} serial rows`;
   return `run and finish are sim run, ${counts}`;
 }

@@ -38,6 +38,7 @@ codes=$(sed -n '/^| `code` |/,/^$/ s/^| `\([a-z_]*\)` | .*/"\1"/p' docs/wasm.md 
   paste -sd '|' | sed 's/|/ | /g')
 for line in \
   "export type Code = $codes;" \
+  'readonly integrals: Float64Array;' \
   'static open(netlist: Uint8Array): Session;' \
   'static record(netlist: Uint8Array): Session;' \
   'advanceTo(ps: bigint): Status;' \

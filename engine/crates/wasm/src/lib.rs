@@ -237,7 +237,7 @@ fn json(value: &(impl serde::Serialize + ?Sized)) -> String {
     serde_json::to_string(value).expect("run folder JSON serializes")
 }
 
-/// Every analog column at `now`, in `refs()` order.
+/// Every analog column at `now`, in `refs()` order, and each column's integral from t = 0.
 #[wasm_bindgen(getter_with_clone)]
 pub struct Probe {
     #[wasm_bindgen(readonly)]
@@ -247,6 +247,9 @@ pub struct Probe {
     /// Both solves failed, so the values are on the line between the accepted steps around it.
     #[wasm_bindgen(readonly)]
     pub interpolated: bool,
+    /// Each column's integral from t = 0 to `at`, in that column's unit times picoseconds.
+    #[wasm_bindgen(readonly)]
+    pub integrals: Vec<f64>,
 }
 
 /// Serial bytes, one per index across the three arrays, and the cursor past them.
@@ -378,6 +381,7 @@ impl Session {
             at: probe.at().as_ps(),
             values: probe.values().iter().map(|v| v.get()).collect(),
             interpolated: probe.interpolated(),
+            integrals: probe.integrals().to_vec(),
         }
     }
 

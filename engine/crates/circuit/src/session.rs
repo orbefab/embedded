@@ -125,6 +125,9 @@ pub struct Session {
     signals: Vec<Ref>,
     /// The level of each signal at `now`, in the order of `signals`.
     logic: Vec<Level>,
+    /// Integral of each analog column from t = 0 through the last accepted step, in `refs`
+    /// order. The unit is the column's unit times picoseconds.
+    integrals: Vec<f64>,
     /// Every byte a USART sent whose stop bit ended at or before the last accepted step, in the
     /// order stop bits ended, then in `usarts` order.
     serial: Vec<SerialByte>,
@@ -226,6 +229,8 @@ pub struct Probe<'s> {
     columns: &'s Columns,
     values: Vec<Finite>,
     interpolated: bool,
+    /// Integral of each column from t = 0 to `at`, in the column's unit times picoseconds.
+    integrals: Vec<f64>,
 }
 
 impl std::fmt::Debug for Probe<'_> {
@@ -234,6 +239,7 @@ impl std::fmt::Debug for Probe<'_> {
             .field("at", &self.at)
             .field("values", &self.values)
             .field("interpolated", &self.interpolated)
+            .field("integrals", &self.integrals)
             .finish()
     }
 }
@@ -259,6 +265,12 @@ impl Probe<'_> {
     /// Both solves failed, so the values are on the line between the accepted steps around it.
     pub fn interpolated(&self) -> bool {
         self.interpolated
+    }
+
+    /// The integral of each column from t = 0 to `at`, in the column's unit times picoseconds,
+    /// in `refs` order.
+    pub fn integrals(&self) -> &[f64] {
+        &self.integrals
     }
 }
 
@@ -348,6 +360,7 @@ impl Session {
         )?;
         let signals = circuit.logic_refs();
         let logic = circuit.logic_levels(&start.chips, &start.levels);
+        let integrals = vec![0.0; columns.refs().len()];
         let record = rows
             .map(|rows| {
                 Record::start(
@@ -387,6 +400,7 @@ impl Session {
             memo,
             signals,
             logic,
+            integrals,
             serial: Vec::new(),
             record,
             document,
@@ -462,24 +476,38 @@ impl Session {
 
     /// Every analog column at `now`. On an accepted step it is that step's row. Between steps it
     /// is solved from the last accepted step the way a row is, so at a row time it is that row.
+    /// The integrals run from t = 0 to that time. Between steps they add the trapezoid from the
+    /// accepted step to these values, and that piece is not stored.
     pub fn probe(&self) -> Probe<'_> {
-        let (at, values, interpolated) = match &self.state {
+        let (at, values, interpolated, integrals) = match &self.state {
             State::Running {
                 accepted,
                 now,
                 next,
-            } if *now > accepted.at => match self.span(accepted, next).probe(*now) {
-                Probed::Solved(values) => (*now, values, false),
-                Probed::Interpolated(values) => (*now, values, true),
-            },
-            State::Running { accepted, .. } => (accepted.at, accepted.row.clone(), false),
-            State::Ended { at, row, .. } => (*at, row.clone(), false),
+            } if *now > accepted.at => {
+                let (values, interpolated) = match self.span(accepted, next).probe(*now) {
+                    Probed::Solved(values) => (values, false),
+                    Probed::Interpolated(values) => (values, true),
+                };
+                let mut integrals = self.integrals.clone();
+                let left = accepted.restart_row.as_ref().unwrap_or(&accepted.row);
+                trapezoid(&mut integrals, (accepted.at, left), (*now, &values));
+                (*now, values, interpolated, integrals)
+            }
+            State::Running { accepted, .. } => (
+                accepted.at,
+                accepted.row.clone(),
+                false,
+                self.integrals.clone(),
+            ),
+            State::Ended { at, row, .. } => (*at, row.clone(), false, self.integrals.clone()),
         };
         Probe {
             at,
             columns: &self.columns,
             values,
             interpolated,
+            integrals,
         }
     }
 
@@ -754,6 +782,14 @@ impl Session {
                 end: End::Fault(fault),
             };
         }
+        // A refused step ends on the accepted row, so it is not counted. The count is before
+        // the restart solve, so a failed restart still includes the landing it ends on.
+        let left = accepted.restart_row.as_ref().unwrap_or(&accepted.row);
+        trapezoid(
+            &mut self.integrals,
+            (accepted.at, left),
+            (landing.at, &landing.row),
+        );
         self.stats.landings += 1;
         let Landing {
             h,
@@ -973,6 +1009,17 @@ fn probe_failure(circuit: &Circuit, from: Time, probe: Time, failure: Failure) -
                 step_ps: probe.as_ps() - from.as_ps(),
             },
         },
+    }
+}
+
+/// The width is picoseconds, so the unit is the column's unit times picoseconds.
+fn trapezoid(integrals: &mut [f64], from: (Time, &[Finite]), to: (Time, &[Finite])) {
+    debug_assert_eq!(integrals.len(), from.1.len());
+    debug_assert_eq!(integrals.len(), to.1.len());
+    debug_assert!(to.0 >= from.0);
+    let h = (to.0.as_ps() - from.0.as_ps()) as f64;
+    for ((sum, left), right) in integrals.iter_mut().zip(from.1).zip(to.1) {
+        *sum += h * 0.5 * (left.get() + right.get());
     }
 }
 

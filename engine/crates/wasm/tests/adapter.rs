@@ -185,6 +185,8 @@ fn a_probe_reads_its_columns_in_refs_order() {
     let probe = session.probe();
     assert_eq!(probe.at, 0);
     assert_eq!(probe.values.len(), session.refs().len());
+    assert_eq!(probe.integrals.len(), session.refs().len());
+    assert!(probe.integrals.iter().all(|value| *value == 0.0));
     assert_eq!(session.refs()[0], "#net.gnd");
     assert_eq!(probe.values[0], 0.0);
     assert!(!probe.interpolated);
@@ -207,6 +209,9 @@ fn assert_same_reads(binding: &Session, inner: &sim_circuit::Session) -> (Vec<u8
     let bits: Vec<u64> = probe.values.iter().map(|v| v.to_bits()).collect();
     let want_bits: Vec<u64> = want.values().iter().map(|v| v.get().to_bits()).collect();
     assert_eq!(bits, want_bits, "probe values at {at} ps");
+    let integrals: Vec<u64> = probe.integrals.iter().map(|v| v.to_bits()).collect();
+    let want_integrals: Vec<u64> = want.integrals().iter().map(|v| v.to_bits()).collect();
+    assert_eq!(integrals, want_integrals, "integrals at {at} ps");
     assert_eq!(
         probe.interpolated,
         want.interpolated(),
