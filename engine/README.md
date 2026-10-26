@@ -63,3 +63,9 @@ The process exits with one of these codes.
 Stdout for `run` repeats `diagnostics` in the same order as `diagnostics.json`.
 
 The schema is [docs/netlist.md](docs/netlist.md). How the engine steps, and how accurate it is, is [docs/engine.md](docs/engine.md). The folder is [docs/run-folder.md](docs/run-folder.md). The codes are [docs/diagnostics.md](docs/diagnostics.md). Which changes keep or bump each version is [docs/versions.md](docs/versions.md). The ngspice references are [docs/reference.md](docs/reference.md). The ATmega328P core behind the `atmega328p` kind is [docs/avr.md](docs/avr.md). The development board fragment is [docs/board.md](docs/board.md). How to time a run is [docs/bench.md](docs/bench.md). The JavaScript package for a Worker is [docs/wasm.md](docs/wasm.md).
+
+## License
+
+The code is under either of the MIT license ([LICENSE-MIT](LICENSE-MIT)) or the Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE)), at your option. A contribution you submit for inclusion is under the same two licenses, with no other terms.
+
+The compiled sketch images in `firmware/sketch/` are test fixtures that link third-party code under its own licenses. [firmware/sketch/NOTICE](firmware/sketch/NOTICE) names them. The engine does not link that code.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds crates/wasm into one wasm-bindgen package that loads in a browser module Worker and in a
-# node worker thread. The folder holds sim_wasm.js, sim_wasm_bg.wasm, their two .d.ts files, and
-# package.json. docs/wasm.md says how to load it.
+# node worker thread. The folder holds sim_wasm.js, sim_wasm_bg.wasm, their two .d.ts files,
+# package.json, LICENSE-MIT, and LICENSE-APACHE. docs/wasm.md says how to load it.
 #
 # Usage: scripts/wasm.sh [OUT_DIR]
 #
@@ -349,6 +349,7 @@ cat >"$out/package.json" <<EOF
   "name": "sim-wasm",
   "version": "$workspace_version",
   "private": true,
+  "license": "MIT OR Apache-2.0",
   "type": "module",
   "main": "./sim_wasm.js",
   "module": "./sim_wasm.js",
@@ -361,6 +362,8 @@ cat >"$out/package.json" <<EOF
     "./sim_wasm_bg.wasm": "./sim_wasm_bg.wasm"
   },
   "files": [
+    "LICENSE-APACHE",
+    "LICENSE-MIT",
     "package.json",
     "sim_wasm.d.ts",
     "sim_wasm.js",
@@ -372,4 +375,5 @@ cat >"$out/package.json" <<EOF
   }
 }
 EOF
+cp "$repo/LICENSE-APACHE" "$repo/LICENSE-MIT" "$out/"
 echo "$out"

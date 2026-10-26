@@ -57,6 +57,33 @@ if (manifest.private !== true) {
   console.error('package.json private is not true');
   process.exit(1);
 }
+if (manifest.license !== 'MIT OR Apache-2.0') {
+  console.error(`package.json license is ${manifest.license}`);
+  process.exit(1);
+}
+const files = [
+  'LICENSE-APACHE',
+  'LICENSE-MIT',
+  'package.json',
+  'sim_wasm.d.ts',
+  'sim_wasm.js',
+  'sim_wasm_bg.wasm',
+  'sim_wasm_bg.wasm.d.ts',
+];
+const got = manifest.files;
+const sameFiles =
+  Array.isArray(got) && got.length === files.length && got.every((name, i) => name === files[i]);
+if (!sameFiles) {
+  console.error(`package.json files is ${JSON.stringify(got)}`);
+  process.exit(1);
+}
+for (const name of files) {
+  const file = path.join(pkgDir, name);
+  if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
+    console.error(`package.json file is missing: ${name}`);
+    process.exit(1);
+  }
+}
 const commit = manifest.simEngine && manifest.simEngine.commit;
 const stamped = typeof commit === 'string' && /^[0-9a-f]{40}(-dirty)?$/.test(commit);
 const commitOk = stamped || (commit === null && !requireCommit);
