@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # Builds the wasm package with scripts/wasm.sh and runs crates/wasm/tests/worker.mjs, which drives
 # it in node worker threads and checks its folders and serial rows against native `sim run` on
-# every example, byte for byte. It needs node 22.7 or later and rustup, and fails without them.
+# every example, byte for byte. scripts/wasm-check.sh needs bash 4.2 or later, node 22.7 or later, and rustup. scripts/wasm.sh needs bash 4.2 or later and rustup.
+# It also fails when a regular file contains $HOME/ and HOME is not /, or a remapped host
+# prefix with a trailing slash. A prefix equal to /sim-engine, /cargo, /rustc, or /target
+# is not a needle, because the build writes that replacement into the package. A match is
+# a leak only when it starts a path. The check walks back from the match over / bytes.
+# The match is a leak when that reaches the start of the file, or the byte there is
+# outside [A-Za-z0-9._/-]. A host path glued on after other path characters, such as
+# abc/home/u/x, is a known miss.
 #
 # Usage: scripts/wasm-check.sh [SCRATCH_DIR]
 #
@@ -86,6 +93,95 @@ console.log(`package.json ok ${manifest.name}@${manifest.version} ${manifest.sim
 JS
 }
 
+# Source scripts/wasm.sh first. Every regular file under the package is scanned.
+# A home of / is not a needle. A prefix equal to a replacement is not a needle,
+# because the build writes that replacement into the package.
+sim_wasm_skip_host_prefix() {
+  local prefix=$1 repl
+  for repl in /sim-engine /cargo /rustc /target; do
+    [[ $prefix == "$repl" ]] && return 0
+  done
+  return 1
+}
+
+sim_wasm_match_is_leak() {
+  local file=$1 pos=$2 b
+  local -a bytes
+  while ((pos > 0)); do
+    read -ra bytes < <(od -v -An -t u1 -j $((pos - 1)) -N 1 -- "$file")
+    b=${bytes[0]}
+    if ((b != 47)); then
+      break
+    fi
+    pos=$((pos - 1))
+  done
+  if ((pos == 0)); then
+    return 0
+  fi
+  if ((b == 45 || b == 46 || b == 47 || b == 95)); then
+    return 1
+  fi
+  if ((b >= 48 && b <= 57)); then
+    return 1
+  fi
+  if ((b >= 65 && b <= 90)); then
+    return 1
+  fi
+  if ((b >= 97 && b <= 122)); then
+    return 1
+  fi
+  return 0
+}
+
+sim_wasm_file_has_needle() {
+  local file=$1 needle=$2 hit off
+  while IFS= read -r hit; do
+    off=${hit%%:*}
+    if sim_wasm_match_is_leak "$file" "$off"; then
+      return 0
+    fi
+  done < <(grep -a -F -b -o -- "$needle" "$file" || true)
+  return 1
+}
+
+sim_wasm_reject_host_paths() {
+  local pkg=${1%/} file needle home prefix
+  local -a needles=()
+  local -A seen=()
+  local rows
+  if [[ ! -d $pkg ]]; then
+    echo "wasm-check: package directory is missing" >&2
+    return 1
+  fi
+  rows=$(sim_wasm_remap_rows) || return 1
+  while IFS=$'\t' read -r prefix _ || [[ -n ${prefix:-} ]]; do
+    [[ -n ${prefix:-} ]] || continue
+    prefix=${prefix%/}
+    sim_wasm_skip_host_prefix "$prefix" && continue
+    needle="${prefix}/"
+    if [[ -z ${seen[$needle]+x} ]]; then
+      seen[$needle]=1
+      needles+=("$needle")
+    fi
+  done <<<"$rows"
+  home=${HOME:-}
+  home=${home%/}
+  if [[ -n $home && $home != / ]]; then
+    needle="${home}/"
+    if [[ -z ${seen[$needle]+x} ]]; then
+      needles+=("$needle")
+    fi
+  fi
+  while IFS= read -r -d '' file; do
+    for needle in "${needles[@]+"${needles[@]}"}"; do
+      if sim_wasm_file_has_needle "$file" "$needle"; then
+        echo "wasm-check: ${file#"$pkg"/} contains a host path" >&2
+        return 1
+      fi
+    done
+  done < <(find "$pkg" -type f -print0)
+}
+
 if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
   return 0
 fi
@@ -119,6 +215,7 @@ rm -rf "$scratch/pkg" "$scratch/native" "$scratch/work"
 cd "$repo"
 # shellcheck source=scripts/wasm.sh
 source "$repo/scripts/wasm.sh"
+sim_wasm_reject_host_paths "$scratch/pkg"
 sim_wasm_check_manifest "$scratch/pkg" "$repo"
 # The .d.ts types each argument as docs/wasm.md does, and its Code union is the docs' codes.
 codes=$(sed -n '/^| `code` |/,/^$/ s/^| `\([a-z_]*\)` | .*/"\1"/p' docs/wasm.md | sed 1d |

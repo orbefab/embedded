@@ -5,12 +5,23 @@
 #
 # Usage: scripts/wasm.sh [OUT_DIR]
 #
+# The script needs bash 4.2 or later and rustup.
+#
 # OUT_DIR defaults to .scratch/wasm/pkg beside the repo. The wasm-bindgen CLI must be the version
 # Cargo.lock holds for the crate. The script uses WASM_TOOLS_DIR/wasm-bindgen-<version> when it is
 # there, then a wasm-bindgen on PATH at that version, and otherwise installs it into that
 # directory from source, which takes about a minute. WASM_TOOLS_DIR defaults to
 # .scratch/wasm/tools beside the repo, and checkouts that set one WASM_TOOLS_DIR share one
 # install. CARGO_TARGET_DIR is honored, and CARGO_BUILD_JOBS defaults to 4.
+#
+# The sim-wasm cargo build remaps the checkout, CARGO_HOME, the sysroot, and a
+# target directory that sits outside the checkout. The shortest prefix is first.
+# The package is built reproducibly and takes no extra rustflags. The child
+# cargo receives only those remap flags in CARGO_ENCODED_RUSTFLAGS. The script
+# exits 1 when RUSTFLAGS, CARGO_ENCODED_RUSTFLAGS, CARGO_BUILD_RUSTFLAGS, or
+# CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS is set and not empty, and when
+# a cargo config file contains the text rustflags. That check runs before
+# wasm-bindgen is installed.
 #
 # package.json's simEngine.commit is SIM_COMMIT when that is set. Otherwise, in this git checkout,
 # it is git rev-parse HEAD, plus -dirty when git status --porcelain lists a change. An untracked
@@ -43,6 +54,185 @@ sim_wasm_git_root() {
   fi
 }
 
+sim_wasm_script=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+
+# Later rows replace an equal path. Callers sort the shortest prefix first,
+# because rustc keeps the last match.
+sim_wasm_repo_path() {
+  (cd "$sim_wasm_script/.." && pwd "$1")
+}
+
+sim_wasm_cargo_home() {
+  local cargo_raw
+  cargo_raw=${CARGO_HOME:-${HOME:-}/.cargo}
+  cargo_raw=${cargo_raw%/}
+  if [[ $cargo_raw != /* ]]; then
+    cargo_raw=$(sim_wasm_repo_path -P)/$cargo_raw
+  fi
+  printf '%s\n' "$cargo_raw"
+}
+
+sim_wasm_remap_emit() {
+  local from=${1%/}
+  [[ $from == /* && $from != / ]] || return 0
+  printf '%s\t%s\n' "$from" "$2"
+}
+
+sim_wasm_path_inside() {
+  [[ $1 == "$2" || $1 == "$2"/* ]]
+}
+
+sim_wasm_remap_rows() {
+  local repo_raw repo_phys cargo_raw cargo_phys sys_raw sys_phys
+  local target_raw target_phys rustc_bin
+  repo_raw=$(sim_wasm_repo_path -L)
+  repo_phys=$(sim_wasm_repo_path -P)
+  cargo_raw=$(sim_wasm_cargo_home)
+  if [[ -d $cargo_raw ]]; then
+    cargo_phys=$(cd "$cargo_raw" && pwd -P)
+  else
+    cargo_phys=$cargo_raw
+  fi
+  rustc_bin=${RUSTC:-rustc}
+  sys_raw=$("$rustc_bin" --print sysroot)
+  sys_raw=${sys_raw%/}
+  sys_phys=$(cd "$sys_raw" && pwd -P)
+  if ! target_raw=$(
+    cd "$repo_phys" &&
+      cargo metadata --format-version 1 --no-deps --color never |
+      sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p'
+  ); then
+    echo "sim-wasm: cargo metadata failed" >&2
+    return 1
+  fi
+  if [[ -z $target_raw ]]; then
+    echo "sim-wasm: cargo metadata did not report a target directory" >&2
+    return 1
+  fi
+  mkdir -p "$target_raw"
+  target_phys=$(cd "$target_raw" && pwd -P)
+  sim_wasm_remap_emit "$cargo_raw" /cargo
+  sim_wasm_remap_emit "$cargo_phys" /cargo
+  sim_wasm_remap_emit "$sys_raw" /rustc
+  sim_wasm_remap_emit "$sys_phys" /rustc
+  if ! sim_wasm_path_inside "$target_raw" "$repo_raw" &&
+    ! sim_wasm_path_inside "$target_raw" "$repo_phys"; then
+    sim_wasm_remap_emit "$target_raw" /target
+  fi
+  if ! sim_wasm_path_inside "$target_phys" "$repo_raw" &&
+    ! sim_wasm_path_inside "$target_phys" "$repo_phys"; then
+    sim_wasm_remap_emit "$target_phys" /target
+  fi
+  sim_wasm_remap_emit "$repo_raw" /sim-engine
+  sim_wasm_remap_emit "$repo_phys" /sim-engine
+}
+
+sim_wasm_join_unit() {
+  local first=1 arg
+  for arg in "$@"; do
+    if ((first)); then
+      printf '%s' "$arg"
+      first=0
+    else
+      printf '\x1f%s' "$arg"
+    fi
+  done
+}
+
+# Any occurrence of the text rustflags is refused. A comment or a quoted key counts.
+sim_wasm_file_has_rustflags() {
+  grep -F -q -- 'rustflags' "$1"
+}
+
+sim_wasm_rustflags_above() {
+  local dir=$1 file
+  while true; do
+    for file in "$dir/.cargo/config" "$dir/.cargo/config.toml"; do
+      if [[ -f $file ]] && sim_wasm_file_has_rustflags "$file"; then
+        printf '%s\n' "$file"
+        return 0
+      fi
+    done
+    [[ $dir == / ]] && return 1
+    dir=${dir%/*}
+    [[ -n $dir ]] || dir=/
+  done
+}
+
+sim_wasm_refuse_other_rustflags() {
+  local name cargo_home file raw phys found=
+  for name in RUSTFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_RUSTFLAGS \
+    CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS; do
+    if [[ -v $name && -n ${!name} ]]; then
+      found=$name
+      break
+    fi
+  done
+  if [[ -z $found ]]; then
+    cargo_home=$(sim_wasm_cargo_home)
+    for file in "$cargo_home/config" "$cargo_home/config.toml"; do
+      if [[ -f $file ]] && sim_wasm_file_has_rustflags "$file"; then
+        found=$file
+        break
+      fi
+    done
+  fi
+  if [[ -z $found ]]; then
+    raw=$(sim_wasm_repo_path -L)
+    phys=$(sim_wasm_repo_path -P)
+    if found=$(sim_wasm_rustflags_above "$phys"); then
+      :
+    elif [[ $raw != "$phys" ]] && found=$(sim_wasm_rustflags_above "$raw"); then
+      :
+    else
+      found=
+    fi
+  fi
+  if [[ -n $found ]]; then
+    echo "sim-wasm: the package is built reproducibly and takes no extra rustflags. Found ${found}." >&2
+    return 1
+  fi
+  return 0
+}
+
+sim_wasm_remap_flags() {
+  local rows from to bytes
+  local -a order=() sortable=()
+  local -A dest=()
+  rows=$(sim_wasm_remap_rows) || return 1
+  while IFS=$'\t' read -r from to || [[ -n ${from:-} ]]; do
+    [[ -n ${from:-} ]] || continue
+    if [[ -z ${dest[$from]+x} ]]; then
+      order+=("$from")
+    fi
+    dest[$from]=$to
+  done <<<"$rows"
+  for from in "${order[@]+"${order[@]}"}"; do
+    bytes=$(printf '%s' "$from" | wc -c)
+    bytes=${bytes//[[:space:]]/}
+    sortable+=("${bytes}"$'\t'"${from}"$'\t'"--remap-path-prefix=${from}=${dest[$from]}")
+  done
+  if ((${#sortable[@]} == 0)); then
+    return 0
+  fi
+  (
+    set -o pipefail
+    printf '%s\n' "${sortable[@]}" | LC_ALL=C sort -t $'\t' -k1,1n -k2,2 | cut -f3-
+  )
+}
+
+sim_wasm_encoded_rustflags() {
+  local line remap_text
+  local -a remaps=()
+  remap_text=$(sim_wasm_remap_flags) || return 1
+  while IFS= read -r line || [[ -n ${line:-} ]]; do
+    [[ -n ${line:-} ]] && remaps+=("$line")
+  done <<<"$remap_text"
+  if ((${#remaps[@]})); then
+    sim_wasm_join_unit "${remaps[@]}"
+  fi
+}
+
 if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
   return 0
 fi
@@ -57,6 +247,7 @@ if ! command -v rustup >/dev/null; then
   echo "rustup not found" >&2
   exit 2
 fi
+sim_wasm_refuse_other_rustflags || exit 1
 repo=$(cd "$(dirname "$0")/.." && pwd -P)
 out=${1:-$repo/../.scratch/wasm/pkg}
 tools_dir=${WASM_TOOLS_DIR:-$repo/../.scratch/wasm/tools}
@@ -129,7 +320,19 @@ if [[ ! -x $bindgen ]]; then
 fi
 
 mkdir -p "$out"
-cargo build -p sim-wasm --release --locked --target wasm32-unknown-unknown
+# The encoded value is on this cargo invocation only, so a native build does not
+# inherit the flags. An empty parent value is not a source on the child.
+encoded=$(sim_wasm_encoded_rustflags) || exit 1
+if [[ -z $encoded ]]; then
+  echo "sim-wasm: no remap flags" >&2
+  exit 1
+fi
+env -u RUSTFLAGS \
+  -u CARGO_ENCODED_RUSTFLAGS \
+  -u CARGO_BUILD_RUSTFLAGS \
+  -u CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS \
+  CARGO_ENCODED_RUSTFLAGS="$encoded" \
+  cargo build -p sim-wasm --release --locked --target wasm32-unknown-unknown
 target=$(cargo metadata --format-version 1 --no-deps |
   sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
 "$bindgen" --target web --out-dir "$out" "$target/wasm32-unknown-unknown/release/sim_wasm.wasm"
