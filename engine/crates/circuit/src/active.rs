@@ -298,7 +298,7 @@ enum Reach {
 
 impl Ahead {
     /// Puts the copy at `at` with everything there done but the stop's sample and inputs. A
-    /// copy that ran past a flip at `at` runs again from the committed core.
+    /// copy that ran past `at` runs again from the committed core.
     fn rewind(&mut self, committed: &Core, at: Time) {
         let reached = match self.reach {
             Reach::Done(reached) | Reach::Twin(reached) => reached,
@@ -453,7 +453,10 @@ impl Actives {
     /// A step landed at `at`, no later than the last `horizon`, with `after` read on `x` and
     /// `before` in force until then. Each core that stops at `at` takes its sample from `x`,
     /// each core whose watches flipped takes them, and each such core is committed at `at`.
-    /// Returns whether an image changed, and how many cores stopped at `at`.
+    /// With `keep`, so is every other core, and a later rewind runs again from `at` at the
+    /// earliest. A copy that ran past `at`, as a retry shorter than its first try leaves it, runs
+    /// again from its last commit to `at` first. Returns whether an image changed, and how many
+    /// cores stopped at `at`.
     pub(crate) fn land(
         &mut self,
         circuit: &Circuit,
@@ -461,6 +464,7 @@ impl Actives {
         x: &Solution,
         before: &Levels,
         after: &Levels,
+        keep: bool,
     ) -> (bool, u64) {
         let mut changed = false;
         let mut stops = 0u64;
@@ -472,7 +476,7 @@ impl Actives {
                 Reach::Stopped(stop) if stop.at == at => Some(stop),
                 _ => None,
             };
-            if stop.is_none() && !flipped {
+            if stop.is_none() && !flipped && !keep {
                 continue;
             }
             if stop.is_some() {

@@ -6,6 +6,7 @@ mod failures;
 mod fixtures;
 mod inputs;
 mod limits;
+mod replay;
 mod serial;
 mod session;
 mod steps;

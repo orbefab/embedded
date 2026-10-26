@@ -522,7 +522,7 @@ impl Session {
         loop {
             state = match state {
                 State::Running { accepted, next, .. } if next.at <= to => {
-                    self.accept(accepted, next)
+                    self.accept(accepted, next, to)
                 }
                 _ => break,
             };
@@ -879,7 +879,10 @@ impl Session {
     }
 
     /// Records `landing`, takes its chip events and any restart, and solves the step after it.
-    fn accept(&mut self, accepted: Accepted, landing: Landing) -> State {
+    /// A landing within one step limit of `to`, the call's target, may be the call's last, so
+    /// every core is kept there. An input after the call then runs a core again from that
+    /// landing. A call to `stop` ends the session, so it keeps none.
+    fn accept(&mut self, accepted: Accepted, landing: Landing, to: Time) -> State {
         let span = Span {
             circuit: &self.circuit,
             columns: &self.columns,
@@ -933,6 +936,7 @@ impl Session {
             &converged.iterate.solution,
             &accepted.levels,
             &levels,
+            to < transient.stop && at.as_ps().saturating_add(transient.max_step) > to.as_ps(),
         );
         self.stats.stops += stopped;
         let restart = (self.breakpoints.is_edge(at) || chips != accepted.chips || driven)

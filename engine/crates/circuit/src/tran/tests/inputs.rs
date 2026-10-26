@@ -255,7 +255,7 @@ const STIFF_PARTS: &[PartSpec] = &[
     },
 ];
 
-fn without_events(input: &[u8]) -> Vec<u8> {
+pub(super) fn without_events(input: &[u8]) -> Vec<u8> {
     let mut json: serde_json::Value = serde_json::from_slice(input).unwrap();
     for part in json["parts"].as_array_mut().unwrap() {
         if part["kind"] == "switch" {
