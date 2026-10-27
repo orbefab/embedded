@@ -13,6 +13,9 @@
     "reg_3v3": {
       "model": "placeholder:on-board"
     },
+    "c3": {
+      "model": "placeholder:on-board"
+    },
     "mcu": {
       "model": "placeholder:dev-board-328p"
     },

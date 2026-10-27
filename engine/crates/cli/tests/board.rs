@@ -44,7 +44,21 @@ const CITED: &[(&str, &str, f64)] = &[
     ("usb_vbus", "voltage.value", 5.0),
     ("usb_fuse", "resistance.value", 0.15),
     ("usb_switch", "resistance.value", 0.06),
-    ("reg_3v3", "voltage.value", 3.3),
+    ("reg_3v3", "output_voltage.value", 3.3),
+    ("reg_3v3", "line_regulation.value", 0.000231),
+    ("reg_3v3", "output_resistance.value", 0.3322147651006711),
+    ("reg_3v3", "dropout_voltage.value", 0.0051677852348993285),
+    ("reg_3v3", "dropout_resistance.value", 1.8322147651006713),
+    ("reg_3v3", "current_limit.value", 0.35),
+    ("reg_3v3", "quiescent_current.value", 6.5e-5),
+    (
+        "reg_3v3",
+        "ground_current_ratio.value",
+        0.005233333333333334,
+    ),
+    ("reg_3v3", "ratings.current.value", 0.15),
+    ("reg_3v3", "ratings.power.value", 0.48685491723466406),
+    ("c3", "capacitance.value", 1e-6),
     ("mcu", "clock_hz.value", 16_000_000.0),
     ("mcu", "fuses.low", 255.0),
     ("mcu", "fuses.high", 223.0),
@@ -706,4 +720,148 @@ fn a_live_dtr_fall_restarts_the_sketch() {
     let grid = 1_000_000_000;
     live_dtr_fall(1_500_000_000_000, grid, true);
     live_dtr_fall(1_234_567_890_123, grid, false);
+}
+
+/// `sp(x) = ln(1 + e^x)`, branched so `exp` is never of a positive overflow.
+fn softplus(x: f64) -> f64 {
+    if x > 0.0 {
+        x + libm::log1p(libm::exp(-x))
+    } else {
+        libm::log1p(libm::exp(x))
+    }
+}
+
+/// Open-circuit output of the regulator law at `vi`, the current that `GMIN` draws there,
+/// and `dvo/di` at that current. The constants are the law's.
+fn regulator_open(reg: &sim_core::netlist::LinearRegulator, vi: f64) -> (f64, f64, f64) {
+    const KNEE_V: f64 = 1e-3;
+    const FLOOR_OHM: f64 = 0.25;
+    const LIMIT_FRACTION: f64 = 1e-3;
+    const LIMIT_HEADROOM: f64 = 100.0;
+    const BLOCK_OHM: f64 = 1e9;
+    const BLOCK_A: f64 = 1e-12;
+    let vout = reg.output_voltage.si.get();
+    let k = reg.line_regulation.si.get();
+    let ro = reg.output_resistance.si.get();
+    let vdo = reg.dropout_voltage.si.get();
+    let rdo = reg.dropout_resistance.si.get();
+    let ilim = reg.current_limit.si.get();
+    let law = |i: f64| {
+        let d = LIMIT_FRACTION * ilim;
+        let rlim = LIMIT_HEADROOM * vout / ilim;
+        let a = vout + k * (vi - vout) - ro * i;
+        let raw = vi - vdo - rdo * i;
+        let floor = -FLOOR_OHM * i;
+        let b = floor + KNEE_V * softplus((raw - floor) / KNEE_V);
+        let vo_min = a - KNEE_V * softplus((a - b) / KNEE_V);
+        let over = (i - ilim) / d;
+        let back = -i / BLOCK_A;
+        vo_min - rlim * d * softplus(over) + BLOCK_OHM * BLOCK_A * softplus(back)
+    };
+    let mut i = GMIN * vout;
+    for _ in 0..20 {
+        i = GMIN * law(i);
+    }
+    let volts = law(i);
+    let step = 1e-15;
+    let slope = (law(i + step) - law(i - step)) / (2.0 * step);
+    (volts, i, slope)
+}
+
+/// `v3v3` stays between the lowest and highest open-circuit setpoints the run visits.
+///
+/// The output cannot sink when its only load is `GMIN`, so a fall in the setpoint
+/// settles with a time constant of about 36 s.
+#[test]
+fn v3v3_stays_between_the_setpoints_the_run_visits() {
+    let bytes = fs::read(fragment_path()).unwrap();
+    let netlist = sim_core::netlist::parse(&bytes).unwrap();
+    let (results, stats) = sim_circuit::simulate_stats(&netlist);
+    assert!(
+        results.diagnostics().is_empty(),
+        "{:?}",
+        results.diagnostics()
+    );
+    let folder = sim_core::run_folder::render(
+        &bytes,
+        Some(&netlist),
+        &results,
+        Timestamp::from_unix_seconds(0),
+    );
+    let text = std::str::from_utf8(folder.file("traces/logic.vcd").unwrap()).unwrap();
+    let vcd = read_vcd(text);
+    let mut pin_edges = 0_u64;
+    let mut pb5 = 0_u64;
+    for (key, body) in vcd.as_object().unwrap() {
+        let count = body["edges"]
+            .as_array()
+            .map(|edges| edges.len())
+            .unwrap_or(0) as u64;
+        if key.starts_with("#mcu.logic.") {
+            pin_edges += count;
+        }
+        if key == "#mcu.logic.PB5" {
+            pb5 = count;
+        }
+    }
+    let trace = results.trace().unwrap();
+    eprintln!("landings {}", stats.landings);
+    eprintln!("stops {}", stats.stops);
+    eprintln!("pb5_edges {pb5}");
+    eprintln!("pin_edges {pin_edges}");
+    assert_eq!(stats.landings, 778, "accepted steps after t = 0");
+    assert_eq!(pb5, 4, "PB5 edges");
+    assert_eq!(pin_edges, 4, "pin edges");
+    let name = Name::new("reg_3v3").unwrap();
+    let id = netlist.part_id(&name).unwrap();
+    let sim_core::netlist::Model::LinearRegulator(reg) = &netlist.part(id).model else {
+        panic!("reg_3v3 is not a linear regulator");
+    };
+    let high = 500_000_000_000;
+    let host = sample(trace, "#usb_vbus.i", high);
+    assert!((host + 0.009555890962038169).abs() <= 1e-12, "host {host}");
+    let v5_col = trace.column(column_index(trace, "#net.v5"));
+    let v3_col = trace.column(column_index(trace, "#net.v3v3"));
+    let mut low = f64::INFINITY;
+    let mut high_set = f64::NEG_INFINITY;
+    for &v5 in v5_col {
+        let (law, _, _) = regulator_open(reg, v5);
+        low = low.min(law);
+        high_set = high_set.max(law);
+    }
+    let (law0, _, slope0) = regulator_open(reg, v5_col[0]);
+    let tau = 1e-6 * slope0.abs();
+    eprintln!("setpoint_low {low} setpoint_high {high_set}");
+    eprintln!("t0_law {law0} open_slope_ohm {slope0} tau_s {tau}");
+    eprintln!("high_ic {}", sample(trace, "#c3.i", high));
+    for (tag, ps) in [
+        ("t0", 0_u64),
+        ("high", 500_000_000_000),
+        ("low", 1_500_000_000_000),
+    ] {
+        let v5 = sample(trace, "#net.v5", ps);
+        let v3 = sample(trace, "#net.v3v3", ps);
+        let (law, _, _) = regulator_open(reg, v5);
+        eprintln!(
+            "{tag} v5 {v5} v3v3 {v3} law {law} host {} led {} d0 {} dtr {} iin {} ic {}",
+            sample(trace, "#usb_vbus.i", ps),
+            sample(trace, "#led_l.i", ps),
+            sample(trace, "#net.d0", ps),
+            sample(trace, "#net.dtr", ps),
+            sample(trace, "#reg_3v3.iin", ps),
+            sample(trace, "#c3.i", ps),
+        );
+    }
+    assert!(
+        (v3_col[0] - law0).abs() <= 1e-9,
+        "t0 v3v3 {} law {law0}",
+        v3_col[0]
+    );
+    for (index, (&v3, time)) in v3_col.iter().zip(trace.time()).enumerate() {
+        assert!(
+            (low - 1e-9) <= v3 && v3 <= (high_set + 1e-9),
+            "row {index} at {} ps v3 {v3} outside {low} to {high_set}",
+            time.as_ps()
+        );
+    }
 }

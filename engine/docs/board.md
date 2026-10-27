@@ -8,14 +8,15 @@ The example runs `firmware/sketch/blink.hex` for 4 s on a 10 ms grid and writes 
 
 ## Parts
 
-The fragment is on USB power. `v5` is the 5 V header pin, and it is also the IOREF pin, which the sheet ties to +5V. `v3v3` is an ideal 3.3 V source. The LP2985-33 is specified for 150 mA. Its peak output current is typically 350 mA, and the minimum of that peak is 300 mA. The model has no current limit. A load on `v3v3` does not load `v5`. On the board the regulator draws that current from +5V.
+The fragment is on USB power. `v5` is the 5 V header pin, and it is also the IOREF pin, which the sheet ties to +5V. `v3v3` is the output of `reg_3v3`. That part is the legacy standard-grade LP2985-33, from `v5` to `v3v3`, with its ON/OFF pin tied to its input. Page 30 Table 8-1 of TI SLVS522S allows this orderable part to be the legacy chip or the new chip. The fit uses the legacy column because the revision 3 schematic predates the new chip. A later board may carry the new chip. The model has no enable pin. C3, 1 uF, sits on `v3v3`. A load on `v3v3` draws from `v5`. The 3.3 V rail carries no switched load.
 
 | Part | Designator | What it is |
 | --- | --- | --- |
 | `usb_vbus` | host VBUS | 5.0 V on `vbus` |
 | `usb_fuse` | F1 | 0.15 ohm from `vbus` to `usbvcc`. The sheet names MF-MSMF050-2. The `-2` suffix is tape and reel packaged per EIA-481, which is why the MF-MSMF050 row is this part. That row's minimum resistance at 23 C is 0.15 ohm. The fuse holds 0.5 A and trips at 1.0 A. This resistor never trips. |
 | `usb_switch` | T1, FDN340P | 0.06 ohm from `usbvcc` to `v5`, the typical on resistance at VGS of -4.5 V. The gate drive and the comparator that produces it are left out, so the switch stays on. |
-| `reg_3v3` | U2, LP2985-33 | 3.3 V on `v3v3` |
+| `reg_3v3` | U2, LP2985-33 | Linear regulator from `v5` to `v3v3`. The values are the legacy standard-grade column of TI SLVS522S, fitted in [netlist.md](netlist.md#linear-regulator). |
+| `c3` | C3 | 1 uF from `v3v3` to `gnd`. The legacy sheet asks for at least 2.2 uF so the loop is stable. This model has no stability condition, and the schematic value is 1 uF. |
 | `mcu` | ZU4, ATmega328P | The documented pin values. `clock_hz` is 16 MHz. Fuses are low `0xFF`, high `0xDF`, extended `0xFD`. |
 | `res_xtal1`, `res_xtal2` | resonator | 15 pF each, held at 0 V, so `xtal1` and `xtal2` have a DC path |
 | `c_aref` | C4 | 100 nF from `aref` to `gnd`, held at 0 V |
@@ -33,7 +34,7 @@ The fragment is on USB power. `v5` is the 5 V header pin, and it is also the IOR
 | `r_on_a`, `r_on_b` | RN4D, RN4C | 1 kohm each, in parallel from `v5` to `on_led` |
 | `led_on` | ON | The same red LED. The sheet marks this one green and publishes no part number. |
 
-On a release run of the blink example, `#net.v5` is 4.998007 V while D13 is high and the host supplies 9.491 mA. While D13 is low, `#net.v5` is 4.998671 V and the host supplies 6.328 mA. `#net.v3v3` is 3.3 V. The pin-13 LED draws 3.164 mA while D13 is high. D0 idles at 4.999091 V. While U3 drives high, `dtr` rests at 4.826 V. That host current leaves out the USB-serial chip, the op-amp, and the regulator. `r_dtr_boot` draws from `usb_dtr`, not from VBUS.
+On a release run of the blink example, `#net.v5` is 4.99799326289932 V while D13 is high and `#usb_vbus.i` is -0.009555890962038169 A. While D13 is low, at the row t = 0, `#net.v5` is 4.998657542762282 V, `#usb_vbus.i` is -0.0063926535193707884 A, and `#net.v3v3` is 3.3004285939117013 V. `#led_l.i` is 0.0031643889021110896 A while D13 is high. D0 idles at 4.999090990557572 V. While U3 drives high, `dtr` rests at 4.826254826087119 V. That host current leaves out the USB-serial chip and the op-amp. It includes the regulator. At the high row `#reg_3v3.iin` is 0.00006500000331343172 A. `r_dtr_boot` draws from `usb_dtr`, not from VBUS.
 
 ## What differs from the board
 
@@ -47,7 +48,7 @@ With `dtr_out` and RN2D in place, a rising DTR edge peaks RESET at 6.002 V and t
 
 The host VBUS is exactly 5.0 V. The rail has no bulk capacitance, so a load step moves `v5` at once, by the step times 0.21 ohm. D1, the TX pin, is left unconnected. The chip's TX bytes are already in `traces/serial.csv`.
 
-Left out on purpose are the 1 Mohm resistor across the resonator, the 16U2 and its crystal and LEDs, the op-amp, the ICSP header, the fuse's trip, the barrel jack, VIN, the 5 V regulator, and the power-path comparator. Rail capacitors PC2, C2, and C6 are out. C3 sits across the ideal 3.3 V source, so it is out too.
+Left out on purpose are the 1 Mohm resistor across the resonator, the 16U2 and its crystal and LEDs, the op-amp, the ICSP header, the fuse's trip, the barrel jack, VIN, the 5 V regulator, and the power-path comparator. Rail capacitors PC2, C2, and C6 are out. C3, 1 uF, is on `v3v3`.
 
 ## A button on the board
 
@@ -55,4 +56,4 @@ Left out on purpose are the 1 Mohm resistor across the resonator, the 16U2 and i
 
 ## Later
 
-A regulator part can replace `reg_3v3` and keep the net name `v3v3`, with the 1 uF output capacitor beside it. A `vin` net and the 5 V regulator from `vin` to `v5` add barrel-jack power. The automatic switch between USB and the jack waits on an op-amp and a `pmos` kind. Until then a barrel-powered board is a second fragment, with that regulator in place of `usb_vbus`, `usb_fuse`, and `usb_switch`. The pin-13 follower waits on the same op-amp. It would sit between `d13` and a new net, and `r_l` would move to that net. `l13` and `led_l` keep their names. The bootloader is not part of this fragment.
+A `vin` net and the 5 V regulator from `vin` to `v5` add barrel-jack power. The automatic switch between USB and the jack waits on an op-amp and a `pmos` kind. Until then a barrel-powered board is a second fragment, with that regulator in place of `usb_vbus`, `usb_fuse`, and `usb_switch`. The pin-13 follower waits on the same op-amp. It would sit between `d13` and a new net, and `r_l` would move to that net. `l13` and `led_l` keep their names. The bootloader is not part of this fragment.
