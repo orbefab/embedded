@@ -9,11 +9,13 @@
 //!                 of the rows - 1 intervals between the rows
 //!   logic.vcd     when a chip in the netlist has logic signals, see `logic`
 //!   serial.csv    when a chip in the netlist has a USART, see `serial`
+//!   i2c.csv       when a chip in the netlist has a TWI, see `i2c`
 //! ```
 
 use serde::Serialize;
 
 use crate::finite::Finite;
+use crate::i2c::I2c;
 use crate::logic::Logic;
 use crate::name::{Quantity, Ref};
 use crate::netlist::Transient;
@@ -42,6 +44,7 @@ pub struct Trace {
     grid: u64,
     logic: Option<Logic>,
     serial: Option<Serial>,
+    i2c: Option<I2c>,
 }
 
 /// Running minimum and maximum of the interval open since the last row, one pair per column.
@@ -99,6 +102,7 @@ impl Trace {
             grid: transient.grid,
             logic: None,
             serial: None,
+            i2c: None,
         }
     }
 
@@ -117,6 +121,13 @@ impl Trace {
     pub fn attach_serial(&mut self, serial: Serial) {
         assert!(self.serial.is_none(), "serial is attached once");
         self.serial = Some(serial);
+    }
+
+    /// The phases the chips' TWIs saw over the run, attached once at its end, after an error
+    /// too.
+    pub fn attach_i2c(&mut self, i2c: I2c) {
+        assert!(self.i2c.is_none(), "i2c is attached once");
+        self.i2c = Some(i2c);
     }
 
     /// Folds a non-row accepted step into the interval open since the last row. The engine
@@ -229,6 +240,9 @@ impl Trace {
         if let Some(serial) = &self.serial {
             files.push((SERIAL, serial.csv()));
         }
+        if let Some(i2c) = &self.i2c {
+            files.push((I2C, i2c.csv()));
+        }
         files
     }
 
@@ -289,6 +303,7 @@ const ANALOG: &str = "analog.f64";
 const ENVELOPE: &str = "envelope.f64";
 const VCD: &str = "logic.vcd";
 const SERIAL: &str = "serial.csv";
+const I2C: &str = "i2c.csv";
 
 fn unit(reference: &Ref) -> &'static str {
     match reference {
@@ -374,6 +389,7 @@ struct Column<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::i2c::{I2cPhase, I2cRow};
     use crate::logic::Level;
     use crate::name::Name;
     use crate::serial::SerialByte;
@@ -589,6 +605,38 @@ mod tests {
         );
         assert_eq!(files[0].1, index);
         assert_eq!(files[5].1, b"t_ps,part,usart,byte\n5,u1,USART0,72\n");
+    }
+
+    #[test]
+    fn i2c_comes_after_serial_and_leaves_the_index_as_it_was() {
+        let mut trace = trace();
+        let index = trace.files().swap_remove(0).1;
+        let u1 = Name::new("u1").unwrap();
+        trace.attach_serial(Serial::new(vec![(u1.clone(), "USART0")], Vec::new()));
+        let rows = vec![I2cRow {
+            at: Time::from_ps(7),
+            twi: 0,
+            phase: I2cPhase::Stop,
+        }];
+        trace.attach_i2c(I2c::new(vec![u1], rows));
+        let files = trace.files();
+        let names: Vec<_> = files.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            names,
+            [
+                "index.json",
+                "time.u64",
+                "analog.f64",
+                "envelope.f64",
+                "serial.csv",
+                "i2c.csv"
+            ]
+        );
+        assert_eq!(files[0].1, index);
+        assert_eq!(
+            files[5].1,
+            b"t_ps,part,phase,address,read,byte,ack\n7,u1,stop,,,,\n"
+        );
     }
 
     #[test]

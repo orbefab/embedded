@@ -9,19 +9,25 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 
 // One 60 Hz frame of a run paced at 1x.
 const FRAME_PS = 16_666_666_667n;
 
 // The input cases: the part each takes inputs on, and which setting a seeded input writes.
+const I2C_STRETCH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../cli/tests/fixtures/i2c-stretch/netlist.json',
+);
+
 const INPUTS = [
   { name: 'atmega-button', part: 'sw1', setting: 'contact' },
   { name: 'atmega-analog-serial', part: 'rv1', setting: 'level' },
   { name: 'v-serial', part: 'v1', setting: 'serial' },
   { name: 'atmega-serial-echo', part: 'vrx', setting: 'serial' },
+  { name: 'i2c-stretch', part: 'sw1', setting: 'contact', netlist: I2C_STRETCH },
 ];
 
 // `bigint` arguments the binding takes exactly, and the `created_at` each stamps as seconds.
@@ -416,7 +422,22 @@ function withInputs(wasm, job, json, work) {
   mkdirSync(work, { recursive: true });
   writeFileSync(exported, session.export());
   execFileSync(workerData.sim, ['run', exported, '--out', native]);
-  assertSameFolder(label, session.finish(0n), native);
+  const finished = session.finish(0n);
+  const i2c = finished.file('traces/i2c.csv');
+  let phases = 0;
+  if (i2c) {
+    const lines = Buffer.from(i2c).toString('utf8').trim().split('\n').slice(1);
+    const seen = new Set();
+    for (const line of lines) {
+      assert.ok(!seen.has(line), `${label}: a phase was delivered twice (${line})`);
+      seen.add(line);
+    }
+    phases = lines.length;
+  }
+  if (job.name === 'i2c-stretch') {
+    assert.ok(phases > 0, `${label}: the bus delivered a phase`);
+  }
+  assertSameFolder(label, finished, native);
   assertProbesOnRows(label, read, native);
   assert.deepEqual(read.rows, serialRows(native), `${label}: the serial rows are serial.csv's`);
   assert.deepEqual(
@@ -424,7 +445,8 @@ function withInputs(wasm, job, json, work) {
     logicChanges(native),
     `${label}: the edges are the changes in traces/logic.vcd`,
   );
-  const counts = `${read.probes.length} probes on rows, ${read.rows.length} serial rows, ${read.edges.length} logic changes`;
+  const phasesText = phases > 0 ? `, ${phases} i2c phases once` : '';
+  const counts = `${read.probes.length} probes on rows, ${read.rows.length} serial rows, ${read.edges.length} logic changes${phasesText}`;
   return `finish is sim run on the ended export after ${applied} inputs, ${counts}`;
 }
 
@@ -724,7 +746,7 @@ if (isMainThread && invokedDirectly) {
   const { job, pkg, examples, native, work } = workerData;
   const wasm = await import(pathToFileURL(join(pkg, 'sim_wasm.js')));
   wasm.initSync({ module: readFileSync(join(pkg, 'sim_wasm_bg.wasm')) });
-  const json = () => readFileSync(join(examples, job.name, 'netlist.json'));
+  const json = () => readFileSync(job.netlist ?? join(examples, job.name, 'netlist.json'));
   const checks = {
     example: () => example(wasm, job, json(), join(native, job.name)),
     inputs: () => withInputs(wasm, job, json(), work),

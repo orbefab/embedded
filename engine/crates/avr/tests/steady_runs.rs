@@ -384,16 +384,18 @@ fn an_eepe_poll_ends_at_the_write_as_stepped() {
 
 /// The TWI master's waits on `TWINT` after a START and after SLA+W, then on `TWSTO` after a
 /// STOP. At `TWBR` 0 a START is 16 cycles and the address phase 144, and zero to four `NOP`s after
-/// each store put the phase's end at every offset of the 5-cycle poll.
+/// each store put the phase's end at every offset of the 5-cycle poll. The pads' own pull-ups
+/// hold the bus high, as `Wire.begin` sets them.
 #[test]
 fn a_twint_poll_ends_at_the_phase_as_stepped() {
+    const PORTC_IO: u16 = 0x08;
     const TWDR: u16 = 0xBB;
     const TWCR: u16 = 0xBC;
     const TWINT: u16 = 7;
     const TWSTO: u16 = 4;
     for shift in 0..5 {
         let start = MAIN;
-        let mut main = vec![];
+        let mut main = vec![sbi(PORTC_IO, 4), sbi(PORTC_IO, 5)];
         let wait = |main: &mut Vec<u16>, control: u16, bit: u16, set: bool| {
             main.push(ldi(16, control));
             main.extend(sts(16, TWCR));

@@ -14,7 +14,7 @@ A pin report carries the pin's level and its drive, the pin's own stage apart fr
 - Ports B, C, and D, with the synchronizer on `PINx` (§14.2.4), the pull-ups, and the alternate functions of §14.3 on one pin mux. A pin id is port × 8 + bit, so `PB0` is 0, `PC0` is 8, and `PD0` is 16.
 - Timer0, Timer1, and Timer2 in every waveform mode, the shared prescaler of §17, input capture with the noise canceler, and the `T0`/`T1` clock inputs.
 - `INT0`, `INT1`, and the three pin-change groups (§13). While `clkI/O` runs, they read each pin through the `PINx` synchronizer, two cycles after the pad changes (Figure 14-3, and Figure 13-1 for a pin change). A pin holds the last level it was driven to in a cycle. Every level that lasts a cycle reaches the edge detector, however many pins change at once. §13.2.1 does not ensure an interrupt for a pulse shorter than a clock, and here it sets no flag. While reset holds the core, through the start-up time-out, the registers keep their reset values (§11.1), so a pin that moves then sets no flag. §11.1 does not say whether the synchronizer samples during reset. This model lets it, so the pin leaves its last level and release flags only a change that reaches the edge detector after it. A first `IN` from `PINx` reads the levels sampled during the hold. A change on the last cycle of the time-out reaches the edge detector after the first instruction. A first `STS` to `EICRA` or `PCMSK2` arms an edge for it only when the host has set the stored register, since reset clears the register file.
-- USART0 in asynchronous mode and as an SPI master (§20, §21). SPI master and slave (§19). The TWI master (§22).
+- USART0 in asynchronous mode and as an SPI master (§20, §21). SPI master and slave (§19). The TWI master on SCL and SDA (§22), as [The TWI](#the-twi) says.
 - The ADC and the analog comparator (§23, §24), sampling voltages the host sets.
 - EEPROM (§8), the watchdog (§11), every reset source with its `MCUSR` flag, brown-out, the sleep modes and their wake sources (§10), `PRR`, `CLKPR`, and the fuse bytes.
 
@@ -58,12 +58,35 @@ Other choices that the documents do not settle are written beside the code that 
 
 ## Not yet modelled
 
-- **TWI on the pins.** The TWI is the transaction, with the status codes of Tables 22-2 and 22-3 and the timing of §22.5.2. SDA and SCL show only their pull-up level, and no edge leaves the pads. Slave mode is not modelled.
-- **SPI with a part on a net.** SPI drives SCK, MOSI, and MISO, but its peer is inside the crate. A byte queue answers a master, or a host master clocks a slave. The I2C peer is a separate stand-in inside the crate.
+- **TWI slave mode.** `TWAR` and `TWAMR` are stored and logged, and nothing answers an address, general call included. The TWI is a master only.
+- **SPI with a part on a net.** SPI drives SCK, MOSI, and MISO, but its peer is inside the crate. A byte queue answers a master, or a host master clocks a slave.
 - **The analog comparator through the seam.** The adapter hands the core each pin as a level from its watch, so `AIN0`, `AIN1`, and an ADC channel the comparator reads through `ACME` compare 0 V or VCC, not the pins' voltages.
 - **`tRST`.** Table 29-11 (§29) gives `RESET` a minimum pulse width of 2.5 us. The adapter does not filter it and resets on a low of any length.
 - Timer2's asynchronous clock from a TOSC crystal. `ASSR.AS2` is stored and logged, and Timer2 counts `clkI/O`.
 - The boot section. The image runs from word 0, so parse rejects a programmed `BOOTRST`, and `SPM` is logged but does not write flash.
+- The TWI slew-rate limiter (§22.5.1). A low edge falls through the pin's 25 ohm stage.
+- The TWI spike filter (§22.5.1). The part suppresses a spike under 50 ns. The model has no filter, so it passes any pulse the circuit resolves.
+- tHD;DAT's maximum below about 18 kHz. `D` is `T/16`, which stays inside Table 29-14 down to that rate.
+- SMBus timeouts. The datasheet does not define them for this part.
+
+## The TWI
+
+The TWI master runs the bus bit by bit on `PC5`, SCL, and `PC4`, SDA. While `TWEN` is set it pulls a line low through the pin's low stage and otherwise releases it, whatever `DDRC` holds. Table 14-7 keeps the pull-up on while the TWI pulls the line low, because `PUOE` is `TWEN`. The pull-up is the netlist's `pull_up_resistance`, 35,714 ohm by default, from Figure 31-348, inside the 20 to 50 kohm range. The model drops that pull-up during the low. On a 4.7 kohm bus with the default, the low is about 3.5 mV lower than the part, and the pin draws about 140 uA less. While it releases a line, the pull-up follows `PORTC` and `PUD`. `Wire.begin` sets both pull-ups. It reads both lines from the pads on the cycle they change, with no `PINx` synchronizer.
+
+§22.5.2 gives the period, `T = 16 + 2·TWBR·4^TWPS` cycles, and Table 29-14 the minimums, but neither says where each edge sits inside a bit. The core fixes a bit table. `S` is `floor(0.45·T)`, `L` is `T - S`, and `D` is `floor(T/16)`. At `TWBR` 72, `T` is 160 cycles, 100 kHz at 16 MHz, and `S`, `L` and `D` are 72, 88 and 10. At `TWBR` 12, `T` is 40, 400 kHz, and they are 18, 22 and 2. `w` is the cycle a `TWCR` write retires.
+
+- START on a free bus: SDA low at `w + L`, SCL low `S` later. `TWINT` sets with that SCL fall.
+- Each bit, from the SCL fall `f`: SDA changes at `f + D`, SCL is released at `f + L`, SDA is sampled on the cycle SCL reads high, and SCL goes low `S` after that. A byte is nine bits, `9·T`.
+- STOP: SDA low at `w + D`, SCL released at `w + L`, SDA released `S` after SCL reads high. `TWSTO` clears on the cycle SDA reads high.
+- Repeated START: SDA released at `w + D`, SCL released at `w + L`, SDA low `L` after SCL reads high, and SCL low `S` after that, `T + L` in all.
+
+A length after a release counts from the cycle the line reads high, so a device that holds SCL low stretches the bit (§22.4). A length after the TWI pulls a line low counts from that cycle. Another master's earlier SCL fall pulls this one's SCL low at once, and another master's START while this one waits to send its own is joined. SCL stays low while `TWINT` is set (§22.5.5).
+
+A master read releases SDA for the eight data bits and drives the ninth from `TWEA` (§22.7.2). A 1 the TWI sends that reads back 0 at its SCL rise loses arbitration. The status is 0x38, both lines are released and `TWINT` sets. An SDA change while SCL is high inside a byte is a bus error, 0x00, with both lines released (§22.8). A START seen on the bus makes it busy and a STOP frees it. A START asked for while the bus is busy waits for the STOP, then starts `L` after it. Wire's writes at 0x38 and 0x00 are rows of Tables 22-2 and 22-6 that put nothing on the bus. A `TWCR` write that is a row of no table, including `TWSTA` with no `TWSTO` from 0x08, 0x10, 0x40 or 0x50, is logged once. This master releases both lines and drops the phase start it had recorded. If it owned the bus, it treats the bus as free. If it did not, `busy` stays with the bus monitor, an SDA edge while SCL is high, and a START waits for a STOP when the bus is busy.
+
+`TWAR` resets to 0xFE (§22.9.5). Each phase the TWI finishes is an `I2cStamp`: its first bus change and its end in oscillator cycles from power-on, and what it was. `Cpu::take_i2c_through` takes the phases that ended by a cycle. An in-run reset keeps the phases that ended and drops the one on the bus. `traces/i2c.csv` is written from them, as [run-folder.md](run-folder.md#traces) says.
+
+`tests/twi.rs` runs the TWI against a peer on its pads that holds the bus high, answers as a target, and records every edge. At `TWBR` 72 and 12 it checks every interval of the bit table, repeated START included, against Table 29-14's timing rows. It also covers master transmit and receive, each master status code Wire's `twi.c` reads, clock stretching, arbitration loss, both bus errors, and a START that waits for another master's STOP.
 
 ## Behind the seam
 

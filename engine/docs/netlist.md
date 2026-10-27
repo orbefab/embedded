@@ -767,6 +767,8 @@ This document runs `firmware/toggle.S` at 16 MHz into 1 kohm on PB5. `cx1` and `
 
 `examples/atmega-fade` is this part with these values running `firmware/fade.S`. PB1, which is OC1A, drives the WP7113ID of `examples/led-5v` through 220 ohm to ground. Timer1 is 8-bit phase-correct PWM with prescaler 64, about 490 Hz, and OC1A is non-inverting. `OCR1A` steps by 5 every 30 ms and reverses at 0 and 255. Its 1.57 s run climbs from off to full on and starts back down, on a 100 us grid.
 
+`examples/atmega-i2c-scan` is this part with these values running `firmware/sketch/i2c_scan.hex`, a Wire scanner. 4.7 kohm resistors pull PC4, SDA, and PC5, SCL, up to VCC, and nothing else is on the bus. The sketch probes each address from 1 to 126, none answers, and it prints `no devices` at 115200 baud. The 20 ms run is on a 100 us grid. Its `traces/i2c.csv` holds a START, an SLA+W with no acknowledge and a STOP for each address.
+
 | Field | Unit | Rule |
 | --- | --- | --- |
 | `firmware` | Intel HEX text | records 00 to 05, an end record, every byte inside the 32 KB flash |

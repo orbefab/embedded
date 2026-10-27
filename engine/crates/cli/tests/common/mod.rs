@@ -109,7 +109,8 @@ impl TransientFolder {
 
 /// Reads the run folder `out` of the transient example `name` and asserts what every one keeps:
 /// its files, with `traces/logic.vcd` exactly when its observations have logic and
-/// `traces/serial.csv` exactly when it has an ATmega328P, which has a USART, a row at each
+/// `traces/serial.csv` and `traces/i2c.csv` exactly when it has an ATmega328P, which has a
+/// USART and a TWI, a row at each
 /// `grid_ps` to `stop_ps`, row 0 equal to `observations.op`, and an envelope that holds both rows
 /// of each interval.
 pub fn transient_folder(name: &str, out: &Path) -> TransientFolder {
@@ -127,8 +128,11 @@ pub fn transient_folder(name: &str, out: &Path) -> TransientFolder {
         "observations.json",
         "traces/analog.f64",
         "traces/envelope.f64",
-        "traces/index.json",
     ];
+    if usart {
+        expected.push("traces/i2c.csv");
+    }
+    expected.push("traces/index.json");
     if logic {
         expected.push("traces/logic.vcd");
     }

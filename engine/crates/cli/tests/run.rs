@@ -460,8 +460,9 @@ fn two_runs_of_each_transient_example_differ_only_in_created_at() {
         let logic = usize::from(observations.get("logic").is_some());
         let netlist: serde_json::Value =
             serde_json::from_slice(&left_files["netlist.json"]).unwrap();
-        let serial = usize::from(has_usart(&netlist));
-        assert_eq!(left_files.len(), 7 + logic + serial, "{name}");
+        // An ATmega328P writes `serial.csv` for its USART and `i2c.csv` for its TWI.
+        let chip = 2 * usize::from(has_usart(&netlist));
+        assert_eq!(left_files.len(), 7 + logic + chip, "{name}");
         assert_eq!(left_files, right_files, "{}", left.display());
         let _ = fs::remove_dir_all(left);
         let _ = fs::remove_dir_all(right);

@@ -1,19 +1,37 @@
-//! TWI master, DS40002061B §22, transaction level.
+//! TWI master, DS40002061B §22, at bit level on `SCL` and `SDA`.
 //!
-//! A byte phase is exactly `9·T` from the `TWINT` write to `TWINT` set
-//! (§22.3.3, §22.3.4, §22.5.5). START, repeated START, and STOP take `T`.
-//! This is a Bounded choice, ±T: Table 29-14 gives only minimums. `T` is
-//! `16 + 2·TWBR·4^TWPS` (§22.5.2). The
-//! write's cycle is the store's retire cycle, the same convention as an
-//! `SPDR` store. The bus waits while `TWINT` is set (§22.5.5). SCL and SDA
-//! edges are not modeled.
+//! The TWI pulls each line low through the pin's low stage and releases it otherwise
+//! (Table 14-7). It reads both lines from pad edges through `AIO`, with no `PINx`
+//! synchronizer. The part suppresses a spike under 50 ns. The model has no filter,
+//! so it passes any pulse the circuit resolves (§22.5.1).
 //!
-//! Slave modes, arbitration loss, bus error, and general call are stored
-//! nowhere: a master transfer does not produce those status codes.
+//! The datasheet gives the period and the minimums of Table 29-14, not where the edges sit
+//! inside a bit. This bit table is a choice that meets every timing row of Table 29-14
+//! from 100 kHz to 400 kHz. `T` is `16 + 2·TWBR·4^TWPS` (§22.5.2), `S = ⌊0.45·T⌋`, `L = T - S`
+//! and `D = ⌊T/16⌋`. A length after the TWI releases a line counts from the cycle it reads that
+//! line high, so a device that holds SCL low stretches the bit (§22.4). A length after the TWI
+//! pulls a line low counts from that cycle, and another master's earlier SCL fall pulls SCL
+//! low at once.
+//!
+//! - START on a free bus: SDA low at `w + L`, SCL low `S` later.
+//! - Each bit after the SCL fall `f`: SDA at `f + D`, SCL released at `f + L`, SDA sampled
+//!   when SCL reads high, SCL low `S` after that.
+//! - STOP: SDA low at `w + D`, SCL released at `w + L`, SDA released `S` after SCL reads high.
+//! - Repeated START: SDA released at `w + D`, SCL released at `w + L`, SDA low `L` after SCL
+//!   reads high, SCL low `S` after that.
+//!
+//! `w` is the `TWCR` write's retire cycle, the same convention as an `SPDR` store. SCL stays low
+//! while `TWINT` is set (§22.5.5). A master read releases SDA for the eight data bits and drives
+//! the ninth from `TWEA` (§22.7.2). A transmitted 1 read back as 0 loses arbitration, 0x38. An
+//! SDA change while SCL is high inside a byte is a bus error, 0x00 (§22.4, §22.8). A START asked
+//! for while another master holds the bus waits for its STOP.
+//!
+//! Slave modes, general call and `TWAMR` matching are not modelled, so this TWI never answers
+//! its own address.
 
 use std::collections::VecDeque;
 
-use crate::bus::hostside::HostSide;
+use crate::Level;
 use crate::chip::{OcPin, TwiCfg};
 use crate::mux::PinMux;
 use crate::periph::{Ctx, Gate, Touch};
@@ -34,17 +52,37 @@ const TWIE: u8 = 1 << 0;
 /// Control bits a program can store. `TWINT` and `TWWC` are separate.
 const TWCR_STORE: u8 = TWEA | TWSTA | TWSTO | TWEN | TWIE;
 
-/// One completed host phase. Stamped when `TWINT` sets, or when `TWSTO` clears.
+/// One phase this master saw on the bus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum I2cNote {
-    Start { repeated: bool },
-    Address { addr: u8, read: bool, ack: bool },
-    Data { byte: u8, write: bool, ack: bool },
+    Start {
+        repeated: bool,
+    },
+    Address {
+        addr: u8,
+        read: bool,
+        ack: bool,
+    },
+    Data {
+        byte: u8,
+        write: bool,
+        ack: bool,
+    },
     Stop,
+    /// A transmitted 1 read back as 0, status 0x38.
+    ArbitrationLost,
+    /// A START or STOP inside an address or data byte, status 0x00.
+    BusError,
 }
 
+/// `start` is the phase's first bus change, the first SCL or SDA edge the TWI read after the
+/// cycle the previous phase ended while it owned the bus or had a phase under way, or `at` when
+/// there was none. `at` is the cycle the phase
+/// ended: `TWINT` set, or `TWSTO` cleared. Both are oscillator cycles from power-on, as a
+/// USART's [`crate::Sent`] is, so a reset and a clock prescaler leave them in place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct I2cStamp {
+    pub start: u64,
     pub at: u64,
     pub note: I2cNote,
 }
@@ -54,47 +92,92 @@ pub struct I2cStamp {
 enum Action {
     Start {
         repeated: bool,
-        /// Status was 0x08, 0x10, 0x40, or 0x50. No START row for these in
-        /// Tables 22-2 and 22-3. Logged once.
-        off_table: bool,
     },
     Address,
     DataTx,
     DataRx,
     Stop,
     StopThenStart,
-    /// No row in Tables 22-2 and 22-3 for this write. Logged once.
+    /// No row in Tables 22-2 or 22-3. Logged once, and this master releases its lines.
     Invalid,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Job {
-    Start {
-        repeated: bool,
-    },
-    Address {
-        addr: u8,
-        read: bool,
-        ack: bool,
-    },
-    DataTx {
-        byte: u8,
-        ack: bool,
-    },
-    DataRx {
-        byte: u8,
-    },
-    Stop,
-    /// STOP at `due`, then a new START at `start_at`.
-    StopThenStart {
-        start_at: u64,
-    },
+enum Line {
+    Scl,
+    Sda,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Address,
+    Write,
+    Read,
+}
+
+/// The byte on the bus: what it sends, and what it has read so far.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Byte {
+    kind: Kind,
+    out: u8,
+    got: u8,
+    /// 0 to 8. Bit 8 is the acknowledge.
+    bit: u8,
+    ack: bool,
+}
+
+/// The next bus action of a phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    /// A START waits for another master's STOP.
+    Busy,
+    /// SDA falls for a START.
+    StartSda { repeated: bool },
+    /// SCL falls `S` after SDA, and the START ends.
+    StartScl { repeated: bool },
+    /// A repeated START releases SDA at `w + D`.
+    RestartSda,
+    /// A repeated START releases SCL at `w + L`.
+    RestartScl,
+    /// SDA takes the bit at `f + D`.
+    Data(Byte),
+    /// SCL is released at `f + L`.
+    Release(Byte),
+    /// SCL reads high: the bit is sampled.
+    Sample(Byte),
+    /// SCL falls `S` after it read high.
+    Fall(Byte),
+    /// SDA falls at `w + D` for a STOP.
+    StopSda { then_start: bool },
+    /// SCL is released at `w + L`.
+    StopScl { then_start: bool },
+    /// SDA is released `S` after SCL reads high.
+    StopRise { then_start: bool },
+    /// SDA reads high, and the STOP ends.
+    StopEnd { then_start: bool },
+}
+
+/// `step` runs `delay` cycles after `line` reads `high`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Sense {
+    line: Line,
+    high: bool,
+    delay: u64,
+}
+
+/// SDA and SCL edges of one pad batch, in the order they took effect.
+const EDGE_CAP: usize = 8;
 
 /// SCL period in CPU cycles. `4^TWPS` is `1 << (2·TWPS)`.
 pub(crate) fn scl_period(twbr: u8, twps: u8) -> u64 {
     let scale = 1u64 << (2 * u32::from(twps & 0x03));
     16 + 2 * u64::from(twbr) * scale
+}
+
+/// `(S, L, D)` of the bit table for period `t`.
+pub(crate) fn lengths(t: u64) -> (u64, u64, u64) {
+    let short = t * 45 / 100;
+    (short, t - short, t / 16)
 }
 
 #[derive(Debug, Clone)]
@@ -109,14 +192,26 @@ pub(crate) struct Twi {
     twwc: bool,
     /// Status code while `TWINT` is set. Reads as `0xF8` otherwise.
     status: u8,
-    /// A START was sent and no STOP or `TWEN` = 0 has happened since.
+    /// A START of this master and no STOP, loss or `TWEN` = 0 since.
     owns: bool,
-    /// The last SLA+R/W was acknowledged. Data after a NACK goes nowhere.
-    addressed: bool,
-    last_addr: u8,
+    /// A START on the bus and no STOP since, from any master.
+    busy: bool,
+    step: Option<Step>,
+    /// The cycle `step` runs, `u64::MAX` while it waits on `sense` or nothing.
     due: u64,
-    job: Option<Job>,
+    sense: Option<Sense>,
     armed: Option<Action>,
+    /// What the TWI pulls low.
+    sda_low: bool,
+    scl_low: bool,
+    /// The levels it last read.
+    sda_high: bool,
+    scl_high: bool,
+    /// The first edge read after the cycle the last phase ended.
+    first: Option<u64>,
+    ended: Option<u64>,
+    edges: [(Line, bool, u64); EDGE_CAP],
+    edge_len: u8,
     clock_on: bool,
     prr_off: bool,
     frozen_at: u64,
@@ -125,7 +220,6 @@ pub(crate) struct Twi {
     vec: u8,
     out: VecDeque<I2cStamp>,
     logged_speed: bool,
-    logged_off: bool,
     logged_invalid: bool,
     logged_twar: bool,
     logged_twamr: bool,
@@ -146,11 +240,19 @@ impl Twi {
             twwc: false,
             status: 0xF8,
             owns: false,
-            addressed: false,
-            last_addr: 0,
+            busy: false,
+            step: None,
             due: u64::MAX,
-            job: None,
+            sense: None,
             armed: None,
+            sda_low: false,
+            scl_low: false,
+            sda_high: false,
+            scl_high: false,
+            first: None,
+            ended: None,
+            edges: [(Line::Scl, false, 0); EDGE_CAP],
+            edge_len: 0,
             clock_on: true,
             prr_off: false,
             frozen_at: 0,
@@ -159,7 +261,6 @@ impl Twi {
             vec: cfg.vec,
             out: VecDeque::new(),
             logged_speed: false,
-            logged_off: false,
             logged_invalid: false,
             logged_twar: false,
             logged_twamr: false,
@@ -196,10 +297,37 @@ impl Twi {
         {
             self.due = self.due.wrapping_add(delta);
         }
+        if self.running() {
+            self.resume(cycle);
+        }
     }
 
-    pub(crate) fn take(&mut self) -> Option<I2cStamp> {
-        self.out.pop_front()
+    /// A level read or a STOP seen while frozen starts its step from the resume.
+    fn resume(&mut self, cycle: u64) {
+        if self.step == Some(Step::Busy) && !self.busy {
+            let (_, long, _) = lengths(self.period());
+            self.at(Step::StartSda { repeated: false }, cycle + long);
+        }
+        if let Some(sense) = self.sense
+            && self.reads(sense.line) == sense.high
+        {
+            self.sense = None;
+            self.due = cycle + sense.delay;
+        }
+    }
+
+    /// The next phase that ended at or before oscillator cycle `through`.
+    pub(crate) fn take(&mut self, through: u64) -> Option<I2cStamp> {
+        self.out.pop_front_if(|stamp| stamp.at <= through)
+    }
+
+    /// The phases that ended, which an in-run reset keeps.
+    pub(crate) fn take_all(&mut self) -> VecDeque<I2cStamp> {
+        std::mem::take(&mut self.out)
+    }
+
+    pub(crate) fn restore(&mut self, kept: VecDeque<I2cStamp>) {
+        self.out = kept;
     }
 
     pub(crate) fn peek(&self, reg: u8) -> u8 {
@@ -214,7 +342,7 @@ impl Twi {
         }
     }
 
-    /// `TWINT`, the status and a received `TWDR` change when the phase fires.
+    /// `TWINT`, the status and a received `TWDR` change at an event or a pad edge.
     pub(crate) fn steady(&self, reg: u8) -> bool {
         matches!(
             reg,
@@ -263,28 +391,21 @@ impl Twi {
         mux: &mut PinMux,
         ctx: &mut Ctx<'_>,
         cycle: u64,
-        host: &mut HostSide,
     ) -> Touch {
         if !self.running() {
             return Touch::default();
         }
         let touch = self.store(reg, value, mux, ctx, cycle, true);
         if self.armed.is_some() {
-            self.launch(cycle, mux, ctx, host);
+            self.launch(cycle, mux, ctx);
         }
         touch
     }
 
     /// The store has retired. The phase is measured from `cycle`.
-    pub(crate) fn stamp(
-        &mut self,
-        cycle: u64,
-        mux: &mut PinMux,
-        ctx: &mut Ctx<'_>,
-        host: &mut HostSide,
-    ) {
+    pub(crate) fn stamp(&mut self, cycle: u64, mux: &mut PinMux, ctx: &mut Ctx<'_>) {
         if self.armed.is_some() {
-            self.launch(cycle, mux, ctx, host);
+            self.launch(cycle, mux, ctx);
         }
     }
 
@@ -334,25 +455,33 @@ impl Twi {
 
     fn write_twcr(&mut self, value: u8, mux: &mut PinMux, ctx: &mut Ctx<'_>, cycle: u64) {
         let start_bit = value & TWINT != 0;
-        let was_on = self.enabled() || self.job.is_some() || self.owns || self.twint;
-        let status = self.status;
+        let was_enabled = self.enabled();
+        let status = if self.twint { self.status } else { 0xF8 };
         let owns = self.owns;
         self.ctrl = value & TWCR_STORE;
-        self.apply_pads(mux, ctx, cycle);
         if !self.enabled() {
-            if was_on {
+            if was_enabled {
                 self.abort();
             }
+            self.apply_pads(mux, ctx, cycle);
             self.armed = None;
             return;
         }
-        if self.job.is_some() {
+        if !was_enabled {
+            self.sda_high = mux.pad_high(self.sda.port, self.sda.bit);
+            self.scl_high = mux.pad_high(self.scl.port, self.scl.bit);
+            self.busy = false;
+            self.first = None;
+        }
+        self.apply_pads(mux, ctx, cycle);
+        if self.step.is_some() {
             // The in-flight phase finishes on its own. A `TWEN` clear returned above (§22.9.2).
             self.armed = None;
             return;
         }
+        let stop = self.ctrl & TWSTO != 0;
         // Idle `TWSTO` sends nothing and reads 0 after the write (§22.9.2).
-        if !owns && self.ctrl & TWSTO != 0 {
+        if !owns && stop {
             self.ctrl &= !TWSTO;
         }
         // Writing 0 leaves `TWINT`. Nothing starts while it stays set (§22.3.2).
@@ -362,6 +491,12 @@ impl Twi {
         // Bit 7 clears `TWINT` and the other bits are already stored, so the
         // interrupt request is the result of this write (§22.9.2).
         self.twint = false;
+        let start = self.ctrl & TWSTA != 0;
+        // Table 22-2, 0x38 with neither bit: the bus is released. Table 22-6, 0x00 with
+        // `TWSTO`: only the hardware recovers, and no STOP goes on the bus.
+        if !owns && !start && (status == 0x38 || (status == 0x00 && stop)) {
+            return;
+        }
         self.armed = Some(self.choose(status, owns));
     }
 
@@ -369,11 +504,12 @@ impl Twi {
         let sta = self.ctrl & TWSTA != 0;
         let sto = self.ctrl & TWSTO != 0;
         if sta && !sto {
-            let off_table = matches!(status, 0x08 | 0x10 | 0x40 | 0x50);
-            return Action::Start {
-                repeated: owns,
-                off_table: owns && off_table,
-            };
+            // 0x08, 0x10, 0x40 and 0x50 have no START row. They take the same path as
+            // every other missing row.
+            if owns && matches!(status, 0x08 | 0x10 | 0x40 | 0x50) {
+                return Action::Invalid;
+            }
+            return Action::Start { repeated: owns };
         }
         if !owns {
             return Action::Invalid;
@@ -398,7 +534,7 @@ impl Twi {
         }
     }
 
-    fn launch(&mut self, at: u64, mux: &mut PinMux, ctx: &mut Ctx<'_>, host: &mut HostSide) {
+    fn launch(&mut self, at: u64, mux: &mut PinMux, ctx: &mut Ctx<'_>) {
         let Some(action) = self.armed.take() else {
             return;
         };
@@ -406,73 +542,72 @@ impl Twi {
             self.abort();
             return;
         }
-        let period = self.period();
         if !matches!(action, Action::Invalid) {
             self.note_speed(ctx);
         }
+        let (_, long, data) = lengths(self.period());
+        let byte = |kind, out| Byte {
+            kind,
+            out,
+            got: 0,
+            bit: 0,
+            ack: false,
+        };
         match action {
-            Action::Start {
-                repeated,
-                off_table,
-            } => {
-                if off_table {
-                    let value = self.ctrl | TWINT;
-                    log_once(ctx, &mut self.logged_off, 0x00BC, value);
-                }
-                self.job = Some(Job::Start { repeated });
-                self.due = at.saturating_add(period);
-            }
-            Action::Address => {
-                let sla = self.twdr;
-                let addr = sla >> 1;
-                let read = sla & 1 == 1;
-                let ack = host.i2c_address(addr);
-                self.addressed = ack;
-                self.last_addr = addr;
-                self.job = Some(Job::Address { addr, read, ack });
-                self.due = at.saturating_add(9 * period);
-            }
-            Action::DataTx => {
-                let byte = self.twdr;
-                let ack = self.addressed && host.i2c_write_data(self.last_addr);
-                self.job = Some(Job::DataTx { byte, ack });
-                self.due = at.saturating_add(9 * period);
-            }
-            Action::DataRx => {
-                let byte = if self.addressed {
-                    host.i2c_read_data(self.last_addr, ctx)
+            Action::Start { repeated } => {
+                if repeated {
+                    self.at(Step::RestartSda, at + data);
+                } else if self.busy {
+                    self.step = Some(Step::Busy);
+                    self.due = u64::MAX;
                 } else {
-                    host.i2c_idle_read(ctx)
-                };
-                self.job = Some(Job::DataRx { byte });
-                self.due = at.saturating_add(9 * period);
+                    self.at(Step::StartSda { repeated: false }, at + long);
+                }
             }
-            Action::Stop => {
-                self.job = Some(Job::Stop);
-                self.due = at.saturating_add(period);
-            }
-            Action::StopThenStart => {
-                let start_at = at.saturating_add(2 * period);
-                self.job = Some(Job::StopThenStart { start_at });
-                self.due = at.saturating_add(period);
-            }
+            Action::Address => self.at(Step::Data(byte(Kind::Address, self.twdr)), at + data),
+            Action::DataTx => self.at(Step::Data(byte(Kind::Write, self.twdr)), at + data),
+            Action::DataRx => self.at(Step::Data(byte(Kind::Read, 0xFF)), at + data),
+            Action::Stop => self.at(Step::StopSda { then_start: false }, at + data),
+            Action::StopThenStart => self.at(Step::StopSda { then_start: true }, at + data),
             Action::Invalid => {
                 let value = self.ctrl;
                 log_once(ctx, &mut self.logged_invalid, 0x00BC, value);
+                // One path for every missing row. This master releases its lines.
+                // `busy` clears only when it owned the bus. Otherwise the SDA edge
+                // while SCL is high keeps it.
+                let owned = self.owns;
                 self.abort();
-                self.apply_pads(mux, ctx, at);
+                if owned {
+                    self.busy = false;
+                }
+                self.drive(Some(false), Some(false), mux, ctx, at);
             }
         }
     }
 
+    fn at(&mut self, step: Step, due: u64) {
+        self.step = Some(step);
+        self.sense = None;
+        self.due = due;
+    }
+
+    /// `step` runs `delay` cycles after `line` reads `high`.
+    fn when(&mut self, step: Step, line: Line, high: bool, delay: u64) {
+        self.step = Some(step);
+        self.due = u64::MAX;
+        self.sense = Some(Sense { line, high, delay });
+    }
+
     fn abort(&mut self) {
-        self.job = None;
+        self.step = None;
+        self.sense = None;
         self.due = u64::MAX;
         self.armed = None;
         self.twint = false;
         self.ctrl &= !TWSTO;
         self.owns = false;
-        self.addressed = false;
+        // The next phase must not keep an edge recorded after the last one ended.
+        self.first = None;
     }
 
     /// `running` masks the request while `PRTWI` is set or clkI/O is stopped.
@@ -494,92 +629,316 @@ impl Twi {
         if self.running() { self.due } else { u64::MAX }
     }
 
-    pub(crate) fn fire(&mut self, at: u64) {
+    pub(crate) fn fire(&mut self, at: u64, mux: &mut PinMux, ctx: &mut Ctx<'_>) {
         if !self.running() || self.due != at {
             return;
         }
-        let Some(job) = self.job.take() else {
-            self.due = u64::MAX;
-            return;
+        self.due = u64::MAX;
+        if let Some(step) = self.step {
+            self.act(step, at, mux, ctx);
+        }
+    }
+
+    pub(crate) fn on_pad(&mut self, pin: u8, level: Level, at: u64) -> Touch {
+        if !self.enabled() {
+            return Touch::default();
+        }
+        let line = if u32::from(pin) == self.scl.port.pin_id(self.scl.bit) {
+            Line::Scl
+        } else if u32::from(pin) == self.sda.port.pin_id(self.sda.bit) {
+            Line::Sda
+        } else {
+            return Touch::default();
         };
-        match job {
-            Job::Start { repeated } => {
-                self.owns = true;
-                self.finish_wait(if repeated { 0x10 } else { 0x08 });
-                self.push(at, I2cNote::Start { repeated });
+        let index = usize::from(self.edge_len);
+        debug_assert!(
+            index < EDGE_CAP,
+            "more bus edges in one batch than the TWI keeps"
+        );
+        if index < EDGE_CAP {
+            self.edges[index] = (line, level == Level::High, at);
+            self.edge_len += 1;
+        }
+        Touch {
+            schedule: true,
+            irq: true,
+            ..Touch::default()
+        }
+    }
+
+    pub(crate) fn after_pad(&mut self, mux: &mut PinMux, ctx: &mut Ctx<'_>) -> Touch {
+        let n = usize::from(self.edge_len);
+        if n == 0 {
+            return Touch::default();
+        }
+        self.edge_len = 0;
+        for k in 0..n {
+            let (line, high, at) = self.edges[k];
+            self.on_edge(line, high, at, mux, ctx);
+        }
+        Touch {
+            schedule: true,
+            irq: true,
+            ..Touch::default()
+        }
+    }
+
+    fn on_edge(&mut self, line: Line, high: bool, at: u64, mux: &mut PinMux, ctx: &mut Ctx<'_>) {
+        let was = self.reads(line);
+        match line {
+            Line::Scl => self.scl_high = high,
+            Line::Sda => self.sda_high = high,
+        }
+        if was == high {
+            return;
+        }
+        // An edge on the cycle a phase ended belongs to that phase, as the edge ending it does.
+        // Another master's traffic while this one waits or has lost belongs to no phase of its.
+        let mine = self.owns || !matches!(self.step, None | Some(Step::Busy));
+        if mine && self.ended.is_none_or(|end| at > end) {
+            self.first.get_or_insert(ctx.oscillator_cycles(at));
+        }
+        if line == Line::Sda && self.scl_high {
+            self.busy = !high;
+        }
+        if !self.running() {
+            return;
+        }
+        match (self.step, line, high) {
+            (Some(Step::Fall(_) | Step::Sample(_)), Line::Sda, _) if self.scl_high => {
+                self.bus_error(at, mux, ctx);
+                return;
             }
-            Job::Address { addr, read, ack } => {
-                let status = match (read, ack) {
+            (Some(Step::Busy), Line::Sda, true) if self.scl_high => {
+                let (_, long, _) = lengths(self.period());
+                self.at(Step::StartSda { repeated: false }, at + long);
+                return;
+            }
+            // Another master's START: this one joins it (§22.4).
+            (Some(step @ Step::StartSda { repeated: false }), Line::Sda, false)
+                if self.scl_high =>
+            {
+                self.act(step, at, mux, ctx);
+                return;
+            }
+            // Another master pulled SCL low first: this one pulls it low too (§22.4).
+            (Some(step @ (Step::Fall(_) | Step::StartScl { .. })), Line::Scl, false) => {
+                self.act(step, at, mux, ctx);
+                return;
+            }
+            _ => {}
+        }
+        if let (Some(step), Some(sense)) = (self.step, self.sense)
+            && sense.line == line
+            && sense.high == high
+        {
+            self.sense = None;
+            if sense.delay == 0 {
+                self.act(step, at, mux, ctx);
+            } else {
+                self.due = at + sense.delay;
+            }
+        }
+    }
+
+    fn reads(&self, line: Line) -> bool {
+        match line {
+            Line::Scl => self.scl_high,
+            Line::Sda => self.sda_high,
+        }
+    }
+
+    /// Runs `step` at `at`, and sets the next one.
+    fn act(&mut self, step: Step, at: u64, mux: &mut PinMux, ctx: &mut Ctx<'_>) {
+        let (short, long, data) = lengths(self.period());
+        match step {
+            Step::Busy => {}
+            Step::StartSda { repeated } => {
+                self.drive(Some(true), None, mux, ctx, at);
+                self.at(Step::StartScl { repeated }, at + short);
+            }
+            Step::StartScl { repeated } => {
+                self.drive(None, Some(true), mux, ctx, at);
+                self.owns = true;
+                self.finish(if repeated { 0x10 } else { 0x08 });
+                self.push(at, I2cNote::Start { repeated }, ctx);
+            }
+            Step::RestartSda => {
+                self.drive(Some(false), None, mux, ctx, at);
+                self.at(Step::RestartScl, at + (long - data));
+            }
+            Step::RestartScl => {
+                self.drive(None, Some(false), mux, ctx, at);
+                self.when(Step::StartSda { repeated: true }, Line::Scl, true, long);
+            }
+            Step::Data(byte) => {
+                let release = match (byte.kind, byte.bit) {
+                    (Kind::Read, 8) => self.ctrl & TWEA == 0,
+                    (Kind::Read, _) | (_, 8) => true,
+                    (_, bit) => byte.out & (0x80 >> bit) != 0,
+                };
+                self.drive(Some(!release), None, mux, ctx, at);
+                self.at(Step::Release(byte), at + (long - data));
+            }
+            Step::Release(byte) => {
+                self.drive(None, Some(false), mux, ctx, at);
+                self.when(Step::Sample(byte), Line::Scl, true, 0);
+            }
+            Step::Sample(mut byte) => {
+                let high = self.sda_high;
+                let sent_one = byte.kind != Kind::Read && byte.bit < 8 && !self.sda_low;
+                if sent_one && !high {
+                    self.drive(Some(false), Some(false), mux, ctx, at);
+                    self.owns = false;
+                    self.finish(0x38);
+                    self.push(at, I2cNote::ArbitrationLost, ctx);
+                    return;
+                }
+                match (byte.kind, byte.bit) {
+                    (Kind::Read, 8) => byte.ack = self.sda_low,
+                    (_, 8) => byte.ack = !high,
+                    (_, bit) if high => byte.got |= 0x80 >> bit,
+                    _ => {}
+                }
+                self.at(Step::Fall(byte), at + short);
+            }
+            Step::Fall(byte) => {
+                self.drive(None, Some(true), mux, ctx, at);
+                if byte.bit < 8 {
+                    self.at(
+                        Step::Data(Byte {
+                            bit: byte.bit + 1,
+                            ..byte
+                        }),
+                        at + data,
+                    );
+                } else {
+                    self.end_byte(byte, at, ctx);
+                }
+            }
+            Step::StopSda { then_start } => {
+                self.drive(Some(true), None, mux, ctx, at);
+                self.at(Step::StopScl { then_start }, at + (long - data));
+            }
+            Step::StopScl { then_start } => {
+                self.drive(None, Some(false), mux, ctx, at);
+                self.when(Step::StopRise { then_start }, Line::Scl, true, short);
+            }
+            Step::StopRise { then_start } => {
+                self.drive(Some(false), None, mux, ctx, at);
+                self.when(Step::StopEnd { then_start }, Line::Sda, true, 0);
+            }
+            Step::StopEnd { then_start } => {
+                self.ctrl &= !TWSTO;
+                self.owns = false;
+                self.twint = false;
+                self.push(at, I2cNote::Stop, ctx);
+                if then_start {
+                    self.at(Step::StartSda { repeated: false }, at + long);
+                } else {
+                    self.step = None;
+                }
+            }
+        }
+    }
+
+    fn end_byte(&mut self, byte: Byte, at: u64, ctx: &Ctx<'_>) {
+        let ack = byte.ack;
+        let read = byte.out & 1 == 1;
+        let (status, note) = match byte.kind {
+            Kind::Address => (
+                match (read, ack) {
                     (false, true) => 0x18,
                     (false, false) => 0x20,
                     (true, true) => 0x40,
                     (true, false) => 0x48,
-                };
-                self.finish_wait(status);
-                self.push(at, I2cNote::Address { addr, read, ack });
-            }
-            Job::DataTx { byte, ack } => {
-                self.finish_wait(if ack { 0x28 } else { 0x30 });
-                self.push(
-                    at,
+                },
+                I2cNote::Address {
+                    addr: byte.out >> 1,
+                    read,
+                    ack,
+                },
+            ),
+            Kind::Write => (
+                if ack { 0x28 } else { 0x30 },
+                I2cNote::Data {
+                    byte: byte.out,
+                    write: true,
+                    ack,
+                },
+            ),
+            Kind::Read => {
+                self.twdr = byte.got;
+                (
+                    if ack { 0x50 } else { 0x58 },
                     I2cNote::Data {
-                        byte,
-                        write: true,
-                        ack,
-                    },
-                );
-            }
-            Job::DataRx { byte } => {
-                let ack = self.ctrl & TWEA != 0;
-                self.twdr = byte;
-                self.finish_wait(if ack { 0x50 } else { 0x58 });
-                self.push(
-                    at,
-                    I2cNote::Data {
-                        byte,
+                        byte: byte.got,
                         write: false,
                         ack,
                     },
-                );
+                )
             }
-            Job::Stop => {
-                self.ctrl &= !TWSTO;
-                self.owns = false;
-                self.addressed = false;
-                self.twint = false;
-                self.due = u64::MAX;
-                self.push(at, I2cNote::Stop);
-            }
-            Job::StopThenStart { start_at } => {
-                self.ctrl &= !TWSTO;
-                self.owns = false;
-                self.addressed = false;
-                self.twint = false;
-                self.push(at, I2cNote::Stop);
-                self.job = Some(Job::Start { repeated: false });
-                self.due = start_at;
-            }
-        }
+        };
+        self.finish(status);
+        self.push(at, note, ctx);
     }
 
-    fn finish_wait(&mut self, status: u8) {
+    /// A START or STOP inside a byte. Both lines are released (§22.8, Table 22-6).
+    fn bus_error(&mut self, at: u64, mux: &mut PinMux, ctx: &mut Ctx<'_>) {
+        self.drive(Some(false), Some(false), mux, ctx, at);
+        self.owns = false;
+        self.finish(0x00);
+        self.push(at, I2cNote::BusError, ctx);
+    }
+
+    fn finish(&mut self, status: u8) {
         self.status = status;
         self.twint = true;
+        self.step = None;
+        self.sense = None;
         self.due = u64::MAX;
-        self.job = None;
     }
 
-    fn push(&mut self, at: u64, note: I2cNote) {
-        self.out.push_back(I2cStamp { at, note });
+    fn push(&mut self, at: u64, note: I2cNote, ctx: &Ctx<'_>) {
+        let end = ctx.oscillator_cycles(at);
+        let start = self.first.take().unwrap_or(end);
+        self.ended = Some(at);
+        self.out.push_back(I2cStamp {
+            start,
+            at: end,
+            note,
+        });
+    }
+
+    /// `Some(true)` pulls the line low, `Some(false)` releases it, `None` leaves it.
+    fn drive(
+        &mut self,
+        sda: Option<bool>,
+        scl: Option<bool>,
+        mux: &mut PinMux,
+        ctx: &mut Ctx<'_>,
+        at: u64,
+    ) {
+        if let Some(low) = sda {
+            self.sda_low = low;
+        }
+        if let Some(low) = scl {
+            self.scl_low = low;
+        }
+        self.apply_pads(mux, ctx, at);
     }
 
     fn apply_pads(&mut self, mux: &mut PinMux, ctx: &mut Ctx<'_>, at: u64) {
-        let mask = if self.enabled() {
-            (1u8 << self.sda.bit) | (1u8 << self.scl.bit)
+        let (sda, scl) = ((1u8 << self.sda.bit), (1u8 << self.scl.bit));
+        let (mask, low) = if self.enabled() {
+            let low = if self.sda_low { sda } else { 0 } | if self.scl_low { scl } else { 0 };
+            (sda | scl, low)
         } else {
-            0
+            self.sda_low = false;
+            self.scl_low = false;
+            (0, 0)
         };
-        mux.set_twi_override(self.sda.port, mask, ctx, Some(at), at);
+        mux.set_twi_override(self.sda.port, mask, low, ctx, Some(at), at);
     }
 
     /// Out of spec when `f_SCL = f_CK / T` is above 400 kHz (Table 29-14).
@@ -598,4 +957,16 @@ fn log_once(ctx: &mut Ctx<'_>, flag: &mut bool, addr: u16, value: u8) {
     }
     *flag = true;
     ctx.log(addr, value);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// DS40002061B Table 29-14 at TWBR 72 and 12 on a 16 MHz clock, from the plan's table.
+    #[test]
+    fn the_bit_table_at_100_and_400_khz() {
+        assert_eq!(lengths(scl_period(72, 0)), (72, 88, 10));
+        assert_eq!(lengths(scl_period(12, 0)), (18, 22, 2));
+    }
 }

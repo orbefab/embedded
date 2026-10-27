@@ -11,8 +11,7 @@
 //! [`index::Index`] is the device list resolved once at construction, including
 //! the flag, comparator, and capture slots.
 //! [`hostside::HostSide`]
-//! is the host SPI master, the MISO queue, and the host I2C device, not a
-//! device on the die.
+//! is the host SPI master and the MISO queue, not a device on the die.
 
 pub(crate) mod hostside;
 mod index;
@@ -113,7 +112,7 @@ pub(crate) struct Bus {
     /// Watchdog timeout asked for a system reset. Set only when an event
     /// fires, and returned from that slow path. Not read on the fetch path.
     wdt_reset: bool,
-    /// Host SPI master, the host slave's MISO queue, and the host I2C device.
+    /// Host SPI master and the host slave's MISO queue.
     host_side: HostSide,
     /// Oscillator hertz. `cpu_hz` is this divided by `div`.
     osc_hz: u32,
@@ -534,24 +533,29 @@ impl Bus {
         self.spi_mut()?.take_mosi()
     }
 
-    pub(crate) fn take_i2c_across_reset(&mut self) -> crate::bus::hostside::I2cKept {
-        self.host_side.take_i2c_across_reset()
-    }
-
-    pub(crate) fn restore_i2c_across_reset(&mut self, kept: crate::bus::hostside::I2cKept) {
-        self.host_side.restore_i2c_across_reset(kept);
-    }
-
-    /// Attach, replace, or detach the host I2C device. Applied at the next address phase.
-    pub(crate) fn queue_i2c(&mut self, update: crate::bus::hostside::I2cAttach) {
-        self.host_side.queue_i2c(update);
-    }
-
     /// The next TWI phase, stamped when `TWINT` sets or `TWSTO` clears.
-    pub(crate) fn take_i2c(&mut self) -> Option<crate::periph::twi::I2cStamp> {
+    pub(crate) fn take_i2c(&mut self, through: u64) -> Option<crate::periph::twi::I2cStamp> {
+        self.twi_mut()?.take(through)
+    }
+
+    /// The TWI's finished phases, which an in-run reset keeps.
+    pub(crate) fn take_i2c_across_reset(&mut self) -> VecDeque<crate::periph::twi::I2cStamp> {
+        self.twi_mut().map(|twi| twi.take_all()).unwrap_or_default()
+    }
+
+    pub(crate) fn restore_i2c_across_reset(
+        &mut self,
+        kept: VecDeque<crate::periph::twi::I2cStamp>,
+    ) {
+        if let Some(twi) = self.twi_mut() {
+            twi.restore(kept);
+        }
+    }
+
+    fn twi_mut(&mut self) -> Option<&mut crate::periph::twi::Twi> {
         let slot = self.index.twi?;
         match self.devices.get_mut(usize::from(slot)) {
-            Some(Device::Twi(twi)) => twi.take(),
+            Some(Device::Twi(twi)) => Some(twi),
             _ => None,
         }
     }

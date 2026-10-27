@@ -643,8 +643,8 @@ impl Cpu {
         let asks = self.bus.asks_for_samples();
         let pins = self.bus.pin_levels();
         let pads = self.bus.host_levels();
-        let i2c = self.bus.take_i2c_across_reset();
         let sent = self.bus.take_sent_across_reset();
+        let i2c = self.bus.take_i2c_across_reset();
         *self = Self::new();
         self.clock_hz = clock;
         self.bus.set_osc_hz(clock);
@@ -656,7 +656,6 @@ impl Cpu {
         if asks {
             self.bus.ask_for_samples();
         }
-        self.bus.restore_i2c_across_reset(i2c);
         self.bus.set_fuses(fuses);
         self.bus.set_eeprom(&eeprom);
         if let Some(bytes) = sram.as_deref() {
@@ -673,6 +672,7 @@ impl Cpu {
                 self.core.set_wdr_executions(wdrs);
                 self.bus.restore_epochs(epochs, now);
                 self.bus.restore_sent_across_reset(sent);
+                self.bus.restore_i2c_across_reset(i2c);
                 self.begin_reset_delay();
             }
             ResetWhen::Hold => {
@@ -681,6 +681,7 @@ impl Cpu {
                 self.core.set_wdr_executions(wdrs);
                 self.bus.restore_epochs(epochs, now);
                 self.bus.restore_sent_across_reset(sent);
+                self.bus.restore_i2c_across_reset(i2c);
                 self.core.set_activity(Activity::Held);
             }
         }
@@ -1002,27 +1003,15 @@ impl Cpu {
         self.bus.take_sent(through)
     }
 
-    /// Queue a host I2C device change. It applies at the next address phase.
-    pub fn queue_i2c(
-        &mut self,
-        addr: u8,
-        present: bool,
-        reads: Vec<u8>,
-        repeat: bool,
-        nack_data_at: Option<u8>,
-    ) {
-        self.bus.queue_i2c(crate::bus::hostside::I2cAttach {
-            addr,
-            present,
-            reads,
-            repeat,
-            nack_data_at,
-        });
+    /// The next TWI phase the master finished, at any cycle.
+    pub fn take_i2c(&mut self) -> Option<crate::I2cStamp> {
+        self.bus.take_i2c(u64::MAX)
     }
 
-    /// The next TWI phase, if the master has finished one.
-    pub fn take_i2c(&mut self) -> Option<crate::I2cStamp> {
-        self.bus.take_i2c()
+    /// The next TWI phase that ended at or before oscillator cycle `through`. An in-run reset
+    /// keeps the phases that ended and drops the one on the bus. A power-on reset keeps none.
+    pub fn take_i2c_through(&mut self, through: u64) -> Option<crate::I2cStamp> {
+        self.bus.take_i2c(through)
     }
 }
 

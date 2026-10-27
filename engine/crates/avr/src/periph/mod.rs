@@ -489,7 +489,7 @@ impl Device {
             // The scratch stays here. The real context would report SS and MOSI,
             // and no caller expects a poke to do that.
             Device::Spi(spi) => spi.poke(reg, value, mux, cycle, host.slave_miso()),
-            Device::Twi(twi) => twi.poke(reg, value, mux, ctx, cycle, host),
+            Device::Twi(twi) => twi.poke(reg, value, mux, ctx, cycle),
             Device::Adc(adc) => adc.write(reg, value, mux, ctx, cycle),
             Device::Acmp(acmp) => acmp.write(reg, value, mux, ctx, cycle),
             Device::Eeprom(eeprom) => eeprom.poke(reg, value, cycle),
@@ -566,7 +566,7 @@ impl Device {
             Device::ExtInt(ext) => ext.fire(at),
             Device::Usart(usart) => usart.fire(at, mux, ctx),
             Device::Spi(spi) => spi.fire(at, mux, ctx),
-            Device::Twi(twi) => twi.fire(at),
+            Device::Twi(twi) => twi.fire(at, mux, ctx),
             Device::Adc(adc) => adc.fire(at),
             Device::Acmp(acmp) => acmp.fire(at),
             Device::Eeprom(eeprom) => eeprom.fire(at),
@@ -590,6 +590,7 @@ impl Device {
             Device::Timer(timer) => timer.on_pad(pin, level, at),
             Device::Usart(usart) => usart.on_pad(pin, level, at),
             Device::Spi(spi) => spi.on_pad(pin, level, at),
+            Device::Twi(twi) => twi.on_pad(pin, level, at),
             _ => Touch::default(),
         }
     }
@@ -598,6 +599,7 @@ impl Device {
     pub(crate) fn after_pad(&mut self, mux: &mut PinMux, ctx: &mut Ctx<'_>, at: u64) -> Touch {
         match self {
             Device::Spi(spi) => spi.after_pad(mux, ctx, at),
+            Device::Twi(twi) => twi.after_pad(mux, ctx),
             _ => Touch::default(),
         }
     }
@@ -673,7 +675,7 @@ impl Device {
         match self {
             Device::Usart(usart) => usart.stamp(cycle, mux, ctx),
             Device::Spi(spi) => spi.stamp(cycle, mux, ctx, host.slave_miso()),
-            Device::Twi(twi) => twi.stamp(cycle, mux, ctx, host),
+            Device::Twi(twi) => twi.stamp(cycle, mux, ctx),
             _ => {}
         }
     }

@@ -1,10 +1,9 @@
 //! Host peers that are not devices on the die.
 //!
 //! The host SPI master clocks a slave chip. The slave queue is the bytes that
-//! host returns on `MISO` while the chip is master. The host I2C device is the
-//! peer a TWI master addresses. This lives on [`super::Bus`], beside the device
-//! list, because [`crate::core::Core::step`] only has `&mut Bus` and a master
-//! transfer starts from an `SPDR` or `TWCR` store.
+//! host returns on `MISO` while the chip is master. This lives on [`super::Bus`],
+//! beside the device list, because [`crate::core::Core::step`] only has `&mut Bus`
+//! and a master transfer starts from an `SPDR` store.
 
 use std::collections::VecDeque;
 
@@ -246,9 +245,6 @@ pub(crate) struct HostSide {
     pub(crate) master: HostClock,
     /// One byte per master frame. An empty queue shifts in `0xFF`.
     slave_miso: VecDeque<u8>,
-    i2c: Vec<I2cDev>,
-    i2c_pending: Vec<I2cAttach>,
-    logged_ff: bool,
 }
 
 impl HostSide {
@@ -256,9 +252,6 @@ impl HostSide {
         Self {
             master: HostClock::idle(),
             slave_miso: VecDeque::new(),
-            i2c: Vec::new(),
-            i2c_pending: Vec::new(),
-            logged_ff: false,
         }
     }
 
@@ -269,136 +262,4 @@ impl HostSide {
     pub(crate) fn slave_miso(&mut self) -> &mut VecDeque<u8> {
         &mut self.slave_miso
     }
-
-    /// The host device sits outside the MCU, so a reset keeps it.
-    /// The transaction in flight is aborted: write count and the repeat-read
-    /// index clear, and unread queue bytes stay.
-    pub(crate) fn take_i2c_across_reset(&mut self) -> I2cKept {
-        for dev in &mut self.i2c {
-            dev.write_n = 0;
-            dev.read_i = 0;
-        }
-        I2cKept {
-            devices: std::mem::take(&mut self.i2c),
-            pending: std::mem::take(&mut self.i2c_pending),
-            logged_ff: self.logged_ff,
-        }
-    }
-
-    pub(crate) fn restore_i2c_across_reset(&mut self, kept: I2cKept) {
-        self.i2c = kept.devices;
-        self.i2c_pending = kept.pending;
-        self.logged_ff = kept.logged_ff;
-    }
-
-    /// Queue an attach, replace, or detach. It takes effect at the next address phase.
-    pub(crate) fn queue_i2c(&mut self, update: I2cAttach) {
-        self.i2c_pending.push(update);
-    }
-
-    /// SLA+R/W. Pending attaches apply here, then the addressed device ACKs or not.
-    pub(crate) fn i2c_address(&mut self, addr: u8) -> bool {
-        self.apply_i2c();
-        let Some(dev) = self.i2c.iter_mut().find(|dev| dev.addr == addr) else {
-            return false;
-        };
-        dev.write_n = 0;
-        // `read_i` is read only while `repeat` is set, after this ACK.
-        dev.read_i = 0;
-        true
-    }
-
-    /// Data byte of the current write. `false` when nothing is addressed or this index NACKs.
-    pub(crate) fn i2c_write_data(&mut self, addr: u8) -> bool {
-        let Some(dev) = self.i2c.iter_mut().find(|dev| dev.addr == addr) else {
-            return false;
-        };
-        let nack = dev.nack_at == Some(dev.write_n);
-        dev.write_n = dev.write_n.saturating_add(1);
-        !nack
-    }
-
-    /// Next byte of a read. Past the end is `0xFF`, logged once.
-    pub(crate) fn i2c_read_data(&mut self, addr: u8, ctx: &mut crate::periph::Ctx<'_>) -> u8 {
-        let got = self.i2c.iter_mut().find(|dev| dev.addr == addr).map(|dev| {
-            if dev.repeat {
-                if dev.read_i >= dev.pattern.len() {
-                    return None;
-                }
-                let byte = dev.pattern[dev.read_i];
-                dev.read_i += 1;
-                return Some(byte);
-            }
-            dev.reads.pop_front()
-        });
-        match got {
-            Some(Some(byte)) => byte,
-            _ => self.i2c_ff(ctx),
-        }
-    }
-
-    /// A read with no device on the address. The wire is high.
-    pub(crate) fn i2c_idle_read(&mut self, ctx: &mut crate::periph::Ctx<'_>) -> u8 {
-        self.i2c_ff(ctx)
-    }
-
-    fn i2c_ff(&mut self, ctx: &mut crate::periph::Ctx<'_>) -> u8 {
-        if !self.logged_ff {
-            self.logged_ff = true;
-            ctx.log(0x00BB, 0xFF);
-        }
-        0xFF
-    }
-
-    fn apply_i2c(&mut self) {
-        let pending = std::mem::take(&mut self.i2c_pending);
-        for update in pending {
-            if !update.present {
-                self.i2c.retain(|dev| dev.addr != update.addr);
-                continue;
-            }
-            let dev = I2cDev {
-                addr: update.addr,
-                reads: update.reads.iter().copied().collect(),
-                pattern: update.reads,
-                repeat: update.repeat,
-                nack_at: update.nack_data_at,
-                write_n: 0,
-                read_i: 0,
-            };
-            if let Some(slot) = self.i2c.iter_mut().find(|dev| dev.addr == update.addr) {
-                *slot = dev;
-            } else {
-                self.i2c.push(dev);
-            }
-        }
-    }
-}
-
-/// Devices and pending attaches carried across an MCU reset.
-pub(crate) struct I2cKept {
-    devices: Vec<I2cDev>,
-    pending: Vec<I2cAttach>,
-    logged_ff: bool,
-}
-
-/// One host I2C device, applied at the next address phase.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct I2cAttach {
-    pub addr: u8,
-    pub present: bool,
-    pub reads: Vec<u8>,
-    pub repeat: bool,
-    pub nack_data_at: Option<u8>,
-}
-
-#[derive(Debug, Clone)]
-struct I2cDev {
-    addr: u8,
-    reads: VecDeque<u8>,
-    pattern: Vec<u8>,
-    repeat: bool,
-    nack_at: Option<u8>,
-    write_n: u8,
-    read_i: usize,
 }

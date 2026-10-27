@@ -179,6 +179,7 @@ pub fn run_beside_steps(example: &str) -> Beside {
         "observations.json",
         "traces/logic.vcd",
         "traces/serial.csv",
+        "traces/i2c.csv",
     ] {
         assert_eq!(
             gridless_folder.file(file),
@@ -231,6 +232,16 @@ pub fn run_beside_steps(example: &str) -> Beside {
 /// `traces/serial.csv`.
 pub fn serial_csv(beside: &Beside) -> &[u8] {
     &beside.folder.files["traces/serial.csv"]
+}
+
+/// `traces/i2c.csv`.
+pub fn i2c_csv(beside: &Beside) -> &[u8] {
+    &beside.folder.files["traces/i2c.csv"]
+}
+
+/// The bytes of the run folder's file `name`.
+pub fn folder_file<'a>(beside: &'a Beside, name: &str) -> &'a [u8] {
+    &beside.folder.files[name]
 }
 
 /// `(t_ps, high)` of one signal in `logic.vcd`.

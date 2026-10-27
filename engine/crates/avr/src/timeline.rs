@@ -139,9 +139,9 @@ impl Timeline {
         self.cpu.take_sent(through)
     }
 
-    /// See [`Cpu::take_i2c`].
-    pub fn take_i2c(&mut self) -> Option<I2cStamp> {
-        self.cpu.take_i2c()
+    /// See [`Cpu::take_i2c_through`]. `through` is an oscillator cycle.
+    pub fn take_i2c_through(&mut self, through: u64) -> Option<I2cStamp> {
+        self.cpu.take_i2c_through(through)
     }
 
     /// The oscillator cycle at and before which the core has made every report.

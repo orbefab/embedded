@@ -888,7 +888,7 @@ fn image(path: &str) -> Cpu {
 }
 
 /// `clone_from` between any two of: a fresh core, the shipped and compiled firmwares,
-/// [`every_register`] at three times with comparator volts and host SPI and I2C queued,
+/// [`every_register`] at three times with comparator volts, host SPI queued and a TWI START under way,
 /// [`every_queue`] with an edge waiting on each armed pin, the [`corners`], an ADC sample the
 /// host has not answered, a slower, lower, brown-out core with a host baud, a core whose `EECR`
 /// a host poked, and a core stopped one instruction short of a pin write. Each pair leaves the
@@ -921,7 +921,10 @@ fn a_clone_from_across_runs_leaves_the_state_a_clone_does() {
             lsb_first: false,
         };
         assert!(cpu.queue_spi_master(until / 2, &[0xA5], clock));
-        cpu.queue_i2c(0x50, true, vec![1, 2], false, None);
+        // TWBR 255 and TWPS 3 make a START of 32_656 cycles, so each run stops inside it.
+        cpu.poke(0x00B8, 0xFF);
+        cpu.poke(0x00B9, 0x03);
+        cpu.poke(0x00BC, 0xA4);
         states.push(ran(cpu, until, &[PB0, PD4, PD5]));
     }
     states.push(ran(cpu(&every_queue()), 70_000, &ARMED));

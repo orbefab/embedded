@@ -3,6 +3,7 @@
 
 pub mod diagnostic;
 pub mod finite;
+pub mod i2c;
 pub mod logic;
 pub mod name;
 pub mod netlist;

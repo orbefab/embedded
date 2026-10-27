@@ -6,6 +6,7 @@
 //!
 //! Addresses are the data-space addresses in DS40002061B Table 31-1.
 
+pub mod i2c;
 pub mod runs;
 
 pub const SPL: u16 = 0x005D;

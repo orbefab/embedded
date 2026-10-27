@@ -80,6 +80,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "atmega-board-button",
             "atmega-button",
             "atmega-fade",
+            "atmega-i2c-scan",
             "atmega-serial-echo",
             "button-led",
             "ce-amp",
@@ -135,7 +136,9 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
 /// with only a capacitor on the output. `regulator-c100u` is the load step with 100 uF
 /// on the output. `regulator-step-4v` steps the input to 4 V and sets `grid_ps` to 20 us.
 /// `regulator-rdo-1` uses a 1 ohm dropout resistance and a 0.1 V dropout voltage.
-/// `regulator-ground` draws 0.5 A and sets `ground_current_ratio` to 0.02.
+/// `regulator-ground` draws 0.5 A and sets `ground_current_ratio` to 0.02. `i2c-rc-bus`
+/// switches a START, two bits and a STOP onto 4.7 kohm pull-ups and 200 pF per line. The
+/// other `i2c-` fixtures run firmware, so they have no reference, and `i2c.rs` checks them.
 /// `p-relay-npn-bare` has a `rows-skipped` file. `relay.rs` checks its collector envelope
 /// and its release. The rows are not compared.
 #[test]
@@ -155,6 +158,11 @@ fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
         [
             "diode-off",
             "diode-reverse",
+            "i2c-arbitration",
+            "i2c-contend",
+            "i2c-rc-bus",
+            "i2c-scan-400k",
+            "i2c-stretch",
             "led-off",
             "led-reverse",
             "nmos-follower",

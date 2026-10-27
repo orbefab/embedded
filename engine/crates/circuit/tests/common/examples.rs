@@ -32,7 +32,7 @@ pub fn runs_firmware(netlist: &Netlist) -> bool {
 /// `crates/cli/tests/button.rs` and `crates/cli/tests/fade.rs` each run that example once
 /// through `sim run`, with its steps, its grid and a grid with no row before `stop_ps`
 /// beside it, all at once. They hold the envelope to the steps, and the gridless run's stats,
-/// diagnostics, observations, `logic.vcd` and `serial.csv` to the grid's.
+/// diagnostics, observations, `logic.vcd`, `serial.csv` and `i2c.csv` to the grid's.
 /// `examples/npn-blinker` is here too. One run of it accepts on the order of 2e5 steps, and
 /// `crates/cli/tests/blinker.rs` is the check. A scan that also keeps every step repeats that cost.
 pub const CHECKED_ON_THEIR_OWN: &[&str] = &[

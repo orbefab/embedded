@@ -1,11 +1,12 @@
 //! The ATmega328P behind the seam. Its package pins become outputs, watches, and samples
 //! around `sim_avr::Timeline`, and its oscillator converts between picoseconds and cycles.
 
-use sim_avr::{Channel, Cpu, PinDrive, Port, Timeline};
+use sim_avr::{Channel, Cpu, I2cNote, PinDrive, Port, Timeline};
+use sim_core::i2c::I2cPhase;
 use sim_core::netlist::{Atmega328p, PartId, Value};
 use sim_core::time::Time;
 
-use super::{Chip, Drive, Frame, Output, Stage, Stop};
+use super::{Chip, Drive, Frame, Output, Phase, Stage, Stop};
 use crate::mna::Node;
 use crate::watch::{Signal, Watch};
 
@@ -121,6 +122,8 @@ pub(crate) struct Core {
     image: [Drive; PORT_PINS.len()],
     /// The levels it last took, in watch order. Empty before the power-on input.
     levels: Vec<bool>,
+    /// How many TWI phases `deliver` has taken, which numbers the next one.
+    phases: u64,
 }
 
 /// By hand for `clone_from`, which reuses the timeline's buffers. The patterns name every field.
@@ -131,12 +134,14 @@ impl Clone for Core {
             clock_hz,
             image,
             levels,
+            phases,
         } = self;
         Core {
             timeline: timeline.clone(),
             clock_hz: *clock_hz,
             image: *image,
             levels: levels.clone(),
+            phases: *phases,
         }
     }
 
@@ -146,11 +151,13 @@ impl Clone for Core {
             clock_hz,
             image,
             levels,
+            phases,
         } = self;
         timeline.clone_from(&source.timeline);
         *clock_hz = source.clock_hz;
         *image = source.image;
         levels.clone_from(&source.levels);
+        *phases = source.phases;
     }
 }
 
@@ -249,6 +256,7 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
         clock_hz: u64::from(clock_hz),
         image: [Drive::Off; PORT_PINS.len()],
         levels: Vec::new(),
+        phases: 0,
     };
     core.refresh();
     Chip {
@@ -258,6 +266,7 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
         signals,
         samples,
         usarts: &["USART0"],
+        twi: true,
         core: super::Core::Avr(Box::new(core)),
     }
 }
@@ -316,8 +325,14 @@ impl Core {
     }
 
     /// Takes the frames whose stop bit ended on a cycle at or before `through`'s last, which is
-    /// the same as that cycle's first picosecond being at or before `through`.
-    pub(crate) fn deliver(&mut self, through: Time, mut sent: impl FnMut(Frame)) {
+    /// the same as that cycle's first picosecond being at or before `through`, and the TWI
+    /// phases that ended by then.
+    pub(crate) fn deliver(
+        &mut self,
+        through: Time,
+        mut sent: impl FnMut(Frame),
+        mut saw: impl FnMut(Phase),
+    ) {
         let through = self.cycle(through);
         while let Some(frame) = self.timeline.take_sent(through) {
             sent(Frame {
@@ -330,7 +345,32 @@ impl Core {
         for channel in [Channel::Spi, Channel::SpiHostMaster] {
             while self.timeline.take(channel).is_some() {}
         }
-        while self.timeline.take_i2c().is_some() {}
+        while let Some(stamp) = self.timeline.take_i2c_through(through) {
+            let phase = match stamp.note {
+                I2cNote::Start { repeated: false } => I2cPhase::Start,
+                I2cNote::Start { repeated: true } => I2cPhase::RepeatedStart,
+                I2cNote::Address { addr, read, ack } => I2cPhase::Address {
+                    address: addr,
+                    read,
+                    ack,
+                },
+                I2cNote::Data { byte, write, ack } => I2cPhase::Data {
+                    byte,
+                    read: !write,
+                    ack,
+                },
+                I2cNote::Stop => I2cPhase::Stop,
+                I2cNote::ArbitrationLost => I2cPhase::ArbitrationLost,
+                I2cNote::BusError => I2cPhase::BusError,
+            };
+            saw(Phase {
+                phase,
+                start: self.time(stamp.start),
+                end: self.time(stamp.at),
+                count: self.phases,
+            });
+            self.phases += 1;
+        }
     }
 
     fn refresh(&mut self) {

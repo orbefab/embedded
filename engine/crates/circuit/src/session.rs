@@ -2,6 +2,7 @@ use std::mem::size_of;
 
 use sim_core::diagnostic::{Diagnostic, Solve};
 use sim_core::finite::Finite;
+use sim_core::i2c::{I2c, I2cRow};
 use sim_core::logic::{Change, Level};
 use sim_core::name::{Name, Ref};
 use sim_core::netlist::{Analysis, Document, Netlist, Transient};
@@ -144,6 +145,9 @@ pub struct Session {
     /// bytes before that, so `serial[0]` is that byte. A recorded session keeps every byte.
     serial: Vec<SerialByte>,
     serial_forgotten: u64,
+    /// TWI phases that ended at or before the last accepted step, in the order they ended, then
+    /// in `twis` order. Only a recorded session keeps them, for `i2c.csv`.
+    i2c: Vec<I2cRow>,
     pub(crate) record: Option<Record>,
     /// The JSON the session opened from, which `export` writes back.
     document: Option<Document>,
@@ -446,6 +450,7 @@ impl Session {
             integrals,
             serial: Vec::new(),
             serial_forgotten: 0,
+            i2c: Vec::new(),
             record,
             document,
             opened: None,
@@ -533,6 +538,11 @@ impl Session {
         self.state = state;
         let accepted = self.accepted();
         self.serial.extend(self.actives.deliver(accepted));
+        if self.record.is_some() {
+            self.i2c.extend(self.actives.phases());
+        } else {
+            self.actives.phases().for_each(drop);
+        }
         self.status()
     }
 
@@ -690,7 +700,8 @@ impl Session {
     }
 
     /// The observations and trace of a recorded session advanced to its end, and its warnings,
-    /// ratings and fault in `diagnostics`. The trace holds the serial log when a chip has a USART.
+    /// ratings and fault in `diagnostics`. The trace holds the serial log when a chip has a USART,
+    /// and the TWI phases when a chip has a TWI.
     pub(crate) fn outcome(self, diagnostics: &mut Vec<Diagnostic>) -> Outcome {
         let (State::Ended { at, row, end }, Some(record)) = (self.state, self.record) else {
             unreachable!("a recorded run finishes once it has ended");
@@ -701,6 +712,10 @@ impl Session {
         let usarts = self.actives.usarts();
         if !usarts.is_empty() {
             trace.attach_serial(Delivered::new(usarts.to_vec(), self.serial));
+        }
+        let twis = self.actives.twis();
+        if !twis.is_empty() {
+            trace.attach_i2c(I2c::new(twis.to_vec(), self.i2c));
         }
         if let End::Fault(fault) = end {
             diagnostics.push(fault);

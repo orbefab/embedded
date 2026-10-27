@@ -2,7 +2,9 @@
 # Rebuilds firmware/sketch/<name>.hex from firmware/sketch/<name>/<name>.ino with a pinned AVR
 # toolchain and the standard AVR runtime, for the ATmega328P at 16 MHz, with the flags the
 # standard IDE uses. The runtime's core is compiled into an archive and linked with each sketch,
-# and main() comes from the core. A build of the engine reads only the committed hex.
+# and main() comes from the core. The runtime's Wire library is compiled into a second archive,
+# which a sketch that includes Wire.h also links. A build of the engine reads only the committed
+# hex.
 #
 # Usage: scripts/sketches.sh TOOLS_DIR [DOWNLOAD_DIR]
 #
@@ -69,12 +71,27 @@ for source in $(cd "$core" && ls -- *.c *.cpp *.S | LC_ALL=C sort); do
   "$bin/avr-gcc-ar" rcs "$work/core.a" "$object"
 done
 
+wire=$runtime/libraries/Wire/src
+mkdir "$work/wire"
+"$bin/avr-g++" "${cpp_flags[@]}" "${target[@]}" -I"$wire" -I"$wire/utility" "$wire/Wire.cpp" \
+  -o "$work/wire/Wire.cpp.o"
+"$bin/avr-gcc" "${c_flags[@]}" "${target[@]}" -I"$wire/utility" "$wire/utility/twi.c" \
+  -o "$work/wire/twi.c.o"
+"$bin/avr-gcc-ar" rcs "$work/wire.a" "$work/wire/Wire.cpp.o" "$work/wire/twi.c.o"
+
 for dir in "$firmware"/*/; do
   dir=${dir%/}
   name=$(basename "$dir")
-  "$bin/avr-g++" "${cpp_flags[@]}" "${target[@]}" -x c++ -include Arduino.h \
+  library=()
+  archives=()
+  if grep -q '^#include <Wire.h>' "$dir/$name.ino"; then
+    library=(-I"$wire")
+    archives=("$work/wire.a")
+  fi
+  "$bin/avr-g++" "${cpp_flags[@]}" "${target[@]}" "${library[@]}" -x c++ -include Arduino.h \
     "$dir/$name.ino" -o "$work/$name.o"
-  "$bin/avr-gcc" "${link_flags[@]}" -o "$work/$name.elf" "$work/$name.o" "$work/core.a" -L"$work" -lm
+  "$bin/avr-gcc" "${link_flags[@]}" -o "$work/$name.elf" "$work/$name.o" "${archives[@]}" \
+    "$work/core.a" -L"$work" -lm
   "$bin/avr-objcopy" -O ihex -R .eeprom "$work/$name.elf" "$firmware/$name.hex"
   "$bin/avr-size" "$work/$name.elf" | tail -n 1 | awk -v n="$name" '{print n ": " $1 + $2 " flash bytes"}'
 done

@@ -4,8 +4,8 @@
 //! [`DriveSource::Compare`]. USART `TXD` is [`DriveSource::UsartTx`], MSPIM
 //! `XCK` is [`DriveSource::UsartXck`], and SPI is [`DriveSource::Spi`].
 //! TWI is not a [`DriveSource`]: while `TWEN` is set, `SDA` and `SCL` follow
-//! Table 14-7 through [`PinMux::set_twi_override`]. Override slots are keyed
-//! by source, not by timer index.
+//! Table 14-7 through [`PinMux::set_twi_override`], open drain: low while the TWI pulls
+//! them, an input otherwise. Override slots are keyed by source, not by timer index.
 //!
 //! An input's electrical level is the host drive, or high when the pull-up is
 //! on (`PORTx` = 1, `DDRx` = 0, `MCUCR.PUD` = 0, DS40002061B Table 14-1), or
@@ -193,6 +193,8 @@ struct PortState {
     buf_off: u8,
     /// `TWEN`. These bits ignore `DDR` and peripheral overrides (Table 14-7).
     twi: u8,
+    /// The TWI pulls these `twi` bits low, `SDA_OUT` and `SCL_OUT` clear.
+    twi_low: u8,
 }
 
 impl PortState {
@@ -207,6 +209,7 @@ impl PortState {
             force_in: 0,
             buf_off: 0,
             twi: 0,
+            twi_low: 0,
         }
     }
 }
@@ -220,8 +223,6 @@ pub(crate) struct PinMux {
     pud: bool,
     edges: [PadEdge; EDGE_CAP],
     edge_len: u8,
-    /// A host drive on a TWI pin while `TWEN` is set has already been logged.
-    twi_host_logged: bool,
     /// `RSTDISBL` is unprogrammed, so `PC6` is `RESET`: an input with its own pull-up that
     /// `DDRC6`, `PORTC6`, and `PUD` do not move, and `PINC6` reads 0 (Table 14-7, §14.3.2).
     reset_pin: bool,
@@ -241,7 +242,6 @@ impl PinMux {
                 at: 0,
             }; EDGE_CAP],
             edge_len: 0,
-            twi_host_logged: false,
             reset_pin: false,
         };
         mux.set_reset_pin(true);
@@ -401,31 +401,29 @@ impl PinMux {
         let Some((port, bit)) = Port::from_pin(pin) else {
             return;
         };
-        let twi = self.ports[port.index()].twi & (1u8 << bit) != 0;
-        if twi && matches!(level, Level::High | Level::Low) && !self.twi_host_logged {
-            self.twi_host_logged = true;
-            // Once per run. The TWI state machine does not sample this drive.
-            ctx.log(0x00BC, bit);
-        }
         self.ports[port.index()].wires[usize::from(bit)].host = level;
         self.reconcile(port, ctx, None, at, false, true);
     }
 
     /// Table 14-7. While `mask` bits are set, those pads are open-drain TWI
-    /// pins: `DDR` and peripheral overrides do not drive them.
+    /// pins: `DDR` and peripheral overrides do not drive them. The `low` bits of `mask` are
+    /// pulled low, and the rest are inputs with the `PORTx` pull-up.
     pub(crate) fn set_twi_override(
         &mut self,
         port: Port,
         mask: u8,
+        low: u8,
         ctx: &mut Ctx<'_>,
         report_at: Option<u64>,
         at: u64,
     ) {
         let state = &mut self.ports[port.index()];
-        if state.twi == mask {
+        let low = low & mask;
+        if state.twi == mask && state.twi_low == low {
             return;
         }
         state.twi = mask;
+        state.twi_low = low;
         self.reconcile(port, ctx, report_at, at, true, true);
     }
 
@@ -544,6 +542,10 @@ impl PinMux {
         }
         let state = &self.ports[port.index()];
         let mask = 1u8 << bit;
+        // `DDOV` = `SDA_OUT`: the low stage, with the `PUOV` pull-up not stamped beside it.
+        if state.twi_low & mask != 0 {
+            return PinDrive::Low;
+        }
         let input = state.twi & mask != 0
             || state.force_in & mask != 0
             || (state.ddr & mask == 0 && !self.usart_driven(port, bit));
@@ -668,6 +670,9 @@ impl PinMux {
             };
         }
         // `PUOE` = `TWEN`, `PUOV` = `PORTCn`·¬`PUD`, `PVOE` = `TWEN`, `PVOV` = 0.
+        if state.twi_low & mask != 0 {
+            return Level::Low;
+        }
         if state.twi & mask != 0 {
             return self.input_level(port, bit);
         }

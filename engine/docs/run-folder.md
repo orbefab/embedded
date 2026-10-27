@@ -1,6 +1,6 @@
 # Run folder
 
-`sim run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and so does an ATmega328P. It adds `traces/serial.csv` when a chip has a USART, as an ATmega328P does.
+`sim run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and so does an ATmega328P. It adds `traces/serial.csv` when a chip has a USART, and `traces/i2c.csv` when a chip has a TWI, as an ATmega328P does.
 
 ```text
 <dir>/
@@ -15,6 +15,7 @@
     envelope.f64
     logic.vcd
     serial.csv
+    i2c.csv
 ```
 
 Each JSON file is pretty JSON with a two-space indent and a trailing newline. `manifest.json` uses the field order in the example below. Keys inside a diagnostic `data` object are alphabetical. Observation keys follow ref order.
@@ -25,7 +26,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 {
   "run_format": 0,
   "netlist_format": 0,
-  "engine_version": "0.20.0",
+  "engine_version": "0.21.0",
   "input": {
     "file": "netlist.json",
     "sha256": "<lowercase hex sha256 of the input bytes>",
@@ -36,7 +37,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 }
 ```
 
-`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.20.0`. [versions.md](versions.md) says which changes move them.
+`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.21.0`. [versions.md](versions.md) says which changes move them.
 
 `netlist_format` is the input's `version`, when it reads as an unsigned integer. That holds when the engine rejected the input, so `version: 1` records 1. It is `null` when no such integer could be read.
 
@@ -330,9 +331,31 @@ for r in csv.DictReader(open("run/traces/serial.csv")): text[r["part"], r["usart
 print({key: bytes(data) for key, data in text.items()})  # {('u1', 'USART0'): b'512\r\n512\r\n512\r\n'}
 ```
 
+A netlist with a chip that has a TWI adds `i2c.csv`. An ATmega328P has one. The file holds every phase the TWI master saw on the bus, one row per phase, as ASCII with `\n` line ends. `index.json` has no key for it, because its header names its columns. `examples/atmega-i2c-scan` probes addresses 1 to 126 with nothing on the bus, and its file starts:
+
+```text
+t_ps,part,phase,address,read,byte,ack
+218062500,u1,start,,,,
+232375000,u1,address,1,0,,0
+322000000,u1,stop,,,,
+349375000,u1,start,,,,
+363687500,u1,address,2,0,,0
+453312500,u1,stop,,,,
+```
+
+- `phase` is `start`, `repeated_start`, `address`, `data`, `stop`, `arbitration_lost` or `bus_error`.
+- `t_ps` is the phase's first bus change, the first SCL or SDA edge the TWI read after the cycle the phase before it ended, while it owned the bus or had a phase under way. It is the first picosecond at or after that oscillator cycle. A START and a repeated START end at their SCL fall, an address or data byte at its ninth SCL fall, a STOP when SDA reads high, an arbitration loss at the SCL rise that read it, and a bus error at the SDA edge.
+- `part` is the chip's part name.
+- On an address row `address` is the 7-bit address, and on a data row `byte` is the byte, both decimal. `read` is 1 for a read and 0 for a write, and `ack` is 1 for an acknowledge and 0 for none, on both. On a write the target acknowledges, and on a read the master does. Every other cell is empty.
+- Rows of one delivery are in the order phases ended, then in part order. A phase that ends on an input can end within one CPU cycle before a delivery already made, and that row is then written after a row that ended later.
+- A phase still on the bus at `stop_ps` is not in the file. After an error the file keeps the phases that ended by `end_ps`.
+- A chip with a TWI writes the file even when the TWI never ran, as the header alone.
+
+`scripts/i2c_decode.py` decodes the bus from `logic.vcd` apart from the engine and checks it against this file, as [reference.md](reference.md#i2c) says.
+
 `end_ps` is the last row's time, and the same number as `observations.end_ps`. It is less than `stop_ps` only when the run reported an error. The grid rows before the error stay, and the last accepted step is the last row. A run that fails at t = 0 writes no `traces/`.
 
-A transient whose grid gives more than `min(1000000, 67108864 / columns)` rows is refused before it solves, with one `trace.too_large`. 67108864 is 2^26 f64 values, 512 MiB. `columns` is the width of `analog.f64`. The cap counts `analog.f64` and not the envelope, which stores at most twice as many values. Writing the folder keeps a second copy of the trace bytes. A run at this cap peaks near 1.02 GiB without the envelope and near 3.02 GiB with it. The refused run writes `{}` to `observations.json` and no `traces/`. The row count depends only on `stop_ps` and `grid_ps`, so a run that is not refused never runs out of rows. Edges, jumps and chip events cost steps, not rows. Those steps can end the run at [`solver.step_limit`](diagnostics.md#solverstep_limit). `examples/rc-switch` writes 4051 rows, `examples/button-led` 2001, `examples/v-pulse-rc` 1401, `examples/current-pulse` 801, `examples/ne555-led` 401, `examples/atmega-blink` 401, `examples/atmega-board-blink` 401, `examples/atmega-board-button` 21, `examples/atmega-button` 101, `examples/atmega-analog-serial` 951, `examples/atmega-fade` 15701, `examples/atmega-serial-echo` 121, `examples/npn-sweep` 521, `examples/pnp-sweep` 521, `examples/nmos-sweep` 521, `examples/npn-pulse` 1101, and `examples/npn-blinker` 2001.
+A transient whose grid gives more than `min(1000000, 67108864 / columns)` rows is refused before it solves, with one `trace.too_large`. 67108864 is 2^26 f64 values, 512 MiB. `columns` is the width of `analog.f64`. The cap counts `analog.f64` and not the envelope, which stores at most twice as many values. Writing the folder keeps a second copy of the trace bytes. A run at this cap peaks near 1.02 GiB without the envelope and near 3.02 GiB with it. The refused run writes `{}` to `observations.json` and no `traces/`. The row count depends only on `stop_ps` and `grid_ps`, so a run that is not refused never runs out of rows. Edges, jumps and chip events cost steps, not rows. Those steps can end the run at [`solver.step_limit`](diagnostics.md#solverstep_limit). `examples/rc-switch` writes 4051 rows, `examples/button-led` 2001, `examples/v-pulse-rc` 1401, `examples/current-pulse` 801, `examples/ne555-led` 401, `examples/atmega-blink` 401, `examples/atmega-board-blink` 401, `examples/atmega-board-button` 21, `examples/atmega-button` 101, `examples/atmega-analog-serial` 951, `examples/atmega-fade` 15701, `examples/atmega-serial-echo` 121, `examples/atmega-i2c-scan` 201, `examples/npn-sweep` 521, `examples/pnp-sweep` 521, `examples/nmos-sweep` 521, `examples/npn-pulse` 1101, and `examples/npn-blinker` 2001.
 
 Python with numpy reads one column like this:
 

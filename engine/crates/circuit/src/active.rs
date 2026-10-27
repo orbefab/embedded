@@ -7,6 +7,7 @@ pub(crate) mod avr;
 #[cfg(test)]
 pub(crate) mod script;
 
+use sim_core::i2c::{I2cPhase, I2cRow};
 use sim_core::name::Name;
 use sim_core::netlist::{NetId, PartId};
 use sim_core::serial::SerialByte;
@@ -71,6 +72,8 @@ pub(crate) struct Chip {
     pub(crate) samples: Vec<Signal>,
     /// The datasheet name of each USART its core sends on, in its core's order.
     pub(crate) usarts: &'static [&'static str],
+    /// Whether its core has a TWI master, whose phases go to `i2c.csv`.
+    pub(crate) twi: bool,
     /// The core at power-on.
     pub(crate) core: Core,
 }
@@ -160,10 +163,11 @@ impl Core {
     }
 
     /// Takes each byte a USART sent whose stop bit ended at or before `through`, in the order
-    /// they ended on each USART, and drops every SPI byte and bus phase, which no output reads.
-    fn deliver(&mut self, through: Time, sent: impl FnMut(Frame)) {
+    /// they ended on each USART, and each TWI phase that ended by then, in the order they
+    /// ended. Drops every SPI byte, which no output reads.
+    fn deliver(&mut self, through: Time, sent: impl FnMut(Frame), saw: impl FnMut(Phase)) {
         match *self {
-            Core::Avr(ref mut core) => core.deliver(through, sent),
+            Core::Avr(ref mut core) => core.deliver(through, sent, saw),
             #[cfg(test)]
             Core::Script(_) => {}
         }
@@ -178,6 +182,15 @@ pub(crate) struct Frame {
     pub(crate) byte: u8,
     pub(crate) start: Time,
     pub(crate) end: Time,
+}
+
+/// A phase a core's TWI master saw, its first bus change and its end on the run's clock, and
+/// how many phases the core delivered before it.
+pub(crate) struct Phase {
+    pub(crate) phase: I2cPhase,
+    pub(crate) start: Time,
+    pub(crate) end: Time,
+    pub(crate) count: u64,
 }
 
 pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
@@ -222,11 +235,14 @@ pub(crate) fn stamp(chip: &Chip, core: &Core, sys: &mut System, source_scale: f6
 pub(crate) struct Actives {
     committed: Vec<Core>,
     ahead: Vec<Ahead>,
-    /// The bytes landings delivered since the last `deliver`, in no order.
-    staged: Vec<Staged>,
+    /// What landings delivered since the last `deliver`, in no order.
+    staged: Staging,
     /// Each USART, chips in part order, then each chip's in its core's order: the part's name
     /// and the USART's. A `SerialByte`'s `usart` indexes this.
     usarts: Vec<(Name, &'static str)>,
+    /// The name of each part whose core has a TWI, in part order. An `I2cRow`'s `twi` indexes
+    /// this.
+    twis: Vec<Name>,
 }
 
 struct Ahead {
@@ -241,7 +257,20 @@ struct Staged {
     byte: SerialByte,
 }
 
-/// Every byte of one chip whose stop bit ended at or before `through` was staged, once.
+/// A delivered TWI phase and its end, which orders it.
+struct StagedPhase {
+    end: Time,
+    row: I2cRow,
+}
+
+#[derive(Default)]
+struct Staging {
+    bytes: Vec<Staged>,
+    phases: Vec<StagedPhase>,
+}
+
+/// Every byte of one chip whose stop bit ended at or before `through` was staged, once, and
+/// so was every TWI phase that ended by then.
 ///
 /// `through` is never past the session's last accepted step. A commit is at a step being
 /// accepted, and the session's delivery from the copies is through the accepted step. Nothing
@@ -259,27 +288,53 @@ struct Staged {
 /// its time by its commit and has not run, and an input ends no frame, so an input on a twin
 /// delivers nothing. A stop and a run that idles after its last byte are the session's
 /// delivery through the accepted step, which every copy has done.
+///
+/// A phase can end on an input, at the time the input lands, which a delivery may already have
+/// passed: a STOP ends on the SDA rise the TWI reads. So a phase is staged by its count, not its
+/// end. `phases` is how many were staged. Every run of a core numbers its phases from its
+/// commit, as the first run did, so a phase run again has the count it was staged with.
 struct Delivered {
     through: Time,
     /// The index in `Actives::usarts` of the chip's first USART.
     usart: u16,
+    /// The index in `Actives::twis` of the chip's TWI. A chip with none delivers no phase.
+    twi: u16,
+    phases: u64,
 }
 
 impl Delivered {
-    fn deliver(&mut self, core: &mut Core, to: Time, staged: &mut Vec<Staged>) {
-        let (through, usart) = (self.through, self.usart);
-        core.deliver(to, |frame| {
-            if frame.end > through {
-                staged.push(Staged {
-                    end: frame.end,
-                    byte: SerialByte {
-                        at: frame.start,
-                        usart: usart + u16::from(frame.usart),
-                        byte: frame.byte,
-                    },
-                });
-            }
-        });
+    fn deliver(&mut self, core: &mut Core, to: Time, staged: &mut Staging) {
+        let (through, usart, twi) = (self.through, self.usart, self.twi);
+        let staged_phases = &mut self.phases;
+        let Staging { bytes, phases } = staged;
+        core.deliver(
+            to,
+            |frame| {
+                if frame.end > through {
+                    bytes.push(Staged {
+                        end: frame.end,
+                        byte: SerialByte {
+                            at: frame.start,
+                            usart: usart + u16::from(frame.usart),
+                            byte: frame.byte,
+                        },
+                    });
+                }
+            },
+            |phase| {
+                if phase.count >= *staged_phases {
+                    *staged_phases = phase.count + 1;
+                    phases.push(StagedPhase {
+                        end: phase.end,
+                        row: I2cRow {
+                            at: phase.start,
+                            twi,
+                            phase: phase.phase,
+                        },
+                    });
+                }
+            },
+        );
         debug_assert!(through <= to, "a delivery never goes back");
         self.through = to;
     }
@@ -314,7 +369,7 @@ impl Ahead {
 
     /// Delivers the copy through its time and commits it, so no later copy of either core
     /// carries what it delivered.
-    fn commit(&mut self, committed: &mut Core, staged: &mut Vec<Staged>) {
+    fn commit(&mut self, committed: &mut Core, staged: &mut Staging) {
         let Reach::Done(at) = self.reach else {
             panic!("a copy commits only where it was rewound");
         };
@@ -325,7 +380,7 @@ impl Ahead {
 
     /// Its watches' levels from `at` on, after the landing at `at`, then committed. A twin of
     /// the committed core takes them on both cores, which leaves the state a fresh copy would.
-    fn input(&mut self, committed: &mut Core, at: Time, levels: &[bool], staged: &mut Vec<Staged>) {
+    fn input(&mut self, committed: &mut Core, at: Time, levels: &[bool], staged: &mut Staging) {
         if !matches!(self.reach, Reach::Twin(twin) if twin == at) {
             self.rewind(committed, at);
             self.core.input(at, levels);
@@ -359,6 +414,7 @@ impl Actives {
     /// The power-on cores, given their levels on the operating point at t = 0.
     pub(crate) fn new(circuit: &Circuit, levels: &Levels) -> Actives {
         let mut usarts = Vec::new();
+        let mut twis = Vec::new();
         let committed: Vec<Core> = circuit
             .actives
             .iter()
@@ -381,10 +437,16 @@ impl Actives {
                 let delivered = Delivered {
                     through: Time::ZERO,
                     usart: u16::try_from(usarts.len()).expect("a run has few USARTs"),
+                    twi: u16::try_from(twis.len()).expect("a run has few TWIs"),
+                    phases: 0,
                 };
                 for &usart in chip.usarts {
                     let part = chip.part.expect("a chip with a USART is a part");
                     usarts.push((circuit.netlist.part(part).name.clone(), usart));
+                }
+                if chip.twi {
+                    let part = chip.part.expect("a chip with a TWI is a part");
+                    twis.push(circuit.netlist.part(part).name.clone());
                 }
                 Ahead {
                     core: core.clone(),
@@ -396,8 +458,9 @@ impl Actives {
         Actives {
             committed,
             ahead,
-            staged: Vec::new(),
+            staged: Staging::default(),
             usarts,
+            twis,
         }
     }
 
@@ -412,6 +475,10 @@ impl Actives {
 
     pub(crate) fn usarts(&self) -> &[(Name, &'static str)] {
         &self.usarts
+    }
+
+    pub(crate) fn twis(&self) -> &[Name] {
+        &self.twis
     }
 
     pub(crate) fn cores(&self) -> &[Core] {
@@ -522,7 +589,7 @@ impl Actives {
 
     /// Delivers each copy through `through`, which every copy has done everything up to. Returns
     /// every byte delivered since the last call, in the order stop bits ended, then in `usarts`
-    /// order.
+    /// order. The TWI phases wait for `phases`.
     pub(crate) fn deliver(&mut self, through: Time) -> impl Iterator<Item = SerialByte> {
         for ahead in &mut self.ahead {
             assert!(ahead.has_done(through), "a copy delivers only what it did");
@@ -530,8 +597,16 @@ impl Actives {
                 .delivered
                 .deliver(&mut ahead.core, through, &mut self.staged);
         }
-        self.staged
-            .sort_unstable_by_key(|staged| (staged.end, staged.byte.usart));
-        self.staged.drain(..).map(|staged| staged.byte)
+        let bytes = &mut self.staged.bytes;
+        bytes.sort_unstable_by_key(|staged| (staged.end, staged.byte.usart));
+        bytes.drain(..).map(|staged| staged.byte)
+    }
+
+    /// Every TWI phase delivered since the last call, in the order phases ended, then in `twis`
+    /// order.
+    pub(crate) fn phases(&mut self) -> impl Iterator<Item = I2cRow> {
+        let phases = &mut self.staged.phases;
+        phases.sort_unstable_by_key(|staged| (staged.end, staged.row.twi));
+        phases.drain(..).map(|staged| staged.row)
     }
 }
