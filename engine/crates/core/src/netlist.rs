@@ -222,6 +222,8 @@ pub enum Model {
     Diode(Junction),
     /// The same device equation as `Diode`. Its own kind, so an LED-only quantity needs no flag.
     Led(Junction),
+    /// A forward junction and a breakdown junction. See [`Zener`].
+    Zener(Zener),
     Npn(Bjt),
     /// The same device equations as `Npn`, with every junction voltage and pin current negated.
     Pnp(Bjt),
@@ -245,7 +247,7 @@ impl Model {
             Model::Potentiometer(_) => &Potentiometer::PINS,
             Model::VoltageSource(_) => &VoltageSource::PINS,
             Model::CurrentSource(_) => &CurrentSource::PINS,
-            Model::Diode(_) | Model::Led(_) => &Junction::PINS,
+            Model::Diode(_) | Model::Led(_) | Model::Zener(_) => &Junction::PINS,
             Model::Npn(_) | Model::Pnp(_) => &Bjt::PINS,
             Model::Nmos(_) => &Mosfet::PINS,
             Model::Capacitor(_) => &Capacitor::PINS,
@@ -267,6 +269,7 @@ impl Model {
             | Model::CurrentSource(_)
             | Model::Diode(_)
             | Model::Led(_)
+            | Model::Zener(_)
             | Model::Capacitor(_)
             | Model::Inductor(_)
             | Model::Relay(_)
@@ -295,6 +298,7 @@ impl Model {
             Model::VoltageSource(v) => &v.pins,
             Model::CurrentSource(c) => &c.pins,
             Model::Diode(j) | Model::Led(j) => &j.pins,
+            Model::Zener(z) => &z.pins,
             Model::Npn(b) | Model::Pnp(b) => &b.pins,
             Model::Nmos(m) => &m.pins,
             Model::Capacitor(c) => &c.pins,
@@ -319,6 +323,7 @@ impl Model {
             | Model::Switch(_)
             | Model::Chip(_) => (None, None),
             Model::Diode(j) | Model::Led(j) => (j.max_current.as_ref(), j.max_power.as_ref()),
+            Model::Zener(z) => (z.max_current.as_ref(), z.max_power.as_ref()),
             Model::Npn(b) | Model::Pnp(b) => (b.max_current.as_ref(), b.max_power.as_ref()),
             Model::Nmos(m) => (m.max_current.as_ref(), m.max_power.as_ref()),
         };
@@ -337,6 +342,7 @@ impl Model {
             Model::Resistor(_)
             | Model::Diode(_)
             | Model::Led(_)
+            | Model::Zener(_)
             | Model::Npn(_)
             | Model::Pnp(_)
             | Model::Nmos(_)
@@ -364,6 +370,7 @@ impl Model {
             Model::Resistor(_)
             | Model::Diode(_)
             | Model::Led(_)
+            | Model::Zener(_)
             | Model::Npn(_)
             | Model::Pnp(_)
             | Model::Nmos(_)
@@ -384,6 +391,7 @@ impl Model {
             Model::Resistor(_)
             | Model::Diode(_)
             | Model::Led(_)
+            | Model::Zener(_)
             | Model::Npn(_)
             | Model::Pnp(_)
             | Model::Nmos(_)
@@ -404,6 +412,7 @@ impl Model {
             | Model::Potentiometer(_)
             | Model::Diode(_)
             | Model::Led(_)
+            | Model::Zener(_)
             | Model::Npn(_)
             | Model::Pnp(_)
             | Model::Nmos(_)
@@ -423,6 +432,7 @@ impl Model {
             | Model::Potentiometer(_)
             | Model::Diode(_)
             | Model::Led(_)
+            | Model::Zener(_)
             | Model::Npn(_)
             | Model::Pnp(_)
             | Model::Nmos(_)
@@ -1115,6 +1125,74 @@ impl Mosfet {
     pub const PINS: [&'static str; 3] = ["drain", "gate", "source"];
 }
 
+/// A forward junction and a breakdown junction, each with its own series resistance.
+///
+/// `series_resistance` joins the anode to internal node 0. The forward junction runs from
+/// there to the cathode, with the diode's law. `breakdown_resistance` joins internal node 1
+/// to the cathode, and the breakdown junction runs from internal node 1 to internal node 0.
+/// Breakdown current does not flow in the forward junction.
+///
+/// `breakdown` is derived at parse time:
+/// `nbvt = (zener_impedance - series_resistance - breakdown_resistance) * zener_current`,
+/// `bvj = zener_voltage - zener_current * (series_resistance + breakdown_resistance)`,
+/// `Isb = zener_current / expm1(bvj / nbvt)`.
+/// At `zener_current` the pin voltage is `zener_voltage`. The slope there is
+/// `series_resistance + breakdown_resistance + nbvt / (zener_current + Isb)`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Zener {
+    /// Nets of pins `anode`, `cathode`.
+    pub pins: [NetId; 2],
+    /// Ampere. The forward junction's `Is`.
+    pub saturation_current: Value,
+    /// Unit `1`. The forward junction's `N`.
+    pub emission_coefficient: Value,
+    /// Ohm. From the anode to internal node 0.
+    pub series_resistance: Value,
+    /// Volt. `VZ`, the pin voltage at `zener_current` in breakdown.
+    pub zener_voltage: Value,
+    /// Ampere. `IZT`.
+    pub zener_current: Value,
+    /// Ohm. `ZZT`, the slope of the pin voltage at `zener_current`.
+    pub zener_impedance: Value,
+    /// Ohm. In series with the breakdown junction only.
+    pub breakdown_resistance: Value,
+    /// The breakdown junction derived from the row and the two resistances.
+    pub breakdown: Breakdown,
+    /// Ampere, greater than 0. Bounds `|i|`. `None` is an explicit `"current": null`.
+    pub max_current: Option<Value>,
+    /// Watt, greater than 0. `None` is an explicit `"power": null`.
+    pub max_power: Option<Value>,
+}
+
+/// `Isb`, `nbvt` and `vcrit` of a zener's breakdown junction.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Breakdown {
+    /// Ampere.
+    pub saturation_current: f64,
+    /// Volt. `NBV * VT`.
+    pub nvt: f64,
+    /// Volt. The breakdown junction's start voltage.
+    pub vcrit: f64,
+}
+
+/// Which derived breakdown value breaks `finite_junction`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BreakdownFault {
+    /// `nbvt` is not normal.
+    Impedance,
+    /// `Isb` is not normal, or `vcrit` is not finite and positive.
+    Voltage,
+}
+
+impl BreakdownFault {
+    pub fn field(self) -> &'static str {
+        match self {
+            BreakdownFault::Impedance => "zener_impedance",
+            BreakdownFault::Voltage => "zener_voltage",
+        }
+    }
+}
+
 /// `n*VT` and `vcrit` for a junction whose parameters are inside the domain.
 pub struct JunctionScale {
     pub nvt: f64,
@@ -1166,6 +1244,37 @@ pub fn junction_scale(emission: f64, saturation: f64) -> Result<JunctionScale, J
         });
     }
     Ok(JunctionScale { nvt, vcrit })
+}
+
+/// The breakdown junction of a row whose impedance and voltage already clear the two resistances.
+///
+/// `nbvt` must be normal. `Isb` must be normal and positive, and its `vcrit` must be finite and
+/// positive. A failure names [`BreakdownFault::Impedance`] or [`BreakdownFault::Voltage`].
+pub fn breakdown_scale(
+    series_resistance: f64,
+    breakdown_resistance: f64,
+    zener_voltage: f64,
+    zener_current: f64,
+    zener_impedance: f64,
+) -> Result<Breakdown, BreakdownFault> {
+    let nbvt = (zener_impedance - series_resistance - breakdown_resistance) * zener_current;
+    if !nbvt.is_normal() {
+        return Err(BreakdownFault::Impedance);
+    }
+    let bvj = zener_voltage - zener_current * (series_resistance + breakdown_resistance);
+    let isb = zener_current / libm::expm1(bvj / nbvt);
+    if !isb.is_normal() || isb <= 0.0 {
+        return Err(BreakdownFault::Voltage);
+    }
+    let vcrit = nbvt * libm::log(nbvt / (SQRT_2 * isb));
+    if !(vcrit.is_finite() && vcrit > 0.0) {
+        return Err(BreakdownFault::Voltage);
+    }
+    Ok(Breakdown {
+        saturation_current: isb,
+        nvt: nbvt,
+        vcrit,
+    })
 }
 
 /// What a rating bounds. Each maps to one quantity and one diagnostic code.

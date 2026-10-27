@@ -7,6 +7,7 @@ mod resistor;
 mod switch;
 mod transistor;
 mod voltage_source;
+mod zener;
 
 use sim_core::netlist::{Model, NetId, PartId, Relay};
 use sim_core::time::Time;
@@ -107,6 +108,12 @@ impl Device for Model {
                 branches: 0,
                 junctions: 1,
             },
+            Model::Zener(_) => Unknowns {
+                internal_nodes: 2,
+                bare_internal: true,
+                branches: 0,
+                junctions: 2,
+            },
             Model::Npn(_) | Model::Pnp(_) => Unknowns {
                 internal_nodes: 3,
                 bare_internal: true,
@@ -138,6 +145,7 @@ impl Device for Model {
             | Model::CurrentSource(_)
             | Model::Diode(_)
             | Model::Led(_)
+            | Model::Zener(_)
             | Model::Inductor(_)
             | Model::Relay(_)
             | Model::Switch(_)
@@ -155,6 +163,7 @@ impl Device for Model {
             | Model::CurrentSource(_)
             | Model::Diode(_)
             | Model::Led(_)
+            | Model::Zener(_)
             | Model::Npn(_)
             | Model::Pnp(_)
             | Model::Nmos(_)
@@ -171,6 +180,7 @@ impl Device for Model {
             Model::VoltageSource(source) => voltage_source::stamp(source, stamp),
             Model::CurrentSource(source) => current_source::stamp(source, stamp),
             Model::Diode(j) | Model::Led(j) => junction::stamp(j, stamp),
+            Model::Zener(zener) => zener::stamp(zener, stamp),
             Model::Npn(bjt) => transistor::stamp(bjt, Polarity::Npn, stamp),
             Model::Pnp(bjt) => transistor::stamp(bjt, Polarity::Pnp, stamp),
             Model::Nmos(mosfet) => transistor::mos_stamp(mosfet, stamp),
@@ -188,7 +198,7 @@ impl Device for Model {
 }
 
 /// Whether this part's stamp reads the Newton iterate. Only a junction's does, a diode's, a
-/// BJT's or an `nmos`'s, through `Stamp::junction`, the one reader of the iterate. Every other
+/// zener's, a BJT's or an `nmos`'s, through `Stamp::junction`, the one reader of the iterate. Every other
 /// stamp reads only the call's conditions, so on a circuit where no part reads it every iteration
 /// of one call stamps the same system.
 pub(crate) fn reads_iterate(model: &Model) -> bool {
@@ -201,7 +211,12 @@ pub(crate) fn reads_iterate(model: &Model) -> bool {
         | Model::Inductor(_)
         | Model::Relay(_)
         | Model::Switch(_) => false,
-        Model::Diode(_) | Model::Led(_) | Model::Npn(_) | Model::Pnp(_) | Model::Nmos(_) => true,
+        Model::Diode(_)
+        | Model::Led(_)
+        | Model::Zener(_)
+        | Model::Npn(_)
+        | Model::Pnp(_)
+        | Model::Nmos(_) => true,
         Model::Chip(chip) => chip::reads_iterate(chip),
     }
 }
@@ -219,6 +234,9 @@ pub(crate) fn initial(model: &Model, out: &mut [f64]) {
         | Model::Switch(_)
         | Model::Chip(_) => {}
         Model::Diode(j) | Model::Led(j) => out[0] = junction::initial(j),
+        Model::Zener(zener) => {
+            out[..2].copy_from_slice(&zener::initial(zener));
+        }
         Model::Npn(bjt) | Model::Pnp(bjt) => transistor::initial(bjt, out),
         Model::Nmos(_) => transistor::mos_initial(out),
     }
@@ -239,6 +257,11 @@ pub(crate) fn update(model: &Model, probe: &Probe<'_>, prior: &[f64], next: &mut
         Model::Diode(j) | Model::Led(j) => {
             let (limited, update) = junction::update(j, probe, prior[0]);
             next[0] = limited;
+            update
+        }
+        Model::Zener(zener) => {
+            let (limited, update) = zener::update(zener, probe, prior);
+            next[..2].copy_from_slice(&limited);
             update
         }
         Model::Npn(bjt) => transistor::update(bjt, Polarity::Npn, probe, prior, next),
@@ -266,6 +289,7 @@ pub(crate) fn dc_paths(model: &Model) -> &'static [(usize, usize)] {
         | Model::VoltageSource(_)
         | Model::Diode(_)
         | Model::Led(_)
+        | Model::Zener(_)
         | Model::Inductor(_)
         | Model::Switch(_) => &[(0, 1)],
         Model::Potentiometer(_) | Model::Npn(_) | Model::Pnp(_) => &[(0, 1), (1, 2)],
@@ -321,6 +345,7 @@ pub(crate) fn observe(model: &Model, probe: &Probe<'_>, at: Time, side: Side) ->
         Model::VoltageSource(source) => (source.pins, voltage_source::current(probe)),
         Model::CurrentSource(source) => (source.pins, current_source::current(source, at, side)),
         Model::Diode(j) | Model::Led(j) => (j.pins, junction::current(j, probe)),
+        Model::Zener(zener) => (zener.pins, zener::current(zener, probe)),
         Model::Capacitor(capacitor) => (capacitor.pins, capacitor::current(probe)),
         Model::Inductor(inductor) => (inductor.pins, inductor::current(probe)),
         Model::Relay(relay) => (

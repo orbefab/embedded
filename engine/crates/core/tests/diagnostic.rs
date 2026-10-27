@@ -391,6 +391,8 @@ fn a_value_message_uses_the_same_characters_as_data_value() {
         ValueRule::FiniteJunction,
         ValueRule::BounceRoom,
         ValueRule::NonNegative,
+        ValueRule::AboveResistance,
+        ValueRule::AboveDrop,
     ] {
         let diagnostic = Diagnostic::NetlistValue {
             part: part("d1"),

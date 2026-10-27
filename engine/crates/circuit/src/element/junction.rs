@@ -27,6 +27,11 @@ impl Shockley {
         }
     }
 
+    /// A junction whose saturation current, `n*VT` and `vcrit` are already known.
+    pub(super) fn from_parts(is: f64, nvt: f64, vcrit: f64) -> Shockley {
+        Shockley { is, nvt, vcrit }
+    }
+
     /// Largest `exp` argument whose current and slope stay finite and under `G_CAP`.
     fn arg_cap(&self) -> f64 {
         // In log space, so a tiny `Is` cannot overflow the quotient.

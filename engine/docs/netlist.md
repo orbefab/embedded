@@ -349,6 +349,42 @@ The device is at 25 C, 298.15 K. `k` and `q` are the exact SI values. There is n
 
 `examples/led-5v` and `examples/led-9v` use a Kingbright WP7113ID, a red 5 mm LED. Its `Is`, `N`, and `Rs` solve the equation exactly through three points read off the datasheet's forward current figure at 25 C: (1.70 V, 2 mA), (1.90 V, 10 mA), and (2.00 V, 20 mA). The fit gives `Is` = 6.711e-10 A, `N` = 4.427, and `Rs` = 2.115 ohm. Each value's `at` names the figure, the points, and the temperature, so the fit can be redone from the citation.
 
+### Zener
+
+`kind` is `zener`. Pins are `anode` and `cathode`.
+
+The part is two junctions. `series_resistance` joins the anode to internal node 0, and the forward junction runs from there to the cathode, with the diode's law and the forward `Is` and `N`. `breakdown_resistance` joins internal node 1 to the cathode, and the breakdown junction runs from internal node 1 to internal node 0. Breakdown current does not flow in the forward junction. Each junction has its own `GMIN`, 1e-12 S, across it. The engine puts no node gmin on either internal node. `i` is the current through `series_resistance`, entering the anode. In breakdown `i` and `v` are negative.
+
+| Field | Symbol | Unit |
+| --- | --- | --- |
+| `saturation_current` | `Is` | `A` |
+| `emission_coefficient` | `N` | `1` |
+| `series_resistance` | `Rs` | `ohm` |
+| `zener_voltage` | `VZ` | `V` |
+| `zener_current` | `IZT` | `A` |
+| `zener_impedance` | `ZZT` | `ohm` |
+| `breakdown_resistance` | `Rb` | `ohm` |
+
+`VZ` is the pin voltage at `IZT` in breakdown. `ZZT` is the slope of that pin voltage at `IZT`. A datasheet column headed at 1 kHz is used here as the DC slope. Each of the seven values must be greater than 0, and its reciprocal must be finite. `zener_impedance` must exceed `series_resistance + breakdown_resistance`. Less or equal is `netlist.value` with rule `above_resistance` on `zener_impedance`. `zener_voltage` must exceed `zener_current * (series_resistance + breakdown_resistance)`. Less or equal is `netlist.value` with rule `above_drop` on `zener_voltage`. When either inequality fails, the part does not also report `finite_junction`.
+
+When both hold, the engine derives the breakdown junction:
+
+```text
+nbvt = (ZZT - Rs - Rb) * IZT
+bvj  = VZ - IZT * (Rs + Rb)
+Isb  = IZT / expm1(bvj / nbvt)
+```
+
+`expm1` comes from `libm`. At `IZT` the pin voltage is `VZ`. The slope there is `Rs + Rb + nbvt / (IZT + Isb)`, which equals `ZZT` when `Isb` is negligible beside `IZT`. `nbvt` must be normal. `Isb` must be normal and positive, and the breakdown junction's `vcrit` must be finite and positive. A break is `finite_junction`. It names `zener_impedance` when `nbvt` is not normal, and `zener_voltage` when `Isb` or `vcrit` is not. The forward junction follows the diode's `finite_junction` rule on its own fields.
+
+The device is at 25 C, 298.15 K. There is no temperature field, no `VZ` temperature coefficient, and no junction capacitance. A thermal-equilibrium reading taken at another temperature does not describe the part here.
+
+`ratings` holds `current` and `power`. `current` bounds `|i|` in both directions. That is stricter than a sheet that states a forward drop at a current above the reverse current limit.
+
+`scripts/fit_zener.py` fits the 1N4733A row. `Is`, `N` and `Rs` solve the forward equation through three stroke centers of Vishay 85816 Rev. 2.7, p3 Fig. 2, at Tj = 25 C: (0.622 V, 0.1 mA), (0.695 V, 1 mA), and (0.876 V, 100 mA). `VZ`, `IZT` and `ZZT` are that document's p2 row, 5.1 V, 49 mA and 7 ohm. `Rb` is the value that puts 1 mA on the 4.46 V read of EIC 1N4727A to 1N4761A Fig. 1 at TA = 25 C. The script prints `Is` = 2.908000103814407e-13 A, `N` = 1.2314970051462708, `Rs` = 0.35129980768421137 ohm and `Rb` = 4.5183447909672836 ohm. The forward drop at 200 mA is 0.932671 V, under the 1.2 V maximum. The slope at 49 mA is 7 ohm. Against the figure, the model is 4.460 V at 1 mA, 4.6475 V at 5 mA (1.695% high), 4.7442 V at 10 mA (1.807% high) and 5.100 V at 49 mA (0.394% above the 5.08 V read). The impedance at 1 mA is 109.2571 ohm, under the 550 ohm maximum. At 1 V reverse the current entering the anode is -2.2907918471752469e-12 A. The total includes both junctions and `GMIN`, and the reverse-current maximum is 10 uA. The reverse curve below 1 mA is an extrapolation, since no point under 1 mA was fit. Current in a circuit biased below the knee is likely under-predicted. The examples are the 5.1 V part.
+
+`examples/zener-shunt` is 9 V through 100 ohm into the zener, with a 1 kohm load. The cathode sits at 4.996963715824736 V and the zener current is -0.03503339912093094 A. `examples/zener-sweep` steps a pin from -2 V to 12 V in 0.25 V levels, one per millisecond, through 220 ohm into the cathode, and accepts 190 steps after t = 0. The rows pass through forward, reverse below the knee, the knee and breakdown.
+
 ### NPN and PNP transistors
 
 `kind` is `npn` or `pnp`. Both take the same fields and solve the same equations. The kind is the polarity. Pins are `collector`, `base` and `emitter`, in SPICE order.
@@ -726,7 +762,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | Kind | Keys | Checked quantity |
 | --- | --- | --- |
 | `resistor` | `power` | `#<part>.p` |
-| `diode`, `led` | `current`, `power` | `#<part>.i`, `#<part>.p` |
+| `diode`, `led`, `zener` | `current`, `power` | `#<part>.i`, `#<part>.p` |
 | `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
 | `nmos` | `current`, `power` | `#<part>.id`, `#<part>.p` |
 | `voltage_source`, `current_source`, `capacitor`, `inductor`, `relay`, `switch`, `ne555`, `atmega328p`, `potentiometer` | none | |
@@ -769,7 +805,7 @@ For every two-terminal part, pin 0 is the first pin listed above.
 
 `p` is `v * i`, the power the part absorbs. A source that delivers power has negative `i` and negative `p`.
 
-For a diode or LED, `i` is the current through `Rs`, and `p` includes the power in `Rs`. The junction's internal node is not observed.
+For a diode or LED, `i` is the current through `Rs`, and `p` includes the power in `Rs`. The junction's internal node is not observed. For a zener, `i` is the current through `series_resistance`, and `p` includes both resistances. Its internal nodes are not observed. In breakdown `i` and `v` are negative.
 
 For a capacitor, `i` is the solved current into pin `a`. For an inductor, `i` is the solved current into pin `a`, through its series resistance and its inductance, and `v` is across both. For a relay, `i` is the coil's current into `coil_a`, and `v` is from `coil_a` to `coil_b`. For a switch, `i` is `v` over the resistance of the contact on the interval that ends at that time. For a current source, `i` is minus its `current` on the interval that ends at that time, since that current leaves at `p`.
 

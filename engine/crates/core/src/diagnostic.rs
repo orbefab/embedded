@@ -22,6 +22,7 @@ pub enum ValueRule {
     Positive,
     FiniteReciprocal,
     /// `n*VT` is not normal, or `vcrit` is not finite and positive.
+    /// On a zener, `nbvt` is not normal, or `Isb` or its `vcrit` is not.
     FiniteJunction,
     /// `bounce.window` is less than `2 * max_bounces * MIN_GAP_PS`.
     BounceRoom,
@@ -32,6 +33,10 @@ pub enum ValueRule {
     AboveHigh,
     /// A relay's `drop_out_current` is at or above its `pull_in_current`.
     Hysteresis,
+    /// A zener's `zener_impedance` does not exceed `series_resistance + breakdown_resistance`.
+    AboveResistance,
+    /// A zener's `zener_voltage` does not exceed `zener_current` times those two resistances.
+    AboveDrop,
     /// A fuse byte selects a mode the model does not run.
     Unsupported,
 }
@@ -447,9 +452,16 @@ impl Diagnostic {
                     ValueRule::FiniteReciprocal => {
                         format!("{part} {field} is {value}; its reciprocal must be finite")
                     }
-                    ValueRule::FiniteJunction => format!(
-                        "{part} {field} is {value}; n*VT must be normal, and vcrit must be finite and positive"
-                    ),
+                    ValueRule::FiniteJunction => {
+                        let requirement = if field.as_ref() == "zener_voltage" {
+                            "Isb must be normal and positive, and vcrit must be finite and positive"
+                        } else if field.as_ref() == "zener_impedance" {
+                            "nbvt must be normal"
+                        } else {
+                            "n*VT must be normal, and vcrit must be finite and positive"
+                        };
+                        format!("{part} {field} is {value}; {requirement}")
+                    }
                     ValueRule::NonNegative => {
                         format!("{part} {field} is {value}; it must not be negative")
                     }
@@ -466,6 +478,12 @@ impl Diagnostic {
                     ValueRule::Hysteresis => {
                         format!("{part} {field} is {value}; it must be below pull_in_current")
                     }
+                    ValueRule::AboveResistance => format!(
+                        "{part} {field} is {value}; it must exceed series_resistance + breakdown_resistance"
+                    ),
+                    ValueRule::AboveDrop => format!(
+                        "{part} {field} is {value}; it must exceed zener_current * (series_resistance + breakdown_resistance)"
+                    ),
                     ValueRule::Unsupported => {
                         format!("{part} {field} is 0x{byte:02X}; the model does not run that mode")
                     }

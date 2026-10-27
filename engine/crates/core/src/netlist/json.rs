@@ -10,10 +10,10 @@ mod potentiometer;
 mod waveform;
 
 use super::{
-    Analysis, Basis, Bjt, Bounce, Capacitor, Chip, Contact, CurrentSource, Discharge, Edge, Event,
-    Inductor, IntValue, Junction, MIN_GAP_PS, Model, Mosfet, Ne555, NetId, Netlist, OutputStage,
-    Part, Relay, Resistor, Schedule, Source, Switch, Transient, Value, VoltageSource, bounce,
-    junction_scale,
+    Analysis, Basis, Bjt, Bounce, BreakdownFault, Capacitor, Chip, Contact, CurrentSource,
+    Discharge, Edge, Event, Inductor, IntValue, Junction, MIN_GAP_PS, Model, Mosfet, Ne555, NetId,
+    Netlist, OutputStage, Part, Relay, Resistor, Schedule, Source, Switch, Transient, Value,
+    VoltageSource, Zener, bounce, breakdown_scale, junction_scale,
 };
 use crate::diagnostic::{AnalysisRule, Diagnostic, ScheduleRule, ValueRule};
 use crate::finite::Finite;
@@ -87,6 +87,7 @@ enum WirePart {
     },
     Diode(WireJunction),
     Led(WireJunction),
+    Zener(Box<WireZener>),
     Npn(Box<WireBjt>),
     Pnp(Box<WireBjt>),
     Nmos(Box<WireMosfet>),
@@ -195,6 +196,21 @@ struct WireJunction {
     saturation_current: WireValue,
     emission_coefficient: WireValue,
     series_resistance: WireValue,
+    ratings: WireJunctionRatings,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireZener {
+    name: String,
+    pins: PinMap,
+    saturation_current: WireValue,
+    emission_coefficient: WireValue,
+    series_resistance: WireValue,
+    zener_voltage: WireValue,
+    zener_current: WireValue,
+    zener_impedance: WireValue,
+    breakdown_resistance: WireValue,
     ratings: WireJunctionRatings,
 }
 
@@ -498,6 +514,7 @@ fn resolve_part(
         | WirePart::Capacitor { name, .. }
         | WirePart::Inductor { name, .. } => name,
         WirePart::Diode(junction) | WirePart::Led(junction) => &junction.name,
+        WirePart::Zener(zener) => &zener.name,
         WirePart::Npn(bjt) | WirePart::Pnp(bjt) => &bjt.name,
         WirePart::Nmos(mosfet) => &mosfet.name,
         WirePart::Relay(relay) => &relay.name,
@@ -586,6 +603,9 @@ fn resolve_part(
         }
         WirePart::Led(junction) => {
             resolve_junction(&name, &part_ref, junction, nets, out).map(Model::Led)
+        }
+        WirePart::Zener(zener) => {
+            resolve_zener(&name, &part_ref, *zener, nets, out).map(Model::Zener)
         }
         WirePart::Npn(bjt) => resolve_bjt(&name, &part_ref, *bjt, nets, out).map(Model::Npn),
         WirePart::Pnp(bjt) => resolve_bjt(&name, &part_ref, *bjt, nets, out).map(Model::Pnp),
@@ -713,6 +733,103 @@ fn resolve_junction(
         saturation_current: is?,
         emission_coefficient: n?,
         series_resistance: rs?,
+        max_current: max_current?,
+        max_power: max_power?,
+    })
+}
+
+fn resolve_zener(
+    name: &Name,
+    part_ref: &Ref,
+    wire: WireZener,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Zener> {
+    let pins = resolve_pins(name, Junction::PINS, &wire.pins.0, nets, out);
+    let mut positive =
+        |field: &'static str, unit, value| resolve_value(part_ref, field, unit, true, value, out);
+    let is = positive("saturation_current", "A", wire.saturation_current);
+    let n = positive("emission_coefficient", "1", wire.emission_coefficient);
+    let rs = positive("series_resistance", "ohm", wire.series_resistance);
+    let vz = positive("zener_voltage", "V", wire.zener_voltage);
+    let izt = positive("zener_current", "A", wire.zener_current);
+    let zzt = positive("zener_impedance", "ohm", wire.zener_impedance);
+    let rb = positive("breakdown_resistance", "ohm", wire.breakdown_resistance);
+    let max_current = resolve_rating(part_ref, "ratings.current", "A", wire.ratings.current, out);
+    let max_power = resolve_rating(part_ref, "ratings.power", "W", wire.ratings.power, out);
+    let mut rejected = false;
+    let mut breakdown = None;
+    if let (Some(is), Some(n), Some(rs), Some(vz), Some(izt), Some(zzt), Some(rb)) =
+        (&is, &n, &rs, &vz, &izt, &zzt, &rb)
+    {
+        if let Err(fault) = junction_scale(n.si.get(), is.si.get()) {
+            rejected = true;
+            out.push(Diagnostic::NetlistValue {
+                part: part_ref.clone(),
+                field: fault.field("emission_coefficient").into(),
+                value: fault.value(n.si.get(), is.si.get()),
+                rule: ValueRule::FiniteJunction,
+            });
+        }
+        let series = rs.si.get() + rb.si.get();
+        let resistance_ok = zzt.si.get() > series;
+        let drop_ok = vz.si.get() > izt.si.get() * series;
+        if !resistance_ok {
+            rejected = true;
+            out.push(Diagnostic::NetlistValue {
+                part: part_ref.clone(),
+                field: "zener_impedance".into(),
+                value: zzt.si.get(),
+                rule: ValueRule::AboveResistance,
+            });
+        }
+        if !drop_ok {
+            rejected = true;
+            out.push(Diagnostic::NetlistValue {
+                part: part_ref.clone(),
+                field: "zener_voltage".into(),
+                value: vz.si.get(),
+                rule: ValueRule::AboveDrop,
+            });
+        }
+        if resistance_ok && drop_ok {
+            match breakdown_scale(
+                rs.si.get(),
+                rb.si.get(),
+                vz.si.get(),
+                izt.si.get(),
+                zzt.si.get(),
+            ) {
+                Ok(found) => breakdown = Some(found),
+                Err(fault) => {
+                    rejected = true;
+                    let value = match fault {
+                        BreakdownFault::Impedance => zzt.si.get(),
+                        BreakdownFault::Voltage => vz.si.get(),
+                    };
+                    out.push(Diagnostic::NetlistValue {
+                        part: part_ref.clone(),
+                        field: fault.field().into(),
+                        value,
+                        rule: ValueRule::FiniteJunction,
+                    });
+                }
+            }
+        }
+    }
+    if rejected {
+        return None;
+    }
+    Some(Zener {
+        pins: pins?,
+        saturation_current: is?,
+        emission_coefficient: n?,
+        series_resistance: rs?,
+        zener_voltage: vz?,
+        zener_current: izt?,
+        zener_impedance: zzt?,
+        breakdown_resistance: rb?,
+        breakdown: breakdown?,
         max_current: max_current?,
         max_power: max_power?,
     })

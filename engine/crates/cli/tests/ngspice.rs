@@ -101,7 +101,9 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "rl-step",
             "v-pulse-rc",
             "v-serial",
-            "v-steps"
+            "v-steps",
+            "zener-shunt",
+            "zener-sweep"
         ]
     );
     for example in examples() {
@@ -122,7 +124,9 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
 /// so its drain current is the drain-source gmin. `npn-slow-edge` drives the junction
 /// capacitors through 1 Mohm, and `nmos-pulse` does the same for the gate capacitances, slow
 /// next to the deck's ramp. `nmos-regions` biases the drain through reverse, linear and saturation.
-/// `nmos-follower` holds the source off ground. `p-relay-npn-bare` has a `rows-skipped`
+/// `nmos-follower` holds the source off ground. `zener-forward`, `zener-reverse`,
+/// `zener-breakdown` and `zener-overload` hold the fitted zener forward, below the knee,
+/// at its test current, and past both ratings. `p-relay-npn-bare` has a `rows-skipped`
 /// file. `relay.rs` checks its collector envelope and its release. The rows are not compared.
 #[test]
 fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
@@ -156,7 +160,11 @@ fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "pnp-held-off",
             "pnp-nf-nr",
             "pnp-off",
-            "pnp-reverse"
+            "pnp-reverse",
+            "zener-breakdown",
+            "zener-forward",
+            "zener-overload",
+            "zener-reverse"
         ]
     );
     for fixture in fixtures {
@@ -392,6 +400,10 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
         let stored: BTreeSet<_> = spans.keys().cloned().collect();
         assert_eq!(stored, compared.checked, "{label}: stored spans");
     }
+    eprintln!("{label} span error:");
+    for line in &compared.report {
+        eprintln!("{line}");
+    }
     assert!(
         !compared.failed,
         "{label} span error:\n{}",
@@ -564,8 +576,7 @@ impl SpanCheck<'_> {
             .map(|&t| (interpolate(engine_t, got, t) - interpolate(reference_t, wanted, t)).abs())
             .fold(0.0, f64::max);
         self.failed |= error > 1e-3 * span + floor(key);
-        self.report
-            .push(format!("{key} error {error:e} span {span:e}"));
+        self.report.push(format!("{key} error {error} span {span}"));
         self.checked.insert(key.to_string());
     }
 }

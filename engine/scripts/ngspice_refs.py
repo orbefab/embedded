@@ -37,6 +37,7 @@ fixture. Its rows are not stored. A fixture without that file keeps its rows.
 
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -95,6 +96,8 @@ CHIP_TMAX = 400_000
 CHIP_GRID = 2_000
 # The engine's conductance from every net to ground.
 ENGINE_GMIN = 1e-12
+# k*T/q at 298.15 K, the same product as Junction::VT.
+VT = 1.380649e-23 * 298.15 / 1.602176634e-19
 # The engine's first step after a contact edge or a source jump. The Rust test pins both.
 EDGE_RAMP_PS = 1000
 # Knots strictly before the stop, including the one at t = 0. This bounds the
@@ -629,6 +632,7 @@ PIN_ORDER = {
     "current_source": ("p", "n"),
     "diode": ("anode", "cathode"),
     "led": ("anode", "cathode"),
+    "zener": ("anode", "cathode"),
     "npn": ("collector", "base", "emitter"),
     "pnp": ("collector", "base", "emitter"),
     "nmos": ("drain", "gate", "source"),
@@ -702,9 +706,10 @@ def translate_shape(title, netlist):
         raise Skip("a transient deck reserves names starting with ctl_, bp or x_")
     transistors = any(p.get("kind") in TRANSISTORS for p in parts)
     coils = transient and has_inductor(netlist)
-    junctions = any(p.get("kind") in ("diode", "led") for p in parts)
-    if (transistors or has_inductor(netlist)) and any(n.lower().startswith("x_") for n in names):
-        raise Skip("a deck with a transistor or an inductor reserves names starting with x_")
+    zeners = any(p.get("kind") == "zener" for p in parts)
+    junctions = any(p.get("kind") in ("diode", "led", "zener") for p in parts)
+    if (transistors or has_inductor(netlist) or zeners) and any(n.lower().startswith("x_") for n in names):
+        raise Skip("a deck with a transistor, an inductor or a zener reserves names starting with x_")
 
     def node(net):
         return "0" if net == ground else net.lower()
@@ -751,6 +756,28 @@ def translate_shape(title, netlist):
             lines.append(f"i{name} {n} {p} {source_value(part['current'], transient, corners)}")
             saves.append(f"@i{name}[current]")
             mapping[f"i(@i{name}[current])"] = Negated(ref)
+        elif kind == "zener":
+            # Rs from the anode to x_<name>, the forward diode from there to the cathode,
+            # Rb from x_<name>_b to the cathode, and the breakdown diode from x_<name>_b
+            # back to x_<name>. #.i is the series resistor's current. The internal nodes
+            # are not shunted: the engine puts no node gmin on them.
+            anode, cathode = (node(net) for net in pin_list)
+            inner = f"x_{name}"
+            knee = f"x_{name}_b"
+            isb, nbv = zener_breakdown(part)
+            lines.append(f"rx_{name}_s {anode} {inner} {number(part['series_resistance'])}")
+            lines.append(f"dx_{name}_f {inner} {cathode} dmodf_{name}")
+            lines.append(f"rx_{name}_b {knee} {cathode} {number(part['breakdown_resistance'])}")
+            lines.append(f"dx_{name}_b {knee} {inner} dmodb_{name}")
+            lines.append(
+                f".model dmodf_{name} d (is={number(part['saturation_current'])} "
+                f"n={number(part['emission_coefficient'])})"
+            )
+            lines.append(f".model dmodb_{name} d (is={isb!r} n={nbv!r})")
+            saves.append(f"@rx_{name}_s[i]")
+            mapping[f"i(@rx_{name}_s[i])"] = ref
+            mapping[f"v({inner})"] = None
+            mapping[f"v({knee})"] = None
         elif kind in ("diode", "led"):
             lines.append(f"d{name} {pins} dmod_{name}")
             params = (
@@ -978,6 +1005,19 @@ def initial_condition(part, ground, node, transient):
     if a == ground and b != ground:
         return f".ic v({node(b)})={-volts!r}"
     raise Skip("a held capacitor needs exactly one pin on ground")
+
+
+def zener_breakdown(part):
+    """Isb and NBV from the same formulas the engine derives at parse time."""
+    rs = float(part["series_resistance"]["value"])
+    rb = float(part["breakdown_resistance"]["value"])
+    vz = float(part["zener_voltage"]["value"])
+    izt = float(part["zener_current"]["value"])
+    zzt = float(part["zener_impedance"]["value"])
+    nbvt = (zzt - rs - rb) * izt
+    bvj = vz - izt * (rs + rb)
+    isb = izt / math.expm1(bvj / nbvt)
+    return isb, nbvt / VT
 
 
 def number(value):

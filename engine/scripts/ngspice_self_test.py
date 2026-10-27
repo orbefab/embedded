@@ -187,7 +187,7 @@ def self_test(refs):
             "part": bjt("q1", "npn", "x_q1_c", "a", "gnd"),
             "commit": [],
             "exit": 0,
-            "reason": "a deck with a transistor or an inductor reserves names starting with x_",
+            "reason": "a deck with a transistor, an inductor or a zener reserves names starting with x_",
             "failure": None,
         },
         {
@@ -287,6 +287,7 @@ def self_test(refs):
     cases.append(source_jump_times(refs))
     cases.append(potentiometer_deck(refs))
     cases.append(diode_deck(refs))
+    cases.append(zener_deck(refs))
     cases.append(transistor_deck(refs))
     cases.append(nmos_deck(refs))
     cases.append(inductor_deck(refs))
@@ -918,6 +919,64 @@ def diode_deck(refs):
     text, _ = refs.translate("diode", transient)
     ok = ok and all(line in text.splitlines() for line in want[2:])
     return {"name": "diode deck", "ok": ok}
+
+
+def zener_deck(refs):
+    """Two diodes and two resistors, shunts on the external nets only, and #.i on the series resistor."""
+    import math
+
+    part = {
+        "name": "DZ1",
+        "kind": "zener",
+        "pins": {"anode": "a", "cathode": "c"},
+        "saturation_current": {"value": 1e-14},
+        "emission_coefficient": {"value": 1.0},
+        "series_resistance": {"value": 1.0},
+        "zener_voltage": {"value": 5.0},
+        "zener_current": {"value": 0.05},
+        "zener_impedance": {"value": 10.0},
+        "breakdown_resistance": {"value": 4.0},
+    }
+    netlist = {
+        "analysis": {"op": {}},
+        "ground": "gnd",
+        "nets": ["gnd", "a", "c"],
+        "parts": [part],
+    }
+    text, mapping = refs.translate("zener", netlist)
+    rs = 1.0
+    rb = 4.0
+    vz = 5.0
+    izt = 0.05
+    zzt = 10.0
+    nbvt = (zzt - rs - rb) * izt
+    isb = izt / math.expm1((vz - izt * (rs + rb)) / nbvt)
+    nbv = nbvt / refs.VT
+    want = [
+        "rx_dz1_s a x_dz1 1.0",
+        "dx_dz1_f x_dz1 c dmodf_dz1",
+        "rx_dz1_b x_dz1_b c 4.0",
+        "dx_dz1_b x_dz1_b x_dz1 dmodb_dz1",
+        ".model dmodf_dz1 d (is=1e-14 n=1.0)",
+        f".model dmodb_dz1 d (is={isb!r} n={nbv!r})",
+        "* The engine's gmin on every node, beside the gmin ngspice puts across each junction.",
+        "rx_gmin_a a 0 1000000000000.0",
+        "rx_gmin_c c 0 1000000000000.0",
+    ]
+    lines = text.splitlines()
+    ok = lines[2 : 2 + len(want)] == want
+    ok = ok and "rx_gmin_x_dz1" not in text
+    ok = ok and mapping["i(@rx_dz1_s[i])"] == "#DZ1.i"
+    ok = ok and mapping["v(x_dz1)"] is None and mapping["v(x_dz1_b)"] is None
+    reserved = dict(netlist, nets=["gnd", "a", "x_dz1"])
+    reserved["parts"] = [dict(part, pins={"anode": "a", "cathode": "x_dz1"})]
+    try:
+        refs.translate("zener", reserved)
+    except refs.Skip as skip:
+        ok = ok and str(skip) == "a deck with a transistor, an inductor or a zener reserves names starting with x_"
+    else:
+        ok = False
+    return {"name": "zener deck", "ok": ok}
 
 
 def transistor_deck(refs):
