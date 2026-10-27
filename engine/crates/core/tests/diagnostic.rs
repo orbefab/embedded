@@ -391,6 +391,7 @@ fn a_value_message_uses_the_same_characters_as_data_value() {
         ValueRule::FiniteJunction,
         ValueRule::BounceRoom,
         ValueRule::NonNegative,
+        ValueRule::BelowOne,
         ValueRule::AboveResistance,
         ValueRule::AboveDrop,
     ] {

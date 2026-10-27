@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! ref      = "#" ( "net." name | name [ "." ( quantity | "pin." name | "logic." name ) ] )
-//! quantity = "ib" | "ic" | "id" | "i" | "v" | "p"
+//! quantity = "ib" | "ic" | "id" | "iin" | "iout" | "i" | "v" | "p"
 //! name     = ASCII letter, then ASCII letters, digits or "_"; 1..=64 bytes
 //! ```
 
@@ -56,12 +56,15 @@ impl Name {
 /// `i` enters at the first pin, `v` is V(first) - V(second), and `p = v * i`
 /// is absorbed power, so a source that delivers power reads negative.
 /// A BJT's `ib` and `ic` enter at its base and collector. A MOSFET's `id` enters at its drain.
+/// A linear regulator's `iin` enters at `in` and its `iout` enters at `out`.
 /// `p` is the power entering at every pin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Quantity {
     Ib,
     Ic,
     Id,
+    Iin,
+    Iout,
     I,
     V,
     P,
@@ -73,6 +76,8 @@ impl Quantity {
             Quantity::Ib => "ib",
             Quantity::Ic => "ic",
             Quantity::Id => "id",
+            Quantity::Iin => "iin",
+            Quantity::Iout => "iout",
             Quantity::I => "i",
             Quantity::V => "v",
             Quantity::P => "p",
@@ -149,6 +154,8 @@ impl FromStr for Ref {
                 "ib" => Quantity::Ib,
                 "ic" => Quantity::Ic,
                 "id" => Quantity::Id,
+                "iin" => Quantity::Iin,
+                "iout" => Quantity::Iout,
                 "i" => Quantity::I,
                 "v" => Quantity::V,
                 "p" => Quantity::P,

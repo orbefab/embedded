@@ -403,7 +403,21 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
         ]);
         assert_eq!(code, 0, "{stdout}");
         assert!(stderr.is_empty(), "{stderr}");
-        assert_eq!(json(&stdout)["diagnostics"], serde_json::json!([]));
+        let doc = json(&stdout);
+        let found = codes_and_refs(&doc);
+        if name == "regulator-load-step" {
+            assert_eq!(
+                found,
+                vec![
+                    ("rating.current".to_string(), "#u1.iout".to_string()),
+                    ("rating.power".to_string(), "#u1.p".to_string()),
+                ],
+                "{name}: {}",
+                doc["diagnostics"]
+            );
+        } else {
+            assert!(found.is_empty(), "{name}: {}", doc["diagnostics"]);
+        }
         transient_folder(&name, &out);
         let _ = fs::remove_dir_all(&out);
     }

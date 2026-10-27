@@ -244,6 +244,13 @@ pub(crate) struct System {
 }
 
 impl System {
+    /// The stamped coefficient of column `col` on row `row`. Tests read the regulator's input column.
+    #[cfg(test)]
+    pub(crate) fn term(&self, row: usize, col: usize) -> f64 {
+        let n = self.b.len();
+        self.a.entries()[row * n + col]
+    }
+
     /// Empty storage. `reset` loads `gmin` before each stamp.
     pub(crate) fn new(layout: &Layout) -> System {
         System {
@@ -444,7 +451,8 @@ pub(crate) struct Stamp<'a> {
     pub(crate) sys: &'a mut System,
     pub(crate) layout: &'a Layout,
     pub(crate) part: PartId,
-    /// Read only through `junction`, so a stamp that reads the iterate calls it by name.
+    /// Read through `junction` or `prior`. A stamp that linearises at the last solution
+    /// calls `prior` by name.
     iterate: &'a Iterate,
     pub(crate) conditions: &'a Conditions<'a>,
 }
@@ -483,6 +491,11 @@ impl<'a> Stamp<'a> {
             part: self.part,
             x,
         }
+    }
+
+    /// The last solution. A branch law linearised here is not the law at the zero start.
+    pub(crate) fn prior(&self) -> Probe<'_> {
+        self.probe(&self.iterate.solution)
     }
 
     /// The limited voltage of this part's junction `k`, from the iterate.

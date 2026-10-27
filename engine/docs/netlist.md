@@ -385,6 +385,60 @@ The device is at 25 C, 298.15 K. There is no temperature field, no `VZ` temperat
 
 `examples/zener-shunt` is 9 V through 100 ohm into the zener, with a 1 kohm load. The cathode sits at 4.996963715824736 V and the zener current is -0.03503339912093094 A. `examples/zener-sweep` steps a pin from -2 V to 12 V in 0.25 V levels, one per millisecond, through 220 ohm into the cathode, and accepts 190 steps after t = 0. The rows pass through forward, reverse below the knee, the knee and breakdown.
 
+### Linear regulator
+
+`kind` is `linear_regulator`. Pins are `in`, `out` and `gnd`.
+
+The part is one branch. `i` is the pass current from `in` to `out`. `vi` is `V(in) - V(gnd)` and `vo` is `V(out) - V(gnd)`.
+
+```text
+vset = Vout + k * (vi - Vout)
+a    = vset - Ro * i
+raw  = vi - Vdo - Rdo * i
+b    = -Rf * i + s * sp((raw + Rf * i) / s)
+vo   = smin(a, b) - Rlim * d * sp((i - Ilim) / d) + Rblk * db * sp(-i / db)
+ig   = (Iq + r * i) * h(vi / Vdo)
+```
+
+`sp(x)` is `ln(1 + e^x)`, written as `x + ln(1 + e^-x)` when `x` is positive, so the exponential's argument stays at or below 0. `smin(a, b)` is `a - s * sp((a - b) / s)`. `b` is that same smooth maximum of `raw` and `-Rf * i`. `h(x)` is 0 at and below 0, `3x^2 - 2x^3` from 0 to 1, and 1 at and above 1. `ln` and `exp` come from `libm`.
+
+`s` is 1e-3 V, the width of the smooth maximum and of the dropout knee. `Rf` is 0.25 ohm. `db/di` stays between `-Rf` and `-Rdo`, and `db/dvi` stays between 0 and 1. Below the ground pin the softplus of `raw` alone underflows to 0, and the floor keeps a slope of `-Rf`. With the input at the ground pin and no load, `b` is 0. A load that draws pass current `i` then sits near `-Rf * i`, which is below the pin. A current source of 0.5 A from `out` to `gnd`, with the input held at 0 V, solves at -0.12499999999996891 V. A 10 us trapezoidal run of `examples/regulator-load-step` stops when the floor is 0.15 ohm, at 1.21482e-09 s on `vx_u1#branch`, and finishes when the floor is 0.2 ohm. A floor of 0.25 ohm finishes that run, the same deck with 100 uF on the output, the same deck stepping the input to 4 V, and the same deck with a 1 ohm dropout resistance. `d` is `1e-3 * Ilim`. `Rlim` is `100 * Vout / Ilim`, so a short sits about 1% above `Ilim`. `Rblk` is 1e9 ohm and `db` is 1e-12 A, so a reverse current stays under a nanoamp per volt. These numbers are constants of the law. They are not fields.
+
+`iin` is `i + ig`, the current entering `in`. `iout` is `-i`, the current entering `out`. The ground pin takes `-ig`. `p` is `vi * iin + vo * iout`.
+
+The stamp reads the last solution, because the row is the law linearised at that current and that `vi`. The first linearisation, from a zero start, is not the operating point, and the solve iterates on it. The part has no junction, so it takes no `pnjlim` and no limiting. Convergence compares the solved `vo` with the law at the solved `i` and `vi`.
+
+`in` joins `gnd`, and `out` joins `gnd`. Both are DC paths. A capacitor on the input and a capacitor on the output, with nothing else, are not `net.floating`.
+
+| Field | Symbol | Unit |
+| --- | --- | --- |
+| `output_voltage` | `Vout` | `V` |
+| `line_regulation` | `k` | `1` |
+| `output_resistance` | `Ro` | `ohm` |
+| `dropout_voltage` | `Vdo` | `V` |
+| `dropout_resistance` | `Rdo` | `ohm` |
+| `current_limit` | `Ilim` | `A` |
+| `quiescent_current` | `Iq` | `A` |
+| `ground_current_ratio` | `r` | `1` |
+
+`output_voltage`, `output_resistance`, `dropout_voltage`, `dropout_resistance` and `current_limit` must be greater than 0, and each reciprocal must be finite. `line_regulation` must be at least 0 and below 1. A value outside that is `netlist.value` with rule `below_one`. `quiescent_current` and `ground_current_ratio` must be at least 0. A negative value is `netlist.value` with rule `non_negative`.
+
+`ratings` holds `current` and `power`. `current` bounds `|iout|`.
+
+The law is the DC table. It has no internal pole and no output inductance. It has no enable pin and no input-voltage rating. It has no diode from `out` to `in`. A circuit that needs that diode adds a `diode` part. The current limit is flat. There is no thermal shutdown, and a `power` rating warns instead. `ig` follows `h` and does not add a further rise in dropout. There is no minimum load. Ripple from the input reaches the output through the static `k`.
+
+`scripts/fit_regulator.py` fits the LM1117-3.3 row of TI LM1117, SNOS412Q. `output_voltage` is 3.3 V, the p5 typical at 10 mA and VIN 5 V. `line_regulation` is `0.001 / 10.25` = 9.75609756097561e-05, the p5 typical of 1 mV from 4.75 V to 15 V at 0 mA. `output_resistance` is `0.001 / 0.8` = 0.00125 ohm, the p5 typical of 1 mV from 0 to 800 mA at VIN 4.75 V. `dropout_resistance` is `0.1 / 0.7` = 0.14285714285714288 ohm and `dropout_voltage` is 1.0857142857142859 V, the line through the p6 typicals of 1.10 V at 100 mA and 1.20 V at 800 mA. `current_limit` is 1.2 A, the p6 typical at a 5 V differential. `quiescent_current` is 0.005 A, the p6 LM1117-3.3 typical. The maximum on that row is 10 mA, at VIN of at most 15 V, and the model uses the typical. `ground_current_ratio` is 0. The p6 table gives no load term, and the model holds the ground current at 5 mA wherever `h` is 1. `ratings.current` is 0.8 A, the p1 output current, which is also the top of the p5 load-regulation range from 0 to 800 mA. `ratings.power` is `(125 - 25) / 61.6` = 1.6233766233766234 W. Section 7.3's recommended junction limit is 125 C and section 7.4's SOT-223 RθJA is 61.6 C/W. The ambient in that figure is 25 C. Section 7.1's absolute junction limit is 150 C, which would be 2.029220779220779 W. The rating uses 125 C.
+
+Note 3 on p5 measures line and load regulation at constant junction room temperature. The fit uses that table. Figure 7-1 at 25 C reads about 1.0 V at no load and about 1.17 V at 800 mA. Figure 7-3 reads about -0.2% for an 800 mA step at 25 C, which is 6.6 mV at 3.3 V. The figures do not name the version.
+
+The script's law, with the output's gmin carrying the no-load current, gives 3.3001533536585366 V at 10 mA and 5 V, inside the p5 window of 3.267 V to 3.333 V. Line regulation from 4.75 V to 15 V is 0.0009999644533134067 V. Load regulation from no load to 800 mA at 4.75 V is 0.0010362129392489372 V, 36 uV over the 1 mV typical, inside 0.1 mV. From 100 mA to 800 mA it is 0.0008749999999997371 V. Dropout by note 4, a 100 mV drop from the value at 4.8 V, is 1.1 V at 100 mA, 1.1571428571428575 V at 500 mA and 1.2000000000000002 V at 800 mA. The 500 mA point is the one the line does not use. The table says 1.15 V, so the model is 0.007142857142857562 V high. A short at a 5 V differential draws 1.2119950393315033 A, inside the p6 window of 0.8 A to 1.5 A. The ground current at 5 V is 0.005 A.
+
+Figure 7-8 is captioned for the LM1117-5.0. It prints CIN and COUT of 10 uF tantalum, VIN of 6.5 V, a 0.1 A preload, and a step from 0.1 A to 0.5 A. The dip read from that figure for the ratio is 0.14 V. This model's 0.5 A step on 10 uF moves the output by `Ro` times the step, 0.000625 V. The ratio of that reading to the model's step is 224.00000000000003, and 280.0 per ampere. The gap is 2.35 orders of magnitude. The 0.14 V depth, the recovery, and an inductance read off that dip are readings of the 5.0 V figure.
+
+The AMS1117 states dropout at a 1% drop. At 3.3 V that is 33 mV. SNOS412Q note 4 is a 100 mV drop. The two 1.1 V numbers are different measurements. This fit uses the 100 mV definition, and it does not fit the AMS1117.
+
+`examples/regulator-3v3` is 5 V into 33 ohm. The output sits at 3.300040852111104 V, `#u1.iout` is -0.10000123794606076 A and `#u1.iin` is 0.10500123794606077 A. `examples/regulator-dropout` steps the input from 0 V to 6 V in 0.1 V levels, one per millisecond, into 33 ohm. The rows pass through off, dropout, the knee and regulation. At 12 ms the input is 1.1 V and `#net.vout` is 0.014224138525133514 V, which is 5.798777846788283e-10 V above the unfloored reference 0.01422413794525573 V. At 13 ms the input is 1.2 V and `#net.vout` is 0.11379310344825949 V, which is 1.421500417375654e-11 V below the unfloored reference 0.1137931034624745 V. `examples/regulator-load-step` steps 5 V on at 1 ns, with 10 uF on the output, a 330 ohm preload, and a switch that adds 6.6 ohm from 1 ms to 3 ms. It accepts 300 steps after t = 0. The same capacitor, preload and switch, fed by an ideal 3.3 V source that is already at 3.3 V, accepts 80. The charge from 0 to 40 us takes 37 of the 300, and the window from 28 us to 40 us takes 4. The 100 us after the two load edges take 178 together. Two steps last 1 ns. Between 40 us and the first load edge the largest reversal of `#net.vout` is 3.688149829983445e-8 V. Ten times `output_resistance` accepts 273 steps, and a tenth accepts 967. The charge current is about 1.21 A, so the run warns `rating.current` and `rating.power`. The fixture `regulator-c100u` is that circuit with 100 uF on the output and the load step's `grid_ps` of 10 us. `regulator-step-4v` is that circuit with the input stepping to 4 V and `grid_ps` of 20 us. `regulator-rdo-1` is that circuit with `dropout_resistance` of 1 ohm, `dropout_voltage` of 0.1 V and `grid_ps` of 10 us. Their references use the same trapezoidal options as the load step.
+
 ### NPN and PNP transistors
 
 `kind` is `npn` or `pnp`. Both take the same fields and solve the same equations. The kind is the polarity. Pins are `collector`, `base` and `emitter`, in SPICE order.
@@ -763,6 +817,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | --- | --- | --- |
 | `resistor` | `power` | `#<part>.p` |
 | `diode`, `led`, `zener` | `current`, `power` | `#<part>.i`, `#<part>.p` |
+| `linear_regulator` | `current`, `power` | `#<part>.iout`, `#<part>.p` |
 | `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
 | `nmos` | `current`, `power` | `#<part>.id`, `#<part>.p` |
 | `voltage_source`, `current_source`, `capacitor`, `inductor`, `relay`, `switch`, `ne555`, `atmega328p`, `potentiometer` | none | |
@@ -815,6 +870,8 @@ For a bipolar transistor, `ib` is the current entering the base pin and `ic` the
 
 For an `nmos`, `id` is the current entering the drain pin. It includes the drain-source capacitor and the gate-drain capacitor. `p` is `(V(drain) - V(source)) * id + (V(gate) - V(source)) * ig`, where `ig` is the current entering the gate pin. The gate current is not a separate ref. At DC the capacitors are open, so `ig` is 0 and `p` is `(V(drain) - V(source)) * id`. An `nmos` has no `v` and no internal node. On `examples/nmos-led`, `#m1.id` and `#m1.p` are positive.
 
+A linear regulator has no `i` and no `v`. `iin` is the current entering `in` and `iout` is the current entering `out`. While the part supplies a load, `iout` is negative. `p` is `(V(in) - V(gnd)) * iin + (V(out) - V(gnd)) * iout`. On `examples/regulator-3v3`, `#u1.iout` is negative and `#u1.p` is positive.
+
 A potentiometer has no `i`, `v`, or `p`. Its pins and nets are observed as every part's are.
 
 ## Refs
@@ -823,7 +880,7 @@ A ref names one net, part, pin, quantity, or logic signal.
 
 ```text
 ref      = "#" ( "net." name | name [ "." ( quantity | "pin." name | "logic." name ) ] )
-quantity = "ib" | "ic" | "id" | "i" | "v" | "p"
+quantity = "ib" | "ic" | "id" | "iin" | "iout" | "i" | "v" | "p"
 ```
 
 | Text | Meaning |
@@ -838,6 +895,8 @@ quantity = "ib" | "ic" | "id" | "i" | "v" | "p"
 | `#q1.ib` | Base current of transistor `q1` |
 | `#q1.ic` | Collector current of transistor `q1` |
 | `#m1.id` | Drain current of MOSFET `m1` |
+| `#u1.iin` | Current entering `in` of regulator `u1` |
+| `#u1.iout` | Current entering `out` of regulator `u1` |
 | `#u1.logic.out` | Logic level of signal `out` of chip `u1` |
 | `#k1.logic.contact` | Logic level of the contact of relay `k1` |
 
@@ -850,4 +909,4 @@ These texts parse and format back to the same text. The following texts are reje
 
 `#net.vout` is a net. `#net` is a part named `net`. `#u1.logic.out` is the level the chip drives on OUT, and `#u1.pin.out` is the pin itself. An NE555's signals are `out`, `reset`, `thres`, and `trig`. A relay's one signal is `contact`, high while the contact is closed. An ATmega328P's are named for its package pins: `PB0` to `PB5`, `PC0` to `PC6`, and `PD0` to `PD7`, each the level that pin reads, and `VCC` while `BODLEVEL` enables brown-out, the level its brown-out detector reads on the supply. `PB6` and `PB7` hold the crystal and have none. `#u1.logic.PB5` is the level PB5 reads, and `#u1.pin.PB5` is the pin itself.
 
-Map keys and diagnostic order use this order: nets, then parts, then pins, then quantities, then logic signals. Quantities sort `ib`, `ic`, `i`, `v`, then `p`. Names sort by byte order inside one group.
+Map keys and diagnostic order use this order: nets, then parts, then pins, then quantities, then logic signals. Quantities sort `ib`, `ic`, `id`, `iin`, `iout`, `i`, `v`, then `p`. Names sort by byte order inside one group.

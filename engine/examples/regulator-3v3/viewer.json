@@ -1,0 +1,14 @@
+{
+  "version": 0,
+  "parts": {
+    "v1": {
+      "model": "placeholder:dc-supply"
+    },
+    "rl": {
+      "model": "placeholder:resistor-axial"
+    },
+    "u1": {
+      "model": "placeholder:sot-223"
+    }
+  }
+}

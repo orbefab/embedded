@@ -224,6 +224,8 @@ pub enum Model {
     Led(Junction),
     /// A forward junction and a breakdown junction. See [`Zener`].
     Zener(Zener),
+    /// A static linear regulator. See [`LinearRegulator`].
+    LinearRegulator(LinearRegulator),
     Npn(Bjt),
     /// The same device equations as `Npn`, with every junction voltage and pin current negated.
     Pnp(Bjt),
@@ -248,6 +250,7 @@ impl Model {
             Model::VoltageSource(_) => &VoltageSource::PINS,
             Model::CurrentSource(_) => &CurrentSource::PINS,
             Model::Diode(_) | Model::Led(_) | Model::Zener(_) => &Junction::PINS,
+            Model::LinearRegulator(_) => &LinearRegulator::PINS,
             Model::Npn(_) | Model::Pnp(_) => &Bjt::PINS,
             Model::Nmos(_) => &Mosfet::PINS,
             Model::Capacitor(_) => &Capacitor::PINS,
@@ -261,7 +264,8 @@ impl Model {
 
     /// The quantities a run observes on this part, in `Quantity` order. A two-pin part has
     /// `i`, `v` and `p`, and so does a relay, of its coil. A BJT has `ib`, `ic` and `p`. An `nmos`
-    /// has `id` and `p`. A chip and a potentiometer have none.
+    /// has `id` and `p`. A linear regulator has `iin`, `iout` and `p`. A chip and a potentiometer
+    /// have none.
     pub fn quantities(&self) -> &'static [Quantity] {
         match self {
             Model::Resistor(_)
@@ -274,18 +278,20 @@ impl Model {
             | Model::Inductor(_)
             | Model::Relay(_)
             | Model::Switch(_) => &[Quantity::I, Quantity::V, Quantity::P],
+            Model::LinearRegulator(_) => &[Quantity::Iin, Quantity::Iout, Quantity::P],
             Model::Npn(_) | Model::Pnp(_) => &[Quantity::Ib, Quantity::Ic, Quantity::P],
             Model::Nmos(_) => &[Quantity::Id, Quantity::P],
             Model::Potentiometer(_) | Model::Chip(_) => &[],
         }
     }
 
-    /// The quantity a rating of `kind` bounds by magnitude. A current rating bounds `ic` on a
-    /// BJT, `id` on an `nmos`, and `i` on every other part.
+    /// The quantity a rating of `kind` bounds by magnitude. A current rating bounds `iout` on a
+    /// linear regulator, `ic` on a BJT, `id` on an `nmos`, and `i` on every other part.
     pub fn rated(&self, kind: RatingKind) -> Quantity {
         match (kind, self) {
             (RatingKind::Current, Model::Npn(_) | Model::Pnp(_)) => Quantity::Ic,
             (RatingKind::Current, Model::Nmos(_)) => Quantity::Id,
+            (RatingKind::Current, Model::LinearRegulator(_)) => Quantity::Iout,
             (RatingKind::Current, _) => Quantity::I,
             (RatingKind::Power, _) => Quantity::P,
         }
@@ -299,6 +305,7 @@ impl Model {
             Model::CurrentSource(c) => &c.pins,
             Model::Diode(j) | Model::Led(j) => &j.pins,
             Model::Zener(z) => &z.pins,
+            Model::LinearRegulator(r) => &r.pins,
             Model::Npn(b) | Model::Pnp(b) => &b.pins,
             Model::Nmos(m) => &m.pins,
             Model::Capacitor(c) => &c.pins,
@@ -324,6 +331,7 @@ impl Model {
             | Model::Chip(_) => (None, None),
             Model::Diode(j) | Model::Led(j) => (j.max_current.as_ref(), j.max_power.as_ref()),
             Model::Zener(z) => (z.max_current.as_ref(), z.max_power.as_ref()),
+            Model::LinearRegulator(r) => (r.max_current.as_ref(), r.max_power.as_ref()),
             Model::Npn(b) | Model::Pnp(b) => (b.max_current.as_ref(), b.max_power.as_ref()),
             Model::Nmos(m) => (m.max_current.as_ref(), m.max_power.as_ref()),
         };
@@ -343,6 +351,7 @@ impl Model {
             | Model::Diode(_)
             | Model::Led(_)
             | Model::Zener(_)
+            | Model::LinearRegulator(_)
             | Model::Npn(_)
             | Model::Pnp(_)
             | Model::Nmos(_)
@@ -371,6 +380,7 @@ impl Model {
             | Model::Diode(_)
             | Model::Led(_)
             | Model::Zener(_)
+            | Model::LinearRegulator(_)
             | Model::Npn(_)
             | Model::Pnp(_)
             | Model::Nmos(_)
@@ -392,6 +402,7 @@ impl Model {
             | Model::Diode(_)
             | Model::Led(_)
             | Model::Zener(_)
+            | Model::LinearRegulator(_)
             | Model::Npn(_)
             | Model::Pnp(_)
             | Model::Nmos(_)
@@ -413,6 +424,7 @@ impl Model {
             | Model::Diode(_)
             | Model::Led(_)
             | Model::Zener(_)
+            | Model::LinearRegulator(_)
             | Model::Npn(_)
             | Model::Pnp(_)
             | Model::Nmos(_)
@@ -433,6 +445,7 @@ impl Model {
             | Model::Diode(_)
             | Model::Led(_)
             | Model::Zener(_)
+            | Model::LinearRegulator(_)
             | Model::Npn(_)
             | Model::Pnp(_)
             | Model::Nmos(_)
@@ -1123,6 +1136,51 @@ pub struct Mosfet {
 
 impl Mosfet {
     pub const PINS: [&'static str; 3] = ["drain", "gate", "source"];
+}
+
+/// A static linear regulator. The pass branch's voltage falls with its own current.
+/// `in` feeds the pass element and the ground current. `out` is the regulated pin.
+/// `gnd` is the reference for both voltages and the return for the ground current.
+///
+/// `vset = output_voltage + line_regulation * (V(in) - V(gnd) - output_voltage)`.
+/// The regulating line is `vset - output_resistance * i`. The dropout line is
+/// `V(in) - V(gnd) - dropout_voltage - dropout_resistance * i`. The pass voltage
+/// uses the smooth maximum of that line and `-Rf * i`, where `Rf` is a constant
+/// of the law, then the smooth minimum against the regulating line, a current
+/// limit and a reverse block. At no load the floor is the ground pin. A load
+/// that draws current with the input at the pin pulls the output below it.
+/// `i` is the current in the pass branch, from `in` to `out`. The ground current is
+/// `(quiescent_current + ground_current_ratio * i)` times a smooth step of
+/// `(V(in) - V(gnd)) / dropout_voltage`. The constants of that law are in the
+/// engine, not fields.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinearRegulator {
+    /// Nets of pins `in`, `out`, `gnd`.
+    pub pins: [NetId; 3],
+    /// Volt. The output at the line-regulation reference input, at no load.
+    pub output_voltage: Value,
+    /// Unit `1`. The change in the set voltage per volt of input, at least 0 and below 1.
+    pub line_regulation: Value,
+    /// Ohm. The fall of the regulating line per ampere.
+    pub output_resistance: Value,
+    /// Volt. The dropout line's intercept.
+    pub dropout_voltage: Value,
+    /// Ohm. The fall of the dropout line per ampere.
+    pub dropout_resistance: Value,
+    /// Ampere. The pass current the limit holds.
+    pub current_limit: Value,
+    /// Ampere. The ground current at no load, once the input is above `dropout_voltage`.
+    pub quiescent_current: Value,
+    /// Unit `1`. The extra ground current per ampere of pass current. Zero is a constant ground current.
+    pub ground_current_ratio: Value,
+    /// Ampere, greater than 0. Bounds `|iout|`. `None` is an explicit `"current": null`.
+    pub max_current: Option<Value>,
+    /// Watt, greater than 0. `None` is an explicit `"power": null`.
+    pub max_power: Option<Value>,
+}
+
+impl LinearRegulator {
+    pub const PINS: [&'static str; 3] = ["in", "out", "gnd"];
 }
 
 /// A forward junction and a breakdown junction, each with its own series resistance.

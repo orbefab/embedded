@@ -29,6 +29,8 @@ pub enum ValueRule {
     NonNegative,
     /// Not inside `(0, 1)`.
     Fraction,
+    /// Not at least 0 and below 1. Zero is allowed. One is not.
+    BelowOne,
     /// A threshold's `low` is above its `high`.
     AboveHigh,
     /// A relay's `drop_out_current` is at or above its `pull_in_current`.
@@ -471,6 +473,9 @@ impl Diagnostic {
                     ),
                     ValueRule::Fraction => {
                         format!("{part} {field} is {value}; it must be between 0 and 1")
+                    }
+                    ValueRule::BelowOne => {
+                        format!("{part} {field} is {value}; it must be at least 0 and below 1")
                     }
                     ValueRule::AboveHigh => {
                         format!("{part} {field} is {value}; it must not be above high")

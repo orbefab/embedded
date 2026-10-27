@@ -276,7 +276,7 @@ fn a_grid_never_changes_the_run() {
 /// `#net.*` and `*.v` are volts, `*.i` amperes, `*.p` watts.
 fn floor(reference: &Ref) -> f64 {
     match reference.to_string().rsplit_once('.') {
-        Some((_, "i")) => 1e-12,
+        Some((_, "i" | "iin" | "iout")) => 1e-12,
         Some((_, "p")) => 1e-15,
         _ => 1e-9,
     }

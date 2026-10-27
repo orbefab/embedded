@@ -31,7 +31,7 @@ fn json(path: &Path) -> serde_json::Value {
 fn floor(reference: &str) -> f64 {
     if reference.starts_with("#net.") || reference.ends_with(".v") {
         1e-9
-    } else if [".i", ".ib", ".ic", ".id", ".ig"]
+    } else if [".i", ".ib", ".ic", ".id", ".ig", ".iin", ".iout"]
         .iter()
         .any(|end| reference.ends_with(end))
     {
@@ -60,6 +60,8 @@ fn floor_is_one_nanovolt_one_picoampere_or_one_femtowatt() {
     assert_eq!(floor("#q1.ic"), 1e-12);
     assert_eq!(floor("#m1.id"), 1e-12);
     assert_eq!(floor("#m1.ig"), 1e-12);
+    assert_eq!(floor("#u1.iin"), 1e-12);
+    assert_eq!(floor("#u1.iout"), 1e-12);
     assert_eq!(floor("#r1.p"), 1e-15);
 }
 
@@ -96,6 +98,9 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "pnp-load",
             "pnp-sweep",
             "rc-switch",
+            "regulator-3v3",
+            "regulator-dropout",
+            "regulator-load-step",
             "relay-flyback",
             "relay-switch",
             "rl-step",
@@ -126,8 +131,13 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
 /// next to the deck's ramp. `nmos-regions` biases the drain through reverse, linear and saturation.
 /// `nmos-follower` holds the source off ground. `zener-forward`, `zener-reverse`,
 /// `zener-breakdown` and `zener-overload` hold the fitted zener forward, below the knee,
-/// at its test current, and past both ratings. `p-relay-npn-bare` has a `rows-skipped`
-/// file. `relay.rs` checks its collector envelope and its release. The rows are not compared.
+/// at its test current, and past both ratings. `regulator-off-cap` holds the input at 0 V
+/// with only a capacitor on the output. `regulator-c100u` is the load step with 100 uF
+/// on the output. `regulator-step-4v` steps the input to 4 V and sets `grid_ps` to 20 us.
+/// `regulator-rdo-1` uses a 1 ohm dropout resistance and a 0.1 V dropout voltage.
+/// `regulator-ground` draws 0.5 A and sets `ground_current_ratio` to 0.02.
+/// `p-relay-npn-bare` has a `rows-skipped` file. `relay.rs` checks its collector envelope
+/// and its release. The rows are not compared.
 #[test]
 fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
@@ -161,6 +171,18 @@ fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "pnp-nf-nr",
             "pnp-off",
             "pnp-reverse",
+            "regulator-backfeed",
+            "regulator-c100u",
+            "regulator-ground",
+            "regulator-hot",
+            "regulator-limit",
+            "regulator-off",
+            "regulator-off-cap",
+            "regulator-open",
+            "regulator-rdo-1",
+            "regulator-sag",
+            "regulator-short",
+            "regulator-step-4v",
             "zener-breakdown",
             "zener-forward",
             "zener-overload",
@@ -263,11 +285,32 @@ fn check_op(label: &str, reference: &serde_json::Value, done: &Completed) {
 /// engine's, and each waveform must be within 1e-3 of its span at every engine row away from
 /// every edge and jump.
 fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &Completed) {
-    assert!(
-        done.results.diagnostics().is_empty(),
-        "{label}: {:?}",
-        done.results.diagnostics()
-    );
+    let found: Vec<(String, String)> = done
+        .results
+        .diagnostics()
+        .iter()
+        .map(|d| {
+            let refs = d.refs();
+            assert_eq!(refs.len(), 1, "{label}: {d:?}");
+            (d.code().to_string(), refs[0].to_string())
+        })
+        .collect();
+    if label.contains("regulator-load-step")
+        || label.contains("regulator-c100u")
+        || label.contains("regulator-step-4v")
+        || label.contains("regulator-rdo-1")
+    {
+        assert_eq!(
+            found,
+            vec![
+                ("rating.current".to_string(), "#u1.iout".to_string()),
+                ("rating.power".to_string(), "#u1.p".to_string()),
+            ],
+            "{label}"
+        );
+    } else {
+        assert!(found.is_empty(), "{label}: {found:?}");
+    }
     assert_eq!(
         reference["edge_ramp_ps"].as_u64(),
         Some(EDGE_RAMP_PS),
@@ -605,6 +648,19 @@ fn power(
                 let (ib, ic) = (read(&format!("{stem}.ib")), read(&format!("{stem}.ic")));
                 (0..ic.len())
                     .map(|row| (c[row] - e[row]) * ic[row] + (b[row] - e[row]) * ib[row])
+                    .collect()
+            }
+            Model::LinearRegulator(_) => {
+                let [vin, vout, gnd] = [0, 1, 2].map(|k| {
+                    let net = netlist.net_name(model.pins()[k]);
+                    read(&format!("#net.{}", net.as_str()))
+                });
+                let iin = read(&format!("{stem}.iin"));
+                let iout = read(&format!("{stem}.iout"));
+                (0..iin.len())
+                    .map(|row| {
+                        (vin[row] - gnd[row]) * iin[row] + (vout[row] - gnd[row]) * iout[row]
+                    })
                     .collect()
             }
             Model::Nmos(_) => {

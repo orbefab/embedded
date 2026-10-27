@@ -187,7 +187,7 @@ def self_test(refs):
             "part": bjt("q1", "npn", "x_q1_c", "a", "gnd"),
             "commit": [],
             "exit": 0,
-            "reason": "a deck with a transistor, an inductor or a zener reserves names starting with x_",
+            "reason": "a deck with a transistor, an inductor, a zener or a linear regulator reserves names starting with x_",
             "failure": None,
         },
         {
@@ -288,6 +288,7 @@ def self_test(refs):
     cases.append(potentiometer_deck(refs))
     cases.append(diode_deck(refs))
     cases.append(zener_deck(refs))
+    cases.append(regulator_deck(refs))
     cases.append(transistor_deck(refs))
     cases.append(nmos_deck(refs))
     cases.append(inductor_deck(refs))
@@ -973,10 +974,103 @@ def zener_deck(refs):
     try:
         refs.translate("zener", reserved)
     except refs.Skip as skip:
-        ok = ok and str(skip) == "a deck with a transistor, an inductor or a zener reserves names starting with x_"
+        ok = ok and str(skip) == (
+            "a deck with a transistor, an inductor, a zener or a linear regulator reserves names starting with x_"
+        )
     else:
         ok = False
     return {"name": "zener deck", "ok": ok}
+
+
+def regulator_deck(refs):
+    """The branch form, the external shunts, and a real operating point at 1 A and at 1 pA."""
+    part = {
+        "name": "u1",
+        "kind": "linear_regulator",
+        "pins": {"in": "vin", "out": "vout", "gnd": "gnd"},
+        "output_voltage": {"value": 3.3},
+        "line_regulation": {"value": 0.001 / 10.25},
+        "output_resistance": {"value": 0.00125},
+        "dropout_voltage": {"value": 1.1 - 0.1 / 7},
+        "dropout_resistance": {"value": 0.1 / 0.7},
+        "current_limit": {"value": 1.2},
+        "quiescent_current": {"value": 0.005},
+        "ground_current_ratio": {"value": 0.0},
+    }
+
+    def netlist(load):
+        return {
+            "analysis": {"op": {}},
+            "ground": "gnd",
+            "nets": ["gnd", "vin", "vout"],
+            "parts": [
+                {"name": "v1", "kind": "voltage_source", "pins": {"p": "vin", "n": "gnd"}, "voltage": {"value": 5.0}},
+                {"name": "rl", "kind": "resistor", "pins": {"a": "vout", "b": "gnd"}, "resistance": {"value": load}},
+                part,
+            ],
+        }
+
+    text, mapping = refs.translate("regulator", netlist(1.0))
+    lines = text.splitlines()
+    ok = text.count(".func sp(") == 1
+    ok = ok and any(line.startswith("bx_u1_v ") and "smin(" in line and "i(vx_u1)" in line for line in lines)
+    ok = ok and "vx_u1 x_u1 vout dc 0" in lines
+    ok = ok and "fx_u1 vin 0 vx_u1 1" in lines
+    ok = ok and any(line.startswith("bx_u1_g ") for line in lines)
+    ok = ok and "rx_gmin_x_u1" not in text and "rx_gmin_x_u1_g" not in text
+    ok = ok and mapping["i(vx_u1)"] == refs.RegulatorPass("#u1")
+    ok = ok and mapping["i(vx_u1_g)"] == refs.RegulatorGround("#u1")
+    ok = ok and mapping["v(x_u1)"] is None and mapping["v(x_u1_g)"] is None
+    reserved = netlist(1.0)
+    reserved["nets"] = ["gnd", "vin", "x_u1"]
+    reserved["parts"][2] = dict(part, pins={"in": "vin", "out": "x_u1", "gnd": "gnd"})
+    try:
+        refs.translate("regulator", reserved)
+    except refs.Skip as skip:
+        ok = ok and "linear regulator" in str(skip)
+    else:
+        ok = False
+
+    def ran(load):
+        try:
+            (vectors,) = refs.run_ngspice(refs.translate("regulator", netlist(load))[0], ["op.raw"], "regulator")
+        except SystemExit:
+            return None
+        return vectors
+
+    limited = ran(1.0)
+    opened = ran(1e9)
+    ok = ok and limited is not None and opened is not None
+    if limited and opened:
+        ok = ok and 1.15 < limited["v(vout)"][0] < 1.25
+        ok = ok and abs(opened["v(vout)"][0] - 3.300166) < 1e-4
+        ok = ok and abs(opened["i(vx_u1_g)"][0] - 0.005) < 1e-6
+    soft = "\n".join(
+        [
+            ".options temp=25 tnom=25 reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-12",
+            ".func sp(x) {ln(1+exp(-abs(x))) + (x>0 ? x : 0)}",
+            "bhi hi 0 v = sp(1e12)",
+            "blo lo 0 v = sp(-1e12)",
+            "rhi hi 0 1e12",
+            "rlo lo 0 1e12",
+            ".control",
+            "save all",
+            "op",
+            "set filetype=ascii",
+            "write op.raw",
+            ".endc",
+            ".end",
+            "",
+        ]
+    )
+    try:
+        (vectors,) = refs.run_ngspice(soft, ["op.raw"], "softplus")
+    except SystemExit:
+        ok = False
+    else:
+        ok = ok and abs(vectors["v(hi)"][0] - 1e12) / 1e12 < 1e-6
+        ok = ok and abs(vectors["v(lo)"][0]) < 1e-6
+    return {"name": "regulator deck", "ok": ok}
 
 
 def transistor_deck(refs):

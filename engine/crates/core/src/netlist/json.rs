@@ -11,9 +11,9 @@ mod waveform;
 
 use super::{
     Analysis, Basis, Bjt, Bounce, BreakdownFault, Capacitor, Chip, Contact, CurrentSource,
-    Discharge, Edge, Event, Inductor, IntValue, Junction, MIN_GAP_PS, Model, Mosfet, Ne555, NetId,
-    Netlist, OutputStage, Part, Relay, Resistor, Schedule, Source, Switch, Transient, Value,
-    VoltageSource, Zener, bounce, breakdown_scale, junction_scale,
+    Discharge, Edge, Event, Inductor, IntValue, Junction, LinearRegulator, MIN_GAP_PS, Model,
+    Mosfet, Ne555, NetId, Netlist, OutputStage, Part, Relay, Resistor, Schedule, Source, Switch,
+    Transient, Value, VoltageSource, Zener, bounce, breakdown_scale, junction_scale,
 };
 use crate::diagnostic::{AnalysisRule, Diagnostic, ScheduleRule, ValueRule};
 use crate::finite::Finite;
@@ -88,6 +88,7 @@ enum WirePart {
     Diode(WireJunction),
     Led(WireJunction),
     Zener(Box<WireZener>),
+    LinearRegulator(Box<WireLinearRegulator>),
     Npn(Box<WireBjt>),
     Pnp(Box<WireBjt>),
     Nmos(Box<WireMosfet>),
@@ -196,6 +197,22 @@ struct WireJunction {
     saturation_current: WireValue,
     emission_coefficient: WireValue,
     series_resistance: WireValue,
+    ratings: WireJunctionRatings,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireLinearRegulator {
+    name: String,
+    pins: PinMap,
+    output_voltage: WireValue,
+    line_regulation: WireValue,
+    output_resistance: WireValue,
+    dropout_voltage: WireValue,
+    dropout_resistance: WireValue,
+    current_limit: WireValue,
+    quiescent_current: WireValue,
+    ground_current_ratio: WireValue,
     ratings: WireJunctionRatings,
 }
 
@@ -515,6 +532,7 @@ fn resolve_part(
         | WirePart::Inductor { name, .. } => name,
         WirePart::Diode(junction) | WirePart::Led(junction) => &junction.name,
         WirePart::Zener(zener) => &zener.name,
+        WirePart::LinearRegulator(regulator) => &regulator.name,
         WirePart::Npn(bjt) | WirePart::Pnp(bjt) => &bjt.name,
         WirePart::Nmos(mosfet) => &mosfet.name,
         WirePart::Relay(relay) => &relay.name,
@@ -606,6 +624,9 @@ fn resolve_part(
         }
         WirePart::Zener(zener) => {
             resolve_zener(&name, &part_ref, *zener, nets, out).map(Model::Zener)
+        }
+        WirePart::LinearRegulator(regulator) => {
+            resolve_regulator(&name, &part_ref, *regulator, nets, out).map(Model::LinearRegulator)
         }
         WirePart::Npn(bjt) => resolve_bjt(&name, &part_ref, *bjt, nets, out).map(Model::Npn),
         WirePart::Pnp(bjt) => resolve_bjt(&name, &part_ref, *bjt, nets, out).map(Model::Pnp),
@@ -832,6 +853,87 @@ fn resolve_zener(
         breakdown: breakdown?,
         max_current: max_current?,
         max_power: max_power?,
+    })
+}
+
+fn resolve_regulator(
+    name: &Name,
+    part_ref: &Ref,
+    wire: WireLinearRegulator,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<LinearRegulator> {
+    let pins = resolve_pins(name, LinearRegulator::PINS, &wire.pins.0, nets, out);
+    let mut positive =
+        |field: &'static str, unit, value| resolve_value(part_ref, field, unit, true, value, out);
+    let output_voltage = positive("output_voltage", "V", wire.output_voltage);
+    let output_resistance = positive("output_resistance", "ohm", wire.output_resistance);
+    let dropout_voltage = positive("dropout_voltage", "V", wire.dropout_voltage);
+    let dropout_resistance = positive("dropout_resistance", "ohm", wire.dropout_resistance);
+    let current_limit = positive("current_limit", "A", wire.current_limit);
+    let line_regulation = bounded(
+        part_ref,
+        "line_regulation",
+        "1",
+        wire.line_regulation,
+        |number| (number < 0.0 || number >= 1.0).then_some(ValueRule::BelowOne),
+        out,
+    );
+    let quiescent_current = bounded(
+        part_ref,
+        "quiescent_current",
+        "A",
+        wire.quiescent_current,
+        |number| (number < 0.0).then_some(ValueRule::NonNegative),
+        out,
+    );
+    let ground_current_ratio = bounded(
+        part_ref,
+        "ground_current_ratio",
+        "1",
+        wire.ground_current_ratio,
+        |number| (number < 0.0).then_some(ValueRule::NonNegative),
+        out,
+    );
+    let ratings = wire.ratings;
+    let max_current = resolve_rating(part_ref, "ratings.current", "A", ratings.current, out);
+    let max_power = resolve_rating(part_ref, "ratings.power", "W", ratings.power, out);
+    Some(LinearRegulator {
+        pins: pins?,
+        output_voltage: output_voltage?,
+        line_regulation: line_regulation?,
+        output_resistance: output_resistance?,
+        dropout_voltage: dropout_voltage?,
+        dropout_resistance: dropout_resistance?,
+        current_limit: current_limit?,
+        quiescent_current: quiescent_current?,
+        ground_current_ratio: ground_current_ratio?,
+        max_current: max_current?,
+        max_power: max_power?,
+    })
+}
+
+/// A field that is not a positive reciprocal, checked by `rule` after its unit. Zero can be legal.
+fn bounded(
+    part: &Ref,
+    field: &'static str,
+    unit: &'static str,
+    value: WireValue,
+    rule: impl FnOnce(f64) -> Option<ValueRule>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Value> {
+    let number = value.value.get();
+    resolve_value(part, field, unit, false, value, out).and_then(|value| match rule(number) {
+        Some(rule) => {
+            out.push(Diagnostic::NetlistValue {
+                part: part.clone(),
+                field: field.into(),
+                value: number,
+                rule,
+            });
+            None
+        }
+        None => Some(value),
     })
 }
 

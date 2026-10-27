@@ -3,6 +3,7 @@ mod current_source;
 mod inductor;
 mod junction;
 mod potentiometer;
+mod regulator;
 mod resistor;
 mod switch;
 mod transistor;
@@ -89,7 +90,7 @@ impl Device for Model {
             | Model::Potentiometer(_)
             | Model::CurrentSource(_)
             | Model::Switch(_) => Unknowns::default(),
-            Model::VoltageSource(_) => Unknowns {
+            Model::VoltageSource(_) | Model::LinearRegulator(_) => Unknowns {
                 branches: 1,
                 ..Unknowns::default()
             },
@@ -146,6 +147,7 @@ impl Device for Model {
             | Model::Diode(_)
             | Model::Led(_)
             | Model::Zener(_)
+            | Model::LinearRegulator(_)
             | Model::Inductor(_)
             | Model::Relay(_)
             | Model::Switch(_)
@@ -164,6 +166,7 @@ impl Device for Model {
             | Model::Diode(_)
             | Model::Led(_)
             | Model::Zener(_)
+            | Model::LinearRegulator(_)
             | Model::Npn(_)
             | Model::Pnp(_)
             | Model::Nmos(_)
@@ -181,6 +184,7 @@ impl Device for Model {
             Model::CurrentSource(source) => current_source::stamp(source, stamp),
             Model::Diode(j) | Model::Led(j) => junction::stamp(j, stamp),
             Model::Zener(zener) => zener::stamp(zener, stamp),
+            Model::LinearRegulator(regulator) => regulator::stamp(regulator, stamp),
             Model::Npn(bjt) => transistor::stamp(bjt, Polarity::Npn, stamp),
             Model::Pnp(bjt) => transistor::stamp(bjt, Polarity::Pnp, stamp),
             Model::Nmos(mosfet) => transistor::mos_stamp(mosfet, stamp),
@@ -197,10 +201,10 @@ impl Device for Model {
     }
 }
 
-/// Whether this part's stamp reads the Newton iterate. Only a junction's does, a diode's, a
-/// zener's, a BJT's or an `nmos`'s, through `Stamp::junction`, the one reader of the iterate. Every other
-/// stamp reads only the call's conditions, so on a circuit where no part reads it every iteration
-/// of one call stamps the same system.
+/// Whether this part's stamp reads the Newton iterate. A junction reads it through
+/// `Stamp::junction`. A linear regulator reads its last branch current and input voltage
+/// through `Stamp::prior`. Every other stamp reads only the call's conditions, so on a
+/// circuit where no part reads the iterate every iteration of one call stamps the same system.
 pub(crate) fn reads_iterate(model: &Model) -> bool {
     match model {
         Model::Resistor(_)
@@ -214,6 +218,7 @@ pub(crate) fn reads_iterate(model: &Model) -> bool {
         Model::Diode(_)
         | Model::Led(_)
         | Model::Zener(_)
+        | Model::LinearRegulator(_)
         | Model::Npn(_)
         | Model::Pnp(_)
         | Model::Nmos(_) => true,
@@ -232,6 +237,7 @@ pub(crate) fn initial(model: &Model, out: &mut [f64]) {
         | Model::Inductor(_)
         | Model::Relay(_)
         | Model::Switch(_)
+        | Model::LinearRegulator(_)
         | Model::Chip(_) => {}
         Model::Diode(j) | Model::Led(j) => out[0] = junction::initial(j),
         Model::Zener(zener) => {
@@ -267,6 +273,7 @@ pub(crate) fn update(model: &Model, probe: &Probe<'_>, prior: &[f64], next: &mut
         Model::Npn(bjt) => transistor::update(bjt, Polarity::Npn, probe, prior, next),
         Model::Pnp(bjt) => transistor::update(bjt, Polarity::Pnp, probe, prior, next),
         Model::Nmos(mosfet) => transistor::mos_update(mosfet, probe, prior, next),
+        Model::LinearRegulator(regulator) => regulator::update(regulator, probe),
     }
 }
 
@@ -294,6 +301,9 @@ pub(crate) fn dc_paths(model: &Model) -> &'static [(usize, usize)] {
         | Model::Switch(_) => &[(0, 1)],
         Model::Potentiometer(_) | Model::Npn(_) | Model::Pnp(_) => &[(0, 1), (1, 2)],
         Model::Nmos(_) => &[(0, 2)],
+        // `in` to `gnd` is the ground current. `out` to `gnd` is the pass branch.
+        // Joining only `in` to `out` leaves a capacitor on each rail floating.
+        Model::LinearRegulator(_) => &[(0, 2), (1, 2)],
         Model::Relay(_) => &[
             (Relay::COIL_A, Relay::COIL_B),
             (Relay::COM, Relay::NO),
@@ -339,6 +349,12 @@ pub(crate) fn observe(model: &Model, probe: &Probe<'_>, at: Time, side: Side) ->
             return Some(Observed {
                 values: [id, p, 0.0],
                 len,
+            });
+        }
+        Model::LinearRegulator(regulator) => {
+            return Some(Observed {
+                values: regulator::observe(regulator, probe),
+                len: 3,
             });
         }
         Model::Resistor(resistor) => (resistor.pins, resistor::current(resistor, probe)),
