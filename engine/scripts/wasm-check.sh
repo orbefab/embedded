@@ -2,13 +2,18 @@
 # Builds the wasm package with scripts/wasm.sh and runs crates/wasm/tests/worker.mjs, which drives
 # it in node worker threads and checks its folders and serial rows against native `sim run` on
 # every example, byte for byte. scripts/wasm-check.sh needs bash 4.2 or later, node 22.7 or later, and rustup. scripts/wasm.sh needs bash 4.2 or later and rustup.
-# It also fails when a regular file contains $HOME/ and HOME is not /, or a remapped host
-# prefix with a trailing slash. A prefix equal to /sim-engine, /cargo, /rustc, or /target
-# is not a needle, because the build writes that replacement into the package. A match is
+# It also fails when a regular file contains $HOME/ and HOME is not / and not
+# equal to /sim-engine, /cargo, /rustc, or /target, or a remapped host prefix
+# with a trailing slash. A prefix equal to one of those four is not a needle,
+# because the build writes that replacement into the package. A match is
 # a leak only when it starts a path. The check walks back from the match over / bytes.
 # The match is a leak when that reaches the start of the file, or the byte there is
 # outside [A-Za-z0-9._/-]. A host path glued on after other path characters, such as
-# abc/home/u/x, is a known miss.
+# abc/home/u/x, is a known miss. When HOME equals a replacement, such as /cargo,
+# a true host path under it passes, because it reads the same as the remapped
+# path. Before the build, a fixture that only names
+# replacements passes under HOME /cargo, /rustc, /sim-engine, and /target. A fixture
+# that holds /probe-home/secret fails under HOME /probe-home.
 #
 # Usage: scripts/wasm-check.sh [SCRATCH_DIR]
 #
@@ -121,8 +126,9 @@ JS
 }
 
 # Source scripts/wasm.sh first. Every regular file under the package is scanned.
-# A home of / is not a needle. A prefix equal to a replacement is not a needle,
-# because the build writes that replacement into the package.
+# A home of /, or a home equal to a replacement, is not a needle. A prefix equal
+# to a replacement is not a needle, because the build writes that replacement
+# into the package.
 sim_wasm_skip_host_prefix() {
   local prefix=$1 repl
   for repl in /sim-engine /cargo /rustc /target; do
@@ -193,7 +199,7 @@ sim_wasm_reject_host_paths() {
   done <<<"$rows"
   home=${HOME:-}
   home=${home%/}
-  if [[ -n $home && $home != / ]]; then
+  if [[ -n $home && $home != / ]] && ! sim_wasm_skip_host_prefix "$home"; then
     needle="${home}/"
     if [[ -z ${seen[$needle]+x} ]]; then
       needles+=("$needle")
@@ -238,10 +244,41 @@ mkdir -p "$scratch"
 scratch=$(cd "$scratch" && pwd)
 rm -rf "$scratch/pkg" "$scratch/native" "$scratch/work"
 
-"$repo/scripts/wasm.sh" "$scratch/pkg"
 cd "$repo"
 # shellcheck source=scripts/wasm.sh
 source "$repo/scripts/wasm.sh"
+home_case=$scratch/home-needle
+rm -rf "$home_case"
+mkdir -p "$home_case"
+printf '%s\n' '/cargo/registry' '/rustc/lib' '/sim-engine/crates/x' '/target/release/x' >"$home_case/replaced.bin"
+# Cargo and rustup keep the caller's homes. Only the needle sees the trial HOME.
+caller_cargo=${CARGO_HOME:-$HOME/.cargo}
+caller_rustup=${RUSTUP_HOME:-$HOME/.rustup}
+for home in /cargo /rustc /sim-engine /target; do
+  if ! (
+    export CARGO_HOME=$caller_cargo RUSTUP_HOME=$caller_rustup HOME=$home
+    sim_wasm_reject_host_paths "$home_case"
+  ); then
+    echo "wasm-check: HOME=$home rejected a package that only names replacements" >&2
+    exit 1
+  fi
+done
+printf '%s\n' '/probe-home/secret' >"$home_case/replaced.bin"
+if msg=$(
+  export CARGO_HOME=$caller_cargo RUSTUP_HOME=$caller_rustup HOME=/probe-home
+  sim_wasm_reject_host_paths "$home_case" 2>&1
+); then
+  echo "wasm-check: HOME=/probe-home missed a host path" >&2
+  exit 1
+fi
+if [[ $msg != *"contains a host path"* ]]; then
+  echo "wasm-check: HOME=/probe-home failed for another reason: $msg" >&2
+  exit 1
+fi
+rm -rf "$home_case"
+echo "wasm-check: a replacement home is not a leak"
+
+"$repo/scripts/wasm.sh" "$scratch/pkg"
 sim_wasm_reject_host_paths "$scratch/pkg"
 sim_wasm_check_manifest "$scratch/pkg" "$repo"
 # The .d.ts types each argument as docs/wasm.md does, and its Code union is the docs' codes.

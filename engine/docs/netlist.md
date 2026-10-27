@@ -883,6 +883,8 @@ ref      = "#" ( "net." name | name [ "." ( quantity | "pin." name | "logic." na
 quantity = "ib" | "ic" | "id" | "iin" | "iout" | "i" | "v" | "p"
 ```
 
+`#<part>.usart.<name>`, such as `#u1.usart.USART0`, is reserved and is not a ref.
+
 | Text | Meaning |
 | --- | --- |
 | `#net.vout` | Net `vout` |
