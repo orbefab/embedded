@@ -65,20 +65,47 @@ fn shape(bytes: &[u8]) -> (u64, u64, u64, u64, u64, f64) {
     )
 }
 
-/// Measured 300 accepted steps. The ideal source takes 80. The ratio is under ten.
+/// A count at most ten percent above `measured`, in integer math.
+fn at_most(got: u64, measured: u64, label: &str) {
+    let bound = measured + measured / 10;
+    assert!(got <= bound, "{label}: {got}, bound {bound}");
+}
+
+fn stiffens(bytes: &[u8]) -> u64 {
+    let netlist = sim_core::netlist::parse(bytes).unwrap();
+    let (results, stats) = sim_circuit::simulate_stats(&netlist);
+    let errors: Vec<_> = results
+        .diagnostics()
+        .iter()
+        .filter(|d| d.severity() == Severity::Error)
+        .map(|d| serde_json::to_string(d).unwrap())
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
+    stats.stiffens
+}
+
+/// Measured 289 accepted steps on the load step and 80 on the ideal source. Each bound is
+/// ten percent above that count. The load step stiffens once. The ideal source does not.
+/// The ratio is under ten.
 #[test]
 fn load_step_stays_within_ten_times_the_ideal_source() {
-    let example = landings(&read("../../examples/regulator-load-step/netlist.json"));
-    let baseline = landings(&read("tests/regulator-baseline.json"));
+    let example_bytes = read("../../examples/regulator-load-step/netlist.json");
+    let baseline_bytes = read("tests/regulator-baseline.json");
+    let example = landings(&example_bytes);
+    let baseline = landings(&baseline_bytes);
     eprintln!("load-step landings {example}");
     eprintln!("baseline landings {baseline}");
-    assert_eq!(example, 300, "load-step landings");
-    assert_eq!(baseline, 80, "baseline landings");
+    at_most(example, 289, "load-step landings");
+    at_most(baseline, 80, "baseline landings");
+    let baseline_stiff = stiffens(&baseline_bytes);
+    eprintln!("baseline stiffens {baseline_stiff}");
+    assert_eq!(baseline_stiff, 0, "baseline stiffens");
     assert!(example <= baseline * 10);
 }
 
 /// The charge, the load edges, and the same circuit with the output resistance at
-/// ten times and a tenth. The 1 ns count is the segment-start step.
+/// ten times and a tenth. Each count is a ceiling ten percent above the measured run.
+/// The 1 ns count is the segment-start step.
 #[test]
 fn load_step_shape_stays_at_the_measured_counts() {
     let bytes = read("../../examples/regulator-load-step/netlist.json");
@@ -88,19 +115,19 @@ fn load_step_shape_stays_at_the_measured_counts() {
     eprintln!("fitted steps nanos charge charge_28_40 edges zigzag: {fitted:?}");
     eprintln!("ro_x10: {stiff:?}");
     eprintln!("ro_div10: {soft:?}");
-    assert_eq!(
-        (fitted.0, fitted.1, fitted.2, fitted.3, fitted.4),
-        (300, 2, 37, 4, 178)
-    );
-    assert!(fitted.5 < 1e-6, "zigzag {}", fitted.5);
-    assert_eq!(
-        (stiff.0, stiff.1, stiff.2, stiff.3, stiff.4),
-        (273, 2, 42, 8, 178)
-    );
-    assert!(stiff.5 < 1e-6, "zigzag {}", stiff.5);
-    assert_eq!(
-        (soft.0, soft.1, soft.2, soft.3, soft.4),
-        (967, 2, 47, 15, 162)
-    );
-    assert!(soft.5 < 1e-6, "zigzag {}", soft.5);
+    let cases = [
+        ("fitted", fitted, [289, 2, 38, 5, 178]),
+        ("ro_x10", stiff, [274, 2, 42, 8, 178]),
+        ("ro_div10", soft, [533, 2, 37, 5, 162]),
+    ];
+    for (label, got, measured) in cases {
+        for (index, (count, measured)) in [got.0, got.1, got.2, got.3, got.4]
+            .into_iter()
+            .zip(measured)
+            .enumerate()
+        {
+            at_most(count, measured, &format!("{label} field {index}"));
+        }
+        assert!(got.5 < 1e-6, "{label} zigzag {}", got.5);
+    }
 }

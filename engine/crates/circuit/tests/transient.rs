@@ -349,6 +349,66 @@ fn rl_closed_form(t_ps: f64) -> f64 {
     }
 }
 
+/// Capacitor voltage of a series RLC after a 5 V step at 100 us, from rest. `r` is the
+/// inductor's series resistance. The pair is underdamped: Q is about 31.6 at 1 ohm and 316 at
+/// 0.1 ohm.
+fn rlc_closed_form(t_ps: f64, r: f64) -> f64 {
+    let (l, c, vin, step) = (1e-3_f64, 1e-6_f64, 5.0_f64, 1e8_f64);
+    if t_ps <= step {
+        return 0.0;
+    }
+    let (w0, alpha) = (1.0 / (l * c).sqrt(), r / (2.0 * l));
+    let wd = (w0 * w0 - alpha * alpha).sqrt();
+    let t = (t_ps - step) * 1e-12;
+    let decay = libm::exp(-alpha * t);
+    vin * (1.0 - decay * (libm::cos(wd * t) + (alpha / wd) * libm::sin(wd * t)))
+}
+
+/// The two series RLC controls follow the underdamped step, and no store turns stiff.
+/// The row bound is the measured drift of that ring. The step count is a ceiling, ten
+/// percent above the measured run, so a later policy can take fewer steps.
+#[test]
+fn the_rlc_controls_follow_the_underdamped_step() {
+    for (name, r, steps) in [("rlc-q31", 1.0, 5329), ("rlc-q316", 0.1, 3482)] {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/controls")
+            .join(format!("{name}.json"));
+        let json = fs::read_to_string(&path).unwrap();
+        let netlist = sim_core::netlist::parse(json.as_bytes()).unwrap();
+        let (results, stats) = sim_circuit::simulate_stats(&netlist);
+        assert!(
+            results.diagnostics().is_empty(),
+            "{name}: {:?}",
+            results.diagnostics()
+        );
+        assert_eq!(stats.stiffens, 0, "{name} turns a store stiff");
+        let bound = steps + steps / 10;
+        assert!(
+            stats.landings <= bound,
+            "{name}: {} steps, bound {bound}",
+            stats.landings
+        );
+        let trace = trace(&results);
+        let volts = column(trace, "#net.x");
+        let swing = span(volts);
+        let mut worst = 0.0f64;
+        let mut at_worst = 0u64;
+        for (row, at) in trace.time().iter().enumerate() {
+            let want = rlc_closed_form(at.as_ps() as f64, r);
+            let miss = (volts[row] - want).abs() / swing;
+            if miss > worst {
+                worst = miss;
+                at_worst = at.as_ps();
+            }
+        }
+        eprintln!("{name}: {worst:e} of the swing at {at_worst} ps, swing {swing} V");
+        assert!(
+            worst <= 2e-3,
+            "{name}: {worst:e} of the swing at {at_worst} ps, swing {swing} V"
+        );
+    }
+}
+
 /// On the committed grid and on one off every step, every row of `examples/rl-step` follows
 /// the closed form within 1e-4 of its swing, and so does each row no step lands on, which is a
 /// probe. The current is held across the fall at 30 ms, so a coil that reset there would miss.

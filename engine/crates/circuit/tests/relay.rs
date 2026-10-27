@@ -357,11 +357,12 @@ fn accepted_steps(rel: &str) -> u64 {
     stats.landings
 }
 
-/// Measured 34290 accepted steps. The bound is 10 percent above that count, in integer math.
+/// Measured 2670 accepted steps. The bound is 10 percent above that count, in integer math.
 #[test]
 fn relay_flyback_stays_near_its_step_count() {
-    let measured = 34_290;
+    let measured = 2_670;
     let steps = accepted_steps("../../examples/relay-flyback/netlist.json");
+    eprintln!("relay-flyback steps {steps}");
     assert!(
         steps <= measured + measured / 10,
         "{steps} steps, bound {}",
@@ -369,12 +370,76 @@ fn relay_flyback_stays_near_its_step_count() {
     );
 }
 
-/// Measured 35801 accepted steps. The bound is 10 percent above that count, in integer math.
+/// `#net.b` from just after 30.01 ms through 41 ms. A reversal is a step whose neighbors
+/// change the voltage in opposite directions. The size is the larger of those two changes.
+fn fb_null_window(bytes: &[u8]) -> (u64, f64) {
+    let netlist = sim_core::netlist::parse(bytes).unwrap();
+    let results = sim_circuit::simulate_steps(&netlist);
+    let trace = results.trace().unwrap();
+    let times: Vec<u64> = trace.time().iter().map(|t| t.as_ps()).collect();
+    let column = trace
+        .columns()
+        .iter()
+        .position(|reference| reference.to_string() == "#net.b")
+        .unwrap();
+    let volts = trace.column(column);
+    let mut steps = 0u64;
+    let mut reversal = 0.0f64;
+    for index in 1..times.len() - 1 {
+        if times[index] <= 30_010_000_000 || times[index] > 41_000_000_000 {
+            continue;
+        }
+        steps += 1;
+        let left = volts[index] - volts[index - 1];
+        let right = volts[index + 1] - volts[index];
+        if left * right < 0.0 {
+            reversal = reversal.max(left.abs().max(right.abs()));
+        }
+    }
+    (steps, reversal)
+}
+
+/// Measured 13688 accepted steps. The bound is 10 percent above that count, in integer math.
+#[test]
+fn the_bare_inductor_stays_near_its_step_count() {
+    let measured = 13_688;
+    let steps = accepted_steps("tests/controls/bare-inductor.json");
+    eprintln!("bare-inductor steps {steps}");
+    assert!(
+        steps <= measured + measured / 10,
+        "{steps} steps, bound {}",
+        measured + measured / 10
+    );
+}
+
+/// Measured 2665 accepted steps. From 30.01 ms to 41 ms the node no longer reverses by
+/// more than 1e-10 V. That window takes 116 steps, and the bound is 1000.
+#[test]
+fn fb_null_20000_stops_zigzagging_on_net_b() {
+    let measured = 2_665;
+    let bytes = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/controls/fb-null-20000.json"),
+    )
+    .unwrap();
+    let steps = accepted_steps("tests/controls/fb-null-20000.json");
+    let (window, reversal) = fb_null_window(&bytes);
+    eprintln!("fb-null window steps {window} reversal {reversal:e}");
+    assert!(
+        steps <= measured + measured / 10,
+        "{steps} steps, bound {}",
+        measured + measured / 10
+    );
+    assert!(window < 1_000, "{window} steps in the window");
+    assert!(reversal < 1e-10, "reversal {reversal:e} V");
+}
+
+/// Measured 13764 accepted steps. The bound is 10 percent above that count, in integer math.
 /// The fixture can carry a power warning, so the run check is the absence of an error.
 #[test]
 fn the_bare_relay_stays_near_its_step_count() {
-    let measured = 35_801;
+    let measured = 13_764;
     let steps = accepted_steps("../cli/tests/fixtures/p-relay-npn-bare/netlist.json");
+    eprintln!("p-relay-npn-bare steps {steps}");
     assert!(
         steps <= measured + measured / 10,
         "{steps} steps, bound {}",

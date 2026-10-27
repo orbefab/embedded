@@ -194,6 +194,9 @@ pub(crate) struct FluxSwing {
 pub(crate) struct Swings {
     caps: Vec<Swing>,
     fluxes: Vec<FluxSwing>,
+    /// Caps then fluxes. The step's change in slope reverses the previous change, and each
+    /// change clears `RELTOL` of the largest sample plus the row's absolute tolerance.
+    reverses: Vec<bool>,
 }
 
 /// Each store's sum of what the edges that kept the segment may have left ringing, in `Charges`
@@ -220,6 +223,8 @@ impl Ringing {
 }
 
 /// The accepted points since the segment started, as far as the next step needs them.
+/// `Smooth` holds a solution, so the variant is already far larger than `Start`.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 pub(crate) enum Segment {
     /// One point. The next step is backward Euler. `span` is the circuit's span at that
@@ -233,6 +238,9 @@ pub(crate) enum Segment {
         /// Each store's swing up to the last point.
         swings: Swings,
         ringing: Ringing,
+        /// Caps then fluxes. How many accepted steps in a row have reversed that store's
+        /// slope. A segment start clears it. A kept edge keeps it.
+        reversals: Vec<u32>,
     },
 }
 
@@ -242,12 +250,21 @@ pub(crate) enum Segment {
 /// they try the trapezoidal rule again.
 #[derive(Clone)]
 pub(crate) enum Stiff {
-    /// On backward Euler, ascending. After an accepted step of `retry` ps or more, the next
-    /// step tries them on the trapezoidal rule.
-    Held { stores: Vec<Store>, retry: u64 },
+    /// On backward Euler, ascending. The next step tries the trapezoidal rule after an accepted
+    /// step of `retry` ps, or once the accepted steps of this hold add up to `HOLD_FACTOR`
+    /// times `retry`. `waited` is that sum. It also grows while no store is held, from the
+    /// segment start or from the end of the last hold. A store that joins does not restart it.
+    /// A failed try does.
+    Held {
+        stores: Vec<Store>,
+        retry: u64,
+        waited: u64,
+    },
     /// This step tries them on the trapezoidal rule. Only an accepted step of `retry` ps or
-    /// more passes the try. A shorter accepted step, cut or not, is one a mode still alive
-    /// passes too, so the next step tries them again.
+    /// more passes the try. A try that started because the hold reached its time uses the
+    /// length of the step that started it, when that step was shorter than the old `retry`.
+    /// A shorter accepted step, cut or not, is one a mode still alive passes too, so the next
+    /// step tries them again.
     Trying { stores: Vec<Store>, retry: u64 },
 }
 
@@ -256,15 +273,18 @@ pub(crate) enum Stiff {
 /// rule keeps it.
 const RETRY: u64 = 256;
 
-/// A tried store stays on the trapezoidal rule only under this share of Newton's tolerance.
-/// What is left of the fast mode does not decay on the trapezoidal rule, and its error grows
-/// with the step, so a try that passes near 1 holds the step near the length it was tried at.
-const TRY: f64 = 1e-3;
+/// A hold that never accepts a step of `retry` ps still tries after this many waits.
+const HOLD_FACTOR: u64 = 4;
+
+/// Slope reversals in a row, the candidate included, after which a trapezoidal store over
+/// Newton's tolerance turns stiff at any step length.
+const REVERSAL_RUN: u32 = 3;
 
 impl Stiff {
     const NONE: Stiff = Stiff::Held {
         stores: Vec::new(),
         retry: RETRY,
+        waited: 0,
     };
 
     /// The stores on backward Euler this step.
@@ -275,11 +295,28 @@ impl Stiff {
         }
     }
 
-    /// After an accepted step of `h` ps.
+    /// After an accepted step of `h` ps. An empty hold adds `h` and does not try.
     fn advance(self, h: u64) -> Stiff {
         match self {
-            Stiff::Held { stores, retry } if !stores.is_empty() && h >= retry => {
-                Stiff::Trying { stores, retry }
+            Stiff::Held {
+                stores,
+                retry,
+                waited,
+            } => {
+                let waited = waited.saturating_add(h);
+                if !stores.is_empty() && (h >= retry || waited >= HOLD_FACTOR.saturating_mul(retry))
+                {
+                    Stiff::Trying {
+                        stores,
+                        retry: retry.min(h.max(1)),
+                    }
+                } else {
+                    Stiff::Held {
+                        stores,
+                        retry,
+                        waited,
+                    }
+                }
             }
             Stiff::Trying { retry, .. } if h >= retry => Stiff::NONE,
             stiff => stiff,
@@ -287,16 +324,26 @@ impl Stiff {
     }
 
     /// For a retry of the same step of `h` ps: `more` on backward Euler too, and the tried
-    /// stores back on it until the step reaches twice `h`.
+    /// stores back on it until the step reaches twice `h`. A failed try restarts the hold's
+    /// clock. A ring on another store during a try sends the tried stores back the same
+    /// way. A store already held keeps its wait and its clock.
     fn with(self, more: &[Store], h: u64) -> Stiff {
-        let (mut stores, retry) = match self {
-            Stiff::Held { stores, retry } => (stores, retry),
-            Stiff::Trying { stores, .. } => (stores, h.saturating_mul(2).max(RETRY)),
+        let (mut stores, retry, waited) = match self {
+            Stiff::Held {
+                stores,
+                retry,
+                waited,
+            } => (stores, retry, waited),
+            Stiff::Trying { stores, .. } => (stores, h.saturating_mul(2).max(RETRY), 0),
         };
         stores.extend_from_slice(more);
         stores.sort_unstable();
         stores.dedup();
-        Stiff::Held { stores, retry }
+        Stiff::Held {
+            stores,
+            retry,
+            waited,
+        }
     }
 }
 
@@ -312,15 +359,32 @@ impl Segment {
     /// new one. `swings` is that step's, from `error` when the accepted step is the one it
     /// judged.
     pub(crate) fn advance(self, at: Time, last: Solution, h: u64, swings: Swings) -> Segment {
-        let (stiff, ringing) = match self {
-            Segment::Start { .. } => (Stiff::NONE, Ringing::none(&swings)),
-            Segment::Smooth { stiff, ringing, .. } => (stiff.advance(h), ringing),
+        let (stiff, ringing, reversals) = match self {
+            Segment::Start { .. } => (
+                Stiff::NONE,
+                Ringing::none(&swings),
+                vec![0; swings.reverses.len()],
+            ),
+            Segment::Smooth {
+                stiff,
+                ringing,
+                reversals,
+                ..
+            } => {
+                let reversals = reversals
+                    .iter()
+                    .zip(&swings.reverses)
+                    .map(|(&count, &rev)| if rev { count + 1 } else { 0 })
+                    .collect();
+                (stiff.advance(h), ringing, reversals)
+            }
         };
         Segment::Smooth {
             before: (at, last),
             stiff,
             swings,
             ringing,
+            reversals,
         }
     }
 
@@ -352,11 +416,12 @@ impl Segment {
     /// nothing to a sum. The edge started no mode. The point before still moves by the raw
     /// `di`. Every step's history already carries a residual of that size.
     ///
-    /// A kept edge ends the stiff hold. The stores take the trapezoidal rule on the step the
-    /// segment wanted. A segment start's next step is 1 ns of backward Euler, and a kept edge
-    /// does not take that step. A switch edge or a source jump that keeps the segment is still
-    /// cut at its breakpoint 1 ns later. A stiff store otherwise leaves backward Euler only
-    /// through a try after a step of `RETRY` ps or more.
+    /// A kept edge ends the stiff hold and its clock. The reversal count stays, because the
+    /// segment continues. The stores take the trapezoidal rule on the step the segment wanted.
+    /// A segment start's next step is 1 ns of backward Euler, and a kept edge does not take
+    /// that step. A switch edge or a source jump that keeps the segment is still cut at its
+    /// breakpoint 1 ns later. A stiff store otherwise leaves backward Euler through a try after
+    /// a step of `RETRY` ps or more, or after `HOLD_FACTOR` times its wait of accepted steps.
     pub(crate) fn across(
         self,
         charges: &Charges,
@@ -368,6 +433,7 @@ impl Segment {
             before: (then, mut before),
             swings,
             mut ringing,
+            reversals,
             ..
         } = self
         {
@@ -387,6 +453,7 @@ impl Segment {
                     stiff: Stiff::NONE,
                     swings,
                     ringing,
+                    reversals,
                 };
             }
         }
@@ -413,6 +480,7 @@ impl Segment {
                 volts: swing.volts.within(v[1]),
             }
         };
+        let reverses = self.reverses(charges, last, next);
         match self {
             Segment::Start { span } => Swings {
                 caps: (charges.caps.iter())
@@ -428,6 +496,7 @@ impl Segment {
                         flux_step(start, flux)
                     })
                     .collect(),
+                reverses,
             },
             Segment::Smooth { swings, .. } => Swings {
                 caps: (swings.caps.iter().zip(&charges.caps))
@@ -436,7 +505,44 @@ impl Segment {
                 fluxes: (swings.fluxes.iter().zip(&charges.fluxes))
                     .map(|(swing, flux)| flux_step(*swing, flux))
                     .collect(),
+                reverses,
             },
+        }
+    }
+
+    /// Whether each store's slope reversed on this step. The scale is the largest of the three
+    /// samples, not the larger change. A segment's first step has no earlier slope.
+    fn reverses(&self, charges: &Charges, last: &Solution, next: &Solution) -> Vec<bool> {
+        let reversed = |a: f64, b: f64, c: f64, floor: f64| {
+            let (d0, d1) = (b - a, c - b);
+            let tol = RELTOL * a.abs().max(b.abs()).max(c.abs()) + floor;
+            d0 * d1 < 0.0 && d0.abs() > tol && d1.abs() > tol
+        };
+        match self {
+            Segment::Start { .. } => vec![false; charges.caps.len() + charges.fluxes.len()],
+            Segment::Smooth {
+                before: (_, before),
+                ..
+            } => charges
+                .caps
+                .iter()
+                .map(|cap| {
+                    reversed(
+                        before.get(cap.branch),
+                        last.get(cap.branch),
+                        next.get(cap.branch),
+                        ABSTOL,
+                    )
+                })
+                .chain(charges.fluxes.iter().map(|flux| {
+                    reversed(
+                        flux.volts(before),
+                        flux.volts(last),
+                        flux.volts(next),
+                        VNTOL,
+                    )
+                }))
+                .collect(),
         }
     }
 
@@ -450,11 +556,13 @@ impl Segment {
                 stiff,
                 swings,
                 ringing,
+                reversals,
             } => Segment::Smooth {
                 before,
                 stiff: stiff.with(more, h),
                 swings,
                 ringing,
+                reversals,
             },
         }
     }
@@ -505,9 +613,12 @@ pub(crate) struct Error {
     pub(crate) swings: Swings,
     /// The trapezoidal stores over Newton's tolerance, ascending.
     over: Vec<Store>,
-    /// The worst error over Newton's tolerance of the stores the step tried on the
-    /// trapezoidal rule. 0 when it tried none.
+    /// The worst swing-ratio of the stores the step tried on the trapezoidal rule. 0 when it
+    /// tried none. A try stays when this is at most 1.
     tried: f64,
+    /// Trapezoidal stores over Newton's tolerance whose slope has reversed on
+    /// `REVERSAL_RUN` steps running, the candidate included.
+    ringing: Vec<Store>,
 }
 
 /// What a step does once its error is known.
@@ -524,21 +635,22 @@ pub(crate) enum Verdict {
 impl Error {
     /// A step of `h` ps. A step of 1 ps over its tolerance is accepted whatever its error,
     /// unless a trapezoidal store is over Newton's tolerance there, which makes it stiff.
-    /// Stiffness is judged on Newton's tolerance. A 20 to 43 ps mode that the swing's share
-    /// would let through at 1 ps would be left ringing once the step grew past it. A step that
-    /// tried stiff stores keeps them on the trapezoidal rule only if their error is under
-    /// `TRY` of Newton's tolerance.
+    /// A trapezoidal store also turns stiff at any longer step when its error is over Newton's
+    /// tolerance and its slope has reversed on `REVERSAL_RUN` steps running. A step that tried
+    /// stiff stores keeps them on the trapezoidal rule when their error is within the swing
+    /// tolerance every trapezoidal store has. A ring on another store during a try sends the
+    /// tried stores back to backward Euler, as a failed try does.
     pub(crate) fn verdict(&self, h: u64) -> Verdict {
-        match (
-            self.tried <= TRY,
-            h,
-            self.over.is_empty(),
-            self.ratio <= 1.0,
-        ) {
-            (false, ..) => Verdict::Stiffen(Vec::new()),
-            (true, 1, false, _) => Verdict::Stiffen(self.over.clone()),
-            (true, 1, true, _) | (true, _, _, true) => Verdict::Accept,
-            (true, _, _, false) => Verdict::Reject,
+        if self.tried > 1.0 {
+            return Verdict::Stiffen(Vec::new());
+        }
+        if !(h == 1 && !self.over.is_empty()) && !self.ringing.is_empty() {
+            return Verdict::Stiffen(self.ringing.clone());
+        }
+        match (h, self.over.is_empty(), self.ratio <= 1.0) {
+            (1, false, _) => Verdict::Stiffen(self.over.clone()),
+            (1, true, _) | (_, _, true) => Verdict::Accept,
+            (_, _, false) => Verdict::Reject,
         }
     }
 }
@@ -638,16 +750,29 @@ pub(crate) fn error(
                 newton,
             }
         });
+    let prior = match segment {
+        Segment::Smooth { reversals, .. } => reversals.as_slice(),
+        Segment::Start { .. } => &[],
+    };
     let mut ratio_worst = 0.0;
     let mut method = segment.method();
     let mut over = Vec::new();
     let mut tried = 0.0f64;
-    for judged in caps.chain(fluxes) {
+    let mut ringing = Vec::new();
+    for (k, judged) in caps.chain(fluxes).enumerate() {
         if judged.newton > 1.0 && judged.method == Method::Trapezoidal {
             over.push(judged.store);
         }
         if segment.tried().binary_search(&judged.store).is_ok() {
-            tried = tried.max(judged.newton);
+            tried = tried.max(judged.ratio);
+        }
+        let run = if swings.reverses[k] {
+            prior.get(k).copied().unwrap_or(0) + 1
+        } else {
+            0
+        };
+        if judged.method == Method::Trapezoidal && run >= REVERSAL_RUN && judged.newton > 1.0 {
+            ringing.push(judged.store);
         }
         if judged.ratio > ratio_worst {
             (ratio_worst, method) = (judged.ratio, judged.method);
@@ -659,6 +784,7 @@ pub(crate) fn error(
         swings,
         over,
         tried,
+        ringing,
     }
 }
 
@@ -762,11 +888,13 @@ mod tests {
             swings: Swings {
                 caps: vec![Swing { lo, hi, ahead: 0.0 }],
                 fluxes: Vec::new(),
+                reverses: vec![false],
             },
             ringing: Ringing {
                 caps: vec![0.0],
                 fluxes: Vec::new(),
             },
+            reversals: vec![0],
         }
     }
 
@@ -960,7 +1088,7 @@ mod tests {
     }
 
     #[test]
-    fn a_try_stays_only_well_under_the_tolerance_and_a_failed_one_waits_for_twice_the_step() {
+    fn a_try_stays_within_its_swing_tolerance_and_a_failed_one_waits_for_twice_the_step() {
         let at = Time::from_ps(RETRY + 1);
         let last = Solution::from(vec![1.0, 0.0, 0.0]);
         // The error of the tried capacitor grows with its current, the other's with its own.
@@ -976,14 +1104,14 @@ mod tests {
         };
         let per_amp = step(0.0, 1.0).tried;
         assert!(matches!(
-            step(0.0, 1e-4 / per_amp).verdict(RETRY),
+            step(0.0, 0.5 / per_amp).verdict(RETRY),
             Verdict::Accept
         ));
         assert!(matches!(
-            step(0.5 / per_amp, 1e-4 / per_amp).verdict(RETRY),
+            step(0.5 / per_amp, 0.5 / per_amp).verdict(RETRY),
             Verdict::Accept
         ));
-        let failed = step(0.0, 1e-2 / per_amp).verdict(RETRY);
+        let failed = step(0.0, 2.0 / per_amp).verdict(RETRY);
         assert!(matches!(&failed, Verdict::Stiffen(parts) if parts.is_empty()));
         let held = trying().stiffen(&[], RETRY + 44);
         assert_eq!(held.stiff(), [ix(1)]);
@@ -994,8 +1122,8 @@ mod tests {
         assert_eq!(again.tried(), [ix(1)]);
     }
 
-    /// A try accepted short of `RETRY` has not shown that the fast mode died. The next step
-    /// still tries it, and an error over `TRY` of Newton's tolerance puts it back on backward
+    /// A try accepted short of its pass length has not shown that the fast mode died. The next
+    /// step still tries it, and an error over the swing tolerance puts it back on backward
     /// Euler, while the slow capacitor beside it keeps the trapezoidal rule.
     #[test]
     fn a_try_cut_short_of_its_step_tries_again() {
@@ -1003,11 +1131,17 @@ mod tests {
         let (cut, h, farad) = (40, RETRY, 1e-9);
         let segment = advanced(trying(), Time::from_ps(RETRY + 1), last.clone(), cut);
         assert_eq!(segment.tried(), [ix(1)]);
-        // From no current, the trapezoidal error is `h^2 * amps / (6C * (h + cut))`.
-        let (hs, cs) = (seconds(h), seconds(cut));
-        let amps = 1e-2 * (RELTOL + VNTOL) * 6.0 * farad * (hs + cs) / (hs * hs);
-        let next = Solution::from(vec![1.0, 0.0, amps]);
         let at = Time::from_ps(RETRY + 1 + cut);
+        let per_amp = error(
+            &two(farad),
+            &segment,
+            at,
+            &last,
+            h,
+            &Solution::from(vec![1.0, 0.0, 1.0]),
+        )
+        .tried;
+        let next = Solution::from(vec![1.0, 0.0, 2.0 / per_amp]);
         let got = error(&two(farad), &segment, at, &last, h, &next);
         assert!(
             matches!(got.verdict(h), Verdict::Stiffen(ref parts) if parts.is_empty()),
@@ -1016,6 +1150,109 @@ mod tests {
         let retried = segment.stiffen(&[], h);
         assert_eq!(retried.method_of(ix(0)), Method::Trapezoidal);
         assert_eq!(retried.method_of(ix(1)), Method::BackwardEuler);
+    }
+
+    /// Three slope reversals over Newton's tolerance at a 1 us step turn the store stiff.
+    /// Two reversals do not, and neither do three whose error is under Newton's tolerance.
+    /// The swing on these cases is 1 V, so Newton's tolerance is the tighter one.
+    #[test]
+    fn three_reversals_over_newton_at_1_us_turn_stiff() {
+        let h = 1_000_000;
+        let charges = one(1e-6);
+        let judge = |before: f64, last: f64, next: f64, count: u32| {
+            let mut segment = swung((Time::from_ps(h), point(1.0, before)), 0.0, 1.0);
+            let Segment::Smooth { reversals, .. } = &mut segment else {
+                panic!("a swung segment is smooth");
+            };
+            reversals[0] = count;
+            error(
+                &charges,
+                &segment,
+                Time::from_ps(2 * h),
+                &point(1.0, last),
+                h,
+                &point(1.0, next),
+            )
+        };
+        let over = judge(1.5e-5, -1.5e-5, 1.5e-5, 2);
+        assert!(over.swings.reverses[0], "{over:?}");
+        assert!(over.ratio <= 1.0, "{over:?}");
+        assert!(matches!(over.verdict(h), Verdict::Stiffen(stores) if stores == [ix(0)]));
+        let two = judge(1.5e-5, -1.5e-5, 1.5e-5, 1);
+        assert!(matches!(two.verdict(h), Verdict::Accept), "{two:?}");
+        let under = judge(1e-9, -1e-9, 1e-9, 2);
+        assert!(under.swings.reverses[0], "{under:?}");
+        assert!(matches!(under.verdict(h), Verdict::Accept), "{under:?}");
+
+        let currents = [0.0, 3e-5, -3e-5, 3e-5];
+        let mut segment = Segment::start(&charges, &point(1.0, currents[0]));
+        let mut at = Time::ZERO;
+        for pair in currents.windows(2) {
+            let next = point(1.0, pair[1]);
+            segment = accept(segment, &charges, at, point(1.0, pair[0]), h, &next);
+            at = Time::from_ps(at.as_ps() + h);
+        }
+        let Segment::Smooth { reversals, .. } = &segment else {
+            panic!("accepted steps make a smooth segment");
+        };
+        assert_eq!(reversals, &[2]);
+    }
+
+    /// Steps shorter than `RETRY` still try once the hold has lasted four times `RETRY`.
+    /// A store that joins the hold does not restart that clock.
+    #[test]
+    fn a_hold_tries_after_four_times_its_wait_and_a_joiner_keeps_the_clock() {
+        let step = RETRY / 4;
+        let mut segment = smooth(&[ix(1)]);
+        let mut at = Time::from_ps(1);
+        for n in 0..15 {
+            segment = advanced(segment, at, Solution::zeros(3), step);
+            at = Time::from_ps(at.as_ps() + step);
+            assert_eq!(segment.stiff(), [ix(1)], "held at step {n}");
+            assert!(segment.tried().is_empty(), "held at step {n}");
+        }
+        let trying = advanced(segment, at, Solution::zeros(3), step);
+        assert_eq!(trying.tried(), [ix(1)]);
+
+        let mut segment = smooth(&[ix(1)]);
+        let mut at = Time::from_ps(1);
+        for _ in 0..12 {
+            segment = advanced(segment, at, Solution::zeros(3), step);
+            at = Time::from_ps(at.as_ps() + step);
+        }
+        segment = segment.stiffen(&[ix(0)], step);
+        for n in 0..3 {
+            segment = advanced(segment, at, Solution::zeros(3), step);
+            at = Time::from_ps(at.as_ps() + step);
+            assert_eq!(segment.stiff(), [ix(0), ix(1)], "joined at step {n}");
+        }
+        let trying = advanced(segment, at, Solution::zeros(3), step);
+        assert_eq!(trying.tried(), [ix(0), ix(1)]);
+    }
+
+    /// An empty hold adds every accepted step. The first store keeps that time, so once the
+    /// clock has reached four waits the next accepted step tries it.
+    #[test]
+    fn an_empty_hold_carries_its_clock_to_the_first_store() {
+        let step = RETRY / 4;
+        let last = Solution::zeros(3);
+        let mut segment = advanced(
+            Segment::start(&two(1e-9), &last),
+            Time::ZERO,
+            last.clone(),
+            1,
+        );
+        let mut at = Time::from_ps(1);
+        for _ in 0..15 {
+            segment = advanced(segment, at, last.clone(), step);
+            at = Time::from_ps(at.as_ps() + step);
+            assert!(segment.stiff().is_empty());
+            assert!(segment.tried().is_empty());
+        }
+        segment = segment.stiffen(&[ix(1)], step);
+        assert_eq!(segment.stiff(), [ix(1)]);
+        let trying = advanced(segment, at, last, step);
+        assert_eq!(trying.tried(), [ix(1)]);
     }
 
     #[test]
@@ -1594,11 +1831,13 @@ mod tests {
                     amps: range(amps),
                     volts: range(volts),
                 }],
+                reverses: vec![false],
             },
             ringing: Ringing {
                 caps: Vec::new(),
                 fluxes: vec![0.0],
             },
+            reversals: vec![0],
         }
     }
 

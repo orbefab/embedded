@@ -788,6 +788,7 @@ impl Session {
                             continue;
                         }
                         Verdict::Stiffen(more) => {
+                            self.stats.stiffens += 1;
                             stiffened = Some(segment.clone().stiffen(&more, h));
                             continue;
                         }
