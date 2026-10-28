@@ -12,6 +12,7 @@ Private notes live in `~/notes/orbefab` (Orbefab/notes). Follow the `notes` skil
 - `crates/circuit`, package `sim-circuit`, solves the DC operating point.
 - `crates/cli`, package `sim-cli`, is the `sim` binary.
 - `crates/avr`, package `sim-avr`, models the ATmega328P core. `sim-circuit` runs it for each `atmega328p` part.
+- `crates/xtensa`, package `sim-xtensa`, models the Xtensa core of the ESP32 and the ESP32-S3, with both generated opcode tables. No SoC uses it yet. `crates/xtensa/gen/regen.sh` regenerates the tables.
 - `crates/bench`, package `sim-bench`, times native, WASI and browser Worker runs. It is not published.
 - `crates/wasm`, package `sim-wasm`, is the session and `sim run` for JavaScript. `scripts/wasm.sh` builds it, and `docs/wasm.md` is its guide.
 
@@ -32,4 +33,4 @@ The commit check needs ngspice-42 on `PATH`.
 
 The `sim-avr` lines turn on `port-skip-check` so the skip check runs, and the other crates leave the feature off.
 
-Also run `scripts/wasm-check.sh` before a commit that touches `crates/wasm`, `crates/circuit/src/session*`, `crates/circuit/src/active.rs`, `crates/circuit/src/active/`, `scripts/wasm.sh`, or the math in `crates/circuit/src/element/junction.rs`, `crates/circuit/src/step.rs` and `crates/core/src/netlist.rs` that goes through `libm`. `scripts/wasm-check.sh` needs bash 4.2 or later, node 22.7 or later, and rustup. `scripts/wasm.sh` needs bash 4.2 or later and rustup. The check compares the wasm package with native `sim run` in node Workers.
+Also run `scripts/wasm-check.sh` before a commit that touches `crates/wasm`, `crates/xtensa`, `crates/circuit/src/session*`, `crates/circuit/src/active.rs`, `crates/circuit/src/active/`, `scripts/wasm.sh`, or the math in `crates/circuit/src/element/junction.rs`, `crates/circuit/src/step.rs` and `crates/core/src/netlist.rs` that goes through `libm`. `scripts/wasm-check.sh` needs bash 4.2 or later, node 22.7 or later, and rustup. `scripts/wasm.sh` needs bash 4.2 or later and rustup. The check compares the wasm package with native `sim run` in node Workers.

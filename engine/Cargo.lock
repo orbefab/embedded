@@ -357,6 +357,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sim-xtensa"
+version = "0.22.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
 name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

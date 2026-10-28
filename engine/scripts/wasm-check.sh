@@ -323,6 +323,9 @@ for line in \
   fi
 done
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}
+# No wasm crate runs sim-xtensa yet, so it gets a build of its own until one does.
+cargo build -p sim-xtensa --locked --target wasm32-unknown-unknown
+echo "wasm-check: sim-xtensa builds for wasm32"
 cargo build -p sim-cli --release --locked
 target=$(cargo metadata --format-version 1 --no-deps |
   sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
