@@ -317,6 +317,29 @@ function assertDisplays(wasm, label, session, json, dir) {
   return displays.length;
 }
 
+// Each ws2812 part of `json` reads from `session` as the native folder in `dir` ends: its
+// `leds()` is its `observations.json` `leds` entry. A part that is no chain throws
+// `unknown_part`. Returns how many chains it read.
+function assertLeds(wasm, label, session, json, dir) {
+  const parts = JSON.parse(json).parts;
+  const chains = parts.filter((part) => part.kind === 'ws2812');
+  if (chains.length === 0) {
+    return 0;
+  }
+  const observed = JSON.parse(readFileSync(join(dir, 'observations.json'), 'utf8')).leds;
+  assert.deepEqual(Object.keys(observed), chains.map((part) => part.name).sort(), `${label}: leds`);
+  for (const { name } of chains) {
+    assert.deepEqual(JSON.parse(session.leds(name)), observed[name], `${label}: leds(${name})`);
+  }
+  const other = parts.find((part) => part.kind !== 'ws2812').name;
+  assert.throws(
+    () => session.leds(other),
+    (error) => error instanceof wasm.SimError && error.code === 'unknown_part',
+    `${label}: ${other} is no chain`,
+  );
+  return chains.length;
+}
+
 // Warnings `diagnostics.json` holds except `trace.row_interpolated` and every error. That is
 // the list `diagnostics()` returns at the stop.
 function sessionWarnings(dir) {
@@ -346,6 +369,7 @@ function example(wasm, job, json, native) {
     `${job.name}: diagnostics() at the stop`,
   );
   const displays = assertDisplays(wasm, job.name, session, json, native);
+  const leds = assertLeds(wasm, job.name, session, json, native);
   const finished = session.finish(0n);
   assertSameFolder(`${job.name} finish`, finished, native);
   const links = assertLinkRows(job.name, json, [
@@ -388,7 +412,8 @@ function example(wasm, job, json, native) {
   once.free();
   const linkText = links > 0 ? `, ${links} link rows from the event list` : '';
   const displayText = displays > 0 ? `, ${displays} display read as native` : '';
-  const counts = `${read.probes.length} probes on rows, ${read.rows.length} serial rows, ${read.edges.length} logic changes${linkText}${displayText}`;
+  const ledText = leds > 0 ? `, ${leds} chain read as native` : '';
+  const counts = `${read.probes.length} probes on rows, ${read.rows.length} serial rows, ${read.edges.length} logic changes${linkText}${displayText}${ledText}`;
   return `run and finish are sim run, ${counts}`;
 }
 
@@ -610,6 +635,7 @@ function argumentChecks(wasm, examples) {
     ['applyTouch down', 'boolean', (v) => serial.applyTouch('rv1', 0n, 1, 2, v)],
     ['display', 'string', (v) => serial.display(v)],
     ['displayImage', 'string', (v) => serial.displayImage(v)],
+    ['leds', 'string', (v) => serial.leds(v)],
     ['finish', 'bigint', (v) => wasm.Session.record(steps).finish(v)],
     ['Folder.file', 'string', (v) => folder.file(v)],
   ];
@@ -637,6 +663,7 @@ function argumentChecks(wasm, examples) {
   refuses('applyTouch part', (part) => serial.applyTouch(part, 0n, 1, 2, true), BAD_NAMES, 'bad_name');
   refuses('display', (part) => serial.display(part), BAD_NAMES, 'bad_name');
   refuses('displayImage', (part) => serial.displayImage(part), BAD_NAMES, 'bad_name');
+  refuses('leds', (part) => serial.leds(part), BAD_NAMES, 'bad_name');
   refuses('applyLevel si', (si) => serial.applyLevel('rv1', 0n, si), [NaN, Infinity], 'not_finite');
   refuses(
     'applyTouch x',

@@ -111,6 +111,8 @@ pub enum Observations {
         logic: Option<LogicSummary>,
         /// Each display part's state at `end`, by name. `None` without a display part.
         displays: Option<BTreeMap<String, Observed>>,
+        /// Each LED chain's colours at `end`, by name. `None` without a chain.
+        leds: Option<BTreeMap<String, crate::leds::Chain>>,
     },
 }
 
@@ -144,7 +146,7 @@ impl Observations {
     }
 }
 
-/// `{}`, `{"op"}`, or `{"end_ps", "op", "switches", "logic"?, "displays"?}`.
+/// `{}`, `{"op"}`, or `{"end_ps", "op", "switches", "logic"?, "displays"?, "leds"?}`.
 impl Serialize for Observations {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
@@ -160,8 +162,12 @@ impl Serialize for Observations {
                 switches,
                 logic,
                 displays,
+                leds,
             } => {
-                let entries = 3 + usize::from(logic.is_some()) + usize::from(displays.is_some());
+                let entries = 3
+                    + usize::from(logic.is_some())
+                    + usize::from(displays.is_some())
+                    + usize::from(leds.is_some());
                 let mut map = serializer.serialize_map(Some(entries))?;
                 map.serialize_entry("end_ps", end)?;
                 map.serialize_entry("op", op)?;
@@ -171,6 +177,9 @@ impl Serialize for Observations {
                 }
                 if let Some(displays) = displays {
                     map.serialize_entry("displays", displays)?;
+                }
+                if let Some(leds) = leds {
+                    map.serialize_entry("leds", leds)?;
                 }
                 map.end()
             }
@@ -391,6 +400,7 @@ mod tests {
             switches: BTreeMap::from([("#sw1".parse().unwrap(), Vec::new())]),
             logic: None,
             displays: None,
+            leds: None,
         };
         assert_eq!(
             serde_json::to_string(&observations).unwrap(),

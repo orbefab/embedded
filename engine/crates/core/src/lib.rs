@@ -5,6 +5,7 @@ pub mod diagnostic;
 pub mod display;
 pub mod finite;
 pub mod i2c;
+pub mod leds;
 pub mod link;
 pub mod logic;
 pub mod name;

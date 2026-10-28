@@ -43,6 +43,8 @@ pub enum ValueRule {
     Unsupported,
     /// A touch coordinate is outside 0 to 4095.
     Span,
+    /// An LED count is outside 1 to 1024.
+    Leds,
 }
 
 /// Why `firmware` is not a program for the part's flash.
@@ -131,6 +133,8 @@ pub enum ProtocolRule {
     PixelFormat,
     /// An I2C target's SDA change came due while SCL was high, so SDA stayed.
     SdaWhileSclHigh,
+    /// A bit whose high or low sat outside the timing windows.
+    Bit,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -482,6 +486,7 @@ impl Diagnostic {
                 rule,
             } => {
                 let byte = *value as u8;
+                let count = *value as u16;
                 let value = number_text(*value);
                 match rule {
                     ValueRule::Positive => {
@@ -530,6 +535,9 @@ impl Diagnostic {
                     }
                     ValueRule::Span => {
                         format!("{part} {field} is {value}; it must be from 0 to 4095")
+                    }
+                    ValueRule::Leds => {
+                        format!("{part} {field} is {count}; it must be from 1 to 1024")
                     }
                 }
             }
@@ -686,6 +694,15 @@ impl Diagnostic {
                 "{part} left SDA unmoved because SCL was high at {} ps, breaking rule {}, the first time",
                 at.as_ps(),
                 rule_text(&ProtocolRule::SdaWhileSclHigh)
+            ),
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::Bit,
+            } => format!(
+                "{part} dropped a bit that broke rule {} at {} ps, the first time",
+                rule_text(&ProtocolRule::Bit),
+                at.as_ps()
             ),
             Diagnostic::ChipProtocol { part, at, rule } => format!(
                 "{part} dropped a transfer that broke rule {} at {} ps, the first time",

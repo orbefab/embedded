@@ -264,6 +264,7 @@ impl Record {
             switches: switches(netlist, end),
             logic: summary,
             displays: None,
+            leds: None,
         };
         (observations, trace)
     }

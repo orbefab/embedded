@@ -20,12 +20,14 @@ Each example has `viewer.json` beside `netlist.json`. The file names the 3D mode
 | `led-5mm-red` | A 5 mm red LED, the Kingbright WP7113ID the LED examples cite. |
 | `on-board` | A part of the development board model. The board model draws it, so the example does not name a package. |
 | `potentiometer-rotary` | A rotary potentiometer. |
+| `pulses-replay` | A recorded pin, which `examples/ws2812-replay` replays as timed levels. It has no package of its own. |
 | `relay-pcb-5pin` | A 5-pin PCB relay with one changeover contact. |
 | `resistor-axial` | An axial resistor. |
 | `round-tft-360` | A round 360 by 360 TFT module on a QSPI bus, the `st77916` panel `examples/st77916-replay` draws on. |
 | `sot-223` | A SOT-223 package, the LM1117 class the regulator examples cite. |
 | `spi-replay` | A recorded SPI host, which `examples/spi-replay` and `examples/st77916-replay` replay. It has no package of its own. |
 | `to-92` | A three-lead TO-92 package. Used for every transistor. |
+| `ws2812` | An addressable LED of the WS2812E-1313 class, the `ws2812` chain `examples/atmega-ws2812` and `examples/ws2812-replay` drive. |
 | `tactile-switch-6mm` | A 6 mm tactile push button. The switches in the examples are momentary contacts, so they share this id. |
 
 `crates/cli/tests/viewer.rs` scans every `examples/*/netlist.json` and checks the file.

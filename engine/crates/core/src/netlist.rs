@@ -275,6 +275,8 @@ impl Model {
             Model::Chip(Chip::SpiReplay(_)) => &SpiReplay::PINS,
             Model::Chip(Chip::St77916(_)) => &St77916::PINS,
             Model::Chip(Chip::Cst816(_)) => &Cst816::PINS,
+            Model::Chip(Chip::Ws2812(_)) => &Ws2812::PINS,
+            Model::Chip(Chip::PulsesReplay(_)) => &PulsesReplay::PINS,
         }
     }
 
@@ -333,6 +335,8 @@ impl Model {
             Model::Chip(Chip::SpiReplay(r)) => &r.pins,
             Model::Chip(Chip::St77916(p)) => &p.pins,
             Model::Chip(Chip::Cst816(dev)) => &dev.pins,
+            Model::Chip(Chip::Ws2812(chain)) => &chain.pins,
+            Model::Chip(Chip::PulsesReplay(replay)) => &replay.pins,
         }
     }
 
@@ -874,6 +878,8 @@ pub enum Chip {
     SpiReplay(Box<SpiReplay>),
     St77916(Box<St77916>),
     Cst816(Box<Cst816>),
+    Ws2812(Box<Ws2812>),
+    PulsesReplay(Box<PulsesReplay>),
 }
 
 /// An ATmega328P in its 28-pin DIP, running `firmware` from power-on. Microchip DS40002061B.
@@ -996,6 +1002,49 @@ impl Cst816 {
         };
         Some(Time::from_ps(from.as_ps().max(first)))
     }
+}
+
+/// A chain of WS2812E-1313 LEDs, an active chip with no clock of its own. It reads `DIN`
+/// through `input_threshold`, fractions of its supply, and takes `Pulses` records on that net.
+/// Each LED keeps the first 24 bits, green then red then blue, and passes the rest on. A low
+/// longer than 280 µs latches. `leds` is from 1 to [`Ws2812::LED_MAX`]. Only parse builds one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ws2812 {
+    pub pins: [NetId; 3],
+    pub leds: u16,
+    pub input_threshold: Threshold,
+}
+
+impl Ws2812 {
+    pub const PINS: [&'static str; 3] = ["VCC", "GND", "DIN"];
+    /// The most LEDs one part holds.
+    pub const LED_MAX: u16 = 1024;
+    /// The count a part omits.
+    pub const LEDS_DEFAULT: u16 = 13;
+}
+
+/// A replay of pulse trains, an active chip with no clock of its own. It drives `OUT` at
+/// `idle` through `output` from `VCC` and into `GND` for the whole run, and sends each of
+/// `events` as a `Pulses` record at the event's end. Only parse builds one, so the events
+/// start in order and none starts before the one before it ends.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PulsesReplay {
+    pub pins: [NetId; 3],
+    pub idle: bool,
+    pub output: OutputStage,
+    pub events: Vec<PulseTrain>,
+}
+
+/// One train of a `pulses_replay`, from `at` to `end`. `end` is `at` plus the pulse durations.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PulseTrain {
+    pub at: Time,
+    pub end: Time,
+    pub pulses: Arc<[(bool, u64)]>,
+}
+
+impl PulsesReplay {
+    pub const PINS: [&'static str; 3] = ["VCC", "GND", "OUT"];
 }
 
 /// One transaction of a `spi_replay`: its phases, then `data` on `lanes`, from `at` to `end`.

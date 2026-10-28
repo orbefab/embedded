@@ -975,6 +975,64 @@ A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.u
 
 A `cst816` has no `ratings` object and no `i`, `v`, or `p`. Its logic signals are `SCL`, `SDA`, `INT` and `RST`. It joins `SDA` to `GND` and `INT` to `GND` through the stage its drive stamps. `SCL`, `RST` and `VCC` draw no current, so each needs another DC path.
 
+### WS2812
+
+`kind` is `ws2812`, a chain of addressable LEDs on one data pin. It is an active chip with no clock of its own. It watches `DIN` and takes the `Pulses` records on that net, as [engine.md](engine.md#records) says. Pins are `VCC`, `GND` and `DIN`. Every pin is required. The part has no `DOUT` pin. Each LED takes the next 24 bits and the bits past the last LED are discarded. Green is the first byte, then red, then blue, most significant bit first. A low longer than the reset latches the colours into `observations.json` and `traces/leds.csv`.
+
+`leds` may be absent. It is then 13. An integer from 0 to 65535 outside 1 to 1024 is `netlist.value` with rule `leds`, and its message prints the count as an integer. Any other number, a negative, a fraction, `13.0`, or one above 65535, is `netlist.syntax`.
+
+The bit times are the Worldsemi WS2812E-1313 datasheet's, V1.1, page 3. A high of 220 ns to 380 ns, T0H, is a 0, and a high of 580 ns to 1 µs, T1H, is a 1, each end included. A low up to 280 µs ends the bit, however short or long. The same page gives T0L and T1L as 580 ns to 1 µs and a bit of at least 1.25 µs, and the WS2812E 5050 datasheet, V1.0, page 3, gives T1L as 220 ns to 420 ns. The chain checks no low against either, so a train timed to either sheet decodes, the 300 ns high and 900 ns low of an RMT 0 and its 900 ns high and 300 ns low 1 among them. RES is a low longer than 280 µs, and it latches. The table gives ">280µs", so a low of exactly 280 µs is no reset and the chain latches at the fall plus 280 µs plus 1 ps. A high outside both windows drops that bit, and the first drop is `chip.protocol` rule `bit`.
+
+The same sheet, page 2, gives `VIH` as at least 0.7 VDD and `VIL` as at most 0.7 V, both at VDD 5 V. `VIL` is a voltage there, not a fraction of the supply. The example's `input_threshold.low` is that 0.7 V over 5 V, 0.14 of the supply, so it holds at 5 V.
+
+`examples/atmega-ws2812` puts 13 LEDs on an ATmega328P at 5 V and 16 MHz. `PB0` drives `DIN` through 100 ohm, and 10 kohm pulls `DIN` down, so the pin is low until the sketch raises it. The sketch is `firmware/sketch/ws2812.hex`. A 0 is high for 5 cycles and low for 15, and a 1 is high for 10 and low for 10. LED `i` is green `i`, red `i + 16` and blue `i + 32`. After the frame the pin stays low for 300 µs, which is the reset. `examples/ws2812-replay` sends that same frame as one `Pulses` record. The part is:
+
+```json
+{
+  "name": "ring",
+  "kind": "ws2812",
+  "pins": { "VCC": "vcc", "GND": "gnd", "DIN": "din" },
+  "leds": 13,
+  "input_threshold": {
+    "low": {
+      "value": 0.14, "unit": "1",
+      "source": { "datasheet": { "doc": "WS2812E-1313", "at": "V1.1 page 2, Electrical Characteristics, VIL 0.7 V at VDD 5 V; 0.7 V / 5 V", "basis": "max" } }
+    },
+    "high": {
+      "value": 0.7, "unit": "1",
+      "source": { "datasheet": { "doc": "WS2812E-1313", "at": "V1.1 page 2, Electrical Characteristics, VIH 0.7 VDD", "basis": "min" } }
+    }
+  }
+}
+```
+
+| Field | Unit | Rule |
+| --- | --- | --- |
+| `leds` | count | an integer from 1 to 1024. 0 to 65535 outside that is rule `leds`, and any other number is `netlist.syntax`. Absent means 13 |
+| `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+
+A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
+
+A `ws2812` has no `ratings` object and no `i`, `v`, or `p`. Its logic signal is `DIN`. It joins no pins, so `VCC`, `GND` and `DIN` each need another DC path.
+
+### Pulses replay
+
+`kind` is `pulses_replay`, a pin that replays a list of timed levels. It is an active chip with no clock of its own, and its records are the trains, as [engine.md](engine.md#records) says. Pins are `VCC`, `GND` and `OUT`. Every pin is required.
+
+`OUT` drives `idle` for the whole run. High is `output.high_drop` under `VCC` behind `output.high_resistance`, and low is `output.low_drop` over `GND` behind `output.low_resistance`. The drops are sources, so source stepping scales them. The bits are in the record. No trace that reads the pin shows them.
+
+Each event is one train from `t_ps`. `pulses` is a list of `{ "level", "ps" }`. The levels run in order, each for `ps` picoseconds, and the event ends at `t_ps` plus those durations. The event is sent as a `Pulses` record at its end, on the part's `OUT` net, with `idle` as the record's idle level. An event that starts exactly when the previous one ends is legal.
+
+| Field | Unit | Rule |
+| --- | --- | --- |
+| `output.high_resistance`, `output.low_resistance` | `ohm` | the resistor's |
+| `output.high_drop`, `output.low_drop` | `V` | at least 0, else rule `non_negative` |
+| `events[k].pulses[j].ps` | `ps` | greater than 0, else rule `positive` |
+
+An event that breaks a schedule rule is `netlist.schedule` on field `events`, with the `serial` waveform's rules: `at_zero`, `not_increasing`, `overlap` and `overflow`, and `same_state` for an event with no pulses. A duration that would end past the largest time is `overflow`.
+
+A `pulses_replay` has no `ratings` object and no `i`, `v`, or `p`. It has no logic signals. It joins `OUT` to `VCC` and to `GND` through the stage its drive stamps.
+
 ## Ratings
 
 A rating bounds the stress on a part. Every key of a kind's `ratings` object is required. Each value is a value object, or `null` for a part that is deliberately unrated.
@@ -986,7 +1044,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `linear_regulator` | `current`, `power` | `#<part>.iout`, `#<part>.p` |
 | `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
 | `nmos` | `current`, `power` | `#<part>.id`, `#<part>.p` |
-| `voltage_source`, `current_source`, `capacitor`, `inductor`, `relay`, `switch`, `ne555`, `atmega328p`, `potentiometer`, `spi_replay`, `st77916`, `cst816` | none | |
+| `voltage_source`, `current_source`, `capacitor`, `inductor`, `relay`, `switch`, `ne555`, `atmega328p`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `pulses_replay`, `ws2812` | none | |
 
 `current` is in `A`. `power` is in `W`. A rating must be greater than 0. A missing key, an unknown key, and a missing `ratings` object are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.current` or `ratings.power`. A value of 0 or below is `netlist.value` with the same field.
 

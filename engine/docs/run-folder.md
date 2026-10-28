@@ -1,6 +1,6 @@
 # Run folder
 
-`sim run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and so does an ATmega328P. It adds `traces/serial.csv` when a chip has a USART, `traces/i2c.csv` when a chip has a TWI, as an ATmega328P does, `traces/link.csv` when a chip can send records, as an SPI replay does, and `traces/display.csv` and one `traces/display-<part>.rgb565` for each display part, an `st77916`.
+`sim run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and so does an ATmega328P. It adds `traces/serial.csv` when a chip has a USART, `traces/i2c.csv` when a chip has a TWI, as an ATmega328P does, `traces/link.csv` when a chip can send records, as an SPI replay does, `traces/display.csv` and one `traces/display-<part>.rgb565` for each display part, an `st77916`, and `traces/leds.csv` when a `ws2812` is in the netlist.
 
 ```text
 <dir>/
@@ -19,6 +19,7 @@
     link.csv
     display.csv
     display-<part>.rgb565
+    leds.csv
 ```
 
 Each JSON file is pretty JSON with a two-space indent and a trailing newline. `manifest.json` uses the field order in the example below. Keys inside a diagnostic `data` object are alphabetical. Observation keys follow ref order.
@@ -29,7 +30,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 {
   "run_format": 0,
   "netlist_format": 0,
-  "engine_version": "0.24.0",
+  "engine_version": "0.25.0",
   "input": {
     "file": "netlist.json",
     "sha256": "<lowercase hex sha256 of the input bytes>",
@@ -40,7 +41,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 }
 ```
 
-`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.24.0`. [versions.md](versions.md) says which changes move them.
+`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.25.0`. [versions.md](versions.md) says which changes move them.
 
 `netlist_format` is the input's `version`, when it reads as an unsigned integer. That holds when the engine rejected the input, so `version: 1` records 1. It is `null` when no such integer could be read.
 
@@ -194,7 +195,20 @@ A netlist with a display part adds `displays` after `logic`. It maps each displa
 }
 ```
 
-`observations.json` holds what the run reached. A rejected netlist, an operating point that failed, and a transient that failed at t = 0 write `{}`. A transient that fails after t = 0 writes `end_ps`, `op`, `switches`, `logic` and `displays` up to the time it reached, the same keys a run that reaches `stop_ps` writes.
+A netlist with a `ws2812` adds `leds` after `displays`. It maps each chain's name to its colours at `end_ps`. `kind` is `ws2812`, `count` is its LED count, `order` is `grb`, and `pixels` is one `[green, red, blue]` per LED, LED 0 first, each channel an integer from 0 to 255. A chain that never latched is still present, with every pixel `[0, 0, 0]`. `examples/ws2812-replay` writes one chain of 13:
+
+```json
+"leds": {
+  "ring": {
+    "kind": "ws2812",
+    "count": 13,
+    "order": "grb",
+    "pixels": [[0, 16, 32], [1, 17, 33], [2, 18, 34], [3, 19, 35], [4, 20, 36], [5, 21, 37], [6, 22, 38], [7, 23, 39], [8, 24, 40], [9, 25, 41], [10, 26, 42], [11, 27, 43], [12, 28, 44]]
+  }
+}
+```
+
+`observations.json` holds what the run reached. A rejected netlist, an operating point that failed, and a transient that failed at t = 0 write `{}`. A transient that fails after t = 0 writes `end_ps`, `op`, `switches`, `logic`, `displays` and `leds` up to the time it reached, the same keys a run that reaches `stop_ps` writes.
 
 ## traces
 
@@ -395,7 +409,7 @@ t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash
 ```
 
 - `t_ps` is the record's end and `start_ps` is its start, both in integer picoseconds. `part` is the sender's part name. `pin` names the link on the sender, `CS` for a `spi` record.
-- `kind` is `spi`, `pulses` or `duty`. At this version only `spi` rows occur.
+- `kind` is `spi`, `pulses` or `duty`. At this version an `spi_replay` writes `spi` rows and a `pulses_replay` writes `pulses` rows. No part writes `duty` rows.
 - On a `spi` row, `cs` is `held` or `released`, the chip select at the record's end. `phases` lists each phase, space-separated, as `<bits>/<lanes>:<value>`, with the value in lowercase hex, one digit for each four bits or part of four. `bytes` is the data's length, and `hash` is the first 8 bytes of the data's SHA-256, in lowercase hex.
 - On a `pulses` row, `phases` is `idle=0` or `idle=1`. The payload is each pulse as one level byte and its time as a little-endian `u64` of picoseconds, and `bytes` and `hash` are its length and hash.
 - On a `duty` row, `phases` is `<duty>/<2^resolution>@<hz>`, and `bytes` and `hash` are empty.
@@ -430,9 +444,24 @@ Each display part also adds `display-<part>.rgb565`, its frame memory at `end_ps
 
 `scripts/render_st77916.py` plays a replay list into a panel apart from the engine and checks a run's `display.csv`, without `t_ps`, its frame memory file, and the `displays` entry's `registers`, `flags`, `madctl` and `colmod` against it, as [reference.md](reference.md#st77916) says.
 
+A netlist with a `ws2812` adds `leds.csv`. The file holds every latch, one row per latch, as ASCII with `\n` line ends. `index.json` has no key for it. A latch is the chain after a low longer than the reset. `examples/ws2812-replay` latches once, and its file is:
+
+```text
+t_ps,part,count,grb
+1669062501,ring,13,0010200111210212220313230414240515250616260717270818280919290a1a2a0b1b2b0c1c2c
+```
+
+- `t_ps` is the reset, in integer picoseconds. That instant can fall inside a pulse, before the record that carried the bits ends. `part` is the chain's name. `count` is its LED count.
+- `grb` is green, red, then blue for LED 0 onward, six lowercase hex digits each, with no separators.
+- Rows are in order of time, then by part name.
+- A frame still open at `stop_ps` is not a row. After an error the file keeps the latches at or before `end_ps`.
+- A `ws2812` writes the file even when it never latched, as the header alone.
+
+`scripts/ws2812_decode.py` reads `DIN` in `traces/logic.vcd` apart from the engine and checks the rows and the `leds` entry, as [reference.md](reference.md#skips) says. A `pulses_replay` holds its pin at the idle level, so the bits of `examples/ws2812-replay` are in the record and not in that VCD.
+
 `end_ps` is the last row's time, and the same number as `observations.end_ps`. It is less than `stop_ps` only when the run reported an error. The grid rows before the error stay, and the last accepted step is the last row. A run that fails at t = 0 writes no `traces/`.
 
-A transient whose grid gives more than `min(1000000, 67108864 / columns)` rows is refused before it solves, with one `trace.too_large`. 67108864 is 2^26 f64 values, 512 MiB. `columns` is the width of `analog.f64`. The cap counts `analog.f64` and not the envelope, which stores at most twice as many values. Writing the folder keeps a second copy of the trace bytes. A run at this cap peaks near 1.02 GiB without the envelope and near 3.02 GiB with it. The refused run writes `{}` to `observations.json` and no `traces/`. The row count depends only on `stop_ps` and `grid_ps`, so a run that is not refused never runs out of rows. Edges, jumps and chip events cost steps, not rows. Those steps can end the run at [`solver.step_limit`](diagnostics.md#solverstep_limit). `examples/rc-switch` writes 4051 rows, `examples/button-led` 2001, `examples/v-pulse-rc` 1401, `examples/current-pulse` 801, `examples/ne555-led` 401, `examples/atmega-blink` 401, `examples/atmega-board-blink` 401, `examples/atmega-board-button` 21, `examples/atmega-button` 101, `examples/atmega-analog-serial` 951, `examples/atmega-fade` 15701, `examples/atmega-serial-echo` 121, `examples/atmega-i2c-scan` 201, `examples/npn-sweep` 521, `examples/pnp-sweep` 521, `examples/nmos-sweep` 521, `examples/npn-pulse` 1101, `examples/st77916-replay` 41, and `examples/npn-blinker` 2001.
+A transient whose grid gives more than `min(1000000, 67108864 / columns)` rows is refused before it solves, with one `trace.too_large`. 67108864 is 2^26 f64 values, 512 MiB. `columns` is the width of `analog.f64`. The cap counts `analog.f64` and not the envelope, which stores at most twice as many values. Writing the folder keeps a second copy of the trace bytes. A run at this cap peaks near 1.02 GiB without the envelope and near 3.02 GiB with it. The refused run writes `{}` to `observations.json` and no `traces/`. The row count depends only on `stop_ps` and `grid_ps`, so a run that is not refused never runs out of rows. Edges, jumps and chip events cost steps, not rows. Those steps can end the run at [`solver.step_limit`](diagnostics.md#solverstep_limit). `examples/rc-switch` writes 4051 rows, `examples/button-led` 2001, `examples/v-pulse-rc` 1401, `examples/current-pulse` 801, `examples/ne555-led` 401, `examples/atmega-blink` 401, `examples/atmega-board-blink` 401, `examples/atmega-board-button` 21, `examples/atmega-button` 101, `examples/atmega-analog-serial` 951, `examples/atmega-fade` 15701, `examples/atmega-serial-echo` 121, `examples/atmega-i2c-scan` 201, `examples/npn-sweep` 521, `examples/pnp-sweep` 521, `examples/nmos-sweep` 521, `examples/npn-pulse` 1101, `examples/st77916-replay` 41, `examples/atmega-ws2812` 21, `examples/ws2812-replay` 5, and `examples/npn-blinker` 2001.
 
 Python with numpy reads one column like this:
 

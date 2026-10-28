@@ -87,14 +87,14 @@ pub fn has_usart(netlist: &serde_json::Value) -> bool {
         .any(|part| part["kind"] == "atmega328p")
 }
 
-/// Whether a chip in `netlist` can send records. Today only a `spi_replay` can, so a new kind
-/// that sends records adds its kind here.
+/// Whether a chip in `netlist` can send records. A `spi_replay` and a `pulses_replay` can, so a
+/// new kind that sends records adds its kind here.
 pub fn sends_records(netlist: &serde_json::Value) -> bool {
     netlist["parts"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|part| part["kind"] == "spi_replay")
+        .any(|part| part["kind"] == "spi_replay" || part["kind"] == "pulses_replay")
 }
 
 /// The names of the display parts of `netlist`, in part order. Today only an `st77916` is one,
@@ -107,6 +107,15 @@ pub fn display_parts(netlist: &serde_json::Value) -> Vec<String> {
         .filter(|part| part["kind"] == "st77916")
         .map(|part| part["name"].as_str().unwrap().to_string())
         .collect()
+}
+
+/// Whether `netlist` has a `ws2812` part, which writes `traces/leds.csv`.
+pub fn led_parts(netlist: &serde_json::Value) -> bool {
+    netlist["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|part| part["kind"] == "ws2812")
 }
 
 /// A transient run folder read back. `analog` holds one column of `time.len()` rows per ref in
@@ -160,6 +169,9 @@ pub fn transient_folder(name: &str, out: &Path) -> TransientFolder {
     }
     if !displays.is_empty() {
         expected.push("traces/display.csv".into());
+    }
+    if led_parts(&input) {
+        expected.push("traces/leds.csv".into());
     }
     if usart {
         expected.push("traces/i2c.csv".into());

@@ -403,7 +403,8 @@ impl Session {
         self.inner.fault().map(json)
     }
 
-    /// The warnings `diagnostics.json` would list if the session ended now, as JSON.
+    /// The warnings found so far, as JSON. Once the session ends they are the ones
+    /// `diagnostics.json` lists. While it runs, a `Pulses` record in flight is not yet counted.
     pub fn diagnostics(&self) -> String {
         json(&self.inner.diagnostics())
     }
@@ -539,6 +540,18 @@ impl Session {
         self.inner
             .display(&name(&str_of(part)?)?)
             .ok_or(SimError::new(Code::UnknownPart))
+    }
+
+    /// The LED chain `part` at `now`, as the JSON of its `observations.json` `leds` entry.
+    pub fn leds(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "string")] part: &Text,
+    ) -> Result<String, SimError> {
+        let chain = self
+            .inner
+            .leds(&name(&str_of(part)?)?)
+            .ok_or(SimError::new(Code::UnknownPart))?;
+        Ok(json(&chain.chain()))
     }
 
     /// Sets a switch's contact from `ps` on.

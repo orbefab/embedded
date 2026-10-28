@@ -13,6 +13,7 @@
 //!   link.csv      when a chip in the netlist can send records, see `link`
 //!   display.csv   when the netlist has a display part, see `display`
 //!   display-<part>.rgb565
+//!   leds.csv      when the netlist has a ws2812 part, see `leds`
 //! ```
 
 use serde::Serialize;
@@ -20,6 +21,7 @@ use serde::Serialize;
 use crate::display::Displays;
 use crate::finite::Finite;
 use crate::i2c::I2c;
+use crate::leds::Leds;
 use crate::link::Link;
 use crate::logic::Logic;
 use crate::name::{Quantity, Ref};
@@ -52,6 +54,7 @@ pub struct Trace {
     i2c: Option<I2c>,
     link: Option<Link>,
     displays: Option<Displays>,
+    leds: Option<Leds>,
 }
 
 /// Running minimum and maximum of the interval open since the last row, one pair per column.
@@ -112,6 +115,7 @@ impl Trace {
             i2c: None,
             link: None,
             displays: None,
+            leds: None,
         }
     }
 
@@ -151,6 +155,12 @@ impl Trace {
     pub fn attach_displays(&mut self, displays: Displays) {
         assert!(self.displays.is_none(), "displays are attached once");
         self.displays = Some(displays);
+    }
+
+    /// What the LED chains latched over the run, attached once at its end, after an error too.
+    pub fn attach_leds(&mut self, leds: Leds) {
+        assert!(self.leds.is_none(), "leds are attached once");
+        self.leds = Some(leds);
     }
 
     /// Folds a non-row accepted step into the interval open since the last row. The engine
@@ -272,6 +282,9 @@ impl Trace {
         if let Some(displays) = &self.displays {
             files.push((DISPLAY, displays.csv()));
         }
+        if let Some(leds) = &self.leds {
+            files.push((LEDS, leds.csv()));
+        }
         files
     }
 
@@ -341,6 +354,7 @@ const SERIAL: &str = "serial.csv";
 const I2C: &str = "i2c.csv";
 const LINK: &str = "link.csv";
 const DISPLAY: &str = "display.csv";
+const LEDS: &str = "leds.csv";
 
 fn unit(reference: &Ref) -> &'static str {
     match reference {

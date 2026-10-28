@@ -121,6 +121,7 @@ pub(crate) fn chip(part: PartId, panel: &St77916) -> Chip {
                 sclk: pins[SCLK],
             }),
             duty: Some(pins[BLK]),
+            pulses: None,
         },
         core: super::Core::St77916(Box::new(Core::new(
             [D0, D0 + 1, D0 + 2, D0 + 3].map(|k| pins[k]),

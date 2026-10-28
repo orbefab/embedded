@@ -8,9 +8,11 @@ use serde::{Deserialize, Deserializer};
 mod atmega328p;
 mod cst816;
 mod potentiometer;
+mod pulses_replay;
 mod spi_replay;
 mod st77916;
 mod waveform;
+mod ws2812;
 
 use super::{
     Analysis, Basis, Bjt, Bounce, BreakdownFault, Capacitor, Chip, Contact, CurrentSource,
@@ -24,9 +26,11 @@ use crate::name::{Name, NameError, Ref};
 use crate::time::Time;
 use atmega328p::{WireAtmega328p, resolve_atmega328p};
 use cst816::{WireCst816, resolve_cst816};
+use pulses_replay::{WirePulsesReplay, resolve_pulses_replay};
 use spi_replay::{WireSpiReplay, resolve_spi_replay};
 use st77916::{WireSt77916, resolve_st77916};
 use waveform::{CURRENT, VOLTAGE, WireWaveform, resolve_waveform};
+use ws2812::{WireWs2812, resolve_ws2812};
 
 pub(crate) use waveform::{AMPERE, VOLT};
 pub(crate) const FRACTION_UNIT: &str = "1";
@@ -119,6 +123,8 @@ enum WirePart {
     SpiReplay(Box<WireSpiReplay>),
     St77916(Box<WireSt77916>),
     Cst816(Box<WireCst816>),
+    Ws2812(Box<WireWs2812>),
+    PulsesReplay(Box<WirePulsesReplay>),
 }
 
 #[derive(Deserialize)]
@@ -551,6 +557,8 @@ fn resolve_part(
         WirePart::SpiReplay(chip) => &chip.name,
         WirePart::St77916(chip) => &chip.name,
         WirePart::Cst816(chip) => &chip.name,
+        WirePart::Ws2812(chip) => &chip.name,
+        WirePart::PulsesReplay(chip) => &chip.name,
     };
     let path = format!("parts[{index}].name");
     let name = match Name::new(raw_name) {
@@ -713,6 +721,10 @@ fn resolve_part(
             .map(|chip| Model::Chip(Chip::St77916(Box::new(chip)))),
         WirePart::Cst816(chip) => resolve_cst816(&name, &part_ref, *chip, nets, out)
             .map(|chip| Model::Chip(Chip::Cst816(Box::new(chip)))),
+        WirePart::Ws2812(chip) => resolve_ws2812(&name, &part_ref, *chip, nets, out)
+            .map(|chip| Model::Chip(Chip::Ws2812(Box::new(chip)))),
+        WirePart::PulsesReplay(chip) => resolve_pulses_replay(&name, &part_ref, *chip, nets, out)
+            .map(|chip| Model::Chip(Chip::PulsesReplay(Box::new(chip)))),
     };
     if duplicate || reserved {
         None

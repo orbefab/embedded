@@ -83,6 +83,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "atmega-fade",
             "atmega-i2c-scan",
             "atmega-serial-echo",
+            "atmega-ws2812",
             "button-led",
             "ce-amp",
             "current-pulse",
@@ -111,6 +112,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "v-pulse-rc",
             "v-serial",
             "v-steps",
+            "ws2812-replay",
             "zener-shunt",
             "zener-sweep"
         ]

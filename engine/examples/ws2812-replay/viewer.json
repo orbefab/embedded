@@ -1,0 +1,14 @@
+{
+  "version": 0,
+  "parts": {
+    "v1": {
+      "model": "placeholder:dc-supply"
+    },
+    "rp1": {
+      "model": "placeholder:pulses-replay"
+    },
+    "ring": {
+      "model": "placeholder:ws2812"
+    }
+  }
+}

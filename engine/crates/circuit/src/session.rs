@@ -4,6 +4,7 @@ use sim_core::diagnostic::{Diagnostic, Solve};
 use sim_core::display::{Displays, Panel, Rectangle};
 use sim_core::finite::Finite;
 use sim_core::i2c::{I2c, I2cRow};
+use sim_core::leds::{Latch, Leds as LedTrace};
 use sim_core::link::{Link, LinkRow};
 use sim_core::logic::{Change, Level};
 use sim_core::name::{Name, Ref};
@@ -14,7 +15,7 @@ use sim_core::time::Time;
 use sim_core::timestamp::Timestamp;
 
 use crate::RunStats;
-use crate::active::{self, Actives, st77916};
+use crate::active::{self, Actives, st77916, ws2812};
 use crate::chip;
 use crate::lte::{self, Charges, Segment, Verdict};
 use crate::mna::{Memo, Solution};
@@ -112,6 +113,18 @@ pub(crate) struct Landing {
 /// A display part's state, read from a session.
 pub struct Display<'s> {
     panel: &'s st77916::Core,
+}
+
+/// An LED chain's colours, read from a session.
+pub struct Leds<'s> {
+    chain: &'s ws2812::Core,
+}
+
+impl Leds<'_> {
+    /// Its colours, as one `observations.json` `leds` entry.
+    pub fn chain(&self) -> sim_core::leds::Chain {
+        self.chain.observed()
+    }
 }
 
 impl Display<'_> {
@@ -518,7 +531,8 @@ impl Session {
         }
     }
 
-    /// The warnings `diagnostics.json` would list if the session ended now.
+    /// The warnings found so far. Once the session ends they are the ones `diagnostics.json`
+    /// lists. While it runs, a `Pulses` record in flight is not yet counted, as with `leds`.
     ///
     /// Static warnings come first in that file's order, each with `t_ps` null. One
     /// `rating.current` or `rating.power` follows for each rated quantity that has gone
@@ -684,6 +698,18 @@ impl Session {
         Some(Display { panel })
     }
 
+    /// The LED chain `part` as it stands after the last accepted step, which is its colours at
+    /// `now`. `None` when `part` is no chain.
+    pub fn leds(&self, part: &Name) -> Option<Leds<'_>> {
+        let k = self
+            .actives
+            .led_names()
+            .iter()
+            .position(|name| name == part)?;
+        let chain = self.actives.chains().nth(k)?;
+        Some(Leds { chain })
+    }
+
     /// Each USART, chips in part order, then each chip's in datasheet order: the part's name and
     /// the USART's, such as `USART0`. A `SerialByte`'s `usart` indexes this.
     pub fn usarts(&self) -> &[(Name, &'static str)] {
@@ -783,6 +809,34 @@ impl Session {
             }
             trace.attach_displays(displays);
         }
+        let names = self.actives.led_names();
+        if !names.is_empty() {
+            let parts: Vec<_> = names
+                .iter()
+                .zip(self.actives.chains())
+                .map(|(name, chain)| (name.clone(), chain.observed()))
+                .collect();
+            let mut rows = Vec::new();
+            for (index, chain) in self.actives.chains().enumerate() {
+                for latch in chain.latches() {
+                    rows.push(Latch {
+                        at: latch.at,
+                        part: u16::try_from(index).expect("a run has few chains"),
+                        pixels: latch.pixels.to_vec(),
+                    });
+                }
+            }
+            rows.sort_by(|a, b| {
+                let left = &parts[usize::from(a.part)].0;
+                let right = &parts[usize::from(b.part)].0;
+                (a.at, left).cmp(&(b.at, right))
+            });
+            let leds = LedTrace::new(parts, rows);
+            if let Observations::Transient { leds: seen, .. } = &mut observations {
+                *seen = Some(leds.observed());
+            }
+            trace.attach_leds(leds);
+        }
         if let End::Fault(fault) = end {
             diagnostics.push(fault);
         }
@@ -810,11 +864,14 @@ impl Session {
                 Err(fault) => End::Fault(fault),
             }
         };
-        State::Ended {
-            at: accepted.at,
-            row: accepted.row,
-            end,
-        }
+        self.ended(accepted.at, accepted.row, end)
+    }
+
+    /// The run ends at `at`. A record still in flight there hands its receivers what it has
+    /// sent, so the ended session and its folder show the line up to `at`.
+    fn ended(&mut self, at: Time, row: Vec<Finite>, end: End) -> State {
+        self.actives.cut(&self.circuit, at);
+        State::Ended { at, row, end }
     }
 
     /// The step after `accepted`. It writes back only the breakpoints and the cores run
@@ -976,11 +1033,7 @@ impl Session {
         if let Some(record) = &mut self.record
             && let Err(fault) = record.landed(&span)
         {
-            return State::Ended {
-                at: accepted.at,
-                row: accepted.row,
-                end: End::Fault(fault),
-            };
+            return self.ended(accepted.at, accepted.row, End::Fault(fault));
         }
         self.ratings.sample(landing.at, &landing.row);
         // A refused step ends on the accepted row, so it is not counted. The count is before
@@ -1057,11 +1110,7 @@ impl Session {
             let (held, restart_row) = match held {
                 Ok(held) => held,
                 Err(fault) => {
-                    return State::Ended {
-                        at,
-                        row,
-                        end: End::Fault(fault),
-                    };
+                    return self.ended(at, row, End::Fault(fault));
                 }
             };
             self.actives.input(circuit, at, &levels, &held.levels);

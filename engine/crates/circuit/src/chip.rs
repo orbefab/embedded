@@ -12,7 +12,7 @@ pub(crate) use relay::coil as relay_coil;
 
 use sim_core::logic::Level;
 use sim_core::netlist::{
-    Atmega328p, Chip, Cst816, Model, Ne555, PartId, Relay, SpiReplay, St77916,
+    Atmega328p, Chip, Cst816, Model, Ne555, PartId, PulsesReplay, Relay, SpiReplay, St77916, Ws2812,
 };
 
 use crate::mna::{Layout, Stamp, Unknowns};
@@ -47,6 +47,8 @@ pub(crate) enum Active<'n> {
     SpiReplay(&'n SpiReplay),
     St77916(&'n St77916),
     Cst816(&'n Cst816),
+    Ws2812(&'n Ws2812),
+    PulsesReplay(&'n PulsesReplay),
 }
 
 pub(crate) fn kind(chip: &Chip) -> Kind<'_> {
@@ -56,6 +58,8 @@ pub(crate) fn kind(chip: &Chip) -> Kind<'_> {
         Chip::SpiReplay(replay) => Kind::Active(Active::SpiReplay(replay)),
         Chip::St77916(panel) => Kind::Active(Active::St77916(panel)),
         Chip::Cst816(dev) => Kind::Active(Active::Cst816(dev)),
+        Chip::Ws2812(chain) => Kind::Active(Active::Ws2812(chain)),
+        Chip::PulsesReplay(replay) => Kind::Active(Active::PulsesReplay(replay)),
     }
 }
 
@@ -79,9 +83,12 @@ pub(crate) fn unknowns(chip: &Chip) -> Unknowns {
             internal_nodes: 1,
             ..Unknowns::default()
         },
-        Chip::Atmega328p(_) | Chip::SpiReplay(_) | Chip::St77916(_) | Chip::Cst816(_) => {
-            Unknowns::default()
-        }
+        Chip::Atmega328p(_)
+        | Chip::SpiReplay(_)
+        | Chip::St77916(_)
+        | Chip::Cst816(_)
+        | Chip::Ws2812(_)
+        | Chip::PulsesReplay(_) => Unknowns::default(),
     }
 }
 
@@ -93,7 +100,9 @@ pub(crate) fn reads_iterate(chip: &Chip) -> bool {
         | Chip::Atmega328p(_)
         | Chip::SpiReplay(_)
         | Chip::St77916(_)
-        | Chip::Cst816(_) => false,
+        | Chip::Cst816(_)
+        | Chip::Ws2812(_)
+        | Chip::PulsesReplay(_) => false,
     }
 }
 
@@ -158,5 +167,7 @@ pub(crate) fn dc_paths(chip: &Chip) -> &'static [(usize, usize)] {
         Chip::SpiReplay(_) => &crate::active::replay::DC_PATHS,
         Chip::St77916(_) => &crate::active::st77916::DC_PATHS,
         Chip::Cst816(_) => &crate::active::cst816::DC_PATHS,
+        Chip::Ws2812(_) => &crate::active::ws2812::DC_PATHS,
+        Chip::PulsesReplay(_) => &crate::active::pulses::DC_PATHS,
     }
 }

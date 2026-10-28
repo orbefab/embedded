@@ -173,5 +173,6 @@ Every other test runs firmware written in assembly for the repo. `firmware/sketc
 - `analog_read_serial` prints `analogRead(A0)` at 9600 baud. The runtime sets `U2X0` and `UBRR0` = 207, so a bit is 1664 cycles, 0.16 % fast. The 64-byte transmit buffer keeps every frame back to back.
 - `serial_counter` prints a counter at 115200 baud with `UBRR0` = 16, a bit of 136 cycles, 2.1 % fast.
 - `tone` plays `tone(8, 440, 500)` once a second. Timer2 runs CTC at /128 with `OCR2A` = 141, and the compare ISR toggles PB0 440 times, each within 128 cycles of an 18176-cycle grid.
+- `ws2812` bit-bangs PB0 for 13 LEDs and then holds the pin low. A 0 is high for 5 cycles and low for 15, and a 1 is high for 10 and low for 10, which sits in the WS2812E-1313 windows. `crates/cli/tests/ws2812.rs` checks the colours. The bare-core tests above do not decode the chain.
 
 The timing windows are hundreds of cycles wide, and the serial tests also check frame spacing to the cycle. They catch a wrong timer, prescaler, `millis()` or baud, which moves an edge by hundreds to thousands of cycles. An interrupt entry one cycle late moves edges a few dozen cycles and stays inside the windows. The unit tests in `crates/avr/src/irq.rs` and the `oc_pin`, `system`, `timeline`, `timers` and `timing` suites in `crates/avr/tests` are cycle-exact and catch that.

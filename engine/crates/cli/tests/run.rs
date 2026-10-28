@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use common::examples::transient_examples;
-use common::{display_parts, files, has_usart, repo, sends_records, transient_folder};
+use common::{display_parts, files, has_usart, led_parts, repo, sends_records, transient_folder};
 
 fn sim(args: &[&str]) -> (i32, String, String) {
     let output = Command::new(env!("CARGO_BIN_EXE_sim"))
@@ -461,12 +461,14 @@ fn two_runs_of_each_transient_example_differ_only_in_created_at() {
         let netlist: serde_json::Value =
             serde_json::from_slice(&left_files["netlist.json"]).unwrap();
         // An ATmega328P writes `serial.csv` for its USART and `i2c.csv` for its TWI, a replay
-        // writes `link.csv`, and display parts write `display.csv` and one image each.
+        // writes `link.csv`, display parts write `display.csv` and one image each, and a
+        // `ws2812` writes `leds.csv`.
         let displays = display_parts(&netlist).len();
         let chip = 2 * usize::from(has_usart(&netlist))
             + usize::from(sends_records(&netlist))
             + usize::from(displays > 0)
-            + displays;
+            + displays
+            + usize::from(led_parts(&netlist));
         assert_eq!(left_files.len(), 7 + logic + chip, "{name}");
         assert_eq!(left_files, right_files, "{}", left.display());
         let _ = fs::remove_dir_all(left);

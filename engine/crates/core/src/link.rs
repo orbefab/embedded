@@ -30,7 +30,7 @@ pub struct Record {
     pub seq: u64,
     pub start: Time,
     pub end: Time,
-    /// The sender's pin that names the link: the CS pin of an SPI host.
+    /// The sender's pin that names the link.
     pub pin: &'static str,
     pub kind: RecordKind,
 }
@@ -108,6 +108,9 @@ pub struct SpiNets {
 pub struct Pulses {
     pub idle: bool,
     pub pulses: Arc<[(bool, u64)]>,
+    /// The net of the sender's pin when it sent. A receiver whose pulse pin sits on it takes
+    /// the record.
+    pub net: NetId,
 }
 
 /// A PWM duty as an LEDC channel sets it: `duty` of `2^resolution` steps at `hz`.
@@ -290,6 +293,7 @@ mod tests {
                     kind: RecordKind::Pulses(Pulses {
                         idle: false,
                         pulses: vec![(true, 400), (false, 850)].into(),
+                        net: NetId::GROUND,
                     }),
                 },
             },
