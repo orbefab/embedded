@@ -112,9 +112,9 @@ pub(crate) struct Takes {
 impl Takes {
     fn record(self, record: &Record) -> bool {
         match &record.kind {
-            RecordKind::Spi(spi) => self
-                .spi
-                .is_some_and(|target| spi.nets.cs == target.cs && spi.nets.sclk == target.sclk),
+            RecordKind::Spi(spi) => self.spi.is_some_and(|target| {
+                spi.nets.cs == Some(target.cs) && spi.nets.sclk == Some(target.sclk)
+            }),
             RecordKind::Duty(duty) => self.duty == Some(duty.net),
             RecordKind::Pulses(pulses) => self.pulses == Some(pulses.net),
         }
@@ -276,11 +276,8 @@ impl Core {
     /// The records it sent that it still holds, in the order it sent them.
     fn records(&self) -> &[Record] {
         match *self {
-            Core::Avr(_)
-            | Core::St77916(_)
-            | Core::Cst816(_)
-            | Core::Esp32s3(_)
-            | Core::Ws2812(_) => &[],
+            Core::Avr(_) | Core::St77916(_) | Core::Cst816(_) | Core::Ws2812(_) => &[],
+            Core::Esp32s3(ref core) => core.records(),
             Core::SpiReplay(ref core) => core.records(),
             Core::PulsesReplay(ref core) => core.records(),
             #[cfg(test)]
@@ -292,11 +289,8 @@ impl Core {
     /// order it sent them.
     fn drain_records(&mut self, through: Time, sent: impl FnMut(Record)) {
         match *self {
-            Core::Avr(_)
-            | Core::St77916(_)
-            | Core::Cst816(_)
-            | Core::Esp32s3(_)
-            | Core::Ws2812(_) => {}
+            Core::Avr(_) | Core::St77916(_) | Core::Cst816(_) | Core::Ws2812(_) => {}
+            Core::Esp32s3(ref mut core) => core.drain_records(through, sent),
             Core::SpiReplay(ref mut core) => core.drain_records(through, sent),
             Core::PulsesReplay(ref mut core) => core.drain_records(through, sent),
             #[cfg(test)]

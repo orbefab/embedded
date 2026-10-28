@@ -311,6 +311,16 @@ pub enum Diagnostic {
         pc: u32,
         symbol: Option<String>,
     },
+    /// A chip's firmware started a `peripheral` transfer from the store at `pc` with `setting`,
+    /// which the model does not run. It ends the run.
+    ChipUnsupportedSetting {
+        part: Ref,
+        at: Time,
+        peripheral: &'static str,
+        setting: &'static str,
+        pc: u32,
+        symbol: Option<String>,
+    },
     /// A chip's watchdog ran out its first stage. It ends the run.
     ChipWatchdog {
         part: Ref,
@@ -416,6 +426,7 @@ impl Diagnostic {
             Diagnostic::ChipLinkMiswired { .. } => "chip.link_miswired",
             Diagnostic::ChipUnsupportedInstruction { .. } => "chip.unsupported_instruction",
             Diagnostic::ChipUnmappedFetch { .. } => "chip.unmapped_fetch",
+            Diagnostic::ChipUnsupportedSetting { .. } => "chip.unsupported_setting",
             Diagnostic::ChipWatchdog { .. } => "chip.watchdog",
             Diagnostic::ChipUnmodeledRegister { .. } => "chip.unmodeled_register",
             Diagnostic::TraceTooLarge { .. } => "trace.too_large",
@@ -457,6 +468,7 @@ impl Diagnostic {
             | Diagnostic::ChipUnsettled { .. }
             | Diagnostic::ChipUnsupportedInstruction { .. }
             | Diagnostic::ChipUnmappedFetch { .. }
+            | Diagnostic::ChipUnsupportedSetting { .. }
             | Diagnostic::ChipWatchdog { .. }
             | Diagnostic::TraceTooLarge { .. } => Severity::Error,
         }
@@ -474,6 +486,7 @@ impl Diagnostic {
             | Diagnostic::ChipLinkMiswired { at, .. }
             | Diagnostic::ChipUnsupportedInstruction { at, .. }
             | Diagnostic::ChipUnmappedFetch { at, .. }
+            | Diagnostic::ChipUnsupportedSetting { at, .. }
             | Diagnostic::ChipWatchdog { at, .. }
             | Diagnostic::ChipUnmodeledRegister { at, .. }
             | Diagnostic::TraceRowInterpolated { at, .. } => Some(*at),
@@ -526,6 +539,7 @@ impl Diagnostic {
             | Diagnostic::ChipLinkMiswired { part, .. }
             | Diagnostic::ChipUnsupportedInstruction { part, .. }
             | Diagnostic::ChipUnmappedFetch { part, .. }
+            | Diagnostic::ChipUnsupportedSetting { part, .. }
             | Diagnostic::ChipWatchdog { part, .. }
             | Diagnostic::ChipUnmodeledRegister { part, .. } => vec![part.clone()],
             Diagnostic::SolverTooLarge { .. }
@@ -882,6 +896,18 @@ impl Diagnostic {
                 symbol_text(symbol),
                 at.as_ps()
             ),
+            Diagnostic::ChipUnsupportedSetting {
+                part,
+                at,
+                peripheral,
+                setting,
+                pc,
+                symbol,
+            } => format!(
+                "{part} started a {peripheral} transfer with setting {setting} at {pc:#010x}{}, which the model does not run, at {} ps",
+                symbol_text(symbol),
+                at.as_ps()
+            ),
             Diagnostic::ChipWatchdog { part, at, watchdog } => format!(
                 "{part} {watchdog} watchdog ran out at {} ps; the firmware neither fed nor disabled it",
                 at.as_ps()
@@ -1041,6 +1067,18 @@ impl Diagnostic {
             Diagnostic::ChipUnmappedFetch { pc, symbol, .. } => {
                 serde_json::json!({ "pc": pc, "symbol": symbol })
             }
+            Diagnostic::ChipUnsupportedSetting {
+                peripheral,
+                setting,
+                pc,
+                symbol,
+                ..
+            } => serde_json::json!({
+                "peripheral": peripheral,
+                "pc": pc,
+                "setting": setting,
+                "symbol": symbol,
+            }),
             Diagnostic::ChipWatchdog { watchdog, .. } => {
                 serde_json::json!({ "watchdog": watchdog })
             }

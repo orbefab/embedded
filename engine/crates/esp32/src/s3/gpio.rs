@@ -3,9 +3,11 @@
 //!
 //! A pad drives from the matrix when its IO_MUX function is the GPIO one: function 1 on every
 //! pad, or function 0 on a pad whose function 0 is its GPIO. The matrix's signal 256 is the
-//! pad's own `GPIO_OUT` bit, with `GPIO_ENABLE` as its output enable. No peripheral output is
-//! modeled yet, so a pad routed to any other signal, or to another IO_MUX function, drives
-//! nothing. A pad that does not drive pulls up when `FUN_WPU` is set. `FUN_WPD` is kept and
+//! pad's own `GPIO_OUT` bit, with `GPIO_ENABLE` as its output enable. A peripheral signal the
+//! SoC gives a level, as SPI2 does its idle levels, drives that level, enabled by the peripheral
+//! unless `OEN_SEL` hands the enable to `GPIO_ENABLE`. A pad routed to any other signal, or to
+//! another IO_MUX function, drives nothing. A pad that does not drive pulls up when `FUN_WPU` is
+//! set. `FUN_WPD` is kept and
 //! not stamped, since the seam has no pull-down drive. `GPIO_PINn`, which holds the open-drain
 //! bit and the interrupt setup, is not modeled.
 
@@ -14,6 +16,9 @@ pub(crate) const PADS: usize = 49;
 
 /// The bits of the 54 the registers hold.
 const BITS: u64 = (1 << 54) - 1;
+
+/// The output signals of the matrix, 0 to 255. 256 is the pad's own `GPIO_OUT` bit.
+const SIGNALS: usize = 256;
 
 /// `FUNCn_OUT_SEL_CFG`'s value for the pad's own `GPIO_OUT` bit.
 const SIG_GPIO_OUT: u32 = 0x100;
@@ -52,6 +57,8 @@ pub(crate) struct Gpio {
     io_mux: [u32; PADS],
     /// The level each pad with a net reads, `None` for one with no net.
     pads: [Option<bool>; PADS],
+    /// The level of each peripheral output signal the SoC drives, `None` for one it does not.
+    signals: [Option<bool>; SIGNALS],
 }
 
 /// A GPIO block register the model keeps.
@@ -85,6 +92,7 @@ impl Gpio {
             in_sel: [0; 256],
             io_mux: [IO_MUX_RESET; PADS],
             pads,
+            signals: [None; SIGNALS],
         }
     }
 
@@ -177,6 +185,18 @@ impl Gpio {
         *pad = Some(level);
     }
 
+    /// The level peripheral output `signal` drives from now on.
+    pub(crate) fn set_signal(&mut self, signal: u16, level: bool) {
+        self.signals[usize::from(signal)] = Some(level);
+    }
+
+    /// The lowest pad whose output `signal` drives, enabled.
+    pub(crate) fn routed(&self, signal: u16) -> Option<u8> {
+        (0..PADS)
+            .find(|&pad| self.out_sel[pad] & OUT_SEL == u32::from(signal) && self.output(pad).0)
+            .map(|pad| pad as u8)
+    }
+
     /// Whether the pad takes its output from the GPIO matrix.
     fn matrix_drives(&self, pad: usize) -> bool {
         match (self.io_mux[pad] & MCU_SEL) >> MCU_SEL_SHIFT {
@@ -189,12 +209,19 @@ impl Gpio {
     /// The output enable and the level the pad drives when enabled.
     fn output(&self, pad: usize) -> (bool, bool) {
         let sel = self.out_sel[pad];
-        if !self.matrix_drives(pad) || sel & OUT_SEL != SIG_GPIO_OUT {
+        if !self.matrix_drives(pad) {
             return (false, false);
         }
-        let enable = (self.enable >> pad & 1 != 0) ^ (sel & OEN_SEL != 0 && sel & OEN_INV_SEL != 0);
-        let level = (self.out >> pad & 1 != 0) ^ (sel & OUT_INV_SEL != 0);
-        (enable, level)
+        let gpio_enable =
+            (self.enable >> pad & 1 != 0) ^ (sel & OEN_SEL != 0 && sel & OEN_INV_SEL != 0);
+        let (enable, level) = match (sel & OUT_SEL) as usize {
+            signal if signal == SIG_GPIO_OUT as usize => (gpio_enable, self.out >> pad & 1 != 0),
+            signal => match self.signals.get(signal).copied().flatten() {
+                Some(level) => (sel & OEN_SEL == 0 || gpio_enable, level),
+                None => return (false, false),
+            },
+        };
+        (enable, level ^ (sel & OUT_INV_SEL != 0))
     }
 
     pub(crate) fn drive(&self, pad: usize) -> PadDrive {
@@ -295,6 +322,31 @@ mod tests {
         );
         gpio.write(0x554 + 4 * 43, SIG_GPIO_OUT | OUT_INV_SEL);
         assert_eq!(gpio.drive(43), PadDrive::Low, "inverted");
+    }
+
+    #[test]
+    fn a_peripheral_signal_drives_its_level_enabled_by_the_peripheral() {
+        let mut gpio = Gpio::new(&[]);
+        gpio.write_io_mux(0x4 + 4 * 12, GPIO_FUNC);
+        gpio.write(0x554 + 4 * 12, 110);
+        assert_eq!(gpio.drive(12), PadDrive::Off, "a signal with no level");
+        assert_eq!(gpio.routed(110), None);
+        gpio.set_signal(110, true);
+        assert_eq!(gpio.drive(12), PadDrive::High, "GPIO_ENABLE clear");
+        gpio.write(0x554 + 4 * 12, 110 | OUT_INV_SEL);
+        assert_eq!(gpio.drive(12), PadDrive::Low, "inverted");
+        gpio.write(0x554 + 4 * 12, 110 | OEN_SEL);
+        assert_eq!(gpio.drive(12), PadDrive::Off, "enabled from GPIO_ENABLE");
+        assert_eq!(
+            gpio.routed(110),
+            None,
+            "a pad that does not drive carries nothing"
+        );
+        gpio.write(0x24, 1 << 12);
+        assert_eq!(gpio.drive(12), PadDrive::High);
+        gpio.write_io_mux(0x4 + 4 * 30, GPIO_FUNC);
+        gpio.write(0x554 + 4 * 30, 110);
+        assert_eq!(gpio.routed(110), Some(12), "the lowest pad");
     }
 
     #[test]

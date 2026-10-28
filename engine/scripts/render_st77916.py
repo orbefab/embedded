@@ -2,10 +2,12 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Render an `st77916` panel from a replay list, apart from the engine.
+"""Render an `st77916` panel from a replay list or a pattern, apart from the engine.
 
     uv run scripts/render_st77916.py EVENTS [--part NAME] [--out DIR]
     uv run scripts/render_st77916.py EVENTS --check RUN_DIR [--part NAME]
+    uv run scripts/render_st77916.py --pattern PATTERN [--part NAME] [--sender NAME] [--out DIR]
+    uv run scripts/render_st77916.py --pattern PATTERN --check RUN_DIR [--part NAME] [--sender NAME]
     uv run scripts/render_st77916.py --self-test
 
 EVENTS is a replay list, a JSON array of `spi_replay` events, such as
@@ -15,12 +17,31 @@ so. `--out` writes `display.csv`, the rows the run must write without `t_ps`, an
 `display-<part>.rgb565`, the frame memory it must end with. `--part` names the panel, `lcd1`
 by default.
 
+PATTERN is `firmware/esp32s3/pattern.json`. The script turns it into the SPI2 transfers
+`firmware/esp32s3/pattern.c` sends, written from that program's source:
+
+- Each init command, then CASET, RASET and RAMWR for each rectangle, is the 32-bit word as an
+  8-bit command phase and a 24-bit address phase on one lane.
+- A command with parameters keeps CS after its word and sends the parameters on one lane.
+- RAMWR keeps CS after its word and sends the rectangle's pixels, RGB565 high byte first, on
+  four lanes in transfers of 64 bytes, keeping CS on all but the last.
+- The fill rules: `bars` takes color `dx * len(colors) // width`, `checker` takes color
+  `(dx // cell + dy // cell) & 1`, `gradient` is `rgb(dx * 31 // (width - 1), dy * 63 //
+  (height - 1), blue)`, and `xor` is `rgb(v >> 3, v >> 2, 31 - (v >> 3))` for `v = (x ^ y) &
+  0xff`, with `dx` and `dy` from the rectangle's corner and `x` and `y` on the panel.
+
+It plays those into the panel as the replay list is played, and refuses a pattern with a
+rectangle whose pixels are all one value. `--out` also writes `link.csv`, the rows the run
+must write without `t_ps` and `start_ps`, with `--sender` naming the chip, `u1` by default.
+
 `--check` compares RUN_DIR with them. Each row of `traces/display.csv` must equal its
 expected row on `part`, `x0`, `y0`, `x1`, `y1`, `bytes` and `hash`, in order, and `t_ps` is
 not compared. `traces/display-<part>.rgb565` must equal the expected image byte for byte.
 `observations.json`'s `displays` entry must name that file and its SHA-256, and its `registers`,
 `flags`, `madctl` and `colmod` must equal the panel's. The check fails when the expected rows
-are none, and when the expected image is a blank one.
+are none, and when the expected image is a blank one. For a pattern, each row of
+`traces/link.csv` must also equal its expected row on `part`, `pin`, `kind`, `cs`, `phases`,
+`bytes` and `hash`, in order.
 
 The panel model, written from the MIPI DCS command set and the ST77916 QSPI framing:
 
@@ -56,6 +77,10 @@ from typing import NamedTuple
 WIDTH = 360
 HEIGHT = 360
 HEADER = ["part", "x0", "y0", "x1", "y1", "bytes", "hash"]
+LINK_HEADER = ["t_ps", "start_ps", "part", "pin", "kind", "cs", "phases", "bytes", "hash"]
+BUFFER = 64
+CS_PIN = "GPIO12"
+PATTERN = Path(__file__).resolve().parent.parent / "firmware/esp32s3/pattern.json"
 
 
 class Panel:
@@ -211,6 +236,89 @@ class Panel:
         }
 
 
+def rgb(r, g, b):
+    return (r & 31) << 11 | (g & 63) << 5 | (b & 31)
+
+
+def pixel(rect, x, y):
+    width, height = rect["x1"] - rect["x0"] + 1, rect["y1"] - rect["y0"] + 1
+    dx, dy = x - rect["x0"], y - rect["y0"]
+    fill = rect["fill"]
+    if fill == "bars":
+        colors = rect["colors"]
+        return colors[dx * len(colors) // width]
+    if fill == "checker":
+        return rect["colors"][(dx // rect["cell"] + dy // rect["cell"]) & 1]
+    if fill == "gradient":
+        return rgb(dx * 31 // (width - 1), dy * 63 // (height - 1), rect["blue"])
+    if fill == "xor":
+        v = (x ^ y) & 0xFF
+        return rgb(v >> 3, v >> 2, 31 - (v >> 3))
+    raise ValueError(f"unknown fill {fill}")
+
+
+def rect_pixels(rect):
+    out = bytearray()
+    for y in range(rect["y0"], rect["y1"] + 1):
+        for x in range(rect["x0"], rect["x1"] + 1):
+            value = pixel(rect, x, y)
+            out += bytes([value >> 8, value & 0xFF])
+    return bytes(out)
+
+
+def pattern_events(doc):
+    """The transfers pattern.c sends for `doc`, in order, as replay events."""
+    events = []
+
+    def word(opcode, command, held):
+        phases = [{"bits": 8, "lanes": 1, "value": opcode}, {"bits": 24, "lanes": 1, "value": command << 8}]
+        events.append({"phases": phases, "lanes": 1, "bytes": [], "cs": "held" if held else "released"})
+
+    def data(payload, lanes, held):
+        events.append({"phases": [], "lanes": lanes, "bytes": list(payload), "cs": "held" if held else "released"})
+
+    def register(command, params):
+        word(0x02, command, bool(params))
+        if params:
+            data(params, 1, False)
+
+    for command in doc["init"]:
+        register(command["cmd"], command["data"])
+    for rect in doc["rects"]:
+        pixels = rect_pixels(rect)
+        if len(set(zip(pixels[::2], pixels[1::2]))) < 2:
+            raise ValueError(f"rectangle {rect} is one value")
+        for command, start, end in [(0x2A, rect["x0"], rect["x1"]), (0x2B, rect["y0"], rect["y1"])]:
+            register(command, [start >> 8, start & 0xFF, end >> 8, end & 0xFF])
+        word(0x32, 0x2C, True)
+        for at in range(0, len(pixels), BUFFER):
+            data(pixels[at : at + BUFFER], 4, at + BUFFER < len(pixels))
+    return events
+
+
+def link_rows(sender, pin, events):
+    """The `link.csv` cells after `t_ps` and `start_ps` that `events` make, one list per row."""
+    rows = []
+    for event in events:
+        phases = " ".join(f"{p['bits']}/{p['lanes']}:{p['value']:0{-(-p['bits'] // 4)}x}" for p in event["phases"])
+        payload = bytes(event["bytes"])
+        rows.append([sender, pin, "spi", event["cs"], phases, str(len(payload)), hashlib.sha256(payload).hexdigest()[:16]])
+    return rows
+
+
+def compare_link(rows, run_csv):
+    lines = run_csv.splitlines()
+    if not lines or lines[0] != ",".join(LINK_HEADER):
+        return ["link.csv has the wrong header"]
+    got = [line.split(",")[2:] for line in lines[1:]]
+    if got == rows:
+        return []
+    at = next((k for k, (g, r) in enumerate(zip(got, rows)) if g != r), min(len(got), len(rows)))
+    have = ",".join(got[at]) if at < len(got) else "no row"
+    want = ",".join(rows[at]) if at < len(rows) else "no row"
+    return [f"link.csv has {len(got)} rows for {len(rows)} expected, and row {at} is {have}, not {want}"]
+
+
 class Rendered(NamedTuple):
     rows: list
     image: bytes
@@ -334,6 +442,42 @@ def self_test():
     assert frame_b[:4] == bytes([0x11, 0x22, 0x55, 0x66])
     assert frame_b[4:6] == bytes(2)
     print(f"self-test ok: {len(rows)} rows, registers {state['registers']}, image sha256 {sha}")
+    pattern_self_test()
+
+
+def pattern_self_test():
+    doc = json.loads(PATTERN.read_text())
+    events = pattern_events(doc)
+    rows, image, state = render(events)
+    assert len(rows) == len(doc["rects"]), rows
+    sha = hashlib.sha256(image).hexdigest()
+    entry = entry_for(state, sha)
+    header = "t_ps," + ",".join(HEADER) + "\n"
+    lines = [f"{k},lcd1,{','.join(map(str, row))}\n" for k, row in enumerate(rows)]
+    run_csv = header + "".join(lines)
+    assert compare("lcd1", rows, image, state, run_csv, image, entry) == [], "the right pattern run passes"
+    assert compare("lcd1", rows, image, state, header, image, entry), "a run with no row fails"
+    assert compare("lcd1", rows, image, state, header + "".join(lines[:-1]), image, entry), "a missing row fails"
+    assert compare("lcd1", rows, image, state, run_csv + lines[-1], image, entry), "an extra row fails"
+    blank = bytes(len(image))
+    assert compare("lcd1", rows, image, state, run_csv, blank, entry_for(state, hashlib.sha256(blank).hexdigest())), "a blank final image fails"
+    flat = {**doc, "rects": [{**doc["rects"][0], "fill": "bars", "colors": [0x1234, 0x1234]}]}
+    try:
+        pattern_events(flat)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a rectangle of one value is refused")
+    want = link_rows("u1", CS_PIN, events)
+    link_header = ",".join(LINK_HEADER) + "\n"
+    link = [f"{k},{k},{','.join(row)}\n" for k, row in enumerate(want)]
+    assert compare_link(want, link_header + "".join(link)) == [], "the right link.csv passes"
+    assert compare_link(want, link_header), "a link.csv with no row fails"
+    assert compare_link(want, link_header + "".join(link[:-1])), "a missing transfer fails"
+    assert compare_link(want, link_header + "".join(link) + link[-1]), "an extra transfer fails"
+    changed = link_header + "".join(link[:2]) + link[2].replace(",u1,", ",u9,", 1) + "".join(link[3:])
+    assert "row 2 is " in compare_link(want, changed)[0], "a changed transfer is named by its row"
+    print(f"pattern self-test ok: {len(rows)} rows, {len(want)} transfers, image sha256 {sha}")
 
 
 def replay(opcode, command, data, lanes, cs):
@@ -355,7 +499,9 @@ def last_rectangle(events):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("events", nargs="?", type=Path)
+    parser.add_argument("--pattern", type=Path)
     parser.add_argument("--part", default="lcd1")
+    parser.add_argument("--sender", default="u1")
     parser.add_argument("--out", type=Path)
     parser.add_argument("--check", type=Path, metavar="RUN_DIR")
     parser.add_argument("--self-test", action="store_true")
@@ -363,22 +509,32 @@ def main():
     if args.self_test:
         self_test()
         return
-    if args.events is None:
-        parser.error("EVENTS is required")
-    events = json.loads(args.events.read_text())
+    if (args.events is None) == (args.pattern is None):
+        parser.error("give EVENTS or --pattern")
+    if args.pattern:
+        events = pattern_events(json.loads(args.pattern.read_text()))
+        link = link_rows(args.sender, CS_PIN, events)
+    else:
+        events = json.loads(args.events.read_text())
+        link = None
     rows, image, _state = render(events)
     if args.out:
         args.out.mkdir(parents=True, exist_ok=True)
         (args.out / "display.csv").write_text(expected_csv(args.part, rows))
         (args.out / f"display-{args.part}.rgb565").write_bytes(image)
+        if link is not None:
+            (args.out / "link.csv").write_text("".join(",".join(row) + "\n" for row in [LINK_HEADER[2:], *link]))
     print(f"expected: {len(rows)} rows, image sha256 {hashlib.sha256(image).hexdigest()}")
     if args.check:
         _, _, problems = check(events, args.part, args.check)
+        if link is not None:
+            problems += compare_link(link, (args.check / "traces/link.csv").read_text())
         for problem in problems:
             print(f"FAIL {problem}")
         if problems:
             sys.exit(1)
-        print(f"ok: {args.check} matches on {len(rows)} rows and the image")
+        extra = f", {len(link)} transfers" if link is not None else ""
+        print(f"ok: {args.check} matches on {len(rows)} rows{extra} and the image")
 
 
 if __name__ == "__main__":

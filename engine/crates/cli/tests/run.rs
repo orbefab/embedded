@@ -461,8 +461,9 @@ fn two_runs_of_each_transient_example_differ_only_in_created_at() {
         let netlist: serde_json::Value =
             serde_json::from_slice(&left_files["netlist.json"]).unwrap();
         // An ATmega328P writes `serial.csv` for its USART and `i2c.csv` for its TWI, an
-        // ESP32-S3 writes `serial.csv` for its console, a replay writes `link.csv`, display parts
-        // write `display.csv` and one image each, and a `ws2812` writes `leds.csv`.
+        // ESP32-S3 writes `serial.csv` for its console, a replay or an ESP32-S3 writes
+        // `link.csv`, display parts write `display.csv` and one image each, and a `ws2812`
+        // writes `leds.csv`.
         let displays = display_parts(&netlist).len();
         let chip = 2 * usize::from(has_kind(&netlist, "atmega328p"))
             + usize::from(has_kind(&netlist, "esp32s3") && !has_kind(&netlist, "atmega328p"))

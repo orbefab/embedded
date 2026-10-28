@@ -674,8 +674,8 @@ mod tests {
                     clock_hz: 1,
                     cs,
                     nets: SpiNets {
-                        cs: NetId::GROUND,
-                        sclk: NetId::GROUND,
+                        cs: Some(NetId::GROUND),
+                        sclk: Some(NetId::GROUND),
                         data: lanes().map(Some),
                     },
                 }),

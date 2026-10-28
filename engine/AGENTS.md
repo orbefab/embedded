@@ -13,7 +13,7 @@ Private notes live in `~/notes/orbefab` (Orbefab/notes). Follow the `notes` skil
 - `crates/cli`, package `sim-cli`, is the `sim` binary.
 - `crates/avr`, package `sim-avr`, models the ATmega328P core. `sim-circuit` runs it for each `atmega328p` part.
 - `crates/xtensa`, package `sim-xtensa`, models the Xtensa core of the ESP32 and the ESP32-S3, with both generated opcode tables. `crates/xtensa/gen/regen.sh` regenerates the tables.
-- `crates/esp32`, package `sim-esp32`, models the ESP32-S3 around `sim-xtensa`: SRAM, GPIO and its matrix, SYSTIMER, the watchdogs and the USB Serial/JTAG console. `sim-circuit` runs it for each `esp32s3` part. `scripts/esp32s3-firmware.sh` rebuilds the bare-metal program of `examples/esp32s3-blink`.
+- `crates/esp32`, package `sim-esp32`, models the ESP32-S3 around `sim-xtensa`: SRAM, GPIO and its matrix, SYSTIMER, the watchdogs, SPI2 and the USB Serial/JTAG console. `sim-circuit` runs it for each `esp32s3` part. `scripts/esp32s3-firmware.sh` rebuilds the bare-metal programs of `examples/esp32s3-blink` and `examples/esp32s3-pattern`, and `scripts/pattern_header.py` writes the pattern program's `pattern.h` from `pattern.json`.
 - `crates/bench`, package `sim-bench`, times native, WASI and browser Worker runs. It is not published.
 - `crates/wasm`, package `sim-wasm`, is the session and `sim run` for JavaScript. `scripts/wasm.sh` builds it, and `docs/wasm.md` is its guide.
 
@@ -31,9 +31,10 @@ uv run scripts/ngspice_refs.py --self-test
 uv run scripts/st77916_example.py --check
 uv run scripts/render_st77916.py --self-test
 uv run scripts/esp32s3_blink.py --self-test
+uv run scripts/pattern_header.py --check
 ```
 
-It then runs `sim run` on `examples/st77916-replay` and checks the folder with `scripts/render_st77916.py --check`, and on `examples/esp32s3-blink` and checks that folder with `scripts/esp32s3_blink.py --check`.
+It then runs `sim run` on `examples/st77916-replay` and checks the folder with `scripts/render_st77916.py --check`, on `examples/esp32s3-blink` and checks that folder with `scripts/esp32s3_blink.py --check`, and on `examples/esp32s3-pattern` and checks that folder with `scripts/render_st77916.py --pattern firmware/esp32s3/pattern.json --check`.
 
 The commit check needs ngspice-42 on `PATH`.
 

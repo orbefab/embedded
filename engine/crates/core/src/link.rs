@@ -93,11 +93,12 @@ pub enum Cs {
 }
 
 /// The nets of an SPI host's CS, SCLK and data pins. A receiver takes the transaction when its
-/// own CS and SCLK pins sit on `cs` and `sclk`.
+/// own CS and SCLK pins sit on `cs` and `sclk`. `None` for a signal the host has no pin with a
+/// net for, which no receiver takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SpiNets {
-    pub cs: NetId,
-    pub sclk: NetId,
+    pub cs: Option<NetId>,
+    pub sclk: Option<NetId>,
     /// D0 to D3. `None` for a lane the host has no pin for.
     pub data: [Option<NetId>; 4],
 }
@@ -267,8 +268,8 @@ mod tests {
                 clock_hz: 40_000_000,
                 cs,
                 nets: SpiNets {
-                    cs: NetId::GROUND,
-                    sclk: NetId::GROUND,
+                    cs: Some(NetId::GROUND),
+                    sclk: Some(NetId::GROUND),
                     data: [Some(NetId::GROUND), None, None, None],
                 },
             }),

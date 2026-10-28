@@ -345,8 +345,8 @@ fn spi(bus: SpiTarget, tag: u8) -> Spi {
         clock_hz: 1,
         cs: Cs::Released,
         nets: SpiNets {
-            cs: bus.cs,
-            sclk: bus.sclk,
+            cs: Some(bus.cs),
+            sclk: Some(bus.sclk),
             data: [None; 4],
         },
     }

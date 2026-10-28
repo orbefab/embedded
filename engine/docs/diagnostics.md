@@ -389,6 +389,14 @@ The message is `{part} reached {what} at {pc}, which the model does not run, at 
 - `litbase`: an `l32r` while `LITBASE` is enabled.
 - `loop_end`: the op is the last of a zero-overhead loop and loops back, and it is a call, `isync`, `waiti` or `rsr.lcount`, which the ISA rules out there.
 
+## chip.unsupported_setting
+
+Severity `error`. Refs are the chip. `t_ps` is the time of the store that started the transfer. It ends the run.
+
+The message is `{part} started a {peripheral} transfer with setting {setting} at {pc}, which the model does not run, at {t_ps} ps`, with ` in {symbol}` after the PC when the firmware has a symbol at or below it.
+
+`data` holds `peripheral`, `pc`, `setting` and `symbol`. `peripheral` is `SPI2`. `pc` is the address of the store, and `symbol` is written as `chip.unsupported_instruction` writes it. `setting` is the first of these the registers held when the store wrote `SPI_USR`: `slave`, `dma`, `lsb_first`, `qpi`, `octal`, `dtr`, `dummy`, `read`, `high_part`, `three_line`, `full_duplex`, `clock_mode`, `cs_disabled`, `data_length`, `clock_off` or `unsynced`. The store writes nothing, and the run keeps every row before it, as [esp32s3.md](esp32s3.md#what-it-models) says.
+
 ## chip.unmapped_fetch
 
 Severity `error`. Refs are the chip. `t_ps` is the time of the fetch. It ends the run.

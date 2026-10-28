@@ -1,5 +1,5 @@
 //! The ESP32-S3 as one Xtensa LX7 core on its internal SRAM, with GPIO, IO_MUX and the GPIO
-//! matrix, SYSTIMER, the watchdogs and the USB Serial/JTAG console.
+//! matrix, SYSTIMER, the watchdogs, the USB Serial/JTAG console and SPI2.
 //!
 //! The chip starts as a bare-metal ELF leaves it: the segments in SRAM, the PC at the entry, and
 //! the core's reset state otherwise, with no boot ROM, no flash and no cache. The core runs on the
@@ -19,6 +19,7 @@
 
 mod blocks;
 mod gpio;
+mod spi2;
 mod timers;
 mod usb;
 
@@ -27,10 +28,12 @@ use std::collections::BTreeMap;
 use sim_xtensa::{Bus, Cause, Config, Core, Cycle, Exit, PagedRam, Stop, Unimplemented, Width};
 
 use gpio::{Gpio, PADS};
+use spi2::Spi2;
 use timers::{Systimer, Watchdogs};
 use usb::UsbSerialJtag;
 
 pub use gpio::PadDrive;
+pub use spi2::{Pads, Phase, Setting, Transfer};
 pub use timers::Watchdog;
 
 /// The crystal and CPU clock.
@@ -71,6 +74,7 @@ const IO_MUX: u32 = 0x6000_9000;
 const TIMG0: u32 = 0x6001_f000;
 const TIMG1: u32 = 0x6002_0000;
 const SYSTIMER: u32 = 0x6002_3000;
+const SPI2: u32 = 0x6002_4000;
 const USB_SERIAL_JTAG: u32 = 0x6003_8000;
 const BLOCK: u32 = 0x1000;
 
@@ -83,13 +87,20 @@ pub enum Fault {
     UnmappedFetch(u32),
     /// A watchdog ran out its first stage.
     Watchdog(Watchdog),
+    /// The store at this PC started an SPI2 transfer with a setting the model does not run.
+    Setting(Setting, u32),
 }
 
 /// Where a run stopped before its limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Halt {
-    /// A pad's drive changed at this cycle. [`Esp32s3::drive`] gives the new drives.
-    Image(Cycle),
+    /// At `at` a pad's drive changed, an SPI2 transfer ended, or both. [`Esp32s3::drive`] gives
+    /// the new drives, and [`Esp32s3::take_transfers`] the transfer.
+    Change {
+        at: Cycle,
+        image: bool,
+        record: bool,
+    },
     /// The run ended at this cycle. The chip runs no further.
     Fault(Cycle, Fault),
 }
@@ -97,7 +108,7 @@ pub enum Halt {
 impl Halt {
     pub fn at(self) -> Cycle {
         match self {
-            Halt::Image(at) | Halt::Fault(at, _) => at,
+            Halt::Change { at, .. } | Halt::Fault(at, _) => at,
         }
     }
 }
@@ -125,6 +136,7 @@ struct Soc {
     systimer: Systimer,
     watchdogs: Watchdogs,
     usb: UsbSerialJtag,
+    spi2: Spi2,
     /// The GPIOs with nets, whose drives the image holds.
     netted: Vec<u8>,
     unmodeled: BTreeMap<u32, Touch>,
@@ -138,6 +150,12 @@ struct Soc {
     first_touch: Option<u32>,
     /// The core fetched outside the instruction window.
     unmapped_fetch: bool,
+    /// A store started an SPI2 transfer, so the next fetch stops the core and the run reads its
+    /// end.
+    started: bool,
+    /// A store's SPI2 transfer met a setting the model does not run, and the store stopped the
+    /// core.
+    refused: Option<Setting>,
 }
 
 impl Soc {
@@ -162,8 +180,8 @@ impl Soc {
         Ok(Self::sram_offset(addr, false))
     }
 
-    /// The kept register's word at `addr`, a multiple of 4 in the peripherals.
-    fn read_kept(&self, addr: u32) -> Option<u32> {
+    /// The kept register's word at `addr`, a multiple of 4 in the peripherals, at `now`.
+    fn read_kept(&mut self, now: Cycle, addr: u32) -> Option<u32> {
         let (base, offset) = (addr & !(BLOCK - 1), addr & (BLOCK - 1));
         match base {
             GPIO => self.gpio.read(offset),
@@ -173,6 +191,7 @@ impl Soc {
             TIMG1 => self.watchdogs.read_timg(1, offset),
             SYSTIMER => self.systimer.read(offset),
             USB_SERIAL_JTAG => self.usb.read(offset),
+            SPI2 => self.spi2.read(now, offset),
             _ => None,
         }
     }
@@ -187,6 +206,16 @@ impl Soc {
             TIMG1 => self.watchdogs.write_timg(now, 1, offset, value),
             SYSTIMER => self.systimer.write(now, offset, value),
             USB_SERIAL_JTAG => self.usb.write(now, offset, value),
+            SPI2 => {
+                match self.spi2.write(now, offset, value, &self.gpio) {
+                    Ok(started) => self.started |= started,
+                    Err(setting) => self.refused = Some(setting),
+                }
+                for (signal, level) in self.spi2.idle() {
+                    self.gpio.set_signal(signal, level);
+                }
+                true
+            }
             _ => false,
         }
     }
@@ -229,7 +258,7 @@ fn word_of(addr: u32, width: Width) -> (u32, u32, u32) {
 
 impl Bus for Soc {
     fn fetch(&mut self, _now: Cycle, addr: u32) -> Result<u32, Exit> {
-        if self.changed.is_some() || self.rearmed {
+        if self.changed.is_some() || self.rearmed || self.started {
             return Err(Exit::Stop);
         }
         match Self::sram_offset(addr, true) {
@@ -249,7 +278,7 @@ impl Bus for Soc {
             return Err(Exit::Fault(Cause::LoadStoreError));
         }
         let (word, shift, mask) = word_of(addr, width);
-        match self.read_kept(word) {
+        match self.read_kept(now, word) {
             Some(value) => Ok((value >> shift) & mask),
             None => self.touch(now, word, false).map(|()| 0),
         }
@@ -264,11 +293,11 @@ impl Bus for Soc {
             return Err(Exit::Fault(Cause::LoadStoreError));
         }
         let (word, shift, mask) = word_of(addr, width);
-        let Some(old) = self.read_kept(word) else {
+        let Some(old) = self.read_kept(now, word) else {
             return self.touch(now, word, true);
         };
         let value = (old & !(mask << shift)) | ((value & mask) << shift);
-        if !matches!(word & !(BLOCK - 1), GPIO | IO_MUX) {
+        if !matches!(word & !(BLOCK - 1), GPIO | IO_MUX | SPI2) {
             let deadline = self.watchdogs.deadline();
             self.write_kept(now, word, value);
             self.rearmed |= self.watchdogs.deadline() != deadline;
@@ -276,6 +305,9 @@ impl Bus for Soc {
         }
         let before = self.image();
         self.write_kept(now, word, value);
+        if self.refused.is_some() {
+            return Err(Exit::Stop);
+        }
         if self.image() != before {
             self.changed = Some(now);
         }
@@ -293,16 +325,21 @@ impl Bus for Soc {
 
 /// One ESP32-S3 running its firmware, on the timeline a run sees.
 ///
-/// [`Esp32s3::run_until`] runs to a cycle and reports each image change and the fault that ends
-/// the run, in cycle order, at the same cycles however a run splits its limits.
+/// [`Esp32s3::run_until`] runs to a cycle and reports each image change, each SPI2 transfer's
+/// end and the fault that ends the run, in cycle order, at the same cycles however a run splits
+/// its limits.
 #[derive(Clone, Debug)]
 pub struct Esp32s3 {
     core: Core<sim_xtensa::Esp32s3>,
     soc: Soc,
     /// The drive of each netted pad, as the last reported image left it.
     shown: [PadDrive; PADS],
-    /// A halt past the last limit, reported first next run.
-    pending: Option<Halt>,
+    /// The cycle of an image change not reported yet.
+    changed: Option<Cycle>,
+    /// How many of SPI2's transfers have had their end reported and wait to be taken.
+    reported: usize,
+    /// The fault that ends the run, not reported yet.
+    fault: Option<(Cycle, Fault)>,
     ended: bool,
 }
 
@@ -321,85 +358,141 @@ impl Esp32s3 {
         }
         let mut core = Core::new();
         core.set_pc(entry);
-        let soc = Soc {
+        let mut soc = Soc {
             sram,
             gpio: Gpio::new(netted),
             systimer: Systimer::new(),
             watchdogs: Watchdogs::new(),
             usb: UsbSerialJtag::default(),
+            spi2: Spi2::new(),
             netted: netted.to_vec(),
             unmodeled: BTreeMap::new(),
             changed: None,
             rearmed: false,
             first_touch: None,
             unmapped_fetch: false,
+            started: false,
+            refused: None,
         };
+        for (signal, level) in soc.spi2.idle() {
+            soc.gpio.set_signal(signal, level);
+        }
         Esp32s3 {
             core,
             shown: soc.image(),
             soc,
-            pending: None,
+            changed: None,
+            reported: 0,
+            fault: None,
             ended: false,
         }
     }
 
-    /// Runs through cycle `limit`, and returns the first image change or fault at or before it.
-    /// `None` when the chip reached the limit, or ended before.
+    /// Runs through cycle `limit`, and returns the first image change, transfer end or fault at
+    /// or before it. `None` when the chip reached the limit, or ended before.
     pub fn run_until(&mut self, limit: Cycle) -> Option<Halt> {
         loop {
-            if let Some(halt) = self.pending {
+            if let Some(halt) = self.next_halt() {
                 if halt.at() > limit {
                     return None;
                 }
-                self.pending = None;
-                match halt {
-                    Halt::Image(_) => self.shown = self.soc.image(),
-                    Halt::Fault(..) => self.ended = true,
-                }
+                self.report(halt);
                 return Some(halt);
             }
-            if self.ended {
+            if self.ended || self.fault.is_some() || self.core.cycle() > limit {
                 return None;
             }
             let watchdog = self.soc.watchdogs.deadline();
-            let end = Cycle(limit.0 + 1);
-            let until = watchdog.map_or(end, |(at, _)| at.min(end));
+            let until = [
+                Some(Cycle(limit.0 + 1)),
+                watchdog.map(|(at, _)| at),
+                self.soc.spi2.end(self.reported),
+            ]
+            .into_iter()
+            .flatten()
+            .min()
+            .expect("the limit");
             let stop = self.core.run_until(&mut self.soc, until);
-            let changed = self.soc.changed.take();
+            if let Some(change) = self.soc.changed.take() {
+                debug_assert!(self.changed.is_none(), "a change stops the core");
+                self.changed = Some(change);
+            }
             self.soc.rearmed = false;
+            self.soc.started = false;
             if let Some((at, which)) = watchdog
                 && self.core.cycle() >= at
                 && self.soc.watchdogs.deadline() == watchdog
             {
-                self.pending = Some(match changed {
-                    Some(change) if change <= at => Halt::Image(change),
-                    _ => Halt::Fault(at, Fault::Watchdog(which)),
-                });
+                self.fault = Some((at, Fault::Watchdog(which)));
                 continue;
             }
-            if let Some(change) = changed {
-                self.pending = Some(Halt::Image(change));
-                continue;
-            }
+            let pc = self.core.pc();
             match stop {
-                Stop::Limit if self.core.cycle() >= end => return None,
                 Stop::Limit => {}
                 Stop::Bus => {
                     if let Some(addr) = self.soc.first_touch.take() {
-                        let pc = self.core.pc();
                         self.soc.unmodeled.get_mut(&addr).expect("touched").pc = pc;
+                    } else if let Some(setting) = self.soc.refused.take() {
+                        self.fault = Some((self.core.cycle(), Fault::Setting(setting, pc)));
                     } else if self.soc.unmapped_fetch {
-                        let pc = self.core.pc();
-                        self.pending =
-                            Some(Halt::Fault(self.core.cycle(), Fault::UnmappedFetch(pc)));
+                        self.fault = Some((self.core.cycle(), Fault::UnmappedFetch(pc)));
                     }
                 }
                 Stop::Unimplemented(missing) => {
-                    self.pending =
-                        Some(Halt::Fault(self.core.cycle(), Fault::Unsupported(missing)));
+                    self.fault = Some((self.core.cycle(), Fault::Unsupported(missing)));
                 }
             }
         }
+    }
+
+    /// The earliest halt the core has reached and not reported. An image change and a transfer
+    /// end at one cycle are one halt, and either comes before a fault at that cycle.
+    fn next_halt(&self) -> Option<Halt> {
+        if self.ended {
+            return None;
+        }
+        let record = self
+            .soc
+            .spi2
+            .end(self.reported)
+            .filter(|&end| end <= self.core.cycle());
+        let change = [self.changed, record].into_iter().flatten().min();
+        match (change, self.fault) {
+            (Some(at), Some((fault_at, fault))) if fault_at < at => {
+                Some(Halt::Fault(fault_at, fault))
+            }
+            (Some(at), _) => Some(Halt::Change {
+                at,
+                image: self.changed == Some(at),
+                record: record == Some(at),
+            }),
+            (None, Some((at, fault))) => Some(Halt::Fault(at, fault)),
+            (None, None) => None,
+        }
+    }
+
+    fn report(&mut self, halt: Halt) {
+        match halt {
+            Halt::Change { image, record, .. } => {
+                if image {
+                    self.shown = self.soc.image();
+                    self.changed = None;
+                }
+                if record {
+                    self.reported += 1;
+                }
+            }
+            Halt::Fault(..) => {
+                self.fault = None;
+                self.ended = true;
+            }
+        }
+    }
+
+    /// The SPI2 transfers whose ends were reported, in the order they started.
+    pub fn take_transfers(&mut self) -> impl Iterator<Item = Transfer> + '_ {
+        let n = std::mem::take(&mut self.reported);
+        self.soc.spi2.take(n)
     }
 
     /// What the pad of `gpio`, a netted one, drives in the last reported image.
@@ -485,9 +578,21 @@ mod tests {
         }
 
         fn chip(&self) -> Esp32s3 {
+            self.chip_on(&[21])
+        }
+
+        fn chip_on(&self, netted: &[u8]) -> Esp32s3 {
             let mut image: Vec<u8> = self.literals.iter().flat_map(|w| w.to_le_bytes()).collect();
             image.extend(&self.code);
-            Esp32s3::new(&[21], self.entry(), [(BASE, image.as_slice())])
+            Esp32s3::new(netted, self.entry(), [(BASE, image.as_slice())])
+        }
+    }
+
+    fn image_at(at: Cycle) -> Halt {
+        Halt::Change {
+            at,
+            image: true,
+            record: false,
         }
     }
 
@@ -536,7 +641,14 @@ mod tests {
         let seen = halts(&mut whole, 1000, 1000);
         let drives: Vec<PadDrive> = seen.iter().map(|&(_, drive)| drive).collect();
         assert_eq!(drives, [PadDrive::Low, PadDrive::High]);
-        assert!(seen.iter().all(|(halt, _)| matches!(halt, Halt::Image(_))));
+        assert!(seen.iter().all(|(halt, _)| matches!(
+            halt,
+            Halt::Change {
+                image: true,
+                record: false,
+                ..
+            }
+        )));
         for step in [1, 2, 3, 7] {
             let mut split = blink().chip();
             assert_eq!(halts(&mut split, 1000, step), seen, "limits {step} apart");
@@ -598,7 +710,7 @@ mod tests {
         let mut probe = store_after_two_loads(0x6000_0000, 0, 0).chip();
         assert_eq!(probe.run_until(Cycle(1000)), None);
         let (_, touch) = probe.unmodeled().next().expect("the store touched UART0");
-        assert_eq!(image, Some(Halt::Image(touch.at)));
+        assert_eq!(image, Some(image_at(touch.at)));
     }
 
     #[test]
@@ -616,7 +728,8 @@ mod tests {
                 .raw(&LOOP);
             program
         };
-        let Some(Halt::Image(store)) = program(1000).chip().run_until(Cycle(1000)) else {
+        let Some(Halt::Change { at: store, .. }) = program(1000).chip().run_until(Cycle(1000))
+        else {
             panic!("the store changes GPIO21");
         };
         let at = Cycle(store.0 + 1);
@@ -625,7 +738,7 @@ mod tests {
             assert_eq!(
                 halts(&mut chip, 1000, step),
                 [
-                    (Halt::Image(store), PadDrive::Low),
+                    (image_at(store), PadDrive::Low),
                     (
                         Halt::Fault(at, Fault::Watchdog(Watchdog::Timg0)),
                         PadDrive::Low
@@ -644,6 +757,130 @@ mod tests {
             ),
             "a hold below the count ends the run before the drive changes: {seen:?}"
         );
+    }
+
+    /// Routes GPIO12 to SPI2's CS, turns SPI2's clock on, then syncs and starts a transfer of
+    /// an 8-bit command with `user`.
+    fn transfer(user: u32) -> Program {
+        let mut program = Program::new(&[
+            IO_MUX,
+            1 << 12,
+            GPIO + 0x500,
+            110,
+            SPI2,
+            user,
+            1 << 24,
+            0x3,
+            1 << 23,
+        ]);
+        program
+            .l32r(2, 0)
+            .l32r(3, 1)
+            .rri8(6, 3, 2, 0x34)
+            .l32r(2, 2)
+            .l32r(3, 3)
+            .rri8(6, 3, 2, 0x84)
+            .l32r(2, 4)
+            .l32r(3, 5)
+            .rri8(6, 3, 2, 0x10)
+            .l32r(3, 7)
+            .rri8(6, 3, 2, 0xe8)
+            .l32r(3, 8)
+            .rri8(6, 3, 2, 0x00)
+            .l32r(3, 6)
+            .rri8(6, 3, 2, 0x00)
+            .raw(&LOOP);
+        program
+    }
+
+    #[test]
+    fn a_transfer_ends_in_a_record_halt_however_the_run_splits() {
+        let program = transfer(1 << 31);
+        let run = |step: u64| {
+            let mut chip = program.chip_on(&[12]);
+            let mut seen = Vec::new();
+            let mut limit = 0;
+            while limit < 1000 {
+                limit = (limit + step).min(1000);
+                while let Some(halt) = chip.run_until(Cycle(limit)) {
+                    seen.push((
+                        halt,
+                        chip.drive(12),
+                        chip.take_transfers().collect::<Vec<_>>(),
+                        chip.cycle(),
+                    ));
+                }
+            }
+            seen
+        };
+        let seen = run(1000);
+        let [
+            (routed, drive, ref none, _),
+            (
+                Halt::Change {
+                    at,
+                    image: false,
+                    record: true,
+                },
+                _,
+                ref sent,
+                core,
+            ),
+        ] = seen[..]
+        else {
+            panic!("a CS route, then a transfer: {seen:?}");
+        };
+        assert!(matches!(
+            routed,
+            Halt::Change {
+                image: true,
+                record: false,
+                ..
+            }
+        ));
+        assert_eq!(drive, PadDrive::High, "CS idles high once routed");
+        assert!(none.is_empty());
+        let [ref transfer] = sent[..] else {
+            panic!("one transfer: {sent:?}");
+        };
+        assert_eq!(transfer.end, at);
+        assert!(
+            core.0 <= at.0 + 2,
+            "the core stops in the `j` that reaches the end, not at the limit: {core:?}"
+        );
+        assert_eq!(
+            transfer.end.0 - transfer.start.0,
+            8,
+            "8 clocks at the crystal"
+        );
+        assert_eq!(transfer.pads.cs, Some(12));
+        assert_eq!(transfer.pads.sclk, None);
+        assert_eq!(
+            transfer.phases,
+            [Phase {
+                bits: 8,
+                lanes: 1,
+                value: 0
+            }]
+        );
+        for step in [1, 2, 3, 7] {
+            assert_eq!(run(step), seen, "limits {step} apart");
+        }
+    }
+
+    #[test]
+    fn a_transfer_with_a_setting_the_model_does_not_run_ends_the_run_at_its_store() {
+        let program = transfer(1 << 31 | 1 << 29);
+        let mut chip = program.chip_on(&[]);
+        let Some(Halt::Fault(_, fault)) = chip.run_until(Cycle(1000)) else {
+            panic!("the store faults");
+        };
+        assert_eq!(
+            fault,
+            Fault::Setting(Setting::Dummy, program.entry() + 14 * 3)
+        );
+        assert_eq!(chip.run_until(Cycle(2000)), None, "ended");
+        assert_eq!(chip.take_transfers().count(), 0);
     }
 
     #[test]

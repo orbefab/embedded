@@ -1,15 +1,16 @@
 //! The ESP32-S3 behind the seam. Each GPIO with a net becomes an output and a watch around
-//! `sim_esp32::s3::Esp32s3`, its console goes to `serial.csv` as `USB_SERIAL_JTAG`, and its
-//! 40 MHz clock converts between picoseconds and cycles.
+//! `sim_esp32::s3::Esp32s3`, its console goes to `serial.csv` as `USB_SERIAL_JTAG`, each SPI2
+//! transfer is a `Spi` record, and its 40 MHz clock converts between picoseconds and cycles.
 //!
 //! A console packet has no line timing: every byte of one starts and ends at the cycle the
 //! firmware flushed it.
 
 use sim_core::diagnostic::{Diagnostic, Unsupported};
+use sim_core::link::{Cs, Lanes, Record, RecordKind, Spi, SpiNets, SpiPhase};
 use sim_core::name::Ref;
-use sim_core::netlist::{Esp32s3, PartId, Value};
+use sim_core::netlist::{Esp32s3, NetId, PartId, Value};
 use sim_core::time::Time;
-use sim_esp32::s3::{self, Fault, HZ, Halt, PadDrive, Touch};
+use sim_esp32::s3::{self, Fault, HZ, Halt, PadDrive, Touch, Transfer};
 use sim_xtensa::{Cycle, Missing};
 
 use super::{Chip, Drive, Frame, Output, Stage, Stop, Takes};
@@ -39,6 +40,12 @@ pub(crate) struct Core {
     chip: s3::Esp32s3,
     /// The GPIO of each output and watch.
     gpios: Vec<u8>,
+    /// The net of each of `gpios`.
+    nets: Vec<NetId>,
+    /// The records it sent and still holds, in the order it sent them.
+    records: Vec<Record>,
+    /// How many records it has made.
+    made: u64,
     image: Vec<Drive>,
     /// The levels it last took, in watch order. Empty before the power-on input.
     levels: Vec<bool>,
@@ -102,6 +109,9 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
         chip: s3::Esp32s3::new(&gpios, firmware.entry(), segments),
         image: vec![Drive::Off; gpios.len()],
         gpios,
+        nets: pins.to_vec(),
+        records: Vec::new(),
+        made: 0,
         levels: Vec::new(),
         fault: None,
     };
@@ -114,7 +124,7 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
         samples: Vec::new(),
         usarts: &["USB_SERIAL_JTAG"],
         twi: false,
-        sends: false,
+        sends: true,
         takes: Takes::default(),
         core: super::Core::Esp32s3(Box::new(core)),
     }
@@ -136,15 +146,97 @@ impl Core {
     pub(crate) fn run_until(&mut self, limit: Time) -> Option<Stop> {
         let halt = self.chip.run_until(cycle(limit))?;
         let at = time(halt.at());
+        let mut record = false;
         match halt {
-            Halt::Image(_) => self.refresh(),
+            Halt::Change {
+                image,
+                record: sent,
+                ..
+            } => {
+                if image {
+                    self.refresh();
+                }
+                if sent {
+                    let transfers: Vec<Transfer> = self.chip.take_transfers().collect();
+                    for transfer in transfers {
+                        let record = self.record(transfer);
+                        self.records.push(record);
+                    }
+                    record = true;
+                }
+            }
             Halt::Fault(_, fault) => self.fault = Some((at, fault)),
         }
         Some(Stop {
             at,
             sample: false,
-            record: false,
+            record,
         })
+    }
+
+    /// `transfer` as its `Spi` record, named by the pin of its CS pad, or `SPI2` when no pin of
+    /// the part carries CS. A signal whose pad has no net has no net in the record.
+    fn record(&mut self, transfer: Transfer) -> Record {
+        let net = |pad: Option<u8>| {
+            let k = self.gpios.iter().position(|&gpio| Some(gpio) == pad)?;
+            Some(self.nets[k])
+        };
+        let lanes = |count: u8| match count {
+            1 => Lanes::One,
+            2 => Lanes::Two,
+            4 => Lanes::Four,
+            _ => unreachable!("SPI2 sends on 1, 2 or 4 lanes"),
+        };
+        let pads = transfer.pads;
+        let pin = pads
+            .cs
+            .and_then(|pad| {
+                Esp32s3::PINS
+                    .into_iter()
+                    .find(|name| name.strip_prefix("GPIO") == Some(&pad.to_string()))
+            })
+            .unwrap_or("SPI2");
+        let seq = self.made;
+        self.made += 1;
+        Record {
+            seq,
+            start: time(transfer.start),
+            end: time(transfer.end),
+            pin,
+            kind: RecordKind::Spi(Spi {
+                phases: transfer
+                    .phases
+                    .iter()
+                    .map(|phase| SpiPhase {
+                        bits: phase.bits,
+                        lanes: lanes(phase.lanes),
+                        value: phase.value,
+                    })
+                    .collect(),
+                lanes: lanes(transfer.lanes),
+                data: transfer.data.into(),
+                clock_hz: transfer.clock_hz,
+                cs: if transfer.held {
+                    Cs::Held
+                } else {
+                    Cs::Released
+                },
+                nets: SpiNets {
+                    cs: net(pads.cs),
+                    sclk: net(pads.sclk),
+                    data: pads.data.map(net),
+                },
+            }),
+        }
+    }
+
+    pub(crate) fn records(&self) -> &[Record] {
+        &self.records
+    }
+
+    pub(crate) fn drain_records(&mut self, through: Time, sent: impl FnMut(Record)) {
+        let ended = self.records.partition_point(|record| record.end <= through);
+        self.records.drain(..ended).for_each(sent);
     }
 
     pub(crate) fn drive(&self) -> &[Drive] {
@@ -200,6 +292,14 @@ impl Core {
             Fault::UnmappedFetch(pc) => Diagnostic::ChipUnmappedFetch {
                 part,
                 at,
+                pc,
+                symbol: symbol(pc),
+            },
+            Fault::Setting(setting, pc) => Diagnostic::ChipUnsupportedSetting {
+                part,
+                at,
+                peripheral: "SPI2",
+                setting: setting.name(),
                 pc,
                 symbol: symbol(pc),
             },

@@ -1,0 +1,196 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": {
+    "transient": {
+      "stop_ps": 600000000000,
+      "max_step_ps": 10000000000,
+      "grid_ps": 10000000000
+    }
+  },
+  "ground": "gnd",
+  "nets": [
+    "blk",
+    "cs",
+    "d0",
+    "d1",
+    "d2",
+    "d3",
+    "gnd",
+    "rst",
+    "sclk",
+    "te",
+    "v3v3"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "v3v3",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 3.3,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "u1",
+      "kind": "esp32s3",
+      "pins": {
+        "VCC": "v3v3",
+        "GND": "gnd",
+        "GPIO11": "sclk",
+        "GPIO12": "cs",
+        "GPIO13": "d0",
+        "GPIO14": "d1",
+        "GPIO15": "d2",
+        "GPIO16": "d3",
+        "GPIO17": "rst",
+        "GPIO18": "te",
+        "GPIO21": "blk"
+      },
+      "firmware": {
+        "elf": {
+          "sha256": "b41703d1861775b5fddd3eff83bc27350edb682dabcc14a03b504fc03fb6e877",
+          "bytes": 5752
+        }
+      },
+      "output": {
+        "high_drop": {
+          "value": 0.0,
+          "unit": "V",
+          "source": {
+            "closed_form": {
+              "note": "the high stage as a resistance from VCC"
+            }
+          }
+        },
+        "high_resistance": {
+          "value": 16.5,
+          "unit": "ohm",
+          "source": {
+            "closed_form": {
+              "note": "Table 5-4: IOH 40 mA at VOH 2.64 V, VDD 3.3 V and drive strength 3, so 0.66 V / 40 mA"
+            }
+          }
+        },
+        "low_drop": {
+          "value": 0.0,
+          "unit": "V",
+          "source": {
+            "closed_form": {
+              "note": "the low stage as a resistance into GND"
+            }
+          }
+        },
+        "low_resistance": {
+          "value": 17.68,
+          "unit": "ohm",
+          "source": {
+            "closed_form": {
+              "note": "Table 5-4: IOL 28 mA at VOL 0.495 V, VDD 3.3 V and drive strength 3, so 0.495 V / 28 mA"
+            }
+          }
+        }
+      },
+      "pull_up_resistance": {
+        "value": 45000.0,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "Espressif ESP32-S3 Series Datasheet v2.2",
+            "at": "Table 5-4, DC Characteristics (3.3 V, 25 C)",
+            "basis": "typical"
+          }
+        }
+      },
+      "leakage_resistance": {
+        "value": 66000000.0,
+        "unit": "ohm",
+        "source": {
+          "closed_form": {
+            "note": "Table 5-4: IIH and IIL at most 50 nA, so 3.3 V / 50 nA"
+          }
+        }
+      },
+      "input_threshold": {
+        "low": {
+          "value": 0.25,
+          "unit": "1",
+          "source": {
+            "datasheet": {
+              "doc": "Espressif ESP32-S3 Series Datasheet v2.2",
+              "at": "Table 5-4, DC Characteristics (3.3 V, 25 C)",
+              "basis": "max"
+            }
+          }
+        },
+        "high": {
+          "value": 0.75,
+          "unit": "1",
+          "source": {
+            "datasheet": {
+              "doc": "Espressif ESP32-S3 Series Datasheet v2.2",
+              "at": "Table 5-4, DC Characteristics (3.3 V, 25 C)",
+              "basis": "min"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "lcd1",
+      "kind": "st77916",
+      "pins": {
+        "VCC": "v3v3",
+        "GND": "gnd",
+        "CS": "cs",
+        "SCLK": "sclk",
+        "D0": "d0",
+        "D1": "d1",
+        "D2": "d2",
+        "D3": "d3",
+        "RST": "rst",
+        "TE": "te",
+        "BLK": "blk"
+      },
+      "output": {
+        "high_drop": {
+          "value": 0.0,
+          "unit": "V",
+          "source": "user"
+        },
+        "high_resistance": {
+          "value": 25.0,
+          "unit": "ohm",
+          "source": "user"
+        },
+        "low_drop": {
+          "value": 0.0,
+          "unit": "V",
+          "source": "user"
+        },
+        "low_resistance": {
+          "value": 25.0,
+          "unit": "ohm",
+          "source": "user"
+        }
+      },
+      "input_threshold": {
+        "low": {
+          "value": 0.3,
+          "unit": "1",
+          "source": "user"
+        },
+        "high": {
+          "value": 0.7,
+          "unit": "1",
+          "source": "user"
+        }
+      }
+    }
+  ]
+}

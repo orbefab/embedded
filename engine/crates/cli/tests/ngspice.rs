@@ -89,6 +89,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "current-pulse",
             "divider",
             "esp32s3-blink",
+            "esp32s3-pattern",
             "i-divider",
             "led-5v",
             "led-9v",

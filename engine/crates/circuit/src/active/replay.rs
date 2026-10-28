@@ -62,8 +62,8 @@ pub(crate) fn chip(part: PartId, replay: &SpiReplay) -> Chip {
         })
         .collect();
     let nets = SpiNets {
-        cs: pins[CS],
-        sclk: pins[SCLK],
+        cs: Some(pins[CS]),
+        sclk: Some(pins[SCLK]),
         data: [D0, D0 + 1, D0 + 2, D0 + 3].map(|k| Some(pins[k])),
     };
     let clock_hz = u32::try_from(replay.clock_hz.value).expect("parse keeps the clock in u32");

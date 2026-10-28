@@ -1,7 +1,8 @@
 //! `esp32s3` parts through `sim run`: where the firmware blob is found, the `netlist.blob` error
 //! when it is not, and the diagnostics a program raises when it leaves a watchdog running,
-//! touches a register the model does not keep, reaches an instruction the core does not run, or
-//! jumps out of its memory, and an FPU op the core now runs.
+//! touches a register the model does not keep, reaches an instruction the core does not run,
+//! starts an SPI2 transfer the model does not run, or jumps out of its memory, and an FPU op the
+//! core now runs.
 
 mod common;
 
@@ -525,6 +526,35 @@ fn an_fpu_op_runs_once_its_coprocessor_is_enabled() {
     assert_eq!(
         found[0]["data"],
         serde_json::json!({ "pc": 0x4000_03c0, "symbol": null })
+    );
+}
+
+#[test]
+fn an_spi2_transfer_with_a_setting_the_model_does_not_run_ends_the_run() {
+    // l32r a2 <- SPI2; l32r a3 <- USR_DUMMY; l32r a4 <- USR; s32i a3 to USER; s32i a4 to CMD.
+    let code = [
+        0x21, 0xfd, 0xff, 0x31, 0xfd, 0xff, 0x41, 0xfd, 0xff, 0x32, 0x62, 0x04, 0x42, 0x62, 0x00,
+    ];
+    let doc = run_program(
+        "setting",
+        &[0x6002_4000, 1 << 29, 1 << 24],
+        &[code.as_slice(), &IDLE].concat(),
+        10_000_000_000,
+    );
+    assert_eq!(doc["status"], "failed", "{doc}");
+    let found = diagnostics(&doc);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["code"], "chip.unsupported_setting");
+    assert_eq!(found[0]["severity"], "error");
+    assert_eq!(found[0]["refs"], serde_json::json!(["#u1"]));
+    assert_eq!(
+        found[0]["data"],
+        serde_json::json!({
+            "peripheral": "SPI2",
+            "pc": IRAM + 12 + 12,
+            "setting": "dummy",
+            "symbol": "main+0xc",
+        })
     );
 }
 

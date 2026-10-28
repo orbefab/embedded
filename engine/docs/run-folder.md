@@ -1,6 +1,6 @@
 # Run folder
 
-`sim run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and so do an ATmega328P and an ESP32-S3. It adds `traces/serial.csv` when a chip has a USART, as an ATmega328P does, or a console, as an ESP32-S3 does, `traces/i2c.csv` when a chip has a TWI, as an ATmega328P does, `traces/link.csv` when a chip can send records, as an SPI replay does, `traces/display.csv` and one `traces/display-<part>.rgb565` for each display part, an `st77916`, and `traces/leds.csv` when a `ws2812` is in the netlist.
+`sim run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and so do an ATmega328P and an ESP32-S3. It adds `traces/serial.csv` when a chip has a USART, as an ATmega328P does, or a console, as an ESP32-S3 does, `traces/i2c.csv` when a chip has a TWI, as an ATmega328P does, `traces/link.csv` when a chip can send records, as an SPI replay and an ESP32-S3 do, `traces/display.csv` and one `traces/display-<part>.rgb565` for each display part, an `st77916`, and `traces/leds.csv` when a `ws2812` is in the netlist.
 
 ```text
 <dir>/
@@ -30,7 +30,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 {
   "run_format": 0,
   "netlist_format": 0,
-  "engine_version": "0.27.0",
+  "engine_version": "0.28.0",
   "input": {
     "file": "netlist.json",
     "sha256": "<lowercase hex sha256 of the input bytes>",
@@ -41,7 +41,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 }
 ```
 
-`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.27.0`. [versions.md](versions.md) says which changes move them.
+`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.28.0`. [versions.md](versions.md) says which changes move them.
 
 `netlist_format` is the input's `version`, when it reads as an unsigned integer. That holds when the engine rejected the input, so `version: 1` records 1. It is `null` when no such integer could be read.
 
@@ -410,7 +410,7 @@ t_ps,part,phase,address,read,byte,ack
 
 `scripts/i2c_decode.py` decodes the bus from `logic.vcd` apart from the engine and checks it against this file, as [reference.md](reference.md#i2c) says.
 
-A netlist with a chip that can send records adds `link.csv`. An SPI replay can. The file holds every record a chip sent, one row per record, as ASCII with `\n` line ends. `index.json` has no key for it, because its header names its columns. `examples/spi-replay` replays a display panel's start-up, and its file is:
+A netlist with a chip that can send records adds `link.csv`. An SPI replay, a pulse replay and an ESP32-S3 can. The file holds every record a chip sent, one row per record, as ASCII with `\n` line ends. `index.json` has no key for it, because its header names its columns. `examples/spi-replay` replays a display panel's start-up, and its file is:
 
 ```text
 t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash
@@ -423,8 +423,8 @@ t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash
 60800000,60000000,rp1,CS,spi,released,8/1:02 24/1:002900,0,e3b0c44298fc1c14
 ```
 
-- `t_ps` is the record's end and `start_ps` is its start, both in integer picoseconds. `part` is the sender's part name. `pin` names the link on the sender, `CS` for a `spi` record.
-- `kind` is `spi`, `pulses` or `duty`. At this version an `spi_replay` writes `spi` rows and a `pulses_replay` writes `pulses` rows. No part writes `duty` rows.
+- `t_ps` is the record's end and `start_ps` is its start, both in integer picoseconds. `part` is the sender's part name. `pin` names the link on the sender. It is `CS` for a replay's `spi` record. For an ESP32-S3's it is the pin its SPI2 chip select is routed to, such as `GPIO12`, or `SPI2` when CS is routed to none of the part's pins.
+- `kind` is `spi`, `pulses` or `duty`. At this version an `spi_replay` and an `esp32s3` write `spi` rows and a `pulses_replay` writes `pulses` rows. No part writes `duty` rows.
 - On a `spi` row, `cs` is `held` or `released`, the chip select at the record's end. `phases` lists each phase, space-separated, as `<bits>/<lanes>:<value>`, with the value in lowercase hex, one digit for each four bits or part of four. `bytes` is the data's length, and `hash` is the first 8 bytes of the data's SHA-256, in lowercase hex.
 - On a `pulses` row, `phases` is `idle=0` or `idle=1`. The payload is each pulse as one level byte and its time as a little-endian `u64` of picoseconds, and `bytes` and `hash` are its length and hash.
 - On a `duty` row, `phases` is `<duty>/<2^resolution>@<hz>`, and `bytes` and `hash` are empty.
@@ -433,7 +433,7 @@ t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash
 - A record that ends after `stop_ps` is not in the file. After an error the file keeps the records that ended by `end_ps`.
 - A chip that can send records writes the file even when it sent none, as the header alone.
 
-A record is not a level, so no column of `analog.f64` and no signal of `logic.vcd` shows it. The replay's pins hold their idle levels in the trace for the whole run.
+A record is not a level, so no column of `analog.f64` and no signal of `logic.vcd` shows it. The replay's pins hold their idle levels in the trace for the whole run, and an ESP32-S3's SPI2 pads hold theirs while they are routed.
 
 A netlist with a display part adds `display.csv`. The file holds every pixel write a display part closed, one row per write, as ASCII with `\n` line ends. `index.json` has no key for it. `examples/st77916-replay` closes seven writes, and its file is:
 

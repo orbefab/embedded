@@ -95,11 +95,9 @@ pub fn has_kind(netlist: &serde_json::Value, kind: &str) -> bool {
 /// Whether a chip in `netlist` can send records. A `spi_replay` and a `pulses_replay` can, so a
 /// new kind that sends records adds its kind here.
 pub fn sends_records(netlist: &serde_json::Value) -> bool {
-    netlist["parts"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|part| part["kind"] == "spi_replay" || part["kind"] == "pulses_replay")
+    netlist["parts"].as_array().unwrap().iter().any(|part| {
+        ["spi_replay", "pulses_replay", "esp32s3"].contains(&part["kind"].as_str().unwrap())
+    })
 }
 
 /// The names of the display parts of `netlist`, in part order. Today only an `st77916` is one,

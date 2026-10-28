@@ -20,3 +20,9 @@ rm -rf "$blink_run"
 cargo run -q -p sim-cli --locked -- run examples/esp32s3-blink/netlist.json --out "$blink_run" >/dev/null
 uv run scripts/esp32s3_blink.py --check "$blink_run"
 rm -rf "$blink_run"
+uv run scripts/pattern_header.py --check
+pattern_run="${CARGO_TARGET_DIR:-target}/esp32s3-pattern-check"
+rm -rf "$pattern_run"
+cargo run -q -p sim-cli --locked -- run examples/esp32s3-pattern/netlist.json --out "$pattern_run" >/dev/null
+uv run scripts/render_st77916.py --pattern firmware/esp32s3/pattern.json --check "$pattern_run"
+rm -rf "$pattern_run"
