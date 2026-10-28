@@ -42,6 +42,9 @@ macro_rules! registers {
 }
 
 registers! {
+    Lbeg: u32::MAX => [Read RSR_LBEG, Write WSR_LBEG, Exchange XSR_LBEG];
+    Lend: u32::MAX => [Read RSR_LEND, Write WSR_LEND, Exchange XSR_LEND];
+    Lcount: u32::MAX => [Read RSR_LCOUNT, Write WSR_LCOUNT, Exchange XSR_LCOUNT];
     Sar: 0x3f => [Read RSR_SAR, Write WSR_SAR, Exchange XSR_SAR];
     Litbase: 0xffff_f001 => [Read RSR_LITBASE, Write WSR_LITBASE, Exchange XSR_LITBASE];
     Scompare1: u32::MAX => [Read RSR_SCOMPARE1, Write WSR_SCOMPARE1, Exchange XSR_SCOMPARE1];
@@ -76,6 +79,7 @@ registers! {
     Ccompare0: u32::MAX => [Read RSR_CCOMPARE0, Write WSR_CCOMPARE0, Exchange XSR_CCOMPARE0];
     Ccompare1: u32::MAX => [Read RSR_CCOMPARE1, Write WSR_CCOMPARE1, Exchange XSR_CCOMPARE1];
     Ccompare2: u32::MAX => [Read RSR_CCOMPARE2, Write WSR_CCOMPARE2, Exchange XSR_CCOMPARE2];
+    Interrupt: u32::MAX => [Read RSR_INTERRUPT];
     IntEnable: u32::MAX => [Read RSR_INTENABLE, Write WSR_INTENABLE, Exchange XSR_INTENABLE];
     Icount: u32::MAX => [Read RSR_ICOUNT, Write WSR_ICOUNT, Exchange XSR_ICOUNT];
     IcountLevel: 0xf => [Read RSR_ICOUNTLEVEL, Write WSR_ICOUNTLEVEL, Exchange XSR_ICOUNTLEVEL];
@@ -89,6 +93,8 @@ registers! {
     Misc3: u32::MAX => [Read RSR_MISC3, Write WSR_MISC3, Exchange XSR_MISC3];
     Threadptr: u32::MAX => [Read RUR_THREADPTR, Write WUR_THREADPTR];
 }
+
+pub(crate) const CCOMPARE: [Sr; 3] = [Sr::Ccompare0, Sr::Ccompare1, Sr::Ccompare2];
 
 /// `EPC1` to `EPC7` by level. Index 0 is unused.
 pub(crate) const EPC: [Sr; 8] = [

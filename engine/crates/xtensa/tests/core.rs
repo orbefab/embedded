@@ -13,6 +13,12 @@ pub const RAM: u32 = 0x3fc8_8000;
 pub struct Flat {
     code: Vec<u8>,
     pub ram: PagedRam,
+    /// Interrupt lines that are high from the start.
+    pub lines: u32,
+    /// Interrupt lines that rise at a cycle and stay high.
+    pub rise: Option<(Cycle, u32)>,
+    /// How many times the core read the lines.
+    pub polls: u64,
 }
 
 impl Flat {
@@ -27,6 +33,9 @@ impl Flat {
         Flat {
             code,
             ram: PagedRam::new(RAM, 512 * 1024),
+            lines: 0,
+            rise: None,
+            polls: 0,
         }
     }
 }
@@ -56,6 +65,18 @@ impl Bus for Flat {
             Err(Exit::Fault(Cause::StoreProhibited))
         }
     }
+
+    fn interrupts(&mut self, now: Cycle) -> u32 {
+        self.polls += 1;
+        match self.rise {
+            Some((at, lines)) if now >= at => self.lines | lines,
+            _ => self.lines,
+        }
+    }
+
+    fn next_event(&mut self, now: Cycle) -> Option<Cycle> {
+        self.rise.map(|(at, _)| at).filter(|at| now < *at)
+    }
 }
 
 pub fn core_at<C: Config>(pc: u32) -> Core<C> {
@@ -65,17 +86,18 @@ pub fn core_at<C: Config>(pc: u32) -> Core<C> {
 }
 
 fn unmodeled_op_stops_before_it<C: Config>() {
-    let mut bus = Flat::new("768201");
+    // add.s f1, f2, f3
+    let mut bus = Flat::new("30120a");
     let mut core = core_at::<C>(CODE);
     let stop = core.run_until(&mut bus, Cycle(100));
     let want = Unimplemented {
         pc: CODE,
-        missing: Missing::Op(Op::LOOP),
+        missing: Missing::Op(Op::ADD_S),
     };
     assert_eq!(stop, Stop::Unimplemented(want), "{}", C::NAME);
     assert_eq!(core.pc(), CODE);
     assert_eq!(core.cycle(), Cycle(0));
-    assert_eq!(want.to_string(), "`loop` at 0x40370000 is not modeled");
+    assert_eq!(want.to_string(), "`add.s` at 0x40370000 is not modeled");
 }
 
 #[test]
@@ -111,6 +133,6 @@ fn two_byte_op_before_an_unmapped_word_runs() {
 /// `Core` is copied at every landing, so its size is pinned.
 #[test]
 fn core_size_is_pinned() {
-    assert_eq!(size_of::<Core<Esp32>>(), 456);
-    assert_eq!(size_of::<Core<Esp32s3>>(), 456);
+    assert_eq!(size_of::<Core<Esp32>>(), 504);
+    assert_eq!(size_of::<Core<Esp32s3>>(), 504);
 }

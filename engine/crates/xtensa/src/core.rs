@@ -7,11 +7,13 @@ use std::marker::PhantomData;
 use crate::bus::{Bus, Cause, Cycle, Exit, Width};
 use crate::config::Config;
 use crate::decode::{Decoded, Insn, Op};
-use crate::special::{Access, EPC, EPS, Sr, register_op};
+use crate::special::{Access, CCOMPARE, EPC, EPS, Sr, register_op};
 
 const PS_INTLEVEL: u32 = 0xf;
 const PS_EXCM: u32 = 1 << 4;
 const PS_UM: u32 = 1 << 5;
+const PS_OWB_SHIFT: u32 = 8;
+const PS_OWB: u32 = 0xf << PS_OWB_SHIFT;
 const PS_CALLINC_SHIFT: u32 = 16;
 const PS_CALLINC: u32 = 3 << PS_CALLINC_SHIFT;
 const PS_WOE: u32 = 1 << 18;
@@ -32,13 +34,20 @@ const DEBUGCAUSE_BREAK_N: u32 = 1 << 4;
 /// classic board net 144 cycles: four each, and one more for each of the 16 whose target runs
 /// into the next word. That one sequential chain is the only pattern measured.
 const REDIRECT_CYCLES: u64 = 3;
-/// Cycles of `quos`, `quou`, `rems` and `remu`, a placeholder until the S3 board timing (S5b). A
+/// Cycles of `quos`, `quou`, `rems` and `remu`, a placeholder until the S3 board timing probe. A
 /// divide also refetches the next instruction, a cycle more when that instruction runs into the
 /// next word, and that cycle is a placeholder too. With it, 32 `quos` net 208, the low edge of
 /// the classic bounds of 208 to 216, where the board measured 212. Without it no whole divide
 /// cost lands inside them. The model is off outside the divide too: 32 `memw` net 32 here and 35
 /// on the board.
 const DIVIDE_CYCLES: u64 = 6;
+/// Cycles the first loop-back after a loop op adds, a placeholder until the S3 board timing
+/// probe. One classic row measures it: a 32-pass loop of one `addi` nets 33 cycles plus this one,
+/// and 5 is fitted to the board median of 38. The row's bounds accept 1 to 9. The ISA's extra
+/// clock there is 1 (8.3.149, p 475). Two costs are not modelled. A first pass that leaves through
+/// a taken branch charges this on a later loop-back. The extra cycle the ISA gives the loop-back
+/// after an `isync` or a `LEND` write is not charged.
+const FIRST_LOOPBACK_CYCLES: u64 = 5;
 
 /// Why `run_until` returned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,12 +77,10 @@ pub enum Missing {
     Unaligned(Op),
     /// `l32r` with `LITBASE` enabled.
     Litbase,
-    /// `entry` would rotate into a frame `WindowStart` still holds, or the next instruction could
-    /// reference one, where the chip would spill it first. A run that resumes stops here again
-    /// until the frame is out of the window or overflow is off.
-    WindowOverflow,
-    /// `retw` would return to a frame `WindowStart` no longer holds.
-    WindowUnderflow,
+    /// This op as the last of a loop when it loops back. The ISA says a loop's last op must not
+    /// be a call, `isync`, `waiti` or `rsr.lcount` (4.3.2.2, p 86), and its own pseudo-code and
+    /// prose disagree on where a call there returns (8.3.57, p 373).
+    LoopEnd(Op),
 }
 
 impl fmt::Display for Unimplemented {
@@ -91,12 +98,12 @@ impl fmt::Display for Unimplemented {
             Missing::Litbase => {
                 write!(f, "`l32r` with LITBASE at {:#010x} is not modeled", self.pc)
             }
-            Missing::WindowOverflow => {
-                write!(f, "window overflow at {:#010x} is not modeled", self.pc)
-            }
-            Missing::WindowUnderflow => {
-                write!(f, "window underflow at {:#010x} is not modeled", self.pc)
-            }
+            Missing::LoopEnd(op) => write!(
+                f,
+                "`{}` as the last op of a loop at {:#010x} is not modeled",
+                op.name(),
+                self.pc
+            ),
         }
     }
 }
@@ -104,6 +111,12 @@ impl fmt::Display for Unimplemented {
 /// Why an instruction did not complete.
 enum Trap {
     Exception(Cause, Option<u32>),
+    /// A window overflow or underflow. Its handler runs with `WindowBase` at `base`, from
+    /// `VECBASE` plus `vector`.
+    Window {
+        base: u32,
+        vector: u32,
+    },
     Debug(u32),
     Stop(Stop),
 }
@@ -115,34 +128,27 @@ impl Trap {
 }
 
 /// One Xtensa core of chip `C`.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Core<C: Config> {
     /// The physical address registers. `a(n)` is `ar[(WindowBase * 4 + n) % 64]`.
     ar: [u32; 64],
-    /// Indexed by [`Sr`]. `Ccount` holds `CCOUNT` minus the low 32 bits of `cycle`.
+    /// Indexed by [`Sr`]. `Ccount` holds `CCOUNT` minus the low 32 bits of `cycle`, and
+    /// `Interrupt` the pending bits that latch: software, edge and timer.
     sr: [u32; Sr::COUNT],
     pc: u32,
     cycle: Cycle,
     /// The last instruction moved the fetch to a new address, so the next fetch costs a cycle
     /// more when its instruction runs into the next word.
     refetch: bool,
-    /// The last instruction may have exposed a live frame, so [`Core::run_until`] checks the
-    /// window before the next one. It stays set until the check passes.
-    window_check: bool,
+    /// `WAITI` suspended the core until it takes an interrupt.
+    waiting: bool,
+    /// A loop op ran and no loop-back has happened since.
+    loop_fresh: bool,
+    /// The external interrupt lines as the last poll read them.
+    lines: u32,
+    /// The cycle at which each `CCOMPAREn` next equals `CCOUNT`.
+    timer_due: [Cycle; 3],
     chip: PhantomData<C>,
-}
-
-impl<C: Config> Clone for Core<C> {
-    fn clone(&self) -> Self {
-        Core {
-            ar: self.ar,
-            sr: self.sr,
-            pc: self.pc,
-            cycle: self.cycle,
-            refetch: self.refetch,
-            window_check: self.window_check,
-            chip: PhantomData,
-        }
-    }
 }
 
 impl<C: Config> fmt::Debug for Core<C> {
@@ -163,7 +169,8 @@ impl<C: Config> Default for Core<C> {
 
 impl<C: Config> Core<C> {
     /// The reset state: PC at the reset vector, `PS` with `EXCM` set and `INTLEVEL` 15,
-    /// `WindowStart` 1, `VECBASE` at its reset value, and cycle 0.
+    /// `WindowStart` 1, `VECBASE` at its reset value, and cycle 0. The registers the ISA leaves
+    /// undefined at reset are 0.
     pub fn new() -> Self {
         let mut core = Core {
             ar: [0; 64],
@@ -171,12 +178,18 @@ impl<C: Config> Core<C> {
             pc: RESET_VECTOR,
             cycle: Cycle(0),
             refetch: false,
-            window_check: false,
+            waiting: false,
+            loop_fresh: false,
+            lines: 0,
+            timer_due: [Cycle(0); 3],
             chip: PhantomData,
         };
         core.sr[Sr::Ps as usize] = RESET_PS;
         core.sr[Sr::WindowStart as usize] = 1;
         core.sr[Sr::Vecbase as usize] = RESET_VECBASE;
+        for i in 0..3 {
+            core.arm_timer(i);
+        }
         core
     }
 
@@ -202,46 +215,76 @@ impl<C: Config> Core<C> {
         self.ar[index] = value;
     }
 
+    /// `Interrupt` is the pending bits that latch, with the external level lines as the last
+    /// poll read them.
     pub fn special(&self, sr: Sr) -> u32 {
         match sr {
             Sr::Ccount => self.sr[sr as usize].wrapping_add(self.cycle.0 as u32),
+            Sr::Interrupt => self.sr[sr as usize] | (self.lines & C::INTERRUPTS.extern_level),
             _ => self.sr[sr as usize],
         }
     }
 
-    /// Writes `value` with the register's unwritable bits cleared.
+    /// Writes `value` with the register's unwritable bits cleared. Writing `CCOMPAREn` clears
+    /// its timer interrupt, and writing `CCOUNT` or `CCOMPAREn` moves the next timer match.
+    /// Writing `Interrupt` sets the bits that latch.
     pub fn set_special(&mut self, sr: Sr, value: u32) {
         let value = value & sr.mask();
-        self.sr[sr as usize] = match sr {
-            Sr::Ccount => value.wrapping_sub(self.cycle.0 as u32),
-            _ => value,
-        };
+        match sr {
+            Sr::Ccount => {
+                self.sr[sr as usize] = value.wrapping_sub(self.cycle.0 as u32);
+                for i in 0..3 {
+                    self.arm_timer(i);
+                }
+            }
+            Sr::Ccompare0 | Sr::Ccompare1 | Sr::Ccompare2 => {
+                let i = sr as usize - Sr::Ccompare0 as usize;
+                self.sr[sr as usize] = value;
+                self.sr[Sr::Interrupt as usize] &= !C::INTERRUPTS.timer_mask(i);
+                self.arm_timer(i);
+            }
+            Sr::Interrupt => self.sr[sr as usize] = value & latched::<C>(),
+            _ => self.sr[sr as usize] = value,
+        }
     }
 
     /// Runs until the cycle reaches `limit`, the bus stops the core, or the next instruction is
     /// not modeled. An instruction that starts before `limit` runs whole, so the cycle may pass
-    /// it.
+    /// it. A core in `WAITI` stops at `limit` exactly.
     pub fn run_until<B: Bus>(&mut self, bus: &mut B, limit: Cycle) -> Stop {
         loop {
-            if self.window_check {
-                if self.window_exposed() {
-                    return Stop::Unimplemented(Unimplemented {
-                        pc: self.pc,
-                        missing: Missing::WindowOverflow,
-                    });
-                }
-                self.window_check = false;
-            }
             if self.cycle >= limit {
                 return Stop::Limit;
             }
-            if let Err(stop) = self.step(bus) {
+            if let Err(stop) = self.step(bus, limit) {
                 return stop;
             }
         }
     }
 
-    fn step<B: Bus>(&mut self, bus: &mut B) -> Result<(), Stop> {
+    /// Takes a pending interrupt, idles in `WAITI`, or runs one instruction. Interrupts come
+    /// first, as the ISA's priority list puts them ahead of the `ICOUNT` debug exception (4.4.1.11,
+    /// p 145).
+    fn step<B: Bus>(&mut self, bus: &mut B, limit: Cycle) -> Result<(), Stop> {
+        let nmi = self.poll(bus);
+        let level = if nmi {
+            Some(C::INTERRUPTS.nmi_level)
+        } else {
+            self.interrupt_level()
+        };
+        if let Some(level) = level {
+            self.waiting = false;
+            if level == 1 {
+                self.exception(Cause::Level1Interrupt, None);
+            } else {
+                self.take_level(level);
+            }
+            return Ok(());
+        }
+        if self.waiting {
+            self.idle(bus, limit);
+            return Ok(());
+        }
         let counting = self.cintlevel() < self.sr[Sr::IcountLevel as usize];
         let icount = self.sr[Sr::Icount as usize];
         let done = if counting && icount == u32::MAX && self.debug_allowed() {
@@ -254,9 +297,9 @@ impl<C: Config> Core<C> {
                 if counting && !matches!(op, Op::WSR_ICOUNT | Op::XSR_ICOUNT) {
                     self.sr[Sr::Icount as usize] = icount.wrapping_add(1);
                 }
-                self.window_check = moves_window(op);
             }
             Err(Trap::Exception(cause, vaddr)) => self.exception(cause, vaddr),
+            Err(Trap::Window { base, vector }) => self.window_exception(base, vector),
             Err(Trap::Debug(cause)) => self.debug_exception(cause),
             Err(Trap::Stop(stop)) => return Err(stop),
         }
@@ -286,22 +329,111 @@ impl<C: Config> Core<C> {
         self.cintlevel() < C::DEBUG_LEVEL
     }
 
-    /// Window overflow is on and a frame `WindowStart` holds lies in the current window's upper
-    /// three quarters. The chip spills that frame on the first reference to one of its registers.
-    /// This core checks no reference, so it stops instead. `entry` keeps this false, and only a
-    /// write to `WindowBase`, `WindowStart` or `PS` or a return can make it true.
-    fn window_exposed(&self) -> bool {
-        let ps = self.ps();
-        ps & PS_WOE != 0
-            && ps & PS_EXCM == 0
-            && live_frame_above(
-                self.sr[Sr::WindowStart as usize],
-                self.sr[Sr::WindowBase as usize],
-                3,
-            )
+    /// Reads the lines and the timers before an instruction, and returns whether the NMI line
+    /// rose.
+    fn poll<B: Bus>(&mut self, bus: &mut B) -> bool {
+        let interrupts = C::INTERRUPTS;
+        let lines = bus.interrupts(self.cycle) & interrupts.external();
+        let rose = lines & !self.lines;
+        self.lines = lines;
+        let mut latched = self.sr[Sr::Interrupt as usize] | (rose & interrupts.extern_edge);
+        for i in 0..3 {
+            let due = self.timer_due[i];
+            if self.cycle >= due {
+                latched |= interrupts.timer_mask(i);
+                let periods = ((self.cycle.0 - due.0) >> 32) + 1;
+                self.timer_due[i] = Cycle(due.0 + (periods << 32));
+            }
+        }
+        self.sr[Sr::Interrupt as usize] = latched;
+        rose & interrupts.nmi != 0
     }
 
-    /// A vector costs a redirect's cycles, a placeholder until the S3 board timing (S5b). No board
+    /// The highest level above `CINTLEVEL` with an enabled pending interrupt, as the ISA's
+    /// `checkInterrupts` picks it (4.4.6.4, p 160).
+    fn interrupt_level(&self) -> Option<u32> {
+        let pending = self.special(Sr::Interrupt) & self.sr[Sr::IntEnable as usize];
+        if pending == 0 {
+            return None;
+        }
+        let by_level = const { C::INTERRUPTS.by_level() };
+        (self.cintlevel() + 1..C::INTERRUPTS.nmi_level)
+            .rev()
+            .find(|&level| pending & by_level[level as usize] != 0)
+    }
+
+    /// `CCOMPAREn` next equals `CCOUNT` at the first cycle after this one where they agree. A
+    /// value equal to `CCOUNT` now matches a whole count later, 2^32 cycles on. The ISA says only
+    /// that a match raises the interrupt (4.4.7.2, p 162).
+    fn arm_timer(&mut self, i: usize) {
+        let compare = self.sr[CCOMPARE[i] as usize];
+        let ahead = match compare.wrapping_sub(self.special(Sr::Ccount)) {
+            0 => 1 << 32,
+            ahead => u64::from(ahead),
+        };
+        self.timer_due[i] = Cycle(self.cycle.0 + ahead);
+    }
+
+    /// `WAITI` with no interrupt to take moves the cycle to the bus's next event, a timer match
+    /// or `limit`, whichever comes first, and at least one cycle on.
+    fn idle<B: Bus>(&mut self, bus: &mut B, limit: Cycle) {
+        let wake = bus
+            .next_event(self.cycle)
+            .into_iter()
+            .chain(self.timer_due)
+            .fold(limit, Cycle::min);
+        self.cycle = wake.max(Cycle(self.cycle.0 + 1));
+    }
+
+    /// The ISA's `WindowCheck` for an op whose address registers reach quarter `reach`: how many
+    /// quarters up the nearest live frame within it lies (6.1.3, p 246). `CWOE` is
+    /// `PS.WOE` with `PS.EXCM` clear (4.4.1.4, p 135).
+    fn overflow(&self, reach: u32) -> Option<u32> {
+        if reach == 0 || self.ps() & (PS_WOE | PS_EXCM) != PS_WOE {
+            return None;
+        }
+        let hit = self.frames_above() & ((1 << reach) - 1);
+        (hit != 0).then(|| hit.trailing_zeros() + 1)
+    }
+
+    /// Bit `k - 1` is `WindowStart` bit `WindowBase + k`, for `k` from 1 to 15.
+    fn frames_above(&self) -> u32 {
+        let start = self.sr[Sr::WindowStart as usize];
+        let base = self.sr[Sr::WindowBase as usize];
+        ((start | start << 16) >> (base + 1)) & 0x7fff
+    }
+
+    /// The overflow that spills the frame `n` quarters up. The next live frame above that one
+    /// bounds its size, and the size picks the vector.
+    fn overflow_trap(&self, n: u32) -> Trap {
+        let base = (self.sr[Sr::WindowBase as usize] + n) & 15;
+        let next = self.frames_above() >> n;
+        let quarters = if next & 1 != 0 {
+            1
+        } else if next & 2 != 0 {
+            2
+        } else {
+            3
+        };
+        Trap::Window {
+            base,
+            vector: window_vector(quarters, false),
+        }
+    }
+
+    /// Enters a window handler as `WindowCheck` and `retw` do: `PS.OWB` keeps the current
+    /// `WindowBase`, `EPC1` the PC, and `PS.UM` stays.
+    fn window_exception(&mut self, base: u32, vector: u32) {
+        let ps = self.ps();
+        let owb = self.sr[Sr::WindowBase as usize];
+        self.sr[Sr::Ps as usize] = (ps & !PS_OWB) | (owb << PS_OWB_SHIFT) | PS_EXCM;
+        self.sr[Sr::Epc1 as usize] = self.pc;
+        self.sr[Sr::WindowBase as usize] = base;
+        let vecbase = self.sr[Sr::Vecbase as usize];
+        self.take_vector(vecbase + vector);
+    }
+
+    /// A vector costs a redirect's cycles, a placeholder until the S3 board timing probe. No board
     /// row measures it.
     fn take_vector(&mut self, target: u32) {
         self.pc = target;
@@ -332,9 +464,13 @@ impl<C: Config> Core<C> {
     }
 
     fn debug_exception(&mut self, cause: u32) {
-        let level = C::DEBUG_LEVEL;
-        let ps = self.ps();
         self.sr[Sr::DebugCause as usize] = cause;
+        self.take_level(C::DEBUG_LEVEL);
+    }
+
+    /// The ISA's `takeinterrupt` for a level from 2 up (4.4.6.4, pp 160-161).
+    fn take_level(&mut self, level: u32) {
+        let ps = self.ps();
         self.sr[EPC[level as usize] as usize] = self.pc;
         self.sr[EPS[level as usize] as usize] = ps;
         self.sr[Sr::Ps as usize] = (ps & !PS_INTLEVEL) | PS_EXCM | level;
@@ -415,10 +551,70 @@ impl<C: Config> Core<C> {
     /// Runs one instruction. On `Ok` the PC, the registers and the cycle have moved. On `Err`
     /// none of them has, except what fetching and decoding charged, but an unaligned store that
     /// stops keeps the parts it wrote before the faulting one.
+    ///
+    /// The loop-back follows the ISA's fetch pseudo-code (3.5.4.1, p 53): it sets the next PC
+    /// before the op runs, so a taken branch as a loop's last op still counts `LCOUNT` down, which
+    /// the ISA says is undefined on some implementations (4.3.2.2, p 86).
+    ///
+    /// An op that raises an exception as a loop's last op has two readings. The literal fetch
+    /// pseudo-code (3.5.4.1, p 53, and 4.3.2.4, p 86) counts `LCOUNT` down before `Inst()`, and
+    /// neither `Exception` (4.4.1.11, p 145) nor `WindowCheck` (6.1.3, p 246) puts it back, so a
+    /// handler that reruns the op loses a pass. The precise reading has the op not complete, so
+    /// its loop-back waits for the rerun. This core takes the precise reading and restores
+    /// `LCOUNT`. The S3 board confirms it: an exception on the last op of a 3-pass loop's first
+    /// pass leaves `LCOUNT` at 2, and the rerun finishes all 3 passes. The classic chip is
+    /// unprobed.
     fn execute<B: Bus>(&mut self, bus: &mut B) -> Result<Op, Trap> {
         let insn = self.fetch(bus)?;
+        if let Some(n) = self.overflow(u32::from(insn.reach)) {
+            return Err(self.overflow_trap(n));
+        }
         let pc = self.pc;
-        let next = pc.wrapping_add(u32::from(insn.len));
+        let lcount = self.sr[Sr::Lcount as usize];
+        let seq = pc.wrapping_add(u32::from(insn.len));
+        let loops = seq == self.sr[Sr::Lend as usize] && lcount != 0 && self.ps() & PS_EXCM == 0;
+        let next = if loops {
+            if no_loop_end(insn.op) {
+                return Err(Trap::missing(pc, Missing::LoopEnd(insn.op)));
+            }
+            self.sr[Sr::Lcount as usize] = lcount - 1;
+            self.sr[Sr::Lbeg as usize]
+        } else {
+            seq
+        };
+        let (cycles, target) = match self.operate(bus, &insn, next) {
+            Ok(done) => done,
+            Err(trap) => {
+                self.sr[Sr::Lcount as usize] = lcount;
+                return Err(trap);
+            }
+        };
+        self.cycle.0 += cycles;
+        match target {
+            Some(to) => {
+                self.cycle.0 += REDIRECT_CYCLES;
+                self.refetch = true;
+                self.pc = to;
+            }
+            None => {
+                if loops && std::mem::take(&mut self.loop_fresh) {
+                    self.cycle.0 += FIRST_LOOPBACK_CYCLES;
+                }
+                self.pc = next;
+            }
+        }
+        Ok(insn.op)
+    }
+
+    /// The op's own operation, with `next` the PC after it. Returns its cycles and the target of
+    /// a taken branch, jump, call or return.
+    fn operate<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        insn: &Insn,
+        next: u32,
+    ) -> Result<(u64, Option<u32>), Trap> {
+        let pc = self.pc;
         let f = insn.fields;
         let mut cycles = 1;
         let mut target = None;
@@ -541,13 +737,18 @@ impl<C: Config> Core<C> {
                     self.load(bus, insn.op, self.a(f[1]).wrapping_add(f[2]), Width::Half)?;
                 self.set_a(f[0], value as i16 as u32);
             }
-            Op::L32I | Op::L32I_N => {
+            // Both chips' `core-isa.h` set `XCHAL_UNALIGNED_LOAD_HW` and `XCHAL_UNALIGNED_STORE_HW`
+            // (classic lines 173-174, S3 lines 204-205). That Hardware Alignment Option builds on
+            // the Unaligned Exception Option and does not list `l32e` or `s32e` among the ops that
+            // may still raise `LoadStoreAlignmentCause` (4.6, p 168), so they split as `l32i` and
+            // `s32i` do.
+            Op::L32I | Op::L32I_N | Op::L32E => {
                 let value =
                     self.load(bus, insn.op, self.a(f[1]).wrapping_add(f[2]), Width::Word)?;
                 self.set_a(f[0], value);
             }
             Op::L32AI => {
-                let addr = sync_addr(pc, insn.op, self.a(f[1]).wrapping_add(f[2]))?;
+                let addr = word_addr(pc, insn.op, self.a(f[1]).wrapping_add(f[2]))?;
                 let value = self.load(bus, insn.op, addr, Width::Word)?;
                 self.set_a(f[0], value);
             }
@@ -572,7 +773,7 @@ impl<C: Config> Core<C> {
                 Width::Half,
                 self.a(f[0]),
             )?,
-            Op::S32I | Op::S32I_N | Op::S32NB => {
+            Op::S32I | Op::S32I_N | Op::S32NB | Op::S32E => {
                 self.store(
                     bus,
                     insn.op,
@@ -582,7 +783,7 @@ impl<C: Config> Core<C> {
                 )?;
             }
             Op::S32RI => {
-                let addr = sync_addr(pc, insn.op, self.a(f[1]).wrapping_add(f[2]))?;
+                let addr = word_addr(pc, insn.op, self.a(f[1]).wrapping_add(f[2]))?;
                 self.store(bus, insn.op, addr, Width::Word, self.a(f[0]))?;
             }
 
@@ -631,6 +832,44 @@ impl<C: Config> Core<C> {
             Op::CALLX12 => target = Some(self.window_call(3, self.a(f[0]), next)),
             Op::ENTRY => self.entry(pc, f[0], f[1])?,
             Op::RETW | Op::RETW_N => target = Some(self.retw(pc, insn.op)?),
+            Op::MOVSP => {
+                if self.frames_below() == 0 {
+                    return Err(Trap::Exception(Cause::Alloca, None));
+                }
+                self.set_a(f[0], self.a(f[1]));
+            }
+            Op::ROTW => {
+                let base = self.sr[Sr::WindowBase as usize].wrapping_add(f[0]) & 15;
+                self.sr[Sr::WindowBase as usize] = base;
+            }
+            Op::RFWO | Op::RFWU => {
+                let ps = self.ps();
+                let base = self.sr[Sr::WindowBase as usize];
+                let bit = 1 << base;
+                let start = self.sr[Sr::WindowStart as usize];
+                self.sr[Sr::WindowStart as usize] = if insn.op == Op::RFWO {
+                    start & !bit
+                } else {
+                    start | bit
+                };
+                self.sr[Sr::WindowBase as usize] = (ps & PS_OWB) >> PS_OWB_SHIFT;
+                self.sr[Sr::Ps as usize] = ps & !PS_EXCM;
+                target = Some(self.sr[Sr::Epc1 as usize]);
+            }
+
+            Op::LOOP | Op::LOOPNEZ | Op::LOOPGTZ => {
+                let count = self.a(f[0]);
+                self.sr[Sr::Lcount as usize] = count.wrapping_sub(1);
+                self.sr[Sr::Lbeg as usize] = next;
+                self.sr[Sr::Lend as usize] = f[1];
+                self.loop_fresh = true;
+                let skip = match insn.op {
+                    Op::LOOPNEZ => count == 0,
+                    Op::LOOPGTZ => count as i32 <= 0,
+                    _ => false,
+                };
+                target = taken(skip, f[1]);
+            }
 
             Op::RSIL => {
                 let ps = self.ps();
@@ -644,6 +883,17 @@ impl<C: Config> Core<C> {
             Op::RFDE => {
                 self.sr[Sr::Ps as usize] &= !PS_EXCM;
                 target = Some(self.sr[Sr::Depc as usize]);
+            }
+            Op::WAITI => {
+                self.sr[Sr::Ps as usize] = (self.ps() & !PS_INTLEVEL) | f[0];
+                self.waiting = true;
+            }
+            Op::WSR_INTSET => {
+                self.sr[Sr::Interrupt as usize] |= self.a(f[0]) & C::INTERRUPTS.software;
+            }
+            Op::WSR_INTCLEAR => {
+                let clears = C::INTERRUPTS.software | C::INTERRUPTS.extern_edge;
+                self.sr[Sr::Interrupt as usize] &= !(self.a(f[0]) & clears);
             }
             Op::RFI => {
                 let level = f[0] as usize;
@@ -664,16 +914,7 @@ impl<C: Config> Core<C> {
                 None => return Err(Trap::missing(pc, Missing::Op(op))),
             },
         }
-        self.cycle.0 += cycles;
-        match target {
-            Some(to) => {
-                self.cycle.0 += REDIRECT_CYCLES;
-                self.refetch = true;
-                self.pc = to;
-            }
-            None => self.pc = next,
-        }
-        Ok(insn.op)
+        Ok((cycles, target))
     }
 
     fn move_if(&mut self, f: [u32; 8], test: impl Fn(u32) -> bool) {
@@ -704,52 +945,62 @@ impl<C: Config> Core<C> {
     }
 
     /// Rotates the window by `PS.CALLINC` and moves the new frame's stack pointer down by
-    /// `frame`. The ISA checks the frames `WindowBase + 1` to `WindowBase + CALLINC` for the
-    /// register `entry` writes, and none when `CALLINC` is 0. The chip checks the callee's other
-    /// registers on each reference and this core does not, so it also stops when a frame lies in
-    /// the new window's upper three quarters. Together that is `WindowBase + 1` to
-    /// `WindowBase + CALLINC + 3`, checked before any write.
+    /// `frame`. Its `WindowCheck (00, PS.CALLINC, 00)` tests the quarters up to `CALLINC`, before
+    /// the rotation (8.3.106, p 427). The callee's own references check the rest of its window.
     fn entry(&mut self, pc: u32, s: u32, frame: u32) -> Result<(), Trap> {
         let ps = self.ps();
+        let inc = (ps & PS_CALLINC) >> PS_CALLINC_SHIFT;
+        if let Some(n) = self.overflow(inc) {
+            return Err(self.overflow_trap(n));
+        }
         if s > 3 || ps & PS_WOE == 0 || ps & PS_EXCM != 0 {
             return Err(Trap::missing(pc, Missing::Op(Op::ENTRY)));
         }
-        let inc = (ps & PS_CALLINC) >> PS_CALLINC_SHIFT;
-        let base = self.sr[Sr::WindowBase as usize];
-        let start = self.sr[Sr::WindowStart as usize];
-        if live_frame_above(start, base, inc + 3) {
-            return Err(Trap::missing(pc, Missing::WindowOverflow));
-        }
         let sp = self.a(s).wrapping_sub(frame);
-        let base = (base + inc) & 15;
+        let base = (self.sr[Sr::WindowBase as usize] + inc) & 15;
         self.sr[Sr::WindowBase as usize] = base;
-        self.sr[Sr::WindowStart as usize] = start | (1 << base);
+        self.sr[Sr::WindowStart as usize] |= 1 << base;
         self.set_a(s, sp);
         Ok(())
     }
 
-    /// Rotates the window back by the increment in `a0`'s top two bits and returns the target.
-    /// The ISA leaves it undefined when the nearest frame below, `m` quarters down, is not the
-    /// caller's.
+    /// Rotates the window back by the increment in `a0`'s top two bits and returns the target,
+    /// or raises the underflow when the caller's frame was spilled (6.1.4, p 247). The ISA leaves
+    /// it undefined when the nearest frame below, `m` quarters down, is not the caller's.
     fn retw(&mut self, pc: u32, op: Op) -> Result<u32, Trap> {
         let ps = self.ps();
         let ret = self.a(0);
         let n = ret >> 30;
-        let base = self.sr[Sr::WindowBase as usize];
-        let start = self.sr[Sr::WindowStart as usize];
-        let m = (1..=3)
-            .find(|k| start >> (base.wrapping_sub(*k) & 15) & 1 != 0)
-            .unwrap_or(0);
+        let below = self.frames_below();
+        let m = if below == 0 {
+            0
+        } else {
+            below.trailing_zeros() + 1
+        };
         if n == 0 || (m != 0 && m != n) || ps & PS_WOE == 0 || ps & PS_EXCM != 0 {
             return Err(Trap::missing(pc, Missing::Op(op)));
         }
+        let base = self.sr[Sr::WindowBase as usize];
         let caller = base.wrapping_sub(n) & 15;
+        let start = self.sr[Sr::WindowStart as usize];
         if start >> caller & 1 == 0 {
-            return Err(Trap::missing(pc, Missing::WindowUnderflow));
+            return Err(Trap::Window {
+                base: caller,
+                vector: window_vector(n, true),
+            });
         }
         self.sr[Sr::WindowStart as usize] = start & !(1 << base);
         self.sr[Sr::WindowBase as usize] = caller;
         Ok((pc & 0xc000_0000) | (ret & 0x3fff_ffff))
+    }
+
+    /// Bit `k - 1` is `WindowStart` bit `WindowBase - k`, for `k` from 1 to 3.
+    fn frames_below(&self) -> u32 {
+        let start = self.sr[Sr::WindowStart as usize];
+        let base = self.sr[Sr::WindowBase as usize];
+        (1..=3).fold(0, |bits, k| {
+            bits | (((start >> (base.wrapping_sub(k) & 15)) & 1) << (k - 1))
+        })
     }
 }
 
@@ -757,27 +1008,38 @@ fn taken(condition: bool, to: u32) -> Option<u32> {
     condition.then_some(to)
 }
 
-/// Whether `start` holds a frame in the `quarters` quarters of the window above `base`.
-fn live_frame_above(start: u32, base: u32, quarters: u32) -> bool {
-    (1..=quarters).any(|k| start >> ((base + k) & 15) & 1 != 0)
+/// The `INTERRUPT` bits that hold until cleared: software, edge and timer.
+const fn latched<C: Config>() -> u32 {
+    let interrupts = C::INTERRUPTS;
+    interrupts.software
+        | interrupts.extern_edge
+        | interrupts.timer_mask(0)
+        | interrupts.timer_mask(1)
+        | interrupts.timer_mask(2)
 }
 
-/// The ops after which [`Core::window_exposed`] can turn true.
-fn moves_window(op: Op) -> bool {
+/// The ops the ISA says must not end a loop (4.3.2.2, p 86).
+fn no_loop_end(op: Op) -> bool {
     matches!(
         op,
-        Op::WSR_WINDOWBASE
-            | Op::XSR_WINDOWBASE
-            | Op::WSR_WINDOWSTART
-            | Op::XSR_WINDOWSTART
-            | Op::WSR_PS
-            | Op::XSR_PS
-            | Op::RFE
-            | Op::RFDE
-            | Op::RFI
-            | Op::RETW
-            | Op::RETW_N
+        Op::CALL0
+            | Op::CALL4
+            | Op::CALL8
+            | Op::CALL12
+            | Op::CALLX0
+            | Op::CALLX4
+            | Op::CALLX8
+            | Op::CALLX12
+            | Op::ISYNC
+            | Op::WAITI
+            | Op::RSR_LCOUNT
     )
+}
+
+/// The offset from `VECBASE` of the overflow or underflow vector for a frame of `quarters`
+/// quarters, 1 to 3. Both chips' `core-isa.h` place them 0x80 apart, underflow 0x40 after.
+const fn window_vector(quarters: u32, underflow: bool) -> u32 {
+    (quarters - 1) * 0x80 + if underflow { 0x40 } else { 0 }
 }
 
 /// The aligned parts that cover `width` bytes from `addr`, lowest first, each with its shift in
@@ -800,9 +1062,9 @@ fn parts(addr: u32, width: Width) -> impl Iterator<Item = (u32, Width, u32)> {
     })
 }
 
-/// `l32ai` and `s32ri` order memory for other cores, and what the chip does with one that is not
-/// word-aligned is unmeasured.
-fn sync_addr(pc: u32, op: Op, addr: u32) -> Result<u32, Trap> {
+/// ISA 4.6 lets an `l32ai` or `s32ri` that is not word-aligned raise `LoadStoreAlignmentCause`,
+/// and the S3 board does (cause 9). The core stops there until it models that exception.
+fn word_addr(pc: u32, op: Op, addr: u32) -> Result<u32, Trap> {
     if addr.is_multiple_of(4) {
         Ok(addr)
     } else {

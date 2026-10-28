@@ -31,6 +31,10 @@ pub struct Insn {
     pub len: u8,
     pub fields: [u32; 8],
     pub field_count: u8,
+    /// The highest quarter of the window, 0 to 3, that the op's address-register operands
+    /// name, the hidden ones included, such as the `a4` that `call4` writes. The ISA's window
+    /// overflow check tests the quarters up to it.
+    pub reach: u8,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -89,6 +93,7 @@ macro_rules! decoder {
                 let mut val = 0u32;
                 let mut fields = [0u32; 8];
                 let mut count = 0usize;
+                let mut reach = 0u32;
                 for arg in $m::ICLASS_OPS[$m::OP_CLASS[op as usize] as usize] {
                     let operand = &$m::OPERANDS[arg.operand as usize];
                     let raw = match getters[operand.field as usize] {
@@ -96,6 +101,9 @@ macro_rules! decoder {
                         None => val,
                     };
                     val = (operand.rtoa)((operand.sem)(raw), pc);
+                    if operand.prefix == b'a' {
+                        reach = reach.max(val >> 2);
+                    }
                     if operand.visible && arg.show {
                         fields[count] = val;
                         count += 1;
@@ -106,6 +114,7 @@ macro_rules! decoder {
                     len,
                     fields,
                     field_count: count as u8,
+                    reach: reach as u8,
                 }))
             }
 

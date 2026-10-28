@@ -2,6 +2,7 @@ pub mod board;
 pub mod elf;
 
 use sha2::{Digest, Sha256};
+use sim_xtensa::{Bus, Config, Core, Cycle, Stop};
 
 pub fn fixture_path(name: &str) -> String {
     format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))
@@ -69,6 +70,42 @@ pub fn first_difference(have: &str, want: &str) -> Option<(usize, String, String
                     b.unwrap_or("<end>").escape_debug().to_string(),
                 ));
             }
+        }
+    }
+}
+
+/// Run lengths for a split run, from a seeded xorshift: mostly short, some up to 2^16 cycles.
+pub struct Pieces(u64);
+
+impl Pieces {
+    pub fn new(seed: u64) -> Pieces {
+        Pieces(seed | 1)
+    }
+
+    pub fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        let bits = self.0 % 17;
+        1 + (self.0 >> 8) % (1 << bits)
+    }
+}
+
+/// Runs to `limit`, in one call or in pieces, and returns the stop that is not an early limit.
+pub fn run_in_pieces<C: Config, B: Bus>(
+    core: &mut Core<C>,
+    bus: &mut B,
+    limit: Cycle,
+    pieces: &mut Option<Pieces>,
+) -> Stop {
+    loop {
+        let to = match pieces {
+            Some(pieces) => Cycle(limit.0.min(core.cycle().0 + pieces.next())),
+            None => limit,
+        };
+        let stop = core.run_until(bus, to);
+        if stop != Stop::Limit || to == limit {
+            return stop;
         }
     }
 }

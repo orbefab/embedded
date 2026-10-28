@@ -1,8 +1,8 @@
 //! One row per op arm the probe images do not run, on the flat test bus. Each row's state after
 //! comes from the op's operation in the Xtensa ISA, not from this core, except where the ISA
-//! leaves the result open. There the unaligned stop rows and the early `entry` stop rows pin this
-//! core's choice. The encodings are GNU `as` output, and each row checks that its bytes decode to
-//! its text.
+//! leaves the result open. There the unaligned stop rows, the undefined `entry` and `retw` stop
+//! rows and the `wsr.ccount` row pin this core's choice. The encodings are GNU `as` output, and
+//! each row checks that its bytes decode to its text.
 
 use sim_xtensa::{
     Config, Core, Cycle, Decoded, Esp32, Esp32s3, Missing, Op, Sr, Stop, Unimplemented, Width,
@@ -21,6 +21,17 @@ const NEXT: u32 = CODE + 3;
 const TAKEN: u32 = CODE + 16;
 const TO: u32 = CODE + 0x40;
 const KERNEL: u32 = 0x4000_0300;
+const OF4: u32 = 0x4000_0000;
+const UF4: u32 = 0x4000_0040;
+const OF8: u32 = 0x4000_0080;
+const UF8: u32 = 0x4000_00c0;
+const OF12: u32 = 0x4000_0100;
+const UF12: u32 = 0x4000_0140;
+
+/// `PS.OWB` holding `base`.
+const fn owb(base: u32) -> u32 {
+    base << 8
+}
 
 /// A piece of state: an address register of the current window, a special register, or the
 /// word at an address.
@@ -808,8 +819,9 @@ const ROWS: &[Row] = &[
         ],
         NEXT,
     ),
-    // The ISA's own check: the frame at `WindowBase + 1` for `CALLINC` 1.
-    stops(
+    // `entry`'s check covers the quarters up to `CALLINC`. Frame 1 is in them, and no frame lies
+    // in the two quarters above it, so the handler spills twelve registers.
+    runs(
         "entry\ta1, 32",
         "364100",
         &[
@@ -818,15 +830,31 @@ const ROWS: &[Row] = &[
             A(1, 0x3fc9_0000),
         ],
         &[
-            S(Sr::WindowBase, 0),
+            S(Sr::WindowBase, 1),
             S(Sr::WindowStart, 0b11),
-            A(1, 0x3fc9_0000),
+            S(Sr::Ps, WOE | CALLINC1 | EXCM),
+            S(Sr::Epc1, CODE),
         ],
-        CODE,
-        Missing::WindowOverflow,
+        OF12,
     ),
-    // A frame in the callee's top quarter, which the chip spills on the first reference.
-    stops(
+    runs(
+        "entry\ta1, 32",
+        "364100",
+        &[
+            S(Sr::Ps, WOE | CALLINC3),
+            S(Sr::WindowStart, 0b1_1001),
+            A(1, 0x3fc9_0000),
+        ],
+        &[
+            S(Sr::WindowBase, 3),
+            S(Sr::WindowStart, 0b1_1001),
+            S(Sr::Ps, WOE | CALLINC3 | EXCM),
+            S(Sr::Epc1, CODE),
+        ],
+        OF4,
+    ),
+    // A frame in the callee's top quarter waits for the callee's first reference to it.
+    runs(
         "entry\ta1, 32",
         "364100",
         &[
@@ -835,12 +863,130 @@ const ROWS: &[Row] = &[
             A(1, 0x3fc9_0000),
         ],
         &[
-            S(Sr::WindowBase, 0),
-            S(Sr::WindowStart, 0b1_0001),
-            A(1, 0x3fc9_0000),
+            S(Sr::WindowBase, 1),
+            S(Sr::WindowStart, 0b1_0011),
+            A(1, 0x3fc8_ffe0),
         ],
+        NEXT,
+    ),
+    stops(
+        "entry\ta1, 32",
+        "364100",
+        &[S(Sr::Ps, WOE | EXCM | CALLINC1), A(1, 0x3fc9_0000)],
+        &[S(Sr::WindowBase, 0), A(1, 0x3fc9_0000)],
         CODE,
-        Missing::WindowOverflow,
+        Missing::Op(Op::ENTRY),
+    ),
+    // A reference to `a4` checks quarter 1. The next frame above the one it spills picks the
+    // vector.
+    runs(
+        "mov.n\ta4, a5",
+        "4d05",
+        &[S(Sr::WindowStart, 0b111)],
+        &[
+            S(Sr::WindowBase, 1),
+            S(Sr::WindowStart, 0b111),
+            S(Sr::Ps, WOE | EXCM),
+            S(Sr::Epc1, CODE),
+        ],
+        OF4,
+    ),
+    runs(
+        "mov.n\ta4, a5",
+        "4d05",
+        &[S(Sr::WindowStart, 0b1011)],
+        &[S(Sr::WindowBase, 1), S(Sr::Ps, WOE | EXCM)],
+        OF8,
+    ),
+    runs(
+        "mov.n\ta4, a5",
+        "4d05",
+        &[S(Sr::WindowStart, 0b11)],
+        &[S(Sr::WindowBase, 1), S(Sr::Ps, WOE | EXCM)],
+        OF12,
+    ),
+    // `PS.OWB` keeps the old `WindowBase`.
+    runs(
+        "mov.n\ta8, a2",
+        "8d02",
+        &[
+            S(Sr::WindowBase, 5),
+            S(Sr::WindowStart, 1 << 5 | 1 << 7 | 1 << 9),
+        ],
+        &[
+            S(Sr::WindowBase, 7),
+            S(Sr::Ps, WOE | EXCM | owb(5)),
+            S(Sr::Epc1, CODE),
+        ],
+        OF8,
+    ),
+    // A reference to `a8` checks quarters 1 and 2, so a frame at quarter 3 waits.
+    runs(
+        "mov.n\ta8, a2",
+        "8d02",
+        &[S(Sr::WindowStart, 0b1001), A(2, 9)],
+        &[S(Sr::WindowBase, 0), A(8, 9)],
+        CODE + 2,
+    ),
+    runs(
+        "mov.n\ta12, a2",
+        "cd02",
+        &[S(Sr::WindowStart, 0b1001)],
+        &[S(Sr::WindowBase, 3), S(Sr::Ps, WOE | EXCM)],
+        OF12,
+    ),
+    // The check wraps past window 15.
+    runs(
+        "mov.n\ta8, a2",
+        "8d02",
+        &[S(Sr::WindowBase, 14), S(Sr::WindowStart, 1 << 14 | 1)],
+        &[S(Sr::WindowBase, 0), S(Sr::Ps, WOE | EXCM | owb(14))],
+        OF12,
+    ),
+    // `CWOE` is 0 with `PS.EXCM` set or `PS.WOE` clear.
+    runs(
+        "mov.n\ta4, a5",
+        "4d05",
+        &[S(Sr::Ps, WOE | EXCM), S(Sr::WindowStart, 0b11), A(5, 9)],
+        &[S(Sr::WindowBase, 0), A(4, 9)],
+        CODE + 2,
+    ),
+    runs(
+        "mov.n\ta4, a5",
+        "4d05",
+        &[S(Sr::Ps, 0), S(Sr::WindowStart, 0b11), A(5, 9)],
+        &[S(Sr::WindowBase, 0), A(4, 9)],
+        CODE + 2,
+    ),
+    // A call checks the quarters up to the register it writes, before it writes it.
+    runs(
+        "call4\t0x40370010",
+        "d50000",
+        &[S(Sr::WindowStart, 0b11)],
+        &[
+            S(Sr::WindowBase, 1),
+            S(Sr::Ps, WOE | EXCM),
+            S(Sr::Epc1, CODE),
+        ],
+        OF12,
+    ),
+    runs(
+        "call8\t0x40370010",
+        "e50000",
+        &[S(Sr::WindowStart, 0b101)],
+        &[
+            S(Sr::WindowBase, 2),
+            S(Sr::Ps, WOE | EXCM),
+            S(Sr::Epc1, CODE),
+        ],
+        OF12,
+    ),
+    runs(
+        "callx8\ta2",
+        "e00200",
+        &[S(Sr::WindowStart, 0b101), A(2, TO)],
+        &[S(Sr::WindowBase, 2), S(Sr::Ps, WOE | EXCM)],
+        OF12,
     ),
     runs(
         "retw",
@@ -853,7 +999,9 @@ const ROWS: &[Row] = &[
         &[S(Sr::WindowBase, 0), S(Sr::WindowStart, 1)],
         TO,
     ),
-    stops(
+    // A spilled caller raises the underflow for the increment in `a0`, with `WindowBase` already
+    // at the caller and `WindowStart` as it was.
+    runs(
         "retw",
         "900000",
         &[
@@ -861,9 +1009,57 @@ const ROWS: &[Row] = &[
             S(Sr::WindowStart, 0b10),
             A(0, 0x4037_0040),
         ],
-        &[S(Sr::WindowBase, 1), S(Sr::WindowStart, 0b10)],
-        CODE,
-        Missing::WindowUnderflow,
+        &[
+            S(Sr::WindowBase, 0),
+            S(Sr::WindowStart, 0b10),
+            S(Sr::Ps, WOE | EXCM | owb(1)),
+            S(Sr::Epc1, CODE),
+        ],
+        UF4,
+    ),
+    runs(
+        "retw",
+        "900000",
+        &[
+            S(Sr::WindowBase, 2),
+            S(Sr::WindowStart, 0b100),
+            A(0, 0x8037_0040),
+        ],
+        &[S(Sr::WindowBase, 0), S(Sr::Ps, WOE | EXCM | owb(2))],
+        UF8,
+    ),
+    runs(
+        "retw",
+        "900000",
+        &[
+            S(Sr::WindowBase, 3),
+            S(Sr::WindowStart, 0b1000),
+            A(0, 0xc037_0040),
+        ],
+        &[S(Sr::WindowBase, 0), S(Sr::Ps, WOE | EXCM | owb(3))],
+        UF12,
+    ),
+    runs(
+        "retw",
+        "900000",
+        &[
+            S(Sr::WindowBase, 1),
+            S(Sr::WindowStart, 0b10),
+            A(0, 0x8037_0040),
+        ],
+        &[S(Sr::WindowBase, 15), S(Sr::Ps, WOE | EXCM | owb(1))],
+        UF8,
+    ),
+    runs(
+        "retw.n",
+        "1df0",
+        &[
+            S(Sr::WindowBase, 1),
+            S(Sr::WindowStart, 0b10),
+            A(0, 0x4037_0040),
+        ],
+        &[S(Sr::WindowBase, 0), S(Sr::Epc1, CODE)],
+        UF4,
     ),
     // The nearest frame below is one quarter down and `a0` says two, which the ISA leaves
     // undefined.
@@ -891,23 +1087,159 @@ const ROWS: &[Row] = &[
         CODE,
         Missing::Op(Op::RETW_N),
     ),
-    // A write that leaves a frame in the window with overflow on stops before the next op.
     stops(
+        "retw",
+        "900000",
+        &[
+            S(Sr::Ps, WOE | EXCM),
+            S(Sr::WindowBase, 1),
+            S(Sr::WindowStart, 0b11),
+            A(0, 0x4037_0040),
+        ],
+        &[S(Sr::WindowBase, 1), S(Sr::WindowStart, 0b11)],
+        CODE,
+        Missing::Op(Op::RETW),
+    ),
+    // `movsp` moves when a frame lies in the three quarters below, and raises the alloca
+    // exception otherwise, with `PS.WOE` clear too.
+    runs(
+        "movsp\ta1, a2",
+        "101200",
+        &[
+            S(Sr::WindowBase, 1),
+            S(Sr::WindowStart, 0b11),
+            A(2, 0x3fc8_0000),
+        ],
+        &[A(1, 0x3fc8_0000)],
+        NEXT,
+    ),
+    runs(
+        "movsp\ta1, a2",
+        "101200",
+        &[
+            S(Sr::WindowBase, 3),
+            S(Sr::WindowStart, 0b1001),
+            A(2, 0x3fc8_0000),
+        ],
+        &[A(1, 0x3fc8_0000)],
+        NEXT,
+    ),
+    runs(
+        "movsp\ta1, a2",
+        "101200",
+        &[
+            S(Sr::WindowBase, 1),
+            S(Sr::WindowStart, 0b10),
+            A(1, 7),
+            A(2, 0x3fc8_0000),
+        ],
+        &[
+            A(1, 7),
+            S(Sr::ExcCause, 5),
+            S(Sr::Epc1, CODE),
+            S(Sr::Ps, WOE | EXCM),
+        ],
+        KERNEL,
+    ),
+    runs(
+        "movsp\ta1, a2",
+        "101200",
+        &[S(Sr::WindowBase, 4), S(Sr::WindowStart, 0b1_0001), A(1, 7)],
+        &[A(1, 7), S(Sr::ExcCause, 5)],
+        KERNEL,
+    ),
+    runs(
+        "movsp\ta1, a2",
+        "101200",
+        &[S(Sr::Ps, 0), S(Sr::WindowBase, 1), S(Sr::WindowStart, 0b10)],
+        &[S(Sr::ExcCause, 5), S(Sr::Ps, EXCM)],
+        KERNEL,
+    ),
+    runs(
+        "rotw\t1",
+        "108040",
+        &[],
+        &[S(Sr::WindowBase, 1), S(Sr::WindowStart, 1)],
+        NEXT,
+    ),
+    runs(
+        "rotw\t-1",
+        "f08040",
+        &[],
+        &[S(Sr::WindowBase, 15), S(Sr::WindowStart, 1)],
+        NEXT,
+    ),
+    runs(
+        "rfwo",
+        "003400",
+        &[
+            S(Sr::Ps, WOE | EXCM | owb(5)),
+            S(Sr::WindowBase, 1),
+            S(Sr::WindowStart, 0b11),
+            S(Sr::Epc1, TO),
+        ],
+        &[
+            S(Sr::Ps, WOE | owb(5)),
+            S(Sr::WindowBase, 5),
+            S(Sr::WindowStart, 0b01),
+        ],
+        TO,
+    ),
+    runs(
+        "rfwu",
+        "003500",
+        &[
+            S(Sr::Ps, WOE | EXCM | owb(5)),
+            S(Sr::WindowBase, 1),
+            S(Sr::WindowStart, 0b01),
+            S(Sr::Epc1, TO),
+        ],
+        &[
+            S(Sr::Ps, WOE | owb(5)),
+            S(Sr::WindowBase, 5),
+            S(Sr::WindowStart, 0b11),
+        ],
+        TO,
+    ),
+    runs(
+        "l32e\ta2, a3, -16",
+        "20c309",
+        &[A(3, RAM + 16), M(RAM, 0xdead_beef)],
+        &[A(2, 0xdead_beef)],
+        NEXT,
+    ),
+    // With the Hardware Alignment Option, an unaligned `l32e` or `s32e` acts at its own address
+    // (4.6, p 168).
+    runs(
+        "l32e\ta2, a3, -16",
+        "20c309",
+        &[BYTES[0], BYTES[1], A(3, RAM + 17)],
+        &[A(2, 0xc4b3_a291)],
+        NEXT,
+    ),
+    runs(
+        "s32e\ta2, a3, -16",
+        "20c349",
+        &[A(2, 0xdead_beef), A(3, RAM + 16)],
+        &[M(RAM, 0xdead_beef)],
+        NEXT,
+    ),
+    runs(
+        "s32e\ta2, a3, -16",
+        "20c349",
+        &[ONES[0], ONES[1], A(2, 0x4433_2211), A(3, RAM + 19)],
+        &[M(RAM, 0x11ff_ffff), M(RAM + 4, 0xff44_3322)],
+        NEXT,
+    ),
+    // A write that leaves a frame in the window completes, and the next reference to it spills.
+    runs(
         "wsr.windowstart\ta2",
         "204913",
         &[A(2, 0b11)],
         &[S(Sr::WindowStart, 0b11)],
         NEXT,
-        Missing::WindowOverflow,
     ),
     runs(
-        "wsr.windowstart\ta2",
-        "204913",
-        &[S(Sr::Ps, WOE | EXCM), A(2, 0b11)],
-        &[S(Sr::WindowStart, 0b11)],
-        NEXT,
-    ),
-    stops(
         "rfe",
         "003000",
         &[
@@ -917,7 +1249,135 @@ const ROWS: &[Row] = &[
         ],
         &[S(Sr::Ps, WOE)],
         TO,
-        Missing::WindowOverflow,
+    ),
+    runs(
+        "loop\ta2, 0x40370010",
+        "76820c",
+        &[A(2, 3)],
+        &[S(Sr::Lcount, 2), S(Sr::Lbeg, NEXT), S(Sr::Lend, TAKEN)],
+        NEXT,
+    ),
+    // A count of 0 loops 2^32 times.
+    runs(
+        "loop\ta2, 0x40370010",
+        "76820c",
+        &[A(2, 0)],
+        &[S(Sr::Lcount, u32::MAX)],
+        NEXT,
+    ),
+    // A loop op that skips the body still sets the loop registers.
+    runs(
+        "loopnez\ta2, 0x40370010",
+        "76920c",
+        &[A(2, 0)],
+        &[
+            S(Sr::Lcount, u32::MAX),
+            S(Sr::Lbeg, NEXT),
+            S(Sr::Lend, TAKEN),
+        ],
+        TAKEN,
+    ),
+    runs(
+        "loopnez\ta2, 0x40370010",
+        "76920c",
+        &[A(2, 5)],
+        &[S(Sr::Lcount, 4)],
+        NEXT,
+    ),
+    runs(
+        "loopgtz\ta2, 0x40370010",
+        "76a20c",
+        &[A(2, 1 << 31)],
+        &[S(Sr::Lcount, 0x7fff_ffff), S(Sr::Lend, TAKEN)],
+        TAKEN,
+    ),
+    runs(
+        "loopgtz\ta2, 0x40370010",
+        "76a20c",
+        &[A(2, 0)],
+        &[S(Sr::Lcount, u32::MAX)],
+        TAKEN,
+    ),
+    runs(
+        "loopgtz\ta2, 0x40370010",
+        "76a20c",
+        &[A(2, 1)],
+        &[S(Sr::Lcount, 0)],
+        NEXT,
+    ),
+    runs(
+        "rsr.lbeg\ta2",
+        "200003",
+        &[S(Sr::Lbeg, TO)],
+        &[A(2, TO)],
+        NEXT,
+    ),
+    runs(
+        "wsr.lend\ta2",
+        "200113",
+        &[A(2, TO)],
+        &[S(Sr::Lend, TO)],
+        NEXT,
+    ),
+    runs(
+        "rsr.lcount\ta2",
+        "200203",
+        &[S(Sr::Lcount, 7)],
+        &[A(2, 7)],
+        NEXT,
+    ),
+    runs(
+        "waiti\t3",
+        "007300",
+        &[S(Sr::Ps, WOE | 5)],
+        &[S(Sr::Ps, WOE | 3)],
+        NEXT,
+    ),
+    // `INTSET` sets only the software interrupts, 7 and 29.
+    runs(
+        "wsr.intset\ta2",
+        "20e213",
+        &[A(2, u32::MAX)],
+        &[S(Sr::Interrupt, 0x2000_0080)],
+        NEXT,
+    ),
+    // `INTCLEAR` clears the software and edge interrupts. The timer interrupts stay.
+    runs(
+        "wsr.intclear\ta2",
+        "20e313",
+        &[S(Sr::Interrupt, u32::MAX), A(2, u32::MAX)],
+        &[S(Sr::Interrupt, 0x0001_8040)],
+        NEXT,
+    ),
+    runs(
+        "rsr.interrupt\ta2",
+        "20e203",
+        &[S(Sr::Interrupt, 1 << 7)],
+        &[A(2, 1 << 7)],
+        NEXT,
+    ),
+    // Writing `CCOMPARE0` clears timer interrupt 6.
+    runs(
+        "wsr.ccompare0\ta2",
+        "20f013",
+        &[S(Sr::Interrupt, 1 << 6 | 1 << 7), A(2, 100)],
+        &[S(Sr::Ccompare0, 100), S(Sr::Interrupt, 1 << 7)],
+        NEXT,
+    ),
+    runs(
+        "wsr.ccompare2\ta2",
+        "20f213",
+        &[S(Sr::Interrupt, 1 << 16 | 1 << 15), A(2, 100)],
+        &[S(Sr::Ccompare2, 100), S(Sr::Interrupt, 1 << 15)],
+        NEXT,
+    ),
+    // `CCOUNT` takes the value at the write and counts the write's own cycle after it.
+    runs(
+        "wsr.ccount\ta2",
+        "20ea13",
+        &[A(2, 1000)],
+        &[S(Sr::Ccount, 1001)],
+        NEXT,
     ),
 ];
 
@@ -981,51 +1441,23 @@ fn every_unprobed_arm_matches_the_isa() {
     );
 }
 
-/// `call12` and `entry` in a loop rotate by three quarters a call, and the fourth `entry` makes
-/// window 12. The chip would run the fifth `entry` into window 15, whose second quarter is frame
-/// 0's, and spill frame 0 at the next `call12`, whose `WindowCheck` tests `WindowBase + 1`. The
-/// core stops at the fifth `entry` in window 12, since frame 0 lies in the callee's window.
+/// `call12` and `entry` in a loop rotate by three quarters a call. The fifth `entry` makes
+/// window 15, whose next quarter is frame 0's, so the `call12` after it spills frame 0 into the
+/// twelve-register handler.
 #[test]
-fn a_call12_chain_stops_at_the_entry_that_would_reach_frame_0() {
+fn a_call12_chain_spills_frame_0_at_the_sixth_call() {
     // call12 1f; .byte 0; 1: entry a1, 16; call12 1b
     let mut bus = Flat::new("35000000362100f5ffff");
     let mut core: Core<Esp32> = core_at(CODE);
     core.set_special(Sr::Ps, WOE);
     core.set_a(1, 0x3fc9_0000);
-    let stop = core.run_until(&mut bus, Cycle(1000));
-    let want = Unimplemented {
-        pc: CODE + 4,
-        missing: Missing::WindowOverflow,
-    };
-    assert_eq!(stop, Stop::Unimplemented(want));
-    assert_eq!(core.special(Sr::WindowBase), 12);
-    assert_eq!(core.special(Sr::WindowStart), 0b1_0010_0100_1001);
-    assert_eq!(core.a(1), 0x3fc9_0000 - 4 * 16);
-    assert_eq!(
-        want.to_string(),
-        "window overflow at 0x40370004 is not modeled"
-    );
-}
-
-/// The window check after a write stays pending until it passes, so a run that resumes after
-/// the stop stops again before the next op.
-#[test]
-fn a_resumed_run_stops_again_at_an_exposed_frame() {
-    // wsr.windowstart a2; nop
-    let mut bus = Flat::new("204913f02000");
-    let mut core: Core<Esp32> = core_at(CODE);
-    core.set_special(Sr::Ps, WOE);
-    core.set_a(2, 0b11);
-    let want = Stop::Unimplemented(Unimplemented {
-        pc: NEXT,
-        missing: Missing::WindowOverflow,
-    });
-    assert_eq!(core.run_until(&mut bus, Cycle(1)), want);
-    assert_eq!(core.run_until(&mut bus, Cycle(100)), want);
-    assert_eq!(core.cycle(), Cycle(1));
-    core.set_special(Sr::WindowStart, 1);
-    assert_eq!(core.run_until(&mut bus, Cycle(2)), Stop::Limit);
-    assert_eq!(core.pc(), NEXT + 3);
+    assert_eq!(core.run_until(&mut bus, Cycle(1000)), Stop::Bus);
+    assert_eq!(core.pc(), OF12);
+    assert_eq!(core.special(Sr::Epc1), CODE + 7);
+    assert_eq!(core.special(Sr::WindowBase), 0);
+    assert_eq!(core.special(Sr::WindowStart), 0b1001_0010_0100_1001);
+    assert_eq!(core.special(Sr::Ps), WOE | EXCM | CALLINC3 | owb(15));
+    assert_eq!(core.a(1), 0x3fc9_0000);
 }
 
 #[test]
@@ -1042,5 +1474,9 @@ fn the_new_stops_say_what_is_missing() {
     assert_eq!(
         at(Missing::Unaligned(Op::S32I)),
         "unaligned `s32i` at 0x40370000 is not modeled"
+    );
+    assert_eq!(
+        at(Missing::LoopEnd(Op::CALL0)),
+        "`call0` as the last op of a loop at 0x40370000 is not modeled"
     );
 }

@@ -29,6 +29,8 @@ pub enum Cause {
     Syscall = 1,
     InstructionFetchError = 2,
     LoadStoreError = 3,
+    Level1Interrupt = 4,
+    Alloca = 5,
     IntegerDivideByZero = 6,
     InstFetchProhibited = 20,
     LoadProhibited = 28,
@@ -60,4 +62,13 @@ pub trait Bus {
     fn load(&mut self, now: Cycle, addr: u32, width: Width) -> Result<u32, Exit>;
     /// Writes the low `width` bytes of `value` at `addr`, a multiple of `width`'s size.
     fn store(&mut self, now: Cycle, addr: u32, width: Width, value: u32) -> Result<(), Exit>;
+    /// The levels of the interrupt lines at `now`, one bit per interrupt number. The core reads
+    /// the bits of the external level, edge and NMI interrupts, once before each instruction.
+    /// The lines may change at an access or at [`Bus::next_event`], so that a run split at any
+    /// cycle sees the same lines as one run. The core compares each call with the last one, so an
+    /// edge or NMI line must read low on one call and high on a later one.
+    fn interrupts(&mut self, now: Cycle) -> u32;
+    /// The first cycle after `now` at which the lines can change with no access, or `None`. A
+    /// core in `WAITI` skips to the earliest of this, its own timer match and the run's limit.
+    fn next_event(&mut self, now: Cycle) -> Option<Cycle>;
 }

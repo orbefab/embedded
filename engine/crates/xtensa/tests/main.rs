@@ -1,6 +1,8 @@
 mod common;
 mod core;
 mod decode;
+mod interrupts;
+mod loops;
 mod ops;
 mod paged;
 mod probes;

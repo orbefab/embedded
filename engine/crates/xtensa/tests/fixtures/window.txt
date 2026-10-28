@@ -1,0 +1,66 @@
+chip: ESP32-D0WDQ6
+revision: v1.0
+toolchain: xtensa-esp-elf-gcc (crosstool-NG esp-14.2.0_20251107) 14.2.0
+image_sha256: b456d13a1dc04d9bfa3d6702f9cf5326720c227514359e7b36251cf2a3fc81ed
+seed: none
+vectors: 12
+probe: window
+---
+BEGIN window
+mark chain
+marker 0000010c
+base 00000004
+start 00000014
+count_ov4 00000000
+count_uf4 00000000
+count_ov8 00000002
+count_uf8 00000001
+count_ov12 00000005
+count_uf12 00000005
+log_n 0000000d
+00 ov8     02 2495
+01 ov12    04 2499
+02 ov12    07 24c9
+03 ov12    0a 26c9
+04 ov12    0d 32c9
+05 ov12    00 b2c9
+06 uf12    00 0008
+07 uf12    0d 0001
+08 uf12    0a 2000
+09 uf12    07 0400
+0a uf12    04 0080
+0b uf8     02 0010
+mark movsp_shallow
+shallow e=00 b=04 s=0014 p=3ffe014c
+count_ov4 00000000
+count_uf4 00000000
+count_ov8 00000001
+count_uf8 00000000
+count_ov12 00000000
+count_uf12 00000000
+log_n 00000001
+mark movsp_deep
+deep_ret 3ffdffcc
+deep e=00 b=06 s=2449 p=3ffdffcc
+count_ov4 00000000
+count_uf4 00000000
+count_ov8 00000002
+count_uf8 00000001
+count_ov12 00000002
+count_uf12 00000002
+log_n 00000007
+00 ov8     02 2495
+01 ov12    04 2499
+02 ov12    07 24c9
+03 uf12    07 0400
+04 uf12    04 0080
+05 uf8     02 0010
+mark rotw
+rotw 1 06 0054 07 0054 e=00
+rotw -1 06 0054 05 0054 e=00
+rotw 2 06 0054 08 0054 e=00
+rotw 3 06 0054 09 0054 e=00
+rotw -3 06 0054 03 0054 e=00
+base 00000004
+start 00000054
+END window
