@@ -1,5 +1,12 @@
 //! The special and user registers the core models, and the `rsr`, `wsr`, `xsr`, `rur` and `wur`
 //! ops that reach them. A register op this table does not name ends the run as unimplemented.
+//!
+//! Each mask is the register's width in the chip's table. `BR` is 16 bits, `ACCHI` 8 and
+//! `ACCLO` 32, so `ACC` is 40. `FCR` and `FSR` are 32 bits of state each: the rounding mode, the
+//! enables or the flags, and the reserved fields. The S3's `cop_ai` user registers are `ACCX`,
+//! 40 bits, `QACC_H` and `QACC_L`, 160 bits each, `SAR_BYTE` and `FFT_BIT_WIDTH`, 4 bits each,
+//! and `UA_STATE`, 128 bits. `GPIO_OUT` is 8 bits. The table gives `ERACCESS` no state, so it
+//! keeps all 32 bits here. The classic `F64R_LO`, `F64R_HI` and `F64S` are plain state.
 
 use crate::decode::Op;
 
@@ -92,6 +99,38 @@ registers! {
     Misc2: u32::MAX => [Read RSR_MISC2, Write WSR_MISC2, Exchange XSR_MISC2];
     Misc3: u32::MAX => [Read RSR_MISC3, Write WSR_MISC3, Exchange XSR_MISC3];
     Threadptr: u32::MAX => [Read RUR_THREADPTR, Write WUR_THREADPTR];
+    Br: 0xffff => [Read RSR_BR, Write WSR_BR, Exchange XSR_BR];
+    Acclo: u32::MAX => [Read RSR_ACCLO, Write WSR_ACCLO, Exchange XSR_ACCLO];
+    Acchi: 0xff => [Read RSR_ACCHI, Write WSR_ACCHI, Exchange XSR_ACCHI];
+    M0: u32::MAX => [Read RSR_M0, Write WSR_M0, Exchange XSR_M0];
+    M1: u32::MAX => [Read RSR_M1, Write WSR_M1, Exchange XSR_M1];
+    M2: u32::MAX => [Read RSR_M2, Write WSR_M2, Exchange XSR_M2];
+    M3: u32::MAX => [Read RSR_M3, Write WSR_M3, Exchange XSR_M3];
+    Fcr: u32::MAX => [Read RUR_FCR, Write WUR_FCR];
+    Fsr: u32::MAX => [Read RUR_FSR, Write WUR_FSR];
+    F64rLo: u32::MAX => [Read RUR_F64R_LO, Write WUR_F64R_LO];
+    F64rHi: u32::MAX => [Read RUR_F64R_HI, Write WUR_F64R_HI];
+    F64s: u32::MAX => [Read RUR_F64S, Write WUR_F64S];
+    Eraccess: u32::MAX => [Read RSR_ERACCESS, Write WSR_ERACCESS, Exchange XSR_ERACCESS];
+    Accx0: u32::MAX => [Read RUR_ACCX_0, Write WUR_ACCX_0];
+    Accx1: 0xff => [Read RUR_ACCX_1, Write WUR_ACCX_1];
+    QaccH0: u32::MAX => [Read RUR_QACC_H_0, Write WUR_QACC_H_0];
+    QaccH1: u32::MAX => [Read RUR_QACC_H_1, Write WUR_QACC_H_1];
+    QaccH2: u32::MAX => [Read RUR_QACC_H_2, Write WUR_QACC_H_2];
+    QaccH3: u32::MAX => [Read RUR_QACC_H_3, Write WUR_QACC_H_3];
+    QaccH4: u32::MAX => [Read RUR_QACC_H_4, Write WUR_QACC_H_4];
+    QaccL0: u32::MAX => [Read RUR_QACC_L_0, Write WUR_QACC_L_0];
+    QaccL1: u32::MAX => [Read RUR_QACC_L_1, Write WUR_QACC_L_1];
+    QaccL2: u32::MAX => [Read RUR_QACC_L_2, Write WUR_QACC_L_2];
+    QaccL3: u32::MAX => [Read RUR_QACC_L_3, Write WUR_QACC_L_3];
+    QaccL4: u32::MAX => [Read RUR_QACC_L_4, Write WUR_QACC_L_4];
+    GpioOut: 0xff => [Read RUR_GPIO_OUT, Write WUR_GPIO_OUT];
+    SarByte: 0xf => [Read RUR_SAR_BYTE, Write WUR_SAR_BYTE];
+    FftBitWidth: 0xf => [Read RUR_FFT_BIT_WIDTH, Write WUR_FFT_BIT_WIDTH];
+    UaState0: u32::MAX => [Read RUR_UA_STATE_0, Write WUR_UA_STATE_0];
+    UaState1: u32::MAX => [Read RUR_UA_STATE_1, Write WUR_UA_STATE_1];
+    UaState2: u32::MAX => [Read RUR_UA_STATE_2, Write WUR_UA_STATE_2];
+    UaState3: u32::MAX => [Read RUR_UA_STATE_3, Write WUR_UA_STATE_3];
 }
 
 pub(crate) const CCOMPARE: [Sr; 3] = [Sr::Ccompare0, Sr::Ccompare1, Sr::Ccompare2];

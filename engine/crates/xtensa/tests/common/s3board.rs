@@ -4,7 +4,9 @@
 use std::collections::VecDeque;
 use std::ops::Range;
 
-use sim_xtensa::{Bus, Cause, Core, Cycle, Esp32s3, Exit, PagedRam, Sr, Stop, Width};
+use sim_xtensa::{
+    Bus, Cause, Core, Cycle, Esp32s3, Exit, PagedRam, Sr, Stop, Unimplemented, Width,
+};
 
 use super::elf::Elf;
 
@@ -58,7 +60,7 @@ impl Board {
     }
 
     /// The print hook the classic board uses does not exist here. A served function returns 0
-    /// the way the classic `ccount` test answers the floating-point rows.
+    /// the way the classic `fpu` test answers the double-precision ops.
     fn serve(&mut self, core: &mut Core<Esp32s3>) {
         let window = (core.special(Sr::Ps) >> 16) & 3;
         let args = window * 4 + 2;
@@ -174,6 +176,18 @@ pub struct Run {
 
 /// Runs a probe image from its entry until it prints `END <probe>`, stops, or reaches `limit`.
 pub fn run_probe(elf: &Elf, probe: &str, limit: Cycle, served: &[&str]) -> Run {
+    run_answering(elf, probe, limit, served, |_, _| false)
+}
+
+/// [`run_probe`], where `answer` may carry out an op the core stops at as unimplemented, move the
+/// PC past it and return true to run on.
+pub fn run_answering(
+    elf: &Elf,
+    probe: &str,
+    limit: Cycle,
+    served: &[&str],
+    mut answer: impl FnMut(&mut Core<Esp32s3>, Unimplemented) -> bool,
+) -> Run {
     let mut board = Board::load(elf, served);
     let mut core = Core::<Esp32s3>::new();
     core.set_pc(elf.entry);
@@ -183,6 +197,11 @@ pub fn run_probe(elf: &Elf, probe: &str, limit: Cycle, served: &[&str]) -> Run {
         let stop = core.run_until(&mut board, to);
         if stop == Stop::Bus {
             board.serve(&mut core);
+            continue;
+        }
+        if let Stop::Unimplemented(missing) = stop
+            && answer(&mut core, missing)
+        {
             continue;
         }
         if board.uart.contains(&end) || stop != Stop::Limit || core.cycle() >= limit {

@@ -1,7 +1,8 @@
 //! Decoding and printing on both chips, against GNU objdump's text.
 
-use sim_xtensa::{Config, Decoded, Esp32, Esp32s3};
+use sim_xtensa::{Config, Decoded, Esp32, Esp32s3, Op};
 
+use crate::common::elf::Elf;
 use crate::common::{read_fixture, sha256_hex};
 
 fn bytes_of(hex: &str) -> Vec<u8> {
@@ -81,6 +82,50 @@ fn sample_matches_gnu_objdump_on_both_chips() {
     }
     assert_eq!(chips, [44, 14], "rows per chip");
     assert_eq!(sha256_hex(text.as_bytes()), want.trim());
+}
+
+/// The S3 decoder yields no classic-only op and the classic decoder no `ee.*` op, each at every
+/// row of the committed sample on both chips and at every byte of the classic `fpu` image and the
+/// S3 `cop` image. Those images hold the `f64*` and `ee.zero.q` encodings, and the test checks
+/// that each decoder met its own chip's ops there.
+#[test]
+fn each_decoder_yields_only_its_own_ops() {
+    let list = String::from_utf8(read_fixture("decode-sample.txt")).unwrap();
+    let mut inputs: Vec<Vec<u8>> = Vec::new();
+    for line in list.lines() {
+        let hex = line.split_once(' ').unwrap().1;
+        inputs.push(sample_slot("esp32", hex));
+        inputs.push(sample_slot("esp32s3", hex));
+    }
+    for name in ["fpu.elf", "s3-cop.elf"] {
+        let elf = Elf::parse(&read_fixture(name));
+        for segment in &elf.segments {
+            for at in 0..segment.data.len() {
+                inputs.push(segment.data[at..(at + 8).min(segment.data.len())].to_vec());
+            }
+        }
+    }
+    let classic_only = |op: Op| Esp32::owns(op) && !Esp32s3::owns(op);
+    let vector = |op: Op| op.name().starts_with("ee.");
+    let (mut met_classic_only, mut met_vector) = (false, false);
+    for bytes in &inputs {
+        if let Some(Decoded::Insn(insn)) = Esp32::decode(bytes, 0x4008_0000) {
+            assert!(Esp32::owns(insn.op), "{}", insn.op.name());
+            assert!(!vector(insn.op), "classic decodes {}", insn.op.name());
+            met_classic_only |= classic_only(insn.op);
+        }
+        if let Some(Decoded::Insn(insn)) = Esp32s3::decode(bytes, 0x4008_0000) {
+            assert!(Esp32s3::owns(insn.op), "{}", insn.op.name());
+            assert!(!classic_only(insn.op), "S3 decodes {}", insn.op.name());
+            met_vector |= vector(insn.op);
+        }
+    }
+    assert!(
+        met_classic_only,
+        "the classic decoder met a classic-only op"
+    );
+    assert!(met_vector, "the S3 decoder met an ee.* op");
+    println!("{} inputs on both decoders", inputs.len());
 }
 
 #[test]

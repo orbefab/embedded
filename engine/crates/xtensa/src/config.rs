@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use crate::decode::{self, Decoded};
+use crate::decode::{self, Decoded, Op};
 
 /// A chip's core configuration. The constants come from that chip's `core-isa.h`. The decoder
 /// comes from that chip's generated table and names only that chip's ops.
@@ -22,6 +22,12 @@ pub trait Config: Copy + Eq + fmt::Debug + 'static {
     fn decode(bytes: &[u8], pc: u32) -> Option<Decoded>;
     /// The text GNU objdump prints for the instruction, without the address.
     fn render(decoded: &Decoded) -> String;
+    /// Whether this chip's table has the op, so its decoder can yield it.
+    fn owns(op: Op) -> bool;
+    /// The coprocessor whose `CPENABLE` bit the op needs, from the chip's table: 0 for the FPU
+    /// ops, and on the S3 3 for the `cop_ai` ops. The Boolean registers are shared and need
+    /// none.
+    fn coprocessor(op: Op) -> Option<u8>;
 
     /// Cycles a taken branch, jump, call or return adds to its own one. 32 taken `j` on the
     /// classic board net 144: four each, and one more for each of the 16 whose target runs into
@@ -67,8 +73,8 @@ pub trait Config: Copy + Eq + fmt::Debug + 'static {
         false
     }
 
-    /// An `l32ai` or `s32ri` that is not word-aligned raises `LoadStoreAlignment` instead of
-    /// stopping.
+    /// An `l32ai`, `s32ri` or `s32c1i` that is not word-aligned raises `LoadStoreAlignment`
+    /// instead of stopping.
     fn sync_unaligned_excepts() -> bool {
         false
     }
@@ -155,6 +161,14 @@ impl Config for Esp32 {
     fn render(decoded: &Decoded) -> String {
         decode::classic::render(decoded)
     }
+
+    fn owns(op: Op) -> bool {
+        decode::classic::owns(op)
+    }
+
+    fn coprocessor(op: Op) -> Option<u8> {
+        decode::classic::coprocessor(op)
+    }
 }
 
 impl Config for Esp32s3 {
@@ -173,6 +187,14 @@ impl Config for Esp32s3 {
 
     fn render(decoded: &Decoded) -> String {
         decode::s3::render(decoded)
+    }
+
+    fn owns(op: Op) -> bool {
+        decode::s3::owns(op)
+    }
+
+    fn coprocessor(op: Op) -> Option<u8> {
+        decode::s3::coprocessor(op)
     }
 
     /// `j_t` in the ccount fixture, `median=00000070`. 32 taken `j` of 3 bytes from a word-aligned
@@ -245,7 +267,7 @@ impl Config for Esp32s3 {
     }
 
     /// `dram l32ai +=01` is cause 9 at `3fcb0101` and the words stay as they were. `dram s32ri +=02`
-    /// is the same.
+    /// is the same. `s32c1i` is unprobed, and the ISA lists it with those two (4.6, p 168).
     fn sync_unaligned_excepts() -> bool {
         true
     }

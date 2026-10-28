@@ -7,7 +7,9 @@ use std::marker::PhantomData;
 use crate::bus::{Bus, Cause, Cycle, Exit, Width};
 use crate::config::Config;
 use crate::decode::{Decoded, Insn, Op};
-use crate::special::{Access, CCOMPARE, EPC, EPS, Sr, register_op};
+use crate::special::{Access, CCOMPARE, EPC, EPS, Sr};
+
+mod options;
 
 const PS_INTLEVEL: u32 = 0xf;
 const PS_EXCM: u32 = 1 << 4;
@@ -59,10 +61,10 @@ pub struct Unimplemented {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Missing {
     Op(Op),
-    /// This op at an address that is not a multiple of its size: `l32ai` or `s32ri` at any such
-    /// address, and any other load or store when one of its parts faults. The ISA lets the chip
-    /// raise `LoadStoreAlignmentCause` there and does not say what `EXCVADDR` holds for a later
-    /// part. A store's parts before the faulting one stay written.
+    /// This op at an address that is not a multiple of its size: `l32ai`, `s32ri`, `s32c1i`,
+    /// `ld.qr` or `st.qr` at any such address, and any other load or store when one of its parts
+    /// faults. The ISA lets the chip raise `LoadStoreAlignmentCause` there and does not say what
+    /// `EXCVADDR` holds for a later part. A store's parts before the faulting one stay written.
     Unaligned(Op),
     /// `l32r` with `LITBASE` enabled.
     Litbase,
@@ -95,6 +97,22 @@ impl fmt::Display for Unimplemented {
             ),
         }
     }
+}
+
+/// The latest coprocessor-disabled exception: the coprocessor, the op that needed it and the op's
+/// PC. A handler that enables the coprocessor and returns runs the op again. When that op is one
+/// this core does not model, such as an S3 vector op, the run stops there, and this names the
+/// op that first found the coprocessor off.
+///
+/// The record stays until the next such exception. An op whose coprocessor is already on raises
+/// nothing and leaves an older record in place, so a reader that takes the record for a stop
+/// checks that its `pc` is the stop's PC. Keeping it, rather than clearing it at each op, keeps
+/// that check off the path every instruction takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CoprocessorDisabled {
+    pub coprocessor: u8,
+    pub op: Op,
+    pub pc: u32,
 }
 
 /// Why an instruction did not complete.
@@ -137,6 +155,11 @@ pub struct Core<C: Config> {
     lines: u32,
     /// The cycle at which each `CCOMPAREn` next equals `CCOUNT`.
     timer_due: [Cycle; 3],
+    /// The FPU registers `f0` to `f15`.
+    fr: [u32; 16],
+    /// The S3's `q0` to `q7`, each as four words, lowest first.
+    q: [[u32; 4]; 8],
+    disabled: Option<CoprocessorDisabled>,
     chip: PhantomData<C>,
 }
 
@@ -171,6 +194,9 @@ impl<C: Config> Core<C> {
             pace: 0,
             lines: 0,
             timer_due: [Cycle(0); 3],
+            fr: [0; 16],
+            q: [[0; 4]; 8],
+            disabled: None,
             chip: PhantomData,
         };
         core.sr[Sr::Ps as usize] = RESET_PS;
@@ -204,12 +230,42 @@ impl<C: Config> Core<C> {
         self.ar[index] = value;
     }
 
+    /// FPU register `n`, `n < 16`.
+    pub fn f(&self, n: u32) -> u32 {
+        self.fr[n as usize]
+    }
+
+    pub fn set_f(&mut self, n: u32, value: u32) {
+        self.fr[n as usize] = value;
+    }
+
+    /// The S3's `q` register `n`, `n < 8`. No classic op reads or writes it.
+    pub fn q(&self, n: u32) -> u128 {
+        let words = self.q[n as usize];
+        words
+            .iter()
+            .rev()
+            .fold(0, |value, word| (value << 32) | u128::from(*word))
+    }
+
+    pub fn set_q(&mut self, n: u32, value: u128) {
+        for (i, word) in self.q[n as usize].iter_mut().enumerate() {
+            *word = (value >> (32 * i)) as u32;
+        }
+    }
+
+    /// The latest coprocessor-disabled exception this core raised.
+    pub fn coprocessor_disabled(&self) -> Option<CoprocessorDisabled> {
+        self.disabled
+    }
+
     /// `Interrupt` is the pending bits that latch, with the external level lines as the last
-    /// poll read them.
+    /// poll read them. `ACCHI` reads sign-extended from its 8 bits.
     pub fn special(&self, sr: Sr) -> u32 {
         match sr {
             Sr::Ccount => self.sr[sr as usize].wrapping_add(self.cycle.0 as u32),
             Sr::Interrupt => self.sr[sr as usize] | (self.lines & C::INTERRUPTS.extern_level),
+            Sr::Acchi => self.sr[sr as usize] as u8 as i8 as u32,
             _ => self.sr[sr as usize],
         }
     }
@@ -537,7 +593,7 @@ impl<C: Config> Core<C> {
     /// writes nothing. Anything else is split, and a faulting part of that split stops.
     fn guard_access(&self, op: Op, addr: u32, width: Width) -> Result<(), Trap> {
         let natural = addr.is_multiple_of(width.bytes());
-        let sync = matches!(op, Op::L32AI | Op::S32RI);
+        let sync = matches!(op, Op::L32AI | Op::S32RI | Op::S32C1I);
         if C::instruction_bus(addr) {
             if !natural {
                 return Err(Trap::Exception(Cause::LoadStoreAlignment, Some(addr)));
@@ -558,8 +614,8 @@ impl<C: Config> Core<C> {
     }
 
     /// An aligned access that faults raises the exception with its address in `EXCVADDR`. An
-    /// unaligned one whose part faults stops. The S3 instruction bus and its unaligned `l32ai`
-    /// and `s32ri` are decided in [`Self::guard_access`] before this.
+    /// unaligned one whose part faults stops. The S3 instruction bus and its unaligned `l32ai`,
+    /// `s32ri` and `s32c1i` are decided in [`Self::guard_access`] before this.
     fn access_trap(&self, exit: Exit, op: Op, addr: u32, width: Width) -> Trap {
         match exit {
             Exit::Fault(_) if !addr.is_multiple_of(width.bytes()) => {
@@ -585,12 +641,28 @@ impl<C: Config> Core<C> {
     /// `LCOUNT`. The S3 board confirms it: an exception on the last op of a 3-pass loop's first
     /// pass leaves `LCOUNT` at 2, and the rerun finishes all 3 passes. The classic chip is
     /// unprobed.
+    ///
+    /// The coprocessor-disabled exception comes after the window check, as the ISA's priority list
+    /// orders them (4.4.1.11, p 146).
     fn execute<B: Bus>(&mut self, bus: &mut B) -> Result<Op, Trap> {
         let insn = self.fetch(bus)?;
         if let Some(n) = self.overflow(u32::from(insn.reach)) {
             return Err(self.overflow_trap(n));
         }
         let pc = self.pc;
+        if let Some(n) = C::coprocessor(insn.op)
+            && self.sr[Sr::CpEnable as usize] >> n & 1 == 0
+        {
+            let Some(cause) = Cause::coprocessor_disabled(n) else {
+                return Err(Trap::missing(pc, Missing::Op(insn.op)));
+            };
+            self.disabled = Some(CoprocessorDisabled {
+                coprocessor: n,
+                op: insn.op,
+                pc,
+            });
+            return Err(Trap::Exception(cause, None));
+        }
         let lcount = self.sr[Sr::Lcount as usize];
         let seq = pc.wrapping_add(u32::from(insn.len));
         let loops = seq == self.sr[Sr::Lend as usize] && lcount != 0 && self.ps() & PS_EXCM == 0;
@@ -610,7 +682,7 @@ impl<C: Config> Core<C> {
                 return Err(trap);
             }
         };
-        self.note(insn.op);
+        self.note(&insn);
         self.cycle.0 += cycles;
         match target {
             Some(to) => {
@@ -635,13 +707,19 @@ impl<C: Config> Core<C> {
 
     /// The store and divide bits describe the op that just completed. The loop arm is left as the
     /// loop op set it, including across a taken branch, so a later loop-back still pays the first
-    /// extra.
-    fn note(&mut self, op: Op) {
+    /// extra. The FPU and `q` stores, and a `s32c1i` that stored, count as stores, though no board
+    /// row times a `memw` after one. A `s32c1i` stored when the old word it left in `at` equals
+    /// `SCOMPARE1`.
+    fn note(&mut self, insn: &Insn) {
+        let op = insn.op;
         self.pace &= PACE_LOOP;
-        if matches!(
-            op,
-            Op::S8I | Op::S16I | Op::S32I | Op::S32I_N | Op::S32NB | Op::S32E | Op::S32RI
-        ) {
+        let stored = match op {
+            Op::S8I | Op::S16I | Op::S32I | Op::S32I_N | Op::S32NB | Op::S32E | Op::S32RI => true,
+            Op::SSI | Op::SSX | Op::SSIP | Op::SSXP | Op::st_QR => true,
+            Op::S32C1I => self.a(insn.fields[0]) == self.sr[Sr::Scompare1 as usize],
+            _ => false,
+        };
+        if stored {
             self.pace |= PACE_STORE;
         }
         if matches!(op, Op::QUOU | Op::QUOS | Op::REMU | Op::REMS) {
@@ -971,10 +1049,7 @@ impl<C: Config> Core<C> {
             Op::BREAK_N if self.debug_allowed() => return Err(Trap::Debug(DEBUGCAUSE_BREAK_N)),
             Op::BREAK | Op::BREAK_N => {}
 
-            op => match register_op(op) {
-                Some((access, sr)) => self.register_op(access, sr, f[0]),
-                None => return Err(Trap::missing(pc, Missing::Op(op))),
-            },
+            _ => target = self.option_op(bus, insn)?,
         }
         Ok((cycles, target))
     }

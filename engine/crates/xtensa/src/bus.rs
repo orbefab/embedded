@@ -36,6 +36,21 @@ pub enum Cause {
     InstFetchProhibited = 20,
     LoadProhibited = 28,
     StoreProhibited = 29,
+    /// An FPU op with `CPENABLE` bit 0 clear.
+    Coprocessor0Disabled = 32,
+    /// On the S3, a `cop_ai` op with `CPENABLE` bit 3 clear.
+    Coprocessor3Disabled = 35,
+}
+
+impl Cause {
+    /// `CoprocessornDisabled` for coprocessor `n`, of the two a chip here has.
+    pub const fn coprocessor_disabled(n: u8) -> Option<Cause> {
+        match n {
+            0 => Some(Cause::Coprocessor0Disabled),
+            3 => Some(Cause::Coprocessor3Disabled),
+            _ => None,
+        }
+    }
 }
 
 /// Why an access did not complete.
@@ -64,6 +79,13 @@ pub trait Bus {
     fn load(&mut self, now: Cycle, addr: u32, width: Width) -> Result<u32, Exit>;
     /// Writes the low `width` bytes of `value` at `addr`, a multiple of `width`'s size.
     fn store(&mut self, now: Cycle, addr: u32, width: Width, value: u32) -> Result<(), Exit>;
+    /// Whether a word store at `addr`, a multiple of 4, would complete, without making it.
+    /// `s32c1i` asks when its compare fails, since it needs store permission whether or not it
+    /// stores. The default allows every address, which is right for a bus whose `load` refuses
+    /// every address its `store` refuses, since `s32c1i` loads first.
+    fn check_store(&mut self, _now: Cycle, _addr: u32) -> Result<(), Exit> {
+        Ok(())
+    }
     /// The levels of the interrupt lines at `now`, one bit per interrupt number. The core reads
     /// the bits of the external level, edge and NMI interrupts, once before each instruction.
     /// The lines may change at an access or at [`Bus::next_event`], so that a run split at any

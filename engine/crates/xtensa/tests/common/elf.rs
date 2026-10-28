@@ -68,6 +68,19 @@ impl Elf {
         }
     }
 
+    /// The `len` loaded bytes from `addr`, within one segment.
+    pub fn bytes_at(&self, addr: u32, len: usize) -> &[u8] {
+        let segment = self
+            .segments
+            .iter()
+            .find(|segment| {
+                addr >= segment.addr && (addr - segment.addr) as usize + len <= segment.data.len()
+            })
+            .unwrap_or_else(|| panic!("no segment holds {len} bytes at {addr:#010x}"));
+        let at = (addr - segment.addr) as usize;
+        &segment.data[at..at + len]
+    }
+
     pub fn symbol(&self, name: &str) -> u32 {
         self.symbols
             .iter()

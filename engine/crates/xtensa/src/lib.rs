@@ -4,9 +4,19 @@
 //! `decode` holds both generated opcode tables and one [`Op`] enum over them. `core` runs the
 //! integer ops, loads and stores, branches, `call0`, the register windows with their overflow and
 //! underflow exceptions, zero-overhead loops, the special registers, exceptions, interrupts and
-//! their levels, the `CCOMPARE` timers, `WAITI` and the `ICOUNT` debug exception. Every other op
-//! ends the run with [`Stop::Unimplemented`]. `bus` is what the core asks of its SoC, and `paged`
+//! their levels, the `CCOMPARE` timers, `WAITI` and the `ICOUNT` debug exception. It also runs
+//! the single-precision FPU, MAC16, the Boolean registers and `s32c1i`, and on the S3 the `q`
+//! registers and `cop_ai` user registers as plain state: `ld.qr`, `st.qr`, `mv.qr`, `rur` and
+//! `wur`. Every other op ends the run with [`Stop::Unimplemented`], among them the classic
+//! `f64*` ops and the S3's `ee.*` vector ops. `bus` is what the core asks of its SoC, and `paged`
 //! is the copy-on-write RAM a SoC keeps its memory in.
+//!
+//! `fpu` holds the floating-point rules, in integer arithmetic, so a result is the same on every
+//! host and in wasm. An op of a coprocessor whose `CPENABLE` bit is clear raises
+//! [`Cause::Coprocessor0Disabled`] for the FPU or [`Cause::Coprocessor3Disabled`] for `cop_ai`,
+//! and the core keeps the op and its PC as [`Core::coprocessor_disabled`]. A handler that sets
+//! the bit runs the op again, and an `ee.*` op then stops the run, with the record naming the op
+//! that found the coprocessor off.
 //!
 //! The window overflow check is the ISA's: each op tests the quarters of the window its address
 //! registers name, so a frame spills on the first reference to it. The decoder gives each op its
@@ -23,8 +33,9 @@
 //! aligned for the access, and [`Cause::LoadStoreError`] for a sub-word access or an aligned
 //! `l32ai` or `s32ri` there. The board probed `0x40378dc0` and `0x40000400`. The rest of each
 //! window is the memory map. An unaligned `l32ai` or `s32ri` anywhere on the S3 raises
-//! `LoadStoreAlignment` and writes nothing. The classic core still stops as [`Missing::Unaligned`]
-//! for those two ops, and both chips stop that way when a later part of some other unaligned
+//! `LoadStoreAlignment` and writes nothing, and `s32c1i`, which the ISA lists with them (4.6,
+//! p 168), does the same. The classic core still stops as [`Missing::Unaligned`] for those three
+//! ops, and both chips stop that way when a later part of some other unaligned
 //! access faults. The region is the start address. Cached instruction ROM and RTC instruction RAM
 //! are not classified.
 //!
@@ -41,12 +52,13 @@ mod bus;
 mod config;
 mod core;
 mod decode;
+mod fpu;
 mod paged;
 mod special;
 
 pub use bus::{Bus, Cause, Cycle, Exit, Width};
 pub use config::{Config, Esp32, Esp32s3, Interrupts};
-pub use core::{Core, Missing, Stop, Unimplemented};
+pub use core::{CoprocessorDisabled, Core, Missing, Stop, Unimplemented};
 pub use decode::{Decoded, Insn, Op};
 pub use paged::{PAGE, PagedRam};
 pub use special::Sr;

@@ -36,6 +36,18 @@ BIN_PREC = {
     "*": 10, "/": 10, "%": 10,
 }
 CMP_OPS = {"==", "!=", "<", ">", "<=", ">="}
+# The register files and states each coprocessor owns, from the save-area lists of each chip's
+# `tie.h`: `XCHAL_CP0_SA_LIST` is FCR, FSR and f0 to f15, and the S3's `XCHAL_CP3_SA_LIST` is
+# ACCX, QACC, SAR_BYTE, FFT_BIT_WIDTH, UA_STATE and q0 to q7. FCR and FSR are the FP states.
+COPROCESSOR_REGFILES = {"f": 0, "q": 3}
+COPROCESSOR_STATES = {
+    "RoundMode": 0, "InvalidEnable": 0, "DivZeroEnable": 0, "OverflowEnable": 0,
+    "UnderflowEnable": 0, "InexactEnable": 0, "InvalidFlag": 0, "DivZeroFlag": 0,
+    "OverflowFlag": 0, "UnderflowFlag": 0, "InexactFlag": 0, "FPreserved20": 0,
+    "FPreserved20a": 0, "FPreserved5": 0, "FPreserved7": 0,
+    "ACCX": 3, "QACC_H": 3, "QACC_L": 3, "SAR_BYTE": 3, "FFT_BIT_WIDTH": 3, "UA_STATE": 3,
+}
+NO_COPROCESSOR = 255
 FLAGS = {
     "XTENSA_OPERAND_IS_REGISTER": 1,
     "XTENSA_OPERAND_IS_INVISIBLE": 2,
@@ -1150,10 +1162,15 @@ def load_chip(text, work, wide, source_name, commit, sha):
         args_tok = atom(cols[1])
         if n[0] != "num":
             fail("iclass n")
-        iclass_rows.append((n[1], None if args_tok[0] == "num" else args_tok[1]))
+        states_tok = atom(cols[3])
+        iclass_rows.append((
+            n[1],
+            None if args_tok[0] == "num" else args_tok[1],
+            None if states_tok[0] == "num" else states_tok[1],
+        ))
     if len(iclass_rows) != len(iclass_enum):
         fail("iclass count")
-    for (n, args_sym), enum_name in zip(iclass_rows, iclass_enum):
+    for (n, args_sym, _states), enum_name in zip(iclass_rows, iclass_enum):
         if args_sym is None:
             if n != 0:
                 fail(f"{enum_name} has no args array but n={n}")
@@ -1161,6 +1178,18 @@ def load_chip(text, work, wide, source_name, commit, sha):
         rest = enum_name[len("ICLASS_") :]
         if args_sym != f"Iclass_{rest}_args":
             fail(f"{enum_name} args {args_sym}")
+
+    state_lists = {}
+    for m in re.finditer(r"static xtensa_arg_internal (Iclass_\w+_stateArgs)\[\] = \{", text):
+        brace = text.find("{", m.end() - 1)
+        close = find_matching(text, brace)
+        toks = tokenize(text[brace + 1 : close])
+        uses = []
+        for i, tok in enumerate(toks):
+            if tok[0] == "id" and tok[1].startswith("STATE_"):
+                direction = next((t[1] for t in toks[i + 1 :] if t[0] == "chr"), None)
+                uses.append((tok[1][len("STATE_") :], direction))
+        state_lists[m.group(1)] = uses
 
     arg_lists = {}
     for m in re.finditer(r"static xtensa_arg_internal (Iclass_\w+_args)\[\] = \{", text):
@@ -1285,7 +1314,7 @@ def load_chip(text, work, wide, source_name, commit, sha):
     iclass_ops = []
     max_visible = 0
     operand_index = {name: i for i, name in enumerate(operands_enum)}
-    for n, args_name in iclass_rows:
+    for n, args_name, _states in iclass_rows:
         if args_name is None:
             iclass_ops.append([])
             continue
@@ -1323,6 +1352,26 @@ def load_chip(text, work, wide, source_name, commit, sha):
     iclass_index = {name: i for i, name in enumerate(iclass_enum)}
     for _mnem, iclass_name in op_rows:
         op_class.append(iclass_index[iclass_name])
+
+    # An op belongs to a coprocessor when its iclass reads CPENABLE and it names a register file
+    # or a state that coprocessor owns. CPENABLE's own rsr, wsr and xsr name neither.
+    op_coprocessor = []
+    for mnem, iclass_name in op_rows:
+        _n, _args, states_name = iclass_rows[iclass_index[iclass_name]]
+        states = state_lists.get(states_name, []) if states_name else []
+        reads_cpenable = ("CPENABLE", "i") in states
+        owners = {COPROCESSOR_STATES[name] for name, _d in states if name in COPROCESSOR_STATES}
+        for operand, _show in iclass_ops[iclass_index[iclass_name]]:
+            reg = operand_rows[operand]["reg"]
+            if reg is not None and shorts[reg] in COPROCESSOR_REGFILES:
+                owners.add(COPROCESSOR_REGFILES[shorts[reg]])
+        if len(owners) > 1:
+            fail(f"{mnem} names state of coprocessors {sorted(owners)}")
+        if reads_cpenable and not owners and not mnem.endswith(".cpenable"):
+            fail(f"{mnem} reads CPENABLE and names no coprocessor state")
+        if owners and not reads_cpenable:
+            fail(f"{mnem} names coprocessor state and does not read CPENABLE")
+        op_coprocessor.append(owners.pop() if owners else NO_COPROCESSOR)
 
     variants = [variant_of(name) for name in opcode_enum]
     mnemonics = [mnem for mnem, _ic in op_rows]
@@ -1482,6 +1531,7 @@ def load_chip(text, work, wide, source_name, commit, sha):
         "variants": variants,
         "mnemonics": mnemonics,
         "op_class": op_class,
+        "op_coprocessor": op_coprocessor,
         "named": named,
         "tail": out,
         "opcode_count": len(op_rows),
@@ -1570,9 +1620,13 @@ def write_op(path, variants, mnemonics_by_variant, commit, chips):
 def write_chip(path, chip, variants):
     index_of = {variant: i for i, variant in enumerate(variants)}
     class_at = [0] * len(variants)
+    owned = ["false"] * len(variants)
+    coprocessor = [NO_COPROCESSOR] * len(variants)
     name_ok = set(chip["variants"])
-    for variant, iclass in zip(chip["variants"], chip["op_class"]):
+    for variant, iclass, cp in zip(chip["variants"], chip["op_class"], chip["op_coprocessor"]):
         class_at[index_of[variant]] = iclass
+        owned[index_of[variant]] = "true"
+        coprocessor[index_of[variant]] = cp
     if set(chip["named"]) - name_ok:
         fail("named op missing from the chip table")
     out = []
@@ -1593,6 +1647,16 @@ def write_chip(path, chip, variants):
     out.append("")
     out.append("pub static OP_CLASS: [u16; OPCODE_COUNT] = [")
     out.extend(comma_rows(class_at))
+    out.append("];")
+    out.append("")
+    out.append("/// Whether this chip's table has the op.")
+    out.append("pub static OWNED: [bool; OPCODE_COUNT] = [")
+    out.extend(comma_rows(owned))
+    out.append("];")
+    out.append("")
+    out.append(f"/// The coprocessor whose CPENABLE bit the op needs, or {NO_COPROCESSOR} for none.")
+    out.append("pub static COPROCESSOR: [u8; OPCODE_COUNT] = [")
+    out.extend(comma_rows(coprocessor))
     out.append("];")
     out.append("")
     out.extend(chip["tail"])

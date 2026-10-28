@@ -65,6 +65,19 @@ macro_rules! decoder {
                 $m::format_len(first).map(|(len, _)| len)
             }
 
+            /// Whether this chip's table has the op.
+            pub(crate) fn owns(op: op::Op) -> bool {
+                $m::OWNED[op as usize]
+            }
+
+            /// The coprocessor whose `CPENABLE` bit the op needs.
+            pub(crate) fn coprocessor(op: op::Op) -> Option<u8> {
+                match $m::COPROCESSOR[op as usize] {
+                    u8::MAX => None,
+                    n => Some(n),
+                }
+            }
+
             /// Decodes the instruction at the front of `bytes`, whose first byte is at `pc`.
             ///
             /// A null field getter keeps the previous operand's decoded value. GNU does that for

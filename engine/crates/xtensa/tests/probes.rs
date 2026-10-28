@@ -1,6 +1,6 @@
 //! The classic probe images, run on `Core<Esp32>`, against the fixtures the classic board printed.
 
-use sim_xtensa::{Config, Cycle, Decoded, Esp32, Stop};
+use sim_xtensa::{Config, Cycle, Decoded, Esp32, Missing, Stop};
 
 use crate::common::board::{ROM_STUB, Run, bytes_of, run_probe};
 use crate::common::elf::Elf;
@@ -59,6 +59,77 @@ fn loop_matches_the_classic_board() {
     assert_transcript("loop", &run, &fixture, &elf);
 }
 
+#[test]
+fn mac_matches_the_classic_board() {
+    let (run, fixture, elf) = run("mac", &[], None);
+    assert_transcript("mac", &run, &fixture, &elf);
+}
+
+/// The double-precision ops this core does not model. The test answers each op's probe function
+/// with 0 and skips that op's rows. The three `wur.f64*` rows write and read plain state, and
+/// they are compared.
+const F64_OPS: [&str; 11] = [
+    "f64iter", "f64rnd", "f64addc", "f64subc", "f64sig", "f64cmpl", "f64cmph", "f64norm",
+    "f64sexp", "rf64r", "wf64r",
+];
+
+#[test]
+fn fpu_matches_the_classic_board_but_the_double_ops() {
+    let served: Vec<String> = F64_OPS.iter().map(|op| format!("run_{op}")).collect();
+    let served: Vec<&str> = served.iter().map(String::as_str).collect();
+    let (run, fixture, elf) = run("fpu", &served, None);
+    assert_eq!(run.stop, Stop::Limit, "fpu runs on after END");
+    assert_eq!(run.core.pc(), elf.symbol("halt"), "fpu returns to halt");
+    let kept = |text: &str| -> String {
+        text.split_inclusive('\n')
+            .filter(|line| !F64_OPS.contains(&line.split_whitespace().next().unwrap_or("")))
+            .collect()
+    };
+    let (have, want) = (kept(&run.uart), kept(&fixture.body));
+    if let Some((line, have, want)) = first_difference(&have, &want) {
+        panic!("fpu kept line {line}: sim printed {have:?}, the board printed {want:?}");
+    }
+    let vectors: usize = fixture.get("vectors").parse().unwrap();
+    let ops = fixture
+        .body
+        .lines()
+        .filter(|line| line.starts_with("op "))
+        .count();
+    let rows = want.lines().filter(|line| line.contains(" y=")).count();
+    assert_eq!(
+        rows,
+        (ops - F64_OPS.len()) * vectors,
+        "every kept op prints its rows"
+    );
+    println!(
+        "fpu: {} of {ops} ops match, {rows} rows",
+        ops - F64_OPS.len()
+    );
+}
+
+/// Unanswered, the classic `fpu` image ends its run at the first double-precision op it reaches,
+/// the first such op the fixture lists, after printing that op's header.
+#[test]
+fn a_double_op_ends_the_classic_run_as_unimplemented() {
+    let (run, fixture, _) = run("fpu", &[], None);
+    let first = fixture
+        .body
+        .lines()
+        .filter_map(|line| line.strip_prefix("op "))
+        .map(|rest| rest.split_whitespace().next().unwrap())
+        .find(|op| F64_OPS.contains(op))
+        .unwrap();
+    let Stop::Unimplemented(stop) = run.stop else {
+        panic!("fpu stopped with {:?}", run.stop);
+    };
+    let Missing::Op(op) = stop.missing else {
+        panic!("fpu stopped at {stop}");
+    };
+    assert_eq!(op.name(), first);
+    assert!(run.uart.contains(&format!("op {first} ")));
+    assert!(!run.uart.contains("END fpu"));
+}
+
 /// The `window` and `loop` images cut at random limits print the same text and end in the same
 /// state as one run.
 #[test]
@@ -76,8 +147,7 @@ fn random_limit_splits_of_the_probes_equal_one_run() {
     }
 }
 
-/// The classes in the order the probe measures them. The test serves the FPU and MAC16
-/// measures, whose ops this core does not model, and their rows print 0.
+/// The classes in the order the probe measures them.
 const CLASSES: [&str; 19] = [
     "overhead",
     "nop",
@@ -99,12 +169,10 @@ const CLASSES: [&str; 19] = [
     "call0_ret",
     "call8_retw",
 ];
-const SERVED: [&str; 3] = ["measure_add_s", "measure_mul_s", "measure_mula_aa_ll"];
-const SERVED_CLASSES: [&str; 3] = ["add.s", "mul.s", "mula.aa.ll"];
 
 #[test]
 fn ccount_rows_fall_inside_the_classic_bounds() {
-    let (run, fixture, elf) = run("ccount", &SERVED, None);
+    let (run, fixture, elf) = run("ccount", &[], None);
     assert_eq!(run.stop, Stop::Limit, "ccount runs on after END");
     assert_eq!(run.core.pc(), elf.symbol("halt"), "ccount returns to halt");
 
@@ -143,10 +211,6 @@ fn ccount_rows_fall_inside_the_classic_bounds() {
 
     let overhead = rows[0].2;
     for (name, n, delta, exception) in &rows {
-        if SERVED_CLASSES.contains(&name.as_str()) {
-            assert_eq!(*delta, 0, "{name} is served");
-            continue;
-        }
         let net = if name == "overhead" {
             *delta
         } else {

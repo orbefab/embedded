@@ -12,17 +12,17 @@ use sim_xtensa::{
 use crate::core::{CODE, Flat, RAM, core_at};
 
 const END: u32 = RAM + 0x8_0000;
-const WOE: u32 = 1 << 18;
-const EXCM: u32 = 1 << 4;
+pub(crate) const WOE: u32 = 1 << 18;
+pub(crate) const EXCM: u32 = 1 << 4;
 const UM: u32 = 1 << 5;
 const CALLINC1: u32 = 1 << 16;
 const CALLINC3: u32 = 3 << 16;
 
-const NEXT: u32 = CODE + 3;
-const TAKEN: u32 = CODE + 16;
+pub(crate) const NEXT: u32 = CODE + 3;
+pub(crate) const TAKEN: u32 = CODE + 16;
 const TO: u32 = CODE + 0x40;
-const KERNEL: u32 = 0x4000_0300;
-const OF4: u32 = 0x4000_0000;
+pub(crate) const KERNEL: u32 = 0x4000_0300;
+pub(crate) const OF4: u32 = 0x4000_0000;
 const UF4: u32 = 0x4000_0040;
 const OF8: u32 = 0x4000_0080;
 const UF8: u32 = 0x4000_00c0;
@@ -34,18 +34,20 @@ const fn owb(base: u32) -> u32 {
     base << 8
 }
 
-/// A piece of state: an address register of the current window, a special register, or the
-/// word at an address.
+/// A piece of state: an address register of the current window, a special register, the word at
+/// an address, an FPU register, or an S3 `q` register.
 #[derive(Clone, Copy, Debug)]
-enum Is {
+pub(crate) enum Is {
     A(u32, u32),
     S(Sr, u32),
     M(u32, u32),
+    F(u32, u32),
+    Q(u32, u128),
 }
 
 use Is::{A, M, S};
 
-struct Row {
+pub(crate) struct Row {
     text: &'static str,
     hex: &'static str,
     before: &'static [Is],
@@ -54,7 +56,7 @@ struct Row {
     stop: Stop,
 }
 
-const fn runs(
+pub(crate) const fn runs(
     text: &'static str,
     hex: &'static str,
     before: &'static [Is],
@@ -71,7 +73,7 @@ const fn runs(
     }
 }
 
-const fn stops(
+pub(crate) const fn stops(
     text: &'static str,
     hex: &'static str,
     before: &'static [Is],
@@ -1473,7 +1475,7 @@ fn bytes_of(hex: &str) -> Vec<u8> {
 }
 
 /// `PS` has `WOE` set and nothing else unless the row sets it.
-fn run_row<C: Config>(row: &Row) {
+pub(crate) fn run_row<C: Config>(row: &Row) {
     let at = format!("{} {:?} from {:?}", C::NAME, row.text, row.before);
     let decoded = C::decode(&bytes_of(row.hex), CODE).unwrap();
     assert!(matches!(decoded, Decoded::Insn(_)), "{at}: decodes");
@@ -1487,15 +1489,19 @@ fn run_row<C: Config>(row: &Row) {
             A(n, value) => core.set_a(n, value),
             S(sr, value) => core.set_special(sr, value),
             M(addr, value) => bus.ram.write(addr, Width::Word, value),
+            Is::F(n, value) => core.set_f(n, value),
+            Is::Q(n, value) => core.set_q(n, value),
         }
     }
     assert_eq!(core.run_until(&mut bus, Cycle(1)), row.stop, "{at}: stop");
     assert_eq!(core.pc(), row.pc, "{at}: pc");
     for is in row.after {
         let (have, want) = match *is {
-            A(n, value) => (core.a(n), value),
-            S(sr, value) => (core.special(sr), value),
-            M(addr, value) => (bus.ram.read(addr, Width::Word), value),
+            A(n, value) => (core.a(n).into(), value.into()),
+            S(sr, value) => (core.special(sr).into(), value.into()),
+            M(addr, value) => (bus.ram.read(addr, Width::Word).into(), value.into()),
+            Is::F(n, value) => (core.f(n).into(), value.into()),
+            Is::Q(n, value) => (core.q(n), value),
         };
         assert_eq!(have, want, "{at}: {is:?}, have {have:#x}");
     }

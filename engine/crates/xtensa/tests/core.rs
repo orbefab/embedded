@@ -1,6 +1,8 @@
 //! The core on a flat test bus: code words from a list, RAM in a `PagedRam`, and a stop at the
 //! first fetch past the code.
 
+use std::ops::Range;
+
 use sim_xtensa::{
     Bus, Cause, Config, Core, Cycle, Esp32, Esp32s3, Exit, Missing, Op, PagedRam, Sr, Stop,
     Unimplemented, Width,
@@ -13,6 +15,8 @@ pub const RAM: u32 = 0x3fc8_8000;
 pub struct Flat {
     code: Vec<u8>,
     pub ram: PagedRam,
+    /// RAM that loads and refuses stores.
+    pub read_only: Range<u32>,
     /// Interrupt lines that are high from the start.
     pub lines: u32,
     /// Interrupt lines that rise at a cycle and stay high.
@@ -33,6 +37,7 @@ impl Flat {
         Flat {
             code,
             ram: PagedRam::new(RAM, 512 * 1024),
+            read_only: 0..0,
             lines: 0,
             rise: None,
             polls: 0,
@@ -57,9 +62,14 @@ impl Bus for Flat {
         }
     }
 
-    fn store(&mut self, _now: Cycle, addr: u32, width: Width, value: u32) -> Result<(), Exit> {
-        if self.ram.contains(addr) {
-            self.ram.write(addr, width, value);
+    fn store(&mut self, now: Cycle, addr: u32, width: Width, value: u32) -> Result<(), Exit> {
+        self.check_store(now, addr)?;
+        self.ram.write(addr, width, value);
+        Ok(())
+    }
+
+    fn check_store(&mut self, _now: Cycle, addr: u32) -> Result<(), Exit> {
+        if self.ram.contains(addr) && !self.read_only.contains(&addr) {
             Ok(())
         } else {
             Err(Exit::Fault(Cause::StoreProhibited))
@@ -86,18 +96,24 @@ pub fn core_at<C: Config>(pc: u32) -> Core<C> {
 }
 
 fn unmodeled_op_stops_before_it<C: Config>() {
-    // add.s f1, f2, f3
-    let mut bus = Flat::new("30120a");
+    let rer = [0x20u8, 0x63, 0x40];
+    assert_eq!(
+        C::render(&C::decode(&rer, CODE).unwrap()),
+        "rer\ta2, a3",
+        "{}",
+        C::NAME
+    );
+    let mut bus = Flat::new("206340");
     let mut core = core_at::<C>(CODE);
     let stop = core.run_until(&mut bus, Cycle(100));
     let want = Unimplemented {
         pc: CODE,
-        missing: Missing::Op(Op::ADD_S),
+        missing: Missing::Op(Op::RER),
     };
     assert_eq!(stop, Stop::Unimplemented(want), "{}", C::NAME);
     assert_eq!(core.pc(), CODE);
     assert_eq!(core.cycle(), Cycle(0));
-    assert_eq!(want.to_string(), "`add.s` at 0x40370000 is not modeled");
+    assert_eq!(want.to_string(), "`rer` at 0x40370000 is not modeled");
 }
 
 #[test]
@@ -133,6 +149,6 @@ fn two_byte_op_before_an_unmapped_word_runs() {
 /// `Core` is copied at every landing, so its size is pinned.
 #[test]
 fn core_size_is_pinned() {
-    assert_eq!(size_of::<Core<Esp32>>(), 504);
-    assert_eq!(size_of::<Core<Esp32s3>>(), 504);
+    assert_eq!(size_of::<Core<Esp32>>(), 832);
+    assert_eq!(size_of::<Core<Esp32s3>>(), 832);
 }

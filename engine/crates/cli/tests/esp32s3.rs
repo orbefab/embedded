@@ -1,7 +1,7 @@
 //! `esp32s3` parts through `sim run`: where the firmware blob is found, the `netlist.blob` error
 //! when it is not, and the diagnostics a program raises when it leaves a watchdog running,
 //! touches a register the model does not keep, reaches an instruction the core does not run, or
-//! jumps out of its memory.
+//! jumps out of its memory, and an FPU op the core now runs.
 
 mod common;
 
@@ -486,6 +486,46 @@ fn an_op_the_core_does_not_run_ends_the_run() {
     );
     // The movi takes 1 cycle at 25 ns.
     assert_eq!(found[0]["t_ps"], 25_000);
+}
+
+/// An FPU op runs once `CPENABLE` bit 0 is set, so the run goes on to the `rfi` after it. With
+/// the bit clear the op raises cause 32. `PS.EXCM` is still set from reset, so the core takes it
+/// at the double exception vector, `VECBASE + 0x3c0`, where nothing is mapped.
+#[test]
+fn an_fpu_op_runs_once_its_coprocessor_is_enabled() {
+    // movi.n a2, 1; wsr.cpenable a2; rsync; add.s f0, f1, f2; rfi 1.
+    let doc = run_program(
+        "fpu",
+        &[0],
+        &[
+            0x0c, 0x12, 0x20, 0xe0, 0x13, 0x10, 0x20, 0x00, 0x20, 0x01, 0x0a, 0x10, 0x31, 0x00,
+        ],
+        10_000_000_000,
+    );
+    let found = diagnostics(&doc);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["code"], "chip.unsupported_instruction");
+    assert_eq!(
+        found[0]["data"],
+        serde_json::json!({ "op": "rfi", "pc": IRAM + 4 + 11, "reason": "op", "symbol": "main+0xb" })
+    );
+
+    // movi.n a2, 0; wsr.cpenable a2; rsync; add.s f0, f1, f2; rfi 1.
+    let doc = run_program(
+        "fpu-off",
+        &[0],
+        &[
+            0x0c, 0x02, 0x20, 0xe0, 0x13, 0x10, 0x20, 0x00, 0x20, 0x01, 0x0a, 0x10, 0x31, 0x00,
+        ],
+        10_000_000_000,
+    );
+    let found = diagnostics(&doc);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["code"], "chip.unmapped_fetch");
+    assert_eq!(
+        found[0]["data"],
+        serde_json::json!({ "pc": 0x4000_03c0, "symbol": null })
+    );
 }
 
 #[test]

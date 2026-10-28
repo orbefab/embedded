@@ -1,0 +1,141 @@
+chip: ESP32-S3 (QFN56)
+revision: v0.2
+toolchain: xtensa-esp-elf-gcc (crosstool-NG esp-14.2.0_20260121) 14.2.0
+image_sha256: e1c734138d2bc49bf358bd5a8ab414847bcbcce7e0eda56504c10371d89eb863
+seed: c2a11a04
+vectors: 64
+probe: salt
+---
+BEGIN salt
+seed c2a11a04
+op salt c2a14013
+salt 000 a=00000000 b=00000000 y=00000000 e=ff
+salt 001 a=00000001 b=00000000 y=00000000 e=ff
+salt 002 a=ffffffff b=00000000 y=00000001 e=ff
+salt 003 a=7fffffff b=00000000 y=00000000 e=ff
+salt 004 a=80000000 b=00000001 y=00000001 e=ff
+salt 005 a=80000001 b=00000001 y=00000001 e=ff
+salt 006 a=fffffffe b=00000001 y=00000001 e=ff
+salt 007 a=12345678 b=00000001 y=00000000 e=ff
+salt 008 a=00000000 b=ffffffff y=00000000 e=ff
+salt 009 a=00000001 b=ffffffff y=00000000 e=ff
+salt 00a a=ffffffff b=ffffffff y=00000000 e=ff
+salt 00b a=7fffffff b=ffffffff y=00000000 e=ff
+salt 00c a=80000000 b=7fffffff y=00000001 e=ff
+salt 00d a=80000001 b=7fffffff y=00000001 e=ff
+salt 00e a=fffffffe b=7fffffff y=00000001 e=ff
+salt 00f a=12345678 b=7fffffff y=00000001 e=ff
+salt 010 a=00000000 b=80000000 y=00000000 e=ff
+salt 011 a=00000001 b=80000000 y=00000000 e=ff
+salt 012 a=ffffffff b=80000000 y=00000000 e=ff
+salt 013 a=7fffffff b=80000000 y=00000000 e=ff
+salt 014 a=80000000 b=80000001 y=00000001 e=ff
+salt 015 a=80000001 b=80000001 y=00000000 e=ff
+salt 016 a=fffffffe b=80000001 y=00000000 e=ff
+salt 017 a=12345678 b=80000001 y=00000000 e=ff
+salt 018 a=00000000 b=fffffffe y=00000000 e=ff
+salt 019 a=00000001 b=fffffffe y=00000000 e=ff
+salt 01a a=ffffffff b=fffffffe y=00000000 e=ff
+salt 01b a=7fffffff b=fffffffe y=00000000 e=ff
+salt 01c a=80000000 b=12345678 y=00000001 e=ff
+salt 01d a=80000001 b=12345678 y=00000001 e=ff
+salt 01e a=fffffffe b=12345678 y=00000001 e=ff
+salt 01f a=12345678 b=12345678 y=00000000 e=ff
+salt 020 a=87369d8e b=c4698e6d y=00000001 e=ff
+salt 021 a=412ec35f b=b1e8905d y=00000000 e=ff
+salt 022 a=df8f542c b=94531b89 y=00000000 e=ff
+salt 023 a=136a4318 b=3a24bd1c y=00000001 e=ff
+salt 024 a=1d6a103f b=b2d62ea9 y=00000000 e=ff
+salt 025 a=97659028 b=8970d198 y=00000000 e=ff
+salt 026 a=fb309f19 b=f2aaa570 y=00000000 e=ff
+salt 027 a=669a3832 b=1211777c y=00000000 e=ff
+salt 028 a=a323c963 b=9bf748e4 y=00000000 e=ff
+salt 029 a=2f95c3b1 b=6b96a040 y=00000001 e=ff
+salt 02a a=4c410e6f b=dc17cd89 y=00000000 e=ff
+salt 02b a=9179141a b=ccbbb107 y=00000001 e=ff
+salt 02c a=e9fa850a b=9228ad47 y=00000000 e=ff
+salt 02d a=7781de67 b=c5ee1061 y=00000000 e=ff
+salt 02e a=fba44190 b=0159733b y=00000001 e=ff
+salt 02f a=c8fe9024 b=45b9b679 y=00000001 e=ff
+salt 030 a=1da35782 b=9d36a94b y=00000000 e=ff
+salt 031 a=4be245c4 b=68024949 y=00000001 e=ff
+salt 032 a=0444425c b=0dff0f3b y=00000001 e=ff
+salt 033 a=6f1b3fd7 b=14daaf47 y=00000000 e=ff
+salt 034 a=677f941e b=2a7fc2e0 y=00000000 e=ff
+salt 035 a=9656d5d1 b=d176a747 y=00000001 e=ff
+salt 036 a=b656f488 b=703fdd8b y=00000001 e=ff
+salt 037 a=fa51f1cc b=496a6cf8 y=00000001 e=ff
+salt 038 a=9a58bec2 b=3d97b842 y=00000001 e=ff
+salt 039 a=996c3cad b=c1cbe9f1 y=00000001 e=ff
+salt 03a a=224766eb b=1dd65566 y=00000000 e=ff
+salt 03b a=382525bb b=0ed375b2 y=00000000 e=ff
+salt 03c a=6cc5b580 b=94cecffa y=00000000 e=ff
+salt 03d a=eb048522 b=0fbfe6b2 y=00000001 e=ff
+salt 03e a=9e523fc6 b=ecf8f173 y=00000001 e=ff
+salt 03f a=a80beb18 b=7878b42c y=00000001 e=ff
+op saltu c2a4bb74
+saltu 000 a=00000000 b=00000000 y=00000000 e=ff
+saltu 001 a=00000001 b=00000000 y=00000000 e=ff
+saltu 002 a=ffffffff b=00000000 y=00000000 e=ff
+saltu 003 a=7fffffff b=00000000 y=00000000 e=ff
+saltu 004 a=80000000 b=00000001 y=00000000 e=ff
+saltu 005 a=80000001 b=00000001 y=00000000 e=ff
+saltu 006 a=fffffffe b=00000001 y=00000000 e=ff
+saltu 007 a=12345678 b=00000001 y=00000000 e=ff
+saltu 008 a=00000000 b=ffffffff y=00000001 e=ff
+saltu 009 a=00000001 b=ffffffff y=00000001 e=ff
+saltu 00a a=ffffffff b=ffffffff y=00000000 e=ff
+saltu 00b a=7fffffff b=ffffffff y=00000001 e=ff
+saltu 00c a=80000000 b=7fffffff y=00000000 e=ff
+saltu 00d a=80000001 b=7fffffff y=00000000 e=ff
+saltu 00e a=fffffffe b=7fffffff y=00000000 e=ff
+saltu 00f a=12345678 b=7fffffff y=00000001 e=ff
+saltu 010 a=00000000 b=80000000 y=00000001 e=ff
+saltu 011 a=00000001 b=80000000 y=00000001 e=ff
+saltu 012 a=ffffffff b=80000000 y=00000000 e=ff
+saltu 013 a=7fffffff b=80000000 y=00000001 e=ff
+saltu 014 a=80000000 b=80000001 y=00000001 e=ff
+saltu 015 a=80000001 b=80000001 y=00000000 e=ff
+saltu 016 a=fffffffe b=80000001 y=00000000 e=ff
+saltu 017 a=12345678 b=80000001 y=00000001 e=ff
+saltu 018 a=00000000 b=fffffffe y=00000001 e=ff
+saltu 019 a=00000001 b=fffffffe y=00000001 e=ff
+saltu 01a a=ffffffff b=fffffffe y=00000000 e=ff
+saltu 01b a=7fffffff b=fffffffe y=00000001 e=ff
+saltu 01c a=80000000 b=12345678 y=00000000 e=ff
+saltu 01d a=80000001 b=12345678 y=00000000 e=ff
+saltu 01e a=fffffffe b=12345678 y=00000000 e=ff
+saltu 01f a=12345678 b=12345678 y=00000000 e=ff
+saltu 020 a=e38ab58f b=125aed52 y=00000000 e=ff
+saltu 021 a=b1e1dfea b=c9878664 y=00000001 e=ff
+saltu 022 a=102842e1 b=16f9b5bb y=00000001 e=ff
+saltu 023 a=2996761c b=0de53376 y=00000000 e=ff
+saltu 024 a=daff70d3 b=a8445e81 y=00000000 e=ff
+saltu 025 a=5119862b b=5a460e65 y=00000001 e=ff
+saltu 026 a=ead697a0 b=3c73fd91 y=00000000 e=ff
+saltu 027 a=3bfe7251 b=433139eb y=00000001 e=ff
+saltu 028 a=e581164d b=2e5268c9 y=00000000 e=ff
+saltu 029 a=0a2454ec b=978b02b0 y=00000001 e=ff
+saltu 02a a=0c72529e b=8217804e y=00000001 e=ff
+saltu 02b a=31d15161 b=6452ef7f y=00000001 e=ff
+saltu 02c a=0e1f6781 b=bf09e836 y=00000001 e=ff
+saltu 02d a=c3e24f11 b=ca056831 y=00000001 e=ff
+saltu 02e a=876c0db0 b=dd9bd57d y=00000001 e=ff
+saltu 02f a=41b0fa07 b=80f69a9f y=00000001 e=ff
+saltu 030 a=270f3aed b=ca0da244 y=00000001 e=ff
+saltu 031 a=b6e6b1a6 b=7a9a782f y=00000000 e=ff
+saltu 032 a=866fdee0 b=cbcfe719 y=00000001 e=ff
+saltu 033 a=d2b74d6f b=584caca2 y=00000000 e=ff
+saltu 034 a=76c9c38e b=99bcbe92 y=00000001 e=ff
+saltu 035 a=c3b1cd05 b=b83311ad y=00000000 e=ff
+saltu 036 a=9add496e b=4de28256 y=00000000 e=ff
+saltu 037 a=a8a1dcc2 b=f4037e9e y=00000001 e=ff
+saltu 038 a=e1ce9db6 b=7d70d5ca y=00000000 e=ff
+saltu 039 a=9efd63ee b=6297ef6e y=00000000 e=ff
+saltu 03a a=70367ab3 b=5368e563 y=00000000 e=ff
+saltu 03b a=b750f2a1 b=89944243 y=00000000 e=ff
+saltu 03c a=3a58770d b=a3806771 y=00000001 e=ff
+saltu 03d a=42ac0806 b=b63993d0 y=00000001 e=ff
+saltu 03e a=0c39efd1 b=09b93130 y=00000000 e=ff
+saltu 03f a=dc7bf91f b=c8515ed3 y=00000000 e=ff
+END salt

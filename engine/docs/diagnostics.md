@@ -385,7 +385,7 @@ The message is `{part} reached {what} at {pc}, which the model does not run, at 
 `data` holds `op`, `pc`, `reason` and `symbol`. `op` is the op's name. `pc` is its address. `symbol` is the ELF symbol at or below the PC, written `name+0x1c` past its start, or `null`. `reason` is one of these.
 
 - `op`: the core does not model the op.
-- `unaligned`: the op is an `l32ai` or an `s32ri` at an address that is not a multiple of 4, or another load or store whose access is unaligned and one of whose parts faults.
+- `unaligned`: the op is an `l32ai`, an `s32ri` or an `s32c1i` at an address that is not a multiple of 4, or another load or store whose access is unaligned and one of whose parts faults.
 - `litbase`: an `l32r` while `LITBASE` is enabled.
 - `loop_end`: the op is the last of a zero-overhead loop and loops back, and it is a call, `isync`, `waiti` or `rsr.lcount`, which the ISA rules out there.
 

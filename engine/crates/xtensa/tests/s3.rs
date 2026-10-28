@@ -1,17 +1,15 @@
 //! The S3 probe images, run on `Core<Esp32s3>`, against the fixtures the S3 board printed.
 
-use sim_xtensa::{Cause, Config, Core, Cycle, Esp32s3, Sr, Stop, Width};
+use sim_xtensa::{Cause, Config, Core, Cycle, Decoded, Esp32s3, Missing, Op, Sr, Stop, Width};
 
+use crate::common::board::bytes_of;
 use crate::common::elf::Elf;
-use crate::common::s3board::run_probe;
+use crate::common::s3board::{run_answering, run_probe};
 use crate::common::{Fixture, first_difference, read_fixture, sha256_hex};
 use crate::core::{CODE, Flat, RAM, core_at};
 
 const LIMIT: Cycle = Cycle(20_000_000);
 const WOE: u32 = 1 << 18;
-/// Floating-point rows. This core does not run them, and the test answers each call with 0.
-const SERVED: [&str; 3] = ["measure_add_s", "measure_mul_s", "measure_mula_aa_ll"];
-const SERVED_CLASSES: [&str; 3] = ["add.s", "mul.s", "mula.aa.ll"];
 /// The model's nets, not the board medians. `rsr` and `wsr` of `epc1` cost one cycle here, and
 /// the board spends more. A vector costs 4, and no row isolates that entry. The board medians
 /// are 15, 116 and 39.
@@ -112,6 +110,81 @@ fn icounthold_matches_the_s3_board() {
     }
 }
 
+fn assert_matches(probe: &str) {
+    let (fixture, elf) = image(probe);
+    let run = run_probe(&elf, probe, LIMIT, &[]);
+    require_ran(probe, &run);
+    if let Some((line, have, want)) = first_difference(&run.uart, &fixture.body) {
+        panic!("{probe} line {line}: sim printed {have:?}, the board printed {want:?}");
+    }
+    println!("{probe}: {} lines match", fixture.body.lines().count());
+}
+
+#[test]
+fn fpu_matches_the_s3_board() {
+    assert_matches("fpu");
+}
+
+#[test]
+fn mac_matches_the_s3_board() {
+    assert_matches("mac");
+}
+
+#[test]
+fn salt_matches_the_s3_board() {
+    assert_matches("salt");
+}
+
+/// `ee.*` ops are not modeled, so the test carries out the probe's `ee.zero.q` when the core stops
+/// at it with coprocessor 3 on. The fixture's rows show which `CPENABLE` bit each op needs, and the
+/// core's record names the last op that raised the exception.
+#[test]
+fn coprocessor_exceptions_match_the_s3_board() {
+    let (fixture, elf) = image("cop");
+    let mut answered = 0;
+    let run = run_answering(&elf, "cop", LIMIT, &[], |core, stop| {
+        if stop.missing != Missing::Op(Op::EE_ZERO_Q) {
+            return false;
+        }
+        let Some(Decoded::Insn(insn)) = Esp32s3::decode(elf.bytes_at(stop.pc, 3), stop.pc) else {
+            return false;
+        };
+        assert_eq!(
+            core.special(Sr::CpEnable) & 1 << 3,
+            1 << 3,
+            "ee.zero.q stops only with coprocessor 3 on"
+        );
+        core.set_q(insn.fields[0], 0);
+        core.set_pc(stop.pc + u32::from(insn.len));
+        answered += 1;
+        true
+    });
+    require_ran("cop", &run);
+    if let Some((line, have, want)) = first_difference(&run.uart, &fixture.body) {
+        panic!("cop line {line}: sim printed {have:?}, the board printed {want:?}");
+    }
+    let runs = fixture
+        .body
+        .lines()
+        .filter(|line| line.starts_with("ee.zero.q ") && line.contains(" e=ff "))
+        .count();
+    assert_eq!(answered, runs + 1, "the cp=08 row and the zeroing call");
+    let last = fixture
+        .body
+        .lines()
+        .rfind(|line| line.contains(" cp=") && !line.contains(" e=ff "))
+        .unwrap();
+    let name = last.split_whitespace().next().unwrap();
+    let raised = run.core.coprocessor_disabled().unwrap();
+    assert_eq!(raised.op.name(), name);
+    assert_eq!(
+        raised.pc,
+        elf.symbol(&format!("cop_op_{}", name.replace('.', "_")))
+    );
+    let cause = u32::from_str_radix(&last[last.find(" e=").unwrap() + 3..][..2], 16).unwrap();
+    assert_eq!(32 + u32::from(raised.coprocessor), cause);
+}
+
 /// The translation-table line records entries this core does not own, so it is not compared.
 #[test]
 fn unaligned_regions_match_the_s3_board() {
@@ -137,7 +210,7 @@ fn unaligned_regions_match_the_s3_board() {
 #[test]
 fn ccount_rows_match_the_s3_board() {
     let (fixture, elf) = image("ccount");
-    let run = run_probe(&elf, "ccount", LIMIT, &SERVED);
+    let run = run_probe(&elf, "ccount", LIMIT, &[]);
     require_ran("ccount", &run);
 
     let bounds: Vec<(String, u32, u32, u32)> = fixture
@@ -176,12 +249,6 @@ fn ccount_rows_match_the_s3_board() {
     let overhead = rows.iter().find(|row| row.0 == "overhead").unwrap().1;
     let mut bad = Vec::new();
     for (name, delta, exception) in &rows {
-        if SERVED_CLASSES.contains(&name.as_str()) {
-            if *delta != 0 {
-                bad.push(format!("{name} delta {delta}, served rows return 0"));
-            }
-            continue;
-        }
         let net = if name == "overhead" {
             *delta
         } else {
@@ -335,6 +402,35 @@ fn wide_s32i_then_memw_costs_five() {
     assert_eq!(core.run_until(&mut bus, Cycle(20)), Stop::Bus);
     assert_eq!(core.cycle(), Cycle(5));
     assert_eq!(bus.ram.read(RAM, Width::Word), 0x11);
+}
+
+/// An FPU store, a `q` store and a `s32c1i` that stores each count as a store before `memw`, so
+/// the pair costs 5, as `s32i` then `memw` does. A `s32c1i` whose compare fails stores nothing,
+/// and the pair costs 2. No board row times these.
+#[test]
+fn other_stores_then_memw_cost_as_s32i_does() {
+    for (hex, text, scompare1, cycles) in [
+        ("134300", "ssi\tf1, a3, 0", 0, 5),
+        ("34e0cd", "st.qr\tq1, a3, 0", 0, 5),
+        ("22e300", "s32c1i\ta2, a3, 0", 0, 5),
+        ("22e300", "s32c1i\ta2, a3, 0", 1, 2),
+    ] {
+        let mut bus = Flat::new(&format!("{hex}c02000"));
+        let decoded = Esp32s3::decode(&bytes_of(hex), CODE).unwrap();
+        assert_eq!(Esp32s3::render(&decoded), text);
+        let mut core: Core<Esp32s3> = core_at(CODE);
+        core.set_special(Sr::Ps, WOE);
+        core.set_special(Sr::CpEnable, 1 | 1 << 3);
+        core.set_special(Sr::Scompare1, scompare1);
+        core.set_a(2, 0x11);
+        core.set_a(3, RAM);
+        assert_eq!(core.run_until(&mut bus, Cycle(20)), Stop::Bus, "{text}");
+        assert_eq!(
+            core.cycle(),
+            Cycle(cycles),
+            "{text} with SCOMPARE1 {scompare1}"
+        );
+    }
 }
 
 fn placed(parts: &[(usize, &[u8])]) -> String {

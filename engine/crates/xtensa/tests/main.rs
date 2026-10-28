@@ -4,6 +4,7 @@ mod decode;
 mod interrupts;
 mod loops;
 mod ops;
+mod options;
 mod paged;
 mod probes;
 mod s3;
