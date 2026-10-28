@@ -1,9 +1,9 @@
 //! The session and `sim run` for JavaScript, through `wasm-bindgen`. `docs/wasm.md` is the guide.
 //!
 //! Times cross as `bigint` picoseconds, and `finish` and `run` take a `bigint` of unix seconds.
-//! Per-frame data crosses as typed arrays. A diagnostic and the USART list cross as the JSON
-//! text the run folder writes, for the caller to parse. Every failure the engine or the binding
-//! detects throws a `SimError`.
+//! Per-frame data crosses as typed arrays. A diagnostic, the USART list and a display's state
+//! cross as the JSON text the run folder writes, for the caller to parse. Every failure
+//! the engine or the binding detects throws a `SimError`.
 
 use sim_circuit::{Input, Refused, Rejected, Serial as SerialSend, Setting};
 use sim_core::diagnostic::Diagnostic;
@@ -38,7 +38,8 @@ impl From<sim_circuit::Status> for Status {
 /// Why a call failed. The first three are why `open` or `record` made no session, the next seven
 /// why an input changed nothing, then the binding's own checks of an argument's type, a part
 /// name, a level, a baud and a `bigint`, a cursor before a dropped log entry, and `finish` on a
-/// session `open` made.
+/// session `open` made. `display` and `displayImage` throw `unknown_part` for a part that is no
+/// display part.
 #[wasm_bindgen]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Code {
@@ -499,6 +500,31 @@ impl Session {
     ) -> Result<(), SimError> {
         self.inner.forget_edges(u64_of(cursor)?.into());
         Ok(())
+    }
+
+    /// The display part `part` at `now`, as the JSON of its `observations.json` `displays` entry
+    /// without `image` and `sha256`.
+    pub fn display(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "string")] part: &Text,
+    ) -> Result<String, SimError> {
+        Ok(json(&self.panel(part)?.panel()))
+    }
+
+    /// The display part `part`'s frame memory at `now`, as `traces/display-<part>.rgb565` holds
+    /// it.
+    #[wasm_bindgen(js_name = displayImage)]
+    pub fn display_image(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "string")] part: &Text,
+    ) -> Result<Vec<u8>, SimError> {
+        Ok(self.panel(part)?.image())
+    }
+
+    fn panel(&self, part: &Text) -> Result<sim_circuit::Display<'_>, SimError> {
+        self.inner
+            .display(&name(&str_of(part)?)?)
+            .ok_or(SimError::new(Code::UnknownPart))
     }
 
     /// Sets a switch's contact from `ps` on.

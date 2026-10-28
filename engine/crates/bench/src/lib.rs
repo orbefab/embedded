@@ -1,4 +1,4 @@
-//! Times one parsed netlist, and the four committed chip examples.
+//! Times one parsed netlist, and the five committed chip examples.
 //!
 //! The caller supplies the clock. `std::time::Instant` is not available on
 //! `wasm32-unknown-unknown`.
@@ -13,11 +13,12 @@ use sim_core::diagnostic::Severity;
 use sim_core::netlist::{Analysis, Chip, Model, Netlist};
 
 /// Committed examples the benchmark reads at run time.
-pub const EXAMPLES: [&str; 4] = [
+pub const EXAMPLES: [&str; 5] = [
     "atmega-blink",
     "atmega-button",
     "atmega-fade",
     "atmega-analog-serial",
+    "st77916-replay",
 ];
 
 const SERIAL_EXAMPLE: &str = "atmega-analog-serial";

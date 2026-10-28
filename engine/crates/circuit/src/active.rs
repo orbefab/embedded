@@ -7,10 +7,13 @@ pub(crate) mod avr;
 pub(crate) mod replay;
 #[cfg(test)]
 pub(crate) mod script;
+pub(crate) mod st77916;
 
+use sim_core::diagnostic::Diagnostic;
+use sim_core::display::Rectangle;
 use sim_core::i2c::{I2cPhase, I2cRow};
 use sim_core::link::{LinkRow, Record, RecordKind};
-use sim_core::name::Name;
+use sim_core::name::{Name, Ref};
 use sim_core::netlist::{NetId, PartId};
 use sim_core::serial::SerialByte;
 use sim_core::time::Time;
@@ -78,8 +81,8 @@ pub(crate) struct Chip {
     pub(crate) twi: bool,
     /// Whether its core sends records, which go to `link.csv`.
     pub(crate) sends: bool,
-    /// Its SPI target's pins, on a chip that takes `Spi` records.
-    pub(crate) spi_target: Option<SpiTarget>,
+    /// The records it takes.
+    pub(crate) takes: Takes,
     /// The core at power-on.
     pub(crate) core: Core,
 }
@@ -92,11 +95,22 @@ pub(crate) struct SpiTarget {
     pub(crate) sclk: NetId,
 }
 
-impl SpiTarget {
-    fn takes(self, record: &Record) -> bool {
+/// The record pins of a chip: its SPI target's, and the pin that takes `Duty` records. A chip
+/// with neither takes no record.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Takes {
+    pub(crate) spi: Option<SpiTarget>,
+    pub(crate) duty: Option<NetId>,
+}
+
+impl Takes {
+    fn record(self, record: &Record) -> bool {
         match &record.kind {
-            RecordKind::Spi(spi) => spi.nets.cs == self.cs && spi.nets.sclk == self.sclk,
-            RecordKind::Pulses(_) | RecordKind::Duty(_) => false,
+            RecordKind::Spi(spi) => self
+                .spi
+                .is_some_and(|target| spi.nets.cs == target.cs && spi.nets.sclk == target.sclk),
+            RecordKind::Duty(duty) => self.duty == Some(duty.net),
+            RecordKind::Pulses(_) => false,
         }
     }
 }
@@ -128,14 +142,17 @@ pub(crate) struct Stop {
 /// - Each record a core sends ends at a stop with `record` set, and the core holds it from that
 ///   stop until `drain_records` takes it. A core numbers its records from 0, and the count
 ///   carries in its copies.
-/// - `input`, `take`, `deliver` and `drain_records` read nothing but the core and their
-///   arguments, so they take two equal cores to two equal cores. A clone shares only what no
-///   call writes: the AVR core's flash and decoded ops behind an `Arc`, a replay core's
-///   records, and a script core's script.
+/// - A core that takes records makes its display rows only in `take`, at the landing's time,
+///   and holds them until `drain_rows` takes them.
+/// - `input`, `take`, `deliver`, `drain_records` and `drain_rows` read nothing but the core and
+///   their arguments, so they take two equal cores to two equal cores. A clone shares only what
+///   no call writes: the AVR core's flash and decoded ops behind an `Arc`, a replay core's
+///   records, a script core's script, and a panel's frame memory bands until one is written.
 #[derive(Debug)]
 pub(crate) enum Core {
     Avr(Box<avr::Core>),
     SpiReplay(replay::Core),
+    St77916(Box<st77916::Core>),
     #[cfg(test)]
     Script(script::Core),
 }
@@ -145,6 +162,7 @@ impl Clone for Core {
         match self {
             Core::Avr(core) => Core::Avr(core.clone()),
             Core::SpiReplay(core) => Core::SpiReplay(core.clone()),
+            Core::St77916(core) => Core::St77916(core.clone()),
             #[cfg(test)]
             Core::Script(core) => Core::Script(core.clone()),
         }
@@ -155,6 +173,7 @@ impl Clone for Core {
     fn clone_from(&mut self, source: &Self) {
         match (self, source) {
             (Core::Avr(core), Core::Avr(source)) => core.clone_from(source),
+            (Core::St77916(core), Core::St77916(source)) => core.clone_from(source),
             (core, source) => *core = source.clone(),
         }
     }
@@ -165,6 +184,7 @@ impl Core {
         match *self {
             Core::Avr(ref mut core) => core.run_until(limit),
             Core::SpiReplay(ref mut core) => core.run_until(limit),
+            Core::St77916(_) => None,
             #[cfg(test)]
             Core::Script(ref mut core) => core.run_until(limit),
         }
@@ -174,6 +194,7 @@ impl Core {
         match *self {
             Core::Avr(ref core) => core.drive(),
             Core::SpiReplay(ref core) => core.drive(),
+            Core::St77916(ref core) => core.drive(),
             #[cfg(test)]
             Core::Script(ref core) => core.drive(),
         }
@@ -183,7 +204,7 @@ impl Core {
     fn sample(&mut self, at: Time, volts: &[f64]) {
         match *self {
             Core::Avr(ref mut core) => core.sample(at, volts),
-            Core::SpiReplay(_) => unreachable!("a replay never samples"),
+            Core::SpiReplay(_) | Core::St77916(_) => unreachable!("only a clocked core samples"),
             #[cfg(test)]
             Core::Script(ref mut core) => core.sample(at, volts),
         }
@@ -194,6 +215,7 @@ impl Core {
         match *self {
             Core::Avr(ref mut core) => core.input(at, levels),
             Core::SpiReplay(ref mut core) => core.input(at, levels),
+            Core::St77916(ref mut core) => core.input(at, levels),
             #[cfg(test)]
             Core::Script(ref mut core) => core.input(at, levels),
         }
@@ -205,7 +227,7 @@ impl Core {
     fn deliver(&mut self, through: Time, sent: impl FnMut(Frame), saw: impl FnMut(Phase)) {
         match *self {
             Core::Avr(ref mut core) => core.deliver(through, sent, saw),
-            Core::SpiReplay(_) => {}
+            Core::SpiReplay(_) | Core::St77916(_) => {}
             #[cfg(test)]
             Core::Script(ref mut core) => core.deliver(through, sent),
         }
@@ -214,7 +236,7 @@ impl Core {
     /// The records it sent that it still holds, in the order it sent them.
     fn records(&self) -> &[Record] {
         match *self {
-            Core::Avr(_) => &[],
+            Core::Avr(_) | Core::St77916(_) => &[],
             Core::SpiReplay(ref core) => core.records(),
             #[cfg(test)]
             Core::Script(ref core) => core.records(),
@@ -225,7 +247,7 @@ impl Core {
     /// order it sent them.
     fn drain_records(&mut self, through: Time, sent: impl FnMut(Record)) {
         match *self {
-            Core::Avr(_) => {}
+            Core::Avr(_) | Core::St77916(_) => {}
             Core::SpiReplay(ref mut core) => core.drain_records(through, sent),
             #[cfg(test)]
             Core::Script(ref mut core) => core.drain_records(through, sent),
@@ -240,8 +262,19 @@ impl Core {
                 "a chip with no record pins took {} records at {at:?}",
                 records.len()
             ),
+            Core::St77916(ref mut core) => core.take(at, records),
             #[cfg(test)]
             Core::Script(ref mut core) => core.take(at, records),
+        }
+    }
+
+    /// Hands over and drops each display row it made, in the order it made them.
+    fn drain_rows(&mut self, sent: impl FnMut(st77916::Closed)) {
+        match *self {
+            Core::St77916(ref mut core) => core.drain_rows(sent),
+            Core::Avr(_) | Core::SpiReplay(_) => {}
+            #[cfg(test)]
+            Core::Script(_) => {}
         }
     }
 }
@@ -269,6 +302,7 @@ pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
     match kind {
         Active::Atmega328p(mcu) => avr::chip(part, mcu),
         Active::SpiReplay(replay) => replay::chip(part, replay),
+        Active::St77916(panel) => st77916::chip(part, panel),
     }
 }
 
@@ -319,6 +353,8 @@ pub(crate) struct Actives {
     /// The name of each part whose core sends records, in part order. A `LinkRow`'s `sender`
     /// indexes this.
     senders: Vec<Name>,
+    /// The name of each display part, in part order. A `Rectangle`'s `part` indexes this.
+    displays: Vec<Name>,
 }
 
 struct Ahead {
@@ -345,6 +381,7 @@ struct Staging {
     bytes: Vec<Staged>,
     phases: Vec<StagedPhase>,
     records: Vec<LinkRow>,
+    rows: Vec<Rectangle>,
 }
 
 /// Every byte of one chip whose stop bit ended at or before `through` was staged, once, and
@@ -378,6 +415,9 @@ struct Staging {
 /// so a record is staged in the landing at its end, by the commit that also hands it to its
 /// receivers. The committed core then holds no record, and a run again from it makes only
 /// records after its commit.
+///
+/// A display row is made only where a core takes records, in a landing that commits it at
+/// once, and that commit stages it. So the committed core holds no row.
 struct Delivered {
     through: Time,
     /// The index in `Actives::usarts` of the chip's first USART.
@@ -390,6 +430,8 @@ struct Delivered {
     records: Time,
     /// The index in `Actives::senders` of the chip. A chip with none sends no record.
     sender: u16,
+    /// The index in `Actives::displays` of the chip. A chip that is no display makes no row.
+    display: u16,
 }
 
 impl Delivered {
@@ -444,6 +486,25 @@ impl Delivered {
         debug_assert!(after <= to, "a record cursor never goes back");
         self.records = to;
     }
+
+    /// Stages each display row the copy made, all at `at`, and drops it from the copy. Only
+    /// `Ahead::commit` calls this.
+    fn take_rows(&self, core: &mut Core, at: Time, staged: &mut Staging) {
+        let part = self.display;
+        core.drain_rows(|row| {
+            debug_assert_eq!(row.at, at, "a row is made at the landing that commits it");
+            staged.rows.push(Rectangle {
+                at: row.at,
+                part,
+                x0: row.x0,
+                y0: row.y0,
+                x1: row.x1,
+                y1: row.y1,
+                bytes: row.bytes,
+                hash: row.hash,
+            });
+        });
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -481,6 +542,7 @@ impl Ahead {
         };
         self.delivered.deliver(&mut self.core, at, staged);
         self.delivered.take_records(&mut self.core, at, staged);
+        self.delivered.take_rows(&mut self.core, at, staged);
         committed.clone_from(&self.core);
         self.reach = Reach::Twin(at);
     }
@@ -523,6 +585,7 @@ impl Actives {
         let mut usarts = Vec::new();
         let mut twis = Vec::new();
         let mut senders = Vec::new();
+        let mut displays = Vec::new();
         let committed: Vec<Core> = circuit
             .actives
             .iter()
@@ -550,6 +613,7 @@ impl Actives {
                     bytes: 0,
                     records: Time::ZERO,
                     sender: u16::try_from(senders.len()).expect("a run has few senders"),
+                    display: u16::try_from(displays.len()).expect("a run has few displays"),
                 };
                 for &usart in chip.usarts {
                     usarts.push((name(circuit, chip), usart));
@@ -559,6 +623,9 @@ impl Actives {
                 }
                 if chip.sends {
                     senders.push(name(circuit, chip));
+                }
+                if matches!(chip.core, Core::St77916(_)) {
+                    displays.push(name(circuit, chip));
                 }
                 Ahead {
                     core: core.clone(),
@@ -574,6 +641,7 @@ impl Actives {
             usarts,
             twis,
             senders,
+            displays,
         }
     }
 
@@ -600,6 +668,44 @@ impl Actives {
 
     pub(crate) fn cores(&self) -> &[Core] {
         &self.committed
+    }
+
+    pub(crate) fn displays(&self) -> &[Name] {
+        &self.displays
+    }
+
+    /// Each display part's committed panel, in `displays` order.
+    pub(crate) fn panels(&self) -> impl Iterator<Item = &st77916::Core> {
+        self.committed.iter().filter_map(|core| match core {
+            Core::St77916(panel) => Some(&**panel),
+            _ => None,
+        })
+    }
+
+    /// The protocol and wiring warnings of the committed cores, each at its first time.
+    pub(crate) fn warnings(&self, circuit: &Circuit) -> Vec<Diagnostic> {
+        let mut found = Vec::new();
+        for (core, chip) in self.committed.iter().zip(&circuit.actives) {
+            let Core::St77916(panel) = core else {
+                continue;
+            };
+            let part = Ref::Part(name(circuit, chip));
+            for (rule, at) in panel.broke_rules() {
+                found.push(Diagnostic::ChipProtocol {
+                    part: part.clone(),
+                    at,
+                    rule,
+                });
+            }
+            if let Some((at, sender)) = panel.miswired() {
+                found.push(Diagnostic::ChipLinkMiswired {
+                    part: part.clone(),
+                    at,
+                    sender: self.senders[usize::from(sender)].clone(),
+                });
+            }
+        }
+        found
     }
 
     /// Each core's record cursor: every record it sent that ended by then is staged.
@@ -738,7 +844,7 @@ impl Actives {
                     "a held record ends at its sender's stop"
                 );
                 for (list, chip) in incoming.iter_mut().zip(&circuit.actives) {
-                    if chip.spi_target.is_some_and(|target| target.takes(record)) {
+                    if chip.takes.record(record) {
                         list.push(LinkRow {
                             sender: ahead.delivered.sender,
                             record: record.clone(),
@@ -808,6 +914,18 @@ impl Actives {
         let mut records = std::mem::take(&mut self.staged.records);
         records.sort_by(|a, b| self.record_key(a).cmp(&self.record_key(b)));
         records
+    }
+
+    /// Every display row staged since the last call, ordered by time, then by part name, then
+    /// in the order its part made them.
+    pub(crate) fn rows(&mut self) -> Vec<Rectangle> {
+        let mut rows = std::mem::take(&mut self.staged.rows);
+        let displays = &self.displays;
+        rows.sort_by(|a, b| {
+            let key = |row: &Rectangle| (row.at, &displays[usize::from(row.part)]);
+            key(a).cmp(&key(b))
+        });
+        rows
     }
 }
 

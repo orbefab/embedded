@@ -97,6 +97,18 @@ pub fn sends_records(netlist: &serde_json::Value) -> bool {
         .any(|part| part["kind"] == "spi_replay")
 }
 
+/// The names of the display parts of `netlist`, in part order. Today only an `st77916` is one,
+/// so a new display kind adds its kind here.
+pub fn display_parts(netlist: &serde_json::Value) -> Vec<String> {
+    netlist["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|part| part["kind"] == "st77916")
+        .map(|part| part["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
 /// A transient run folder read back. `analog` holds one column of `time.len()` rows per ref in
 /// `refs`. `envelope` holds each column's interval minimums, then its maximums.
 pub struct TransientFolder {
@@ -120,7 +132,8 @@ impl TransientFolder {
 /// Reads the run folder `out` of the transient example `name` and asserts what every one keeps:
 /// its files, with `traces/logic.vcd` exactly when its observations have logic and
 /// `traces/serial.csv` and `traces/i2c.csv` exactly when it has an ATmega328P, which has a
-/// USART and a TWI, `traces/link.csv` exactly when a chip can send records, a row at each
+/// USART and a TWI, `traces/link.csv` exactly when a chip can send records, `traces/display.csv`
+/// and one `traces/display-<part>.rgb565` per part exactly when it has display parts, a row at each
 /// `grid_ps` to `stop_ps`, row 0 equal to `observations.op`, and an envelope that holds both rows
 /// of each interval.
 pub fn transient_folder(name: &str, out: &Path) -> TransientFolder {
@@ -131,28 +144,38 @@ pub fn transient_folder(name: &str, out: &Path) -> TransientFolder {
     let logic = observations.get("logic").is_some();
     let input: serde_json::Value = serde_json::from_slice(&found["netlist.json"]).unwrap();
     let usart = has_usart(&input);
-    let mut expected = vec![
+    let mut expected: Vec<String> = [
         "diagnostics.json",
         "manifest.json",
         "netlist.json",
         "observations.json",
         "traces/analog.f64",
         "traces/envelope.f64",
-    ];
-    if usart {
-        expected.push("traces/i2c.csv");
+    ]
+    .map(String::from)
+    .to_vec();
+    let displays = display_parts(&input);
+    for part in &displays {
+        expected.push(format!("traces/display-{part}.rgb565"));
     }
-    expected.push("traces/index.json");
+    if !displays.is_empty() {
+        expected.push("traces/display.csv".into());
+    }
+    if usart {
+        expected.push("traces/i2c.csv".into());
+    }
+    expected.push("traces/index.json".into());
     if sends_records(&input) {
-        expected.push("traces/link.csv");
+        expected.push("traces/link.csv".into());
     }
     if logic {
-        expected.push("traces/logic.vcd");
+        expected.push("traces/logic.vcd".into());
     }
     if usart {
-        expected.push("traces/serial.csv");
+        expected.push("traces/serial.csv".into());
     }
-    expected.push("traces/time.u64");
+    expected.push("traces/time.u64".into());
+    expected.sort();
     assert_eq!(names, expected, "{name}");
     let index: serde_json::Value = serde_json::from_slice(&found["traces/index.json"]).unwrap();
     assert_eq!(index.get("logic").is_some(), logic, "{name}");

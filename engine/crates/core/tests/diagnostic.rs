@@ -1,5 +1,6 @@
 use sim_core::diagnostic::{
-    AnalysisRule, Diagnostic, Excursion, ScheduleRule, Severity, Solve, ValueRule, WaveformRule,
+    AnalysisRule, Diagnostic, Excursion, ProtocolRule, ScheduleRule, Severity, Solve, ValueRule,
+    WaveformRule,
 };
 use sim_core::name::{Name, NameError, Ref};
 use sim_core::time::Time;
@@ -127,6 +128,16 @@ fn samples() -> Vec<Diagnostic> {
             value: 1500,
             rule: WaveformRule::TooClose,
         },
+        Diagnostic::ChipProtocol {
+            part: part("lcd1"),
+            at: Time::from_ps(4_000),
+            rule: ProtocolRule::SpiContinuation,
+        },
+        Diagnostic::ChipLinkMiswired {
+            part: part("lcd1"),
+            at: Time::from_ps(6_000),
+            sender: name("rp1"),
+        },
     ]
 }
 
@@ -164,7 +175,7 @@ fn codes_are_unique_and_match_the_grammar() {
         assert!(is_code(code), "{code}");
         assert!(seen.insert(code), "duplicate code {code}");
     }
-    assert_eq!(seen.len(), 22);
+    assert_eq!(seen.len(), 24);
 }
 
 #[test]
@@ -196,11 +207,16 @@ fn severity_refs_and_time_follow_the_variant() {
             "trace.too_large",
             "chip.unsettled",
             "netlist.waveform",
+            "chip.protocol",
+            "chip.link_miswired",
         ]
     );
     for diagnostic in &found {
         let code = diagnostic.code();
-        let warning = code == "net.floating" || code.starts_with("rating.");
+        let warning = code == "net.floating"
+            || code.starts_with("rating.")
+            || code == "chip.protocol"
+            || code == "chip.link_miswired";
         assert_eq!(diagnostic.severity() == Severity::Warning, warning);
         if code.starts_with("solver.") || code == "rating.current" {
             assert_eq!(diagnostic.at(), Some(Time::ZERO));
@@ -208,6 +224,10 @@ fn severity_refs_and_time_follow_the_variant() {
             assert_eq!(diagnostic.at(), Some(Time::from_ps(5)));
         } else if code == "chip.unsettled" {
             assert_eq!(diagnostic.at(), Some(Time::from_ps(3_000)));
+        } else if code == "chip.protocol" {
+            assert_eq!(diagnostic.at(), Some(Time::from_ps(4_000)));
+        } else if code == "chip.link_miswired" {
+            assert_eq!(diagnostic.at(), Some(Time::from_ps(6_000)));
         } else {
             assert_eq!(diagnostic.at(), None);
         }
@@ -307,6 +327,16 @@ fn severity_refs_and_time_follow_the_variant() {
     assert_eq!(
         unsettled,
         r##"{"code":"chip.unsettled","severity":"error","refs":["#u1","#u2"],"t_ps":3000,"message":"the chips kept changing state for 8 solves at 3000 ps","data":{"rounds":8}}"##
+    );
+    let protocol = serde_json::to_string(by_code(&found, "chip.protocol")).unwrap();
+    assert_eq!(
+        protocol,
+        r##"{"code":"chip.protocol","severity":"warning","refs":["#lcd1"],"t_ps":4000,"message":"#lcd1 dropped a transfer that broke rule spi_continuation at 4000 ps, the first time","data":{"rule":"spi_continuation"}}"##
+    );
+    let miswired = serde_json::to_string(by_code(&found, "chip.link_miswired")).unwrap();
+    assert_eq!(
+        miswired,
+        r##"{"code":"chip.link_miswired","severity":"warning","refs":["#lcd1"],"t_ps":6000,"message":"#lcd1 dropped an SPI transaction from #rp1 whose data lanes are not on its own data pins at 6000 ps, the first time","data":{"sender":"rp1"}}"##
     );
     let waveform = serde_json::to_string(by_code(&found, "netlist.waveform")).unwrap();
     assert!(

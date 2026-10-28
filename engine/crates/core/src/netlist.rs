@@ -262,6 +262,7 @@ impl Model {
             Model::Chip(Chip::Ne555(_)) => &Ne555::PINS,
             Model::Chip(Chip::Atmega328p(_)) => &Atmega328p::PINS,
             Model::Chip(Chip::SpiReplay(_)) => &SpiReplay::PINS,
+            Model::Chip(Chip::St77916(_)) => &St77916::PINS,
         }
     }
 
@@ -318,6 +319,7 @@ impl Model {
             Model::Chip(Chip::Ne555(n)) => &n.pins,
             Model::Chip(Chip::Atmega328p(m)) => &m.pins,
             Model::Chip(Chip::SpiReplay(r)) => &r.pins,
+            Model::Chip(Chip::St77916(p)) => &p.pins,
         }
     }
 
@@ -854,6 +856,7 @@ pub enum Chip {
     Ne555(Box<Ne555>),
     Atmega328p(Box<Atmega328p>),
     SpiReplay(Box<SpiReplay>),
+    St77916(Box<St77916>),
 }
 
 /// An ATmega328P in its 28-pin DIP, running `firmware` from power-on. Microchip DS40002061B.
@@ -911,6 +914,23 @@ pub struct SpiReplay {
 
 impl SpiReplay {
     pub const PINS: [&'static str; 8] = ["VCC", "GND", "CS", "SCLK", "D0", "D1", "D2", "D3"];
+}
+
+/// A 360 by 360 QSPI panel controller, an active chip with no clock of its own. It takes the
+/// `Spi` records on its `CS` and `SCLK` nets and the `Duty` records on `BLK`. It reads `RST`
+/// through `input_threshold`, fractions of its supply, and drives `TE` low through `output`
+/// from `VCC` and into `GND` for the whole run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct St77916 {
+    pub pins: [NetId; 11],
+    pub output: OutputStage,
+    pub input_threshold: Threshold,
+}
+
+impl St77916 {
+    pub const PINS: [&'static str; 11] = [
+        "VCC", "GND", "CS", "SCLK", "D0", "D1", "D2", "D3", "RST", "TE", "BLK",
+    ];
 }
 
 /// One transaction of a `spi_replay`: its phases, then `data` on `lanes`, from `at` to `end`.

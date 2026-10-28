@@ -117,6 +117,9 @@ pub struct Duty {
     /// Below 32.
     pub resolution: u8,
     pub hz: u32,
+    /// The net of the sender's pin when it sent. A receiver whose duty pin sits on it takes the
+    /// record.
+    pub net: NetId,
 }
 
 /// Why [`Link::csv`] cannot write a row.
@@ -301,6 +304,7 @@ mod tests {
                         duty: 512,
                         resolution: 10,
                         hz: 5000,
+                        net: NetId::GROUND,
                     }),
                 },
             },
@@ -349,6 +353,7 @@ mod tests {
                         duty: 1,
                         resolution,
                         hz: 1,
+                        net: NetId::GROUND,
                     }),
                 },
             }],

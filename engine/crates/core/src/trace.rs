@@ -11,10 +11,13 @@
 //!   serial.csv    when a chip in the netlist has a USART, see `serial`
 //!   i2c.csv       when a chip in the netlist has a TWI, see `i2c`
 //!   link.csv      when a chip in the netlist can send records, see `link`
+//!   display.csv   when the netlist has a display part, see `display`
+//!   display-<part>.rgb565
 //! ```
 
 use serde::Serialize;
 
+use crate::display::Displays;
 use crate::finite::Finite;
 use crate::i2c::I2c;
 use crate::link::Link;
@@ -48,6 +51,7 @@ pub struct Trace {
     serial: Option<Serial>,
     i2c: Option<I2c>,
     link: Option<Link>,
+    displays: Option<Displays>,
 }
 
 /// Running minimum and maximum of the interval open since the last row, one pair per column.
@@ -107,6 +111,7 @@ impl Trace {
             serial: None,
             i2c: None,
             link: None,
+            displays: None,
         }
     }
 
@@ -139,6 +144,13 @@ impl Trace {
     pub fn attach_link(&mut self, link: Link) {
         assert!(self.link.is_none(), "link is attached once");
         self.link = Some(link);
+    }
+
+    /// What the display parts showed over the run, attached once at its end, after an error
+    /// too.
+    pub fn attach_displays(&mut self, displays: Displays) {
+        assert!(self.displays.is_none(), "displays are attached once");
+        self.displays = Some(displays);
     }
 
     /// Folds a non-row accepted step into the interval open since the last row. The engine
@@ -257,7 +269,16 @@ impl Trace {
         if let Some(link) = &self.link {
             files.push((LINK, link.csv().expect("a duty resolution is below 32")));
         }
+        if let Some(displays) = &self.displays {
+            files.push((DISPLAY, displays.csv()));
+        }
         files
+    }
+
+    /// Each pixel panel's frame memory file under `traces/`, with its bytes. Their names come
+    /// from part names, so they are not in `files`.
+    pub(crate) fn images(&self) -> impl Iterator<Item = (String, &[u8])> {
+        self.displays.iter().flat_map(Displays::images)
     }
 
     fn index(&self) -> Index<'_> {
@@ -319,6 +340,7 @@ const VCD: &str = "logic.vcd";
 const SERIAL: &str = "serial.csv";
 const I2C: &str = "i2c.csv";
 const LINK: &str = "link.csv";
+const DISPLAY: &str = "display.csv";
 
 fn unit(reference: &Ref) -> &'static str {
     match reference {

@@ -129,6 +129,7 @@ pub(super) fn reached(outcome: &Outcome) -> Time {
         op,
         switches,
         logic,
+        ..
     } = &outcome.observations
     else {
         panic!("{:?}", outcome.observations);

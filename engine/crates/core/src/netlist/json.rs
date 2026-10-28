@@ -8,6 +8,7 @@ use serde::{Deserialize, Deserializer};
 mod atmega328p;
 mod potentiometer;
 mod spi_replay;
+mod st77916;
 mod waveform;
 
 use super::{
@@ -22,6 +23,7 @@ use crate::name::{Name, NameError, Ref};
 use crate::time::Time;
 use atmega328p::{WireAtmega328p, resolve_atmega328p};
 use spi_replay::{WireSpiReplay, resolve_spi_replay};
+use st77916::{WireSt77916, resolve_st77916};
 use waveform::{CURRENT, VOLTAGE, WireWaveform, resolve_waveform};
 
 pub(crate) use waveform::{AMPERE, VOLT};
@@ -113,6 +115,7 @@ enum WirePart {
     Ne555(Box<WireNe555>),
     Atmega328p(Box<WireAtmega328p>),
     SpiReplay(Box<WireSpiReplay>),
+    St77916(Box<WireSt77916>),
 }
 
 #[derive(Deserialize)]
@@ -543,6 +546,7 @@ fn resolve_part(
         WirePart::Ne555(chip) => &chip.name,
         WirePart::Atmega328p(chip) => &chip.name,
         WirePart::SpiReplay(chip) => &chip.name,
+        WirePart::St77916(chip) => &chip.name,
     };
     let path = format!("parts[{index}].name");
     let name = match Name::new(raw_name) {
@@ -701,6 +705,8 @@ fn resolve_part(
             .map(|chip| Model::Chip(Chip::Atmega328p(Box::new(chip)))),
         WirePart::SpiReplay(chip) => resolve_spi_replay(&name, &part_ref, *chip, nets, out)
             .map(|chip| Model::Chip(Chip::SpiReplay(Box::new(chip)))),
+        WirePart::St77916(chip) => resolve_st77916(&name, &part_ref, *chip, nets, out)
+            .map(|chip| Model::Chip(Chip::St77916(Box::new(chip)))),
     };
     if duplicate || reserved {
         None

@@ -7,7 +7,7 @@ use sim_core::link::{Record, RecordKind, Spi, SpiNets};
 use sim_core::netlist::{PartId, SpiReplay, Value};
 use sim_core::time::Time;
 
-use super::{Chip, Drive, Output, Stage, Stop};
+use super::{Chip, Drive, Output, Stage, Stop, Takes};
 
 const VCC: usize = 0;
 const GND: usize = 1;
@@ -93,7 +93,7 @@ pub(crate) fn chip(part: PartId, replay: &SpiReplay) -> Chip {
         usarts: &[],
         twi: false,
         sends: true,
-        spi_target: None,
+        takes: Takes::default(),
         core: super::Core::SpiReplay(Core {
             records,
             made: 0,

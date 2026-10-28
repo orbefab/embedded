@@ -1,6 +1,7 @@
 mod active;
 mod avr;
 mod breakpoints;
+mod display;
 mod events;
 mod failures;
 mod fixtures;

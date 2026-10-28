@@ -286,6 +286,36 @@ function assertLinkRows(label, json, folders) {
   return want.trim().split('\n').length - 1;
 }
 
+// Each display part of `json` reads from `session` as the native folder in `dir` ends: its
+// `display()` is its `observations.json` `displays` entry without `image` and `sha256`, and its
+// `displayImage()` is the native frame memory file byte for byte, whose SHA-256 the entry names.
+// A part that is no display part throws `unknown_part`. Returns how many display parts it read.
+function assertDisplays(wasm, label, session, json, dir) {
+  const parts = JSON.parse(json).parts;
+  const displays = parts.filter((part) => part.kind === 'st77916');
+  if (displays.length === 0) {
+    return 0;
+  }
+  const observed = JSON.parse(readFileSync(join(dir, 'observations.json'), 'utf8')).displays;
+  assert.deepEqual(Object.keys(observed), displays.map((part) => part.name).sort(), `${label}: displays`);
+  for (const { name } of displays) {
+    const { image, sha256, ...panel } = observed[name];
+    assert.deepEqual(JSON.parse(session.display(name)), panel, `${label}: display(${name})`);
+    const got = Buffer.from(session.displayImage(name));
+    assert.ok(got.equals(readFileSync(join(dir, image))), `${label}: displayImage(${name}) is ${image}`);
+    assert.equal(createHash('sha256').update(got).digest('hex'), sha256, `${label}: ${name}'s SHA-256`);
+  }
+  const other = parts.find((part) => part.kind !== 'st77916').name;
+  for (const call of [(part) => session.display(part), (part) => session.displayImage(part)]) {
+    assert.throws(
+      () => call(other),
+      (error) => error instanceof wasm.SimError && error.code === 'unknown_part',
+      `${label}: ${other} is no display part`,
+    );
+  }
+  return displays.length;
+}
+
 // Warnings `diagnostics.json` holds except `trace.row_interpolated` and every error. That is
 // the list `diagnostics()` returns at the stop.
 function sessionWarnings(dir) {
@@ -314,6 +344,7 @@ function example(wasm, job, json, native) {
     sessionWarnings(native),
     `${job.name}: diagnostics() at the stop`,
   );
+  const displays = assertDisplays(wasm, job.name, session, json, native);
   const finished = session.finish(0n);
   assertSameFolder(`${job.name} finish`, finished, native);
   const links = assertLinkRows(job.name, json, [
@@ -355,7 +386,8 @@ function example(wasm, job, json, native) {
   );
   once.free();
   const linkText = links > 0 ? `, ${links} link rows from the event list` : '';
-  const counts = `${read.probes.length} probes on rows, ${read.rows.length} serial rows, ${read.edges.length} logic changes${linkText}`;
+  const displayText = displays > 0 ? `, ${displays} display read as native` : '';
+  const counts = `${read.probes.length} probes on rows, ${read.rows.length} serial rows, ${read.edges.length} logic changes${linkText}${displayText}`;
   return `run and finish are sim run, ${counts}`;
 }
 
@@ -535,6 +567,8 @@ function argumentChecks(wasm, examples) {
     ['applySerial ps', 'bigint', (v) => serial.applySerial('rv1', v, 9600, new Uint8Array([1]))],
     ['applySerial baud', 'number', (v) => serial.applySerial('rv1', 0n, v, new Uint8Array([1]))],
     ['applySerial bytes', 'Uint8Array', (v) => serial.applySerial('rv1', 0n, 9600, v)],
+    ['display', 'string', (v) => serial.display(v)],
+    ['displayImage', 'string', (v) => serial.displayImage(v)],
     ['finish', 'bigint', (v) => wasm.Session.record(steps).finish(v)],
     ['Folder.file', 'string', (v) => folder.file(v)],
   ];
@@ -559,6 +593,8 @@ function argumentChecks(wasm, examples) {
     BAD_NAMES,
     'bad_name',
   );
+  refuses('display', (part) => serial.display(part), BAD_NAMES, 'bad_name');
+  refuses('displayImage', (part) => serial.displayImage(part), BAD_NAMES, 'bad_name');
   refuses('applyLevel si', (si) => serial.applyLevel('rv1', 0n, si), [NaN, Infinity], 'not_finite');
   refuses(
     'applySerial baud',

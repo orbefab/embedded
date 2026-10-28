@@ -15,7 +15,7 @@ A diagnostic is one JSON object. The fields are written in this order.
 
 The run sorts diagnostics by `t_ps`, then `code`, then `refs`, then the JSON bytes of the whole object. A `null` time sorts before a number, so every input finding precedes a solver finding.
 
-A session's `diagnostics()` returns the warnings that list would hold if the session ended now. The folder's warnings are `net.floating`, `trace.row_interpolated`, `rating.current` and `rating.power`. `diagnostics()` returns `net.floating`, `rating.current` and `rating.power`. It leaves out `trace.row_interpolated`, because that warning names a grid row whose probe failed twice, and only a recorded trace defines those rows. An open session has no grid. The accepted steps do not depend on the grid, and neither do the warnings `diagnostics()` returns. Every other code on this page is an error. The error that ends a run is `fault` on the session, and `diagnostics()` does not return it. [engine.md](engine.md#sessions) says when the samples are taken.
+A session's `diagnostics()` returns the warnings that list would hold if the session ended now. The folder's warnings are `net.floating`, `trace.row_interpolated`, `rating.current`, `rating.power`, `chip.protocol` and `chip.link_miswired`. `diagnostics()` returns all but `trace.row_interpolated`. It leaves out `trace.row_interpolated`, because that warning names a grid row whose probe failed twice, and only a recorded trace defines those rows. An open session has no grid. The accepted steps do not depend on the grid, and neither do the warnings `diagnostics()` returns. Every other code on this page is an error. The error that ends a run is `fault` on the session, and `diagnostics()` does not return it. [engine.md](engine.md#sessions) says when the samples are taken.
 
 A run whose diagnostics are all warnings still writes the operating point. A run with an error writes the observations it reached, as [run-folder.md](run-folder.md#observationsjson) says. That is `{}` when nothing solved, as at t = 0. A transient keeps its grid rows before the error, and its last accepted step is the last row. Its observations end there. A warning found before that error is kept, including a rating sampled on any accepted step before it.
 
@@ -329,6 +329,28 @@ Severity `error`. Refs are the chips whose state changed on the last solve, in p
 The message is `the chips kept changing state for {rounds} solves at {t_ps} ps`.
 
 `data` holds `rounds`, which is 8. At one time the run solves, lets every chip react to the levels on that solve, and solves again while any state changed. A chip whose output drives its own inputs with nothing to slow it never agrees with its levels. An NE555 with OUT wired to TRIG and THRES is one: low sets the latch and high resets it. So are two NE555s, each OUT on the other's TRIG, that reset at one time. So is a relay whose `nc` feeds its own coil, when that coil is powered at t = 0. Open, the coil current is above pull-in. Closed, it is below drop-out. When the coil is powered later, it holds its current across each move and the contact buzzes. At t = 0 `observations.json` is `{}`.
+
+## chip.protocol
+
+Severity `warning`. Refs are the chip that dropped a transaction. `t_ps` is the end of the first transaction it dropped under that rule.
+
+The message is `{part} dropped a transfer that broke rule {rule} at {t_ps} ps, the first time`.
+
+`data` holds `rule`. A chip that takes `Spi` records drops one that breaks its protocol, and the run reports each rule once per part, at its first time. An `st77916` has three rules, which [netlist.md](netlist.md#st77916) describes.
+
+| `rule` | The dropped transaction |
+| --- | --- |
+| `command` | Its command word is not 32 bits, its opcode is not the one that command takes, its data lanes do not match that opcode on a transaction that carries bytes, or its register command is short of bytes or out of range. A continuation whose data lanes do not match drops that transaction's data, and a release still closes the open command. Opcode 0x02 writes a register on one lane. Opcode 0x32 writes pixels on four lanes, and only `RAMWR` and `RAMWRC` take it. |
+| `spi_continuation` | It has no phases, and no transaction left a command open with `CS` held. |
+| `pixel_format` | It starts a pixel write while the pixel format is not 16 bits a pixel. |
+
+## chip.link_miswired
+
+Severity `warning`. Refs are the chip that dropped a transaction. `t_ps` is the end of the first transaction it dropped.
+
+The message is `{part} dropped an SPI transaction from #{sender} whose data lanes are not on its own data pins at {t_ps} ps, the first time`.
+
+`data` holds `sender`, the part name of the chip that sent it. A transaction goes to every chip whose `CS` and `SCLK` are on the sender's. A lane it uses, up to the most lanes any of its phases or its data take, must be on the receiver's pin of the same number, `D0` to `D3`. Otherwise the receiver drops it, and the run reports the first such drop once per part.
 
 ## trace.too_large
 

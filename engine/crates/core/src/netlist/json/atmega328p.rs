@@ -39,7 +39,7 @@ struct WireFuses {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct WireThreshold {
+pub(super) struct WireThreshold {
     low: WireValue,
     high: WireValue,
 }
@@ -165,7 +165,7 @@ fn resolve_fuses(part: &Ref, wire: &WireFuses, out: &mut Vec<Diagnostic>) -> Opt
     })
 }
 
-fn resolve_threshold(
+pub(super) fn resolve_threshold(
     part: &Ref,
     [low_field, high_field]: [&'static str; 2],
     wire: WireThreshold,

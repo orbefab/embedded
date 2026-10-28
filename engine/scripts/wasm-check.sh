@@ -296,6 +296,8 @@ for line in \
   'edgeCursor(): bigint;' \
   'forgetEdges(cursor: bigint): void;' \
   'forgetSerial(cursor: bigint): void;' \
+  'display(part: string): string;' \
+  'displayImage(part: string): Uint8Array;' \
   'applyContact(part: string, ps: bigint, closed: boolean): Applied;' \
   'applyLevel(part: string, ps: bigint, si: number): Applied;' \
   'applySerial(part: string, ps: bigint, baud: number, bytes: Uint8Array): Applied;' \

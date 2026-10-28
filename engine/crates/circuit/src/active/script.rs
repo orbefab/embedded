@@ -5,12 +5,12 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use sim_core::link::{Cs, Lanes, LinkRow, Record, RecordKind, Spi, SpiNets};
+use sim_core::link::{Cs, Duty, Lanes, LinkRow, Record, RecordKind, Spi, SpiNets};
 use sim_core::name::Name;
 use sim_core::netlist::NetId;
 use sim_core::time::Time;
 
-use super::{Chip, Drive, Frame, Output, SpiTarget, Stage, Stop};
+use super::{Chip, Drive, Frame, Output, SpiTarget, Stage, Stop, Takes};
 use crate::mna::Node;
 use crate::watch::{Signal, Watch};
 
@@ -21,6 +21,9 @@ pub(crate) enum Op {
     Sample(Sample),
     /// A `Spi` record that starts and ends here, whose one data byte is the tag.
     Send(u8),
+    /// A `Duty` record of this many of 1024 steps at 5 kHz on `out`'s net, which starts and
+    /// ends here.
+    Duty(u32),
     /// `count` console bytes from `first` up, which all start and end here.
     Bytes {
         first: u8,
@@ -74,6 +77,8 @@ pub(crate) struct Core {
     name: Option<&'static str>,
     /// The nets its records name.
     bus: Option<SpiTarget>,
+    /// The net of `out`, which its `Duty` records name.
+    out: NetId,
     /// How many records it has sent.
     sent: u64,
     sends: Sends,
@@ -117,8 +122,8 @@ pub(crate) fn chip(
         usarts: &[],
         twi: false,
         sends: false,
-        spi_target: None,
-        core: super::Core::Script(Core::new(script, echo)),
+        takes: Takes::default(),
+        core: super::Core::Script(Core::new(script, echo, out)),
     }
 }
 
@@ -145,7 +150,7 @@ pub(crate) fn sends(chip: &mut Chip) -> Sends {
 
 /// `chip` taking each `Spi` record sent on `bus`.
 pub(crate) fn receiver(mut chip: Chip, bus: SpiTarget) -> Chip {
-    chip.spi_target = Some(bus);
+    chip.takes.spi = Some(bus);
     chip
 }
 
@@ -157,7 +162,7 @@ pub(crate) fn console(mut chip: Chip, name: &'static str) -> Chip {
 }
 
 impl Core {
-    fn new(script: Vec<(Time, Op)>, echo: Option<u64>) -> Core {
+    fn new(script: Vec<(Time, Op)>, echo: Option<u64>, out: NetId) -> Core {
         assert!(script.is_sorted_by_key(|&(at, _)| at));
         let mut core = Core {
             script: script.into(),
@@ -170,6 +175,7 @@ impl Core {
             drive: [Drive::Off],
             name: None,
             bus: None,
+            out,
             sent: 0,
             sends: Sends::default(),
             records: Vec::new(),
@@ -208,7 +214,19 @@ impl Core {
                 Op::Drive(drive) => self.drive = [drive],
                 Op::Sample(sample) => self.sampling = Some(sample),
                 Op::Send(tag) => {
-                    self.send(at, tag);
+                    let bus = self.bus.expect("a sender has a bus");
+                    self.send(at, RecordKind::Spi(spi(bus, tag)));
+                    record = true;
+                }
+                Op::Duty(duty) => {
+                    let net = self.out;
+                    let duty = Duty {
+                        duty,
+                        resolution: 10,
+                        hz: 5000,
+                        net,
+                    };
+                    self.send(at, RecordKind::Duty(duty));
                     record = true;
                 }
                 Op::Bytes { first, count } => {
@@ -228,25 +246,13 @@ impl Core {
         })
     }
 
-    fn send(&mut self, at: Time, tag: u8) {
-        let bus = self.bus.expect("a sender has a bus");
+    fn send(&mut self, at: Time, kind: RecordKind) {
         self.records.push(Record {
             seq: self.sent,
             start: at,
             end: at,
             pin: "CS",
-            kind: RecordKind::Spi(Spi {
-                phases: Vec::new(),
-                lanes: Lanes::One,
-                data: vec![tag].into(),
-                clock_hz: 1,
-                cs: Cs::Released,
-                nets: SpiNets {
-                    cs: bus.cs,
-                    sclk: bus.sclk,
-                    data: [None; 4],
-                },
-            }),
+            kind,
         });
         self.sent += 1;
         self.sends.0.fetch_add(1, Ordering::Relaxed);
@@ -330,6 +336,22 @@ impl Core {
     }
 }
 
+/// One byte, `tag`, on `bus`, on a lane the script names no pin for.
+fn spi(bus: SpiTarget, tag: u8) -> Spi {
+    Spi {
+        phases: Vec::new(),
+        lanes: Lanes::One,
+        data: vec![tag].into(),
+        clock_hz: 1,
+        cs: Cs::Released,
+        nets: SpiNets {
+            cs: bus.cs,
+            sclk: bus.sclk,
+            data: [None; 4],
+        },
+    }
+}
+
 pub(crate) fn eager(mut chip: Chip) -> Chip {
     script(&mut chip).eager = true;
     chip
@@ -351,7 +373,7 @@ mod tests {
             ),
             (Time::from_ps(40), Op::Drive(Drive::Off)),
         ];
-        Core::new(script, None)
+        Core::new(script, None, NetId::GROUND)
     }
 
     #[test]

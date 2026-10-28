@@ -106,6 +106,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "relay-switch",
             "rl-step",
             "spi-replay",
+            "st77916-replay",
             "v-pulse-rc",
             "v-serial",
             "v-steps",

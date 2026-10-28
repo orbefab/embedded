@@ -10,7 +10,7 @@
 //! ```
 //!
 //! `observations.json` holds what the run reached: `{}` when nothing solved,
-//! `{"op"}` for an operating point, and `{"end_ps", "op", "switches", "logic"?}`
+//! `{"op"}` for an operating point, and `{"end_ps", "op", "switches", "logic"?, "displays"?}`
 //! for a transient that solved t = 0, whether or not it reached its stop.
 
 mod replace;
@@ -22,6 +22,7 @@ use serde::{Serialize, Serializer};
 use sha2::{Digest, Sha256};
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::display::Observed;
 use crate::finite::Finite;
 use crate::logic::LogicSummary;
 use crate::name::Ref;
@@ -108,6 +109,8 @@ pub enum Observations {
         /// One summary per chip signal up to `end`. `None` without a chip. Every change is
         /// in the trace's `Logic`.
         logic: Option<LogicSummary>,
+        /// Each display part's state at `end`, by name. `None` without a display part.
+        displays: Option<BTreeMap<String, Observed>>,
     },
 }
 
@@ -141,7 +144,7 @@ impl Observations {
     }
 }
 
-/// `{}`, `{"op"}`, or `{"end_ps", "op", "switches", "logic"?}`.
+/// `{}`, `{"op"}`, or `{"end_ps", "op", "switches", "logic"?, "displays"?}`.
 impl Serialize for Observations {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
@@ -156,13 +159,18 @@ impl Serialize for Observations {
                 op,
                 switches,
                 logic,
+                displays,
             } => {
-                let mut map = serializer.serialize_map(Some(3 + usize::from(logic.is_some())))?;
+                let entries = 3 + usize::from(logic.is_some()) + usize::from(displays.is_some());
+                let mut map = serializer.serialize_map(Some(entries))?;
                 map.serialize_entry("end_ps", end)?;
                 map.serialize_entry("op", op)?;
                 map.serialize_entry("switches", switches)?;
                 if let Some(logic) = logic {
                     map.serialize_entry("logic", logic)?;
+                }
+                if let Some(displays) = displays {
+                    map.serialize_entry("displays", displays)?;
                 }
                 map.end()
             }
@@ -243,6 +251,9 @@ pub fn render(
     if let Some(trace) = results.trace() {
         for (name, bytes) in trace.files() {
             files.insert(format!("traces/{name}"), bytes);
+        }
+        for (name, bytes) in trace.images() {
+            files.insert(format!("traces/{name}"), bytes.to_vec());
         }
     }
     RunFolder { files }
@@ -379,6 +390,7 @@ mod tests {
             op: OpPoint { values },
             switches: BTreeMap::from([("#sw1".parse().unwrap(), Vec::new())]),
             logic: None,
+            displays: None,
         };
         assert_eq!(
             serde_json::to_string(&observations).unwrap(),

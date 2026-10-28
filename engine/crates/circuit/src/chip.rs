@@ -11,7 +11,7 @@ mod relay;
 pub(crate) use relay::coil as relay_coil;
 
 use sim_core::logic::Level;
-use sim_core::netlist::{Atmega328p, Chip, Model, Ne555, PartId, Relay, SpiReplay};
+use sim_core::netlist::{Atmega328p, Chip, Model, Ne555, PartId, Relay, SpiReplay, St77916};
 
 use crate::mna::{Layout, Stamp, Unknowns};
 use crate::watch::Watch;
@@ -43,6 +43,7 @@ pub(crate) enum Passive<'n> {
 pub(crate) enum Active<'n> {
     Atmega328p(&'n Atmega328p),
     SpiReplay(&'n SpiReplay),
+    St77916(&'n St77916),
 }
 
 pub(crate) fn kind(chip: &Chip) -> Kind<'_> {
@@ -50,6 +51,7 @@ pub(crate) fn kind(chip: &Chip) -> Kind<'_> {
         Chip::Ne555(ne555) => Kind::Passive(Passive::Ne555(ne555)),
         Chip::Atmega328p(mcu) => Kind::Active(Active::Atmega328p(mcu)),
         Chip::SpiReplay(replay) => Kind::Active(Active::SpiReplay(replay)),
+        Chip::St77916(panel) => Kind::Active(Active::St77916(panel)),
     }
 }
 
@@ -73,7 +75,7 @@ pub(crate) fn unknowns(chip: &Chip) -> Unknowns {
             internal_nodes: 1,
             ..Unknowns::default()
         },
-        Chip::Atmega328p(_) | Chip::SpiReplay(_) => Unknowns::default(),
+        Chip::Atmega328p(_) | Chip::SpiReplay(_) | Chip::St77916(_) => Unknowns::default(),
     }
 }
 
@@ -81,7 +83,7 @@ pub(crate) fn unknowns(chip: &Chip) -> Unknowns {
 /// active chip from its core's drive image. A Newton call changes neither.
 pub(crate) fn reads_iterate(chip: &Chip) -> bool {
     match chip {
-        Chip::Ne555(_) | Chip::Atmega328p(_) | Chip::SpiReplay(_) => false,
+        Chip::Ne555(_) | Chip::Atmega328p(_) | Chip::SpiReplay(_) | Chip::St77916(_) => false,
     }
 }
 
@@ -144,5 +146,6 @@ pub(crate) fn dc_paths(chip: &Chip) -> &'static [(usize, usize)] {
         Chip::Ne555(_) => &ne555::DC_PATHS,
         Chip::Atmega328p(_) => &crate::active::avr::DC_PATHS,
         Chip::SpiReplay(_) => &crate::active::replay::DC_PATHS,
+        Chip::St77916(_) => &crate::active::st77916::DC_PATHS,
     }
 }

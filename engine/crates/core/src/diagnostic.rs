@@ -115,6 +115,20 @@ pub enum WaveformRule {
     Equal,
 }
 
+/// Which rule of its protocol a chip saw broken. The chip drops what broke it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtocolRule {
+    /// A command the model does not run: a command word that is not 32 bits, an opcode other
+    /// than the one that command takes, data lanes that do not match that opcode, too few
+    /// parameter bytes, or a window past the panel.
+    Command,
+    /// A data-only SPI transaction with no open command.
+    SpiContinuation,
+    /// Pixels while the pixel format is not 16 bits.
+    PixelFormat,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Diagnostic {
     /// JSON is malformed or does not match the v0 schema.
@@ -218,6 +232,15 @@ pub enum Diagnostic {
         chips: Vec<Ref>,
         rounds: u32,
     },
+    /// A chip saw `rule` broken, first at `at`.
+    ChipProtocol {
+        part: Ref,
+        at: Time,
+        rule: ProtocolRule,
+    },
+    /// A chip whose CS and SCLK sit on `sender`'s nets dropped an SPI transaction whose data
+    /// lanes are not on its own data pins, first at `at`.
+    ChipLinkMiswired { part: Ref, at: Time, sender: Name },
     /// The grid gives more rows than the trace holds, found before the first solve, when
     /// `at` is `None`. The test-only step-rows mode can also fill the trace and refuse the
     /// next step. Then `at` is that step, and the rows already written stay.
@@ -300,6 +323,8 @@ impl Diagnostic {
             Diagnostic::SolverStepLimit { .. } => "solver.step_limit",
             Diagnostic::SolverConvergence { .. } => "solver.convergence",
             Diagnostic::ChipUnsettled { .. } => "chip.unsettled",
+            Diagnostic::ChipProtocol { .. } => "chip.protocol",
+            Diagnostic::ChipLinkMiswired { .. } => "chip.link_miswired",
             Diagnostic::TraceTooLarge { .. } => "trace.too_large",
             Diagnostic::TraceRowInterpolated { .. } => "trace.row_interpolated",
             Diagnostic::RatingCurrent(_) => "rating.current",
@@ -310,6 +335,8 @@ impl Diagnostic {
     pub fn severity(&self) -> Severity {
         match self {
             Diagnostic::NetFloating { .. }
+            | Diagnostic::ChipProtocol { .. }
+            | Diagnostic::ChipLinkMiswired { .. }
             | Diagnostic::TraceRowInterpolated { .. }
             | Diagnostic::RatingCurrent(_)
             | Diagnostic::RatingPower(_) => Severity::Warning,
@@ -345,6 +372,8 @@ impl Diagnostic {
             | Diagnostic::SolverStepLimit { at, .. }
             | Diagnostic::SolverConvergence { at, .. }
             | Diagnostic::ChipUnsettled { at, .. }
+            | Diagnostic::ChipProtocol { at, .. }
+            | Diagnostic::ChipLinkMiswired { at, .. }
             | Diagnostic::TraceRowInterpolated { at, .. } => Some(*at),
             Diagnostic::TraceTooLarge { at, .. } => *at,
             Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
@@ -389,6 +418,9 @@ impl Diagnostic {
             | Diagnostic::SolverNonFinite { unknown, .. }
             | Diagnostic::SolverConvergence { unknown, .. } => vec![unknown.clone()],
             Diagnostic::ChipUnsettled { chips, .. } => chips.clone(),
+            Diagnostic::ChipProtocol { part, .. } | Diagnostic::ChipLinkMiswired { part, .. } => {
+                vec![part.clone()]
+            }
             Diagnostic::SolverTooLarge { .. }
             | Diagnostic::SolverStepLimit { .. }
             | Diagnostic::TraceTooLarge { .. }
@@ -639,6 +671,16 @@ impl Diagnostic {
                 "the chips kept changing state for {rounds} solves at {} ps",
                 at.as_ps()
             ),
+            Diagnostic::ChipProtocol { part, at, rule } => format!(
+                "{part} dropped a transfer that broke rule {} at {} ps, the first time",
+                rule_text(rule),
+                at.as_ps()
+            ),
+            Diagnostic::ChipLinkMiswired { part, at, sender } => format!(
+                "{part} dropped an SPI transaction from #{} whose data lanes are not on its own data pins at {} ps, the first time",
+                sender.as_str(),
+                at.as_ps()
+            ),
             Diagnostic::TraceTooLarge {
                 rows,
                 limit,
@@ -752,6 +794,10 @@ impl Diagnostic {
                 data
             }
             Diagnostic::ChipUnsettled { rounds, .. } => serde_json::json!({ "rounds": rounds }),
+            Diagnostic::ChipProtocol { rule, .. } => serde_json::json!({ "rule": rule }),
+            Diagnostic::ChipLinkMiswired { sender, .. } => {
+                serde_json::json!({ "sender": sender.as_str() })
+            }
             Diagnostic::TraceTooLarge {
                 rows,
                 limit,
@@ -771,6 +817,14 @@ impl Diagnostic {
             }
         }
     }
+}
+
+/// The rule as `data.rule` names it.
+fn rule_text(rule: &ProtocolRule) -> String {
+    serde_json::to_value(rule)
+        .ok()
+        .and_then(|name| name.as_str().map(str::to_string))
+        .expect("a rule serializes to its name")
 }
 
 /// The same characters `data.value` uses. `Display` for a subnormal is hundreds of digits.

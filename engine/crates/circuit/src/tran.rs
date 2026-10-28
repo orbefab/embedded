@@ -263,6 +263,7 @@ impl Record {
             op: self.op,
             switches: switches(netlist, end),
             logic: summary,
+            displays: None,
         };
         (observations, trace)
     }

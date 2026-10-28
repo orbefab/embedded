@@ -870,6 +870,59 @@ A `bits`, `value` or `lanes` outside its rule, a byte above 255, and a `cs` othe
 
 A `spi_replay` has no `ratings` object and no `i`, `v`, or `p`. It has no logic signals. It joins `CS`, `SCLK` and `D0` to `D3` each to `VCC` and to `GND`, through the stage its drive stamps.
 
+### ST77916
+
+`kind` is `st77916`, the controller of a round 360 by 360 TFT panel on a QSPI bus. It is an active chip with no clock of its own. It takes the `Spi` records whose chip select and clock are on its `CS` and `SCLK` nets and the `Duty` records on its `BLK` net, as [engine.md](engine.md#records) says. Pins are `VCC`, `GND`, `CS`, `SCLK`, `D0` to `D3`, `RST`, `TE` and `BLK`. Every pin is required.
+
+`examples/st77916-replay` puts it on a `spi_replay` at 80 MHz and 3.3 V. The replay sends a short start-up, then closes seven pixel writes, each a pattern with more than one value. The start-up is `SWRESET`, `SLPOUT`, `COLMOD` 0x55, `MADCTL`, `CASET`, `RASET` and `DISPON`, then four writes to registers the model stores and does not run. One write overfills its window and wraps. One is a `RAMWRC` that continues a `RAMWR`. `scripts/st77916_example.py` writes the example and its replay list, `events.json`. The panel part is:
+
+```json
+{
+  "name": "lcd1",
+  "kind": "st77916",
+  "pins": {
+    "VCC": "v3v3", "GND": "gnd", "CS": "cs", "SCLK": "sclk",
+    "D0": "d0", "D1": "d1", "D2": "d2", "D3": "d3",
+    "RST": "rst", "TE": "te", "BLK": "v3v3"
+  },
+  "output": {
+    "high_drop": { "value": 0.0, "unit": "V", "source": "user" },
+    "high_resistance": { "value": 25.0, "unit": "ohm", "source": "user" },
+    "low_drop": { "value": 0.0, "unit": "V", "source": "user" },
+    "low_resistance": { "value": 25.0, "unit": "ohm", "source": "user" }
+  },
+  "input_threshold": {
+    "low": { "value": 0.3, "unit": "1", "source": "user" },
+    "high": { "value": 0.7, "unit": "1", "source": "user" }
+  }
+}
+```
+
+The model is the panel's command set and its frame memory.
+
+- A command is one 32-bit word, `opcode << 24 | command << 8`, in a transaction's phases. Bits 16 to 23 are ignored, and so is the page byte, the low eight bits. Opcode 0x02 is the register opcode. Opcode 0x32 is the pixel opcode. `RAMWR` and `RAMWRC` take the pixel opcode. Every other command takes the register opcode. The model checks the opcode on every transaction. It checks the data lanes only when that transaction carries bytes, because a transaction with no bytes clocks no data. Register data uses one lane, and pixel data uses four. A cross pair on the opening transaction runs nothing and drops that transaction's data, rule `command`. A continuation whose data lanes do not match drops that transaction's data, and a release still closes the open command. Phases that are not 32 bits, or another opcode, do the same. The model does not check the lanes of the command phase or the address phase.
+- A transaction with no phases continues the command a transaction that ended with `CS` held left open. With no command open it is dropped, rule `spi_continuation`. A command closes when `CS` is released, when the next command comes, or when `RST` goes low.
+- A register command runs when it closes. `SWRESET` (0x01) resets the registers. `SLPIN` and `SLPOUT` (0x10, 0x11) set the sleep flag, `INVOFF` and `INVON` (0x20, 0x21) the inverted flag, and `DISPOFF` and `DISPON` (0x28, 0x29) the display flag. `CASET` and `RASET` (0x2A, 0x2B) take a big-endian start and end, both ends included, and an end below 360 at or after the start. `MADCTL` (0x36) and `COLMOD` (0x3A) take one byte. A `CASET`, `RASET`, `MADCTL` or `COLMOD` short of bytes or out of range changes nothing, rule `command`. Every other register command replaces the stored bytes of that command and is never run. The panel keeps the last bytes of each such command, at most 256 commands. `registers` in the panel state is how many of those commands it holds.
+- `RAMWR` (0x2C) writes from the window's first column and row, and `RAMWRC` (0x3C) goes on from the last pixel. Each two bytes are one pixel, kept in the frame memory in the order they arrived. Firmware that sends the high byte first, as this example does and as `COLMOD` 0x55 on this panel expects, gives big-endian RGB565. A reader must not assume little-endian. A pixel goes along its row, to the next row at the window's last column, and back to the first row after the last one. `MADCTL` maps each pixel into the frame memory. Bit 0x40 mirrors the column, bit 0x80 mirrors the row, and then bit 0x20 exchanges them. That order is this model's choice until a capture from a real panel checks it. The other bits stay in the byte and move no pixel. A pixel write needs `COLMOD`'s low three bits to be 5, 16 bits a pixel. Otherwise it is dropped with its data, rule `pixel_format`.
+- A pixel write that took bytes is one row of `traces/display.csv` when it closes, as [run-folder.md](run-folder.md#traces) says. One that took none is no row.
+- A reset sets the sleep flag, clears the display and inverted flags, sets `MADCTL` to 0, `COLMOD` to 0x66, the window to the whole panel, and drops every stored register. The frame memory keeps its pixels, and is all zero bytes at power-on.
+- `RST` reads high above `input_threshold.high` times `V(VCC) - V(GND)` over `GND`, and low at or below `input_threshold.low` times it. It is a watch, described in [Chip events](engine.md#chip-events). Going low resets the panel and drops an open command with no row. While it is low the panel drops every transaction.
+- `TE` drives low for the whole run, `output.low_drop` over `GND` behind `output.low_resistance`. The panel never signals a tearing effect, so firmware that waits on `TE` stalls.
+- `BLK` keeps the last `Duty` record it took as `brightness`. It changes no pixel.
+- The panel waits for nothing. The 120 ms a real panel needs after `SWRESET` and `SLPOUT` is not kept, and sleep and the display flag change no pixel.
+
+A dropped transaction is the warning `chip.protocol`, once per rule at its first time. A transaction whose data lanes are not on the panel's own `D0` to `D3` is dropped as the warning `chip.link_miswired`, once at its first time. [diagnostics.md](diagnostics.md) has both.
+
+| Field | Unit | Rule |
+| --- | --- | --- |
+| `output.high_resistance`, `output.low_resistance` | `ohm` | the resistor's |
+| `output.high_drop`, `output.low_drop` | `V` | at least 0, else rule `non_negative` |
+| `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+
+A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
+
+An `st77916` has no `ratings` object and no `i`, `v`, or `p`. Its logic signal is `RST`. It joins `TE` to `VCC` and to `GND` through the stage its drive stamps. `CS`, `SCLK`, `D0` to `D3`, `RST` and `BLK` draw no current, so each needs another DC path.
+
 ## Ratings
 
 A rating bounds the stress on a part. Every key of a kind's `ratings` object is required. Each value is a value object, or `null` for a part that is deliberately unrated.
@@ -881,7 +934,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `linear_regulator` | `current`, `power` | `#<part>.iout`, `#<part>.p` |
 | `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
 | `nmos` | `current`, `power` | `#<part>.id`, `#<part>.p` |
-| `voltage_source`, `current_source`, `capacitor`, `inductor`, `relay`, `switch`, `ne555`, `atmega328p`, `potentiometer`, `spi_replay` | none | |
+| `voltage_source`, `current_source`, `capacitor`, `inductor`, `relay`, `switch`, `ne555`, `atmega328p`, `potentiometer`, `spi_replay`, `st77916` | none | |
 
 `current` is in `A`. `power` is in `W`. A rating must be greater than 0. A missing key, an unknown key, and a missing `ratings` object are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.current` or `ratings.power`. A value of 0 or below is `netlist.value` with the same field.
 

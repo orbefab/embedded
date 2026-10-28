@@ -1,19 +1,20 @@
 use std::mem::size_of;
 
 use sim_core::diagnostic::{Diagnostic, Solve};
+use sim_core::display::{Displays, Panel, Rectangle};
 use sim_core::finite::Finite;
 use sim_core::i2c::{I2c, I2cRow};
 use sim_core::link::{Link, LinkRow};
 use sim_core::logic::{Change, Level};
 use sim_core::name::{Name, Ref};
 use sim_core::netlist::{Analysis, Document, Netlist, Transient};
-use sim_core::run_folder::{self, Results, RunFolder};
+use sim_core::run_folder::{self, Observations, Results, RunFolder};
 use sim_core::serial::{Serial as Delivered, SerialByte};
 use sim_core::time::Time;
 use sim_core::timestamp::Timestamp;
 
 use crate::RunStats;
-use crate::active::{self, Actives};
+use crate::active::{self, Actives, st77916};
 use crate::chip;
 use crate::lte::{self, Charges, Segment, Verdict};
 use crate::mna::{Memo, Solution};
@@ -108,6 +109,23 @@ pub(crate) struct Landing {
     pub(crate) reach: Time,
 }
 
+/// A display part's state, read from a session.
+pub struct Display<'s> {
+    panel: &'s st77916::Core,
+}
+
+impl Display<'_> {
+    /// Its flags, registers and brightness.
+    pub fn panel(&self) -> Panel {
+        self.panel.panel()
+    }
+
+    /// Its frame memory, as `traces/display-<part>.rgb565` holds it.
+    pub fn image(&self) -> Vec<u8> {
+        self.panel.frame().image()
+    }
+}
+
 /// A transient run held between calls. `advance_to` accepts every step that lands by its time.
 /// The step after the last one it accepted is solved and waits. A call never cuts that step
 /// and never accepts it early, so a session advanced in any chunks takes the steps of one
@@ -153,6 +171,10 @@ pub struct Session {
     /// Records that ended at or before the last accepted step, ordered by end, then by sender
     /// name, then by sequence. Only a recorded session keeps them, for `link.csv`.
     link: Vec<LinkRow>,
+    /// Pixel writes display parts closed at or before the last accepted step, ordered by time,
+    /// then by part name, then in the order each part closed them. Only a recorded session
+    /// keeps them, for `display.csv`.
+    display: Vec<Rectangle>,
     pub(crate) record: Option<Record>,
     /// The JSON the session opened from, which `export` writes back.
     document: Option<Document>,
@@ -457,6 +479,7 @@ impl Session {
             serial_forgotten: 0,
             i2c: Vec::new(),
             link: Vec::new(),
+            display: Vec::new(),
             record,
             document,
             opened: None,
@@ -508,6 +531,7 @@ impl Session {
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
         let mut found = self.warnings.clone();
         found.extend(self.ratings.findings());
+        found.extend(self.actives.warnings(&self.circuit));
         sim_core::run_folder::sort_diagnostics(&mut found);
         found
     }
@@ -545,9 +569,11 @@ impl Session {
         let accepted = self.accepted();
         self.serial.extend(self.actives.deliver(accepted));
         let records = self.actives.records();
+        let rows = self.actives.rows();
         if self.record.is_some() {
             self.i2c.extend(self.actives.phases());
             self.link.extend(records);
+            self.display.extend(rows);
         } else {
             self.actives.phases().for_each(drop);
         }
@@ -646,6 +672,18 @@ impl Session {
         }
     }
 
+    /// The display part `part` as it stands after the last accepted step, which is its state at
+    /// `now`. `None` when `part` is no display part.
+    pub fn display(&self, part: &Name) -> Option<Display<'_>> {
+        let k = self
+            .actives
+            .displays()
+            .iter()
+            .position(|name| name == part)?;
+        let panel = self.actives.panels().nth(k)?;
+        Some(Display { panel })
+    }
+
     /// Each USART, chips in part order, then each chip's in datasheet order: the part's name and
     /// the USART's, such as `USART0`. A `SerialByte`'s `usart` indexes this.
     pub fn usarts(&self) -> &[(Name, &'static str)] {
@@ -717,7 +755,9 @@ impl Session {
         };
         diagnostics.extend(self.warnings);
         diagnostics.extend(self.ratings.findings());
-        let (observations, mut trace) = record.finish(&self.circuit.netlist, at, &row, diagnostics);
+        diagnostics.extend(self.actives.warnings(&self.circuit));
+        let (mut observations, mut trace) =
+            record.finish(&self.circuit.netlist, at, &row, diagnostics);
         let usarts = self.actives.usarts();
         if !usarts.is_empty() {
             trace.attach_serial(Delivered::new(usarts.to_vec(), self.serial));
@@ -729,6 +769,19 @@ impl Session {
         let senders = self.actives.senders();
         if !senders.is_empty() {
             trace.attach_link(Link::new(senders.to_vec(), self.link));
+        }
+        let names = self.actives.displays();
+        if !names.is_empty() {
+            let parts = names
+                .iter()
+                .zip(self.actives.panels())
+                .map(|(name, panel)| (name.clone(), panel.panel(), panel.frame().image()))
+                .collect();
+            let displays = Displays::new(parts, self.display);
+            if let Observations::Transient { displays: seen, .. } = &mut observations {
+                *seen = Some(displays.observed());
+            }
+            trace.attach_displays(displays);
         }
         if let End::Fault(fault) = end {
             diagnostics.push(fault);

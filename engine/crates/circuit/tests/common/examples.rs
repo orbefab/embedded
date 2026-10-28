@@ -23,7 +23,7 @@ pub fn runs_a_core(netlist: &Netlist) -> bool {
     netlist.parts().any(|(_, part)| match &part.model {
         Model::Chip(chip) => match chip {
             Chip::Ne555(_) => false,
-            Chip::Atmega328p(_) | Chip::SpiReplay(_) => true,
+            Chip::Atmega328p(_) | Chip::SpiReplay(_) | Chip::St77916(_) => true,
         },
         _ => false,
     })

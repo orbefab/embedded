@@ -6,7 +6,7 @@ use sim_core::i2c::I2cPhase;
 use sim_core::netlist::{Atmega328p, PartId, Value};
 use sim_core::time::Time;
 
-use super::{Chip, Drive, Frame, Output, Phase, Stage, Stop};
+use super::{Chip, Drive, Frame, Output, Phase, Stage, Stop, Takes};
 use crate::mna::Node;
 use crate::watch::{Signal, Watch};
 
@@ -268,7 +268,7 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
         usarts: &["USART0"],
         twi: true,
         sends: false,
-        spi_target: None,
+        takes: Takes::default(),
         core: super::Core::Avr(Box::new(core)),
     }
 }
