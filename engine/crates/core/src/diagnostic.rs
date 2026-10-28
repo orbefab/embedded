@@ -41,6 +41,8 @@ pub enum ValueRule {
     AboveDrop,
     /// A fuse byte selects a mode the model does not run.
     Unsupported,
+    /// A touch coordinate is outside 0 to 4095.
+    Span,
 }
 
 /// Why `firmware` is not a program for the part's flash.
@@ -81,8 +83,8 @@ pub enum AnalysisRule {
     GridOverStop,
 }
 
-/// Which rule a schedule event broke. A switch, a `steps` source, a potentiometer, and a
-/// `serial` source share it.
+/// Which rule a schedule event broke. A switch, a `steps` source, a potentiometer, a
+/// `serial` source, and a `cst816` touch share it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScheduleRule {
@@ -127,6 +129,8 @@ pub enum ProtocolRule {
     SpiContinuation,
     /// Pixels while the pixel format is not 16 bits.
     PixelFormat,
+    /// An I2C target's SDA change came due while SCL was high, so SDA stayed.
+    SdaWhileSclHigh,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -524,6 +528,9 @@ impl Diagnostic {
                     ValueRule::Unsupported => {
                         format!("{part} {field} is 0x{byte:02X}; the model does not run that mode")
                     }
+                    ValueRule::Span => {
+                        format!("{part} {field} is {value}; it must be from 0 to 4095")
+                    }
                 }
             }
             Diagnostic::NetlistFirmware { part, line, rule } => {
@@ -670,6 +677,15 @@ impl Diagnostic {
             Diagnostic::ChipUnsettled { at, rounds, .. } => format!(
                 "the chips kept changing state for {rounds} solves at {} ps",
                 at.as_ps()
+            ),
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::SdaWhileSclHigh,
+            } => format!(
+                "{part} left SDA unmoved because SCL was high at {} ps, breaking rule {}, the first time",
+                at.as_ps(),
+                rule_text(&ProtocolRule::SdaWhileSclHigh)
             ),
             Diagnostic::ChipProtocol { part, at, rule } => format!(
                 "{part} dropped a transfer that broke rule {} at {} ps, the first time",

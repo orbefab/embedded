@@ -301,6 +301,7 @@ for line in \
   'applyContact(part: string, ps: bigint, closed: boolean): Applied;' \
   'applyLevel(part: string, ps: bigint, si: number): Applied;' \
   'applySerial(part: string, ps: bigint, baud: number, bytes: Uint8Array): Applied;' \
+  'applyTouch(part: string, ps: bigint, x: number, y: number, down: boolean): Applied;' \
   'finish(createdAtSeconds: bigint): Folder;' \
   'export function run(netlist: Uint8Array, createdAtSeconds: bigint): Folder;' \
   'file(path: string): Uint8Array | undefined;'; do

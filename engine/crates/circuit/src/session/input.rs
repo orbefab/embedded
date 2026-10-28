@@ -2,7 +2,8 @@ use sim_core::diagnostic::ValueRule;
 use sim_core::finite::Finite;
 use sim_core::name::Name;
 use sim_core::netlist::{
-    Appended, Baud, Contact, Frame, Model, Schedule, SerialSend, Value, position_rule,
+    Appended, Baud, Chip, Contact, Cst816, Frame, Model, Schedule, SerialSend, Touch, Value,
+    position_rule,
 };
 use sim_core::time::Time;
 
@@ -33,6 +34,8 @@ pub enum Setting {
     Level(Finite),
     /// 8N1 frames on a `serial` source.
     Serial(Serial),
+    /// A point on a `cst816`. `x` and `y` run from 0 to 4095.
+    Touch(Touch),
 }
 
 /// An input in its part's events.
@@ -51,13 +54,17 @@ pub enum Rejected {
     Ended,
     /// No part has the input's name.
     UnknownPart,
-    /// A resistor, a capacitor, an inductor, a junction, a chip, or a `step` or `pulse` source.
+    /// A setting on a part that takes none of any kind: a resistor, a capacitor, an inductor, a
+    /// relay, a junction, a `step` or `pulse` source, or a chip. A `cst816` takes only a touch,
+    /// so a contact, a level or a serial send on it is this too.
     NotSettable,
     /// A contact on a source or a potentiometer, a level on a switch, a serial send on a
     /// switch, a potentiometer, or a plain or `steps` source, or a contact or a level on a
-    /// `serial` source.
+    /// `serial` source, or a touch on a switch, a potentiometer, a plain or `steps` source,
+    /// or a `serial` source.
     WrongSetting,
-    /// A position outside `(0, 1)`, or a leg that breaks the resistance rules.
+    /// A position outside `(0, 1)`, a leg that breaks the resistance rules, or a touch
+    /// coordinate outside 0 to 4095.
     Value(ValueRule),
     /// It would land at or after `stop`, or a serial send's frames would not end inside a
     /// time the engine can store.
@@ -73,7 +80,8 @@ impl Session {
     /// potentiometer, in that field's unit. A serial send sets a `serial` source. It lands at the
     /// latest of that time and the end of the source's last event, so a send asked for while the
     /// last frames are still on the wire starts when the line is idle. The start bit is at that
-    /// time. One call appends one event and solves the held step once, however many bytes it
+    /// time. A touch sets one point on a `cst816`, and a point equal to the last one still lands.
+    /// One call appends one event and solves the held step once, however many bytes it
     /// sends. A batch run of the export takes every accepted step there. The held step is solved
     /// again with the new edge, and every step that then lands by `now` is accepted. A level or a
     /// serial start is a jump, so that solve restarts. The status is the session's after that
@@ -115,6 +123,7 @@ impl Session {
     /// The document `open_document` read, with every applied input in its part. A switch event
     /// is appended to `events`. A plain `voltage`, `current` or `position` becomes `steps`, and
     /// a `steps` field gains the new levels. A `serial` field gains one event per applied send.
+    /// A `cst816` gains each applied point on `touches`.
     /// A part with nothing applied is unchanged. A plain source does not become a `serial` source.
     /// While the session runs, `stop_ps` is the held step's reach, at least `max_step_ps` and at
     /// most the document's `stop_ps`. No test pins the reach in that bound; the argument in `docs/engine.md` Sessions covers it. A batch run of the export
@@ -155,6 +164,14 @@ fn decision(
             Ok(level_decision(&pot.position, *level, from))
         }
         (Model::Potentiometer(_), Setting::Contact(_)) => Err(Rejected::WrongSetting),
+        (Model::Chip(Chip::Cst816(dev)), Setting::Touch(touch)) => {
+            touch_decision(dev, *touch, from)
+        }
+        (_, Setting::Touch(_)) => Err(if takes_another_setting(model) {
+            Rejected::WrongSetting
+        } else {
+            Rejected::NotSettable
+        }),
         (_, Setting::Serial(send)) => serial_decision(model, send, from),
         (_, Setting::Contact(_)) => {
             if model.serial().is_some() || model.level().is_some() {
@@ -204,7 +221,20 @@ fn serial_decision(
 }
 
 fn takes_another_setting(model: &Model) -> bool {
-    matches!(model, Model::Switch(_) | Model::Potentiometer(_)) || model.level().is_some()
+    matches!(model, Model::Switch(_) | Model::Potentiometer(_))
+        || model.level().is_some()
+        || model.serial().is_some()
+}
+
+fn touch_decision(
+    dev: &Cst816,
+    touch: Touch,
+    from: Time,
+) -> Result<(Appended, Option<Time>, bool), Rejected> {
+    if touch.x > Cst816::COORD_MAX || touch.y > Cst816::COORD_MAX {
+        return Err(Rejected::Value(ValueRule::Span));
+    }
+    Ok((Appended::Touch(touch), dev.earliest(from), false))
 }
 
 fn level_decision(

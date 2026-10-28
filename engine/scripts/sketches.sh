@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Rebuilds firmware/sketch/<name>.hex from firmware/sketch/<name>/<name>.ino with a pinned AVR
-# toolchain and the standard AVR runtime, for the ATmega328P at 16 MHz, with the flags the
-# standard IDE uses. The runtime's core is compiled into an archive and linked with each sketch,
-# and main() comes from the core. The runtime's Wire library is compiled into a second archive,
-# which a sketch that includes Wire.h also links. A build of the engine reads only the committed
-# hex.
+# toolchain and the standard AVR runtime, for the ATmega328P, with the flags the standard IDE
+# uses. The clock is 16 MHz unless the sketch directory contains `f_cpu`, one integer of hertz.
+# The runtime's core is compiled into an archive and linked with each sketch, and main() comes
+# from the core. The runtime's Wire library is compiled into a second archive, which a sketch
+# that includes Wire.h also links. A clock other than 16 MHz gets its own core and Wire archives.
+# A build of the engine reads only the committed hex.
 #
 # Usage: scripts/sketches.sh TOOLS_DIR [DOWNLOAD_DIR]
 #
@@ -79,19 +80,54 @@ mkdir "$work/wire"
   -o "$work/wire/twi.c.o"
 "$bin/avr-gcc-ar" rcs "$work/wire.a" "$work/wire/Wire.cpp.o" "$work/wire/twi.c.o"
 
+# A clock other than 16 MHz. The 16 MHz archives above stay the ones every other sketch links.
+clock_archives() {
+  local cpu=$1 dest=$work/cpu-$cpu
+  [[ -f $dest/core.a ]] && return
+  mkdir -p "$dest/core" "$dest/wire"
+  local clocked=(-mmcu=atmega328p -DF_CPU="${cpu}L" -I"$core" -I"$runtime/variants/standard")
+  local source object
+  for source in $(cd "$core" && ls -- *.c *.cpp *.S | LC_ALL=C sort); do
+    object=$dest/core/$source.o
+    case $source in
+      *.c) "$bin/avr-gcc" "${c_flags[@]}" "${clocked[@]}" "$core/$source" -o "$object" ;;
+      *.cpp) "$bin/avr-g++" "${cpp_flags[@]}" "${clocked[@]}" "$core/$source" -o "$object" ;;
+      *.S) "$bin/avr-gcc" "${s_flags[@]}" "${clocked[@]}" "$core/$source" -o "$object" ;;
+    esac
+    "$bin/avr-gcc-ar" rcs "$dest/core.a" "$object"
+  done
+  "$bin/avr-g++" "${cpp_flags[@]}" "${clocked[@]}" -I"$wire" -I"$wire/utility" "$wire/Wire.cpp" \
+    -o "$dest/wire/Wire.cpp.o"
+  "$bin/avr-gcc" "${c_flags[@]}" "${clocked[@]}" -I"$wire/utility" "$wire/utility/twi.c" \
+    -o "$dest/wire/twi.c.o"
+  "$bin/avr-gcc-ar" rcs "$dest/wire.a" "$dest/wire/Wire.cpp.o" "$dest/wire/twi.c.o"
+}
+
 for dir in "$firmware"/*/; do
   dir=${dir%/}
   name=$(basename "$dir")
   library=()
   archives=()
+  sketch_target=("${target[@]}")
+  core_a=$work/core.a
+  wire_a=$work/wire.a
+  if [[ -f $dir/f_cpu ]]; then
+    cpu=$(tr -d '[:space:]' < "$dir/f_cpu")
+    if [[ $cpu != 16000000 ]]; then
+      clock_archives "$cpu"
+      sketch_target=(-mmcu=atmega328p -DF_CPU="${cpu}L" -I"$core" -I"$runtime/variants/standard")
+      core_a=$work/cpu-$cpu/core.a
+      wire_a=$work/cpu-$cpu/wire.a
+    fi
+  fi
   if grep -q '^#include <Wire.h>' "$dir/$name.ino"; then
     library=(-I"$wire")
-    archives=("$work/wire.a")
+    archives=("$wire_a")
   fi
-  "$bin/avr-g++" "${cpp_flags[@]}" "${target[@]}" "${library[@]}" -x c++ -include Arduino.h \
+  "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${library[@]}" -x c++ -include Arduino.h \
     "$dir/$name.ino" -o "$work/$name.o"
   "$bin/avr-gcc" "${link_flags[@]}" -o "$work/$name.elf" "$work/$name.o" "${archives[@]}" \
-    "$work/core.a" -L"$work" -lm
+    "$core_a" -L"$work" -lm
   "$bin/avr-objcopy" -O ihex -R .eeprom "$work/$name.elf" "$firmware/$name.hex"
   "$bin/avr-size" "$work/$name.elf" | tail -n 1 | awk -v n="$name" '{print n ": " $1 + $2 " flash bytes"}'
 done

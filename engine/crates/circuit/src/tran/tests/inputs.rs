@@ -6,7 +6,7 @@ use sim_core::logic::Level;
 use sim_core::name::Name;
 use sim_core::name::Ref;
 use sim_core::netlist::{
-    self, Appended, Baud, Chip, Contact, Document, Frame, Model, Netlist, Part, Schedule,
+    self, Appended, Baud, Chip, Contact, Cst816, Document, Frame, Model, Netlist, Part, Schedule,
     SerialSend, Switch, Value, position_rule,
 };
 use sim_core::run_folder::Results;
@@ -529,6 +529,22 @@ fn ruling(session: &Session, input: &Input) -> Result<Time, Rejected> {
             level_ruling(&pot.position, *level, from, stop)
         }
         (Model::Potentiometer(_), Setting::Contact(_)) => Err(Rejected::WrongSetting),
+        (Model::Chip(Chip::Cst816(dev)), Setting::Touch(touch)) => {
+            if touch.x > Cst816::COORD_MAX || touch.y > Cst816::COORD_MAX {
+                return Err(Rejected::Value(ValueRule::Span));
+            }
+            landing(dev.earliest(from), stop)
+        }
+        (_, Setting::Touch(_)) => Err(
+            if matches!(model, Model::Switch(_) | Model::Potentiometer(_))
+                || model.level().is_some()
+                || model.serial().is_some()
+            {
+                Rejected::WrongSetting
+            } else {
+                Rejected::NotSettable
+            },
+        ),
         (_, Setting::Serial(send)) => serial_ruling(model, send, from, stop),
         (_, Setting::Contact(_)) => {
             if model.serial().is_some() || model.level().is_some() {
@@ -665,6 +681,7 @@ fn land(landings: &mut Netlist, input: &Input, at: Time) {
             frame: send.frame,
             bytes: send.bytes.clone(),
         }),
+        Setting::Touch(touch) => Appended::Touch(*touch),
     };
     landings.append(id, at, to);
 }

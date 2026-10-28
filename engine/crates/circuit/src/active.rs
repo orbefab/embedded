@@ -4,17 +4,19 @@
 //! Active chips, holds the loop's protocol.
 
 pub(crate) mod avr;
+pub(crate) mod cst816;
+pub(crate) mod i2c;
 pub(crate) mod replay;
 #[cfg(test)]
 pub(crate) mod script;
 pub(crate) mod st77916;
 
-use sim_core::diagnostic::Diagnostic;
+use sim_core::diagnostic::{Diagnostic, ProtocolRule};
 use sim_core::display::Rectangle;
 use sim_core::i2c::{I2cPhase, I2cRow};
 use sim_core::link::{LinkRow, Record, RecordKind};
 use sim_core::name::{Name, Ref};
-use sim_core::netlist::{NetId, PartId};
+use sim_core::netlist::{NetId, PartId, Touch};
 use sim_core::serial::SerialByte;
 use sim_core::time::Time;
 
@@ -153,6 +155,7 @@ pub(crate) enum Core {
     Avr(Box<avr::Core>),
     SpiReplay(replay::Core),
     St77916(Box<st77916::Core>),
+    Cst816(Box<cst816::Core>),
     #[cfg(test)]
     Script(script::Core),
 }
@@ -163,6 +166,7 @@ impl Clone for Core {
             Core::Avr(core) => Core::Avr(core.clone()),
             Core::SpiReplay(core) => Core::SpiReplay(core.clone()),
             Core::St77916(core) => Core::St77916(core.clone()),
+            Core::Cst816(core) => Core::Cst816(core.clone()),
             #[cfg(test)]
             Core::Script(core) => Core::Script(core.clone()),
         }
@@ -174,6 +178,7 @@ impl Clone for Core {
         match (self, source) {
             (Core::Avr(core), Core::Avr(source)) => core.clone_from(source),
             (Core::St77916(core), Core::St77916(source)) => core.clone_from(source),
+            (Core::Cst816(core), Core::Cst816(source)) => core.clone_from(source),
             (core, source) => *core = source.clone(),
         }
     }
@@ -185,6 +190,7 @@ impl Core {
             Core::Avr(ref mut core) => core.run_until(limit),
             Core::SpiReplay(ref mut core) => core.run_until(limit),
             Core::St77916(_) => None,
+            Core::Cst816(ref mut core) => core.run_until(limit),
             #[cfg(test)]
             Core::Script(ref mut core) => core.run_until(limit),
         }
@@ -195,6 +201,7 @@ impl Core {
             Core::Avr(ref core) => core.drive(),
             Core::SpiReplay(ref core) => core.drive(),
             Core::St77916(ref core) => core.drive(),
+            Core::Cst816(ref core) => core.drive(),
             #[cfg(test)]
             Core::Script(ref core) => core.drive(),
         }
@@ -204,7 +211,9 @@ impl Core {
     fn sample(&mut self, at: Time, volts: &[f64]) {
         match *self {
             Core::Avr(ref mut core) => core.sample(at, volts),
-            Core::SpiReplay(_) | Core::St77916(_) => unreachable!("only a clocked core samples"),
+            Core::SpiReplay(_) | Core::St77916(_) | Core::Cst816(_) => {
+                unreachable!("only a clocked core samples")
+            }
             #[cfg(test)]
             Core::Script(ref mut core) => core.sample(at, volts),
         }
@@ -216,6 +225,7 @@ impl Core {
             Core::Avr(ref mut core) => core.input(at, levels),
             Core::SpiReplay(ref mut core) => core.input(at, levels),
             Core::St77916(ref mut core) => core.input(at, levels),
+            Core::Cst816(ref mut core) => core.input(at, levels),
             #[cfg(test)]
             Core::Script(ref mut core) => core.input(at, levels),
         }
@@ -227,7 +237,7 @@ impl Core {
     fn deliver(&mut self, through: Time, sent: impl FnMut(Frame), saw: impl FnMut(Phase)) {
         match *self {
             Core::Avr(ref mut core) => core.deliver(through, sent, saw),
-            Core::SpiReplay(_) | Core::St77916(_) => {}
+            Core::SpiReplay(_) | Core::St77916(_) | Core::Cst816(_) => {}
             #[cfg(test)]
             Core::Script(ref mut core) => core.deliver(through, sent),
         }
@@ -236,7 +246,7 @@ impl Core {
     /// The records it sent that it still holds, in the order it sent them.
     fn records(&self) -> &[Record] {
         match *self {
-            Core::Avr(_) | Core::St77916(_) => &[],
+            Core::Avr(_) | Core::St77916(_) | Core::Cst816(_) => &[],
             Core::SpiReplay(ref core) => core.records(),
             #[cfg(test)]
             Core::Script(ref core) => core.records(),
@@ -247,7 +257,7 @@ impl Core {
     /// order it sent them.
     fn drain_records(&mut self, through: Time, sent: impl FnMut(Record)) {
         match *self {
-            Core::Avr(_) | Core::St77916(_) => {}
+            Core::Avr(_) | Core::St77916(_) | Core::Cst816(_) => {}
             Core::SpiReplay(ref mut core) => core.drain_records(through, sent),
             #[cfg(test)]
             Core::Script(ref mut core) => core.drain_records(through, sent),
@@ -258,7 +268,7 @@ impl Core {
     /// then by sequence.
     fn take(&mut self, at: Time, records: &[LinkRow]) {
         match *self {
-            Core::Avr(_) | Core::SpiReplay(_) => unreachable!(
+            Core::Avr(_) | Core::SpiReplay(_) | Core::Cst816(_) => unreachable!(
                 "a chip with no record pins took {} records at {at:?}",
                 records.len()
             ),
@@ -272,9 +282,21 @@ impl Core {
     fn drain_rows(&mut self, sent: impl FnMut(st77916::Closed)) {
         match *self {
             Core::St77916(ref mut core) => core.drain_rows(sent),
-            Core::Avr(_) | Core::SpiReplay(_) => {}
+            Core::Avr(_) | Core::SpiReplay(_) | Core::Cst816(_) => {}
             #[cfg(test)]
             Core::Script(_) => {}
+        }
+    }
+
+    /// A touch at `at`. The image stays as it is. Only a `cst816` takes one.
+    fn touch(&mut self, at: Time, touch: Touch) {
+        match self {
+            Core::Cst816(core) => core.touch(at, touch),
+            Core::Avr(_) | Core::SpiReplay(_) | Core::St77916(_) => {
+                unreachable!("only a cst816 takes a touch")
+            }
+            #[cfg(test)]
+            Core::Script(_) => unreachable!("only a cst816 takes a touch"),
         }
     }
 }
@@ -303,6 +325,7 @@ pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
         Active::Atmega328p(mcu) => avr::chip(part, mcu),
         Active::SpiReplay(replay) => replay::chip(part, replay),
         Active::St77916(panel) => st77916::chip(part, panel),
+        Active::Cst816(dev) => cst816::chip(part, dev),
     }
 }
 
@@ -686,23 +709,36 @@ impl Actives {
     pub(crate) fn warnings(&self, circuit: &Circuit) -> Vec<Diagnostic> {
         let mut found = Vec::new();
         for (core, chip) in self.committed.iter().zip(&circuit.actives) {
-            let Core::St77916(panel) = core else {
-                continue;
-            };
-            let part = Ref::Part(name(circuit, chip));
-            for (rule, at) in panel.broke_rules() {
-                found.push(Diagnostic::ChipProtocol {
-                    part: part.clone(),
-                    at,
-                    rule,
-                });
-            }
-            if let Some((at, sender)) = panel.miswired() {
-                found.push(Diagnostic::ChipLinkMiswired {
-                    part: part.clone(),
-                    at,
-                    sender: self.senders[usize::from(sender)].clone(),
-                });
+            match core {
+                Core::St77916(panel) => {
+                    let part = Ref::Part(name(circuit, chip));
+                    for (rule, at) in panel.broke_rules() {
+                        found.push(Diagnostic::ChipProtocol {
+                            part: part.clone(),
+                            at,
+                            rule,
+                        });
+                    }
+                    if let Some((at, sender)) = panel.miswired() {
+                        found.push(Diagnostic::ChipLinkMiswired {
+                            part: part.clone(),
+                            at,
+                            sender: self.senders[usize::from(sender)].clone(),
+                        });
+                    }
+                }
+                Core::Cst816(dev) => {
+                    if let Some(at) = dev.sda_blocked_at() {
+                        found.push(Diagnostic::ChipProtocol {
+                            part: Ref::Part(name(circuit, chip)),
+                            at,
+                            rule: ProtocolRule::SdaWhileSclHigh,
+                        });
+                    }
+                }
+                Core::Avr(_) | Core::SpiReplay(_) => {}
+                #[cfg(test)]
+                Core::Script(_) => {}
             }
         }
         found
@@ -783,7 +819,8 @@ impl Actives {
                 _ => None,
             };
             let records = incoming.get_mut(k).map(std::mem::take).unwrap_or_default();
-            if stop.is_none() && !flipped && records.is_empty() && !keep {
+            let touch = Self::due_touch(circuit, k, at);
+            if stop.is_none() && !flipped && records.is_empty() && touch.is_none() && !keep {
                 continue;
             }
             if stop.is_some() {
@@ -808,14 +845,30 @@ impl Actives {
             if !records.is_empty() {
                 ahead.core.take(at, &records);
             }
+            if let Some(touch) = touch {
+                ahead.core.touch(at, touch);
+            }
             assert_eq!(
                 ahead.core.drive(),
                 image,
-                "a sample, an input or a record at a landing never changes an image"
+                "a sample, an input, a record or a touch at a landing never changes an image"
             );
             ahead.commit(committed, &mut self.staged);
         }
         (changed, stops)
+    }
+
+    /// A touch whose time is this landing, on a `cst816` in this slot.
+    fn due_touch(circuit: &Circuit, slot: usize, at: Time) -> Option<Touch> {
+        let part = circuit.actives[slot].part?;
+        let sim_core::netlist::Model::Chip(sim_core::netlist::Chip::Cst816(dev)) =
+            &circuit.netlist.part(part).model
+        else {
+            return None;
+        };
+        let index = dev.touches.partition_point(|event| event.at < at);
+        let event = dev.touches.get(index)?;
+        (event.at == at).then_some(event.to)
     }
 
     /// The records that end at `at`, read from each sender stopped there and listed for each

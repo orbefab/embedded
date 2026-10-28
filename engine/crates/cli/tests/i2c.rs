@@ -140,6 +140,7 @@ fn the_fixtures_run_the_committed_hex() {
         ("i2c-arbitration", "u1", "firmware/sketch/i2c_scan.hex"),
         ("i2c-contend", "u1", "firmware/sketch/i2c_contend.hex"),
         ("i2c-contend", "u2", "firmware/sketch/i2c_contend.hex"),
+        ("i2c-cst816-fast", "u1", "firmware/sketch/cst816_fast.hex"),
     ];
     for (name, part, hex) in cases {
         let path = repo(&format!("crates/cli/tests/fixtures/{name}/netlist.json"));

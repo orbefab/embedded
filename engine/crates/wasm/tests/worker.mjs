@@ -28,6 +28,7 @@ const INPUTS = [
   { name: 'atmega-analog-serial', part: 'rv1', setting: 'level' },
   { name: 'v-serial', part: 'v1', setting: 'serial' },
   { name: 'atmega-serial-echo', part: 'vrx', setting: 'serial' },
+  { name: 'atmega-cst816', part: 'u2', setting: 'touch' },
   { name: 'i2c-stretch', part: 'sw1', setting: 'contact', netlist: I2C_STRETCH },
 ];
 
@@ -393,12 +394,17 @@ function example(wasm, job, json, native) {
 
 // The setting `part` holds after its last event in `session.export()`, and that event's time.
 // A contact is `true` for closed. A level is the position. A serial send is its baud, frame
-// and bytes. None of those is the document's initial setting when the part has no event yet.
+// and bytes. A touch is its x, y and down. None of those is the document's initial setting
+// when the part has no event yet.
 function lastSetting(session, { part, setting }) {
   const found = JSON.parse(Buffer.from(session.export())).parts.find((item) => item.name === part);
   if (setting === 'contact') {
     const last = found.events.at(-1);
     return { at: last && BigInt(last.t_ps), value: (last?.state ?? found.initial) === 'closed' };
+  }
+  if (setting === 'touch') {
+    const last = found.touches.at(-1);
+    return { at: last && BigInt(last.t_ps), value: { x: last.x, y: last.y, down: last.down } };
   }
   if (setting === 'serial') {
     const last = found.voltage.events.at(-1);
@@ -441,13 +447,43 @@ function applySeededSerial(wasm, session, rng, input) {
   return true;
 }
 
-// One seeded input on `part` at `now`, a contact, a position from 0.1 to 0.9, or one serial
-// byte. A setting equal to the part's last throws `no_change`, and then a contact is moved to
-// the other one. An input that lands is in the export at `Applied.at` with the setting passed.
-// Whether it landed.
+// One point on a `cst816`. A point equal to the last one still lands. An input that lands is
+// the last `touches` event, at `Applied.at`, with the x, y and down passed. Whether it landed.
+function applySeededTouch(wasm, session, rng, input) {
+  const { part } = input;
+  const x = Number(rng.below(4096n));
+  const y = Number(rng.below(4096n));
+  const down = rng.below(2n) === 0n;
+  const before = lastSetting(session, input);
+  let applied;
+  try {
+    applied = session.applyTouch(part, session.now(), x, y, down);
+  } catch (error) {
+    assert.ok(error instanceof wasm.SimError, `${part} throws a SimError`);
+    assert.equal(error.code, 'past_stop', `${part} lands or is past the stop`);
+    assert.deepEqual(lastSetting(session, input), before, `${part} past the stop is unchanged`);
+    return false;
+  }
+  const at = applied.at;
+  applied.free();
+  assert.deepEqual(
+    lastSetting(session, input),
+    { at, value: { x, y, down } },
+    `${part} holds the point from Applied.at`,
+  );
+  return true;
+}
+
+// One seeded input on `part` at `now`, a contact, a position from 0.1 to 0.9, one serial
+// byte, or one touch. A setting equal to the part's last throws `no_change`, and then a
+// contact is moved to the other one. A touch equal to the last one still lands. An input
+// that lands is in the export at `Applied.at` with the setting passed. Whether it landed.
 function applySeeded(wasm, session, rng, input) {
   if (input.setting === 'serial') {
     return applySeededSerial(wasm, session, rng, input);
+  }
+  if (input.setting === 'touch') {
+    return applySeededTouch(wasm, session, rng, input);
   }
   const { part } = input;
   const contact = input.setting === 'contact';
@@ -567,6 +603,11 @@ function argumentChecks(wasm, examples) {
     ['applySerial ps', 'bigint', (v) => serial.applySerial('rv1', v, 9600, new Uint8Array([1]))],
     ['applySerial baud', 'number', (v) => serial.applySerial('rv1', 0n, v, new Uint8Array([1]))],
     ['applySerial bytes', 'Uint8Array', (v) => serial.applySerial('rv1', 0n, 9600, v)],
+    ['applyTouch part', 'string', (v) => serial.applyTouch(v, 0n, 1, 2, true)],
+    ['applyTouch ps', 'bigint', (v) => serial.applyTouch('rv1', v, 1, 2, true)],
+    ['applyTouch x', 'number', (v) => serial.applyTouch('rv1', 0n, v, 2, true)],
+    ['applyTouch y', 'number', (v) => serial.applyTouch('rv1', 0n, 1, v, true)],
+    ['applyTouch down', 'boolean', (v) => serial.applyTouch('rv1', 0n, 1, 2, v)],
     ['display', 'string', (v) => serial.display(v)],
     ['displayImage', 'string', (v) => serial.displayImage(v)],
     ['finish', 'bigint', (v) => wasm.Session.record(steps).finish(v)],
@@ -593,9 +634,27 @@ function argumentChecks(wasm, examples) {
     BAD_NAMES,
     'bad_name',
   );
+  refuses('applyTouch part', (part) => serial.applyTouch(part, 0n, 1, 2, true), BAD_NAMES, 'bad_name');
   refuses('display', (part) => serial.display(part), BAD_NAMES, 'bad_name');
   refuses('displayImage', (part) => serial.displayImage(part), BAD_NAMES, 'bad_name');
   refuses('applyLevel si', (si) => serial.applyLevel('rv1', 0n, si), [NaN, Infinity], 'not_finite');
+  refuses(
+    'applyTouch x',
+    (x) => serial.applyTouch('rv1', 0n, x, 0, true),
+    [4096, -1, 1.5, 4095.5],
+    'value',
+  );
+  refuses(
+    'applyTouch coordinate',
+    (x) => serial.applyTouch('rv1', 0n, x, 0, true),
+    [NaN, Infinity, -Infinity],
+    'not_finite',
+  );
+  assert.throws(
+    () => serial.applyTouch('rv1', 0n, 4096, 0, true),
+    (error) => error instanceof wasm.SimError && error.code === 'value' && error.rule === 'span',
+    'a coordinate past 4095 throws value span',
+  );
   refuses(
     'applySerial baud',
     (rate) => serial.applySerial('rv1', 0n, rate, new Uint8Array([1])),
@@ -622,6 +681,9 @@ function argumentChecks(wasm, examples) {
       () => serial.applySerial('rv1', 0n, 0, 'x'),
       'bad_baud',
     ],
+    ['applyTouch("1rv", -1n, 0, 0, true)', () => serial.applyTouch('1rv', -1n, 0, 0, true), 'bad_name'],
+    ['applyTouch("rv1", -1n, "x", 0, true)', () => serial.applyTouch('rv1', -1n, 'x', 0, true), 'range'],
+    ['applyTouch("rv1", 0n, NaN, "x", true)', () => serial.applyTouch('rv1', 0n, NaN, 'x', true), 'not_finite'],
     ['run("x", -1n)', () => wasm.run('x', -1n), 'type'],
   ];
   for (const [what, call, code] of firstWrong) {
@@ -652,6 +714,25 @@ function argumentChecks(wasm, examples) {
     isCode('wrong_setting'),
     'bytes on a steps source throw wrong_setting',
   );
+  assert.throws(
+    () => stepsSession.applyTouch('v1', 0n, 1, 2, true),
+    isCode('wrong_setting'),
+    'a touch on a steps source throws wrong_setting',
+  );
+  const blink = wasm.Session.open(read('atmega-blink'));
+  assert.throws(
+    () => blink.applyTouch('r1', 0n, 1, 2, true),
+    isCode('not_settable'),
+    'a touch on a resistor throws not_settable',
+  );
+  blink.free();
+  const touch = wasm.Session.record(read('atmega-cst816'));
+  const again = touch.applyTouch('u2', 50_000_000_000n, 16, 32, true);
+  assert.equal(again.at, 50_000_000_000n, 'a repeated point still lands');
+  again.free();
+  const held = lastSetting(touch, { part: 'u2', setting: 'touch' });
+  assert.deepEqual(held, { at: 50_000_000_000n, value: { x: 16, y: 32, down: true } });
+  touch.free();
   const serialSource = wasm.Session.open(read('v-serial'));
   assert.throws(
     () => serialSource.applySerial('v1', 0n, 9600, new Uint8Array()),

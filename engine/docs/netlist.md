@@ -923,6 +923,58 @@ A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.u
 
 An `st77916` has no `ratings` object and no `i`, `v`, or `p`. Its logic signal is `RST`. It joins `TE` to `VCC` and to `GND` through the stage its drive stamps. `CS`, `SCLK`, `D0` to `D3`, `RST` and `BLK` draw no current, so each needs another DC path.
 
+### CST816
+
+`kind` is `cst816`, a touch controller that is an I2C target at address 0x15. It is an active chip with no clock of its own. Pins are `VCC`, `GND`, `SCL`, `SDA`, `INT` and `RST`. Every pin is required. `SDA` and `INT` are open drain into `GND`, `low_drop` over `GND` behind `low_resistance`. `SCL` is an input. The part does not hold `SCL`, so a target that clock-stretches is not modelled, as [engine.md](engine.md#i2c-targets) says. The model answers while idle, and it answers on the first transfer after `RST` rises. Auto-sleep and the start-up time after reset are not modelled.
+
+`examples/atmega-cst816` puts one on an ATmega328P at 3.3 V and 8 MHz. 2.2 kohm resistors pull `SDA` and `SCL` up to `VCC`, and the bus has no capacitance. 10 kohm pulls `INT` up. `RST` is tied to `VCC`. The part runs `firmware/sketch/cst816.hex`, which reads register 0x02 for five bytes and prints the finger count, X and Y at 9600 baud, twice, 20 ms apart. The part is:
+
+```json
+{
+  "name": "u2",
+  "kind": "cst816",
+  "pins": {
+    "VCC": "vcc", "GND": "gnd", "SCL": "pc5", "SDA": "pc4", "INT": "pd2", "RST": "vcc"
+  },
+  "low_drop": { "value": 0.0, "unit": "V", "source": "user" },
+  "low_resistance": { "value": 133.3, "unit": "ohm", "source": "user" },
+  "input_threshold": {
+    "low": { "value": 0.3, "unit": "1", "source": "user" },
+    "high": { "value": 0.7, "unit": "1", "source": "user" }
+  },
+  "touches": [
+    { "t_ps": 20000000000, "x": 291, "y": 69, "down": true },
+    { "t_ps": 41000000000, "x": 16, "y": 32, "down": true }
+  ]
+}
+```
+
+`low_resistance` of 133.3 ohm is 0.4 V at 3 mA, a stated assumption for the open-drain low. `input_threshold` of 0.3 and 0.7 is a guess.
+
+Registers `0x01` to `0x06` and `0xA7` are the layout the open drivers read. No datasheet was in hand. The chip id byte below is the same kind of guess.
+
+- `0x01` is the gesture. It stays 0. The model has no gesture classifier.
+- `0x02` is the finger count, 1 while the finger is down and 0 while it is up.
+- `0x03` and `0x04` are X high and X low. `0x05` and `0x06` are Y high and Y low. Each coordinate is 12 bits, from 0 to 4095. The high register holds bits 11 to 8 in bits 3 to 0, and bits 7 to 4 stay 0. Event flags in those bits are not modelled.
+- `0xA7` is the chip id, `0xB4`. That byte is a guess: it is the byte those drivers expect for a CST816S, and no sheet was in hand.
+- Every other register reads 0 until a host writes it.
+
+The first data byte of a write sets the register pointer. Each later write byte stores at the pointer and then advances it by one, wrapping at 256. Each read byte returns the pointer and then advances it the same way. The advance is inferred from the burst those drivers read. A touch writes `0x01` to `0x06` and leaves the pointer. A finger up keeps the last X and Y and sets the finger count to 0. A host write can overwrite any of those bytes. `RST` low restores the chip id and clears the rest on that edge, and drops a touch that arrives while it is held. `INT` releases 1 ps later. `SDA` releases 300 ns later, whatever `SCL` reads. `INT` is released at rest. Each touch drives it low for 100 us, starting 1 ps after the touch. That width is a guess. A second touch during the pulse extends the one release.
+
+`touches` may be absent. Each event is one point, after t = 0 and at least 2000 ps after the previous event. `x` and `y` are integers from 0 to 4095. A point equal to the previous one is still an event. A session appends to this array the way it appends a serial send, as [engine.md](engine.md#sessions) says.
+
+| Field | Unit | Rule |
+| --- | --- | --- |
+| `low_resistance` | `ohm` | the resistor's |
+| `low_drop` | `V` | at least 0, else rule `non_negative` |
+| `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+| `touches[].x`, `touches[].y` | | from 0 to 4095, else rule `span` |
+| `touches[].t_ps` | `ps` | the schedule rules, on field `touches` |
+
+A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`. A touch at t = 0, a touch that is not after the previous one, and a touch less than 2000 ps after it are `netlist.schedule`, as [diagnostics.md](diagnostics.md#netlistschedule) says.
+
+A `cst816` has no `ratings` object and no `i`, `v`, or `p`. Its logic signals are `SCL`, `SDA`, `INT` and `RST`. It joins `SDA` to `GND` and `INT` to `GND` through the stage its drive stamps. `SCL`, `RST` and `VCC` draw no current, so each needs another DC path.
+
 ## Ratings
 
 A rating bounds the stress on a part. Every key of a kind's `ratings` object is required. Each value is a value object, or `null` for a part that is deliberately unrated.
@@ -934,7 +986,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `linear_regulator` | `current`, `power` | `#<part>.iout`, `#<part>.p` |
 | `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
 | `nmos` | `current`, `power` | `#<part>.id`, `#<part>.p` |
-| `voltage_source`, `current_source`, `capacitor`, `inductor`, `relay`, `switch`, `ne555`, `atmega328p`, `potentiometer`, `spi_replay`, `st77916` | none | |
+| `voltage_source`, `current_source`, `capacitor`, `inductor`, `relay`, `switch`, `ne555`, `atmega328p`, `potentiometer`, `spi_replay`, `st77916`, `cst816` | none | |
 
 `current` is in `A`. `power` is in `W`. A rating must be greater than 0. A missing key, an unknown key, and a missing `ratings` object are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.current` or `ratings.power`. A value of 0 or below is `netlist.value` with the same field.
 

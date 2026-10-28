@@ -102,6 +102,7 @@ impl Netlist {
             Appended::Contact(to) => self.append_contact(id, at, to),
             Appended::Level(level) => self.append_level(id, at, level),
             Appended::Serial(send) => self.append_serial(id, at, send),
+            Appended::Touch(touch) => self.append_touch(id, at, touch),
         }
     }
 
@@ -135,6 +136,16 @@ impl Netlist {
             panic!("{} takes no serial event", part.name.as_str());
         };
         serial.push(at, send);
+    }
+
+    fn append_touch(&mut self, id: PartId, at: Time, touch: Touch) {
+        let part = &mut self.parts[id.index()];
+        let Model::Chip(Chip::Cst816(dev)) = &mut part.model else {
+            panic!("{} takes no touch", part.name.as_str());
+        };
+        debug_assert_eq!(dev.earliest(at), Some(at));
+        debug_assert!(touch.x <= Cst816::COORD_MAX && touch.y <= Cst816::COORD_MAX);
+        dev.touches.push(Event { at, to: touch });
     }
 }
 
@@ -263,6 +274,7 @@ impl Model {
             Model::Chip(Chip::Atmega328p(_)) => &Atmega328p::PINS,
             Model::Chip(Chip::SpiReplay(_)) => &SpiReplay::PINS,
             Model::Chip(Chip::St77916(_)) => &St77916::PINS,
+            Model::Chip(Chip::Cst816(_)) => &Cst816::PINS,
         }
     }
 
@@ -320,6 +332,7 @@ impl Model {
             Model::Chip(Chip::Atmega328p(m)) => &m.pins,
             Model::Chip(Chip::SpiReplay(r)) => &r.pins,
             Model::Chip(Chip::St77916(p)) => &p.pins,
+            Model::Chip(Chip::Cst816(dev)) => &dev.pins,
         }
     }
 
@@ -346,13 +359,14 @@ impl Model {
         current.into_iter().chain(power).collect()
     }
 
-    /// The next contact edge, source jump, or potentiometer move strictly after `at`.
+    /// The next contact edge, source jump, potentiometer move, or touch strictly after `at`.
     pub fn next_change_after(&self, at: Time) -> Option<Time> {
         match self {
             Model::VoltageSource(source) => source.voltage.next_change_after(at),
             Model::CurrentSource(source) => source.current.next_change_after(at),
             Model::Switch(switch) => switch.schedule.next_change_after(at),
             Model::Potentiometer(pot) => pot.position.next_change_after(at),
+            Model::Chip(Chip::Cst816(dev)) => dev.next_touch_after(at),
             Model::Resistor(_)
             | Model::Diode(_)
             | Model::Led(_)
@@ -742,6 +756,8 @@ pub enum Appended {
     Level(Finite),
     /// Bytes a `serial` source sends from the appended time.
     Serial(SerialSend),
+    /// A point on a `cst816`.
+    Touch(Touch),
 }
 
 impl Serialize for Edge {
@@ -857,6 +873,7 @@ pub enum Chip {
     Atmega328p(Box<Atmega328p>),
     SpiReplay(Box<SpiReplay>),
     St77916(Box<St77916>),
+    Cst816(Box<Cst816>),
 }
 
 /// An ATmega328P in its 28-pin DIP, running `firmware` from power-on. Microchip DS40002061B.
@@ -931,6 +948,54 @@ impl St77916 {
     pub const PINS: [&'static str; 11] = [
         "VCC", "GND", "CS", "SCLK", "D0", "D1", "D2", "D3", "RST", "TE", "BLK",
     ];
+}
+
+/// A CST816 touch controller, an active chip with no clock of its own. It is an I2C target at
+/// address 0x15. `SDA` and `INT` are open drain into `GND` through `low_resistance` above
+/// `low_drop`. `SCL` is an input, and the part does not hold it. `RST` low clears it. It reads
+/// each of those four pins through `input_threshold`, fractions of its supply.
+///
+/// `touches` is the finger. Each event is one point, after t = 0 and at least [`MIN_GAP_PS`]
+/// after the previous event. `x` and `y` run from 0 to [`Cst816::COORD_MAX`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Cst816 {
+    pub pins: [NetId; 6],
+    /// Volt, at least 0. The open-drain low side.
+    pub low_drop: Value,
+    /// Ohm.
+    pub low_resistance: Value,
+    pub input_threshold: Threshold,
+    pub touches: Vec<Event<Touch>>,
+}
+
+/// One point of a [`Cst816`]: the finger is down at `(x, y)`, or up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Touch {
+    pub x: u16,
+    pub y: u16,
+    pub down: bool,
+}
+
+impl Cst816 {
+    pub const PINS: [&'static str; 6] = ["VCC", "GND", "SCL", "SDA", "INT", "RST"];
+    /// The largest `x` or `y`.
+    pub const COORD_MAX: u16 = 4095;
+
+    /// The next touch strictly after `at`.
+    pub fn next_touch_after(&self, at: Time) -> Option<Time> {
+        let k = self.touches.partition_point(|event| event.at <= at);
+        self.touches.get(k).map(|event| event.at)
+    }
+
+    /// The first time at or after `from` that one more touch passes the schedule rules.
+    /// With no touch that is 1 ps. After one it is that touch plus [`MIN_GAP_PS`].
+    pub fn earliest(&self, from: Time) -> Option<Time> {
+        let first = match self.touches.last() {
+            None => 1,
+            Some(last) => last.at.as_ps().checked_add(MIN_GAP_PS)?,
+        };
+        Some(Time::from_ps(from.as_ps().max(first)))
+    }
 }
 
 /// One transaction of a `spi_replay`: its phases, then `data` on `lanes`, from `at` to `end`.

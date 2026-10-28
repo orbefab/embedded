@@ -10,7 +10,7 @@ use sim_core::diagnostic::Diagnostic;
 use sim_core::finite::Finite;
 use sim_core::logic::Level;
 use sim_core::name::Name;
-use sim_core::netlist::{Baud, Contact, Frame};
+use sim_core::netlist::{Baud, Contact, Cst816, Frame, Touch};
 use sim_core::run_folder::RunFolder;
 use sim_core::time::Time;
 use sim_core::timestamp::Timestamp;
@@ -222,6 +222,20 @@ fn name(part: &str) -> Result<Name, SimError> {
 
 fn level(si: f64) -> Result<Finite, SimError> {
     Finite::new(si).ok_or(SimError::new(Code::NotFinite))
+}
+
+fn coordinate(value: f64) -> Result<u16, SimError> {
+    let whole = value as u16;
+    if value.is_finite() && f64::from(whole) == value && whole <= Cst816::COORD_MAX {
+        return Ok(whole);
+    }
+    if !value.is_finite() {
+        return Err(SimError::new(Code::NotFinite));
+    }
+    Err(SimError {
+        rule: Some("span".to_string()),
+        ..SimError::new(Code::Value)
+    })
 }
 
 fn parse_baud(rate: f64) -> Result<Baud, SimError> {
@@ -581,6 +595,26 @@ impl Session {
                 bytes,
             }),
         )
+    }
+
+    /// A point on a `cst816` from `ps` on. `x` and `y` are integers from 0 to 4095.
+    #[wasm_bindgen(js_name = applyTouch)]
+    pub fn apply_touch(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "string")] part: &Text,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] ps: Bigint,
+        #[wasm_bindgen(unchecked_param_type = "number")] x: Number,
+        #[wasm_bindgen(unchecked_param_type = "number")] y: Number,
+        #[wasm_bindgen(unchecked_param_type = "boolean")] down: Bool,
+    ) -> Result<Applied, SimError> {
+        let part = name(&str_of(part)?)?;
+        let at = u64_of(ps)?;
+        let touch = Touch {
+            x: coordinate(f64_of(x)?)?,
+            y: coordinate(f64_of(y)?)?,
+            down: bool_of(down)?,
+        };
+        self.apply(part, at, Setting::Touch(touch))
     }
 
     fn apply(&mut self, part: Name, at: u64, setting: Setting) -> Result<Applied, SimError> {

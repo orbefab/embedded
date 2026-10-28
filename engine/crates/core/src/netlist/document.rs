@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::{Event, Model, Netlist, SerialEvent, Switch, Value as Level};
+use super::{Chip, Event, Model, Netlist, SerialEvent, Switch, Touch, Value as Level};
 use crate::diagnostic::Diagnostic;
 use crate::name::Name;
 use crate::time::Time;
@@ -45,6 +45,9 @@ impl Document {
                     }
                     if let Some(serial) = model.serial() {
                         append_serial(&mut part[serial.field], serial.waveform.events());
+                    }
+                    if let Model::Chip(Chip::Cst816(dev)) = model {
+                        append_touches(part, &dev.touches);
                     }
                 }
             }
@@ -104,6 +107,34 @@ fn append_serial(field: &mut Value, events: &[SerialEvent]) {
         .as_array_mut()
         .expect("parsed events")
         .extend(appended.iter().map(serial_event));
+}
+
+fn append_touches(part: &mut Value, events: &[Event<Touch>]) {
+    let own = part
+        .get("touches")
+        .and_then(|touches| touches.as_array())
+        .map(|touches| touches.len())
+        .unwrap_or(0);
+    let appended = &events[own..];
+    if appended.is_empty() {
+        return;
+    }
+    if part.get("touches").is_none() {
+        part["touches"] = serde_json::json!([]);
+    }
+    part["touches"]
+        .as_array_mut()
+        .expect("parsed touches")
+        .extend(appended.iter().map(touch_event));
+}
+
+fn touch_event(event: &Event<Touch>) -> Value {
+    serde_json::json!({
+        "t_ps": event.at.as_ps(),
+        "x": event.to.x,
+        "y": event.to.y,
+        "down": event.to.down,
+    })
 }
 
 fn serial_event(event: &SerialEvent) -> Value {

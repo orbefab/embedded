@@ -8,6 +8,7 @@ Each example has `viewer.json` beside `netlist.json`. The file names the 3D mode
 | --- | --- |
 | `capacitor-ceramic` | A ceramic capacitor. Used for every capacitor under 1 uF, including the 22 pF crystal loads, the 10 nF control bypass, and the 100 nF parts. |
 | `capacitor-electrolytic` | An electrolytic capacitor. Used for every capacitor of 1 uF or more. |
+| `cst816` | A touch controller on an I2C bus, the `cst816` part `examples/atmega-cst816` reads. |
 | `current-source` | A DC current source. |
 | `dc-supply` | A DC voltage source. |
 | `dev-board-328p` | An ATmega328P on a common ATmega328P development board, revision 3, drawn as the whole board. |
