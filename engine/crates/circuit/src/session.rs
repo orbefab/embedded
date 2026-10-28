@@ -3,6 +3,7 @@ use std::mem::size_of;
 use sim_core::diagnostic::{Diagnostic, Solve};
 use sim_core::finite::Finite;
 use sim_core::i2c::{I2c, I2cRow};
+use sim_core::link::{Link, LinkRow};
 use sim_core::logic::{Change, Level};
 use sim_core::name::{Name, Ref};
 use sim_core::netlist::{Analysis, Document, Netlist, Transient};
@@ -140,14 +141,18 @@ pub struct Session {
     /// order. The unit is the column's unit times picoseconds.
     integrals: Vec<f64>,
     /// Bytes a USART sent whose stop bit ended at or before the last accepted step, in the
-    /// order stop bits ended, then in `usarts` order. `serial_forgotten` is the first byte a
-    /// reader may still see, counting from the first byte. An unrecorded session drains the
-    /// bytes before that, so `serial[0]` is that byte. A recorded session keeps every byte.
+    /// order stop bits ended, then by part name, USART index and send order.
+    /// `serial_forgotten` is the first byte a reader may still see, counting from the first
+    /// byte. An unrecorded session drains the bytes before that, so `serial[0]` is that byte. A
+    /// recorded session keeps every byte.
     serial: Vec<SerialByte>,
     serial_forgotten: u64,
     /// TWI phases that ended at or before the last accepted step, in the order they ended, then
     /// in `twis` order. Only a recorded session keeps them, for `i2c.csv`.
     i2c: Vec<I2cRow>,
+    /// Records that ended at or before the last accepted step, ordered by end, then by sender
+    /// name, then by sequence. Only a recorded session keeps them, for `link.csv`.
+    link: Vec<LinkRow>,
     pub(crate) record: Option<Record>,
     /// The JSON the session opened from, which `export` writes back.
     document: Option<Document>,
@@ -451,6 +456,7 @@ impl Session {
             serial: Vec::new(),
             serial_forgotten: 0,
             i2c: Vec::new(),
+            link: Vec::new(),
             record,
             document,
             opened: None,
@@ -538,8 +544,10 @@ impl Session {
         self.state = state;
         let accepted = self.accepted();
         self.serial.extend(self.actives.deliver(accepted));
+        let records = self.actives.records();
         if self.record.is_some() {
             self.i2c.extend(self.actives.phases());
+            self.link.extend(records);
         } else {
             self.actives.phases().for_each(drop);
         }
@@ -647,9 +655,10 @@ impl Session {
     /// Every byte a USART sent after the ones `cursor` has read, up to the last whose stop bit
     /// ended at or before the last accepted step, and the cursor past them. So a byte appears at
     /// most one step after its stop bit ends, and once the session has ended every byte that
-    /// ended by `now` is here. The bytes are in the order their stop bits ended, then in
-    /// `usarts` order. On one USART that is the order they started. Solves nothing. A cursor
-    /// past the end, from another session or a count the caller made, reads nothing and stays.
+    /// ended by `now` is here. The bytes are in the order their stop bits ended, then by part
+    /// name, USART index and send order. On one USART that is the order they started. Solves
+    /// nothing. A cursor past the end, from another session or a count the caller made, reads
+    /// nothing and stays.
     /// `None` when `cursor` is before a byte `forget_serial` dropped.
     pub fn serial_since(&self, cursor: SerialCursor) -> Option<(&[SerialByte], SerialCursor)> {
         let cursor = u64::from(cursor);
@@ -701,7 +710,7 @@ impl Session {
 
     /// The observations and trace of a recorded session advanced to its end, and its warnings,
     /// ratings and fault in `diagnostics`. The trace holds the serial log when a chip has a USART,
-    /// and the TWI phases when a chip has a TWI.
+    /// the TWI phases when a chip has a TWI, and the records when a chip can send them.
     pub(crate) fn outcome(self, diagnostics: &mut Vec<Diagnostic>) -> Outcome {
         let (State::Ended { at, row, end }, Some(record)) = (self.state, self.record) else {
             unreachable!("a recorded run finishes once it has ended");
@@ -716,6 +725,10 @@ impl Session {
         let twis = self.actives.twis();
         if !twis.is_empty() {
             trace.attach_i2c(I2c::new(twis.to_vec(), self.i2c));
+        }
+        let senders = self.actives.senders();
+        if !senders.is_empty() {
+            trace.attach_link(Link::new(senders.to_vec(), self.link));
         }
         if let End::Fault(fault) = end {
             diagnostics.push(fault);

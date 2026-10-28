@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-use common::examples::{examples, runs_firmware};
+use common::examples::{examples, runs_a_core};
 use sha2::{Digest, Sha256};
 use sim_cli::Completed;
 use sim_core::logic::{Level, Logic};
@@ -105,6 +105,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "relay-flyback",
             "relay-switch",
             "rl-step",
+            "spi-replay",
             "v-pulse-rc",
             "v-serial",
             "v-steps",
@@ -205,7 +206,7 @@ fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
     }
 }
 
-/// `example` holds netlist.json, and deck.cir and ngspice.json unless it runs firmware.
+/// `example` holds netlist.json, and deck.cir and ngspice.json unless it runs a core.
 fn matches_its_reference(example: &Path) {
     let label = example.display();
     let reference_path = example.join("ngspice.json");
@@ -217,10 +218,10 @@ fn matches_its_reference(example: &Path) {
         );
         return;
     }
-    if runs_firmware(&netlist::parse(&input).unwrap()) {
+    if runs_a_core(&netlist::parse(&input).unwrap()) {
         assert!(
             !reference_path.exists() && !example.join("deck.cir").exists(),
-            "{label} runs firmware, which a deck has no CPU for, so it has no reference"
+            "{label} runs an active chip's core, which a deck has none of, so it has no reference"
         );
         return;
     }

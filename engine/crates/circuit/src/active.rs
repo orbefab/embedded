@@ -4,10 +4,12 @@
 //! Active chips, holds the loop's protocol.
 
 pub(crate) mod avr;
+pub(crate) mod replay;
 #[cfg(test)]
 pub(crate) mod script;
 
 use sim_core::i2c::{I2cPhase, I2cRow};
+use sim_core::link::{LinkRow, Record, RecordKind};
 use sim_core::name::Name;
 use sim_core::netlist::{NetId, PartId};
 use sim_core::serial::SerialByte;
@@ -74,17 +76,42 @@ pub(crate) struct Chip {
     pub(crate) usarts: &'static [&'static str],
     /// Whether its core has a TWI master, whose phases go to `i2c.csv`.
     pub(crate) twi: bool,
+    /// Whether its core sends records, which go to `link.csv`.
+    pub(crate) sends: bool,
+    /// Its SPI target's pins, on a chip that takes `Spi` records.
+    pub(crate) spi_target: Option<SpiTarget>,
     /// The core at power-on.
     pub(crate) core: Core,
 }
 
-/// Where a core stopped before its limit: at `at` its image may differ, or it samples.
+/// The nets of a chip's SPI target pins. It takes each `Spi` record whose CS and SCLK are on
+/// these nets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SpiTarget {
+    pub(crate) cs: NetId,
+    pub(crate) sclk: NetId,
+}
+
+impl SpiTarget {
+    fn takes(self, record: &Record) -> bool {
+        match &record.kind {
+            RecordKind::Spi(spi) => spi.nets.cs == self.cs && spi.nets.sclk == self.sclk,
+            RecordKind::Pulses(_) | RecordKind::Duty(_) => false,
+        }
+    }
+}
+
+/// Where a core stopped before its limit: at `at` its image may differ, it samples, or a record
+/// it sent ends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Stop {
     pub(crate) at: Time,
     /// Whether it samples at `at`. It reads every one of its samples on the step's solution
     /// there, before any change at `at`.
     pub(crate) sample: bool,
+    /// Whether a record it sent ends at `at`. The image does not change at that stop for the
+    /// record's sake.
+    pub(crate) record: bool,
 }
 
 /// A core's state, everything it remembers. `Clone` is the checkpoint.
@@ -96,13 +123,19 @@ pub(crate) struct Stop {
 ///   does. All of a time's effects are one stop.
 /// - A clocked kind runs to cycle `floor(limit_ps * f / 1e12)` and puts a stop at cycle `c` at
 ///   `ceil(c * 1e12 / f)` ps, counting from its clock domain's last frequency change.
-/// - `sample` and `input` never change the image. What they cause comes at least 1 ps later.
-/// - `input` and `deliver` read nothing but the core and their arguments, so they take two
-///   equal cores to two equal cores. A clone shares only what no call writes: the AVR
-///   core's flash and decoded ops behind an `Arc`, and a script core's script.
+/// - `sample`, `input` and `take` never change the image. What they cause comes at least 1 ps
+///   later.
+/// - Each record a core sends ends at a stop with `record` set, and the core holds it from that
+///   stop until `drain_records` takes it. A core numbers its records from 0, and the count
+///   carries in its copies.
+/// - `input`, `take`, `deliver` and `drain_records` read nothing but the core and their
+///   arguments, so they take two equal cores to two equal cores. A clone shares only what no
+///   call writes: the AVR core's flash and decoded ops behind an `Arc`, a replay core's
+///   records, and a script core's script.
 #[derive(Debug)]
 pub(crate) enum Core {
     Avr(Box<avr::Core>),
+    SpiReplay(replay::Core),
     #[cfg(test)]
     Script(script::Core),
 }
@@ -111,6 +144,7 @@ impl Clone for Core {
     fn clone(&self) -> Self {
         match self {
             Core::Avr(core) => Core::Avr(core.clone()),
+            Core::SpiReplay(core) => Core::SpiReplay(core.clone()),
             #[cfg(test)]
             Core::Script(core) => Core::Script(core.clone()),
         }
@@ -121,7 +155,6 @@ impl Clone for Core {
     fn clone_from(&mut self, source: &Self) {
         match (self, source) {
             (Core::Avr(core), Core::Avr(source)) => core.clone_from(source),
-            #[cfg(test)]
             (core, source) => *core = source.clone(),
         }
     }
@@ -131,6 +164,7 @@ impl Core {
     fn run_until(&mut self, limit: Time) -> Option<Stop> {
         match *self {
             Core::Avr(ref mut core) => core.run_until(limit),
+            Core::SpiReplay(ref mut core) => core.run_until(limit),
             #[cfg(test)]
             Core::Script(ref mut core) => core.run_until(limit),
         }
@@ -139,6 +173,7 @@ impl Core {
     fn drive(&self) -> &[Drive] {
         match *self {
             Core::Avr(ref core) => core.drive(),
+            Core::SpiReplay(ref core) => core.drive(),
             #[cfg(test)]
             Core::Script(ref core) => core.drive(),
         }
@@ -148,6 +183,7 @@ impl Core {
     fn sample(&mut self, at: Time, volts: &[f64]) {
         match *self {
             Core::Avr(ref mut core) => core.sample(at, volts),
+            Core::SpiReplay(_) => unreachable!("a replay never samples"),
             #[cfg(test)]
             Core::Script(ref mut core) => core.sample(at, volts),
         }
@@ -157,6 +193,7 @@ impl Core {
     fn input(&mut self, at: Time, levels: &[bool]) {
         match *self {
             Core::Avr(ref mut core) => core.input(at, levels),
+            Core::SpiReplay(ref mut core) => core.input(at, levels),
             #[cfg(test)]
             Core::Script(ref mut core) => core.input(at, levels),
         }
@@ -168,8 +205,43 @@ impl Core {
     fn deliver(&mut self, through: Time, sent: impl FnMut(Frame), saw: impl FnMut(Phase)) {
         match *self {
             Core::Avr(ref mut core) => core.deliver(through, sent, saw),
+            Core::SpiReplay(_) => {}
             #[cfg(test)]
-            Core::Script(_) => {}
+            Core::Script(ref mut core) => core.deliver(through, sent),
+        }
+    }
+
+    /// The records it sent that it still holds, in the order it sent them.
+    fn records(&self) -> &[Record] {
+        match *self {
+            Core::Avr(_) => &[],
+            Core::SpiReplay(ref core) => core.records(),
+            #[cfg(test)]
+            Core::Script(ref core) => core.records(),
+        }
+    }
+
+    /// Hands over and drops each record it holds that ended at or before `through`, in the
+    /// order it sent them.
+    fn drain_records(&mut self, through: Time, sent: impl FnMut(Record)) {
+        match *self {
+            Core::Avr(_) => {}
+            Core::SpiReplay(ref mut core) => core.drain_records(through, sent),
+            #[cfg(test)]
+            Core::Script(ref mut core) => core.drain_records(through, sent),
+        }
+    }
+
+    /// Takes the records that end at `at` on its record pins, ordered by end, then by sender name,
+    /// then by sequence.
+    fn take(&mut self, at: Time, records: &[LinkRow]) {
+        match *self {
+            Core::Avr(_) | Core::SpiReplay(_) => unreachable!(
+                "a chip with no record pins took {} records at {at:?}",
+                records.len()
+            ),
+            #[cfg(test)]
+            Core::Script(ref mut core) => core.take(at, records),
         }
     }
 }
@@ -196,6 +268,7 @@ pub(crate) struct Phase {
 pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
     match kind {
         Active::Atmega328p(mcu) => avr::chip(part, mcu),
+        Active::SpiReplay(replay) => replay::chip(part, replay),
     }
 }
 
@@ -243,6 +316,9 @@ pub(crate) struct Actives {
     /// The name of each part whose core has a TWI, in part order. An `I2cRow`'s `twi` indexes
     /// this.
     twis: Vec<Name>,
+    /// The name of each part whose core sends records, in part order. A `LinkRow`'s `sender`
+    /// indexes this.
+    senders: Vec<Name>,
 }
 
 struct Ahead {
@@ -251,10 +327,11 @@ struct Ahead {
     delivered: Delivered,
 }
 
-/// A delivered byte and the end of its stop bit, which orders it.
+/// A delivered byte, the end of its stop bit, and how many bytes its chip staged before it.
 struct Staged {
     end: Time,
     byte: SerialByte,
+    seq: u64,
 }
 
 /// A delivered TWI phase and its end, which orders it.
@@ -267,6 +344,7 @@ struct StagedPhase {
 struct Staging {
     bytes: Vec<Staged>,
     phases: Vec<StagedPhase>,
+    records: Vec<LinkRow>,
 }
 
 /// Every byte of one chip whose stop bit ended at or before `through` was staged, once, and
@@ -293,6 +371,13 @@ struct Staging {
 /// passed: a STOP ends on the SDA rise the TWI reads. So a phase is staged by its count, not its
 /// end. `phases` is how many were staged. Every run of a core numbers its phases from its
 /// commit, as the first run did, so a phase run again has the count it was staged with.
+///
+/// Every record that ended at or before `records` was staged, once. Only a commit moves
+/// `records`, to the commit's time, and drains each record that ended by then from the copy it
+/// commits. A record's end is a stop of its sender, and every stop lands and commits its core,
+/// so a record is staged in the landing at its end, by the commit that also hands it to its
+/// receivers. The committed core then holds no record, and a run again from it makes only
+/// records after its commit.
 struct Delivered {
     through: Time,
     /// The index in `Actives::usarts` of the chip's first USART.
@@ -300,13 +385,19 @@ struct Delivered {
     /// The index in `Actives::twis` of the chip's TWI. A chip with none delivers no phase.
     twi: u16,
     phases: u64,
+    /// How many bytes it staged, which orders bytes that end at one time on one USART.
+    bytes: u64,
+    records: Time,
+    /// The index in `Actives::senders` of the chip. A chip with none sends no record.
+    sender: u16,
 }
 
 impl Delivered {
     fn deliver(&mut self, core: &mut Core, to: Time, staged: &mut Staging) {
         let (through, usart, twi) = (self.through, self.usart, self.twi);
         let staged_phases = &mut self.phases;
-        let Staging { bytes, phases } = staged;
+        let staged_bytes = &mut self.bytes;
+        let Staging { bytes, phases, .. } = staged;
         core.deliver(
             to,
             |frame| {
@@ -318,7 +409,9 @@ impl Delivered {
                             usart: usart + u16::from(frame.usart),
                             byte: frame.byte,
                         },
+                        seq: *staged_bytes,
                     });
+                    *staged_bytes += 1;
                 }
             },
             |phase| {
@@ -337,6 +430,19 @@ impl Delivered {
         );
         debug_assert!(through <= to, "a delivery never goes back");
         self.through = to;
+    }
+
+    /// Stages each record the copy holds that ended at or before `to`, drops it from the copy,
+    /// and moves `records` to `to`. Only `Ahead::commit` calls this, never the session's
+    /// delivery.
+    fn take_records(&mut self, core: &mut Core, to: Time, staged: &mut Staging) {
+        let (after, sender) = (self.records, self.sender);
+        core.drain_records(to, |record| {
+            debug_assert!(record.end > after, "a record is staged once");
+            staged.records.push(LinkRow { sender, record });
+        });
+        debug_assert!(after <= to, "a record cursor never goes back");
+        self.records = to;
     }
 }
 
@@ -367,13 +473,14 @@ impl Ahead {
         self.reach = Reach::Done(at);
     }
 
-    /// Delivers the copy through its time and commits it, so no later copy of either core
-    /// carries what it delivered.
+    /// Delivers the copy's bytes, phases and records through its time and commits it, so no
+    /// later copy of either core carries what it delivered.
     fn commit(&mut self, committed: &mut Core, staged: &mut Staging) {
         let Reach::Done(at) = self.reach else {
             panic!("a copy commits only where it was rewound");
         };
         self.delivered.deliver(&mut self.core, at, staged);
+        self.delivered.take_records(&mut self.core, at, staged);
         committed.clone_from(&self.core);
         self.reach = Reach::Twin(at);
     }
@@ -415,6 +522,7 @@ impl Actives {
     pub(crate) fn new(circuit: &Circuit, levels: &Levels) -> Actives {
         let mut usarts = Vec::new();
         let mut twis = Vec::new();
+        let mut senders = Vec::new();
         let committed: Vec<Core> = circuit
             .actives
             .iter()
@@ -439,14 +547,18 @@ impl Actives {
                     usart: u16::try_from(usarts.len()).expect("a run has few USARTs"),
                     twi: u16::try_from(twis.len()).expect("a run has few TWIs"),
                     phases: 0,
+                    bytes: 0,
+                    records: Time::ZERO,
+                    sender: u16::try_from(senders.len()).expect("a run has few senders"),
                 };
                 for &usart in chip.usarts {
-                    let part = chip.part.expect("a chip with a USART is a part");
-                    usarts.push((circuit.netlist.part(part).name.clone(), usart));
+                    usarts.push((name(circuit, chip), usart));
                 }
                 if chip.twi {
-                    let part = chip.part.expect("a chip with a TWI is a part");
-                    twis.push(circuit.netlist.part(part).name.clone());
+                    twis.push(name(circuit, chip));
+                }
+                if chip.sends {
+                    senders.push(name(circuit, chip));
                 }
                 Ahead {
                     core: core.clone(),
@@ -461,6 +573,7 @@ impl Actives {
             staged: Staging::default(),
             usarts,
             twis,
+            senders,
         }
     }
 
@@ -481,8 +594,21 @@ impl Actives {
         &self.twis
     }
 
+    pub(crate) fn senders(&self) -> &[Name] {
+        &self.senders
+    }
+
     pub(crate) fn cores(&self) -> &[Core] {
         &self.committed
+    }
+
+    /// Each core's record cursor: every record it sent that ended by then is staged.
+    #[cfg(test)]
+    pub(crate) fn record_cursors(&self) -> Vec<Time> {
+        self.ahead
+            .iter()
+            .map(|ahead| ahead.delivered.records)
+            .collect()
     }
 
     /// The copies each core runs ahead on. The next kept copy is cloned from these.
@@ -519,11 +645,17 @@ impl Actives {
 
     /// A step landed at `at`, no later than the last `horizon`, with `after` read on `x` and
     /// `before` in force until then. Each core that stops at `at` takes its sample from `x`,
-    /// each core whose watches flipped takes them, and each such core is committed at `at`.
-    /// With `keep`, so is every other core, and a later rewind runs again from `at` at the
-    /// earliest. A copy that ran past `at`, as a retry shorter than its first try leaves it, runs
-    /// again from its last commit to `at` first. Returns whether an image changed, and how many
-    /// cores stopped at `at`.
+    /// each core whose watches flipped takes them, and each core with a record pin on a record
+    /// that ends at `at` takes it. Each such core, and each sender, is committed at `at`. With
+    /// `keep`, so is every other core, and a later rewind runs again from `at` at the earliest.
+    /// A copy that ran past `at`, as a retry shorter than its first try leaves it, runs again
+    /// from its last commit to `at` first. Returns whether an image changed, and how many cores
+    /// stopped at `at`.
+    ///
+    /// Two passes keep the landing free of part order. The first only reads: each sender stopped
+    /// at `at` holds its records there, and they go to their receivers. The second is the only
+    /// rewind and the only commit, so a receiver ahead of its sender in part order still takes
+    /// the record, and the sender is still committed on its stop.
     pub(crate) fn land(
         &mut self,
         circuit: &Circuit,
@@ -533,6 +665,7 @@ impl Actives {
         after: &Levels,
         keep: bool,
     ) -> (bool, u64) {
+        let mut incoming = self.incoming(circuit, at);
         let mut changed = false;
         let mut stops = 0u64;
         for (k, (committed, ahead)) in self.committed.iter_mut().zip(&mut self.ahead).enumerate() {
@@ -543,12 +676,15 @@ impl Actives {
                 Reach::Stopped(stop) if stop.at == at => Some(stop),
                 _ => None,
             };
-            if stop.is_none() && !flipped && !keep {
+            let records = incoming.get_mut(k).map(std::mem::take).unwrap_or_default();
+            if stop.is_none() && !flipped && records.is_empty() && !keep {
                 continue;
             }
             if stop.is_some() {
                 stops += 1;
             }
+            // A sender stopped at `at` has reached `at`, so this leaves its copy and the
+            // records the first pass read in place.
             ahead.rewind(committed, at);
             let image = ahead.core.drive().to_vec();
             changed |= image != committed.drive();
@@ -563,14 +699,63 @@ impl Actives {
             if flipped {
                 ahead.core.input(at, levels);
             }
+            if !records.is_empty() {
+                ahead.core.take(at, &records);
+            }
             assert_eq!(
                 ahead.core.drive(),
                 image,
-                "a sample or an input at a landing never changes an image"
+                "a sample, an input or a record at a landing never changes an image"
             );
             ahead.commit(committed, &mut self.staged);
         }
         (changed, stops)
+    }
+
+    /// The records that end at `at`, read from each sender stopped there and listed for each
+    /// chip that takes them, ordered by end, then by sender name, then by sequence. Reads only:
+    /// no rewind, no commit, no cursor and no reach moves.
+    fn incoming(&self, circuit: &Circuit, at: Time) -> Vec<Vec<LinkRow>> {
+        if self.senders.is_empty() {
+            return Vec::new();
+        }
+        let mut incoming = vec![Vec::new(); self.ahead.len()];
+        for ahead in &self.ahead {
+            let Reach::Stopped(stop) = ahead.reach else {
+                continue;
+            };
+            if stop.at != at || !stop.record {
+                debug_assert!(
+                    stop.at != at || ahead.core.records().is_empty(),
+                    "a core stopped without the record flag holds no records"
+                );
+                continue;
+            }
+            let after = ahead.delivered.records;
+            for record in ahead.core.records() {
+                debug_assert!(
+                    record.end > after && record.end == at,
+                    "a held record ends at its sender's stop"
+                );
+                for (list, chip) in incoming.iter_mut().zip(&circuit.actives) {
+                    if chip.spi_target.is_some_and(|target| target.takes(record)) {
+                        list.push(LinkRow {
+                            sender: ahead.delivered.sender,
+                            record: record.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        for list in &mut incoming {
+            list.sort_by(|a, b| self.record_key(a).cmp(&self.record_key(b)));
+        }
+        incoming
+    }
+
+    fn record_key<'a>(&'a self, row: &LinkRow) -> (Time, &'a Name, u64) {
+        let sender = &self.senders[usize::from(row.sender)];
+        (row.record.end, sender, row.record.seq)
     }
 
     /// After a restart at `at`, with `after` read on the held solve and `before` read on the
@@ -588,8 +773,9 @@ impl Actives {
     }
 
     /// Delivers each copy through `through`, which every copy has done everything up to. Returns
-    /// every byte delivered since the last call, in the order stop bits ended, then in `usarts`
-    /// order. The TWI phases wait for `phases`.
+    /// every byte delivered since the last call, in the order stop bits ended, then by part
+    /// name, then in its chip's USART order, then in the order its chip sent them. The TWI
+    /// phases wait for `phases`, and the records for `records`.
     pub(crate) fn deliver(&mut self, through: Time) -> impl Iterator<Item = SerialByte> {
         for ahead in &mut self.ahead {
             assert!(ahead.has_done(through), "a copy delivers only what it did");
@@ -597,8 +783,14 @@ impl Actives {
                 .delivered
                 .deliver(&mut ahead.core, through, &mut self.staged);
         }
+        let usarts = &self.usarts;
+        let key = |staged: &Staged| {
+            let usart = staged.byte.usart;
+            let part = &usarts[usize::from(usart)].0;
+            (staged.end, part, usart, staged.seq)
+        };
         let bytes = &mut self.staged.bytes;
-        bytes.sort_unstable_by_key(|staged| (staged.end, staged.byte.usart));
+        bytes.sort_unstable_by(|a, b| key(a).cmp(&key(b)));
         bytes.drain(..).map(|staged| staged.byte)
     }
 
@@ -608,5 +800,23 @@ impl Actives {
         let phases = &mut self.staged.phases;
         phases.sort_unstable_by_key(|staged| (staged.end, staged.row.twi));
         phases.drain(..).map(|staged| staged.row)
+    }
+
+    /// Every record staged since the last call, ordered by end, then by sender name, then by
+    /// sequence.
+    pub(crate) fn records(&mut self) -> Vec<LinkRow> {
+        let mut records = std::mem::take(&mut self.staged.records);
+        records.sort_by(|a, b| self.record_key(a).cmp(&self.record_key(b)));
+        records
+    }
+}
+
+/// The name of a chip's part. A test's script chip is no part and carries its own.
+fn name(circuit: &Circuit, chip: &Chip) -> Name {
+    match (chip.part, &chip.core) {
+        (Some(part), _) => circuit.netlist.part(part).name.clone(),
+        #[cfg(test)]
+        (None, Core::Script(core)) => core.name(),
+        (None, _) => unreachable!("only a test's script chip is no part"),
     }
 }

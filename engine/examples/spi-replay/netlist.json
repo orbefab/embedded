@@ -1,0 +1,63 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": { "transient": { "stop_ps": 100000000, "max_step_ps": 10000000, "grid_ps": 10000000 } },
+  "ground": "gnd",
+  "nets": ["gnd", "cs", "d0", "d1", "d2", "d3", "sclk", "v3v3"],
+  "parts": [
+    {
+      "name": "rp1",
+      "kind": "spi_replay",
+      "pins": {
+        "VCC": "v3v3", "GND": "gnd", "CS": "cs", "SCLK": "sclk",
+        "D0": "d0", "D1": "d1", "D2": "d2", "D3": "d3"
+      },
+      "clock_hz": { "value": 40000000, "unit": "Hz", "source": "user" },
+      "output": {
+        "high_drop": { "value": 0.0, "unit": "V", "source": "user" },
+        "high_resistance": { "value": 25.0, "unit": "ohm", "source": "user" },
+        "low_drop": { "value": 0.0, "unit": "V", "source": "user" },
+        "low_resistance": { "value": 25.0, "unit": "ohm", "source": "user" }
+      },
+      "events": [
+        {
+          "t_ps": 10000000,
+          "phases": [{ "bits": 8, "lanes": 1, "value": 2 }, { "bits": 24, "lanes": 1, "value": 4352 }],
+          "lanes": 1, "bytes": [], "cs": "released"
+        },
+        {
+          "t_ps": 20000000,
+          "phases": [{ "bits": 8, "lanes": 1, "value": 2 }, { "bits": 24, "lanes": 1, "value": 14848 }],
+          "lanes": 1, "bytes": [85], "cs": "released"
+        },
+        {
+          "t_ps": 30000000,
+          "phases": [{ "bits": 8, "lanes": 1, "value": 2 }, { "bits": 24, "lanes": 1, "value": 10752 }],
+          "lanes": 1, "bytes": [0, 0, 0, 1], "cs": "released"
+        },
+        {
+          "t_ps": 40000000,
+          "phases": [{ "bits": 8, "lanes": 1, "value": 2 }, { "bits": 24, "lanes": 1, "value": 11008 }],
+          "lanes": 1, "bytes": [0, 0, 0, 0], "cs": "released"
+        },
+        {
+          "t_ps": 50000000,
+          "phases": [{ "bits": 8, "lanes": 1, "value": 50 }, { "bits": 24, "lanes": 1, "value": 11264 }],
+          "lanes": 4, "bytes": [248, 0], "cs": "held"
+        },
+        { "t_ps": 52000000, "phases": [], "lanes": 4, "bytes": [7, 224], "cs": "released" },
+        {
+          "t_ps": 60000000,
+          "phases": [{ "bits": 8, "lanes": 1, "value": 2 }, { "bits": 24, "lanes": 1, "value": 10496 }],
+          "lanes": 1, "bytes": [], "cs": "released"
+        }
+      ]
+    },
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": { "p": "v3v3", "n": "gnd" },
+      "voltage": { "value": 3.3, "unit": "V", "source": "user" }
+    }
+  ]
+}

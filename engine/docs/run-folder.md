@@ -1,6 +1,6 @@
 # Run folder
 
-`sim run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and so does an ATmega328P. It adds `traces/serial.csv` when a chip has a USART, and `traces/i2c.csv` when a chip has a TWI, as an ATmega328P does.
+`sim run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and so does an ATmega328P. It adds `traces/serial.csv` when a chip has a USART, `traces/i2c.csv` when a chip has a TWI, as an ATmega328P does, and `traces/link.csv` when a chip can send records, as an SPI replay does.
 
 ```text
 <dir>/
@@ -16,6 +16,7 @@
     logic.vcd
     serial.csv
     i2c.csv
+    link.csv
 ```
 
 Each JSON file is pretty JSON with a two-space indent and a trailing newline. `manifest.json` uses the field order in the example below. Keys inside a diagnostic `data` object are alphabetical. Observation keys follow ref order.
@@ -26,7 +27,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 {
   "run_format": 0,
   "netlist_format": 0,
-  "engine_version": "0.21.0",
+  "engine_version": "0.22.0",
   "input": {
     "file": "netlist.json",
     "sha256": "<lowercase hex sha256 of the input bytes>",
@@ -37,7 +38,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 }
 ```
 
-`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.21.0`. [versions.md](versions.md) says which changes move them.
+`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.22.0`. [versions.md](versions.md) says which changes move them.
 
 `netlist_format` is the input's `version`, when it reads as an unsigned integer. That holds when the engine rejected the input, so `version: 1` records 1. It is `null` when no such integer could be read.
 
@@ -318,7 +319,7 @@ t_ps,part,usart,byte
 - `t_ps` is the start-bit time in integer picoseconds. It is the first picosecond at or after the oscillator cycle the start bit began, the time the core drove `TXD` low. When `TXD` read high before the start bit and nothing else loads it, that is the fall in `logic.vcd`. [avr.md](avr.md#sent-bytes) says when there is no fall at that time.
 - `part` is the chip's part name and `usart` the USART's datasheet name. Neither needs quoting.
 - `byte` is decimal, 0 to 255.
-- Rows are in the order stop bits ended, then in part order, then in the chip's USART order. On one USART that is also the order bytes started. With two USARTs at different bauds, `t_ps` can step back between rows of different USARTs.
+- Rows are in the order stop bits ended, then by part name, then by the USART's index in `usarts`, then in the order its chip sent them. Parse sorts parts by name, so that index order is the part order a parsed netlist has. On one USART that is also the order bytes started. With two USARTs at different bauds, `t_ps` can step back between rows of different USARTs.
 - A frame still on the wire at `stop_ps` is not in the file. After an error the file keeps the bytes whose stop bit ended by `end_ps`, like the rest of `traces/`.
 - A chip with a USART writes the file even when it sent nothing, as the header alone. So a reader can tell a circuit with no USART from a USART that sent nothing.
 
@@ -352,6 +353,31 @@ t_ps,part,phase,address,read,byte,ack
 - A chip with a TWI writes the file even when the TWI never ran, as the header alone.
 
 `scripts/i2c_decode.py` decodes the bus from `logic.vcd` apart from the engine and checks it against this file, as [reference.md](reference.md#i2c) says.
+
+A netlist with a chip that can send records adds `link.csv`. An SPI replay can. The file holds every record a chip sent, one row per record, as ASCII with `\n` line ends. `index.json` has no key for it, because its header names its columns. `examples/spi-replay` replays a display panel's start-up, and its file is:
+
+```text
+t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash
+10800000,10000000,rp1,CS,spi,released,8/1:02 24/1:001100,0,e3b0c44298fc1c14
+21000000,20000000,rp1,CS,spi,released,8/1:02 24/1:003a00,1,a25513c7e0f6eaa8
+31600000,30000000,rp1,CS,spi,released,8/1:02 24/1:002a00,4,b40711a88c703975
+41600000,40000000,rp1,CS,spi,released,8/1:02 24/1:002b00,4,df3f619804a92fdb
+50900000,50000000,rp1,CS,spi,held,8/1:32 24/1:002c00,2,240fbad97784f181
+52100000,52000000,rp1,CS,spi,released,,2,98cebd64dc25ea9c
+60800000,60000000,rp1,CS,spi,released,8/1:02 24/1:002900,0,e3b0c44298fc1c14
+```
+
+- `t_ps` is the record's end and `start_ps` is its start, both in integer picoseconds. `part` is the sender's part name. `pin` names the link on the sender, `CS` for a `spi` record.
+- `kind` is `spi`, `pulses` or `duty`. At this version only `spi` rows occur.
+- On a `spi` row, `cs` is `held` or `released`, the chip select at the record's end. `phases` lists each phase, space-separated, as `<bits>/<lanes>:<value>`, with the value in lowercase hex, one digit for each four bits or part of four. `bytes` is the data's length, and `hash` is the first 8 bytes of the data's SHA-256, in lowercase hex.
+- On a `pulses` row, `phases` is `idle=0` or `idle=1`. The payload is each pulse as one level byte and its time as a little-endian `u64` of picoseconds, and `bytes` and `hash` are its length and hash.
+- On a `duty` row, `phases` is `<duty>/<2^resolution>@<hz>`, and `bytes` and `hash` are empty.
+- Every other cell is empty.
+- Rows are in the order records ended, then by sender part name, then in the order each sender sent them.
+- A record that ends after `stop_ps` is not in the file. After an error the file keeps the records that ended by `end_ps`.
+- A chip that can send records writes the file even when it sent none, as the header alone.
+
+A record is not a level, so no column of `analog.f64` and no signal of `logic.vcd` shows it. The replay's pins hold their idle levels in the trace for the whole run.
 
 `end_ps` is the last row's time, and the same number as `observations.end_ps`. It is less than `stop_ps` only when the run reported an error. The grid rows before the error stay, and the last accepted step is the last row. A run that fails at t = 0 writes no `traces/`.
 

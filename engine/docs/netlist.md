@@ -817,6 +817,59 @@ An ATmega328P has no `ratings` object. [avr.md](avr.md#ratings) names its rating
 
 `examples/atmega-board-blink` places this part on the development board fragment and runs `firmware/sketch/blink.hex`. [board.md](board.md) lists the parts, the nets, and what that fragment leaves out. `examples/atmega-board-button` is that fragment running `firmware/sketch/button.hex`, with a switch from `d2` to `v5` and a 10 kohm pull-down to `gnd`.
 
+### SPI replay
+
+`kind` is `spi_replay`, an SPI host that replays a list of transactions. It is an active chip with no clock of its own, and its records are the transactions, as [engine.md](engine.md#records) says. Pins are `VCC`, `GND`, `CS`, `SCLK` and `D0` to `D3`. Every pin is required.
+
+`examples/spi-replay` replays a display panel's start-up on a 3.3 V supply at 40 MHz. Each register write is the opcode 0x02 and a 24-bit address that holds the command in its middle byte, all on one lane, then the parameters on one lane. The pixel write is the opcode 0x32 and the address 0x002C00 on one lane, then two bytes on four lanes with CS held, then two more bytes alone, which continue it. The part below shows that pixel write's two events, and the example's other five are the register writes around it:
+
+```json
+{
+  "name": "rp1",
+  "kind": "spi_replay",
+  "pins": {
+    "VCC": "v3v3", "GND": "gnd", "CS": "cs", "SCLK": "sclk",
+    "D0": "d0", "D1": "d1", "D2": "d2", "D3": "d3"
+  },
+  "clock_hz": { "value": 40000000, "unit": "Hz", "source": "user" },
+  "output": {
+    "high_drop": { "value": 0.0, "unit": "V", "source": "user" },
+    "high_resistance": { "value": 25.0, "unit": "ohm", "source": "user" },
+    "low_drop": { "value": 0.0, "unit": "V", "source": "user" },
+    "low_resistance": { "value": 25.0, "unit": "ohm", "source": "user" }
+  },
+  "events": [
+    {
+      "t_ps": 50000000,
+      "phases": [{ "bits": 8, "lanes": 1, "value": 50 }, { "bits": 24, "lanes": 1, "value": 11264 }],
+      "lanes": 4, "bytes": [248, 0], "cs": "held"
+    },
+    { "t_ps": 52000000, "phases": [], "lanes": 4, "bytes": [7, 224], "cs": "released" }
+  ]
+}
+```
+
+The model is the bus's idle levels and the list.
+
+- `CS` drives high and `SCLK` and `D0` to `D3` drive low for the whole run, SPI mode 0's idle levels. High is `output.high_drop` under `VCC` behind `output.high_resistance`, and low is `output.low_drop` over `GND` behind `output.low_resistance`. The drops are sources, so source stepping scales them.
+- Each event is one transaction from `t_ps`. Its `phases` run first, in order, each `bits` bits of `value`, most significant first, on `lanes` lanes. Then `bytes` run on `lanes` lanes. A phase takes `ceil(bits / lanes)` SCLK cycles, and the bytes take `ceil(8 * count / lanes)`. The event ends at `t_ps + floor(cycles * 10^12 / clock_hz)` picoseconds, computed in 128-bit arithmetic.
+- `cs` is `held` or `released`, the chip select at the event's end. A transaction with no phases after one that ends `held` continues it.
+- The event is sent as a `Spi` record at its end, with the nets of the part's `CS`, `SCLK` and `D0` to `D3` pins. No trace that reads a net shows the transfer. `traces/link.csv` holds it, as [run-folder.md](run-folder.md#traces) says.
+
+| Field | Unit | Rule |
+| --- | --- | --- |
+| `clock_hz` | `Hz`, a JSON integer | greater than 0 and at most 4294967295, else rule `positive` or `netlist.syntax` |
+| `output.high_resistance`, `output.low_resistance` | `ohm` | the resistor's |
+| `output.high_drop`, `output.low_drop` | `V` | at least 0, else rule `non_negative` |
+| `events[k].phases[j].bits` | count | an integer from 1 to 32 |
+| `events[k].phases[j].value` | count | an integer below `2^bits` |
+| `events[k].phases[j].lanes`, `events[k].lanes` | count | 1, 2 or 4 |
+| `events[k].bytes` | count | integers from 0 to 255 |
+
+A `bits`, `value` or `lanes` outside its rule, a byte above 255, and a `cs` other than `held` or `released` are `netlist.syntax`. An event that breaks a schedule rule is `netlist.schedule` on field `events`, with the `serial` waveform's rules: `at_zero`, `not_increasing`, `overlap` and `overflow`, and `same_state` for an event with no phases and no bytes, which sends nothing. An event that starts exactly when the previous one ends is legal.
+
+A `spi_replay` has no `ratings` object and no `i`, `v`, or `p`. It has no logic signals. It joins `CS`, `SCLK` and `D0` to `D3` each to `VCC` and to `GND`, through the stage its drive stamps.
+
 ## Ratings
 
 A rating bounds the stress on a part. Every key of a kind's `ratings` object is required. Each value is a value object, or `null` for a part that is deliberately unrated.
@@ -828,7 +881,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `linear_regulator` | `current`, `power` | `#<part>.iout`, `#<part>.p` |
 | `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
 | `nmos` | `current`, `power` | `#<part>.id`, `#<part>.p` |
-| `voltage_source`, `current_source`, `capacitor`, `inductor`, `relay`, `switch`, `ne555`, `atmega328p`, `potentiometer` | none | |
+| `voltage_source`, `current_source`, `capacitor`, `inductor`, `relay`, `switch`, `ne555`, `atmega328p`, `potentiometer`, `spi_replay` | none | |
 
 `current` is in `A`. `power` is in `W`. A rating must be greater than 0. A missing key, an unknown key, and a missing `ratings` object are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.current` or `ratings.power`. A value of 0 or below is `netlist.value` with the same field.
 

@@ -8,6 +8,7 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -245,6 +246,46 @@ function advanceInChunks(session, json, rng, input = () => {}) {
   }
 }
 
+// The `link.csv` the `spi_replay` parts of `json` write, from their event lists alone. An event
+// ends at its start plus each phase's bits over its lanes and its data bits over its lanes,
+// each rounded up, in cycles of the part's clock, rounded down to a picosecond. Rows are by
+// end, then by part name.
+function replayCsv(json) {
+  const rows = [];
+  for (const part of JSON.parse(json).parts.filter((part) => part.kind === 'spi_replay')) {
+    const clock = BigInt(part.clock_hz.value);
+    for (const event of part.events) {
+      const over = (bits, lanes) => (BigInt(bits) + BigInt(lanes) - 1n) / BigInt(lanes);
+      let cycles = over(8 * event.bytes.length, event.lanes);
+      const phases = event.phases.map(({ bits, lanes, value }) => {
+        cycles += over(bits, lanes);
+        return `${bits}/${lanes}:${value.toString(16).padStart(Math.ceil(bits / 4), '0')}`;
+      });
+      const start = BigInt(event.t_ps);
+      const end = start + (cycles * 1_000_000_000_000n) / clock;
+      const hash = createHash('sha256').update(Buffer.from(event.bytes)).digest('hex').slice(0, 16);
+      const row = `${end},${start},${part.name},CS,spi,${event.cs},${phases.join(' ')},${event.bytes.length},${hash}`;
+      rows.push({ end, name: part.name, row });
+    }
+  }
+  rows.sort((a, b) => (a.end !== b.end ? (a.end < b.end ? -1 : 1) : a.name < b.name ? -1 : 1));
+  return ['t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash', ...rows.map(({ row }) => row)].join('\n') + '\n';
+}
+
+// `link.csv` of each folder is the event list's, for a netlist with a `spi_replay` part.
+// Returns how many rows it holds.
+function assertLinkRows(label, json, folders) {
+  if (!JSON.parse(json).parts.some((part) => part.kind === 'spi_replay')) {
+    return 0;
+  }
+  const want = replayCsv(json);
+  for (const [name, folder] of folders) {
+    const got = Buffer.from(folder.file('traces/link.csv')).toString('utf8');
+    assert.equal(got, want, `${label}: ${name}'s link.csv is the event list`);
+  }
+  return want.trim().split('\n').length - 1;
+}
+
 // Warnings `diagnostics.json` holds except `trace.row_interpolated` and every error. That is
 // the list `diagnostics()` returns at the stop.
 function sessionWarnings(dir) {
@@ -255,7 +296,8 @@ function sessionWarnings(dir) {
 // `run` is the native folder. A transient recorded, advanced in chunks and finished is that
 // folder too, and its serial rows are those of `serial.csv`. `record` refuses an `op` analysis.
 function example(wasm, job, json, native) {
-  assertSameFolder(`${job.name} run`, wasm.run(json, 0n), native);
+  const ran = wasm.run(json, 0n);
+  assertSameFolder(`${job.name} run`, ran, native);
   if ('op' in JSON.parse(json).analysis) {
     assert.throws(
       () => wasm.Session.record(json),
@@ -272,7 +314,12 @@ function example(wasm, job, json, native) {
     sessionWarnings(native),
     `${job.name}: diagnostics() at the stop`,
   );
-  assertSameFolder(`${job.name} finish`, session.finish(0n), native);
+  const finished = session.finish(0n);
+  assertSameFolder(`${job.name} finish`, finished, native);
+  const links = assertLinkRows(job.name, json, [
+    ['run', ran],
+    ['finish', finished],
+  ]);
   assertProbesOnRows(job.name, read, native);
   assert.deepEqual(read.rows, serialRows(native), `${job.name}: the serial rows are serial.csv's`);
   assert.deepEqual(
@@ -307,7 +354,8 @@ function example(wasm, job, json, native) {
     `${job.name}: an open session's edges are the changes in traces/logic.vcd`,
   );
   once.free();
-  const counts = `${read.probes.length} probes on rows, ${read.rows.length} serial rows, ${read.edges.length} logic changes`;
+  const linkText = links > 0 ? `, ${links} link rows from the event list` : '';
+  const counts = `${read.probes.length} probes on rows, ${read.rows.length} serial rows, ${read.edges.length} logic changes${linkText}`;
   return `run and finish are sim run, ${counts}`;
 }
 

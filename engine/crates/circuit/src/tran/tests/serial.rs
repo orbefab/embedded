@@ -32,8 +32,8 @@ struct Frame {
 }
 
 /// Each ATmega328P's core run alone to `stop`, chip `k` at `clocks[k]` Hz, every sample read on
-/// the operating point at t = 0. Its frames in the order their stop bits ended, then in part
-/// order.
+/// the operating point at t = 0. Its frames in the order their stop bits ended, then by part
+/// name.
 fn alone(netlist: &Netlist, clocks: &[u32], stop: Time) -> Vec<Frame> {
     let circuit = Circuit::new(netlist.clone()).unwrap();
     let start = settled(&circuit);
@@ -561,7 +561,7 @@ fn boards_with(stop: u64, chips: &[(&str, u32)], extra: Vec<String>) -> Netlist 
 
 /// Two ATmega328Ps print ADC0 at 16 MHz and at 8 MHz, so `u`'s frames are half as long as
 /// `w`'s, and some start after one of `w`'s and end before it. The log is in the order stop
-/// bits ended, then in part order, and `usarts` names each chip's USART0.
+/// bits ended, then by part name, and `usarts` names each chip's USART0.
 #[test]
 fn two_chips_interleave_by_stop_bit_end_then_part() {
     let stop = 19_000 * US;

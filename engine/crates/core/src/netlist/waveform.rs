@@ -293,7 +293,9 @@ pub(super) fn serial_end(start: u64, baud: u64, nbytes: usize) -> Option<u64> {
     boundary(start, baud, bits)
 }
 
-fn boundary(start: u64, baud: u64, index: u64) -> Option<u64> {
+/// Boundary `index` of a bit train from `start` at `baud` bits a second, or `None` when `baud`
+/// is 0 or the boundary does not fit in `u64`.
+pub(super) fn boundary(start: u64, baud: u64, index: u64) -> Option<u64> {
     if baud == 0 {
         return None;
     }

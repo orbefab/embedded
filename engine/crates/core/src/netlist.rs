@@ -1,6 +1,7 @@
 //! Nets are ground first, then the rest by name. Parts are by name.
 
 use std::f64::consts::SQRT_2;
+use std::sync::Arc;
 
 pub mod bounce;
 mod document;
@@ -11,6 +12,7 @@ use serde::{Deserialize, Serialize, Serializer};
 
 use crate::diagnostic::{Diagnostic, ValueRule};
 use crate::finite::Finite;
+use crate::link::{Cs, Lanes, SpiPhase};
 use crate::name::{Name, Quantity};
 use crate::time::Time;
 
@@ -259,6 +261,7 @@ impl Model {
             Model::Switch(_) => &Switch::PINS,
             Model::Chip(Chip::Ne555(_)) => &Ne555::PINS,
             Model::Chip(Chip::Atmega328p(_)) => &Atmega328p::PINS,
+            Model::Chip(Chip::SpiReplay(_)) => &SpiReplay::PINS,
         }
     }
 
@@ -314,6 +317,7 @@ impl Model {
             Model::Switch(s) => &s.pins,
             Model::Chip(Chip::Ne555(n)) => &n.pins,
             Model::Chip(Chip::Atmega328p(m)) => &m.pins,
+            Model::Chip(Chip::SpiReplay(r)) => &r.pins,
         }
     }
 
@@ -849,6 +853,7 @@ impl Schedule<Value> {
 pub enum Chip {
     Ne555(Box<Ne555>),
     Atmega328p(Box<Atmega328p>),
+    SpiReplay(Box<SpiReplay>),
 }
 
 /// An ATmega328P in its 28-pin DIP, running `firmware` from power-on. Microchip DS40002061B.
@@ -889,6 +894,36 @@ impl Atmega328p {
     ];
     /// The flash, 32 KB, DS40002061B Table 2-1.
     pub const FLASH_BYTES: usize = 32 * 1024;
+}
+
+/// A replay of SPI transactions, an active chip with no clock of its own. It drives `CS` high
+/// and `SCLK` and `D0` to `D3` low, through `output` from `VCC` and into `GND`, for the whole
+/// run, and sends each of `events` as a `Spi` record at the event's end. Only parse builds one,
+/// so the events start in order and none starts before the one before it ends.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpiReplay {
+    pub pins: [NetId; 8],
+    /// Hertz, greater than 0, at most `u32::MAX`. Every event's SCLK.
+    pub clock_hz: IntValue,
+    pub output: OutputStage,
+    pub events: Vec<SpiEvent>,
+}
+
+impl SpiReplay {
+    pub const PINS: [&'static str; 8] = ["VCC", "GND", "CS", "SCLK", "D0", "D1", "D2", "D3"];
+}
+
+/// One transaction of a `spi_replay`: its phases, then `data` on `lanes`, from `at` to `end`.
+/// `end` is `at` plus the transaction's SCLK cycles at the part's clock, rounded down to a
+/// picosecond, and is after `at`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpiEvent {
+    pub at: Time,
+    pub end: Time,
+    pub phases: Vec<SpiPhase>,
+    pub lanes: Lanes,
+    pub data: Arc<[u8]>,
+    pub cs: Cs,
 }
 
 /// A program image from flash address 0. Only parse builds one, so it fits the flash.

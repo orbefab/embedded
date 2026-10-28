@@ -267,6 +267,8 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
         samples,
         usarts: &["USART0"],
         twi: true,
+        sends: false,
+        spi_target: None,
         core: super::Core::Avr(Box::new(core)),
     }
 }
@@ -278,6 +280,7 @@ impl Core {
         Some(Stop {
             at: self.time(halt.at),
             sample: halt.sample,
+            record: false,
         })
     }
 

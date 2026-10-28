@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use common::examples::transient_examples;
-use common::{files, has_usart, repo, transient_folder};
+use common::{files, has_usart, repo, sends_records, transient_folder};
 
 fn sim(args: &[&str]) -> (i32, String, String) {
     let output = Command::new(env!("CARGO_BIN_EXE_sim"))
@@ -460,8 +460,9 @@ fn two_runs_of_each_transient_example_differ_only_in_created_at() {
         let logic = usize::from(observations.get("logic").is_some());
         let netlist: serde_json::Value =
             serde_json::from_slice(&left_files["netlist.json"]).unwrap();
-        // An ATmega328P writes `serial.csv` for its USART and `i2c.csv` for its TWI.
-        let chip = 2 * usize::from(has_usart(&netlist));
+        // An ATmega328P writes `serial.csv` for its USART and `i2c.csv` for its TWI, and a
+        // replay writes `link.csv`.
+        let chip = 2 * usize::from(has_usart(&netlist)) + usize::from(sends_records(&netlist));
         assert_eq!(left_files.len(), 7 + logic + chip, "{name}");
         assert_eq!(left_files, right_files, "{}", left.display());
         let _ = fs::remove_dir_all(left);

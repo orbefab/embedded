@@ -1,12 +1,16 @@
 //! A test-only active chip: a script of drives and samples on one output pin, `out`, and one
-//! input pin, `in`. A drive at 0 is its power-on drive.
+//! input pin, `in`. A drive at 0 is its power-on drive. A script can also send records and
+//! console bytes, take records, and log what it took.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
+use sim_core::link::{Cs, Lanes, LinkRow, Record, RecordKind, Spi, SpiNets};
+use sim_core::name::Name;
 use sim_core::netlist::NetId;
 use sim_core::time::Time;
 
-use super::{Chip, Drive, Output, Stage, Stop};
+use super::{Chip, Drive, Frame, Output, SpiTarget, Stage, Stop};
 use crate::mna::Node;
 use crate::watch::{Signal, Watch};
 
@@ -15,6 +19,33 @@ use crate::watch::{Signal, Watch};
 pub(crate) enum Op {
     Drive(Drive),
     Sample(Sample),
+    /// A `Spi` record that starts and ends here, whose one data byte is the tag.
+    Send(u8),
+    /// `count` console bytes from `first` up, which all start and end here.
+    Bytes {
+        first: u8,
+        count: u8,
+    },
+}
+
+/// One record a script took: when, its data and its sequence.
+pub(crate) type Taken = (Time, Vec<u8>, u64);
+
+/// How many sends every copy of one script made, runs again included. Every copy shares it, so
+/// it is no part of a core's state, and two cores equal on everything else are equal.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Sends(Arc<AtomicU64>);
+
+impl Sends {
+    pub(crate) fn get(&self) -> u64 {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+impl PartialEq for Sends {
+    fn eq(&self, _: &Sends) -> bool {
+        true
+    }
 }
 
 /// Sample `in`. `after` ps later drive `out` high if it read above `threshold`, otherwise low.
@@ -39,6 +70,18 @@ pub(crate) struct Core {
     pending: Vec<(Time, Drive)>,
     sampling: Option<Sample>,
     drive: [Drive; 1],
+    /// The part name a sender or a console sorts by.
+    name: Option<&'static str>,
+    /// The nets its records name.
+    bus: Option<SpiTarget>,
+    /// How many records it has sent.
+    sent: u64,
+    sends: Sends,
+    /// The records it sent that it still holds.
+    records: Vec<Record>,
+    /// The console bytes it sent that it still holds, each with its time.
+    bytes: Vec<(Time, u8)>,
+    taken: Vec<Taken>,
 }
 
 pub(crate) fn chip(
@@ -73,8 +116,44 @@ pub(crate) fn chip(
         samples: vec![v_in],
         usarts: &[],
         twi: false,
+        sends: false,
+        spi_target: None,
         core: super::Core::Script(Core::new(script, echo)),
     }
+}
+
+fn script(chip: &mut Chip) -> &mut Core {
+    let super::Core::Script(core) = &mut chip.core else {
+        unreachable!("a script chip");
+    };
+    core
+}
+
+/// `chip` sending as part `name`, its records naming `bus`'s CS and SCLK.
+pub(crate) fn sender(mut chip: Chip, name: &'static str, bus: SpiTarget) -> Chip {
+    chip.sends = true;
+    let core = script(&mut chip);
+    core.name = Some(name);
+    core.bus = Some(bus);
+    chip
+}
+
+/// The send count every copy of `chip`'s core shares.
+pub(crate) fn sends(chip: &mut Chip) -> Sends {
+    script(chip).sends.clone()
+}
+
+/// `chip` taking each `Spi` record sent on `bus`.
+pub(crate) fn receiver(mut chip: Chip, bus: SpiTarget) -> Chip {
+    chip.spi_target = Some(bus);
+    chip
+}
+
+/// `chip` sending its console bytes as part `name`, on one USART.
+pub(crate) fn console(mut chip: Chip, name: &'static str) -> Chip {
+    chip.usarts = &["USB_SERIAL_JTAG"];
+    script(&mut chip).name = Some(name);
+    chip
 }
 
 impl Core {
@@ -89,6 +168,13 @@ impl Core {
             sampling: None,
             eager: false,
             drive: [Drive::Off],
+            name: None,
+            bus: None,
+            sent: 0,
+            sends: Sends::default(),
+            records: Vec::new(),
+            bytes: Vec::new(),
+            taken: Vec::new(),
         };
         while let Some(&(Time::ZERO, op)) = core.script.get(core.cursor) {
             let Op::Drive(drive) = op else {
@@ -114,12 +200,21 @@ impl Core {
             return None;
         };
         self.now = at;
+        let mut record = false;
         while let Some(&(when, op)) = self.script.get(self.cursor)
             && when == at
         {
             match op {
                 Op::Drive(drive) => self.drive = [drive],
                 Op::Sample(sample) => self.sampling = Some(sample),
+                Op::Send(tag) => {
+                    self.send(at, tag);
+                    record = true;
+                }
+                Op::Bytes { first, count } => {
+                    self.bytes
+                        .extend((first..first + count).map(|byte| (at, byte)));
+                }
             }
             self.cursor += 1;
         }
@@ -129,7 +224,77 @@ impl Core {
         Some(Stop {
             at,
             sample: self.sampling.is_some(),
+            record,
         })
+    }
+
+    fn send(&mut self, at: Time, tag: u8) {
+        let bus = self.bus.expect("a sender has a bus");
+        self.records.push(Record {
+            seq: self.sent,
+            start: at,
+            end: at,
+            pin: "CS",
+            kind: RecordKind::Spi(Spi {
+                phases: Vec::new(),
+                lanes: Lanes::One,
+                data: vec![tag].into(),
+                clock_hz: 1,
+                cs: Cs::Released,
+                nets: SpiNets {
+                    cs: bus.cs,
+                    sclk: bus.sclk,
+                    data: [None; 4],
+                },
+            }),
+        });
+        self.sent += 1;
+        self.sends.0.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Everything up to here is done.
+    pub(crate) fn now(&self) -> Time {
+        self.now
+    }
+
+    pub(crate) fn name(&self) -> Name {
+        Name::new(self.name.expect("a named script")).expect("a script's name is a name")
+    }
+
+    pub(crate) fn records(&self) -> &[Record] {
+        &self.records
+    }
+
+    pub(crate) fn drain_records(&mut self, through: Time, mut sent: impl FnMut(Record)) {
+        let held = self.records.partition_point(|record| record.end <= through);
+        self.records.drain(..held).for_each(&mut sent);
+    }
+
+    pub(crate) fn deliver(&mut self, through: Time, mut sent: impl FnMut(Frame)) {
+        let held = self.bytes.partition_point(|&(at, _)| at <= through);
+        for (at, byte) in self.bytes.drain(..held) {
+            sent(Frame {
+                usart: 0,
+                byte,
+                start: at,
+                end: at,
+            });
+        }
+    }
+
+    pub(crate) fn take(&mut self, at: Time, records: &[LinkRow]) {
+        assert_eq!(at, self.now, "a record arrives where the core is");
+        for row in records {
+            let RecordKind::Spi(spi) = &row.record.kind else {
+                unreachable!("a script takes only SPI");
+            };
+            self.taken.push((at, spi.data.to_vec(), row.record.seq));
+        }
+    }
+
+    /// Each record it took, in the order it took them.
+    pub(crate) fn taken(&self) -> &[Taken] {
+        &self.taken
     }
 
     pub(crate) fn drive(&self) -> &[Drive] {
@@ -166,10 +331,7 @@ impl Core {
 }
 
 pub(crate) fn eager(mut chip: Chip) -> Chip {
-    let super::Core::Script(core) = &mut chip.core else {
-        unreachable!("a script chip");
-    };
-    core.eager = true;
+    script(&mut chip).eager = true;
     chip
 }
 

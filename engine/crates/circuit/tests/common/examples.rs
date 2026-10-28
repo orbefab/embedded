@@ -18,11 +18,12 @@ pub fn examples() -> Vec<PathBuf> {
     found
 }
 
-pub fn runs_firmware(netlist: &Netlist) -> bool {
+/// Whether a part is an active chip, whose core no ngspice deck has.
+pub fn runs_a_core(netlist: &Netlist) -> bool {
     netlist.parts().any(|(_, part)| match &part.model {
         Model::Chip(chip) => match chip {
             Chip::Ne555(_) => false,
-            Chip::Atmega328p(_) => true,
+            Chip::Atmega328p(_) | Chip::SpiReplay(_) => true,
         },
         _ => false,
     })

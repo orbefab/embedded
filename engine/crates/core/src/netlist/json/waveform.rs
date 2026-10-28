@@ -397,7 +397,7 @@ fn resolve_serial(
     ok.then(|| Waveform::serial(mark, space, events))
 }
 
-fn serial_schedule(
+pub(super) fn serial_schedule(
     at: u64,
     bytes_empty: bool,
     previous_start: Option<u64>,

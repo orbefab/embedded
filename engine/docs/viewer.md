@@ -22,6 +22,7 @@ Each example has `viewer.json` beside `netlist.json`. The file names the 3D mode
 | `relay-pcb-5pin` | A 5-pin PCB relay with one changeover contact. |
 | `resistor-axial` | An axial resistor. |
 | `sot-223` | A SOT-223 package, the LM1117 class the regulator examples cite. |
+| `spi-replay` | A recorded SPI host, which `examples/spi-replay` replays. It has no package of its own. |
 | `to-92` | A three-lead TO-92 package. Used for every transistor. |
 | `tactile-switch-6mm` | A 6 mm tactile push button. The switches in the examples are momentary contacts, so they share this id. |
 

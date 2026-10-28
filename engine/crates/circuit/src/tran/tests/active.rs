@@ -669,7 +669,7 @@ fn a_core_that_stops_where_it_reached_is_caught() {
 }
 
 #[test]
-#[should_panic(expected = "a sample or an input at a landing never changes an image")]
+#[should_panic(expected = "a sample, an input or a record at a landing never changes an image")]
 fn a_sample_that_drives_at_its_read_is_caught() {
     let netlist = pin_into_rc(2 * US);
     let sample = Sample {

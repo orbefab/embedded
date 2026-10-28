@@ -10,12 +10,14 @@
 //!   logic.vcd     when a chip in the netlist has logic signals, see `logic`
 //!   serial.csv    when a chip in the netlist has a USART, see `serial`
 //!   i2c.csv       when a chip in the netlist has a TWI, see `i2c`
+//!   link.csv      when a chip in the netlist can send records, see `link`
 //! ```
 
 use serde::Serialize;
 
 use crate::finite::Finite;
 use crate::i2c::I2c;
+use crate::link::Link;
 use crate::logic::Logic;
 use crate::name::{Quantity, Ref};
 use crate::netlist::Transient;
@@ -45,6 +47,7 @@ pub struct Trace {
     logic: Option<Logic>,
     serial: Option<Serial>,
     i2c: Option<I2c>,
+    link: Option<Link>,
 }
 
 /// Running minimum and maximum of the interval open since the last row, one pair per column.
@@ -103,6 +106,7 @@ impl Trace {
             logic: None,
             serial: None,
             i2c: None,
+            link: None,
         }
     }
 
@@ -128,6 +132,13 @@ impl Trace {
     pub fn attach_i2c(&mut self, i2c: I2c) {
         assert!(self.i2c.is_none(), "i2c is attached once");
         self.i2c = Some(i2c);
+    }
+
+    /// The records the chips sent each other over the run, attached once at its end, after an
+    /// error too.
+    pub fn attach_link(&mut self, link: Link) {
+        assert!(self.link.is_none(), "link is attached once");
+        self.link = Some(link);
     }
 
     /// Folds a non-row accepted step into the interval open since the last row. The engine
@@ -243,6 +254,9 @@ impl Trace {
         if let Some(i2c) = &self.i2c {
             files.push((I2C, i2c.csv()));
         }
+        if let Some(link) = &self.link {
+            files.push((LINK, link.csv().expect("a duty resolution is below 32")));
+        }
         files
     }
 
@@ -304,6 +318,7 @@ const ENVELOPE: &str = "envelope.f64";
 const VCD: &str = "logic.vcd";
 const SERIAL: &str = "serial.csv";
 const I2C: &str = "i2c.csv";
+const LINK: &str = "link.csv";
 
 fn unit(reference: &Ref) -> &'static str {
     match reference {
@@ -636,6 +651,33 @@ mod tests {
         assert_eq!(
             files[5].1,
             b"t_ps,part,phase,address,read,byte,ack\n7,u1,stop,,,,\n"
+        );
+    }
+
+    #[test]
+    fn link_comes_after_i2c_and_leaves_the_index_as_it_was() {
+        let mut trace = trace();
+        let index = trace.files().swap_remove(0).1;
+        let u1 = Name::new("u1").unwrap();
+        trace.attach_i2c(I2c::new(vec![u1.clone()], Vec::new()));
+        trace.attach_link(Link::new(vec![u1], Vec::new()));
+        let files = trace.files();
+        let names: Vec<_> = files.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            names,
+            [
+                "index.json",
+                "time.u64",
+                "analog.f64",
+                "envelope.f64",
+                "i2c.csv",
+                "link.csv"
+            ]
+        );
+        assert_eq!(files[0].1, index);
+        assert_eq!(
+            files[5].1,
+            b"t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash\n"
         );
     }
 

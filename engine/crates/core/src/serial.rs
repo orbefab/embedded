@@ -21,7 +21,7 @@ pub struct SerialByte {
 }
 
 /// A run's USARTs, each as its part's name and its own, and the bytes they sent in the order
-/// stop bits ended, then in USART order.
+/// stop bits ended, then by part name, USART index and send order.
 #[derive(Debug, PartialEq)]
 pub struct Serial {
     usarts: Vec<(Name, &'static str)>,
