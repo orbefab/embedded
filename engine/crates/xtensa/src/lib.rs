@@ -17,13 +17,19 @@
 //! The ISA lets a chip leave `WAITI` at any time (8.3.341, p 643). This core leaves only to take
 //! an interrupt.
 //!
-//! Both chips' `core-isa.h` select the ISA's hardware alignment option, so the hardware does most
-//! unaligned loads and stores at their own address. The ISA still lets a chip raise
-//! `LoadStoreAlignmentCause` when a part lies in instruction RAM, ROM or XLMI, has the Isolate
-//! attribute, or the parts differ in memory type or cache attribute, and does not say what
-//! `EXCVADDR` holds for a fault on a later part. So the core splits an unaligned access into
-//! aligned bus accesses and stops as [`Missing::Unaligned`] when any part faults. A board probe
-//! settles what each region does.
+//! Both chips select the hardware alignment option, so an unaligned load or store in data RAM
+//! completes at its own address. On the S3, instruction RAM (`0x40370000..0x403e0000`) and mask
+//! ROM (`0x40000000..0x40060000`) raise [`Cause::LoadStoreAlignment`] when the address is not
+//! aligned for the access, and [`Cause::LoadStoreError`] for a sub-word access or an aligned
+//! `l32ai` or `s32ri` there. The board probed `0x40378dc0` and `0x40000400`. The rest of each
+//! window is the memory map. An unaligned `l32ai` or `s32ri` anywhere on the S3 raises
+//! `LoadStoreAlignment` and writes nothing. The classic core still stops as [`Missing::Unaligned`]
+//! for those two ops, and both chips stop that way when a later part of some other unaligned
+//! access faults. The region is the start address. Cached instruction ROM and RTC instruction RAM
+//! are not classified.
+//!
+//! A vector costs 4 cycles on both chips. No capture isolates that entry. `rsr` and `wsr` cost
+//! one cycle, and the S3 board spends more than that on `epc1` inside an exception handler.
 //!
 //! Neither chip has an MMU or an MPU, so the ISA's current ring is always 0, and the privileged
 //! ops, such as `rfi`, `rsil`, `waiti`, `rotw`, `rfwo`, `l32e` and the special-register ops, never

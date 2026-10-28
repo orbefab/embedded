@@ -30,24 +30,13 @@ const DEBUGCAUSE_ICOUNT: u32 = 1 << 0;
 const DEBUGCAUSE_BREAK: u32 = 1 << 3;
 const DEBUGCAUSE_BREAK_N: u32 = 1 << 4;
 
-/// Cycles a taken branch, a jump, a call or a return adds to its own one. 32 taken `j` on the
-/// classic board net 144 cycles: four each, and one more for each of the 16 whose target runs
-/// into the next word. That one sequential chain is the only pattern measured.
-const REDIRECT_CYCLES: u64 = 3;
-/// Cycles of `quos`, `quou`, `rems` and `remu`, a placeholder until the S3 board timing probe. A
-/// divide also refetches the next instruction, a cycle more when that instruction runs into the
-/// next word, and that cycle is a placeholder too. With it, 32 `quos` net 208, the low edge of
-/// the classic bounds of 208 to 216, where the board measured 212. Without it no whole divide
-/// cost lands inside them. The model is off outside the divide too: 32 `memw` net 32 here and 35
-/// on the board.
-const DIVIDE_CYCLES: u64 = 6;
-/// Cycles the first loop-back after a loop op adds, a placeholder until the S3 board timing
-/// probe. One classic row measures it: a 32-pass loop of one `addi` nets 33 cycles plus this one,
-/// and 5 is fitted to the board median of 38. The row's bounds accept 1 to 9. The ISA's extra
-/// clock there is 1 (8.3.149, p 475). Two costs are not modelled. A first pass that leaves through
-/// a taken branch charges this on a later loop-back. The extra cycle the ISA gives the loop-back
-/// after an `isync` or a `LEND` write is not charged.
-const FIRST_LOOPBACK_CYCLES: u64 = 5;
+/// Low two bits of [`Core::pace`]: 0 when no loop-back is pending, 1 when the next one is the
+/// first after a loop op, 2 when it is the second, 3 after that.
+const PACE_LOOP: u8 = 0b11;
+/// Set after a store, so the next `memw` can cost [`Config::memw_after_store`].
+const PACE_STORE: u8 = 1 << 2;
+/// Set after a divide, so the next divide can cost the follower rate.
+const PACE_DIVIDE: u8 = 1 << 3;
 
 /// Why `run_until` returned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -142,8 +131,8 @@ pub struct Core<C: Config> {
     refetch: bool,
     /// `WAITI` suspended the core until it takes an interrupt.
     waiting: bool,
-    /// A loop op ran and no loop-back has happened since.
-    loop_fresh: bool,
+    /// Loop-back arm, and whether the previous completed op was a store or a divide.
+    pace: u8,
     /// The external interrupt lines as the last poll read them.
     lines: u32,
     /// The cycle at which each `CCOMPAREn` next equals `CCOUNT`.
@@ -179,7 +168,7 @@ impl<C: Config> Core<C> {
             cycle: Cycle(0),
             refetch: false,
             waiting: false,
-            loop_fresh: false,
+            pace: 0,
             lines: 0,
             timer_due: [Cycle(0); 3],
             chip: PhantomData,
@@ -287,7 +276,10 @@ impl<C: Config> Core<C> {
         }
         let counting = self.cintlevel() < self.sr[Sr::IcountLevel as usize];
         let icount = self.sr[Sr::Icount as usize];
-        let done = if counting && icount == u32::MAX && self.debug_allowed() {
+        // Below debug level the usual rule applies. The S3 also re-takes at debug level.
+        // A higher level does not, so the entry cannot lower `PS.INTLEVEL`.
+        let recount = C::icount_past_debug_level() && self.cintlevel() <= C::DEBUG_LEVEL;
+        let done = if counting && icount == u32::MAX && (self.debug_allowed() || recount) {
             Err(Trap::Debug(DEBUGCAUSE_ICOUNT))
         } else {
             self.execute(bus)
@@ -433,12 +425,14 @@ impl<C: Config> Core<C> {
         self.take_vector(vecbase + vector);
     }
 
-    /// A vector costs a redirect's cycles, a placeholder until the S3 board timing probe. No board
-    /// row measures it.
+    /// 4 cycles on both chips. The syscall rows mix the entry with `rsr` and `wsr` of `epc1`
+    /// and with `rfe`, so no capture isolates it. The entry clears the store and divide
+    /// follower bits. The loop arm stays.
     fn take_vector(&mut self, target: u32) {
         self.pc = target;
-        self.cycle.0 += 1 + REDIRECT_CYCLES;
+        self.cycle.0 += 4;
         self.refetch = true;
+        self.pace &= PACE_LOOP;
     }
 
     fn exception(&mut self, cause: Cause, vaddr: Option<u32>) {
@@ -512,6 +506,7 @@ impl<C: Config> Core<C> {
 
     /// Loads the bytes from `addr`, little-endian, one bus access per aligned part.
     fn load<B: Bus>(&self, bus: &mut B, op: Op, addr: u32, width: Width) -> Result<u32, Trap> {
+        self.guard_access(op, addr, width)?;
         let mut value = 0;
         for (at, part, shift) in parts(addr, width) {
             let bytes = bus
@@ -530,6 +525,7 @@ impl<C: Config> Core<C> {
         width: Width,
         value: u32,
     ) -> Result<(), Trap> {
+        self.guard_access(op, addr, width)?;
         for (at, part, shift) in parts(addr, width) {
             bus.store(self.cycle, at, part, value >> shift)
                 .map_err(|exit| self.access_trap(exit, op, addr, width))?;
@@ -537,8 +533,33 @@ impl<C: Config> Core<C> {
         Ok(())
     }
 
+    /// Instruction-bus and unaligned-sync faults are raised before any bus access, so a store
+    /// writes nothing. Anything else is split, and a faulting part of that split stops.
+    fn guard_access(&self, op: Op, addr: u32, width: Width) -> Result<(), Trap> {
+        let natural = addr.is_multiple_of(width.bytes());
+        let sync = matches!(op, Op::L32AI | Op::S32RI);
+        if C::instruction_bus(addr) {
+            if !natural {
+                return Err(Trap::Exception(Cause::LoadStoreAlignment, Some(addr)));
+            }
+            if width != Width::Word || sync {
+                return Err(Trap::Exception(Cause::LoadStoreError, Some(addr)));
+            }
+            return Ok(());
+        }
+        if sync && !addr.is_multiple_of(4) {
+            return if C::sync_unaligned_excepts() {
+                Err(Trap::Exception(Cause::LoadStoreAlignment, Some(addr)))
+            } else {
+                Err(Trap::missing(self.pc, Missing::Unaligned(op)))
+            };
+        }
+        Ok(())
+    }
+
     /// An aligned access that faults raises the exception with its address in `EXCVADDR`. An
-    /// unaligned one stops, since the ISA leaves its cause and `EXCVADDR` open.
+    /// unaligned one whose part faults stops. The S3 instruction bus and its unaligned `l32ai`
+    /// and `s32ri` are decided in [`Self::guard_access`] before this.
     fn access_trap(&self, exit: Exit, op: Op, addr: u32, width: Width) -> Trap {
         match exit {
             Exit::Fault(_) if !addr.is_multiple_of(width.bytes()) => {
@@ -589,21 +610,43 @@ impl<C: Config> Core<C> {
                 return Err(trap);
             }
         };
+        self.note(insn.op);
         self.cycle.0 += cycles;
         match target {
             Some(to) => {
-                self.cycle.0 += REDIRECT_CYCLES;
+                self.cycle.0 += C::redirect_cycles();
                 self.refetch = true;
                 self.pc = to;
             }
             None => {
-                if loops && std::mem::take(&mut self.loop_fresh) {
-                    self.cycle.0 += FIRST_LOOPBACK_CYCLES;
+                if loops {
+                    let arm = self.pace & PACE_LOOP;
+                    if arm > 0 {
+                        self.cycle.0 += C::loopback_extra(u32::from(arm - 1));
+                        let next_arm = (arm + 1).min(3);
+                        self.pace = (self.pace & !PACE_LOOP) | next_arm;
+                    }
                 }
                 self.pc = next;
             }
         }
         Ok(insn.op)
+    }
+
+    /// The store and divide bits describe the op that just completed. The loop arm is left as the
+    /// loop op set it, including across a taken branch, so a later loop-back still pays the first
+    /// extra.
+    fn note(&mut self, op: Op) {
+        self.pace &= PACE_LOOP;
+        if matches!(
+            op,
+            Op::S8I | Op::S16I | Op::S32I | Op::S32I_N | Op::S32NB | Op::S32E | Op::S32RI
+        ) {
+            self.pace |= PACE_STORE;
+        }
+        if matches!(op, Op::QUOU | Op::QUOS | Op::REMU | Op::REMS) {
+            self.pace |= PACE_DIVIDE;
+        }
     }
 
     /// The op's own operation, with `next` the PC after it. Returns its cycles and the target of
@@ -620,9 +663,13 @@ impl<C: Config> Core<C> {
         let mut target = None;
         let sar = self.sr[Sr::Sar as usize];
         match insn.op {
+            Op::MEMW => {
+                if (self.pace & PACE_STORE) != 0 {
+                    cycles = C::memw_after_store();
+                }
+            }
             Op::NOP
             | Op::NOP_N
-            | Op::MEMW
             | Op::EXTW
             | Op::ISYNC
             | Op::RSYNC
@@ -654,6 +701,11 @@ impl<C: Config> Core<C> {
             Op::MAX => self.set_a(f[0], (self.a(f[1]) as i32).max(self.a(f[2]) as i32) as u32),
             Op::MINU => self.set_a(f[0], self.a(f[1]).min(self.a(f[2]))),
             Op::MAXU => self.set_a(f[0], self.a(f[1]).max(self.a(f[2]))),
+            Op::SALT => self.set_a(
+                f[0],
+                u32::from((self.a(f[1]) as i32) < (self.a(f[2]) as i32)),
+            ),
+            Op::SALTU => self.set_a(f[0], u32::from(self.a(f[1]) < self.a(f[2]))),
             Op::CLAMPS => {
                 let high = (1i32 << f[2]) - 1;
                 self.set_a(f[0], (self.a(f[1]) as i32).clamp(-high - 1, high) as u32);
@@ -718,7 +770,12 @@ impl<C: Config> Core<C> {
                     _ => (s as i32).wrapping_rem(t as i32) as u32,
                 };
                 self.set_a(f[0], value);
-                cycles = DIVIDE_CYCLES;
+                let magnitude = match insn.op {
+                    Op::QUOS | Op::REMS => (s as i32).unsigned_abs(),
+                    _ => s,
+                };
+                let remainder = matches!(insn.op, Op::REMU | Op::REMS);
+                cycles = C::divide_cycles((self.pace & PACE_DIVIDE) != 0, remainder, magnitude);
                 self.refetch = true;
             }
 
@@ -748,8 +805,8 @@ impl<C: Config> Core<C> {
                 self.set_a(f[0], value);
             }
             Op::L32AI => {
-                let addr = word_addr(pc, insn.op, self.a(f[1]).wrapping_add(f[2]))?;
-                let value = self.load(bus, insn.op, addr, Width::Word)?;
+                let value =
+                    self.load(bus, insn.op, self.a(f[1]).wrapping_add(f[2]), Width::Word)?;
                 self.set_a(f[0], value);
             }
             Op::L32R => {
@@ -783,8 +840,13 @@ impl<C: Config> Core<C> {
                 )?;
             }
             Op::S32RI => {
-                let addr = word_addr(pc, insn.op, self.a(f[1]).wrapping_add(f[2]))?;
-                self.store(bus, insn.op, addr, Width::Word, self.a(f[0]))?;
+                self.store(
+                    bus,
+                    insn.op,
+                    self.a(f[1]).wrapping_add(f[2]),
+                    Width::Word,
+                    self.a(f[0]),
+                )?;
             }
 
             Op::BEQZ | Op::BEQZ_N => target = taken(self.a(f[0]) == 0, f[1]),
@@ -862,7 +924,7 @@ impl<C: Config> Core<C> {
                 self.sr[Sr::Lcount as usize] = count.wrapping_sub(1);
                 self.sr[Sr::Lbeg as usize] = next;
                 self.sr[Sr::Lend as usize] = f[1];
-                self.loop_fresh = true;
+                self.pace = (self.pace & !PACE_LOOP) | 1;
                 let skip = match insn.op {
                     Op::LOOPNEZ => count == 0,
                     Op::LOOPGTZ => count as i32 <= 0,
@@ -924,7 +986,14 @@ impl<C: Config> Core<C> {
     }
 
     fn register_op(&mut self, access: Access, sr: Sr, t: u32) {
-        let old = self.special(sr);
+        let mut old = self.special(sr);
+        if sr == Sr::Icount
+            && matches!(access, Access::Read | Access::Exchange)
+            && C::icount_read_lag()
+            && self.cintlevel() < self.sr[Sr::IcountLevel as usize]
+        {
+            old = old.wrapping_sub(1);
+        }
         match access {
             Access::Read => self.set_a(t, old),
             Access::Write => self.set_special(sr, self.a(t)),
@@ -1060,16 +1129,6 @@ fn parts(addr: u32, width: Width) -> impl Iterator<Item = (u32, Width, u32)> {
             item
         })
     })
-}
-
-/// ISA 4.6 lets an `l32ai` or `s32ri` that is not word-aligned raise `LoadStoreAlignmentCause`,
-/// and the S3 board does (cause 9). The core stops there until it models that exception.
-fn word_addr(pc: u32, op: Op, addr: u32) -> Result<u32, Trap> {
-    if addr.is_multiple_of(4) {
-        Ok(addr)
-    } else {
-        Err(Trap::missing(pc, Missing::Unaligned(op)))
-    }
 }
 
 /// The offset from `VECBASE` of the vector for interrupt level `level`, 2 to 7. Level 6 is the

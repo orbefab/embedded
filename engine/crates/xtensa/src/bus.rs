@@ -32,6 +32,7 @@ pub enum Cause {
     Level1Interrupt = 4,
     Alloca = 5,
     IntegerDivideByZero = 6,
+    LoadStoreAlignment = 9,
     InstFetchProhibited = 20,
     LoadProhibited = 28,
     StoreProhibited = 29,
@@ -46,7 +47,8 @@ pub enum Exit {
     /// where an access has a side effect, such as a peripheral register.
     Stop,
     /// The access faulted. The core raises this exception with the access's address in
-    /// `EXCVADDR`, or stops as `Missing::Unaligned` when the access is unaligned.
+    /// `EXCVADDR`. An unaligned access whose part faults stops as `Missing::Unaligned` on the
+    /// classic core, and also on the S3 when the address is not on its instruction bus.
     Fault(Cause),
 }
 

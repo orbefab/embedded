@@ -6,6 +6,7 @@ mod loops;
 mod ops;
 mod paged;
 mod probes;
+mod s3;
 
 /// With `autotests = false`, cargo skips a test file that is not declared above.
 #[test]

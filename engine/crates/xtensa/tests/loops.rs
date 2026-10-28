@@ -1,7 +1,9 @@
 //! Zero-overhead loops on the flat test bus. Each program is GNU `as` output from `CODE`, and
 //! each ends where the next fetch runs past the code, so a run that leaves the loop stops there.
 
-use sim_xtensa::{Cause, Core, Cycle, Esp32, Missing, Op, Sr, Stop, Unimplemented};
+use sim_xtensa::{
+    Cause, Config, Core, Cycle, Decoded, Esp32, Esp32s3, Missing, Op, Sr, Stop, Unimplemented,
+};
 
 use crate::core::{CODE, Flat, RAM, core_at};
 
@@ -33,7 +35,7 @@ fn run(hex: &str, count: u32, setup: impl FnOnce(&mut Core<Esp32>)) -> (Stop, Co
     (stop, core)
 }
 
-/// The first loop-back costs `FIRST_LOOPBACK_CYCLES` more, and a count of 1 has none.
+/// The first loop-back costs five cycles more, and a count of 1 has none.
 #[test]
 fn a_loop_runs_its_body_count_times() {
     for (count, cycles) in [(1, 3), (2, 9), (5, 12)] {
@@ -137,4 +139,84 @@ fn exception_mode_turns_the_loop_back_off() {
     let (stop, core) = run(COUNT, 5, |core| core.set_special(Sr::Ps, WOE | EXCM));
     assert_eq!((stop, core.pc()), (Stop::Bus, CODE + 7));
     assert_eq!((core.a(3), core.special(Sr::Lcount)), (1, 4));
+}
+
+/// A level-1 timer between `loop` and the body still pays the first loop-back.
+#[test]
+fn a_vector_after_loop_keeps_the_first_loop_back() {
+    vector_after_loop::<Esp32>();
+    vector_after_loop::<Esp32s3>();
+}
+
+fn vector_after_loop<C: Config>() {
+    let loop_op = [0x76u8, 0x82, 0x01];
+    let addi = [0x1bu8, 0x33];
+    let stop_op = [0x30u8, 0x12, 0x0a];
+    let wsr = [0x40u8, 0xf0, 0x13];
+    let rfe = [0x00u8, 0x30, 0x00];
+    let lend = CODE + 5;
+    assert_eq!(
+        C::render(&decode::<C>(&loop_op)),
+        "loop\ta2, 0x40370005",
+        "{}",
+        C::NAME
+    );
+    assert_eq!(
+        C::render(&decode::<C>(&addi)),
+        "addi.n\ta3, a3, 1",
+        "{}",
+        C::NAME
+    );
+    assert_eq!(
+        C::render(&decode::<C>(&wsr)),
+        "wsr.ccompare0\ta4",
+        "{}",
+        C::NAME
+    );
+    assert_eq!(C::render(&decode::<C>(&rfe)), "rfe", "{}", C::NAME);
+
+    let mut bus = Flat::new(&placed(&[
+        (0, &loop_op),
+        (3, &addi),
+        (5, &stop_op),
+        (0x300, &wsr),
+        (0x303, &rfe),
+    ]));
+    let mut core: Core<C> = core_at(CODE);
+    core.set_special(Sr::Ps, WOE);
+    core.set_special(Sr::Vecbase, CODE);
+    core.set_special(Sr::IntEnable, 1 << 6);
+    core.set_special(Sr::Ccompare0, 1);
+    core.set_a(2, 2);
+    core.set_a(4, 0x1000);
+    let stop = core.run_until(&mut bus, Cycle(100));
+    let want = Unimplemented {
+        pc: lend,
+        missing: Missing::Op(Op::ADD_S),
+    };
+    assert_eq!(stop, Stop::Unimplemented(want), "{}", C::NAME);
+    assert_eq!(core.pc(), lend, "{}", C::NAME);
+    assert_eq!(core.a(3), 2, "{}", C::NAME);
+    assert_eq!(core.special(Sr::Lcount), 0, "{}", C::NAME);
+    // loop, the vector, `wsr.ccompare0`, `rfe` plus its redirect, the first `addi.n`
+    // (one refetch, the op, and the first loop-back), and the second `addi.n`.
+    let cycles = 1 + 4 + 1 + 1 + C::redirect_cycles() + 1 + 1 + C::loopback_extra(0) + 1;
+    assert_eq!(core.cycle(), Cycle(cycles), "{}", C::NAME);
+}
+
+fn decode<C: Config>(bytes: &[u8]) -> Decoded {
+    C::decode(bytes, CODE).unwrap()
+}
+
+fn placed(parts: &[(usize, &[u8])]) -> String {
+    let len = parts
+        .iter()
+        .map(|(at, bytes)| at + bytes.len())
+        .max()
+        .unwrap();
+    let mut code = vec![0u8; len];
+    for (at, bytes) in parts {
+        code[*at..*at + bytes.len()].copy_from_slice(bytes);
+    }
+    code.iter().map(|byte| format!("{byte:02x}")).collect()
 }

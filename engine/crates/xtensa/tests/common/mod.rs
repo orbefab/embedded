@@ -1,5 +1,6 @@
 pub mod board;
 pub mod elf;
+pub mod s3board;
 
 use sha2::{Digest, Sha256};
 use sim_xtensa::{Bus, Config, Core, Cycle, Stop};

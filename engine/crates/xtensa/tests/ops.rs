@@ -5,7 +5,8 @@
 //! each row checks that its bytes decode to its text.
 
 use sim_xtensa::{
-    Config, Core, Cycle, Decoded, Esp32, Esp32s3, Missing, Op, Sr, Stop, Unimplemented, Width,
+    Cause, Config, Core, Cycle, Decoded, Esp32, Esp32s3, Missing, Op, Sr, Stop, Unimplemented,
+    Width,
 };
 
 use crate::core::{CODE, Flat, RAM, core_at};
@@ -277,14 +278,6 @@ const ROWS: &[Row] = &[
         &[A(2, 0xdead_beef)],
         NEXT,
     ),
-    stops(
-        "l32ai\ta2, a3, 4",
-        "22b301",
-        &[A(2, 7), A(3, RAM + 1)],
-        &[A(2, 7)],
-        CODE,
-        Missing::Unaligned(Op::L32AI),
-    ),
     runs(
         "s16i\ta2, a3, 2",
         "225301",
@@ -298,14 +291,6 @@ const ROWS: &[Row] = &[
         &[A(2, 0xdead_beef), A(3, RAM)],
         &[M(RAM + 4, 0xdead_beef)],
         NEXT,
-    ),
-    stops(
-        "s32ri\ta2, a3, 4",
-        "22f301",
-        &[A(2, 0xdead_beef), A(3, RAM + 2)],
-        &[M(RAM + 4, 0), M(RAM + 8, 0)],
-        CODE,
-        Missing::Unaligned(Op::S32RI),
     ),
     stops(
         "l32r\ta2, 0x4036fffc",
@@ -1381,13 +1366,104 @@ const ROWS: &[Row] = &[
     ),
 ];
 
-const S3_ROWS: &[Row] = &[runs(
-    "s32nb\ta2, a3, 0",
-    "200359",
-    &[A(2, 0x1234_5678), A(3, RAM)],
-    &[M(RAM, 0x1234_5678)],
-    NEXT,
-)];
+const CLASSIC_ROWS: &[Row] = &[
+    stops(
+        "l32ai\ta2, a3, 4",
+        "22b301",
+        &[A(2, 7), A(3, RAM + 1)],
+        &[A(2, 7)],
+        CODE,
+        Missing::Unaligned(Op::L32AI),
+    ),
+    stops(
+        "s32ri\ta2, a3, 4",
+        "22f301",
+        &[A(2, 0xdead_beef), A(3, RAM + 2)],
+        &[M(RAM + 4, 0), M(RAM + 8, 0)],
+        CODE,
+        Missing::Unaligned(Op::S32RI),
+    ),
+];
+
+const S3_ROWS: &[Row] = &[
+    runs(
+        "s32nb\ta2, a3, 0",
+        "200359",
+        &[A(2, 0x1234_5678), A(3, RAM)],
+        &[M(RAM, 0x1234_5678)],
+        NEXT,
+    ),
+    runs(
+        "l32ai\ta2, a3, 4",
+        "22b301",
+        &[A(2, 7), A(3, RAM + 1)],
+        &[
+            A(2, 7),
+            S(Sr::ExcCause, Cause::LoadStoreAlignment as u32),
+            S(Sr::ExcVaddr, RAM + 5),
+            S(Sr::Epc1, CODE),
+            S(Sr::Ps, WOE | EXCM),
+        ],
+        KERNEL,
+    ),
+    runs(
+        "s32ri\ta2, a3, 4",
+        "22f301",
+        &[A(2, 0xdead_beef), A(3, RAM + 2)],
+        &[
+            M(RAM + 4, 0),
+            M(RAM + 8, 0),
+            S(Sr::ExcCause, Cause::LoadStoreAlignment as u32),
+            S(Sr::ExcVaddr, RAM + 6),
+        ],
+        KERNEL,
+    ),
+    // Capture `salt 002` / `saltu 002`: `ffffffff` against `0`. Signed is 1, unsigned is 0.
+    runs(
+        "salt\ta2, a3, a4",
+        "402372",
+        &[A(3, 0xffff_ffff), A(4, 0)],
+        &[A(2, 1)],
+        NEXT,
+    ),
+    runs(
+        "saltu\ta2, a3, a4",
+        "402362",
+        &[A(3, 0xffff_ffff), A(4, 0)],
+        &[A(2, 0)],
+        NEXT,
+    ),
+    // Capture `salt 008` / `saltu 008`: `0` against `ffffffff`. Signed is 0, unsigned is 1.
+    runs(
+        "salt\ta2, a3, a4",
+        "402372",
+        &[A(3, 0), A(4, 0xffff_ffff)],
+        &[A(2, 0)],
+        NEXT,
+    ),
+    runs(
+        "saltu\ta2, a3, a4",
+        "402362",
+        &[A(3, 0), A(4, 0xffff_ffff)],
+        &[A(2, 1)],
+        NEXT,
+    ),
+    // Capture `salt 000` / `saltu 000`: equal operands. Both results are 0.
+    runs(
+        "salt\ta2, a3, a4",
+        "402372",
+        &[A(3, 0), A(4, 0)],
+        &[A(2, 0)],
+        NEXT,
+    ),
+    runs(
+        "saltu\ta2, a3, a4",
+        "402362",
+        &[A(3, 0), A(4, 0)],
+        &[A(2, 0)],
+        NEXT,
+    ),
+];
 
 fn bytes_of(hex: &str) -> Vec<u8> {
     (0..hex.len())
@@ -1430,6 +1506,9 @@ fn every_unprobed_arm_matches_the_isa() {
     for row in ROWS {
         run_row::<Esp32>(row);
         run_row::<Esp32s3>(row);
+    }
+    for row in CLASSIC_ROWS {
+        run_row::<Esp32>(row);
     }
     for row in S3_ROWS {
         run_row::<Esp32s3>(row);
