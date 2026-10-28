@@ -62,7 +62,7 @@ EDGES_RAW = "edges.raw"
 CHIPS = ("ne555",)
 # A relay's coil is an inductor, so a relay deck takes the inductor deck's settings.
 COILS = ("inductor", "relay")
-FIRMWARE = ("atmega328p",)
+FIRMWARE = ("atmega328p", "esp32s3")
 TRANSISTORS = ("npn", "pnp", "nmos")
 BJT_KINDS = ("npn", "pnp")
 # Each BJT field's .model parameter. `mje=0 mjc=0` makes the depletion capacitances constant.

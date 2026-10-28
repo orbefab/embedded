@@ -7,6 +7,7 @@ use serde::{Deserialize, Deserializer};
 
 mod atmega328p;
 mod cst816;
+mod esp32s3;
 mod potentiometer;
 mod pulses_replay;
 mod spi_replay;
@@ -20,12 +21,14 @@ use super::{
     Mosfet, Ne555, NetId, Netlist, OutputStage, Part, Relay, Resistor, Schedule, Source, Switch,
     Transient, Value, VoltageSource, Zener, bounce, breakdown_scale, junction_scale,
 };
+use crate::blob::{Blobs, Sha256};
 use crate::diagnostic::{AnalysisRule, Diagnostic, ScheduleRule, ValueRule};
 use crate::finite::Finite;
 use crate::name::{Name, NameError, Ref};
 use crate::time::Time;
 use atmega328p::{WireAtmega328p, resolve_atmega328p};
 use cst816::{WireCst816, resolve_cst816};
+use esp32s3::{WireEsp32s3, resolve_esp32s3};
 use pulses_replay::{WirePulsesReplay, resolve_pulses_replay};
 use spi_replay::{WireSpiReplay, resolve_spi_replay};
 use st77916::{WireSt77916, resolve_st77916};
@@ -123,6 +126,7 @@ enum WirePart {
     SpiReplay(Box<WireSpiReplay>),
     St77916(Box<WireSt77916>),
     Cst816(Box<WireCst816>),
+    Esp32s3(Box<WireEsp32s3>),
     Ws2812(Box<WireWs2812>),
     PulsesReplay(Box<WirePulsesReplay>),
 }
@@ -350,7 +354,7 @@ enum WireSource {
 
 /// A later version adds its own wire types here, and a lift into the domain types. Nothing
 /// past this function sees a version.
-pub(super) fn parse(json: &[u8]) -> Result<Netlist, Vec<Diagnostic>> {
+pub(super) fn parse(json: &[u8], blobs: &Blobs) -> Result<Netlist, Vec<Diagnostic>> {
     if let Some(found) = probe_version(json)
         && !super::VERSIONS.contains(&found)
     {
@@ -367,7 +371,20 @@ pub(super) fn parse(json: &[u8]) -> Result<Netlist, Vec<Diagnostic>> {
     if let Err(err) = de.end() {
         return Err(vec![json_syntax(&err)]);
     }
-    resolve(wire)
+    resolve(wire, blobs)
+}
+
+pub(super) fn blob_names(json: &[u8]) -> Vec<Sha256> {
+    let Ok(wire) = serde_json::from_slice::<WireNetlist>(json) else {
+        return Vec::new();
+    };
+    wire.parts
+        .iter()
+        .filter_map(|part| match part {
+            WirePart::Esp32s3(chip) => Some(chip.firmware()),
+            _ => None,
+        })
+        .collect()
 }
 
 pub(super) fn probe_version(json: &[u8]) -> Option<u64> {
@@ -396,7 +413,7 @@ fn netlist_syntax(path: String, err: &serde_json::Error) -> Diagnostic {
     }
 }
 
-fn resolve(wire: WireNetlist) -> Result<Netlist, Vec<Diagnostic>> {
+fn resolve(wire: WireNetlist, blobs: &Blobs) -> Result<Netlist, Vec<Diagnostic>> {
     let mut out = Vec::new();
     let nets = resolve_nets(&wire.nets, &wire.ground, &mut out);
     let net_ids: BTreeMap<String, NetId> = nets
@@ -409,9 +426,15 @@ fn resolve(wire: WireNetlist) -> Result<Netlist, Vec<Diagnostic>> {
     let mut seen_parts = BTreeSet::new();
     let mut parts = Vec::new();
     for (index, part) in wire.parts.into_iter().enumerate() {
-        if let Some(part) =
-            resolve_part(wire.seed, index, part, &net_ids, &mut seen_parts, &mut out)
-        {
+        if let Some(part) = resolve_part(
+            wire.seed,
+            index,
+            part,
+            &net_ids,
+            blobs,
+            &mut seen_parts,
+            &mut out,
+        ) {
             parts.push(part);
         }
     }
@@ -535,6 +558,7 @@ fn resolve_part(
     index: usize,
     part: WirePart,
     nets: &BTreeMap<String, NetId>,
+    blobs: &Blobs,
     seen: &mut BTreeSet<String>,
     out: &mut Vec<Diagnostic>,
 ) -> Option<Part> {
@@ -557,6 +581,7 @@ fn resolve_part(
         WirePart::SpiReplay(chip) => &chip.name,
         WirePart::St77916(chip) => &chip.name,
         WirePart::Cst816(chip) => &chip.name,
+        WirePart::Esp32s3(chip) => &chip.name,
         WirePart::Ws2812(chip) => &chip.name,
         WirePart::PulsesReplay(chip) => &chip.name,
     };
@@ -721,6 +746,8 @@ fn resolve_part(
             .map(|chip| Model::Chip(Chip::St77916(Box::new(chip)))),
         WirePart::Cst816(chip) => resolve_cst816(&name, &part_ref, *chip, nets, out)
             .map(|chip| Model::Chip(Chip::Cst816(Box::new(chip)))),
+        WirePart::Esp32s3(chip) => resolve_esp32s3(&name, &part_ref, *chip, nets, blobs, out)
+            .map(|chip| Model::Chip(Chip::Esp32s3(Box::new(chip)))),
         WirePart::Ws2812(chip) => resolve_ws2812(&name, &part_ref, *chip, nets, out)
             .map(|chip| Model::Chip(Chip::Ws2812(Box::new(chip)))),
         WirePart::PulsesReplay(chip) => resolve_pulses_replay(&name, &part_ref, *chip, nets, out)

@@ -6,6 +6,7 @@
 //! the engine or the binding detects throws a `SimError`.
 
 use sim_circuit::{Input, Refused, Rejected, Serial as SerialSend, Setting};
+use sim_core::blob::Blobs;
 use sim_core::diagnostic::Diagnostic;
 use sim_core::finite::Finite;
 use sim_core::logic::Level;
@@ -134,7 +135,7 @@ impl From<Rejected> for SimError {
 /// `level` check it.
 #[cfg(target_arch = "wasm32")]
 mod arg {
-    use super::{Code, SimError};
+    use super::{Blobs, Code, SimError};
     use wasm_bindgen::prelude::*;
 
     #[wasm_bindgen]
@@ -146,9 +147,22 @@ mod arg {
         // slots they hold, and after 1024 every call traps, so a detached view must not throw.
         #[wasm_bindgen(method, catch)]
         fn subarray(this: &Bytes) -> Result<Vec<u8>, JsValue>;
+
+        #[wasm_bindgen(js_name = Array)]
+        type List;
+
+        #[wasm_bindgen(js_namespace = Array, js_name = isArray)]
+        fn is_array(value: &JsValue) -> bool;
+
+        #[wasm_bindgen(method, getter)]
+        fn length(this: &List) -> u32;
+
+        #[wasm_bindgen(method, indexing_getter)]
+        fn at(this: &List, index: u32) -> JsValue;
     }
 
     pub type Netlist = JsValue;
+    pub type BlobList = JsValue;
     pub type Bigint = JsValue;
     pub type Text = JsValue;
     pub type Bool = JsValue;
@@ -161,6 +175,19 @@ mod arg {
     pub fn bytes_of(value: &Netlist) -> Result<Vec<u8>, SimError> {
         let bytes = value.dyn_ref::<Bytes>().ok_or_else(wrong_type)?;
         bytes.subarray().map_err(|_| wrong_type())
+    }
+
+    /// An array of `Uint8Array`, each filed under its own SHA-256.
+    pub fn blobs_of(value: &BlobList) -> Result<Blobs, SimError> {
+        if !is_array(value) {
+            return Err(wrong_type());
+        }
+        let list = value.unchecked_ref::<List>();
+        let mut blobs = Blobs::new();
+        for k in 0..list.length() {
+            blobs.add(bytes_of(&list.at(k))?.into());
+        }
+        Ok(blobs)
     }
 
     pub fn u64_of(value: Bigint) -> Result<u64, SimError> {
@@ -185,7 +212,8 @@ mod arg {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod arg {
-    use super::SimError;
+    use super::{Blobs, SimError};
+    use wasm_bindgen::prelude::*;
 
     pub type Netlist = [u8];
     pub type Bigint = u64;
@@ -195,6 +223,25 @@ mod arg {
 
     pub fn bytes_of(value: &Netlist) -> Result<Vec<u8>, SimError> {
         Ok(value.to_vec())
+    }
+
+    /// The files a native caller passes where JavaScript passes a `Uint8Array[]`. The binding
+    /// passes no slice of vectors, so they cross in a class of their own.
+    #[wasm_bindgen]
+    pub struct BlobList(Vec<Vec<u8>>);
+
+    impl BlobList {
+        pub fn new(files: Vec<Vec<u8>>) -> BlobList {
+            BlobList(files)
+        }
+    }
+
+    pub fn blobs_of(value: &BlobList) -> Result<Blobs, SimError> {
+        let mut blobs = Blobs::new();
+        for bytes in &value.0 {
+            blobs.add(bytes.as_slice().into());
+        }
+        Ok(blobs)
     }
 
     pub fn u64_of(value: Bigint) -> Result<u64, SimError> {
@@ -214,7 +261,10 @@ mod arg {
     }
 }
 
-use arg::{Bigint, Bool, Netlist, Number, Text, bool_of, bytes_of, f64_of, str_of, u64_of};
+pub use arg::BlobList;
+use arg::{
+    Bigint, Bool, Netlist, Number, Text, blobs_of, bool_of, bytes_of, f64_of, str_of, u64_of,
+};
 
 fn name(part: &str) -> Result<Name, SimError> {
     Name::new(part).map_err(|_| SimError::new(Code::BadName))
@@ -379,6 +429,29 @@ impl Session {
         #[wasm_bindgen(unchecked_param_type = "Uint8Array")] netlist: &Netlist,
     ) -> Result<Session, SimError> {
         let session = sim_circuit::Session::record_document(&bytes_of(netlist)?)?;
+        Ok(Session::new(session))
+    }
+
+    /// `open` with the blobs the netlist names, each the bytes of one file, filed under its own
+    /// SHA-256.
+    #[wasm_bindgen(js_name = openWith)]
+    pub fn open_with(
+        #[wasm_bindgen(unchecked_param_type = "Uint8Array")] netlist: &Netlist,
+        #[wasm_bindgen(unchecked_param_type = "Uint8Array[]")] blobs: &BlobList,
+    ) -> Result<Session, SimError> {
+        let netlist = bytes_of(netlist)?;
+        let session = sim_circuit::Session::open_document_with(&netlist, &blobs_of(blobs)?)?;
+        Ok(Session::new(session))
+    }
+
+    /// `record` with the blobs the netlist names, as `openWith` takes them.
+    #[wasm_bindgen(js_name = recordWith)]
+    pub fn record_with(
+        #[wasm_bindgen(unchecked_param_type = "Uint8Array")] netlist: &Netlist,
+        #[wasm_bindgen(unchecked_param_type = "Uint8Array[]")] blobs: &BlobList,
+    ) -> Result<Session, SimError> {
+        let netlist = bytes_of(netlist)?;
+        let session = sim_circuit::Session::record_document_with(&netlist, &blobs_of(blobs)?)?;
         Ok(Session::new(session))
     }
 
@@ -672,4 +745,20 @@ pub fn run(
     let netlist = bytes_of(netlist)?;
     let created_at = Timestamp::from_unix_seconds(u64_of(created_at_seconds)?);
     Ok(Folder(sim_circuit::run(&netlist, created_at).folder))
+}
+
+/// `run` with the blobs the netlist names, as `Session.openWith` takes them.
+#[wasm_bindgen(js_name = runWith)]
+pub fn run_with(
+    #[wasm_bindgen(unchecked_param_type = "Uint8Array")] netlist: &Netlist,
+    #[wasm_bindgen(unchecked_param_type = "Uint8Array[]")] blobs: &BlobList,
+    #[wasm_bindgen(js_name = createdAtSeconds, unchecked_param_type = "bigint")]
+    created_at_seconds: Bigint,
+) -> Result<Folder, SimError> {
+    let netlist = bytes_of(netlist)?;
+    let blobs = blobs_of(blobs)?;
+    let created_at = Timestamp::from_unix_seconds(u64_of(created_at_seconds)?);
+    Ok(Folder(
+        sim_circuit::run_with(&netlist, &blobs, created_at).folder,
+    ))
 }

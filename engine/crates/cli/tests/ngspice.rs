@@ -88,6 +88,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "ce-amp",
             "current-pulse",
             "divider",
+            "esp32s3-blink",
             "i-divider",
             "led-5v",
             "led-9v",
@@ -223,7 +224,7 @@ fn matches_its_reference(example: &Path) {
         );
         return;
     }
-    if runs_a_core(&netlist::parse(&input).unwrap()) {
+    if runs_a_core(&common::examples::parse(example)) {
         assert!(
             !reference_path.exists() && !example.join("deck.cir").exists(),
             "{label} runs an active chip's core, which a deck has none of, so it has no reference"

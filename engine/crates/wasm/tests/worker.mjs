@@ -47,6 +47,7 @@ const OUTSIDE = [-1n, 2n ** 64n, 2n ** 64n + 1n, 2n ** 64n + 5n, 2n ** 128n];
 // `type`. Each would otherwise be coerced, reduced, read as other bytes, or trap the module.
 const WRONG = {
   Uint8Array: [new ArrayBuffer(2), '{}', [123, 125], {}, 5, null, undefined],
+  'Uint8Array[]': [new Uint8Array([1]), '[]', [5], [new ArrayBuffer(2)], [[1]], {}, 5, null, undefined],
   bigint: [5, '5', true, null, undefined],
   string: [5, 5n, true, {}, null, undefined],
   boolean: ['true', 'false', 1, 0, 1n, {}, [], null, undefined],
@@ -347,20 +348,47 @@ function sessionWarnings(dir) {
   return found.filter((item) => item.severity === 'warning' && item.code !== 'trace.row_interpolated');
 }
 
+// The files of an example's `blobs` folder, which `sim run` reads beside its netlist, in name
+// order. None for an example with no folder.
+function blobsOf(dir) {
+  const folder = join(dir, 'blobs');
+  if (!existsSync(folder)) return [];
+  return readdirSync(folder)
+    .sort()
+    .map((name) => new Uint8Array(readFileSync(join(folder, name))));
+}
+
 // `run` is the native folder. A transient recorded, advanced in chunks and finished is that
 // folder too, and its serial rows are those of `serial.csv`. `record` refuses an `op` analysis.
-function example(wasm, job, json, native) {
-  const ran = wasm.run(json, 0n);
+// An example with blobs goes through `runWith`, `recordWith` and `openWith`.
+function example(wasm, job, json, blobs, native) {
+  const withBlobs = blobs.length > 0;
+  const run = () => (withBlobs ? wasm.runWith(json, blobs, 0n) : wasm.run(json, 0n));
+  const record = () => (withBlobs ? wasm.Session.recordWith(json, blobs) : wasm.Session.record(json));
+  const open = () => (withBlobs ? wasm.Session.openWith(json, blobs) : wasm.Session.open(json));
+  if (withBlobs) {
+    assert.throws(
+      () => wasm.Session.record(json),
+      (error) =>
+        error instanceof wasm.SimError &&
+        error.code === 'invalid' &&
+        JSON.parse(error.diagnostics).every((item) => item.code === 'netlist.blob'),
+      `${job.name}: record without its blobs throws invalid with netlist.blob`,
+    );
+    const missing = JSON.parse(Buffer.from(wasm.run(json, 0n).file('diagnostics.json')).toString());
+    assert.ok(missing.length > 0 && missing.every((item) => item.code === 'netlist.blob'), `${job.name}: run without its blobs`);
+  }
+  const ran = run();
   assertSameFolder(`${job.name} run`, ran, native);
   if ('op' in JSON.parse(json).analysis) {
     assert.throws(
-      () => wasm.Session.record(json),
+      () => record(),
       (error) => error instanceof wasm.SimError && error.code === 'op',
       'record refuses an op analysis with op',
     );
     return 'run is sim run, record refuses op';
   }
-  const session = wasm.Session.record(json);
+  const session = record();
   const read = advanceInChunks(session, json, new Rng(job.seed));
   assert.equal(session.status(), 'stopped');
   assert.deepEqual(
@@ -384,7 +412,7 @@ function example(wasm, job, json, native) {
     `${job.name}: the edges are the changes in traces/logic.vcd`,
   );
   const stop = BigInt(JSON.parse(json).analysis.transient.stop_ps);
-  const once = wasm.Session.open(json);
+  const once = open();
   assert.equal(once.advanceTo(stop), 'stopped');
   assert.deepEqual(
     JSON.parse(once.diagnostics()),
@@ -638,6 +666,13 @@ function argumentChecks(wasm, examples) {
     ['leds', 'string', (v) => serial.leds(v)],
     ['finish', 'bigint', (v) => wasm.Session.record(steps).finish(v)],
     ['Folder.file', 'string', (v) => folder.file(v)],
+    ['Session.openWith netlist', 'Uint8Array', (v) => wasm.Session.openWith(v, [])],
+    ['Session.openWith blobs', 'Uint8Array[]', (v) => wasm.Session.openWith(steps, v)],
+    ['Session.recordWith netlist', 'Uint8Array', (v) => wasm.Session.recordWith(v, [])],
+    ['Session.recordWith blobs', 'Uint8Array[]', (v) => wasm.Session.recordWith(steps, v)],
+    ['runWith netlist', 'Uint8Array', (v) => wasm.runWith(v, [], 0n)],
+    ['runWith blobs', 'Uint8Array[]', (v) => wasm.runWith(steps, v, 0n)],
+    ['runWith createdAtSeconds', 'bigint', (v) => wasm.runWith(steps, [], v)],
   ];
   let refused = 0;
   const refuses = (what, call, values, code) => {
@@ -858,6 +893,7 @@ const checked = example(
   wasm,
   { name: ${JSON.stringify(name)}, seed: 1n },
   readFileSync(${JSON.stringify(netlist)}),
+  [],
   ${JSON.stringify(folder)},
 );
 console.log('ok   ' + ${JSON.stringify(name)} + ' by name: ' + checked);
@@ -940,7 +976,7 @@ if (isMainThread && invokedDirectly) {
   wasm.initSync({ module: readFileSync(join(pkg, 'sim_wasm_bg.wasm')) });
   const json = () => readFileSync(job.netlist ?? join(examples, job.name, 'netlist.json'));
   const checks = {
-    example: () => example(wasm, job, json(), join(native, job.name)),
+    example: () => example(wasm, job, json(), blobsOf(join(examples, job.name)), join(native, job.name)),
     inputs: () => withInputs(wasm, job, json(), work),
     arguments: () => argumentChecks(wasm, examples),
   };

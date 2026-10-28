@@ -12,7 +12,8 @@ Private notes live in `~/notes/orbefab` (Orbefab/notes). Follow the `notes` skil
 - `crates/circuit`, package `sim-circuit`, solves the DC operating point.
 - `crates/cli`, package `sim-cli`, is the `sim` binary.
 - `crates/avr`, package `sim-avr`, models the ATmega328P core. `sim-circuit` runs it for each `atmega328p` part.
-- `crates/xtensa`, package `sim-xtensa`, models the Xtensa core of the ESP32 and the ESP32-S3, with both generated opcode tables. No SoC uses it yet. `crates/xtensa/gen/regen.sh` regenerates the tables.
+- `crates/xtensa`, package `sim-xtensa`, models the Xtensa core of the ESP32 and the ESP32-S3, with both generated opcode tables. `crates/xtensa/gen/regen.sh` regenerates the tables.
+- `crates/esp32`, package `sim-esp32`, models the ESP32-S3 around `sim-xtensa`: SRAM, GPIO and its matrix, SYSTIMER, the watchdogs and the USB Serial/JTAG console. `sim-circuit` runs it for each `esp32s3` part. `scripts/esp32s3-firmware.sh` rebuilds the bare-metal program of `examples/esp32s3-blink`.
 - `crates/bench`, package `sim-bench`, times native, WASI and browser Worker runs. It is not published.
 - `crates/wasm`, package `sim-wasm`, is the session and `sim run` for JavaScript. `scripts/wasm.sh` builds it, and `docs/wasm.md` is its guide.
 
@@ -29,12 +30,13 @@ cargo test -p sim-avr --locked --features port-skip-check
 uv run scripts/ngspice_refs.py --self-test
 uv run scripts/st77916_example.py --check
 uv run scripts/render_st77916.py --self-test
+uv run scripts/esp32s3_blink.py --self-test
 ```
 
-It then runs `sim run` on `examples/st77916-replay` and checks the folder with `scripts/render_st77916.py --check`.
+It then runs `sim run` on `examples/st77916-replay` and checks the folder with `scripts/render_st77916.py --check`, and on `examples/esp32s3-blink` and checks that folder with `scripts/esp32s3_blink.py --check`.
 
 The commit check needs ngspice-42 on `PATH`.
 
 The `sim-avr` lines turn on `port-skip-check` so the skip check runs, and the other crates leave the feature off.
 
-Also run `scripts/wasm-check.sh` before a commit that touches `crates/wasm`, `crates/xtensa`, `crates/circuit/src/session*`, `crates/circuit/src/active.rs`, `crates/circuit/src/active/`, `scripts/wasm.sh`, or the math in `crates/circuit/src/element/junction.rs`, `crates/circuit/src/step.rs` and `crates/core/src/netlist.rs` that goes through `libm`. `scripts/wasm-check.sh` needs bash 4.2 or later, node 22.7 or later, and rustup. `scripts/wasm.sh` needs bash 4.2 or later and rustup. The check compares the wasm package with native `sim run` in node Workers.
+Also run `scripts/wasm-check.sh` before a commit that touches `crates/wasm`, `crates/xtensa`, `crates/esp32`, `crates/circuit/src/session*`, `crates/circuit/src/active.rs`, `crates/circuit/src/active/`, `scripts/wasm.sh`, or the math in `crates/circuit/src/element/junction.rs`, `crates/circuit/src/step.rs` and `crates/core/src/netlist.rs` that goes through `libm`. `scripts/wasm-check.sh` needs bash 4.2 or later, node 22.7 or later, and rustup. `scripts/wasm.sh` needs bash 4.2 or later and rustup. The check compares the wasm package with native `sim run` in node Workers.

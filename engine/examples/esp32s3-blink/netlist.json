@@ -1,0 +1,215 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": {
+    "transient": {
+      "stop_ps": 900000000000,
+      "max_step_ps": 10000000000,
+      "grid_ps": 10000000000
+    }
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "gpio21",
+    "vcc",
+    "vled"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vcc",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 3.3,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "u1",
+      "kind": "esp32s3",
+      "pins": {
+        "VCC": "vcc",
+        "GND": "gnd",
+        "GPIO21": "gpio21"
+      },
+      "firmware": {
+        "elf": {
+          "sha256": "36f33508452c63a7527edff29db0da3e534714c5737c660a441a1c056effe3aa",
+          "bytes": 3800
+        }
+      },
+      "output": {
+        "high_drop": {
+          "value": 0.0,
+          "unit": "V",
+          "source": {
+            "closed_form": {
+              "note": "the high stage as a resistance from VCC"
+            }
+          }
+        },
+        "high_resistance": {
+          "value": 16.5,
+          "unit": "ohm",
+          "source": {
+            "closed_form": {
+              "note": "Table 5-4: IOH 40 mA at VOH 2.64 V, VDD 3.3 V and drive strength 3, so 0.66 V / 40 mA"
+            }
+          }
+        },
+        "low_drop": {
+          "value": 0.0,
+          "unit": "V",
+          "source": {
+            "closed_form": {
+              "note": "the low stage as a resistance into GND"
+            }
+          }
+        },
+        "low_resistance": {
+          "value": 17.68,
+          "unit": "ohm",
+          "source": {
+            "closed_form": {
+              "note": "Table 5-4: IOL 28 mA at VOL 0.495 V, VDD 3.3 V and drive strength 3, so 0.495 V / 28 mA"
+            }
+          }
+        }
+      },
+      "pull_up_resistance": {
+        "value": 45000.0,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "Espressif ESP32-S3 Series Datasheet v2.2",
+            "at": "Table 5-4, DC Characteristics (3.3 V, 25 C)",
+            "basis": "typical"
+          }
+        }
+      },
+      "leakage_resistance": {
+        "value": 66000000.0,
+        "unit": "ohm",
+        "source": {
+          "closed_form": {
+            "note": "Table 5-4: IIH and IIL at most 50 nA, so 3.3 V / 50 nA"
+          }
+        }
+      },
+      "input_threshold": {
+        "low": {
+          "value": 0.25,
+          "unit": "1",
+          "source": {
+            "datasheet": {
+              "doc": "Espressif ESP32-S3 Series Datasheet v2.2",
+              "at": "Table 5-4, DC Characteristics (3.3 V, 25 C)",
+              "basis": "max"
+            }
+          }
+        },
+        "high": {
+          "value": 0.75,
+          "unit": "1",
+          "source": {
+            "datasheet": {
+              "doc": "Espressif ESP32-S3 Series Datasheet v2.2",
+              "at": "Table 5-4, DC Characteristics (3.3 V, 25 C)",
+              "basis": "min"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": {
+        "a": "gpio21",
+        "b": "vled"
+      },
+      "resistance": {
+        "value": 330.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": {
+          "value": 0.25,
+          "unit": "W",
+          "source": "user"
+        }
+      }
+    },
+    {
+      "name": "led1",
+      "kind": "led",
+      "pins": {
+        "anode": "vled",
+        "cathode": "gnd"
+      },
+      "saturation_current": {
+        "value": 6.711e-10,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical"
+          }
+        }
+      },
+      "emission_coefficient": {
+        "value": 4.427,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical"
+          }
+        }
+      },
+      "series_resistance": {
+        "value": 2.115,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical"
+          }
+        }
+      },
+      "ratings": {
+        "current": {
+          "value": 0.03,
+          "unit": "A",
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+              "at": "Absolute Maximum Ratings at Ta = 25 C, DC forward current",
+              "basis": "absolute_max"
+            }
+          }
+        },
+        "power": {
+          "value": 0.075,
+          "unit": "W",
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+              "at": "Absolute Maximum Ratings at Ta = 25 C, power dissipation",
+              "basis": "absolute_max"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -62,7 +62,7 @@ The process exits with one of these codes.
 
 Stdout for `run` repeats `diagnostics` in the same order as `diagnostics.json`.
 
-The schema is [docs/netlist.md](docs/netlist.md). How the engine steps, and how accurate it is, is [docs/engine.md](docs/engine.md). The folder is [docs/run-folder.md](docs/run-folder.md). The codes are [docs/diagnostics.md](docs/diagnostics.md). Which changes keep or bump each version is [docs/versions.md](docs/versions.md). The ngspice references are [docs/reference.md](docs/reference.md). The ATmega328P core behind the `atmega328p` kind is [docs/avr.md](docs/avr.md). The development board fragment is [docs/board.md](docs/board.md). How to time a run is [docs/bench.md](docs/bench.md). The JavaScript package for a Worker is [docs/wasm.md](docs/wasm.md).
+The schema is [docs/netlist.md](docs/netlist.md). How the engine steps, and how accurate it is, is [docs/engine.md](docs/engine.md). The folder is [docs/run-folder.md](docs/run-folder.md). The codes are [docs/diagnostics.md](docs/diagnostics.md). Which changes keep or bump each version is [docs/versions.md](docs/versions.md). The ngspice references are [docs/reference.md](docs/reference.md). The ATmega328P core behind the `atmega328p` kind is [docs/avr.md](docs/avr.md). The ESP32-S3 behind the `esp32s3` kind is [docs/esp32s3.md](docs/esp32s3.md). The development board fragment is [docs/board.md](docs/board.md). How to time a run is [docs/bench.md](docs/bench.md). The JavaScript package for a Worker is [docs/wasm.md](docs/wasm.md).
 
 ## License
 

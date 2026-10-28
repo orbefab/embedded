@@ -212,9 +212,20 @@ struct Manifest {
     netlist_format: Option<u64>,
     engine_version: String,
     input: ManifestInput,
+    /// Each blob the netlist names, in [`Netlist::blobs`] order. Absent when it names none, or
+    /// when parsing rejected the input.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    blobs: Vec<ManifestBlob>,
     /// `None` when parsing rejected the input.
     seed: Option<u64>,
     created_at: String,
+}
+
+#[derive(Serialize)]
+struct ManifestBlob {
+    role: &'static str,
+    sha256: String,
+    bytes: u64,
 }
 
 #[derive(Serialize)]
@@ -243,6 +254,15 @@ pub fn render(
             sha256: hex(&Sha256::digest(input)),
             bytes: input.len() as u64,
         },
+        blobs: netlist
+            .into_iter()
+            .flat_map(Netlist::blobs)
+            .map(|blob| ManifestBlob {
+                role: blob.role.as_str(),
+                sha256: blob.sha256.to_string(),
+                bytes: blob.bytes.len() as u64,
+            })
+            .collect(),
         seed: netlist.map(Netlist::seed),
         created_at: created_at.rfc3339(),
     };

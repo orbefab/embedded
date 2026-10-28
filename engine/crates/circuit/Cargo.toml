@@ -10,6 +10,8 @@ publish.workspace = true
 libm.workspace = true
 sim-core.workspace = true
 sim-avr.workspace = true
+sim-esp32.workspace = true
+sim-xtensa.workspace = true
 
 [features]
 # Tests only: `simulate_steps`, a row at every accepted step.

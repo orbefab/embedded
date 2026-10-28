@@ -77,14 +77,19 @@ pub fn coil_edge_bound_ps(span: f64, t_s: &[f64], current: &[f64]) -> f64 {
     bound
 }
 
-/// Whether a chip in `netlist` has a USART. Today only an ATmega328P has one, `USART0`, so a new
-/// chip with a USART adds its kind here.
+/// Whether a chip in `netlist` writes `serial.csv`: an ATmega328P for `USART0`, or an ESP32-S3
+/// for `USB_SERIAL_JTAG`. A new chip with a USART adds its kind here.
 pub fn has_usart(netlist: &serde_json::Value) -> bool {
+    has_kind(netlist, "atmega328p") || has_kind(netlist, "esp32s3")
+}
+
+/// Whether a part of `netlist` is of `kind`.
+pub fn has_kind(netlist: &serde_json::Value, kind: &str) -> bool {
     netlist["parts"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|part| part["kind"] == "atmega328p")
+        .any(|part| part["kind"] == kind)
 }
 
 /// Whether a chip in `netlist` can send records. A `spi_replay` and a `pulses_replay` can, so a
@@ -139,12 +144,12 @@ impl TransientFolder {
 }
 
 /// Reads the run folder `out` of the transient example `name` and asserts what every one keeps:
-/// its files, with `traces/logic.vcd` exactly when its observations have logic and
-/// `traces/serial.csv` and `traces/i2c.csv` exactly when it has an ATmega328P, which has a
-/// USART and a TWI, `traces/link.csv` exactly when a chip can send records, `traces/display.csv`
-/// and one `traces/display-<part>.rgb565` per part exactly when it has display parts, a row at each
-/// `grid_ps` to `stop_ps`, row 0 equal to `observations.op`, and an envelope that holds both rows
-/// of each interval.
+/// its files, with `traces/logic.vcd` exactly when its observations have logic,
+/// `traces/serial.csv` exactly when it has an ATmega328P or an ESP32-S3, `traces/i2c.csv`
+/// exactly when it has an ATmega328P, which has a TWI, `traces/link.csv` exactly when a chip
+/// can send records, `traces/display.csv` and one `traces/display-<part>.rgb565` per part
+/// exactly when it has display parts, a row at each `grid_ps` to `stop_ps`, row 0 equal to
+/// `observations.op`, and an envelope that holds both rows of each interval.
 pub fn transient_folder(name: &str, out: &Path) -> TransientFolder {
     let found = files(out);
     let names: Vec<_> = found.keys().map(String::as_str).collect();
@@ -173,7 +178,7 @@ pub fn transient_folder(name: &str, out: &Path) -> TransientFolder {
     if led_parts(&input) {
         expected.push("traces/leds.csv".into());
     }
-    if usart {
+    if has_kind(&input, "atmega328p") {
         expected.push("traces/i2c.csv".into());
     }
     expected.push("traces/index.json".into());

@@ -5,11 +5,13 @@ use std::sync::Arc;
 
 pub mod bounce;
 mod document;
+pub mod elf;
 mod json;
 mod waveform;
 
 use serde::{Deserialize, Serialize, Serializer};
 
+use crate::blob::{Blob, Blobs, Sha256};
 use crate::diagnostic::{Diagnostic, ValueRule};
 use crate::finite::Finite;
 use crate::link::{Cs, Lanes, SpiPhase};
@@ -27,7 +29,20 @@ pub const VERSIONS: &[u64] = &[0];
 /// Schema errors stop early. Name, pin, unit, and value errors are collected
 /// together.
 pub fn parse(json: &[u8]) -> Result<Netlist, Vec<Diagnostic>> {
-    json::parse(json)
+    json::parse(json, &Blobs::new())
+}
+
+/// [`parse`], finding each blob the netlist names in `blobs`. A blob it names and `blobs` lacks
+/// is a `netlist.blob` error, as is one whose bytes do not hash to its name or whose length
+/// differs from the netlist's.
+pub fn parse_with(json: &[u8], blobs: &Blobs) -> Result<Netlist, Vec<Diagnostic>> {
+    json::parse(json, blobs)
+}
+
+/// The SHA-256 of each blob the document names, in part order, so a caller can look up only
+/// those. Empty when the document does not parse, which [`parse_with`] then reports.
+pub fn blob_names(json: &[u8]) -> Vec<Sha256> {
+    json::blob_names(json)
 }
 
 /// The document's `version`, when it is readable as an unsigned integer, whether or not
@@ -81,6 +96,12 @@ impl Netlist {
 
     pub fn part(&self, id: PartId) -> &Part {
         &self.parts[id.index()]
+    }
+
+    /// Every blob the netlist names: parts in canonical order, and each part's in its field
+    /// order.
+    pub fn blobs(&self) -> impl Iterator<Item = &Blob> {
+        self.parts.iter().flat_map(|part| part.model.blobs())
     }
 
     pub fn part_id(&self, name: &Name) -> Option<PartId> {
@@ -255,8 +276,8 @@ pub enum Model {
 }
 
 impl Model {
-    /// Pin names in the order of `pins()`.
-    pub fn pin_names(&self) -> &'static [&'static str] {
+    /// Pin names in the order of `pins()`. An `esp32s3` lists only the pins it has nets on.
+    pub fn pin_names(&self) -> &[&'static str] {
         match self {
             Model::Resistor(_) => &Resistor::PINS,
             Model::Potentiometer(_) => &Potentiometer::PINS,
@@ -275,6 +296,7 @@ impl Model {
             Model::Chip(Chip::SpiReplay(_)) => &SpiReplay::PINS,
             Model::Chip(Chip::St77916(_)) => &St77916::PINS,
             Model::Chip(Chip::Cst816(_)) => &Cst816::PINS,
+            Model::Chip(Chip::Esp32s3(mcu)) => &mcu.names,
             Model::Chip(Chip::Ws2812(_)) => &Ws2812::PINS,
             Model::Chip(Chip::PulsesReplay(_)) => &PulsesReplay::PINS,
         }
@@ -337,6 +359,15 @@ impl Model {
             Model::Chip(Chip::Cst816(dev)) => &dev.pins,
             Model::Chip(Chip::Ws2812(chain)) => &chain.pins,
             Model::Chip(Chip::PulsesReplay(replay)) => &replay.pins,
+            Model::Chip(Chip::Esp32s3(mcu)) => &mcu.pins,
+        }
+    }
+
+    /// The blobs it names, in its own field order.
+    pub fn blobs(&self) -> Vec<&Blob> {
+        match self {
+            Model::Chip(Chip::Esp32s3(mcu)) => vec![mcu.firmware.blob()],
+            _ => Vec::new(),
         }
     }
 
@@ -880,6 +911,69 @@ pub enum Chip {
     Cst816(Box<Cst816>),
     Ws2812(Box<Ws2812>),
     PulsesReplay(Box<PulsesReplay>),
+    Esp32s3(Box<Esp32s3>),
+}
+
+/// An ESP32-S3 whose core starts at `firmware`'s entry at power-on, with every segment loaded.
+///
+/// `VCC` and `GND` need nets, and every GPIO is optional. A GPIO with no net is neither stamped
+/// nor watched. One with a net drives through `output` from `VCC` and into `GND`, pulls up
+/// through `pull_up_resistance`, or is off, as the firmware sets it, leaks to `VCC` and to `GND`
+/// through `leakage_resistance`, and reads its level through `input_threshold`. Only parse
+/// builds one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Esp32s3 {
+    /// `VCC`, `GND`, then each GPIO with a net, in `PINS` order.
+    pub pins: Vec<NetId>,
+    /// The name of each of `pins`.
+    pub names: Vec<&'static str>,
+    pub firmware: elf::Elf,
+    pub output: OutputStage,
+    /// Ohm. Every GPIO's pull-up.
+    pub pull_up_resistance: Value,
+    /// Ohm. Every GPIO's to `VCC` and again to `GND`, in every drive state.
+    pub leakage_resistance: Value,
+    pub input_threshold: Threshold,
+}
+
+impl Esp32s3 {
+    /// The supply pins, then the GPIOs a board can wire. GPIO22 to GPIO25 do not exist, and
+    /// GPIO33 to GPIO37 belong to the in-package PSRAM.
+    pub const PINS: [&'static str; 42] = [
+        "VCC", "GND", "GPIO0", "GPIO1", "GPIO2", "GPIO3", "GPIO4", "GPIO5", "GPIO6", "GPIO7",
+        "GPIO8", "GPIO9", "GPIO10", "GPIO11", "GPIO12", "GPIO13", "GPIO14", "GPIO15", "GPIO16",
+        "GPIO17", "GPIO18", "GPIO19", "GPIO20", "GPIO21", "GPIO26", "GPIO27", "GPIO28", "GPIO29",
+        "GPIO30", "GPIO31", "GPIO32", "GPIO38", "GPIO39", "GPIO40", "GPIO41", "GPIO42", "GPIO43",
+        "GPIO44", "GPIO45", "GPIO46", "GPIO47", "GPIO48",
+    ];
+
+    /// Where a bare-metal program may load: the 512 KB of internal SRAM, through its window on
+    /// the instruction bus and through its window on the data bus. Each window's `offset` is
+    /// its first byte's place in the SRAM, so code at `0x4037_8000` and data at `0x3fc8_8000`
+    /// are one byte.
+    pub const RAM: [elf::Window; 2] = [
+        elf::Window {
+            start: 0x4037_0000,
+            end: 0x403e_0000,
+            offset: 0,
+            code: true,
+        },
+        elf::Window {
+            start: 0x3fc8_8000,
+            end: 0x3fd0_0000,
+            offset: 0x8000,
+            code: false,
+        },
+    ];
+
+    /// The GPIO number of each of `pins` past `VCC` and `GND`.
+    pub fn gpios(&self) -> impl Iterator<Item = u8> + '_ {
+        self.names[2..].iter().map(|name| {
+            name.strip_prefix("GPIO")
+                .and_then(|number| number.parse().ok())
+                .expect("a GPIO pin name")
+        })
+    }
 }
 
 /// An ATmega328P in its 28-pin DIP, running `firmware` from power-on. Microchip DS40002061B.

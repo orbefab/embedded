@@ -6,12 +6,13 @@ mod common;
 use std::fs;
 use std::path::Path;
 
-use common::examples::examples;
+use common::examples::{self as example_files, examples};
 use sim_circuit::{Input, Refused, Rejected, Serial, SerialCursor, Session, Setting, Status};
+use sim_core::blob::Blobs;
 use sim_core::diagnostic::ValueRule;
 use sim_core::finite::Finite;
 use sim_core::name::Name;
-use sim_core::netlist::{self, Analysis, Baud, Contact, Frame};
+use sim_core::netlist::{Baud, Contact, Frame};
 use sim_core::run_folder::RunFolder;
 use sim_core::time::Time;
 use sim_core::timestamp::Timestamp;
@@ -43,10 +44,10 @@ fn created_at() -> Timestamp {
 const CREATED_AT: &str = "2023-11-14T22:13:20Z";
 
 fn stop_ps(json: &[u8]) -> u64 {
-    match netlist::parse(json).unwrap().analysis() {
-        Analysis::Transient(transient) => transient.stop.as_ps(),
-        Analysis::Op => panic!("an op analysis has no stop"),
-    }
+    let doc: serde_json::Value = serde_json::from_slice(json).unwrap();
+    doc["analysis"]["transient"]["stop_ps"]
+        .as_u64()
+        .expect("a transient has a stop")
 }
 
 /// Advances `session` on `json` in seeded calls until it ends or stands at `until`. A call moves
@@ -125,11 +126,11 @@ fn assert_serial_rows(name: &str, folder: &RunFolder, rows: &[String]) {
     assert_eq!(rows, want, "{name}: serial rows");
 }
 
-/// `json` recorded, advanced in chunks with no input, and finished, is `sim run`'s folder. An
-/// `op` analysis opens no session, and `sim run` still writes its folder.
-fn finishes_as_sim_run(name: &str, json: &[u8], seed: u64) {
-    let batch = sim_cli::run(json, created_at()).folder;
-    let mut session = match Session::record_document(json) {
+/// `json` recorded with `blobs`, advanced in chunks with no input, and finished, is `sim run`'s
+/// folder. An `op` analysis opens no session, and `sim run` still writes its folder.
+fn finishes_as_sim_run(name: &str, json: &[u8], blobs: &Blobs, seed: u64) {
+    let batch = sim_cli::run_with(json, blobs, created_at()).folder;
+    let mut session = match Session::record_document_with(json, blobs) {
         Ok(session) => session,
         Err(Refused::Op) => {
             assert!(batch.file("observations.json").is_some(), "{name}");
@@ -143,9 +144,10 @@ fn finishes_as_sim_run(name: &str, json: &[u8], seed: u64) {
     assert_serial_rows(name, &folder, &rows);
 }
 
-fn example(path: &Path) -> (String, Vec<u8>) {
+fn example(path: &Path) -> (String, Vec<u8>, Blobs) {
     let name = path.file_name().unwrap().to_string_lossy().into_owned();
-    (name, fs::read(path.join("netlist.json")).unwrap())
+    let json = fs::read(path.join("netlist.json")).unwrap();
+    (name, json, example_files::blobs(path))
 }
 
 #[test]
@@ -153,8 +155,8 @@ fn every_example_finishes_to_the_folder_sim_run_writes() {
     let examples: Vec<_> = examples().iter().map(|path| example(path)).collect();
     assert!(examples.len() >= 14);
     std::thread::scope(|scope| {
-        for (k, (name, json)) in examples.iter().enumerate() {
-            scope.spawn(move || finishes_as_sim_run(name, json, 0x5eed_8000 + k as u64));
+        for (k, (name, json, blobs)) in examples.iter().enumerate() {
+            scope.spawn(move || finishes_as_sim_run(name, json, blobs, 0x5eed_8000 + k as u64));
         }
     });
 }
@@ -193,7 +195,7 @@ fn floating_nets_and_ratings_finish_as_sim_run_reports_them() {
     let results = sim_cli::run(&json, created_at()).results;
     let codes: Vec<_> = results.diagnostics().iter().map(|d| d.code()).collect();
     assert_eq!(codes, ["net.floating", "net.floating", "rating.power"]);
-    finishes_as_sim_run("floating", &json, 0x5eed_8100);
+    finishes_as_sim_run("floating", &json, &Blobs::new(), 0x5eed_8100);
 }
 
 /// `json`, the floating `v-steps` changed so it cannot open, is refused by `record_document` with
@@ -242,7 +244,7 @@ fn a_faulted_session_finishes_to_the_folder_sim_run_writes() {
     let mut session = Session::record_document(&json).unwrap();
     assert_eq!(session.advance_to(END), Status::Faulted);
     assert_eq!(session.fault().unwrap().code(), "solver.nonfinite");
-    finishes_as_sim_run("fault", &json, 0x5eed_8200);
+    finishes_as_sim_run("fault", &json, &Blobs::new(), 0x5eed_8200);
 }
 
 /// `examples/<name>` recorded, advanced in chunks to half its run, and finished while it runs,

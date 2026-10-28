@@ -1,6 +1,6 @@
 # Run folder
 
-`sim run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and so does an ATmega328P. It adds `traces/serial.csv` when a chip has a USART, `traces/i2c.csv` when a chip has a TWI, as an ATmega328P does, `traces/link.csv` when a chip can send records, as an SPI replay does, `traces/display.csv` and one `traces/display-<part>.rgb565` for each display part, an `st77916`, and `traces/leds.csv` when a `ws2812` is in the netlist.
+`sim run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and so do an ATmega328P and an ESP32-S3. It adds `traces/serial.csv` when a chip has a USART, as an ATmega328P does, or a console, as an ESP32-S3 does, `traces/i2c.csv` when a chip has a TWI, as an ATmega328P does, `traces/link.csv` when a chip can send records, as an SPI replay does, `traces/display.csv` and one `traces/display-<part>.rgb565` for each display part, an `st77916`, and `traces/leds.csv` when a `ws2812` is in the netlist.
 
 ```text
 <dir>/
@@ -30,7 +30,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 {
   "run_format": 0,
   "netlist_format": 0,
-  "engine_version": "0.25.0",
+  "engine_version": "0.26.0",
   "input": {
     "file": "netlist.json",
     "sha256": "<lowercase hex sha256 of the input bytes>",
@@ -41,11 +41,25 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 }
 ```
 
-`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.25.0`. [versions.md](versions.md) says which changes move them.
+`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.26.0`. [versions.md](versions.md) says which changes move them.
 
 `netlist_format` is the input's `version`, when it reads as an unsigned integer. That holds when the engine rejected the input, so `version: 1` records 1. It is `null` when no such integer could be read.
 
 `input.file` is the name inside the folder. `input.sha256` and `input.bytes` describe the input bytes. For `examples/divider/netlist.json` the length is 904.
+
+`blobs` follows `input` when the netlist names a [blob](netlist.md#blobs), and is absent otherwise, so a folder whose netlist names none has no such key. It lists each blob in part order, and in each part's field order. An entry is `{ "role", "sha256", "bytes" }`. `role` is `elf` for an `esp32s3` part's `firmware.elf`. `examples/esp32s3-blink` writes:
+
+```json
+  "blobs": [
+    {
+      "role": "elf",
+      "sha256": "36f33508452c63a7527edff29db0da3e534714c5737c660a441a1c056effe3aa",
+      "bytes": 3800
+    }
+  ],
+```
+
+When parsing fails, `blobs` is absent. The folder copies no blob. A rerun from the folder alone fails with `netlist.blob`, so it names the blob folder, as in `sim run <run>/netlist.json --out <new> --blobs examples/esp32s3-blink/blobs`. A rerun from `examples/esp32s3-blink/netlist.json` finds the `blobs` folder beside it.
 
 `seed` is the netlist seed. When parsing fails, `seed` is `null`.
 
@@ -345,7 +359,7 @@ $end
 - Times are integer picoseconds. There is no `$date` and no `$version`, so the file has no clock read and no float.
 - After an error the file keeps the edges up to `end_ps`, like the rest of `traces/`.
 
-A netlist with a chip that has a USART adds `serial.csv`. An ATmega328P has one, `USART0`. The file holds every serial frame a USART finished, one row per byte, as ASCII with `\n` line ends. `index.json` has no key for it, because its header names its columns. `examples/atmega-analog-serial` prints `512\r\n` three times, and its file starts:
+A netlist with a chip that has a USART adds `serial.csv`. An ATmega328P has one, `USART0`. An ESP32-S3's USB Serial/JTAG console counts as one, `USB_SERIAL_JTAG`. The file holds every serial frame a USART finished, one row per byte, as ASCII with `\n` line ends. `index.json` has no key for it, because its header names its columns. `examples/atmega-analog-serial` prints `512\r\n` three times, and its file starts:
 
 ```text
 t_ps,part,usart,byte
@@ -358,6 +372,7 @@ t_ps,part,usart,byte
 ```
 
 - `t_ps` is the start-bit time in integer picoseconds. It is the first picosecond at or after the oscillator cycle the start bit began, the time the core drove `TXD` low. When `TXD` read high before the start bit and nothing else loads it, that is the fall in `logic.vcd`. [avr.md](avr.md#sent-bytes) says when there is no fall at that time.
+- On `USB_SERIAL_JTAG`, `t_ps` is the time the byte's packet went, and every byte of one packet has that time, as [esp32s3.md](esp32s3.md#what-it-models) says.
 - `part` is the chip's part name and `usart` the USART's datasheet name. Neither needs quoting.
 - `byte` is decimal, 0 to 255.
 - Rows are in the order stop bits ended, then by part name, then by the USART's index in `usarts`, then in the order its chip sent them. Parse sorts parts by name, so that index order is the part order a parsed netlist has. On one USART that is also the order bytes started. With two USARTs at different bauds, `t_ps` can step back between rows of different USARTs.

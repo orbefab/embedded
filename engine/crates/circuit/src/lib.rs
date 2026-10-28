@@ -15,6 +15,7 @@ mod topology;
 mod tran;
 mod watch;
 
+use sim_core::blob::Blobs;
 use sim_core::netlist::{self, Analysis, Netlist};
 use sim_core::run_folder::{self, Observations, Results, RunFolder};
 use sim_core::timestamp::Timestamp;
@@ -49,7 +50,12 @@ pub struct Completed {
 /// netlist.json bytes to a run folder, as `sim run` writes it. Never fails. A rejected netlist is
 /// a folder whose diagnostics say why.
 pub fn run(input: &[u8], created_at: Timestamp) -> Completed {
-    let (netlist, results) = match netlist::parse(input) {
+    run_with(input, &Blobs::new(), created_at)
+}
+
+/// [`run`], finding each blob the netlist names in `blobs`.
+pub fn run_with(input: &[u8], blobs: &Blobs, created_at: Timestamp) -> Completed {
+    let (netlist, results) = match netlist::parse_with(input, blobs) {
         Ok(n) => {
             let r = simulate(&n);
             (Some(n), r)

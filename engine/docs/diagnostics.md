@@ -15,7 +15,7 @@ A diagnostic is one JSON object. The fields are written in this order.
 
 The run sorts diagnostics by `t_ps`, then `code`, then `refs`, then the JSON bytes of the whole object. A `null` time sorts before a number, so every input finding precedes a solver finding.
 
-A session's `diagnostics()` returns the warnings found so far, and once the session ends they are that list's. While it runs, a `Pulses` record still in flight is not yet counted, as [engine.md](engine.md#sessions) says. The folder's warnings are `net.floating`, `trace.row_interpolated`, `rating.current`, `rating.power`, `chip.protocol` and `chip.link_miswired`. `diagnostics()` returns all but `trace.row_interpolated`. It leaves out `trace.row_interpolated`, because that warning names a grid row whose probe failed twice, and only a recorded trace defines those rows. An open session has no grid. The accepted steps do not depend on the grid, and neither do the warnings `diagnostics()` returns. Every other code on this page is an error. The error that ends a run is `fault` on the session, and `diagnostics()` does not return it. [engine.md](engine.md#sessions) says when the samples are taken.
+A session's `diagnostics()` returns the warnings found so far, and once the session ends they are that list's. While it runs, a `Pulses` record still in flight is not yet counted, as [engine.md](engine.md#sessions) says. The folder's warnings are `net.floating`, `trace.row_interpolated`, `rating.current`, `rating.power`, `chip.protocol`, `chip.link_miswired` and `chip.unmodeled_register`. `diagnostics()` returns all but `trace.row_interpolated`. It leaves out `trace.row_interpolated`, because that warning names a grid row whose probe failed twice, and only a recorded trace defines those rows. An open session has no grid. The accepted steps do not depend on the grid, and neither do the warnings `diagnostics()` returns. Every other code on this page is an error. The error that ends a run is `fault` on the session, and `diagnostics()` does not return it. [engine.md](engine.md#sessions) says when the samples are taken.
 
 A run whose diagnostics are all warnings still writes the operating point. A run with an error writes the observations it reached, as [run-folder.md](run-folder.md#observationsjson) says. That is `{}` when nothing solved, as at t = 0. A transient keeps its grid rows before the error, and its last accepted step is the last row. Its observations end there. A warning found before that error is kept, including a rating sampled on any accepted step before it.
 
@@ -147,7 +147,27 @@ The message is `{ref} firmware line {line} {what}`, or `{ref} firmware {what}` w
 - `past_flash`: a data byte lands at or past byte 32768, the end of the ATmega328P's flash.
 - `overlap`: a data byte lands where an earlier record placed one. `line` is the later record's.
 
-Parse stops at the first fault, so a part has at most one. [netlist.md](netlist.md#atmega328p) says how the text becomes flash.
+An `esp32s3` part's `firmware.elf` blob has three rules, each with `line` `null`. `field` is still `firmware`.
+
+- `elf`: the blob is not a 32-bit little-endian Xtensa ELF executable with a loadable segment, or a header, a segment or the symbol table runs past the file.
+- `unmapped`: a loadable segment lies outside the chip's SRAM windows, or the entry lies in no segment on the instruction bus.
+- `overlap`: two loadable segments reach one byte of SRAM, through one window or both. The message is `{ref} firmware loads two segments onto one byte of memory`.
+
+Parse stops at the first fault, so a part has at most one. [netlist.md](netlist.md#atmega328p) says how the text becomes flash, and [netlist.md](netlist.md#esp32-s3) how an ELF loads.
+
+## netlist.blob
+
+Severity `error`. Refs is the part. `t_ps` is `null`.
+
+A blob the part names is missing or is not the blob it names, as [netlist.md](netlist.md#blobs) says. The message names the part, the role and the hash. For a missing blob it is `{ref} {role} blob {sha256} is not in the blobs folder beside the netlist or in any --blobs folder`. For another hash it is `{ref} {role} blob {sha256}: no file under that name in the blobs folder beside the netlist or in a --blobs folder has that SHA-256`. For another length it is `{ref} {role} blob {sha256} in the blobs folder beside the netlist or a --blobs folder has {found} bytes; the netlist says {bytes}`. Those are the messages of `sim run`. The wasm package takes a blob list, so there a missing blob is `{ref} {role} blob {sha256} is not in the blob list` and another length is `{ref} {role} blob {sha256} in the blob list has {found} bytes; the netlist says {bytes}`.
+
+`data` holds `bytes`, `found`, `role`, `rule` and `sha256`. `bytes` is the netlist's length. `found` is the length of the file the run read under that name, or `null` when there is none. When no file under that name has the right hash, it is the first file found, in the search order of [netlist.md](netlist.md#blobs). `role` is `elf`. `sha256` is the hash the netlist names. `rule` is one of these.
+
+- `missing`: no folder has a file under that name.
+- `hash`: every file under that name hashes to another digest.
+- `length`: the file's length is not `bytes`.
+
+A missing blob in the wasm package is `missing` too, and a file there is filed under its own hash, so the package never reports `hash`.
 
 ## netlist.same_net
 
@@ -355,6 +375,43 @@ Severity `warning`. Refs are the chip that dropped a transaction. `t_ps` is the 
 The message is `{part} dropped an SPI transaction from #{sender} whose data lanes are not on its own data pins at {t_ps} ps, the first time`.
 
 `data` holds `sender`, the part name of the chip that sent it. A transaction goes to every chip whose `CS` and `SCLK` are on the sender's. A lane it uses, up to the most lanes any of its phases or its data take, must be on the receiver's pin of the same number, `D0` to `D3`. Otherwise the receiver drops it, and the run reports the first such drop once per part.
+
+## chip.unsupported_instruction
+
+Severity `error`. Refs are the chip. `t_ps` is the time the core reached the instruction. It ends the run.
+
+The message is `{part} reached {what} at {pc}, which the model does not run, at {t_ps} ps`, with ` in {symbol}` after the PC when the firmware has a symbol at or below it.
+
+`data` holds `op`, `pc`, `reason` and `symbol`. `op` is the op's name. `pc` is its address. `symbol` is the ELF symbol at or below the PC, written `name+0x1c` past its start, or `null`. `reason` is one of these.
+
+- `op`: the core does not model the op.
+- `unaligned`: the op is an `l32ai` or an `s32ri` at an address that is not a multiple of 4, or another load or store whose access is unaligned and one of whose parts faults.
+- `litbase`: an `l32r` while `LITBASE` is enabled.
+- `loop_end`: the op is the last of a zero-overhead loop and loops back, and it is a call, `isync`, `waiti` or `rsr.lcount`, which the ISA rules out there.
+
+## chip.unmapped_fetch
+
+Severity `error`. Refs are the chip. `t_ps` is the time of the fetch. It ends the run.
+
+The message is `{part} fetched code at {pc}, where the model maps no memory, at {t_ps} ps`, with ` in {symbol}` after the PC when the firmware has a symbol at or below it.
+
+`data` holds `pc` and `symbol`, as `chip.unsupported_instruction` writes them. An `esp32s3` fetches only from its instruction-bus SRAM window, as [esp32s3.md](esp32s3.md#what-it-models) says.
+
+## chip.watchdog
+
+Severity `error`. Refs are the chip. `t_ps` is the time the watchdog's first stage ran out. It ends the run.
+
+The message is `{part} {watchdog} watchdog ran out at {t_ps} ps; the firmware neither fed nor disabled it`.
+
+`data` holds `watchdog`, which is `RTC`, `timer group 0` or `timer group 1`. [esp32s3.md](esp32s3.md#what-it-models) says when each runs.
+
+## chip.unmodeled_register
+
+Severity `warning`. Refs are the chip. `t_ps` is the time of the first access to the register.
+
+The message is `{part} read {register} at {address}, which the model does not keep, first at {t_ps} ps from {pc}`, with `wrote` for a write and ` in {symbol}` after the PC when the firmware has a symbol at or below it.
+
+`data` holds `address`, `pc`, `register`, `symbol` and `write`. `address` is the register's word address. `register` names it by its block and the offset into the block, such as `UART0+0x0` or `TIMG0+0x24`. `pc` is the address of the instruction that made the access, and `symbol` is written as `chip.unsupported_instruction` writes it. `write` is true for a store. A read of such a register gives 0 and a store is dropped. The run reports each register once per chip, at its first access, whatever later accesses do. The list is the work queue of registers a firmware needs, as [esp32s3.md](esp32s3.md#unmodeled-registers) says.
 
 ## trace.too_large
 

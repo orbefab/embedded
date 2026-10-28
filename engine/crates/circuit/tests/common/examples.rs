@@ -2,8 +2,9 @@
 //! only `sim_core` and `std`.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use sim_core::blob::{Blobs, Sha256};
 use sim_core::netlist::{self, Analysis, Chip, Model, Netlist};
 
 /// The directory of every example, sorted.
@@ -18,6 +19,29 @@ pub fn examples() -> Vec<PathBuf> {
     found
 }
 
+/// The blobs in an example's `blobs` folder, each under the hash its file is named by. `sim run`
+/// reads the same folder beside the netlist.
+pub fn blobs(example: &Path) -> Blobs {
+    let mut blobs = Blobs::new();
+    let Ok(entries) = fs::read_dir(example.join("blobs")) else {
+        return blobs;
+    };
+    for entry in entries {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_str().unwrap();
+        let sha256 = Sha256::parse(name).unwrap_or_else(|| panic!("{} is a hash", path.display()));
+        blobs.insert(sha256, fs::read(&path).unwrap().into());
+    }
+    blobs
+}
+
+/// An example's netlist, parsed with its blobs.
+pub fn parse(example: &Path) -> Netlist {
+    let json = fs::read(example.join("netlist.json")).unwrap();
+    netlist::parse_with(&json, &blobs(example))
+        .unwrap_or_else(|errors| panic!("{}: {errors:?}", example.display()))
+}
+
 /// Whether a part is an active chip, whose core no ngspice deck has.
 pub fn runs_a_core(netlist: &Netlist) -> bool {
     netlist.parts().any(|(_, part)| match &part.model {
@@ -27,6 +51,7 @@ pub fn runs_a_core(netlist: &Netlist) -> bool {
             | Chip::SpiReplay(_)
             | Chip::St77916(_)
             | Chip::Cst816(_)
+            | Chip::Esp32s3(_)
             | Chip::Ws2812(_)
             | Chip::PulsesReplay(_) => true,
         },
@@ -51,10 +76,7 @@ pub const CHECKED_ON_THEIR_OWN: &[&str] = &[
 pub fn transient_examples() -> Vec<String> {
     examples()
         .into_iter()
-        .filter(|example| {
-            let netlist = netlist::parse(&fs::read(example.join("netlist.json")).unwrap()).unwrap();
-            matches!(netlist.analysis(), Analysis::Transient(_))
-        })
+        .filter(|example| matches!(parse(example).analysis(), Analysis::Transient(_)))
         .map(|example| example.file_name().unwrap().to_string_lossy().into_owned())
         .filter(|name| !CHECKED_ON_THEIR_OWN.contains(&name.as_str()))
         .collect()

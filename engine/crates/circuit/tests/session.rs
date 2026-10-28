@@ -6,6 +6,7 @@ use std::fs;
 
 use common::{held_capacitor, resistor, source_on, trace, transient};
 use sim_circuit::{EdgeCursor, Input, Refused, SerialCursor, Session, Setting, Status};
+use sim_core::blob::Blobs;
 use sim_core::diagnostic::{Diagnostic, Severity};
 use sim_core::finite::Finite;
 use sim_core::name::{Name, Ref};
@@ -1096,16 +1097,16 @@ fn peak(diagnostics: &[Diagnostic], code: &str) -> f64 {
 }
 
 /// Warnings in `diagnostics.json` other than `trace.row_interpolated` and the fault.
-fn folder_warnings(which: &str, bytes: &[u8], stop: Time) -> Vec<Diagnostic> {
-    let netlist = netlist::parse(bytes).unwrap();
+fn folder_warnings(which: &str, bytes: &[u8], blobs: &Blobs, stop: Time) -> Vec<Diagnostic> {
+    let netlist = netlist::parse_with(bytes, blobs).unwrap();
     let results = sim_circuit::simulate(&netlist);
     let from_run = session_warnings(results.diagnostics());
     drop(results);
-    let mut opened = Session::open_document(bytes).expect(which);
+    let mut opened = Session::open_document_with(bytes, blobs).expect(which);
     opened.advance_to(stop);
     let open_found = opened.diagnostics();
     drop(opened);
-    let mut recorded = Session::record_document(bytes).expect(which);
+    let mut recorded = Session::record_document_with(bytes, blobs).expect(which);
     recorded.advance_to(stop);
     let recorded_found = recorded.diagnostics();
     let folder = recorded
@@ -1156,7 +1157,7 @@ fn a_floating_net_is_listed_when_the_session_opens() {
     );
     assert_eq!(session.diagnostics(), at_open);
     assert_eq!(
-        folder_warnings("floating", bytes, Time::from_ps(1_000_000)),
+        folder_warnings("floating", bytes, &Blobs::new(), Time::from_ps(1_000_000)),
         at_open
     );
 }
@@ -1258,7 +1259,10 @@ fn a_pulsed_over_current_is_the_same_for_one_call_frames_and_1_ps_calls_around_t
     );
     assert_eq!(fine.advance_to(stop), Status::Stopped);
     assert_eq!(fine.diagnostics(), found);
-    assert_eq!(folder_warnings("pulsed-led", bytes, stop), found);
+    assert_eq!(
+        folder_warnings("pulsed-led", bytes, &Blobs::new(), stop),
+        found
+    );
 }
 
 #[test]
@@ -1359,7 +1363,8 @@ fn diagnostics_at_the_stop_match_the_folder() {
     for example in common::examples::examples() {
         let name = example.file_name().unwrap().to_string_lossy().into_owned();
         let bytes = fs::read(example.join("netlist.json")).unwrap();
-        let netlist = netlist::parse(&bytes).unwrap();
+        let blobs = common::examples::blobs(&example);
+        let netlist = netlist::parse_with(&bytes, &blobs).unwrap();
         match netlist.analysis() {
             Analysis::Op => {
                 assert!(
@@ -1376,7 +1381,7 @@ fn diagnostics_at_the_stop_match_the_folder() {
             Analysis::Transient(transient) => {
                 let stop = transient.stop;
                 drop(netlist);
-                let found = folder_warnings(&name, &bytes, stop);
+                let found = folder_warnings(&name, &bytes, &blobs, stop);
                 mark_transient(&found);
                 notes_reporting(&name, &found, &mut reporting);
             }
@@ -1396,7 +1401,7 @@ fn diagnostics_at_the_stop_match_the_folder() {
         };
         let stop = transient.stop;
         drop(netlist);
-        let found = folder_warnings(name, &bytes, stop);
+        let found = folder_warnings(name, &bytes, &Blobs::new(), stop);
         mark_transient(&found);
         notes_reporting(name, &found, &mut reporting);
         match name {
@@ -1433,7 +1438,12 @@ fn diagnostics_at_the_stop_match_the_folder() {
 #[test]
 fn a_nine_volt_led_transient_matches_its_folder() {
     let bytes = nine_volt_led_transient();
-    let found = folder_warnings("led-9v-transient", &bytes, Time::from_ps(1_000_000));
+    let found = folder_warnings(
+        "led-9v-transient",
+        &bytes,
+        &Blobs::new(),
+        Time::from_ps(1_000_000),
+    );
     let codes: Vec<_> = found.iter().map(Diagnostic::code).collect();
     assert!(codes.contains(&"rating.current"), "{codes:?}");
     assert!(codes.contains(&"rating.power"), "{codes:?}");

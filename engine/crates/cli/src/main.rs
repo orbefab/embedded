@@ -22,6 +22,10 @@ enum Command {
         netlist: PathBuf,
         #[arg(long)]
         out: PathBuf,
+        /// A folder of blobs, each file named by its SHA-256 in hex, searched after the
+        /// `blobs` folder beside the netlist, in the order given. Repeatable.
+        #[arg(long = "blobs", value_name = "DIR")]
+        blobs: Vec<PathBuf>,
     },
     /// Report engine version, formats, and self-checks.
     Doctor,
@@ -45,7 +49,11 @@ fn main() -> ExitCode {
         }
     };
     match cli.command {
-        Command::Run { netlist, out } => run(&netlist, &out),
+        Command::Run {
+            netlist,
+            out,
+            blobs,
+        } => run(&netlist, &out, &blobs),
         Command::Doctor => {
             let report = sim_cli::doctor();
             emit(report.status(), &report)
@@ -53,12 +61,16 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(netlist: &Path, out: &Path) -> ExitCode {
+fn run(netlist: &Path, out: &Path, dirs: &[PathBuf]) -> ExitCode {
     let input = match fs::read(netlist) {
         Ok(bytes) => bytes,
         Err(e) => return emit(Status::IoError, &io_failure(netlist, e)),
     };
-    let done = sim_cli::run(&input, Timestamp::now());
+    let blobs = match sim_cli::blobs(&input, netlist, dirs) {
+        Ok(blobs) => blobs,
+        Err((path, e)) => return emit(Status::IoError, &io_failure(&path, e)),
+    };
+    let done = sim_cli::run_with(&input, &blobs, Timestamp::now());
     if let Err(e) = done.folder.write(out) {
         return emit(Status::IoError, &io_failure(out, e));
     }

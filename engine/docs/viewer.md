@@ -20,6 +20,7 @@ Each example has `viewer.json` beside `netlist.json`. The file names the 3D mode
 | `led-5mm-red` | A 5 mm red LED, the Kingbright WP7113ID the LED examples cite. |
 | `on-board` | A part of the development board model. The board model draws it, so the example does not name a package. |
 | `potentiometer-rotary` | A rotary potentiometer. |
+| `qfn-56` | An ESP32-S3 in its 56-pin QFN. |
 | `pulses-replay` | A recorded pin, which `examples/ws2812-replay` replays as timed levels. It has no package of its own. |
 | `relay-pcb-5pin` | A 5-pin PCB relay with one changeover contact. |
 | `resistor-axial` | An axial resistor. |

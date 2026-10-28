@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use serde::{Serialize, Serializer};
 
+use crate::blob::{Role, Sha256, Source};
 use crate::name::{Name, NameError, Ref};
 use crate::netlist::MIN_GAP_PS;
 use crate::time::Time;
@@ -64,8 +65,41 @@ pub enum FirmwareRule {
     NoEnd,
     /// A data byte at or past the end of the flash.
     PastFlash,
-    /// A data byte an earlier record already placed.
+    /// A data byte an earlier record already placed, or an ELF segment on a byte of memory
+    /// an earlier segment reaches.
     Overlap,
+    /// Not a 32-bit little-endian Xtensa ELF executable with a loadable segment, or a header,
+    /// segment or symbol table that runs past the file.
+    Elf,
+    /// An ELF segment outside the memory a program may load into, or an entry outside the
+    /// segments in code memory.
+    Unmapped,
+}
+
+/// What the model lacks to run an instruction a core reached.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Unsupported {
+    /// The op itself.
+    Op,
+    /// The op at an address that is not a multiple of its size.
+    Unaligned,
+    /// `l32r` while `LITBASE` is enabled.
+    Litbase,
+    /// The op as the last of a loop that loops back.
+    LoopEnd,
+}
+
+/// Why a blob a netlist names is not there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlobRule {
+    /// No blob is filed under its hash.
+    Missing,
+    /// The blob filed under its hash hashes to another digest.
+    Hash,
+    /// The blob has another length than the netlist's `bytes`.
+    Length,
 }
 
 /// Which rule a transient analysis broke.
@@ -188,6 +222,17 @@ pub enum Diagnostic {
         line: Option<usize>,
         rule: FirmwareRule,
     },
+    /// A blob the part names in its `role` field is missing, or is not the blob it names.
+    /// `bytes` is the netlist's length, and `found` the blob's when one was filed.
+    NetlistBlob {
+        part: Ref,
+        role: Role,
+        sha256: Sha256,
+        rule: BlobRule,
+        bytes: u64,
+        found: Option<u64>,
+        source: Source,
+    },
     /// `pin` is on net `found`, and its kind ties it to `with`, on net `expected`.
     NetlistSameNet {
         pin: Ref,
@@ -249,6 +294,41 @@ pub enum Diagnostic {
     /// A chip whose CS and SCLK sit on `sender`'s nets dropped an SPI transaction whose data
     /// lanes are not on its own data pins, first at `at`.
     ChipLinkMiswired { part: Ref, at: Time, sender: Name },
+    /// A chip's core reached `op` at `pc`, which the model does not run there. `reason` says
+    /// what is missing. It ends the run.
+    ChipUnsupportedInstruction {
+        part: Ref,
+        at: Time,
+        op: &'static str,
+        reason: Unsupported,
+        pc: u32,
+        symbol: Option<String>,
+    },
+    /// A chip's core fetched code at `pc`, where the model maps no memory. It ends the run.
+    ChipUnmappedFetch {
+        part: Ref,
+        at: Time,
+        pc: u32,
+        symbol: Option<String>,
+    },
+    /// A chip's watchdog ran out its first stage. It ends the run.
+    ChipWatchdog {
+        part: Ref,
+        at: Time,
+        watchdog: &'static str,
+    },
+    /// A chip's firmware read or wrote `register` at `address`, which the model keeps no state
+    /// for, first at `at` from `pc`, with a write when `write` is set. A read gives 0 and a
+    /// write is dropped.
+    ChipUnmodeledRegister {
+        part: Ref,
+        at: Time,
+        address: u32,
+        register: String,
+        pc: u32,
+        symbol: Option<String>,
+        write: bool,
+    },
     /// The grid gives more rows than the trace holds, found before the first solve, when
     /// `at` is `None`. The test-only step-rows mode can also fill the trace and refuse the
     /// next step. Then `at` is that step, and the rows already written stay.
@@ -319,6 +399,7 @@ impl Diagnostic {
             Diagnostic::NetlistUnit { .. } => "netlist.unit",
             Diagnostic::NetlistValue { .. } => "netlist.value",
             Diagnostic::NetlistFirmware { .. } => "netlist.firmware",
+            Diagnostic::NetlistBlob { .. } => "netlist.blob",
             Diagnostic::NetlistSameNet { .. } => "netlist.same_net",
             Diagnostic::NetlistGround { .. } => "netlist.ground",
             Diagnostic::NetlistAnalysis { .. } => "netlist.analysis",
@@ -333,6 +414,10 @@ impl Diagnostic {
             Diagnostic::ChipUnsettled { .. } => "chip.unsettled",
             Diagnostic::ChipProtocol { .. } => "chip.protocol",
             Diagnostic::ChipLinkMiswired { .. } => "chip.link_miswired",
+            Diagnostic::ChipUnsupportedInstruction { .. } => "chip.unsupported_instruction",
+            Diagnostic::ChipUnmappedFetch { .. } => "chip.unmapped_fetch",
+            Diagnostic::ChipWatchdog { .. } => "chip.watchdog",
+            Diagnostic::ChipUnmodeledRegister { .. } => "chip.unmodeled_register",
             Diagnostic::TraceTooLarge { .. } => "trace.too_large",
             Diagnostic::TraceRowInterpolated { .. } => "trace.row_interpolated",
             Diagnostic::RatingCurrent(_) => "rating.current",
@@ -345,6 +430,7 @@ impl Diagnostic {
             Diagnostic::NetFloating { .. }
             | Diagnostic::ChipProtocol { .. }
             | Diagnostic::ChipLinkMiswired { .. }
+            | Diagnostic::ChipUnmodeledRegister { .. }
             | Diagnostic::TraceRowInterpolated { .. }
             | Diagnostic::RatingCurrent(_)
             | Diagnostic::RatingPower(_) => Severity::Warning,
@@ -357,6 +443,7 @@ impl Diagnostic {
             | Diagnostic::NetlistUnit { .. }
             | Diagnostic::NetlistValue { .. }
             | Diagnostic::NetlistFirmware { .. }
+            | Diagnostic::NetlistBlob { .. }
             | Diagnostic::NetlistSameNet { .. }
             | Diagnostic::NetlistGround { .. }
             | Diagnostic::NetlistAnalysis { .. }
@@ -368,6 +455,9 @@ impl Diagnostic {
             | Diagnostic::SolverStepLimit { .. }
             | Diagnostic::SolverConvergence { .. }
             | Diagnostic::ChipUnsettled { .. }
+            | Diagnostic::ChipUnsupportedInstruction { .. }
+            | Diagnostic::ChipUnmappedFetch { .. }
+            | Diagnostic::ChipWatchdog { .. }
             | Diagnostic::TraceTooLarge { .. } => Severity::Error,
         }
     }
@@ -382,6 +472,10 @@ impl Diagnostic {
             | Diagnostic::ChipUnsettled { at, .. }
             | Diagnostic::ChipProtocol { at, .. }
             | Diagnostic::ChipLinkMiswired { at, .. }
+            | Diagnostic::ChipUnsupportedInstruction { at, .. }
+            | Diagnostic::ChipUnmappedFetch { at, .. }
+            | Diagnostic::ChipWatchdog { at, .. }
+            | Diagnostic::ChipUnmodeledRegister { at, .. }
             | Diagnostic::TraceRowInterpolated { at, .. } => Some(*at),
             Diagnostic::TraceTooLarge { at, .. } => *at,
             Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
@@ -396,6 +490,7 @@ impl Diagnostic {
             | Diagnostic::NetlistUnit { .. }
             | Diagnostic::NetlistValue { .. }
             | Diagnostic::NetlistFirmware { .. }
+            | Diagnostic::NetlistBlob { .. }
             | Diagnostic::NetlistSameNet { .. }
             | Diagnostic::NetlistGround { .. }
             | Diagnostic::NetlistAnalysis { .. }
@@ -419,6 +514,7 @@ impl Diagnostic {
             | Diagnostic::NetlistUnit { part, .. }
             | Diagnostic::NetlistValue { part, .. }
             | Diagnostic::NetlistFirmware { part, .. }
+            | Diagnostic::NetlistBlob { part, .. }
             | Diagnostic::NetlistSchedule { part, .. }
             | Diagnostic::NetlistWaveform { part, .. } => vec![part.clone()],
             Diagnostic::NetFloating { net } => vec![net.clone()],
@@ -426,9 +522,12 @@ impl Diagnostic {
             | Diagnostic::SolverNonFinite { unknown, .. }
             | Diagnostic::SolverConvergence { unknown, .. } => vec![unknown.clone()],
             Diagnostic::ChipUnsettled { chips, .. } => chips.clone(),
-            Diagnostic::ChipProtocol { part, .. } | Diagnostic::ChipLinkMiswired { part, .. } => {
-                vec![part.clone()]
-            }
+            Diagnostic::ChipProtocol { part, .. }
+            | Diagnostic::ChipLinkMiswired { part, .. }
+            | Diagnostic::ChipUnsupportedInstruction { part, .. }
+            | Diagnostic::ChipUnmappedFetch { part, .. }
+            | Diagnostic::ChipWatchdog { part, .. }
+            | Diagnostic::ChipUnmodeledRegister { part, .. } => vec![part.clone()],
             Diagnostic::SolverTooLarge { .. }
             | Diagnostic::SolverStepLimit { .. }
             | Diagnostic::TraceTooLarge { .. }
@@ -549,11 +648,50 @@ impl Diagnostic {
                     FirmwareRule::AfterEnd => "comes after the end-of-file record",
                     FirmwareRule::NoEnd => "has no end-of-file record",
                     FirmwareRule::PastFlash => "puts a byte past the end of the flash",
+                    FirmwareRule::Overlap if line.is_none() => {
+                        "loads two segments onto one byte of memory"
+                    }
                     FirmwareRule::Overlap => "places a byte an earlier record placed",
+                    FirmwareRule::Elf => "is not a 32-bit little-endian Xtensa ELF executable",
+                    FirmwareRule::Unmapped => {
+                        "loads a segment, or starts, outside the RAM a program may load into"
+                    }
                 };
                 match line {
                     Some(line) => format!("{part} firmware line {line} {what}"),
                     None => format!("{part} firmware {what}"),
+                }
+            }
+            Diagnostic::NetlistBlob {
+                part,
+                role,
+                sha256,
+                rule,
+                bytes,
+                found,
+                source,
+            } => {
+                let role = role.as_str();
+                let found = found.unwrap_or(0);
+                match (source, rule) {
+                    (Source::Folders, BlobRule::Missing) => format!(
+                        "{part} {role} blob {sha256} is not in the blobs folder beside the netlist or in any --blobs folder"
+                    ),
+                    (Source::Folders, BlobRule::Hash) => format!(
+                        "{part} {role} blob {sha256}: no file under that name in the blobs folder beside the netlist or in a --blobs folder has that SHA-256"
+                    ),
+                    (Source::Folders, BlobRule::Length) => format!(
+                        "{part} {role} blob {sha256} in the blobs folder beside the netlist or a --blobs folder has {found} bytes; the netlist says {bytes}"
+                    ),
+                    (Source::List, BlobRule::Missing) => {
+                        format!("{part} {role} blob {sha256} is not in the blob list")
+                    }
+                    (Source::List, BlobRule::Hash) => format!(
+                        "{part} {role} blob {sha256}: the blob under that name in the blob list has another SHA-256"
+                    ),
+                    (Source::List, BlobRule::Length) => format!(
+                        "{part} {role} blob {sha256} in the blob list has {found} bytes; the netlist says {bytes}"
+                    ),
                 }
             }
             Diagnostic::NetlistSameNet {
@@ -714,6 +852,54 @@ impl Diagnostic {
                 sender.as_str(),
                 at.as_ps()
             ),
+            Diagnostic::ChipUnsupportedInstruction {
+                part,
+                at,
+                op,
+                reason,
+                pc,
+                symbol,
+            } => {
+                let what = match reason {
+                    Unsupported::Op => format!("`{op}`"),
+                    Unsupported::Unaligned => format!("an unaligned `{op}`"),
+                    Unsupported::Litbase => "`l32r` with LITBASE".to_string(),
+                    Unsupported::LoopEnd => format!("`{op}` as the last op of a loop"),
+                };
+                format!(
+                    "{part} reached {what} at {pc:#010x}{}, which the model does not run, at {} ps",
+                    symbol_text(symbol),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipUnmappedFetch {
+                part,
+                at,
+                pc,
+                symbol,
+            } => format!(
+                "{part} fetched code at {pc:#010x}{}, where the model maps no memory, at {} ps",
+                symbol_text(symbol),
+                at.as_ps()
+            ),
+            Diagnostic::ChipWatchdog { part, at, watchdog } => format!(
+                "{part} {watchdog} watchdog ran out at {} ps; the firmware neither fed nor disabled it",
+                at.as_ps()
+            ),
+            Diagnostic::ChipUnmodeledRegister {
+                part,
+                at,
+                address,
+                register,
+                pc,
+                symbol,
+                write,
+            } => format!(
+                "{part} {} {register} at {address:#010x}, which the model does not keep, first at {} ps from {pc:#010x}{}",
+                if *write { "wrote" } else { "read" },
+                at.as_ps(),
+                symbol_text(symbol)
+            ),
             Diagnostic::TraceTooLarge {
                 rows,
                 limit,
@@ -789,6 +975,20 @@ impl Diagnostic {
             Diagnostic::NetlistFirmware { line, rule, .. } => {
                 serde_json::json!({ "field": "firmware", "line": line, "rule": rule })
             }
+            Diagnostic::NetlistBlob {
+                role,
+                sha256,
+                rule,
+                bytes,
+                found,
+                ..
+            } => serde_json::json!({
+                "bytes": bytes,
+                "found": found,
+                "role": role.as_str(),
+                "rule": rule,
+                "sha256": sha256.to_string(),
+            }),
             Diagnostic::NetlistSameNet {
                 found, expected, ..
             } => serde_json::json!({ "expected": expected.as_str(), "found": found.as_str() }),
@@ -831,6 +1031,33 @@ impl Diagnostic {
             Diagnostic::ChipLinkMiswired { sender, .. } => {
                 serde_json::json!({ "sender": sender.as_str() })
             }
+            Diagnostic::ChipUnsupportedInstruction {
+                op,
+                reason,
+                pc,
+                symbol,
+                ..
+            } => serde_json::json!({ "op": op, "pc": pc, "reason": reason, "symbol": symbol }),
+            Diagnostic::ChipUnmappedFetch { pc, symbol, .. } => {
+                serde_json::json!({ "pc": pc, "symbol": symbol })
+            }
+            Diagnostic::ChipWatchdog { watchdog, .. } => {
+                serde_json::json!({ "watchdog": watchdog })
+            }
+            Diagnostic::ChipUnmodeledRegister {
+                address,
+                register,
+                pc,
+                symbol,
+                write,
+                ..
+            } => serde_json::json!({
+                "address": address,
+                "pc": pc,
+                "register": register,
+                "symbol": symbol,
+                "write": write,
+            }),
             Diagnostic::TraceTooLarge {
                 rows,
                 limit,
@@ -850,6 +1077,14 @@ impl Diagnostic {
             }
         }
     }
+}
+
+/// ` in name+0x1c`, or nothing with no symbol.
+fn symbol_text(symbol: &Option<String>) -> String {
+    symbol
+        .as_ref()
+        .map(|name| format!(" in {name}"))
+        .unwrap_or_default()
 }
 
 /// The rule as `data.rule` names it.

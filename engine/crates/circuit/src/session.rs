@@ -1,5 +1,6 @@
 use std::mem::size_of;
 
+use sim_core::blob::Blobs;
 use sim_core::diagnostic::{Diagnostic, Solve};
 use sim_core::display::{Displays, Panel, Rectangle};
 use sim_core::finite::Finite;
@@ -366,7 +367,12 @@ impl Session {
 
     /// `open` on the netlist `json` parses to, keeping `json` so `export` can write it back.
     pub fn open_document(json: &[u8]) -> Result<Session, Refused> {
-        let (document, netlist) = Document::parse(json).map_err(Refused::Invalid)?;
+        Session::open_document_with(json, &Blobs::new())
+    }
+
+    /// [`Session::open_document`], finding each blob the netlist names in `blobs`.
+    pub fn open_document_with(json: &[u8], blobs: &Blobs) -> Result<Session, Refused> {
+        let (document, netlist) = Document::parse_with(json, blobs).map_err(Refused::Invalid)?;
         Session::open_with(netlist, Some(document), BUDGET)
     }
 
@@ -382,7 +388,12 @@ impl Session {
     /// its run folder. It also refuses a grid with more rows than a trace holds, with
     /// `trace.too_large`.
     pub fn record_document(json: &[u8]) -> Result<Session, Refused> {
-        let (document, netlist) = Document::parse(json).map_err(Refused::Invalid)?;
+        Session::record_document_with(json, &Blobs::new())
+    }
+
+    /// [`Session::record_document`], finding each blob the netlist names in `blobs`.
+    pub fn record_document_with(json: &[u8], blobs: &Blobs) -> Result<Session, Refused> {
+        let (document, netlist) = Document::parse_with(json, blobs).map_err(Refused::Invalid)?;
         let transient = transient(&netlist)?;
         let mut session = tran::record(netlist, &transient, Rows::Grid, Some(document))
             .map_err(|unopened| Refused::Failed(unopened.error))?;
@@ -545,7 +556,7 @@ impl Session {
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
         let mut found = self.warnings.clone();
         found.extend(self.ratings.findings());
-        found.extend(self.actives.warnings(&self.circuit));
+        found.extend(self.actives.warnings(&self.circuit, self.accepted()));
         sim_core::run_folder::sort_diagnostics(&mut found);
         found
     }
@@ -781,7 +792,7 @@ impl Session {
         };
         diagnostics.extend(self.warnings);
         diagnostics.extend(self.ratings.findings());
-        diagnostics.extend(self.actives.warnings(&self.circuit));
+        diagnostics.extend(self.actives.warnings(&self.circuit, at));
         let (mut observations, mut trace) =
             record.finish(&self.circuit.netlist, at, &row, diagnostics);
         let usarts = self.actives.usarts();
@@ -1175,6 +1186,10 @@ impl Session {
             // Logic::set merges a same-time change, which would move a count cursor.
             debug_assert!(record.changes().last().is_none_or(|change| change.at < at));
             record.logic(at, &self.logic);
+        }
+        // A core that faulted at this landing ends the run on it.
+        if let Some(fault) = self.actives.fault(circuit) {
+            return self.ended(at, next.row, End::Fault(fault));
         }
         self.solved(next)
     }

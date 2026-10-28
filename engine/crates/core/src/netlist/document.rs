@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 use super::{Chip, Event, Model, Netlist, SerialEvent, Switch, Touch, Value as Level};
+use crate::blob::Blobs;
 use crate::diagnostic::Diagnostic;
 use crate::name::Name;
 use crate::time::Time;
@@ -13,7 +14,12 @@ pub struct Document(Value);
 impl Document {
     /// `json` and the netlist it parses to.
     pub fn parse(json: &[u8]) -> Result<(Document, Netlist), Vec<Diagnostic>> {
-        let netlist = super::parse(json)?;
+        Document::parse_with(json, &Blobs::new())
+    }
+
+    /// [`Document::parse`], finding each blob the netlist names in `blobs`.
+    pub fn parse_with(json: &[u8], blobs: &Blobs) -> Result<(Document, Netlist), Vec<Diagnostic>> {
+        let netlist = super::parse_with(json, blobs)?;
         let document = serde_json::from_slice(json).expect("a document that parses is JSON");
         Ok((Document(document), netlist))
     }

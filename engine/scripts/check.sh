@@ -14,3 +14,9 @@ rm -rf "$display_run"
 cargo run -q -p sim-cli --locked -- run examples/st77916-replay/netlist.json --out "$display_run" >/dev/null
 uv run scripts/render_st77916.py examples/st77916-replay/events.json --check "$display_run"
 rm -rf "$display_run"
+uv run scripts/esp32s3_blink.py --self-test
+blink_run="${CARGO_TARGET_DIR:-target}/esp32s3-blink-check"
+rm -rf "$blink_run"
+cargo run -q -p sim-cli --locked -- run examples/esp32s3-blink/netlist.json --out "$blink_run" >/dev/null
+uv run scripts/esp32s3_blink.py --check "$blink_run"
+rm -rf "$blink_run"

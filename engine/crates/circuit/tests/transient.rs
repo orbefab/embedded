@@ -3,12 +3,13 @@ mod common;
 use std::fs;
 use std::path::PathBuf;
 
+use sim_core::blob::Blobs;
 use sim_core::diagnostic::Diagnostic;
 use sim_core::name::Ref;
 use sim_core::run_folder::Results;
 use sim_core::trace::Trace;
 
-use common::examples::transient_examples;
+use common::examples::{self as examples, transient_examples};
 use common::{
     column, held_capacitor, resistor, simulate, simulate_steps, source, span, trace, transient,
 };
@@ -138,24 +139,25 @@ fn seed_moves_only_the_bounce_edges() {
     assert_eq!(plain(r#""seed": 7"#), plain(r#""seed": 8"#));
 }
 
-fn example(name: &str) -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+fn example_dir(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../examples")
         .join(name)
-        .join("netlist.json");
-    fs::read_to_string(path).unwrap()
+}
+
+fn example(name: &str) -> String {
+    fs::read_to_string(example_dir(name).join("netlist.json")).unwrap()
 }
 
 #[test]
 fn every_example_writes_its_grid_and_its_steps_change_nothing_else() {
     for name in transient_examples() {
-        let json = example(&name);
-        let netlist = sim_core::netlist::parse(json.as_bytes()).unwrap();
+        let netlist = examples::parse(&example_dir(&name));
         let sim_core::netlist::Analysis::Transient(transient) = netlist.analysis() else {
             panic!("{name} is not a transient");
         };
         let (stop, grid) = (transient.stop.as_ps(), transient.grid);
-        let results = simulate(&json);
+        let results = sim_circuit::simulate(&netlist);
         let trace = results.trace().unwrap();
         let rows: Vec<u64> = trace.time().iter().map(|t| t.as_ps()).collect();
         assert_eq!(rows.len() as u64, stop.div_ceil(grid) + 1, "{name}");
@@ -218,11 +220,11 @@ fn assert_rows_read_the_steps(run: &str, trace: &Trace, steps: &Trace) {
     }
 }
 
-/// `json` with its `grid_ps` set to `grid`.
-fn with_grid(json: &str, grid: u64) -> sim_core::netlist::Netlist {
+/// `json` with its `grid_ps` set to `grid`, parsed with `blobs`.
+fn with_grid(json: &str, blobs: &Blobs, grid: u64) -> sim_core::netlist::Netlist {
     let mut doc: serde_json::Value = serde_json::from_str(json).unwrap();
     doc["analysis"]["transient"]["grid_ps"] = grid.into();
-    sim_core::netlist::parse(doc.to_string().as_bytes()).unwrap()
+    sim_core::netlist::parse_with(doc.to_string().as_bytes(), blobs).unwrap()
 }
 
 /// A row is a probe. On the committed grid, a grid four times finer, a grid off every
@@ -233,7 +235,8 @@ fn with_grid(json: &str, grid: u64) -> sim_core::netlist::Netlist {
 fn a_grid_never_changes_the_run() {
     for name in transient_examples() {
         let json = example(&name);
-        let netlist = sim_core::netlist::parse(json.as_bytes()).unwrap();
+        let blobs = examples::blobs(&example_dir(&name));
+        let netlist = examples::parse(&example_dir(&name));
         let sim_core::netlist::Analysis::Transient(transient) = netlist.analysis() else {
             panic!("{name} is not a transient");
         };
@@ -243,8 +246,13 @@ fn a_grid_never_changes_the_run() {
             let runs: Vec<_> = [grid, grid / 4, 3 * grid + 7, stop]
                 .into_iter()
                 .map(|grid| {
-                    let json = &json;
-                    scope.spawn(move || (grid, sim_circuit::simulate_stats(&with_grid(json, grid))))
+                    let (json, blobs) = (&json, &blobs);
+                    scope.spawn(move || {
+                        (
+                            grid,
+                            sim_circuit::simulate_stats(&with_grid(json, blobs, grid)),
+                        )
+                    })
                 })
                 .collect();
             let runs: Vec<_> = runs.into_iter().map(|run| run.join().unwrap()).collect();
@@ -318,7 +326,7 @@ fn the_rc_example_follows_its_closed_form_at_every_row() {
     let steps = simulate_steps(&json);
     let steps = trace(&steps).time();
     for grid in [20_000_000, 60_000_007] {
-        let results = sim_circuit::simulate(&with_grid(&json, grid));
+        let results = sim_circuit::simulate(&with_grid(&json, &Blobs::new(), grid));
         let trace = trace(&results);
         let vout = column(trace, "#net.vout");
         let current = column(trace, "#c1.i");
@@ -418,7 +426,7 @@ fn the_rl_example_follows_its_closed_form_at_every_row() {
     let steps = simulate_steps(&json);
     let steps = trace(&steps).time();
     for grid in [50_000_000, 60_000_007] {
-        let results = sim_circuit::simulate(&with_grid(&json, grid));
+        let results = sim_circuit::simulate(&with_grid(&json, &Blobs::new(), grid));
         let trace = trace(&results);
         let current = column(trace, "#l1.i");
         let swing = span(current);

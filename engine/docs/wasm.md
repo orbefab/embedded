@@ -79,6 +79,7 @@ Times are `bigint` picoseconds both ways, so a run past 2^53 ps, about 2.5 hours
 | --- | --- | --- |
 | `Session.open(netlist)` | `open_document`, a session that records nothing | `Uint8Array` in |
 | `Session.record(netlist)` | `record_document`, a session `finish` turns into a folder | `Uint8Array` in |
+| `Session.openWith(netlist, blobs)`, `Session.recordWith(netlist, blobs)` | `open` and `record` for a netlist that names [blobs](netlist.md#blobs). Each blob is filed under its own SHA-256 | `Uint8Array` and `Uint8Array[]` in |
 | `advanceTo(ps)` | accepts every step by `ps` | `bigint` in, `Status` out |
 | `now()`, `status()` | where the session stands | `bigint`, `Status` |
 | `fault()` | the diagnostic that ended a faulted session | JSON text of one diagnostic, or `undefined` |
@@ -102,6 +103,7 @@ Times are `bigint` picoseconds both ways, so a run past 2^53 ps, about 2.5 hours
 | `export()` | the netlist with every applied input | `Uint8Array` |
 | `finish(createdAtSeconds)` | advances to the stop and returns the folder `sim run` writes, and frees the session, also when it throws | `bigint` in, a `Folder` |
 | `run(netlist, createdAtSeconds)` | the folder `sim run` writes, as one call | `Uint8Array` and `bigint` in, a `Folder` |
+| `runWith(netlist, blobs, createdAtSeconds)` | `run` for a netlist that names blobs, as `openWith` takes them | `Uint8Array`, `Uint8Array[]` and `bigint` in, a `Folder` |
 | `Folder.paths()`, `Folder.file(path)` | the folder's files, such as `traces/analog.f64` | `string[]`, and `string` in, `Uint8Array` or `undefined` out |
 
 `Status` is `"running"`, `"stopped"` or `"faulted"`. The `.d.ts` files type every class, and `Status` and the error codes as string unions.
@@ -116,21 +118,23 @@ A cursor is a count since the first byte or the first change, so `0n` reads from
 
 `display` and `displayImage` read the display part as the last accepted step left it, as a level is read, and change nothing. A caller that draws the panel each frame reads `displayImage`, 259200 bytes for an `st77916`, each pixel two bytes in the order the panel took them. A high byte first is big-endian RGB565, and a reader must not assume little-endian. [run-folder.md](run-folder.md#traces) has the layout.
 
+`open`, `record` and `run` offer no blobs, so a netlist that names one is `invalid` with `netlist.blob` there, and `run` writes that folder. A blob the netlist does not name is ignored. `scripts/wasm-check.sh` passes each example's `blobs` folder, the files `sim run` reads beside the netlist, so the package writes the folder `sim run` writes.
+
 `run` is the batch path. A netlist that `record` refuses still gets its folder from `run`, as `sim run` writes one. That covers an `op` analysis, an invalid netlist and a grid past the row limit.
 
 ## Errors
 
 Every failure the engine or the binding detects throws a `SimError`. It is not an `Error`, so test it with `instanceof SimError`. `code` says which failure it is. `diagnostics` is JSON text of an array, empty unless the code says otherwise. `rule` is set only for `value`.
 
-Each argument must have the JavaScript type the table above names, and one of another type throws `type`. Nothing is converted, so `"0.3"` for a level, `"true"` or `1` for a contact, `5` for a time and `null` for any argument each throw `type`. A netlist must be a `Uint8Array`. A node `Buffer` is one, and a view of part of a buffer crosses as just its bytes. An `ArrayBuffer`, such as `response.arrayBuffer()` returns, or a string throws `type`, so wrap it in a `Uint8Array` or encode it first. A `Uint8Array` whose buffer was transferred, so it is detached, throws `type` too. The binding checks the arguments in order, so the code is that of the first wrong one. A call that throws changes nothing, except `finish`, which has freed its session.
+Each argument must have the JavaScript type the table above names, and one of another type throws `type`. Nothing is converted, so `"0.3"` for a level, `"true"` or `1` for a contact, `5` for a time and `null` for any argument each throw `type`. A netlist must be a `Uint8Array`. A node `Buffer` is one, and a view of part of a buffer crosses as just its bytes. An `ArrayBuffer`, such as `response.arrayBuffer()` returns, or a string throws `type`, so wrap it in a `Uint8Array` or encode it first. A `Uint8Array` whose buffer was transferred, so it is detached, throws `type` too. A blob list must be an `Array` whose every item is a `Uint8Array`, so a lone `Uint8Array`, an `ArrayBuffer` item or a nested array throws `type`. The binding checks the arguments in order, so the code is that of the first wrong one. A call that throws changes nothing, except `finish`, which has freed its session.
 
 One failure throws from the `wasm-bindgen` glue instead. A call on an object that `finish` or `free()` has freed throws an `Error` whose message is `null pointer passed to rust`.
 
 | `code` | Thrown by | Means |
 | --- | --- | --- |
-| `op` | `open`, `record` | the analysis is `op`, which has no time to advance |
-| `failed` | `open`, `record` | `diagnostics` holds the one error, such as `solver.too_large`, a failed operating point at t = 0, or for `record` `trace.too_large` |
-| `invalid` | `open`, `record` | the bytes are not a valid netlist, and `diagnostics` holds why |
+| `op` | `open`, `record`, `openWith`, `recordWith` | the analysis is `op`, which has no time to advance |
+| `failed` | `open`, `record`, `openWith`, `recordWith` | `diagnostics` holds the one error, such as `solver.too_large`, a failed operating point at t = 0, or for `record` `trace.too_large` |
+| `invalid` | `open`, `record`, `openWith`, `recordWith` | the bytes are not a valid netlist, and `diagnostics` holds why |
 | `ended` | `applyContact`, `applyLevel`, `applySerial`, `applyTouch` | the session has stopped or faulted |
 | `unknown_part` | the same, and `display`, `displayImage` | no part has that name, or for `display` and `displayImage` the part is no display part |
 | `not_settable` | the same | the part takes no input of that kind. A serial send on a resistor, a capacitor, an inductor, a relay, a junction, a chip, or a `step` or `pulse` source. A touch on a resistor, a capacitor, an inductor, a relay, a junction, a `step` or `pulse` source, or a chip other than a `cst816`. A contact, a level, or a serial send on a `cst816` |
@@ -142,7 +146,7 @@ One failure throws from the `wasm-bindgen` glue instead. A call on an object tha
 | `bad_name` | `applyContact`, `applyLevel`, `applySerial`, `applyTouch`, `display`, `displayImage` | the part name is a string but not a name in the ref grammar |
 | `not_finite` | `applyLevel`, `applyTouch` | the level or a coordinate is NaN or infinite |
 | `bad_baud` | `applySerial` | `baud` is not an integer from 1 to 500000000 |
-| `range` | `advanceTo`, `serialSince`, `edgesSince`, `forgetEdges`, `forgetSerial`, `applyContact`, `applyLevel`, `applySerial`, `applyTouch`, `finish`, `run` | a `bigint` argument is negative or above 2^64 - 1 |
+| `range` | `advanceTo`, `serialSince`, `edgesSince`, `forgetEdges`, `forgetSerial`, `applyContact`, `applyLevel`, `applySerial`, `applyTouch`, `finish`, `run`, `runWith` | a `bigint` argument is negative or above 2^64 - 1 |
 | `forgotten` | `edgesSince`, `serialSince` | the cursor is before an entry `forgetEdges` or `forgetSerial` dropped |
 | `unrecorded` | `finish` | `open` made the session, so it has no folder. `finish` has freed the session |
 
