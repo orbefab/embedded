@@ -14,7 +14,7 @@
 
 use std::fmt::Write;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::name::Name;
@@ -78,7 +78,7 @@ pub struct Panel {
     pub brightness: Option<Brightness>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Flags {
     pub display_on: bool,
     pub inverted: bool,

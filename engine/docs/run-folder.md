@@ -30,7 +30,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 {
   "run_format": 0,
   "netlist_format": 0,
-  "engine_version": "0.28.0",
+  "engine_version": "0.29.0",
   "input": {
     "file": "netlist.json",
     "sha256": "<lowercase hex sha256 of the input bytes>",
@@ -41,7 +41,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 }
 ```
 
-`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.28.0`. [versions.md](versions.md) says which changes move them.
+`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.29.0`. [versions.md](versions.md) says which changes move them.
 
 `netlist_format` is the input's `version`, when it reads as an unsigned integer. That holds when the engine rejected the input, so `version: 1` records 1. It is `null` when no such integer could be read.
 
@@ -455,7 +455,7 @@ t_ps,part,x0,y0,x1,y1,bytes,hash
 - A write still open at `stop_ps`, a write that took no bytes, and a write a reset dropped are not in the file. After an error the file keeps the writes that closed by `end_ps`.
 - A display part writes the file even when it closed no write, as the header alone.
 
-Each display part also adds `display-<part>.rgb565`, its frame memory at `end_ps`. An `st77916` file is 259200 bytes, 360 rows of 360 pixels, rows top to bottom and each row left to right. The file keeps each pixel's bytes in the order they arrived. Firmware that sends the high byte first, as `examples/st77916-replay` does and as `COLMOD` 0x55 on this panel expects, gives big-endian RGB565. A reader must not assume little-endian. A pixel no write reached is two zero bytes. [netlist.md](netlist.md#st77916) says how a write maps its pixels.
+Each display part also adds `display-<part>.rgb565`, its frame memory at `end_ps`. An `st77916` file is 259200 bytes, 360 rows of 360 pixels, rows top to bottom and each row left to right. The file keeps each pixel's bytes in the order they arrived. Firmware that sends the high byte first, as `examples/st77916-replay` does and as `COLMOD` 0x55 on this panel expects, gives big-endian RGB565. A reader must not assume little-endian. A pixel no write reached is two zero bytes. [netlist.md](netlist.md#st77916) says how a write maps its pixels, and [What the glass shows](#what-the-glass-shows) how a reader turns the file into the pixels a person sees.
 
 `scripts/render_st77916.py` plays a replay list into a panel apart from the engine and checks a run's `display.csv`, without `t_ps`, its frame memory file, and the `displays` entry's `registers`, `flags`, `madctl` and `colmod` against it, as [reference.md](reference.md#st77916) says.
 
@@ -489,6 +489,26 @@ vout = np.fromfile("runs/rc/traces/analog.f64", "<f8").reshape(len(refs), ix["ro
 env = np.fromfile("runs/rc/traces/envelope.f64", "<f8").reshape(len(refs), 2, ix["rows"] - 1)
 lo, hi = env[refs.index("#net.vout")]  # interval k spans t_ps[k] to t_ps[k + 1]
 ```
+
+## What the glass shows
+
+The frame memory file is what the panel holds, not what a person sees. The engine draws what the glass shows, and a viewer only paints those pixels. `sim view <dir> --out <out>` reads a finished run folder and writes `display-<part>.png` into `<out>` for each entry of `observations.json` `displays`. It writes nothing into the run folder unless `<out>` is that folder. `Display::pixels` on a session and `displayPixels` in the wasm package give the same pixels from the same function, as [engine.md](engine.md#sessions) and [wasm.md](wasm.md) say.
+
+For an `st77916` the pixels are 360 rows of 360, rows top to bottom and each row left to right, each pixel red, green, blue and alpha, one byte each:
+
+- A pixel whose centre lies outside the round glass is transparent, `[0, 0, 0, 0]`. [netlist.md](netlist.md#st77916) defines the circle. 101780 of the 129600 pixels are on the glass.
+- When `display_on` is false, `sleep` is true, or `reset` is true, every pixel on the glass is opaque black, `[0, 0, 0, 255]`.
+- Otherwise a pixel is its two frame memory bytes read as big-endian RGB565, high byte first. The frame memory holds only pixels written while `COLMOD`'s low three bits are 5, 16 bits a pixel, as 0x55 is. The panel drops a write in any other format, so `colmod` at the end does not change how a pixel reads. Each channel widens to 8 bits by bit replication: the channel's top bits repeat below it, so 5 bits `v` become `v << 3 | v >> 2` and 6 bits become `v << 2 | v >> 4`. Replication keeps 0 at 0 and takes full scale to 255, lands every value within one of `v * 255 / full scale`, and needs no table or division.
+- When `inverted` is true the pixel is shown as written. When it is false each channel is inverted, `255 - c`. That is this panel's sense of `INVON`, a board observation [netlist.md](netlist.md#st77916) records.
+- Alpha is 255 on the glass.
+
+The glass does not dim. `brightness` stays a separate number in the `displays` entry, and a viewer applies it.
+
+`examples/st77916-replay` ends with `inverted` false, so its unwritten pixels, all zero bytes, show white on the glass.
+
+The PNG is 8-bit RGBA with no interlace. Every row has filter type 0, and the image data is one `IDAT` of stored deflate blocks, uncompressed. The same pixels always give the same bytes, so two `sim view` runs of one folder write identical files. An `st77916` PNG is 518863 bytes.
+
+`sim view` prints one JSON document. A clean view is `ok`, exit 0, with `out` and `images`, the PNG path written for each part, by part name. A run folder with no display part creates no `<out>`, writes no file, and prints `"images": {}`. A folder it cannot read is `io_error`, exit 3, with `message` and `path`, and it writes no file. That covers a missing or malformed `observations.json`, a display kind it does not draw, an `image` other than `traces/display-<part>.rgb565`, and a frame memory file that is missing, the wrong size, or not the bytes its `sha256` names.
 
 ## Determinism
 

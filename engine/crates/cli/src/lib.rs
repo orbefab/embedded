@@ -1,4 +1,6 @@
 mod doctor;
+mod png;
+mod view;
 
 use std::path::{Path, PathBuf};
 use std::{fs, io};
@@ -10,6 +12,7 @@ use sim_core::run_folder::Results;
 
 pub use doctor::{Check, DoctorReport, doctor};
 pub use sim_circuit::{Completed, run, run_with};
+pub use view::{ViewReport, view};
 
 /// The blobs `sim run` offers the netlist `json` read from `netlist`. For each blob it names, the
 /// first file under that hash, in the `blobs` folder beside the netlist when there is one and
@@ -67,7 +70,8 @@ pub enum Status {
     Failed,
     /// Exit 2. Bad command line. Nothing written.
     UsageError,
-    /// Exit 3. Could not read the netlist or write the run folder.
+    /// Exit 3. Could not read the netlist or write the run folder. View: could not read the run
+    /// folder or write an image.
     IoError,
 }
 

@@ -27,6 +27,13 @@ enum Command {
         #[arg(long = "blobs", value_name = "DIR")]
         blobs: Vec<PathBuf>,
     },
+    /// Write what each display part's glass showed at the end of a run folder, one PNG a part.
+    View {
+        run: PathBuf,
+        /// The folder for `display-<part>.png`.
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Report engine version, formats, and self-checks.
     Doctor,
 }
@@ -54,6 +61,10 @@ fn main() -> ExitCode {
             out,
             blobs,
         } => run(&netlist, &out, &blobs),
+        Command::View { run, out } => match sim_cli::view(&run, &out) {
+            Ok(report) => emit(Status::Ok, &report),
+            Err(failure) => emit(Status::IoError, &failure),
+        },
         Command::Doctor => {
             let report = sim_cli::doctor();
             emit(report.status(), &report)

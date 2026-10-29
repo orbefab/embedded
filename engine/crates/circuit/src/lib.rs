@@ -22,6 +22,7 @@ use sim_core::timestamp::Timestamp;
 
 use crate::tran::Rows;
 
+pub use active::st77916;
 pub use session::{
     Applied, Display, EdgeCursor, Input, Leds, Probe, Refused, Rejected, Serial, SerialCursor,
     Session, Setting, Status,

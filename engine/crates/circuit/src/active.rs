@@ -11,7 +11,7 @@ pub(crate) mod pulses;
 pub(crate) mod replay;
 #[cfg(test)]
 pub(crate) mod script;
-pub(crate) mod st77916;
+pub mod st77916;
 pub(crate) mod ws2812;
 
 use sim_core::diagnostic::{Diagnostic, ProtocolRule};

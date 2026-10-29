@@ -39,8 +39,8 @@ impl From<sim_circuit::Status> for Status {
 /// Why a call failed. The first three are why `open` or `record` made no session, the next seven
 /// why an input changed nothing, then the binding's own checks of an argument's type, a part
 /// name, a level, a baud and a `bigint`, a cursor before a dropped log entry, and `finish` on a
-/// session `open` made. `display` and `displayImage` throw `unknown_part` for a part that is no
-/// display part.
+/// session `open` made. `display`, `displayImage` and `displayPixels` throw `unknown_part` for a
+/// part that is no display part.
 #[wasm_bindgen]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Code {
@@ -607,6 +607,16 @@ impl Session {
         #[wasm_bindgen(unchecked_param_type = "string")] part: &Text,
     ) -> Result<Vec<u8>, SimError> {
         Ok(self.panel(part)?.image())
+    }
+
+    /// What the display part `part`'s glass shows at `now`, red, green, blue and alpha a byte
+    /// each, rows top to bottom, as `sim view` draws it.
+    #[wasm_bindgen(js_name = displayPixels)]
+    pub fn display_pixels(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "string")] part: &Text,
+    ) -> Result<Vec<u8>, SimError> {
+        Ok(self.panel(part)?.pixels())
     }
 
     fn panel(&self, part: &Text) -> Result<sim_circuit::Display<'_>, SimError> {

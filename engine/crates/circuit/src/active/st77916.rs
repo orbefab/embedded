@@ -10,6 +10,8 @@
 //! command arrives, or when RST goes low. A register command runs when it closes. A pixel write
 //! puts each pixel in the frame memory as it arrives and adds a rectangle row when it closes.
 
+mod glass;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -23,6 +25,8 @@ use super::{Chip, Drive, Output, SpiTarget, Stage, Takes};
 use crate::mna::Node;
 use crate::watch::{Signal, Watch};
 
+pub use glass::glass;
+
 const VCC: usize = 0;
 const GND: usize = 1;
 const CS: usize = 2;
@@ -32,8 +36,9 @@ const RST: usize = 8;
 const TE: usize = 9;
 const BLK: usize = 10;
 
-pub(crate) const WIDTH: u16 = 360;
-pub(crate) const HEIGHT: u16 = 360;
+/// The panel's pixels across and down.
+pub const WIDTH: u16 = 360;
+pub const HEIGHT: u16 = 360;
 const ROW_BYTES: usize = WIDTH as usize * 2;
 /// Rows of the frame memory in one band. A commit copies only the bands a write touched.
 const BAND_ROWS: usize = 8;

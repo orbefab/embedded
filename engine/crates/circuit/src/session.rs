@@ -138,6 +138,11 @@ impl Display<'_> {
     pub fn image(&self) -> Vec<u8> {
         self.panel.frame().image()
     }
+
+    /// What its glass shows, as [`st77916::glass`] draws its flags and frame memory.
+    pub fn pixels(&self) -> Vec<u8> {
+        st77916::glass(self.panel.panel().flags, &self.image())
+    }
 }
 
 /// A transient run held between calls. `advance_to` accepts every step that lands by its time.

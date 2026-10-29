@@ -51,12 +51,14 @@ A clean run prints one JSON document and exits 0.
 
 `sim doctor` runs that divider and checks that two renders of it are byte-identical. It exits 0 when both checks pass.
 
+`sim view <run> --out <dir>` writes `display-<part>.png` into `<dir>` for each display part of a finished run folder, what the panel's glass showed at the end. [docs/run-folder.md](docs/run-folder.md#what-the-glass-shows) says how it draws them.
+
 The process exits with one of these codes.
 
 - 0, `ok`. The folder is written. A warning still exits 0.
 - 1, `failed`. The folder is written and contains an error diagnostic.
 - 2, `usage_error`. The command line is wrong. Nothing is written.
-- 3, `io_error`. The netlist cannot be read, or the folder cannot be written.
+- 3, `io_error`. The netlist cannot be read, or the folder cannot be written. For `view`, the run folder cannot be read, or an image cannot be written.
 
 `--help` and `--version` print plain text and exit 0.
 

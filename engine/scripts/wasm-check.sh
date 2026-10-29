@@ -298,6 +298,7 @@ for line in \
   'forgetSerial(cursor: bigint): void;' \
   'display(part: string): string;' \
   'displayImage(part: string): Uint8Array;' \
+  'displayPixels(part: string): Uint8Array;' \
   'leds(part: string): string;' \
   'applyContact(part: string, ps: bigint, closed: boolean): Applied;' \
   'applyLevel(part: string, ps: bigint, si: number): Applied;' \

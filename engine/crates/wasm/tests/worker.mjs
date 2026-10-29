@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { inflateSync } from 'node:zlib';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 
@@ -288,9 +289,35 @@ function assertLinkRows(label, json, folders) {
   return want.trim().split('\n').length - 1;
 }
 
+// The RGBA pixels of a PNG with filter type 0 on every row, inflated by node's zlib.
+function pngPixels(png) {
+  let at = 8;
+  let width = 0;
+  const idat = [];
+  while (at < png.length) {
+    const length = png.readUInt32BE(at);
+    const kind = png.toString('latin1', at + 4, at + 8);
+    const body = png.subarray(at + 8, at + 8 + length);
+    if (kind === 'IHDR') {
+      width = body.readUInt32BE(0);
+    } else if (kind === 'IDAT') {
+      idat.push(body);
+    }
+    at += 12 + length;
+  }
+  const raw = inflateSync(Buffer.concat(idat));
+  const rows = [];
+  for (let row = 0; row < raw.length; row += width * 4 + 1) {
+    assert.equal(raw[row], 0, 'filter type 0');
+    rows.push(raw.subarray(row + 1, row + 1 + width * 4));
+  }
+  return Buffer.concat(rows);
+}
+
 // Each display part of `json` reads from `session` as the native folder in `dir` ends: its
-// `display()` is its `observations.json` `displays` entry without `image` and `sha256`, and its
-// `displayImage()` is the native frame memory file byte for byte, whose SHA-256 the entry names.
+// `display()` is its `observations.json` `displays` entry without `image` and `sha256`, its
+// `displayImage()` is the native frame memory file byte for byte, whose SHA-256 the entry names,
+// and its `displayPixels()` is the pixels of the PNG native `sim view` writes from that folder.
 // A part that is no display part throws `unknown_part`. Returns how many display parts it read.
 function assertDisplays(wasm, label, session, json, dir) {
   const parts = JSON.parse(json).parts;
@@ -299,6 +326,8 @@ function assertDisplays(wasm, label, session, json, dir) {
     return 0;
   }
   const observed = JSON.parse(readFileSync(join(dir, 'observations.json'), 'utf8')).displays;
+  const view = join(workerData.work, `${label}-view`);
+  execFileSync(workerData.sim, ['view', dir, '--out', view]);
   assert.deepEqual(Object.keys(observed), displays.map((part) => part.name).sort(), `${label}: displays`);
   for (const { name } of displays) {
     const { image, sha256, ...panel } = observed[name];
@@ -306,9 +335,18 @@ function assertDisplays(wasm, label, session, json, dir) {
     const got = Buffer.from(session.displayImage(name));
     assert.ok(got.equals(readFileSync(join(dir, image))), `${label}: displayImage(${name}) is ${image}`);
     assert.equal(createHash('sha256').update(got).digest('hex'), sha256, `${label}: ${name}'s SHA-256`);
+    const pixels = Buffer.from(session.displayPixels(name));
+    const png = pngPixels(readFileSync(join(view, `display-${name}.png`)));
+    assert.equal(pixels.length, 360 * 360 * 4, `${label}: displayPixels(${name}) is 360 by 360 RGBA`);
+    assert.ok(pixels.equals(png), `${label}: displayPixels(${name}) is sim view's PNG`);
   }
   const other = parts.find((part) => part.kind !== 'st77916').name;
-  for (const call of [(part) => session.display(part), (part) => session.displayImage(part)]) {
+  const calls = [
+    (part) => session.display(part),
+    (part) => session.displayImage(part),
+    (part) => session.displayPixels(part),
+  ];
+  for (const call of calls) {
     assert.throws(
       () => call(other),
       (error) => error instanceof wasm.SimError && error.code === 'unknown_part',
@@ -663,6 +701,7 @@ function argumentChecks(wasm, examples) {
     ['applyTouch down', 'boolean', (v) => serial.applyTouch('rv1', 0n, 1, 2, v)],
     ['display', 'string', (v) => serial.display(v)],
     ['displayImage', 'string', (v) => serial.displayImage(v)],
+    ['displayPixels', 'string', (v) => serial.displayPixels(v)],
     ['leds', 'string', (v) => serial.leds(v)],
     ['finish', 'bigint', (v) => wasm.Session.record(steps).finish(v)],
     ['Folder.file', 'string', (v) => folder.file(v)],
@@ -698,6 +737,7 @@ function argumentChecks(wasm, examples) {
   refuses('applyTouch part', (part) => serial.applyTouch(part, 0n, 1, 2, true), BAD_NAMES, 'bad_name');
   refuses('display', (part) => serial.display(part), BAD_NAMES, 'bad_name');
   refuses('displayImage', (part) => serial.displayImage(part), BAD_NAMES, 'bad_name');
+  refuses('displayPixels', (part) => serial.displayPixels(part), BAD_NAMES, 'bad_name');
   refuses('leds', (part) => serial.leds(part), BAD_NAMES, 'bad_name');
   refuses('applyLevel si', (si) => serial.applyLevel('rv1', 0n, si), [NaN, Infinity], 'not_finite');
   refuses(
