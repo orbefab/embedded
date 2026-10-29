@@ -29,8 +29,9 @@ struct RunShapeInput {
 impl RunFolder {
     /// Replace `out` with this folder.
     ///
-    /// Files land in `<out>.partial.<pid>` and are renamed into place. That
-    /// rename is the commit. A crash before it leaves `out` unchanged, and a
+    /// Files land in `<out>.partial.<id>` and are renamed into place. The id
+    /// is the process id, or a random value on WASI, which has no process id.
+    /// That rename is the commit. A crash before it leaves `out` unchanged, and a
     /// failure while deleting the backup afterwards does not fail the run.
     /// An existing non-empty directory is replaced only when its
     /// `manifest.json` has the shape of a run folder from any version of
@@ -89,7 +90,22 @@ fn write_files(dir: &Path, files: &BTreeMap<String, Vec<u8>>) -> io::Result<()> 
 }
 
 pub(super) fn sibling(out: &Path, kind: &str) -> PathBuf {
-    named_sibling(out, kind, u64::from(std::process::id()))
+    named_sibling(out, kind, sibling_id())
+}
+
+fn sibling_id() -> u64 {
+    #[cfg(not(target_os = "wasi"))]
+    {
+        u64::from(std::process::id())
+    }
+    // `std::process::id` panics on WASI: the platform has no process id.
+    #[cfg(target_os = "wasi")]
+    {
+        use std::hash::{BuildHasher, Hasher, RandomState};
+        use std::sync::OnceLock;
+        static ID: OnceLock<u64> = OnceLock::new();
+        *ID.get_or_init(|| RandomState::new().build_hasher().finish())
+    }
 }
 
 fn named_sibling(out: &Path, kind: &str, id: u64) -> PathBuf {

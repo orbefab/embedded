@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # Builds the wasm package with scripts/wasm.sh and runs crates/wasm/tests/worker.mjs, which drives
 # it in node worker threads and checks its folders and serial rows against native `sim run` on
-# every example, byte for byte. scripts/wasm-check.sh needs bash 4.2 or later, node 22.7 or later, and rustup. scripts/wasm.sh needs bash 4.2 or later and rustup.
+# every example, byte for byte. When node can load node:wasi, it also builds sim for
+# wasm32-wasip1, runs that sim on every example, and compares each folder with the native one
+# after masking created_at. When that run exits non-zero, the script prints the run's
+# diagnostics. When node:wasi is missing, it prints a skip line and continues.
+# scripts/wasm-check.sh needs bash 4.2 or later, node 22.7 or later, and rustup. The WASI build
+# needs the wasm32-wasip1 target. The script installs it when rustup does not have it.
+# scripts/wasm.sh needs bash 4.2 or later and rustup.
 # It also fails when a regular file contains $HOME/ and HOME is not / and not
 # equal to /sim-engine, /cargo, /rustc, or /target, or a remapped host prefix
 # with a trailing slash. A prefix equal to one of those four is not a needle,
@@ -18,7 +24,8 @@
 # Usage: scripts/wasm-check.sh [SCRATCH_DIR]
 #
 # SCRATCH_DIR defaults to .scratch/wasm/check beside the repo. The package goes in SCRATCH_DIR/pkg,
-# the native folders in SCRATCH_DIR/native, and the input cases' files in SCRATCH_DIR/work.
+# the native folders in SCRATCH_DIR/native, the WASI folders in SCRATCH_DIR/wasi, and the input
+# cases' files in SCRATCH_DIR/work.
 #
 # Sourced, this file only defines sim_wasm_check_manifest. Source scripts/wasm.sh first. Executed,
 # this file builds the package and runs the Worker test. With SIM_COMMIT unset, that check requires
@@ -332,8 +339,125 @@ cargo build -p sim-cli --release --locked
 target=$(cargo metadata --format-version 1 --no-deps |
   sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
 sim=$target/release/sim
+names=()
 for netlist in examples/*/netlist.json; do
   name=$(basename "$(dirname "$netlist")")
+  names+=("$name")
   "$sim" run "$netlist" --out "$scratch/native/$name" >/dev/null
 done
+if node --disable-warning=ExperimentalWarning --input-type=module -e 'import { WASI } from "node:wasi"' >/dev/null 2>&1; then
+  if ! rustup target list --installed | grep -qx wasm32-wasip1; then
+    rustup target add wasm32-wasip1
+  fi
+  cargo build -p sim-cli --release --locked --target wasm32-wasip1
+  wasm=$target/wasm32-wasip1/release/sim.wasm
+  rm -rf "$scratch/wasi"
+  mkdir -p "$scratch/wasi"
+  node --disable-warning=ExperimentalWarning --input-type=module - "$wasm" "$repo" "$scratch/native" "$scratch/wasi" "$scratch/wasi-report" "${names[@]}" <<'JS'
+import { WASI } from 'node:wasi';
+import { closeSync, openSync } from 'node:fs';
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { join } from 'node:path';
+
+const [wasmPath, repo, nativeRoot, wasiRoot, reportPath, ...names] = process.argv.slice(2);
+const mod = await WebAssembly.compile(await readFile(wasmPath));
+
+async function files(dir, prefix = '') {
+  const found = await readdir(dir);
+  found.sort();
+  const out = [];
+  for (const name of found) {
+    const rel = prefix ? `${prefix}/${name}` : name;
+    const path = join(dir, name);
+    if ((await stat(path)).isDirectory()) out.push(...(await files(path, rel)));
+    else out.push(rel);
+  }
+  return out;
+}
+
+function maskCreatedAt(text) {
+  const doc = JSON.parse(text);
+  delete doc.created_at;
+  return JSON.stringify(doc);
+}
+
+for (const name of names) {
+  const reportFd = openSync(reportPath, 'w');
+  const wasi = new WASI({
+    version: 'preview1',
+    args: ['sim', 'run', `/repo/examples/${name}/netlist.json`, '--out', `/out/${name}`],
+    preopens: { '/repo': repo, '/out': wasiRoot },
+    stdout: reportFd,
+    returnOnExit: true,
+  });
+  let code;
+  try {
+    const inst = await WebAssembly.instantiate(mod, wasi.getImportObject());
+    code = wasi.start(inst);
+  } catch (error) {
+    closeSync(reportFd);
+    console.error(`wasm-check: WASI sim run examples/${name} failed: ${error.message ?? error}`);
+    process.exit(1);
+  }
+  closeSync(reportFd);
+  if (code !== 0) {
+    const report = (await readFile(reportPath, 'utf8')).trim();
+    console.error(`wasm-check: WASI sim run examples/${name} exited ${code ?? 'null'}`);
+    let why = report;
+    try {
+      const doc = JSON.parse(report);
+      if (Array.isArray(doc.diagnostics) && doc.diagnostics.length > 0) {
+        why = doc.diagnostics.map((item) => item.message ?? JSON.stringify(item)).join('\n');
+      }
+    } catch {
+      why = report;
+    }
+    if (why) console.error(why);
+    process.exit(code || 1);
+  }
+  const nativeDir = join(nativeRoot, name);
+  const wasiDir = join(wasiRoot, name);
+  let nativeFiles;
+  let wasiFiles;
+  try {
+    nativeFiles = await files(nativeDir);
+    wasiFiles = await files(wasiDir);
+  } catch (error) {
+    console.error(`wasm-check: examples/${name} folder missing: ${error.message ?? error}`);
+    process.exit(1);
+  }
+  const nativeSet = new Set(nativeFiles);
+  const wasiSet = new Set(wasiFiles);
+  const onlyNative = nativeFiles.filter((rel) => !wasiSet.has(rel));
+  const onlyWasi = wasiFiles.filter((rel) => !nativeSet.has(rel));
+  if (onlyNative.length || onlyWasi.length) {
+    console.error(
+      `wasm-check: examples/${name} file list differs, native only ${onlyNative}, wasi only ${onlyWasi}`,
+    );
+    process.exit(1);
+  }
+  for (const rel of nativeFiles) {
+    const nativeBytes = await readFile(join(nativeDir, rel));
+    const wasiBytes = await readFile(join(wasiDir, rel));
+    if (rel === 'manifest.json') {
+      const nativeText = maskCreatedAt(nativeBytes.toString('utf8'));
+      const wasiText = maskCreatedAt(wasiBytes.toString('utf8'));
+      if (nativeText !== wasiText) {
+        console.error(`wasm-check: examples/${name} manifest.json differs after masking created_at`);
+        process.exit(1);
+      }
+      continue;
+    }
+    if (!nativeBytes.equals(wasiBytes)) {
+      console.error(`wasm-check: examples/${name} ${rel} differs`);
+      process.exit(1);
+    }
+  }
+}
+
+console.log(`wasm-check: WASI sim run matches native on ${names.length} examples`);
+JS
+else
+  echo "wasm-check: skip WASI sim run, node:wasi is not available"
+fi
 node crates/wasm/tests/worker.mjs "$scratch/pkg" examples "$scratch/native" "$sim" "$scratch/work"
