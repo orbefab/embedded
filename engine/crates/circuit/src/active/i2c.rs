@@ -592,6 +592,18 @@ mod tests {
             self.go(dev, true, !ack);
         }
 
+        fn ack_rise_while_still_driving(&mut self, dev: &mut Dev) {
+            self.t += 1_000;
+            self.scl = false;
+            self.master = true;
+            self.engine
+                .edge(Time::from_ps(self.t), false, self.wire(), false, dev);
+            self.t += 1_000;
+            self.scl = true;
+            self.engine
+                .edge(Time::from_ps(self.t), true, self.wire(), false, dev);
+        }
+
         fn stop(&mut self, dev: &mut Dev) {
             self.go(dev, false, false);
             self.go(dev, true, false);
@@ -669,5 +681,36 @@ mod tests {
                 Ev::Stop,
             ]
         );
+    }
+
+    /// Bit 0 of 0xB4 is 0, so the target still drives SDA when the ACK rise comes inside the
+    /// hold. The events stop at that read. After the next fall the target is not driving, and
+    /// no read ACK or further byte appears.
+    #[test]
+    fn a_read_ack_while_the_target_still_drives_goes_idle() {
+        let mut dev = Dev::new();
+        dev.mem[0] = 0xB4;
+        let mut step = Step::power(&mut dev);
+        step.start(&mut dev);
+        step.byte(&mut dev, (0x15 << 1) | 1);
+        step.ack_clock(&mut dev);
+        step.read_byte(&mut dev);
+        assert!(step.driven, "bit 0 of 0xB4 holds SDA");
+        step.ack_rise_while_still_driving(&mut dev);
+        assert_eq!(
+            dev.events,
+            vec![
+                Ev::StartRead,
+                Ev::Ack(AckKind::Address, true),
+                Ev::Read(0xB4),
+            ]
+        );
+        step.t += 1_000;
+        step.scl = false;
+        step.engine
+            .edge(Time::from_ps(step.t), false, step.wire(), false, &mut dev);
+        step.pump(&mut dev);
+        assert!(!step.driven, "the target is not driving after the fall");
+        assert_eq!(dev.events.len(), 3, "no read ack and no further byte");
     }
 }

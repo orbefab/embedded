@@ -210,7 +210,7 @@ fn an_arbitration_loss_on_a_leading_one_matches() {
     assert!(text.contains("2 of 2 rows match"), "{text}");
 }
 
-/// A bus error whose SCL rises all read SDA high. No rise shows that another driver won.
+/// A bus error whose bits 7 to 0 all read SDA high. A loss needs a low read on one of them.
 #[test]
 fn a_bus_error_with_no_low_read_rejects_the_arbitration_row() {
     let output = decode("crates/cli/tests/decode/i2c-arbitration-nolow");
@@ -220,7 +220,72 @@ fn a_bus_error_with_no_low_read_rejects_the_arbitration_row() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(!output.status.success(), "{text}");
-    assert!(text.contains("no SCL rise that read SDA low"), "{text}");
+    assert!(
+        text.contains("no low read on bits 7 to 0 of an address, on bits 7 to 0 of a write data byte, or on the ACK bit of a read data byte"),
+        "{text}"
+    );
+}
+
+/// Address 0x7F read, so the eight bits are 1. The ACK reads 0 and SDA rises in that high.
+/// The only low read is the ninth bit, and that is not a loss.
+#[test]
+fn an_ack_low_does_not_mark_an_arbitration_loss() {
+    let output = decode("crates/cli/tests/decode/i2c-arbitration-ack");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!output.status.success(), "{text}");
+    assert!(
+        text.contains("no low read on bits 7 to 0 of an address, on bits 7 to 0 of a write data byte, or on the ACK bit of a read data byte"),
+        "{text}"
+    );
+}
+
+/// Address 0x50 read, acked, then a data byte whose first bit reads 0 and whose next high
+/// changes SDA. The master released those bits, so the low is not a loss.
+#[test]
+fn a_read_data_low_does_not_mark_an_arbitration_loss() {
+    let output = decode("crates/cli/tests/decode/i2c-arbitration-read");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!output.status.success(), "{text}");
+    assert!(
+        text.contains("no low read on bits 7 to 0 of an address, on bits 7 to 0 of a write data byte, or on the ACK bit of a read data byte"),
+        "{text}"
+    );
+}
+
+/// Address 0x50 read, acked, then eight high data bits. The ninth rise reads low and SDA
+/// rises in that high. The master sends that ACK bit, so the loss matches.
+#[test]
+fn a_read_nack_low_marks_an_arbitration_loss() {
+    let output = decode("crates/cli/tests/decode/i2c-arbitration-nack");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("3 of 3 rows match"), "{text}");
+}
+
+/// Address 0x50 write, acked, then a data bit that reads low. SDA rises on the next high.
+/// The master sends bits 7 to 0 of that write, so the loss matches.
+#[test]
+fn a_write_data_low_marks_an_arbitration_loss() {
+    let output = decode("crates/cli/tests/decode/i2c-arbitration-write");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("3 of 3 rows match"), "{text}");
 }
 
 /// The START before the loss has no row. The decoder names that skipped phase.

@@ -410,3 +410,93 @@ fn a_bad_high_before_a_split_warns_the_same_when_the_run_stops_at_the_split() {
         }
     }
 }
+
+/// Idle high, one frame, the reset low split across two events. The return to idle ends the
+/// first low. The second low starts the reset again, so the frame never latches when what
+/// remains is within the reset, and it latches later when the remainder runs past it.
+#[test]
+fn an_idle_high_split_inside_the_reset_low_never_latches_or_latches_late() {
+    const START: u64 = 1_000_000_000;
+    const RES: u64 = 280_000_000;
+    let pulses = train(&[0x12, 0x34, 0x56, 0xA5, 0x5A, 0xC3]);
+    let fall = last_fall(START, &pulses, true).unwrap();
+    let whole_at = fall + RES + 1;
+    let last = pulses.last().unwrap().1;
+    for (into, gap) in [
+        (150_000_000, 0),
+        (150_000_000, 1),
+        (1_000_000, 0),
+        (1_000_000, 1),
+    ] {
+        let mut first = pulses.clone();
+        first.last_mut().unwrap().1 = into;
+        let second = vec![(false, last - into)];
+        let start = fall + into + gap;
+        let stop = start + (last - into) + 1_000_000_000;
+        let whole = two_leds(true, &[(START, &pulses)], stop);
+        let split = two_leds(true, &[(START, &first), (start, &second)], stop);
+        assert!(
+            whole[0].contains(&format!("{whole_at},ring,2,123456a55ac3")),
+            "{}",
+            whole[0]
+        );
+        assert!(
+            !split[2].contains("chip.protocol"),
+            "into {into} gap {gap}: {}",
+            split[2]
+        );
+        let remainder = last - into;
+        if remainder < RES + 1 {
+            assert_eq!(
+                split[0].lines().count(),
+                1,
+                "into {into} gap {gap}: {}",
+                split[0]
+            );
+        } else {
+            let late = start + RES + 1;
+            assert_eq!(
+                split[0].lines().count(),
+                2,
+                "into {into} gap {gap}: {}",
+                split[0]
+            );
+            assert!(
+                !split[0].contains(&format!("{whole_at},ring,2,123456a55ac3")),
+                "into {into} gap {gap}: {}",
+                split[0]
+            );
+            assert!(
+                split[0].contains(&format!("{late},ring,2,123456a55ac3")),
+                "into {into} gap {gap}: {}",
+                split[0]
+            );
+        }
+    }
+}
+
+/// Idle high, and the event opens on a low the line was already holding. The fall at the
+/// record's start starts the reset, so a lead longer than the reset latches before the bits.
+#[test]
+fn a_held_fall_starts_the_reset_count() {
+    const START: u64 = 1_000_000_000;
+    const RES: u64 = 280_000_000;
+    const LEAD: u64 = 300_000_000;
+    let mut pulses = vec![(false, LEAD)];
+    pulses.extend(train(&[0x80, 0x00, 0x00, 0x00, 0x00, 0x00]));
+    let stop = START + pulses.iter().map(|&(_, ps)| ps).sum::<u64>() + 1_000_000_000;
+    let folder = two_leds(true, &[(START, &pulses)], stop);
+    let early = START + RES + 1;
+    assert!(
+        folder[0].contains(&format!("{early},ring,2,000000000000")),
+        "{}",
+        folder[0]
+    );
+    let fall = last_fall(START, &pulses, true).unwrap();
+    assert!(
+        folder[0].contains(&format!("{},ring,2,800000000000", fall + RES + 1)),
+        "{}",
+        folder[0]
+    );
+    assert!(!folder[2].contains("chip.protocol"), "{}", folder[2]);
+}

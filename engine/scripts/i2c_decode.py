@@ -27,10 +27,11 @@ when the winner changes SDA during that high.
 A master that lost arbitration has an `arbitration_lost` row and no rows after it until its
 next START. That row matches the byte that starts at its time, an address, a data byte, or
 a bus error. An address or a data byte matches on that time, which is the byte's first bus
-change. A bus error matches only when the byte has at least one SCL rise that reads SDA low.
-That low is the evidence another driver won. A decoded phase before the row is a mismatch.
-A START or a STOP at that time does not match. The decoded phases up to the next START are
-the winner's.
+change. A loss needs a low read, so a bus error with none cannot be one. The read is an SCL
+rise on bits 7 to 0 of an address, on bits 7 to 0 of a write data byte, or on the ACK bit
+of a read data byte. A low read does not show a loss. A decoded phase before the row is a
+mismatch. A START or a STOP at that time does not match. The decoded phases up to the next
+START are the winner's.
 
 `--timing` lists, per view, each interval of DS40002061B Table 29-14 with its count, its least
 value, and every value below the table's minimum for the measured rate. The rate is the
@@ -117,9 +118,14 @@ def decode(scl, sda):
     held = False  # SDA at that rise
     byte = None  # [bits, value, ack], set only once the rise is a bit
     byte_rise = None  # first SCL rise of the open byte
-    byte_low = False  # one of those rises read SDA low
+    byte_low = False  # SDA read low on a bit the master sends
     open_byte = False
     address = None  # the frame's (address, read)
+
+    def on_a_written_bit(index):
+        if address is None or address[1] == 0:
+            return index < 8
+        return index == 8
 
     def emit(at, phase, **fields):
         nonlocal ended, first, byte_rise, byte_low
@@ -182,7 +188,7 @@ def decode(scl, sda):
                     byte = [0, 0, False]
                     byte_rise = at
                     byte_low = False
-                if not sda_high:
+                if not sda_high and on_a_written_bit(byte[0]):
                     byte_low = True
                 if byte[0] < 8:
                     byte[1] = (byte[1] << 1) | int(sda_high)
@@ -204,7 +210,7 @@ def decode(scl, sda):
         if clocked:
             byte = [1, int(held), False]
             byte_rise = clocked_at
-            byte_low = not held
+            byte_low = (not held) and on_a_written_bit(0)
             open_byte = True
             clocked = False
             continue
@@ -254,7 +260,7 @@ def compare(decoded, rows, cycle_ps):
                 return matched, exact, problems
             if phase["phase"] == "bus_error" and not phase["read_low"]:
                 problems.append(
-                    f"row {n + 1}: arbitration loss at {t} matches a bus error with no SCL rise that read SDA low"
+                    f"row {n + 1}: arbitration loss at {t} matches a bus error with no low read on bits 7 to 0 of an address, on bits 7 to 0 of a write data byte, or on the ACK bit of a read data byte"
                 )
                 return matched, exact, problems
             matched += 1
