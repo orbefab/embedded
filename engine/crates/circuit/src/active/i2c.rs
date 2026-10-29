@@ -297,7 +297,6 @@ impl Engine {
             Phase::SampleAck => {
                 if self.sda_low {
                     self.phase = Phase::Idle;
-                    self.release_on_fall = true;
                 } else {
                     let ack = !self.sda;
                     self.phase = Phase::AfterAck { cont: ack };

@@ -1090,6 +1090,55 @@ fn a_lost_one_reads_0x38_and_the_next_start_waits_for_a_stop() {
     assert_eq!(start - stop, L, "tBUF from the STOP the TWI read");
 }
 
+/// Table 22-3, 0x38, "Arbitration lost in SLA+R or NOT ACK bit". The master NACKs a
+/// received byte, so it sends 1 on that bit. Another master holds SDA low, an ACK. This
+/// one reads 0 at the SCL rise, releases both lines and reads 0x38.
+#[test]
+fn a_nack_on_a_read_that_reads_low_loses_arbitration() {
+    let mut cpu = machine();
+    let mut peer = Peer::at(&mut cpu, 8);
+    peer.reads.extend([0xA5]);
+    address(&mut cpu, &mut peer, 8, true, T);
+    assert_eq!(status(&cpu), 0x40);
+    // Fall 0 is the START's. Fall 17 ends the eighth data bit and opens the ACK bit.
+    peer.steal = Some((17, 100));
+    let data = go(&mut cpu, 0);
+    peer.run(&mut cpu, data + BYTE);
+    let rise = data + 8 * T + L;
+    assert_eq!(
+        pull(&mut cpu).last(),
+        Some(&(rise, I2cNote::ArbitrationLost))
+    );
+    assert_eq!(status(&cpu), 0x38);
+    assert_eq!(peek(&cpu, TWDR), 0xA5);
+    assert_ne!(peek(&cpu, TWCR) & TWINT, 0);
+    assert!(!Peer::twi_pulls(&cpu, SDA) && !Peer::twi_pulls(&cpu, SCL));
+    poke(&mut cpu, TWCR, TWINT | TWEN | TWEA | TWIE);
+    assert_eq!(peek(&cpu, TWSR), 0xF8);
+    assert_eq!(logged(&cpu, TWCR), 0, "the release is a Table 22-3 row");
+}
+
+/// A master that drives the read ACK low is sending 0. Another master holding SDA low
+/// matches that bit, so this one keeps the bus and reads 0x50.
+#[test]
+fn an_ack_on_a_read_does_not_lose_when_sda_is_low() {
+    let mut cpu = machine();
+    let mut peer = Peer::at(&mut cpu, 8);
+    peer.reads.extend([0xA5]);
+    address(&mut cpu, &mut peer, 8, true, T);
+    assert_eq!(status(&cpu), 0x40);
+    peer.steal = Some((17, 100));
+    let data = go(&mut cpu, TWEA);
+    peer.run(&mut cpu, data + BYTE);
+    assert_eq!(status(&cpu), 0x50);
+    assert_eq!(peek(&cpu, TWDR), 0xA5);
+    assert!(
+        pull(&mut cpu)
+            .iter()
+            .all(|(_, note)| !matches!(note, I2cNote::ArbitrationLost))
+    );
+}
+
 /// §22.8. A START inside a byte is a bus error: 0x00, both lines released. Wire answers with
 /// `TWSTO`, which clears at once and puts no STOP on the bus (Table 22-6).
 #[test]

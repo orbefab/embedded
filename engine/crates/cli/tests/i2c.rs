@@ -140,6 +140,8 @@ fn the_fixtures_run_the_committed_hex() {
         ("i2c-arbitration", "u1", "firmware/sketch/i2c_scan.hex"),
         ("i2c-contend", "u1", "firmware/sketch/i2c_contend.hex"),
         ("i2c-contend", "u2", "firmware/sketch/i2c_contend.hex"),
+        ("i2c-read-ack", "u1", "firmware/sketch/i2c_read_ack.hex"),
+        ("i2c-read-ack", "u2", "firmware/sketch/i2c_read_ack.hex"),
         ("i2c-cst816-fast", "u1", "firmware/sketch/cst816_fast.hex"),
     ];
     for (name, part, hex) in cases {
@@ -272,6 +274,24 @@ fn a_read_nack_low_marks_an_arbitration_loss() {
     );
     assert!(output.status.success(), "{text}");
     assert!(text.contains("3 of 3 rows match"), "{text}");
+}
+
+/// Address 0x50 write, acked, then eight high data bits. The ninth rise reads low and SDA
+/// rises in that high. The target drives that ACK, so the only low is not a loss. Counting
+/// the ACK of a write data byte would accept this folder.
+#[test]
+fn a_write_ack_low_does_not_mark_an_arbitration_loss() {
+    let output = decode("crates/cli/tests/decode/i2c-arbitration-write-ack");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!output.status.success(), "{text}");
+    assert!(
+        text.contains("no low read on bits 7 to 0 of an address, on bits 7 to 0 of a write data byte, or on the ACK bit of a read data byte"),
+        "{text}"
+    );
 }
 
 /// Address 0x50 write, acked, then a data bit that reads low. SDA rises on the next high.
@@ -524,4 +544,67 @@ fn two_masters_contend_and_the_higher_address_loses() {
         .map(|row| row.t_ps)
         .collect();
     assert_eq!(starts[0], starts[1], "both masters' START is one SDA fall");
+}
+
+/// Two chips and a `cst816` at 0x15 run `i2c_read_ack.hex`. `u1` asks for two bytes and ACKs
+/// the first. `u2` asks for one and NACKs it. They read the same byte, `u2` sends 1 and reads
+/// `u1`'s 0, and `u2` loses. `requestFrom` returns 0. The decoder accepts the run.
+#[test]
+fn a_master_that_nacks_a_shared_read_loses_arbitration() {
+    let folder = fixture("i2c-read-ack");
+    let rows = rows(folder.file("traces/i2c.csv").unwrap());
+    let of = |part: &str| -> Vec<(String, [Option<u8>; 4])> {
+        rows.iter()
+            .filter(|row| row.part == part)
+            .map(|row| (row.phase.clone(), row.cells))
+            .collect()
+    };
+    assert_eq!(
+        of("u1"),
+        [
+            ("start".into(), [None; 4]),
+            ("address".into(), [Some(0x15), Some(1), None, Some(1)]),
+            ("data".into(), [None, Some(1), Some(0), Some(1)]),
+            ("data".into(), [None, Some(1), Some(0), Some(0)]),
+            ("stop".into(), [None; 4]),
+        ]
+    );
+    assert_eq!(
+        of("u2"),
+        [
+            ("start".into(), [None; 4]),
+            ("address".into(), [Some(0x15), Some(1), None, Some(1)]),
+            ("arbitration_lost".into(), [None; 4]),
+        ]
+    );
+    let text = serial_text(folder.file("traces/serial.csv").unwrap());
+    assert_eq!(text["u1"], "2 got 2\r\n");
+    assert_eq!(text["u2"], "1 got 0\r\n");
+    let vcd = folder.file("traces/logic.vcd").unwrap();
+    assert_eq!(pin(vcd, "u1", "PC5"), pin(vcd, "u2", "PC5"));
+    assert_eq!(pin(vcd, "u1", "PC4"), pin(vcd, "u2", "PC4"));
+    let starts: Vec<u64> = rows
+        .iter()
+        .filter(|row| row.phase == "start")
+        .map(|row| row.t_ps)
+        .collect();
+    assert_eq!(starts[0], starts[1], "both masters' START is one SDA fall");
+    let out = std::env::temp_dir().join(format!("sim-i2c-read-ack-{}", std::process::id()));
+    if out.exists() {
+        std::fs::remove_dir_all(&out).unwrap();
+    }
+    folder.write(&out).unwrap();
+    let output = std::process::Command::new("uv")
+        .args(["run", "scripts/i2c_decode.py", "--timing"])
+        .arg(&out)
+        .current_dir(repo("."))
+        .output()
+        .expect("uv run scripts/i2c_decode.py: uv is not installed");
+    let got = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.status.success(), "{got}");
+    let _ = std::fs::remove_dir_all(&out);
 }

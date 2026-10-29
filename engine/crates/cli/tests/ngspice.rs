@@ -171,6 +171,7 @@ fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "i2c-contend",
             "i2c-cst816-fast",
             "i2c-rc-bus",
+            "i2c-read-ack",
             "i2c-scan-400k",
             "i2c-stretch",
             "led-off",

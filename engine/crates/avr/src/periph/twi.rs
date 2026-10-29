@@ -22,9 +22,10 @@
 //!
 //! `w` is the `TWCR` write's retire cycle, the same convention as an `SPDR` store. SCL stays low
 //! while `TWINT` is set (§22.5.5). A master read releases SDA for the eight data bits and drives
-//! the ninth from `TWEA` (§22.7.2). A transmitted 1 read back as 0 loses arbitration, 0x38. An
-//! SDA change while SCL is high inside a byte is a bus error, 0x00 (§22.4, §22.8). A START asked
-//! for while another master holds the bus waits for its STOP.
+//! the ninth from `TWEA` (§22.7.2). A 1 the master sends on an address bit, a write data bit, or
+//! that ninth bit, read back as 0, loses arbitration, 0x38. An SDA change while SCL is high
+//! inside a byte is a bus error, 0x00 (§22.4, §22.8). A START asked for while another master
+//! holds the bus waits for its STOP.
 //!
 //! Slave modes, general call and `TWAMR` matching are not modelled, so this TWI never answers
 //! its own address.
@@ -492,8 +493,8 @@ impl Twi {
         // interrupt request is the result of this write (§22.9.2).
         self.twint = false;
         let start = self.ctrl & TWSTA != 0;
-        // Table 22-2, 0x38 with neither bit: the bus is released. Table 22-6, 0x00 with
-        // `TWSTO`: only the hardware recovers, and no STOP goes on the bus.
+        // Tables 22-2 and 22-3, 0x38 with neither bit: the bus is released. Table 22-6, 0x00
+        // with `TWSTO`: only the hardware recovers, and no STOP goes on the bus.
         if !owns && !start && (status == 0x38 || (status == 0x00 && stop)) {
             return;
         }
@@ -786,8 +787,15 @@ impl Twi {
             }
             Step::Sample(mut byte) => {
                 let high = self.sda_high;
-                let sent_one = byte.kind != Kind::Read && byte.bit < 8 && !self.sda_low;
+                let sent = match byte.kind {
+                    Kind::Read => byte.bit == 8,
+                    Kind::Address | Kind::Write => byte.bit < 8,
+                };
+                let sent_one = sent && !self.sda_low;
                 if sent_one && !high {
+                    if byte.kind == Kind::Read && byte.bit == 8 {
+                        self.twdr = byte.got;
+                    }
                     self.drive(Some(false), Some(false), mux, ctx, at);
                     self.owns = false;
                     self.finish(0x38);
