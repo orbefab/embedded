@@ -922,8 +922,9 @@ pub enum Chip {
 /// `VCC` and `GND` need nets, and every GPIO is optional. A GPIO with no net is neither stamped
 /// nor watched. One with a net drives through `output` from `VCC` and into `GND`, pulls up
 /// through `pull_up_resistance`, or is off, as the firmware sets it, leaks to `VCC` and to `GND`
-/// through `leakage_resistance`, and reads its level through `input_threshold`. Only parse
-/// builds one.
+/// through `leakage_resistance`, and reads its level through `input_threshold`. `console` is
+/// what the host sends its console: each event's bytes, in order, after t = 0 and after the
+/// previous event. Only parse builds one.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Esp32s3 {
     /// `VCC`, `GND`, then each GPIO with a net, in `PINS` order.
@@ -937,6 +938,7 @@ pub struct Esp32s3 {
     /// Ohm. Every GPIO's to `VCC` and again to `GND`, in every drive state.
     pub leakage_resistance: Value,
     pub input_threshold: Threshold,
+    pub console: Vec<Event<Vec<u8>>>,
 }
 
 /// What an `esp32s3` runs.

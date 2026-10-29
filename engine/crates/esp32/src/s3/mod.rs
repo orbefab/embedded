@@ -31,9 +31,13 @@ mod clock;
 mod efuse;
 mod extmem;
 mod flash;
+mod gates;
+mod gdma;
 mod gpio;
+mod ledc;
 mod matrix;
 mod rom;
+mod sha;
 mod soc;
 mod spi1;
 mod spi2;
@@ -90,6 +94,8 @@ pub enum Fault {
     Unsupported(Unimplemented),
     /// The core fetched outside the instruction window, at this PC.
     UnmappedFetch(u32),
+    /// The core reached a jump to itself at this PC that nothing can take it out of.
+    Halted(u32),
     /// A watchdog ran out its first stage.
     Watchdog(Watchdog),
     /// The store at this PC started an SPI2 transfer with a setting the model does not run.
@@ -126,6 +132,8 @@ pub enum ResetCause {
 pub enum Refused {
     /// An interrupt enable of this peripheral, whose interrupt the model never raises.
     Interrupt(&'static str),
+    /// A setting of this peripheral, by name, that the model does not run.
+    Register(&'static str, &'static str),
     /// `RTC_CNTL_SLEEP_EN`.
     Sleep,
 }
@@ -321,6 +329,8 @@ impl Esp32s3 {
                 Stop::Bus => {
                     if let Some(addr) = self.soc.first_touch.take() {
                         self.soc.unmodeled.get_mut(&addr).expect("touched").pc = pc;
+                    } else if std::mem::take(&mut self.soc.change_stop) {
+                        self.soc.pending.as_mut().expect("reported").2.pc = pc;
                     } else if let Some(ending) = self.soc.ending.take() {
                         let fault = match ending {
                             Ending::Setting(setting) => Fault::Setting(setting, pc),
@@ -338,6 +348,12 @@ impl Esp32s3 {
                         self.fault = Some((now, fault));
                     } else if self.soc.unmapped_fetch {
                         self.fault = Some((now, Fault::UnmappedFetch(pc)));
+                    }
+                }
+                Stop::Spin => {
+                    let nmi = self.soc.routes_to_nmi();
+                    if !nmi && self.soc.watchdogs.deadline().is_none() {
+                        self.fault = Some((now, Fault::Halted(pc)));
                     }
                 }
                 Stop::Unimplemented(missing) => {
@@ -433,11 +449,18 @@ impl Esp32s3 {
         self.soc.usb.take_sent(through)
     }
 
-    /// Each unmodeled register the firmware touched, by address.
+    /// Queues `bytes` for the console to receive from `at`, after every byte queued before.
+    pub fn receive(&mut self, at: Tick, bytes: &[u8]) {
+        self.soc.usb.receive(at, bytes);
+    }
+
+    /// Each unmodeled register the firmware touched, by address, then each write that changed
+    /// a register the model keeps without running its effect, in the order written.
     pub fn unmodeled(&self) -> impl Iterator<Item = (u32, Touch)> + '_ {
         self.soc
             .unmodeled
             .iter()
+            .chain(self.soc.changes.iter().map(|(addr, touch)| (addr, touch)))
             .map(|(&addr, &touch)| (addr, touch))
     }
 
@@ -451,7 +474,9 @@ impl Esp32s3 {
 mod tests {
     use sim_xtensa::{Bus, Cause, Cycle, Exit, Sr, Width};
 
-    use super::soc::{EFUSE, GPIO, IO_MUX, RTC_CNTL, SPI2, SYSTEM, TIMG0, TIMG1, USB_SERIAL_JTAG};
+    use super::soc::{
+        EFUSE, Ending, GDMA, GPIO, IO_MUX, RTC_CNTL, SPI2, SYSTEM, TIMG0, TIMG1, USB_SERIAL_JTAG,
+    };
     use super::*;
 
     /// The tick of crystal cycle `n`, a CPU cycle at power-on.
@@ -743,11 +768,12 @@ mod tests {
         );
     }
 
-    /// Each write that turns on an interrupt the model never raises, or sleep, ends the run at
-    /// its store, and a write that leaves those bits clear does not.
+    /// Each write that turns on an interrupt the model never raises, a GDMA mode it does not run,
+    /// or sleep, ends the run at its store, and a write that leaves those bits clear does not.
     #[test]
-    fn an_interrupt_the_model_never_raises_or_sleep_ends_the_run() {
+    fn an_interrupt_the_model_never_raises_a_gdma_mode_or_sleep_ends_the_run() {
         let gdma = 0x6003_f000;
+        let out = gdma + 4 * 0xc0 + 0x60;
         let refused = [
             (SPI2 + 0x34, 1 << 10, Refused::Interrupt("SPI2")),
             (TIMG0 + 0x70, 1, Refused::Interrupt("TIMG0")),
@@ -758,13 +784,23 @@ mod tests {
                 Refused::Interrupt("USB_SERIAL_JTAG"),
             ),
             (gdma + 0x10, 1, Refused::Interrupt("GDMA")),
-            (gdma + 4 * 0xc0 + 0x70, 1, Refused::Interrupt("GDMA")),
+            (out + 0x10, 1, Refused::Interrupt("GDMA")),
+            (0x6003_b028, 1, Refused::Interrupt("SHA")),
+            (0x6001_90c8, 1 << 3, Refused::Interrupt("LEDC")),
+            (gdma, 1 << 4, Refused::Register("GDMA", "memory_copy")),
+            (out, 1 << 2, Refused::Register("GDMA", "write_back")),
+            (gdma + 0x20, 1 << 23, Refused::Register("GDMA", "restart")),
+            (out + 0x20, 1 << 22, Refused::Register("GDMA", "restart")),
             (RTC_CNTL + 0x18, 1 << 31, Refused::Sleep),
         ];
         for (address, value, why) in refused {
             let program = store_after_two_loads(address, value, 0);
+            let mut chip = program.chip();
+            chip.soc.restore(SYSTEM + 0x18, 1 << 6 | 1 << 11);
+            chip.soc.restore(SYSTEM + 0x1c, 1 << 6 | 1 << 2);
+            chip.soc.restore(SYSTEM + 0x24, 0);
             assert_eq!(
-                program.chip().run_until(c(1000)),
+                chip.run_until(c(1000)),
                 Some(Halt::Fault(c(2), Fault::Refused(why, program.entry() + 6))),
                 "{address:#x}"
             );
@@ -773,29 +809,116 @@ mod tests {
         assert_eq!(chip.run_until(c(1000)), None, "the watchdog's interrupt");
     }
 
-    /// A write that changes a reset, clock gate or clock select register is listed as an
-    /// unmodeled register, since the model does not run its effect, and the word keeps it.
+    /// Each write that changes a register the model keeps without running its effect is
+    /// listed, with the PC of its own store, and the word keeps it. A write that leaves the word
+    /// as it was is not listed. On SYSTEM's gates only a change of a bit the model keeps without
+    /// running counts.
     #[test]
-    fn a_change_to_a_peripheral_reset_or_clock_register_is_listed_and_kept() {
-        let system = (0x18..=0x24).step_by(4).map(|offset| SYSTEM + offset);
-        let spi0 = (0x18..=0x20).step_by(4).map(|offset| 0x6000_3000 + offset);
-        for address in system.chain(spi0).chain([RTC_CNTL + 0x74]) {
-            let program = store_after_two_loads(address, 0x40, 0);
+    fn each_change_to_a_register_whose_effect_does_not_run_is_listed_and_kept() {
+        let system = [
+            (0x18, 1 << 29),
+            (0x1c, 1 << 10),
+            (0x20, 1 << 13),
+            (0x24, 1 << 10),
+        ];
+        let spi0 = (0x18..=0x20)
+            .step_by(4)
+            .map(|offset| (0x6000_3000 + offset, 0x40));
+        let system = system.map(|(offset, bit)| (SYSTEM + offset, bit));
+        for (address, value) in system
+            .into_iter()
+            .chain(spi0)
+            .chain([(RTC_CNTL + 0x74, 0x40)])
+        {
+            let mut program = Program::new(&[address, value, 0]);
+            program.l32r(2, 0).l32r(3, 1).l32r(4, 2);
+            let first = program.pc();
+            program.rri8(6, 3, 2, 0);
+            let second = program.pc();
+            program.rri8(6, 4, 2, 0).rri8(6, 4, 2, 0).raw(&LOOP);
             let mut chip = program.chip();
             chip.soc.restore(address, 0);
             assert_eq!(chip.run_until(c(1000)), None, "{address:#x}");
-            let listed: Vec<(u32, Touch)> = chip.unmodeled().collect();
-            assert_eq!(listed.len(), 1, "{address:#x}");
-            assert_eq!(listed[0].0, address);
-            assert!(listed[0].1.write && listed[0].1.kept);
-            assert_eq!(listed[0].1.pc, program.entry() + 6, "{address:#x}");
-            assert_eq!(chip.soc.load(Cycle(0), address, Width::Word), Ok(0x40));
-
-            let mut same = program.chip();
-            same.soc.restore(address, 0x40);
-            assert_eq!(same.run_until(c(1000)), None);
-            assert_eq!(same.unmodeled().count(), 0, "{address:#x} unchanged");
+            let listed: Vec<(u32, u32)> =
+                chip.unmodeled().map(|(at, touch)| (at, touch.pc)).collect();
+            assert_eq!(
+                listed,
+                [(address, first), (address, second)],
+                "{address:#x}"
+            );
+            assert!(chip.unmodeled().all(|(_, touch)| touch.write && touch.kept));
+            assert_eq!(chip.soc.load(Cycle(0), address, Width::Word), Ok(0));
         }
+        let mut chip = store_after_two_loads(SYSTEM + 0x18, 1 << 6 | 1 << 2, 0).chip();
+        chip.soc.restore(SYSTEM + 0x18, 0);
+        assert_eq!(chip.run_until(c(1000)), None);
+        assert_eq!(chip.unmodeled().count(), 0, "SPI2 runs its clock bit");
+    }
+
+    /// A jump to itself with every interrupt masked ends the run as halted once no watchdog
+    /// runs and no source reaches the NMI line, as IDF's print-and-halt panic ends. While a
+    /// watchdog runs, or a source is routed to the NMI line, the core spins on.
+    #[test]
+    fn a_jump_to_itself_that_nothing_can_leave_halts_the_run() {
+        let mut program = Program::new(&[]);
+        program.raw(&LOOP);
+        let quiet = |chip: &mut Esp32s3| {
+            chip.soc.watchdogs.write_timg(Tick(0), 0, 0x48, 0);
+            chip.soc.watchdogs.write_rtc(Tick(0), 0x98, 0);
+        };
+        let mut chip = program.chip();
+        quiet(&mut chip);
+        assert_eq!(
+            chip.run_until(c(1000)),
+            Some(Halt::Fault(c(0), Fault::Halted(program.entry())))
+        );
+        assert_eq!(program.chip().run_until(c(1000)), None, "a watchdog runs");
+        let mut nmi = program.chip();
+        quiet(&mut nmi);
+        nmi.soc.restore(0x600c_2000, 14);
+        assert_eq!(
+            nmi.run_until(c(1000)),
+            None,
+            "a source reaches the NMI line"
+        );
+    }
+
+    /// SPI2's reset bit puts its registers back to power-on, and an access while the bit holds
+    /// it, or while a block's clock is off, ends the run at that access.
+    #[test]
+    fn a_peripheral_reset_clears_its_registers_and_a_held_or_unclocked_block_ends_the_run() {
+        let user1 = SPI2 + 0x14;
+        let mut program = Program::new(&[user1, 0x1234, SYSTEM + 0x20, 1 << 6, 0]);
+        program
+            .l32r(2, 0)
+            .l32r(3, 1)
+            .rri8(6, 3, 2, 0)
+            .l32r(4, 2)
+            .l32r(5, 3)
+            .l32r(7, 4)
+            .rri8(6, 5, 4, 0)
+            .rri8(6, 7, 4, 0)
+            .raw(&LOOP);
+        let mut chip = program.chip();
+        assert_eq!(chip.run_until(c(1000)), None);
+        assert_eq!(chip.soc.load(Cycle(0), user1, Width::Word), Ok(0xb841_0007));
+
+        let mut program = Program::new(&[SYSTEM + 0x20, 1 << 6, user1]);
+        program.l32r(2, 0).l32r(3, 1).rri8(6, 3, 2, 0).l32r(4, 2);
+        let load = program.pc();
+        program.rri8(2, 5, 4, 0).raw(&LOOP);
+        let held = Refused::Register("SPI2", "held_in_reset");
+        assert_eq!(
+            program.chip().run_until(c(1000)),
+            Some(Halt::Fault(c(4), Fault::Refused(held, load)))
+        );
+
+        let program = store_after_two_loads(0x6001_9000, 0, 0);
+        let off = Refused::Register("LEDC", "clock_off");
+        assert_eq!(
+            program.chip().run_until(c(1000)),
+            Some(Halt::Fault(c(2), Fault::Refused(off, program.entry() + 6)))
+        );
     }
 
     /// A write that would take a flash pad, GPIO26 to GPIO32, from SPI0 and SPI1 ends the run:
@@ -1000,8 +1123,9 @@ mod tests {
     }
 
     /// Routes GPIO12 to SPI2's CS, turns SPI2's clock on, then syncs and starts a transfer of
-    /// an 8-bit command with `user`.
-    fn transfer(user: u32) -> Program {
+    /// an 8-bit command with `user`, and then stores `then`'s value to its address.
+    fn transfer(user: u32, then: Option<(u32, u32)>) -> Program {
+        let (address, value) = then.unwrap_or_default();
         let mut program = Program::new(&[
             IO_MUX,
             1 << 12,
@@ -1012,6 +1136,8 @@ mod tests {
             1 << 24,
             0x3,
             1 << 23,
+            address,
+            value,
         ]);
         program
             .l32r(2, 0)
@@ -1028,14 +1154,17 @@ mod tests {
             .l32r(3, 8)
             .rri8(6, 3, 2, 0x00)
             .l32r(3, 6)
-            .rri8(6, 3, 2, 0x00)
-            .raw(&LOOP);
+            .rri8(6, 3, 2, 0x00);
+        if then.is_some() {
+            program.l32r(2, 9).l32r(3, 10).rri8(6, 3, 2, 0x00);
+        }
+        program.raw(&LOOP);
         program
     }
 
     #[test]
     fn a_transfer_ends_in_a_record_halt_however_the_run_splits() {
-        let program = transfer(1 << 31);
+        let program = transfer(1 << 31, None);
         let run = |step: u64| {
             let mut chip = program.chip_on(&[12]);
             let mut seen = Vec::new();
@@ -1110,7 +1239,7 @@ mod tests {
 
     #[test]
     fn a_transfer_with_a_setting_the_model_does_not_run_ends_the_run_at_its_store() {
-        let program = transfer(1 << 31 | 1 << 29);
+        let program = transfer(1 << 31 | 1 << 29, None);
         let mut chip = program.chip_on(&[]);
         let Some(Halt::Fault(_, fault)) = chip.run_until(c(1000)) else {
             panic!("the store faults");
@@ -1121,6 +1250,337 @@ mod tests {
         );
         assert_eq!(chip.run_until(c(2000)), None, "ended");
         assert_eq!(chip.take_transfers().count(), 0);
+    }
+
+    /// SPI2's reset bit while a transfer runs ends the run at its store, and leaves the gates as
+    /// they were.
+    #[test]
+    fn a_reset_of_spi2_while_it_sends_ends_the_run() {
+        let program = transfer(1 << 31, Some((SYSTEM + 0x20, 1 << 6)));
+        let mut chip = program.chip_on(&[]);
+        let sending = Refused::Register("SPI2", "reset_while_sending");
+        assert_eq!(
+            chip.run_until(c(1000)),
+            Some(Halt::Fault(
+                c(17),
+                Fault::Refused(sending, program.entry() + 17 * 3)
+            ))
+        );
+        assert_eq!(chip.soc.load(Cycle(0), SYSTEM + 0x20, Width::Word), Ok(0));
+    }
+
+    /// A turn of SPI2's clock off while it sends ends the run at its store. A GDMA reset bit
+    /// that a transfer from the CPU buffer leaves set does not.
+    #[test]
+    fn spi2_clock_off_while_it_sends_ends_the_run() {
+        let program = transfer(1 << 31, Some((SYSTEM + 0x18, 0xf9c1_e06f & !(1 << 6))));
+        let off = Refused::Register("SPI2", "clock_off_while_sending");
+        assert_eq!(
+            program.chip_on(&[]).run_until(c(1000)),
+            Some(Halt::Fault(
+                c(17),
+                Fault::Refused(off, program.entry() + 17 * 3)
+            ))
+        );
+        let program = transfer(1 << 31, Some((SYSTEM + 0x24, 0x1fe)));
+        let halt = program.chip_on(&[]).run_until(c(1000));
+        assert!(
+            matches!(halt, Some(Halt::Change { record: true, .. })),
+            "{halt:?}"
+        );
+    }
+
+    const DESCRIPTOR: u32 = 0x3fce_0000;
+    const BUFFER: u32 = 0x3fca_0000;
+
+    /// A chip with GDMA clocked and out of reset, its channel 0 started on SPI2 at one
+    /// descriptor for the 8 bytes at `buffer`, and SPI2 set and synced to send 8 bytes from
+    /// DMA, with no CS setup or hold, at the crystal.
+    fn dma_chip(buffer: u32) -> Esp32s3 {
+        let mut program = Program::new(&[]);
+        program.raw(&LOOP);
+        let mut chip = program.chip_on(&[]);
+        let soc = &mut chip.soc;
+        soc.poke(buffer, &[1, 2, 3, 4, 5, 6, 7, 8]);
+        let head: u32 = 1 << 31 | 1 << 30 | 8 << 12 | 8;
+        let descriptor: Vec<u8> = [head, buffer, 0]
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect();
+        soc.poke(DESCRIPTOR, &descriptor);
+        for (cycle, address, value) in [
+            (1, SYSTEM + 0x1c, 0x640),
+            (2, SYSTEM + 0x24, 0x1be),
+            (3, GDMA + 0xa8, 0),
+            (4, GDMA + 0x80, DESCRIPTOR & 0xf_ffff | 1 << 21),
+            (5, SPI2 + 0x10, 1 << 27),
+            (6, SPI2 + 0x1c, 63),
+            (7, SPI2 + 0x30, 1 << 28),
+            (8, SPI2 + 0xe8, 0x3),
+            (9, SPI2, 1 << 23),
+        ] {
+            assert_eq!(soc.store(Cycle(cycle), address, Width::Word, value), Ok(()));
+        }
+        chip
+    }
+
+    /// `dma_chip` with its transfer started at cycle 10, which runs for 64 crystal cycles.
+    fn sending(buffer: u32) -> Esp32s3 {
+        let mut chip = dma_chip(buffer);
+        assert_eq!(
+            chip.soc.store(Cycle(10), SPI2, Width::Word, 1 << 24),
+            Ok(())
+        );
+        assert!(chip.soc.spi2.busy(c(73)) && !chip.soc.spi2.busy(c(74)));
+        chip
+    }
+
+    /// While a transfer sends from GDMA, a store into a byte of its descriptors or buffers ends
+    /// the run, before it lands. A store beside them, or after the transfer, lands.
+    #[test]
+    fn a_store_into_a_list_a_running_dma_transfer_sends_from_ends_the_run() {
+        let refused = Some(Ending::Refused(Refused::Register("GDMA", "buffer_write")));
+        for (address, width) in [
+            (BUFFER + 4, Width::Word),
+            (BUFFER + 7, Width::Byte),
+            (BUFFER - 1, Width::Half),
+            (DESCRIPTOR + 8, Width::Word),
+        ] {
+            let mut chip = sending(BUFFER);
+            assert_eq!(
+                chip.soc.store(Cycle(11), address, width, 0),
+                Err(Exit::Stop),
+                "{address:#x}"
+            );
+            assert_eq!(chip.soc.ending, refused, "{address:#x}");
+            assert_eq!(
+                chip.soc.load(Cycle(12), BUFFER + 4, Width::Word),
+                Ok(0x0807_0605)
+            );
+        }
+        let mut chip = sending(BUFFER);
+        for address in [BUFFER + 8, BUFFER - 4, DESCRIPTOR + 12] {
+            assert_eq!(chip.soc.store(Cycle(11), address, Width::Word, 0), Ok(()));
+        }
+        assert_eq!(chip.soc.store(Cycle(74), BUFFER, Width::Word, 0), Ok(()));
+        assert_eq!(chip.soc.ending, None);
+    }
+
+    /// While a transfer sends from GDMA, a store into a byte that shares a word with its buffer
+    /// lands, and a store into the buffer's own bytes ends the run.
+    #[test]
+    fn a_store_beside_a_buffer_in_a_word_they_share_lands() {
+        for (address, width) in [
+            (BUFFER, Width::Byte),
+            (BUFFER + 9, Width::Byte),
+            (BUFFER + 10, Width::Half),
+        ] {
+            let mut chip = sending(BUFFER + 1);
+            assert_eq!(
+                chip.soc.store(Cycle(11), address, width, 0xffff),
+                Ok(()),
+                "{address:#x}"
+            );
+            assert_eq!(chip.soc.ending, None, "{address:#x}");
+        }
+        for address in [BUFFER + 1, BUFFER + 8] {
+            let mut chip = sending(BUFFER + 1);
+            assert_eq!(
+                chip.soc.store(Cycle(11), address, Width::Byte, 0xff),
+                Err(Exit::Stop),
+                "{address:#x}"
+            );
+            let refused = Refused::Register("GDMA", "buffer_write");
+            assert_eq!(chip.soc.ending, Some(Ending::Refused(refused)));
+        }
+    }
+
+    /// IDF's `esp_system_reset_modules_on_exit`, which its restart and panic paths run, sets
+    /// these bits of `SYSTEM_PERIP_RST_EN1_REG`: `SYSTEM_DMA_RST` and the crypto and SDIO host
+    /// resets. While a transfer sends from GDMA that store ends the run with GDMA's
+    /// `reset_while_sending`, before it lands. Once the transfer has ended it lands.
+    #[test]
+    fn a_restart_while_a_transfer_sends_from_gdma_ends_the_run() {
+        const RESTART_RST_EN1: u32 = 1 << 7 | 1 << 6 | 1 << 5 | 1 << 4 | 1 << 3 | 1 << 2 | 1 << 1;
+        let mut chip = sending(BUFFER);
+        let before = chip
+            .soc
+            .load(Cycle(11), SYSTEM + 0x24, Width::Word)
+            .unwrap();
+        assert_eq!(
+            chip.soc.store(
+                Cycle(11),
+                SYSTEM + 0x24,
+                Width::Word,
+                before | RESTART_RST_EN1
+            ),
+            Err(Exit::Stop)
+        );
+        let refused = Refused::Register("GDMA", "reset_while_sending");
+        assert_eq!(chip.soc.ending, Some(Ending::Refused(refused)));
+        assert_eq!(
+            chip.soc.load(Cycle(12), SYSTEM + 0x24, Width::Word),
+            Ok(before)
+        );
+        let mut chip = sending(BUFFER);
+        assert_eq!(
+            chip.soc.store(
+                Cycle(74),
+                SYSTEM + 0x24,
+                Width::Word,
+                before | RESTART_RST_EN1
+            ),
+            Ok(())
+        );
+        assert_eq!(chip.soc.ending, None);
+        assert_eq!(
+            chip.soc.load(Cycle(75), SYSTEM + 0x24, Width::Word),
+            Ok(before | RESTART_RST_EN1)
+        );
+    }
+
+    /// While a transfer sends from GDMA, a GDMA reset or a turn of its clock off ends the run,
+    /// as SPI2's own do. Once the transfer has ended, each lands. A transfer started while GDMA's
+    /// clock is off has no channel to feed it.
+    #[test]
+    fn a_gate_change_that_stops_a_running_dma_transfer_ends_the_run() {
+        for (address, value, block, setting) in [
+            (SYSTEM + 0x24, 0x1fe, "GDMA", "reset_while_sending"),
+            (SYSTEM + 0x1c, 0x600, "GDMA", "clock_off_while_sending"),
+            (
+                SYSTEM + 0x18,
+                0xf9c1_e02f,
+                "SPI2",
+                "clock_off_while_sending",
+            ),
+            (SYSTEM + 0x20, 1 << 6, "SPI2", "reset_while_sending"),
+        ] {
+            let mut chip = sending(BUFFER);
+            assert_eq!(
+                chip.soc.store(Cycle(11), address, Width::Word, value),
+                Err(Exit::Stop),
+                "{setting}"
+            );
+            let refused = Refused::Register(block, setting);
+            assert_eq!(chip.soc.ending, Some(Ending::Refused(refused)));
+            let mut chip = sending(BUFFER);
+            assert_eq!(
+                chip.soc.store(Cycle(74), address, Width::Word, value),
+                Ok(()),
+                "{setting} after the transfer"
+            );
+        }
+        let mut chip = dma_chip(BUFFER);
+        assert_eq!(
+            chip.soc.store(Cycle(10), SYSTEM + 0x1c, Width::Word, 0x600),
+            Ok(())
+        );
+        assert_eq!(
+            chip.soc.store(Cycle(11), SPI2, Width::Word, 1 << 24),
+            Err(Exit::Stop)
+        );
+        assert_eq!(chip.soc.ending, Some(Ending::Setting(Setting::DmaLink)));
+    }
+
+    /// A store that starts a GDMA link the model does not feed ends the run before it lands.
+    #[test]
+    fn a_gdma_link_the_model_does_not_feed_ends_the_run() {
+        for (address, value, setting) in [
+            (
+                GDMA + 0x20,
+                DESCRIPTOR & 0xf_ffff | 1 << 22,
+                "link_peripheral",
+            ),
+            (GDMA + 0xa8, 7, "peri_sel_while_started"),
+        ] {
+            let mut chip = dma_chip(BUFFER);
+            assert_eq!(
+                chip.soc.store(Cycle(10), address, Width::Word, value),
+                Err(Exit::Stop)
+            );
+            let refused = Refused::Register("GDMA", setting);
+            assert_eq!(chip.soc.ending, Some(Ending::Refused(refused)));
+        }
+    }
+
+    /// A change is listed once, when its store lands: a change that another reported store
+    /// cuts in on, as an interrupt can between the stop and the store run again, is listed
+    /// after that one, and a change whose store never runs again is not listed.
+    #[test]
+    fn a_change_is_listed_once_when_its_store_lands() {
+        let (rtc, spi0) = (RTC_CNTL + 0x74, 0x6000_3018);
+        let mut chip = Program::new(&[]).chip();
+        chip.soc.restore(rtc, 0);
+        chip.soc.restore(spi0, 0);
+        let soc = &mut chip.soc;
+        assert_eq!(soc.store(Cycle(1), rtc, Width::Word, 1), Err(Exit::Stop));
+        assert_eq!(soc.store(Cycle(2), spi0, Width::Word, 1), Err(Exit::Stop));
+        assert_eq!(soc.store(Cycle(2), spi0, Width::Word, 1), Ok(()));
+        assert_eq!(soc.store(Cycle(3), rtc, Width::Word, 1), Err(Exit::Stop));
+        assert_eq!(soc.store(Cycle(3), rtc, Width::Word, 1), Ok(()));
+        assert_eq!(soc.store(Cycle(4), spi0, Width::Word, 2), Err(Exit::Stop));
+        let listed: Vec<(u32, Tick)> = soc.changes.iter().map(|&(a, t)| (a, t.at)).collect();
+        assert_eq!(listed, [(spi0, c(2)), (rtc, c(3))]);
+    }
+
+    /// While `SPI_TRANS_DONE` is enabled, a running transfer's end is the core's next event, so
+    /// its interrupt rises on that tick with no access.
+    #[test]
+    fn the_end_of_a_transfer_whose_interrupt_is_enabled_is_the_next_event() {
+        let program = transfer(1 << 31, Some((SPI2 + 0x34, spi2::TRANS_DONE)));
+        let mut chip = program.chip_on(&[]);
+        assert_eq!(chip.run_until(c(18)), None);
+        let end = chip.soc.spi2.end(0).expect("a transfer runs");
+        assert!(c(18) < end);
+        assert_eq!(
+            chip.soc.next_event(Cycle(18)),
+            Some(chip.soc.clock.cycle_after(end))
+        );
+    }
+
+    /// A reset of SPI2 puts its pads back to their idle levels, so a store that resets it and
+    /// moves a pad ends the step there.
+    #[test]
+    fn a_reset_of_spi2_that_moves_a_pad_ends_the_step_at_its_store() {
+        let mut program = Program::new(&[
+            IO_MUX,
+            1 << 12,
+            GPIO + 0x500,
+            110,
+            SPI2,
+            1 << 7,
+            SYSTEM + 0x20,
+            1 << 6,
+        ]);
+        program
+            .l32r(2, 0)
+            .l32r(3, 1)
+            .rri8(6, 3, 2, 0x34)
+            .l32r(2, 2)
+            .l32r(3, 3)
+            .rri8(6, 3, 2, 0x84)
+            .l32r(2, 4)
+            .l32r(3, 5)
+            .rri8(6, 3, 2, 0x20)
+            .l32r(2, 6)
+            .l32r(3, 7)
+            .rri8(6, 3, 2, 0)
+            .raw(&LOOP);
+        let mut chip = program.chip_on(&[12]);
+        let mut drives = Vec::new();
+        while let Some(halt) = chip.run_until(c(1000)) {
+            assert!(matches!(halt, Halt::Change { image: true, .. }), "{halt:?}");
+            drives.push((halt.at(), chip.drive(12)));
+        }
+        assert_eq!(
+            drives,
+            [
+                (c(5), PadDrive::High),
+                (c(8), PadDrive::Low),
+                (c(11), PadDrive::High)
+            ],
+            "routed, MASTER_CS0_POL, then the reset"
+        );
     }
 
     #[test]

@@ -16,11 +16,15 @@ use super::clock::{CpuClock, Source, Tick};
 use super::efuse::Efuse;
 use super::extmem;
 use super::flash::{self, Flash};
+use super::gates::{self, Block, Gates};
+use super::gdma::{self, Gdma};
 use super::gpio::{self, Gpio, PADS, PadDrive};
+use super::ledc::{self, Ledc};
 use super::matrix::{self, Matrix};
 use super::rom;
+use super::sha::{self, Sha};
 use super::spi1::{self, FlashRefusal, Spi1};
-use super::spi2::{Setting, Spi2};
+use super::spi2::{self, Setting, Spi2};
 use super::timers::{Register, Systimer, Watchdogs};
 use super::usb::UsbSerialJtag;
 use super::{RAM, Refused, ResetCause, Touch};
@@ -44,9 +48,10 @@ pub(crate) const TIMG0: u32 = 0x6001_f000;
 pub(crate) const TIMG1: u32 = 0x6002_0000;
 pub(crate) const SYSTIMER: u32 = 0x6002_3000;
 pub(crate) const SPI2: u32 = 0x6002_4000;
+const LEDC: u32 = 0x6001_9000;
 pub(crate) const USB_SERIAL_JTAG: u32 = 0x6003_8000;
-/// GDMA, which the model does not run.
-const GDMA: u32 = 0x6003_f000;
+const SHA: u32 = 0x6003_b000;
+pub(crate) const GDMA: u32 = 0x6003_f000;
 pub(crate) const SYSTEM: u32 = 0x600c_0000;
 /// `SYSTEM_CPU_PER_CONF_REG` and `SYSTEM_SYSCLK_CONF_REG`, which pick the CPU clock.
 const CPU_PER_CONF: u32 = 0x10;
@@ -75,6 +80,10 @@ pub(crate) struct Soc {
     pub(crate) watchdogs: Watchdogs,
     pub(crate) usb: UsbSerialJtag,
     pub(crate) spi2: Spi2,
+    gdma: Gdma,
+    sha: Sha,
+    ledc: Ledc,
+    gates: Gates,
     analog: Analog,
     efuse: Efuse,
     spi1: Spi1,
@@ -84,6 +93,15 @@ pub(crate) struct Soc {
     /// The GPIOs with nets, whose drives the image holds.
     netted: Vec<u8>,
     pub(crate) unmodeled: BTreeMap<u32, Touch>,
+    /// Each write that changed a register the model keeps without running its effect, with
+    /// that register, in the order the writes landed.
+    pub(crate) changes: Vec<(u32, Touch)>,
+    /// The register, word and touch of the change the last stop reported, which is listed when
+    /// the core runs the store again and it lands.
+    pub(crate) pending: Option<(u32, u32, Touch)>,
+    /// The SRAM offsets of the descriptors and buffers the last SPI2 transfer read through GDMA,
+    /// which a store may not reach while it runs.
+    in_flight: Vec<Range<u32>>,
     /// A store changed a netted pad's drive at this tick, so the next fetch stops the core.
     pub(crate) changed: Option<Tick>,
     /// A store changed the CPU clock, so the next fetch stops the core and the run maps its
@@ -95,6 +113,8 @@ pub(crate) struct Soc {
     /// The first access to an unmodeled register stopped the core, so the timeline can take the
     /// access's PC.
     pub(crate) first_touch: Option<u32>,
+    /// A change of a kept register stopped the core, so the timeline can take its PC.
+    pub(crate) change_stop: bool,
     /// The core fetched outside its memories.
     pub(crate) unmapped_fetch: bool,
     /// A store started an SPI2 transfer, so the next fetch stops the core and the run reads its
@@ -162,28 +182,39 @@ enum Effect {
     Refuse(u32, Ending),
     /// The write ends the run unless it leaves these bits at this value.
     Pin(u32, u32, Ending),
-    /// The write is listed as an unmodeled register when it changes the word, and then kept.
+    /// Each write that changes the word is listed as an unmodeled register, and then kept.
     Report,
+    /// A write to SYSTEM's gates is listed when it changes a bit the model keeps without
+    /// running, and then kept.
+    Gates,
 }
 
 /// The effect of a write of the register at `addr`, when it has one the model does not run.
 fn effect(addr: u32) -> Option<Effect> {
     let (base, offset) = (addr & !(BLOCK - 1), addr & (BLOCK - 1));
     let interrupt = |peripheral| Ending::Refused(Refused::Interrupt(peripheral));
+    let dma = |setting| Ending::Refused(Refused::Register("GDMA", setting));
     let pads = Ending::FlashCommand(FlashRefusal::Pads);
     Some(match (base, offset) {
         (RTC_CNTL, 0x18) => Effect::Refuse(1 << 31, Ending::Refused(Refused::Sleep)),
         (RTC_CNTL, 0x74) => Effect::Report,
-        (SPI2, 0x34) => Effect::Refuse(u32::MAX, interrupt("SPI2")),
+        (SPI2, 0x34) => Effect::Refuse(!spi2::TRANS_DONE, interrupt("SPI2")),
         (TIMG0, 0x70) => Effect::Refuse(0b11, interrupt("TIMG0")),
         (TIMG1, 0x70) => Effect::Refuse(0b11, interrupt("TIMG1")),
         (USB_SERIAL_JTAG, 0x10) => Effect::Refuse(u32::MAX, interrupt("USB_SERIAL_JTAG")),
-        (GDMA, _) if offset < 5 * 0xc0 && matches!(offset % 0xc0, 0x10 | 0x70) => {
-            Effect::Refuse(u32::MAX, interrupt("GDMA"))
-        }
+        (SHA, sha::INT_ENA) => Effect::Refuse(1, interrupt("SHA")),
+        (LEDC, ledc::INT_ENA) => Effect::Refuse(u32::MAX, interrupt("LEDC")),
+        (GDMA, _) if offset < 5 * 0xc0 => match offset % 0xc0 {
+            0x10 | 0x70 => Effect::Refuse(u32::MAX, interrupt("GDMA")),
+            0x00 => Effect::Refuse(gdma::MEM_TRANS_EN, dma("memory_copy")),
+            0x60 => Effect::Refuse(gdma::AUTO_WRBACK, dma("write_back")),
+            0x20 => Effect::Refuse(gdma::INLINK_RESTART, dma("restart")),
+            0x80 => Effect::Refuse(gdma::OUTLINK_RESTART, dma("restart")),
+            _ => return None,
+        },
         (SPI0, 0x0) => Effect::Refuse(spi1::STARTS, Ending::FlashCommand(FlashRefusal::Spi0)),
         (SPI0, 0x18..=0x20) => Effect::Report,
-        (SYSTEM, 0x18..=0x24) => Effect::Report,
+        (SYSTEM, _) if gates::OFFSETS.contains(&offset) => Effect::Gates,
         // The flash's pads, GPIO26 to GPIO32, keep IO_MUX function 0, SPI0's and SPI1's, their
         // GPIO output enables clear, and their matrix outputs at the reset value.
         (IO_MUX, 0x6c..=0x84) => Effect::Pin(gpio::MCU_SEL, 0, pads),
@@ -209,6 +240,10 @@ impl Soc {
             watchdogs,
             usb: UsbSerialJtag::default(),
             spi2: Spi2::new(),
+            gdma: Gdma::new(),
+            sha: Sha::new(),
+            ledc: Ledc::new(),
+            gates: Gates::new(),
             analog: Analog::default(),
             efuse: Efuse::default(),
             spi1: Spi1::default(),
@@ -216,10 +251,14 @@ impl Soc {
             calibration: Default::default(),
             netted: netted.to_vec(),
             unmodeled: BTreeMap::new(),
+            changes: Vec::new(),
+            pending: None,
+            in_flight: Vec::new(),
             changed: None,
             rearmed: false,
             reclocked: false,
             first_touch: None,
+            change_stop: false,
             unmapped_fetch: false,
             started: false,
             ending: None,
@@ -234,6 +273,45 @@ impl Soc {
     pub(crate) fn attach(&mut self, rom: Arc<[u8]>, flash: Flash) {
         self.rom = Some(rom);
         self.flash = Some(flash);
+    }
+
+    /// The byte at `addr` in the GDMA's SRAM window, with its SRAM offset added to `read`.
+    fn dma_byte(sram: &PagedRam, read: &mut Vec<Range<u32>>, addr: u32) -> u8 {
+        let offset = Self::sram_offset(addr, false).expect("in the DMA window");
+        match read.last_mut() {
+            Some(last) if last.end == offset => last.end += 1,
+            _ => read.push(offset..offset + 1),
+        }
+        sram.read(offset, Width::Byte) as u8
+    }
+
+    /// The `bytes` bytes GDMA's channel started on `peripheral` sends, with the SRAM offsets of
+    /// the bytes it read added to `read`. While GDMA's clock is off no channel feeds it.
+    fn feed(
+        gdma: &mut Gdma,
+        sram: &PagedRam,
+        gates: &Gates,
+        peripheral: u32,
+        bytes: usize,
+        read: &mut Vec<Range<u32>>,
+    ) -> Result<Vec<u8>, Setting> {
+        if !gates.clocked(Block::Gdma) {
+            return Err(Setting::DmaLink);
+        }
+        gdma.send(peripheral, bytes, |addr| Self::dma_byte(sram, read, addr))
+    }
+
+    /// Whether a `width` store at SRAM offset `offset` reaches a descriptor or a buffer that a
+    /// running SPI2 transfer sends from.
+    fn in_flight(&mut self, now: Tick, offset: u32, width: Width) -> bool {
+        if !self.spi2.busy(now) {
+            self.in_flight.clear();
+            return false;
+        }
+        let end = offset + width.bytes();
+        self.in_flight
+            .iter()
+            .any(|range| offset < range.end && range.start < end)
     }
 
     pub(crate) fn sram_offset(addr: u32, fetch: bool) -> Option<u32> {
@@ -302,6 +380,9 @@ impl Soc {
             INTERRUPT_CORE0 if self.matrix.write(offset, value) => {}
             SYSTEM if matrix::FROM_CPU.contains(&offset) => {
                 self.matrix.write_from_cpu(offset, value);
+            }
+            SYSTEM if gates::OFFSETS.contains(&offset) => {
+                self.gates.write(offset, value).for_each(drop);
             }
             _ => {
                 self.plain.insert(addr, value);
@@ -373,8 +454,12 @@ impl Soc {
             TIMG0 => self.watchdogs.read_timg(0, offset),
             TIMG1 => self.watchdogs.read_timg(1, offset),
             SYSTIMER => self.systimer.read(now, offset),
-            USB_SERIAL_JTAG => self.usb.read(offset),
+            USB_SERIAL_JTAG => self.usb.read(now, offset),
             SPI2 => self.spi2.read(now, offset),
+            GDMA => self.gdma.read(offset),
+            SHA => self.sha.read(offset),
+            LEDC => self.ledc.read(offset),
+            SYSTEM if gates::OFFSETS.contains(&offset) => Some(self.gates.read(offset)),
             ANALOG => self.analog.read(offset),
             EFUSE => self.efuse.read(offset),
             SPI1 => self.spi1.read(offset),
@@ -405,10 +490,65 @@ impl Soc {
             SYSTIMER => self.systimer.write(now, offset, value),
             USB_SERIAL_JTAG => self.usb.write(now, offset, value),
             ANALOG => self.analog.write(offset, value),
+            GDMA => self.gdma.write(offset, value).unwrap_or_else(|setting| {
+                self.ending = Some(Ending::Refused(Refused::Register("GDMA", setting)));
+                true
+            }),
+            SHA => {
+                let (gdma, sram, gates) = (&mut self.gdma, &self.sram, &self.gates);
+                let mut read = Vec::new();
+                let dma = |bytes| Self::feed(gdma, sram, gates, sha::PERIPHERAL, bytes, &mut read);
+                self.sha
+                    .write(offset, value, dma)
+                    .unwrap_or_else(|setting| {
+                        self.ending = Some(Ending::Refused(Refused::Register("SHA", setting)));
+                        true
+                    })
+            }
             SYSTEM if matrix::FROM_CPU.contains(&offset) => {
                 self.matrix.write_from_cpu(offset, value);
                 true
             }
+            SYSTEM if gates::OFFSETS.contains(&offset) => {
+                let mut gates = self.gates.clone();
+                let held: Vec<Block> = gates.write(offset, value).collect();
+                let sending = self.spi2.busy(now);
+                let dma = sending && !self.in_flight.is_empty();
+                let refused = [
+                    (
+                        sending && held.contains(&Block::Spi2),
+                        "SPI2",
+                        "reset_while_sending",
+                    ),
+                    (
+                        sending && !gates.clocked(Block::Spi2),
+                        "SPI2",
+                        "clock_off_while_sending",
+                    ),
+                    (
+                        dma && held.contains(&Block::Gdma),
+                        "GDMA",
+                        "reset_while_sending",
+                    ),
+                    (
+                        dma && !gates.clocked(Block::Gdma),
+                        "GDMA",
+                        "clock_off_while_sending",
+                    ),
+                ]
+                .into_iter()
+                .find(|&(refused, ..)| refused);
+                if let Some((_, block, setting)) = refused {
+                    self.ending = Some(Ending::Refused(Refused::Register(block, setting)));
+                    return true;
+                }
+                self.gates = gates;
+                for block in held {
+                    self.reset(block);
+                }
+                true
+            }
+            LEDC => self.ledc.write(offset, value),
             INTERRUPT_CORE0 => self.matrix.write(offset, value),
             EFUSE => self.efuse.write(offset, value).unwrap_or_else(|()| {
                 self.ending = Some(Ending::EfuseProgram);
@@ -425,8 +565,16 @@ impl Soc {
             }
             SPI2 => {
                 let cpu = self.clock.source.cpu();
-                match self.spi2.write(now, cpu, offset, value, &self.gpio) {
-                    Ok(started) => self.started |= started,
+                let (gdma, sram, gates) = (&mut self.gdma, &self.sram, &self.gates);
+                let mut read = Vec::new();
+                let dma = |bytes| Self::feed(gdma, sram, gates, gdma::SPI2, bytes, &mut read);
+                match self.spi2.write(now, cpu, offset, value, &self.gpio, dma) {
+                    Ok(started) => {
+                        self.started |= started;
+                        if started {
+                            self.in_flight = read;
+                        }
+                    }
                     Err(setting) => self.ending = Some(Ending::Setting(setting)),
                 }
                 for (signal, level) in self.spi2.idle() {
@@ -459,7 +607,8 @@ impl Soc {
     /// The interrupt sources' levels at `now`.
     fn sources(&mut self, now: Tick) -> u128 {
         self.systimer.settle(now);
-        self.matrix.sources(self.systimer.lines())
+        let spi2 = self.spi2.line(now);
+        self.matrix.sources(self.systimer.lines(), spi2)
     }
 
     /// Runs the CPU from the clock the SYSTEM registers now pick, from core cycle `now` on.
@@ -492,6 +641,68 @@ impl Soc {
         self.unmodeled.insert(addr, touch);
         self.first_touch = Some(addr);
         Err(Exit::Stop)
+    }
+
+    /// Whether the interrupt matrix routes a source to the NMI line.
+    pub(crate) fn routes_to_nmi(&self) -> bool {
+        self.matrix.routes_to(matrix::NMI)
+    }
+
+    /// Stops the core at the write of `value` to the kept register at `addr`, whose effect the
+    /// model does not run, so the timeline can take its PC. When the core runs the store again,
+    /// the touch to list once it lands.
+    fn report(&mut self, now: Tick, addr: u32, value: u32) -> Result<Option<Touch>, Exit> {
+        if let Some((.., touch)) = self
+            .pending
+            .take_if(|&mut (at, word, _)| (at, word) == (addr, value))
+        {
+            return Ok(Some(touch));
+        }
+        let touch = Touch {
+            at: now,
+            pc: 0,
+            write: true,
+            kept: true,
+        };
+        self.pending = Some((addr, value, touch));
+        self.change_stop = true;
+        Err(Exit::Stop)
+    }
+
+    /// Puts `block` back to its power-on state, as its reset bit does. SPI2's transfers already
+    /// sent stay to be taken, and its pads go to its idle levels.
+    fn reset(&mut self, block: Block) {
+        match block {
+            Block::Spi2 => {
+                self.spi2.reset();
+                for (signal, level) in self.spi2.idle() {
+                    self.gpio.set_signal(signal, level);
+                }
+            }
+            Block::Ledc => self.ledc = Ledc::new(),
+            Block::Gdma => self.gdma = Gdma::new(),
+            Block::Sha => self.sha = Sha::new(),
+        }
+    }
+
+    /// The block whose registers hold `addr` and why an access to them ends the run: its
+    /// clock is off, or a reset bit holds it.
+    fn gated(&self, addr: u32) -> Option<Refused> {
+        let block = match addr & !(BLOCK - 1) {
+            SPI2 => Block::Spi2,
+            LEDC => Block::Ledc,
+            GDMA => Block::Gdma,
+            SHA => Block::Sha,
+            _ => return None,
+        };
+        let why = if !self.gates.clocked(block) {
+            "clock_off"
+        } else if self.gates.held(block) {
+            "held_in_reset"
+        } else {
+            return None;
+        };
+        Some(Refused::Register(block.name(), why))
     }
 
     /// Puts GPIO and IO_MUX back to power-on, as a reset does.
@@ -557,7 +768,15 @@ impl Bus for Soc {
         if !PERIPHERALS.contains(&addr) {
             return Err(Exit::Fault(Cause::LoadStoreError));
         }
-        match self.read_kept(now, word) {
+        if let Some(refused) = self.gated(word) {
+            self.ending = Some(Ending::Refused(refused));
+            return Err(Exit::Stop);
+        }
+        let kept = self.read_kept(now, word);
+        if word == USB_SERIAL_JTAG {
+            self.usb.take_received(now);
+        }
+        match kept {
             Some(value) => Ok((value >> shift) & mask),
             None => self.touch(now, word, false, false).map(|()| 0),
         }
@@ -566,6 +785,11 @@ impl Bus for Soc {
     fn store(&mut self, cycle: Cycle, addr: u32, width: Width, value: u32) -> Result<(), Exit> {
         let now = self.clock.tick(cycle);
         if let Some(offset) = Self::data_offset(addr, width)? {
+            if !self.in_flight.is_empty() && self.in_flight(now, offset, width) {
+                let refused = Refused::Register("GDMA", "buffer_write");
+                self.ending = Some(Ending::Refused(refused));
+                return Err(Exit::Stop);
+            }
             self.sram.write(offset, width, value);
             return Ok(());
         }
@@ -581,6 +805,10 @@ impl Bus for Soc {
             return Err(Exit::Fault(Cause::LoadStoreError));
         }
         let (word, shift, mask) = word_of(addr, width);
+        if let Some(refused) = self.gated(word) {
+            self.ending = Some(Ending::Refused(refused));
+            return Err(Exit::Stop);
+        }
         if word == RTC_CNTL + OPTIONS0 && ((value & mask) << shift) & RESETS != 0 {
             let store6 = self.read_kept(now, RTC_CNTL + STORE6);
             self.ending = Some(Ending::Restart(reset_cause(store6)));
@@ -588,7 +816,7 @@ impl Bus for Soc {
         }
         let kept = self.read_kept(now, word);
         let value = (kept.unwrap_or(0) & !(mask << shift)) | ((value & mask) << shift);
-        match effect(word) {
+        let change = match effect(word) {
             Some(Effect::Refuse(bits, ending)) if value & bits != 0 => {
                 self.ending = Some(ending);
                 return Err(Exit::Stop);
@@ -597,13 +825,18 @@ impl Bus for Soc {
                 self.ending = Some(ending);
                 return Err(Exit::Stop);
             }
-            Some(Effect::Report) if kept != Some(value) => self.touch(now, word, true, true)?,
-            _ => {}
-        }
+            Some(Effect::Report) if kept != Some(value) => self.report(now, word, value)?,
+            Some(Effect::Gates) if self.gates.reports(word - SYSTEM, value) => {
+                self.report(now, word, value)?
+            }
+            _ => None,
+        };
         if kept.is_none() {
             return self.touch(now, word, true, false);
         }
-        if !matches!(word & !(BLOCK - 1), GPIO | IO_MUX | SPI2) {
+        let pads = matches!(word & !(BLOCK - 1), GPIO | IO_MUX | SPI2)
+            || (word & !(BLOCK - 1) == SYSTEM && gates::OFFSETS.contains(&(word - SYSTEM)));
+        if !pads {
             let deadline = self.watchdogs.deadline();
             self.write_kept(now, word, value);
             if word == SYSTEM + SYSCLK_CONF || word == SYSTEM + CPU_PER_CONF {
@@ -612,6 +845,7 @@ impl Bus for Soc {
             if self.ending.is_some() {
                 return Err(Exit::Stop);
             }
+            self.changes.extend(change.map(|touch| (word, touch)));
             self.rearmed |= self.watchdogs.deadline() != deadline;
             return Ok(());
         }
@@ -620,6 +854,7 @@ impl Bus for Soc {
         if self.ending.is_some() {
             return Err(Exit::Stop);
         }
+        self.changes.extend(change.map(|touch| (word, touch)));
         if self.image() != before {
             self.changed = Some(now);
         }
@@ -632,7 +867,13 @@ impl Bus for Soc {
     }
 
     fn next_event(&mut self, now: Cycle) -> Option<Cycle> {
-        let next = self.systimer.next_event(self.clock.tick(now))?;
+        let next = [
+            self.systimer.next_event(self.clock.tick(now)),
+            self.spi2.next_event(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()?;
         Some(self.clock.cycle_after(next))
     }
 }

@@ -9,11 +9,12 @@ use serde::Deserialize;
 use super::atmega328p::{WireThreshold, resolve_threshold};
 use super::{PinMap, WireOutputStage, WireValue, resolve_output_stage, resolve_value};
 use crate::blob::{Blob, Blobs, Role, Sha256};
-use crate::diagnostic::{BlobRule, Diagnostic, FirmwareRule};
+use crate::diagnostic::{BlobRule, Diagnostic, FirmwareRule, ScheduleRule};
 use crate::name::{Name, Ref};
 use crate::netlist::elf::Elf;
 use crate::netlist::flash::Flash;
-use crate::netlist::{Esp32s3, Esp32s3Firmware, NetId};
+use crate::netlist::{Esp32s3, Esp32s3Firmware, Event, NetId};
+use crate::time::Time;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -27,6 +28,15 @@ pub(super) struct WireEsp32s3 {
     pull_up_resistance: WireValue,
     leakage_resistance: WireValue,
     input_threshold: WireThreshold,
+    #[serde(default)]
+    console: Vec<WireSend>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireSend {
+    t_ps: u64,
+    bytes: Vec<u8>,
 }
 
 #[derive(Deserialize)]
@@ -96,6 +106,7 @@ pub(super) fn resolve_esp32s3(
         wire.input_threshold,
         out,
     );
+    let console = resolve_console(part_ref, wire.console, out);
     let (pins, names) = pins?;
     Some(Esp32s3 {
         pins,
@@ -105,7 +116,46 @@ pub(super) fn resolve_esp32s3(
         pull_up_resistance: pull_up?,
         leakage_resistance: leakage?,
         input_threshold: input_threshold?,
+        console: console?,
     })
+}
+
+/// The console's sends, each after t = 0, after the previous one, and with a byte.
+fn resolve_console(
+    part: &Ref,
+    wires: Vec<WireSend>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Vec<Event<Vec<u8>>>> {
+    let mut ok = true;
+    let mut previous = None;
+    let mut events = Vec::with_capacity(wires.len());
+    for (index, wire) in wires.into_iter().enumerate() {
+        let rule = if previous.is_some_and(|previous| wire.t_ps <= previous) {
+            Some(ScheduleRule::NotIncreasing)
+        } else if wire.t_ps == 0 {
+            Some(ScheduleRule::AtZero)
+        } else if wire.bytes.is_empty() {
+            Some(ScheduleRule::SameState)
+        } else {
+            None
+        };
+        if let Some(rule) = rule {
+            ok = false;
+            out.push(Diagnostic::NetlistSchedule {
+                part: part.clone(),
+                field: "console",
+                event: index,
+                rule,
+                end_ps: 0,
+            });
+        }
+        previous = Some(wire.t_ps);
+        events.push(Event {
+            at: Time::from_ps(wire.t_ps),
+            to: wire.bytes,
+        });
+    }
+    ok.then_some(events)
 }
 
 /// The firmware `wire` names, with `rom` beside a flash and absent beside an ELF.

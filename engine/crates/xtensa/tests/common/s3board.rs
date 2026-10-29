@@ -199,6 +199,9 @@ pub fn run_answering(
             board.serve(&mut core);
             continue;
         }
+        if stop == Stop::Spin {
+            continue;
+        }
         if let Stop::Unimplemented(missing) = stop
             && answer(&mut core, missing)
         {

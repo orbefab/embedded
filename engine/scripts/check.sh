@@ -33,3 +33,9 @@ rm -rf "$hello_run"
 cargo run -q -p sim-cli --locked -- run examples/esp32s3-hello/netlist.json --out "$hello_run" --blobs "$blobs" >/dev/null
 uv run scripts/esp32s3_hello.py --check "$hello_run"
 rm -rf "$hello_run"
+uv run scripts/esp32s3_screen.py --self-test
+screen_run="${CARGO_TARGET_DIR:-target}/esp32s3-screen-check"
+rm -rf "$screen_run"
+cargo run -q -p sim-cli --locked -- run examples/esp32s3-screen/netlist.json --out "$screen_run" --blobs "$blobs" >/dev/null
+uv run scripts/esp32s3_screen.py --check "$screen_run"
+rm -rf "$screen_run"

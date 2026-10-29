@@ -13,7 +13,7 @@ Private notes live in `~/notes/orbefab` (Orbefab/notes). Follow the `notes` skil
 - `crates/cli`, package `sim-cli`, is the `sim` binary.
 - `crates/avr`, package `sim-avr`, models the ATmega328P core. `sim-circuit` runs it for each `atmega328p` part.
 - `crates/xtensa`, package `sim-xtensa`, models the Xtensa core of the ESP32 and the ESP32-S3, with both generated opcode tables. `crates/xtensa/gen/regen.sh` regenerates the tables.
-- `crates/esp32`, package `sim-esp32`, models the ESP32-S3 around `sim-xtensa`: SRAM and RTC memory, GPIO and its matrix, the interrupt matrix, SYSTIMER, the watchdogs, SPI2, the USB Serial/JTAG console, and for a chip booted from flash the ROM, SPI1 and the flash, the MMU, the eFuses and the rest of the boot path, from the captured state in `crates/esp32/src/s3/boot/state.txt`. `sim-circuit` runs it for each `esp32s3` part. `scripts/esp32s3-firmware.sh` rebuilds the bare-metal programs of `examples/esp32s3-blink` and `examples/esp32s3-pattern`, and with ESP-IDF v5.5.5 the app and partition table of `examples/esp32s3-hello` from `firmware/esp32s3/idf`. `scripts/pattern_header.py` writes the pattern program's `pattern.h` from `pattern.json`. `scripts/blobs.sh` puts the ROM, which no example commits, into its cache folder and prints that folder.
+- `crates/esp32`, package `sim-esp32`, models the ESP32-S3 around `sim-xtensa`: SRAM and RTC memory, GPIO and its matrix, the interrupt matrix, SYSTIMER, the watchdogs, SPI2 and the GDMA channels that feed it, the SHA accelerator, LEDC's setup, the peripheral clock gates and resets, the USB Serial/JTAG console, and for a chip booted from flash the ROM, SPI1 and the flash, the MMU, the eFuses and the rest of the boot path, from the captured state in `crates/esp32/src/s3/boot/state.txt`. `sim-circuit` runs it for each `esp32s3` part. `scripts/esp32s3-firmware.sh` rebuilds the bare-metal programs of `examples/esp32s3-blink` and `examples/esp32s3-pattern`, and with ESP-IDF v5.5.5 the apps and partition tables of `examples/esp32s3-hello` and `examples/esp32s3-screen` from `firmware/esp32s3/idf`. `scripts/pattern_header.py` writes the pattern program's `pattern.h` from `pattern.json`. `scripts/blobs.sh` puts the ROM, which no example commits, into its cache folder and prints that folder.
 - `crates/bench`, package `sim-bench`, times native, WASI and browser Worker runs. It is not published.
 - `crates/wasm`, package `sim-wasm`, is the session and `sim run` for JavaScript. `scripts/wasm.sh` builds it, and `docs/wasm.md` is its guide.
 
@@ -33,9 +33,10 @@ uv run scripts/render_st77916.py --self-test
 uv run scripts/esp32s3_blink.py --self-test
 uv run scripts/pattern_header.py --check
 uv run scripts/esp32s3_hello.py --self-test
+uv run scripts/esp32s3_screen.py --self-test
 ```
 
-It then runs `sim run` on `examples/st77916-replay` and checks the folder with `scripts/render_st77916.py --check`, on `examples/esp32s3-blink` and checks that folder with `scripts/esp32s3_blink.py --check`, on `examples/esp32s3-pattern` and checks that folder with `scripts/render_st77916.py --pattern firmware/esp32s3/pattern.json --check`, and on `examples/esp32s3-hello` with the folder `scripts/blobs.sh` prints and checks that folder with `scripts/esp32s3_hello.py --check`. `scripts/blobs.sh` fetches the ROM when its cache lacks it.
+It then runs `sim run` on `examples/st77916-replay` and checks the folder with `scripts/render_st77916.py --check`, on `examples/esp32s3-blink` and checks that folder with `scripts/esp32s3_blink.py --check`, on `examples/esp32s3-pattern` and checks that folder with `scripts/render_st77916.py --pattern firmware/esp32s3/pattern.json --check`, and on `examples/esp32s3-hello` and `examples/esp32s3-screen` with the folder `scripts/blobs.sh` prints and checks those folders with `scripts/esp32s3_hello.py --check` and `scripts/esp32s3_screen.py --check`. `scripts/blobs.sh` fetches the ROM when its cache lacks it.
 
 The commit check needs ngspice-42 on `PATH`.
 

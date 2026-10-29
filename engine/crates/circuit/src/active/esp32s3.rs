@@ -102,7 +102,7 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
         .collect();
     signals.sort_unstable();
 
-    let chip = match &mcu.firmware {
+    let mut chip = match &mcu.firmware {
         Esp32s3Firmware::Elf(elf) => {
             let segments = elf
                 .segments()
@@ -129,6 +129,9 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
             s3::Esp32s3::boot(&gpios, boot)
         }
     };
+    for send in &mcu.console {
+        chip.receive(tick_at_or_after(send.at), &send.to);
+    }
     let mut core = Core {
         chip,
         image: vec![Drive::Off; gpios.len()],
@@ -157,6 +160,12 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
 /// The last tick at or before `at`.
 fn tick(at: Time) -> Tick {
     let ticks = u128::from(at.as_ps()) * u128::from(TICK_HZ) / 1_000_000_000_000;
+    Tick(u64::try_from(ticks).expect("a tick count fits in u64"))
+}
+
+/// The first tick at or after `at`.
+fn tick_at_or_after(at: Time) -> Tick {
+    let ticks = (u128::from(at.as_ps()) * u128::from(TICK_HZ)).div_ceil(1_000_000_000_000);
     Tick(u64::try_from(ticks).expect("a tick count fits in u64"))
 }
 
@@ -319,6 +328,12 @@ impl Core {
                 pc,
                 symbol: symbol(pc),
             },
+            Fault::Halted(pc) => Diagnostic::ChipHalted {
+                part,
+                at,
+                pc,
+                symbol: symbol(pc),
+            },
             Fault::Setting(setting, pc) => Diagnostic::ChipUnsupportedSetting {
                 part,
                 at,
@@ -330,6 +345,9 @@ impl Core {
             Fault::Refused(refused, pc) => {
                 let (peripheral, setting) = match refused {
                     Refused::Interrupt(peripheral) => (peripheral, ChipSetting::Interrupt),
+                    Refused::Register(peripheral, setting) => {
+                        (peripheral, ChipSetting::Register(setting))
+                    }
                     Refused::Sleep => ("RTC_CNTL", ChipSetting::Sleep),
                 };
                 Diagnostic::ChipUnsupportedSetting {
@@ -474,6 +492,20 @@ mod tests {
                 .map(sim_xtensa::Esp32s3::instruction_bus),
             [false, true, true, false]
         );
+    }
+
+    /// A console byte reaches the chip at the first tick at or after its time, never before.
+    #[test]
+    fn a_send_lands_on_the_first_tick_at_or_after_its_time() {
+        assert_eq!(tick_at_or_after(Time::from_ps(75_000)), Tick(36));
+        assert_eq!(tick_at_or_after(Time::from_ps(75_001)), Tick(37));
+        assert_eq!(tick_at_or_after(Time::from_ps(1)), Tick(1));
+        for ps in [1u64, 2083, 2084, 1_500_000_001] {
+            let Tick(at) = tick_at_or_after(Time::from_ps(ps));
+            let scaled = u128::from(ps) * u128::from(TICK_HZ);
+            assert!(u128::from(at) * 1_000_000_000_000 >= scaled, "{ps}");
+            assert!(u128::from(at - 1) * 1_000_000_000_000 < scaled, "{ps}");
+        }
     }
 
     #[test]

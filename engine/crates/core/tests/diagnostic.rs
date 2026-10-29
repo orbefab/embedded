@@ -131,7 +131,7 @@ fn samples() -> Vec<Diagnostic> {
         Diagnostic::ChipProtocol {
             part: part("lcd1"),
             at: Time::from_ps(4_000),
-            rule: ProtocolRule::SpiContinuation,
+            rule: ProtocolRule::PixelFormat,
         },
         Diagnostic::ChipLinkMiswired {
             part: part("lcd1"),
@@ -331,7 +331,7 @@ fn severity_refs_and_time_follow_the_variant() {
     let protocol = serde_json::to_string(by_code(&found, "chip.protocol")).unwrap();
     assert_eq!(
         protocol,
-        r##"{"code":"chip.protocol","severity":"warning","refs":["#lcd1"],"t_ps":4000,"message":"#lcd1 dropped a transfer that broke rule spi_continuation at 4000 ps, the first time","data":{"rule":"spi_continuation"}}"##
+        r##"{"code":"chip.protocol","severity":"warning","refs":["#lcd1"],"t_ps":4000,"message":"#lcd1 dropped a transfer that broke rule pixel_format at 4000 ps, the first time","data":{"rule":"pixel_format"}}"##
     );
     let miswired = serde_json::to_string(by_code(&found, "chip.link_miswired")).unwrap();
     assert_eq!(
@@ -506,6 +506,41 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
         "#u1 enabled a GDMA interrupt at 0x00000010, which the model never raises, at 5 ps"
     );
     assert_eq!(data["setting"], "interrupt");
+    let (message, data) = chip_json(setting(ChipSetting::Register("clock_off"), "GDMA"));
+    assert_eq!(
+        message,
+        "#u1 set GDMA clock_off at 0x00000010, which the model does not run, at 5 ps"
+    );
+    assert_eq!(
+        (&data["peripheral"], &data["setting"]),
+        (&serde_json::json!("GDMA"), &serde_json::json!("clock_off"))
+    );
+    let reset = ChipSetting::Register("reset_while_sending");
+    let (message, data) = chip_json(setting(reset, "GDMA"));
+    assert_eq!(
+        message,
+        "#u1 set GDMA reset_while_sending at 0x00000010, which the model does not run; ESP-IDF sets GDMA's reset when it restarts or panics, so the console holds any panic text, at 5 ps"
+    );
+    assert_eq!(data["setting"], "reset_while_sending");
+    let (message, _) = chip_json(setting(reset, "SPI2"));
+    assert_eq!(
+        message,
+        "#u1 set SPI2 reset_while_sending at 0x00000010, which the model does not run, at 5 ps"
+    );
+    let (message, data) = chip_json(Diagnostic::ChipHalted {
+        part: part("u1"),
+        at,
+        pc: 0x10,
+        symbol: Some("panic_abort+0x4".into()),
+    });
+    assert_eq!(
+        message,
+        "#u1 halted at 0x00000010 in panic_abort+0x4, a jump to itself that no interrupt or watchdog can leave, at 5 ps"
+    );
+    assert_eq!(
+        data,
+        serde_json::json!({ "pc": 0x10, "symbol": "panic_abort+0x4" })
+    );
     let (message, data) = chip_json(setting(ChipSetting::Sleep, "RTC_CNTL"));
     assert_eq!(
         message,
@@ -566,7 +601,7 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
     let (dropped, data) = chip_json(register(false));
     assert_eq!(
         message,
-        "#u1 wrote SYSTEM+0x20 at 0x600c0020, whose effect the model does not run, first at 5 ps from 0x00000010"
+        "#u1 wrote SYSTEM+0x20 at 0x600c0020, whose effect the model does not run, at 5 ps from 0x00000010"
     );
     assert_eq!(
         dropped,

@@ -419,30 +419,46 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
                 doc["diagnostics"]
             );
         } else if name == "esp32s3-hello" {
-            // The 8 registers the app touches that the model does not keep, the 3 reset and
-            // clock gate registers whose effect it does not run, then its reset.
-            let mut want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 11];
+            // The 8 registers the app touches that the model does not keep, the 9 writes whose
+            // effect it does not run: the one that sets the reset of SYSTEM_WDG at start-up, the
+            // pulses of the resets of SYSTIMER, TIMG0 and TIMG1 at start-up, and those of SPI0,
+            // SPI1 and SYSTIMER at the restart, then its reset.
+            let mut want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 17];
             want.push(("chip.restart".to_string(), "#u1".to_string()));
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
-            let kept: Vec<_> = doc["diagnostics"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|d| d["data"]["kept"] == true)
-                .collect();
-            assert_eq!(kept.len(), 3, "{name}: {}", doc["diagnostics"]);
-            for d in kept {
-                let message = d["message"].as_str().unwrap();
-                assert!(
-                    message.contains("whose effect the model does not run"),
-                    "{message}"
-                );
-            }
+            assert_kept_resets(&name, &doc, 9);
+        } else if name == "esp32s3-screen" {
+            // The 19 registers the app touches that the model does not keep, the write that sets
+            // the reset of SYSTEM_WDG at start-up, and the 6 writes that pulse the resets of
+            // SYSTIMER, TIMG0 and TIMG1 at start-up.
+            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 26];
+            assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
+            assert_kept_resets(&name, &doc, 7);
         } else {
             assert!(found.is_empty(), "{name}: {}", doc["diagnostics"]);
         }
         transient_folder(&name, &out);
         let _ = fs::remove_dir_all(&out);
+    }
+}
+
+/// That `doc` reports `count` writes to `SYSTEM_PERIP_RST_EN0_REG` whose effect the model does
+/// not run, and no other register it keeps.
+fn assert_kept_resets(name: &str, doc: &serde_json::Value, count: usize) {
+    let kept: Vec<_> = doc["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["data"]["kept"] == true)
+        .collect();
+    assert_eq!(kept.len(), count, "{name}: {}", doc["diagnostics"]);
+    for d in kept {
+        let message = d["message"].as_str().unwrap();
+        assert!(
+            message.contains("whose effect the model does not run"),
+            "{message}"
+        );
+        assert_eq!(d["data"]["register"], "SYSTEM+0x20", "{message}");
     }
 }
 

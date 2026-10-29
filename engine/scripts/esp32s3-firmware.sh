@@ -10,10 +10,13 @@
 # firmware/esp32s3. It needs xtensa-esp32s3-elf-gcc on PATH, or its path in XTENSA_ESP32S3_GCC.
 # Those blobs came from GCC 14.2.0, crosstool-NG esp-14.2.0_20260121.
 #
-# idf builds the hello_world app and partition table of examples/esp32s3-hello from
-# firmware/esp32s3/idf with ESP-IDF v5.5.5. It needs that IDF's export.sh sourced, so that
-# IDF_PATH is set and idf.py and its toolchain are on PATH. The build is reproducible, so it does
-# not depend on where the tree or the build lies.
+# idf builds the hello_world app and partition table of examples/esp32s3-hello, and the screen
+# app and partition table of examples/esp32s3-screen, from firmware/esp32s3/idf with ESP-IDF
+# v5.5.5. It needs that IDF's export.sh sourced, so that IDF_PATH is set and idf.py and its
+# toolchain are on PATH. The screen app also needs the components its dependencies.lock pins,
+# which IDF's component manager fetches or takes from IDF_COMPONENT_CACHE_PATH, and checks
+# against the pinned hashes. The builds are reproducible, so they do not depend on where the tree
+# or the build lies.
 #
 # With neither named, it builds both. Another compiler or IDF builds other bytes, and a build of
 # the engine reads only the committed blobs.
@@ -89,16 +92,23 @@ bare_metal() {
   file_blobs esp32s3-pattern elf "$work/pattern.elf"
 }
 
+# idf_build APP: builds firmware/esp32s3/idf/APP in the copy of the tree under $work/idf.
+idf_build() {
+  local project=$work/idf/$1
+  idf.py --project-dir "$project" --build-dir "$project/build" set-target esp32s3 >"$work/$1-set-target.log" 2>&1 ||
+    { cat "$work/$1-set-target.log" >&2; return 1; }
+  idf.py --project-dir "$project" --build-dir "$project/build" build >"$work/$1-build.log" 2>&1 ||
+    { cat "$work/$1-build.log" >&2; return 1; }
+}
+
 idf() {
   : "${IDF_PATH:?source ESP-IDF v5.5.5 export.sh first}"
-  local tree=$work/idf project=$work/idf/hello_world
-  cp -r "$root/firmware/esp32s3/idf" "$tree"
-  idf.py --project-dir "$project" --build-dir "$project/build" set-target esp32s3 >"$work/set-target.log" 2>&1 ||
-    { cat "$work/set-target.log" >&2; return 1; }
-  idf.py --project-dir "$project" --build-dir "$project/build" build >"$work/build.log" 2>&1 ||
-    { cat "$work/build.log" >&2; return 1; }
-  file_blobs esp32s3-hello flash "$project/build/partition_table/partition-table.bin" \
-    "$project/build/hello_world.bin"
+  local hello=$work/idf/hello_world/build screen=$work/idf/screen/build
+  cp -r "$root/firmware/esp32s3/idf" "$work/idf"
+  idf_build hello_world
+  idf_build screen
+  file_blobs esp32s3-hello flash "$hello/partition_table/partition-table.bin" "$hello/hello_world.bin"
+  file_blobs esp32s3-screen flash "$screen/partition_table/partition-table.bin" "$screen/screen.bin"
 }
 
 for group in "${groups[@]}"; do

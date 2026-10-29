@@ -105,6 +105,9 @@ pub fn run_in_pieces<C: Config, B: Bus>(
             None => limit,
         };
         let stop = core.run_until(bus, to);
+        if stop == Stop::Spin {
+            continue;
+        }
         if stop != Stop::Limit || to == limit {
             return stop;
         }

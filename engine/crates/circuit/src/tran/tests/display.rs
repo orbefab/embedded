@@ -292,8 +292,8 @@ fn a_transaction_on_other_data_nets_is_dropped_with_one_warning() {
     );
 }
 
-/// Data with no open command, a 24-bit command word, and pixels before COLMOD picks 16 bits
-/// each warn `chip.protocol` once, at the first, and write nothing. The pixel write after
+/// Command words a release cuts to 8 bits and to 24, and pixels before COLMOD picks 16 bits,
+/// warn `chip.protocol` once a rule, at its first time, and write nothing. The pixel write after
 /// COLMOD lands.
 #[test]
 fn each_broken_rule_warns_once_at_its_first_time() {
@@ -312,11 +312,7 @@ fn each_broken_rule_warns_once_at_its_first_time() {
     let netlist = panel_netlist(&events, "d1", US);
     let mut session = open(&netlist, Vec::new(), BUDGET);
     chunked(&mut session, STOP, 9);
-    let ends = [
-        US + 2 * BYTE_PS / 8,
-        3 * US + 24 * BYTE_PS / 8,
-        6 * US + (32 + 4) * BYTE_PS / 8,
-    ];
+    let ends = [US + 2 * BYTE_PS / 8, 6 * US + (32 + 4) * BYTE_PS / 8];
     let rule = |rule, at| Diagnostic::ChipProtocol {
         part: "#lcd1".parse().unwrap(),
         at: Time::from_ps(at),
@@ -325,9 +321,8 @@ fn each_broken_rule_warns_once_at_its_first_time() {
     assert_eq!(
         session.diagnostics(),
         [
-            rule(ProtocolRule::SpiContinuation, ends[0]),
-            rule(ProtocolRule::Command, ends[1]),
-            rule(ProtocolRule::PixelFormat, ends[2]),
+            rule(ProtocolRule::Command, ends[0]),
+            rule(ProtocolRule::PixelFormat, ends[1]),
         ]
     );
     assert_eq!(image(&session)[..4], [5, 6, 0, 0]);

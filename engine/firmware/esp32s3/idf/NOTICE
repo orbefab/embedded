@@ -1,9 +1,13 @@
-The app image and partition table in examples/esp32s3-hello/blobs are built from this directory
-by scripts/esp32s3-firmware.sh with ESP-IDF v5.5.5, the tag v5.5.5 of
-https://github.com/espressif/esp-idf, and its toolchain esp-14.2.0_20260121. Their source is not
-kept in this repository, and that tag and toolchain give it.
+The app images and partition tables in examples/esp32s3-hello/blobs and
+examples/esp32s3-screen/blobs are built from this directory by scripts/esp32s3-firmware.sh with
+ESP-IDF v5.5.5, the tag v5.5.5 of https://github.com/espressif/esp-idf, and its toolchain
+esp-14.2.0_20260121. Their source is not kept in this repository, and that tag and toolchain give
+it. The screen app also links three components from the ESP Component Registry,
+https://components.espressif.com, at the versions and hashes screen/dependencies.lock pins:
+lvgl/lvgl 9.3.0, espressif/esp_lcd_st77916 2.0.2, and espressif/cmake_utilities 0.5.3, which only
+the build uses.
 
-The app image links ESP-IDF's components. They are under the Apache License 2.0, whose text is
+The app images link ESP-IDF's components. They are under the Apache License 2.0, whose text is
 LICENSE-APACHE at the root of this repository, apart from the files whose headers name other
 terms. Among those, the FreeRTOS kernel is under the MIT License, reproduced with its notice in
 LICENSE-freertos, and the Xtensa core HAL under the notice reproduced in LICENSE-xtensa. The
@@ -11,10 +15,24 @@ FreeRTOS Xtensa port and the Xtensa interrupt, context and vector files are unde
 notice, with the line Copyright (c) 2015-2019 Cadence Design Systems, Inc. The TLSF heap
 allocator is under the BSD-3-Clause License, reproduced with its notice in LICENSE-tlsf, and the
 undefined behaviour sanitizer hooks under the BSD-2-Clause terms reproduced with their notice in
-LICENSE-ubsan. The image also holds routines of the toolchain's C library, newlib, under the
+LICENSE-ubsan. The images also hold routines of the toolchain's C library, newlib, under the
 notices of LICENSE-newlib, and of the compiler's support library, under the GCC Runtime Library
 Exception.
 
+The screen app links more. Its SHA-256 routines come from Mbed TLS, Copyright The Mbed TLS
+Contributors, which ESP-IDF carries under Apache-2.0 OR GPL-2.0-or-later, used here under the
+Apache License 2.0. esp_lcd_st77916 is under the Apache License 2.0, Copyright 2023-2024 Espressif
+Systems (Shanghai) CO LTD. LVGL is under the MIT License, reproduced with its notice in
+LICENSE-lvgl. LVGL's memory allocator is the same TLSF allocator, under LICENSE-tlsf, and its
+printf is Marco Paland's, under the MIT License reproduced with its notice in LICENSE-printf.
+The cubic-bezier routine of LVGL's src/misc/lv_math.c comes from the bezier-easing project, under
+the MIT License reproduced with its notice in LICENSE-bezier-easing. The image holds LVGL's
+Montserrat fonts at 14 and 48 px. Their Montserrat glyphs are under the SIL Open Font License 1.1,
+reproduced with the Montserrat Project Authors' notice in LICENSE-montserrat, and their symbol
+glyphs come from Font Awesome Free 5, whose fonts are under the same licence, reproduced with the
+Fonticons, Inc. notice in LICENSE-fontawesome.
+
 hello_world/main/hello_world_main.c is ESP-IDF's hello_world example, under CC0-1.0, with two
-lines added. The other sources and the scripts in this directory are under the repository's MIT or
-Apache-2.0 terms.
+lines added. screen/main/vendor_init.inc holds the panel maker's init sequence for the ST77916,
+the commands that examples/esp32s3-pattern also sends. The other sources and the scripts in this
+directory are under the repository's MIT or Apache-2.0 terms.

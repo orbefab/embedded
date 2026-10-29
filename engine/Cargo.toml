@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/core", "crates/circuit", "crates/cli", "crates/avr", "crates/xtensa", "crates/esp32", "crates/bench", "crates/wasm"]
 
 [workspace.package]
-version = "0.31.0"
+version = "0.32.0"
 edition = "2024"
 rust-version = "1.98"
 publish = false
@@ -27,3 +27,11 @@ wasm-bindgen = "=0.2.129"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+# The ESP32-S3 examples run every instruction of their firmware, so builds without optimisation
+# still optimise the core and the chip.
+[profile.dev.package.sim-xtensa]
+opt-level = 3
+
+[profile.dev.package.sim-esp32]
+opt-level = 3

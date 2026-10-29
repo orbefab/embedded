@@ -2,12 +2,12 @@
 //! takes `Spi` records on its CS and SCLK nets and `Duty` records on BLK, reads RST through a
 //! watch, and holds TE low. It never stops and never changes its image.
 //!
-//! A command is one 32-bit word, `opcode << 24 | command << 8`, in the phases before the data.
-//! `RAMWR` and `RAMWRC` take opcode 0x32 and four data lanes, and every other command takes
-//! opcode 0x02 and one. The opcode is checked on every command, and the lanes only when a
-//! transaction carries bytes. A transaction that ends with CS held leaves its command open, and
-//! the next data-only transaction continues it. The command closes when CS is released, when a new
-//! command arrives, or when RST goes low. A register command runs when it closes. A pixel write
+//! A command is one 32-bit word, `opcode << 24 | command << 8`, the first 32 bits CS carries,
+//! from a transaction's phases and then its bytes. `RAMWR` and `RAMWRC` take opcode 0x32 and
+//! four data lanes, and every other command takes opcode 0x02 and one. The opcode is checked on
+//! every command, and the lanes only on bytes past the word. A transaction that ends with CS held
+//! leaves its command open, and the next transaction's bytes continue it. The command closes when
+//! CS is released or when RST goes low. A register command runs when it closes. A pixel write
 //! puts each pixel in the frame memory as it arrives and adds a rectangle row when it closes.
 
 mod glass;
@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use sim_core::diagnostic::ProtocolRule;
 use sim_core::display::{Brightness, Flags, Panel, RectangleHash};
-use sim_core::link::{Cs, Duty, Lanes, LinkRow, RecordKind, Spi, SpiPhase};
+use sim_core::link::{Cs, Duty, Lanes, LinkRow, RecordKind, Spi};
 use sim_core::netlist::{NetId, PartId, St77916, Value};
 use sim_core::time::Time;
 
@@ -77,11 +77,7 @@ const MV: u8 = 0x20;
 /// COLMOD after a reset: 18 bits a pixel.
 const COLMOD_RESET: u8 = 0x66;
 
-const RULES: [ProtocolRule; 3] = [
-    ProtocolRule::Command,
-    ProtocolRule::SpiContinuation,
-    ProtocolRule::PixelFormat,
-];
+const RULES: [ProtocolRule; 2] = [ProtocolRule::Command, ProtocolRule::PixelFormat];
 
 pub(crate) fn chip(part: PartId, panel: &St77916) -> Chip {
     let pins = panel.pins;
@@ -183,20 +179,21 @@ impl Frame {
     }
 }
 
-/// What a transaction that ended with CS held left open.
+/// What CS has carried since it fell.
 #[derive(Clone, Debug, PartialEq)]
 enum Open {
-    Nothing,
+    /// The first `bits` bits of the command word, fewer than 32, as `word`.
+    Word { bits: u32, word: u32 },
     /// A register command and the bytes it has taken. It runs when it closes.
-    Register {
-        command: u8,
-        bytes: Vec<u8>,
-    },
+    Register { command: u8, bytes: Vec<u8> },
     /// A pixel write, in the window it began with.
     Pixels(Pixels),
-    /// A pixel write the model drops, with its data.
+    /// A command the model drops, with its data.
     Dropped,
 }
+
+/// CS released: no bit of the next command word yet.
+const IDLE: Open = Open::Word { bits: 0, word: 0 };
 
 #[derive(Clone, Debug, PartialEq)]
 struct Pixels {
@@ -279,7 +276,7 @@ pub(crate) struct Core {
     /// Pixel writes it closed that the seam has not taken.
     closed: Vec<Closed>,
     /// The first time each of `RULES` broke.
-    broke: [Option<Time>; 3],
+    broke: [Option<Time>; 2],
     /// The first time it dropped a transaction whose lanes sat elsewhere, and its sender, an
     /// index in the run's senders.
     miswired: Option<(Time, u16)>,
@@ -331,11 +328,11 @@ impl Core {
             lanes,
             reset: false,
             registers: Registers::reset(),
-            open: Open::Nothing,
+            open: IDLE,
             brightness: None,
             frame: Frame::new(),
             closed: Vec::new(),
-            broke: [None; 3],
+            broke: [None; 2],
             miswired: None,
         }
     }
@@ -350,7 +347,7 @@ impl Core {
         let low = !levels[0];
         if low && !self.reset {
             self.registers = Registers::reset();
-            self.open = Open::Nothing;
+            self.open = IDLE;
         }
         self.reset = low;
     }
@@ -427,38 +424,77 @@ impl Core {
             self.miswired.get_or_insert((at, sender));
             return;
         }
-        if spi.phases.is_empty() {
-            if matches!(self.open, Open::Nothing) {
-                self.broke(at, ProtocolRule::SpiContinuation);
-                return;
+        let mut data = &spi.data[..];
+        let Some(opened) = self.take_word(at, spi, &mut data) else {
+            if spi.cs == Cs::Released {
+                self.close(at);
             }
-            if !spi.data.is_empty()
-                && let Some(expect) = open_lanes(&self.open)
-                && spi.lanes != expect
-            {
-                self.broke(at, ProtocolRule::Command);
-                if spi.cs == Cs::Released {
-                    self.close(at);
-                }
-                return;
+            return;
+        };
+        if !data.is_empty()
+            && let Some(expect) = open_lanes(&self.open)
+            && spi.lanes != expect
+        {
+            self.broke(at, ProtocolRule::Command);
+            if opened {
+                self.open = Open::Dropped;
             }
-        } else {
-            self.close(at);
-            let has_data = !spi.data.is_empty();
-            self.open = match command(&spi.phases) {
-                Some((opcode, command)) if accept(opcode, command, spi.lanes, has_data) => {
-                    self.begin(at, command)
-                }
-                _ => {
-                    self.broke(at, ProtocolRule::Command);
-                    Open::Nothing
-                }
-            };
+            data = &[];
         }
-        self.feed(&spi.data);
+        self.feed(data);
         if spi.cs == Cs::Released {
             self.close(at);
         }
+    }
+
+    /// Takes the bits of the command word from the transaction's phases and then from the front
+    /// of `data`, and begins the command once all 32 have come. Whether this transaction began
+    /// it, or `None` when its phases run past the word or a bit of the word comes on more than
+    /// one lane, which drops the transaction.
+    fn take_word(&mut self, at: Time, spi: &Spi, data: &mut &[u8]) -> Option<bool> {
+        let Open::Word { mut bits, mut word } = self.open else {
+            if spi.phases.is_empty() {
+                return Some(false);
+            }
+            self.broke(at, ProtocolRule::Command);
+            return None;
+        };
+        for phase in &spi.phases {
+            bits += u32::from(phase.bits);
+            if bits > 32 || phase.lanes != Lanes::One {
+                self.broke(at, ProtocolRule::Command);
+                self.open = Open::Dropped;
+                return None;
+            }
+            word = word.unbounded_shl(u32::from(phase.bits)) | phase.value;
+        }
+        if bits < 32 && !data.is_empty() && spi.lanes != Lanes::One {
+            self.broke(at, ProtocolRule::Command);
+            self.open = Open::Dropped;
+            return None;
+        }
+        while bits < 32
+            && let Some((&byte, rest)) = data.split_first()
+        {
+            (bits, word, *data) = (bits + 8, word << 8 | u32::from(byte), rest);
+        }
+        if bits < 32 {
+            self.open = Open::Word { bits, word };
+            return Some(false);
+        }
+        let (opcode, command) = (word >> 24, (word >> 8) as u8);
+        let lanes = if matches!(command, RAMWR | RAMWRC) {
+            (OPCODE_PIXELS, Lanes::Four)
+        } else {
+            (OPCODE_REGISTER, Lanes::One)
+        };
+        self.open = if opcode != lanes.0 || (!data.is_empty() && spi.lanes != lanes.1) {
+            self.broke(at, ProtocolRule::Command);
+            Open::Dropped
+        } else {
+            self.begin(at, command)
+        };
+        Some(true)
     }
 
     /// Whether each lane the transaction uses sits on this chip's own data pin.
@@ -500,7 +536,7 @@ impl Core {
 
     fn feed(&mut self, data: &[u8]) {
         match &mut self.open {
-            Open::Nothing | Open::Dropped => {}
+            Open::Word { .. } | Open::Dropped => {}
             Open::Register { bytes, .. } => bytes.extend_from_slice(data),
             Open::Pixels(pixels) => {
                 pixels.bytes += data.len() as u64;
@@ -520,8 +556,9 @@ impl Core {
     }
 
     fn close(&mut self, at: Time) {
-        match std::mem::replace(&mut self.open, Open::Nothing) {
-            Open::Nothing | Open::Dropped => {}
+        match std::mem::replace(&mut self.open, IDLE) {
+            Open::Word { bits: 0, .. } | Open::Dropped => {}
+            Open::Word { .. } => self.broke(at, ProtocolRule::Command),
             Open::Pixels(pixels) => {
                 if pixels.bytes > 0 {
                     let Window { x0, y0, x1, y1 } = pixels.window;
@@ -588,34 +625,12 @@ impl Core {
     }
 }
 
-fn accept(opcode: u32, command: u8, lanes: Lanes, has_data: bool) -> bool {
-    let (want_opcode, want_lanes) = if matches!(command, RAMWR | RAMWRC) {
-        (OPCODE_PIXELS, Lanes::Four)
-    } else {
-        (OPCODE_REGISTER, Lanes::One)
-    };
-    opcode == want_opcode && (!has_data || lanes == want_lanes)
-}
-
 fn open_lanes(open: &Open) -> Option<Lanes> {
     match open {
         Open::Register { .. } => Some(Lanes::One),
         Open::Pixels(_) => Some(Lanes::Four),
-        Open::Dropped | Open::Nothing => None,
+        Open::Dropped | Open::Word { .. } => None,
     }
-}
-
-/// The opcode and the command of a 32-bit command word, `opcode << 24 | command << 8`, sent
-/// as the phases before the data. `None` when the phases are not 32 bits.
-fn command(phases: &[SpiPhase]) -> Option<(u32, u8)> {
-    let mut bits = 0u32;
-    let mut word = 0u64;
-    for phase in phases {
-        bits += u32::from(phase.bits);
-        word = (word << phase.bits) | u64::from(phase.value);
-    }
-    let word = u32::try_from(word).ok().filter(|_| bits == 32)?;
-    Some((word >> 24, (word >> 8) as u8))
 }
 
 /// The frame memory column and row of a pixel at `(column, row)`. MADCTL's MX mirrors the
@@ -651,7 +666,7 @@ fn advance(window: Window, (column, row): (u16, u16)) -> (u16, u16) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sim_core::link::{Lanes, Record, SpiNets};
+    use sim_core::link::{Lanes, Record, SpiNets, SpiPhase};
 
     fn lanes() -> [NetId; 4] {
         [NetId::GROUND; 4]
@@ -788,20 +803,126 @@ mod tests {
     }
 
     #[test]
-    fn data_with_no_open_command_breaks_spi_continuation_once() {
+    fn a_command_word_sent_as_bytes_opens_the_command_the_next_bytes_continue() {
+        let mut core = ready();
+        core.take(
+            Time::from_ps(1),
+            &[
+                spi(&[], &[0x02, 0x00, MADCTL, 0x00], Lanes::One, Cs::Held),
+                spi(&[], &[MX], Lanes::One, Cs::Released),
+                spi(&[(8, 0x32)], &[0x00, RAMWR, 0x00], Lanes::One, Cs::Held),
+                spi(&[], &[0x11, 0x22], Lanes::Four, Cs::Released),
+            ],
+        );
+        assert_eq!(core.panel().madctl, MX);
+        assert_eq!(pixel(&core.frame.image(), 359, 0), &[0x11, 0x22]);
+        assert_eq!(core.closed.len(), 1);
+        assert_eq!(core.broke_rules().count(), 0);
+        let mut split = ready();
+        split.take(
+            Time::from_ps(1),
+            &[spi(
+                &[],
+                &[0x02, 0x00, COLMOD, 0x00, 0x66],
+                Lanes::One,
+                Cs::Released,
+            )],
+        );
+        assert_eq!(split.panel().colmod, 0x66);
+        assert_eq!(split.broke_rules().count(), 0);
+    }
+
+    #[test]
+    fn a_command_word_a_release_cuts_short_or_phases_past_it_break_command() {
         let mut core = ready();
         core.take(
             Time::from_ps(5),
-            &[spi(&[], &[1], Lanes::One, Cs::Released)],
+            &[spi(&[], &[0x02, 0x00], Lanes::One, Cs::Released)],
         );
-        core.take(
-            Time::from_ps(9),
-            &[spi(&[], &[1], Lanes::One, Cs::Released)],
-        );
+        core.take(Time::from_ps(6), &[write(0x02, DISPON, &[])]);
+        assert!(core.panel().flags.display_on, "a release ends the cut word");
         assert_eq!(
             core.broke_rules().collect::<Vec<_>>(),
-            [(ProtocolRule::SpiContinuation, Time::from_ps(5))]
+            [(ProtocolRule::Command, Time::from_ps(5))]
         );
+        let mut past = ready();
+        past.take(
+            Time::from_ps(7),
+            &[spi(
+                &[(8, 0x02), (32, 0x0200_2900)],
+                &[],
+                Lanes::One,
+                Cs::Released,
+            )],
+        );
+        assert!(!past.panel().flags.display_on);
+        assert_eq!(
+            past.broke_rules().collect::<Vec<_>>(),
+            [(ProtocolRule::Command, Time::from_ps(7))]
+        );
+        let mut held = ready();
+        held.take(
+            Time::from_ps(8),
+            &[
+                spi(
+                    &[(8, 0x02), (24, u32::from(COLMOD) << 8)],
+                    &[],
+                    Lanes::One,
+                    Cs::Held,
+                ),
+                spi(
+                    &[(8, 0x02), (24, u32::from(DISPON) << 8)],
+                    &[],
+                    Lanes::One,
+                    Cs::Held,
+                ),
+                spi(&[], &[0x66], Lanes::One, Cs::Released),
+            ],
+        );
+        assert!(
+            !held.panel().flags.display_on,
+            "phases inside a command are dropped"
+        );
+        assert_eq!(held.panel().colmod, 0x66);
+        assert_eq!(
+            held.broke_rules().collect::<Vec<_>>(),
+            [(ProtocolRule::Command, Time::from_ps(8))]
+        );
+    }
+
+    #[test]
+    fn a_command_word_on_more_than_one_lane_breaks_command() {
+        let quad_bytes = spi(&[], &[0x02, 0x00, DISPON, 0x00], Lanes::Four, Cs::Released);
+        let mut quad_phase = spi(
+            &[(8, 0x02), (24, u32::from(DISPON) << 8)],
+            &[],
+            Lanes::One,
+            Cs::Released,
+        );
+        if let RecordKind::Spi(spi) = &mut quad_phase.record.kind {
+            spi.phases[1].lanes = Lanes::Four;
+        }
+        for (k, row) in [quad_bytes, quad_phase].into_iter().enumerate() {
+            let mut core = ready();
+            core.take(Time::from_ps(9), &[row]);
+            assert!(!core.panel().flags.display_on, "case {k}");
+            assert_eq!(
+                core.broke_rules().collect::<Vec<_>>(),
+                [(ProtocolRule::Command, Time::from_ps(9))],
+                "case {k}"
+            );
+        }
+        let mut one = ready();
+        one.take(
+            Time::from_ps(9),
+            &[spi(
+                &[],
+                &[0x02, 0x00, DISPON, 0x00],
+                Lanes::One,
+                Cs::Released,
+            )],
+        );
+        assert!(one.panel().flags.display_on);
     }
 
     #[test]
@@ -889,6 +1010,7 @@ mod tests {
         );
         assert_eq!(core.panel().colmod, 0x55);
         let mut pixels = ready();
+        pixels.take(Time::from_ps(2), &[write(0x32, RAMWR, &[9, 9])]);
         pixels.take(
             Time::from_ps(3),
             &[spi(
@@ -898,8 +1020,15 @@ mod tests {
                 Cs::Released,
             )],
         );
-        assert!(pixels.closed.is_empty());
-        assert_eq!(pixel(&pixels.frame.image(), 0, 0), &[0, 0]);
+        pixels.take(Time::from_ps(4), &[write(0x32, RAMWRC, &[3, 4])]);
+        assert_eq!(pixels.closed.len(), 2);
+        let image = pixels.frame.image();
+        assert_eq!(pixel(&image, 0, 0), &[9, 9]);
+        assert_eq!(
+            pixel(&image, 1, 0),
+            &[3, 4],
+            "the dropped RAMWR left the cursor"
+        );
         assert_eq!(
             pixels.broke_rules().collect::<Vec<_>>(),
             [(ProtocolRule::Command, Time::from_ps(3))]
@@ -1105,23 +1234,5 @@ mod tests {
             core.broke_rules().collect::<Vec<_>>(),
             [(ProtocolRule::Command, Time::from_ps(2))]
         );
-    }
-
-    #[test]
-    fn a_command_word_is_32_bits_of_phases() {
-        assert_eq!(
-            command(&[phase(8, 0x32), phase(24, 0x2c00)]),
-            Some((0x32, 0x2c))
-        );
-        assert_eq!(command(&[phase(32, 0x0211_2200)]), Some((0x02, 0x22)));
-        assert_eq!(command(&[phase(8, 0x02), phase(16, 0x2c00)]), None);
-    }
-
-    fn phase(bits: u8, value: u32) -> SpiPhase {
-        SpiPhase {
-            bits,
-            lanes: Lanes::One,
-            value,
-        }
     }
 }

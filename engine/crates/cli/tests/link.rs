@@ -68,7 +68,7 @@ fn expected_rows(part: &serde_json::Value) -> Vec<(u64, String, String)> {
             end,
             name.to_string(),
             format!(
-                "{end},{start},{name},CS,spi,{},{},{},{hash}",
+                "{end},{start},{name},CS,spi,{},{},{},{hash},{lanes}",
                 event["cs"].as_str().unwrap(),
                 phases.join(" "),
                 bytes.len()
@@ -79,7 +79,7 @@ fn expected_rows(part: &serde_json::Value) -> Vec<(u64, String, String)> {
 }
 
 fn csv(rows: &[(u64, String, String)]) -> String {
-    let mut text = String::from("t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash\n");
+    let mut text = String::from("t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash,lanes\n");
     for (_, _, row) in rows {
         text.push_str(row);
         text.push('\n');

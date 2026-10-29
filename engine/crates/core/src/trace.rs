@@ -713,7 +713,7 @@ mod tests {
         assert_eq!(files[0].1, index);
         assert_eq!(
             files[5].1,
-            b"t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash\n"
+            b"t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash,lanes\n"
         );
     }
 

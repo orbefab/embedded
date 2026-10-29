@@ -168,11 +168,11 @@ fn a_receiver_takes_each_record_once_in_any_part_order_and_any_chunking() {
     assert_eq!(rows.len(), 7, "{}", csvs[0]);
     assert_eq!(
         rows[1],
-        format!("{T0},{T0},alpha,CS,spi,released,,1,{}", hash(&[0xb0]))
+        format!("{T0},{T0},alpha,CS,spi,released,,1,{},1", hash(&[0xb0]))
     );
     assert_eq!(
         rows[2],
-        format!("{T0},{T0},zeta,CS,spi,released,,1,{}", hash(&[0xa0]))
+        format!("{T0},{T0},zeta,CS,spi,released,,1,{},1", hash(&[0xa0]))
     );
     assert!(csvs.iter().all(|csv| *csv == csvs[0]));
 }

@@ -801,3 +801,85 @@ fn elf(addr: u32, entry: u32, image: &[u8], symbols: &[(&str, u32)]) -> Vec<u8> 
     }
     file
 }
+
+/// Polls `USB_SERIAL_JTAG_EP1_CONF_REG` until `SERIAL_OUT_EP_DATA_AVAIL`, takes the byte from
+/// `USB_SERIAL_JTAG_EP1_REG`, writes it back and `WR_DONE`, and polls again.
+const ECHO: [u8; 24] = [
+    0x21, 0xff, 0xff, // l32r a2 <- USB_SERIAL_JTAG
+    0x32, 0x22, 0x01, // l32i a3, a2, 4
+    0x27, 0x63, 0xf9, // bbci a3, 2, back to the l32i
+    0x42, 0x22, 0x00, // l32i a4, a2, 0
+    0x42, 0x62, 0x00, // s32i a4, a2, 0
+    0x52, 0xa0, 0x01, // movi a5, 1
+    0x52, 0x62, 0x01, // s32i a5, a2, 4
+    0x86, 0xfa, 0xff, // j back to the first l32i
+];
+
+#[test]
+fn the_console_reads_each_byte_the_host_sends_from_its_time_on() {
+    let bytes = program(&[0x6003_8000], &ECHO);
+    let mut netlist = netlist_for(&bytes, 20_000_000_000);
+    netlist["parts"][1]["console"] = serde_json::json!([
+        { "t_ps": 1_000_000_000u64, "bytes": [65, 66] },
+        { "t_ps": 1_500_000_001u64, "bytes": [67] },
+    ]);
+    let dir = scratch("console-echo");
+    let blobs = dir.join("blobs");
+    fs::create_dir_all(&blobs).unwrap();
+    fs::write(blobs.join(Sha256::of(&bytes).to_string()), &bytes).unwrap();
+    let (code, doc) = run(&dir, &netlist, &[]);
+    assert_eq!(code, 0, "{doc}");
+    let serial = fs::read_to_string(dir.join("out/traces/serial.csv")).unwrap();
+    let rows: Vec<(u64, u8)> = serial
+        .lines()
+        .skip(1)
+        .map(|row| {
+            let fields: Vec<&str> = row.split(',').collect();
+            (fields[0].parse().unwrap(), fields[3].parse().unwrap())
+        })
+        .collect();
+    let echoed: Vec<u8> = rows.iter().map(|&(_, byte)| byte).collect();
+    assert_eq!(echoed, b"ABC", "{serial}");
+    assert!(
+        rows[0].0 > 1_000_000_000 && rows[1].0 > rows[0].0,
+        "{serial}"
+    );
+    assert!(rows[2].0 > 1_500_000_001, "{serial}");
+}
+
+#[test]
+fn a_console_send_at_t_0_out_of_order_or_empty_is_a_schedule_error() {
+    let bytes = program(&[], &IDLE);
+    let cases = [
+        (
+            serde_json::json!([{ "t_ps": 0, "bytes": [1] }]),
+            0,
+            "at_zero",
+        ),
+        (
+            serde_json::json!([{ "t_ps": 5, "bytes": [1] }, { "t_ps": 5, "bytes": [2] }]),
+            1,
+            "not_increasing",
+        ),
+        (
+            serde_json::json!([{ "t_ps": 5, "bytes": [] }]),
+            0,
+            "same_state",
+        ),
+    ];
+    for (console, event, rule) in cases {
+        let mut netlist = netlist_for(&bytes, 20_000_000_000);
+        netlist["parts"][1]["console"] = console;
+        let dir = scratch(&format!("console-{rule}"));
+        let blobs = dir.join("blobs");
+        fs::create_dir_all(&blobs).unwrap();
+        fs::write(blobs.join(Sha256::of(&bytes).to_string()), &bytes).unwrap();
+        let (code, doc) = run(&dir, &netlist, &[]);
+        assert_eq!(code, 1, "{doc}");
+        let found = diagnostics(&doc);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0]["code"], "netlist.schedule");
+        assert_eq!(found[0]["data"]["event"], event, "{rule}");
+        assert_eq!(found[0]["data"]["rule"], rule);
+    }
+}

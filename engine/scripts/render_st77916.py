@@ -41,7 +41,7 @@ not compared. `traces/display-<part>.rgb565` must equal the expected image byte 
 `flags`, `madctl` and `colmod` must equal the panel's. The check fails when the expected rows
 are none, and when the expected image is a blank one. For a pattern, each row of
 `traces/link.csv` must also equal its expected row on `part`, `pin`, `kind`, `cs`, `phases`,
-`bytes` and `hash`, in order.
+`bytes`, `hash` and `lanes`, in order.
 
 The panel model, written from the MIPI DCS command set and the ST77916 QSPI framing:
 
@@ -77,7 +77,7 @@ from typing import NamedTuple
 WIDTH = 360
 HEIGHT = 360
 HEADER = ["part", "x0", "y0", "x1", "y1", "bytes", "hash"]
-LINK_HEADER = ["t_ps", "start_ps", "part", "pin", "kind", "cs", "phases", "bytes", "hash"]
+LINK_HEADER = ["t_ps", "start_ps", "part", "pin", "kind", "cs", "phases", "bytes", "hash", "lanes"]
 BUFFER = 64
 CS_PIN = "GPIO12"
 PATTERN = Path(__file__).resolve().parent.parent / "firmware/esp32s3/pattern.json"
@@ -302,15 +302,25 @@ def link_rows(sender, pin, events):
     for event in events:
         phases = " ".join(f"{p['bits']}/{p['lanes']}:{p['value']:0{-(-p['bits'] // 4)}x}" for p in event["phases"])
         payload = bytes(event["bytes"])
-        rows.append([sender, pin, "spi", event["cs"], phases, str(len(payload)), hashlib.sha256(payload).hexdigest()[:16]])
+        rows.append([sender, pin, "spi", event["cs"], phases, str(len(payload)), hashlib.sha256(payload).hexdigest()[:16],
+                     str(event["lanes"])])
     return rows
 
 
+def columns(run_csv, names):
+    """The cells of each row of `run_csv` under the header names `names`, in that order, or the
+    first of them the header lacks. Any other column is ignored."""
+    reader = csv.DictReader(io.StringIO(run_csv))
+    missing = [name for name in names if name not in (reader.fieldnames or [])]
+    if missing:
+        return missing[0]
+    return [[row[name] for name in names] for row in reader]
+
+
 def compare_link(rows, run_csv):
-    lines = run_csv.splitlines()
-    if not lines or lines[0] != ",".join(LINK_HEADER):
-        return ["link.csv has the wrong header"]
-    got = [line.split(",")[2:] for line in lines[1:]]
+    got = columns(run_csv, LINK_HEADER[2:])
+    if isinstance(got, str):
+        return [f"link.csv has no column {got}"]
     if got == rows:
         return []
     at = next((k for k, (g, r) in enumerate(zip(got, rows)) if g != r), min(len(got), len(rows)))
@@ -348,12 +358,11 @@ def compare(part, rows, image, state, run_csv, run_image, entry):
         problems.append("the replay list gives no row")
     if hashlib.sha256(image).digest() == hashlib.sha256(blank).digest():
         problems.append("the expected image is blank")
-    lines = run_csv.splitlines()
-    if not lines or lines[0] != "t_ps," + ",".join(HEADER):
-        problems.append("display.csv has the wrong header")
-    got = [line.split(",")[1:] for line in lines[1:]]
+    got = columns(run_csv, HEADER)
     want = [[part, *map(str, row)] for row in rows]
-    if got != want:
+    if isinstance(got, str):
+        problems.append(f"display.csv has no column {got}")
+    elif got != want:
         problems.append(f"display.csv has {len(got)} rows that differ from the {len(want)} expected")
     if run_image != image:
         problems.append("the image differs from the expected image")
@@ -459,6 +468,9 @@ def pattern_self_test():
     assert compare("lcd1", rows, image, state, header, image, entry), "a run with no row fails"
     assert compare("lcd1", rows, image, state, header + "".join(lines[:-1]), image, entry), "a missing row fails"
     assert compare("lcd1", rows, image, state, run_csv + lines[-1], image, entry), "an extra row fails"
+    wider = "".join(line.rstrip("\n") + ",x\n" for line in (header, *lines))
+    assert compare("lcd1", rows, image, state, wider, image, entry) == [], "a column past the known ones is ignored"
+    assert compare("lcd1", rows, image, state, run_csv.replace(",hash", ",sha", 1), image, entry), "a lost column fails"
     blank = bytes(len(image))
     assert compare("lcd1", rows, image, state, run_csv, blank, entry_for(state, hashlib.sha256(blank).hexdigest())), "a blank final image fails"
     flat = {**doc, "rects": [{**doc["rects"][0], "fill": "bars", "colors": [0x1234, 0x1234]}]}
@@ -472,11 +484,17 @@ def pattern_self_test():
     link_header = ",".join(LINK_HEADER) + "\n"
     link = [f"{k},{k},{','.join(row)}\n" for k, row in enumerate(want)]
     assert compare_link(want, link_header + "".join(link)) == [], "the right link.csv passes"
+    wider = "".join(line.rstrip("\n") + ",x\n" for line in (link_header, *link))
+    assert compare_link(want, wider) == [], "a column past the known ones is ignored"
+    assert compare_link(want, link_header.replace(",lanes", "") + "".join(link)), "a link.csv with no lanes column fails"
     assert compare_link(want, link_header), "a link.csv with no row fails"
     assert compare_link(want, link_header + "".join(link[:-1])), "a missing transfer fails"
     assert compare_link(want, link_header + "".join(link) + link[-1]), "an extra transfer fails"
     changed = link_header + "".join(link[:2]) + link[2].replace(",u1,", ",u9,", 1) + "".join(link[3:])
     assert "row 2 is " in compare_link(want, changed)[0], "a changed transfer is named by its row"
+    relaned = link_header + "".join(link[:-1]) + link[-1].rsplit(",", 1)[0] + ",1\n"
+    assert (want[0][-1], want[-1][-1]) == ("1", "4"), "a register write goes on one lane, colour on four"
+    assert compare_link(want, relaned), "a transfer on other lanes fails"
     print(f"pattern self-test ok: {len(rows)} rows, {len(want)} transfers, image sha256 {sha}")
 
 

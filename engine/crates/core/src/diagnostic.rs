@@ -105,6 +105,8 @@ pub enum ChipSetting {
     Transfer(&'static str),
     /// An interrupt of the peripheral that the model never raises.
     Interrupt,
+    /// A register setting, by name, that the model does not run.
+    Register(&'static str),
     /// Sleep.
     Sleep,
 }
@@ -113,6 +115,7 @@ impl ChipSetting {
     pub fn name(self) -> &'static str {
         match self {
             ChipSetting::Transfer(name) => name,
+            ChipSetting::Register(name) => name,
             ChipSetting::Interrupt => "interrupt",
             ChipSetting::Sleep => "sleep",
         }
@@ -221,12 +224,10 @@ pub enum WaveformRule {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProtocolRule {
-    /// A command the model does not run: a command word that is not 32 bits, an opcode other
-    /// than the one that command takes, data lanes that do not match that opcode, too few
-    /// parameter bytes, or a window past the panel.
+    /// A command the model does not run: a command word cut short by a release of CS, phases
+    /// past the command word, an opcode other than the one that command takes, data lanes that
+    /// do not match that opcode, too few parameter bytes, or a window past the panel.
     Command,
-    /// A data-only SPI transaction with no open command.
-    SpiContinuation,
     /// Pixels while the pixel format is not 16 bits.
     PixelFormat,
     /// An I2C target's SDA change came due while SCL was high, so SDA stayed.
@@ -370,6 +371,15 @@ pub enum Diagnostic {
     },
     /// A chip's core fetched code at `pc`, where the model maps no memory. It ends the run.
     ChipUnmappedFetch {
+        part: Ref,
+        at: Time,
+        pc: u32,
+        symbol: Option<String>,
+    },
+    /// A chip's core reached a jump to itself at `pc` that nothing can take it out of: every
+    /// enabled interrupt at or below the core's level, no source on the NMI, and no watchdog
+    /// running. It ends the run.
+    ChipHalted {
         part: Ref,
         at: Time,
         pc: u32,
@@ -544,6 +554,7 @@ impl Diagnostic {
             Diagnostic::ChipLinkMiswired { .. } => "chip.link_miswired",
             Diagnostic::ChipUnsupportedInstruction { .. } => "chip.unsupported_instruction",
             Diagnostic::ChipUnmappedFetch { .. } => "chip.unmapped_fetch",
+            Diagnostic::ChipHalted { .. } => "chip.halted",
             Diagnostic::ChipUnsupportedSetting { .. } => "chip.unsupported_setting",
             Diagnostic::ChipWatchdog { .. } => "chip.watchdog",
             Diagnostic::ChipEfuseProgram { .. } => "chip.efuse_program",
@@ -593,6 +604,7 @@ impl Diagnostic {
             | Diagnostic::ChipUnsettled { .. }
             | Diagnostic::ChipUnsupportedInstruction { .. }
             | Diagnostic::ChipUnmappedFetch { .. }
+            | Diagnostic::ChipHalted { .. }
             | Diagnostic::ChipUnsupportedSetting { .. }
             | Diagnostic::ChipWatchdog { .. }
             | Diagnostic::ChipEfuseProgram { .. }
@@ -616,6 +628,7 @@ impl Diagnostic {
             | Diagnostic::ChipLinkMiswired { at, .. }
             | Diagnostic::ChipUnsupportedInstruction { at, .. }
             | Diagnostic::ChipUnmappedFetch { at, .. }
+            | Diagnostic::ChipHalted { at, .. }
             | Diagnostic::ChipUnsupportedSetting { at, .. }
             | Diagnostic::ChipWatchdog { at, .. }
             | Diagnostic::ChipEfuseProgram { at, .. }
@@ -675,6 +688,7 @@ impl Diagnostic {
             | Diagnostic::ChipLinkMiswired { part, .. }
             | Diagnostic::ChipUnsupportedInstruction { part, .. }
             | Diagnostic::ChipUnmappedFetch { part, .. }
+            | Diagnostic::ChipHalted { part, .. }
             | Diagnostic::ChipUnsupportedSetting { part, .. }
             | Diagnostic::ChipWatchdog { part, .. }
             | Diagnostic::ChipEfuseProgram { part, .. }
@@ -1047,6 +1061,16 @@ impl Diagnostic {
                 symbol_text(symbol),
                 at.as_ps()
             ),
+            Diagnostic::ChipHalted {
+                part,
+                at,
+                pc,
+                symbol,
+            } => format!(
+                "{part} halted at {pc:#010x}{}, a jump to itself that no interrupt or watchdog can leave, at {} ps",
+                symbol_text(symbol),
+                at.as_ps()
+            ),
             Diagnostic::ChipUnsupportedSetting {
                 part,
                 at,
@@ -1060,10 +1084,14 @@ impl Diagnostic {
                         format!("started a {peripheral} transfer with setting {setting}")
                     }
                     ChipSetting::Interrupt => format!("enabled a {peripheral} interrupt"),
+                    ChipSetting::Register(setting) => format!("set {peripheral} {setting}"),
                     ChipSetting::Sleep => "put the chip to sleep".to_string(),
                 };
-                let why = match setting {
-                    ChipSetting::Interrupt => "which the model never raises",
+                let why = match (*peripheral, *setting) {
+                    (_, ChipSetting::Interrupt) => "which the model never raises",
+                    ("GDMA", ChipSetting::Register("reset_while_sending")) => {
+                        "which the model does not run; ESP-IDF sets GDMA's reset when it restarts or panics, so the console holds any panic text"
+                    }
                     _ => "which the model does not run",
                 };
                 format!(
@@ -1198,12 +1226,12 @@ impl Diagnostic {
                 write,
                 kept,
             } => format!(
-                "{part} {} {register} at {address:#010x}, {}, first at {} ps from {pc:#010x}{}",
+                "{part} {} {register} at {address:#010x}, {} {} ps from {pc:#010x}{}",
                 if *write { "wrote" } else { "read" },
                 if *kept {
-                    "whose effect the model does not run"
+                    "whose effect the model does not run, at"
                 } else {
-                    "which the model does not keep"
+                    "which the model does not keep, first at"
                 },
                 at.as_ps(),
                 symbol_text(symbol)
@@ -1346,7 +1374,8 @@ impl Diagnostic {
                 symbol,
                 ..
             } => serde_json::json!({ "op": op, "pc": pc, "reason": reason, "symbol": symbol }),
-            Diagnostic::ChipUnmappedFetch { pc, symbol, .. } => {
+            Diagnostic::ChipUnmappedFetch { pc, symbol, .. }
+            | Diagnostic::ChipHalted { pc, symbol, .. } => {
                 serde_json::json!({ "pc": pc, "symbol": symbol })
             }
             Diagnostic::ChipUnsupportedSetting {

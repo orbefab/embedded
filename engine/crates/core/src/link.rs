@@ -2,15 +2,16 @@
 //!
 //! ```text
 //! traces/link.csv   when a chip in the netlist can send records
-//!   t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash
-//!   <end ps>,<start ps>,<sender part name>,<sender pin>,<spi, pulses or duty>,<cs>,<phases>,<bytes>,<hash>
+//!   t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash,lanes
+//!   <end ps>,<start ps>,<sender part name>,<sender pin>,<spi, pulses or duty>,<cs>,<phases>,<bytes>,<hash>,<lanes>
 //! ```
 //!
 //! A `spi` row's `cs` is `held` or `released`, its `phases` are its phases before the data,
-//! each `<bits>/<lanes>:<value in hex>`, separated by spaces, and its `bytes` and `hash` are the
-//! data's length and the first 16 hex digits of the data's SHA-256. A `pulses` row's `phases`
-//! is `idle=0` or `idle=1`, and its `bytes` and `hash` cover each pulse as its level byte, then
-//! its duration in picoseconds as a little-endian `u64`. A `duty` row's `phases` is
+//! each `<bits>/<lanes>:<value in hex>`, separated by spaces, its `bytes` and `hash` are the
+//! data's length and the first 16 hex digits of the data's SHA-256, and its `lanes` are the
+//! data's lanes. A `pulses` row's `phases` is `idle=0` or `idle=1`, and its `bytes` and `hash`
+//! cover each pulse as its level byte, then its duration in picoseconds as a little-endian
+//! `u64`. A `duty` row's `phases` is
 //! `<duty>/<steps>@<hz>`. Every other cell is empty.
 
 use std::fmt::Write;
@@ -157,7 +158,7 @@ impl Link {
     /// The bytes of `link.csv`. The header, then one row per record in order, each line ended
     /// by `\n`. A duty whose resolution is 32 or more is [`LinkError::Resolution`].
     pub fn csv(&self) -> Result<Vec<u8>, LinkError> {
-        let mut text = String::from("t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash\n");
+        let mut text = String::from("t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash,lanes\n");
         for row in &self.rows {
             let record = &row.record;
             let part = self.senders[usize::from(row.sender)].as_str();
@@ -178,10 +179,11 @@ impl Link {
                     let phases: Vec<String> = spi.phases.iter().map(phase).collect();
                     writeln!(
                         text,
-                        "spi,{cs},{},{},{}",
+                        "spi,{cs},{},{},{},{}",
                         phases.join(" "),
                         spi.data.len(),
-                        hash(&spi.data)
+                        hash(&spi.data),
+                        spi.lanes.count()
                     )
                 }
                 RecordKind::Pulses(pulses) => {
@@ -194,7 +196,7 @@ impl Link {
                         .collect();
                     writeln!(
                         text,
-                        "pulses,,idle={},{},{}",
+                        "pulses,,idle={},{},{},",
                         u8::from(pulses.idle),
                         payload.len(),
                         hash(&payload)
@@ -202,7 +204,7 @@ impl Link {
                 }
                 RecordKind::Duty(duty) => writeln!(
                     text,
-                    "duty,,{}/{}@{},,",
+                    "duty,,{}/{}@{},,,",
                     duty.duty,
                     duty_steps(duty.resolution)?,
                     duty.hz
@@ -319,10 +321,10 @@ mod tests {
         assert_eq!(
             csv,
             format!(
-                "t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash\n\
-                 500,400,rp1,CS,spi,held,8/1:02 24/1:002c00,3,{}\n\
-                 900,600,u2,GPIO0,pulses,,idle=0,18,{}\n\
-                 1000,1000,u2,GPIO21,duty,,512/1024@5000,,\n",
+                "t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash,lanes\n\
+                 500,400,rp1,CS,spi,held,8/1:02 24/1:002c00,3,{},4\n\
+                 900,600,u2,GPIO0,pulses,,idle=0,18,{},\n\
+                 1000,1000,u2,GPIO21,duty,,512/1024@5000,,,\n",
                 hash(b"abc"),
                 hash(&pulses),
             )
@@ -340,7 +342,7 @@ mod tests {
         let link = Link::new(vec![Name::new("rp1").unwrap()], Vec::new());
         assert_eq!(
             link.csv().unwrap(),
-            b"t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash\n"
+            b"t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash,lanes\n"
         );
     }
 

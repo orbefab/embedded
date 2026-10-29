@@ -276,12 +276,12 @@ function replayCsv(json) {
       const start = BigInt(event.t_ps);
       const end = start + (cycles * 1_000_000_000_000n) / clock;
       const hash = createHash('sha256').update(Buffer.from(event.bytes)).digest('hex').slice(0, 16);
-      const row = `${end},${start},${part.name},CS,spi,${event.cs},${phases.join(' ')},${event.bytes.length},${hash}`;
+      const row = `${end},${start},${part.name},CS,spi,${event.cs},${phases.join(' ')},${event.bytes.length},${hash},${event.lanes}`;
       rows.push({ end, name: part.name, row });
     }
   }
   rows.sort((a, b) => (a.end !== b.end ? (a.end < b.end ? -1 : 1) : a.name < b.name ? -1 : 1));
-  return ['t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash', ...rows.map(({ row }) => row)].join('\n') + '\n';
+  return ['t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash,lanes', ...rows.map(({ row }) => row)].join('\n') + '\n';
 }
 
 // `link.csv` of each folder is the event list's, for a netlist with a `spi_replay` part.

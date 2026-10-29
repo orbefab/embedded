@@ -50,6 +50,10 @@ pub enum Stop {
     Bus,
     /// The next instruction needs behavior this core does not model. The core stopped before it.
     Unimplemented(Unimplemented),
+    /// The next instruction is a `J` to itself, and no interrupt `INTENABLE` enables sits above
+    /// `CINTLEVEL`, so only the NMI line can take the core out. The core stopped before it, and
+    /// does not stop there again until it takes an exception or an interrupt.
+    Spin,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,6 +164,9 @@ pub struct Core<C: Config> {
     /// The S3's `q0` to `q7`, each as four words, lowest first.
     q: [[u32; 4]; 8],
     disabled: Option<CoprocessorDisabled>,
+    /// The core stopped before the jump to itself at its PC, with [`Stop::Spin`], and has not
+    /// taken a vector since.
+    spun: bool,
     /// The access rights of each 512 MB region, for instruction fetches and then for loads and
     /// stores, as `witlb` and `wdtlb` leave them.
     regions: [[u8; 8]; 2],
@@ -200,6 +207,7 @@ impl<C: Config> Core<C> {
             fr: [0; 16],
             q: [[0; 4]; 8],
             disabled: None,
+            spun: false,
             regions: [[REGION_RESET; 8]; 2],
             chip: PhantomData,
         };
@@ -217,6 +225,7 @@ impl<C: Config> Core<C> {
     }
 
     pub fn set_pc(&mut self, pc: u32) {
+        self.spun = false;
         self.pc = pc;
     }
 
@@ -402,6 +411,14 @@ impl<C: Config> Core<C> {
         rose & interrupts.nmi != 0
     }
 
+    /// Whether no interrupt `INTENABLE` enables sits on a level above `CINTLEVEL`, below the NMI.
+    fn masks_every_interrupt(&self) -> bool {
+        let enabled = self.sr[Sr::IntEnable as usize];
+        let by_level = const { C::INTERRUPTS.by_level() };
+        (self.cintlevel() + 1..C::INTERRUPTS.nmi_level)
+            .all(|level| enabled & by_level[level as usize] == 0)
+    }
+
     /// The highest level above `CINTLEVEL` with an enabled pending interrupt, as the ISA's
     /// `checkInterrupts` picks it (4.4.6.4, p 160).
     fn interrupt_level(&self) -> Option<u32> {
@@ -490,6 +507,7 @@ impl<C: Config> Core<C> {
     /// and with `rfe`, so no capture isolates it. The entry clears the store and divide
     /// follower bits. The loop arm stays.
     fn take_vector(&mut self, target: u32) {
+        self.spun = false;
         self.pc = target;
         self.cycle.0 += 4;
         self.refetch = true;
@@ -651,6 +669,14 @@ impl<C: Config> Core<C> {
     /// orders them (4.4.1.11, p 146).
     fn execute<B: Bus>(&mut self, bus: &mut B) -> Result<Op, Trap> {
         let insn = self.fetch(bus)?;
+        if insn.op == Op::J
+            && insn.fields[0] == self.pc
+            && !self.spun
+            && self.masks_every_interrupt()
+        {
+            self.spun = true;
+            return Err(Trap::Stop(Stop::Spin));
+        }
         if let Some(n) = self.overflow(u32::from(insn.reach)) {
             return Err(self.overflow_trap(n));
         }

@@ -183,3 +183,28 @@ fn core_size_is_pinned() {
     assert_eq!(size_of::<Core<Esp32>>(), 848);
     assert_eq!(size_of::<Core<Esp32s3>>(), 848);
 }
+
+/// A `j` to itself while every interrupt is masked stops the core before it once, and the core
+/// spins on after. With an interrupt enabled above `CINTLEVEL` it does not stop, and with one
+/// enabled at `CINTLEVEL` it does. A `j` to another address does not stop.
+#[test]
+fn a_jump_to_itself_with_every_interrupt_masked_stops_once() {
+    let mut bus = Flat::new("06ffff");
+    let mut core = core_at::<Esp32s3>(CODE);
+    assert_eq!(core.run_until(&mut bus, Cycle(100)), Stop::Spin);
+    assert_eq!((core.pc(), core.cycle()), (CODE, Cycle(0)));
+    assert_eq!(core.run_until(&mut bus, Cycle(100)), Stop::Limit);
+    assert_eq!(core.pc(), CODE);
+    let mut open = core_at::<Esp32s3>(CODE);
+    open.set_special(Sr::Ps, 0);
+    open.set_special(Sr::IntEnable, 1);
+    assert_eq!(open.run_until(&mut bus, Cycle(100)), Stop::Limit);
+    let mut level_1 = core_at::<Esp32s3>(CODE);
+    level_1.set_special(Sr::Ps, 1);
+    level_1.set_special(Sr::IntEnable, 1);
+    assert_eq!(level_1.run_until(&mut bus, Cycle(100)), Stop::Spin);
+    let mut bus = Flat::new("0600000006ffff");
+    let mut forward = core_at::<Esp32s3>(CODE);
+    assert_eq!(forward.run_until(&mut bus, Cycle(100)), Stop::Spin);
+    assert_eq!(forward.pc(), CODE + 4, "a `j` elsewhere runs");
+}
