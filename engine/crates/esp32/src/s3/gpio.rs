@@ -197,6 +197,15 @@ impl Gpio {
             .map(|pad| pad as u8)
     }
 
+    /// The peripheral signal the pad drives from the matrix, enabled, and whether `OUT_INV_SEL`
+    /// inverts it.
+    pub(crate) fn carries(&self, pad: usize) -> Option<(u16, bool)> {
+        let sel = self.out_sel[pad];
+        let signal = (sel & OUT_SEL) as u16;
+        let peripheral = usize::from(signal) < SIGNALS && self.output(pad).0;
+        peripheral.then_some((signal, sel & OUT_INV_SEL != 0))
+    }
+
     /// Whether the pad takes its output from the GPIO matrix.
     fn matrix_drives(&self, pad: usize) -> bool {
         match (self.io_mux[pad] & MCU_SEL) >> MCU_SEL_SHIFT {

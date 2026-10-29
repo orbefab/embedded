@@ -410,9 +410,126 @@ fn a_watchdog_left_running_ends_the_run_at_its_first_stage() {
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0]["code"], "chip.watchdog");
     assert_eq!(found[0]["severity"], "error");
-    // Timer group 0 at its boot hold of 26,000,000 cycles of the 40 MHz clock, 0.65 s.
+    // Timer group 0 at its boot hold of 26,000,000 cycles of the 40 MHz clock, 0.65 s, in flash
+    // boot mode, which resets the system.
     assert_eq!(found[0]["t_ps"], 650_000_000_000u64);
-    assert_eq!(found[0]["data"]["watchdog"], "timer group 0");
+    assert_eq!(
+        found[0]["data"],
+        serde_json::json!({ "reset": "system", "stage": 0, "watchdog": "timer group 0" })
+    );
+    assert_eq!(
+        found[0]["message"],
+        "#u1 timer group 0 watchdog's stage 0 ran out and reset the system at 650000000000 ps; the firmware neither fed nor disabled it"
+    );
+}
+
+/// Code that stores each value to its address in turn, store `k` at 40 MHz cycle `3k + 2`, then
+/// idles, and its literals.
+fn stores(pairs: &[(u32, u32)]) -> (Vec<u32>, Vec<u8>) {
+    let literals: Vec<u32> = pairs.iter().flat_map(|&(a, v)| [a, v]).collect();
+    let entry = IRAM + 4 * literals.len() as u32;
+    let mut code = Vec::new();
+    for k in 0..pairs.len() as u32 {
+        for t in 0..2 {
+            let pc = entry + code.len() as u32;
+            let literal = IRAM + 4 * (2 * k + t);
+            let imm = (literal.wrapping_sub((pc + 3) & !3) as i32 >> 2) as u16;
+            code.extend([(2 + t as u8) << 4 | 1, imm as u8, (imm >> 8) as u8]);
+        }
+        // s32i a3, a2, 0
+        code.extend([0x32, 0x62, 0x00]);
+    }
+    code.extend(IDLE);
+    (literals, code)
+}
+
+/// Timer group 0's stage 0 interrupts 1000 cycles after the store that starts it, store 4 at
+/// cycle 14, and nothing takes the interrupt. Stage 1 resets the system 500 cycles later, at
+/// cycle 1514.
+#[test]
+fn a_watchdog_stage_that_interrupts_leads_to_the_stage_that_resets() {
+    let (literals, code) = stores(&[
+        (0x6000_8098, 0),
+        (0x6001_f048, 0),
+        (0x6001_f050, 1000),
+        (0x6001_f054, 500),
+        (0x6001_f048, 1 << 31 | 1 << 29 | 3 << 27),
+    ]);
+    let doc = run_program("watchdog-stages", &literals, &code, 10_000_000_000);
+    let found = diagnostics(&doc);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["code"], "chip.watchdog");
+    assert_eq!(found[0]["t_ps"], 1514 * 25_000);
+    assert_eq!(
+        found[0]["data"],
+        serde_json::json!({ "reset": "system", "stage": 1, "watchdog": "timer group 0" })
+    );
+}
+
+/// The `u1` `GPIO21` changes in `logic.vcd`, as each time and level.
+fn gpio21_edges(vcd: &str) -> Vec<(u64, char)> {
+    let mut scope = "";
+    let mut id = None;
+    for line in vcd.lines() {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        match words[..] {
+            ["$scope", "module", name, "$end"] => scope = name,
+            ["$var", "wire", "1", code, "GPIO21", "$end"] if scope == "u1" => id = Some(code),
+            _ => {}
+        }
+    }
+    let id = id.expect("GPIO21 in logic.vcd");
+    let mut at = 0;
+    let mut edges = Vec::new();
+    for line in vcd.lines().skip_while(|line| *line != "$end") {
+        if let Some(time) = line.strip_prefix('#') {
+            at = time.parse().unwrap();
+        } else if line.len() == 1 + id.len() && line.ends_with(id) && at > 0 {
+            edges.push((at, line.chars().next().unwrap()));
+        }
+    }
+    edges
+}
+
+/// LEDC channel 0 on GPIO21, timer 0 on the 40 MHz crystal at 1 bit and divider 1, a period of
+/// two cycles from store 5 at cycle 17. The duty goes from 0 to 1 of 2 steps at store 8, cycle
+/// 26, and back to 0 at store 11, cycle 35. Each takes effect at the timer's next overflow, at
+/// cycles 27 and 37, 675 and 925 ns: a `Duty` row then, and GPIO21's edge 1 ps after it.
+#[test]
+fn an_led_duty_from_0_to_half_and_back_sends_two_duty_rows_and_two_edges() {
+    let ledc = 0x6001_9000;
+    let duty = |duty: u32| {
+        [
+            (ledc + 0x08, duty << 4),
+            (ledc + 0x0c, 1 << 31 | 1 << 30 | 1 << 20 | 1 << 10),
+            (ledc, 1 << 2 | 1 << 4),
+        ]
+    };
+    let setup = [
+        (0x6000_9058, 1 << 12 | 3 << 10 | 1 << 9),
+        (0x6000_45a8, 73),
+        (0x6000_4024, 1 << 21),
+        (0x600c_0018, 0xf9c1_e06f | 1 << 11),
+        (ledc + 0xd0, 3),
+        (ledc + 0xa0, 1 | 256 << 4 | 1 << 25),
+    ];
+    let (literals, code) = stores(&[&setup[..], &duty(1), &duty(0)].concat());
+    let dir = scratch("duty");
+    let bytes = program(&literals, &code);
+    let blobs = dir.join("blobs");
+    fs::create_dir_all(&blobs).unwrap();
+    fs::write(blobs.join(Sha256::of(&bytes).to_string()), &bytes).unwrap();
+    let (code, doc) = run(&dir, &netlist_for(&bytes, 10_000_000_000), &[]);
+    assert_eq!((code, doc["status"].as_str()), (0, Some("ok")), "{doc}");
+    let link = fs::read_to_string(dir.join("out/traces/link.csv")).unwrap();
+    assert_eq!(
+        link,
+        "t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash,lanes\n\
+         675000,675000,u1,GPIO21,duty,,1/2@20000000,,,\n\
+         925000,925000,u1,GPIO21,duty,,0/2@20000000,,,\n"
+    );
+    let vcd = fs::read_to_string(dir.join("out/traces/logic.vcd")).unwrap();
+    assert_eq!(gpio21_edges(&vcd), [(675_001, '1'), (925_001, '0')]);
 }
 
 /// The replay frame's reset latches while its record is still open, and timer group 0 runs out

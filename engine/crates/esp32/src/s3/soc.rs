@@ -27,7 +27,7 @@ use super::spi1::{self, FlashRefusal, Spi1};
 use super::spi2::{self, Setting, Spi2};
 use super::timers::{Register, Systimer, Watchdogs};
 use super::usb::UsbSerialJtag;
-use super::{RAM, Refused, ResetCause, Touch};
+use super::{Duty, RAM, Refused, ResetCause, Touch};
 
 pub(crate) const SRAM: usize = 512 * 1024;
 /// RTC fast memory, on both buses at one address.
@@ -82,7 +82,11 @@ pub(crate) struct Soc {
     pub(crate) spi2: Spi2,
     gdma: Gdma,
     sha: Sha,
-    ledc: Ledc,
+    pub(crate) ledc: Ledc,
+    /// The LEDC updates that took effect and that the chip has not taken.
+    pub(crate) effects: Vec<ledc::Effect>,
+    /// The `Duty` records those updates and the routes to netted pads made, in time order.
+    pub(crate) duties: Vec<Duty>,
     gates: Gates,
     analog: Analog,
     efuse: Efuse,
@@ -107,8 +111,9 @@ pub(crate) struct Soc {
     /// A store changed the CPU clock, so the next fetch stops the core and the run maps its
     /// limits to cycles again.
     pub(crate) reclocked: bool,
-    /// A store moved a watchdog's deadline, so the next fetch stops the core and the run reads
-    /// the new one.
+    /// A store moved a watchdog's deadline or the tick of the next LEDC update, or sent a `Duty`
+    /// record for a pad it routed, so the next fetch stops the core and the run reads the
+    /// change.
     pub(crate) rearmed: bool,
     /// The first access to an unmodeled register stopped the core, so the timeline can take the
     /// access's PC.
@@ -243,6 +248,8 @@ impl Soc {
             gdma: Gdma::new(),
             sha: Sha::new(),
             ledc: Ledc::new(),
+            effects: Vec::new(),
+            duties: Vec::new(),
             gates: Gates::new(),
             analog: Analog::default(),
             efuse: Efuse::default(),
@@ -266,7 +273,52 @@ impl Soc {
         for (signal, level) in soc.spi2.idle() {
             soc.gpio.set_signal(signal, level);
         }
+        soc.idle_ledc();
         soc
+    }
+
+    /// Puts each LEDC channel's signal at its power-on level, low.
+    fn idle_ledc(&mut self) {
+        for channel in 0..ledc::CHANNELS as u16 {
+            self.gpio.set_signal(ledc::SIGNAL + channel, false);
+        }
+    }
+
+    /// Lets every LEDC update due at or before `through` take effect, each with a `Duty` record
+    /// on every netted pad that carries its channel.
+    pub(crate) fn settle_ledc(&mut self, through: Tick) {
+        self.ledc.settle(through, self.clock.source.apb());
+        for effect in self.ledc.take_done() {
+            for (pad, channel, inverted) in self.ledc_pads() {
+                if channel == effect.channel {
+                    self.duties.push(duty(effect, pad, inverted));
+                }
+            }
+            self.effects.push(effect);
+        }
+    }
+
+    /// Whether a netted pad carries an LEDC channel, or an update has yet to take effect or to
+    /// drive its signal. A reset then would leave a pad's last `Duty` record stale, or let the
+    /// update drive its signal after the reset.
+    fn ledc_runs(&self) -> bool {
+        self.ledc.pending() || !self.effects.is_empty() || !self.ledc_pads().is_empty()
+    }
+
+    /// Each netted pad that drives an LEDC channel's signal from the matrix, lowest first, with
+    /// that channel and whether `OUT_INV_SEL` inverts it.
+    fn ledc_pads(&self) -> Vec<(u8, u8, bool)> {
+        let channels = ledc::SIGNAL..ledc::SIGNAL + ledc::CHANNELS as u16;
+        (0..PADS as u8)
+            .filter(|&pad| self.netted(pad))
+            .filter_map(|pad| {
+                let (signal, inverted) = self.gpio.carries(usize::from(pad))?;
+                let channel = channels
+                    .contains(&signal)
+                    .then(|| (signal - ledc::SIGNAL) as u8)?;
+                Some((pad, channel, inverted))
+            })
+            .collect()
     }
 
     /// Adds the ROM and the flash, as a chip booted from flash has them.
@@ -357,17 +409,14 @@ impl Soc {
         let (base, offset) = (addr & !(BLOCK - 1), addr & (BLOCK - 1));
         let now = Tick(0);
         match base {
-            TIMG0 | TIMG1 if (0x48..=0x64).contains(&offset) => {
+            TIMG0 | TIMG1 if (0x48..=0x64).contains(&offset) || (0x70..=0x7c).contains(&offset) => {
                 let group = usize::from(base == TIMG1);
                 self.watchdogs
                     .restore(now, Register::Timg(group, offset), value);
             }
-            RTC_CNTL if (0x98..=0xb8).contains(&offset) => match offset {
-                0xb4 | 0xb8 => {
-                    self.watchdogs.write_rtc(now, offset, value);
-                }
-                _ => self.watchdogs.restore(now, Register::Rtc(offset), value),
-            },
+            RTC_CNTL if (0x98..=0xb8).contains(&offset) => {
+                self.watchdogs.restore(now, Register::Rtc(offset), value);
+            }
             SYSTIMER => self.systimer.restore(now, offset, value),
             TIMG0 | TIMG1 if calibration::OFFSETS.contains(&offset) => {
                 self.calibration[usize::from(base == TIMG1)].write(offset, value);
@@ -481,12 +530,26 @@ impl Soc {
         let done = match base {
             GPIO => self.gpio.write(offset, value),
             IO_MUX => self.gpio.write_io_mux(offset, value),
-            RTC_CNTL => self.watchdogs.write_rtc(now, offset, value),
+            RTC_CNTL => self
+                .watchdogs
+                .write_rtc(now, offset, value)
+                .unwrap_or_else(|setting| {
+                    self.ending = Some(Ending::Refused(Refused::Register("RTC_CNTL", setting)));
+                    true
+                }),
             TIMG0 | TIMG1 if calibration::OFFSETS.contains(&offset) => {
                 self.calibration[usize::from(base == TIMG1)].write(offset, value)
             }
-            TIMG0 => self.watchdogs.write_timg(now, 0, offset, value),
-            TIMG1 => self.watchdogs.write_timg(now, 1, offset, value),
+            TIMG0 | TIMG1 => {
+                let group = usize::from(base == TIMG1);
+                self.watchdogs
+                    .write_timg(now, group, offset, value)
+                    .unwrap_or_else(|setting| {
+                        let block = if group == 0 { "TIMG0" } else { "TIMG1" };
+                        self.ending = Some(Ending::Refused(Refused::Register(block, setting)));
+                        true
+                    })
+            }
             SYSTIMER => self.systimer.write(now, offset, value),
             USB_SERIAL_JTAG => self.usb.write(now, offset, value),
             ANALOG => self.analog.write(offset, value),
@@ -535,6 +598,18 @@ impl Soc {
                         "GDMA",
                         "clock_off_while_sending",
                     ),
+                    (
+                        self.ledc.counts() && !gates.clocked(Block::Ledc),
+                        "LEDC",
+                        "clock_off_while_running",
+                    ),
+                    (
+                        held.contains(&Block::Ledc)
+                            && !self.gates.held(Block::Ledc)
+                            && self.ledc_runs(),
+                        "LEDC",
+                        "reset_while_running",
+                    ),
                 ]
                 .into_iter()
                 .find(|&(refused, ..)| refused);
@@ -548,7 +623,15 @@ impl Soc {
                 }
                 true
             }
-            LEDC => self.ledc.write(offset, value),
+            LEDC => {
+                let apb = self.clock.source.apb();
+                self.ledc
+                    .write(now, offset, value, apb)
+                    .unwrap_or_else(|setting| {
+                        self.ending = Some(Ending::Refused(Refused::Register("LEDC", setting)));
+                        true
+                    })
+            }
             INTERRUPT_CORE0 => self.matrix.write(offset, value),
             EFUSE => self.efuse.write(offset, value).unwrap_or_else(|()| {
                 self.ending = Some(Ending::EfuseProgram);
@@ -608,7 +691,8 @@ impl Soc {
     fn sources(&mut self, now: Tick) -> u128 {
         self.systimer.settle(now);
         let spi2 = self.spi2.line(now);
-        self.matrix.sources(self.systimer.lines(), spi2)
+        self.matrix
+            .sources(self.systimer.lines(), spi2, self.watchdogs.lines())
     }
 
     /// Runs the CPU from the clock the SYSTEM registers now pick, from core cycle `now` on.
@@ -616,6 +700,10 @@ impl Soc {
         let register = |offset| self.plain.get(&(SYSTEM + offset)).copied().unwrap_or(0);
         match Source::of(register(SYSCLK_CONF), register(CPU_PER_CONF)) {
             None => self.ending = Some(Ending::Clock),
+            Some(source) if source.apb() != self.clock.source.apb() && self.ledc.counts_apb() => {
+                let refused = Refused::Register("LEDC", "clock_change_while_running");
+                self.ending = Some(Ending::Refused(refused));
+            }
             Some(source) if source != self.clock.source => {
                 let tick = self.clock.tick(now);
                 self.clock.switch(now, source);
@@ -679,7 +767,10 @@ impl Soc {
                     self.gpio.set_signal(signal, level);
                 }
             }
-            Block::Ledc => self.ledc = Ledc::new(),
+            Block::Ledc => {
+                self.ledc = Ledc::new();
+                self.idle_ledc();
+            }
             Block::Gdma => self.gdma = Gdma::new(),
             Block::Sha => self.sha = Sha::new(),
         }
@@ -705,6 +796,11 @@ impl Soc {
         Some(Refused::Register(block.name(), why))
     }
 
+    /// Whether pad `gpio` has a net.
+    pub(crate) fn netted(&self, gpio: u8) -> bool {
+        self.netted.contains(&gpio)
+    }
+
     /// Puts GPIO and IO_MUX back to power-on, as a reset does.
     pub(crate) fn reset_pads(&mut self) {
         self.gpio = Gpio::new(&self.netted);
@@ -717,6 +813,23 @@ impl Soc {
             image[usize::from(gpio)] = self.gpio.drive(usize::from(gpio));
         }
         image
+    }
+}
+
+/// `effect`'s `Duty` record on `pad`, which sends every step the channel does not when
+/// `inverted`, since the pad drives the inverted level.
+fn duty(effect: ledc::Effect, pad: u8, inverted: bool) -> Duty {
+    let steps = 1 << effect.resolution;
+    Duty {
+        at: effect.at,
+        pad,
+        duty: if inverted {
+            steps - effect.duty
+        } else {
+            effect.duty
+        },
+        resolution: effect.resolution,
+        hz: effect.hz,
     }
 }
 
@@ -838,6 +951,7 @@ impl Bus for Soc {
             || (word & !(BLOCK - 1) == SYSTEM && gates::OFFSETS.contains(&(word - SYSTEM)));
         if !pads {
             let deadline = self.watchdogs.deadline();
+            let due = self.ledc.next(self.clock.source.apb());
             self.write_kept(now, word, value);
             if word == SYSTEM + SYSCLK_CONF || word == SYSTEM + CPU_PER_CONF {
                 self.switch_clock(cycle);
@@ -846,10 +960,13 @@ impl Bus for Soc {
                 return Err(Exit::Stop);
             }
             self.changes.extend(change.map(|touch| (word, touch)));
-            self.rearmed |= self.watchdogs.deadline() != deadline;
+            self.rearmed |= self.watchdogs.deadline() != deadline
+                || self.ledc.next(self.clock.source.apb()) != due;
             return Ok(());
         }
+        self.settle_ledc(now);
         let before = self.image();
+        let carried = self.ledc_pads();
         self.write_kept(now, word, value);
         if self.ending.is_some() {
             return Err(Exit::Stop);
@@ -857,6 +974,15 @@ impl Bus for Soc {
         self.changes.extend(change.map(|touch| (word, touch)));
         if self.image() != before {
             self.changed = Some(now);
+        }
+        for (pad, channel, inverted) in self.ledc_pads() {
+            if let Some(effect) = self.ledc.sent(usize::from(channel))
+                && !carried.contains(&(pad, channel, inverted))
+            {
+                self.duties
+                    .push(duty(ledc::Effect { at: now, ..effect }, pad, inverted));
+                self.rearmed = true;
+            }
         }
         Ok(())
     }

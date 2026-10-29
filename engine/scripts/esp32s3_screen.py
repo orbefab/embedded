@@ -15,12 +15,14 @@ transfer took, with its flags and length in bits. The last field of a `P`, `C` o
 board's time in microseconds, which no check reads.
 
 From those lines alone, every transfer is the 32-bit command word on one lane, then its bytes in
-the transactions its `S` lines give, with CS held until the last. Each row of `traces/link.csv`
-must be one of those transactions, in order, with its CS state, no phases, its byte count and
-hash, and its data lanes. Each row of `traces/display.csv` must be one flush, in order, with its
-rectangle, byte count and hash. `traces/display-lcd1.rgb565` must be the frame memory the flushes
-leave, with every pixel no flush reached zero, and the console in `traces/serial.csv` must hold
-the board's lines with their times left out. The run must hold no error, no `chip.protocol` and no
+the transactions its `S` lines give, with CS held until the last. Each `spi` row of
+`traces/link.csv` must be one of those transactions, in order, with its CS state, no phases, its
+byte count and hash, and its data lanes. Its `duty` rows must be the backlight's two duties on
+GPIO21 that the app's source sets, 0 when it configures the channel and then 4095 of 4096 steps,
+both at 5 kHz. Each row of `traces/display.csv` must be one flush, in order, with its rectangle,
+byte count and hash. `traces/display-lcd1.rgb565` must be the frame memory the flushes leave, with
+every pixel no flush reached zero, and the console in `traces/serial.csv` must hold the board's
+lines with their times left out. The run must hold no error, no `chip.protocol` and no
 `chip.link_miswired`.
 """
 
@@ -43,6 +45,7 @@ TIMED = ("P", "C", "F")
 FAILING = ("chip.protocol", "chip.link_miswired")
 LINK = ["part", "pin", "kind", "cs", "phases", "bytes", "hash", "lanes"]
 DISPLAY = ["part", "x0", "y0", "x1", "y1", "bytes", "hash"]
+DUTIES = [("u1", "GPIO21", "duty", "", f"{duty}/4096@5000", "", "", "") for duty in (0, 4095)]
 
 
 def h16(data: bytes) -> str:
@@ -160,7 +163,9 @@ def check(run: Path) -> str:
     board = BOARD.read_text()
     transfers, flushes = parse(board)
     traces = run / "traces"
-    compare("link.csv", table(traces / "link.csv", LINK), link_rows(transfers))
+    link = table(traces / "link.csv", LINK)
+    compare("link.csv's spi", [row for row in link if row[2] != "duty"], link_rows(transfers))
+    compare("link.csv's duty", [row for row in link if row[2] == "duty"], DUTIES)
     compare("display.csv", table(traces / "display.csv", DISPLAY), display_rows(flushes))
     want = frame(flushes)
     got = (traces / "display-lcd1.rgb565").read_bytes()
@@ -173,7 +178,7 @@ def check(run: Path) -> str:
     if failing:
         raise ValueError(f"the run holds {failing}")
     return (f"esp32s3-screen: {len(link_rows(transfers))} transactions and {len(flushes)} flushes as the board sent "
-            f"them, the board's final frame {hashlib.sha256(want).hexdigest()}, and its console lines")
+            f"them, the backlight's duties, the board's final frame {hashlib.sha256(want).hexdigest()}, and its console lines")
 
 
 def write_run(run: Path, link: list[tuple], display: list[tuple], image: bytes, console: str,
@@ -195,7 +200,8 @@ def check_cases() -> list[tuple[str, bool]]:
     """Each case of `check` on a run folder built from the committed capture, and whether it passed."""
     board = BOARD.read_text()
     transfers, flushes = parse(board)
-    link, display, image = link_rows(transfers), display_rows(flushes), frame(flushes)
+    display, image = display_rows(flushes), frame(flushes)
+    link = [DUTIES[0], *link_rows(transfers)[:4], DUTIES[1], *link_rows(transfers)[4:]]
     console = "I (31) boot: screen\r\n" + "".join(line + "\r\n" for line in board.splitlines())
     warning = {"code": "chip.unmodeled_register", "severity": "warning"}
     moved = (*display[3][:1], str(int(display[3][1]) + 1), *display[3][2:])
@@ -208,11 +214,15 @@ def check_cases() -> list[tuple[str, bool]]:
         "an error": (link, display, image, console, [{"code": "chip.halted", "severity": "error"}]),
         "a protocol warning": (link, display, image, console, [{"code": "chip.protocol", "severity": "warning"}]),
         "a miswire warning": (link, display, image, console, [{"code": "chip.link_miswired", "severity": "warning"}]),
+        "a missing duty": ([row for row in link if row != DUTIES[0]], display, image, console, []),
+        "another duty": ([*link, (*DUTIES[1][:4], "2048/4096@5000", "", "", "")], display, image, console, []),
+        "reordered duties": ([DUTIES[1], *link[1:5], DUTIES[0], *link[6:]], display, image, console, []),
+        "a duty on another pin": ([(DUTIES[0][0], "GPIO20", *DUTIES[0][2:]), *link[1:]], display, image, console, []),
         "a missing transfer": (link[:-1], display, image, console, []),
         "an extra transfer": ([*link, link[-1]], display, image, console, []),
-        "reordered transfers": ([link[1], link[0], *link[2:]], display, image, console, []),
-        "a transaction on other lanes": ([(*link[0][:7], "4"), *link[1:]], display, image, console, []),
-        "a transaction with phases": ([(*link[0][:4], "8/1:02", *link[0][5:]), *link[1:]], display, image, console, []),
+        "reordered transfers": ([link[0], link[2], link[1], *link[3:]], display, image, console, []),
+        "a transaction on other lanes": ([link[0], (*link[1][:7], "4"), *link[2:]], display, image, console, []),
+        "a transaction with phases": ([link[0], (*link[1][:4], "8/1:02", *link[1][5:]), *link[2:]], display, image, console, []),
         "a missing flush": (link, display[:-1], image, console, []),
         "an extra flush": (link, [*display, display[-1]], image, console, []),
         "reordered flushes": (link, [display[1], display[0], *display[2:]], image, console, []),

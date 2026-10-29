@@ -30,7 +30,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 {
   "run_format": 0,
   "netlist_format": 0,
-  "engine_version": "0.32.0",
+  "engine_version": "0.33.0",
   "input": {
     "file": "netlist.json",
     "sha256": "<lowercase hex sha256 of the input bytes>",
@@ -41,7 +41,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 }
 ```
 
-`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.32.0`. [versions.md](versions.md) says which changes move them.
+`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.33.0`. [versions.md](versions.md) says which changes move them.
 
 `netlist_format` is the input's `version`, when it reads as an unsigned integer. That holds when the engine rejected the input, so `version: 1` records 1. It is `null` when no such integer could be read.
 
@@ -424,7 +424,7 @@ t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash,lanes
 ```
 
 - `t_ps` is the record's end and `start_ps` is its start, both in integer picoseconds. `part` is the sender's part name. `pin` names the link on the sender. It is `CS` for a replay's `spi` record. For an ESP32-S3's it is the pin its SPI2 chip select is routed to, such as `GPIO12`, or `SPI2` when CS is routed to none of the part's pins.
-- `kind` is `spi`, `pulses` or `duty`. At this version an `spi_replay` and an `esp32s3` write `spi` rows and a `pulses_replay` writes `pulses` rows. No part writes `duty` rows.
+- `kind` is `spi`, `pulses` or `duty`. At this version an `spi_replay` and an `esp32s3` write `spi` rows, a `pulses_replay` writes `pulses` rows, and an `esp32s3` writes `duty` rows from its LEDC.
 - On a `spi` row, `cs` is `held` or `released`, the chip select at the record's end. `phases` lists each phase, space-separated, as `<bits>/<lanes>:<value>`, with the value in lowercase hex, one digit for each four bits or part of four. `bytes` is the data's length, `hash` is the first 8 bytes of the data's SHA-256, in lowercase hex, and `lanes` is how many lanes the data went on, 1, 2 or 4.
 - On a `pulses` row, `phases` is `idle=0` or `idle=1`. The payload is each pulse as one level byte and its time as a little-endian `u64` of picoseconds, and `bytes` and `hash` are its length and hash.
 - On a `duty` row, `phases` is `<duty>/<2^resolution>@<hz>`, and `bytes`, `hash` and `lanes` are empty.

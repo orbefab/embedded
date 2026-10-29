@@ -8,15 +8,22 @@
 //! `INT_RAW` bit, and its interrupt line is that bit and its `INT_ENA` bit.
 //!
 //! The watchdogs: the RTC watchdog, and the main watchdog of each timer group. Each runs while
-//! its `EN` bit is set and its first stage acts, or while its flash boot bit is set. That bit is
-//! set at power-on on the RTC watchdog and the timer group 0 watchdog, as the boot ROM leaves
-//! them, so firmware that does not disable or feed them meets the first stage. A watchdog that
-//! runs out its first stage ends the run, whatever that stage's action. Every write but to the
+//! its `EN` bit is set and a stage acts, or while its flash boot bit is set. That bit is set at
+//! power-on on the RTC watchdog and the timer group 0 watchdog, as the boot ROM leaves them, and
+//! in flash boot mode stage 0 resets the system, or on the RTC watchdog the RTC domain. A running
+//! watchdog counts each stage's hold in turn from stage 0, and after stage 3 stage 0 again. A
+//! stage that runs out does its action: nothing, its interrupt, or a reset of the CPU, the system
+//! or the RTC domain, which ends the run. A timer group's watchdog interrupt sets the watchdog
+//! bit of the group's `INT_RAW` until `INT_CLR` clears it, and its line is that bit and its
+//! `INT_ENA` bit. A feed, or a write that starts it, counts stage 0 again. A write that leaves a
+//! running watchdog a stage the model does not run is refused: an interrupt of the RTC watchdog,
+//! a CPU reset without `PROCPU_RESET_EN`, or a code that names no action. Every write but to the
 //! write-protect register needs the key there. Writes take effect at once, and
 //! `TIMG_WDT_CONF_UPDATE_EN` is not needed. A hold written below the count runs out at the write.
 //! A timer group's watchdog counts the APB clock through its prescaler, and keeps its count
 //! when the APB clock changes. The RTC watchdog counts the 136 kHz RC slow clock. The super
-//! watchdog's two registers are kept, unlocked at power-on, and it never runs out.
+//! watchdog's two registers are kept, unlocked at power-on. A write that leaves it neither
+//! feeding itself nor disabled is refused, so it never runs out.
 
 use super::clock::{TICK_HZ, Tick};
 
@@ -288,21 +295,61 @@ impl Watchdog {
     }
 }
 
+/// What a watchdog's stage does when it runs out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Action {
+    Off,
+    Interrupt,
+    Reset(Reset),
+}
+
+/// What a watchdog's reset resets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reset {
+    Cpu,
+    System,
+    Rtc,
+}
+
+impl Reset {
+    pub fn name(self) -> &'static str {
+        match self {
+            Reset::Cpu => "CPU",
+            Reset::System => "system",
+            Reset::Rtc => "RTC domain",
+        }
+    }
+}
+
+/// The next stage of a watchdog to run out: when, and what it does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Expiry {
+    pub(crate) at: Tick,
+    pub(crate) watchdog: Watchdog,
+    pub(crate) stage: u8,
+    pub(crate) action: Action,
+}
+
 /// `RTC_CNTL_WDT_WKEY_VALUE` and `TIMG_WDT_WKEY`, one value.
 const WDT_KEY: u32 = 0x50d8_3aa1;
+
+/// The watchdog's bit in a timer group's `INT_ENA`, `INT_RAW`, `INT_ST` and `INT_CLR`.
+const WDT_INT: u32 = 1 << 2;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Watchdogs {
     timg: [Timer; 2],
     rtc: Timer,
+    /// Each timer group's `INT_ENA`.
+    int_ena: [u32; 2],
     /// `RTC_CNTL_SWD_CONF_REG` and `RTC_CNTL_SWD_WPROTECT_REG`.
     swd: [u32; 2],
     /// Ticks per APB cycle.
     apb: u64,
 }
 
-/// One watchdog: its config words from `CONFIG0`, its write-protect word, and its count, which
-/// is `done` counts at tick `since` and counts on from there.
+/// One watchdog: its config words from `CONFIG0`, its write-protect word, and its count in its
+/// stage, which is `done` counts at tick `since` and counts on from there.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Timer {
     config: [u32; 6],
@@ -311,28 +358,83 @@ struct Timer {
     done: u64,
     /// The last write's tick. A hold written below the count runs out there.
     written: Tick,
-    /// Where `EN`, the first stage's action and the flash boot bit sit in `CONFIG0`.
+    /// The stage that counts, 0 to 3.
+    stage: usize,
+    /// A stage that interrupts ran out, and `INT_CLR` has not cleared it since.
+    raised: bool,
+    /// Where `EN`, the stages' actions and the flash boot bit sit in `CONFIG0`.
     layout: Layout,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Layout {
     en: u32,
+    /// Stage 0's action sits at this bit, and stage `n`'s `width * n` bits below it.
     stg0_shift: u32,
-    stg0_mask: u32,
+    width: u32,
     flashboot: u32,
     /// Whether the flash boot bit runs the timer. Only timer group 0's does.
     flashboot_runs: bool,
+    /// `PROCPU_RESET_EN`, which lets a CPU reset reach the core.
+    cpu_reset_en: u32,
     /// Whether it counts the RTC slow clock, else the APB clock through its prescaler.
     slow: bool,
 }
 
 impl Timer {
-    fn runs(&self) -> bool {
-        let c = self.config[0];
+    fn flashboot(&self) -> bool {
+        self.layout.flashboot_runs && self.config[0] & self.layout.flashboot != 0
+    }
+
+    /// The action of `stage`, or `None` for a code that names none. In flash boot mode stage 0
+    /// resets the system, or the RTC domain on the RTC watchdog.
+    fn action(&self, stage: usize) -> Option<Action> {
         let l = self.layout;
-        let stage = (c >> l.stg0_shift) & l.stg0_mask;
-        (c & l.en != 0 && stage != 0) || (l.flashboot_runs && c & l.flashboot != 0)
+        if stage == 0 && self.flashboot() {
+            return Some(Action::Reset(if l.slow {
+                Reset::Rtc
+            } else {
+                Reset::System
+            }));
+        }
+        let code =
+            (self.config[0] >> (l.stg0_shift - l.width * stage as u32)) & ((1 << l.width) - 1);
+        Some(match code {
+            0 => Action::Off,
+            1 => Action::Interrupt,
+            2 => Action::Reset(Reset::Cpu),
+            3 => Action::Reset(Reset::System),
+            4 if l.slow => Action::Reset(Reset::Rtc),
+            _ => return None,
+        })
+    }
+
+    fn runs(&self) -> bool {
+        self.flashboot()
+            || (self.config[0] & self.layout.en != 0
+                && (0..4).any(|stage| self.action(stage) != Some(Action::Off)))
+    }
+
+    /// The setting a running watchdog's stages need that the model does not run, in the stages
+    /// up to the first that resets.
+    fn refusal(&self) -> Option<&'static str> {
+        if !self.runs() || self.flashboot() {
+            return None;
+        }
+        for stage in 0..4 {
+            match self.action(stage) {
+                None => return Some("watchdog_stage"),
+                Some(Action::Interrupt) if self.layout.slow => return Some("watchdog_interrupt"),
+                Some(Action::Reset(Reset::Cpu))
+                    if self.config[0] & self.layout.cpu_reset_en == 0 =>
+                {
+                    return Some("watchdog_cpu_reset");
+                }
+                Some(Action::Reset(_)) => return None,
+                Some(_) => {}
+            }
+        }
+        None
     }
 
     /// Ticks per count, as a numerator over a denominator.
@@ -344,16 +446,16 @@ impl Timer {
         }
     }
 
-    /// The counts of the first stage.
+    /// The counts of the stage that counts.
     fn hold(&self) -> u64 {
-        if self.layout.slow {
-            u64::from(self.config[1]) * RTC_STAGE0_SCALE
-        } else {
-            u64::from(self.config[2])
+        match (self.layout.slow, self.stage) {
+            (true, 0) => u64::from(self.config[1]) * RTC_STAGE0_SCALE,
+            (true, stage) => u64::from(self.config[1 + stage]),
+            (false, stage) => u64::from(self.config[2 + stage]),
         }
     }
 
-    /// The tick its first stage runs out, while it runs.
+    /// The tick its stage runs out, while it runs.
     fn deadline(&self, apb: u64) -> Option<Tick> {
         if !self.runs() {
             return None;
@@ -382,11 +484,27 @@ impl Timer {
     fn restart(&mut self, now: Tick) {
         self.since = now;
         self.done = 0;
+        self.stage = 0;
     }
 
-    fn write(&mut self, now: Tick, index: Option<usize>, value: u32, feed: bool) {
+    /// Its stage ran out at `at` and did not reset: it raises its interrupt if the stage
+    /// interrupts, and the next stage counts from `at`, after stage 3 stage 0.
+    fn run_out(&mut self, at: Tick) {
+        self.raised |= self.action(self.stage) == Some(Action::Interrupt);
+        self.stage = (self.stage + 1) % 4;
+        self.since = at;
+        self.done = 0;
+    }
+
+    fn write(
+        &mut self,
+        now: Tick,
+        index: Option<usize>,
+        value: u32,
+        feed: bool,
+    ) -> Option<&'static str> {
         if self.wprotect != WDT_KEY {
-            return;
+            return None;
         }
         let ran = self.runs();
         self.written = now;
@@ -396,6 +514,7 @@ impl Timer {
         if feed || (!ran && self.runs()) {
             self.restart(now);
         }
+        self.refusal()
     }
 }
 
@@ -414,12 +533,15 @@ impl Watchdogs {
             since: Tick(0),
             done: 0,
             written: Tick(0),
+            stage: 0,
+            raised: false,
             layout: Layout {
                 en: 1 << 31,
                 stg0_shift: 29,
-                stg0_mask: 0x3,
+                width: 2,
                 flashboot: 1 << 14,
                 flashboot_runs,
+                cpu_reset_en: 1 << 13,
                 slow: false,
             },
         };
@@ -431,30 +553,59 @@ impl Watchdogs {
                 since: Tick(0),
                 done: 0,
                 written: Tick(0),
+                stage: 0,
+                raised: false,
                 layout: Layout {
                     en: 1 << 31,
                     stg0_shift: 28,
-                    stg0_mask: 0x7,
+                    width: 3,
                     flashboot: 1 << 12,
                     flashboot_runs: true,
+                    cpu_reset_en: 1 << 11,
                     slow: true,
                 },
             },
+            int_ena: [0; 2],
             swd: [SWD_CONF_RESET, SWD_KEY],
             apb,
         }
     }
 
-    /// The first watchdog to run out, and when.
-    pub(crate) fn deadline(&self) -> Option<(Tick, Watchdog)> {
+    fn timer(&mut self, watchdog: Watchdog) -> &mut Timer {
+        match watchdog {
+            Watchdog::Rtc => &mut self.rtc,
+            Watchdog::Timg0 => &mut self.timg[0],
+            Watchdog::Timg1 => &mut self.timg[1],
+        }
+    }
+
+    /// The first watchdog stage to run out, when, and what it does.
+    pub(crate) fn deadline(&self) -> Option<Expiry> {
         [
-            (self.rtc.deadline(self.apb), Watchdog::Rtc),
-            (self.timg[0].deadline(self.apb), Watchdog::Timg0),
-            (self.timg[1].deadline(self.apb), Watchdog::Timg1),
+            (&self.rtc, Watchdog::Rtc),
+            (&self.timg[0], Watchdog::Timg0),
+            (&self.timg[1], Watchdog::Timg1),
         ]
         .into_iter()
-        .filter_map(|(at, which)| Some((at?, which)))
-        .min_by_key(|&(at, _)| at)
+        .filter_map(|(timer, watchdog)| {
+            Some(Expiry {
+                at: timer.deadline(self.apb)?,
+                watchdog,
+                stage: timer.stage as u8,
+                action: timer.action(timer.stage).unwrap_or(Action::Off),
+            })
+        })
+        .min_by_key(|expiry| expiry.at)
+    }
+
+    /// The stage of `expiry`, which does not reset, ran out.
+    pub(crate) fn run_out(&mut self, expiry: Expiry) {
+        self.timer(expiry.watchdog).run_out(expiry.at);
+    }
+
+    /// Each timer group's watchdog interrupt line.
+    pub(crate) fn lines(&self) -> [bool; 2] {
+        [0, 1].map(|group| self.timg[group].raised && self.int_ena[group] & WDT_INT != 0)
     }
 
     /// The APB clock runs at `apb` ticks per cycle from `now` on.
@@ -468,23 +619,48 @@ impl Watchdogs {
     /// A timer group's watchdog register at `offset` in the group's block.
     pub(crate) fn read_timg(&self, group: usize, offset: u32) -> Option<u32> {
         let t = &self.timg[group];
+        let raw = if t.raised { WDT_INT } else { 0 };
         match offset {
             0x48..=0x5c => Some(t.config[((offset - 0x48) / 4) as usize]),
             0x60 => Some(0),
             0x64 => Some(t.wprotect),
+            0x70 => Some(self.int_ena[group]),
+            0x74 => Some(raw),
+            0x78 => Some(raw & self.int_ena[group]),
+            0x7c => Some(0),
             _ => None,
         }
     }
 
-    pub(crate) fn write_timg(&mut self, now: Tick, group: usize, offset: u32, value: u32) -> bool {
+    /// Writes a timer group's watchdog register, or names the setting the write leaves that the
+    /// model does not run.
+    pub(crate) fn write_timg(
+        &mut self,
+        now: Tick,
+        group: usize,
+        offset: u32,
+        value: u32,
+    ) -> Result<bool, &'static str> {
         let t = &mut self.timg[group];
-        match offset {
+        let refused = match offset {
             0x48..=0x5c => t.write(now, Some(((offset - 0x48) / 4) as usize), value, false),
             0x60 => t.write(now, None, value, true),
-            0x64 => t.wprotect = value,
-            _ => return false,
-        }
-        true
+            0x64 => {
+                t.wprotect = value;
+                None
+            }
+            0x70 => {
+                self.int_ena[group] = value & 0x7;
+                None
+            }
+            0x74 | 0x78 => None,
+            0x7c => {
+                t.raised &= value & WDT_INT == 0;
+                None
+            }
+            _ => return Ok(false),
+        };
+        refused.map_or(Ok(true), Err)
     }
 
     /// An RTC_CNTL register the watchdogs own, at `offset` in that block.
@@ -499,28 +675,49 @@ impl Watchdogs {
         }
     }
 
-    pub(crate) fn write_rtc(&mut self, now: Tick, offset: u32, value: u32) -> bool {
-        match offset {
+    /// Writes an RTC_CNTL register the watchdogs own, or names the setting the write leaves
+    /// that the model does not run.
+    pub(crate) fn write_rtc(
+        &mut self,
+        now: Tick,
+        offset: u32,
+        value: u32,
+    ) -> Result<bool, &'static str> {
+        let refused = match offset {
             0x98..=0xa8 => {
                 let index = ((offset - 0x98) / 4) as usize;
-                self.rtc.write(now, Some(index), value, false);
+                self.rtc.write(now, Some(index), value, false)
             }
             0xac => self.rtc.write(now, None, value, value & (1 << 31) != 0),
-            0xb0 => self.rtc.wprotect = value,
-            0xb4 => {
-                if self.swd[1] == SWD_KEY {
-                    self.swd[0] = value;
-                }
+            0xb0 => {
+                self.rtc.wprotect = value;
+                None
             }
-            0xb8 => self.swd[1] = value,
-            _ => return false,
-        }
-        true
+            0xb4 if self.swd[1] != SWD_KEY => None,
+            0xb4 if value & (SWD_AUTO_FEED_EN | SWD_DISABLE) == 0 => Some("super_watchdog"),
+            0xb4 => {
+                self.swd[0] = value;
+                None
+            }
+            0xb8 => {
+                self.swd[1] = value;
+                None
+            }
+            _ => return Ok(false),
+        };
+        refused.map_or(Ok(true), Err)
     }
 
     /// Sets each kept register to `value` as the boot left it. A config word restarts the
     /// count at `now`, and a feed does nothing.
     pub(crate) fn restore(&mut self, now: Tick, register: Register, value: u32) {
+        match register {
+            Register::Timg(group, 0x70) => self.int_ena[group] = value & 0x7,
+            Register::Timg(group, 0x74) => self.timg[group].raised = value & WDT_INT != 0,
+            Register::Rtc(0xb4) => self.swd[0] = value,
+            Register::Rtc(0xb8) => self.swd[1] = value,
+            _ => {}
+        }
         // A timer group has six config words, the feed and the protect word. The RTC watchdog
         // has five config words, so its feed and protect word come one word earlier.
         let (timer, index, configs) = match register {
@@ -552,11 +749,19 @@ pub(crate) enum Register {
 const SWD_KEY: u32 = 0x8f1d_312a;
 /// `RTC_CNTL_SWD_SIGNAL_WIDTH` 300 at bit 18, the rest 0, from the same header's line 2142.
 const SWD_CONF_RESET: u32 = 300 << 18;
+/// `RTC_CNTL_SWD_AUTO_FEED_EN` and `RTC_CNTL_SWD_DISABLE`, lines 2120 and 2126.
+const SWD_AUTO_FEED_EN: u32 = 1 << 31;
+const SWD_DISABLE: u32 = 1 << 30;
 
 #[cfg(test)]
 mod tests {
     use super::super::clock::XTAL;
     use super::*;
+
+    /// The next watchdog to run out a stage, and when.
+    fn due(dogs: &Watchdogs) -> Option<(Tick, Watchdog)> {
+        dogs.deadline().map(|expiry| (expiry.at, expiry.watchdog))
+    }
 
     /// The tick of crystal cycle `cycle`.
     fn x(cycle: u64) -> Tick {
@@ -627,37 +832,34 @@ mod tests {
     #[test]
     fn the_boot_watchdogs_run_until_disabled() {
         let mut dogs = Watchdogs::new(XTAL);
-        assert_eq!(dogs.deadline(), Some((x(26_000_000), Watchdog::Timg0)));
-        dogs.write_timg(x(5), 0, 0x64, WDT_KEY);
-        dogs.write_timg(x(5), 0, 0x48, 0);
+        assert_eq!(due(&dogs), Some((x(26_000_000), Watchdog::Timg0)));
+        dogs.write_timg(x(5), 0, 0x64, WDT_KEY).unwrap();
+        dogs.write_timg(x(5), 0, 0x48, 0).unwrap();
         let rtc = Tick((400_000u64 * TICK_HZ).div_ceil(SLOW_HZ));
-        assert_eq!(dogs.deadline(), Some((rtc, Watchdog::Rtc)));
-        dogs.write_rtc(x(6), 0x98, 0);
-        assert_eq!(dogs.deadline(), None);
+        assert_eq!(due(&dogs), Some((rtc, Watchdog::Rtc)));
+        dogs.write_rtc(x(6), 0x98, 0).unwrap();
+        assert_eq!(due(&dogs), None);
     }
 
     #[test]
     fn the_rtc_feed_is_bit_31() {
         let mut dogs = Watchdogs::new(XTAL);
-        dogs.write_timg(x(0), 0, 0x64, WDT_KEY);
-        dogs.write_timg(x(0), 0, 0x48, 0);
+        dogs.write_timg(x(0), 0, 0x64, WDT_KEY).unwrap();
+        dogs.write_timg(x(0), 0, 0x48, 0).unwrap();
         let hold = (400_000u64 * TICK_HZ).div_ceil(SLOW_HZ);
-        dogs.write_rtc(x(100), 0xac, 1);
-        assert_eq!(dogs.deadline(), Some((Tick(hold), Watchdog::Rtc)));
-        dogs.write_rtc(x(100), 0xac, 1 << 31);
-        assert_eq!(
-            dogs.deadline(),
-            Some((Tick(x(100).0 + hold), Watchdog::Rtc))
-        );
+        dogs.write_rtc(x(100), 0xac, 1).unwrap();
+        assert_eq!(due(&dogs), Some((Tick(hold), Watchdog::Rtc)));
+        dogs.write_rtc(x(100), 0xac, 1 << 31).unwrap();
+        assert_eq!(due(&dogs), Some((Tick(x(100).0 + hold), Watchdog::Rtc)));
     }
 
     #[test]
     fn a_timer_group_watchdog_keeps_its_count_across_an_apb_change() {
         let mut dogs = Watchdogs::new(XTAL);
-        dogs.write_rtc(x(0), 0x98, 0);
+        dogs.write_rtc(x(0), 0x98, 0).unwrap();
         dogs.reclock(x(13_000_000), XTAL / 2);
         assert_eq!(
-            dogs.deadline(),
+            due(&dogs),
             Some((
                 Tick(x(13_000_000).0 + 13_000_000 * XTAL / 2),
                 Watchdog::Timg0
@@ -671,27 +873,27 @@ mod tests {
         let mut dogs = Watchdogs::new(XTAL);
         assert_eq!(dogs.read_rtc(0xb4), Some(300 << 18));
         assert_eq!(dogs.read_rtc(0xb8), Some(SWD_KEY));
-        dogs.write_rtc(x(0), 0xb4, 1 << 30);
+        dogs.write_rtc(x(0), 0xb4, 1 << 30).unwrap();
         assert_eq!(
             dogs.read_rtc(0xb4),
             Some(1 << 30),
             "a write at reset sticks"
         );
-        dogs.write_rtc(x(0), 0xb8, 0);
-        dogs.write_rtc(x(0), 0xb4, 0);
+        dogs.write_rtc(x(0), 0xb8, 0).unwrap();
+        dogs.write_rtc(x(0), 0xb4, 0).unwrap();
         assert_eq!(dogs.read_rtc(0xb4), Some(1 << 30), "locked");
     }
 
     #[test]
     fn a_locked_watchdog_drops_writes_and_a_feed_restarts_it() {
         let mut dogs = Watchdogs::new(XTAL);
-        dogs.write_timg(x(5), 0, 0x64, 0);
-        dogs.write_timg(x(5), 0, 0x48, 0);
-        dogs.write_timg(x(5), 0, 0x60, 1);
-        assert_eq!(dogs.deadline(), Some((x(26_000_000), Watchdog::Timg0)));
-        dogs.write_timg(x(5), 0, 0x64, WDT_KEY);
-        dogs.write_timg(x(100), 0, 0x60, 1);
-        assert_eq!(dogs.deadline(), Some((x(26_000_100), Watchdog::Timg0)));
+        dogs.write_timg(x(5), 0, 0x64, 0).unwrap();
+        dogs.write_timg(x(5), 0, 0x48, 0).unwrap();
+        dogs.write_timg(x(5), 0, 0x60, 1).unwrap();
+        assert_eq!(due(&dogs), Some((x(26_000_000), Watchdog::Timg0)));
+        dogs.write_timg(x(5), 0, 0x64, WDT_KEY).unwrap();
+        dogs.write_timg(x(100), 0, 0x60, 1).unwrap();
+        assert_eq!(due(&dogs), Some((x(26_000_100), Watchdog::Timg0)));
     }
 
     #[test]
@@ -701,17 +903,159 @@ mod tests {
         dogs.restore(x(0), Register::Rtc(0xb0), 0);
         dogs.restore(x(0), Register::Timg(0, 0x64), 0);
         assert_eq!(dogs.read_rtc(0xb0), Some(0));
-        let before = dogs.deadline();
-        dogs.write_rtc(x(10), 0x98, 0);
-        dogs.write_timg(x(10), 0, 0x48, 0);
-        assert_eq!(dogs.deadline(), before, "locked, so the writes drop");
+        let before = due(&dogs);
+        dogs.write_rtc(x(10), 0x98, 0).unwrap();
+        dogs.write_timg(x(10), 0, 0x48, 0).unwrap();
+        assert_eq!(due(&dogs), before, "locked, so the writes drop");
         assert_eq!(dogs.rtc.config[0], 0x0001_3214);
     }
 
     #[test]
     fn a_hold_written_below_the_count_runs_out_at_the_write() {
         let mut dogs = Watchdogs::new(XTAL);
-        dogs.write_timg(x(500), 0, 0x50, 10);
-        assert_eq!(dogs.deadline(), Some((x(500), Watchdog::Timg0)));
+        dogs.write_timg(x(500), 0, 0x50, 10).unwrap();
+        assert_eq!(due(&dogs), Some((x(500), Watchdog::Timg0)));
+    }
+
+    const EN: u32 = 1 << 31;
+
+    /// Timer group 0's watchdog, out of flash boot mode, with `config0`, prescaler 1 and stage
+    /// holds 10, 20, 30 and 40, started at crystal cycle 0, and the others disabled.
+    fn group0(config0: u32) -> Watchdogs {
+        let mut dogs = Watchdogs::new(XTAL);
+        dogs.write_rtc(x(0), 0x98, 0).unwrap();
+        for (k, hold) in [10, 20, 30, 40].into_iter().enumerate() {
+            dogs.write_timg(x(0), 0, 0x50 + 4 * k as u32, hold).unwrap();
+        }
+        dogs.write_timg(x(0), 0, 0x48, 0).unwrap();
+        dogs.write_timg(x(0), 0, 0x48, config0).unwrap();
+        dogs
+    }
+
+    /// The stage, action and tick of each stage run out in turn, until one resets or `n` ran.
+    fn stages(dogs: &mut Watchdogs, n: usize) -> Vec<(u8, Action, u64)> {
+        let mut seen = Vec::new();
+        while let Some(expiry) = dogs.deadline() {
+            seen.push((expiry.stage, expiry.action, expiry.at.0 / XTAL));
+            if matches!(expiry.action, Action::Reset(_)) || seen.len() == n {
+                break;
+            }
+            dogs.run_out(expiry);
+        }
+        seen
+    }
+
+    #[test]
+    fn each_stage_counts_its_hold_in_turn_and_does_its_action() {
+        let mut dogs = group0(EN | 1 << 29 | 3 << 27);
+        assert_eq!(
+            stages(&mut dogs, 4),
+            [
+                (0, Action::Interrupt, 10),
+                (1, Action::Reset(Reset::System), 30)
+            ]
+        );
+        assert_eq!(dogs.read_timg(0, 0x74), Some(WDT_INT));
+        assert_eq!(dogs.lines(), [false, false], "not enabled");
+        dogs.write_timg(x(10), 0, 0x70, WDT_INT).unwrap();
+        assert_eq!(dogs.lines(), [true, false]);
+        assert_eq!(dogs.read_timg(0, 0x78), Some(WDT_INT));
+        dogs.write_timg(x(10), 0, 0x7c, WDT_INT).unwrap();
+        assert_eq!(dogs.lines(), [false, false]);
+        assert_eq!(dogs.read_timg(0, 0x74), Some(0));
+    }
+
+    #[test]
+    fn stages_that_do_nothing_count_and_stage_3_leads_back_to_stage_0() {
+        let mut dogs = group0(EN | 1 << 25);
+        assert_eq!(
+            stages(&mut dogs, 5),
+            [
+                (0, Action::Off, 10),
+                (1, Action::Off, 30),
+                (2, Action::Interrupt, 60),
+                (3, Action::Off, 100),
+                (0, Action::Off, 110),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_feed_counts_stage_0_again() {
+        let mut dogs = group0(EN | 1 << 29 | 3 << 27);
+        let first = dogs.deadline().unwrap();
+        dogs.run_out(first);
+        dogs.write_timg(x(15), 0, 0x60, 1).unwrap();
+        assert_eq!(stages(&mut dogs, 1), [(0, Action::Interrupt, 25)]);
+    }
+
+    #[test]
+    fn flash_boot_mode_resets_the_system_or_the_rtc_domain_at_stage_0() {
+        let dogs = Watchdogs::new(XTAL);
+        let expiry = dogs.deadline().unwrap();
+        assert_eq!(
+            (expiry.watchdog, expiry.stage, expiry.action),
+            (Watchdog::Timg0, 0, Action::Reset(Reset::System))
+        );
+        let mut dogs = Watchdogs::new(XTAL);
+        dogs.write_timg(x(0), 0, 0x48, 0).unwrap();
+        let expiry = dogs.deadline().unwrap();
+        assert_eq!(
+            (expiry.watchdog, expiry.action),
+            (Watchdog::Rtc, Action::Reset(Reset::Rtc))
+        );
+    }
+
+    #[test]
+    fn the_rtc_watchdog_takes_its_later_holds_from_config2_on() {
+        let mut dogs = Watchdogs::new(XTAL);
+        dogs.write_timg(x(0), 0, 0x48, 0).unwrap();
+        dogs.write_rtc(x(0), 0x9c, 34).unwrap();
+        dogs.write_rtc(x(0), 0xa0, 68).unwrap();
+        dogs.write_rtc(x(0), 0x98, EN | 3 << 25 | 1 << 11).unwrap();
+        let slow = |counts: u64| (counts * TICK_HZ).div_ceil(SLOW_HZ);
+        let first = dogs.deadline().unwrap();
+        assert_eq!((first.at.0, first.action), (slow(68), Action::Off));
+        dogs.run_out(first);
+        let second = dogs.deadline().unwrap();
+        assert_eq!(
+            (second.at.0, second.stage, second.action),
+            (slow(68) + slow(68), 1, Action::Reset(Reset::System))
+        );
+    }
+
+    #[test]
+    fn a_stage_the_model_does_not_run_is_refused_while_it_runs() {
+        let timg = |config0| {
+            let mut dogs = Watchdogs::new(XTAL);
+            dogs.write_timg(x(0), 1, 0x48, config0)
+        };
+        assert_eq!(timg(EN | 2 << 29), Err("watchdog_cpu_reset"));
+        assert_eq!(timg(EN | 1 << 29 | 2 << 27), Err("watchdog_cpu_reset"));
+        assert_eq!(timg(EN | 2 << 29 | 1 << 13), Ok(true));
+        assert_eq!(timg(EN | 3 << 29 | 2 << 27), Ok(true), "after a reset");
+        assert_eq!(timg(2 << 29), Ok(true), "not running");
+        let rtc = |config0| {
+            let mut dogs = Watchdogs::new(XTAL);
+            dogs.write_rtc(x(0), 0x98, config0)
+        };
+        assert_eq!(rtc(EN | 1 << 28), Err("watchdog_interrupt"));
+        assert_eq!(rtc(EN | 5 << 28), Err("watchdog_stage"));
+        assert_eq!(rtc(EN | 2 << 28), Err("watchdog_cpu_reset"));
+        assert_eq!(rtc(EN | 2 << 28 | 1 << 11), Ok(true));
+        assert_eq!(rtc(EN | 4 << 28), Ok(true));
+        let mut dogs = Watchdogs::new(XTAL);
+        dogs.write_rtc(x(0), 0xb0, 0).unwrap();
+        assert_eq!(dogs.write_rtc(x(0), 0x98, EN | 1 << 28), Ok(true), "locked");
+    }
+
+    #[test]
+    fn a_super_watchdog_left_to_be_fed_is_refused() {
+        let mut dogs = Watchdogs::new(XTAL);
+        assert_eq!(dogs.write_rtc(x(0), 0xb4, 300 << 18), Err("super_watchdog"));
+        assert_eq!(dogs.write_rtc(x(0), 0xb4, SWD_AUTO_FEED_EN), Ok(true));
+        assert_eq!(dogs.read_rtc(0xb4), Some(SWD_AUTO_FEED_EN));
+        dogs.write_rtc(x(0), 0xb8, 0).unwrap();
+        assert_eq!(dogs.write_rtc(x(0), 0xb4, 0), Ok(true), "locked");
     }
 }

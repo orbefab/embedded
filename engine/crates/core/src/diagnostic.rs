@@ -395,11 +395,14 @@ pub enum Diagnostic {
         pc: u32,
         symbol: Option<String>,
     },
-    /// A chip's watchdog ran out its first stage. It ends the run.
+    /// A stage of a chip's watchdog ran out and reset `reset`, the CPU, the system or the RTC
+    /// domain. It ends the run.
     ChipWatchdog {
         part: Ref,
         at: Time,
         watchdog: &'static str,
+        stage: u8,
+        reset: &'static str,
     },
     /// A chip's firmware started an eFuse program command from the store at `pc`, which would
     /// burn eFuses. It ends the run.
@@ -1100,8 +1103,14 @@ impl Diagnostic {
                     at.as_ps()
                 )
             }
-            Diagnostic::ChipWatchdog { part, at, watchdog } => format!(
-                "{part} {watchdog} watchdog ran out at {} ps; the firmware neither fed nor disabled it",
+            Diagnostic::ChipWatchdog {
+                part,
+                at,
+                watchdog,
+                stage,
+                reset,
+            } => format!(
+                "{part} {watchdog} watchdog's stage {stage} ran out and reset the {reset} at {} ps; the firmware neither fed nor disabled it",
                 at.as_ps()
             ),
             Diagnostic::ChipEfuseProgram {
@@ -1390,8 +1399,13 @@ impl Diagnostic {
                 "setting": setting.name(),
                 "symbol": symbol,
             }),
-            Diagnostic::ChipWatchdog { watchdog, .. } => {
-                serde_json::json!({ "watchdog": watchdog })
+            Diagnostic::ChipWatchdog {
+                watchdog,
+                stage,
+                reset,
+                ..
+            } => {
+                serde_json::json!({ "watchdog": watchdog, "stage": stage, "reset": reset })
             }
             Diagnostic::ChipEfuseProgram { pc, symbol, .. }
             | Diagnostic::ChipUnsupportedClock { pc, symbol, .. }

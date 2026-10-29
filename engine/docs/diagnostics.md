@@ -410,6 +410,13 @@ The message is `{part} started a {peripheral} transfer with setting {setting} at
 - `mode`, `dma_link`, `dma_descriptor` and `dma_length`, with `peripheral` `SHA`: the store started a hash in another mode than SHA-256, or a DMA hash whose GDMA channel or list SPI2 would refuse with that setting. A transfer setting `dma_link` also covers a start while GDMA's clock is off.
 - `reset_while_sending` and `clock_off_while_sending`, with `peripheral` `SPI2`: the store set SPI2's reset bit, or cleared its clock bit, while a transfer ran. With `peripheral` `GDMA`, the store did that to GDMA's bits while an SPI2 transfer sent from it. ESP-IDF's restart and panic paths set GDMA's reset, `SYSTEM_DMA_RST`, in `esp_system_reset_modules_on_exit`, so an `esp_restart()` or a panic while SPI2 sends from GDMA ends the run here, at a PC in that function, in place of `chip.restart` or `chip.halted`. The console holds a panic's text, which ESP-IDF prints first.
 - `clock_off` and `held_in_reset`, with `peripheral` `SPI2`, `LEDC`, `GDMA` or `SHA`: a load or a store reached that peripheral while its clock gate was clear, or while a reset bit held it. `pc` is that access's.
+- `hpoint`, `fade` and `duty_fraction`, with `peripheral` `LEDC`: the store sent a channel's update with a nonzero `LEDC_HPOINT_LSCHn`, with `LEDC_DUTY_START_LSCHn` and a nonzero `LEDC_DUTY_SCALE_LSCHn`, or with a duty that has a fraction.
+- `clock`, `tick_sel`, `clock_divider`, `duty_resolution`, `fractional_divider`, `duty_range` and `full_duty`, with `peripheral` `LEDC`: an update waits on a counting timer whose `LEDC_APB_CLK_SEL` is neither 1 nor 3, whose `LEDC_TICK_SEL_LSTIMERn` is set, whose divider is below 256, whose resolution is 0 or above 14, or whose period is not whole ticks of 480 MHz, or the update's duty is above that timer's steps, or is every step at 14 bits.
+- `timer_change_while_running`, `pause` and `clock_change_while_running`, with `peripheral` `LEDC`: the store changed a counting timer's resolution, divider or tick source, paused it, or changed `LEDC_APB_CLK_SEL` or the APB clock while a timer counted it.
+- `clock_off_while_running`, with `peripheral` `LEDC`: the store cleared LEDC's clock gate while a timer counted.
+- `reset_while_running`, with `peripheral` `LEDC`: the store set LEDC's reset bit while a pin with a net carried a channel through the matrix, or while an update had yet to take effect or to drive its signal.
+- `watchdog_cpu_reset`, `watchdog_interrupt` and `watchdog_stage`, with `peripheral` `TIMG0`, `TIMG1` or `RTC_CNTL`: the store left a running watchdog, at or before its first stage that resets, a CPU reset while its `PROCPU_RESET_EN` is clear, an interrupt of the RTC watchdog, or a stage field that names no action.
+- `super_watchdog`, with `peripheral` `RTC_CNTL`: the store left both `SWD_AUTO_FEED_EN` and `SWD_DISABLE` clear in `RTC_CNTL_SWD_CONF_REG`.
 
 The access writes nothing, and the run keeps every row before it, as [esp32s3.md](esp32s3.md#what-it-models) says.
 
@@ -431,11 +438,11 @@ The message is `{part} fetched code at {pc}, where the model maps no memory, at 
 
 ## chip.watchdog
 
-Severity `error`. Refs are the chip. `t_ps` is the time the watchdog's first stage ran out. It ends the run.
+Severity `error`. Refs are the chip. `t_ps` is the time the watchdog's stage ran out. It ends the run.
 
-The message is `{part} {watchdog} watchdog ran out at {t_ps} ps; the firmware neither fed nor disabled it`.
+The message is `{part} {watchdog} watchdog's stage {stage} ran out and reset the {reset} at {t_ps} ps; the firmware neither fed nor disabled it`.
 
-`data` holds `watchdog`, which is `RTC`, `timer group 0` or `timer group 1`. [esp32s3.md](esp32s3.md#what-it-models) says when each runs.
+`data` holds `watchdog`, which is `RTC`, `timer group 0` or `timer group 1`, `stage`, 0 to 3, and `reset`, which is `CPU`, `system` or `RTC domain`. [esp32s3.md](esp32s3.md#what-it-models) says when each runs and what each stage does.
 
 ## chip.efuse_program
 

@@ -1,17 +1,21 @@
 //! The ESP32-S3 behind the seam. Each GPIO with a net becomes an output and a watch around
 //! `sim_esp32::s3::Esp32s3`, its console goes to `serial.csv` as `USB_SERIAL_JTAG`, each SPI2
-//! transfer is a `Spi` record, and its 480 MHz tick converts between picoseconds and its timeline.
+//! transfer is a `Spi` record, each LEDC update is a `Duty` record on each of its pins with a
+//! net, and its 480 MHz tick converts between picoseconds and its timeline.
+//!
+//! An LEDC update that moves its pad's drive moves it 1 ps after its record's end, a stop of its
+//! own, so the record and the drive change never land together.
 //!
 //! A console packet has no line timing: every byte of one starts and ends at the cycle the
 //! firmware flushed it.
 
 use sim_core::diagnostic::{ChipSetting, Diagnostic, FlashRefusal, ResetReason, Unsupported};
-use sim_core::link::{Cs, Lanes, Record, RecordKind, Spi, SpiNets, SpiPhase};
+use sim_core::link::{self, Cs, Lanes, Record, RecordKind, Spi, SpiNets, SpiPhase};
 use sim_core::name::Ref;
 use sim_core::netlist::{Esp32s3, Esp32s3Firmware, NetId, PartId, Value};
 use sim_core::time::Time;
 use sim_esp32::s3::{
-    self, Fault, Halt, PadDrive, Refused, ResetCause, TICK_HZ, Tick, Touch, Transfer,
+    self, Duty, Fault, Halt, PadDrive, Refused, ResetCause, TICK_HZ, Tick, Touch, Transfer,
 };
 use sim_xtensa::Missing;
 
@@ -53,6 +57,9 @@ pub(crate) struct Core {
     levels: Vec<bool>,
     /// The fault that ended its run, once a stop reported it.
     fault: Option<(Time, Fault)>,
+    /// The time of an LEDC drive move the chip reported past the last limit, which the next
+    /// call stops at.
+    moved: Option<Time>,
 }
 
 pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
@@ -141,6 +148,7 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
         made: 0,
         levels: Vec::new(),
         fault: None,
+        moved: None,
     };
     core.refresh();
     Chip {
@@ -177,6 +185,9 @@ fn time(tick: Tick) -> Time {
 
 impl Core {
     pub(crate) fn run_until(&mut self, limit: Time) -> Option<Stop> {
+        if let Some(at) = self.moved {
+            return (at <= limit).then(|| self.move_drive(at));
+        }
         let halt = self.chip.run_until(tick(limit))?;
         let at = time(halt.at());
         let mut record = false;
@@ -195,8 +206,18 @@ impl Core {
                         let record = self.record(transfer);
                         self.records.push(record);
                     }
+                    let duties: Vec<Duty> = self.chip.take_duties().collect();
+                    for duty in duties {
+                        let record = self.duty(duty);
+                        self.records.push(record);
+                    }
                     record = true;
                 }
+            }
+            Halt::Moved(_) => {
+                let at = Time::from_ps(at.as_ps() + 1);
+                self.moved = Some(at);
+                return (at <= limit).then(|| self.move_drive(at));
             }
             Halt::Fault(_, fault) => self.fault = Some((at, fault)),
         }
@@ -205,6 +226,47 @@ impl Core {
             sample: false,
             record,
         })
+    }
+
+    /// The stop at `at` where the drives the chip moved after an LEDC record land.
+    fn move_drive(&mut self, at: Time) -> Stop {
+        self.moved = None;
+        self.refresh();
+        Stop {
+            at,
+            sample: false,
+            record: false,
+        }
+    }
+
+    /// The pin of the part on `pad`.
+    fn pin(pad: u8) -> Option<&'static str> {
+        Esp32s3::PINS
+            .into_iter()
+            .find(|name| name.strip_prefix("GPIO") == Some(&pad.to_string()))
+    }
+
+    /// `duty` as its `Duty` record, named by its pad's pin.
+    fn duty(&mut self, duty: Duty) -> Record {
+        let k = self
+            .gpios
+            .iter()
+            .position(|&gpio| gpio == duty.pad)
+            .expect("a duty's pad has a net");
+        let seq = self.made;
+        self.made += 1;
+        Record {
+            seq,
+            start: time(duty.at),
+            end: time(duty.at),
+            pin: Self::pin(duty.pad).expect("a pad with a net has a pin"),
+            kind: RecordKind::Duty(link::Duty {
+                duty: duty.duty,
+                resolution: duty.resolution,
+                hz: duty.hz,
+                net: self.nets[k],
+            }),
+        }
     }
 
     /// `transfer` as its `Spi` record, named by the pin of its CS pad, or `SPI2` when no pin of
@@ -221,14 +283,7 @@ impl Core {
             _ => unreachable!("SPI2 sends on 1, 2 or 4 lanes"),
         };
         let pads = transfer.pads;
-        let pin = pads
-            .cs
-            .and_then(|pad| {
-                Esp32s3::PINS
-                    .into_iter()
-                    .find(|name| name.strip_prefix("GPIO") == Some(&pad.to_string()))
-            })
-            .unwrap_or("SPI2");
+        let pin = pads.cs.and_then(Self::pin).unwrap_or("SPI2");
         let seq = self.made;
         self.made += 1;
         Record {
@@ -359,10 +414,16 @@ impl Core {
                     symbol: symbol(pc),
                 }
             }
-            Fault::Watchdog(watchdog) => Diagnostic::ChipWatchdog {
+            Fault::Watchdog {
+                watchdog,
+                stage,
+                reset,
+            } => Diagnostic::ChipWatchdog {
                 part,
                 at,
                 watchdog: watchdog.name(),
+                stage,
+                reset: reset.name(),
             },
             Fault::EfuseProgram(pc) => Diagnostic::ChipEfuseProgram {
                 part,

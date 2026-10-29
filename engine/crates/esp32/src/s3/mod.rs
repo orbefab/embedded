@@ -52,14 +52,14 @@ use clock::{CpuClock, Source, XTAL};
 use flash::Flash;
 use gpio::PADS;
 use soc::{Ending, Soc};
-use timers::Watchdogs;
+use timers::{Action, Watchdogs};
 
 pub use boot::Segment;
 pub use clock::{TICK_HZ, Tick};
 pub use gpio::PadDrive;
 pub use spi1::FlashRefusal;
 pub use spi2::{Pads, Phase, Setting, Transfer};
-pub use timers::Watchdog;
+pub use timers::{Reset, Watchdog};
 
 /// A window onto SRAM: its bus addresses, and where in SRAM it starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,8 +96,12 @@ pub enum Fault {
     UnmappedFetch(u32),
     /// The core reached a jump to itself at this PC that nothing can take it out of.
     Halted(u32),
-    /// A watchdog ran out its first stage.
-    Watchdog(Watchdog),
+    /// A watchdog's stage ran out and reset the CPU, the system or the RTC domain.
+    Watchdog {
+        watchdog: Watchdog,
+        stage: u8,
+        reset: Reset,
+    },
     /// The store at this PC started an SPI2 transfer with a setting the model does not run.
     Setting(Setting, u32),
     /// The store at this PC started an eFuse program command, which would burn eFuses.
@@ -141,9 +145,13 @@ pub enum Refused {
 /// Where a run stopped before its limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Halt {
-    /// At `at` a pad's drive changed, an SPI2 transfer ended, or both. [`Esp32s3::drive`] gives
-    /// the new drives, and [`Esp32s3::take_transfers`] the transfer.
+    /// At `at` a pad's drive changed, a record ended, or both: an SPI2 transfer, or an LEDC
+    /// update that took effect on a pad with a net. [`Esp32s3::drive`] gives the new drives,
+    /// and [`Esp32s3::take_transfers`] and [`Esp32s3::take_duties`] the records.
     Change { at: Tick, image: bool, record: bool },
+    /// The LEDC updates that took effect at `at` moved a pad's drive, after the `Change` at
+    /// `at` that holds their records. [`Esp32s3::drive`] gives the new drives.
+    Moved(Tick),
     /// The run ended at this tick. The chip runs no further.
     Fault(Tick, Fault),
 }
@@ -151,9 +159,22 @@ pub enum Halt {
 impl Halt {
     pub fn at(self) -> Tick {
         match self {
-            Halt::Change { at, .. } | Halt::Fault(at, _) => at,
+            Halt::Change { at, .. } | Halt::Moved(at) | Halt::Fault(at, _) => at,
         }
     }
+}
+
+/// An LEDC update that took effect at `at`, or a route that put a netted pad on a channel at
+/// `at`: `pad` sends `duty` of `2^resolution` steps at `hz`. Every netted pad that carries the
+/// channel gets its own record, and an inverted pad's duty is the steps the channel does not
+/// send.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Duty {
+    pub at: Tick,
+    pub pad: u8,
+    pub duty: u32,
+    pub resolution: u8,
+    pub hz: u32,
 }
 
 /// The first access to a peripheral register the model does not keep, or the first write that
@@ -198,6 +219,13 @@ pub struct Esp32s3 {
     changed: Option<Tick>,
     /// How many of SPI2's transfers have had their end reported and wait to be taken.
     reported: usize,
+    /// The `Duty` records, from the first not taken.
+    duties: Vec<Duty>,
+    /// How many of `duties` have been reported and wait to be taken.
+    reported_duties: usize,
+    /// The LEDC signal changes that move a pad's drive and are not reported yet: each one's tick,
+    /// signal and level.
+    moves: Vec<(Tick, u16, bool)>,
     /// The fault that ends the run, not reported yet.
     fault: Option<(Tick, Fault)>,
     ended: bool,
@@ -266,6 +294,9 @@ impl Esp32s3 {
             soc,
             changed: None,
             reported: 0,
+            duties: Vec::new(),
+            reported_duties: 0,
+            moves: Vec::new(),
             fault: None,
             ended: false,
             restarted: None,
@@ -276,6 +307,7 @@ impl Esp32s3 {
     /// or before it. `None` when the chip reached the limit, or ended before.
     pub fn run_until(&mut self, limit: Tick) -> Option<Halt> {
         loop {
+            self.settle_ledc();
             if let Some(halt) = self.next_halt() {
                 if halt.at() > limit {
                     return None;
@@ -287,15 +319,14 @@ impl Esp32s3 {
             {
                 return None;
             }
-            let watchdog = self
-                .soc
-                .watchdogs
-                .deadline()
-                .map(|(at, which)| (self.soc.clock.round_up(at), which));
+            let watchdog = self.soc.watchdogs.deadline();
+            let due = watchdog.map(|expiry| self.soc.clock.round_up(expiry.at));
+            let ledc = self.soc.ledc.next(self.soc.clock.source.apb());
             let until = [
                 Some(Tick(limit.0 + 1)),
-                watchdog.map(|(at, _)| at),
+                due,
                 self.soc.spi2.end(self.reported),
+                ledc.map(|at| Tick(at.0 + 1)),
             ]
             .into_iter()
             .flatten()
@@ -310,17 +341,20 @@ impl Esp32s3 {
             self.soc.rearmed = false;
             self.soc.reclocked = false;
             self.soc.started = false;
-            let rounded = self
-                .soc
-                .watchdogs
-                .deadline()
-                .map(|(at, which)| (self.soc.clock.round_up(at), which));
-            if let Some((at, which)) = watchdog
-                && self.now() >= at
-                && rounded == watchdog
+            if let (Some(expiry), Some(due)) = (watchdog, due)
+                && self.now() >= due
+                && self.soc.watchdogs.deadline() == watchdog
             {
-                self.fault = Some((at, Fault::Watchdog(which)));
-                continue;
+                if let Action::Reset(reset) = expiry.action {
+                    let fault = Fault::Watchdog {
+                        watchdog: expiry.watchdog,
+                        stage: expiry.stage,
+                        reset,
+                    };
+                    self.fault = Some((due, fault));
+                    continue;
+                }
+                self.soc.watchdogs.run_out(expiry);
             }
             let pc = self.core.pc();
             let now = self.now();
@@ -363,6 +397,37 @@ impl Esp32s3 {
         }
     }
 
+    /// Lets every LEDC update take effect that is due at a tick whose instructions have all run,
+    /// before any fault. An update that moves a pad's drive waits for its `Moved` halt to change
+    /// the signal, and the others change it at once.
+    fn settle_ledc(&mut self) {
+        let Some(through) = self.now().0.checked_sub(1) else {
+            return;
+        };
+        self.soc.settle_ledc(Tick(through));
+        let fault = self.fault.map(|(at, _)| at);
+        let before_fault = |at: Tick| fault.is_none_or(|fault| at < fault);
+        let duties = self
+            .soc
+            .duties
+            .drain(..)
+            .filter(|duty| before_fault(duty.at));
+        self.duties.extend(duties);
+        for effect in std::mem::take(&mut self.soc.effects) {
+            if !before_fault(effect.at) {
+                continue;
+            }
+            let signal = ledc::SIGNAL + u16::from(effect.channel);
+            let level = effect.duty > 0;
+            let before = self.soc.image();
+            self.soc.gpio.set_signal(signal, level);
+            if self.soc.image() != before {
+                self.soc.gpio.set_signal(signal, !level);
+                self.moves.push((effect.at, signal, level));
+            }
+        }
+    }
+
     /// Holds the chip in reset from `now`, after the store at `pc` reset it from `esp_restart`.
     /// The boot ROM does not run, so the core runs no further, and each pad drives as at
     /// power-on.
@@ -384,42 +449,61 @@ impl Esp32s3 {
         self.soc.clock.tick(self.core.cycle())
     }
 
-    /// The earliest halt the core has reached and not reported. An image change and a transfer
-    /// end at one cycle are one halt, and either comes before a fault at that cycle.
+    /// The earliest halt the core has reached and not reported. An image change and the records
+    /// that end at one cycle are one halt, then the drive moves of that cycle's LEDC updates,
+    /// and either comes before a fault at that cycle.
     fn next_halt(&self) -> Option<Halt> {
         if self.ended {
             return None;
         }
-        let record = self
+        let transfer = self
             .soc
             .spi2
             .end(self.reported)
             .filter(|&end| end <= self.now());
+        let duty = self.duties.get(self.reported_duties).map(|duty| duty.at);
+        let record = [transfer, duty].into_iter().flatten().min();
         let change = [self.changed, record].into_iter().flatten().min();
-        match (change, self.fault) {
-            (Some(at), Some((fault_at, fault))) if fault_at < at => {
-                Some(Halt::Fault(fault_at, fault))
-            }
-            (Some(at), _) => Some(Halt::Change {
+        let change = change.map(|at| {
+            let halt = Halt::Change {
                 at,
                 image: self.changed == Some(at),
                 record: record == Some(at),
-            }),
-            (None, Some((at, fault))) => Some(Halt::Fault(at, fault)),
-            (None, None) => None,
-        }
+            };
+            (at, 0, halt)
+        });
+        let moved = self.moves.first().map(|&(at, ..)| (at, 1, Halt::Moved(at)));
+        let fault = self
+            .fault
+            .map(|(at, fault)| (at, 2, Halt::Fault(at, fault)));
+        [change, moved, fault]
+            .into_iter()
+            .flatten()
+            .min_by_key(|&(at, rank, _)| (at, rank))
+            .map(|(.., halt)| halt)
     }
 
     fn report(&mut self, halt: Halt) {
         match halt {
-            Halt::Change { image, record, .. } => {
+            Halt::Change { at, image, record } => {
                 if image {
                     self.shown = self.soc.image();
                     self.changed = None;
                 }
                 if record {
-                    self.reported += 1;
+                    if self.soc.spi2.end(self.reported) == Some(at) {
+                        self.reported += 1;
+                    }
+                    let unreported = &self.duties[self.reported_duties..];
+                    self.reported_duties += unreported.iter().take_while(|d| d.at == at).count();
                 }
+            }
+            Halt::Moved(at) => {
+                while let Some(&(_, signal, level)) = self.moves.first().filter(|m| m.0 == at) {
+                    self.soc.gpio.set_signal(signal, level);
+                    self.moves.remove(0);
+                }
+                self.shown = self.soc.image();
             }
             Halt::Fault(..) => {
                 self.fault = None;
@@ -432,6 +516,12 @@ impl Esp32s3 {
     pub fn take_transfers(&mut self) -> impl Iterator<Item = Transfer> + '_ {
         let n = std::mem::take(&mut self.reported);
         self.soc.spi2.take(n)
+    }
+
+    /// The `Duty` records whose ends were reported, in time order.
+    pub fn take_duties(&mut self) -> impl Iterator<Item = Duty> + '_ {
+        let n = std::mem::take(&mut self.reported_duties);
+        self.duties.drain(..n)
     }
 
     /// What the pad of `gpio`, a netted one, drives in the last reported image.
@@ -553,6 +643,12 @@ mod tests {
 
     const LOOP: [u8; 3] = [0x06, 0xff, 0xff];
     const WAITI: [u8; 3] = [0x00, 0x70, 0x00];
+    /// Timer group 0's watchdog in flash boot mode, as at power-on, at its stage 0.
+    const TIMG0_FLASHBOOT: Fault = Fault::Watchdog {
+        watchdog: Watchdog::Timg0,
+        stage: 0,
+        reset: Reset::System,
+    };
 
     /// Enables GPIO21, raises it, reads `GPIO_PIN0`, sends `hi` and spins.
     fn blink() -> Program {
@@ -713,7 +809,7 @@ mod tests {
             let store = program.pc();
             program.rri8(6, 5, 4, 0x00).raw(&LOOP);
             let want = if u64::from(hold) <= 5 {
-                Halt::Fault(c(hold.into()), Fault::Watchdog(Watchdog::Timg0))
+                Halt::Fault(c(hold.into()), TIMG0_FLASHBOOT)
             } else {
                 Halt::Fault(c(5), Fault::EfuseProgram(store))
             };
@@ -744,10 +840,7 @@ mod tests {
             let mut chip = program.chip();
             assert_eq!(
                 halts(&mut chip, 1000, step),
-                [(
-                    Halt::Fault(c(3), Fault::Watchdog(Watchdog::Timg0)),
-                    PadDrive::Off
-                )],
+                [(Halt::Fault(c(3), TIMG0_FLASHBOOT), PadDrive::Off)],
                 "limits {step} apart"
             );
             assert_eq!(chip.unmodeled().count(), 0, "limits {step} apart");
@@ -863,8 +956,8 @@ mod tests {
         let mut program = Program::new(&[]);
         program.raw(&LOOP);
         let quiet = |chip: &mut Esp32s3| {
-            chip.soc.watchdogs.write_timg(Tick(0), 0, 0x48, 0);
-            chip.soc.watchdogs.write_rtc(Tick(0), 0x98, 0);
+            chip.soc.watchdogs.write_timg(Tick(0), 0, 0x48, 0).unwrap();
+            chip.soc.watchdogs.write_rtc(Tick(0), 0x98, 0).unwrap();
         };
         let mut chip = program.chip();
         quiet(&mut chip);
@@ -1043,13 +1136,13 @@ mod tests {
         let mut program = Program::new(&[]);
         program.raw(&WAITI).raw(&LOOP);
         let mut chip = program.chip();
-        let (at, which) = Watchdogs::new(XTAL)
+        let expiry = Watchdogs::new(XTAL)
             .deadline()
             .expect("a watchdog runs at power-on");
-        assert_eq!(chip.run_until(Tick(at.0 - 1)), None);
+        assert_eq!(chip.run_until(Tick(expiry.at.0 - 1)), None);
         assert_eq!(
             chip.run_until(Tick(u64::MAX - 1)),
-            Some(Halt::Fault(at, Fault::Watchdog(which)))
+            Some(Halt::Fault(expiry.at, TIMG0_FLASHBOOT))
         );
         assert_eq!(chip.run_until(Tick(u64::MAX - 1)), None, "ended");
     }
@@ -1102,10 +1195,7 @@ mod tests {
                 halts(&mut chip, 1000, step),
                 [
                     (image_at(store), PadDrive::Low),
-                    (
-                        Halt::Fault(at, Fault::Watchdog(Watchdog::Timg0)),
-                        PadDrive::Low
-                    ),
+                    (Halt::Fault(at, TIMG0_FLASHBOOT), PadDrive::Low),
                 ],
                 "limits {step} apart"
             );
@@ -1116,7 +1206,7 @@ mod tests {
         assert!(
             matches!(
                 seen[..],
-                [(Halt::Fault(at, Fault::Watchdog(Watchdog::Timg0)), PadDrive::Off)] if at < store
+                [(Halt::Fault(at, TIMG0_FLASHBOOT), PadDrive::Off)] if at < store
             ),
             "a hold below the count ends the run before the drive changes: {seen:?}"
         );
@@ -1659,5 +1749,460 @@ mod tests {
             soc.load(Cycle(0), 0x5100_0000, Width::Word),
             Err(Exit::Fault(Cause::LoadStoreError))
         );
+    }
+
+    /// Each store of `pairs` in turn, the value to the address, store `k` at cycle `3k + 2`,
+    /// then a jump to itself.
+    fn stores(pairs: &[(u32, u32)]) -> Program {
+        let literals: Vec<u32> = pairs.iter().flat_map(|&(a, v)| [a, v]).collect();
+        let mut program = Program::new(&literals);
+        for k in 0..pairs.len() {
+            program.l32r(2, 2 * k).l32r(3, 2 * k + 1).rri8(6, 3, 2, 0);
+        }
+        program.raw(&LOOP);
+        program
+    }
+
+    /// The PC of store `k` of [`stores`].
+    fn store_pc(program: &Program, k: u32) -> u32 {
+        program.entry() + 9 * k + 6
+    }
+
+    const LEDC: u32 = 0x6001_9000;
+
+    /// Routes LEDC channel 0 to GPIO21, which drives it from store 1, at cycle 5, enables the
+    /// pad, turns LEDC's clock on, picks the clock `clock` and starts timer 0 at 1 bit and divider
+    /// 1, a period of two clock cycles. The timer counts from store 5, at cycle 17.
+    fn ledc_on(clock: u32) -> Vec<(u32, u32)> {
+        vec![
+            (IO_MUX + 4 + 4 * 21, 1 << 12 | 3 << 10 | 1 << 9),
+            (GPIO + 0x554 + 4 * 21, u32::from(ledc::SIGNAL)),
+            (GPIO + 0x24, GPIO21),
+            (SYSTEM + 0x18, 0xf9c1_e06f | 1 << 11),
+            (LEDC + 0xd0, clock),
+            (LEDC + 0xa0, 1 | 256 << 4 | 1 << 25),
+        ]
+    }
+
+    /// The three stores that set channel 0 to `duty` of its steps on timer 0, as IDF's
+    /// `ledc_set_duty` and `ledc_update_duty` do.
+    fn duty(duty: u32) -> [(u32, u32); 3] {
+        [
+            (LEDC + 0x08, duty << 4),
+            (LEDC + 0x0c, 1 << 31 | 1 << 30 | 1 << 20 | 1 << 10),
+            (LEDC, 1 << 2 | 1 << 4),
+        ]
+    }
+
+    fn record_at(at: Tick) -> Halt {
+        Halt::Change {
+            at,
+            image: false,
+            record: true,
+        }
+    }
+
+    /// The updates at cycles 26 and 35 take effect at the timer's next overflows, 24 ticks
+    /// apart from cycle 17: cycles 27 and 37. Each sends its record, then the drive it moves.
+    #[test]
+    fn an_led_duty_update_sends_its_record_then_moves_the_pads_drive() {
+        let program = stores(&[ledc_on(3), duty(1).to_vec(), duty(0).to_vec()].concat());
+        for step in [1, 1000] {
+            let mut chip = program.chip();
+            assert_eq!(
+                halts(&mut chip, 1000, step),
+                [
+                    (image_at(c(5)), PadDrive::Low),
+                    (record_at(c(27)), PadDrive::Low),
+                    (Halt::Moved(c(27)), PadDrive::High),
+                    (record_at(c(37)), PadDrive::High),
+                    (Halt::Moved(c(37)), PadDrive::Low),
+                ],
+                "limits {step} apart"
+            );
+            let duties: Vec<Duty> = chip.take_duties().collect();
+            let sent = |at, duty| Duty {
+                at,
+                pad: 21,
+                duty,
+                resolution: 1,
+                hz: 20_000_000,
+            };
+            assert_eq!(duties, [sent(c(27), 1), sent(c(37), 0)]);
+        }
+    }
+
+    #[test]
+    fn a_duty_change_that_keeps_the_drive_sends_only_its_record() {
+        let program = stores(&[ledc_on(3), duty(1).to_vec(), duty(2).to_vec()].concat());
+        let mut chip = program.chip();
+        assert_eq!(
+            halts(&mut chip, 1000, 1000),
+            [
+                (image_at(c(5)), PadDrive::Low),
+                (record_at(c(27)), PadDrive::Low),
+                (Halt::Moved(c(27)), PadDrive::High),
+                (record_at(c(37)), PadDrive::High),
+            ]
+        );
+    }
+
+    /// Routes LEDC channel `channel` to GPIO22 and enables the pad, in three stores.
+    fn pad22(channel: u16) -> [(u32, u32); 3] {
+        [
+            (IO_MUX + 4 + 4 * 22, 1 << 12 | 3 << 10 | 1 << 9),
+            (GPIO + 0x554 + 4 * 22, u32::from(ledc::SIGNAL + channel)),
+            (GPIO + 0x24, GPIO21 | 1 << 22),
+        ]
+    }
+
+    fn pads_and_duties(chip: &mut Esp32s3) -> Vec<(Tick, u8, u32)> {
+        halts(chip, 1000, 1000);
+        chip.take_duties().map(|d| (d.at, d.pad, d.duty)).collect()
+    }
+
+    /// Each netted pad that carries the channel gets its own record, and a pad with no net or on
+    /// another channel gets none.
+    #[test]
+    fn every_netted_pad_on_a_channel_gets_its_duty() {
+        let other = stores(&[ledc_on(3), pad22(1).to_vec(), duty(1).to_vec()].concat());
+        let pads = pads_and_duties(&mut other.chip_on(&[21, 22]));
+        assert_eq!(pads, [(c(37), 21, 1)]);
+        let program = stores(&[ledc_on(3), pad22(0).to_vec(), duty(1).to_vec()].concat());
+        let both = pads_and_duties(&mut program.chip_on(&[21, 22]));
+        assert_eq!(both, [(c(37), 21, 1), (c(37), 22, 1)]);
+        assert_eq!(
+            pads_and_duties(&mut program.chip_on(&[22])),
+            [(c(37), 22, 1)]
+        );
+        assert_eq!(pads_and_duties(&mut program.chip_on(&[])), []);
+    }
+
+    /// A pad routed to the channel after its update took effect gets the channel's duty at the
+    /// store that routes it, cycle 32, since LEDC enables its own output. A route away from the
+    /// channel sends nothing.
+    #[test]
+    fn a_pad_routed_to_a_running_channel_gets_its_duty_at_the_route() {
+        let off = [(GPIO + 0x554 + 4 * 22, 0x100)];
+        let pairs = [
+            ledc_on(3),
+            duty(1).to_vec(),
+            pad22(0).to_vec(),
+            off.to_vec(),
+        ];
+        let program = stores(&pairs.concat());
+        let mut chip = program.chip_on(&[21, 22]);
+        assert_eq!(pads_and_duties(&mut chip), [(c(27), 21, 1), (c(32), 22, 1)]);
+    }
+
+    /// GPIO22 drives its own `GPIO_OUT` low from cycle 23, and channel 0 sends 0 from cycle 33.
+    /// The store at cycle 35 that routes the pad to the channel keeps its drive, and its record
+    /// still stops the core at that store, before the two SRAM stores after it.
+    #[test]
+    fn a_route_that_keeps_the_drive_still_halts_at_its_store() {
+        let pairs = [
+            ledc_on(3),
+            vec![
+                (IO_MUX + 4 + 4 * 22, 1 << 12 | 3 << 10 | 1 << 9),
+                (GPIO + 0x24, GPIO21 | 1 << 22),
+            ],
+            duty(0).to_vec(),
+            vec![(GPIO + 0x554 + 4 * 22, u32::from(ledc::SIGNAL))],
+            vec![(RAM[1].start + 0x100, 0); 2],
+        ];
+        let program = stores(&pairs.concat());
+        let mut chip = program.chip_on(&[21, 22]);
+        let mut at_route = None;
+        while let Some(halt) = chip.run_until(c(1000)) {
+            if halt == record_at(c(35)) {
+                at_route = Some(chip.now());
+            }
+        }
+        assert_eq!(at_route, Some(c(36)));
+    }
+
+    /// A timer of three cycles a period, from cycle 17, overflows at every store. The update sent
+    /// at cycle 35 takes effect at cycle 38, before the store there that routes GPIO22 away, so
+    /// both pads get it.
+    #[test]
+    fn an_update_due_at_a_route_store_goes_on_the_pads_from_before_it() {
+        let mut on = ledc_on(3);
+        on[5].1 = 1 | 384 << 4 | 1 << 25;
+        let pairs = [
+            on,
+            pad22(0).to_vec(),
+            duty(1).to_vec(),
+            vec![(GPIO + 0x554 + 4 * 22, 0x100)],
+        ];
+        let program = stores(&pairs.concat());
+        let pads = pads_and_duties(&mut program.chip_on(&[21, 22]));
+        assert_eq!(pads, [(c(38), 21, 1), (c(38), 22, 1)]);
+    }
+
+    /// `OUT_INV_SEL` on the pad: at full duty the pad drives low, and the record sends 0 of the
+    /// 2 steps. Clearing it at cycle 29 drives the pad high and sends the duty, 2, at that store.
+    #[test]
+    fn an_inverted_pad_sends_the_duty_it_drives() {
+        let mut on = ledc_on(3);
+        on[1].1 |= 1 << 9;
+        let pairs = [
+            on,
+            duty(2).to_vec(),
+            vec![(GPIO + 0x554 + 4 * 21, u32::from(ledc::SIGNAL))],
+        ];
+        let program = stores(&pairs.concat());
+        let mut chip = program.chip();
+        assert_eq!(
+            halts(&mut chip, 1000, 1000),
+            [
+                (image_at(c(5)), PadDrive::High),
+                (record_at(c(27)), PadDrive::High),
+                (Halt::Moved(c(27)), PadDrive::Low),
+                (
+                    Halt::Change {
+                        at: c(29),
+                        image: true,
+                        record: true,
+                    },
+                    PadDrive::High
+                ),
+            ]
+        );
+        let duties: Vec<u32> = chip.take_duties().map(|d| d.duty).collect();
+        assert_eq!(duties, [0, 2]);
+    }
+
+    /// At a partial duty an inverted pad drives low, and the record sends the steps the channel
+    /// does not: 3 of the 4 steps of a 2-bit timer at duty 1, from cycle 29.
+    #[test]
+    fn an_inverted_pad_at_a_partial_duty_drives_low() {
+        let mut on = ledc_on(3);
+        on[1].1 |= 1 << 9;
+        on[5].1 = 2 | 256 << 4 | 1 << 25;
+        let program = stores(&[on, duty(1).to_vec()].concat());
+        let mut chip = program.chip();
+        assert_eq!(
+            halts(&mut chip, 1000, 1000),
+            [
+                (image_at(c(5)), PadDrive::High),
+                (record_at(c(29)), PadDrive::High),
+                (Halt::Moved(c(29)), PadDrive::Low),
+            ]
+        );
+        let duties: Vec<u32> = chip.take_duties().map(|d| d.duty).collect();
+        assert_eq!(duties, [3]);
+    }
+
+    /// LEDC's reset bit, set at cycle 32 once GPIO21 is routed away from channel 0 at cycle 29,
+    /// puts the signal back at its power-on level, low. Routing the pad back to the channel at
+    /// cycle 35 then keeps it low and sends no record, since the channel has no duty.
+    #[test]
+    fn an_led_reset_with_no_pad_on_a_channel_drives_its_signals_low() {
+        let route = |signal| [(GPIO + 0x554 + 4 * 21, signal)];
+        let pairs = [
+            ledc_on(3),
+            duty(1).to_vec(),
+            route(0x100).to_vec(),
+            vec![(SYSTEM + 0x20, 1 << 11)],
+            route(u32::from(ledc::SIGNAL)).to_vec(),
+        ];
+        let program = stores(&pairs.concat());
+        let mut chip = program.chip();
+        assert_eq!(
+            halts(&mut chip, 1000, 1000),
+            [
+                (image_at(c(5)), PadDrive::Low),
+                (record_at(c(27)), PadDrive::Low),
+                (Halt::Moved(c(27)), PadDrive::High),
+                (image_at(c(29)), PadDrive::Low),
+            ]
+        );
+        assert_eq!(chip.take_duties().count(), 1);
+    }
+
+    /// LEDC's reset bit ends the run at its store while a netted pad carries a channel, while an
+    /// update waits for its overflow, or when an update takes effect at that store, on a pad or
+    /// on none.
+    #[test]
+    fn an_led_reset_while_a_channel_runs_ends_the_run() {
+        let reset = vec![(SYSTEM + 0x20, 1 << 11)];
+        let why = Refused::Register("LEDC", "reset_while_running");
+        let refused = |program: &Program, netted: &[u8], k, records| {
+            let mut chip = program.chip_on(netted);
+            let last = halts(&mut chip, 1000, 1000).pop().map(|(halt, _)| halt);
+            let fault = Fault::Refused(why, store_pc(program, k));
+            assert_eq!(last, Some(Halt::Fault(c(u64::from(3 * k + 2)), fault)));
+            assert_eq!(chip.take_duties().count(), records);
+        };
+        let on_pad = stores(&[ledc_on(3), duty(1).to_vec(), reset.clone()].concat());
+        refused(&on_pad, &[21], 9, 1);
+        let mut slow = ledc_on(3);
+        slow[5].1 = 1 | 2048 << 4 | 1 << 25;
+        let waiting = stores(&[slow, duty(1).to_vec(), reset.clone()].concat());
+        refused(&waiting, &[], 9, 0);
+        let mut on = ledc_on(3);
+        on[5].1 = 1 | 384 << 4 | 1 << 25;
+        let pairs = [on, pad22(0).to_vec(), duty(1).to_vec(), reset];
+        let due = stores(&pairs.concat());
+        refused(&due, &[21, 22], 12, 0);
+        refused(&due, &[], 12, 0);
+    }
+
+    /// IDF's cold-boot order: start-up sets LEDC's reset bit, `ledc_set_pin` routes the netted
+    /// GPIO21 to channel 0, and `ledc_timer_config` turns LEDC's clock on before it clears the
+    /// reset. Neither store sets the bit, so the run goes on and channel 0 sends its duty.
+    #[test]
+    fn a_reset_held_from_start_up_lets_the_clock_store_through() {
+        let on = ledc_on(3);
+        let pairs = [
+            vec![(SYSTEM + 0x20, 1 << 11)],
+            on[..4].to_vec(),
+            vec![(SYSTEM + 0x20, 0)],
+            on[4..].to_vec(),
+            duty(1).to_vec(),
+        ];
+        let program = stores(&pairs.concat());
+        let mut chip = program.chip();
+        assert_eq!(
+            halts(&mut chip, 1000, 1000),
+            [
+                (image_at(c(8)), PadDrive::Low),
+                (record_at(c(33)), PadDrive::Low),
+                (Halt::Moved(c(33)), PadDrive::High),
+            ]
+        );
+        assert_eq!(chip.take_duties().count(), 1);
+    }
+
+    /// Timer group 0's watchdog, armed at cycle 29, resets the system at cycle 49, inside a jump
+    /// of the program's closing loop, so the core runs past it. The update sent at cycle 38 takes
+    /// effect at the overflow at cycle 49 of a timer of 16 cycles a period, and the reset comes
+    /// first.
+    #[test]
+    fn an_update_at_the_watchdogs_reset_is_not_sent() {
+        let mut on = ledc_on(3);
+        on[5].1 = 1 | 2048 << 4 | 1 << 25;
+        let watchdog = [
+            (TIMG0 + 0x48, 0),
+            (TIMG0 + 0x50, 20),
+            (TIMG0 + 0x54, 0),
+            (TIMG0 + 0x48, EN | 3 << 29),
+        ];
+        let program = stores(&[on, watchdog.to_vec(), duty(1).to_vec()].concat());
+        let mut chip = program.chip();
+        let reset = Fault::Watchdog {
+            watchdog: Watchdog::Timg0,
+            stage: 0,
+            reset: Reset::System,
+        };
+        let seen: Vec<Halt> = halts(&mut chip, 1000, 1000)
+            .into_iter()
+            .map(|(h, _)| h)
+            .collect();
+        assert_eq!(seen, [image_at(c(5)), Halt::Fault(c(49), reset)]);
+    }
+
+    /// LEDC's clock gate off, or an APB change under a timer that counts the APB clock, ends
+    /// the run at its store. A crystal-clocked timer keeps counting across the APB change.
+    #[test]
+    fn a_clock_change_under_a_counting_led_timer_ends_the_run() {
+        let last = |program: &Program| {
+            halts(&mut program.chip(), 1000, 1000)
+                .pop()
+                .map(|(halt, _)| halt)
+        };
+        let off = stores(&[ledc_on(3), vec![(SYSTEM + 0x18, 0xf9c1_e06f)]].concat());
+        let why = Refused::Register("LEDC", "clock_off_while_running");
+        assert_eq!(
+            last(&off),
+            Some(Halt::Fault(c(20), Fault::Refused(why, store_pc(&off, 6))))
+        );
+        let pll = [(SYSTEM + 0x10, 0x6), (SYSTEM + 0x60, 1 << 10)];
+        let apb = stores(&[ledc_on(1), pll.to_vec()].concat());
+        let why = Refused::Register("LEDC", "clock_change_while_running");
+        assert_eq!(
+            last(&apb),
+            Some(Halt::Fault(c(23), Fault::Refused(why, store_pc(&apb, 7))))
+        );
+        let xtal = stores(&[ledc_on(3), pll.to_vec()].concat());
+        assert_eq!(
+            last(&xtal),
+            Some(image_at(c(5))),
+            "the crystal does not change"
+        );
+    }
+
+    const EN: u32 = 1 << 31;
+
+    /// Timer group 0's watchdog, stopped and then started at cycle 11: stage 0 interrupts at
+    /// cycle 21, and its source reads in the interrupt matrix's status from then while `INT_ENA`
+    /// holds the bit. Stage 1 resets the system 5 cycles later.
+    #[test]
+    fn a_watchdog_stage_that_interrupts_raises_its_source_and_the_next_stage_resets() {
+        let program = stores(&[
+            (TIMG0 + 0x48, 0),
+            (TIMG0 + 0x50, 10),
+            (TIMG0 + 0x54, 5),
+            (TIMG0 + 0x48, EN | 1 << 29 | 3 << 27),
+        ]);
+        let status = |chip: &mut Esp32s3| {
+            let word = chip.soc.load(Cycle(0), 0x600c_2190, Width::Word);
+            word.map(|word| word >> (52 - 32) & 1)
+        };
+        let mut chip = program.chip();
+        chip.soc.restore(TIMG0 + 0x70, 1 << 2);
+        assert_eq!(chip.run_until(c(15)), None);
+        assert_eq!(status(&mut chip), Ok(0));
+        assert_eq!(chip.run_until(c(25)), None);
+        assert_eq!(status(&mut chip), Ok(1));
+        let reset = Fault::Watchdog {
+            watchdog: Watchdog::Timg0,
+            stage: 1,
+            reset: Reset::System,
+        };
+        assert_eq!(chip.run_until(c(1000)), Some(Halt::Fault(c(26), reset)));
+
+        let mut quiet = program.chip();
+        assert_eq!(quiet.run_until(c(25)), None);
+        assert_eq!(status(&mut quiet), Ok(0), "INT_ENA clear");
+    }
+
+    #[test]
+    fn a_watchdog_stage_the_model_does_not_run_ends_the_run_at_its_store() {
+        let refused = [
+            (
+                TIMG0 + 0x48,
+                EN | 2 << 29,
+                Refused::Register("TIMG0", "watchdog_cpu_reset"),
+            ),
+            (
+                TIMG1 + 0x48,
+                EN | 2 << 29,
+                Refused::Register("TIMG1", "watchdog_cpu_reset"),
+            ),
+            (
+                RTC_CNTL + 0x98,
+                EN | 1 << 28,
+                Refused::Register("RTC_CNTL", "watchdog_interrupt"),
+            ),
+            (
+                RTC_CNTL + 0x98,
+                EN | 6 << 28,
+                Refused::Register("RTC_CNTL", "watchdog_stage"),
+            ),
+            (
+                RTC_CNTL + 0xb4,
+                300 << 18,
+                Refused::Register("RTC_CNTL", "super_watchdog"),
+            ),
+        ];
+        for (address, value, why) in refused {
+            let program = store_after_two_loads(address, value, 0);
+            assert_eq!(
+                program.chip().run_until(c(1000)),
+                Some(Halt::Fault(c(2), Fault::Refused(why, program.entry() + 6))),
+                "{address:#x}"
+            );
+        }
     }
 }
