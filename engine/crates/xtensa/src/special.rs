@@ -134,10 +134,6 @@ registers! {
     UaState3: u32::MAX => [Read RUR_UA_STATE_3, Write WUR_UA_STATE_3];
 }
 
-/// What `PRID` reads on core 0, the one core a chip runs: `0xCDCD`, and on core 1 `0xABAB`.
-/// IDF v5.5.5, `components/xtensa/include/xtensa_context.h`.
-pub(crate) const PRID: u32 = 0xcdcd;
-
 pub(crate) const CCOMPARE: [Sr; 3] = [Sr::Ccompare0, Sr::Ccompare1, Sr::Ccompare2];
 
 /// `EPC1` to `EPC7` by level. Index 0 is unused.

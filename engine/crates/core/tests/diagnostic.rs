@@ -462,6 +462,7 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
         command: Some(0x31),
         reason: FlashRefusal::StatusWrite,
         pc: 0x4200_0010,
+        app: false,
         symbol: None,
     });
     assert_eq!(
@@ -478,6 +479,7 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
         command: None,
         reason: FlashRefusal::StartBits,
         pc: 0x10,
+        app: false,
         symbol: Some("main".into()),
     });
     assert_eq!(
@@ -492,6 +494,7 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
         peripheral,
         setting,
         pc: 0x10,
+        app: false,
         symbol: None,
     };
     let (message, data) = chip_json(setting(ChipSetting::Transfer("dma"), "SPI2"));
@@ -531,6 +534,7 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
         part: part("u1"),
         at,
         pc: 0x10,
+        app: false,
         symbol: Some("panic_abort+0x4".into()),
     });
     assert_eq!(
@@ -540,6 +544,21 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
     assert_eq!(
         data,
         serde_json::json!({ "pc": 0x10, "symbol": "panic_abort+0x4" })
+    );
+    let (message, data) = chip_json(Diagnostic::ChipHalted {
+        part: part("u1"),
+        at,
+        pc: 0x10,
+        app: true,
+        symbol: None,
+    });
+    assert_eq!(
+        message,
+        "#u1 halted at 0x00000010 on the APP CPU, a jump to itself that no interrupt or watchdog can leave, at 5 ps"
+    );
+    assert_eq!(
+        data,
+        serde_json::json!({ "core": "app", "pc": 0x10, "symbol": null })
     );
     let (message, data) = chip_json(setting(ChipSetting::Sleep, "RTC_CNTL"));
     assert_eq!(
@@ -553,6 +572,7 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
         at,
         reason,
         pc: 0x10,
+        app: false,
         symbol: None,
     };
     let (message, data) = chip_json(restart(ResetReason::Panic));
@@ -576,6 +596,7 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
         at,
         address: 0x3c01_0000,
         pc: 0x10,
+        app: false,
         symbol: None,
     });
     assert_eq!(
@@ -593,6 +614,7 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
         address: 0x600c_0020,
         register: "SYSTEM+0x20".into(),
         pc: 0x10,
+        app: false,
         symbol: None,
         write: true,
         kept,
@@ -619,4 +641,36 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
         })
     );
     assert_eq!(kept["kept"], true);
+
+    let (message, data) = chip_json(Diagnostic::ChipUnmodeledRegister {
+        part: part("u1"),
+        at,
+        address: 0x600c_0020,
+        register: "SYSTEM+0x20".into(),
+        pc: 0x10,
+        app: true,
+        symbol: None,
+        write: false,
+        kept: false,
+    });
+    assert_eq!(
+        message,
+        "#u1 read SYSTEM+0x20 at 0x600c0020, which the model does not keep, first at 5 ps from 0x00000010 on the APP CPU"
+    );
+    assert_eq!(data["core"], "app");
+    let (message, data) = chip_json(Diagnostic::ChipUnmappedFetch {
+        part: part("u1"),
+        at,
+        pc: 0x4000_0400,
+        app: true,
+        symbol: None,
+    });
+    assert_eq!(
+        message,
+        "#u1 fetched code at 0x40000400 on the APP CPU, where the model maps no memory, at 5 ps"
+    );
+    assert_eq!(
+        data,
+        serde_json::json!({ "core": "app", "pc": 0x4000_0400u32, "symbol": null })
+    );
 }

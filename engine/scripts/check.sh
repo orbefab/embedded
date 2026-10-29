@@ -2,6 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 cargo fmt --all --check
+blobs=$(scripts/blobs.sh)
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo clippy -p sim-avr --all-targets --locked --features port-skip-check -- -D warnings
 cargo test --workspace --locked --exclude sim-avr
@@ -27,7 +28,6 @@ cargo run -q -p sim-cli --locked -- run examples/esp32s3-pattern/netlist.json --
 uv run scripts/render_st77916.py --pattern firmware/esp32s3/pattern.json --check "$pattern_run"
 rm -rf "$pattern_run"
 uv run scripts/esp32s3_hello.py --self-test
-blobs=$(scripts/blobs.sh)
 hello_run="${CARGO_TARGET_DIR:-target}/esp32s3-hello-check"
 rm -rf "$hello_run"
 cargo run -q -p sim-cli --locked -- run examples/esp32s3-hello/netlist.json --out "$hello_run" --blobs "$blobs" >/dev/null

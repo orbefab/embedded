@@ -4,10 +4,10 @@
 use std::fmt;
 use std::marker::PhantomData;
 
-use crate::bus::{Bus, Cause, Cycle, Exit, Width};
+use crate::bus::{Bus, Cause, CoreId, Cycle, Exit, Width};
 use crate::config::Config;
 use crate::decode::{Decoded, Insn, Op};
-use crate::special::{Access, CCOMPARE, EPC, EPS, PRID, Sr};
+use crate::special::{Access, CCOMPARE, EPC, EPS, Sr};
 
 mod options;
 
@@ -54,6 +54,8 @@ pub enum Stop {
     /// `CINTLEVEL`, so only the NMI line can take the core out. The core stopped before it, and
     /// does not stop there again until it takes an exception or an interrupt.
     Spin,
+    /// The bus asked the core to return before its next step.
+    Yield,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,6 +143,7 @@ impl Trap {
 /// One Xtensa core of chip `C`.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Core<C: Config> {
+    id: CoreId,
     /// The physical address registers. `a(n)` is `ar[(WindowBase * 4 + n) % 64]`.
     ar: [u32; 64],
     /// Indexed by [`Sr`]. `Ccount` holds `CCOUNT` minus the low 32 bits of `cycle`, and
@@ -177,6 +180,7 @@ impl<C: Config> fmt::Debug for Core<C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Core")
             .field("chip", &C::NAME)
+            .field("id", &self.id)
             .field("pc", &format_args!("{:#010x}", self.pc))
             .field("cycle", &self.cycle.0)
             .finish_non_exhaustive()
@@ -195,6 +199,7 @@ impl<C: Config> Core<C> {
     /// undefined at reset are 0.
     pub fn new() -> Self {
         let mut core = Core {
+            id: CoreId::Pro,
             ar: [0; 64],
             sr: [0; Sr::COUNT],
             pc: RESET_VECTOR,
@@ -218,6 +223,29 @@ impl<C: Config> Core<C> {
             core.arm_timer(i);
         }
         core
+    }
+
+    /// `id`'s reset state with its cycle at `at` and `CCOUNT` 0.
+    pub fn reset(id: CoreId, at: Cycle) -> Self {
+        let mut core = Self::new();
+        core.id = id;
+        core.cycle = at;
+        core.set_special(Sr::Ccount, 0);
+        core
+    }
+
+    pub fn id(&self) -> CoreId {
+        self.id
+    }
+
+    /// `WAITI` suspended it until it takes an interrupt.
+    pub fn waiting(&self) -> bool {
+        self.waiting
+    }
+
+    /// Moves the cycle on to `at` with no poll between, never back. `CCOUNT` counts the gap.
+    pub fn skip_to(&mut self, at: Cycle) {
+        self.cycle = self.cycle.max(at);
     }
 
     pub fn pc(&self) -> u32 {
@@ -273,10 +301,10 @@ impl<C: Config> Core<C> {
     }
 
     /// `Interrupt` is the pending bits that latch, with the external level lines as the last
-    /// poll read them. `ACCHI` reads sign-extended from its 8 bits, and `PRID` is fixed.
+    /// poll read them. `ACCHI` reads sign-extended from its 8 bits, and `PRID` is the core's.
     pub fn special(&self, sr: Sr) -> u32 {
         match sr {
-            Sr::Prid => PRID,
+            Sr::Prid => self.id.prid(),
             Sr::Ccount => self.sr[sr as usize].wrapping_add(self.cycle.0 as u32),
             Sr::Interrupt => self.sr[sr as usize] | (self.lines & C::INTERRUPTS.extern_level),
             Sr::Acchi => self.sr[sr as usize] as u8 as i8 as u32,
@@ -307,13 +335,16 @@ impl<C: Config> Core<C> {
         }
     }
 
-    /// Runs until the cycle reaches `limit`, the bus stops the core, or the next instruction is
-    /// not modeled. An instruction that starts before `limit` runs whole, so the cycle may pass
-    /// it. A core in `WAITI` stops at `limit` exactly.
+    /// Runs until the cycle reaches `limit`, the bus stops the core or asks it to yield, or the
+    /// next instruction is not modeled. An instruction that starts before `limit` runs whole, so
+    /// the cycle may pass it. A core in `WAITI` stops at `limit` exactly.
     pub fn run_until<B: Bus>(&mut self, bus: &mut B, limit: Cycle) -> Stop {
         loop {
             if self.cycle >= limit {
                 return Stop::Limit;
+            }
+            if bus.yields() {
+                return Stop::Yield;
             }
             if let Err(stop) = self.step(bus, limit) {
                 return stop;

@@ -1,16 +1,21 @@
-//! What the core sees: its memories and the peripherals, on the chip's tick timeline.
+//! What the cores see: their memories and the peripherals, on the chip's tick timeline.
 //!
 //! Every chip has SRAM, both RTC memories and the peripherals. A chip booted from flash also has
 //! the mask ROM and the flash through the MMU. Its registers that the captured state
 //! names and no model owns are kept as plain words.
+//!
+//! Each core reaches the SoC through a [`CoreBus`], which knows the core and the step it is in.
+//! Every peripheral access turns its cycle into a tick through [`Soc::stamp`], so a peripheral
+//! never sees time go back when one core's access comes a cycle after its step's start.
 
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::Arc;
 
-use sim_xtensa::{Bus, Cause, Config, Cycle, Exit, PagedRam, Width};
+use sim_xtensa::{Bus, Cause, Config, CoreId, Cycle, Exit, PagedRam, Width};
 
 use super::analog::Analog;
+use super::app::{self, AppControl, Hold, Steer};
 use super::calibration::{self, Calibration};
 use super::clock::{CpuClock, Source, Tick};
 use super::efuse::Efuse;
@@ -27,7 +32,7 @@ use super::spi1::{self, FlashRefusal, Spi1};
 use super::spi2::{self, Setting, Spi2};
 use super::timers::{Register, Systimer, Watchdogs};
 use super::usb::UsbSerialJtag;
-use super::{Duty, RAM, Refused, ResetCause, Touch};
+use super::{Duty, Pc, RAM, Refused, ResetCause, Touch};
 
 pub(crate) const SRAM: usize = 512 * 1024;
 /// RTC fast memory, on both buses at one address.
@@ -127,6 +132,30 @@ pub(crate) struct Soc {
     pub(crate) started: bool,
     /// A store ended the run, and stopped the core.
     pub(crate) ending: Option<Ending>,
+    app: AppControl,
+    /// Taken by the scheduler after every slice. A step keeps the strongest of its steers.
+    pub(crate) steer: Option<Steer>,
+    /// The latest tick a peripheral saw. A later access is never earlier.
+    latest: Tick,
+}
+
+/// The step a core is in, as its bus sees it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Step {
+    pub(crate) core: CoreId,
+    /// The start of the step, which the poll that opens every step sets.
+    pub(crate) start: Cycle,
+    /// Whether the APP CPU has started. A clock switch then lands at `start`, or at the cycle
+    /// the latest tick lies on when that is later.
+    pub(crate) paired: bool,
+    /// Whether the other core is halted, so a store outside SRAM and RTC memory wakes it.
+    pub(crate) other_sleeps: bool,
+}
+
+/// What one core sees of the SoC.
+pub(crate) struct CoreBus<'a> {
+    pub(crate) soc: &'a mut Soc,
+    pub(crate) step: Step,
 }
 
 /// Why a store ended the run.
@@ -148,8 +177,7 @@ pub(crate) enum Ending {
     Clock,
 }
 
-/// `RTC_CNTL_OPTIONS0_REG`, and its bits that reset the core and the whole chip. The bit that
-/// resets the second core resets nothing here, as this chip runs one.
+/// `RTC_CNTL_OPTIONS0_REG`, and its bits that reset the PRO CPU and the whole chip.
 const OPTIONS0: u32 = 0x0;
 const RESETS: u32 = 1 << 31 | 1 << 5;
 /// `RTC_CNTL_STORE6_REG`, where ESP-IDF records why it resets the chip. IDF v5.5.5,
@@ -269,7 +297,12 @@ impl Soc {
             unmapped_fetch: false,
             started: false,
             ending: None,
+            app: AppControl::default(),
+            steer: None,
+            latest: Tick(0),
         };
+        soc.plain.insert(RTC_CNTL + OPTIONS0, 0);
+        soc.plain.insert(RTC_CNTL + app::SW_CPU_STALL, 0);
         for (signal, level) in soc.spi2.idle() {
             soc.gpio.set_signal(signal, level);
         }
@@ -322,9 +355,54 @@ impl Soc {
     }
 
     /// Adds the ROM and the flash, as a chip booted from flash has them.
-    pub(crate) fn attach(&mut self, rom: Arc<[u8]>, flash: Flash) {
+    pub(crate) fn attach_rom(&mut self, rom: Arc<[u8]>) {
         self.rom = Some(rom);
-        self.flash = Some(flash);
+    }
+
+    /// The PRO CPU's bus for one access outside a run, as a test makes it.
+    #[cfg(test)]
+    pub(crate) fn bus(&mut self) -> CoreBus<'_> {
+        CoreBus {
+            soc: self,
+            step: Step {
+                core: CoreId::Pro,
+                start: Cycle(0),
+                paired: false,
+                other_sleeps: false,
+            },
+        }
+    }
+
+    /// The tick of core cycle `cycle` for a peripheral, never before the latest one given.
+    fn stamp(&mut self, cycle: Cycle) -> Tick {
+        let tick = self.clock.tick(cycle).max(self.latest);
+        self.latest = tick;
+        tick
+    }
+
+    /// `RTC_CNTL_OPTIONS0_REG` and `RTC_CNTL_SW_CPU_STALL_REG`, which hold both cores' RTC
+    /// stall fields.
+    fn stall_words(&self) -> (u32, u32) {
+        let word = |offset| self.plain.get(&(RTC_CNTL + offset)).copied().unwrap_or(0);
+        (word(OPTIONS0), word(app::SW_CPU_STALL))
+    }
+
+    /// What holds the APP CPU now.
+    fn hold(&self) -> Hold {
+        let (options0, sw_cpu_stall) = self.stall_words();
+        Hold::new(self.app.control, options0, sw_cpu_stall)
+    }
+
+    /// Whether the APP CPU may run.
+    pub(crate) fn app_runs(&self) -> bool {
+        self.hold().runs()
+    }
+
+    /// Keeps `steer` unless the step already has a stronger one.
+    fn steer(&mut self, steer: Steer) {
+        if self.steer.is_none_or(|kept| kept.rank() < steer.rank()) {
+            self.steer = Some(steer);
+        }
     }
 
     /// The byte at `addr` in the GDMA's SRAM window, with its SRAM offset added to `read`.
@@ -430,6 +508,8 @@ impl Soc {
             SYSTEM if matrix::FROM_CPU.contains(&offset) => {
                 self.matrix.write_from_cpu(offset, value);
             }
+            SYSTEM if offset == app::CONTROL_0 => self.app.control = value,
+            SYSTEM if offset == app::CONTROL_1 => self.app.boot = value,
             SYSTEM if gates::OFFSETS.contains(&offset) => {
                 self.gates.write(offset, value).for_each(drop);
             }
@@ -513,6 +593,8 @@ impl Soc {
             EFUSE => self.efuse.read(offset),
             SPI1 => self.spi1.read(offset),
             SYSTEM if matrix::FROM_CPU.contains(&offset) => Some(self.matrix.read_from_cpu(offset)),
+            SYSTEM if offset == app::CONTROL_0 => Some(self.app.control),
+            SYSTEM if offset == app::CONTROL_1 => Some(self.app.boot),
             INTERRUPT_CORE0 => {
                 let sources = self.sources(now);
                 self.matrix.read(offset, sources)
@@ -570,6 +652,14 @@ impl Soc {
             }
             SYSTEM if matrix::FROM_CPU.contains(&offset) => {
                 self.matrix.write_from_cpu(offset, value);
+                true
+            }
+            SYSTEM if offset == app::CONTROL_0 => {
+                self.app.control = value & 0x7;
+                true
+            }
+            SYSTEM if offset == app::CONTROL_1 => {
+                self.app.boot = value;
                 true
             }
             SYSTEM if gates::OFFSETS.contains(&offset) => {
@@ -695,8 +785,9 @@ impl Soc {
             .sources(self.systimer.lines(), spi2, self.watchdogs.lines())
     }
 
-    /// Runs the CPU from the clock the SYSTEM registers now pick, from core cycle `now` on.
-    fn switch_clock(&mut self, now: Cycle) {
+    /// Runs the CPU from the clock the SYSTEM registers now pick, from core cycle `at` on, which
+    /// lies at tick `tick`.
+    fn switch_clock(&mut self, at: Cycle, tick: Tick) {
         let register = |offset| self.plain.get(&(SYSTEM + offset)).copied().unwrap_or(0);
         match Source::of(register(SYSCLK_CONF), register(CPU_PER_CONF)) {
             None => self.ending = Some(Ending::Clock),
@@ -705,8 +796,7 @@ impl Soc {
                 self.ending = Some(Ending::Refused(refused));
             }
             Some(source) if source != self.clock.source => {
-                let tick = self.clock.tick(now);
-                self.clock.switch(now, source);
+                self.clock.switch(at, source);
                 self.watchdogs.reclock(tick, source.apb());
                 self.reclocked = true;
             }
@@ -722,7 +812,10 @@ impl Soc {
         }
         let touch = Touch {
             at: now,
-            pc: 0,
+            pc: Pc {
+                core: CoreId::Pro,
+                pc: 0,
+            },
             write,
             kept,
         };
@@ -731,9 +824,9 @@ impl Soc {
         Err(Exit::Stop)
     }
 
-    /// Whether the interrupt matrix routes a source to the NMI line.
-    pub(crate) fn routes_to_nmi(&self) -> bool {
-        self.matrix.routes_to(matrix::NMI)
+    /// Whether the interrupt matrix routes a source to `core`'s NMI line.
+    pub(crate) fn routes_to_nmi(&self, core: CoreId) -> bool {
+        self.matrix.routes_to(core, matrix::NMI)
     }
 
     /// Stops the core at the write of `value` to the kept register at `addr`, whose effect the
@@ -748,7 +841,10 @@ impl Soc {
         }
         let touch = Touch {
             at: now,
-            pc: 0,
+            pc: Pc {
+                core: CoreId::Pro,
+                pc: 0,
+            },
             write: true,
             kept: true,
         };
@@ -844,8 +940,8 @@ fn word_of(addr: u32, width: Width) -> (u32, u32, u32) {
     (addr & !3, shift, mask)
 }
 
-impl Bus for Soc {
-    fn fetch(&mut self, _now: Cycle, addr: u32) -> Result<u32, Exit> {
+impl Soc {
+    fn fetch(&mut self, addr: u32) -> Result<u32, Exit> {
         if self.changed.is_some() || self.rearmed || self.reclocked || self.started {
             return Err(Exit::Stop);
         }
@@ -865,8 +961,7 @@ impl Bus for Soc {
         })
     }
 
-    fn load(&mut self, now: Cycle, addr: u32, width: Width) -> Result<u32, Exit> {
-        let now = self.clock.tick(now);
+    fn load(&mut self, cycle: Cycle, addr: u32, width: Width) -> Result<u32, Exit> {
         if let Some(offset) = Self::data_offset(addr, width)? {
             return Ok(self.sram.read(offset, width));
         }
@@ -885,6 +980,7 @@ impl Bus for Soc {
             self.ending = Some(Ending::Refused(refused));
             return Err(Exit::Stop);
         }
+        let now = self.stamp(cycle);
         let kept = self.read_kept(now, word);
         if word == USB_SERIAL_JTAG {
             self.usb.take_received(now);
@@ -895,13 +991,22 @@ impl Bus for Soc {
         }
     }
 
-    fn store(&mut self, cycle: Cycle, addr: u32, width: Width, value: u32) -> Result<(), Exit> {
-        let now = self.clock.tick(cycle);
+    fn store(
+        &mut self,
+        step: &Step,
+        cycle: Cycle,
+        addr: u32,
+        width: Width,
+        value: u32,
+    ) -> Result<(), Exit> {
         if let Some(offset) = Self::data_offset(addr, width)? {
-            if !self.in_flight.is_empty() && self.in_flight(now, offset, width) {
-                let refused = Refused::Register("GDMA", "buffer_write");
-                self.ending = Some(Ending::Refused(refused));
-                return Err(Exit::Stop);
+            if !self.in_flight.is_empty() {
+                let now = self.stamp(cycle);
+                if self.in_flight(now, offset, width) {
+                    let refused = Refused::Register("GDMA", "buffer_write");
+                    self.ending = Some(Ending::Refused(refused));
+                    return Err(Exit::Stop);
+                }
             }
             self.sram.write(offset, width, value);
             return Ok(());
@@ -917,11 +1022,36 @@ impl Bus for Soc {
         if !PERIPHERALS.contains(&addr) {
             return Err(Exit::Fault(Cause::LoadStoreError));
         }
+        self.store_register(step, cycle, addr, width, value)?;
+        if step.other_sleeps {
+            self.steer(Steer::Wake(step.start));
+        }
+        Ok(())
+    }
+
+    /// A store to the peripheral register at `addr`.
+    fn store_register(
+        &mut self,
+        step: &Step,
+        cycle: Cycle,
+        addr: u32,
+        width: Width,
+        value: u32,
+    ) -> Result<(), Exit> {
         let (word, shift, mask) = word_of(addr, width);
         if let Some(refused) = self.gated(word) {
             self.ending = Some(Ending::Refused(refused));
             return Err(Exit::Stop);
         }
+        let clock = word == SYSTEM + SYSCLK_CONF || word == SYSTEM + CPU_PER_CONF;
+        // The other core's refetched access on a tie can have stamped the cycle after `start`,
+        // and a switch at `start` would hold the reported tick until the new clock caught up.
+        let at = if clock && step.paired {
+            step.start.max(self.clock.cycle_after(self.latest))
+        } else {
+            cycle
+        };
+        let now = self.stamp(at);
         if word == RTC_CNTL + OPTIONS0 && ((value & mask) << shift) & RESETS != 0 {
             let store6 = self.read_kept(now, RTC_CNTL + STORE6);
             self.ending = Some(Ending::Restart(reset_cause(store6)));
@@ -951,10 +1081,26 @@ impl Bus for Soc {
             || (word & !(BLOCK - 1) == SYSTEM && gates::OFFSETS.contains(&(word - SYSTEM)));
         if !pads {
             let deadline = self.watchdogs.deadline();
+            let app = [
+                SYSTEM + app::CONTROL_0,
+                RTC_CNTL + OPTIONS0,
+                RTC_CNTL + app::SW_CPU_STALL,
+            ]
+            .contains(&word)
+            .then(|| self.hold());
+            let reset = word == RTC_CNTL + OPTIONS0 && value & app::APPCPU_RST != 0;
+            let kept = if reset {
+                value & !app::APPCPU_RST
+            } else {
+                value
+            };
             let due = self.ledc.next(self.clock.source.apb());
-            self.write_kept(now, word, value);
-            if word == SYSTEM + SYSCLK_CONF || word == SYSTEM + CPU_PER_CONF {
-                self.switch_clock(cycle);
+            self.write_kept(now, word, kept);
+            if clock {
+                self.switch_clock(at, now);
+            }
+            if let Some(before) = app {
+                self.steer_app(step, before, reset);
             }
             if self.ending.is_some() {
                 return Err(Exit::Stop);
@@ -987,19 +1133,69 @@ impl Bus for Soc {
         Ok(())
     }
 
+    /// Steers the run after a store took the APP CPU's hold from `before`, with `reset` a write
+    /// of `RTC_CNTL_SW_APPCPU_RST`. A store that would let an APP CPU never reset run ends the
+    /// run, as the model cannot know its state, and so does one that would stall the PRO CPU,
+    /// which the model does not do.
+    fn steer_app(&mut self, step: &Step, before: Hold, reset: bool) {
+        let (options0, sw_cpu_stall) = self.stall_words();
+        if app::pro_stalled(options0, sw_cpu_stall) {
+            let refused = Refused::Register("RTC_CNTL", "pro_cpu_stall");
+            self.ending = Some(Ending::Refused(refused));
+            return;
+        }
+        let after = self.hold();
+        let Some(steer) = Steer::of_store(before, after, reset, step.start) else {
+            return;
+        };
+        if !step.paired && matches!(steer, Steer::Run { .. }) && after.runs() {
+            let refused = Refused::Register("SYSTEM", "app_cpu_without_reset");
+            self.ending = Some(Ending::Refused(refused));
+            return;
+        }
+        self.steer(steer);
+    }
+
+    fn interrupts(&mut self, core: CoreId, cycle: Cycle) -> u32 {
+        let now = self.stamp(cycle);
+        let sources = self.sources(now);
+        self.matrix.lines(core, sources)
+    }
+
+    fn next_event(&mut self, cycle: Cycle) -> Option<Cycle> {
+        let now = self.stamp(cycle);
+        let next = [self.systimer.next_event(now), self.spi2.next_event()]
+            .into_iter()
+            .flatten()
+            .min()?;
+        Some(self.clock.cycle_after(next))
+    }
+}
+
+impl Bus for CoreBus<'_> {
+    fn fetch(&mut self, _now: Cycle, addr: u32) -> Result<u32, Exit> {
+        self.soc.fetch(addr)
+    }
+
+    fn load(&mut self, now: Cycle, addr: u32, width: Width) -> Result<u32, Exit> {
+        self.soc.load(now, addr, width)
+    }
+
+    fn store(&mut self, now: Cycle, addr: u32, width: Width, value: u32) -> Result<(), Exit> {
+        self.soc.store(&self.step, now, addr, width, value)
+    }
+
+    /// The poll that opens every step, so it marks the step's start.
     fn interrupts(&mut self, now: Cycle) -> u32 {
-        let sources = self.sources(self.clock.tick(now));
-        self.matrix.lines(sources)
+        self.step.start = now;
+        self.soc.interrupts(self.step.core, now)
     }
 
     fn next_event(&mut self, now: Cycle) -> Option<Cycle> {
-        let next = [
-            self.systimer.next_event(self.clock.tick(now)),
-            self.spi2.next_event(),
-        ]
-        .into_iter()
-        .flatten()
-        .min()?;
-        Some(self.clock.cycle_after(next))
+        self.soc.next_event(now)
+    }
+
+    fn yields(&self) -> bool {
+        self.soc.steer.is_some()
     }
 }

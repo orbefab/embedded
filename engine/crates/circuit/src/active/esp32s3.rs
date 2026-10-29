@@ -15,7 +15,8 @@ use sim_core::name::Ref;
 use sim_core::netlist::{Esp32s3, Esp32s3Firmware, NetId, PartId, Value};
 use sim_core::time::Time;
 use sim_esp32::s3::{
-    self, Duty, Fault, Halt, PadDrive, Refused, ResetCause, TICK_HZ, Tick, Touch, Transfer,
+    self, CoreId, Duty, Fault, Halt, PadDrive, Pc, Refused, ResetCause, TICK_HZ, Tick, Touch,
+    Transfer,
 };
 use sim_xtensa::Missing;
 
@@ -115,7 +116,7 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
                 .segments()
                 .iter()
                 .map(|segment| (segment.addr, elf.data(segment)));
-            s3::Esp32s3::new(&gpios, elf.entry(), segments)
+            s3::Esp32s3::new(&gpios, elf.entry(), segments, None)
         }
         Esp32s3Firmware::Flash { rom, flash } => {
             let segments: Vec<s3::Segment> = flash
@@ -163,6 +164,11 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
         takes: Takes::default(),
         core: super::Core::Esp32s3(Box::new(core)),
     }
+}
+
+/// Whether the APP CPU ran the code at `pc`.
+fn on_app(pc: Pc) -> bool {
+    pc.core == CoreId::App
 }
 
 /// The last tick at or before `at`.
@@ -359,9 +365,9 @@ impl Core {
     pub(crate) fn fault(&self, part: &Ref, mcu: &Esp32s3) -> Option<(Time, Diagnostic)> {
         let (at, fault) = self.fault?;
         let part = part.clone();
-        let symbol = |pc| mcu.firmware.symbolize(pc);
+        let symbol = |pc: Pc| mcu.firmware.symbolize(pc.pc);
         let diagnostic = match fault {
-            Fault::Unsupported(unimplemented) => {
+            Fault::Unsupported(core, unimplemented) => {
                 let (op, reason) = match unimplemented.missing {
                     Missing::Op(op) => (op.name(), Unsupported::Op),
                     Missing::Unaligned(op) => (op.name(), Unsupported::Unaligned),
@@ -374,19 +380,22 @@ impl Core {
                     op,
                     reason,
                     pc: unimplemented.pc,
-                    symbol: symbol(unimplemented.pc),
+                    app: core == CoreId::App,
+                    symbol: mcu.firmware.symbolize(unimplemented.pc),
                 }
             }
             Fault::UnmappedFetch(pc) => Diagnostic::ChipUnmappedFetch {
                 part,
                 at,
-                pc,
+                pc: pc.pc,
+                app: on_app(pc),
                 symbol: symbol(pc),
             },
             Fault::Halted(pc) => Diagnostic::ChipHalted {
                 part,
                 at,
-                pc,
+                pc: pc.pc,
+                app: on_app(pc),
                 symbol: symbol(pc),
             },
             Fault::Setting(setting, pc) => Diagnostic::ChipUnsupportedSetting {
@@ -394,7 +403,8 @@ impl Core {
                 at,
                 peripheral: "SPI2",
                 setting: ChipSetting::Transfer(setting.name()),
-                pc,
+                pc: pc.pc,
+                app: on_app(pc),
                 symbol: symbol(pc),
             },
             Fault::Refused(refused, pc) => {
@@ -410,7 +420,8 @@ impl Core {
                     at,
                     peripheral,
                     setting,
-                    pc,
+                    pc: pc.pc,
+                    app: on_app(pc),
                     symbol: symbol(pc),
                 }
             }
@@ -428,7 +439,8 @@ impl Core {
             Fault::EfuseProgram(pc) => Diagnostic::ChipEfuseProgram {
                 part,
                 at,
-                pc,
+                pc: pc.pc,
+                app: on_app(pc),
                 symbol: symbol(pc),
             },
             Fault::FlashCommand(refusal, pc) => {
@@ -448,7 +460,8 @@ impl Core {
                     at,
                     command,
                     reason,
-                    pc,
+                    pc: pc.pc,
+                    app: on_app(pc),
                     symbol: symbol(pc),
                 }
             }
@@ -463,20 +476,23 @@ impl Core {
                     ResetCause::Brownout => ResetReason::Brownout,
                     ResetCause::Unreadable => ResetReason::Unreadable,
                 },
-                pc,
+                pc: pc.pc,
+                app: on_app(pc),
                 symbol: symbol(pc),
             },
             Fault::UnmappedLoad { address, pc } => Diagnostic::ChipUnmappedLoad {
                 part,
                 at,
                 address,
-                pc,
+                pc: pc.pc,
+                app: on_app(pc),
                 symbol: symbol(pc),
             },
             Fault::Clock(pc) => Diagnostic::ChipUnsupportedClock {
                 part,
                 at,
-                pc,
+                pc: pc.pc,
+                app: on_app(pc),
                 symbol: symbol(pc),
             },
         };
@@ -494,8 +510,9 @@ impl Core {
                 at: time(touch.at),
                 address,
                 register: Touch::register(address),
-                pc: touch.pc,
-                symbol: mcu.firmware.symbolize(touch.pc),
+                pc: touch.pc.pc,
+                app: on_app(touch.pc),
+                symbol: mcu.firmware.symbolize(touch.pc.pc),
                 write: touch.write,
                 kept: touch.kept,
             })
@@ -508,8 +525,9 @@ impl Core {
         (time(at) <= through).then(|| Diagnostic::ChipRestart {
             part: part.clone(),
             at: time(at),
-            pc,
-            symbol: mcu.firmware.symbolize(pc),
+            pc: pc.pc,
+            app: on_app(pc),
+            symbol: mcu.firmware.symbolize(pc.pc),
         })
     }
 

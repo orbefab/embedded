@@ -24,10 +24,12 @@
 //! access to a kept register reads or merges into its word.
 
 mod analog;
+mod app;
 mod blocks;
 mod boot;
 mod calibration;
 mod clock;
+mod cores;
 mod efuse;
 mod extmem;
 mod flash;
@@ -49,6 +51,7 @@ use std::sync::Arc;
 use sim_xtensa::{Core, Stop, Unimplemented};
 
 use clock::{CpuClock, Source, XTAL};
+use cores::Cores;
 use flash::Flash;
 use gpio::PADS;
 use soc::{Ending, Soc};
@@ -57,6 +60,7 @@ use timers::{Action, Watchdogs};
 pub use boot::Segment;
 pub use clock::{TICK_HZ, Tick};
 pub use gpio::PadDrive;
+pub use sim_xtensa::CoreId;
 pub use spi1::FlashRefusal;
 pub use spi2::{Pads, Phase, Setting, Transfer};
 pub use timers::{Reset, Watchdog};
@@ -87,15 +91,22 @@ pub const RAM: [Window; 2] = [
     },
 ];
 
+/// A PC and the core whose PC it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pc {
+    pub core: CoreId,
+    pub pc: u32,
+}
+
 /// Why a run ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fault {
-    /// The next instruction needs behavior the core does not model.
-    Unsupported(Unimplemented),
-    /// The core fetched outside the instruction window, at this PC.
-    UnmappedFetch(u32),
-    /// The core reached a jump to itself at this PC that nothing can take it out of.
-    Halted(u32),
+    /// The next instruction of this core needs behavior the core does not model.
+    Unsupported(CoreId, Unimplemented),
+    /// A core fetched outside the instruction window, at this PC.
+    UnmappedFetch(Pc),
+    /// A core reached a jump to itself at this PC that nothing can take it out of.
+    Halted(Pc),
     /// A watchdog's stage ran out and reset the CPU, the system or the RTC domain.
     Watchdog {
         watchdog: Watchdog,
@@ -103,20 +114,20 @@ pub enum Fault {
         reset: Reset,
     },
     /// The store at this PC started an SPI2 transfer with a setting the model does not run.
-    Setting(Setting, u32),
+    Setting(Setting, Pc),
     /// The store at this PC started an eFuse program command, which would burn eFuses.
-    EfuseProgram(u32),
+    EfuseProgram(Pc),
     /// The store at this PC sent the flash a command the model refuses.
-    FlashCommand(FlashRefusal, u32),
+    FlashCommand(FlashRefusal, Pc),
     /// The store at this PC picked a CPU clock the model does not run: the RC fast clock, or a
     /// reserved setting.
-    Clock(u32),
+    Clock(Pc),
     /// The store at this PC reset the chip for this cause.
-    FaultRestart(ResetCause, u32),
+    FaultRestart(ResetCause, Pc),
     /// The store at this PC set something the model does not run.
-    Refused(Refused, u32),
+    Refused(Refused, Pc),
     /// The load at `pc` read `address` in a cache window, where the MMU maps no flash.
-    UnmappedLoad { address: u32, pc: u32 },
+    UnmappedLoad { address: u32, pc: Pc },
 }
 
 /// Why firmware reset the chip, when the reset ends the run: the cause ESP-IDF records in
@@ -182,7 +193,7 @@ pub struct Duty {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Touch {
     pub at: Tick,
-    pub pc: u32,
+    pub pc: Pc,
     pub write: bool,
     /// The model keeps the register's word and does not run what the write does.
     pub kept: bool,
@@ -211,7 +222,7 @@ pub struct Boot<'a> {
 /// its limits.
 #[derive(Clone, Debug)]
 pub struct Esp32s3 {
-    core: Core<sim_xtensa::Esp32s3>,
+    cores: Cores,
     soc: Soc,
     /// The drive of each netted pad, as the last reported image left it.
     shown: [PadDrive; PADS],
@@ -230,19 +241,25 @@ pub struct Esp32s3 {
     fault: Option<(Tick, Fault)>,
     ended: bool,
     /// The tick and PC of the store that reset the chip, which holds it in reset from then on.
-    restarted: Option<(Tick, u32)>,
+    restarted: Option<(Tick, Pc)>,
 }
 
 impl Esp32s3 {
     /// The chip with `segments`, each an address and its bytes, loaded into SRAM and the PC at
     /// `entry`. `netted` names the GPIOs with nets. Every segment lies inside one [`RAM`] window.
+    /// With `rom`, the ROM ELF, the chip has the mask ROM and the ROM's data in SRAM under the
+    /// segments, so the APP CPU can run the ROM's reset path.
     pub fn new<'a>(
         netted: &[u8],
         entry: u32,
         segments: impl IntoIterator<Item = (u32, &'a [u8])>,
+        rom: Option<&[u8]>,
     ) -> Esp32s3 {
         let mut soc = Soc::new(CpuClock::new(Source::Xtal(1)), netted, Watchdogs::new(XTAL));
         soc.keep_crystal_clock();
+        if let Some(rom) = rom {
+            load_rom(&mut soc, rom);
+        }
         for (addr, data) in segments {
             assert!(
                 Soc::sram_offset(addr, false).is_some(),
@@ -259,18 +276,11 @@ impl Esp32s3 {
     /// entry: the ROM's data in SRAM, the captured state applied, then the app's segments
     /// loaded or mapped, and the PC at `boot.entry`.
     pub fn boot(netted: &[u8], boot: Boot) -> Esp32s3 {
-        let image = rom::load(boot.rom, |addr, len| {
-            Soc::sram_offset(addr, false).is_some()
-                && Soc::sram_offset(addr + len as u32 - 1, false).is_some()
-        })
-        .expect("the pinned ROM ELF");
         let state: Vec<boot::Value> = boot::state().collect();
         let source = boot::clock_source(&state).expect("the captured clock is one the model runs");
         let mut soc = Soc::new(CpuClock::new(source), netted, Watchdogs::new(source.apb()));
-        soc.attach(image.rom, Flash::new(boot.flash));
-        for (addr, bytes) in &image.data {
-            soc.poke(*addr, bytes);
-        }
+        load_rom(&mut soc, boot.rom);
+        soc.flash = Some(Flash::new(boot.flash));
         let mut core = Core::new();
         boot::apply(&state, &mut core, &mut soc);
         for segment in boot.segments {
@@ -289,7 +299,7 @@ impl Esp32s3 {
 
     fn with(core: Core<sim_xtensa::Esp32s3>, soc: Soc) -> Esp32s3 {
         Esp32s3 {
-            core,
+            cores: Cores::new(core),
             shown: soc.image(),
             soc,
             changed: None,
@@ -333,7 +343,7 @@ impl Esp32s3 {
             .min()
             .expect("the limit");
             let until = self.soc.clock.cycle_after(until);
-            let stop = self.core.run_until(&mut self.soc, until);
+            let (id, stop) = self.cores.run_until(&mut self.soc, until);
             if let Some(change) = self.soc.changed.take() {
                 debug_assert!(self.changed.is_none(), "a change stops the core");
                 self.changed = Some(change);
@@ -356,10 +366,14 @@ impl Esp32s3 {
                 }
                 self.soc.watchdogs.run_out(expiry);
             }
-            let pc = self.core.pc();
-            let now = self.now();
+            let core = self.cores.core(id);
+            let pc = Pc {
+                core: id,
+                pc: core.pc(),
+            };
+            let now = self.soc.clock.tick(core.cycle());
             match stop {
-                Stop::Limit => {}
+                Stop::Limit | Stop::Yield => {}
                 Stop::Bus => {
                     if let Some(addr) = self.soc.first_touch.take() {
                         self.soc.unmodeled.get_mut(&addr).expect("touched").pc = pc;
@@ -385,13 +399,13 @@ impl Esp32s3 {
                     }
                 }
                 Stop::Spin => {
-                    let nmi = self.soc.routes_to_nmi();
+                    let nmi = self.soc.routes_to_nmi(id);
                     if !nmi && self.soc.watchdogs.deadline().is_none() {
                         self.fault = Some((now, Fault::Halted(pc)));
                     }
                 }
                 Stop::Unimplemented(missing) => {
-                    self.fault = Some((now, Fault::Unsupported(missing)));
+                    self.fault = Some((now, Fault::Unsupported(id, missing)));
                 }
             }
         }
@@ -431,7 +445,7 @@ impl Esp32s3 {
     /// Holds the chip in reset from `now`, after the store at `pc` reset it from `esp_restart`.
     /// The boot ROM does not run, so the core runs no further, and each pad drives as at
     /// power-on.
-    fn hold_in_reset(&mut self, now: Tick, pc: u32) {
+    fn hold_in_reset(&mut self, now: Tick, pc: Pc) {
         self.restarted = Some((now, pc));
         self.soc.reset_pads();
         if self.soc.image() != self.shown {
@@ -440,13 +454,13 @@ impl Esp32s3 {
     }
 
     /// The tick and PC of the store that reset the chip, if one did.
-    pub fn restart(&self) -> Option<(Tick, u32)> {
+    pub fn restart(&self) -> Option<(Tick, Pc)> {
         self.restarted
     }
 
-    /// The tick of the core's next cycle.
+    /// The tick through which both cores have run everything.
     fn now(&self) -> Tick {
-        self.soc.clock.tick(self.core.cycle())
+        self.soc.clock.tick(self.cores.reached())
     }
 
     /// The earliest halt the core has reached and not reported. An image change and the records
@@ -554,9 +568,22 @@ impl Esp32s3 {
             .map(|(&addr, &touch)| (addr, touch))
     }
 
-    /// The tick of the core's next cycle.
+    /// The tick through which both cores have run everything.
     pub fn tick(&self) -> Tick {
         self.now()
+    }
+}
+
+/// Adds the mask ROM from the ROM ELF `rom`, and puts its data in SRAM.
+fn load_rom(soc: &mut Soc, rom: &[u8]) {
+    let image = rom::load(rom, |addr, len| {
+        Soc::sram_offset(addr, false).is_some()
+            && Soc::sram_offset(addr + len as u32 - 1, false).is_some()
+    })
+    .expect("the pinned ROM ELF");
+    soc.attach_rom(image.rom);
+    for (addr, bytes) in &image.data {
+        soc.poke(*addr, bytes);
     }
 }
 
@@ -574,33 +601,54 @@ mod tests {
         Tick(n * XTAL)
     }
 
+    /// `pc` on the PRO CPU.
+    fn pro(pc: u32) -> Pc {
+        Pc {
+            core: CoreId::Pro,
+            pc,
+        }
+    }
+
     const BASE: u32 = 0x4037_0000;
     const GPIO21: u32 = 1 << 21;
 
-    /// A program: literal words from `BASE`, then the code after them.
+    /// A program: literal words from `base`, then the code after them.
     struct Program {
+        base: u32,
         literals: Vec<u32>,
         code: Vec<u8>,
     }
 
     impl Program {
         fn new(literals: &[u32]) -> Program {
+            Program::at(BASE, literals)
+        }
+
+        fn at(base: u32, literals: &[u32]) -> Program {
             Program {
+                base,
                 literals: literals.to_vec(),
                 code: Vec::new(),
             }
         }
 
         fn entry(&self) -> u32 {
-            BASE + 4 * self.literals.len() as u32
+            self.base + 4 * self.literals.len() as u32
         }
 
         fn pc(&self) -> u32 {
             self.entry() + self.code.len() as u32
         }
 
+        /// The literals and the code, from `base`.
+        fn image(&self) -> Vec<u8> {
+            let mut image: Vec<u8> = self.literals.iter().flat_map(|w| w.to_le_bytes()).collect();
+            image.extend(&self.code);
+            image
+        }
+
         fn l32r(&mut self, t: u8, literal: usize) -> &mut Program {
-            let target = BASE + 4 * literal as u32;
+            let target = self.base + 4 * literal as u32;
             let imm = (target.wrapping_sub((self.pc() + 3) & !3) as i32 >> 2) as u16;
             self.code.extend([t << 4 | 1, imm as u8, (imm >> 8) as u8]);
             self
@@ -622,14 +670,21 @@ mod tests {
             self
         }
 
+        fn wsr(&mut self, t: u8, sr: u8) -> &mut Program {
+            self.raw(&[t << 4, sr, 0x13])
+        }
+
         fn chip(&self) -> Esp32s3 {
             self.chip_on(&[21])
         }
 
         fn chip_on(&self, netted: &[u8]) -> Esp32s3 {
-            let mut image: Vec<u8> = self.literals.iter().flat_map(|w| w.to_le_bytes()).collect();
-            image.extend(&self.code);
-            Esp32s3::new(netted, self.entry(), [(BASE, image.as_slice())])
+            Esp32s3::new(
+                netted,
+                self.entry(),
+                [(BASE, self.image().as_slice())],
+                None,
+            )
         }
     }
 
@@ -642,6 +697,8 @@ mod tests {
     }
 
     const LOOP: [u8; 3] = [0x06, 0xff, 0xff];
+    const PS: u8 = 230;
+    const INTENABLE: u8 = 228;
     const WAITI: [u8; 3] = [0x00, 0x70, 0x00];
     /// Timer group 0's watchdog in flash boot mode, as at power-on, at its stage 0.
     const TIMG0_FLASHBOOT: Fault = Fault::Watchdog {
@@ -684,6 +741,8 @@ mod tests {
         }
         seen
     }
+
+    mod dual;
 
     #[test]
     fn a_drive_change_halts_at_its_store_however_the_run_splits() {
@@ -747,7 +806,7 @@ mod tests {
         let drives: Vec<PadDrive> = seen.iter().map(|&(_, drive)| drive).collect();
         assert_eq!(drives, [PadDrive::Low, PadDrive::High, PadDrive::Off]);
         assert_eq!(seen[2].0, image_at(c(6)));
-        assert_eq!(whole.restart(), Some((c(6), at)));
+        assert_eq!(whole.restart(), Some((c(6), pro(at))));
         assert_eq!(whole.run_until(c(100_000)), None);
         assert_eq!(whole.tick(), c(6), "the core stays at its reset");
         for step in [1, 2, 3, 7] {
@@ -759,7 +818,11 @@ mod tests {
         let mut chip = chip();
         chip.soc.restore(STORE6, hint(3));
         halts(&mut chip, 1000, 1000);
-        assert_eq!(chip.restart(), Some((c(6), at)), "a hint of ESP_RST_SW");
+        assert_eq!(
+            chip.restart(),
+            Some((c(6), pro(at))),
+            "a hint of ESP_RST_SW"
+        );
     }
 
     /// A reset after IDF recorded a panic or a watchdog, or with no reason the model can read,
@@ -786,7 +849,7 @@ mod tests {
             let seen = halts(&mut chip, 1000, 1000);
             assert_eq!(
                 seen.last().map(|&(halt, _)| halt),
-                Some(Halt::Fault(c(6), Fault::FaultRestart(cause, at))),
+                Some(Halt::Fault(c(6), Fault::FaultRestart(cause, pro(at)))),
                 "{store6:x?}"
             );
             assert_eq!(chip.restart(), None, "{store6:x?}");
@@ -811,7 +874,7 @@ mod tests {
             let want = if u64::from(hold) <= 5 {
                 Halt::Fault(c(hold.into()), TIMG0_FLASHBOOT)
             } else {
-                Halt::Fault(c(5), Fault::EfuseProgram(store))
+                Halt::Fault(c(5), Fault::EfuseProgram(pro(store)))
             };
             for step in [1, 1000] {
                 let mut chip = program.chip();
@@ -857,7 +920,7 @@ mod tests {
         program.rri8(4, 3, 2, 0).raw(&LOOP);
         assert_eq!(
             program.chip().run_until(c(1000)),
-            Some(Halt::Fault(c(2), Fault::EfuseProgram(store)))
+            Some(Halt::Fault(c(2), Fault::EfuseProgram(pro(store))))
         );
     }
 
@@ -894,7 +957,10 @@ mod tests {
             chip.soc.restore(SYSTEM + 0x24, 0);
             assert_eq!(
                 chip.run_until(c(1000)),
-                Some(Halt::Fault(c(2), Fault::Refused(why, program.entry() + 6))),
+                Some(Halt::Fault(
+                    c(2),
+                    Fault::Refused(why, pro(program.entry() + 6))
+                )),
                 "{address:#x}"
             );
         }
@@ -932,15 +998,17 @@ mod tests {
             let mut chip = program.chip();
             chip.soc.restore(address, 0);
             assert_eq!(chip.run_until(c(1000)), None, "{address:#x}");
-            let listed: Vec<(u32, u32)> =
-                chip.unmodeled().map(|(at, touch)| (at, touch.pc)).collect();
+            let listed: Vec<(u32, u32)> = chip
+                .unmodeled()
+                .map(|(at, touch)| (at, touch.pc.pc))
+                .collect();
             assert_eq!(
                 listed,
                 [(address, first), (address, second)],
                 "{address:#x}"
             );
             assert!(chip.unmodeled().all(|(_, touch)| touch.write && touch.kept));
-            assert_eq!(chip.soc.load(Cycle(0), address, Width::Word), Ok(0));
+            assert_eq!(chip.soc.bus().load(Cycle(0), address, Width::Word), Ok(0));
         }
         let mut chip = store_after_two_loads(SYSTEM + 0x18, 1 << 6 | 1 << 2, 0).chip();
         chip.soc.restore(SYSTEM + 0x18, 0);
@@ -963,7 +1031,7 @@ mod tests {
         quiet(&mut chip);
         assert_eq!(
             chip.run_until(c(1000)),
-            Some(Halt::Fault(c(0), Fault::Halted(program.entry())))
+            Some(Halt::Fault(c(0), Fault::Halted(pro(program.entry()))))
         );
         assert_eq!(program.chip().run_until(c(1000)), None, "a watchdog runs");
         let mut nmi = program.chip();
@@ -994,7 +1062,10 @@ mod tests {
             .raw(&LOOP);
         let mut chip = program.chip();
         assert_eq!(chip.run_until(c(1000)), None);
-        assert_eq!(chip.soc.load(Cycle(0), user1, Width::Word), Ok(0xb841_0007));
+        assert_eq!(
+            chip.soc.bus().load(Cycle(0), user1, Width::Word),
+            Ok(0xb841_0007)
+        );
 
         let mut program = Program::new(&[SYSTEM + 0x20, 1 << 6, user1]);
         program.l32r(2, 0).l32r(3, 1).rri8(6, 3, 2, 0).l32r(4, 2);
@@ -1003,14 +1074,17 @@ mod tests {
         let held = Refused::Register("SPI2", "held_in_reset");
         assert_eq!(
             program.chip().run_until(c(1000)),
-            Some(Halt::Fault(c(4), Fault::Refused(held, load)))
+            Some(Halt::Fault(c(4), Fault::Refused(held, pro(load))))
         );
 
         let program = store_after_two_loads(0x6001_9000, 0, 0);
         let off = Refused::Register("LEDC", "clock_off");
         assert_eq!(
             program.chip().run_until(c(1000)),
-            Some(Halt::Fault(c(2), Fault::Refused(off, program.entry() + 6)))
+            Some(Halt::Fault(
+                c(2),
+                Fault::Refused(off, pro(program.entry() + 6))
+            ))
         );
     }
 
@@ -1040,7 +1114,7 @@ mod tests {
                     program.chip().run_until(c(1000)),
                     Some(Halt::Fault(
                         c(2),
-                        Fault::FlashCommand(FlashRefusal::Pads, program.entry() + 6)
+                        Fault::FlashCommand(FlashRefusal::Pads, pro(program.entry() + 6))
                     )),
                     "GPIO{pad} {address:#x}"
                 );
@@ -1069,7 +1143,7 @@ mod tests {
             program.chip().run_until(c(1000)),
             Some(Halt::Fault(
                 c(2),
-                Fault::FlashCommand(FlashRefusal::Spi0, program.entry() + 6)
+                Fault::FlashCommand(FlashRefusal::Spi0, pro(program.entry() + 6))
             ))
         );
     }
@@ -1090,7 +1164,7 @@ mod tests {
                 c(1),
                 Fault::UnmappedLoad {
                     address: 0x3c00_0010,
-                    pc: program.entry() + 3
+                    pc: pro(program.entry() + 3)
                 }
             )),
             "no flash"
@@ -1103,7 +1177,7 @@ mod tests {
             let halt = chip.run_until(c(1000));
             if mapped {
                 assert_eq!(halt, None, "entry {entry:#x}");
-                assert_eq!(chip.core.a(3), 0xa5a5_a5a5);
+                assert_eq!(chip.cores.core(CoreId::Pro).a(3), 0xa5a5_a5a5);
             } else {
                 assert!(
                     matches!(halt, Some(Halt::Fault(_, Fault::UnmappedLoad { .. }))),
@@ -1127,7 +1201,7 @@ mod tests {
         let (address, touch) = touched[0];
         assert_eq!(Touch::register(address), "GPIO+0x74");
         assert!(!touch.write);
-        assert_eq!(touch.pc, program.entry() + 5 * 3);
+        assert_eq!(touch.pc, pro(program.entry() + 5 * 3));
         assert!(touch.at < first);
     }
 
@@ -1336,7 +1410,7 @@ mod tests {
         };
         assert_eq!(
             fault,
-            Fault::Setting(Setting::Dummy, program.entry() + 14 * 3)
+            Fault::Setting(Setting::Dummy, pro(program.entry() + 14 * 3))
         );
         assert_eq!(chip.run_until(c(2000)), None, "ended");
         assert_eq!(chip.take_transfers().count(), 0);
@@ -1353,10 +1427,13 @@ mod tests {
             chip.run_until(c(1000)),
             Some(Halt::Fault(
                 c(17),
-                Fault::Refused(sending, program.entry() + 17 * 3)
+                Fault::Refused(sending, pro(program.entry() + 17 * 3))
             ))
         );
-        assert_eq!(chip.soc.load(Cycle(0), SYSTEM + 0x20, Width::Word), Ok(0));
+        assert_eq!(
+            chip.soc.bus().load(Cycle(0), SYSTEM + 0x20, Width::Word),
+            Ok(0)
+        );
     }
 
     /// A turn of SPI2's clock off while it sends ends the run at its store. A GDMA reset bit
@@ -1369,7 +1446,7 @@ mod tests {
             program.chip_on(&[]).run_until(c(1000)),
             Some(Halt::Fault(
                 c(17),
-                Fault::Refused(off, program.entry() + 17 * 3)
+                Fault::Refused(off, pro(program.entry() + 17 * 3))
             ))
         );
         let program = transfer(1 << 31, Some((SYSTEM + 0x24, 0x1fe)));
@@ -1409,7 +1486,10 @@ mod tests {
             (8, SPI2 + 0xe8, 0x3),
             (9, SPI2, 1 << 23),
         ] {
-            assert_eq!(soc.store(Cycle(cycle), address, Width::Word, value), Ok(()));
+            assert_eq!(
+                soc.bus().store(Cycle(cycle), address, Width::Word, value),
+                Ok(())
+            );
         }
         chip
     }
@@ -1418,7 +1498,7 @@ mod tests {
     fn sending(buffer: u32) -> Esp32s3 {
         let mut chip = dma_chip(buffer);
         assert_eq!(
-            chip.soc.store(Cycle(10), SPI2, Width::Word, 1 << 24),
+            chip.soc.bus().store(Cycle(10), SPI2, Width::Word, 1 << 24),
             Ok(())
         );
         assert!(chip.soc.spi2.busy(c(73)) && !chip.soc.spi2.busy(c(74)));
@@ -1438,21 +1518,27 @@ mod tests {
         ] {
             let mut chip = sending(BUFFER);
             assert_eq!(
-                chip.soc.store(Cycle(11), address, width, 0),
+                chip.soc.bus().store(Cycle(11), address, width, 0),
                 Err(Exit::Stop),
                 "{address:#x}"
             );
             assert_eq!(chip.soc.ending, refused, "{address:#x}");
             assert_eq!(
-                chip.soc.load(Cycle(12), BUFFER + 4, Width::Word),
+                chip.soc.bus().load(Cycle(12), BUFFER + 4, Width::Word),
                 Ok(0x0807_0605)
             );
         }
         let mut chip = sending(BUFFER);
         for address in [BUFFER + 8, BUFFER - 4, DESCRIPTOR + 12] {
-            assert_eq!(chip.soc.store(Cycle(11), address, Width::Word, 0), Ok(()));
+            assert_eq!(
+                chip.soc.bus().store(Cycle(11), address, Width::Word, 0),
+                Ok(())
+            );
         }
-        assert_eq!(chip.soc.store(Cycle(74), BUFFER, Width::Word, 0), Ok(()));
+        assert_eq!(
+            chip.soc.bus().store(Cycle(74), BUFFER, Width::Word, 0),
+            Ok(())
+        );
         assert_eq!(chip.soc.ending, None);
     }
 
@@ -1467,7 +1553,7 @@ mod tests {
         ] {
             let mut chip = sending(BUFFER + 1);
             assert_eq!(
-                chip.soc.store(Cycle(11), address, width, 0xffff),
+                chip.soc.bus().store(Cycle(11), address, width, 0xffff),
                 Ok(()),
                 "{address:#x}"
             );
@@ -1476,7 +1562,7 @@ mod tests {
         for address in [BUFFER + 1, BUFFER + 8] {
             let mut chip = sending(BUFFER + 1);
             assert_eq!(
-                chip.soc.store(Cycle(11), address, Width::Byte, 0xff),
+                chip.soc.bus().store(Cycle(11), address, Width::Byte, 0xff),
                 Err(Exit::Stop),
                 "{address:#x}"
             );
@@ -1495,10 +1581,11 @@ mod tests {
         let mut chip = sending(BUFFER);
         let before = chip
             .soc
+            .bus()
             .load(Cycle(11), SYSTEM + 0x24, Width::Word)
             .unwrap();
         assert_eq!(
-            chip.soc.store(
+            chip.soc.bus().store(
                 Cycle(11),
                 SYSTEM + 0x24,
                 Width::Word,
@@ -1509,12 +1596,12 @@ mod tests {
         let refused = Refused::Register("GDMA", "reset_while_sending");
         assert_eq!(chip.soc.ending, Some(Ending::Refused(refused)));
         assert_eq!(
-            chip.soc.load(Cycle(12), SYSTEM + 0x24, Width::Word),
+            chip.soc.bus().load(Cycle(12), SYSTEM + 0x24, Width::Word),
             Ok(before)
         );
         let mut chip = sending(BUFFER);
         assert_eq!(
-            chip.soc.store(
+            chip.soc.bus().store(
                 Cycle(74),
                 SYSTEM + 0x24,
                 Width::Word,
@@ -1524,7 +1611,7 @@ mod tests {
         );
         assert_eq!(chip.soc.ending, None);
         assert_eq!(
-            chip.soc.load(Cycle(75), SYSTEM + 0x24, Width::Word),
+            chip.soc.bus().load(Cycle(75), SYSTEM + 0x24, Width::Word),
             Ok(before | RESTART_RST_EN1)
         );
     }
@@ -1547,7 +1634,7 @@ mod tests {
         ] {
             let mut chip = sending(BUFFER);
             assert_eq!(
-                chip.soc.store(Cycle(11), address, Width::Word, value),
+                chip.soc.bus().store(Cycle(11), address, Width::Word, value),
                 Err(Exit::Stop),
                 "{setting}"
             );
@@ -1555,18 +1642,20 @@ mod tests {
             assert_eq!(chip.soc.ending, Some(Ending::Refused(refused)));
             let mut chip = sending(BUFFER);
             assert_eq!(
-                chip.soc.store(Cycle(74), address, Width::Word, value),
+                chip.soc.bus().store(Cycle(74), address, Width::Word, value),
                 Ok(()),
                 "{setting} after the transfer"
             );
         }
         let mut chip = dma_chip(BUFFER);
         assert_eq!(
-            chip.soc.store(Cycle(10), SYSTEM + 0x1c, Width::Word, 0x600),
+            chip.soc
+                .bus()
+                .store(Cycle(10), SYSTEM + 0x1c, Width::Word, 0x600),
             Ok(())
         );
         assert_eq!(
-            chip.soc.store(Cycle(11), SPI2, Width::Word, 1 << 24),
+            chip.soc.bus().store(Cycle(11), SPI2, Width::Word, 1 << 24),
             Err(Exit::Stop)
         );
         assert_eq!(chip.soc.ending, Some(Ending::Setting(Setting::DmaLink)));
@@ -1585,7 +1674,7 @@ mod tests {
         ] {
             let mut chip = dma_chip(BUFFER);
             assert_eq!(
-                chip.soc.store(Cycle(10), address, Width::Word, value),
+                chip.soc.bus().store(Cycle(10), address, Width::Word, value),
                 Err(Exit::Stop)
             );
             let refused = Refused::Register("GDMA", setting);
@@ -1603,12 +1692,24 @@ mod tests {
         chip.soc.restore(rtc, 0);
         chip.soc.restore(spi0, 0);
         let soc = &mut chip.soc;
-        assert_eq!(soc.store(Cycle(1), rtc, Width::Word, 1), Err(Exit::Stop));
-        assert_eq!(soc.store(Cycle(2), spi0, Width::Word, 1), Err(Exit::Stop));
-        assert_eq!(soc.store(Cycle(2), spi0, Width::Word, 1), Ok(()));
-        assert_eq!(soc.store(Cycle(3), rtc, Width::Word, 1), Err(Exit::Stop));
-        assert_eq!(soc.store(Cycle(3), rtc, Width::Word, 1), Ok(()));
-        assert_eq!(soc.store(Cycle(4), spi0, Width::Word, 2), Err(Exit::Stop));
+        assert_eq!(
+            soc.bus().store(Cycle(1), rtc, Width::Word, 1),
+            Err(Exit::Stop)
+        );
+        assert_eq!(
+            soc.bus().store(Cycle(2), spi0, Width::Word, 1),
+            Err(Exit::Stop)
+        );
+        assert_eq!(soc.bus().store(Cycle(2), spi0, Width::Word, 1), Ok(()));
+        assert_eq!(
+            soc.bus().store(Cycle(3), rtc, Width::Word, 1),
+            Err(Exit::Stop)
+        );
+        assert_eq!(soc.bus().store(Cycle(3), rtc, Width::Word, 1), Ok(()));
+        assert_eq!(
+            soc.bus().store(Cycle(4), spi0, Width::Word, 2),
+            Err(Exit::Stop)
+        );
         let listed: Vec<(u32, Tick)> = soc.changes.iter().map(|&(a, t)| (a, t.at)).collect();
         assert_eq!(listed, [(spi0, c(2)), (rtc, c(3))]);
     }
@@ -1623,7 +1724,7 @@ mod tests {
         let end = chip.soc.spi2.end(0).expect("a transfer runs");
         assert!(c(18) < end);
         assert_eq!(
-            chip.soc.next_event(Cycle(18)),
+            chip.soc.bus().next_event(Cycle(18)),
             Some(chip.soc.clock.cycle_after(end))
         );
     }
@@ -1675,16 +1776,16 @@ mod tests {
 
     #[test]
     fn a_fetch_outside_the_instruction_window_ends_the_run() {
-        let mut chip = Esp32s3::new(&[], 0x4000_0400, []);
+        let mut chip = Esp32s3::new(&[], 0x4000_0400, [], None);
         assert_eq!(
             chip.run_until(c(10)),
-            Some(Halt::Fault(c(0), Fault::UnmappedFetch(0x4000_0400)))
+            Some(Halt::Fault(c(0), Fault::UnmappedFetch(pro(0x4000_0400))))
         );
         let data = RAM[1].start;
-        let mut chip = Esp32s3::new(&[], data, [(data, [0u8; 4].as_slice())]);
+        let mut chip = Esp32s3::new(&[], data, [(data, [0u8; 4].as_slice())], None);
         assert_eq!(
             chip.run_until(c(10)),
-            Some(Halt::Fault(c(0), Fault::UnmappedFetch(data))),
+            Some(Halt::Fault(c(0), Fault::UnmappedFetch(pro(data)))),
             "the data bus does not fetch"
         );
     }
@@ -1700,35 +1801,47 @@ mod tests {
             program.l32r(2, 0).l32r(3, 1).rri8(r, 3, 2, 0);
             let mut chip = program.chip();
             chip.run_until(c(100));
-            assert_eq!(chip.core.special(Sr::ExcCause), 3, "{op}");
-            assert_eq!(chip.core.special(Sr::ExcVaddr), at, "{op}");
-            assert_eq!(chip.soc.load(Cycle(0), at - 1, Width::Word), Ok(0), "{op}");
+            assert_eq!(
+                chip.cores.core(CoreId::Pro).special(Sr::ExcCause),
+                3,
+                "{op}"
+            );
+            assert_eq!(
+                chip.cores.core(CoreId::Pro).special(Sr::ExcVaddr),
+                at,
+                "{op}"
+            );
+            assert_eq!(
+                chip.soc.bus().load(Cycle(0), at - 1, Width::Word),
+                Ok(0),
+                "{op}"
+            );
         }
 
-        let mut soc = Esp32s3::new(&[], BASE, []).soc;
+        let mut soc = Esp32s3::new(&[], BASE, [], None).soc;
         let iram = RAM[0].start + 0x8040;
         for width in [Width::Byte, Width::Half] {
             assert_eq!(
-                soc.load(Cycle(0), iram, width),
+                soc.bus().load(Cycle(0), iram, width),
                 Err(Exit::Fault(Cause::LoadStoreError))
             );
             assert_eq!(
-                soc.store(Cycle(0), iram, width, 1),
+                soc.bus().store(Cycle(0), iram, width, 1),
                 Err(Exit::Fault(Cause::LoadStoreError))
             );
         }
         for width in [Width::Half, Width::Word] {
             assert_eq!(
-                soc.load(Cycle(0), iram + 1, width),
+                soc.bus().load(Cycle(0), iram + 1, width),
                 Err(Exit::Fault(Cause::LoadStoreAlignment))
             );
             assert_eq!(
-                soc.store(Cycle(0), iram + 1, width, 1),
+                soc.bus().store(Cycle(0), iram + 1, width, 1),
                 Err(Exit::Fault(Cause::LoadStoreAlignment))
             );
         }
         assert_eq!(
-            soc.load(Cycle(0), RAM[1].start + 0x40, Width::Byte),
+            soc.bus().load(Cycle(0), RAM[1].start + 0x40, Width::Byte),
             Ok(0),
             "the data bus takes a byte"
         );
@@ -1736,17 +1849,18 @@ mod tests {
 
     #[test]
     fn both_windows_reach_the_same_sram() {
-        let mut soc = Esp32s3::new(&[], BASE, []).soc;
+        let mut soc = Esp32s3::new(&[], BASE, [], None).soc;
         let through_data = RAM[1].start + 0x40;
         let through_code = RAM[0].start + 0x8040;
-        soc.store(Cycle(0), through_data, Width::Word, 0x1234_5678)
+        soc.bus()
+            .store(Cycle(0), through_data, Width::Word, 0x1234_5678)
             .unwrap();
         assert_eq!(
-            soc.load(Cycle(0), through_code, Width::Word),
+            soc.bus().load(Cycle(0), through_code, Width::Word),
             Ok(0x1234_5678)
         );
         assert_eq!(
-            soc.load(Cycle(0), 0x5100_0000, Width::Word),
+            soc.bus().load(Cycle(0), 0x5100_0000, Width::Word),
             Err(Exit::Fault(Cause::LoadStoreError))
         );
     }
@@ -1764,8 +1878,8 @@ mod tests {
     }
 
     /// The PC of store `k` of [`stores`].
-    fn store_pc(program: &Program, k: u32) -> u32 {
-        program.entry() + 9 * k + 6
+    fn store_pc(program: &Program, k: u32) -> Pc {
+        pro(program.entry() + 9 * k + 6)
     }
 
     const LEDC: u32 = 0x6001_9000;
@@ -2146,7 +2260,7 @@ mod tests {
             (TIMG0 + 0x48, EN | 1 << 29 | 3 << 27),
         ]);
         let status = |chip: &mut Esp32s3| {
-            let word = chip.soc.load(Cycle(0), 0x600c_2190, Width::Word);
+            let word = chip.soc.bus().load(Cycle(0), 0x600c_2190, Width::Word);
             word.map(|word| word >> (52 - 32) & 1)
         };
         let mut chip = program.chip();
@@ -2200,8 +2314,75 @@ mod tests {
             let program = store_after_two_loads(address, value, 0);
             assert_eq!(
                 program.chip().run_until(c(1000)),
-                Some(Halt::Fault(c(2), Fault::Refused(why, program.entry() + 6))),
+                Some(Halt::Fault(
+                    c(2),
+                    Fault::Refused(why, pro(program.entry() + 6))
+                )),
                 "{address:#x}"
+            );
+        }
+    }
+
+    /// Enables GPIO21 at cycle 2, lets level-1 interrupt 1 in, stops timer group 0's watchdog
+    /// and holds its stage 0 to 0, starts it with `config` at cycle 12, and sets GPIO21 at
+    /// cycle 13, at the PC it returns. Timer group 0's watchdog source reaches interrupt 1.
+    fn armed(config: u32) -> (Esp32s3, u32) {
+        let mut program = Program::new(&[GPIO, GPIO21, TIMG0, config]);
+        program
+            .l32r(2, 0)
+            .l32r(3, 1)
+            .rri8(6, 3, 2, 0x24)
+            .movi(7, 2)
+            .wsr(7, INTENABLE)
+            .movi(7, 0)
+            .wsr(7, PS)
+            .l32r(4, 2)
+            .movi(5, 0)
+            .rri8(6, 5, 4, 0x48)
+            .rri8(6, 5, 4, 0x50)
+            .l32r(5, 3)
+            .rri8(6, 5, 4, 0x48);
+        let set = program.pc();
+        program.rri8(6, 3, 2, 0x08).raw(&LOOP);
+        let mut chip = program.chip();
+        chip.soc.restore(TIMG0 + 0x70, 1 << 2);
+        chip.soc.restore(0x600c_2000 + 4 * 52, 1);
+        (chip, set)
+    }
+
+    /// A watchdog start whose stage 0 runs out on the next cycle comes before the next
+    /// instruction, however the run splits. A stage that resets ends the run before that
+    /// instruction sets GPIO21. A stage that interrupts is taken at it, so `EPC1` holds its PC
+    /// and GPIO21 stays low. The kernel vector is outside any memory, so the run ends there.
+    #[test]
+    fn a_watchdog_stage_due_just_after_its_start_comes_before_the_next_instruction() {
+        for step in [1, 1000] {
+            let (mut chip, _) = armed(EN | 3 << 29);
+            assert_eq!(
+                halts(&mut chip, 1000, step),
+                [
+                    (image_at(c(2)), PadDrive::Low),
+                    (Halt::Fault(c(13), TIMG0_FLASHBOOT), PadDrive::Low),
+                ],
+                "limits {step} apart"
+            );
+
+            let (mut chip, set) = armed(EN | 1 << 29 | 3 << 27);
+            let seen = halts(&mut chip, 1000, step);
+            assert!(
+                matches!(
+                    seen[..],
+                    [
+                        (Halt::Change { .. }, PadDrive::Low),
+                        (Halt::Fault(_, Fault::UnmappedFetch(pc)), PadDrive::Low),
+                    ] if pc == pro(0x4000_0300)
+                ),
+                "limits {step} apart: {seen:?}"
+            );
+            assert_eq!(
+                chip.cores.core(CoreId::Pro).special(Sr::Epc1),
+                set,
+                "limits {step} apart"
             );
         }
     }

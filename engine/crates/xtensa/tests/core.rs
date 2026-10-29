@@ -4,7 +4,7 @@
 use std::ops::Range;
 
 use sim_xtensa::{
-    Bus, Cause, Config, Core, Cycle, Esp32, Esp32s3, Exit, Missing, Op, PagedRam, Sr, Stop,
+    Bus, Cause, Config, Core, CoreId, Cycle, Esp32, Esp32s3, Exit, Missing, Op, PagedRam, Sr, Stop,
     Unimplemented, Width,
 };
 
@@ -23,6 +23,8 @@ pub struct Flat {
     pub rise: Option<(Cycle, u32)>,
     /// How many times the core read the lines.
     pub polls: u64,
+    /// Asks the core to return before each step.
+    pub yields: bool,
 }
 
 impl Flat {
@@ -41,6 +43,7 @@ impl Flat {
             lines: 0,
             rise: None,
             polls: 0,
+            yields: false,
         }
     }
 }
@@ -86,6 +89,10 @@ impl Bus for Flat {
 
     fn next_event(&mut self, now: Cycle) -> Option<Cycle> {
         self.rise.map(|(at, _)| at).filter(|at| now < *at)
+    }
+
+    fn yields(&self) -> bool {
+        self.yields
     }
 }
 
@@ -177,11 +184,40 @@ fn two_byte_op_before_an_unmapped_word_runs() {
     assert_eq!(core.cycle(), Cycle(1));
 }
 
+/// A core reset at a cycle reads its own `PRID` and counts `CCOUNT` from 0 there. `skip_to`
+/// never moves the cycle back, and `CCOUNT` counts the gap it skips.
+#[test]
+fn a_reset_app_cpu_reads_its_prid_and_counts_from_its_reset() {
+    // rsr.prid a5; rsr.ccount a6.
+    let mut bus = Flat::new("50eb0360ea03");
+    let mut core = Core::<Esp32s3>::reset(CoreId::App, Cycle(1000));
+    core.set_pc(CODE);
+    assert_eq!(core.id(), CoreId::App);
+    assert_eq!(core.special(Sr::Ccount), 0);
+    assert_eq!(core.run_until(&mut bus, Cycle(2000)), Stop::Bus);
+    assert_eq!((core.a(5), core.a(6)), (0xabab, 1));
+    core.skip_to(Cycle(500));
+    assert_eq!(core.cycle(), Cycle(1002));
+    core.skip_to(Cycle(3000));
+    assert_eq!(core.special(Sr::Ccount), 2000);
+}
+
+/// A bus that asks the core to yield stops it before its next step, after the limit check.
+#[test]
+fn a_yielding_bus_stops_the_core_before_its_next_step() {
+    let mut bus = Flat::new("50eb03");
+    bus.yields = true;
+    let mut core = core_at::<Esp32s3>(CODE);
+    assert_eq!(core.run_until(&mut bus, Cycle(0)), Stop::Limit);
+    assert_eq!(core.run_until(&mut bus, Cycle(100)), Stop::Yield);
+    assert_eq!((core.pc(), core.cycle(), bus.polls), (CODE, Cycle(0), 0));
+}
+
 /// `Core` is copied at every landing, so its size is pinned.
 #[test]
 fn core_size_is_pinned() {
-    assert_eq!(size_of::<Core<Esp32>>(), 848);
-    assert_eq!(size_of::<Core<Esp32s3>>(), 848);
+    assert_eq!(size_of::<Core<Esp32>>(), 856);
+    assert_eq!(size_of::<Core<Esp32s3>>(), 856);
 }
 
 /// A `j` to itself while every interrupt is masked stops the core before it once, and the core

@@ -367,6 +367,8 @@ pub enum Diagnostic {
         op: &'static str,
         reason: Unsupported,
         pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
         symbol: Option<String>,
     },
     /// A chip's core fetched code at `pc`, where the model maps no memory. It ends the run.
@@ -374,6 +376,8 @@ pub enum Diagnostic {
         part: Ref,
         at: Time,
         pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
         symbol: Option<String>,
     },
     /// A chip's core reached a jump to itself at `pc` that nothing can take it out of: every
@@ -383,6 +387,8 @@ pub enum Diagnostic {
         part: Ref,
         at: Time,
         pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
         symbol: Option<String>,
     },
     /// A chip's firmware started a `peripheral` transfer from the store at `pc` with `setting`,
@@ -393,6 +399,8 @@ pub enum Diagnostic {
         peripheral: &'static str,
         setting: ChipSetting,
         pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
         symbol: Option<String>,
     },
     /// A stage of a chip's watchdog ran out and reset `reset`, the CPU, the system or the RTC
@@ -410,6 +418,8 @@ pub enum Diagnostic {
         part: Ref,
         at: Time,
         pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
         symbol: Option<String>,
     },
     /// A chip's firmware sent its flash `command` from the store at `pc`, which the model
@@ -420,6 +430,8 @@ pub enum Diagnostic {
         command: Option<u8>,
         reason: FlashRefusal,
         pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
         symbol: Option<String>,
     },
     /// A chip's firmware picked a CPU clock the model does not run from the store at `pc`. It
@@ -428,6 +440,8 @@ pub enum Diagnostic {
         part: Ref,
         at: Time,
         pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
         symbol: Option<String>,
     },
     /// A chip's firmware reset the chip from the store at `pc`. The model does not run the boot
@@ -436,6 +450,8 @@ pub enum Diagnostic {
         part: Ref,
         at: Time,
         pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
         symbol: Option<String>,
     },
     /// A chip's firmware reset the chip from the store at `pc` after recording `reason`, or no
@@ -445,6 +461,8 @@ pub enum Diagnostic {
         at: Time,
         reason: ResetReason,
         pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
         symbol: Option<String>,
     },
     /// A chip's core loaded from `address` from `pc`, in a cache window where the MMU maps no
@@ -454,6 +472,8 @@ pub enum Diagnostic {
         at: Time,
         address: u32,
         pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
         symbol: Option<String>,
     },
     /// A chip's firmware read or wrote `register` at `address`, which the model keeps no state
@@ -465,6 +485,8 @@ pub enum Diagnostic {
         address: u32,
         register: String,
         pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
         symbol: Option<String>,
         write: bool,
         /// The register keeps the write, and the model does not run what it does.
@@ -1040,6 +1062,7 @@ impl Diagnostic {
                 op,
                 reason,
                 pc,
+                app,
                 symbol,
             } => {
                 let what = match reason {
@@ -1049,8 +1072,9 @@ impl Diagnostic {
                     Unsupported::LoopEnd => format!("`{op}` as the last op of a loop"),
                 };
                 format!(
-                    "{part} reached {what} at {pc:#010x}{}, which the model does not run, at {} ps",
+                    "{part} reached {what} at {pc:#010x}{}{}, which the model does not run, at {} ps",
                     symbol_text(symbol),
+                    core_text(*app),
                     at.as_ps()
                 )
             }
@@ -1058,20 +1082,24 @@ impl Diagnostic {
                 part,
                 at,
                 pc,
+                app,
                 symbol,
             } => format!(
-                "{part} fetched code at {pc:#010x}{}, where the model maps no memory, at {} ps",
+                "{part} fetched code at {pc:#010x}{}{}, where the model maps no memory, at {} ps",
                 symbol_text(symbol),
+                core_text(*app),
                 at.as_ps()
             ),
             Diagnostic::ChipHalted {
                 part,
                 at,
                 pc,
+                app,
                 symbol,
             } => format!(
-                "{part} halted at {pc:#010x}{}, a jump to itself that no interrupt or watchdog can leave, at {} ps",
+                "{part} halted at {pc:#010x}{}{}, a jump to itself that no interrupt or watchdog can leave, at {} ps",
                 symbol_text(symbol),
+                core_text(*app),
                 at.as_ps()
             ),
             Diagnostic::ChipUnsupportedSetting {
@@ -1080,6 +1108,7 @@ impl Diagnostic {
                 peripheral,
                 setting,
                 pc,
+                app,
                 symbol,
             } => {
                 let what = match setting {
@@ -1098,8 +1127,9 @@ impl Diagnostic {
                     _ => "which the model does not run",
                 };
                 format!(
-                    "{part} {what} at {pc:#010x}{}, {why}, at {} ps",
+                    "{part} {what} at {pc:#010x}{}{}, {why}, at {} ps",
                     symbol_text(symbol),
+                    core_text(*app),
                     at.as_ps()
                 )
             }
@@ -1117,10 +1147,12 @@ impl Diagnostic {
                 part,
                 at,
                 pc,
+                app,
                 symbol,
             } => format!(
-                "{part} started an eFuse program command at {pc:#010x}{}, which would burn eFuses, at {} ps",
+                "{part} started an eFuse program command at {pc:#010x}{}{}, which would burn eFuses, at {} ps",
                 symbol_text(symbol),
+                core_text(*app),
                 at.as_ps()
             ),
             Diagnostic::ChipFlashCommand {
@@ -1129,6 +1161,7 @@ impl Diagnostic {
                 command,
                 reason,
                 pc,
+                app,
                 symbol,
             } => {
                 let command = match command {
@@ -1170,8 +1203,9 @@ impl Diagnostic {
                     ),
                 };
                 format!(
-                    "{part} {what} at {pc:#010x}{}, {why}, at {} ps",
+                    "{part} {what} at {pc:#010x}{}{}, {why}, at {} ps",
                     symbol_text(symbol),
+                    core_text(*app),
                     at.as_ps()
                 )
             }
@@ -1179,20 +1213,24 @@ impl Diagnostic {
                 part,
                 at,
                 pc,
+                app,
                 symbol,
             } => format!(
-                "{part} picked a CPU clock the model does not run, the RC fast clock or a reserved setting, at {pc:#010x}{} at {} ps",
+                "{part} picked a CPU clock the model does not run, the RC fast clock or a reserved setting, at {pc:#010x}{}{} at {} ps",
                 symbol_text(symbol),
+                core_text(*app),
                 at.as_ps()
             ),
             Diagnostic::ChipRestart {
                 part,
                 at,
                 pc,
+                app,
                 symbol,
             } => format!(
-                "{part} reset itself at {pc:#010x}{} at {} ps; the model does not run the boot ROM, so the chip stays in reset",
+                "{part} reset itself at {pc:#010x}{}{} at {} ps; the model does not run the boot ROM, so the chip stays in reset",
                 symbol_text(symbol),
+                core_text(*app),
                 at.as_ps()
             ),
             Diagnostic::ChipFaultRestart {
@@ -1200,10 +1238,12 @@ impl Diagnostic {
                 at,
                 reason,
                 pc,
+                app,
                 symbol,
             } => format!(
-                "{part} reset itself at {pc:#010x}{} {}, at {} ps",
+                "{part} reset itself at {pc:#010x}{}{} {}, at {} ps",
                 symbol_text(symbol),
+                core_text(*app),
                 match reason {
                     ResetReason::Panic => "after a panic",
                     ResetReason::InterruptWatchdog => "after its interrupt watchdog fired",
@@ -1219,10 +1259,12 @@ impl Diagnostic {
                 at,
                 address,
                 pc,
+                app,
                 symbol,
             } => format!(
-                "{part} loaded from {address:#010x} at {pc:#010x}{}, where the MMU maps no flash, at {} ps",
+                "{part} loaded from {address:#010x} at {pc:#010x}{}{}, where the MMU maps no flash, at {} ps",
                 symbol_text(symbol),
+                core_text(*app),
                 at.as_ps()
             ),
             Diagnostic::ChipUnmodeledRegister {
@@ -1231,11 +1273,12 @@ impl Diagnostic {
                 address,
                 register,
                 pc,
+                app,
                 symbol,
                 write,
                 kept,
             } => format!(
-                "{part} {} {register} at {address:#010x}, {} {} ps from {pc:#010x}{}",
+                "{part} {} {register} at {address:#010x}, {} {} ps from {pc:#010x}{}{}",
                 if *write { "wrote" } else { "read" },
                 if *kept {
                     "whose effect the model does not run, at"
@@ -1243,7 +1286,8 @@ impl Diagnostic {
                     "which the model does not keep, first at"
                 },
                 at.as_ps(),
-                symbol_text(symbol)
+                symbol_text(symbol),
+                core_text(*app)
             ),
             Diagnostic::TraceTooLarge {
                 rows,
@@ -1273,6 +1317,32 @@ impl Diagnostic {
     }
 
     fn data(&self) -> serde_json::Value {
+        let mut data = self.fields();
+        if self.on_app_cpu() {
+            data["core"] = serde_json::json!("app");
+        }
+        data
+    }
+
+    /// Whether the code a chip diagnostic names ran on the APP CPU.
+    fn on_app_cpu(&self) -> bool {
+        matches!(
+            self,
+            Diagnostic::ChipUnsupportedInstruction { app: true, .. }
+                | Diagnostic::ChipUnmappedFetch { app: true, .. }
+                | Diagnostic::ChipHalted { app: true, .. }
+                | Diagnostic::ChipUnsupportedSetting { app: true, .. }
+                | Diagnostic::ChipEfuseProgram { app: true, .. }
+                | Diagnostic::ChipFlashCommand { app: true, .. }
+                | Diagnostic::ChipUnsupportedClock { app: true, .. }
+                | Diagnostic::ChipRestart { app: true, .. }
+                | Diagnostic::ChipFaultRestart { app: true, .. }
+                | Diagnostic::ChipUnmappedLoad { app: true, .. }
+                | Diagnostic::ChipUnmodeledRegister { app: true, .. }
+        )
+    }
+
+    fn fields(&self) -> serde_json::Value {
         match self {
             Diagnostic::NetlistSyntax {
                 path,
@@ -1468,6 +1538,11 @@ impl Diagnostic {
             }
         }
     }
+}
+
+/// ` on the APP CPU` for code the APP CPU ran, or nothing.
+fn core_text(app: bool) -> &'static str {
+    if app { " on the APP CPU" } else { "" }
 }
 
 /// ` in name+0x1c`, or nothing with no symbol.

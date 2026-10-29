@@ -1,5 +1,23 @@
 //! What the core asks of its SoC. The core knows no SoC and owns no memory.
 
+/// Which of a chip's two cores, by the `PRID` it reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CoreId {
+    Pro,
+    App,
+}
+
+impl CoreId {
+    /// `0xCDCD` on the PRO CPU and `0xABAB` on the APP CPU. IDF v5.5.5,
+    /// `components/xtensa/include/xtensa_context.h`.
+    pub const fn prid(self) -> u32 {
+        match self {
+            CoreId::Pro => 0xcdcd,
+            CoreId::App => 0xabab,
+        }
+    }
+}
+
 /// A core's cycle on its own clock.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Cycle(pub u64);
@@ -95,4 +113,8 @@ pub trait Bus {
     /// The first cycle after `now` at which the lines can change with no access, or `None`. A
     /// core in `WAITI` skips to the earliest of this, its own timer match and the run's limit.
     fn next_event(&mut self, now: Cycle) -> Option<Cycle>;
+    /// Whether the core returns [`Stop::Yield`](crate::Stop::Yield) before its next step.
+    fn yields(&self) -> bool {
+        false
+    }
 }

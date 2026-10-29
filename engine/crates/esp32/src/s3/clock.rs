@@ -88,9 +88,15 @@ impl CpuClock {
         }
     }
 
-    /// The tick of core cycle `cycle`, at or after the last change.
+    /// The tick of core cycle `cycle`, at or after the last change. A release build gives a
+    /// cycle before it the change's tick.
     pub(crate) fn tick(&self, cycle: Cycle) -> Tick {
-        Tick(self.at.0 + (cycle.0 - self.since.0) * self.source.cpu())
+        debug_assert!(
+            cycle >= self.since,
+            "cycle {cycle:?} before the clock's change at {:?}",
+            self.since
+        );
+        Tick(self.at.0 + cycle.0.saturating_sub(self.since.0) * self.source.cpu())
     }
 
     /// The first core cycle at or after `tick`, which may lie before the last change.

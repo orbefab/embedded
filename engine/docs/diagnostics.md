@@ -388,7 +388,7 @@ Severity `error`. Refs are the chip. `t_ps` is the time the core reached the ins
 
 The message is `{part} reached {what} at {pc}, which the model does not run, at {t_ps} ps`, with ` in {symbol}` after the PC when the firmware has a symbol at or below it.
 
-`data` holds `op`, `pc`, `reason` and `symbol`. `op` is the op's name. `pc` is its address. `symbol` is the ELF symbol at or below the PC, written `name+0x1c` past its start, or `null`. `reason` is one of these.
+`data` holds `op`, `pc`, `reason` and `symbol`. `op` is the op's name. `pc` is its address. `symbol` is the ELF symbol at or below the PC, written `name+0x1c` past its start, or `null`. When the APP CPU ran the code, the message has ` on the APP CPU` after the PC and its symbol, and `data` also holds `core`, `"app"`. Every `esp32s3` diagnostic with a `pc` writes the core this way. `reason` is one of these.
 
 - `op`: the core does not model the op.
 - `unaligned`: the op is an `l32ai`, an `s32ri` or an `s32c1i` at an address that is not a multiple of 4, or another load or store whose access is unaligned and one of whose parts faults.
@@ -410,6 +410,8 @@ The message is `{part} started a {peripheral} transfer with setting {setting} at
 - `mode`, `dma_link`, `dma_descriptor` and `dma_length`, with `peripheral` `SHA`: the store started a hash in another mode than SHA-256, or a DMA hash whose GDMA channel or list SPI2 would refuse with that setting. A transfer setting `dma_link` also covers a start while GDMA's clock is off.
 - `reset_while_sending` and `clock_off_while_sending`, with `peripheral` `SPI2`: the store set SPI2's reset bit, or cleared its clock bit, while a transfer ran. With `peripheral` `GDMA`, the store did that to GDMA's bits while an SPI2 transfer sent from it. ESP-IDF's restart and panic paths set GDMA's reset, `SYSTEM_DMA_RST`, in `esp_system_reset_modules_on_exit`, so an `esp_restart()` or a panic while SPI2 sends from GDMA ends the run here, at a PC in that function, in place of `chip.restart` or `chip.halted`. The console holds a panic's text, which ESP-IDF prints first.
 - `clock_off` and `held_in_reset`, with `peripheral` `SPI2`, `LEDC`, `GDMA` or `SHA`: a load or a store reached that peripheral while its clock gate was clear, or while a reset bit held it. `pc` is that access's.
+- `app_cpu_without_reset`, with `peripheral` `SYSTEM`: the store would let the APP CPU run, and it has not been reset in this run, so the model cannot know its state. ESP-IDF's own start of the APP CPU from the `SYSTEM_CORE_1_CONTROL_0_REG` that a chip booted from flash restores ends the run here, at the store that clears `RUNSTALL`, one store before ESP-IDF sets `RESETING`, as [esp32s3.md](esp32s3.md#the-two-cores) says.
+- `pro_cpu_stall`, with `peripheral` `RTC_CNTL`: the store left `RTC_CNTL_SW_STALL_PROCPU_C0` at 2 and `RTC_CNTL_SW_STALL_PROCPU_C1` at `0x21`, which would stall the PRO CPU. The model does not stall it.
 - `hpoint`, `fade` and `duty_fraction`, with `peripheral` `LEDC`: the store sent a channel's update with a nonzero `LEDC_HPOINT_LSCHn`, with `LEDC_DUTY_START_LSCHn` and a nonzero `LEDC_DUTY_SCALE_LSCHn`, or with a duty that has a fraction.
 - `clock`, `tick_sel`, `clock_divider`, `duty_resolution`, `fractional_divider`, `duty_range` and `full_duty`, with `peripheral` `LEDC`: an update waits on a counting timer whose `LEDC_APB_CLK_SEL` is neither 1 nor 3, whose `LEDC_TICK_SEL_LSTIMERn` is set, whose divider is below 256, whose resolution is 0 or above 14, or whose period is not whole ticks of 480 MHz, or the update's duty is above that timer's steps, or is every step at 14 bits.
 - `timer_change_while_running`, `pause` and `clock_change_while_running`, with `peripheral` `LEDC`: the store changed a counting timer's resolution, divider or tick source, paused it, or changed `LEDC_APB_CLK_SEL` or the APB clock while a timer counted it.
@@ -418,15 +420,15 @@ The message is `{part} started a {peripheral} transfer with setting {setting} at
 - `watchdog_cpu_reset`, `watchdog_interrupt` and `watchdog_stage`, with `peripheral` `TIMG0`, `TIMG1` or `RTC_CNTL`: the store left a running watchdog, at or before its first stage that resets, a CPU reset while its `PROCPU_RESET_EN` is clear, an interrupt of the RTC watchdog, or a stage field that names no action.
 - `super_watchdog`, with `peripheral` `RTC_CNTL`: the store left both `SWD_AUTO_FEED_EN` and `SWD_DISABLE` clear in `RTC_CNTL_SWD_CONF_REG`.
 
-The access writes nothing, and the run keeps every row before it, as [esp32s3.md](esp32s3.md#what-it-models) says.
+The access writes nothing, apart from an `app_cpu_without_reset` or `pro_cpu_stall` store, whose word keeps the value it stored. The run keeps every row before it, as [esp32s3.md](esp32s3.md#what-it-models) says.
 
 ## chip.halted
 
-Severity `error`. Refs are the chip. `t_ps` is the time the core reached the jump. It ends the run.
+Severity `error`. Refs are the chip. `t_ps` is the time the core reached the jump. With both cores started, it is the time the last core that could run stopped. It ends the run.
 
 The message is `{part} halted at {pc}, a jump to itself that no interrupt or watchdog can leave, at {t_ps} ps`, with ` in {symbol}` after the PC when the firmware has a symbol at or below it.
 
-`data` holds `pc` and `symbol`, as `chip.unsupported_instruction` writes them. The core reached a `j` to its own address while every interrupt `INTENABLE` enabled was at or below the current interrupt level, `PS.INTLEVEL` or `EXCMLEVEL` while `PS.EXCM` is set, the interrupt matrix mapped no source to CPU interrupt 14, the non-maskable one, and no watchdog ran. ESP-IDF's panic handler ends in such a loop when the app is built to print and halt, so a panic there ends the run with this error. A bare-metal program that ends in such a loop does too.
+`data` holds `pc` and `symbol`, as `chip.unsupported_instruction` writes them. The core reached a `j` to its own address while every interrupt `INTENABLE` enabled was at or below the current interrupt level, `PS.INTLEVEL` or `EXCMLEVEL` while `PS.EXCM` is set, the interrupt matrix mapped no source to that core's CPU interrupt 14, the non-maskable one, and no watchdog ran. ESP-IDF's panic handler ends in such a loop when the app is built to print and halt, so a panic there ends the run with this error. A bare-metal program that ends in such a loop does too.
 
 ## chip.unmapped_fetch
 
