@@ -96,30 +96,61 @@ pub fn core_at<C: Config>(pc: u32) -> Core<C> {
 }
 
 fn unmodeled_op_stops_before_it<C: Config>() {
-    let rer = [0x20u8, 0x63, 0x40];
+    let rfdo = [0x00u8, 0xe0, 0xf1];
     assert_eq!(
-        C::render(&C::decode(&rer, CODE).unwrap()),
-        "rer\ta2, a3",
+        C::render(&C::decode(&rfdo, CODE).unwrap()),
+        "rfdo\t0",
         "{}",
         C::NAME
     );
-    let mut bus = Flat::new("206340");
+    let mut bus = Flat::new("00e0f1");
     let mut core = core_at::<C>(CODE);
     let stop = core.run_until(&mut bus, Cycle(100));
     let want = Unimplemented {
         pc: CODE,
-        missing: Missing::Op(Op::RER),
+        missing: Missing::Op(Op::RFDO),
     };
     assert_eq!(stop, Stop::Unimplemented(want), "{}", C::NAME);
     assert_eq!(core.pc(), CODE);
     assert_eq!(core.cycle(), Cycle(0));
-    assert_eq!(want.to_string(), "`rer` at 0x40370000 is not modeled");
+    assert_eq!(want.to_string(), "`rfdo` at 0x40370000 is not modeled");
 }
 
 #[test]
 fn unmodeled_op_stops_before_it_on_both_chips() {
     unmodeled_op_stops_before_it::<Esp32>();
     unmodeled_op_stops_before_it::<Esp32s3>();
+}
+
+/// `witlb` and `wdtlb` set a region's attribute, which `ritlb1` and `rdtlb1` read back beside the
+/// region's address bits, and a region never written reads 2. `PRID` is core 0's, and `rer`
+/// reads 0.
+fn region_prid_and_external_registers<C: Config>() {
+    // witlb a2, a3; wdtlb a2, a3; ritlb1 a4, a3; rdtlb1 a7, a8; ritlb0 a9, a3; rsr.prid a5;
+    // rer a6, a3; wer a6, a3; rfdo 0.
+    let mut bus = Flat::new("20635020e35040735070f85090335050eb0360634060734000e0f1");
+    let mut core = core_at::<C>(CODE);
+    core.set_a(2, 0xf);
+    core.set_a(3, 0x4123_4567);
+    core.set_a(6, 0x5a5a);
+    core.set_a(8, 0x6000_0010);
+    let stop = core.run_until(&mut bus, Cycle(100));
+    let want = Unimplemented {
+        pc: CODE + 0x18,
+        missing: Missing::Op(Op::RFDO),
+    };
+    assert_eq!(stop, Stop::Unimplemented(want), "{}", C::NAME);
+    assert_eq!(core.a(4), 0x4000_000f, "{}", C::NAME);
+    assert_eq!(core.a(7), 0x6000_0002, "{}", C::NAME);
+    assert_eq!(core.a(9), 0x4000_0000, "{}", C::NAME);
+    assert_eq!(core.a(5), 0xcdcd, "{}", C::NAME);
+    assert_eq!(core.a(6), 0, "{}", C::NAME);
+}
+
+#[test]
+fn region_prid_and_external_registers_on_both_chips() {
+    region_prid_and_external_registers::<Esp32>();
+    region_prid_and_external_registers::<Esp32s3>();
 }
 
 #[test]
@@ -149,6 +180,6 @@ fn two_byte_op_before_an_unmapped_word_runs() {
 /// `Core` is copied at every landing, so its size is pinned.
 #[test]
 fn core_size_is_pinned() {
-    assert_eq!(size_of::<Core<Esp32>>(), 832);
-    assert_eq!(size_of::<Core<Esp32s3>>(), 832);
+    assert_eq!(size_of::<Core<Esp32>>(), 848);
+    assert_eq!(size_of::<Core<Esp32s3>>(), 848);
 }

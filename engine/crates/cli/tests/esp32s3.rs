@@ -241,6 +241,44 @@ fn a_blob_that_is_not_an_executable_for_its_ram_is_a_firmware_error() {
     }
 }
 
+fn hello() -> serde_json::Value {
+    serde_json::from_slice(&fs::read(repo("examples/esp32s3-hello/netlist.json")).unwrap()).unwrap()
+}
+
+/// `rom` goes with `firmware.flash` and only there, and is the pinned ROM, which no example
+/// commits, so its absence is the one blob a run of the flash example names.
+#[test]
+fn the_rom_comes_with_a_flash_and_is_the_pinned_one() {
+    let dir = scratch("rom");
+    let hello_blobs = repo("examples/esp32s3-hello/blobs");
+    let rom = hello()["parts"][1]["rom"].clone();
+    let mut other = hello();
+    other["parts"][1]["rom"]["bytes"] = 949_553.into();
+    let mut absent = hello();
+    absent["parts"][1].as_object_mut().unwrap().remove("rom");
+    let mut beside_elf = example();
+    beside_elf["parts"][1]["rom"] = rom.clone();
+    for (name, netlist) in [
+        ("other", other),
+        ("absent", absent),
+        ("beside an elf", beside_elf),
+    ] {
+        let (code, doc) = run(&dir, &netlist, &[&hello_blobs, &example_blobs()]);
+        assert_eq!(code, 1, "{name}");
+        let found = diagnostics(&doc);
+        assert_eq!(found.len(), 1, "{name}: {found:?}");
+        assert_eq!(found[0]["code"], "netlist.firmware", "{name}");
+        assert_eq!(found[0]["data"]["rule"], "rom", "{name}");
+    }
+    let (code, doc) = run(&dir, &hello(), &[&hello_blobs]);
+    assert_eq!(code, 1);
+    let found = diagnostics(&doc);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["code"], "netlist.blob");
+    assert_eq!(found[0]["data"]["role"], "rom");
+    assert_eq!(found[0]["data"]["sha256"], rom["sha256"]);
+}
+
 #[test]
 fn a_gpio_is_optional_and_a_pin_the_chip_lacks_is_refused() {
     let dir = scratch("pins");
@@ -415,6 +453,7 @@ fn an_unmodeled_register_is_reported_once_with_its_pc_and_symbol() {
         found[0]["data"],
         serde_json::json!({
             "address": 0x6000_0000u32,
+            "kept": false,
             "pc": IRAM + 4 + 3,
             "register": "UART0+0x0",
             "symbol": "main+0x3",
@@ -487,6 +526,142 @@ fn an_op_the_core_does_not_run_ends_the_run() {
     );
     // The movi takes 1 cycle at 25 ns.
     assert_eq!(found[0]["t_ps"], 25_000);
+}
+
+/// A store of `EFUSE_PGM_CMD` to `EFUSE_CMD_REG` would burn eFuses, so it ends the run.
+#[test]
+fn an_efuse_program_command_ends_the_run() {
+    // l32r a2 <- EFUSE_CONF_REG; l32r a3 <- its program opcode; s32i a3, a2, 0;
+    // l32r a2 <- EFUSE_CMD_REG; l32r a3 <- EFUSE_PGM_CMD; s32i a3, a2, 0; then idle.
+    let mut code = vec![
+        0x21, 0xfc, 0xff, 0x31, 0xfc, 0xff, 0x32, 0x62, 0x00, 0x21, 0xfb, 0xff, 0x31, 0xfc, 0xff,
+        0x32, 0x62, 0x00,
+    ];
+    code.extend(IDLE);
+    let literals = [0x6000_71cc, 0x5a5a, 0x6000_71d4, 0b10];
+    let doc = run_program("efuse", &literals, &code, 10_000_000_000);
+    assert_eq!(doc["status"], "failed");
+    let found = diagnostics(&doc);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["code"], "chip.efuse_program");
+    assert_eq!(found[0]["severity"], "error");
+    assert_eq!(
+        found[0]["data"],
+        serde_json::json!({ "pc": IRAM + 16 + 15, "symbol": "main+0xf" })
+    );
+    // Five ops of one cycle at 25 ns come before the store.
+    assert_eq!(found[0]["t_ps"], 125_000);
+}
+
+/// The flash has no erase, so a sector erase through SPI1 ends the run with its command byte.
+#[test]
+fn a_flash_erase_ends_the_run() {
+    // l32r a2 <- SPI_MEM_CMD_REG of SPI1; l32r a3 <- SPI_MEM_FLASH_SE; s32i a3, a2, 0; then idle.
+    let mut code = vec![0x21, 0xfe, 0xff, 0x31, 0xfe, 0xff, 0x32, 0x62, 0x00];
+    code.extend(IDLE);
+    let doc = run_program("erase", &[0x6000_2000, 1 << 24], &code, 10_000_000_000);
+    let found = diagnostics(&doc);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["code"], "chip.flash_command");
+    assert_eq!(found[0]["severity"], "error");
+    assert_eq!(
+        found[0]["data"],
+        serde_json::json!({
+            "command": 0x20,
+            "pc": IRAM + 8 + 6,
+            "reason": "unsupported",
+            "symbol": "main+0x6"
+        })
+    );
+}
+
+/// A pad of the flash given to the GPIO matrix could send the flash any command, so that write
+/// ends the run.
+#[test]
+fn a_write_that_takes_a_flash_pad_ends_the_run() {
+    // l32r a2 <- IO_MUX_GPIO30_REG; l32r a3 <- function 1, the GPIO; s32i a3, a2, 0; then idle.
+    let mut code = vec![0x21, 0xfe, 0xff, 0x31, 0xfe, 0xff, 0x32, 0x62, 0x00];
+    code.extend(IDLE);
+    let doc = run_program("pads", &[0x6000_907c, 1 << 12], &code, 10_000_000_000);
+    let found = diagnostics(&doc);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["code"], "chip.flash_command");
+    assert_eq!(found[0]["severity"], "error");
+    assert_eq!(
+        found[0]["data"],
+        serde_json::json!({
+            "command": null,
+            "pc": IRAM + 8 + 6,
+            "reason": "pads",
+            "symbol": "main+0x6"
+        })
+    );
+    let message = found[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("took a flash pad from SPI0 and SPI1 at 0x4038000e in main+0x6, which could send the flash any command"),
+        "{message}"
+    );
+}
+
+/// `RTC_CNTL_SW_SYS_RST` resets the chip. A bare-metal chip keeps no `RTC_CNTL_STORE6_REG`, so
+/// the model cannot read why, and the reset ends the run as an error. The hello example covers a
+/// reset from `esp_restart`, which holds the chip in reset to the run's stop.
+#[test]
+fn a_reset_with_no_reason_the_model_can_read_fails_the_run() {
+    // l32r a2 <- RTC_CNTL_OPTIONS0_REG; l32r a3 <- RTC_CNTL_SW_SYS_RST; s32i a3, a2, 0; then idle.
+    let mut code = vec![0x21, 0xfe, 0xff, 0x31, 0xfe, 0xff, 0x32, 0x62, 0x00];
+    code.extend(IDLE);
+    let doc = run_program("restart", &[0x6000_8000, 1 << 31], &code, 10_000_000_000);
+    let found = diagnostics(&doc);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["code"], "chip.fault_restart");
+    assert_eq!(found[0]["severity"], "error");
+    assert_eq!(
+        found[0]["data"],
+        serde_json::json!({ "pc": IRAM + 8 + 6, "reason": "unreadable", "symbol": "main+0x6" })
+    );
+    assert_eq!(found[0]["t_ps"], 50_000);
+    assert_eq!(doc["status"], "failed");
+}
+
+/// The CPU leaves the 40 MHz crystal for the 240 MHz PLL at the store that selects it, so the read
+/// two cycles later comes two 240 MHz cycles after it.
+#[test]
+fn a_switch_to_the_pll_speeds_up_the_core() {
+    // l32r a2 <- SYSTEM_CPU_PER_CONF_REG; l32r a3 <- 240 MHz from the 480 MHz PLL; s32i a3, a2, 0;
+    // l32r a2 <- SYSTEM_SYSCLK_CONF_REG; l32r a3 <- the PLL; s32i a3, a2, 0;
+    // l32r a2 <- UART0; l32i a3, a2, 0; then idle.
+    let mut code = vec![
+        0x21, 0xfb, 0xff, 0x31, 0xfb, 0xff, 0x32, 0x62, 0x00, 0x21, 0xfa, 0xff, 0x31, 0xfb, 0xff,
+        0x32, 0x62, 0x00, 0x21, 0xfa, 0xff, 0x32, 0x22, 0x00,
+    ];
+    code.extend(IDLE);
+    let literals = [0x600c_0010, 0x6, 0x600c_0060, 1 << 10, 0x6000_0000];
+    let doc = run_program("pll", &literals, &code, 10_000_000_000);
+    let found = diagnostics(&doc);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["code"], "chip.unmodeled_register");
+    assert_eq!(found[0]["data"]["pc"], IRAM + 20 + 21);
+    // The store at cycle 5 is 60 ticks of 480 MHz, and two 240 MHz cycles of 2 ticks follow: 64
+    // ticks, 133333.3 ps, rounded up.
+    assert_eq!(found[0]["t_ps"], 133_334);
+}
+
+/// The RC fast clock is not one the model runs the CPU on.
+#[test]
+fn a_switch_to_the_rc_fast_clock_ends_the_run() {
+    // l32r a2 <- SYSTEM_SYSCLK_CONF_REG; l32r a3 <- the RC fast clock; s32i a3, a2, 0; then idle.
+    let mut code = vec![0x21, 0xfe, 0xff, 0x31, 0xfe, 0xff, 0x32, 0x62, 0x00];
+    code.extend(IDLE);
+    let doc = run_program("rc-fast", &[0x600c_0060, 2 << 10], &code, 10_000_000_000);
+    let found = diagnostics(&doc);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["code"], "chip.unsupported_clock");
+    assert_eq!(found[0]["severity"], "error");
+    assert_eq!(
+        found[0]["data"],
+        serde_json::json!({ "pc": IRAM + 8 + 6, "symbol": "main+0x6" })
+    );
 }
 
 /// An FPU op runs once `CPENABLE` bit 0 is set, so the run goes on to the `rfi` after it. With

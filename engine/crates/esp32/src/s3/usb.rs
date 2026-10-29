@@ -5,7 +5,7 @@
 
 use std::collections::VecDeque;
 
-use sim_xtensa::Cycle;
+use super::clock::Tick;
 
 const PACKET: usize = 64;
 const WR_DONE: u32 = 1 << 0;
@@ -15,7 +15,7 @@ const SERIAL_IN_EP_DATA_FREE: u32 = 1 << 1;
 pub(crate) struct UsbSerialJtag {
     fifo: Vec<u8>,
     /// Each sent byte and its packet's flush, in the order sent.
-    sent: VecDeque<(Cycle, u8)>,
+    sent: VecDeque<(Tick, u8)>,
 }
 
 impl UsbSerialJtag {
@@ -27,7 +27,7 @@ impl UsbSerialJtag {
         }
     }
 
-    pub(crate) fn write(&mut self, now: Cycle, offset: u32, value: u32) -> bool {
+    pub(crate) fn write(&mut self, now: Tick, offset: u32, value: u32) -> bool {
         match offset {
             0x00 => {
                 self.fifo.push(value as u8);
@@ -45,13 +45,13 @@ impl UsbSerialJtag {
         true
     }
 
-    fn flush(&mut self, now: Cycle) {
+    fn flush(&mut self, now: Tick) {
         self.sent
             .extend(self.fifo.drain(..).map(|byte| (now, byte)));
     }
 
     /// The first sent byte not taken yet, when its packet flushed at or before `through`.
-    pub(crate) fn take_sent(&mut self, through: Cycle) -> Option<(Cycle, u8)> {
+    pub(crate) fn take_sent(&mut self, through: Tick) -> Option<(Tick, u8)> {
         let &(at, byte) = self.sent.front()?;
         if at > through {
             return None;
@@ -68,18 +68,18 @@ mod tests {
     #[test]
     fn a_packet_goes_at_wr_done_or_its_64th_byte() {
         let mut usb = UsbSerialJtag::default();
-        usb.write(Cycle(1), 0x00, u32::from(b'h'));
-        usb.write(Cycle(2), 0x00, u32::from(b'i'));
-        assert_eq!(usb.take_sent(Cycle(100)), None, "held in the FIFO");
-        usb.write(Cycle(3), 0x04, WR_DONE);
-        assert_eq!(usb.take_sent(Cycle(2)), None);
-        assert_eq!(usb.take_sent(Cycle(3)), Some((Cycle(3), b'h')));
-        assert_eq!(usb.take_sent(Cycle(3)), Some((Cycle(3), b'i')));
+        usb.write(Tick(1), 0x00, u32::from(b'h'));
+        usb.write(Tick(2), 0x00, u32::from(b'i'));
+        assert_eq!(usb.take_sent(Tick(100)), None, "held in the FIFO");
+        usb.write(Tick(3), 0x04, WR_DONE);
+        assert_eq!(usb.take_sent(Tick(2)), None);
+        assert_eq!(usb.take_sent(Tick(3)), Some((Tick(3), b'h')));
+        assert_eq!(usb.take_sent(Tick(3)), Some((Tick(3), b'i')));
         for k in 0..PACKET as u64 {
-            usb.write(Cycle(10 + k), 0x00, 0x41);
+            usb.write(Tick(10 + k), 0x00, 0x41);
         }
-        let flush = Cycle(10 + PACKET as u64 - 1);
+        let flush = Tick(10 + PACKET as u64 - 1);
         assert!((0..PACKET).all(|_| usb.take_sent(flush) == Some((flush, 0x41))));
-        assert_eq!(usb.take_sent(Cycle(u64::MAX)), None);
+        assert_eq!(usb.take_sent(Tick(u64::MAX)), None);
     }
 }

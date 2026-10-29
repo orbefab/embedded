@@ -7,7 +7,10 @@
 //! their levels, the `CCOMPARE` timers, `WAITI` and the `ICOUNT` debug exception. It also runs
 //! the single-precision FPU, MAC16, the Boolean registers and `s32c1i`, and on the S3 the `q`
 //! registers and `cop_ai` user registers as plain state: `ld.qr`, `st.qr`, `mv.qr`, `rur` and
-//! `wur`. Every other op ends the run with [`Stop::Unimplemented`], among them the classic
+//! `wur`. `PRID` reads core 0's `0xCDCD`. The region protection ops `witlb` and `wdtlb` keep each
+//! 512 MB region's attribute for `ritlb1` and `rdtlb1` to read back, and no access is checked
+//! against it. `iitlb` and `idtlb` do nothing, and the external registers read 0 through `rer`
+//! and drop `wer`. Every other op ends the run with [`Stop::Unimplemented`], among them the classic
 //! `f64*` ops and the S3's `ee.*` vector ops. `bus` is what the core asks of its SoC, and `paged`
 //! is the copy-on-write RAM a SoC keeps its memory in.
 //!

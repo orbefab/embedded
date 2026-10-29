@@ -2,7 +2,7 @@
 
 A netlist is fully resolved JSON. `version` is 0. [versions.md](versions.md) says which changes keep it. Every field is required, and an unknown field is an error. Nothing is filled in by default.
 
-The netlist is the engine's input. Data a part needs lives inside the document, with one exception. A large input, such as an `esp32s3` part's firmware, is a blob, which the document names by its SHA-256 and length, as [Blobs](#blobs) says.
+The netlist is the engine's input. Data a part needs lives inside the document, with one exception. A large input, such as an `esp32s3` part's firmware or its mask ROM, is a blob, which the document names by its SHA-256 and length, as [Blobs](#blobs) says.
 
 Values are SI numbers. `unit` must already be the field's unit. Integer values are the exception. A time in `ps` sits on the engine's picosecond timeline, and a count is in `1`.
 
@@ -1040,7 +1040,7 @@ A `pulses_replay` has no `ratings` object and no `i`, `v`, or `p`. It has no log
 
 ### ESP32-S3
 
-`kind` is `esp32s3`, an ESP32-S3 running a bare-metal program, as [esp32s3.md](esp32s3.md) describes. Pins are `VCC`, `GND`, and the GPIOs a board can wire: `GPIO0` to `GPIO21`, `GPIO26` to `GPIO32`, and `GPIO38` to `GPIO48`. GPIO22 to GPIO25 do not exist, and GPIO33 to GPIO37 belong to the in-package PSRAM. `VCC` and `GND` are required. Every GPIO is optional. A GPIO with no net is neither stamped nor watched, and its pad reads what it drives. A pin outside that list is `netlist.pins`.
+`kind` is `esp32s3`, an ESP32-S3 running a bare-metal program or booting an app from its flash, as [esp32s3.md](esp32s3.md) describes. Pins are `VCC`, `GND`, and the GPIOs a board can wire: `GPIO0` to `GPIO21`, `GPIO26` to `GPIO32`, and `GPIO38` to `GPIO48`. GPIO22 to GPIO25 do not exist, and GPIO33 to GPIO37 belong to the in-package PSRAM. `VCC` and `GND` are required. Every GPIO is optional. A GPIO with no net is neither stamped nor watched, and its pad reads what it drives. A pin outside that list is `netlist.pins`.
 
 `examples/esp32s3-blink` drives the WP7113ID of `examples/led-5v` from GPIO21 through 330 ohm at 3.3 V. Its part is:
 
@@ -1070,9 +1070,36 @@ A `pulses_replay` has no `ratings` object and no `i`, `v`, or `p`. It has no log
 }
 ```
 
+`examples/esp32s3-hello` boots an ESP-IDF app from the flash instead. Its part replaces `firmware` with the flash's regions and names the mask ROM beside them:
+
+```json
+"rom": {
+  "sha256": "c0ce0f338d1de1bdc6efbef1591779a2a42c1ab7d759d3c6ae8ae63a7dd34cfd",
+  "bytes": 949552
+},
+"firmware": {
+  "flash": [
+    {
+      "offset": 32768,
+      "sha256": "978d83c84af3a8b59ecf9763499ac8c18f4d4231f9499bbe4b2acd99863325be",
+      "bytes": 3072
+    },
+    {
+      "offset": 65536,
+      "sha256": "98f9055cacf28d25297beccd746ff861abfebb49da89518eb87867f5954a03b9",
+      "bytes": 151664
+    }
+  ]
+}
+```
+
+`firmware` holds exactly one of `elf` and `flash`. `rom` is present exactly when `firmware` is `flash`.
+
 | Field | Unit | Rule |
 | --- | --- | --- |
 | `firmware.elf` | a blob | the [Blobs](#blobs) rules, then an ELF executable for the chip's SRAM |
+| `firmware.flash` | blobs, each at an `offset` | the [Blobs](#blobs) rules for each, then a flash with an app the bootloader would start |
+| `rom` | a blob | only beside `firmware.flash`, the revision 0 ROM, then the [Blobs](#blobs) rules |
 | `output.high_drop`, `output.low_drop` | `V` | at least 0, else rule `non_negative` |
 | `output.high_resistance`, `output.low_resistance` | `ohm` | the resistor's |
 | `pull_up_resistance` | `ohm` | the resistor's |
@@ -1082,6 +1109,10 @@ A `pulses_replay` has no `ratings` object and no `i`, `v`, or `p`. It has no log
 A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
 
 `firmware.elf` names a 32-bit little-endian Xtensa ELF executable. Parse loads each loadable segment with a nonzero memory size. A segment must lie inside one SRAM window, from `0x4037_0000` to `0x403e_0000` on the instruction bus or from `0x3fc8_8000` to `0x3fd0_0000` on the data bus, and no two segments may reach the same byte of SRAM through either window. The entry must lie in a segment on the instruction bus. A blob that is not such an executable is `netlist.firmware` rule `elf`, a segment or an entry outside those windows is rule `unmapped`, and two segments on one byte are rule `overlap`, each with `line` `null`. The function symbols and untyped labels of the symbol table name a PC in a diagnostic.
+
+`firmware.flash` places each region's blob on the 16 MB flash at its `offset`, a byte count from the flash's start, and every byte no region places reads `0xFF`. A region past the end of the flash, or on a byte an earlier region placed, is `netlist.firmware` rule `region`. The partition table is at `0x8000`. The app is the factory app partition, else `ota_0`, as ESP-IDF's second-stage bootloader picks it while otadata is blank. The app partition must hold an ESP-IDF app image for the ESP32-S3, chip ID 9, whose checksum holds, and whose SHA-256 holds when its header says one follows. A flash with no partition table, no such app partition, a partition past the flash's end, otadata that is not blank, or an image that breaks one of those rules is rule `image`. The table's MD5 row is not checked. Each image segment must lie inside the instruction or data cache window, `0x4200_0000` to `0x4400_0000` or `0x3c00_0000` to `0x3e00_0000`, an SRAM window, or RTC fast or slow memory, and the entry must lie in a segment in the instruction-bus SRAM window, else rule `unmapped`. Each of these has `line` `null`. The image has no symbol table here, so a diagnostic's `symbol` is `null`.
+
+`rom` names the mask ROM's ELF, which Espressif publishes for each chip revision. The model runs one ROM, revision 0's, so `rom` must have its SHA-256 and length, `c0ce0f338d1de1bdc6efbef1591779a2a42c1ab7d759d3c6ae8ae63a7dd34cfd` and 949,552 bytes. Another value, `rom` beside `firmware.elf`, or no `rom` beside `firmware.flash` is rule `rom`. No example commits the ROM. `scripts/blobs.sh` fetches it from Espressif's release into a cache folder by pinned hash, and prints that folder for `--blobs`.
 
 Each GPIO with a net drives high through `output.high_resistance` from `VCC`, drives low through `output.low_resistance` into `GND`, pulls up through `pull_up_resistance` to `VCC`, or is off, as the firmware sets it. In each of those states it also leaks through `leakage_resistance` to `VCC` and through another to `GND`. It reads high above `input_threshold.high` times `V(VCC) - V(GND)` over `GND`, and low at or below `input_threshold.low` times it.
 

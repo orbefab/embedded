@@ -26,3 +26,10 @@ rm -rf "$pattern_run"
 cargo run -q -p sim-cli --locked -- run examples/esp32s3-pattern/netlist.json --out "$pattern_run" >/dev/null
 uv run scripts/render_st77916.py --pattern firmware/esp32s3/pattern.json --check "$pattern_run"
 rm -rf "$pattern_run"
+uv run scripts/esp32s3_hello.py --self-test
+blobs=$(scripts/blobs.sh)
+hello_run="${CARGO_TARGET_DIR:-target}/esp32s3-hello-check"
+rm -rf "$hello_run"
+cargo run -q -p sim-cli --locked -- run examples/esp32s3-hello/netlist.json --out "$hello_run" --blobs "$blobs" >/dev/null
+uv run scripts/esp32s3_hello.py --check "$hello_run"
+rm -rf "$hello_run"

@@ -71,9 +71,17 @@ pub enum FirmwareRule {
     /// Not a 32-bit little-endian Xtensa ELF executable with a loadable segment, or a header,
     /// segment or symbol table that runs past the file.
     Elf,
-    /// An ELF segment outside the memory a program may load into, or an entry outside the
-    /// segments in code memory.
+    /// An ELF or app segment outside the memory a program may load into, or an entry outside
+    /// the segments in code memory.
     Unmapped,
+    /// A flash region past the end of the flash, or on a byte an earlier region placed.
+    Region,
+    /// A flash with no partition table, no app partition the bootloader would pick, a set
+    /// otadata, or an app image that is not one for the chip or fails its checksum or hash.
+    Image,
+    /// A `rom` that is not the one ROM the model runs, `rom` absent with `firmware.flash`, or
+    /// `rom` present with `firmware.elf`.
+    Rom,
 }
 
 /// What the model lacks to run an instruction a core reached.
@@ -88,6 +96,62 @@ pub enum Unsupported {
     Litbase,
     /// The op as the last of a loop that loops back.
     LoopEnd,
+}
+
+/// What a chip's firmware set that the model does not run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChipSetting {
+    /// A transfer setting, by name, that the store starting the transfer found.
+    Transfer(&'static str),
+    /// An interrupt of the peripheral that the model never raises.
+    Interrupt,
+    /// Sleep.
+    Sleep,
+}
+
+impl ChipSetting {
+    pub fn name(self) -> &'static str {
+        match self {
+            ChipSetting::Transfer(name) => name,
+            ChipSetting::Interrupt => "interrupt",
+            ChipSetting::Sleep => "sleep",
+        }
+    }
+}
+
+/// Why a chip's flash command ends the run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlashRefusal {
+    /// A program, an erase, or a command the model does not know.
+    Unsupported,
+    /// A write of the flash's status registers, which can lock them for good.
+    StatusWrite,
+    /// A user command with no command phase.
+    NoCommandPhase,
+    /// One `SPI_MEM_CMD_REG` write that starts more than one command.
+    StartBits,
+    /// A read that reaches past the flash's end.
+    PastEnd,
+    /// An address phase longer than 32 bits.
+    AddressBits,
+    /// A command started on SPI0, the controller the cache reads the flash through.
+    Spi0,
+    /// A write that would take one of the flash's pads from SPI0 and SPI1.
+    Pads,
+}
+
+/// Why firmware reset its chip, as ESP-IDF records it before the reset, when that ends the run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResetReason {
+    Panic,
+    InterruptWatchdog,
+    TaskWatchdog,
+    Watchdog,
+    Brownout,
+    /// The firmware recorded no reason the model can read.
+    Unreadable,
 }
 
 /// Why a blob a netlist names is not there.
@@ -312,12 +376,12 @@ pub enum Diagnostic {
         symbol: Option<String>,
     },
     /// A chip's firmware started a `peripheral` transfer from the store at `pc` with `setting`,
-    /// which the model does not run. It ends the run.
+    /// or set `setting` on `peripheral` there, which the model does not run. It ends the run.
     ChipUnsupportedSetting {
         part: Ref,
         at: Time,
         peripheral: &'static str,
-        setting: &'static str,
+        setting: ChipSetting,
         pc: u32,
         symbol: Option<String>,
     },
@@ -326,6 +390,58 @@ pub enum Diagnostic {
         part: Ref,
         at: Time,
         watchdog: &'static str,
+    },
+    /// A chip's firmware started an eFuse program command from the store at `pc`, which would
+    /// burn eFuses. It ends the run.
+    ChipEfuseProgram {
+        part: Ref,
+        at: Time,
+        pc: u32,
+        symbol: Option<String>,
+    },
+    /// A chip's firmware sent its flash `command` from the store at `pc`, which the model
+    /// refuses for `reason`. `command` is `None` when no one command byte went. It ends the run.
+    ChipFlashCommand {
+        part: Ref,
+        at: Time,
+        command: Option<u8>,
+        reason: FlashRefusal,
+        pc: u32,
+        symbol: Option<String>,
+    },
+    /// A chip's firmware picked a CPU clock the model does not run from the store at `pc`. It
+    /// ends the run.
+    ChipUnsupportedClock {
+        part: Ref,
+        at: Time,
+        pc: u32,
+        symbol: Option<String>,
+    },
+    /// A chip's firmware reset the chip from the store at `pc`. The model does not run the boot
+    /// ROM, so the chip stays in reset to the end of the run.
+    ChipRestart {
+        part: Ref,
+        at: Time,
+        pc: u32,
+        symbol: Option<String>,
+    },
+    /// A chip's firmware reset the chip from the store at `pc` after recording `reason`, or no
+    /// reason the model can read. It ends the run.
+    ChipFaultRestart {
+        part: Ref,
+        at: Time,
+        reason: ResetReason,
+        pc: u32,
+        symbol: Option<String>,
+    },
+    /// A chip's core loaded from `address` from `pc`, in a cache window where the MMU maps no
+    /// flash. It ends the run.
+    ChipUnmappedLoad {
+        part: Ref,
+        at: Time,
+        address: u32,
+        pc: u32,
+        symbol: Option<String>,
     },
     /// A chip's firmware read or wrote `register` at `address`, which the model keeps no state
     /// for, first at `at` from `pc`, with a write when `write` is set. A read gives 0 and a
@@ -338,6 +454,8 @@ pub enum Diagnostic {
         pc: u32,
         symbol: Option<String>,
         write: bool,
+        /// The register keeps the write, and the model does not run what it does.
+        kept: bool,
     },
     /// The grid gives more rows than the trace holds, found before the first solve, when
     /// `at` is `None`. The test-only step-rows mode can also fill the trace and refuse the
@@ -428,6 +546,12 @@ impl Diagnostic {
             Diagnostic::ChipUnmappedFetch { .. } => "chip.unmapped_fetch",
             Diagnostic::ChipUnsupportedSetting { .. } => "chip.unsupported_setting",
             Diagnostic::ChipWatchdog { .. } => "chip.watchdog",
+            Diagnostic::ChipEfuseProgram { .. } => "chip.efuse_program",
+            Diagnostic::ChipFlashCommand { .. } => "chip.flash_command",
+            Diagnostic::ChipUnsupportedClock { .. } => "chip.unsupported_clock",
+            Diagnostic::ChipRestart { .. } => "chip.restart",
+            Diagnostic::ChipFaultRestart { .. } => "chip.fault_restart",
+            Diagnostic::ChipUnmappedLoad { .. } => "chip.unmapped_load",
             Diagnostic::ChipUnmodeledRegister { .. } => "chip.unmodeled_register",
             Diagnostic::TraceTooLarge { .. } => "trace.too_large",
             Diagnostic::TraceRowInterpolated { .. } => "trace.row_interpolated",
@@ -442,6 +566,7 @@ impl Diagnostic {
             | Diagnostic::ChipProtocol { .. }
             | Diagnostic::ChipLinkMiswired { .. }
             | Diagnostic::ChipUnmodeledRegister { .. }
+            | Diagnostic::ChipRestart { .. }
             | Diagnostic::TraceRowInterpolated { .. }
             | Diagnostic::RatingCurrent(_)
             | Diagnostic::RatingPower(_) => Severity::Warning,
@@ -470,6 +595,11 @@ impl Diagnostic {
             | Diagnostic::ChipUnmappedFetch { .. }
             | Diagnostic::ChipUnsupportedSetting { .. }
             | Diagnostic::ChipWatchdog { .. }
+            | Diagnostic::ChipEfuseProgram { .. }
+            | Diagnostic::ChipFlashCommand { .. }
+            | Diagnostic::ChipUnsupportedClock { .. }
+            | Diagnostic::ChipFaultRestart { .. }
+            | Diagnostic::ChipUnmappedLoad { .. }
             | Diagnostic::TraceTooLarge { .. } => Severity::Error,
         }
     }
@@ -488,6 +618,12 @@ impl Diagnostic {
             | Diagnostic::ChipUnmappedFetch { at, .. }
             | Diagnostic::ChipUnsupportedSetting { at, .. }
             | Diagnostic::ChipWatchdog { at, .. }
+            | Diagnostic::ChipEfuseProgram { at, .. }
+            | Diagnostic::ChipFlashCommand { at, .. }
+            | Diagnostic::ChipUnsupportedClock { at, .. }
+            | Diagnostic::ChipRestart { at, .. }
+            | Diagnostic::ChipFaultRestart { at, .. }
+            | Diagnostic::ChipUnmappedLoad { at, .. }
             | Diagnostic::ChipUnmodeledRegister { at, .. }
             | Diagnostic::TraceRowInterpolated { at, .. } => Some(*at),
             Diagnostic::TraceTooLarge { at, .. } => *at,
@@ -541,6 +677,12 @@ impl Diagnostic {
             | Diagnostic::ChipUnmappedFetch { part, .. }
             | Diagnostic::ChipUnsupportedSetting { part, .. }
             | Diagnostic::ChipWatchdog { part, .. }
+            | Diagnostic::ChipEfuseProgram { part, .. }
+            | Diagnostic::ChipFlashCommand { part, .. }
+            | Diagnostic::ChipUnsupportedClock { part, .. }
+            | Diagnostic::ChipRestart { part, .. }
+            | Diagnostic::ChipFaultRestart { part, .. }
+            | Diagnostic::ChipUnmappedLoad { part, .. }
             | Diagnostic::ChipUnmodeledRegister { part, .. } => vec![part.clone()],
             Diagnostic::SolverTooLarge { .. }
             | Diagnostic::SolverStepLimit { .. }
@@ -662,6 +804,15 @@ impl Diagnostic {
                     FirmwareRule::AfterEnd => "comes after the end-of-file record",
                     FirmwareRule::NoEnd => "has no end-of-file record",
                     FirmwareRule::PastFlash => "puts a byte past the end of the flash",
+                    FirmwareRule::Region => {
+                        "places a flash region past the end of the 16 MB flash or onto a byte an earlier region placed"
+                    }
+                    FirmwareRule::Image => {
+                        "has no app the bootloader would start: a partition table, an app partition, blank otadata, and an ESP32-S3 app image whose checksum and hash hold"
+                    }
+                    FirmwareRule::Rom => {
+                        "needs `rom` with `flash` and none with `elf`, and `rom` must be the revision 0 ROM, sha256 c0ce0f338d1de1bdc6efbef1591779a2a42c1ab7d759d3c6ae8ae63a7dd34cfd, 949552 bytes"
+                    }
                     FirmwareRule::Overlap if line.is_none() => {
                         "loads two segments onto one byte of memory"
                     }
@@ -903,13 +1054,138 @@ impl Diagnostic {
                 setting,
                 pc,
                 symbol,
+            } => {
+                let what = match setting {
+                    ChipSetting::Transfer(setting) => {
+                        format!("started a {peripheral} transfer with setting {setting}")
+                    }
+                    ChipSetting::Interrupt => format!("enabled a {peripheral} interrupt"),
+                    ChipSetting::Sleep => "put the chip to sleep".to_string(),
+                };
+                let why = match setting {
+                    ChipSetting::Interrupt => "which the model never raises",
+                    _ => "which the model does not run",
+                };
+                format!(
+                    "{part} {what} at {pc:#010x}{}, {why}, at {} ps",
+                    symbol_text(symbol),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipWatchdog { part, at, watchdog } => format!(
+                "{part} {watchdog} watchdog ran out at {} ps; the firmware neither fed nor disabled it",
+                at.as_ps()
+            ),
+            Diagnostic::ChipEfuseProgram {
+                part,
+                at,
+                pc,
+                symbol,
             } => format!(
-                "{part} started a {peripheral} transfer with setting {setting} at {pc:#010x}{}, which the model does not run, at {} ps",
+                "{part} started an eFuse program command at {pc:#010x}{}, which would burn eFuses, at {} ps",
                 symbol_text(symbol),
                 at.as_ps()
             ),
-            Diagnostic::ChipWatchdog { part, at, watchdog } => format!(
-                "{part} {watchdog} watchdog ran out at {} ps; the firmware neither fed nor disabled it",
+            Diagnostic::ChipFlashCommand {
+                part,
+                at,
+                command,
+                reason,
+                pc,
+                symbol,
+            } => {
+                let command = match command {
+                    Some(command) => format!("command 0x{command:02X}"),
+                    None => "a command".to_string(),
+                };
+                let (what, why) = match reason {
+                    FlashRefusal::Unsupported => (
+                        format!("sent the flash {command}"),
+                        "which the model does not run",
+                    ),
+                    FlashRefusal::StatusWrite => (
+                        format!("sent the flash the status write {command}"),
+                        "which could lock the flash",
+                    ),
+                    FlashRefusal::NoCommandPhase => (
+                        "sent the flash a user command with no command phase".to_string(),
+                        "which the model does not run",
+                    ),
+                    FlashRefusal::StartBits => (
+                        "started more than one SPI1 command in one write".to_string(),
+                        "which the model does not run",
+                    ),
+                    FlashRefusal::PastEnd => (
+                        format!("sent the flash the read {command}"),
+                        "which reaches past the flash's end",
+                    ),
+                    FlashRefusal::AddressBits => (
+                        format!("sent the flash {command}"),
+                        "whose address is longer than 32 bits",
+                    ),
+                    FlashRefusal::Spi0 => (
+                        "started a command on SPI0".to_string(),
+                        "which the model does not run",
+                    ),
+                    FlashRefusal::Pads => (
+                        "took a flash pad from SPI0 and SPI1".to_string(),
+                        "which could send the flash any command",
+                    ),
+                };
+                format!(
+                    "{part} {what} at {pc:#010x}{}, {why}, at {} ps",
+                    symbol_text(symbol),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipUnsupportedClock {
+                part,
+                at,
+                pc,
+                symbol,
+            } => format!(
+                "{part} picked a CPU clock the model does not run, the RC fast clock or a reserved setting, at {pc:#010x}{} at {} ps",
+                symbol_text(symbol),
+                at.as_ps()
+            ),
+            Diagnostic::ChipRestart {
+                part,
+                at,
+                pc,
+                symbol,
+            } => format!(
+                "{part} reset itself at {pc:#010x}{} at {} ps; the model does not run the boot ROM, so the chip stays in reset",
+                symbol_text(symbol),
+                at.as_ps()
+            ),
+            Diagnostic::ChipFaultRestart {
+                part,
+                at,
+                reason,
+                pc,
+                symbol,
+            } => format!(
+                "{part} reset itself at {pc:#010x}{} {}, at {} ps",
+                symbol_text(symbol),
+                match reason {
+                    ResetReason::Panic => "after a panic",
+                    ResetReason::InterruptWatchdog => "after its interrupt watchdog fired",
+                    ResetReason::TaskWatchdog => "after its task watchdog fired",
+                    ResetReason::Watchdog => "after a watchdog fired",
+                    ResetReason::Brownout => "after a brownout",
+                    ResetReason::Unreadable => "with no reset reason the model can read",
+                },
+                at.as_ps()
+            ),
+            Diagnostic::ChipUnmappedLoad {
+                part,
+                at,
+                address,
+                pc,
+                symbol,
+            } => format!(
+                "{part} loaded from {address:#010x} at {pc:#010x}{}, where the MMU maps no flash, at {} ps",
+                symbol_text(symbol),
                 at.as_ps()
             ),
             Diagnostic::ChipUnmodeledRegister {
@@ -920,9 +1196,15 @@ impl Diagnostic {
                 pc,
                 symbol,
                 write,
+                kept,
             } => format!(
-                "{part} {} {register} at {address:#010x}, which the model does not keep, first at {} ps from {pc:#010x}{}",
+                "{part} {} {register} at {address:#010x}, {}, first at {} ps from {pc:#010x}{}",
                 if *write { "wrote" } else { "read" },
+                if *kept {
+                    "whose effect the model does not run"
+                } else {
+                    "which the model does not keep"
+                },
                 at.as_ps(),
                 symbol_text(symbol)
             ),
@@ -1076,21 +1358,49 @@ impl Diagnostic {
             } => serde_json::json!({
                 "peripheral": peripheral,
                 "pc": pc,
-                "setting": setting,
+                "setting": setting.name(),
                 "symbol": symbol,
             }),
             Diagnostic::ChipWatchdog { watchdog, .. } => {
                 serde_json::json!({ "watchdog": watchdog })
             }
+            Diagnostic::ChipEfuseProgram { pc, symbol, .. }
+            | Diagnostic::ChipUnsupportedClock { pc, symbol, .. }
+            | Diagnostic::ChipRestart { pc, symbol, .. } => {
+                serde_json::json!({ "pc": pc, "symbol": symbol })
+            }
+            Diagnostic::ChipFlashCommand {
+                command,
+                reason,
+                pc,
+                symbol,
+                ..
+            } => serde_json::json!({
+                "command": command,
+                "pc": pc,
+                "reason": reason,
+                "symbol": symbol,
+            }),
+            Diagnostic::ChipFaultRestart {
+                reason, pc, symbol, ..
+            } => serde_json::json!({ "pc": pc, "reason": reason, "symbol": symbol }),
+            Diagnostic::ChipUnmappedLoad {
+                address,
+                pc,
+                symbol,
+                ..
+            } => serde_json::json!({ "address": address, "pc": pc, "symbol": symbol }),
             Diagnostic::ChipUnmodeledRegister {
                 address,
                 register,
                 pc,
                 symbol,
                 write,
+                kept,
                 ..
             } => serde_json::json!({
                 "address": address,
+                "kept": kept,
                 "pc": pc,
                 "register": register,
                 "symbol": symbol,

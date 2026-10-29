@@ -6,6 +6,7 @@ use std::sync::Arc;
 pub mod bounce;
 mod document;
 pub mod elf;
+pub mod flash;
 mod json;
 mod waveform;
 
@@ -366,7 +367,7 @@ impl Model {
     /// The blobs it names, in its own field order.
     pub fn blobs(&self) -> Vec<&Blob> {
         match self {
-            Model::Chip(Chip::Esp32s3(mcu)) => vec![mcu.firmware.blob()],
+            Model::Chip(Chip::Esp32s3(mcu)) => mcu.firmware.blobs(),
             _ => Vec::new(),
         }
     }
@@ -914,7 +915,9 @@ pub enum Chip {
     Esp32s3(Box<Esp32s3>),
 }
 
-/// An ESP32-S3 whose core starts at `firmware`'s entry at power-on, with every segment loaded.
+/// An ESP32-S3 running `firmware`: a bare-metal program whose core starts at its entry at
+/// power-on, with every segment loaded, or the app on its flash, from where the bootloader
+/// leaves it.
 ///
 /// `VCC` and `GND` need nets, and every GPIO is optional. A GPIO with no net is neither stamped
 /// nor watched. One with a net drives through `output` from `VCC` and into `GND`, pulls up
@@ -927,7 +930,7 @@ pub struct Esp32s3 {
     pub pins: Vec<NetId>,
     /// The name of each of `pins`.
     pub names: Vec<&'static str>,
-    pub firmware: elf::Elf,
+    pub firmware: Esp32s3Firmware,
     pub output: OutputStage,
     /// Ohm. Every GPIO's pull-up.
     pub pull_up_resistance: Value,
@@ -936,7 +939,42 @@ pub struct Esp32s3 {
     pub input_threshold: Threshold,
 }
 
+/// What an `esp32s3` runs.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Esp32s3Firmware {
+    /// A bare-metal program in SRAM.
+    Elf(elf::Elf),
+    /// The app on the flash, booted with the mask ROM.
+    Flash { rom: Blob, flash: flash::Flash },
+}
+
+impl Esp32s3Firmware {
+    /// The blobs it names: the ELF, or the ROM and then each flash region.
+    pub fn blobs(&self) -> Vec<&Blob> {
+        match self {
+            Esp32s3Firmware::Elf(elf) => vec![elf.blob()],
+            Esp32s3Firmware::Flash { rom, flash } => {
+                std::iter::once(rom).chain(flash.regions()).collect()
+            }
+        }
+    }
+
+    /// The symbol a diagnostic names `pc` by. A flash's app carries none.
+    pub fn symbolize(&self, pc: u32) -> Option<String> {
+        match self {
+            Esp32s3Firmware::Elf(elf) => elf.symbolize(pc),
+            Esp32s3Firmware::Flash { .. } => None,
+        }
+    }
+}
+
 impl Esp32s3 {
+    /// The mask ROM the model runs, revision 0, as its SHA-256 and length.
+    pub const ROM: (&'static str, u64) = (
+        "c0ce0f338d1de1bdc6efbef1591779a2a42c1ab7d759d3c6ae8ae63a7dd34cfd",
+        949_552,
+    );
+
     /// The supply pins, then the GPIOs a board can wire. GPIO22 to GPIO25 do not exist, and
     /// GPIO33 to GPIO37 belong to the in-package PSRAM.
     pub const PINS: [&'static str; 42] = [

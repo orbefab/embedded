@@ -824,8 +824,8 @@ fn a_vector_op_is_recorded_when_it_raises_and_stops_when_it_runs() {
 }
 
 /// The ISA's single-precision divide sequence (4.3.11.5, p 111), registers `a` f0, `b` f1, `y0`
-/// f2, `bN` f3, `e` f4, `y` f5, `ex` f6, `aN` f7, `q` f8 and `r` f9, then `rer` to stop on.
-const DIVIDE: &str = "7021fab031fa3041fa20436a0052fa0061fab070fa20546a3041fa3080fa6097fa50436a20896ad060fa50546a80936a3041fa50436a50896a6097fa50546a80936af086fae056fa50897a206340";
+/// f2, `bN` f3, `e` f4, `y` f5, `ex` f6, `aN` f7, `q` f8 and `r` f9, then `rfdo` to stop on.
+const DIVIDE: &str = "7021fab031fa3041fa20436a0052fa0061fab070fa20546a3041fa3080fa6097fa50436a20896ad060fa50546a80936a3041fa50436a50896a6097fa50546a80936af086fae056fa50897a00e0f1";
 
 /// `a / b` rounded in `FCR` mode `mode`, from the host's round-to-nearest quotient. `q * b` has
 /// at most 48 significant bits and lies within a factor of two of `a`, so `q * b - a` is exact
@@ -881,7 +881,7 @@ fn the_isa_divide_sequence_rounds_like_ieee_division() {
             let stop = core.run_until(&mut bus, Cycle(1000));
             let want = Unimplemented {
                 pc: CODE + 75,
-                missing: Missing::Op(Op::RER),
+                missing: Missing::Op(Op::RFDO),
             };
             assert_eq!(stop, Stop::Unimplemented(want), "{a} / {b} in mode {mode}");
             assert_eq!(

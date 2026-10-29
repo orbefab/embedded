@@ -777,13 +777,15 @@ impl Actives {
     }
 
     /// The protocol and wiring warnings of the committed cores, each at its first time, and the
-    /// unmodeled registers each copy touched by `through`, the accepted time.
+    /// unmodeled registers each copy touched and the restart it made by `through`, the accepted
+    /// time.
     pub(crate) fn warnings(&self, circuit: &Circuit, through: Time) -> Vec<Diagnostic> {
         let mut found = Vec::new();
         for ((core, ahead), chip) in self.committed.iter().zip(&self.ahead).zip(&circuit.actives) {
             if let Core::Esp32s3(copy) = &ahead.core {
                 let part = Ref::Part(name(circuit, chip));
                 found.extend(copy.unmodeled(&part, esp32s3_of(circuit, chip), through));
+                found.extend(copy.restart(&part, esp32s3_of(circuit, chip), through));
             }
             match core {
                 Core::St77916(panel) => {

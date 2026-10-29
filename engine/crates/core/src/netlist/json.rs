@@ -380,9 +380,9 @@ pub(super) fn blob_names(json: &[u8]) -> Vec<Sha256> {
     };
     wire.parts
         .iter()
-        .filter_map(|part| match part {
-            WirePart::Esp32s3(chip) => Some(chip.firmware()),
-            _ => None,
+        .flat_map(|part| match part {
+            WirePart::Esp32s3(chip) => chip.blob_names(),
+            _ => Vec::new(),
         })
         .collect()
 }

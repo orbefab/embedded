@@ -30,7 +30,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 {
   "run_format": 0,
   "netlist_format": 0,
-  "engine_version": "0.29.0",
+  "engine_version": "0.30.0",
   "input": {
     "file": "netlist.json",
     "sha256": "<lowercase hex sha256 of the input bytes>",
@@ -41,13 +41,13 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 }
 ```
 
-`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.29.0`. [versions.md](versions.md) says which changes move them.
+`run_format` versions this folder, and `engine_version` is the workspace package version. The current values are 0 and `0.30.0`. [versions.md](versions.md) says which changes move them.
 
 `netlist_format` is the input's `version`, when it reads as an unsigned integer. That holds when the engine rejected the input, so `version: 1` records 1. It is `null` when no such integer could be read.
 
 `input.file` is the name inside the folder. `input.sha256` and `input.bytes` describe the input bytes. For `examples/divider/netlist.json` the length is 904.
 
-`blobs` follows `input` when the netlist names a [blob](netlist.md#blobs), and is absent otherwise, so a folder whose netlist names none has no such key. It lists each blob in part order, and in each part's field order. An entry is `{ "role", "sha256", "bytes" }`. `role` is `elf` for an `esp32s3` part's `firmware.elf`. `examples/esp32s3-blink` writes:
+`blobs` follows `input` when the netlist names a [blob](netlist.md#blobs), and is absent otherwise, so a folder whose netlist names none has no such key. It lists each blob in part order, and in each part's field order, with an `esp32s3` part's `rom` before its firmware. An entry is `{ "role", "sha256", "bytes" }`, and a flash region's adds `offset` after `bytes`. `role` is `elf` for an `esp32s3` part's `firmware.elf`, `rom` for its `rom`, and `flash` for each region of its `firmware.flash`, in the netlist's order. `examples/esp32s3-blink` writes:
 
 ```json
   "blobs": [
@@ -59,7 +59,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
   ],
 ```
 
-When parsing fails, `blobs` is absent. The folder copies no blob. A rerun from the folder alone fails with `netlist.blob`, so it names the blob folder, as in `sim run <run>/netlist.json --out <new> --blobs examples/esp32s3-blink/blobs`. A rerun from `examples/esp32s3-blink/netlist.json` finds the `blobs` folder beside it.
+When parsing fails, `blobs` is absent. The folder copies no blob. A rerun from the folder alone fails with `netlist.blob`, so it names the blob folder, as in `sim run <run>/netlist.json --out <new> --blobs examples/esp32s3-blink/blobs`. A rerun from `examples/esp32s3-blink/netlist.json` finds the `blobs` folder beside it. No example commits the ROM, so a rerun of `examples/esp32s3-hello` also passes the folder `scripts/blobs.sh` prints, as in `sim run examples/esp32s3-hello/netlist.json --out <new> --blobs "$(scripts/blobs.sh)"`.
 
 `seed` is the netlist seed. When parsing fails, `seed` is `null`.
 

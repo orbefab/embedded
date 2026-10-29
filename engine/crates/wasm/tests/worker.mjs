@@ -58,6 +58,12 @@ const WRONG = {
 // Strings that are not a name in the ref grammar, which the binding refuses with `bad_name`.
 const BAD_NAMES = ['1rv', '', 'rv1 ', 'r'.repeat(300), 'rv\0'];
 
+// An example's seed, from its name alone, so a new example changes no other's chunking. It is
+// odd, since the xorshift never leaves 0.
+function seedOf(name) {
+  return BigInt(`0x${createHash('sha256').update(name).digest('hex').slice(0, 16)}`) | 1n;
+}
+
 // A seeded xorshift, so a failing chunking replays.
 class Rng {
   constructor(seed) {
@@ -184,7 +190,8 @@ function assertProbesOnRows(label, { refs, probes }, dir) {
 // time, or up to an eighth of the run. A frame is 60 Hz at 1x, or a 60th of a shorter run.
 // After each call it reads the probe, the levels and the new serial bytes, and keeps the probes
 // at row times. Then `input` may apply an input at `now`. Returns the refs, the probes kept, the
-// serial bytes as `serial.csv` rows, the logic changes, and the integrals when the session ends.
+// serial bytes as `serial.csv` rows, the logic changes, the time each call ended at, and the
+// integrals when the session ends.
 function advanceInChunks(session, json, rng, input = () => {}) {
   const { stop_ps, grid_ps } = JSON.parse(json).analysis.transient;
   const [stop, grid] = [BigInt(stop_ps), BigInt(grid_ps)];
@@ -196,6 +203,7 @@ function advanceInChunks(session, json, rng, input = () => {}) {
   const probes = [];
   const rows = [];
   const edges = [];
+  const ends = [];
   let integrals;
   let cursor = 0n;
   let edgeCursor = 0n;
@@ -218,6 +226,7 @@ function advanceInChunks(session, json, rng, input = () => {}) {
     }
     const status = session.advanceTo(now + stride);
     const at = session.now();
+    ends.push(at);
     const probe = session.probe();
     assert.equal(probe.at, at, 'the probe is at now');
     if (isRow(at)) {
@@ -243,7 +252,7 @@ function advanceInChunks(session, json, rng, input = () => {}) {
     edgeCursor = readEdges.cursor;
     readEdges.free();
     if (status !== 'running') {
-      return { refs, probes, rows, edges, integrals };
+      return { refs, probes, rows, edges, ends, integrals };
     }
     input(session, rng);
   }
@@ -387,13 +396,22 @@ function sessionWarnings(dir) {
 }
 
 // The files of an example's `blobs` folder, which `sim run` reads beside its netlist, in name
-// order. None for an example with no folder.
+// order, then those of the blob cache in `SIM_BLOBS` that its netlist names, which no example
+// commits. None for an example with neither.
 function blobsOf(dir) {
-  const folder = join(dir, 'blobs');
-  if (!existsSync(folder)) return [];
-  return readdirSync(folder)
-    .sort()
-    .map((name) => new Uint8Array(readFileSync(join(folder, name))));
+  const netlist = readFileSync(join(dir, 'netlist.json'), 'utf8');
+  const files = (folder, keep) =>
+    existsSync(folder)
+      ? readdirSync(folder)
+          .filter(keep)
+          .sort()
+          .map((name) => new Uint8Array(readFileSync(join(folder, name))))
+      : [];
+  const cache = process.env.SIM_BLOBS;
+  return [
+    ...files(join(dir, 'blobs'), () => true),
+    ...(cache ? files(cache, (name) => netlist.includes(`"${name}"`)) : []),
+  ];
 }
 
 // `run` is the native folder. A transient recorded, advanced in chunks and finished is that
@@ -479,8 +497,24 @@ function example(wasm, job, json, blobs, native) {
   const linkText = links > 0 ? `, ${links} link rows from the event list` : '';
   const displayText = displays > 0 ? `, ${displays} display read as native` : '';
   const ledText = leds > 0 ? `, ${leds} chain read as native` : '';
-  const counts = `${read.probes.length} probes on rows, ${read.rows.length} serial rows, ${read.edges.length} logic changes${linkText}${displayText}${ledText}`;
+  const countdownText = job.name === 'esp32s3-hello' ? `, ${countdownEnds(read, native)} calls ended in the countdown` : '';
+  const counts = `${read.probes.length} probes on rows, ${read.rows.length} serial rows, ${read.edges.length} logic changes${linkText}${displayText}${ledText}${countdownText}`;
   return `run and finish are sim run, ${counts}`;
+}
+
+// How many calls ended after hello's first countdown line and before its reset, at least one, so
+// a session resumes while the countdown and the console task both run.
+function countdownEnds(read, native) {
+  const rows = serialRows(native).map((row) => row.split(','));
+  const text = rows.map((row) => String.fromCharCode(Number(row[3]))).join('');
+  const line = text.indexOf('\n', text.indexOf('Restarting in '));
+  assert.ok(line > 0, 'esp32s3-hello: the console has a countdown line');
+  const first = BigInt(rows[line][0]);
+  const diagnostics = JSON.parse(readFileSync(join(native, 'diagnostics.json'), 'utf8'));
+  const restart = BigInt(diagnostics.find((item) => item.code === 'chip.restart').t_ps);
+  const ends = read.ends.filter((at) => at > first && at < restart).length;
+  assert.ok(ends > 0, `esp32s3-hello: a call ends between ${first} and ${restart} ps`);
+  return ends;
 }
 
 // The setting `part` holds after its last event in `session.export()`, and that event's time.
@@ -954,7 +988,7 @@ if (isMainThread && invokedDirectly) {
     .sort();
   assert.ok(names.length >= 14, 'every example is here');
   const jobs = [
-    ...names.map((name, k) => ({ kind: 'example', name, seed: 0x5eed_c000n + BigInt(k) })),
+    ...names.map((name) => ({ kind: 'example', name, seed: seedOf(name) })),
     ...INPUTS.map((input, k) => ({ ...input, kind: 'inputs', seed: 0x5eed_c100n + BigInt(k) })),
     { kind: 'arguments', name: 'arguments' },
   ];

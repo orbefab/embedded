@@ -226,6 +226,9 @@ struct ManifestBlob {
     role: &'static str,
     sha256: String,
     bytes: u64,
+    /// Where a flash region starts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    offset: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -261,6 +264,7 @@ pub fn render(
                 role: blob.role.as_str(),
                 sha256: blob.sha256.to_string(),
                 bytes: blob.bytes.len() as u64,
+                offset: blob.role.offset(),
             })
             .collect(),
         seed: netlist.map(Netlist::seed),

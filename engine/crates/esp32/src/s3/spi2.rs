@@ -16,9 +16,7 @@
 
 use std::collections::VecDeque;
 
-use sim_xtensa::Cycle;
-
-use super::HZ;
+use super::clock::{TICK_HZ, Tick, XTAL};
 use super::gpio::Gpio;
 
 const CMD: u32 = 0x00;
@@ -111,6 +109,7 @@ const LANES: [u16; 4] = [FSPID, FSPIQ, FSPIWP, FSPIHD];
 
 /// `PLL_F80M`, the clock `SPI_MST_CLK_SEL` 1 picks. 0 picks the crystal.
 const PLL_F80M: u64 = 80_000_000;
+const XTAL_HZ: u64 = TICK_HZ / XTAL;
 
 const BUFFER: usize = 64;
 
@@ -201,10 +200,10 @@ pub struct Pads {
 /// One SPI2 transfer as its registers set it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Transfer {
-    /// The cycle `SPI_USR` was written.
-    pub start: Cycle,
-    /// The cycle its last clock ends, from which `SPI_USR` reads 0.
-    pub end: Cycle,
+    /// The tick `SPI_USR` was written.
+    pub start: Tick,
+    /// The tick its last clock ends, rounded up to a CPU cycle, from which `SPI_USR` reads 0.
+    pub end: Tick,
     /// The command phase, then the address phase, each when enabled.
     pub phases: Vec<Phase>,
     /// The data's lanes.
@@ -222,9 +221,9 @@ pub(crate) struct Spi2 {
     regs: [u32; 61],
     /// The registers of [`SYNCED`] as the last `SPI_UPDATE` left them.
     synced: [u32; 11],
-    /// `SPI_TRANS_DONE_INT_RAW` comes due at this cycle, the last transfer's end. An access at
+    /// `SPI_TRANS_DONE_INT_RAW` comes due at this tick, the last transfer's end. An access at
     /// or after it sets the bit.
-    done_at: Option<Cycle>,
+    done_at: Option<Tick>,
     /// The transfers started and not yet taken, in the order they started.
     transfers: VecDeque<Transfer>,
 }
@@ -263,19 +262,19 @@ impl Spi2 {
     }
 
     /// Sets `SPI_TRANS_DONE_INT_RAW` once the last transfer has ended by `now`.
-    fn settle(&mut self, now: Cycle) {
+    fn settle(&mut self, now: Tick) {
         if self.done_at.is_some_and(|at| at <= now) {
             self.regs[(DMA_INT_RAW / 4) as usize] |= TRANS_DONE;
             self.done_at = None;
         }
     }
 
-    fn busy(&self, now: Cycle) -> bool {
+    fn busy(&self, now: Tick) -> bool {
         self.transfers.back().is_some_and(|last| now < last.end)
     }
 
     /// The register at `offset` at `now`, or `None` for one the model does not keep.
-    pub(crate) fn read(&mut self, now: Cycle, offset: u32) -> Option<u32> {
+    pub(crate) fn read(&mut self, now: Tick, offset: u32) -> Option<u32> {
         if !Self::kept(offset) {
             return None;
         }
@@ -296,7 +295,8 @@ impl Spi2 {
     /// `SPI_UPDATE` syncs the registers after any start in the same write.
     pub(crate) fn write(
         &mut self,
-        now: Cycle,
+        now: Tick,
+        cpu: u64,
         offset: u32,
         value: u32,
         gpio: &Gpio,
@@ -305,7 +305,7 @@ impl Spi2 {
         self.settle(now);
         let start = offset == CMD && value & USR != 0 && !self.busy(now);
         if start {
-            let transfer = self.transfer(now, gpio)?;
+            let transfer = self.transfer(now, cpu, gpio)?;
             self.done_at = Some(transfer.end);
             self.transfers.push_back(transfer);
         }
@@ -362,7 +362,7 @@ impl Spi2 {
         .find_map(|(refused, setting)| refused.then_some(setting))
     }
 
-    fn transfer(&self, now: Cycle, gpio: &Gpio) -> Result<Transfer, Setting> {
+    fn transfer(&self, now: Tick, cpu: u64, gpio: &Gpio) -> Result<Transfer, Setting> {
         if let Some(setting) = self.refused() {
             return Err(setting);
         }
@@ -434,12 +434,12 @@ impl Spi2 {
         let source = if self.reg(CLK_GATE) & MST_CLK_SEL != 0 {
             PLL_F80M
         } else {
-            HZ
+            XTAL_HZ
         };
-        let cycles = (clocks * divider * HZ).div_ceil(source);
+        let ticks = clocks * divider * (TICK_HZ / source);
         Ok(Transfer {
             start: now,
-            end: Cycle(now.0 + cycles),
+            end: Tick(now.0 + ticks.div_ceil(cpu) * cpu),
             phases,
             lanes: data_lanes,
             data,
@@ -468,7 +468,7 @@ impl Spi2 {
     }
 
     /// The end of the `n`th transfer not yet taken, counting from 0.
-    pub(crate) fn end(&self, n: usize) -> Option<Cycle> {
+    pub(crate) fn end(&self, n: usize) -> Option<Tick> {
         self.transfers.get(n).map(|transfer| transfer.end)
     }
 
@@ -481,6 +481,11 @@ impl Spi2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tick of crystal cycle `n`.
+    fn c(n: u64) -> Tick {
+        Tick(n * XTAL)
+    }
 
     const CLOCKED: u32 = CLK_EN | MST_CLK_ACTIVE;
 
@@ -506,7 +511,7 @@ mod tests {
     /// Makes `writes`, then syncs them with `SPI_UPDATE`.
     fn set(spi: &mut Spi2, gpio: &Gpio, writes: &[(u32, u32)]) {
         for &(offset, value) in writes.iter().chain(&[(CMD, UPDATE)]) {
-            assert_eq!(spi.write(Cycle(0), offset, value, gpio), Ok(false));
+            assert_eq!(spi.write(c(0), XTAL, offset, value, gpio), Ok(false));
         }
     }
 
@@ -537,7 +542,7 @@ mod tests {
     fn a_transfer_sends_its_phases_and_buffer_and_lasts_its_clocks() {
         let (mut spi, gpio) = spi();
         command_and_data(&mut spi, &gpio, &[0xab, 0xcd, 0xef], true);
-        assert_eq!(spi.write(Cycle(100), CMD, USR, &gpio), Ok(true));
+        assert_eq!(spi.write(c(100), XTAL, CMD, USR, &gpio), Ok(true));
         let transfer = spi.transfers.back().unwrap().clone();
         assert_eq!(
             transfer.phases,
@@ -561,32 +566,29 @@ mod tests {
         assert!(transfer.held);
         // 8 + 24 clocks for the phases and 24 bits over 4 lanes, 38 clocks of 4 cycles.
         assert_eq!(transfer.clock_hz, 10_000_000);
-        assert_eq!(
-            (transfer.start, transfer.end),
-            (Cycle(100), Cycle(100 + 38 * 4))
-        );
+        assert_eq!((transfer.start, transfer.end), (c(100), c(100 + 38 * 4)));
     }
 
     #[test]
     fn usr_reads_1_and_done_reads_0_until_the_end() {
         let (mut spi, gpio) = spi();
         command_and_data(&mut spi, &gpio, &[1], false);
-        spi.write(Cycle(10), CMD, USR, &gpio).unwrap();
+        spi.write(c(10), XTAL, CMD, USR, &gpio).unwrap();
         let end = spi.end(0).unwrap();
         let done = |spi: &mut Spi2, at| {
             (
-                spi.read(Cycle(at), CMD).unwrap() & USR != 0,
-                spi.read(Cycle(at), DMA_INT_RAW).unwrap() & TRANS_DONE != 0,
+                spi.read(Tick(at), CMD).unwrap() & USR != 0,
+                spi.read(Tick(at), DMA_INT_RAW).unwrap() & TRANS_DONE != 0,
             )
         };
-        assert_eq!(done(&mut spi, end.0 - 1), (true, false));
+        assert_eq!(done(&mut spi, end.0 - XTAL), (true, false));
         assert_eq!(
-            spi.write(Cycle(end.0 - 1), CMD, USR, &gpio),
+            spi.write(Tick(end.0 - XTAL), XTAL, CMD, USR, &gpio),
             Ok(false),
             "a start while one runs starts nothing"
         );
         assert_eq!(done(&mut spi, end.0), (false, true));
-        spi.write(Cycle(end.0), DMA_INT_CLR, TRANS_DONE, &gpio)
+        spi.write(end, XTAL, DMA_INT_CLR, TRANS_DONE, &gpio)
             .unwrap();
         assert_eq!(done(&mut spi, end.0), (false, false));
         assert_eq!(spi.take(1).count(), 1);
@@ -606,7 +608,7 @@ mod tests {
                 (ADDR, 0xa500_0000),
             ],
         );
-        spi.write(Cycle(0), CMD, USR, &gpio).unwrap();
+        spi.write(c(0), XTAL, CMD, USR, &gpio).unwrap();
         let transfer = spi.transfers.back().unwrap();
         // 12 bits of 0x34 then 0x02: 0011_0100 0000.
         assert_eq!(transfer.phases[0].value, 0x340);
@@ -658,7 +660,7 @@ mod tests {
             set(&mut spi, &gpio, &writes);
             let before = spi.clone();
             assert_eq!(
-                spi.write(Cycle(0), CMD, USR, &gpio),
+                spi.write(c(0), XTAL, CMD, USR, &gpio),
                 Err(setting),
                 "{writes:x?}"
             );
@@ -667,16 +669,16 @@ mod tests {
 
         let (mut spi, gpio) = spi();
         command_and_data(&mut spi, &gpio, &[1], false);
-        spi.write(Cycle(0), ADDR, 0, &gpio).unwrap();
+        spi.write(c(0), XTAL, ADDR, 0, &gpio).unwrap();
         assert_eq!(
-            spi.write(Cycle(0), CMD, USR | UPDATE, &gpio),
+            spi.write(c(0), XTAL, CMD, USR | UPDATE, &gpio),
             Err(Setting::Unsynced),
             "a start in the update's own store uses the registers the last update synced"
         );
-        spi.write(Cycle(0), CMD, UPDATE, &gpio).unwrap();
-        spi.write(Cycle(0), W0, 0xff, &gpio).unwrap();
+        spi.write(c(0), XTAL, CMD, UPDATE, &gpio).unwrap();
+        spi.write(c(0), XTAL, W0, 0xff, &gpio).unwrap();
         assert_eq!(
-            spi.write(Cycle(0), CMD, USR, &gpio),
+            spi.write(c(0), XTAL, CMD, USR, &gpio),
             Ok(true),
             "the buffer needs no update"
         );
@@ -687,12 +689,12 @@ mod tests {
         for offset in (ADDR..=DOUT_MODE).step_by(4) {
             let (mut spi, gpio) = spi();
             command_and_data(&mut spi, &gpio, &[1], false);
-            let value = spi.read(Cycle(0), offset).unwrap();
-            spi.write(Cycle(0), offset, differ(offset, value), &gpio)
+            let value = spi.read(c(0), offset).unwrap();
+            spi.write(c(0), XTAL, offset, differ(offset, value), &gpio)
                 .unwrap();
             let before = spi.clone();
             assert_eq!(
-                spi.write(Cycle(0), CMD, USR, &gpio),
+                spi.write(c(0), XTAL, CMD, USR, &gpio),
                 Err(Setting::Unsynced),
                 "offset {offset:#x} with no SPI_UPDATE"
             );
@@ -717,8 +719,8 @@ mod tests {
                 (CLK_GATE, CLOCKED | MST_CLK_SEL),
             ],
         );
-        spi.write(Cycle(0), CMD, 0x3ffff, &gpio).unwrap();
-        assert_eq!(spi.write(Cycle(0), CMD, USR, &gpio), Ok(true));
+        spi.write(c(0), XTAL, CMD, 0x3ffff, &gpio).unwrap();
+        assert_eq!(spi.write(c(0), XTAL, CMD, USR, &gpio), Ok(true));
     }
 
     /// `spi_hal_init` sets `SPI_TRANS_DONE_INT_ENA`. A polling master then pulses
@@ -728,10 +730,10 @@ mod tests {
         let (mut spi, gpio) = spi();
         command_and_data(&mut spi, &gpio, &[0x5a], false);
         set(&mut spi, &gpio, &[(DMA_INT_ENA, TRANS_DONE)]);
-        assert_eq!(spi.write(Cycle(10), CMD, USR, &gpio), Ok(true));
+        assert_eq!(spi.write(c(10), XTAL, CMD, USR, &gpio), Ok(true));
         let end = spi.end(0).unwrap();
         assert_eq!(
-            spi.read(Cycle(end.0 - 1), DMA_INT_RAW).unwrap() & TRANS_DONE,
+            spi.read(Tick(end.0 - XTAL), DMA_INT_RAW).unwrap() & TRANS_DONE,
             0
         );
         assert_eq!(spi.read(end, DMA_INT_RAW).unwrap() & TRANS_DONE, TRANS_DONE);
@@ -759,14 +761,14 @@ mod tests {
                 (CLOCK, (pre as u32) << 18 | (n as u32) << 12 | 1),
             ],
         );
-        assert_eq!(spi.write(Cycle(50), CMD, USR, &gpio), Ok(true));
+        assert_eq!(spi.write(c(50), XTAL, CMD, USR, &gpio), Ok(true));
         let transfer = spi.transfers.back().unwrap();
         let clocks = (setup_time + 1) + 8 + 16 + hold_time;
         let divider = (pre + 1) * (n + 1);
-        assert_eq!(u64::from(transfer.clock_hz), HZ / divider);
+        assert_eq!(u64::from(transfer.clock_hz), XTAL_HZ / divider);
         assert_eq!(
             (transfer.start, transfer.end),
-            (Cycle(50), Cycle(50 + clocks * divider))
+            (c(50), c(50 + clocks * divider))
         );
     }
 
@@ -778,12 +780,12 @@ mod tests {
             &gpio,
             &[(USER, USR_COMMAND), (USER2, 7 << 28), (CLOCK, 1 << 12 | 1)],
         );
-        spi.write(Cycle(0), CMD, USR, &gpio).unwrap();
+        spi.write(c(0), XTAL, CMD, USR, &gpio).unwrap();
         // 8 clocks at 20 MHz, plus setup and hold off: 16 cycles.
-        assert_eq!(spi.end(0), Some(Cycle(16)));
+        assert_eq!(spi.end(0), Some(c(16)));
         set(&mut spi, &gpio, &[(CLK_GATE, CLOCKED | MST_CLK_SEL)]);
-        spi.write(Cycle(16), CMD, USR, &gpio).unwrap();
-        assert_eq!(spi.end(1), Some(Cycle(24)));
+        spi.write(c(16), XTAL, CMD, USR, &gpio).unwrap();
+        assert_eq!(spi.end(1), Some(c(24)));
         assert_eq!(spi.transfers[1].clock_hz, 40_000_000);
     }
 

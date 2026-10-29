@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 use crate::bus::{Bus, Cause, Cycle, Exit, Width};
 use crate::config::Config;
 use crate::decode::{Decoded, Insn, Op};
-use crate::special::{Access, CCOMPARE, EPC, EPS, Sr};
+use crate::special::{Access, CCOMPARE, EPC, EPS, PRID, Sr};
 
 mod options;
 
@@ -160,6 +160,9 @@ pub struct Core<C: Config> {
     /// The S3's `q0` to `q7`, each as four words, lowest first.
     q: [[u32; 4]; 8],
     disabled: Option<CoprocessorDisabled>,
+    /// The access rights of each 512 MB region, for instruction fetches and then for loads and
+    /// stores, as `witlb` and `wdtlb` leave them.
+    regions: [[u8; 8]; 2],
     chip: PhantomData<C>,
 }
 
@@ -197,6 +200,7 @@ impl<C: Config> Core<C> {
             fr: [0; 16],
             q: [[0; 4]; 8],
             disabled: None,
+            regions: [[REGION_RESET; 8]; 2],
             chip: PhantomData,
         };
         core.sr[Sr::Ps as usize] = RESET_PS;
@@ -260,9 +264,10 @@ impl<C: Config> Core<C> {
     }
 
     /// `Interrupt` is the pending bits that latch, with the external level lines as the last
-    /// poll read them. `ACCHI` reads sign-extended from its 8 bits.
+    /// poll read them. `ACCHI` reads sign-extended from its 8 bits, and `PRID` is fixed.
     pub fn special(&self, sr: Sr) -> u32 {
         match sr {
+            Sr::Prid => PRID,
             Sr::Ccount => self.sr[sr as usize].wrapping_add(self.cycle.0 as u32),
             Sr::Interrupt => self.sr[sr as usize] | (self.lines & C::INTERRUPTS.extern_level),
             Sr::Acchi => self.sr[sr as usize] as u8 as i8 as u32,
@@ -755,6 +760,23 @@ impl<C: Config> Core<C> {
             | Op::DSYNC
             | Op::EXCW => {}
 
+            Op::WITLB | Op::WDTLB => {
+                let side = usize::from(insn.op == Op::WDTLB);
+                self.regions[side][region(self.a(f[1]))] = (self.a(f[0]) & 0xf) as u8;
+            }
+            Op::RITLB0 | Op::RDTLB0 => self.set_a(f[0], self.a(f[1]) & REGION_MASK),
+            Op::RITLB1 | Op::RDTLB1 => {
+                let side = usize::from(insn.op == Op::RDTLB1);
+                let at = self.a(f[1]);
+                self.set_a(
+                    f[0],
+                    (at & REGION_MASK) | u32::from(self.regions[side][region(at)]),
+                );
+            }
+            Op::IITLB | Op::IDTLB => {}
+            Op::RER => self.set_a(f[0], 0),
+            Op::WER => {}
+
             Op::ADD | Op::ADD_N => self.set_a(f[0], self.a(f[1]).wrapping_add(self.a(f[2]))),
             Op::ADDX2 => self.set_a(f[0], (self.a(f[1]) << 1).wrapping_add(self.a(f[2]))),
             Op::ADDX4 => self.set_a(f[0], (self.a(f[1]) << 2).wrapping_add(self.a(f[2]))),
@@ -1160,6 +1182,16 @@ const fn latched<C: Config>() -> u32 {
         | interrupts.timer_mask(0)
         | interrupts.timer_mask(1)
         | interrupts.timer_mask(2)
+}
+
+/// The access rights each region has at reset: 2, bypass the cache, read, write and execute.
+const REGION_RESET: u8 = 2;
+/// The address bits that pick a region.
+const REGION_MASK: u32 = 0xe000_0000;
+
+/// The region `addr` lies in.
+fn region(addr: u32) -> usize {
+    (addr >> 29) as usize
 }
 
 /// The ops the ISA says must not end a loop (4.3.2.2, p 86).

@@ -15,7 +15,7 @@ A diagnostic is one JSON object. The fields are written in this order.
 
 The run sorts diagnostics by `t_ps`, then `code`, then `refs`, then the JSON bytes of the whole object. A `null` time sorts before a number, so every input finding precedes a solver finding.
 
-A session's `diagnostics()` returns the warnings found so far, and once the session ends they are that list's. While it runs, a `Pulses` record still in flight is not yet counted, as [engine.md](engine.md#sessions) says. The folder's warnings are `net.floating`, `trace.row_interpolated`, `rating.current`, `rating.power`, `chip.protocol`, `chip.link_miswired` and `chip.unmodeled_register`. `diagnostics()` returns all but `trace.row_interpolated`. It leaves out `trace.row_interpolated`, because that warning names a grid row whose probe failed twice, and only a recorded trace defines those rows. An open session has no grid. The accepted steps do not depend on the grid, and neither do the warnings `diagnostics()` returns. Every other code on this page is an error. The error that ends a run is `fault` on the session, and `diagnostics()` does not return it. [engine.md](engine.md#sessions) says when the samples are taken.
+A session's `diagnostics()` returns the warnings found so far, and once the session ends they are that list's. While it runs, a `Pulses` record still in flight is not yet counted, as [engine.md](engine.md#sessions) says. The folder's warnings are `net.floating`, `trace.row_interpolated`, `rating.current`, `rating.power`, `chip.protocol`, `chip.link_miswired`, `chip.unmodeled_register` and `chip.restart`. `diagnostics()` returns all but `trace.row_interpolated`. It leaves out `trace.row_interpolated`, because that warning names a grid row whose probe failed twice, and only a recorded trace defines those rows. An open session has no grid. The accepted steps do not depend on the grid, and neither do the warnings `diagnostics()` returns. Every other code on this page is an error. The error that ends a run is `fault` on the session, and `diagnostics()` does not return it. [engine.md](engine.md#sessions) says when the samples are taken.
 
 A run whose diagnostics are all warnings still writes the operating point. A run with an error writes the observations it reached, as [run-folder.md](run-folder.md#observationsjson) says. That is `{}` when nothing solved, as at t = 0. A transient keeps its grid rows before the error, and its last accepted step is the last row. Its observations end there. A warning found before that error is kept, including a rating sampled on any accepted step before it.
 
@@ -153,7 +153,14 @@ An `esp32s3` part's `firmware.elf` blob has three rules, each with `line` `null`
 - `unmapped`: a loadable segment lies outside the chip's SRAM windows, or the entry lies in no segment on the instruction bus.
 - `overlap`: two loadable segments reach one byte of SRAM, through one window or both. The message is `{ref} firmware loads two segments onto one byte of memory`.
 
-Parse stops at the first fault, so a part has at most one. [netlist.md](netlist.md#atmega328p) says how the text becomes flash, and [netlist.md](netlist.md#esp32-s3) how an ELF loads.
+An `esp32s3` part's `firmware.flash` and `rom` have these, each with `line` `null` and `field` `firmware`.
+
+- `region`: a region lies past the end of the 16 MB flash, or on a byte an earlier region placed.
+- `image`: the flash has no app ESP-IDF's bootloader would start. It has no partition table at `0x8000`, no factory or `ota_0` app partition, a partition past the flash's end, or otadata that is not blank, or the app partition holds no ESP32-S3 app image whose checksum, and hash when the header names one, hold. A segment in a cache window whose address and flash offset differ modulo the 64 KB MMU page is refused too, as IDF's bootloader refuses it.
+- `unmapped`: an app segment lies outside the cache windows, the SRAM windows and RTC memory, or the entry lies in no segment in the instruction-bus SRAM window.
+- `rom`: `rom` is not the revision 0 ROM the model runs, or is absent beside `firmware.flash`, or present beside `firmware.elf`. The message names the ROM's SHA-256 and length.
+
+Parse stops at the first fault, so a part has at most one. [netlist.md](netlist.md#atmega328p) says how the text becomes flash, and [netlist.md](netlist.md#esp32-s3) how an ELF loads and how the flash finds its app.
 
 ## netlist.blob
 
@@ -391,11 +398,11 @@ The message is `{part} reached {what} at {pc}, which the model does not run, at 
 
 ## chip.unsupported_setting
 
-Severity `error`. Refs are the chip. `t_ps` is the time of the store that started the transfer. It ends the run.
+Severity `error`. Refs are the chip. `t_ps` is the time of the store that started the transfer or set the setting. It ends the run.
 
-The message is `{part} started a {peripheral} transfer with setting {setting} at {pc}, which the model does not run, at {t_ps} ps`, with ` in {symbol}` after the PC when the firmware has a symbol at or below it.
+The message is `{part} started a {peripheral} transfer with setting {setting} at {pc}, which the model does not run, at {t_ps} ps` for a transfer, `{part} enabled a {peripheral} interrupt at {pc}, which the model never raises, at {t_ps} ps` for an interrupt, and `{part} put the chip to sleep at {pc}, which the model does not run, at {t_ps} ps` for sleep, each with ` in {symbol}` after the PC when the firmware has a symbol at or below it.
 
-`data` holds `peripheral`, `pc`, `setting` and `symbol`. `peripheral` is `SPI2`. `pc` is the address of the store, and `symbol` is written as `chip.unsupported_instruction` writes it. `setting` is the first of these the registers held when the store wrote `SPI_USR`: `slave`, `dma`, `lsb_first`, `qpi`, `octal`, `dtr`, `dummy`, `read`, `high_part`, `three_line`, `full_duplex`, `clock_mode`, `cs_disabled`, `data_length`, `clock_off` or `unsynced`. The store writes nothing, and the run keeps every row before it, as [esp32s3.md](esp32s3.md#what-it-models) says.
+`data` holds `peripheral`, `pc`, `setting` and `symbol`. `pc` is the address of the store, and `symbol` is written as `chip.unsupported_instruction` writes it. For a transfer, `peripheral` is `SPI2`, and `setting` is the first of these the registers held when the store wrote `SPI_USR`: `slave`, `dma`, `lsb_first`, `qpi`, `octal`, `dtr`, `dummy`, `read`, `high_part`, `three_line`, `full_duplex`, `clock_mode`, `cs_disabled`, `data_length`, `clock_off` or `unsynced`. `setting` is `interrupt` when the store set an interrupt enable bit of a source the model never raises, with `peripheral` `SPI2`, `GDMA`, `TIMG0`, `TIMG1` or `USB_SERIAL_JTAG`. It is `sleep`, with `peripheral` `RTC_CNTL`, when the store set `RTC_CNTL_SLEEP_EN`. The store writes nothing, and the run keeps every row before it, as [esp32s3.md](esp32s3.md#what-it-models) says.
 
 ## chip.unmapped_fetch
 
@@ -413,13 +420,81 @@ The message is `{part} {watchdog} watchdog ran out at {t_ps} ps; the firmware ne
 
 `data` holds `watchdog`, which is `RTC`, `timer group 0` or `timer group 1`. [esp32s3.md](esp32s3.md#what-it-models) says when each runs.
 
+## chip.efuse_program
+
+Severity `error`. Refs are the chip. `t_ps` is the time of the store. It ends the run.
+
+The message is `{part} started an eFuse program command at {pc}, which would burn eFuses, at {t_ps} ps`, with ` in {symbol}` after the PC when the firmware has a symbol at or below it.
+
+`data` holds `pc` and `symbol`, as `chip.unsupported_instruction` writes them. The store wrote `EFUSE_PGM_CMD` to `EFUSE_CMD_REG`. The model never burns its eFuses, and the store writes nothing.
+
+## chip.flash_command
+
+Severity `error`. Refs are the chip. `t_ps` is the time of the store. It ends the run.
+
+The message is `{part} {what} at {pc}, {why}, at {t_ps} ps`, with ` in {symbol}` after the PC when the firmware has a symbol at or below it. `{what}` and `{why}` follow `reason`, and a command prints as `command 0x20`.
+
+`data` holds `command`, `pc`, `reason` and `symbol`. `command` is the command byte SPI1 sent, or `null` when no one byte went. `pc` and `symbol` are as `chip.unsupported_instruction` writes them. The store writes no status bit and no flash byte. `reason` is one of these.
+
+- `unsupported`: a program, an erase, or another command the model does not run. The message reads `sent the flash command 0x20`, `which the model does not run`.
+- `status_write`: the fixed `WRSR`, or a user `0x01`, `0x31` or `0x11`, with or without `WREN`. A status write can set the flash's protect and one-time lock bits. The message reads `sent the flash the status write command 0x01`, `which could lock the flash`.
+- `no_command_phase`: a user command with no command phase, or a write that sets only `SPI_MEM_FLASH_PE`. `command` is `null`.
+- `start_bits`: one write of `SPI_MEM_CMD_REG` that starts more than one command, such as `WREN` with a sector erase. None of them runs. `command` is `null`.
+- `past_end`: a read whose bytes reach past the flash's end. A chip with no flash refuses every read. The message reads `sent the flash the read command 0x03`, `which reaches past the flash's end`.
+- `address_bits`: a command whose address phase is longer than 32 bits.
+- `spi0`: a write of SPI0's `SPI_MEM_CMD_REG` that starts a command. `command` is `null`.
+- `pads`: a write that would take one of the flash's pads, GPIO26 to GPIO32, from SPI0 and SPI1. It gives the pad an IO_MUX function other than 0, sets its `GPIO_ENABLE` bit, or moves its `GPIO_FUNCn_OUT_SEL_CFG_REG` from its reset value, as [esp32s3.md](esp32s3.md#what-it-models) says. `command` is `null`. The message reads `took a flash pad from SPI0 and SPI1`, `which could send the flash any command`.
+
+The flash reads, and reports its ID and status, as [esp32s3.md](esp32s3.md#what-it-models) says.
+
+## chip.unsupported_clock
+
+Severity `error`. Refs are the chip. `t_ps` is the time of the store. It ends the run.
+
+The message is `{part} picked a CPU clock the model does not run, the RC fast clock or a reserved setting, at {pc} at {t_ps} ps`, with ` in {symbol}` after the PC when the firmware has a symbol at or below it.
+
+`data` holds `pc` and `symbol`, as `chip.unsupported_instruction` writes them. The store to `SYSTEM_SYSCLK_CONF_REG` or `SYSTEM_CPU_PER_CONF_REG` left `SYSTEM_SOC_CLK_SEL` at the RC fast clock or its reserved value, or the PLL with the reserved `SYSTEM_CPUPERIOD_SEL` 3, or with `SYSTEM_CPUPERIOD_SEL` 2 while `SYSTEM_PLL_FREQ_SEL` picks the 320 MHz PLL.
+
+## chip.restart
+
+Severity `warning`. Refs are the chip. `t_ps` is the time of the store.
+
+The message is `{part} reset itself at {pc} at {t_ps} ps; the model does not run the boot ROM, so the chip stays in reset`, with ` in {symbol}` after the PC when the firmware has a symbol at or below it.
+
+`data` holds `pc` and `symbol`, as `chip.unsupported_instruction` writes them. The store set `RTC_CNTL_SW_PROCPU_RST` or `RTC_CNTL_SW_SYS_RST` in `RTC_CNTL_OPTIONS0_REG` while `RTC_CNTL_STORE6_REG` held 0 or the hint `ESP_RST_SW`, as `esp_restart` leaves it. From that cycle the core runs no further and each pad drives as at power-on, while the rest of the circuit runs on to `stop_ps`. Any other reset is `chip.fault_restart`.
+
+## chip.fault_restart
+
+Severity `error`. Refs are the chip. `t_ps` is the time of the store. It ends the run.
+
+The message is `{part} reset itself at {pc} {why}, at {t_ps} ps`, with ` in {symbol}` after the PC when the firmware has a symbol at or below it. `{why}` follows `reason`, such as `after a panic`.
+
+`data` holds `pc`, `reason` and `symbol`. `pc` and `symbol` are as `chip.unsupported_instruction` writes them. The store set `RTC_CNTL_SW_PROCPU_RST` or `RTC_CNTL_SW_SYS_RST`, and `RTC_CNTL_STORE6_REG` held what ESP-IDF records before such a reset, `hint | hint << 16 | 1 << 31`, as [esp32s3.md](esp32s3.md#what-it-models) says. `reason` is one of these.
+
+- `panic`: the hint `ESP_RST_PANIC`, which IDF's panic handler records after an abort, an assert or an unhandled exception.
+- `interrupt_watchdog`: `ESP_RST_INT_WDT`.
+- `task_watchdog`: `ESP_RST_TASK_WDT`.
+- `watchdog`: `ESP_RST_WDT`.
+- `brownout`: `ESP_RST_BROWNOUT`.
+- `unreadable`: any other word but 0, or no `RTC_CNTL_STORE6_REG` at all, as on a bare-metal chip. The message reads `with no reset reason the model can read`.
+
+Two resets that are no fault on the board end the run here as `unreadable`: a bare-metal program's software reset, and `esp_restart` after a deep-sleep wake stub left its address, whose top bit is clear, in `RTC_CNTL_STORE6_REG`, which IDF reports as `ESP_RST_SW`.
+
+## chip.unmapped_load
+
+Severity `error`. Refs are the chip. `t_ps` is the time of the load. It ends the run.
+
+The message is `{part} loaded from {address} at {pc}, where the MMU maps no flash, at {t_ps} ps`, with ` in {symbol}` after the PC when the firmware has a symbol at or below it.
+
+`data` holds `address`, `pc` and `symbol`. `address` is the address the load read, in the instruction or data cache window. `pc` and `symbol` are as `chip.unsupported_instruction` writes them. The MMU entry of that page is invalid, or picks PSRAM, which the chip lacks, or maps a page past the flash's end, or the chip has no flash, as [esp32s3.md](esp32s3.md#what-it-models) says.
+
 ## chip.unmodeled_register
 
 Severity `warning`. Refs are the chip. `t_ps` is the time of the first access to the register.
 
-The message is `{part} read {register} at {address}, which the model does not keep, first at {t_ps} ps from {pc}`, with `wrote` for a write and ` in {symbol}` after the PC when the firmware has a symbol at or below it.
+The message is `{part} read {register} at {address}, which the model does not keep, first at {t_ps} ps from {pc}`, with `wrote` for a write and ` in {symbol}` after the PC when the firmware has a symbol at or below it. For a register the model keeps without running its effect, it reads `{part} wrote {register} at {address}, whose effect the model does not run, first at {t_ps} ps from {pc}`.
 
-`data` holds `address`, `pc`, `register`, `symbol` and `write`. `address` is the register's word address. `register` names it by its block and the offset into the block, such as `UART0+0x0` or `TIMG0+0x24`. `pc` is the address of the instruction that made the access, and `symbol` is written as `chip.unsupported_instruction` writes it. `write` is true for a store. A read of such a register gives 0 and a store is dropped. The run reports each register once per chip, at its first access, whatever later accesses do. The list is the work queue of registers a firmware needs, as [esp32s3.md](esp32s3.md#unmodeled-registers) says.
+`data` holds `address`, `kept`, `pc`, `register`, `symbol` and `write`. `address` is the register's word address. `register` names it by its block and the offset into the block, such as `UART0+0x0` or `TIMG0+0x24`. `pc` is the address of the instruction that made the access, and `symbol` is written as `chip.unsupported_instruction` writes it. `write` is true for a store. A read of such a register gives 0 and a store is dropped. The run reports each register once per chip, at its first access, whatever later accesses do. The registers whose writes change the peripherals' resets and clock gates, the slow clock, or SPI0's read command are kept, and their effect does not run. `kept` is true for those and false for every other register. The run reports each of those once too, at the first write that changes its word, as [esp32s3.md](esp32s3.md#what-it-models) lists. The list is the work queue of registers a firmware needs, as [esp32s3.md](esp32s3.md#unmodeled-registers) says.
 
 ## trace.too_large
 

@@ -119,14 +119,28 @@ impl Blobs {
 /// What a blob is to the part that names it. `manifest.json` lists each blob with its role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Role {
+    /// The mask ROM as its ELF.
+    Rom,
     /// A bare-metal program as an ELF executable.
     Elf,
+    /// Bytes of the flash from this offset.
+    Flash(u32),
 }
 
 impl Role {
     pub fn as_str(self) -> &'static str {
         match self {
+            Role::Rom => "rom",
             Role::Elf => "elf",
+            Role::Flash(_) => "flash",
+        }
+    }
+
+    /// Where a flash region starts.
+    pub fn offset(self) -> Option<u32> {
+        match self {
+            Role::Flash(offset) => Some(offset),
+            Role::Rom | Role::Elf => None,
         }
     }
 }

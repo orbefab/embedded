@@ -1,17 +1,19 @@
 //! The ESP32-S3 behind the seam. Each GPIO with a net becomes an output and a watch around
 //! `sim_esp32::s3::Esp32s3`, its console goes to `serial.csv` as `USB_SERIAL_JTAG`, each SPI2
-//! transfer is a `Spi` record, and its 40 MHz clock converts between picoseconds and cycles.
+//! transfer is a `Spi` record, and its 480 MHz tick converts between picoseconds and its timeline.
 //!
 //! A console packet has no line timing: every byte of one starts and ends at the cycle the
 //! firmware flushed it.
 
-use sim_core::diagnostic::{Diagnostic, Unsupported};
+use sim_core::diagnostic::{ChipSetting, Diagnostic, FlashRefusal, ResetReason, Unsupported};
 use sim_core::link::{Cs, Lanes, Record, RecordKind, Spi, SpiNets, SpiPhase};
 use sim_core::name::Ref;
-use sim_core::netlist::{Esp32s3, NetId, PartId, Value};
+use sim_core::netlist::{Esp32s3, Esp32s3Firmware, NetId, PartId, Value};
 use sim_core::time::Time;
-use sim_esp32::s3::{self, Fault, HZ, Halt, PadDrive, Touch, Transfer};
-use sim_xtensa::{Cycle, Missing};
+use sim_esp32::s3::{
+    self, Fault, Halt, PadDrive, Refused, ResetCause, TICK_HZ, Tick, Touch, Transfer,
+};
+use sim_xtensa::Missing;
 
 use super::{Chip, Drive, Frame, Output, Stage, Stop, Takes};
 use crate::mna::Node;
@@ -100,13 +102,35 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
         .collect();
     signals.sort_unstable();
 
-    let firmware = &mcu.firmware;
-    let segments = firmware
-        .segments()
-        .iter()
-        .map(|segment| (segment.addr, firmware.data(segment)));
+    let chip = match &mcu.firmware {
+        Esp32s3Firmware::Elf(elf) => {
+            let segments = elf
+                .segments()
+                .iter()
+                .map(|segment| (segment.addr, elf.data(segment)));
+            s3::Esp32s3::new(&gpios, elf.entry(), segments)
+        }
+        Esp32s3Firmware::Flash { rom, flash } => {
+            let segments: Vec<s3::Segment> = flash
+                .segments()
+                .iter()
+                .map(|segment| s3::Segment {
+                    addr: segment.addr,
+                    offset: segment.offset,
+                    len: segment.len,
+                })
+                .collect();
+            let boot = s3::Boot {
+                rom: &rom.bytes,
+                flash: flash.bytes().clone(),
+                entry: flash.entry(),
+                segments: &segments,
+            };
+            s3::Esp32s3::boot(&gpios, boot)
+        }
+    };
     let mut core = Core {
-        chip: s3::Esp32s3::new(&gpios, firmware.entry(), segments),
+        chip,
         image: vec![Drive::Off; gpios.len()],
         gpios,
         nets: pins.to_vec(),
@@ -130,21 +154,21 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
     }
 }
 
-/// The last cycle at or before `at`.
-fn cycle(at: Time) -> Cycle {
-    let cycles = u128::from(at.as_ps()) * u128::from(HZ) / 1_000_000_000_000;
-    Cycle(u64::try_from(cycles).expect("a cycle count fits in u64"))
+/// The last tick at or before `at`.
+fn tick(at: Time) -> Tick {
+    let ticks = u128::from(at.as_ps()) * u128::from(TICK_HZ) / 1_000_000_000_000;
+    Tick(u64::try_from(ticks).expect("a tick count fits in u64"))
 }
 
-/// The first picosecond at or after `cycle`.
-fn time(cycle: Cycle) -> Time {
-    let at = (u128::from(cycle.0) * 1_000_000_000_000).div_ceil(u128::from(HZ));
-    Time::from_ps(u64::try_from(at).expect("a cycle inside the run"))
+/// The first picosecond at or after `tick`.
+fn time(tick: Tick) -> Time {
+    let at = (u128::from(tick.0) * 1_000_000_000_000).div_ceil(u128::from(TICK_HZ));
+    Time::from_ps(u64::try_from(at).expect("a tick inside the run"))
 }
 
 impl Core {
     pub(crate) fn run_until(&mut self, limit: Time) -> Option<Stop> {
-        let halt = self.chip.run_until(cycle(limit))?;
+        let halt = self.chip.run_until(tick(limit))?;
         let at = time(halt.at());
         let mut record = false;
         match halt {
@@ -253,9 +277,9 @@ impl Core {
         self.levels = levels.to_vec();
     }
 
-    /// Takes the console bytes whose packet went on a cycle at or before `through`'s last.
+    /// Takes the console bytes whose packet went on a tick at or before `through`'s last.
     pub(crate) fn deliver(&mut self, through: Time, mut sent: impl FnMut(Frame)) {
-        while let Some((at, byte)) = self.chip.take_sent(cycle(through)) {
+        while let Some((at, byte)) = self.chip.take_sent(tick(through)) {
             let at = time(at);
             sent(Frame {
                 usart: 0,
@@ -299,14 +323,82 @@ impl Core {
                 part,
                 at,
                 peripheral: "SPI2",
-                setting: setting.name(),
+                setting: ChipSetting::Transfer(setting.name()),
                 pc,
                 symbol: symbol(pc),
             },
+            Fault::Refused(refused, pc) => {
+                let (peripheral, setting) = match refused {
+                    Refused::Interrupt(peripheral) => (peripheral, ChipSetting::Interrupt),
+                    Refused::Sleep => ("RTC_CNTL", ChipSetting::Sleep),
+                };
+                Diagnostic::ChipUnsupportedSetting {
+                    part,
+                    at,
+                    peripheral,
+                    setting,
+                    pc,
+                    symbol: symbol(pc),
+                }
+            }
             Fault::Watchdog(watchdog) => Diagnostic::ChipWatchdog {
                 part,
                 at,
                 watchdog: watchdog.name(),
+            },
+            Fault::EfuseProgram(pc) => Diagnostic::ChipEfuseProgram {
+                part,
+                at,
+                pc,
+                symbol: symbol(pc),
+            },
+            Fault::FlashCommand(refusal, pc) => {
+                use s3::FlashRefusal as R;
+                let (command, reason) = match refusal {
+                    R::Command(command) => (Some(command), FlashRefusal::Unsupported),
+                    R::StatusWrite(command) => (Some(command), FlashRefusal::StatusWrite),
+                    R::NoCommandPhase => (None, FlashRefusal::NoCommandPhase),
+                    R::StartBits => (None, FlashRefusal::StartBits),
+                    R::PastEnd(command) => (Some(command), FlashRefusal::PastEnd),
+                    R::AddressBits(command) => (Some(command), FlashRefusal::AddressBits),
+                    R::Spi0 => (None, FlashRefusal::Spi0),
+                    R::Pads => (None, FlashRefusal::Pads),
+                };
+                Diagnostic::ChipFlashCommand {
+                    part,
+                    at,
+                    command,
+                    reason,
+                    pc,
+                    symbol: symbol(pc),
+                }
+            }
+            Fault::FaultRestart(cause, pc) => Diagnostic::ChipFaultRestart {
+                part,
+                at,
+                reason: match cause {
+                    ResetCause::Panic => ResetReason::Panic,
+                    ResetCause::InterruptWatchdog => ResetReason::InterruptWatchdog,
+                    ResetCause::TaskWatchdog => ResetReason::TaskWatchdog,
+                    ResetCause::Watchdog => ResetReason::Watchdog,
+                    ResetCause::Brownout => ResetReason::Brownout,
+                    ResetCause::Unreadable => ResetReason::Unreadable,
+                },
+                pc,
+                symbol: symbol(pc),
+            },
+            Fault::UnmappedLoad { address, pc } => Diagnostic::ChipUnmappedLoad {
+                part,
+                at,
+                address,
+                pc,
+                symbol: symbol(pc),
+            },
+            Fault::Clock(pc) => Diagnostic::ChipUnsupportedClock {
+                part,
+                at,
+                pc,
+                symbol: symbol(pc),
             },
         };
         Some((at, diagnostic))
@@ -326,8 +418,20 @@ impl Core {
                 pc: touch.pc,
                 symbol: mcu.firmware.symbolize(touch.pc),
                 write: touch.write,
+                kept: touch.kept,
             })
             .collect()
+    }
+
+    /// The `chip.restart` warning, when the firmware reset the chip at or before `through`.
+    pub(crate) fn restart(&self, part: &Ref, mcu: &Esp32s3, through: Time) -> Option<Diagnostic> {
+        let (at, pc) = self.chip.restart()?;
+        (time(at) <= through).then(|| Diagnostic::ChipRestart {
+            part: part.clone(),
+            at: time(at),
+            pc,
+            symbol: mcu.firmware.symbolize(pc),
+        })
     }
 
     fn refresh(&mut self) {
@@ -373,9 +477,9 @@ mod tests {
     }
 
     #[test]
-    fn a_cycle_is_25_ns() {
-        assert_eq!(time(Cycle(3)), Time::from_ps(75_000));
-        assert_eq!(cycle(Time::from_ps(74_999)), Cycle(2));
-        assert_eq!(cycle(Time::from_ps(75_000)), Cycle(3));
+    fn a_crystal_cycle_is_25_ns() {
+        assert_eq!(time(Tick(3 * 12)), Time::from_ps(75_000));
+        assert_eq!(tick(Time::from_ps(74_999)).0 / 12, 2);
+        assert_eq!(tick(Time::from_ps(75_000)), Tick(3 * 12));
     }
 }

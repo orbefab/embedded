@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use common::examples::transient_examples;
+use common::examples::{blob_args, transient_examples};
 use common::{display_parts, files, has_kind, led_parts, repo, sends_records, transient_folder};
 
 fn sim(args: &[&str]) -> (i32, String, String) {
@@ -395,12 +395,15 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
     for name in transient_examples() {
         let out = scratch(&format!("tran-{name}"));
         let netlist = named_example(&name);
-        let (code, stdout, stderr) = sim(&[
-            "run",
-            netlist.to_str().unwrap(),
-            "--out",
-            out.to_str().unwrap(),
-        ]);
+        let mut args = vec![
+            "run".to_string(),
+            netlist.display().to_string(),
+            "--out".to_string(),
+            out.display().to_string(),
+        ];
+        args.extend(blob_args(netlist.parent().unwrap()));
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let (code, stdout, stderr) = sim(&args);
         assert_eq!(code, 0, "{stdout}");
         assert!(stderr.is_empty(), "{stderr}");
         let doc = json(&stdout);
@@ -415,6 +418,26 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
                 "{name}: {}",
                 doc["diagnostics"]
             );
+        } else if name == "esp32s3-hello" {
+            // The 8 registers the app touches that the model does not keep, the 3 reset and
+            // clock gate registers whose effect it does not run, then its reset.
+            let mut want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 11];
+            want.push(("chip.restart".to_string(), "#u1".to_string()));
+            assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
+            let kept: Vec<_> = doc["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|d| d["data"]["kept"] == true)
+                .collect();
+            assert_eq!(kept.len(), 3, "{name}: {}", doc["diagnostics"]);
+            for d in kept {
+                let message = d["message"].as_str().unwrap();
+                assert!(
+                    message.contains("whose effect the model does not run"),
+                    "{message}"
+                );
+            }
         } else {
             assert!(found.is_empty(), "{name}: {}", doc["diagnostics"]);
         }
@@ -432,12 +455,15 @@ fn two_runs_of_each_transient_example_differ_only_in_created_at() {
             .map(|name| {
                 let out = scratch(&format!("tran-twice-{name}-{round}"));
                 let netlist = named_example(name);
-                let (code, stdout, _) = sim(&[
-                    "run",
-                    netlist.to_str().unwrap(),
-                    "--out",
-                    out.to_str().unwrap(),
-                ]);
+                let mut args = vec![
+                    "run".to_string(),
+                    netlist.display().to_string(),
+                    "--out".to_string(),
+                    out.display().to_string(),
+                ];
+                args.extend(blob_args(netlist.parent().unwrap()));
+                let args: Vec<&str> = args.iter().map(String::as_str).collect();
+                let (code, stdout, _) = sim(&args);
                 assert_eq!(code, 0, "{stdout}");
                 out
             })

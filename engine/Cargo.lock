@@ -297,11 +297,11 @@ dependencies = [
 
 [[package]]
 name = "sim-avr"
-version = "0.29.0"
+version = "0.30.0"
 
 [[package]]
 name = "sim-bench"
-version = "0.29.0"
+version = "0.30.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -312,7 +312,7 @@ dependencies = [
 
 [[package]]
 name = "sim-circuit"
-version = "0.29.0"
+version = "0.30.0"
 dependencies = [
  "libm",
  "serde_json",
@@ -325,7 +325,7 @@ dependencies = [
 
 [[package]]
 name = "sim-cli"
-version = "0.29.0"
+version = "0.30.0"
 dependencies = [
  "clap",
  "libm",
@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "sim-core"
-version = "0.29.0"
+version = "0.30.0"
 dependencies = [
  "libm",
  "serde",
@@ -349,14 +349,14 @@ dependencies = [
 
 [[package]]
 name = "sim-esp32"
-version = "0.29.0"
+version = "0.30.0"
 dependencies = [
  "sim-xtensa",
 ]
 
 [[package]]
 name = "sim-wasm"
-version = "0.29.0"
+version = "0.30.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "sim-xtensa"
-version = "0.29.0"
+version = "0.30.0"
 dependencies = [
  "sha2",
 ]

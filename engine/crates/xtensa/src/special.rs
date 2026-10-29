@@ -111,6 +111,7 @@ registers! {
     F64rLo: u32::MAX => [Read RUR_F64R_LO, Write WUR_F64R_LO];
     F64rHi: u32::MAX => [Read RUR_F64R_HI, Write WUR_F64R_HI];
     F64s: u32::MAX => [Read RUR_F64S, Write WUR_F64S];
+    Prid: 0 => [Read RSR_PRID];
     Eraccess: u32::MAX => [Read RSR_ERACCESS, Write WSR_ERACCESS, Exchange XSR_ERACCESS];
     Accx0: u32::MAX => [Read RUR_ACCX_0, Write WUR_ACCX_0];
     Accx1: 0xff => [Read RUR_ACCX_1, Write WUR_ACCX_1];
@@ -132,6 +133,10 @@ registers! {
     UaState2: u32::MAX => [Read RUR_UA_STATE_2, Write WUR_UA_STATE_2];
     UaState3: u32::MAX => [Read RUR_UA_STATE_3, Write WUR_UA_STATE_3];
 }
+
+/// What `PRID` reads on core 0, the one core a chip runs: `0xCDCD`, and on core 1 `0xABAB`.
+/// IDF v5.5.5, `components/xtensa/include/xtensa_context.h`.
+pub(crate) const PRID: u32 = 0xcdcd;
 
 pub(crate) const CCOMPARE: [Sr; 3] = [Sr::Ccompare0, Sr::Ccompare1, Sr::Ccompare2];
 

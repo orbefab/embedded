@@ -151,7 +151,7 @@ fn a_vector_after_loop_keeps_the_first_loop_back() {
 fn vector_after_loop<C: Config>() {
     let loop_op = [0x76u8, 0x82, 0x01];
     let addi = [0x1bu8, 0x33];
-    let stop_op = [0x20u8, 0x63, 0x40];
+    let stop_op = [0x00u8, 0xe0, 0xf1];
     let wsr = [0x40u8, 0xf0, 0x13];
     let rfe = [0x00u8, 0x30, 0x00];
     let lend = CODE + 5;
@@ -192,7 +192,7 @@ fn vector_after_loop<C: Config>() {
     let stop = core.run_until(&mut bus, Cycle(100));
     let want = Unimplemented {
         pc: lend,
-        missing: Missing::Op(Op::RER),
+        missing: Missing::Op(Op::RFDO),
     };
     assert_eq!(stop, Stop::Unimplemented(want), "{}", C::NAME);
     assert_eq!(core.pc(), lend, "{}", C::NAME);

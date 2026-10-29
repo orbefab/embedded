@@ -1,5 +1,6 @@
 //! The `esp32s3` kind: its supply pins and the GPIOs it has nets on, its firmware as a blob
-//! reference to an ELF executable, and the values of its pin electrics.
+//! reference to an ELF executable or as blobs placed on its flash with the mask ROM's blob, and
+//! the values of its pin electrics.
 
 use std::collections::BTreeMap;
 
@@ -8,16 +9,19 @@ use serde::Deserialize;
 use super::atmega328p::{WireThreshold, resolve_threshold};
 use super::{PinMap, WireOutputStage, WireValue, resolve_output_stage, resolve_value};
 use crate::blob::{Blob, Blobs, Role, Sha256};
-use crate::diagnostic::{BlobRule, Diagnostic};
+use crate::diagnostic::{BlobRule, Diagnostic, FirmwareRule};
 use crate::name::{Name, Ref};
 use crate::netlist::elf::Elf;
-use crate::netlist::{Esp32s3, NetId};
+use crate::netlist::flash::Flash;
+use crate::netlist::{Esp32s3, Esp32s3Firmware, NetId};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct WireEsp32s3 {
     pub(super) name: String,
     pins: PinMap,
+    #[serde(default)]
+    rom: Option<WireBlob>,
     firmware: WireFirmware,
     output: WireOutputStage,
     pull_up_resistance: WireValue,
@@ -29,6 +33,16 @@ pub(super) struct WireEsp32s3 {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 enum WireFirmware {
     Elf(WireBlob),
+    Flash(Vec<WireRegion>),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireRegion {
+    offset: u32,
+    #[serde(deserialize_with = "sha256")]
+    sha256: Sha256,
+    bytes: u64,
 }
 
 #[derive(Deserialize)]
@@ -46,10 +60,17 @@ fn sha256<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Sha256, D
 }
 
 impl WireEsp32s3 {
-    /// The SHA-256 its firmware names.
-    pub(super) fn firmware(&self) -> Sha256 {
-        let WireFirmware::Elf(elf) = &self.firmware;
-        elf.sha256
+    /// The SHA-256 of each blob it names: the ROM, then its firmware's.
+    pub(super) fn blob_names(&self) -> Vec<Sha256> {
+        let firmware = match &self.firmware {
+            WireFirmware::Elf(elf) => vec![elf.sha256],
+            WireFirmware::Flash(regions) => regions.iter().map(|region| region.sha256).collect(),
+        };
+        self.rom
+            .iter()
+            .map(|rom| rom.sha256)
+            .chain(firmware)
+            .collect()
     }
 }
 
@@ -65,18 +86,7 @@ pub(super) fn resolve_esp32s3(
         resolve_value(part_ref, field, "ohm", true, value, out)
     };
     let pins = resolve_pins(name, &wire.pins.0, nets, out);
-    let WireFirmware::Elf(elf) = wire.firmware;
-    let firmware = find(part_ref, Role::Elf, &elf, blobs, out).and_then(|blob| {
-        Elf::parse(blob, &Esp32s3::RAM)
-            .map_err(|rule| {
-                out.push(Diagnostic::NetlistFirmware {
-                    part: part_ref.clone(),
-                    line: None,
-                    rule,
-                })
-            })
-            .ok()
-    });
+    let firmware = resolve_firmware(part_ref, wire.rom, wire.firmware, blobs, out);
     let output = resolve_output_stage(part_ref, wire.output, out);
     let pull_up = ohm("pull_up_resistance", wire.pull_up_resistance, out);
     let leakage = ohm("leakage_resistance", wire.leakage_resistance, out);
@@ -96,6 +106,55 @@ pub(super) fn resolve_esp32s3(
         leakage_resistance: leakage?,
         input_threshold: input_threshold?,
     })
+}
+
+/// The firmware `wire` names, with `rom` beside a flash and absent beside an ELF.
+fn resolve_firmware(
+    part: &Ref,
+    rom: Option<WireBlob>,
+    wire: WireFirmware,
+    blobs: &Blobs,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Esp32s3Firmware> {
+    let fail = |rule, out: &mut Vec<Diagnostic>| {
+        out.push(Diagnostic::NetlistFirmware {
+            part: part.clone(),
+            line: None,
+            rule,
+        });
+        None
+    };
+    match (rom, wire) {
+        (None, WireFirmware::Elf(elf)) => {
+            let blob = find(part, Role::Elf, &elf, blobs, out)?;
+            match Elf::parse(blob, &Esp32s3::RAM) {
+                Ok(elf) => Some(Esp32s3Firmware::Elf(elf)),
+                Err(rule) => fail(rule, out),
+            }
+        }
+        (Some(rom), WireFirmware::Flash(wire_regions)) => {
+            let (sha256, bytes) = Esp32s3::ROM;
+            if rom.sha256.to_string() != sha256 || rom.bytes != bytes {
+                return fail(FirmwareRule::Rom, out);
+            }
+            let rom = find(part, Role::Rom, &rom, blobs, out);
+            let mut regions = Vec::new();
+            for region in wire_regions {
+                let wire = WireBlob {
+                    sha256: region.sha256,
+                    bytes: region.bytes,
+                };
+                regions.push(find(part, Role::Flash(region.offset), &wire, blobs, out));
+            }
+            let regions: Option<Vec<_>> = regions.into_iter().collect();
+            let (rom, regions) = (rom?, regions?);
+            match Flash::parse(regions) {
+                Ok(flash) => Some(Esp32s3Firmware::Flash { rom, flash }),
+                Err(rule) => fail(rule, out),
+            }
+        }
+        _ => fail(FirmwareRule::Rom, out),
+    }
 }
 
 /// `VCC` and `GND`, then each GPIO the part has a net on, in [`Esp32s3::PINS`] order.

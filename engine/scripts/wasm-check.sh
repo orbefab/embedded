@@ -2,8 +2,8 @@
 # Builds the wasm package with scripts/wasm.sh and runs crates/wasm/tests/worker.mjs, which drives
 # it in node worker threads and checks its folders and serial rows against native `sim run` on
 # every example, byte for byte. When node can load node:wasi, it also builds sim for
-# wasm32-wasip1, runs that sim on every example, and compares each folder with the native one
-# after masking created_at. When that run exits non-zero, the script prints the run's
+# wasm32-wasip1, runs that sim on every example with the blob cache preopened as /blobs and passed
+# as --blobs, and compares each folder with the native one after masking created_at. When that run exits non-zero, the script prints the run's
 # diagnostics. When node:wasi is missing, it prints a skip line and continues.
 # scripts/wasm-check.sh needs bash 4.2 or later, node 22.7 or later, and rustup. The WASI build
 # needs the wasm32-wasip1 target. The script installs it when rustup does not have it.
@@ -339,11 +339,14 @@ cargo build -p sim-cli --release --locked
 target=$(cargo metadata --format-version 1 --no-deps |
   sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
 sim=$target/release/sim
+# The blobs no example commits, which every side reads from the cache.
+SIM_BLOBS=$("$repo/scripts/blobs.sh")
+export SIM_BLOBS
 names=()
 for netlist in examples/*/netlist.json; do
   name=$(basename "$(dirname "$netlist")")
   names+=("$name")
-  "$sim" run "$netlist" --out "$scratch/native/$name" >/dev/null
+  "$sim" run "$netlist" --out "$scratch/native/$name" --blobs "$SIM_BLOBS" >/dev/null
 done
 if node --disable-warning=ExperimentalWarning --input-type=module -e 'import { WASI } from "node:wasi"' >/dev/null 2>&1; then
   if ! rustup target list --installed | grep -qx wasm32-wasip1; then
@@ -353,13 +356,13 @@ if node --disable-warning=ExperimentalWarning --input-type=module -e 'import { W
   wasm=$target/wasm32-wasip1/release/sim.wasm
   rm -rf "$scratch/wasi"
   mkdir -p "$scratch/wasi"
-  node --disable-warning=ExperimentalWarning --input-type=module - "$wasm" "$repo" "$scratch/native" "$scratch/wasi" "$scratch/wasi-report" "${names[@]}" <<'JS'
+  node --disable-warning=ExperimentalWarning --input-type=module - "$wasm" "$repo" "$scratch/native" "$scratch/wasi" "$scratch/wasi-report" "$SIM_BLOBS" "${names[@]}" <<'JS'
 import { WASI } from 'node:wasi';
 import { closeSync, openSync } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
-const [wasmPath, repo, nativeRoot, wasiRoot, reportPath, ...names] = process.argv.slice(2);
+const [wasmPath, repo, nativeRoot, wasiRoot, reportPath, blobs, ...names] = process.argv.slice(2);
 const mod = await WebAssembly.compile(await readFile(wasmPath));
 
 async function files(dir, prefix = '') {
@@ -385,8 +388,8 @@ for (const name of names) {
   const reportFd = openSync(reportPath, 'w');
   const wasi = new WASI({
     version: 'preview1',
-    args: ['sim', 'run', `/repo/examples/${name}/netlist.json`, '--out', `/out/${name}`],
-    preopens: { '/repo': repo, '/out': wasiRoot },
+    args: ['sim', 'run', `/repo/examples/${name}/netlist.json`, '--out', `/out/${name}`, '--blobs', '/blobs'],
+    preopens: { '/repo': repo, '/out': wasiRoot, '/blobs': blobs },
     stdout: reportFd,
     returnOnExit: true,
   });

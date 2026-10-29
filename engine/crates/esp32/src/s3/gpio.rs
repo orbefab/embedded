@@ -30,7 +30,7 @@ const OEN_INV_SEL: u32 = 1 << 11;
 const FUN_WPU: u32 = 1 << 8;
 const FUN_IE: u32 = 1 << 9;
 const MCU_SEL_SHIFT: u32 = 12;
-const MCU_SEL: u32 = 0x7 << MCU_SEL_SHIFT;
+pub(crate) const MCU_SEL: u32 = 0x7 << MCU_SEL_SHIFT;
 /// `FUN_DRV` 2, no pull, input off and function 0, as every pad reads at power-on here. The
 /// datasheet's power-on pulls and input enables are not modeled.
 const IO_MUX_RESET: u32 = 0x800;

@@ -1,6 +1,6 @@
 use sim_core::diagnostic::{
-    AnalysisRule, Diagnostic, Excursion, ProtocolRule, ScheduleRule, Severity, Solve, ValueRule,
-    WaveformRule,
+    AnalysisRule, ChipSetting, Diagnostic, Excursion, FlashRefusal, ProtocolRule, ResetReason,
+    ScheduleRule, Severity, Solve, ValueRule, WaveformRule,
 };
 use sim_core::name::{Name, NameError, Ref};
 use sim_core::time::Time;
@@ -441,4 +441,147 @@ fn a_value_message_uses_the_same_characters_as_data_value() {
         );
         assert!(!message.contains("000000"), "{rule:?} {message}");
     }
+}
+
+/// The message and `data` of an `esp32s3` refusal, as JSON.
+fn chip_json(diagnostic: Diagnostic) -> (String, serde_json::Value) {
+    let doc = serde_json::to_value(&diagnostic).unwrap();
+    assert_eq!(doc["severity"], serde_json::json!(diagnostic.severity()));
+    (
+        doc["message"].as_str().unwrap().to_string(),
+        doc["data"].clone(),
+    )
+}
+
+#[test]
+fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
+    let at = Time::from_ps(5);
+    let (message, data) = chip_json(Diagnostic::ChipFlashCommand {
+        part: part("u1"),
+        at,
+        command: Some(0x31),
+        reason: FlashRefusal::StatusWrite,
+        pc: 0x4200_0010,
+        symbol: None,
+    });
+    assert_eq!(
+        message,
+        "#u1 sent the flash the status write command 0x31 at 0x42000010, which could lock the flash, at 5 ps"
+    );
+    assert_eq!(
+        data,
+        serde_json::json!({ "command": 0x31, "pc": 0x4200_0010, "reason": "status_write", "symbol": null })
+    );
+    let (message, data) = chip_json(Diagnostic::ChipFlashCommand {
+        part: part("u1"),
+        at,
+        command: None,
+        reason: FlashRefusal::StartBits,
+        pc: 0x10,
+        symbol: Some("main".into()),
+    });
+    assert_eq!(
+        message,
+        "#u1 started more than one SPI1 command in one write at 0x00000010 in main, which the model does not run, at 5 ps"
+    );
+    assert_eq!(data["reason"], "start_bits");
+
+    let setting = |setting, peripheral| Diagnostic::ChipUnsupportedSetting {
+        part: part("u1"),
+        at,
+        peripheral,
+        setting,
+        pc: 0x10,
+        symbol: None,
+    };
+    let (message, data) = chip_json(setting(ChipSetting::Transfer("dma"), "SPI2"));
+    assert_eq!(
+        message,
+        "#u1 started a SPI2 transfer with setting dma at 0x00000010, which the model does not run, at 5 ps"
+    );
+    assert_eq!(data["setting"], "dma");
+    let (message, data) = chip_json(setting(ChipSetting::Interrupt, "GDMA"));
+    assert_eq!(
+        message,
+        "#u1 enabled a GDMA interrupt at 0x00000010, which the model never raises, at 5 ps"
+    );
+    assert_eq!(data["setting"], "interrupt");
+    let (message, data) = chip_json(setting(ChipSetting::Sleep, "RTC_CNTL"));
+    assert_eq!(
+        message,
+        "#u1 put the chip to sleep at 0x00000010, which the model does not run, at 5 ps"
+    );
+    assert_eq!(data["peripheral"], "RTC_CNTL");
+
+    let restart = |reason| Diagnostic::ChipFaultRestart {
+        part: part("u1"),
+        at,
+        reason,
+        pc: 0x10,
+        symbol: None,
+    };
+    let (message, data) = chip_json(restart(ResetReason::Panic));
+    assert_eq!(
+        message,
+        "#u1 reset itself at 0x00000010 after a panic, at 5 ps"
+    );
+    assert_eq!(
+        data,
+        serde_json::json!({ "pc": 0x10, "reason": "panic", "symbol": null })
+    );
+    let (message, data) = chip_json(restart(ResetReason::Unreadable));
+    assert_eq!(
+        message,
+        "#u1 reset itself at 0x00000010 with no reset reason the model can read, at 5 ps"
+    );
+    assert_eq!(data["reason"], "unreadable");
+
+    let (message, data) = chip_json(Diagnostic::ChipUnmappedLoad {
+        part: part("u1"),
+        at,
+        address: 0x3c01_0000,
+        pc: 0x10,
+        symbol: None,
+    });
+    assert_eq!(
+        message,
+        "#u1 loaded from 0x3c010000 at 0x00000010, where the MMU maps no flash, at 5 ps"
+    );
+    assert_eq!(
+        data,
+        serde_json::json!({ "address": 0x3c01_0000, "pc": 0x10, "symbol": null })
+    );
+
+    let register = |kept| Diagnostic::ChipUnmodeledRegister {
+        part: part("u1"),
+        at,
+        address: 0x600c_0020,
+        register: "SYSTEM+0x20".into(),
+        pc: 0x10,
+        symbol: None,
+        write: true,
+        kept,
+    };
+    let (message, kept) = chip_json(register(true));
+    let (dropped, data) = chip_json(register(false));
+    assert_eq!(
+        message,
+        "#u1 wrote SYSTEM+0x20 at 0x600c0020, whose effect the model does not run, first at 5 ps from 0x00000010"
+    );
+    assert_eq!(
+        dropped,
+        "#u1 wrote SYSTEM+0x20 at 0x600c0020, which the model does not keep, first at 5 ps from 0x00000010"
+    );
+    assert_eq!(
+        data,
+        serde_json::json!({
+            "address": 0x600c_0020u32,
+            "kept": false,
+            "pc": 0x10,
+            "register": "SYSTEM+0x20",
+            "symbol": null,
+            "write": true,
+        })
+    );
+    assert_eq!(kept["kept"], true);
 }
