@@ -19,11 +19,13 @@ Each example has `viewer.json` beside `netlist.json`. The file names the 3D mode
 | `inductor-radial` | A radial leaded inductor. |
 | `led-5mm-red` | A 5 mm red LED, the Kingbright WP7113ID the LED examples cite. |
 | `on-board` | A part of the development board model. The board model draws it, so the example does not name a package. |
+| `on-encoder` | The second contact of the example's `rotary-encoder`. That model draws it, so the example does not name a package. An example with this id has exactly one `rotary-encoder`, so the pair is never in doubt. |
 | `potentiometer-rotary` | A rotary potentiometer. |
 | `qfn-56` | An ESP32-S3 in its 56-pin QFN. |
 | `pulses-replay` | A recorded pin, which `examples/ws2812-replay` replays as timed levels. It has no package of its own. |
 | `relay-pcb-5pin` | A 5-pin PCB relay with one changeover contact. |
 | `resistor-axial` | An axial resistor. |
+| `rotary-encoder` | A detent rotary encoder with two contacts. On the knob `examples/atmega-board-knob` models, each detent pulls one of its two lines low, and the two lines are never low together. The `switch` part of its first contact names this id, and the model draws both contacts. |
 | `round-tft-360` | A round 360 by 360 TFT module on a QSPI bus, the `st77916` panel `examples/st77916-replay` draws on. |
 | `sot-223` | A SOT-223 package, the LM1117 class the regulator examples cite. |
 | `spi-replay` | A recorded SPI host, which `examples/spi-replay` and `examples/st77916-replay` replay. It has no package of its own. |

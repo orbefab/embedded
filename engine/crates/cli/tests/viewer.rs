@@ -71,6 +71,20 @@ fn every_example_names_a_placeholder_model_for_each_part() {
             );
             used.insert(id.to_string());
         }
+        let count = |id: &str| {
+            parts
+                .values()
+                .filter(|value| value["model"] == format!("placeholder:{id}"))
+                .count()
+        };
+        if count("on-encoder") + count("rotary-encoder") > 0 {
+            assert_eq!(count("on-encoder"), 1, "{name} has one second contact");
+            assert_eq!(
+                count("rotary-encoder"),
+                1,
+                "{name} pairs it with one encoder"
+            );
+        }
     }
     let missing: Vec<_> = documented.difference(&used).collect();
     assert!(
