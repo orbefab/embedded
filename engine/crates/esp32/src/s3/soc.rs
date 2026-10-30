@@ -148,7 +148,8 @@ pub(crate) struct Step {
     /// Whether the APP CPU has started. A clock switch then lands at `start`, or at the cycle
     /// the latest tick lies on when that is later.
     pub(crate) paired: bool,
-    /// Whether the other core is halted, so a store outside SRAM and RTC memory wakes it.
+    /// Whether the other core is halted or parked, so a store outside SRAM and RTC memory wakes
+    /// it.
     pub(crate) other_sleeps: bool,
 }
 

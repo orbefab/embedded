@@ -140,6 +140,17 @@ impl Trap {
     }
 }
 
+/// Where a core stands in `WAITI`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Wait {
+    No,
+    /// It has not idled since `WAITI`, so it has not polled at its cycle.
+    Entered,
+    /// Its last idle found nothing to latch before this cycle, though the run's limit may have
+    /// stopped it sooner.
+    Idled(Cycle),
+}
+
 /// One Xtensa core of chip `C`.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Core<C: Config> {
@@ -154,8 +165,7 @@ pub struct Core<C: Config> {
     /// The last instruction moved the fetch to a new address, so the next fetch costs a cycle
     /// more when its instruction runs into the next word.
     refetch: bool,
-    /// `WAITI` suspended the core until it takes an interrupt.
-    waiting: bool,
+    wait: Wait,
     /// Loop-back arm, and whether the previous completed op was a store or a divide.
     pace: u8,
     /// The external interrupt lines as the last poll read them.
@@ -205,7 +215,7 @@ impl<C: Config> Core<C> {
             pc: RESET_VECTOR,
             cycle: Cycle(0),
             refetch: false,
-            waiting: false,
+            wait: Wait::No,
             pace: 0,
             lines: 0,
             timer_due: [Cycle(0); 3],
@@ -240,7 +250,17 @@ impl<C: Config> Core<C> {
 
     /// `WAITI` suspended it until it takes an interrupt.
     pub fn waiting(&self) -> bool {
-        self.waiting
+        self.wait != Wait::No
+    }
+
+    /// For a core that waits and has idled, the first cycle at which a poll can latch what no
+    /// access changed: the bus's next event or a timer match. After a run stops at its limit it
+    /// is at or after the core's cycle, since an idle that ends before the limit polls again.
+    pub fn wake(&self) -> Option<Cycle> {
+        match self.wait {
+            Wait::Idled(wake) => Some(wake),
+            Wait::No | Wait::Entered => None,
+        }
     }
 
     /// Moves the cycle on to `at` with no poll between, never back. `CCOUNT` counts the gap.
@@ -363,7 +383,7 @@ impl<C: Config> Core<C> {
             self.interrupt_level()
         };
         if let Some(level) = level {
-            self.waiting = false;
+            self.wait = Wait::No;
             if level == 1 {
                 self.exception(Cause::Level1Interrupt, None);
             } else {
@@ -371,7 +391,7 @@ impl<C: Config> Core<C> {
             }
             return Ok(());
         }
-        if self.waiting {
+        if self.wait != Wait::No {
             self.idle(bus, limit);
             return Ok(());
         }
@@ -476,14 +496,23 @@ impl<C: Config> Core<C> {
     }
 
     /// `WAITI` with no interrupt to take moves the cycle to the bus's next event, a timer match
-    /// or `limit`, whichever comes first, and at least one cycle on.
+    /// or `limit`, whichever comes first, and at least one cycle on. Each of those lies after the
+    /// cycle. The recorded wake is what `wake` returns, the first cycle at which a poll can latch
+    /// something, so a release build records a wake at or before the cycle as the cycle the core
+    /// moves to, and `wake` never lies behind the core.
     fn idle<B: Bus>(&mut self, bus: &mut B, limit: Cycle) {
         let wake = bus
             .next_event(self.cycle)
             .into_iter()
             .chain(self.timer_due)
-            .fold(limit, Cycle::min);
-        self.cycle = wake.max(Cycle(self.cycle.0 + 1));
+            .fold(Cycle(u64::MAX), Cycle::min);
+        debug_assert!(
+            wake > self.cycle,
+            "a wake at {wake:?}, not after {:?}",
+            self.cycle
+        );
+        self.cycle = wake.min(limit).max(Cycle(self.cycle.0 + 1));
+        self.wait = Wait::Idled(wake.max(self.cycle));
     }
 
     /// The ISA's `WindowCheck` for an op whose address registers reach quarter `reach`: how many
@@ -1105,7 +1134,7 @@ impl<C: Config> Core<C> {
             }
             Op::WAITI => {
                 self.sr[Sr::Ps as usize] = (self.ps() & !PS_INTLEVEL) | f[0];
-                self.waiting = true;
+                self.wait = Wait::Entered;
             }
             Op::WSR_INTSET => {
                 self.sr[Sr::Interrupt as usize] |= self.a(f[0]) & C::INTERRUPTS.software;

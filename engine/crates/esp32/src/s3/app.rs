@@ -84,7 +84,7 @@ pub(crate) enum Steer {
     /// Whether the APP CPU runs or its clock runs changed. `clocked` is whether its clock ran
     /// up to `at`.
     Run { at: Cycle, clocked: bool },
-    /// A store outside SRAM and RTC memory while the other core is halted.
+    /// A store outside SRAM and RTC memory while the other core is halted or parked.
     Wake(Cycle),
 }
 

@@ -997,3 +997,5 @@ fn a_watchdog_stage_due_on_a_stopped_stores_charged_cycle_runs_out_before_its_re
     assert_eq!(epc1, store);
     assert_eq!(listed, [(GPIO + 0x74, pro(store))]);
 }
+
+mod waiting;

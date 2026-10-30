@@ -1,7 +1,7 @@
 //! Interrupts, the timers and `WAITI` on the flat test bus, with the interrupt table both chips'
 //! `core-isa.h` give.
 
-use sim_xtensa::{Cause, Core, Cycle, Esp32, Esp32s3, Sr, Stop};
+use sim_xtensa::{Bus, Cause, Core, Cycle, Esp32, Esp32s3, Exit, Sr, Stop, Width};
 
 use crate::common::{Pieces, run_in_pieces};
 use crate::core::{CODE, Flat, core_at};
@@ -209,6 +209,67 @@ fn a_limit_inside_waiti_splits_the_wait() {
     assert_eq!(split.run_until(&mut bus, Cycle(6000)), Stop::Bus);
     assert_eq!(split, whole);
     assert_eq!(split.special(Sr::Epc2), CODE + 3);
+}
+
+/// A core in `WAITI` has no wake until it has idled, so a run whose limit falls on the end of
+/// the `WAITI` itself leaves it to poll there. Each idle then gives the earlier of the bus's
+/// next event and a timer match, whether or not the match is enabled. An interrupt taken ends
+/// the wait and the wake.
+#[test]
+fn a_waiting_core_has_a_wake_once_it_has_idled() {
+    let mut bus = Flat::new(WAITI);
+    bus.rise = Some((Cycle(5000), LINE2));
+    let mut core = setup(WOE, LINE2);
+    core.set_special(Sr::Ccompare0, 4000);
+    assert_eq!(core.run_until(&mut bus, Cycle(1)), Stop::Limit);
+    assert_eq!((core.waiting(), core.wake()), (true, None));
+    assert_eq!(core.run_until(&mut bus, Cycle(3000)), Stop::Limit);
+    assert_eq!(core.wake(), Some(Cycle(4000)));
+    assert_eq!(core.run_until(&mut bus, Cycle(4500)), Stop::Limit);
+    assert_eq!(core.wake(), Some(Cycle(5000)));
+    assert_eq!(core.run_until(&mut bus, Cycle(6000)), Stop::Bus);
+    assert_eq!((core.waiting(), core.wake()), (false, None));
+}
+
+/// The flat bus with an event due on every cycle it is asked about, which [`Bus::next_event`]
+/// rules out.
+struct EventNow(Flat);
+
+impl Bus for EventNow {
+    fn fetch(&mut self, now: Cycle, addr: u32) -> Result<u32, Exit> {
+        self.0.fetch(now, addr)
+    }
+
+    fn load(&mut self, now: Cycle, addr: u32, width: Width) -> Result<u32, Exit> {
+        self.0.load(now, addr, width)
+    }
+
+    fn store(&mut self, now: Cycle, addr: u32, width: Width, value: u32) -> Result<(), Exit> {
+        self.0.store(now, addr, width, value)
+    }
+
+    fn interrupts(&mut self, now: Cycle) -> u32 {
+        self.0.interrupts(now)
+    }
+
+    fn next_event(&mut self, now: Cycle) -> Option<Cycle> {
+        Some(now)
+    }
+}
+
+/// An idle whose bus gives an event at the idle's own cycle fails a debug build. A release build
+/// records the wake as the cycle the core moved to, so a core that stops at its limit has its
+/// wake there.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    should_panic(expected = "a wake at Cycle(1), not after Cycle(1)")
+)]
+fn a_wake_not_after_the_idles_cycle_is_the_cycle_it_moved_to() {
+    let mut core = setup(WOE, LINE2);
+    let mut bus = EventNow(Flat::new(WAITI));
+    assert_eq!(core.run_until(&mut bus, Cycle(3000)), Stop::Limit);
+    assert_eq!(core.wake(), Some(Cycle(3000)));
 }
 
 #[test]

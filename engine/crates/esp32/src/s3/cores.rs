@@ -1,10 +1,10 @@
 //! The two cores and the order they run in.
 //!
 //! The next step to run is the one with the lowest start cycle, and the PRO CPU's at a tie. A
-//! core's key is its cycle while it may run. A core that may not run has no key: an APP CPU
-//! never reset, one that `SYSTEM_CORE_1_CONTROL_0_REG` or the RTC stall holds, and a halted
-//! core. Each slice runs one core up to the other's key, so a run to any limit runs a prefix of
-//! that one order, and a run split at any cycles runs the same steps.
+//! core's key is its cycle while it may run, or its wake while it is parked. A core that may not
+//! run has no key: an APP CPU never reset, one that `SYSTEM_CORE_1_CONTROL_0_REG` or the RTC
+//! stall holds, and a halted core. Each slice runs one core up to the other's key, so a run to
+//! any limit runs a prefix of that one order, and a run split at any cycles runs the same steps.
 //!
 //! A store that changes what a core may do sets a [`Steer`]. The storing core returns before
 //! its next step, and the steer moves the other core before either runs on.
@@ -18,6 +18,13 @@
 //! a watchdog stage that falls due first runs out first. A stopped step charged onto the run's
 //! limit keeps its turn into the next run, so a watchdog stage due on that cycle runs out
 //! before it, as on one core.
+//!
+//! A core in `WAITI` parks until its wake, the first cycle at which a poll can latch what no
+//! access changed. Each slice of the other core then runs up to that wake, not one step. A store
+//! to a peripheral register, a steer of the APP CPU, and each return from a run put a parked
+//! core where it would stand had it polled after each step of the other, so it runs every poll
+//! that can see a change at the cycle it would have run it. Nothing between runs meets a parked
+//! core.
 //!
 //! `CCOUNT` counts through a hold while the APP CPU's clock runs, and not while
 //! `CLKGATE_EN` gates it. A reset sets it to 0.
@@ -40,8 +47,21 @@ struct Lane {
 enum Run {
     /// Runs from its cycle.
     Ready,
+    /// In `WAITI`, with no poll before `wake` that can latch what no access changed.
+    Parked { wake: Cycle },
     /// At a jump to itself that only an NMI leaves, with no source routed to its NMI line.
     Halted,
+}
+
+impl Lane {
+    /// Unparks a parked core at `at`.
+    fn rouse(&mut self, at: Cycle) {
+        if let Run::Parked { wake } = self.run {
+            debug_assert!(at <= wake, "roused at {at:?} past its wake {wake:?}");
+            self.core.skip_to(at);
+            self.run = Run::Ready;
+        }
+    }
 }
 
 /// The APP CPU. The model knows no state of it before its first reset.
@@ -61,6 +81,10 @@ pub(crate) struct Cores {
     /// The core the bus stopped to list an access, which runs its next step before the other
     /// core runs, while it may run.
     rerun: Option<CoreId>,
+    /// How many more slices a test lets the cores run before it fails, so that a test whose run
+    /// stops moving fails rather than hangs.
+    #[cfg(test)]
+    pub(crate) slices_left: u64,
 }
 
 impl Cores {
@@ -74,6 +98,8 @@ impl Cores {
             },
             app: App::Unstarted,
             rerun: None,
+            #[cfg(test)]
+            slices_left: 1_000_000,
         }
     }
 
@@ -102,11 +128,31 @@ impl Cores {
         }
     }
 
-    /// The start of `id`'s next step, while it may run.
+    /// The start of `id`'s next step, or its wake while parked, while it may run.
     fn key(&self, id: CoreId, soc: &Soc) -> Option<Cycle> {
         let lane = self.lane(id)?;
-        let held = id == CoreId::App && !soc.app_runs();
-        (lane.run == Run::Ready && !held).then(|| lane.core.cycle())
+        if id == CoreId::App && !soc.app_runs() {
+            return None;
+        }
+        match lane.run {
+            Run::Ready => Some(lane.core.cycle()),
+            Run::Parked { wake } => Some(wake),
+            Run::Halted => None,
+        }
+    }
+
+    fn rouse(&mut self, at: Cycle) {
+        for id in [CoreId::Pro, CoreId::App] {
+            if let Some(lane) = self.lane_mut(id) {
+                lane.rouse(at);
+            }
+        }
+    }
+
+    /// Sets `reached` to the lowest key, or to `until` when no core may run.
+    fn reach(&mut self, soc: &Soc, until: Cycle) {
+        let keys = [self.key(CoreId::Pro, soc), self.key(CoreId::App, soc)];
+        self.reached = keys.into_iter().flatten().min().unwrap_or(until);
     }
 
     /// Runs the cores in order until every key reaches `until`, or a core stops for another
@@ -143,7 +189,8 @@ impl Cores {
             } else {
                 let reached = keys.into_iter().flatten().min().expect("a key");
                 if reached >= until {
-                    self.reached = reached;
+                    self.rouse(until);
+                    self.reach(soc, until);
                     return (pick, Stop::Limit);
                 }
                 other.map_or(until, |key| {
@@ -156,15 +203,29 @@ impl Cores {
                 paired: matches!(self.app, App::Started(_)),
                 other_sleeps: self
                     .lane(other_core(pick))
-                    .is_some_and(|lane| lane.run == Run::Halted),
+                    .is_some_and(|lane| lane.run != Run::Ready),
             };
+            #[cfg(test)]
+            {
+                self.slices_left = self.slices_left.checked_sub(1).expect("a slice left");
+            }
+            let key = keys[pick as usize].expect("a key");
             let lane = self.lane_mut(pick).expect("a key");
-            let stop = lane.core.run_until(&mut CoreBus { soc, step }, limit);
+            lane.rouse(key);
+            let mut bus = CoreBus { soc, step };
+            let stop = lane.core.run_until(&mut bus, limit);
+            let start = bus.step.start;
             if let Some(steer) = soc.steer.take() {
                 self.apply(pick, steer, soc);
             }
             match stop {
-                Stop::Limit | Stop::Yield => {}
+                Stop::Limit => {
+                    let lane = self.lane_mut(pick).expect("a key");
+                    if let Some(wake) = lane.core.wake() {
+                        lane.run = Run::Parked { wake };
+                    }
+                }
+                Stop::Yield => {}
                 Stop::Spin if self.key(other_core(pick), soc).is_some() => {
                     if !soc.routes_to_nmi(pick) {
                         self.lane_mut(pick).expect("a key").run = Run::Halted;
@@ -174,8 +235,11 @@ impl Cores {
                     if stop == Stop::Bus && (soc.first_touch.is_some() || soc.change_stop) {
                         self.rerun = Some(pick);
                     }
-                    let keys = [self.key(CoreId::Pro, soc), self.key(CoreId::App, soc)];
-                    self.reached = keys.into_iter().flatten().min().unwrap_or(until);
+                    let other = other_core(pick);
+                    if let Some(lane) = self.lane_mut(other) {
+                        lane.rouse(Cycle(start.0 + bias(other)));
+                    }
+                    self.reach(soc, until);
                     return (pick, stop);
                 }
             }
@@ -193,6 +257,7 @@ impl Cores {
             }
             Steer::Run { at, clocked } => {
                 if let App::Started(lane) = &mut self.app {
+                    lane.rouse(at);
                     let ccount = lane.core.special(Sr::Ccount);
                     lane.core.skip_to(at);
                     if !clocked {
@@ -202,16 +267,27 @@ impl Cores {
             }
             Steer::Wake(at) => {
                 let other = other_core(storer);
-                if soc.routes_to_nmi(other)
-                    && let Some(lane) = self.lane_mut(other)
-                    && lane.run == Run::Halted
-                {
-                    lane.core.skip_to(at);
-                    lane.run = Run::Ready;
+                let nmi = soc.routes_to_nmi(other);
+                let Some(lane) = self.lane_mut(other) else {
+                    return;
+                };
+                match lane.run {
+                    Run::Parked { .. } => lane.rouse(Cycle(at.0 + bias(other))),
+                    Run::Halted if nmi => {
+                        lane.core.skip_to(at);
+                        lane.run = Run::Ready;
+                    }
+                    Run::Ready | Run::Halted => {}
                 }
             }
         }
     }
+}
+
+/// How far past the start of the other core's step `id` would stand had it polled after that
+/// step. The PRO CPU runs first on a tie, so it stands a cycle on.
+fn bias(id: CoreId) -> u64 {
+    u64::from(id == CoreId::Pro)
 }
 
 fn other_core(id: CoreId) -> CoreId {

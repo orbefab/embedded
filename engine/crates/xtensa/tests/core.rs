@@ -216,8 +216,8 @@ fn a_yielding_bus_stops_the_core_before_its_next_step() {
 /// `Core` is copied at every landing, so its size is pinned.
 #[test]
 fn core_size_is_pinned() {
-    assert_eq!(size_of::<Core<Esp32>>(), 856);
-    assert_eq!(size_of::<Core<Esp32s3>>(), 856);
+    assert_eq!(size_of::<Core<Esp32>>(), 864);
+    assert_eq!(size_of::<Core<Esp32s3>>(), 864);
 }
 
 /// A `j` to itself while every interrupt is masked stops the core before it once, and the core
