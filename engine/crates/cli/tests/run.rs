@@ -418,6 +418,24 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
                 "{name}: {}",
                 doc["diagnostics"]
             );
+        } else if name == "esp32s3-encoder" {
+            // The 10 registers the app touches that the model does not keep, among them the two
+            // RTC IO pad words `gpio_config` reads, the write that sets the reset of SYSTEM_WDG
+            // at start-up, and the 6 writes that pulse the resets of SYSTIMER, TIMG0 and TIMG1
+            // at start-up.
+            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 17];
+            assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
+            assert_kept_resets(&name, &doc, 7);
+            // The ISR prints one `edge` line for each of the 7 closings, so it fails when the
+            // seam hands the chip no pad.
+            let serial = fs::read_to_string(out.join("traces/serial.csv")).unwrap();
+            let console: String = serial
+                .lines()
+                .skip(1)
+                .map(|row| char::from(row.rsplit(',').next().unwrap().parse::<u8>().unwrap()))
+                .collect();
+            let edges = console.lines().filter(|line| line.starts_with("edge "));
+            assert_eq!(edges.count(), 7, "{name}: {console}");
         } else if name == "esp32s3-hello" {
             // The 8 registers the app touches that the model does not keep, the 9 writes whose
             // effect it does not run: the one that sets the reset of SYSTEM_WDG at start-up, the
@@ -428,10 +446,10 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
             assert_kept_resets(&name, &doc, 9);
         } else if name == "esp32s3-screen" {
-            // The 19 registers the app touches that the model does not keep, the write that sets
+            // The 11 registers the app touches that the model does not keep, the write that sets
             // the reset of SYSTEM_WDG at start-up, and the 6 writes that pulse the resets of
             // SYSTIMER, TIMG0 and TIMG1 at start-up.
-            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 26];
+            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 18];
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
             assert_kept_resets(&name, &doc, 7);
         } else {

@@ -419,6 +419,7 @@ The message is `{part} started a {peripheral} transfer with setting {setting} at
 - `reset_while_running`, with `peripheral` `LEDC`: the store set LEDC's reset bit while a pin with a net carried a channel through the matrix, or while an update had yet to take effect or to drive its signal.
 - `watchdog_cpu_reset`, `watchdog_interrupt` and `watchdog_stage`, with `peripheral` `TIMG0`, `TIMG1` or `RTC_CNTL`: the store left a running watchdog, at or before its first stage that resets, a CPU reset while its `PROCPU_RESET_EN` is clear, an interrupt of the RTC watchdog, or a stage field that names no action.
 - `super_watchdog`, with `peripheral` `RTC_CNTL`: the store left both `SWD_AUTO_FEED_EN` and `SWD_DISABLE` clear in `RTC_CNTL_SWD_CONF_REG`.
+- `pin_int_ena`, `pin_int_type` and `pin_wakeup`, with `peripheral` `GPIO`: the store set a `GPIO_PINn` word whose `INT_ENA` enables the NMI or an SDIO interrupt, whose `INT_TYPE` is the reserved 6 or 7, or whose `WAKEUP_ENABLE` is set.
 
 The access writes nothing, apart from an `app_cpu_without_reset` or `pro_cpu_stall` store, whose word keeps the value it stored. The run keeps every row before it, as [esp32s3.md](esp32s3.md#what-it-models) says.
 

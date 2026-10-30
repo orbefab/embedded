@@ -433,11 +433,10 @@ impl Esp32s3 {
             }
             let signal = ledc::SIGNAL + u16::from(effect.channel);
             let level = effect.duty > 0;
-            let before = self.soc.image();
-            self.soc.gpio.set_signal(signal, level);
-            if self.soc.image() != before {
-                self.soc.gpio.set_signal(signal, !level);
+            if self.soc.gpio.moves(signal, level) {
                 self.moves.push((effect.at, signal, level));
+            } else {
+                self.soc.gpio.set_signal(signal, level);
             }
         }
     }
@@ -543,9 +542,16 @@ impl Esp32s3 {
         self.shown[usize::from(gpio)]
     }
 
-    /// The level the pad of `gpio`, a netted one, reads from now on.
-    pub fn set_pad(&mut self, gpio: u8, level: bool) {
-        self.soc.gpio.set_pad(gpio, level);
+    /// The levels of netted pads from tick `at` on, each a GPIO and its level. The chip has run
+    /// through `at`. A core in `WAITI` polls on the first cycle after `at`, so a pad edge reaches
+    /// it at the same cycle however the run splits.
+    pub fn input(&mut self, at: Tick, pads: impl IntoIterator<Item = (u8, bool)>) {
+        // Each return from a run unparks both cores. A change that keeps one parked must rouse
+        // it here.
+        debug_assert!(!self.cores.parked(), "an input at {at:?} met a parked core");
+        for (gpio, level) in pads {
+            self.soc.gpio.set_pad(gpio, level);
+        }
     }
 
     /// The next console byte whose packet went at or before `through`, with that tick.
@@ -707,7 +713,7 @@ mod tests {
         reset: Reset::System,
     };
 
-    /// Enables GPIO21, raises it, reads `GPIO_PIN0`, sends `hi` and spins.
+    /// Enables GPIO21, raises it, reads `GPIO_PCPU_NMI_INT`, sends `hi` and spins.
     fn blink() -> Program {
         let mut program = Program::new(&[GPIO, GPIO21, USB_SERIAL_JTAG]);
         program
@@ -716,7 +722,7 @@ mod tests {
             .l32r(5, 2)
             .rri8(6, 3, 2, 0x24)
             .rri8(6, 3, 2, 0x08)
-            .rri8(2, 4, 2, 0x74)
+            .rri8(2, 4, 2, 0x60)
             .movi(6, b'h')
             .rri8(6, 6, 5, 0x00)
             .movi(6, b'i')
@@ -743,6 +749,7 @@ mod tests {
     }
 
     mod dual;
+    mod pads;
 
     #[test]
     fn a_drive_change_halts_at_its_store_however_the_run_splits() {
@@ -971,7 +978,7 @@ mod tests {
     /// Each write that changes a register the model keeps without running its effect is
     /// listed, with the PC of its own store, and the word keeps it. A write that leaves the word
     /// as it was is not listed. On SYSTEM's gates only a change of a bit the model keeps without
-    /// running counts.
+    /// running counts, and on `GPIO_PINn` only a change of a synchronizer or `CONFIG` bit.
     #[test]
     fn each_change_to_a_register_whose_effect_does_not_run_is_listed_and_kept() {
         let system = [
@@ -987,7 +994,7 @@ mod tests {
         for (address, value) in system
             .into_iter()
             .chain(spi0)
-            .chain([(RTC_CNTL + 0x74, 0x40)])
+            .chain([(RTC_CNTL + 0x74, 0x40), (GPIO + 0x74 + 4 * 21, 1 << 3)])
         {
             let mut program = Program::new(&[address, value, 0]);
             program.l32r(2, 0).l32r(3, 1).l32r(4, 2);
@@ -1014,6 +1021,9 @@ mod tests {
         chip.soc.restore(SYSTEM + 0x18, 0);
         assert_eq!(chip.run_until(c(1000)), None);
         assert_eq!(chip.unmodeled().count(), 0, "SPI2 runs its clock bit");
+        let mut chip = store_after_two_loads(GPIO + 0x74, 1 << 2 | 2 << 7 | 1 << 13, 0).chip();
+        assert_eq!(chip.run_until(c(1000)), None);
+        assert_eq!(chip.unmodeled().count(), 0, "GPIO_PIN0 runs the rest");
     }
 
     /// A jump to itself with every interrupt masked ends the run as halted once no watchdog
@@ -1199,7 +1209,7 @@ mod tests {
         let touched: Vec<(u32, Touch)> = chip.unmodeled().collect();
         assert_eq!(touched.len(), 1);
         let (address, touch) = touched[0];
-        assert_eq!(Touch::register(address), "GPIO+0x74");
+        assert_eq!(Touch::register(address), "GPIO+0x60");
         assert!(!touch.write);
         assert_eq!(touch.pc, pro(program.entry() + 5 * 3));
         assert!(touch.at < first);

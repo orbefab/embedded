@@ -338,12 +338,13 @@ impl Core {
     }
 
     /// Its GPIOs' levels, in watch order.
-    pub(crate) fn input(&mut self, _at: Time, levels: &[bool]) {
-        for (k, &level) in levels.iter().enumerate() {
-            if self.levels.get(k) != Some(&level) {
-                self.chip.set_pad(self.gpios[k], level);
-            }
-        }
+    pub(crate) fn input(&mut self, at: Time, levels: &[bool]) {
+        let changed = levels
+            .iter()
+            .enumerate()
+            .filter(|&(k, level)| self.levels.get(k) != Some(level))
+            .map(|(k, &level)| (self.gpios[k], level));
+        self.chip.input(tick(at), changed);
         self.levels = levels.to_vec();
     }
 

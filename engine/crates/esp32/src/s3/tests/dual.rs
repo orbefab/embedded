@@ -861,14 +861,14 @@ fn an_unmodeled_register_the_app_cpu_reads_is_listed_against_it() {
     let mut app_code = Program::at(APP, &[GPIO]);
     app_code.l32r(2, 0);
     let load = app_code.pc();
-    app_code.l32i(3, 2, 0x74).raw(&LOOP);
+    app_code.l32i(3, 2, 0x60).raw(&LOOP);
     let mut chip = chip(&pro, &boot_rom(), &[&app_code]);
     while chip.run_until(c(200)).is_some() {}
     let touched: Vec<(u32, Pc, bool)> = chip
         .unmodeled()
         .map(|(address, touch)| (address, touch.pc, touch.write))
         .collect();
-    assert_eq!(touched, [(GPIO + 0x74, app(load), false)]);
+    assert_eq!(touched, [(GPIO + 0x60, app(load), false)]);
 }
 
 /// From `at`, enables GPIO21, holds timer group 0's stage 0 to 0, starts the watchdog with that
@@ -957,7 +957,7 @@ fn armed_then_listed(hold: u8, both: bool) -> (Esp32s3, u32) {
         .l32r(9, 3)
         .s32i(9, 8, 0x48)
         .l32r(10, 5)
-        .straddling_s32i(9, 10, 0x74)
+        .straddling_s32i(9, 10, 0x60)
         .raw(&LOOP);
     let store = pro.pc() - 6;
     let mut app_code = Program::at(APP, &[]);
@@ -995,7 +995,7 @@ fn a_watchdog_stage_due_on_a_stopped_stores_charged_cycle_runs_out_before_its_re
     }
     let (_, epc1, listed, store) = run(6, true);
     assert_eq!(epc1, store);
-    assert_eq!(listed, [(GPIO + 0x74, pro(store))]);
+    assert_eq!(listed, [(GPIO + 0x60, pro(store))]);
 }
 
 mod waiting;

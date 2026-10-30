@@ -23,8 +23,10 @@
 //! access changed. Each slice of the other core then runs up to that wake, not one step. A store
 //! to a peripheral register, a steer of the APP CPU, and each return from a run put a parked
 //! core where it would stand had it polled after each step of the other, so it runs every poll
-//! that can see a change at the cycle it would have run it. Nothing between runs meets a parked
-//! core.
+//! that can see a change at the cycle it would have run it. So no core is parked between runs,
+//! and an input from the seam never meets one. A core in `WAITI` polls on the first cycle after
+//! the input's tick, where a core that polled at each run's limit would read it. A change that
+//! keeps a core parked across runs must rouse it at an input, with a test that pins its cycle.
 //!
 //! `CCOUNT` counts through a hold while the APP CPU's clock runs, and not while
 //! `CLKGATE_EN` gates it. A reset sets it to 0.
@@ -147,6 +149,14 @@ impl Cores {
                 lane.rouse(at);
             }
         }
+    }
+
+    /// Whether a core is parked.
+    pub(crate) fn parked(&self) -> bool {
+        [CoreId::Pro, CoreId::App]
+            .into_iter()
+            .filter_map(|id| self.lane(id))
+            .any(|lane| matches!(lane.run, Run::Parked { .. }))
     }
 
     /// Sets `reached` to the lowest key, or to `until` when no core may run.

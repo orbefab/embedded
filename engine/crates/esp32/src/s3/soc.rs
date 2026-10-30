@@ -216,8 +216,8 @@ enum Effect {
     Refuse(u32, Ending),
     /// The write ends the run unless it leaves these bits at this value.
     Pin(u32, u32, Ending),
-    /// Each write that changes the word is listed as an unmodeled register, and then kept.
-    Report,
+    /// Each write that changes these bits is listed as an unmodeled register, and then kept.
+    Report(u32),
     /// A write to SYSTEM's gates is listed when it changes a bit the model keeps without
     /// running, and then kept.
     Gates,
@@ -231,7 +231,7 @@ fn effect(addr: u32) -> Option<Effect> {
     let pads = Ending::FlashCommand(FlashRefusal::Pads);
     Some(match (base, offset) {
         (RTC_CNTL, 0x18) => Effect::Refuse(1 << 31, Ending::Refused(Refused::Sleep)),
-        (RTC_CNTL, 0x74) => Effect::Report,
+        (RTC_CNTL, 0x74) => Effect::Report(u32::MAX),
         (SPI2, 0x34) => Effect::Refuse(!spi2::TRANS_DONE, interrupt("SPI2")),
         (TIMG0, 0x70) => Effect::Refuse(0b11, interrupt("TIMG0")),
         (TIMG1, 0x70) => Effect::Refuse(0b11, interrupt("TIMG1")),
@@ -247,7 +247,7 @@ fn effect(addr: u32) -> Option<Effect> {
             _ => return None,
         },
         (SPI0, 0x0) => Effect::Refuse(spi1::STARTS, Ending::FlashCommand(FlashRefusal::Spi0)),
-        (SPI0, 0x18..=0x20) => Effect::Report,
+        (SPI0, 0x18..=0x20) => Effect::Report(u32::MAX),
         (SYSTEM, _) if gates::OFFSETS.contains(&offset) => Effect::Gates,
         // The flash's pads, GPIO26 to GPIO32, keep IO_MUX function 0, SPI0's and SPI1's, their
         // GPIO output enables clear, and their matrix outputs at the reset value.
@@ -255,6 +255,7 @@ fn effect(addr: u32) -> Option<Effect> {
         (GPIO, 0x20 | 0x24) => Effect::Refuse(0xfc00_0000, pads),
         (GPIO, 0x2c | 0x30) => Effect::Refuse(1, pads),
         (GPIO, 0x5bc..=0x5d4) => Effect::Pin(0xfff, 0x100, pads),
+        (GPIO, 0x74..=0x134) => Effect::Report(gpio::PIN_UNRUN),
         _ => return None,
     })
 }
@@ -611,7 +612,10 @@ impl Soc {
     fn write_kept(&mut self, now: Tick, addr: u32, value: u32) -> bool {
         let (base, offset) = (addr & !(BLOCK - 1), addr & (BLOCK - 1));
         let done = match base {
-            GPIO => self.gpio.write(offset, value),
+            GPIO => self.gpio.write(offset, value).unwrap_or_else(|setting| {
+                self.ending = Some(Ending::Refused(Refused::Register("GPIO", setting)));
+                true
+            }),
             IO_MUX => self.gpio.write_io_mux(offset, value),
             RTC_CNTL => self
                 .watchdogs
@@ -782,8 +786,9 @@ impl Soc {
     fn sources(&mut self, now: Tick) -> u128 {
         self.systimer.settle(now);
         let spi2 = self.spi2.line(now);
+        let gpio = self.gpio.pending() != 0;
         self.matrix
-            .sources(self.systimer.lines(), spi2, self.watchdogs.lines())
+            .sources(self.systimer.lines(), spi2, self.watchdogs.lines(), gpio)
     }
 
     /// Runs the CPU from the clock the SYSTEM registers now pick, from core cycle `at` on, which
@@ -1069,7 +1074,9 @@ impl Soc {
                 self.ending = Some(ending);
                 return Err(Exit::Stop);
             }
-            Some(Effect::Report) if kept != Some(value) => self.report(now, word, value)?,
+            Some(Effect::Report(bits)) if kept.map(|kept| kept & bits) != Some(value & bits) => {
+                self.report(now, word, value)?
+            }
             Some(Effect::Gates) if self.gates.reports(word - SYSTEM, value) => {
                 self.report(now, word, value)?
             }

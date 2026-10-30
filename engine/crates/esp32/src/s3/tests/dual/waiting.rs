@@ -306,7 +306,7 @@ fn two_waiting_cores_reach_each_limit_and_take_a_pad_input() {
         }
         assert!(chip.tick() < alarm, "steps of {step} ms");
         ticks.push(chip.tick());
-        chip.set_pad(4, true);
+        chip.input(ms(100), [(4, true)]);
         let mut halts = Vec::new();
         while let Some(halt) = chip.run_until(ms(2000)) {
             halts.push((halt, chip.drive(21)));
@@ -536,6 +536,141 @@ fn the_tick_after_a_fault_counts_a_waiting_core_where_it_would_have_polled() {
                 Halt::Fault(_, Fault::Refused(Refused::Interrupt("TIMG0"), _))
             ),
             "{core:?}: {whole:?}"
+        );
+    }
+}
+
+const GPIO_SOURCE: u32 = 16;
+/// `GPIO_PINn`'s falling-edge type with its interrupt enabled.
+const FALL_ENABLED: u32 = 2 << 7 | 1 << 13;
+
+/// GPIO4 high with its input on and a falling-edge interrupt.
+fn falling_gpio4(chip: &mut Esp32s3) {
+    chip.soc.gpio.write_io_mux(0x4 + 4 * 4, 0xa00);
+    chip.input(Tick(0), [(4, true)]);
+    chip.soc.gpio.write(0x74 + 4 * 4, FALL_ENABLED).unwrap();
+}
+
+/// Core 0 waits in `WAITI` for interrupt 1 with its only SYSTIMER alarm at one second, while
+/// core 1 is unstarted, waits beside it, or waits with its own map routing the GPIO source. A
+/// run to 100 ms in one call or in steps of 1, 7 and 37 ms returns `None`, and GPIO4 then falls
+/// from outside. The core whose map routes source 16 to interrupt 1 polls on the first cycle
+/// after the input's tick, and its handler raises GPIO21 a fixed number of cycles later, long
+/// before the alarm, in every case and every split.
+#[test]
+fn a_waiting_core_wakes_on_a_gpio_edge() {
+    let ms = |n: u64| Tick(n * TICK_HZ / 1000);
+    let mut alone = Program::new(&[PRO_VECTORS]);
+    alone.l32r(5, 0).wait_for(2);
+    let mut app_takes = Program::at(APP, &[APP_VECTORS]);
+    app_takes.l32r(5, 0).wait_for(2);
+    let app = app_waits();
+    let cases = [
+        (alone, None, CoreId::Pro),
+        (pro_waits(&app), Some(app), CoreId::Pro),
+        (pro_waits(&app_takes), Some(app_takes), CoreId::App),
+    ];
+    for (pro, app, taker) in &cases {
+        let vectors = match taker {
+            CoreId::Pro => PRO_VECTORS,
+            CoreId::App => APP_VECTORS,
+        };
+        let handler = pads_high(vectors + 0x300, GPIO21);
+        let mut seen = Vec::new();
+        for step in [100, 1, 7, 37] {
+            let more: Vec<&Program> = app.iter().chain([&handler]).collect();
+            let mut chip = chip(pro, &boot_rom(), &more);
+            falling_gpio4(&mut chip);
+            arm_alarm(&mut chip, CoreId::Pro, SECOND, 0);
+            if *taker == CoreId::App {
+                chip.soc.restore(INTERRUPT_CORE1 + 4 * GPIO_SOURCE, 1);
+            } else {
+                chip.soc.restore(INTERRUPT_CORE0 + 4 * GPIO_SOURCE, 1);
+            }
+            let alarm = systimer_due(&mut chip);
+            let mut limit = 0;
+            while limit < 100 {
+                limit = (limit + step).min(100);
+                assert_eq!(
+                    chip.run_until(ms(limit)),
+                    None,
+                    "{taker:?}, steps of {step} ms"
+                );
+            }
+            chip.input(ms(100), [(4, false)]);
+            let woke = chip
+                .soc
+                .clock
+                .tick(chip.soc.clock.cycle_after(Tick(ms(100).0 + 1)));
+            let mut halts = Vec::new();
+            while halts.len() < 2
+                && let Some(halt) = chip.run_until(ms(2000))
+            {
+                halts.push((halt, chip.drive(21)));
+            }
+            assert_eq!(
+                halts,
+                [
+                    (image_at(Tick(woke.0 + 6 * XTAL)), PadDrive::Low),
+                    (image_at(Tick(woke.0 + 7 * XTAL)), PadDrive::High),
+                ],
+                "{taker:?}, steps of {step} ms"
+            );
+            assert!(halts[1].0.at() < alarm);
+            seen.push(halts);
+        }
+        assert!(seen.windows(2).all(|w| w[0] == w[1]), "{taker:?}");
+    }
+}
+
+/// The APP CPU makes a falling edge on GPIO5, a pad with no net that reads its own drive,
+/// while the PRO CPU waits in `WAITI` for interrupt 1. The edge interrupts the core whose own
+/// map routes source 16 to interrupt 1, and only that one: the APP CPU's handler raises GPIO21,
+/// the PRO CPU's raises GPIO4, at one tick however the run splits.
+#[test]
+fn a_gpio_interrupt_on_the_app_cpu_runs_its_own_map() {
+    let gpio5 = 1 << 5;
+    let mut app = Program::at(APP, &[GPIO, gpio5, APP_VECTORS]);
+    app.l32r(2, 0)
+        .l32r(3, 1)
+        .l32r(5, 2)
+        .wsr(5, VECBASE)
+        .movi(6, 2)
+        .wsr(6, INTENABLE)
+        .movi(6, 0)
+        .wsr(6, PS)
+        .rsync()
+        .s32i(3, 2, 0x08)
+        .s32i(3, 2, 0x24)
+        .delay(5, 20)
+        .s32i(3, 2, 0x0c)
+        .delay(5, 100)
+        .raw(&LOOP);
+    let pro = pro_waits(&app);
+    let app_handler = pads_high(APP_VECTORS + 0x300, GPIO21);
+    let pro_handler = pads_high(PRO_VECTORS + 0x300, GPIO4);
+    for taker in [CoreId::App, CoreId::Pro] {
+        let make = || {
+            let mut chip = chip(&pro, &boot_rom(), &[&app, &app_handler, &pro_handler]);
+            chip.soc.gpio.write_io_mux(0x4 + 4 * 5, 0xa00);
+            chip.soc.gpio.write(0x74 + 4 * 5, FALL_ENABLED).unwrap();
+            let map = match taker {
+                CoreId::Pro => INTERRUPT_CORE0,
+                CoreId::App => INTERRUPT_CORE1,
+            };
+            chip.soc.restore(map + 4 * GPIO_SOURCE, 1);
+            chip
+        };
+        let seen = however_split(make, 400);
+        let (raised, quiet) = match taker {
+            CoreId::App => (1, 0),
+            CoreId::Pro => (0, 1),
+        };
+        assert_eq!(pad(&seen, quiet), [], "{taker:?}");
+        assert_eq!(
+            pad(&seen, raised),
+            [(c(108), PadDrive::Low), (c(109), PadDrive::High)],
+            "{taker:?}"
         );
     }
 }
