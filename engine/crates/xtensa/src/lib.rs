@@ -10,7 +10,9 @@
 //! `wur`. `PRID` reads `0xCDCD` on the PRO CPU and `0xABAB` on the APP CPU, by [`CoreId`]. The
 //! region protection ops `witlb` and `wdtlb` keep each 512 MB region's attribute for `ritlb1` and
 //! `rdtlb1` to read back, and no access is checked against it. `iitlb` and `idtlb` do nothing,
-//! and the external registers read 0 through `rer` and drop `wer`. Every other op ends the run
+//! and the external registers read 0 through `rer` and drop `wer`. `DBREAKA0`, `DBREAKA1`,
+//! `DBREAKC0` and `DBREAKC1` read back what was written. A load or a store that hits one stops
+//! the core with [`Stop::Watchpoint`] before the bus access. Every other op ends the run
 //! with [`Stop::Unimplemented`], among them the classic `f64*` ops and the S3's `ee.*` vector ops.
 //! `bus` is what the core asks of its SoC, and `paged` is the copy-on-write RAM a SoC keeps its
 //! memory in.

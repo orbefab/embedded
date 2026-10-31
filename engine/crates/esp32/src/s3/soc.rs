@@ -155,6 +155,9 @@ pub(crate) struct Step {
     /// Whether the APP CPU has started. A clock switch then lands at `start`, or at the cycle
     /// the latest tick lies on when that is later.
     pub(crate) paired: bool,
+    /// The cycle a store made an unstarted APP CPU runnable, as it stood when this step opened.
+    /// The release store itself sees `None`. A later store sees the cycle.
+    pub(crate) app_released: Option<Cycle>,
     /// Whether the other core is halted or parked, so a store outside SRAM and RTC memory wakes
     /// it.
     pub(crate) other_sleeps: bool,
@@ -394,6 +397,7 @@ impl Soc {
                 core: CoreId::Pro,
                 start: Cycle(0),
                 paired: false,
+                app_released: None,
                 other_sleeps: false,
             },
         }
@@ -1157,6 +1161,7 @@ impl Soc {
             .contains(&word)
             .then(|| self.hold());
             let reset = word == RTC_CNTL + OPTIONS0 && value & app::APPCPU_RST != 0;
+            let control_store = word == SYSTEM + app::CONTROL_0;
             let kept = if reset {
                 value & !app::APPCPU_RST
             } else {
@@ -1169,7 +1174,7 @@ impl Soc {
                 self.switch_clock(at, now);
             }
             if let Some(before) = app {
-                self.steer_app(step, before, reset);
+                self.steer_app(step, before, reset, control_store);
             }
             if self.ending.is_some() {
                 return Err(Exit::Stop);
@@ -1207,10 +1212,12 @@ impl Soc {
     }
 
     /// Steers the run after a store took the APP CPU's hold from `before`, with `reset` a write
-    /// of `RTC_CNTL_SW_APPCPU_RST`. A store that would let an APP CPU never reset run ends the
-    /// run, as the model cannot know its state, and so does one that would stall the PRO CPU,
-    /// which the model does not do.
-    fn steer_app(&mut self, step: &Step, before: Hold, reset: bool) {
+    /// of `RTC_CNTL_SW_APPCPU_RST` and `control_store` a write of `SYSTEM_CORE_1_CONTROL_0_REG`.
+    /// A store that would stall the PRO CPU ends the run, which the model does not stall. A
+    /// `CONTROL_0` store that does not set `RESETING`, while an earlier store already made an
+    /// unstarted APP CPU runnable, ends the run too. The release store itself sees no such
+    /// cycle and does not end it.
+    fn steer_app(&mut self, step: &Step, before: Hold, reset: bool, control_store: bool) {
         let (options0, sw_cpu_stall) = self.stall_words();
         if app::pro_stalled(options0, sw_cpu_stall) {
             let refused = Refused::Register("RTC_CNTL", "pro_cpu_stall");
@@ -1218,15 +1225,19 @@ impl Soc {
             return;
         }
         let after = self.hold();
-        let Some(steer) = Steer::of_store(before, after, reset, step.start) else {
-            return;
-        };
-        if !step.paired && matches!(steer, Steer::Run { .. }) && after.runs() {
+        let steer = Steer::of_store(before, after, reset, step.start);
+        let later = control_store
+            && step.app_released.is_some()
+            && !after.resetting()
+            && !matches!(steer, Some(Steer::Reset(_)));
+        if later {
             let refused = Refused::Register("SYSTEM", "app_cpu_without_reset");
             self.ending = Some(Ending::Refused(refused));
             return;
         }
-        self.steer(steer);
+        if let Some(steer) = steer {
+            self.steer(steer);
+        }
     }
 
     fn interrupts(&mut self, core: CoreId, cycle: Cycle) -> u32 {

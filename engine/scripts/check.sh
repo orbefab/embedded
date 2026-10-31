@@ -52,3 +52,9 @@ rm -rf "$touch_run"
 cargo run -q -p sim-cli --locked -- run examples/esp32s3-touch/netlist.json --out "$touch_run" --blobs "$blobs" >/dev/null
 uv run scripts/esp32s3_touch.py --check "$touch_run"
 rm -rf "$touch_run"
+uv run scripts/esp32s3_dualcore.py --self-test
+dualcore_run="${CARGO_TARGET_DIR:-target}/esp32s3-dualcore-check"
+rm -rf "$dualcore_run"
+cargo run -q -p sim-cli --locked -- run examples/esp32s3-dualcore/netlist.json --out "$dualcore_run" --blobs "$blobs" >/dev/null
+uv run scripts/esp32s3_dualcore.py --check "$dualcore_run"
+rm -rf "$dualcore_run"

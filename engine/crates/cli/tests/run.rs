@@ -418,6 +418,13 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
                 "{name}: {}",
                 doc["diagnostics"]
             );
+        } else if name == "esp32s3-dualcore" {
+            // The 10 registers the app touches that the model does not keep, the write that
+            // sets the reset of SYSTEM_WDG at start-up, and the 6 writes that pulse the resets
+            // of SYSTIMER, TIMG0 and TIMG1 at start-up.
+            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 17];
+            assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
+            assert_kept_resets(&name, &doc, 7);
         } else if name == "esp32s3-encoder" {
             // The 10 registers the app touches that the model does not keep, among them the two
             // RTC IO pad words `gpio_config` reads, the write that sets the reset of SYSTEM_WDG

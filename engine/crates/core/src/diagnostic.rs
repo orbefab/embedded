@@ -142,6 +142,8 @@ pub enum FlashRefusal {
     Spi0,
     /// A write that would take one of the flash's pads from SPI0 and SPI1.
     Pads,
+    /// A user command while `CS0_DIS` is set or `CS1_DIS` is clear.
+    Cs,
 }
 
 /// Why firmware reset its chip, as ESP-IDF records it before the reset, when that ends the run.
@@ -1200,6 +1202,10 @@ impl Diagnostic {
                     FlashRefusal::Pads => (
                         "took a flash pad from SPI0 and SPI1".to_string(),
                         "which could send the flash any command",
+                    ),
+                    FlashRefusal::Cs => (
+                        format!("sent the flash {command} with CS0 disabled or CS1 enabled"),
+                        "which the model does not run",
                     ),
                 };
                 format!(

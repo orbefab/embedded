@@ -73,6 +73,11 @@ impl Hold {
     fn clocked(self) -> bool {
         self.control & CLKGATE_EN != 0
     }
+
+    /// Whether `RESETING` is set.
+    pub(crate) fn resetting(self) -> bool {
+        self.control & RESETING != 0
+    }
 }
 
 /// A store that changed what a core may do, at the start of the storing step. The storing core

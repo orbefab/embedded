@@ -487,6 +487,7 @@ impl Core {
                     R::AddressBits(command) => (Some(command), FlashRefusal::AddressBits),
                     R::Spi0 => (None, FlashRefusal::Spi0),
                     R::Pads => (None, FlashRefusal::Pads),
+                    R::Cs(command) => (Some(command), FlashRefusal::Cs),
                 };
                 Diagnostic::ChipFlashCommand {
                     part,

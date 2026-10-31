@@ -3,7 +3,9 @@
 //!
 //! A write of `SPI_MEM_CMD_REG` runs its one command at once and clears its bits, and a write
 //! that starts more than one is refused. A user command sends the command byte and the address
-//! when `SPI_MEM_USR_ADDR` is set, and leaves the MISO bytes from `SPI_MEM_W0_REG` on. No command
+//! when `SPI_MEM_USR_ADDR` is set, and leaves the MISO bytes from `SPI_MEM_W0_REG` on. A user
+//! command while `SPI_MEM_MISC_REG` has `CS0_DIS` set or `CS1_DIS` clear is refused. That register
+//! resets to `0x2`, CS0 on and CS1 off, and the fixed commands do not look at it. No command
 //! the chip runs takes MOSI bytes, and the dummy cycles have no effect. The fixed commands `RDSR`, `WREN`, `WRDI` and
 //! `RDID` run as their flash commands do. The controller's other registers are plain words.
 //!
@@ -22,6 +24,7 @@ const USER1: u32 = 0x1c;
 const USER2: u32 = 0x20;
 const MISO_DLEN: u32 = 0x28;
 const RD_STATUS: u32 = 0x2c;
+const MISC: u32 = 0x34;
 const W0: u32 = 0x58;
 const BUFFER_WORDS: usize = 16;
 const SIZE: u32 = 0x400;
@@ -55,6 +58,10 @@ const USR_COMMAND: u32 = 1 << 31;
 const USR_ADDR: u32 = 1 << 30;
 const USR_MISO: u32 = 1 << 28;
 const MISO_HIGHPART: u32 = 1 << 24;
+/// `SPI_MEM_MISC_REG` bit 0. Set disables the flash's chip select.
+const CS0_DIS: u32 = 1;
+/// `SPI_MEM_MISC_REG` bit 1. Clear selects the second chip, which this flash is not.
+const CS1_DIS: u32 = 1 << 1;
 
 const JEDEC_ID: [u8; 3] = [0x68, 0x40, 0x18];
 /// What `RDID` reads with no flash on the bus, whose MISO line idles high.
@@ -82,6 +89,8 @@ pub enum FlashRefusal {
     /// A write that would take a flash pad, GPIO26 to GPIO32, from SPI0 and SPI1: another
     /// IO_MUX function, its output enable, or a matrix output route.
     Pads,
+    /// A user command while `CS0_DIS` is set or `CS1_DIS` is clear.
+    Cs(u8),
 }
 
 #[derive(Clone, Debug)]
@@ -94,8 +103,10 @@ pub(crate) struct Spi1 {
 
 impl Default for Spi1 {
     fn default() -> Spi1 {
+        let mut regs = vec![0; (SIZE / 4) as usize];
+        regs[(MISC / 4) as usize] = CS1_DIS;
         Spi1 {
-            regs: vec![0; (SIZE / 4) as usize],
+            regs,
             status: [0, QE, 0],
         }
     }
@@ -156,6 +167,10 @@ impl Spi1 {
             return Err(FlashRefusal::NoCommandPhase);
         }
         let command = self.reg(USER2) as u8;
+        let misc = self.reg(MISC);
+        if misc & CS0_DIS != 0 || misc & CS1_DIS == 0 {
+            return Err(FlashRefusal::Cs(command));
+        }
         let addr = if user & USR_ADDR != 0 {
             let bits = (self.reg(USER1) >> 26) + 1;
             if bits > 32 {
@@ -411,6 +426,54 @@ mod tests {
             send(&mut spi1, &flash, 0x03, Some(0x10), 1),
             Ok(vec![0x10]),
             "32 bits"
+        );
+    }
+
+    #[test]
+    fn a_user_command_with_the_wrong_chip_select_is_refused() {
+        let flash: Vec<u8> = (0..=255).collect();
+        let mut reset = spi1();
+        assert_eq!(reset.read(MISC), Some(CS1_DIS), "CS0 on, CS1 off");
+        assert_eq!(
+            send(&mut reset, &flash, 0x03, Some(0x10), 1),
+            Ok(vec![0x10]),
+            "the reset select"
+        );
+
+        let mut cs0 = spi1();
+        cs0.write(MISC, CS0_DIS | CS1_DIS, &flash).unwrap();
+        assert_eq!(
+            send(&mut cs0, &flash, 0x03, Some(0x10), 1),
+            Err(FlashRefusal::Cs(0x03)),
+            "CS0 disabled"
+        );
+        assert_eq!(cs0.read(W0), Some(0), "the read does not run");
+
+        let mut cs1 = spi1();
+        cs1.write(MISC, 0, &flash).unwrap();
+        assert_eq!(
+            send(&mut cs1, &flash, 0x9f, None, 3),
+            Err(FlashRefusal::Cs(0x9f)),
+            "CS1 enabled"
+        );
+
+        let mut bare = spi1();
+        bare.write(MISC, CS0_DIS, &flash).unwrap();
+        bare.write(USER, 0, &flash).unwrap();
+        bare.write(USER2, 7 << 28 | 0x03, &flash).unwrap();
+        assert_eq!(
+            bare.write(CMD, USR, &flash),
+            Err(FlashRefusal::NoCommandPhase),
+            "no command phase is refused first"
+        );
+
+        let mut fixed = spi1();
+        fixed.write(MISC, 0, &flash).unwrap();
+        fixed.write(CMD, FLASH_RDSR, &flash).unwrap();
+        assert_eq!(
+            fixed.read(RD_STATUS),
+            Some(0),
+            "a fixed command ignores the select"
         );
     }
 }

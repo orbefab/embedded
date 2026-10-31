@@ -30,11 +30,20 @@
 //!
 //! `CCOUNT` counts through a hold while the APP CPU's clock runs, and not while
 //! `CLKGATE_EN` gates it. A reset sets it to 0.
+//!
+//! A store that makes an unstarted APP CPU runnable leaves it unstarted and records the cycle.
+//! The run ends if a later store to `SYSTEM_CORE_1_CONTROL_0_REG` does not set `RESETING`, or if
+//! [`APP_RESET_BOUND`] PRO CPU cycles pass with no reset. The bound is the model's, not a chip
+//! figure. A jump to itself while that release is pending ends at the bound, not as a halt.
 
 use sim_xtensa::{Core, CoreId, Cycle, Sr, Stop};
 
+use super::Refused;
 use super::app::Steer;
-use super::soc::{CoreBus, Soc, Step};
+use super::soc::{CoreBus, Ending, Soc, Step};
+
+/// PRO CPU cycles an unstarted APP CPU may stay runnable before the run ends.
+const APP_RESET_BOUND: u64 = 1_000;
 
 type Xtensa = Core<sim_xtensa::Esp32s3>;
 
@@ -69,7 +78,10 @@ impl Lane {
 /// The APP CPU. The model knows no state of it before its first reset.
 #[derive(Clone, Debug)]
 enum App {
-    Unstarted,
+    /// Never started. `released` is the cycle a store made it runnable with no reset yet.
+    Unstarted {
+        released: Option<Cycle>,
+    },
     Started(Box<Lane>),
 }
 
@@ -98,7 +110,7 @@ impl Cores {
                 core: pro,
                 run: Run::Ready,
             },
-            app: App::Unstarted,
+            app: App::Unstarted { released: None },
             rerun: None,
             #[cfg(test)]
             slices_left: 1_000_000,
@@ -118,7 +130,7 @@ impl Cores {
         match (id, &self.app) {
             (CoreId::Pro, _) => Some(&self.pro),
             (CoreId::App, App::Started(lane)) => Some(lane),
-            (CoreId::App, App::Unstarted) => None,
+            (CoreId::App, App::Unstarted { .. }) => None,
         }
     }
 
@@ -126,8 +138,25 @@ impl Cores {
         match (id, &mut self.app) {
             (CoreId::Pro, _) => Some(&mut self.pro),
             (CoreId::App, App::Started(lane)) => Some(lane),
-            (CoreId::App, App::Unstarted) => None,
+            (CoreId::App, App::Unstarted { .. }) => None,
         }
+    }
+
+    /// The cycle a store made the unstarted APP CPU runnable, when one has.
+    fn app_released(&self) -> Option<Cycle> {
+        match self.app {
+            App::Unstarted { released } => released,
+            App::Started(_) => None,
+        }
+    }
+
+    /// Ends the run at the reset bound. The PRO CPU stands at that cycle, on the instruction it
+    /// had reached.
+    fn refuse_unreset(&mut self, soc: &mut Soc) {
+        let at = self.app_released().expect("a release");
+        self.pro.core.skip_to(Cycle(at.0 + APP_RESET_BOUND));
+        let refused = Refused::Register("SYSTEM", "app_cpu_without_reset");
+        soc.ending = Some(Ending::Refused(refused));
     }
 
     /// The start of `id`'s next step, or its wake while parked, while it may run.
@@ -170,6 +199,14 @@ impl Cores {
     /// stops with [`Stop::Spin`] at the latest cycle any core ran to, and `reached` is `until`.
     pub(crate) fn run_until(&mut self, soc: &mut Soc, until: Cycle) -> (CoreId, Stop) {
         loop {
+            if self
+                .app_released()
+                .is_some_and(|at| self.pro.core.cycle() >= Cycle(at.0 + APP_RESET_BOUND))
+            {
+                self.refuse_unreset(soc);
+                self.reach(soc, until);
+                return (CoreId::Pro, Stop::Bus);
+            }
             let keys = [self.key(CoreId::Pro, soc), self.key(CoreId::App, soc)];
             let rerun = self
                 .rerun
@@ -189,7 +226,7 @@ impl Cores {
                 }
             };
             let other = keys[1 - pick as usize];
-            let limit = if let Some((stopped, key)) = rerun {
+            let mut limit = if let Some((stopped, key)) = rerun {
                 if key >= until {
                     self.rerun = Some(stopped);
                     self.reached = until;
@@ -207,10 +244,16 @@ impl Cores {
                     until.min(Cycle(key.0 + u64::from(pick == CoreId::Pro)))
                 })
             };
+            if pick == CoreId::Pro
+                && let Some(at) = self.app_released()
+            {
+                limit = limit.min(Cycle(at.0 + APP_RESET_BOUND));
+            }
             let step = Step {
                 core: pick,
                 start: Cycle(0),
                 paired: matches!(self.app, App::Started(_)),
+                app_released: self.app_released(),
                 other_sleeps: self
                     .lane(other_core(pick))
                     .is_some_and(|lane| lane.run != Run::Ready),
@@ -241,6 +284,11 @@ impl Cores {
                         self.lane_mut(pick).expect("a key").run = Run::Halted;
                     }
                 }
+                Stop::Spin if self.app_released().is_some() => {
+                    self.refuse_unreset(soc);
+                    self.reach(soc, until);
+                    return (CoreId::Pro, Stop::Bus);
+                }
                 stop => {
                     if stop == Stop::Bus && (soc.first_touch.is_some() || soc.change_stop) {
                         self.rerun = Some(pick);
@@ -265,8 +313,8 @@ impl Cores {
                     run: Run::Ready,
                 }));
             }
-            Steer::Run { at, clocked } => {
-                if let App::Started(lane) = &mut self.app {
+            Steer::Run { at, clocked } => match &mut self.app {
+                App::Started(lane) => {
                     lane.rouse(at);
                     let ccount = lane.core.special(Sr::Ccount);
                     lane.core.skip_to(at);
@@ -274,7 +322,11 @@ impl Cores {
                         lane.core.set_special(Sr::Ccount, ccount);
                     }
                 }
-            }
+                App::Unstarted { released } if released.is_none() && soc.app_runs() => {
+                    *released = Some(at);
+                }
+                App::Unstarted { .. } => {}
+            },
             Steer::Wake(at) => {
                 let other = other_core(storer);
                 let nmi = soc.routes_to_nmi(other);

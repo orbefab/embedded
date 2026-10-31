@@ -216,8 +216,124 @@ fn a_yielding_bus_stops_the_core_before_its_next_step() {
 /// `Core` is copied at every landing, so its size is pinned.
 #[test]
 fn core_size_is_pinned() {
-    assert_eq!(size_of::<Core<Esp32>>(), 864);
-    assert_eq!(size_of::<Core<Esp32s3>>(), 864);
+    assert_eq!(size_of::<Core<Esp32>>(), 912);
+    assert_eq!(size_of::<Core<Esp32s3>>(), 912);
+}
+
+/// `DBREAKAn` and `DBREAKCn` read back through `wsr` and `rsr`.
+#[test]
+fn the_data_breakpoint_registers_read_back() {
+    let regs = [
+        (144u8, 0x3fc8_8000),
+        (145, 0x3fc8_8020),
+        (160, 0x8000_0020),
+        (161, 0x3f),
+    ];
+    for (sr, value) in regs {
+        let hex = format!("20{sr:02x}1330{sr:02x}03");
+        let mut bus = Flat::new(&hex);
+        let mut core = core_at::<Esp32s3>(CODE);
+        core.set_a(2, value);
+        assert_eq!(core.run_until(&mut bus, Cycle(10)), Stop::Bus);
+        assert_eq!(core.a(3), value, "sr {sr}");
+    }
+}
+
+/// A 32-byte store-only window stops a byte inside it and not the accesses outside it. The
+/// window starts 32 bytes into RAM, so the word at `base - 4` lies in the RAM. Mask `0x3f` with
+/// the store bit set compares every low bit, so a store at `base + 1` misses. Mask `0x3f` alone
+/// arms nothing. With no watch armed, nothing stops.
+#[test]
+fn a_store_watch_stops_on_a_byte_inside_its_window() {
+    let base = RAM + 32;
+    let inside = access(base, "22431f", base, 0x8000_0020);
+    assert!(
+        matches!(inside.stop, Stop::Watchpoint { pc, addr } if pc == CODE && addr == base + 31),
+        "{:?}",
+        inside.stop
+    );
+    assert_eq!(inside.bus.ram.read(base + 31, Width::Byte), 0);
+
+    let past = access(base, "224300", base + 32, 0x8000_0020);
+    assert_eq!(past.stop, Stop::Bus);
+    assert_eq!(past.bus.ram.read(base + 32, Width::Byte), 0x11);
+
+    let before = access(base, "226300", base - 4, 0x8000_0020);
+    assert_eq!(before.stop, Stop::Bus);
+    assert_eq!(before.bus.ram.read(base - 4, Width::Word), 0x11);
+
+    let load = access(base, "222300", base, 0x8000_0020);
+    assert_eq!(load.stop, Stop::Bus);
+
+    let polarity = access(base, "224300", base + 1, 0x8000_003f);
+    assert_eq!(polarity.stop, Stop::Bus);
+    assert_eq!(polarity.bus.ram.read(base + 1, Width::Byte), 0x11);
+
+    let mask = access(base, "224300", base + 1, 0x3f);
+    assert_eq!(mask.stop, Stop::Bus);
+    assert_eq!(mask.bus.ram.read(base + 1, Width::Byte), 0x11);
+
+    let open = access(base, "224300", base, 0);
+    assert_eq!(open.stop, Stop::Bus);
+}
+
+/// Watch 1 stops a byte store inside a 32-byte window. `DBREAKC1` is `0x80000020`.
+#[test]
+fn a_store_on_watch_1_stops_inside_its_window() {
+    let base = RAM + 32;
+    let inside = access_on(1, base, "22431f", base, 0x8000_0020);
+    assert!(
+        matches!(inside.stop, Stop::Watchpoint { pc, addr } if pc == CODE && addr == base + 31),
+        "{:?}",
+        inside.stop
+    );
+    assert_eq!(inside.bus.ram.read(base + 31, Width::Byte), 0);
+    assert_eq!(inside.a3, base);
+}
+
+/// A load watch stops `l32i a3, a3, 0` before the load, so `a3` stays the address. `DBREAKC0` is
+/// `0x40000020`.
+#[test]
+fn a_load_watch_stops_before_the_load() {
+    let base = RAM + 32;
+    let load = access_on(0, base, "322300", base, 0x4000_0020);
+    assert!(
+        matches!(load.stop, Stop::Watchpoint { pc, addr } if pc == CODE && addr == base),
+        "{:?}",
+        load.stop
+    );
+    assert_eq!(load.a3, base);
+    assert_eq!(load.bus.ram.read(base, Width::Word), 0);
+}
+
+struct Watched {
+    stop: Stop,
+    bus: Flat,
+    a3: u32,
+}
+
+/// Runs the one instruction in `hex` at `addr` in `a3`, with `DBREAKA0` at `base` and `DBREAKC0`
+/// `control`. `a2` holds `0x11`.
+fn access(base: u32, hex: &str, addr: u32, control: u32) -> Watched {
+    access_on(0, base, hex, addr, control)
+}
+
+/// As [`access`], on watch `which`. Watch 1 uses `DBREAKA1` and `DBREAKC1`.
+fn access_on(which: u8, base: u32, hex: &str, addr: u32, control: u32) -> Watched {
+    let mut bus = Flat::new(hex);
+    let mut core = core_at::<Esp32s3>(CODE);
+    core.set_a(2, 0x11);
+    core.set_a(3, addr);
+    let (addr_sr, control_sr) = if which == 0 {
+        (Sr::Dbreaka0, Sr::Dbreakc0)
+    } else {
+        (Sr::Dbreaka1, Sr::Dbreakc1)
+    };
+    core.set_special(addr_sr, base);
+    core.set_special(control_sr, control);
+    let stop = core.run_until(&mut bus, Cycle(10));
+    let a3 = core.a(3);
+    Watched { stop, bus, a3 }
 }
 
 /// A `j` to itself while every interrupt is masked stops the core before it once, and the core

@@ -3,8 +3,10 @@
 //! SYSTIMER counts at 16 MHz, the crystal times 2 over 5, whatever clock the CPU runs on. Each
 //! of its two units counts while its `WORK_EN` bit is set. Each alarm compares one unit with
 //! its target while its `WORK_EN` bit is set. A load through `COMPn_LOAD` takes the target, or
-//! in period mode the unit's count plus the period. A target alarm fires once its unit reaches
-//! the target, and a period alarm fires each period after the load. A firing alarm sets its
+//! in period mode the unit's count plus the period. A write of `TARGETn_CONF` that sets period
+//! mode on an alarm with no fire pending arms it at the unit's count plus the period, and one
+//! that finds a fire pending keeps that count. A target alarm fires once its unit reaches the
+//! target, and a period alarm fires each period after the load. A firing alarm sets its
 //! `INT_RAW` bit, and its interrupt line is that bit and its `INT_ENA` bit.
 //!
 //! The watchdogs: the RTC watchdog, and the main watchdog of each timer group. Each runs while
@@ -76,7 +78,7 @@ struct Unit {
 struct Alarm {
     target: u64,
     conf: u32,
-    /// The count at which it next fires, from its last load.
+    /// The count at which it next fires, from its last load or its period-mode write.
     due: Option<u64>,
 }
 
@@ -219,7 +221,19 @@ impl Systimer {
                 let target = &mut self.alarms[((offset - 0x20) / 8) as usize].target;
                 *target = (*target & !0xffff_ffff) | u64::from(value);
             }
-            0x34..=0x3c => self.alarms[((offset - 0x34) / 4) as usize].conf = value,
+            0x34..=0x3c => {
+                let k = ((offset - 0x34) / 4) as usize;
+                let was = self.alarms[k].conf;
+                self.alarms[k].conf = value;
+                // A rising period mode with nothing pending arms at the count plus the period.
+                // The second core's tick is that write: its target alarm has already fired.
+                let sets_period = was & PERIOD_MODE == 0 && value & PERIOD_MODE != 0;
+                if sets_period && self.alarms[k].due.is_none() {
+                    let unit = self.unit_of(k);
+                    let period = u64::from(value & PERIOD);
+                    self.alarms[k].due = Some(self.value(unit, now) + period);
+                }
+            }
             0x50..=0x58 => {
                 let k = ((offset - 0x50) / 4) as usize;
                 if value & 1 != 0 {
@@ -768,6 +782,10 @@ mod tests {
         Tick(cycle * XTAL)
     }
 
+    fn dues(timer: &Systimer) -> [Option<u64>; 2] {
+        [timer.alarms[0].due, timer.alarms[1].due]
+    }
+
     #[test]
     fn systimer_counts_two_every_five_crystal_cycles_and_latches_on_update() {
         let mut timer = Systimer::new();
@@ -812,6 +830,110 @@ mod tests {
         timer.write(first, 0x6c, 1);
         assert_eq!(timer.lines(), 0);
         assert_eq!(timer.next_event(first), Some(Tick(200 * SYSTIMER_TICKS)));
+    }
+
+    /// The two alarms as ESP-IDF's `vSystimerSetup` stores them for two cores. P is 16,000
+    /// counts. Unit 1 stays stopped through step 10, so those stores share `x(100)`.
+    #[test]
+    fn the_dual_core_tick_arms_alarm_1_at_the_period_mode_write() {
+        const P: u64 = 16_000;
+        let mut timer = Systimer::new();
+        let at = x(100);
+
+        timer.write(at, 0x14, 0);
+        timer.write(at, 0x18, 0);
+        timer.write(at, 0x60, 1);
+        assert_eq!(dues(&timer), [None, None]);
+
+        timer.write(at, 0x34, 0);
+        timer.write(at, 0x38, 0);
+        assert_eq!(dues(&timer), [None, None]);
+
+        timer.write(at, 0x34, UNIT_SEL);
+        assert_eq!(dues(&timer), [None, None]);
+
+        let conf = timer.read(at, 0x00).unwrap() & !TARGET_WORK_EN[0];
+        timer.write(at, 0x00, conf);
+        assert_eq!(dues(&timer), [None, None]);
+
+        timer.write(at, 0x34, UNIT_SEL | P as u32);
+        assert_eq!(dues(&timer), [None, None]);
+
+        timer.write(at, 0x50, 1);
+        assert_eq!(dues(&timer), [Some(0), None]);
+
+        let conf = timer.read(at, 0x00).unwrap() | TARGET_WORK_EN[0];
+        timer.write(at, 0x00, conf);
+        assert_eq!(dues(&timer), [Some(0), None]);
+        assert_eq!(timer.lines(), 0, "unit 1 is stopped");
+
+        timer.write(at, 0x34, UNIT_SEL | PERIOD_MODE | P as u32);
+        assert_eq!(
+            dues(&timer),
+            [Some(0), None],
+            "a pending alarm keeps its count"
+        );
+
+        let conf = timer.read(at, 0x00).unwrap() | (1 << 26);
+        timer.write(at, 0x00, conf);
+        assert_eq!(dues(&timer), [Some(0), None]);
+
+        timer.write(at, 0x64, 1);
+        assert_eq!(dues(&timer), [Some(0), None]);
+
+        let on = x(105);
+        let conf = timer.read(on, 0x00).unwrap() | UNIT_WORK_EN[1];
+        timer.write(on, 0x00, conf);
+        assert_eq!(dues(&timer), [Some(P), None]);
+        assert_eq!(timer.read(on, 0x68), Some(1));
+        assert_eq!(timer.lines(), 1);
+
+        timer.write(x(110), 0x08, UPDATE);
+        assert_eq!(timer.read(x(110), 0x4c), Some(2));
+        let advance = x(115);
+        timer.write(advance, 0x14, 0);
+        timer.write(advance, 0x18, 8_002);
+        timer.write(advance, 0x60, 1);
+        assert_eq!(dues(&timer), [Some(P), None]);
+
+        let alarm1 = x(120);
+        timer.write(alarm1, 0x38, UNIT_SEL);
+        let conf = timer.read(alarm1, 0x00).unwrap() & !TARGET_WORK_EN[1];
+        timer.write(alarm1, 0x00, conf);
+        timer.write(alarm1, 0x38, UNIT_SEL | P as u32);
+        timer.write(alarm1, 0x54, 1);
+        let conf = timer.read(alarm1, 0x00).unwrap() | TARGET_WORK_EN[1];
+        timer.write(alarm1, 0x00, conf);
+        assert_eq!(dues(&timer), [Some(P), None]);
+        assert_eq!(timer.read(alarm1, 0x68).unwrap() & 2, 2);
+
+        let mode = x(125);
+        timer.write(mode, 0x38, UNIT_SEL | PERIOD_MODE | P as u32);
+        assert_eq!(dues(&timer), [Some(P), Some(24_006)]);
+
+        let conf = timer.read(mode, 0x00).unwrap() | (1 << 25);
+        timer.write(mode, 0x00, conf);
+        assert_eq!(dues(&timer), [Some(P), Some(24_006)]);
+
+        let mut now = mode;
+        for count in [16_000, 24_006, 32_000, 40_006, 48_000] {
+            timer.write(now, 0x6c, 0x7);
+            let tick = timer.next_event(now).expect("a tick");
+            timer.write(tick, 0x08, UPDATE);
+            assert_eq!(timer.read(tick, 0x4c), Some(count), "latched {count}");
+            now = tick;
+        }
+    }
+
+    /// A period-mode write that leaves the bit set does not move a pending alarm.
+    #[test]
+    fn a_period_mode_write_that_keeps_the_bit_leaves_a_pending_alarm() {
+        let mut timer = Systimer::new();
+        timer.write(x(0), 0x34, PERIOD_MODE | 16_000);
+        assert_eq!(timer.alarms[0].due, Some(16_000));
+        timer.write(x(250), 0x34, PERIOD_MODE | 16_000);
+        assert_eq!(timer.alarms[0].due, Some(16_000));
+        assert_eq!(timer.value(0, x(250)), 100);
     }
 
     #[test]

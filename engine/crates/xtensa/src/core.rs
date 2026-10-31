@@ -56,6 +56,8 @@ pub enum Stop {
     Spin,
     /// The bus asked the core to return before its next step.
     Yield,
+    /// A load or a store hit a data breakpoint. The core stopped before the access, at `pc`.
+    Watchpoint { pc: u32, addr: u32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -151,6 +153,20 @@ enum Wait {
     Idled(Cycle),
 }
 
+/// One data breakpoint, from `DBREAKAn` and `DBREAKCn`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Watch {
+    /// `DBREAKAn`.
+    addr: u32,
+    /// The address bits an access must share with `addr`: bits 6 to 31 always, and bit `i` of
+    /// 0 to 5 when `DBREAKCn`'s mask has it set.
+    keep: u32,
+    /// `DBREAKCn` bit 30.
+    load: bool,
+    /// `DBREAKCn` bit 31.
+    store: bool,
+}
+
 /// One Xtensa core of chip `C`.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Core<C: Config> {
@@ -183,6 +199,9 @@ pub struct Core<C: Config> {
     /// The access rights of each 512 MB region, for instruction fetches and then for loads and
     /// stores, as `witlb` and `wdtlb` leave them.
     regions: [[u8; 8]; 2],
+    watches: [Watch; 2],
+    /// Whether either watch compares an access, so a load or a store tests one flag.
+    watching: bool,
     chip: PhantomData<C>,
 }
 
@@ -224,6 +243,8 @@ impl<C: Config> Core<C> {
             disabled: None,
             spun: false,
             regions: [[REGION_RESET; 8]; 2],
+            watches: [Watch::default(); 2],
+            watching: false,
             chip: PhantomData,
         };
         core.sr[Sr::Ps as usize] = RESET_PS;
@@ -334,7 +355,8 @@ impl<C: Config> Core<C> {
 
     /// Writes `value` with the register's unwritable bits cleared. Writing `CCOMPAREn` clears
     /// its timer interrupt, and writing `CCOUNT` or `CCOMPAREn` moves the next timer match.
-    /// Writing `Interrupt` sets the bits that latch.
+    /// Writing `Interrupt` sets the bits that latch. Writing a data breakpoint register rebuilds
+    /// both watches.
     pub fn set_special(&mut self, sr: Sr, value: u32) {
         let value = value & sr.mask();
         match sr {
@@ -351,7 +373,40 @@ impl<C: Config> Core<C> {
                 self.arm_timer(i);
             }
             Sr::Interrupt => self.sr[sr as usize] = value & latched::<C>(),
+            Sr::Dbreaka0 | Sr::Dbreaka1 | Sr::Dbreakc0 | Sr::Dbreakc1 => {
+                self.sr[sr as usize] = value;
+                self.arm_watches();
+            }
             _ => self.sr[sr as usize] = value,
+        }
+    }
+
+    /// Rebuilds both watches from `DBREAKAn` and `DBREAKCn`.
+    fn arm_watches(&mut self) {
+        let pairs = [(Sr::Dbreaka0, Sr::Dbreakc0), (Sr::Dbreaka1, Sr::Dbreakc1)];
+        for (watch, (addr, control)) in self.watches.iter_mut().zip(pairs) {
+            let c = self.sr[control as usize];
+            *watch = Watch {
+                addr: self.sr[addr as usize],
+                keep: !0x3f | (c & 0x3f),
+                load: c & (1 << 30) != 0,
+                store: c & (1 << 31) != 0,
+            };
+        }
+        self.watching = self.watches.iter().any(|watch| watch.load || watch.store);
+    }
+
+    /// Stops before the access when a watch's window holds one of its bytes.
+    fn watch_hit(&self, addr: u32, width: Width, store: bool) -> Result<(), Trap> {
+        let bytes = width.bytes();
+        let hit = self.watches.iter().any(|watch| {
+            let armed = if store { watch.store } else { watch.load };
+            armed && (0..bytes).any(|i| (addr.wrapping_add(i) ^ watch.addr) & watch.keep == 0)
+        });
+        if hit {
+            Err(Trap::Stop(Stop::Watchpoint { pc: self.pc, addr }))
+        } else {
+            Ok(())
         }
     }
 
@@ -646,6 +701,9 @@ impl<C: Config> Core<C> {
     /// Loads the bytes from `addr`, little-endian, one bus access per aligned part.
     fn load<B: Bus>(&self, bus: &mut B, op: Op, addr: u32, width: Width) -> Result<u32, Trap> {
         self.guard_access(op, addr, width)?;
+        if self.watching {
+            self.watch_hit(addr, width, false)?;
+        }
         let mut value = 0;
         for (at, part, shift) in parts(addr, width) {
             let bytes = bus
@@ -665,6 +723,9 @@ impl<C: Config> Core<C> {
         value: u32,
     ) -> Result<(), Trap> {
         self.guard_access(op, addr, width)?;
+        if self.watching {
+            self.watch_hit(addr, width, true)?;
+        }
         for (at, part, shift) in parts(addr, width) {
             bus.store(self.cycle, at, part, value >> shift)
                 .map_err(|exit| self.access_trap(exit, op, addr, width))?;

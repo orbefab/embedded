@@ -424,6 +424,10 @@ impl Esp32s3 {
                 Stop::Unimplemented(missing) => {
                     self.fault = Some((now, Fault::Unsupported(id, missing)));
                 }
+                Stop::Watchpoint { .. } => {
+                    let refused = Refused::Register("CPU", "watchpoint");
+                    self.fault = Some((now, Fault::Refused(refused, pc)));
+                }
             }
         }
     }

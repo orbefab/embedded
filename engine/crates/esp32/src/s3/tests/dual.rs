@@ -329,11 +329,60 @@ fn a_from_cpu_store_interrupts_the_app_cpu() {
     assert_eq!(seen.0, []);
 }
 
-/// From the captured `CONTROL_0` of a booted chip, 0x1, a store that lets the APP CPU run with
-/// no reset since power-on ends the run, as the model cannot know its state. Stores that keep
-/// it held do not.
+/// From the captured `CONTROL_0` of a booted chip, 0x1, ESP-IDF's four stores start the APP CPU
+/// at the clear of `RESETING`. The store that clears `RUNSTALL` only makes it runnable.
 #[test]
-fn an_app_cpu_never_reset_does_not_run() {
+fn idfs_four_control_0_stores_start_the_app_cpu_at_the_reseting_clear() {
+    let mut program = Program::new(&[SYSTEM]);
+    program
+        .l32r(2, 0)
+        .movi(3, 3)
+        .s32i(3, 2, 0)
+        .movi(3, 2)
+        .s32i(3, 2, 0)
+        .movi(3, 6)
+        .s32i(3, 2, 0)
+        .movi(3, 2)
+        .s32i(3, 2, 0)
+        .raw(&LOOP);
+    let mut chip = program.chip();
+    chip.soc.restore(SYSTEM, 0x1);
+    assert_eq!(
+        chip.run_until(c(100)),
+        Some(Halt::Fault(c(8), Fault::UnmappedFetch(app(RESET))))
+    );
+}
+
+/// A release followed by another `CONTROL_0` store that does not set `RESETING` ends the run
+/// at that store.
+#[test]
+fn a_release_followed_by_a_store_without_reseting_ends_the_run() {
+    let mut program = Program::new(&[SYSTEM]);
+    program
+        .l32r(2, 0)
+        .movi(3, 3)
+        .s32i(3, 2, 0)
+        .movi(3, 2)
+        .s32i(3, 2, 0)
+        .s32i(3, 2, 0)
+        .raw(&LOOP);
+    let refused = Refused::Register("SYSTEM", "app_cpu_without_reset");
+    let mut chip = chip(&program, &boot_rom(), &[]);
+    chip.soc.restore(SYSTEM, 0x1);
+    assert_eq!(
+        chip.run_until(c(100)),
+        Some(Halt::Fault(
+            c(5),
+            Fault::Refused(refused, pro(program.entry() + 15))
+        ))
+    );
+}
+
+/// A release left with no reset ends the run 1,000 PRO CPU cycles later, at the instruction the
+/// PRO CPU had reached. The release store is the seventh instruction and starts at cycle 6, so
+/// the bound is cycle 1,006.
+#[test]
+fn a_release_left_for_1000_pro_cycles_ends_the_run() {
     let mut program = Program::new(&[SYSTEM]);
     program
         .l32r(2, 0)
@@ -348,11 +397,80 @@ fn an_app_cpu_never_reset_does_not_run() {
     let mut chip = chip(&program, &boot_rom(), &[]);
     chip.soc.restore(SYSTEM, 0x1);
     assert_eq!(
-        chip.run_until(c(100)),
+        chip.run_until(c(2_000)),
         Some(Halt::Fault(
-            c(6),
-            Fault::Refused(refused, pro(program.entry() + 18))
+            c(1_006),
+            Fault::Refused(refused, pro(program.entry() + 21))
         ))
+    );
+}
+
+/// The same bound holds when `CLKGATE_EN` is already set, so the start writes no reset.
+#[test]
+fn a_release_with_the_clock_already_open_waits_the_same_bound() {
+    let mut program = Program::new(&[SYSTEM]);
+    program.l32r(2, 0).movi(3, 2).s32i(3, 2, 0).raw(&LOOP);
+    let refused = Refused::Register("SYSTEM", "app_cpu_without_reset");
+    let mut chip = chip(&program, &boot_rom(), &[]);
+    chip.soc.restore(SYSTEM, 0x3);
+    assert_eq!(
+        chip.run_until(c(2_000)),
+        Some(Halt::Fault(
+            c(1_002),
+            Fault::Refused(refused, pro(program.entry() + 9))
+        ))
+    );
+}
+
+/// A store into watch 1's `DBREAK` window ends the run at that instruction. Watch 1 is
+/// `DBREAKA1` (SR 145) and `DBREAKC1` (SR 161).
+#[test]
+fn a_data_watchpoint_hit_ends_the_run() {
+    let base = 0x3fc8_8000u32;
+    let mut program = Program::new(&[base, 0x8000_0020]);
+    program
+        .l32r(2, 0)
+        .wsr(2, 145)
+        .l32r(2, 1)
+        .wsr(2, 161)
+        .l32r(3, 0)
+        .movi(2, 1);
+    let store = program.pc();
+    program.raw(&[0x22, 0x43, 31]).raw(&LOOP);
+    let refused = Refused::Register("CPU", "watchpoint");
+    let mut chip = program.chip();
+    assert_eq!(
+        chip.run_until(c(100)),
+        Some(Halt::Fault(c(6), Fault::Refused(refused, pro(store))))
+    );
+}
+
+/// A reset whose store starts 999 PRO CPU cycles after the release starts the lane. The release
+/// store is the fifth instruction and starts at cycle 4. 995 `nop`s, then the set and the clear
+/// of `RESETING`, put the clear at cycle 1,003.
+#[test]
+fn a_reset_999_cycles_after_the_release_starts_the_app_cpu() {
+    let mut program = Program::new(&[SYSTEM]);
+    program
+        .l32r(2, 0)
+        .movi(3, 3)
+        .s32i(3, 2, 0)
+        .movi(3, 2)
+        .s32i(3, 2, 0);
+    for _ in 0..995 {
+        program.nop();
+    }
+    program
+        .movi(3, 6)
+        .s32i(3, 2, 0)
+        .movi(3, 2)
+        .s32i(3, 2, 0)
+        .raw(&LOOP);
+    let mut chip = program.chip();
+    chip.soc.restore(SYSTEM, 0x1);
+    assert_eq!(
+        chip.run_until(c(2_000)),
+        Some(Halt::Fault(c(1_003), Fault::UnmappedFetch(app(RESET))))
     );
 }
 
@@ -764,9 +882,45 @@ fn an_app_cpu_released_with_no_rom_fetches_nothing() {
     );
 }
 
+/// From the captured `CONTROL_0`, 0x1, the release store is the fifth instruction and starts at
+/// cycle 4. The next three stores set `RTC_CNTL_SW_STALL_APPCPU_C0` in `RTC_CNTL_OPTIONS0_REG`
+/// at cycle 7, set `RTC_CNTL_SW_CPU_STALL_REG` at cycle 9, and clear that register at cycle 11.
+/// The stall turns on at cycle 9 and off at cycle 11, inside the 1,000-cycle bound. None is a
+/// `CONTROL_0` store. The sixteenth instruction then clears `RESETING` and starts the lane, so
+/// the run ends on an unmapped fetch at the reset vector.
+#[test]
+fn an_rtc_stall_between_a_release_and_its_reset_starts_the_app_cpu() {
+    let mut program = Program::new(&[SYSTEM, RTC_CNTL, 0x21 << 20]);
+    program
+        .l32r(2, 0)
+        .movi(3, 3)
+        .s32i(3, 2, 0)
+        .movi(3, 2)
+        .s32i(3, 2, 0)
+        .l32r(5, 1)
+        .movi(6, 2)
+        .s32i(6, 5, 0)
+        .l32r(7, 2)
+        .s32i(7, 5, 0xbc)
+        .movi(6, 0)
+        .s32i(6, 5, 0xbc)
+        .movi(3, 6)
+        .s32i(3, 2, 0)
+        .movi(3, 2)
+        .s32i(3, 2, 0)
+        .raw(&LOOP);
+    let mut chip = program.chip();
+    chip.soc.restore(SYSTEM, 0x1);
+    assert_eq!(
+        chip.run_until(c(100)),
+        Some(Halt::Fault(c(15), Fault::UnmappedFetch(app(RESET))))
+    );
+}
+
 /// From the captured `CONTROL_0`, 0x1, the PRO CPU turns the RTC stall on, sets `CLKGATE_EN`
-/// and clears `RUNSTALL`. The APP CPU stays held, and the clear of the RTC stall that would let
-/// it run ends the run.
+/// and clears `RUNSTALL`. The APP CPU stays held. The clear of the RTC stall makes it runnable
+/// with no reset, and the run ends 1,000 PRO CPU cycles later, at the jump, not at the clear.
+/// The clear is the twelfth instruction, so the bound is cycle 1,011.
 #[test]
 fn a_clear_of_the_rtc_stall_that_lets_an_app_cpu_never_reset_run_ends_the_run() {
     let mut program = Program::new(&[SYSTEM, RTC_CNTL, 0x21 << 20]);
@@ -787,10 +941,13 @@ fn a_clear_of_the_rtc_stall_that_lets_an_app_cpu_never_reset_run_ends_the_run() 
     let refused = Refused::Register("SYSTEM", "app_cpu_without_reset");
     let mut chip = chip(&program, &boot_rom(), &[]);
     chip.soc.restore(SYSTEM, 0x1);
-    assert!(matches!(
-        chip.run_until(c(100)),
-        Some(Halt::Fault(_, Fault::Refused(why, pc))) if why == refused && pc == pro(clear)
-    ));
+    assert_eq!(
+        chip.run_until(c(2_000)),
+        Some(Halt::Fault(
+            c(1_011),
+            Fault::Refused(refused, pro(clear + 3))
+        ))
+    );
 }
 
 /// The APP CPU makes the four stores of ESP-IDF's `esp_cpu_stall(0)`, a clear and then a set of

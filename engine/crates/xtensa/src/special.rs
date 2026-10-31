@@ -112,6 +112,10 @@ registers! {
     F64rHi: u32::MAX => [Read RUR_F64R_HI, Write WUR_F64R_HI];
     F64s: u32::MAX => [Read RUR_F64S, Write WUR_F64S];
     Prid: 0 => [Read RSR_PRID];
+    Dbreaka0: u32::MAX => [Read RSR_DBREAKA0, Write WSR_DBREAKA0, Exchange XSR_DBREAKA0];
+    Dbreaka1: u32::MAX => [Read RSR_DBREAKA1, Write WSR_DBREAKA1, Exchange XSR_DBREAKA1];
+    Dbreakc0: u32::MAX => [Read RSR_DBREAKC0, Write WSR_DBREAKC0, Exchange XSR_DBREAKC0];
+    Dbreakc1: u32::MAX => [Read RSR_DBREAKC1, Write WSR_DBREAKC1, Exchange XSR_DBREAKC1];
     Eraccess: u32::MAX => [Read RSR_ERACCESS, Write WSR_ERACCESS, Exchange XSR_ERACCESS];
     Accx0: u32::MAX => [Read RUR_ACCX_0, Write WUR_ACCX_0];
     Accx1: 0xff => [Read RUR_ACCX_1, Write WUR_ACCX_1];

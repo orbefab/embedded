@@ -487,6 +487,20 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
         "#u1 started more than one SPI1 command in one write at 0x00000010 in main, which the model does not run, at 5 ps"
     );
     assert_eq!(data["reason"], "start_bits");
+    let (message, data) = chip_json(Diagnostic::ChipFlashCommand {
+        part: part("u1"),
+        at,
+        command: Some(0x03),
+        reason: FlashRefusal::Cs,
+        pc: 0x4200_0020,
+        app: true,
+        symbol: None,
+    });
+    assert_eq!(
+        message,
+        "#u1 sent the flash command 0x03 with CS0 disabled or CS1 enabled at 0x42000020 on the APP CPU, which the model does not run, at 5 ps"
+    );
+    assert_eq!(data["reason"], "cs");
 
     let setting = |setting, peripheral| Diagnostic::ChipUnsupportedSetting {
         part: part("u1"),
