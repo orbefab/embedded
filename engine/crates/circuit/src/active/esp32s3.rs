@@ -58,9 +58,21 @@ pub(crate) struct Core {
     levels: Vec<bool>,
     /// The fault that ended its run, once a stop reported it.
     fault: Option<(Time, Fault)>,
-    /// The time of an LEDC drive move the chip reported past the last limit, which the next
-    /// call stops at.
-    moved: Option<Time>,
+    /// A stop the chip reported whose time is past the last limit, which the first call
+    /// through that time stops at.
+    held: Option<(Time, Held)>,
+    /// The latest time this copy has given the seam.
+    served: Option<Time>,
+}
+
+/// What a held stop does.
+#[derive(Clone, Copy, Debug)]
+enum Held {
+    /// The drives the chip moved land, 1 ps after its `Moved` halt.
+    Moved,
+    /// A fault the chip reported at or before a time this copy had already given the seam ends
+    /// the run, 1 ps after that time.
+    Fault(Fault),
 }
 
 pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
@@ -149,7 +161,8 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
         made: 0,
         levels: Vec::new(),
         fault: None,
-        moved: None,
+        held: None,
+        served: None,
     };
     core.refresh();
     Chip {
@@ -191,13 +204,16 @@ fn time(tick: Tick) -> Time {
 
 impl Core {
     pub(crate) fn run_until(&mut self, limit: Time) -> Option<Stop> {
-        if let Some(at) = self.moved {
-            return (at <= limit).then(|| self.move_drive(at));
+        if self.held.is_some() {
+            return self.take_held(limit);
         }
-        let halt = self.chip.run_until(tick(limit))?;
+        let Some(halt) = self.chip.run_until(tick(limit)) else {
+            self.served = Some(limit);
+            return None;
+        };
         let at = time(halt.at());
         let mut record = false;
-        match halt {
+        let at = match halt {
             Halt::Change {
                 image,
                 record: sent,
@@ -219,14 +235,25 @@ impl Core {
                     }
                     record = true;
                 }
+                at
             }
             Halt::Moved(_) => {
-                let at = Time::from_ps(at.as_ps() + 1);
-                self.moved = Some(at);
-                return (at <= limit).then(|| self.move_drive(at));
+                self.held = Some((Time::from_ps(at.as_ps() + 1), Held::Moved));
+                return self.take_held(limit);
             }
-            Halt::Fault(_, fault) => self.fault = Some((at, fault)),
-        }
+            Halt::Fault(_, fault) => {
+                // A Moved landing of this tick is already 1 ps later, and the input there can
+                // refuse a pulse. The refusal stays on the tick, so its stop is the next
+                // picosecond after whatever this copy has already given the seam.
+                let at = match self.served {
+                    Some(served) if at <= served => Time::from_ps(served.as_ps() + 1),
+                    _ => at,
+                };
+                self.held = Some((at, Held::Fault(fault)));
+                return self.take_held(limit);
+            }
+        };
+        self.served = Some(at);
         Some(Stop {
             at,
             sample: false,
@@ -234,15 +261,20 @@ impl Core {
         })
     }
 
-    /// The stop at `at` where the drives the chip moved after an LEDC record land.
-    fn move_drive(&mut self, at: Time) -> Stop {
-        self.moved = None;
-        self.refresh();
-        Stop {
+    /// The held stop, once `limit` reaches it. A fault ends the run there, and moved drives
+    /// land there.
+    fn take_held(&mut self, limit: Time) -> Option<Stop> {
+        let (at, held) = self.held.take_if(|&mut (at, _)| at <= limit)?;
+        match held {
+            Held::Moved => self.refresh(),
+            Held::Fault(fault) => self.fault = Some((at, fault)),
+        }
+        self.served = Some(at);
+        Some(Stop {
             at,
             sample: false,
             record: false,
-        }
+        })
     }
 
     /// The pin of the part on `pad`.
@@ -586,6 +618,115 @@ mod tests {
             assert!(u128::from(at) * 1_000_000_000_000 >= scaled, "{ps}");
             assert!(u128::from(at - 1) * 1_000_000_000_000 < scaled, "{ps}");
         }
+    }
+
+    /// A chip on GPIO9 as SDA and GPIO10 as SCL that starts writing `0xA5` at 400 kHz with the
+    /// filter at 7 cycles, then spins.
+    fn i2c_core() -> Core {
+        const BASE: u32 = 0x4037_0000;
+        const I2C0: u32 = 0x6001_3000;
+        const GPIO: u32 = 0x6000_4000;
+        const IO_MUX: u32 = 0x6000_9000;
+        let mut stores = vec![(0x600c_0018, 0xf9c1_e06f | 1 << 7)];
+        for (pad, signal) in [(9u32, 90u32), (10, 89)] {
+            stores.extend([
+                (IO_MUX + 0x4 + 4 * pad, 1 << 12 | 1 << 9 | 1 << 8),
+                (GPIO + 0x74 + 4 * pad, 1 << 2),
+                (GPIO + 0x554 + 4 * pad, signal),
+                (GPIO + 0x154 + 4 * signal, 1 << 7 | pad),
+            ]);
+        }
+        let mode = 1 | 1 << 1 | 1 << 4;
+        stores.extend(
+            [
+                (0x00, 49),
+                (0x30, 11),
+                (0x34, 24),
+                (0x38, 23 << 9 | 27),
+                (0x40, 49),
+                (0x44, 49),
+                (0x48, 49),
+                (0x4c, 49),
+                (0x0c, 10 | 1 << 5),
+                (0x54, 1 << 21),
+                (0x50, 7 | 7 << 4 | 1 << 8 | 1 << 9),
+                (0x04, mode | 1 << 11),
+                (0x1c, 0xa5),
+                (0x58, 6 << 11),
+                (0x5c, 1 << 11 | 1 << 8 | 1),
+                (0x60, 2 << 11),
+                (0x04, mode | 1 << 11 | 1 << 5),
+            ]
+            .map(|(offset, value)| (I2C0 + offset, value)),
+        );
+        let mut image: Vec<u8> = stores
+            .iter()
+            .flat_map(|&(addr, value)| [addr, value])
+            .flat_map(u32::to_le_bytes)
+            .collect();
+        let entry = BASE + image.len() as u32;
+        for k in 0..stores.len() as u32 {
+            for (t, literal) in [(2u8, 2 * k), (3, 2 * k + 1)] {
+                let pc = BASE + image.len() as u32;
+                let imm = ((BASE + 4 * literal).wrapping_sub((pc + 3) & !3) as i32 >> 2) as u16;
+                image.extend([t << 4 | 1, imm as u8, (imm >> 8) as u8]);
+            }
+            image.extend([0x32, 0x62, 0x00]);
+        }
+        image.extend([0x06, 0xff, 0xff]);
+        let gpios = vec![9, 10];
+        let mut core = Core {
+            chip: s3::Esp32s3::new(&gpios, entry, [(BASE, image.as_slice())], None),
+            image: vec![Drive::Off; gpios.len()],
+            gpios,
+            nets: vec![NetId::GROUND; 2],
+            records: Vec::new(),
+            made: 0,
+            levels: Vec::new(),
+            fault: None,
+            held: None,
+            served: None,
+        };
+        core.refresh();
+        core
+    }
+
+    /// An input at a landing the copy has served refuses a pulse at that landing's tick. The
+    /// refusal stops the next picosecond and never past a call's limit.
+    #[test]
+    fn a_refusal_at_a_served_landing_stops_the_next_picosecond() {
+        let mut core = i2c_core();
+        core.input(Time::ZERO, &[true, true]);
+        let levels = |core: &Core| core.drive().iter().map(|d| *d != Drive::Low).collect();
+        let released = loop {
+            let stop = core
+                .run_until(Time::from_ps(10_000_000))
+                .expect("the bus moves");
+            let now: Vec<bool> = levels(&core);
+            core.input(stop.at, &now);
+            if now == [true, false] {
+                break stop.at;
+            }
+        };
+        let landing = Time::from_ps(released.as_ps() + 25_000);
+        assert_eq!(core.run_until(landing), None);
+        core.input(landing, &[false, false]);
+        assert_eq!(core.run_until(landing), None, "a stop past the limit");
+        assert!(core.fault.is_none(), "a held refusal is not yet recorded");
+        let next = Time::from_ps(landing.as_ps() + 1);
+        assert_eq!(
+            core.run_until(next).map(|stop| stop.at),
+            Some(next),
+            "the refusal"
+        );
+        assert!(
+            matches!(
+                core.fault,
+                Some((at, Fault::Refused(Refused::Register("I2C0", "glitch"), _))) if at == next
+            ),
+            "{:?}",
+            core.fault
+        );
     }
 
     #[test]

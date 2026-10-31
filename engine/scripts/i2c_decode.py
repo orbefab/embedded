@@ -4,16 +4,23 @@
 # ///
 """Decode the I2C bus in a run folder's logic.vcd, apart from the engine.
 
-    uv run scripts/i2c_decode.py RUN_DIR [--part NAME] [--timing]
+    uv run scripts/i2c_decode.py RUN_DIR [--part NAME] [--timing] [--timing-s3 HZ]
 
 Each `atmega328p` part in RUN_DIR/netlist.json has a view of the bus: its own `PC5` as SCL
-and `PC4` as SDA, the levels its inputs read. For each view the script writes one line per
+and `PC4` as SDA, the levels its inputs read. For each such view the script writes one line per
 phase, as `traces/i2c.csv` names them, and compares the decoding of each master's view with
 that master's rows in `traces/i2c.csv`. A row matches when its phase, address, read, byte and
 ack are equal and its time is within one CPU cycle. The script prints how many rows match and
 how many of those match to the picosecond. Every view must decode to the same phases, though
 their times may differ by the swing between the parts' thresholds. `--part` limits the
 comparison to one part.
+
+Each `cst816` part is a view of its own `SCL` and `SDA`. Each `esp32s3` is a view of its GPIO
+wires on the nets one `cst816`'s `SCL` and `SDA` sit on, one view per controller. The script
+opens `traces/i2c.csv` only when an `atmega328p` view is decoded. Views with no rows are
+compared with each other. When an `atmega328p` view is decoded, another view that decodes to
+the same phases adds no line, and one that does not is printed and fails the run, so an
+ATmega run that already agrees prints what it printed before.
 
 A phase starts at the first bus change after the end of the phase before it. START and a
 repeated START end at their SCL fall, an address or data byte at its ninth SCL fall, and STOP
@@ -40,8 +47,18 @@ The rise and fall rows are not checked. tHD;DAT's maximum holds only on an SCL l
 than 1.5 times the median low, because a master that holds SCL low, as one does while `TWINT`
 is set, need not meet it.
 
+`--timing-s3 HZ` checks each `esp32s3` and `cst816` view against the lengths an ESP-IDF master
+writes at `HZ`, 100000 or 400000, to the picosecond. tLOW, tHIGH, tSU;STA, tHD;STA and tSU;STO
+are those lengths. Each tHD;DAT is the master's SDA hold or the `cst816`'s 300 ns, because both
+parts' edges are on the wires the view reads, and each tSU;DAT is tLOW minus that hold. At
+400 kHz the two holds are both 300 ns. An empty interval is not a mismatch, and tBUF is not
+checked. The ATmega table is not applied to these views. Another `HZ` exits 1. The lengths
+read IDF's register values as the model does, five of them as their register plus one, so
+`--timing-s3` checks the wire against that reading and is not an independent check of it.
+
 Exits 1 when a view's phases differ from another view's, or from `traces/i2c.csv`, or when
-`--timing` finds an interval out of the table.
+`--timing` finds an interval out of the table, or when `--timing-s3` finds an interval off
+its length.
 """
 
 import argparse
@@ -341,24 +358,133 @@ def timing(scl, sda):
     return column, seen, holds
 
 
+# The master's SDA hold at each rate, and the cst816's hold, which is the same at 400 kHz.
+S3_HZ = {
+    100_000: {"edge": 5_000_000, "hold": 1_250_000},
+    400_000: {"edge": 1_250_000, "hold": 300_000},
+}
+CST816_HOLD_PS = 300_000
+S3_EDGES = ("tLOW", "tHIGH", "tSU;STA", "tHD;STA", "tSU;STO")
+
+
+def gpio_on(part, net):
+    """The `GPIO<n>` pin of `part` that sits on `net`, or `None`."""
+    for pin, named in part["pins"].items():
+        if named == net and pin.startswith("GPIO"):
+            return pin
+    return None
+
+
+def bus_views(netlist):
+    """`(atmega, extra)` wire keys. `extra` is `(label, scl, sda)` for each cst816 and S3 view."""
+    atmega = []
+    for part in netlist["parts"]:
+        if part["kind"] == "atmega328p":
+            name = part["name"]
+            atmega.append((part, (name, "PC5"), (name, "PC4")))
+    controllers = [part for part in netlist["parts"] if part["kind"] == "cst816"]
+    chips = [part for part in netlist["parts"] if part["kind"] == "esp32s3"]
+    extra = [(part["name"], (part["name"], "SCL"), (part["name"], "SDA")) for part in controllers]
+    pairs = []
+    for chip in chips:
+        for touch in controllers:
+            scl = gpio_on(chip, touch["pins"]["SCL"])
+            sda = gpio_on(chip, touch["pins"]["SDA"])
+            if scl and sda:
+                pairs.append((chip["name"], touch["name"], scl, sda))
+    for chip, touch, scl, sda in pairs:
+        label = chip if len(pairs) == 1 else f"{chip}/{touch}"
+        extra.append((label, (chip, scl), (chip, sda)))
+    return atmega, extra
+
+
+def s3_lengths(hz):
+    """The picosecond lengths at `hz`, or `None` for a rate the table does not name."""
+    row = S3_HZ.get(hz)
+    if row is None:
+        return None
+    holds = {row["hold"], CST816_HOLD_PS}
+    return {"edge": row["edge"], "holds": holds, "setups": {row["edge"] - hold for hold in holds}}
+
+
+def s3_problems(seen, hz):
+    """Interval names whose values are not the lengths at `hz`. tBUF is not one of them."""
+    lengths = s3_lengths(hz)
+    if lengths is None:
+        return ["hz"]
+    off = []
+    for name in S3_EDGES:
+        if any(value != lengths["edge"] for value in seen[name]):
+            off.append(name)
+    if any(value not in lengths["holds"] for value in seen["tHD;DAT"]):
+        off.append("tHD;DAT")
+    if any(value not in lengths["setups"] for value in seen["tSU;DAT"]):
+        off.append("tSU;DAT")
+    return off
+
+
+def report_s3(name, scl, sda, hz):
+    """Print one view's `--timing-s3` rows. Returns whether any interval is off."""
+    _column, seen, _holds = timing(scl, sda)
+    lengths = s3_lengths(hz)
+    print(f"{name}: timing-s3 at {hz} Hz")
+    failed = False
+    for row in (*S3_EDGES, "tHD;DAT", "tSU;DAT"):
+        values = seen[row]
+        least = min(values) if values else None
+        if row in S3_EDGES:
+            want = f"want={lengths['edge']}"
+        elif row == "tHD;DAT":
+            want = f"holds={sorted(lengths['holds'])}"
+        else:
+            want = f"setups={sorted(lengths['setups'])}"
+        off = row in s3_problems(seen, hz)
+        print(f"{name}:   {row} n={len(values)} least={least} ps {want} ps off={int(off)}")
+        failed |= off
+    return failed
+
+
+def same_phases(views, left, right):
+    return [fields(phase) for phase in views[left]] == [fields(phase) for phase in views[right]]
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("run")
+    parser.add_argument("run", nargs="?")
     parser.add_argument("--part")
     parser.add_argument("--timing", action="store_true")
+    parser.add_argument(
+        "--timing-s3",
+        type=int,
+        metavar="HZ",
+        help="check the esp32s3 and cst816 views against IDF's lengths at HZ, read from its "
+        "registers as the model reads them, so not an independent check of that reading",
+    )
+    parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
+    if args.self_test:
+        sys.exit(self_test())
+    if not args.run:
+        parser.error("RUN_DIR is required")
+    if args.timing_s3 is not None and s3_lengths(args.timing_s3) is None:
+        print(f"--timing-s3 takes 100000 or 400000, not {args.timing_s3}", file=sys.stderr)
+        sys.exit(1)
     run = Path(args.run)
     netlist = json.loads((run / "netlist.json").read_text())
     vcd = read_vcd(run / "traces" / "logic.vcd")
-    chips = [p for p in netlist["parts"] if p["kind"] == "atmega328p"]
-    with open(run / "traces" / "i2c.csv", newline="") as f:
-        rows = list(csv.DictReader(f))
+    atmega, extra = bus_views(netlist)
+    rows = []
+    if atmega:
+        with open(run / "traces" / "i2c.csv", newline="") as f:
+            rows = list(csv.DictReader(f))
     failed = False
     views = {}
-    for chip in chips:
+    order = []
+    for chip, scl, sda in atmega:
         name = chip["name"]
         cycle_ps = -(-10**12 // chip["clock_hz"]["value"])
-        views[name] = decode(vcd[(name, "PC5")], vcd[(name, "PC4")])
+        views[name] = decode(vcd[scl], vcd[sda])
+        order.append(name)
         mine = [row for row in rows if row["part"] == name]
         print(f"{name}: {len(views[name])} decoded phases, {len(mine)} rows in i2c.csv")
         if args.part and args.part != name:
@@ -368,17 +494,29 @@ def main():
         for problem in problems:
             print(f"{name}: {problem}")
             failed = True
-    names = list(views)
-    for other in names[1:]:
-        a = [fields(p) for p in views[names[0]]]
-        b = [fields(p) for p in views[other]]
-        same = a == b
-        print(f"{names[0]} and {other} decode the same phases: {same}")
+    for label, scl, sda in extra:
+        views[label] = decode(vcd[scl], vcd[sda])
+        order.append(label)
+    atmega_names = [chip["name"] for chip, _scl, _sda in atmega]
+    for other in atmega_names[1:]:
+        same = same_phases(views, atmega_names[0], other)
+        print(f"{atmega_names[0]} and {other} decode the same phases: {same}")
         failed |= not same
+    if atmega_names:
+        for label, _scl, _sda in extra:
+            if same_phases(views, atmega_names[0], label):
+                continue
+            print(f"{atmega_names[0]} and {label} decode the same phases: False")
+            failed = True
+    elif order:
+        for other in order[1:]:
+            same = same_phases(views, order[0], other)
+            print(f"{order[0]} and {other} decode the same phases: {same}")
+            failed |= not same
     if args.timing:
-        for chip in chips:
+        for chip, scl, sda in atmega:
             name = chip["name"]
-            column, seen, holds = timing(vcd[(name, "PC5")], vcd[(name, "PC4")])
+            column, seen, holds = timing(vcd[scl], vcd[sda])
             rate = ("100 kHz", "400 kHz")[column]
             print(f"{name}: timing against the {rate} column")
             for row, mins in TABLE.items():
@@ -390,7 +528,100 @@ def main():
             over = [h for h in holds if h > HOLD_MAX[column]]
             print(f"{name}:   tHD;DAT max={HOLD_MAX[column]} ps on {len(holds)} unstretched holds, over={len(over)}")
             failed |= bool(over)
+    if args.timing_s3 is not None:
+        for label, scl, sda in extra:
+            failed |= report_s3(label, vcd[scl], vcd[sda], args.timing_s3)
     sys.exit(1 if failed else 0)
+
+
+def self_test():
+    """The S3 lengths, and that an ATmega view adds no line for a matching controller."""
+    failures = 0
+
+    def expect(name, ok):
+        nonlocal failures
+        if not ok:
+            print(f"FAIL {name}")
+            failures += 1
+
+    def seen_of(**rows):
+        base = {name: [] for name in (*TABLE,)}
+        base.update(rows)
+        return base
+
+    edge = 1_250_000
+    exact = seen_of(**{name: [edge] for name in S3_EDGES}, **{"tHD;DAT": [300_000], "tSU;DAT": [950_000]})
+    expect("400 kHz lengths pass", s3_problems(exact, 400_000) == [])
+    expect("a tLOW 1 ps off fails", "tLOW" in s3_problems({**exact, "tLOW": [edge + 1]}, 400_000))
+    expect("an empty interval passes", s3_problems(seen_of(), 400_000) == [])
+    expect("tBUF is not checked", s3_problems({**exact, "tBUF": [33_000_000_000]}, 400_000) == [])
+    slow = seen_of(
+        **{name: [5_000_000] for name in S3_EDGES},
+        **{"tHD;DAT": [1_250_000, 300_000], "tSU;DAT": [3_750_000, 4_700_000]},
+    )
+    expect("100 kHz takes the master hold and the 300 ns hold", s3_problems(slow, 100_000) == [])
+    expect("a 400 ns hold fails at 100 kHz", "tHD;DAT" in s3_problems({**slow, "tHD;DAT": [400_000]}, 100_000))
+    expect("a setup that is not the low minus its hold fails", "tSU;DAT" in s3_problems({**slow, "tSU;DAT": [950_000]}, 100_000))
+    expect("another rate is rejected", s3_lengths(200_000) is None)
+
+    import tempfile
+
+    def vcd(scopes):
+        body = ["$timescale 1 ps $end"]
+        n = 0
+        codes = []
+        for scope, names in scopes:
+            body.append(f"$scope module {scope} $end")
+            for name in names:
+                code = chr(ord("!") + n)
+                n += 1
+                codes.append(code)
+                body.append(f"$var wire 1 {code} {name} $end")
+            body.append("$upscope $end")
+        body += ["$enddefinitions $end", "$dumpvars"]
+        body += [f"1{code}" for code in codes]
+        body.append("$end")
+        return "\n".join(body) + "\n"
+
+    with tempfile.TemporaryDirectory() as raw:
+        folder = Path(raw)
+        (folder / "traces").mkdir()
+        (folder / "traces" / "i2c.csv").write_text("t_ps,part,phase,address,read,byte,ack\n")
+        (folder / "traces" / "logic.vcd").write_text(vcd([
+            ("u1", ["PC5", "PC4"]),
+            ("u2", ["SCL", "SDA"]),
+            ("u3", ["GPIO10", "GPIO9"]),
+        ]))
+        netlist = {
+            "parts": [
+                {"name": "u1", "kind": "atmega328p", "clock_hz": {"value": 16_000_000}, "pins": {}},
+                {"name": "u2", "kind": "cst816", "pins": {"SCL": "scl", "SDA": "sda"}},
+                {"name": "u3", "kind": "esp32s3", "pins": {"GPIO10": "scl", "GPIO9": "sda"}},
+            ]
+        }
+        (folder / "netlist.json").write_text(json.dumps(netlist))
+        import subprocess
+
+        script = Path(__file__).resolve()
+        out = subprocess.run([sys.executable, script, str(folder)], capture_output=True, text=True)
+        expect("a matching controller adds no line", out.returncode == 0 and out.stdout == (
+            "u1: 0 decoded phases, 0 rows in i2c.csv\n"
+            "u1: 0 of 0 rows match, 0 to the picosecond\n"
+        ))
+        netlist["parts"] = netlist["parts"][1:]
+        (folder / "netlist.json").write_text(json.dumps(netlist))
+        out = subprocess.run([sys.executable, script, str(folder)], capture_output=True, text=True)
+        expect("an S3 run compares its views and does not open i2c.csv", out.returncode == 0 and out.stdout == (
+            "u2 and u3 decode the same phases: True\n"
+        ))
+        (folder / "traces" / "i2c.csv").unlink()
+        out = subprocess.run([sys.executable, script, str(folder), "--timing-s3", "400000"], capture_output=True, text=True)
+        expect("timing-s3 on an idle bus passes", out.returncode == 0 and "off=1" not in out.stdout)
+        out = subprocess.run([sys.executable, script, str(folder), "--timing-s3", "200000"], capture_output=True, text=True)
+        expect("another timing-s3 rate exits 1", out.returncode == 1)
+
+    print("self-test passed" if not failures else f"self-test: {failures} failed")
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

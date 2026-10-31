@@ -1,5 +1,5 @@
-The app images and partition tables in examples/esp32s3-hello/blobs, examples/esp32s3-screen/blobs
-and examples/esp32s3-encoder/blobs are built from this directory by scripts/esp32s3-firmware.sh
+The app images and partition tables in examples/esp32s3-hello/blobs, examples/esp32s3-screen/blobs,
+examples/esp32s3-encoder/blobs and examples/esp32s3-touch/blobs are built from this directory by scripts/esp32s3-firmware.sh
 with ESP-IDF v5.5.5, the tag v5.5.5 of https://github.com/espressif/esp-idf, and its toolchain
 esp-14.2.0_20260121. Their source is not kept in this repository, and that tag and toolchain give
 it. The screen app also links three components from the ESP Component Registry,

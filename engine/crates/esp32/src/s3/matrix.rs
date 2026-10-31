@@ -7,7 +7,7 @@
 //! interrupts drives nothing, as the core takes no external line there. The APP CPU's map
 //! starts at 16, a core timer, as the hardware resets it. The status registers show each
 //! source's level, the same in both halves. The sources modeled are the GPIO interrupt, SPI2's,
-//! each timer group's watchdog, the three SYSTIMER alarms and the four `FROM_CPU` registers, and
+//! I2C0's, each timer group's watchdog, the three SYSTIMER alarms and the four `FROM_CPU` registers, and
 //! every other source stays low. IDF v5.5.5, `components/soc/esp32s3/include/soc/interrupts.h`,
 //! `interrupt_core0_reg.h` and `interrupt_core1_reg.h`.
 
@@ -18,6 +18,8 @@ const SOURCES: u32 = 99;
 /// `ETS_GPIO_INTR_SOURCE`.
 const GPIO: u32 = 16;
 const SPI2: u32 = 21;
+/// `ETS_I2C_EXT0_INTR_SOURCE`.
+const I2C_EXT0: u32 = 42;
 /// `ETS_TG0_WDT_LEVEL_INTR_SOURCE` and `ETS_TG1_WDT_LEVEL_INTR_SOURCE`.
 const TG_WDT: [u32; 2] = [52, 55];
 pub(crate) const SYSTIMER_TARGET0: u32 = 57;
@@ -95,17 +97,20 @@ impl Matrix {
     }
 
     /// The source levels, bit `n` for source `n`, with `systimer` the SYSTIMER alarm lines,
-    /// `spi2` SPI2's line, `watchdogs` each timer group's watchdog line and `gpio` the GPIO line.
+    /// `spi2` SPI2's line, `watchdogs` each timer group's watchdog line, `gpio` the GPIO line and
+    /// `i2c` I2C0's.
     pub(crate) fn sources(
         &self,
         systimer: u32,
         spi2: bool,
         watchdogs: [bool; 2],
         gpio: bool,
+        i2c: bool,
     ) -> u128 {
         u128::from(systimer) << SYSTIMER_TARGET0
             | u128::from(gpio) << GPIO
             | u128::from(spi2) << SPI2
+            | u128::from(i2c) << I2C_EXT0
             | u128::from(watchdogs[0]) << TG_WDT[0]
             | u128::from(watchdogs[1]) << TG_WDT[1]
             | u128::from(self.from_cpu) << FROM_CPU_INTR0
@@ -136,48 +141,51 @@ mod tests {
         matrix.write(4 * FROM_CPU_INTR0, 9);
         matrix.write(4 * SYSTIMER_TARGET0, 19);
         assert_eq!(
-            matrix.lines(Pro, matrix.sources(0, false, [false; 2], false)),
+            matrix.lines(Pro, matrix.sources(0, false, [false; 2], false, false)),
             0
         );
         matrix.write_from_cpu(*FROM_CPU.start(), 1);
         assert_eq!(
-            matrix.lines(Pro, matrix.sources(0, false, [false; 2], false)),
+            matrix.lines(Pro, matrix.sources(0, false, [false; 2], false, false)),
             1 << 9
         );
         assert_eq!(
-            matrix.lines(Pro, matrix.sources(0b1, false, [false; 2], false)),
+            matrix.lines(Pro, matrix.sources(0b1, false, [false; 2], false, false)),
             1 << 9 | 1 << 19
         );
         let status = matrix
             .read(
                 STATUS.start() + 8,
-                matrix.sources(0, false, [false; 2], false),
+                matrix.sources(0, false, [false; 2], false, false),
             )
             .unwrap();
         assert_eq!(status, 1 << (FROM_CPU_INTR0 - 64), "the third status word");
         matrix.write_from_cpu(*FROM_CPU.start(), 0);
         assert_eq!(
-            matrix.lines(Pro, matrix.sources(0, false, [false; 2], false)),
+            matrix.lines(Pro, matrix.sources(0, false, [false; 2], false, false)),
             0
         );
         matrix.write(4 * SPI2, 5);
         assert_eq!(
-            matrix.lines(Pro, matrix.sources(0, true, [false; 2], false)),
+            matrix.lines(Pro, matrix.sources(0, true, [false; 2], false, false)),
             1 << 5
         );
         let status = matrix
-            .read(*STATUS.start(), matrix.sources(0, true, [false; 2], false))
+            .read(
+                *STATUS.start(),
+                matrix.sources(0, true, [false; 2], false, false),
+            )
             .unwrap();
         assert_eq!(status, 1 << SPI2, "the first status word");
         matrix.write(4 * TG_WDT[1], 24);
         assert_eq!(
-            matrix.lines(Pro, matrix.sources(0, false, [false, true], false)),
+            matrix.lines(Pro, matrix.sources(0, false, [false, true], false, false)),
             1 << 24
         );
         let status = matrix
             .read(
                 STATUS.start() + 4,
-                matrix.sources(0, false, [true, false], false),
+                matrix.sources(0, false, [true, false], false, false),
             )
             .unwrap();
         assert_eq!(status, 1 << (TG_WDT[0] - 32), "the second status word");
@@ -190,17 +198,17 @@ mod tests {
         matrix.write_from_cpu(FROM_CPU.start() + 4, 1);
         assert_eq!(matrix.read(CORE1 + 4 * from_cpu_1, 0), Some(16));
         assert_eq!(
-            matrix.lines(App, matrix.sources(0, false, [false; 2], false)),
+            matrix.lines(App, matrix.sources(0, false, [false; 2], false, false)),
             1 << 16
         );
         matrix.write(CORE1 + 4 * from_cpu_1, 2);
         assert_eq!(matrix.read(4 * from_cpu_1, 0), Some(0), "the PRO CPU's map");
         assert_eq!(
-            matrix.lines(App, matrix.sources(0, false, [false; 2], false)),
+            matrix.lines(App, matrix.sources(0, false, [false; 2], false, false)),
             1 << 2
         );
         assert_eq!(
-            matrix.lines(Pro, matrix.sources(0, false, [false; 2], false)),
+            matrix.lines(Pro, matrix.sources(0, false, [false; 2], false, false)),
             1 << 0
         );
         assert!(!matrix.routes_to(Pro, NMI));
@@ -208,7 +216,7 @@ mod tests {
         assert!(matrix.routes_to(App, NMI) && !matrix.routes_to(Pro, NMI));
         let status = matrix.read(
             CORE1 + STATUS.start() + 8,
-            matrix.sources(0, false, [false; 2], false),
+            matrix.sources(0, false, [false; 2], false, false),
         );
         assert_eq!(
             status,

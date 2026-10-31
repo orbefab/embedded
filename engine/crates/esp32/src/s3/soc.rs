@@ -24,6 +24,7 @@ use super::flash::{self, Flash};
 use super::gates::{self, Block, Gates};
 use super::gdma::{self, Gdma};
 use super::gpio::{self, Gpio, PADS, PadDrive};
+use super::i2c::{self, I2c};
 use super::ledc::{self, Ledc};
 use super::matrix::{self, Matrix};
 use super::rom;
@@ -54,6 +55,8 @@ pub(crate) const TIMG1: u32 = 0x6002_0000;
 pub(crate) const SYSTIMER: u32 = 0x6002_3000;
 pub(crate) const SPI2: u32 = 0x6002_4000;
 const LEDC: u32 = 0x6001_9000;
+const I2C0: u32 = 0x6001_3000;
+const I2C1: u32 = 0x6002_7000;
 pub(crate) const USB_SERIAL_JTAG: u32 = 0x6003_8000;
 const SHA: u32 = 0x6003_b000;
 pub(crate) const GDMA: u32 = 0x6003_f000;
@@ -88,6 +91,7 @@ pub(crate) struct Soc {
     gdma: Gdma,
     sha: Sha,
     pub(crate) ledc: Ledc,
+    pub(crate) i2c: I2c,
     /// The LEDC updates that took effect and that the chip has not taken.
     pub(crate) effects: Vec<ledc::Effect>,
     /// The `Duty` records those updates and the routes to netted pads made, in time order.
@@ -130,6 +134,9 @@ pub(crate) struct Soc {
     /// A store started an SPI2 transfer, so the next fetch stops the core and the run reads its
     /// end.
     pub(crate) started: bool,
+    /// A store by this core started an I2C transfer, so the run takes that core's PC as the
+    /// transfer's.
+    pub(crate) i2c_started: Option<CoreId>,
     /// A store ended the run, and stopped the core.
     pub(crate) ending: Option<Ending>,
     app: AppControl,
@@ -256,6 +263,9 @@ fn effect(addr: u32) -> Option<Effect> {
         (GPIO, 0x2c | 0x30) => Effect::Refuse(1, pads),
         (GPIO, 0x5bc..=0x5d4) => Effect::Pin(0xfff, 0x100, pads),
         (GPIO, 0x74..=0x134) => Effect::Report(gpio::PIN_UNRUN),
+        (I2C0, 0x04) => Effect::Report(i2c::CTR_UNRUN),
+        (I2C0, 0x10 | 0x78 | 0x7c | 0x84) => Effect::Report(u32::MAX),
+        (I2C0, 0x18) => Effect::Report(i2c::FIFO_CONF_UNRUN),
         _ => return None,
     })
 }
@@ -278,6 +288,7 @@ impl Soc {
             gdma: Gdma::new(),
             sha: Sha::new(),
             ledc: Ledc::new(),
+            i2c: I2c::new(),
             effects: Vec::new(),
             duties: Vec::new(),
             gates: Gates::new(),
@@ -298,6 +309,7 @@ impl Soc {
             change_stop: false,
             unmapped_fetch: false,
             started: false,
+            i2c_started: None,
             ending: None,
             app: AppControl::default(),
             steer: None,
@@ -309,7 +321,19 @@ impl Soc {
             soc.gpio.set_signal(signal, level);
         }
         soc.idle_ledc();
+        soc.idle_i2c();
         soc
+    }
+
+    /// Puts I2C0's outputs at their idle level, released.
+    fn idle_i2c(&mut self) {
+        self.gpio.set_signal(i2c::SCL, true);
+        self.gpio.set_signal(i2c::SDA, true);
+    }
+
+    /// Runs every I2C event due at or before `through`, until one waits for its drive to land.
+    pub(crate) fn settle_i2c(&mut self, through: Tick) {
+        self.i2c.settle(through, &mut self.gpio);
     }
 
     /// Puts each LEDC channel's signal at its power-on level, low.
@@ -590,6 +614,7 @@ impl Soc {
             GDMA => self.gdma.read(offset),
             SHA => self.sha.read(offset),
             LEDC => self.ledc.read(offset),
+            I2C0 => self.i2c.read(now, offset, &mut self.gpio),
             SYSTEM if gates::OFFSETS.contains(&offset) => Some(self.gates.read(offset)),
             ANALOG => self.analog.read(offset),
             EFUSE => self.efuse.read(offset),
@@ -670,6 +695,8 @@ impl Soc {
             SYSTEM if gates::OFFSETS.contains(&offset) => {
                 let mut gates = self.gates.clone();
                 let held: Vec<Block> = gates.write(offset, value).collect();
+                self.settle_i2c(now);
+                let i2c = self.i2c.runs();
                 let sending = self.spi2.busy(now);
                 let dma = sending && !self.in_flight.is_empty();
                 let refused = [
@@ -705,6 +732,16 @@ impl Soc {
                         "LEDC",
                         "reset_while_running",
                     ),
+                    (
+                        i2c && held.contains(&Block::I2c0),
+                        "I2C0",
+                        "reset_while_sending",
+                    ),
+                    (
+                        i2c && !gates.clocked(Block::I2c0),
+                        "I2C0",
+                        "reset_while_sending",
+                    ),
                 ]
                 .into_iter()
                 .find(|&(refused, ..)| refused);
@@ -727,6 +764,13 @@ impl Soc {
                         true
                     })
             }
+            I2C0 => self
+                .i2c
+                .write(now, offset, value, &mut self.gpio)
+                .unwrap_or_else(|setting| {
+                    self.ending = Some(Ending::Refused(Refused::Register("I2C0", setting)));
+                    true
+                }),
             INTERRUPT_CORE0 => self.matrix.write(offset, value),
             EFUSE => self.efuse.write(offset, value).unwrap_or_else(|()| {
                 self.ending = Some(Ending::EfuseProgram);
@@ -787,8 +831,9 @@ impl Soc {
         self.systimer.settle(now);
         let spi2 = self.spi2.line(now);
         let gpio = self.gpio.pending() != 0;
+        let lines = self.watchdogs.lines();
         self.matrix
-            .sources(self.systimer.lines(), spi2, self.watchdogs.lines(), gpio)
+            .sources(self.systimer.lines(), spi2, lines, gpio, self.i2c.line())
     }
 
     /// Runs the CPU from the clock the SYSTEM registers now pick, from core cycle `at` on, which
@@ -875,6 +920,10 @@ impl Soc {
             }
             Block::Gdma => self.gdma = Gdma::new(),
             Block::Sha => self.sha = Sha::new(),
+            Block::I2c0 => {
+                self.i2c = I2c::new();
+                self.idle_i2c();
+            }
         }
     }
 
@@ -886,6 +935,7 @@ impl Soc {
             LEDC => Block::Ledc,
             GDMA => Block::Gdma,
             SHA => Block::Sha,
+            I2C0 => Block::I2c0,
             _ => return None,
         };
         let why = if !self.gates.clocked(block) {
@@ -991,6 +1041,12 @@ impl Soc {
         if word == USB_SERIAL_JTAG {
             self.usb.take_received(now);
         }
+        if word == I2C0 + i2c::DATA
+            && let Err(setting) = self.i2c.take()
+        {
+            self.ending = Some(Ending::Refused(Refused::Register("I2C0", setting)));
+            return Err(Exit::Stop);
+        }
         match kept {
             Some(value) => Ok((value >> shift) & mask),
             None => self.touch(now, word, false, false).map(|()| 0),
@@ -1049,6 +1105,10 @@ impl Soc {
             self.ending = Some(Ending::Refused(refused));
             return Err(Exit::Stop);
         }
+        if word & !(BLOCK - 1) == I2C1 {
+            self.ending = Some(Ending::Refused(Refused::Register("I2C1", "port")));
+            return Err(Exit::Stop);
+        }
         let clock = word == SYSTEM + SYSCLK_CONF || word == SYSTEM + CPU_PER_CONF;
         // The other core's refetched access on a tie can have stamped the cycle after `start`,
         // and a switch at `start` would hold the reported tick until the new clock caught up.
@@ -1103,6 +1163,7 @@ impl Soc {
                 value
             };
             let due = self.ledc.next(self.clock.source.apb());
+            let i2c = (self.i2c.runs(), self.i2c.next_event());
             self.write_kept(now, word, kept);
             if clock {
                 self.switch_clock(at, now);
@@ -1114,8 +1175,12 @@ impl Soc {
                 return Err(Exit::Stop);
             }
             self.changes.extend(change.map(|touch| (word, touch)));
+            if !i2c.0 && self.i2c.runs() {
+                self.i2c_started = Some(step.core);
+            }
             self.rearmed |= self.watchdogs.deadline() != deadline
-                || self.ledc.next(self.clock.source.apb()) != due;
+                || self.ledc.next(self.clock.source.apb()) != due
+                || self.i2c.next_event() != i2c.1;
             return Ok(());
         }
         self.settle_ledc(now);

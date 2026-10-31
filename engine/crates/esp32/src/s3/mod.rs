@@ -36,6 +36,7 @@ mod flash;
 mod gates;
 mod gdma;
 mod gpio;
+mod i2c;
 mod ledc;
 mod matrix;
 mod rom;
@@ -242,6 +243,9 @@ pub struct Esp32s3 {
     ended: bool,
     /// The tick and PC of the store that reset the chip, which holds it in reset from then on.
     restarted: Option<(Tick, Pc)>,
+    /// The PC after the store that started the last I2C transfer, which a setting the transfer
+    /// meets later names.
+    i2c_pc: Pc,
 }
 
 impl Esp32s3 {
@@ -310,6 +314,10 @@ impl Esp32s3 {
             fault: None,
             ended: false,
             restarted: None,
+            i2c_pc: Pc {
+                core: CoreId::Pro,
+                pc: 0,
+            },
         }
     }
 
@@ -318,6 +326,7 @@ impl Esp32s3 {
     pub fn run_until(&mut self, limit: Tick) -> Option<Halt> {
         loop {
             self.settle_ledc();
+            self.settle_i2c(limit);
             if let Some(halt) = self.next_halt() {
                 if halt.at() > limit {
                     return None;
@@ -332,11 +341,13 @@ impl Esp32s3 {
             let watchdog = self.soc.watchdogs.deadline();
             let due = watchdog.map(|expiry| self.soc.clock.round_up(expiry.at));
             let ledc = self.soc.ledc.next(self.soc.clock.source.apb());
+            let i2c = self.soc.i2c.next_event();
             let until = [
                 Some(Tick(limit.0 + 1)),
                 due,
                 self.soc.spi2.end(self.reported),
                 ledc.map(|at| Tick(at.0 + 1)),
+                i2c.map(|at| Tick(at.0 + 1)),
             ]
             .into_iter()
             .flatten()
@@ -351,6 +362,12 @@ impl Esp32s3 {
             self.soc.rearmed = false;
             self.soc.reclocked = false;
             self.soc.started = false;
+            if let Some(core) = self.soc.i2c_started.take() {
+                self.i2c_pc = Pc {
+                    core,
+                    pc: self.cores.core(core).pc(),
+                };
+            }
             if let (Some(expiry), Some(due)) = (watchdog, due)
                 && self.now() >= due
                 && self.soc.watchdogs.deadline() == watchdog
@@ -441,6 +458,34 @@ impl Esp32s3 {
         }
     }
 
+    /// Runs every I2C event due through `limit` at a tick whose instructions have all run, and
+    /// before any halt the chip has not reported, so an event never runs before the inputs of an
+    /// earlier landing. A setting a transfer meets ends the run, naming the PC after the store
+    /// that started it.
+    fn settle_i2c(&mut self, limit: Tick) {
+        if self.soc.i2c.idle() {
+            return;
+        }
+        let Some(through) = self.now().0.checked_sub(1) else {
+            return;
+        };
+        let halt = self.next_halt().map(|halt| match halt {
+            Halt::Fault(at, _) => at.0.saturating_sub(1),
+            halt => halt.at().0,
+        });
+        let through = [Some(through), Some(limit.0), halt]
+            .into_iter()
+            .flatten()
+            .min();
+        self.soc.settle_i2c(Tick(through.expect("a bound")));
+        if let Some((at, setting)) = self.soc.i2c.take_refused()
+            && self.fault.is_none_or(|(fault, _)| at < fault)
+        {
+            let refused = Refused::Register("I2C0", setting);
+            self.fault = Some((at, Fault::Refused(refused, self.i2c_pc)));
+        }
+    }
+
     /// Holds the chip in reset from `now`, after the store at `pc` reset it from `esp_restart`.
     /// The boot ROM does not run, so the core runs no further, and each pad drives as at
     /// power-on.
@@ -485,7 +530,14 @@ impl Esp32s3 {
             };
             (at, 0, halt)
         });
-        let moved = self.moves.first().map(|&(at, ..)| (at, 1, Halt::Moved(at)));
+        let moved = [
+            self.moves.first().map(|&(at, ..)| at),
+            self.soc.i2c.moved().map(|(at, ..)| at),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+        .map(|at| (at, 1, Halt::Moved(at)));
         let fault = self
             .fault
             .map(|(at, fault)| (at, 2, Halt::Fault(at, fault)));
@@ -515,6 +567,9 @@ impl Esp32s3 {
                 while let Some(&(_, signal, level)) = self.moves.first().filter(|m| m.0 == at) {
                     self.soc.gpio.set_signal(signal, level);
                     self.moves.remove(0);
+                }
+                if let Some((signal, level)) = self.soc.i2c.land(at) {
+                    self.soc.gpio.set_signal(signal, level);
                 }
                 self.shown = self.soc.image();
             }
@@ -552,6 +607,7 @@ impl Esp32s3 {
         for (gpio, level) in pads {
             self.soc.gpio.set_pad(gpio, level);
         }
+        self.soc.i2c.input(at, &self.soc.gpio);
     }
 
     /// The next console byte whose packet went at or before `through`, with that tick.
@@ -749,6 +805,7 @@ mod tests {
     }
 
     mod dual;
+    mod i2c;
     mod pads;
 
     #[test]

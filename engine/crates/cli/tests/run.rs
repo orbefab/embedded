@@ -452,6 +452,36 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
             let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 18];
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
             assert_kept_resets(&name, &doc, 7);
+        } else if name == "esp32s3-touch" {
+            // The 10 registers the app touches that the model does not keep, the write of
+            // `I2C_CTR_REG` that changes bits the model keeps and does not run, the write that
+            // sets the reset of SYSTEM_WDG at start-up, and the 6 writes that pulse the resets
+            // of SYSTIMER, TIMG0 and TIMG1 at start-up.
+            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 18];
+            assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
+            let kept: Vec<_> = doc["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|d| d["data"]["kept"] == true)
+                .collect();
+            assert_eq!(kept.len(), 8, "{name}: {}", doc["diagnostics"]);
+            assert_eq!(
+                kept.iter()
+                    .filter(|d| d["data"]["register"] == "SYSTEM+0x20")
+                    .count(),
+                7,
+                "{name}: {}",
+                doc["diagnostics"]
+            );
+            assert_eq!(
+                kept.iter()
+                    .filter(|d| d["data"]["register"] == "I2C0+0x4")
+                    .count(),
+                1,
+                "{name}: {}",
+                doc["diagnostics"]
+            );
         } else {
             assert!(found.is_empty(), "{name}: {}", doc["diagnostics"]);
         }

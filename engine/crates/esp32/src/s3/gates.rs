@@ -1,7 +1,7 @@
 //! SYSTEM's peripheral clock gates and resets: `SYSTEM_PERIP_CLK_EN0_REG`,
 //! `SYSTEM_PERIP_CLK_EN1_REG`, `SYSTEM_PERIP_RST_EN0_REG` and `SYSTEM_PERIP_RST_EN1_REG`.
 //!
-//! SPI2, LEDC, GDMA and the SHA accelerator run their gates. Each runs while its clock bit is set
+//! SPI2, LEDC, I2C0, GDMA and the SHA accelerator run their gates. Each runs while its clock bit is set
 //! and its reset bits are clear. A write that leaves one of its reset bits set puts it back to
 //! its power-on state, and it stays there until they clear. The SHA accelerator is held by the
 //! digital signature and HMAC reset bits too, as IDF's `sha_ll_reset_register` says.
@@ -25,10 +25,17 @@ pub(crate) enum Block {
     Ledc,
     Gdma,
     Sha,
+    I2c0,
 }
 
 impl Block {
-    pub(crate) const ALL: [Block; 4] = [Block::Spi2, Block::Ledc, Block::Gdma, Block::Sha];
+    pub(crate) const ALL: [Block; 5] = [
+        Block::Spi2,
+        Block::Ledc,
+        Block::Gdma,
+        Block::Sha,
+        Block::I2c0,
+    ];
 
     pub(crate) fn name(self) -> &'static str {
         match self {
@@ -36,6 +43,7 @@ impl Block {
             Block::Ledc => "LEDC",
             Block::Gdma => "GDMA",
             Block::Sha => "SHA",
+            Block::I2c0 => "I2C0",
         }
     }
 
@@ -46,6 +54,7 @@ impl Block {
             Block::Ledc => (0, 1 << 11, 1 << 11),
             Block::Gdma => (1, 1 << 6, 1 << 6),
             Block::Sha => (1, 1 << 2, 1 << 2 | 1 << 4 | 1 << 5),
+            Block::I2c0 => (0, 1 << 7, 1 << 7),
         }
     }
 }
@@ -122,6 +131,7 @@ mod tests {
         assert!(gates.clocked(Block::Spi2) && !gates.held(Block::Spi2));
         assert!(!gates.clocked(Block::Gdma) && gates.held(Block::Gdma));
         assert!(!gates.clocked(Block::Ledc) && !gates.held(Block::Ledc));
+        assert!(!gates.clocked(Block::I2c0) && !gates.held(Block::I2c0));
         let held: Vec<Block> = gates.write(0x20, 1 << 6).collect();
         assert_eq!(held, [Block::Spi2, Block::Gdma, Block::Sha]);
         assert!(gates.write(0x24, 1 << 4).any(|block| block == Block::Sha));

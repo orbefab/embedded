@@ -29,6 +29,13 @@ const OUT_INV_SEL: u32 = 1 << 9;
 const OEN_SEL: u32 = 1 << 10;
 const OEN_INV_SEL: u32 = 1 << 11;
 
+/// `FUNCn_IN_SEL_CFG`'s fields, and the two `IN_SEL` values that read a constant.
+const IN_SEL: u32 = 0x3f;
+const IN_INV_SEL: u32 = 1 << 6;
+const SIG_IN_SEL: u32 = 1 << 7;
+const IN_HIGH: u32 = 0x38;
+const IN_LOW: u32 = 0x3c;
+
 /// `GPIO_PINn`'s fields.
 const PAD_DRIVER: u32 = 1 << 2;
 const INT_TYPE_SHIFT: u32 = 7;
@@ -291,16 +298,7 @@ impl Gpio {
 
     /// The level input `signal` reads through the matrix, or `None` when `SIG_IN_SEL` leaves it
     /// to IO_MUX or `IN_SEL` names no pad.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "no modeled peripheral reads an input signal yet")
-    )]
     pub(crate) fn input(&self, signal: u16) -> Option<bool> {
-        const IN_SEL: u32 = 0x3f;
-        const IN_INV_SEL: u32 = 1 << 6;
-        const SIG_IN_SEL: u32 = 1 << 7;
-        const IN_HIGH: u32 = 0x38;
-        const IN_LOW: u32 = 0x3c;
         let sel = self.in_sel[usize::from(signal)];
         if sel & SIG_IN_SEL == 0 {
             return None;
@@ -312,6 +310,18 @@ impl Gpio {
             _ => return None,
         };
         Some(level ^ (sel & IN_INV_SEL != 0))
+    }
+
+    /// The pad input `signal` reads through the matrix, uninverted.
+    pub(crate) fn reads(&self, signal: u16) -> Option<u8> {
+        let sel = self.in_sel[usize::from(signal)];
+        let pad = (sel & IN_SEL) as usize;
+        (sel & (SIG_IN_SEL | IN_INV_SEL) == SIG_IN_SEL && pad < PADS).then_some(pad as u8)
+    }
+
+    /// Whether the pad's `GPIO_PINn` sets `PAD_DRIVER`.
+    pub(crate) fn open_drain(&self, pad: u8) -> bool {
+        self.pin[usize::from(pad)] & PAD_DRIVER != 0
     }
 
     /// The lowest pad whose output `signal` drives, enabled.

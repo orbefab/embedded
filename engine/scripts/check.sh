@@ -45,3 +45,10 @@ rm -rf "$encoder_run"
 cargo run -q -p sim-cli --locked -- run examples/esp32s3-encoder/netlist.json --out "$encoder_run" --blobs "$blobs" >/dev/null
 uv run scripts/esp32s3_encoder.py --check "$encoder_run"
 rm -rf "$encoder_run"
+uv run scripts/i2c_decode.py --self-test
+uv run scripts/esp32s3_touch.py --self-test
+touch_run="${CARGO_TARGET_DIR:-target}/esp32s3-touch-check"
+rm -rf "$touch_run"
+cargo run -q -p sim-cli --locked -- run examples/esp32s3-touch/netlist.json --out "$touch_run" --blobs "$blobs" >/dev/null
+uv run scripts/esp32s3_touch.py --check "$touch_run"
+rm -rf "$touch_run"

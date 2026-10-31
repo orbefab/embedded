@@ -11,8 +11,9 @@
 # Those blobs came from GCC 14.2.0, crosstool-NG esp-14.2.0_20260121.
 #
 # idf builds the hello_world app and partition table of examples/esp32s3-hello, the screen app
-# and partition table of examples/esp32s3-screen, and the encoder app and partition table of
-# examples/esp32s3-encoder, from firmware/esp32s3/idf with ESP-IDF v5.5.5. It needs that IDF's
+# and partition table of examples/esp32s3-screen, the encoder app and partition table of
+# examples/esp32s3-encoder, and the touch app and partition table of examples/esp32s3-touch,
+# from firmware/esp32s3/idf with ESP-IDF v5.5.5. It needs that IDF's
 # export.sh sourced, so that IDF_PATH is set and idf.py and its toolchain are on PATH. The
 # screen app also needs the components its dependencies.lock pins, which IDF's component manager
 # fetches or takes from IDF_COMPONENT_CACHE_PATH, and checks against the pinned hashes. The
@@ -104,14 +105,16 @@ idf_build() {
 idf() {
   : "${IDF_PATH:?source ESP-IDF v5.5.5 export.sh first}"
   local hello=$work/idf/hello_world/build screen=$work/idf/screen/build
-  local encoder=$work/idf/encoder/build
+  local encoder=$work/idf/encoder/build touch=$work/idf/touch/build
   cp -r "$root/firmware/esp32s3/idf" "$work/idf"
   idf_build hello_world
   idf_build screen
   idf_build encoder
+  idf_build touch
   file_blobs esp32s3-hello flash "$hello/partition_table/partition-table.bin" "$hello/hello_world.bin"
   file_blobs esp32s3-screen flash "$screen/partition_table/partition-table.bin" "$screen/screen.bin"
   file_blobs esp32s3-encoder flash "$encoder/partition_table/partition-table.bin" "$encoder/encoder.bin"
+  file_blobs esp32s3-touch flash "$touch/partition_table/partition-table.bin" "$touch/touch.bin"
 }
 
 for group in "${groups[@]}"; do
