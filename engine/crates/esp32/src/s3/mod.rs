@@ -1004,7 +1004,7 @@ mod tests {
             (TIMG1 + 0x70, 2, Refused::Interrupt("TIMG1")),
             (
                 USB_SERIAL_JTAG + 0x10,
-                1 << 3,
+                1 << 0,
                 Refused::Interrupt("USB_SERIAL_JTAG"),
             ),
             (gdma + 0x10, 1, Refused::Interrupt("GDMA")),
@@ -1034,6 +1034,63 @@ mod tests {
         }
         let mut chip = store_after_two_loads(TIMG0 + 0x70, 1 << 2, 0).chip();
         assert_eq!(chip.run_until(c(1000)), None, "the watchdog's interrupt");
+    }
+
+    /// `JTAG_IN_FLUSH` and SOF are not among the USB Serial/JTAG enables the model runs.
+    #[test]
+    fn enabling_sof_or_jtag_in_flush_ends_the_run() {
+        for bit in [1 << 0, 1 << 1] {
+            let program = store_after_two_loads(USB_SERIAL_JTAG + 0x10, bit, 0);
+            assert_eq!(
+                program.chip().run_until(c(1000)),
+                Some(Halt::Fault(
+                    c(2),
+                    Fault::Refused(
+                        Refused::Interrupt("USB_SERIAL_JTAG"),
+                        pro(program.entry() + 6)
+                    )
+                )),
+                "{bit:#x}"
+            );
+        }
+    }
+
+    /// `SERIAL_OUT_RECV_PKT`, `SERIAL_IN_EMPTY` and `USB_BUS_RESET` may be enabled together.
+    #[test]
+    fn serial_out_recv_pkt_serial_in_empty_and_bus_reset_may_be_enabled() {
+        let value = (1 << 2) | (1 << 3) | (1 << 9);
+        let mut chip = store_after_two_loads(USB_SERIAL_JTAG + 0x10, value, 0).chip();
+        assert_eq!(chip.run_until(c(1000)), None);
+    }
+
+    #[test]
+    fn a_store_to_usb_wrap_ends_the_run() {
+        for address in [0x6003_9000, 0x6003_9004] {
+            let program = store_after_two_loads(address, 1, 0);
+            assert_eq!(
+                program.chip().run_until(c(1000)),
+                Some(Halt::Fault(
+                    c(2),
+                    Fault::Refused(
+                        Refused::Register("USB_WRAP", "otg"),
+                        pro(program.entry() + 6)
+                    )
+                )),
+                "{address:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_load_of_usb_wrap_is_unmodeled() {
+        let mut program = Program::new(&[0x6003_9000]);
+        program.l32r(2, 0).rri8(2, 3, 2, 0).raw(&LOOP);
+        let mut chip = program.chip();
+        assert_eq!(chip.run_until(c(1000)), None);
+        let touched: Vec<(u32, Touch)> = chip.unmodeled().collect();
+        assert_eq!(touched.len(), 1);
+        assert_eq!(touched[0].0, 0x6003_9000);
+        assert!(!touched[0].1.write);
     }
 
     /// Each write that changes a register the model keeps without running its effect is

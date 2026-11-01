@@ -91,6 +91,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "divider",
             "esp32s3-blink",
             "esp32s3-dualcore",
+            "esp32s3-echo",
             "esp32s3-encoder",
             "esp32s3-hello",
             "esp32s3-pattern",

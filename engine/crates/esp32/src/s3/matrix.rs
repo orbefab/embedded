@@ -6,9 +6,10 @@
 //! line is high while any source mapped to it is. A source mapped to one of the core's own
 //! interrupts drives nothing, as the core takes no external line there. The APP CPU's map
 //! starts at 16, a core timer, as the hardware resets it. The status registers show each
-//! source's level, the same in both halves. The sources modeled are the GPIO interrupt, SPI2's,
-//! I2C0's, each timer group's watchdog, the three SYSTIMER alarms and the four `FROM_CPU` registers, and
-//! every other source stays low. IDF v5.5.5, `components/soc/esp32s3/include/soc/interrupts.h`,
+//! source's level, the same in both halves. The sources modeled here are the GPIO interrupt,
+//! SPI2's, I2C0's, each timer group's watchdog, the three SYSTIMER alarms and the four
+//! `FROM_CPU` registers. The USB Serial/JTAG source is added by the caller. Every other source
+//! stays low. IDF v5.5.5, `components/soc/esp32s3/include/soc/interrupts.h`,
 //! `interrupt_core0_reg.h` and `interrupt_core1_reg.h`.
 
 use sim_xtensa::CoreId;

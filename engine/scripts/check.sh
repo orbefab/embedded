@@ -58,3 +58,10 @@ rm -rf "$dualcore_run"
 cargo run -q -p sim-cli --locked -- run examples/esp32s3-dualcore/netlist.json --out "$dualcore_run" --blobs "$blobs" >/dev/null
 uv run scripts/esp32s3_dualcore.py --check "$dualcore_run"
 rm -rf "$dualcore_run"
+uv run scripts/esp32s3_echo.py --self-test
+echo_run="${CARGO_TARGET_DIR:-target}/esp32s3-echo-check"
+rm -rf "$echo_run"
+cargo run -q -p sim-cli --locked -- run examples/esp32s3-echo/netlist.json --out "$echo_run" --blobs "$blobs" >/dev/null
+uv run scripts/esp32s3_echo.py --check "$echo_run"
+rm -rf "$echo_run"
+uv run scripts/esp32s3_arduino_console.py --self-test

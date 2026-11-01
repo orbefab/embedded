@@ -32,7 +32,7 @@ use super::sha::{self, Sha};
 use super::spi1::{self, FlashRefusal, Spi1};
 use super::spi2::{self, Setting, Spi2};
 use super::timers::{Register, Systimer, Watchdogs};
-use super::usb::UsbSerialJtag;
+use super::usb::{self, UsbSerialJtag};
 use super::{Duty, Pc, RAM, Refused, ResetCause, Touch};
 
 pub(crate) const SRAM: usize = 512 * 1024;
@@ -58,6 +58,7 @@ const LEDC: u32 = 0x6001_9000;
 const I2C0: u32 = 0x6001_3000;
 const I2C1: u32 = 0x6002_7000;
 pub(crate) const USB_SERIAL_JTAG: u32 = 0x6003_8000;
+const USB_WRAP: u32 = 0x6003_9000;
 const SHA: u32 = 0x6003_b000;
 pub(crate) const GDMA: u32 = 0x6003_f000;
 pub(crate) const SYSTEM: u32 = 0x600c_0000;
@@ -245,7 +246,7 @@ fn effect(addr: u32) -> Option<Effect> {
         (SPI2, 0x34) => Effect::Refuse(!spi2::TRANS_DONE, interrupt("SPI2")),
         (TIMG0, 0x70) => Effect::Refuse(0b11, interrupt("TIMG0")),
         (TIMG1, 0x70) => Effect::Refuse(0b11, interrupt("TIMG1")),
-        (USB_SERIAL_JTAG, 0x10) => Effect::Refuse(u32::MAX, interrupt("USB_SERIAL_JTAG")),
+        (USB_SERIAL_JTAG, 0x10) => Effect::Refuse(!usb::ENA_ALLOWED, interrupt("USB_SERIAL_JTAG")),
         (SHA, sha::INT_ENA) => Effect::Refuse(1, interrupt("SHA")),
         (LEDC, ledc::INT_ENA) => Effect::Refuse(u32::MAX, interrupt("LEDC")),
         (GDMA, _) if offset < 5 * 0xc0 => match offset % 0xc0 {
@@ -836,8 +837,13 @@ impl Soc {
         let spi2 = self.spi2.line(now);
         let gpio = self.gpio.pending() != 0;
         let lines = self.watchdogs.lines();
-        self.matrix
-            .sources(self.systimer.lines(), spi2, lines, gpio, self.i2c.line())
+        let mut sources =
+            self.matrix
+                .sources(self.systimer.lines(), spi2, lines, gpio, self.i2c.line());
+        if self.usb.poll(now) {
+            sources |= 1 << usb::SOURCE;
+        }
+        sources
     }
 
     /// Runs the CPU from the clock the SYSTEM registers now pick, from core cycle `at` on, which
@@ -1113,6 +1119,10 @@ impl Soc {
             self.ending = Some(Ending::Refused(Refused::Register("I2C1", "port")));
             return Err(Exit::Stop);
         }
+        if word & !(BLOCK - 1) == USB_WRAP {
+            self.ending = Some(Ending::Refused(Refused::Register("USB_WRAP", "otg")));
+            return Err(Exit::Stop);
+        }
         let clock = word == SYSTEM + SYSCLK_CONF || word == SYSTEM + CPU_PER_CONF;
         // The other core's refetched access on a tie can have stamped the cycle after `start`,
         // and a switch at `start` would hold the reported tick until the new clock caught up.
@@ -1169,6 +1179,7 @@ impl Soc {
             };
             let due = self.ledc.next(self.clock.source.apb());
             let i2c = (self.i2c.runs(), self.i2c.next_event());
+            let usb_due = self.usb.next_event(now);
             self.write_kept(now, word, kept);
             if clock {
                 self.switch_clock(at, now);
@@ -1185,7 +1196,8 @@ impl Soc {
             }
             self.rearmed |= self.watchdogs.deadline() != deadline
                 || self.ledc.next(self.clock.source.apb()) != due
-                || self.i2c.next_event() != i2c.1;
+                || self.i2c.next_event() != i2c.1
+                || self.usb.next_event(now) != usb_due;
             return Ok(());
         }
         self.settle_ledc(now);
@@ -1248,10 +1260,14 @@ impl Soc {
 
     fn next_event(&mut self, cycle: Cycle) -> Option<Cycle> {
         let now = self.stamp(cycle);
-        let next = [self.systimer.next_event(now), self.spi2.next_event()]
-            .into_iter()
-            .flatten()
-            .min()?;
+        let next = [
+            self.systimer.next_event(now),
+            self.spi2.next_event(),
+            self.usb.next_event(now),
+        ]
+        .into_iter()
+        .flatten()
+        .min()?;
         Some(self.clock.cycle_after(next))
     }
 }

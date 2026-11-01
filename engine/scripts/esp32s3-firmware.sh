@@ -13,7 +13,8 @@
 # idf builds the hello_world app and partition table of examples/esp32s3-hello, the screen app
 # and partition table of examples/esp32s3-screen, the encoder app and partition table of
 # examples/esp32s3-encoder, the touch app and partition table of examples/esp32s3-touch,
-# and the dualcore app and partition table of examples/esp32s3-dualcore,
+# the dualcore app and partition table of examples/esp32s3-dualcore,
+# and the echo app and partition table of examples/esp32s3-echo,
 # from firmware/esp32s3/idf with ESP-IDF v5.5.5. It needs that IDF's
 # export.sh sourced, so that IDF_PATH is set and idf.py and its toolchain are on PATH. The
 # screen app also needs the components its dependencies.lock pins, which IDF's component manager
@@ -108,17 +109,20 @@ idf() {
   local hello=$work/idf/hello_world/build screen=$work/idf/screen/build
   local encoder=$work/idf/encoder/build touch=$work/idf/touch/build
   local dualcore=$work/idf/dualcore/build
+  local echo=$work/idf/echo/build
   cp -r "$root/firmware/esp32s3/idf" "$work/idf"
   idf_build hello_world
   idf_build screen
   idf_build encoder
   idf_build touch
   idf_build dualcore
+  idf_build echo
   file_blobs esp32s3-hello flash "$hello/partition_table/partition-table.bin" "$hello/hello_world.bin"
   file_blobs esp32s3-screen flash "$screen/partition_table/partition-table.bin" "$screen/screen.bin"
   file_blobs esp32s3-encoder flash "$encoder/partition_table/partition-table.bin" "$encoder/encoder.bin"
   file_blobs esp32s3-touch flash "$touch/partition_table/partition-table.bin" "$touch/touch.bin"
   file_blobs esp32s3-dualcore flash "$dualcore/partition_table/partition-table.bin" "$dualcore/dualcore.bin"
+  file_blobs esp32s3-echo flash "$echo/partition_table/partition-table.bin" "$echo/echo.bin"
 }
 
 for group in "${groups[@]}"; do
