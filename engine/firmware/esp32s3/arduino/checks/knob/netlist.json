@@ -3,7 +3,7 @@
   "seed": 0,
   "analysis": {
     "transient": {
-      "stop_ps": 3000000000000,
+      "stop_ps": 6080000000000,
       "max_step_ps": 10000000000,
       "grid_ps": 10000000000
     }
@@ -172,7 +172,7 @@
           ]
         },
         {
-          "t_ps": 2500000000000,
+          "t_ps": 5580000000000,
           "bytes": [
             120
           ]
@@ -295,7 +295,44 @@
           "source": "user"
         }
       },
-      "touches": []
+      "touches": [
+        {
+          "t_ps": 4280000000000,
+          "x": 180,
+          "y": 80,
+          "down": true
+        },
+        {
+          "t_ps": 4580000000000,
+          "x": 180,
+          "y": 80,
+          "down": false
+        },
+        {
+          "t_ps": 4680000000000,
+          "x": 93,
+          "y": 230,
+          "down": true
+        },
+        {
+          "t_ps": 4980000000000,
+          "x": 93,
+          "y": 230,
+          "down": false
+        },
+        {
+          "t_ps": 5080000000000,
+          "x": 267,
+          "y": 230,
+          "down": true
+        },
+        {
+          "t_ps": 5380000000000,
+          "x": 267,
+          "y": 230,
+          "down": false
+        }
+      ]
     },
     {
       "name": "r52",
@@ -347,7 +384,32 @@
         "source": "user"
       },
       "initial": "open",
-      "events": [],
+      "events": [
+        {
+          "t_ps": 3200000000000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 3280000000000,
+          "state": "open"
+        },
+        {
+          "t_ps": 3500000000000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 3580000000000,
+          "state": "open"
+        },
+        {
+          "t_ps": 3800000000000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 3880000000000,
+          "state": "open"
+        }
+      ],
       "bounce": null
     },
     {
@@ -368,7 +430,40 @@
         "source": "user"
       },
       "initial": "open",
-      "events": [],
+      "events": [
+        {
+          "t_ps": 2000000000000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 2080000000000,
+          "state": "open"
+        },
+        {
+          "t_ps": 2300000000000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 2380000000000,
+          "state": "open"
+        },
+        {
+          "t_ps": 2600000000000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 2680000000000,
+          "state": "open"
+        },
+        {
+          "t_ps": 2900000000000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 2980000000000,
+          "state": "open"
+        }
+      ],
       "bounce": null
     }
   ]

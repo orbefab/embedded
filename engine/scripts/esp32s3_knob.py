@@ -20,13 +20,15 @@ hashes and the frame. `panel` does not read a mark line.
 `marks` compares every line from the start line through the done line that is not a transfer, a
 K line or a T line. `events` compares the K and T lines. `--check` runs all three. It also wants
 every diagnostic to be `chip.unmodeled_register`, `KNOB READY` before 2.0 s, and the backlight
-duties 0 then 4096 of 4096 steps at 5 kHz.
+duties 0 then 4096 of 4096 steps at 5 kHz. The summary names that ready time.
 
 `refs --write` keeps one capture's lists only when exactly three different captures agree.
 The destination must not exist yet and must not be one of the captures. Two paths that resolve
 to the same file are refused. A 12-hex address token on a mark line, a K line or a T line is
 refused. `--start` defaults to `KNOB START`. The done line is that line's first word plus
-` DONE`. `script` writes closings, touches and the `x` byte into a netlist.
+` DONE`. `script` writes closings, touches and the `x` byte into a netlist. The compare
+of that write with the committed netlist catches a moved or removed closing or touch, while
+a later stop time or an extra console byte other than `x` still matches.
 """
 
 import argparse
@@ -258,10 +260,11 @@ def ready_ps(serial_csv: str) -> int:
     raise ValueError("the console has no KNOB READY line")
 
 
-def check_ready(serial_csv: str) -> None:
+def check_ready(serial_csv: str) -> int:
     at = ready_ps(serial_csv)
     if at >= READY_BEFORE_PS:
         raise ValueError(f"KNOB READY is at {at} ps, which is not before {READY_BEFORE_PS} ps")
+    return at
 
 
 def check_diagnostics(items: list[dict]) -> None:
@@ -280,9 +283,9 @@ def check(run: Path, refs_path: Path) -> str:
     serial = serial_path(run)
     text = " ".join((panel(run, refs_path, False), marks(run, refs_path), events(run, refs_path)))
     check_diagnostics(json.loads((run / "diagnostics.json").read_text()))
-    check_ready(serial)
+    at = check_ready(serial)
     check_duties(run)
-    return f"knob check: {text}"
+    return f"knob check: {text}, ready at {at} ps"
 
 
 def same_lists(a: dict, b: dict) -> str | None:
@@ -547,12 +550,19 @@ def self_test() -> int:
                          refs_path, DEFAULT_START))
         refs = load_refs(refs_path)
         expect("the line before the start is not a mark", lambda: "BEFORE THE START" not in json.dumps(refs) or bad("present"))
+        ready_at = 1_000_000_000_000
         run = root / "run"
-        write_run(run, text, refs)
+        write_run(run, text, refs, ready_at)
+
+        def check_summary() -> None:
+            summary = check(run, refs_path)
+            if f"ready at {ready_at} ps" not in summary:
+                bad(summary)
+
         expect("panel", lambda: panel(run, refs_path, False))
         expect("marks", lambda: marks(run, refs_path))
         expect("events", lambda: events(run, refs_path))
-        expect("check", lambda: check(run, refs_path))
+        expect("check", check_summary)
 
         shaped = json.loads(refs_path.read_text())
         shaped["transfers"][2]["hash"] = "0" * 16

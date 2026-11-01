@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Builds one Arduino sketch, files its app and partition table in the blob cache, and fails
 # unless those hashes are the ones the verifier netlist names. The ELF hashes are pinned below.
-# With --check, console then runs its netlist and scripts/esp32s3_arduino_console.py --check.
+# With --check, the sketch is built, its netlist is run with --blobs set to the cache,
+# and the matching checker runs on the folder.
 #
 #   scripts/esp32s3-arduino.sh console
 #   scripts/esp32s3-arduino.sh --check console
 #   scripts/esp32s3-arduino.sh knob LVGL_DIR
+#   scripts/esp32s3-arduino.sh --check knob LVGL_DIR
 #
 # knob stages LVGL_DIR with the knob panel library and files the ELF in the blob cache.
-# --check knob is refused until a refs file is added.
 # It needs Arduino CLI 1.5.1 and the installed esp32:esp32 core 3.3.12. It installs nothing
 # and downloads nothing. The compile's working directory is the temporary folder, which the
 # prefix map rewrites, so the image does not record the directory the script was started from.
@@ -21,16 +22,12 @@ if [[ ${1:-} == --check ]]; then
 fi
 if [[ $# -lt 1 ]]; then
   echo "usage: scripts/esp32s3-arduino.sh [--check] console" >&2
-  echo "       scripts/esp32s3-arduino.sh knob LVGL_DIR" >&2
+  echo "       scripts/esp32s3-arduino.sh [--check] knob LVGL_DIR" >&2
   exit 2
 fi
 name=$1
-if [[ $name == knob && $check -eq 1 ]]; then
-  echo "esp32s3-arduino.sh: --check knob is refused until a refs file is added" >&2
-  exit 2
-fi
 if [[ $name == knob && $# -ne 2 ]]; then
-  echo "usage: scripts/esp32s3-arduino.sh knob LVGL_DIR" >&2
+  echo "usage: scripts/esp32s3-arduino.sh [--check] knob LVGL_DIR" >&2
   exit 2
 fi
 if [[ $name != console && $name != knob ]]; then
@@ -38,7 +35,13 @@ if [[ $name != console && $name != knob ]]; then
   exit 2
 fi
 lvgl=
+refs=
 if [[ $name == knob ]]; then
+  refs=$root/firmware/esp32s3/arduino/checks/knob/refs.json
+  if [[ $check -eq 1 && ! -f $refs ]]; then
+    echo "esp32s3-arduino.sh: firmware/esp32s3/arduino/checks/knob/refs.json is missing" >&2
+    exit 1
+  fi
   lvgl=$(cd "$2" && pwd)
 fi
 
@@ -196,13 +199,17 @@ if [[ $name == knob && $(sha "$cache/$elf_sha") != "$elf_sha" ]]; then
 fi
 
 if ((check)); then
-  run=${CARGO_TARGET_DIR:-$root/target}/esp32s3-arduino-console-check
+  run=${CARGO_TARGET_DIR:-$root/target}/esp32s3-arduino-$name-check
   rm -rf "$run"
   (
     cd "$root"
     echo "rustc $(rustc --version)"
     cargo run -q -p sim-cli --locked -- run "$netlist" --out "$run" --blobs "$cache"
   )
-  uv run "$root/scripts/esp32s3_arduino_console.py" --check "$run"
+  if [[ $name == console ]]; then
+    uv run "$root/scripts/esp32s3_arduino_console.py" --check "$run"
+  else
+    uv run "$root/scripts/esp32s3_knob.py" --check "$run" "$refs"
+  fi
   rm -rf "$run"
 fi

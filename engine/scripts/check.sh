@@ -66,3 +66,12 @@ uv run scripts/esp32s3_echo.py --check "$echo_run"
 rm -rf "$echo_run"
 uv run scripts/esp32s3_arduino_console.py --self-test
 uv run scripts/esp32s3_knob.py --self-test
+knob_dir=$(mktemp -d "${TMPDIR:-/tmp}/knob-script.XXXXXX")
+(
+  trap 'rm -rf "$knob_dir"' EXIT
+  cp firmware/esp32s3/arduino/checks/knob/netlist.json "$knob_dir/netlist.json"
+  uv run scripts/esp32s3_knob.py script \
+    firmware/esp32s3/arduino/checks/knob/refs.json \
+    "$knob_dir/netlist.json"
+  cmp firmware/esp32s3/arduino/checks/knob/netlist.json "$knob_dir/netlist.json"
+)

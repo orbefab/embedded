@@ -42,9 +42,20 @@ uv run scripts/esp32s3_dualcore.py --self-test
 uv run scripts/esp32s3_echo.py --self-test
 uv run scripts/esp32s3_arduino_console.py --self-test
 uv run scripts/esp32s3_knob.py --self-test
+knob_dir=$(mktemp -d "${TMPDIR:-/tmp}/knob-script.XXXXXX")
+(
+  trap 'rm -rf "$knob_dir"' EXIT
+  cp firmware/esp32s3/arduino/checks/knob/netlist.json "$knob_dir/netlist.json"
+  uv run scripts/esp32s3_knob.py script \
+    firmware/esp32s3/arduino/checks/knob/refs.json \
+    "$knob_dir/netlist.json"
+  cmp firmware/esp32s3/arduino/checks/knob/netlist.json "$knob_dir/netlist.json"
+)
 ```
 
-It then runs `sim run` on `examples/st77916-replay` and checks the folder with `scripts/render_st77916.py --check`, on `examples/esp32s3-blink` and checks that folder with `scripts/esp32s3_blink.py --check`, on `examples/esp32s3-pattern` and checks that folder with `scripts/render_st77916.py --pattern firmware/esp32s3/pattern.json --check`, and on `examples/esp32s3-hello`, `examples/esp32s3-screen`, `examples/esp32s3-encoder`, `examples/esp32s3-touch`, `examples/esp32s3-dualcore` and `examples/esp32s3-echo` with the folder `scripts/blobs.sh` prints and checks those folders with `scripts/esp32s3_hello.py --check`, `scripts/esp32s3_screen.py --check`, `scripts/esp32s3_encoder.py --check`, `scripts/esp32s3_touch.py --check`, `scripts/esp32s3_dualcore.py --check` and `scripts/esp32s3_echo.py --check`. `scripts/check.sh` runs `scripts/esp32s3_arduino_console.py --self-test` and `scripts/esp32s3_knob.py --self-test` and does not build either Arduino sketch. `scripts/blobs.sh` fetches the ROM when its cache lacks it. It runs before the tests, since the dual-core probe test in `crates/esp32/tests/dualcore.rs` runs the ROM from that cache and fails when it is missing.
+It then runs `sim run` on `examples/st77916-replay` and checks the folder with `scripts/render_st77916.py --check`, on `examples/esp32s3-blink` and checks that folder with `scripts/esp32s3_blink.py --check`, on `examples/esp32s3-pattern` and checks that folder with `scripts/render_st77916.py --pattern firmware/esp32s3/pattern.json --check`, and on `examples/esp32s3-hello`, `examples/esp32s3-screen`, `examples/esp32s3-encoder`, `examples/esp32s3-touch`, `examples/esp32s3-dualcore` and `examples/esp32s3-echo` with the folder `scripts/blobs.sh` prints and checks those folders with `scripts/esp32s3_hello.py --check`, `scripts/esp32s3_screen.py --check`, `scripts/esp32s3_encoder.py --check`, `scripts/esp32s3_touch.py --check`, `scripts/esp32s3_dualcore.py --check` and `scripts/esp32s3_echo.py --check`. `scripts/check.sh` runs `scripts/esp32s3_arduino_console.py --self-test` and `scripts/esp32s3_knob.py --self-test` and does not build either Arduino sketch. It copies `firmware/esp32s3/arduino/checks/knob/netlist.json` to `$knob_dir` under `TMPDIR`, runs `script` on the refs into that copy, and fails when `cmp` shows a difference. `scripts/blobs.sh` fetches the ROM when its cache lacks it. It runs before the tests, since the dual-core probe test in `crates/esp32/tests/dualcore.rs` runs the ROM from that cache and fails when it is missing.
+
+`scripts/esp32s3-arduino.sh --check console` rebuilds the console sketch, runs `firmware/esp32s3/arduino/checks/console/netlist.json`, and checks the folder with `scripts/esp32s3_arduino_console.py --check`. `scripts/esp32s3-arduino.sh --check knob LVGL_DIR` builds the knob sketch, runs `firmware/esp32s3/arduino/checks/knob/netlist.json`, and checks the folder with `scripts/esp32s3_knob.py --check` against `firmware/esp32s3/arduino/checks/knob/refs.json`. Those refs come from a board session of three agreeing captures. Clockwise drives contact B.
 
 The commit check needs ngspice-42 on `PATH`.
 
