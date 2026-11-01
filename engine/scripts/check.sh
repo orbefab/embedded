@@ -65,3 +65,4 @@ cargo run -q -p sim-cli --locked -- run examples/esp32s3-echo/netlist.json --out
 uv run scripts/esp32s3_echo.py --check "$echo_run"
 rm -rf "$echo_run"
 uv run scripts/esp32s3_arduino_console.py --self-test
+uv run scripts/esp32s3_knob.py --self-test

@@ -7,3 +7,22 @@ kept here. Its package is LGPL-2.1-or-later. HWCDC and the HAL files it builds w
 Apache-2.0. The prebuilt libraries under esp32s3-libs are ESP-IDF's, under the terms named in
 firmware/esp32s3/idf/NOTICE. The script checks the SHA-256 of that core's
 esp32s3-libs/3.3.12/qio_qspi/include/sdkconfig.h and installs nothing.
+
+The knob sketch is built by the same script. It links LVGL 9.3.0. LVGL is under the MIT
+License, reproduced with its notice in firmware/esp32s3/idf/LICENSE-lvgl. LVGL's memory
+allocator is the TLSF allocator, under firmware/esp32s3/idf/LICENSE-tlsf, and its printf is
+Marco Paland's, under the MIT License reproduced with its notice in
+firmware/esp32s3/idf/LICENSE-printf. The cubic-bezier routine of LVGL's src/misc/lv_math.c
+comes from the bezier-easing project, under the MIT License reproduced with its notice in
+firmware/esp32s3/idf/LICENSE-bezier-easing. The image holds LVGL's Montserrat fonts at 14,
+28 and 48 px. Their Montserrat glyphs are under the SIL Open Font License 1.1, reproduced
+with the Montserrat Project Authors' notice in firmware/esp32s3/idf/LICENSE-montserrat, and
+their symbol glyphs come from Font Awesome Free 5, whose fonts are under the same licence,
+reproduced with the Fonticons, Inc. notice in firmware/esp32s3/idf/LICENSE-fontawesome.
+The caller names the LVGL tree. The script checks that tree's hash and copies nothing of it
+into this repository.
+
+libraries/knobpanel is a QSPI IO and an ST77916 panel after Espressif's esp_lcd_st77916,
+which is under the Apache License 2.0, Copyright 2023-2024 Espressif Systems (Shanghai) CO
+LTD. The build includes firmware/esp32s3/idf/screen/main/vendor_init.inc beside the port.
+That file holds the panel maker's init sequence.

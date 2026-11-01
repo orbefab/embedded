@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Builds the console sketch, files its app and partition table in the blob cache, and fails
-# unless those hashes are the ones the verifier netlist names. The ELF hash is pinned below.
-# With --check it then runs that netlist and scripts/esp32s3_arduino_console.py --check.
+# Builds one Arduino sketch, files its app and partition table in the blob cache, and fails
+# unless those hashes are the ones the verifier netlist names. The ELF hashes are pinned below.
+# With --check, console then runs its netlist and scripts/esp32s3_arduino_console.py --check.
 #
 #   scripts/esp32s3-arduino.sh console
 #   scripts/esp32s3-arduino.sh --check console
+#   scripts/esp32s3-arduino.sh knob LVGL_DIR
 #
+# knob stages LVGL_DIR with the knob panel library and files the ELF in the blob cache.
+# --check knob is refused until a refs file is added.
 # It needs Arduino CLI 1.5.1 and the installed esp32:esp32 core 3.3.12. It installs nothing
 # and downloads nothing. The compile's working directory is the temporary folder, which the
 # prefix map rewrites, so the image does not record the directory the script was started from.
@@ -18,17 +21,32 @@ if [[ ${1:-} == --check ]]; then
 fi
 if [[ $# -lt 1 ]]; then
   echo "usage: scripts/esp32s3-arduino.sh [--check] console" >&2
+  echo "       scripts/esp32s3-arduino.sh knob LVGL_DIR" >&2
   exit 2
 fi
 name=$1
-if [[ $name != console ]]; then
+if [[ $name == knob && $check -eq 1 ]]; then
+  echo "esp32s3-arduino.sh: --check knob is refused until a refs file is added" >&2
+  exit 2
+fi
+if [[ $name == knob && $# -ne 2 ]]; then
+  echo "usage: scripts/esp32s3-arduino.sh knob LVGL_DIR" >&2
+  exit 2
+fi
+if [[ $name != console && $name != knob ]]; then
   echo "esp32s3-arduino.sh: unknown sketch $name" >&2
   exit 2
+fi
+lvgl=
+if [[ $name == knob ]]; then
+  lvgl=$(cd "$2" && pwd)
 fi
 
 sdkconfig=$HOME/.arduino15/packages/esp32/tools/esp32s3-libs/3.3.12/qio_qspi/include/sdkconfig.h
 sdkconfig_sha=f44c8812a67ab0c3c25704efd4aac3be2389119c65fc6179349aa7475a8405fa
-elf_sha=143e2e2f6b5f77c152b48c5b2b516d66c9d7ce09a9671821a78dd0c1818be0b7
+console_elf_sha=143e2e2f6b5f77c152b48c5b2b516d66c9d7ce09a9671821a78dd0c1818be0b7
+knob_elf_sha=cadfaa8b24a34ebfbb04e4ba36ee74e4104de31ef98220a2c94ec68dd2a176b8
+lvgl_tree_sha=5734ad146cf77713982329c7712d30b765c761207b3caf5d55a431cf7ea3dc18
 version=$(arduino-cli version)
 if [[ $version != "arduino-cli  Version: 1.5.1 "* ]]; then
   echo "esp32s3-arduino.sh: arduino-cli is not 1.5.1: $version" >&2
@@ -44,43 +62,113 @@ if [[ $got_sdk != "$sdkconfig_sha" ]]; then
   exit 1
 fi
 
-work=$(mktemp -d)
+if [[ $name == knob ]]; then
+  got_tree=$(python3 -I - "$lvgl" <<'PY'
+import hashlib, os, sys
+root = sys.argv[1]
+files = []
+for dirpath, dirnames, filenames in os.walk(root):
+    dirnames.sort()
+    for name in dirnames:
+        if os.path.islink(os.path.join(dirpath, name)):
+            sys.exit("esp32s3-arduino.sh: the LVGL tree has a symlink")
+    for name in filenames:
+        path = os.path.join(dirpath, name)
+        if os.path.islink(path):
+            sys.exit("esp32s3-arduino.sh: the LVGL tree has a symlink")
+        files.append(os.path.relpath(path, root))
+digest = hashlib.sha256()
+for rel in sorted(files):
+    digest.update(rel.encode())
+    digest.update(b"\0")
+    with open(os.path.join(root, rel), "rb") as fh:
+        digest.update(fh.read())
+    digest.update(b"\0")
+print(f"{digest.hexdigest()} {len(files)}")
+PY
+)
+  echo "lvgl tree: $got_tree"
+  if [[ ${got_tree%% *} != "$lvgl_tree_sha" ]]; then
+    echo "esp32s3-arduino.sh: the LVGL tree is ${got_tree%% *}, not $lvgl_tree_sha" >&2
+    exit 1
+  fi
+fi
+
+# An unset TMPDIR, and /tmp, would put the compile under /tmp. Use the repo scratch instead.
+case ${TMPDIR:-} in
+  ""|/tmp|/tmp/*)
+    TMPDIR=$root/.scratch/arduino
+    mkdir -p "$TMPDIR"
+    export TMPDIR
+    ;;
+esac
+work=$(mktemp -d "$TMPDIR/esp32s3-arduino.XXXXXX")
 trap 'rm -rf "$work"' EXIT
-sketch=$work/console
+sketch=$work/$name
 mkdir -p "$sketch"
-cp "$root/firmware/esp32s3/arduino/console/console.ino" "$sketch/"
 build=$work/build
 out=$work/out
 fqbn=esp32:esp32:esp32s3:CDCOnBoot=cdc,USBMode=hwcdc,FlashSize=16M,PSRAM=disabled
 map="-ffile-prefix-map=$work=/src -ffile-prefix-map=$build=/build -ffile-prefix-map=$HOME/.arduino15=/arduino15"
+if [[ $name == console ]]; then
+  cp "$root/firmware/esp32s3/arduino/console/console.ino" "$sketch/"
+else
+  cp "$root/firmware/esp32s3/arduino/knob/knob.ino" "$root/firmware/esp32s3/arduino/knob/wrap.c" "$sketch/"
+  mkdir -p "$work/libraries/knobpanel/src" "$work/libraries/lvgl"
+  cp -a "$lvgl"/. "$work/libraries/lvgl/"
+  cp "$root/firmware/esp32s3/arduino/libraries/lv_conf.h" "$work/libraries/lv_conf.h"
+  cp -a "$root/firmware/esp32s3/arduino/libraries/knobpanel"/. "$work/libraries/knobpanel/"
+  cp "$root/firmware/esp32s3/idf/screen/main/vendor_init.inc" "$work/libraries/knobpanel/src/vendor_init.inc"
+fi
+compile_args=(
+  --build-property "compiler.c.extra_flags=$map"
+  --build-property "compiler.cpp.extra_flags=$map"
+  --build-property "compiler.S.extra_flags=$map"
+)
+if [[ $name == knob ]]; then
+  compile_args+=(--libraries "$work/libraries")
+  compile_args+=(--build-property "compiler.c.elf.extra_flags=-Wl,--wrap=esp_lcd_panel_io_tx_param -Wl,--wrap=esp_lcd_panel_io_tx_color -Wl,--wrap=esp_lcd_panel_draw_bitmap -Wl,--wrap=spi_device_queue_trans -Wl,--wrap=spi_device_polling_transmit -Wl,--wrap=spi_device_transmit")
+fi
 (
   cd "$work"
   SOURCE_DATE_EPOCH=1767225600 arduino-cli compile --clean --fqbn "$fqbn" --jobs 2 \
     --build-path "$build" --output-dir "$out" \
-    --build-property "compiler.c.extra_flags=$map" \
-    --build-property "compiler.cpp.extra_flags=$map" \
-    --build-property "compiler.S.extra_flags=$map" \
+    "${compile_args[@]}" \
     "$sketch"
 )
 
 sha() {
   sha256sum "$1" | cut -d' ' -f1
 }
-bin=$out/console.ino.bin
-elf=$out/console.ino.elf
-table=$out/console.ino.partitions.bin
+bin=$out/$name.ino.bin
+elf=$out/$name.ino.elf
+table=$out/$name.ino.partitions.bin
 bin_sha=$(sha "$bin")
 table_sha=$(sha "$table")
 got_elf=$(sha "$elf")
-echo "console.ino.bin: $bin_sha $(wc -c < "$bin")"
-echo "console.ino.elf: $got_elf $(wc -c < "$elf")"
-echo "console.ino.partitions.bin: $table_sha $(wc -c < "$table")"
+echo "$name.ino.bin: $bin_sha $(wc -c < "$bin")"
+echo "$name.ino.elf: $got_elf $(wc -c < "$elf")"
+echo "$name.ino.partitions.bin: $table_sha $(wc -c < "$table")"
+elf_sha=$console_elf_sha
+if [[ $name == knob ]]; then
+  elf_sha=$knob_elf_sha
+  python3 -I - "$bin" "$elf" "$HOME" "$work" <<'PY'
+import sys
+bin_path, elf_path, home, work = sys.argv[1:]
+if home.encode() in open(bin_path, "rb").read():
+    sys.exit("esp32s3-arduino.sh: the bin holds the home path")
+if work.encode() in open(elf_path, "rb").read():
+    sys.exit("esp32s3-arduino.sh: the ELF holds the build directory")
+print("home path in bin: 0")
+print("dir in elf: 0")
+PY
+fi
 if [[ $got_elf != "$elf_sha" ]]; then
   echo "esp32s3-arduino.sh: the ELF is $got_elf, not $elf_sha" >&2
   exit 1
 fi
 
-netlist=$root/firmware/esp32s3/arduino/checks/console/netlist.json
+netlist=$root/firmware/esp32s3/arduino/checks/$name/netlist.json
 python3 -I - "$netlist" "$table_sha" "$bin_sha" <<'PY'
 import json, sys
 path, table, app = sys.argv[1:]
@@ -95,8 +183,15 @@ PY
 cache=$( "$root/scripts/blobs.sh" | tail -n 1)
 cp "$table" "$cache/$table_sha"
 cp "$bin" "$cache/$bin_sha"
+if [[ $name == knob ]]; then
+  cp "$elf" "$cache/$elf_sha"
+fi
 if [[ $(sha "$cache/$table_sha") != "$table_sha" || $(sha "$cache/$bin_sha") != "$bin_sha" ]]; then
   echo "esp32s3-arduino.sh: the blob cache does not hold the built images" >&2
+  exit 1
+fi
+if [[ $name == knob && $(sha "$cache/$elf_sha") != "$elf_sha" ]]; then
+  echo "esp32s3-arduino.sh: the blob cache does not hold the ELF" >&2
   exit 1
 fi
 
