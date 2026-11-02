@@ -424,6 +424,9 @@ impl<C: Config> Core<C> {
     /// next instruction is not modeled. An instruction that starts before `limit` runs whole, so
     /// the cycle may pass it. A core in `WAITI` stops at `limit` exactly.
     pub fn run_until<B: Bus>(&mut self, bus: &mut B, limit: Cycle) -> Stop {
+        if limit.0.wrapping_sub(self.cycle.0) <= 1 {
+            return self.run_one(bus, limit);
+        }
         self.lines_until = Cycle(0);
         loop {
             if self.cycle >= limit {
@@ -432,7 +435,26 @@ impl<C: Config> Core<C> {
             if bus.yields() {
                 return Stop::Yield;
             }
-            if let Err(stop) = self.step(bus, limit) {
+            if let Err(stop) = self.step::<true, _>(bus, limit) {
+                return stop;
+            }
+        }
+    }
+
+    /// A slice with one cycle of room. It reads the lines and does not ask when they can next
+    /// change. The next slice reads them again. Out of line, so the room test stays ahead of a
+    /// longer slice's step loop.
+    #[inline(never)]
+    fn run_one<B: Bus>(&mut self, bus: &mut B, limit: Cycle) -> Stop {
+        self.lines_until = Cycle(0);
+        loop {
+            if self.cycle >= limit {
+                return Stop::Limit;
+            }
+            if bus.yields() {
+                return Stop::Yield;
+            }
+            if let Err(stop) = self.step::<false, _>(bus, limit) {
                 return stop;
             }
         }
@@ -441,8 +463,8 @@ impl<C: Config> Core<C> {
     /// Takes a pending interrupt, idles in `WAITI`, or runs one instruction. Interrupts come
     /// first, as the ISA's priority list puts them ahead of the `ICOUNT` debug exception (4.4.1.11,
     /// p 145).
-    fn step<B: Bus>(&mut self, bus: &mut B, limit: Cycle) -> Result<(), Stop> {
-        let nmi = self.poll(bus);
+    fn step<const ASK: bool, B: Bus>(&mut self, bus: &mut B, limit: Cycle) -> Result<(), Stop> {
+        let nmi = self.poll::<ASK, _>(bus);
         let level = if nmi {
             Some(C::INTERRUPTS.nmi_level)
         } else {
@@ -509,8 +531,10 @@ impl<C: Config> Core<C> {
     }
 
     /// Reads the lines and the timers before an instruction, and returns whether the NMI line
-    /// rose. While the lines cannot have changed, this latches only the timers.
-    fn poll<B: Bus>(&mut self, bus: &mut B) -> bool {
+    /// rose. While the lines cannot have changed, this latches only the timers. A read with
+    /// `ASK` set asks for the next event. A read with `ASK` clear leaves the lines due on the
+    /// next step.
+    fn poll<const ASK: bool, B: Bus>(&mut self, bus: &mut B) -> bool {
         let interrupts = C::INTERRUPTS;
         let rose = if self.cycle < self.lines_until {
             // A check build reads the lines here, as a poll would, and compares them. That
@@ -530,7 +554,11 @@ impl<C: Config> Core<C> {
             let lines = bus.interrupts(self.cycle) & interrupts.external();
             let rose = lines & !self.lines;
             self.lines = lines;
-            self.lines_until = bus.next_event(self.cycle).unwrap_or(Cycle(u64::MAX));
+            self.lines_until = if ASK {
+                bus.next_event(self.cycle).unwrap_or(Cycle(u64::MAX))
+            } else {
+                Cycle(0)
+            };
             rose
         };
         let mut latched = self.sr[Sr::Interrupt as usize] | (rose & interrupts.extern_edge);

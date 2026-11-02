@@ -114,7 +114,8 @@ pub trait Bus {
     /// call and high on a later one.
     fn interrupts(&mut self, now: Cycle) -> u32;
     /// The first cycle after `now` at which the lines can change with no access, or `None`. A
-    /// core in `WAITI` skips to the earliest of this, its own timer match and the run's limit.
+    /// poll asks at the cycle of the read. A one-step read does not ask. A core in `WAITI` asks
+    /// from `idle` and skips to the earliest of this, its own timer match and the run's limit.
     fn next_event(&mut self, now: Cycle) -> Option<Cycle>;
     /// Whether the core returns [`Stop::Yield`](crate::Stop::Yield) before its next step.
     fn yields(&self) -> bool {

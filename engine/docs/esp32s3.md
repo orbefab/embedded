@@ -24,7 +24,7 @@ Both cores count the one CPU clock. The next instruction to run is the one that 
 
 Each core keeps the instructions it has decoded, keyed by the address and the bytes the fetch read, and it fetches before it looks. The kept decode changes no output.
 
-A core reads its interrupt lines only when they could have changed. After a read, it keeps those lines until the bus reports its next event, until a load or a store outside SRAM, RTC memory, the ROM and the flash windows, or until the next run of that core. A skipped read changes no output. A build with `poll-skip-check` reads the lines on each skipped step and panics if they moved. That read settles and stamps the way a poll does. It does not run the stamp a skipped poll uses.
+A core reads its interrupt lines only when they could have changed. After a read, it keeps those lines until the bus reports its next event, until a load or a store outside SRAM, RTC memory, the ROM and the flash windows, or until the next run of that core. A slice with one cycle of room does not ask, and its next slice reads again. A longer slice asks while it reads. A skipped read changes no output. A build with `poll-skip-check` reads the lines on each skipped step and panics if they moved. That read settles and stamps the way a poll does. It does not run the stamp a skipped poll uses.
 
 ## The timeline and the clock
 

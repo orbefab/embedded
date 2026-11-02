@@ -17,6 +17,8 @@ struct Device {
     /// Whether the line is high. A load or a store of `DEVICE` raises it.
     high: bool,
     polls: u64,
+    /// How many times the core asked for the next event.
+    events: u64,
 }
 
 impl Device {
@@ -30,6 +32,7 @@ impl Device {
             code,
             high: false,
             polls: 0,
+            events: 0,
         }
     }
 }
@@ -67,6 +70,7 @@ impl Bus for Device {
     }
 
     fn next_event(&mut self, _now: Cycle) -> Option<Cycle> {
+        self.events += 1;
         None
     }
 
@@ -131,14 +135,57 @@ fn a_store_that_raises_a_line_is_seen_at_the_next_step() {
     assert_eq!(core.pc(), 0x4000_0100 + 0x40 * 2);
 }
 
-/// Each run reads the lines at its first step, so a change between runs is seen.
+/// A run that stops on the step of the read never asks when the lines can change.
+#[test]
+fn a_run_of_one_step_does_not_ask_for_the_next_event() {
+    let mut bus = Device::new("f02000");
+    let mut core = setup(RAM);
+    core.run_until(&mut bus, Cycle(1));
+    assert_eq!(core.pc(), CODE + 3);
+    assert_eq!(bus.polls, 1);
+    assert_eq!(bus.events, 0);
+}
+
+/// A run of more than one step asks once, on its first read. The steps after that keep the lines.
+#[test]
+fn a_longer_run_asks_once() {
+    let mut bus = Device::new(&"f02000".repeat(8));
+    let mut core = setup(RAM);
+    core.run_until(&mut bus, Cycle(4));
+    assert_eq!(core.pc(), CODE + 12);
+    assert_eq!(bus.events, 1);
+    #[cfg(not(feature = "poll-skip-check"))]
+    assert_eq!(bus.polls, 1);
+}
+
+/// A horizon asked in one run does not stay into the next, so a line raised between the runs
+/// is read at the next run's first step.
+#[test]
+fn a_horizon_from_the_previous_run_is_not_kept() {
+    let mut bus = Device::new(&"f02000".repeat(8));
+    let mut core = setup(RAM);
+    core.run_until(&mut bus, Cycle(3));
+    assert_eq!(bus.events, 1);
+    bus.high = true;
+    core.run_until(&mut bus, Cycle(4));
+    assert_eq!(core.special(Sr::Epc2), CODE + 9);
+    assert_eq!(
+        bus.events, 1,
+        "the new run is one step, so it reads and does not ask"
+    );
+}
+
+/// Each run reads the lines at its first step, so a change between runs is seen. The second run
+/// has more than one step, so it is the path that asks while it reads.
 #[test]
 fn a_change_between_runs_is_seen_at_the_next_run() {
     let mut bus = Device::new(&"f02000".repeat(8));
     let mut core = setup(RAM);
     core.run_until(&mut bus, Cycle(2));
     assert_eq!(core.pc(), CODE + 6);
+    assert_eq!(bus.events, 1);
     bus.high = true;
-    core.run_until(&mut bus, Cycle(3));
+    core.run_until(&mut bus, Cycle(5));
     assert_eq!(core.special(Sr::Epc2), CODE + 6);
+    assert_eq!(bus.events, 2, "the second run asks while it reads");
 }
