@@ -7,9 +7,13 @@ Orbefab's **Embedded systems** branch: open-source mechatronics software built f
 - **engine**: the simulator. Today it's `orbefab/sim-engine` ("micro-sim" was only a working name). Inside this repo it's just "engine". sim-engine isn't renamed; it gets archived once its code has moved.
 - **maker-sandbox**: the learning UI (web). Once both are here it builds against the current engine instead of a frozen copy.
 - **Orbe Blocks**: comes later, after the architecture and core decisions.
-- Skills, examples and parts (sim model, specs, 3D, 2D) follow.
+- Skills, examples and parts (sim model, specs, 3D) follow.
 
-Right now the repo holds docs only. There's no code and no license file yet (the license is still open).
+Right now the repo holds docs only.
+
+## License
+
+The code is under either of the MIT license ([LICENSE-MIT](LICENSE-MIT)) or the Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE)), at your option. A contribution you submit for inclusion is under the same two licenses, with no other terms.
 
 ## How we proceed
 
