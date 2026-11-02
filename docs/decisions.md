@@ -1,6 +1,6 @@
 # Decisions
 
-Restated from the branch doc in `orbefab/notes` (`org/branches/embedded-systems.md`), which stays the source of truth. Investigations may challenge any of these, with reasons.
+Investigations may challenge any of these, with reasons.
 
 ## Firmware toolchains are not ours (Oct 31 2026)
 The engine runs firmware built with any toolchain, and users bring whatever they like. Orbefab never builds its own compiler. The skills recommend existing tools: arduino-cli for AVR/Arduino, ESP-IDF for ESP32.

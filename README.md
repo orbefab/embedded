@@ -13,7 +13,7 @@ Right now the repo holds docs only. There's no code and no license file yet (the
 
 ## How we proceed
 
-1. **Investigations first.** See [`docs/investigations/`](docs/investigations/README.md). They run only when Alejandro says.
+1. **Investigations first.** See [`docs/investigations/`](docs/investigations/README.md).
 2. **Then migrate:** engine first, then sandbox, then the rest.
 
 ## Docs
@@ -21,5 +21,3 @@ Right now the repo holds docs only. There's no code and no license file yet (the
 - [`docs/decisions.md`](docs/decisions.md): what's decided so far.
 - [`docs/investigations/README.md`](docs/investigations/README.md): investigations to run before migrating code.
 - [`docs/open-questions.md`](docs/open-questions.md): what's still open.
-
-The vision docs live in `orbefab/notes` (`org/VISION.md` and `org/branches/embedded-systems.md`). If anything here disagrees with them, the notes win.
