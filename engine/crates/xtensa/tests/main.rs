@@ -2,6 +2,7 @@ mod common;
 mod core;
 mod decode;
 mod decodes;
+mod horizon;
 mod interrupts;
 mod loops;
 mod ops;

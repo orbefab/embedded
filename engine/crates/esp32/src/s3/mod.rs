@@ -658,7 +658,8 @@ mod tests {
     use sim_xtensa::{Bus, Cause, Cycle, Exit, Sr, Width};
 
     use super::soc::{
-        EFUSE, Ending, GDMA, GPIO, IO_MUX, RTC_CNTL, SPI2, SYSTEM, TIMG0, TIMG1, USB_SERIAL_JTAG,
+        EFUSE, Ending, GDMA, GPIO, IO_MUX, RTC_CNTL, SPI2, SYSTEM, SYSTIMER, TIMG0, TIMG1,
+        USB_SERIAL_JTAG,
     };
     use super::*;
 

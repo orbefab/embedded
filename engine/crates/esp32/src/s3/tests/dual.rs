@@ -329,6 +329,45 @@ fn a_from_cpu_store_interrupts_the_app_cpu() {
     assert_eq!(seen.0, []);
 }
 
+/// The PRO CPU, alone, maps `FROM_CPU_0` to its level-1 interrupt and stores 1 there. That
+/// store raises the line, and the next instruction takes it, so `EPC1` is that instruction
+/// and the handler raises GPIO21.
+#[test]
+fn a_store_to_from_cpu_is_seen_on_the_next_instruction() {
+    let mut pro = Program::new(&[SYSTEM, INTERRUPT_CORE0 + 4 * 79, PRO_VECTORS, 1 << 2]);
+    pro.l32r(2, 0)
+        .l32r(3, 1)
+        .l32r(4, 2)
+        .wsr(4, VECBASE)
+        .l32r(4, 3)
+        .wsr(4, INTENABLE)
+        .movi(4, 0)
+        .wsr(4, PS)
+        .rsync()
+        .movi(5, 2)
+        .s32i(5, 3, 0)
+        .movi(5, 1)
+        .s32i(5, 2, 0x30);
+    let after = pro.pc();
+    pro.nop().raw(&LOOP);
+    let handler = pads_high(PRO_VECTORS + 0x300, GPIO21);
+    let mut chip = chip(&pro, &boot_rom(), &[&handler]);
+    let mut guard = 0;
+    loop {
+        guard += 1;
+        assert!(guard < 8, "the handler did not raise GPIO21");
+        let halt = chip.run_until(c(200));
+        if chip.drive(21) == PadDrive::High {
+            break;
+        }
+        assert!(
+            matches!(halt, Some(Halt::Change { .. })),
+            "stopped before GPIO21 rose: {halt:?}"
+        );
+    }
+    assert_eq!(chip.cores.core(CoreId::Pro).special(Sr::Epc1), after);
+}
+
 /// From the captured `CONTROL_0` of a booted chip, 0x1, ESP-IDF's four stores start the APP CPU
 /// at the clear of `RESETING`. The store that clears `RUNSTALL` only makes it runnable.
 #[test]
@@ -1153,6 +1192,81 @@ fn a_watchdog_stage_due_on_a_stopped_stores_charged_cycle_runs_out_before_its_re
     let (_, epc1, listed, store) = run(6, true);
     assert_eq!(epc1, store);
     assert_eq!(listed, [(GPIO + 0x60, pro(store))]);
+}
+
+/// PRO releases the APP CPU into `WAITI` and then runs SRAM `nop`s. A run through crystal
+/// cycle 80 executes the nop that starts on that cycle. A SYSTIMER update at cycle 0 then
+/// latches the count at that nop's tick, and the same run split into single cycles latches
+/// the same count. Crystal cycles are 12 ticks and the timer counts every 30, so cycle 80
+/// is count 32.
+#[test]
+fn a_systimer_update_after_skipped_nops_reads_the_poll_tick() {
+    let through = 80;
+    let sample = |step: u64| {
+        let mut app = Program::at(APP, &[]);
+        app.raw(&WAITI).raw(&LOOP);
+        let mut pro = Program::new(&[SYSTEM, app.entry()]);
+        pro.l32r(2, 0).l32r(4, 1).release();
+        for _ in 0..100 {
+            pro.nop();
+        }
+        pro.raw(&LOOP);
+        let mut chip = chip(&pro, &boot_rom(), &[&app]);
+        let mut limit = 0u64;
+        while limit < through {
+            limit = (limit + step).min(through);
+            assert_eq!(chip.run_until(c(limit)), None);
+        }
+        chip.soc
+            .bus()
+            .store(Cycle(0), SYSTIMER + 4, Width::Word, 1 << 30)
+            .unwrap();
+        let snap = chip
+            .soc
+            .bus()
+            .load(Cycle(0), SYSTIMER + 0x44, Width::Word)
+            .unwrap();
+        let app = chip.cores.core(CoreId::App);
+        assert!(app.waiting());
+        assert_eq!(app.cycle().0, through + 1);
+        assert_eq!(chip.cores.core(CoreId::Pro).cycle().0, through + 1);
+        snap
+    };
+    let count = u32::try_from(through * super::super::clock::XTAL / 30).unwrap();
+    assert_eq!(sample(1), count);
+    assert_eq!(sample(through), count);
+}
+
+/// A straddling store to the CPU clock ends some slice when the run is split from 1 to 80.
+/// That store's step skipped its poll, and the switch lands one cycle after the step's start.
+/// The tick matches one run that is not split. The run asks for no tick before the switch,
+/// which a release build would answer with the switch's own tick.
+#[test]
+fn a_clock_store_that_ends_the_slice_keeps_the_tick() {
+    let mut pro = Program::new(&[SYSTEM, 0xe, 0x400]);
+    pro.l32r(2, 0)
+        .l32r(6, 1)
+        .s32i(6, 2, 0x10)
+        .l32r(7, 2)
+        .straddling_s32i(7, 2, 0x60)
+        .raw(&LOOP);
+    let run = |step: u64| {
+        let _ = super::super::clock::take_early_ticks();
+        let mut chip = chip(&pro, &boot_rom(), &[]);
+        let mut limit = 0u64;
+        while limit < 80 {
+            limit = (limit + step).min(80);
+            while chip.run_until(c(limit)).is_some() {}
+        }
+        assert_eq!(chip.soc.clock.source, super::super::clock::Source::Pll(240));
+        let tick = chip.tick();
+        assert_eq!(super::super::clock::take_early_ticks(), 0, "step {step}");
+        tick
+    };
+    let whole = run(80);
+    for step in 1..=80 {
+        assert_eq!(run(step), whole, "step {step}");
+    }
 }
 
 mod waiting;

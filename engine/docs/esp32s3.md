@@ -24,6 +24,8 @@ Both cores count the one CPU clock. The next instruction to run is the one that 
 
 Each core keeps the instructions it has decoded, keyed by the address and the bytes the fetch read, and it fetches before it looks. The kept decode changes no output.
 
+A core reads its interrupt lines only when they could have changed. After a read, it keeps those lines until the bus reports its next event, until a load or a store outside SRAM, RTC memory, the ROM and the flash windows, or until the next run of that core. A skipped read changes no output. A build with `poll-skip-check` reads the lines on each skipped step and panics if they moved. That read settles and stamps the way a poll does. It does not run the stamp a skipped poll uses.
+
 ## The timeline and the clock
 
 Every peripheral counts ticks of 480 MHz, the least common multiple of the clocks the CPU runs on. The core counts its own cycles, and each maps to ticks from the last change of the CPU clock. The CPU runs on the crystal divided by `SYSTEM_PRE_DIV_CNT` + 1, or on the PLL at 80, 160 or 240 MHz as `SYSTEM_CPUPERIOD_SEL` picks. 240 MHz needs the 480 MHz PLL, which `SYSTEM_PLL_FREQ_SEL` set picks, so `SYSTEM_CPUPERIOD_SEL` 2 with the 320 MHz PLL is a reserved value. After a store to either register, the next cycle runs on the clock it picks, and the watchdogs keep their counts across the change. The APB clock is 80 MHz while the CPU runs on the PLL, and the CPU's own clock while it runs on the crystal. A store that picks the RC fast clock, or a reserved value, ends the run with `chip.unsupported_clock`.

@@ -28,6 +28,8 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo clippy -p sim-avr --all-targets --locked --features port-skip-check -- -D warnings
 cargo test --workspace --locked --exclude sim-avr
 cargo test -p sim-avr --locked --features port-skip-check
+cargo clippy -p sim-xtensa -p sim-esp32 -p sim-cli --all-targets --locked --features sim-xtensa/poll-skip-check -- -D warnings
+cargo test -p sim-xtensa -p sim-esp32 -p sim-cli --locked --features sim-xtensa/poll-skip-check
 uv run scripts/ngspice_refs.py --self-test
 uv run scripts/st77916_example.py --check
 uv run scripts/render_st77916.py --self-test
@@ -59,6 +61,6 @@ It then runs `sim run` on `examples/st77916-replay` and checks the folder with `
 
 The commit check needs ngspice-42 on `PATH`.
 
-The `sim-avr` lines turn on `port-skip-check` so the skip check runs, and the other crates leave the feature off.
+The `sim-avr` lines turn on `port-skip-check` so the skip check runs, and the other crates leave the feature off. The `sim-xtensa` lines turn on `poll-skip-check`. On a step whose poll is skipped, that build reads the interrupt lines and panics if they moved. The read is the one a normal build makes when it does poll, so it settles and stamps on that path. It does not run the stamp a skipped poll uses.
 
 Also run `scripts/wasm-check.sh` before a commit that touches `crates/wasm`, `crates/xtensa`, `crates/esp32`, `crates/circuit/src/session*`, `crates/circuit/src/active.rs`, `crates/circuit/src/active/`, `scripts/wasm.sh`, or the math in `crates/circuit/src/element/junction.rs`, `crates/circuit/src/step.rs` and `crates/core/src/netlist.rs` that goes through `libm`. `scripts/wasm-check.sh` needs bash 4.2 or later, node 22.7 or later, and rustup. `scripts/wasm.sh` needs bash 4.2 or later and rustup. The check compares the wasm package with native `sim run` in node Workers.

@@ -189,6 +189,9 @@ pub struct Core<C: Config> {
     pace: u8,
     /// The external interrupt lines as the last poll read them.
     lines: u32,
+    /// The cycle before which those lines cannot change. A read is due at this cycle, after an
+    /// access that can move the lines, and at the start of a run.
+    lines_until: Cycle,
     /// The cycle at which each `CCOMPAREn` next equals `CCOUNT`.
     timer_due: [Cycle; 3],
     /// The FPU registers `f0` to `f15`.
@@ -242,6 +245,7 @@ impl<C: Config> Core<C> {
             wait: Wait::No,
             pace: 0,
             lines: 0,
+            lines_until: Cycle(0),
             timer_due: [Cycle(0); 3],
             fr: [0; 16],
             q: [[0; 4]; 8],
@@ -420,6 +424,7 @@ impl<C: Config> Core<C> {
     /// next instruction is not modeled. An instruction that starts before `limit` runs whole, so
     /// the cycle may pass it. A core in `WAITI` stops at `limit` exactly.
     pub fn run_until<B: Bus>(&mut self, bus: &mut B, limit: Cycle) -> Stop {
+        self.lines_until = Cycle(0);
         loop {
             if self.cycle >= limit {
                 return Stop::Limit;
@@ -504,12 +509,30 @@ impl<C: Config> Core<C> {
     }
 
     /// Reads the lines and the timers before an instruction, and returns whether the NMI line
-    /// rose.
+    /// rose. While the lines cannot have changed, this latches only the timers.
     fn poll<B: Bus>(&mut self, bus: &mut B) -> bool {
         let interrupts = C::INTERRUPTS;
-        let lines = bus.interrupts(self.cycle) & interrupts.external();
-        let rose = lines & !self.lines;
-        self.lines = lines;
+        let rose = if self.cycle < self.lines_until {
+            // A check build reads the lines here, as a poll would, and compares them. That
+            // read settles and stamps. It does not record the step the way a skipped poll does.
+            #[cfg(feature = "poll-skip-check")]
+            assert_eq!(
+                bus.interrupts(self.cycle) & interrupts.external(),
+                self.lines,
+                "the lines moved at {:?}, before the next event at {:?}",
+                self.cycle,
+                self.lines_until
+            );
+            #[cfg(not(feature = "poll-skip-check"))]
+            bus.begin_step(self.cycle);
+            0
+        } else {
+            let lines = bus.interrupts(self.cycle) & interrupts.external();
+            let rose = lines & !self.lines;
+            self.lines = lines;
+            self.lines_until = bus.next_event(self.cycle).unwrap_or(Cycle(u64::MAX));
+            rose
+        };
         let mut latched = self.sr[Sr::Interrupt as usize] | (rose & interrupts.extern_edge);
         for i in 0..3 {
             let due = self.timer_due[i];
@@ -521,6 +544,12 @@ impl<C: Config> Core<C> {
         }
         self.sr[Sr::Interrupt as usize] = latched;
         rose & interrupts.nmi != 0
+    }
+
+    fn note_lines<B: Bus>(&mut self, bus: &B, addr: u32) {
+        if bus.access_moves_lines(addr) {
+            self.lines_until = Cycle(0);
+        }
     }
 
     /// Whether no interrupt `INTENABLE` enables sits on a level above `CINTLEVEL`, below the NMI.
@@ -709,13 +738,14 @@ impl<C: Config> Core<C> {
     }
 
     /// Loads the bytes from `addr`, little-endian, one bus access per aligned part.
-    fn load<B: Bus>(&self, bus: &mut B, op: Op, addr: u32, width: Width) -> Result<u32, Trap> {
+    fn load<B: Bus>(&mut self, bus: &mut B, op: Op, addr: u32, width: Width) -> Result<u32, Trap> {
         self.guard_access(op, addr, width)?;
         if self.watching {
             self.watch_hit(addr, width, false)?;
         }
         let mut value = 0;
         for (at, part, shift) in parts(addr, width) {
+            self.note_lines(bus, at);
             let bytes = bus
                 .load(self.cycle, at, part)
                 .map_err(|exit| self.access_trap(exit, op, addr, width))?;
@@ -725,7 +755,7 @@ impl<C: Config> Core<C> {
     }
 
     fn store<B: Bus>(
-        &self,
+        &mut self,
         bus: &mut B,
         op: Op,
         addr: u32,
@@ -737,6 +767,7 @@ impl<C: Config> Core<C> {
             self.watch_hit(addr, width, true)?;
         }
         for (at, part, shift) in parts(addr, width) {
+            self.note_lines(bus, at);
             bus.store(self.cycle, at, part, value >> shift)
                 .map_err(|exit| self.access_trap(exit, op, addr, width))?;
         }

@@ -9,6 +9,17 @@
 
 use sim_xtensa::Cycle;
 
+#[cfg(test)]
+std::thread_local! {
+    static EARLY_TICKS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread asked for a tick before the clock's last change, then clears it.
+#[cfg(test)]
+pub(crate) fn take_early_ticks() -> u32 {
+    EARLY_TICKS.with(|count| count.replace(0))
+}
+
 /// Ticks per second.
 pub const TICK_HZ: u64 = 480_000_000;
 
@@ -91,6 +102,10 @@ impl CpuClock {
     /// The tick of core cycle `cycle`, at or after the last change. A release build gives a
     /// cycle before it the change's tick.
     pub(crate) fn tick(&self, cycle: Cycle) -> Tick {
+        #[cfg(test)]
+        if cycle < self.since {
+            EARLY_TICKS.with(|count| count.set(count.get().saturating_add(1)));
+        }
         debug_assert!(
             cycle >= self.since,
             "cycle {cycle:?} before the clock's change at {:?}",

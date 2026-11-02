@@ -265,9 +265,9 @@ impl Cores {
             let key = keys[pick as usize].expect("a key");
             let lane = self.lane_mut(pick).expect("a key");
             lane.rouse(key);
-            let mut bus = CoreBus { soc, step };
+            let mut bus = CoreBus::new(soc, step);
             let stop = lane.core.run_until(&mut bus, limit);
-            let start = bus.step.start;
+            let start = bus.last_start();
             if let Some(steer) = soc.steer.take() {
                 self.apply(pick, steer, soc);
             }

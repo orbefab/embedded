@@ -24,10 +24,12 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo clippy -p sim-avr --all-targets --locked --features port-skip-check -- -D warnings
 cargo test --workspace --locked --exclude sim-avr
 cargo test -p sim-avr --locked --features port-skip-check
+cargo clippy -p sim-xtensa -p sim-esp32 -p sim-cli --all-targets --locked --features sim-xtensa/poll-skip-check -- -D warnings
+cargo test -p sim-xtensa -p sim-esp32 -p sim-cli --locked --features sim-xtensa/poll-skip-check
 uv run scripts/ngspice_refs.py --self-test
 ```
 
-The `sim-avr` lines turn on `port-skip-check` so the skip check runs, and the other crates leave the feature off.
+The `sim-avr` lines turn on `port-skip-check` so the skip check runs, and the other crates leave the feature off. The `sim-xtensa` lines turn on `poll-skip-check`. On a step whose poll is skipped, that build reads the interrupt lines and panics if they moved. The read is the one a normal build makes when it does poll, so it settles and stamps on that path. It does not run the stamp a skipped poll uses.
 
 ## Run the divider
 

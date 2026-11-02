@@ -151,7 +151,7 @@ pub(crate) struct Soc {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Step {
     pub(crate) core: CoreId,
-    /// The start of the step, which the poll that opens every step sets.
+    /// The start of the step. The poll sets it, and so does a step that keeps its lines.
     pub(crate) start: Cycle,
     /// Whether the APP CPU has started. A clock switch then lands at `start`, or at the cycle
     /// the latest tick lies on when that is later.
@@ -168,6 +168,18 @@ pub(crate) struct Step {
 pub(crate) struct CoreBus<'a> {
     pub(crate) soc: &'a mut Soc,
     pub(crate) step: Step,
+    /// `step.start` is set and [`Soc::stamp`] has not taken it yet.
+    unstamped: bool,
+}
+
+impl<'a> CoreBus<'a> {
+    pub(crate) fn new(soc: &'a mut Soc, step: Step) -> Self {
+        CoreBus {
+            soc,
+            step,
+            unstamped: false,
+        }
+    }
 }
 
 /// Why a store ended the run.
@@ -392,16 +404,16 @@ impl Soc {
     /// The PRO CPU's bus for one access outside a run, as a test makes it.
     #[cfg(test)]
     pub(crate) fn bus(&mut self) -> CoreBus<'_> {
-        CoreBus {
-            soc: self,
-            step: Step {
+        CoreBus::new(
+            self,
+            Step {
                 core: CoreId::Pro,
                 start: Cycle(0),
                 paired: false,
                 app_released: None,
                 other_sleeps: false,
             },
-        }
+        )
     }
 
     /// The tick of core cycle `cycle` for a peripheral, never before the latest one given.
@@ -473,6 +485,24 @@ impl Soc {
         self.in_flight
             .iter()
             .any(|range| offset < range.end && range.start < end)
+    }
+
+    /// SRAM, RTC memory, the ROMs and the flash windows do not move an interrupt line. A store
+    /// there can still change an instruction, which the fetch compares byte for byte.
+    pub(crate) fn access_moves_lines(addr: u32) -> bool {
+        if Self::sram_offset(addr, false).is_some() {
+            return false;
+        }
+        if RTC_FAST.contains(&addr) || RTC_SLOW.contains(&addr) {
+            return false;
+        }
+        if rom::ROM.contains(&addr) || rom::DROM.contains(&addr) {
+            return false;
+        }
+        if flash::IROM.contains(&addr) || flash::DROM.contains(&addr) {
+            return false;
+        }
+        true
     }
 
     pub(crate) fn sram_offset(addr: u32, fetch: bool) -> Option<u32> {
@@ -1272,26 +1302,59 @@ impl Soc {
     }
 }
 
+impl CoreBus<'_> {
+    /// Stamps the step's start before the first access of a step that did not poll. A poll
+    /// stamps that cycle itself, before the instruction fetches, so a later access of this step
+    /// must not stamp it again and a clock store must see it already stamped.
+    fn stamp_start(&mut self) {
+        if self.unstamped {
+            self.soc.stamp(self.step.start);
+            self.unstamped = false;
+        }
+    }
+
+    /// The start of the slice's last step. A step that kept its lines and made no access has
+    /// not stamped it, so this stamps it now. The other core's next access then finds the tick
+    /// it found when every step polled.
+    pub(crate) fn last_start(mut self) -> Cycle {
+        self.stamp_start();
+        self.step.start
+    }
+}
+
 impl Bus for CoreBus<'_> {
     fn fetch(&mut self, _now: Cycle, addr: u32) -> Result<u32, Exit> {
         self.soc.fetch(addr)
     }
 
     fn load(&mut self, now: Cycle, addr: u32, width: Width) -> Result<u32, Exit> {
+        self.stamp_start();
         self.soc.load(now, addr, width)
     }
 
     fn store(&mut self, now: Cycle, addr: u32, width: Width, value: u32) -> Result<(), Exit> {
+        self.stamp_start();
         self.soc.store(&self.step, now, addr, width, value)
     }
 
-    /// The poll that opens every step, so it marks the step's start.
+    /// The poll that opens a step whose lines may have changed, so it marks the step's start.
     fn interrupts(&mut self, now: Cycle) -> u32 {
         self.step.start = now;
+        self.unstamped = false;
         self.soc.interrupts(self.step.core, now)
     }
 
+    fn begin_step(&mut self, now: Cycle) {
+        self.step.start = now;
+        self.unstamped = true;
+    }
+
+    fn access_moves_lines(&self, addr: u32) -> bool {
+        Soc::access_moves_lines(addr)
+    }
+
     fn next_event(&mut self, now: Cycle) -> Option<Cycle> {
+        self.stamp_start();
         self.soc.next_event(now)
     }
 

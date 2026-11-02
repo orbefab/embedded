@@ -105,10 +105,13 @@ pub trait Bus {
         Ok(())
     }
     /// The levels of the interrupt lines at `now`, one bit per interrupt number. The core reads
-    /// the bits of the external level, edge and NMI interrupts, once before each instruction.
-    /// The lines may change at an access or at [`Bus::next_event`], so that a run split at any
-    /// cycle sees the same lines as one run. The core compares each call with the last one, so an
-    /// edge or NMI line must read low on one call and high on a later one.
+    /// the bits of the external level, edge and NMI interrupts before an instruction when this
+    /// run has not read them yet, when the cycle has reached [`Bus::next_event`], or when the
+    /// previous instruction accessed an address [`Bus::access_moves_lines`] names. Between those
+    /// reads the lines stay as the last read left them. The lines may change at an access or at
+    /// [`Bus::next_event`], so that a run split at any cycle sees the same lines as one run. The
+    /// core compares each call with the last one, so an edge or NMI line must read low on one
+    /// call and high on a later one.
     fn interrupts(&mut self, now: Cycle) -> u32;
     /// The first cycle after `now` at which the lines can change with no access, or `None`. A
     /// core in `WAITI` skips to the earliest of this, its own timer match and the run's limit.
@@ -116,5 +119,16 @@ pub trait Bus {
     /// Whether the core returns [`Stop::Yield`](crate::Stop::Yield) before its next step.
     fn yields(&self) -> bool {
         false
+    }
+
+    /// Records the start of the instruction at `now` when the core does not read the lines.
+    /// A bus that timestamps a store from that cycle records it here. The default does nothing.
+    fn begin_step(&mut self, _now: Cycle) {}
+
+    /// Whether a data access at `addr` can change what [`Bus::interrupts`] returns. The default
+    /// is every access. A memory that cannot move the lines answers `false`, and the core keeps
+    /// the lines it last read until the next event.
+    fn access_moves_lines(&self, _addr: u32) -> bool {
+        true
     }
 }

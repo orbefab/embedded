@@ -179,7 +179,7 @@ const WAITI: &str = "007000f02000";
 
 /// `WAITI` with no interrupt to take moves the cycle to the bus's next event and takes the
 /// interrupt there, as `rfi` would return past the `WAITI`. The core reads the lines before the
-/// `WAITI`, once to start the wait, once at the event, and once before the stop.
+/// `WAITI` and at the event. The wait's own step and the fetch of the vector keep those lines.
 #[test]
 fn waiti_skips_to_the_next_event_and_wakes_there() {
     let mut bus = Flat::new(WAITI);
@@ -191,7 +191,8 @@ fn waiti_skips_to_the_next_event_and_wakes_there() {
     assert_eq!(core.special(Sr::Eps2), WOE);
     assert_eq!(core.special(Sr::Ps), WOE | EXCM | 2);
     assert_eq!(core.cycle(), Cycle(5000 + 4));
-    assert_eq!(bus.polls, 4);
+    #[cfg(not(feature = "poll-skip-check"))]
+    assert_eq!(bus.polls, 2);
 }
 
 /// A limit inside the wait stops it there, and the next run waits on to the same event.
@@ -284,7 +285,8 @@ fn waiti_wakes_at_a_timer_match() {
 }
 
 /// `waiti 3` masks a level-2 line, so the core waits to the limit and stops there exactly. It
-/// reads the lines before the `WAITI`, at the start of the wait and at the line's rise.
+/// reads the lines before the `WAITI` and at the line's rise. The start of the wait keeps the
+/// lines from the first read.
 #[test]
 fn a_masked_wait_runs_to_the_limit() {
     // waiti 3; nop
@@ -295,7 +297,8 @@ fn a_masked_wait_runs_to_the_limit() {
     assert_eq!(core.cycle(), Cycle(1_000_000));
     assert_eq!(core.pc(), CODE + 3);
     assert_eq!(core.special(Sr::Ps), WOE | 3);
-    assert_eq!(bus.polls, 3);
+    #[cfg(not(feature = "poll-skip-check"))]
+    assert_eq!(bus.polls, 2);
 }
 
 /// A loop, then `WAITI` in a loop, woken by timer 0 every 100 cycles and once by edge

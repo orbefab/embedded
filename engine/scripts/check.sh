@@ -7,6 +7,8 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo clippy -p sim-avr --all-targets --locked --features port-skip-check -- -D warnings
 cargo test --workspace --locked --exclude sim-avr
 cargo test -p sim-avr --locked --features port-skip-check
+cargo clippy -p sim-xtensa -p sim-esp32 -p sim-cli --all-targets --locked --features sim-xtensa/poll-skip-check -- -D warnings
+cargo test -p sim-xtensa -p sim-esp32 -p sim-cli --locked --features sim-xtensa/poll-skip-check
 uv run scripts/ngspice_refs.py --self-test
 uv run scripts/st77916_example.py --check
 uv run scripts/render_st77916.py --self-test
