@@ -183,7 +183,9 @@ impl Clone for Core {
     }
 
     /// Reuses the buffers of a core of the same kind. Every landing copies each core it commits
-    /// over that core's last commit.
+    /// over that core's last commit. A copy of an `esp32s3` core starts with an empty table of
+    /// decoded instructions, so a landing leaves the running core's table in place and a rewind
+    /// starts that core empty.
     fn clone_from(&mut self, source: &Self) {
         match (self, source) {
             (Core::Avr(core), Core::Avr(source)) => core.clone_from(source),

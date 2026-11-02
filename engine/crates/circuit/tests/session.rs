@@ -14,6 +14,13 @@ use sim_core::netlist::{self, Analysis, Contact, Model, Netlist};
 use sim_core::time::Time;
 use sim_core::timestamp::Timestamp;
 
+/// A worker thread runs a `Session`, so this stops compiling if `Session` is not `Send`.
+#[test]
+fn session_is_send() {
+    fn assert_send<T: Send>() {}
+    assert_send::<Session>();
+}
+
 /// A seeded xorshift, so a failing run of calls replays.
 struct Rng(u64);
 

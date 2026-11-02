@@ -9,7 +9,10 @@ use crate::config::Config;
 use crate::decode::{Decoded, Insn, Op};
 use crate::special::{Access, CCOMPARE, EPC, EPS, Sr};
 
+mod decodes;
 mod options;
+
+use decodes::Decodes;
 
 const PS_INTLEVEL: u32 = 0xf;
 const PS_EXCM: u32 = 1 << 4;
@@ -202,6 +205,8 @@ pub struct Core<C: Config> {
     watches: [Watch; 2],
     /// Whether either watch compares an access, so a load or a store tests one flag.
     watching: bool,
+    /// Instructions already decoded, by PC and the bytes the fetch read.
+    decodes: Decodes,
     chip: PhantomData<C>,
 }
 
@@ -245,6 +250,7 @@ impl<C: Config> Core<C> {
             regions: [[REGION_RESET; 8]; 2],
             watches: [Watch::default(); 2],
             watching: false,
+            decodes: Decodes::default(),
             chip: PhantomData,
         };
         core.sr[Sr::Ps as usize] = RESET_PS;
@@ -669,33 +675,37 @@ impl<C: Config> Core<C> {
     fn fetch<B: Bus>(&mut self, bus: &mut B) -> Result<Insn, Trap> {
         let pc = self.pc;
         let word = pc & !3;
-        let mut bytes = [0u8; 8];
         let low = bus
             .fetch(self.cycle, word)
             .map_err(|exit| exit_trap(exit, pc))?;
-        bytes[..4].copy_from_slice(&low.to_le_bytes());
-        let offset = (pc & 3) as usize;
-        let Some(len) = C::insn_len(bytes[offset]) else {
+        let offset = pc & 3;
+        let Some(len) = C::insn_len((low >> (8 * offset)) as u8) else {
             return Err(Trap::Exception(Cause::IllegalInstruction, None));
         };
-        let end = offset + len as usize;
+        let end = offset + u32::from(len);
+        let mut both = u64::from(low);
         if end > 4 {
             let next = word.wrapping_add(4);
             let high = bus
                 .fetch(self.cycle, next)
                 .map_err(|exit| exit_trap(exit, next))?;
-            bytes[4..].copy_from_slice(&high.to_le_bytes());
+            both |= u64::from(high) << 32;
         }
-        match C::decode(&bytes[offset..end], pc) {
-            Some(Decoded::Insn(insn)) => {
-                if self.refetch && end > 4 {
-                    self.cycle.0 += 1;
+        let raw = ((both >> (8 * offset)) as u32) & (u32::MAX >> (32 - 8 * u32::from(len)));
+        let insn = self
+            .decodes
+            .get_or(pc, len, raw, || {
+                match C::decode(&raw.to_le_bytes()[..usize::from(len)], pc) {
+                    Some(Decoded::Insn(insn)) => Some(insn),
+                    _ => None,
                 }
-                self.refetch = false;
-                Ok(insn)
-            }
-            _ => Err(Trap::Exception(Cause::IllegalInstruction, None)),
+            })
+            .ok_or(Trap::Exception(Cause::IllegalInstruction, None))?;
+        if self.refetch && end > 4 {
+            self.cycle.0 += 1;
         }
+        self.refetch = false;
+        Ok(insn)
     }
 
     /// Loads the bytes from `addr`, little-endian, one bus access per aligned part.
