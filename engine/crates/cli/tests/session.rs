@@ -161,6 +161,91 @@ fn every_example_finishes_to_the_folder_sim_run_writes() {
     });
 }
 
+/// The cut folder keeps the two `pulses` rows that had already ended, the full run's first three
+/// `leds.csv` rows, and the full run's diagnostics, with no `chip.protocol`.
+fn assert_ring_cut(label: &str, full: &RunFolder, cut: &RunFolder) {
+    let diagnostics = std::str::from_utf8(cut.file("diagnostics.json").unwrap()).unwrap();
+    assert!(
+        !diagnostics.contains("chip.protocol"),
+        "{label}: chip.protocol in {diagnostics}"
+    );
+    assert_eq!(
+        diagnostics,
+        std::str::from_utf8(full.file("diagnostics.json").unwrap()).unwrap(),
+        "{label}: diagnostics"
+    );
+    let full_leds = std::str::from_utf8(full.file("traces/leds.csv").unwrap()).unwrap();
+    let cut_leds = std::str::from_utf8(cut.file("traces/leds.csv").unwrap()).unwrap();
+    let full_rows: Vec<&str> = full_leds
+        .lines()
+        .skip(1)
+        .filter(|line| !line.is_empty())
+        .collect();
+    let cut_rows: Vec<&str> = cut_leds
+        .lines()
+        .skip(1)
+        .filter(|line| !line.is_empty())
+        .collect();
+    assert_eq!(cut_rows, full_rows[..3], "{label}: leds.csv");
+    let link = std::str::from_utf8(cut.file("traces/link.csv").unwrap()).unwrap();
+    let pulses = link
+        .lines()
+        .skip(1)
+        .filter(|line| line.split(',').nth(4) == Some("pulses"))
+        .count();
+    assert_eq!(pulses, 2, "{label}: {link}");
+}
+
+/// A session stopped `offset` ps after frame 2's start matches a batch run stopped there.
+fn run_ring_cut(
+    name: &str,
+    json: &[u8],
+    blobs: &Blobs,
+    full: &RunFolder,
+    start: u64,
+    offset: u64,
+    seed: u64,
+) {
+    let label = format!("{name} +{offset}");
+    let cut = start + offset;
+    let mut doc: serde_json::Value = serde_json::from_slice(json).unwrap();
+    doc["analysis"]["transient"]["stop_ps"] = serde_json::Value::from(cut);
+    let cut_json = serde_json::to_vec(&doc).unwrap();
+    let batch = sim_cli::run_with(&cut_json, blobs, created_at()).folder;
+    assert_ring_cut(&label, full, &batch);
+    let mut session = Session::record_document_with(&cut_json, blobs).unwrap();
+    let rows = advance_in_chunks(&mut session, &cut_json, END, &mut Rng(seed), |_, _| {});
+    let folder = session.finish(created_at()).unwrap();
+    assert_same_folder(&label, &folder, &batch, CREATED_AT);
+    assert_serial_rows(&label, &folder, &rows);
+    assert_ring_cut(&label, full, &folder);
+}
+
+/// Frame 2's entry 275 starts 330 µs after that record's start, 275 entries of 1.2 µs. A second
+/// cut, 600 ns later, is inside the same entry. The start comes from a full run. A session
+/// stopped at either time matches a batch run stopped there. No folder file holds the pairs a
+/// cut reads, since the chain writes only latched frames, so the RMT unit tests pin those pairs.
+#[test]
+fn a_session_cut_inside_frame_2_matches_a_batch_run() {
+    let path = examples()
+        .into_iter()
+        .find(|path| path.file_name().unwrap() == "esp32s3-ring")
+        .expect("examples/esp32s3-ring");
+    let (name, json, blobs) = example(&path);
+    let full = sim_cli::run_with(&json, &blobs, created_at()).folder;
+    let link = std::str::from_utf8(full.file("traces/link.csv").unwrap()).unwrap();
+    let pulses: Vec<Vec<&str>> = link
+        .lines()
+        .skip(1)
+        .map(|line| line.split(',').collect::<Vec<_>>())
+        .filter(|cells| cells.get(4) == Some(&"pulses"))
+        .collect();
+    assert_eq!(pulses.len(), 3, "{name}: {link}");
+    let start: u64 = pulses[2][1].parse().unwrap();
+    run_ring_cut(&name, &json, &blobs, &full, start, 330_000_000, 0x5eed_8275);
+    run_ring_cut(&name, &json, &blobs, &full, start, 330_600_000, 0x5eed_8276);
+}
+
 /// `v-steps` as a JSON value.
 fn v_steps() -> serde_json::Value {
     serde_json::from_slice(&fs::read(common::repo("examples/v-steps/netlist.json")).unwrap())

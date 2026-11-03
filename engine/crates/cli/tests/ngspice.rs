@@ -95,6 +95,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "esp32s3-encoder",
             "esp32s3-hello",
             "esp32s3-pattern",
+            "esp32s3-ring",
             "esp32s3-screen",
             "esp32s3-touch",
             "i-divider",
