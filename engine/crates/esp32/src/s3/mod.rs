@@ -1,6 +1,6 @@
 //! The ESP32-S3 as one Xtensa LX7 core on its internal SRAM and RTC memory, with GPIO, IO_MUX
 //! and the GPIO matrix, the interrupt matrix, SYSTIMER, the watchdogs, the USB Serial/JTAG
-//! console, SPI2, and for a chip booted from flash the mask ROM, the flash behind SPI1 and the
+//! console, SPI2, RMT, and for a chip booted from flash the mask ROM, the flash behind SPI1 and the
 //! MMU, and the registers the boot path reads.
 //!
 //! The chip starts in one of two ways. [`Esp32s3::new`] starts it as a bare-metal ELF leaves it:
@@ -39,6 +39,7 @@ mod gpio;
 mod i2c;
 mod ledc;
 mod matrix;
+mod rmt;
 mod rom;
 mod sha;
 mod soc;
@@ -61,6 +62,7 @@ use timers::{Action, Watchdogs};
 pub use boot::Segment;
 pub use clock::{TICK_HZ, Tick};
 pub use gpio::PadDrive;
+pub use rmt::{Flight, Train};
 pub use sim_xtensa::CoreId;
 pub use spi1::FlashRefusal;
 pub use spi2::{Pads, Phase, Setting, Transfer};
@@ -157,9 +159,10 @@ pub enum Refused {
 /// Where a run stopped before its limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Halt {
-    /// At `at` a pad's drive changed, a record ended, or both: an SPI2 transfer, or an LEDC
-    /// update that took effect on a pad with a net. [`Esp32s3::drive`] gives the new drives,
-    /// and [`Esp32s3::take_transfers`] and [`Esp32s3::take_duties`] the records.
+    /// At `at` a pad's drive changed, a record ended, or both: an SPI2 transfer, an LEDC
+    /// update that took effect on a pad with a net, or an RMT transmission. [`Esp32s3::drive`]
+    /// gives the new drives, and [`Esp32s3::take_transfers`], [`Esp32s3::take_duties`] and
+    /// [`Esp32s3::take_trains`] the records.
     Change { at: Tick, image: bool, record: bool },
     /// The LEDC updates that took effect at `at` moved a pad's drive, after the `Change` at
     /// `at` that holds their records. [`Esp32s3::drive`] gives the new drives.
@@ -235,6 +238,10 @@ pub struct Esp32s3 {
     duties: Vec<Duty>,
     /// How many of `duties` have been reported and wait to be taken.
     reported_duties: usize,
+    /// The RMT transmissions that ended, one per netted pad, from the first not taken.
+    trains: Vec<Train>,
+    /// How many of `trains` have been reported and wait to be taken.
+    reported_trains: usize,
     /// The LEDC signal changes that move a pad's drive and are not reported yet: each one's tick,
     /// signal and level.
     moves: Vec<(Tick, u16, bool)>,
@@ -246,6 +253,9 @@ pub struct Esp32s3 {
     /// The PC after the store that started the last I2C transfer, which a setting the transfer
     /// meets later names.
     i2c_pc: Pc,
+    /// The PC after the store that started the last RMT transmission, which a transmission
+    /// that never ends names.
+    rmt_pc: Pc,
 }
 
 impl Esp32s3 {
@@ -310,11 +320,17 @@ impl Esp32s3 {
             reported: 0,
             duties: Vec::new(),
             reported_duties: 0,
+            trains: Vec::new(),
+            reported_trains: 0,
             moves: Vec::new(),
             fault: None,
             ended: false,
             restarted: None,
             i2c_pc: Pc {
+                core: CoreId::Pro,
+                pc: 0,
+            },
+            rmt_pc: Pc {
                 core: CoreId::Pro,
                 pc: 0,
             },
@@ -327,6 +343,7 @@ impl Esp32s3 {
         loop {
             self.settle_ledc();
             self.settle_i2c(limit);
+            self.settle_rmt();
             if let Some(halt) = self.next_halt() {
                 if halt.at() > limit {
                     return None;
@@ -342,12 +359,19 @@ impl Esp32s3 {
             let due = watchdog.map(|expiry| self.soc.clock.round_up(expiry.at));
             let ledc = self.soc.ledc.next(self.soc.clock.source.apb());
             let i2c = self.soc.i2c.next_event();
+            let rmt = self.soc.rmt.upcoming().map(|at| Tick(at.0 + 1));
+            let train = self
+                .trains
+                .get(self.reported_trains)
+                .map(|train| Tick(train.end.0 + 1));
             let until = [
                 Some(Tick(limit.0 + 1)),
                 due,
                 self.soc.spi2.end(self.reported),
                 ledc.map(|at| Tick(at.0 + 1)),
                 i2c.map(|at| Tick(at.0 + 1)),
+                rmt,
+                train,
             ]
             .into_iter()
             .flatten()
@@ -364,6 +388,12 @@ impl Esp32s3 {
             self.soc.started = false;
             if let Some(core) = self.soc.i2c_started.take() {
                 self.i2c_pc = Pc {
+                    core,
+                    pc: self.cores.core(core).pc(),
+                };
+            }
+            if let Some(core) = self.soc.rmt_started.take() {
+                self.rmt_pc = Pc {
                     core,
                     pc: self.cores.core(core).pc(),
                 };
@@ -490,6 +520,33 @@ impl Esp32s3 {
         }
     }
 
+    /// Lets every RMT entry take effect that is due at a tick whose instructions have all run,
+    /// and takes the transmissions that ended. A transmission that passes 65,536 entries with
+    /// no end word ends the run, naming the PC after the store that started it.
+    fn settle_rmt(&mut self) {
+        if self.soc.rmt.quiet() {
+            return;
+        }
+        let Some(through) = self.now().0.checked_sub(1) else {
+            return;
+        };
+        self.soc.rmt.settle(Tick(through));
+        if let Some((at, setting)) = self.soc.rmt.take_refused()
+            && self.fault.is_none_or(|(fault, _)| at < fault)
+        {
+            let refused = Refused::Register("RMT", setting);
+            self.fault = Some((at, Fault::Refused(refused, self.rmt_pc)));
+        }
+        let fault = self.fault.map(|(at, _)| at);
+        let trains = self
+            .soc
+            .rmt
+            .drain()
+            .into_iter()
+            .filter(|train| fault.is_none_or(|fault| train.end < fault));
+        self.trains.extend(trains);
+    }
+
     /// Holds the chip in reset from `now`, after the store at `pc` reset it from `esp_restart`.
     /// The boot ROM does not run, so the core runs no further, and each pad drives as at
     /// power-on.
@@ -524,7 +581,12 @@ impl Esp32s3 {
             .end(self.reported)
             .filter(|&end| end <= self.now());
         let duty = self.duties.get(self.reported_duties).map(|duty| duty.at);
-        let record = [transfer, duty].into_iter().flatten().min();
+        let train = self
+            .trains
+            .get(self.reported_trains)
+            .map(|train| train.end)
+            .filter(|&end| end <= self.now());
+        let record = [transfer, duty, train].into_iter().flatten().min();
         let change = [self.changed, record].into_iter().flatten().min();
         let change = change.map(|at| {
             let halt = Halt::Change {
@@ -565,6 +627,8 @@ impl Esp32s3 {
                     }
                     let unreported = &self.duties[self.reported_duties..];
                     self.reported_duties += unreported.iter().take_while(|d| d.at == at).count();
+                    let unreported = &self.trains[self.reported_trains..];
+                    self.reported_trains += unreported.iter().take_while(|t| t.end == at).count();
                 }
             }
             Halt::Moved(at) => {
@@ -594,6 +658,40 @@ impl Esp32s3 {
     pub fn take_duties(&mut self) -> impl Iterator<Item = Duty> + '_ {
         let n = std::mem::take(&mut self.reported_duties);
         self.duties.drain(..n)
+    }
+
+    /// The RMT transmissions whose ends were reported, in the order they ended, one per pad.
+    pub fn take_trains(&mut self) -> impl Iterator<Item = Train> + '_ {
+        let n = std::mem::take(&mut self.reported_trains);
+        self.trains.drain(..n)
+    }
+
+    /// A transmission that started by `at` and ends after it. The chip has already run past `at`.
+    pub fn transmission_open(&self, at: Tick) -> bool {
+        self.soc.rmt.covers(at)
+            || self
+                .trains
+                .iter()
+                .any(|train| train.start <= at && train.end > at)
+    }
+
+    /// The part of channel 0's transmission that had started by `at`. The chip is cloned and run
+    /// to `at`, which meets no halt at or before `at`.
+    pub fn in_flight(&self, at: Tick) -> Option<Flight> {
+        let mut copy = self.clone();
+        assert!(
+            copy.run_until(at).is_none(),
+            "a cut meets no halt at or before {at:?}"
+        );
+        copy.soc.rmt.settle(at);
+        copy.soc.rmt.flight(at)
+    }
+
+    /// The word at `addr`, as the core would load it at the cycle it has reached.
+    #[cfg(test)]
+    pub(crate) fn load_word(&mut self, addr: u32) -> Result<u32, sim_xtensa::Exit> {
+        let cycle = self.cores.reached();
+        self.soc.load_word(cycle, addr)
     }
 
     /// What the pad of `gpio`, a netted one, drives in the last reported image.
@@ -809,9 +907,37 @@ mod tests {
         seen
     }
 
+    /// A transmission already listed still waits until both cores have reached its end.
+    /// Reporting it earlier lets a halt from the core still behind land before it.
+    #[test]
+    fn a_train_the_cores_have_not_reached_is_not_a_halt_yet() {
+        let mut program = Program::new(&[]);
+        program.raw(&LOOP);
+        let mut chip = program.chip();
+        let end = c(10);
+        chip.trains.push(Train {
+            start: c(1),
+            end,
+            idle: false,
+            pad: 21,
+            pulses: vec![(true, 25_000)],
+        });
+        let halt = chip.run_until(c(40)).expect("the train's end");
+        assert!(
+            matches!(halt, Halt::Change { record: true, .. }) && halt.at() == end,
+            "{halt:?}"
+        );
+        assert!(
+            chip.tick() >= end,
+            "the record was reported at {:?}, before the cores reached {end:?}",
+            chip.tick()
+        );
+    }
+
     mod dual;
     mod i2c;
     mod pads;
+    mod rmt;
 
     #[test]
     fn a_drive_change_halts_at_its_store_however_the_run_splits() {

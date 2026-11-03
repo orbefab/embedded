@@ -27,6 +27,7 @@ use super::gpio::{self, Gpio, PADS, PadDrive};
 use super::i2c::{self, I2c};
 use super::ledc::{self, Ledc};
 use super::matrix::{self, Matrix};
+use super::rmt::{self, Rmt};
 use super::rom;
 use super::sha::{self, Sha};
 use super::spi1::{self, FlashRefusal, Spi1};
@@ -55,6 +56,7 @@ pub(crate) const TIMG1: u32 = 0x6002_0000;
 pub(crate) const SYSTIMER: u32 = 0x6002_3000;
 pub(crate) const SPI2: u32 = 0x6002_4000;
 const LEDC: u32 = 0x6001_9000;
+pub(crate) const RMT: u32 = 0x6001_6000;
 const I2C0: u32 = 0x6001_3000;
 const I2C1: u32 = 0x6002_7000;
 pub(crate) const USB_SERIAL_JTAG: u32 = 0x6003_8000;
@@ -93,6 +95,7 @@ pub(crate) struct Soc {
     sha: Sha,
     pub(crate) ledc: Ledc,
     pub(crate) i2c: I2c,
+    pub(crate) rmt: Rmt,
     /// The LEDC updates that took effect and that the chip has not taken.
     pub(crate) effects: Vec<ledc::Effect>,
     /// The `Duty` records those updates and the routes to netted pads made, in time order.
@@ -121,9 +124,9 @@ pub(crate) struct Soc {
     /// A store changed the CPU clock, so the next fetch stops the core and the run maps its
     /// limits to cycles again.
     pub(crate) reclocked: bool,
-    /// A store moved a watchdog's deadline or the tick of the next LEDC update, or sent a `Duty`
-    /// record for a pad it routed, so the next fetch stops the core and the run reads the
-    /// change.
+    /// A store moved a watchdog's deadline, the tick of the next LEDC update, an I2C or USB
+    /// event, or the tick RMT next raises its interrupt, or sent a `Duty` record for a pad it
+    /// routed, so the next fetch stops the core and the run reads the change.
     pub(crate) rearmed: bool,
     /// The first access to an unmodeled register stopped the core, so the timeline can take the
     /// access's PC.
@@ -132,12 +135,17 @@ pub(crate) struct Soc {
     pub(crate) change_stop: bool,
     /// The core fetched outside its memories.
     pub(crate) unmapped_fetch: bool,
-    /// A store started an SPI2 transfer, so the next fetch stops the core and the run reads its
-    /// end.
+    /// A store started an SPI2 transfer or an RMT transmission, so the next fetch stops the core
+    /// and the run reads its end.
     pub(crate) started: bool,
     /// A store by this core started an I2C transfer, so the run takes that core's PC as the
     /// transfer's.
     pub(crate) i2c_started: Option<CoreId>,
+    /// A store by this core started an RMT transmission. The run takes that core's PC, which a
+    /// transmission that never ends names.
+    pub(crate) rmt_started: Option<CoreId>,
+    /// `write_kept` started a transmission and has not handed the core to `rmt_started`.
+    rmt_pending: bool,
     /// A store ended the run, and stopped the core.
     pub(crate) ending: Option<Ending>,
     app: AppControl,
@@ -261,6 +269,7 @@ fn effect(addr: u32) -> Option<Effect> {
         (USB_SERIAL_JTAG, 0x10) => Effect::Refuse(!usb::ENA_ALLOWED, interrupt("USB_SERIAL_JTAG")),
         (SHA, sha::INT_ENA) => Effect::Refuse(1, interrupt("SHA")),
         (LEDC, ledc::INT_ENA) => Effect::Refuse(u32::MAX, interrupt("LEDC")),
+        (RMT, 0x78) => Effect::Refuse(!(1 | 1 << 8 | 1 << 12), interrupt("RMT")),
         (GDMA, _) if offset < 5 * 0xc0 => match offset % 0xc0 {
             0x10 | 0x70 => Effect::Refuse(u32::MAX, interrupt("GDMA")),
             0x00 => Effect::Refuse(gdma::MEM_TRANS_EN, dma("memory_copy")),
@@ -305,6 +314,7 @@ impl Soc {
             sha: Sha::new(),
             ledc: Ledc::new(),
             i2c: I2c::new(),
+            rmt: Rmt::new(),
             effects: Vec::new(),
             duties: Vec::new(),
             gates: Gates::new(),
@@ -326,6 +336,8 @@ impl Soc {
             unmapped_fetch: false,
             started: false,
             i2c_started: None,
+            rmt_started: None,
+            rmt_pending: false,
             ending: None,
             app: AppControl::default(),
             steer: None,
@@ -338,7 +350,27 @@ impl Soc {
         }
         soc.idle_ledc();
         soc.idle_i2c();
+        soc.idle_rmt();
         soc
+    }
+
+    /// Signal 81 is low from reset, so a pad routed to it drives low before `IDLE_OUT_EN`.
+    fn idle_rmt(&mut self) {
+        self.gpio.set_signal(rmt::SIGNAL, false);
+    }
+
+    /// The pads the matrix routes to signal 81, netted or not.
+    fn rmt_routes(&self) -> Vec<rmt::Route> {
+        (0..PADS)
+            .filter_map(|pad| {
+                let (signal, inverted) = self.gpio.carries(pad)?;
+                (signal == rmt::SIGNAL).then_some(rmt::Route {
+                    pad: pad as u8,
+                    netted: self.netted(pad as u8),
+                    inverted,
+                })
+            })
+            .collect()
     }
 
     /// Puts I2C0's outputs at their idle level, released.
@@ -399,6 +431,12 @@ impl Soc {
     /// Adds the ROM and the flash, as a chip booted from flash has them.
     pub(crate) fn attach_rom(&mut self, rom: Arc<[u8]>) {
         self.rom = Some(rom);
+    }
+
+    /// The word at `addr`, as a load at `cycle` reads it.
+    #[cfg(test)]
+    pub(crate) fn load_word(&mut self, cycle: Cycle, addr: u32) -> Result<u32, Exit> {
+        self.load(cycle, addr, Width::Word)
     }
 
     /// The PRO CPU's bus for one access outside a run, as a test makes it.
@@ -649,6 +687,7 @@ impl Soc {
             GDMA => self.gdma.read(offset),
             SHA => self.sha.read(offset),
             LEDC => self.ledc.read(offset),
+            RMT => self.rmt.read(now, offset),
             I2C0 => self.i2c.read(now, offset, &mut self.gpio),
             SYSTEM if gates::OFFSETS.contains(&offset) => Some(self.gates.read(offset)),
             ANALOG => self.analog.read(offset),
@@ -732,6 +771,7 @@ impl Soc {
                 let held: Vec<Block> = gates.write(offset, value).collect();
                 self.settle_i2c(now);
                 let i2c = self.i2c.runs();
+                let rmt_sends = self.rmt.sending(now);
                 let sending = self.spi2.busy(now);
                 let dma = sending && !self.in_flight.is_empty();
                 let refused = [
@@ -777,6 +817,16 @@ impl Soc {
                         "I2C0",
                         "reset_while_sending",
                     ),
+                    (
+                        rmt_sends && held.contains(&Block::Rmt),
+                        "RMT",
+                        "reset_while_sending",
+                    ),
+                    (
+                        rmt_sends && !gates.clocked(Block::Rmt),
+                        "RMT",
+                        "clock_off_while_sending",
+                    ),
                 ]
                 .into_iter()
                 .find(|&(refused, ..)| refused);
@@ -806,6 +856,25 @@ impl Soc {
                     self.ending = Some(Ending::Refused(Refused::Register("I2C0", setting)));
                     true
                 }),
+            RMT => {
+                let routes = if Rmt::wants_routes(offset, value) {
+                    self.rmt_routes()
+                } else {
+                    Vec::new()
+                };
+                let apb = self.clock.source.apb();
+                match self.rmt.write(now, offset, value, apb, &routes) {
+                    Ok(started) => {
+                        self.started |= started;
+                        self.rmt_pending |= started;
+                        self.gpio.set_signal(rmt::SIGNAL, self.rmt.level());
+                    }
+                    Err(setting) => {
+                        self.ending = Some(Ending::Refused(Refused::Register("RMT", setting)));
+                    }
+                }
+                true
+            }
             INTERRUPT_CORE0 => self.matrix.write(offset, value),
             EFUSE => self.efuse.write(offset, value).unwrap_or_else(|()| {
                 self.ending = Some(Ending::EfuseProgram);
@@ -867,9 +936,15 @@ impl Soc {
         let spi2 = self.spi2.line(now);
         let gpio = self.gpio.pending() != 0;
         let lines = self.watchdogs.lines();
-        let mut sources =
-            self.matrix
-                .sources(self.systimer.lines(), spi2, lines, gpio, self.i2c.line());
+        let rmt = self.rmt.line(now);
+        let mut sources = self.matrix.sources(
+            self.systimer.lines(),
+            spi2,
+            lines,
+            gpio,
+            self.i2c.line(),
+            rmt,
+        );
         if self.usb.poll(now) {
             sources |= 1 << usb::SOURCE;
         }
@@ -882,10 +957,6 @@ impl Soc {
         let register = |offset| self.plain.get(&(SYSTEM + offset)).copied().unwrap_or(0);
         match Source::of(register(SYSCLK_CONF), register(CPU_PER_CONF)) {
             None => self.ending = Some(Ending::Clock),
-            Some(source) if source.apb() != self.clock.source.apb() && self.ledc.counts_apb() => {
-                let refused = Refused::Register("LEDC", "clock_change_while_running");
-                self.ending = Some(Ending::Refused(refused));
-            }
             Some(source) if source != self.clock.source => {
                 self.clock.switch(at, source);
                 self.watchdogs.reclock(tick, source.apb());
@@ -964,6 +1035,10 @@ impl Soc {
                 self.i2c = I2c::new();
                 self.idle_i2c();
             }
+            Block::Rmt => {
+                self.rmt = Rmt::new();
+                self.idle_rmt();
+            }
         }
     }
 
@@ -976,6 +1051,7 @@ impl Soc {
             GDMA => Block::Gdma,
             SHA => Block::Sha,
             I2C0 => Block::I2c0,
+            RMT => Block::Rmt,
             _ => return None,
         };
         let why = if !self.gates.clocked(block) {
@@ -986,6 +1062,51 @@ impl Soc {
             return None;
         };
         Some(Refused::Register(block.name(), why))
+    }
+
+    /// An access of an RMT FIFO register, which the model does not run.
+    fn rmt_fifo(&self, word: u32) -> bool {
+        word & !(BLOCK - 1) == RMT && Rmt::fifo(word & (BLOCK - 1))
+    }
+
+    /// A clock store whose new APB rate differs while channel 0 sends, or while an LEDC timer
+    /// counts that clock. The store writes nothing. A source the model does not run still writes,
+    /// and `switch_clock` ends that run.
+    fn refuse_clock_change(&mut self, word: u32, value: u32, now: Tick) -> Result<(), Exit> {
+        if word != SYSTEM + SYSCLK_CONF && word != SYSTEM + CPU_PER_CONF {
+            return Ok(());
+        }
+        let sysclk = if word == SYSTEM + SYSCLK_CONF {
+            value
+        } else {
+            self.plain
+                .get(&(SYSTEM + SYSCLK_CONF))
+                .copied()
+                .unwrap_or(0)
+        };
+        let cpu = if word == SYSTEM + CPU_PER_CONF {
+            value
+        } else {
+            self.plain
+                .get(&(SYSTEM + CPU_PER_CONF))
+                .copied()
+                .unwrap_or(0)
+        };
+        let Some(source) = Source::of(sysclk, cpu) else {
+            return Ok(());
+        };
+        if source.apb() == self.clock.source.apb() {
+            return Ok(());
+        }
+        let setting = if self.rmt.sending(now) {
+            ("RMT", "clock_change_while_sending")
+        } else if self.ledc.counts_apb() {
+            ("LEDC", "clock_change_while_running")
+        } else {
+            return Ok(());
+        };
+        self.ending = Some(Ending::Refused(Refused::Register(setting.0, setting.1)));
+        Err(Exit::Stop)
     }
 
     /// Whether pad `gpio` has a net.
@@ -1076,6 +1197,10 @@ impl Soc {
             self.ending = Some(Ending::Refused(refused));
             return Err(Exit::Stop);
         }
+        if self.rmt_fifo(word) {
+            self.ending = Some(Ending::Refused(Refused::Register("RMT", "fifo")));
+            return Err(Exit::Stop);
+        }
         let now = self.stamp(cycle);
         let kept = self.read_kept(now, word);
         if word == USB_SERIAL_JTAG {
@@ -1145,6 +1270,10 @@ impl Soc {
             self.ending = Some(Ending::Refused(refused));
             return Err(Exit::Stop);
         }
+        if self.rmt_fifo(word) {
+            self.ending = Some(Ending::Refused(Refused::Register("RMT", "fifo")));
+            return Err(Exit::Stop);
+        }
         if word & !(BLOCK - 1) == I2C1 {
             self.ending = Some(Ending::Refused(Refused::Register("I2C1", "port")));
             return Err(Exit::Stop);
@@ -1189,8 +1318,9 @@ impl Soc {
         if kept.is_none() {
             return self.touch(now, word, true, false);
         }
-        let pads = matches!(word & !(BLOCK - 1), GPIO | IO_MUX | SPI2)
-            || (word & !(BLOCK - 1) == SYSTEM && gates::OFFSETS.contains(&(word - SYSTEM)));
+        let base = word & !(BLOCK - 1);
+        let pads = matches!(base, GPIO | IO_MUX | SPI2 | RMT)
+            || (base == SYSTEM && gates::OFFSETS.contains(&(word - SYSTEM)));
         if !pads {
             let deadline = self.watchdogs.deadline();
             let app = [
@@ -1210,6 +1340,7 @@ impl Soc {
             let due = self.ledc.next(self.clock.source.apb());
             let i2c = (self.i2c.runs(), self.i2c.next_event());
             let usb_due = self.usb.next_event(now);
+            self.refuse_clock_change(word, kept, now)?;
             self.write_kept(now, word, kept);
             if clock {
                 self.switch_clock(at, now);
@@ -1231,15 +1362,24 @@ impl Soc {
             return Ok(());
         }
         self.settle_ledc(now);
+        self.rmt.settle(now);
+        let rmt_due = self.rmt.next_event();
         let before = self.image();
         let carried = self.ledc_pads();
         self.write_kept(now, word, value);
+        if self.rmt_pending {
+            self.rmt_started = Some(step.core);
+            self.rmt_pending = false;
+        }
         if self.ending.is_some() {
             return Err(Exit::Stop);
         }
         self.changes.extend(change.map(|touch| (word, touch)));
         if self.image() != before {
             self.changed = Some(now);
+        }
+        if self.rmt.next_event() != rmt_due {
+            self.rearmed = true;
         }
         for (pad, channel, inverted) in self.ledc_pads() {
             if let Some(effect) = self.ledc.sent(usize::from(channel))
@@ -1290,10 +1430,12 @@ impl Soc {
 
     fn next_event(&mut self, cycle: Cycle) -> Option<Cycle> {
         let now = self.stamp(cycle);
+        self.rmt.settle(now);
         let next = [
             self.systimer.next_event(now),
             self.spi2.next_event(),
             self.usb.next_event(now),
+            self.rmt.next_event(),
         ]
         .into_iter()
         .flatten()

@@ -969,9 +969,14 @@ impl Actives {
         let flying: Vec<Record> = self
             .committed
             .iter()
-            .filter_map(|core| match core {
-                Core::PulsesReplay(replay) => replay.in_flight(at).cloned(),
-                _ => None,
+            .zip(&self.ahead)
+            .flat_map(|(core, ahead)| match core {
+                Core::PulsesReplay(replay) => replay.in_flight(at).cloned().into_iter().collect(),
+                Core::Esp32s3(chip) => match &ahead.core {
+                    Core::Esp32s3(copy) if copy.no_train_through(at) => Vec::new(),
+                    _ => chip.in_flight(at),
+                },
+                _ => Vec::new(),
             })
             .collect();
         for (core, chip) in self.committed.iter_mut().zip(&circuit.actives) {

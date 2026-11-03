@@ -1,7 +1,8 @@
 //! The ESP32-S3 behind the seam. Each GPIO with a net becomes an output and a watch around
 //! `sim_esp32::s3::Esp32s3`, its console goes to `serial.csv` as `USB_SERIAL_JTAG`, each SPI2
 //! transfer is a `Spi` record, each LEDC update is a `Duty` record on each of its pins with a
-//! net, and its 480 MHz tick converts between picoseconds and its timeline.
+//! net, each RMT transmission is a `Pulses` record on each of its pins with a net, and its
+//! 480 MHz tick converts between picoseconds and its timeline.
 //!
 //! An LEDC update that moves its pad's drive moves it 1 ps after its record's end, a stop of its
 //! own, so the record and the drive change never land together.
@@ -16,7 +17,7 @@ use sim_core::netlist::{Esp32s3, Esp32s3Firmware, NetId, PartId, Value};
 use sim_core::time::Time;
 use sim_esp32::s3::{
     self, CoreId, Duty, Fault, Halt, PadDrive, Pc, Refused, ResetCause, TICK_HZ, Tick, Touch,
-    Transfer,
+    Train, Transfer,
 };
 use sim_xtensa::Missing;
 
@@ -233,6 +234,11 @@ impl Core {
                         let record = self.duty(duty);
                         self.records.push(record);
                     }
+                    let trains: Vec<Train> = self.chip.take_trains().collect();
+                    for train in trains {
+                        let record = self.pulses(train);
+                        self.records.push(record);
+                    }
                     record = true;
                 }
                 at
@@ -282,6 +288,69 @@ impl Core {
         Esp32s3::PINS
             .into_iter()
             .find(|name| name.strip_prefix("GPIO") == Some(&pad.to_string()))
+    }
+
+    /// `train` as its `Pulses` record, named by its pad's pin.
+    fn pulses(&mut self, train: Train) -> Record {
+        let k = self
+            .gpios
+            .iter()
+            .position(|&gpio| gpio == train.pad)
+            .expect("a train's pad has a net");
+        let seq = self.made;
+        self.made += 1;
+        Record {
+            seq,
+            start: time(train.start),
+            end: time(train.end),
+            pin: Self::pin(train.pad).expect("a pad with a net has a pin"),
+            kind: RecordKind::Pulses(link::Pulses {
+                idle: train.idle,
+                pulses: std::sync::Arc::from(train.pulses),
+                net: self.nets[k],
+            }),
+        }
+    }
+
+    /// The copy stands at `at`, and no live or unreported transmission covers `at`.
+    /// A held record ends at or before `served`, so standing on `at` already excludes it.
+    /// A copy that ran past `at` is not the state at the cut.
+    pub(crate) fn no_train_through(&self, at: Time) -> bool {
+        debug_assert!(
+            self.served != Some(at)
+                || self.records.iter().all(|record| {
+                    !matches!(record.kind, RecordKind::Pulses(_)) || record.end <= at
+                }),
+            "a held record ends after the cut the copy stands on"
+        );
+        self.served == Some(at) && !self.chip.transmission_open(tick(at))
+    }
+
+    /// The part of a transmission still running at `at`, one record per netted pad. Each record
+    /// ends one picosecond after `at`, so a chain cut at `at` takes the pairs read by then.
+    pub(crate) fn in_flight(&self, at: Time) -> Vec<Record> {
+        let Some(flight) = self.chip.in_flight(tick(at)) else {
+            return Vec::new();
+        };
+        let end = Time::from_ps(at.as_ps().saturating_add(1));
+        flight
+            .pads
+            .into_iter()
+            .filter_map(|pad| {
+                let k = self.gpios.iter().position(|&gpio| gpio == pad)?;
+                Some(Record {
+                    seq: 0,
+                    start: time(flight.start),
+                    end,
+                    pin: Self::pin(pad)?,
+                    kind: RecordKind::Pulses(link::Pulses {
+                        idle: flight.idle,
+                        pulses: std::sync::Arc::from(flight.pulses.clone()),
+                        net: self.nets[k],
+                    }),
+                })
+            })
+            .collect()
     }
 
     /// `duty` as its `Duty` record, named by its pad's pin.
@@ -735,5 +804,219 @@ mod tests {
         assert_eq!(time(Tick(3 * 12)), Time::from_ps(75_000));
         assert_eq!(tick(Time::from_ps(74_999)).0 / 12, 2);
         assert_eq!(tick(Time::from_ps(75_000)), Tick(3 * 12));
+    }
+
+    /// GPIO0 on ground and GPIO1 on ground. The train is four entries of 8 and 8 at divider 1,
+    /// so it starts at 875,000 ps and ends at 2,475,000 ps.
+    fn rmt_core(reroute: bool) -> Core {
+        const BASE: u32 = 0x4037_0000;
+        const RMT: u32 = 0x6001_6000;
+        const GPIO: u32 = 0x6000_4000;
+        const IO_MUX: u32 = 0x6000_9000;
+        const SYSTEM: u32 = 0x600c_0000;
+        let symbol = 8u32 | 1 << 15 | 8 << 16;
+        let mut stores = vec![
+            (SYSTEM + 0x18, 0xf9c1_e06f | 1 << 9),
+            (SYSTEM + 0x20, 1 << 9),
+            (SYSTEM + 0x20, 0),
+            (IO_MUX + 4, 1 << 12),
+            (GPIO + 0x554, 81),
+            (RMT + 0xc0, 1 | 1 << 24 | 1 << 26),
+        ];
+        for index in 0..4u32 {
+            stores.push((RMT + 0x800 + 4 * index, symbol));
+        }
+        stores.push((RMT + 0x810, 0));
+        stores.push((RMT + 0x20, 1 | 1 << 4 | 1 << 6 | 1 << 8 | 1 << 16));
+        if reroute {
+            stores.extend([
+                (GPIO + 0x554, 0x100),
+                (IO_MUX + 8, 1 << 12),
+                (GPIO + 0x558, 81),
+            ]);
+        }
+        let mut image: Vec<u8> = stores
+            .iter()
+            .flat_map(|&(addr, value)| [addr, value])
+            .flat_map(u32::to_le_bytes)
+            .collect();
+        let entry = BASE + image.len() as u32;
+        for k in 0..stores.len() as u32 {
+            for (t, literal) in [(2u8, 2 * k), (3, 2 * k + 1)] {
+                let pc = BASE + image.len() as u32;
+                let imm = ((BASE + 4 * literal).wrapping_sub((pc + 3) & !3) as i32 >> 2) as u16;
+                image.extend([t << 4 | 1, imm as u8, (imm >> 8) as u8]);
+            }
+            image.extend([0x32, 0x62, 0x00]);
+        }
+        image.extend([0x06, 0xff, 0xff]);
+        let gpios = vec![0, 1];
+        let mut core = Core {
+            chip: s3::Esp32s3::new(&gpios, entry, [(BASE, image.as_slice())], None),
+            image: vec![Drive::Off; gpios.len()],
+            gpios,
+            nets: vec![NetId::GROUND, NetId::GROUND],
+            records: Vec::new(),
+            made: 0,
+            levels: Vec::new(),
+            fault: None,
+            held: None,
+            served: None,
+        };
+        core.refresh();
+        core
+    }
+
+    fn pulses_of(record: &Record) -> &link::Pulses {
+        match &record.kind {
+            RecordKind::Pulses(pulses) => pulses,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_train_record_names_the_pad_it_started_on() {
+        let mut core = rmt_core(false);
+        let record = loop {
+            let stop = core
+                .run_until(Time::from_ps(5_000_000))
+                .expect("the train ends");
+            if stop.record {
+                break core.records.pop().expect("the record");
+            }
+        };
+        assert!(core.records.is_empty());
+        assert_eq!(record.pin, "GPIO0");
+        assert_eq!(record.seq, 0);
+        assert_eq!(record.start, Time::from_ps(875_000));
+        assert_eq!(record.end, Time::from_ps(2_475_000));
+        let pulses = pulses_of(&record);
+        assert!(!pulses.idle);
+        assert_eq!(pulses.net, NetId::GROUND);
+        assert_eq!(pulses.net, core.nets[0]);
+        let pair = [(true, 200_000u64), (false, 200_000)];
+        assert_eq!(pulses.pulses.len(), 8);
+        for (index, pulse) in pulses.pulses.iter().enumerate() {
+            assert_eq!(*pulse, pair[index % 2]);
+        }
+    }
+
+    #[test]
+    fn a_reroute_during_the_train_keeps_the_start_pad() {
+        let mut core = rmt_core(true);
+        let mut images = Vec::new();
+        let record = loop {
+            let stop = core
+                .run_until(Time::from_ps(5_000_000))
+                .expect("the train ends");
+            if stop.record {
+                break core.records.pop().expect("the record");
+            }
+            images.push(stop.at);
+        };
+        assert!(
+            images
+                .iter()
+                .any(|at| *at > record.start && *at < record.end),
+            "the pad moves while the train runs: {images:?}"
+        );
+        assert!(core.records.is_empty(), "gpio1 sends no second record");
+        assert_eq!(record.pin, "GPIO0");
+        assert_eq!(pulses_of(&record).net, core.nets[0]);
+        assert_eq!(pulses_of(&record).pulses.len(), 8);
+    }
+
+    #[test]
+    fn a_cut_inside_an_entry_returns_the_pairs_read_by_then() {
+        let mut core = rmt_core(false);
+        let opened = Time::from_ps(400_000);
+        while let Some(stop) = core.run_until(opened) {
+            assert!(!stop.record);
+            assert_eq!(core.drive()[0], Drive::Low);
+        }
+        let mid = Time::from_ps(1_868_750);
+        let flying = core.in_flight(mid);
+        assert_eq!(flying.len(), 1);
+        assert_eq!(flying[0].pin, "GPIO0");
+        assert_eq!(flying[0].start, Time::from_ps(875_000));
+        assert_eq!(flying[0].end, Time::from_ps(mid.as_ps() + 1));
+        let pulses = pulses_of(&flying[0]);
+        assert_eq!(pulses.net, core.nets[0]);
+        assert_eq!(
+            pulses.pulses.as_ref(),
+            &[
+                (true, 200_000),
+                (false, 200_000),
+                (true, 200_000),
+                (false, 200_000),
+                (true, 200_000),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_copy_short_of_the_cut_does_not_count_as_idle() {
+        let mut core = rmt_core(false);
+        let early = Time::from_ps(400_000);
+        let mid = Time::from_ps(1_868_750);
+        while core.run_until(early).is_some() {}
+        assert!(core.no_train_through(early));
+        assert!(!core.no_train_through(mid));
+    }
+
+    #[test]
+    fn a_fault_cut_inside_a_train_the_copy_already_finished_keeps_the_pairs() {
+        let mut ahead = rmt_core(false);
+        let mid = Time::from_ps(1_868_750);
+        let mut finished = false;
+        while let Some(stop) = ahead.run_until(Time::from_ps(5_000_000)) {
+            if stop.record {
+                finished = true;
+                break;
+            }
+        }
+        assert!(finished, "the copy ran to the train's end");
+        assert!(ahead.served.is_some_and(|served| served > mid));
+        assert!(
+            !ahead.no_train_through(mid),
+            "the finished train still covers the cut"
+        );
+        let mut committed = rmt_core(false);
+        while committed.run_until(mid).is_some() {}
+        let flying = committed.in_flight(mid);
+        assert_eq!(flying.len(), 1);
+        assert_eq!(flying[0].end, Time::from_ps(mid.as_ps() + 1));
+        assert_eq!(pulses_of(&flying[0]).pulses.len(), 5);
+    }
+
+    #[test]
+    fn a_copy_past_a_quiet_cut_does_not_count_as_standing_there() {
+        let mut core = rmt_core(false);
+        let early = Time::from_ps(400_000);
+        let later = Time::from_ps(500_000);
+        while core.run_until(later).is_some() {}
+        assert_eq!(core.served, Some(later));
+        assert!(core.records.is_empty());
+        assert!(!core.no_train_through(early));
+    }
+
+    #[test]
+    fn a_copy_that_reached_a_cut_inside_a_train_still_has_one() {
+        let mut core = rmt_core(false);
+        let mid = Time::from_ps(1_868_750);
+        while core.run_until(mid).is_some() {}
+        assert!(!core.no_train_through(mid));
+        let flying = core.in_flight(mid);
+        assert_eq!(flying.len(), 1);
+        assert_eq!(
+            pulses_of(&flying[0]).pulses.as_ref(),
+            &[
+                (true, 200_000),
+                (false, 200_000),
+                (true, 200_000),
+                (false, 200_000),
+                (true, 200_000),
+            ]
+        );
     }
 }

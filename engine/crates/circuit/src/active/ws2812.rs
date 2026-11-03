@@ -74,11 +74,9 @@ enum Line {
     High {
         at: Time,
     },
-    /// High since `at` at the idle level, from power-on or from a record's return to idle.
-    /// The hold is no bit, so the next record times its first high from its own start.
-    Held {
-        at: Time,
-    },
+    /// High at the idle level, from power-on or from a record's return to idle. The hold is no
+    /// bit, so a fall ends none, and the next record times its first high from its own start.
+    Held,
     /// `open` is the bit of the high before, when that high was in a window. The rise or the
     /// reset that ends the low shifts it.
     Low {
@@ -212,13 +210,14 @@ impl Core {
         {
             *self = *before;
         }
-        match self.line {
-            Line::Fresh => self.feed(idle, start),
-            Line::Held { .. } => match pulses.first() {
+        if self.line == Line::Fresh {
+            self.feed(idle, start);
+        }
+        if self.line == Line::Held {
+            match pulses.first() {
                 Some((false, _)) => self.fall(None, start),
                 _ => self.line = Line::High { at: start },
-            },
-            Line::High { .. } | Line::Low { .. } => {}
+            }
         }
         let until = until.as_ps();
         let mut t = start.as_ps();
@@ -242,7 +241,7 @@ impl Core {
         let rises = idle && matches!(self.line, Line::Low { .. });
         self.feed(idle, at);
         if rises {
-            self.line = Line::Held { at };
+            self.line = Line::Held;
         }
     }
 
@@ -250,12 +249,13 @@ impl Core {
         match self.line {
             Line::Fresh => {
                 self.line = if level {
-                    Line::Held { at }
+                    Line::Held
                 } else {
                     Line::Low { open: None }
                 };
             }
-            Line::High { at: since } | Line::Held { at: since } if !level => {
+            Line::Held if !level => self.fall(None, at),
+            Line::High { at: since } if !level => {
                 let high = at.as_ps().saturating_sub(since.as_ps());
                 let open = if T0H.contains(&high) {
                     Some(false)
@@ -278,7 +278,7 @@ impl Core {
                 }
                 self.line = Line::High { at };
             }
-            Line::High { .. } | Line::Held { .. } | Line::Low { .. } => {}
+            Line::High { .. } | Line::Held | Line::Low { .. } => {}
         }
     }
 
@@ -686,5 +686,44 @@ mod tests {
         );
         settle(&mut core, end(start, &pulses) + 2 * RES);
         assert_eq!(core.observed().pixels, vec![[7, 8, 9], [4, 5, 6]]);
+    }
+
+    #[test]
+    fn a_fresh_line_under_an_idle_high_record_keeps_its_first_bit() {
+        let pulses = train(&[0x80, 0, 0], ZERO, ONE);
+        let mut core = Core::new(1);
+        let end = end(START, &pulses);
+        core.land(Time::from_ps(START), true, &pulses, Time::from_ps(end));
+        settle(&mut core, end + 2 * RES);
+        assert_eq!(core.observed().pixels, vec![[0x80, 0, 0]]);
+        assert_eq!(core.broke(), None);
+    }
+
+    #[test]
+    fn a_held_line_that_falls_on_its_pin_ends_no_bit() {
+        let mut core = Core::new(1);
+        core.input(Time::ZERO, &[true]);
+        core.input(Time::from_ps(START), &[false]);
+        settle(&mut core, START + RES + 1);
+        assert_eq!(core.broke(), None);
+        assert_eq!(latch_times(&core), vec![START + RES + 1]);
+        assert_eq!(core.observed().pixels, vec![[0, 0, 0]]);
+
+        let mut early = Core::new(1);
+        early.input(Time::ZERO, &[true]);
+        early.input(Time::from_ps(300_000), &[false]);
+        settle(&mut early, 300_000 + RES + 1);
+        let pulses = train(&[0x80, 0, 0], ZERO, ONE);
+        let mut t = START;
+        for &(level, ps) in &pulses {
+            settle(&mut early, t);
+            early.input(Time::from_ps(t), &[level]);
+            t += ps;
+        }
+        settle(&mut early, t);
+        early.input(Time::from_ps(t), &[false]);
+        settle(&mut early, t + 2 * RES);
+        assert_eq!(early.broke(), None);
+        assert_eq!(early.observed().pixels, vec![[0x80, 0, 0]]);
     }
 }

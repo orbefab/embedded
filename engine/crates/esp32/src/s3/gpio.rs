@@ -4,7 +4,7 @@
 //! A pad drives from the matrix when its IO_MUX function is the GPIO one: function 1 on every
 //! pad, or function 0 on a pad whose function 0 is its GPIO. The matrix's signal 256 is the
 //! pad's own `GPIO_OUT` bit, with `GPIO_ENABLE` as its output enable. A peripheral signal the
-//! SoC gives a level, as SPI2 does its idle levels, drives that level, enabled by the peripheral
+//! SoC gives a level, as SPI2 does its idle levels and RMT does signal 81, drives that level, enabled by the peripheral
 //! unless `OEN_SEL` hands the enable to `GPIO_ENABLE`. A pad routed to any other signal, or to
 //! another IO_MUX function, drives nothing. A pad whose `GPIO_PINn` sets `PAD_DRIVER` is open
 //! drain, and drives nothing for a high level. A pad that does not drive pulls up when `FUN_WPU`
