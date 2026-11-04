@@ -1,0 +1,16 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": { "op": {} },
+  "ground": "gnd",
+  "nets": ["gnd", "vout"],
+  "parts": [
+    {
+      "name": "r2",
+      "kind": "resistor",
+      "pins": { "a": "vout", "b": "gnd2" },
+      "resistance": { "value": 2000.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
+    }
+  ]
+}

@@ -1,0 +1,123 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": {
+    "op": {}
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "b",
+    "c",
+    "e"
+  ],
+  "parts": [
+    {
+      "name": "vb",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "b",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 0.0,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "vc",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "c",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 0.27,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "ve",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "e",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 0.13,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "q1",
+      "kind": "npn",
+      "pins": {
+        "collector": "c",
+        "base": "b",
+        "emitter": "e"
+      },
+      "saturation_current": {
+        "value": 1e-08,
+        "unit": "A",
+        "source": "user"
+      },
+      "forward_beta": {
+        "value": 173.2,
+        "unit": "1",
+        "source": "user"
+      },
+      "reverse_beta": {
+        "value": 0.2704,
+        "unit": "1",
+        "source": "user"
+      },
+      "forward_emission": {
+        "value": 1.5,
+        "unit": "1",
+        "source": "user"
+      },
+      "reverse_emission": {
+        "value": 2.0,
+        "unit": "1",
+        "source": "user"
+      },
+      "early_voltage": {
+        "value": 100.0,
+        "unit": "V",
+        "source": "user"
+      },
+      "base_resistance": {
+        "value": 5.707,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "collector_resistance": {
+        "value": 1.531,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "emitter_resistance": {
+        "value": 0.867,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "base_emitter_capacitance": {
+        "value": 8e-12,
+        "unit": "F",
+        "source": "user"
+      },
+      "base_collector_capacitance": {
+        "value": 4e-12,
+        "unit": "F",
+        "source": "user"
+      },
+      "ratings": {
+        "current": null,
+        "power": null
+      }
+    }
+  ]
+}

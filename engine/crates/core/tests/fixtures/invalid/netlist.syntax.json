@@ -1,0 +1,15 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": { "op": {} },
+  "ground": "gnd",
+  "nets": ["gnd"],
+  "parts": [
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": { "a": "gnd", "b": "gnd" },
+      "resistence": { "value": 1000.0, "unit": "ohm", "source": "user" }
+    }
+  ]
+}

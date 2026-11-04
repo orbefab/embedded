@@ -1,0 +1,146 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": {
+    "op": {}
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "vin",
+    "vout"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vin",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 5.0,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "i1",
+      "kind": "current_source",
+      "pins": {
+        "p": "gnd",
+        "n": "vout"
+      },
+      "current": {
+        "value": 0.5,
+        "unit": "A",
+        "source": "user"
+      }
+    },
+    {
+      "name": "u1",
+      "kind": "linear_regulator",
+      "pins": {
+        "in": "vin",
+        "out": "vout",
+        "gnd": "gnd"
+      },
+      "output_voltage": {
+        "value": 3.3,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "TI LM1117, SNOS412Q",
+            "at": "p5, LM1117-3.3 VOUT typical at IOUT 10 mA and VIN 5 V",
+            "basis": "typical"
+          }
+        }
+      },
+      "line_regulation": {
+        "value": 9.75609756097561e-05,
+        "unit": "1",
+        "source": {
+          "closed_form": {
+            "note": "1 mV typical from 4.75 V to 15 V at 0 mA, p5, divided by 10.25 V"
+          }
+        }
+      },
+      "output_resistance": {
+        "value": 0.00125,
+        "unit": "ohm",
+        "source": {
+          "closed_form": {
+            "note": "1 mV typical from 0 to 800 mA at VIN 4.75 V, p5, divided by 0.8 A"
+          }
+        }
+      },
+      "dropout_voltage": {
+        "value": 1.0857142857142859,
+        "unit": "V",
+        "source": {
+          "closed_form": {
+            "note": "the line through p6 dropout 1.10 V at 100 mA and 1.20 V at 800 mA"
+          }
+        }
+      },
+      "dropout_resistance": {
+        "value": 0.14285714285714288,
+        "unit": "ohm",
+        "source": {
+          "closed_form": {
+            "note": "the line through p6 dropout 1.10 V at 100 mA and 1.20 V at 800 mA"
+          }
+        }
+      },
+      "current_limit": {
+        "value": 1.2,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "TI LM1117, SNOS412Q",
+            "at": "p6, current limit typical at VIN - VOUT = 5 V",
+            "basis": "typical"
+          }
+        }
+      },
+      "quiescent_current": {
+        "value": 0.005,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "TI LM1117, SNOS412Q",
+            "at": "p6, LM1117-3.3 quiescent current typical, VIN at most 15 V",
+            "basis": "typical"
+          }
+        }
+      },
+      "ground_current_ratio": {
+        "value": 0.02,
+        "unit": "1",
+        "source": "user"
+      },
+      "ratings": {
+        "current": {
+          "value": 0.8,
+          "unit": "A",
+          "source": {
+            "datasheet": {
+              "doc": "TI LM1117, SNOS412Q",
+              "at": "p1, output current 800 mA",
+              "basis": "max"
+            }
+          }
+        },
+        "power": {
+          "value": 1.6233766233766234,
+          "unit": "W",
+          "source": {
+            "closed_form": {
+              "note": "(125 C - 25 C) / 61.6 C/W, section 7.3 recommended junction and section 7.4 SOT-223 R\u03b8JA, ambient 25 C"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

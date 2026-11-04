@@ -1,0 +1,23 @@
+{
+  "version": 0,
+  "parts": {
+    "v1": {
+      "model": "placeholder:dc-supply"
+    },
+    "vpin": {
+      "model": "placeholder:dc-supply"
+    },
+    "rg": {
+      "model": "placeholder:resistor-axial"
+    },
+    "r1": {
+      "model": "placeholder:resistor-axial"
+    },
+    "led1": {
+      "model": "placeholder:led-5mm-red"
+    },
+    "m1": {
+      "model": "placeholder:to-92"
+    }
+  }
+}

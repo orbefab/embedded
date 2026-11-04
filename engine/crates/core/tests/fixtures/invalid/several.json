@@ -1,0 +1,23 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": { "op": {} },
+  "ground": "gnd",
+  "nets": ["gnd", "vin", "vout"],
+  "parts": [
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": { "a": "vin", "b": "vout" },
+      "resistance": { "value": 1000.0, "unit": "kohm", "source": "user" },
+      "ratings": { "power": null }
+    },
+    {
+      "name": "r2",
+      "kind": "resistor",
+      "pins": { "a": "vout", "b": "gnd2" },
+      "resistance": { "value": 2000.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
+    }
+  ]
+}

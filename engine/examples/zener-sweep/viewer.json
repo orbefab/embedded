@@ -1,0 +1,14 @@
+{
+  "version": 0,
+  "parts": {
+    "vpin": {
+      "model": "placeholder:dc-supply"
+    },
+    "r1": {
+      "model": "placeholder:resistor-axial"
+    },
+    "dz1": {
+      "model": "placeholder:do-41"
+    }
+  }
+}

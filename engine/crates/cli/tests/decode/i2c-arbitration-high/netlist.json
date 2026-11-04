@@ -1,0 +1,10 @@
+{
+  "version": 0,
+  "parts": [
+    {
+      "name": "u1",
+      "kind": "atmega328p",
+      "clock_hz": { "value": 16000000 }
+    }
+  ]
+}

@@ -1,0 +1,237 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": {
+    "op": {}
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "b",
+    "out",
+    "pin",
+    "vcc"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vcc",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 5.0,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "vpin",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "pin",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 5.0,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "rb",
+      "kind": "resistor",
+      "pins": {
+        "a": "pin",
+        "b": "b"
+      },
+      "resistance": {
+        "value": 1000.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "rup",
+      "kind": "resistor",
+      "pins": {
+        "a": "vcc",
+        "b": "b"
+      },
+      "resistance": {
+        "value": 10000.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "q1",
+      "kind": "pnp",
+      "pins": {
+        "collector": "out",
+        "base": "b",
+        "emitter": "vcc"
+      },
+      "saturation_current": {
+        "value": 2.9e-15,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "2N3906/D Rev. 4",
+            "at": "Figure 15 at TJ = 25 C, VBE at VCE = 1.0 V through (1 mA, 0.683 V) and (100 mA, 0.853 V) read at the labelled lines, fitted by scripts/fit_transistor.py with NF = NR = 1. The figure draws 1 to 10 mA narrower than 10 to 100 mA, and the fit's VBE at 10 mA is 0.747 V against the curve's 0.728 V",
+            "basis": "typical"
+          }
+        }
+      },
+      "forward_beta": {
+        "value": 173.2,
+        "unit": "1",
+        "source": {
+          "closed_form": {
+            "note": "geometric mean of the 2N3906 hFE, minimum 100 and maximum 300, at IC = 10 mA and VCE = 1.0 V, 2N3906/D Rev. 4 ON CHARACTERISTICS"
+          }
+        }
+      },
+      "reverse_beta": {
+        "value": 0.7185,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "2N3906/D Rev. 4",
+            "at": "Figure 15 at TJ = 25 C, VCE(sat) 0.075 V at IC = 1 mA, IC/IB = 10, fitted by scripts/fit_transistor.py with NF = NR = 1",
+            "basis": "typical"
+          }
+        }
+      },
+      "forward_emission": {
+        "value": 1.0,
+        "unit": "1",
+        "source": {
+          "closed_form": {
+            "note": "ideal junction"
+          }
+        }
+      },
+      "reverse_emission": {
+        "value": 1.0,
+        "unit": "1",
+        "source": {
+          "closed_form": {
+            "note": "ideal junction"
+          }
+        }
+      },
+      "early_voltage": {
+        "value": 100.0,
+        "unit": "V",
+        "source": {
+          "closed_form": {
+            "note": "puts hoe at 9.1 umhos at IC = 1 mA and VCE = 10 V, inside the 3 to 60 umhos of 2N3906/D Rev. 4"
+          }
+        }
+      },
+      "base_resistance": {
+        "value": 4.068,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "2N3906/D Rev. 4",
+            "at": "Figure 15 at TJ = 25 C, VBE(sat) 0.90 V at IC = 100 mA, IC/IB = 10, fitted by scripts/fit_transistor.py with NF = NR = 1",
+            "basis": "typical"
+          }
+        }
+      },
+      "collector_resistance": {
+        "value": 1.041,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "2N3906/D Rev. 4",
+            "at": "Figure 15 at TJ = 25 C, VCE(sat) 0.232 V at IC = 100 mA, IC/IB = 10, fitted by scripts/fit_transistor.py with NF = NR = 1",
+            "basis": "typical"
+          }
+        }
+      },
+      "emitter_resistance": {
+        "value": 0.495,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "2N3906/D Rev. 4",
+            "at": "Figure 15 at TJ = 25 C, VBE at VCE = 1.0 V through (1 mA, 0.683 V) and (100 mA, 0.853 V) read at the labelled lines, fitted by scripts/fit_transistor.py with NF = NR = 1. The figure draws 1 to 10 mA narrower than 10 to 100 mA, and the fit's VBE at 10 mA is 0.747 V against the curve's 0.728 V",
+            "basis": "typical"
+          }
+        }
+      },
+      "base_emitter_capacitance": {
+        "value": 1e-11,
+        "unit": "F",
+        "source": {
+          "datasheet": {
+            "doc": "2N3906/D Rev. 4",
+            "at": "Cibo at VEB = 0.5 V, IC = 0, f = 1.0 MHz",
+            "basis": "max"
+          }
+        }
+      },
+      "base_collector_capacitance": {
+        "value": 4.5e-12,
+        "unit": "F",
+        "source": {
+          "datasheet": {
+            "doc": "2N3906/D Rev. 4",
+            "at": "Cobo at VCB = 5.0 V, IE = 0, f = 1.0 MHz",
+            "basis": "max"
+          }
+        }
+      },
+      "ratings": {
+        "current": {
+          "value": 0.2,
+          "unit": "A",
+          "source": {
+            "datasheet": {
+              "doc": "2N3906/D Rev. 4",
+              "at": "MAXIMUM RATINGS, IC continuous",
+              "basis": "absolute_max"
+            }
+          }
+        },
+        "power": {
+          "value": 0.625,
+          "unit": "W",
+          "source": {
+            "datasheet": {
+              "doc": "2N3906/D Rev. 4",
+              "at": "MAXIMUM RATINGS, PD at TA = 25 C",
+              "basis": "absolute_max"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "rl",
+      "kind": "resistor",
+      "pins": {
+        "a": "out",
+        "b": "gnd"
+      },
+      "resistance": {
+        "value": 100.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    }
+  ]
+}

@@ -1,0 +1,470 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": {
+    "transient": {
+      "stop_ps": 6080000000000,
+      "max_step_ps": 10000000000,
+      "grid_ps": 10000000000
+    }
+  },
+  "ground": "gnd",
+  "nets": [
+    "blk",
+    "cs",
+    "d0",
+    "d1",
+    "d2",
+    "d3",
+    "ec_a",
+    "ec_b",
+    "gnd",
+    "rst",
+    "scl",
+    "sclk",
+    "sda",
+    "te",
+    "tp_int",
+    "tp_rst",
+    "v3v3"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "v3v3",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 3.3,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "u1",
+      "kind": "esp32s3",
+      "pins": {
+        "VCC": "v3v3",
+        "GND": "gnd",
+        "GPIO11": "sclk",
+        "GPIO12": "cs",
+        "GPIO13": "d0",
+        "GPIO14": "d1",
+        "GPIO15": "d2",
+        "GPIO16": "d3",
+        "GPIO17": "rst",
+        "GPIO18": "te",
+        "GPIO21": "blk",
+        "GPIO7": "tp_int",
+        "GPIO8": "tp_rst",
+        "GPIO9": "sda",
+        "GPIO10": "scl",
+        "GPIO1": "ec_b",
+        "GPIO2": "ec_a"
+      },
+      "output": {
+        "high_drop": {
+          "value": 0.0,
+          "unit": "V",
+          "source": {
+            "closed_form": {
+              "note": "the high stage as a resistance from VCC"
+            }
+          }
+        },
+        "high_resistance": {
+          "value": 16.5,
+          "unit": "ohm",
+          "source": {
+            "closed_form": {
+              "note": "Table 5-4: IOH 40 mA at VOH 2.64 V, VDD 3.3 V and drive strength 3, so 0.66 V / 40 mA"
+            }
+          }
+        },
+        "low_drop": {
+          "value": 0.0,
+          "unit": "V",
+          "source": {
+            "closed_form": {
+              "note": "the low stage as a resistance into GND"
+            }
+          }
+        },
+        "low_resistance": {
+          "value": 17.68,
+          "unit": "ohm",
+          "source": {
+            "closed_form": {
+              "note": "Table 5-4: IOL 28 mA at VOL 0.495 V, VDD 3.3 V and drive strength 3, so 0.495 V / 28 mA"
+            }
+          }
+        }
+      },
+      "pull_up_resistance": {
+        "value": 45000.0,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "Espressif ESP32-S3 Series Datasheet v2.2",
+            "at": "Table 5-4, DC Characteristics (3.3 V, 25 C)",
+            "basis": "typical"
+          }
+        }
+      },
+      "leakage_resistance": {
+        "value": 66000000.0,
+        "unit": "ohm",
+        "source": {
+          "closed_form": {
+            "note": "Table 5-4: IIH and IIL at most 50 nA, so 3.3 V / 50 nA"
+          }
+        }
+      },
+      "input_threshold": {
+        "low": {
+          "value": 0.25,
+          "unit": "1",
+          "source": {
+            "datasheet": {
+              "doc": "Espressif ESP32-S3 Series Datasheet v2.2",
+              "at": "Table 5-4, DC Characteristics (3.3 V, 25 C)",
+              "basis": "max"
+            }
+          }
+        },
+        "high": {
+          "value": 0.75,
+          "unit": "1",
+          "source": {
+            "datasheet": {
+              "doc": "Espressif ESP32-S3 Series Datasheet v2.2",
+              "at": "Table 5-4, DC Characteristics (3.3 V, 25 C)",
+              "basis": "min"
+            }
+          }
+        }
+      },
+      "rom": {
+        "sha256": "c0ce0f338d1de1bdc6efbef1591779a2a42c1ab7d759d3c6ae8ae63a7dd34cfd",
+        "bytes": 949552
+      },
+      "firmware": {
+        "flash": [
+          {
+            "offset": 32768,
+            "sha256": "148b959cbff1c38aa8e1d5c0ba9d612c54997b945e56a63f41223eef650653a1",
+            "bytes": 3072
+          },
+          {
+            "offset": 65536,
+            "sha256": "7a7e0eb9c0023e052ff40e21ffd222b363d339d23fbf5b4cae61325a741d643f",
+            "bytes": 731984
+          }
+        ]
+      },
+      "console": [
+        {
+          "t_ps": 100000000000,
+          "bytes": [
+            103
+          ]
+        },
+        {
+          "t_ps": 5580000000000,
+          "bytes": [
+            120
+          ]
+        }
+      ]
+    },
+    {
+      "name": "lcd1",
+      "kind": "st77916",
+      "pins": {
+        "VCC": "v3v3",
+        "GND": "gnd",
+        "CS": "cs",
+        "SCLK": "sclk",
+        "D0": "d0",
+        "D1": "d1",
+        "D2": "d2",
+        "D3": "d3",
+        "RST": "rst",
+        "TE": "te",
+        "BLK": "blk"
+      },
+      "output": {
+        "high_drop": {
+          "value": 0.0,
+          "unit": "V",
+          "source": "user"
+        },
+        "high_resistance": {
+          "value": 25.0,
+          "unit": "ohm",
+          "source": "user"
+        },
+        "low_drop": {
+          "value": 0.0,
+          "unit": "V",
+          "source": "user"
+        },
+        "low_resistance": {
+          "value": 25.0,
+          "unit": "ohm",
+          "source": "user"
+        }
+      },
+      "input_threshold": {
+        "low": {
+          "value": 0.3,
+          "unit": "1",
+          "source": "user"
+        },
+        "high": {
+          "value": 0.7,
+          "unit": "1",
+          "source": "user"
+        }
+      }
+    },
+    {
+      "name": "rscl",
+      "kind": "resistor",
+      "pins": {
+        "a": "v3v3",
+        "b": "scl"
+      },
+      "resistance": {
+        "value": 2200.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "rsda",
+      "kind": "resistor",
+      "pins": {
+        "a": "v3v3",
+        "b": "sda"
+      },
+      "resistance": {
+        "value": 2200.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "u2",
+      "kind": "cst816",
+      "pins": {
+        "VCC": "v3v3",
+        "GND": "gnd",
+        "SCL": "scl",
+        "SDA": "sda",
+        "INT": "tp_int",
+        "RST": "tp_rst"
+      },
+      "low_drop": {
+        "value": 0.0,
+        "unit": "V",
+        "source": "user"
+      },
+      "low_resistance": {
+        "value": 133.3,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "input_threshold": {
+        "low": {
+          "value": 0.3,
+          "unit": "1",
+          "source": "user"
+        },
+        "high": {
+          "value": 0.7,
+          "unit": "1",
+          "source": "user"
+        }
+      },
+      "touches": [
+        {
+          "t_ps": 4280000000000,
+          "x": 180,
+          "y": 80,
+          "down": true
+        },
+        {
+          "t_ps": 4580000000000,
+          "x": 180,
+          "y": 80,
+          "down": false
+        },
+        {
+          "t_ps": 4680000000000,
+          "x": 93,
+          "y": 230,
+          "down": true
+        },
+        {
+          "t_ps": 4980000000000,
+          "x": 93,
+          "y": 230,
+          "down": false
+        },
+        {
+          "t_ps": 5080000000000,
+          "x": 267,
+          "y": 230,
+          "down": true
+        },
+        {
+          "t_ps": 5380000000000,
+          "x": 267,
+          "y": 230,
+          "down": false
+        }
+      ]
+    },
+    {
+      "name": "r52",
+      "kind": "resistor",
+      "pins": {
+        "a": "v3v3",
+        "b": "ec_a"
+      },
+      "resistance": {
+        "value": 10000.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "r53",
+      "kind": "resistor",
+      "pins": {
+        "a": "v3v3",
+        "b": "ec_b"
+      },
+      "resistance": {
+        "value": 10000.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "sw_a",
+      "kind": "switch",
+      "pins": {
+        "a": "ec_a",
+        "b": "gnd"
+      },
+      "on_resistance": {
+        "value": 0.1,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "off_resistance": {
+        "value": 1000000000.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "initial": "open",
+      "events": [
+        {
+          "t_ps": 3200000000000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 3280000000000,
+          "state": "open"
+        },
+        {
+          "t_ps": 3500000000000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 3580000000000,
+          "state": "open"
+        },
+        {
+          "t_ps": 3800000000000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 3880000000000,
+          "state": "open"
+        }
+      ],
+      "bounce": null
+    },
+    {
+      "name": "sw_b",
+      "kind": "switch",
+      "pins": {
+        "a": "ec_b",
+        "b": "gnd"
+      },
+      "on_resistance": {
+        "value": 0.1,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "off_resistance": {
+        "value": 1000000000.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "initial": "open",
+      "events": [
+        {
+          "t_ps": 2000000000000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 2080000000000,
+          "state": "open"
+        },
+        {
+          "t_ps": 2300000000000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 2380000000000,
+          "state": "open"
+        },
+        {
+          "t_ps": 2600000000000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 2680000000000,
+          "state": "open"
+        },
+        {
+          "t_ps": 2900000000000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 2980000000000,
+          "state": "open"
+        }
+      ],
+      "bounce": null
+    }
+  ]
+}

@@ -1,0 +1,159 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": {
+    "transient": {
+      "stop_ps": 100000000000,
+      "max_step_ps": 100000000000,
+      "grid_ps": 10000000000
+    }
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "vcc"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vcc",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 3.3,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "u1",
+      "kind": "esp32s3",
+      "pins": {
+        "VCC": "vcc",
+        "GND": "gnd"
+      },
+      "rom": {
+        "sha256": "c0ce0f338d1de1bdc6efbef1591779a2a42c1ab7d759d3c6ae8ae63a7dd34cfd",
+        "bytes": 949552
+      },
+      "firmware": {
+        "flash": [
+          {
+            "offset": 32768,
+            "sha256": "978d83c84af3a8b59ecf9763499ac8c18f4d4231f9499bbe4b2acd99863325be",
+            "bytes": 3072
+          },
+          {
+            "offset": 65536,
+            "sha256": "0ffd3beeb1526b633ad86ed18118d84d3559ca3c6c9a4ab282eeb20475147533",
+            "bytes": 174048
+          }
+        ]
+      },
+      "console": [
+        {
+          "t_ps": 13248000000,
+          "bytes": [
+            65
+          ]
+        },
+        {
+          "t_ps": 15248000000,
+          "bytes": [
+            66
+          ]
+        },
+        {
+          "t_ps": 17248000000,
+          "bytes": [
+            67
+          ]
+        }
+      ],
+      "output": {
+        "high_drop": {
+          "value": 0.0,
+          "unit": "V",
+          "source": {
+            "closed_form": {
+              "note": "the high stage as a resistance from VCC"
+            }
+          }
+        },
+        "high_resistance": {
+          "value": 16.5,
+          "unit": "ohm",
+          "source": {
+            "closed_form": {
+              "note": "Table 5-4: IOH 40 mA at VOH 2.64 V, VDD 3.3 V and drive strength 3, so 0.66 V / 40 mA"
+            }
+          }
+        },
+        "low_drop": {
+          "value": 0.0,
+          "unit": "V",
+          "source": {
+            "closed_form": {
+              "note": "the low stage as a resistance into GND"
+            }
+          }
+        },
+        "low_resistance": {
+          "value": 17.68,
+          "unit": "ohm",
+          "source": {
+            "closed_form": {
+              "note": "Table 5-4: IOL 28 mA at VOL 0.495 V, VDD 3.3 V and drive strength 3, so 0.495 V / 28 mA"
+            }
+          }
+        }
+      },
+      "pull_up_resistance": {
+        "value": 45000.0,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "Espressif ESP32-S3 Series Datasheet v2.2",
+            "at": "Table 5-4, DC Characteristics (3.3 V, 25 C)",
+            "basis": "typical"
+          }
+        }
+      },
+      "leakage_resistance": {
+        "value": 66000000.0,
+        "unit": "ohm",
+        "source": {
+          "closed_form": {
+            "note": "Table 5-4: IIH and IIL at most 50 nA, so 3.3 V / 50 nA"
+          }
+        }
+      },
+      "input_threshold": {
+        "low": {
+          "value": 0.25,
+          "unit": "1",
+          "source": {
+            "datasheet": {
+              "doc": "Espressif ESP32-S3 Series Datasheet v2.2",
+              "at": "Table 5-4, DC Characteristics (3.3 V, 25 C)",
+              "basis": "max"
+            }
+          }
+        },
+        "high": {
+          "value": 0.75,
+          "unit": "1",
+          "source": {
+            "datasheet": {
+              "doc": "Espressif ESP32-S3 Series Datasheet v2.2",
+              "at": "Table 5-4, DC Characteristics (3.3 V, 25 C)",
+              "basis": "min"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

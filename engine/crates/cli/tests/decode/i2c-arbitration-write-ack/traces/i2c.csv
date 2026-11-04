@@ -1,0 +1,4 @@
+t_ps,part,phase,address,read,byte,ack
+1000000,u1,start,,,,
+6000000,u1,address,80,0,,1
+43000000,u1,arbitration_lost,,,,

@@ -1,0 +1,84 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": { "op": {} },
+  "ground": "gnd",
+  "nets": ["gnd", "vin", "vled"],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": { "p": "vin", "n": "gnd" },
+      "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": { "a": "vin", "b": "vled" },
+      "resistance": { "value": 220.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": { "value": 0.25, "unit": "W", "source": "user" } }
+    },
+    {
+      "name": "led1",
+      "kind": "led",
+      "pins": { "anode": "vled", "cathode": "gnd" },
+      "saturation_current": {
+        "value": 6.711e-10,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical"
+          }
+        }
+      },
+      "emission_coefficient": {
+        "value": 4.427,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical"
+          }
+        }
+      },
+      "series_resistance": {
+        "value": 2.115,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical"
+          }
+        }
+      },
+      "ratings": {
+        "current": {
+          "value": 0.03,
+          "unit": "A",
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+              "at": "Absolute Maximum Ratings at Ta = 25 C, DC forward current",
+              "basis": "absolute_max"
+            }
+          }
+        },
+        "power": {
+          "value": 0.075,
+          "unit": "W",
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+              "at": "Absolute Maximum Ratings at Ta = 25 C, power dissipation",
+              "basis": "absolute_max"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

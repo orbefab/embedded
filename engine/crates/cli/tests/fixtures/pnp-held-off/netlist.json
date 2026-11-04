@@ -1,0 +1,143 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": {
+    "op": {}
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "b",
+    "c",
+    "pin",
+    "vcc"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vcc",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 12.0,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "vpin",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "pin",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 12.13,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "rb",
+      "kind": "resistor",
+      "pins": {
+        "a": "pin",
+        "b": "b"
+      },
+      "resistance": {
+        "value": 1000.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": {
+        "a": "c",
+        "b": "gnd"
+      },
+      "resistance": {
+        "value": 100.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "q1",
+      "kind": "pnp",
+      "pins": {
+        "collector": "c",
+        "base": "b",
+        "emitter": "vcc"
+      },
+      "saturation_current": {
+        "value": 1e-08,
+        "unit": "A",
+        "source": "user"
+      },
+      "forward_beta": {
+        "value": 173.2,
+        "unit": "1",
+        "source": "user"
+      },
+      "reverse_beta": {
+        "value": 0.7185,
+        "unit": "1",
+        "source": "user"
+      },
+      "forward_emission": {
+        "value": 1.0,
+        "unit": "1",
+        "source": "user"
+      },
+      "reverse_emission": {
+        "value": 1.0,
+        "unit": "1",
+        "source": "user"
+      },
+      "early_voltage": {
+        "value": 100.0,
+        "unit": "V",
+        "source": "user"
+      },
+      "base_resistance": {
+        "value": 4.068,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "collector_resistance": {
+        "value": 1.041,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "emitter_resistance": {
+        "value": 0.495,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "base_emitter_capacitance": {
+        "value": 1e-11,
+        "unit": "F",
+        "source": "user"
+      },
+      "base_collector_capacitance": {
+        "value": 4.5e-12,
+        "unit": "F",
+        "source": "user"
+      },
+      "ratings": {
+        "current": null,
+        "power": null
+      }
+    }
+  ]
+}

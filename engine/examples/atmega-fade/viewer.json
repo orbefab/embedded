@@ -1,0 +1,26 @@
+{
+  "version": 0,
+  "parts": {
+    "v1": {
+      "model": "placeholder:dc-supply"
+    },
+    "r1": {
+      "model": "placeholder:resistor-axial"
+    },
+    "led1": {
+      "model": "placeholder:led-5mm-red"
+    },
+    "cx1": {
+      "model": "placeholder:capacitor-ceramic"
+    },
+    "cx2": {
+      "model": "placeholder:capacitor-ceramic"
+    },
+    "cref": {
+      "model": "placeholder:capacitor-ceramic"
+    },
+    "u1": {
+      "model": "placeholder:dip-28"
+    }
+  }
+}

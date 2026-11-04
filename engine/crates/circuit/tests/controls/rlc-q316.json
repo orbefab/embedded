@@ -1,0 +1,77 @@
+{
+ "version": 0,
+ "seed": 0,
+ "analysis": {
+  "transient": {
+   "stop_ps": 2000000000,
+   "max_step_ps": 1000000000,
+   "grid_ps": 1000000
+  }
+ },
+ "ground": "gnd",
+ "nets": [
+  "gnd",
+  "vin",
+  "x"
+ ],
+ "parts": [
+  {
+   "name": "v1",
+   "kind": "voltage_source",
+   "pins": {
+    "p": "vin",
+    "n": "gnd"
+   },
+   "voltage": {
+    "kind": "steps",
+    "initial": {
+     "value": 0.0,
+     "unit": "V",
+     "source": "user"
+    },
+    "events": [
+     {
+      "t_ps": 100000000,
+      "level": {
+       "value": 5.0,
+       "unit": "V",
+       "source": "user"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "l1",
+   "kind": "inductor",
+   "pins": {
+    "a": "vin",
+    "b": "x"
+   },
+   "inductance": {
+    "value": 0.001,
+    "unit": "H",
+    "source": "user"
+   },
+   "series_resistance": {
+    "value": 0.1,
+    "unit": "ohm",
+    "source": "user"
+   }
+  },
+  {
+   "name": "c1",
+   "kind": "capacitor",
+   "pins": {
+    "a": "x",
+    "b": "gnd"
+   },
+   "capacitance": {
+    "value": 1e-06,
+    "unit": "F",
+    "source": "user"
+   },
+   "initial": null
+  }
+ ]
+}

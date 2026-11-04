@@ -1,0 +1,1616 @@
+use std::borrow::Cow;
+
+use serde::{Serialize, Serializer};
+
+use crate::blob::{Role, Sha256, Source};
+use crate::name::{Name, NameError, Ref};
+use crate::netlist::MIN_GAP_PS;
+use crate::time::Time;
+
+/// `Error` means the engine has no trustworthy result.
+/// `Warning` means the result stands and the circuit still has a problem.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Severity {
+    Error,
+    Warning,
+}
+
+/// Which numeric rule a netlist value broke.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValueRule {
+    Positive,
+    FiniteReciprocal,
+    /// `n*VT` is not normal, or `vcrit` is not finite and positive.
+    /// On a zener, `nbvt` is not normal, or `Isb` or its `vcrit` is not.
+    FiniteJunction,
+    /// `bounce.window` is less than `2 * max_bounces * MIN_GAP_PS`.
+    BounceRoom,
+    NonNegative,
+    /// Not inside `(0, 1)`.
+    Fraction,
+    /// Not at least 0 and below 1. Zero is allowed. One is not.
+    BelowOne,
+    /// A threshold's `low` is above its `high`.
+    AboveHigh,
+    /// A relay's `drop_out_current` is at or above its `pull_in_current`.
+    Hysteresis,
+    /// A zener's `zener_impedance` does not exceed `series_resistance + breakdown_resistance`.
+    AboveResistance,
+    /// A zener's `zener_voltage` does not exceed `zener_current` times those two resistances.
+    AboveDrop,
+    /// A fuse byte selects a mode the model does not run.
+    Unsupported,
+    /// A touch coordinate is outside 0 to 4095.
+    Span,
+    /// An LED count is outside 1 to 1024.
+    Leds,
+}
+
+/// Why `firmware` is not a program for the part's flash.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FirmwareRule {
+    /// The line is not an Intel HEX record: no `:`, a digit that is not hexadecimal, or a
+    /// length that does not match its byte count or its type.
+    Record,
+    /// The record's bytes do not sum to 0.
+    Checksum,
+    /// A record type other than 00 to 05.
+    RecordType,
+    /// A record after the end-of-file record.
+    AfterEnd,
+    /// No end-of-file record.
+    NoEnd,
+    /// A data byte at or past the end of the flash.
+    PastFlash,
+    /// A data byte an earlier record already placed, or an ELF segment on a byte of memory
+    /// an earlier segment reaches.
+    Overlap,
+    /// Not a 32-bit little-endian Xtensa ELF executable with a loadable segment, or a header,
+    /// segment or symbol table that runs past the file.
+    Elf,
+    /// An ELF or app segment outside the memory a program may load into, or an entry outside
+    /// the segments in code memory.
+    Unmapped,
+    /// A flash region past the end of the flash, or on a byte an earlier region placed.
+    Region,
+    /// A flash with no partition table, no app partition the bootloader would pick, a set
+    /// otadata, or an app image that is not one for the chip or fails its checksum or hash.
+    Image,
+    /// A `rom` that is not the one ROM the model runs, `rom` absent with `firmware.flash`, or
+    /// `rom` present with `firmware.elf`.
+    Rom,
+}
+
+/// What the model lacks to run an instruction a core reached.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Unsupported {
+    /// The op itself.
+    Op,
+    /// The op at an address that is not a multiple of its size.
+    Unaligned,
+    /// `l32r` while `LITBASE` is enabled.
+    Litbase,
+    /// The op as the last of a loop that loops back.
+    LoopEnd,
+}
+
+/// What a chip's firmware set that the model does not run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChipSetting {
+    /// A transfer setting, by name, that the store starting the transfer found.
+    Transfer(&'static str),
+    /// An interrupt of the peripheral that the model never raises.
+    Interrupt,
+    /// A register setting, by name, that the model does not run.
+    Register(&'static str),
+    /// Sleep.
+    Sleep,
+}
+
+impl ChipSetting {
+    pub fn name(self) -> &'static str {
+        match self {
+            ChipSetting::Transfer(name) => name,
+            ChipSetting::Register(name) => name,
+            ChipSetting::Interrupt => "interrupt",
+            ChipSetting::Sleep => "sleep",
+        }
+    }
+}
+
+/// Why a chip's flash command ends the run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlashRefusal {
+    /// A program, an erase, or a command the model does not know.
+    Unsupported,
+    /// A write of the flash's status registers, which can lock them for good.
+    StatusWrite,
+    /// A user command with no command phase.
+    NoCommandPhase,
+    /// One `SPI_MEM_CMD_REG` write that starts more than one command.
+    StartBits,
+    /// A read that reaches past the flash's end.
+    PastEnd,
+    /// An address phase longer than 32 bits.
+    AddressBits,
+    /// A command started on SPI0, the controller the cache reads the flash through.
+    Spi0,
+    /// A write that would take one of the flash's pads from SPI0 and SPI1.
+    Pads,
+    /// A user command while `CS0_DIS` is set or `CS1_DIS` is clear.
+    Cs,
+}
+
+/// Why firmware reset its chip, as ESP-IDF records it before the reset, when that ends the run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResetReason {
+    Panic,
+    InterruptWatchdog,
+    TaskWatchdog,
+    Watchdog,
+    Brownout,
+    /// The firmware recorded no reason the model can read.
+    Unreadable,
+}
+
+/// Why a blob a netlist names is not there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlobRule {
+    /// No blob is filed under its hash.
+    Missing,
+    /// The blob filed under its hash hashes to another digest.
+    Hash,
+    /// The blob has another length than the netlist's `bytes`.
+    Length,
+}
+
+/// Which rule a transient analysis broke.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnalysisRule {
+    Positive,
+    /// `max_step_ps` is below 1000, the first step of a segment.
+    #[serde(rename = "step_under_1ns")]
+    StepUnder1ns,
+    /// `max_step_ps` is greater than `stop_ps`.
+    StepOverStop,
+    /// `grid_ps` is below 1000.
+    #[serde(rename = "grid_under_1ns")]
+    GridUnder1ns,
+    /// `grid_ps` is greater than `stop_ps`.
+    GridOverStop,
+}
+
+/// Which rule a schedule event broke. A switch, a `steps` source, a potentiometer, a
+/// `serial` source, and a `cst816` touch share it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScheduleRule {
+    /// The event is at t = 0, where the operating point already holds `initial`.
+    AtZero,
+    /// The event does not change the value in force.
+    SameState,
+    /// The event is not strictly after the previous event.
+    NotIncreasing,
+    /// The event is less than `MIN_GAP_PS` after the previous event's last possible edge.
+    TooClose,
+    /// The event ends past the largest `u64` picosecond. For a switch that is the end of its
+    /// bounce window.
+    Overflow,
+    /// The event starts before the previous serial event ends.
+    Overlap,
+}
+
+/// Which rule a source waveform's time broke.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaveformRule {
+    /// The first jump is at t = 0, where the operating point already holds `initial`.
+    AtZero,
+    /// Two jumps are less than `MIN_GAP_PS` apart.
+    TooClose,
+    /// The first fall is past the largest `u64` picosecond.
+    Overflow,
+    /// `mark` and `space` are the same SI value, so the line never changes.
+    Equal,
+}
+
+/// Which rule of its protocol a chip saw broken. The chip drops what broke it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtocolRule {
+    /// A command the model does not run: a command word cut short by a release of CS, phases
+    /// past the command word, an opcode other than the one that command takes, data lanes that
+    /// do not match that opcode, too few parameter bytes, or a window past the panel.
+    Command,
+    /// Pixels while the pixel format is not 16 bits.
+    PixelFormat,
+    /// An I2C target's SDA change came due while SCL was high, so SDA stayed.
+    SdaWhileSclHigh,
+    /// A bit whose high or low sat outside the timing windows.
+    Bit,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Diagnostic {
+    /// JSON is malformed or does not match the v0 schema.
+    NetlistSyntax {
+        path: String,
+        line: usize,
+        column: usize,
+        detail: String,
+    },
+    /// `version` is not one this engine reads. `supported` is every version it reads.
+    NetlistVersion {
+        found: u64,
+        supported: &'static [u64],
+    },
+    /// A name breaks the grammar, or a part is named `net`.
+    NetlistName {
+        path: String,
+        name: String,
+        problem: NameError,
+    },
+    /// Two parts, or two nets, share a name.
+    NetlistDuplicate { name: Ref },
+    /// A pin names a net that is not in `nets`.
+    NetlistUnknownNet { pin: Ref, net: String },
+    /// A part's pin keys differ from its kind's pin set.
+    NetlistPins {
+        part: Ref,
+        missing: Vec<&'static str>,
+        unexpected: Vec<String>,
+    },
+    /// A value's `unit` is not the unit its field is measured in.
+    NetlistUnit {
+        part: Ref,
+        field: Cow<'static, str>,
+        expected: &'static str,
+        found: String,
+    },
+    /// A value is outside its field's domain.
+    NetlistValue {
+        part: Ref,
+        field: Cow<'static, str>,
+        value: f64,
+        rule: ValueRule,
+    },
+    /// A part's `firmware` is not a program for its flash. `line` is 1-based, `None` when no
+    /// one line is at fault.
+    NetlistFirmware {
+        part: Ref,
+        line: Option<usize>,
+        rule: FirmwareRule,
+    },
+    /// A blob the part names in its `role` field is missing, or is not the blob it names.
+    /// `bytes` is the netlist's length, and `found` the blob's when one was filed.
+    NetlistBlob {
+        part: Ref,
+        role: Role,
+        sha256: Sha256,
+        rule: BlobRule,
+        bytes: u64,
+        found: Option<u64>,
+        source: Source,
+    },
+    /// `pin` is on net `found`, and its kind ties it to `with`, on net `expected`.
+    NetlistSameNet {
+        pin: Ref,
+        with: Ref,
+        found: Name,
+        expected: Name,
+    },
+    /// `ground` names a net that is not in `nets`.
+    NetlistGround { net: String },
+    /// A transient analysis field breaks a rule.
+    NetlistAnalysis {
+        field: &'static str,
+        value: u64,
+        rule: AnalysisRule,
+    },
+    /// `field[event]` breaks a schedule rule. `field` is `events`, `voltage.events`,
+    /// `current.events`, or `position.events`. `end_ps` is the previous event's end. Only an
+    /// `overlap` message reads either one. `data` does not hold them.
+    NetlistSchedule {
+        part: Ref,
+        field: &'static str,
+        event: usize,
+        rule: ScheduleRule,
+        end_ps: u64,
+    },
+    /// A source waveform's time field breaks a rule. `field` is owned when it names one event.
+    NetlistWaveform {
+        part: Ref,
+        field: Cow<'static, str>,
+        value: u64,
+        rule: WaveformRule,
+    },
+    /// The net has no DC path to ground. Its voltage is held only by gmin.
+    NetFloating { net: Ref },
+    /// The MNA matrix is singular at `unknown`.
+    SolverSingular { at: Time, unknown: Ref },
+    /// A solution component or an observed quantity is not finite.
+    SolverNonFinite { at: Time, unknown: Ref },
+    /// The dense system has more unknowns than it will allocate.
+    SolverTooLarge {
+        at: Time,
+        unknowns: usize,
+        limit: usize,
+    },
+    /// The run accepted `limit` steps and had not reached its stop.
+    SolverStepLimit { at: Time, limit: u64 },
+    /// The chips kept changing state for `rounds` solves at one time. `chips` changed in the last.
+    ChipUnsettled {
+        at: Time,
+        chips: Vec<Ref>,
+        rounds: u32,
+    },
+    /// A chip saw `rule` broken, first at `at`.
+    ChipProtocol {
+        part: Ref,
+        at: Time,
+        rule: ProtocolRule,
+    },
+    /// A chip whose CS and SCLK sit on `sender`'s nets dropped an SPI transaction whose data
+    /// lanes are not on its own data pins, first at `at`.
+    ChipLinkMiswired { part: Ref, at: Time, sender: Name },
+    /// A chip's core reached `op` at `pc`, which the model does not run there. `reason` says
+    /// what is missing. It ends the run.
+    ChipUnsupportedInstruction {
+        part: Ref,
+        at: Time,
+        op: &'static str,
+        reason: Unsupported,
+        pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
+        symbol: Option<String>,
+    },
+    /// A chip's core fetched code at `pc`, where the model maps no memory. It ends the run.
+    ChipUnmappedFetch {
+        part: Ref,
+        at: Time,
+        pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
+        symbol: Option<String>,
+    },
+    /// A chip's core reached a jump to itself at `pc` that nothing can take it out of: every
+    /// enabled interrupt at or below the core's level, no source on the NMI, and no watchdog
+    /// running. It ends the run.
+    ChipHalted {
+        part: Ref,
+        at: Time,
+        pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
+        symbol: Option<String>,
+    },
+    /// A chip's firmware started a `peripheral` transfer from the store at `pc` with `setting`,
+    /// or set `setting` on `peripheral` there, which the model does not run. It ends the run.
+    ChipUnsupportedSetting {
+        part: Ref,
+        at: Time,
+        peripheral: &'static str,
+        setting: ChipSetting,
+        pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
+        symbol: Option<String>,
+    },
+    /// A stage of a chip's watchdog ran out and reset `reset`, the CPU, the system or the RTC
+    /// domain. It ends the run.
+    ChipWatchdog {
+        part: Ref,
+        at: Time,
+        watchdog: &'static str,
+        stage: u8,
+        reset: &'static str,
+    },
+    /// A chip's firmware started an eFuse program command from the store at `pc`, which would
+    /// burn eFuses. It ends the run.
+    ChipEfuseProgram {
+        part: Ref,
+        at: Time,
+        pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
+        symbol: Option<String>,
+    },
+    /// A chip's firmware sent its flash `command` from the store at `pc`, which the model
+    /// refuses for `reason`. `command` is `None` when no one command byte went. It ends the run.
+    ChipFlashCommand {
+        part: Ref,
+        at: Time,
+        command: Option<u8>,
+        reason: FlashRefusal,
+        pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
+        symbol: Option<String>,
+    },
+    /// A chip's firmware picked a CPU clock the model does not run from the store at `pc`. It
+    /// ends the run.
+    ChipUnsupportedClock {
+        part: Ref,
+        at: Time,
+        pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
+        symbol: Option<String>,
+    },
+    /// A chip's firmware reset the chip from the store at `pc`. The model does not run the boot
+    /// ROM, so the chip stays in reset to the end of the run.
+    ChipRestart {
+        part: Ref,
+        at: Time,
+        pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
+        symbol: Option<String>,
+    },
+    /// A chip's firmware reset the chip from the store at `pc` after recording `reason`, or no
+    /// reason the model can read. It ends the run.
+    ChipFaultRestart {
+        part: Ref,
+        at: Time,
+        reason: ResetReason,
+        pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
+        symbol: Option<String>,
+    },
+    /// A chip's core loaded from `address` from `pc`, in a cache window where the MMU maps no
+    /// flash. It ends the run.
+    ChipUnmappedLoad {
+        part: Ref,
+        at: Time,
+        address: u32,
+        pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
+        symbol: Option<String>,
+    },
+    /// A chip's firmware read or wrote `register` at `address`, which the model keeps no state
+    /// for, first at `at` from `pc`, with a write when `write` is set. A read gives 0 and a
+    /// write is dropped.
+    ChipUnmodeledRegister {
+        part: Ref,
+        at: Time,
+        address: u32,
+        register: String,
+        pc: u32,
+        /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
+        app: bool,
+        symbol: Option<String>,
+        write: bool,
+        /// The register keeps the write, and the model does not run what it does.
+        kept: bool,
+    },
+    /// The grid gives more rows than the trace holds, found before the first solve, when
+    /// `at` is `None`. The test-only step-rows mode can also fill the trace and refuse the
+    /// next step. Then `at` is that step, and the rows already written stay.
+    TraceTooLarge {
+        rows: u64,
+        limit: usize,
+        columns: usize,
+        at: Option<Time>,
+    },
+    /// The row at `at` did not solve, twice, so it is the line between the accepted steps at
+    /// `from` and `to`.
+    TraceRowInterpolated { at: Time, from: Time, to: Time },
+    /// Newton found no operating point.
+    SolverConvergence {
+        at: Time,
+        /// The junction that failed worst in the last iteration, else the unknown.
+        unknown: Ref,
+        /// Newton iterations over every attempt.
+        iterations: u32,
+        /// Smallest extra node conductance that converged, in siemens.
+        gmin: Option<f64>,
+        /// Largest source scale that converged, from 0 to 1.
+        source_scale: f64,
+        solve: Solve,
+    },
+    /// A rated current went over its limit.
+    RatingCurrent(Excursion),
+    /// A rated power went over its limit.
+    RatingPower(Excursion),
+}
+
+/// The solve that did not converge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Solve {
+    /// The operating point, or the restart solve after an edge.
+    Ladder,
+    /// A time step, halved down to `step_ps`.
+    Step { step_ps: u64 },
+    /// A probe locating a chip event, `step_ps` after the last accepted time.
+    Probe { step_ps: u64 },
+}
+
+/// One rated quantity over its limit, merged over the whole run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Excursion {
+    /// `#<part>.i` or `#<part>.p`, which is also the observation key.
+    pub quantity: Ref,
+    /// The rating, in SI units.
+    pub limit: f64,
+    /// Largest magnitude seen.
+    pub peak: f64,
+    pub peak_at: Time,
+    /// First sample over the limit.
+    pub first: Time,
+    /// Total time over the limit. `None` for an operating point, which has no duration.
+    pub over_ps: Option<u64>,
+}
+
+impl Diagnostic {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Diagnostic::NetlistSyntax { .. } => "netlist.syntax",
+            Diagnostic::NetlistVersion { .. } => "netlist.version",
+            Diagnostic::NetlistName { .. } => "netlist.name",
+            Diagnostic::NetlistDuplicate { .. } => "netlist.duplicate",
+            Diagnostic::NetlistUnknownNet { .. } => "netlist.unknown_net",
+            Diagnostic::NetlistPins { .. } => "netlist.pins",
+            Diagnostic::NetlistUnit { .. } => "netlist.unit",
+            Diagnostic::NetlistValue { .. } => "netlist.value",
+            Diagnostic::NetlistFirmware { .. } => "netlist.firmware",
+            Diagnostic::NetlistBlob { .. } => "netlist.blob",
+            Diagnostic::NetlistSameNet { .. } => "netlist.same_net",
+            Diagnostic::NetlistGround { .. } => "netlist.ground",
+            Diagnostic::NetlistAnalysis { .. } => "netlist.analysis",
+            Diagnostic::NetlistSchedule { .. } => "netlist.schedule",
+            Diagnostic::NetlistWaveform { .. } => "netlist.waveform",
+            Diagnostic::NetFloating { .. } => "net.floating",
+            Diagnostic::SolverSingular { .. } => "solver.singular",
+            Diagnostic::SolverNonFinite { .. } => "solver.nonfinite",
+            Diagnostic::SolverTooLarge { .. } => "solver.too_large",
+            Diagnostic::SolverStepLimit { .. } => "solver.step_limit",
+            Diagnostic::SolverConvergence { .. } => "solver.convergence",
+            Diagnostic::ChipUnsettled { .. } => "chip.unsettled",
+            Diagnostic::ChipProtocol { .. } => "chip.protocol",
+            Diagnostic::ChipLinkMiswired { .. } => "chip.link_miswired",
+            Diagnostic::ChipUnsupportedInstruction { .. } => "chip.unsupported_instruction",
+            Diagnostic::ChipUnmappedFetch { .. } => "chip.unmapped_fetch",
+            Diagnostic::ChipHalted { .. } => "chip.halted",
+            Diagnostic::ChipUnsupportedSetting { .. } => "chip.unsupported_setting",
+            Diagnostic::ChipWatchdog { .. } => "chip.watchdog",
+            Diagnostic::ChipEfuseProgram { .. } => "chip.efuse_program",
+            Diagnostic::ChipFlashCommand { .. } => "chip.flash_command",
+            Diagnostic::ChipUnsupportedClock { .. } => "chip.unsupported_clock",
+            Diagnostic::ChipRestart { .. } => "chip.restart",
+            Diagnostic::ChipFaultRestart { .. } => "chip.fault_restart",
+            Diagnostic::ChipUnmappedLoad { .. } => "chip.unmapped_load",
+            Diagnostic::ChipUnmodeledRegister { .. } => "chip.unmodeled_register",
+            Diagnostic::TraceTooLarge { .. } => "trace.too_large",
+            Diagnostic::TraceRowInterpolated { .. } => "trace.row_interpolated",
+            Diagnostic::RatingCurrent(_) => "rating.current",
+            Diagnostic::RatingPower(_) => "rating.power",
+        }
+    }
+
+    pub fn severity(&self) -> Severity {
+        match self {
+            Diagnostic::NetFloating { .. }
+            | Diagnostic::ChipProtocol { .. }
+            | Diagnostic::ChipLinkMiswired { .. }
+            | Diagnostic::ChipUnmodeledRegister { .. }
+            | Diagnostic::ChipRestart { .. }
+            | Diagnostic::TraceRowInterpolated { .. }
+            | Diagnostic::RatingCurrent(_)
+            | Diagnostic::RatingPower(_) => Severity::Warning,
+            Diagnostic::NetlistSyntax { .. }
+            | Diagnostic::NetlistVersion { .. }
+            | Diagnostic::NetlistName { .. }
+            | Diagnostic::NetlistDuplicate { .. }
+            | Diagnostic::NetlistUnknownNet { .. }
+            | Diagnostic::NetlistPins { .. }
+            | Diagnostic::NetlistUnit { .. }
+            | Diagnostic::NetlistValue { .. }
+            | Diagnostic::NetlistFirmware { .. }
+            | Diagnostic::NetlistBlob { .. }
+            | Diagnostic::NetlistSameNet { .. }
+            | Diagnostic::NetlistGround { .. }
+            | Diagnostic::NetlistAnalysis { .. }
+            | Diagnostic::NetlistSchedule { .. }
+            | Diagnostic::NetlistWaveform { .. }
+            | Diagnostic::SolverSingular { .. }
+            | Diagnostic::SolverNonFinite { .. }
+            | Diagnostic::SolverTooLarge { .. }
+            | Diagnostic::SolverStepLimit { .. }
+            | Diagnostic::SolverConvergence { .. }
+            | Diagnostic::ChipUnsettled { .. }
+            | Diagnostic::ChipUnsupportedInstruction { .. }
+            | Diagnostic::ChipUnmappedFetch { .. }
+            | Diagnostic::ChipHalted { .. }
+            | Diagnostic::ChipUnsupportedSetting { .. }
+            | Diagnostic::ChipWatchdog { .. }
+            | Diagnostic::ChipEfuseProgram { .. }
+            | Diagnostic::ChipFlashCommand { .. }
+            | Diagnostic::ChipUnsupportedClock { .. }
+            | Diagnostic::ChipFaultRestart { .. }
+            | Diagnostic::ChipUnmappedLoad { .. }
+            | Diagnostic::TraceTooLarge { .. } => Severity::Error,
+        }
+    }
+
+    pub fn at(&self) -> Option<Time> {
+        match self {
+            Diagnostic::SolverSingular { at, .. }
+            | Diagnostic::SolverNonFinite { at, .. }
+            | Diagnostic::SolverTooLarge { at, .. }
+            | Diagnostic::SolverStepLimit { at, .. }
+            | Diagnostic::SolverConvergence { at, .. }
+            | Diagnostic::ChipUnsettled { at, .. }
+            | Diagnostic::ChipProtocol { at, .. }
+            | Diagnostic::ChipLinkMiswired { at, .. }
+            | Diagnostic::ChipUnsupportedInstruction { at, .. }
+            | Diagnostic::ChipUnmappedFetch { at, .. }
+            | Diagnostic::ChipHalted { at, .. }
+            | Diagnostic::ChipUnsupportedSetting { at, .. }
+            | Diagnostic::ChipWatchdog { at, .. }
+            | Diagnostic::ChipEfuseProgram { at, .. }
+            | Diagnostic::ChipFlashCommand { at, .. }
+            | Diagnostic::ChipUnsupportedClock { at, .. }
+            | Diagnostic::ChipRestart { at, .. }
+            | Diagnostic::ChipFaultRestart { at, .. }
+            | Diagnostic::ChipUnmappedLoad { at, .. }
+            | Diagnostic::ChipUnmodeledRegister { at, .. }
+            | Diagnostic::TraceRowInterpolated { at, .. } => Some(*at),
+            Diagnostic::TraceTooLarge { at, .. } => *at,
+            Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
+                Some(excursion.first)
+            }
+            Diagnostic::NetlistSyntax { .. }
+            | Diagnostic::NetlistVersion { .. }
+            | Diagnostic::NetlistName { .. }
+            | Diagnostic::NetlistDuplicate { .. }
+            | Diagnostic::NetlistUnknownNet { .. }
+            | Diagnostic::NetlistPins { .. }
+            | Diagnostic::NetlistUnit { .. }
+            | Diagnostic::NetlistValue { .. }
+            | Diagnostic::NetlistFirmware { .. }
+            | Diagnostic::NetlistBlob { .. }
+            | Diagnostic::NetlistSameNet { .. }
+            | Diagnostic::NetlistGround { .. }
+            | Diagnostic::NetlistAnalysis { .. }
+            | Diagnostic::NetlistSchedule { .. }
+            | Diagnostic::NetlistWaveform { .. }
+            | Diagnostic::NetFloating { .. } => None,
+        }
+    }
+
+    pub fn refs(&self) -> Vec<Ref> {
+        match self {
+            Diagnostic::NetlistSyntax { .. }
+            | Diagnostic::NetlistVersion { .. }
+            | Diagnostic::NetlistName { .. }
+            | Diagnostic::NetlistGround { .. }
+            | Diagnostic::NetlistAnalysis { .. } => Vec::new(),
+            Diagnostic::NetlistDuplicate { name } => vec![name.clone()],
+            Diagnostic::NetlistUnknownNet { pin, .. } => vec![pin.clone()],
+            Diagnostic::NetlistSameNet { pin, with, .. } => vec![pin.clone(), with.clone()],
+            Diagnostic::NetlistPins { part, .. }
+            | Diagnostic::NetlistUnit { part, .. }
+            | Diagnostic::NetlistValue { part, .. }
+            | Diagnostic::NetlistFirmware { part, .. }
+            | Diagnostic::NetlistBlob { part, .. }
+            | Diagnostic::NetlistSchedule { part, .. }
+            | Diagnostic::NetlistWaveform { part, .. } => vec![part.clone()],
+            Diagnostic::NetFloating { net } => vec![net.clone()],
+            Diagnostic::SolverSingular { unknown, .. }
+            | Diagnostic::SolverNonFinite { unknown, .. }
+            | Diagnostic::SolverConvergence { unknown, .. } => vec![unknown.clone()],
+            Diagnostic::ChipUnsettled { chips, .. } => chips.clone(),
+            Diagnostic::ChipProtocol { part, .. }
+            | Diagnostic::ChipLinkMiswired { part, .. }
+            | Diagnostic::ChipUnsupportedInstruction { part, .. }
+            | Diagnostic::ChipUnmappedFetch { part, .. }
+            | Diagnostic::ChipHalted { part, .. }
+            | Diagnostic::ChipUnsupportedSetting { part, .. }
+            | Diagnostic::ChipWatchdog { part, .. }
+            | Diagnostic::ChipEfuseProgram { part, .. }
+            | Diagnostic::ChipFlashCommand { part, .. }
+            | Diagnostic::ChipUnsupportedClock { part, .. }
+            | Diagnostic::ChipRestart { part, .. }
+            | Diagnostic::ChipFaultRestart { part, .. }
+            | Diagnostic::ChipUnmappedLoad { part, .. }
+            | Diagnostic::ChipUnmodeledRegister { part, .. } => vec![part.clone()],
+            Diagnostic::SolverTooLarge { .. }
+            | Diagnostic::SolverStepLimit { .. }
+            | Diagnostic::TraceTooLarge { .. }
+            | Diagnostic::TraceRowInterpolated { .. } => Vec::new(),
+            Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
+                vec![excursion.quantity.clone()]
+            }
+        }
+    }
+
+    /// `(time, code, refs)`. `Results` sorts by this and then by JSON bytes.
+    pub fn sort_key(&self) -> (Option<Time>, &'static str, Vec<Ref>) {
+        (self.at(), self.code(), self.refs())
+    }
+
+    fn message(&self) -> String {
+        match self {
+            Diagnostic::NetlistSyntax { path, detail, .. } => {
+                format!("schema mismatch at `{path}` ({detail})")
+            }
+            Diagnostic::NetlistVersion { found, supported } => {
+                let supported: Vec<_> = supported.iter().map(u64::to_string).collect();
+                format!(
+                    "netlist version {found} is not supported; this engine reads {}",
+                    supported.join(", ")
+                )
+            }
+            Diagnostic::NetlistName {
+                path,
+                name,
+                problem,
+            } => {
+                format!(
+                    "name `{name}` at `{path}` is not valid ({})",
+                    name_problem(*problem)
+                )
+            }
+            Diagnostic::NetlistDuplicate { name } => format!("{name} is declared more than once"),
+            Diagnostic::NetlistUnknownNet { pin, net } => {
+                format!("pin {pin} names net `{net}`, which is not in `nets`")
+            }
+            Diagnostic::NetlistPins { part, .. } => format!("{part} pins do not match its kind"),
+            Diagnostic::NetlistUnit {
+                part,
+                field,
+                expected,
+                found,
+            } => format!(
+                "{part} {field} is in `{found}`; it must be in `{expected}` (SI base units)"
+            ),
+            Diagnostic::NetlistValue {
+                part,
+                field,
+                value,
+                rule,
+            } => {
+                let byte = *value as u8;
+                let count = *value as u16;
+                let value = number_text(*value);
+                match rule {
+                    ValueRule::Positive => {
+                        format!("{part} {field} is {value}; it must be positive")
+                    }
+                    ValueRule::FiniteReciprocal => {
+                        format!("{part} {field} is {value}; its reciprocal must be finite")
+                    }
+                    ValueRule::FiniteJunction => {
+                        let requirement = if field.as_ref() == "zener_voltage" {
+                            "Isb must be normal and positive, and vcrit must be finite and positive"
+                        } else if field.as_ref() == "zener_impedance" {
+                            "nbvt must be normal"
+                        } else {
+                            "n*VT must be normal, and vcrit must be finite and positive"
+                        };
+                        format!("{part} {field} is {value}; {requirement}")
+                    }
+                    ValueRule::NonNegative => {
+                        format!("{part} {field} is {value}; it must not be negative")
+                    }
+                    ValueRule::BounceRoom => format!(
+                        "{part} {field} is {value}; it must fit 2 * max_bounces edges {} ps apart",
+                        MIN_GAP_PS
+                    ),
+                    ValueRule::Fraction => {
+                        format!("{part} {field} is {value}; it must be between 0 and 1")
+                    }
+                    ValueRule::BelowOne => {
+                        format!("{part} {field} is {value}; it must be at least 0 and below 1")
+                    }
+                    ValueRule::AboveHigh => {
+                        format!("{part} {field} is {value}; it must not be above high")
+                    }
+                    ValueRule::Hysteresis => {
+                        format!("{part} {field} is {value}; it must be below pull_in_current")
+                    }
+                    ValueRule::AboveResistance => format!(
+                        "{part} {field} is {value}; it must exceed series_resistance + breakdown_resistance"
+                    ),
+                    ValueRule::AboveDrop => format!(
+                        "{part} {field} is {value}; it must exceed zener_current * (series_resistance + breakdown_resistance)"
+                    ),
+                    ValueRule::Unsupported => {
+                        format!("{part} {field} is 0x{byte:02X}; the model does not run that mode")
+                    }
+                    ValueRule::Span => {
+                        format!("{part} {field} is {value}; it must be from 0 to 4095")
+                    }
+                    ValueRule::Leds => {
+                        format!("{part} {field} is {count}; it must be from 1 to 1024")
+                    }
+                }
+            }
+            Diagnostic::NetlistFirmware { part, line, rule } => {
+                let what = match rule {
+                    FirmwareRule::Record => "is not an Intel HEX record",
+                    FirmwareRule::Checksum => "has a bad checksum",
+                    FirmwareRule::RecordType => "has a record type other than 00 to 05",
+                    FirmwareRule::AfterEnd => "comes after the end-of-file record",
+                    FirmwareRule::NoEnd => "has no end-of-file record",
+                    FirmwareRule::PastFlash => "puts a byte past the end of the flash",
+                    FirmwareRule::Region => {
+                        "places a flash region past the end of the 16 MB flash or onto a byte an earlier region placed"
+                    }
+                    FirmwareRule::Image => {
+                        "has no app the bootloader would start: a partition table, an app partition, blank otadata, and an ESP32-S3 app image whose checksum and hash hold"
+                    }
+                    FirmwareRule::Rom => {
+                        "needs `rom` with `flash` and none with `elf`, and `rom` must be the revision 0 ROM, sha256 c0ce0f338d1de1bdc6efbef1591779a2a42c1ab7d759d3c6ae8ae63a7dd34cfd, 949552 bytes"
+                    }
+                    FirmwareRule::Overlap if line.is_none() => {
+                        "loads two segments onto one byte of memory"
+                    }
+                    FirmwareRule::Overlap => "places a byte an earlier record placed",
+                    FirmwareRule::Elf => "is not a 32-bit little-endian Xtensa ELF executable",
+                    FirmwareRule::Unmapped => {
+                        "loads a segment, or starts, outside the RAM a program may load into"
+                    }
+                };
+                match line {
+                    Some(line) => format!("{part} firmware line {line} {what}"),
+                    None => format!("{part} firmware {what}"),
+                }
+            }
+            Diagnostic::NetlistBlob {
+                part,
+                role,
+                sha256,
+                rule,
+                bytes,
+                found,
+                source,
+            } => {
+                let role = role.as_str();
+                let found = found.unwrap_or(0);
+                match (source, rule) {
+                    (Source::Folders, BlobRule::Missing) => format!(
+                        "{part} {role} blob {sha256} is not in the blobs folder beside the netlist or in any --blobs folder"
+                    ),
+                    (Source::Folders, BlobRule::Hash) => format!(
+                        "{part} {role} blob {sha256}: no file under that name in the blobs folder beside the netlist or in a --blobs folder has that SHA-256"
+                    ),
+                    (Source::Folders, BlobRule::Length) => format!(
+                        "{part} {role} blob {sha256} in the blobs folder beside the netlist or a --blobs folder has {found} bytes; the netlist says {bytes}"
+                    ),
+                    (Source::List, BlobRule::Missing) => {
+                        format!("{part} {role} blob {sha256} is not in the blob list")
+                    }
+                    (Source::List, BlobRule::Hash) => format!(
+                        "{part} {role} blob {sha256}: the blob under that name in the blob list has another SHA-256"
+                    ),
+                    (Source::List, BlobRule::Length) => format!(
+                        "{part} {role} blob {sha256} in the blob list has {found} bytes; the netlist says {bytes}"
+                    ),
+                }
+            }
+            Diagnostic::NetlistSameNet {
+                pin,
+                with,
+                found,
+                expected,
+            } => format!(
+                "pin {pin} is on `{}`; it must be on `{}`, as {with} is",
+                found.as_str(),
+                expected.as_str()
+            ),
+            Diagnostic::NetlistGround { net } => format!("ground `{net}` is not in `nets`"),
+            Diagnostic::NetlistAnalysis { field, value, rule } => {
+                let must = match rule {
+                    AnalysisRule::Positive => "it must be positive",
+                    AnalysisRule::StepUnder1ns | AnalysisRule::GridUnder1ns => {
+                        "it must be at least 1000"
+                    }
+                    AnalysisRule::StepOverStop | AnalysisRule::GridOverStop => {
+                        "it must not exceed stop_ps"
+                    }
+                };
+                format!("analysis {field} is {value}; {must}")
+            }
+            Diagnostic::NetlistSchedule {
+                part,
+                field,
+                event,
+                rule,
+                end_ps,
+            } => {
+                let what = match rule {
+                    ScheduleRule::AtZero => {
+                        "is at 0 ps; an event must come after t = 0".to_string()
+                    }
+                    ScheduleRule::SameState if *field == "events" => {
+                        "does not change the contact".to_string()
+                    }
+                    ScheduleRule::SameState => "does not change the level".to_string(),
+                    ScheduleRule::NotIncreasing => "is not after the previous event".to_string(),
+                    ScheduleRule::TooClose if *field == "events" => format!(
+                        "is less than {} ps after the previous event and its bounce window",
+                        MIN_GAP_PS
+                    ),
+                    ScheduleRule::TooClose => {
+                        format!("is less than {} ps after the previous event", MIN_GAP_PS)
+                    }
+                    ScheduleRule::Overflow if *field == "events" => {
+                        "has a bounce window that ends past the largest time".to_string()
+                    }
+                    ScheduleRule::Overflow => "ends past the largest time".to_string(),
+                    ScheduleRule::Overlap => {
+                        format!("starts before the previous event ends at {end_ps} ps")
+                    }
+                };
+                format!("{part} {field}[{event}] {what}")
+            }
+            Diagnostic::NetlistWaveform {
+                part,
+                field,
+                value,
+                rule,
+            } => match rule {
+                WaveformRule::Equal => {
+                    let source = field.strip_suffix(".space").unwrap_or(field.as_ref());
+                    format!("{part} {source}.mark and {source}.space are equal")
+                }
+                WaveformRule::AtZero => {
+                    format!("{part} {field} is {value}; a jump must come after t = 0")
+                }
+                WaveformRule::TooClose => format!(
+                    "{part} {field} is {value}; two jumps must be at least {} ps apart",
+                    MIN_GAP_PS
+                ),
+                WaveformRule::Overflow => {
+                    format!("{part} {field} is {value}; the first fall is past the largest time")
+                }
+            },
+            Diagnostic::NetFloating { net } => format!("{net} has no DC path to ground"),
+            Diagnostic::SolverSingular { unknown, .. } => format!("singular matrix at {unknown}"),
+            Diagnostic::SolverNonFinite { unknown, .. } => {
+                format!("non-finite number at {unknown}")
+            }
+            Diagnostic::SolverTooLarge {
+                unknowns, limit, ..
+            } => format!("{unknowns} unknowns exceeds the dense solver limit of {limit}"),
+            Diagnostic::SolverStepLimit { limit, .. } => format!(
+                "the run accepted {limit} steps, its limit; dense switch or source schedules cost steps, not rows"
+            ),
+            Diagnostic::SolverConvergence {
+                at,
+                unknown,
+                iterations,
+                source_scale,
+                solve: Solve::Ladder,
+                ..
+            } if *at > Time::ZERO => format!(
+                "Newton did not converge at {unknown} after {iterations} iterations in the restart solve at {} ps; source stepping reached {source_scale}",
+                at.as_ps()
+            ),
+            Diagnostic::SolverConvergence {
+                unknown,
+                iterations,
+                source_scale,
+                solve: Solve::Ladder,
+                ..
+            } => format!(
+                "Newton did not converge at {unknown} after {iterations} iterations; source stepping reached {source_scale}"
+            ),
+            Diagnostic::SolverConvergence {
+                unknown,
+                iterations,
+                solve: Solve::Step { step_ps },
+                ..
+            } => format!(
+                "Newton did not converge at {unknown} after {iterations} iterations; the time step halved to {step_ps} ps"
+            ),
+            Diagnostic::SolverConvergence {
+                at,
+                unknown,
+                iterations,
+                solve: Solve::Probe { .. },
+                ..
+            } => format!(
+                "Newton did not converge at {unknown} after {iterations} iterations in the probe at {} ps locating a chip event",
+                at.as_ps()
+            ),
+            Diagnostic::ChipUnsettled { at, rounds, .. } => format!(
+                "the chips kept changing state for {rounds} solves at {} ps",
+                at.as_ps()
+            ),
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::SdaWhileSclHigh,
+            } => format!(
+                "{part} left SDA unmoved because SCL was high at {} ps, breaking rule {}, the first time",
+                at.as_ps(),
+                rule_text(&ProtocolRule::SdaWhileSclHigh)
+            ),
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::Bit,
+            } => format!(
+                "{part} dropped a bit that broke rule {} at {} ps, the first time",
+                rule_text(&ProtocolRule::Bit),
+                at.as_ps()
+            ),
+            Diagnostic::ChipProtocol { part, at, rule } => format!(
+                "{part} dropped a transfer that broke rule {} at {} ps, the first time",
+                rule_text(rule),
+                at.as_ps()
+            ),
+            Diagnostic::ChipLinkMiswired { part, at, sender } => format!(
+                "{part} dropped an SPI transaction from #{} whose data lanes are not on its own data pins at {} ps, the first time",
+                sender.as_str(),
+                at.as_ps()
+            ),
+            Diagnostic::ChipUnsupportedInstruction {
+                part,
+                at,
+                op,
+                reason,
+                pc,
+                app,
+                symbol,
+            } => {
+                let what = match reason {
+                    Unsupported::Op => format!("`{op}`"),
+                    Unsupported::Unaligned => format!("an unaligned `{op}`"),
+                    Unsupported::Litbase => "`l32r` with LITBASE".to_string(),
+                    Unsupported::LoopEnd => format!("`{op}` as the last op of a loop"),
+                };
+                format!(
+                    "{part} reached {what} at {pc:#010x}{}{}, which the model does not run, at {} ps",
+                    symbol_text(symbol),
+                    core_text(*app),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipUnmappedFetch {
+                part,
+                at,
+                pc,
+                app,
+                symbol,
+            } => format!(
+                "{part} fetched code at {pc:#010x}{}{}, where the model maps no memory, at {} ps",
+                symbol_text(symbol),
+                core_text(*app),
+                at.as_ps()
+            ),
+            Diagnostic::ChipHalted {
+                part,
+                at,
+                pc,
+                app,
+                symbol,
+            } => format!(
+                "{part} halted at {pc:#010x}{}{}, a jump to itself that no interrupt or watchdog can leave, at {} ps",
+                symbol_text(symbol),
+                core_text(*app),
+                at.as_ps()
+            ),
+            Diagnostic::ChipUnsupportedSetting {
+                part,
+                at,
+                peripheral,
+                setting,
+                pc,
+                app,
+                symbol,
+            } => {
+                let what = match setting {
+                    ChipSetting::Transfer(setting) => {
+                        format!("started a {peripheral} transfer with setting {setting}")
+                    }
+                    ChipSetting::Interrupt => format!("enabled a {peripheral} interrupt"),
+                    ChipSetting::Register(setting) => format!("set {peripheral} {setting}"),
+                    ChipSetting::Sleep => "put the chip to sleep".to_string(),
+                };
+                let why = match (*peripheral, *setting) {
+                    (_, ChipSetting::Interrupt) => "which the model never raises",
+                    ("GDMA", ChipSetting::Register("reset_while_sending")) => {
+                        "which the model does not run; ESP-IDF sets GDMA's reset when it restarts or panics, so the console holds any panic text"
+                    }
+                    _ => "which the model does not run",
+                };
+                format!(
+                    "{part} {what} at {pc:#010x}{}{}, {why}, at {} ps",
+                    symbol_text(symbol),
+                    core_text(*app),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipWatchdog {
+                part,
+                at,
+                watchdog,
+                stage,
+                reset,
+            } => format!(
+                "{part} {watchdog} watchdog's stage {stage} ran out and reset the {reset} at {} ps; the firmware neither fed nor disabled it",
+                at.as_ps()
+            ),
+            Diagnostic::ChipEfuseProgram {
+                part,
+                at,
+                pc,
+                app,
+                symbol,
+            } => format!(
+                "{part} started an eFuse program command at {pc:#010x}{}{}, which would burn eFuses, at {} ps",
+                symbol_text(symbol),
+                core_text(*app),
+                at.as_ps()
+            ),
+            Diagnostic::ChipFlashCommand {
+                part,
+                at,
+                command,
+                reason,
+                pc,
+                app,
+                symbol,
+            } => {
+                let command = match command {
+                    Some(command) => format!("command 0x{command:02X}"),
+                    None => "a command".to_string(),
+                };
+                let (what, why) = match reason {
+                    FlashRefusal::Unsupported => (
+                        format!("sent the flash {command}"),
+                        "which the model does not run",
+                    ),
+                    FlashRefusal::StatusWrite => (
+                        format!("sent the flash the status write {command}"),
+                        "which could lock the flash",
+                    ),
+                    FlashRefusal::NoCommandPhase => (
+                        "sent the flash a user command with no command phase".to_string(),
+                        "which the model does not run",
+                    ),
+                    FlashRefusal::StartBits => (
+                        "started more than one SPI1 command in one write".to_string(),
+                        "which the model does not run",
+                    ),
+                    FlashRefusal::PastEnd => (
+                        format!("sent the flash the read {command}"),
+                        "which reaches past the flash's end",
+                    ),
+                    FlashRefusal::AddressBits => (
+                        format!("sent the flash {command}"),
+                        "whose address is longer than 32 bits",
+                    ),
+                    FlashRefusal::Spi0 => (
+                        "started a command on SPI0".to_string(),
+                        "which the model does not run",
+                    ),
+                    FlashRefusal::Pads => (
+                        "took a flash pad from SPI0 and SPI1".to_string(),
+                        "which could send the flash any command",
+                    ),
+                    FlashRefusal::Cs => (
+                        format!("sent the flash {command} with CS0 disabled or CS1 enabled"),
+                        "which the model does not run",
+                    ),
+                };
+                format!(
+                    "{part} {what} at {pc:#010x}{}{}, {why}, at {} ps",
+                    symbol_text(symbol),
+                    core_text(*app),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipUnsupportedClock {
+                part,
+                at,
+                pc,
+                app,
+                symbol,
+            } => format!(
+                "{part} picked a CPU clock the model does not run, the RC fast clock or a reserved setting, at {pc:#010x}{}{} at {} ps",
+                symbol_text(symbol),
+                core_text(*app),
+                at.as_ps()
+            ),
+            Diagnostic::ChipRestart {
+                part,
+                at,
+                pc,
+                app,
+                symbol,
+            } => format!(
+                "{part} reset itself at {pc:#010x}{}{} at {} ps; the model does not run the boot ROM, so the chip stays in reset",
+                symbol_text(symbol),
+                core_text(*app),
+                at.as_ps()
+            ),
+            Diagnostic::ChipFaultRestart {
+                part,
+                at,
+                reason,
+                pc,
+                app,
+                symbol,
+            } => format!(
+                "{part} reset itself at {pc:#010x}{}{} {}, at {} ps",
+                symbol_text(symbol),
+                core_text(*app),
+                match reason {
+                    ResetReason::Panic => "after a panic",
+                    ResetReason::InterruptWatchdog => "after its interrupt watchdog fired",
+                    ResetReason::TaskWatchdog => "after its task watchdog fired",
+                    ResetReason::Watchdog => "after a watchdog fired",
+                    ResetReason::Brownout => "after a brownout",
+                    ResetReason::Unreadable => "with no reset reason the model can read",
+                },
+                at.as_ps()
+            ),
+            Diagnostic::ChipUnmappedLoad {
+                part,
+                at,
+                address,
+                pc,
+                app,
+                symbol,
+            } => format!(
+                "{part} loaded from {address:#010x} at {pc:#010x}{}{}, where the MMU maps no flash, at {} ps",
+                symbol_text(symbol),
+                core_text(*app),
+                at.as_ps()
+            ),
+            Diagnostic::ChipUnmodeledRegister {
+                part,
+                at,
+                address,
+                register,
+                pc,
+                app,
+                symbol,
+                write,
+                kept,
+            } => format!(
+                "{part} {} {register} at {address:#010x}, {} {} ps from {pc:#010x}{}{}",
+                if *write { "wrote" } else { "read" },
+                if *kept {
+                    "whose effect the model does not run, at"
+                } else {
+                    "which the model does not keep, first at"
+                },
+                at.as_ps(),
+                symbol_text(symbol),
+                core_text(*app)
+            ),
+            Diagnostic::TraceTooLarge {
+                rows,
+                limit,
+                columns,
+                at: None,
+            } => format!(
+                "the grid gives {rows} rows; the trace holds {limit} rows of {columns} columns; raise grid_ps or shorten stop_ps"
+            ),
+            Diagnostic::TraceTooLarge {
+                limit,
+                at: Some(at),
+                ..
+            } => format!(
+                "the trace holds {limit} rows; the step at {} ps did not fit",
+                at.as_ps()
+            ),
+            Diagnostic::TraceRowInterpolated { at, from, to } => format!(
+                "the row at {} ps did not solve; it is the line between the steps at {} ps and {} ps",
+                at.as_ps(),
+                from.as_ps(),
+                to.as_ps()
+            ),
+            Diagnostic::RatingCurrent(excursion) => over_rating(excursion, "A"),
+            Diagnostic::RatingPower(excursion) => over_rating(excursion, "W"),
+        }
+    }
+
+    fn data(&self) -> serde_json::Value {
+        let mut data = self.fields();
+        if self.on_app_cpu() {
+            data["core"] = serde_json::json!("app");
+        }
+        data
+    }
+
+    /// Whether the code a chip diagnostic names ran on the APP CPU.
+    fn on_app_cpu(&self) -> bool {
+        matches!(
+            self,
+            Diagnostic::ChipUnsupportedInstruction { app: true, .. }
+                | Diagnostic::ChipUnmappedFetch { app: true, .. }
+                | Diagnostic::ChipHalted { app: true, .. }
+                | Diagnostic::ChipUnsupportedSetting { app: true, .. }
+                | Diagnostic::ChipEfuseProgram { app: true, .. }
+                | Diagnostic::ChipFlashCommand { app: true, .. }
+                | Diagnostic::ChipUnsupportedClock { app: true, .. }
+                | Diagnostic::ChipRestart { app: true, .. }
+                | Diagnostic::ChipFaultRestart { app: true, .. }
+                | Diagnostic::ChipUnmappedLoad { app: true, .. }
+                | Diagnostic::ChipUnmodeledRegister { app: true, .. }
+        )
+    }
+
+    fn fields(&self) -> serde_json::Value {
+        match self {
+            Diagnostic::NetlistSyntax {
+                path,
+                line,
+                column,
+                detail,
+            } => serde_json::json!({
+                "path": path,
+                "line": line,
+                "column": column,
+                "detail": detail,
+            }),
+            Diagnostic::NetlistVersion { found, supported } => {
+                serde_json::json!({ "found": found, "supported": supported })
+            }
+            Diagnostic::NetlistName {
+                path,
+                name,
+                problem,
+            } => {
+                serde_json::json!({ "path": path, "name": name, "problem": problem })
+            }
+            Diagnostic::NetlistDuplicate { .. } | Diagnostic::NetFloating { .. } => {
+                serde_json::json!({})
+            }
+            Diagnostic::NetlistUnknownNet { net, .. } => serde_json::json!({ "net": net }),
+            Diagnostic::NetlistPins {
+                missing,
+                unexpected,
+                ..
+            } => serde_json::json!({ "missing": missing, "unexpected": unexpected }),
+            Diagnostic::NetlistUnit {
+                field,
+                expected,
+                found,
+                ..
+            } => serde_json::json!({
+                "field": field,
+                "expected": expected,
+                "found": found,
+            }),
+            Diagnostic::NetlistValue {
+                field, value, rule, ..
+            } => serde_json::json!({ "field": field, "value": value, "rule": rule }),
+            Diagnostic::NetlistFirmware { line, rule, .. } => {
+                serde_json::json!({ "field": "firmware", "line": line, "rule": rule })
+            }
+            Diagnostic::NetlistBlob {
+                role,
+                sha256,
+                rule,
+                bytes,
+                found,
+                ..
+            } => serde_json::json!({
+                "bytes": bytes,
+                "found": found,
+                "role": role.as_str(),
+                "rule": rule,
+                "sha256": sha256.to_string(),
+            }),
+            Diagnostic::NetlistSameNet {
+                found, expected, ..
+            } => serde_json::json!({ "expected": expected.as_str(), "found": found.as_str() }),
+            Diagnostic::NetlistGround { net } => serde_json::json!({ "net": net }),
+            Diagnostic::NetlistAnalysis { field, value, rule } => {
+                serde_json::json!({ "field": field, "rule": rule, "value": value })
+            }
+            Diagnostic::NetlistSchedule { event, rule, .. } => {
+                serde_json::json!({ "event": event, "rule": rule })
+            }
+            Diagnostic::NetlistWaveform {
+                field, value, rule, ..
+            } => serde_json::json!({ "field": field, "rule": rule, "value": value }),
+            Diagnostic::SolverSingular { .. } | Diagnostic::SolverNonFinite { .. } => {
+                serde_json::json!({})
+            }
+            Diagnostic::SolverTooLarge {
+                unknowns, limit, ..
+            } => serde_json::json!({ "limit": limit, "unknowns": unknowns }),
+            Diagnostic::SolverStepLimit { limit, .. } => serde_json::json!({ "limit": limit }),
+            Diagnostic::SolverConvergence {
+                iterations,
+                gmin,
+                source_scale,
+                solve,
+                ..
+            } => {
+                let mut data = serde_json::json!({
+                    "gmin": gmin,
+                    "iterations": iterations,
+                    "source_scale": source_scale,
+                });
+                if let Solve::Step { step_ps } | Solve::Probe { step_ps } = solve {
+                    data["step_ps"] = serde_json::json!(step_ps);
+                }
+                data
+            }
+            Diagnostic::ChipUnsettled { rounds, .. } => serde_json::json!({ "rounds": rounds }),
+            Diagnostic::ChipProtocol { rule, .. } => serde_json::json!({ "rule": rule }),
+            Diagnostic::ChipLinkMiswired { sender, .. } => {
+                serde_json::json!({ "sender": sender.as_str() })
+            }
+            Diagnostic::ChipUnsupportedInstruction {
+                op,
+                reason,
+                pc,
+                symbol,
+                ..
+            } => serde_json::json!({ "op": op, "pc": pc, "reason": reason, "symbol": symbol }),
+            Diagnostic::ChipUnmappedFetch { pc, symbol, .. }
+            | Diagnostic::ChipHalted { pc, symbol, .. } => {
+                serde_json::json!({ "pc": pc, "symbol": symbol })
+            }
+            Diagnostic::ChipUnsupportedSetting {
+                peripheral,
+                setting,
+                pc,
+                symbol,
+                ..
+            } => serde_json::json!({
+                "peripheral": peripheral,
+                "pc": pc,
+                "setting": setting.name(),
+                "symbol": symbol,
+            }),
+            Diagnostic::ChipWatchdog {
+                watchdog,
+                stage,
+                reset,
+                ..
+            } => {
+                serde_json::json!({ "watchdog": watchdog, "stage": stage, "reset": reset })
+            }
+            Diagnostic::ChipEfuseProgram { pc, symbol, .. }
+            | Diagnostic::ChipUnsupportedClock { pc, symbol, .. }
+            | Diagnostic::ChipRestart { pc, symbol, .. } => {
+                serde_json::json!({ "pc": pc, "symbol": symbol })
+            }
+            Diagnostic::ChipFlashCommand {
+                command,
+                reason,
+                pc,
+                symbol,
+                ..
+            } => serde_json::json!({
+                "command": command,
+                "pc": pc,
+                "reason": reason,
+                "symbol": symbol,
+            }),
+            Diagnostic::ChipFaultRestart {
+                reason, pc, symbol, ..
+            } => serde_json::json!({ "pc": pc, "reason": reason, "symbol": symbol }),
+            Diagnostic::ChipUnmappedLoad {
+                address,
+                pc,
+                symbol,
+                ..
+            } => serde_json::json!({ "address": address, "pc": pc, "symbol": symbol }),
+            Diagnostic::ChipUnmodeledRegister {
+                address,
+                register,
+                pc,
+                symbol,
+                write,
+                kept,
+                ..
+            } => serde_json::json!({
+                "address": address,
+                "kept": kept,
+                "pc": pc,
+                "register": register,
+                "symbol": symbol,
+                "write": write,
+            }),
+            Diagnostic::TraceTooLarge {
+                rows,
+                limit,
+                columns,
+                ..
+            } => serde_json::json!({ "columns": columns, "limit": limit, "rows": rows }),
+            Diagnostic::TraceRowInterpolated { from, to, .. } => {
+                serde_json::json!({ "from_ps": from, "to_ps": to })
+            }
+            Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
+                serde_json::json!({
+                    "limit": excursion.limit,
+                    "over_ps": excursion.over_ps,
+                    "peak": excursion.peak,
+                    "peak_ps": excursion.peak_at,
+                })
+            }
+        }
+    }
+}
+
+/// ` on the APP CPU` for code the APP CPU ran, or nothing.
+fn core_text(app: bool) -> &'static str {
+    if app { " on the APP CPU" } else { "" }
+}
+
+/// ` in name+0x1c`, or nothing with no symbol.
+fn symbol_text(symbol: &Option<String>) -> String {
+    symbol
+        .as_ref()
+        .map(|name| format!(" in {name}"))
+        .unwrap_or_default()
+}
+
+/// The rule as `data.rule` names it.
+fn rule_text(rule: &ProtocolRule) -> String {
+    serde_json::to_value(rule)
+        .ok()
+        .and_then(|name| name.as_str().map(str::to_string))
+        .expect("a rule serializes to its name")
+}
+
+/// The same characters `data.value` uses. `Display` for a subnormal is hundreds of digits.
+fn number_text(value: f64) -> String {
+    serde_json::to_string(&value).expect("a netlist value is a finite number")
+}
+
+fn over_rating(excursion: &Excursion, unit: &str) -> String {
+    let Excursion {
+        quantity,
+        limit,
+        peak,
+        ..
+    } = excursion;
+    format!("{quantity} peaks at {peak} {unit}, over its {limit} {unit} rating")
+}
+
+fn name_problem(problem: NameError) -> &'static str {
+    match problem {
+        NameError::Empty => "it is empty",
+        NameError::TooLong => "it is longer than 64 bytes",
+        NameError::BadChar => "it must be an ASCII letter, then letters, digits, or underscore",
+        NameError::Reserved => "`net` is reserved",
+    }
+}
+
+impl Serialize for Diagnostic {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Wire<'a> {
+            code: &'static str,
+            severity: Severity,
+            refs: Vec<Ref>,
+            t_ps: Option<Time>,
+            message: String,
+            data: &'a serde_json::Value,
+        }
+        let data = self.data();
+        Wire {
+            code: self.code(),
+            severity: self.severity(),
+            refs: self.refs(),
+            t_ps: self.at(),
+            message: self.message(),
+            data: &data,
+        }
+        .serialize(serializer)
+    }
+}

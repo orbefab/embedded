@@ -1,0 +1,177 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": {
+    "transient": {
+      "stop_ps": 50000000,
+      "max_step_ps": 100000,
+      "grid_ps": 100000
+    }
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "scl",
+    "sda",
+    "vcc"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vcc",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 5.0,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "rsda",
+      "kind": "resistor",
+      "pins": {
+        "a": "vcc",
+        "b": "sda"
+      },
+      "resistance": {
+        "value": 4700.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "rscl",
+      "kind": "resistor",
+      "pins": {
+        "a": "vcc",
+        "b": "scl"
+      },
+      "resistance": {
+        "value": 4700.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "csda",
+      "kind": "capacitor",
+      "pins": {
+        "a": "sda",
+        "b": "gnd"
+      },
+      "capacitance": {
+        "value": 2e-10,
+        "unit": "F",
+        "source": "user"
+      },
+      "initial": null
+    },
+    {
+      "name": "cscl",
+      "kind": "capacitor",
+      "pins": {
+        "a": "scl",
+        "b": "gnd"
+      },
+      "capacitance": {
+        "value": 2e-10,
+        "unit": "F",
+        "source": "user"
+      },
+      "initial": null
+    },
+    {
+      "name": "swsda",
+      "kind": "switch",
+      "pins": {
+        "a": "sda",
+        "b": "gnd"
+      },
+      "on_resistance": {
+        "value": 0.1,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "off_resistance": {
+        "value": 1000000000.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "initial": "open",
+      "events": [
+        {
+          "t_ps": 5000000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 10000000,
+          "state": "open"
+        },
+        {
+          "t_ps": 20000000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 39500000,
+          "state": "open"
+        }
+      ],
+      "bounce": null
+    },
+    {
+      "name": "swscl",
+      "kind": "switch",
+      "pins": {
+        "a": "scl",
+        "b": "gnd"
+      },
+      "on_resistance": {
+        "value": 0.1,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "off_resistance": {
+        "value": 1000000000.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "initial": "open",
+      "events": [
+        {
+          "t_ps": 9500000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 15000000,
+          "state": "open"
+        },
+        {
+          "t_ps": 19500000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 25000000,
+          "state": "open"
+        },
+        {
+          "t_ps": 29500000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 35000000,
+          "state": "open"
+        }
+      ],
+      "bounce": null
+    }
+  ]
+}
