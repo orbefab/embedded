@@ -5,6 +5,72 @@ Investigations may challenge any of these, with reasons.
 ## Firmware toolchains are not ours (Oct 31 2026)
 The engine runs firmware built with any toolchain, and users bring whatever they like. Orbefab never builds its own compiler. The skills recommend existing tools: arduino-cli for AVR/Arduino, ESP-IDF for ESP32.
 
+## Entry points (Nov 1 2026)
+- The CLI is `orbe`. If it ships through npm, where `orbe` is taken, a scoped package can still install an `orbe` binary.
+- A background process per session holds the simulation, so short commands share state. Headless is the normal case for agents and CI. Headed opens the viewer on the same session, and the person can interact too.
+- The simulation pauses between commands by default, and plays, pauses or steps when told. Sessions end after 2 hours.
+- Files are the record: the scene, part files, tests and the paths of firmware the user built. The live session is the agent's working loop.
+- Scenes are data files. No Python scenes at first.
+- Tests are command files, `tests/*.test`, with `expect` lines.
+- Output is plain text, or JSON with `--json`.
+- A recording is for replay and checking only. To continue, rerun the commands on the scene.
+- The ESP32-S3 gets its time from a scheduled `console` file the scene names. There is no live send command.
+- Skills work with every agent: a thin stub, installed with skills.sh, points at the CLI, which serves the full skill for its own version.
+- No MCP server for now. One comes only if a use appears.
+- No legacy. Nothing is kept for compatibility with old scenes.
+
+## No hidden actions (Nov 4 2026)
+A command does what it names and nothing in the background. Where `orbe` could guess or quietly fix something, it stops with a clear error that says what happened and what to run instead. A reply carries what concerns its own command (its result, its errors and how to fix them), and nothing unrelated is added to every reply.
+
+## Parts (Nov 4 2026)
+- A part is one real physical object, defined in one file, `part.jsonc`. Every field is optional except `format`. A part may have an engine model, children (`parts`, `wires`, `layout`), both or neither.
+- A scene is not a part. We ship parts only.
+- A param is a number, a choice or a file. A choice picks a named set of values, such as an LED's colour, and may tint the 3D model. A param never changes pins or shape. An LED's colour is required.
+- A part with children passes a param to a child with `{ "param": "<name>" }` on the child, as a prop passes through a component. The whole value passes, with no arithmetic for now.
+- Catalog parts name the real object in `real` (maker, part number, datasheet), and every model value cites its source.
+- A part's files, such as the ESP32-S3 ROM, live in its folder. `files` maps a name to a path.
+- A part states its readings, such as an LED's `on` above 1 mA.
+- `joints` say what moves, such as a button's plunger, and `controls.press` names the joint it drives. Joints between two parts come later.
+- Versions are three numbers. A patch or minor version can't change a passing test.
+- Parts that share an engine model, such as two packages of one chip, each hold a copy of its values. A check keeps the copies equal.
+
+## Catalog and projects (Nov 4 2026)
+- The catalog is a registry: a static index plus one archive per part version, shaped like shadcn's registry. `orbe` reads it itself.
+- `orbe add <id>…` copies catalog parts, and the parts they use, into the project's `parts/<id>/`. A project holds one version per id. `orbe add --diff` shows what a newer version changes, and `--overwrite` takes it. Crossing a major version needs the version named.
+- Only `orbe add` copies or fetches parts. `orbe open` and `orbe test` never do. A missing part is an error that gives the exact `orbe add` command.
+- `parts.lock` records each catalog copy: its id, version, registry and hash. It is a checksum record, with no version ranges, no solver and no shared store. A fresh clone holds every part and can check them offline.
+- Catalog parts are sealed, except a part built only from other parts. A changed sealed copy is an error. Restore it with `orbe add <id> --overwrite`, or copy it to a part of your own. A catalog part built from other parts, such as the nano board, can be edited, and checks report it as modified.
+- Parts from other registries are named `@<registry>/<id>`. The first release reads the official registry only.
+- 3D models live in plain git, in the part's folder.
+
+## Scenes (Nov 4 2026)
+- A scene is its own kind of file, usually `scene.jsonc`. Its keys are `format`, `parts`, `wires`, `layout`, `sim` and `nets`. It has no `pins` or `params`, and no file can use a scene as a part.
+- Scenes and part files are JSONC: JSON plus `//` comments and trailing commas, nothing more. `orbe` generates a JSON Schema, `parts/schema.json`, from the project's parts. A file's `$schema` key points editors at it for completion and value checks.
+- An instance has a `type` (a catalog id, or a `./` path to a part of your own), its params, and an optional `not_simulated` reason.
+- `wires` lists pin pairs, such as `["nano.D2", "btn1.a"]`, and `orbe` works out the nets. Every wire has a kind. `jumper` is the default and is drawn. `trace` (copper on a board) and `contact` (two pins touching, such as a leg in a breadboard hole) are not drawn. Drawing traces comes later.
+- `layout` sits in the parent, keyed by name, with `{ "at": [x, y, z], "rotate": [rx, ry, rz] }` in mm and degrees. The rotation is about the parent's fixed X, then Y, then Z, URDF's order. `mate` is reserved for later.
+- A net takes the name of its smallest label. A scene can name nets in `nets`, such as `"GND": "nano.GND"`.
+- Nested names flatten for the engine by joining with `__`, so `@nano.D13` is the net `nano__D13`. Names may not contain `__`.
+- A viewer edit goes to the file that holds what it changes. If that file is used more than once, the viewer asks first. Sealed parts refuse edits. A part with no position is placed by the viewer for drawing only, and nothing is written until a person drags it.
+- Two hashes: one over every project file read, which guards writes, and one over the netlist, which says whether the simulation is current.
+- The ESP32-S3 takes one file param per flash image, `partitions` and `app`. Its ROM comes from the chip part's files.
+
+## Checking (Nov 4 2026)
+Type checking, linting and runtime diagnostics are separate.
+- `orbe check` type-checks: do the files describe a valid circuit? Every finding is an error. `orbe open` runs it first.
+- `orbe lint` runs `orbe check`, then lint rules that never block, such as an unnamed ground net, a part with no position or an unconnected pin. It includes the engine's static checks, such as a floating net.
+- Runtime diagnostics come only from `run`, `step` and `test`.
+- `orbe open` shows type errors and the engine's static warnings.
+
+## The nano board (Nov 4 2026)
+- It is built from 14 leaf parts, 28 children in all, wired with traces. The viewer draws it by composing its children's 3D models, with no merged model.
+- Its header children sit at z = 0 with their plastic under the board, so it seats on a breadboard.
+- A6 and A7 are not simulated yet, since the engine's 328P has the DIP's pins. A wire to them is an error that says so.
+- Its 16 MHz clock is a three-terminal ceramic resonator, until a clone's photo says otherwise.
+
+## Later
+Mates between parts, joints between two parts, importing outside CAD, PCB routing, drawing traces, per-instance placement overrides, A6 and A7, and an `orbe lsp` for editors.
+
 ## Repo (Oct 31 2026)
 One private repo for the whole branch: `orbefab/embedded`. The current sim-engine code moves in first, then maker-sandbox, then the rest (Blocks, skills, examples). The sandbox then builds against the current engine instead of a frozen copy.
 
@@ -18,9 +84,8 @@ Every part (circuit parts, sensors, dev boards) should eventually have its sim m
 - Parts use generic names (e.g. `uno-board`, `led-5mm`), not brand or product names.
 - Everything is a part, and parts can nest.
 - ICs (e.g. the 328P) are black boxes: the smallest unit, never broken down further.
-- A board is a group of components shipped together as one library part, and it can be broken down into its sub-components. Same for other assemblies.
+- A board is a part built from other parts. To change one, you edit your project's copy of it (see "Catalog and projects").
 - Prior art: sim-all-proto ADR 0010 (parts nest) and the layered-sim Uno/Nano composites. Today's sim-engine board example is flat.
-- The exact nesting format goes to the parts and scene-format investigations.
 
 ## Complete-part order (Nov 2 2026)
 The first boards taken to complete (sim, specs, 3D):
@@ -34,6 +99,7 @@ The ESP32-C3 and the original ESP32 come later (sim-engine models only the S3 to
 ## Licensing (Oct 31 2026)
 - The code is under MIT OR Apache-2.0, at the user's option (Nov 2 2026), the same as `orbefab/sim-engine`.
 - Part files here (sim models, specs, 3D) use the same license as the code.
+- A third-party file a part carries, such as the ESP32-S3 ROM, keeps its own license. It ships with the upstream license files, unchanged, beside it.
 - Our own models in `orbefab/models` are Orbefab copyright, so they can be relicensed.
 - Third-party CAD keeps its own license (SO-ARM100 Apache-2.0, Adafruit MIT).
 - The Waveshare Bus Servo Adapter model has no license and can't go public; it would need our own remodel.
@@ -48,7 +114,7 @@ A web visualizer (the sandbox) and a local-computer visualizer share one viewer:
 - The viewer's world is Y-up in mm. Parts are authored in their own frame, mm with +Z up, and one mapping converts between the two.
 - 3D models are GLBs exported by each `orbefab/models` script, with part names kept and a pin-anchor file beside them.
 - Whole-scene screenshots use an open viewer, or else a Chrome, Chromium or Edge already on the machine.
-- The viewer sends input commands only. It can't restart a session. Its edits go to the scene file and show as not simulated until the next open.
+- The viewer sends input commands only. It can't restart a session. Its edits go to the file that holds what they change (see "Scenes") and show as not simulated until the next open.
 
 ## No 2D views (Nov 2 2026)
 Parts have no 2D schematic view. The top-down view is a camera on the 3D scene.
