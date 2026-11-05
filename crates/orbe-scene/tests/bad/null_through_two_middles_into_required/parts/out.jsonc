@@ -1,0 +1,6 @@
+{
+  "format": 1,
+  "params": { "on": { "default": null } },
+  "parts": { "a": { "type": "./a.jsonc", "on": { "param": "on" } } },
+  "pins": { "a": "a.a", "b": "a.b" },
+}

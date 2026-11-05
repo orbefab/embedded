@@ -1,1 +1,1 @@
-scene.param parts/sw.jsonc:4:15 | `/events/0/t_ps` indexes into `events`, which is an empty list | add an item to `events` in `model`, or point `sets` at a field `model` has
+scene.param parts/sw.jsonc:4:15 | `/events/0/t_ps` indexes into `events`, which is an empty list | give `events` at least 1 item in `model`, or point `sets` at a field `model` has

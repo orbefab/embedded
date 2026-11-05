@@ -1,0 +1,1 @@
+scene.param scene.jsonc:6:53 | `btn1.bounce` is 18446744s; #btn1 events[0] has a bounce window that ends past the largest time | shorten `bounce.window`

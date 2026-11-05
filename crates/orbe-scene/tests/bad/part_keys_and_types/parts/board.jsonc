@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "titel": "Pulled button",
+  "tags": "button",
+  "real": { "maker": "Omron", "nuber": "B3F-1000" },
+  "params": { "resistance": { "default": "10k", "requird": true } },
+  "parts": {
+    "sw": { "type": "tactile-switch-6mm" },
+    "r": { "type": "resistor-axial", "resistance": { "param": "resistance" } },
+  },
+  "wires": [["sw.a", "r.a", { "colr": "red" }]],
+  "layout": { "r": { "at": [0, -6.35, 0], "rotat": [0, 0, 90] } },
+  "pins": { "a": "sw.a", "b": "sw.b", "gnd": "r.b" },
+  "not_simulated": [{ "what": "force", "why": "A press is a contact change.", "pin": ["a"] }],
+}

@@ -1,0 +1,1 @@
+scene.param scene.jsonc:10:51 | `rp.width`: the engine does not read `events.0.phases.0.value`: a phase's value fits in its bits | raise `bits`

@@ -1,0 +1,17 @@
+{
+  "format": 1,
+  "pins": { "vcc": [1], "gnd": [2], "out": [3] },
+  "params": { "len": { "default": "short", "choices": { "short": { "sets": { "/events/0/pulses/0/ps": 1000 } }, "long": { "sets": { "/events/0/pulses/0/ps": 5000000 } } } } },
+  "model": {
+    "kind": "pulses_replay",
+    "idle": false,
+    "output": {
+      "high_drop": { "value": 0.0, "unit": "V", "source": "user" },
+      "high_resistance": { "value": 25.0, "unit": "ohm", "source": "user" },
+      "low_drop": { "value": 0.0, "unit": "V", "source": "user" },
+      "low_resistance": { "value": 25.0, "unit": "ohm", "source": "user" },
+    },
+    "events": [{ "t_ps": 10000000, "pulses": [{ "level": true, "ps": 1000 }] }, { "t_ps": 11000000, "pulses": [{ "level": true, "ps": 1000 }] }],
+    "pins": { "VCC": "vcc", "GND": "gnd", "OUT": "out" },
+  },
+}

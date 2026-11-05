@@ -1,0 +1,1 @@
+scene.param parts/spi.jsonc:4:172 | `/events/0/bytes/3` passes through `events.0.bytes`, which choice param `seq` sets to [85] in its choice `a` | give `events.0.bytes` at least 4 items in choice `seq`'s `a`

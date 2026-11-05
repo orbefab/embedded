@@ -1,0 +1,1 @@
+scene.param parts/spi.jsonc:4:211 | `/events/0/phases/1/bits` passes through `events.0.phases`, which choice param `seq` sets to [{"bits":8,"lanes":1,"value":200}] in its choice `a` | give `events.0.phases` at least 2 items in choice `seq`'s `a`

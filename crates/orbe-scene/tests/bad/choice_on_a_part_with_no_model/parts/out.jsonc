@@ -1,0 +1,6 @@
+{
+  "format": 1,
+  "params": { "on": { "default": "lo", "choices": { "lo": { "sets": { "/x": 1 } }, "hi": { "sets": { "/x": 2 } } } } },
+  "parts": { "s": { "type": "./sw.jsonc" } },
+  "pins": { "a": "s.a", "b": "s.b" },
+}

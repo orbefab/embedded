@@ -1,0 +1,1 @@
+scene.param parts/out.jsonc:4:49 | `btn1.m.s` needs param `on`, and `ohm` passes nothing while it is unset | give `ohm` a default other than null

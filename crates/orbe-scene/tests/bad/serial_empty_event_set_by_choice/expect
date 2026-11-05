@@ -1,0 +1,1 @@
+scene.param scene.jsonc:6:49 | `vs.msg` is none; #vs voltage.events[0] sends nothing: it has no byte | give each event a byte, or remove the event

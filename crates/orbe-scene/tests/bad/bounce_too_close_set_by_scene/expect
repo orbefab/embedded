@@ -1,0 +1,1 @@
+scene.param scene.jsonc:6:53 | `btn1.bounce` is 5ms; #btn1 events[1] is less than 2000 ps after the previous event and its bounce window | shorten `bounce.window`

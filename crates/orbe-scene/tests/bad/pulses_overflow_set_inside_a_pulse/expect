@@ -1,0 +1,1 @@
+scene.param scene.jsonc:6:49 | `rp.wide` is long; #rp events[0] | shorten this event's pulses, or move it earlier, so it ends by 18446744073709551615 ps

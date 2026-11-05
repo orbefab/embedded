@@ -1,0 +1,6 @@
+{
+  "format": 1,
+  "params": { "on": { "unit": "ohm", "default": "220", "sets": "/on_resistance" } },
+  "parts": { "s": { "type": "./sw.jsonc" } },
+  "pins": { "a": "s.a", "b": "s.b" },
+}

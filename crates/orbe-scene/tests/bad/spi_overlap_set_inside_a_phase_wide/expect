@@ -1,0 +1,1 @@
+scene.param scene.jsonc:6:51 | `rp.width` is wide; #rp events[1] starts before the previous event ends at 11000000 ps | raise `clock_hz` or send fewer bits in the previous event

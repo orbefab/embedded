@@ -13,6 +13,7 @@ mod model;
 mod name;
 mod params;
 mod project;
+mod shape;
 mod source;
 mod syntax;
 mod units;

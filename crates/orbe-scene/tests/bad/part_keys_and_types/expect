@@ -1,0 +1,7 @@
+scene.syntax parts/board.jsonc:3:3 | a part has no key `titel` | did you mean `title`?
+scene.syntax parts/board.jsonc:4:11 | `tags` takes a list, found a string | write a list
+scene.syntax parts/board.jsonc:5:31 | `real` has no key `nuber` | did you mean `number`?
+scene.syntax parts/board.jsonc:6:49 | a param declaration has no key `requird` | did you mean `required`?
+scene.wires parts/board.jsonc:11:31 | a wire's hint has no key `colr` | did you mean `color`?
+scene.layout parts/board.jsonc:12:43 | a placement has no key `rotat` | did you mean `rotate`?
+scene.syntax parts/board.jsonc:14:79 | a not_simulated entry has no key `pin` | did you mean `pins`?

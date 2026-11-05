@@ -1,0 +1,1 @@
+scene.param parts/out.jsonc:3:15 | param `on` is passed only to `skip`, which is not simulated, so its value reaches nothing | pass `on` to a simulated child, or remove it

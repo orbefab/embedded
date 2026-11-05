@@ -1,0 +1,2 @@
+scene.syntax parts/out.jsonc:3:41 | a param that passes its value through does not read `min_exclusive` | remove `min_exclusive`
+scene.syntax parts/out.jsonc:3:63 | a param that passes its value through does not read `sets` | remove `sets`

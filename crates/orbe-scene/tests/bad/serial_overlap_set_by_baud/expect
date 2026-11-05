@@ -1,0 +1,1 @@
+scene.param scene.jsonc:6:51 | `vs.speed` is slow; #vs voltage.events[1] starts before the previous event ends at 34333333333 ps | move this event later, or raise `baud` or send fewer bytes in the previous event

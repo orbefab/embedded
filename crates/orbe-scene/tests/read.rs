@@ -1117,3 +1117,98 @@ fn a_bad_item_at_the_end_of_a_long_list_is_placed_quickly() {
         "32,000 bytes took {took:?}; a search that grows with the square of the list is back"
     );
 }
+
+/// The `good` fixture's SPI part with `params` in place of its own, used as `rp` with `args`.
+fn spi_with(params: &Value, args: &str) -> tempfile::TempDir {
+    let case = common::repo()
+        .join("crates/orbe-scene/tests/good/item_of_a_list_every_choice_writes_at_another_depth");
+    let project = common::overlaid(&case);
+    let part = project.path().join("parts/spi.jsonc");
+    let text = fs::read_to_string(&part).unwrap();
+    let line = text.lines().find(|l| l.contains("\"params\":")).unwrap();
+    fs::write(
+        &part,
+        text.replacen(line, &format!("  \"params\": {params},"), 1),
+    )
+    .unwrap();
+    let scene = project.path().join("scene.jsonc");
+    let text = fs::read_to_string(&scene).unwrap();
+    fs::write(&scene, text.replacen("\"n\": \"nine\"", args, 1)).unwrap();
+    project
+}
+
+/// A choice param that writes `pointer`, with `arms` arms.
+fn chooser(pointer: &str, arms: usize, value: impl Fn(usize) -> Value) -> Value {
+    let choices: serde_json::Map<String, Value> = (0..arms)
+        .map(|j| {
+            (
+                format!("a{j}"),
+                serde_json::json!({ "sets": { pointer: value(j) } }),
+            )
+        })
+        .collect();
+    serde_json::json!({ "default": "a0", "choices": choices })
+}
+
+#[test]
+#[expect(clippy::disallowed_methods, reason = "the clock is the measurement")]
+fn choice_params_on_one_way_are_checked_in_time_that_follows_their_arms() {
+    let event = |j: usize| serde_json::json!([{ "t_ps": 10_000_000 + j * 1_000_000, "lanes": 1, "bytes": [85], "cs": "released", "phases": [{ "bits": 8, "lanes": 1, "value": 1 }] }]);
+    let deep = serde_json::json!({
+        "pe": chooser("/events", 30, event),
+        "pe0": chooser("/events/0", 30, |j| serde_json::json!({ "t_ps": 10_000_000 + j * 1_000_000 })),
+        "pp": chooser("/events/0/phases", 30, |j| serde_json::json!([{ "bits": 8, "lanes": 1, "value": j % 2 }])),
+        "pp0": chooser("/events/0/phases/0", 30, |j| serde_json::json!({ "value": j % 2 })),
+        "bits": { "default": "eight", "choices": { "eight": { "sets": { "/events/0/phases/0/bits": 8 } }, "four": { "sets": { "/events/0/phases/0/bits": 4 } } } },
+    });
+    let mut one_prefix = serde_json::Map::new();
+    for k in 0..20 {
+        let cs = |j: usize| serde_json::json!({ "cs": if j == 0 { "released" } else { "held" } });
+        one_prefix.insert(format!("p{k}"), chooser("/events/0", 2, cs));
+    }
+    one_prefix.insert(
+        "n".into(),
+        serde_json::json!({ "default": "nine", "choices": { "nine": { "sets": { "/events/0/t_ps": 9 } } } }),
+    );
+    let cases = [
+        (
+            "four params of 30 arms on one way",
+            spi_with(&deep, "\"bits\": \"four\""),
+        ),
+        (
+            "twenty params on one prefix",
+            spi_with(&Value::Object(one_prefix), "\"n\": \"nine\""),
+        ),
+    ];
+    let (send, receive) = std::sync::mpsc::channel();
+    for (label, project) in cases {
+        let send = send.clone();
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            let found = orbe_scene::read(&project.path().join("scene.jsonc")).err();
+            send.send((label, found, started.elapsed())).unwrap();
+        });
+    }
+    for _ in 0..2 {
+        let (label, found, took) = receive
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect(
+                "a part file's check took over a second; it grows with the product of the arms",
+            );
+        println!("{label}: {took:?}");
+        match label {
+            "four params of 30 arms on one way" => assert!(found.is_none(), "{found:#?}"),
+            _ => {
+                let found = found.unwrap();
+                assert_eq!(found.len(), 19, "{found:#?}");
+                assert!(
+                    found
+                        .iter()
+                        .all(|d| d.message.starts_with("params `p0` and `p")
+                            && d.message.ends_with("both write `/events/0`")),
+                    "{found:#?}"
+                );
+            }
+        }
+    }
+}
