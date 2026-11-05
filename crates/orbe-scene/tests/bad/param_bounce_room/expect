@@ -1,0 +1,1 @@
+scene.param scene.jsonc:6:55 | `btn1.bounce` is 5ns; with max_bounces 2, it must be at least 8ns | at least 8ns

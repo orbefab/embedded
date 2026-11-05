@@ -1,0 +1,1 @@
+scene.param parts/r.jsonc:6:5 | param `trim` writes `/resistance/value`, inside `/resistance`, which param `resistance` writes | let one param write `/resistance/value`

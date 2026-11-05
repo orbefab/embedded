@@ -1,0 +1,2 @@
+not_simulated scene.jsonc:16:6 | nano.A6: The engine's atmega328p kind has the DIP's pins, with no ADC6 or ADC7 pad.
+not_simulated scene.jsonc:17:6 | nano.A7: The engine's atmega328p kind has the DIP's pins, with no ADC6 or ADC7 pad.

@@ -1,0 +1,8 @@
+// A part that holds itself.
+{
+  "format": 1,
+  "parts": {
+    "inner": { "type": "./loop.jsonc" },
+  },
+  "pins": { "a": "inner.a", "b": "inner.b" },
+}

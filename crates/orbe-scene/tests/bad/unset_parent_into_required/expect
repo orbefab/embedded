@@ -1,0 +1,1 @@
+scene.param parts/held.jsonc:4:54 | `btn1.sw` needs param `bounce`, and `bounce` passes nothing while it is unset | give `bounce` a default other than null

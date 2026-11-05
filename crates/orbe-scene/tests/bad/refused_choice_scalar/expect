@@ -1,0 +1,2 @@
+scene.param parts/sw.jsonc:5:5 | `/bounce/window` passes through `bounce`, which choice param `mode` sets to 5 | write `bounce` as an object in that choice
+scene.param parts/sw.jsonc:7:5 | `/bounce/max_bounces` passes through `bounce`, which choice param `mode` sets to 5 | write `bounce` as an object in that choice

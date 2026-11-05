@@ -1,0 +1,12 @@
+// parts/pulled-button.jsonc. A push button with its pull-down. `out` reads high while pressed.
+{
+  "format": 1,
+  "params": { "resistance": { "default": "10k" } },
+  "parts": {
+    "sw": { "type": "tactile-switch-6mm" },
+    "r": { "type": "resistor-axial", "resistance": { "param": "resistance" } },
+  },
+  "wires": [["sw.a", "r.a"]],
+  "layout": { "r": { "at": [0, -6.35, 0], "rotate": [0, 0, 90] } },
+  "pins": { "out": "sw.a", "vcc": "sw.b", "gnd": "r.b" },
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "pins": { "a": [1], "b": [2] },
+  "params": { "presses": { "default": "fast", "choices": { "fast": { "sets": { "/events": [{ "t_ps": 1000000000, "state": "closed" }, { "t_ps": 2000000000, "state": "open" }] } }, "slow": { "sets": { "/events": [{ "t_ps": 5000000000, "state": "closed" }, { "t_ps": 9000000000, "state": "open" }] } } } }, "late": { "default": "no", "choices": { "no": { "sets": { "/events/1/t_ps": 3000000000 } }, "yes": { "sets": { "/events/1/t_ps": 8000000000 } } } } },
+  "model": {
+    "kind": "switch",
+    "on_resistance": { "value": 0.1, "unit": "ohm", "source": "user" },
+    "off_resistance": { "value": 1e8, "unit": "ohm", "source": "user" },
+    "initial": "open",
+    "events": [{ "t_ps": 1000000000, "state": "closed" }, { "t_ps": 3000000000, "state": "open" }],
+    "bounce": null,
+  },
+}

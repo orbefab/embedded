@@ -1,0 +1,6 @@
+{
+  "format": 1,
+  "params": { "wipe": { "default": null } },
+  "parts": { "r": { "type": "./ohm.jsonc", "resistance": { "param": "wipe" } } },
+  "pins": { "a": "r.a", "b": "r.b" },
+}

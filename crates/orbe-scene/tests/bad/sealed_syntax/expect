@@ -1,0 +1,1 @@
+scene.syntax parts/led-5mm/part.jsonc:31:19 | Unexpected token | restore it with `orbe add led-5mm --overwrite`, or copy it to a path to make it your own

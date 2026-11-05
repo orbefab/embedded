@@ -1,0 +1,2 @@
+scene.param scene.jsonc:10:54 | `c1.capacitance`: `x` is not a prefix or unit of F | "100n"
+scene.param scene.jsonc:10:71 | `c1.initial`: `x` is not a prefix or unit of V | "3.3V"

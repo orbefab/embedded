@@ -1,0 +1,1 @@
+scene.param scene.jsonc:6:76 | `btn1.max_bounces` has no effect while `btn1.bounce` is null | give `btn1.bounce` a value

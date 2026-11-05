@@ -1,0 +1,2 @@
+scene.param scene.jsonc:6:55 | `btn1.bounce` is 1ns; with max_bounces 2, it must be at least 8ns | at least 8ns
+scene.unknown_pin scene.jsonc:17:14 | anod | anode

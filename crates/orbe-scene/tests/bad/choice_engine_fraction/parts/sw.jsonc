@@ -1,0 +1,18 @@
+{
+  "format": 1,
+  "pins": { "a": [1], "b": [2] },
+  "params": {
+    "speed": { "default": "fast", "choices": {
+      "fast": { "sets": { "/bounce/window": { "value": 1000000000.0, "unit": "ps", "source": "user" } } },
+      "odd": { "sets": { "/bounce/window": { "value": 1.5, "unit": "ps", "source": "user" } } },
+    } },
+  },
+  "model": {
+    "kind": "switch",
+    "on_resistance": { "value": 0.1, "unit": "ohm", "source": "user" },
+    "off_resistance": { "value": 1e8, "unit": "ohm", "source": "user" },
+    "initial": "open",
+    "events": [],
+    "bounce": { "window": { "value": 1000000000, "unit": "ps", "source": "user" }, "max_bounces": { "value": 2, "unit": "1", "source": "user" } },
+  },
+}

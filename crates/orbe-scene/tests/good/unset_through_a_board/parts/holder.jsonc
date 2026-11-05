@@ -1,0 +1,6 @@
+{
+  "format": 1,
+  "params": { "initial": { "default": null } },
+  "parts": { "c": { "type": "./cap.jsonc", "initial": { "param": "initial" } } },
+  "pins": { "a": "c.a", "b": "c.b" },
+}

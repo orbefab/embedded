@@ -1,0 +1,2 @@
+scene.param parts/sw.jsonc:5:5 | `bounce`, which is null
+scene.param parts/sw.jsonc:6:5 | `bounce`, which is null

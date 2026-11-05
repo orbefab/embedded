@@ -1,0 +1,2 @@
+netlist.schedule parts/sw.jsonc:9:26 | events[0] is at 0 ps | later than 0
+scene.param scene.jsonc:8:53 | `r1.resistance`: 0 is out of range | greater than 0 ohm

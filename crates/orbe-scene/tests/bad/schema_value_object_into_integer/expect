@@ -1,0 +1,1 @@
+scene.param scene.jsonc:10:51 | `src.when`: the engine does not read `voltage.at_ps` | point the param's `sets` at a field that takes a value object

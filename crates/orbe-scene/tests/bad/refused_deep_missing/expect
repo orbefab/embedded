@@ -1,0 +1,1 @@
+scene.param parts/sw.jsonc:6:5 | passes through `bounce.max_bounces`, which is missing in `model` | write `bounce.max_bounces` as an object

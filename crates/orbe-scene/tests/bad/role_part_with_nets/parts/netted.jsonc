@@ -1,0 +1,6 @@
+{
+  "format": 1,
+  "parts": { "sw": { "type": "tactile-switch-6mm" } },
+  "pins": { "a": "sw.a", "b": "sw.b" },
+  "nets": { "SW": "sw.a" },
+}
