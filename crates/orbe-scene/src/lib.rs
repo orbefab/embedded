@@ -22,7 +22,7 @@ mod units;
 use std::path::Path;
 
 pub use add::{Reply, Request, RunError, run as add_parts};
-pub use circuit::Netlist;
+pub use circuit::{Amount, EnginePart, MapPart, Netlist, Reading, RefMap};
 pub use diagnostic::{Code, Diagnostic};
 pub use project::{REGISTRY, folder_hash};
 
