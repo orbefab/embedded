@@ -1,10 +1,10 @@
-//! `orbe`, the CLI. This first version has one command, `orbe check`.
+//! `orbe`, the CLI. `orbe check` type-checks a scene. `orbe add` copies catalog parts.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use orbe_scene::Diagnostic;
+use orbe_scene::{Diagnostic, Reply, Request};
 use serde_json::{Value, json};
 
 #[derive(Parser)]
@@ -24,6 +24,23 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Copies catalog parts into `parts/` and writes `parts.lock`.
+    Add {
+        /// Part ids. A version is `id@0.1.0`.
+        ids: Vec<String>,
+        /// Replace a copy that differs within the same major version.
+        #[arg(long)]
+        overwrite: bool,
+        /// Show what would change, and write nothing.
+        #[arg(long)]
+        diff: bool,
+        /// Rebuild `parts.lock` from the part folders.
+        #[arg(long)]
+        relock: bool,
+        /// Print one JSON envelope instead of text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 const FAILED: u8 = 1;
@@ -35,6 +52,13 @@ fn main() -> ExitCode {
     match Cli::try_parse() {
         Ok(cli) => match cli.command {
             Command::Check { scene, json } => check(&scene, json),
+            Command::Add {
+                ids,
+                overwrite,
+                diff,
+                relock,
+                json,
+            } => add(&ids, overwrite, diff, relock, json),
         },
         Err(err) => usage(err),
     }
@@ -126,6 +150,48 @@ fn check(scene: &Path, json: bool) -> ExitCode {
             ExitCode::from(FAILED)
         }
     }
+}
+
+fn add(ids: &[String], overwrite: bool, diff: bool, relock: bool, json: bool) -> ExitCode {
+    let root = match std::env::current_dir() {
+        Ok(root) => root,
+        Err(error) => {
+            return io_exit(&format!("cannot use the current directory: {error}"), json);
+        }
+    };
+    let request = Request {
+        ids: ids.to_vec(),
+        overwrite,
+        diff,
+        relock,
+    };
+    match orbe_scene::add_parts(&root, &request) {
+        Ok(reply) => print_reply(reply, json),
+        Err(error) => io_exit(&error.to_string(), json),
+    }
+}
+
+fn print_reply(reply: Reply, json: bool) -> ExitCode {
+    if json {
+        print_json(&reply.json());
+    } else if reply.code() == USAGE {
+        eprintln!("{}", reply.text());
+    } else {
+        println!("{}", reply.text());
+    }
+    ExitCode::from(reply.code())
+}
+
+fn io_exit(message: &str, json: bool) -> ExitCode {
+    if json {
+        print_json(&json!({
+            "ok": false,
+            "error": { "code": "io_error", "message": message }
+        }));
+    } else {
+        eprintln!("error[io_error]: {message}");
+    }
+    ExitCode::from(IO)
 }
 
 fn print_json(value: &Value) {

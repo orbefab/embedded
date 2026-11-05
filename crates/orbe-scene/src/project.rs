@@ -150,21 +150,20 @@ impl Loader<'_> {
                 end: start + line.trim_end().len(),
             };
             start += line.len();
-            let fields: Vec<&str> = line.split_whitespace().collect();
-            match fields.as_slice() {
-                [] => {}
-                [id, version, registry, hash] if hash.starts_with("sha256:") => {
+            match lock_fields(line) {
+                Ok(None) => {}
+                Ok(Some(fields)) => {
                     self.lock.insert(
-                        id.to_string(),
+                        fields.id,
                         LockLine {
-                            version: version.to_string(),
-                            registry: registry.to_string(),
-                            hash: hash.to_string(),
+                            version: fields.version,
+                            registry: fields.registry,
+                            hash: fields.hash,
                             span,
                         },
                     );
                 }
-                _ => self.out.push(
+                Err(()) => self.out.push(
                     Code::Syntax,
                     span,
                     "a parts.lock line is `<id> <version> <registry> sha256:<hash>`",
@@ -537,8 +536,51 @@ impl Loader<'_> {
 }
 
 /// A catalog part is sealed when it has a model, or when it has no children of its own.
-fn is_sealed(tree: &Node) -> bool {
+pub(crate) fn is_sealed(tree: &Node) -> bool {
     tree.get("model").is_some() || tree.get("parts").is_none()
+}
+
+/// One `parts.lock` line. The hash includes the `sha256:` prefix.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LockFields {
+    pub(crate) id: String,
+    pub(crate) version: String,
+    pub(crate) registry: String,
+    pub(crate) hash: String,
+}
+
+impl LockFields {
+    pub(crate) fn line(&self) -> String {
+        format!(
+            "{} {} {} {}",
+            self.id, self.version, self.registry, self.hash
+        )
+    }
+}
+
+/// `Ok(None)` is a blank line. `Err` is a line that is not the lock format.
+pub(crate) fn lock_fields(line: &str) -> Result<Option<LockFields>, ()> {
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    match fields.as_slice() {
+        [] => Ok(None),
+        [id, version, registry, hash] if hash.starts_with("sha256:") => Ok(Some(LockFields {
+            id: (*id).to_string(),
+            version: (*version).to_string(),
+            registry: (*registry).to_string(),
+            hash: (*hash).to_string(),
+        })),
+        _ => Err(()),
+    }
+}
+
+/// Lock text sorted by id, one line each, with a trailing newline when there is a line.
+pub(crate) fn render_lock(lines: &BTreeMap<String, LockFields>) -> String {
+    let mut out = String::new();
+    for line in lines.values() {
+        out.push_str(&line.line());
+        out.push('\n');
+    }
+    out
 }
 
 /// The first field where a copy's `part.jsonc` differs from the catalog's, as a dotted path,

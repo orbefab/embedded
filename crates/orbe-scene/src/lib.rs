@@ -5,6 +5,7 @@
 //! and needs a line in `parts.lock`. A `./` or `../` path reads a part of the user's own,
 //! relative to the file that names it.
 
+mod add;
 mod catalog;
 mod circuit;
 mod diagnostic;
@@ -19,6 +20,7 @@ mod units;
 
 use std::path::Path;
 
+pub use add::{Reply, Request, RunError, run as add_parts};
 pub use circuit::Netlist;
 pub use diagnostic::{Code, Diagnostic};
 pub use project::{REGISTRY, folder_hash};
