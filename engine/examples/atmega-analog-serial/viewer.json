@@ -1,0 +1,23 @@
+{
+  "version": 0,
+  "parts": {
+    "v1": {
+      "model": "placeholder:dc-supply"
+    },
+    "rv1": {
+      "model": "placeholder:potentiometer-rotary"
+    },
+    "cx1": {
+      "model": "placeholder:capacitor-ceramic"
+    },
+    "cx2": {
+      "model": "placeholder:capacitor-ceramic"
+    },
+    "cref": {
+      "model": "placeholder:capacitor-ceramic"
+    },
+    "u1": {
+      "model": "placeholder:dip-28"
+    }
+  }
+}

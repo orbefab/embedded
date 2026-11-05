@@ -1,0 +1,74 @@
+{
+  "version": 0,
+  "parts": {
+    "usb_vbus": {
+      "model": "placeholder:on-board"
+    },
+    "usb_fuse": {
+      "model": "placeholder:on-board"
+    },
+    "usb_switch": {
+      "model": "placeholder:on-board"
+    },
+    "reg_3v3": {
+      "model": "placeholder:on-board"
+    },
+    "c3": {
+      "model": "placeholder:on-board"
+    },
+    "mcu": {
+      "model": "placeholder:dev-board-328p"
+    },
+    "res_xtal1": {
+      "model": "placeholder:on-board"
+    },
+    "res_xtal2": {
+      "model": "placeholder:on-board"
+    },
+    "c_aref": {
+      "model": "placeholder:on-board"
+    },
+    "usb_tx": {
+      "model": "placeholder:on-board"
+    },
+    "r_rx": {
+      "model": "placeholder:on-board"
+    },
+    "usb_dtr": {
+      "model": "placeholder:on-board"
+    },
+    "dtr_out": {
+      "model": "placeholder:on-board"
+    },
+    "r_dtr_boot": {
+      "model": "placeholder:on-board"
+    },
+    "c_reset": {
+      "model": "placeholder:on-board"
+    },
+    "r_reset": {
+      "model": "placeholder:on-board"
+    },
+    "d_reset": {
+      "model": "placeholder:on-board"
+    },
+    "sw_reset": {
+      "model": "placeholder:on-board"
+    },
+    "r_l": {
+      "model": "placeholder:on-board"
+    },
+    "led_l": {
+      "model": "placeholder:on-board"
+    },
+    "r_on_a": {
+      "model": "placeholder:on-board"
+    },
+    "r_on_b": {
+      "model": "placeholder:on-board"
+    },
+    "led_on": {
+      "model": "placeholder:on-board"
+    }
+  }
+}

@@ -1,0 +1,79 @@
+chip: ESP32-S3 (QFN56)
+revision: v0.2
+toolchain: xtensa-esp-elf-gcc (crosstool-NG esp-14.2.0_20260121) 14.2.0
+image_sha256: b4bc39a6908c3c0ef5d7b600627db814d51bfaa889b3c0e626dd5bc24e0dd001
+seed: none
+vectors: 0
+probe: unaligned
+---
+BEGIN unaligned
+dram_buf 3fcb0100
+iram_buf 40378dc0
+dram l32 +=00 v=13121110 e=ff n=00 va=00000000
+dram l32 +=01 v=14131211 e=ff n=00 va=00000000
+dram l32 +=02 v=15141312 e=ff n=00 va=00000000
+dram l32 +=03 v=16151413 e=ff n=00 va=00000000
+dram l32 +=07 v=1a191817 e=ff n=00 va=00000000
+dram l32 +=0f v=2221201f e=ff n=00 va=00000000
+dram l16u +=00 v=00001110 e=ff n=00 va=00000000
+dram l16s +=00 v=00001110 e=ff n=00 va=00000000
+dram l16u +=01 v=00001211 e=ff n=00 va=00000000
+dram l16s +=01 v=00001211 e=ff n=00 va=00000000
+dram l16u +=03 v=00001413 e=ff n=00 va=00000000
+dram l16s +=03 v=00001413 e=ff n=00 va=00000000
+dram l8 +=01 v=00000011 e=ff n=00 va=00000000
+dram l32ai +=00 v=13121110 e=ff n=00 va=00000000
+dram l32ai +=01 v=a5a5a5a5 e=09 n=01 va=3fcb0101
+dram s32 +=00 w0=ddccbbaa w1=17161514 e=ff n=00 va=00000000
+dram s32 +=01 w0=ccbbaa10 w1=171615dd e=ff n=00 va=00000000
+dram s32 +=02 w0=bbaa1110 w1=1716ddcc e=ff n=00 va=00000000
+dram s32 +=03 w0=aa121110 w1=17ddccbb e=ff n=00 va=00000000
+dram s32 +=0f w0=aa1e1d1c w1=23ddccbb e=ff n=00 va=00000000
+dram s16 +=01 w0=13bbaa10 w1=17161514 e=ff n=00 va=00000000
+dram s16 +=03 w0=aa121110 w1=171615bb e=ff n=00 va=00000000
+dram s8 +=01 w0=1312aa10 w1=17161514 e=ff n=00 va=00000000
+dram s32ri +=00 w0=ddccbbaa w1=17161514 e=ff n=00 va=00000000
+dram s32ri +=02 w0=13121110 w1=17161514 e=09 n=01 va=3fcb0102
+iram l32 +=00 v=13121110 e=ff n=00 va=00000000
+iram l32 +=01 v=a5a5a5a5 e=09 n=01 va=40378dc1
+iram l32 +=02 v=a5a5a5a5 e=09 n=01 va=40378dc2
+iram l32 +=03 v=a5a5a5a5 e=09 n=01 va=40378dc3
+iram l32 +=07 v=a5a5a5a5 e=09 n=01 va=40378dc7
+iram l32 +=0f v=a5a5a5a5 e=09 n=01 va=40378dcf
+iram l16u +=00 v=a5a5a5a5 e=03 n=01 va=40378dc0
+iram l16s +=00 v=a5a5a5a5 e=03 n=01 va=40378dc0
+iram l16u +=01 v=a5a5a5a5 e=09 n=01 va=40378dc1
+iram l16s +=01 v=a5a5a5a5 e=09 n=01 va=40378dc1
+iram l16u +=03 v=a5a5a5a5 e=09 n=01 va=40378dc3
+iram l16s +=03 v=a5a5a5a5 e=09 n=01 va=40378dc3
+iram l8 +=01 v=a5a5a5a5 e=03 n=01 va=40378dc1
+iram l32ai +=00 v=a5a5a5a5 e=03 n=01 va=40378dc0
+iram l32ai +=01 v=a5a5a5a5 e=09 n=01 va=40378dc1
+iram s32 +=00 w0=ddccbbaa w1=17161514 e=ff n=00 va=00000000
+iram s32 +=01 w0=13121110 w1=17161514 e=09 n=01 va=40378dc1
+iram s32 +=02 w0=13121110 w1=17161514 e=09 n=01 va=40378dc2
+iram s32 +=03 w0=13121110 w1=17161514 e=09 n=01 va=40378dc3
+iram s32 +=0f w0=1f1e1d1c w1=23222120 e=09 n=01 va=40378dcf
+iram s16 +=01 w0=13121110 w1=17161514 e=09 n=01 va=40378dc1
+iram s16 +=03 w0=13121110 w1=17161514 e=09 n=01 va=40378dc3
+iram s8 +=01 w0=13121110 w1=17161514 e=03 n=01 va=40378dc1
+iram s32ri +=00 w0=13121110 w1=17161514 e=03 n=01 va=40378dc0
+iram s32ri +=02 w0=13121110 w1=17161514 e=09 n=01 va=40378dc2
+irom l32 +=00 v=00001406 e=ff n=00 va=00000000
+irom l32 +=01 v=a5a5a5a5 e=09 n=01 va=40000401
+irom l32 +=02 v=a5a5a5a5 e=09 n=01 va=40000402
+irom l32 +=03 v=a5a5a5a5 e=09 n=01 va=40000403
+irom l16u +=01 v=a5a5a5a5 e=09 n=01 va=40000401
+irom l8 +=01 v=a5a5a5a5 e=03 n=01 va=40000401
+drom l32 +=00 v=0c080400 e=ff n=00 va=00000000
+drom l32 +=01 v=100c0804 e=ff n=00 va=00000000
+drom l32 +=02 v=13100c08 e=ff n=00 va=00000000
+drom l32 +=03 v=1613100c e=ff n=00 va=00000000
+drom l16u +=01 v=00000804 e=ff n=00 va=00000000
+drom l8 +=01 v=00000004 e=ff n=00 va=00000000
+edge l32 +=01 v=14131211 e=ff n=00 va=00000000
+edge l32 +=02 v=15141312 e=ff n=00 va=00000000
+edge l32 +=03 v=16151413 e=ff n=00 va=00000000
+edge s32 +=02 w0=bbaa1110 w1=1716ddcc e=ff n=00 va=00000000
+mmu_valid=08c first=000 entry=00000005 spiram=080
+END unaligned

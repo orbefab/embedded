@@ -1,0 +1,19 @@
+[package]
+name = "sim-avr"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+autotests = false
+
+[features]
+# Turns on the check that a skipped store changes no pin, and is off by default because the check costs about what the skip saves.
+port-skip-check = []
+
+[[test]]
+name = "suite"
+path = "tests/main.rs"
+
+[lints]
+workspace = true

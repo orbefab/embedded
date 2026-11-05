@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "seed": 0,
+  "analysis": { "op": {} },
+  "ground": "gnd",
+  "nets": ["gnd"],
+  "parts": []
+}

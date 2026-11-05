@@ -1,0 +1,23 @@
+{
+  "version": 0,
+  "parts": {
+    "v1": {
+      "model": "placeholder:dc-supply"
+    },
+    "u1": {
+      "model": "placeholder:qfn-56"
+    },
+    "r52": {
+      "model": "placeholder:on-board"
+    },
+    "r53": {
+      "model": "placeholder:on-board"
+    },
+    "sw_a": {
+      "model": "placeholder:on-board"
+    },
+    "sw_b": {
+      "model": "placeholder:on-board"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": { "op": {} },
+  "ground": "earth",
+  "nets": ["gnd"],
+  "parts": []
+}

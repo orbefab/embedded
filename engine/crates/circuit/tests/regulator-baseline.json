@@ -1,0 +1,108 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": {
+    "transient": {
+      "stop_ps": 5000000000,
+      "max_step_ps": 100000000,
+      "grid_ps": 10000000
+    }
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "ld",
+    "vout"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vout",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 3.3,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "c1",
+      "kind": "capacitor",
+      "pins": {
+        "a": "vout",
+        "b": "gnd"
+      },
+      "capacitance": {
+        "value": 1e-05,
+        "unit": "F",
+        "source": "user"
+      },
+      "initial": null
+    },
+    {
+      "name": "rl",
+      "kind": "resistor",
+      "pins": {
+        "a": "vout",
+        "b": "gnd"
+      },
+      "resistance": {
+        "value": 330.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "sw1",
+      "kind": "switch",
+      "pins": {
+        "a": "vout",
+        "b": "ld"
+      },
+      "on_resistance": {
+        "value": 0.01,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "off_resistance": {
+        "value": 1000000000.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "initial": "open",
+      "events": [
+        {
+          "t_ps": 1000000000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 3000000000,
+          "state": "open"
+        }
+      ],
+      "bounce": null
+    },
+    {
+      "name": "rl2",
+      "kind": "resistor",
+      "pins": {
+        "a": "ld",
+        "b": "gnd"
+      },
+      "resistance": {
+        "value": 6.6,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    }
+  ]
+}

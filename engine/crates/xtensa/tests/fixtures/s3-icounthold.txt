@@ -1,0 +1,20 @@
+chip: ESP32-S3 (QFN56)
+revision: v0.2
+toolchain: xtensa-esp-elf-gcc (crosstool-NG esp-14.2.0_20260121) 14.2.0
+image_sha256: 8fc7ed02fda938be1d4068fc6a2cafb7037f0a34b079ba03ad8de294d50d8fcb
+seed: none
+vectors: 0
+probe: icounthold
+---
+BEGIN icounthold
+case level1_int1
+level1_int1 icount=fffffffc n=00
+case masked_m100
+masked_m100 icount=ffffffa4 n=00
+case open6_m4
+open6_m4 icount=ffffffff n=01 at=06 ic=ffffffff cause=01 eps=00060000
+case open6_m1
+open6_m1 icount=ffffffff n=01 at=fd ic=ffffffff cause=01 eps=00060000
+case level6_int5
+level6_int5 icount=ffffffff n=01 at=06 ic=ffffffff cause=01 eps=00060005
+END icounthold

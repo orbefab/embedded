@@ -9,7 +9,7 @@ Orbefab's **Embedded systems** branch: open-source mechatronics software built f
 - **Orbe Blocks**: comes later, after the architecture and core decisions.
 - Skills, examples and parts (sim model, specs, 3D) follow.
 
-Right now the repo holds docs only.
+The engine lives in [`engine/`](engine/), with its own [`AGENTS.md`](engine/AGENTS.md) and docs. The rest is docs for now.
 
 ## License
 

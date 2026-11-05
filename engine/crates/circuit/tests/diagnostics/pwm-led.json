@@ -1,0 +1,34 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": { "transient": { "stop_ps": 20000000, "max_step_ps": 1000000, "grid_ps": 1000000 } },
+  "ground": "gnd",
+  "nets": ["gnd", "vled"],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": { "p": "vled", "n": "gnd" },
+      "voltage": {
+        "kind": "pulse",
+        "initial": { "value": 0.0, "unit": "V", "source": "user" },
+        "pulsed": { "value": 5.0, "unit": "V", "source": "user" },
+        "delay_ps": 2000000,
+        "width_ps": 5000000,
+        "period_ps": 20000000
+      }
+    },
+    {
+      "name": "led1",
+      "kind": "led",
+      "pins": { "anode": "vled", "cathode": "gnd" },
+      "saturation_current": { "value": 6.711e-10, "unit": "A", "source": "user" },
+      "emission_coefficient": { "value": 4.427, "unit": "1", "source": "user" },
+      "series_resistance": { "value": 2.115, "unit": "ohm", "source": "user" },
+      "ratings": {
+        "current": { "value": 0.03, "unit": "A", "source": "user" },
+        "power": { "value": 0.075, "unit": "W", "source": "user" }
+      }
+    }
+  ]
+}

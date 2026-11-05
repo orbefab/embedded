@@ -1,0 +1,20 @@
+{
+  "version": 0,
+  "parts": {
+    "v1": {
+      "model": "placeholder:dc-supply"
+    },
+    "u1": {
+      "model": "placeholder:qfn-56"
+    },
+    "rscl": {
+      "model": "placeholder:on-board"
+    },
+    "rsda": {
+      "model": "placeholder:on-board"
+    },
+    "u2": {
+      "model": "placeholder:cst816"
+    }
+  }
+}

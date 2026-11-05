@@ -1,0 +1,22 @@
+chip: ESP32-S3 (QFN56)
+revision: v0.2
+toolchain: xtensa-esp-elf-gcc (crosstool-NG esp-14.2.0_20260121) 14.2.0
+image_sha256: c02fc9a72dd885ecfc34f5758429378e2c3dd4cc25412df83db5f9a2d6d277b9
+seed: none
+vectors: 0
+probe: icounthang_masked
+---
+BEGIN icounthang
+case masked_m4
+body 40378803
+vecbase 40378000
+core0 stuck n=00000000
+sample=0 pc=40378280 body=fffffa7d vec=00000280 inst=06003000 status=10
+sample=1 pc=40378280 body=fffffa7d vec=00000280 inst=06003000 status=10
+sample=2 pc=40378280 body=fffffa7d vec=00000280 inst=06003000 status=10
+sample=3 pc=40378280 body=fffffa7d vec=00000280 inst=06003000 status=10
+sample=4 pc=40378280 body=fffffa7d vec=00000280 inst=06003000 status=10
+sample=5 pc=40378280 body=fffffa7d vec=00000280 inst=06003000 status=10
+sample=6 pc=40378280 body=fffffa7d vec=00000280 inst=06003000 status=10
+sample=7 pc=40378280 body=fffffa7d vec=00000280 inst=06003000 status=10
+END icounthang

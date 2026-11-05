@@ -1,0 +1,68 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": {
+    "op": {}
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "a",
+    "c"
+  ],
+  "parts": [
+    {
+      "name": "va",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "a",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 5.0,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "vc",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "c",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 8.0,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "d1",
+      "kind": "diode",
+      "pins": {
+        "anode": "a",
+        "cathode": "c"
+      },
+      "saturation_current": {
+        "value": 1e-14,
+        "unit": "A",
+        "source": "user"
+      },
+      "emission_coefficient": {
+        "value": 1.0,
+        "unit": "1",
+        "source": "user"
+      },
+      "series_resistance": {
+        "value": 1.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "current": null,
+        "power": null
+      }
+    }
+  ]
+}

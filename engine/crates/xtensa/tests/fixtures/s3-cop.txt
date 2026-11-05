@@ -1,0 +1,25 @@
+chip: ESP32-S3 (QFN56)
+revision: v0.2
+toolchain: xtensa-esp-elf-gcc (crosstool-NG esp-14.2.0_20260121) 14.2.0
+image_sha256: d981739a69bf120570c050febcc1522ff28ff5f8120f22afc7b66dcf0c1bca80
+seed: none
+vectors: 0
+probe: cop
+---
+BEGIN cop
+ee.zero.q cp=00 e=23 n=01 epc=00
+ld.qr cp=00 e=23 n=01 epc=00
+st.qr cp=00 e=23 n=01 epc=00
+add.s cp=00 e=20 n=01 epc=00
+ee.zero.q cp=01 e=23 n=01 epc=00
+ld.qr cp=01 e=23 n=01 epc=00
+st.qr cp=01 e=23 n=01 epc=00
+add.s cp=01 e=ff n=00 epc=00
+ee.zero.q cp=08 e=ff n=00 epc=00
+ld.qr cp=08 e=ff n=00 epc=00
+st.qr cp=08 e=ff n=00 epc=00
+add.s cp=08 e=20 n=01 epc=00
+copy 11112222 33334444 55556666 77778888
+zero 00000000 00000000 00000000 00000000
+cpenable_end 00000000
+END cop

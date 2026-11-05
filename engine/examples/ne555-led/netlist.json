@@ -1,0 +1,308 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": {
+    "transient": {
+      "stop_ps": 4000000000000,
+      "max_step_ps": 10000000000,
+      "grid_ps": 10000000000
+    }
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "vcc",
+    "dis",
+    "thr",
+    "cont",
+    "out",
+    "vled"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vcc",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 5.0,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "ra",
+      "kind": "resistor",
+      "pins": {
+        "a": "vcc",
+        "b": "dis"
+      },
+      "resistance": {
+        "value": 10000.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "rb",
+      "kind": "resistor",
+      "pins": {
+        "a": "dis",
+        "b": "thr"
+      },
+      "resistance": {
+        "value": 47000.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "c1",
+      "kind": "capacitor",
+      "pins": {
+        "a": "thr",
+        "b": "gnd"
+      },
+      "capacitance": {
+        "value": 1e-05,
+        "unit": "F",
+        "source": "user"
+      },
+      "initial": {
+        "value": 0.0,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "ccont",
+      "kind": "capacitor",
+      "pins": {
+        "a": "cont",
+        "b": "gnd"
+      },
+      "capacitance": {
+        "value": 1e-08,
+        "unit": "F",
+        "source": {
+          "datasheet": {
+            "doc": "TI NE555, SLFS022K, March 2026",
+            "at": "Figure 6-5, Circuit for Astable Operation, CONT decoupling 0.01 uF",
+            "basis": "nominal"
+          }
+        }
+      },
+      "initial": null
+    },
+    {
+      "name": "u1",
+      "kind": "ne555",
+      "pins": {
+        "gnd": "gnd",
+        "trig": "thr",
+        "out": "out",
+        "reset": "vcc",
+        "cont": "cont",
+        "thres": "thr",
+        "disch": "dis",
+        "vcc": "vcc"
+      },
+      "ladder_resistance": {
+        "value": 5000.0,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "TI LM555, SNAS548D, January 2015",
+            "at": "Schematic Diagram, R3, R4, R5 = 5k (pin-compatible NE555 replacement per Features)",
+            "basis": "nominal"
+          }
+        }
+      },
+      "reset_threshold": {
+        "value": 0.7,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "TI NE555, SLFS022K, March 2026",
+            "at": "5.5 Electrical Characteristics, RESET voltage level, typ",
+            "basis": "typical"
+          }
+        }
+      },
+      "discharge": {
+        "on_resistance": {
+          "value": 18.75,
+          "unit": "ohm",
+          "source": {
+            "datasheet": {
+              "doc": "TI NE555, SLFS022K, March 2026",
+              "at": "5.5 Electrical Characteristics, DISCH switch on-state voltage 0.15 V typ at VCC = 5 V, IO = 8 mA; 0.15 V / 8 mA",
+              "basis": "typical"
+            }
+          }
+        },
+        "off_resistance": {
+          "value": 250000000.0,
+          "unit": "ohm",
+          "source": {
+            "datasheet": {
+              "doc": "TI NE555, SLFS022K, March 2026",
+              "at": "5.5 Electrical Characteristics, DISCH switch off-state current 20 nA typ; 5 V / 20 nA at VCC = 5 V",
+              "basis": "typical"
+            }
+          }
+        }
+      },
+      "supply_resistance": {
+        "value": 1875.0,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "TI NE555, SLFS022K, March 2026",
+            "at": "5.5 Electrical Characteristics, supply current 3 mA typ, output low, no load, VCC = 5 V; 5 V / (3 mA - 5 V / 15 kohm ladder)",
+            "basis": "typical"
+          }
+        }
+      },
+      "output": {
+        "high_drop": {
+          "value": 0.9,
+          "unit": "V",
+          "source": {
+            "datasheet": {
+              "doc": "TI NE555, SLFS022K, March 2026",
+              "at": "5.5 Electrical Characteristics, high-level output voltage at VCC = 15 V: 13.3 V typ at IOH = -100 mA, 12.5 V typ at -200 mA; line through both, drop at 0 A",
+              "basis": "typical"
+            }
+          }
+        },
+        "high_resistance": {
+          "value": 8.0,
+          "unit": "ohm",
+          "source": {
+            "datasheet": {
+              "doc": "TI NE555, SLFS022K, March 2026",
+              "at": "5.5 Electrical Characteristics, high-level output voltage at VCC = 15 V: 13.3 V typ at IOH = -100 mA, 12.5 V typ at -200 mA; slope of that line",
+              "basis": "typical"
+            }
+          }
+        },
+        "low_drop": {
+          "value": 0.016666666666666666,
+          "unit": "V",
+          "source": {
+            "datasheet": {
+              "doc": "TI NE555, SLFS022K, March 2026",
+              "at": "5.5 Electrical Characteristics, low-level output voltage at VCC = 5 V: 0.1 V typ at IOL = 5 mA, 0.15 V typ at 8 mA; line through both, voltage at 0 A",
+              "basis": "typical"
+            }
+          }
+        },
+        "low_resistance": {
+          "value": 16.666666666666668,
+          "unit": "ohm",
+          "source": {
+            "datasheet": {
+              "doc": "TI NE555, SLFS022K, March 2026",
+              "at": "5.5 Electrical Characteristics, low-level output voltage at VCC = 5 V: 0.1 V typ at IOL = 5 mA, 0.15 V typ at 8 mA; slope of that line",
+              "basis": "typical"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "rled",
+      "kind": "resistor",
+      "pins": {
+        "a": "out",
+        "b": "vled"
+      },
+      "resistance": {
+        "value": 220.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": {
+          "value": 0.25,
+          "unit": "W",
+          "source": "user"
+        }
+      }
+    },
+    {
+      "name": "led1",
+      "kind": "led",
+      "pins": {
+        "anode": "vled",
+        "cathode": "gnd"
+      },
+      "saturation_current": {
+        "value": 6.711e-10,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical"
+          }
+        }
+      },
+      "emission_coefficient": {
+        "value": 4.427,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical"
+          }
+        }
+      },
+      "series_resistance": {
+        "value": 2.115,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical"
+          }
+        }
+      },
+      "ratings": {
+        "current": {
+          "value": 0.03,
+          "unit": "A",
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+              "at": "Absolute Maximum Ratings at Ta = 25 C, DC forward current",
+              "basis": "absolute_max"
+            }
+          }
+        },
+        "power": {
+          "value": 0.075,
+          "unit": "W",
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+              "at": "Absolute Maximum Ratings at Ta = 25 C, power dissipation",
+              "basis": "absolute_max"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

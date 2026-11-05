@@ -1,0 +1,391 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": {
+    "transient": {
+      "stop_ps": 60000000000,
+      "max_step_ps": 1000000000,
+      "grid_ps": 50000000
+    }
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "vcc",
+    "pin",
+    "b",
+    "k",
+    "no",
+    "nc",
+    "vled"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vcc",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 5.0,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "vpin",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "pin",
+        "n": "gnd"
+      },
+      "voltage": {
+        "kind": "pulse",
+        "initial": {
+          "value": 0.0,
+          "unit": "V",
+          "source": "user"
+        },
+        "pulsed": {
+          "value": 5.0,
+          "unit": "V",
+          "source": "user"
+        },
+        "delay_ps": 5000000000,
+        "width_ps": 25000000000,
+        "period_ps": 100000000000
+      }
+    },
+    {
+      "name": "rb",
+      "kind": "resistor",
+      "pins": {
+        "a": "pin",
+        "b": "b"
+      },
+      "resistance": {
+        "value": 1000.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "q1",
+      "kind": "npn",
+      "pins": {
+        "collector": "k",
+        "base": "b",
+        "emitter": "gnd"
+      },
+      "saturation_current": {
+        "value": 8.095e-15,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "2N3903/D Rev. 8",
+            "at": "Figure 17, typical for the 2N3903 and the 2N3904 at TJ = 25 C, VBE at VCE = 1.0 V through (1 mA, 0.657 V) and (100 mA, 0.865 V), fitted by scripts/fit_transistor.py with NF = NR = 1",
+            "basis": "typical"
+          }
+        }
+      },
+      "forward_beta": {
+        "value": 173.2,
+        "unit": "1",
+        "source": {
+          "closed_form": {
+            "note": "geometric mean of the 2N3904 row's hFE, minimum 100 and maximum 300, at IC = 10 mA and VCE = 1.0 V, 2N3903/D Rev. 8 ON CHARACTERISTICS"
+          }
+        }
+      },
+      "reverse_beta": {
+        "value": 0.2704,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "2N3903/D Rev. 8",
+            "at": "Figure 17, typical for the 2N3903 and the 2N3904 at TJ = 25 C, VCE(sat) 0.100 V at IC = 1 mA, IC/IB = 10, fitted by scripts/fit_transistor.py with NF = NR = 1",
+            "basis": "typical"
+          }
+        }
+      },
+      "forward_emission": {
+        "value": 1.0,
+        "unit": "1",
+        "source": {
+          "closed_form": {
+            "note": "ideal junction"
+          }
+        }
+      },
+      "reverse_emission": {
+        "value": 1.0,
+        "unit": "1",
+        "source": {
+          "closed_form": {
+            "note": "ideal junction"
+          }
+        }
+      },
+      "early_voltage": {
+        "value": 100.0,
+        "unit": "V",
+        "source": {
+          "closed_form": {
+            "note": "puts hoe at 9.1 umhos at IC = 1 mA and VCE = 10 V, inside the 1 to 40 umhos of 2N3903/D Rev. 8"
+          }
+        }
+      },
+      "base_resistance": {
+        "value": 5.707,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "2N3903/D Rev. 8",
+            "at": "Figure 17, typical for the 2N3903 and the 2N3904 at TJ = 25 C, VBE(sat) 0.93 V at IC = 100 mA, IC/IB = 10, fitted by scripts/fit_transistor.py with NF = NR = 1",
+            "basis": "typical"
+          }
+        }
+      },
+      "collector_resistance": {
+        "value": 1.531,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "2N3903/D Rev. 8",
+            "at": "Figure 17, typical for the 2N3903 and the 2N3904 at TJ = 25 C, VCE(sat) 0.346 V at IC = 100 mA, IC/IB = 10, fitted by scripts/fit_transistor.py with NF = NR = 1",
+            "basis": "typical"
+          }
+        }
+      },
+      "emitter_resistance": {
+        "value": 0.867,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "2N3903/D Rev. 8",
+            "at": "Figure 17, typical for the 2N3903 and the 2N3904 at TJ = 25 C, VBE at VCE = 1.0 V through (1 mA, 0.657 V) and (100 mA, 0.865 V), fitted by scripts/fit_transistor.py with NF = NR = 1",
+            "basis": "typical"
+          }
+        }
+      },
+      "base_emitter_capacitance": {
+        "value": 8e-12,
+        "unit": "F",
+        "source": {
+          "datasheet": {
+            "doc": "2N3903/D Rev. 8",
+            "at": "Cibo at VEB = 0.5 V, IC = 0, f = 1.0 MHz",
+            "basis": "max"
+          }
+        }
+      },
+      "base_collector_capacitance": {
+        "value": 4e-12,
+        "unit": "F",
+        "source": {
+          "datasheet": {
+            "doc": "2N3903/D Rev. 8",
+            "at": "Cobo at VCB = 5.0 V, IE = 0, f = 1.0 MHz",
+            "basis": "max"
+          }
+        }
+      },
+      "ratings": {
+        "current": {
+          "value": 0.2,
+          "unit": "A",
+          "source": {
+            "datasheet": {
+              "doc": "2N3903/D Rev. 8",
+              "at": "MAXIMUM RATINGS, IC continuous",
+              "basis": "absolute_max"
+            }
+          }
+        },
+        "power": {
+          "value": 0.625,
+          "unit": "W",
+          "source": {
+            "datasheet": {
+              "doc": "2N3903/D Rev. 8",
+              "at": "MAXIMUM RATINGS, PD at TA = 25 C",
+              "basis": "absolute_max"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "k1",
+      "kind": "relay",
+      "pins": {
+        "coil_a": "vcc",
+        "coil_b": "k",
+        "com": "vcc",
+        "no": "no",
+        "nc": "nc"
+      },
+      "inductance": {
+        "value": 0.505,
+        "unit": "H",
+        "source": {
+          "closed_form": {
+            "note": "10 ms / ln 4 * 70 ohm = 0.504943 H reaches a pull-in of 75 % of 5 V in the 10 ms max operate time at 70 ohm, no travel, rounded to 0.505 H"
+          }
+        }
+      },
+      "coil_resistance": {
+        "value": 70.0,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "SRD, RELAY ISO9002",
+            "at": "COIL DATA CHART, 05 VDC high sensitivity, 0.36 W",
+            "basis": "typical"
+          }
+        }
+      },
+      "pull_in_current": {
+        "value": 0.05357142857142857,
+        "unit": "A",
+        "source": {
+          "closed_form": {
+            "note": "pull-in voltage 75 % max of 5 V over 70 ohm, COIL DATA CHART, 05 VDC high sensitivity"
+          }
+        }
+      },
+      "drop_out_current": {
+        "value": 0.007142857142857143,
+        "unit": "A",
+        "source": {
+          "closed_form": {
+            "note": "drop-out voltage 10 % min of 5 V over 70 ohm, COIL DATA CHART, 05 VDC high sensitivity"
+          }
+        }
+      },
+      "on_resistance": {
+        "value": 0.1,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "SRD, RELAY ISO9002",
+            "at": "Contact Resistance",
+            "basis": "max"
+          }
+        }
+      },
+      "off_resistance": {
+        "value": 100000000.0,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "SRD, RELAY ISO9002",
+            "at": "Insulation Resistance, 500 VDC",
+            "basis": "min"
+          }
+        }
+      }
+    },
+    {
+      "name": "rl",
+      "kind": "resistor",
+      "pins": {
+        "a": "no",
+        "b": "vled"
+      },
+      "resistance": {
+        "value": 220.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "led1",
+      "kind": "led",
+      "pins": {
+        "anode": "vled",
+        "cathode": "gnd"
+      },
+      "saturation_current": {
+        "value": 6.711e-10,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical"
+          }
+        }
+      },
+      "emission_coefficient": {
+        "value": 4.427,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical"
+          }
+        }
+      },
+      "series_resistance": {
+        "value": 2.115,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical"
+          }
+        }
+      },
+      "ratings": {
+        "current": {
+          "value": 0.03,
+          "unit": "A",
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+              "at": "Absolute Maximum Ratings at Ta = 25 C, DC forward current",
+              "basis": "absolute_max"
+            }
+          }
+        },
+        "power": {
+          "value": 0.075,
+          "unit": "W",
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+              "at": "Absolute Maximum Ratings at Ta = 25 C, power dissipation",
+              "basis": "absolute_max"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "rnc",
+      "kind": "resistor",
+      "pins": {
+        "a": "nc",
+        "b": "gnd"
+      },
+      "resistance": {
+        "value": 1000.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    }
+  ]
+}

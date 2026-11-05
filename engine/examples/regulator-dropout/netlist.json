@@ -1,0 +1,642 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": {
+    "transient": {
+      "stop_ps": 60000000000,
+      "max_step_ps": 500000000,
+      "grid_ps": 1000000000
+    }
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "vin",
+    "vout"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vin",
+        "n": "gnd"
+      },
+      "voltage": {
+        "kind": "steps",
+        "initial": {
+          "value": 0.0,
+          "unit": "V",
+          "source": "user"
+        },
+        "events": [
+          {
+            "t_ps": 1000000000,
+            "level": {
+              "value": 0.1,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 2000000000,
+            "level": {
+              "value": 0.2,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 3000000000,
+            "level": {
+              "value": 0.3,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 4000000000,
+            "level": {
+              "value": 0.4,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 5000000000,
+            "level": {
+              "value": 0.5,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 6000000000,
+            "level": {
+              "value": 0.6,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 7000000000,
+            "level": {
+              "value": 0.7,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 8000000000,
+            "level": {
+              "value": 0.8,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 9000000000,
+            "level": {
+              "value": 0.9,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 10000000000,
+            "level": {
+              "value": 1.0,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 11000000000,
+            "level": {
+              "value": 1.1,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 12000000000,
+            "level": {
+              "value": 1.2,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 13000000000,
+            "level": {
+              "value": 1.3,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 14000000000,
+            "level": {
+              "value": 1.4,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 15000000000,
+            "level": {
+              "value": 1.5,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 16000000000,
+            "level": {
+              "value": 1.6,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 17000000000,
+            "level": {
+              "value": 1.7,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 18000000000,
+            "level": {
+              "value": 1.8,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 19000000000,
+            "level": {
+              "value": 1.9,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 20000000000,
+            "level": {
+              "value": 2.0,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 21000000000,
+            "level": {
+              "value": 2.1,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 22000000000,
+            "level": {
+              "value": 2.2,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 23000000000,
+            "level": {
+              "value": 2.3,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 24000000000,
+            "level": {
+              "value": 2.4,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 25000000000,
+            "level": {
+              "value": 2.5,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 26000000000,
+            "level": {
+              "value": 2.6,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 27000000000,
+            "level": {
+              "value": 2.7,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 28000000000,
+            "level": {
+              "value": 2.8,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 29000000000,
+            "level": {
+              "value": 2.9,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 30000000000,
+            "level": {
+              "value": 3.0,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 31000000000,
+            "level": {
+              "value": 3.1,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 32000000000,
+            "level": {
+              "value": 3.2,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 33000000000,
+            "level": {
+              "value": 3.3,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 34000000000,
+            "level": {
+              "value": 3.4,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 35000000000,
+            "level": {
+              "value": 3.5,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 36000000000,
+            "level": {
+              "value": 3.6,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 37000000000,
+            "level": {
+              "value": 3.7,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 38000000000,
+            "level": {
+              "value": 3.8,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 39000000000,
+            "level": {
+              "value": 3.9,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 40000000000,
+            "level": {
+              "value": 4.0,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 41000000000,
+            "level": {
+              "value": 4.1,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 42000000000,
+            "level": {
+              "value": 4.2,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 43000000000,
+            "level": {
+              "value": 4.3,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 44000000000,
+            "level": {
+              "value": 4.4,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 45000000000,
+            "level": {
+              "value": 4.5,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 46000000000,
+            "level": {
+              "value": 4.6,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 47000000000,
+            "level": {
+              "value": 4.7,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 48000000000,
+            "level": {
+              "value": 4.8,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 49000000000,
+            "level": {
+              "value": 4.9,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 50000000000,
+            "level": {
+              "value": 5.0,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 51000000000,
+            "level": {
+              "value": 5.1,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 52000000000,
+            "level": {
+              "value": 5.2,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 53000000000,
+            "level": {
+              "value": 5.3,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 54000000000,
+            "level": {
+              "value": 5.4,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 55000000000,
+            "level": {
+              "value": 5.5,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 56000000000,
+            "level": {
+              "value": 5.6,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 57000000000,
+            "level": {
+              "value": 5.7,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 58000000000,
+            "level": {
+              "value": 5.8,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 59000000000,
+            "level": {
+              "value": 5.9,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 60000000000,
+            "level": {
+              "value": 6.0,
+              "unit": "V",
+              "source": "user"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "rl",
+      "kind": "resistor",
+      "pins": {
+        "a": "vout",
+        "b": "gnd"
+      },
+      "resistance": {
+        "value": 33.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "u1",
+      "kind": "linear_regulator",
+      "pins": {
+        "in": "vin",
+        "out": "vout",
+        "gnd": "gnd"
+      },
+      "output_voltage": {
+        "value": 3.3,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "TI LM1117, SNOS412Q",
+            "at": "p5, LM1117-3.3 VOUT typical at IOUT 10 mA and VIN 5 V",
+            "basis": "typical"
+          }
+        }
+      },
+      "line_regulation": {
+        "value": 9.75609756097561e-05,
+        "unit": "1",
+        "source": {
+          "closed_form": {
+            "note": "1 mV typical from 4.75 V to 15 V at 0 mA, p5, divided by 10.25 V"
+          }
+        }
+      },
+      "output_resistance": {
+        "value": 0.00125,
+        "unit": "ohm",
+        "source": {
+          "closed_form": {
+            "note": "1 mV typical from 0 to 800 mA at VIN 4.75 V, p5, divided by 0.8 A"
+          }
+        }
+      },
+      "dropout_voltage": {
+        "value": 1.0857142857142859,
+        "unit": "V",
+        "source": {
+          "closed_form": {
+            "note": "the line through p6 dropout 1.10 V at 100 mA and 1.20 V at 800 mA"
+          }
+        }
+      },
+      "dropout_resistance": {
+        "value": 0.14285714285714288,
+        "unit": "ohm",
+        "source": {
+          "closed_form": {
+            "note": "the line through p6 dropout 1.10 V at 100 mA and 1.20 V at 800 mA"
+          }
+        }
+      },
+      "current_limit": {
+        "value": 1.2,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "TI LM1117, SNOS412Q",
+            "at": "p6, current limit typical at VIN - VOUT = 5 V",
+            "basis": "typical"
+          }
+        }
+      },
+      "quiescent_current": {
+        "value": 0.005,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "TI LM1117, SNOS412Q",
+            "at": "p6, LM1117-3.3 quiescent current typical, VIN at most 15 V",
+            "basis": "typical"
+          }
+        }
+      },
+      "ground_current_ratio": {
+        "value": 0.0,
+        "unit": "1",
+        "source": {
+          "closed_form": {
+            "note": "this fit holds the ground current at the no-load typical"
+          }
+        }
+      },
+      "ratings": {
+        "current": {
+          "value": 0.8,
+          "unit": "A",
+          "source": {
+            "datasheet": {
+              "doc": "TI LM1117, SNOS412Q",
+              "at": "p1, output current 800 mA",
+              "basis": "max"
+            }
+          }
+        },
+        "power": {
+          "value": 1.6233766233766234,
+          "unit": "W",
+          "source": {
+            "closed_form": {
+              "note": "(125 C - 25 C) / 61.6 C/W, section 7.3 recommended junction and section 7.4 SOT-223 R\u03b8JA, ambient 25 C"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

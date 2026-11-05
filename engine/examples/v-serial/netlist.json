@@ -1,0 +1,36 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": { "transient": { "stop_ps": 3000000000, "max_step_ps": 100000000, "grid_ps": 10000000 } },
+  "ground": "gnd",
+  "nets": ["gnd", "vin", "vout"],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": { "p": "vin", "n": "gnd" },
+      "voltage": {
+        "kind": "serial",
+        "mark": { "value": 5.0, "unit": "V", "source": "user" },
+        "space": { "value": 0.0, "unit": "V", "source": "user" },
+        "events": [
+          { "t_ps": 1000000000, "baud": 9600, "frame": "8N1", "bytes": [49] }
+        ]
+      }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": { "a": "vin", "b": "vout" },
+      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
+    },
+    {
+      "name": "c1",
+      "kind": "capacitor",
+      "pins": { "a": "vout", "b": "gnd" },
+      "capacitance": { "value": 1e-7, "unit": "F", "source": "user" },
+      "initial": null
+    }
+  ]
+}

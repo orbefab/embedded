@@ -1,0 +1,15 @@
+$timescale 1 ps $end
+$scope module u1 $end
+$var wire 1 s PC4 $end
+$var wire 1 c PC5 $end
+$upscope $end
+$enddefinitions $end
+#0
+$dumpvars
+1s
+1c
+$end
+#1000000
+0s
+#5000000
+0c

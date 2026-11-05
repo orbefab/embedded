@@ -1,0 +1,1060 @@
+// The wasm package in node worker threads, against native `sim run` byte for byte.
+//
+// Usage: node crates/wasm/tests/worker.mjs PKG_DIR EXAMPLES_DIR NATIVE_DIR SIM WORK_DIR
+//
+// NATIVE_DIR/<name> holds `sim run`'s folder for EXAMPLES_DIR/<name>/netlist.json. Each example
+// runs in its own Worker, as do the two input cases, which write their export and its native
+// folder under WORK_DIR, and the argument checks. `scripts/wasm-check.sh` sets this up.
+
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { inflateSync } from 'node:zlib';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
+
+// One 60 Hz frame of a run paced at 1x.
+const FRAME_PS = 16_666_666_667n;
+
+// The input cases: the part each takes inputs on, and which setting a seeded input writes.
+const I2C_STRETCH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../cli/tests/fixtures/i2c-stretch/netlist.json',
+);
+
+const INPUTS = [
+  { name: 'atmega-button', part: 'sw1', setting: 'contact' },
+  { name: 'atmega-analog-serial', part: 'rv1', setting: 'level' },
+  { name: 'v-serial', part: 'v1', setting: 'serial' },
+  { name: 'atmega-serial-echo', part: 'vrx', setting: 'serial' },
+  { name: 'atmega-cst816', part: 'u2', setting: 'touch' },
+  { name: 'i2c-stretch', part: 'sw1', setting: 'contact', netlist: I2C_STRETCH },
+];
+
+// `bigint` arguments the binding takes exactly, and the `created_at` each stamps as seconds.
+const EDGES = [
+  [0n, '1970-01-01T00:00:00Z'],
+  [2n ** 53n + 1n, '285428751-11-12T07:36:33Z'],
+  [2n ** 63n, '292277026596-12-04T15:30:08Z'],
+  [2n ** 64n - 1n, '584554051223-11-09T07:00:15Z'],
+];
+
+// `bigint` arguments outside 0 to 2^64 - 1, which the binding refuses with `range`.
+const OUTSIDE = [-1n, 2n ** 64n, 2n ** 64n + 1n, 2n ** 64n + 5n, 2n ** 128n];
+
+// Values of another JavaScript type for each argument type, which the binding refuses with
+// `type`. Each would otherwise be coerced, reduced, read as other bytes, or trap the module.
+const WRONG = {
+  Uint8Array: [new ArrayBuffer(2), '{}', [123, 125], {}, 5, null, undefined],
+  'Uint8Array[]': [new Uint8Array([1]), '[]', [5], [new ArrayBuffer(2)], [[1]], {}, 5, null, undefined],
+  bigint: [5, '5', true, null, undefined],
+  string: [5, 5n, true, {}, null, undefined],
+  boolean: ['true', 'false', 1, 0, 1n, {}, [], null, undefined],
+  number: ['0.3', 1n, true, {}, null, undefined],
+};
+
+// Strings that are not a name in the ref grammar, which the binding refuses with `bad_name`.
+const BAD_NAMES = ['1rv', '', 'rv1 ', 'r'.repeat(300), 'rv\0'];
+
+// An example's seed, from its name alone, so a new example changes no other's chunking. It is
+// odd, since the xorshift never leaves 0.
+function seedOf(name) {
+  return BigInt(`0x${createHash('sha256').update(name).digest('hex').slice(0, 16)}`) | 1n;
+}
+
+// A seeded xorshift, so a failing chunking replays.
+class Rng {
+  constructor(seed) {
+    this.state = BigInt.asUintN(64, seed);
+  }
+
+  below(n) {
+    let x = this.state;
+    x = BigInt.asUintN(64, x ^ (x << 13n));
+    x ^= x >> 7n;
+    x = BigInt.asUintN(64, x ^ (x << 17n));
+    this.state = x;
+    return x % n;
+  }
+}
+
+// Every file under `dir`, by its path with `/` separators, in the order `Folder.paths()` lists.
+function nativeFolder(dir, prefix = '') {
+  const files = new Map();
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = prefix + entry.name;
+    if (entry.isDirectory()) {
+      for (const [inner, bytes] of nativeFolder(join(dir, entry.name), `${path}/`)) {
+        files.set(inner, bytes);
+      }
+    } else {
+      files.set(path, readFileSync(join(dir, entry.name)));
+    }
+  }
+  return new Map([...files].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+}
+
+// `folder`, stamped 0 seconds, holds the files of the native folder in `dir`, byte for byte.
+// `sim run` stamps the wall clock, so the native `manifest.json` is compared with its
+// `created_at` value replaced by the epoch.
+function assertSameFolder(label, folder, dir) {
+  const want = nativeFolder(dir);
+  assert.deepEqual(folder.paths(), [...want.keys()], `${label}: the folder's paths`);
+  for (const [path, bytes] of want) {
+    const got = Buffer.from(folder.file(path));
+    let native = bytes;
+    if (path === 'manifest.json') {
+      const stamp = /"created_at": "[^"]*"/g;
+      assert.equal(bytes.toString().match(stamp)?.length, 1, `${label}: one created_at`);
+      native = Buffer.from(bytes.toString().replace(stamp, '"created_at": "1970-01-01T00:00:00Z"'));
+    }
+    assert.ok(got.equals(native), `${label}: ${path} is the native bytes`);
+  }
+}
+
+// The f64 bits of `values`, so -0 and a NaN payload stay distinct.
+function floatBits(values) {
+  const copy = new Float64Array(values.length);
+  copy.set(values);
+  return [...new BigUint64Array(copy.buffer)];
+}
+
+// The VCD identifier is base 94 from `!`, least significant character first.
+function vcdIndex(id) {
+  let index = 0;
+  let place = 1;
+  for (let k = 0; k < id.length; k += 1) {
+    index += (id.charCodeAt(k) - 33) * place;
+    place *= 94;
+  }
+  return index;
+}
+
+// The value changes in `traces/logic.vcd`, after `$dumpvars`. None when the folder has no file.
+function logicChanges(dir) {
+  let text;
+  try {
+    text = readFileSync(join(dir, 'traces', 'logic.vcd'), 'utf8');
+  } catch {
+    return [];
+  }
+  const changes = [];
+  let time = 0n;
+  let dump = false;
+  let body = false;
+  for (const line of text.split('\n')) {
+    if (!body) {
+      if (line === '$dumpvars') dump = true;
+      else if (dump && line === '$end') body = true;
+      continue;
+    }
+    if (line.startsWith('#')) {
+      time = BigInt(line.slice(1));
+      continue;
+    }
+    const bit = line.charCodeAt(0);
+    if (bit !== 48 && bit !== 49) continue;
+    changes.push({ at: time, signal: vcdIndex(line.slice(1)), level: bit - 48 });
+  }
+  return changes;
+}
+
+// The rows of `serial.csv` in the native folder in `dir`, and none without one.
+function serialRows(dir) {
+  try {
+    return readFileSync(join(dir, 'traces', 'serial.csv'), 'utf8').split('\n').slice(1, -1);
+  } catch {
+    return [];
+  }
+}
+
+// The probes read at row times are those rows of the native trace in `dir`, column for column.
+function assertProbesOnRows(label, { refs, probes }, dir) {
+  const index = JSON.parse(readFileSync(join(dir, 'traces', 'index.json')));
+  const time = readFileSync(join(dir, 'traces', 'time.u64'));
+  const analog = readFileSync(join(dir, 'traces', 'analog.f64'));
+  const columns = index.analog.columns.map((column) => column.ref);
+  assert.deepEqual(refs, columns, `${label}: refs() is the trace columns in order`);
+  const times = Array.from({ length: index.rows }, (_, r) => time.readBigUInt64LE(8 * r));
+  for (const { at, values } of probes) {
+    const r = times.indexOf(at);
+    assert.ok(r >= 0, `${label}: ${at} ps is a row time`);
+    const row = columns.map((_, k) => analog.readDoubleLE(8 * (k * index.rows + r)));
+    assert.deepEqual(values, row, `${label}: the probe at ${at} ps is that row`);
+  }
+}
+
+// Advances `session` in seeded calls until it ends. A call moves 1 ps, a frame, to the next row
+// time, or up to an eighth of the run. A frame is 60 Hz at 1x, or a 60th of a shorter run.
+// After each call it reads the probe, the levels and the new serial bytes, and keeps the probes
+// at row times. Then `input` may apply an input at `now`. Returns the refs, the probes kept, the
+// serial bytes as `serial.csv` rows, the logic changes, the time each call ended at, and the
+// integrals when the session ends.
+function advanceInChunks(session, json, rng, input = () => {}) {
+  const { stop_ps, grid_ps } = JSON.parse(json).analysis.transient;
+  const [stop, grid] = [BigInt(stop_ps), BigInt(grid_ps)];
+  const isRow = (at) => at === stop || at % grid === 0n;
+  const frame = FRAME_PS < stop / 60n ? FRAME_PS : stop / 60n + 1n;
+  const refs = session.refs();
+  const signals = session.signals();
+  const usarts = JSON.parse(session.usarts());
+  const probes = [];
+  const rows = [];
+  const edges = [];
+  const ends = [];
+  let integrals;
+  let cursor = 0n;
+  let edgeCursor = 0n;
+  for (;;) {
+    const now = session.now();
+    let stride;
+    switch (Number(rng.below(8n))) {
+      case 0:
+      case 1:
+        stride = 1n;
+        break;
+      case 2:
+        stride = (now / grid + 1n) * grid - now;
+        break;
+      case 3:
+        stride = 1n + rng.below(stop / 8n + 1n);
+        break;
+      default:
+        stride = frame;
+    }
+    const status = session.advanceTo(now + stride);
+    const at = session.now();
+    ends.push(at);
+    const probe = session.probe();
+    assert.equal(probe.at, at, 'the probe is at now');
+    if (isRow(at)) {
+      probes.push({ at, values: Array.from(probe.values) });
+    }
+    if (status !== 'running') {
+      integrals = new Float64Array(probe.integrals.length);
+      integrals.set(probe.integrals);
+    }
+    probe.free();
+    assert.equal(session.levels().length, signals.length, 'a level for each signal');
+    const serial = session.serialSince(cursor);
+    serial.byte.forEach((byte, k) => {
+      const [part, usart] = usarts[serial.usart[k]];
+      rows.push(`${serial.at[k]},${part},${usart},${byte}`);
+    });
+    cursor = serial.cursor;
+    serial.free();
+    const readEdges = session.edgesSince(edgeCursor);
+    for (let k = 0; k < readEdges.at.length; k += 1) {
+      edges.push({ at: readEdges.at[k], signal: readEdges.signal[k], level: readEdges.level[k] });
+    }
+    edgeCursor = readEdges.cursor;
+    readEdges.free();
+    if (status !== 'running') {
+      return { refs, probes, rows, edges, ends, integrals };
+    }
+    input(session, rng);
+  }
+}
+
+// The `link.csv` the `spi_replay` parts of `json` write, from their event lists alone. An event
+// ends at its start plus each phase's bits over its lanes and its data bits over its lanes,
+// each rounded up, in cycles of the part's clock, rounded down to a picosecond. Rows are by
+// end, then by part name.
+function replayCsv(json) {
+  const rows = [];
+  for (const part of JSON.parse(json).parts.filter((part) => part.kind === 'spi_replay')) {
+    const clock = BigInt(part.clock_hz.value);
+    for (const event of part.events) {
+      const over = (bits, lanes) => (BigInt(bits) + BigInt(lanes) - 1n) / BigInt(lanes);
+      let cycles = over(8 * event.bytes.length, event.lanes);
+      const phases = event.phases.map(({ bits, lanes, value }) => {
+        cycles += over(bits, lanes);
+        return `${bits}/${lanes}:${value.toString(16).padStart(Math.ceil(bits / 4), '0')}`;
+      });
+      const start = BigInt(event.t_ps);
+      const end = start + (cycles * 1_000_000_000_000n) / clock;
+      const hash = createHash('sha256').update(Buffer.from(event.bytes)).digest('hex').slice(0, 16);
+      const row = `${end},${start},${part.name},CS,spi,${event.cs},${phases.join(' ')},${event.bytes.length},${hash},${event.lanes}`;
+      rows.push({ end, name: part.name, row });
+    }
+  }
+  rows.sort((a, b) => (a.end !== b.end ? (a.end < b.end ? -1 : 1) : a.name < b.name ? -1 : 1));
+  return ['t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash,lanes', ...rows.map(({ row }) => row)].join('\n') + '\n';
+}
+
+// `link.csv` of each folder is the event list's, for a netlist with a `spi_replay` part.
+// Returns how many rows it holds.
+function assertLinkRows(label, json, folders) {
+  if (!JSON.parse(json).parts.some((part) => part.kind === 'spi_replay')) {
+    return 0;
+  }
+  const want = replayCsv(json);
+  for (const [name, folder] of folders) {
+    const got = Buffer.from(folder.file('traces/link.csv')).toString('utf8');
+    assert.equal(got, want, `${label}: ${name}'s link.csv is the event list`);
+  }
+  return want.trim().split('\n').length - 1;
+}
+
+// The RGBA pixels of a PNG with filter type 0 on every row, inflated by node's zlib.
+function pngPixels(png) {
+  let at = 8;
+  let width = 0;
+  const idat = [];
+  while (at < png.length) {
+    const length = png.readUInt32BE(at);
+    const kind = png.toString('latin1', at + 4, at + 8);
+    const body = png.subarray(at + 8, at + 8 + length);
+    if (kind === 'IHDR') {
+      width = body.readUInt32BE(0);
+    } else if (kind === 'IDAT') {
+      idat.push(body);
+    }
+    at += 12 + length;
+  }
+  const raw = inflateSync(Buffer.concat(idat));
+  const rows = [];
+  for (let row = 0; row < raw.length; row += width * 4 + 1) {
+    assert.equal(raw[row], 0, 'filter type 0');
+    rows.push(raw.subarray(row + 1, row + 1 + width * 4));
+  }
+  return Buffer.concat(rows);
+}
+
+// Each display part of `json` reads from `session` as the native folder in `dir` ends: its
+// `display()` is its `observations.json` `displays` entry without `image` and `sha256`, its
+// `displayImage()` is the native frame memory file byte for byte, whose SHA-256 the entry names,
+// and its `displayPixels()` is the pixels of the PNG native `sim view` writes from that folder.
+// A part that is no display part throws `unknown_part`. Returns how many display parts it read.
+function assertDisplays(wasm, label, session, json, dir) {
+  const parts = JSON.parse(json).parts;
+  const displays = parts.filter((part) => part.kind === 'st77916');
+  if (displays.length === 0) {
+    return 0;
+  }
+  const observed = JSON.parse(readFileSync(join(dir, 'observations.json'), 'utf8')).displays;
+  const view = join(workerData.work, `${label}-view`);
+  execFileSync(workerData.sim, ['view', dir, '--out', view]);
+  assert.deepEqual(Object.keys(observed), displays.map((part) => part.name).sort(), `${label}: displays`);
+  for (const { name } of displays) {
+    const { image, sha256, ...panel } = observed[name];
+    assert.deepEqual(JSON.parse(session.display(name)), panel, `${label}: display(${name})`);
+    const got = Buffer.from(session.displayImage(name));
+    assert.ok(got.equals(readFileSync(join(dir, image))), `${label}: displayImage(${name}) is ${image}`);
+    assert.equal(createHash('sha256').update(got).digest('hex'), sha256, `${label}: ${name}'s SHA-256`);
+    const pixels = Buffer.from(session.displayPixels(name));
+    const png = pngPixels(readFileSync(join(view, `display-${name}.png`)));
+    assert.equal(pixels.length, 360 * 360 * 4, `${label}: displayPixels(${name}) is 360 by 360 RGBA`);
+    assert.ok(pixels.equals(png), `${label}: displayPixels(${name}) is sim view's PNG`);
+  }
+  const other = parts.find((part) => part.kind !== 'st77916').name;
+  const calls = [
+    (part) => session.display(part),
+    (part) => session.displayImage(part),
+    (part) => session.displayPixels(part),
+  ];
+  for (const call of calls) {
+    assert.throws(
+      () => call(other),
+      (error) => error instanceof wasm.SimError && error.code === 'unknown_part',
+      `${label}: ${other} is no display part`,
+    );
+  }
+  return displays.length;
+}
+
+// Each ws2812 part of `json` reads from `session` as the native folder in `dir` ends: its
+// `leds()` is its `observations.json` `leds` entry. A part that is no chain throws
+// `unknown_part`. Returns how many chains it read.
+function assertLeds(wasm, label, session, json, dir) {
+  const parts = JSON.parse(json).parts;
+  const chains = parts.filter((part) => part.kind === 'ws2812');
+  if (chains.length === 0) {
+    return 0;
+  }
+  const observed = JSON.parse(readFileSync(join(dir, 'observations.json'), 'utf8')).leds;
+  assert.deepEqual(Object.keys(observed), chains.map((part) => part.name).sort(), `${label}: leds`);
+  for (const { name } of chains) {
+    assert.deepEqual(JSON.parse(session.leds(name)), observed[name], `${label}: leds(${name})`);
+  }
+  const other = parts.find((part) => part.kind !== 'ws2812').name;
+  assert.throws(
+    () => session.leds(other),
+    (error) => error instanceof wasm.SimError && error.code === 'unknown_part',
+    `${label}: ${other} is no chain`,
+  );
+  return chains.length;
+}
+
+// Warnings `diagnostics.json` holds except `trace.row_interpolated` and every error. That is
+// the list `diagnostics()` returns at the stop.
+function sessionWarnings(dir) {
+  const found = JSON.parse(readFileSync(join(dir, 'diagnostics.json'), 'utf8'));
+  return found.filter((item) => item.severity === 'warning' && item.code !== 'trace.row_interpolated');
+}
+
+// The files of an example's `blobs` folder, which `sim run` reads beside its netlist, in name
+// order, then those of the blob cache in `SIM_BLOBS` that its netlist names, which no example
+// commits. None for an example with neither.
+function blobsOf(dir) {
+  const netlist = readFileSync(join(dir, 'netlist.json'), 'utf8');
+  const files = (folder, keep) =>
+    existsSync(folder)
+      ? readdirSync(folder)
+          .filter(keep)
+          .sort()
+          .map((name) => new Uint8Array(readFileSync(join(folder, name))))
+      : [];
+  const cache = process.env.SIM_BLOBS;
+  return [
+    ...files(join(dir, 'blobs'), () => true),
+    ...(cache ? files(cache, (name) => netlist.includes(`"${name}"`)) : []),
+  ];
+}
+
+// `run` is the native folder. A transient recorded, advanced in chunks and finished is that
+// folder too, and its serial rows are those of `serial.csv`. `record` refuses an `op` analysis.
+// An example with blobs goes through `runWith`, `recordWith` and `openWith`.
+function example(wasm, job, json, blobs, native) {
+  const withBlobs = blobs.length > 0;
+  const run = () => (withBlobs ? wasm.runWith(json, blobs, 0n) : wasm.run(json, 0n));
+  const record = () => (withBlobs ? wasm.Session.recordWith(json, blobs) : wasm.Session.record(json));
+  const open = () => (withBlobs ? wasm.Session.openWith(json, blobs) : wasm.Session.open(json));
+  if (withBlobs) {
+    assert.throws(
+      () => wasm.Session.record(json),
+      (error) =>
+        error instanceof wasm.SimError &&
+        error.code === 'invalid' &&
+        JSON.parse(error.diagnostics).every((item) => item.code === 'netlist.blob'),
+      `${job.name}: record without its blobs throws invalid with netlist.blob`,
+    );
+    const missing = JSON.parse(Buffer.from(wasm.run(json, 0n).file('diagnostics.json')).toString());
+    assert.ok(missing.length > 0 && missing.every((item) => item.code === 'netlist.blob'), `${job.name}: run without its blobs`);
+  }
+  const ran = run();
+  assertSameFolder(`${job.name} run`, ran, native);
+  if ('op' in JSON.parse(json).analysis) {
+    assert.throws(
+      () => record(),
+      (error) => error instanceof wasm.SimError && error.code === 'op',
+      'record refuses an op analysis with op',
+    );
+    return 'run is sim run, record refuses op';
+  }
+  const session = record();
+  const read = advanceInChunks(session, json, new Rng(job.seed));
+  assert.equal(session.status(), 'stopped');
+  assert.deepEqual(
+    JSON.parse(session.diagnostics()),
+    sessionWarnings(native),
+    `${job.name}: diagnostics() at the stop`,
+  );
+  const displays = assertDisplays(wasm, job.name, session, json, native);
+  const leds = assertLeds(wasm, job.name, session, json, native);
+  const finished = session.finish(0n);
+  assertSameFolder(`${job.name} finish`, finished, native);
+  const links = assertLinkRows(job.name, json, [
+    ['run', ran],
+    ['finish', finished],
+  ]);
+  assertProbesOnRows(job.name, read, native);
+  assert.deepEqual(read.rows, serialRows(native), `${job.name}: the serial rows are serial.csv's`);
+  assert.deepEqual(
+    read.edges,
+    logicChanges(native),
+    `${job.name}: the edges are the changes in traces/logic.vcd`,
+  );
+  const stop = BigInt(JSON.parse(json).analysis.transient.stop_ps);
+  const once = open();
+  assert.equal(once.advanceTo(stop), 'stopped');
+  assert.deepEqual(
+    JSON.parse(once.diagnostics()),
+    sessionWarnings(native),
+    `${job.name}: an open session's diagnostics() at the stop`,
+  );
+  const probe = once.probe();
+  assert.deepEqual(
+    floatBits(read.integrals),
+    floatBits(probe.integrals),
+    `${job.name}: integrals at the stop`,
+  );
+  probe.free();
+  const openEdges = once.edgesSince(0n);
+  const openList = [];
+  for (let k = 0; k < openEdges.at.length; k += 1) {
+    openList.push({ at: openEdges.at[k], signal: openEdges.signal[k], level: openEdges.level[k] });
+  }
+  openEdges.free();
+  assert.deepEqual(
+    openList,
+    logicChanges(native),
+    `${job.name}: an open session's edges are the changes in traces/logic.vcd`,
+  );
+  once.free();
+  const linkText = links > 0 ? `, ${links} link rows from the event list` : '';
+  const displayText = displays > 0 ? `, ${displays} display read as native` : '';
+  const ledText = leds > 0 ? `, ${leds} chain read as native` : '';
+  const countdownText = job.name === 'esp32s3-hello' ? `, ${countdownEnds(read, native)} calls ended in the countdown` : '';
+  const counts = `${read.probes.length} probes on rows, ${read.rows.length} serial rows, ${read.edges.length} logic changes${linkText}${displayText}${ledText}${countdownText}`;
+  return `run and finish are sim run, ${counts}`;
+}
+
+// How many calls ended after hello's first countdown line and before its reset, at least one, so
+// a session resumes while the countdown and the console task both run.
+function countdownEnds(read, native) {
+  const rows = serialRows(native).map((row) => row.split(','));
+  const text = rows.map((row) => String.fromCharCode(Number(row[3]))).join('');
+  const line = text.indexOf('\n', text.indexOf('Restarting in '));
+  assert.ok(line > 0, 'esp32s3-hello: the console has a countdown line');
+  const first = BigInt(rows[line][0]);
+  const diagnostics = JSON.parse(readFileSync(join(native, 'diagnostics.json'), 'utf8'));
+  const restart = BigInt(diagnostics.find((item) => item.code === 'chip.restart').t_ps);
+  const ends = read.ends.filter((at) => at > first && at < restart).length;
+  assert.ok(ends > 0, `esp32s3-hello: a call ends between ${first} and ${restart} ps`);
+  return ends;
+}
+
+// The setting `part` holds after its last event in `session.export()`, and that event's time.
+// A contact is `true` for closed. A level is the position. A serial send is its baud, frame
+// and bytes. A touch is its x, y and down. None of those is the document's initial setting
+// when the part has no event yet.
+function lastSetting(session, { part, setting }) {
+  const found = JSON.parse(Buffer.from(session.export())).parts.find((item) => item.name === part);
+  if (setting === 'contact') {
+    const last = found.events.at(-1);
+    return { at: last && BigInt(last.t_ps), value: (last?.state ?? found.initial) === 'closed' };
+  }
+  if (setting === 'touch') {
+    const last = found.touches.at(-1);
+    return { at: last && BigInt(last.t_ps), value: { x: last.x, y: last.y, down: last.down } };
+  }
+  if (setting === 'serial') {
+    const last = found.voltage.events.at(-1);
+    return {
+      at: last && BigInt(last.t_ps),
+      value: { baud: last.baud, frame: last.frame, bytes: last.bytes },
+    };
+  }
+  const { kind: shape, initial, events, value } = found.position;
+  const last = shape === 'steps' ? events.at(-1) : undefined;
+  return { at: last && BigInt(last.t_ps), value: last?.level.value ?? initial?.value ?? value };
+}
+
+// Rates other than 9600. A binding that stores 9600 for every accepted rate fails the export.
+const SERIAL_BAUDS = [115200, 500_000_000, 1, 333_333_333];
+
+// One 8N1 byte at a drawn baud on `part` at `now`. It lands in the export at `Applied.at`.
+// Whether it landed.
+function applySeededSerial(wasm, session, rng, input) {
+  const { part } = input;
+  const bytes = [Number(rng.below(256n))];
+  const baud = SERIAL_BAUDS[Number(rng.below(BigInt(SERIAL_BAUDS.length)))];
+  const before = lastSetting(session, input);
+  let applied;
+  try {
+    applied = session.applySerial(part, session.now(), baud, new Uint8Array(bytes));
+  } catch (error) {
+    assert.ok(error instanceof wasm.SimError, `${part} throws a SimError`);
+    assert.equal(error.code, 'past_stop', `${part} lands or is past the stop`);
+    assert.deepEqual(lastSetting(session, input), before, `${part} past the stop is unchanged`);
+    return false;
+  }
+  const at = applied.at;
+  applied.free();
+  assert.deepEqual(
+    lastSetting(session, input),
+    { at, value: { baud, frame: '8N1', bytes } },
+    `${part} holds the byte from Applied.at`,
+  );
+  return true;
+}
+
+// One point on a `cst816`. A point equal to the last one still lands. An input that lands is
+// the last `touches` event, at `Applied.at`, with the x, y and down passed. Whether it landed.
+function applySeededTouch(wasm, session, rng, input) {
+  const { part } = input;
+  const x = Number(rng.below(4096n));
+  const y = Number(rng.below(4096n));
+  const down = rng.below(2n) === 0n;
+  const before = lastSetting(session, input);
+  let applied;
+  try {
+    applied = session.applyTouch(part, session.now(), x, y, down);
+  } catch (error) {
+    assert.ok(error instanceof wasm.SimError, `${part} throws a SimError`);
+    assert.equal(error.code, 'past_stop', `${part} lands or is past the stop`);
+    assert.deepEqual(lastSetting(session, input), before, `${part} past the stop is unchanged`);
+    return false;
+  }
+  const at = applied.at;
+  applied.free();
+  assert.deepEqual(
+    lastSetting(session, input),
+    { at, value: { x, y, down } },
+    `${part} holds the point from Applied.at`,
+  );
+  return true;
+}
+
+// One seeded input on `part` at `now`, a contact, a position from 0.1 to 0.9, one serial
+// byte, or one touch. A setting equal to the part's last throws `no_change`, and then a
+// contact is moved to the other one. A touch equal to the last one still lands. An input
+// that lands is in the export at `Applied.at` with the setting passed. Whether it landed.
+function applySeeded(wasm, session, rng, input) {
+  if (input.setting === 'serial') {
+    return applySeededSerial(wasm, session, rng, input);
+  }
+  if (input.setting === 'touch') {
+    return applySeededTouch(wasm, session, rng, input);
+  }
+  const { part } = input;
+  const contact = input.setting === 'contact';
+  const apply = (setting) =>
+    contact
+      ? session.applyContact(part, session.now(), setting)
+      : session.applyLevel(part, session.now(), setting);
+  const before = lastSetting(session, input);
+  let setting = contact ? rng.below(2n) === 0n : Number(1n + rng.below(9n)) / 10;
+  if (setting === before.value) {
+    assert.throws(
+      () => apply(setting),
+      (error) => error instanceof wasm.SimError && error.code === 'no_change',
+      `${part} at ${setting}, its last setting, throws no_change`,
+    );
+    if (!contact) {
+      return false;
+    }
+    setting = !setting;
+  }
+  let applied;
+  try {
+    applied = apply(setting);
+  } catch (error) {
+    assert.ok(error instanceof wasm.SimError, `${part} at ${setting} throws a SimError`);
+    assert.equal(error.code, 'past_stop', `${part} at ${setting} lands or is past the stop`);
+    assert.deepEqual(lastSetting(session, input), before, `${part} past the stop is unchanged`);
+    return false;
+  }
+  const at = applied.at;
+  applied.free();
+  assert.deepEqual(lastSetting(session, input), { at, value: setting }, `${part} holds ${setting} from Applied.at`);
+  return true;
+}
+
+// A recorded session with seeded inputs at chunk ends, advanced to the document stop. Its
+// ended export, run by native `sim`, is the folder `finish` writes, and the serial rows read are
+// that folder's `serial.csv` rows.
+function withInputs(wasm, job, json, work) {
+  const label = `${job.name} with inputs`;
+  const session = wasm.Session.record(json);
+  let applied = 0;
+  const read = advanceInChunks(session, json, new Rng(job.seed), (session, rng) => {
+    if ((applied === 0 || rng.below(2n) === 1n) && applySeeded(wasm, session, rng, job)) {
+      applied += 1;
+    }
+  });
+  assert.ok(applied > 0, `${label}: an input landed`);
+  assert.equal(session.status(), 'stopped');
+  const exported = join(work, `${job.name}.json`);
+  const native = join(work, job.name);
+  mkdirSync(work, { recursive: true });
+  writeFileSync(exported, session.export());
+  execFileSync(workerData.sim, ['run', exported, '--out', native]);
+  const finished = session.finish(0n);
+  const i2c = finished.file('traces/i2c.csv');
+  let phases = 0;
+  if (i2c) {
+    const lines = Buffer.from(i2c).toString('utf8').trim().split('\n').slice(1);
+    const seen = new Set();
+    for (const line of lines) {
+      assert.ok(!seen.has(line), `${label}: a phase was delivered twice (${line})`);
+      seen.add(line);
+    }
+    phases = lines.length;
+  }
+  if (job.name === 'i2c-stretch') {
+    assert.ok(phases > 0, `${label}: the bus delivered a phase`);
+  }
+  assertSameFolder(label, finished, native);
+  assertProbesOnRows(label, read, native);
+  assert.deepEqual(read.rows, serialRows(native), `${label}: the serial rows are serial.csv's`);
+  assert.deepEqual(
+    read.edges,
+    logicChanges(native),
+    `${label}: the edges are the changes in traces/logic.vcd`,
+  );
+  const phasesText = phases > 0 ? `, ${phases} i2c phases once` : '';
+  const counts = `${read.probes.length} probes on rows, ${read.rows.length} serial rows, ${read.edges.length} logic changes${phasesText}`;
+  return `finish is sim run on the ended export after ${applied} inputs, ${counts}`;
+}
+
+// Each argument of another type in WRONG throws `type`, a string that is not a name throws
+// `bad_name`, and each `bigint` in OUTSIDE throws `range`, all moving nothing. A call with two
+// wrong arguments throws the first one's code. A detached netlist throws `type`, and 1100 of them,
+// past the module's 1024 externref slots, leave it working. Each of EDGES crosses exactly, as a
+// time, a cursor, an input time and seconds.
+function argumentChecks(wasm, examples) {
+  const read = (name) => readFileSync(join(examples, name, 'netlist.json'));
+  const isCode = (code) => (error) => error instanceof wasm.SimError && error.code === code;
+  const shown = (value) => {
+    if (typeof value === 'bigint') return `${value}n`;
+    if (value instanceof ArrayBuffer) return 'an ArrayBuffer';
+    if (value instanceof Uint8Array) return 'a detached Uint8Array';
+    return value === undefined ? 'undefined' : JSON.stringify(value).slice(0, 12);
+  };
+  const steps = read('v-steps');
+  const serial = wasm.Session.open(read('atmega-analog-serial'));
+  const folder = wasm.run(steps, 0n);
+  const calls = [
+    ['Session.open', 'Uint8Array', (v) => wasm.Session.open(v)],
+    ['Session.record', 'Uint8Array', (v) => wasm.Session.record(v)],
+    ['run netlist', 'Uint8Array', (v) => wasm.run(v, 0n)],
+    ['run createdAtSeconds', 'bigint', (v) => wasm.run(steps, v)],
+    ['advanceTo', 'bigint', (v) => serial.advanceTo(v)],
+    ['serialSince', 'bigint', (v) => serial.serialSince(v)],
+    ['edgesSince', 'bigint', (v) => serial.edgesSince(v)],
+    ['forgetEdges', 'bigint', (v) => serial.forgetEdges(v)],
+    ['forgetSerial', 'bigint', (v) => serial.forgetSerial(v)],
+    ['applyLevel part', 'string', (v) => serial.applyLevel(v, 0n, 0.5)],
+    ['applyLevel ps', 'bigint', (v) => serial.applyLevel('rv1', v, 0.5)],
+    ['applyLevel si', 'number', (v) => serial.applyLevel('rv1', 0n, v)],
+    ['applyContact part', 'string', (v) => serial.applyContact(v, 0n, true)],
+    ['applyContact ps', 'bigint', (v) => serial.applyContact('rv1', v, true)],
+    ['applyContact closed', 'boolean', (v) => serial.applyContact('rv1', 0n, v)],
+    ['applySerial part', 'string', (v) => serial.applySerial(v, 0n, 9600, new Uint8Array([1]))],
+    ['applySerial ps', 'bigint', (v) => serial.applySerial('rv1', v, 9600, new Uint8Array([1]))],
+    ['applySerial baud', 'number', (v) => serial.applySerial('rv1', 0n, v, new Uint8Array([1]))],
+    ['applySerial bytes', 'Uint8Array', (v) => serial.applySerial('rv1', 0n, 9600, v)],
+    ['applyTouch part', 'string', (v) => serial.applyTouch(v, 0n, 1, 2, true)],
+    ['applyTouch ps', 'bigint', (v) => serial.applyTouch('rv1', v, 1, 2, true)],
+    ['applyTouch x', 'number', (v) => serial.applyTouch('rv1', 0n, v, 2, true)],
+    ['applyTouch y', 'number', (v) => serial.applyTouch('rv1', 0n, 1, v, true)],
+    ['applyTouch down', 'boolean', (v) => serial.applyTouch('rv1', 0n, 1, 2, v)],
+    ['display', 'string', (v) => serial.display(v)],
+    ['displayImage', 'string', (v) => serial.displayImage(v)],
+    ['displayPixels', 'string', (v) => serial.displayPixels(v)],
+    ['leds', 'string', (v) => serial.leds(v)],
+    ['finish', 'bigint', (v) => wasm.Session.record(steps).finish(v)],
+    ['Folder.file', 'string', (v) => folder.file(v)],
+    ['Session.openWith netlist', 'Uint8Array', (v) => wasm.Session.openWith(v, [])],
+    ['Session.openWith blobs', 'Uint8Array[]', (v) => wasm.Session.openWith(steps, v)],
+    ['Session.recordWith netlist', 'Uint8Array', (v) => wasm.Session.recordWith(v, [])],
+    ['Session.recordWith blobs', 'Uint8Array[]', (v) => wasm.Session.recordWith(steps, v)],
+    ['runWith netlist', 'Uint8Array', (v) => wasm.runWith(v, [], 0n)],
+    ['runWith blobs', 'Uint8Array[]', (v) => wasm.runWith(steps, v, 0n)],
+    ['runWith createdAtSeconds', 'bigint', (v) => wasm.runWith(steps, [], v)],
+  ];
+  let refused = 0;
+  const refuses = (what, call, values, code) => {
+    for (const value of values) {
+      assert.throws(() => call(value), isCode(code), `${what}(${shown(value)}) throws ${code}`);
+      refused += 1;
+    }
+  };
+  for (const [what, type, call] of calls) {
+    refuses(what, call, WRONG[type], 'type');
+    if (type === 'bigint') {
+      refuses(what, call, OUTSIDE, 'range');
+    }
+  }
+  refuses('applyLevel part', (part) => serial.applyLevel(part, 0n, 0.5), BAD_NAMES, 'bad_name');
+  refuses('applyContact part', (part) => serial.applyContact(part, 0n, true), BAD_NAMES, 'bad_name');
+  refuses(
+    'applySerial part',
+    (part) => serial.applySerial(part, 0n, 9600, new Uint8Array([1])),
+    BAD_NAMES,
+    'bad_name',
+  );
+  refuses('applyTouch part', (part) => serial.applyTouch(part, 0n, 1, 2, true), BAD_NAMES, 'bad_name');
+  refuses('display', (part) => serial.display(part), BAD_NAMES, 'bad_name');
+  refuses('displayImage', (part) => serial.displayImage(part), BAD_NAMES, 'bad_name');
+  refuses('displayPixels', (part) => serial.displayPixels(part), BAD_NAMES, 'bad_name');
+  refuses('leds', (part) => serial.leds(part), BAD_NAMES, 'bad_name');
+  refuses('applyLevel si', (si) => serial.applyLevel('rv1', 0n, si), [NaN, Infinity], 'not_finite');
+  refuses(
+    'applyTouch x',
+    (x) => serial.applyTouch('rv1', 0n, x, 0, true),
+    [4096, -1, 1.5, 4095.5],
+    'value',
+  );
+  refuses(
+    'applyTouch coordinate',
+    (x) => serial.applyTouch('rv1', 0n, x, 0, true),
+    [NaN, Infinity, -Infinity],
+    'not_finite',
+  );
+  assert.throws(
+    () => serial.applyTouch('rv1', 0n, 4096, 0, true),
+    (error) => error instanceof wasm.SimError && error.code === 'value' && error.rule === 'span',
+    'a coordinate past 4095 throws value span',
+  );
+  refuses(
+    'applySerial baud',
+    (rate) => serial.applySerial('rv1', 0n, rate, new Uint8Array([1])),
+    [0, 0.5, 1.5, -1, 500_000_001, NaN, Infinity],
+    'bad_baud',
+  );
+  const firstWrong = [
+    ['applyContact("1rv", -1n, "x")', () => serial.applyContact('1rv', -1n, 'x'), 'bad_name'],
+    ['applyContact("rv1", -1n, "x")', () => serial.applyContact('rv1', -1n, 'x'), 'range'],
+    ['applyLevel("1rv", -1n, "x")', () => serial.applyLevel('1rv', -1n, 'x'), 'bad_name'],
+    ['applyLevel("rv1", -1n, NaN)', () => serial.applyLevel('rv1', -1n, NaN), 'range'],
+    [
+      'applySerial("1rv", -1n, 9600, bytes)',
+      () => serial.applySerial('1rv', -1n, 9600, new Uint8Array([1])),
+      'bad_name',
+    ],
+    [
+      'applySerial("rv1", -1n, "x", bytes)',
+      () => serial.applySerial('rv1', -1n, 'x', new Uint8Array([1])),
+      'range',
+    ],
+    [
+      'applySerial("rv1", 0n, 0, "x")',
+      () => serial.applySerial('rv1', 0n, 0, 'x'),
+      'bad_baud',
+    ],
+    ['applyTouch("1rv", -1n, 0, 0, true)', () => serial.applyTouch('1rv', -1n, 0, 0, true), 'bad_name'],
+    ['applyTouch("rv1", -1n, "x", 0, true)', () => serial.applyTouch('rv1', -1n, 'x', 0, true), 'range'],
+    ['applyTouch("rv1", 0n, NaN, "x", true)', () => serial.applyTouch('rv1', 0n, NaN, 'x', true), 'not_finite'],
+    ['run("x", -1n)', () => wasm.run('x', -1n), 'type'],
+  ];
+  for (const [what, call, code] of firstWrong) {
+    assert.throws(call, isCode(code), `${what} throws ${code}, the first wrong argument's`);
+    refused += 1;
+  }
+  const detached = () => {
+    const bytes = new Uint8Array(steps);
+    structuredClone(bytes.buffer, { transfer: [bytes.buffer] });
+    return bytes;
+  };
+  for (const [what, , call] of calls.slice(0, 3)) {
+    refuses(what, call, [detached()], 'type');
+  }
+  refuses(
+    'applySerial bytes',
+    (bytes) => serial.applySerial('rv1', 0n, 9600, bytes),
+    [detached()],
+    'type',
+  );
+  for (let k = 0; k < 1100; k += 1) {
+    assert.throws(() => wasm.run(detached(), 0n), isCode('type'), `detached netlist ${k} throws type`);
+  }
+  assert.throws(() => serial.applyContact('rv1', 0n, false), isCode('wrong_setting'), 'a boolean is a contact');
+  const stepsSession = wasm.Session.open(steps);
+  assert.throws(
+    () => stepsSession.applySerial('v1', 0n, 9600, new Uint8Array([1])),
+    isCode('wrong_setting'),
+    'bytes on a steps source throw wrong_setting',
+  );
+  assert.throws(
+    () => stepsSession.applyTouch('v1', 0n, 1, 2, true),
+    isCode('wrong_setting'),
+    'a touch on a steps source throws wrong_setting',
+  );
+  const blink = wasm.Session.open(read('atmega-blink'));
+  assert.throws(
+    () => blink.applyTouch('r1', 0n, 1, 2, true),
+    isCode('not_settable'),
+    'a touch on a resistor throws not_settable',
+  );
+  blink.free();
+  const touch = wasm.Session.record(read('atmega-cst816'));
+  const again = touch.applyTouch('u2', 50_000_000_000n, 16, 32, true);
+  assert.equal(again.at, 50_000_000_000n, 'a repeated point still lands');
+  again.free();
+  const held = lastSetting(touch, { part: 'u2', setting: 'touch' });
+  assert.deepEqual(held, { at: 50_000_000_000n, value: { x: 16, y: 32, down: true } });
+  touch.free();
+  const serialSource = wasm.Session.open(read('v-serial'));
+  assert.throws(
+    () => serialSource.applySerial('v1', 0n, 9600, new Uint8Array()),
+    isCode('no_change'),
+    'an empty send throws no_change',
+  );
+  assert.equal(serial.now(), 0n, 'a refused argument moves nothing');
+  assert.equal(JSON.parse(Buffer.from(serial.export())).parts[1].position.value, 0.49951171875);
+  assert.equal(folder.file('nothing'), undefined, 'a missing file is undefined');
+  const padded = Buffer.concat([Buffer.from('junk'), steps, Buffer.from('junk')]);
+  const view = new Uint8Array(padded.buffer, padded.byteOffset + 4, steps.length);
+  assert.ok(Buffer.from(wasm.run(view, 0n).file('netlist.json')).equals(steps), 'a view is its own bytes');
+
+  for (const [ps] of EDGES.slice(1)) {
+    assert.throws(() => serial.applyLevel('rv1', ps, 0.5), isCode('past_stop'), `${ps}n is past the stop`);
+  }
+  assert.equal(serial.advanceTo(2n ** 64n - 1n), 'stopped');
+  const sent = BigInt(serial.serialSince(0n).byte.length);
+  assert.ok(sent > 0n, 'the session sent bytes');
+  for (const [cursor] of EDGES) {
+    const next = serial.serialSince(cursor).cursor;
+    assert.equal(next, cursor === 0n ? sent : cursor, `serialSince(${cursor}n) keeps the cursor`);
+  }
+  const edgeEnd = serial.edgeCursor();
+  assert.ok(edgeEnd > 1n, 'the session changed a chip signal');
+  serial.forgetEdges(1n);
+  assert.throws(() => serial.edgesSince(0n), isCode('forgotten'), 'edgesSince(0n) is forgotten');
+  const keptEdges = serial.edgesSince(1n);
+  assert.equal(keptEdges.cursor, edgeEnd);
+  assert.equal(keptEdges.at.length, Number(edgeEnd - 1n));
+  keptEdges.free();
+  const pastEdges = serial.edgesSince(edgeEnd + 1n);
+  assert.equal(pastEdges.at.length, 0);
+  assert.equal(pastEdges.cursor, edgeEnd + 1n);
+  pastEdges.free();
+  serial.forgetSerial(sent);
+  assert.throws(() => serial.serialSince(0n), isCode('forgotten'), 'serialSince(0n) is forgotten');
+  const keptSerial = serial.serialSince(sent);
+  assert.equal(keptSerial.byte.length, 0);
+  assert.equal(keptSerial.cursor, sent);
+  keptSerial.free();
+
+  const stop = 2n ** 64n - 1n;
+  const far = Buffer.from(
+    steps
+      .toString()
+      .replace(
+        /"stop_ps": \d+, "max_step_ps": \d+, "grid_ps": \d+/,
+        `"stop_ps": ${stop}, "max_step_ps": ${stop}, "grid_ps": ${stop}`,
+      ),
+  );
+  const session = wasm.Session.open(far);
+  for (const [ps] of EDGES) {
+    session.advanceTo(ps);
+    assert.equal(session.now(), ps, `advanceTo(${ps}n) stands at ${ps}n`);
+  }
+  assert.equal(session.status(), 'stopped');
+  for (const [seconds, stamp] of EDGES) {
+    const folders = { run: wasm.run(steps, seconds), finish: wasm.Session.record(steps).finish(seconds) };
+    for (const [call, folder] of Object.entries(folders)) {
+      const { created_at } = JSON.parse(Buffer.from(folder.file('manifest.json')));
+      assert.equal(created_at, stamp, `${call}(${seconds}n) stamps ${stamp}`);
+    }
+  }
+  return `${refused} refused arguments across ${calls.length} arguments, 1100 detached netlists, ${EDGES.length} edges cross exactly`;
+}
+
+// True only for `node worker.mjs`. A named-import runner imports this file for `example`.
+const invokedDirectly = process.argv[1] !== undefined
+  && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+function importByName(pkg, examples, native, work) {
+  const name = 'v-steps';
+  const root = join(work, 'by-name');
+  const link = join(root, 'node_modules', 'sim-wasm');
+  mkdirSync(join(root, 'node_modules'), { recursive: true });
+  if (existsSync(link)) unlinkSync(link);
+  symlinkSync(pkg, link);
+  const runner = join(root, 'run.mjs');
+  const wasmFile = join(pkg, 'sim_wasm_bg.wasm');
+  const netlist = join(examples, name, 'netlist.json');
+  const folder = join(native, name);
+  writeFileSync(
+    runner,
+    `import assert from 'node:assert/strict';
+import { readFileSync, realpathSync } from 'node:fs';
+import init, { Session } from 'sim-wasm';
+import * as wasm from 'sim-wasm';
+import { example } from ${JSON.stringify(import.meta.url)};
+
+const wasmUrl = import.meta.resolve('sim-wasm/sim_wasm_bg.wasm');
+assert.equal(realpathSync(new URL(wasmUrl)), realpathSync(${JSON.stringify(wasmFile)}));
+await init({ module_or_path: readFileSync(new URL(wasmUrl)) });
+assert.equal(Session, wasm.Session);
+const checked = example(
+  wasm,
+  { name: ${JSON.stringify(name)}, seed: 1n },
+  readFileSync(${JSON.stringify(netlist)}),
+  [],
+  ${JSON.stringify(folder)},
+);
+console.log('ok   ' + ${JSON.stringify(name)} + ' by name: ' + checked);
+`,
+  );
+  execFileSync(process.execPath, [runner], { stdio: 'inherit' });
+}
+
+if (isMainThread && invokedDirectly) {
+  const [pkg, examples, native, sim, work] = process.argv.slice(2);
+  if (!work) {
+    console.error('usage: worker.mjs PKG_DIR EXAMPLES_DIR NATIVE_DIR SIM WORK_DIR');
+    process.exit(2);
+  }
+  const names = readdirSync(examples, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && existsSync(join(examples, entry.name, 'netlist.json')))
+    .map((entry) => entry.name)
+    .sort();
+  assert.ok(names.length >= 14, 'every example is here');
+  const jobs = [
+    ...names.map((name) => ({ kind: 'example', name, seed: seedOf(name) })),
+    ...INPUTS.map((input, k) => ({ ...input, kind: 'inputs', seed: 0x5eed_c100n + BigInt(k) })),
+    { kind: 'arguments', name: 'arguments' },
+  ];
+  const results = await Promise.all(
+    jobs.map(
+      (job) =>
+        new Promise((resolve) => {
+          const worker = new Worker(new URL(import.meta.url), {
+            workerData: { job, pkg, examples, native, sim, work },
+          });
+          worker.on('message', (checked) => resolve({ job, checked }));
+          worker.on('error', (error) => resolve({ job, error }));
+          worker.on('exit', (code) => resolve({ job, error: `exited ${code} with no result` }));
+        }),
+    ),
+  );
+  let failed = 0;
+  let inputPosts = 0;
+  for (const { job, checked, error } of results) {
+    const inputRow = INPUTS.find((row) => row.name === job.name && row.part === job.part);
+    if (inputRow) {
+      inputPosts += 1;
+      const text = typeof checked === 'string' ? checked : '';
+      const posted =
+        job.kind === 'inputs' &&
+        !error &&
+        text.startsWith('finish is sim run on the ended export');
+      if (!posted) {
+        failed += 1;
+        console.log(
+          `FAIL ${inputRow.name} with inputs: kind ${job.kind}, ${error?.stack ?? error ?? checked}`,
+        );
+        continue;
+      }
+    }
+    const label = job.kind === 'inputs' ? `${job.name} with inputs` : job.name;
+    if (error) {
+      failed += 1;
+      console.log(`FAIL ${label}: ${error.stack ?? error}`);
+    } else {
+      console.log(`ok   ${label}: ${checked}`);
+    }
+  }
+  if (inputPosts !== INPUTS.length) {
+    failed += 1;
+    console.log(`FAIL inputs: ${inputPosts} results, want ${INPUTS.length}`);
+  }
+  try {
+    importByName(pkg, examples, native, work);
+  } catch (error) {
+    failed += 1;
+    console.log(`FAIL v-steps by name: ${error.stack ?? error}`);
+  }
+  console.log(`${results.length + 1 - failed} passed, ${failed} failed`);
+  process.exit(failed ? 1 : 0);
+} else if (!isMainThread) {
+  const { job, pkg, examples, native, work } = workerData;
+  const wasm = await import(pathToFileURL(join(pkg, 'sim_wasm.js')));
+  wasm.initSync({ module: readFileSync(join(pkg, 'sim_wasm_bg.wasm')) });
+  const json = () => readFileSync(job.netlist ?? join(examples, job.name, 'netlist.json'));
+  const checks = {
+    example: () => example(wasm, job, json(), blobsOf(join(examples, job.name)), join(native, job.name)),
+    inputs: () => withInputs(wasm, job, json(), work),
+    arguments: () => argumentChecks(wasm, examples),
+  };
+  parentPort.postMessage(checks[job.kind]());
+}
+
+export { example };

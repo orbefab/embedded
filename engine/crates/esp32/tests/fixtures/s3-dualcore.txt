@@ -1,0 +1,35 @@
+chip: ESP32-S3 (QFN56)
+revision: v0.2
+toolchain: xtensa-esp-elf-gcc (crosstool-NG esp-14.2.0_20260121) 14.2.0
+image_sha256: 082d75d38370846168fed78d54db480b8b830bbc143b08afcd0f3bf5fc5d7f74
+seed: none
+vectors: 0
+probe: dualcore
+---
+BEGIN dualcore
+pro_prid 0000cdcd
+cas_hit old=00000005 now=00000009
+cas_miss old=00000009 now=00000009
+core1_ctrl_before 00000004
+core1_ctrl_after 00000002
+app_prid 0000abab
+app_ps 00060000
+mbox=01 rsp=9e382564 ok
+mbox=02 rsp=3c6f9f1d ok
+mbox=03 rsp=daa718d6 ok
+mbox=04 rsp=78de928f ok
+mbox=05 rsp=17160c48 ok
+mbox=06 rsp=b54d8601 ok
+mbox=07 rsp=5384ffba ok
+mbox=08 rsp=f1bc7973 ok
+mbox=09 rsp=8ff3f32c ok
+mbox=0a rsp=2e2b6ce5 ok
+mbox=0b rsp=cc62e69e ok
+mbox=0c rsp=6a9a6057 ok
+mbox=0d rsp=08d1da10 ok
+mbox=0e rsp=a70953c9 ok
+mbox=0f rsp=4540cd82 ok
+mbox=10 rsp=e378473b ok
+lock_counter=00009c40 want=00009c40 app_done
+lock_word 00000000
+END dualcore
