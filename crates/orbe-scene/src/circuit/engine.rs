@@ -1,9 +1,9 @@
 //! The engine's findings on the netlist the reader wrote, placed in the files that wrote it.
 
 use serde_json::{Map, Value};
-use sim_core::diagnostic::Diagnostic;
+use sim_core::diagnostic::{Diagnostic, ScheduleRule};
 
-use super::{Circuit, Head, Setter, Written, setter_of};
+use super::{Circuit, Head, SetBy, Setter, Written, setter_of};
 use crate::diagnostic::{Code, Reported};
 use crate::params::{dotted, within};
 use crate::source::Span;
@@ -75,19 +75,26 @@ impl<'p> Circuit<'p> {
                 requirement(&message),
                 "make each event's time later than the one before it".into(),
             ),
+            "same_state" => (
+                requirement(&message),
+                "make each event change the state or level in force, which for the first event is `initial`".into(),
+            ),
             _ => (
                 requirement(&message),
                 "change the value so it meets the engine's rule".into(),
             ),
         };
-        let pointer = field_pointer(diagnostic, value);
-        let setter = setter_of(&origin.set_by, &pointer).or_else(|| {
-            origin
-                .set_by
-                .iter()
-                .find(|(p, _)| !pointer.is_empty() && within(p, &pointer))
-                .map(|(_, s)| s)
-        });
+        let fields = read_fields(diagnostic, value);
+        let pointer = fields[0].clone();
+        let setter = set_by_instance(&origin.set_by, &fields)
+            .or_else(|| setter_of(&origin.set_by, &pointer))
+            .or_else(|| {
+                origin
+                    .set_by
+                    .iter()
+                    .find(|(p, _)| !pointer.is_empty() && within(p, &pointer))
+                    .map(|(_, s)| s)
+            });
         if let Some(setter) = setter {
             self.out.push(
                 Code::Param,
@@ -127,7 +134,16 @@ impl<'p> Circuit<'p> {
     ) -> Reported {
         let detail = detail(value);
         let at = culprit(&origin.fields, &detail, |part| refusal(head, part));
-        let setter = setter_of(&origin.set_by, &at);
+        let parent = at.rsplit_once('/').map_or("", |(parent, _)| parent);
+        let fields: Vec<String> = std::iter::once(at.clone())
+            .chain(
+                rule(&detail)
+                    .into_iter()
+                    .flat_map(|(_, _, reads, _)| reads.iter().map(|f| format!("{parent}/{f}"))),
+            )
+            .collect();
+        let setter =
+            set_by_instance(&origin.set_by, &fields).or_else(|| setter_of(&origin.set_by, &at));
         let (message, hint) = words(&detail, &at, origin.fields.pointer(&at), setter);
         let before = self.out.len();
         match setter {
@@ -151,15 +167,50 @@ impl<'p> Circuit<'p> {
     }
 }
 
-/// The JSON pointer of the field an engine finding is about. A schedule finding names its event,
-/// and goes at that event's time.
-fn field_pointer(diagnostic: &Diagnostic, value: &Value) -> String {
-    if let Diagnostic::NetlistSchedule { field, event, .. } = diagnostic {
-        return format!("/{}/{event}/t_ps", field.replace('.', "/"));
+/// A value an instance set, or a choice it picked, among the fields a rule reads. A finding
+/// goes there first, since that value is what broke a rule the part file alone keeps.
+fn set_by_instance<'s>(set_by: &'s SetBy, fields: &[String]) -> Option<&'s Setter> {
+    fields
+        .iter()
+        .filter_map(|f| setter_of(set_by, f))
+        .find(|s| s.explicit)
+}
+
+/// The JSON pointers of the fields an engine finding's rule reads, the one it names first. A
+/// schedule finding names its event and goes at that event's time, unless the rule reads
+/// other fields: whether an event changes the contact reads its state and the one in force
+/// before it.
+fn read_fields(diagnostic: &Diagnostic, value: &Value) -> Vec<String> {
+    if let Diagnostic::NetlistSchedule {
+        field, event, rule, ..
+    } = diagnostic
+    {
+        let list = format!("/{}", field.replace('.', "/"));
+        let item = |index: usize, key: &str| format!("{list}/{index}/{key}");
+        let previous = event.checked_sub(1);
+        return match rule {
+            ScheduleRule::SameState => {
+                let to = if *field == "events" { "state" } else { "level" };
+                let before = match previous {
+                    Some(previous) => item(previous, to),
+                    None => format!("{}initial", list.trim_end_matches("events")),
+                };
+                vec![item(*event, to), before]
+            }
+            ScheduleRule::NotIncreasing | ScheduleRule::TooClose => std::iter::once(*event)
+                .chain(previous)
+                .map(|index| item(index, "t_ps"))
+                .collect(),
+            _ => vec![item(*event, "t_ps")],
+        };
     }
-    match value["data"]["field"].as_str() {
+    let named = match value["data"]["field"].as_str() {
         Some(field) if !field.is_empty() => format!("/{}", field.replace('.', "/")),
         _ => String::new(),
+    };
+    match value["data"]["rule"].as_str() {
+        Some("bounce_room") => vec![named, "/bounce/max_bounces".into()],
+        _ => vec![named],
     }
 }
 
@@ -183,29 +234,39 @@ fn refusal(head: &Head, part: &Value) -> Option<String> {
         .map(|d| detail(&serde_json::to_value(d).unwrap_or_default()))
 }
 
-/// Engine rules on one object, by the engine's words: the field each is about, and its fix.
-/// The first two are checked once all the object's fields are read, so the search below finds
-/// only the object's last field for them.
-const RULES: &[(&str, &str, &str)] = &[
+/// Engine rules on one object, by the engine's words: the field each is about, the other
+/// fields of the object it reads, and its fix. The first two are checked once all the object's
+/// fields are read, so the search below finds only the object's last field for them.
+const RULES: &[Rule] = &[
     (
         "a phase has 1 to 32 bits",
         "bits",
+        &[],
         "give `bits` a value from 1 to 32",
     ),
     (
         "a phase's value fits in its bits",
         "value",
+        &["bits"],
         "make `value` less than 2 to the power of `bits`, or raise `bits`",
     ),
     (
         "lanes is 1, 2 or 4",
         "lanes",
+        &[],
         "give `lanes` the value 1, 2 or 4",
     ),
 ];
 
-fn rule(detail: &str) -> Option<&'static (&'static str, &'static str, &'static str)> {
-    RULES.iter().find(|(words, _, _)| *words == detail)
+type Rule = (
+    &'static str,
+    &'static str,
+    &'static [&'static str],
+    &'static str,
+);
+
+fn rule(detail: &str) -> Option<&'static Rule> {
+    RULES.iter().find(|(words, ..)| *words == detail)
 }
 
 /// The JSON pointer of the field the engine refuses in `part`. The engine names only the part,
@@ -219,7 +280,7 @@ fn culprit(part: &Value, detail: &str, refusal: impl Fn(&Value) -> Option<String
     let missing = detail
         .strip_prefix("missing field `")
         .and_then(|rest| rest.split('`').next());
-    let rule_field = rule(detail).map(|(_, field, _)| *field);
+    let rule_field = rule(detail).map(|(_, field, ..)| *field);
     let mut at = String::new();
     while let Some(node) = part.pointer(&at) {
         if let (Some(key), Some(object)) = (missing, node.as_object())
@@ -343,7 +404,7 @@ fn words(
             ),
         );
     }
-    let hint = if let Some((_, _, fix)) = rule(detail) {
+    let hint = if let Some((.., fix)) = rule(detail) {
         (*fix).to_string()
     } else if detail.starts_with("invalid type: map") && setter.is_some_and(|s| s.unit.is_some()) {
         format!(

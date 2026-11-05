@@ -7,39 +7,13 @@ use crate::diagnostic::{Code, Findings, Reported};
 use crate::kinds;
 use crate::name::{NameKind, did_you_mean, problem};
 use crate::params::{Step, dotted, pointer_of, step, tokens, within};
+use crate::shape::{self, schema, unknown_key};
 use crate::source::{FileId, Sources, Span};
 use crate::syntax::{Node, Prop};
 use crate::units::{self, Unit};
 
 const SCENE_KEYS: &[&str] = &[
     "format", "$schema", "parts", "wires", "layout", "ground", "nets", "sim",
-];
-const PART_KEYS: &[&str] = &[
-    "format",
-    "$schema",
-    "part",
-    "version",
-    "title",
-    "summary",
-    "tags",
-    "license",
-    "docs",
-    "real",
-    "uses",
-    "pins",
-    "model",
-    "params",
-    "files",
-    "parts",
-    "wires",
-    "layout",
-    "ground",
-    "readings",
-    "controls",
-    "joints",
-    "facts",
-    "view",
-    "not_simulated",
 ];
 const FORMATS: &[u32] = &[1];
 const WIRE_KINDS: &[&str] = &["jumper", "trace", "contact"];
@@ -200,7 +174,8 @@ impl Part {
     }
 
     /// The param that turns on the object at `off`, such as `/bounce`: one with "default": null
-    /// that sets a field inside it, else one that writes the object, or an object around it.
+    /// that sets a field inside it, else one that writes the object, or an object or a list
+    /// around it.
     pub(crate) fn opener(&self, off: &str) -> Option<&ParamDecl> {
         let inside = |p: &str| p != off && within(p, off);
         self.params
@@ -209,7 +184,8 @@ impl Part {
             .or_else(|| {
                 self.params.iter().find(|d| {
                     d.writes().into_iter().any(|(p, value)| {
-                        within(off, p) && value.is_none_or(|v| v.props().is_some())
+                        within(off, p)
+                            && value.is_none_or(|v| v.props().is_some() || v.items().is_some())
                     })
                 })
             })
@@ -225,6 +201,16 @@ impl Part {
                     v.items().is_some() && matches!(step(&v.to_value(), next), Step::Found(_));
                 (!passes).then_some((d, v))
             })
+        })
+    }
+
+    /// Whether a choice writes a list at `at`, so the list's items come from the choice and
+    /// not from `model`.
+    fn chosen_list(&self, at: &str) -> bool {
+        self.params.iter().any(|d| {
+            d.writes()
+                .into_iter()
+                .any(|(p, v)| p == at && v.is_some_and(|v| v.items().is_some()))
         })
     }
 
@@ -302,15 +288,6 @@ fn name_ok(name: &str, span: Span, kind: NameKind, what: &str, out: &mut Finding
     }
 }
 
-fn schema(out: &mut Findings, node: &Node, expected: &str) {
-    out.push(
-        Code::Syntax,
-        node.span,
-        format!("expected {expected}, found {}", node.what()),
-        format!("write {expected}"),
-    );
-}
-
 pub(crate) fn decode_scene(
     sources: &Sources,
     file: FileId,
@@ -341,28 +318,18 @@ pub(crate) fn decode_scene(
             "ground" => scene.comp.ground = decode_ref(value, out),
             "nets" => scene.nets = decode_nets(value, out),
             "sim" => decode_sim(value, &mut scene, out),
-            key if PART_KEYS.contains(&key) => out.push(
+            key if shape::PART.iter().any(|(k, _)| *k == key) => out.push(
                 Code::Role,
                 prop.key_span,
                 format!("a scene has no `{key}`; it is a part's key, and this file is read as a scene"),
                 "a part file is used from a scene, as \"btn1\": { \"type\": \"./parts/my-part.jsonc\" }".into(),),
-            key => unknown_key(out, prop, key, SCENE_KEYS, "a scene"),
+            _ => unknown_key(out, prop, SCENE_KEYS, "a scene"),
         }
     }
     if let Some(layout) = root.get("layout") {
         decode_layout(layout, &scene.comp, out);
     }
     Some(scene)
-}
-
-fn unknown_key(out: &mut Findings, prop: &Prop, key: &str, keys: &[&str], what: &str) {
-    let hint = did_you_mean(key, keys.iter().copied(), "");
-    out.push(
-        Code::Syntax,
-        prop.key_span,
-        format!("{what} has no key `{key}`"),
-        format!("{hint}its keys are {}", keys.join(", ")),
-    );
 }
 
 pub(crate) fn decode_part(
@@ -392,6 +359,19 @@ pub(crate) fn decode_part(
     };
     for prop in props {
         let value = &prop.value;
+        let Some((_, value_shape)) = shape::PART.iter().find(|(k, _)| *k == prop.key) else {
+            match prop.key.as_str() {
+                key @ ("sim" | "nets") => out.push(
+                    Code::Role,
+                    prop.key_span,
+                    format!("a part has no `{key}`; only a scene does"),
+                    format!("move `{key}` to the scene that uses this part"),
+                ),
+                _ => unknown_key(out, prop, &shape::keys(shape::PART), "a part"),
+            }
+            continue;
+        };
+        shape::check(value, value_shape, Some(&prop.key), out);
         match prop.key.as_str() {
             "parts" => part.comp.parts = decode_instances(value, out),
             "wires" => part.comp.wires = decode_wires(sources, value, out),
@@ -400,14 +380,7 @@ pub(crate) fn decode_part(
             "model" => part.model = Some(value.clone()),
             "readings" => decode_names(value, "reading", out),
             "not_simulated" => part.not_simulated = decode_not_simulated(value, out),
-            key @ ("sim" | "nets") => out.push(
-                Code::Role,
-                prop.key_span,
-                format!("a part has no `{key}`; only a scene does"),
-                format!("move `{key}` to the scene that uses this part"),
-            ),
-            key if PART_KEYS.contains(&key) => {}
-            key => unknown_key(out, prop, key, PART_KEYS, "a part"),
+            _ => {}
         }
     }
     if let Some(params) = root.get("params") {
@@ -635,7 +608,10 @@ fn decode_wire_hint(hint: &Node, out: &mut Findings) {
                 Code::Wires,
                 prop.key_span,
                 format!("a wire's hint has no key `{key}`"),
-                "its keys are kind and color".into(),
+                format!(
+                    "{}its keys are kind and color",
+                    did_you_mean(key, ["kind", "color"], "")
+                ),
             ),
         }
     }
@@ -701,7 +677,10 @@ fn decode_layout(node: &Node, comp: &Comp, out: &mut Findings) {
                     Code::Layout,
                     field.key_span,
                     format!("a placement has no key `{key}`"),
-                    "its keys are at and rotate".into(),
+                    format!(
+                        "{}its keys are at and rotate",
+                        did_you_mean(key, ["at", "rotate"], "")
+                    ),
                 ),
             }
         }
@@ -760,7 +739,7 @@ fn decode_sim(node: &Node, scene: &mut Scene, out: &mut Findings) {
                     ),
                 }
             }
-            key => unknown_key(out, prop, key, &["seed", "max_step"], "`sim`"),
+            _ => unknown_key(out, prop, &["seed", "max_step"], "`sim`"),
         }
     }
 }
@@ -808,38 +787,38 @@ fn decode_names(node: &Node, what: &str, out: &mut Findings) {
     }
 }
 
+/// Each entry's reason with the pins it lists. `shape` reports the types.
 fn decode_not_simulated(node: &Node, out: &mut Findings) -> Vec<(String, Vec<String>)> {
-    let Some(items) = node.items() else {
-        schema(out, node, "a list of { what, why, pins }");
-        return Vec::new();
-    };
     let mut entries = Vec::new();
-    for item in items {
-        let why = item.get("why").and_then(Node::str);
-        let pins = item.get("pins").map(|p| {
-            p.items()
-                .map(|i| i.iter().filter_map(Node::str).map(str::to_string).collect())
-        });
-        match (why, pins) {
-            (Some(why), None) => entries.push((why.to_string(), Vec::new())),
-            (Some(why), Some(Some(pins))) => entries.push((why.to_string(), pins)),
-            _ => schema(
-                out,
-                item,
-                "{ \"what\", \"why\", \"pins\" } with `why` a string and `pins` a list",
-            ),
+    for item in node.items().unwrap_or_default() {
+        if item.props().is_some() && item.get("why").is_none() {
+            out.push(
+                Code::Syntax,
+                item.span,
+                "a not_simulated entry has no `why`",
+                "say why it is left out, as \"why\": \"The engine has no temperature.\"".into(),
+            );
         }
+        let Some(why) = item.get("why").and_then(Node::str) else {
+            continue;
+        };
+        let pins = item.get("pins").and_then(Node::items).unwrap_or_default();
+        entries.push((
+            why.to_string(),
+            pins.iter()
+                .filter_map(Node::str)
+                .map(str::to_string)
+                .collect(),
+        ));
     }
     entries
 }
 
+/// The part's params. `shape` reports an unknown key or a value of the wrong type, so a field
+/// written with the wrong type is left out here without a second finding.
 fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl> {
-    let Some(props) = node.props() else {
-        schema(out, node, "an object of params by name");
-        return Vec::new();
-    };
     let mut params = Vec::new();
-    for prop in props {
+    for prop in node.props().unwrap_or_default() {
         if prop.key == "type" || prop.key == "not_simulated" {
             out.push(
                 Code::Param,
@@ -853,22 +832,19 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
             continue;
         }
         name_ok(&prop.key, prop.key_span, NameKind::Name, "param", out);
-        let Some(fields) = prop.value.props() else {
-            schema(out, &prop.value, "an object declaring the param");
+        if prop.value.props().is_none() {
             continue;
-        };
+        }
         let field = |key: &str| prop.value.get(key);
         let sets = field("sets").and_then(Node::str).map(str::to_string);
         let kind = if let Some(choices) = field("choices") {
-            ParamKind::Choice(decode_choices(choices, out))
-        } else if let Some(format) = field("file") {
-            if format.str().is_none() {
-                schema(out, format, "the file's format, such as \"hex\"");
-            }
-            match field("as").and_then(Node::str) {
-                Some("text") => ParamKind::File { text: true },
-                Some("blob") => ParamKind::File { text: false },
-                _ => {
+            ParamKind::Choice(decode_choices(choices))
+        } else if field("file").is_some() {
+            match field("as").map(Node::str) {
+                Some(Some("text")) => ParamKind::File { text: true },
+                Some(Some("blob")) => ParamKind::File { text: false },
+                Some(_) => continue,
+                None => {
                     out.push(
                         Code::Param,
                         prop.key_span,
@@ -882,7 +858,8 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
                 }
             }
         } else if let Some(unit) = field("unit") {
-            let Some(parsed) = unit.str().and_then(Unit::parse) else {
+            let Some(text) = unit.str() else { continue };
+            let Some(parsed) = Unit::parse(text) else {
                 out.push(
                     Code::Param,
                     unit.span,
@@ -898,46 +875,8 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
         } else {
             ParamKind::Through
         };
-        let required = field("required").and_then(|r| r.to_value().as_bool()) == Some(true);
+        let required = field("required").is_some_and(|r| r.to_value().as_bool() != Some(false));
         let default = field("default").cloned();
-        let keys_ok = fields.iter().all(|f| {
-            [
-                "unit",
-                "default",
-                "required",
-                "min_exclusive",
-                "sets",
-                "choices",
-                "file",
-                "as",
-            ]
-            .contains(&f.key.as_str())
-        });
-        if !keys_ok {
-            let bad = fields
-                .iter()
-                .find(|f| {
-                    ![
-                        "unit",
-                        "default",
-                        "required",
-                        "min_exclusive",
-                        "sets",
-                        "choices",
-                        "file",
-                        "as",
-                    ]
-                    .contains(&f.key.as_str())
-                })
-                .unwrap();
-            out.push(
-                Code::Param,
-                bad.key_span,
-                format!("a param declaration has no key `{}`", bad.key),
-                "its keys are unit, choices, file, as, default, required, min_exclusive and sets"
-                    .into(),
-            );
-        }
         let through = matches!(kind, ParamKind::Through);
         if !through && default.is_none() && !required {
             out.push(
@@ -950,7 +889,7 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
                 "add \"default\" or \"required\": true".into(),
             );
         }
-        if !through && !matches!(kind, ParamKind::Choice(_)) && sets.is_none() {
+        if !through && !matches!(kind, ParamKind::Choice(_)) && field("sets").is_none() {
             out.push(
                 Code::Param,
                 prop.key_span,
@@ -1071,8 +1010,8 @@ fn sets_problem(part: &Part, model: &Value, pointer: &str, name: &str) -> Option
             );
             let hint = match (value.items(), next.parse::<usize>()) {
                 (Some(_), Ok(index)) => format!(
-                    "give `{field}` at least {} items in that choice, or point `sets` at a field every choice of `{}` keeps",
-                    index + 1,
+                    "give `{field}` at least {} in that choice, or point `sets` at a field every choice of `{}` keeps",
+                    items(index + 1),
                     choice.name
                 ),
                 (Some(_), Err(_)) => {
@@ -1098,7 +1037,14 @@ fn sets_problem(part: &Part, model: &Value, pointer: &str, name: &str) -> Option
                     at_field(),
                 ));
             }
-            Some((parent, found)) => return not_passable(pointer, &tokens[..i], parent, found),
+            // Every list a choice writes here has the item, which `blocking_choice` checked
+            // one step up.
+            Some((_, Step::PastEnd(_))) if part.chosen_list(&pointer_of(&tokens[..i])) => {
+                "is past the end"
+            }
+            Some((parent, found)) => {
+                return not_passable(pointer, &tokens[..i], token, parent, found);
+            }
         };
         node = None;
         if part.opener(&here).is_none() {
@@ -1113,20 +1059,32 @@ fn sets_problem(part: &Part, model: &Value, pointer: &str, name: &str) -> Option
         }
     }
     let parent = node?;
-    if parent.is_object() {
-        return None;
+    match step(parent, last) {
+        _ if parent.is_object() => None,
+        Step::PastEnd(_) if part.chosen_list(&pointer_of(through)) => None,
+        found => not_passable(pointer, through, last, parent, found),
     }
-    not_passable(pointer, through, parent, step(parent, last))
 }
 
-/// Why a pointer cannot go on from `parent`, the value at `tokens`, by a step that is neither
-/// an object's key nor an item a list has.
+/// "1 item" or "`n` items".
+fn items(n: usize) -> String {
+    if n == 1 {
+        "1 item".into()
+    } else {
+        format!("{n} items")
+    }
+}
+
+/// Why a pointer cannot go on from `parent`, the value at `tokens`, by `token`, a step that is
+/// neither an object's key nor an item a list has.
 fn not_passable(
     pointer: &str,
     tokens: &[&str],
+    token: &str,
     parent: &Value,
     found: Step<'_>,
 ) -> Option<(String, String)> {
+    let need = || items(token.parse::<usize>().map_or(1, |index| index + 1));
     let field = dotted(&pointer_of(tokens));
     let shown = if field.is_empty() {
         "model".to_string()
@@ -1137,16 +1095,20 @@ fn not_passable(
         Step::Found(_) | Step::Missing => None,
         Step::PastEnd(0) => Some((
             format!("`{pointer}` indexes into `{shown}`, which is an empty list"),
-            format!("add an item to `{shown}` in `model`, or point `sets` at a field `model` has"),
+            format!(
+                "give `{shown}` at least {} in `model`, or point `sets` at a field `model` has",
+                need()
+            ),
         )),
         Step::PastEnd(len) => Some((
             format!(
-                "`{pointer}` indexes past the end of `{shown}`, which has {len} {}",
-                if len == 1 { "item" } else { "items" }
+                "`{pointer}` indexes past the end of `{shown}`, which has {}",
+                items(len)
             ),
             format!(
-                "index an item `{shown}` has, from 0 to {}",
-                len.saturating_sub(1)
+                "give `{shown}` at least {} in `model`, or index an item it has, from 0 to {}",
+                need(),
+                len - 1
             ),
         )),
         Step::NotIndex => Some((
@@ -1163,12 +1125,9 @@ fn not_passable(
     }
 }
 
-fn decode_choices(node: &Node, out: &mut Findings) -> Vec<(String, Vec<(String, Node)>)> {
-    let Some(props) = node.props() else {
-        schema(out, node, "an object of choices by name");
-        return Vec::new();
-    };
-    props
+fn decode_choices(node: &Node) -> Vec<(String, Vec<(String, Node)>)> {
+    node.props()
+        .unwrap_or_default()
         .iter()
         .map(|choice| {
             let sets = choice

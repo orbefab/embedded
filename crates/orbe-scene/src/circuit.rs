@@ -26,6 +26,10 @@ struct Inst {
     part: Option<usize>,
     children: BTreeMap<String, usize>,
     args: BTreeMap<String, Arg>,
+    /// Params that only pass a value on and get none, because a param above them is left
+    /// unset at a null default: each with the `{ "param": ... }` where that unset param is
+    /// passed down, and its name.
+    unset: BTreeMap<String, (Span, String)>,
     /// Why this instance or one above it is left out.
     dropped: Option<String>,
     /// The name of the scene's instance this one sits in, for a finding about its flat name.
@@ -79,6 +83,8 @@ struct Setter {
     /// A number param's unit.
     unit: Option<Unit>,
     choice: bool,
+    /// An instance set it, or a choice an instance picked, and not a default.
+    explicit: bool,
 }
 
 impl Setter {
@@ -92,6 +98,7 @@ impl Setter {
                 _ => None,
             },
             choice: matches!(decl.kind, ParamKind::Choice(_)),
+            explicit: arg.explicit,
         }
     }
 }
@@ -135,6 +142,7 @@ pub(crate) fn compile(project: &Project, out: &mut Findings) -> Option<Netlist> 
         part: None,
         children: BTreeMap::new(),
         args: BTreeMap::new(),
+        unset: BTreeMap::new(),
         dropped: None,
         top_span: Span::start_of(scene.file),
     };
@@ -195,12 +203,14 @@ impl<'p> Circuit<'p> {
                 part,
                 children: BTreeMap::new(),
                 args: BTreeMap::new(),
+                unset: BTreeMap::new(),
                 dropped,
                 top_span,
             };
             let before = self.out.len();
             if let Some(part) = part {
-                inst.args = self.args(parent, owner, &dir, &inst, instance, &project.parts[part]);
+                (inst.args, inst.unset) =
+                    self.args(parent, owner, &dir, &inst, instance, &project.parts[part]);
             }
             self.insts.push(inst);
             let id = self.insts.len() - 1;
@@ -219,7 +229,8 @@ impl<'p> Circuit<'p> {
 
     /// The values an instance's params take, each passed-through value replaced by the one
     /// its parent got. A parent's default is passed on as a default, and a parent param left
-    /// unset with a null default leaves the child's param unset too.
+    /// unset with a null default leaves the child's param unset too, through any number of
+    /// params that only pass it on. Returns the values, and the params left unset that way.
     fn args(
         &mut self,
         parent: usize,
@@ -228,9 +239,10 @@ impl<'p> Circuit<'p> {
         inst: &Inst,
         instance: &crate::model::Instance,
         part: &Part,
-    ) -> BTreeMap<String, Arg> {
+    ) -> (BTreeMap<String, Arg>, BTreeMap<String, (Span, String)>) {
         let project = self.project;
         let mut args = BTreeMap::new();
+        let mut unset = BTreeMap::new();
         for prop in &instance.params {
             if part.param(&prop.key).is_none() {
                 let names: Vec<&str> = part.params.iter().map(|p| p.name.as_str()).collect();
@@ -288,25 +300,34 @@ impl<'p> Circuit<'p> {
                 );
                 continue;
             };
+            let left_unset = self.insts[parent]
+                .unset
+                .get(name)
+                .cloned()
+                .or_else(|| decl.opens().then(|| (prop.value.span, name.to_string())));
             if let Some(arg) = self.insts[parent].args.get(name) {
                 args.insert(prop.key.clone(), arg.clone());
-            } else if decl.opens() {
-                if part
+            } else if let Some((span, origin)) = left_unset {
+                let child = part
                     .param(&prop.key)
-                    .is_some_and(|d| d.default.is_none() && !matches!(d.kind, ParamKind::Through))
-                {
-                    self.out.push(
+                    .expect("an unknown param is skipped above");
+                match (&child.default, &child.kind) {
+                    (Some(_), _) => {}
+                    (None, ParamKind::Through) => {
+                        unset.insert(prop.key.clone(), (span, origin));
+                    }
+                    (None, _) => self.out.push(
                         Code::Param,
-                        prop.value.span,
+                        span,
                         format!(
-                            "`{}` needs param `{}`, and `{name}` passes nothing while it is unset",
+                            "`{}` needs param `{}`, and `{origin}` passes nothing while it is unset",
                             inst.dotted(),
                             prop.key
                         ),
                         format!(
-                            "give `{name}` a default other than null, or set `{name}` where this part is used"
+                            "give `{origin}` a default other than null, or set `{origin}` where this part is used"
                         ),
-                    );
+                    ),
                 }
             } else if let Some(default) = &decl.default {
                 let site = format!("{}.{name}", self.insts[parent].dotted());
@@ -339,7 +360,7 @@ impl<'p> Circuit<'p> {
                 );
             }
         }
-        args
+        (args, unset)
     }
 
     fn make_pins(&mut self) {
@@ -946,9 +967,11 @@ impl<'p> Circuit<'p> {
                 },
                 (None, None) => continue,
             };
-            let rank = match (arg.explicit, arg.node.is_null()) {
-                (true, _) => Rank::Set,
-                (false, true) => Rank::Unset,
+            // `convert` takes null only for a param whose default is null, so a null set by an
+            // instance is that default and ranks as unset.
+            let rank = match (arg.node.is_null(), arg.explicit) {
+                (true, _) => Rank::Unset,
+                (false, true) => Rank::Set,
                 (false, false) => Rank::Default,
             };
             match convert(decl, &arg) {
@@ -1056,18 +1079,19 @@ impl<'p> Circuit<'p> {
                             }
                             _ => String::new(),
                         };
-                        let set_null = writes.iter().find(|o| {
-                            o.param == opener.name && o.rank == Rank::Set && o.value.is_null()
-                        });
+                        let set_null = self.insts[inst]
+                            .args
+                            .get(&opener.name)
+                            .filter(|a| a.explicit && a.node.is_null());
                         match set_null {
                             Some(off) => (
                                 format!(
                                     "`{site}` has no effect while `{}` is null, which leaves `{field}` off",
-                                    off.setter.site
+                                    off.site
                                 ),
                                 format!(
                                     "give `{}` a value{example}, or remove this value",
-                                    off.setter.site
+                                    off.site
                                 ),
                             ),
                             None => (
@@ -1094,8 +1118,8 @@ impl<'p> Circuit<'p> {
 /// Where a param's value comes from, weakest first.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Rank {
-    /// Left unset at a null default: it fills a field the model leaves out, and turns
-    /// nothing off.
+    /// Left unset at a null default, or set to that null: it fills a field the model leaves
+    /// out, and turns nothing off.
     Unset,
     /// A declaration's default, or a parent's default passed down.
     Default,

@@ -272,7 +272,7 @@ fn below_min(
     Ok(())
 }
 
-fn source_ok(node: &Node) -> bool {
+pub(crate) fn source_ok(node: &Node) -> bool {
     if let Some(text) = node.str() {
         return text == "user";
     }

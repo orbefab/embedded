@@ -1,0 +1,1 @@
+scene.syntax parts/cap.jsonc:4:74 | `min_exclusive` takes a number, found a string | write a number

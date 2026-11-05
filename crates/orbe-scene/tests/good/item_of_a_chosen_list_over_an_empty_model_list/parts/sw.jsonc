@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "pins": { "a": [1], "b": [2] },
+  "params": { "play": { "default": "one", "choices": { "one": { "sets": { "/events": [{ "t_ps": 1000000000, "state": "closed" }] } } } }, "when": { "default": "early", "choices": { "early": { "sets": { "/events/0/t_ps": 2000000000 } }, "late": { "sets": { "/events/0/t_ps": 3000000000 } } } } },
+  "model": {
+    "kind": "switch",
+    "on_resistance": { "value": 0.1, "unit": "ohm", "source": "user" },
+    "off_resistance": { "value": 1e8, "unit": "ohm", "source": "user" },
+    "initial": "open",
+    "events": [],
+    "bounce": null,
+  },
+}
