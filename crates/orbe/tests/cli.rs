@@ -4,7 +4,7 @@
 mod common;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use serde_json::Value;
@@ -27,6 +27,58 @@ fn orbe_in(dir: &Path, args: &[&str]) -> (Output, String, String) {
     let stdout = String::from_utf8(output.stdout.clone()).unwrap();
     let stderr = String::from_utf8(output.stderr.clone()).unwrap();
     (output, stdout, stderr)
+}
+
+/// A folder with a scene and nothing else.
+fn scene_only() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("scene.jsonc"), "{}\n").unwrap();
+    dir
+}
+
+/// A fresh first-target project at `<workspace>/proj`, with its firmware and no parts.
+fn first_target() -> (tempfile::TempDir, PathBuf) {
+    let workspace = tempfile::tempdir().unwrap();
+    let proj = workspace.path().join("proj");
+    fs::create_dir_all(proj.join("build")).unwrap();
+    fs::copy(
+        common::fixture("nano-button").join("scene.jsonc"),
+        proj.join("scene.jsonc"),
+    )
+    .unwrap();
+    fs::copy(common::firmware(), proj.join("build/button.ino.hex")).unwrap();
+    (workspace, proj)
+}
+
+/// Every `orbe add` command in the hint of a `part_missing` or `part_modified` finding.
+fn hint_commands(stdout: &str) -> Vec<String> {
+    let lines: Vec<&str> = stdout.lines().collect();
+    let mut commands = Vec::new();
+    for pair in lines.windows(2) {
+        if !(pair[0].contains("error[part_missing]") || pair[0].contains("error[part_modified]")) {
+            continue;
+        }
+        let hint = pair[1]
+            .strip_prefix("  hint: ")
+            .unwrap_or_else(|| panic!("{stdout}"));
+        let at = hint
+            .find("`orbe add ")
+            .unwrap_or_else(|| panic!("no command in {hint}"));
+        let rest = &hint[at + 1..];
+        let command = &rest[..rest.find('`').unwrap()];
+        if !commands.iter().any(|c| c == command) {
+            commands.push(command.to_string());
+        }
+    }
+    commands
+}
+
+/// Runs a printed command as a shell would split it. The paths here have no quotes or spaces.
+fn run_printed(cwd: &Path, command: &str) -> (Output, String, String) {
+    assert!(!command.contains(['\'', '"']), "{command}");
+    let words: Vec<&str> = command.split_whitespace().collect();
+    assert_eq!(&words[..2], ["orbe", "add"], "{command}");
+    orbe_in(cwd, &words[1..])
 }
 
 /// The one `orbe add` command in a `part_missing` hint. Every hint names the same command.
@@ -141,15 +193,12 @@ fn json_with_a_value_is_still_one_envelope() {
 fn a_deleted_copy_prints_one_part_missing() {
     let project = common::project("nano-button");
     fs::remove_dir_all(project.path().join("parts/led-5mm")).unwrap();
-    let scene = project.path().join("scene.jsonc");
-    let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
     assert_eq!(output.status.code(), Some(1), "{stdout}");
-    let expected = format!(
-        "{}:9:23: error[part_missing]: part `led-5mm` has a parts.lock line but no folder\n  hint: run `orbe add led-5mm`\n1 error in {}\n",
-        scene.display(),
-        scene.display()
+    assert_eq!(
+        stdout,
+        "scene.jsonc:9:23: error[part_missing]: part `led-5mm` has a parts.lock line but no folder\n  hint: run `orbe add led-5mm`\n1 error in scene.jsonc\n"
     );
-    assert_eq!(stdout, expected);
 }
 
 #[test]
@@ -236,10 +285,14 @@ fn adding_parts_for_the_first_target() {
             "{stdout}"
         );
     }
+    assert!(!stdout.contains("did you mean"), "{stdout}");
     let command = add_command(&stdout);
     assert_eq!(
         command,
-        "orbe add led-5mm nano-board resistor-axial tactile-switch-6mm"
+        format!(
+            "orbe add -C {} led-5mm nano-board resistor-axial tactile-switch-6mm",
+            dir.path().display()
+        )
     );
 
     let args: Vec<&str> = command.split_whitespace().skip(1).collect();
@@ -421,7 +474,7 @@ fn adding_parts_for_the_first_target() {
 
 #[test]
 fn an_unknown_id_names_a_close_catalog_id() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = scene_only();
     let (output, stdout, _) = orbe_in(dir.path(), &["add", "led-5m"]);
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     assert!(stdout.contains("did you mean"), "{stdout}");
@@ -432,7 +485,7 @@ fn an_unknown_id_names_a_close_catalog_id() {
 
 #[test]
 fn a_registry_id_says_v1_reads_the_official_catalog() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = scene_only();
     let (output, stdout, _) = orbe_in(dir.path(), &["add", "@acme/led-5mm"]);
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     assert!(
@@ -473,12 +526,246 @@ fn a_folder_with_no_lock_line_is_part_missing() {
         .filter(|line| !line.starts_with("led-5mm "))
         .collect();
     fs::write(&lock, format!("{}\n", kept.join("\n"))).unwrap();
-    let scene = project.path().join("scene.jsonc");
-    let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     assert!(
         stdout.contains("part `led-5mm` is not in this project's parts.lock"),
         "{stdout}"
     );
     assert!(stdout.contains("run `orbe add led-5mm`"), "{stdout}");
+}
+
+#[test]
+fn the_first_target_walk_from_the_folder_above() {
+    let (workspace, proj) = first_target();
+    let (output, stdout, _) = orbe_in(workspace.path(), &["check", "proj/scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert_eq!(stdout.matches("error[part_missing]").count(), 4, "{stdout}");
+    assert!(!stdout.contains("did you mean"), "{stdout}");
+    let command = add_command(&stdout);
+    assert_eq!(
+        command,
+        "orbe add -C proj led-5mm nano-board resistor-axial tactile-switch-6mm"
+    );
+    let (output, stdout, stderr) = run_printed(workspace.path(), &command);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert_eq!(stdout.matches("wrote parts/").count(), 18, "{stdout}");
+    assert!(!workspace.path().join("parts").exists());
+    assert!(!workspace.path().join("parts.lock").exists());
+    let (output, stdout, _) = orbe_in(workspace.path(), &["check", "proj/scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert_eq!(
+        stdout,
+        "proj/scene.jsonc: ok, 18 engine parts, 31 nets, ground nano__GND\n"
+    );
+    assert!(proj.join("parts.lock").is_file());
+}
+
+#[test]
+fn every_part_missing_and_part_modified_hint_makes_the_next_check_pass() {
+    let set_version = |project: &Path, to: &str| {
+        let path = project.join("parts/led-5mm/part.jsonc");
+        let text = fs::read_to_string(&path).unwrap();
+        let edited = text.replacen(
+            "\"version\": \"0.1.0\"",
+            &format!("\"version\": \"{to}\""),
+            1,
+        );
+        assert_ne!(text, edited);
+        fs::write(&path, edited).unwrap();
+    };
+    let drop_lock_line = |project: &Path| {
+        let lock = project.join("parts.lock");
+        let kept: String = fs::read_to_string(&lock)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.starts_with("led-5mm "))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        fs::write(&lock, kept).unwrap();
+    };
+    let edit_title = |project: &Path| {
+        let path = project.join("parts/led-5mm/part.jsonc");
+        let text = fs::read_to_string(&path).unwrap();
+        fs::write(&path, text.replace("5 mm LED", "5 mm LED edited")).unwrap();
+    };
+    type Break = Box<dyn Fn(&Path)>;
+    let cases: Vec<(&str, &str, Break)> = vec![
+        (
+            "no parts at all",
+            "is not in this project's parts.lock",
+            Box::new(|p: &Path| {
+                fs::remove_dir_all(p.join("parts")).unwrap();
+                fs::remove_file(p.join("parts.lock")).unwrap();
+            }),
+        ),
+        (
+            "a deleted folder",
+            "has a parts.lock line but no folder",
+            Box::new(|p: &Path| {
+                fs::remove_dir_all(p.join("parts/led-5mm")).unwrap();
+            }),
+        ),
+        (
+            "no lock line",
+            "is not in this project's parts.lock",
+            Box::new(move |p: &Path| drop_lock_line(p)),
+        ),
+        (
+            "no lock line and an edit",
+            "is not in this project's parts.lock",
+            Box::new(move |p: &Path| {
+                drop_lock_line(p);
+                edit_title(p);
+            }),
+        ),
+        (
+            "a folder with no part.jsonc",
+            "has a folder, parts/led-5mm, with no part.jsonc",
+            Box::new(|p: &Path| {
+                fs::remove_file(p.join("parts/led-5mm/part.jsonc")).unwrap();
+            }),
+        ),
+        (
+            "a file at the folder's place",
+            "is parts/led-5mm, which is a file, not a folder",
+            Box::new(|p: &Path| {
+                fs::remove_dir_all(p.join("parts/led-5mm")).unwrap();
+                fs::write(p.join("parts/led-5mm"), "notes\n").unwrap();
+            }),
+        ),
+        (
+            "a sealed edit",
+            "differs from `led-5mm@0.1.0` in `title`",
+            Box::new(move |p: &Path| edit_title(p)),
+        ),
+        (
+            "a version in another major",
+            "differs from `led-5mm@0.1.0` in `version`",
+            Box::new(move |p: &Path| set_version(p, "1.0.0")),
+        ),
+        (
+            "a lock line at another version",
+            "parts.lock lists `led-5mm` at `0.2.0`",
+            Box::new(|p: &Path| {
+                let lock = p.join("parts.lock");
+                let text = fs::read_to_string(&lock).unwrap();
+                fs::write(&lock, text.replacen("led-5mm 0.1.0 ", "led-5mm 0.2.0 ", 1)).unwrap();
+            }),
+        ),
+    ];
+    for (name, message, break_it) in cases {
+        let project = common::project("nano-button");
+        break_it(project.path());
+        let above = project.path().parent().unwrap();
+        let folder = project.path().file_name().unwrap().to_str().unwrap();
+        let scene = format!("{folder}/scene.jsonc");
+        let (output, stdout, _) = orbe_in(above, &["check", &scene]);
+        assert_eq!(output.status.code(), Some(1), "{name}: {stdout}");
+        assert!(stdout.contains(message), "{name}: {stdout}");
+        let commands = hint_commands(&stdout);
+        assert!(!commands.is_empty(), "{name}: {stdout}");
+        for command in &commands {
+            assert!(
+                command.starts_with(&format!("orbe add -C {folder} ")),
+                "{name}: {command}"
+            );
+            let (output, out, err) = run_printed(above, command);
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{name}: {command}\n{out}{err}"
+            );
+        }
+        let (output, stdout, _) = orbe_in(above, &["check", &scene]);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{name}: {commands:?}\n{stdout}"
+        );
+        assert!(stdout.contains("ok, 18 engine parts"), "{name}: {stdout}");
+        let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
+        assert_eq!(output.status.code(), Some(0), "{name}: {stdout}");
+    }
+}
+
+#[test]
+fn a_scene_id_the_catalog_lacks_gets_a_suggestion_and_stays_out_of_the_command() {
+    let (_workspace, proj) = first_target();
+    let scene = proj.join("scene.jsonc");
+    let text = fs::read_to_string(&scene).unwrap();
+    fs::write(&scene, text.replace("\"led-5mm\"", "\"led-5mn\"")).unwrap();
+    let (output, stdout, _) = orbe_in(&proj, &["check", "scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(
+        stdout.contains("part `led-5mn` is not in this project's parts.lock\n  hint: did you mean `led-5mm`? the catalog has no part named `led-5mn`\n"),
+        "{stdout}"
+    );
+    assert_eq!(stdout.matches("did you mean").count(), 1, "{stdout}");
+    assert!(
+        stdout.contains("run `orbe add nano-board resistor-axial tactile-switch-6mm`"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn add_refuses_a_folder_that_is_not_a_project() {
+    let (_workspace, proj) = first_target();
+    let build = proj.join("build");
+    let (output, stdout, _) = orbe_in(&build, &["add", "led-5mm"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert_eq!(
+        stdout,
+        "error[not_a_project]: the current folder is not an orbe project. it has no scene.jsonc and no parts.lock\n  hint: run `orbe add -C .. led-5mm`\n"
+    );
+    assert_eq!(fs::read_dir(&build).unwrap().count(), 1);
+    let (output, stdout, _) = run_printed(&build, "orbe add -C .. led-5mm");
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(proj.join("parts/led-5mm/part.jsonc").is_file());
+    assert!(!build.join("parts").exists());
+
+    let lonely = tempfile::tempdir().unwrap();
+    let (output, stdout, _) = orbe_in(lonely.path(), &["add", "--json", "led-5mm"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(reply["error"]["code"], "not_a_project");
+    assert!(
+        reply["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("orbe add -C <folder>"),
+        "{stdout}"
+    );
+    assert_eq!(fs::read_dir(lonely.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn a_failed_overwrite_puts_every_folder_back_and_says_so() {
+    use std::os::unix::fs::PermissionsExt;
+    let project = common::project("nano-button");
+    let root = project.path();
+    for id in ["led-5mm", "resistor-axial"] {
+        let path = root.join("parts").join(id).join("part.jsonc");
+        let mut bytes = fs::read(&path).unwrap();
+        bytes.extend_from_slice(b"// my edit\n");
+        fs::write(&path, bytes).unwrap();
+    }
+    let lock = fs::read(root.join("parts.lock")).unwrap();
+    let blocked = root.join("parts/resistor-axial");
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o555)).unwrap();
+    let (output, stdout, stderr) =
+        orbe_in(root, &["add", "led-5mm", "resistor-axial", "--overwrite"]);
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+    assert!(stderr.starts_with("error[io_error]: cannot move ./parts/resistor-axial to ./parts/.orbe-add/old/resistor-axial: Permission denied"), "{stderr}");
+    assert!(
+        stderr.ends_with("rolled back, so the project is as it was: put back parts/led-5mm\n"),
+        "{stderr}"
+    );
+    for id in ["led-5mm", "resistor-axial"] {
+        let text = fs::read_to_string(root.join("parts").join(id).join("part.jsonc")).unwrap();
+        assert!(text.ends_with("// my edit\n"), "{id}");
+    }
+    assert_eq!(fs::read(root.join("parts.lock")).unwrap(), lock);
+    assert!(!root.join("parts/.orbe-add").exists());
 }

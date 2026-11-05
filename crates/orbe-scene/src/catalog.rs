@@ -185,6 +185,12 @@ impl Catalog {
         self.of_id(id).max_by_key(|entry| entry.version)
     }
 
+    pub(crate) fn newest_in_major(&self, id: &str, major: u64) -> Option<&CatalogEntry> {
+        self.of_id(id)
+            .filter(|entry| entry.version.major == major)
+            .max_by_key(|entry| entry.version)
+    }
+
     pub(crate) fn ids(&self) -> BTreeSet<&str> {
         self.entries.keys().map(|(id, _)| id.as_str()).collect()
     }

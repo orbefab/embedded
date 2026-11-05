@@ -28,6 +28,9 @@ enum Command {
     Add {
         /// Part ids. A version is `id@0.1.0`.
         ids: Vec<String>,
+        /// The project folder, the one with scene.jsonc. The current folder by default.
+        #[arg(short = 'C', value_name = "DIR")]
+        dir: Option<PathBuf>,
         /// Replace a copy that differs within the same major version.
         #[arg(long)]
         overwrite: bool,
@@ -54,11 +57,21 @@ fn main() -> ExitCode {
             Command::Check { scene, json } => check(&scene, json),
             Command::Add {
                 ids,
+                dir,
                 overwrite,
                 diff,
                 relock,
                 json,
-            } => add(&ids, overwrite, diff, relock, json),
+            } => add(
+                dir.as_deref().unwrap_or(Path::new(".")),
+                Request {
+                    ids,
+                    overwrite,
+                    diff,
+                    relock,
+                },
+                json,
+            ),
         },
         Err(err) => usage(err),
     }
@@ -152,20 +165,8 @@ fn check(scene: &Path, json: bool) -> ExitCode {
     }
 }
 
-fn add(ids: &[String], overwrite: bool, diff: bool, relock: bool, json: bool) -> ExitCode {
-    let root = match std::env::current_dir() {
-        Ok(root) => root,
-        Err(error) => {
-            return io_exit(&format!("cannot use the current directory: {error}"), json);
-        }
-    };
-    let request = Request {
-        ids: ids.to_vec(),
-        overwrite,
-        diff,
-        relock,
-    };
-    match orbe_scene::add_parts(&root, &request) {
+fn add(root: &Path, request: Request, json: bool) -> ExitCode {
+    match orbe_scene::add_parts(root, &request) {
         Ok(reply) => print_reply(reply, json),
         Err(error) => io_exit(&error.to_string(), json),
     }
