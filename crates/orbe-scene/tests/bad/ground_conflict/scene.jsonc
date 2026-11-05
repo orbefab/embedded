@@ -1,0 +1,9 @@
+// Two Nanos whose grounds are never joined.
+{
+  "format": 1,
+  "parts": {
+    "a": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "b": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+  },
+  "wires": [["a.D2", "b.D2"]],
+}

@@ -1,0 +1,13 @@
+// two-buttons.jsonc
+{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "btn1": { "type": "./parts/pulled-button.jsonc" },
+    "btn2": { "type": "./parts/pulled-button.jsonc", "resistance": "4.7k" },
+  },
+  "wires": [
+    ["btn1.out", "nano.D2"], ["btn1.vcc", "nano.5V"], ["btn1.gnd", "nano.GND"],
+    ["btn2.out", "nano.D3"], ["btn2.vcc", "nano.5V"], ["btn2.gnd", "nano.GND"],
+  ],
+}

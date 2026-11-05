@@ -1,0 +1,10 @@
+{
+  "format": 1, "part": "capacitor-0603", "version": "0.1.0", "title": "Capacitor, 0603 ceramic chip", "license": "MIT OR Apache-2.0",
+  "real": { "generic": true, "maker": "Murata", "number": "GRM18", "datasheet": null },
+  "pins": { "a": [1], "b": [2] },
+  "params": {
+    "capacitance": { "unit": "F", "required": true, "sets": "/capacitance" },
+    "initial": { "unit": "V", "default": null, "sets": "/initial" },
+  },
+  "model": { "kind": "capacitor" },
+}
