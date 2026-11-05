@@ -1,0 +1,9 @@
+{
+  "format": 1,
+  "params": { "on": { "default": "220" } },
+  "parts": {
+    "live": { "type": "./sw.jsonc" },
+    "skip": { "type": "./sw.jsonc", "on": { "param": "on" }, "not_simulated": "left out of this build" },
+  },
+  "pins": { "a": "live.a", "b": "live.b" },
+}
