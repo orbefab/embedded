@@ -667,10 +667,9 @@ fn a_deleted_copy_is_only_part_missing() {
     assert_eq!(found[0].code, orbe_scene::Code::PartMissing);
     assert_eq!(found[0].file, "scene.jsonc");
     assert_eq!((found[0].line, found[0].column), (9, 23));
-    assert!(
-        found[0].hint.contains("orbe add led-5mm"),
-        "{}",
-        found[0].hint
+    assert_eq!(
+        found[0].hint,
+        format!("run `orbe add -C {} led-5mm`", project.path().display())
     );
 }
 

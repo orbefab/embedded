@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::catalog;
+use crate::catalog::{self, Version};
 use crate::diagnostic::{Code, Findings};
 use crate::model::{Comp, Part, Scene, TypeRef, decode_part, decode_scene};
 use crate::name::did_you_mean;
@@ -70,11 +70,14 @@ struct Loader<'a> {
     missing: Vec<(String, Span)>,
     /// The catalog ids whose `part.jsonc` read, the copies `check_copies` compares.
     used: BTreeSet<String>,
+    /// `orbe add`, run from where the scene was named, as hints print it.
+    add: String,
 }
 
 /// Reads the scene and everything it uses. When the scene itself does not read, the files
 /// read so far, so its findings can be placed.
 pub(crate) fn load(scene_path: &Path, out: &mut Findings) -> Result<Project, Sources> {
+    let add = add_command(hint_dir(scene_path).as_deref());
     let scene_path = scene_path
         .canonicalize()
         .unwrap_or_else(|_| scene_path.to_path_buf());
@@ -90,6 +93,7 @@ pub(crate) fn load(scene_path: &Path, out: &mut Findings) -> Result<Project, Sou
         types: BTreeMap::new(),
         missing: Vec::new(),
         used: BTreeSet::new(),
+        add,
     };
     let scene = loader.read(&scene_path).and_then(|file| {
         let tree = syntax::parse(&loader.sources, file, loader.out)?;
@@ -150,25 +154,27 @@ impl Loader<'_> {
                 end: start + line.trim_end().len(),
             };
             start += line.len();
-            let fields: Vec<&str> = line.split_whitespace().collect();
-            match fields.as_slice() {
-                [] => {}
-                [id, version, registry, hash] if hash.starts_with("sha256:") => {
+            match lock_fields(line) {
+                Ok(None) => {}
+                Ok(Some(fields)) => {
                     self.lock.insert(
-                        id.to_string(),
+                        fields.id,
                         LockLine {
-                            version: version.to_string(),
-                            registry: registry.to_string(),
-                            hash: hash.to_string(),
+                            version: fields.version,
+                            registry: fields.registry,
+                            hash: fields.hash,
                             span,
                         },
                     );
                 }
-                _ => self.out.push(
+                Err(()) => self.out.push(
                     Code::Syntax,
                     span,
                     "a parts.lock line is `<id> <version> <registry> sha256:<hash>`",
-                    "`orbe add` writes this file".into(),
+                    format!(
+                        "`orbe add` writes this file. rebuild it with `{} --relock`",
+                        self.add
+                    ),
                 ),
             }
         }
@@ -305,12 +311,7 @@ impl Loader<'_> {
                 && catalog
                 && catalog::find(&id).is_none_or(|original| is_sealed(&original.tree))
             {
-                self.out.rehint_since(
-                    before,
-                    &format!(
-                        "restore it with `orbe add {id} --overwrite`, or copy it to a path to make it your own"
-                    ),
-                );
+                self.out.rehint_since(before, &self.restore(&id, None));
             }
             part
         });
@@ -328,34 +329,121 @@ impl Loader<'_> {
         Some(id)
     }
 
-    /// One finding per missing id, each with one `orbe add` command for all of them.
+    /// One finding per missing id. Every catalog id shares one `orbe add` command that adds
+    /// them all. A suggestion is only for an id the catalog does not have, since that command
+    /// cannot add it.
     fn report_missing(&mut self) {
-        let mut ids: Vec<&str> = self.missing.iter().map(|(id, _)| id.as_str()).collect();
-        ids.sort();
-        ids.dedup();
-        let command = format!("orbe add {}", ids.join(" "));
-        let have: Vec<String> = self.lock.keys().cloned().chain(catalog::ids()).collect();
-        let mut seen = Vec::new();
+        let root = self.sources.root().to_path_buf();
+        let mut found: Vec<(String, Span, String, bool)> = Vec::new();
         for (id, span) in &self.missing {
-            if seen.contains(id) {
+            if found.iter().any(|(seen, ..)| seen == id) {
                 continue;
             }
-            seen.push(id.clone());
-            let close = did_you_mean(id, have.iter().map(String::as_str).filter(|h| h != id), "");
-            let why = if self.lock.contains_key(id) {
+            let (why, overwrite) = self.why_missing(&root, id);
+            found.push((id.clone(), *span, why, overwrite));
+        }
+        let mut ids: Vec<&str> = found
+            .iter()
+            .map(|(id, ..)| id.as_str())
+            .filter(|id| catalog::find(id).is_some())
+            .collect();
+        ids.sort();
+        let overwrite = found
+            .iter()
+            .any(|(id, _, _, overwrite)| *overwrite && ids.contains(&id.as_str()));
+        let command = format!(
+            "{} {}{}",
+            self.add,
+            ids.join(" "),
+            if overwrite { " --overwrite" } else { "" }
+        );
+        let known: Vec<String> = self.lock.keys().cloned().chain(catalog::ids()).collect();
+        let parts = root.join("parts");
+        let blocked = fs::symlink_metadata(&parts).is_ok() && !parts.is_dir();
+        for (id, span, why, _) in &found {
+            let hint = if blocked {
+                "move `parts` out of the way, since part folders go in a folder named `parts`. then check again for the command that adds them".into()
+            } else if ids.contains(&id.as_str()) {
+                format!("run `{command}`")
+            } else {
+                let close = did_you_mean(id, known.iter().map(String::as_str), "");
+                format!("{close}the catalog has no part named `{id}`")
+            };
+            self.out
+                .push(Code::PartMissing, *span, format!("part `{id}` {why}"), hint);
+        }
+    }
+
+    /// What is at `parts/<id>` for an id that did not resolve, and whether `orbe add` has to
+    /// replace it.
+    fn why_missing(&self, root: &Path, id: &str) -> (String, bool) {
+        let parts = root.join("parts");
+        if let Ok(meta) = fs::symlink_metadata(&parts)
+            && !parts.is_dir()
+        {
+            let what = if meta.is_file() {
+                "is a file, not a folder"
+            } else {
+                "is not a folder"
+            };
+            return (format!("cannot be read, because `parts` {what}"), false);
+        }
+        let folder = parts.join(id);
+        let listed = self.lock.contains_key(id);
+        let Ok(meta) = fs::symlink_metadata(&folder) else {
+            let why = if listed {
                 "has a parts.lock line but no folder"
             } else {
                 "is not in this project's parts.lock"
             };
-            self.out.push(
-                Code::PartMissing,
-                *span,
-                format!("part `{id}` {why}"),
-                format!(
-                    "{close}{}run `{command}`",
-                    if close.is_empty() { "" } else { "otherwise " }
-                ),
+            return (why.into(), false);
+        };
+        if meta.file_type().is_symlink() {
+            return (
+                format!("is parts/{id}, which is a link, not a folder"),
+                true,
             );
+        }
+        if !meta.is_dir() {
+            return (
+                format!("is parts/{id}, which is a file, not a folder"),
+                true,
+            );
+        }
+        if !folder.join("part.jsonc").is_file() {
+            return (
+                format!("has a folder, parts/{id}, with no part.jsonc"),
+                true,
+            );
+        }
+        let differs = catalog::find(id)
+            .is_none_or(|original| hash_folder(&folder).ok() != Some(original.hash));
+        ("is not in this project's parts.lock".into(), differs)
+    }
+
+    /// The command that puts the catalog's copy back. It names the version when the copy's own
+    /// version is in another major version, since `--overwrite` alone keeps the major.
+    fn restore(&self, id: &str, copy: Option<&Node>) -> String {
+        if catalog::find(id).is_none() {
+            return format!(
+                "this binary's catalog has no `{id}` to restore. copy it to a path to make it your own"
+            );
+        }
+        format!(
+            "restore it with `{}`, or copy it to a path to make it your own",
+            self.restore_command(id, copy)
+        )
+    }
+
+    fn restore_command(&self, id: &str, copy: Option<&Node>) -> String {
+        let named = catalog::find(id).and_then(|original| {
+            let copy = Version::parse(copy?.get("version")?.str()?)?;
+            let theirs = Version::parse(&original.version)?;
+            (copy.major != theirs.major).then_some(original.version)
+        });
+        match named {
+            Some(version) => format!("{} {id}@{version} --overwrite", self.add),
+            None => format!("{} {id} --overwrite", self.add),
         }
     }
 
@@ -395,9 +483,7 @@ impl Loader<'_> {
             let bytes_differ = hash
                 .as_ref()
                 .is_some_and(|h| h != &line.hash || h != &original.hash);
-            let restore = format!(
-                "restore it with `orbe add {id} --overwrite`, or copy it to a path to make it your own"
-            );
+            let restore = self.restore(id, tree.as_ref());
             if is_sealed(&original.tree) && (diff.is_some() || bytes_differ) {
                 let (message, span) = match diff {
                     Some((field, span)) => (
@@ -451,8 +537,8 @@ impl Loader<'_> {
                     line.span,
                     message,
                     format!(
-                        "this binary knows `{id}@{}` from the official registry; point the line at that version, or restore the copy",
-                        original.version
+                        "this binary knows `{id}@{}` from the official registry. restore the catalog's copy with `{} {id}@{} --overwrite`",
+                        original.version, self.add, original.version
                     ),
                 );
                 continue;
@@ -480,7 +566,8 @@ impl Loader<'_> {
                 (
                     link.clone(),
                     format!(
-                        "remove the link that loops at {link}, or restore the folder with `orbe add {id} --overwrite`"
+                        "remove the link that loops at {link}, or restore the folder with `{} {id} --overwrite`",
+                        self.add
                     ),
                 )
             }
@@ -491,7 +578,7 @@ impl Loader<'_> {
             }
             None => (
                 display(&root, path),
-                format!("restore the folder with `orbe add {id} --overwrite`"),
+                format!("restore the folder with `{} {id} --overwrite`", self.add),
             ),
         };
         self.out.push(
@@ -528,17 +615,58 @@ impl Loader<'_> {
             Code::PartModified,
             file.map_or(line.span, Span::start_of),
             format!("part `{id}` does not match its parts.lock line"),
-            format!(
-                "restore it with `orbe add {id} --overwrite`, or copy it to a path to make it your own"
-            ),
+            self.restore(id, tree.as_ref()),
         );
         false
     }
 }
 
 /// A catalog part is sealed when it has a model, or when it has no children of its own.
-fn is_sealed(tree: &Node) -> bool {
+pub(crate) fn is_sealed(tree: &Node) -> bool {
     tree.get("model").is_some() || tree.get("parts").is_none()
+}
+
+/// One `parts.lock` line. The hash includes the `sha256:` prefix.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LockFields {
+    pub(crate) id: String,
+    pub(crate) version: String,
+    pub(crate) registry: String,
+    pub(crate) hash: String,
+}
+
+impl LockFields {
+    pub(crate) fn line(&self) -> String {
+        format!(
+            "{} {} {} {}",
+            self.id, self.version, self.registry, self.hash
+        )
+    }
+}
+
+/// `Ok(None)` is a blank line. `Err` is a line that is not the lock format.
+pub(crate) fn lock_fields(line: &str) -> Result<Option<LockFields>, ()> {
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    match fields.as_slice() {
+        [] => Ok(None),
+        [id, version, registry, hash] if hash.starts_with("sha256:") => Ok(Some(LockFields {
+            id: (*id).to_string(),
+            version: (*version).to_string(),
+            registry: (*registry).to_string(),
+            hash: (*hash).to_string(),
+        })),
+        _ => Err(()),
+    }
+}
+
+/// Lock text sorted by id, one line each, with a trailing newline when there is a line.
+pub(crate) fn render_lock(lines: &BTreeMap<String, LockFields>) -> String {
+    let mut out = String::new();
+    for line in lines.values() {
+        out.push_str(&line.line());
+        out.push('\n');
+    }
+    out
 }
 
 /// The first field where a copy's `part.jsonc` differs from the catalog's, as a dotted path,
@@ -626,4 +754,84 @@ pub(crate) fn hash_files<'a>(files: impl Iterator<Item = (&'a str, &'a [u8])>) -
 
 pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// `orbe add` as a hint prints it, with `-C <dir>` when a folder is named. A folder that starts
+/// with `-` gets `./` first, so the argument parser reads it as the folder.
+pub(crate) fn add_command(dir: Option<&Path>) -> String {
+    match dir {
+        Some(dir) if !dir.as_os_str().is_empty() => {
+            let shown = dir.display().to_string();
+            let shown = if shown.starts_with('-') {
+                format!("./{shown}")
+            } else {
+                shown
+            };
+            format!("orbe add -C {}", shell_word(&shown))
+        }
+        _ => "orbe add".into(),
+    }
+}
+
+/// The folder `orbe add` must name for the scene `orbe check` read, run from where check ran.
+/// It is the folder check reads parts from, the scene's real folder, as the scene path named it
+/// when that path names the same folder, else relative to the current folder. `None` when that
+/// is the current folder and the scene is `scene.jsonc`, which `orbe add` finds there by itself.
+fn hint_dir(scene: &Path) -> Option<PathBuf> {
+    let typed = scene
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let real = scene.canonicalize().ok();
+    let dir = match real.as_deref().and_then(Path::parent) {
+        Some(real_dir) if typed.canonicalize().ok().as_deref() != Some(real_dir) => {
+            from_cwd(real_dir)
+        }
+        _ => typed.to_path_buf(),
+    };
+    let found = real.as_deref().unwrap_or(scene).file_name() == Some("scene.jsonc".as_ref());
+    (!found || dir != Path::new(".")).then_some(dir)
+}
+
+/// `dir`, an absolute path, relative to the current folder.
+fn from_cwd(dir: &Path) -> PathBuf {
+    let Some(cwd) = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| cwd.canonicalize().ok())
+    else {
+        return dir.to_path_buf();
+    };
+    let shared = cwd
+        .components()
+        .zip(dir.components())
+        .take_while(|(a, b)| a == b)
+        .count();
+    if shared == 0 {
+        return dir.to_path_buf();
+    }
+    let mut rel = PathBuf::new();
+    for _ in cwd.components().skip(shared) {
+        rel.push("..");
+    }
+    for part in dir.components().skip(shared) {
+        rel.push(part);
+    }
+    if rel.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        rel
+    }
+}
+
+/// A word a POSIX shell reads back unchanged.
+pub(crate) fn shell_word(word: &str) -> String {
+    let plain = !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._-+:@%=,".contains(c));
+    if plain {
+        word.to_string()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
+    }
 }
