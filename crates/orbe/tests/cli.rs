@@ -769,3 +769,139 @@ fn a_failed_overwrite_puts_every_folder_back_and_says_so() {
     assert_eq!(fs::read(root.join("parts.lock")).unwrap(), lock);
     assert!(!root.join("parts/.orbe-add").exists());
 }
+
+/// A scene of another name: check names the folder with `-C .`, and that command runs.
+#[test]
+fn a_scene_not_named_scene_jsonc_gets_a_hint_that_runs() {
+    let (_workspace, proj) = first_target();
+    fs::rename(proj.join("scene.jsonc"), proj.join("blinky.jsonc")).unwrap();
+    let (output, stdout, _) = orbe_in(&proj, &["check", "blinky.jsonc"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    let command = add_command(&stdout);
+    assert_eq!(
+        command,
+        "orbe add -C . led-5mm nano-board resistor-axial tactile-switch-6mm"
+    );
+    let (output, stdout, stderr) = run_printed(&proj, &command);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    let (output, stdout, _) = orbe_in(&proj, &["check", "blinky.jsonc"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert_eq!(
+        stdout,
+        "blinky.jsonc: ok, 18 engine parts, 31 nets, ground nano__GND\n"
+    );
+}
+
+/// A scene file that is a link: `-C` names the folder check reads parts from, the link's
+/// target's, relative to where check ran.
+#[test]
+fn a_linked_scene_file_gets_the_folder_check_reads_from() {
+    let (workspace, proj) = first_target();
+    let view = workspace.path().join("view");
+    fs::create_dir(&view).unwrap();
+    std::os::unix::fs::symlink("../proj/scene.jsonc", view.join("scene.jsonc")).unwrap();
+    for (cwd, scene, command) in [
+        (
+            workspace.path().to_path_buf(),
+            "view/scene.jsonc",
+            "orbe add -C proj led-5mm nano-board resistor-axial tactile-switch-6mm",
+        ),
+        (
+            view.clone(),
+            "scene.jsonc",
+            "orbe add -C ../proj led-5mm nano-board resistor-axial tactile-switch-6mm",
+        ),
+    ] {
+        let _ = fs::remove_dir_all(proj.join("parts"));
+        let _ = fs::remove_file(proj.join("parts.lock"));
+        let (output, stdout, _) = orbe_in(&cwd, &["check", scene]);
+        assert_eq!(output.status.code(), Some(1), "{stdout}");
+        assert_eq!(add_command(&stdout), command);
+        let (output, stdout, stderr) = run_printed(&cwd, command);
+        assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+        assert!(!view.join("parts").exists());
+        let (output, stdout, _) = orbe_in(&cwd, &["check", scene]);
+        assert_eq!(output.status.code(), Some(0), "{stdout}");
+    }
+}
+
+/// A project folder whose name starts with `-` is printed as `./-x`, which the argument parser
+/// reads as a folder, for both a missing part and a modified one.
+#[test]
+fn a_folder_starting_with_a_dash_gets_hints_that_run() {
+    let (workspace, proj) = first_target();
+    let dashed = workspace.path().join("-backup");
+    fs::rename(&proj, &dashed).unwrap();
+    let scene = "./-backup/scene.jsonc";
+    let (output, stdout, _) = orbe_in(workspace.path(), &["check", "--", "-backup/scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    let command = add_command(&stdout);
+    assert_eq!(
+        command,
+        "orbe add -C ./-backup led-5mm nano-board resistor-axial tactile-switch-6mm"
+    );
+    let (output, stdout, stderr) = run_printed(workspace.path(), &command);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    let led = dashed.join("parts/led-5mm/part.jsonc");
+    let text = fs::read_to_string(&led).unwrap();
+    fs::write(&led, text.replace("5 mm LED", "5 mm LED edited")).unwrap();
+    let (output, stdout, _) = orbe_in(workspace.path(), &["check", scene]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert_eq!(
+        hint_commands(&stdout),
+        ["orbe add -C ./-backup led-5mm --overwrite"]
+    );
+    let (output, stdout, stderr) = run_printed(
+        workspace.path(),
+        "orbe add -C ./-backup led-5mm --overwrite",
+    );
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    let (output, stdout, _) = orbe_in(workspace.path(), &["check", scene]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+}
+
+/// A file where `parts/` goes: check says so and prints no command that cannot run.
+#[test]
+fn a_file_named_parts_is_named_and_gets_no_command() {
+    let project = common::project("nano-button");
+    fs::remove_dir_all(project.path().join("parts")).unwrap();
+    fs::write(project.path().join("parts"), "x\n").unwrap();
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(
+        stdout.contains("error[part_missing]: part `nano-board` cannot be read, because `parts` is a file, not a folder\n  hint: move `parts` out of the way, since part folders go in a folder named `parts`. then check again for the command that adds them\n"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("orbe add"), "{stdout}");
+}
+
+/// While one run holds the project's lock, another refuses at once with `busy`, `--diff`
+/// included, and writes nothing.
+#[test]
+fn a_second_add_is_busy_while_one_holds_the_lock() {
+    let project = scene_only();
+    let lock = fs::File::create(project.path().join(".orbe-add.lock")).unwrap();
+    lock.lock().unwrap();
+    for args in [
+        &["add", "led-5mm"][..],
+        &["add", "led-5mm", "--diff"],
+        &["add", "--relock"],
+    ] {
+        let (output, stdout, _) = orbe_in(project.path(), args);
+        assert_eq!(output.status.code(), Some(1), "{stdout}");
+        assert!(
+            stdout.starts_with("error[busy]: another `orbe add` is at work in this project. it holds the lock on ./.orbe-add.lock\n  hint: wait for it to finish, then run `orbe "),
+            "{stdout}"
+        );
+    }
+    let (output, stdout, _) = orbe_in(project.path(), &["add", "--json", "led-5mm"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(reply["error"]["code"], "busy");
+    assert!(!project.path().join("parts").exists());
+    assert!(!project.path().join("parts.lock").exists());
+    drop(lock);
+    let (output, stdout, _) = orbe_in(project.path(), &["add", "led-5mm"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(!project.path().join(".orbe-add.lock").exists());
+}

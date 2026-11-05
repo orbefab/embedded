@@ -2,9 +2,13 @@
 //!
 //! [`plan::plan`] is a pure function of the request, the catalog and a snapshot of the folders
 //! it may write or compare. [`txn::apply`] is the only code that writes part folders or
-//! `parts.lock`, and a run that stops part way is rolled back or finished by the next run.
+//! `parts.lock`. It logs each step, and a run that stops part way is rolled back or finished by
+//! the next run, which [`journal::next`] decides from the log alone. [`held`] keeps a second run
+//! out while one is at work.
 
 mod diff;
+mod held;
+mod journal;
 mod plan;
 mod snapshot;
 mod txn;
@@ -17,8 +21,11 @@ use serde_json::{Value, json};
 use crate::catalog::Catalog;
 use crate::project;
 
+use held::Hold;
 use plan::Plan;
-use txn::{Change, Inject, Pending, Stop};
+#[cfg(test)]
+use txn::Inject;
+use txn::{Change, Fault, Pending, Stop};
 
 /// What the CLI asked `orbe add` to do.
 pub struct Request {
@@ -134,28 +141,32 @@ impl Reply {
     }
 }
 
-/// Copies parts into the project at `root` and writes `parts.lock`. A refusal writes nothing.
-/// `root` is the folder as the user named it, `.` for the current one, so hints can repeat it.
-pub fn run(root: &Path, request: &Request) -> Result<Reply, RunError> {
-    run_with(root, request, &mut |_| None)
+/// Copies parts into a project and writes `parts.lock`. A refusal writes nothing. `dir` is the
+/// folder `-C` named, as the user wrote it, so hints can repeat it. With none, the current
+/// folder must look like a project.
+pub fn run(dir: Option<&Path>, request: &Request) -> Result<Reply, RunError> {
+    run_with(dir, request, &mut |_| None)
 }
 
-fn run_with(
-    root: &Path,
-    request: &Request,
-    fault: &mut dyn FnMut(usize) -> Option<Inject>,
-) -> Result<Reply, RunError> {
+fn run_with(dir: Option<&Path>, request: &Request, fault: &mut Fault) -> Result<Reply, RunError> {
     if let Some(message) = plan::usage(request) {
         return Ok(Reply::Usage(message));
     }
-    if let Some(refusal) = not_a_project(root, request) {
+    if let Some(refusal) = not_a_project(dir, request) {
         return Ok(Reply::Refuse(refusal));
     }
-    let add = project::add_command(Some(root));
+    let root = dir.unwrap_or(Path::new("."));
+    let add = project::add_command(dir);
+    let again = request_command(&add, request);
+    let _held = match held::hold(root) {
+        Ok(held) => held,
+        Err(Hold::Busy(lock)) => return Ok(Reply::Refuse(busy(&lock, &again))),
+        Err(Hold::Io(error)) => return Err(error),
+    };
     let recovered = if request.diff {
         pending_note(root, &add)
     } else {
-        txn::recover(root)?
+        txn::recover(root, &again, fault).map_err(stop_error)?
     };
     let catalog = Catalog::builtin();
     let snapshot = snapshot::load(root, &plan::wanted(&catalog, request))?;
@@ -175,7 +186,7 @@ fn run_with(
                 folders,
                 lock: planned.lock.as_deref(),
             };
-            let mut notes = apply(root, &change, fault)?;
+            let mut notes = txn::apply(root, &change, &again, fault).map_err(stop_error)?;
             notes.extend(planned.notes);
             Reply::Add(add_reply(
                 planned.write,
@@ -189,7 +200,7 @@ fn run_with(
                 folders: Vec::new(),
                 lock: planned.lock.as_deref(),
             };
-            let notes = apply(root, &change, fault)?;
+            let notes = txn::apply(root, &change, &again, fault).map_err(stop_error)?;
             Reply::Relock(RelockReply {
                 lock_written: planned.lock.is_some(),
                 parts: planned.parts,
@@ -207,17 +218,24 @@ fn run_with(
     Ok(with_notes(reply, recovered))
 }
 
-fn apply(
-    root: &Path,
-    change: &Change,
-    fault: &mut dyn FnMut(usize) -> Option<Inject>,
-) -> Result<Vec<String>, RunError> {
-    txn::apply(root, change, fault).map_err(|stop| match stop {
+fn stop_error(stop: Stop) -> RunError {
+    match stop {
         Stop::Failed(error) => error,
         Stop::Killed => RunError {
             message: "killed".into(),
         },
-    })
+    }
+}
+
+fn busy(lock: &Path, again: &str) -> Refusal {
+    Refusal {
+        code: "busy",
+        message: format!(
+            "another `orbe add` is at work in this project. it holds the lock on {}",
+            lock.display()
+        ),
+        hint: format!("wait for it to finish, then run `{again}`"),
+    }
 }
 
 /// `--diff` writes nothing, so an interrupted add stays for the next writing run.
@@ -226,6 +244,7 @@ fn pending_note(root: &Path, add: &str) -> Vec<String> {
         Pending::None => return Vec::new(),
         Pending::Uncommitted => "rolls it back",
         Pending::Committed => "finishes it",
+        Pending::Unclear => "says what it holds",
     };
     vec![format!(
         "an interrupted add is pending in parts/{}. --diff leaves it, and the next `{add}` without --diff {what}",
@@ -233,18 +252,22 @@ fn pending_note(root: &Path, add: &str) -> Vec<String> {
     )]
 }
 
-/// A project folder holds `scene.jsonc` or `parts.lock`. Anywhere else, `orbe add` would make
-/// a second project, so it names the folder above that is one, if any.
-fn not_a_project(root: &Path, request: &Request) -> Option<Refusal> {
-    if is_project(root) {
+/// With no `-C`, the current folder must hold `scene.jsonc` or `parts.lock`. Anywhere else,
+/// `orbe add` would make a second project, so it names the folder above that is one, if any.
+/// A folder `-C` names is trusted, since `orbe check` names it for a scene of any name.
+fn not_a_project(dir: Option<&Path>, request: &Request) -> Option<Refusal> {
+    if let Some(dir) = dir {
+        return (!dir.is_dir()).then(|| Refusal {
+            code: "not_a_project",
+            message: format!("`{}` is not a folder", dir.display()),
+            hint: String::new(),
+        });
+    }
+    let here = Path::new(".");
+    if is_project(here) {
         return None;
     }
-    let shown = if root == Path::new(".") {
-        "the current folder".to_string()
-    } else {
-        format!("`{}`", root.display())
-    };
-    let hint = match project_above(root) {
+    let hint = match project_above(here) {
         Some(dir) => format!(
             "run `{}`",
             request_command(&project::add_command(Some(&dir)), request)
@@ -253,7 +276,9 @@ fn not_a_project(root: &Path, request: &Request) -> Option<Refusal> {
     };
     Some(Refusal {
         code: "not_a_project",
-        message: format!("{shown} is not an orbe project. it has no scene.jsonc and no parts.lock"),
+        message:
+            "the current folder is not an orbe project. it has no scene.jsonc and no parts.lock"
+                .into(),
         hint,
     })
 }

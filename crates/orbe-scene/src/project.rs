@@ -77,7 +77,7 @@ struct Loader<'a> {
 /// Reads the scene and everything it uses. When the scene itself does not read, the files
 /// read so far, so its findings can be placed.
 pub(crate) fn load(scene_path: &Path, out: &mut Findings) -> Result<Project, Sources> {
-    let add = add_command(scene_path.parent());
+    let add = add_command(hint_dir(scene_path).as_deref());
     let scene_path = scene_path
         .canonicalize()
         .unwrap_or_else(|_| scene_path.to_path_buf());
@@ -358,8 +358,12 @@ impl Loader<'_> {
             if overwrite { " --overwrite" } else { "" }
         );
         let known: Vec<String> = self.lock.keys().cloned().chain(catalog::ids()).collect();
+        let parts = root.join("parts");
+        let blocked = fs::symlink_metadata(&parts).is_ok() && !parts.is_dir();
         for (id, span, why, _) in &found {
-            let hint = if ids.contains(&id.as_str()) {
+            let hint = if blocked {
+                "move `parts` out of the way, since part folders go in a folder named `parts`. then check again for the command that adds them".into()
+            } else if ids.contains(&id.as_str()) {
                 format!("run `{command}`")
             } else {
                 let close = did_you_mean(id, known.iter().map(String::as_str), "");
@@ -373,7 +377,18 @@ impl Loader<'_> {
     /// What is at `parts/<id>` for an id that did not resolve, and whether `orbe add` has to
     /// replace it.
     fn why_missing(&self, root: &Path, id: &str) -> (String, bool) {
-        let folder = root.join("parts").join(id);
+        let parts = root.join("parts");
+        if let Ok(meta) = fs::symlink_metadata(&parts)
+            && !parts.is_dir()
+        {
+            let what = if meta.is_file() {
+                "is a file, not a folder"
+            } else {
+                "is not a folder"
+            };
+            return (format!("cannot be read, because `parts` {what}"), false);
+        }
+        let folder = parts.join(id);
         let listed = self.lock.contains_key(id);
         let Ok(meta) = fs::symlink_metadata(&folder) else {
             let why = if listed {
@@ -741,14 +756,70 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// `orbe add`, with `-C <dir>` when the scene was named from another folder. The folder is the
-/// one the scene path was given in, so the command runs from where `orbe check` ran.
-pub(crate) fn add_command(scene_dir: Option<&Path>) -> String {
-    match scene_dir {
-        Some(dir) if !dir.as_os_str().is_empty() && dir != Path::new(".") => {
-            format!("orbe add -C {}", shell_word(&dir.display().to_string()))
+/// `orbe add` as a hint prints it, with `-C <dir>` when a folder is named. A folder that starts
+/// with `-` gets `./` first, so the argument parser reads it as the folder.
+pub(crate) fn add_command(dir: Option<&Path>) -> String {
+    match dir {
+        Some(dir) if !dir.as_os_str().is_empty() => {
+            let shown = dir.display().to_string();
+            let shown = if shown.starts_with('-') {
+                format!("./{shown}")
+            } else {
+                shown
+            };
+            format!("orbe add -C {}", shell_word(&shown))
         }
         _ => "orbe add".into(),
+    }
+}
+
+/// The folder `orbe add` must name for the scene `orbe check` read, run from where check ran.
+/// It is the folder check reads parts from, the scene's real folder, as the scene path named it
+/// when that path names the same folder, else relative to the current folder. `None` when that
+/// is the current folder and the scene is `scene.jsonc`, which `orbe add` finds there by itself.
+fn hint_dir(scene: &Path) -> Option<PathBuf> {
+    let typed = scene
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let real = scene.canonicalize().ok();
+    let dir = match real.as_deref().and_then(Path::parent) {
+        Some(real_dir) if typed.canonicalize().ok().as_deref() != Some(real_dir) => {
+            from_cwd(real_dir)
+        }
+        _ => typed.to_path_buf(),
+    };
+    let found = real.as_deref().unwrap_or(scene).file_name() == Some("scene.jsonc".as_ref());
+    (!found || dir != Path::new(".")).then_some(dir)
+}
+
+/// `dir`, an absolute path, relative to the current folder.
+fn from_cwd(dir: &Path) -> PathBuf {
+    let Some(cwd) = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| cwd.canonicalize().ok())
+    else {
+        return dir.to_path_buf();
+    };
+    let shared = cwd
+        .components()
+        .zip(dir.components())
+        .take_while(|(a, b)| a == b)
+        .count();
+    if shared == 0 {
+        return dir.to_path_buf();
+    }
+    let mut rel = PathBuf::new();
+    for _ in cwd.components().skip(shared) {
+        rel.push("..");
+    }
+    for part in dir.components().skip(shared) {
+        rel.push(part);
+    }
+    if rel.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        rel
     }
 }
 

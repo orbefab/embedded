@@ -63,7 +63,7 @@ fn main() -> ExitCode {
                 relock,
                 json,
             } => add(
-                dir.as_deref().unwrap_or(Path::new(".")),
+                dir.as_deref(),
                 Request {
                     ids,
                     overwrite,
@@ -165,8 +165,8 @@ fn check(scene: &Path, json: bool) -> ExitCode {
     }
 }
 
-fn add(root: &Path, request: Request, json: bool) -> ExitCode {
-    match orbe_scene::add_parts(root, &request) {
+fn add(dir: Option<&Path>, request: Request, json: bool) -> ExitCode {
+    match orbe_scene::add_parts(dir, &request) {
         Ok(reply) => print_reply(reply, json),
         Err(error) => io_exit(&error.to_string(), json),
     }

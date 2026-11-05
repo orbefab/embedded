@@ -459,16 +459,21 @@ fn uno_after_nano(nano_r: &str) -> (Catalog, Snapshot) {
     (catalog, snapshot)
 }
 
+/// The project already holds the newer `r`, so adding `uno` keeps it, with or without
+/// `--overwrite`, and only the note differs.
 #[test]
 fn a_part_in_the_project_keeps_the_child_version_it_uses() {
     let (catalog, snapshot) = uno_after_nano("0.2.0");
-    let refused = refusal(plan(&catalog, &snapshot, &ask(&["uno"], false, false), ADD));
-    assert_eq!(refused.code, "part_conflict");
+    let planned = added(plan(&catalog, &snapshot, &ask(&["uno"], false, false), ADD));
+    assert_eq!(wrote(&planned, "uno"), Some(v("0.1.0")));
+    assert_eq!(wrote(&planned, "r"), None);
+    assert!(planned.skip.contains(&("r".to_string(), v("0.2.0"))));
     assert_eq!(
-        refused.message,
-        "`r` is `0.1.0` in `uno` and `0.2.0` in `nano`, which the project holds"
+        planned.notes,
+        [
+            "kept `r` 0.2.0, which the project holds, the newer of `0.1.0` in `uno` and `0.2.0` in `nano`, which the project holds"
+        ]
     );
-    assert_eq!(refused.hint, "run `orbe add uno --overwrite`");
 
     let planned = added(plan(&catalog, &snapshot, &ask(&["uno"], true, false), ADD));
     assert_eq!(wrote(&planned, "uno"), Some(v("0.1.0")));
@@ -482,6 +487,54 @@ fn a_part_in_the_project_keeps_the_child_version_it_uses() {
     );
     let lock = planned.lock.unwrap();
     assert!(lock.contains("\nr 0.2.0 "), "{lock}");
+}
+
+/// Once `--overwrite` settled the clash, every later plain add and `--diff` of either part
+/// plans without it, and so does re-adding a deleted folder, which is check's plain hint.
+#[test]
+fn a_clash_settled_by_overwrite_stays_settled() {
+    let (catalog, mut snapshot) = uno_after_nano("0.2.0");
+    let uno = catalog.get("uno", v("0.1.0")).unwrap().clone();
+    install(&mut snapshot, &catalog, &uno);
+    snapshot.lock_text = Some(project::render_lock(&snapshot.lock));
+    for ids in [&["uno"][..], &["nano"], &["r"], &["nano", "uno"]] {
+        let planned = added(plan(&catalog, &snapshot, &ask(ids, false, false), ADD));
+        assert!(planned.write.is_empty(), "{ids:?}");
+        assert!(planned.lock.is_none(), "{ids:?}");
+    }
+    let Plan::Diff(diff) = plan(&catalog, &snapshot, &ask(&["uno"], false, true), ADD) else {
+        panic!("expected a diff");
+    };
+    assert!(
+        diff.notes
+            .iter()
+            .any(|note| note.starts_with("kept `r` 0.2.0")),
+        "{:?}",
+        diff.notes
+    );
+    assert!(
+        diff.notes.iter().any(|note| note == "nothing would change"),
+        "{:?}",
+        diff.notes
+    );
+
+    snapshot.targets.remove("nano");
+    let planned = added(plan(
+        &catalog,
+        &snapshot,
+        &ask(&["nano"], false, false),
+        ADD,
+    ));
+    assert_eq!(wrote(&planned, "nano"), Some(v("0.1.0")));
+    assert_eq!(wrote(&planned, "r"), None);
+
+    let refused = refusal(plan(
+        &catalog,
+        &snapshot,
+        &ask(&["uno", "r@0.1.0"], false, false),
+        ADD,
+    ));
+    assert_eq!(refused.code, "part_conflict");
 }
 
 #[test]

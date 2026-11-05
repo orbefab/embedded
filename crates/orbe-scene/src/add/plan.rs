@@ -331,7 +331,11 @@ fn select(
     let mut tests_may_change = false;
     let mut clashes = Vec::new();
     for (id, group) in &demands {
-        match choose(id, group, specs, overwrite) {
+        let held = snapshot
+            .lock
+            .get(id)
+            .and_then(|line| Version::parse(&line.version));
+        match choose(id, group, specs, overwrite, held) {
             Choose::Take(version) => {
                 chosen.insert(id.clone(), version);
             }
@@ -406,7 +410,16 @@ struct Clash {
     versions: Vec<Version>,
 }
 
-fn choose(id: &str, group: &[Demand], specs: &[Spec], overwrite: bool) -> Choose {
+/// `held` is the version of `id` in the project's lock. When it is already the newer of two
+/// versions in one major version, an earlier `--overwrite` settled the clash, and it stays
+/// settled, unless the request names a version of `id`.
+fn choose(
+    id: &str,
+    group: &[Demand],
+    specs: &[Spec],
+    overwrite: bool,
+    held: Option<Version>,
+) -> Choose {
     let mut versions: Vec<Version> = group.iter().map(|demand| demand.version).collect();
     versions.sort();
     versions.dedup();
@@ -416,9 +429,19 @@ fn choose(id: &str, group: &[Demand], specs: &[Spec], overwrite: bool) -> Choose
     let same_major = versions
         .windows(2)
         .all(|pair| pair[0].major == pair[1].major);
+    let newer = *versions.last().expect("at least two versions");
     if same_major && overwrite {
-        let newer = *versions.last().expect("at least two versions");
         let note = format!("took `{id}` {newer}, the newer of {}", describe(group));
+        return Choose::Newer(newer, note);
+    }
+    let named = specs
+        .iter()
+        .any(|spec| spec.id == id && spec.version.is_some());
+    if same_major && held == Some(newer) && !named {
+        let note = format!(
+            "kept `{id}` {newer}, which the project holds, the newer of {}",
+            describe(group)
+        );
         return Choose::Newer(newer, note);
     }
     if !same_major
