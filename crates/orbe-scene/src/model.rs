@@ -156,6 +156,23 @@ impl ParamDecl {
     pub(crate) fn opens(&self) -> bool {
         self.default.as_ref().is_some_and(Node::is_null)
     }
+
+    /// Whether this param writes an object or a list at `at`, or null to turn it off, so other
+    /// params may write the fields inside it: a choice that writes nothing else there, or a
+    /// param that turns on what it writes.
+    fn holds_object(&self, at: &str) -> bool {
+        match &self.kind {
+            ParamKind::Choice(_) => {
+                self.writes()
+                    .into_iter()
+                    .filter(|(p, _)| *p == at)
+                    .all(|(_, v)| {
+                        v.is_some_and(|v| v.is_null() || v.props().is_some() || v.items().is_some())
+                    })
+            }
+            _ => self.opens(),
+        }
+    }
 }
 
 pub(crate) struct Part {
@@ -198,13 +215,16 @@ impl Part {
             })
     }
 
-    /// A choice that writes `at` as a value with no fields, such as `{ "/bounce": 5 }`.
-    fn scalar_choice(&self, at: &str) -> Option<(&ParamDecl, &Node)> {
+    /// A choice that writes `at` as a value `next` cannot step into: one with no fields, such
+    /// as `{ "/bounce": 5 }`, or a list without item `next`.
+    fn blocking_choice(&self, at: &str, next: &str) -> Option<(&ParamDecl, &Node)> {
         self.params.iter().find_map(|d| {
-            d.writes()
-                .into_iter()
-                .find(|(p, v)| *p == at && v.is_some_and(|v| v.props().is_none() && !v.is_null()))
-                .and_then(|(_, v)| v.map(|v| (d, v)))
+            d.writes().into_iter().find_map(|(p, v)| {
+                let v = v.filter(|v| p == at && v.props().is_none() && !v.is_null())?;
+                let passes =
+                    v.items().is_some() && matches!(step(&v.to_value(), next), Step::Found(_));
+                (!passes).then_some((d, v))
+            })
         })
     }
 
@@ -974,9 +994,58 @@ fn check_sets(part: &mut Part, model: &Node, out: &mut Findings) {
             refused.push(index);
         }
     }
+    for (later, decl) in part.params.iter().enumerate() {
+        if refused.contains(&later) {
+            continue;
+        }
+        let clash = part.params[..later]
+            .iter()
+            .enumerate()
+            .filter(|(earlier, _)| !refused.contains(earlier))
+            .find_map(|(_, earlier)| clash(earlier, decl));
+        if let Some((message, hint)) = clash {
+            out.push(Code::Param, decl.span, message, hint);
+            refused.push(later);
+        }
+    }
     for index in refused {
         part.params[index].sets_refused = true;
     }
+}
+
+/// Two params that write one field: the same pointer, or one inside the other's value. A
+/// param that writes an object, or turns one on as a null default, leaves the fields inside
+/// it to other params.
+fn clash(earlier: &ParamDecl, later: &ParamDecl) -> Option<(String, String)> {
+    let (a, b) = (&earlier.name, &later.name);
+    for p in later.pointers() {
+        for q in earlier.pointers() {
+            if p == q {
+                return Some((
+                    format!("params `{a}` and `{b}` both write `{p}`"),
+                    format!("let one param write `{p}`; remove it from `{b}` or from `{a}`"),
+                ));
+            }
+            let (outer, at, inside, place) = if within(p, q) {
+                (earlier, q, p, "inside")
+            } else if within(q, p) {
+                (later, p, q, "around")
+            } else {
+                continue;
+            };
+            if outer.holds_object(at) {
+                continue;
+            }
+            return Some((
+                format!("param `{b}` writes `{p}`, {place} `{q}`, which param `{a}` writes"),
+                format!(
+                    "let one param write `{inside}`, or make `{}` a choice that writes an object or a list at `{at}`, or give it \"default\": null",
+                    outer.name
+                ),
+            ));
+        }
+    }
+    None
 }
 
 fn sets_problem(part: &Part, model: &Value, pointer: &str, name: &str) -> Option<(String, String)> {
@@ -993,15 +1062,27 @@ fn sets_problem(part: &Part, model: &Value, pointer: &str, name: &str) -> Option
     for (i, token) in through.iter().enumerate() {
         let here = pointer_of(&tokens[..=i]);
         let field = dotted(&here);
-        if let Some((choice, value)) = part.scalar_choice(&here) {
-            return Some((
-                format!(
-                    "`{pointer}` passes through `{field}`, which choice param `{}` sets to {}",
-                    choice.name,
-                    value.to_value()
+        let next = tokens[i + 1];
+        if let Some((choice, value)) = part.blocking_choice(&here, next) {
+            let message = format!(
+                "`{pointer}` passes through `{field}`, which choice param `{}` sets to {}",
+                choice.name,
+                value.to_value()
+            );
+            let hint = match (value.items(), next.parse::<usize>()) {
+                (Some(_), Ok(index)) => format!(
+                    "give `{field}` at least {} items in that choice, or point `sets` at a field every choice of `{}` keeps",
+                    index + 1,
+                    choice.name
                 ),
-                format!("write `{field}` as an object in that choice, or as null to turn it off"),
-            ));
+                (Some(_), Err(_)) => {
+                    format!("index an item of `{field}` by number, such as \"{here}/0\"")
+                }
+                (None, _) => format!(
+                    "write `{field}` as an object in that choice, or as null to turn it off"
+                ),
+            };
+            return Some((message, hint));
         }
         let state = match node.map(|parent| (parent, step(parent, token))) {
             None => "is missing",
@@ -1054,6 +1135,10 @@ fn not_passable(
     };
     match found {
         Step::Found(_) | Step::Missing => None,
+        Step::PastEnd(0) => Some((
+            format!("`{pointer}` indexes into `{shown}`, which is an empty list"),
+            format!("add an item to `{shown}` in `model`, or point `sets` at a field `model` has"),
+        )),
         Step::PastEnd(len) => Some((
             format!(
                 "`{pointer}` indexes past the end of `{shown}`, which has {len} {}",

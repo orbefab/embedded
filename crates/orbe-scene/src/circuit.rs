@@ -8,7 +8,7 @@ use serde_json::{Map, Value, json};
 use crate::diagnostic::{Code, Findings, Reported};
 use crate::model::{Comp, ParamDecl, ParamKind, Part, PinDef, Ref, Scene};
 use crate::name::did_you_mean;
-use crate::params::{Arg, blocked, convert, dotted, set, within};
+use crate::params::{Arg, Step, blocked, convert, dotted, set, step, within};
 use crate::project::{Owner, Project};
 use crate::source::Span;
 use crate::syntax::Node;
@@ -218,7 +218,8 @@ impl<'p> Circuit<'p> {
     }
 
     /// The values an instance's params take, each passed-through value replaced by the one
-    /// its parent got.
+    /// its parent got. A parent's default is passed on as a default, and a parent param left
+    /// unset with a null default leaves the child's param unset too.
     fn args(
         &mut self,
         parent: usize,
@@ -289,6 +290,24 @@ impl<'p> Circuit<'p> {
             };
             if let Some(arg) = self.insts[parent].args.get(name) {
                 args.insert(prop.key.clone(), arg.clone());
+            } else if decl.opens() {
+                if part
+                    .param(&prop.key)
+                    .is_some_and(|d| d.default.is_none() && !matches!(d.kind, ParamKind::Through))
+                {
+                    self.out.push(
+                        Code::Param,
+                        prop.value.span,
+                        format!(
+                            "`{}` needs param `{}`, and `{name}` passes nothing while it is unset",
+                            inst.dotted(),
+                            prop.key
+                        ),
+                        format!(
+                            "give `{name}` a default other than null, or set `{name}` where this part is used"
+                        ),
+                    );
+                }
             } else if let Some(default) = &decl.default {
                 let site = format!("{}.{name}", self.insts[parent].dotted());
                 let dir = project
@@ -304,7 +323,7 @@ impl<'p> Circuit<'p> {
                         node: default.clone(),
                         site,
                         dir,
-                        explicit: true,
+                        explicit: false,
                     },
                 );
             }
@@ -798,7 +817,7 @@ impl<'p> Circuit<'p> {
                         .map(|r| r.split('.').next().unwrap_or(r))
                         .and_then(|name| parts.iter().position(|w| w.name == name))
                 });
-                self.engine_finding(diagnostic.code(), &value, origin.map(|i| &parts[i]), quiet);
+                self.engine_finding(diagnostic, &value, origin.map(|i| &parts[i]), quiet);
             }
             if !refused {
                 break text;
@@ -891,12 +910,17 @@ impl<'p> Circuit<'p> {
         }
     }
 
-    /// The part's model with every param set. A param left at a null default writes nothing
-    /// over a value the model has, and only fills a field the model leaves out. Writes go
-    /// shallowest pointer first, so a param that writes an object comes before one that writes
-    /// inside it. A param whose default is null turns on the objects its value passes through,
-    /// unless another param wrote one of them null. Then a value an instance set that did not
-    /// land, because an object on its way is off in the end, is a finding at that value.
+    /// The part's model with every param set. Nothing here depends on the order params are
+    /// declared or applied: each write is kept or dropped by what the other writes declare,
+    /// the objects that end up on follow from the kept writes, and then each kept write goes
+    /// in once, shallowest first.
+    ///
+    /// A param left unset at a null default only fills a field the model leaves out. A value
+    /// an instance set beats any default. Of two defaults, one that writes an object keeps
+    /// what it wrote, and a deeper one fills only what it left out. Of two set values, the
+    /// deeper wins, unless the object around it is set off. A param whose default is null
+    /// turns on the objects its value passes through, unless a write that wins over it turns
+    /// one off. Then a value an instance set that did not land is a finding at that value.
     fn model(&mut self, inst: usize, part: &Part, model_node: &Node) -> (Value, SetBy) {
         let mut model = model_node.to_value();
         let dir = self
@@ -922,7 +946,11 @@ impl<'p> Circuit<'p> {
                 },
                 (None, None) => continue,
             };
-            let fill = !arg.explicit && arg.node.is_null();
+            let rank = match (arg.explicit, arg.node.is_null()) {
+                (true, _) => Rank::Set,
+                (false, true) => Rank::Unset,
+                (false, false) => Rank::Default,
+            };
             match convert(decl, &arg) {
                 Ok(sets) => {
                     let setter = Setter::new(decl, &arg);
@@ -931,8 +959,7 @@ impl<'p> Circuit<'p> {
                         pointer,
                         value,
                         opens,
-                        explicit: arg.explicit,
-                        fill,
+                        rank,
                         checked: !decl.sets_refused,
                         param: decl.name.clone(),
                         setter: setter.clone(),
@@ -946,23 +973,52 @@ impl<'p> Circuit<'p> {
                 ),
             }
         }
-        writes.sort_by_key(|w| w.pointer.matches('/').count());
-        let mut set_by = SetBy::new();
-        let mut closed: Vec<(&str, &Setter)> = Vec::new();
-        for w in &writes {
-            if w.fill && model.pointer(&w.pointer).is_some() {
+        let mut kept: Vec<(&Write, bool)> = writes
+            .iter()
+            .filter_map(|w| match fate(w, &writes) {
+                Fate::Dropped => None,
+                Fate::Lands { opens } => Some((w, opens)),
+            })
+            .collect();
+        kept.sort_by_key(|(w, _)| w.pointer.matches('/').count());
+        // The objects that end up on, decided before any write goes in, so a write whose way
+        // a deeper write turns on lands whatever order they come in.
+        let on: BTreeSet<String> = kept
+            .iter()
+            .filter(|(_, opens)| *opens)
+            .flat_map(|(w, _)| around(&w.pointer))
+            .collect();
+        for (w, _) in &kept {
+            if w.rank == Rank::Unset && model.pointer(&w.pointer).is_some() {
                 continue;
             }
-            let create = w.opens && !closed.iter().any(|(c, _)| within(&w.pointer, c));
-            if set(&mut model, &w.pointer, w.value.clone(), create) {
-                if w.value.is_null() && !w.fill {
-                    closed.push((&w.pointer, &w.setter));
-                }
-                set_by.insert(w.pointer.clone(), w.setter.clone());
+            let open = around(&w.pointer).iter().all(|at| {
+                on.contains(at)
+                    || model
+                        .pointer(at)
+                        .is_some_and(|v| v.is_object() || v.is_array())
+            });
+            set(&mut model, &w.pointer, w.value.clone(), open);
+        }
+        let mut set_by = SetBy::new();
+        let mut closed: Vec<(&str, &Setter)> = Vec::new();
+        for (w, _) in &kept {
+            let Some(landed) = model.pointer(&w.pointer) else {
+                continue;
+            };
+            if landed.is_null() != w.value.is_null() {
+                continue;
+            }
+            set_by.insert(w.pointer.clone(), w.setter.clone());
+            if w.value.is_null() && w.rank != Rank::Unset {
+                closed.push((&w.pointer, &w.setter));
             }
         }
         let mut told = BTreeSet::new();
-        for w in writes.iter().filter(|w| w.explicit && w.checked) {
+        for w in writes
+            .iter()
+            .filter(|w| w.rank == Rank::Set && w.checked && !w.value.is_null())
+        {
             let Some((at, found)) = blocked(&model, &w.pointer) else {
                 continue;
             };
@@ -1000,13 +1056,28 @@ impl<'p> Circuit<'p> {
                             }
                             _ => String::new(),
                         };
-                        (
-                            format!(
-                                "`{site}` has no effect while `{field}` is off; set `{}` too",
-                                opener.name
+                        let set_null = writes.iter().find(|o| {
+                            o.param == opener.name && o.rank == Rank::Set && o.value.is_null()
+                        });
+                        match set_null {
+                            Some(off) => (
+                                format!(
+                                    "`{site}` has no effect while `{}` is null, which leaves `{field}` off",
+                                    off.setter.site
+                                ),
+                                format!(
+                                    "give `{}` a value{example}, or remove this value",
+                                    off.setter.site
+                                ),
                             ),
-                            format!("set `{}`{example}, or remove this value", opener.name),
-                        )
+                            None => (
+                                format!(
+                                    "`{site}` has no effect while `{field}` is off; set `{}` too",
+                                    opener.name
+                                ),
+                                format!("set `{}`{example}, or remove this value", opener.name),
+                            ),
+                        }
                     }
                     None => (
                         format!("`{site}` has no effect while `{field}` is off"),
@@ -1020,20 +1091,95 @@ impl<'p> Circuit<'p> {
     }
 }
 
+/// Where a param's value comes from, weakest first.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Rank {
+    /// Left unset at a null default: it fills a field the model leaves out, and turns
+    /// nothing off.
+    Unset,
+    /// A declaration's default, or a parent's default passed down.
+    Default,
+    /// Set by an instance, or passed down from a value an instance set.
+    Set,
+}
+
 /// One value a param writes into a model.
 struct Write {
     pointer: String,
     value: Value,
     /// It turns on the objects on its way.
     opens: bool,
-    /// An instance set it, not a declaration's default.
-    explicit: bool,
-    /// A null default: it fills a field the model leaves out, and turns nothing off.
-    fill: bool,
+    rank: Rank,
     /// The part file's check passed its pointers. A refused one has its own finding.
     checked: bool,
     param: String,
     setter: Setter,
+}
+
+enum Fate {
+    Dropped,
+    /// It goes in; `opens` when it may turn on the objects on its way.
+    Lands {
+        opens: bool,
+    },
+}
+
+/// What another param's write around `w` decides for it. A write that holds `w`'s field
+/// keeps it from a default. A write that turns `w`'s object off keeps a default from turning
+/// it on, and drops a set value when it is set itself.
+fn fate(w: &Write, writes: &[Write]) -> Fate {
+    let mut opens = w.opens;
+    for around in writes.iter().filter(|a| {
+        a.param != w.param
+            && a.rank != Rank::Unset
+            && a.pointer != w.pointer
+            && within(&w.pointer, &a.pointer)
+    }) {
+        match cover(&around.value, &w.pointer[around.pointer.len()..]) {
+            Cover::Gap => {}
+            Cover::Value if w.rank == Rank::Set => {}
+            Cover::Value => return Fate::Dropped,
+            Cover::Off if w.rank == Rank::Set && around.rank == Rank::Set => {
+                return Fate::Dropped;
+            }
+            Cover::Off if w.rank == Rank::Set => {}
+            Cover::Off => opens = false,
+        }
+    }
+    Fate::Lands { opens }
+}
+
+/// The pointers of the objects `pointer` passes through, outermost first: `/a` and `/a/b` for
+/// `/a/b/c`.
+fn around(pointer: &str) -> Vec<String> {
+    pointer
+        .match_indices('/')
+        .skip(1)
+        .map(|(i, _)| pointer[..i].to_string())
+        .collect()
+}
+
+/// What a write's `value` holds at `rest`, a pointer inside it.
+enum Cover {
+    /// It leaves the field out.
+    Gap,
+    /// It writes the field, or a value with no fields on its way.
+    Value,
+    /// It writes an object on the way null.
+    Off,
+}
+
+fn cover(value: &Value, rest: &str) -> Cover {
+    let mut node = value;
+    for token in rest.split('/').skip(1) {
+        match step(node, token) {
+            Step::Found(next) => node = next,
+            Step::Missing => return Cover::Gap,
+            Step::Leaf if node.is_null() => return Cover::Off,
+            Step::Leaf | Step::PastEnd(_) | Step::NotIndex => return Cover::Value,
+        }
+    }
+    Cover::Value
 }
 
 /// Netlist v0 without its parts.

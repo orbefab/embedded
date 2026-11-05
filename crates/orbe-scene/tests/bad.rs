@@ -2,7 +2,7 @@
 //! must give exactly the findings its `expect` file lists, one `<code> <file>:<line>:<col>`
 //! per line. ` | <message>` and a further ` | <hint>` are substrings the finding must contain.
 //! Every finding has a hint. An `edit` file changes one project file: its path, the text, and
-//! the new text.
+//! the new text. `orbe check` prints the same findings and exits 1, in the CLI's own tests.
 
 mod common;
 
@@ -30,37 +30,8 @@ const CODES: &[&str] = &[
     "part_modified",
 ];
 
-fn overlay(from: &Path, to: &Path) {
-    for entry in fs::read_dir(from).unwrap() {
-        let path = entry.unwrap().path();
-        let name = path.file_name().unwrap();
-        if name == "expect" || name == "edit" {
-            continue;
-        }
-        if path.is_dir() {
-            common::copy_dir(&path, &to.join(name));
-        } else {
-            fs::copy(&path, to.join(name)).unwrap();
-        }
-    }
-}
-
 fn run(case: &Path) -> (Vec<(String, String, String)>, String) {
-    let project = common::project("nano-button");
-    overlay(case, project.path());
-    if let Ok(edit) = fs::read_to_string(case.join("edit")) {
-        let lines: Vec<&str> = edit.lines().collect();
-        let target = project.path().join(lines[0]);
-        let text = fs::read_to_string(&target).unwrap();
-        assert!(
-            text.contains(lines[1]),
-            "{}: `{}` is not in {}",
-            case.display(),
-            lines[1],
-            lines[0]
-        );
-        fs::write(&target, text.replacen(lines[1], lines[2], 1)).unwrap();
-    }
+    let project = common::overlaid(case);
     let diagnostics = orbe_scene::read(&project.path().join("scene.jsonc"))
         .err()
         .unwrap_or_default();
@@ -82,12 +53,7 @@ fn run(case: &Path) -> (Vec<(String, String, String)>, String) {
 fn every_bad_fixture_gives_its_findings() {
     let mut covered = Vec::new();
     let mut failures = Vec::new();
-    let mut cases: Vec<_> = fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/bad"))
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .collect();
-    cases.sort();
-    for case in cases {
+    for case in common::cases("bad") {
         let expect = fs::read_to_string(case.join("expect")).unwrap();
         let expected: Vec<(&str, Option<&str>, Option<&str>)> = expect
             .lines()

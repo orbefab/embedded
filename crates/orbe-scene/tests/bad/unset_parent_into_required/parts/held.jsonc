@@ -1,0 +1,6 @@
+{
+  "format": 1,
+  "params": { "bounce": { "default": null } },
+  "parts": { "sw": { "type": "./sw.jsonc", "bounce": { "param": "bounce" } } },
+  "pins": { "a": "sw.a", "b": "sw.b" },
+}

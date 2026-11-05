@@ -949,3 +949,171 @@ fn an_unset_null_default_keeps_the_model_value() {
     assert_eq!(resistor(""), 1000);
     assert_eq!(resistor(", \"wipe\": \"470\""), 470);
 }
+
+/// Every order of `params`' items.
+fn orders(params: &[&str]) -> Vec<Vec<String>> {
+    if params.len() <= 1 {
+        return vec![params.iter().map(|p| p.to_string()).collect()];
+    }
+    let mut all = Vec::new();
+    for (i, first) in params.iter().enumerate() {
+        let mut rest = params.to_vec();
+        rest.remove(i);
+        for mut tail in orders(&rest) {
+            tail.insert(0, first.to_string());
+            all.push(tail);
+        }
+    }
+    all
+}
+
+#[test]
+fn reordering_param_declarations_does_not_change_the_netlist() {
+    let params = [
+        r#""contacts": { "default": "ideal", "choices": {
+      "ideal": { "sets": { "/bounce": null } },
+      "gold": { "sets": { "/bounce": { "window": { "value": 5000000000, "unit": "ps", "source": "user" }, "max_bounces": { "value": 3, "unit": "1", "source": "user" } } } },
+      "silver": { "sets": { "/bounce": { "window": { "value": 3000000000, "unit": "ps", "source": "user" } } } } } }"#,
+        r#""bounce": { "unit": "s", "default": null, "sets": "/bounce/window" }"#,
+        r#""max_bounces": { "unit": "1", "default": 2, "sets": "/bounce/max_bounces" }"#,
+    ];
+    for (values, window, edges) in [
+        (
+            ", \"contacts\": \"gold\"",
+            Some(5_000_000_000u64),
+            Some(3u64),
+        ),
+        (
+            ", \"contacts\": \"gold\", \"max_bounces\": 5",
+            Some(5_000_000_000),
+            Some(5),
+        ),
+        (", \"contacts\": \"silver\"", Some(3_000_000_000), Some(2)),
+        (
+            ", \"contacts\": \"silver\", \"bounce\": \"1ms\"",
+            Some(1_000_000_000),
+            Some(2),
+        ),
+        (", \"bounce\": \"1ms\"", Some(1_000_000_000), Some(2)),
+        ("", None, None),
+    ] {
+        let mut seen = Vec::new();
+        for order in orders(&params) {
+            let project = switch_project(&order.join(", "), "null", "[]", values);
+            let netlist = orbe_scene::read(&project.path().join("scene.jsonc"))
+                .unwrap_or_else(|d| panic!("{values} {order:?}: {d:#?}"));
+            seen.push(engine_part(&netlist, "btn1"));
+        }
+        let bounce = &seen[0]["bounce"];
+        assert_eq!(
+            bounce["window"]["value"].as_u64(),
+            window,
+            "{values}: {bounce}"
+        );
+        assert_eq!(
+            bounce["max_bounces"]["value"].as_u64(),
+            edges,
+            "{values}: {bounce}"
+        );
+        assert!(
+            seen.iter().all(|part| *part == seen[0]),
+            "{values}: the order of params changed btn1: {seen:#?}"
+        );
+    }
+}
+
+#[test]
+fn every_catalog_part_file_reads_without_a_finding() {
+    let project = project("nano-button");
+    let ids = common::locked_ids(project.path());
+    let catalog: Vec<String> = fs::read_dir(common::repo().join("parts"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(
+        ids.len(),
+        catalog.len(),
+        "the fixture locks every catalog part"
+    );
+    let required = |id: &str| match id {
+        "capacitor-0603" | "capacitor-tantalum-3216" => ", \"capacitance\": \"100n\"",
+        "resistor-axial" | "resistor-0603" => ", \"resistance\": \"1k\"",
+        "atmega328p-tqfp32" | "nano-board" => ", \"firmware\": \"build/button.ino.hex\"",
+        "led-5mm" | "led-0603" => ", \"color\": \"red\"",
+        _ => "",
+    };
+    let parts: String = ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| format!("\"u{i}\": {{ \"type\": \"{id}\"{} }}, ", required(id)))
+        .collect();
+    fs::write(
+        project.path().join("scene.jsonc"),
+        format!("{{ \"format\": 1, \"parts\": {{ {parts} }} }}"),
+    )
+    .unwrap();
+    let found = orbe_scene::read(&project.path().join("scene.jsonc"))
+        .err()
+        .unwrap_or_default();
+    let in_parts: Vec<_> = found.iter().filter(|d| d.file != "scene.jsonc").collect();
+    assert!(in_parts.is_empty(), "{in_parts:#?}");
+    for id in &ids {
+        assert!(
+            catalog.contains(id),
+            "{id} is in the fixture's parts.lock but not in parts/"
+        );
+    }
+}
+
+#[test]
+#[expect(clippy::disallowed_methods, reason = "the clock is the measurement")]
+fn a_bad_item_at_the_end_of_a_long_list_is_placed_quickly() {
+    let project = with_scene(
+        "\"led1\": { \"type\": \"led-5mm\", \"color\": \"red\" },",
+        "\"led1\": { \"type\": \"led-5mm\", \"color\": \"red\" },\n    \"tx\": { \"type\": \"./parts/ser.jsonc\" },",
+    );
+    let scene = project.path().join("scene.jsonc");
+    let text = fs::read_to_string(&scene).unwrap().replacen(
+        "[\"led1.cathode\", \"nano.GND\"],",
+        "[\"led1.cathode\", \"nano.GND\"], [\"tx.pos\", \"nano.D2\"], [\"tx.neg\", \"nano.GND\"],",
+        1,
+    );
+    fs::write(&scene, text).unwrap();
+    let bytes = format!("{}256", "85,".repeat(31_999));
+    let part = format!(
+        r#"{{
+  "format": 1,
+  "pins": {{ "pos": [1], "neg": [2] }},
+  "model": {{
+    "kind": "voltage_source",
+    "voltage": {{
+      "kind": "serial",
+      "mark": {{ "value": 5, "unit": "V", "source": "user" }},
+      "space": {{ "value": 0, "unit": "V", "source": "user" }},
+      "events": [{{ "t_ps": 1000000000, "baud": 115200, "frame": "8N1", "bytes": [{bytes}] }}],
+    }},
+    "pins": {{ "p": "pos", "n": "neg" }},
+  }},
+}}
+"#
+    );
+    let column = part.lines().nth(9).unwrap().find("256").unwrap() + 1;
+    fs::write(project.path().join("parts/ser.jsonc"), part).unwrap();
+    let started = std::time::Instant::now();
+    let found = scene_errors(project.path());
+    let took = started.elapsed();
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].code, orbe_scene::Code::Engine("netlist.syntax"));
+    assert_eq!(found[0].file, "parts/ser.jsonc");
+    assert_eq!((found[0].line, found[0].column), (10, column));
+    assert!(
+        found[0].message.contains("256 is outside 0 to 255"),
+        "{}",
+        found[0].message
+    );
+    assert!(!found[0].hint.is_empty());
+    assert!(
+        took < std::time::Duration::from_secs(2),
+        "32,000 bytes took {took:?}; a search that grows with the square of the list is back"
+    );
+}

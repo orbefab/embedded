@@ -76,3 +76,46 @@ pub fn project(name: &str) -> TempDir {
     fs::copy(firmware(), dir.path().join("build/button.ino.hex")).unwrap();
     dir
 }
+
+/// The `nano-button` project with a case folder from `tests/bad/` or `tests/good/` laid over
+/// it. An `edit` file changes one project file: its path, the text, and the new text.
+pub fn overlaid(case: &Path) -> TempDir {
+    let project = project("nano-button");
+    for entry in fs::read_dir(case).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap();
+        if name == "expect" || name == "edit" {
+            continue;
+        }
+        let target = project.path().join(name);
+        if path.is_dir() {
+            copy_dir(&path, &target);
+        } else {
+            fs::copy(&path, &target).unwrap();
+        }
+    }
+    if let Ok(edit) = fs::read_to_string(case.join("edit")) {
+        let lines: Vec<&str> = edit.lines().collect();
+        let target = project.path().join(lines[0]);
+        let text = fs::read_to_string(&target).unwrap();
+        assert!(
+            text.contains(lines[1]),
+            "{}: `{}` is not in {}",
+            case.display(),
+            lines[1],
+            lines[0]
+        );
+        fs::write(&target, text.replacen(lines[1], lines[2], 1)).unwrap();
+    }
+    project
+}
+
+/// The case folders in `tests/<kind>/`, sorted.
+pub fn cases(kind: &str) -> Vec<PathBuf> {
+    let mut cases: Vec<PathBuf> = fs::read_dir(repo().join("crates/orbe-scene/tests").join(kind))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    cases.sort();
+    cases
+}

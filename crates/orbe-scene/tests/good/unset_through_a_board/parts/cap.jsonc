@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "pins": { "a": [1], "b": [2] },
+  "params": { "initial": { "unit": "V", "default": null, "sets": "/initial" } },
+  "model": {
+    "kind": "capacitor",
+    "capacitance": { "value": 1e-7, "unit": "F", "source": "user" },
+    "initial": { "value": 2, "unit": "V", "source": "user" },
+    "pins": { "a": "a", "b": "b" },
+  },
+}

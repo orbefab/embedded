@@ -131,46 +131,49 @@ fn help_is_not_a_usage_envelope() {
 }
 
 #[test]
-fn every_bad_fixture_exits_1_and_prints_a_hint() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../orbe-scene/tests/bad");
-    let mut cases: Vec<_> = fs::read_dir(root)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .collect();
-    cases.sort();
-    for case in cases {
-        let project = common::project("nano-button");
-        for entry in fs::read_dir(&case).unwrap() {
-            let path = entry.unwrap().path();
-            let name = path.file_name().unwrap();
-            if name == "expect" || name == "edit" {
-                continue;
-            }
-            let target = project.path().join(name);
-            if path.is_dir() {
-                common::copy_dir(&path, &target);
-            } else {
-                fs::copy(&path, &target).unwrap();
-            }
-        }
-        if let Ok(edit) = fs::read_to_string(case.join("edit")) {
-            let lines: Vec<&str> = edit.lines().collect();
-            let target = project.path().join(lines[0]);
-            let text = fs::read_to_string(&target).unwrap();
-            fs::write(&target, text.replacen(lines[1], lines[2], 1)).unwrap();
-        }
+fn every_bad_fixture_exits_1_and_prints_its_findings() {
+    for case in common::cases("bad") {
+        let name = case.file_name().unwrap().to_string_lossy().to_string();
+        let project = common::overlaid(&case);
         let scene = project.path().join("scene.jsonc");
         let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
-        assert_eq!(
-            output.status.code(),
-            Some(1),
-            "{}: {stdout}",
-            case.file_name().unwrap().to_string_lossy()
-        );
+        assert_eq!(output.status.code(), Some(1), "{name}: {stdout}");
+        let printed: Vec<&str> = stdout.lines().collect();
+        for line in fs::read_to_string(case.join("expect")).unwrap().lines() {
+            let mut fields = line.splitn(3, " | ");
+            let (code, place) = fields.next().unwrap().split_once(' ').unwrap();
+            let head = format!("{}/{place}: error[{code}]: ", project.path().display());
+            let at = printed
+                .iter()
+                .position(|l| l.starts_with(&head))
+                .unwrap_or_else(|| panic!("{name}: no `{head}` in\n{stdout}"));
+            if let Some(message) = fields.next() {
+                assert!(printed[at].contains(message), "{name}: {}", printed[at]);
+            }
+            let hint = printed[at + 1]
+                .strip_prefix("  hint: ")
+                .unwrap_or_else(|| panic!("{name}: no hint after {}", printed[at]));
+            assert!(!hint.is_empty(), "{name}: an empty hint");
+            if let Some(want) = fields.next() {
+                assert!(hint.contains(want), "{name}: {hint}");
+            }
+        }
+    }
+}
+
+#[test]
+fn every_good_fixture_exits_0_with_its_part_count() {
+    for case in common::cases("good") {
+        let name = case.file_name().unwrap().to_string_lossy().to_string();
+        let parts = fs::read_to_string(case.join("expect")).unwrap();
+        let parts = parts.lines().next().unwrap();
+        let project = common::overlaid(&case);
+        let scene = project.path().join("scene.jsonc");
+        let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
+        assert_eq!(output.status.code(), Some(0), "{name}: {stdout}");
         assert!(
-            stdout.contains("\n  hint: ") && !stdout.contains("\n  hint: \n"),
-            "{}:\n{stdout}",
-            case.file_name().unwrap().to_string_lossy()
+            stdout.contains(&format!("ok, {parts}, ")),
+            "{name}: {stdout}"
         );
     }
 }

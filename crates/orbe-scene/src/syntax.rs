@@ -84,7 +84,26 @@ pub(crate) fn parse(sources: &Sources, file: FileId, out: &mut Findings) -> Opti
     };
     let node = convert(file, &value);
     check_duplicate_keys(sources, &node, out);
-    Some(node)
+    let before = out.len();
+    check_numbers(&node, out);
+    (out.len() == before).then_some(node)
+}
+
+/// A number JSON writes but no 64-bit float holds, such as `1e400`, is not read as anything
+/// else.
+fn check_numbers(node: &Node, out: &mut Findings) {
+    match &node.json {
+        Json::Num(raw) if serde_json::from_str::<Value>(raw).is_err() => out.push(
+            Code::Syntax,
+            node.span,
+            format!("{raw} is not a finite number"),
+            "write a number from -1.7e308 to 1.7e308, such as 1e9, or a string such as \"1G\""
+                .into(),
+        ),
+        Json::Arr(items) => items.iter().for_each(|item| check_numbers(item, out)),
+        Json::Obj(props) => props.iter().for_each(|p| check_numbers(&p.value, out)),
+        _ => {}
+    }
 }
 
 /// The library's messages for the likeliest slips are weak, so name the fix.
@@ -251,7 +270,9 @@ impl Node {
         match &self.json {
             Json::Null => Value::Null,
             Json::Bool(b) => Value::Bool(*b),
-            Json::Num(raw) => serde_json::from_str(raw).unwrap_or(Value::Null),
+            Json::Num(raw) => {
+                serde_json::from_str(raw).expect("parse refuses a number it cannot hold")
+            }
             Json::Str(s) => Value::String(s.clone()),
             Json::Arr(items) => Value::Array(items.iter().map(Node::to_value).collect()),
             Json::Obj(props) => Value::Object(

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "pins": { "a": [1], "b": [2] },
+  "params": { "state": { "default": "open", "choices": { "open": { "sets": { "/initial": "open" } }, "closed": { "sets": { "/initial": "closed" } } } }, "start": { "default": "open", "choices": { "open": { "sets": { "/initial": "open" } }, "pressed": { "sets": { "/initial": "closed" } } } } },
+  "model": {
+    "kind": "switch",
+    "on_resistance": { "value": 0.1, "unit": "ohm", "source": "user" },
+    "off_resistance": { "value": 1e8, "unit": "ohm", "source": "user" },
+    "initial": "open",
+    "events": [],
+    "bounce": null,
+  },
+}

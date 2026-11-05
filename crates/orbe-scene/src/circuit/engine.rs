@@ -1,6 +1,7 @@
 //! The engine's findings on the netlist the reader wrote, placed in the files that wrote it.
 
 use serde_json::{Map, Value};
+use sim_core::diagnostic::Diagnostic;
 
 use super::{Circuit, Head, Setter, Written, setter_of};
 use crate::diagnostic::{Code, Reported};
@@ -24,11 +25,12 @@ impl<'p> Circuit<'p> {
     /// finding keeps its engine findings for the next run.
     pub(super) fn engine_finding(
         &mut self,
-        code: &'static str,
+        diagnostic: &Diagnostic,
         value: &Value,
         origin: Option<&Written>,
         quiet: bool,
     ) {
+        let code = diagnostic.code();
         if quiet && REPEATS.contains(&code) {
             return;
         }
@@ -47,7 +49,6 @@ impl<'p> Circuit<'p> {
         if self.failed.contains_key(&origin.inst) {
             return;
         }
-        let field = value["data"]["field"].as_str().unwrap_or_default();
         let rule = value["data"]["rule"].as_str().unwrap_or_default();
         let (requirement, hint) = match rule {
             "bounce_room" => {
@@ -66,16 +67,20 @@ impl<'p> Circuit<'p> {
                 requirement(&message),
                 "write a value greater than zero".into(),
             ),
+            "at_zero" => (
+                requirement(&message),
+                "make this time later than 0, such as 1 ms, which is 1000000000 ps".into(),
+            ),
+            "not_increasing" => (
+                requirement(&message),
+                "make each event's time later than the one before it".into(),
+            ),
             _ => (
                 requirement(&message),
                 "change the value so it meets the engine's rule".into(),
             ),
         };
-        let pointer = if field.is_empty() {
-            String::new()
-        } else {
-            format!("/{}", field.replace('.', "/"))
-        };
+        let pointer = field_pointer(diagnostic, value);
         let setter = setter_of(&origin.set_by, &pointer).or_else(|| {
             origin
                 .set_by
@@ -146,6 +151,18 @@ impl<'p> Circuit<'p> {
     }
 }
 
+/// The JSON pointer of the field an engine finding is about. A schedule finding names its event,
+/// and goes at that event's time.
+fn field_pointer(diagnostic: &Diagnostic, value: &Value) -> String {
+    if let Diagnostic::NetlistSchedule { field, event, .. } = diagnostic {
+        return format!("/{}/{event}/t_ps", field.replace('.', "/"));
+    }
+    match value["data"]["field"].as_str() {
+        Some(field) if !field.is_empty() => format!("/{}", field.replace('.', "/")),
+        _ => String::new(),
+    }
+}
+
 /// A schema finding's detail without the place in the netlist text, which is where the
 /// engine finished reading the part and not where the field is.
 fn detail(value: &Value) -> String {
@@ -166,16 +183,43 @@ fn refusal(head: &Head, part: &Value) -> Option<String> {
         .map(|d| detail(&serde_json::to_value(d).unwrap_or_default()))
 }
 
+/// Engine rules on one object, by the engine's words: the field each is about, and its fix.
+/// The first two are checked once all the object's fields are read, so the search below finds
+/// only the object's last field for them.
+const RULES: &[(&str, &str, &str)] = &[
+    (
+        "a phase has 1 to 32 bits",
+        "bits",
+        "give `bits` a value from 1 to 32",
+    ),
+    (
+        "a phase's value fits in its bits",
+        "value",
+        "make `value` less than 2 to the power of `bits`, or raise `bits`",
+    ),
+    (
+        "lanes is 1, 2 or 4",
+        "lanes",
+        "give `lanes` the value 1, 2 or 4",
+    ),
+];
+
+fn rule(detail: &str) -> Option<&'static (&'static str, &'static str, &'static str)> {
+    RULES.iter().find(|(words, _, _)| *words == detail)
+}
+
 /// The JSON pointer of the field the engine refuses in `part`. The engine names only the part,
 /// so this asks the engine again on cut-down copies. The engine reads an object's fields in
 /// order and stops at the first bad one, so the first field that, kept with those before it,
-/// still gives the same refusal holds the cause. A missing field is placed at the object that
+/// still gives the same refusal holds the cause. A list is searched by halves, since a list can
+/// be long and each try reads the whole part. A missing field is placed at the object that
 /// lacks it: giving it that field there changes the refusal, and giving it to any other
 /// object leaves it or makes the field unknown.
 fn culprit(part: &Value, detail: &str, refusal: impl Fn(&Value) -> Option<String>) -> String {
     let missing = detail
         .strip_prefix("missing field `")
         .and_then(|rest| rest.split('`').next());
+    let rule_field = rule(detail).map(|(_, field, _)| *field);
     let mut at = String::new();
     while let Some(node) = part.pointer(&at) {
         if let (Some(key), Some(object)) = (missing, node.as_object())
@@ -190,15 +234,29 @@ fn culprit(part: &Value, detail: &str, refusal: impl Fn(&Value) -> Option<String
                 return at;
             }
         }
-        let children: Vec<String> = match node {
-            Value::Object(map) => map.keys().filter(|k| *k != "kind").cloned().collect(),
+        let same =
+            |children: &[String]| refusal(&cut(part, &at, children)).as_deref() == Some(detail);
+        let (children, first) = match node {
+            Value::Object(map) => {
+                let children: Vec<String> = map.keys().filter(|k| *k != "kind").cloned().collect();
+                let first = (0..=children.len()).find(|&kept| same(&children[..kept]));
+                if let (Some(kept), Some(field)) = (first, rule_field)
+                    && kept == children.len()
+                    && map.contains_key(field)
+                {
+                    return format!("{at}/{field}");
+                }
+                (children, first)
+            }
             // A cut list has another length, so a refusal of the length stays with the list.
             Value::Array(_) if detail.starts_with("invalid length") => return at,
-            Value::Array(items) => (0..items.len()).map(|i| i.to_string()).collect(),
+            Value::Array(items) => {
+                let children: Vec<String> = (0..items.len()).map(|i| i.to_string()).collect();
+                let first = shortest(children.len(), |kept| same(&children[..kept]));
+                (children, first)
+            }
             _ => return at,
         };
-        let first = (0..=children.len())
-            .find(|&kept| refusal(&cut(part, &at, &children[..kept])).as_deref() == Some(detail));
         match first {
             Some(0) if node.get("kind").is_some() => return format!("{at}/kind"),
             Some(0) | None => return at,
@@ -206,6 +264,24 @@ fn culprit(part: &Value, detail: &str, refusal: impl Fn(&Value) -> Option<String
         }
     }
     at
+}
+
+/// The fewest of `len` items for which `holds` is true, when it holds for every count from
+/// some point on, found by halves.
+fn shortest(len: usize, holds: impl Fn(usize) -> bool) -> Option<usize> {
+    if !holds(len) {
+        return None;
+    }
+    let (mut low, mut high) = (0, len);
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if holds(middle) {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    Some(low)
 }
 
 /// `part` with the object or list at `at` cut down to `kept` and its `kind`.
@@ -267,9 +343,9 @@ fn words(
             ),
         );
     }
-    let hint = if detail.starts_with("invalid type: map")
-        && setter.is_some_and(|s| s.unit.is_some())
-    {
+    let hint = if let Some((_, _, fix)) = rule(detail) {
+        (*fix).to_string()
+    } else if detail.starts_with("invalid type: map") && setter.is_some_and(|s| s.unit.is_some()) {
         format!(
             "a number param writes {{ value, unit, source }}, and the engine takes a bare value at {place}; point the param's `sets` at a field that takes a value object"
         )
