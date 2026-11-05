@@ -1,0 +1,1 @@
+scene.param scene.jsonc:10:51 | `rp.clock` is 1MHz; #rp events[1] starts before the previous event ends at 26000000 ps | raise `clock_hz`

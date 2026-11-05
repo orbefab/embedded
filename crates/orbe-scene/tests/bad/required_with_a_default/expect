@@ -1,0 +1,1 @@
+scene.syntax parts/sw.jsonc:4:38 | a param with a `default` is not required | remove "required": true

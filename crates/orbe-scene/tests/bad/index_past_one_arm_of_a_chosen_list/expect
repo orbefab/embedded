@@ -1,0 +1,1 @@
+scene.param parts/spi.jsonc:4:377 | `/events/0/bytes/2` passes through `events.0.bytes`, which choice param `play` sets to [1] in its choice `short` | give `events.0.bytes` at least 3 items in choice `play`'s `short`

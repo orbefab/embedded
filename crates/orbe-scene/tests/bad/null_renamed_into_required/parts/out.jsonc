@@ -1,0 +1,6 @@
+{
+  "format": 1,
+  "params": { "ohm": { "default": null } },
+  "parts": { "m": { "type": "./mid.jsonc", "r": { "param": "ohm" } } },
+  "pins": { "a": "m.a", "b": "m.b" },
+}

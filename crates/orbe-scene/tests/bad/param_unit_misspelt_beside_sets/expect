@@ -1,0 +1,2 @@
+scene.param parts/sw.jsonc:4:15 | param `on` has no unit, choices or file, and this part has no children
+scene.syntax parts/sw.jsonc:4:23 | a param declaration has no key `unt` | did you mean `unit`

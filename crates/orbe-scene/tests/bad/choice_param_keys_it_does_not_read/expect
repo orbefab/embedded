@@ -1,0 +1,3 @@
+scene.syntax parts/sw.jsonc:4:26 | a choice param does not read `unit` | remove `unit`
+scene.syntax parts/sw.jsonc:4:39 | a choice param does not read `min_exclusive` | remove `min_exclusive`
+scene.syntax parts/sw.jsonc:4:59 | a choice param does not read `sets` | remove `sets`

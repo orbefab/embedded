@@ -7,7 +7,7 @@ use crate::diagnostic::{Code, Findings, Reported};
 use crate::kinds;
 use crate::name::{NameKind, did_you_mean, problem};
 use crate::params::{Step, dotted, pointer_of, step, tokens, within};
-use crate::shape::{self, schema, unknown_key};
+use crate::shape::{self, ParamShape, schema, unknown_key};
 use crate::source::{FileId, Sources, Span};
 use crate::syntax::{Node, Prop};
 use crate::units::{self, Unit};
@@ -191,27 +191,24 @@ impl Part {
             })
     }
 
-    /// A choice that writes `at` as a value `next` cannot step into: one with no fields, such
-    /// as `{ "/bounce": 5 }`, or a list without item `next`.
-    fn blocking_choice(&self, at: &str, next: &str) -> Option<(&ParamDecl, &Node)> {
-        self.params.iter().find_map(|d| {
-            d.writes().into_iter().find_map(|(p, v)| {
-                let v = v.filter(|v| p == at && v.props().is_none() && !v.is_null())?;
-                let passes =
-                    v.items().is_some() && matches!(step(&v.to_value(), next), Step::Found(_));
-                (!passes).then_some((d, v))
-            })
-        })
-    }
-
-    /// Whether a choice writes a list at `at`, so the list's items come from the choice and
-    /// not from `model`.
-    fn chosen_list(&self, at: &str) -> bool {
-        self.params.iter().any(|d| {
-            d.writes()
-                .into_iter()
-                .any(|(p, v)| p == at && v.is_some_and(|v| v.items().is_some()))
-        })
+    /// Each choice that writes `at`: its param, its name and its value there. Also whether one
+    /// param writes `at` in every choice, so the value `model` has there never shows.
+    fn chosen(&self, at: &str) -> (Vec<(&ParamDecl, &str, &Node)>, bool) {
+        let mut arms = Vec::new();
+        let mut every = false;
+        for decl in &self.params {
+            let ParamKind::Choice(choices) = &decl.kind else {
+                continue;
+            };
+            let before = arms.len();
+            for (name, sets) in choices {
+                if let Some((_, value)) = sets.iter().find(|(p, _)| p == at) {
+                    arms.push((decl, name.as_str(), value));
+                }
+            }
+            every |= !choices.is_empty() && arms.len() - before == choices.len();
+        }
+        (arms, every)
     }
 
     pub(crate) fn pin_list(&self) -> String {
@@ -836,11 +833,12 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
             continue;
         }
         let field = |key: &str| prop.value.get(key);
-        let sets = field("sets").and_then(Node::str).map(str::to_string);
-        let kind = if let Some(choices) = field("choices") {
-            ParamKind::Choice(decode_choices(choices))
-        } else if field("file").is_some() {
-            match field("as").map(Node::str) {
+        let shape = shape::param_shape(&prop.value, out);
+        let kind = match shape {
+            ParamShape::Choice => {
+                ParamKind::Choice(field("choices").map(decode_choices).unwrap_or_default())
+            }
+            ParamShape::File => match field("as").map(Node::str) {
                 Some(Some("text")) => ParamKind::File { text: true },
                 Some(Some("blob")) => ParamKind::File { text: false },
                 Some(_) => continue,
@@ -856,24 +854,31 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
                     );
                     continue;
                 }
+            },
+            ParamShape::Number => {
+                let Some(unit) = field("unit") else { continue };
+                let Some(text) = unit.str() else { continue };
+                let Some(parsed) = Unit::parse(text) else {
+                    out.push(
+                        Code::Param,
+                        unit.span,
+                        "a param's unit is one of ohm, F, V, A, s, Hz, W and 1",
+                        "use one of ohm, F, V, A, s, Hz, W or 1".into(),
+                    );
+                    continue;
+                };
+                ParamKind::Number {
+                    unit: parsed,
+                    min_exclusive: field("min_exclusive").and_then(Node::number),
+                }
             }
-        } else if let Some(unit) = field("unit") {
-            let Some(text) = unit.str() else { continue };
-            let Some(parsed) = Unit::parse(text) else {
-                out.push(
-                    Code::Param,
-                    unit.span,
-                    "a param's unit is one of ohm, F, V, A, s, Hz, W and 1",
-                    "use one of ohm, F, V, A, s, Hz, W or 1".into(),
-                );
-                continue;
-            };
-            ParamKind::Number {
-                unit: parsed,
-                min_exclusive: field("min_exclusive").and_then(Node::number),
+            ParamShape::Through => ParamKind::Through,
+        };
+        let sets = match kind {
+            ParamKind::Number { .. } | ParamKind::File { .. } => {
+                field("sets").and_then(Node::str).map(str::to_string)
             }
-        } else {
-            ParamKind::Through
+            ParamKind::Choice(_) | ParamKind::Through => None,
         };
         let required = field("required").is_some_and(|r| r.to_value().as_bool() != Some(false));
         let default = field("default").cloned();
@@ -912,9 +917,10 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
     params
 }
 
-/// Every object a pointer passes through is in `model`, or a param turns it on: one with
-/// "default": null inside it, or one that writes it. A list is passed by the index of an item
-/// it has. Otherwise no value of the param could take effect.
+/// Every object a pointer passes through is in `model` and in each value a choice writes
+/// around it, or a param turns it on: one with "default": null inside it, or one that writes
+/// it. A list is passed by the index of an item it has. Otherwise some value of the param
+/// would not take effect.
 fn check_sets(part: &mut Part, model: &Node, out: &mut Findings) {
     let model = model.to_value();
     let mut refused = Vec::new();
@@ -987,83 +993,194 @@ fn clash(earlier: &ParamDecl, later: &ParamDecl) -> Option<(String, String)> {
     None
 }
 
+/// A value the object or list at one point on a pointer's way may hold once the params are
+/// applied, and the choice that wrote it, when one did. `None` once the way is off: the
+/// objects from there on are made by the param that turns them on.
+struct Held<'p> {
+    value: Option<Value>,
+    by: Option<(&'p ParamDecl, &'p str)>,
+}
+
+impl Held<'_> {
+    /// Where the value comes from, for a message: "in `model`" or "in choice `play`'s `one`".
+    fn place(&self) -> String {
+        match self.by {
+            None => "in `model`".into(),
+            Some((decl, arm)) => format!("in choice `{}`'s `{arm}`", decl.name),
+        }
+    }
+}
+
+/// Every value each point on the way may hold is checked: `model`'s, unless one param writes
+/// that point in every choice, and each value a choice writes there, with the objects and
+/// lists inside it. The pointer is good only when each of them has the way.
 fn sets_problem(part: &Part, model: &Value, pointer: &str, name: &str) -> Option<(String, String)> {
-    let at_field =
-        || "point `sets` at a field of an object in `model`, such as \"/resistance\"".to_string();
     let tokens = match tokens(pointer) {
         Ok(tokens) => tokens,
-        Err(problem) => return Some((problem, at_field())),
-    };
-    let (last, through) = tokens.split_last().expect("split yields one token");
-    // `None` once the way is off: the objects from there on are made by the param that turns
-    // them on.
-    let mut node = Some(model);
-    for (i, token) in through.iter().enumerate() {
-        let here = pointer_of(&tokens[..=i]);
-        let field = dotted(&here);
-        let next = tokens[i + 1];
-        if let Some((choice, value)) = part.blocking_choice(&here, next) {
-            let message = format!(
-                "`{pointer}` passes through `{field}`, which choice param `{}` sets to {}",
-                choice.name,
-                value.to_value()
-            );
-            let hint = match (value.items(), next.parse::<usize>()) {
-                (Some(_), Ok(index)) => format!(
-                    "give `{field}` at least {} in that choice, or point `sets` at a field every choice of `{}` keeps",
-                    items(index + 1),
-                    choice.name
-                ),
-                (Some(_), Err(_)) => {
-                    format!("index an item of `{field}` by number, such as \"{here}/0\"")
-                }
-                (None, _) => format!(
-                    "write `{field}` as an object in that choice, or as null to turn it off"
-                ),
-            };
-            return Some((message, hint));
-        }
-        let state = match node.map(|parent| (parent, step(parent, token))) {
-            None => "is missing",
-            Some((_, Step::Found(next))) if next.is_object() || next.is_array() => {
-                node = Some(next);
-                continue;
-            }
-            Some((_, Step::Found(Value::Null))) => "is null",
-            Some((_, Step::Missing)) => "is missing",
-            Some((_, Step::Found(_))) => {
-                return Some((
-                    format!("`{pointer}` passes through `{field}`, which is not an object"),
-                    at_field(),
-                ));
-            }
-            // Every list a choice writes here has the item, which `blocking_choice` checked
-            // one step up.
-            Some((_, Step::PastEnd(_))) if part.chosen_list(&pointer_of(&tokens[..i])) => {
-                "is past the end"
-            }
-            Some((parent, found)) => {
-                return not_passable(pointer, &tokens[..i], token, parent, found);
-            }
-        };
-        node = None;
-        if part.opener(&here).is_none() {
+        Err(problem) => {
             return Some((
-                format!(
-                    "`{pointer}` passes through `{field}`, which {state} in `model`, and no param turns it on, so this value never takes effect"
-                ),
-                format!(
-                    "write `{field}` as an object in `model`, or give `{name}` \"default\": null so that setting it turns `{field}` on"
-                ),
+                problem,
+                "point `sets` at a field of an object in `model`, such as \"/resistance\"".into(),
             ));
         }
+    };
+    let (last, through) = tokens.split_last().expect("split yields one token");
+    let mut held = vec![Held {
+        value: Some(model.clone()),
+        by: None,
+    }];
+    for (i, token) in through.iter().enumerate() {
+        let here = pointer_of(&tokens[..=i]);
+        let (arms, every) = part.chosen(&here);
+        let mut stepped = Vec::new();
+        for h in &held {
+            let found = h.value.as_ref().map_or(Step::Missing, |v| step(v, token));
+            match found {
+                Step::Found(next) if next.is_object() || next.is_array() => stepped.push(Held {
+                    value: Some(next.clone()),
+                    by: h.by,
+                }),
+                _ if every => {}
+                Step::Found(Value::Null) | Step::Missing if part.opener(&here).is_some() => {
+                    stepped.push(Held {
+                        value: None,
+                        by: h.by,
+                    });
+                }
+                found => return Some(off_the_way(pointer, &tokens[..i], token, h, found, name)),
+            }
+        }
+        let mut next: Vec<Held> = Vec::new();
+        for (decl, arm, value) in arms {
+            let by = Some((decl, arm));
+            match value.to_value() {
+                Value::Null => {}
+                // An object a choice writes merges into the one there.
+                Value::Object(written) => {
+                    let bases: Vec<_> = stepped
+                        .iter()
+                        .filter_map(|h| h.value.as_ref()?.as_object())
+                        .collect();
+                    if bases.is_empty() {
+                        next.push(Held {
+                            value: Some(Value::Object(written)),
+                            by,
+                        });
+                    } else {
+                        for base in bases {
+                            let mut value = base.clone();
+                            value.extend(written.clone());
+                            next.push(Held {
+                                value: Some(Value::Object(value)),
+                                by,
+                            });
+                        }
+                    }
+                }
+                value => next.push(Held {
+                    value: Some(value),
+                    by,
+                }),
+            }
+        }
+        if !every {
+            next.extend(stepped);
+        }
+        held = next;
     }
-    let parent = node?;
-    match step(parent, last) {
-        _ if parent.is_object() => None,
-        Step::PastEnd(_) if part.chosen_list(&pointer_of(through)) => None,
-        found => not_passable(pointer, through, last, parent, found),
-    }
+    held.iter().find_map(|h| {
+        let value = h.value.as_ref()?;
+        match step(value, last) {
+            _ if value.is_object() => None,
+            Step::Found(_) => None,
+            found => Some(off_the_way(pointer, through, last, h, found, name)),
+        }
+    })
+}
+
+/// Why `pointer` cannot go on from `h`, the value at `tokens`, by `token`.
+fn off_the_way(
+    pointer: &str,
+    tokens: &[&str],
+    token: &str,
+    h: &Held<'_>,
+    found: Step<'_>,
+    name: &str,
+) -> (String, String) {
+    let place = h.place();
+    let here = pointer_of(&[tokens, &[token]].concat());
+    let (field, state) = match found {
+        Step::Found(Value::Null) => (dotted(&here), "is null"),
+        Step::Missing => (dotted(&here), "is missing"),
+        Step::Found(leaf) => {
+            let field = dotted(&here);
+            return match h.by {
+                None => (
+                    format!("`{pointer}` passes through `{field}`, which is not an object"),
+                    "point `sets` at a field of an object in `model`, such as \"/resistance\""
+                        .into(),
+                ),
+                Some(_) => chosen_leaf(pointer, &field, leaf, h, &place),
+            };
+        }
+        found => {
+            let Some((decl, arm)) = h.by else {
+                let parent = h.value.as_ref().expect("an off way steps as missing");
+                return not_passable(pointer, tokens, token, parent, found)
+                    .expect("a step that is not found");
+            };
+            let field = dotted(&pointer_of(tokens));
+            let value = h.value.as_ref().expect("an off way steps as missing");
+            let sets = format!(
+                "`{pointer}` passes through `{field}`, which choice param `{}` sets to {value} in its choice `{arm}`",
+                decl.name
+            );
+            return match found {
+                Step::PastEnd(_) => (
+                    sets,
+                    format!(
+                        "give `{field}` at least {} {place}, or point `sets` at a field every choice of `{}` keeps",
+                        items(token.parse::<usize>().map_or(1, |index| index + 1)),
+                        decl.name
+                    ),
+                ),
+                Step::NotIndex => (
+                    sets,
+                    format!(
+                        "index an item of `{field}` by number, such as \"{}/0\"",
+                        pointer_of(tokens)
+                    ),
+                ),
+                _ => chosen_leaf(pointer, &field, value, h, &place),
+            };
+        }
+    };
+    (
+        format!(
+            "`{pointer}` passes through `{field}`, which {state} {place}, and no param turns it on, so this value never takes effect"
+        ),
+        format!(
+            "write `{field}` as an object {place}, or give `{name}` \"default\": null so that setting it turns `{field}` on"
+        ),
+    )
+}
+
+/// A choice writes `field` as a value with no fields, such as `{ "/bounce": 5 }`.
+fn chosen_leaf(
+    pointer: &str,
+    field: &str,
+    value: &Value,
+    h: &Held<'_>,
+    place: &str,
+) -> (String, String) {
+    let (decl, arm) = h.by.expect("a value a choice wrote");
+    (
+        format!(
+            "`{pointer}` passes through `{field}`, which choice param `{}` sets to {value} in its choice `{arm}`",
+            decl.name
+        ),
+        format!("write `{field}` as an object {place}, or as null to turn it off"),
+    )
 }
 
 /// "1 item" or "`n` items".

@@ -56,19 +56,97 @@ const CHOICE: Shape = Shape::Obj(
     ],
 );
 
-const PARAM: Shape = Shape::Obj(
-    "a param declaration",
-    &[
-        ("unit", Shape::Str),
-        ("choices", Shape::Map(&CHOICE)),
-        ("file", Shape::Str),
-        ("as", Shape::Word(&["text", "blob"])),
-        ("default", Shape::Any),
-        ("required", Shape::Bool),
-        ("min_exclusive", Shape::Num),
-        ("sets", Shape::Str),
-    ],
-);
+const PARAM_KEYS: &[(&str, Shape)] = &[
+    ("unit", Shape::Str),
+    ("choices", Shape::Map(&CHOICE)),
+    ("file", Shape::Str),
+    ("as", Shape::Word(&["text", "blob"])),
+    ("default", Shape::Any),
+    ("required", Shape::Bool),
+    ("min_exclusive", Shape::Num),
+    ("sets", Shape::Str),
+];
+
+const PARAM: Shape = Shape::Obj("a param declaration", PARAM_KEYS);
+
+#[derive(Clone, Copy)]
+pub(crate) enum ParamShape {
+    Choice,
+    File,
+    Number,
+    /// No unit, choices or file: a part with children hands the value to a child, whose param
+    /// checks it.
+    Through,
+}
+
+/// A param's kinds, told apart by their keys: what each is called, the key that marks it, of
+/// which the first a declaration holds decides, and the keys that kind reads.
+const PARAM_KINDS: &[(ParamShape, &str, Option<&str>, &[&str])] = &[
+    (
+        ParamShape::Choice,
+        "a choice param",
+        Some("choices"),
+        &["choices", "default", "required"],
+    ),
+    (
+        ParamShape::File,
+        "a file param",
+        Some("file"),
+        &["file", "as", "default", "required", "sets"],
+    ),
+    (
+        ParamShape::Number,
+        "a number param",
+        Some("unit"),
+        &["unit", "default", "required", "min_exclusive", "sets"],
+    ),
+    (
+        ParamShape::Through,
+        "a param that passes its value through",
+        None,
+        &["default", "required"],
+    ),
+];
+
+/// The kind of a param declaration, with a `scene.syntax` finding at each key that kind does
+/// not read, and at `"required": true` beside a `default`. [`check`] reports a key no kind has,
+/// such as a misspelt `unit`, and then the kind is not known, so its keys wait for the next run.
+pub(crate) fn param_shape(node: &Node, out: &mut Findings) -> ParamShape {
+    let props = node.props().unwrap_or_default();
+    let has = |key: &str| props.iter().any(|p| p.key == key);
+    let (kind, what, mark, reads) = PARAM_KINDS
+        .iter()
+        .find(|(_, _, mark, _)| mark.is_none_or(has))
+        .expect("the last kind has no mark");
+    let known = props
+        .iter()
+        .all(|p| keys(PARAM_KEYS).contains(&p.key.as_str()));
+    let or = match mark {
+        Some(_) => String::new(),
+        None => ", or give it a unit, choices or file to make it a param of that kind".into(),
+    };
+    for prop in props {
+        let key = prop.key.as_str();
+        if known && !reads.contains(&key) {
+            out.push(
+                Code::Syntax,
+                prop.key_span,
+                format!("{what} does not read `{key}`"),
+                format!("remove `{key}`{or}; {what} reads only {}", reads.join(", ")),
+            );
+        }
+        if key == "required" && matches!(prop.value.json, Json::Bool(true)) && has("default") {
+            out.push(
+                Code::Syntax,
+                prop.key_span,
+                "a param with a `default` is not required",
+                "remove \"required\": true, or remove `default` so that every use must set it"
+                    .into(),
+            );
+        }
+    }
+    *kind
+}
 
 const READING: Shape = Shape::Obj(
     "a reading",

@@ -305,7 +305,12 @@ impl<'p> Circuit<'p> {
                 .get(name)
                 .cloned()
                 .or_else(|| decl.opens().then(|| (prop.value.span, name.to_string())));
-            if let Some(arg) = self.insts[parent].args.get(name) {
+            // A null set where the default is null is that default, so it passes on as unset.
+            let passed = self.insts[parent]
+                .args
+                .get(name)
+                .filter(|arg| !(decl.opens() && arg.node.is_null()));
+            if let Some(arg) = passed {
                 args.insert(prop.key.clone(), arg.clone());
             } else if let Some((span, origin)) = left_unset {
                 let child = part
