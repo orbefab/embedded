@@ -242,3 +242,330 @@ fn a_bounce_window_fills_the_switch_with_its_default_count() {
     );
     assert_eq!(btn1["bounce"]["max_bounces"]["value"], 2);
 }
+
+fn scene_errors(root: &std::path::Path) -> Vec<orbe_scene::Diagnostic> {
+    orbe_scene::read(&root.join("scene.jsonc"))
+        .err()
+        .unwrap_or_else(|| panic!("scene read with no findings"))
+}
+
+fn rewrite_lock(root: &std::path::Path, id: &str, version: &str, registry: &str) {
+    let hash = orbe_scene::folder_hash(&root.join("parts").join(id)).unwrap();
+    let new_line = format!("{id} {version} {registry} {hash}");
+    let path = root.join("parts.lock");
+    let text = fs::read_to_string(&path).unwrap();
+    let lines: Vec<String> = text
+        .lines()
+        .map(|line| {
+            if line.split_whitespace().next() == Some(id) {
+                new_line.clone()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+    fs::write(&path, lines.join("\n") + "\n").unwrap();
+}
+
+fn edit_led_resistance(root: &std::path::Path) {
+    let file = root.join("parts/led-5mm/part.jsonc");
+    let text = fs::read_to_string(&file).unwrap();
+    fs::write(
+        &file,
+        text.replacen("\"value\": 2.115", "\"value\": 1000", 1),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_sealed_edit_with_a_foreign_lock_version_is_part_modified() {
+    let project = project("nano-button");
+    edit_led_resistance(project.path());
+    rewrite_lock(project.path(), "led-5mm", "9.9.9", orbe_scene::REGISTRY);
+    let found = scene_errors(project.path());
+    let modified: Vec<_> = found
+        .iter()
+        .filter(|d| d.code == orbe_scene::Code::PartModified)
+        .collect();
+    assert_eq!(modified.len(), 1, "{found:#?}");
+    let d = modified[0];
+    assert_eq!(d.file, "parts/led-5mm/part.jsonc");
+    assert_eq!((d.line, d.column), (24, 46));
+    assert!(
+        d.message
+            .contains("`params.color.choices.red.sets./series_resistance.value`"),
+        "{}",
+        d.message
+    );
+    assert!(d.message.contains("led-5mm@0.1.0"), "{}", d.message);
+    assert!(d.hint.contains("orbe add"), "{}", d.hint);
+}
+
+#[test]
+fn a_lock_version_outside_the_catalog_is_an_error() {
+    let project = project("nano-button");
+    rewrite_lock(project.path(), "led-5mm", "9.9.9", orbe_scene::REGISTRY);
+    let found = scene_errors(project.path());
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].code, orbe_scene::Code::PartModified);
+    assert_eq!(found[0].file, "parts.lock");
+    assert_eq!((found[0].line, found[0].column), (9, 1));
+    assert!(found[0].message.contains("9.9.9"), "{}", found[0].message);
+    assert!(
+        found[0].message.contains("led-5mm@0.1.0"),
+        "{}",
+        found[0].message
+    );
+    assert!(!found[0].hint.is_empty());
+}
+
+#[test]
+fn a_lock_registry_outside_the_catalog_is_an_error() {
+    let project = project("nano-button");
+    rewrite_lock(
+        project.path(),
+        "led-5mm",
+        "0.1.0",
+        "https://example.com/parts",
+    );
+    let found = scene_errors(project.path());
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].code, orbe_scene::Code::PartModified);
+    assert_eq!(found[0].file, "parts.lock");
+    assert_eq!((found[0].line, found[0].column), (9, 1));
+    assert!(
+        found[0].message.contains("https://example.com/parts"),
+        "{}",
+        found[0].message
+    );
+    assert!(
+        found[0].message.contains("led-5mm@0.1.0"),
+        "{}",
+        found[0].message
+    );
+    assert!(!found[0].hint.is_empty());
+}
+
+#[test]
+fn deleting_a_sealed_model_does_not_unseal_the_part() {
+    let project = project("nano-button");
+    let file = project.path().join("parts/resistor-axial/part.jsonc");
+    let text = fs::read_to_string(&file).unwrap();
+    let from = "  \"model\": {\n    \"kind\": \"resistor\",\n    \"ratings\": { \"power\": { \"value\": 0.25, \"unit\": \"W\", \"source\": \"user\" } },\n  },";
+    let edited = text.replacen(
+        from,
+        "  \"parts\": { \"r\": { \"type\": \"resistor-0603\", \"resistance\": \"1\" } },",
+        1,
+    );
+    assert_ne!(text, edited);
+    fs::write(&file, edited).unwrap();
+    let found = scene_errors(project.path());
+    let modified: Vec<_> = found
+        .iter()
+        .filter(|d| d.code == orbe_scene::Code::PartModified)
+        .collect();
+    assert_eq!(modified.len(), 1, "{found:#?}");
+    assert_eq!(modified[0].file, "parts/resistor-axial/part.jsonc");
+    assert_eq!((modified[0].line, modified[0].column), (15, 3));
+    assert!(
+        modified[0].message.contains("resistor-axial@0.1.0"),
+        "{}",
+        modified[0].message
+    );
+    assert!(
+        modified[0].message.contains("differs"),
+        "{}",
+        modified[0].message
+    );
+    assert!(
+        modified[0].hint.contains("orbe add"),
+        "{}",
+        modified[0].hint
+    );
+}
+
+#[test]
+fn a_symlink_loop_in_a_sealed_copy_is_an_error() {
+    let project = project("nano-button");
+    let folder = project.path().join("parts/led-5mm");
+    std::os::unix::fs::symlink(".", folder.join("loop")).unwrap();
+    edit_led_resistance(project.path());
+    let found = scene_errors(project.path());
+    let io: Vec<_> = found
+        .iter()
+        .filter(|d| d.code == orbe_scene::Code::Io)
+        .collect();
+    let modified: Vec<_> = found
+        .iter()
+        .filter(|d| d.code == orbe_scene::Code::PartModified)
+        .collect();
+    assert_eq!(io.len(), 1, "{found:#?}");
+    assert_eq!(io[0].file, "parts/led-5mm/part.jsonc");
+    assert_eq!((io[0].line, io[0].column), (1, 1));
+    assert!(
+        io[0].message.contains("cannot hash parts/led-5mm"),
+        "{}",
+        io[0].message
+    );
+    assert!(io[0].hint.contains("link"), "{}", io[0].hint);
+    assert_eq!(modified.len(), 1, "{found:#?}");
+    assert_eq!((modified[0].line, modified[0].column), (24, 46));
+    assert!(
+        modified[0].message.contains("led-5mm@0.1.0"),
+        "{}",
+        modified[0].message
+    );
+}
+
+#[test]
+fn a_symlink_loop_without_an_edit_does_not_pass() {
+    let project = project("nano-button");
+    let folder = project.path().join("parts/led-5mm");
+    std::os::unix::fs::symlink(".", folder.join("loop")).unwrap();
+    let found = scene_errors(project.path());
+    assert!(
+        found
+            .iter()
+            .any(|d| d.code == orbe_scene::Code::Io && d.hint.contains("link")),
+        "{found:#?}"
+    );
+}
+
+#[test]
+fn a_passed_through_bounce_default_matches_setting_it() {
+    let direct = project("nano-button");
+    let scene = direct.path().join("scene.jsonc");
+    let text = fs::read_to_string(&scene).unwrap();
+    fs::write(
+        &scene,
+        text.replacen(
+            "{ \"type\": \"tactile-switch-6mm\" }",
+            "{ \"type\": \"tactile-switch-6mm\", \"bounce\": \"1ms\" }",
+            1,
+        ),
+    )
+    .unwrap();
+    let direct = orbe_scene::read(&scene).unwrap();
+
+    let via = project("nano-button");
+    fs::write(
+        via.path().join("parts/bouncy.jsonc"),
+        "{\n  \"format\": 1,\n  \"params\": { \"bounce\": { \"default\": \"1ms\" } },\n  \"parts\": { \"sw\": { \"type\": \"tactile-switch-6mm\", \"bounce\": { \"param\": \"bounce\" } } },\n  \"pins\": { \"a\": \"sw.a\", \"b\": \"sw.b\" }\n}\n",
+    )
+    .unwrap();
+    let scene = via.path().join("scene.jsonc");
+    let text = fs::read_to_string(&scene).unwrap();
+    fs::write(
+        &scene,
+        text.replacen(
+            "{ \"type\": \"tactile-switch-6mm\" }",
+            "{ \"type\": \"./parts/bouncy.jsonc\" }",
+            1,
+        ),
+    )
+    .unwrap();
+    let via = orbe_scene::read(&scene).unwrap_or_else(|d| panic!("{d:#?}"));
+    let bounce = |json: &str| {
+        let value: Value = serde_json::from_str(json).unwrap();
+        value["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == "btn1" || p["name"] == "btn1__sw")
+            .unwrap()["bounce"]
+            .clone()
+    };
+    assert_eq!(bounce(&direct.json), bounce(&via.json));
+}
+
+#[test]
+fn max_bounces_without_bounce_leaves_bounce_off() {
+    let project = project("nano-button");
+    let scene = project.path().join("scene.jsonc");
+    let text = fs::read_to_string(&scene).unwrap();
+    fs::write(
+        &scene,
+        text.replacen(
+            "{ \"type\": \"tactile-switch-6mm\" }",
+            "{ \"type\": \"tactile-switch-6mm\", \"max_bounces\": 4 }",
+            1,
+        ),
+    )
+    .unwrap();
+    let netlist = orbe_scene::read(&scene).unwrap_or_else(|d| panic!("{d:#?}"));
+    let json: Value = serde_json::from_str(&netlist.json).unwrap();
+    let btn1 = json["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "btn1")
+        .unwrap();
+    assert!(btn1["bounce"].is_null(), "{}", btn1["bounce"]);
+}
+
+fn pin_net(json: &str, part: &str, pin: &str) -> String {
+    let value: Value = serde_json::from_str(json).unwrap();
+    value["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == part)
+        .unwrap_or_else(|| panic!("no part {part}"))["pins"][pin]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+fn jumper_board(root: &std::path::Path, drop_jumper: bool) {
+    let mark = if drop_jumper {
+        ", \"not_simulated\": \"left out\""
+    } else {
+        ""
+    };
+    fs::write(
+        root.join("parts/jumper.jsonc"),
+        "{\n  \"format\": 1,\n  \"pins\": { \"a\": [1], \"b\": [2] },\n  \"wires\": [[\"a\", \"b\"]]\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("parts/board.jsonc"),
+        format!(
+            "{{\n  \"format\": 1,\n  \"parts\": {{\n    \"j\": {{ \"type\": \"./jumper.jsonc\"{mark} }},\n    \"ra\": {{ \"type\": \"resistor-axial\", \"resistance\": \"100\" }},\n    \"rb\": {{ \"type\": \"resistor-axial\", \"resistance\": \"100\" }}\n  }},\n  \"wires\": [[\"j.a\", \"ra.a\"], [\"j.b\", \"rb.a\"]],\n  \"pins\": {{ \"pa\": \"ra.b\", \"pb\": \"rb.b\" }}\n}}\n"
+        ),
+    )
+    .unwrap();
+    let scene = root.join("scene.jsonc");
+    let text = fs::read_to_string(&scene).unwrap();
+    let text = text.replacen(
+        "\"led1\": { \"type\": \"led-5mm\", \"color\": \"red\" },",
+        "\"led1\": { \"type\": \"led-5mm\", \"color\": \"red\" },\n    \"board\": { \"type\": \"./parts/board.jsonc\" },",
+        1,
+    );
+    let text = text.replacen(
+        "[\"led1.cathode\", \"nano.GND\"],",
+        "[\"led1.cathode\", \"nano.GND\"],\n    [\"board.pa\", \"nano.D13\"],\n    [\"board.pb\", \"nano.GND\"],",
+        1,
+    );
+    fs::write(&scene, text).unwrap();
+}
+
+#[test]
+fn a_dropped_jumper_does_not_join_its_wires() {
+    let kept = project("nano-button");
+    jumper_board(kept.path(), false);
+    let kept =
+        orbe_scene::read(&kept.path().join("scene.jsonc")).unwrap_or_else(|d| panic!("{d:#?}"));
+    assert_eq!(
+        pin_net(&kept.json, "board__ra", "a"),
+        pin_net(&kept.json, "board__rb", "a")
+    );
+
+    let dropped = project("nano-button");
+    jumper_board(dropped.path(), true);
+    let dropped =
+        orbe_scene::read(&dropped.path().join("scene.jsonc")).unwrap_or_else(|d| panic!("{d:#?}"));
+    assert_ne!(
+        pin_net(&dropped.json, "board__ra", "a"),
+        pin_net(&dropped.json, "board__rb", "a")
+    );
+}

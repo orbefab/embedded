@@ -1,0 +1,2 @@
+scene.param scene.jsonc:8:5 | needs param `resistance` | resistance
+scene.param scene.jsonc:9:43 | purple | red

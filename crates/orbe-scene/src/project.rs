@@ -122,7 +122,7 @@ impl Loader<'_> {
                         "cannot read {}: {error}",
                         display(self.sources.root(), path)
                     ),
-                    None,
+                    "check that the path exists and is readable".into(),
                 );
                 None
             }
@@ -162,7 +162,7 @@ impl Loader<'_> {
                     Code::Syntax,
                     span,
                     "a parts.lock line is `<id> <version> <registry> sha256:<hash>`",
-                    Some("`orbe add` writes this file".into()),
+                    "`orbe add` writes this file".into(),
                 ),
             }
         }
@@ -196,7 +196,7 @@ impl Loader<'_> {
                             format!(
                                 "a catalog part names its children by id, not by the path `{rel}`"
                             ),
-                            None,
+                            "name the child by its catalog id, as \"type\": \"led-5mm\"".into(),
                         );
                         continue;
                     }
@@ -225,7 +225,7 @@ impl Loader<'_> {
                 Code::Type,
                 span,
                 format!("`{rel}` is not a part file or a folder holding part.jsonc"),
-                Some("a path is relative to the file that names it".into()),
+                "a path is relative to the file that names it".into(),
             );
             return None;
         }
@@ -235,7 +235,7 @@ impl Loader<'_> {
                 Code::Role,
                 span,
                 format!("`{rel}` is the scene; a scene is not a part and cannot be a `type`"),
-                None,
+                "point `type` at a part file".into(),
             );
             return None;
         }
@@ -245,7 +245,7 @@ impl Loader<'_> {
                 Code::Type,
                 span,
                 format!("`{rel}` is inside the catalog part `{id}`"),
-                Some(format!("name it by its id, as \"type\": \"{id}\"")),
+                format!("name it by its id, as \"type\": \"{id}\""),
             );
             return None;
         }
@@ -270,7 +270,7 @@ impl Loader<'_> {
                 Code::Cycle,
                 span,
                 format!("this part reaches itself: {}", chain.join(" -> ")),
-                None,
+                "a part's type cannot reach its own file".into(),
             );
             return None;
         }
@@ -318,87 +318,168 @@ impl Loader<'_> {
                 Code::PartMissing,
                 *span,
                 format!("part `{id}` {why}"),
-                Some(format!(
+                format!(
                     "{close}{}run `{command}`",
                     if close.is_empty() { "" } else { "otherwise " }
-                )),
+                ),
             );
         }
     }
 
-    /// Hashes every folder `parts.lock` lists. A sealed copy that differs is `part_modified`.
-    /// Returns the copies that differ and are not sealed.
+    /// Hashes every folder `parts.lock` lists. A sealed catalog part is compared with the
+    /// copy this binary embeds, and a lock line for one of those ids has to name that copy.
+    /// Returns the unsealed copies that differ and whose lock line still matches.
     fn check_copies(&mut self, root: &Path) -> Vec<String> {
         let mut modified = Vec::new();
         let lock = std::mem::take(&mut self.lock);
         for (id, line) in &lock {
             let folder = root.join("parts").join(id);
-            let Ok(hash) = folder_hash(&folder) else {
-                continue;
-            };
-            let original = (line.registry == REGISTRY)
-                .then(|| catalog::find(id))
-                .flatten()
-                .filter(|o| o.version == line.version);
-            let differs = hash != line.hash || original.as_ref().is_some_and(|o| o.hash != hash);
-            if !differs {
-                continue;
-            }
+            let hash = folder_hash(&folder);
             let path = folder.join("part.jsonc");
-            let file = self.file_for(&path.canonicalize().unwrap_or(path));
+            let file = self.file_for(&path.canonicalize().unwrap_or(path.clone()));
             let tree = file.and_then(|f| syntax::parse(&self.sources, f, &mut Findings::default()));
-            let sealed = tree
+            let Some(original) = catalog::find(id) else {
+                if self.note_unlisted(id, line, file, &tree, hash) {
+                    modified.push(id.clone());
+                }
+                continue;
+            };
+            if let Err(error) = &hash {
+                self.out.push(
+                    Code::Io,
+                    file.map_or(line.span, Span::start_of),
+                    format!("cannot hash parts/{id}: {error}"),
+                    format!("remove the link that loops in parts/{id}, or restore the folder"),
+                );
+            }
+            let diff = tree
                 .as_ref()
-                .is_none_or(|t| t.get("model").is_some() || t.get("parts").is_none());
-            if !sealed {
-                modified.push(id.clone());
+                .and_then(|t| first_difference(t, &original.tree, String::new()));
+            let bytes_differ = hash
+                .as_ref()
+                .ok()
+                .is_some_and(|h| h != &line.hash || h != &original.hash);
+            let restore = format!(
+                "restore it with `orbe add {id} --overwrite`, or copy it to a path to make it your own"
+            );
+            if is_sealed(&original.tree) && (diff.is_some() || bytes_differ) {
+                let (message, span) = match diff {
+                    Some((field, span)) => (
+                        format!(
+                            "sealed part `{id}` differs from `{id}@{}` in `{field}`",
+                            original.version
+                        ),
+                        span,
+                    ),
+                    None => match original.files_differing(&folder) {
+                        Some(files) => (
+                            format!(
+                                "sealed part `{id}` differs from `{id}@{}` in {files}",
+                                original.version
+                            ),
+                            file.map_or(line.span, Span::start_of),
+                        ),
+                        None => (
+                            format!(
+                                "parts.lock's line for `{id}` does not match `{id}@{}`",
+                                original.version
+                            ),
+                            line.span,
+                        ),
+                    },
+                };
+                self.out.push(Code::PartModified, span, message, restore);
                 continue;
             }
-            let hint = Some(format!(
-                "restore it with `orbe add {id} --overwrite`, or copy it to a path to make it your own"
-            ));
-            let (message, span) = match (&original, &tree) {
-                (Some(original), Some(tree)) => {
-                    match first_difference(tree, &original.tree, String::new()) {
-                        Some((field, span)) => (
-                            format!(
-                                "sealed part `{id}` differs from `{id}@{}` in `{field}`",
-                                line.version
-                            ),
-                            span,
-                        ),
-                        None => match original.files_differing(&folder) {
-                            Some(files) => (
-                                format!(
-                                    "sealed part `{id}` differs from `{id}@{}` in {files}",
-                                    line.version
-                                ),
-                                Span::start_of(tree.span.file),
-                            ),
-                            None => (
-                                format!(
-                                    "parts.lock's line for `{id}` does not match its folder or `{id}@{}`",
-                                    line.version
-                                ),
-                                line.span,
-                            ),
-                        },
-                    }
-                }
-                _ => (
-                    format!("sealed part `{id}` does not match its parts.lock line"),
-                    file.map_or(line.span, Span::start_of),
-                ),
-            };
-            self.out.push(Code::PartModified, span, message, hint);
+            let indexed = line.registry == REGISTRY && line.version == original.version;
+            let copy_version = tree
+                .as_ref()
+                .and_then(|t| t.get("version").and_then(Node::str));
+            let version_problem =
+                tree.as_ref().is_some() && copy_version != Some(line.version.as_str());
+            if !indexed || version_problem {
+                let message = if !indexed {
+                    format!(
+                        "parts.lock lists `{id}` at `{}` from `{}`, and this binary's catalog has `{id}@{}`",
+                        line.version, line.registry, original.version
+                    )
+                } else {
+                    format!(
+                        "parts.lock lists `{id}` at `{}`, and the copy's version is `{}`",
+                        line.version,
+                        copy_version.unwrap_or("")
+                    )
+                };
+                self.out.push(
+                    Code::PartModified,
+                    line.span,
+                    message,
+                    format!(
+                        "this binary knows `{id}@{}` from the official registry; point the line at that version, or restore the copy",
+                        original.version
+                    ),
+                );
+                continue;
+            }
+            if !is_sealed(&original.tree) && (diff.is_some() || bytes_differ) {
+                modified.push(id.clone());
+            }
         }
         self.lock = lock;
         modified
     }
 
+    /// An id this binary's catalog does not have. A hash that cannot be computed is an error.
+    /// A differing copy is sealed from its own file, which is all there is to judge.
+    /// Returns whether the copy differs and is not sealed.
+    fn note_unlisted(
+        &mut self,
+        id: &str,
+        line: &LockLine,
+        file: Option<FileId>,
+        tree: &Option<Node>,
+        hash: io::Result<String>,
+    ) -> bool {
+        let hash = match hash {
+            Ok(hash) => hash,
+            Err(error) => {
+                self.out.push(
+                    Code::Io,
+                    file.map_or(line.span, Span::start_of),
+                    format!("cannot hash parts/{id}: {error}"),
+                    format!("remove the link that loops in parts/{id}, or restore the folder"),
+                );
+                return false;
+            }
+        };
+        if hash == line.hash {
+            return false;
+        }
+        let sealed = tree
+            .as_ref()
+            .is_none_or(|t| t.get("model").is_some() || t.get("parts").is_none());
+        if !sealed {
+            return true;
+        }
+        self.out.push(
+            Code::PartModified,
+            file.map_or(line.span, Span::start_of),
+            format!("part `{id}` does not match its parts.lock line"),
+            format!(
+                "restore it with `orbe add {id} --overwrite`, or copy it to a path to make it your own"
+            ),
+        );
+        false
+    }
+
     fn file_for(&mut self, path: &Path) -> Option<FileId> {
         self.sources.find(path).or_else(|| self.read(path))
     }
+}
+
+/// A catalog part is sealed when it has a model, or when it has no children of its own.
+fn is_sealed(tree: &Node) -> bool {
+    tree.get("model").is_some() || tree.get("parts").is_none()
 }
 
 /// The first field where a copy's `part.jsonc` differs from the catalog's, as a dotted path,

@@ -76,3 +76,75 @@ fn a_missing_scene_is_an_io_error() {
     let (output, _) = orbe(&["check", dir.path().join("scene.jsonc").to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(3));
 }
+
+#[test]
+fn json_usage_is_one_envelope_on_stdout() {
+    let (output, stdout) = orbe(&["check", "--json"]);
+    assert_eq!(output.status.code(), Some(2), "{stdout}");
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(reply["ok"], false);
+    assert!(reply["error"].is_object());
+    assert_eq!(reply["error"]["code"], "usage");
+    assert!(!reply["error"]["message"].as_str().unwrap_or("").is_empty());
+    assert_eq!(stdout.lines().count(), 1, "{stdout}");
+
+    let (output, stdout) = orbe(&["check", "--json", "scene.jsonc", "extra"]);
+    assert_eq!(output.status.code(), Some(2), "{stdout}");
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["error"]["code"], "usage");
+}
+
+#[test]
+fn help_is_not_a_usage_envelope() {
+    let (output, stdout) = orbe(&["check", "--help"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(stdout.contains("check"), "{stdout}");
+}
+
+#[test]
+fn every_bad_fixture_exits_1_and_prints_a_hint() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../orbe-scene/tests/bad");
+    let mut cases: Vec<_> = fs::read_dir(root)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    cases.sort();
+    for case in cases {
+        let project = common::project("nano-button");
+        for entry in fs::read_dir(&case).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap();
+            if name == "expect" || name == "edit" {
+                continue;
+            }
+            let target = project.path().join(name);
+            if path.is_dir() {
+                common::copy_dir(&path, &target);
+            } else {
+                fs::copy(&path, &target).unwrap();
+            }
+        }
+        if let Ok(edit) = fs::read_to_string(case.join("edit")) {
+            let lines: Vec<&str> = edit.lines().collect();
+            let target = project.path().join(lines[0]);
+            let text = fs::read_to_string(&target).unwrap();
+            fs::write(&target, text.replacen(lines[1], lines[2], 1)).unwrap();
+        }
+        let scene = project.path().join("scene.jsonc");
+        let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{}: {stdout}",
+            case.file_name().unwrap().to_string_lossy()
+        );
+        assert!(
+            stdout.contains("\n  hint: ") && !stdout.contains("\n  hint: \n"),
+            "{}:\n{stdout}",
+            case.file_name().unwrap().to_string_lossy()
+        );
+    }
+}

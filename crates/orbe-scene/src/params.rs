@@ -26,7 +26,11 @@ pub(crate) struct Arg {
     pub(crate) explicit: bool,
 }
 
-pub(crate) type Converted = Result<Vec<(String, Value)>, (Code, String, Option<String>)>;
+pub(crate) type Converted = Result<Vec<(String, Value)>, (Code, String, String)>;
+
+fn fail(message: impl Into<String>, hint: impl Into<String>) -> (Code, String, String) {
+    (Code::Param, message.into(), hint.into())
+}
 
 /// The pointers a param's value sets in the model, and what goes at each.
 pub(crate) fn convert(decl: &ParamDecl, arg: &Arg) -> Converted {
@@ -36,7 +40,19 @@ pub(crate) fn convert(decl: &ParamDecl, arg: &Arg) -> Converted {
         ParamKind::Number {
             unit,
             min_exclusive,
-        } => number(*unit, *min_exclusive, node).map(|v| vec![(pointer, v)]),
+        } => {
+            if node.is_null() {
+                return if decl.default.as_ref().is_some_and(Node::is_null) {
+                    Ok(vec![(pointer, Value::Null)])
+                } else {
+                    Err(fail(
+                        "null is not a value",
+                        format!("write a number, such as {}", unit.example()),
+                    ))
+                };
+            }
+            number(decl, *unit, *min_exclusive, node).map(|v| vec![(pointer, v)])
+        }
         ParamKind::Choice(choices) => {
             let names: Vec<&str> = choices.iter().map(|(n, _)| n.as_str()).collect();
             let chosen = node
@@ -55,26 +71,27 @@ pub(crate) fn convert(decl: &ParamDecl, arg: &Arg) -> Converted {
                         .str()
                         .map(|s| did_you_mean(s, names.iter().copied(), ""))
                         .unwrap_or_default();
-                    Err((
-                        Code::Param,
+                    Err(fail(
                         format!("{written} is not a choice of `{}`", decl.name),
-                        Some(format!("{hint}the choices: {}", names.join(", "))),
+                        format!("{hint}the choices: {}", names.join(", ")),
                     ))
                 }
             }
         }
         ParamKind::File { text } => {
             let Some(rel) = node.str() else {
-                return Err((
-                    Code::Param,
+                return Err(fail(
                     format!("a file param takes a path, found {}", node.what()),
-                    None,
+                    "write a path relative to the file that sets it",
                 ));
             };
             match fs::read(arg.dir.join(rel)) {
                 Ok(bytes) if *text => match String::from_utf8(bytes) {
                     Ok(text) => Ok(vec![(pointer, Value::String(text))]),
-                    Err(_) => Err((Code::Param, format!("`{rel}` is not text"), None)),
+                    Err(_) => Err(fail(
+                        format!("`{rel}` is not text"),
+                        "save it as UTF-8 text",
+                    )),
                 },
                 Ok(bytes) => Ok(vec![(
                     pointer,
@@ -83,9 +100,7 @@ pub(crate) fn convert(decl: &ParamDecl, arg: &Arg) -> Converted {
                 Err(_) => Err((
                     Code::FirmwareMissing,
                     format!("no file at `{rel}`"),
-                    Some(
-                        "build it, or fix the path; it is relative to the file that sets it".into(),
-                    ),
+                    "build it, or fix the path; it is relative to the file that sets it".into(),
                 )),
             }
         }
@@ -94,85 +109,262 @@ pub(crate) fn convert(decl: &ParamDecl, arg: &Arg) -> Converted {
 }
 
 fn number(
+    decl: &ParamDecl,
     unit: Unit,
     min_exclusive: Option<f64>,
     node: &Node,
-) -> Result<Value, (Code, String, Option<String>)> {
-    let expected = || {
-        (
-            Code::Param,
-            format!(
-                "expected a number in {}, such as {}",
-                unit.as_str(),
-                unit.example()
-            ),
-            None,
+) -> Result<Value, (Code, String, String)> {
+    let example = || {
+        format!(
+            "write a number and an optional prefix, such as {}",
+            unit.example()
         )
     };
-    if node.is_null() {
-        return Ok(Value::Null);
-    }
     if node.props().is_some() {
-        let written = node.get("unit").and_then(Node::str);
-        let fits =
-            node.get("value").and_then(Node::number).is_some() && node.get("source").is_some();
-        return match written {
-            Some(u) if fits && (u == unit.as_str() || (unit == Unit::Second && u == "ps")) => {
-                Ok(node.to_value())
-            }
-            Some(u) if fits => Err((
-                Code::Param,
-                format!("the unit is `{u}`, and this param is in {}", unit.as_str()),
-                None,
-            )),
-            _ => Err((
-                Code::Param,
-                "a value object is { \"value\", \"unit\", \"source\" }".into(),
-                None,
-            )),
-        };
+        return value_object(decl, unit, min_exclusive, node);
     }
     let text = match (node.str(), node.number()) {
         (Some(text), _) => text.to_string(),
-        (None, Some(_)) => node.to_value().to_string(),
-        _ => return Err(expected()),
+        (None, Some(_)) => node.raw_number().unwrap_or("").to_string(),
+        _ => {
+            return Err(fail(
+                format!(
+                    "expected a number in {}, such as {}",
+                    unit.as_str(),
+                    unit.example()
+                ),
+                example(),
+            ));
+        }
     };
     let shift = if unit == Unit::Second { 12 } else { 0 };
     let value = units::parse(&text, unit, shift).map_err(|reason| {
-        (
-            Code::Param,
+        fail(
             format!(
                 "{reason}; expected a number in {}, such as {}",
                 unit.as_str(),
                 unit.example()
             ),
-            None,
+            example(),
         )
     })?;
+    if !value.is_finite() {
+        return Err(fail(
+            format!("{text} is not a finite number"),
+            format!("write a finite number, such as {}", unit.example()),
+        ));
+    }
+    bounded(decl, unit, min_exclusive, &text, value)
+}
+
+fn value_object(
+    decl: &ParamDecl,
+    unit: Unit,
+    min_exclusive: Option<f64>,
+    node: &Node,
+) -> Result<Value, (Code, String, String)> {
+    let shape = "a value object is { \"value\", \"unit\", \"source\" }";
+    let shape_hint = format!(
+        "write value, unit and source, or a string such as {}",
+        unit.example()
+    );
+    let Some(props) = node.props() else {
+        return Err(fail(shape, shape_hint));
+    };
+    let keys_ok = props.len() == 3
+        && props
+            .iter()
+            .all(|p| matches!(p.key.as_str(), "value" | "unit" | "source"));
+    if !keys_ok {
+        return Err(fail(shape, shape_hint));
+    }
+    let value_node = node.get("value").expect("value is one of the three keys");
+    let Some(unit_text) = node.get("unit").and_then(Node::str) else {
+        return Err(fail(shape, shape_hint));
+    };
+    let source = node.get("source").expect("source is one of the three keys");
+    if !source_ok(source) {
+        let shown = source
+            .raw_number()
+            .or_else(|| source.str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| source.what().to_string());
+        return Err(fail(
+            format!("source `{shown}` is not a source"),
+            "source is \"user\", { \"closed_form\": { \"note\" } }, or { \"datasheet\": { \"doc\", \"at\", \"basis\" } }",
+        ));
+    }
+    let Some(number) = value_node.number() else {
+        return Err(fail(shape, shape_hint));
+    };
+    let shown = value_node.raw_number().unwrap_or("");
+    if !number.is_finite() {
+        return Err(fail(
+            format!("{shown} is not a finite number"),
+            format!("write a finite number, such as {}", unit.example()),
+        ));
+    }
+    if unit == Unit::Second {
+        if unit_text != "ps" {
+            return Err(fail(
+                format!(
+                    "the unit is `{unit_text}`, and a duration in the netlist is an integer number of picoseconds"
+                ),
+                "write \"1ms\", or a value object with \"unit\": \"ps\"",
+            ));
+        }
+        let Ok(whole) = shown.parse::<u64>() else {
+            return Err(fail(
+                format!("{shown} is not a whole number of picoseconds"),
+                "write an integer number of ps, or a string such as \"1ms\"",
+            ));
+        };
+        below_min(min_exclusive, unit, shown, whole as f64 / 1e12)?;
+        return Ok(json!({ "value": whole, "unit": "ps", "source": source.to_value() }));
+    }
+    if unit_text != unit.as_str() {
+        return Err(fail(
+            format!(
+                "the unit is `{unit_text}`, and this param is in {}",
+                unit.as_str()
+            ),
+            format!(
+                "use the unit {}, or a string such as {}",
+                unit.as_str(),
+                unit.example()
+            ),
+        ));
+    }
+    below_min(min_exclusive, unit, shown, number)?;
+    if decl
+        .sets
+        .as_deref()
+        .is_some_and(|p| p.ends_with("max_bounces"))
+    {
+        let Ok(whole) = shown.parse::<u64>() else {
+            return Err(fail(
+                format!("{shown} is not a whole number"),
+                "max_bounces counts contact edges; write a whole number such as 2",
+            ));
+        };
+        if whole > 255 {
+            return Err(fail(
+                format!("{shown} is outside 0 to 255"),
+                "max_bounces counts contact edges; write a whole number such as 2",
+            ));
+        }
+        return Ok(json!({ "value": whole, "unit": "1", "source": source.to_value() }));
+    }
+    Ok(json!({ "value": number, "unit": unit_text, "source": source.to_value() }))
+}
+
+fn bounded(
+    decl: &ParamDecl,
+    unit: Unit,
+    min_exclusive: Option<f64>,
+    text: &str,
+    value: f64,
+) -> Result<Value, (Code, String, String)> {
+    if unit == Unit::Second && value < 0.0 {
+        return Err(fail(
+            format!("{text} is negative"),
+            "write a positive duration, such as \"1ms\"",
+        ));
+    }
     let si = if unit == Unit::Second {
         value / 1e12
     } else {
         value
     };
-    if let Some(min) = min_exclusive
-        && si <= min
+    below_min(min_exclusive, unit, text, si)?;
+    if unit == Unit::Second {
+        if value > (1u64 << 63) as f64 {
+            return Err(fail(
+                format!("{text} does not fit in picoseconds"),
+                "write a shorter duration, such as \"1ms\"",
+            ));
+        }
+        return Ok(json!({ "value": value.round() as u64, "unit": "ps", "source": "user" }));
+    }
+    if decl
+        .sets
+        .as_deref()
+        .is_some_and(|p| p.ends_with("max_bounces"))
     {
-        return Err((
-            Code::Param,
-            format!(
-                "{text} is out of range; it must be more than {min} {}",
-                unit.as_str()
-            ),
-            None,
-        ));
+        if value < 0.0 || value.fract() != 0.0 {
+            return Err(fail(
+                format!("{text} is not a whole number"),
+                "max_bounces counts contact edges; write a whole number such as 2",
+            ));
+        }
+        if value > 255.0 {
+            return Err(fail(
+                format!("{text} is outside 0 to 255"),
+                "max_bounces counts contact edges; write a whole number such as 2",
+            ));
+        }
+        return Ok(json!({ "value": value as u64, "unit": "1", "source": "user" }));
     }
     Ok(match unit {
-        Unit::Second => json!({ "value": value.round() as u64, "unit": "ps", "source": "user" }),
         Unit::One if value.fract() == 0.0 => {
             json!({ "value": value as i64, "unit": "1", "source": "user" })
         }
         _ => json!({ "value": value, "unit": unit.as_str(), "source": "user" }),
     })
+}
+
+fn below_min(
+    min_exclusive: Option<f64>,
+    unit: Unit,
+    text: &str,
+    si: f64,
+) -> Result<(), (Code, String, String)> {
+    if let Some(min) = min_exclusive
+        && si <= min
+    {
+        return Err(fail(
+            format!(
+                "{text} is out of range; it must be more than {min} {}",
+                unit.as_str()
+            ),
+            format!("write a value greater than {min} {}", unit.as_str()),
+        ));
+    }
+    Ok(())
+}
+
+fn source_ok(node: &Node) -> bool {
+    if let Some(text) = node.str() {
+        return text == "user";
+    }
+    let Some(props) = node.props() else {
+        return false;
+    };
+    if props.len() != 1 {
+        return false;
+    }
+    match props[0].key.as_str() {
+        "closed_form" => props[0].value.props().is_some_and(|fields| {
+            fields.len() == 1 && fields[0].key == "note" && fields[0].value.str().is_some()
+        }),
+        "datasheet" => props[0].value.props().is_some_and(|fields| {
+            fields.len() == 3
+                && fields
+                    .iter()
+                    .any(|f| f.key == "doc" && f.value.str().is_some())
+                && fields
+                    .iter()
+                    .any(|f| f.key == "at" && f.value.str().is_some())
+                && fields.iter().any(|f| {
+                    f.key == "basis"
+                        && matches!(
+                            f.value.str(),
+                            Some("typical" | "min" | "max" | "nominal" | "absolute_max")
+                        )
+                })
+        }),
+        _ => false,
+    }
 }
 
 /// Puts `value` at a JSON pointer, merging two objects. A missing or null object on the way

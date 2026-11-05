@@ -78,7 +78,7 @@ pub(crate) fn parse(sources: &Sources, file: FileId, out: &mut Findings) -> Opti
             Code::Syntax,
             Span::start_of(file),
             "the file holds no JSON value",
-            None,
+            "write one JSON value".into(),
         );
         return None;
     };
@@ -88,27 +88,27 @@ pub(crate) fn parse(sources: &Sources, file: FileId, out: &mut Findings) -> Opti
 }
 
 /// The library's messages for the likeliest slips are weak, so name the fix.
-fn trap_hint(text: &str, at: usize, kind: &ParseErrorKind) -> Option<String> {
+fn trap_hint(text: &str, at: usize, kind: &ParseErrorKind) -> String {
     let rest = &text[at.min(text.len())..];
     let word: String = rest
         .chars()
         .take_while(|c| !c.is_whitespace() && !",]}".contains(*c))
         .collect();
     if rest.starts_with('#') {
-        return Some("comments start with `//`".into());
+        return "comments start with `//`".into();
     }
     if word.starts_with(|c: char| c.is_ascii_digit()) && word.contains(char::is_alphabetic) {
-        return Some(format!(
+        return format!(
             "a value with a prefix or unit is a string, such as \"10k\" or \"1ms\", not {word}"
-        ));
+        );
     }
     match kind {
-        ParseErrorKind::ExpectedComma => Some("add a comma between the items".into()),
-        ParseErrorKind::SingleQuotedStringsNotAllowed => Some("strings take double quotes".into()),
+        ParseErrorKind::ExpectedComma => "add a comma between the items".into(),
+        ParseErrorKind::SingleQuotedStringsNotAllowed => "strings take double quotes".into(),
         ParseErrorKind::UnexpectedWord | ParseErrorKind::ExpectedStringObjectProperty => {
-            Some("keys and strings take double quotes".into())
+            "keys and strings take double quotes".into()
         }
-        _ => None,
+        _ => "fix the JSON here; strings take double quotes".into(),
     }
 }
 
@@ -170,11 +170,11 @@ fn check_duplicate_keys(sources: &Sources, node: &Node, out: &mut Findings) {
                         Code::Duplicate,
                         prop.key_span,
                         format!("`{}` is listed twice", prop.key),
-                        Some(format!(
+                        format!(
                             "the first `{}` is at {}; rename or remove one",
                             prop.key,
                             sources.location(first.key_span)
-                        )),
+                        ),
                     );
                 }
                 check_duplicate_keys(sources, &prop.value, out);
@@ -212,6 +212,14 @@ impl Node {
     pub(crate) fn number(&self) -> Option<f64> {
         match &self.json {
             Json::Num(raw) => raw.parse().ok(),
+            _ => None,
+        }
+    }
+
+    /// The number as written, before it is parsed.
+    pub(crate) fn raw_number(&self) -> Option<&str> {
+        match &self.json {
+            Json::Num(raw) => Some(raw),
             _ => None,
         }
     }

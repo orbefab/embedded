@@ -29,10 +29,28 @@ enum Command {
 const FAILED: u8 = 1;
 const IO: u8 = 3;
 
+const USAGE: u8 = 2;
+
 fn main() -> ExitCode {
-    match Cli::parse().command {
-        Command::Check { scene, json } => check(&scene, json),
+    match Cli::try_parse() {
+        Ok(cli) => match cli.command {
+            Command::Check { scene, json } => check(&scene, json),
+        },
+        Err(err) => usage(err),
     }
+}
+
+/// A usage error with `--json` is one envelope on stdout. Help and version stay clap's.
+fn usage(err: clap::Error) -> ExitCode {
+    let json = std::env::args().any(|arg| arg == "--json");
+    if json && err.exit_code() == i32::from(USAGE) {
+        print_json(&json!({
+            "ok": false,
+            "error": { "code": "usage", "message": err.to_string().trim().to_string() }
+        }));
+        return ExitCode::from(USAGE);
+    }
+    err.exit();
 }
 
 fn check(scene: &Path, json: bool) -> ExitCode {

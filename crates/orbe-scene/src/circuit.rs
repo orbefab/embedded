@@ -1,6 +1,6 @@
 //! One tree of instances from the files, then pins joined into nets, and netlist v0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use serde_json::{Map, Value, json};
@@ -54,7 +54,10 @@ struct Circuit<'p> {
     keys: BTreeMap<(usize, String), usize>,
     pins: Vec<PinInfo>,
     parent: Vec<usize>,
-    long: BTreeMap<Span, String>,
+    /// The longest name past the limit at each span, and whether a `nets` entry wrote it.
+    long: BTreeMap<Span, (String, bool)>,
+    /// Each instance's model after its params are applied.
+    built: BTreeMap<usize, (Value, SetBy)>,
 }
 
 /// For each param that set a model field, by the field's dotted path, its value's span and
@@ -99,15 +102,19 @@ pub(crate) fn compile(project: &Project, out: &mut Findings) -> Option<Netlist> 
         pins: Vec::new(),
         parent: Vec::new(),
         long: BTreeMap::new(),
+        built: BTreeMap::new(),
     };
     circuit.instantiate(ROOT, Owner::Scene);
     circuit.make_pins();
     circuit.join_inside();
     circuit.check_scene_wires(scene);
+    circuit.apply_models();
+    let nets = circuit.name_nets(scene);
+    circuit.check_flat_names();
+    circuit.report_long();
     if !circuit.out.is_empty() {
         return None;
     }
-    let nets = circuit.name_nets(scene);
     let ground = circuit.ground(scene, &nets)?;
     let netlist = circuit.write(scene, &nets, &ground)?;
     circuit.out.is_empty().then_some(netlist)
@@ -195,7 +202,7 @@ impl<'p> Circuit<'p> {
                         part.label,
                         prop.key
                     ),
-                    Some(format!("{hint}{list}")),
+                    format!("{hint}{list}"),
                 );
                 continue;
             }
@@ -218,7 +225,7 @@ impl<'p> Circuit<'p> {
                 continue;
             };
             let Owner::Part(owner_part) = owner else {
-                self.out.push(Code::Param, prop.value.span, "a scene sets a value; only a part passes its own param through with { \"param\": ... }", None);
+                self.out.push(Code::Param, prop.value.span, "a scene sets a value; only a part passes its own param through with { \"param\": ... }", "set the value here, such as \"220\" or \"1ms\"".into());
                 continue;
             };
             let owner_part = &project.parts[owner_part];
@@ -230,7 +237,7 @@ impl<'p> Circuit<'p> {
                         "`{}` declares no param `{name}` to pass through",
                         owner_part.label
                     ),
-                    None,
+                    "pass a param this part declares, or set the value directly".into(),
                 );
                 continue;
             };
@@ -251,7 +258,7 @@ impl<'p> Circuit<'p> {
                         node: default.clone(),
                         site,
                         dir,
-                        explicit: false,
+                        explicit: true,
                     },
                 );
             }
@@ -263,7 +270,7 @@ impl<'p> Circuit<'p> {
                     Code::Param,
                     instance.name_span,
                     format!("`{}` needs param `{}`", inst.dotted(), decl.name),
-                    Some(format!("{} takes {}", part.label, names.join(", "))),
+                    format!("{} takes {}", part.label, names.join(", ")),
                 );
             }
         }
@@ -346,7 +353,7 @@ impl<'p> Circuit<'p> {
                 continue;
             }
             let (code, message, hint) = self.unresolved(at, seg, &prefix, last);
-            self.out.push(code, r.span, message, Some(hint));
+            self.out.push(code, r.span, message, hint);
             return None;
         }
         None
@@ -354,6 +361,19 @@ impl<'p> Circuit<'p> {
 
     fn unresolved(&self, at: usize, seg: &str, prefix: &str, last: bool) -> (Code, String, String) {
         let children: Vec<&str> = self.insts[at].children.keys().map(String::as_str).collect();
+        if last && let Some(&child) = self.insts[at].children.get(seg) {
+            let pins = self.part(child).map(Part::pin_list).unwrap_or_default();
+            let full = if prefix.is_empty() {
+                seg.to_string()
+            } else {
+                format!("{prefix}.{seg}")
+            };
+            return (
+                Code::UnknownPin,
+                format!("`{full}` is a part, not a pin"),
+                format!("name one of its pins; its pins: {pins}"),
+            );
+        }
         if at == ROOT {
             let hint = did_you_mean(seg, children.iter().copied(), "");
             return (
@@ -368,18 +388,6 @@ impl<'p> Circuit<'p> {
         } else {
             format!("`{prefix}`")
         };
-        if last && children.contains(&seg) {
-            let full = if prefix.is_empty() {
-                seg.to_string()
-            } else {
-                format!("{prefix}.{seg}")
-            };
-            return (
-                Code::UnknownPin,
-                format!("`{full}` is a part, not a pin"),
-                "name one of its pins, such as `<part>.<pin>`".into(),
-            );
-        }
         if last {
             let dotted = if prefix.is_empty() {
                 String::new()
@@ -410,9 +418,13 @@ impl<'p> Circuit<'p> {
         )
     }
 
-    /// Joins labels to their child pins and every part's own wires.
+    /// Joins labels to their child pins and every part's own wires. A part marked
+    /// `not_simulated` contributes neither: its parent's wires still reach its pins.
     fn join_inside(&mut self) {
         for inst in 1..self.insts.len() {
+            if self.insts[inst].dropped.is_some() {
+                continue;
+            }
             let Some(part) = self.part(inst) else {
                 continue;
             };
@@ -469,7 +481,7 @@ impl<'p> Circuit<'p> {
                         Code::NotSimulated,
                         r.span,
                         format!("{}: {reason}", r.text),
-                        Some("wire to a pin the engine simulates".into()),
+                        "wire to a pin the engine simulates".into(),
                     );
                 }
             }
@@ -498,12 +510,14 @@ impl<'p> Circuit<'p> {
     /// smallest label, else the smallest member pin, each flattened.
     fn name_nets(&mut self, scene: &Scene) -> BTreeMap<usize, String> {
         let mut named: BTreeMap<usize, String> = BTreeMap::new();
+        let mut from_scene = BTreeSet::new();
         let mut engine: BTreeMap<usize, bool> = BTreeMap::new();
         for key in 0..self.pins.len() {
             let root = self.find(key);
             *engine.entry(root).or_default() |= self.pins[key].engine;
         }
         for (name, span, r) in &scene.nets {
+            self.note_long(*span, name, true);
             let Some(key) = self.resolve(ROOT, r) else {
                 continue;
             };
@@ -516,17 +530,18 @@ impl<'p> Circuit<'p> {
                         "net `{name}` names `{}`, whose net has no simulated pin",
                         r.text
                     ),
-                    None,
+                    "name a pin the engine simulates".into(),
                 );
             } else if let Some(other) = named.get(&root) {
                 self.out.push(
                     Code::Duplicate,
                     *span,
                     format!("`{name}` names the net `{other}` already names"),
-                    Some("give a net one name".into()),
+                    "give a net one name".into(),
                 );
             } else {
                 named.insert(root, name.clone());
+                from_scene.insert(root);
             }
         }
         let mut labels: BTreeMap<usize, String> = BTreeMap::new();
@@ -554,8 +569,11 @@ impl<'p> Circuit<'p> {
             named.entry(root).or_insert(name);
         }
         for (root, name) in &named {
+            if from_scene.contains(root) {
+                continue;
+            }
             let span = self.insts[self.pins[*root].inst].top_span;
-            self.too_long(span, name);
+            self.note_long(span, name, false);
         }
         named
     }
@@ -579,7 +597,7 @@ impl<'p> Circuit<'p> {
             }
         }
         let span = scene.span;
-        let hint = Some("name one in the scene, as \"ground\": \"nano.GND\"".to_string());
+        let hint = "name one in the scene, as \"ground\": \"nano.GND\"";
         let roots: Vec<(Option<&String>, &String)> = grounds
             .iter()
             .map(|(k, text)| (k.map(|k| self.find(k)).and_then(|r| nets.get(&r)), text))
@@ -589,7 +607,7 @@ impl<'p> Circuit<'p> {
                 Code::Ground,
                 span,
                 "nothing in the scene names a ground",
-                hint,
+                hint.into(),
             );
             return None;
         };
@@ -598,7 +616,7 @@ impl<'p> Circuit<'p> {
                 Code::Ground,
                 span,
                 format!("the ground `{first_text}` is on no simulated net"),
-                hint,
+                hint.into(),
             );
             return None;
         };
@@ -607,7 +625,7 @@ impl<'p> Circuit<'p> {
                 Code::Ground,
                 span,
                 format!("the grounds `{first_text}` and `{other}` sit on different nets"),
-                hint,
+                hint.into(),
             );
             return None;
         }
@@ -629,10 +647,12 @@ impl<'p> Circuit<'p> {
             let Some(part) = self.part(inst) else {
                 continue;
             };
-            let Some(model_node) = &part.model else {
+            if part.model.is_none() {
+                continue;
+            }
+            let Some((model, set_by)) = self.built.get(&inst).cloned() else {
                 continue;
             };
-            let (model, set_by) = self.model(inst, part, model_node);
             for body in &part.bodies {
                 let mut flat = self.insts[inst].flat();
                 let mut fields = model.clone();
@@ -650,7 +670,6 @@ impl<'p> Circuit<'p> {
                 } else {
                     set_here.clone_from(&set_by);
                 }
-                self.too_long(self.insts[inst].top_span, &flat);
                 let mut pins = Map::new();
                 for (engine_pin, part_pin) in &body.pins {
                     let key = self.keys[&(inst, part_pin.clone())];
@@ -688,17 +707,6 @@ impl<'p> Circuit<'p> {
             "parts": parts,
         });
         let text = serde_json::to_string_pretty(&document).expect("a JSON value");
-        for (span, name) in std::mem::take(&mut self.long) {
-            self.out.push(
-                Code::NameTooLong,
-                span,
-                format!(
-                    "the flat engine name `{name}` is {} bytes, past the engine's {NAME_LIMIT}",
-                    name.len()
-                ),
-                Some("shorten this part's name; names inside it join onto it with __".into()),
-            );
-        }
         if !self.out.is_empty() {
             return None;
         }
@@ -717,10 +725,77 @@ impl<'p> Circuit<'p> {
         })
     }
 
-    /// Keeps the longest flat name past the limit under each of the scene's instances.
-    fn too_long(&mut self, span: Span, name: &str) {
-        if name.len() > NAME_LIMIT && self.long.get(&span).is_none_or(|n| n.len() < name.len()) {
-            self.long.insert(span, name.to_string());
+    /// Params are converted even when a wire is wrong, so one run reports both.
+    fn apply_models(&mut self) {
+        for inst in 1..self.insts.len() {
+            if self.insts[inst].dropped.is_some() {
+                continue;
+            }
+            let Some(part) = self.part(inst) else {
+                continue;
+            };
+            let Some(model_node) = part.model.clone() else {
+                continue;
+            };
+            let (model, set_by) = self.model(inst, part, &model_node);
+            self.built.insert(inst, (model, set_by));
+        }
+    }
+
+    /// Flat part names are checked even when a wire is wrong.
+    fn check_flat_names(&mut self) {
+        for inst in 1..self.insts.len() {
+            if self.insts[inst].dropped.is_some() {
+                continue;
+            }
+            let Some(part) = self.part(inst) else {
+                continue;
+            };
+            if part.model.is_none() {
+                continue;
+            }
+            for body in &part.bodies {
+                let mut flat = self.insts[inst].flat();
+                if let Some(name) = &body.name {
+                    flat = format!("{flat}__{name}");
+                }
+                self.note_long(self.insts[inst].top_span, &flat, false);
+            }
+        }
+    }
+
+    /// Keeps the longest name past the limit at `span`. `from_nets` is a `nets` entry.
+    fn note_long(&mut self, span: Span, name: &str, from_nets: bool) {
+        if name.len() > NAME_LIMIT
+            && self
+                .long
+                .get(&span)
+                .is_none_or(|(kept, _)| kept.len() < name.len())
+        {
+            self.long.insert(span, (name.to_string(), from_nets));
+        }
+    }
+
+    fn report_long(&mut self) {
+        for (span, (name, from_nets)) in std::mem::take(&mut self.long) {
+            let (message, hint) = if from_nets {
+                (
+                    format!(
+                        "net name `{name}` is {} bytes, past the engine's {NAME_LIMIT}",
+                        name.len()
+                    ),
+                    "shorten this name; a net name is at most 64 bytes",
+                )
+            } else {
+                (
+                    format!(
+                        "the flat engine name `{name}` is {} bytes, past the engine's {NAME_LIMIT}",
+                        name.len()
+                    ),
+                    "shorten this part's name; names inside it join onto it with __",
+                )
+            };
+            self.out.push(Code::NameTooLong, span, message, hint.into());
         }
     }
 
@@ -748,16 +823,20 @@ impl<'p> Circuit<'p> {
             self.out.push(
                 Code::Engine(diagnostic.code()),
                 Span::start_of(self.project.scene.file),
-                message,
-                None,
+                message.clone(),
+                value_hint(&message).into(),
             );
             return;
         };
         if let Some((_, (span, site))) = set_by.iter().find(|(f, _)| {
             !field.is_empty() && (f.starts_with(&field) || field.starts_with(f.as_str()))
         }) {
-            self.out
-                .push(Code::Param, *span, format!("`{site}`: {message}"), None);
+            self.out.push(
+                Code::Param,
+                *span,
+                format!("`{site}`: {message}"),
+                value_hint(&message).into(),
+            );
             return;
         }
         let part = self.part(*inst).expect("an engine part has a part");
@@ -776,13 +855,14 @@ impl<'p> Circuit<'p> {
             Code::Engine(diagnostic.code()),
             span,
             format!("{}: {message}", self.insts[*inst].dotted()),
-            None,
+            value_hint(&message).into(),
         );
     }
 
-    /// The part's model with every param set: an instance's values first, then the defaults.
-    /// A default never creates an object its pointer passes through, so a switch whose
-    /// `bounce` is off keeps `"bounce": null` and drops its default `max_bounces`.
+    /// The part's model with every param set. An explicit value whose default is null opens
+    /// the object it points through. A part's own default does not, so `bounce` stays null
+    /// and its default `max_bounces` is dropped. Other explicit values are written after
+    /// that object exists.
     fn model(&mut self, inst: usize, part: &Part, model_node: &Node) -> (Value, SetBy) {
         let mut model = model_node.to_value();
         let mut set_by = BTreeMap::new();
@@ -794,7 +874,7 @@ impl<'p> Circuit<'p> {
             .parent()
             .map(PathBuf::from)
             .unwrap_or_default();
-        for explicit_pass in [true, false] {
+        for pass in 0..3 {
             for decl in &part.params {
                 if matches!(decl.kind, ParamKind::Through) {
                     continue;
@@ -809,7 +889,13 @@ impl<'p> Circuit<'p> {
                     },
                     (None, None) => continue,
                 };
-                if arg.explicit != explicit_pass {
+                let turns_on = decl.default.as_ref().is_none_or(Node::is_null);
+                let selected = match pass {
+                    0 => arg.explicit && turns_on,
+                    1 => arg.explicit && !turns_on,
+                    _ => !arg.explicit,
+                };
+                if !selected {
                     continue;
                 }
                 let sets = match convert(decl, &arg) {
@@ -825,7 +911,7 @@ impl<'p> Circuit<'p> {
                     }
                 };
                 for (pointer, value) in sets {
-                    let create = arg.explicit && !value.is_null();
+                    let create = arg.explicit && !value.is_null() && turns_on;
                     match set(&mut model, &pointer, value, create) {
                         Ok(true) => {
                             set_by.insert(
@@ -838,12 +924,23 @@ impl<'p> Circuit<'p> {
                             Code::Param,
                             arg.node.span,
                             format!("`{}`: {reason}", arg.site),
-                            None,
+                            "point `sets` at an object path in `model`, such as \"/resistance\""
+                                .into(),
                         ),
                     }
                 }
             }
         }
         (model, set_by)
+    }
+}
+
+fn value_hint(message: &str) -> &'static str {
+    if message.contains("must fit") {
+        "widen the bounce window or lower max_bounces"
+    } else if message.contains("positive") {
+        "write a value greater than zero"
+    } else {
+        "change this value so it meets the engine's rule"
     }
 }

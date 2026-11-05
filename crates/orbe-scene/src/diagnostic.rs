@@ -74,7 +74,7 @@ pub struct Diagnostic {
     pub line: usize,
     pub column: usize,
     pub message: String,
-    pub hint: Option<String>,
+    pub hint: String,
 }
 
 impl fmt::Display for Diagnostic {
@@ -84,9 +84,7 @@ impl fmt::Display for Diagnostic {
             "{}:{}:{}: error[{}]: {}",
             self.file, self.line, self.column, self.code, self.message
         )?;
-        if let Some(hint) = &self.hint {
-            write!(f, "\n  hint: {hint}")?;
-        }
+        write!(f, "\n  hint: {}", self.hint)?;
         Ok(())
     }
 }
@@ -95,7 +93,7 @@ pub(crate) struct Finding {
     code: Code,
     span: Span,
     message: String,
-    hint: Option<String>,
+    hint: String,
 }
 
 #[derive(Default)]
@@ -107,7 +105,7 @@ impl Findings {
         code: Code,
         span: Span,
         message: impl Into<String>,
-        hint: Option<String>,
+        hint: String,
     ) {
         self.0.push(Finding {
             code,

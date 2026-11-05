@@ -59,6 +59,25 @@ pub(crate) fn closest<'a>(
         .map(|(_, c)| c)
 }
 
+/// What to write instead, for the reason `problem` gave.
+pub(crate) fn hint(reason: &str) -> String {
+    if reason.contains("__") {
+        "use a single underscore, because `__` joins flat names".into()
+    } else if reason.contains("reserved") {
+        "pick another name".into()
+    } else if reason.starts_with("contains `") {
+        "use letters, digits and underscores".into()
+    } else if reason.contains("empty") {
+        "give it a name".into()
+    } else if reason.contains("start") {
+        "start the name with a letter".into()
+    } else if reason.contains("ends in") {
+        "drop the trailing underscore".into()
+    } else {
+        "rename it to fit the name rule".into()
+    }
+}
+
 /// "did you mean `x`? " when one is close, else "".
 pub(crate) fn did_you_mean<'a>(
     word: &str,

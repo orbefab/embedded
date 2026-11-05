@@ -180,9 +180,7 @@ fn format_ok(file: FileId, root: &Node, out: &mut Findings) -> bool {
                 Code::Format,
                 Span::start_of(file),
                 "the file has no `format`",
-                Some(format!(
-                    "add \"format\": 1; this binary reads format {reads}"
-                )),
+                format!("add \"format\": 1; this binary reads format {reads}"),
             );
             false
         }
@@ -198,7 +196,7 @@ fn format_ok(file: FileId, root: &Node, out: &mut Findings) -> bool {
                 Code::Format,
                 node.span,
                 format!("format {} is not one this binary reads", node.to_value()),
-                Some(format!("this binary reads format {reads}")),
+                format!("this binary reads format {reads}"),
             );
             false
         }
@@ -209,7 +207,12 @@ fn name_ok(name: &str, span: Span, kind: NameKind, what: &str, out: &mut Finding
     match problem(name, kind) {
         None => true,
         Some(reason) => {
-            out.push(Code::Name, span, format!("{what} `{name}` {reason}"), None);
+            out.push(
+                Code::Name,
+                span,
+                format!("{what} `{name}` {reason}"),
+                crate::name::hint(&reason),
+            );
             false
         }
     }
@@ -220,7 +223,7 @@ fn schema(out: &mut Findings, node: &Node, expected: &str) {
         Code::Syntax,
         node.span,
         format!("expected {expected}, found {}", node.what()),
-        None,
+        format!("write {expected}"),
     );
 }
 
@@ -258,8 +261,7 @@ pub(crate) fn decode_scene(
                 Code::Role,
                 prop.key_span,
                 format!("a scene has no `{key}`; it is a part's key, and this file is read as a scene"),
-                Some("a part file is used from a scene, as \"btn1\": { \"type\": \"./parts/my-part.jsonc\" }".into()),
-            ),
+                "a part file is used from a scene, as \"btn1\": { \"type\": \"./parts/my-part.jsonc\" }".into(),),
             key => unknown_key(out, prop, key, SCENE_KEYS, "a scene"),
         }
     }
@@ -275,7 +277,7 @@ fn unknown_key(out: &mut Findings, prop: &Prop, key: &str, keys: &[&str], what: 
         Code::Syntax,
         prop.key_span,
         format!("{what} has no key `{key}`"),
-        Some(format!("{hint}its keys are {}", keys.join(", "))),
+        format!("{hint}its keys are {}", keys.join(", ")),
     );
 }
 
@@ -317,7 +319,7 @@ pub(crate) fn decode_part(
                 Code::Role,
                 prop.key_span,
                 format!("a part has no `{key}`; only a scene does"),
-                Some(format!("move `{key}` to the scene that uses this part")),
+                format!("move `{key}` to the scene that uses this part"),
             ),
             key if PART_KEYS.contains(&key) => {}
             key => unknown_key(out, prop, key, PART_KEYS, "a part"),
@@ -340,7 +342,7 @@ pub(crate) fn decode_part(
                     Code::UnknownPin,
                     span,
                     format!("`not_simulated` lists `{pin}`, which is not a pin of this part"),
-                    Some(format!("its pins: {}", part.pin_list())),
+                    format!("its pins: {}", part.pin_list()),
                 );
             }
         }
@@ -392,7 +394,7 @@ fn decode_instances(node: &Node, out: &mut Findings) -> Vec<Instance> {
                 Code::Type,
                 prop.key_span,
                 format!("`{}` has no `type`", prop.key),
-                Some("add a part id, as \"type\": \"led-5mm\", or a ./ path to a part file".into()),
+                "add a part id, as \"type\": \"led-5mm\", or a ./ path to a part file".into(),
             );
         }
         instances.push(instance);
@@ -423,7 +425,8 @@ fn classify_type(text: &str, span: Span, out: &mut Findings) -> Option<TypeRef> 
             Code::Type,
             span,
             format!("`{text}` is neither a part id nor a ./ or ../ path"),
-            Some("an id is kebab case, such as `led-5mm`; a path to a part of your own starts with ./".into()),
+            "an id is kebab case, such as `led-5mm`; a path to a part of your own starts with ./"
+                .into(),
         );
         None
     }
@@ -441,7 +444,7 @@ fn decode_ref(node: &Node, out: &mut Findings) -> Option<Ref> {
             Code::Wires,
             node.span,
             format!("`{text}` is not a pin ref"),
-            Some("a pin ref is a part name, a dot and a pin, such as \"nano.D2\"".into()),
+            "a pin ref is a part name, a dot and a pin, such as \"nano.D2\"".into(),
         );
         return None;
     }
@@ -463,7 +466,7 @@ fn decode_wires(sources: &Sources, node: &Node, out: &mut Findings) -> Vec<Wire>
             .items()
             .filter(|e| (2..=3).contains(&e.len()) && e[0].str().is_some() && e[1].str().is_some());
         let Some(elements) = shape else {
-            out.push(Code::Wires, item.span, "a wire is two pin refs and an optional hint", Some("such as [\"nano.D2\", \"btn1.a\"] or [\"r1.b\", \"led1.anode\", { \"kind\": \"jumper\" }]".into()));
+            out.push(Code::Wires, item.span, "a wire is two pin refs and an optional hint", "such as [\"nano.D2\", \"btn1.a\"] or [\"r1.b\", \"led1.anode\", { \"kind\": \"jumper\" }]".into());
             continue;
         };
         if let Some(hint) = elements.get(2) {
@@ -478,7 +481,7 @@ fn decode_wires(sources: &Sources, node: &Node, out: &mut Findings) -> Vec<Wire>
                 Code::Wires,
                 item.span,
                 format!("this wire joins `{}` to itself", a.text),
-                None,
+                "name two different pins".into(),
             );
             continue;
         }
@@ -490,10 +493,10 @@ fn decode_wires(sources: &Sources, node: &Node, out: &mut Findings) -> Vec<Wire>
                 Code::Duplicate,
                 item.span,
                 format!("the wire from `{}` to `{}` is listed twice", a.text, b.text),
-                Some(format!(
+                format!(
                     "the first is at {}; remove one",
                     sources.location(first.ends[0].span)
-                )),
+                ),
             );
             continue;
         }
@@ -508,7 +511,7 @@ fn decode_wire_hint(hint: &Node, out: &mut Findings) {
             Code::Wires,
             hint.span,
             format!("a wire's hint is an object, found {}", hint.what()),
-            Some("such as { \"kind\": \"trace\" }".into()),
+            "such as { \"kind\": \"trace\" }".into(),
         );
         return;
     };
@@ -520,16 +523,16 @@ fn decode_wire_hint(hint: &Node, out: &mut Findings) {
                     Code::Wires,
                     prop.value.span,
                     format!("`{kind}` is not a wire kind"),
-                    Some(format!(
+                    format!(
                         "{}the kinds are jumper, trace and contact",
                         did_you_mean(kind, WIRE_KINDS.iter().copied(), "")
-                    )),
+                    ),
                 ),
                 None => out.push(
                     Code::Wires,
                     prop.value.span,
                     "a wire's kind is a string",
-                    Some("the kinds are jumper, trace and contact".into()),
+                    "the kinds are jumper, trace and contact".into(),
                 ),
             },
             "color" => {
@@ -538,7 +541,7 @@ fn decode_wire_hint(hint: &Node, out: &mut Findings) {
                         Code::Wires,
                         prop.value.span,
                         "a wire's color is a string",
-                        None,
+                        "name a color, such as \"red\"".into(),
                     );
                 }
             }
@@ -546,7 +549,7 @@ fn decode_wire_hint(hint: &Node, out: &mut Findings) {
                 Code::Wires,
                 prop.key_span,
                 format!("a wire's hint has no key `{key}`"),
-                Some("its keys are kind and color".into()),
+                "its keys are kind and color".into(),
             ),
         }
     }
@@ -558,7 +561,7 @@ fn decode_layout(node: &Node, comp: &Comp, out: &mut Findings) {
             Code::Layout,
             node.span,
             "`layout` is an object of placements by part name",
-            None,
+            "each key is a part name and each value is { \"at\": [x, y] }".into(),
         );
         return;
     };
@@ -569,9 +572,7 @@ fn decode_layout(node: &Node, comp: &Comp, out: &mut Findings) {
                 Code::Layout,
                 prop.key_span,
                 format!("there is no part named `{}` to place", prop.key),
-                Some(format!(
-                    "{hint}a layout entry is keyed by a name in `parts`"
-                )),
+                format!("{hint}a layout entry is keyed by a name in `parts`"),
             );
         }
         let Some(fields) = prop.value.props() else {
@@ -579,7 +580,7 @@ fn decode_layout(node: &Node, comp: &Comp, out: &mut Findings) {
                 Code::Layout,
                 prop.value.span,
                 "a placement is an object, such as { \"at\": [38, 12] }",
-                None,
+                "write { \"at\": [x, y] }".into(),
             );
             continue;
         };
@@ -595,26 +596,26 @@ fn decode_layout(node: &Node, comp: &Comp, out: &mut Findings) {
                     Code::Layout,
                     field.value.span,
                     "`at` is [x, y] or [x, y, z] in mm",
-                    None,
+                    "write [x, y] or [x, y, z]".into(),
                 ),
                 "rotate" if numbers(&[3]) => {}
                 "rotate" => out.push(
                     Code::Layout,
                     field.value.span,
                     "`rotate` is [rx, ry, rz] in degrees",
-                    None,
+                    "write [rx, ry, rz]".into(),
                 ),
                 "mate" => out.push(
                     Code::Layout,
                     field.key_span,
                     "`mate` is reserved for a later format",
-                    Some("place the part with `at` and `rotate`".into()),
+                    "place the part with `at` and `rotate`".into(),
                 ),
                 key => out.push(
                     Code::Layout,
                     field.key_span,
                     format!("a placement has no key `{key}`"),
-                    Some("its keys are at and rotate".into()),
+                    "its keys are at and rotate".into(),
                 ),
             }
         }
@@ -663,13 +664,13 @@ fn decode_sim(node: &Node, scene: &mut Scene, out: &mut Findings) {
                         Code::Syntax,
                         value.span,
                         "`max_step` is from 1 ns to 2 hours",
-                        None,
+                        "write a duration such as \"10ms\"".into(),
                     ),
                     Err(reason) => out.push(
                         Code::Syntax,
                         value.span,
                         format!("`max_step` is a duration, such as \"10ms\": {reason}"),
-                        None,
+                        "write a duration such as \"10ms\"".into(),
                     ),
                 }
             }
@@ -761,7 +762,7 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
                     "no param may be named `{}`; an instance uses that key itself",
                     prop.key
                 ),
-                None,
+                "rename it; an instance already uses that key".into(),
             );
             continue;
         }
@@ -789,7 +790,7 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
                             "file param `{}` needs \"as\": \"text\" or \"blob\"",
                             prop.key
                         ),
-                        None,
+                        "add \"as\": \"text\" or \"as\": \"blob\"".into(),
                     );
                     continue;
                 }
@@ -800,7 +801,7 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
                     Code::Param,
                     unit.span,
                     "a param's unit is one of ohm, F, V, A, s, Hz, W and 1",
-                    None,
+                    "use one of ohm, F, V, A, s, Hz, W or 1".into(),
                 );
                 continue;
             };
@@ -843,7 +844,13 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
                     .contains(&f.key.as_str())
                 })
                 .unwrap();
-            out.push(Code::Param, bad.key_span, format!("a param declaration has no key `{}`", bad.key), Some("its keys are unit, choices, file, as, default, required, min_exclusive and sets".into()));
+            out.push(
+                Code::Param,
+                bad.key_span,
+                format!("a param declaration has no key `{}`", bad.key),
+                "its keys are unit, choices, file, as, default, required, min_exclusive and sets"
+                    .into(),
+            );
         }
         let through = matches!(kind, ParamKind::Through);
         if !through && default.is_none() && !required {
@@ -854,7 +861,7 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
                     "param `{}` needs a `default` or \"required\": true",
                     prop.key
                 ),
-                None,
+                "add \"default\" or \"required\": true".into(),
             );
         }
         if !through && !matches!(kind, ParamKind::Choice(_)) && sets.is_none() {
@@ -862,11 +869,11 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
                 Code::Param,
                 prop.key_span,
                 format!("param `{}` has no `sets` pointer into `model`", prop.key),
-                None,
+                "add \"sets\": \"/field\" pointing at the model field this param writes".into(),
             );
         }
         if through && part.comp.parts.is_empty() {
-            out.push(Code::Param, prop.key_span, format!("param `{}` has no unit, choices or file, and this part has no children to pass it to", prop.key), None);
+            out.push(Code::Param, prop.key_span, format!("param `{}` has no unit, choices or file, and this part has no children to pass it to", prop.key), "give this part a child that takes the param, or give the param a unit, choices or file".into());
         }
         params.push(ParamDecl {
             name: prop.key.clone(),
@@ -927,7 +934,7 @@ fn decode_bodies(model: &Node, part: &Part, out: &mut Findings) -> Vec<Body> {
                 Code::Name,
                 prop.key_span,
                 format!("engine part `{}` looks like pin `{}`", prop.key, pin.name),
-                Some("name engine parts apart from pins, such as `host_tx` beside `TXD`".into()),
+                "name engine parts apart from pins, such as `host_tx` beside `TXD`".into(),
             );
         }
         bodies.extend(decode_body(Some(prop.key.clone()), &prop.value, part, out));
@@ -945,12 +952,24 @@ fn decode_body(name: Option<String>, node: &Node, part: &Part, out: &mut Finding
         return None;
     };
     let Some(engine_pins) = kinds::pins(kind) else {
-        let hint = did_you_mean(kind, kinds::KINDS.iter().map(|(k, _)| *k), "");
+        let named = did_you_mean(kind, kinds::KINDS.iter().map(|(k, _)| *k), "");
+        let hint = if named.is_empty() {
+            format!(
+                "the kinds are {}",
+                kinds::KINDS
+                    .iter()
+                    .map(|(k, _)| *k)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        } else {
+            named.trim_end().to_string()
+        };
         out.push(
             Code::Syntax,
             kind_node.span,
             format!("`{kind}` is not an engine kind this reader knows"),
-            Some(hint.trim_end().to_string()).filter(|h| !h.is_empty()),
+            hint,
         );
         return None;
     };
@@ -961,7 +980,7 @@ fn decode_body(name: Option<String>, node: &Node, part: &Part, out: &mut Finding
                 Code::UnknownPin,
                 entry.key_span,
                 format!("the engine's `{kind}` has no pin `{}`", entry.key),
-                Some(format!("its pins: {}", engine_pins.join(", "))),
+                format!("its pins: {}", engine_pins.join(", ")),
             );
         }
     }
@@ -979,8 +998,7 @@ fn decode_body(name: Option<String>, node: &Node, part: &Part, out: &mut Finding
                 Code::UnknownPin,
                 span,
                 format!("engine pin `{engine_pin}` sits on `{part_pin}`, which is not a pin of this part"),
-                Some(format!("map it in the model's `pins`; the part's pins: {}", part.pin_list())),
-            );
+                format!("map it in the model's `pins`; the part's pins: {}", part.pin_list()),);
             continue;
         }
         pins.push((engine_pin, part_pin));

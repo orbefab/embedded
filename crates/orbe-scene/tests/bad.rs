@@ -1,7 +1,8 @@
 //! Each folder in `tests/bad/` is laid over the `nano-button` fixture, and its `scene.jsonc`
 //! must give exactly the findings its `expect` file lists, one `<code> <file>:<line>:<col>`
-//! per line, optionally followed by ` | <text>` that the message must contain. An `edit` file
-//! changes one project file: its path, the text, and the new text.
+//! per line. ` | <message>` and a further ` | <hint>` are substrings the finding must contain.
+//! Every finding has a hint. An `edit` file changes one project file: its path, the text, and
+//! the new text.
 
 mod common;
 
@@ -44,7 +45,7 @@ fn overlay(from: &Path, to: &Path) {
     }
 }
 
-fn run(case: &Path) -> (Vec<(String, String)>, String) {
+fn run(case: &Path) -> (Vec<(String, String, String)>, String) {
     let project = common::project("nano-button");
     overlay(case, project.path());
     if let Ok(edit) = fs::read_to_string(case.join("edit")) {
@@ -69,6 +70,7 @@ fn run(case: &Path) -> (Vec<(String, String)>, String) {
             (
                 format!("{} {}:{}:{}", d.code, d.file, d.line, d.column),
                 d.message.clone(),
+                d.hint.clone(),
             )
         })
         .collect();
@@ -87,11 +89,11 @@ fn every_bad_fixture_gives_its_findings() {
     cases.sort();
     for case in cases {
         let expect = fs::read_to_string(case.join("expect")).unwrap();
-        let expected: Vec<(&str, Option<&str>)> = expect
+        let expected: Vec<(&str, Option<&str>, Option<&str>)> = expect
             .lines()
             .map(|l| {
-                l.split_once(" | ")
-                    .map_or((l, None), |(at, text)| (at, Some(text)))
+                let mut parts = l.splitn(3, " | ");
+                (parts.next().unwrap_or(""), parts.next(), parts.next())
             })
             .collect();
         let (found, shown) = run(&case);
@@ -103,8 +105,11 @@ fn every_bad_fixture_gives_its_findings() {
             && found
                 .iter()
                 .zip(&expected)
-                .all(|((at, message), (want, text))| {
-                    at == want && text.is_none_or(|t| message.contains(t))
+                .all(|((at, message, hint), (want, text, want_hint))| {
+                    at == want
+                        && text.is_none_or(|t| message.contains(t))
+                        && want_hint.is_none_or(|t| hint.contains(t))
+                        && !hint.is_empty()
                 });
         if !matches {
             failures.push(format!(
@@ -115,7 +120,7 @@ fn every_bad_fixture_gives_its_findings() {
         covered.extend(
             found
                 .iter()
-                .map(|(at, _)| at.split(' ').next().unwrap().to_string()),
+                .map(|(at, _, _)| at.split(' ').next().unwrap().to_string()),
         );
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
