@@ -292,9 +292,27 @@ impl Loader<'_> {
         if let Some(loaded) = self.loaded.get(path) {
             return *loaded;
         }
+        let id = label.clone();
         let part = self.read(path).and_then(|file| {
-            let tree = syntax::parse(&self.sources, file, self.out)?;
-            decode_part(&self.sources, file, label, &tree, self.out)
+            let before = self.out.len();
+            let mut part = syntax::parse(&self.sources, file, self.out)
+                .and_then(|tree| decode_part(&self.sources, file, label, &tree, self.out));
+            if let Some(part) = &mut part {
+                part.reported = self.out.since(before);
+            }
+            // A sealed copy that no longer reads was edited, and the fix is to restore it.
+            if part.is_none()
+                && catalog
+                && catalog::find(&id).is_none_or(|original| is_sealed(&original.tree))
+            {
+                self.out.rehint_since(
+                    before,
+                    &format!(
+                        "restore it with `orbe add {id} --overwrite`, or copy it to a path to make it your own"
+                    ),
+                );
+            }
+            part
         });
         let Some(part) = part else {
             self.loaded.insert(path.to_path_buf(), None);

@@ -740,7 +740,9 @@ fn an_unreadable_file_in_a_copy_is_one_io_error_that_names_it() {
         found[0].message
     );
     assert!(
-        found[0].hint.contains("chmod u+r parts/led-5mm/datasheet.txt"),
+        found[0]
+            .hint
+            .contains("chmod u+r parts/led-5mm/datasheet.txt"),
         "{}",
         found[0].hint
     );
@@ -812,4 +814,138 @@ fn a_dropped_jumper_does_not_join_its_wires() {
         pin_net(&dropped.json, "board__ra", "a"),
         pin_net(&dropped.json, "board__rb", "a")
     );
+}
+
+/// A local switch with `params` and a model whose `bounce` is `bounce` and whose events are
+/// `events`, used as `btn1` with `values`.
+fn switch_project(params: &str, bounce: &str, events: &str, values: &str) -> tempfile::TempDir {
+    let project = with_scene(
+        BTN1,
+        &format!("{{ \"type\": \"./parts/sw.jsonc\"{values} }}"),
+    );
+    fs::write(
+        project.path().join("parts/sw.jsonc"),
+        format!(
+            r#"{{
+  "format": 1,
+  "pins": {{ "a": [1], "b": [2] }},
+  "params": {{ {params} }},
+  "model": {{
+    "kind": "switch",
+    "on_resistance": {{ "value": 0.1, "unit": "ohm", "source": "user" }},
+    "off_resistance": {{ "value": 1e8, "unit": "ohm", "source": "user" }},
+    "initial": "open",
+    "events": {events},
+    "bounce": {bounce},
+  }},
+}}
+"#
+        ),
+    )
+    .unwrap();
+    project
+}
+
+#[test]
+fn every_netlist_counts_the_parts_it_writes() {
+    let mut netlists = Vec::new();
+    for scene in ["scene.jsonc", "two-buttons.jsonc", "two-buttons-nets.jsonc"] {
+        netlists.push(read(scene).0);
+    }
+    let chosen = switch_project(
+        r#""contacts": { "required": true, "choices": { "gold": { "sets": { "/bounce": { "window": { "value": 1000000000, "unit": "ps", "source": "user" } } } } } }, "max_bounces": { "unit": "1", "default": 2, "sets": "/bounce/max_bounces" }"#,
+        "null",
+        "[]",
+        ", \"contacts\": \"gold\"",
+    );
+    netlists.push(
+        orbe_scene::read(&chosen.path().join("scene.jsonc")).unwrap_or_else(|d| panic!("{d:#?}")),
+    );
+    for netlist in netlists {
+        let json: Value = serde_json::from_str(&netlist.json).unwrap();
+        assert_eq!(
+            netlist.parts,
+            json["parts"].as_array().unwrap().len(),
+            "the count is the parts written"
+        );
+    }
+}
+
+#[test]
+fn a_choice_that_writes_the_whole_object_opens_it() {
+    let contacts = r#""contacts": { "required": true, "choices": {
+      "gold": { "sets": { "/bounce": { "window": { "value": 1000000000, "unit": "ps", "source": "user" } } } },
+      "silver": { "sets": { "/bounce": { "window": { "value": 3000000000, "unit": "ps", "source": "user" } } } } } }"#;
+    let max = r#""max_bounces": { "unit": "1", "default": 2, "sets": "/bounce/max_bounces" }"#;
+    for (params, values, window, edges) in [
+        (
+            format!("{contacts}, {max}"),
+            ", \"contacts\": \"gold\", \"max_bounces\": 4",
+            1_000_000_000u64,
+            4u64,
+        ),
+        (
+            format!("{max}, {contacts}"),
+            ", \"contacts\": \"silver\"",
+            3_000_000_000,
+            2,
+        ),
+    ] {
+        let project = switch_project(&params, "null", "[]", values);
+        let netlist = orbe_scene::read(&project.path().join("scene.jsonc"))
+            .unwrap_or_else(|d| panic!("{values}: {d:#?}"));
+        let bounce = &engine_part(&netlist, "btn1")["bounce"];
+        assert_eq!(bounce["window"]["value"].as_u64(), Some(window), "{bounce}");
+        assert_eq!(
+            bounce["max_bounces"]["value"].as_u64(),
+            Some(edges),
+            "{bounce}"
+        );
+    }
+}
+
+#[test]
+fn a_choice_sets_a_list_item() {
+    let project = switch_project(
+        r#""late": { "default": "no", "choices": { "no": { "sets": { "/events/0/t_ps": 1000000000 } }, "yes": { "sets": { "/events/0/t_ps": 2000000000 } } } }"#,
+        "null",
+        r#"[{ "t_ps": 1000000000, "state": "closed" }]"#,
+        ", \"late\": \"yes\"",
+    );
+    let netlist =
+        orbe_scene::read(&project.path().join("scene.jsonc")).unwrap_or_else(|d| panic!("{d:#?}"));
+    assert_eq!(
+        engine_part(&netlist, "btn1")["events"][0]["t_ps"].as_u64(),
+        Some(2_000_000_000)
+    );
+}
+
+#[test]
+fn an_unset_null_default_keeps_the_model_value() {
+    let resistor = |values: &str| {
+        let project = with_scene(
+            "\"r1\": { \"type\": \"resistor-axial\", \"resistance\": \"220\" }",
+            &format!("\"r1\": {{ \"type\": \"./parts/r.jsonc\"{values} }}"),
+        );
+        fs::write(
+            project.path().join("parts/r.jsonc"),
+            r#"{
+  "format": 1,
+  "pins": { "a": [1], "b": [2] },
+  "params": { "wipe": { "unit": "ohm", "default": null, "sets": "/resistance" } },
+  "model": {
+    "kind": "resistor",
+    "resistance": { "value": 1000, "unit": "ohm", "source": "user" },
+    "ratings": { "power": null },
+  },
+}
+"#,
+        )
+        .unwrap();
+        let netlist = orbe_scene::read(&project.path().join("scene.jsonc"))
+            .unwrap_or_else(|d| panic!("{values}: {d:#?}"));
+        engine_part(&netlist, "r1")["resistance"]["value"].clone()
+    };
+    assert_eq!(resistor(""), 1000);
+    assert_eq!(resistor(", \"wipe\": \"470\""), 470);
 }

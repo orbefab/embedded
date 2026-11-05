@@ -1,0 +1,2 @@
+netlist.syntax parts/bad.jsonc:8:14 | the engine has no field `extra` here | `resistance`
+netlist.schedule parts/sw.jsonc:4:12 | events[0] is at 0 ps | change the value

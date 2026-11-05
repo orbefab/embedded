@@ -1,16 +1,27 @@
 //! The engine's findings on the netlist the reader wrote, placed in the files that wrote it.
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value};
 
-use super::{Circuit, Written};
-use crate::diagnostic::Code;
+use super::{Circuit, Head, Setter, Written, setter_of};
+use crate::diagnostic::{Code, Reported};
+use crate::params::{dotted, within};
 use crate::source::Span;
 use crate::syntax::Node;
+use crate::units::Unit;
+
+/// Engine findings that repeat what the reader reports itself: names, duplicates and nets.
+const REPEATS: &[&str] = &[
+    "netlist.name",
+    "netlist.duplicate",
+    "netlist.unknown_net",
+    "netlist.ground",
+];
 
 impl<'p> Circuit<'p> {
     /// An engine finding placed at the value that set the field, or else at the field in the
-    /// part file's model. When `quiet`, the reader's own findings or a refused part may be its
-    /// cause, so only a finding about one part's values is kept.
+    /// part file's model. When `quiet`, the reader already has findings, so a finding that
+    /// repeats one, or that belongs to no part, is left out. A part whose own params have a
+    /// finding keeps its engine findings for the next run.
     pub(super) fn engine_finding(
         &mut self,
         code: &'static str,
@@ -18,9 +29,11 @@ impl<'p> Circuit<'p> {
         origin: Option<&Written>,
         quiet: bool,
     ) {
+        if quiet && REPEATS.contains(&code) {
+            return;
+        }
         let message = value["message"].as_str().unwrap_or_default().to_string();
-        let about_values = code == "netlist.syntax" || value["data"]["field"].is_string();
-        let Some(origin) = origin.filter(|_| about_values || !quiet) else {
+        let Some(origin) = origin else {
             if !quiet {
                 self.out.push(
                     Code::Engine(code),
@@ -31,12 +44,7 @@ impl<'p> Circuit<'p> {
             }
             return;
         };
-        if self.failed.contains(&origin.inst) {
-            return;
-        }
-        if code == "netlist.syntax" {
-            let detail = value["data"]["detail"].as_str().unwrap_or_default();
-            self.schema_finding(origin, detail);
+        if self.failed.contains_key(&origin.inst) {
             return;
         }
         let field = value["data"]["field"].as_str().unwrap_or_default();
@@ -63,9 +71,19 @@ impl<'p> Circuit<'p> {
                 "change the value so it meets the engine's rule".into(),
             ),
         };
-        if let Some((_, setter)) = origin.set_by.iter().find(|(f, _)| {
-            !field.is_empty() && (f.starts_with(field) || field.starts_with(f.as_str()))
-        }) {
+        let pointer = if field.is_empty() {
+            String::new()
+        } else {
+            format!("/{}", field.replace('.', "/"))
+        };
+        let setter = setter_of(&origin.set_by, &pointer).or_else(|| {
+            origin
+                .set_by
+                .iter()
+                .find(|(p, _)| !pointer.is_empty() && within(p, &pointer))
+                .map(|(_, s)| s)
+        });
+        if let Some(setter) = setter {
             self.out.push(
                 Code::Param,
                 setter.span,
@@ -74,8 +92,7 @@ impl<'p> Circuit<'p> {
             );
             return;
         }
-        let model = self.body_model(origin);
-        let span = model.at_field(field).map_or(model.span, |n| n.span);
+        let span = self.body_model(origin).at_pointer(&pointer).span;
         self.out.push(
             Code::Engine(code),
             span,
@@ -95,125 +112,230 @@ impl<'p> Circuit<'p> {
             .unwrap_or(model)
     }
 
-    /// The engine's schema refused a part. Its message names the key or shows the value, so
-    /// the finding goes to the value that set it, or else to that key or value in the model.
-    fn schema_finding(&mut self, origin: &Written, detail: &str) {
-        let detail = detail.rsplit_once(" at line ").map_or(detail, |(d, _)| d);
-        let subject = Subject::of(detail);
-        let (what, hint) = subject.words(detail);
-        let setter = origin.set_by.iter().find(|(field, _)| match &subject {
-            Subject::Key(key) => field.rsplit('.').next() == Some(key.as_str()),
-            Subject::Seen(seen, _) => origin
-                .fields
-                .pointer(&format!("/{}", field.replace('.', "/")))
-                .is_some_and(|v| holds(v, seen)),
-            Subject::Other => false,
-        });
-        if let Some((_, setter)) = setter {
-            self.out.push(
+    /// The engine's schema refused a part. The finding goes to the value that set the field
+    /// the engine refuses, or else to that field in the part file's model.
+    pub(super) fn schema_finding(
+        &mut self,
+        origin: &Written,
+        head: &Head,
+        value: &Value,
+    ) -> Reported {
+        let detail = detail(value);
+        let at = culprit(&origin.fields, &detail, |part| refusal(head, part));
+        let setter = setter_of(&origin.set_by, &at);
+        let (message, hint) = words(&detail, &at, origin.fields.pointer(&at), setter);
+        let before = self.out.len();
+        match setter {
+            Some(setter) => self.out.push(
                 Code::Param,
                 setter.span,
-                format!("`{}`: {what}", setter.site),
+                format!("`{}`: {message}", setter.site),
                 hint,
-            );
-            return;
-        }
-        let model = self.body_model(origin);
-        let found = match &subject {
-            Subject::Key(key) => {
-                find(model, &|n: &Node| n.get(key).is_some()).and_then(|n| n.get(key))
+            ),
+            None => {
+                let span = self.body_model(origin).at_pointer(&at).span;
+                self.out.push(
+                    Code::Engine("netlist.syntax"),
+                    span,
+                    format!("`{}`: {message}", self.insts[origin.inst].dotted()),
+                    hint,
+                );
             }
-            Subject::Seen(seen, _) => find(model, &|n: &Node| {
-                n.props().is_none() && n.items().is_none() && holds(&n.to_value(), seen)
-            }),
-            Subject::Other => None,
+        }
+        self.out.since(before).expect("a finding was pushed")
+    }
+}
+
+/// A schema finding's detail without the place in the netlist text, which is where the
+/// engine finished reading the part and not where the field is.
+fn detail(value: &Value) -> String {
+    let detail = value["data"]["detail"].as_str().unwrap_or_default();
+    detail
+        .rsplit_once(" at line ")
+        .map_or(detail, |(d, _)| d)
+        .to_string()
+}
+
+/// The schema refusal of a netlist holding only `part`, if any.
+fn refusal(head: &Head, part: &Value) -> Option<String> {
+    let text = serde_json::to_string(&head.with([part])).expect("a JSON value");
+    let diagnostics = sim_core::netlist::parse(text.as_bytes()).err()?;
+    diagnostics
+        .iter()
+        .find(|d| d.code() == "netlist.syntax")
+        .map(|d| detail(&serde_json::to_value(d).unwrap_or_default()))
+}
+
+/// The JSON pointer of the field the engine refuses in `part`. The engine names only the part,
+/// so this asks the engine again on cut-down copies. The engine reads an object's fields in
+/// order and stops at the first bad one, so the first field that, kept with those before it,
+/// still gives the same refusal holds the cause. A missing field is placed at the object that
+/// lacks it: giving it that field there changes the refusal, and giving it to any other
+/// object leaves it or makes the field unknown.
+fn culprit(part: &Value, detail: &str, refusal: impl Fn(&Value) -> Option<String>) -> String {
+    let missing = detail
+        .strip_prefix("missing field `")
+        .and_then(|rest| rest.split('`').next());
+    let mut at = String::new();
+    while let Some(node) = part.pointer(&at) {
+        if let (Some(key), Some(object)) = (missing, node.as_object())
+            && !object.contains_key(key)
+        {
+            let mut trial = part.clone();
+            if let Some(Value::Object(map)) = trial.pointer_mut(&at) {
+                map.insert(key.to_string(), Value::Null);
+            }
+            let unknown = format!("unknown field `{key}`");
+            if refusal(&trial).is_none_or(|d| d != detail && !d.starts_with(&unknown)) {
+                return at;
+            }
+        }
+        let children: Vec<String> = match node {
+            Value::Object(map) => map.keys().filter(|k| *k != "kind").cloned().collect(),
+            // A cut list has another length, so a refusal of the length stays with the list.
+            Value::Array(_) if detail.starts_with("invalid length") => return at,
+            Value::Array(items) => (0..items.len()).map(|i| i.to_string()).collect(),
+            _ => return at,
         };
-        self.out.push(
-            Code::Engine("netlist.syntax"),
-            found.map_or(model.span, |n| n.span),
-            format!("`{}`: {what}", self.insts[origin.inst].dotted()),
-            hint,
+        let first = (0..=children.len())
+            .find(|&kept| refusal(&cut(part, &at, &children[..kept])).as_deref() == Some(detail));
+        match first {
+            Some(0) if node.get("kind").is_some() => return format!("{at}/kind"),
+            Some(0) | None => return at,
+            Some(kept) => at = format!("{at}/{}", children[kept - 1]),
+        }
+    }
+    at
+}
+
+/// `part` with the object or list at `at` cut down to `kept` and its `kind`.
+fn cut(part: &Value, at: &str, kept: &[String]) -> Value {
+    let mut trial = part.clone();
+    match trial.pointer_mut(at) {
+        Some(Value::Object(map)) => {
+            let old = std::mem::take(map);
+            *map = old
+                .into_iter()
+                .filter(|(k, _)| k == "kind" || kept.contains(k))
+                .collect::<Map<String, Value>>();
+        }
+        Some(Value::Array(items)) => items.truncate(kept.len()),
+        _ => {}
+    }
+    trial
+}
+
+/// A schema finding's message and hint. A whole-number refusal of a param's value is put in
+/// that param's unit and string form.
+fn words(
+    detail: &str,
+    at: &str,
+    found: Option<&Value>,
+    setter: Option<&Setter>,
+) -> (String, String) {
+    let expected = detail.split_once(", expected ").map(|(_, e)| e);
+    if let (Some(found), Some((low, high))) = (
+        found.filter(|v| v.is_number()),
+        expected.and_then(integer_range),
+    ) {
+        return whole(found, low, high, setter);
+    }
+    let field = dotted(at);
+    let place = if field.is_empty() {
+        "the model".to_string()
+    } else {
+        format!("`{field}`")
+    };
+    if let Some(key) = detail
+        .strip_prefix("missing field `")
+        .and_then(|rest| rest.split('`').next())
+    {
+        return (
+            format!("the engine needs `{key}` in {place}, and nothing writes it"),
+            format!("add `{key}` to {place} in `model`"),
         );
     }
+    if let Some(key) = detail
+        .strip_prefix("unknown field `")
+        .and_then(|rest| rest.split('`').next())
+    {
+        return (
+            format!("the engine has no field `{key}` here"),
+            format!(
+                "point `sets` or the model at a field it has: {}",
+                expected.unwrap_or("see the engine's netlist docs")
+            ),
+        );
+    }
+    let hint = if detail.starts_with("invalid type: map")
+        && setter.is_some_and(|s| s.unit.is_some())
+    {
+        format!(
+            "a number param writes {{ value, unit, source }}, and the engine takes a bare value at {place}; point the param's `sets` at a field that takes a value object"
+        )
+    } else {
+        "write the value as the engine's field takes it".into()
+    };
+    (format!("the engine does not read {place}: {detail}"), hint)
 }
 
-/// What a schema message is about: a key it names, or a value it shows, with the text it shows.
-enum Subject {
-    Key(String),
-    Seen(Value, String),
-    Other,
-}
-
-impl Subject {
-    fn of(detail: &str) -> Subject {
-        let quoted = |s: &str| s.split('`').nth(1).map(str::to_string);
-        for prefix in ["missing field ", "unknown field ", "duplicate field "] {
-            if let Some(rest) = detail.strip_prefix(prefix) {
-                return quoted(rest).map_or(Subject::Other, Subject::Key);
-            }
+/// The refusal of `number` where the engine takes a whole number from `low` to `high`.
+fn whole(found: &Value, low: i128, high: i128, setter: Option<&Setter>) -> (String, String) {
+    let number = found.as_f64().unwrap_or_default();
+    let unit = setter.and_then(|s| s.unit);
+    let shown = match setter {
+        Some(s) if !s.choice => s.shown.clone(),
+        _ => found.to_string(),
+    };
+    // A u64 or i64 is the natural range of a whole number, so it is not worth printing.
+    let narrow =
+        (low, high) != (0, u64::MAX.into()) && (low, high) != (i64::MIN.into(), i64::MAX.into());
+    let range = if narrow {
+        format!(" from {low} to {high}")
+    } else {
+        String::new()
+    };
+    let of = match unit {
+        Some(Unit::Second) => " of ps".to_string(),
+        Some(Unit::One) | None => String::new(),
+        Some(unit) => format!(" of {}", unit.as_str()),
+    };
+    let fits = (low as f64..=high as f64).contains(&number);
+    let message = match (fits, narrow) {
+        (true, true) => {
+            format!("{shown} is not a whole number{of}; the engine takes one{range} here")
         }
-        if let Some(name) = detail.strip_prefix("unknown variant ").and_then(quoted) {
-            return Subject::Seen(Value::String(name.clone()), name);
-        }
-        let Some(rest) = detail
-            .strip_prefix("invalid type: ")
-            .or_else(|| detail.strip_prefix("invalid value: "))
-        else {
-            return Subject::Other;
-        };
-        let seen = rest.split(", expected").next().unwrap_or(rest);
-        if seen == "null" {
-            return Subject::Seen(Value::Null, "null".into());
-        }
-        if let Some(text) = seen.strip_prefix("string ") {
-            let text = text.trim_matches('"');
-            return Subject::Seen(Value::String(text.into()), format!("\"{text}\""));
-        }
-        if let Some(word) = seen.strip_prefix("boolean ") {
-            let word = word.trim_matches('`');
-            return Subject::Seen(Value::Bool(word == "true"), word.into());
-        }
-        match quoted(seen).and_then(|n| n.parse::<f64>().ok().map(|f| (f, n))) {
-            Some((number, text)) => Subject::Seen(json!(number), text),
-            None => Subject::Other,
-        }
+        (true, false) => format!("{shown} is not a whole number{of}"),
+        (false, true) => format!("{shown} is outside {low} to {high}{of}"),
+        (false, false) if number < 0.0 => format!("{shown} is negative, and this field holds none"),
+        (false, false) => format!("{shown} is more than this field holds"),
+    };
+    if setter.is_some_and(|s| s.choice) {
+        return (
+            message,
+            format!("pick another choice, or make this choice's value a whole number{range}"),
+        );
     }
-
-    /// The finding's message and hint, in the scene's terms where the message allows.
-    fn words(&self, detail: &str) -> (String, String) {
-        let expected = detail.split_once(", expected ").map(|(_, e)| e);
-        if let (Subject::Seen(seen, text), Some((low, high))) =
-            (self, expected.and_then(integer_range))
-        {
-            let hint = format!("write a whole number from {low} to {high}");
-            return match seen.as_f64() {
-                Some(n) if n.fract() != 0.0 => (
-                    format!(
-                        "{text} is not a whole number; the engine takes an integer from {low} to {high} here"
-                    ),
-                    hint,
-                ),
-                _ => (format!("{text} is outside {low} to {high}"), hint),
-            };
+    let example = |n: i128| match unit {
+        Some(Unit::Second) => format!("\"{n}ps\", or \"1ms\""),
+        Some(Unit::One) | None => n.to_string(),
+        Some(_) => format!("\"{n}\""),
+    };
+    let hint = if fits || narrow {
+        let nearest = (number.round() as i128).clamp(low, high);
+        format!(
+            "write a whole number{of}{range}, such as {}",
+            example(nearest)
+        )
+    } else {
+        let such = unit.map_or_else(|| example(0), |u| u.example().to_string());
+        if number < 0.0 {
+            format!("write a value of 0 or more, such as {such}")
+        } else {
+            format!("write a smaller value, such as {such}")
         }
-        match self {
-            Subject::Key(key) if detail.starts_with("missing field") => (
-                format!("the engine needs `{key}`, and nothing writes it"),
-                format!("add `{key}` to `model`"),
-            ),
-            Subject::Key(key) if detail.starts_with("unknown field") => (
-                format!("the engine has no field `{key}` here"),
-                format!(
-                    "point `sets` or the model at a field it has: {}",
-                    expected.unwrap_or("see the engine's netlist docs")
-                ),
-            ),
-            _ => (
-                format!("the engine does not read this: {detail}"),
-                "write the value as the engine's field takes it".into(),
-            ),
-        }
-    }
+    };
+    (message, hint)
 }
 
 fn integer_range(expected: &str) -> Option<(i128, i128)> {
@@ -228,29 +350,6 @@ fn integer_range(expected: &str) -> Option<(i128, i128)> {
         "i64" => (i64::MIN.into(), i64::MAX.into()),
         _ => return None,
     })
-}
-
-/// Whether `value` is `seen` or holds it, numbers compared by value.
-fn holds(value: &Value, seen: &Value) -> bool {
-    match value {
-        Value::Array(items) => items.iter().any(|v| holds(v, seen)),
-        Value::Object(map) => map.values().any(|v| holds(v, seen)),
-        Value::Number(n) => seen.as_f64().is_some_and(|s| n.as_f64() == Some(s)),
-        _ => value == seen,
-    }
-}
-
-/// The first node, depth first, that `matches`.
-fn find<'n>(node: &'n Node, matches: &dyn Fn(&Node) -> bool) -> Option<&'n Node> {
-    if matches(node) {
-        return Some(node);
-    }
-    let children: Vec<&Node> = match (node.props(), node.items()) {
-        (Some(props), _) => props.iter().map(|p| &p.value).collect(),
-        (_, Some(items)) => items.iter().collect(),
-        _ => Vec::new(),
-    };
-    children.into_iter().find_map(|c| find(c, matches))
 }
 
 /// The engine's requirement, after its own `#part field is value; `.

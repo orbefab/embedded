@@ -263,8 +263,21 @@ impl Node {
         }
     }
 
-    /// The node at a dotted field path, such as `ratings.power.value`.
-    pub(crate) fn at_field(&self, field: &str) -> Option<&Node> {
-        field.split('.').try_fold(self, |node, key| node.get(key))
+    /// The deepest node on the way to a JSON pointer, such as `/events/0/t_ps`: the node
+    /// itself when it is there, else the last one there on its way.
+    pub(crate) fn at_pointer(&self, pointer: &str) -> &Node {
+        let mut node = self;
+        for token in pointer.split('/').skip(1) {
+            let next = match &node.json {
+                Json::Obj(_) => node.get(token),
+                Json::Arr(items) => token.parse::<usize>().ok().and_then(|i| items.get(i)),
+                _ => None,
+            };
+            match next {
+                Some(next) => node = next,
+                None => break,
+            }
+        }
+        node
     }
 }

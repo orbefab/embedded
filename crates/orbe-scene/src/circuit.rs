@@ -5,13 +5,14 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value, json};
 
-use crate::diagnostic::{Code, Findings};
-use crate::model::{Comp, ParamKind, Part, PinDef, Ref, Scene};
+use crate::diagnostic::{Code, Findings, Reported};
+use crate::model::{Comp, ParamDecl, ParamKind, Part, PinDef, Ref, Scene};
 use crate::name::did_you_mean;
-use crate::params::{Arg, convert, off_at, set};
+use crate::params::{Arg, blocked, convert, dotted, set, within};
 use crate::project::{Owner, Project};
 use crate::source::Span;
 use crate::syntax::Node;
+use crate::units::Unit;
 
 mod engine;
 
@@ -60,11 +61,12 @@ struct Circuit<'p> {
     long: BTreeMap<Span, (String, bool)>,
     /// Each instance's model after its params are applied.
     built: BTreeMap<usize, (Value, SetBy)>,
-    /// Instances with a finding about their own params, whose engine findings would repeat it.
-    failed: BTreeSet<usize>,
+    /// Instances with a finding about their own params or their part file, with its proof.
+    /// Their engine findings may only repeat it, so they wait for the next run.
+    failed: BTreeMap<usize, Reported>,
 }
 
-/// The value that set a model field, by the field's dotted path.
+/// The value that set a model field, by the field's JSON pointer.
 type SetBy = BTreeMap<String, Setter>;
 
 #[derive(Clone)]
@@ -74,10 +76,37 @@ struct Setter {
     site: String,
     /// The value as written, such as `5ns`.
     shown: String,
+    /// A number param's unit.
+    unit: Option<Unit>,
+    choice: bool,
 }
 
-/// Where an engine part came from: its instance, its name in a model map, its params, and what
-/// was written for it.
+impl Setter {
+    fn new(decl: &ParamDecl, arg: &Arg) -> Setter {
+        Setter {
+            span: arg.node.span,
+            site: arg.site.clone(),
+            shown: shown(&arg.node),
+            unit: match decl.kind {
+                ParamKind::Number { unit, .. } => Some(unit),
+                _ => None,
+            },
+            choice: matches!(decl.kind, ParamKind::Choice(_)),
+        }
+    }
+}
+
+/// The deepest setter of `pointer` or of an object around it.
+fn setter_of<'s>(set_by: &'s SetBy, pointer: &str) -> Option<&'s Setter> {
+    set_by
+        .iter()
+        .filter(|(p, _)| within(pointer, p))
+        .max_by_key(|(p, _)| p.len())
+        .map(|(_, s)| s)
+}
+
+/// An engine part as the reader writes it: its instance, its name in a model map, its params,
+/// and its fields.
 struct Written {
     inst: usize,
     body: Option<String>,
@@ -118,7 +147,7 @@ pub(crate) fn compile(project: &Project, out: &mut Findings) -> Option<Netlist> 
         parent: Vec::new(),
         long: BTreeMap::new(),
         built: BTreeMap::new(),
-        failed: BTreeSet::new(),
+        failed: BTreeMap::new(),
     };
     circuit.instantiate(ROOT, Owner::Scene);
     circuit.make_pins();
@@ -175,8 +204,9 @@ impl<'p> Circuit<'p> {
             }
             self.insts.push(inst);
             let id = self.insts.len() - 1;
-            if self.out.len() > before {
-                self.failed.insert(id);
+            let part_reported = part.and_then(|p| project.parts[p].reported);
+            if let Some(reported) = self.out.since(before).or(part_reported) {
+                self.failed.insert(id, reported);
             }
             self.insts[parent]
                 .children
@@ -651,8 +681,8 @@ impl<'p> Circuit<'p> {
     }
 
     /// Writes netlist v0 and has the engine check it, even when the reader has findings, so
-    /// one run reports both. A part the engine's schema refuses is reported and left out, and
-    /// the rest are checked again.
+    /// one run reports both. A part the engine's schema refuses is left out with the finding
+    /// that says why, and the rest are checked again.
     fn write(
         &mut self,
         scene: &Scene,
@@ -660,7 +690,6 @@ impl<'p> Circuit<'p> {
         ground: Option<String>,
     ) -> Option<Netlist> {
         let mut parts = Vec::new();
-        let mut origins = Vec::new();
         for inst in 1..self.insts.len() {
             if self.insts[inst].dropped.is_some() {
                 continue;
@@ -674,16 +703,15 @@ impl<'p> Circuit<'p> {
             for body in &part.bodies {
                 let mut flat = self.insts[inst].flat();
                 let mut fields = model.clone();
-                let mut set_here = BTreeMap::new();
+                let mut set_here = SetBy::new();
                 if let Some(name) = &body.name {
                     flat = format!("{flat}__{name}");
                     fields = model.get(name).cloned().unwrap_or(Value::Null);
-                    let prefix = format!("{name}.");
+                    let prefix = format!("/{name}");
                     set_here = set_by
                         .iter()
-                        .filter_map(|(f, s)| {
-                            f.strip_prefix(&prefix).map(|f| (f.to_string(), s.clone()))
-                        })
+                        .filter(|(p, _)| within(p, &prefix))
+                        .map(|(p, s)| (p[prefix.len()..].to_string(), s.clone()))
                         .collect();
                 } else {
                     set_here.clone_from(&set_by);
@@ -691,13 +719,8 @@ impl<'p> Circuit<'p> {
                 let mut pins = Map::new();
                 for (engine_pin, part_pin) in &body.pins {
                     let key = self.keys.get(&(inst, part_pin.clone())).copied();
-                    match key.map(|k| self.find(k)).and_then(|root| nets.get(&root)) {
-                        Some(net) => {
-                            pins.insert(engine_pin.to_string(), Value::String(net.clone()));
-                        }
-                        None => {
-                            self.failed.insert(inst);
-                        }
+                    if let Some(net) = key.map(|k| self.find(k)).and_then(|root| nets.get(&root)) {
+                        pins.insert(engine_pin.to_string(), Value::String(net.clone()));
                     }
                 }
                 let mut object = match fields {
@@ -710,14 +733,13 @@ impl<'p> Circuit<'p> {
                 object.insert("pins".into(), Value::Object(pins));
                 let mut object = Value::Object(object);
                 whole_numbers(&mut object);
-                origins.push(Written {
+                parts.push(Written {
                     inst,
                     body: body.name.clone(),
                     name: flat,
                     set_by: set_here,
-                    fields: object.clone(),
+                    fields: object,
                 });
-                parts.push(object);
             }
         }
         let mut names: Vec<String> = nets.values().cloned().collect();
@@ -728,24 +750,26 @@ impl<'p> Circuit<'p> {
             .unwrap_or_default();
         names.retain(|n| *n != ground_name);
         names.insert(0, ground_name.clone());
+        let head = Head(json!({
+            "version": 0,
+            "seed": scene.seed,
+            "analysis": { "transient": { "stop_ps": Scene::STOP_PS, "max_step_ps": scene.max_step_ps, "grid_ps": GRID_PS } },
+            "ground": ground_name,
+            "nets": names,
+        }));
         let clean = self.out.is_empty();
-        let mut kept: Vec<usize> = (0..parts.len()).collect();
+        let mut left_out: BTreeMap<usize, Reported> = BTreeMap::new();
         let text = loop {
-            let written: Vec<&Value> = kept.iter().map(|&i| &parts[i]).collect();
-            let document = json!({
-                "version": 0,
-                "seed": scene.seed,
-                "analysis": { "transient": { "stop_ps": Scene::STOP_PS, "max_step_ps": scene.max_step_ps, "grid_ps": GRID_PS } },
-                "ground": ground_name,
-                "nets": names,
-                "parts": written,
-            });
+            let kept: Vec<usize> = (0..parts.len())
+                .filter(|i| !left_out.contains_key(i))
+                .collect();
+            let document = head.with(kept.iter().map(|&i| &parts[i].fields));
             let text = serde_json::to_string_pretty(&document).expect("a JSON value");
             let Err(diagnostics) = sim_core::netlist::parse(text.as_bytes()) else {
                 break text;
             };
-            let quiet = !clean || kept.len() < parts.len();
-            let mut refused = None;
+            let quiet = !clean || !left_out.is_empty();
+            let mut refused = false;
             for diagnostic in &diagnostics {
                 let value = serde_json::to_value(diagnostic).unwrap_or_default();
                 let index = value["data"]["path"]
@@ -753,32 +777,36 @@ impl<'p> Circuit<'p> {
                     .and_then(|p| p.strip_prefix("parts["))
                     .and_then(|p| p.split(']').next())
                     .and_then(|i| i.parse::<usize>().ok())
-                    .filter(|&i| i < kept.len());
-                let origin = match index {
-                    Some(i) => Some(&origins[kept[i]]),
-                    None => value["refs"]
+                    .and_then(|i| kept.get(i).copied());
+                if diagnostic.code() == "netlist.syntax"
+                    && let Some(i) = index
+                {
+                    let reported = match self.failed.get(&parts[i].inst) {
+                        Some(reported) => *reported,
+                        None => self.schema_finding(&parts[i], &head, &value),
+                    };
+                    left_out.insert(i, reported);
+                    refused = true;
+                    continue;
+                }
+                let origin = index.or_else(|| {
+                    value["refs"]
                         .as_array()
                         .and_then(|r| r.first())
                         .and_then(Value::as_str)
                         .and_then(|r| r.strip_prefix('#'))
                         .map(|r| r.split('.').next().unwrap_or(r))
-                        .and_then(|name| origins.iter().find(|w| w.name == name)),
-                };
-                if diagnostic.code() == "netlist.syntax" {
-                    refused = index;
-                }
-                self.engine_finding(diagnostic.code(), &value, origin, quiet);
+                        .and_then(|name| parts.iter().position(|w| w.name == name))
+                });
+                self.engine_finding(diagnostic.code(), &value, origin.map(|i| &parts[i]), quiet);
             }
-            match refused {
-                Some(i) => {
-                    kept.remove(i);
-                }
-                None => break text,
+            if !refused {
+                break text;
             }
         };
         (self.out.is_empty() && ground.is_some()).then(|| Netlist {
             json: text,
-            parts: parts.len(),
+            parts: parts.len() - left_out.len(),
             nets: names,
             ground: ground_name,
             modified: self.project.modified.clone(),
@@ -799,8 +827,8 @@ impl<'p> Circuit<'p> {
             };
             let before = self.out.len();
             let (model, set_by) = self.model(inst, part, &model_node);
-            if self.out.len() > before {
-                self.failed.insert(inst);
+            if let Some(reported) = self.out.since(before) {
+                self.failed.entry(inst).or_insert(reported);
             }
             self.built.insert(inst, (model, set_by));
         }
@@ -863,12 +891,14 @@ impl<'p> Circuit<'p> {
         }
     }
 
-    /// The part's model with every param set. A param whose default is null and that has a
-    /// value turns on the objects it points through, before the others write into them. A
-    /// value that lands in an object still off is a finding when an instance set it.
+    /// The part's model with every param set. A param left at a null default writes nothing
+    /// over a value the model has, and only fills a field the model leaves out. Writes go
+    /// shallowest pointer first, so a param that writes an object comes before one that writes
+    /// inside it. A param whose default is null turns on the objects its value passes through,
+    /// unless another param wrote one of them null. Then a value an instance set that did not
+    /// land, because an object on its way is off in the end, is a finding at that value.
     fn model(&mut self, inst: usize, part: &Part, model_node: &Node) -> (Value, SetBy) {
         let mut model = model_node.to_value();
-        let mut set_by = BTreeMap::new();
         let dir = self
             .project
             .sources
@@ -877,7 +907,7 @@ impl<'p> Circuit<'p> {
             .parent()
             .map(PathBuf::from)
             .unwrap_or_default();
-        let mut args = Vec::new();
+        let mut writes: Vec<Write> = Vec::new();
         for decl in &part.params {
             if matches!(decl.kind, ParamKind::Through) {
                 continue;
@@ -892,67 +922,129 @@ impl<'p> Circuit<'p> {
                 },
                 (None, None) => continue,
             };
-            let opening = decl.opens() && !arg.node.is_null();
-            args.push((opening, decl, arg));
-        }
-        args.sort_by_key(|(opening, _, _)| !opening);
-        for (opening, decl, arg) in args {
-            let sets = match convert(decl, &arg) {
-                Ok(sets) => sets,
-                Err((code, message, hint)) => {
-                    self.out.push(
-                        code,
-                        arg.node.span,
-                        format!("`{}`: {message}", arg.site),
-                        hint,
-                    );
-                    continue;
+            let fill = !arg.explicit && arg.node.is_null();
+            match convert(decl, &arg) {
+                Ok(sets) => {
+                    let setter = Setter::new(decl, &arg);
+                    let opens = decl.opens() && !arg.node.is_null();
+                    writes.extend(sets.into_iter().map(|(pointer, value)| Write {
+                        pointer,
+                        value,
+                        opens,
+                        explicit: arg.explicit,
+                        fill,
+                        checked: !decl.sets_refused,
+                        param: decl.name.clone(),
+                        setter: setter.clone(),
+                    }));
                 }
-            };
-            for (pointer, value) in sets {
-                let null = value.is_null();
-                if set(&mut model, &pointer, value, opening) {
-                    set_by.insert(
-                        pointer.trim_start_matches('/').replace('/', "."),
-                        Setter {
-                            span: arg.node.span,
-                            site: arg.site.clone(),
-                            shown: shown(&arg.node),
-                        },
-                    );
-                    continue;
-                }
-                if null {
-                    continue;
-                }
-                let off = off_at(&model, &pointer).ok().flatten();
-                let Some((off, opener)) = off.and_then(|off| part.opener(&off).map(|o| (off, o)))
-                else {
-                    // The part file's own finding says why this param never takes effect.
-                    self.failed.insert(inst);
-                    continue;
-                };
-                if !arg.explicit {
-                    continue;
-                }
-                let example = match &opener.kind {
-                    ParamKind::Number { unit, .. } => format!(", such as {}", unit.example()),
-                    _ => String::new(),
-                };
-                self.out.push(
-                    Code::Param,
+                Err((code, message, hint)) => self.out.push(
+                    code,
                     arg.node.span,
-                    format!(
-                        "`{}` has no effect while `{}` is off; set `{}` too",
-                        arg.site,
-                        off[1..].replace('/', "."),
-                        opener.name
-                    ),
-                    format!("set `{}`{example}, or remove this value", opener.name),
-                );
+                    format!("`{}`: {message}", arg.site),
+                    hint,
+                ),
             }
         }
+        writes.sort_by_key(|w| w.pointer.matches('/').count());
+        let mut set_by = SetBy::new();
+        let mut closed: Vec<(&str, &Setter)> = Vec::new();
+        for w in &writes {
+            if w.fill && model.pointer(&w.pointer).is_some() {
+                continue;
+            }
+            let create = w.opens && !closed.iter().any(|(c, _)| within(&w.pointer, c));
+            if set(&mut model, &w.pointer, w.value.clone(), create) {
+                if w.value.is_null() && !w.fill {
+                    closed.push((&w.pointer, &w.setter));
+                }
+                set_by.insert(w.pointer.clone(), w.setter.clone());
+            }
+        }
+        let mut told = BTreeSet::new();
+        for w in writes.iter().filter(|w| w.explicit && w.checked) {
+            let Some((at, found)) = blocked(&model, &w.pointer) else {
+                continue;
+            };
+            if !told.insert(w.setter.span) {
+                continue;
+            }
+            let site = &w.setter.site;
+            let field = dotted(&at);
+            let closer = closed.iter().find(|(c, _)| within(&at, c));
+            let (message, hint) = match (found, closer) {
+                (Some(value), _) => {
+                    let by = setter_of(&set_by, &at)
+                        .map(|s| format!("; `{}` writes it as {}", s.site, s.shown))
+                        .unwrap_or_default();
+                    (
+                        format!("`{site}` has no effect: `{field}` is {value}, not an object{by}"),
+                        format!("make `{field}` an object, or remove this value"),
+                    )
+                }
+                (None, Some((_, closer))) => (
+                    format!(
+                        "`{site}` has no effect while `{}` is {}, which turns `{field}` off",
+                        closer.site, closer.shown
+                    ),
+                    format!(
+                        "remove this value, or give `{}` a value that keeps `{field}` on",
+                        closer.site
+                    ),
+                ),
+                (None, None) => match part.opener(&at).filter(|o| o.name != w.param) {
+                    Some(opener) => {
+                        let example = match &opener.kind {
+                            ParamKind::Number { unit, .. } => {
+                                format!(", such as {}", unit.example())
+                            }
+                            _ => String::new(),
+                        };
+                        (
+                            format!(
+                                "`{site}` has no effect while `{field}` is off; set `{}` too",
+                                opener.name
+                            ),
+                            format!("set `{}`{example}, or remove this value", opener.name),
+                        )
+                    }
+                    None => (
+                        format!("`{site}` has no effect while `{field}` is off"),
+                        "remove this value".into(),
+                    ),
+                },
+            };
+            self.out.push(Code::Param, w.setter.span, message, hint);
+        }
         (model, set_by)
+    }
+}
+
+/// One value a param writes into a model.
+struct Write {
+    pointer: String,
+    value: Value,
+    /// It turns on the objects on its way.
+    opens: bool,
+    /// An instance set it, not a declaration's default.
+    explicit: bool,
+    /// A null default: it fills a field the model leaves out, and turns nothing off.
+    fill: bool,
+    /// The part file's check passed its pointers. A refused one has its own finding.
+    checked: bool,
+    param: String,
+    setter: Setter,
+}
+
+/// Netlist v0 without its parts.
+pub(super) struct Head(Value);
+
+impl Head {
+    /// The netlist with these parts.
+    pub(super) fn with<'v>(&self, parts: impl IntoIterator<Item = &'v Value>) -> Value {
+        let mut document = self.0.clone();
+        document["parts"] = Value::Array(parts.into_iter().cloned().collect());
+        document
     }
 }
 

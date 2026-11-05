@@ -1,0 +1,2 @@
+scene.param scene.jsonc:6:53 | `btn1.bounce` has no effect while `btn1.contacts` is ideal, which turns `bounce` off | give `btn1.contacts` a value that keeps `bounce` on
+scene.param scene.jsonc:6:75 | `btn1.max_bounces` has no effect while `btn1.contacts` is ideal, which turns `bounce` off | give `btn1.contacts` a value that keeps `bounce` on

@@ -307,42 +307,95 @@ fn source_ok(node: &Node) -> bool {
 }
 
 /// The tokens of a pointer into a model, such as `/bounce/window`.
-fn tokens(pointer: &str) -> Result<Vec<&str>, String> {
+pub(crate) fn tokens(pointer: &str) -> Result<Vec<&str>, String> {
     pointer
         .strip_prefix('/')
         .map(|rest| rest.split('/').collect())
         .ok_or_else(|| format!("`{pointer}` is not a pointer into `model`; it starts with /"))
 }
 
-/// Where `pointer` stops in `model`: `Ok(None)` when every object on its way is there, else
-/// the first one that is null or missing, such as `/bounce`. That object is off.
-pub(crate) fn off_at(model: &Value, pointer: &str) -> Result<Option<String>, String> {
-    let tokens = tokens(pointer)?;
-    let mut node = model;
-    for (i, token) in tokens[..tokens.len() - 1].iter().enumerate() {
-        let object = node.as_object().ok_or_else(|| {
-            format!(
-                "`{pointer}` passes through `{}`, which is not an object",
-                tokens[..i].join(".")
-            )
-        })?;
-        match object.get(*token) {
-            None | Some(Value::Null) => return Ok(Some(format!("/{}", tokens[..=i].join("/")))),
-            Some(next) => node = next,
-        }
-    }
-    if node.is_object() {
-        Ok(None)
-    } else {
-        Err(format!(
-            "`{pointer}` passes through `{}`, which is not an object",
-            tokens[..tokens.len() - 1].join(".")
-        ))
+/// The pointer made of `tokens`, such as `/bounce`.
+pub(crate) fn pointer_of(tokens: &[&str]) -> String {
+    tokens.iter().map(|t| format!("/{t}")).collect()
+}
+
+/// `pointer` as a dotted field for a message, such as `bounce.window`.
+pub(crate) fn dotted(pointer: &str) -> String {
+    pointer.trim_start_matches('/').replace('/', ".")
+}
+
+/// Whether `pointer` is `outer` or lies inside it.
+pub(crate) fn within(pointer: &str, outer: &str) -> bool {
+    pointer == outer
+        || pointer
+            .strip_prefix(outer)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// What one pointer token finds in a value.
+pub(crate) enum Step<'v> {
+    Found(&'v Value),
+    Missing,
+    /// An index at or past the end of a list of this many items.
+    PastEnd(usize),
+    /// A token that is not an index, into a list.
+    NotIndex,
+    /// The value holds no fields: a number, a string, a boolean or null.
+    Leaf,
+}
+
+pub(crate) fn step<'v>(node: &'v Value, token: &str) -> Step<'v> {
+    match node {
+        Value::Object(map) => map.get(token).map_or(Step::Missing, Step::Found),
+        Value::Array(items) => match index(token) {
+            Some(i) if i < items.len() => Step::Found(&items[i]),
+            Some(_) => Step::PastEnd(items.len()),
+            None => Step::NotIndex,
+        },
+        _ => Step::Leaf,
     }
 }
 
-/// Puts `value` at a JSON pointer, merging two objects. An object on the way that is off is
-/// made only when `create` is set. Returns whether the value was written.
+fn index(token: &str) -> Option<usize> {
+    let plain = token == "0" || (!token.starts_with('0') && !token.starts_with('+'));
+    token.parse().ok().filter(|_| plain)
+}
+
+fn step_mut<'v>(node: &'v mut Value, token: &str) -> Option<&'v mut Value> {
+    match node {
+        Value::Object(map) => map.get_mut(token),
+        Value::Array(items) => index(token).and_then(|i| items.get_mut(i)),
+        _ => None,
+    }
+}
+
+/// Where the way to `pointer`'s field stops in `model`: the pointer of the first value on it
+/// that is null, missing, or holds no fields, with that value when it is one. `None` when the
+/// field's object or list is there.
+pub(crate) fn blocked<'v>(model: &'v Value, pointer: &str) -> Option<(String, Option<&'v Value>)> {
+    let tokens = tokens(pointer).ok()?;
+    let mut node = model;
+    for (i, token) in tokens[..tokens.len() - 1].iter().enumerate() {
+        let at = pointer_of(&tokens[..=i]);
+        match step(node, token) {
+            Step::Found(next) if next.is_object() || next.is_array() => node = next,
+            Step::Found(Value::Null) | Step::Missing | Step::PastEnd(_) | Step::NotIndex => {
+                return Some((at, None));
+            }
+            Step::Found(leaf) => return Some((at, Some(leaf))),
+            Step::Leaf => return Some((pointer_of(&tokens[..i]), Some(node))),
+        }
+    }
+    let last = tokens[tokens.len() - 1];
+    match (node, step(node, last)) {
+        (Value::Object(_), _) | (_, Step::Found(_)) => None,
+        _ => Some((pointer_of(&tokens[..tokens.len() - 1]), Some(node))),
+    }
+}
+
+/// Puts `value` at a JSON pointer, merging two objects. A list item is one that is there. An
+/// object on the way that is null or missing is made only when `create` is set. Returns
+/// whether the value was written.
 pub(crate) fn set(target: &mut Value, pointer: &str, value: Value, create: bool) -> bool {
     let Ok(tokens) = tokens(pointer) else {
         return false;
@@ -350,25 +403,27 @@ pub(crate) fn set(target: &mut Value, pointer: &str, value: Value, create: bool)
     let (last, through) = tokens.split_last().expect("split yields one token");
     let mut node = target;
     for token in through {
-        let Some(object) = node.as_object_mut() else {
-            return false;
-        };
-        if object.get(*token).is_none_or(Value::is_null) {
-            if !create {
-                return false;
-            }
-            object.insert((*token).to_string(), Value::Object(Map::new()));
+        if create
+            && let Value::Object(map) = node
+            && map.get(*token).is_none_or(Value::is_null)
+        {
+            map.insert((*token).to_string(), Value::Object(Map::new()));
         }
-        node = object.get_mut(*token).expect("inserted above");
+        match step_mut(node, token) {
+            Some(next) if next.is_object() || next.is_array() => node = next,
+            _ => return false,
+        }
     }
-    let Some(object) = node.as_object_mut() else {
-        return false;
+    let slot = match node {
+        Value::Object(map) => map.entry((*last).to_string()).or_insert(Value::Null),
+        node => match step_mut(node, last) {
+            Some(slot) => slot,
+            None => return false,
+        },
     };
-    match (object.get_mut(*last), value) {
-        (Some(Value::Object(existing)), Value::Object(new)) => existing.extend(new),
-        (_, value) => {
-            object.insert((*last).to_string(), value);
-        }
+    match (slot, value) {
+        (Value::Object(existing), Value::Object(new)) => existing.extend(new),
+        (slot, value) => *slot = value,
     }
     true
 }

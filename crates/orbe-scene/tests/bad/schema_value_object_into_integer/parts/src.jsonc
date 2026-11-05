@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "pins": { "pos": [1], "neg": [2] },
+  "params": { "when": { "unit": "s", "default": "1ms", "sets": "/voltage/at_ps" } },
+  "model": {
+    "kind": "voltage_source",
+    "voltage": {
+      "kind": "step",
+      "initial": { "value": 0, "unit": "V", "source": "user" },
+      "final": { "value": 5, "unit": "V", "source": "user" },
+      "at_ps": 1000000000,
+    },
+    "pins": { "p": "pos", "n": "neg" },
+  },
+}

@@ -99,6 +99,11 @@ pub(crate) struct Finding {
 #[derive(Default)]
 pub(crate) struct Findings(Vec<Finding>);
 
+/// Proof that a finding was pushed. Only [`Findings::since`] makes one, so whatever holds it
+/// is explained by a finding the reader reports.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Reported(());
+
 impl Findings {
     pub(crate) fn push(
         &mut self,
@@ -117,6 +122,18 @@ impl Findings {
 
     pub(crate) fn len(&self) -> usize {
         self.0.len()
+    }
+
+    /// Proof of a finding pushed after `mark`, a [`Findings::len`] taken earlier.
+    pub(crate) fn since(&self, mark: usize) -> Option<Reported> {
+        (self.0.len() > mark).then_some(Reported(()))
+    }
+
+    /// Gives every finding pushed after `mark` this hint.
+    pub(crate) fn rehint_since(&mut self, mark: usize, hint: &str) {
+        for finding in &mut self.0[mark..] {
+            finding.hint = hint.to_string();
+        }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
