@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use serde_json::{Map, Value, json};
 
 use crate::diagnostic::{Code, Findings, Reported};
-use crate::model::{Comp, ParamDecl, ParamKind, Part, PinDef, Ref, Scene};
+use crate::model::{Comp, ParamDecl, ParamKind, Part, PinDef, Ref, Scene, passed};
 use crate::name::did_you_mean;
-use crate::params::{Arg, Step, blocked, convert, dotted, set, step, within};
+use crate::params::{Arg, Cover, blocked, convert, cover, dotted, set, within};
 use crate::project::{Owner, Project};
 use crate::source::Span;
 use crate::syntax::Node;
@@ -265,12 +265,7 @@ impl<'p> Circuit<'p> {
                 );
                 continue;
             }
-            let through = prop
-                .value
-                .props()
-                .filter(|p| p.len() == 1 && p[0].key == "param")
-                .and_then(|p| p[0].value.str());
-            let Some(name) = through else {
+            let Some(name) = passed(&prop.value) else {
                 let site = format!("{}.{}", inst.dotted(), prop.key);
                 args.insert(
                     prop.key.clone(),
@@ -1186,29 +1181,6 @@ fn around(pointer: &str) -> Vec<String> {
         .skip(1)
         .map(|(i, _)| pointer[..i].to_string())
         .collect()
-}
-
-/// What a write's `value` holds at `rest`, a pointer inside it.
-enum Cover {
-    /// It leaves the field out.
-    Gap,
-    /// It writes the field, or a value with no fields on its way.
-    Value,
-    /// It writes an object on the way null.
-    Off,
-}
-
-fn cover(value: &Value, rest: &str) -> Cover {
-    let mut node = value;
-    for token in rest.split('/').skip(1) {
-        match step(node, token) {
-            Step::Found(next) => node = next,
-            Step::Missing => return Cover::Gap,
-            Step::Leaf if node.is_null() => return Cover::Off,
-            Step::Leaf | Step::PastEnd(_) | Step::NotIndex => return Cover::Value,
-        }
-    }
-    Cover::Value
 }
 
 /// Netlist v0 without its parts.

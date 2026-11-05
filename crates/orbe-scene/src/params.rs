@@ -356,6 +356,29 @@ pub(crate) fn step<'v>(node: &'v Value, token: &str) -> Step<'v> {
     }
 }
 
+/// What a write's `value` holds at `rest`, a pointer inside it.
+pub(crate) enum Cover {
+    /// It leaves the field out.
+    Gap,
+    /// It writes the field, or a value with no fields on its way.
+    Value,
+    /// It writes an object on the way null.
+    Off,
+}
+
+pub(crate) fn cover(value: &Value, rest: &str) -> Cover {
+    let mut node = value;
+    for token in rest.split('/').skip(1) {
+        match step(node, token) {
+            Step::Found(next) => node = next,
+            Step::Missing => return Cover::Gap,
+            Step::Leaf if node.is_null() => return Cover::Off,
+            Step::Leaf | Step::PastEnd(_) | Step::NotIndex => return Cover::Value,
+        }
+    }
+    Cover::Value
+}
+
 fn index(token: &str) -> Option<usize> {
     let plain = token == "0" || (!token.starts_with('0') && !token.starts_with('+'));
     token.parse().ok().filter(|_| plain)

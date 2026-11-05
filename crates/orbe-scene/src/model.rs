@@ -1,12 +1,12 @@
 //! The files' model: what a scene or a part file says, decoded from the syntax tree. Each
 //! decoder reports what one file alone can show, and keeps going after a finding.
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::diagnostic::{Code, Findings, Reported};
 use crate::kinds;
 use crate::name::{NameKind, did_you_mean, problem};
-use crate::params::{Step, dotted, pointer_of, step, tokens, within};
+use crate::params::{Cover, Step, cover, dotted, pointer_of, step, tokens, within};
 use crate::shape::{self, ParamShape, schema, unknown_key};
 use crate::source::{FileId, Sources, Span};
 use crate::syntax::{Node, Prop};
@@ -44,6 +44,14 @@ pub(crate) struct Instance {
     pub(crate) ty: Option<(TypeRef, Span)>,
     pub(crate) params: Vec<Prop>,
     pub(crate) not_simulated: Option<String>,
+}
+
+/// The param a child's value passes down, when it is `{ "param": "<name>" }`.
+pub(crate) fn passed(value: &Node) -> Option<&str> {
+    value
+        .props()
+        .filter(|p| p.len() == 1 && p[0].key == "param")
+        .and_then(|p| p[0].value.str())
 }
 
 pub(crate) struct Wire {
@@ -189,26 +197,6 @@ impl Part {
                     })
                 })
             })
-    }
-
-    /// Each choice that writes `at`: its param, its name and its value there. Also whether one
-    /// param writes `at` in every choice, so the value `model` has there never shows.
-    fn chosen(&self, at: &str) -> (Vec<(&ParamDecl, &str, &Node)>, bool) {
-        let mut arms = Vec::new();
-        let mut every = false;
-        for decl in &self.params {
-            let ParamKind::Choice(choices) = &decl.kind else {
-                continue;
-            };
-            let before = arms.len();
-            for (name, sets) in choices {
-                if let Some((_, value)) = sets.iter().find(|(p, _)| p == at) {
-                    arms.push((decl, name.as_str(), value));
-                }
-            }
-            every |= !choices.is_empty() && arms.len() - before == choices.len();
-        }
-        (arms, every)
     }
 
     pub(crate) fn pin_list(&self) -> String {
@@ -904,6 +892,20 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
         }
         if through && part.comp.parts.is_empty() {
             out.push(Code::Param, prop.key_span, format!("param `{}` has no unit, choices or file, and this part has no children to pass it to", prop.key), "give this part a child that takes the param, or give the param a unit, choices or file".into());
+        } else if through
+            && !part.comp.parts.iter().any(|child| {
+                child
+                    .params
+                    .iter()
+                    .any(|p| passed(&p.value) == Some(&prop.key))
+            })
+        {
+            out.push(
+                Code::Param,
+                prop.key_span,
+                format!("param `{}` has no unit, choices or file, and no child of this part takes it, so its value reaches nothing", prop.key),
+                format!("no child takes `{0}`; pass it to a child with {{ \"param\": \"{0}\" }}, or remove it", prop.key),
+            );
         }
         params.push(ParamDecl {
             name: prop.key.clone(),
@@ -1011,9 +1013,74 @@ impl Held<'_> {
     }
 }
 
-/// Every value each point on the way may hold is checked: `model`'s, unless one param writes
-/// that point in every choice, and each value a choice writes there, with the objects and
-/// lists inside it. The pointer is good only when each of them has the way.
+/// A choice's write at one point on a pointer's way.
+#[derive(Clone)]
+struct Pick<'p> {
+    decl: &'p ParamDecl,
+    arm: &'p str,
+    at: &'p str,
+    value: Value,
+}
+
+impl Pick<'_> {
+    /// Whether a shallower write of another param in the same combination covers this one. The
+    /// reader then drops it while it is a default, so the covering value shows too.
+    fn covered(&self, picks: &[Pick<'_>]) -> bool {
+        picks.iter().any(|q| {
+            q.decl.name != self.decl.name
+                && q.at != self.at
+                && within(self.at, q.at)
+                && matches!(cover(&q.value, &self.at[q.at.len()..]), Cover::Value)
+        })
+    }
+}
+
+/// Each combination of choices that writes a point on the pointer's way: one arm of every
+/// choice param that writes one, and for `name` itself, only the arms that write `pointer`.
+fn combinations<'p>(
+    part: &'p Part,
+    pointer: &str,
+    way: &[String],
+    name: &str,
+) -> Vec<Vec<Pick<'p>>> {
+    let mut combos = vec![Vec::new()];
+    for decl in &part.params {
+        let ParamKind::Choice(choices) = &decl.kind else {
+            continue;
+        };
+        let arms: Vec<Vec<Pick>> = choices
+            .iter()
+            .filter(|(_, sets)| decl.name != name || sets.iter().any(|(p, _)| p == pointer))
+            .map(|(arm, sets)| {
+                sets.iter()
+                    .filter(|(p, _)| way.contains(p))
+                    .map(|(p, v)| Pick {
+                        decl,
+                        arm,
+                        at: p,
+                        value: v.to_value(),
+                    })
+                    .collect()
+            })
+            .collect();
+        if arms.iter().all(Vec::is_empty) {
+            continue;
+        }
+        combos = combos
+            .iter()
+            .flat_map(|combo: &Vec<Pick>| {
+                arms.iter()
+                    .map(move |arm| combo.iter().chain(arm).cloned().collect())
+            })
+            .collect();
+    }
+    combos
+}
+
+/// Every value each point on the way may hold is checked, in every combination of choices
+/// that write points on it, applied as the reader applies them: shallowest first, an object
+/// merged into the one it lands on, anything else in place of what is there. The pointer is
+/// good only when each of them has the way.
 fn sets_problem(part: &Part, model: &Value, pointer: &str, name: &str) -> Option<(String, String)> {
     let tokens = match tokens(pointer) {
         Ok(tokens) => tokens,
@@ -1024,67 +1091,73 @@ fn sets_problem(part: &Part, model: &Value, pointer: &str, name: &str) -> Option
             ));
         }
     };
+    let way: Vec<String> = (1..tokens.len())
+        .map(|end| pointer_of(&tokens[..end]))
+        .collect();
+    combinations(part, pointer, &way, name)
+        .iter()
+        .find_map(|picks| walk(part, model, &tokens, &way, picks, name))
+}
+
+/// The first point where `picks` leave a value `pointer` cannot pass.
+fn walk(
+    part: &Part,
+    model: &Value,
+    tokens: &[&str],
+    way: &[String],
+    picks: &[Pick<'_>],
+    name: &str,
+) -> Option<(String, String)> {
+    let pointer = pointer_of(tokens);
     let (last, through) = tokens.split_last().expect("split yields one token");
     let mut held = vec![Held {
         value: Some(model.clone()),
         by: None,
     }];
-    for (i, token) in through.iter().enumerate() {
-        let here = pointer_of(&tokens[..=i]);
-        let (arms, every) = part.chosen(&here);
-        let mut stepped = Vec::new();
+    for (i, (token, here)) in through.iter().zip(way).enumerate() {
+        let write = picks.iter().find(|p| p.at == here);
+        let mut next = Vec::new();
         for h in &held {
             let found = h.value.as_ref().map_or(Step::Missing, |v| step(v, token));
+            if let Some(w) = write {
+                let by = Some((w.decl, w.arm));
+                match &w.value {
+                    Value::Null => {}
+                    Value::Object(written) => {
+                        let mut value = match found {
+                            Step::Found(Value::Object(base)) => base.clone(),
+                            _ => Map::new(),
+                        };
+                        value.extend(written.clone());
+                        next.push(Held {
+                            value: Some(Value::Object(value)),
+                            by,
+                        });
+                    }
+                    value => next.push(Held {
+                        value: Some(value.clone()),
+                        by,
+                    }),
+                }
+                if !w.covered(picks) {
+                    continue;
+                }
+            }
             match found {
-                Step::Found(next) if next.is_object() || next.is_array() => stepped.push(Held {
-                    value: Some(next.clone()),
-                    by: h.by,
-                }),
-                _ if every => {}
-                Step::Found(Value::Null) | Step::Missing if part.opener(&here).is_some() => {
-                    stepped.push(Held {
+                Step::Found(next_value) if next_value.is_object() || next_value.is_array() => {
+                    next.push(Held {
+                        value: Some(next_value.clone()),
+                        by: h.by,
+                    });
+                }
+                Step::Found(Value::Null) | Step::Missing if part.opener(here).is_some() => {
+                    next.push(Held {
                         value: None,
                         by: h.by,
                     });
                 }
-                found => return Some(off_the_way(pointer, &tokens[..i], token, h, found, name)),
+                found => return Some(off_the_way(&pointer, &tokens[..i], token, h, found, name)),
             }
-        }
-        let mut next: Vec<Held> = Vec::new();
-        for (decl, arm, value) in arms {
-            let by = Some((decl, arm));
-            match value.to_value() {
-                Value::Null => {}
-                // An object a choice writes merges into the one there.
-                Value::Object(written) => {
-                    let bases: Vec<_> = stepped
-                        .iter()
-                        .filter_map(|h| h.value.as_ref()?.as_object())
-                        .collect();
-                    if bases.is_empty() {
-                        next.push(Held {
-                            value: Some(Value::Object(written)),
-                            by,
-                        });
-                    } else {
-                        for base in bases {
-                            let mut value = base.clone();
-                            value.extend(written.clone());
-                            next.push(Held {
-                                value: Some(Value::Object(value)),
-                                by,
-                            });
-                        }
-                    }
-                }
-                value => next.push(Held {
-                    value: Some(value),
-                    by,
-                }),
-            }
-        }
-        if !every {
-            next.extend(stepped);
         }
         held = next;
     }
@@ -1093,7 +1166,7 @@ fn sets_problem(part: &Part, model: &Value, pointer: &str, name: &str) -> Option
         match step(value, last) {
             _ if value.is_object() => None,
             Step::Found(_) => None,
-            found => Some(off_the_way(pointer, through, last, h, found, name)),
+            found => Some(off_the_way(&pointer, through, last, h, found, name)),
         }
     })
 }

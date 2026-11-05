@@ -49,7 +49,6 @@ impl<'p> Circuit<'p> {
         if self.failed.contains_key(&origin.inst) {
             return;
         }
-        let kind = origin.fields["kind"].as_str().unwrap_or_default();
         // The fields the rule reads, the message, what it asks of a value that set one of
         // them, and the fix.
         let (fields, message, requirement, hint) = match diagnostic {
@@ -61,6 +60,15 @@ impl<'p> Circuit<'p> {
                 ..
             } => {
                 let at = format!("{part} {field}[{event}]");
+                // The kind of the object that holds the list, such as a source's waveform.
+                let holder = field
+                    .rsplit_once('.')
+                    .map_or(String::new(), |(h, _)| format!("/{}", h.replace('.', "/")));
+                let kind = origin
+                    .fields
+                    .pointer(&format!("{holder}/kind"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 let (said, fix) = schedule(kind, *rule, &at, &message);
                 let requirement = requirement(&said);
                 let fields = schedule_fields(kind, field, *event, *rule);
@@ -177,13 +185,20 @@ impl<'p> Circuit<'p> {
     }
 }
 
-/// A value an instance set, or a choice it picked, among the fields a rule reads. A finding
-/// goes there first, since that value is what broke a rule the part file alone keeps.
+/// A value an instance set, or a choice it picked, at or inside one of the fields a rule
+/// reads. A finding goes there first, since that value is what broke a rule the part file
+/// alone keeps.
 fn set_by_instance<'s>(set_by: &'s SetBy, fields: &[String]) -> Option<&'s Setter> {
-    fields
-        .iter()
-        .filter_map(|f| setter_of(set_by, f))
-        .find(|s| s.explicit)
+    fields.iter().find_map(|f| {
+        let inside = set_by
+            .iter()
+            .filter(|(p, _)| !f.is_empty() && within(p, f))
+            .map(|(_, s)| s);
+        setter_of(set_by, f)
+            .into_iter()
+            .chain(inside)
+            .find(|s| s.explicit)
+    })
 }
 
 /// A kind whose events each send something, in its own terms.
@@ -211,6 +226,15 @@ const SENDERS: &[Sender] = &[
         empty: "give each event a phase or a byte, or remove the event",
         overflow: "send fewer bits, raise `clock_hz`, or move this event earlier",
         overlap: "move this event later, or raise `clock_hz` or send fewer bits in the previous event",
+    },
+    Sender {
+        kind: "serial",
+        sends: &["bytes"],
+        pace: &["baud"],
+        lacks: "no byte",
+        empty: "give each event a byte, or remove the event",
+        overflow: "send fewer bytes, raise `baud`, or move this event earlier",
+        overlap: "move this event later, or raise `baud` or send fewer bytes in the previous event",
     },
     Sender {
         kind: "pulses_replay",

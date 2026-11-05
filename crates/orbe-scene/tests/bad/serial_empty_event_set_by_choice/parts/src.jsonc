@@ -1,0 +1,21 @@
+{
+  "format": 1,
+  "pins": { "pos": [1], "neg": [2] },
+  "params": { "msg": { "default": "full", "choices": {
+    "full": { "sets": { "/voltage/events/0/bytes": [49] } },
+    "none": { "sets": { "/voltage/events/0/bytes": [] } }
+  } } },
+  "model": {
+    "kind": "voltage_source",
+    "pins": { "p": "pos", "n": "neg" },
+    "voltage": {
+      "kind": "serial",
+      "mark": { "value": 5.0, "unit": "V", "source": "user" },
+      "space": { "value": 0.0, "unit": "V", "source": "user" },
+      "events": [
+        { "t_ps": 1000000000, "baud": 9600, "frame": "8N1", "bytes": [49] },
+        { "t_ps": 3000000000, "baud": 9600, "frame": "8N1", "bytes": [50] }
+      ]
+    }
+  }
+}

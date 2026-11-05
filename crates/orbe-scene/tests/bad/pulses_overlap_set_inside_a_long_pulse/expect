@@ -1,0 +1,1 @@
+scene.param scene.jsonc:6:49 | `rp.wide` is long; #rp events[1] starts before the previous event ends at 6001000000 ps | move this event later, or shorten the previous event's pulses, so it starts once the previous event ends

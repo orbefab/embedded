@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "pins": { "a": [1], "b": [2] },
+  "params": { "on": { "unit": "ohm", "default": "220", "sets": "/on_resistance" } },
+  "model": {
+    "kind": "switch",
+    "on_resistance": { "value": 0.1, "unit": "ohm", "source": "user" },
+    "off_resistance": { "value": 1e8, "unit": "ohm", "source": "user" },
+    "initial": "open",
+    "events": [],
+    "bounce": null,
+  },
+}
