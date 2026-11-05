@@ -87,3 +87,56 @@ fn pressing_the_button_lights_led1() {
         .collect();
     assert!(errors.is_empty(), "errors: {errors:?}");
 }
+
+/// The reader writes every finite whole number as a JSON integer. Each engine example netlist
+/// that reads as written still reads with its whole numbers made integers, so every float field
+/// those examples cover takes an integer.
+#[test]
+fn the_engine_reads_whole_numbers_as_integers() {
+    fn integers(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Number(n) => {
+                if let Some(f) = n
+                    .as_f64()
+                    .filter(|f| n.is_f64() && f.fract() == 0.0 && f.abs() < 9e15)
+                {
+                    *value = serde_json::json!(f as i64);
+                }
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(integers),
+            serde_json::Value::Object(map) => map.values_mut().for_each(integers),
+            _ => {}
+        }
+    }
+    let examples = common::repo().join("engine/examples");
+    let mut kinds = std::collections::BTreeSet::new();
+    for entry in std::fs::read_dir(examples).unwrap() {
+        let path = entry.unwrap().path().join("netlist.json");
+        let Ok(text) = std::fs::read(&path) else {
+            continue;
+        };
+        if sim_core::netlist::parse(&text).is_err() {
+            continue;
+        }
+        let mut json: serde_json::Value = serde_json::from_slice(&text).unwrap();
+        integers(&mut json);
+        let changed = serde_json::to_vec(&json).unwrap();
+        if let Err(found) = sim_core::netlist::parse(&changed) {
+            panic!("{}: {found:?}", path.display());
+        }
+        for part in json["parts"].as_array().unwrap() {
+            kinds.insert(part["kind"].as_str().unwrap().to_string());
+        }
+    }
+    for kind in [
+        "resistor",
+        "capacitor",
+        "led",
+        "switch",
+        "atmega328p",
+        "voltage_source",
+    ] {
+        assert!(kinds.contains(kind), "no example covers {kind}: {kinds:?}");
+    }
+    println!("kinds read with integers: {kinds:?}");
+}

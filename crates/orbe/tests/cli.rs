@@ -98,6 +98,32 @@ fn json_usage_is_one_envelope_on_stdout() {
 }
 
 #[test]
+fn json_with_a_value_is_still_one_envelope() {
+    let (output, stdout) = orbe(&["check", "--json=true"]);
+    assert_eq!(output.status.code(), Some(2), "{stdout}");
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["error"]["code"], "usage");
+    assert_eq!(stdout.lines().count(), 1, "{stdout}");
+}
+
+#[test]
+fn a_deleted_copy_prints_one_part_missing() {
+    let project = common::project("nano-button");
+    fs::remove_dir_all(project.path().join("parts/led-5mm")).unwrap();
+    let scene = project.path().join("scene.jsonc");
+    let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    let expected = format!(
+        "{}:9:23: error[part_missing]: part `led-5mm` has a parts.lock line but no folder\n  hint: run `orbe add led-5mm`\n1 error in {}\n",
+        scene.display(),
+        scene.display()
+    );
+    assert_eq!(stdout, expected);
+}
+
+#[test]
 fn help_is_not_a_usage_envelope() {
     let (output, stdout) = orbe(&["check", "--help"]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");

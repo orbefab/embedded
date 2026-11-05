@@ -4,6 +4,7 @@
 use crate::diagnostic::{Code, Findings};
 use crate::kinds;
 use crate::name::{NameKind, did_you_mean, problem};
+use crate::params::off_at;
 use crate::source::{FileId, Sources, Span};
 use crate::syntax::{Node, Prop};
 use crate::units::{self, Unit};
@@ -116,10 +117,31 @@ pub(crate) enum ParamKind {
 
 pub(crate) struct ParamDecl {
     pub(crate) name: String,
+    /// The param's key in the part file.
+    pub(crate) span: Span,
     pub(crate) kind: ParamKind,
     /// `None` when the param is required.
     pub(crate) default: Option<Node>,
     pub(crate) sets: Option<String>,
+}
+
+impl ParamDecl {
+    /// Every pointer into `model` this param can set.
+    pub(crate) fn pointers(&self) -> Vec<&str> {
+        match &self.kind {
+            ParamKind::Choice(choices) => choices
+                .iter()
+                .flat_map(|(_, sets)| sets.iter().map(|(p, _)| p.as_str()))
+                .collect(),
+            _ => self.sets.as_deref().into_iter().collect(),
+        }
+    }
+
+    /// A param whose default is null is off until it gets a value, and that value turns on
+    /// the objects its pointer passes through.
+    pub(crate) fn opens(&self) -> bool {
+        self.default.as_ref().is_some_and(Node::is_null)
+    }
 }
 
 pub(crate) struct Part {
@@ -142,6 +164,14 @@ impl Part {
 
     pub(crate) fn param(&self, name: &str) -> Option<&ParamDecl> {
         self.params.iter().find(|p| p.name == name)
+    }
+
+    /// The param that turns on the object at `off`, such as `/bounce`.
+    pub(crate) fn opener(&self, off: &str) -> Option<&ParamDecl> {
+        let inside = format!("{off}/");
+        self.params
+            .iter()
+            .find(|d| d.opens() && d.pointers().iter().any(|p| p.starts_with(&inside)))
     }
 
     pub(crate) fn pin_list(&self) -> String {
@@ -330,6 +360,7 @@ pub(crate) fn decode_part(
     }
     if let Some(model) = &part.model {
         part.bodies = decode_bodies(model, &part, out);
+        check_sets(&part, model, out);
     }
     if let Some(layout) = root.get("layout") {
         decode_layout(layout, &part.comp, out);
@@ -877,12 +908,55 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
         }
         params.push(ParamDecl {
             name: prop.key.clone(),
+            span: prop.key_span,
             kind,
             default,
             sets,
         });
     }
     params
+}
+
+/// Every pointer reaches `model`, or passes through an object that a param with a null default
+/// turns on. Otherwise no value of the param could take effect.
+fn check_sets(part: &Part, model: &Node, out: &mut Findings) {
+    let model = model.to_value();
+    for decl in &part.params {
+        for pointer in decl.pointers() {
+            let (problem, hint) = match off_at(&model, pointer) {
+                Ok(None) => continue,
+                Ok(Some(off)) if part.opener(&off).is_some() => continue,
+                Ok(Some(off)) => {
+                    let field = off[1..].replace('/', ".");
+                    let state = if model.pointer(&off).is_some() {
+                        "is null"
+                    } else {
+                        "is missing"
+                    };
+                    (
+                        format!(
+                            "`{pointer}` passes through `{field}`, which {state} in `model`, and no param with \"default\": null turns it on, so this value never takes effect"
+                        ),
+                        format!(
+                            "write `{field}` as an object in `model`, or give `{}` \"default\": null so that setting it turns `{field}` on",
+                            decl.name
+                        ),
+                    )
+                }
+                Err(problem) => (
+                    problem,
+                    "point `sets` at a field of an object in `model`, such as \"/resistance\""
+                        .into(),
+                ),
+            };
+            out.push(
+                Code::Param,
+                decl.span,
+                format!("param `{}`: {problem}", decl.name),
+                hint,
+            );
+        }
+    }
 }
 
 fn decode_choices(node: &Node, out: &mut Findings) -> Vec<(String, Vec<(String, Node)>)> {

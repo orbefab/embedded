@@ -42,7 +42,7 @@ fn main() -> ExitCode {
 
 /// A usage error with `--json` is one envelope on stdout. Help and version stay clap's.
 fn usage(err: clap::Error) -> ExitCode {
-    let json = std::env::args().any(|arg| arg == "--json");
+    let json = std::env::args().any(|arg| arg == "--json" || arg.starts_with("--json="));
     if json && err.exit_code() == i32::from(USAGE) {
         print_json(&json!({
             "ok": false,

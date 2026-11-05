@@ -1,7 +1,7 @@
 //! Finding and reading every part file a scene uses, and checking the catalog copies against
 //! `parts.lock`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -68,6 +68,8 @@ struct Loader<'a> {
     stack: Vec<PathBuf>,
     types: BTreeMap<(Owner, usize), usize>,
     missing: Vec<(String, Span)>,
+    /// The catalog ids whose `part.jsonc` read, the copies `check_copies` compares.
+    used: BTreeSet<String>,
 }
 
 /// Reads the scene and everything it uses. When the scene itself does not read, the files
@@ -87,6 +89,7 @@ pub(crate) fn load(scene_path: &Path, out: &mut Findings) -> Result<Project, Sou
         stack: vec![scene_path.clone()],
         types: BTreeMap::new(),
         missing: Vec::new(),
+        used: BTreeSet::new(),
     };
     let scene = loader.read(&scene_path).and_then(|file| {
         let tree = syntax::parse(&loader.sources, file, loader.out)?;
@@ -115,14 +118,17 @@ impl Loader<'_> {
             Ok(text) => Some(self.sources.add(path, text)),
             Err(error) => {
                 let file = self.sources.add(path, String::new());
+                let shown = display(self.sources.root(), path);
+                let hint = if error.kind() == io::ErrorKind::PermissionDenied {
+                    format!("make it readable, such as `chmod u+r {shown}`")
+                } else {
+                    "check that the path exists and is readable".into()
+                };
                 self.out.push(
                     Code::Io,
                     Span::start_of(file),
-                    format!(
-                        "cannot read {}: {error}",
-                        display(self.sources.root(), path)
-                    ),
-                    "check that the path exists and is readable".into(),
+                    format!("cannot read {shown}: {error}"),
+                    hint,
                 );
                 None
             }
@@ -186,7 +192,16 @@ impl Loader<'_> {
                         self.missing.push((id, span));
                         continue;
                     }
-                    self.load_part(&path.canonicalize().unwrap_or(path), id, true, span)
+                    let found = self.load_part(
+                        &path.canonicalize().unwrap_or(path),
+                        id.clone(),
+                        true,
+                        span,
+                    );
+                    if found.is_some() {
+                        self.used.insert(id);
+                    }
+                    found
                 }
                 TypeRef::Path(rel) => {
                     if catalog_owner {
@@ -326,17 +341,29 @@ impl Loader<'_> {
         }
     }
 
-    /// Hashes every folder `parts.lock` lists. A sealed catalog part is compared with the
-    /// copy this binary embeds, and a lock line for one of those ids has to name that copy.
-    /// Returns the unsealed copies that differ and whose lock line still matches.
+    /// Hashes the folder of every catalog copy the scene uses. A missing folder is the
+    /// scene's `part_missing`, and a lock line for an id the scene does not use is not
+    /// checked. A sealed catalog part is compared with the copy this binary embeds, and a lock
+    /// line for one of those ids has to name that copy. Returns the unsealed copies that
+    /// differ and whose lock line still matches.
     fn check_copies(&mut self, root: &Path) -> Vec<String> {
         let mut modified = Vec::new();
         let lock = std::mem::take(&mut self.lock);
         for (id, line) in &lock {
+            if !self.used.contains(id) {
+                continue;
+            }
             let folder = root.join("parts").join(id);
-            let hash = folder_hash(&folder);
             let path = folder.join("part.jsonc");
-            let file = self.file_for(&path.canonicalize().unwrap_or(path.clone()));
+            let file = self.sources.find(&path.canonicalize().unwrap_or(path));
+            let at = file.map_or(line.span, Span::start_of);
+            let hash = match hash_folder(&folder) {
+                Ok(hash) => Some(hash),
+                Err((path, error)) => {
+                    self.unhashable(id, &folder, &path, &error, at);
+                    None
+                }
+            };
             let tree = file.and_then(|f| syntax::parse(&self.sources, f, &mut Findings::default()));
             let Some(original) = catalog::find(id) else {
                 if self.note_unlisted(id, line, file, &tree, hash) {
@@ -344,20 +371,11 @@ impl Loader<'_> {
                 }
                 continue;
             };
-            if let Err(error) = &hash {
-                self.out.push(
-                    Code::Io,
-                    file.map_or(line.span, Span::start_of),
-                    format!("cannot hash parts/{id}: {error}"),
-                    format!("remove the link that loops in parts/{id}, or restore the folder"),
-                );
-            }
             let diff = tree
                 .as_ref()
                 .and_then(|t| first_difference(t, &original.tree, String::new()));
             let bytes_differ = hash
                 .as_ref()
-                .ok()
                 .is_some_and(|h| h != &line.hash || h != &original.hash);
             let restore = format!(
                 "restore it with `orbe add {id} --overwrite`, or copy it to a path to make it your own"
@@ -429,28 +447,55 @@ impl Loader<'_> {
         modified
     }
 
-    /// An id this binary's catalog does not have. A hash that cannot be computed is an error.
-    /// A differing copy is sealed from its own file, which is all there is to judge.
-    /// Returns whether the copy differs and is not sealed.
+    /// A file in a copy that cannot be read. A link on its path is named, since a link that
+    /// loops is the usual cause.
+    fn unhashable(&mut self, id: &str, folder: &Path, path: &Path, error: &io::Error, at: Span) {
+        let root = self.sources.root().to_path_buf();
+        let link = path
+            .ancestors()
+            .take_while(|p| *p != folder && p.starts_with(folder))
+            .filter(|p| p.is_symlink())
+            .last();
+        let (shown, hint) = match link {
+            Some(link) => {
+                let link = display(&root, link);
+                (
+                    link.clone(),
+                    format!(
+                        "remove the link that loops at {link}, or restore the folder with `orbe add {id} --overwrite`"
+                    ),
+                )
+            }
+            None if error.kind() == io::ErrorKind::PermissionDenied => {
+                let shown = display(&root, path);
+                let hint = format!("make it readable, such as `chmod u+r {shown}`");
+                (shown, hint)
+            }
+            None => (
+                display(&root, path),
+                format!("restore the folder with `orbe add {id} --overwrite`"),
+            ),
+        };
+        self.out.push(
+            Code::Io,
+            at,
+            format!("cannot hash parts/{id}: cannot read {shown}: {error}"),
+            hint,
+        );
+    }
+
+    /// An id this binary's catalog does not have. A differing copy is sealed from its own
+    /// file, which is all there is to judge. Returns whether the copy differs and is not sealed.
     fn note_unlisted(
         &mut self,
         id: &str,
         line: &LockLine,
         file: Option<FileId>,
         tree: &Option<Node>,
-        hash: io::Result<String>,
+        hash: Option<String>,
     ) -> bool {
-        let hash = match hash {
-            Ok(hash) => hash,
-            Err(error) => {
-                self.out.push(
-                    Code::Io,
-                    file.map_or(line.span, Span::start_of),
-                    format!("cannot hash parts/{id}: {error}"),
-                    format!("remove the link that loops in parts/{id}, or restore the folder"),
-                );
-                return false;
-            }
+        let Some(hash) = hash else {
+            return false;
         };
         if hash == line.hash {
             return false;
@@ -470,10 +515,6 @@ impl Loader<'_> {
             ),
         );
         false
-    }
-
-    fn file_for(&mut self, path: &Path) -> Option<FileId> {
-        self.sources.find(path).or_else(|| self.read(path))
     }
 }
 
@@ -527,6 +568,11 @@ fn first_difference(copy: &Node, original: &Node, path: String) -> Option<(Strin
 /// The SHA-256 over a folder's files, paths included: one line `<sha256>  <path>` per file,
 /// sorted by path, with `/` between path parts. Written as `sha256:<hex>`, as in `parts.lock`.
 pub fn folder_hash(dir: &Path) -> io::Result<String> {
+    hash_folder(dir).map_err(|(_, error)| error)
+}
+
+/// [`folder_hash`], with the path that could not be read.
+fn hash_folder(dir: &Path) -> Result<String, (PathBuf, io::Error)> {
     let mut files = Vec::new();
     collect(dir, dir, &mut files)?;
     Ok(hash_files(
@@ -534,13 +580,19 @@ pub fn folder_hash(dir: &Path) -> io::Result<String> {
     ))
 }
 
-fn collect(root: &Path, dir: &Path, files: &mut Vec<(String, Vec<u8>)>) -> io::Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let path = entry?.path();
+fn collect(
+    root: &Path,
+    dir: &Path,
+    files: &mut Vec<(String, Vec<u8>)>,
+) -> Result<(), (PathBuf, io::Error)> {
+    let at = |path: &Path, error| (path.to_path_buf(), error);
+    for entry in fs::read_dir(dir).map_err(|e| at(dir, e))? {
+        let path = entry.map_err(|e| at(dir, e))?.path();
         if path.is_dir() {
             collect(root, &path, files)?;
         } else {
-            files.push((display(root, &path), fs::read(&path)?));
+            let bytes = fs::read(&path).map_err(|e| at(&path, e))?;
+            files.push((display(root, &path), bytes));
         }
     }
     Ok(())

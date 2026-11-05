@@ -8,10 +8,12 @@ use serde_json::{Map, Value, json};
 use crate::diagnostic::{Code, Findings};
 use crate::model::{Comp, ParamKind, Part, PinDef, Ref, Scene};
 use crate::name::did_you_mean;
-use crate::params::{Arg, convert, set};
+use crate::params::{Arg, convert, off_at, set};
 use crate::project::{Owner, Project};
 use crate::source::Span;
 use crate::syntax::Node;
+
+mod engine;
 
 const ROOT: usize = 0;
 const NAME_LIMIT: usize = 64;
@@ -58,17 +60,30 @@ struct Circuit<'p> {
     long: BTreeMap<Span, (String, bool)>,
     /// Each instance's model after its params are applied.
     built: BTreeMap<usize, (Value, SetBy)>,
+    /// Instances with a finding about their own params, whose engine findings would repeat it.
+    failed: BTreeSet<usize>,
 }
 
-/// For each param that set a model field, by the field's dotted path, its value's span and
-/// the param the file sets.
-type SetBy = BTreeMap<String, (Span, String)>;
+/// The value that set a model field, by the field's dotted path.
+type SetBy = BTreeMap<String, Setter>;
 
-/// Where an engine part came from: its instance, its name in a model map, and its params.
+#[derive(Clone)]
+struct Setter {
+    span: Span,
+    /// The param the file sets, such as `btn1.bounce`.
+    site: String,
+    /// The value as written, such as `5ns`.
+    shown: String,
+}
+
+/// Where an engine part came from: its instance, its name in a model map, its params, and what
+/// was written for it.
 struct Written {
     inst: usize,
     body: Option<String>,
+    name: String,
     set_by: SetBy,
+    fields: Value,
 }
 
 /// What the reader made of a scene that reads.
@@ -103,6 +118,7 @@ pub(crate) fn compile(project: &Project, out: &mut Findings) -> Option<Netlist> 
         parent: Vec::new(),
         long: BTreeMap::new(),
         built: BTreeMap::new(),
+        failed: BTreeSet::new(),
     };
     circuit.instantiate(ROOT, Owner::Scene);
     circuit.make_pins();
@@ -112,12 +128,8 @@ pub(crate) fn compile(project: &Project, out: &mut Findings) -> Option<Netlist> 
     let nets = circuit.name_nets(scene);
     circuit.check_flat_names();
     circuit.report_long();
-    if !circuit.out.is_empty() {
-        return None;
-    }
-    let ground = circuit.ground(scene, &nets)?;
-    let netlist = circuit.write(scene, &nets, &ground)?;
-    circuit.out.is_empty().then_some(netlist)
+    let ground = circuit.ground(scene, &nets);
+    circuit.write(scene, &nets, ground)
 }
 
 impl<'p> Circuit<'p> {
@@ -157,11 +169,15 @@ impl<'p> Circuit<'p> {
                 dropped,
                 top_span,
             };
+            let before = self.out.len();
             if let Some(part) = part {
                 inst.args = self.args(parent, owner, &dir, &inst, instance, &project.parts[part]);
             }
             self.insts.push(inst);
             let id = self.insts.len() - 1;
+            if self.out.len() > before {
+                self.failed.insert(id);
+            }
             self.insts[parent]
                 .children
                 .insert(instance.name.clone(), id);
@@ -603,12 +619,14 @@ impl<'p> Circuit<'p> {
             .map(|(k, text)| (k.map(|k| self.find(k)).and_then(|r| nets.get(&r)), text))
             .collect();
         let Some((first, first_text)) = roots.first().copied() else {
-            self.out.push(
-                Code::Ground,
-                span,
-                "nothing in the scene names a ground",
-                hint.into(),
-            );
+            if self.insts[1..].iter().all(|i| i.part.is_some()) {
+                self.out.push(
+                    Code::Ground,
+                    span,
+                    "nothing in the scene names a ground",
+                    hint.into(),
+                );
+            }
             return None;
         };
         let Some(first) = first else {
@@ -632,14 +650,17 @@ impl<'p> Circuit<'p> {
         Some(first.clone())
     }
 
+    /// Writes netlist v0 and has the engine check it, even when the reader has findings, so
+    /// one run reports both. A part the engine's schema refuses is reported and left out, and
+    /// the rest are checked again.
     fn write(
         &mut self,
         scene: &Scene,
         nets: &BTreeMap<usize, String>,
-        ground: &str,
+        ground: Option<String>,
     ) -> Option<Netlist> {
         let mut parts = Vec::new();
-        let mut origins: BTreeMap<String, Written> = BTreeMap::new();
+        let mut origins = Vec::new();
         for inst in 1..self.insts.len() {
             if self.insts[inst].dropped.is_some() {
                 continue;
@@ -647,9 +668,6 @@ impl<'p> Circuit<'p> {
             let Some(part) = self.part(inst) else {
                 continue;
             };
-            if part.model.is_none() {
-                continue;
-            }
             let Some((model, set_by)) = self.built.get(&inst).cloned() else {
                 continue;
             };
@@ -663,8 +681,8 @@ impl<'p> Circuit<'p> {
                     let prefix = format!("{name}.");
                     set_here = set_by
                         .iter()
-                        .filter_map(|(f, o)| {
-                            f.strip_prefix(&prefix).map(|f| (f.to_string(), o.clone()))
+                        .filter_map(|(f, s)| {
+                            f.strip_prefix(&prefix).map(|f| (f.to_string(), s.clone()))
                         })
                         .collect();
                 } else {
@@ -672,9 +690,15 @@ impl<'p> Circuit<'p> {
                 }
                 let mut pins = Map::new();
                 for (engine_pin, part_pin) in &body.pins {
-                    let key = self.keys[&(inst, part_pin.clone())];
-                    let root = self.find(key);
-                    pins.insert(engine_pin.to_string(), Value::String(nets[&root].clone()));
+                    let key = self.keys.get(&(inst, part_pin.clone())).copied();
+                    match key.map(|k| self.find(k)).and_then(|root| nets.get(&root)) {
+                        Some(net) => {
+                            pins.insert(engine_pin.to_string(), Value::String(net.clone()));
+                        }
+                        None => {
+                            self.failed.insert(inst);
+                        }
+                    }
                 }
                 let mut object = match fields {
                     Value::Object(map) => map,
@@ -684,43 +708,79 @@ impl<'p> Circuit<'p> {
                 object.insert("name".into(), Value::String(flat.clone()));
                 object.insert("kind".into(), Value::String(body.kind.clone()));
                 object.insert("pins".into(), Value::Object(pins));
-                parts.push(Value::Object(object));
-                origins.insert(
-                    flat,
-                    Written {
-                        inst,
-                        body: body.name.clone(),
-                        set_by: set_here,
-                    },
-                );
+                let mut object = Value::Object(object);
+                whole_numbers(&mut object);
+                origins.push(Written {
+                    inst,
+                    body: body.name.clone(),
+                    name: flat,
+                    set_by: set_here,
+                    fields: object.clone(),
+                });
+                parts.push(object);
             }
         }
-        let mut names: Vec<String> = nets.values().filter(|n| *n != ground).cloned().collect();
+        let mut names: Vec<String> = nets.values().cloned().collect();
         names.sort();
-        names.insert(0, ground.to_string());
-        let document = json!({
-            "version": 0,
-            "seed": scene.seed,
-            "analysis": { "transient": { "stop_ps": Scene::STOP_PS, "max_step_ps": scene.max_step_ps, "grid_ps": GRID_PS } },
-            "ground": ground,
-            "nets": names,
-            "parts": parts,
-        });
-        let text = serde_json::to_string_pretty(&document).expect("a JSON value");
-        if !self.out.is_empty() {
-            return None;
-        }
-        if let Err(diagnostics) = sim_core::netlist::parse(text.as_bytes()) {
-            for diagnostic in diagnostics {
-                self.engine_finding(&diagnostic, &origins);
+        let ground_name = ground
+            .clone()
+            .or_else(|| names.first().cloned())
+            .unwrap_or_default();
+        names.retain(|n| *n != ground_name);
+        names.insert(0, ground_name.clone());
+        let clean = self.out.is_empty();
+        let mut kept: Vec<usize> = (0..parts.len()).collect();
+        let text = loop {
+            let written: Vec<&Value> = kept.iter().map(|&i| &parts[i]).collect();
+            let document = json!({
+                "version": 0,
+                "seed": scene.seed,
+                "analysis": { "transient": { "stop_ps": Scene::STOP_PS, "max_step_ps": scene.max_step_ps, "grid_ps": GRID_PS } },
+                "ground": ground_name,
+                "nets": names,
+                "parts": written,
+            });
+            let text = serde_json::to_string_pretty(&document).expect("a JSON value");
+            let Err(diagnostics) = sim_core::netlist::parse(text.as_bytes()) else {
+                break text;
+            };
+            let quiet = !clean || kept.len() < parts.len();
+            let mut refused = None;
+            for diagnostic in &diagnostics {
+                let value = serde_json::to_value(diagnostic).unwrap_or_default();
+                let index = value["data"]["path"]
+                    .as_str()
+                    .and_then(|p| p.strip_prefix("parts["))
+                    .and_then(|p| p.split(']').next())
+                    .and_then(|i| i.parse::<usize>().ok())
+                    .filter(|&i| i < kept.len());
+                let origin = match index {
+                    Some(i) => Some(&origins[kept[i]]),
+                    None => value["refs"]
+                        .as_array()
+                        .and_then(|r| r.first())
+                        .and_then(Value::as_str)
+                        .and_then(|r| r.strip_prefix('#'))
+                        .map(|r| r.split('.').next().unwrap_or(r))
+                        .and_then(|name| origins.iter().find(|w| w.name == name)),
+                };
+                if diagnostic.code() == "netlist.syntax" {
+                    refused = index;
+                }
+                self.engine_finding(diagnostic.code(), &value, origin, quiet);
             }
-            return None;
-        }
-        Some(Netlist {
+            match refused {
+                Some(i) => {
+                    kept.remove(i);
+                }
+                None => break text,
+            }
+        };
+        (self.out.is_empty() && ground.is_some()).then(|| Netlist {
             json: text,
             parts: parts.len(),
             nets: names,
-            ground: ground.to_string(),
+            ground: ground_name,
             modified: self.project.modified.clone(),
         })
     }
@@ -737,7 +797,11 @@ impl<'p> Circuit<'p> {
             let Some(model_node) = part.model.clone() else {
                 continue;
             };
+            let before = self.out.len();
             let (model, set_by) = self.model(inst, part, &model_node);
+            if self.out.len() > before {
+                self.failed.insert(inst);
+            }
             self.built.insert(inst, (model, set_by));
         }
     }
@@ -799,70 +863,9 @@ impl<'p> Circuit<'p> {
         }
     }
 
-    /// An engine finding placed at the param that set the field, or else at the field in its
-    /// part file.
-    fn engine_finding(
-        &mut self,
-        diagnostic: &sim_core::diagnostic::Diagnostic,
-        origins: &BTreeMap<String, Written>,
-    ) {
-        let value = serde_json::to_value(diagnostic).unwrap_or_default();
-        let message = value["message"].as_str().unwrap_or_default().to_string();
-        let field = value["data"]["field"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
-        let part = value["refs"]
-            .as_array()
-            .and_then(|r| r.first())
-            .and_then(Value::as_str)
-            .and_then(|r| r.strip_prefix('#'))
-            .map(|r| r.split('.').next().unwrap_or(r).to_string());
-        let found = part.as_ref().and_then(|p| origins.get(p));
-        let Some(Written { inst, body, set_by }) = found else {
-            self.out.push(
-                Code::Engine(diagnostic.code()),
-                Span::start_of(self.project.scene.file),
-                message.clone(),
-                value_hint(&message).into(),
-            );
-            return;
-        };
-        if let Some((_, (span, site))) = set_by.iter().find(|(f, _)| {
-            !field.is_empty() && (f.starts_with(&field) || field.starts_with(f.as_str()))
-        }) {
-            self.out.push(
-                Code::Param,
-                *span,
-                format!("`{site}`: {message}"),
-                value_hint(&message).into(),
-            );
-            return;
-        }
-        let part = self.part(*inst).expect("an engine part has a part");
-        let model = part.model.as_ref().expect("an engine part has a model");
-        let within = match body {
-            Some(name) if field.is_empty() => name.clone(),
-            Some(name) => format!("{name}.{field}"),
-            None => field.clone(),
-        };
-        let span = if within.is_empty() {
-            model.span
-        } else {
-            model.at_field(&within).map_or(model.span, |n| n.span)
-        };
-        self.out.push(
-            Code::Engine(diagnostic.code()),
-            span,
-            format!("{}: {message}", self.insts[*inst].dotted()),
-            value_hint(&message).into(),
-        );
-    }
-
-    /// The part's model with every param set. An explicit value whose default is null opens
-    /// the object it points through. A part's own default does not, so `bounce` stays null
-    /// and its default `max_bounces` is dropped. Other explicit values are written after
-    /// that object exists.
+    /// The part's model with every param set. A param whose default is null and that has a
+    /// value turns on the objects it points through, before the others write into them. A
+    /// value that lands in an object still off is a finding when an instance set it.
     fn model(&mut self, inst: usize, part: &Part, model_node: &Node) -> (Value, SetBy) {
         let mut model = model_node.to_value();
         let mut set_by = BTreeMap::new();
@@ -874,73 +877,115 @@ impl<'p> Circuit<'p> {
             .parent()
             .map(PathBuf::from)
             .unwrap_or_default();
-        for pass in 0..3 {
-            for decl in &part.params {
-                if matches!(decl.kind, ParamKind::Through) {
+        let mut args = Vec::new();
+        for decl in &part.params {
+            if matches!(decl.kind, ParamKind::Through) {
+                continue;
+            }
+            let arg = match (self.insts[inst].args.get(&decl.name), &decl.default) {
+                (Some(arg), _) => arg.clone(),
+                (None, Some(default)) => Arg {
+                    node: default.clone(),
+                    site: format!("{}.{}", self.insts[inst].dotted(), decl.name),
+                    dir: dir.clone(),
+                    explicit: false,
+                },
+                (None, None) => continue,
+            };
+            let opening = decl.opens() && !arg.node.is_null();
+            args.push((opening, decl, arg));
+        }
+        args.sort_by_key(|(opening, _, _)| !opening);
+        for (opening, decl, arg) in args {
+            let sets = match convert(decl, &arg) {
+                Ok(sets) => sets,
+                Err((code, message, hint)) => {
+                    self.out.push(
+                        code,
+                        arg.node.span,
+                        format!("`{}`: {message}", arg.site),
+                        hint,
+                    );
                     continue;
                 }
-                let arg = match (self.insts[inst].args.get(&decl.name), &decl.default) {
-                    (Some(arg), _) => arg.clone(),
-                    (None, Some(default)) => Arg {
-                        node: default.clone(),
-                        site: format!("{}.{}", self.insts[inst].dotted(), decl.name),
-                        dir: dir.clone(),
-                        explicit: false,
-                    },
-                    (None, None) => continue,
-                };
-                let turns_on = decl.default.as_ref().is_none_or(Node::is_null);
-                let selected = match pass {
-                    0 => arg.explicit && turns_on,
-                    1 => arg.explicit && !turns_on,
-                    _ => !arg.explicit,
-                };
-                if !selected {
+            };
+            for (pointer, value) in sets {
+                let null = value.is_null();
+                if set(&mut model, &pointer, value, opening) {
+                    set_by.insert(
+                        pointer.trim_start_matches('/').replace('/', "."),
+                        Setter {
+                            span: arg.node.span,
+                            site: arg.site.clone(),
+                            shown: shown(&arg.node),
+                        },
+                    );
                     continue;
                 }
-                let sets = match convert(decl, &arg) {
-                    Ok(sets) => sets,
-                    Err((code, message, hint)) => {
-                        self.out.push(
-                            code,
-                            arg.node.span,
-                            format!("`{}`: {message}", arg.site),
-                            hint,
-                        );
-                        continue;
-                    }
-                };
-                for (pointer, value) in sets {
-                    let create = arg.explicit && !value.is_null() && turns_on;
-                    match set(&mut model, &pointer, value, create) {
-                        Ok(true) => {
-                            set_by.insert(
-                                pointer.trim_start_matches('/').replace('/', "."),
-                                (arg.node.span, arg.site.clone()),
-                            );
-                        }
-                        Ok(false) => {}
-                        Err(reason) => self.out.push(
-                            Code::Param,
-                            arg.node.span,
-                            format!("`{}`: {reason}", arg.site),
-                            "point `sets` at an object path in `model`, such as \"/resistance\""
-                                .into(),
-                        ),
-                    }
+                if null {
+                    continue;
                 }
+                let off = off_at(&model, &pointer).ok().flatten();
+                let Some((off, opener)) = off.and_then(|off| part.opener(&off).map(|o| (off, o)))
+                else {
+                    // The part file's own finding says why this param never takes effect.
+                    self.failed.insert(inst);
+                    continue;
+                };
+                if !arg.explicit {
+                    continue;
+                }
+                let example = match &opener.kind {
+                    ParamKind::Number { unit, .. } => format!(", such as {}", unit.example()),
+                    _ => String::new(),
+                };
+                self.out.push(
+                    Code::Param,
+                    arg.node.span,
+                    format!(
+                        "`{}` has no effect while `{}` is off; set `{}` too",
+                        arg.site,
+                        off[1..].replace('/', "."),
+                        opener.name
+                    ),
+                    format!("set `{}`{example}, or remove this value", opener.name),
+                );
             }
         }
         (model, set_by)
     }
 }
 
-fn value_hint(message: &str) -> &'static str {
-    if message.contains("must fit") {
-        "widen the bounce window or lower max_bounces"
-    } else if message.contains("positive") {
-        "write a value greater than zero"
-    } else {
-        "change this value so it meets the engine's rule"
+/// A param's value as the file wrote it, such as `5ns` or `220`.
+fn shown(node: &Node) -> String {
+    if let Some(text) = node.str().or(node.raw_number()) {
+        return text.to_string();
+    }
+    match (
+        node.get("value").and_then(Node::raw_number),
+        node.get("unit").and_then(Node::str),
+    ) {
+        (Some(value), Some(unit)) => format!("{value} {unit}"),
+        _ => node.what().to_string(),
+    }
+}
+
+/// A finite whole number goes in as a JSON integer and any other number as a float. A field the
+/// engine reads as an integer then gets one, and a float field reads either.
+fn whole_numbers(value: &mut Value) {
+    match value {
+        Value::Number(n) => {
+            let Some(f) = n.as_f64().filter(|f| n.is_f64() && f.fract() == 0.0) else {
+                return;
+            };
+            if (0.0..18_446_744_073_709_551_616.0).contains(&f) {
+                *value = Value::from(f as u64);
+            } else if (-9_223_372_036_854_775_808.0..0.0).contains(&f) {
+                *value = Value::from(f as i64);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(whole_numbers),
+        Value::Object(map) => map.values_mut().for_each(whole_numbers),
+        _ => {}
     }
 }

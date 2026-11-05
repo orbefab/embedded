@@ -108,7 +108,7 @@ fn scene_params_are_user_values_and_defaults_fill_the_rest() {
     };
     assert_eq!(
         part("r1")["resistance"],
-        serde_json::json!({ "value": 220.0, "unit": "ohm", "source": "user" })
+        serde_json::json!({ "value": 220, "unit": "ohm", "source": "user" })
     );
     assert_eq!(part("r2")["resistance"]["value"], 10_000.0);
     assert_eq!(part("led1")["saturation_current"]["value"], 6.711e-10);
@@ -479,7 +479,7 @@ fn a_passed_through_bounce_default_matches_setting_it() {
 }
 
 #[test]
-fn max_bounces_without_bounce_leaves_bounce_off() {
+fn max_bounces_without_bounce_is_a_finding() {
     let project = project("nano-button");
     let scene = project.path().join("scene.jsonc");
     let text = fs::read_to_string(&scene).unwrap();
@@ -492,15 +492,259 @@ fn max_bounces_without_bounce_leaves_bounce_off() {
         ),
     )
     .unwrap();
-    let netlist = orbe_scene::read(&scene).unwrap_or_else(|d| panic!("{d:#?}"));
+    let found = scene_errors(project.path());
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].code, orbe_scene::Code::Param);
+    assert_eq!(found[0].file, "scene.jsonc");
+    assert_eq!((found[0].line, found[0].column), (6, 60));
+    assert_eq!(
+        found[0].message,
+        "`btn1.max_bounces` has no effect while `bounce` is off; set `bounce` too"
+    );
+    assert!(found[0].hint.contains("\"1ms\""), "{}", found[0].hint);
+}
+
+/// The project as the fixture leaves it, with `from` replaced by `to` in the scene.
+fn with_scene(from: &str, to: &str) -> tempfile::TempDir {
+    let project = project("nano-button");
+    let scene = project.path().join("scene.jsonc");
+    let text = fs::read_to_string(&scene).unwrap();
+    assert!(text.contains(from), "{from}");
+    fs::write(&scene, text.replacen(from, to, 1)).unwrap();
+    project
+}
+
+fn engine_part(netlist: &orbe_scene::Netlist, name: &str) -> Value {
     let json: Value = serde_json::from_str(&netlist.json).unwrap();
-    let btn1 = json["parts"]
+    json["parts"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|p| p["name"] == "btn1")
+        .find(|p| p["name"] == name)
+        .unwrap_or_else(|| panic!("no engine part {name}"))
+        .clone()
+}
+
+const BTN1: &str = "{ \"type\": \"tactile-switch-6mm\" }";
+
+/// A copy of the catalog ATmega as a project part, with a `clock` param in Hz that sets the
+/// engine's integer `clock_hz`, used as `u2`.
+fn clock_project(clock: Option<&str>) -> tempfile::TempDir {
+    let project = project("nano-button");
+    let catalog =
+        fs::read_to_string(common::repo().join("parts/atmega328p-tqfp32/part.jsonc")).unwrap();
+    let firmware = "\"firmware\": { \"file\": \"hex\", \"as\": \"text\", \"required\": true, \"sets\": \"/firmware\" }";
+    assert!(catalog.contains(firmware));
+    let part = catalog
+        .replacen("\"part\": \"atmega328p-tqfp32\", \"version\": \"0.1.0\", ", "", 1)
+        .replacen(
+            firmware,
+            &format!("{firmware}, \"clock\": {{ \"unit\": \"Hz\", \"default\": \"16M\", \"sets\": \"/clock_hz\" }}"),
+            1,
+        );
+    fs::write(project.path().join("parts/mcu.jsonc"), part).unwrap();
+    let clock = clock
+        .map(|c| format!(", \"clock\": {c}"))
+        .unwrap_or_default();
+    let scene = project.path().join("scene.jsonc");
+    let text = fs::read_to_string(&scene)
+        .unwrap()
+        .replacen(
+            "\"parts\": {",
+            &format!("\"parts\": {{\n    \"u2\": {{ \"type\": \"./parts/mcu.jsonc\", \"firmware\": \"build/button.ino.hex\"{clock} }},"),
+            1,
+        )
+        .replacen("\"wires\": [", "\"wires\": [\n    [\"u2.GND\", \"nano.GND\"],", 1);
+    fs::write(&scene, text).unwrap();
+    project
+}
+
+#[test]
+fn a_hertz_value_reaches_an_integer_field_as_an_integer() {
+    for (clock, hz) in [
+        (None, 16_000_000u64),
+        (Some("\"8M\""), 8_000_000),
+        (Some("8000000"), 8_000_000),
+        (
+            Some("{ \"value\": 8000000, \"unit\": \"Hz\", \"source\": \"user\" }"),
+            8_000_000,
+        ),
+        (
+            Some("{ \"value\": 8000000.0, \"unit\": \"Hz\", \"source\": \"user\" }"),
+            8_000_000,
+        ),
+    ] {
+        let project = clock_project(clock);
+        let netlist = orbe_scene::read(&project.path().join("scene.jsonc"))
+            .unwrap_or_else(|d| panic!("{clock:?}: {d:#?}"));
+        let value = &engine_part(&netlist, "u2")["clock_hz"]["value"];
+        assert_eq!(value.as_u64(), Some(hz), "{clock:?}: {value}");
+    }
+}
+
+#[test]
+fn a_whole_value_object_is_an_integer() {
+    let project = with_scene(
+        BTN1,
+        "{ \"type\": \"tactile-switch-6mm\", \"bounce\": { \"value\": 1000000000.0, \"unit\": \"ps\", \"source\": \"user\" }, \"max_bounces\": { \"value\": 2.0, \"unit\": \"1\", \"source\": \"user\" } }",
+    );
+    let netlist =
+        orbe_scene::read(&project.path().join("scene.jsonc")).unwrap_or_else(|d| panic!("{d:#?}"));
+    let bounce = &engine_part(&netlist, "btn1")["bounce"];
+    assert_eq!(
+        bounce["window"]["value"].as_u64(),
+        Some(1_000_000_000),
+        "{bounce}"
+    );
+    assert_eq!(bounce["max_bounces"]["value"].as_u64(), Some(2), "{bounce}");
+}
+
+/// A switch part whose model already has a bounce object, with `bounce` defaulting to 1 ms.
+const ON_SWITCH: &str = r#"{
+  "format": 1,
+  "pins": { "a": [1], "b": [2] },
+  "params": {
+    "bounce": { "unit": "s", "default": "1ms", "sets": "/bounce/window" },
+    "speed": { "default": "fast", "choices": { "fast": { "sets": { "/bounce/max_bounces": { "value": 2.0, "unit": "1", "source": "user" } } } } },
+  },
+  "model": {
+    "kind": "switch",
+    "on_resistance": { "value": 0.1, "unit": "ohm", "source": "user" },
+    "off_resistance": { "value": 1e8, "unit": "ohm", "source": "user" },
+    "initial": "open",
+    "events": [],
+    "bounce": { "window": { "value": 1000000000, "unit": "ps", "source": "user" }, "max_bounces": { "value": 3, "unit": "1", "source": "user" } },
+  },
+}
+"#;
+
+#[test]
+fn a_set_bounce_takes_effect_whatever_its_default() {
+    let direct = with_scene(
+        BTN1,
+        "{ \"type\": \"./parts/sw.jsonc\", \"bounce\": \"2ms\" }",
+    );
+    fs::write(direct.path().join("parts/sw.jsonc"), ON_SWITCH).unwrap();
+    let netlist =
+        orbe_scene::read(&direct.path().join("scene.jsonc")).unwrap_or_else(|d| panic!("{d:#?}"));
+    let bounce = &engine_part(&netlist, "btn1")["bounce"];
+    assert_eq!(
+        bounce["window"]["value"].as_u64(),
+        Some(2_000_000_000),
+        "{bounce}"
+    );
+    assert_eq!(
+        bounce["max_bounces"]["value"].as_u64(),
+        Some(2),
+        "the choice's 2.0 is an integer: {bounce}"
+    );
+
+    for child in ["./sw.jsonc", "tactile-switch-6mm"] {
+        let via = with_scene(BTN1, "{ \"type\": \"./parts/bouncy.jsonc\" }");
+        fs::write(via.path().join("parts/sw.jsonc"), ON_SWITCH).unwrap();
+        fs::write(
+            via.path().join("parts/bouncy.jsonc"),
+            format!("{{\n  \"format\": 1,\n  \"params\": {{ \"bounce\": {{ \"default\": \"2ms\" }} }},\n  \"parts\": {{ \"sw\": {{ \"type\": \"{child}\", \"bounce\": {{ \"param\": \"bounce\" }} }} }},\n  \"pins\": {{ \"a\": \"sw.a\", \"b\": \"sw.b\" }}\n}}\n"),
+        )
         .unwrap();
-    assert!(btn1["bounce"].is_null(), "{}", btn1["bounce"]);
+        let netlist = orbe_scene::read(&via.path().join("scene.jsonc"))
+            .unwrap_or_else(|d| panic!("{child}: {d:#?}"));
+        let bounce = &engine_part(&netlist, "btn1__sw")["bounce"];
+        assert_eq!(
+            bounce["window"]["value"].as_u64(),
+            Some(2_000_000_000),
+            "{child}: {bounce}"
+        );
+    }
+}
+
+#[test]
+fn a_deleted_copy_is_only_part_missing() {
+    let project = project("nano-button");
+    fs::remove_dir_all(project.path().join("parts/led-5mm")).unwrap();
+    let found = scene_errors(project.path());
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].code, orbe_scene::Code::PartMissing);
+    assert_eq!(found[0].file, "scene.jsonc");
+    assert_eq!((found[0].line, found[0].column), (9, 23));
+    assert!(
+        found[0].hint.contains("orbe add led-5mm"),
+        "{}",
+        found[0].hint
+    );
+}
+
+#[test]
+fn a_lock_line_the_scene_no_longer_uses_is_not_checked() {
+    let project = project("nano-button");
+    fs::remove_dir_all(project.path().join("parts/led-5mm")).unwrap();
+    let scene = project.path().join("scene.jsonc");
+    let mut text = fs::read_to_string(&scene).unwrap();
+    for (from, to) in [
+        (
+            "\"led1\": { \"type\": \"led-5mm\", \"color\": \"red\" },",
+            "",
+        ),
+        ("[\"r1.b\", \"led1.anode\"],", "[\"r1.b\", \"nano.GND\"],"),
+        ("[\"led1.cathode\", \"nano.GND\"],", ""),
+    ] {
+        assert!(text.contains(from), "{from}");
+        text = text.replacen(from, to, 1);
+    }
+    fs::write(&scene, text).unwrap();
+    let netlist = orbe_scene::read(&scene).unwrap_or_else(|d| panic!("{d:#?}"));
+    assert_eq!(netlist.parts, 17);
+}
+
+fn unreadable(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o000)).unwrap();
+}
+
+#[test]
+fn an_unreadable_part_file_is_one_io_error() {
+    let project = project("nano-button");
+    unreadable(&project.path().join("parts/led-5mm/part.jsonc"));
+    let found = scene_errors(project.path());
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].code, orbe_scene::Code::Io);
+    assert_eq!(found[0].file, "parts/led-5mm/part.jsonc");
+    assert!(
+        found[0]
+            .message
+            .contains("cannot read parts/led-5mm/part.jsonc"),
+        "{}",
+        found[0].message
+    );
+    assert!(
+        found[0].hint.contains("chmod u+r parts/led-5mm/part.jsonc"),
+        "{}",
+        found[0].hint
+    );
+}
+
+#[test]
+fn an_unreadable_file_in_a_copy_is_one_io_error_that_names_it() {
+    let project = project("nano-button");
+    let extra = project.path().join("parts/led-5mm/datasheet.txt");
+    fs::write(&extra, "kept").unwrap();
+    unreadable(&extra);
+    let found = scene_errors(project.path());
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].code, orbe_scene::Code::Io);
+    assert!(
+        found[0]
+            .message
+            .contains("cannot read parts/led-5mm/datasheet.txt"),
+        "{}",
+        found[0].message
+    );
+    assert!(
+        found[0].hint.contains("chmod u+r parts/led-5mm/datasheet.txt"),
+        "{}",
+        found[0].hint
+    );
+    assert!(!found[0].hint.contains("link"), "{}", found[0].hint);
 }
 
 fn pin_net(json: &str, part: &str, pin: &str) -> String {

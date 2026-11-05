@@ -1,0 +1,20 @@
+// Button and LED on a Nano. D2 reads the button, D13 drives the LED.
+{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "btn1": { "type": "tactile-switch-6mm", "bounce": "1ns" },
+    "r2": { "type": "resistor-axial", "resistance": "10k" }, // pull-down, so D2 reads low while open
+    "r1": { "type": "resistor-axial", "resistance": "220" },
+    "led1": { "type": "led-5mm", "color": "red" },
+  },
+  "wires": [
+    ["nano.D2", "btn1.a"],
+    ["btn1.b", "nano.5V"],
+    ["nano.D2", "r2.a"],
+    ["r2.b", "nano.GND"],
+    ["nano.D13", "r1.a"],
+    ["r1.b", "led1.anod"],
+    ["led1.cathode", "nano.GND"],
+  ],
+}

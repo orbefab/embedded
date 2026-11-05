@@ -1,0 +1,1 @@
+scene.param parts/myres.jsonc:6:5 | `ratings`, which is missing | write `ratings` as an object

@@ -51,7 +51,7 @@ pub(crate) fn convert(decl: &ParamDecl, arg: &Arg) -> Converted {
                     ))
                 };
             }
-            number(decl, *unit, *min_exclusive, node).map(|v| vec![(pointer, v)])
+            number(*unit, *min_exclusive, node).map(|v| vec![(pointer, v)])
         }
         ParamKind::Choice(choices) => {
             let names: Vec<&str> = choices.iter().map(|(n, _)| n.as_str()).collect();
@@ -109,7 +109,6 @@ pub(crate) fn convert(decl: &ParamDecl, arg: &Arg) -> Converted {
 }
 
 fn number(
-    decl: &ParamDecl,
     unit: Unit,
     min_exclusive: Option<f64>,
     node: &Node,
@@ -121,7 +120,7 @@ fn number(
         )
     };
     if node.props().is_some() {
-        return value_object(decl, unit, min_exclusive, node);
+        return value_object(unit, min_exclusive, node);
     }
     let text = match (node.str(), node.number()) {
         (Some(text), _) => text.to_string(),
@@ -154,11 +153,10 @@ fn number(
             format!("write a finite number, such as {}", unit.example()),
         ));
     }
-    bounded(decl, unit, min_exclusive, &text, value)
+    bounded(unit, min_exclusive, &text, value)
 }
 
 fn value_object(
-    decl: &ParamDecl,
     unit: Unit,
     min_exclusive: Option<f64>,
     node: &Node,
@@ -213,14 +211,8 @@ fn value_object(
                 "write \"1ms\", or a value object with \"unit\": \"ps\"",
             ));
         }
-        let Ok(whole) = shown.parse::<u64>() else {
-            return Err(fail(
-                format!("{shown} is not a whole number of picoseconds"),
-                "write an integer number of ps, or a string such as \"1ms\"",
-            ));
-        };
-        below_min(min_exclusive, unit, shown, whole as f64 / 1e12)?;
-        return Ok(json!({ "value": whole, "unit": "ps", "source": source.to_value() }));
+        below_min(min_exclusive, unit, shown, number / 1e12)?;
+        return Ok(json!({ "value": number, "unit": "ps", "source": source.to_value() }));
     }
     if unit_text != unit.as_str() {
         return Err(fail(
@@ -236,30 +228,10 @@ fn value_object(
         ));
     }
     below_min(min_exclusive, unit, shown, number)?;
-    if decl
-        .sets
-        .as_deref()
-        .is_some_and(|p| p.ends_with("max_bounces"))
-    {
-        let Ok(whole) = shown.parse::<u64>() else {
-            return Err(fail(
-                format!("{shown} is not a whole number"),
-                "max_bounces counts contact edges; write a whole number such as 2",
-            ));
-        };
-        if whole > 255 {
-            return Err(fail(
-                format!("{shown} is outside 0 to 255"),
-                "max_bounces counts contact edges; write a whole number such as 2",
-            ));
-        }
-        return Ok(json!({ "value": whole, "unit": "1", "source": source.to_value() }));
-    }
     Ok(json!({ "value": number, "unit": unit_text, "source": source.to_value() }))
 }
 
 fn bounded(
-    decl: &ParamDecl,
     unit: Unit,
     min_exclusive: Option<f64>,
     text: &str,
@@ -271,46 +243,13 @@ fn bounded(
             "write a positive duration, such as \"1ms\"",
         ));
     }
-    let si = if unit == Unit::Second {
-        value / 1e12
+    let (si, unit_text) = if unit == Unit::Second {
+        (value / 1e12, "ps")
     } else {
-        value
+        (value, unit.as_str())
     };
     below_min(min_exclusive, unit, text, si)?;
-    if unit == Unit::Second {
-        if value > (1u64 << 63) as f64 {
-            return Err(fail(
-                format!("{text} does not fit in picoseconds"),
-                "write a shorter duration, such as \"1ms\"",
-            ));
-        }
-        return Ok(json!({ "value": value.round() as u64, "unit": "ps", "source": "user" }));
-    }
-    if decl
-        .sets
-        .as_deref()
-        .is_some_and(|p| p.ends_with("max_bounces"))
-    {
-        if value < 0.0 || value.fract() != 0.0 {
-            return Err(fail(
-                format!("{text} is not a whole number"),
-                "max_bounces counts contact edges; write a whole number such as 2",
-            ));
-        }
-        if value > 255.0 {
-            return Err(fail(
-                format!("{text} is outside 0 to 255"),
-                "max_bounces counts contact edges; write a whole number such as 2",
-            ));
-        }
-        return Ok(json!({ "value": value as u64, "unit": "1", "source": "user" }));
-    }
-    Ok(match unit {
-        Unit::One if value.fract() == 0.0 => {
-            json!({ "value": value as i64, "unit": "1", "source": "user" })
-        }
-        _ => json!({ "value": value, "unit": unit.as_str(), "source": "user" }),
-    })
+    Ok(json!({ "value": value, "unit": unit_text, "source": "user" }))
 }
 
 fn below_min(
@@ -367,41 +306,69 @@ fn source_ok(node: &Node) -> bool {
     }
 }
 
-/// Puts `value` at a JSON pointer, merging two objects. A missing or null object on the way
-/// is made only when `create` is set, and otherwise nothing is written.
-pub(crate) fn set(
-    target: &mut Value,
-    pointer: &str,
-    value: Value,
-    create: bool,
-) -> Result<bool, String> {
-    let tokens: Vec<&str> = pointer
+/// The tokens of a pointer into a model, such as `/bounce/window`.
+fn tokens(pointer: &str) -> Result<Vec<&str>, String> {
+    pointer
         .strip_prefix('/')
-        .ok_or_else(|| format!("`{pointer}` is not a pointer into the model"))?
-        .split('/')
-        .collect();
+        .map(|rest| rest.split('/').collect())
+        .ok_or_else(|| format!("`{pointer}` is not a pointer into `model`; it starts with /"))
+}
+
+/// Where `pointer` stops in `model`: `Ok(None)` when every object on its way is there, else
+/// the first one that is null or missing, such as `/bounce`. That object is off.
+pub(crate) fn off_at(model: &Value, pointer: &str) -> Result<Option<String>, String> {
+    let tokens = tokens(pointer)?;
+    let mut node = model;
+    for (i, token) in tokens[..tokens.len() - 1].iter().enumerate() {
+        let object = node.as_object().ok_or_else(|| {
+            format!(
+                "`{pointer}` passes through `{}`, which is not an object",
+                tokens[..i].join(".")
+            )
+        })?;
+        match object.get(*token) {
+            None | Some(Value::Null) => return Ok(Some(format!("/{}", tokens[..=i].join("/")))),
+            Some(next) => node = next,
+        }
+    }
+    if node.is_object() {
+        Ok(None)
+    } else {
+        Err(format!(
+            "`{pointer}` passes through `{}`, which is not an object",
+            tokens[..tokens.len() - 1].join(".")
+        ))
+    }
+}
+
+/// Puts `value` at a JSON pointer, merging two objects. An object on the way that is off is
+/// made only when `create` is set. Returns whether the value was written.
+pub(crate) fn set(target: &mut Value, pointer: &str, value: Value, create: bool) -> bool {
+    let Ok(tokens) = tokens(pointer) else {
+        return false;
+    };
     let (last, through) = tokens.split_last().expect("split yields one token");
     let mut node = target;
     for token in through {
-        let object = node
-            .as_object_mut()
-            .ok_or_else(|| format!("`{pointer}` passes through a value that is not an object"))?;
+        let Some(object) = node.as_object_mut() else {
+            return false;
+        };
         if object.get(*token).is_none_or(Value::is_null) {
             if !create {
-                return Ok(false);
+                return false;
             }
             object.insert((*token).to_string(), Value::Object(Map::new()));
         }
         node = object.get_mut(*token).expect("inserted above");
     }
-    let object = node
-        .as_object_mut()
-        .ok_or_else(|| format!("`{pointer}` passes through a value that is not an object"))?;
+    let Some(object) = node.as_object_mut() else {
+        return false;
+    };
     match (object.get_mut(*last), value) {
         (Some(Value::Object(existing)), Value::Object(new)) => existing.extend(new),
         (_, value) => {
             object.insert((*last).to_string(), value);
         }
     }
-    Ok(true)
+    true
 }

@@ -1,0 +1,8 @@
+// One resistor, and nothing that names a ground.
+{
+  "format": 1,
+  "parts": {
+    "r1": { "type": "resistor-axial", "resistance": "0" },
+  },
+  "wires": [],
+}
