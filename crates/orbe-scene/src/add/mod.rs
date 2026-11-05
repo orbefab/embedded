@@ -3,8 +3,8 @@
 //! [`plan::plan`] is a pure function of the request, the catalog and a snapshot of the folders
 //! it may write or compare. [`txn::apply`] is the only code that writes part folders or
 //! `parts.lock`. It logs each step, and a run that stops part way is rolled back or finished by
-//! the next run, which [`journal::next`] decides from the log alone. [`held`] keeps a second run
-//! out while one is at work.
+//! the next run, which [`journal::next`] decides from the log and the hashes on disk. [`held`]
+//! keeps a second run out while one is at work.
 
 mod diff;
 mod held;
@@ -159,8 +159,9 @@ fn run_with(dir: Option<&Path>, request: &Request, fault: &mut Fault) -> Result<
     let add = project::add_command(dir);
     let again = request_command(&add, request);
     let _held = match held::hold(root) {
-        Ok(held) => held,
-        Err(Hold::Busy(lock)) => return Ok(Reply::Refuse(busy(&lock, &again))),
+        Ok(held) => Some(held),
+        Err(Hold::Busy) => return Ok(Reply::Refuse(busy(&again))),
+        Err(Hold::Io(_)) if request.diff => None,
         Err(Hold::Io(error)) => return Err(error),
     };
     let recovered = if request.diff {
@@ -227,13 +228,10 @@ fn stop_error(stop: Stop) -> RunError {
     }
 }
 
-fn busy(lock: &Path, again: &str) -> Refusal {
+fn busy(again: &str) -> Refusal {
     Refusal {
         code: "busy",
-        message: format!(
-            "another `orbe add` is at work in this project. it holds the lock on {}",
-            lock.display()
-        ),
+        message: "another `orbe add` is at work in this project, and holds its lock".into(),
         hint: format!("wait for it to finish, then run `{again}`"),
     }
 }
@@ -242,6 +240,11 @@ fn busy(lock: &Path, again: &str) -> Refusal {
 fn pending_note(root: &Path, add: &str) -> Vec<String> {
     let what = match txn::pending(root) {
         Pending::None => return Vec::new(),
+        Pending::Leftover(name) => {
+            return vec![format!(
+                "an interrupted add left {name}. --diff leaves it, and the next `{add}` without --diff deletes it"
+            )];
+        }
         Pending::Uncommitted => "rolls it back",
         Pending::Committed => "finishes it",
         Pending::Unclear => "says what it holds",

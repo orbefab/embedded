@@ -880,7 +880,7 @@ fn a_file_named_parts_is_named_and_gets_no_command() {
 #[test]
 fn a_second_add_is_busy_while_one_holds_the_lock() {
     let project = scene_only();
-    let lock = fs::File::create(project.path().join(".orbe-add.lock")).unwrap();
+    let lock = fs::File::open(project.path()).unwrap();
     lock.lock().unwrap();
     for args in [
         &["add", "led-5mm"][..],
@@ -890,7 +890,7 @@ fn a_second_add_is_busy_while_one_holds_the_lock() {
         let (output, stdout, _) = orbe_in(project.path(), args);
         assert_eq!(output.status.code(), Some(1), "{stdout}");
         assert!(
-            stdout.starts_with("error[busy]: another `orbe add` is at work in this project. it holds the lock on ./.orbe-add.lock\n  hint: wait for it to finish, then run `orbe "),
+            stdout.starts_with("error[busy]: another `orbe add` is at work in this project, and holds its lock\n  hint: wait for it to finish, then run `orbe "),
             "{stdout}"
         );
     }
@@ -904,4 +904,41 @@ fn a_second_add_is_busy_while_one_holds_the_lock() {
     let (output, stdout, _) = orbe_in(project.path(), &["add", "led-5mm"]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(!project.path().join(".orbe-add.lock").exists());
+}
+
+/// `--diff` writes nothing, so it previews a project it cannot write.
+#[test]
+fn diff_previews_a_project_it_cannot_write() {
+    use std::os::unix::fs::PermissionsExt;
+    let project = scene_only();
+    let (output, stdout, _) = orbe_in(project.path(), &["add", "led-5mm"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    let part = project.path().join("parts/led-5mm/part.jsonc");
+    let text = fs::read_to_string(&part).unwrap();
+    fs::write(&part, text.replace("5 mm LED", "5 mm LED edited")).unwrap();
+    let folders = [
+        project.path().to_path_buf(),
+        project.path().join("parts"),
+        project.path().join("parts/led-5mm"),
+    ];
+    let mode = |path: &Path, mode| fs::set_permissions(path, fs::Permissions::from_mode(mode));
+    for folder in &folders {
+        mode(folder, 0o555).unwrap();
+    }
+    let (output, stdout, stderr) = orbe_in(project.path(), &["add", "led-5mm", "--diff"]);
+    let left: Vec<String> = fs::read_dir(project.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    for folder in &folders {
+        mode(folder, 0o755).unwrap();
+    }
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("parts/led-5mm/part.jsonc\n-") && stdout.contains("5 mm LED edited"),
+        "{stdout}"
+    );
+    let mut left = left;
+    left.sort();
+    assert_eq!(left, ["parts", "parts.lock", "scene.jsonc"]);
 }

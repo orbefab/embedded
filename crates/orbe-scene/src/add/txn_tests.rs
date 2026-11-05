@@ -108,14 +108,32 @@ fn assert_replaced(root: &Path) {
 }
 
 /// Runs the replacing add and stops it at the point the hook picks.
-fn stop_add(root: &Path, mut pick: impl FnMut(&str) -> Option<Inject>) -> RunError {
-    run_with(Some(root), &ask(REPLACE, true), &mut pick)
+fn stop_add(root: &Path, pick: impl FnMut(&str) -> Option<Inject>) -> RunError {
+    stop_add_of(root, REPLACE, pick)
+}
+
+fn stop_add_of(
+    root: &Path,
+    ids: &[&str],
+    mut pick: impl FnMut(&str) -> Option<Inject>,
+) -> RunError {
+    run_with(Some(root), &ask(ids, true), &mut pick)
         .err()
         .expect("the add stopped")
 }
 
 fn kill_at(point: &'static str) -> impl FnMut(&str) -> Option<Inject> {
     move |at: &str| at.starts_with(point).then_some(Inject::Kill)
+}
+
+/// Kills the add at its first point after the commit line, before it deletes anything.
+fn kill_after_commit() -> impl FnMut(&str) -> Option<Inject> {
+    let mut committed = false;
+    move |at: &str| {
+        let kill = committed;
+        committed |= at == "log committed";
+        kill.then_some(Inject::Kill)
+    }
 }
 
 fn recover(root: &Path) -> String {
@@ -135,7 +153,7 @@ fn run_copies_a_real_part_and_a_second_run_keeps_the_bytes() {
     );
     assert_eq!(tree(dir.path()), before);
     assert_lock_agrees(dir.path());
-    assert!(!dir.path().join(held::LOCK_FILE).exists());
+    assert!(!dir.path().join(".orbe-add.lock").exists());
 }
 
 #[test]
@@ -162,9 +180,9 @@ fn a_failure_at_any_point_rolls_every_move_back() {
             }
             Ok(reply) if text(&reply).contains("finishing it stopped") => {
                 assert!(
-                    text(&reply).contains("injected failure at do cleaned led-5mm")
-                        || text(&reply).contains("injected failure at log cleaned")
-                        || text(&reply).contains("injected failure at do clean"),
+                    text(&reply).contains("injected failure at do clean")
+                        || text(&reply)
+                            .contains("injected failure at do delete parts/.orbe-add.trash"),
                     "{}",
                     text(&reply)
                 );
@@ -256,6 +274,7 @@ fn a_kill_in_the_add_then_a_kill_in_recovery_keeps_every_edit() {
                 }
             }
             assert!(!dir.path().join("parts").join(txn::STAGE).exists(), "{at}");
+            assert!(!dir.path().join("parts/.orbe-add.trash").exists(), "{at}");
             assert!(recover(dir.path()).is_empty(), "{at}");
             if first.is_ok() {
                 break;
@@ -343,7 +362,7 @@ fn an_edit_after_a_crash_is_never_deleted() {
 #[test]
 fn a_committed_add_puts_back_the_copy_it_replaced_when_the_new_one_is_gone() {
     let dir = edited_project();
-    stop_add(dir.path(), kill_at("do cleaned"));
+    stop_add(dir.path(), kill_after_commit());
     fs::remove_dir_all(dir.path().join("parts/led-5mm")).unwrap();
     let line = recover(dir.path());
     assert!(
@@ -363,7 +382,8 @@ fn a_committed_add_puts_back_the_copy_it_replaced_when_the_new_one_is_gone() {
 #[test]
 fn a_name_no_add_made_is_never_deleted() {
     let dir = edited_project();
-    stop_add(dir.path(), kill_at("do cleaned"));
+    stop_add(dir.path(), kill_after_commit());
+    let before = tree(dir.path());
     let precious = dir.path().join("parts/.orbe-add/old/precious");
     fs::create_dir(&precious).unwrap();
     fs::write(precious.join("note.txt"), "KEEP-ME\n").unwrap();
@@ -373,7 +393,7 @@ fn a_name_no_add_made_is_never_deleted() {
         .to_string();
     assert!(
         error.starts_with(
-            "parts/.orbe-add/old/precious was not made by an add, so orbe left parts/.orbe-add and its log\nbefore it stopped, orbe deleted parts/.orbe-add/old/resistor-axial, deleted parts/.orbe-add/old/led-5mm\n  hint: move parts/.orbe-add/old/precious out of parts/.orbe-add. then run `orbe add -C "
+            "parts/.orbe-add/old/precious was not made by an add, so orbe left parts/.orbe-add and its log\n  hint: move parts/.orbe-add/old/precious out of parts/.orbe-add. then run `orbe add -C "
         ),
         "{error}"
     );
@@ -382,10 +402,12 @@ fn a_name_no_add_made_is_never_deleted() {
         "KEEP-ME\n"
     );
     fs::rename(&precious, dir.path().join("precious")).unwrap();
+    assert_eq!(tree(dir.path()).len(), before.len() + 2);
     let reply = add(dir.path(), &["led-5mm"], false).unwrap();
     assert!(
-        text(&reply)
-            .ends_with(", and deleted the copies it replaced: parts/led-5mm, parts/resistor-axial"),
+        text(&reply).ends_with(
+            ", and deleted the old copies of parts/led-5mm, parts/resistor-axial it replaced"
+        ),
         "{}",
         text(&reply)
     );
@@ -403,10 +425,10 @@ fn a_kill_after_the_commit_is_finished_and_said_to_be() {
     );
 
     let dir = edited_project();
-    stop_add(dir.path(), kill_at("do cleaned led-5mm"));
+    stop_add(dir.path(), kill_after_commit());
     let reply = add(dir.path(), &["led-5mm"], false).unwrap();
     assert!(
-        text(&reply).contains("finished an interrupted add, which had written parts/led-5mm, parts/resistor-axial, parts/tactile-switch-6mm, parts.lock, and deleted the copies it replaced: parts/led-5mm, parts/resistor-axial"),
+        text(&reply).contains("finished an interrupted add, which had written parts/led-5mm, parts/resistor-axial, parts/tactile-switch-6mm, parts.lock, and deleted the old copies of parts/led-5mm, parts/resistor-axial it replaced"),
         "{}",
         text(&reply)
     );
@@ -466,23 +488,15 @@ fn a_second_run_is_busy_while_one_holds_the_lock() {
         };
         let reply = run(Some(dir.path()), &request).unwrap();
         assert_eq!(reply.code(), 1);
-        let lock = dir.path().join(".orbe-add.lock");
         assert_eq!(
             text(&reply),
             format!(
-                "error[busy]: another `orbe add` is at work in this project. it holds the lock on {}\n  hint: wait for it to finish, then run `orbe add -C {} led-5mm --overwrite{}`",
-                lock.display(),
+                "error[busy]: another `orbe add` is at work in this project, and holds its lock\n  hint: wait for it to finish, then run `orbe add -C {} led-5mm --overwrite{}`",
                 dir.path().display(),
                 if request.diff { " --diff" } else { "" }
             )
         );
-        assert_eq!(
-            tree(dir.path())
-                .keys()
-                .filter(|path| *path != ".orbe-add.lock")
-                .count(),
-            before.len()
-        );
+        assert_eq!(tree(dir.path()), before);
     }
     drop(held);
     assert_eq!(tree(dir.path()), before);
@@ -491,14 +505,405 @@ fn a_second_run_is_busy_while_one_holds_the_lock() {
     assert!(!dir.path().join(".orbe-add.lock").exists());
 }
 
-/// A run killed while it held the lock leaves the file, and the next run takes it.
+/// The lock is on the project folder, so no file stands for it. Deleting one frees nothing, and
+/// a second run, `--diff` included, stays busy.
 #[test]
-fn a_lock_file_a_killed_run_left_does_not_block() {
-    let dir = project();
-    fs::write(dir.path().join(".orbe-add.lock"), "").unwrap();
-    let reply = add(dir.path(), &["led-5mm"], false).unwrap();
-    assert_eq!(text(&reply), "wrote parts/led-5mm 0.1.0\nwrote parts.lock");
+fn a_deleted_lock_file_does_not_let_a_second_run_in() {
+    let dir = edited_project();
+    let before = tree(dir.path());
+    let held = held::hold(dir.path()).ok().unwrap();
     assert!(!dir.path().join(".orbe-add.lock").exists());
+    for diff in [false, true] {
+        let request = Request {
+            diff,
+            ..ask(&["tactile-switch-6mm"], false)
+        };
+        let reply = run(Some(dir.path()), &request).unwrap();
+        assert_eq!(reply.code(), 1, "{}", text(&reply));
+        assert!(text(&reply).starts_with("error[busy]"), "{}", text(&reply));
+    }
+    assert_eq!(tree(dir.path()), before);
+    drop(held);
+}
+
+/// A link where a lock file used to go is never opened, so nothing is made where it points.
+#[test]
+fn a_link_named_like_a_lock_file_is_never_followed() {
+    let dir = project();
+    let outside = tempfile::tempdir().unwrap();
+    let planted = outside.path().join("planted");
+    std::os::unix::fs::symlink(&planted, dir.path().join(".orbe-add.lock")).unwrap();
+    let diff = Request {
+        diff: true,
+        ..ask(&["led-5mm"], false)
+    };
+    run(Some(dir.path()), &diff).unwrap();
+    add(dir.path(), &["led-5mm"], false).unwrap();
+    assert!(!planted.exists());
+    assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
+}
+
+/// A run killed inside an append leaves part of a line. Recovery drops it before its own first
+/// line, so a recovery killed after that line is still read by the next run.
+#[test]
+fn a_torn_last_log_line_is_dropped_before_the_next_append() {
+    let dir = edited_project();
+    let before = tree(dir.path());
+    stop_add(dir.path(), kill_at("do place resistor-axial"));
+    append_to(
+        &dir.path().join("parts/.orbe-add/log"),
+        "placed resistor-axial sha256:4f49ecfd39d5195100ee",
+    );
+    let mut logged = 0;
+    let first = txn::recover(dir.path(), AGAIN, &mut |at| {
+        logged += usize::from(at.starts_with("log "));
+        (logged == 2).then_some(Inject::Kill)
+    });
+    assert!(first.is_err());
+    let line = recover(dir.path());
+    assert!(
+        line.starts_with("rolled back an interrupted add: put back parts/resistor-axial"),
+        "{line}"
+    );
+    assert_eq!(tree(dir.path()), before);
+}
+
+/// A log line orbe cannot read stops recovery. The hint never moves a saved copy back over a
+/// finished add, and following it as written finishes that add.
+#[test]
+fn an_unreadable_log_line_gets_a_hint_that_keeps_a_finished_add() {
+    let dir = edited_project();
+    stop_add(dir.path(), kill_after_commit());
+    let log = dir.path().join("parts/.orbe-add/log");
+    let kept = fs::read(&log).unwrap();
+    append_to(&log, "garbage\n");
+    let error = add(dir.path(), &["led-5mm"], false)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        error.starts_with(
+            "parts/.orbe-add/log has a line this orbe does not write, `garbage`, so orbe left parts/.orbe-add as it is\n  hint: delete that line and the lines after it from parts/.orbe-add/log, then run `orbe add -C "
+        ),
+        "{error}"
+    );
+    assert!(!error.contains("back to parts/"), "{error}");
+    fs::write(&log, kept).unwrap();
+    let reply = add(dir.path(), &["led-5mm"], false).unwrap();
+    assert!(
+        text(&reply).contains("finished an interrupted add"),
+        "{}",
+        text(&reply)
+    );
+    assert_replaced(dir.path());
+}
+
+/// After the commit, the saved copy is the user's only copy of what the add replaced. An edit
+/// to it, or a name added inside it, stops recovery, and both copies stay.
+#[test]
+fn an_edit_to_a_saved_copy_after_the_commit_is_kept() {
+    let dir = edited_project();
+    stop_add(dir.path(), kill_after_commit());
+    let old = dir.path().join("parts/.orbe-add/old/led-5mm");
+    fs::write(old.join("notes.txt"), "KEEP-ME\n").unwrap();
+    append_to(&old.join("part.jsonc"), "// saved copy edit\n");
+    for _ in 0..2 {
+        let error = add(dir.path(), &["resistor-0603"], false)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.starts_with(
+                "parts/.orbe-add/old/led-5mm changed after the add moved the copy from parts/led-5mm there. orbe left it, and parts/led-5mm as it is\n  hint: move parts/.orbe-add/old/led-5mm out of parts/.orbe-add to keep it. then run `orbe add -C "
+            ),
+            "{error}"
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(old.join("notes.txt")).unwrap(),
+        "KEEP-ME\n"
+    );
+    assert!(
+        fs::read_to_string(old.join("part.jsonc"))
+            .unwrap()
+            .ends_with("// my edit\n// saved copy edit\n")
+    );
+    assert!(!part_file(dir.path(), "led-5mm").contains("my edit"));
+
+    let kept = dir.path().join("kept-led");
+    fs::rename(&old, &kept).unwrap();
+    let reply = add(dir.path(), &["led-5mm"], false).unwrap();
+    assert!(
+        text(&reply).ends_with(
+            "finished an interrupted add, which had written parts/led-5mm, parts/resistor-axial, parts/tactile-switch-6mm, parts.lock, and deleted the old copy of parts/resistor-axial it replaced"
+        ),
+        "{}",
+        text(&reply)
+    );
+    fs::remove_dir_all(&kept).unwrap();
+    assert_replaced(dir.path());
+}
+
+/// A recovery killed after it moved a placed copy out, before its log line, leaves the log
+/// saying `placed`. The next run says recovery removed it, not that it was gone.
+#[test]
+fn a_placed_copy_a_killed_recovery_moved_out_is_said_to_be_removed() {
+    let dir = edited_project();
+    let before = tree(dir.path());
+    stop_add(dir.path(), kill_at("log lock-written"));
+    let first = txn::recover(dir.path(), AGAIN, &mut |at| {
+        at.starts_with("log unplaced tactile-switch-6mm")
+            .then_some(Inject::Kill)
+    });
+    assert!(first.is_err());
+    let line = recover(dir.path());
+    assert!(
+        line.contains("removed the new parts/tactile-switch-6mm"),
+        "{line}"
+    );
+    assert!(!line.contains("already gone"), "{line}");
+    assert_eq!(tree(dir.path()), before);
+}
+
+#[test]
+fn diff_names_the_leftover_it_finds() {
+    let dir = project();
+    add(dir.path(), &["led-5mm"], false).unwrap();
+    fs::write(dir.path().join(".parts.lock.orbe-add"), "half a lock").unwrap();
+    let request = Request {
+        diff: true,
+        ..ask(&["led-5mm"], false)
+    };
+    let reply = run(Some(dir.path()), &request).unwrap();
+    assert!(
+        text(&reply).starts_with("an interrupted add left .parts.lock.orbe-add. --diff leaves it, and the next `orbe add -C "),
+        "{}",
+        text(&reply)
+    );
+    assert!(text(&reply).contains(" without --diff deletes it"));
+    assert!(
+        !text(&reply).contains("parts/.orbe-add"),
+        "{}",
+        text(&reply)
+    );
+}
+
+/// A link at `parts/.orbe-add/old` is never followed, and recovery stops before it moves
+/// anything. It never says the next run picks up when that run would stop the same way.
+#[test]
+fn a_link_at_old_is_never_followed() {
+    let dir = edited_project();
+    stop_add(dir.path(), kill_after_commit());
+    let outside = tempfile::tempdir().unwrap();
+    fs::create_dir(outside.path().join("led-5mm")).unwrap();
+    fs::write(outside.path().join("led-5mm/secret"), "SECRET\n").unwrap();
+    let old = dir.path().join("parts/.orbe-add/old");
+    let saved = dir.path().join("saved-old");
+    fs::rename(&old, &saved).unwrap();
+    std::os::unix::fs::symlink(outside.path(), &old).unwrap();
+    for _ in 0..2 {
+        let error = add(dir.path(), &["led-5mm"], false)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.starts_with(
+                "parts/.orbe-add/old was not made by an add, so orbe left parts/.orbe-add and its log\n  hint: move parts/.orbe-add/old out of parts/.orbe-add. then run `orbe add -C "
+            ),
+            "{error}"
+        );
+        assert!(!error.contains("picks up"), "{error}");
+        assert_eq!(
+            fs::read_to_string(outside.path().join("led-5mm/secret")).unwrap(),
+            "SECRET\n"
+        );
+    }
+    fs::remove_file(&old).unwrap();
+    let reply = add(dir.path(), &["led-5mm"], false).unwrap();
+    assert!(
+        text(&reply).ends_with(
+            "finished an interrupted add, which had written parts/led-5mm, parts/resistor-axial, parts/tactile-switch-6mm, parts.lock"
+        ),
+        "{}",
+        text(&reply)
+    );
+    assert!(
+        fs::read_to_string(saved.join("led-5mm/part.jsonc"))
+            .unwrap()
+            .ends_with("// my edit\n")
+    );
+    fs::remove_dir_all(&saved).unwrap();
+    assert_replaced(dir.path());
+}
+
+/// A log from an earlier run, put back with empty `new/` and `old/`, has no saved copy to put
+/// back, so the project's only copy of the part stays.
+#[test]
+fn an_older_log_never_removes_the_only_copy_of_a_part() {
+    let dir = project();
+    add(dir.path(), &["led-5mm"], false).unwrap();
+    edit(dir.path(), "led-5mm");
+    run_with(
+        Some(dir.path()),
+        &ask(&["led-5mm"], true),
+        &mut kill_at("do place led-5mm"),
+    )
+    .err()
+    .unwrap();
+    let old_log = fs::read(dir.path().join("parts/.orbe-add/log")).unwrap();
+    add(dir.path(), &["led-5mm"], false).unwrap();
+    add(dir.path(), &["led-5mm"], true).unwrap();
+    let catalog = part_file(dir.path(), "led-5mm");
+    let lock = fs::read(dir.path().join("parts.lock")).unwrap();
+    for dir_name in ["parts/.orbe-add/new", "parts/.orbe-add/old"] {
+        fs::create_dir_all(dir.path().join(dir_name)).unwrap();
+    }
+    fs::write(dir.path().join("parts/.orbe-add/log"), &old_log).unwrap();
+    let error = add(dir.path(), &["tactile-switch-6mm"], false)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        error.starts_with(
+            "parts/led-5mm holds the new copy the interrupted add placed, and the copy it replaced is not in parts/.orbe-add/old/led-5mm, so orbe cannot put that back. orbe left parts/led-5mm\n  hint: delete parts/led-5mm, whose files are the catalog's, to finish the rollback. then run `orbe add -C "
+        ),
+        "{error}"
+    );
+    assert_eq!(part_file(dir.path(), "led-5mm"), catalog);
+    assert_eq!(fs::read(dir.path().join("parts.lock")).unwrap(), lock);
+    assert!(!dir.path().join("parts/tactile-switch-6mm").exists());
+}
+
+/// Truncating `committed` and what follows off the log, with `new/` and `old/` gone or empty,
+/// leaves the part in place, and the reply never says the next run picks up.
+#[test]
+fn a_log_cut_before_its_commit_never_removes_the_part() {
+    for empty_folders in [false, true] {
+        let dir = project();
+        add(dir.path(), &["led-5mm"], false).unwrap();
+        edit(dir.path(), "led-5mm");
+        stop_add_of(dir.path(), &["led-5mm"], kill_at("do clean"));
+        let stage = dir.path().join("parts/.orbe-add");
+        let log = fs::read_to_string(stage.join("log")).unwrap();
+        let cut = log
+            .find("lock-written\n")
+            .or(log.find("committed\n"))
+            .unwrap();
+        fs::write(stage.join("log"), &log[..cut]).unwrap();
+        for name in ["new", "old"] {
+            let _ = fs::remove_dir_all(stage.join(name));
+            if empty_folders {
+                fs::create_dir(stage.join(name)).unwrap();
+            }
+        }
+        for _ in 0..2 {
+            let error = add(dir.path(), &["led-5mm"], false)
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(
+                error.contains("orbe left parts/led-5mm\n  hint: delete parts/led-5mm"),
+                "{error}"
+            );
+            assert!(!error.contains("picks up"), "{error}");
+            assert!(dir.path().join("parts/led-5mm/part.jsonc").is_file());
+        }
+        fs::remove_dir_all(dir.path().join("parts/led-5mm")).unwrap();
+        let reply = add(dir.path(), &["led-5mm"], false).unwrap();
+        assert!(
+            text(&reply).starts_with("wrote parts/led-5mm 0.1.0"),
+            "{}",
+            text(&reply)
+        );
+        assert_lock_agrees(dir.path());
+        assert!(!stage.exists());
+    }
+}
+
+/// `aside <id> -` says nothing was moved aside, so a folder at `old/<id>` is not the add's: it
+/// is never put in place, never deleted, and the add's copy stays where the log placed it.
+#[test]
+fn a_folder_planted_in_old_is_never_installed_or_deleted() {
+    let dir = project();
+    run_with(
+        Some(dir.path()),
+        &ask(&["led-5mm"], false),
+        &mut kill_at("do write parts.lock"),
+    )
+    .err()
+    .unwrap();
+    let planted = dir.path().join("parts/.orbe-add/old/led-5mm");
+    fs::create_dir_all(&planted).unwrap();
+    fs::write(planted.join("note.txt"), "KEEP-ME\n").unwrap();
+    let error = add(dir.path(), &["led-5mm"], false)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        error.starts_with(
+            "parts/.orbe-add/old/led-5mm was not made by an add, so orbe left parts/.orbe-add and its log\n  hint: move parts/.orbe-add/old/led-5mm out of parts/.orbe-add. then run `orbe add -C "
+        ),
+        "{error}"
+    );
+    assert!(dir.path().join("parts/led-5mm/part.jsonc").is_file());
+    let kept = dir.path().join("kept");
+    fs::rename(&planted, &kept).unwrap();
+    let reply = add(dir.path(), &["led-5mm"], false).unwrap();
+    assert!(
+        text(&reply).starts_with("wrote parts/led-5mm 0.1.0\nwrote parts.lock\nrolled back an interrupted add: removed the new parts/led-5mm"),
+        "{}",
+        text(&reply)
+    );
+    assert_eq!(
+        fs::read_to_string(kept.join("note.txt")).unwrap(),
+        "KEEP-ME\n"
+    );
+}
+
+/// The add wrote `parts.lock`, then the saved copy of the old lock was edited. Recovery keeps
+/// both and never says the live lock changed, since it is the one the add wrote.
+#[test]
+fn an_edited_saved_lock_is_kept_beside_the_lock_the_add_wrote() {
+    let dir = project();
+    add(dir.path(), &["led-5mm"], false).unwrap();
+    run_with(
+        Some(dir.path()),
+        &ask(&["resistor-axial"], false),
+        &mut kill_at("log lock-written"),
+    )
+    .err()
+    .unwrap();
+    let saved = dir.path().join("parts/.orbe-add/parts.lock");
+    append_to(&saved, "# SAVED-LOCK-EDIT\n");
+    let live = fs::read(dir.path().join("parts.lock")).unwrap();
+    let error = add(dir.path(), &["resistor-axial"], false)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        error.starts_with(
+            "parts/.orbe-add/parts.lock changed after the add saved the old parts.lock there. orbe left it, and parts.lock as it is\n  hint: move parts/.orbe-add/parts.lock out of parts/.orbe-add to keep it. then run `orbe add -C "
+        ),
+        "{error}"
+    );
+    assert!(
+        fs::read_to_string(&saved)
+            .unwrap()
+            .ends_with("# SAVED-LOCK-EDIT\n")
+    );
+    assert_eq!(fs::read(dir.path().join("parts.lock")).unwrap(), live);
+
+    fs::rename(&saved, dir.path().join("saved.lock")).unwrap();
+    let reply = add(dir.path(), &["resistor-axial"], false).unwrap();
+    assert!(
+        text(&reply).contains(
+            "rolled back an interrupted add: removed the new parts/resistor-axial, left the parts.lock the add wrote, since the copy from before it was not in parts/.orbe-add"
+        ),
+        "{}",
+        text(&reply)
+    );
+    assert!(!text(&reply).contains("since it changed after the add"));
+    assert_lock_agrees(dir.path());
 }
 
 #[test]
@@ -630,4 +1035,31 @@ fn parts_on_another_filesystem_still_takes_an_add() {
     let reply = add(dir.path(), &["led-5mm"], true).unwrap();
     assert!(text(&reply).contains("replacing 0.1.0 with local edits"));
     assert_lock_agrees(dir.path());
+}
+
+/// An edit to the new copy after a crash past the commit keeps the copy the add replaced.
+#[test]
+fn an_edit_to_the_new_copy_after_the_commit_keeps_the_saved_copy() {
+    let dir = edited_project();
+    stop_add(dir.path(), kill_after_commit());
+    append_to(
+        &dir.path().join("parts/led-5mm/part.jsonc"),
+        "// after the crash\n",
+    );
+    let error = add(dir.path(), &["led-5mm"], false)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        error.starts_with(
+            "parts/led-5mm changed after the add replaced it, and the copy it replaced is in parts/.orbe-add/old/led-5mm. orbe left both"
+        ),
+        "{error}"
+    );
+    assert!(part_file(dir.path(), "led-5mm").ends_with("// after the crash\n"));
+    assert!(
+        fs::read_to_string(dir.path().join("parts/.orbe-add/old/led-5mm/part.jsonc"))
+            .unwrap()
+            .ends_with("// my edit\n")
+    );
 }
