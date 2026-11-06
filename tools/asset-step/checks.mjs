@@ -122,12 +122,12 @@ function leadNames(anchors) {
 }
 
 /** Fails `check` when a node outside `exempt` reaches below the seating plane. */
-function seat(check, nodes, exempt, lead) {
+function seat(check, nodes, exempt, context) {
   const low = lowest(nodes, exempt);
   if (!low) return { lowest_node: null, z_mm: null };
-  if (!Number.isFinite(low.z)) fail(check, `${lead}node \`${low.name}\` has a vertex that is not a finite number`);
+  if (!Number.isFinite(low.z)) fail(check, `${context}node \`${low.name}\` has a vertex that is not a finite number`);
   if (!(low.z >= -SEAT_TOLERANCE)) {
-    fail(check, `${lead}node \`${low.name}\` reaches z = ${low.z.toFixed(3)} mm, below the seating plane; only a lead may`);
+    fail(check, `${context}node \`${low.name}\` reaches z = ${low.z.toFixed(3)} mm, below the seating plane; only a lead may`);
   }
   return { lowest_node: low.name, z_mm: mm(low.z) };
 }
