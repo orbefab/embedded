@@ -57,25 +57,78 @@ async function open({ frame = "idle", touch = false } = {}) {
     timeout: 30_000,
   });
   await settle(page);
-  const commands = () => logs.filter((line) => /^(press|release) @/.test(line));
-  return { context, page, logs, commands, cdp: touch ? await context.newCDPSession(page) : undefined };
+  const commands = () => logs.filter((line) => /^(press|release) @\S+$/.test(line));
+  return { context, page, logs, commands, cdp: await context.newCDPSession(page) };
 }
 
 const settle = (page, ms = 800) => page.waitForTimeout(ms);
 
-/** Waits until the controls' damping has stopped moving the camera. */
+/** Waits until the controls' damping has stopped moving the camera: 5 drawn frames in a row
+ * in which the target and the zoom each move under 0.01. The damping steps once per drawn
+ * frame, so frames, not wall time, say when it is done. Throws after 600 frames. */
 async function still(page) {
-  let last = "";
-  for (let tries = 0; tries < 50; tries += 1) {
-    await page.waitForTimeout(200);
-    const now = await page.evaluate(() => {
-      const { controls, camera } = window.orbeViewer.get();
-      return JSON.stringify([...controls.target.toArray(), camera.zoom].map((v) => v.toFixed(3)));
-    });
-    if (now === last) return;
-    last = now;
-  }
+  const result = await page.evaluate(
+    () =>
+      new Promise((done) => {
+        let last;
+        let calm = 0;
+        let frames = 0;
+        const tick = () => {
+          const { controls, camera } = window.orbeViewer.get();
+          const now = [...controls.target.toArray(), camera.zoom];
+          calm = last !== undefined && now.every((value, i) => Math.abs(value - last[i]) < 0.01) ? calm + 1 : 0;
+          last = now;
+          frames += 1;
+          if (calm >= 5 || frames >= 600) done({ frames, calm, now });
+          else requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      })
+  );
+  if (result.calm < 5) throw new Error(`the camera still moved after ${result.frames} frames: ${JSON.stringify(result.now)}`);
 }
+
+/** Presses `T` and waits until the `type` camera is the controls' and stands still. */
+async function toggleView(page, type) {
+  await page.keyboard.press("t");
+  await page.waitForFunction((type) => {
+    const { camera, controls } = window.orbeViewer.get();
+    return camera.type === type && controls?.object === camera;
+  }, type);
+  await still(page);
+}
+
+/** Records the id of each pointer that goes down on the canvas in `window.lastPointer`. */
+const watchPointer = (page) =>
+  page.evaluate(() => {
+    window.orbeViewer.get().gl.domElement.addEventListener("pointerdown", (event) => {
+      window.lastPointer = event.pointerId;
+    });
+  });
+
+/** Dispatches a `type` pointer event for the last pointer on the canvas, and says whether
+ * the canvas had that pointer's capture before and after. */
+const dispatchPointer = (page, type, init) =>
+  page.evaluate(
+    ([type, init]) => {
+      const canvas = window.orbeViewer.get().gl.domElement;
+      const before = canvas.hasPointerCapture(window.lastPointer);
+      canvas.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: window.lastPointer, ...init }));
+      return { before, after: canvas.hasPointerCapture(window.lastPointer) };
+    },
+    [type, init]
+  );
+
+/** The canvas's pointerup, pointercancel and lostpointercapture listeners, counted by type. */
+async function endListeners(cdp) {
+  const { result } = await cdp.send("Runtime.evaluate", { expression: "window.orbeViewer.get().gl.domElement" });
+  const { listeners } = await cdp.send("DOMDebugger.getEventListeners", { objectId: result.objectId });
+  const by = {};
+  for (const { type } of listeners) if (["pointerup", "pointercancel", "lostpointercapture"].includes(type)) by[type] = (by[type] ?? 0) + 1;
+  return by;
+}
+
+const errorsShown = (page) => page.evaluate(() => document.querySelector('[data-testid="errors"]')?.textContent ?? null);
 
 /** The client pixel of the centre of the mesh `node` under the instance `ref`, or of the
  * instance itself with no `node`. */
@@ -192,24 +245,94 @@ const lookAt = (page, ref, node, distance) =>
 
 const pushScene = (page, edit) =>
   page.evaluate((source) => {
-    const { push, firstTarget } = window.orbeFixture;
-    push(new Function("scene", source)(firstTarget));
+    const { source: fixture, firstTarget } = window.orbeFixture;
+    fixture.push(new Function("scene", source)(firstTarget));
   }, edit);
 
 try {
   await guarded(async () => {
-    const { context, page, commands } = await open();
+    const { context, page, commands, cdp } = await open();
     const stem = await pointOn(page, "@btn1", "stem");
     await page.mouse.move(stem.x, stem.y);
     await page.mouse.down();
     await page.waitForTimeout(80);
     const afterDown = commands();
+    const held = await endListeners(cdp);
     await page.mouse.up();
     await page.waitForTimeout(80);
     check(
       "mouse down on btn1 presses it, and up releases it",
       same(afterDown, ["press @btn1"]) && same(commands(), ["press @btn1", "release @btn1"]),
       { afterDown, afterUp: commands() }
+    );
+    const released = await endListeners(cdp);
+    check(
+      "a press adds one pointerup, pointercancel and lostpointercapture listener to the canvas, and its release removes them",
+      same(held, { pointerup: 1, pointercancel: 1, lostpointercapture: 1 }) && same(released, {}),
+      { held, released }
+    );
+    const touchAction = await page.evaluate(() => getComputedStyle(document.querySelector('[data-testid="viewer"]')).touchAction);
+    check("the viewer box's touch-action is none, so a finger on it never scrolls the page", touchAction === "none", { touchAction });
+    await context.close();
+  });
+
+  await guarded(async () => {
+    const { context, page, commands } = await open();
+    const stem = await pointOn(page, "@btn1", "stem");
+    await page.mouse.move(stem.x, stem.y);
+    await page.mouse.down({ button: "right" });
+    await page.waitForTimeout(80);
+    await page.mouse.up({ button: "right" });
+    await page.waitForTimeout(80);
+    check("the right button alone on btn1 sends nothing", same(commands(), []), { commands: commands() });
+    await context.close();
+  });
+
+  await guarded(async () => {
+    const { context, page, commands } = await open();
+    const stem = await pointOn(page, "@btn1", "stem");
+    await watchPointer(page);
+    await page.mouse.move(stem.x, stem.y);
+    await page.mouse.down();
+    await page.waitForTimeout(80);
+    await page.mouse.down({ button: "right" });
+    await page.mouse.up({ button: "right" });
+    await page.waitForTimeout(80);
+    const afterChord = commands();
+    const rightUp = await dispatchPointer(page, "pointerup", { pointerType: "mouse", button: 2, buttons: 1 });
+    await page.waitForTimeout(80);
+    const afterRightUp = commands();
+    await page.mouse.up();
+    await page.waitForTimeout(80);
+    check(
+      "with the left button held on btn1, the right button going down and up does not release it, and the left up does",
+      same(afterChord, ["press @btn1"]) && same(afterRightUp, ["press @btn1"]) && same(commands(), ["press @btn1", "release @btn1"]),
+      { afterChord, rightUp, afterRightUp, afterLeftUp: commands() }
+    );
+    await context.close();
+  });
+
+  await guarded(async () => {
+    const { context, page, commands } = await open();
+    const stem = await pointOn(page, "@btn1", "stem");
+    await page.evaluate(() => {
+      const { source } = window.orbeFixture;
+      window.realSend = source.send;
+      source.send = async (command) =>
+        command.cmd === "press"
+          ? { ok: false, error: { code: "usage", message: "no part @btn1", hint: "" } }
+          : Promise.reject(new Error("the session closed"));
+    });
+    await click(page, stem);
+    const shown = await errorsShown(page);
+    await page.evaluate(() => {
+      window.orbeFixture.source.send = window.realSend;
+    });
+    await click(page, stem);
+    check(
+      "a press the session refuses and a release whose send rejects are both listed, and the next press works",
+      shown === "press @btn1: no part @btn1\nrelease @btn1: the session closed" && same(commands(), ["press @btn1", "release @btn1"]),
+      { shown, commands: commands() }
     );
     await context.close();
   });
@@ -231,14 +354,29 @@ try {
   });
 
   await guarded(async () => {
+    const { context, page, commands, cdp } = await open({ touch: true });
+    const stem = await pointOn(page, "@btn1", "stem");
+    await watchPointer(page);
+    await touch(cdp, "touchStart", [{ ...stem, id: 1 }]);
+    await page.waitForTimeout(150);
+    const capture = await dispatchPointer(page, "pointercancel", { pointerType: "touch" });
+    await page.waitForTimeout(150);
+    const afterCancel = commands();
+    await touch(cdp, "touchEnd", []);
+    await page.waitForTimeout(150);
+    check(
+      "a pointercancel on btn1's pointer releases it while the canvas still has the capture, and the lift sends nothing",
+      capture.before && capture.after && same(afterCancel, ["press @btn1", "release @btn1"]) && same(commands(), afterCancel),
+      { capture, afterCancel, final: commands() }
+    );
+    await context.close();
+  });
+
+  await guarded(async () => {
     const { context, page, commands } = await open();
     const stem = await pointOn(page, "@btn1", "stem");
     const mat = await pointOnMat(page);
-    await page.evaluate(() => {
-      window.orbeViewer.get().gl.domElement.addEventListener("pointerdown", (event) => {
-        window.lastPointer = event.pointerId;
-      });
-    });
+    await watchPointer(page);
     await page.mouse.move(stem.x, stem.y);
     await page.mouse.down();
     await page.mouse.move(stem.x + 1, stem.y);
@@ -265,8 +403,9 @@ try {
   await guarded(async () => {
     const { context, page, commands, cdp } = await open({ touch: true });
     const stem = await pointOn(page, "@btn1", "stem");
+    const secondFingerOn = await hitAt(page, { x: stem.x + 1, y: stem.y });
     const f1 = { ...stem, id: 1 };
-    const f2 = { ...(await pointAt(page, "@nano", [3, -6, 4.2])), id: 2 };
+    const f2 = { x: stem.x + 1, y: stem.y, id: 2 };
     await touch(cdp, "touchStart", [f1]);
     await page.waitForTimeout(120);
     await touch(cdp, "touchStart", [f1, f2]);
@@ -278,9 +417,9 @@ try {
     await touch(cdp, "touchEnd", [f1]);
     await page.waitForTimeout(150);
     check(
-      "a second finger lifting off the board does not release the first finger's press",
-      same(afterSecondLifts, ["press @btn1"]) && same(commands(), ["press @btn1", "release @btn1"]),
-      { secondFingerOn: await hitAt(page, f2), afterSecondLifts, afterFirstLifts: commands() }
+      "a second finger on btn1 while it is held sends no second press, and lifting it does not release the first finger's",
+      secondFingerOn === "@btn1" && same(afterSecondLifts, ["press @btn1"]) && same(commands(), ["press @btn1", "release @btn1"]),
+      { secondFingerOn, afterSecondLifts, afterFirstLifts: commands() }
     );
     await context.close();
   });
@@ -357,8 +496,7 @@ try {
 
   await guarded(async () => {
     const { context, page } = await open();
-    await page.keyboard.press("t");
-    await settle(page, 1200);
+    await toggleView(page, "OrthographicCamera");
     const live = await page.evaluate(() => {
       const viewer = window.orbeViewer;
       return { keys: Object.keys(viewer), camera: viewer.get().camera.type, stale: "camera" in viewer && viewer.camera !== viewer.get().camera };
@@ -383,28 +521,28 @@ try {
         return { target: controls.target.toArray(), zoom: camera.zoom };
       });
     const mat = await pointOnMat(page);
-    const before = await state();
-    await page.mouse.move(mat.x, mat.y);
-    await page.mouse.down({ button: "left" });
-    await page.mouse.move(mat.x - 200, mat.y, { steps: 10 });
-    await page.mouse.up({ button: "left" });
-    await still(page);
-    const afterLeft = await state();
-    await page.mouse.move(mat.x, mat.y);
-    await page.mouse.down({ button: "left" });
-    await page.mouse.move(mat.x, mat.y - 150, { steps: 10 });
-    await page.mouse.up({ button: "left" });
-    await still(page);
-    const afterUp = await state();
+    const drag = async (dx, dy) => {
+      const from = await state();
+      await page.mouse.move(mat.x, mat.y);
+      await page.mouse.down({ button: "left" });
+      await page.mouse.move(mat.x + dx, mat.y + dy, { steps: 10 });
+      await page.mouse.up({ button: "left" });
+      await still(page);
+      const to = await state();
+      return { from, to, moved: to.target.map((value, i) => value - from.target[i]) };
+    };
+    const left = await drag(-200, 0);
+    await toggleView(page, "PerspectiveCamera");
+    await toggleView(page, "OrthographicCamera");
+    const up = await drag(0, -150);
+    const afterUp = up.to;
     await page.mouse.wheel(0, -400);
     await still(page);
     const afterWheel = await state();
-    const dx = afterLeft.target[0] - before.target[0];
-    const dz = afterUp.target[2] - afterLeft.target[2];
     check(
       "in the top view a left drag pans: dragging left moves the target +X, dragging up moves it +Z",
-      dx > 5 && Math.abs(afterLeft.target[2] - before.target[2]) < 0.5 && dz > 5 && Math.abs(afterUp.target[0] - afterLeft.target[0]) < 0.5,
-      { before, afterLeft, afterUp }
+      left.moved[0] > 5 && Math.abs(left.moved[2]) < 0.5 && up.moved[2] > 5 && Math.abs(up.moved[0]) < 0.5,
+      { left, up }
     );
     check("in the top view the wheel zooms", afterWheel.zoom > afterUp.zoom * 1.05, { before: afterUp.zoom, after: afterWheel.zoom });
     await context.close();
@@ -412,8 +550,7 @@ try {
 
   await guarded(async () => {
     const { context, page, cdp } = await open({ touch: true });
-    await page.keyboard.press("t");
-    await settle(page, 1200);
+    await toggleView(page, "OrthographicCamera");
     const mat = await pointOnMat(page);
     const target = () => page.evaluate(() => window.orbeViewer.get().controls.target.toArray());
     const before = await target();
@@ -459,7 +596,7 @@ try {
       page.evaluate(() => ({
         canvas: document.querySelectorAll("canvas").length,
         r1: window.orbeViewer.get().scene.getObjectByName("@r1") !== undefined,
-        errors: document.querySelector('[data-testid="part-errors"]')?.textContent ?? null,
+        errors: document.querySelector('[data-testid="errors"]')?.textContent ?? null,
       }));
     await pushScene(
       page,
@@ -515,9 +652,9 @@ try {
     const glow = [];
     for (const fraction of [0.95, 1.0]) {
       await page.evaluate((fraction) => {
-        const { push, script } = window.orbeFixture;
+        const { source, script } = window.orbeFixture;
         const amps = 0.01 * fraction;
-        push({ ...script.idle, seq: 1000 + fraction, led_a: [amps, amps, amps] });
+        source.push({ ...script.idle, seq: 1000 + fraction, led_a: [amps, amps, amps] });
       }, fraction);
       await settle(page, 300);
       glow.push(

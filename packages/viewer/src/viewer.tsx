@@ -131,7 +131,7 @@ export function Viewer({ source, onCreated }: ViewerProps) {
   }, []);
 
   return (
-    <div style={{ position: "relative", width: "100%", height: "100%", touchAction: "none" }}>
+    <div data-testid="viewer" style={{ position: "relative", width: "100%", height: "100%", touchAction: "none" }}>
       <ShowError>
         <Canvas dpr={[1, 1.75]} gl={{ antialias: true, alpha: false }} onCreated={onCreated}>
           <color args={["#1b1d21"]} attach="background" />
