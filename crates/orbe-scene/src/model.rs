@@ -810,6 +810,10 @@ fn check_own_names(root: &Node, out: &mut Findings) {
         }
         let hint = match keys.as_slice() {
             [] => format!("add `{name}` to `{section}`"),
+            [only] => format!(
+                "{}its only {what} is {only}",
+                did_you_mean(name, keys.iter().copied(), "")
+            ),
             _ => format!(
                 "{}its {section} are {}",
                 did_you_mean(name, keys.iter().copied(), ""),

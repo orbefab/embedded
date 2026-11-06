@@ -96,3 +96,16 @@ pub(crate) fn did_you_mean<'a>(
         .map(|c| format!("did you mean `{prefix}{c}`? "))
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::and_list;
+
+    #[test]
+    fn and_list_joins_like_a_sentence() {
+        assert_eq!(and_list(&[]), "");
+        assert_eq!(and_list(&["a"]), "a");
+        assert_eq!(and_list(&["a", "b"]), "a and b");
+        assert_eq!(and_list(&["a", "b", "c"]), "a, b and c");
+    }
+}
