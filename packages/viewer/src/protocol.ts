@@ -28,6 +28,9 @@ export interface InstanceBase {
   readonly part: string;
   readonly params: Params;
   readonly children: readonly Child[];
+  /** Why the part is not simulated: its own `not_simulated` reason in its parent's `parts`,
+   * else the nearest marked ancestor's. Absent for a simulated part. */
+  readonly not_simulated?: string;
 }
 
 /** A part the scene uses. `placement` is null when the scene's `layout` has no entry, and
@@ -76,6 +79,14 @@ export interface Joint {
   readonly range: number;
 }
 
+/** One entry of `part.jsonc`'s `not_simulated`, unchanged. */
+export interface NotSimulated {
+  readonly what: string;
+  readonly why: string;
+  /** The part's own pins the entry covers. */
+  readonly pins?: readonly string[];
+}
+
 /** What the viewer needs of one part, keyed by part id in `SceneMessage.parts`. */
 export interface PartData {
   /** The URL of `<id>.glb`, or null for a part with no body model of its own. One URL is
@@ -94,6 +105,7 @@ export interface PartData {
   readonly readings: { readonly brightness?: { readonly full: number } };
   /** For each choice param, the `tint` of each choice that has one. */
   readonly tints: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  readonly not_simulated?: readonly NotSimulated[];
 }
 
 /** A pin pair. Each end is a pin ref from the scene's top, without the `@`, such as
@@ -110,6 +122,15 @@ export interface Channels {
   readonly pins: readonly Ref[];
   readonly leds: readonly Ref[];
   readonly switches: readonly Ref[];
+  readonly displays?: readonly Ref[];
+}
+
+/** A pin whose net reaches no pin the engine simulates, with the reason `orbe check` gives
+ * for a wire to it. */
+export interface PinNotSimulated {
+  /** A pin ref at any depth, such as `@nano.A6`. */
+  readonly ref: Ref;
+  readonly why: string;
 }
 
 export interface SceneMessage {
@@ -121,6 +142,7 @@ export interface SceneMessage {
   readonly parts: Readonly<Record<string, PartData>>;
   readonly wires: readonly Wire[];
   readonly channels: Channels;
+  readonly not_simulated?: readonly PinNotSimulated[];
 }
 
 export type RunState = "paused" | "playing" | "stopped" | "faulted";
@@ -137,6 +159,22 @@ export interface FrameMessage {
   readonly led_a: readonly number[];
   /** 1 for closed, 0 for open, per `channels.switches`. */
   readonly switches: readonly (0 | 1)[];
+  /** The speed `play` asked for. */
+  readonly speed?: number | "max";
+  /** Simulated time over wall time, as the session achieved it. */
+  readonly ratio?: number;
+  /** Per `channels.displays`, without pixels. */
+  readonly displays?: readonly DisplayState[];
+  /** How many warnings the session has. */
+  readonly diagnostics?: number;
+}
+
+export interface DisplayState {
+  /** The panel's write count, which changes when its pixels do. */
+  readonly writes: number;
+  readonly on: boolean;
+  /** The backlight pin's last duty as a fraction from 0 to 1, or null before its first. */
+  readonly brightness: number | null;
 }
 
 export type ToViewer = SceneMessage | FrameMessage;

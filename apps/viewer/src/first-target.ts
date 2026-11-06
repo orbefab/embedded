@@ -88,7 +88,10 @@ const parts: Record<string, PartData> = {
       "5V": ["j2.12"], VIN: ["j2.15"],
     },
   }),
-  "ams1117-sot223": part("ams1117-sot223", ams1117, { leads: { GND: [1], OUT: [2, 4], IN: [3] } }),
+  "ams1117-sot223": part("ams1117-sot223", ams1117, {
+    leads: { GND: [1], OUT: [2, 4], IN: [3] },
+    not_simulated: [{ what: "regulator", pins: ["GND", "OUT", "IN"], why: "No AMS1117 fit yet." }],
+  }),
   "atmega328p-tqfp32": part("atmega328p-tqfp32", atmega328p, {
     leads: {
       PD3: [1], PD4: [2], GND: [3, 5, 21], VCC: [4, 6], PB6: [7], PB7: [8], PD5: [9], PD6: [10], PD7: [11],
@@ -96,6 +99,13 @@ const parts: Record<string, PartData> = {
       ADC7: [22], PC0: [23], PC1: [24], PC2: [25], PC3: [26], PC4: [27], PC5: [28], PC6: [29], PD0: [30],
       PD1: [31], PD2: [32],
     },
+    not_simulated: [
+      {
+        what: "ADC6, ADC7",
+        pins: ["ADC6", "ADC7"],
+        why: "The engine's atmega328p kind has the DIP's pins, with no ADC6 or ADC7 pad.",
+      },
+    ],
   }),
   "capacitor-0603": part("capacitor-0603", capacitor0603, { leads: { a: [1], b: [2] } }),
   "capacitor-tantalum-3216": part("capacitor-tantalum-3216", tantalum3216, { leads: { pos: [1], neg: [2] } }),
@@ -104,20 +114,39 @@ const parts: Record<string, PartData> = {
       GND: [1], TXD: [2], RXD: [3], V3: [4], UDP: [5], UDM: [6], XI: [7], XO: [8], CTS: [9], DSR: [10], RI: [11],
       DCD: [12], DTR: [13], RTS: [14], R232: [15], VCC: [16],
     },
+    not_simulated: [
+      {
+        what: "USB to serial",
+        pins: ["RXD", "V3", "UDP", "UDM", "XI", "XO", "CTS", "DSR", "RI", "DCD", "RTS", "R232", "VCC"],
+        why: "The engine has no USB-serial chip. A serial source stands in for TXD and a steps source for DTR.",
+      },
+    ],
   }),
-  "crystal-3215": part("crystal-3215", crystal3215, { leads: numbered(2) }),
-  "diode-sod123": part("diode-sod123", diodeSod123, { leads: { cathode: [1], anode: [2] } }),
+  "crystal-3215": part("crystal-3215", crystal3215, {
+    leads: numbered(2),
+    not_simulated: [{ what: "crystal", pins: ["1", "2"], why: "The engine's chips take their clock as a value." }],
+  }),
+  "diode-sod123": part("diode-sod123", diodeSod123, {
+    leads: { cathode: [1], anode: [2] },
+    not_simulated: [{ what: "forward drop", why: "No Schottky fit yet. A wire stands in, so the drop is 0 V." }],
+  }),
   "led-0603": part("led-0603", led0603, {
     leads: { anode: [1], cathode: [2] },
-    view: { glow: [{ node: "body", by: "brightness" }] },
+    view: { glow: [{ node: "body", by: "brightness" }], tint: [{ node: "body", by: "color" }] },
     readings: { brightness: { full: LED_FULL_A } },
     tints: { color: { red: "#e0b0a4", yellow: "#e8c56a", green: "#c5d6b0" } },
+    not_simulated: [{ what: "yellow and green", why: "They use the red WP7113ID fit until a fit of their own exists." }],
   }),
   "led-5mm": part("led-5mm", led5mm, {
     leads: { anode: [1], cathode: [2] },
     view: { glow: [{ node: "body", by: "brightness" }], tint: [{ node: "body", by: "color" }] },
     readings: { brightness: { full: LED_FULL_A } },
     tints: { color: { red: "#d8342a" } },
+    not_simulated: [
+      { what: "light", why: "The engine reports current. Brightness is the current over 10 mA, so 1 at 10 mA, and above that the LED blooms." },
+      { what: "temperature", why: "The fit is at 25 C and the engine has no temperature." },
+      { what: "reverse breakdown", why: "The engine's LED has no breakdown voltage." },
+    ],
   }),
   "pin-header-1x15": part("pin-header-1x15", header1x15, { leads: numbered(15) }),
   "pin-header-2x3": part("pin-header-2x3", header2x3, { leads: numbered(6) }),
@@ -129,18 +158,58 @@ const parts: Record<string, PartData> = {
         { nodes: ["band1-brown", "band2-black", "band3-orange", "band4-gold"], by: "resistance", rule: "iec60062-4-band" },
       ],
     },
+    not_simulated: [
+      { what: "tolerance", why: "The value is exact. The fourth band is drawn gold, 5 %." },
+      { what: "temperature coefficient", why: "The engine has no temperature." },
+    ],
   }),
-  "resonator-cstce": part("resonator-cstce", resonator, { leads: { IN: [1], GND: [2], OUT: [3] } }),
-  "tactile-switch-6mm": part("tactile-switch-6mm", tactile6mm, { leads: { a: [1, 2], b: [3, 4] }, ...plunger("stem", 0.25) }),
+  "resonator-cstce": part("resonator-cstce", resonator, {
+    leads: { IN: [1], GND: [2], OUT: [3] },
+    not_simulated: [
+      { what: "oscillation", why: "The engine's chips take their clock as a value. The built-in loads stand in." },
+    ],
+  }),
+  "tactile-switch-6mm": part("tactile-switch-6mm", tactile6mm, {
+    leads: { a: [1, 2], b: [3, 4] },
+    ...plunger("stem", 0.25),
+    not_simulated: [{ what: "operating force", why: "A press is a contact change. Force and travel are drawing facts only." }],
+  }),
   "tactile-switch-smd": part("tactile-switch-smd", tactileSmd, { leads: { a: [1, 2], b: [3, 4] }, ...plunger("button", 0.2) }),
-  "usb-mini-b": part("usb-mini-b", usbMiniB, { leads: { VBUS: [1], DM: [2], DP: [3], ID: [4], GND: [5] } }),
+  "usb-mini-b": part("usb-mini-b", usbMiniB, {
+    leads: { VBUS: [1], DM: [2], DP: [3], ID: [4], GND: [5] },
+    not_simulated: [
+      { what: "USB data", pins: ["DM", "DP", "ID"], why: "The host's 5 V stands in for a plugged cable. USB data is not modelled." },
+    ],
+  }),
 };
 
 type Turn = readonly [number, number, number];
 const UNDER: Turn = [180, 0, 0];
 
+// nano-board's `parts` that are marked `not_simulated`, with their reasons.
+const NANO_NOT_SIMULATED: Readonly<Record<string, string>> = {
+  r_tx: "It feeds the TX LED, which follows the CH340G.",
+  r_rx: "It feeds the RX LED, which follows the CH340G.",
+  led_tx: "The CH340G drives it, and its model covers only TXD and DTR.",
+  led_rx: "The CH340G drives it, and its model covers only TXD and DTR.",
+  c_usb_a: "The clone's schematic is not cited, so its value and net are unknown.",
+  c_usb_b: "The clone's schematic is not cited, so its value and net are unknown.",
+  c_bulk_usb: "A rail capacitor. The engine's board example leaves rail capacitors out.",
+  r_rxd: "Its far end is the CH340G's RXD, which its model does not cover.",
+  c_bulk_reg: "It sits on the AMS1117 path, which is not modelled.",
+  c_reg: "It sits on the AMS1117 path, which is not modelled.",
+};
+
 function child(name: string, type: string, at: Turn, rotate: Turn = [0, 0, 0], params: Child["params"] = {}): Child {
-  return { name, part: type, params, placement: { at, rotate }, children: [] };
+  const reason = NANO_NOT_SIMULATED[name];
+  return {
+    name,
+    part: type,
+    params,
+    placement: { at, rotate },
+    children: [],
+    ...(reason === undefined ? {} : { not_simulated: reason }),
+  };
 }
 
 // nano-board's `parts` and `layout`, with each param as the reader parses it.
@@ -207,6 +276,14 @@ export const firstTarget: SceneMessage = {
     leds: ["@led1", "@nano.led_l", "@nano.led_pwr"],
     switches: ["@btn1", "@nano.sw_reset"],
   },
+  // The Nano's header pins whose nets reach no simulated pin, with the reasons `orbe check`
+  // gives for a wire to each. A session lists such pins at every depth.
+  not_simulated: [
+    { ref: "@nano.3V3", why: "The engine has no USB-serial chip. A serial source stands in for TXD and a steps source for DTR." },
+    { ref: "@nano.A6", why: "The engine's atmega328p kind has the DIP's pins, with no ADC6 or ADC7 pad." },
+    { ref: "@nano.A7", why: "The engine's atmega328p kind has the DIP's pins, with no ADC6 or ADC7 pad." },
+    { ref: "@nano.VIN", why: "No AMS1117 fit yet." },
+  ],
 };
 
 // led1 and the L LED carry the currents a run of this scene measured with the button held.
