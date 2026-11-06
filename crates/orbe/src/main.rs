@@ -1,21 +1,27 @@
 //! `orbe`, the CLI. `orbe check` type-checks a scene. `orbe add` copies catalog parts.
 //! `orbe test` runs each test file's live commands in a fresh in-process session. The live
 //! commands, such as `orbe open` and `orbe step`, drive a session that a background process
-//! holds between commands.
+//! holds between commands. `orbe skills` prints the skills that tell an agent how to use it.
 
 #[cfg(unix)]
 mod live;
+mod skills;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{Arg, ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand};
 use orbe_scene::{Diagnostic, Reply, Request};
 use orbe_session::test::{self, Report};
 use serde_json::{Value, json};
 
 #[derive(Parser)]
-#[command(name = "orbe", version, about = "A hardware simulator for agents")]
+#[command(
+    name = "orbe",
+    version,
+    about = "A hardware simulator for agents",
+    after_help = "An agent new to orbe runs `orbe skills get core` first."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -24,6 +30,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Type-checks a scene and every part file it uses, and prints each finding.
+    #[command(display_order = 1)]
     Check {
         /// The scene file, such as scene.jsonc.
         scene: PathBuf,
@@ -32,6 +39,7 @@ enum Command {
         json: bool,
     },
     /// Copies catalog parts into `parts/` and writes `parts.lock`.
+    #[command(display_order = 2)]
     Add {
         /// Part ids. A version is `id@0.1.0`.
         ids: Vec<String>,
@@ -53,6 +61,7 @@ enum Command {
     },
     /// Runs each test file, a transcript of live commands, in a fresh session, and stops a file
     /// at its first failed line.
+    #[command(display_order = 20)]
     Test {
         /// Test files, or project folders whose tests/*.test run. The current folder by default.
         paths: Vec<PathBuf>,
@@ -63,6 +72,12 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Prints the skills that tell an agent how to use orbe.
+    #[command(display_order = 21)]
+    Skills {
+        #[command(subcommand)]
+        command: SkillsCommand,
+    },
     /// The session's background process, which `orbe open` starts.
     #[command(hide = true)]
     Daemon {
@@ -71,6 +86,73 @@ enum Command {
         #[arg(long)]
         start_log: Option<u64>,
     },
+}
+
+#[derive(Subcommand)]
+enum SkillsCommand {
+    /// Lists the skills with what each covers.
+    List {
+        /// Print one JSON envelope instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Prints one skill, such as `core`.
+    Get {
+        name: String,
+        /// Print one JSON envelope instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// The live commands parse their own words, from the table in `orbe-session`. Clap only
+/// describes them, so `orbe --help` and `orbe <command> --help` list them.
+fn cli() -> clap::Command {
+    let live = orbe_session::COMMANDS
+        .iter()
+        .zip(3..)
+        .map(|(spec, order)| live_help(spec).display_order(order));
+    Cli::command().subcommands(live)
+}
+
+const LIVE_HELP: &str = "Refs: @btn1, @nano.D13, @led1.i. Conditions: @led1 on, @nano.D13 high, @led1.i '>' 5mA, serial contains \"text\", no diagnostics. Durations: 100ms, 1.5ms, 20us. `orbe skills get core` explains each.";
+
+fn live_help(spec: &orbe_session::Spec) -> clap::Command {
+    let usage: Vec<String> = spec
+        .usage
+        .split(" | ")
+        .map(|form| format!("orbe {form} [OPTIONS]"))
+        .collect();
+    let mut command = clap::Command::new(spec.name)
+        .about(spec.about.trim_end_matches('.'))
+        .override_usage(usage.join("\n       "))
+        .arg(
+            Arg::new("session")
+                .long("session")
+                .value_name("NAME")
+                .help("The session, instead of ORBE_SESSION or the project's default name"),
+        )
+        .arg(
+            Arg::new("json")
+                .long("json")
+                .action(ArgAction::SetTrue)
+                .help("Print one JSON envelope instead of text"),
+        );
+    if ["<ref>", "<condition>", "<duration>"]
+        .iter()
+        .any(|word| spec.usage.contains(word))
+    {
+        command = command.after_help(LIVE_HELP);
+    }
+    if spec.name == "close" {
+        command = command.arg(
+            Arg::new("all")
+                .long("all")
+                .action(ArgAction::SetTrue)
+                .help("Close every session of this orbe"),
+        );
+    }
+    command
 }
 
 const FAILED: u8 = 1;
@@ -92,9 +174,16 @@ fn main() -> ExitCode {
             eprintln!("error[usage]: `orbe {}` takes UTF-8 arguments", spec.name);
             return ExitCode::from(USAGE);
         };
+        if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+            let help = cli().try_get_matches_from(["orbe", spec.name, "--help"]);
+            return usage(help.expect_err("--help stops the parse"));
+        }
         return live_command(spec, &args);
     }
-    match Cli::try_parse() {
+    let parsed = cli()
+        .try_get_matches()
+        .and_then(|matches| Cli::from_arg_matches(&matches));
+    match parsed {
         Ok(cli) => match cli.command {
             Command::Check { scene, json } => check(&scene, json),
             Command::Add {
@@ -119,6 +208,7 @@ fn main() -> ExitCode {
                 verbose,
                 json,
             } => run_tests(&paths, verbose, json),
+            Command::Skills { command } => print_skill(command),
             Command::Daemon { session, start_log } => daemon(&session, start_log),
         },
         Err(err) => usage(err),
@@ -350,6 +440,46 @@ fn report_json(report: &Report, verbose: bool) -> Value {
             .collect();
     }
     entry
+}
+
+fn print_skill(command: SkillsCommand) -> ExitCode {
+    match command {
+        SkillsCommand::List { json: true } => {
+            let skills: Vec<Value> = skills::SKILLS
+                .iter()
+                .map(|s| json!({ "name": s.name, "about": s.about }))
+                .collect();
+            print_json(&json!({ "ok": true, "data": { "skills": skills } }));
+        }
+        SkillsCommand::List { json: false } => {
+            for skill in skills::SKILLS {
+                println!("{:<8} {}", skill.name, skill.about);
+            }
+        }
+        SkillsCommand::Get { name, json } => {
+            let Some(skill) = skills::find(&name) else {
+                let message = format!("no skill named `{name}`");
+                let hint = format!("the skills are {}", skills::names());
+                if json {
+                    print_json(&json!({
+                        "ok": false,
+                        "error": { "code": "usage", "message": message, "hint": hint }
+                    }));
+                } else {
+                    eprintln!("error[usage]: {message}\n  hint: {hint}");
+                }
+                return ExitCode::from(USAGE);
+            };
+            if json {
+                print_json(
+                    &json!({ "ok": true, "data": { "name": skill.name, "text": skill.text() } }),
+                );
+            } else {
+                print!("{}", skill.text());
+            }
+        }
+    }
+    ExitCode::SUCCESS
 }
 
 fn check(scene: &Path, json: bool) -> ExitCode {
