@@ -946,6 +946,13 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     let project = worked_example();
     let dir = project.path();
     let scene = fs::read_to_string(dir.join("scene.jsonc")).unwrap();
+    let series = scene
+        .lines()
+        .find(|l| l.contains("\"r1\""))
+        .and_then(|l| l.split("\"resistance\": \"").nth(1))
+        .and_then(|v| v.split('"').next())
+        .unwrap()
+        .to_owned();
     let cathode = "[\"led1.cathode\", \"nano.GND\"],";
     let bare: String = scene
         .lines()
@@ -997,6 +1004,10 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
             pin["level"].as_str().unwrap(),
             if led["on"] == true { "on" } else { "off" },
         ),
+    );
+    says(
+        &core,
+        &format!("Give each LED a series resistor, such as {series} ohm from a 5 V pin."),
     );
     says(
         &core,
