@@ -162,11 +162,12 @@ export interface FrameMessage {
   readonly led_a: readonly number[];
   /** 1 for closed, 0 for open, per `channels.switches`. */
   readonly switches: readonly (0 | 1)[];
-  /** The speed `play` asked for. */
+  /** Reserved until the engine has a play speed: the speed `play` asked for. */
   readonly speed?: number | "max";
-  /** Simulated time over wall time, as the session achieved it. */
+  /** Reserved until the engine has a play speed: simulated time over wall time, as the
+   * session achieved it. */
   readonly ratio?: number;
-  /** Per `channels.displays`, without pixels. */
+  /** Reserved until the engine has displays: per `channels.displays`, without pixels. */
   readonly displays?: readonly DisplayState[];
   /** How many warnings the session has. */
   readonly diagnostics?: number;
