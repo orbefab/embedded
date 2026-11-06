@@ -3,12 +3,13 @@
 use std::fmt;
 
 use orbe_scene::{MapPart, RefMap};
+use serde::{Deserialize, Serialize};
 use sim_core::name::Quantity;
 
 use crate::reply::{Code, Error};
 
 /// `@` and a dotted scene name, such as `@nano.D13` or `@led1.i`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ref(Vec<String>);
 
 impl Ref {
@@ -48,7 +49,7 @@ pub enum Target {
     },
 }
 
-const QUANTITIES: [Quantity; 8] = [
+pub(crate) const QUANTITIES: [Quantity; 8] = [
     Quantity::I,
     Quantity::V,
     Quantity::P,
@@ -60,8 +61,12 @@ const QUANTITIES: [Quantity; 8] = [
 ];
 
 /// Walks one instance per segment from the scene. The last segment may also be a pin or a
-/// quantity.
-pub fn resolve(map: &RefMap, r: &Ref) -> Result<Target, Error> {
+/// quantity. `reports` lists the quantities the engine reports for an engine part.
+pub fn resolve(
+    map: &RefMap,
+    r: &Ref,
+    reports: &dyn Fn(&str) -> Vec<Quantity>,
+) -> Result<Target, Error> {
     let first = &r.0[0];
     if !map.top.contains(first) {
         return Err(unknown(
@@ -86,28 +91,40 @@ pub fn resolve(map: &RefMap, r: &Ref) -> Result<Target, Error> {
             });
         }
         if last && let Some(&quantity) = QUANTITIES.iter().find(|q| q.as_str() == seg) {
-            let engine = one_engine(&path, part)?;
+            let engine = one_engine(&path, part, Code::NoReading)?;
+            let reported = reports(&engine);
+            if !reported.contains(&quantity) {
+                return Err(Error::new(
+                    Code::NoReading,
+                    format!("the engine reports no `{path}.{seg}`"),
+                    reports_hint(&path, &reported),
+                ));
+            }
             return Ok(Target::Quantity {
                 path,
                 engine,
                 quantity,
             });
         }
+        let reported = one_engine(&path, part, Code::NoReading)
+            .map(|engine| reports(&engine))
+            .unwrap_or_default();
         return Err(unknown(
             r,
             format!("`{path}` has no pin or part named `{seg}`"),
-            names(part),
+            names(part, &reported),
         ));
     }
     Ok(Target::Part(path))
 }
 
-/// The flat name of the one engine part a part's own model writes.
-pub fn one_engine(path: &str, part: &MapPart) -> Result<String, Error> {
+/// The flat name of the one engine part a part's own model writes. `code` is the caller's:
+/// `no_reading` for a read, `not_settable` for an input.
+pub fn one_engine(path: &str, part: &MapPart, code: Code) -> Result<String, Error> {
     match part.engine.as_slice() {
         [one] => Ok(one.name.clone()),
         [] => Err(Error::new(
-            Code::NotSettable,
+            code,
             format!("`{path}` has no engine part of its own"),
             if part.children.is_empty() {
                 "it is not simulated".to_string()
@@ -116,10 +133,22 @@ pub fn one_engine(path: &str, part: &MapPart) -> Result<String, Error> {
             },
         )),
         many => Err(Error::new(
-            Code::NotSettable,
+            code,
             format!("`{path}` is {} engine parts", many.len()),
-            "a quantity or an input names one engine part".to_string(),
+            format!(
+                "a quantity or an input names one engine part; read one of its {}",
+                names(part, &[])
+            ),
         )),
+    }
+}
+
+pub(crate) fn reports_hint(path: &str, reported: &[Quantity]) -> String {
+    let names: Vec<&str> = reported.iter().map(|q| q.as_str()).collect();
+    match names.as_slice() {
+        [] => format!("`{path}` reports no quantity; read one of its pins"),
+        [one] => format!("`{path}` reports {one}"),
+        [rest @ .., last] => format!("`{path}` reports {} and {last}", rest.join(", ")),
     }
 }
 
@@ -127,7 +156,8 @@ fn unknown(r: &Ref, message: String, hint: String) -> Error {
     Error::new(Code::UnknownRef, format!("{r}: {message}"), hint)
 }
 
-fn names(part: &MapPart) -> String {
+/// What a ref can name inside `part`: its pins, its parts and the quantities it reports.
+pub(crate) fn names(part: &MapPart, reported: &[Quantity]) -> String {
     let mut found = Vec::new();
     if !part.pins.is_empty() {
         found.push(format!(
@@ -138,8 +168,9 @@ fn names(part: &MapPart) -> String {
     if !part.children.is_empty() {
         found.push(format!("parts: {}", part.children.join(", ")));
     }
-    if part.engine.len() == 1 {
-        found.push("quantities: i, v, p".to_string());
+    if !reported.is_empty() {
+        let names: Vec<&str> = reported.iter().map(|q| q.as_str()).collect();
+        found.push(format!("quantities: {}", names.join(", ")));
     }
     found.join("; ")
 }

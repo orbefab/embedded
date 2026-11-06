@@ -2,9 +2,11 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::target::Ref;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Condition {
     /// `@led1 on`, `@nano.D13 high`.
     State(Ref, State),
@@ -16,7 +18,7 @@ pub enum Condition {
     NoDiagnostics,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum State {
     On,
     Off,
@@ -41,7 +43,7 @@ impl State {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Op {
     Lt,
     Le,
@@ -75,7 +77,7 @@ impl Op {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Unit {
     Ampere,
     Volt,
@@ -98,8 +100,8 @@ impl Unit {
     }
 }
 
-/// A value in its SI unit, as written: `5mA` is 0.005 A.
-#[derive(Clone, Debug, PartialEq)]
+/// A value in its SI unit, as written: `5mA` is 0.005 A, and `3.2e-7A` is what `get` prints.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Amount {
     pub value: f64,
     pub unit: Unit,
@@ -120,10 +122,14 @@ impl Amount {
     pub fn parse(text: &str) -> Result<Amount, String> {
         let bad = || format!("`{text}` is not a value with a unit, such as `5mA` or `2.5V`");
         let split = text
-            .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
+            .find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E')))
             .ok_or_else(bad)?;
         let (number, suffix) = text.split_at(split);
-        let number: f64 = number.parse().map_err(|_| bad())?;
+        let number: f64 = number
+            .parse()
+            .ok()
+            .filter(|n: &f64| n.is_finite())
+            .ok_or_else(bad)?;
         let (scale, unit) = match Unit::parse(suffix) {
             Some(unit) => (1.0, unit),
             None => PREFIXES
@@ -145,6 +151,9 @@ impl Condition {
         let words: Vec<&str> = words.iter().map(String::as_str).collect();
         match words.as_slice() {
             ["no", "diagnostics"] => Ok(Condition::NoDiagnostics),
+            ["serial", "contains", ""] => {
+                Err("`serial contains` needs text, because `\"\"` is in any serial".to_string())
+            }
             ["serial", "contains", text] => Ok(Condition::SerialContains((*text).to_string())),
             [r, word] if r.starts_with('@') => {
                 let state = State::parse(word)

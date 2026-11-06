@@ -100,12 +100,31 @@ fn each_condition_form_parses() {
 }
 
 #[test]
+fn an_amount_reads_the_numbers_a_reply_prints() {
+    for (text, value) in [
+        ("3.2687677014840023e-7A", 3.2687677014840023e-7),
+        ("1e-3mA", 1e-6),
+        ("2.5E+1V", 25.0),
+        ("-0.0V", 0.0),
+    ] {
+        let Condition::Compare(_, _, amount) =
+            Condition::parse(&words(&format!("@led1.i > {text}"))).unwrap()
+        else {
+            panic!("not a comparison");
+        };
+        assert_eq!(amount.value, value, "{text}");
+    }
+}
+
+#[test]
 fn a_bad_condition_says_what_to_write() {
     for (text, says) in [
         ("@led1 bright", "use on, off, high or low"),
         ("@led1.i == 5mA", "use <, <=, > or >="),
         ("@led1.i > 5", "not a value with a unit"),
         ("@led1.i > 5mOhm", "not a value with a unit"),
+        ("@led1.i > 1e400A", "not a value with a unit"),
+        ("@led1.i > 1e-A", "not a value with a unit"),
         ("led1 on", "not a condition"),
         ("@ on", "empty name"),
         ("@led1. on", "empty name"),
@@ -114,6 +133,8 @@ fn a_bad_condition_says_what_to_write() {
         let error = Condition::parse(&words(text)).unwrap_err();
         assert!(error.contains(says), "{text}: {error}");
     }
+    let error = line("expect serial contains \"\"").unwrap_err();
+    assert!(error.contains("needs text"), "{error}");
 }
 
 #[test]

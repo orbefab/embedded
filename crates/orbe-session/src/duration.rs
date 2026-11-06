@@ -2,8 +2,10 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 /// A span of simulated time, in picoseconds.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Duration(u64);
 
 const UNITS: &[(&str, u32)] = &[

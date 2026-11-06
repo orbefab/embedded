@@ -3,11 +3,14 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::condition::Condition;
 use crate::duration::Duration;
 use crate::target::Ref;
 
-#[derive(Clone, Debug, PartialEq)]
+/// A command's wire form, for a session process and its client, is its serde form.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Command {
     Open(PathBuf),
     Close,
@@ -19,7 +22,7 @@ pub enum Command {
     Expect(Condition),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Step {
     For(Duration),
     Until {

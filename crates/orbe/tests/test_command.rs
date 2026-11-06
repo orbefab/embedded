@@ -1,70 +1,11 @@
 //! `orbe test` on the first target: each live command's reply as text and as JSON, each error
 //! code, and how a failing test reports.
 
-#[path = "../../orbe-scene/tests/common/mod.rs"]
-mod common;
+mod live;
 
 use std::fs;
-use std::path::Path;
-use std::process::Command;
 
-use serde_json::Value;
-use tempfile::TempDir;
-
-struct Run {
-    code: i32,
-    stdout: String,
-    stderr: String,
-}
-
-impl Run {
-    fn json(&self) -> Value {
-        serde_json::from_str(&self.stdout).unwrap_or_else(|e| panic!("{e}: {}", self.stdout))
-    }
-}
-
-fn orbe(dir: &Path, args: &[&str]) -> Run {
-    let output = Command::new(env!("CARGO_BIN_EXE_orbe"))
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    Run {
-        code: output.status.code().unwrap(),
-        stdout: String::from_utf8(output.stdout).unwrap(),
-        stderr: String::from_utf8(output.stderr).unwrap(),
-    }
-}
-
-/// The first-target project with one test file, `tests/a.test`.
-fn project(test: &str) -> TempDir {
-    let dir = common::project("nano-button");
-    fs::create_dir_all(dir.path().join("tests")).unwrap();
-    fs::write(dir.path().join("tests/a.test"), test).unwrap();
-    dir
-}
-
-/// Each reply of a passing `--json -v` run of `tests/a.test`.
-fn replies(test: &str) -> Vec<Value> {
-    let dir = project(test);
-    let run = orbe(dir.path(), &["test", "--json", "-v"]);
-    let json = run.json();
-    json["data"]["tests"][0]["replies"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["reply"].clone())
-        .collect()
-}
-
-/// The error a one-test run stopped on, from `--json`.
-fn failed(test: &str) -> (Value, Value) {
-    let dir = project(test);
-    let run = orbe(dir.path(), &["test", "--json"]);
-    assert_eq!(run.code, 1, "{}", run.stdout);
-    let entry = run.json()["data"]["tests"][0].clone();
-    (entry["error"].clone(), entry)
-}
+use live::{common, failed, orbe, project, replies};
 
 #[test]
 fn the_first_target_example_passes() {
@@ -154,7 +95,13 @@ fn each_command_replies_in_text() {
         "{}",
         blocks[2]
     );
-    assert_eq!(block(3), ["5> press @btn1", "  pressed btn1 at t=100ms"]);
+    assert_eq!(
+        block(3),
+        [
+            "5> press @btn1",
+            "  pressed btn1 at t=100ms; reads show it after t=100ms"
+        ]
+    );
 
     let until = block(4);
     assert_eq!(until[0], "6> step --until @led1 on --timeout 50ms");
@@ -165,7 +112,7 @@ fn each_command_replies_in_text() {
         "{}",
         until[3]
     );
-    assert_eq!(until[4], "    101ms led1 on");
+    assert_eq!(until[4], "    by 101ms led1 on");
 
     assert_eq!(
         block(5),
@@ -215,7 +162,10 @@ fn each_command_replies_in_text() {
 
     assert_eq!(
         block(8),
-        ["10> release @btn1", "  released btn1 at t=101ms"]
+        [
+            "10> release @btn1",
+            "  released btn1 at t=101ms; reads show it after t=101ms"
+        ]
     );
     let step = block(9);
     assert_eq!(
@@ -226,12 +176,12 @@ fn each_command_replies_in_text() {
             "    101ms nano.D2 low"
         ]
     );
-    assert_eq!(step[4], "    102ms led1 off");
+    assert_eq!(step[4], "    by 102ms led1 off");
     assert_eq!(
         block(10),
         [
             "12> expect no diagnostics",
-            "  passed no diagnostics (no diagnostics)"
+            "  passed no diagnostics (no diagnostics; a chip warning can show up to 10ms late)"
         ]
     );
     assert_eq!(block(11)[..2], ["13> close", "  closed at t=151ms"]);
@@ -309,7 +259,7 @@ fn each_command_replies_with_one_json_envelope() {
     assert_eq!(changes[1]["ref"], "@nano.D13");
     assert_eq!(
         changes[2],
-        serde_json::json!({ "kind": "led", "at_ps": 101_000_000_000u64, "ref": "@led1", "on": true })
+        serde_json::json!({ "kind": "led", "by_ps": 101_000_000_000u64, "ref": "@led1", "on": true })
     );
 
     assert_eq!(high["data"]["actual"], "nano.D13 high");
@@ -325,7 +275,10 @@ fn each_command_replies_with_one_json_envelope() {
 
     assert_eq!(release["data"]["landed_ps"], 101_000_000_000u64);
     assert_eq!(step2["data"]["changes"][0]["level"], "low");
-    assert_eq!(clean["data"]["actual"], "no diagnostics");
+    assert_eq!(
+        clean["data"]["actual"],
+        "no diagnostics; a chip warning can show up to 10ms late"
+    );
     assert_eq!(
         close["data"],
         serde_json::json!({ "closed": true, "at_ps": 151_000_000_000u64 })
@@ -469,7 +422,7 @@ fn each_error_code() {
         (
             "open\nget @nano",
             "no_reading",
-            "`nano` has no engine part of its own",
+            "`nano` has no reading of its own",
         ),
         (
             "open\nget @nano.mcu.i",

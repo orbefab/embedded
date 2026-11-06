@@ -274,6 +274,7 @@ name = "orbe-session"
 version = "0.1.0"
 dependencies = [
  "orbe-scene",
+ "serde",
  "serde_json",
  "sim-circuit",
  "sim-core",

@@ -1,13 +1,17 @@
 //! What a command answers: the session's time and state, the command's data, and an error
 //! with its fix when it failed. Text by default, one JSON envelope with `--json`.
 
-use std::fmt::Write as _;
+use std::fmt::{self, Write as _};
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::condition::Unit;
 use crate::duration::Duration;
 
-#[derive(Clone, Debug, PartialEq)]
+/// A reply's wire form, for a session process and its client, is its serde form. `json` is
+/// the envelope a person or an agent reads.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Reply {
     pub session: String,
     pub t_ps: u64,
@@ -16,7 +20,7 @@ pub struct Reply {
     pub error: Option<Error>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum State {
     /// No session is open.
     Closed,
@@ -37,7 +41,7 @@ impl State {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Error {
     pub code: Code,
     pub message: String,
@@ -54,7 +58,7 @@ impl Error {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Code {
     Usage,
     IoError,
@@ -75,12 +79,14 @@ pub enum Code {
     Value,
     PastStop,
     NoChange,
+    /// A step its caller stopped between two slices.
+    Cancelled,
     /// The engine refused to open the netlist, with its diagnostic's code.
-    Engine(&'static str),
+    Engine(String),
 }
 
 impl Code {
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &str {
         match self {
             Code::Usage => "usage",
             Code::IoError => "io_error",
@@ -99,12 +105,13 @@ impl Code {
             Code::Value => "value",
             Code::PastStop => "past_stop",
             Code::NoChange => "no_change",
+            Code::Cancelled => "cancelled",
             Code::Engine(code) => code,
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Data {
     None,
     Opened {
@@ -115,7 +122,7 @@ pub enum Data {
         diagnostics: Vec<Diagnostic>,
     },
     /// The findings `orbe check` reports, for an `open` it refused.
-    Invalid(Vec<orbe_scene::Diagnostic>),
+    Invalid(Vec<Finding>),
     Closed {
         at_ps: u64,
     },
@@ -130,17 +137,52 @@ pub enum Data {
     Checked(Check),
 }
 
+/// One `orbe check` finding, placed at its file, line and column.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Finding {
+    pub code: String,
+    pub file: String,
+    pub line: usize,
+    pub column: usize,
+    pub message: String,
+    pub hint: String,
+}
+
+impl Finding {
+    pub fn new(d: orbe_scene::Diagnostic) -> Finding {
+        Finding {
+            code: d.code.as_str().to_string(),
+            file: d.file,
+            line: d.line,
+            column: d.column,
+            message: d.message,
+            hint: d.hint,
+        }
+    }
+}
+
+/// `orbe check`'s own form: `scene.jsonc:4:23: error[part_missing]: ...` and its hint.
+impl fmt::Display for Finding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}:{}:{}: error[{}]: {}\n  hint: {}",
+            self.file, self.line, self.column, self.code, self.message, self.hint
+        )
+    }
+}
+
 /// An engine diagnostic: its code and the engine's JSON.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Diagnostic {
-    pub code: &'static str,
+    pub code: String,
     pub json: Value,
 }
 
 impl Diagnostic {
     pub fn new(diagnostic: &sim_core::diagnostic::Diagnostic) -> Diagnostic {
         Diagnostic {
-            code: diagnostic.code(),
+            code: diagnostic.code().to_string(),
             json: serde_json::to_value(diagnostic).unwrap_or_default(),
         }
     }
@@ -159,13 +201,13 @@ impl Diagnostic {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Got {
     pub target: String,
     pub value: Reading,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Reading {
     /// A pin: the chip's logic level when a chip pin shares its net, and its voltage.
     Pin {
@@ -173,17 +215,17 @@ pub enum Reading {
         v: f64,
     },
     Quantity {
-        unit: &'static str,
+        unit: Unit,
         value: f64,
     },
-    /// A part: its `on` reading when it states one, and its engine quantities.
+    /// A part: its `on` reading when it states one, and each engine quantity by name.
     Part {
         on: Option<bool>,
-        quantities: Vec<(&'static str, &'static str, f64)>,
+        quantities: Vec<(String, Unit, f64)>,
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Level {
     Low,
     High,
@@ -198,10 +240,11 @@ impl Level {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Stepped {
     pub from_ps: u64,
-    /// When `--until`'s condition first held.
+    /// When `--until`'s condition first held: a pin's edge, the start bit of the byte that
+    /// completed a serial match, else the slice end it was seen at.
     pub met_at_ps: Option<u64>,
     pub changes: Vec<Change>,
     /// Changes past the 20 a reply lists.
@@ -210,7 +253,10 @@ pub struct Stepped {
     pub check: Option<Check>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// What a step saw. An edge and serial carry the engine's own time, `at_ps`. An `on` reading
+/// and a diagnostic are found by reading the circuit at a slice end, so they carry `by_ps`:
+/// the change happened after the slice before and by then.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Change {
     Edge {
         at_ps: u64,
@@ -218,17 +264,22 @@ pub enum Change {
         level: Level,
     },
     Led {
-        at_ps: u64,
+        by_ps: u64,
         part: String,
         on: bool,
     },
+    /// Text whose first byte's start bit is at `at_ps`.
     Serial {
         at_ps: u64,
         text: String,
     },
+    Diagnostic {
+        by_ps: u64,
+        diagnostic: Diagnostic,
+    },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Snapshot {
     pub scene: String,
     pub parts: Vec<PartState>,
@@ -236,7 +287,7 @@ pub struct Snapshot {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PartState {
     pub name: String,
     pub ty: String,
@@ -246,7 +297,7 @@ pub struct PartState {
     pub pins: Vec<(String, Reading)>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Check {
     pub passed: bool,
     pub expected: String,
@@ -273,7 +324,7 @@ impl Reading {
                     map.insert("on".into(), json!(on));
                 }
                 for (name, _, value) in quantities {
-                    map.insert((*name).into(), json!(value));
+                    map.insert(name.clone(), json!(value));
                 }
                 Value::Object(map)
             }
@@ -300,8 +351,8 @@ impl Reading {
                 on: *on,
                 quantities: quantities
                     .iter()
-                    .filter(|(n, ..)| *n == "i")
-                    .copied()
+                    .filter(|(n, ..)| n == "i")
+                    .cloned()
                     .collect(),
             }
             .text(),
@@ -316,7 +367,7 @@ impl Reading {
                 v,
             } => format!("{} {} V", level.as_str(), number(*v)),
             Reading::Pin { level: None, v } => format!("{} V", number(*v)),
-            Reading::Quantity { unit, value, .. } => format!("{} {unit}", number(*value)),
+            Reading::Quantity { unit, value } => format!("{} {}", number(*value), unit.as_str()),
             Reading::Part { on, quantities } => {
                 let mut words: Vec<String> = on
                     .map(|on| if on { "on" } else { "off" }.to_string())
@@ -325,7 +376,7 @@ impl Reading {
                 words.extend(
                     quantities
                         .iter()
-                        .map(|(n, u, v)| format!("{n}={} {u}", number(*v))),
+                        .map(|(n, u, v)| format!("{n}={} {}", number(*v), u.as_str())),
                 );
                 words.join(" ")
             }
@@ -340,16 +391,27 @@ impl Check {
 }
 
 impl Change {
+    /// When it happened, or the slice end it was found by.
+    pub fn ps(&self) -> u64 {
+        match self {
+            Change::Edge { at_ps, .. } | Change::Serial { at_ps, .. } => *at_ps,
+            Change::Led { by_ps, .. } | Change::Diagnostic { by_ps, .. } => *by_ps,
+        }
+    }
+
     fn json(&self) -> Value {
         match self {
             Change::Edge { at_ps, pin, level } => {
                 json!({ "kind": "edge", "at_ps": at_ps, "ref": format!("@{pin}"), "level": level.as_str() })
             }
-            Change::Led { at_ps, part, on } => {
-                json!({ "kind": "led", "at_ps": at_ps, "ref": format!("@{part}"), "on": on })
+            Change::Led { by_ps, part, on } => {
+                json!({ "kind": "led", "by_ps": by_ps, "ref": format!("@{part}"), "on": on })
             }
             Change::Serial { at_ps, text } => {
                 json!({ "kind": "serial", "at_ps": at_ps, "text": text })
+            }
+            Change::Diagnostic { by_ps, diagnostic } => {
+                json!({ "kind": "diagnostic", "by_ps": by_ps, "diagnostic": diagnostic.json })
             }
         }
     }
@@ -357,10 +419,13 @@ impl Change {
     fn text(&self) -> String {
         match self {
             Change::Edge { at_ps, pin, level } => format!("{} {pin} {}", t(*at_ps), level.as_str()),
-            Change::Led { at_ps, part, on } => {
-                format!("{} {part} {}", t(*at_ps), if *on { "on" } else { "off" })
+            Change::Led { by_ps, part, on } => {
+                format!("by {} {part} {}", t(*by_ps), if *on { "on" } else { "off" })
             }
             Change::Serial { at_ps, text } => format!("{} serial {text:?}", t(*at_ps)),
+            Change::Diagnostic { by_ps, diagnostic } => {
+                format!("by {} {}", t(*by_ps), diagnostic.text())
+            }
         }
     }
 }
@@ -453,7 +518,8 @@ impl Data {
                 landed_ps,
             } => {
                 let verb = if *pressed { "pressed" } else { "released" };
-                let _ = write!(out, "{verb} {target} at t={}", t(*landed_ps));
+                let at = t(*landed_ps);
+                let _ = write!(out, "{verb} {target} at t={at}; reads show it after t={at}");
             }
             Data::Got(got) => {
                 let _ = write!(out, "{} {}", got.target, got.value.text());
@@ -553,10 +619,16 @@ impl Reply {
             return self.data.text(self.t_ps);
         };
         let mut out = String::new();
-        if let Data::Invalid(found) = &self.data {
-            for d in found {
-                let _ = writeln!(out, "{d}");
+        match &self.data {
+            Data::Invalid(found) => {
+                for d in found {
+                    let _ = writeln!(out, "{d}");
+                }
             }
+            Data::Stepped(_) => {
+                let _ = writeln!(out, "{}", self.data.text(self.t_ps));
+            }
+            _ => {}
         }
         let _ = write!(out, "error[{}]: {}", error.code.as_str(), error.message);
         if let Some(check) = self.check() {

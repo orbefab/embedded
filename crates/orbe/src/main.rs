@@ -136,8 +136,9 @@ fn live_command(spec: &orbe_session::Spec) -> ExitCode {
     ExitCode::from(USAGE)
 }
 
-/// Every test file the paths name: a file itself, or a folder's tests/*.test, sorted.
-fn test_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>, (u8, String, String)> {
+/// Every test file the paths name, with its project folder: a file itself, or a folder's
+/// tests/*.test, sorted.
+fn test_files(paths: &[PathBuf]) -> Result<Vec<(PathBuf, PathBuf)>, (u8, String, String)> {
     let paths = if paths.is_empty() {
         vec![PathBuf::from(".")]
     } else {
@@ -146,7 +147,14 @@ fn test_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>, (u8, String, String)> {
     let mut files = Vec::new();
     for path in &paths {
         if path.is_file() {
-            files.push(path.clone());
+            let root = test::root(path).ok_or_else(|| {
+                (
+                    USAGE,
+                    format!("{} is not in a tests/ folder", path.display()),
+                    "put it in the project's tests/ folder, beside scene.jsonc".into(),
+                )
+            })?;
+            files.push((path.clone(), root));
             continue;
         }
         if !path.is_dir() {
@@ -157,10 +165,22 @@ fn test_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>, (u8, String, String)> {
             ));
         }
         let tests = path.join("tests");
-        let mut found: Vec<PathBuf> = std::fs::read_dir(&tests)
+        let unreadable = |error: std::io::Error| {
+            let shown = tests.strip_prefix("./").unwrap_or(&tests);
+            (
+                IO,
+                format!("cannot read {}: {error}", shown.display()),
+                "make the folder readable".to_string(),
+            )
+        };
+        let entries = match std::fs::read_dir(&tests) {
+            Ok(entries) => entries.collect::<Result<Vec<_>, _>>().map_err(unreadable)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(unreadable(error)),
+        };
+        let mut found: Vec<PathBuf> = entries
             .into_iter()
-            .flatten()
-            .filter_map(|entry| Some(entry.ok()?.path()))
+            .map(|entry| entry.path())
             .filter(|p| p.extension().is_some_and(|e| e == "test"))
             .map(|p| p.strip_prefix("./").map(Path::to_path_buf).unwrap_or(p))
             .collect();
@@ -172,7 +192,10 @@ fn test_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>, (u8, String, String)> {
             ));
         }
         found.sort();
-        files.extend(found);
+        for file in found {
+            let root = test::root(&file).expect("a file in a tests folder");
+            files.push((file, root));
+        }
     }
     Ok(files)
 }
@@ -194,17 +217,18 @@ fn run_tests(paths: &[PathBuf], verbose: bool, json: bool) -> ExitCode {
         }
     };
     let mut reports = Vec::new();
-    for file in &files {
+    for (file, root) in &files {
         let text = match std::fs::read_to_string(file) {
             Ok(text) => text,
             Err(error) => return io_exit(&format!("{}: {error}", file.display()), json),
         };
-        let report = test::run(file, &text, &test::root(file));
+        let report = test::run(file, &text, root);
         if !json {
             print_report(&report, verbose);
         }
         reports.push(report);
     }
+    let exit = reports.iter().map(Report::exit).max().unwrap_or(0);
     let failed = reports.iter().filter(|r| !r.passed()).count();
     let passed = reports.len() - failed;
     if json {
@@ -219,7 +243,7 @@ fn run_tests(paths: &[PathBuf], verbose: bool, json: bool) -> ExitCode {
     } else {
         println!("{passed} passed, {failed} failed");
     }
-    ExitCode::from(if failed == 0 { 0 } else { FAILED })
+    ExitCode::from(exit)
 }
 
 fn print_report(report: &Report, verbose: bool) {
@@ -231,6 +255,13 @@ fn print_report(report: &Report, verbose: bool) {
                 println!("  {text}");
             }
         }
+    }
+    if let Some(refused) = &report.refused {
+        println!("FAIL {file}");
+        for text in refused.text().lines() {
+            println!("  {text}");
+        }
+        return;
     }
     let Some(failure) = report.failure() else {
         println!("PASS {file}");
@@ -246,14 +277,21 @@ fn print_report(report: &Report, verbose: bool) {
 
 fn report_json(report: &Report, verbose: bool) -> Value {
     let mut entry = json!({ "file": report.file.display().to_string(), "ok": report.passed() });
+    if let Some(refused) = &report.refused {
+        entry["error"] = refused.json()["error"].clone();
+    }
     if let Some(failure) = report.failure() {
         let reply = &failure.reply;
+        let envelope = reply.json();
         entry["line"] = json!(failure.number);
         entry["command"] = json!(failure.text);
-        entry["error"] = reply.json()["error"].clone();
+        entry["error"] = envelope["error"].clone();
         if let Some(check) = reply.check() {
             entry["expected"] = json!(check.expected);
             entry["actual"] = json!(check.actual);
+        }
+        if let Some(data) = envelope.get("data") {
+            entry["data"] = data.clone();
         }
     }
     if verbose {

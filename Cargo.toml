@@ -16,6 +16,7 @@ orbe-session = { path = "crates/orbe-session" }
 sim-core = { path = "engine/crates/core" }
 sim-circuit = { path = "engine/crates/circuit" }
 jsonc-parser = "=0.34.0"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 strsim = "0.11"
