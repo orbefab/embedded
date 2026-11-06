@@ -21,7 +21,10 @@
     "events": [],
     "bounce": null,
   },
-  "controls": { "press": { "input": "contact" } },
+  "controls": { "press": { "input": "contact", "joint": "plunger" } },
+  "joints": {
+    "plunger": { "node": "stem", "slide": [0, 0, -1], "range": { "value": 0.25, "unit": "mm", "source": { "datasheet": { "doc": "Omron B3F", "at": "Operating Characteristics, 6 x 6 mm, pretravel", "basis": "nominal" } } } },
+  },
   "facts": {
     "bounce_time": { "value": 5, "unit": "ms", "source": { "datasheet": { "doc": "Omron B3F", "at": "Ratings/Characteristics, bounce time", "basis": "max" } } },
     "pretravel": { "value": 0.25, "unit": "mm", "source": { "datasheet": { "doc": "Omron B3F", "at": "Operating Characteristics, 6 x 6 mm, pretravel", "basis": "nominal" } } },

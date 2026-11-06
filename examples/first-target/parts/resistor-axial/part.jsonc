@@ -16,6 +16,9 @@
     "kind": "resistor",
     "ratings": { "power": { "value": 0.25, "unit": "W", "source": "user" } },
   },
+  "view": {
+    "recolour": [{ "nodes": ["band1-brown", "band2-black", "band3-orange", "band4-gold"], "by": "resistance", "rule": "iec60062-4-band" }],
+  },
   "not_simulated": [
     { "what": "tolerance", "why": "The value is exact. The fourth band is drawn gold, 5 %." },
     { "what": "temperature coefficient", "why": "The engine has no temperature." },

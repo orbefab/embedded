@@ -17,5 +17,8 @@
     "events": [],
     "bounce": null,
   },
-  "controls": { "press": { "input": "contact" } },
+  "controls": { "press": { "input": "contact", "joint": "plunger" } },
+  "joints": {
+    "plunger": { "node": "button", "slide": [0, 0, -1], "range": { "value": 0.2, "unit": "mm", "source": { "datasheet": { "doc": "TS42031-160R-TR-7260", "at": "A guess, not a sheet value. No sheet for TS42031-160R-TR-7260 was found, so the travel is 0.2 mm until one is.", "basis": "nominal" } } } },
+  },
 }
