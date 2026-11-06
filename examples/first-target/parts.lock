@@ -7,7 +7,7 @@ crystal-3215 0.1.0 https://github.com/orbefab/embedded/releases/download/parts s
 diode-sod123 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:26e5af396ea74a76cd91799de3cf3e4339dd878321e7fb1254b86d08659995c8
 led-0603 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:a98a0bb58d02932059ffe53448305ca7f4d6f6810501a27594b21bb537cf9c86
 led-5mm 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:e0b0af2a995e3f64ee5a600f1264f1201c866f22586d270f966233b14389a124
-nano-board 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:10657d5cab5df3e810261f21629472fce88cff34a760fcadef3eeab1f371d64d
+nano-board 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:d38919f88370220be42a6df772c229effc9e63322d44b0d7f31d5fd18dba7410
 pin-header-1x15 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:e7a2a9f52bafd03efd3feb51f052f69f9d3cdd2ad363971e9968d647316ad066
 pin-header-2x3 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:20be4e11e3306b32f92a4f2ec5a13b420dcdb81db7ee06c7eb5e78e2dd919dd8
 resistor-0603 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:d0bdbb0c2fcb7fc880a46018dd2649e211a1964dac63efa18cd687c9ee72095d

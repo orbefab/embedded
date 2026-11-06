@@ -4,7 +4,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -91,18 +91,36 @@ function noAnchors(id) {
   return { part: id, units: 'mm', anchors: [] };
 }
 
-function readOutput(partsDir, id) {
-  const folder = join(partsDir, id);
-  const anchorsPath = join(folder, `${id}.anchors.json`);
-  return {
-    glb: readFileSync(join(folder, `${id}.glb`)),
-    anchors: existsSync(anchorsPath) ? JSON.parse(readFileSync(anchorsPath, 'utf8')) : noAnchors(id),
-    drawCalls: JSON.parse(readFileSync(join(folder, 'asset.json'), 'utf8')).draw_calls,
-  };
+function readAnchors(src, id) {
+  return src.anchors ? JSON.parse(src.anchors.toString('utf8')) : noAnchors(id);
 }
 
-async function step(part, src, partsDir) {
-  const anchors = src.anchors ? JSON.parse(src.anchors.toString('utf8')) : noAnchors(part.id);
+function readAsset(partsDir, id) {
+  const path = join(partsDir, id, 'asset.json');
+  return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null;
+}
+
+/**
+ * The source model of every part below `part`, from the models commit its asset.json records,
+ * which passed its checks when that asset.json was written.
+ */
+async function childModels(models, partsDir, part, found = new Map()) {
+  for (const type of part.children.values()) {
+    if (found.has(type)) continue;
+    const asset = readAsset(partsDir, type);
+    if (!asset) continue;
+    const src = source(models, asset.source.commit, type);
+    if (!src) throw new CheckFailed('composition', `child type \`${type}\` has no GLB at the commit its asset.json records`);
+    const child = readPart(partsDir, type);
+    const nodes = partNodes((await io.readBinary(src.glb)).setLogger(quiet));
+    found.set(type, { part: child, nodes, anchors: readAnchors(src, type), drawCalls: asset.draw_calls });
+    await childModels(models, partsDir, child, found);
+  }
+  return found;
+}
+
+async function step(part, src, models, partsDir) {
+  const anchors = readAnchors(src, part.id);
   const doc = (await io.readBinary(src.glb)).setLogger(quiet);
   const checks = { frame: frame(doc) };
   const nodes = partNodes(doc);
@@ -113,13 +131,8 @@ async function step(part, src, partsDir) {
   frame(doc);
   checks.merge = merged.detail;
   if (part.children.size) {
-    const children = new Map();
-    for (const type of new Set(part.children.values())) {
-      if (!existsSync(join(partsDir, type, 'asset.json'))) continue;
-      const out = readOutput(partsDir, type);
-      children.set(type, { ...out, nodes: partNodes(await io.readBinary(out.glb)) });
-    }
-    const composed = composition(part, partNodes(doc), children);
+    const model = { part, nodes, anchors, drawCalls: merged.drawCalls };
+    const composed = composition(model, await childModels(models, partsDir, part));
     checks.composition = { ...composed.detail, draw_calls: composed.drawCalls };
   }
   const glb = Buffer.from(await io.writeBinary(doc));
@@ -137,26 +150,44 @@ async function step(part, src, partsDir) {
   return { glb, asset };
 }
 
-function writeAtomic(path, bytes) {
-  writeFileSync(`${path}.tmp`, bytes);
-  renameSync(`${path}.tmp`, path);
-}
-
 /** JSON with two-space indents and each list of numbers or names on one line. */
 function stringify(value) {
   return JSON.stringify(value, null, 2).replace(/\[\s+([^[\]{}]*?)\s+\]/g, (_, inner) => `[${inner.split(/,\s+/).join(', ')}]`);
 }
 
+/** Writes every file to a temporary name first, so a failed write leaves the old files. */
 function write(partsDir, part, src, { glb, asset }) {
   const folder = join(partsDir, part.id);
-  writeAtomic(join(folder, `${part.id}.glb`), glb);
-  if (src.anchors) writeAtomic(join(folder, `${part.id}.anchors.json`), src.anchors);
-  writeAtomic(join(folder, 'asset.json'), `${stringify(asset)}\n`);
+  const files = [[`${part.id}.glb`, glb], ['asset.json', `${stringify(asset)}\n`]];
+  if (src.anchors) files.push([`${part.id}.anchors.json`, src.anchors]);
+  const paths = files.map(([name]) => join(folder, name));
+  try {
+    files.forEach(([, bytes], i) => writeFileSync(`${paths[i]}.tmp`, bytes));
+  } catch (error) {
+    paths.forEach((path) => rmSync(`${path}.tmp`, { force: true }));
+    throw error;
+  }
+  paths.forEach((path) => renameSync(`${path}.tmp`, path));
 }
 
-function recordedCommit(partsDir, id) {
-  const path = join(partsDir, id, 'asset.json');
-  return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')).source.commit : null;
+/** Orders the jobs so each part comes after the parts it holds, then by id. */
+function childrenFirst(jobs) {
+  const byId = new Map(jobs.map((job) => [job.part.id, job]));
+  const ordered = [];
+  const seen = new Set();
+  const visit = (job) => {
+    if (seen.has(job)) return;
+    seen.add(job);
+    for (const type of job.part.children.values()) if (byId.has(type)) visit(byId.get(type));
+    ordered.push(job);
+  };
+  [...byId.keys()].sort().forEach((id) => visit(byId.get(id)));
+  return ordered;
+}
+
+function report(id, error) {
+  if (!(error instanceof CheckFailed)) console.error(error);
+  console.log(`FAIL  ${id}  ${error.check ?? 'error'}: ${error.message}`);
 }
 
 async function main() {
@@ -174,35 +205,33 @@ async function main() {
   const pinned = values.commit && commitOf(values.models, values.commit);
 
   const jobs = [];
-  let failed = 0;
-  for (const id of ids) {
-    const rev = pinned || recordedCommit(partsDir, id);
-    if (!rev) {
-      console.log(`FAIL  ${id}  source: no --commit given and no asset.json records one`);
-      failed++;
-      continue;
-    }
-    const src = source(values.models, commitOf(values.models, rev), id);
-    if (!src) {
-      if (positionals.length) {
-        console.log(`FAIL  ${id}  source: no GLB/parts/${id}.glb at ${rev}`);
-        failed++;
-      } else {
-        console.log(`skip  ${id}  no GLB/parts/${id}.glb at ${rev}`);
-      }
-      continue;
-    }
-    jobs.push({ part: readPart(partsDir, id), src });
-  }
-  // A part with children is checked against its children's merged output, so it goes last.
-  jobs.sort((a, b) => Math.sign(a.part.children.size) - Math.sign(b.part.children.size) || a.part.id.localeCompare(b.part.id));
-
   const failedIds = new Set();
-  for (const { part, src } of jobs) {
+  for (const id of ids) {
+    try {
+      const rev = pinned || readAsset(partsDir, id)?.source.commit;
+      if (!rev) {
+        if (positionals.length) throw new CheckFailed('source', 'no --commit given and no asset.json records one');
+        console.log(`skip  ${id}  no --commit given and no asset.json records one`);
+        continue;
+      }
+      const src = source(values.models, commitOf(values.models, rev), id);
+      if (!src) {
+        if (positionals.length) throw new CheckFailed('source', `no GLB/parts/${id}.glb at ${rev}`);
+        console.log(`skip  ${id}  no GLB/parts/${id}.glb at ${rev}`);
+        continue;
+      }
+      jobs.push({ part: readPart(partsDir, id), src });
+    } catch (error) {
+      report(id, error);
+      failedIds.add(id);
+    }
+  }
+
+  for (const { part, src } of childrenFirst(jobs)) {
     try {
       const blocked = [...part.children.values()].filter((type) => failedIds.has(type));
       if (blocked.length) throw new CheckFailed('composition', `children ${[...new Set(blocked)].join(', ')} failed their checks`);
-      const out = await step(part, src, partsDir);
+      const out = await step(part, src, values.models, partsDir);
       write(partsDir, part, src, out);
       const composed = out.asset.checks.composition;
       const calls = composed ? `${out.asset.draw_calls}, composed ${composed.draw_calls}` : out.asset.draw_calls;
@@ -211,14 +240,12 @@ async function main() {
           `${out.glb.length} B, ${src.commit.slice(0, 7)}`,
       );
     } catch (error) {
-      if (!(error instanceof CheckFailed)) throw error;
-      console.log(`FAIL  ${part.id}  ${error.check}: ${error.message}`);
+      report(part.id, error);
       failedIds.add(part.id);
-      failed++;
     }
   }
-  if (failed) console.log(`${failed} part(s) failed; a failed part's files were not written`);
-  return failed ? 1 : 0;
+  if (failedIds.size) console.log(`${failedIds.size} part(s) failed; a failed part's files were not written`);
+  return failedIds.size ? 1 : 0;
 }
 
 process.exitCode = await main();

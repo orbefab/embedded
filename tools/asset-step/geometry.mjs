@@ -3,7 +3,10 @@
 
 export const GLTF_TURN = [-Math.SQRT1_2, 0, 0, Math.SQRT1_2];
 
-const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+export const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+
+/** How far behind the furthest vertex along a lead's axis a vertex still counts as its tip, in mm. */
+const TIP_BAND = 1e-3;
 
 /** Column-major 4x4 product `a * b`. */
 export function multiply(a, b) {
@@ -24,28 +27,31 @@ export function apply(m, [x, y, z]) {
   ];
 }
 
-/** A layout placement `{at, rotate}`: degrees about the parent's fixed X, then Y, then Z. */
-export function placement({ at = [0, 0, 0], rotate = [0, 0, 0] }) {
+/**
+ * A layout placement `{at, rotate}`: degrees about the parent's fixed X, then Y, then Z. An `at`
+ * of two numbers sits at z = 0.
+ */
+export function placement({ at: [x, y, z = 0] = [0, 0], rotate = [0, 0, 0] }) {
   const [cx, cy, cz] = rotate.map((d) => Math.cos((d * Math.PI) / 180));
   const [sx, sy, sz] = rotate.map((d) => Math.sin((d * Math.PI) / 180));
   const rx = [1, 0, 0, 0, 0, cx, sx, 0, 0, -sx, cx, 0, 0, 0, 0, 1];
   const ry = [cy, 0, -sy, 0, 0, 1, 0, 0, sy, 0, cy, 0, 0, 0, 0, 1];
   const rz = [cz, sz, 0, 0, -sz, cz, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
   const turn = multiply(rz, multiply(ry, rx));
-  turn[12] = at[0];
-  turn[13] = at[1];
-  turn[14] = at[2];
+  turn[12] = x;
+  turn[13] = y;
+  turn[14] = z;
   return turn;
 }
 
 /**
- * Every node under the scene root as `{name, parent, points, primitives}`, with its vertices
- * in the part frame in mm. `parent` indexes the returned list, and is null under the root.
+ * Every node under the scene root as `{name, points, primitives}`, with its own vertices in the
+ * part frame in mm. Each node holds only its own mesh's vertices, not its children's.
  */
 export function partNodes(doc) {
   const [root] = doc.getRoot().listScenes()[0].listChildren();
   const nodes = [];
-  const walk = (node, parent, matrix) => {
+  const walk = (node, matrix) => {
     const world = multiply(matrix, node.getMatrix());
     const points = [];
     let primitives = 0;
@@ -61,37 +67,33 @@ export function partNodes(doc) {
         }
       }
     }
-    const index = nodes.length;
-    nodes.push({ name: node.getName(), parent, points, primitives });
-    for (const child of node.listChildren()) walk(child, index, world);
+    nodes.push({ name: node.getName(), points, primitives });
+    for (const child of node.listChildren()) walk(child, world);
   };
-  for (const child of root.listChildren()) walk(child, null, IDENTITY);
+  for (const child of root.listChildren()) walk(child, IDENTITY);
   return nodes;
 }
 
 /** The centroid of the vertices furthest along `axis`. */
 export function tip(points, axis) {
   const along = points.map((p) => p[0] * axis[0] + p[1] * axis[1] + p[2] * axis[2]);
-  const far = Math.max(...along) - 1e-4;
+  const far = Math.max(...along) - TIP_BAND;
   const chosen = points.filter((_, i) => along[i] >= far);
   return [0, 1, 2].map((k) => chosen.reduce((sum, p) => sum + p[k], 0) / chosen.length);
 }
 
-/** The indexes of the nodes named in `names` and of every node below them. */
-export function subtree(nodes, names) {
-  const inside = new Set();
-  nodes.forEach((node, i) => {
-    if (names.has(node.name) || inside.has(node.parent)) inside.add(i);
-  });
-  return inside;
-}
-
-/** The lowest vertex of any node outside `exempt`, as `{name, z}`, or null when every node is exempt. */
+/**
+ * The lowest vertex of any node outside `exempt`, as `{name, z}`, or null when no other node has a
+ * vertex. A vertex with a coordinate that is not a finite number counts as lowest, at z = -Infinity.
+ */
 export function lowest(nodes, exempt) {
   let low = null;
   nodes.forEach((node, i) => {
     if (exempt.has(i)) return;
-    for (const p of node.points) if (!low || p[2] < low.z) low = { name: node.name || '(merged)', z: p[2] };
+    for (const p of node.points) {
+      const z = p.every(Number.isFinite) ? p[2] : -Infinity;
+      if (!low || z < low.z) low = { name: node.name || '(unnamed)', z };
+    }
   });
   return low;
 }

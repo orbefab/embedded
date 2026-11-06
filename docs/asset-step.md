@@ -11,7 +11,9 @@ node tools/asset-step/asset-step.mjs --models ../models --commit <models commit>
 
 `--models` is a checkout of `orbefab/models`. The step reads `GLB/parts/<id>.glb` and `GLB/parts/<id>.anchors.json` at the commit with `git show`, so it never changes the checkout. With no ids, it runs every part in `parts/` that has a GLB at that commit. With no `--commit`, each part reruns from the commit its `asset.json` records.
 
-`scripts/check-assets.sh <models checkout>` reruns every part that way and fails if any file under `parts/` changes. Run it on a clean tree.
+With no `--commit` and no ids, a part with no GLB at its commit, or with no `asset.json` to name a commit, is skipped. A part with no model yet does not fail the run.
+
+`scripts/check-assets.sh <models checkout>` runs the step's tests, `tools/asset-step/asset-step.test.mjs`, then reruns every part from its recorded commit and fails if any file under `parts/` changes. Run it on a clean tree.
 
 ## What it writes
 
@@ -21,20 +23,22 @@ For each part that passes every check, it writes three files:
 - `<id>.anchors.json`, copied unchanged. A part with no leads of its own, such as `nano-board`, has none.
 - `asset.json`, with the source repo and commit, the path, SHA-256 and size of each input, the SHA-256 and size of each file written, the box in mm, the kept nodes, the draw calls and what each check measured.
 
-A part that fails a check gets no files. The step prints the check and the reason, and exits 1. Files from an earlier run stay as they were.
+A part that fails a check gets no files. The step prints the check and the reason, goes on to the next part, and exits 1 at the end. Files from an earlier run stay as they were. An input the step cannot read, such as an anchors file with no `also` list, fails its part the same way.
 
 ## The checks
 
 Lengths are in the part frame: mm, +Z up, with the seating plane at z = 0.
 
+A lead is the mesh of the node an anchor names. The anchors check takes a lead's tip from that node's own vertices, so a node whose mesh sits on a child node fails. Seating and composition exempt the nodes the anchors name in `node` and `also`, and not the nodes under them. A vertex whose coordinates are not finite numbers fails seating and composition.
+
 | Check | Passes when |
 | --- | --- |
 | frame | The scene has one root node, and it carries only glTF's -90 degree turn about X. |
-| anchors | Each lead in `pins` has exactly one anchor, and each anchor's lead is in `pins`. Each anchor's `node` and every node in its `also` exist once. The tip of `node`, the centroid of its vertices furthest along `axis`, is within 0.01 mm of `at`. |
-| seating | No node reaches more than 0.01 mm below z = 0, except a node an anchor names and the nodes under it. |
+| anchors | Each anchor has an integer `lead`, a `node` name, an `also` list of names, an `at` and a unit `axis` of three numbers each, and a `kind` of leg, socket or pad. Each lead in `pins` has exactly one anchor, and each anchor's lead is in `pins`. Each anchor's `node` and every node in its `also` exist once. `node` has vertices of its own. Its tip, the centroid of its vertices within 0.001 mm of the furthest along `axis`, is within 0.01 mm of `at`. |
+| seating | No node reaches more than 0.01 mm below z = 0, except the nodes an anchor names. |
 | names | Each node that `view` and `joints` name exists once. |
-| merge | The merge keeps the nodes that `view` and `joints` name, and the `node` and `also` of each `leg` or `socket` anchor. Every other node loses its name and joins one mesh per material, and identical meshes are shared. Each kept node exists once afterwards. |
-| composition | Only for a part with children. Each child's merged model, placed by `layout` with its full rotation, stays within 0.01 mm of z = 0 or above, except at the child's leads. |
+| merge | The merge keeps the nodes that `view` and `joints` name, and the `node` and `also` of each `leg` or `socket` anchor. Every other node loses its name and joins one mesh per material, and identical meshes are shared. Each kept node exists once afterwards, and the scene still has nodes to draw. |
+| composition | Only for a part with children. The part's model, each child's model and each model below those, placed by each parent's `layout` with its full rotation, stay within 0.01 mm of z = 0 or above, except at the nodes their anchors name, pads included. An `at` of two numbers sits at z = 0. Each child's model is its source GLB at the commit its `asset.json` records, which passed these checks, because the merge drops a pad's name. |
 
 The step does not compare a composed part with the whole object the models repo also exports, such as the Nano. The models repo does that in its own `checks/nano_ref.py`.
 

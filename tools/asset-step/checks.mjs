@@ -2,7 +2,7 @@
 // measured for `asset.json`, or throws a `CheckFailed` that says why.
 
 import { dedup, join, prune } from '@gltf-transform/functions';
-import { GLTF_TURN, apply, box, distance, lowest, mm, partNodes, placement, subtree, tip } from './geometry.mjs';
+import { GLTF_TURN, IDENTITY, apply, box, distance, lowest, mm, multiply, partNodes, placement, tip } from './geometry.mjs';
 
 const TIP_TOLERANCE = 0.01;
 const SEAT_TOLERANCE = 0.01;
@@ -57,7 +57,33 @@ export function frame(doc) {
   return { root_rotation: root.getRotation().map(mm) };
 }
 
+const finite3 = (v) => Array.isArray(v) && v.length === 3 && v.every(Number.isFinite);
+const nodeName = (v) => typeof v === 'string' && v !== '';
+
+const ANCHOR_FIELDS = [
+  ['lead', Number.isInteger, 'an integer'],
+  ['node', nodeName, 'a node name'],
+  ['also', (v) => Array.isArray(v) && v.every(nodeName), 'a list of node names'],
+  ['at', finite3, 'three finite numbers'],
+  ['axis', finite3, 'three finite numbers'],
+  ['kind', (v) => ['leg', 'socket', 'pad'].includes(v), 'leg, socket or pad'],
+];
+
+function anchorShape(anchors) {
+  if (!Array.isArray(anchors?.anchors)) fail('anchors', 'the anchors file has no `anchors` list');
+  anchors.anchors.forEach((a, i) => {
+    for (const [field, ok, what] of ANCHOR_FIELDS) {
+      if (!ok(a?.[field])) fail('anchors', `anchor ${i + 1}'s \`${field}\` must be ${what}, and is ${JSON.stringify(a?.[field])}`);
+    }
+  });
+}
+
+/**
+ * A lead is the mesh of the node an anchor names, so its tip is taken from that node's own
+ * vertices, not its children's.
+ */
 export function anchorCheck(part, anchors, nodes) {
+  anchorShape(anchors);
   if (anchors.part !== part.id || anchors.units !== 'mm') {
     fail('anchors', `the anchors file names part \`${anchors.part}\` in \`${anchors.units}\`, not \`${part.id}\` in mm`);
   }
@@ -71,14 +97,15 @@ export function anchorCheck(part, anchors, nodes) {
 
   let largest = 0;
   for (const a of anchors.anchors) {
-    if (!['leg', 'socket', 'pad'].includes(a.kind)) {
-      fail('anchors', `lead ${a.lead} has kind \`${a.kind}\`, not leg, socket or pad`);
-    }
     if (Math.abs(Math.hypot(...a.axis) - 1) > 1e-9) fail('anchors', `lead ${a.lead}'s axis is not a unit vector`);
     onceEach('anchors', nodes, [a.node, ...a.also], `lead ${a.lead}'s node and \`also\``);
-    const at = tip(nodes.find((n) => n.name === a.node).points, a.axis);
+    const { points } = nodes.find((n) => n.name === a.node);
+    if (!points.length) {
+      fail('anchors', `lead ${a.lead}'s node \`${a.node}\` has no vertices of its own; a lead's mesh must be on the node its anchor names`);
+    }
+    const at = tip(points, a.axis);
     const miss = distance(at, a.at);
-    if (miss > TIP_TOLERANCE) {
+    if (!(miss <= TIP_TOLERANCE)) {
       fail(
         'anchors',
         `lead ${a.lead}'s node \`${a.node}\` ends at (${at.map((v) => v.toFixed(3)).join(', ')}), ` +
@@ -94,13 +121,21 @@ function leadNames(anchors) {
   return new Set(anchors.anchors.flatMap((a) => [a.node, ...a.also]));
 }
 
-export function seating(anchors, nodes) {
-  const low = lowest(nodes, subtree(nodes, leadNames(anchors)));
+/** Fails `check` when a node outside `exempt` reaches below the seating plane. */
+function seat(check, nodes, exempt, lead) {
+  const low = lowest(nodes, exempt);
   if (!low) return { lowest_node: null, z_mm: null };
-  if (low.z < -SEAT_TOLERANCE) {
-    fail('seating', `node \`${low.name}\` reaches z = ${low.z.toFixed(3)} mm, below the seating plane; only a lead may`);
+  if (!Number.isFinite(low.z)) fail(check, `${lead}node \`${low.name}\` has a vertex that is not a finite number`);
+  if (!(low.z >= -SEAT_TOLERANCE)) {
+    fail(check, `${lead}node \`${low.name}\` reaches z = ${low.z.toFixed(3)} mm, below the seating plane; only a lead may`);
   }
   return { lowest_node: low.name, z_mm: mm(low.z) };
+}
+
+/** Only the nodes an anchor names are leads. A node under a lead is not one. */
+export function seating(anchors, nodes) {
+  const leads = leadNames(anchors);
+  return seat('seating', nodes, new Set(nodes.flatMap((n, i) => (leads.has(n.name) ? [i] : []))), '');
 }
 
 export function names(part, nodes) {
@@ -123,6 +158,7 @@ export async function merge(doc, part, anchors) {
   for (const mesh of doc.getRoot().listMeshes()) mesh.setName('');
   for (const node of doc.getRoot().listNodes()) if (!keep.has(node.getName())) node.setName('');
   await doc.transform(join({ keepNamed: true }), dedup(), prune());
+  if (!doc.getRoot().listScenes()[0]?.listChildren().length) fail('merge', 'the merged scene has no nodes left to draw');
   const nodes = partNodes(doc);
   const kept = [...keep].sort();
   onceEach('merge', nodes, kept, 'the kept nodes');
@@ -131,35 +167,33 @@ export async function merge(doc, part, anchors) {
 }
 
 /**
- * Places every child's merged GLB by the part's layout and seats the whole part. A child's
- * pads merge away, so only its leg and socket nodes count as leads here.
+ * Places every child's checked source model by the part's layout, and each child's own children
+ * by the child's layout, then seats the whole part. `model` and each entry of `models` are
+ * `{part, nodes, anchors, drawCalls}`, with the nodes from the source GLB, so a pad's node still
+ * has its name and is a lead here as it is in `seating`.
  */
-export function composition(part, bodyNodes, children) {
-  const placed = bodyNodes.map((n) => ({ ...n, name: n.name || '(body)', lead: false }));
-  let drawCalls = bodyNodes.reduce((sum, n) => sum + n.primitives, 0);
-  for (const [role, type] of part.children) {
-    const child = children.get(type);
-    if (!child) fail('composition', `child \`${role}\` is a \`${type}\`, which has no asset step output`);
-    const at = part.layout.get(role);
-    if (!at) fail('composition', `child \`${role}\` has no placement in \`layout\``);
-    const m = placement(at);
-    const leads = subtree(child.nodes, leadNames(child.anchors));
-    child.nodes.forEach((n, i) => {
-      placed.push({
-        name: `${role}/${n.name || '(merged)'}`,
-        lead: leads.has(i),
-        points: n.points.map((p) => apply(m, p)),
-      });
-    });
-    drawCalls += child.drawCalls;
-  }
-  const exempt = new Set(placed.flatMap((n, i) => (n.lead ? [i] : [])));
-  const low = lowest(placed, exempt);
-  if (low.z < -SEAT_TOLERANCE) {
-    fail('composition', `placed by the layout, \`${low.name}\` reaches z = ${low.z.toFixed(3)} mm; only a lead may go below z = 0`);
-  }
+export function composition(model, models) {
+  const placed = [];
+  const exempt = new Set();
+  let drawCalls = 0;
+  const place = ({ part, nodes, anchors, drawCalls: calls }, matrix, prefix) => {
+    const leads = leadNames(anchors);
+    for (const n of nodes) {
+      if (leads.has(n.name)) exempt.add(placed.length);
+      placed.push({ name: `${prefix}${n.name || '(unnamed)'}`, points: n.points.map((p) => apply(matrix, p)) });
+    }
+    drawCalls += calls;
+    for (const [role, type] of part.children) {
+      const child = models.get(type);
+      if (!child) fail('composition', `child \`${prefix}${role}\` is a \`${type}\`, which has no asset step output`);
+      const at = part.layout.get(role);
+      if (!at) fail('composition', `child \`${prefix}${role}\` has no placement in \`layout\``);
+      place(child, multiply(matrix, placement(at)), `${prefix}${role}/`);
+    }
+  };
+  place(model, IDENTITY, '');
   return {
-    detail: { children: part.children.size, lowest_node: low.name, z_mm: mm(low.z) },
+    detail: { children: model.part.children.size, ...seat('composition', placed, exempt, 'placed by the layout, ') },
     drawCalls,
   };
 }
