@@ -1,9 +1,10 @@
+// Adapted from maker-sandbox (MIT, Copyright 2026 Alwurts).
 import { OrbitControls } from "@react-three/drei/core/OrbitControls";
 import { OrthographicCamera } from "@react-three/drei/core/OrthographicCamera";
 import { PerspectiveCamera } from "@react-three/drei/core/PerspectiveCamera";
 import { useThree } from "@react-three/fiber";
 import { useEffect } from "react";
-import { OrthographicCamera as OrthoImpl } from "three";
+import { MOUSE, OrthographicCamera as OrthoImpl, TOUCH } from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three/addons/controls/OrbitControls.js";
 import {
   CAMERA_FOV_DEG,
@@ -15,6 +16,15 @@ import {
   tiltedOffset,
 } from "./camera-frame";
 import type { Box } from "./wire-geometry";
+
+const ORBIT_MOUSE = { LEFT: MOUSE.ROTATE, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN };
+const ORBIT_TOUCH = { ONE: TOUCH.ROTATE, TWO: TOUCH.DOLLY_PAN };
+const TOP_MOUSE = { LEFT: MOUSE.PAN, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN };
+const TOP_TOUCH = { ONE: TOUCH.PAN, TWO: TOUCH.DOLLY_PAN };
+// The top camera's up is world -Z, so the part frame's +Y points up the screen. The camera
+// has it from its creation, so the controls orbit about Z, and they hold the camera on +Y
+// above the target: polar angle 90 degrees, azimuth 0.
+const TOP_UP = [0, 0, -1] as const;
 
 /** Orbit in 3D, or pan and zoom straight down in the top view. Each mode, and each new
  * scene, starts framed on `boxes`. */
@@ -40,7 +50,14 @@ export function CameraRig({ mode, boxes }: { mode: CameraMode; boxes: readonly B
   return (
     <>
       {mode === "top" ? (
-        <OrthographicCamera far={2000} makeDefault near={0.1} position={[0, 400, 0]} zoom={TOP_VIEW_ZOOM} />
+        <OrthographicCamera
+          far={2000}
+          makeDefault
+          near={0.1}
+          position={[0, 400, 0]}
+          up={TOP_UP}
+          zoom={TOP_VIEW_ZOOM}
+        />
       ) : (
         <PerspectiveCamera far={4000} fov={CAMERA_FOV_DEG} makeDefault near={0.1} position={[ox, oy, oz]} />
       )}
@@ -50,9 +67,13 @@ export function CameraRig({ mode, boxes }: { mode: CameraMode; boxes: readonly B
         enableRotate={mode === "tilted"}
         keyEvents={false}
         makeDefault
-        maxPolarAngle={mode === "tilted" ? Math.PI / 2.2 : 0.01}
+        maxAzimuthAngle={mode === "tilted" ? Number.POSITIVE_INFINITY : 0}
+        maxPolarAngle={mode === "tilted" ? Math.PI / 2.2 : Math.PI / 2}
+        minAzimuthAngle={mode === "tilted" ? Number.NEGATIVE_INFINITY : 0}
         minDistance={MIN_DISTANCE_MM}
-        minPolarAngle={mode === "tilted" ? 0.08 : 0}
+        minPolarAngle={mode === "tilted" ? 0.08 : Math.PI / 2}
+        mouseButtons={mode === "top" ? TOP_MOUSE : ORBIT_MOUSE}
+        touches={mode === "top" ? TOP_TOUCH : ORBIT_TOUCH}
       />
     </>
   );
