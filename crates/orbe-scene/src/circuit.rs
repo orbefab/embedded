@@ -6,9 +6,7 @@ use std::path::PathBuf;
 use serde_json::{Map, Value, json};
 
 use crate::diagnostic::{Code, Findings, Reported};
-use crate::model::{
-    Comp, ParamDecl, ParamKind, Part, PinDef, Ref, Scene, check_dropped_required, passed,
-};
+use crate::model::{Comp, ParamDecl, ParamKind, Part, PinDef, Ref, Scene, passed};
 use crate::name::did_you_mean;
 use crate::params::{Arg, Cover, blocked, convert, cover, dotted, set, within};
 use crate::project::{Owner, Project};
@@ -868,9 +866,7 @@ impl<'p> Circuit<'p> {
                 continue;
             };
             let before = self.out.len();
-            let droppable = self.defaulted_required(inst, part);
-            let unchecked = check_dropped_required(part, &model_node, &droppable, self.out);
-            let (model, set_by) = self.model(inst, part, &model_node, &unchecked);
+            let (model, set_by) = self.model(inst, part, &model_node);
             if let Some(reported) = self.out.since(before) {
                 self.failed.entry(inst).or_insert(reported);
             }
@@ -935,23 +931,6 @@ impl<'p> Circuit<'p> {
         }
     }
 
-    /// Choice params with no default whose value here is a parent's default. The reader ranks
-    /// that value as a default, so a shallower write can drop it.
-    fn defaulted_required(&self, inst: usize, part: &Part) -> Vec<String> {
-        part.params
-            .iter()
-            .filter(|decl| {
-                matches!(decl.kind, ParamKind::Choice(_))
-                    && decl.default.is_none()
-                    && self.insts[inst]
-                        .args
-                        .get(&decl.name)
-                        .is_some_and(|arg| !arg.explicit && !arg.node.is_null())
-            })
-            .map(|decl| decl.name.clone())
-            .collect()
-    }
-
     /// The part's model with every param set. Nothing here depends on the order params are
     /// declared or applied: each write is kept or dropped by what the other writes declare,
     /// the objects that end up on follow from the kept writes, and then each kept write goes
@@ -963,13 +942,7 @@ impl<'p> Circuit<'p> {
     /// deeper wins, unless the object around it is set off. A param whose default is null
     /// turns on the objects its value passes through, unless a write that wins over it turns
     /// one off. Then a value an instance set that did not land is a finding at that value.
-    fn model(
-        &mut self,
-        inst: usize,
-        part: &Part,
-        model_node: &Node,
-        unchecked: &[String],
-    ) -> (Value, SetBy) {
+    fn model(&mut self, inst: usize, part: &Part, model_node: &Node) -> (Value, SetBy) {
         let mut model = model_node.to_value();
         let dir = self
             .project
@@ -995,8 +968,9 @@ impl<'p> Circuit<'p> {
                 (None, None) => continue,
             };
             // `convert` takes null only for a param whose default is null, so a null set by an
-            // instance is that default and ranks as unset.
-            let rank = match (arg.node.is_null(), arg.explicit) {
+            // instance is that default and ranks as unset. A required param is always set, so
+            // its value ranks as set even when it is a parent's default passed down.
+            let rank = match (arg.node.is_null(), arg.explicit || decl.default.is_none()) {
                 (true, _) => Rank::Unset,
                 (false, true) => Rank::Set,
                 (false, false) => Rank::Default,
@@ -1010,7 +984,7 @@ impl<'p> Circuit<'p> {
                         value,
                         opens,
                         rank,
-                        checked: !decl.sets_refused && !unchecked.contains(&decl.name),
+                        checked: !decl.sets_refused,
                         param: decl.name.clone(),
                         setter: setter.clone(),
                     }));
@@ -1148,9 +1122,10 @@ enum Rank {
     /// Left unset at a null default, or set to that null: it fills a field the model leaves
     /// out, and turns nothing off.
     Unset,
-    /// A declaration's default, or a parent's default passed down.
+    /// A declaration's default, or a parent's default passed down into a param that has one.
     Default,
-    /// Set by an instance, or passed down from a value an instance set.
+    /// Set by an instance, passed down from a value an instance set, or the value of a
+    /// required param.
     Set,
 }
 

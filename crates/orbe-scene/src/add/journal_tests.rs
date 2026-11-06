@@ -528,3 +528,49 @@ fn only_the_write_after_the_last_line_may_be_unlogged() {
         Next::Stop(vec![Problem::Changed(vec!["new/led".into()])])
     );
 }
+
+/// A clearing line reads back every name it lists, whatever bytes the name holds, and never
+/// a path outside the staging folder or the log itself.
+#[test]
+fn a_clearing_line_reads_back_its_names_and_only_paths_below_the_folder() {
+    let entries = vec![
+        Entry {
+            path: "old/led".into(),
+            kind: Kind::Folder,
+        },
+        Entry {
+            path: "old/led/my notes: 100%\nµ.txt".into(),
+            kind: Kind::File(A.into()),
+        },
+        Entry {
+            path: "old/led/sheet".into(),
+            kind: Kind::Link("../a b/c:d".into()),
+        },
+        Entry {
+            path: "old/led/fifo".into(),
+            kind: Kind::Other,
+        },
+    ];
+    let line = Record::Clearing(entries.clone()).line();
+    assert!(
+        !line.contains('\n') && line.split(' ').count() == 5,
+        "{line}"
+    );
+    assert_eq!(Record::parse(&line), Some(Record::Clearing(entries)));
+    assert_eq!(
+        Record::parse("clearing"),
+        Some(Record::Clearing(Vec::new()))
+    );
+    for word in [
+        "d:../x",
+        "d:/x",
+        "d:a//b",
+        "d:log",
+        "f:a",
+        "d:a%2",
+        "x:a",
+        "d:old/./a",
+    ] {
+        assert_eq!(Record::parse(&format!("clearing {word}")), None, "{word}");
+    }
+}

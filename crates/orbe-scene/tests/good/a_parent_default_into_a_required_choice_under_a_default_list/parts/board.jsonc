@@ -1,0 +1,9 @@
+{
+  "format": 1,
+  "params": { "play": { "default": "long" } },
+  "parts": { "rp": { "type": "./spi.jsonc", "play": { "param": "play" } } },
+  "pins": {
+    "vcc": "rp.vcc", "gnd": "rp.gnd", "cs": "rp.cs", "sclk": "rp.sclk",
+    "d0": "rp.d0", "d1": "rp.d1", "d2": "rp.d2", "d3": "rp.d3"
+  },
+}

@@ -165,7 +165,10 @@ fn run_with(dir: Option<&Path>, request: &Request, fault: &mut Fault) -> Result<
         Err(Hold::Io(error)) => return Err(error),
     };
     let recovered = if request.diff {
-        pending_note(root, &add)
+        txn::Recovered {
+            lines: pending_note(root, &add),
+            planned: Vec::new(),
+        }
     } else {
         txn::recover(root, &again, fault).map_err(stop_error)?
     };
@@ -216,7 +219,27 @@ fn run_with(dir: Option<&Path>, request: &Request, fault: &mut Fault) -> Result<
         Plan::Refuse(refusal) => Reply::Refuse(refusal),
         Plan::Usage(message) => Reply::Usage(message),
     };
-    Ok(with_notes(reply, recovered))
+    let mut notes = recovered.lines;
+    let holes = txn::lock_holes(root, &recovered.planned);
+    if !holes.is_empty() {
+        let folders = holes
+            .iter()
+            .map(|id| format!("parts/{id}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let ids = holes
+            .iter()
+            .map(|id| project::shell_word(id))
+            .collect::<Vec<_>>()
+            .join(" ");
+        notes.push(format!(
+            "parts.lock lists {}, and {folders} {} missing. run `{add} {ids}` to copy {} back",
+            holes.join(", "),
+            if holes.len() == 1 { "is" } else { "are" },
+            if holes.len() == 1 { "it" } else { "them" },
+        ));
+    }
+    Ok(with_notes(reply, notes))
 }
 
 fn stop_error(stop: Stop) -> RunError {
@@ -245,14 +268,10 @@ fn pending_note(root: &Path, add: &str) -> Vec<String> {
                 "an interrupted add left {name}. --diff leaves it, and the next `{add}` without --diff deletes it"
             )];
         }
-        Pending::Unproven(name) => {
-            return vec![format!(
-                "{name} has no log from an add. --diff leaves it, and the next `{add}` without --diff names it and stops"
-            )];
-        }
         Pending::Uncommitted => "rolls it back",
         Pending::Committed => "finishes it",
-        Pending::Unclear => "says what it holds",
+        Pending::Clearing => "finishes deleting it",
+        Pending::Stops => "names what it cannot prove the add made, and stops",
     };
     vec![format!(
         "an interrupted add is pending in parts/{}. --diff leaves it, and the next `{add}` without --diff {what}",

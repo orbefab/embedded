@@ -943,23 +943,20 @@ fn diff_previews_a_project_it_cannot_write() {
     assert_eq!(left, ["parts", "parts.lock", "scene.jsonc"]);
 }
 
-/// A folder the user makes at the add trash is not an interrupted add, so it stays.
+/// A folder at the name an earlier orbe used for its trash is the user's, so an add leaves it.
 #[test]
-fn a_user_folder_at_the_add_trash_is_left_in_place() {
+fn a_user_folder_at_the_old_add_trash_is_left_in_place() {
     let project = scene_only();
     let note = project.path().join("parts/.orbe-add.trash/mine/note.txt");
     fs::create_dir_all(note.parent().unwrap()).unwrap();
     fs::write(&note, "KEEP-ME\n").unwrap();
-    for _ in 0..2 {
-        let (output, stdout, stderr) = orbe_in(project.path(), &["add", "led-5mm"]);
-        assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
-        assert!(
-            stderr.contains("error[io_error]:")
-                && stderr.contains("parts/.orbe-add.trash")
-                && stderr.contains("\n  hint:"),
-            "{stderr}"
-        );
-        assert_eq!(fs::read(&note).unwrap(), b"KEEP-ME\n");
-        assert!(!project.path().join("parts/led-5mm").exists());
-    }
+    fs::write(
+        project.path().join("parts/.orbe-add.trash/log"),
+        "orbe add log 1\nplan existed -\n",
+    )
+    .unwrap();
+    let (output, stdout, stderr) = orbe_in(project.path(), &["add", "led-5mm"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert_eq!(stdout, "wrote parts/led-5mm 0.1.0\nwrote parts.lock\n");
+    assert_eq!(fs::read(&note).unwrap(), b"KEEP-ME\n");
 }

@@ -1,0 +1,17 @@
+{
+  "format": 1,
+  "pins": { "vcc": [1], "gnd": [2], "cs": [3], "sclk": [4], "d0": [5], "d1": [6], "d2": [7], "d3": [8] },
+  "params": {"outer": {"default": "keep", "choices": {"keep": {"sets": {"/events/0/t_ps": 10000000}}, "short": {"sets": {"/events": [{"t_ps": 10000000, "lanes": 1, "bytes": [85], "cs": "released", "phases": [{"bits": 8, "lanes": 1, "value": 1}]}]}}}}, "play": {"required": true, "choices": {"long": {"sets": {"/events/0/bytes": [1, 2, 3]}}}}, "n": {"default": "nine", "choices": {"nine": {"sets": {"/events/0/bytes/2": 9}}}}},
+  "model": {
+    "kind": "spi_replay",
+    "clock_hz": { "value": 40000000, "unit": "Hz", "source": "user" },
+    "output": {
+      "high_drop": { "value": 0.0, "unit": "V", "source": "user" },
+      "high_resistance": { "value": 25.0, "unit": "ohm", "source": "user" },
+      "low_drop": { "value": 0.0, "unit": "V", "source": "user" },
+      "low_resistance": { "value": 25.0, "unit": "ohm", "source": "user" },
+    },
+    "events": [{ "t_ps": 10000000, "lanes": 1, "bytes": [85], "cs": "released", "phases": [{ "bits": 8, "lanes": 1, "value": 1 }] }],
+    "pins": { "VCC": "vcc", "GND": "gnd", "CS": "cs", "SCLK": "sclk", "D0": "d0", "D1": "d1", "D2": "d2", "D3": "d3" },
+  },
+}

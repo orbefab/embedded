@@ -55,6 +55,83 @@ pub(super) enum Record {
     LockKept,
     /// `parts.lock` is the one the add wrote, and the copy from before it is gone, so it stays.
     LockStays,
+    /// Every path below the staging folder but the log, with what it held, logged before the
+    /// first of them is deleted. Recovery deletes only these, and only while they hold it.
+    Clearing(Vec<Entry>),
+}
+
+/// A path below the staging folder, such as `old/led-5mm/part.jsonc`, and what is there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Entry {
+    pub(super) path: String,
+    pub(super) kind: Kind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Kind {
+    Folder,
+    File(Hash),
+    Link(String),
+    Other,
+}
+
+impl Entry {
+    fn word(&self) -> String {
+        let path = escape(&self.path);
+        match &self.kind {
+            Kind::Folder => format!("d:{path}"),
+            Kind::File(hash) => format!("f:{path}:{hash}"),
+            Kind::Link(target) => format!("l:{path}:{}", escape(target)),
+            Kind::Other => format!("o:{path}"),
+        }
+    }
+
+    fn parse(word: &str) -> Option<Entry> {
+        let mut fields = word.splitn(3, ':');
+        let (tag, path, rest) = (fields.next()?, fields.next()?, fields.next());
+        let path = unescape(path)?;
+        let below = path.split('/').all(|name| !matches!(name, "" | "." | ".."));
+        if !below || path == "log" {
+            return None;
+        }
+        let kind = match (tag, rest) {
+            ("d", None) => Kind::Folder,
+            ("f", Some(h)) => Kind::File(hash(h)?),
+            ("l", Some(target)) => Kind::Link(unescape(target)?),
+            ("o", None) => Kind::Other,
+            _ => return None,
+        };
+        Some(Entry { path, kind })
+    }
+}
+
+/// A name in a log word, with `%`, `:`, spaces and every byte outside printable ASCII as `%XX`.
+fn escape(name: &str) -> String {
+    let mut out = String::new();
+    for byte in name.bytes() {
+        if byte.is_ascii_graphic() && byte != b'%' && byte != b':' {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+fn unescape(word: &str) -> Option<String> {
+    let mut bytes = Vec::new();
+    let mut rest = word.as_bytes();
+    while let Some((&byte, after)) = rest.split_first() {
+        if byte == b'%' {
+            let digits = std::str::from_utf8(after.get(..2)?).ok()?;
+            bytes.push(u8::from_str_radix(digits, 16).ok()?);
+            rest = &after[2..];
+        } else {
+            bytes.push(byte);
+            rest = after;
+        }
+    }
+    String::from_utf8(bytes).ok()
 }
 
 impl Record {
@@ -73,6 +150,11 @@ impl Record {
             Record::LockRestored => "lock-restored".into(),
             Record::LockKept => "lock-kept".into(),
             Record::LockStays => "lock-stays".into(),
+            Record::Clearing(entries) => {
+                entries.iter().fold("clearing".to_string(), |line, entry| {
+                    format!("{line} {}", entry.word())
+                })
+            }
         }
     }
 
@@ -93,6 +175,12 @@ impl Record {
             ["lock-restored"] => Record::LockRestored,
             ["lock-kept"] => Record::LockKept,
             ["lock-stays"] => Record::LockStays,
+            ["clearing", entries @ ..] => Record::Clearing(
+                entries
+                    .iter()
+                    .map(|word| Entry::parse(word))
+                    .collect::<Option<_>>()?,
+            ),
             _ => return None,
         })
     }
@@ -230,6 +318,14 @@ impl Log {
         self.records.contains(&Record::Committed)
     }
 
+    /// What the clearing record lists, once recovery has begun to delete the staging folder.
+    pub(super) fn clearing(&self) -> Option<&[Entry]> {
+        self.records.iter().find_map(|record| match record {
+            Record::Clearing(entries) => Some(entries.as_slice()),
+            _ => None,
+        })
+    }
+
     fn part(&self, id: &str) -> PartLog {
         let mut part = PartLog::default();
         for record in &self.records {
@@ -356,9 +452,26 @@ enum Decision {
 /// it moves anything. An id in conflict is never moved. Recovery settles every other id first,
 /// then stops and names the conflicts.
 pub(super) fn next(log: &Log, seen: &Seen) -> Next {
+    let (first, problems) = steps(log, seen);
+    if let Some((effect, record)) = first {
+        return Next::Act(effect, record);
+    }
+    if !problems.is_empty() {
+        return Next::Stop(problems);
+    }
+    Next::Clean
+}
+
+/// Whether recovery from here stops on a problem before it is done, as [`next`] decides it.
+pub(super) fn stops(log: &Log, seen: &Seen) -> bool {
+    !steps(log, seen).1.is_empty()
+}
+
+/// The first step recovery takes, and the problems it stops on once every other step is done.
+fn steps(log: &Log, seen: &Seen) -> (Option<(Effect, Record)>, Vec<Problem>) {
     let strays = strays(log, seen);
     if !strays.is_empty() {
-        return Next::Stop(strays);
+        return (None, strays);
     }
     let committed = log.committed();
     let mut problems = Vec::new();
@@ -389,13 +502,7 @@ pub(super) fn next(log: &Log, seen: &Seen) -> Next {
             None => {}
         }
     }
-    if let Some((effect, record)) = first {
-        return Next::Act(effect, record);
-    }
-    if !problems.is_empty() {
-        return Next::Stop(problems);
-    }
-    Next::Clean
+    (first, problems)
 }
 
 fn undo_part(id: &str, part: &PartLog, here: &Here) -> Option<Decision> {
