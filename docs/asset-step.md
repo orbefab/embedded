@@ -44,6 +44,6 @@ The step does not compare a composed part with the whole object the models repo 
 
 ## In check.sh
 
-`cargo test` checks every catalog part with a GLB, without Node. The hashes and sizes in `asset.json` must match the files, the anchors' leads must equal the leads in `pins`, and every node that `view` and `joints` name must be a kept node.
+`cargo test` checks every catalog part with a GLB, without Node. The hashes and sizes in `asset.json` must match the files. The anchors' leads must equal the leads in `pins`, and each anchor's `at` must sit inside the box `asset.json` records, with a unit `axis`. The test reads the node names from the GLB's JSON chunk. They must equal `kept_nodes`, and `kept_nodes` must equal what the merge keeps by `part.jsonc` and the anchors, with each leg or socket anchor's `node` and `also` in the GLB once. The test reads no vertices, so the geometry checks stay with the asset step and `scripts/check-assets.sh`.
 
 `parts.lock` hashes every file in a part's folder. After a run, rewrite the lock fixture with `ORBE_BLESS=1 cargo test -p orbe-scene --test read`, copy the changed part folders and the fixture's `parts.lock` into `examples/first-target/`, and run `./scripts/check.sh`.

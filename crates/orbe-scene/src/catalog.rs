@@ -343,9 +343,44 @@ mod tests {
             .collect()
     }
 
+    /// A GLB's named nodes, sorted, read from its JSON chunk: bytes 20 to 20 + the u32 at
+    /// byte 12.
+    fn glb_node_names(id: &str, glb: &[u8]) -> Vec<String> {
+        assert_eq!(&glb[..4], b"glTF", "{id}: the GLB's magic");
+        assert_eq!(&glb[16..20], b"JSON", "{id}: the GLB's first chunk");
+        let len = u32::from_le_bytes(glb[12..16].try_into().unwrap()) as usize;
+        let json: Value = serde_json::from_slice(&glb[20..20 + len])
+            .unwrap_or_else(|e| panic!("{id}: the GLB's JSON chunk: {e}"));
+        let mut names: Vec<String> = json["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|node| node["name"].as_str())
+            .filter(|name| !name.is_empty())
+            .map(String::from)
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn numbers(id: &str, value: &Value) -> [f64; 3] {
+        let list: Vec<f64> = value
+            .as_array()
+            .unwrap_or_else(|| panic!("{id}: {value} is not a list"))
+            .iter()
+            .map(|n| {
+                n.as_f64()
+                    .unwrap_or_else(|| panic!("{id}: {n} is not a number"))
+            })
+            .collect();
+        list.try_into()
+            .unwrap_or_else(|_| panic!("{id}: {value} is not three numbers"))
+    }
+
     /// The asset step's record holds for every part with a body model: the hashes and sizes
-    /// match the files, the anchors cover exactly the leads in `pins`, and the merge kept every
-    /// node `view` and `joints` name.
+    /// match the files, the anchors cover exactly the leads in `pins` and sit inside the box,
+    /// and the GLB's named nodes are exactly the nodes the merge keeps: those `view` and `joints`
+    /// name, and the `node` and `also` of each leg or socket anchor, each once.
     #[test]
     fn every_body_model_matches_its_asset_record() {
         let catalog = Catalog::builtin();
@@ -380,36 +415,80 @@ mod tests {
             }
 
             let part = find(id).unwrap().tree.to_value();
-            let anchors: Vec<u64> = match entry.files.get(&anchors_name) {
+            let anchors: Vec<Value> = match entry.files.get(&anchors_name) {
                 Some(bytes) => serde_json::from_slice::<Value>(bytes).unwrap()["anchors"]
                     .as_array()
                     .unwrap()
-                    .iter()
-                    .map(|anchor| anchor["lead"].as_u64().unwrap())
-                    .collect(),
+                    .clone(),
                 None => Vec::new(),
             };
-            let anchor_set: BTreeSet<u64> = anchors.iter().copied().collect();
+            let anchor_leads: Vec<u64> = anchors
+                .iter()
+                .map(|anchor| anchor["lead"].as_u64().unwrap())
+                .collect();
+            let lead_set: BTreeSet<u64> = anchor_leads.iter().copied().collect();
             assert_eq!(
-                anchor_set.len(),
-                anchors.len(),
+                lead_set.len(),
+                anchor_leads.len(),
                 "{id}: a lead has two anchors"
             );
+            assert_eq!(lead_set, leads(&part["pins"]), "{id}: anchors against pins");
             assert_eq!(
-                anchor_set,
-                leads(&part["pins"]),
-                "{id}: anchors against pins"
+                asset["checks"]["anchors"]["anchors"],
+                anchors.len(),
+                "{id}: the anchors the asset step checked"
             );
 
-            let kept: BTreeSet<&str> = asset["kept_nodes"]
+            let [min, max] = ["min", "max"].map(|end| numbers(id, &asset["box"][end]));
+            for anchor in &anchors {
+                let at = numbers(id, &anchor["at"]);
+                let inside = (0..3).all(|k| min[k] - 0.01 <= at[k] && at[k] <= max[k] + 0.01);
+                assert!(
+                    inside,
+                    "{id}: lead {}'s anchor at {at:?} is outside the box",
+                    anchor["lead"]
+                );
+                let axis = numbers(id, &anchor["axis"]);
+                let length = axis.iter().map(|v| v * v).sum::<f64>().sqrt();
+                assert!(
+                    (length - 1.0).abs() < 1e-9,
+                    "{id}: lead {}'s axis is not a unit vector",
+                    anchor["lead"]
+                );
+            }
+
+            let kept: Vec<String> = asset["kept_nodes"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .map(|node| node.as_str().unwrap())
+                .map(|node| node.as_str().unwrap().to_string())
                 .collect();
-            for node in named_nodes(&part) {
-                assert!(kept.contains(node), "{id}: `{node}` is not a kept node");
+            let in_glb = glb_node_names(id, &entry.files[&glb]);
+            assert_eq!(
+                in_glb, kept,
+                "{id}: the GLB's named nodes against kept_nodes"
+            );
+
+            let mut policy: BTreeSet<String> =
+                named_nodes(&part).into_iter().map(String::from).collect();
+            for anchor in &anchors {
+                if !matches!(anchor["kind"].as_str(), Some("leg" | "socket")) {
+                    continue;
+                }
+                let also = anchor["also"].as_array().unwrap().iter();
+                for node in std::iter::once(&anchor["node"]).chain(also) {
+                    let node = node.as_str().unwrap();
+                    let times = in_glb.iter().filter(|name| *name == node).count();
+                    assert_eq!(
+                        times, 1,
+                        "{id}: lead {}'s node `{node}` in the GLB",
+                        anchor["lead"]
+                    );
+                    policy.insert(node.to_string());
+                }
             }
+            let policy: Vec<String> = policy.into_iter().collect();
+            assert_eq!(kept, policy, "{id}: kept_nodes against the keep policy");
         }
         assert_eq!(checked, 18);
     }
