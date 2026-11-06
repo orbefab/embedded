@@ -386,6 +386,7 @@ pub(crate) fn decode_part(
     if let Some(layout) = root.get("layout") {
         decode_layout(layout, &part.comp, out);
     }
+    check_own_names(root, out);
     for (_, pins) in &part.not_simulated {
         for pin in pins {
             if part.pin(pin).is_none() {
@@ -772,6 +773,53 @@ fn decode_pins(node: &Node, out: &mut Findings) -> Vec<Pin> {
         });
     }
     pins
+}
+
+/// Each name a part file gives to another of its own sections: `controls.press.joint` to a key
+/// of `joints`, each `view.glow` entry's `by` to a reading, and each `view.tint` and
+/// `view.recolour` entry's `by` to a param. `shape` has checked the types.
+fn check_own_names(root: &Node, out: &mut Findings) {
+    let press = root.get("controls").and_then(|c| c.get("press"));
+    let mut names: Vec<(&Node, &str, &str)> = press
+        .and_then(|p| p.get("joint"))
+        .map(|joint| (joint, "joints", "joint"))
+        .into_iter()
+        .collect();
+    let view = root.get("view");
+    for (list, section, what) in [
+        ("glow", "readings", "reading"),
+        ("tint", "params", "param"),
+        ("recolour", "params", "param"),
+    ] {
+        let entries = view.and_then(|v| v.get(list)).and_then(Node::items);
+        let by = entries
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|e| e.get("by"));
+        names.extend(by.map(|by| (by, section, what)));
+    }
+    for (node, section, what) in names {
+        let Some(name) = node.str() else { continue };
+        let props = root.get(section).and_then(Node::props).unwrap_or_default();
+        let keys: Vec<&str> = props.iter().map(|p| p.key.as_str()).collect();
+        if keys.contains(&name) {
+            continue;
+        }
+        let hint = match keys.as_slice() {
+            [] => format!("add `{name}` to `{section}`"),
+            _ => format!(
+                "{}its {section}: {}",
+                did_you_mean(name, keys.iter().copied(), ""),
+                keys.join(", ")
+            ),
+        };
+        out.push(
+            Code::UnknownRef,
+            node.span,
+            format!("this part has no {what} named `{name}`"),
+            hint,
+        );
+    }
 }
 
 fn decode_names(node: &Node, what: &str, out: &mut Findings) {
