@@ -1381,3 +1381,33 @@ fn an_open_whose_every_process_ends_before_reading_it_says_how_many_times() {
     wait_until("every process ended", || runtime.daemons().is_empty());
     assert!(session_files(&runtime).is_empty());
 }
+
+/// A scene whose name starts with `-` reads as a flag, live and in a test file, and the error
+/// names the `./` form. `--` before it opens it too.
+#[test]
+fn a_scene_named_like_a_flag_opens_as_dot_slash_or_after_dashes() {
+    let dir = project("open -dash.jsonc\n");
+    let root = dir.path();
+    fs::copy(root.join("scene.jsonc"), root.join("-dash.jsonc")).unwrap();
+    let runtime = Runtime::new();
+    let refused = "`-dash.jsonc` is a flag, not a scene; write a scene named so as `./-dash.jsonc`; usage: open [<scene>]";
+    let run = runtime.orbe(root, &["open", "-dash.jsonc"]);
+    assert_eq!(
+        (run.code, run.stderr.as_str()),
+        (2, format!("error[usage]: {refused}\n").as_str())
+    );
+    let tested = runtime.orbe(root, &["test"]);
+    assert_eq!(tested.code, 2, "{}", tested.stdout);
+    assert!(tested.stdout.contains(refused), "{}", tested.stdout);
+    for scene in [&["./-dash.jsonc"][..], &["--", "-dash.jsonc"]] {
+        let run = runtime.orbe(root, &[&["open"][..], scene].concat()).ok();
+        assert!(run.stdout.contains("-dash.jsonc at t=0"), "{}", run.stdout);
+        runtime.orbe(root, &["close"]).ok();
+        fs::write(
+            root.join("tests/a.test"),
+            format!("open {}\n", scene.join(" ")),
+        )
+        .unwrap();
+        runtime.orbe(root, &["test"]).ok();
+    }
+}

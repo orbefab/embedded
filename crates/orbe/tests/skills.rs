@@ -14,6 +14,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 use harness::{Run, Runtime};
 
@@ -72,26 +73,26 @@ fn shell(runtime: &Runtime, dir: &Path, line: &str) -> Run {
     Run::new(output)
 }
 
-/// Writes a block's file. A block for a file already written shows only its changed lines,
-/// each found by the key before its `:`.
-fn write_block(dir: &Path, file: &str, body: &str) {
+/// Applies a `diff` block: each `-` line of the file becomes the `+` line after it.
+fn apply_diff(dir: &Path, file: &str, body: &str) {
     let path = dir.join(file);
-    let Ok(mut text) = fs::read_to_string(&path) else {
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, body).unwrap();
-        return;
-    };
-    for line in body.lines() {
-        let key = line.split(':').next().unwrap();
-        let old: Vec<String> = text
-            .lines()
-            .filter(|l| l.split(':').next() == Some(key))
-            .map(str::to_string)
-            .collect();
-        assert_eq!(old.len(), 1, "{file} has one `{key}` line to change");
-        text = text.replace(&old[0], line);
+    let mut text = fs::read_to_string(&path).unwrap();
+    let lines: Vec<&str> = body.lines().collect();
+    for pair in lines.chunks(2) {
+        let old = pair[0].strip_prefix('-');
+        let new = pair.get(1).and_then(|l| l.strip_prefix('+'));
+        let (Some(old), Some(new)) = (old, new) else {
+            panic!("a diff block pairs each `-` line with a `+` line: {pair:?}");
+        };
+        assert_eq!(text.matches(old).count(), 1, "{file} has one `{old}`");
+        text = text.replace(old, new);
     }
     fs::write(path, text).unwrap();
+}
+
+fn write_file(dir: &Path, file: &str, body: &str) {
+    fs::create_dir_all(dir.join(file).parent().unwrap()).unwrap();
+    fs::write(dir.join(file), body).unwrap();
 }
 
 /// Runs each `$ ` line of a `console` block and compares what it prints with the lines shown.
@@ -155,7 +156,8 @@ fn the_core_examples_run_from_an_empty_folder_as_shown() {
     let mut sessions = Vec::new();
     for (info, body) in blocks(&text) {
         match info.split_once(' ') {
-            Some((_, file)) => write_block(dir, file, &body),
+            Some(("diff", file)) => apply_diff(dir, file, &body),
+            Some((_, file)) => write_file(dir, file, &body),
             None if info == "console" => {
                 run_shown(&runtime, dir, &body);
                 sessions.push(body);
@@ -426,13 +428,10 @@ fn the_arduino_compile_command_writes_the_firmware_the_scene_names() {
     assert_eq!(listed, written);
 
     let core = skill("core");
-    for (info, body) in blocks(&core)
-        .into_iter()
-        .take_while(|(info, _)| info != "console")
-    {
-        if let Some((_, file)) = info.split_once(' ') {
-            fs::create_dir_all(dir.join(file).parent().unwrap()).unwrap();
-            fs::write(dir.join(file), body).unwrap();
+    for (info, body) in blocks(&core) {
+        match info.split_once(' ') {
+            Some(("diff", _)) | None => {}
+            Some((_, file)) => write_file(dir, file, &body),
         }
     }
     let runtime = Runtime::new();
@@ -660,44 +659,284 @@ fn the_check_findings_core_states_are_the_ones_orbe_reports() {
     );
 }
 
-/// A flag before the command name gets a hint whose line runs: a flag's value is never taken
-/// for the command, and a flag the command does not take is named and left out.
+/// A flag before the command name gets a hint that moves the words before it to after it, as
+/// typed, and drops only a repeat clap refuses. The hinted line runs, or fails with the
+/// command's own error, and an `add` writes the folder its `-C` names.
 #[test]
 fn a_flag_before_the_command_gets_a_hint_whose_line_runs() {
     let project = worked_example();
     let dir = project.path();
-    fs::create_dir(dir.join("check")).unwrap();
+    for folder in ["check", "dir", "-proj", "a", "b"] {
+        write_file(dir, &format!("{folder}/scene.jsonc"), "{ \"format\": 1 }\n");
+    }
     let runtime = Runtime::new();
-    for (flags, command, hint) in [
+    runtime.orbe(dir, &["open"]).ok();
+    let unexpected = "error: unexpected argument '--session' found";
+    let twice = "error: the argument '-C <DIR>' cannot be used multiple times";
+    for (written, line, code, lock, says) in [
+        ("--session test open", "open --session test", 0, None, ""),
         (
-            "--session test",
-            "open",
-            "put it after the command name, as `orbe open --session test`",
+            "--session x check scene.jsonc",
+            "check scene.jsonc --session x",
+            2,
+            None,
+            unexpected,
         ),
         (
-            "--session x",
-            "check scene.jsonc",
-            "`orbe check` takes no `--session`, so run `orbe check scene.jsonc`",
+            "-C check add led-5mm",
+            "add led-5mm -C check",
+            0,
+            Some("check"),
+            "",
         ),
         (
-            "-C check",
-            "add led-5mm",
-            "put it after the command name, as `orbe add led-5mm -C check`",
+            "--timeout 50ms step --until @led1 off",
+            "step --until @led1 off --timeout 50ms",
+            0,
+            None,
+            "",
+        ),
+        (
+            "--timeout=50ms step --until @led1 off",
+            "step --until @led1 off --timeout=50ms",
+            0,
+            None,
+            "",
+        ),
+        (
+            "-Cdir add resistor-axial",
+            "add resistor-axial -Cdir",
+            0,
+            Some("dir"),
+            "",
+        ),
+        (
+            "-C./dir add led-5mm",
+            "add led-5mm -C./dir",
+            0,
+            Some("dir"),
+            "",
+        ),
+        (
+            "--json -Cdir add ams1117-sot223",
+            "add ams1117-sot223 --json -Cdir",
+            0,
+            Some("dir"),
+            "",
+        ),
+        (
+            "-C -proj add capacitor-0603",
+            "add capacitor-0603 -C -proj",
+            0,
+            Some("-proj"),
+            "",
+        ),
+        (
+            "-C a -C b add resonator-cstce",
+            "add resonator-cstce -C a -C b",
+            2,
+            None,
+            twice,
+        ),
+        (
+            "-C a -C a add led-5mm",
+            "add led-5mm -C a",
+            0,
+            Some("a"),
+            "",
+        ),
+        (
+            "--json --json check scene.jsonc",
+            "check scene.jsonc --json",
+            0,
+            None,
+            "",
+        ),
+        (
+            "--session p --session q check scene.jsonc",
+            "check scene.jsonc --session p --session q",
+            2,
+            None,
+            unexpected,
+        ),
+        (
+            "--session a --session b open",
+            "open --session a --session b",
+            0,
+            None,
+            "",
+        ),
+        (
+            "--json expect @led1.i '<' 1A",
+            "expect @led1.i '<' 1A --json",
+            0,
+            None,
+            "",
         ),
     ] {
-        let written = format!("{flags} {command}");
-        let words: Vec<&str> = written.split(' ').collect();
-        let run = runtime.orbe(dir, &words);
+        let run = shell(&runtime, dir, &format!("orbe {written}"));
         assert_eq!(run.code, 2, "orbe {written}");
-        assert_eq!(
-            run.stderr,
-            format!("error[usage]: `{flags}` is before the command name\n  hint: {hint}\n"),
-            "orbe {written}"
+        let (message, hint) = if written.contains("--json") {
+            let error = &run.json()["error"];
+            let text = |key: &str| error[key].as_str().unwrap().to_string();
+            (text("message"), text("hint"))
+        } else {
+            let (message, hint) = run.stderr.trim_end().split_once("\n  hint: ").unwrap();
+            (message.replace("error[usage]: ", ""), hint.to_string())
+        };
+        assert!(
+            message.ends_with("` is before the command name"),
+            "{message}"
         );
-        let line = hint.rsplit('`').nth(1).unwrap();
-        let words: Vec<&str> = line.split(' ').skip(1).collect();
-        let run = runtime.orbe(dir, &words);
-        assert_eq!(run.code, 0, "`{line}`: {}{}", run.stdout, run.stderr);
+        let hinted = format!("put it after the command name, as `orbe {line}`");
+        assert_eq!(hint, hinted, "orbe {written}");
+        let run = shell(&runtime, dir, &format!("orbe {line}"));
+        let printed = format!("{}{}", run.stdout, run.stderr);
+        assert_eq!(run.code, code, "orbe {line}: {printed}");
+        assert!(printed.starts_with(says), "orbe {line}: {printed}");
+        if let Some(folder) = lock {
+            let id = line.split(' ').nth(1).unwrap();
+            let lock = fs::read_to_string(dir.join(folder).join("parts.lock")).unwrap();
+            assert!(lock.contains(id), "orbe {line} adds {id} to {folder}");
+        }
     }
-    runtime.orbe(dir, &["close", "--session", "test"]).ok();
+    runtime.orbe(dir, &["close", "--all"]).ok();
+}
+
+/// Each input on a bouncing switch lands just after the window of the one before, and a read
+/// past the last input's time plus the window sees the switch settled. Two windows, with a
+/// press last and a release last.
+#[test]
+fn a_bouncing_switch_reads_settled_where_core_says() {
+    let core = skill("core");
+    for sentence in [
+        "an input on it lands after the window of the one before.",
+        "a `release` and a `press` with no `step` between land 2 ms apart, and `step --until @led1 on` stops at the first contact, which opens again inside the window",
+        "To read a bouncing switch settled, step past the time in the last input's reply plus the window.",
+    ] {
+        says(&core, sentence);
+    }
+    let (_, diff) = blocks(&core)
+        .into_iter()
+        .find(|(info, _)| info == "diff scene.jsonc")
+        .expect("core shows its bounce change");
+    let project = worked_example();
+    let dir = project.path();
+    let scene = fs::read_to_string(dir.join("scene.jsonc")).unwrap();
+    let runtime = Runtime::new();
+    let orbe = |args: &[&str]| runtime.orbe(dir, &[args, &["--json"]].concat()).ok().json();
+    for (window, window_ps) in [("2ms", 2_000_000_000u64), ("200us", 200_000_000)] {
+        fs::write(dir.join("scene.jsonc"), &scene).unwrap();
+        apply_diff(dir, "scene.jsonc", &diff.replace("2ms", window));
+        orbe(&["open"]);
+        let mut now = orbe(&["step", "100ms"])["t_ps"].as_u64().unwrap();
+        for inputs in [&["press"][..], &["release", "press"], &["release"]] {
+            let mut last: Option<u64> = None;
+            for input in inputs {
+                let landed = orbe(&[input, "@btn1"])["data"]["landed_ps"]
+                    .as_u64()
+                    .unwrap();
+                match last {
+                    None => assert!(landed >= now, "{window}: {input} lands at {landed}"),
+                    Some(before) => assert!(
+                        landed > before + window_ps && landed <= before + window_ps + 1_000_000,
+                        "{window}: {input} lands at {landed}, {before} + the window before"
+                    ),
+                }
+                last = Some(landed);
+            }
+            let past = last.unwrap() + window_ps + 1;
+            orbe(&["step", &format!("{}ps", past - now)]);
+            let (pin, led) = match inputs.last() {
+                Some(&"press") => ("high", "on"),
+                _ => ("low", "off"),
+            };
+            orbe(&["expect", "@nano.D2", pin]);
+            now = orbe(&["step", "1ms"])["t_ps"].as_u64().unwrap();
+            orbe(&["expect", "@led1", led]);
+        }
+        orbe(&["close"]);
+    }
+}
+
+#[test]
+fn a_command_sent_while_a_step_runs_waits_for_it() {
+    says(
+        &skill("core"),
+        "A command sent while a `step` runs waits for it.",
+    );
+    let project = worked_example();
+    let dir = project.path();
+    let runtime = Runtime::new();
+    runtime.orbe(dir, &["open"]).ok();
+    let stepping = runtime.spawn(dir, &["step", "600s", "--json"]);
+    std::thread::sleep(Duration::from_millis(300));
+    let mut reading = runtime.spawn(dir, &["snapshot", "--json"]);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        reading.try_wait().unwrap().is_none(),
+        "snapshot waits while the step runs"
+    );
+    harness::kill("-INT", stepping.id());
+    let reached = Run::new(stepping.wait_with_output().unwrap()).json()["t_ps"].clone();
+    let read = Run::new(reading.wait_with_output().unwrap()).ok().json();
+    assert_eq!(
+        read["t_ps"], reached,
+        "snapshot reads where the step stopped"
+    );
+    runtime.orbe(dir, &["close"]).ok();
+}
+
+/// `flood.ino` prints one line in `loop`, built by arduino-cli as the arduino skill says.
+#[test]
+fn snapshot_joins_the_last_serial_lines_with_a_newline_and_a_println_in_loop_repeats() {
+    says(
+        &skill("core"),
+        "`snapshot` shows the last 10 lines of it, joined with `\\n`.",
+    );
+    says(
+        &skill("arduino"),
+        "A `println` in `loop` prints on every pass, so its text repeats.",
+    );
+    let project = worked_example();
+    let dir = project.path();
+    let flood = common::repo().join("crates/orbe/tests/firmware/flood/flood.hex");
+    fs::copy(flood, dir.join("build/button.ino.hex")).unwrap();
+    let runtime = Runtime::new();
+    runtime.orbe(dir, &["open"]).ok();
+    runtime.orbe(dir, &["step", "50ms"]).ok();
+    let snapshot = runtime.orbe(dir, &["snapshot", "--json"]).ok().json();
+    let serial = snapshot["data"]["serial"].as_str().unwrap();
+    assert_eq!(serial.split('\n').count(), 10, "{serial:?}");
+    assert!(!serial.contains('\r'), "{serial:?}");
+    let looped = "abcdefghijklmnopqrstuvwxyz0123456789";
+    assert!(
+        serial.split('\n').take(9).all(|l| l == looped),
+        "{serial:?}"
+    );
+    runtime
+        .orbe(dir, &["expect", "serial", "contains", "ready"])
+        .ok();
+    runtime.orbe(dir, &["close"]).ok();
+}
+
+#[test]
+fn a_failed_test_prints_what_core_shows() {
+    let core = skill("core");
+    says(
+        &core,
+        "With the first `expect` in `tests/button.test` changed to `expect @led1 on`:",
+    );
+    let blocks = blocks(&core);
+    let block =
+        |found: fn(&(String, String)) -> bool| blocks.iter().find(|b| found(b)).unwrap().1.clone();
+    let test = block(|(info, _)| info == "text tests/button.test");
+    let shown = block(|(info, body)| info.is_empty() && body.starts_with("FAIL "));
+    let project = worked_example();
+    let dir = project.path();
+    let failing = test.replacen("expect @led1 off", "expect @led1 on", 1);
+    write_file(dir, "tests/button.test", &failing);
+    let run = Runtime::new().orbe(dir, &["test"]);
+    assert_eq!(run.code, 1);
+    assert_eq!(format!("{}{}", run.stdout, run.stderr), shown);
 }

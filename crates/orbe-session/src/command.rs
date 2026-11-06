@@ -50,7 +50,10 @@ pub const COMMANDS: &[Spec] = &[
         about: "Checks the scene and opens it at t = 0, paused. The scene is scene.jsonc by default.",
         parse: |args, root| match args {
             [] => Ok(Command::Open(root.join("scene.jsonc"))),
-            [flag] if flag.starts_with('-') => Err(format!("`{flag}` is a flag, not a scene")),
+            [dashes, scene] if dashes == "--" => Ok(Command::Open(root.join(scene))),
+            [flag] if flag.starts_with('-') => Err(format!(
+                "`{flag}` is a flag, not a scene; write a scene named so as `./{flag}`"
+            )),
             [scene] => Ok(Command::Open(root.join(scene))),
             _ => Err("takes at most one scene".into()),
         },
@@ -148,6 +151,9 @@ fn parse_step(args: &[String]) -> Result<Step, String> {
             let (words, timeout) = match rest {
                 [words @ .., flag, value] if flag == "--timeout" => {
                     (words, Duration::parse(value)?)
+                }
+                [words @ .., flag] if flag.starts_with("--timeout=") => {
+                    (words, Duration::parse(&flag["--timeout=".len()..])?)
                 }
                 words => (words, UNTIL_TIMEOUT),
             };

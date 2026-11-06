@@ -172,10 +172,11 @@ In a shell, quote `<` and `>`, or the shell takes them as redirects, as in `orbe
 - Serial can reach orbe up to one engine step (10 ms) after the chip sends it. Step a little past a print before you expect it.
 - A session stops at 2 hours of simulated time. Reads still work there, and `press`, `release` and `step` fail with `ended`. A `step` that would pass the stop fails with `past_stop`. Run `orbe open` to start again.
 
-A switch with `bounce` set bounces up to `max_bounces` times within that window after each `press` and `release`, and an input on it lands after the window of the one before. With `btn1`'s line in the worked example's scene changed to
+A switch with `bounce` set bounces up to `max_bounces` times within that window after each `press` and `release`, and an input on it lands after the window of the one before. With this one-line change to the worked example's `scene.jsonc`,
 
-```jsonc scene.jsonc
-    "btn1": { "type": "tactile-switch-6mm", "bounce": "2ms" },
+```diff scene.jsonc
+-    "btn1": { "type": "tactile-switch-6mm" },
++    "btn1": { "type": "tactile-switch-6mm", "bounce": "2ms" },
 ```
 
 a `release` and a `press` with no `step` between land 2 ms apart, and `step --until @led1 on` stops at the first contact, which opens again inside the window:
@@ -210,10 +211,10 @@ To read a bouncing switch settled, step past the time in the last input's reply 
 
 A test file is `tests/<name>.test` in the project folder. Each line is a live command without `orbe`. `--json`, `--session`, `--help` or `-h` on a line is a usage error, except as the text after `serial contains`. Live, `--help` anywhere prints help, so `orbe expect serial contains --help` prints help, while the same test line looks for that text. `#` starts a comment. `"..."` holds spaces, and inside it only `\"` and `\\` escape, so a test cannot name a line ending. To tell lines apart, print text that only one line has, such as `led=on`. Paths start from the project folder, and `open` alone opens `scene.jsonc`.
 
-`orbe test` runs every `tests/*.test` of the project in the current folder, each in a fresh session, and stops a file at its first failed line. `orbe test <file or folder>…` runs those. `-v` prints every command with its reply. A failure prints the line, the expected and the actual value:
+`orbe test` runs every `tests/*.test` of the project in the current folder, each in a fresh session, and stops a file at its first failed line. `orbe test <file or folder>…` runs those. `-v` prints every command with its reply. A failure prints the line, the expected and the actual value. With the first `expect` in `tests/button.test` changed to `expect @led1 on`:
 
 ```
-FAIL tests/button.test:3: expect @led1 on
+FAIL tests/button.test:4: expect @led1 on
   error[expect_failed]: expected @led1 on
     expected: @led1 on
     actual:   led1 off, i=1.341311570535588e-13 A

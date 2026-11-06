@@ -430,10 +430,12 @@ mod tests {
             .take_while(|l| l.starts_with('|'))
             .collect();
         assert!(table.len() > 10, "{} rows", table.len());
+        let mut listed = std::collections::BTreeSet::new();
         for row in table {
             let codes = row.split('|').nth(1).unwrap();
             for code in codes.split('`').skip(1).step_by(2) {
                 assert!(known.contains(&code), "orbe reports no `{code}`");
+                assert!(listed.insert(code), "`{code}` has two rows");
             }
         }
     }

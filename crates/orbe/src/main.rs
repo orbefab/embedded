@@ -45,7 +45,7 @@ enum Command {
         /// Part ids. A version is `id@0.1.0`.
         ids: Vec<String>,
         /// The project folder, the one with scene.jsonc. The current folder by default.
-        #[arg(short = 'C', value_name = "DIR")]
+        #[arg(short = 'C', value_name = "DIR", allow_hyphen_values = true)]
         dir: Option<PathBuf>,
         /// Replace a copy that differs within the same major version.
         #[arg(long)]
@@ -231,9 +231,12 @@ fn main() -> ExitCode {
     }
 }
 
-/// A flag before the command name, as in `orbe --session x open`, is refused with the line
-/// that puts it after, minus any flag the command does not take. Only `--help` and
-/// `--version` go first.
+/// The flags that take the next word as their value, so that word is never the command name.
+const VALUED: [&str; 4] = ["--session", "-C", "--timeout", "--until"];
+
+/// A flag before the command name, as in `orbe --session x open`, is refused with a hint
+/// that moves the words before the command name to after it, as typed, less a repeat clap
+/// refuses. Only `--help` and `--version` go first.
 fn flag_before_command(args: &[OsString]) -> Option<ExitCode> {
     let words: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
     let first = words.first()?;
@@ -241,48 +244,49 @@ fn flag_before_command(args: &[OsString]) -> Option<ExitCode> {
         return None;
     }
     let commands = cli();
-    let mut flags: Vec<(&str, &[&str])> = Vec::new();
     let mut at = 0;
-    while let Some(word) = words.get(at).filter(|w| w.starts_with('-')) {
-        let name = word.split_once('=').map_or(*word, |(name, _)| name);
-        let valued = !word.contains('=')
-            && commands
-                .get_subcommands()
-                .flat_map(clap::Command::get_arguments)
-                .any(|arg| names(arg, name) && arg.get_action().takes_values());
-        let end = (at + 1 + usize::from(valued)).min(words.len());
-        flags.push((name, &words[at..end]));
-        at = end;
+    while commands.find_subcommand(words.get(at)?).is_none() {
+        at += if VALUED.contains(&words[at]) { 2 } else { 1 };
     }
-    let mut command = commands.find_subcommand(words.get(at)?)?;
-    let mut end = at + 1;
-    while let Some(sub) = words.get(end).and_then(|w| command.find_subcommand(w)) {
-        command = sub;
-        end += 1;
+    let mut command = commands.find_subcommand(words[at])?;
+    for word in &words[at + 1..] {
+        match command.find_subcommand(word) {
+            Some(sub) => command = sub,
+            None => break,
+        }
     }
-    let (taken, foreign): (Vec<_>, Vec<_>) = flags
-        .iter()
-        .partition(|(name, _)| command.get_arguments().any(|arg| names(arg, name)));
-    let line: Vec<&str> = words[at..]
-        .iter()
-        .copied()
-        .chain(taken.iter().flat_map(|(_, words)| words.iter().copied()))
-        .collect();
-    let line = format!("`orbe {}`", line.join(" "));
-    let message = format!("`{}` is before the command name", words[..at].join(" "));
-    let hint = if foreign.is_empty() {
-        format!("put it after the command name, as {line}")
-    } else {
-        let foreign: Vec<String> = foreign
-            .iter()
-            .map(|(name, _)| format!("`{name}`"))
-            .collect();
-        format!(
-            "`orbe {}` takes no {}, so run {line}",
-            words[at..end].join(" "),
-            foreign.join(" or ")
-        )
+    let live = orbe_session::spec(words[at]).is_some();
+    let takes_once = |flag: &str| {
+        !live
+            && command.get_arguments().any(|arg| {
+                names(arg, flag)
+                    && matches!(
+                        arg.get_action(),
+                        ArgAction::Set | ArgAction::SetTrue | ArgAction::SetFalse
+                    )
+            })
     };
+    let mut line: Vec<&str> = words[at..].to_vec();
+    let mut before = words[..at].iter().copied();
+    while let Some(flag) = before.next() {
+        let unit: Vec<&str> = if VALUED.contains(&flag) {
+            [flag].into_iter().chain(before.next()).collect()
+        } else {
+            vec![flag]
+        };
+        if !(takes_once(flag) && line.windows(unit.len()).any(|w| w == unit)) {
+            line.extend(unit);
+        }
+    }
+    let shown = |words: &[&str]| {
+        words
+            .iter()
+            .map(|w| quoted(w))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let message = format!("`{}` is before the command name", shown(&words[..at]));
+    let hint = format!("put it after the command name, as `orbe {}`", shown(&line));
     if words.contains(&"--json") {
         print_json(&json!({
             "ok": false,
@@ -294,13 +298,24 @@ fn flag_before_command(args: &[OsString]) -> Option<ExitCode> {
     Some(ExitCode::from(USAGE))
 }
 
+/// Whether `flag`, such as `--json`, `--session=x` or `-Cdir`, is `arg`.
 fn names(arg: &Arg, flag: &str) -> bool {
     match flag.strip_prefix("--") {
-        Some(long) => arg.get_long() == Some(long),
-        None => {
-            let mut short = flag.chars().skip(1);
-            short.next().is_some_and(|c| arg.get_short() == Some(c)) && short.next().is_none()
-        }
+        Some(long) => arg.get_long() == long.split('=').next(),
+        None => flag
+            .chars()
+            .nth(1)
+            .is_some_and(|c| arg.get_short() == Some(c)),
+    }
+}
+
+/// The word as `sh` reads it back.
+fn quoted(word: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "@%+=:,./_-".contains(c);
+    if !word.is_empty() && word.chars().all(plain) {
+        word.to_string()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
     }
 }
 
