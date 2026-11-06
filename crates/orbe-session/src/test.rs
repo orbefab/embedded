@@ -82,30 +82,99 @@ pub fn run(file: &Path, text: &str, root: &Path) -> Report {
     }
 }
 
-/// The project folder a test file belongs to: the folder above the nearest folder named
-/// `tests` that holds it, as a path from where `file` starts. `None` when no folder above the
-/// file is named `tests`.
-pub fn root(file: &Path) -> Option<PathBuf> {
-    let absolute = std::path::absolute(file).ok()?;
-    let mut folders = Vec::new();
-    for component in absolute.parent()?.components() {
+/// A test file and its project folder, as paths from the working folder.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Located {
+    pub file: PathBuf,
+    pub root: PathBuf,
+}
+
+/// Finds a test file's project, the nearest folder above it that holds `scene.jsonc` or
+/// `parts.lock`, as `orbe add` finds one. The file must sit under that folder's `tests/`.
+/// `..` is read from the path's text. `cwd` is the working folder, as `cwd` names it. A
+/// refusal is its message and hint.
+pub fn locate(file: &Path, cwd: &Path) -> Result<Located, (String, String)> {
+    let path = lexical(&cwd.join(file));
+    let Some(project) = path.ancestors().skip(1).find(|dir| is_project(dir)) else {
+        return Err((
+            format!("{} is in no orbe project", file.display()),
+            "no folder above it holds scene.jsonc or parts.lock; put it in the project's tests/ folder, beside scene.jsonc".into(),
+        ));
+    };
+    let root = shown(project, cwd);
+    if !path.starts_with(project.join("tests")) {
+        let named = if root.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            &root
+        };
+        return Err((
+            format!("{} is not in its project's tests/ folder", file.display()),
+            format!(
+                "its project is {}, the nearest folder above it with scene.jsonc or parts.lock; put the file in {}/",
+                named.display(),
+                root.join("tests").display()
+            ),
+        ));
+    }
+    Ok(Located {
+        file: shown(&path, cwd),
+        root,
+    })
+}
+
+/// The working folder as the shell names it: `$PWD` when that is the same folder as the
+/// process's, so a folder reached through a symlink keeps its name, else the process's.
+pub fn cwd() -> std::io::Result<PathBuf> {
+    let process = std::env::current_dir()?;
+    let shell = std::env::var_os("PWD")
+        .map(PathBuf::from)
+        .filter(|pwd| pwd.is_absolute() && same(pwd, &process));
+    Ok(shell.map_or(process, |pwd| lexical(&pwd)))
+}
+
+fn is_project(dir: &Path) -> bool {
+    dir.join("scene.jsonc").is_file() || dir.join("parts.lock").is_file()
+}
+
+fn same(a: &Path, b: &Path) -> bool {
+    matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
+}
+
+/// An absolute path with each `..` taken off the name before it.
+fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
         match component {
             Component::ParentDir => {
-                folders.pop();
+                out.pop();
             }
             Component::CurDir => {}
-            other => folders.push(other.as_os_str().to_owned()),
+            other => out.push(other),
         }
     }
-    let up = folders.iter().rev().position(|name| name == "tests")? + 1;
-    let mut root = file.parent().unwrap_or(Path::new("")).to_path_buf();
-    for _ in 0..up {
-        match root.components().next_back() {
-            Some(Component::Normal(_)) => {
-                root.pop();
-            }
-            _ => root.push(".."),
-        }
+    out
+}
+
+/// `path` from `cwd`: below it as is, else with `..` when that reaches the same file through
+/// the process's folder, else whole.
+fn shown(path: &Path, cwd: &Path) -> PathBuf {
+    if let Ok(below) = path.strip_prefix(cwd) {
+        return below.to_path_buf();
     }
-    Some(root)
+    let Some(common) = cwd.ancestors().find(|dir| path.starts_with(dir)) else {
+        return path.to_path_buf();
+    };
+    let mut up: PathBuf = cwd
+        .strip_prefix(common)
+        .into_iter()
+        .flat_map(Path::components)
+        .map(|_| Component::ParentDir)
+        .collect();
+    up.push(path.strip_prefix(common).unwrap_or(path));
+    if same(&up, path) {
+        up
+    } else {
+        path.to_path_buf()
+    }
 }

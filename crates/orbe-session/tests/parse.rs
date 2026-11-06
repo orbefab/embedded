@@ -2,7 +2,9 @@
 
 use std::path::Path;
 
-use orbe_session::{Command, Condition, Duration, Op, Ref, Step, UNTIL_TIMEOUT, Unit, Want};
+use orbe_session::{
+    Command, Condition, Duration, Needle, Op, Ref, Step, UNTIL_TIMEOUT, Unit, Want,
+};
 
 fn ps(text: &str) -> u64 {
     Duration::parse(text).unwrap().as_ps()
@@ -91,7 +93,7 @@ fn each_condition_form_parses() {
     assert_eq!((volts.value, volts.unit), (2.5, Unit::Volt));
     assert_eq!(
         Condition::parse(&["serial".into(), "contains".into(), "two words".into()]).unwrap(),
-        Condition::SerialContains("two words".into())
+        Condition::SerialContains(Needle::parse("two words").unwrap())
     );
     assert_eq!(
         Condition::parse(&words("no diagnostics")).unwrap(),
@@ -168,7 +170,7 @@ fn comments_blank_lines_and_quotes() {
     assert_eq!(
         line(r#"expect serial contains "a # \"b\" \\""#).unwrap(),
         Some(Command::Expect(Condition::SerialContains(
-            r#"a # "b" \"#.into()
+            Needle::parse(r#"a # "b" \"#).unwrap()
         )))
     );
     assert!(
@@ -213,4 +215,49 @@ fn a_bad_line_names_the_command_and_its_usage() {
         let error = line(text).unwrap_err();
         assert!(error.contains(says), "{text}: {error}");
     }
+}
+
+#[test]
+fn the_wire_refuses_what_the_parser_refuses() {
+    use serde_json::{Value, json};
+    let refused = |wire: Value| serde_json::from_value::<Command>(wire).is_err();
+    for text in ["btn1", "@", "@a..b", "@.a", "@a.", ""] {
+        assert!(Ref::parse(text).is_err(), "{text}");
+        assert!(refused(json!({ "Get": text })), "{text}");
+        assert!(refused(json!({ "Press": text })), "{text}");
+    }
+    assert!(refused(json!({ "Get": [] })), "a ref with no name");
+    assert!(refused(json!({ "Get": [""] })), "a ref with an empty name");
+    for text in ["5", "mA", "5mX", "1e999A", "--5A", "5 mA"] {
+        assert!(orbe_session::Amount::parse(text).is_err(), "{text}");
+        assert!(
+            refused(json!({ "Expect": { "Compare": ["@led1", "Gt", text] } })),
+            "{text}"
+        );
+    }
+    assert!(Condition::parse(&["serial".into(), "contains".into(), "".into()]).is_err());
+    assert!(refused(json!({ "Expect": { "SerialContains": "" } })));
+    assert!(refused(
+        json!({ "Step": { "Until": { "condition": { "SerialContains": "" }, "timeout": 1 } } })
+    ));
+
+    for line in [
+        "get @nano.D13",
+        "press @btn1",
+        "expect @led1.i > 5mA",
+        "expect serial contains \"ready\"",
+        "step --until @led1 on --timeout 50ms",
+    ] {
+        let command = line_ok(line);
+        let wire = serde_json::to_value(&command).unwrap();
+        assert_eq!(
+            serde_json::from_value::<Command>(wire.clone()).unwrap(),
+            command,
+            "{wire}"
+        );
+    }
+}
+
+fn line_ok(text: &str) -> Command {
+    line(text).unwrap().unwrap()
 }

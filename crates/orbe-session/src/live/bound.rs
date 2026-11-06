@@ -3,7 +3,7 @@
 
 use sim_core::name::Ref as EngineRef;
 
-use super::{Open, Outcome, engine_name, fail, failed, find, quantity, t, unit_of};
+use super::{Open, Outcome, engine_name, fail, failed, quantity, t, unit_of};
 use crate::condition::{Condition, Op, State as Want, Unit};
 use crate::reply::{Check, Code, Data, Diagnostic, Error, Level, number};
 use crate::target::Target;
@@ -36,45 +36,64 @@ impl Open {
     pub(super) fn bind(&self, condition: &Condition) -> Result<Bound, Error> {
         Ok(match condition {
             Condition::NoDiagnostics => Bound::NoDiagnostics,
-            Condition::SerialContains(text) => Bound::SerialContains(text.clone()),
-            Condition::State(r, want) => match (self.resolve(r)?, want) {
-                (Target::Part(path), Want::On | Want::Off) => {
-                    let (i, above) = self.on_threshold(&path)?;
-                    Bound::On {
-                        part: path,
-                        i,
-                        above,
-                        want: *want == Want::On,
+            Condition::SerialContains(text) => Bound::SerialContains(text.as_str().to_string()),
+            Condition::State(r, want) => {
+                match (self.resolve(r)?, want) {
+                    (Target::Part(path), Want::On | Want::Off) => {
+                        let (i, above) = self.on_threshold(&path)?;
+                        Bound::On {
+                            part: path,
+                            i,
+                            above,
+                            want: *want == Want::On,
+                        }
                     }
-                }
-                (Target::Pin { path, pin, net }, Want::High | Want::Low) => {
-                    let name = format!("{path}.{pin}");
-                    let signal = net.as_ref().and_then(|n| self.signals.get(n)).copied().ok_or_else(|| {
+                    (
+                        Target::Pin {
+                            path,
+                            pin,
+                            net: None,
+                        },
+                        Want::High | Want::Low,
+                    ) => {
+                        return Err(self.not_simulated(&path, &pin));
+                    }
+                    (
+                        Target::Pin {
+                            path,
+                            pin,
+                            net: Some(net),
+                        },
+                        Want::High | Want::Low,
+                    ) => {
+                        let name = format!("{path}.{pin}");
+                        let signal = self.signals.get(&net).copied().ok_or_else(|| {
                         Error::new(
                             Code::NoReading,
                             format!("`{name}` has no logic level, because no chip pin shares its net"),
                             format!("compare its voltage instead, such as `{r} > 2.5V`"),
                         )
                     })?;
-                    let want = if *want == Want::High {
-                        Level::High
-                    } else {
-                        Level::Low
-                    };
-                    Bound::Level {
-                        pin: name,
-                        signal,
-                        want,
+                        let want = if *want == Want::High {
+                            Level::High
+                        } else {
+                            Level::Low
+                        };
+                        Bound::Level {
+                            pin: name,
+                            signal,
+                            want,
+                        }
+                    }
+                    (_, want) => {
+                        return Err(Error::new(
+                            Code::NoReading,
+                            format!("{r} cannot be {}", want.as_str()),
+                            "a part with an `on` reading is on or off, and a pin on a chip's net is high or low",
+                        ));
                     }
                 }
-                (_, want) => {
-                    return Err(Error::new(
-                        Code::NoReading,
-                        format!("{r} cannot be {}", want.as_str()),
-                        "a part with an `on` reading is on or off, and a pin on a chip's net is high or low",
-                    ));
-                }
-            },
+            }
             Condition::Compare(r, op, amount) => {
                 let (label, column, unit) = match self.resolve(r)? {
                     Target::Pin {
@@ -95,7 +114,12 @@ impl Open {
                         quantity(&engine, q),
                         unit_of(q),
                     ),
-                    _ => {
+                    Target::Pin {
+                        path,
+                        pin,
+                        net: None,
+                    } => return Err(self.not_simulated(&path, &pin)),
+                    Target::Part(_) => {
                         return Err(Error::new(
                             Code::NoReading,
                             format!("{r} has no one value to compare"),
@@ -158,10 +182,7 @@ impl Open {
                     format!("{label} = {} {}", number(seen), unit.as_str()),
                 )
             }
-            Bound::SerialContains(text) => (
-                find(&self.serial.bytes, text.as_bytes()).is_some(),
-                self.serial.actual(),
-            ),
+            Bound::SerialContains(text) => (self.serial.contains(text), self.serial.actual()),
             Bound::NoDiagnostics => {
                 let found: Vec<Diagnostic> = self
                     .diagnostics(&self.engine.probe())

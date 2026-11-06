@@ -5,7 +5,7 @@ mod live;
 
 use std::fs;
 
-use live::{change, common, edit_scene, orbe, project, replies, replies_in, with_firmware};
+use live::{change, common, edit_scene, failed, orbe, project, replies, replies_in, with_firmware};
 use serde_json::Value;
 
 const PRESS_THEN_D13: &str =
@@ -112,8 +112,11 @@ fn a_serial_match_meets_at_the_start_bit_of_the_byte_that_completed_it() {
         .iter()
         .find(|c| c["kind"] == "serial")
         .unwrap_or_else(|| panic!("{step}"));
-    assert_eq!(met_at(step), byte["at_ps"].as_u64().unwrap());
     assert_eq!(met_at(step), 138_500_000);
+    assert!(
+        byte["at_ps"].as_u64().unwrap() >= met_at(step),
+        "the change is at the byte that completed its text: {step}"
+    );
 }
 
 #[test]
@@ -284,4 +287,172 @@ fn every_number_a_reply_prints_reads_back_in_a_condition() {
     ));
     let run = orbe(dir.path(), &["test"]);
     assert_eq!(run.code, 0, "{}", run.stdout);
+}
+
+fn edges(reply: &Value, reference: &str) -> Vec<(u64, String)> {
+    reply["data"]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == "edge" && c["ref"] == reference)
+        .map(|c| {
+            (
+                c["at_ps"].as_u64().unwrap(),
+                c["level"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn until_counts_an_edge_at_its_start() {
+    let json = replies_in(&with_firmware(
+        "pulse",
+        "open\nstep 10.019ms\nstep --until @nano.D13 low --timeout 10us\n",
+    ));
+    let until = &json[2];
+    assert_eq!(until["error"]["code"], "until_timeout", "{until}");
+    assert_eq!(until["data"]["check"]["actual"], "nano.D13 high", "{until}");
+
+    let json = replies("open\nstep 10ms\npress @btn1\nstep --until @nano.D2 low --timeout 5ms\n");
+    assert_eq!(json[3]["error"]["code"], "until_timeout", "{}", json[3]);
+
+    let json = replies("open\nstep 10ms\npress @btn1\nstep --until @nano.D2 high --timeout 0s\n");
+    let until = &json[3];
+    assert_eq!(until["ok"], true, "{until}");
+    assert_eq!(met_at(until), 10_000_000_000);
+    assert_eq!(until["t_ps"], 10_000_000_000u64, "it takes no time");
+}
+
+#[test]
+fn until_counts_an_edge_at_its_end() {
+    let dir = with_firmware(
+        "pulse",
+        "open\nstep --until @nano.D13 high --timeout 10.019ms\nget @nano.D13\nstep 1ps\n",
+    );
+    let json = replies_in(&dir);
+    let until = &json[1];
+    assert_eq!(until["ok"], true, "{until}");
+    assert_eq!(met_at(until), 10_019_000_000);
+    assert_eq!(until["t_ps"], 10_019_000_000u64);
+    assert_eq!(
+        edges(until, "@nano.D13"),
+        [(10_019_000_000, "high".to_string())]
+    );
+    assert_eq!(
+        json[2]["data"]["value"]["level"], "low",
+        "a read at now shows the circuit just before the edge"
+    );
+    assert!(
+        edges(&json[3], "@nano.D13").is_empty(),
+        "the next step does not list it again: {}",
+        json[3]
+    );
+
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert!(
+        run.stdout.contains(
+            "  t=10.019ms (from 0s), @nano.D13 high at 10.019ms\n    10.019ms nano.D13 high\n"
+        ),
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
+fn a_sampled_until_says_by() {
+    let dir = project("open\nstep 100ms\npress @btn1\nstep --until @led1 on --timeout 50ms\n");
+    let json = replies_in(&dir);
+    let until = &json[3]["data"];
+    assert_eq!(until["met_by_ps"], 101_000_000_000u64, "{until}");
+    assert!(until["met_at_ps"].is_null(), "{until}");
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert!(
+        run.stdout
+            .contains("  t=101ms (from 100ms), @led1 on by 101ms\n"),
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
+fn a_serial_time_lies_inside_its_step() {
+    for (test, listed) in [
+        (
+            "open\nstep 250us\nstep --until serial contains \"é\" --timeout 1ms\n",
+            false,
+        ),
+        ("open\nstep 15ms\nstep 7.3ms\n", true),
+    ] {
+        let json = replies_in(&with_firmware("split", test));
+        let serial = json[2]["data"]["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["kind"] == "serial");
+        assert_eq!(serial, listed, "{}", json[2]);
+        for reply in &json[1..] {
+            let data = &reply["data"];
+            let (from, t) = (
+                data["from_ps"].as_u64().unwrap(),
+                reply["t_ps"].as_u64().unwrap(),
+            );
+            if let Some(met) = data["met_at_ps"].as_u64() {
+                assert!(from <= met && met <= t, "{reply}");
+            }
+            for c in data["changes"].as_array().unwrap() {
+                if c["kind"] == "serial" {
+                    let at = c["at_ps"].as_u64().unwrap();
+                    assert!(from <= at && at <= t, "{c} in {reply}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_character_still_arriving_is_left_out_and_noted() {
+    let dir = with_firmware(
+        "split",
+        "open\nstep 250us\nsnapshot\nexpect serial contains \"é\"\n",
+    );
+    let json = replies_in(&dir);
+    let snapshot = &json[2]["data"];
+    assert_eq!(snapshot["serial"], "", "{snapshot}");
+    assert_eq!(snapshot["serial_arriving"], 1, "{snapshot}");
+    assert_eq!(
+        json[3]["data"]["actual"], "serial \"\" (1 byte still arriving)",
+        "{}",
+        json[3]
+    );
+}
+
+#[test]
+fn serial_contains_matches_the_text_a_reply_shows() {
+    let dir = with_firmware(
+        "split",
+        "open\nstep 45ms\nexpect serial contains \"|bad��|\"\n",
+    );
+    let run = orbe(dir.path(), &["test"]);
+    assert_eq!(run.code, 0, "{}", run.stdout);
+}
+
+#[test]
+fn a_level_on_a_pin_the_engine_does_not_simulate_says_so() {
+    let (expect, _) = failed("open\nexpect @nano.A6 high\n");
+    let (get, _) = failed("open\nget @nano.A6\n");
+    assert_eq!(expect, get, "one reason for one pin");
+    assert_eq!(expect["message"], "`nano.A6` is not simulated");
+    let hint = expect["hint"].as_str().unwrap();
+    let named = hint
+        .split('`')
+        .nth(1)
+        .unwrap_or_else(|| panic!("the hint names no read: {hint}"));
+    let json = replies(&format!("open\nget {named}\nexpect {named} low\n"));
+    assert_eq!(json[1]["ok"], true, "{hint}: {}", json[1]);
+    assert!(
+        json[2]["error"]["code"] != "no_reading",
+        "{hint}: {}",
+        json[2]
+    );
 }

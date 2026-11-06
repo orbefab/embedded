@@ -2,8 +2,9 @@
 //!
 //! A read at `now` shows the circuit just before any event at `now`. That is the engine's own
 //! rule for a probe, whose row at an accepted step is read before any restart there, and the
-//! loop holds pin levels to it too: an edge at `now` stays unread until time moves past it.
-//! So `press` lands at `now`, and reads show it once a step has moved past that time.
+//! loop holds pin levels to it too: `get` and `expect` leave out an edge at `now` until time
+//! moves past it. So `press` lands at `now`, and reads show it once a step has moved past
+//! that time. A step from S to E lists every edge in [S, E] once, and `--until` counts them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
@@ -30,7 +31,7 @@ mod step;
 
 pub use step::Progress;
 
-use serial::{Serial, find};
+use serial::Serial;
 
 /// A named session that holds at most one open scene.
 pub struct Live {
@@ -52,8 +53,11 @@ struct Open {
     /// The pin each logic signal is named by in `step`'s changes.
     signal_pins: Vec<String>,
     ratings: Vec<Rated>,
-    /// Past every edge before `now`. An edge at `now` is read once time moves past it.
+    /// Past every edge before `now`. A read leaves out an edge at `now` until time moves
+    /// past it.
     edges: EdgeCursor,
+    /// Past every edge a step has listed, which is every edge through `now` once a step ran.
+    listed: EdgeCursor,
     serial: Serial,
 }
 
@@ -343,6 +347,7 @@ impl Open {
             signal_pins,
             ratings,
             edges,
+            listed: edges,
             serial: Serial::default(),
         })
     }
@@ -440,9 +445,8 @@ impl Open {
     fn get(&self, r: &Ref) -> Result<Got, Error> {
         let (target, value) = match self.resolve(r)? {
             Target::Pin { path, pin, net } => {
-                let name = format!("{path}.{pin}");
-                let value = self.pin(&name, net.as_deref())?;
-                (name, value)
+                let value = self.pin(&path, &pin, net.as_deref())?;
+                (format!("{path}.{pin}"), value)
             }
             Target::Quantity {
                 path,
@@ -506,18 +510,32 @@ impl Open {
         }
     }
 
-    fn pin(&self, name: &str, net: Option<&str>) -> Result<Reading, Error> {
-        let net = net.ok_or_else(|| {
-            Error::new(
-                Code::NoReading,
-                format!("`{name}` is not simulated"),
-                "read a pin the engine simulates",
-            )
-        })?;
+    fn pin(&self, path: &str, pin: &str, net: Option<&str>) -> Result<Reading, Error> {
+        let net = net.ok_or_else(|| self.not_simulated(path, pin))?;
         Ok(Reading::Pin {
             level: self.signals.get(net).map(|&k| self.level_before_now(k)),
             v: self.read(&EngineRef::Net(engine_name(net))),
         })
+    }
+
+    /// Why a pin on no engine net has no reading, with a pin of the same part that has a
+    /// level, else a voltage.
+    fn not_simulated(&self, path: &str, pin: &str) -> Error {
+        let pins = &self.refs.parts[path].pins;
+        let leveled = pins
+            .iter()
+            .find(|(_, net)| net.as_ref().is_some_and(|n| self.signals.contains_key(n)));
+        let hint = match leveled.or_else(|| pins.iter().find(|(_, net)| net.is_some())) {
+            Some((other, _)) => {
+                format!("read a pin the engine simulates, such as `@{path}.{other}`")
+            }
+            None => format!("`{path}` has no pin the engine simulates"),
+        };
+        Error::new(
+            Code::NoReading,
+            format!("`{path}.{pin}` is not simulated"),
+            hint,
+        )
     }
 
     /// A part's `on` reading and its engine quantities. `None` when it has neither.
@@ -592,7 +610,7 @@ impl Open {
                 .filter(|_| part.engine.is_empty())
                 .filter_map(|(pin, net)| {
                     let net = net.as_deref().filter(|n| wired(n))?;
-                    Some((pin.clone(), self.pin(pin, Some(net)).ok()?))
+                    Some((pin.clone(), self.pin(top, pin, Some(net)).ok()?))
                 })
                 .collect();
             parts.push(PartState {
@@ -602,13 +620,13 @@ impl Open {
                 pins,
             });
         }
-        let text = self.serial.text();
-        let lines: Vec<&str> = text.lines().collect();
+        let lines: Vec<&str> = self.serial.text().lines().collect();
         let serial = lines[lines.len().saturating_sub(10)..].join("\n");
         Data::Snapshot(Snapshot {
             scene: self.scene.clone(),
             parts,
             serial,
+            serial_arriving: self.serial.arriving(),
             diagnostics: self.diagnostics(&self.engine.probe()),
         })
     }
@@ -699,5 +717,29 @@ mod tests {
         assert_eq!((reply.t_ps, reply.state), (50_000_000_000, State::Stopped));
         let after = step(&mut live, "1ms");
         assert_eq!(after.error.unwrap().code, Code::Ended);
+    }
+
+    #[test]
+    fn an_until_near_the_stop_meets_at_once_or_ends_at_the_stop() {
+        let mut live = stopping_at_50ms();
+        assert!(step(&mut live, "45ms").ok());
+        let held = step(&mut live, "--until @led1 off");
+        assert!(held.ok(), "{}", held.text());
+        assert_eq!(
+            held.t_ps, 45_000_000_000,
+            "a condition that holds takes no time"
+        );
+
+        let reached = step(&mut live, "--until @led1 on --timeout 10ms");
+        let error = reached.error.as_ref().unwrap();
+        assert_eq!(error.code, Code::Ended, "{}", reached.text());
+        assert_eq!(
+            error.message,
+            "the session reached its stop before the condition held"
+        );
+        assert_eq!(
+            (reached.t_ps, reached.state),
+            (50_000_000_000, State::Stopped)
+        );
     }
 }

@@ -8,14 +8,74 @@ use std::fs;
 use live::{failed, orbe, project, replies};
 
 #[test]
-fn a_test_file_outside_a_tests_folder_is_refused() {
+fn a_test_file_outside_its_projects_tests_folder_is_refused() {
     let dir = project("open\n");
     fs::write(dir.path().join("smoke.test"), "open\nexpect @led1 off\n").unwrap();
     let run = orbe(dir.path(), &["test", "smoke.test"]);
     assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
     assert_eq!(
         run.stderr,
-        "error[usage]: smoke.test is not in a tests/ folder\n  hint: put it in the project's tests/ folder, beside scene.jsonc\n"
+        "error[usage]: smoke.test is not in its project's tests/ folder\n  hint: its project is ., the nearest folder above it with scene.jsonc or parts.lock; put the file in tests/\n"
+    );
+
+    let alone = tempfile::tempdir().unwrap();
+    fs::write(alone.path().join("smoke.test"), "open\n").unwrap();
+    let run = orbe(alone.path(), &["test", "smoke.test"]);
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stderr
+            .starts_with("error[usage]: smoke.test is in no orbe project\n"),
+        "{}",
+        run.stderr
+    );
+}
+
+#[test]
+fn a_test_belongs_to_the_nearest_project_above_it() {
+    let dir = project("open\n");
+    let inner = dir.path().join("tests/proj");
+    fs::create_dir_all(&inner).unwrap();
+    fs::copy(dir.path().join("scene.jsonc"), inner.join("scene.jsonc")).unwrap();
+    fs::write(inner.join("smoke.test"), "open\nexpect @led1 off\n").unwrap();
+    let run = orbe(dir.path(), &["test", "tests/proj/smoke.test"]);
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.stderr,
+        "error[usage]: tests/proj/smoke.test is not in its project's tests/ folder\n  hint: its project is tests/proj, the nearest folder above it with scene.jsonc or parts.lock; put the file in tests/proj/tests/\n"
+    );
+}
+
+#[test]
+fn a_test_run_inside_a_linked_tests_folder_opens_its_project() {
+    let dir = project("open\nexpect @led1 off\n");
+    fs::rename(dir.path().join("tests"), dir.path().join("checks")).unwrap();
+    std::os::unix::fs::symlink("checks", dir.path().join("tests")).unwrap();
+    let run = orbe(&dir.path().join("tests"), &["test", "-v", "a.test"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("\n  opened ../scene.jsonc at t=0: "),
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
+fn dot_dot_in_a_test_path_is_read_by_its_text() {
+    let dir = project("open\nexpect @led1 off\n");
+    let elsewhere = tempfile::tempdir().unwrap();
+    fs::write(elsewhere.path().join("scene.jsonc"), "{}\n").unwrap();
+    let real = elsewhere.path().join("real");
+    fs::create_dir(&real).unwrap();
+    fs::create_dir(real.join("sub")).unwrap();
+    fs::copy(dir.path().join("tests/a.test"), real.join("a.test")).unwrap();
+    fs::remove_dir_all(dir.path().join("tests")).unwrap();
+    std::os::unix::fs::symlink(&real, dir.path().join("tests")).unwrap();
+    let run = orbe(dir.path(), &["test", "-v", "tests/sub/../a.test"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("\n  opened scene.jsonc at t=0: "),
+        "{}",
+        run.stdout
     );
 }
 
@@ -166,12 +226,13 @@ fn a_step_past_the_stop_is_refused_before_it_runs() {
         "the session has 7200s left; step at most that"
     );
 
-    let (error, _) = failed("open\nstep 1s\nstep --until @led1 on --timeout 7200s\n");
-    assert_eq!(error["code"], "past_stop");
+    let held = replies("open\nstep 1s\nstep --until @led1 off --timeout 7200s\n");
     assert_eq!(
-        error["hint"],
-        "the session has 7199s left; give `--timeout` at most that"
+        held[2]["ok"], true,
+        "an until that holds takes no time: {}",
+        held[2]
     );
+    assert_eq!(held[2]["t_ps"], 1_000_000_000_000u64);
 
     let (error, _) = failed("open\nstep 18446744s\n");
     assert_eq!(error["code"], "past_stop");

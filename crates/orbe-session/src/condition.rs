@@ -13,7 +13,7 @@ pub enum Condition {
     /// `@led1.i > 5mA`.
     Compare(Ref, Op, Amount),
     /// `serial contains "pressed"`.
-    SerialContains(String),
+    SerialContains(Needle),
     /// `no diagnostics`.
     NoDiagnostics,
 }
@@ -100,12 +100,63 @@ impl Unit {
     }
 }
 
+/// The text `serial contains` looks for. It is never empty, because `""` is in any serial.
+/// Its wire form is the text, read by `parse`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct Needle(String);
+
+impl Needle {
+    pub fn parse(text: &str) -> Result<Needle, String> {
+        if text.is_empty() {
+            return Err(
+                "`serial contains` needs text, because `\"\"` is in any serial".to_string(),
+            );
+        }
+        Ok(Needle(text.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for Needle {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Needle, String> {
+        Needle::parse(&text)
+    }
+}
+
+impl From<Needle> for String {
+    fn from(needle: Needle) -> String {
+        needle.0
+    }
+}
+
 /// A value in its SI unit, as written: `5mA` is 0.005 A, and `3.2e-7A` is what `get` prints.
+/// Its wire form is the text as written, read by `parse`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct Amount {
     pub value: f64,
     pub unit: Unit,
     pub written: String,
+}
+
+impl TryFrom<String> for Amount {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Amount, String> {
+        Amount::parse(&text)
+    }
+}
+
+impl From<Amount> for String {
+    fn from(amount: Amount) -> String {
+        amount.written
+    }
 }
 
 const PREFIXES: &[(&str, f64)] = &[
@@ -151,10 +202,7 @@ impl Condition {
         let words: Vec<&str> = words.iter().map(String::as_str).collect();
         match words.as_slice() {
             ["no", "diagnostics"] => Ok(Condition::NoDiagnostics),
-            ["serial", "contains", ""] => {
-                Err("`serial contains` needs text, because `\"\"` is in any serial".to_string())
-            }
-            ["serial", "contains", text] => Ok(Condition::SerialContains((*text).to_string())),
+            ["serial", "contains", text] => Ok(Condition::SerialContains(Needle::parse(text)?)),
             [r, word] if r.starts_with('@') => {
                 let state = State::parse(word)
                     .ok_or_else(|| format!("`{word}` is not a state; use on, off, high or low"))?;
@@ -185,7 +233,7 @@ impl fmt::Display for Condition {
             Condition::Compare(r, op, amount) => {
                 write!(f, "{r} {} {}", op.as_str(), amount.written)
             }
-            Condition::SerialContains(text) => write!(f, "serial contains {text:?}"),
+            Condition::SerialContains(text) => write!(f, "serial contains {:?}", text.as_str()),
             Condition::NoDiagnostics => f.write_str("no diagnostics"),
         }
     }

@@ -105,7 +105,7 @@ fn each_command_replies_in_text() {
 
     let until = block(4);
     assert_eq!(until[0], "6> step --until @led1 on --timeout 50ms");
-    assert_eq!(until[1], "  t=101ms (from 100ms), @led1 on at 101ms");
+    assert_eq!(until[1], "  t=101ms (from 100ms), @led1 on by 101ms");
     assert_eq!(until[2], "    100ms nano.D2 high");
     assert!(
         until[3].starts_with("    100.") && until[3].ends_with("ms nano.D13 high"),
@@ -238,7 +238,7 @@ fn each_command_replies_with_one_json_envelope() {
     assert_eq!(step["t_ps"], 100_000_000_000u64);
     assert_eq!(
         step["data"],
-        serde_json::json!({ "from_ps": 0, "met_at_ps": null, "changes": [], "more": 0 })
+        serde_json::json!({ "from_ps": 0, "met_at_ps": null, "met_by_ps": null, "changes": [], "more": 0 })
     );
     assert_eq!(expect["data"]["passed"], true);
     assert_eq!(expect["data"]["expected"], "@led1 off");
@@ -249,7 +249,7 @@ fn each_command_replies_with_one_json_envelope() {
 
     assert_eq!(until["t_ps"], 101_000_000_000u64);
     assert_eq!(until["data"]["from_ps"], 100_000_000_000u64);
-    assert_eq!(until["data"]["met_at_ps"], 101_000_000_000u64);
+    assert_eq!(until["data"]["met_by_ps"], 101_000_000_000u64);
     assert_eq!(until["data"]["check"]["passed"], true);
     let changes = until["data"]["changes"].as_array().unwrap();
     assert_eq!(

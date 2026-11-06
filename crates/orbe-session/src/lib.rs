@@ -11,11 +11,11 @@ mod target;
 pub mod test;
 
 pub use command::{COMMANDS, Command, Spec, Step, UNTIL_TIMEOUT, spec};
-pub use condition::{Amount, Condition, Op, State as Want, Unit};
+pub use condition::{Amount, Condition, Needle, Op, State as Want, Unit};
 pub use duration::Duration;
 pub use live::{Live, Progress};
 pub use reply::{
-    Change, Check, Code, Data, Diagnostic, Error, Finding, Got, Level, PartState, Reading, Reply,
-    Snapshot, State, Stepped,
+    Change, Check, Code, Data, Diagnostic, Error, Finding, Got, Level, Met, PartState, Reading,
+    Reply, Snapshot, State, Stepped,
 };
 pub use target::{Ref, Target, resolve};

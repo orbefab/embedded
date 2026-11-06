@@ -8,26 +8,48 @@ use sim_core::name::Quantity;
 
 use crate::reply::{Code, Error};
 
-/// `@` and a dotted scene name, such as `@nano.D13` or `@led1.i`.
+/// `@` and a dotted scene name, such as `@nano.D13` or `@led1.i`: a part and the names below
+/// it, none empty. Its wire form is that text, read by `parse`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Ref(Vec<String>);
+#[serde(try_from = "String", into = "String")]
+pub struct Ref {
+    part: String,
+    below: Vec<String>,
+}
 
 impl Ref {
     pub fn parse(text: &str) -> Result<Ref, String> {
         let name = text.strip_prefix('@').ok_or_else(|| {
             format!("`{text}` is not a ref; a ref is `@` and a name, such as `@btn1`")
         })?;
-        let segs: Vec<String> = name.split('.').map(str::to_string).collect();
-        if segs.iter().any(String::is_empty) {
+        let mut segs = name.split('.').map(str::to_string);
+        let part = segs.next().unwrap_or_default();
+        let below: Vec<String> = segs.collect();
+        if part.is_empty() || below.iter().any(String::is_empty) {
             return Err(format!("`{text}` has an empty name between dots"));
         }
-        Ok(Ref(segs))
+        Ok(Ref { part, below })
+    }
+}
+
+impl TryFrom<String> for Ref {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Ref, String> {
+        Ref::parse(&text)
+    }
+}
+
+impl From<Ref> for String {
+    fn from(r: Ref) -> String {
+        r.to_string()
     }
 }
 
 impl fmt::Display for Ref {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "@{}", self.0.join("."))
+        write!(f, "@{}", self.part)?;
+        self.below.iter().try_for_each(|seg| write!(f, ".{seg}"))
     }
 }
 
@@ -67,7 +89,7 @@ pub fn resolve(
     r: &Ref,
     reports: &dyn Fn(&str) -> Vec<Quantity>,
 ) -> Result<Target, Error> {
-    let first = &r.0[0];
+    let first = &r.part;
     if !map.top.contains(first) {
         return Err(unknown(
             r,
@@ -76,9 +98,9 @@ pub fn resolve(
         ));
     }
     let mut path = first.clone();
-    for (i, seg) in r.0.iter().enumerate().skip(1) {
+    for (i, seg) in r.below.iter().enumerate() {
         let part = &map.parts[&path];
-        let last = i + 1 == r.0.len();
+        let last = i + 1 == r.below.len();
         if part.children.contains(seg) {
             path = format!("{path}.{seg}");
             continue;

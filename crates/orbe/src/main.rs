@@ -144,17 +144,22 @@ fn test_files(paths: &[PathBuf]) -> Result<Vec<(PathBuf, PathBuf)>, (u8, String,
     } else {
         paths.to_vec()
     };
+    let cwd = test::cwd().map_err(|error| {
+        (
+            IO,
+            format!("cannot read the working folder: {error}"),
+            "run `orbe test` from a folder that exists".to_string(),
+        )
+    })?;
+    let locate = |file: &Path| {
+        test::locate(file, &cwd)
+            .map(|found| (found.file, found.root))
+            .map_err(|(message, hint)| (USAGE, message, hint))
+    };
     let mut files = Vec::new();
     for path in &paths {
         if path.is_file() {
-            let root = test::root(path).ok_or_else(|| {
-                (
-                    USAGE,
-                    format!("{} is not in a tests/ folder", path.display()),
-                    "put it in the project's tests/ folder, beside scene.jsonc".into(),
-                )
-            })?;
-            files.push((path.clone(), root));
+            files.push(locate(path)?);
             continue;
         }
         if !path.is_dir() {
@@ -193,8 +198,7 @@ fn test_files(paths: &[PathBuf]) -> Result<Vec<(PathBuf, PathBuf)>, (u8, String,
         }
         found.sort();
         for file in found {
-            let root = test::root(&file).expect("a file in a tests folder");
-            files.push((file, root));
+            files.push(locate(&file)?);
         }
     }
     Ok(files)
