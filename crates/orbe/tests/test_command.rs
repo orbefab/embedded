@@ -509,20 +509,6 @@ fn a_scene_that_does_not_check_refuses_to_open() {
 }
 
 #[test]
-fn live_commands_outside_a_test_come_with_the_session_process() {
-    let dir = project("open\n");
-    let run = orbe(dir.path(), &["press", "@btn1"]);
-    assert_eq!(run.code, 2);
-    assert_eq!(
-        run.stderr,
-        "error[usage]: `orbe press` is a live command, and live commands come with the session process\n  hint: write `press <ref>` in a tests/<name>.test file and run `orbe test`\n"
-    );
-    let run = orbe(dir.path(), &["open", "--json"]);
-    assert_eq!(run.code, 2);
-    assert_eq!(run.json()["error"]["code"], "usage");
-}
-
-#[test]
 fn test_paths_name_files_or_project_folders() {
     let dir = project("open\nexpect @led1 off\n");
     fs::write(dir.path().join("tests/b.test"), "open\nexpect @led1 on\n").unwrap();

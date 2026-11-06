@@ -35,16 +35,10 @@ impl Report {
     /// `orbe check`'s exit codes: 0 when it passed, 1 for a failed check or any other refusal
     /// at run time, 2 for a malformed line or file, 3 for an io error.
     pub fn exit(&self) -> u8 {
-        let reply = self
-            .refused
+        self.refused
             .as_ref()
-            .or_else(|| self.failure().map(|line| &line.reply));
-        match reply.and_then(|r| r.error.as_ref()).map(|e| &e.code) {
-            None => 0,
-            Some(Code::Usage) => 2,
-            Some(Code::IoError) => 3,
-            Some(_) => 1,
-        }
+            .or_else(|| self.failure().map(|line| &line.reply))
+            .map_or(0, Reply::exit)
     }
 }
 

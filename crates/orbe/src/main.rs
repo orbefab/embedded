@@ -1,5 +1,10 @@
 //! `orbe`, the CLI. `orbe check` type-checks a scene. `orbe add` copies catalog parts.
-//! `orbe test` runs each test file's live commands in a fresh in-process session.
+//! `orbe test` runs each test file's live commands in a fresh in-process session. The live
+//! commands, such as `orbe open` and `orbe step`, drive a session that a background process
+//! holds between commands.
+
+#[cfg(unix)]
+mod live;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -58,6 +63,12 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// The session's background process, which `orbe open` starts.
+    #[command(hide = true)]
+    Daemon {
+        #[arg(long)]
+        session: String,
+    },
 }
 
 const FAILED: u8 = 1;
@@ -66,11 +77,20 @@ const IO: u8 = 3;
 const USAGE: u8 = 2;
 
 fn main() -> ExitCode {
-    if let Some(spec) = std::env::args()
-        .nth(1)
-        .and_then(|name| orbe_session::spec(&name))
+    let name = std::env::args_os().nth(1);
+    if let Some(spec) = name
+        .and_then(|n| n.into_string().ok())
+        .and_then(|n| orbe_session::spec(&n))
     {
-        return live_command(spec);
+        let args: Result<Vec<String>, _> = std::env::args_os()
+            .skip(2)
+            .map(|a| a.into_string())
+            .collect();
+        let Ok(args) = args else {
+            eprintln!("error[usage]: `orbe {}` takes UTF-8 arguments", spec.name);
+            return ExitCode::from(USAGE);
+        };
+        return live_command(spec, &args);
     }
     match Cli::try_parse() {
         Ok(cli) => match cli.command {
@@ -97,6 +117,7 @@ fn main() -> ExitCode {
                 verbose,
                 json,
             } => run_tests(&paths, verbose, json),
+            Command::Daemon { session } => daemon(&session),
         },
         Err(err) => usage(err),
     }
@@ -115,17 +136,24 @@ fn usage(err: clap::Error) -> ExitCode {
     err.exit();
 }
 
-/// The live commands run inside `orbe test` until the session process comes.
-fn live_command(spec: &orbe_session::Spec) -> ExitCode {
-    let message = format!(
-        "`orbe {}` is a live command, and live commands come with the session process",
-        spec.name
-    );
+#[cfg(unix)]
+fn live_command(spec: &orbe_session::Spec, args: &[String]) -> ExitCode {
+    live::main(spec, args)
+}
+
+#[cfg(unix)]
+fn daemon(session: &str) -> ExitCode {
+    live::daemon(session)
+}
+
+#[cfg(not(unix))]
+fn live_command(spec: &orbe_session::Spec, args: &[String]) -> ExitCode {
+    let message = format!("`orbe {}` needs Unix for now", spec.name);
     let hint = format!(
         "write `{}` in a tests/<name>.test file and run `orbe test`",
         spec.usage
     );
-    if std::env::args().any(|arg| arg == "--json") {
+    if args.iter().any(|arg| arg == "--json") {
         print_json(&json!({
             "ok": false,
             "error": { "code": "usage", "message": message, "hint": hint }
@@ -133,6 +161,12 @@ fn live_command(spec: &orbe_session::Spec) -> ExitCode {
     } else {
         eprintln!("error[usage]: {message}\n  hint: {hint}");
     }
+    ExitCode::from(USAGE)
+}
+
+#[cfg(not(unix))]
+fn daemon(_session: &str) -> ExitCode {
+    eprintln!("error[usage]: the session process needs Unix for now");
     ExitCode::from(USAGE)
 }
 
