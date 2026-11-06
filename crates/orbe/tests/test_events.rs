@@ -17,11 +17,17 @@ fn met_at(reply: &Value) -> u64 {
         .unwrap_or_else(|| panic!("not met: {reply}"))
 }
 
+fn met_by(reply: &Value) -> u64 {
+    reply["data"]["met_by_ps"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("not met by a read: {reply}"))
+}
+
 #[test]
-fn a_pulse_inside_one_slice_meets_until_at_its_edge() {
+fn an_until_met_by_an_edge_ends_1ps_past_it_where_reads_show_it() {
     let dir = with_firmware(
         "pulse",
-        "open\nstep --until @nano.D13 high --timeout 100ms\n",
+        "open\nstep --until @nano.D13 high --timeout 100ms\nget @nano.D13\nexpect @nano.D13 high\n",
     );
     let json = replies_in(&dir);
     let step = &json[1];
@@ -30,16 +36,50 @@ fn a_pulse_inside_one_slice_meets_until_at_its_edge() {
     assert_eq!(edge["level"], "high");
     assert_eq!(met_at(step), edge["at_ps"].as_u64().unwrap());
     assert_eq!(met_at(step), 10_019_000_000);
-    assert_eq!(step["t_ps"], 11_000_000_000u64, "the slice the edge is in");
+    assert_eq!(step["t_ps"], 10_019_000_001u64, "1 ps past the edge");
+    assert_eq!(json[2]["data"]["value"]["level"], "high", "{}", json[2]);
+    assert_eq!(json[3]["ok"], true, "{}", json[3]);
 
     let run = orbe(dir.path(), &["test", "-v"]);
     assert_eq!(run.code, 0, "{}", run.stdout);
     assert!(
-        run.stdout
-            .contains("  t=11ms (from 0s), @nano.D13 high at 10.019ms\n"),
+        run.stdout.contains(
+            "  t=10.019000001ms (from 0s), @nano.D13 high at 10.019ms (reads show it from 10.019000001ms)\n"
+        ),
         "{}",
         run.stdout
     );
+}
+
+#[test]
+fn an_until_met_by_an_edge_at_its_start_moves_past_it() {
+    let json = replies_in(&with_firmware(
+        "pulse",
+        "open\nstep 10.019ms\nget @nano.D13\nstep --until @nano.D13 high --timeout 1us\nget @nano.D13\n",
+    ));
+    assert_eq!(json[2]["data"]["value"]["level"], "low", "{}", json[2]);
+    let until = &json[3];
+    assert_eq!(until["ok"], true, "{until}");
+    assert_eq!(met_at(until), 10_019_000_000);
+    assert_eq!(until["t_ps"], 10_019_000_001u64, "{until}");
+    assert!(
+        edges(until, "@nano.D13").is_empty(),
+        "the step before listed it: {until}"
+    );
+    assert_eq!(json[4]["data"]["value"]["level"], "high", "{}", json[4]);
+}
+
+#[test]
+fn a_press_then_an_until_on_its_pin_agrees_with_expect() {
+    let pressed = "open\nstep 10ms\npress @btn1\nstep --until @nano.D2 high\n";
+    let json = replies(&format!("{pressed}expect @nano.D2 high\n"));
+    assert_eq!(met_at(&json[3]), 10_000_000_000, "{}", json[3]);
+    assert_eq!(json[3]["t_ps"], 10_000_000_001u64, "{}", json[3]);
+    assert_eq!(json[4]["ok"], true, "{}", json[4]);
+
+    let (error, entry) = failed(&format!("{pressed}expect @nano.D2 low\n"));
+    assert_eq!(error["code"], "expect_failed", "{entry}");
+    assert_eq!(entry["actual"], "nano.D2 high", "{entry}");
 }
 
 #[test]
@@ -97,7 +137,7 @@ fn two_chip_pins_on_one_net_keep_their_own_names() {
 }
 
 #[test]
-fn a_serial_match_meets_at_the_start_bit_of_the_byte_that_completed_it() {
+fn a_serial_match_is_dated_by_the_read_that_found_it() {
     let dir = project("open\nstep --until serial contains \"0\" --timeout 350us\n");
     fs::copy(
         common::repo().join("engine/firmware/sketch/serial_counter.hex"),
@@ -106,17 +146,17 @@ fn a_serial_match_meets_at_the_start_bit_of_the_byte_that_completed_it() {
     .unwrap();
     let json = replies_in(&dir);
     let step = &json[1];
+    assert!(step["data"]["met_at_ps"].is_null(), "{step}");
+    assert_eq!(met_by(step), step["t_ps"].as_u64().unwrap(), "{step}");
+    assert_eq!(step["data"]["sent_at_ps"], 138_500_000u64, "{step}");
     let byte = step["data"]["changes"]
         .as_array()
         .unwrap()
         .iter()
         .find(|c| c["kind"] == "serial")
         .unwrap_or_else(|| panic!("{step}"));
-    assert_eq!(met_at(step), 138_500_000);
-    assert!(
-        byte["at_ps"].as_u64().unwrap() >= met_at(step),
-        "the change is at the byte that completed its text: {step}"
-    );
+    assert_eq!(byte["by_ps"], met_by(step), "{step}");
+    assert!(byte["at_ps"].is_null(), "{byte}");
 }
 
 #[test]
@@ -305,30 +345,28 @@ fn edges(reply: &Value, reference: &str) -> Vec<(u64, String)> {
 }
 
 #[test]
-fn until_counts_an_edge_at_its_start() {
+fn until_reads_its_condition_at_its_start_as_get_does() {
     let json = replies_in(&with_firmware(
         "pulse",
-        "open\nstep 10.019ms\nstep --until @nano.D13 low --timeout 10us\n",
+        "open\nstep 10.019ms\nstep --until @nano.D13 low --timeout 0s\n",
     ));
     let until = &json[2];
-    assert_eq!(until["error"]["code"], "until_timeout", "{until}");
-    assert_eq!(until["data"]["check"]["actual"], "nano.D13 high", "{until}");
-
-    let json = replies("open\nstep 10ms\npress @btn1\nstep --until @nano.D2 low --timeout 5ms\n");
-    assert_eq!(json[3]["error"]["code"], "until_timeout", "{}", json[3]);
+    assert_eq!(until["ok"], true, "{until}");
+    assert_eq!(met_at(until), 10_019_000_000);
+    assert_eq!(until["t_ps"], 10_019_000_000u64, "it takes no time");
 
     let json = replies("open\nstep 10ms\npress @btn1\nstep --until @nano.D2 high --timeout 0s\n");
     let until = &json[3];
-    assert_eq!(until["ok"], true, "{until}");
-    assert_eq!(met_at(until), 10_000_000_000);
+    assert_eq!(until["error"]["code"], "until_timeout", "{until}");
+    assert_eq!(until["data"]["check"]["actual"], "nano.D2 low", "{until}");
     assert_eq!(until["t_ps"], 10_000_000_000u64, "it takes no time");
 }
 
 #[test]
-fn until_counts_an_edge_at_its_end() {
+fn an_until_whose_edge_ends_its_timeout_says_reads_show_it_after() {
     let dir = with_firmware(
         "pulse",
-        "open\nstep --until @nano.D13 high --timeout 10.019ms\nget @nano.D13\nstep 1ps\n",
+        "open\nstep --until @nano.D13 high --timeout 10.019ms\nget @nano.D13\nstep 1ps\nget @nano.D13\n",
     );
     let json = replies_in(&dir);
     let until = &json[1];
@@ -348,11 +386,12 @@ fn until_counts_an_edge_at_its_end() {
         "the next step does not list it again: {}",
         json[3]
     );
+    assert_eq!(json[4]["data"]["value"]["level"], "high", "{}", json[4]);
 
     let run = orbe(dir.path(), &["test", "-v"]);
     assert!(
         run.stdout.contains(
-            "  t=10.019ms (from 0s), @nano.D13 high at 10.019ms\n    10.019ms nano.D13 high\n"
+            "  t=10.019ms (from 0s), @nano.D13 high at 10.019ms (reads show it after 10.019ms)\n    10.019ms nano.D13 high\n"
         ),
         "{}",
         run.stdout
@@ -376,42 +415,52 @@ fn a_sampled_until_says_by() {
 }
 
 #[test]
-fn a_serial_time_lies_inside_its_step() {
-    for (test, listed) in [
-        (
-            "open\nstep 250us\nstep --until serial contains \"é\" --timeout 1ms\n",
-            false,
+fn a_serial_time_is_one_an_expect_of_the_text_passes_at() {
+    let dir = with_firmware(
+        "split",
+        "open\nstep 250us\nstep --until serial contains \"é\" --timeout 1ms\nexpect serial contains \"é\"\n",
+    );
+    let json = replies_in(&dir);
+    let until = &json[2];
+    assert!(until["data"]["met_at_ps"].is_null(), "{until}");
+    assert_eq!(met_by(until), 1_250_000_000, "{until}");
+    assert_eq!(until["t_ps"], 1_250_000_000u64, "{until}");
+    assert_eq!(until["data"]["sent_at_ps"], 200_500_000u64, "{until}");
+    assert_eq!(json[3]["ok"], true, "{}", json[3]);
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert!(
+        run.stdout.contains(
+            "  t=1.25ms (from 250us), serial contains \"é\" by 1.25ms (last byte sent from 200.5us)\n"
         ),
-        ("open\nstep 15ms\nstep 7.3ms\n", true),
-    ] {
-        let json = replies_in(&with_firmware("split", test));
-        let serial = json[2]["data"]["changes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|c| c["kind"] == "serial");
-        assert_eq!(serial, listed, "{}", json[2]);
-        for reply in &json[1..] {
-            let data = &reply["data"];
-            let (from, t) = (
-                data["from_ps"].as_u64().unwrap(),
-                reply["t_ps"].as_u64().unwrap(),
-            );
-            if let Some(met) = data["met_at_ps"].as_u64() {
-                assert!(from <= met && met <= t, "{reply}");
-            }
-            for c in data["changes"].as_array().unwrap() {
-                if c["kind"] == "serial" {
-                    let at = c["at_ps"].as_u64().unwrap();
-                    assert!(from <= at && at <= t, "{c} in {reply}");
-                }
-            }
-        }
-    }
+        "{}",
+        run.stdout
+    );
+
+    let dir = with_firmware("split", "open\nstep 250us\nstep 50us\n");
+    let json = replies_in(&dir);
+    let serial = json[2]["data"]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["kind"] == "serial")
+        .unwrap_or_else(|| panic!("{}", json[2]));
+    assert_eq!(
+        *serial,
+        serde_json::json!({ "kind": "serial", "by_ps": 300_000_000u64, "sent_at_ps": 200_500_000u64, "text": "é" }),
+        "{}",
+        json[2]
+    );
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert!(
+        run.stdout
+            .contains("\n    by 300us serial \"é\" (last byte sent from 200.5us)"),
+        "{}",
+        run.stdout
+    );
 }
 
 #[test]
-fn a_character_still_arriving_is_left_out_and_noted() {
+fn a_character_not_yet_whole_is_left_out_and_noted() {
     let dir = with_firmware(
         "split",
         "open\nstep 250us\nsnapshot\nexpect serial contains \"é\"\n",
@@ -419,11 +468,19 @@ fn a_character_still_arriving_is_left_out_and_noted() {
     let json = replies_in(&dir);
     let snapshot = &json[2]["data"];
     assert_eq!(snapshot["serial"], "", "{snapshot}");
-    assert_eq!(snapshot["serial_arriving"], 1, "{snapshot}");
+    assert_eq!(snapshot["serial_held"], 1, "{snapshot}");
     assert_eq!(
-        json[3]["data"]["actual"], "serial \"\" (1 byte still arriving)",
+        json[3]["data"]["actual"],
+        "serial \"\" (1 byte of a character held until the rest arrives); serial can reach orbe up to one step (10ms) late",
         "{}",
         json[3]
+    );
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert!(
+        run.stdout
+            .contains("\n  serial  \"\" (1 byte of a character held until the rest arrives)\n"),
+        "{}",
+        run.stdout
     );
 }
 

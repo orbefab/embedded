@@ -254,17 +254,22 @@ pub struct Stepped {
 /// When `--until`'s condition first held.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Met {
-    /// An exact time: the step's start when it held there, a pin's edge, or the start bit of
-    /// the byte that completed a serial match.
+    /// The step's start: the read there, the one `get` gives, held, and the step took no time.
     At(u64),
+    /// A pin's edge. Reads show it from 1 ps later, where the step ends unless that is past
+    /// its timeout or the stop.
+    Edge(u64),
     /// The slice end it was read at, for a condition read from the circuit, such as an `on`
     /// reading: it began to hold after the slice before and by then.
     By(u64),
+    /// The slice end where the byte that completed the match first reached the session, and
+    /// that byte's start bit.
+    Serial { by_ps: u64, sent_at_ps: u64 },
 }
 
-/// What a step saw. An edge and serial carry the engine's own time, `at_ps`. An `on` reading
-/// and a diagnostic are found by reading the circuit at a slice end, so they carry `by_ps`:
-/// the change happened after the slice before and by then.
+/// What a step saw. An edge carries the engine's own time, `at_ps`. An `on` reading, a
+/// diagnostic and serial text are found at a slice end, so they carry `by_ps`: the change
+/// happened after the slice before and by then.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Change {
     Edge {
@@ -277,10 +282,10 @@ pub enum Change {
         part: String,
         on: bool,
     },
-    /// Text, at the start bit of the byte that completed it, or at the step's start for a
-    /// byte that began before the step.
+    /// Text, by the slice end it reached the session at, with the start bit of its last byte.
     Serial {
-        at_ps: u64,
+        by_ps: u64,
+        sent_at_ps: u64,
         text: String,
     },
     Diagnostic {
@@ -294,8 +299,8 @@ pub struct Snapshot {
     pub scene: String,
     pub parts: Vec<PartState>,
     pub serial: String,
-    /// The bytes of a character still arriving, which `serial` leaves out.
-    pub serial_arriving: usize,
+    /// The bytes of a character held until the rest arrives, which `serial` leaves out.
+    pub serial_held: usize,
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -318,6 +323,17 @@ pub struct Check {
 
 fn t(ps: u64) -> String {
     Duration::from_ps(ps).to_string()
+}
+
+/// The note for the bytes of a character the serial holds until the rest arrives.
+pub(crate) fn held(bytes: usize) -> Option<String> {
+    match bytes {
+        0 => None,
+        1 => Some("1 byte of a character held until the rest arrives".into()),
+        n => Some(format!(
+            "{n} bytes of a character held until the rest arrives"
+        )),
+    }
 }
 
 /// The shortest text that reads back as the same value: `0.012246558123229083`, `1.34e-13`.
@@ -406,8 +422,10 @@ impl Change {
     /// When it happened, or the slice end it was found by.
     pub fn ps(&self) -> u64 {
         match self {
-            Change::Edge { at_ps, .. } | Change::Serial { at_ps, .. } => *at_ps,
-            Change::Led { by_ps, .. } | Change::Diagnostic { by_ps, .. } => *by_ps,
+            Change::Edge { at_ps, .. } => *at_ps,
+            Change::Led { by_ps, .. }
+            | Change::Diagnostic { by_ps, .. }
+            | Change::Serial { by_ps, .. } => *by_ps,
         }
     }
 
@@ -419,8 +437,12 @@ impl Change {
             Change::Led { by_ps, part, on } => {
                 json!({ "kind": "led", "by_ps": by_ps, "ref": format!("@{part}"), "on": on })
             }
-            Change::Serial { at_ps, text } => {
-                json!({ "kind": "serial", "at_ps": at_ps, "text": text })
+            Change::Serial {
+                by_ps,
+                sent_at_ps,
+                text,
+            } => {
+                json!({ "kind": "serial", "by_ps": by_ps, "sent_at_ps": sent_at_ps, "text": text })
             }
             Change::Diagnostic { by_ps, diagnostic } => {
                 json!({ "kind": "diagnostic", "by_ps": by_ps, "diagnostic": diagnostic.json })
@@ -434,7 +456,15 @@ impl Change {
             Change::Led { by_ps, part, on } => {
                 format!("by {} {part} {}", t(*by_ps), if *on { "on" } else { "off" })
             }
-            Change::Serial { at_ps, text } => format!("{} serial {text:?}", t(*at_ps)),
+            Change::Serial {
+                by_ps,
+                sent_at_ps,
+                text,
+            } => format!(
+                "by {} serial {text:?} (last byte sent from {})",
+                t(*by_ps),
+                t(*sent_at_ps)
+            ),
             Change::Diagnostic { by_ps, diagnostic } => {
                 format!("by {} {}", t(*by_ps), diagnostic.text())
             }
@@ -475,15 +505,19 @@ impl Data {
                 "value": got.value.json(),
             }),
             Data::Stepped(stepped) => {
-                let (at, by) = match stepped.met {
-                    Some(Met::At(ps)) => (Some(ps), None),
-                    Some(Met::By(ps)) => (None, Some(ps)),
-                    None => (None, None),
+                let (at, by, sent) = match stepped.met {
+                    Some(Met::At(ps) | Met::Edge(ps)) => (Some(ps), None, None),
+                    Some(Met::By(ps)) => (None, Some(ps), None),
+                    Some(Met::Serial { by_ps, sent_at_ps }) => {
+                        (None, Some(by_ps), Some(sent_at_ps))
+                    }
+                    None => (None, None, None),
                 };
                 let mut value = json!({
                     "from_ps": stepped.from_ps,
                     "met_at_ps": at,
                     "met_by_ps": by,
+                    "sent_at_ps": sent,
                     "changes": stepped.changes.iter().map(Change::json).collect::<Vec<_>>(),
                     "more": stepped.more,
                 });
@@ -501,7 +535,7 @@ impl Data {
                     "pins": p.pins.iter().map(|(pin, r)| (pin.clone(), r.json())).collect::<serde_json::Map<_, _>>(),
                 })).collect::<Vec<_>>(),
                 "serial": snapshot.serial,
-                "serial_arriving": snapshot.serial_arriving,
+                "serial_held": snapshot.serial_held,
                 "diagnostics": snapshot.diagnostics.iter().map(|d| &d.json).collect::<Vec<_>>(),
             }),
             Data::Checked(check) => check.json(),
@@ -548,11 +582,23 @@ impl Data {
                 if let Some(met) = stepped.met
                     && let Some(check) = &stepped.check
                 {
-                    let (word, ps) = match met {
-                        Met::At(ps) => ("at", ps),
-                        Met::By(ps) => ("by", ps),
+                    let _ = write!(out, ", {} ", check.expected);
+                    let _ = match met {
+                        Met::At(ps) => write!(out, "at {}", t(ps)),
+                        Met::Edge(ps) if t_ps > ps => {
+                            write!(out, "at {} (reads show it from {})", t(ps), t(t_ps))
+                        }
+                        Met::Edge(ps) => {
+                            write!(out, "at {} (reads show it after {})", t(ps), t(ps))
+                        }
+                        Met::By(ps) => write!(out, "by {}", t(ps)),
+                        Met::Serial { by_ps, sent_at_ps } => write!(
+                            out,
+                            "by {} (last byte sent from {})",
+                            t(by_ps),
+                            t(sent_at_ps)
+                        ),
                     };
-                    let _ = write!(out, ", {} {word} {}", check.expected, t(ps));
                 }
                 for change in &stepped.changes {
                     let _ = write!(out, "\n  {}", change.text());
@@ -585,15 +631,11 @@ impl Data {
                         words.join("  ")
                     );
                 }
-                if !snapshot.serial.is_empty() || snapshot.serial_arriving > 0 {
+                if !snapshot.serial.is_empty() || snapshot.serial_held > 0 {
                     let _ = write!(out, "\nserial  {:?}", snapshot.serial);
                 }
-                match snapshot.serial_arriving {
-                    0 => {}
-                    1 => out.push_str(" (1 byte still arriving)"),
-                    n => {
-                        let _ = write!(out, " ({n} bytes still arriving)");
-                    }
+                if let Some(held) = held(snapshot.serial_held) {
+                    let _ = write!(out, " ({held})");
                 }
                 if snapshot.diagnostics.is_empty() {
                     out.push_str("\ndiagnostics  none");

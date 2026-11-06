@@ -3,8 +3,9 @@
 //! A read at `now` shows the circuit just before any event at `now`. That is the engine's own
 //! rule for a probe, whose row at an accepted step is read before any restart there, and the
 //! loop holds pin levels to it too: `get` and `expect` leave out an edge at `now` until time
-//! moves past it. So `press` lands at `now`, and reads show it once a step has moved past
-//! that time. A step from S to E lists every edge in [S, E] once, and `--until` counts them.
+//! moves past it. So an event at t, an edge or a `press`, shows in reads from t + 1 ps. A step
+//! from S to E lists every edge in [S, E] once. `--until` first reads its condition as `get`
+//! would at S, and a pin's edge at t that meets it ends the step at t + 1 ps.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
@@ -626,7 +627,7 @@ impl Open {
             scene: self.scene.clone(),
             parts,
             serial,
-            serial_arriving: self.serial.arriving(),
+            serial_held: self.serial.held(),
             diagnostics: self.diagnostics(&self.engine.probe()),
         })
     }
@@ -741,5 +742,19 @@ mod tests {
             (reached.t_ps, reached.state),
             (50_000_000_000, State::Stopped)
         );
+    }
+
+    #[test]
+    fn an_until_at_the_stop_reads_its_condition_there() {
+        let mut live = stopping_at_50ms();
+        assert!(step(&mut live, "50ms").ok());
+        let held = step(&mut live, "--until @led1 off --timeout 0s");
+        assert!(held.ok(), "{}", held.text());
+        assert_eq!(held.text(), "t=50ms (from 50ms), @led1 off at 50ms");
+
+        let unmet = step(&mut live, "--until @led1 on");
+        assert_eq!(unmet.error.as_ref().unwrap().code, Code::Ended);
+        let actual = &unmet.check().unwrap().actual;
+        assert!(actual.starts_with("led1 off, i="), "{}", unmet.text());
     }
 }

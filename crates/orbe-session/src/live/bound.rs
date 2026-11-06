@@ -1,6 +1,8 @@
 //! The one condition grammar bound to an open scene: what each condition reads, and
 //! whether it holds now.
 
+use std::fmt::Write;
+
 use sim_core::name::Ref as EngineRef;
 
 use super::{Open, Outcome, engine_name, fail, failed, quantity, t, unit_of};
@@ -182,7 +184,18 @@ impl Open {
                     format!("{label} = {} {}", number(seen), unit.as_str()),
                 )
             }
-            Bound::SerialContains(text) => (self.serial.contains(text), self.serial.actual()),
+            Bound::SerialContains(text) => {
+                let found = self.serial.contains(text);
+                let mut actual = self.serial.actual();
+                if !found {
+                    let _ = write!(
+                        actual,
+                        "; serial can reach orbe up to one step ({}) late",
+                        t(self.max_step_ps)
+                    );
+                }
+                (found, actual)
+            }
             Bound::NoDiagnostics => {
                 let found: Vec<Diagnostic> = self
                     .diagnostics(&self.engine.probe())

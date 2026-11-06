@@ -15,7 +15,14 @@ fn a_test_file_outside_its_projects_tests_folder_is_refused() {
     assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
     assert_eq!(
         run.stderr,
-        "error[usage]: smoke.test is not in its project's tests/ folder\n  hint: its project is ., the nearest folder above it with scene.jsonc or parts.lock; put the file in tests/\n"
+        format!(
+            "error[usage]: smoke.test is not in its project's tests/ folder\n  hint: its real path is {}; its project is ., the nearest folder above it with scene.jsonc or parts.lock; put the file in tests/\n",
+            dir.path()
+                .canonicalize()
+                .unwrap()
+                .join("smoke.test")
+                .display()
+        )
     );
 
     let alone = tempfile::tempdir().unwrap();
@@ -41,7 +48,10 @@ fn a_test_belongs_to_the_nearest_project_above_it() {
     assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
     assert_eq!(
         run.stderr,
-        "error[usage]: tests/proj/smoke.test is not in its project's tests/ folder\n  hint: its project is tests/proj, the nearest folder above it with scene.jsonc or parts.lock; put the file in tests/proj/tests/\n"
+        format!(
+            "error[usage]: tests/proj/smoke.test is not in its project's tests/ folder\n  hint: its real path is {}; its project is tests/proj, the nearest folder above it with scene.jsonc or parts.lock; put the file in tests/proj/tests/\n",
+            inner.canonicalize().unwrap().join("smoke.test").display()
+        )
     );
 }
 
@@ -60,7 +70,7 @@ fn a_test_run_inside_a_linked_tests_folder_opens_its_project() {
 }
 
 #[test]
-fn dot_dot_in_a_test_path_is_read_by_its_text() {
+fn a_test_is_found_from_its_real_path() {
     let dir = project("open\nexpect @led1 off\n");
     let elsewhere = tempfile::tempdir().unwrap();
     fs::write(elsewhere.path().join("scene.jsonc"), "{}\n").unwrap();
@@ -70,12 +80,47 @@ fn dot_dot_in_a_test_path_is_read_by_its_text() {
     fs::copy(dir.path().join("tests/a.test"), real.join("a.test")).unwrap();
     fs::remove_dir_all(dir.path().join("tests")).unwrap();
     std::os::unix::fs::symlink(&real, dir.path().join("tests")).unwrap();
-    let run = orbe(dir.path(), &["test", "-v", "tests/sub/../a.test"]);
-    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let real = real.canonicalize().unwrap();
+    let elsewhere = std::path::Path::new("..").join(elsewhere.path().file_name().unwrap());
+
+    for named in ["tests/sub/../a.test", "tests/a.test"] {
+        let run = orbe(dir.path(), &["test", named]);
+        assert_eq!(run.code, 2, "{named}: {}{}", run.stdout, run.stderr);
+        assert_eq!(
+            run.stderr,
+            format!(
+                "error[usage]: {named} is not in its project's tests/ folder\n  hint: its real path is {}; its project is {}, the nearest folder above it with scene.jsonc or parts.lock; put the file in {}/tests/\n",
+                real.join("a.test").display(),
+                elsewhere.display(),
+                elsewhere.display()
+            )
+        );
+    }
+}
+
+#[test]
+fn the_working_folder_is_the_real_one_whatever_pwd_says() {
+    let dir = project("open\nexpect @led1 off\n");
+    let other = project("open\nexpect @led1 off\n");
+    fs::remove_file(other.path().join("build/button.ino.hex")).unwrap();
+    fs::create_dir(dir.path().join("tests/foo")).unwrap();
+    std::os::unix::fs::symlink(dir.path().join("tests"), other.path().join("jump")).unwrap();
+    let spoof = other.path().join("jump/foo/../../tests");
+    assert_eq!(
+        spoof.canonicalize().unwrap(),
+        dir.path().join("tests").canonicalize().unwrap()
+    );
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_orbe"))
+        .args(["test", "-v", "a.test"])
+        .current_dir(dir.path().join("tests"))
+        .env("PWD", &spoof)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        run.stdout.contains("\n  opened scene.jsonc at t=0: "),
-        "{}",
-        run.stdout
+        stdout.contains("\n  opened ../scene.jsonc at t=0: "),
+        "{stdout}"
     );
 }
 

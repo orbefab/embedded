@@ -89,80 +89,63 @@ pub struct Located {
     pub root: PathBuf,
 }
 
-/// Finds a test file's project, the nearest folder above it that holds `scene.jsonc` or
-/// `parts.lock`, as `orbe add` finds one. The file must sit under that folder's `tests/`.
-/// `..` is read from the path's text. `cwd` is the working folder, as `cwd` names it. A
-/// refusal is its message and hint.
-pub fn locate(file: &Path, cwd: &Path) -> Result<Located, (String, String)> {
-    let path = lexical(&cwd.join(file));
-    let Some(project) = path.ancestors().skip(1).find(|dir| is_project(dir)) else {
+/// Finds a test file's project from `real`, its path with every symlink resolved: the nearest
+/// folder above it that holds `scene.jsonc` or `parts.lock`, as `orbe add` finds one. The file
+/// must sit under that folder's `tests/`, resolved too, so a linked `tests/` is its target.
+/// `named` is the path as given, and `cwd` is the working folder, resolved. A refusal is its
+/// message and hint.
+pub fn locate(real: &Path, named: &Path, cwd: &Path) -> Result<Located, (String, String)> {
+    let really = format!("its real path is {}; ", real.display());
+    let Some(project) = real.ancestors().skip(1).find(|dir| is_project(dir)) else {
         return Err((
-            format!("{} is in no orbe project", file.display()),
-            "no folder above it holds scene.jsonc or parts.lock; put it in the project's tests/ folder, beside scene.jsonc".into(),
+            format!("{} is in no orbe project", named.display()),
+            format!(
+                "{really}no folder above it holds scene.jsonc or parts.lock; put it in the project's tests/ folder, beside scene.jsonc"
+            ),
         ));
     };
     let root = shown(project, cwd);
-    if !path.starts_with(project.join("tests")) {
-        let named = if root.as_os_str().is_empty() {
+    let tests = project.join("tests");
+    if !real.starts_with(tests.canonicalize().unwrap_or(tests)) {
+        let named_root = if root.as_os_str().is_empty() {
             Path::new(".")
         } else {
             &root
         };
         return Err((
-            format!("{} is not in its project's tests/ folder", file.display()),
+            format!("{} is not in its project's tests/ folder", named.display()),
             format!(
-                "its project is {}, the nearest folder above it with scene.jsonc or parts.lock; put the file in {}/",
-                named.display(),
+                "{really}its project is {}, the nearest folder above it with scene.jsonc or parts.lock; put the file in {}/",
+                named_root.display(),
                 root.join("tests").display()
             ),
         ));
     }
     Ok(Located {
-        file: shown(&path, cwd),
+        file: shown(real, cwd),
         root,
     })
 }
 
-/// The working folder as the shell names it: `$PWD` when that is the same folder as the
-/// process's, so a folder reached through a symlink keeps its name, else the process's.
+/// The working folder with every symlink resolved, which a relative path starts from.
 pub fn cwd() -> std::io::Result<PathBuf> {
-    let process = std::env::current_dir()?;
-    let shell = std::env::var_os("PWD")
-        .map(PathBuf::from)
-        .filter(|pwd| pwd.is_absolute() && same(pwd, &process));
-    Ok(shell.map_or(process, |pwd| lexical(&pwd)))
+    std::env::current_dir()?.canonicalize()
 }
 
 fn is_project(dir: &Path) -> bool {
     dir.join("scene.jsonc").is_file() || dir.join("parts.lock").is_file()
 }
 
-fn same(a: &Path, b: &Path) -> bool {
-    matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
-}
-
-/// An absolute path with each `..` taken off the name before it.
-fn lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::ParentDir => {
-                out.pop();
-            }
-            Component::CurDir => {}
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-/// `path` from `cwd`: below it as is, else with `..` when that reaches the same file through
-/// the process's folder, else whole.
-fn shown(path: &Path, cwd: &Path) -> PathBuf {
+/// `path` from `cwd`, both resolved: below it as is, else up with `..` to a folder they share
+/// below the root, else whole.
+pub fn shown(path: &Path, cwd: &Path) -> PathBuf {
     if let Ok(below) = path.strip_prefix(cwd) {
         return below.to_path_buf();
     }
-    let Some(common) = cwd.ancestors().find(|dir| path.starts_with(dir)) else {
+    let Some(common) = cwd
+        .ancestors()
+        .find(|dir| dir.parent().is_some() && path.starts_with(dir))
+    else {
         return path.to_path_buf();
     };
     let mut up: PathBuf = cwd
@@ -172,9 +155,5 @@ fn shown(path: &Path, cwd: &Path) -> PathBuf {
         .map(|_| Component::ParentDir)
         .collect();
     up.push(path.strip_prefix(common).unwrap_or(path));
-    if same(&up, path) {
-        up
-    } else {
-        path.to_path_buf()
-    }
+    up
 }

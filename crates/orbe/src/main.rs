@@ -151,27 +151,32 @@ fn test_files(paths: &[PathBuf]) -> Result<Vec<(PathBuf, PathBuf)>, (u8, String,
             "run `orbe test` from a folder that exists".to_string(),
         )
     })?;
-    let locate = |file: &Path| {
-        test::locate(file, &cwd)
+    let missing = |path: &Path| {
+        (
+            IO,
+            format!("no test file or folder at {}", path.display()),
+            "name a .test file or a project folder".to_string(),
+        )
+    };
+    let locate = |named: &Path| {
+        let real = named.canonicalize().map_err(|_| missing(named))?;
+        test::locate(&real, named, &cwd)
             .map(|found| (found.file, found.root))
             .map_err(|(message, hint)| (USAGE, message, hint))
     };
     let mut files = Vec::new();
     for path in &paths {
-        if path.is_file() {
+        let real = path.canonicalize().map_err(|_| missing(path))?;
+        if real.is_file() {
             files.push(locate(path)?);
             continue;
         }
-        if !path.is_dir() {
-            return Err((
-                IO,
-                format!("no test file or folder at {}", path.display()),
-                "name a .test file or a project folder".into(),
-            ));
+        if !real.is_dir() {
+            return Err(missing(path));
         }
-        let tests = path.join("tests");
+        let tests = real.join("tests");
+        let shown = test::shown(&tests, &cwd);
         let unreadable = |error: std::io::Error| {
-            let shown = tests.strip_prefix("./").unwrap_or(&tests);
             (
                 IO,
                 format!("cannot read {}: {error}", shown.display()),
@@ -187,13 +192,16 @@ fn test_files(paths: &[PathBuf]) -> Result<Vec<(PathBuf, PathBuf)>, (u8, String,
             .into_iter()
             .map(|entry| entry.path())
             .filter(|p| p.extension().is_some_and(|e| e == "test"))
-            .map(|p| p.strip_prefix("./").map(Path::to_path_buf).unwrap_or(p))
+            .map(|p| test::shown(&p, &cwd))
             .collect();
         if found.is_empty() {
             return Err((
                 USAGE,
-                format!("no tests in {}", tests.display()),
-                "write a tests/<name>.test file of live commands with `expect` lines".into(),
+                format!("no tests in {}", shown.display()),
+                format!(
+                    "its real path is {}; write a tests/<name>.test file of live commands with `expect` lines",
+                    tests.display()
+                ),
             ));
         }
         found.sort();

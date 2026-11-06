@@ -4,7 +4,6 @@ use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 
 use sim_circuit::{EdgeCursor, Probe, Status};
-use sim_core::logic::Change as EngineEdge;
 use sim_core::name::Ref as EngineRef;
 use sim_core::time::Time;
 
@@ -13,7 +12,7 @@ use super::serial::Arrived;
 use super::{Key, Open, Outcome, fail, failed, key, level, t};
 use crate::command::Step;
 use crate::duration::Duration;
-use crate::reply::{Change, Check, Code, Data, Diagnostic, Error, Got, Met, Stepped};
+use crate::reply::{Change, Check, Code, Data, Diagnostic, Error, Got, Level, Met, Stepped};
 use crate::target::Ref;
 
 /// `step` advances in slices this long, so `--until` and a caller see each one.
@@ -41,37 +40,59 @@ impl Progress<'_> {
 #[derive(Default)]
 struct Slice {
     changes: Vec<Change>,
-    edges: Vec<EngineEdge>,
     arrived: Arrived,
 }
 
 impl Open {
-    /// Whether the condition holds as the step starts. A pin's level counts every edge at
-    /// `now`, since a step from `now` counts them.
-    fn holds_at_start(&self, bound: &Bound) -> bool {
-        match bound {
-            Bound::Level { signal, want, .. } => level(self.engine.levels()[*signal]) == *want,
-            _ => self.observe(bound).0,
+    /// Advances to `to`. For a pin condition it goes one landing at a time and stops at the
+    /// first edge from `from` on that meets it, then 1 ps past the edge when `end` allows, so
+    /// reads show it. Returns that edge's time.
+    fn advance(
+        &mut self,
+        to: u64,
+        end: u64,
+        from: u64,
+        pin: Option<(usize, Level)>,
+    ) -> (Status, Option<u64>) {
+        let Some((signal, want)) = pin else {
+            return (self.engine.advance_to(Time::from_ps(to)), None);
+        };
+        let mut seen = 0;
+        loop {
+            let edge = self.engine.edges_since(self.edges).and_then(|(edges, _)| {
+                let found = edges[seen..]
+                    .iter()
+                    .find(|e| e.signal == signal && level(e.level) == want && e.at.as_ps() >= from);
+                seen = edges.len();
+                found.map(|e| e.at.as_ps())
+            });
+            if let Some(at) = edge {
+                let after = at + 1;
+                if self.engine.now().as_ps() < after && after <= end {
+                    self.engine.advance_to(Time::from_ps(after));
+                }
+                return (self.engine.status(), Some(at));
+            }
+            let now = self.engine.now().as_ps();
+            if now >= to || self.engine.status() != Status::Running {
+                return (self.engine.status(), None);
+            }
+            let landing = self.engine.next_at().map_or(to, |at| at.as_ps().min(to));
+            self.engine.advance_to(Time::from_ps(landing));
         }
     }
 
-    /// When the condition first held inside the slice that just ran: a pin's edge, the start
-    /// bit of the byte that completed a serial match, else by the slice's end if it holds there.
-    fn met_in(&self, bound: &Bound, slice: &Slice, from: u64) -> Option<Met> {
+    /// When a condition read from the circuit or the serial first held in the slice that just
+    /// ran: by the slice's end. A pin's edge is found by `advance`.
+    fn met_in(&self, bound: &Bound, slice: &Slice) -> Option<Met> {
+        let by_ps = self.engine.now().as_ps();
         match bound {
-            Bound::Level { signal, want, .. } => slice
-                .edges
-                .iter()
-                .find(|e| e.signal == *signal && level(e.level) == *want && e.at.as_ps() >= from)
-                .map(|e| Met::At(e.at.as_ps())),
+            Bound::Level { .. } => None,
             Bound::SerialContains(text) => self
                 .serial
                 .met(&slice.arrived, text)
-                .map(|at| Met::At(at.max(from))),
-            _ => self
-                .observe(bound)
-                .0
-                .then(|| Met::By(self.engine.now().as_ps())),
+                .map(|sent_at_ps| Met::Serial { by_ps, sent_at_ps }),
+            _ => self.observe(bound).0.then_some(Met::By(by_ps)),
         }
     }
 
@@ -92,16 +113,16 @@ impl Open {
                 Some((condition, *timeout, self.bind(condition).map_err(fail)?))
             }
         };
-        match self.engine.status() {
-            Status::Running => {}
-            Status::Stopped => {
+        match (self.engine.status(), step) {
+            (Status::Faulted, _) => return Err(fail(self.faulted())),
+            (Status::Stopped, Step::For(_)) => {
                 return Err(fail(Error::new(
                     Code::Ended,
                     "the session reached its 2-hour stop",
                     "run `open` to start again",
                 )));
             }
-            Status::Faulted => return Err(fail(self.faulted())),
+            _ => {}
         }
         let from = self.engine.now().as_ps();
         let end = match step {
@@ -144,21 +165,26 @@ impl Open {
                 }
             }
         };
-        list(self.drain(from, false).changes);
+        let mut status = self.engine.status();
+        list(self.drain(status != Status::Running).changes);
         let mut met = until
             .as_ref()
-            .filter(|(_, _, bound)| self.holds_at_start(bound))
+            .filter(|(_, _, bound)| self.observe(bound).0)
             .map(|_| Met::At(from));
-        let mut status = Status::Running;
+        let pin = until.as_ref().and_then(|(_, _, bound)| match bound {
+            Bound::Level { signal, want, .. } => Some((*signal, *want)),
+            _ => None,
+        });
         let mut now = from;
         let mut cancelled = false;
         while met.is_none() && now < end && status == Status::Running {
             let to = now.saturating_add(SLICE.as_ps()).min(end);
-            status = self.engine.advance_to(Time::from_ps(to));
+            let edge;
+            (status, edge) = self.advance(to, end, from, pin);
             now = self.engine.now().as_ps();
-            let slice = self.drain(from, status != Status::Running);
+            let slice = self.drain(status != Status::Running);
             if let Some((_, _, bound)) = &until {
-                met = self.met_in(bound, &slice, from);
+                met = edge.map(Met::Edge).or_else(|| self.met_in(bound, &slice));
             }
             let mut found = slice.changes;
             let probe = self.engine.probe();
@@ -197,15 +223,10 @@ impl Open {
         }
         let check = until.as_ref().map(|(condition, _, bound)| {
             let (passed, actual) = match (met, bound) {
-                (Some(Met::At(at)), Bound::Level { pin, want, .. }) => {
+                (Some(Met::At(at) | Met::Edge(at)), Bound::Level { pin, want, .. }) => {
                     (true, format!("{pin} {} at {}", want.as_str(), t(at)))
                 }
-                (None, Bound::Level { pin, signal, .. }) => (
-                    false,
-                    format!("{pin} {}", level(self.engine.levels()[*signal]).as_str()),
-                ),
-                (Some(_), _) => (true, self.observe(bound).1),
-                (None, _) => self.observe(bound),
+                (met, _) => (met.is_some(), self.observe(bound).1),
             };
             Check {
                 passed,
@@ -254,14 +275,21 @@ impl Open {
 
     /// Takes the edges and bytes the engine logged since the last drain. Every edge through
     /// `now` is listed once. The cursor stays before an edge at `now`, which reads still
-    /// leave out until time moves past it.
-    fn drain(&mut self, from: u64, ended: bool) -> Slice {
+    /// leave out until time moves past it. Serial text is dated by `now`, when the session
+    /// read it.
+    fn drain(&mut self, ended: bool) -> Slice {
         let now = self.engine.now();
         let mut slice = Slice::default();
         if let Some((edges, _)) = self.engine.edges_since(self.edges) {
             let base = u64::from(self.edges);
             let listed = (u64::from(self.listed) - base) as usize;
-            slice.edges = edges[listed..].to_vec();
+            for edge in &edges[listed..] {
+                slice.changes.push(Change::Edge {
+                    at_ps: edge.at.as_ps(),
+                    pin: self.signal_pins[edge.signal].clone(),
+                    level: level(edge.level),
+                });
+            }
             let read = if ended {
                 edges.len()
             } else {
@@ -275,13 +303,6 @@ impl Open {
             self.edges = next;
             self.engine.forget_edges(next);
         }
-        for edge in &slice.edges {
-            slice.changes.push(Change::Edge {
-                at_ps: edge.at.as_ps(),
-                pin: self.signal_pins[edge.signal].clone(),
-                level: level(edge.level),
-            });
-        }
         if let Some((bytes, next)) = self.engine.serial_since(self.serial.cursor) {
             let timed: Vec<(u8, u64)> = bytes.iter().map(|b| (b.byte, b.at.as_ps())).collect();
             self.serial.cursor = next;
@@ -290,7 +311,7 @@ impl Open {
         }
         slice
             .changes
-            .extend(self.serial.change(&slice.arrived, from));
+            .extend(self.serial.change(&slice.arrived, now.as_ps()));
         slice
     }
 }

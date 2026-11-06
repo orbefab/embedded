@@ -238,7 +238,7 @@ fn each_command_replies_with_one_json_envelope() {
     assert_eq!(step["t_ps"], 100_000_000_000u64);
     assert_eq!(
         step["data"],
-        serde_json::json!({ "from_ps": 0, "met_at_ps": null, "met_by_ps": null, "changes": [], "more": 0 })
+        serde_json::json!({ "from_ps": 0, "met_at_ps": null, "met_by_ps": null, "sent_at_ps": null, "changes": [], "more": 0 })
     );
     assert_eq!(expect["data"]["passed"], true);
     assert_eq!(expect["data"]["expected"], "@led1 off");
@@ -477,7 +477,10 @@ fn each_error_code() {
     let (error, _) = failed("open\npress @btn2");
     assert_eq!(error["hint"], "parts: nano, btn1, r2, r1, led1");
     let (_, entry) = failed("open\nexpect serial contains \"ready\"");
-    assert_eq!(entry["actual"], "no serial");
+    assert_eq!(
+        entry["actual"],
+        "no serial; serial can reach orbe up to one step (10ms) late"
+    );
 }
 
 #[test]

@@ -3,7 +3,7 @@
 
 use sim_circuit::SerialCursor;
 
-use crate::reply::Change;
+use crate::reply::{Change, held};
 
 /// The serial text a failed `serial contains` shows, from the end.
 const SERIAL_SHOWN: usize = 200;
@@ -15,8 +15,9 @@ pub(super) struct Serial {
     text: String,
     /// The bytes since `open`.
     count: usize,
-    /// The bytes of a character whose last bytes are still on the wire, with their start bits.
-    arriving: Vec<(u8, u64)>,
+    /// The bytes of a character whose last bytes have not reached the session, with their
+    /// start bits.
+    held: Vec<(u8, u64)>,
 }
 
 /// The text one batch of bytes completed: where it starts in the serial's text, and the end
@@ -28,14 +29,14 @@ pub(super) struct Arrived {
 }
 
 impl Serial {
-    /// Decodes bytes as they arrive. A character still arriving waits for its last bytes,
-    /// unless the session has ended, when it is U+FFFD.
+    /// Decodes bytes as they arrive. A character whose last bytes have not arrived waits for
+    /// them, unless the session has ended, when it is U+FFFD.
     pub(super) fn arrive(
         &mut self,
         bytes: impl Iterator<Item = (u8, u64)>,
         ended: bool,
     ) -> Arrived {
-        let mut raw = std::mem::take(&mut self.arriving);
+        let mut raw = std::mem::take(&mut self.held);
         let before = raw.len();
         raw.extend(bytes);
         self.count += raw.len() - before;
@@ -58,7 +59,7 @@ impl Serial {
             let unfinished = read + invalid.len() == data.len()
                 && std::str::from_utf8(invalid).is_err_and(|e| e.error_len().is_none());
             if unfinished && !ended {
-                self.arriving = raw[read..].to_vec();
+                self.held = raw[read..].to_vec();
                 break;
             }
             read += invalid.len();
@@ -72,8 +73,8 @@ impl Serial {
         &self.text
     }
 
-    pub(super) fn arriving(&self) -> usize {
-        self.arriving.len()
+    pub(super) fn held(&self) -> usize {
+        self.held.len()
     }
 
     pub(super) fn contains(&self, needle: &str) -> bool {
@@ -95,12 +96,12 @@ impl Serial {
             .map(|&(_, at_ps)| at_ps)
     }
 
-    /// The text `arrived` completed, at the start bit of the byte that completed it, or at
-    /// `from` for a byte that began before it.
-    pub(super) fn change(&self, arrived: &Arrived, from: u64) -> Option<Change> {
-        let &(_, last) = arrived.ends.last()?;
+    /// The text `arrived` completed, by `by_ps`, the time the session read it.
+    pub(super) fn change(&self, arrived: &Arrived, by_ps: u64) -> Option<Change> {
+        let &(_, sent_at_ps) = arrived.ends.last()?;
         Some(Change::Serial {
-            at_ps: last.max(from),
+            by_ps,
+            sent_at_ps,
             text: self.text[arrived.from..].to_string(),
         })
     }
@@ -109,20 +110,16 @@ impl Serial {
         if self.count == 0 {
             return "no serial".to_string();
         }
-        let arriving = match self.arriving.len() {
-            0 => None,
-            1 => Some("1 byte still arriving".to_string()),
-            n => Some(format!("{n} bytes still arriving")),
-        };
+        let held = held(self.held.len());
         if self.text.len() <= SERIAL_SHOWN {
-            let note = arriving.map(|a| format!(" ({a})")).unwrap_or_default();
+            let note = held.as_ref().map(|a| format!(" ({a})")).unwrap_or_default();
             return format!("serial {:?}{note}", self.text);
         }
         let mut from = self.text.len() - SERIAL_SHOWN;
         while !self.text.is_char_boundary(from) {
             from += 1;
         }
-        let note = arriving.map(|a| format!("; {a}")).unwrap_or_default();
+        let note = held.map(|a| format!("; {a}")).unwrap_or_default();
         format!(
             "serial ends {:?} ({} bytes in all{note})",
             &self.text[from..],
@@ -138,12 +135,13 @@ mod tests {
     fn arrive(serial: &mut Serial, bytes: &[u8], at_ps: u64, ended: bool) -> Option<Change> {
         let timed = bytes.iter().zip(at_ps..).map(|(&b, at)| (b, at));
         let arrived = serial.arrive(timed, ended);
-        serial.change(&arrived, 0)
+        serial.change(&arrived, at_ps + 50)
     }
 
-    fn change(at_ps: u64, text: &str) -> Option<Change> {
+    fn change(by_ps: u64, sent_at_ps: u64, text: &str) -> Option<Change> {
         Some(Change::Serial {
-            at_ps,
+            by_ps,
+            sent_at_ps,
             text: text.into(),
         })
     }
@@ -153,12 +151,15 @@ mod tests {
         let mut serial = Serial::default();
         assert_eq!(
             arrive(&mut serial, b"caf\xc3", 100, false),
-            change(102, "caf")
+            change(150, 102, "caf")
         );
-        assert_eq!(serial.actual(), "serial \"caf\" (1 byte still arriving)");
+        assert_eq!(
+            serial.actual(),
+            "serial \"caf\" (1 byte of a character held until the rest arrives)"
+        );
         assert_eq!(
             arrive(&mut serial, b"\xa9 ok\xff", 200, false),
-            change(204, "é ok\u{fffd}"),
+            change(250, 204, "é ok\u{fffd}"),
             "an invalid byte shows as U+FFFD at once"
         );
         assert!(
@@ -166,10 +167,10 @@ mod tests {
             "a match reads the text shown"
         );
         assert_eq!(arrive(&mut serial, b"\xe2\x82", 300, false), None);
-        assert_eq!(serial.arriving(), 2);
+        assert_eq!(serial.held(), 2);
         assert_eq!(
             arrive(&mut serial, b"", 400, true),
-            change(301, "\u{fffd}"),
+            change(450, 301, "\u{fffd}"),
             "once the session has ended no more bytes come"
         );
         assert_eq!(serial.actual(), "serial \"café ok\u{fffd}\u{fffd}\"");

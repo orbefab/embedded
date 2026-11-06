@@ -24,12 +24,11 @@ impl Run {
     }
 }
 
-/// Runs `orbe` in `dir`, with `PWD` set to it as a shell sets it.
+/// Runs `orbe` in `dir`.
 pub fn orbe(dir: &Path, args: &[&str]) -> Run {
     let output = Command::new(env!("CARGO_BIN_EXE_orbe"))
         .args(args)
         .current_dir(dir)
-        .env("PWD", dir)
         .output()
         .unwrap();
     Run {
