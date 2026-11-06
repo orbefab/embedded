@@ -12,7 +12,7 @@ use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
-use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -481,13 +481,7 @@ fn commands_queued_behind_close_get_no_session_and_a_queued_open_starts_again() 
 fn a_read_before_the_first_open_gets_the_shell_no_session() {
     let dir = project("open\n");
     let runtime = Runtime::new();
-    let mut starting = runtime
-        .command(dir.path(), &["daemon", "--session=st"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    wait_until("the process listens", || runtime.sockets() == ["st.sock"]);
+    let mut starting = runtime.listening(dir.path(), "st", None);
     let run = runtime.orbe(dir.path(), &["get", "@led1", "--session", "st"]);
     assert_eq!((run.code, run.stdout.as_str()), (1, ""));
     assert_eq!(
@@ -797,7 +791,7 @@ fn a_session_at_its_stop_answers_reads_and_refuses_inputs_with_ended() {
     let hint = "  hint: run `orbe open --session end` to start again\n";
     for (line, message) in [
         (&["press", "@btn1"][..], "the session has ended"),
-        (&["step", "1ms"], "the session reached its 2-hour stop"),
+        (&["step", "1ms"], "the session reached its 50ms stop"),
     ] {
         let run = runtime.orbe(dir.path(), &[line, &session].concat());
         assert_eq!(
@@ -859,4 +853,209 @@ fn close_all_ends_every_session_and_removes_stale_sockets() {
     assert!(runtime.sockets().is_empty());
     let run = runtime.orbe(dir.path(), &["close", "--all"]).ok();
     assert_eq!(run.stdout, "no sessions are running\n");
+}
+
+fn no_session(name: &str) -> String {
+    format!(
+        "error[no_session]: no session `{name}` is running\n  hint: run `orbe open --session {name}` to start it\n"
+    )
+}
+
+#[test]
+fn close_on_a_process_with_no_scene_changes_nothing_and_open_reaches_it() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    let mut starting = runtime.listening(dir.path(), "ns", None);
+    let pid = runtime.daemon();
+    for line in [&["close"][..], &["close", "--all"], &["get", "@led1"]] {
+        let run = runtime.orbe(dir.path(), &[line, &["--session", "ns"]].concat());
+        assert_eq!(run.code, 1, "{line:?}");
+        assert!(
+            [run.stderr.as_str(), run.stdout.as_str()]
+                .iter()
+                .any(|out| out.ends_with(&no_session("ns"))),
+            "{line:?}: {}{}",
+            run.stdout,
+            run.stderr
+        );
+        assert_eq!(runtime.daemons(), [pid], "{line:?} leaves the process");
+        assert_eq!(runtime.sockets(), ["ns.sock"], "{line:?} leaves the socket");
+    }
+    let run = runtime.orbe(dir.path(), &["open", "--session", "ns"]).ok();
+    assert!(
+        run.stdout.starts_with("opened scene.jsonc at t=0: "),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(runtime.daemons(), [pid], "the open reached that process");
+    runtime.orbe(dir.path(), &["close", "--session", "ns"]).ok();
+    assert!(starting.wait().unwrap().success(), "close ended it");
+}
+
+#[test]
+fn a_process_with_no_scene_ends_on_its_own_while_commands_reach_it() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    let mut starting = runtime.listening(dir.path(), "orphan", Some("500ms"));
+    for _ in 0..30 {
+        if starting.try_wait().unwrap().is_some() {
+            break;
+        }
+        let run = runtime.orbe(dir.path(), &["get", "@led1", "--session", "orphan"]);
+        assert_eq!((run.code, run.stderr), (1, no_session("orphan")));
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(starting.try_wait().unwrap().is_some(), "the process ended");
+    assert!(runtime.sockets().is_empty(), "and removed its socket");
+}
+
+#[test]
+fn open_reaches_the_process_it_started_while_another_shell_closes_in_a_loop() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    let done = AtomicBool::new(false);
+    let open = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while !done.load(Ordering::Relaxed) {
+                runtime.orbe(dir.path(), &["close", "--session", "oc"]);
+            }
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        let open = runtime.orbe(dir.path(), &["open", "--session", "oc"]);
+        done.store(true, Ordering::Relaxed);
+        open
+    });
+    assert_eq!(open.code, 0, "{}{}", open.stdout, open.stderr);
+    assert!(
+        open.stdout.starts_with("opened scene.jsonc at t=0: "),
+        "{}",
+        open.stdout
+    );
+}
+
+#[test]
+fn opens_at_once_leave_only_the_listening_process_in_the_log() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    let opens: Vec<_> = (0..4)
+        .map(|_| runtime.spawn(dir.path(), &["open", "--session", "lg"]))
+        .collect();
+    for open in opens {
+        let run = Run::new(open.wait_with_output().unwrap()).ok();
+        assert!(run.stdout.starts_with("opened scene.jsonc at t=0: "));
+    }
+    runtime.daemon();
+    let files = || {
+        let mut names: Vec<String> = fs::read_dir(runtime.sessions())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        names
+    };
+    wait_until("only the session's files remain", || {
+        files() == ["lg.log", "lg.sock"]
+    });
+    let log = fs::read_to_string(runtime.sessions().join("lg.log")).unwrap();
+    assert_eq!(log, "", "the log holds only the listening process's output");
+
+    kill_daemon(&runtime);
+    let run = runtime.orbe(dir.path(), &["get", "@led1", "--session", "lg"]);
+    assert_eq!(
+        run.stderr,
+        "error[session_crashed]: the process of session `lg` ended without closing\n  hint: run `orbe open --session lg` to start it again\n"
+    );
+}
+
+#[test]
+fn a_command_whose_process_ends_without_answering_gets_no_session_and_open_starts_again() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    runtime.orbe(dir.path(), &["open", "--session", "dr"]).ok();
+    runtime
+        .orbe(dir.path(), &["step", "5ms", "--session", "dr"])
+        .ok();
+    let pid = runtime.daemon();
+    kill("-STOP", pid);
+    let get = runtime.spawn(dir.path(), &["get", "@led1", "--session", "dr"]);
+    let open = runtime.spawn(dir.path(), &["open", "--session", "dr"]);
+    std::thread::sleep(Duration::from_millis(500));
+    fs::remove_file(runtime.sessions().join("dr.sock")).unwrap();
+    kill("-KILL", pid);
+
+    let get = Run::new(get.wait_with_output().unwrap());
+    assert_eq!((get.code, get.stderr), (1, no_session("dr")));
+    let open = Run::new(open.wait_with_output().unwrap()).ok();
+    assert!(
+        open.stdout.starts_with("opened scene.jsonc at t=0: "),
+        "{}",
+        open.stdout
+    );
+    runtime.orbe(dir.path(), &["close", "--session", "dr"]).ok();
+}
+
+#[test]
+fn the_test_stop_only_lowers_the_stop_and_a_refused_one_names_its_value() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    let open = |stop: &str| {
+        Run::new(
+            runtime
+                .command(dir.path(), &["open", "--session", "sm"])
+                .env("ORBE_TEST_STOP", stop)
+                .output()
+                .unwrap(),
+        )
+    };
+    let longer =
+        "is longer than the 2-hour stop\n  hint: set ORBE_TEST_STOP to at most 7200s, or unset it";
+    let shorter = "is shorter than 10ms, the shortest stop the engine runs for this scene\n  hint: set ORBE_TEST_STOP to at least 10ms, or unset it";
+    for (stop, shown, refusal) in [
+        ("8000s", "8000s", longer),
+        ("7201s", "7201s", longer),
+        ("0s", "0s", shorter),
+        ("1ps", "1ps", shorter),
+        ("9999us", "9.999ms", shorter),
+        (
+            "soon",
+            "soon",
+            "is not a duration: `soon` is not a time unit; use ps, ns, us, ms or s\n  hint: set ORBE_TEST_STOP to a duration such as 50ms, or unset it",
+        ),
+    ] {
+        let run = open(stop);
+        assert_eq!(
+            (run.code, run.stdout),
+            (
+                2,
+                format!("error[usage]: ORBE_TEST_STOP={shown} {refusal}\n")
+            ),
+            "{stop}"
+        );
+    }
+
+    let run = runtime.orbe(dir.path(), &["open", "--session", "sm"]).ok();
+    assert!(
+        run.stdout.starts_with("opened scene.jsonc at t=0: "),
+        "{}",
+        run.stdout
+    );
+    let run = runtime.orbe(dir.path(), &["step", "7201s", "--session", "sm"]);
+    assert_eq!(
+        (run.code, run.stdout.as_str()),
+        (
+            1,
+            "error[past_stop]: the step would end past the session's 2-hour stop\n  hint: the session has 7200s left; step at most that\n"
+        )
+    );
+
+    open("10ms").ok();
+    let run = runtime.orbe(dir.path(), &["step", "20ms", "--session", "sm"]);
+    assert_eq!(
+        (run.code, run.stdout.as_str()),
+        (
+            1,
+            "error[past_stop]: the step would end past the session's 10ms stop\n  hint: the session has 10ms left; step at most that\n"
+        )
+    );
+    runtime.orbe(dir.path(), &["close", "--session", "sm"]).ok();
 }

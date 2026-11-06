@@ -9,7 +9,7 @@ mod daemon;
 mod place;
 
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::net::Shutdown;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::UnixStream;
@@ -28,11 +28,13 @@ use place::{Name, Place};
 /// One request: a command, or the usage error its words gave, and the client's working
 /// folder. `open` reads its scene from that folder and `snapshot` shows the scene's path from
 /// it, so paths read as they would in `orbe test`. A usage error goes to the process only so
-/// the refusal can carry the session's real time and state.
+/// the refusal can carry the session's real time and state. `stop` is `ORBE_TEST_STOP` from
+/// the shell that ran `open`.
 #[derive(Debug, Serialize, Deserialize)]
 struct Request {
     cwd: String,
     command: Result<Command, Error>,
+    stop: Option<String>,
 }
 
 /// The longest line either side reads.
@@ -41,6 +43,9 @@ const LINE: u64 = 1 << 20;
 /// `open` waits up to 2 s for a process it started to listen, polling every 10 ms.
 const POLLS: u32 = 200;
 const POLL: Duration = Duration::from_millis(10);
+
+/// How many times `open` reaches a process, when the one it reached ended before it answered.
+const TRIES: u32 = 5;
 
 fn read_line(reader: &mut impl BufRead) -> Option<String> {
     let mut line = String::new();
@@ -51,9 +56,9 @@ fn read_line(reader: &mut impl BufRead) -> Option<String> {
 }
 
 /// `orbe daemon --session <name>`.
-pub fn daemon(session: &str) -> ExitCode {
+pub fn daemon(session: &str, start_log: Option<u64>) -> ExitCode {
     match Name::parse(session) {
-        Ok(name) => daemon::run(&name),
+        Ok(name) => daemon::run(&name, start_log),
         Err(message) => {
             eprintln!("error[usage]: {message}");
             ExitCode::from(2)
@@ -395,17 +400,23 @@ impl Client {
         }
     }
 
-    /// `open` to the session's process, starting one when none listens or the one there is
-    /// ending.
+    /// `open` to the session's process, starting one when none listens. When the process it
+    /// reached ends before it answers, it starts again.
     fn open(&self, command: Command) -> Result<Box<Reply>, Refusal> {
-        if let Found::Listening(stream) = self.find()? {
-            match self.send(stream, Ok(command.clone())) {
-                Err(refused) if refused.error.code == Code::NoSession => {}
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let answered = match self.find()? {
+                Found::Listening(stream) => self.send(stream, Ok(command.clone())),
+                Found::Missing | Found::Stale => self
+                    .start(attempt)
+                    .and_then(|stream| self.send(stream, Ok(command.clone()))),
+            };
+            match answered {
+                Err(refused) if refused.error.code == Code::NoSession && attempt < TRIES => {}
                 answered => return answered,
             }
         }
-        let stream = self.start()?;
-        self.send(stream, Ok(command))
     }
 
     /// Ends the session: `close` to its process, or, for a socket a crashed process left, the
@@ -458,13 +469,19 @@ impl Client {
     }
 
     /// Starts the session's process, detached in its own process group so a terminal's Ctrl-C
-    /// reaches only the client, and waits for it to listen.
-    fn start(&self) -> Result<UnixStream, Refusal> {
-        let log = self.place.log(&self.name);
+    /// reaches only the client, and waits for it to listen. Its log is its own until it holds
+    /// the socket, named by this client's pid and its attempt.
+    fn start(&self, attempt: u32) -> Result<UnixStream, Refusal> {
+        let id = u64::from(std::process::id()) * u64::from(TRIES) + u64::from(attempt);
+        let log = self.place.start_log(&self.name, id);
         let stderr = self.create_log(&log)?;
         let spawned = std::env::current_exe().and_then(|exe| {
             std::process::Command::new(exe)
-                .args(["daemon", &format!("--session={}", self.name)])
+                .args([
+                    "daemon",
+                    &format!("--session={}", self.name),
+                    &format!("--start-log={id}"),
+                ])
                 .current_dir("/")
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -485,6 +502,9 @@ impl Client {
                 return Ok(stream);
             }
             if let Ok(Some(status)) = child.try_wait() {
+                if status.success() {
+                    return Err(self.no_session());
+                }
                 return Err(self.failed_start(
                     &log,
                     format!("the session process exited ({status}) before it listened"),
@@ -497,30 +517,32 @@ impl Client {
         Err(self.failed_start(&log, "the session process did not listen within 2 s"))
     }
 
-    fn create_log(&self, log: &Path) -> Result<File, Refusal> {
+    /// A symlink at the session's log is refused, since the process that wins the socket
+    /// renames its log over it.
+    fn create_log(&self, start: &Path) -> Result<File, Refusal> {
         use rustix::fs::{Mode, OFlags};
+        let log = self.place.log(&self.name);
+        if fs::symlink_metadata(&log).is_ok_and(|meta| meta.is_symlink()) {
+            let shown = log.display();
+            return Err(self.refuse(
+                Code::IoError,
+                format!(
+                    "{shown} is a symlink, not the log of session `{}`",
+                    self.name
+                ),
+                format!("remove it with `rm {shown}`"),
+            ));
+        }
         let flags =
-            OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-        let shown = log.display();
-        rustix::fs::open(log, flags, Mode::RUSR | Mode::WUSR)
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        rustix::fs::open(start, flags, Mode::RUSR | Mode::WUSR)
             .map(File::from)
             .map_err(|errno| {
-                if errno == rustix::io::Errno::LOOP {
-                    self.refuse(
-                        Code::IoError,
-                        format!(
-                            "{shown} is a symlink, not the log of session `{}`",
-                            self.name
-                        ),
-                        format!("remove it with `rm {shown}`"),
-                    )
-                } else {
-                    self.refuse(
-                        Code::IoError,
-                        format!("cannot write the log {shown}: {errno}"),
-                        "",
-                    )
-                }
+                self.refuse(
+                    Code::IoError,
+                    format!("cannot write the log {}: {errno}", start.display()),
+                    "",
+                )
             })
     }
 
@@ -551,9 +573,13 @@ impl Client {
                 let _ = hangup.shutdown(Shutdown::Write);
             });
         }
+        let stop = matches!(command, Ok(Command::Open(_)))
+            .then(|| std::env::var("ORBE_TEST_STOP").ok())
+            .flatten();
         let request = Request {
             cwd: self.cwd.clone(),
             command,
+            stop,
         };
         let mut wire = serde_json::to_string(&request).map_err(|error| {
             self.refuse(
@@ -563,11 +589,21 @@ impl Client {
             )
         })?;
         wire.push('\n');
-        let line = (&stream)
+        (&stream)
             .write_all(wire.as_bytes())
-            .ok()
-            .and_then(|()| read_line(&mut BufReader::new(&stream)))
-            .ok_or_else(|| self.crashed("ended before it answered"))?;
+            .map_err(|_| self.unanswered())?;
+        let mut line = String::new();
+        match BufReader::new(&stream).take(LINE).read_line(&mut line) {
+            Ok(_) if line.ends_with('\n') => {}
+            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                return Err(self.refuse(
+                    Code::IoError,
+                    format!("session `{}` did not answer in time", self.name),
+                    "",
+                ));
+            }
+            _ => return Err(self.unanswered()),
+        }
         let mut reply = serde_json::from_str::<Box<Reply>>(&line).map_err(|error| {
             self.refuse(
                 Code::IoError,
@@ -600,6 +636,17 @@ impl Client {
                 format!("no session `{}` is running", self.name),
                 self.open_hint("to start it"),
             )
+        }
+    }
+
+    /// A connection that ended with no reply. A process that ends on its own removes its
+    /// socket before it drops a connection, so only a socket still there that nothing answers
+    /// on was left by a crash.
+    fn unanswered(&self) -> Refusal {
+        match self.find() {
+            Ok(Found::Stale) => self.crashed("ended before it answered"),
+            Ok(Found::Missing | Found::Listening(_)) => self.no_session(),
+            Err(refused) => refused,
         }
     }
 

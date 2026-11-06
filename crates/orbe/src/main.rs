@@ -68,6 +68,8 @@ enum Command {
     Daemon {
         #[arg(long)]
         session: String,
+        #[arg(long)]
+        start_log: Option<u64>,
     },
 }
 
@@ -117,7 +119,7 @@ fn main() -> ExitCode {
                 verbose,
                 json,
             } => run_tests(&paths, verbose, json),
-            Command::Daemon { session } => daemon(&session),
+            Command::Daemon { session, start_log } => daemon(&session, start_log),
         },
         Err(err) => usage(err),
     }
@@ -142,8 +144,8 @@ fn live_command(spec: &orbe_session::Spec, args: &[String]) -> ExitCode {
 }
 
 #[cfg(unix)]
-fn daemon(session: &str) -> ExitCode {
-    live::daemon(session)
+fn daemon(session: &str, start_log: Option<u64>) -> ExitCode {
+    live::daemon(session, start_log)
 }
 
 #[cfg(not(unix))]
@@ -165,7 +167,7 @@ fn live_command(spec: &orbe_session::Spec, args: &[String]) -> ExitCode {
 }
 
 #[cfg(not(unix))]
-fn daemon(_session: &str) -> ExitCode {
+fn daemon(_session: &str, _start_log: Option<u64>) -> ExitCode {
     eprintln!("error[usage]: the session process needs Unix for now");
     ExitCode::from(USAGE)
 }

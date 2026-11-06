@@ -108,6 +108,22 @@ impl Runtime {
             .collect()
     }
 
+    /// `orbe daemon --session=<name>` started by hand, once it listens, with no scene open.
+    pub fn listening(&self, cwd: &Path, name: &str, idle: Option<&str>) -> Child {
+        let mut command = self.command(cwd, &["daemon", &format!("--session={name}")]);
+        if let Some(idle) = idle {
+            command.env("ORBE_TEST_IDLE_TIMEOUT", idle);
+        }
+        let child = command
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let socket = format!("{name}.sock");
+        wait_until("the process listens", || self.sockets().contains(&socket));
+        child
+    }
+
     pub fn daemon(&self) -> u32 {
         match self.daemons().as_slice() {
             [pid] => *pid,

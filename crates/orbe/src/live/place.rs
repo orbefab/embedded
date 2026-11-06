@@ -109,6 +109,12 @@ impl Place {
         self.dir.join(format!("{name}.log"))
     }
 
+    /// The log one start of the session's process writes until it holds the socket, so a
+    /// start that loses to another never writes in the session's log.
+    pub fn start_log(&self, name: &Name, id: u64) -> PathBuf {
+        self.dir.join(format!("{name}.log.{id}"))
+    }
+
     /// Every session with a socket, live or left by a crash, sorted.
     pub fn names(&self) -> io::Result<Vec<Name>> {
         let mut names: Vec<Name> = fs::read_dir(&self.dir)?

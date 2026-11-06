@@ -102,6 +102,14 @@ impl Open {
             .collect()
     }
 
+    fn stop_name(&self) -> String {
+        if self.stop_ps == orbe_scene::STOP_PS {
+            "2-hour".into()
+        } else {
+            t(self.stop_ps).to_string()
+        }
+    }
+
     pub(super) fn step(
         &mut self,
         step: &Step,
@@ -118,7 +126,7 @@ impl Open {
             (Status::Stopped, Step::For(_)) => {
                 return Err(fail(Error::new(
                     Code::Ended,
-                    "the session reached its 2-hour stop",
+                    format!("the session reached its {} stop", self.stop_name()),
                     "run `open` to start again",
                 )));
             }
@@ -132,7 +140,10 @@ impl Open {
                 .ok_or_else(|| {
                     fail(Error::new(
                         Code::PastStop,
-                        "the step would end past the session's 2-hour stop",
+                        format!(
+                            "the step would end past the session's {} stop",
+                            self.stop_name()
+                        ),
                         format!(
                             "the session has {} left; step at most that",
                             t(self.stop_ps - from)
