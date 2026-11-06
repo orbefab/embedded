@@ -29,7 +29,7 @@ A part that fails a check gets no files. The step prints the check and the reaso
 
 Lengths are in the part frame: mm, +Z up, with the seating plane at z = 0.
 
-A lead is the mesh of the node an anchor names. The anchors check takes a lead's tip from that node's own vertices, so a node whose mesh sits on a child node fails. Seating and composition exempt the nodes the anchors name in `node` and `also`, and not the nodes under them. A vertex whose coordinates are not finite numbers fails seating and composition on any node, the exempt nodes included.
+A lead is the mesh of the node an anchor names. The anchors check takes a lead's tip from that node's own vertices, so a node whose mesh sits on a child node fails. Seating and composition exempt the nodes the anchors name in `node` and `also`, and not the nodes under them. A vertex whose coordinates are not finite numbers fails on any node, the exempt nodes included. On a lead's own node the anchors check, which runs first, fails it; elsewhere seating and composition do.
 
 | Check | Passes when |
 | --- | --- |

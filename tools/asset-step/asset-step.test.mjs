@@ -223,6 +223,19 @@ test('a part that holds itself fails composition', async (t) => {
   assert.equal(out.stderr, '');
 });
 
+test('two children of one type, and a diamond, are not a cycle', async (t) => {
+  const fx = await fixture(t, {
+    block: BLOCK,
+    twins: board('twins', { u1: 'block', u2: 'block', u3: 'block' }, { u1: { at: [0, 0, 0] }, u2: { at: [5, 0, 0] }, u3: { at: [10, 0, 0] } }),
+    mid: board('mid', { b: 'block' }, { b: { at: [0, 0, 0] } }),
+    diamond: board('diamond', { m1: 'mid', m2: 'mid' }, { m1: { at: [0, 0, 0] }, m2: { at: [10, 0, 0] } }),
+  });
+  const out = run(fx, ['block', 'twins', 'mid', 'diamond']);
+  assert.equal(out.status, 0, out.stdout);
+  assert.match(out.line('twins'), /^ok/);
+  assert.match(out.line('diamond'), /^ok/);
+});
+
 test('a recorded commit the models checkout lacks fails its part and the parts that hold it', async (t) => {
   const fx = await fixture(t, { block: BLOCK, holder: board('holder', { u1: 'block' }, { u1: { at: [0, 0, 0] } }) });
   assert.equal(run(fx, ['block', 'holder']).status, 0);
@@ -302,6 +315,13 @@ test('with no --commit, a part with no asset.json is skipped', async (t) => {
   assert.match(out.line('wires'), /^skip {2}wires {2}no --commit given and no asset.json records one/);
   assert.match(out.line('good'), /^ok/);
   assert.equal(existsSync(join(fx.parts, 'wires', 'asset.json')), false);
+});
+
+test('a --models that is not a git checkout is a usage error', async (t) => {
+  const fx = await fixture(t, { good: leaded('good') });
+  const { status, stderr } = spawnSync(process.execPath, [STEP, '--models', join(fx.parts, 'nowhere'), '--parts', fx.parts], { encoding: 'utf8', env });
+  assert.equal(status, 2);
+  assert.match(stderr, /^--models .*nowhere is not a git checkout/);
 });
 
 test('a --commit the models repo does not have is a usage error', async (t) => {

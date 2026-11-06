@@ -40,13 +40,20 @@ function commitOf(models, rev) {
   return git(models, ['rev-parse', '--verify', `${rev}^{commit}`]).toString().trim();
 }
 
+const resolved = new Map();
+
 /** The commit `id`'s asset.json records, or a `CheckFailed` when the models checkout lacks it. */
 function recorded(models, id, commit) {
-  try {
-    return commitOf(models, commit);
-  } catch {
-    throw new CheckFailed('source', `\`${id}\`'s asset.json records models commit ${commit}, which ${models} does not have; fetch it`);
+  if (!resolved.has(commit)) {
+    try {
+      resolved.set(commit, commitOf(models, commit));
+    } catch {
+      resolved.set(commit, null);
+    }
   }
+  const sha = resolved.get(commit);
+  if (!sha) throw new CheckFailed('source', `\`${id}\`'s asset.json records models commit ${commit}, which ${models} does not have; fetch it`);
+  return sha;
 }
 
 function blob(models, commit, path) {
@@ -211,6 +218,12 @@ async function main() {
   const here = dirname(fileURLToPath(import.meta.url));
   const partsDir = resolve(values.parts ?? join(here, '../../parts'));
   const ids = positionals.length ? positionals : readdirSync(partsDir).filter((id) => existsSync(join(partsDir, id, 'part.jsonc')));
+  try {
+    git(values.models, ['rev-parse', '--git-dir']);
+  } catch {
+    console.error(`--models ${values.models} is not a git checkout\n\n${USAGE}`);
+    return 2;
+  }
   let pinned = null;
   if (values.commit) {
     try {
