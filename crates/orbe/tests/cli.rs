@@ -942,3 +942,21 @@ fn diff_previews_a_project_it_cannot_write() {
     left.sort();
     assert_eq!(left, ["parts", "parts.lock", "scene.jsonc"]);
 }
+
+/// A folder at the name an earlier orbe used for its trash is the user's, so an add leaves it.
+#[test]
+fn a_user_folder_at_the_old_add_trash_is_left_in_place() {
+    let project = scene_only();
+    let note = project.path().join("parts/.orbe-add.trash/mine/note.txt");
+    fs::create_dir_all(note.parent().unwrap()).unwrap();
+    fs::write(&note, "KEEP-ME\n").unwrap();
+    fs::write(
+        project.path().join("parts/.orbe-add.trash/log"),
+        "orbe add log 1\nplan existed -\n",
+    )
+    .unwrap();
+    let (output, stdout, stderr) = orbe_in(project.path(), &["add", "led-5mm"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert_eq!(stdout, "wrote parts/led-5mm 0.1.0\nwrote parts.lock\n");
+    assert_eq!(fs::read(&note).unwrap(), b"KEEP-ME\n");
+}

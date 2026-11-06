@@ -835,3 +835,47 @@ pub(crate) fn shell_word(word: &str) -> String {
         format!("'{}'", word.replace('\'', "'\\''"))
     }
 }
+
+/// A path as one word a POSIX shell reads back as that path. A path that is not UTF-8, or holds
+/// a control character, is written `"$(printf '...')"` with those bytes as octal escapes. A
+/// command substitution drops trailing newlines, so those follow it inside single quotes.
+pub(crate) fn shell_path(path: &std::ffi::OsStr) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    if let Some(word) = path.to_str()
+        && !word.chars().any(char::is_control)
+    {
+        return shell_word(word);
+    }
+    let bytes = path.as_bytes();
+    let newlines = bytes
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'\n')
+        .count();
+    let body = &bytes[..bytes.len() - newlines];
+    let mut format = String::new();
+    for chunk in body.utf8_chunks() {
+        for c in chunk.valid().chars() {
+            match c {
+                '\\' => format.push_str("\\\\"),
+                '%' => format.push_str("%%"),
+                '\'' => format.push_str("'\\''"),
+                c if c.is_control() => {
+                    let mut utf8 = [0; 4];
+                    for byte in c.encode_utf8(&mut utf8).bytes() {
+                        format.push_str(&format!("\\{byte:03o}"));
+                    }
+                }
+                c => format.push(c),
+            }
+        }
+        for byte in chunk.invalid() {
+            format.push_str(&format!("\\{byte:03o}"));
+        }
+    }
+    let mut word = format!("\"$(printf '{format}')\"");
+    if newlines > 0 {
+        word.push_str(&format!("'{}'", "\n".repeat(newlines)));
+    }
+    word
+}

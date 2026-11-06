@@ -1,0 +1,1 @@
+scene.param parts/out.jsonc:3:15 | param `on` writes `model`, but this part has no `model` and no child of this part takes it, so its value reaches nothing | no child takes `on`

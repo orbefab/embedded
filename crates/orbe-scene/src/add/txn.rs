@@ -6,27 +6,34 @@
 //! Every step appends a line to `parts/.orbe-add/log`, and recovery ([`journal::next`]) acts
 //! only on what that log proves. A run that stops before the commit is rolled back, by itself or
 //! by the next run. A run that stops after it is finished by the next. Every move and delete
-//! first checks that its path holds the hash the log recorded. The staging folder is deleted by
-//! renaming it to `parts/.orbe-add.trash` first, so a delete that stops part way leaves only a
-//! folder that recovery had already checked.
+//! first checks that its path holds the hash the log recorded. Before the staging folder is
+//! deleted, the log lists every path in it with its hash. Each path is deleted only while it
+//! holds what that list says, the log goes last, and anything else stops the run before it
+//! deletes a thing.
 
 use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use super::journal::{self, Effect, Hash, Here, LockChange, Log, Next, Plan, Read, Record, Seen};
-use super::{RunError, io_at};
-use crate::project::hex;
+use super::at::{Folder, Found};
+use super::journal::{
+    self, Ahead, Effect, Entry, Hash, Here, Kind, LockChange, Log, Next, Plan, Read, Record, Seen,
+    Unlogged,
+};
+use super::{Again, RunError, io_at};
+use crate::catalog::Catalog;
+use crate::project::{hex, shell_path};
 
 pub(super) use journal::STAGE;
 
 /// The new lock before it is renamed over `parts.lock`, beside it at the project root.
 const LOCK_TMP: &str = ".parts.lock.orbe-add";
-/// The staging folder once recovery has checked everything in it, while it is deleted.
-const TRASH: &str = ".orbe-add.trash";
 const LOG: &str = "log";
 const SAVED_LOCK: &str = "parts.lock";
 
@@ -115,8 +122,12 @@ impl Paths {
         self.stage.join(SAVED_LOCK)
     }
 
-    fn trash(&self) -> PathBuf {
-        self.parts.join(TRASH)
+    fn below_stage(&self, rel: &OsStr) -> PathBuf {
+        if rel.is_empty() {
+            self.stage.clone()
+        } else {
+            self.stage.join(rel)
+        }
     }
 }
 
@@ -126,7 +137,7 @@ impl Paths {
 pub(super) fn apply(
     root: &Path,
     change: &Change,
-    again: &str,
+    again: &Again,
     fault: &mut Fault,
 ) -> Result<Vec<String>, Stop> {
     let paths = Paths::new(root);
@@ -157,7 +168,7 @@ pub(super) fn apply(
         Err(Stop::Killed) => return Err(Stop::Killed),
         Err(Stop::Failed(error)) => return Err(roll_back(&paths, &plan, error, again, fault)),
     }
-    match settle(&paths, again, fault) {
+    match settle_stage(&paths, again, fault) {
         Ok(_) => Ok(Vec::new()),
         Err(Stop::Killed) => Err(Stop::Killed),
         Err(Stop::Failed(error)) => Ok(vec![format!(
@@ -180,7 +191,7 @@ fn forward(paths: &Paths, change: &Change, plan: &Plan, fault: &mut Fault) -> Re
         at(fault, &format!("do stage {id}"))?;
         let dir = paths.new_copy(id);
         write_files(&dir, files)?;
-        let hash = fingerprint(&dir).unwrap_or_default();
+        let hash = proof(&dir).map_err(cannot_read)?.unwrap_or_default();
         staged.insert(*id, hash.clone());
         append(paths, &Record::Staged((*id).into(), hash), fault)?;
     }
@@ -192,7 +203,7 @@ fn forward(paths: &Paths, change: &Change, plan: &Plan, fault: &mut Fault) -> Re
     }
     for (id, _) in &change.folders {
         let dest = paths.dest(id);
-        let before = fingerprint(&dest);
+        let before = proof(&dest).map_err(cannot_read)?;
         append(paths, &Record::Aside((*id).into(), before.clone()), fault)?;
         if before.is_some() {
             at(fault, &format!("do aside {id}"))?;
@@ -216,8 +227,14 @@ fn forward(paths: &Paths, change: &Change, plan: &Plan, fault: &mut Fault) -> Re
 
 /// A step of the add failed. Recovery undoes what the log proves, and the message says what is
 /// on disk afterwards.
-fn roll_back(paths: &Paths, plan: &Plan, error: RunError, again: &str, fault: &mut Fault) -> Stop {
-    let settled = settle(paths, again, fault);
+fn roll_back(
+    paths: &Paths,
+    plan: &Plan,
+    error: RunError,
+    again: &Again,
+    fault: &mut Fault,
+) -> Stop {
+    let settled = settle_stage(paths, again, fault);
     if plan.parts_created && !present(&paths.stage) {
         let _ = fs::remove_dir(&paths.parts);
     }
@@ -246,81 +263,25 @@ struct Done {
     undone: Option<String>,
     /// Whether it left a changed copy in place.
     kept: bool,
+    planned: Vec<String>,
+}
+
+#[derive(Default)]
+pub(super) struct Recovered {
+    pub(super) lines: Vec<String>,
+    pub(super) planned: Vec<String>,
 }
 
 /// Rolls back an add that stopped before its commit, or finishes one that stopped after it.
-/// Returns one line saying what it did, or nothing when no add was pending.
-pub(super) fn recover(root: &Path, again: &str, fault: &mut Fault) -> Result<Vec<String>, Stop> {
-    let done = settle(&Paths::new(root), again, fault)?;
-    Ok(done.map(|done| done.line).into_iter().collect())
+pub(super) fn recover(root: &Path, again: &Again, fault: &mut Fault) -> Result<Recovered, Stop> {
+    let done = settle_stage(&Paths::new(root), again, fault)?;
+    Ok(done.map_or_else(Recovered::default, |done| Recovered {
+        lines: vec![done.line],
+        planned: done.planned,
+    }))
 }
 
-fn settle(paths: &Paths, again: &str, fault: &mut Fault) -> Result<Option<Done>, Stop> {
-    let emptied = empty_trash(paths, fault)?;
-    let done = settle_stage(paths, again, fault)?;
-    Ok(match (emptied, done) {
-        (Some(line), Some(done)) => Some(Done {
-            line: format!("{line}\n{}", done.line),
-            ..done
-        }),
-        (Some(line), None) => Some(Done {
-            line,
-            undone: None,
-            kept: false,
-        }),
-        (None, done) => done,
-    })
-}
-
-/// The trash is a staging folder recovery had checked whole, so all of it goes. Its log goes
-/// last, and says what the run that left it did. A run that made `parts/` for an add it rolled
-/// back deletes it here, once it is empty.
-fn empty_trash(paths: &Paths, fault: &mut Fault) -> Result<Option<String>, Stop> {
-    let trash = paths.trash();
-    let Ok(meta) = fs::symlink_metadata(&trash) else {
-        return Ok(None);
-    };
-    at(fault, &format!("do delete parts/{TRASH}"))?;
-    let log = meta
-        .is_dir()
-        .then(|| match journal::read(&log_text(&trash.join(LOG))) {
-            Read::Log(log) => Some(log),
-            _ => None,
-        })
-        .flatten();
-    let old = trash.join("old");
-    let replaced: Vec<String> = match &log {
-        Some(log) if fs::symlink_metadata(&old).is_ok_and(|meta| meta.is_dir()) => {
-            let left = entries(&old);
-            log.plan
-                .ids
-                .iter()
-                .filter(|id| left.contains(id))
-                .cloned()
-                .collect()
-        }
-        _ => Vec::new(),
-    };
-    if meta.is_dir() {
-        for name in entries(&trash) {
-            if name != LOG {
-                remove_any(&trash.join(name))?;
-            }
-        }
-    }
-    remove_any(&trash)?;
-    let Some(log) = log else {
-        return Ok(Some(format!(
-            "deleted parts/{TRASH}, which an interrupted add left"
-        )));
-    };
-    if log.plan.parts_created && !log.committed() {
-        let _ = fs::remove_dir(&paths.parts);
-    }
-    Ok(Some(done(&log, &replaced).line))
-}
-
-fn settle_stage(paths: &Paths, again: &str, fault: &mut Fault) -> Result<Option<Done>, Stop> {
+fn settle_stage(paths: &Paths, again: &Again, fault: &mut Fault) -> Result<Option<Done>, Stop> {
     if !present(&paths.stage) {
         if !present(&paths.lock_tmp()) {
             return Ok(None);
@@ -331,11 +292,14 @@ fn settle_stage(paths: &Paths, again: &str, fault: &mut Fault) -> Result<Option<
             line: format!("deleted {LOCK_TMP}, a lock an interrupted add had not put in place"),
             undone: None,
             kept: false,
+            planned: Vec::new(),
         }));
     }
     if !fs::symlink_metadata(&paths.stage).is_ok_and(|meta| meta.is_dir()) {
         return Err(halt(format!(
-            "parts/{STAGE} is not a folder, so no add made it. move it out of parts/, then run `{again}` again"
+            "parts/{STAGE} is not a folder, so no add made it\n  hint: move {} out of {}, then run `{again}` again",
+            again.path(format!("parts/{STAGE}")),
+            again.path("parts")
         )));
     }
     let bytes = match fs::symlink_metadata(paths.log()) {
@@ -344,7 +308,9 @@ fn settle_stage(paths: &Paths, again: &str, fault: &mut Fault) -> Result<Option<
         }
         Ok(_) => {
             return Err(halt(format!(
-                "parts/{STAGE}/log is not a file, so no add wrote it, and orbe left parts/{STAGE} as it is\n  hint: move parts/{STAGE}/log out of parts/{STAGE}, then run `{again}` again"
+                "parts/{STAGE}/log is not a file, so no add wrote it, and orbe left parts/{STAGE} as it is\n  hint: move {} out of {}, then run `{again}` again",
+                again.path(format!("parts/{STAGE}/{LOG}")),
+                again.path(format!("parts/{STAGE}"))
             )));
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
@@ -357,20 +323,26 @@ fn settle_stage(paths: &Paths, again: &str, fault: &mut Fault) -> Result<Option<
         Some(Read::Log(log)) => log,
         Some(Read::Unknown(line)) => {
             return Err(halt(format!(
-                "parts/{STAGE}/log is not a log this orbe writes, `{line}`, so orbe left parts/{STAGE} as it is\n  hint: move parts/{STAGE} out of parts/ to keep what it holds, then run `{again}` again"
+                "parts/{STAGE}/log is not a log this orbe writes, `{line}`, so orbe left parts/{STAGE} as it is\n  hint: move {} out of {} to keep what it holds, then run `{again}` again",
+                again.path(format!("parts/{STAGE}")),
+                again.path("parts")
             )));
         }
         Some(Read::UnknownStep(line)) => {
             return Err(halt(format!(
-                "parts/{STAGE}/log has a line this orbe does not write, `{line}`, so orbe left parts/{STAGE} as it is\n  hint: delete that line and the lines after it from parts/{STAGE}/log, then run `{again}` again. orbe then settles the add from the steps before it"
+                "parts/{STAGE}/log has a line this orbe does not write, `{line}`, so orbe left parts/{STAGE} as it is\n  hint: delete that line and the lines after it from {}, then run `{again}` again. orbe then settles the add from the steps before it",
+                again.path(format!("parts/{STAGE}/{LOG}"))
             )));
         }
         None | Some(Read::Torn) => return without_log(paths, again, fault).map(Some),
     };
     drop_torn_line(paths, bytes.as_deref().unwrap_or_default(), fault)?;
     let start = log.records.len();
+    if log.clearing().is_some() {
+        return clear(paths, &log, start, again, fault).map(Some);
+    }
     loop {
-        let seen = observe(paths, &log.plan);
+        let seen = observe(paths, &log);
         match journal::next(&log, &seen) {
             Next::Act(effect, record) => {
                 if effect != Effect::None {
@@ -384,20 +356,16 @@ fn settle_stage(paths: &Paths, again: &str, fault: &mut Fault) -> Result<Option<
                 log.records.push(record);
             }
             Next::Clean => {
-                at(fault, "do clean")?;
-                let replaced: Vec<String> = log
-                    .plan
-                    .ids
-                    .iter()
-                    .filter(|id| seen.parts.get(*id).is_some_and(|here| here.old.is_some()))
-                    .cloned()
-                    .collect();
-                let done = done(&log, &replaced);
-                discard(paths, fault).map_err(|stop| match stop {
-                    Stop::Failed(error) => stopped(&log, start, error, again),
-                    killed => killed,
-                })?;
-                return Ok(Some(done));
+                let io = |stop| io_stop(&log, start, stop, again);
+                at(fault, "do clean").map_err(io)?;
+                if present(&paths.lock_tmp()) {
+                    remove_any(&paths.lock_tmp()).map_err(|error| io(error.into()))?;
+                }
+                let entries = contents(paths).map_err(|error| io(error.into()))?;
+                let record = Record::Clearing(entries);
+                append(paths, &record, fault).map_err(io)?;
+                log.records.push(record);
+                return clear(paths, &log, start, again, fault).map(Some);
             }
             Next::Stop(problems) => {
                 let (lines, hint) = journal::problem_text(&log, &problems, again);
@@ -435,18 +403,243 @@ fn drop_torn_line(paths: &Paths, bytes: &[u8], fault: &mut Fault) -> Result<(), 
         .map_err(|error| io_at(&path, error).into())
 }
 
-/// Everything left in the staging folder is what the log made, with the hashes it recorded.
-/// The folder moves to the trash in one rename, then the trash is emptied.
-fn discard(paths: &Paths, fault: &mut Fault) -> Result<(), Stop> {
-    if present(&paths.lock_tmp()) {
-        remove_any(&paths.lock_tmp())?;
+/// Deletes what the clearing record lists, files and links first and then folders, deepest
+/// first. The log goes last, then the folder. Anything else below the folder stops the run
+/// before it deletes a thing, and is named. A path that changed since the list stops the run
+/// right before its own delete.
+fn clear(
+    paths: &Paths,
+    log: &Log,
+    start: usize,
+    again: &Again,
+    fault: &mut Fault,
+) -> Result<Done, Stop> {
+    let io = |path: &Path, error| io_stop(log, start, io_at(path, error).into(), again);
+    let stage = &Folder::open(&paths.stage).map_err(|error| io(&paths.stage, error))?;
+    let parts = &fs::metadata(&paths.parts).map_err(|error| io(&paths.parts, error))?;
+    let now = delete_listed(paths, stage, log, start, again, fault).map_err(|stop| {
+        match (&stop, swapped(paths, parts, stage, again)) {
+            (Stop::Failed(_), Some(text)) => halt(text),
+            _ => stop,
+        }
+    })?;
+    let last = |error: RunError| halt(log_gone_text(stage, &error, again));
+    at(fault, &format!("do delete parts/{STAGE}")).map_err(|stop| match stop {
+        Stop::Failed(error) => last(error),
+        killed => killed,
+    })?;
+    if let Some(text) = swapped(paths, parts, stage, again) {
+        return Err(halt(text));
     }
-    mv(&paths.stage, &paths.trash())?;
-    empty_trash(paths, fault).map(|_| ())
+    fs::remove_dir(&paths.stage).map_err(|error| last(io_at(&paths.stage, error)))?;
+    if log.plan.parts_created && !log.committed() {
+        let _ = fs::remove_dir(&paths.parts);
+    }
+    let replaced: Vec<String> = journal::set_aside(log)
+        .into_iter()
+        .filter(|id| now.iter().any(|entry| *entry.path == *format!("old/{id}")))
+        .collect();
+    let mut done = done(paths, log, &replaced);
+    if done.undone.is_none()
+        && !log.committed()
+        && !lock_holes(paths.root.as_path(), &log.plan.ids).is_empty()
+    {
+        done.line = "deleted the staging folder of an interrupted add".into();
+    }
+    Ok(done)
 }
 
-fn done(log: &Log, replaced: &[String]) -> Done {
-    let summary = journal::summary(log, replaced);
+/// Deletes every path below `stage` the clearing record lists, and then the log, through the
+/// folders orbe opened. It returns what was there before.
+fn delete_listed(
+    paths: &Paths,
+    stage: &Folder,
+    log: &Log,
+    start: usize,
+    again: &Again,
+    fault: &mut Fault,
+) -> Result<Vec<Entry>, Stop> {
+    let listed = log.clearing().unwrap_or_default();
+    let io = |stop| io_stop(log, start, stop, again);
+    let (now, unlisted) = unlisted(paths, stage, listed).map_err(|error| io(error.into()))?;
+    if !unlisted.is_empty() {
+        return Err(halt(unlisted_text(&unlisted, again)));
+    }
+    let (mut folders, rest): (Vec<&Entry>, Vec<&Entry>) =
+        now.iter().partition(|entry| entry.kind == Kind::Folder);
+    folders.sort_by(|a, b| b.path.cmp(&a.path));
+    for entry in rest.into_iter().chain(folders) {
+        let shown = paths.below_stage(&entry.path);
+        at(
+            fault,
+            &format!("do delete parts/{STAGE}/{}", entry.path.display()),
+        )
+        .map_err(io)?;
+        let (folder, name) = match stage.parent_of(&entry.path) {
+            Ok(found) => found,
+            Err((_, error)) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err((on_the_way, error)) if moved(&error) => {
+                return Err(halt(changed_text(on_the_way, again)));
+            }
+            Err((_, error)) => return Err(io(io_at(&shown, error).into())),
+        };
+        match folder.find(name).map(|found| kind(&found)) {
+            Ok(kind) if kind == entry.kind => {}
+            Ok(_) => return Err(halt(changed_text(&entry.path, again))),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(io(io_at(&shown, error).into())),
+        }
+        if entry.kind == Kind::Folder {
+            folder.remove_folder(name)
+        } else {
+            folder.remove_file(name)
+        }
+        .map_err(|error| io(io_at(&shown, error).into()))?;
+    }
+    at(fault, &format!("do delete parts/{STAGE}/{LOG}")).map_err(io)?;
+    stage
+        .remove_file(OsStr::new(LOG))
+        .map_err(|error| io(io_at(&paths.log(), error).into()))?;
+    Ok(now)
+}
+
+/// What to say when `parts/.orbe-add` no longer leads to the folder orbe opened and deleted in,
+/// because it, or `parts`, was moved or swapped for a link. A hint then names only that path,
+/// never one through it. `None` while it still leads there. `parts` is what `parts` was then.
+fn swapped(paths: &Paths, parts: &fs::Metadata, stage: &Folder, again: &Again) -> Option<String> {
+    let same = |now: &fs::Metadata| now.dev() == parts.dev() && now.ino() == parts.ino();
+    if !fs::metadata(&paths.parts).is_ok_and(|now| same(&now)) {
+        return Some(format!(
+            "parts is not the folder orbe was deleting parts/{STAGE} in, so orbe stopped there\n  hint: put the project's parts folder back at {}, then run `{again}` again",
+            again.path("parts")
+        ));
+    }
+    match fs::symlink_metadata(&paths.stage) {
+        Ok(meta) if meta.is_dir() && stage.is(&meta) => None,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Some(format!(
+            "parts/{STAGE} was moved while orbe deleted what the add left in it, so orbe stopped there\n  hint: run `{again}` again"
+        )),
+        _ => Some(format!(
+            "parts/{STAGE} was replaced while orbe deleted what the add left in it, and what is there now is not the folder orbe was deleting, so orbe stopped there and left it\n  hint: move {} out of {} to keep it, then run `{again}` again",
+            again.path(format!("parts/{STAGE}")),
+            again.path("parts")
+        )),
+    }
+}
+
+/// A folder on the way to a path was swapped for something else, such as a link.
+fn moved(error: &io::Error) -> bool {
+    matches!(
+        rustix::io::Errno::from_io_error(error),
+        Some(rustix::io::Errno::LOOP | rustix::io::Errno::NOTDIR)
+    )
+}
+
+fn changed_text(rel: &OsStr, again: &Again) -> String {
+    let path = journal::staged_paths(again, &[rel]);
+    format!(
+        "{path} changed after orbe listed it to delete, so orbe left it. orbe stopped there, and parts/{STAGE} keeps its log\n  hint: move {path} out of {} to keep it, then run `{again}` again",
+        again.path(format!("parts/{STAGE}"))
+    )
+}
+
+/// The last delete, the staging folder itself, failed after its log was gone.
+fn log_gone_text(stage: &Folder, error: &RunError, again: &Again) -> String {
+    let names = stage.names().unwrap_or_default();
+    let left = if names.is_empty() {
+        "is left as an empty folder".to_string()
+    } else {
+        format!(
+            "now holds {}, which orbe did not list",
+            journal::staged_paths(again, &names)
+        )
+    };
+    format!(
+        "{error}\norbe had deleted its log and everything else in parts/{STAGE}, which {left}\n  hint: fix the error above, then run `{again}` again"
+    )
+}
+
+/// What is below the staging folder now, and the paths of it `listed` does not hold.
+fn unlisted(
+    paths: &Paths,
+    stage: &Folder,
+    listed: &[Entry],
+) -> Result<(Vec<Entry>, Vec<OsString>), RunError> {
+    let now = walk(paths, stage)?;
+    let unlisted = now
+        .iter()
+        .filter(|entry| !listed.contains(entry))
+        .map(|entry| entry.path.clone())
+        .collect();
+    Ok((now, unlisted))
+}
+
+fn unlisted_text(names: &[OsString], again: &Again) -> String {
+    let mut tops: Vec<&OsString> = names
+        .iter()
+        .filter(|name| {
+            !names.iter().any(|other| {
+                let other = other.as_bytes();
+                name.as_bytes().starts_with(other)
+                    && name.as_bytes().get(other.len()) == Some(&b'/')
+            })
+        })
+        .collect();
+    tops.sort();
+    let listed = journal::staged_paths(again, &tops);
+    let them = if tops.len() == 1 { "it" } else { "them" };
+    format!(
+        "{listed} {} not on the list the add made before it began to delete parts/{STAGE}, so orbe cannot tell that the add made {them}. orbe deleted nothing, and left parts/{STAGE} and its log\n  hint: move {listed} out of {} to keep {them}, then run `{again}` again",
+        if tops.len() == 1 { "is" } else { "are" },
+        again.path(format!("parts/{STAGE}"))
+    )
+}
+
+/// Every path below `stage` but its log. A link is listed, never followed.
+fn contents(paths: &Paths) -> Result<Vec<Entry>, RunError> {
+    let stage = Folder::open(&paths.stage).map_err(|error| io_at(&paths.stage, error))?;
+    walk(paths, &stage)
+}
+
+fn walk(paths: &Paths, stage: &Folder) -> Result<Vec<Entry>, RunError> {
+    let found = stage
+        .walk(Some(OsStr::new(LOG)))
+        .map_err(|(rel, error)| io_at(&paths.below_stage(&rel), error))?;
+    Ok(found
+        .into_iter()
+        .map(|(path, found)| Entry {
+            path,
+            kind: kind(&found),
+        })
+        .collect())
+}
+
+fn kind(found: &Found) -> Kind {
+    match found {
+        Found::Folder => Kind::Folder,
+        Found::File(bytes) => Kind::File(bytes_hash(bytes)),
+        Found::Link(target) => Kind::Link(target.clone()),
+        Found::Other => Kind::Other,
+    }
+}
+
+/// The ids among `ids` that `parts.lock` lists and that have no folder.
+pub(super) fn lock_holes(root: &Path, ids: &[String]) -> Vec<String> {
+    let paths = Paths::new(root);
+    let Ok(text) = fs::read_to_string(paths.lock()) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let id = line.split_whitespace().next()?;
+            (ids.iter().any(|planned| planned == id) && !present(&paths.dest(id)))
+                .then(|| id.to_string())
+        })
+        .collect()
+}
+
+/// `replaced` are the ids whose old copies this run deleted.
+fn done(paths: &Paths, log: &Log, replaced: &[String]) -> Done {
     let kept = log.records.iter().any(|record| {
         matches!(
             record,
@@ -454,12 +647,24 @@ fn done(log: &Log, replaced: &[String]) -> Done {
         )
     });
     if log.committed() {
+        let (ids, lock) = journal::written(log);
+        let mut wrote: Vec<String> = ids
+            .iter()
+            .filter(|(id, placed)| fingerprint(&paths.dest(id)).as_ref() == Some(placed))
+            .map(|(id, _)| format!("parts/{id}"))
+            .collect();
+        if lock.is_some_and(|hash| fingerprint(&paths.lock()).as_ref() == Some(hash)) {
+            wrote.push("parts.lock".into());
+        }
         return Done {
-            line: summary.unwrap_or_default(),
+            line: journal::finished(log, &wrote, replaced)
+                .unwrap_or_else(|| "deleted the staging folder of an interrupted add".into()),
             undone: None,
             kept,
+            planned: log.plan.ids.clone(),
         };
     }
+    let summary = journal::summary(log);
     let line = match &summary {
         Some(lines) => format!("rolled back an interrupted add: {lines}"),
         None => "deleted the staging folder of an interrupted add, which leaves the project as it was before that add"
@@ -469,22 +674,20 @@ fn done(log: &Log, replaced: &[String]) -> Done {
         line,
         undone: summary,
         kept,
+        planned: log.plan.ids.clone(),
     }
 }
 
 /// A staging folder with no log. A run writes the log before anything else goes in it and
 /// deletes the log after everything else, so a folder that holds more was not left by a run.
 /// An empty one is left either before the log or after a finished run, so it claims neither.
-fn without_log(paths: &Paths, again: &str, fault: &mut Fault) -> Result<Done, Stop> {
+fn without_log(paths: &Paths, again: &Again, fault: &mut Fault) -> Result<Done, Stop> {
     let names = names(&paths.stage);
     if names.iter().any(|name| name != LOG) {
-        let listed = names
-            .iter()
-            .map(|name| format!("parts/{STAGE}/{name}"))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let listed = journal::staged_paths(again, &names);
+        let stage = again.path(format!("parts/{STAGE}"));
         return Err(halt(format!(
-            "parts/{STAGE} has no log, so orbe cannot tell what the add that left it changed, and it left {listed} as they are. that add may have written folders in parts/ and parts.lock\n  hint: move anything you want to keep out of parts/{STAGE}, delete parts/{STAGE}, then run `{again}` again"
+            "parts/{STAGE} has no log, so orbe cannot tell what the add that left it changed, and it left {listed} as they are. that add may have written folders in parts/ and parts.lock\n  hint: move anything you want to keep out of {stage}, delete {stage}, then run `{again}` again"
         )));
     }
     at(fault, &format!("do delete parts/{STAGE}"))?;
@@ -499,6 +702,7 @@ fn without_log(paths: &Paths, again: &str, fault: &mut Fault) -> Result<Done, St
         line,
         undone: None,
         kept: false,
+        planned: Vec::new(),
     })
 }
 
@@ -506,8 +710,15 @@ fn halt(message: String) -> Stop {
     Stop::Failed(RunError { message })
 }
 
+fn io_stop(log: &Log, start: usize, stop: Stop, again: &Again) -> Stop {
+    match stop {
+        Stop::Failed(error) => stopped(log, start, error, again),
+        killed => killed,
+    }
+}
+
 /// An I/O error part way through recovery. The log keeps every step done so far.
-fn stopped(log: &Log, start: usize, error: RunError, again: &str) -> Stop {
+fn stopped(log: &Log, start: usize, error: RunError, again: &Again) -> Stop {
     let taken = journal::steps_taken(log, start);
     let mut message = format!("{error}\norbe stopped there, and parts/{STAGE} keeps its log");
     if !taken.is_empty() {
@@ -519,7 +730,8 @@ fn stopped(log: &Log, start: usize, error: RunError, again: &str) -> Stop {
     halt(message)
 }
 
-fn observe(paths: &Paths, plan: &Plan) -> Seen {
+fn observe(paths: &Paths, log: &Log) -> Seen {
+    let plan = &log.plan;
     let odd: Vec<String> = ["new", "old"]
         .into_iter()
         .filter(|name| {
@@ -551,21 +763,72 @@ fn observe(paths: &Paths, plan: &Plan) -> Seen {
         saved_lock: fingerprint(&paths.saved_lock()),
         names: names(&paths.stage),
         odd,
+        unlogged_is_prefix: unlogged_is_prefix(paths, log),
     }
+}
+
+/// Whether the write after the log's last line holds a start of what the add writes there:
+/// the catalog's files for the id, or the live `parts.lock` it copies. A kill part way leaves
+/// a start of them.
+fn unlogged_is_prefix(paths: &Paths, log: &Log) -> bool {
+    match log.unlogged() {
+        Some(Unlogged::New(id)) => {
+            let catalog = Catalog::builtin();
+            catalog
+                .versions_of(&id)
+                .into_iter()
+                .filter_map(|version| catalog.get(&id, version))
+                .any(|entry| starts_of(&paths.new_copy(&id), &entry.files))
+        }
+        Some(Unlogged::SavedLock) => {
+            let saved =
+                Folder::open(&paths.stage).and_then(|stage| stage.find(OsStr::new(SAVED_LOCK)));
+            match (saved, fs::read(paths.lock())) {
+                (Ok(Found::File(saved)), Ok(live)) => live.starts_with(&saved),
+                _ => false,
+            }
+        }
+        None => false,
+    }
+}
+
+/// Whether the folder at `dir` holds only starts of `files`, by their paths below it.
+fn starts_of(dir: &Path, files: &BTreeMap<String, Vec<u8>>) -> bool {
+    let Some(found) = Folder::open(dir)
+        .ok()
+        .and_then(|folder| folder.walk(None).ok())
+    else {
+        return false;
+    };
+    found.iter().all(|(path, found)| {
+        let Some(path) = path.to_str() else {
+            return false;
+        };
+        match found {
+            Found::File(bytes) => files
+                .get(path)
+                .is_some_and(|whole| whole.starts_with(bytes.as_slice())),
+            Found::Folder => files
+                .keys()
+                .any(|file| file.starts_with(&format!("{path}/"))),
+            _ => false,
+        }
+    })
 }
 
 /// Every name in the staging folder, with the names inside `new/` and `old/` when they are
 /// folders. A link is listed, never followed.
-fn names(stage: &Path) -> Vec<String> {
+fn names(stage: &Path) -> Vec<OsString> {
     let mut names = Vec::new();
     for name in entries(stage) {
         let folder = fs::symlink_metadata(stage.join(&name)).is_ok_and(|meta| meta.is_dir());
         if (name == "new" || name == "old") && folder {
-            names.extend(
-                entries(&stage.join(&name))
-                    .into_iter()
-                    .map(|inner| format!("{name}/{inner}")),
-            );
+            names.extend(entries(&stage.join(&name)).into_iter().map(|inner| {
+                let mut path = name.clone();
+                path.push("/");
+                path.push(inner);
+                path
+            }));
         }
         names.push(name);
     }
@@ -573,12 +836,12 @@ fn names(stage: &Path) -> Vec<String> {
     names
 }
 
-fn entries(dir: &Path) -> Vec<String> {
+fn entries(dir: &Path) -> Vec<OsString> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
     entries
-        .filter_map(|entry| Some(entry.ok()?.file_name().to_string_lossy().into_owned()))
+        .filter_map(|entry| Some(entry.ok()?.file_name()))
         .collect()
 }
 
@@ -621,26 +884,30 @@ fn gate(path: &Path, want: Option<&Hash>) -> Result<(), RunError> {
     Err(RunError {
         message: format!(
             "{} changed while orbe was at work, so orbe left it",
-            path.display()
+            shell_path(path.as_os_str())
         ),
     })
 }
 
-/// `--diff` writes nothing, so an interrupted add stays for the next writing run.
+/// What the next writing run does with what an interrupted add left. `--diff` writes nothing,
+/// so it only says this.
 pub(super) enum Pending {
     None,
-    /// A file or folder an interrupted add left, which the next run deletes.
+    /// A file or folder that holds nothing of the add's, which the next run deletes.
     Leftover(String),
     Uncommitted,
     Committed,
-    Unclear,
+    /// The next run finishes deleting the staging folder.
+    Clearing,
+    /// The next run takes these steps, then names what it cannot prove the add made, and stops.
+    Stops(Vec<String>),
+    /// The next run stops on this error, before it deletes anything.
+    Fails(String),
 }
 
+/// The same checks [`settle_stage`] makes before it changes anything.
 pub(super) fn pending(root: &Path) -> Pending {
     let paths = Paths::new(root);
-    if present(&paths.trash()) {
-        return Pending::Leftover(format!("parts/{TRASH}"));
-    }
     if !present(&paths.stage) {
         return if present(&paths.lock_tmp()) {
             Pending::Leftover(LOCK_TMP.into())
@@ -648,10 +915,35 @@ pub(super) fn pending(root: &Path) -> Pending {
             Pending::None
         };
     }
-    match journal::read(&log_text(&paths.log())) {
-        Read::Log(log) if log.committed() => Pending::Committed,
-        Read::Log(_) => Pending::Uncommitted,
-        _ => Pending::Unclear,
+    let stops = Pending::Stops(Vec::new());
+    if !fs::symlink_metadata(&paths.stage).is_ok_and(|meta| meta.is_dir()) {
+        return stops;
+    }
+    let read = match fs::symlink_metadata(paths.log()) {
+        Ok(meta) if meta.is_file() => journal::read(&log_text(&paths.log())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Read::Torn,
+        _ => return stops,
+    };
+    match read {
+        Read::Log(log) => match log.clearing() {
+            Some(listed) => match Folder::open(&paths.stage)
+                .map_err(|error| io_at(&paths.stage, error))
+                .and_then(|stage| unlisted(&paths, &stage, listed))
+            {
+                Ok((_, unlisted)) if unlisted.is_empty() => Pending::Clearing,
+                Ok(_) => stops,
+                Err(error) => Pending::Fails(error.to_string()),
+            },
+            None => match journal::ahead(&log, &observe(&paths, &log)) {
+                Ahead { steps, stops: true } => Pending::Stops(steps),
+                _ if log.committed() => Pending::Committed,
+                _ => Pending::Uncommitted,
+            },
+        },
+        Read::Torn if names(&paths.stage).iter().all(|name| name == LOG) => {
+            Pending::Leftover(format!("parts/{STAGE}"))
+        }
+        _ => stops,
     }
 }
 
@@ -679,53 +971,70 @@ fn append(paths: &Paths, record: &Record, fault: &mut Fault) -> Result<(), Stop>
 }
 
 /// A hash of whatever is at `path`, which never follows a link and never fails. `None` when
-/// nothing is there.
+/// nothing is there. Anything below it that cannot be read gives [`UNREADABLE`], which no log
+/// line can hold, so it never matches a hash the log recorded.
 pub(super) fn fingerprint(path: &Path) -> Option<Hash> {
-    let meta = match fs::symlink_metadata(path) {
-        Ok(meta) => meta,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return None,
-        Err(_) => return Some(digest(vec!["unreadable .".into()])),
-    };
-    let mut lines = Vec::new();
-    describe(path, ".", &meta, &mut lines);
-    Some(digest(lines))
+    proof(path).unwrap_or_else(|_| Some(UNREADABLE.into()))
 }
 
-fn describe(path: &Path, rel: &str, meta: &fs::Metadata, lines: &mut Vec<String>) {
+const UNREADABLE: &str = "unreadable";
+
+/// The first path at or below `path` that cannot be read, which no hash can prove unchanged.
+pub(super) fn unreadable(path: &Path) -> Option<PathBuf> {
+    proof(path).err()
+}
+
+fn cannot_read(path: PathBuf) -> RunError {
+    RunError {
+        message: format!(
+            "cannot read {}, so orbe could not tell later that it is unchanged",
+            shell_path(path.as_os_str())
+        ),
+    }
+}
+
+/// The hash [`fingerprint`] gives, or the first path below `path` it cannot read.
+fn proof(path: &Path) -> Result<Option<Hash>, PathBuf> {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(path.into()),
+    };
+    let mut lines = Vec::new();
+    describe(path, ".", &meta, &mut lines)?;
+    Ok(Some(digest(lines)))
+}
+
+fn describe(
+    path: &Path,
+    rel: &str,
+    meta: &fs::Metadata,
+    lines: &mut Vec<String>,
+) -> Result<(), PathBuf> {
+    let cannot = || path.to_path_buf();
     let kind = meta.file_type();
     if kind.is_symlink() {
-        let target = fs::read_link(path).map(|target| target.display().to_string());
-        lines.push(format!("link {rel} {}", target.unwrap_or_default()));
+        let target = fs::read_link(path).map_err(|_| cannot())?;
+        lines.push(format!("link {rel} {}", target.display()));
     } else if kind.is_dir() {
         lines.push(format!("dir {rel}"));
-        let Ok(entries) = fs::read_dir(path) else {
-            lines.push(format!("unreadable {rel}"));
-            return;
-        };
-        for entry in entries {
-            let Ok(entry) = entry else {
-                lines.push(format!("unreadable {rel}"));
-                continue;
-            };
+        for entry in fs::read_dir(path).map_err(|_| cannot())? {
+            let entry = entry.map_err(|_| cannot())?;
             let name = entry.file_name().to_string_lossy().into_owned();
             let child = if rel == "." {
                 name
             } else {
                 format!("{rel}/{name}")
             };
-            match fs::symlink_metadata(entry.path()) {
-                Ok(meta) => describe(&entry.path(), &child, &meta, lines),
-                Err(_) => lines.push(format!("unreadable {child}")),
-            }
+            let meta = fs::symlink_metadata(entry.path()).map_err(|_| entry.path())?;
+            describe(&entry.path(), &child, &meta, lines)?;
         }
     } else if kind.is_file() {
-        match fs::read(path) {
-            Ok(bytes) => lines.push(file_line(rel, &bytes)),
-            Err(_) => lines.push(format!("unreadable {rel}")),
-        }
+        lines.push(file_line(rel, &fs::read(path).map_err(|_| cannot())?));
     } else {
         lines.push(format!("other {rel}"));
     }
+    Ok(())
 }
 
 fn file_line(rel: &str, bytes: &[u8]) -> String {
@@ -774,8 +1083,8 @@ fn mv(from: &Path, to: &Path) -> Result<(), RunError> {
     fs::rename(from, to).map_err(|error| RunError {
         message: format!(
             "cannot move {} to {}: {error}",
-            from.display(),
-            to.display()
+            shell_path(from.as_os_str()),
+            shell_path(to.as_os_str())
         ),
     })?;
     for dir in [from.parent(), to.parent()].into_iter().flatten() {

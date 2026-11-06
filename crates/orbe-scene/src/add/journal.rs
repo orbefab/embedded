@@ -7,8 +7,10 @@
 //! stops part way is resumed.
 
 use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
-use super::single_component;
+use super::{Again, single_component};
 
 pub(super) const HEADER: &str = "orbe add log 1";
 pub(super) const STAGE: &str = ".orbe-add";
@@ -55,6 +57,88 @@ pub(super) enum Record {
     LockKept,
     /// `parts.lock` is the one the add wrote, and the copy from before it is gone, so it stays.
     LockStays,
+    /// Every path below the staging folder but the log, with what it held, logged before the
+    /// first of them is deleted. Recovery deletes only these, and only while they hold it.
+    Clearing(Vec<Entry>),
+}
+
+/// A path below the staging folder, such as `old/led-5mm/part.jsonc`, and what is there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Entry {
+    pub(super) path: OsString,
+    pub(super) kind: Kind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Kind {
+    Folder,
+    File(Hash),
+    Link(OsString),
+    Other,
+}
+
+impl Entry {
+    fn word(&self) -> String {
+        let path = escape(self.path.as_bytes());
+        match &self.kind {
+            Kind::Folder => format!("d:{path}"),
+            Kind::File(hash) => format!("f:{path}:{hash}"),
+            Kind::Link(target) => format!("l:{path}:{}", escape(target.as_bytes())),
+            Kind::Other => format!("o:{path}"),
+        }
+    }
+
+    fn parse(word: &str) -> Option<Entry> {
+        let mut fields = word.splitn(3, ':');
+        let (tag, path, rest) = (fields.next()?, fields.next()?, fields.next());
+        let path = unescape(path)?;
+        let below = path
+            .split(|byte| *byte == b'/')
+            .all(|name| !matches!(name, b"" | b"." | b".."));
+        if !below || path == b"log" {
+            return None;
+        }
+        let kind = match (tag, rest) {
+            ("d", None) => Kind::Folder,
+            ("f", Some(h)) => Kind::File(hash(h)?),
+            ("l", Some(target)) => Kind::Link(OsString::from_vec(unescape(target)?)),
+            ("o", None) => Kind::Other,
+            _ => return None,
+        };
+        Some(Entry {
+            path: OsString::from_vec(path),
+            kind,
+        })
+    }
+}
+
+/// A name in a log word, with `%`, `:`, spaces and every byte outside printable ASCII as `%XX`.
+fn escape(name: &[u8]) -> String {
+    let mut out = String::new();
+    for &byte in name {
+        if byte.is_ascii_graphic() && byte != b'%' && byte != b':' {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+fn unescape(word: &str) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut rest = word.as_bytes();
+    while let Some((&byte, after)) = rest.split_first() {
+        if byte == b'%' {
+            let digits = std::str::from_utf8(after.get(..2)?).ok()?;
+            bytes.push(u8::from_str_radix(digits, 16).ok()?);
+            rest = &after[2..];
+        } else {
+            bytes.push(byte);
+            rest = after;
+        }
+    }
+    Some(bytes)
 }
 
 impl Record {
@@ -73,6 +157,11 @@ impl Record {
             Record::LockRestored => "lock-restored".into(),
             Record::LockKept => "lock-kept".into(),
             Record::LockStays => "lock-stays".into(),
+            Record::Clearing(entries) => {
+                entries.iter().fold("clearing".to_string(), |line, entry| {
+                    format!("{line} {}", entry.word())
+                })
+            }
         }
     }
 
@@ -93,6 +182,12 @@ impl Record {
             ["lock-restored"] => Record::LockRestored,
             ["lock-kept"] => Record::LockKept,
             ["lock-stays"] => Record::LockStays,
+            ["clearing", entries @ ..] => Record::Clearing(
+                entries
+                    .iter()
+                    .map(|word| Entry::parse(word))
+                    .collect::<Option<_>>()?,
+            ),
             _ => return None,
         })
     }
@@ -148,7 +243,7 @@ impl Plan {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct Log {
     pub(super) plan: Plan,
     pub(super) records: Vec<Record>,
@@ -220,7 +315,7 @@ struct LockLog {
 /// A write the add logs only once it is whole, so a run killed inside it leaves part of it and
 /// no line.
 #[derive(PartialEq, Eq)]
-enum Unlogged {
+pub(super) enum Unlogged {
     New(String),
     SavedLock,
 }
@@ -228,6 +323,14 @@ enum Unlogged {
 impl Log {
     pub(super) fn committed(&self) -> bool {
         self.records.contains(&Record::Committed)
+    }
+
+    /// What the clearing record lists, once recovery has begun to delete the staging folder.
+    pub(super) fn clearing(&self) -> Option<&[Entry]> {
+        self.records.iter().find_map(|record| match record {
+            Record::Clearing(entries) => Some(entries.as_slice()),
+            _ => None,
+        })
     }
 
     fn part(&self, id: &str) -> PartLog {
@@ -262,7 +365,7 @@ impl Log {
 
     /// The write that follows the last line, when the log stops inside staging: the next
     /// `new/<id>`, or the saved lock after the last one.
-    fn unlogged(&self) -> Option<Unlogged> {
+    pub(super) fn unlogged(&self) -> Option<Unlogged> {
         let staged = self
             .records
             .iter()
@@ -292,9 +395,10 @@ pub(super) struct Seen {
     pub(super) lock: Option<Hash>,
     pub(super) saved_lock: Option<Hash>,
     /// Every name in the staging folder: `new/<name>`, `old/<name>`, or a name at its top.
-    pub(super) names: Vec<String>,
+    pub(super) names: Vec<OsString>,
     /// `new` or `old` when it is there and is not a folder. Nothing inside it is read.
     pub(super) odd: Vec<String>,
+    pub(super) unlogged_is_prefix: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -336,7 +440,7 @@ pub(super) enum Problem {
     /// The same, for `parts.lock` and its saved copy.
     LockConflict,
     /// Names in the staging folder that no step of the log made.
-    Foreign(Vec<String>),
+    Foreign(Vec<OsString>),
     /// Names the log made that no longer have the hash it recorded.
     Changed(Vec<String>),
     /// Before the commit, `parts/<id>` holds the add's new copy, and the copy it replaced is not
@@ -356,9 +460,68 @@ enum Decision {
 /// it moves anything. An id in conflict is never moved. Recovery settles every other id first,
 /// then stops and names the conflicts.
 pub(super) fn next(log: &Log, seen: &Seen) -> Next {
+    let (first, problems) = first_step(log, seen);
+    if let Some((effect, record)) = first {
+        return Next::Act(effect, record);
+    }
+    if !problems.is_empty() {
+        return Next::Stop(problems);
+    }
+    Next::Clean
+}
+
+/// What recovery from here does, as [`next`] decides it step by step.
+pub(super) struct Ahead {
+    pub(super) steps: Vec<String>,
+    pub(super) stops: bool,
+}
+
+pub(super) fn ahead(log: &Log, seen: &Seen) -> Ahead {
+    let mut log = log.clone();
+    let mut seen = seen.clone();
+    let start = log.records.len();
+    let stops = loop {
+        match next(&log, &seen) {
+            Next::Act(effect, record) => {
+                seen.apply(&effect);
+                log.records.push(record);
+            }
+            Next::Clean => break false,
+            Next::Stop(_) => break true,
+        }
+    };
+    Ahead {
+        steps: steps(&log, start, Tense::Present),
+        stops,
+    }
+}
+
+impl Seen {
+    /// What is on disk once `effect` is done.
+    fn apply(&mut self, effect: &Effect) {
+        match effect {
+            Effect::None => {}
+            Effect::Unplace(id, _) => {
+                let here = self.parts.entry(id.clone()).or_default();
+                here.new = here.dest.take();
+                self.names.push(OsString::from(format!("new/{id}")));
+            }
+            Effect::Restore(id, _) => {
+                let here = self.parts.entry(id.clone()).or_default();
+                here.dest = here.old.take();
+                self.names.retain(|name| *name != *format!("old/{id}"));
+            }
+            Effect::LockBack(saved, _) => self.lock = Some(saved.clone()),
+            Effect::LockRemove(_) => self.lock = None,
+        }
+    }
+}
+
+/// The first step recovery takes, and the problems it stops on once every other step is done.
+fn first_step(log: &Log, seen: &Seen) -> (Option<(Effect, Record)>, Vec<Problem>) {
     let strays = strays(log, seen);
     if !strays.is_empty() {
-        return Next::Stop(strays);
+        return (None, strays);
     }
     let committed = log.committed();
     let mut problems = Vec::new();
@@ -389,13 +552,7 @@ pub(super) fn next(log: &Log, seen: &Seen) -> Next {
             None => {}
         }
     }
-    if let Some((effect, record)) = first {
-        return Next::Act(effect, record);
-    }
-    if !problems.is_empty() {
-        return Next::Stop(problems);
-    }
-    Next::Clean
+    (first, problems)
 }
 
 fn undo_part(id: &str, part: &PartLog, here: &Here) -> Option<Decision> {
@@ -499,10 +656,10 @@ fn strays(log: &Log, seen: &Seen) -> Vec<Problem> {
     let mut foreign = Vec::new();
     let mut changed = Vec::new();
     for name in &seen.names {
-        match made(log, seen, name) {
+        match name.to_str().map_or(Made::No, |name| made(log, seen, name)) {
             Made::Yes => {}
             Made::No => foreign.push(name.clone()),
-            Made::Changed => changed.push(name.clone()),
+            Made::Changed => changed.push(name.to_string_lossy().into_owned()),
         }
     }
     let mut problems = Vec::new();
@@ -534,7 +691,7 @@ fn made(log: &Log, seen: &Seen, name: &str) -> Made {
     match name.split_once('/') {
         Some(("new", id)) if planned(id) && !log.committed() => match log.part(id).staged {
             Some(staged) => holds(here(id).new, &staged),
-            None if log.unlogged() == Some(Unlogged::New(id.into())) => Made::Yes,
+            None if log.unlogged() == Some(Unlogged::New(id.into())) => unlogged(seen),
             None => Made::No,
         },
         Some(("old", id)) if planned(id) => {
@@ -551,7 +708,7 @@ fn made(log: &Log, seen: &Seen, name: &str) -> Made {
             "parts.lock" if matches!(log.plan.lock, LockChange::Replace(_)) => {
                 match &log.lock().saved {
                     Some(saved) => holds(seen.saved_lock.clone(), saved),
-                    None if log.unlogged() == Some(Unlogged::SavedLock) => Made::Yes,
+                    None if log.unlogged() == Some(Unlogged::SavedLock) => unlogged(seen),
                     None => Made::No,
                 }
             }
@@ -560,8 +717,31 @@ fn made(log: &Log, seen: &Seen, name: &str) -> Made {
     }
 }
 
+fn unlogged(seen: &Seen) -> Made {
+    if seen.unlogged_is_prefix {
+        Made::Yes
+    } else {
+        Made::Changed
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tense {
+    Past,
+    Present,
+}
+
+impl Tense {
+    fn verb(self, past: &str, present: &str) -> String {
+        match self {
+            Tense::Past => past.into(),
+            Tense::Present => present.into(),
+        }
+    }
+}
+
 /// What the log says recovery did, one phrase each, in the order it did it.
-fn undone(log: &Log, records: &[Record]) -> Vec<String> {
+fn undone(log: &Log, records: &[Record], tense: Tense) -> Vec<String> {
     let mut seen_ids = Vec::new();
     let mut lines = Vec::new();
     for record in records {
@@ -573,20 +753,29 @@ fn undone(log: &Log, records: &[Record]) -> Vec<String> {
                 seen_ids.push(id.clone());
                 let part = log.part(id);
                 if part.restored {
-                    format!("put back parts/{id}")
+                    format!("{} parts/{id}", tense.verb("put back", "puts back"))
                 } else if part.unplaced {
-                    format!("removed the new parts/{id}")
+                    format!("{} the new parts/{id}", tense.verb("removed", "removes"))
                 } else {
-                    format!("left parts/{id} as it is, since it changed after the add")
+                    format!(
+                        "{} parts/{id} as it is, since it changed after the add",
+                        tense.verb("left", "leaves")
+                    )
                 }
             }
             Record::LockRestored => match log.plan.lock {
-                LockChange::Add(_) => "removed the new parts.lock".into(),
-                _ => "put back parts.lock".into(),
+                LockChange::Add(_) => {
+                    format!("{} the new parts.lock", tense.verb("removed", "removes"))
+                }
+                _ => format!("{} parts.lock", tense.verb("put back", "puts back")),
             },
-            Record::LockKept => "left parts.lock as it is, since it changed after the add".into(),
+            Record::LockKept => format!(
+                "{} parts.lock as it is, since it changed after the add",
+                tense.verb("left", "leaves")
+            ),
             Record::LockStays => format!(
-                "left the parts.lock the add wrote, since the copy from before it was not in parts/{STAGE}"
+                "{} the parts.lock the add wrote, since the copy from before it was not in parts/{STAGE}",
+                tense.verb("left", "leaves")
             ),
             _ => continue,
         };
@@ -608,14 +797,10 @@ fn gone(log: &Log) -> Vec<String> {
         .collect()
 }
 
-/// What recovery did, from the whole log, once it is done. `replaced` are the ids whose old
-/// copies go with the staging folder after the commit. `None` when the project is as it was
-/// before the add.
-pub(super) fn summary(log: &Log, replaced: &[String]) -> Option<String> {
-    if log.committed() {
-        return Some(finished(log, replaced));
-    }
-    let mut lines = undone(log, &log.records);
+/// What a rollback did, from the whole log, once it is done. `None` when the project is as it
+/// was before the add.
+pub(super) fn summary(log: &Log) -> Option<String> {
+    let mut lines = undone(log, &log.records, Tense::Past);
     let gone = gone(log);
     if !gone.is_empty() {
         lines.push(format!(
@@ -629,34 +814,73 @@ pub(super) fn summary(log: &Log, replaced: &[String]) -> Option<String> {
 
 /// The steps this run's recovery took, for a message about a recovery that stopped.
 pub(super) fn steps_taken(log: &Log, from: usize) -> Vec<String> {
+    steps(log, from, Tense::Past)
+}
+
+fn steps(log: &Log, from: usize, tense: Tense) -> Vec<String> {
     let records = &log.records[from.min(log.records.len())..];
     if log.committed() {
         return records
             .iter()
             .filter_map(|record| match record {
-                Record::Restored(id) => Some(format!("put back parts/{id}")),
+                Record::Restored(id) => Some(format!(
+                    "{} parts/{id}",
+                    tense.verb("put back", "puts back")
+                )),
                 _ => None,
             })
             .collect();
     }
-    undone(log, records)
+    undone(log, records, tense)
 }
 
-fn finished(log: &Log, replaced: &[String]) -> String {
-    let mut wrote: Vec<String> = log
+/// The ids whose new copy the log says the add placed, with its hash, then the hash of
+/// `parts.lock` when it says the add wrote it.
+pub(super) fn written(log: &Log) -> (Vec<(String, Hash)>, Option<&Hash>) {
+    let ids = log
         .plan
         .ids
         .iter()
-        .filter(|id| log.part(id).placed.is_some())
-        .map(|id| format!("parts/{id}"))
+        .filter_map(|id| Some((id.clone(), log.part(id).placed?)))
         .collect();
-    if log.records.contains(&Record::LockWritten) {
-        wrote.push("parts.lock".into());
+    let lock = match &log.plan.lock {
+        LockChange::Add(hash) | LockChange::Replace(hash)
+            if log.records.contains(&Record::LockWritten) =>
+        {
+            Some(hash)
+        }
+        _ => None,
+    };
+    (ids, lock)
+}
+
+/// The ids whose copy from before the add the log moved aside.
+pub(super) fn set_aside(log: &Log) -> Vec<String> {
+    log.plan
+        .ids
+        .iter()
+        .filter(|id| matches!(log.part(id).aside, Some(Some(_))))
+        .cloned()
+        .collect()
+}
+
+/// What finishing a committed add did. `wrote` are the paths that still hold what the add
+/// wrote, and `replaced` the ids whose old copies this run deleted. `None` when there is
+/// nothing to say beyond the staging folder.
+pub(super) fn finished(log: &Log, wrote: &[String], replaced: &[String]) -> Option<String> {
+    let restored: Vec<&String> = log
+        .plan
+        .ids
+        .iter()
+        .filter(|id| log.part(id).restored)
+        .collect();
+    if wrote.is_empty() && replaced.is_empty() && restored.is_empty() {
+        return None;
     }
-    let mut text = format!(
-        "finished an interrupted add, which had written {}",
-        wrote.join(", ")
-    );
+    let mut text = "finished an interrupted add".to_string();
+    if !wrote.is_empty() {
+        text.push_str(&format!(", which had written {}", wrote.join(", ")));
+    }
     if !replaced.is_empty() {
         let replaced: Vec<String> = replaced.iter().map(|id| format!("parts/{id}")).collect();
         text.push_str(&format!(
@@ -669,18 +893,16 @@ fn finished(log: &Log, replaced: &[String]) -> String {
             replaced.join(", ")
         ));
     }
-    for id in &log.plan.ids {
-        if log.part(id).restored {
-            text.push_str(&format!(
-                ". parts/{id} was gone, so orbe put back the copy the add had replaced"
-            ));
-        }
+    for id in restored {
+        text.push_str(&format!(
+            ". parts/{id} was gone, so orbe put back the copy the add had replaced"
+        ));
     }
-    text
+    Some(text)
 }
 
 /// One line per problem, saying what is on disk, then a hint. `again` is the command to rerun.
-pub(super) fn problem_text(log: &Log, problems: &[Problem], again: &str) -> (String, String) {
+pub(super) fn problem_text(log: &Log, problems: &[Problem], again: &Again) -> (String, String) {
     let committed = log.committed();
     let mut lines = Vec::new();
     let mut hints = Vec::new();
@@ -690,35 +912,47 @@ pub(super) fn problem_text(log: &Log, problems: &[Problem], again: &str) -> (Str
                 lines.push(format!(
                     "parts/{id} changed after the add replaced it, and the copy it replaced is in parts/{STAGE}/old/{id}. orbe left both"
                 ));
-                hints.push(keep_one(&format!("parts/{id}"), &format!("old/{id}")));
+                hints.push(keep_one(
+                    again,
+                    &format!("parts/{id}"),
+                    &format!("old/{id}"),
+                ));
             }
             Problem::Conflict(id) => {
                 lines.push(format!(
                     "parts/{id} changed after the interrupted add placed its new copy there, and the copy from before the add is in parts/{STAGE}/old/{id}. orbe left both"
                 ));
-                hints.push(keep_one(&format!("parts/{id}"), &format!("old/{id}")));
+                hints.push(keep_one(
+                    again,
+                    &format!("parts/{id}"),
+                    &format!("old/{id}"),
+                ));
             }
             Problem::LockConflict => {
                 lines.push(format!(
                     "parts.lock changed after the interrupted add wrote it, and the lock from before the add is in parts/{STAGE}/parts.lock. orbe left both"
                 ));
-                hints.push(keep_one("parts.lock", "parts.lock"));
+                hints.push(keep_one(again, "parts.lock", "parts.lock"));
             }
             Problem::Foreign(names) => {
-                let names = staged_paths(names);
+                let names = staged_paths(again, names);
                 lines.push(format!(
                     "{names} {} not made by an add, so orbe left parts/{STAGE} and its log",
                     if names.contains(", ") { "were" } else { "was" }
                 ));
-                hints.push(format!("move {names} out of parts/{STAGE}"));
+                hints.push(format!(
+                    "move {names} out of {}",
+                    again.path(format!("parts/{STAGE}"))
+                ));
             }
             Problem::Changed(names) => {
                 for name in names {
                     lines.push(changed_line(name));
                 }
                 hints.push(format!(
-                    "move {} out of parts/{STAGE} to keep {}",
-                    staged_paths(names),
+                    "move {} out of {} to keep {}",
+                    staged_paths(again, names),
+                    again.path(format!("parts/{STAGE}")),
                     if names.len() == 1 { "it" } else { "them" }
                 ));
             }
@@ -727,7 +961,8 @@ pub(super) fn problem_text(log: &Log, problems: &[Problem], again: &str) -> (Str
                     "parts/{id} holds the new copy the interrupted add placed, and the copy it replaced is not in parts/{STAGE}/old/{id}, so orbe cannot put that back. orbe left parts/{id}"
                 ));
                 hints.push(format!(
-                    "delete parts/{id}, whose files are the catalog's, to finish the rollback"
+                    "delete {}, whose files are the catalog's, to finish the rollback",
+                    again.path(format!("parts/{id}"))
                 ));
             }
         }
@@ -736,10 +971,15 @@ pub(super) fn problem_text(log: &Log, problems: &[Problem], again: &str) -> (Str
     (lines.join("\n"), hints.join(". "))
 }
 
-fn staged_paths(names: &[String]) -> String {
+/// Each name below the staging folder as a shell word for its path from the current folder.
+pub(super) fn staged_paths<N: AsRef<OsStr>>(again: &Again, names: &[N]) -> String {
     names
         .iter()
-        .map(|name| format!("parts/{STAGE}/{name}"))
+        .map(|name| {
+            let mut path = format!("parts/{STAGE}/").into_bytes();
+            path.extend_from_slice(name.as_ref().as_bytes());
+            again.path(OsStr::from_bytes(&path))
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -759,9 +999,13 @@ fn changed_line(name: &str) -> String {
     }
 }
 
-fn keep_one(path: &str, staged: &str) -> String {
+fn keep_one(again: &Again, path: &str, staged: &str) -> String {
+    let (path, staged) = (
+        again.path(path),
+        again.path(format!("parts/{STAGE}/{staged}")),
+    );
     format!(
-        "keep one: delete {path} to get back parts/{STAGE}/{staged}, or delete parts/{STAGE}/{staged} to keep {path} as it is"
+        "keep one: delete {path} to get back {staged}, or delete {staged} to keep {path} as it is"
     )
 }
 

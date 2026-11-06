@@ -890,7 +890,12 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
                 "add \"default\" or \"required\": true".into(),
             );
         }
-        if !through && !matches!(kind, ParamKind::Choice(_)) && field("sets").is_none() {
+        let nowhere = reaches_nothing(&prop.key, through, part);
+        if !through
+            && !matches!(kind, ParamKind::Choice(_))
+            && field("sets").is_none()
+            && nowhere.is_none()
+        {
             out.push(
                 Code::Param,
                 prop.key_span,
@@ -898,7 +903,7 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
                 "add \"sets\": \"/field\" pointing at the model field this param writes".into(),
             );
         }
-        if let Some((message, hint)) = reaches_nothing(&prop.key, through, part) {
+        if let Some((message, hint)) = nowhere {
             out.push(Code::Param, prop.key_span, message, hint);
         }
         params.push(ParamDecl {

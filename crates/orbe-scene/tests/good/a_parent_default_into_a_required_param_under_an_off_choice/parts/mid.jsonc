@@ -1,0 +1,6 @@
+{
+  "format": 1,
+  "params": { "window": { "default": "1ms" }, "contacts": { "default": "real" } },
+  "parts": { "s": { "type": "./sw.jsonc", "window": { "param": "window" }, "contacts": { "param": "contacts" } } },
+  "pins": { "a": "s.a", "b": "s.b" },
+}

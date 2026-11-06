@@ -6,6 +6,10 @@ const C: &str = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 const L: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 const M: &str = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
 
+fn again() -> Again {
+    Again::new(None, "orbe add x".into())
+}
+
 /// One id, `led`, whose new copy hashes to `B` and whose copy from before the add hashes to `A`.
 fn log(lock: LockChange, records: Vec<Record>) -> Log {
     Log {
@@ -44,7 +48,7 @@ fn seen(dest: Option<&str>, new: bool, old: bool) -> Seen {
             old: old.then(|| A.into()),
         },
     );
-    seen.names = ["log", "new", "old"].map(str::to_string).to_vec();
+    seen.names = ["log", "new", "old"].map(OsString::from).to_vec();
     if new {
         seen.names.push("new/led".into());
     }
@@ -111,7 +115,7 @@ fn the_log_reads_back_what_it_wrote_and_ignores_a_torn_last_line() {
 fn before_anything_moved_recovery_only_cleans() {
     let log = log(LockChange::Kept, staged());
     assert_eq!(next(&log, &seen(Some(A), true, false)), Next::Clean);
-    assert_eq!(summary(&log, &[]), None);
+    assert_eq!(summary(&log), None);
 }
 
 #[test]
@@ -163,7 +167,7 @@ fn an_edit_after_the_crash_stops_the_rollback_of_that_id() {
     let log = log(LockChange::Kept, placed(aside(staged())));
     let next = next(&log, &seen(Some(C), false, true));
     assert_eq!(next, Next::Stop(vec![Problem::Conflict("led".into())]));
-    let (lines, hint) = problem_text(&log, &[Problem::Conflict("led".into())], "orbe add x");
+    let (lines, hint) = problem_text(&log, &[Problem::Conflict("led".into())], &again());
     assert_eq!(
         lines,
         "parts/led changed after the interrupted add placed its new copy there, and the copy from before the add is in parts/.orbe-add/old/led. orbe left both"
@@ -268,7 +272,7 @@ fn a_recovery_step_the_log_missed_is_not_repeated() {
         ..log
     };
     assert_eq!(
-        summary(&unplaced, &[]).as_deref(),
+        summary(&unplaced).as_deref(),
         Some("removed the new parts/led")
     );
 }
@@ -288,7 +292,7 @@ fn a_placed_copy_stays_when_the_copy_it_replaced_is_not_there_to_put_back() {
         next(&log, &changed),
         Next::Stop(vec![Problem::Changed(vec!["old/led".into()])])
     );
-    let (lines, hint) = problem_text(&log, &[Problem::Missing("led".into())], "orbe add x");
+    let (lines, hint) = problem_text(&log, &[Problem::Missing("led".into())], &again());
     assert_eq!(
         lines,
         "parts/led holds the new copy the interrupted add placed, and the copy it replaced is not in parts/.orbe-add/old/led, so orbe cannot put that back. orbe left parts/led"
@@ -319,7 +323,7 @@ fn a_done_rollback_says_what_it_put_back() {
     records.push(Record::Restored("led".into()));
     let log = log(LockChange::Kept, records);
     assert_eq!(next(&log, &seen(Some(A), true, false)), Next::Clean);
-    assert_eq!(summary(&log, &[]).as_deref(), Some("put back parts/led"));
+    assert_eq!(summary(&log).as_deref(), Some("put back parts/led"));
 }
 
 #[test]
@@ -344,7 +348,7 @@ fn after_the_commit_a_saved_copy_is_deleted_only_beside_the_new_copy() {
         next(&log, &seen(Some(A), false, false)),
         act(Effect::None, Record::Restored("led".into()))
     );
-    let summary = summary(&log, &[]).unwrap();
+    let summary = finished(&log, &["parts/led".into()], &[]).unwrap();
     assert!(!summary.contains("deleted"), "{summary}");
 }
 
@@ -361,11 +365,7 @@ fn after_the_commit_a_changed_saved_copy_or_a_linked_old_is_left() {
         next(&log, &changed),
         Next::Stop(vec![Problem::Changed(vec!["old/led".into()])])
     );
-    let (lines, hint) = problem_text(
-        &log,
-        &[Problem::Changed(vec!["old/led".into()])],
-        "orbe add x",
-    );
+    let (lines, hint) = problem_text(&log, &[Problem::Changed(vec!["old/led".into()])], &again());
     assert_eq!(
         lines,
         "parts/.orbe-add/old/led changed after the add moved the copy from parts/led there. orbe left it, and parts/led as it is"
@@ -390,7 +390,12 @@ fn a_finished_add_says_what_it_wrote_and_deleted() {
     let log = log(LockChange::Replace(L.into()), records);
     assert_eq!(next(&log, &seen(Some(B), false, true)), Next::Clean);
     assert_eq!(
-        summary(&log, &["led".into()]).as_deref(),
+        finished(
+            &log,
+            &["parts/led".into(), "parts.lock".into()],
+            &["led".into()]
+        )
+        .as_deref(),
         Some(
             "finished an interrupted add, which had written parts/led, parts.lock, and deleted the old copy of parts/led it replaced"
         )
@@ -435,7 +440,7 @@ fn the_lock_is_put_back_only_while_it_holds_what_the_add_wrote() {
         names: ["log"]
             .into_iter()
             .chain(saved.map(|_| "parts.lock"))
-            .map(str::to_string)
+            .map(OsString::from)
             .collect(),
         ..Seen::default()
     };
@@ -488,7 +493,7 @@ fn the_lock_is_put_back_only_while_it_holds_what_the_add_wrote() {
         records: vec![Record::SavedLock(M.into()), Record::LockStays],
     };
     assert_eq!(
-        summary(&stays, &[]).as_deref(),
+        summary(&stays).as_deref(),
         Some(
             "left the parts.lock the add wrote, since the copy from before it was not in parts/.orbe-add"
         )
@@ -515,6 +520,11 @@ fn only_the_write_after_the_last_line_may_be_unlogged() {
     let mut half = seen(None, false, false);
     half.names.push("new/led".into());
     half.parts.get_mut("led").unwrap().new = Some(C.into());
+    assert_eq!(
+        next(&log(LockChange::Kept, vec![]), &half),
+        Next::Stop(vec![Problem::Changed(vec!["new/led".into()])])
+    );
+    half.unlogged_is_prefix = true;
     assert_eq!(next(&log(LockChange::Kept, vec![]), &half), Next::Clean);
     assert_eq!(
         next(
@@ -527,4 +537,55 @@ fn only_the_write_after_the_last_line_may_be_unlogged() {
         next(&log(LockChange::Kept, staged()), &half),
         Next::Stop(vec![Problem::Changed(vec!["new/led".into()])])
     );
+}
+
+/// A clearing line reads back every name it lists, whatever bytes the name holds, and never
+/// a path outside the staging folder or the log itself.
+#[test]
+fn a_clearing_line_reads_back_its_names_and_only_paths_below_the_folder() {
+    let entries = vec![
+        Entry {
+            path: "old/led".into(),
+            kind: Kind::Folder,
+        },
+        Entry {
+            path: "old/led/my notes: 100%\nµ.txt".into(),
+            kind: Kind::File(A.into()),
+        },
+        Entry {
+            path: "old/led/sheet".into(),
+            kind: Kind::Link("../a b/c:d".into()),
+        },
+        Entry {
+            path: "old/led/fifo".into(),
+            kind: Kind::Other,
+        },
+        Entry {
+            path: OsString::from_vec(b"old/led/caf\xe9".to_vec()),
+            kind: Kind::File(A.into()),
+        },
+    ];
+    let line = Record::Clearing(entries.clone()).line();
+    assert!(
+        !line.contains('\n') && line.split(' ').count() == 6,
+        "{line}"
+    );
+    assert_eq!(Record::parse(&line), Some(Record::Clearing(entries)));
+    assert_eq!(
+        Record::parse("clearing"),
+        Some(Record::Clearing(Vec::new()))
+    );
+    for word in [
+        "d:../x",
+        "d:/x",
+        "d:a//b",
+        "d:log",
+        "f:a",
+        "d:a%2",
+        "x:a",
+        "d:old/./a",
+        "u:a:12.3.1700000000.5.1700000001.6",
+    ] {
+        assert_eq!(Record::parse(&format!("clearing {word}")), None, "{word}");
+    }
 }

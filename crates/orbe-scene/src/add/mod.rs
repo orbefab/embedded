@@ -6,6 +6,7 @@
 //! the next run, which [`journal::next`] decides from the log and the hashes on disk. [`held`]
 //! keeps a second run out while one is at work.
 
+mod at;
 mod diff;
 mod held;
 mod journal;
@@ -13,6 +14,7 @@ mod plan;
 mod snapshot;
 mod txn;
 
+use std::ffi::OsStr;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
@@ -157,7 +159,7 @@ fn run_with(dir: Option<&Path>, request: &Request, fault: &mut Fault) -> Result<
     }
     let root = dir.unwrap_or(Path::new("."));
     let add = project::add_command(dir);
-    let again = request_command(&add, request);
+    let again = Again::new(dir, request_command(&add, request));
     let _held = match held::hold(root) {
         Ok(held) => Some(held),
         Err(Hold::Busy) => return Ok(Reply::Refuse(busy(&again))),
@@ -165,13 +167,29 @@ fn run_with(dir: Option<&Path>, request: &Request, fault: &mut Fault) -> Result<
         Err(Hold::Io(error)) => return Err(error),
     };
     let recovered = if request.diff {
-        pending_note(root, &add)
+        txn::Recovered {
+            lines: pending_note(
+                root,
+                &request_command(
+                    &add,
+                    &Request {
+                        ids: request.ids.clone(),
+                        diff: false,
+                        ..*request
+                    },
+                ),
+            ),
+            planned: Vec::new(),
+        }
     } else {
         txn::recover(root, &again, fault).map_err(stop_error)?
     };
     let catalog = Catalog::builtin();
     let snapshot = snapshot::load(root, &plan::wanted(&catalog, request))?;
     let reply = match plan::plan(&catalog, &snapshot, request, &add) {
+        Plan::Add(planned) if let Some(refusal) = unreadable(root, &planned, &again) => {
+            Reply::Refuse(refusal)
+        }
         Plan::Add(planned) => {
             let folders = planned
                 .write
@@ -216,7 +234,90 @@ fn run_with(dir: Option<&Path>, request: &Request, fault: &mut Fault) -> Result<
         Plan::Refuse(refusal) => Reply::Refuse(refusal),
         Plan::Usage(message) => Reply::Usage(message),
     };
-    Ok(with_notes(reply, recovered))
+    let mut notes = recovered.lines;
+    let holes = txn::lock_holes(root, &recovered.planned);
+    if !holes.is_empty() {
+        let folders = holes
+            .iter()
+            .map(|id| format!("parts/{id}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let ids = holes
+            .iter()
+            .map(|id| project::shell_word(id))
+            .collect::<Vec<_>>()
+            .join(" ");
+        notes.push(format!(
+            "parts.lock lists {}, and {folders} {} missing. run `{add} {ids}` to copy {} back",
+            holes.join(", "),
+            if holes.len() == 1 { "is" } else { "are" },
+            if holes.len() == 1 { "it" } else { "them" },
+        ));
+    }
+    Ok(with_notes(reply, notes))
+}
+
+/// The command a hint says to run again, and the folder `-C` named as the user wrote it, so a
+/// path in a hint names the same entry from the folder the user ran in.
+pub(super) struct Again {
+    command: String,
+    dir: Option<PathBuf>,
+}
+
+impl Again {
+    fn new(dir: Option<&Path>, command: String) -> Again {
+        let dir = dir.filter(|dir| !dir.as_os_str().is_empty()).map(|dir| {
+            match dir.as_os_str().as_encoded_bytes().first() {
+                Some(b'-') => Path::new(".").join(dir),
+                _ => dir.to_path_buf(),
+            }
+        });
+        Again { command, dir }
+    }
+
+    /// `rel`, a path from the project folder, as one shell word for the same path from the
+    /// current folder.
+    pub(super) fn path(&self, rel: impl AsRef<OsStr>) -> String {
+        let rel = Path::new(rel.as_ref());
+        let path = match &self.dir {
+            Some(dir) => dir.join(rel),
+            None => rel.to_path_buf(),
+        };
+        project::shell_path(path.as_os_str())
+    }
+}
+
+impl std::fmt::Display for Again {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.command)
+    }
+}
+
+/// An add that would move a folder or file aside, and below it is one orbe cannot read. Its
+/// bytes could change without its hash changing, so the add stops before it moves anything.
+fn unreadable(root: &Path, planned: &plan::AddPlan, again: &Again) -> Option<Refusal> {
+    planned
+        .write
+        .iter()
+        .filter(|write| write.replacing.is_some())
+        .find_map(|write| {
+            let dest = Path::new("parts").join(&write.id);
+            let path = txn::unreadable(&root.join(&dest))?;
+            let rel = path.strip_prefix(root).unwrap_or(&path);
+            let holder = if rel == dest { Path::new("parts") } else { &dest };
+            Some(Refusal {
+                code: "unreadable",
+                message: format!(
+                    "{} cannot be read, so orbe could not tell later that the copy it moves aside is unchanged. nothing was written",
+                    again.path(rel)
+                ),
+                hint: format!(
+                    "make {} readable or move it out of {}, then run `{again}` again",
+                    again.path(rel),
+                    again.path(holder)
+                ),
+            })
+        })
 }
 
 fn stop_error(stop: Stop) -> RunError {
@@ -228,7 +329,7 @@ fn stop_error(stop: Stop) -> RunError {
     }
 }
 
-fn busy(again: &str) -> Refusal {
+fn busy(again: &Again) -> Refusal {
     Refusal {
         code: "busy",
         message: "another `orbe add` is at work in this project, and holds its lock".into(),
@@ -237,20 +338,29 @@ fn busy(again: &str) -> Refusal {
 }
 
 /// `--diff` writes nothing, so an interrupted add stays for the next writing run.
-fn pending_note(root: &Path, add: &str) -> Vec<String> {
+fn pending_note(root: &Path, next: &str) -> Vec<String> {
     let what = match txn::pending(root) {
         Pending::None => return Vec::new(),
         Pending::Leftover(name) => {
             return vec![format!(
-                "an interrupted add left {name}. --diff leaves it, and the next `{add}` without --diff deletes it"
+                "an interrupted add left {name}. --diff leaves it, and the next `{next}` without --diff deletes it"
             )];
         }
-        Pending::Uncommitted => "rolls it back",
-        Pending::Committed => "finishes it",
-        Pending::Unclear => "says what it holds",
+        Pending::Uncommitted => "rolls it back".to_string(),
+        Pending::Committed => "finishes it".to_string(),
+        Pending::Clearing => "finishes deleting it".to_string(),
+        Pending::Fails(error) => format!("hits `{error}` and stops"),
+        Pending::Stops(steps) => {
+            let stops = "names what it cannot prove the add made, and stops";
+            if steps.is_empty() {
+                stops.to_string()
+            } else {
+                format!("{}, then {stops}", steps.join(", "))
+            }
+        }
     };
     vec![format!(
-        "an interrupted add is pending in parts/{}. --diff leaves it, and the next `{add}` without --diff {what}",
+        "an interrupted add is pending in parts/{}. --diff leaves it, and the next `{next}` without --diff {what}",
         txn::STAGE
     )]
 }
@@ -366,7 +476,10 @@ fn single_component(id: &str) -> bool {
 
 fn io_at(path: &Path, error: io::Error) -> RunError {
     RunError {
-        message: format!("cannot access {}: {error}", path.display()),
+        message: format!(
+            "cannot access {}: {error}",
+            project::shell_path(path.as_os_str())
+        ),
     }
 }
 

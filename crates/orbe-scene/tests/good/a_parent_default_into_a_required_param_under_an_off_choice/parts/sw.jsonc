@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "pins": { "a": [1], "b": [2] },
+  "params": {
+    "window": { "unit": "s", "required": true, "sets": "/bounce/window" },
+    "contacts": { "default": "real", "choices": { "real": { "sets": { "/initial": "open" } }, "ideal": { "sets": { "/bounce": null } } } },
+  },
+  "model": {
+    "kind": "switch",
+    "on_resistance": { "value": 0.1, "unit": "ohm", "source": "user" },
+    "off_resistance": { "value": 1e8, "unit": "ohm", "source": "user" },
+    "initial": "open",
+    "events": [],
+    "bounce": { "window": { "value": 0.002, "unit": "s", "source": "user" }, "max_bounces": 2 },
+  },
+}
