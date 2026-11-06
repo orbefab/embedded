@@ -9,7 +9,7 @@ use crate::project::{self, LockFields};
 
 use super::diff::diff_files;
 use super::snapshot::{Folder, Snapshot, Target};
-use super::{Refusal, Request};
+use super::{AddCode, Refusal, Request};
 
 const TESTS_MAY_CHANGE: &str = "tests may change";
 
@@ -117,7 +117,7 @@ pub(super) fn plan(catalog: &Catalog, snapshot: &Snapshot, request: &Request, ad
     }
     if let Some(message) = snapshot.lock_error.clone() {
         return Plan::Refuse(Refusal {
-            code: "lock_syntax",
+            code: AddCode::LockSyntax,
             message,
             hint: format!("run `{add} --relock`"),
         });
@@ -221,7 +221,7 @@ fn unknown_specs(catalog: &Catalog, specs: &[Spec]) -> Option<Plan> {
             .join(", ");
         let verb = if registry.len() == 1 { "is" } else { "are" };
         return Some(Plan::Refuse(Refusal {
-            code: "registry",
+            code: AddCode::Registry,
             message: format!(
                 "{listed} {verb} not in the official catalog. v1 reads only the official catalog"
             ),
@@ -245,14 +245,14 @@ fn unknown_specs(catalog: &Catalog, specs: &[Spec]) -> Option<Plan> {
             hints.join(" ")
         };
         return Some(Plan::Refuse(Refusal {
-            code: "unknown_part",
+            code: AddCode::UnknownPart,
             message: lines.join("\n"),
             hint,
         }));
     }
     if !versions.is_empty() {
         return Some(Plan::Refuse(Refusal {
-            code: "unknown_version",
+            code: AddCode::UnknownVersion,
             message: versions.join("\n"),
             hint: String::new(),
         }));
@@ -306,7 +306,7 @@ fn select(
         }
         let entry = catalog.get(&id, version).ok_or_else(|| {
             Plan::Refuse(Refusal {
-                code: "unknown_version",
+                code: AddCode::UnknownVersion,
                 message: format!("the catalog has no `{id}@{version}`"),
                 hint: String::new(),
             })
@@ -314,7 +314,7 @@ fn select(
         for (child, child_version) in &entry.uses {
             if catalog.get(child, *child_version).is_none() {
                 return Err(Plan::Refuse(Refusal {
-                    code: "unknown_version",
+                    code: AddCode::UnknownVersion,
                     message: format!(
                         "`{id}` uses `{child}@{child_version}`, and the catalog has no `{child}@{child_version}`"
                     ),
@@ -352,7 +352,7 @@ fn select(
     }
     if !clashes.is_empty() {
         return Err(Plan::Refuse(Refusal {
-            code: "part_conflict",
+            code: AddCode::PartConflict,
             message: clashes
                 .iter()
                 .map(|clash| clash.message.clone())
@@ -637,7 +637,7 @@ fn plan_add(
             .map(|(_, _, differ)| differ.line.as_str())
             .collect();
         return Plan::Refuse(Refusal {
-            code: "part_differs",
+            code: AddCode::PartDiffers,
             message: format!("nothing was written\n{}", lines.join("\n")),
             hint: format!("run `{}`", command_for(add, specs, &pins, true)),
         });
@@ -873,9 +873,9 @@ fn plan_relock(catalog: &Catalog, snapshot: &Snapshot, add: &str) -> Plan {
             .collect::<Vec<_>>()
             .join("\n");
         let code = if sealed.is_empty() {
-            "unknown_version"
+            AddCode::UnknownVersion
         } else {
-            "part_modified"
+            AddCode::PartModified
         };
         return Plan::Refuse(Refusal {
             code,

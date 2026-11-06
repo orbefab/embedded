@@ -143,7 +143,8 @@ mod tests {
 
     /// Splits a line as `sh` does: `'…'` keeps every character, and `"…"` and a bare `\`
     /// escape the next one. An unquoted `<`, `>`, `|`, `;`, `&`, `(`, `)`, `$` or backquote
-    /// is refused, since `sh` reads it as a redirect, an operator or an expansion.
+    /// is refused, since `sh` reads it as a redirect, an operator or an expansion, and so is a
+    /// word that starts with `#`, which `sh` reads as a comment.
     fn shell_words(line: &str) -> Result<Vec<String>, String> {
         let unclosed = || format!("an unclosed quote in `{line}`");
         let mut words = Vec::new();
@@ -184,6 +185,9 @@ mod tests {
                     return Err(format!(
                         "`sh` reads the unquoted `{c}` in `{line}` as a redirect, an operator or an expansion"
                     ));
+                }
+                '#' if word.is_none() => {
+                    return Err(format!("`sh` reads the `#` in `{line}` as a comment"));
                 }
                 c => word.get_or_insert_default().push(c),
             }
@@ -293,6 +297,7 @@ mod tests {
             "expect @led1.i > 5mA",
             "expect serial contains \"$(printf x)\"",
             "skills get core | less",
+            "expect serial contains #ready",
         ] {
             let caught = std::panic::catch_unwind(|| check_line(line));
             assert!(caught.is_err(), "`orbe {line}` passed");
@@ -341,6 +346,7 @@ mod tests {
 
     #[test]
     fn every_code_in_the_core_error_table_is_one_orbe_reports() {
+        use orbe_scene::AddCode as Add;
         use orbe_scene::Code as Scene;
         use orbe_session::Code as Live;
         let live = [
@@ -385,10 +391,36 @@ mod tests {
             Scene::PartModified,
             Scene::Io,
         ];
-        let known: Vec<String> = live
+        // The match stops the build when an `orbe add` code is added, until it is listed here.
+        let add = |code: Add| match code {
+            Add::Busy
+            | Add::Unreadable
+            | Add::NotAProject
+            | Add::LockSyntax
+            | Add::Registry
+            | Add::UnknownPart
+            | Add::UnknownVersion
+            | Add::PartConflict
+            | Add::PartDiffers
+            | Add::PartModified => code.as_str(),
+        };
+        let added = [
+            Add::Busy,
+            Add::Unreadable,
+            Add::NotAProject,
+            Add::LockSyntax,
+            Add::Registry,
+            Add::UnknownPart,
+            Add::UnknownVersion,
+            Add::PartConflict,
+            Add::PartDiffers,
+            Add::PartModified,
+        ];
+        let known: Vec<&str> = live
             .iter()
-            .map(|code| code.as_str().to_string())
-            .chain(scene.into_iter().map(|code| code.as_str().to_string()))
+            .map(|code| code.as_str())
+            .chain(scene.into_iter().map(|code| code.as_str()))
+            .chain(added.into_iter().map(add))
             .collect();
         let core = find("core").unwrap().text();
         let table: Vec<&str> = core
@@ -401,7 +433,7 @@ mod tests {
         for row in table {
             let codes = row.split('|').nth(1).unwrap();
             for code in codes.split('`').skip(1).step_by(2) {
-                assert!(known.iter().any(|k| k == code), "orbe reports no `{code}`");
+                assert!(known.contains(&code), "orbe reports no `{code}`");
             }
         }
     }

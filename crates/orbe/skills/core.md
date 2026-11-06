@@ -167,15 +167,48 @@ In a shell, quote `<` and `>`, or the shell takes them as redirects, as in `orbe
 - The session is paused between commands. Time moves only inside `step`.
 - `step <duration>` advances by that much and lists what changed, such as pin edges with their exact times, LED changes and diagnostics. It lists at most 20, then `and N more`, so serial edges on D1 can hide the rest. `get` and `snapshot` show the state after it. Durations take ps, ns, us, ms or s, such as `100ms`, `1.5ms`, `20us`.
 - A read at time t, by `get`, `expect` or `snapshot`, shows the circuit just before anything that happens at t. So `press` at t shows from t + 1 ps on, and its reply says "reads show it after t". Step after an input before you read its effect.
-- An input lands at the session's time or later, and its reply gives the time. Two inputs with no `step` between can land 1 ps apart. Both take effect.
+- An input lands at the session's time or later, and its reply gives the time.
 - `step --until <condition> [--timeout <duration>]` first reads the condition now. If it holds, it takes no time. Otherwise it steps until it holds, up to the timeout, 10s by default. A pin condition stops 1 ps after the exact edge. Other conditions are read every 1 ms, so the reply says `by 101ms`. A timeout is the error `until_timeout`.
-- A switch with `bounce` set, such as `"bounce": "2ms"`, bounces up to `max_bounces` times within that window after each `press` and `release`. An input on it lands after the bounces of the one before. `step --until @led1 on` stops at the first contact, and the contact can open again inside the window. To wait past the bounce, `step` the window, such as `step 3ms`, then `expect`.
 - Serial can reach orbe up to one engine step (10 ms) after the chip sends it. Step a little past a print before you expect it.
 - A session stops at 2 hours of simulated time. Reads still work there, and `press`, `release` and `step` fail with `ended`. A `step` that would pass the stop fails with `past_stop`. Run `orbe open` to start again.
 
+A switch with `bounce` set bounces up to `max_bounces` times within that window after each `press` and `release`, and an input on it lands after the window of the one before. With `btn1`'s line in the worked example's scene changed to
+
+```jsonc scene.jsonc
+    "btn1": { "type": "tactile-switch-6mm", "bounce": "2ms" },
+```
+
+a `release` and a `press` with no `step` between land 2 ms apart, and `step --until @led1 on` stops at the first contact, which opens again inside the window:
+
+```console
+$ orbe open
+...
+$ orbe step 100ms
+t=100ms (from 0s)
+$ orbe press @btn1
+pressed btn1 at t=100ms; reads show it after t=100ms
+$ orbe step --until @led1 on
+t=101ms (from 100ms), @led1 on by 101ms
+...
+$ orbe release @btn1
+released btn1 at t=102.000002ms; reads show it after t=102.000002ms
+$ orbe press @btn1
+pressed btn1 at t=104.000004ms; reads show it after t=104.000004ms
+$ orbe step 6ms
+t=107ms (from 101ms)
+  101.028757825ms nano.D2 low
+...
+$ orbe expect @led1 on
+passed @led1 on (led1 on, i=0.012246558123229083 A)
+$ orbe close
+closed at t=107ms
+```
+
+To read a bouncing switch settled, step past the time in the last input's reply plus the window. Here that is 104.000004ms + 2ms, so `step 6ms` from 101ms.
+
 ## Test files
 
-A test file is `tests/<name>.test` in the project folder. Each line is a live command without `orbe` and without `--json`, `--session` or `--help`, which are usage errors there. Live, `--help` anywhere prints help, so `orbe expect serial contains --help` prints help, while the same test line looks for that text. `#` starts a comment. `"..."` holds spaces, and inside it only `\"` and `\\` escape, so a test cannot name a line ending. To tell lines apart, print text that only one line has, such as `led=on`. Paths start from the project folder, and `open` alone opens `scene.jsonc`.
+A test file is `tests/<name>.test` in the project folder. Each line is a live command without `orbe`. `--json`, `--session`, `--help` or `-h` on a line is a usage error, except as the text after `serial contains`. Live, `--help` anywhere prints help, so `orbe expect serial contains --help` prints help, while the same test line looks for that text. `#` starts a comment. `"..."` holds spaces, and inside it only `\"` and `\\` escape, so a test cannot name a line ending. To tell lines apart, print text that only one line has, such as `led=on`. Paths start from the project folder, and `open` alone opens `scene.jsonc`.
 
 `orbe test` runs every `tests/*.test` of the project in the current folder, each in a fresh session, and stops a file at its first failed line. `orbe test <file or folder>…` runs those. `-v` prints every command with its reply. A failure prints the line, the expected and the actual value:
 
@@ -210,6 +243,8 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 | --- | --- |
 | `usage` | The command line is wrong. The message says how. |
 | `part_missing` | Run the `orbe add` command in the hint. |
+| `unknown_part` | `orbe add` knows no part by that id. Pick one from the parts list above. |
+| `busy` | Another `orbe add` is at work in this project. Wait for it, then run yours again. |
 | `firmware_missing` | Build the firmware, or fix the path. It starts from the scene's folder. |
 | `not_simulated` | A wire reaches a pin the engine does not simulate, or a part marked `not_simulated`. Wire another pin, or remove the wire. |
 | `scene.unknown_pin`, `scene.param`, `scene.syntax` | A typo or a wrong value at that line and column. The hint names what is valid. |

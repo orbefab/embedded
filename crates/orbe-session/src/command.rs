@@ -50,6 +50,7 @@ pub const COMMANDS: &[Spec] = &[
         about: "Checks the scene and opens it at t = 0, paused. The scene is scene.jsonc by default.",
         parse: |args, root| match args {
             [] => Ok(Command::Open(root.join("scene.jsonc"))),
+            [flag] if flag.starts_with('-') => Err(format!("`{flag}` is a flag, not a scene")),
             [scene] => Ok(Command::Open(root.join(scene))),
             _ => Err("takes at most one scene".into()),
         },

@@ -73,9 +73,41 @@ pub struct RelockReply {
 }
 
 pub struct Refusal {
-    pub code: &'static str,
+    pub code: AddCode,
     pub message: String,
     pub hint: String,
+}
+
+/// Each code a refused `orbe add` reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddCode {
+    Busy,
+    Unreadable,
+    NotAProject,
+    LockSyntax,
+    Registry,
+    UnknownPart,
+    UnknownVersion,
+    PartConflict,
+    PartDiffers,
+    PartModified,
+}
+
+impl AddCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AddCode::Busy => "busy",
+            AddCode::Unreadable => "unreadable",
+            AddCode::NotAProject => "not_a_project",
+            AddCode::LockSyntax => "lock_syntax",
+            AddCode::Registry => "registry",
+            AddCode::UnknownPart => "unknown_part",
+            AddCode::UnknownVersion => "unknown_version",
+            AddCode::PartConflict => "part_conflict",
+            AddCode::PartDiffers => "part_differs",
+            AddCode::PartModified => "part_modified",
+        }
+    }
 }
 
 /// A project file could not be read or written. The message says what was rolled back. The
@@ -306,7 +338,7 @@ fn unreadable(root: &Path, planned: &plan::AddPlan, again: &Again) -> Option<Ref
             let rel = path.strip_prefix(root).unwrap_or(&path);
             let holder = if rel == dest { Path::new("parts") } else { &dest };
             Some(Refusal {
-                code: "unreadable",
+                code: AddCode::Unreadable,
                 message: format!(
                     "{} cannot be read, so orbe could not tell later that the copy it moves aside is unchanged. nothing was written",
                     again.path(rel)
@@ -331,7 +363,7 @@ fn stop_error(stop: Stop) -> RunError {
 
 fn busy(again: &Again) -> Refusal {
     Refusal {
-        code: "busy",
+        code: AddCode::Busy,
         message: "another `orbe add` is at work in this project, and holds its lock".into(),
         hint: format!("wait for it to finish, then run `{again}`"),
     }
@@ -371,7 +403,7 @@ fn pending_note(root: &Path, next: &str) -> Vec<String> {
 fn not_a_project(dir: Option<&Path>, request: &Request) -> Option<Refusal> {
     if let Some(dir) = dir {
         return (!dir.is_dir()).then(|| Refusal {
-            code: "not_a_project",
+            code: AddCode::NotAProject,
             message: format!("`{}` is not a folder", dir.display()),
             hint: String::new(),
         });
@@ -388,7 +420,7 @@ fn not_a_project(dir: Option<&Path>, request: &Request) -> Option<Refusal> {
         None => "run it in the project's folder, the one with scene.jsonc, or name that folder with `orbe add -C <folder>`".into(),
     };
     Some(Refusal {
-        code: "not_a_project",
+        code: AddCode::NotAProject,
         message:
             "the current folder is not an orbe project. it has no scene.jsonc and no parts.lock"
                 .into(),
@@ -555,7 +587,7 @@ fn relock_text(reply: &RelockReply) -> String {
 fn refuse_text(refusal: &Refusal) -> String {
     let mut lines = refusal.message.lines();
     let first = lines.next().unwrap_or("");
-    let mut text = format!("error[{}]: {first}", refusal.code);
+    let mut text = format!("error[{}]: {first}", refusal.code.as_str());
     for line in lines {
         text.push('\n');
         text.push_str(line);
@@ -571,12 +603,12 @@ fn refuse_json(refusal: &Refusal) -> Value {
     if refusal.hint.is_empty() {
         json!({
             "ok": false,
-            "error": { "code": refusal.code, "message": refusal.message }
+            "error": { "code": refusal.code.as_str(), "message": refusal.message }
         })
     } else {
         json!({
             "ok": false,
-            "error": { "code": refusal.code, "message": refusal.message, "hint": refusal.hint }
+            "error": { "code": refusal.code.as_str(), "message": refusal.message, "hint": refusal.hint }
         })
     }
 }

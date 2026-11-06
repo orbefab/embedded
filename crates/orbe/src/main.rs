@@ -232,7 +232,8 @@ fn main() -> ExitCode {
 }
 
 /// A flag before the command name, as in `orbe --session x open`, is refused with the line
-/// that puts it after. Only `--help` and `--version` go first.
+/// that puts it after, minus any flag the command does not take. Only `--help` and
+/// `--version` go first.
 fn flag_before_command(args: &[OsString]) -> Option<ExitCode> {
     let words: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
     let first = words.first()?;
@@ -240,16 +241,48 @@ fn flag_before_command(args: &[OsString]) -> Option<ExitCode> {
         return None;
     }
     let commands = cli();
-    let at = words
+    let mut flags: Vec<(&str, &[&str])> = Vec::new();
+    let mut at = 0;
+    while let Some(word) = words.get(at).filter(|w| w.starts_with('-')) {
+        let name = word.split_once('=').map_or(*word, |(name, _)| name);
+        let valued = !word.contains('=')
+            && commands
+                .get_subcommands()
+                .flat_map(clap::Command::get_arguments)
+                .any(|arg| names(arg, name) && arg.get_action().takes_values());
+        let end = (at + 1 + usize::from(valued)).min(words.len());
+        flags.push((name, &words[at..end]));
+        at = end;
+    }
+    let mut command = commands.find_subcommand(words.get(at)?)?;
+    let mut end = at + 1;
+    while let Some(sub) = words.get(end).and_then(|w| command.find_subcommand(w)) {
+        command = sub;
+        end += 1;
+    }
+    let (taken, foreign): (Vec<_>, Vec<_>) = flags
         .iter()
-        .position(|w| orbe_session::spec(w).is_some() || commands.find_subcommand(w).is_some())?;
-    let flags = words[..at].join(" ");
-    let after = words[at..].iter().chain(&words[..at]).copied();
-    let message = format!("`{flags}` is before the command name");
-    let hint = format!(
-        "put it after the command name, as `orbe {}`",
-        after.collect::<Vec<_>>().join(" ")
-    );
+        .partition(|(name, _)| command.get_arguments().any(|arg| names(arg, name)));
+    let line: Vec<&str> = words[at..]
+        .iter()
+        .copied()
+        .chain(taken.iter().flat_map(|(_, words)| words.iter().copied()))
+        .collect();
+    let line = format!("`orbe {}`", line.join(" "));
+    let message = format!("`{}` is before the command name", words[..at].join(" "));
+    let hint = if foreign.is_empty() {
+        format!("put it after the command name, as {line}")
+    } else {
+        let foreign: Vec<String> = foreign
+            .iter()
+            .map(|(name, _)| format!("`{name}`"))
+            .collect();
+        format!(
+            "`orbe {}` takes no {}, so run {line}",
+            words[at..end].join(" "),
+            foreign.join(" or ")
+        )
+    };
     if words.contains(&"--json") {
         print_json(&json!({
             "ok": false,
@@ -259,6 +292,16 @@ fn flag_before_command(args: &[OsString]) -> Option<ExitCode> {
         eprintln!("error[usage]: {message}\n  hint: {hint}");
     }
     Some(ExitCode::from(USAGE))
+}
+
+fn names(arg: &Arg, flag: &str) -> bool {
+    match flag.strip_prefix("--") {
+        Some(long) => arg.get_long() == Some(long),
+        None => {
+            let mut short = flag.chars().skip(1);
+            short.next().is_some_and(|c| arg.get_short() == Some(c)) && short.next().is_none()
+        }
+    }
 }
 
 /// A usage error with `--json` is one envelope on stdout. Help and version stay clap's.

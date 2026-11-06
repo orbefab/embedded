@@ -72,36 +72,30 @@ fn shell(runtime: &Runtime, dir: &Path, line: &str) -> Run {
     Run::new(output)
 }
 
-#[test]
-fn the_core_worked_example_runs_from_an_empty_folder_as_shown() {
-    let text = skill("core");
-    let project = tempfile::tempdir().unwrap();
-    let dir = project.path();
-    let mut files = 0;
-    let mut transcript = None;
-    for (info, body) in blocks(&text) {
-        match info.split_once(' ') {
-            Some((_, file)) => {
-                let path = dir.join(file);
-                fs::create_dir_all(path.parent().unwrap()).unwrap();
-                fs::write(path, body).unwrap();
-                files += 1;
-            }
-            None if info == "console" => {
-                assert!(transcript.is_none(), "core shows one session");
-                transcript = Some(body);
-            }
-            None => {}
-        }
+/// Writes a block's file. A block for a file already written shows only its changed lines,
+/// each found by the key before its `:`.
+fn write_block(dir: &Path, file: &str, body: &str) {
+    let path = dir.join(file);
+    let Ok(mut text) = fs::read_to_string(&path) else {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, body).unwrap();
+        return;
+    };
+    for line in body.lines() {
+        let key = line.split(':').next().unwrap();
+        let old: Vec<String> = text
+            .lines()
+            .filter(|l| l.split(':').next() == Some(key))
+            .map(str::to_string)
+            .collect();
+        assert_eq!(old.len(), 1, "{file} has one `{key}` line to change");
+        text = text.replace(&old[0], line);
     }
-    assert_eq!(files, 2, "the scene and the test file");
-    let scene = fs::read_to_string(dir.join("scene.jsonc")).unwrap();
-    assert!(scene.contains("\"firmware\": \"build/button.ino.hex\""));
-    fs::create_dir_all(dir.join("build")).unwrap();
-    fs::copy(common::firmware(), dir.join("build/button.ino.hex")).unwrap();
+    fs::write(path, text).unwrap();
+}
 
-    let runtime = Runtime::new();
-    let transcript = transcript.expect("core shows a session");
+/// Runs each `$ ` line of a `console` block and compares what it prints with the lines shown.
+fn run_shown(runtime: &Runtime, dir: &Path, transcript: &str) {
     let mut steps: Vec<(&str, Vec<&str>)> = Vec::new();
     for line in transcript.lines() {
         match line.strip_prefix("$ ") {
@@ -109,10 +103,9 @@ fn the_core_worked_example_runs_from_an_empty_folder_as_shown() {
             None => steps.last_mut().expect("a command first").1.push(line),
         }
     }
-    assert!(steps.len() >= 10, "{} commands", steps.len());
     for (command, shown) in &steps {
         assert!(command.starts_with("orbe "), "{command}");
-        let run = shell(&runtime, dir, command);
+        let run = shell(runtime, dir, command);
         let printed = format!("{}{}", run.stdout, run.stderr);
         let actual: Vec<&str> = printed.lines().collect();
         assert!(
@@ -122,10 +115,63 @@ fn the_core_worked_example_runs_from_an_empty_folder_as_shown() {
             shown.join("\n")
         );
     }
-    assert_eq!(steps.last().unwrap().0, "orbe test");
+}
+
+/// The core skill's worked example, with its parts copied from the first target.
+fn worked_example() -> tempfile::TempDir {
+    let project = tempfile::tempdir().unwrap();
+    let dir = project.path();
+    let first = common::repo().join("examples/first-target");
+    common::copy_dir(&first.join("parts"), &dir.join("parts"));
+    fs::copy(first.join("parts.lock"), dir.join("parts.lock")).unwrap();
+    let (_, scene) = blocks(&skill("core"))
+        .into_iter()
+        .find(|(info, _)| info == "jsonc scene.jsonc")
+        .unwrap();
+    fs::write(dir.join("scene.jsonc"), scene).unwrap();
+    fs::create_dir_all(dir.join("build")).unwrap();
+    fs::copy(common::firmware(), dir.join("build/button.ino.hex")).unwrap();
+    fs::create_dir(dir.join("tests")).unwrap();
+    project
+}
+
+fn says(skill: &str, sentence: &str) {
+    assert!(
+        skill.contains(sentence),
+        "the skill does not say: {sentence}"
+    );
+}
+
+/// Every block of the core skill, in order, in one folder: each file block is written and
+/// each `console` block runs as shown.
+#[test]
+fn the_core_examples_run_from_an_empty_folder_as_shown() {
+    let text = skill("core");
+    let project = tempfile::tempdir().unwrap();
+    let dir = project.path();
+    fs::create_dir_all(dir.join("build")).unwrap();
+    fs::copy(common::firmware(), dir.join("build/button.ino.hex")).unwrap();
+    let runtime = Runtime::new();
+    let mut sessions = Vec::new();
+    for (info, body) in blocks(&text) {
+        match info.split_once(' ') {
+            Some((_, file)) => write_block(dir, file, &body),
+            None if info == "console" => {
+                run_shown(&runtime, dir, &body);
+                sessions.push(body);
+            }
+            None => {}
+        }
+    }
+    assert!(sessions.len() >= 2, "{} sessions", sessions.len());
+    assert!(
+        sessions[0].matches("$ orbe ").count() >= 10,
+        "the worked example"
+    );
+    assert!(sessions[0].contains("\n$ orbe test\n"));
     assert!(
         runtime.daemons().is_empty(),
-        "the example closes its session"
+        "each example closes its session"
     );
 }
 
@@ -380,7 +426,10 @@ fn the_arduino_compile_command_writes_the_firmware_the_scene_names() {
     assert_eq!(listed, written);
 
     let core = skill("core");
-    for (info, body) in blocks(&core) {
+    for (info, body) in blocks(&core)
+        .into_iter()
+        .take_while(|(info, _)| info != "console")
+    {
         if let Some((_, file)) = info.split_once(' ') {
             fs::create_dir_all(dir.join(file).parent().unwrap()).unwrap();
             fs::write(dir.join(file), body).unwrap();
@@ -422,4 +471,233 @@ fn the_arduino_compile_command_writes_the_firmware_the_scene_names() {
         dir.join("build/other.ino.hex").is_file(),
         "the hex follows the sketch folder"
     );
+}
+
+#[test]
+fn a_flag_on_a_test_line_is_a_usage_error_except_as_serial_text() {
+    let project = worked_example();
+    let dir = project.path();
+    let lines = [
+        "open",
+        "close",
+        "press @btn1",
+        "release @btn1",
+        "get @led1",
+        "step 10ms",
+        "step --until @led1 on",
+        "snapshot",
+        "expect @led1 off",
+    ];
+    let mut files = 0;
+    for line in lines {
+        let name = line.split(' ').next().unwrap();
+        for flag in ["--json", "--session x", "--help", "-h"] {
+            for written in [format!("{name} {flag}"), format!("{line} {flag}")] {
+                files += 1;
+                let opened = if name == "open" { "" } else { "open\n" };
+                fs::write(
+                    dir.join(format!("tests/f{files}.test")),
+                    format!("{opened}{written}\n"),
+                )
+                .unwrap();
+            }
+        }
+    }
+    let runtime = Runtime::new();
+    let run = runtime.orbe(dir, &["test"]);
+    assert_eq!(run.code, 2);
+    let failed: Vec<&str> = run
+        .stdout
+        .lines()
+        .filter(|l| l.starts_with("FAIL "))
+        .collect();
+    assert_eq!(failed.len(), files, "{}", run.stdout);
+    let usage = run.stdout.matches("\n  error[usage]: ").count();
+    assert_eq!(usage, files, "{}", run.stdout);
+
+    fs::remove_dir_all(dir.join("tests")).unwrap();
+    fs::create_dir(dir.join("tests")).unwrap();
+    fs::write(
+        dir.join("tests/text.test"),
+        "open\nexpect serial contains --help\n",
+    )
+    .unwrap();
+    let run = runtime.orbe(dir, &["test"]);
+    assert!(
+        run.stdout
+            .contains("error[expect_failed]: expected serial contains \"--help\""),
+        "{}",
+        run.stdout
+    );
+    let live = runtime
+        .orbe(dir, &["expect", "serial", "contains", "--help"])
+        .ok();
+    assert!(live.stdout.contains("Usage: orbe expect"));
+    fs::write(
+        dir.join("tests/text.test"),
+        "open\nexpect serial contains \"a\\nb\"\n",
+    )
+    .unwrap();
+    let run = runtime.orbe(dir, &["test"]);
+    assert_eq!(run.code, 2);
+    assert!(
+        run.stdout
+            .contains("error[usage]: only `\\\"` and `\\\\` escape inside quotes"),
+        "{}",
+        run.stdout
+    );
+
+    let core = skill("core");
+    says(
+        &core,
+        "Each line is a live command without `orbe`. `--json`, `--session`, `--help` or `-h` on a line is a usage error, except as the text after `serial contains`. Live, `--help` anywhere prints help, so `orbe expect serial contains --help` prints help, while the same test line looks for that text.",
+    );
+    says(
+        &core,
+        "`\"...\"` holds spaces, and inside it only `\\\"` and `\\\\` escape, so a test cannot name a line ending.",
+    );
+}
+
+#[test]
+fn the_session_name_rule_core_states_is_the_one_orbe_follows() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path().join("repo");
+    let project = repo.join("proj");
+    let plain = root.path().join("plain");
+    for dir in [
+        repo.join(".git"),
+        repo.join("notes"),
+        project.join("tests"),
+        project.join("build"),
+        plain.clone(),
+    ] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    fs::write(project.join("scene.jsonc"), "{}").unwrap();
+    let runtime = Runtime::new();
+    let name = |dir: &Path| {
+        let json = runtime.orbe(dir, &["snapshot", "--json"]).json();
+        assert_eq!(json["error"]["code"], "no_session");
+        json["session"].as_str().unwrap().to_string()
+    };
+    let stem = |name: &str| name.rsplit_once('-').unwrap().0.to_string();
+    assert_eq!(stem(&name(&project)), "proj");
+    assert_eq!(name(&project.join("tests")), name(&project));
+    assert_eq!(name(&project.join("build")), name(&project));
+    assert_eq!(stem(&name(&repo.join("notes"))), "repo");
+    assert_eq!(stem(&name(&plain)), "plain");
+    says(
+        &skill("core"),
+        "By default it comes from the project folder, the nearest one up with `scene.jsonc` or `parts.lock`, so each project gets its own, and its `tests/` folder shares it. Outside a project it comes from the git repository's root folder, else the current folder.",
+    );
+}
+
+#[test]
+fn the_check_findings_core_states_are_the_ones_orbe_reports() {
+    let project = worked_example();
+    let dir = project.path();
+    let runtime = Runtime::new();
+    let core = skill("core");
+
+    fs::rename(dir.join("parts.lock"), dir.join("parts.lock.kept")).unwrap();
+    let json = runtime
+        .orbe(dir, &["check", "scene.jsonc", "--json"])
+        .json();
+    let found = &json["data"]["diagnostics"][0];
+    assert_eq!(found["code"], "part_missing", "{json}");
+    assert!(
+        found["hint"]
+            .as_str()
+            .unwrap()
+            .starts_with("run `orbe add ")
+    );
+    says(
+        &core,
+        &format!(
+            "A failed `orbe check scene.jsonc --json` is `{}`, with each finding, its code and hint in `data.diagnostics`.",
+            json["error"]["code"].as_str().unwrap()
+        ),
+    );
+    fs::rename(dir.join("parts.lock.kept"), dir.join("parts.lock")).unwrap();
+
+    let scene = fs::read_to_string(dir.join("scene.jsonc")).unwrap();
+    let drawn = scene.replace(
+        "\"resistance\": \"10k\" }",
+        "\"resistance\": \"10k\", \"not_simulated\": \"drawn only\" }",
+    );
+    assert_ne!(drawn, scene);
+    fs::write(dir.join("scene.jsonc"), &drawn).unwrap();
+    let run = runtime.orbe(dir, &["check", "scene.jsonc"]);
+    assert!(
+        run.stdout
+            .contains("error[not_simulated]: r2.a: drawn only"),
+        "{}",
+        run.stdout
+    );
+    says(
+        &core,
+        "Nothing may be wired to it. A wire to one of its pins is a `not_simulated` error that gives `<why>`.",
+    );
+    fs::write(dir.join("scene.jsonc"), &scene).unwrap();
+
+    for (id, code) in [("led-5mm", 1), ("nano-board", 0)] {
+        let file = dir.join("parts").join(id).join("part.jsonc");
+        let text = fs::read_to_string(&file).unwrap();
+        fs::write(&file, format!("{text}\n")).unwrap();
+        let run = runtime.orbe(dir, &["check", "scene.jsonc"]);
+        assert_eq!(run.code, code, "{id}: {}", run.stdout);
+        let shown = if code == 1 {
+            "error[part_modified]"
+        } else {
+            "note: `nano-board` differs from its parts.lock line"
+        };
+        assert!(run.stdout.contains(shown), "{id}: {}", run.stdout);
+        fs::write(&file, text).unwrap();
+    }
+    says(
+        &core,
+        "A copy that differs, even in spacing, is a `part_modified` error. A board built from other parts, such as `nano-board`, is the exception. An edit to it checks, with a note.",
+    );
+}
+
+/// A flag before the command name gets a hint whose line runs: a flag's value is never taken
+/// for the command, and a flag the command does not take is named and left out.
+#[test]
+fn a_flag_before_the_command_gets_a_hint_whose_line_runs() {
+    let project = worked_example();
+    let dir = project.path();
+    fs::create_dir(dir.join("check")).unwrap();
+    let runtime = Runtime::new();
+    for (flags, command, hint) in [
+        (
+            "--session test",
+            "open",
+            "put it after the command name, as `orbe open --session test`",
+        ),
+        (
+            "--session x",
+            "check scene.jsonc",
+            "`orbe check` takes no `--session`, so run `orbe check scene.jsonc`",
+        ),
+        (
+            "-C check",
+            "add led-5mm",
+            "put it after the command name, as `orbe add led-5mm -C check`",
+        ),
+    ] {
+        let written = format!("{flags} {command}");
+        let words: Vec<&str> = written.split(' ').collect();
+        let run = runtime.orbe(dir, &words);
+        assert_eq!(run.code, 2, "orbe {written}");
+        assert_eq!(
+            run.stderr,
+            format!("error[usage]: `{flags}` is before the command name\n  hint: {hint}\n"),
+            "orbe {written}"
+        );
+        let line = hint.rsplit('`').nth(1).unwrap();
+        let words: Vec<&str> = line.split(' ').skip(1).collect();
+        let run = runtime.orbe(dir, &words);
+        assert_eq!(run.code, 0, "`{line}`: {}{}", run.stdout, run.stderr);
+    }
+    runtime.orbe(dir, &["close", "--session", "test"]).ok();
 }
