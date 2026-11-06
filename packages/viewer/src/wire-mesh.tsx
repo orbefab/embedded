@@ -1,3 +1,4 @@
+// Adapted from maker-sandbox (MIT, Copyright 2026 Alwurts).
 import { useEffect, useMemo } from "react";
 import { BoxGeometry, CatmullRomCurve3, MeshStandardMaterial, Quaternion, TubeGeometry, Vector3 } from "three";
 import type { DrawnWire } from "./build";

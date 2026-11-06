@@ -1,3 +1,4 @@
+// Adapted from maker-sandbox (MIT, Copyright 2026 Alwurts).
 // A wire's path, worked out from its two ends and the part boxes and never stored. In the
 // viewer's world: mm, +Y up.
 

@@ -1,3 +1,4 @@
+// Adapted from maker-sandbox (MIT, Copyright 2026 Alwurts).
 // Where the cameras sit to frame a box, in the viewer's world: mm, +Y up.
 
 import type { Vec3 } from "./protocol";
