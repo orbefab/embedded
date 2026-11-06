@@ -63,13 +63,13 @@ pub const COMMANDS: &[Spec] = &[
     Spec {
         name: "press",
         usage: "press <ref>",
-        about: "Closes a switch now.",
+        about: "Closes a switch, named by its part, such as @btn1.",
         parse: |args, _| one_ref(args).map(Command::Press),
     },
     Spec {
         name: "release",
         usage: "release <ref>",
-        about: "Opens a switch now.",
+        about: "Opens a switch, named by its part, such as @btn1.",
         parse: |args, _| one_ref(args).map(Command::Release),
     },
     Spec {

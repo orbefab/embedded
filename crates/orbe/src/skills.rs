@@ -141,33 +141,92 @@ mod tests {
         lines
     }
 
-    /// Splits a shell line at spaces, keeping `'…'` and `"…"` whole.
-    fn shell_words(line: &str) -> Vec<String> {
+    /// Splits a line as `sh` does: `'…'` keeps every character, and `"…"` and a bare `\`
+    /// escape the next one. An unquoted `<`, `>`, `|`, `;`, `&`, `(`, `)`, `$` or backquote
+    /// is refused, since `sh` reads it as a redirect, an operator or an expansion.
+    fn shell_words(line: &str) -> Result<Vec<String>, String> {
+        let unclosed = || format!("an unclosed quote in `{line}`");
         let mut words = Vec::new();
         let mut word: Option<String> = None;
-        let mut quote = None;
-        for c in line.chars() {
-            match (quote, c) {
-                (None, '\'' | '"') => {
-                    quote = Some(c);
-                    word.get_or_insert_default();
+        let mut chars = line.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                ' ' | '\t' => words.extend(word.take()),
+                '\'' => {
+                    let word = word.get_or_insert_default();
+                    loop {
+                        match chars.next().ok_or_else(unclosed)? {
+                            '\'' => break,
+                            c => word.push(c),
+                        }
+                    }
                 }
-                (Some(q), _) if c == q => quote = None,
-                (None, ' ') => words.extend(word.take()),
-                _ => word.get_or_insert_default().push(c),
+                '"' => {
+                    let word = word.get_or_insert_default();
+                    loop {
+                        match chars.next().ok_or_else(unclosed)? {
+                            '"' => break,
+                            '\\' => match chars.next().ok_or_else(unclosed)? {
+                                c @ ('"' | '\\' | '$' | '`') => word.push(c),
+                                c => word.extend(['\\', c]),
+                            },
+                            c @ ('$' | '`') => {
+                                return Err(format!("`sh` expands the `{c}` in `{line}`"));
+                            }
+                            c => word.push(c),
+                        }
+                    }
+                }
+                '\\' => word
+                    .get_or_insert_default()
+                    .push(chars.next().ok_or_else(unclosed)?),
+                '<' | '>' | '|' | ';' | '&' | '(' | ')' | '$' | '`' => {
+                    return Err(format!(
+                        "`sh` reads the unquoted `{c}` in `{line}` as a redirect, an operator or an expansion"
+                    ));
+                }
+                c => word.get_or_insert_default().push(c),
             }
         }
-        assert!(quote.is_none(), "an unclosed quote in `{line}`");
         words.extend(word);
-        words
+        Ok(words)
+    }
+
+    /// A usage form, such as `add <id>…` or `step --until <condition>`, names a placeholder.
+    fn is_usage(line: &str) -> bool {
+        line.contains('…')
+            || line.split('<').skip(1).any(|rest| {
+                rest.split_once('>').is_some_and(|(name, _)| {
+                    name.starts_with(|c: char| c.is_ascii_lowercase())
+                        && name
+                            .chars()
+                            .all(|c| c.is_ascii_lowercase() || " -_".contains(c))
+                })
+            })
     }
 
     fn check_line(line: &str) {
-        let words = shell_words(line);
-        let usage = line.contains('<') || line.contains('…') || words.len() == 1;
-        if words[0].starts_with('<') {
+        if is_usage(line) {
+            let words: Vec<&str> = line.split(' ').collect();
+            let name = words[0];
+            assert!(
+                name.starts_with('<')
+                    || orbe_session::spec(name).is_some()
+                    || cli().find_subcommand(name).is_some(),
+                "`orbe {line}` names no command"
+            );
+            if let Some(known) = cli().find_subcommand(name)
+                && let Some(sub) = words.get(1).filter(|w| !w.starts_with(['<', '-', '[']))
+            {
+                assert!(
+                    known.has_subcommands() == known.find_subcommand(sub).is_some(),
+                    "`orbe {line}` names no command"
+                );
+            }
             return;
         }
+        let words = shell_words(line).unwrap_or_else(|error| panic!("{error}"));
+        let usage = words.len() == 1;
         if let Some(spec) = orbe_session::spec(&words[0]) {
             if usage {
                 return;
@@ -189,17 +248,11 @@ mod tests {
             }
             return;
         }
-        let commands = cli();
-        let known = commands
-            .find_subcommand(&words[0])
-            .unwrap_or_else(|| panic!("`orbe {line}` names no command"));
+        assert!(
+            cli().find_subcommand(&words[0]).is_some(),
+            "`orbe {line}` names no command"
+        );
         if usage {
-            if let Some(sub) = words.get(1).filter(|w| !w.starts_with(['<', '-'])) {
-                assert!(
-                    known.has_subcommands() == known.find_subcommand(sub).is_some(),
-                    "`orbe {line}` names no command"
-                );
-            }
             return;
         }
         let all = std::iter::once("orbe").chain(words.iter().map(String::as_str));
@@ -237,9 +290,119 @@ mod tests {
             "get led1",
             "skills get nope",
             "add --frob",
+            "expect @led1.i > 5mA",
+            "expect serial contains \"$(printf x)\"",
+            "skills get core | less",
         ] {
             let caught = std::panic::catch_unwind(|| check_line(line));
             assert!(caught.is_err(), "`orbe {line}` passed");
+        }
+    }
+
+    const HOUR_PS: u64 = 3_600_000_000_000_000;
+
+    #[test]
+    fn the_limits_the_core_skill_states_are_this_binary_s() {
+        let core = find("core").unwrap().text();
+        let says = |text: String| assert!(core.contains(&text), "core does not say `{text}`");
+        says(format!("It lists at most {},", orbe_session::CHANGES));
+        says(format!(
+            "`snapshot` shows the last {} lines",
+            orbe_session::SERIAL_LINES
+        ));
+        assert_eq!(orbe_scene::STOP_PS % HOUR_PS, 0);
+        says(format!(
+            "A session stops at {} hours of simulated time",
+            orbe_scene::STOP_PS / HOUR_PS
+        ));
+        says(format!(
+            "up to the timeout, {} by default",
+            orbe_session::UNTIL_TIMEOUT
+        ));
+    }
+
+    #[test]
+    fn the_json_states_the_core_skill_lists_are_every_state() {
+        use orbe_session::State;
+        // The match stops the build when a state is added, until it is listed here.
+        let named = |state: State| match state {
+            State::Paused | State::Stopped | State::Faulted | State::Closed => {
+                format!("`{}`", state.as_str())
+            }
+        };
+        let states = [State::Paused, State::Stopped, State::Faulted, State::Closed].map(named);
+        let listed = format!(
+            "{}, {}, {} or {}",
+            states[0], states[1], states[2], states[3]
+        );
+        let core = find("core").unwrap().text();
+        assert!(core.contains(&listed), "core does not list {listed}");
+    }
+
+    #[test]
+    fn every_code_in_the_core_error_table_is_one_orbe_reports() {
+        use orbe_scene::Code as Scene;
+        use orbe_session::Code as Live;
+        let live = [
+            Live::Usage,
+            Live::IoError,
+            Live::NoSession,
+            Live::SceneInvalid,
+            Live::PartMissing,
+            Live::FirmwareMissing,
+            Live::UnknownRef,
+            Live::NoReading,
+            Live::ExpectFailed,
+            Live::UntilTimeout,
+            Live::Faulted,
+            Live::Ended,
+            Live::NotSettable,
+            Live::WrongSetting,
+            Live::Value,
+            Live::PastStop,
+            Live::NoChange,
+            Live::Cancelled,
+            Live::SessionCrashed,
+        ];
+        let scene = [
+            Scene::Syntax,
+            Scene::Format,
+            Scene::Name,
+            Scene::Duplicate,
+            Scene::Type,
+            Scene::Role,
+            Scene::UnknownRef,
+            Scene::UnknownPin,
+            Scene::Param,
+            Scene::Layout,
+            Scene::Wires,
+            Scene::NotSimulated,
+            Scene::Ground,
+            Scene::Cycle,
+            Scene::NameTooLong,
+            Scene::PartMissing,
+            Scene::FirmwareMissing,
+            Scene::PartModified,
+            Scene::Io,
+        ];
+        let known: Vec<String> = live
+            .iter()
+            .map(|code| code.as_str().to_string())
+            .chain(scene.into_iter().map(|code| code.as_str().to_string()))
+            .collect();
+        let core = find("core").unwrap().text();
+        let table: Vec<&str> = core
+            .lines()
+            .skip_while(|l| !l.starts_with("| Code |"))
+            .skip(2)
+            .take_while(|l| l.starts_with('|'))
+            .collect();
+        assert!(table.len() > 10, "{} rows", table.len());
+        for row in table {
+            let codes = row.split('|').nth(1).unwrap();
+            for code in codes.split('`').skip(1).step_by(2) {
+                assert!(known.iter().any(|k| k == code), "orbe reports no `{code}`");
+            }
         }
     }
 

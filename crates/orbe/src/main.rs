@@ -7,6 +7,7 @@
 mod live;
 mod skills;
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -117,6 +118,8 @@ fn cli() -> clap::Command {
 
 const LIVE_HELP: &str = "Refs: @btn1, @nano.D13, @led1.i. Conditions: @led1 on, @nano.D13 high, @led1.i '>' 5mA, serial contains \"text\", no diagnostics. Durations: 100ms, 1.5ms, 20us. `orbe skills get core` explains each.";
 
+const SWITCH_HELP: &str = "The input lands at the session's time t, and reads show it after t. On a switch with `bounce`, an input inside the bounce window of the one before lands after that window. The reply gives the time.";
+
 fn live_help(spec: &orbe_session::Spec) -> clap::Command {
     let usage: Vec<String> = spec
         .usage
@@ -138,7 +141,9 @@ fn live_help(spec: &orbe_session::Spec) -> clap::Command {
                 .action(ArgAction::SetTrue)
                 .help("Print one JSON envelope instead of text"),
         );
-    if ["<ref>", "<condition>", "<duration>"]
+    if ["press", "release"].contains(&spec.name) {
+        command = command.after_help(SWITCH_HELP);
+    } else if ["<ref>", "<condition>", "<duration>"]
         .iter()
         .any(|word| spec.usage.contains(word))
     {
@@ -161,10 +166,21 @@ const IO: u8 = 3;
 const USAGE: u8 = 2;
 
 fn main() -> ExitCode {
-    let name = std::env::args_os().nth(1);
-    if let Some(spec) = name
-        .and_then(|n| n.into_string().ok())
-        .and_then(|n| orbe_session::spec(&n))
+    let mut args: Vec<OsString> = std::env::args_os().collect();
+    if let Some(exit) = flag_before_command(&args[1..]) {
+        return exit;
+    }
+    if args.get(1).is_some_and(|a| a == "help") {
+        let words = args.len();
+        args.retain(|a| a != "--help" && a != "-h");
+        if args.len() == 2 && words > 2 {
+            args.push("help".into());
+        }
+    }
+    if let Some(spec) = args
+        .get(1)
+        .and_then(|n| n.to_str())
+        .and_then(orbe_session::spec)
     {
         let args: Result<Vec<String>, _> = std::env::args_os()
             .skip(2)
@@ -181,7 +197,7 @@ fn main() -> ExitCode {
         return live_command(spec, &args);
     }
     let parsed = cli()
-        .try_get_matches()
+        .try_get_matches_from(args)
         .and_then(|matches| Cli::from_arg_matches(&matches));
     match parsed {
         Ok(cli) => match cli.command {
@@ -213,6 +229,36 @@ fn main() -> ExitCode {
         },
         Err(err) => usage(err),
     }
+}
+
+/// A flag before the command name, as in `orbe --session x open`, is refused with the line
+/// that puts it after. Only `--help` and `--version` go first.
+fn flag_before_command(args: &[OsString]) -> Option<ExitCode> {
+    let words: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
+    let first = words.first()?;
+    if !first.starts_with('-') || ["-h", "--help", "-V", "--version"].contains(first) {
+        return None;
+    }
+    let commands = cli();
+    let at = words
+        .iter()
+        .position(|w| orbe_session::spec(w).is_some() || commands.find_subcommand(w).is_some())?;
+    let flags = words[..at].join(" ");
+    let after = words[at..].iter().chain(&words[..at]).copied();
+    let message = format!("`{flags}` is before the command name");
+    let hint = format!(
+        "put it after the command name, as `orbe {}`",
+        after.collect::<Vec<_>>().join(" ")
+    );
+    if words.contains(&"--json") {
+        print_json(&json!({
+            "ok": false,
+            "error": { "code": "usage", "message": message, "hint": hint }
+        }));
+    } else {
+        eprintln!("error[usage]: {message}\n  hint: {hint}");
+    }
+    Some(ExitCode::from(USAGE))
 }
 
 /// A usage error with `--json` is one envelope on stdout. Help and version stay clap's.

@@ -30,7 +30,10 @@ mod bound;
 mod serial;
 mod step;
 
-pub use step::Progress;
+pub use step::{CHANGES, Progress};
+
+/// The serial lines a snapshot shows, from the end.
+pub const SERIAL_LINES: usize = 10;
 
 use serial::Serial;
 
@@ -667,7 +670,7 @@ impl Open {
             });
         }
         let lines: Vec<&str> = self.serial.text().lines().collect();
-        let serial = lines[lines.len().saturating_sub(10)..].join("\n");
+        let serial = lines[lines.len().saturating_sub(SERIAL_LINES)..].join("\n");
         Data::Snapshot(Snapshot {
             scene: self.scene.clone(),
             parts,

@@ -11,6 +11,7 @@ mod harness;
 
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
@@ -243,7 +244,7 @@ fn help_lists_every_command_and_each_command_prints_its_usage() {
     want.extend(orbe_session::COMMANDS.iter().map(|s| s.name));
     want.extend(["test", "skills", "help"]);
     assert_eq!(listed, want);
-    for name in &want[..want.len() - 1] {
+    for name in &want {
         for flag in ["--help", "-h"] {
             let run = runtime.orbe(here, &[name, flag]).ok();
             assert!(
@@ -256,5 +257,169 @@ fn help_lists_every_command_and_each_command_prints_its_usage() {
     }
     let step = runtime.orbe(here, &["help", "step"]).ok().stdout;
     assert!(step.contains("orbe step --until <condition> [--timeout <duration>] [OPTIONS]"));
+    assert_eq!(runtime.orbe(here, &["help"]).ok().stdout, help);
+    for flag in ["--help", "-h"] {
+        let run = runtime.orbe(here, &["help", "step", flag]).ok();
+        assert_eq!(run.stdout, step);
+    }
+
+    let early = runtime.orbe(here, &["--session", "x", "open"]);
+    assert_eq!(early.code, 2);
+    assert_eq!(
+        early.stderr,
+        "error[usage]: `--session x` is before the command name\n  hint: put it after the command name, as `orbe open --session x`\n"
+    );
+    let early = runtime.orbe(here, &["--json", "skills", "list"]).json();
+    assert_eq!(early["error"]["code"], "usage");
+    assert_eq!(
+        early["error"]["hint"],
+        "put it after the command name, as `orbe skills list --json`"
+    );
     assert!(runtime.daemons().is_empty(), "help starts no session");
+}
+
+#[test]
+fn the_exit_codes_the_core_skill_states_are_the_ones_orbe_exits_with() {
+    let runtime = Runtime::new();
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("bad.jsonc"), "{ not json").unwrap();
+    let failed = runtime.orbe(dir.path(), &["check", "bad.jsonc"]).code;
+    let usage = runtime.orbe(dir.path(), &["step", "2h"]).code;
+    let io = runtime.orbe(dir.path(), &["check", "nope.jsonc"]).code;
+    let stated = format!(
+        "Exit codes: 0 ok, {failed} a failed check, `expect` or command, {usage} a usage error, {io} a file or system error."
+    );
+    assert!(
+        skill("core").contains(&stated),
+        "core does not say {stated}"
+    );
+}
+
+/// The arduino skill's compile command, run as written in a folder that holds only its
+/// sketch, writes the firmware its scene line names, and the core example passes on it.
+#[test]
+fn the_arduino_compile_command_writes_the_firmware_the_scene_names() {
+    let avr = Command::new("arduino-cli").args(["core", "list"]).output();
+    if !avr.is_ok_and(|o| {
+        o.status.success() && String::from_utf8_lossy(&o.stdout).contains("arduino:avr ")
+    }) {
+        let skipped = "the_arduino_compile_command_writes_the_firmware_the_scene_names: skipped, arduino-cli with the arduino:avr core is not on PATH\n";
+        std::io::stderr().write_all(skipped.as_bytes()).unwrap();
+        return;
+    }
+    let text = skill("arduino");
+    let shown = blocks(&text);
+    let block = |info: &str| {
+        shown
+            .iter()
+            .find(|(i, _)| i == info)
+            .map(|(_, body)| body.as_str())
+            .unwrap_or_else(|| panic!("arduino shows no `{info}` block"))
+    };
+    let compile = shown
+        .iter()
+        .flat_map(|(_, body)| body.lines())
+        .find(|l| l.starts_with("arduino-cli compile "))
+        .expect("arduino shows the compile command");
+    let fqbn = compile
+        .split(' ')
+        .skip_while(|w| *w != "--fqbn")
+        .nth(1)
+        .expect("the compile command names an FQBN");
+    assert!(text.contains(&format!("The Nano's FQBN is `{fqbn}`")));
+    let details = Command::new("arduino-cli")
+        .args(["board", "details", "-b", fqbn, "--format", "json"])
+        .output()
+        .unwrap();
+    let details: serde_json::Value = serde_json::from_slice(&details.stdout).unwrap();
+    assert_eq!(details["name"], "Arduino Nano", "{fqbn}");
+
+    let project = tempfile::tempdir().unwrap();
+    let dir = project.path();
+    fs::create_dir(dir.join("button")).unwrap();
+    fs::write(
+        dir.join("button/button.ino"),
+        block("cpp button/button.ino"),
+    )
+    .unwrap();
+    let built = Command::new("sh")
+        .args(["-c", compile])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let named = block("jsonc");
+    let firmware = named
+        .split("\"firmware\": \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("the scene line names the firmware");
+    assert!(
+        dir.join(firmware).is_file(),
+        "{compile} wrote no {firmware}"
+    );
+    let listed = text
+        .lines()
+        .find(|l| l.starts_with("`build/` then holds "))
+        .expect("arduino lists what build/ holds");
+    let listed: BTreeSet<String> = listed
+        .split('`')
+        .skip(3)
+        .step_by(2)
+        .map(str::to_string)
+        .collect();
+    let written: BTreeSet<String> = fs::read_dir(dir.join("build"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(listed, written);
+
+    let core = skill("core");
+    for (info, body) in blocks(&core) {
+        if let Some((_, file)) = info.split_once(' ') {
+            fs::create_dir_all(dir.join(file).parent().unwrap()).unwrap();
+            fs::write(dir.join(file), body).unwrap();
+        }
+    }
+    let runtime = Runtime::new();
+    let add = core
+        .lines()
+        .find_map(|l| l.strip_prefix("$ orbe add "))
+        .expect("core shows its orbe add");
+    runtime
+        .orbe(
+            dir,
+            &[&["add"][..], &add.split(' ').collect::<Vec<_>>()].concat(),
+        )
+        .ok();
+    let run = runtime.orbe(dir, &["test"]).ok();
+    assert!(
+        run.stdout.ends_with("1 passed, 0 failed\n"),
+        "{}",
+        run.stdout
+    );
+
+    fs::create_dir(dir.join("other")).unwrap();
+    fs::copy(dir.join("button/button.ino"), dir.join("other/other.ino")).unwrap();
+    let other = compile.replace(" button", " other");
+    let built = Command::new("sh")
+        .args(["-c", &other])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    assert!(text.contains("`build/<sketch>.ino.hex`"));
+    assert!(
+        dir.join("build/other.ino.hex").is_file(),
+        "the hex follows the sketch folder"
+    );
 }

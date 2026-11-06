@@ -6,7 +6,7 @@ orbe runs the firmware you build. It never compiles anything. For the `nano-boar
 
 First check that `arduino-cli version` runs and that `arduino-cli core list` lists `arduino:avr`.
 
-If it is missing, install arduino-cli as https://arduino.github.io/arduino-cli/latest/installation/ says (on macOS, `brew install arduino-cli`), then the AVR core:
+If it is missing, install arduino-cli as https://arduino.github.io/arduino-cli/latest/installation/ says, then the AVR core:
 
 ```sh
 arduino-cli core update-index
@@ -46,6 +46,8 @@ arduino-cli compile --fqbn arduino:avr:nano --output-dir build button
 
 `build/` then holds `button.ino.hex`, `button.ino.with_bootloader.hex`, `button.ino.with_bootloader.bin`, `button.ino.elf` and `button.ino.eep`.
 
+The names follow the sketch folder, so the firmware is `build/<sketch>.ino.hex`.
+
 ## Name the right file
 
 The scene names `build/button.ino.hex`, the program alone:
@@ -68,6 +70,6 @@ The path starts from the scene's folder. After each change to the sketch, compil
 - D0 to D13 and A0 to A5 work as digital pins, with `INPUT`, `INPUT_PULLUP` and `OUTPUT`. A6, A7, 3V3 and VIN are not simulated. A wire to one is a `not_simulated` error, so do not use them.
 - An input that nothing drives keeps its last level here. On a real board it floats. Give each button a pull-down resistor, as the core example does, or use `INPUT_PULLUP` and wire the button to GND.
 - D13 also drives the board's own LED, `@nano.led_l`, which `get` and `expect` read.
-- `Serial` output reaches orbe as text. After `Serial.begin(115200)` and `Serial.println("ready")`, `expect serial contains "ready"` passes. `println` ends a line with `\r\n`. `snapshot` shows the text so far, and `step` lists the D1 edges it makes. Serial can reach orbe up to 10 ms after the chip sends it.
+- `Serial` output reaches orbe as text. After `Serial.begin(115200)` and `Serial.println("ready")`, `expect serial contains "ready"` passes. `println` ends a line with `\r\n`, and `step` lists the D1 edges it makes. Serial can reach orbe up to 10 ms after the chip sends it. A `println` in `loop` prints on every pass, so its text repeats.
 - Nothing sends serial into the chip. `Serial.read()` never gets a byte.
 - The program starts at t = 0 with no bootloader delay.

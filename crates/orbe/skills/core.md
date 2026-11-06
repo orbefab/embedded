@@ -119,8 +119,8 @@ The `net.floating` warning on `nano__AREF` is normal for the Nano. Nothing drive
 A scene is JSONC: JSON plus `//` comments and trailing commas, nothing more. Its keys:
 
 - `format`: always `1`.
-- `parts`: each instance by name. `type` is a catalog id (the list below) or a `./` path to a part folder of your own. The other keys are the part's params. Add `"not_simulated": "<why>"` to keep a part in the scene but out of the simulation.
-- `wires`: pairs of pins, `["nano.D2", "btn1.a"]`. orbe joins wired pins into nets. Two wires to one pin are fine. A third item `{ "kind": "jumper" }`, `"trace"` or `"contact"` only says how it is drawn. `jumper` is the default.
+- `parts`: each instance by name. `type` is a catalog id (the list below) or a `./` path to a part folder of your own. The other keys are the part's params. `"not_simulated": "<why>"` keeps a part in the scene for drawing but out of the simulation. Nothing may be wired to it. A wire to one of its pins is a `not_simulated` error that gives `<why>`.
+- `wires`: pairs of pins, `["nano.D2", "btn1.a"]`. orbe joins wired pins into nets. Two wires to one pin are fine. A third item, `{ "kind": "jumper" }`, `{ "kind": "trace" }` or `{ "kind": "contact" }`, only says how it is drawn. `jumper` is the default.
 - `nets` (optional): names a net by one of its pins, `"GND": "nano.GND"`. Other nets take the name of their smallest pin, with `.` written `__`, as `nano__GND`.
 - `layout` (optional): `"btn1": { "at": [x, y, z], "rotate": [rx, ry, rz] }` in mm and degrees, for drawing only.
 - `sim` (optional): `{ "max_step": "1ms", "seed": 1 }`. `max_step` is the engine's largest step, 10 ms by default.
@@ -135,7 +135,7 @@ Param values:
 
 ## Parts
 
-`orbe add <id>…` copies parts from the catalog built into this `orbe` into `parts/<id>/` and records them in `parts.lock`. It also copies the parts a part is built from. Commit `parts/` and `parts.lock` with the scene. Never edit a copied part. Copy it to a folder of your own and name it by its `./` path instead.
+`orbe add <id>…` copies parts from the catalog built into this `orbe` into `parts/<id>/` and records them in `parts.lock`. It also copies the parts a part is built from. Commit `parts/` and `parts.lock` with the scene. Don't edit a copied part. A copy that differs, even in spacing, is a `part_modified` error. A board built from other parts, such as `nano-board`, is the exception. An edit to it checks, with a note. To change a part, copy it to a folder of your own and name it by its `./` path.
 
 <!-- catalog parts -->
 
@@ -157,7 +157,7 @@ A ref names something in the open scene. It starts with `@`, which a shell leave
 - `@led1 on`, `@led1 off`: a part's `on` reading.
 - `@nano.D13 high`, `@nano.D13 low`: a pin's logic level.
 - `@led1.i > 5mA`, `@nano.D2 < 1V`: a quantity or a pin's voltage, with `<`, `<=`, `>` or `>=`, and a value in A, V or W with an optional prefix (p, n, u, m, k, M). A value as `get` prints it, written without the space, such as `2.27e-5V`, parses too.
-- `serial contains "text"`: the serial text the chip has sent since `open`.
+- `serial contains "text"`: all the serial text the chip has sent since `open`, line endings included. Text printed earlier still matches. `snapshot` shows the last 10 lines of it, joined with `\n`.
 - `no diagnostics`: no runtime warning has come up, such as a current over a part's rating.
 
 In a shell, quote `<` and `>`, or the shell takes them as redirects, as in `orbe expect @led1.i '>' 5mA`. A test file needs no quotes for them.
@@ -167,14 +167,15 @@ In a shell, quote `<` and `>`, or the shell takes them as redirects, as in `orbe
 - The session is paused between commands. Time moves only inside `step`.
 - `step <duration>` advances by that much and lists what changed, such as pin edges with their exact times, LED changes and diagnostics. It lists at most 20, then `and N more`, so serial edges on D1 can hide the rest. `get` and `snapshot` show the state after it. Durations take ps, ns, us, ms or s, such as `100ms`, `1.5ms`, `20us`.
 - A read at time t, by `get`, `expect` or `snapshot`, shows the circuit just before anything that happens at t. So `press` at t shows from t + 1 ps on, and its reply says "reads show it after t". Step after an input before you read its effect.
-- `step --until <condition> [--timeout <duration>]` first reads the condition now. If it holds, it takes no time. Otherwise it steps until it holds, up to the timeout, 10 s by default. A pin condition stops 1 ps after the exact edge. Other conditions are read every 1 ms, so the reply says `by 101ms`. A timeout is the error `until_timeout`.
-- A switch with `bounce` set, such as `"bounce": "2ms"`, bounces up to `max_bounces` times within that window after each `press` and `release`. An input lands after the last bounce of the one before, and its reply gives that time.
+- An input lands at the session's time or later, and its reply gives the time. Two inputs with no `step` between can land 1 ps apart. Both take effect.
+- `step --until <condition> [--timeout <duration>]` first reads the condition now. If it holds, it takes no time. Otherwise it steps until it holds, up to the timeout, 10s by default. A pin condition stops 1 ps after the exact edge. Other conditions are read every 1 ms, so the reply says `by 101ms`. A timeout is the error `until_timeout`.
+- A switch with `bounce` set, such as `"bounce": "2ms"`, bounces up to `max_bounces` times within that window after each `press` and `release`. An input on it lands after the bounces of the one before. `step --until @led1 on` stops at the first contact, and the contact can open again inside the window. To wait past the bounce, `step` the window, such as `step 3ms`, then `expect`.
 - Serial can reach orbe up to one engine step (10 ms) after the chip sends it. Step a little past a print before you expect it.
 - A session stops at 2 hours of simulated time. Reads still work there, and `press`, `release` and `step` fail with `ended`. A `step` that would pass the stop fails with `past_stop`. Run `orbe open` to start again.
 
 ## Test files
 
-A test file is `tests/<name>.test` in the project folder. Each line is one command as you type it live, without `orbe`. `#` starts a comment, and `"..."` holds spaces. Paths start from the project folder, and `open` alone opens `scene.jsonc`.
+A test file is `tests/<name>.test` in the project folder. Each line is a live command without `orbe` and without `--json`, `--session` or `--help`, which are usage errors there. Live, `--help` anywhere prints help, so `orbe expect serial contains --help` prints help, while the same test line looks for that text. `#` starts a comment. `"..."` holds spaces, and inside it only `\"` and `\\` escape, so a test cannot name a line ending. To tell lines apart, print text that only one line has, such as `led=on`. Paths start from the project folder, and `open` alone opens `scene.jsonc`.
 
 `orbe test` runs every `tests/*.test` of the project in the current folder, each in a fresh session, and stops a file at its first failed line. `orbe test <file or folder>…` runs those. `-v` prints every command with its reply. A failure prints the line, the expected and the actual value:
 
@@ -190,26 +191,27 @@ A test needs no background process, so it runs the same in CI.
 
 ## Output and exit codes
 
-Every command prints text. With `--json` it prints one JSON object instead, `{"ok": true, "data": {...}}` or `{"ok": false, "error": {"code", "message", "hint"}}`. Live commands add `session`, `t_ps` (picoseconds) and `state` (`paused`, `stopped` or `faulted`).
+Every command prints text. With `--json` it prints one JSON object instead, `{"ok": true, "data": {...}}` or `{"ok": false, "error": {"code", "message", "hint"}}`, where `hint` can be missing or empty. A failed `orbe check scene.jsonc --json` is `scene_invalid`, with each finding, its code and hint in `data.diagnostics`. Live commands add `session`, `t_ps` (picoseconds) and `state`: `paused`, `stopped`, `faulted` or `closed`.
 
 Exit codes: 0 ok, 1 a failed check, `expect` or command, 2 a usage error, 3 a file or system error. `orbe test` exits with the worst file's code.
 
 ## Sessions
 
 - `orbe open` starts a background process that holds the session, and every later command talks to it. The process ends on `orbe close`, or after 1 hour with no command.
-- A session has a name. By default it comes from the git repository's root folder, else the project folder, so each project gets its own. `--session <name>` after the command, as `orbe open --session bench`, or `ORBE_SESSION=<name>`, picks another, so two sessions can run side by side. Live paths start from the shell's current folder, so run live commands from the project folder.
+- A session has a name. By default it comes from the project folder, the nearest one up with `scene.jsonc` or `parts.lock`, so each project gets its own, and its `tests/` folder shares it. Outside a project it comes from the git repository's root folder, else the current folder. `--session <name>` after the command, as `orbe open --session bench`, or `ORBE_SESSION=<name>`, picks another, so two sessions can run side by side. Live paths start from the shell's current folder, so run live commands from the project folder.
 - `orbe close --all` closes every session of this `orbe` and cleans up after crashed ones.
-- Ctrl-C during a long `step` stops it, and the session stays paused at the time it reached.
+- A command sent while a `step` runs waits for it. Ctrl-C during a long `step` stops it, and the session stays paused at the time it reached.
 
 ## Errors
 
-Every error is `error[<code>]: <message>` with a `hint:` line. Do what the hint says. The common ones:
+An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what the hint says. The common ones:
 
 | Code | What to do |
 | --- | --- |
+| `usage` | The command line is wrong. The message says how. |
 | `part_missing` | Run the `orbe add` command in the hint. |
 | `firmware_missing` | Build the firmware, or fix the path. It starts from the scene's folder. |
-| `not_simulated` | A wire reaches a pin the engine does not simulate. Wire another pin. |
+| `not_simulated` | A wire reaches a pin the engine does not simulate, or a part marked `not_simulated`. Wire another pin, or remove the wire. |
 | `scene.unknown_pin`, `scene.param`, `scene.syntax` | A typo or a wrong value at that line and column. The hint names what is valid. |
 | `part_modified` | A copied part was edited. Run `orbe add <id> --overwrite` to restore it, or copy it to a folder of your own. |
 | `no_session` | No session runs under this name. Run the `orbe open` in the hint. |
@@ -218,8 +220,8 @@ Every error is `error[<code>]: <message>` with a `hint:` line. Do what the hint 
 | `not_settable` | `press` and `release` work only on a switch, by its part name. |
 | `expect_failed`, `until_timeout` | The condition did not hold. Compare `actual`, then fix the circuit or the firmware, or step longer. |
 | `ended`, `past_stop` | The session reached its 2-hour stop. Run `orbe open`. |
+| `cancelled` | Ctrl-C stopped a `step`. The session stays at the time it reached. Step again. |
 | `faulted` | The engine stopped the session. The message names why. Fix it and run `orbe open`. |
-| `busy` | Another `orbe add` is running in this project. Wait and run it again. |
 
 ## What is not simulated
 
