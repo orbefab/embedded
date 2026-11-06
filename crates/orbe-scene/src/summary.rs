@@ -13,6 +13,8 @@ pub struct PartSummary {
     pub params: Vec<ParamSummary>,
     /// The `on` reading: the quantity it reads, and the amount above which the part is on.
     pub on: Option<(String, String)>,
+    /// Each `model.ratings` entry with a value, as its name and amount: `("current", "30 mA")`.
+    pub ratings: Vec<(String, String)>,
     /// `controls.press`, so `press` and `release` work on it.
     pub pressable: bool,
     /// The catalog parts whose `uses` name this one.
@@ -71,6 +73,14 @@ pub fn catalog_parts() -> Vec<PartSummary> {
                     let of = on.get("of")?.str()?.to_string();
                     Some((of, amount(on.get("above")?)?))
                 }),
+            ratings: tree
+                .get("model")
+                .and_then(|m| m.get("ratings"))
+                .and_then(Node::props)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|r| Some((r.key.clone(), amount(&r.value)?)))
+                .collect(),
             pressable: tree.get("controls").and_then(|c| c.get("press")).is_some(),
             used_by: trees
                 .iter()

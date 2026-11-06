@@ -56,6 +56,14 @@ fn parts(catalog: &[PartSummary]) -> String {
         if let Some((of, above)) = &part.on {
             out.push_str(&format!("- It reads `on` while `{of}` is above {above}.\n"));
         }
+        if !part.ratings.is_empty() {
+            let warns: Vec<String> = part
+                .ratings
+                .iter()
+                .map(|(name, above)| format!("`rating.{name}` above {above}"))
+                .collect();
+            out.push_str(&format!("- It warns {}.\n", warns.join(" and ")));
+        }
         if part.pressable {
             out.push_str("- `press` and `release` close and open it.\n");
         }
@@ -450,5 +458,11 @@ mod tests {
         assert!(text.contains("### `nano-board`: Nano (CH340 clone)"));
         assert!(text.contains("- `resistance`: a value in ohm above 0, required."));
         assert!(text.contains("- It reads `on` while `i` is above 1 mA."));
+        assert!(
+            text.contains(
+                "- It warns `rating.current` above 30 mA and `rating.power` above 75 mW."
+            )
+        );
+        assert!(text.contains("- It warns `rating.power` above 250 mW."));
     }
 }

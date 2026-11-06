@@ -12,8 +12,8 @@ This text comes from the `orbe` you have installed, so it matches it. `orbe <com
 4. Run `orbe open` in the project folder. It opens `scene.jsonc` there, or the scene you name, as `orbe open path/to/scene.jsonc`. It checks the scene, starts a session at t = 0, paused, and lists the parts.
 5. Drive it with `orbe step`, `orbe press`, `orbe release`, `orbe get`, `orbe expect` and `orbe snapshot`.
 6. To fix something, edit the scene or the firmware, rebuild, and run `orbe open` again. It restarts the session at t = 0.
-7. Write what worked as `tests/<name>.test` and run `orbe test`.
-8. Run `orbe close`.
+7. Run `orbe close` when the live work is done. A `no_session` error from it means nothing was open.
+8. Write what worked as `tests/<name>.test` and run `orbe test`. It leaves no session to close.
 
 ## Worked example
 
@@ -33,7 +33,7 @@ tests/button.test
     "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
     "btn1": { "type": "tactile-switch-6mm" },
     "r2": { "type": "resistor-axial", "resistance": "10k" }, // pull-down, so D2 reads low while open
-    "r1": { "type": "resistor-axial", "resistance": "220" },
+    "r1": { "type": "resistor-axial", "resistance": "220" }, // in series, so led1 stays under its rating
     "led1": { "type": "led-5mm", "color": "red" },
   },
   "wires": [
@@ -114,6 +114,8 @@ PASS tests/button.test
 
 The `net.floating` warning on `nano__AREF` is normal for the Nano. Nothing drives AREF.
 
+With D13 wired straight to `led1.anode` and no `r1`, the LED draws 105 mA. `step` lists `warning[rating.current]` and `warning[rating.power]` for `led1`, and `expect no diagnostics` fails. The LED holds D13 at 2.4 V, so D13 reads `low` while the LED is on. Give each LED a series resistor, such as 220 ohm from a 5 V pin.
+
 ## Scenes
 
 A scene is JSONC: JSON plus `//` comments and trailing commas, nothing more. Its keys:
@@ -146,7 +148,7 @@ A ref names something in the open scene. It starts with `@`, which a shell leave
 - `@led1`: a part. `get` prints its reading, such as `on` or `off`, and its current `i`, voltage `v` and power `p`.
 - `@nano.D13`, `@led1.anode`: a pin. `get` prints its logic level, `high` or `low`, when a chip pin is on its net, and its voltage.
 - `@led1.i`: a quantity of a part: `i`, `v`, `p`, and for some parts `ib`, `ic`, `id`, `iin`, `iout`. An unknown one gets an error that lists what the part reports.
-- `@nano.mcu.PB5`: a part inside a part, by its name in that part's file. The Nano's chip is `mcu`.
+- `@nano.mcu.PB5`, `@nano.led_l`: a part inside a part, by its name in that part's file. The Nano's chip is `mcu`, and `led_l` is its L LED, which D13 drives.
 
 `press @btn1` and `release @btn1` close and open a switch.
 
@@ -158,7 +160,7 @@ A ref names something in the open scene. It starts with `@`, which a shell leave
 - `@nano.D13 high`, `@nano.D13 low`: a pin's logic level.
 - `@led1.i > 5mA`, `@nano.D2 < 1V`: a quantity or a pin's voltage, with `<`, `<=`, `>` or `>=`, and a value in A, V or W with an optional prefix (p, n, u, m, k, M). A value as `get` prints it, written without the space, such as `2.27e-5V`, parses too.
 - `serial contains "text"`: all the serial text the chip has sent since `open`, line endings included. Text printed earlier still matches. `snapshot` shows the last 10 lines of it, joined with `\n`.
-- `no diagnostics`: no runtime warning has come up, such as a current over a part's rating.
+- `no diagnostics`: no runtime warning has come up, such as a current over a part's rating. A chip warning can show up to one engine step (10 ms) late, so step that far past its cause first.
 
 In a shell, quote `<` and `>`, or the shell takes them as redirects, as in `orbe expect @led1.i '>' 5mA`. A test file needs no quotes for them.
 
@@ -168,7 +170,7 @@ In a shell, quote `<` and `>`, or the shell takes them as redirects, as in `orbe
 - `step <duration>` advances by that much and lists what changed, such as pin edges with their exact times, LED changes and diagnostics. It lists at most 20, then `and N more`, so serial edges on D1 can hide the rest. `get` and `snapshot` show the state after it. Durations take ps, ns, us, ms or s, such as `100ms`, `1.5ms`, `20us`.
 - A read at time t, by `get`, `expect` or `snapshot`, shows the circuit just before anything that happens at t. So `press` at t shows from t + 1 ps on, and its reply says "reads show it after t". Step after an input before you read its effect.
 - An input lands at the session's time or later, and its reply gives the time.
-- `step --until <condition> [--timeout <duration>]` first reads the condition now. If it holds, it takes no time. Otherwise it steps until it holds, up to the timeout, 10s by default. A pin condition stops 1 ps after the exact edge. Other conditions are read every 1 ms, so the reply says `by 101ms`. A timeout is the error `until_timeout`.
+- `step --until <condition> [--timeout <duration>]` first reads the condition now. If it holds, it takes no time. Otherwise it steps until it holds, up to the timeout, 10s by default. A pin condition stops 1 ps after the exact edge, and part readings such as `@led1 on` already show the edge there, with no extra `step`. Other conditions are read every 1 ms, so the reply says `by 101ms`. A timeout is the error `until_timeout`.
 - Serial can reach orbe up to one engine step (10 ms) after the chip sends it. Step a little past a print before you expect it.
 - A session stops at 2 hours of simulated time. Reads still work there, and `press`, `release` and `step` fail with `ended`. A `step` that would pass the stop fails with `past_stop`. Run `orbe open` to start again.
 
@@ -221,7 +223,7 @@ FAIL tests/button.test:4: expect @led1 on
 0 passed, 1 failed
 ```
 
-A test needs no background process, so it runs the same in CI.
+A test needs no background process, so it runs the same in CI. Each file's session lives inside `orbe test` and ends with it. A session that `orbe open` started keeps running, untouched. `orbe test` takes no `--session` and ignores `ORBE_SESSION`.
 
 ## Output and exit codes
 
