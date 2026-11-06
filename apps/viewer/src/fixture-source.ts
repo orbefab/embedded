@@ -44,8 +44,9 @@ export function fixtureSource(
         }
       };
     },
-    send(command: Command) {
+    async send(command: Command) {
       console.log(commandLine(command));
+      return { ok: true };
     },
     push(message) {
       if (message.type === "scene") scene = message;

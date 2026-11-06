@@ -9,7 +9,7 @@ import { type CameraMode, union } from "./camera-frame";
 import { CameraRig } from "./camera-rig";
 import { glowIntensity, litColour } from "./glow";
 import type { HoverStore } from "./hover";
-import type { FrameMessage, Ref, SceneMessage, SessionSource } from "./protocol";
+import type { Command, FrameMessage, Ref, SceneMessage } from "./protocol";
 import type { Box } from "./wire-geometry";
 import { WireMesh } from "./wire-mesh";
 
@@ -108,14 +108,14 @@ const PRESS_ENDS = ["pointerup", "pointercancel", "lostpointercapture"] as const
 export function SceneView({
   scene,
   frame,
-  source,
+  send,
   hover,
   mode,
   onBuilt,
 }: {
   scene: SceneMessage;
   frame: RefObject<FrameMessage | null>;
-  source: SessionSource;
+  send: (command: Command) => void;
   hover: HoverStore;
   mode: CameraMode;
   onBuilt: (built: BuiltScene) => void;
@@ -158,8 +158,8 @@ export function SceneView({
     if (pressed === null) return;
     held.current = null;
     pressed.stop();
-    source.send({ cmd: "release", ref: pressed.ref });
-  }, [source]);
+    send({ cmd: "release", ref: pressed.ref });
+  }, [send]);
   useEffect(() => {
     window.addEventListener("blur", release);
     return () => {
@@ -201,7 +201,7 @@ export function SceneView({
       },
     };
     (event.target as Element).setPointerCapture(pointerId);
-    source.send({ cmd: "press", ref });
+    send({ cmd: "press", ref });
   };
   const move = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();

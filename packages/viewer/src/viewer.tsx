@@ -14,7 +14,7 @@ import {
 import type { BuiltScene } from "./build";
 import type { CameraMode } from "./camera-frame";
 import { createHoverStore, type HoverStore } from "./hover";
-import type { FrameMessage, SceneMessage, SessionSource } from "./protocol";
+import { type Command, commandLine, type FrameMessage, type SceneMessage, type SessionSource } from "./protocol";
 import { SceneView } from "./scene-view";
 
 class ShowError extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -66,11 +66,11 @@ function HoverLabel({ hover }: { hover: HoverStore }) {
 }
 
 /** The instances and wires the viewer could not draw, which the rest of the scene draws
- * around. */
-function PartErrors({ errors }: { errors: readonly string[] }) {
+ * around, and the commands the session refused or never got. */
+function Errors({ errors }: { errors: readonly string[] }) {
   if (errors.length === 0) return null;
   return (
-    <pre data-testid="part-errors" style={{ ...overlay, inset: "auto 0 0 0", pointerEvents: "none" }}>
+    <pre data-testid="errors" style={{ ...overlay, inset: "auto 0 0 0", pointerEvents: "none" }}>
       {errors.join("\n")}
     </pre>
   );
@@ -89,14 +89,32 @@ export function Viewer({ source, onCreated }: ViewerProps) {
   const [mode, setMode] = useState<CameraMode>("tilted");
   const frame = useRef<FrameMessage | null>(null);
   const hover = useMemo(createHoverStore, []);
-  const [errors, setErrors] = useState<readonly string[]>([]);
-  const onBuilt = useCallback((built: BuiltScene) => setErrors(built.errors), []);
+  const [partErrors, setPartErrors] = useState<readonly string[]>([]);
+  const [sendErrors, setSendErrors] = useState<readonly string[]>([]);
+  const onBuilt = useCallback((built: BuiltScene) => setPartErrors(built.errors), []);
+  const send = useCallback(
+    (command: Command) => {
+      const fail = (why: string) => {
+        const line = `${commandLine(command)}: ${why}`;
+        console.error(line);
+        setSendErrors((errors) => [...errors, line]);
+      };
+      source.send(command).then(
+        (reply) => {
+          if (!reply.ok) fail(reply.error.message);
+        },
+        (error: unknown) => fail(error instanceof Error ? error.message : String(error))
+      );
+    },
+    [source]
+  );
 
   useEffect(
     () =>
       source.subscribe((message) => {
         if (message.type === "scene") {
           frame.current = null;
+          setSendErrors([]);
           setScene(message);
         } else {
           frame.current = message;
@@ -122,12 +140,12 @@ export function Viewer({ source, onCreated }: ViewerProps) {
           <directionalLight intensity={1.35} position={[40, 90, 24]} />
           {scene === null ? null : (
             <Suspense fallback={null}>
-              <SceneView frame={frame} hover={hover} mode={mode} onBuilt={onBuilt} scene={scene} source={source} />
+              <SceneView frame={frame} hover={hover} mode={mode} onBuilt={onBuilt} scene={scene} send={send} />
             </Suspense>
           )}
         </Canvas>
       </ShowError>
-      <PartErrors errors={errors} />
+      <Errors errors={[...partErrors, ...sendErrors]} />
       <HoverLabel hover={hover} />
     </div>
   );
