@@ -7,6 +7,7 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use rustix::fs::{AtFlags, CWD, Dir, FileType, Mode, OFlags};
@@ -18,8 +19,6 @@ pub(super) struct Folder(OwnedFd);
 pub(super) enum Found {
     Folder,
     File(Vec<u8>),
-    /// A file this process cannot read, by its inode, size and times.
-    Unreadable(String),
     Link(OsString),
     Other,
 }
@@ -48,15 +47,31 @@ impl Folder {
         )?))
     }
 
-    /// The folder that holds `rel`, a `/`-separated path below this one, and its last name.
-    pub(super) fn parent_of<'r>(&self, rel: &'r OsStr) -> io::Result<(Folder, &'r OsStr)> {
-        let mut names = rel.as_bytes().split(|byte| *byte == b'/');
-        let last = names.next_back().unwrap_or_default();
-        let mut folder = self.sub(OsStr::new("."))?;
-        for name in names {
-            folder = folder.sub(OsStr::from_bytes(name))?;
+    /// The folder that holds `rel`, a `/`-separated path below this one, and its last name. An
+    /// error comes with the path of the folder on the way that would not open.
+    pub(super) fn parent_of<'r>(
+        &self,
+        rel: &'r OsStr,
+    ) -> Result<(Folder, &'r OsStr), (&'r OsStr, io::Error)> {
+        let rel = rel.as_bytes();
+        let mut folder = self
+            .sub(OsStr::new("."))
+            .map_err(|error| (OsStr::new(""), error))?;
+        let mut start = 0;
+        while let Some(slash) = rel[start..].iter().position(|byte| *byte == b'/') {
+            let end = start + slash;
+            folder = folder
+                .sub(OsStr::from_bytes(&rel[start..end]))
+                .map_err(|error| (OsStr::from_bytes(&rel[..end]), error))?;
+            start = end + 1;
         }
-        Ok((folder, OsStr::from_bytes(last)))
+        Ok((folder, OsStr::from_bytes(&rel[start..])))
+    }
+
+    /// Whether `meta` describes this folder.
+    pub(super) fn is(&self, meta: &std::fs::Metadata) -> bool {
+        rustix::fs::fstat(&self.0)
+            .is_ok_and(|stat| stat.st_dev == meta.dev() && stat.st_ino == meta.ino())
     }
 
     pub(super) fn names(&self) -> io::Result<Vec<OsString>> {
@@ -82,23 +97,10 @@ impl Folder {
                     .union(OFlags::NOFOLLOW)
                     .union(OFlags::NONBLOCK)
                     .union(OFlags::CLOEXEC);
-                match rustix::fs::openat(&self.0, name, flags, Mode::empty()) {
-                    Ok(fd) => {
-                        let mut bytes = Vec::new();
-                        File::from(fd).read_to_end(&mut bytes)?;
-                        Found::File(bytes)
-                    }
-                    Err(rustix::io::Errno::ACCESS) => Found::Unreadable(format!(
-                        "{}.{}.{}.{}.{}.{}",
-                        stat.st_ino,
-                        stat.st_size,
-                        stat.st_mtime,
-                        stat.st_mtime_nsec,
-                        stat.st_ctime,
-                        stat.st_ctime_nsec
-                    )),
-                    Err(error) => return Err(error.into()),
-                }
+                let fd = rustix::fs::openat(&self.0, name, flags, Mode::empty())?;
+                let mut bytes = Vec::new();
+                File::from(fd).read_to_end(&mut bytes)?;
+                Found::File(bytes)
             }
             _ => Found::Other,
         })

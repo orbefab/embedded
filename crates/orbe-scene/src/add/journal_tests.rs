@@ -6,6 +6,10 @@ const C: &str = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 const L: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 const M: &str = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
 
+fn again() -> Again {
+    Again::new(None, "orbe add x".into())
+}
+
 /// One id, `led`, whose new copy hashes to `B` and whose copy from before the add hashes to `A`.
 fn log(lock: LockChange, records: Vec<Record>) -> Log {
     Log {
@@ -163,7 +167,7 @@ fn an_edit_after_the_crash_stops_the_rollback_of_that_id() {
     let log = log(LockChange::Kept, placed(aside(staged())));
     let next = next(&log, &seen(Some(C), false, true));
     assert_eq!(next, Next::Stop(vec![Problem::Conflict("led".into())]));
-    let (lines, hint) = problem_text(&log, &[Problem::Conflict("led".into())], "orbe add x");
+    let (lines, hint) = problem_text(&log, &[Problem::Conflict("led".into())], &again());
     assert_eq!(
         lines,
         "parts/led changed after the interrupted add placed its new copy there, and the copy from before the add is in parts/.orbe-add/old/led. orbe left both"
@@ -288,7 +292,7 @@ fn a_placed_copy_stays_when_the_copy_it_replaced_is_not_there_to_put_back() {
         next(&log, &changed),
         Next::Stop(vec![Problem::Changed(vec!["old/led".into()])])
     );
-    let (lines, hint) = problem_text(&log, &[Problem::Missing("led".into())], "orbe add x");
+    let (lines, hint) = problem_text(&log, &[Problem::Missing("led".into())], &again());
     assert_eq!(
         lines,
         "parts/led holds the new copy the interrupted add placed, and the copy it replaced is not in parts/.orbe-add/old/led, so orbe cannot put that back. orbe left parts/led"
@@ -361,11 +365,7 @@ fn after_the_commit_a_changed_saved_copy_or_a_linked_old_is_left() {
         next(&log, &changed),
         Next::Stop(vec![Problem::Changed(vec!["old/led".into()])])
     );
-    let (lines, hint) = problem_text(
-        &log,
-        &[Problem::Changed(vec!["old/led".into()])],
-        "orbe add x",
-    );
+    let (lines, hint) = problem_text(&log, &[Problem::Changed(vec!["old/led".into()])], &again());
     assert_eq!(
         lines,
         "parts/.orbe-add/old/led changed after the add moved the copy from parts/led there. orbe left it, and parts/led as it is"
@@ -562,7 +562,7 @@ fn a_clearing_line_reads_back_its_names_and_only_paths_below_the_folder() {
         },
         Entry {
             path: OsString::from_vec(b"old/led/caf\xe9".to_vec()),
-            kind: Kind::Unreadable("12.3.1700000000.5.1700000001.6".into()),
+            kind: Kind::File(A.into()),
         },
     ];
     let line = Record::Clearing(entries.clone()).line();
@@ -584,8 +584,7 @@ fn a_clearing_line_reads_back_its_names_and_only_paths_below_the_folder() {
         "d:a%2",
         "x:a",
         "d:old/./a",
-        "u:a:1 2",
-        "u:a",
+        "u:a:12.3.1700000000.5.1700000001.6",
     ] {
         assert_eq!(Record::parse(&format!("clearing {word}")), None, "{word}");
     }

@@ -10,8 +10,7 @@ use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
-use super::single_component;
-use crate::project::shell_path;
+use super::{Again, single_component};
 
 pub(super) const HEADER: &str = "orbe add log 1";
 pub(super) const STAGE: &str = ".orbe-add";
@@ -74,8 +73,6 @@ pub(super) struct Entry {
 pub(super) enum Kind {
     Folder,
     File(Hash),
-    /// A file orbe cannot read, by its inode, size and times.
-    Unreadable(String),
     Link(OsString),
     Other,
 }
@@ -86,7 +83,6 @@ impl Entry {
         match &self.kind {
             Kind::Folder => format!("d:{path}"),
             Kind::File(hash) => format!("f:{path}:{hash}"),
-            Kind::Unreadable(stat) => format!("u:{path}:{stat}"),
             Kind::Link(target) => format!("l:{path}:{}", escape(target.as_bytes())),
             Kind::Other => format!("o:{path}"),
         }
@@ -105,13 +101,6 @@ impl Entry {
         let kind = match (tag, rest) {
             ("d", None) => Kind::Folder,
             ("f", Some(h)) => Kind::File(hash(h)?),
-            ("u", Some(stat))
-                if stat
-                    .bytes()
-                    .all(|b| b.is_ascii_digit() || b"-.".contains(&b)) =>
-            {
-                Kind::Unreadable(stat.to_string())
-            }
             ("l", Some(target)) => Kind::Link(OsString::from_vec(unescape(target)?)),
             ("o", None) => Kind::Other,
             _ => return None,
@@ -913,7 +902,7 @@ pub(super) fn finished(log: &Log, wrote: &[String], replaced: &[String]) -> Opti
 }
 
 /// One line per problem, saying what is on disk, then a hint. `again` is the command to rerun.
-pub(super) fn problem_text(log: &Log, problems: &[Problem], again: &str) -> (String, String) {
+pub(super) fn problem_text(log: &Log, problems: &[Problem], again: &Again) -> (String, String) {
     let committed = log.committed();
     let mut lines = Vec::new();
     let mut hints = Vec::new();
@@ -923,35 +912,47 @@ pub(super) fn problem_text(log: &Log, problems: &[Problem], again: &str) -> (Str
                 lines.push(format!(
                     "parts/{id} changed after the add replaced it, and the copy it replaced is in parts/{STAGE}/old/{id}. orbe left both"
                 ));
-                hints.push(keep_one(&format!("parts/{id}"), &format!("old/{id}")));
+                hints.push(keep_one(
+                    again,
+                    &format!("parts/{id}"),
+                    &format!("old/{id}"),
+                ));
             }
             Problem::Conflict(id) => {
                 lines.push(format!(
                     "parts/{id} changed after the interrupted add placed its new copy there, and the copy from before the add is in parts/{STAGE}/old/{id}. orbe left both"
                 ));
-                hints.push(keep_one(&format!("parts/{id}"), &format!("old/{id}")));
+                hints.push(keep_one(
+                    again,
+                    &format!("parts/{id}"),
+                    &format!("old/{id}"),
+                ));
             }
             Problem::LockConflict => {
                 lines.push(format!(
                     "parts.lock changed after the interrupted add wrote it, and the lock from before the add is in parts/{STAGE}/parts.lock. orbe left both"
                 ));
-                hints.push(keep_one("parts.lock", "parts.lock"));
+                hints.push(keep_one(again, "parts.lock", "parts.lock"));
             }
             Problem::Foreign(names) => {
-                let names = staged_paths(names);
+                let names = staged_paths(again, names);
                 lines.push(format!(
                     "{names} {} not made by an add, so orbe left parts/{STAGE} and its log",
                     if names.contains(", ") { "were" } else { "was" }
                 ));
-                hints.push(format!("move {names} out of parts/{STAGE}"));
+                hints.push(format!(
+                    "move {names} out of {}",
+                    again.path(format!("parts/{STAGE}"))
+                ));
             }
             Problem::Changed(names) => {
                 for name in names {
                     lines.push(changed_line(name));
                 }
                 hints.push(format!(
-                    "move {} out of parts/{STAGE} to keep {}",
-                    staged_paths(names),
+                    "move {} out of {} to keep {}",
+                    staged_paths(again, names),
+                    again.path(format!("parts/{STAGE}")),
                     if names.len() == 1 { "it" } else { "them" }
                 ));
             }
@@ -960,7 +961,8 @@ pub(super) fn problem_text(log: &Log, problems: &[Problem], again: &str) -> (Str
                     "parts/{id} holds the new copy the interrupted add placed, and the copy it replaced is not in parts/{STAGE}/old/{id}, so orbe cannot put that back. orbe left parts/{id}"
                 ));
                 hints.push(format!(
-                    "delete parts/{id}, whose files are the catalog's, to finish the rollback"
+                    "delete {}, whose files are the catalog's, to finish the rollback",
+                    again.path(format!("parts/{id}"))
                 ));
             }
         }
@@ -969,14 +971,14 @@ pub(super) fn problem_text(log: &Log, problems: &[Problem], again: &str) -> (Str
     (lines.join("\n"), hints.join(". "))
 }
 
-/// Each name below the staging folder as a shell word for its path from the project.
-pub(super) fn staged_paths<N: AsRef<OsStr>>(names: &[N]) -> String {
+/// Each name below the staging folder as a shell word for its path from the current folder.
+pub(super) fn staged_paths<N: AsRef<OsStr>>(again: &Again, names: &[N]) -> String {
     names
         .iter()
         .map(|name| {
             let mut path = format!("parts/{STAGE}/").into_bytes();
             path.extend_from_slice(name.as_ref().as_bytes());
-            shell_path(OsStr::from_bytes(&path))
+            again.path(OsStr::from_bytes(&path))
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -997,9 +999,13 @@ fn changed_line(name: &str) -> String {
     }
 }
 
-fn keep_one(path: &str, staged: &str) -> String {
+fn keep_one(again: &Again, path: &str, staged: &str) -> String {
+    let (path, staged) = (
+        again.path(path),
+        again.path(format!("parts/{STAGE}/{staged}")),
+    );
     format!(
-        "keep one: delete {path} to get back parts/{STAGE}/{staged}, or delete parts/{STAGE}/{staged} to keep {path} as it is"
+        "keep one: delete {path} to get back {staged}, or delete {staged} to keep {path} as it is"
     )
 }
 
