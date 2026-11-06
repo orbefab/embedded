@@ -14,5 +14,5 @@ resistor-0603 0.1.0 https://github.com/orbefab/embedded/releases/download/parts 
 resistor-axial 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:865591323686d5ad6fe00584ae7d8c1c39cfdbb491874aa04d1cd0a972b4a956
 resonator-cstce 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:dd2f3e2cdce56afdd3fe1a0a2896ab95e2053a44fd86ebb6c5f9ccbfd5908be8
 tactile-switch-6mm 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:d0fd4cc9747de3038c0d38a6655dcf67aec3b17d8cdbe9441ffc30e5058ff461
-tactile-switch-smd 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:75afd321d4bd426fcc5ddc8cfa9387b3892d3aab6e6dda96ffa8a63c9061792d
+tactile-switch-smd 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:39cd39fa8b9e359404176bb12e8e7cf8d4f4568c25851cf0465fda63c30e0764
 usb-mini-b 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:4afcdd298d1980fa721adc1c39375797f06f0f98f1e8a20a8c9f33069b6cea8c
