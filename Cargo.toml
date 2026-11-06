@@ -23,6 +23,7 @@ strsim = "0.11"
 rustix = { version = "1", features = ["fs"] }
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"
+ctrlc = "3.4"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -38,6 +38,7 @@ use serial::Serial;
 pub struct Live {
     name: String,
     open: Option<Open>,
+    stop: Option<(Duration, String)>,
 }
 
 struct Open {
@@ -80,7 +81,15 @@ impl Live {
         Live {
             name: name.into(),
             open: None,
+            stop: None,
         }
+    }
+
+    /// Stops the scenes this session opens at `stop` instead of the 2-hour stop, so a test
+    /// reaches it quickly, and `None` puts the 2-hour stop back. A refusal of a stop the
+    /// engine would not run names the variable that set it, such as `ORBE_TEST_STOP`.
+    pub fn stop_at(&mut self, stop: Option<(Duration, String)>) {
+        self.stop = stop;
     }
 
     pub fn run(&mut self, command: &Command) -> Reply {
@@ -157,7 +166,14 @@ impl Live {
             )));
         }
         let dir = scene.parent().unwrap_or(Path::new(""));
-        let netlist = orbe_scene::read(scene).map_err(|found| refused(dir, &shown, found))?;
+        let mut netlist = orbe_scene::read(scene).map_err(|found| refused(dir, &shown, found))?;
+        if let Some((stop, variable)) = &self.stop {
+            let stop = shorter_stop(&netlist.json, *stop, variable).map_err(fail)?;
+            let at = |ps: u64| format!("\"stop_ps\": {ps}");
+            netlist.json = netlist
+                .json
+                .replacen(&at(orbe_scene::STOP_PS), &at(stop), 1);
+        }
         let open = Open::new(&netlist.json, netlist.refs, shown.clone())?;
         let data = Data::Opened {
             scene: shown,
@@ -169,6 +185,35 @@ impl Live {
         self.open = Some(open);
         Ok(data)
     }
+}
+
+/// The engine runs no stop shorter than the scene's max step or trace grid.
+fn shorter_stop(json: &str, stop: Duration, variable: &str) -> Result<u64, Error> {
+    let netlist = sim_core::netlist::parse(json.as_bytes()).expect("the reader writes a netlist");
+    let Analysis::Transient(transient) = netlist.analysis() else {
+        unreachable!("a session runs a transient");
+    };
+    let least = transient.max_step.max(transient.grid);
+    let refuse = |message: String, hint: String| Err(Error::new(Code::Usage, message, hint));
+    if stop.as_ps() > orbe_scene::STOP_PS {
+        return refuse(
+            format!("{variable}={stop} is longer than the 2-hour stop"),
+            format!(
+                "set {variable} to at most {}, or unset it",
+                t(orbe_scene::STOP_PS)
+            ),
+        );
+    }
+    if stop.as_ps() < least {
+        return refuse(
+            format!(
+                "{variable}={stop} is shorter than {}, the shortest stop the engine runs for this scene",
+                t(least)
+            ),
+            format!("set {variable} to at least {}, or unset it", t(least)),
+        );
+    }
+    Ok(stop.as_ps())
 }
 
 /// `orbe check`'s findings as one refusal: `part_missing` or `firmware_missing` when every
@@ -685,7 +730,7 @@ mod tests {
         let scene = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../examples/first-target/scene.jsonc");
         let netlist = orbe_scene::read(&scene).unwrap();
-        let stop = format!("\"stop_ps\": {}", 7_200_000_000_000_000u64);
+        let stop = format!("\"stop_ps\": {}", orbe_scene::STOP_PS);
         assert!(netlist.json.contains(&stop), "{}", netlist.json);
         let json = netlist.json.replace(&stop, "\"stop_ps\": 50000000000");
         let mut live = Live::new("t");

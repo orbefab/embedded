@@ -81,6 +81,8 @@ pub enum Code {
     NoChange,
     /// A step its caller stopped between two slices.
     Cancelled,
+    /// The session's process ended without closing.
+    SessionCrashed,
     /// The engine refused to open the netlist, with its diagnostic's code.
     Engine(String),
 }
@@ -106,6 +108,7 @@ impl Code {
             Code::PastStop => "past_stop",
             Code::NoChange => "no_change",
             Code::Cancelled => "cancelled",
+            Code::SessionCrashed => "session_crashed",
             Code::Engine(code) => code,
         }
     }
@@ -663,6 +666,17 @@ impl Data {
 impl Reply {
     pub fn ok(&self) -> bool {
         self.error.is_none()
+    }
+
+    /// `orbe check`'s exit codes: 0 when it succeeded, 2 for a usage error, 3 for an io error,
+    /// and 1 for any other refusal.
+    pub fn exit(&self) -> u8 {
+        match self.error.as_ref().map(|e| &e.code) {
+            None => 0,
+            Some(Code::Usage) => 2,
+            Some(Code::IoError) => 3,
+            Some(_) => 1,
+        }
     }
 
     /// The `expected` and `actual` of a failed `expect` or `step --until`.

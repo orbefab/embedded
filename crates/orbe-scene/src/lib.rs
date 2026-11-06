@@ -24,6 +24,7 @@ use std::path::Path;
 pub use add::{Reply, Request, RunError, run as add_parts};
 pub use circuit::{Amount, EnginePart, MapPart, Netlist, Reading, RefMap};
 pub use diagnostic::{Code, Diagnostic};
+pub use model::STOP_PS;
 pub use project::{REGISTRY, folder_hash};
 
 /// Type-checks a scene and every part file it reaches. On success, the netlist the engine

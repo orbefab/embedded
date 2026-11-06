@@ -1,6 +1,6 @@
 //! The live commands as one typed table, and the session loop that runs them on one engine
-//! session. `orbe test` runs it in-process. A per-session background process will run the
-//! same loop for the live commands.
+//! session. `orbe test` runs it in-process, and a per-session background process runs it for
+//! the live commands.
 
 mod command;
 mod condition;

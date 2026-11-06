@@ -98,6 +98,13 @@ pub const COMMANDS: &[Spec] = &[
     },
 ];
 
+impl Spec {
+    /// Parses the words after the command's name.
+    pub fn command(&self, args: &[String], root: &Path) -> Result<Command, String> {
+        (self.parse)(args, root).map_err(|reason| format!("{reason}; usage: {}", self.usage))
+    }
+}
+
 pub fn spec(name: &str) -> Option<&'static Spec> {
     COMMANDS.iter().find(|s| s.name == name)
 }
@@ -116,9 +123,7 @@ impl Command {
                 names.join(", ")
             )
         })?;
-        (spec.parse)(args, root)
-            .map(Some)
-            .map_err(|reason| format!("{reason}; usage: {}", spec.usage))
+        spec.command(args, root).map(Some)
     }
 }
 
