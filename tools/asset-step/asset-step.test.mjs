@@ -138,6 +138,13 @@ test('a vertex that is not a finite number fails seating and composition', async
   assert.match(out.line('short-rotate'), /composition: placed by the layout, node `u1\/body` has a vertex that is not a finite number/);
 });
 
+test('a lead whose node has an infinite vertex fails the anchors check', async (t) => {
+  const infinite = leaded('infinite');
+  infinite.nodes[0].points = [...FACE, [0, 0, Infinity]];
+  const fx = await fixture(t, { infinite });
+  assert.match(run(fx, ['infinite']).line('infinite'), /^FAIL {2}infinite {2}anchors: lead 1's node `lead` ends at \(NaN, NaN, NaN\)/);
+});
+
 test('a lead is the mesh of the node its anchor names', async (t) => {
   const fx = await fixture(t, {
     grouped: {
@@ -159,10 +166,13 @@ test('a lead is the mesh of the node its anchor names', async (t) => {
 test('the tip is the centroid of the vertices within 0.001 mm of the furthest', async (t) => {
   const spiked = leaded('spiked');
   spiked.nodes[0].points = [...FACE.slice(0, 3), [-0.5, 0.5, -1.0002]];
-  const fx = await fixture(t, { spiked });
-  const out = run(fx, ['spiked']);
-  assert.equal(out.status, 0, out.line('spiked'));
+  const stepped = leaded('stepped');
+  stepped.nodes[0].points = [...FACE, [0.5, 0.5, -0.998]];
+  const fx = await fixture(t, { spiked, stepped });
+  const out = run(fx, ['spiked', 'stepped']);
+  assert.equal(out.status, 0, `${out.line('spiked')}\n${out.line('stepped')}`);
   assert.ok(asset(fx, 'spiked').checks.anchors.largest_miss_mm < 0.001);
+  assert.equal(asset(fx, 'stepped').checks.anchors.largest_miss_mm, 0);
 });
 
 test("a child's pads are leads when its parent is composed", async (t) => {
@@ -193,6 +203,15 @@ test("composition places a child's own children", async (t) => {
   const out = run(fx, ['tilted', 'flat', 'mid', 'block']);
   assert.match(out.line('tilted'), /composition: placed by the layout, node `m\/b\/body` reaches z = -3\.420 mm/);
   assert.match(out.line('flat'), /^ok {4}flat {2}kept 0 nodes, 1, composed 3 draw calls/);
+});
+
+test('a child is composed from the commit its asset.json records', async (t) => {
+  const fx = await fixture(t, { block: BLOCK, holder: board('holder', { u1: 'block' }, { u1: { at: [0, 0, 0] } }) });
+  assert.equal(run(fx, ['block', 'holder']).status, 0);
+  const sunk = await publish(fx, { block: { ...BLOCK, nodes: [{ name: 'body', points: [[0, 0, -3], [0, 0, 2]] }] } });
+  const out = run(fx, ['holder'], sunk);
+  assert.equal(out.status, 0, out.line('holder'));
+  assert.equal(asset(fx, 'holder').checks.composition.z_mm, 0);
 });
 
 test('a part that holds itself fails composition', async (t) => {
