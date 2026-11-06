@@ -1,13 +1,20 @@
 import { type Command, commandLine, type FrameMessage, type SceneMessage, type SessionSource, type ToViewer } from "@orbe/viewer";
 
+export interface FixtureSource extends SessionSource {
+  /** Sends `message` to every listener and to each later one, as a session sends a new
+   * scene after `open` or a frame after a change. */
+  push(message: ToViewer): void;
+}
+
 /** A session stand-in. It sends `scene`, then plays `frames` one every `stepMs`, from the
  * start again after the last. With `hold`, it sends that one frame and stays on it. It logs
  * every command the viewer sends. */
 export function fixtureSource(
-  scene: SceneMessage,
+  first: SceneMessage,
   frames: readonly FrameMessage[],
   options: { readonly stepMs: number; readonly hold?: FrameMessage }
-): SessionSource {
+): FixtureSource {
+  let scene = first;
   const listeners = new Set<(message: ToViewer) => void>();
   let latest = options.hold ?? frames[0];
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -39,6 +46,11 @@ export function fixtureSource(
     },
     send(command: Command) {
       console.log(commandLine(command));
+    },
+    push(message) {
+      if (message.type === "scene") scene = message;
+      else latest = message;
+      broadcast(message);
     },
   };
 }

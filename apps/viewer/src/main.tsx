@@ -1,6 +1,7 @@
 import { Viewer } from "@orbe/viewer";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { FloatType, WebGLRenderTarget } from "three";
 import { firstTarget, script } from "./first-target";
 import { fixtureSource } from "./fixture-source";
 
@@ -15,7 +16,11 @@ createRoot(root).render(
   <StrictMode>
     <Viewer
       onCreated={(state) => {
-        Object.assign(window, { orbeViewer: state });
+        // `get` returns the live state. The state passed here keeps the startup camera.
+        Object.assign(window, {
+          orbeViewer: { get: state.get },
+          orbeFixture: { push: source.push, firstTarget, script, three: { FloatType, WebGLRenderTarget } },
+        });
       }}
       source={source}
     />
