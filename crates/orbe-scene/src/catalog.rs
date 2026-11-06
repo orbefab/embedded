@@ -282,7 +282,9 @@ fn list(root: &Path, dir: &Path, out: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::folder_hash;
+    use crate::project::{folder_hash, hex};
+    use serde_json::Value;
+    use sha2::{Digest, Sha256};
 
     #[test]
     fn the_builtin_catalog_matches_the_parts_tree() {
@@ -305,5 +307,110 @@ mod tests {
         assert_eq!(nano.uses.len(), 14);
         assert!(!nano.sealed);
         assert!(catalog.newest("led-5mm").unwrap().sealed);
+    }
+
+    fn leads(pins: &Value) -> BTreeSet<u64> {
+        let lists = pins.as_object().into_iter().flat_map(|pins| pins.values());
+        lists
+            .filter_map(Value::as_array)
+            .flatten()
+            .filter_map(Value::as_u64)
+            .collect()
+    }
+
+    fn named_nodes(part: &Value) -> Vec<&str> {
+        let view = &part["view"];
+        let entries = ["glow", "tint"]
+            .iter()
+            .filter_map(|key| view[key].as_array())
+            .flatten()
+            .map(|entry| &entry["node"]);
+        let recoloured = view["recolour"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry["nodes"].as_array())
+            .flatten();
+        let joints = part["joints"]
+            .as_object()
+            .into_iter()
+            .flat_map(|joints| joints.values())
+            .map(|joint| &joint["node"]);
+        entries
+            .chain(recoloured)
+            .chain(joints)
+            .map(|node| node.as_str().unwrap())
+            .collect()
+    }
+
+    /// The asset step's record holds for every part with a body model: the hashes and sizes
+    /// match the files, the anchors cover exactly the leads in `pins`, and the merge kept every
+    /// node `view` and `joints` name.
+    #[test]
+    fn every_body_model_matches_its_asset_record() {
+        let catalog = Catalog::builtin();
+        let mut checked = 0;
+        for id in catalog.ids() {
+            let entry = catalog.newest(id).unwrap();
+            let glb = format!("{id}.glb");
+            if !entry.files.contains_key(&glb) {
+                continue;
+            }
+            checked += 1;
+            let asset: Value = serde_json::from_slice(&entry.files["asset.json"])
+                .unwrap_or_else(|e| panic!("{id}: asset.json: {e}"));
+            let anchors_name = format!("{id}.anchors.json");
+            let mut want = vec![glb.as_str()];
+            if entry.files.contains_key(&anchors_name) {
+                want.push(&anchors_name);
+            }
+            let listed = asset["files"].as_object().unwrap();
+            let mut names: Vec<&str> = listed.keys().map(String::as_str).collect();
+            names.sort();
+            want.sort();
+            assert_eq!(names, want, "{id}: asset.json lists these files");
+            for (name, record) in listed {
+                let bytes = &entry.files[name];
+                assert_eq!(record["bytes"], bytes.len(), "{id}: size of {name}");
+                assert_eq!(
+                    record["sha256"],
+                    hex(&Sha256::digest(bytes)),
+                    "{id}: sha256 of {name}"
+                );
+            }
+
+            let part = find(id).unwrap().tree.to_value();
+            let anchors: Vec<u64> = match entry.files.get(&anchors_name) {
+                Some(bytes) => serde_json::from_slice::<Value>(bytes).unwrap()["anchors"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|anchor| anchor["lead"].as_u64().unwrap())
+                    .collect(),
+                None => Vec::new(),
+            };
+            let anchor_set: BTreeSet<u64> = anchors.iter().copied().collect();
+            assert_eq!(
+                anchor_set.len(),
+                anchors.len(),
+                "{id}: a lead has two anchors"
+            );
+            assert_eq!(
+                anchor_set,
+                leads(&part["pins"]),
+                "{id}: anchors against pins"
+            );
+
+            let kept: BTreeSet<&str> = asset["kept_nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|node| node.as_str().unwrap())
+                .collect();
+            for node in named_nodes(&part) {
+                assert!(kept.contains(node), "{id}: `{node}` is not a kept node");
+            }
+        }
+        assert_eq!(checked, 18);
     }
 }

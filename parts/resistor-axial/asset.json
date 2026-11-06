@@ -1,0 +1,55 @@
+{
+  "part": "resistor-axial",
+  "source": {
+    "repo": "https://github.com/orbefab/models",
+    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
+    "inputs": {
+      "glb": {
+        "path": "GLB/parts/resistor-axial.glb",
+        "sha256": "a3e4e4bc286ac3ce405fdf72758be19fa154abd9ce2a8e32e3cb5e74260591ac",
+        "bytes": 100520
+      },
+      "anchors": {
+        "path": "GLB/parts/resistor-axial.anchors.json",
+        "sha256": "a98084ba09c2a467acca47216708850c932c505643e2f914f0c110e9273fb27a",
+        "bytes": 294
+      }
+    }
+  },
+  "files": {
+    "resistor-axial.glb": {
+      "sha256": "997ce68413260ddfbde85d61daadbe560434131e2729c5f228bce9dc3aad293a",
+      "bytes": 77032
+    },
+    "resistor-axial.anchors.json": {
+      "sha256": "a98084ba09c2a467acca47216708850c932c505643e2f914f0c110e9273fb27a",
+      "bytes": 294
+    }
+  },
+  "box": {
+    "min": [-5.35, -1.196645, -8],
+    "max": [5.35, 1.196645, 2.4]
+  },
+  "kept_nodes": ["band1-brown", "band2-black", "band3-orange", "band4-gold", "lead-1", "lead-2"],
+  "draw_calls": 7,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 2,
+      "largest_miss_mm": 0.003176
+    },
+    "seating": {
+      "lowest_node": "body1",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": ["band1-brown", "band2-black", "band3-orange", "band4-gold"]
+    },
+    "merge": {
+      "primitives_in": 43,
+      "primitives_out": 7
+    }
+  }
+}

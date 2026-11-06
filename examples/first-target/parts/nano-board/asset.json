@@ -1,0 +1,52 @@
+{
+  "part": "nano-board",
+  "source": {
+    "repo": "https://github.com/orbefab/models",
+    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
+    "inputs": {
+      "glb": {
+        "path": "GLB/parts/nano-board.glb",
+        "sha256": "526cd430ae1c58e1a82a0838c55042f7fad2c93666ee0fe8cfe83cceac708853",
+        "bytes": 158900
+      }
+    }
+  },
+  "files": {
+    "nano-board.glb": {
+      "sha256": "b134256067ec4fcb0a1b0d7fc276b2632ea3d168f690e367e1cedea2e1020061",
+      "bytes": 83996
+    }
+  },
+  "box": {
+    "min": [-21.600001, -9, 2.54],
+    "max": [21.600001, 9, 4.19]
+  },
+  "kept_nodes": [],
+  "draw_calls": 2,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 0,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "pcb",
+      "z_mm": 2.54
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 166,
+      "primitives_out": 2
+    },
+    "composition": {
+      "children": 28,
+      "lowest_node": "usb_serial/(merged)",
+      "z_mm": 0.68,
+      "draw_calls": 118
+    }
+  }
+}

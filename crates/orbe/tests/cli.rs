@@ -315,6 +315,21 @@ fn adding_parts_for_the_first_target() {
     }
     copied.sort();
     assert_eq!(copied.len(), 18);
+    for id in &copied {
+        let names = [
+            "part.jsonc".to_string(),
+            "asset.json".to_string(),
+            format!("{id}.glb"),
+            format!("{id}.anchors.json"),
+        ];
+        for name in names {
+            let catalog = common::repo().join("parts").join(id).join(&name);
+            let copy = dir.path().join("parts").join(id).join(&name);
+            if catalog.exists() || name.ends_with(".glb") {
+                assert_eq!(fs::read(&copy).ok(), fs::read(&catalog).ok(), "{id}/{name}");
+            }
+        }
+    }
     let fixture_lock =
         fs::read_to_string(common::fixture("nano-button").join("parts.lock")).unwrap();
     let lock_path = dir.path().join("parts.lock");
@@ -428,16 +443,17 @@ fn adding_parts_for_the_first_target() {
     assert_eq!(fs::read(&lock_path).unwrap(), lock_before);
     assert!(!dir.path().join(".orbe-add-staging").exists());
 
-    let mangled = fs::read_to_string(&lock_path)
-        .unwrap()
-        .replacen("sha256:0", "sha256:1", 1);
-    fs::write(&lock_path, &mangled).unwrap();
+    let lock_text = fs::read_to_string(&lock_path).unwrap();
+    let first = lock_text.lines().next().unwrap();
+    let (fields, _) = first.rsplit_once(" sha256:").unwrap();
+    let wrong = format!("{fields} sha256:{}", "0".repeat(64));
+    fs::write(&lock_path, lock_text.replacen(first, &wrong, 1)).unwrap();
     let (output, stdout, _) = orbe_in(dir.path(), &["add", "--relock"]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(stdout.contains("wrote parts.lock"), "{stdout}");
     assert!(stdout.contains("`nano-board` is modified"), "{stdout}");
     let lock = fs::read_to_string(&lock_path).unwrap();
-    assert!(!lock.contains("sha256:1d3d50"), "{lock}");
+    assert!(!lock.contains(&wrong), "{lock}");
     let hash = orbe_scene::folder_hash(nano.parent().unwrap()).unwrap();
     let nano_line = lock
         .lines()
