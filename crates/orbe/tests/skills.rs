@@ -940,3 +940,217 @@ fn a_failed_test_prints_what_core_shows() {
     assert_eq!(run.code, 1);
     assert_eq!(format!("{}{}", run.stdout, run.stderr), shown);
 }
+
+#[test]
+fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
+    let project = worked_example();
+    let dir = project.path();
+    let scene = fs::read_to_string(dir.join("scene.jsonc")).unwrap();
+    let cathode = "[\"led1.cathode\", \"nano.GND\"],";
+    let bare: String = scene
+        .lines()
+        .filter(|l| !l.contains("\"r1"))
+        .map(|l| format!("{l}\n"))
+        .collect::<String>()
+        .replace(
+            cathode,
+            &format!("[\"nano.D13\", \"led1.anode\"], {cathode}"),
+        );
+    assert!(!bare.contains("r1") && bare.contains("\"led1.anode\"]"));
+    fs::write(dir.join("scene.jsonc"), bare).unwrap();
+    let runtime = Runtime::new();
+    let orbe = |args: &[&str]| runtime.orbe(dir, args);
+    orbe(&["open"]).ok();
+    orbe(&["step", "100ms"]).ok();
+    orbe(&["press", "@btn1"]).ok();
+    let step = orbe(&["step", "--until", "@led1", "on", "--timeout", "50ms"])
+        .ok()
+        .stdout;
+    for warning in [
+        "warning[rating.current] #led1.i peaks at ",
+        "A, over its 0.03 A rating",
+        "warning[rating.power] #led1.p peaks at ",
+        "W, over its 0.075 W rating",
+    ] {
+        assert!(step.contains(warning), "{step}");
+    }
+    let led = orbe(&["get", "@led1", "--json"]).ok().json()["data"]["value"].clone();
+    let pin = orbe(&["get", "@nano.D13", "--json"]).ok().json()["data"]["value"].clone();
+    let expect = orbe(&["expect", "no", "diagnostics"]);
+    assert_eq!(expect.code, 1);
+    assert!(
+        expect
+            .stdout
+            .contains("actual:   rating.current, rating.power"),
+        "{}",
+        expect.stdout
+    );
+    orbe(&["close"]).ok();
+
+    let core = skill("core");
+    says(
+        &core,
+        &format!(
+            "With D13 wired straight to `led1.anode` and no `r1`, the LED draws {:.0} mA. `step` lists `warning[rating.current]` and `warning[rating.power]` for `led1`, and `expect no diagnostics` fails. The LED holds D13 at {:.1} V, so D13 reads `{}` while the LED is {}.",
+            led["i"].as_f64().unwrap() * 1e3,
+            pin["v"].as_f64().unwrap(),
+            pin["level"].as_str().unwrap(),
+            if led["on"] == true { "on" } else { "off" },
+        ),
+    );
+    says(
+        &core,
+        "- It warns `rating.current` above 30 mA and `rating.power` above 75 mW.",
+    );
+}
+
+#[test]
+fn a_resistor_over_its_power_rating_warns_as_its_parts_line_says() {
+    let project = worked_example();
+    let dir = project.path();
+    write_file(
+        dir,
+        "hot.jsonc",
+        r#"{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "r9": { "type": "resistor-axial", "resistance": "10" },
+  },
+  "wires": [["nano.5V", "r9.a"], ["r9.b", "nano.GND"]],
+}
+"#,
+    );
+    let runtime = Runtime::new();
+    let open = runtime.orbe(dir, &["open", "hot.jsonc"]).ok().stdout;
+    assert!(
+        open.contains("warning[rating.power] #r9.p peaks at 2.5 W, over its 0.25 W rating"),
+        "{open}"
+    );
+    runtime.orbe(dir, &["close"]).ok();
+    says(&skill("core"), "- It warns `rating.power` above 250 mW.");
+}
+
+#[test]
+fn part_readings_show_a_pin_edge_where_until_stops_and_led_l_follows_d13() {
+    let core = skill("core");
+    says(
+        &core,
+        "A pin condition stops 1 ps after the exact edge, and part readings such as `@led1 on` already show the edge there, with no extra `step`.",
+    );
+    says(
+        &core,
+        "- `@nano.mcu.PB5`, `@nano.led_l`: a part inside a part, by its name in that part's file. The Nano's chip is `mcu`, and `led_l` is its L LED, which D13 drives.",
+    );
+    let project = worked_example();
+    let dir = project.path();
+    let runtime = Runtime::new();
+    let orbe = |args: &[&str]| runtime.orbe(dir, args).ok();
+    orbe(&["open"]);
+    orbe(&["step", "100ms"]);
+    for (input, level, before, after) in [
+        ("press", "high", "off", "on"),
+        ("release", "low", "on", "off"),
+    ] {
+        for led in ["@led1", "@nano.led_l"] {
+            orbe(&["expect", led, before]);
+        }
+        orbe(&[input, "@btn1"]);
+        orbe(&["step", "--until", "@nano.D13", level]);
+        for led in ["@led1", "@nano.led_l"] {
+            orbe(&["expect", led, after]);
+        }
+    }
+    orbe(&["close"]);
+}
+
+#[test]
+fn orbe_test_leaves_an_open_session_alone_and_none_to_close() {
+    let core = skill("core");
+    let project = worked_example();
+    let dir = project.path();
+    let (_, test) = blocks(&core)
+        .into_iter()
+        .find(|(info, _)| info == "text tests/button.test")
+        .unwrap();
+    write_file(dir, "tests/button.test", &test);
+    let runtime = Runtime::new();
+    let live = ["--session", "sg-live"];
+    runtime.orbe(dir, &[&["open"][..], &live].concat()).ok();
+    runtime
+        .orbe(dir, &[&["step", "7ms"][..], &live].concat())
+        .ok();
+    let run = Run::new(
+        runtime
+            .command(dir, &["test"])
+            .env("ORBE_SESSION", "sg-live")
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.ends_with("1 passed, 0 failed\n"),
+        "{}",
+        run.stdout
+    );
+    let flagged = runtime.orbe(dir, &[&["test"][..], &live].concat());
+    assert_eq!(flagged.code, 2);
+    assert!(
+        flagged
+            .stderr
+            .contains("unexpected argument '--session' found"),
+        "{}",
+        flagged.stderr
+    );
+    let kept = runtime
+        .orbe(dir, &[&["snapshot", "--json"][..], &live].concat())
+        .ok()
+        .json();
+    assert_eq!(
+        kept["t_ps"], 7_000_000_000u64,
+        "the open session is left at 7ms"
+    );
+    runtime.orbe(dir, &[&["close"][..], &live].concat()).ok();
+
+    runtime.orbe(dir, &["test"]).ok();
+    assert!(runtime.daemons().is_empty(), "orbe test leaves no session");
+    let close = runtime.orbe(dir, &["close", "--json"]);
+    assert_eq!(close.code, 1);
+    let code = close.json()["error"]["code"].as_str().unwrap().to_string();
+    says(
+        &core,
+        &format!(
+            "7. Run `orbe close` when the live work is done. A `{code}` error from it means nothing was open.\n8. Write what worked as `tests/<name>.test` and run `orbe test`. It leaves no session to close."
+        ),
+    );
+    says(
+        &core,
+        "Each file's session lives inside `orbe test` and ends with it. A session that `orbe open` started keeps running, untouched. `orbe test` takes no `--session` and ignores `ORBE_SESSION`.",
+    );
+}
+
+#[test]
+fn no_diagnostics_says_a_chip_warning_can_show_one_engine_step_late() {
+    says(
+        &skill("core"),
+        "A chip warning can show up to one engine step (10 ms) late, so step that far past its cause first.",
+    );
+    let project = worked_example();
+    let dir = project.path();
+    let scene = fs::read_to_string(dir.join("scene.jsonc")).unwrap();
+    let runtime = Runtime::new();
+    for (sim, max_step) in [("", "10ms"), ("\"sim\": { \"max_step\": \"1ms\" },", "1ms")] {
+        let set = scene.replacen("\"format\": 1,", &format!("\"format\": 1, {sim}"), 1);
+        fs::write(dir.join("scene.jsonc"), set).unwrap();
+        runtime.orbe(dir, &["open"]).ok();
+        let reply = runtime
+            .orbe(dir, &["expect", "no", "diagnostics", "--json"])
+            .ok()
+            .json();
+        assert_eq!(
+            reply["data"]["actual"],
+            format!("no diagnostics; a chip warning can show up to {max_step} late")
+        );
+        runtime.orbe(dir, &["close"]).ok();
+    }
+}
