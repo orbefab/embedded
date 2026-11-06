@@ -1,13 +1,13 @@
 //! `orbe daemon --session <name>`, the session's process. One thread owns the `Live` and runs
 //! commands in the order they arrive on one channel, and writes each reply itself, so every
 //! command it took is answered before it exits. Each connection carries one request, and a
-//! client that hangs up before its reply cancels a running `step`.
+//! client that hangs up before its reply cancels a running `step`, or the command it queued.
 
 use std::io::{self, BufReader, Read, Write};
 use std::ops::ControlFlow;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,7 +15,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
 
-use orbe_session::{Code, Command, Error, Live, Reply, State};
+use orbe_session::{Code, Command, Data, Error, Live, Reply, State};
 
 use super::place::{Name, Place};
 use super::{Request, read_line};
@@ -33,62 +33,101 @@ struct Job {
     client: UnixStream,
 }
 
-impl Job {
-    fn run(&self, live: &mut Live) -> Reply {
-        let Request { cwd, command } = match &self.request {
-            Ok(request) => request,
-            Err(error) => return live.refuse(error.clone()),
+/// The session's `Live`, and the open scene's real path with the folder `open` ran in, so a
+/// client in another folder sees the scene's path from there.
+struct Held {
+    live: Live,
+    scene: Option<(PathBuf, PathBuf)>,
+}
+
+impl Held {
+    fn run(&mut self, job: &Job) -> Reply {
+        if job.hung_up.load(Ordering::Relaxed) {
+            return self.live.refuse(Error::new(
+                Code::Cancelled,
+                "the command was cancelled before it ran",
+                "the session did not change",
+            ));
+        }
+        let (cwd, command) = match &job.request {
+            Ok(Request {
+                cwd,
+                command: Ok(command),
+            }) => (Path::new(cwd), command),
+            Ok(Request {
+                command: Err(error),
+                ..
+            })
+            | Err(error) => return self.live.refuse(error.clone()),
         };
-        if matches!(command, Command::Open(_))
+        if let Command::Open(_) = command
             && let Err(error) = std::env::set_current_dir(cwd)
         {
-            return live.refuse(Error::new(
+            return self.live.refuse(Error::new(
                 Code::IoError,
                 format!("cannot open from {}: {error}", cwd.display()),
                 "run `orbe open` from a folder that exists",
             ));
         }
-        live.run_with(command, &mut |_| {
-            if self.hung_up.load(Ordering::Relaxed) {
+        let mut reply = self.live.run_with(command, &mut |_| {
+            if job.hung_up.load(Ordering::Relaxed) {
                 ControlFlow::Break(())
             } else {
                 ControlFlow::Continue(())
             }
-        })
+        });
+        match (command, &mut reply.data) {
+            (Command::Open(scene), Data::Opened { .. }) => {
+                self.scene = scene
+                    .canonicalize()
+                    .ok()
+                    .map(|real| (cwd.to_path_buf(), real));
+            }
+            (Command::Close, Data::Closed { .. }) => self.scene = None,
+            (_, Data::Snapshot(snapshot)) => {
+                if let Some((opened_in, real)) = &self.scene
+                    && opened_in != cwd
+                {
+                    snapshot.scene = relative(cwd, real).display().to_string();
+                }
+            }
+            _ => {}
+        }
+        reply
     }
+}
 
+impl Job {
     /// Whether a reply with no open scene ends the process: one to `open` or `close`, not a
     /// read that reached the process before its first `open`.
     fn ends_when_closed(&self) -> bool {
         matches!(
             self.request,
             Ok(Request {
-                command: Command::Open(_) | Command::Close,
+                command: Ok(Command::Open(_) | Command::Close),
                 ..
             })
         )
     }
 
-    fn answer(self, live: &mut Live) -> State {
-        let reply = self.run(live);
-        let mut wire = serde_json::to_string(&reply).expect("a reply serializes");
+    fn answer(self, reply: &Reply) {
+        let mut wire = serde_json::to_string(reply).expect("a reply serializes");
         wire.push('\n');
         let _ = self.client.set_write_timeout(Some(WRITE));
         let _ = (&self.client).write_all(wire.as_bytes());
         let _ = self.client.shutdown(std::net::Shutdown::Both);
-        reply.state
     }
 }
 
 pub fn run(name: &Name) -> ExitCode {
-    let place = match Place::find() {
-        Ok(place) => place,
+    let found = Place::find().and_then(|place| Ok((place.socket(name)?, place.log(name))));
+    let (socket, log) = match found {
+        Ok(paths) => paths,
         Err((message, hint)) => {
             eprintln!("error[io_error]: {message}\n  hint: {hint}");
             return ExitCode::from(3);
         }
     };
-    let socket = place.socket(name);
     let listener = match bind(&socket) {
         Ok(listener) => listener,
         Err(error) => {
@@ -99,49 +138,76 @@ pub fn run(name: &Name) -> ExitCode {
             return ExitCode::from(3);
         }
     };
-    let bound = inode(&socket);
+    let bound = (inode(&socket), inode(&log));
     let (jobs, queue) = mpsc::channel();
     thread::spawn(move || accept(&listener, &jobs));
     let mut live = Live::new(name.as_str());
-    serve(&mut live, &queue, idle());
-    if bound.is_some() && inode(&socket) == bound {
-        let _ = std::fs::remove_file(&socket);
+    if let Some(stop) = test_duration("ORBE_TEST_STOP") {
+        live.stop_at(stop);
     }
+    let mut held = Held { live, scene: None };
+    serve(
+        &mut held,
+        &queue,
+        test_duration("ORBE_TEST_IDLE_TIMEOUT").map_or(IDLE, std),
+    );
+    for (path, identity) in [(&socket, bound.0), (&log, bound.1)] {
+        if identity.is_some() && inode(path) == identity {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    let ending = held.live.refuse(Error::new(
+        Code::NoSession,
+        format!("session `{name}` has ended"),
+        "",
+    ));
     while let Ok(job) = queue.try_recv() {
-        job.answer(&mut live);
+        job.answer(&ending);
     }
-    let _ = std::fs::remove_file(place.log(name));
     ExitCode::SUCCESS
 }
 
-/// Runs jobs in order until one leaves no scene open, the session reaches its stop, or no job
-/// comes for `idle`.
-fn serve(live: &mut Live, queue: &Receiver<Job>, idle: Duration) {
+/// Runs jobs in order until one to `open` or `close` leaves no scene open, or no job comes for
+/// `idle`. A session at its stop stays, so reads still answer there.
+fn serve(held: &mut Held, queue: &Receiver<Job>, idle: Duration) {
     while let Ok(job) = queue.recv_timeout(idle) {
         let ends_when_closed = job.ends_when_closed();
-        match job.answer(live) {
-            State::Stopped => return,
-            State::Closed if ends_when_closed => return,
-            _ => {}
+        let reply = held.run(&job);
+        job.answer(&reply);
+        if ends_when_closed && reply.state == State::Closed {
+            return;
         }
     }
 }
 
-/// The idle timeout, which `ORBE_TEST_IDLE_TIMEOUT` (a duration such as `300ms`) shortens
-/// for tests.
-fn idle() -> Duration {
-    std::env::var("ORBE_TEST_IDLE_TIMEOUT")
+/// A duration such as `300ms` from a test seam: `ORBE_TEST_IDLE_TIMEOUT` shortens the idle
+/// timeout, and `ORBE_TEST_STOP` the 2-hour stop.
+fn test_duration(variable: &str) -> Option<orbe_session::Duration> {
+    std::env::var(variable)
         .ok()
         .and_then(|text| orbe_session::Duration::parse(&text).ok())
-        .map_or(IDLE, |d| Duration::from_nanos(d.as_ps() / 1000))
+}
+
+fn std(duration: orbe_session::Duration) -> Duration {
+    Duration::from_nanos(duration.as_ps() / 1000)
+}
+
+/// `to` from the folder `from`, both real paths, such as `../scene.jsonc`.
+fn relative(from: &Path, to: &Path) -> PathBuf {
+    let from: Vec<Component> = from.components().collect();
+    let to: Vec<Component> = to.components().collect();
+    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    let up = std::iter::repeat_n(Component::ParentDir, from.len() - common);
+    up.chain(to[common..].iter().copied()).collect()
 }
 
 /// Binds the socket. A socket file nothing answers on is one a crashed process left, and is
-/// replaced.
+/// replaced. Anything else at the path stays, and the bind fails.
 fn bind(socket: &Path) -> io::Result<UnixListener> {
     match UnixListener::bind(socket) {
         Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
-            if UnixStream::connect(socket).is_ok() {
+            let is_socket = std::fs::symlink_metadata(socket)?.file_type().is_socket();
+            if !is_socket || UnixStream::connect(socket).is_ok() {
                 return Err(error);
             }
             std::fs::remove_file(socket)?;
@@ -151,9 +217,9 @@ fn bind(socket: &Path) -> io::Result<UnixListener> {
     }
 }
 
-/// The socket file's identity, so the process removes only the one it bound.
-fn inode(socket: &Path) -> Option<(u64, u64)> {
-    std::fs::symlink_metadata(socket)
+/// A file's identity, so the process removes only the socket it bound and the log it got.
+fn inode(path: &Path) -> Option<(u64, u64)> {
+    std::fs::symlink_metadata(path)
         .ok()
         .map(|m| (m.dev(), m.ino()))
 }

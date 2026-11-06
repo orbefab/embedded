@@ -8,9 +8,10 @@
 mod daemon;
 mod place;
 
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::Shutdown;
+use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -24,12 +25,14 @@ use serde_json::{Value, json};
 
 use place::{Name, Place};
 
-/// One request: a command, and the client's working folder, which `open` reads its scene
-/// from, so paths in the reply read as they would in `orbe test`.
+/// One request: a command, or the usage error its words gave, and the client's working
+/// folder. `open` reads its scene from that folder and `snapshot` shows the scene's path from
+/// it, so paths read as they would in `orbe test`. A usage error goes to the process only so
+/// the refusal can carry the session's real time and state.
 #[derive(Debug, Serialize, Deserialize)]
 struct Request {
-    cwd: PathBuf,
-    command: Command,
+    cwd: String,
+    command: Result<Command, Error>,
 }
 
 /// The longest line either side reads.
@@ -114,13 +117,13 @@ pub fn main(spec: &Spec, args: &[String]) -> ExitCode {
             client.run(spec, &invocation.words).map(Answer::One)
         });
     match answer {
-        Ok(Answer::One(reply)) => {
+        Ok(Answer::One(done)) => {
             if json {
-                print_json(&reply.json());
+                print_json(&done.json());
             } else {
-                println!("{}", reply.text());
+                println!("{}", done.text());
             }
-            ExitCode::from(reply.exit())
+            ExitCode::from(done.exit())
         }
         Ok(Answer::All(closed)) => print_all(&closed, json),
         Err(refused) => {
@@ -134,17 +137,108 @@ pub fn main(spec: &Spec, args: &[String]) -> ExitCode {
     }
 }
 
-/// One session's reply, or what `close --all` did to each session.
 enum Answer {
-    One(Box<Reply>),
-    All(Vec<Closed>),
+    One(Done),
+    All(Vec<Result<Done, Refusal>>),
 }
 
-/// What `close --all` did to one session.
-enum Closed {
-    Answered(Box<Reply>),
-    /// A socket that a crashed process left, removed.
-    Stale(Name),
+/// Printed on stdout.
+enum Done {
+    /// The process's reply, success or failure, as `orbe test -v` prints it.
+    Reply(Box<Reply>),
+    /// `close` found a socket a crashed process left, and removed it.
+    Stale(Stale),
+}
+
+struct Stale {
+    session: Name,
+    /// The process's log, kept when it holds output such as a panic.
+    log: Option<PathBuf>,
+}
+
+impl Done {
+    fn session(&self) -> &str {
+        match self {
+            Done::Reply(reply) => &reply.session,
+            Done::Stale(stale) => stale.session.as_str(),
+        }
+    }
+
+    fn text(&self) -> String {
+        match self {
+            Done::Reply(reply) => reply.text(),
+            Done::Stale(Stale { log, .. }) => {
+                let mut text =
+                    String::from("removed the socket of a process that ended without closing");
+                if let Some(log) = log {
+                    text.push_str(&format!("; its last output is in {}", log.display()));
+                }
+                text
+            }
+        }
+    }
+
+    fn json(&self) -> Value {
+        match self {
+            Done::Reply(reply) => reply.json(),
+            Done::Stale(Stale { session, log }) => {
+                let mut entry =
+                    json!({ "ok": true, "session": session.as_str(), "removed": "stale_socket" });
+                if let Some(log) = log {
+                    entry["log"] = log.display().to_string().into();
+                }
+                entry
+            }
+        }
+    }
+
+    fn exit(&self) -> u8 {
+        match self {
+            Done::Reply(reply) => reply.exit(),
+            Done::Stale(_) => 0,
+        }
+    }
+}
+
+/// A refusal the client prints itself, on stderr or as one `--json` envelope. `at` is the
+/// session's time and state when its process, or a missing socket, told the client. Without
+/// it the envelope leaves them out rather than guess.
+struct Refusal {
+    session: String,
+    error: Error,
+    at: Option<(u64, State)>,
+}
+
+impl Refusal {
+    fn reply(&self) -> Reply {
+        let (t_ps, state) = self.at.unwrap_or((0, State::Closed));
+        Reply {
+            session: self.session.clone(),
+            t_ps,
+            state,
+            data: Data::None,
+            error: Some(self.error.clone()),
+        }
+    }
+
+    fn text(&self) -> String {
+        self.reply().text()
+    }
+
+    fn json(&self) -> Value {
+        let mut envelope = self.reply().json();
+        if self.at.is_none()
+            && let Some(fields) = envelope.as_object_mut()
+        {
+            fields.remove("t_ps");
+            fields.remove("state");
+        }
+        envelope
+    }
+
+    fn exit(&self) -> u8 {
+        self.reply().exit()
+    }
 }
 
 fn refusal(
@@ -152,14 +246,19 @@ fn refusal(
     code: Code,
     message: impl Into<String>,
     hint: impl Into<String>,
-) -> Box<Reply> {
-    Box::new(Reply {
+) -> Refusal {
+    Refusal {
         session: session.to_string(),
-        t_ps: 0,
-        state: State::Closed,
-        data: Data::None,
-        error: Some(Error::new(code, message, hint)),
-    })
+        error: Error::new(code, message, hint),
+        at: None,
+    }
+}
+
+enum Found {
+    Missing,
+    Listening(UnixStream),
+    /// A socket nothing answers on, which a crashed process left.
+    Stale,
 }
 
 /// One session, as this shell names it.
@@ -168,11 +267,12 @@ struct Client {
     /// Named with `--session`, so a hint repeats it. `ORBE_SESSION` stays set by itself.
     flagged: bool,
     place: Place,
-    cwd: PathBuf,
+    socket: PathBuf,
+    cwd: String,
 }
 
 impl Client {
-    fn new(flag: Option<&str>) -> Result<Client, Box<Reply>> {
+    fn new(flag: Option<&str>) -> Result<Client, Refusal> {
         let shown = flag.unwrap_or_default();
         let cwd = std::env::current_dir()
             .and_then(|dir| dir.canonicalize())
@@ -182,6 +282,19 @@ impl Client {
                     Code::IoError,
                     format!("cannot read the working folder: {error}"),
                     "run `orbe` from a folder that exists",
+                )
+            })?
+            .into_os_string()
+            .into_string()
+            .map_err(|cwd| {
+                refusal(
+                    shown,
+                    Code::IoError,
+                    format!(
+                        "the working folder {} is not UTF-8, and the session process needs a UTF-8 path",
+                        Path::new(&cwd).display()
+                    ),
+                    "run `orbe` from a folder whose path is UTF-8",
                 )
             })?;
         let env = std::env::var("ORBE_SESSION").ok().filter(|n| !n.is_empty());
@@ -194,110 +307,241 @@ impl Client {
                     "name it with `--session <name>` or ORBE_SESSION",
                 )
             })?,
-            None => Name::default_for(&cwd),
+            None => Name::default_for(Path::new(&cwd)),
         };
         let place = Place::find()
             .map_err(|(message, hint)| refusal(name.as_str(), Code::IoError, message, hint))?;
+        Client::named(name, flag.is_some(), place, cwd)
+    }
+
+    fn named(name: Name, flagged: bool, place: Place, cwd: String) -> Result<Client, Refusal> {
+        let socket = place
+            .socket(&name)
+            .map_err(|(message, hint)| refusal(name.as_str(), Code::IoError, message, hint))?;
         Ok(Client {
-            flagged: flag.is_some(),
             name,
+            flagged,
             place,
+            socket,
             cwd,
         })
     }
 
-    fn refuse(
-        &self,
-        code: Code,
-        message: impl Into<String>,
-        hint: impl Into<String>,
-    ) -> Box<Reply> {
+    fn refuse(&self, code: Code, message: impl Into<String>, hint: impl Into<String>) -> Refusal {
         refusal(self.name.as_str(), code, message, hint)
     }
 
-    fn run(&self, spec: &Spec, words: &[String]) -> Result<Box<Reply>, Box<Reply>> {
-        let command = spec
-            .command(words, Path::new(""))
-            .map_err(|message| self.refuse(Code::Usage, message, ""))?;
-        let socket = self.place.socket(&self.name);
-        let stream = match command {
-            Command::Open(_) => match UnixStream::connect(&socket) {
-                Ok(stream) => stream,
-                Err(_) => self.start()?,
-            },
-            _ => self.connect()?,
+    fn run(&self, spec: &Spec, words: &[String]) -> Result<Done, Refusal> {
+        let command = match spec.command(words, Path::new("")) {
+            Ok(command) => command,
+            Err(message) => return Err(self.usage(Error::new(Code::Usage, message, ""))),
         };
-        self.send(stream, command)
+        match command {
+            Command::Close => self.close(),
+            Command::Open(_) => self.open(command).map(Done::Reply),
+            _ => match self.find()? {
+                Found::Listening(stream) => self.send(stream, Ok(command)).map(Done::Reply),
+                Found::Missing => Err(self.no_session()),
+                Found::Stale => Err(self.crashed("ended without closing")),
+            },
+        }
     }
 
-    fn connect(&self) -> Result<UnixStream, Box<Reply>> {
-        let socket = self.place.socket(&self.name);
-        UnixStream::connect(&socket).map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => self.refuse(
-                Code::NoSession,
-                format!("no session `{}` is running", self.name),
-                format!("run `{}` to start it", self.open_command()),
-            ),
-            std::io::ErrorKind::ConnectionRefused => self.crashed("ended without closing"),
-            _ => self.refuse(
+    fn find(&self) -> Result<Found, Refusal> {
+        let shown = self.socket.display();
+        let meta = match fs::symlink_metadata(&self.socket) {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Found::Missing);
+            }
+            Err(error) => {
+                return Err(self.refuse(
+                    Code::IoError,
+                    format!("cannot read {shown}: {error}"),
+                    "",
+                ));
+            }
+        };
+        if !meta.file_type().is_socket() {
+            let (what, remove) = if meta.is_symlink() {
+                ("a symlink", "rm")
+            } else if meta.is_dir() {
+                ("a folder", "rm -r")
+            } else if meta.is_file() {
+                ("a file", "rm")
+            } else {
+                ("a special file", "rm")
+            };
+            return Err(self.refuse(
                 Code::IoError,
                 format!(
-                    "cannot reach session `{}` at {}: {error}",
-                    self.name,
-                    socket.display()
+                    "{shown} is {what}, not the socket of session `{}`",
+                    self.name
                 ),
-                "run `orbe close --all`, then open the session again",
-            ),
-        })
+                format!("remove it with `{remove} {shown}`"),
+            ));
+        }
+        match UnixStream::connect(&self.socket) {
+            Ok(stream) => Ok(Found::Listening(stream)),
+            Err(error) => match error.kind() {
+                std::io::ErrorKind::ConnectionRefused => Ok(Found::Stale),
+                std::io::ErrorKind::NotFound => Ok(Found::Missing),
+                _ => Err(self.refuse(
+                    Code::IoError,
+                    format!("cannot reach session `{}` at {shown}: {error}", self.name),
+                    "",
+                )),
+            },
+        }
+    }
+
+    /// `open` to the session's process, starting one when none listens or the one there is
+    /// ending.
+    fn open(&self, command: Command) -> Result<Box<Reply>, Refusal> {
+        if let Found::Listening(stream) = self.find()? {
+            match self.send(stream, Ok(command.clone())) {
+                Err(refused) if refused.error.code == Code::NoSession => {}
+                answered => return answered,
+            }
+        }
+        let stream = self.start()?;
+        self.send(stream, Ok(command))
+    }
+
+    /// Ends the session: `close` to its process, or, for a socket a crashed process left, the
+    /// socket removed and the log kept when it holds output.
+    fn close(&self) -> Result<Done, Refusal> {
+        match self.find()? {
+            Found::Listening(stream) => self.send(stream, Ok(Command::Close)).map(Done::Reply),
+            Found::Missing => Err(self.no_session()),
+            Found::Stale => {
+                fs::remove_file(&self.socket).map_err(|error| {
+                    self.refuse(
+                        Code::IoError,
+                        format!("cannot remove {}: {error}", self.socket.display()),
+                        "",
+                    )
+                })?;
+                let log = self.place.log(&self.name);
+                let kept = fs::symlink_metadata(&log).is_ok_and(|m| m.is_file() && m.len() > 0);
+                if !kept {
+                    let _ = fs::remove_file(&log);
+                }
+                Ok(Done::Stale(Stale {
+                    session: self.name.clone(),
+                    log: kept.then_some(log),
+                }))
+            }
+        }
+    }
+
+    /// A usage error, with the session's time and state from its process when one answers
+    /// within a second.
+    fn usage(&self, error: Error) -> Refusal {
+        let at = match self.find() {
+            Ok(Found::Listening(stream)) => {
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+                match self.send(stream, Err(error.clone())) {
+                    Ok(reply) => Some((reply.t_ps, reply.state)),
+                    Err(refused) if refused.error.code == Code::NoSession => refused.at,
+                    Err(_) => None,
+                }
+            }
+            Ok(Found::Missing) => Some((0, State::Closed)),
+            _ => None,
+        };
+        Refusal {
+            session: self.name.to_string(),
+            error,
+            at,
+        }
     }
 
     /// Starts the session's process, detached in its own process group so a terminal's Ctrl-C
     /// reaches only the client, and waits for it to listen.
-    fn start(&self) -> Result<UnixStream, Box<Reply>> {
-        let io = |what: &str, error: std::io::Error| {
+    fn start(&self) -> Result<UnixStream, Refusal> {
+        let log = self.place.log(&self.name);
+        let stderr = self.create_log(&log)?;
+        let spawned = std::env::current_exe().and_then(|exe| {
+            std::process::Command::new(exe)
+                .args(["daemon", &format!("--session={}", self.name)])
+                .current_dir("/")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(stderr)
+                .process_group(0)
+                .spawn()
+        });
+        let mut child = spawned.map_err(|error| {
+            let _ = fs::remove_file(&log);
             self.refuse(
                 Code::IoError,
-                format!("cannot start the session process: {what}: {error}"),
+                format!("cannot start the session process: {error}"),
                 "",
             )
-        };
-        let log = self.place.log(&self.name);
-        let stderr = File::create(&log).map_err(|e| io(&log.display().to_string(), e))?;
-        let exe = std::env::current_exe().map_err(|e| io("cannot find orbe", e))?;
-        let mut child = std::process::Command::new(exe)
-            .args(["daemon", &format!("--session={}", self.name)])
-            .current_dir("/")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(stderr)
-            .process_group(0)
-            .spawn()
-            .map_err(|e| io("spawn", e))?;
-        let socket = self.place.socket(&self.name);
-        let output = format!("its output is in {}", log.display());
+        })?;
         for _ in 0..POLLS {
-            if let Ok(stream) = UnixStream::connect(&socket) {
+            if let Ok(Found::Listening(stream)) = self.find() {
                 return Ok(stream);
             }
             if let Ok(Some(status)) = child.try_wait() {
-                return Err(self.refuse(
-                    Code::IoError,
+                return Err(self.failed_start(
+                    &log,
                     format!("the session process exited ({status}) before it listened"),
-                    output,
                 ));
             }
             std::thread::sleep(POLL);
         }
         let _ = child.kill();
         let _ = child.wait();
-        Err(self.refuse(
-            Code::IoError,
-            "the session process did not listen within 2 s",
-            output,
-        ))
+        Err(self.failed_start(&log, "the session process did not listen within 2 s"))
     }
 
-    fn send(&self, stream: UnixStream, command: Command) -> Result<Box<Reply>, Box<Reply>> {
+    fn create_log(&self, log: &Path) -> Result<File, Refusal> {
+        use rustix::fs::{Mode, OFlags};
+        let flags =
+            OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let shown = log.display();
+        rustix::fs::open(log, flags, Mode::RUSR | Mode::WUSR)
+            .map(File::from)
+            .map_err(|errno| {
+                if errno == rustix::io::Errno::LOOP {
+                    self.refuse(
+                        Code::IoError,
+                        format!(
+                            "{shown} is a symlink, not the log of session `{}`",
+                            self.name
+                        ),
+                        format!("remove it with `rm {shown}`"),
+                    )
+                } else {
+                    self.refuse(
+                        Code::IoError,
+                        format!("cannot write the log {shown}: {errno}"),
+                        "",
+                    )
+                }
+            })
+    }
+
+    /// A start that failed. Its log stays, named in the hint, only when it holds output.
+    fn failed_start(&self, log: &Path, message: impl Into<String>) -> Refusal {
+        let hint = if fs::symlink_metadata(log).is_ok_and(|m| m.len() > 0) {
+            format!("its output is in {}", log.display())
+        } else {
+            let _ = fs::remove_file(log);
+            String::new()
+        };
+        self.refuse(Code::IoError, message, hint)
+    }
+
+    /// A `no_session` reply, from a process with no scene yet or one that is ending, becomes
+    /// the client's own, and a hint to `open` again names the shell command.
+    fn send(
+        &self,
+        stream: UnixStream,
+        command: Result<Command, Error>,
+    ) -> Result<Box<Reply>, Refusal> {
         if let Ok(hangup) = stream.try_clone() {
             let pressed = AtomicBool::new(false);
             let _ = ctrlc::set_handler(move || {
@@ -311,26 +555,58 @@ impl Client {
             cwd: self.cwd.clone(),
             command,
         };
-        let mut wire = serde_json::to_string(&request).expect("a request serializes");
+        let mut wire = serde_json::to_string(&request).map_err(|error| {
+            self.refuse(
+                Code::IoError,
+                format!("cannot write the request: {error}"),
+                "",
+            )
+        })?;
         wire.push('\n');
         let line = (&stream)
             .write_all(wire.as_bytes())
             .ok()
             .and_then(|()| read_line(&mut BufReader::new(&stream)))
             .ok_or_else(|| self.crashed("ended before it answered"))?;
-        serde_json::from_str::<Box<Reply>>(&line).map_err(|error| {
+        let mut reply = serde_json::from_str::<Box<Reply>>(&line).map_err(|error| {
             self.refuse(
                 Code::IoError,
                 format!("the session process sent a reply this orbe cannot read: {error}"),
                 "run `orbe close --all`, then open the session again",
             )
-        })
+        })?;
+        if let Some(error) = &mut reply.error {
+            match error.code {
+                Code::NoSession => return Err(self.no_session()),
+                Code::Ended => error.hint = self.open_hint("to start again"),
+                Code::Faulted => {
+                    error.hint = format!(
+                        "run `orbe snapshot{}` to see the diagnostics, fix the scene or firmware, then {}",
+                        self.session_flag(),
+                        self.open_hint("again")
+                    );
+                }
+                _ => {}
+            }
+        }
+        Ok(reply)
     }
 
-    fn crashed(&self, how: &str) -> Box<Reply> {
+    fn no_session(&self) -> Refusal {
+        Refusal {
+            at: Some((0, State::Closed)),
+            ..self.refuse(
+                Code::NoSession,
+                format!("no session `{}` is running", self.name),
+                self.open_hint("to start it"),
+            )
+        }
+    }
+
+    fn crashed(&self, how: &str) -> Refusal {
         let log = self.place.log(&self.name);
-        let mut hint = format!("run `{}` to start it again", self.open_command());
-        if std::fs::metadata(&log).is_ok_and(|m| m.len() > 0) {
+        let mut hint = self.open_hint("to start it again");
+        if fs::symlink_metadata(&log).is_ok_and(|m| m.len() > 0) {
             hint.push_str(&format!("; its last output is in {}", log.display()));
         }
         self.refuse(
@@ -340,30 +616,36 @@ impl Client {
         )
     }
 
-    /// The `orbe open` that starts this session from this folder.
-    fn open_command(&self) -> String {
-        let mut command = String::from("orbe open");
-        if !self.cwd.join("scene.jsonc").is_file() {
-            let up = self
-                .cwd
-                .ancestors()
-                .skip(1)
-                .position(|dir| dir.join("scene.jsonc").is_file());
-            command.push(' ');
-            command.push_str(&match up {
-                Some(up) => format!("{}scene.jsonc", "../".repeat(up + 1)),
-                None => "<scene>".into(),
-            });
-        }
+    fn session_flag(&self) -> String {
         if self.flagged {
-            command.push_str(&format!(" --session {}", self.name));
+            format!(" --session {}", self.name)
+        } else {
+            String::new()
         }
-        command
+    }
+
+    /// The `orbe open` that starts this session from this folder, or, with no scene.jsonc here
+    /// or above, one with a path to fill in.
+    fn open_hint(&self, purpose: &str) -> String {
+        let session = self.session_flag();
+        let found = Path::new(&self.cwd)
+            .ancestors()
+            .position(|dir| dir.join("scene.jsonc").is_file());
+        match found {
+            Some(0) => format!("run `orbe open{session}` {purpose}"),
+            Some(up) => format!(
+                "run `orbe open {}scene.jsonc{session}` {purpose}",
+                "../".repeat(up)
+            ),
+            None => format!(
+                "run `orbe open path/to/scene.jsonc{session}` {purpose}; no scene.jsonc is in this folder or above"
+            ),
+        }
     }
 
     /// Closes every session of this build for this user, and removes sockets that crashed
     /// processes left.
-    fn close_all(&self) -> Result<Vec<Closed>, Box<Reply>> {
+    fn close_all(&self) -> Result<Vec<Result<Done, Refusal>>, Refusal> {
         let names = self.place.names().map_err(|error| {
             self.refuse(
                 Code::IoError,
@@ -371,52 +653,23 @@ impl Client {
                 "",
             )
         })?;
-        let closed = names.into_iter().map(|name| {
-            let client = Client {
-                name,
-                flagged: true,
-                place: self.place.clone(),
-                cwd: self.cwd.clone(),
-            };
-            let reply = client
-                .connect()
-                .and_then(|stream| client.send(stream, Command::Close));
-            match reply {
-                Err(refused)
-                    if refused
-                        .error
-                        .as_ref()
-                        .is_some_and(|e| e.code == Code::SessionCrashed) =>
-                {
-                    let _ = std::fs::remove_file(client.place.socket(&client.name));
-                    let _ = std::fs::remove_file(client.place.log(&client.name));
-                    Closed::Stale(client.name)
-                }
-                Ok(reply) | Err(reply) => Closed::Answered(reply),
-            }
-        });
+        let closed = names
+            .into_iter()
+            .map(|name| Client::named(name, true, self.place.clone(), self.cwd.clone())?.close());
         Ok(closed.collect())
     }
 }
 
-fn print_all(closed: &[Closed], json: bool) -> ExitCode {
+fn print_all(closed: &[Result<Done, Refusal>], json: bool) -> ExitCode {
     let exit = closed
         .iter()
-        .map(|c| match c {
-            Closed::Answered(reply) => reply.exit(),
-            Closed::Stale(_) => 0,
-        })
+        .map(|c| c.as_ref().map_or_else(Refusal::exit, Done::exit))
         .max()
         .unwrap_or(0);
     if json {
         let sessions: Vec<Value> = closed
             .iter()
-            .map(|c| match c {
-                Closed::Answered(reply) => reply.json(),
-                Closed::Stale(name) => {
-                    json!({ "ok": true, "session": name.as_str(), "removed": "stale_socket" })
-                }
-            })
+            .map(|c| c.as_ref().map_or_else(Refusal::json, Done::json))
             .collect();
         print_json(&json!({ "ok": exit == 0, "data": { "sessions": sessions } }));
     } else if closed.is_empty() {
@@ -424,12 +677,8 @@ fn print_all(closed: &[Closed], json: bool) -> ExitCode {
     } else {
         for c in closed {
             match c {
-                Closed::Answered(reply) => {
-                    println!("{}: {}", reply.session, reply.text());
-                }
-                Closed::Stale(name) => {
-                    println!("{name}: removed the socket of a process that ended without closing");
-                }
+                Ok(done) => println!("{}: {}", done.session(), done.text()),
+                Err(refused) => println!("{}: {}", refused.session, refused.text()),
             }
         }
     }

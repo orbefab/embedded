@@ -20,7 +20,7 @@ const SCENE_KEYS: &[&str] = &[
 const FORMATS: &[u32] = &[1];
 const WIRE_KINDS: &[&str] = &["jumper", "trace", "contact"];
 /// A live session's stop, investigation 1's 2-hour cap.
-const STOP_PS: u64 = 7_200 * 1_000_000_000_000;
+pub const STOP_PS: u64 = 7_200 * 1_000_000_000_000;
 const DEFAULT_MAX_STEP_PS: u64 = 10_000_000_000;
 
 /// A pin ref as written, without a leading `@`, split at its dots.

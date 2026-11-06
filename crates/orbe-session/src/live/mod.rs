@@ -38,6 +38,7 @@ use serial::Serial;
 pub struct Live {
     name: String,
     open: Option<Open>,
+    stop: Option<Duration>,
 }
 
 struct Open {
@@ -80,7 +81,14 @@ impl Live {
         Live {
             name: name.into(),
             open: None,
+            stop: None,
         }
+    }
+
+    /// Stops every scene this session opens at `stop` instead of the 2-hour stop, so a test
+    /// reaches it quickly. Only the netlist's stop changes.
+    pub fn stop_at(&mut self, stop: Duration) {
+        self.stop = Some(stop);
     }
 
     pub fn run(&mut self, command: &Command) -> Reply {
@@ -157,7 +165,13 @@ impl Live {
             )));
         }
         let dir = scene.parent().unwrap_or(Path::new(""));
-        let netlist = orbe_scene::read(scene).map_err(|found| refused(dir, &shown, found))?;
+        let mut netlist = orbe_scene::read(scene).map_err(|found| refused(dir, &shown, found))?;
+        if let Some(stop) = self.stop {
+            let at = |ps: u64| format!("\"stop_ps\": {ps}");
+            netlist.json = netlist
+                .json
+                .replacen(&at(orbe_scene::STOP_PS), &at(stop.as_ps()), 1);
+        }
         let open = Open::new(&netlist.json, netlist.refs, shown.clone())?;
         let data = Data::Opened {
             scene: shown,
@@ -685,7 +699,7 @@ mod tests {
         let scene = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../examples/first-target/scene.jsonc");
         let netlist = orbe_scene::read(&scene).unwrap();
-        let stop = format!("\"stop_ps\": {}", 7_200_000_000_000_000u64);
+        let stop = format!("\"stop_ps\": {}", orbe_scene::STOP_PS);
         assert!(netlist.json.contains(&stop), "{}", netlist.json);
         let json = netlist.json.replace(&stop, "\"stop_ps\": 50000000000");
         let mut live = Live::new("t");

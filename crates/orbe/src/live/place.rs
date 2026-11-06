@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 /// 1 to 64 ASCII letters, digits, `.`, `_` and `-`, starting with a letter or digit, so it is
-/// one file name, never reads as a flag, and keeps a socket path under the system's limit.
+/// one file name and never reads as a flag.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Name(String);
 
@@ -88,8 +88,20 @@ impl Place {
         Ok(Place { dir })
     }
 
-    pub fn socket(&self, name: &Name) -> PathBuf {
-        self.dir.join(format!("{name}.sock"))
+    /// The session's socket path, refused when it is longer than the system can bind.
+    pub fn socket(&self, name: &Name) -> Result<PathBuf, (String, String)> {
+        let socket = self.dir.join(format!("{name}.sock"));
+        let length = socket.as_os_str().len();
+        if length > SOCKET_PATH {
+            return Err((
+                format!(
+                    "the socket path {} is {length} bytes, and the system takes at most {SOCKET_PATH}",
+                    socket.display()
+                ),
+                "use a shorter `--session` name, or set XDG_RUNTIME_DIR to a shorter folder".into(),
+            ));
+        }
+        Ok(socket)
     }
 
     /// What the session's process wrote to stderr, such as a panic, kept when it crashes.
@@ -112,8 +124,15 @@ impl Place {
     }
 }
 
-/// Creates `dir` with mode 0700, or checks that the one there is a folder the user owns that
-/// only the user can open.
+/// The longest socket path: `sun_path`, less its closing NUL.
+#[cfg(target_os = "linux")]
+const SOCKET_PATH: usize = 107;
+#[cfg(not(target_os = "linux"))]
+const SOCKET_PATH: usize = 103;
+
+/// Creates `dir` with mode 0700, or checks that the one there is a folder, not a symlink, that
+/// the user owns and only the user can open. Inside a sticky temp folder no other user can
+/// then rename or replace it.
 fn private(dir: &Path) -> Result<(), (String, String)> {
     let shown = dir.display();
     match DirBuilder::new().mode(0o700).create(dir) {
@@ -126,13 +145,19 @@ fn private(dir: &Path) -> Result<(), (String, String)> {
             ));
         }
     }
-    let meta = fs::metadata(dir).map_err(|error| {
+    let meta = fs::symlink_metadata(dir).map_err(|error| {
         (
             format!("cannot read the session folder {shown}: {error}"),
             "set XDG_RUNTIME_DIR to a folder you own".to_string(),
         )
     })?;
     let uid = rustix::process::getuid().as_raw();
+    if meta.is_symlink() {
+        return Err((
+            format!("the session folder {shown} is a symlink, not a folder"),
+            format!("remove it with `rm {shown}`, or set XDG_RUNTIME_DIR to a folder you own"),
+        ));
+    }
     if !meta.is_dir() {
         return Err((
             format!("the session folder {shown} is not a folder"),
