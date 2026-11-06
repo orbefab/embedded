@@ -1,0 +1,55 @@
+{
+  "part": "ch340g",
+  "source": {
+    "repo": "https://github.com/orbefab/models",
+    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
+    "inputs": {
+      "glb": {
+        "path": "GLB/parts/ch340g.glb",
+        "sha256": "b576350dbbd2630d25ce507b6bbdb73423b87e086df0e16666fb1d6c45a9115a",
+        "bytes": 61236
+      },
+      "anchors": {
+        "path": "GLB/parts/ch340g.anchors.json",
+        "sha256": "d0da8323f794331981cae3a5d9a26fd778093d0f90290159533ea0f8083dad29",
+        "bytes": 1929
+      }
+    }
+  },
+  "files": {
+    "ch340g.glb": {
+      "sha256": "6f32deb8cb761729c65b33f912023afbf790d138a06989e36daca0a5a8164ea7",
+      "bytes": 13528
+    },
+    "ch340g.anchors.json": {
+      "sha256": "d0da8323f794331981cae3a5d9a26fd778093d0f90290159533ea0f8083dad29",
+      "bytes": 1929
+    }
+  },
+  "box": {
+    "min": [-4.95, -3.15, 0],
+    "max": [4.95, 3.15, 1.86]
+  },
+  "kept_nodes": [],
+  "draw_calls": 2,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 16,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 108,
+      "primitives_out": 2
+    }
+  }
+}

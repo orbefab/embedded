@@ -1,0 +1,55 @@
+{
+  "part": "tactile-switch-smd",
+  "source": {
+    "repo": "https://github.com/orbefab/models",
+    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
+    "inputs": {
+      "glb": {
+        "path": "GLB/parts/tactile-switch-smd.glb",
+        "sha256": "41ffb02637e197f0ad27c1597301672f5a9a4cb11710d10546cf8190dd4283a2",
+        "bytes": 22500
+      },
+      "anchors": {
+        "path": "GLB/parts/tactile-switch-smd.anchors.json",
+        "sha256": "61bfdb039c40ce8c589ceb3cfcd4af02537b76bc42dbc449625c0044304b5c04",
+        "bytes": 519
+      }
+    }
+  },
+  "files": {
+    "tactile-switch-smd.glb": {
+      "sha256": "869dfcf7163fe71df31c7368a9d315d8f279f7bfdb859c1d45efb624000ffa07",
+      "bytes": 6388
+    },
+    "tactile-switch-smd.anchors.json": {
+      "sha256": "61bfdb039c40ce8c589ceb3cfcd4af02537b76bc42dbc449625c0044304b5c04",
+      "bytes": 519
+    }
+  },
+  "box": {
+    "min": [-1.75, -3.15, 0],
+    "max": [1.75, 3.15, 2.02]
+  },
+  "kept_nodes": ["button"],
+  "draw_calls": 2,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 4,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": ["button"]
+    },
+    "merge": {
+      "primitives_in": 41,
+      "primitives_out": 2
+    }
+  }
+}

@@ -282,7 +282,9 @@ fn list(root: &Path, dir: &Path, out: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::folder_hash;
+    use crate::project::{folder_hash, hex};
+    use serde_json::Value;
+    use sha2::{Digest, Sha256};
 
     #[test]
     fn the_builtin_catalog_matches_the_parts_tree() {
@@ -305,5 +307,189 @@ mod tests {
         assert_eq!(nano.uses.len(), 14);
         assert!(!nano.sealed);
         assert!(catalog.newest("led-5mm").unwrap().sealed);
+    }
+
+    fn leads(pins: &Value) -> BTreeSet<u64> {
+        let lists = pins.as_object().into_iter().flat_map(|pins| pins.values());
+        lists
+            .filter_map(Value::as_array)
+            .flatten()
+            .filter_map(Value::as_u64)
+            .collect()
+    }
+
+    fn named_nodes(part: &Value) -> Vec<&str> {
+        let view = &part["view"];
+        let entries = ["glow", "tint"]
+            .iter()
+            .filter_map(|key| view[key].as_array())
+            .flatten()
+            .map(|entry| &entry["node"]);
+        let recoloured = view["recolour"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry["nodes"].as_array())
+            .flatten();
+        let joints = part["joints"]
+            .as_object()
+            .into_iter()
+            .flat_map(|joints| joints.values())
+            .map(|joint| &joint["node"]);
+        entries
+            .chain(recoloured)
+            .chain(joints)
+            .map(|node| node.as_str().unwrap())
+            .collect()
+    }
+
+    /// A GLB's named nodes, sorted, read from its JSON chunk: bytes 20 to 20 + the u32 at
+    /// byte 12.
+    fn glb_node_names(id: &str, glb: &[u8]) -> Vec<String> {
+        assert_eq!(&glb[..4], b"glTF", "{id}: the GLB's magic");
+        assert_eq!(&glb[16..20], b"JSON", "{id}: the GLB's first chunk");
+        let len = u32::from_le_bytes(glb[12..16].try_into().unwrap()) as usize;
+        let json: Value = serde_json::from_slice(&glb[20..20 + len])
+            .unwrap_or_else(|e| panic!("{id}: the GLB's JSON chunk: {e}"));
+        let mut names: Vec<String> = json["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|node| node["name"].as_str())
+            .filter(|name| !name.is_empty())
+            .map(String::from)
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn numbers(id: &str, value: &Value) -> [f64; 3] {
+        let list: Vec<f64> = value
+            .as_array()
+            .unwrap_or_else(|| panic!("{id}: {value} is not a list"))
+            .iter()
+            .map(|n| {
+                n.as_f64()
+                    .unwrap_or_else(|| panic!("{id}: {n} is not a number"))
+            })
+            .collect();
+        list.try_into()
+            .unwrap_or_else(|_| panic!("{id}: {value} is not three numbers"))
+    }
+
+    /// The asset step's record holds for every part with a body model: the hashes and sizes
+    /// match the files, the anchors cover exactly the leads in `pins` and sit inside the box,
+    /// and the GLB's named nodes are exactly the nodes the merge keeps: those `view` and `joints`
+    /// name, and the `node` and `also` of each leg or socket anchor, each once.
+    #[test]
+    fn every_body_model_matches_its_asset_record() {
+        let catalog = Catalog::builtin();
+        let mut checked = 0;
+        for id in catalog.ids() {
+            let entry = catalog.newest(id).unwrap();
+            let glb = format!("{id}.glb");
+            if !entry.files.contains_key(&glb) {
+                continue;
+            }
+            checked += 1;
+            let asset: Value = serde_json::from_slice(&entry.files["asset.json"])
+                .unwrap_or_else(|e| panic!("{id}: asset.json: {e}"));
+            let anchors_name = format!("{id}.anchors.json");
+            let mut want = vec![glb.as_str()];
+            if entry.files.contains_key(&anchors_name) {
+                want.push(&anchors_name);
+            }
+            let listed = asset["files"].as_object().unwrap();
+            let mut names: Vec<&str> = listed.keys().map(String::as_str).collect();
+            names.sort();
+            want.sort();
+            assert_eq!(names, want, "{id}: asset.json lists these files");
+            for (name, record) in listed {
+                let bytes = &entry.files[name];
+                assert_eq!(record["bytes"], bytes.len(), "{id}: size of {name}");
+                assert_eq!(
+                    record["sha256"],
+                    hex(&Sha256::digest(bytes)),
+                    "{id}: sha256 of {name}"
+                );
+            }
+
+            let part = find(id).unwrap().tree.to_value();
+            let anchors: Vec<Value> = match entry.files.get(&anchors_name) {
+                Some(bytes) => serde_json::from_slice::<Value>(bytes).unwrap()["anchors"]
+                    .as_array()
+                    .unwrap()
+                    .clone(),
+                None => Vec::new(),
+            };
+            let anchor_leads: Vec<u64> = anchors
+                .iter()
+                .map(|anchor| anchor["lead"].as_u64().unwrap())
+                .collect();
+            let lead_set: BTreeSet<u64> = anchor_leads.iter().copied().collect();
+            assert_eq!(
+                lead_set.len(),
+                anchor_leads.len(),
+                "{id}: a lead has two anchors"
+            );
+            assert_eq!(lead_set, leads(&part["pins"]), "{id}: anchors against pins");
+            assert_eq!(
+                asset["checks"]["anchors"]["anchors"],
+                anchors.len(),
+                "{id}: the anchors the asset step checked"
+            );
+
+            let [min, max] = ["min", "max"].map(|end| numbers(id, &asset["box"][end]));
+            for anchor in &anchors {
+                let at = numbers(id, &anchor["at"]);
+                let inside = (0..3).all(|k| min[k] - 0.01 <= at[k] && at[k] <= max[k] + 0.01);
+                assert!(
+                    inside,
+                    "{id}: lead {}'s anchor at {at:?} is outside the box",
+                    anchor["lead"]
+                );
+                let axis = numbers(id, &anchor["axis"]);
+                let length = axis.iter().map(|v| v * v).sum::<f64>().sqrt();
+                assert!(
+                    (length - 1.0).abs() < 1e-9,
+                    "{id}: lead {}'s axis is not a unit vector",
+                    anchor["lead"]
+                );
+            }
+
+            let kept: Vec<String> = asset["kept_nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|node| node.as_str().unwrap().to_string())
+                .collect();
+            let in_glb = glb_node_names(id, &entry.files[&glb]);
+            assert_eq!(
+                in_glb, kept,
+                "{id}: the GLB's named nodes against kept_nodes"
+            );
+
+            let mut policy: BTreeSet<String> =
+                named_nodes(&part).into_iter().map(String::from).collect();
+            for anchor in &anchors {
+                if !matches!(anchor["kind"].as_str(), Some("leg" | "socket")) {
+                    continue;
+                }
+                let also = anchor["also"].as_array().unwrap().iter();
+                for node in std::iter::once(&anchor["node"]).chain(also) {
+                    let node = node.as_str().unwrap();
+                    let times = in_glb.iter().filter(|name| *name == node).count();
+                    assert_eq!(
+                        times, 1,
+                        "{id}: lead {}'s node `{node}` in the GLB",
+                        anchor["lead"]
+                    );
+                    policy.insert(node.to_string());
+                }
+            }
+            let policy: Vec<String> = policy.into_iter().collect();
+            assert_eq!(kept, policy, "{id}: kept_nodes against the keep policy");
+        }
+        assert_eq!(checked, 18);
     }
 }

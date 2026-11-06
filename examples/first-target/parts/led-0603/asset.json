@@ -1,0 +1,55 @@
+{
+  "part": "led-0603",
+  "source": {
+    "repo": "https://github.com/orbefab/models",
+    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
+    "inputs": {
+      "glb": {
+        "path": "GLB/parts/led-0603.glb",
+        "sha256": "e63baa471c4fd8144d9494df27e26d2f658f79916ce3bc4e033e1f0b0beeab19",
+        "bytes": 10788
+      },
+      "anchors": {
+        "path": "GLB/parts/led-0603.anchors.json",
+        "sha256": "80024bf82c5ae09770ac947e450df447a04a7dfe3f934d94955df9a54cc50739",
+        "bytes": 286
+      }
+    }
+  },
+  "files": {
+    "led-0603.glb": {
+      "sha256": "b4c215cf2ee0b537af3804ce26122d10eb1a16ea80fba3f53a4891ce798130ce",
+      "bytes": 3820
+    },
+    "led-0603.anchors.json": {
+      "sha256": "80024bf82c5ae09770ac947e450df447a04a7dfe3f934d94955df9a54cc50739",
+      "bytes": 286
+    }
+  },
+  "box": {
+    "min": [-0.8, -0.4, 0],
+    "max": [0.8, 0.4, 0.58]
+  },
+  "kept_nodes": ["body"],
+  "draw_calls": 2,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 2,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": ["body"]
+    },
+    "merge": {
+      "primitives_in": 18,
+      "primitives_out": 2
+    }
+  }
+}

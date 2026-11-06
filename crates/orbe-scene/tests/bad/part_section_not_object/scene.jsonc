@@ -1,0 +1,15 @@
+// A button whose `joints` is not an object, so its press names a joint it cannot have.
+{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "btn1": { "type": "./parts/button.jsonc" },
+    "r2": { "type": "resistor-axial", "resistance": "10k" },
+  },
+  "wires": [
+    ["nano.D2", "btn1.a"],
+    ["btn1.b", "nano.5V"],
+    ["nano.D2", "r2.a"],
+    ["r2.b", "nano.GND"],
+  ],
+}

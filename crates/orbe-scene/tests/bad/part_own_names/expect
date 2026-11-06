@@ -1,0 +1,5 @@
+scene.unknown_ref parts/button.jsonc:24:57 | this part has no joint named `plungr` | did you mean `plunger`? its only joint is plunger
+scene.unknown_ref parts/button.jsonc:25:46 | this part has no reading named `on` | add `on` to `readings`
+scene.unknown_ref parts/lamp.jsonc:42:38 | this part has no reading named `brightnes` | did you mean `brightness`? its readings are on and brightness
+scene.unknown_ref parts/lamp.jsonc:43:38 | this part has no param named `colour` | did you mean `color`? its only param is color
+scene.unknown_ref parts/lamp.jsonc:44:99 | this part has no param named `size` | its only param is color

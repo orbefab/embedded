@@ -1,5 +1,6 @@
-// The contact values and sources are the engine's reset button, from
-// engine/examples/atmega-board-button/netlist.json, part `sw_reset`.
+// The contact values are the engine's reset button, from
+// engine/examples/atmega-board-button/netlist.json, part `sw_reset`. No sheet for the part
+// number was found, so each value here is a guess with a note that says so.
 {
   "format": 1, "part": "tactile-switch-smd", "version": "0.1.0", "title": "Push button, SMD", "license": "MIT OR Apache-2.0",
   "docs": { "TS42031-160R-TR-7260": null },
@@ -11,11 +12,14 @@
   },
   "model": {
     "kind": "switch",
-    "on_resistance": { "value": 0.1, "unit": "ohm", "source": { "datasheet": { "doc": "TS42031-160R-TR-7260", "at": "The schematic names TS42031-160R-TR-7260. No sheet for that part number was found. The closed model is 0.1 ohm, a 100 milliohm contact.", "basis": "nominal" } } },
-    "off_resistance": { "value": 100000000.0, "unit": "ohm", "source": { "datasheet": { "doc": "TS42031-160R-TR-7260", "at": "The schematic names TS42031-160R-TR-7260. No sheet for that part number was found. The open model is 1e8 ohm, a 100 megohm insulation.", "basis": "nominal" } } },
+    "on_resistance": { "value": 0.1, "unit": "ohm", "source": { "closed_form": { "note": "A guess. The schematic names TS42031-160R-TR-7260. No sheet for that part number was found. The closed model is 0.1 ohm, a 100 milliohm contact." } } },
+    "off_resistance": { "value": 100000000.0, "unit": "ohm", "source": { "closed_form": { "note": "A guess. The schematic names TS42031-160R-TR-7260. No sheet for that part number was found. The open model is 1e8 ohm, a 100 megohm insulation." } } },
     "initial": "open",
     "events": [],
     "bounce": null,
   },
-  "controls": { "press": { "input": "contact" } },
+  "controls": { "press": { "input": "contact", "joint": "plunger" } },
+  "joints": {
+    "plunger": { "node": "button", "slide": [0, 0, -1], "range": { "value": 0.2, "unit": "mm", "source": { "closed_form": { "note": "A guess. No sheet for TS42031-160R-TR-7260 was found, so the travel is 0.2 mm until one is." } } } },
+  },
 }

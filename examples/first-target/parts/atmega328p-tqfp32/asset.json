@@ -1,0 +1,55 @@
+{
+  "part": "atmega328p-tqfp32",
+  "source": {
+    "repo": "https://github.com/orbefab/models",
+    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
+    "inputs": {
+      "glb": {
+        "path": "GLB/parts/atmega328p-tqfp32.glb",
+        "sha256": "b857582f905da63e8da5b211d170ef7985a8472b3e7c1536742e2131fe38dee4",
+        "bytes": 116060
+      },
+      "anchors": {
+        "path": "GLB/parts/atmega328p-tqfp32.anchors.json",
+        "sha256": "18d213a3d99aed6240e66fb3e6724ef4082dde52d50ba62bfd7e4de41ee27ea7",
+        "bytes": 3764
+      }
+    }
+  },
+  "files": {
+    "atmega328p-tqfp32.glb": {
+      "sha256": "00e9d335a6ee26ca0ae5a11256a3f9019158b3ff692c475eff5939f9d68dfb34",
+      "bytes": 23928
+    },
+    "atmega328p-tqfp32.anchors.json": {
+      "sha256": "18d213a3d99aed6240e66fb3e6724ef4082dde52d50ba62bfd7e4de41ee27ea7",
+      "bytes": 3764
+    }
+  },
+  "box": {
+    "min": [-4.5, -4.5, 0.02],
+    "max": [4.5, 4.5, 1.26]
+  },
+  "kept_nodes": [],
+  "draw_calls": 2,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 32,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0.15
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 204,
+      "primitives_out": 2
+    }
+  }
+}

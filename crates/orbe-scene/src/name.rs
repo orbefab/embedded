@@ -78,6 +78,14 @@ pub(crate) fn hint(reason: &str) -> String {
     }
 }
 
+/// "a", "a and b", or "a, b and c".
+pub(crate) fn and_list(names: &[&str]) -> String {
+    match names.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => names.join(""),
+    }
+}
+
 /// "did you mean `x`? " when one is close, else "".
 pub(crate) fn did_you_mean<'a>(
     word: &str,
@@ -87,4 +95,17 @@ pub(crate) fn did_you_mean<'a>(
     closest(word, candidates)
         .map(|c| format!("did you mean `{prefix}{c}`? "))
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::and_list;
+
+    #[test]
+    fn and_list_joins_like_a_sentence() {
+        assert_eq!(and_list(&[]), "");
+        assert_eq!(and_list(&["a"]), "a");
+        assert_eq!(and_list(&["a", "b"]), "a and b");
+        assert_eq!(and_list(&["a", "b", "c"]), "a, b and c");
+    }
 }

@@ -1,0 +1,282 @@
+#!/usr/bin/env node
+// The asset step: brings each part's body model from a commit of the models repo into
+// parts/<id>/, checked and merged. See docs/asset-step.md.
+
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
+import { Logger, NodeIO } from '@gltf-transform/core';
+import { parse } from 'jsonc-parser';
+import { partNodes } from './geometry.mjs';
+import { CheckFailed, anchorCheck, composition, frame, merge, names, seating } from './checks.mjs';
+
+const REPO = 'https://github.com/orbefab/models';
+const quiet = new Logger(Logger.Verbosity.WARN);
+const io = new NodeIO().setLogger(quiet);
+
+const USAGE = `usage: asset-step.mjs --models <models checkout> [--commit <rev>] [--parts <dir>] [<id> ...]
+
+Reads GLB/parts/<id>.glb and <id>.anchors.json at <rev> of the models checkout, without
+checking it out, and writes parts/<id>/<id>.glb, <id>.anchors.json and asset.json. With no
+--commit, each part is rerun from the commit its asset.json records. With no ids, every part
+in --parts (default: this repo's parts/) that has a GLB at that commit.`;
+
+function sha256(bytes) {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+function digest(bytes) {
+  return { sha256: sha256(bytes), bytes: bytes.length };
+}
+
+function git(models, args) {
+  return execFileSync('git', ['-C', models, ...args], { maxBuffer: 1 << 30, stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+function commitOf(models, rev) {
+  return git(models, ['rev-parse', '--verify', `${rev}^{commit}`]).toString().trim();
+}
+
+const resolved = new Map();
+
+/** The commit `id`'s asset.json records, or a `CheckFailed` when the models checkout lacks it. */
+function recorded(models, id, commit) {
+  if (!resolved.has(commit)) {
+    try {
+      resolved.set(commit, commitOf(models, commit));
+    } catch {
+      resolved.set(commit, null);
+    }
+  }
+  const sha = resolved.get(commit);
+  if (!sha) throw new CheckFailed('source', `\`${id}\`'s asset.json records models commit ${commit}, which ${models} does not have; fetch it`);
+  return sha;
+}
+
+function blob(models, commit, path) {
+  try {
+    return git(models, ['show', `${commit}:${path}`]);
+  } catch {
+    return null;
+  }
+}
+
+function readJsonc(path) {
+  const errors = [];
+  const tree = parse(readFileSync(path, 'utf8'), errors, { allowTrailingComma: true });
+  if (errors.length) throw new Error(`${path} is not valid JSONC`);
+  return tree;
+}
+
+function readPart(partsDir, id) {
+  const tree = readJsonc(join(partsDir, id, 'part.jsonc'));
+  const leads = new Set();
+  for (const value of Object.values(tree.pins ?? {})) {
+    if (Array.isArray(value)) value.filter(Number.isInteger).forEach((lead) => leads.add(lead));
+  }
+  const view = tree.view ?? {};
+  return {
+    id,
+    leads,
+    viewNodes: [
+      ...(view.glow ?? []).map((e) => e.node),
+      ...(view.tint ?? []).map((e) => e.node),
+      ...(view.recolour ?? []).flatMap((e) => e.nodes),
+    ],
+    jointNodes: Object.values(tree.joints ?? {}).map((j) => j.node),
+    children: new Map(Object.entries(tree.parts ?? {}).map(([role, child]) => [role, child.type])),
+    layout: new Map(Object.entries(tree.layout ?? {})),
+  };
+}
+
+function source(models, commit, id) {
+  const glbPath = `GLB/parts/${id}.glb`;
+  const anchorsPath = `GLB/parts/${id}.anchors.json`;
+  const glb = blob(models, commit, glbPath);
+  if (!glb) return null;
+  const anchors = blob(models, commit, anchorsPath);
+  const inputs = { glb: { path: glbPath, ...digest(glb) } };
+  if (anchors) inputs.anchors = { path: anchorsPath, ...digest(anchors) };
+  return { commit, glb, anchors, inputs };
+}
+
+function noAnchors(id) {
+  return { part: id, units: 'mm', anchors: [] };
+}
+
+function readAnchors(src, id) {
+  return src.anchors ? JSON.parse(src.anchors.toString('utf8')) : noAnchors(id);
+}
+
+function readAsset(partsDir, id) {
+  const path = join(partsDir, id, 'asset.json');
+  return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null;
+}
+
+/**
+ * The source model of every part below `part`, from the models commit its asset.json records,
+ * which passed its checks when that asset.json was written.
+ */
+async function childModels(models, partsDir, part, found = new Map()) {
+  for (const type of part.children.values()) {
+    if (found.has(type)) continue;
+    const asset = readAsset(partsDir, type);
+    if (!asset) continue;
+    const src = source(models, recorded(models, type, asset.source.commit), type);
+    if (!src) throw new CheckFailed('composition', `child type \`${type}\` has no GLB at the commit its asset.json records`);
+    const child = readPart(partsDir, type);
+    const nodes = partNodes((await io.readBinary(src.glb)).setLogger(quiet));
+    found.set(type, { part: child, nodes, anchors: readAnchors(src, type), drawCalls: asset.draw_calls });
+    await childModels(models, partsDir, child, found);
+  }
+  return found;
+}
+
+async function step(part, src, models, partsDir) {
+  const anchors = readAnchors(src, part.id);
+  const doc = (await io.readBinary(src.glb)).setLogger(quiet);
+  const checks = { frame: frame(doc) };
+  const nodes = partNodes(doc);
+  checks.anchors = anchorCheck(part, anchors, nodes);
+  checks.seating = seating(anchors, nodes);
+  checks.names = names(part, nodes);
+  const merged = await merge(doc, part, anchors);
+  frame(doc);
+  checks.merge = merged.detail;
+  if (part.children.size) {
+    const model = { part, nodes, anchors, drawCalls: merged.drawCalls };
+    const composed = composition(model, await childModels(models, partsDir, part));
+    checks.composition = { ...composed.detail, draw_calls: composed.drawCalls };
+  }
+  const glb = Buffer.from(await io.writeBinary(doc));
+  const files = { [`${part.id}.glb`]: digest(glb) };
+  if (src.anchors) files[`${part.id}.anchors.json`] = digest(src.anchors);
+  const asset = {
+    part: part.id,
+    source: { repo: REPO, commit: src.commit, inputs: src.inputs },
+    files,
+    box: merged.box,
+    kept_nodes: merged.kept,
+    draw_calls: merged.drawCalls,
+    checks,
+  };
+  return { glb, asset };
+}
+
+/** JSON with two-space indents and each list of numbers or names on one line. */
+function stringify(value) {
+  return JSON.stringify(value, null, 2).replace(/\[\s+([^[\]{}]*?)\s+\]/g, (_, inner) => `[${inner.split(/,\s+/).join(', ')}]`);
+}
+
+/** Writes every file to a temporary name first, so a failed write leaves the old files. */
+function write(partsDir, part, src, { glb, asset }) {
+  const folder = join(partsDir, part.id);
+  const files = [[`${part.id}.glb`, glb], ['asset.json', `${stringify(asset)}\n`]];
+  if (src.anchors) files.push([`${part.id}.anchors.json`, src.anchors]);
+  const paths = files.map(([name]) => join(folder, name));
+  try {
+    files.forEach(([, bytes], i) => writeFileSync(`${paths[i]}.tmp`, bytes));
+  } catch (error) {
+    paths.forEach((path) => rmSync(`${path}.tmp`, { force: true }));
+    throw error;
+  }
+  paths.forEach((path) => renameSync(`${path}.tmp`, path));
+}
+
+/** Orders the jobs so each part comes after the parts it holds, then by id. */
+function childrenFirst(jobs) {
+  const byId = new Map(jobs.map((job) => [job.part.id, job]));
+  const ordered = [];
+  const seen = new Set();
+  const visit = (job) => {
+    if (seen.has(job)) return;
+    seen.add(job);
+    for (const type of job.part.children.values()) if (byId.has(type)) visit(byId.get(type));
+    ordered.push(job);
+  };
+  [...byId.keys()].sort().forEach((id) => visit(byId.get(id)));
+  return ordered;
+}
+
+function report(id, error) {
+  if (!(error instanceof CheckFailed)) console.error(error);
+  console.log(`FAIL  ${id}  ${error.check ?? 'error'}: ${error.message}`);
+}
+
+async function main() {
+  const { values, positionals } = parseArgs({
+    options: { models: { type: 'string' }, commit: { type: 'string' }, parts: { type: 'string' } },
+    allowPositionals: true,
+  });
+  if (!values.models) {
+    console.error(USAGE);
+    return 2;
+  }
+  const here = dirname(fileURLToPath(import.meta.url));
+  const partsDir = resolve(values.parts ?? join(here, '../../parts'));
+  const ids = positionals.length ? positionals : readdirSync(partsDir).filter((id) => existsSync(join(partsDir, id, 'part.jsonc')));
+  try {
+    git(values.models, ['rev-parse', '--git-dir']);
+  } catch {
+    console.error(`--models ${values.models} is not a git checkout\n\n${USAGE}`);
+    return 2;
+  }
+  let pinned = null;
+  if (values.commit) {
+    try {
+      pinned = commitOf(values.models, values.commit);
+    } catch {
+      console.error(`--commit ${values.commit} is not a commit of ${values.models}\n\n${USAGE}`);
+      return 2;
+    }
+  }
+
+  const jobs = [];
+  const failedIds = new Set();
+  for (const id of ids) {
+    try {
+      const asset = pinned ? null : readAsset(partsDir, id);
+      const commit = pinned ?? (asset && recorded(values.models, id, asset.source.commit));
+      if (!commit) {
+        if (positionals.length) throw new CheckFailed('source', 'no --commit given and no asset.json records one');
+        console.log(`skip  ${id}  no --commit given and no asset.json records one`);
+        continue;
+      }
+      const src = source(values.models, commit, id);
+      if (!src) {
+        if (positionals.length) throw new CheckFailed('source', `no GLB/parts/${id}.glb at ${commit}`);
+        console.log(`skip  ${id}  no GLB/parts/${id}.glb at ${commit}`);
+        continue;
+      }
+      jobs.push({ part: readPart(partsDir, id), src });
+    } catch (error) {
+      report(id, error);
+      failedIds.add(id);
+    }
+  }
+
+  for (const { part, src } of childrenFirst(jobs)) {
+    try {
+      const blocked = [...part.children.values()].filter((type) => failedIds.has(type));
+      if (blocked.length) throw new CheckFailed('composition', `children ${[...new Set(blocked)].join(', ')} failed their checks`);
+      const out = await step(part, src, values.models, partsDir);
+      write(partsDir, part, src, out);
+      const composed = out.asset.checks.composition;
+      const calls = composed ? `${out.asset.draw_calls}, composed ${composed.draw_calls}` : out.asset.draw_calls;
+      console.log(
+        `ok    ${part.id}  kept ${out.asset.kept_nodes.length} nodes, ${calls} draw calls, ` +
+          `${out.glb.length} B, ${src.commit.slice(0, 7)}`,
+      );
+    } catch (error) {
+      report(part.id, error);
+      failedIds.add(part.id);
+    }
+  }
+  if (failedIds.size) console.log(`${failedIds.size} part(s) failed; a failed part's files were not written`);
+  return failedIds.size ? 1 : 0;
+}
+
+process.exitCode = await main();

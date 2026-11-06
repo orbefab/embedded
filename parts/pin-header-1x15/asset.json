@@ -1,0 +1,55 @@
+{
+  "part": "pin-header-1x15",
+  "source": {
+    "repo": "https://github.com/orbefab/models",
+    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
+    "inputs": {
+      "glb": {
+        "path": "GLB/parts/pin-header-1x15.glb",
+        "sha256": "2475ceb50091394a5e1925d69f838658afd03535f3d0faa69ef716106a231de2",
+        "bytes": 146632
+      },
+      "anchors": {
+        "path": "GLB/parts/pin-header-1x15.anchors.json",
+        "sha256": "6e2ae2a33e8c00fc465f090ad394fc28741f2f073c8e28a8d420bb2fe8e28bfa",
+        "bytes": 1943
+      }
+    }
+  },
+  "files": {
+    "pin-header-1x15.glb": {
+      "sha256": "61d34e0dfe958ba3be19d96c18c85ce27820a00b5ffa5fa243d7fb170f40fc92",
+      "bytes": 20148
+    },
+    "pin-header-1x15.anchors.json": {
+      "sha256": "6e2ae2a33e8c00fc465f090ad394fc28741f2f073c8e28a8d420bb2fe8e28bfa",
+      "bytes": 1943
+    }
+  },
+  "box": {
+    "min": [-18.9, -1.116868, -8],
+    "max": [18.9, 1.116868, 5.54]
+  },
+  "kept_nodes": ["housing-1", "housing-10", "housing-11", "housing-12", "housing-13", "housing-14", "housing-15", "housing-2", "housing-3", "housing-4", "housing-5", "housing-6", "housing-7", "housing-8", "housing-9", "pin-1", "pin-10", "pin-11", "pin-12", "pin-13", "pin-14", "pin-15", "pin-2", "pin-3", "pin-4", "pin-5", "pin-6", "pin-7", "pin-8", "pin-9"],
+  "draw_calls": 30,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 15,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": null,
+      "z_mm": null
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 135,
+      "primitives_out": 30
+    }
+  }
+}
