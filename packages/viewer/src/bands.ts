@@ -1,3 +1,4 @@
+// Adapted from maker-sandbox (MIT, Copyright 2026 Alwurts).
 // IEC 60062 colour code for a 4-band resistor: two digits, a multiplier, and the gold 5 %
 // tolerance band every resistor part draws.
 
@@ -24,11 +25,9 @@ function multiplier(exponent: number): string | undefined {
 }
 
 /** The four band colours for `ohms`, rounded to two significant digits as a 4-band
- * resistor is. Throws for a value no 4-band code can show. */
-export function fourBands(ohms: number): readonly [string, string, string, string] {
-  if (!(ohms > 0 && Number.isFinite(ohms))) {
-    throw new RangeError(`no 4-band code for ${ohms} ohm`);
-  }
+ * resistor is, or undefined for a value no 4-band code can show, outside 0.1 ohm to 99 Gohm. */
+export function fourBands(ohms: number): readonly [string, string, string, string] | undefined {
+  if (!(ohms > 0 && Number.isFinite(ohms))) return undefined;
   let exponent = Math.floor(Math.log10(ohms)) - 1;
   let digits = Math.round(ohms / 10 ** exponent);
   if (digits >= 100) {
@@ -41,8 +40,6 @@ export function fourBands(ohms: number): readonly [string, string, string, strin
   const band3 = multiplier(exponent);
   const band1 = DIGIT[Math.floor(digits / 10)];
   const band2 = DIGIT[digits % 10];
-  if (band1 === undefined || band2 === undefined || band3 === undefined) {
-    throw new RangeError(`no 4-band code for ${ohms} ohm`);
-  }
+  if (band1 === undefined || band2 === undefined || band3 === undefined) return undefined;
   return [band1, band2, band3, GOLD];
 }

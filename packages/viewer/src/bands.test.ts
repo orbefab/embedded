@@ -31,7 +31,7 @@ describe("fourBands", () => {
     expect(fourBands(996)).toEqual([brown, black, red, gold]);
   });
 
-  test.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, 0.05, 1e12])("refuses %d ohm", (ohms) => {
-    expect(() => fourBands(ohms)).toThrow(RangeError);
+  test.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, 0.01, 0.05, 1e12])("has no code for %d ohm", (ohms) => {
+    expect(fourBands(ohms)).toBeUndefined();
   });
 });
