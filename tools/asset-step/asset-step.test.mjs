@@ -86,6 +86,8 @@ async function publish(fx, specs) {
   return git(fx.models, ['rev-parse', 'HEAD']);
 }
 
+const writePart = (fx, id, part) => writeFileSync(join(fx.parts, id, 'part.jsonc'), JSON.stringify(part));
+
 async function fixture(t, specs) {
   const root = mkdtempSync(join(tmpdir(), 'asset-step-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -95,7 +97,7 @@ async function fixture(t, specs) {
   fx.commit = await publish(fx, specs);
   for (const [id, spec] of Object.entries(specs)) {
     mkdirSync(join(fx.parts, id), { recursive: true });
-    writeFileSync(join(fx.parts, id, 'part.jsonc'), JSON.stringify(spec.part));
+    writePart(fx, id, spec.part);
   }
   return fx;
 }
@@ -191,6 +193,15 @@ test("composition places a child's own children", async (t) => {
   const out = run(fx, ['tilted', 'flat', 'mid', 'block']);
   assert.match(out.line('tilted'), /composition: placed by the layout, node `m\/b\/body` reaches z = -3\.420 mm/);
   assert.match(out.line('flat'), /^ok {4}flat {2}kept 0 nodes, 1, composed 3 draw calls/);
+});
+
+test('a part that holds itself fails composition', async (t) => {
+  const fx = await fixture(t, { loop: { ...BLOCK, part: { format: 1, part: 'loop' } } });
+  assert.equal(run(fx, ['loop']).status, 0);
+  writePart(fx, 'loop', { format: 1, part: 'loop', parts: { self: { type: 'loop' } }, layout: { self: { at: [0, 0, 0] } } });
+  const out = run(fx, ['loop']);
+  assert.match(out.line('loop'), /^FAIL {2}loop {2}composition: child `self` closes a cycle: loop holds loop$/);
+  assert.equal(out.stderr, '');
 });
 
 test('a recorded commit the models checkout lacks fails its part and the parts that hold it', async (t) => {

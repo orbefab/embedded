@@ -180,7 +180,8 @@ export function composition(model, models) {
   const placed = [];
   const exempt = new Set();
   let drawCalls = 0;
-  const place = ({ part, nodes, anchors, drawCalls: calls }, matrix, prefix) => {
+  const place = ({ part, nodes, anchors, drawCalls: calls }, matrix, prefix, holders) => {
+    const types = [...holders, part.id];
     const leads = leadNames(anchors);
     for (const n of nodes) {
       if (leads.has(n.name)) exempt.add(placed.length);
@@ -188,14 +189,15 @@ export function composition(model, models) {
     }
     drawCalls += calls;
     for (const [role, type] of part.children) {
+      if (types.includes(type)) fail('composition', `child \`${prefix}${role}\` closes a cycle: ${[...types, type].join(' holds ')}`);
       const child = models.get(type);
       if (!child) fail('composition', `child \`${prefix}${role}\` is a \`${type}\`, which has no asset step output`);
       const at = part.layout.get(role);
       if (!at) fail('composition', `child \`${prefix}${role}\` has no placement in \`layout\``);
-      place(child, multiply(matrix, placement(at)), `${prefix}${role}/`);
+      place(child, multiply(matrix, placement(at)), `${prefix}${role}/`, types);
     }
   };
-  place(model, IDENTITY, '');
+  place(model, IDENTITY, '', []);
   return {
     detail: { children: model.part.children.size, ...seat('composition', placed, exempt, 'placed by the layout, ') },
     drawCalls,
