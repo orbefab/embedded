@@ -16,16 +16,18 @@ mod params;
 mod project;
 mod shape;
 mod source;
+mod summary;
 mod syntax;
 mod units;
 
 use std::path::Path;
 
-pub use add::{Reply, Request, RunError, run as add_parts};
+pub use add::{AddCode, Reply, Request, RunError, run as add_parts};
 pub use circuit::{Amount, EnginePart, MapPart, Netlist, Reading, RefMap};
 pub use diagnostic::{Code, Diagnostic};
 pub use model::STOP_PS;
 pub use project::{REGISTRY, folder_hash};
+pub use summary::{ParamDefault, ParamSummary, PartSummary, Takes, catalog_parts};
 
 /// Type-checks a scene and every part file it reaches. On success, the netlist the engine
 /// opens. Otherwise every finding, sorted by file, line and column.

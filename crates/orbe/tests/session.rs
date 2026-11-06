@@ -855,6 +855,49 @@ fn close_all_ends_every_session_and_removes_stale_sockets() {
     assert_eq!(run.stdout, "no sessions are running\n");
 }
 
+#[test]
+fn two_projects_in_one_git_repo_get_their_own_sessions() {
+    let repo = tempfile::tempdir().unwrap();
+    fs::create_dir(repo.path().join(".git")).unwrap();
+    let a = repo.path().join("a");
+    let b = repo.path().join("b");
+    for dir in [&a, &b] {
+        common::copy_dir(project("open\n").path(), dir);
+    }
+    let runtime = Runtime::new();
+    runtime.orbe(&a, &["open"]).ok();
+    runtime.orbe(&a, &["step", "10ms"]).ok();
+    runtime.orbe(&b, &["open"]).ok();
+    let mut sockets = runtime.sockets();
+    sockets.sort();
+    assert_eq!(sockets.len(), 2, "{sockets:?}");
+    assert!(
+        sockets[0].starts_with("a-") && sockets[1].starts_with("b-"),
+        "{sockets:?}"
+    );
+
+    let run = runtime.orbe(&a.join("tests"), &["snapshot"]).ok();
+    assert!(run.stdout.starts_with("t=10ms "), "{}", run.stdout);
+    let run = runtime.orbe(&b, &["snapshot"]).ok();
+    assert!(run.stdout.starts_with("t=0s "), "{}", run.stdout);
+
+    let outside = repo.path().join("notes");
+    fs::create_dir(&outside).unwrap();
+    let run = runtime.orbe(&outside, &["open", "../a/scene.jsonc"]).ok();
+    assert!(run.stdout.starts_with("opened "), "{}", run.stdout);
+    let folder = repo.path().file_name().unwrap().to_str().unwrap();
+    let folder = folder.trim_start_matches('.');
+    assert!(
+        runtime
+            .sockets()
+            .iter()
+            .any(|s| s.starts_with(&format!("{folder}-"))),
+        "outside a project the git root names the session: {:?}",
+        runtime.sockets()
+    );
+    runtime.orbe(&a, &["close", "--all"]).ok();
+}
+
 fn no_session(name: &str) -> String {
     format!(
         "error[no_session]: no session `{name}` is running\n  hint: run `orbe open --session {name}` to start it\n"
@@ -1337,4 +1380,34 @@ fn an_open_whose_every_process_ends_before_reading_it_says_how_many_times() {
     );
     wait_until("every process ended", || runtime.daemons().is_empty());
     assert!(session_files(&runtime).is_empty());
+}
+
+/// A scene whose name starts with `-` reads as a flag, live and in a test file, and the error
+/// names the `./` form. `--` before it opens it too.
+#[test]
+fn a_scene_named_like_a_flag_opens_as_dot_slash_or_after_dashes() {
+    let dir = project("open -dash.jsonc\n");
+    let root = dir.path();
+    fs::copy(root.join("scene.jsonc"), root.join("-dash.jsonc")).unwrap();
+    let runtime = Runtime::new();
+    let refused = "`-dash.jsonc` is a flag, not a scene; write a scene named so as `./-dash.jsonc`; usage: open [<scene>]";
+    let run = runtime.orbe(root, &["open", "-dash.jsonc"]);
+    assert_eq!(
+        (run.code, run.stderr.as_str()),
+        (2, format!("error[usage]: {refused}\n").as_str())
+    );
+    let tested = runtime.orbe(root, &["test"]);
+    assert_eq!(tested.code, 2, "{}", tested.stdout);
+    assert!(tested.stdout.contains(refused), "{}", tested.stdout);
+    for scene in [&["./-dash.jsonc"][..], &["--", "-dash.jsonc"]] {
+        let run = runtime.orbe(root, &[&["open"][..], scene].concat()).ok();
+        assert!(run.stdout.contains("-dash.jsonc at t=0"), "{}", run.stdout);
+        runtime.orbe(root, &["close"]).ok();
+        fs::write(
+            root.join("tests/a.test"),
+            format!("open {}\n", scene.join(" ")),
+        )
+        .unwrap();
+        runtime.orbe(root, &["test"]).ok();
+    }
 }

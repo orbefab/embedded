@@ -11,6 +11,10 @@ Orbefab's **Embedded systems** branch: open-source mechatronics software built f
 
 The engine lives in [`engine/`](engine/), with its own [`AGENTS.md`](engine/AGENTS.md) and docs. The rest is docs for now.
 
+## Skills for agents
+
+`orbe skills get core` prints how to use `orbe`, for the version installed, and `orbe skills list` lists the other skills. [`skills/orbe/SKILL.md`](skills/orbe/SKILL.md) is a thin stub that tells an agent to run it. Install the stub for the agents you use with `npx skills add orbefab/embedded`.
+
 ## License
 
 The code is under either of the MIT license ([LICENSE-MIT](LICENSE-MIT)) or the Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE)), at your option. A contribution you submit for inclusion is under the same two licenses, with no other terms.

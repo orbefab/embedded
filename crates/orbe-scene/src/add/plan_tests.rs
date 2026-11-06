@@ -194,7 +194,7 @@ fn a_local_edit_refuses_and_names_the_file() {
     let mut snapshot = empty();
     put(&mut snapshot, "led", edited(&part));
     let refusal = refusal(plan(&catalog, &snapshot, &ask(&["led"], false, false), ADD));
-    assert_eq!(refusal.code, "part_differs");
+    assert_eq!(refusal.code.as_str(), "part_differs");
     assert_eq!(
         refusal.message,
         "nothing was written\n`led` is 0.1.0 in the project and differs in `part.jsonc`"
@@ -229,7 +229,7 @@ fn a_file_at_the_target_is_listed_and_only_overwrite_replaces_it() {
         .targets
         .insert("led".into(), Target::Other("a file"));
     let refused = refusal(plan(&catalog, &snapshot, &ask(&["led"], false, false), ADD));
-    assert_eq!(refused.code, "part_differs");
+    assert_eq!(refused.code.as_str(), "part_differs");
     assert_eq!(
         refused.message,
         "nothing was written\nparts/led is a file, not a part folder"
@@ -387,7 +387,7 @@ fn two_uses_of_one_id_stop_until_the_clash_is_named() {
         &ask(&["nano", "uno"], false, false),
         ADD,
     ));
-    assert_eq!(refused.code, "part_conflict");
+    assert_eq!(refused.code.as_str(), "part_conflict");
     assert_eq!(
         refused.message,
         "`r` is `0.1.0` in `nano` and `0.2.0` in `uno`"
@@ -440,7 +440,7 @@ fn two_uses_of_one_id_stop_until_the_clash_is_named() {
         &ask(&["nano", "mega", "r@1.0.0"], false, false),
         ADD,
     ));
-    assert_eq!(refused.code, "part_conflict");
+    assert_eq!(refused.code.as_str(), "part_conflict");
 }
 
 /// The project holds `nano`, which uses `r` 0.2.0. Adding `uno`, which uses `r` 0.1.0, must
@@ -534,14 +534,14 @@ fn a_clash_settled_by_overwrite_stays_settled() {
         &ask(&["uno", "r@0.1.0"], false, false),
         ADD,
     ));
-    assert_eq!(refused.code, "part_conflict");
+    assert_eq!(refused.code.as_str(), "part_conflict");
 }
 
 #[test]
 fn a_child_version_in_another_major_stops_until_one_is_named() {
     let (catalog, snapshot) = uno_after_nano("1.0.0");
     let refused = refusal(plan(&catalog, &snapshot, &ask(&["uno"], true, false), ADD));
-    assert_eq!(refused.code, "part_conflict");
+    assert_eq!(refused.code.as_str(), "part_conflict");
     assert_eq!(
         refused.message,
         "`r` is `0.1.0` in `uno` and `1.0.0` in `nano`, which the project holds"
@@ -569,7 +569,7 @@ fn an_unknown_id_suggests_a_catalog_id_and_a_registry_id_is_refused() {
         &ask(&["led-5m"], false, false),
         ADD,
     ));
-    assert_eq!(refused.code, "unknown_part");
+    assert_eq!(refused.code.as_str(), "unknown_part");
     assert!(refused.hint.contains("led-5mm"), "{}", refused.hint);
     let refused = refusal(plan(
         &catalog,
@@ -577,7 +577,7 @@ fn an_unknown_id_suggests_a_catalog_id_and_a_registry_id_is_refused() {
         &ask(&["@acme/led-5mm"], false, false),
         ADD,
     ));
-    assert_eq!(refused.code, "registry");
+    assert_eq!(refused.code.as_str(), "registry");
     assert!(
         refused
             .message
@@ -649,7 +649,7 @@ fn relock_refuses_a_sealed_edit_and_records_a_composite_edit() {
     let mut snapshot = empty();
     put(&mut snapshot, "led", edited(&sealed));
     let refused = refusal(plan(&catalog, &snapshot, &relock(), ADD));
-    assert_eq!(refused.code, "part_modified");
+    assert_eq!(refused.code.as_str(), "part_modified");
     assert!(
         refused.message.contains("`part.jsonc`"),
         "{}",

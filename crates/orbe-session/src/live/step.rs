@@ -17,7 +17,8 @@ use crate::target::Ref;
 
 /// `step` advances in slices this long, so `--until` and a caller see each one.
 const SLICE: Duration = Duration::from_ms(1);
-const CHANGES: usize = 20;
+/// The most changes one `step` lists.
+pub const CHANGES: usize = 20;
 
 /// Where a running step stands after a slice, for a caller that shows frames or stops it.
 pub struct Progress<'a> {

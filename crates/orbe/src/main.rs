@@ -1,21 +1,28 @@
 //! `orbe`, the CLI. `orbe check` type-checks a scene. `orbe add` copies catalog parts.
 //! `orbe test` runs each test file's live commands in a fresh in-process session. The live
 //! commands, such as `orbe open` and `orbe step`, drive a session that a background process
-//! holds between commands.
+//! holds between commands. `orbe skills` prints the skills that tell an agent how to use it.
 
 #[cfg(unix)]
 mod live;
+mod skills;
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{Arg, ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand};
 use orbe_scene::{Diagnostic, Reply, Request};
 use orbe_session::test::{self, Report};
 use serde_json::{Value, json};
 
 #[derive(Parser)]
-#[command(name = "orbe", version, about = "A hardware simulator for agents")]
+#[command(
+    name = "orbe",
+    version,
+    about = "A hardware simulator for agents",
+    after_help = "An agent new to orbe runs `orbe skills get core` first."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -24,6 +31,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Type-checks a scene and every part file it uses, and prints each finding.
+    #[command(display_order = 1)]
     Check {
         /// The scene file, such as scene.jsonc.
         scene: PathBuf,
@@ -32,11 +40,12 @@ enum Command {
         json: bool,
     },
     /// Copies catalog parts into `parts/` and writes `parts.lock`.
+    #[command(display_order = 2)]
     Add {
         /// Part ids. A version is `id@0.1.0`.
         ids: Vec<String>,
         /// The project folder, the one with scene.jsonc. The current folder by default.
-        #[arg(short = 'C', value_name = "DIR")]
+        #[arg(short = 'C', value_name = "DIR", allow_hyphen_values = true)]
         dir: Option<PathBuf>,
         /// Replace a copy that differs within the same major version.
         #[arg(long)]
@@ -53,6 +62,7 @@ enum Command {
     },
     /// Runs each test file, a transcript of live commands, in a fresh session, and stops a file
     /// at its first failed line.
+    #[command(display_order = 20)]
     Test {
         /// Test files, or project folders whose tests/*.test run. The current folder by default.
         paths: Vec<PathBuf>,
@@ -62,6 +72,12 @@ enum Command {
         /// Print one JSON envelope instead of text.
         #[arg(long)]
         json: bool,
+    },
+    /// Prints the skills that tell an agent how to use orbe.
+    #[command(display_order = 21)]
+    Skills {
+        #[command(subcommand)]
+        command: SkillsCommand,
     },
     /// The session's background process, which `orbe open` starts.
     #[command(hide = true)]
@@ -73,16 +89,98 @@ enum Command {
     },
 }
 
+#[derive(Subcommand)]
+enum SkillsCommand {
+    /// Lists the skills with what each covers.
+    List {
+        /// Print one JSON envelope instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Prints one skill, such as `core`.
+    Get {
+        name: String,
+        /// Print one JSON envelope instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// The live commands parse their own words, from the table in `orbe-session`. Clap only
+/// describes them, so `orbe --help` and `orbe <command> --help` list them.
+fn cli() -> clap::Command {
+    let live = orbe_session::COMMANDS
+        .iter()
+        .zip(3..)
+        .map(|(spec, order)| live_help(spec).display_order(order));
+    Cli::command().subcommands(live)
+}
+
+const LIVE_HELP: &str = "Refs: @btn1, @nano.D13, @led1.i. Conditions: @led1 on, @nano.D13 high, @led1.i '>' 5mA, serial contains \"text\", no diagnostics. Durations: 100ms, 1.5ms, 20us. `orbe skills get core` explains each.";
+
+const SWITCH_HELP: &str = "The input lands at the session's time t, and reads show it after t. On a switch with `bounce`, an input inside the bounce window of the one before lands after that window. The reply gives the time.";
+
+fn live_help(spec: &orbe_session::Spec) -> clap::Command {
+    let usage: Vec<String> = spec
+        .usage
+        .split(" | ")
+        .map(|form| format!("orbe {form} [OPTIONS]"))
+        .collect();
+    let mut command = clap::Command::new(spec.name)
+        .about(spec.about.trim_end_matches('.'))
+        .override_usage(usage.join("\n       "))
+        .arg(
+            Arg::new("session")
+                .long("session")
+                .value_name("NAME")
+                .help("The session, instead of ORBE_SESSION or the project's default name"),
+        )
+        .arg(
+            Arg::new("json")
+                .long("json")
+                .action(ArgAction::SetTrue)
+                .help("Print one JSON envelope instead of text"),
+        );
+    if ["press", "release"].contains(&spec.name) {
+        command = command.after_help(SWITCH_HELP);
+    } else if ["<ref>", "<condition>", "<duration>"]
+        .iter()
+        .any(|word| spec.usage.contains(word))
+    {
+        command = command.after_help(LIVE_HELP);
+    }
+    if spec.name == "close" {
+        command = command.arg(
+            Arg::new("all")
+                .long("all")
+                .action(ArgAction::SetTrue)
+                .help("Close every session of this orbe"),
+        );
+    }
+    command
+}
+
 const FAILED: u8 = 1;
 const IO: u8 = 3;
 
 const USAGE: u8 = 2;
 
 fn main() -> ExitCode {
-    let name = std::env::args_os().nth(1);
-    if let Some(spec) = name
-        .and_then(|n| n.into_string().ok())
-        .and_then(|n| orbe_session::spec(&n))
+    let mut args: Vec<OsString> = std::env::args_os().collect();
+    if let Some(exit) = flag_before_command(&args[1..]) {
+        return exit;
+    }
+    if args.get(1).is_some_and(|a| a == "help") {
+        let words = args.len();
+        args.retain(|a| a != "--help" && a != "-h");
+        if args.len() == 2 && words > 2 {
+            args.push("help".into());
+        }
+    }
+    if let Some(spec) = args
+        .get(1)
+        .and_then(|n| n.to_str())
+        .and_then(orbe_session::spec)
     {
         let args: Result<Vec<String>, _> = std::env::args_os()
             .skip(2)
@@ -92,9 +190,16 @@ fn main() -> ExitCode {
             eprintln!("error[usage]: `orbe {}` takes UTF-8 arguments", spec.name);
             return ExitCode::from(USAGE);
         };
+        if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+            let help = cli().try_get_matches_from(["orbe", spec.name, "--help"]);
+            return usage(help.expect_err("--help stops the parse"));
+        }
         return live_command(spec, &args);
     }
-    match Cli::try_parse() {
+    let parsed = cli()
+        .try_get_matches_from(args)
+        .and_then(|matches| Cli::from_arg_matches(&matches));
+    match parsed {
         Ok(cli) => match cli.command {
             Command::Check { scene, json } => check(&scene, json),
             Command::Add {
@@ -119,9 +224,98 @@ fn main() -> ExitCode {
                 verbose,
                 json,
             } => run_tests(&paths, verbose, json),
+            Command::Skills { command } => print_skill(command),
             Command::Daemon { session, start_log } => daemon(&session, start_log),
         },
         Err(err) => usage(err),
+    }
+}
+
+/// The flags that take the next word as their value, so that word is never the command name.
+const VALUED: [&str; 4] = ["--session", "-C", "--timeout", "--until"];
+
+/// A flag before the command name, as in `orbe --session x open`, is refused with a hint
+/// that moves the words before the command name to after it, as typed, less a repeat clap
+/// refuses. Only `--help` and `--version` go first.
+fn flag_before_command(args: &[OsString]) -> Option<ExitCode> {
+    let words: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
+    let first = words.first()?;
+    if !first.starts_with('-') || ["-h", "--help", "-V", "--version"].contains(first) {
+        return None;
+    }
+    let commands = cli();
+    let mut at = 0;
+    while commands.find_subcommand(words.get(at)?).is_none() {
+        at += if VALUED.contains(&words[at]) { 2 } else { 1 };
+    }
+    let mut command = commands.find_subcommand(words[at])?;
+    for word in &words[at + 1..] {
+        match command.find_subcommand(word) {
+            Some(sub) => command = sub,
+            None => break,
+        }
+    }
+    let live = orbe_session::spec(words[at]).is_some();
+    let takes_once = |flag: &str| {
+        !live
+            && command.get_arguments().any(|arg| {
+                names(arg, flag)
+                    && matches!(
+                        arg.get_action(),
+                        ArgAction::Set | ArgAction::SetTrue | ArgAction::SetFalse
+                    )
+            })
+    };
+    let mut line: Vec<&str> = words[at..].to_vec();
+    let mut before = words[..at].iter().copied();
+    while let Some(flag) = before.next() {
+        let unit: Vec<&str> = if VALUED.contains(&flag) {
+            [flag].into_iter().chain(before.next()).collect()
+        } else {
+            vec![flag]
+        };
+        if !(takes_once(flag) && line.windows(unit.len()).any(|w| w == unit)) {
+            line.extend(unit);
+        }
+    }
+    let shown = |words: &[&str]| {
+        words
+            .iter()
+            .map(|w| quoted(w))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let message = format!("`{}` is before the command name", shown(&words[..at]));
+    let hint = format!("put it after the command name, as `orbe {}`", shown(&line));
+    if words.contains(&"--json") {
+        print_json(&json!({
+            "ok": false,
+            "error": { "code": "usage", "message": message, "hint": hint }
+        }));
+    } else {
+        eprintln!("error[usage]: {message}\n  hint: {hint}");
+    }
+    Some(ExitCode::from(USAGE))
+}
+
+/// Whether `flag`, such as `--json`, `--session=x` or `-Cdir`, is `arg`.
+fn names(arg: &Arg, flag: &str) -> bool {
+    match flag.strip_prefix("--") {
+        Some(long) => arg.get_long() == long.split('=').next(),
+        None => flag
+            .chars()
+            .nth(1)
+            .is_some_and(|c| arg.get_short() == Some(c)),
+    }
+}
+
+/// The word as `sh` reads it back.
+fn quoted(word: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "@%+=:,./_-".contains(c);
+    if !word.is_empty() && word.chars().all(plain) {
+        word.to_string()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
     }
 }
 
@@ -350,6 +544,46 @@ fn report_json(report: &Report, verbose: bool) -> Value {
             .collect();
     }
     entry
+}
+
+fn print_skill(command: SkillsCommand) -> ExitCode {
+    match command {
+        SkillsCommand::List { json: true } => {
+            let skills: Vec<Value> = skills::SKILLS
+                .iter()
+                .map(|s| json!({ "name": s.name, "about": s.about }))
+                .collect();
+            print_json(&json!({ "ok": true, "data": { "skills": skills } }));
+        }
+        SkillsCommand::List { json: false } => {
+            for skill in skills::SKILLS {
+                println!("{:<8} {}", skill.name, skill.about);
+            }
+        }
+        SkillsCommand::Get { name, json } => {
+            let Some(skill) = skills::find(&name) else {
+                let message = format!("no skill named `{name}`");
+                let hint = format!("the skills are {}", skills::names());
+                if json {
+                    print_json(&json!({
+                        "ok": false,
+                        "error": { "code": "usage", "message": message, "hint": hint }
+                    }));
+                } else {
+                    eprintln!("error[usage]: {message}\n  hint: {hint}");
+                }
+                return ExitCode::from(USAGE);
+            };
+            if json {
+                print_json(
+                    &json!({ "ok": true, "data": { "name": skill.name, "text": skill.text() } }),
+                );
+            } else {
+                print!("{}", skill.text());
+            }
+        }
+    }
+    ExitCode::SUCCESS
 }
 
 fn check(scene: &Path, json: bool) -> ExitCode {
