@@ -3,6 +3,10 @@ import type { Ref } from "./protocol";
 
 export interface Hovered {
   readonly ref: Ref;
+  /** Why the ref is not simulated. */
+  readonly why: string | undefined;
+  /** Why the instance is not drawn as its part data says. */
+  readonly error: string | undefined;
   readonly object: Object3D;
   /** The pointer, in client pixels. */
   readonly x: number;

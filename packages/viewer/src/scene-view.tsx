@@ -1,12 +1,13 @@
-import { type ThreeEvent, useFrame, useLoader } from "@react-three/fiber";
+// Adapted from maker-sandbox (MIT, Copyright 2026 Alwurts).
+import { type ThreeEvent, useFrame, useLoader, useThree } from "@react-three/fiber";
 import { Bloom, EffectComposer, Outline } from "@react-three/postprocessing";
 import { type RefObject, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import { CanvasTexture, Mesh, type Object3D, RepeatWrapping, SRGBColorSpace } from "three";
+import { CanvasTexture, type Group, Mesh, type Object3D, RepeatWrapping, SRGBColorSpace } from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { buildScene, fromGltf, type Tag, tagOf } from "./build";
+import { type BuiltScene, buildScene, fromGltf, type Tag, tagOf } from "./build";
 import { type CameraMode, union } from "./camera-frame";
 import { CameraRig } from "./camera-rig";
-import { glowIntensity } from "./glow";
+import { glowIntensity, litColour } from "./glow";
 import type { HoverStore } from "./hover";
 import type { FrameMessage, Ref, SceneMessage, SessionSource } from "./protocol";
 import type { Box } from "./wire-geometry";
@@ -95,36 +96,54 @@ function modelUrls(scene: SceneMessage): string[] {
   return [...urls];
 }
 
+/** The press a pointer holds, and how to stop listening for its end. */
+interface Held {
+  readonly ref: Ref;
+  readonly pointerId: number;
+  readonly stop: () => void;
+}
+
+const PRESS_ENDS = ["pointerup", "pointercancel", "lostpointercapture"] as const;
+
 export function SceneView({
   scene,
   frame,
   source,
   hover,
   mode,
+  onBuilt,
 }: {
   scene: SceneMessage;
   frame: RefObject<FrameMessage | null>;
   source: SessionSource;
   hover: HoverStore;
   mode: CameraMode;
+  onBuilt: (built: BuiltScene) => void;
 }) {
   const urls = useMemo(() => modelUrls(scene), [scene]);
   const gltfs = useLoader(GLTFLoader, urls);
   const built = useMemo(() => {
-    const models = new Map(
+    const models = new Map<string, Group | Error>(
       urls.map((url, index) => {
         const gltf = gltfs[index];
-        if (gltf === undefined) throw new Error(`${url}: not loaded`);
-        return [url, fromGltf(gltf, url)] as const;
+        if (gltf === undefined) return [url, new Error(`${url}: not loaded`)];
+        try {
+          return [url, fromGltf(gltf, url)];
+        } catch (error) {
+          return [url, error instanceof Error ? error : new Error(String(error))];
+        }
       })
     );
     return buildScene(scene, models);
   }, [gltfs, scene, urls]);
+  useEffect(() => onBuilt(built), [built, onBuilt]);
 
   useFrame(() => {
     const live = frame.current;
     for (const glow of built.glows) {
-      glow.material.emissiveIntensity = glowIntensity(live?.led_a[glow.channel] ?? 0, glow.full);
+      const intensity = glowIntensity(live?.led_a[glow.channel] ?? 0, glow.full);
+      glow.material.emissiveIntensity = intensity;
+      litColour(glow.base, intensity, glow.material.color);
     }
     for (const slide of built.slides) {
       slide.node.position.copy(slide.rest);
@@ -132,12 +151,14 @@ export function SceneView({
     }
   });
 
-  const held = useRef<Ref | null>(null);
+  const canvas = useThree((state) => state.gl.domElement);
+  const held = useRef<Held | null>(null);
   const release = useCallback(() => {
-    const ref = held.current;
-    if (ref === null) return;
+    const pressed = held.current;
+    if (pressed === null) return;
     held.current = null;
-    source.send({ cmd: "release", ref });
+    pressed.stop();
+    source.send({ cmd: "release", ref: pressed.ref });
   }, [source]);
   useEffect(() => {
     window.addEventListener("blur", release);
@@ -146,14 +167,37 @@ export function SceneView({
       release();
     };
   }, [release]);
+  // A new scene follows an `open`, which restarts the session, so a press held across it
+  // is dropped without a release.
+  useEffect(
+    () => () => {
+      held.current?.stop();
+      held.current = null;
+    },
+    [scene]
+  );
 
+  // React Three Fiber never calls an object's onPointerCancel or onLostPointerCapture, so
+  // the press listens for its own pointer's end on the canvas.
   const press = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
     const instance = nearest(event.object, (tag) => tag.instance !== undefined);
     if (instance?.tag.instance?.pressable !== true || held.current !== null) return;
-    held.current = instance.tag.ref;
-    (event.target as Element).setPointerCapture(event.pointerId);
-    source.send({ cmd: "press", ref: instance.tag.ref });
+    const { ref } = instance.tag;
+    const { pointerId } = event;
+    const end = (native: PointerEvent) => {
+      if (native.pointerId === held.current?.pointerId) release();
+    };
+    for (const kind of PRESS_ENDS) canvas.addEventListener(kind, end);
+    held.current = {
+      ref,
+      pointerId,
+      stop: () => {
+        for (const kind of PRESS_ENDS) canvas.removeEventListener(kind, end);
+      },
+    };
+    (event.target as Element).setPointerCapture(pointerId);
+    source.send({ cmd: "press", ref });
   };
   const move = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
@@ -161,7 +205,14 @@ export function SceneView({
     hover.set(
       found === undefined
         ? null
-        : { ref: found.tag.ref, object: found.object, x: event.nativeEvent.clientX, y: event.nativeEvent.clientY }
+        : {
+            ref: found.tag.ref,
+            why: found.tag.why,
+            error: found.tag.error,
+            object: found.object,
+            x: event.nativeEvent.clientX,
+            y: event.nativeEvent.clientY,
+          }
     );
   };
 
@@ -170,12 +221,9 @@ export function SceneView({
       <CameraRig boxes={built.boxes} mode={mode} />
       <primitive
         object={built.root}
-        onLostPointerCapture={release}
-        onPointerCancel={release}
         onPointerDown={press}
         onPointerMove={move}
         onPointerOut={() => hover.set(null)}
-        onPointerUp={release}
       />
       {built.wires.map((wire, index) => (
         <WireMesh key={index} wire={wire} />
