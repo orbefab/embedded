@@ -202,7 +202,15 @@ async function main() {
   const here = dirname(fileURLToPath(import.meta.url));
   const partsDir = resolve(values.parts ?? join(here, '../../parts'));
   const ids = positionals.length ? positionals : readdirSync(partsDir).filter((id) => existsSync(join(partsDir, id, 'part.jsonc')));
-  const pinned = values.commit && commitOf(values.models, values.commit);
+  let pinned = null;
+  if (values.commit) {
+    try {
+      pinned = commitOf(values.models, values.commit);
+    } catch {
+      console.error(`--commit ${values.commit} is not a commit of ${values.models}\n\n${USAGE}`);
+      return 2;
+    }
+  }
 
   const jobs = [];
   const failedIds = new Set();

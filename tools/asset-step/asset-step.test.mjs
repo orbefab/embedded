@@ -255,3 +255,12 @@ test('with no --commit, a part with no asset.json is skipped', async (t) => {
   assert.match(out.line('good'), /^ok/);
   assert.equal(existsSync(join(fx.parts, 'wires', 'asset.json')), false);
 });
+
+test('a --commit the models repo does not have is a usage error', async (t) => {
+  const fx = await fixture(t, { good: leaded('good') });
+  const { status, stderr } = spawnSync(process.execPath, [STEP, '--models', fx.models, '--parts', fx.parts, '--commit', 'no-such-rev'], {
+    encoding: 'utf8',
+  });
+  assert.equal(status, 2);
+  assert.match(stderr, /^--commit no-such-rev is not a commit of /);
+});
