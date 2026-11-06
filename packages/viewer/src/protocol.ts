@@ -79,7 +79,9 @@ export interface Joint {
   readonly range: number;
 }
 
-/** One entry of `part.jsonc`'s `not_simulated`, unchanged. */
+/** One entry of `part.jsonc`'s `not_simulated`, unchanged. It names a feature the engine
+ * leaves out, such as light or temperature, not a part that is dropped. The viewer does not
+ * read it yet. */
 export interface NotSimulated {
   readonly what: string;
   readonly why: string;
@@ -125,10 +127,11 @@ export interface Channels {
   readonly displays?: readonly Ref[];
 }
 
-/** A pin whose net reaches no pin the engine simulates, with the reason `orbe check` gives
- * for a wire to it. */
+/** A pin whose net reaches no pin the engine simulates and has a reason, the one `orbe
+ * check` gives for a wire to it. Every entry carries its `why`. */
 export interface PinNotSimulated {
-  /** A pin ref at any depth, such as `@nano.A6`. */
+  /** The ref hover shows for the pin: the outermost label that reaches it, such as
+   * `@nano.A6`, else its own pin. */
   readonly ref: Ref;
   readonly why: string;
 }

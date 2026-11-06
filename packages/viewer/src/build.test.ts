@@ -148,6 +148,21 @@ describe("buildScene", () => {
     const group = built.root.getObjectByName("@nano.r_tx");
     expect(group !== undefined && tagOf(group)?.why).toBe("It feeds the TX LED.");
   });
+
+  test("a lead of a part that is not simulated takes a reason only from the scene's pin list", () => {
+    const anchor = { lead: 1, node: "body", also: [], at: [0, 0, 0], axis: [0, 0, -1], kind: "pad" } as const;
+    const withLead = { ...parts, led: partData("lamp.glb", { anchors: [anchor], leads: { a: [1] } }) };
+    const led = { name: "led", part: "led", params: {}, placement: at, children: [], not_simulated: "No fit yet." };
+    const reason = (extra: Partial<SceneMessage>) => {
+      const lead = buildScene(scene([led], { parts: withLead, ...extra }), models).root.getObjectByName("@led")?.getObjectByName("body");
+      return lead === undefined ? "no lead" : tagOf(lead);
+    };
+    expect(reason({})).toEqual({ ref: "@led.a" });
+    expect(reason({ not_simulated: [{ ref: "@led.a", why: "Its net reaches no simulated pin." }] })).toEqual({
+      ref: "@led.a",
+      why: "Its net reaches no simulated pin.",
+    });
+  });
 });
 
 /** A GLB with one triangle, whose one root carries the glTF turn and, with `rootHasMesh`,

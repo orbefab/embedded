@@ -164,7 +164,7 @@ function drawBody(builder: Builder, group: Group, instance: InstanceBase, path: 
   for (const anchor of part.anchors) {
     const hover = leadRef(scene, { path, lead: anchor.lead });
     if (hover === undefined) continue;
-    const why = builder.pinReasons.get(hover) ?? instance.not_simulated;
+    const why = builder.pinReasons.get(hover);
     for (const name of [anchor.node, ...anchor.also]) {
       const node = body.getObjectByName(name);
       if (node !== undefined) tag(node, why === undefined ? { ref: hover } : { ref: hover, why });

@@ -277,7 +277,7 @@ export const firstTarget: SceneMessage = {
     switches: ["@btn1", "@nano.sw_reset"],
   },
   // The Nano's header pins whose nets reach no simulated pin, with the reasons `orbe check`
-  // gives for a wire to each. A session lists such pins at every depth.
+  // gives for a wire to each.
   not_simulated: [
     { ref: "@nano.3V3", why: "The engine has no USB-serial chip. A serial source stands in for TXD and a steps source for DTR." },
     { ref: "@nano.A6", why: "The engine's atmega328p kind has the DIP's pins, with no ADC6 or ADC7 pad." },
