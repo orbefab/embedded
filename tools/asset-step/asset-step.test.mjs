@@ -127,10 +127,12 @@ test('a vertex that is not a finite number fails seating and composition', async
   const fx = await fixture(t, {
     block: BLOCK,
     'nan-body': leaded('nan-body', { nodes: [{ name: 'shell', points: [[0, 0, NaN]] }] }),
+    'nan-also': leaded('nan-also', { nodes: [{ name: 'tab', points: [[0, 0, NaN]] }], anchor: { also: ['tab'] } }),
     'short-rotate': board('short-rotate', { u1: 'block' }, { u1: { at: [0, 0, 5], rotate: [180] } }),
   });
-  const out = run(fx, ['block', 'nan-body', 'short-rotate']);
+  const out = run(fx, ['block', 'nan-body', 'nan-also', 'short-rotate']);
   assert.match(out.line('nan-body'), /seating: node `shell` has a vertex that is not a finite number/);
+  assert.match(out.line('nan-also'), /seating: node `tab` has a vertex that is not a finite number/);
   assert.match(out.line('short-rotate'), /composition: placed by the layout, node `u1\/body` has a vertex that is not a finite number/);
 });
 

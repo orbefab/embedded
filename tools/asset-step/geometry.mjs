@@ -82,18 +82,12 @@ export function tip(points, axis) {
   return [0, 1, 2].map((k) => chosen.reduce((sum, p) => sum + p[k], 0) / chosen.length);
 }
 
-/**
- * The lowest vertex of any node outside `exempt`, as `{name, z}`, or null when no other node has a
- * vertex. A vertex with a coordinate that is not a finite number counts as lowest, at z = -Infinity.
- */
+/** The lowest vertex of any node outside `exempt`, as `{name, z}`, or null when no other node has a vertex. */
 export function lowest(nodes, exempt) {
   let low = null;
   nodes.forEach((node, i) => {
     if (exempt.has(i)) return;
-    for (const p of node.points) {
-      const z = p.every(Number.isFinite) ? p[2] : -Infinity;
-      if (!low || z < low.z) low = { name: node.name || '(unnamed)', z };
-    }
+    for (const [, , z] of node.points) if (!low || z < low.z) low = { name: node.name || '(unnamed)', z };
   });
   return low;
 }

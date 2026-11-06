@@ -121,11 +121,15 @@ function leadNames(anchors) {
   return new Set(anchors.anchors.flatMap((a) => [a.node, ...a.also]));
 }
 
-/** Fails `check` when a node outside `exempt` reaches below the seating plane. */
+/**
+ * Fails `check` when any node, exempt or not, has a vertex that is not a finite number, or when a
+ * node outside `exempt` reaches below the seating plane.
+ */
 function seat(check, nodes, exempt, context) {
+  const bad = nodes.find((n) => n.points.some((p) => !p.every(Number.isFinite)));
+  if (bad) fail(check, `${context}node \`${bad.name || '(unnamed)'}\` has a vertex that is not a finite number`);
   const low = lowest(nodes, exempt);
   if (!low) return { lowest_node: null, z_mm: null };
-  if (!Number.isFinite(low.z)) fail(check, `${context}node \`${low.name}\` has a vertex that is not a finite number`);
   if (!(low.z >= -SEAT_TOLERANCE)) {
     fail(check, `${context}node \`${low.name}\` reaches z = ${low.z.toFixed(3)} mm, below the seating plane; only a lead may`);
   }
