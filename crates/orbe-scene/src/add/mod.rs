@@ -245,6 +245,11 @@ fn pending_note(root: &Path, add: &str) -> Vec<String> {
                 "an interrupted add left {name}. --diff leaves it, and the next `{add}` without --diff deletes it"
             )];
         }
+        Pending::Unproven(name) => {
+            return vec![format!(
+                "{name} has no log from an add. --diff leaves it, and the next `{add}` without --diff names it and stops"
+            )];
+        }
         Pending::Uncommitted => "rolls it back",
         Pending::Committed => "finishes it",
         Pending::Unclear => "says what it holds",

@@ -1063,3 +1063,163 @@ fn an_edit_to_the_new_copy_after_the_commit_keeps_the_saved_copy() {
             .ends_with("// my edit\n")
     );
 }
+
+/// A folder a person puts at the trash path has no log, so an add leaves it and says so.
+#[test]
+fn a_user_folder_at_the_trash_is_left_in_place() {
+    let dir = project();
+    let note = dir.path().join("parts/.orbe-add.trash/mine/note.txt");
+    fs::create_dir_all(note.parent().unwrap()).unwrap();
+    fs::write(&note, "KEEP-ME\n").unwrap();
+    let request = Request {
+        diff: true,
+        ..ask(&["led-5mm"], false)
+    };
+    let preview = text(&run(Some(dir.path()), &request).unwrap());
+    assert!(
+        preview.contains("parts/.orbe-add.trash") && !preview.contains("deletes it"),
+        "{preview}"
+    );
+    assert_eq!(fs::read_to_string(&note).unwrap(), "KEEP-ME\n");
+    for _ in 0..2 {
+        let error = add(dir.path(), &["led-5mm"], false)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains("parts/.orbe-add.trash") && error.contains("\n  hint:"),
+            "{error}"
+        );
+        assert_eq!(fs::read_to_string(&note).unwrap(), "KEEP-ME\n");
+        assert!(!dir.path().join("parts/led-5mm").exists());
+    }
+}
+
+/// A file or a link at the trash path is not a log, so an add leaves it.
+#[test]
+fn a_file_or_link_at_the_trash_is_left_in_place() {
+    for link in [false, true] {
+        let dir = project();
+        fs::create_dir_all(dir.path().join("parts")).unwrap();
+        let keep = dir.path().join("parts/keep.txt");
+        fs::write(&keep, "KEEP-ME\n").unwrap();
+        let trash = dir.path().join("parts/.orbe-add.trash");
+        if link {
+            std::os::unix::fs::symlink(&keep, &trash).unwrap();
+        } else {
+            fs::write(&trash, "KEEP-ME\n").unwrap();
+        }
+        let error = add(dir.path(), &["led-5mm"], false)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains("parts/.orbe-add.trash") && error.contains("\n  hint:"),
+            "{error}"
+        );
+        assert_eq!(fs::read_to_string(&keep).unwrap(), "KEEP-ME\n");
+        if link {
+            assert!(
+                fs::symlink_metadata(&trash)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+        } else {
+            assert_eq!(fs::read(&trash).unwrap(), b"KEEP-ME\n");
+        }
+        assert!(!dir.path().join("parts/led-5mm").exists());
+    }
+}
+
+/// A kill after the trash log is set aside still finishes on the next run, and the log goes last.
+#[test]
+fn a_kill_while_deleting_the_trash_log_still_finishes() {
+    let dir = project();
+    let killed = run_with(
+        Some(dir.path()),
+        &ask(&["led-5mm"], false),
+        &mut kill_at("do delete parts/.orbe-add.trash-log"),
+    );
+    assert!(killed.is_err(), "the trash-log delete was not reached");
+    assert!(dir.path().join("parts/.orbe-add.trash-log").is_file());
+    assert!(!dir.path().join("parts/.orbe-add.trash").exists());
+    assert!(dir.path().join("parts/led-5mm/part.jsonc").is_file());
+    let line = recover(dir.path());
+    assert!(
+        line.starts_with("finished an interrupted add, which had written parts/led-5mm"),
+        "{line}"
+    );
+    assert!(!dir.path().join("parts/.orbe-add").exists());
+    assert!(!dir.path().join("parts/.orbe-add.trash").exists());
+    assert!(!dir.path().join("parts/.orbe-add.trash-log").exists());
+    assert_lock_agrees(dir.path());
+    assert!(recover(dir.path()).is_empty());
+}
+
+/// A kill while the trash directory is still on disk, after its log was set aside, finishes
+/// on the next run.
+#[test]
+fn a_kill_while_the_trash_directory_is_deleted_still_finishes() {
+    let dir = project();
+    run_with(
+        Some(dir.path()),
+        &ask(&["led-5mm"], false),
+        &mut kill_at("do delete parts/.orbe-add.trash contents"),
+    )
+    .err()
+    .unwrap();
+    assert!(dir.path().join("parts/.orbe-add.trash-log").is_file());
+    assert!(dir.path().join("parts/.orbe-add.trash").is_dir());
+    let line = recover(dir.path());
+    assert!(
+        line.starts_with("finished an interrupted add, which had written parts/led-5mm"),
+        "{line}"
+    );
+    assert!(!dir.path().join("parts/.orbe-add").exists());
+    assert!(!dir.path().join("parts/.orbe-add.trash").exists());
+    assert!(!dir.path().join("parts/.orbe-add.trash-log").exists());
+    assert_lock_agrees(dir.path());
+}
+
+/// Following the printed delete hint must not claim the project is restored while the lock
+/// still names the part whose folder is gone.
+#[test]
+fn following_the_delete_hint_names_the_lock_line_left_behind() {
+    let dir = project();
+    add(dir.path(), &["led-5mm"], false).unwrap();
+    edit(dir.path(), "led-5mm");
+    run_with(
+        Some(dir.path()),
+        &ask(&["led-5mm"], true),
+        &mut kill_at("do place led-5mm"),
+    )
+    .err()
+    .unwrap();
+    let old_log = fs::read(dir.path().join("parts/.orbe-add/log")).unwrap();
+    add(dir.path(), &["led-5mm"], false).unwrap();
+    add(dir.path(), &["led-5mm"], true).unwrap();
+    for dir_name in ["parts/.orbe-add/new", "parts/.orbe-add/old"] {
+        fs::create_dir_all(dir.path().join(dir_name)).unwrap();
+    }
+    fs::write(dir.path().join("parts/.orbe-add/log"), &old_log).unwrap();
+    let error = add(dir.path(), &["tactile-switch-6mm"], false)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(error.contains("\n  hint: delete parts/led-5mm"), "{error}");
+    fs::remove_dir_all(dir.path().join("parts/led-5mm")).unwrap();
+    let reply = add(dir.path(), &["tactile-switch-6mm"], false).unwrap();
+    let got = text(&reply);
+    assert!(got.contains("parts.lock still lists led-5mm"), "{got}");
+    assert!(got.contains("`orbe check`"), "{got}");
+    assert!(!got.contains("as it was"), "{got}");
+    assert!(!dir.path().join("parts/led-5mm").exists());
+    let lock = fs::read_to_string(dir.path().join("parts.lock")).unwrap();
+    assert!(
+        lock.lines().any(|line| line.starts_with("led-5mm ")),
+        "{lock}"
+    );
+    assert!(!dir.path().join("parts/.orbe-add").exists());
+    assert!(!dir.path().join("parts/.orbe-add.trash").exists());
+}

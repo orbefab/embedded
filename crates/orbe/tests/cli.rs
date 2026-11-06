@@ -942,3 +942,24 @@ fn diff_previews_a_project_it_cannot_write() {
     left.sort();
     assert_eq!(left, ["parts", "parts.lock", "scene.jsonc"]);
 }
+
+/// A folder the user makes at the add trash is not an interrupted add, so it stays.
+#[test]
+fn a_user_folder_at_the_add_trash_is_left_in_place() {
+    let project = scene_only();
+    let note = project.path().join("parts/.orbe-add.trash/mine/note.txt");
+    fs::create_dir_all(note.parent().unwrap()).unwrap();
+    fs::write(&note, "KEEP-ME\n").unwrap();
+    for _ in 0..2 {
+        let (output, stdout, stderr) = orbe_in(project.path(), &["add", "led-5mm"]);
+        assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+        assert!(
+            stderr.contains("error[io_error]:")
+                && stderr.contains("parts/.orbe-add.trash")
+                && stderr.contains("\n  hint:"),
+            "{stderr}"
+        );
+        assert_eq!(fs::read(&note).unwrap(), b"KEEP-ME\n");
+        assert!(!project.path().join("parts/led-5mm").exists());
+    }
+}

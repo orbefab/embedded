@@ -890,7 +890,12 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
                 "add \"default\" or \"required\": true".into(),
             );
         }
-        if !through && !matches!(kind, ParamKind::Choice(_)) && field("sets").is_none() {
+        let nowhere = reaches_nothing(&prop.key, through, part);
+        if !through
+            && !matches!(kind, ParamKind::Choice(_))
+            && field("sets").is_none()
+            && nowhere.is_none()
+        {
             out.push(
                 Code::Param,
                 prop.key_span,
@@ -898,7 +903,7 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
                 "add \"sets\": \"/field\" pointing at the model field this param writes".into(),
             );
         }
-        if let Some((message, hint)) = reaches_nothing(&prop.key, through, part) {
+        if let Some((message, hint)) = nowhere {
             out.push(Code::Param, prop.key_span, message, hint);
         }
         params.push(ParamDecl {
@@ -966,7 +971,7 @@ fn check_sets(part: &mut Part, model: &Node, out: &mut Findings) {
         let problem = decl
             .pointers()
             .into_iter()
-            .find_map(|pointer| sets_problem(part, &model, pointer, &decl.name));
+            .find_map(|pointer| sets_problem(part, &model, pointer, &decl.name, &[]));
         if let Some((problem, hint)) = problem {
             out.push(
                 Code::Param,
@@ -994,6 +999,43 @@ fn check_sets(part: &mut Part, model: &Node, out: &mut Findings) {
     for index in refused {
         part.params[index].sets_refused = true;
     }
+}
+
+/// The same pointer check as [`check_sets`], with `droppable` choice names treated as defaults
+/// the reader can drop. It does not change `sets_refused`: a part is shared by every instance,
+/// and only this use fills those choices with a default. The returned names are the params
+/// whose pointers failed here.
+pub(crate) fn check_dropped_required(
+    part: &Part,
+    model: &Node,
+    droppable: &[String],
+    out: &mut Findings,
+) -> Vec<String> {
+    if droppable.is_empty() {
+        return Vec::new();
+    }
+    let model = model.to_value();
+    let mut refused = Vec::new();
+    for decl in &part.params {
+        if decl.sets_refused || refused.contains(&decl.name) {
+            continue;
+        }
+        let Some((problem, hint)) = decl
+            .pointers()
+            .into_iter()
+            .find_map(|pointer| sets_problem(part, &model, pointer, &decl.name, droppable))
+        else {
+            continue;
+        };
+        out.push(
+            Code::Param,
+            decl.span,
+            format!("param `{}`: {problem}", decl.name),
+            hint,
+        );
+        refused.push(decl.name.clone());
+    }
+    refused
 }
 
 /// Two params that write one field: the same pointer, or one inside the other's value. A
@@ -1169,7 +1211,13 @@ fn choosers<'p>(part: &'p Part, pointer: &str, way: &[String], name: &str) -> Ve
 /// writes points on it, applied as the reader applies them: shallowest first, an object
 /// merged into the one it lands on, anything else in place of what is there. The pointer is
 /// good only when each of them has the way.
-fn sets_problem(part: &Part, model: &Value, pointer: &str, name: &str) -> Option<(String, String)> {
+fn sets_problem(
+    part: &Part,
+    model: &Value,
+    pointer: &str,
+    name: &str,
+    droppable_names: &[String],
+) -> Option<(String, String)> {
     let tokens = match tokens(pointer) {
         Ok(tokens) => tokens,
         Err(problem) => {
@@ -1218,7 +1266,9 @@ fn sets_problem(part: &Part, model: &Value, pointer: &str, name: &str) -> Option
                         }
                         value => reached.add(&picked, Some(value.clone()), by, by),
                     }
-                    let droppable = covered && chooser.decl.default.is_some();
+                    let droppable = covered
+                        && (chooser.decl.default.is_some()
+                            || droppable_names.contains(&chooser.decl.name));
                     if !droppable {
                         continue;
                     }

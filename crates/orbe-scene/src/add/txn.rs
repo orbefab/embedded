@@ -7,8 +7,8 @@
 //! only on what that log proves. A run that stops before the commit is rolled back, by itself or
 //! by the next run. A run that stops after it is finished by the next. Every move and delete
 //! first checks that its path holds the hash the log recorded. The staging folder is deleted by
-//! renaming it to `parts/.orbe-add.trash` first, so a delete that stops part way leaves only a
-//! folder that recovery had already checked.
+//! renaming it to `parts/.orbe-add.trash` first. Its log moves aside and is removed last, so a
+//! delete that stops still has the log. A trash with no such log stays where it is.
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -117,6 +117,10 @@ impl Paths {
 
     fn trash(&self) -> PathBuf {
         self.parts.join(TRASH)
+    }
+
+    fn trash_log(&self) -> PathBuf {
+        self.parts.join(format!("{TRASH}-log"))
     }
 }
 
@@ -256,7 +260,7 @@ pub(super) fn recover(root: &Path, again: &str, fault: &mut Fault) -> Result<Vec
 }
 
 fn settle(paths: &Paths, again: &str, fault: &mut Fault) -> Result<Option<Done>, Stop> {
-    let emptied = empty_trash(paths, fault)?;
+    let emptied = empty_trash(paths, again, fault)?;
     let done = settle_stage(paths, again, fault)?;
     Ok(match (emptied, done) {
         (Some(line), Some(done)) => Some(Done {
@@ -272,52 +276,98 @@ fn settle(paths: &Paths, again: &str, fault: &mut Fault) -> Result<Option<Done>,
     })
 }
 
-/// The trash is a staging folder recovery had checked whole, so all of it goes. Its log goes
-/// last, and says what the run that left it did. A run that made `parts/` for an add it rolled
-/// back deletes it here, once it is empty.
-fn empty_trash(paths: &Paths, fault: &mut Fault) -> Result<Option<String>, Stop> {
+/// Deletes the trash only when its log is one this orbe writes. The log moves to
+/// [`Paths::trash_log`] and is removed last, so a delete that stops still has it. Anything
+/// else at the trash path stays, and the run stops. A run that made `parts/` for an add it
+/// rolled back deletes that folder here, once it is empty.
+fn empty_trash(paths: &Paths, again: &str, fault: &mut Fault) -> Result<Option<String>, Stop> {
+    if present(&paths.trash_log()) {
+        return finish_proven(paths, again, fault);
+    }
     let trash = paths.trash();
     let Ok(meta) = fs::symlink_metadata(&trash) else {
         return Ok(None);
     };
-    at(fault, &format!("do delete parts/{TRASH}"))?;
     let log = meta
+        .file_type()
         .is_dir()
         .then(|| match journal::read(&log_text(&trash.join(LOG))) {
             Read::Log(log) => Some(log),
             _ => None,
         })
         .flatten();
-    let old = trash.join("old");
-    let replaced: Vec<String> = match &log {
-        Some(log) if fs::symlink_metadata(&old).is_ok_and(|meta| meta.is_dir()) => {
-            let left = entries(&old);
-            log.plan
-                .ids
-                .iter()
-                .filter(|id| left.contains(id))
-                .cloned()
-                .collect()
-        }
-        _ => Vec::new(),
-    };
-    if meta.is_dir() {
-        for name in entries(&trash) {
-            if name != LOG {
-                remove_any(&trash.join(name))?;
-            }
-        }
-    }
-    remove_any(&trash)?;
     let Some(log) = log else {
-        return Ok(Some(format!(
-            "deleted parts/{TRASH}, which an interrupted add left"
-        )));
+        return Err(halt(unproven(&format!("parts/{TRASH}"), again)));
     };
+    let replaced = replaced_in(&trash, &log);
+    at(fault, &format!("do delete parts/{TRASH}"))?;
+    mv(&trash.join(LOG), &paths.trash_log())?;
+    delete_trash_dir(paths, fault)?;
+    drop_trash_log(paths, &log, &replaced, fault)
+}
+
+/// A delete stopped after the log was set aside. The log is what proves the trash is that
+/// delete's, so the rest of the trash goes and the log goes last.
+fn finish_proven(paths: &Paths, again: &str, fault: &mut Fault) -> Result<Option<String>, Stop> {
+    let Read::Log(log) = journal::read(&log_text(&paths.trash_log())) else {
+        return Err(halt(unproven(&format!("parts/{TRASH}-log"), again)));
+    };
+    let trash = paths.trash();
+    let replaced = if fs::symlink_metadata(&trash).is_ok_and(|meta| meta.file_type().is_dir()) {
+        replaced_in(&trash, &log)
+    } else if present(&trash) {
+        return Err(halt(unproven(&format!("parts/{TRASH}"), again)));
+    } else {
+        Vec::new()
+    };
+    if present(&trash) {
+        delete_trash_dir(paths, fault)?;
+    }
+    drop_trash_log(paths, &log, &replaced, fault)
+}
+
+fn delete_trash_dir(paths: &Paths, fault: &mut Fault) -> Result<(), Stop> {
+    at(fault, &format!("do delete parts/{TRASH} contents"))?;
+    let trash = paths.trash();
+    for name in entries(&trash) {
+        remove_any(&trash.join(name))?;
+    }
+    fs::remove_dir(&trash).map_err(|error| io_at(&trash, error))?;
+    Ok(())
+}
+
+fn drop_trash_log(
+    paths: &Paths,
+    log: &Log,
+    replaced: &[String],
+    fault: &mut Fault,
+) -> Result<Option<String>, Stop> {
+    at(fault, &format!("do delete parts/{TRASH}-log"))?;
+    remove_any(&paths.trash_log())?;
     if log.plan.parts_created && !log.committed() {
         let _ = fs::remove_dir(&paths.parts);
     }
-    Ok(Some(done(&log, &replaced).line))
+    Ok(Some(done(log, replaced).line))
+}
+
+fn replaced_in(trash: &Path, log: &Log) -> Vec<String> {
+    let old = trash.join("old");
+    if !fs::symlink_metadata(&old).is_ok_and(|meta| meta.is_dir()) {
+        return Vec::new();
+    }
+    let left = entries(&old);
+    log.plan
+        .ids
+        .iter()
+        .filter(|id| left.contains(id))
+        .cloned()
+        .collect()
+}
+
+fn unproven(path: &str, again: &str) -> String {
+    format!(
+        "{path} has no log from an add, so orbe cannot tell that an add left it, and orbe left it\n  hint: move {path} out of parts/ to keep it, then run `{again}` again"
+    )
 }
 
 fn settle_stage(paths: &Paths, again: &str, fault: &mut Fault) -> Result<Option<Done>, Stop> {
@@ -392,8 +442,23 @@ fn settle_stage(paths: &Paths, again: &str, fault: &mut Fault) -> Result<Option<
                     .filter(|id| seen.parts.get(*id).is_some_and(|here| here.old.is_some()))
                     .cloned()
                     .collect();
-                let done = done(&log, &replaced);
-                discard(paths, fault).map_err(|stop| match stop {
+                let mut done = done(&log, &replaced);
+                if !log.committed() {
+                    let missing = listed_without_folder(paths, &log);
+                    if !missing.is_empty() {
+                        let note = format!(
+                            "parts.lock still lists {}, and `orbe check` will name the `orbe add` to run",
+                            missing.join(", ")
+                        );
+                        done.line = match &done.undone {
+                            None => {
+                                format!("deleted the staging folder of an interrupted add. {note}")
+                            }
+                            Some(_) => format!("{}. {note}", done.line),
+                        };
+                    }
+                }
+                discard(paths, again, fault).map_err(|stop| match stop {
                     Stop::Failed(error) => stopped(&log, start, error, again),
                     killed => killed,
                 })?;
@@ -437,12 +502,25 @@ fn drop_torn_line(paths: &Paths, bytes: &[u8], fault: &mut Fault) -> Result<(), 
 
 /// Everything left in the staging folder is what the log made, with the hashes it recorded.
 /// The folder moves to the trash in one rename, then the trash is emptied.
-fn discard(paths: &Paths, fault: &mut Fault) -> Result<(), Stop> {
+fn discard(paths: &Paths, again: &str, fault: &mut Fault) -> Result<(), Stop> {
     if present(&paths.lock_tmp()) {
         remove_any(&paths.lock_tmp())?;
     }
     mv(&paths.stage, &paths.trash())?;
-    empty_trash(paths, fault).map(|_| ())
+    empty_trash(paths, again, fault).map(|_| ())
+}
+
+fn listed_without_folder(paths: &Paths, log: &Log) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(paths.lock()) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let id = line.split_whitespace().next()?;
+            (log.plan.ids.iter().any(|planned| planned == id) && !present(&paths.dest(id)))
+                .then(|| id.to_string())
+        })
+        .collect()
 }
 
 fn done(log: &Log, replaced: &[String]) -> Done {
@@ -631,6 +709,8 @@ pub(super) enum Pending {
     None,
     /// A file or folder an interrupted add left, which the next run deletes.
     Leftover(String),
+    /// Something at the trash path with no log from an add. The next run names it and stops.
+    Unproven(String),
     Uncommitted,
     Committed,
     Unclear,
@@ -638,8 +718,20 @@ pub(super) enum Pending {
 
 pub(super) fn pending(root: &Path) -> Pending {
     let paths = Paths::new(root);
+    if present(&paths.trash_log()) {
+        return Pending::Leftover(format!("parts/{TRASH}-log"));
+    }
     if present(&paths.trash()) {
-        return Pending::Leftover(format!("parts/{TRASH}"));
+        let proven = fs::symlink_metadata(paths.trash())
+            .is_ok_and(|meta| meta.file_type().is_dir())
+            && matches!(
+                journal::read(&log_text(&paths.trash().join(LOG))),
+                Read::Log(_)
+            );
+        if proven {
+            return Pending::Leftover(format!("parts/{TRASH}"));
+        }
+        return Pending::Unproven(format!("parts/{TRASH}"));
     }
     if !present(&paths.stage) {
         return if present(&paths.lock_tmp()) {
