@@ -44,7 +44,7 @@ fn seen(dest: Option<&str>, new: bool, old: bool) -> Seen {
             old: old.then(|| A.into()),
         },
     );
-    seen.names = ["log", "new", "old"].map(str::to_string).to_vec();
+    seen.names = ["log", "new", "old"].map(OsString::from).to_vec();
     if new {
         seen.names.push("new/led".into());
     }
@@ -111,7 +111,7 @@ fn the_log_reads_back_what_it_wrote_and_ignores_a_torn_last_line() {
 fn before_anything_moved_recovery_only_cleans() {
     let log = log(LockChange::Kept, staged());
     assert_eq!(next(&log, &seen(Some(A), true, false)), Next::Clean);
-    assert_eq!(summary(&log, &[]), None);
+    assert_eq!(summary(&log), None);
 }
 
 #[test]
@@ -268,7 +268,7 @@ fn a_recovery_step_the_log_missed_is_not_repeated() {
         ..log
     };
     assert_eq!(
-        summary(&unplaced, &[]).as_deref(),
+        summary(&unplaced).as_deref(),
         Some("removed the new parts/led")
     );
 }
@@ -319,7 +319,7 @@ fn a_done_rollback_says_what_it_put_back() {
     records.push(Record::Restored("led".into()));
     let log = log(LockChange::Kept, records);
     assert_eq!(next(&log, &seen(Some(A), true, false)), Next::Clean);
-    assert_eq!(summary(&log, &[]).as_deref(), Some("put back parts/led"));
+    assert_eq!(summary(&log).as_deref(), Some("put back parts/led"));
 }
 
 #[test]
@@ -344,7 +344,7 @@ fn after_the_commit_a_saved_copy_is_deleted_only_beside_the_new_copy() {
         next(&log, &seen(Some(A), false, false)),
         act(Effect::None, Record::Restored("led".into()))
     );
-    let summary = summary(&log, &[]).unwrap();
+    let summary = finished(&log, &["parts/led".into()], &[]).unwrap();
     assert!(!summary.contains("deleted"), "{summary}");
 }
 
@@ -390,7 +390,12 @@ fn a_finished_add_says_what_it_wrote_and_deleted() {
     let log = log(LockChange::Replace(L.into()), records);
     assert_eq!(next(&log, &seen(Some(B), false, true)), Next::Clean);
     assert_eq!(
-        summary(&log, &["led".into()]).as_deref(),
+        finished(
+            &log,
+            &["parts/led".into(), "parts.lock".into()],
+            &["led".into()]
+        )
+        .as_deref(),
         Some(
             "finished an interrupted add, which had written parts/led, parts.lock, and deleted the old copy of parts/led it replaced"
         )
@@ -435,7 +440,7 @@ fn the_lock_is_put_back_only_while_it_holds_what_the_add_wrote() {
         names: ["log"]
             .into_iter()
             .chain(saved.map(|_| "parts.lock"))
-            .map(str::to_string)
+            .map(OsString::from)
             .collect(),
         ..Seen::default()
     };
@@ -488,7 +493,7 @@ fn the_lock_is_put_back_only_while_it_holds_what_the_add_wrote() {
         records: vec![Record::SavedLock(M.into()), Record::LockStays],
     };
     assert_eq!(
-        summary(&stays, &[]).as_deref(),
+        summary(&stays).as_deref(),
         Some(
             "left the parts.lock the add wrote, since the copy from before it was not in parts/.orbe-add"
         )
@@ -515,6 +520,11 @@ fn only_the_write_after_the_last_line_may_be_unlogged() {
     let mut half = seen(None, false, false);
     half.names.push("new/led".into());
     half.parts.get_mut("led").unwrap().new = Some(C.into());
+    assert_eq!(
+        next(&log(LockChange::Kept, vec![]), &half),
+        Next::Stop(vec![Problem::Changed(vec!["new/led".into()])])
+    );
+    half.unlogged_is_prefix = true;
     assert_eq!(next(&log(LockChange::Kept, vec![]), &half), Next::Clean);
     assert_eq!(
         next(
@@ -550,10 +560,14 @@ fn a_clearing_line_reads_back_its_names_and_only_paths_below_the_folder() {
             path: "old/led/fifo".into(),
             kind: Kind::Other,
         },
+        Entry {
+            path: OsString::from_vec(b"old/led/caf\xe9".to_vec()),
+            kind: Kind::Unreadable("12.3.1700000000.5.1700000001.6".into()),
+        },
     ];
     let line = Record::Clearing(entries.clone()).line();
     assert!(
-        !line.contains('\n') && line.split(' ').count() == 5,
+        !line.contains('\n') && line.split(' ').count() == 6,
         "{line}"
     );
     assert_eq!(Record::parse(&line), Some(Record::Clearing(entries)));
@@ -570,6 +584,8 @@ fn a_clearing_line_reads_back_its_names_and_only_paths_below_the_folder() {
         "d:a%2",
         "x:a",
         "d:old/./a",
+        "u:a:1 2",
+        "u:a",
     ] {
         assert_eq!(Record::parse(&format!("clearing {word}")), None, "{word}");
     }

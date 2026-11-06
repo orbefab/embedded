@@ -260,6 +260,7 @@ name = "orbe-scene"
 version = "0.1.0"
 dependencies = [
  "jsonc-parser",
+ "rustix",
  "serde_json",
  "sha2",
  "sim-circuit",

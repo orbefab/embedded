@@ -937,9 +937,10 @@ impl<'p> Circuit<'p> {
     /// in once, shallowest first.
     ///
     /// A param left unset at a null default only fills a field the model leaves out. A value
-    /// an instance set beats any default. Of two defaults, one that writes an object keeps
-    /// what it wrote, and a deeper one fills only what it left out. Of two set values, the
-    /// deeper wins, unless the object around it is set off. A param whose default is null
+    /// an instance set beats any default, and a default that fills a required param beats any
+    /// other default. Of two defaults, one that writes an object keeps what it wrote, and a
+    /// deeper one fills only what it left out. Of two set values, or two defaults that fill
+    /// required params, the deeper wins, unless the object around it is set off. A param whose default is null
     /// turns on the objects its value passes through, unless a write that wins over it turns
     /// one off. Then a value an instance set that did not land is a finding at that value.
     fn model(&mut self, inst: usize, part: &Part, model_node: &Node) -> (Value, SetBy) {
@@ -968,12 +969,12 @@ impl<'p> Circuit<'p> {
                 (None, None) => continue,
             };
             // `convert` takes null only for a param whose default is null, so a null set by an
-            // instance is that default and ranks as unset. A required param is always set, so
-            // its value ranks as set even when it is a parent's default passed down.
-            let rank = match (arg.node.is_null(), arg.explicit || decl.default.is_none()) {
-                (true, _) => Rank::Unset,
-                (false, true) => Rank::Set,
-                (false, false) => Rank::Default,
+            // instance is that default and ranks as unset.
+            let rank = match (arg.node.is_null(), arg.explicit, decl.default.is_none()) {
+                (true, _, _) => Rank::Unset,
+                (false, true, _) => Rank::Set,
+                (false, false, true) => Rank::Required,
+                (false, false, false) => Rank::Default,
             };
             match convert(decl, &arg) {
                 Ok(sets) => {
@@ -1116,16 +1117,17 @@ impl<'p> Circuit<'p> {
     }
 }
 
-/// Where a param's value comes from, weakest first.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Where a param's value comes from, weakest first. Each beats the ones before it.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Rank {
     /// Left unset at a null default, or set to that null: it fills a field the model leaves
     /// out, and turns nothing off.
     Unset,
     /// A declaration's default, or a parent's default passed down into a param that has one.
     Default,
-    /// Set by an instance, passed down from a value an instance set, or the value of a
-    /// required param.
+    /// A parent's default passed down into a param that has none.
+    Required,
+    /// Set by an instance, or passed down from a value an instance set.
     Set,
 }
 
@@ -1150,9 +1152,10 @@ enum Fate {
     },
 }
 
-/// What another param's write around `w` decides for it. A write that holds `w`'s field
-/// keeps it from a default. A write that turns `w`'s object off keeps a default from turning
-/// it on, and drops a set value when it is set itself.
+/// What another param's write around `w` decides for it. A write that holds `w`'s field drops
+/// `w` unless `w` ranks higher, or both rank alike above a default, where the deeper wins. A
+/// write that turns `w`'s object off drops `w` when both rank alike above a default, and keeps
+/// `w` from turning it on unless `w` ranks higher.
 fn fate(w: &Write, writes: &[Write]) -> Fate {
     let mut opens = w.opens;
     for around in writes.iter().filter(|a| {
@@ -1161,14 +1164,13 @@ fn fate(w: &Write, writes: &[Write]) -> Fate {
             && a.pointer != w.pointer
             && within(&w.pointer, &a.pointer)
     }) {
+        let deeper_wins = w.rank == around.rank && w.rank > Rank::Default;
         match cover(&around.value, &w.pointer[around.pointer.len()..]) {
             Cover::Gap => {}
-            Cover::Value if w.rank == Rank::Set => {}
+            Cover::Value if w.rank > around.rank || deeper_wins => {}
             Cover::Value => return Fate::Dropped,
-            Cover::Off if w.rank == Rank::Set && around.rank == Rank::Set => {
-                return Fate::Dropped;
-            }
-            Cover::Off if w.rank == Rank::Set => {}
+            Cover::Off if deeper_wins => return Fate::Dropped,
+            Cover::Off if w.rank > around.rank => {}
             Cover::Off => opens = false,
         }
     }

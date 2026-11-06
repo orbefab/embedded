@@ -835,3 +835,27 @@ pub(crate) fn shell_word(word: &str) -> String {
         format!("'{}'", word.replace('\'', "'\\''"))
     }
 }
+
+/// A path as one shell word that names it. A path that is not UTF-8, or holds a control
+/// character, is written `$'...'`, which bash, zsh and ksh read back byte for byte.
+pub(crate) fn shell_path(path: &std::ffi::OsStr) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    match path.to_str() {
+        Some(word) if !word.chars().any(char::is_control) => shell_word(word),
+        _ => {
+            let mut out = String::from("$'");
+            for &byte in path.as_bytes() {
+                match byte {
+                    b'\'' | b'\\' => {
+                        out.push('\\');
+                        out.push(byte as char);
+                    }
+                    b' '..=b'~' => out.push(byte as char),
+                    _ => out.push_str(&format!("\\x{byte:02x}")),
+                }
+            }
+            out.push('\'');
+            out
+        }
+    }
+}

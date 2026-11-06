@@ -185,13 +185,18 @@ fn a_failure_at_any_point_rolls_every_move_back() {
                 assert!(
                     text(&reply).contains("injected failure at do clean")
                         || text(&reply).contains("injected failure at log clearing")
-                        || text(&reply).contains("injected failure at do delete parts/.orbe-add/"),
+                        || text(&reply).contains("injected failure at do delete parts/.orbe-add"),
                     "{}",
                     text(&reply)
                 );
                 let line = recover(dir.path());
+                let log_gone = text(&reply).contains("orbe had deleted its log");
                 assert!(
-                    line.starts_with("finished an interrupted add, which had written parts/led-5mm, parts/resistor-axial, parts/tactile-switch-6mm, parts.lock"),
+                    line.starts_with(if log_gone {
+                        "deleted parts/.orbe-add, an empty folder an earlier add left"
+                    } else {
+                        "finished an interrupted add, which had written parts/led-5mm, parts/resistor-axial, parts/tactile-switch-6mm, parts.lock"
+                    }),
                     "{line}"
                 );
                 assert_replaced(dir.path());
@@ -266,6 +271,10 @@ fn a_kill_in_the_add_then_a_kill_in_recovery_keeps_every_edit() {
             let at = format!("add killed at {add_point}, recovery at {recover_point}: {line}");
             if line.starts_with("finished an interrupted add") {
                 assert_replaced(dir.path());
+            } else if line.starts_with("deleted parts/.orbe-add, an empty folder") {
+                if tree(dir.path()) != before {
+                    assert_replaced(dir.path());
+                }
             } else {
                 assert_eq!(tree(dir.path()), before, "{at}");
                 if killed != before {
@@ -369,7 +378,7 @@ fn a_committed_add_puts_back_the_copy_it_replaced_when_the_new_one_is_gone() {
     let line = recover(dir.path());
     assert!(
         line.starts_with(
-            "finished an interrupted add, which had written parts/led-5mm, parts/resistor-axial, parts/tactile-switch-6mm, parts.lock"
+            "finished an interrupted add, which had written parts/resistor-axial, parts/tactile-switch-6mm, parts.lock"
         ),
         "{line}"
     );
@@ -1162,16 +1171,21 @@ fn bytes_put_in_a_half_deleted_staging_folder_are_never_deleted() {
             };
             let error = error.to_string();
             assert_eq!(kept(dir.path()).len(), 1, "{at}: {error}");
-            let hint = error.split("\n  hint: move ").nth(1).expect(&error);
-            let named = hint.split(" out of ").next().unwrap();
-            for (n, path) in named.split(", ").enumerate() {
-                fs::rename(dir.path().join(path), dir.path().join(format!("moved-{n}"))).unwrap();
+            if error.contains("parts/.orbe-add has no log") {
+                assert!(
+                    error.contains("\n  hint: move anything you want to keep out of parts/.orbe-add, delete parts/.orbe-add, then run"),
+                    "{at}: {error}"
+                );
+                fs::rename(&target, dir.path().join("moved-0")).unwrap();
+                fs::remove_dir(&left[0]).unwrap();
+            } else {
+                move_as_hinted(dir.path(), &error);
+                let line = diff_predicts(dir.path()).unwrap();
+                assert!(
+                    line.starts_with("finished an interrupted add, which had written"),
+                    "{at}: {line}"
+                );
             }
-            let line = diff_predicts(dir.path()).unwrap();
-            assert!(
-                line.starts_with("finished an interrupted add, which had written"),
-                "{at}: {line}"
-            );
             assert_replaced(dir.path());
             let found = kept(dir.path());
             assert!(
@@ -1293,4 +1307,278 @@ fn diff_says_what_the_next_add_does_with_a_staging_name() {
     fs::write(dir.path().join("parts/.orbe-add"), "KEEP-ME\n").unwrap();
     diff_predicts(dir.path()).err().unwrap();
     assert_eq!(kept(dir.path()).len(), 1);
+}
+
+/// Runs each path the hint says to move through a shell, as printed, into `moved-<n>`.
+fn move_as_hinted(root: &Path, error: &str) {
+    let hint = error.split("\n  hint: move ").nth(1).expect(error);
+    let named = hint.split(" out of ").next().unwrap();
+    for (n, word) in named.split(", ").enumerate() {
+        let status = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(format!("mv -- {word} moved-{n}"))
+            .current_dir(root)
+            .status()
+            .unwrap();
+        assert!(status.success(), "mv -- {word} failed: {error}");
+    }
+}
+
+/// A run killed after it writes `new/<id>` or the saved lock, and before it logs it, leaves
+/// bytes no line hashes. Recovery deletes them only while they are a copy of what the add
+/// writes there. Anything else is named and stays.
+#[test]
+fn bytes_put_in_a_copy_the_log_has_not_named_yet_are_never_deleted() {
+    for (kill, path) in [
+        (
+            "log staged led-5mm",
+            "parts/.orbe-add/new/led-5mm/notes.txt",
+        ),
+        (
+            "log staged led-5mm",
+            "parts/.orbe-add/new/led-5mm/part.jsonc",
+        ),
+        ("log saved-lock", "parts/.orbe-add/parts.lock"),
+    ] {
+        for planted in [false, true] {
+            let dir = project();
+            add(dir.path(), &["resistor-axial"], false).unwrap();
+            let before = tree(dir.path());
+            stop_add_of(dir.path(), &["led-5mm"], kill_at(kill));
+            let target = dir.path().join(path);
+            let at = format!("{kill}, {path}, planted {planted}");
+            if planted {
+                if target.exists() {
+                    append_to(&target, "KEEP-ME\n");
+                } else {
+                    fs::write(&target, "KEEP-ME\n").unwrap();
+                }
+            } else if target.exists() {
+                let bytes = fs::read(&target).unwrap();
+                fs::write(&target, &bytes[..bytes.len() / 2]).unwrap();
+            }
+            if !planted {
+                diff_predicts(dir.path()).unwrap();
+                assert_eq!(tree(dir.path()), before, "{at}");
+                continue;
+            }
+            let error = diff_predicts(dir.path()).expect_err(&at).to_string();
+            assert_eq!(kept(dir.path()).len(), 1, "{at}: {error}");
+            move_as_hinted(dir.path(), &error);
+            diff_predicts(dir.path()).unwrap();
+            let found = kept(dir.path());
+            assert!(
+                found.len() == 1 && found[0].starts_with("moved-"),
+                "{at}: {found:?}"
+            );
+            assert!(!dir.path().join("parts/.orbe-add").exists(), "{at}");
+        }
+    }
+}
+
+/// A user folder an overwrite replaces may hold a name that is not UTF-8 and a file no one can
+/// read. The add moved both in itself, so it deletes both with the old copy.
+#[test]
+fn an_overwrite_deletes_odd_names_and_unreadable_files_it_moved_aside() {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+    let dir = project();
+    add(dir.path(), &["led-5mm"], false).unwrap();
+    let folder = dir.path().join("parts/led-5mm");
+    fs::write(
+        folder.join(std::ffi::OsStr::from_bytes(b"caf\xe9.txt")),
+        "x",
+    )
+    .unwrap();
+    fs::write(folder.join("secret.txt"), "x").unwrap();
+    fs::set_permissions(folder.join("secret.txt"), fs::Permissions::from_mode(0o000)).unwrap();
+    let reply = text(&add(dir.path(), &["led-5mm"], true).unwrap());
+    assert_eq!(
+        reply,
+        "wrote parts/led-5mm 0.1.0, replacing 0.1.0 with local edits\nparts.lock unchanged"
+    );
+    assert!(!dir.path().join("parts/.orbe-add").exists());
+    assert_lock_agrees(dir.path());
+}
+
+/// A name that is not UTF-8, put in the staging folder before or after the clearing list, is
+/// named so that the printed `mv` moves it, and the add then finishes.
+#[test]
+fn a_name_that_is_not_utf8_is_printed_so_a_shell_finds_it() {
+    use std::os::unix::ffi::OsStrExt;
+    for point in ["do clean", "do delete"] {
+        let dir = edited_project();
+        stop_add(dir.path(), kill_at(point));
+        let name = std::ffi::OsStr::from_bytes(b"\xff\xfe it's");
+        fs::write(dir.path().join("parts/.orbe-add").join(name), "KEEP-ME\n").unwrap();
+        let error = diff_predicts(dir.path()).err().unwrap().to_string();
+        assert!(!error.contains('\u{fffd}'), "{point}: {error}");
+        move_as_hinted(dir.path(), &error);
+        assert_eq!(kept(dir.path()), vec!["moved-0".to_string()], "{point}");
+        diff_predicts(dir.path()).unwrap();
+        assert_replaced(dir.path());
+    }
+}
+
+/// Bytes changed after the clearing list, and a link swapped in for a folder, stop the run.
+/// The path is named, and what it holds stays.
+#[test]
+fn a_path_that_changes_while_the_staging_folder_is_deleted_is_left() {
+    for swap in [false, true] {
+        let dir = project();
+        add(dir.path(), &["led-5mm"], false).unwrap();
+        for name in ["u1.txt", "u2.txt"] {
+            fs::write(dir.path().join("parts/led-5mm").join(name), "mine\n").unwrap();
+        }
+        let outside = tempfile::tempdir().unwrap();
+        fs::create_dir(outside.path().join("led-5mm")).unwrap();
+        fs::write(outside.path().join("led-5mm/u1.txt"), "KEEP-ME\n").unwrap();
+        let stage = dir.path().join("parts/.orbe-add");
+        let mut done = false;
+        let reply = run_with(Some(dir.path()), &ask(&["led-5mm"], true), &mut |at| {
+            if at.starts_with("do delete") && !done {
+                done = true;
+                if swap {
+                    fs::rename(stage.join("old"), dir.path().join("moved-old")).unwrap();
+                    std::os::unix::fs::symlink(outside.path(), stage.join("old")).unwrap();
+                } else {
+                    for name in ["u1.txt", "u2.txt"] {
+                        append_to(&stage.join("old/led-5mm").join(name), "KEEP-ME\n");
+                    }
+                }
+            }
+            None
+        })
+        .unwrap();
+        let reply = text(&reply);
+        assert!(reply.contains("finishing it stopped"), "{reply}");
+        assert_eq!(
+            fs::read_to_string(outside.path().join("led-5mm/u1.txt")).unwrap(),
+            "KEEP-ME\n",
+            "{reply}"
+        );
+        if !swap {
+            assert_eq!(kept(dir.path()).len(), 2, "{reply}");
+        }
+        loop {
+            match diff_predicts(dir.path()) {
+                Ok(_) => break,
+                Err(error) => move_as_hinted(dir.path(), &error.to_string()),
+            }
+        }
+        assert!(!stage.exists());
+        assert_eq!(
+            fs::read_to_string(outside.path().join("led-5mm/u1.txt")).unwrap(),
+            "KEEP-ME\n"
+        );
+        if !swap {
+            assert!(
+                kept(dir.path())
+                    .iter()
+                    .all(|path| path.starts_with("moved-"))
+            );
+        }
+    }
+}
+
+/// When the next add puts a part back and then stops, `--diff` says both, and the command it
+/// names carries the ids it was given.
+#[test]
+fn diff_names_the_steps_the_next_add_takes_before_it_stops() {
+    let dir = edited_project();
+    stop_add(dir.path(), kill_after_commit());
+    fs::remove_dir_all(dir.path().join("parts/led-5mm")).unwrap();
+    edit(dir.path(), "resistor-axial");
+    let error = diff_predicts(dir.path()).err().unwrap().to_string();
+    assert!(
+        error.contains("before it stopped, orbe put back parts/led-5mm"),
+        "{error}"
+    );
+    let request = Request {
+        diff: true,
+        ..ask(&["resistor-0603"], false)
+    };
+    let preview = text(&run(Some(dir.path()), &request).unwrap());
+    let command = format!("{} resistor-0603", project::add_command(Some(dir.path())));
+    assert!(
+        preview.contains(&format!(
+            "the next `{command}` without --diff names what it cannot prove the add made, and stops"
+        )),
+        "{preview}"
+    );
+    let dir = edited_project();
+    stop_add(dir.path(), kill_after_commit());
+    fs::remove_dir_all(dir.path().join("parts/led-5mm")).unwrap();
+    edit(dir.path(), "resistor-axial");
+    let preview = text(&run(Some(dir.path()), &request).unwrap());
+    let command = format!("{} resistor-0603", project::add_command(Some(dir.path())));
+    assert!(
+        preview.contains(&format!(
+            "the next `{command}` without --diff puts back parts/led-5mm, then names what it cannot prove the add made, and stops"
+        )),
+        "{preview}"
+    );
+}
+
+#[test]
+fn a_forged_or_stale_log_claims_only_what_the_run_did() {
+    let dir = project();
+    add(dir.path(), &["led-5mm"], false).unwrap();
+    let stage = dir.path().join("parts/.orbe-add");
+    fs::create_dir_all(stage.join("old/led-5mm")).unwrap();
+    fs::write(
+        stage.join("log"),
+        "orbe add log 1\nplan existed - led-5mm\ncommitted\nclearing d:old d:old/led-5mm\n",
+    )
+    .unwrap();
+    let line = diff_predicts(dir.path()).unwrap();
+    assert_eq!(line, "deleted the staging folder of an interrupted add");
+
+    let dir = project();
+    add(dir.path(), &["led-5mm"], false).unwrap();
+    edit(dir.path(), "led-5mm");
+    stop_add_of(dir.path(), &["led-5mm"], kill_at("do delete"));
+    let log = fs::read(stage_log(dir.path())).unwrap();
+    recover(dir.path());
+    fs::create_dir(dir.path().join("parts/.orbe-add")).unwrap();
+    fs::write(stage_log(dir.path()), log).unwrap();
+    let line = diff_predicts(dir.path()).unwrap();
+    assert_eq!(
+        line,
+        "finished an interrupted add, which had written parts/led-5mm"
+    );
+}
+
+fn stage_log(root: &Path) -> std::path::PathBuf {
+    root.join("parts/.orbe-add/log")
+}
+
+/// An error on the last delete, the staging folder itself, comes after the log is gone. The
+/// reply says so, and the next add deletes the empty folder.
+#[test]
+fn an_error_on_the_last_delete_says_the_log_is_gone() {
+    let dir = project();
+    add(dir.path(), &["led-5mm"], false).unwrap();
+    edit(dir.path(), "led-5mm");
+    let reply = run_with(Some(dir.path()), &ask(&["led-5mm"], true), &mut |at| {
+        (at == "do delete parts/.orbe-add").then_some(Inject::Fail)
+    })
+    .unwrap();
+    let reply = text(&reply);
+    assert!(!reply.contains("keeps its log"), "{reply}");
+    assert!(
+        reply.contains("orbe had deleted its log and everything else in parts/.orbe-add, which is left as an empty folder"),
+        "{reply}"
+    );
+    assert!(!stage_log(dir.path()).exists());
+    assert_eq!(
+        fs::read_dir(dir.path().join("parts/.orbe-add"))
+            .unwrap()
+            .count(),
+        0
+    );
+    assert_eq!(
+        recover(dir.path()),
+        "deleted parts/.orbe-add, an empty folder an earlier add left"
+    );
 }

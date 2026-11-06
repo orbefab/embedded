@@ -6,6 +6,7 @@
 //! the next run, which [`journal::next`] decides from the log and the hashes on disk. [`held`]
 //! keeps a second run out while one is at work.
 
+mod at;
 mod diff;
 mod held;
 mod journal;
@@ -166,7 +167,17 @@ fn run_with(dir: Option<&Path>, request: &Request, fault: &mut Fault) -> Result<
     };
     let recovered = if request.diff {
         txn::Recovered {
-            lines: pending_note(root, &add),
+            lines: pending_note(
+                root,
+                &request_command(
+                    &add,
+                    &Request {
+                        ids: request.ids.clone(),
+                        diff: false,
+                        ..*request
+                    },
+                ),
+            ),
             planned: Vec::new(),
         }
     } else {
@@ -260,21 +271,28 @@ fn busy(again: &str) -> Refusal {
 }
 
 /// `--diff` writes nothing, so an interrupted add stays for the next writing run.
-fn pending_note(root: &Path, add: &str) -> Vec<String> {
+fn pending_note(root: &Path, next: &str) -> Vec<String> {
     let what = match txn::pending(root) {
         Pending::None => return Vec::new(),
         Pending::Leftover(name) => {
             return vec![format!(
-                "an interrupted add left {name}. --diff leaves it, and the next `{add}` without --diff deletes it"
+                "an interrupted add left {name}. --diff leaves it, and the next `{next}` without --diff deletes it"
             )];
         }
-        Pending::Uncommitted => "rolls it back",
-        Pending::Committed => "finishes it",
-        Pending::Clearing => "finishes deleting it",
-        Pending::Stops => "names what it cannot prove the add made, and stops",
+        Pending::Uncommitted => "rolls it back".to_string(),
+        Pending::Committed => "finishes it".to_string(),
+        Pending::Clearing => "finishes deleting it".to_string(),
+        Pending::Stops(steps) => {
+            let stops = "names what it cannot prove the add made, and stops";
+            if steps.is_empty() {
+                stops.to_string()
+            } else {
+                format!("{}, then {stops}", steps.join(", "))
+            }
+        }
     };
     vec![format!(
-        "an interrupted add is pending in parts/{}. --diff leaves it, and the next `{add}` without --diff {what}",
+        "an interrupted add is pending in parts/{}. --diff leaves it, and the next `{next}` without --diff {what}",
         txn::STAGE
     )]
 }
@@ -390,7 +408,10 @@ fn single_component(id: &str) -> bool {
 
 fn io_at(path: &Path, error: io::Error) -> RunError {
     RunError {
-        message: format!("cannot access {}: {error}", path.display()),
+        message: format!(
+            "cannot access {}: {error}",
+            project::shell_path(path.as_os_str())
+        ),
     }
 }
 
