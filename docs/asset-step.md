@@ -42,6 +42,8 @@ A lead is the mesh of the node an anchor names. The anchors check takes a lead's
 
 The step does not compare a composed part with the whole object the models repo also exports, such as the Nano. The models repo does that in its own `checks/nano_ref.py`.
 
+Composition needs each child's `asset.json`. A part with children and no body of its own has none, so a part that holds one fails composition, and the children below it are not placed. `part.jsonc` does not say whether a part has a body, so the step cannot tell such a part from one whose model has not been brought in yet.
+
 ## In check.sh
 
 `cargo test` checks every catalog part with a GLB, without Node. The hashes and sizes in `asset.json` must match the files. The anchors' leads must equal the leads in `pins`, and each anchor's `at` must sit inside the box `asset.json` records, with a unit `axis`. The test reads the node names from the GLB's JSON chunk. They must equal `kept_nodes`, and `kept_nodes` must equal what the merge keeps by `part.jsonc` and the anchors, with each leg or socket anchor's `node` and `also` in the GLB once. The test reads no vertices, so the geometry checks stay with the asset step and `scripts/check-assets.sh`.
