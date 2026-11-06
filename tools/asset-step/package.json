@@ -1,0 +1,11 @@
+{
+  "name": "orbe-asset-step",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "dependencies": {
+    "@gltf-transform/core": "4.5.1",
+    "@gltf-transform/functions": "4.5.1",
+    "jsonc-parser": "3.3.1"
+  }
+}

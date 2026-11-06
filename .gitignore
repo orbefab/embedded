@@ -5,3 +5,4 @@
 .vscode/
 .scratch/
 /target
+node_modules/
