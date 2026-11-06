@@ -43,7 +43,7 @@
     "tint": [{ "node": "body", "by": "color" }],
   },
   "not_simulated": [
-    { "what": "light", "why": "The engine reports current. Brightness is the current over 10 mA, clipped to 1." },
+    { "what": "light", "why": "The engine reports current. Brightness is the current over 10 mA, so 1 at 10 mA, and above that the LED blooms." },
     { "what": "temperature", "why": "The fit is at 25 C and the engine has no temperature." },
     { "what": "reverse breakdown", "why": "The engine's LED has no breakdown voltage." },
   ],
