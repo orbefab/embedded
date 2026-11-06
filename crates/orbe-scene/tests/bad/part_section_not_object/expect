@@ -1,0 +1,1 @@
+scene.syntax parts/button.jsonc:25:13 | `joints` takes an object, found a number

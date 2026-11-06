@@ -78,6 +78,14 @@ pub(crate) fn hint(reason: &str) -> String {
     }
 }
 
+/// "a", "a and b", or "a, b and c".
+pub(crate) fn and_list(names: &[&str]) -> String {
+    match names.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => names.join(""),
+    }
+}
+
 /// "did you mean `x`? " when one is close, else "".
 pub(crate) fn did_you_mean<'a>(
     word: &str,

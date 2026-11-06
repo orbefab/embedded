@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 
 use crate::diagnostic::{Code, Findings, Reported};
 use crate::kinds;
-use crate::name::{NameKind, did_you_mean, problem};
+use crate::name::{NameKind, and_list, did_you_mean, problem};
 use crate::params::{Cover, Step, cover, dotted, pointer_of, step, tokens, within};
 use crate::shape::{self, ParamShape, schema, unknown_key};
 use crate::source::{FileId, Sources, Span};
@@ -777,7 +777,7 @@ fn decode_pins(node: &Node, out: &mut Findings) -> Vec<Pin> {
 
 /// Each name a part file gives to another of its own sections: `controls.press.joint` to a key
 /// of `joints`, each `view.glow` entry's `by` to a reading, and each `view.tint` and
-/// `view.recolour` entry's `by` to a param. `shape` has checked the types.
+/// `view.recolour` entry's `by` to a param. A section that is not an object has its own finding.
 fn check_own_names(root: &Node, out: &mut Findings) {
     let press = root.get("controls").and_then(|c| c.get("press"));
     let mut names: Vec<(&Node, &str, &str)> = press
@@ -800,7 +800,10 @@ fn check_own_names(root: &Node, out: &mut Findings) {
     }
     for (node, section, what) in names {
         let Some(name) = node.str() else { continue };
-        let props = root.get(section).and_then(Node::props).unwrap_or_default();
+        let props = match root.get(section).map(Node::props) {
+            Some(None) => continue,
+            found => found.flatten().unwrap_or_default(),
+        };
         let keys: Vec<&str> = props.iter().map(|p| p.key.as_str()).collect();
         if keys.contains(&name) {
             continue;
@@ -808,9 +811,9 @@ fn check_own_names(root: &Node, out: &mut Findings) {
         let hint = match keys.as_slice() {
             [] => format!("add `{name}` to `{section}`"),
             _ => format!(
-                "{}its {section}: {}",
+                "{}its {section} are {}",
                 did_you_mean(name, keys.iter().copied(), ""),
-                keys.join(", ")
+                and_list(&keys)
             ),
         };
         out.push(
