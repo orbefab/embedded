@@ -15,6 +15,9 @@ use crate::syntax::Node;
 use crate::units::Unit;
 
 mod engine;
+mod map;
+
+pub use map::{Amount, EnginePart, MapPart, Reading, RefMap};
 
 const ROOT: usize = 0;
 const NAME_LIMIT: usize = 64;
@@ -133,6 +136,7 @@ pub struct Netlist {
     pub ground: String,
     /// Catalog copies with children and no model that differ from `parts.lock`.
     pub modified: Vec<String>,
+    pub refs: RefMap,
 }
 
 pub(crate) fn compile(project: &Project, out: &mut Findings) -> Option<Netlist> {
@@ -844,12 +848,16 @@ impl<'p> Circuit<'p> {
                 break text;
             }
         };
-        (self.out.is_empty() && ground.is_some()).then(|| Netlist {
+        if !self.out.is_empty() || ground.is_none() {
+            return None;
+        }
+        Some(Netlist {
             json: text,
             parts: parts.len() - left_out.len(),
             nets: names,
             ground: ground_name,
             modified: self.project.modified.clone(),
+            refs: self.map(nets),
         })
     }
 

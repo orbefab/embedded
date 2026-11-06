@@ -529,6 +529,16 @@ impl Session {
         }
     }
 
+    /// The time the step after the last accepted one lands, which a call accepts once it
+    /// reaches that time. Edges and bytes join the logs only on an accepted step, so none
+    /// arrives before it. `None` once the session has ended.
+    pub fn next_at(&self) -> Option<Time> {
+        match &self.state {
+            State::Running { next, .. } => Some(next.at),
+            State::Ended { .. } => None,
+        }
+    }
+
     /// The last accepted step, which is `now` once the session has ended.
     pub(crate) fn accepted(&self) -> Time {
         match &self.state {

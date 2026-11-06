@@ -1,10 +1,12 @@
 //! `orbe`, the CLI. `orbe check` type-checks a scene. `orbe add` copies catalog parts.
+//! `orbe test` runs each test file's live commands in a fresh in-process session.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use orbe_scene::{Diagnostic, Reply, Request};
+use orbe_session::test::{self, Report};
 use serde_json::{Value, json};
 
 #[derive(Parser)]
@@ -44,6 +46,18 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Runs each test file, a transcript of live commands, in a fresh session, and stops a file
+    /// at its first failed line.
+    Test {
+        /// Test files, or project folders whose tests/*.test run. The current folder by default.
+        paths: Vec<PathBuf>,
+        /// Print every command with its reply.
+        #[arg(short, long)]
+        verbose: bool,
+        /// Print one JSON envelope instead of text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 const FAILED: u8 = 1;
@@ -52,6 +66,12 @@ const IO: u8 = 3;
 const USAGE: u8 = 2;
 
 fn main() -> ExitCode {
+    if let Some(spec) = std::env::args()
+        .nth(1)
+        .and_then(|name| orbe_session::spec(&name))
+    {
+        return live_command(spec);
+    }
     match Cli::try_parse() {
         Ok(cli) => match cli.command {
             Command::Check { scene, json } => check(&scene, json),
@@ -72,6 +92,11 @@ fn main() -> ExitCode {
                 },
                 json,
             ),
+            Command::Test {
+                paths,
+                verbose,
+                json,
+            } => run_tests(&paths, verbose, json),
         },
         Err(err) => usage(err),
     }
@@ -88,6 +113,207 @@ fn usage(err: clap::Error) -> ExitCode {
         return ExitCode::from(USAGE);
     }
     err.exit();
+}
+
+/// The live commands run inside `orbe test` until the session process comes.
+fn live_command(spec: &orbe_session::Spec) -> ExitCode {
+    let message = format!(
+        "`orbe {}` is a live command, and live commands come with the session process",
+        spec.name
+    );
+    let hint = format!(
+        "write `{}` in a tests/<name>.test file and run `orbe test`",
+        spec.usage
+    );
+    if std::env::args().any(|arg| arg == "--json") {
+        print_json(&json!({
+            "ok": false,
+            "error": { "code": "usage", "message": message, "hint": hint }
+        }));
+    } else {
+        eprintln!("error[usage]: {message}\n  hint: {hint}");
+    }
+    ExitCode::from(USAGE)
+}
+
+/// Every test file the paths name, with its project folder: a file itself, or a folder's
+/// tests/*.test, sorted.
+fn test_files(paths: &[PathBuf]) -> Result<Vec<(PathBuf, PathBuf)>, (u8, String, String)> {
+    let paths = if paths.is_empty() {
+        vec![PathBuf::from(".")]
+    } else {
+        paths.to_vec()
+    };
+    let cwd = test::cwd().map_err(|error| {
+        (
+            IO,
+            format!("cannot read the working folder: {error}"),
+            "run `orbe test` from a folder that exists".to_string(),
+        )
+    })?;
+    let missing = |path: &Path| {
+        (
+            IO,
+            format!("no test file or folder at {}", path.display()),
+            "name a .test file or a project folder".to_string(),
+        )
+    };
+    let locate = |named: &Path| {
+        let real = named.canonicalize().map_err(|_| missing(named))?;
+        test::locate(&real, named, &cwd)
+            .map(|found| (found.file, found.root))
+            .map_err(|(message, hint)| (USAGE, message, hint))
+    };
+    let mut files = Vec::new();
+    for path in &paths {
+        let real = path.canonicalize().map_err(|_| missing(path))?;
+        if real.is_file() {
+            files.push(locate(path)?);
+            continue;
+        }
+        if !real.is_dir() {
+            return Err(missing(path));
+        }
+        let tests = real.join("tests");
+        let shown = test::shown(&tests, &cwd);
+        let unreadable = |error: std::io::Error| {
+            (
+                IO,
+                format!("cannot read {}: {error}", shown.display()),
+                "make the folder readable".to_string(),
+            )
+        };
+        let entries = match std::fs::read_dir(&tests) {
+            Ok(entries) => entries.collect::<Result<Vec<_>, _>>().map_err(unreadable)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(unreadable(error)),
+        };
+        let mut found: Vec<PathBuf> = entries
+            .into_iter()
+            .map(|entry| entry.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "test"))
+            .map(|p| test::shown(&p, &cwd))
+            .collect();
+        if found.is_empty() {
+            return Err((
+                USAGE,
+                format!("no tests in {}", shown.display()),
+                format!(
+                    "its real path is {}; write a tests/<name>.test file of live commands with `expect` lines",
+                    tests.display()
+                ),
+            ));
+        }
+        found.sort();
+        for file in found {
+            files.push(locate(&file)?);
+        }
+    }
+    Ok(files)
+}
+
+fn run_tests(paths: &[PathBuf], verbose: bool, json: bool) -> ExitCode {
+    let files = match test_files(paths) {
+        Ok(files) => files,
+        Err((code, message, hint)) => {
+            let name = if code == IO { "io_error" } else { "usage" };
+            if json {
+                print_json(&json!({
+                    "ok": false,
+                    "error": { "code": name, "message": message, "hint": hint }
+                }));
+            } else {
+                eprintln!("error[{name}]: {message}\n  hint: {hint}");
+            }
+            return ExitCode::from(code);
+        }
+    };
+    let mut reports = Vec::new();
+    for (file, root) in &files {
+        let text = match std::fs::read_to_string(file) {
+            Ok(text) => text,
+            Err(error) => return io_exit(&format!("{}: {error}", file.display()), json),
+        };
+        let report = test::run(file, &text, root);
+        if !json {
+            print_report(&report, verbose);
+        }
+        reports.push(report);
+    }
+    let exit = reports.iter().map(Report::exit).max().unwrap_or(0);
+    let failed = reports.iter().filter(|r| !r.passed()).count();
+    let passed = reports.len() - failed;
+    if json {
+        print_json(&json!({
+            "ok": failed == 0,
+            "data": {
+                "passed": passed,
+                "failed": failed,
+                "tests": reports.iter().map(|r| report_json(r, verbose)).collect::<Vec<_>>(),
+            },
+        }));
+    } else {
+        println!("{passed} passed, {failed} failed");
+    }
+    ExitCode::from(exit)
+}
+
+fn print_report(report: &Report, verbose: bool) {
+    let file = report.file.display();
+    if verbose {
+        for line in &report.lines {
+            println!("{file}:{}> {}", line.number, line.text);
+            for text in line.reply.text().lines() {
+                println!("  {text}");
+            }
+        }
+    }
+    if let Some(refused) = &report.refused {
+        println!("FAIL {file}");
+        for text in refused.text().lines() {
+            println!("  {text}");
+        }
+        return;
+    }
+    let Some(failure) = report.failure() else {
+        println!("PASS {file}");
+        return;
+    };
+    println!("FAIL {file}:{}: {}", failure.number, failure.text);
+    if !verbose {
+        for text in failure.reply.text().lines() {
+            println!("  {text}");
+        }
+    }
+}
+
+fn report_json(report: &Report, verbose: bool) -> Value {
+    let mut entry = json!({ "file": report.file.display().to_string(), "ok": report.passed() });
+    if let Some(refused) = &report.refused {
+        entry["error"] = refused.json()["error"].clone();
+    }
+    if let Some(failure) = report.failure() {
+        let reply = &failure.reply;
+        let envelope = reply.json();
+        entry["line"] = json!(failure.number);
+        entry["command"] = json!(failure.text);
+        entry["error"] = envelope["error"].clone();
+        if let Some(check) = reply.check() {
+            entry["expected"] = json!(check.expected);
+            entry["actual"] = json!(check.actual);
+        }
+        if let Some(data) = envelope.get("data") {
+            entry["data"] = data.clone();
+        }
+    }
+    if verbose {
+        entry["replies"] = report
+            .lines
+            .iter()
+            .map(|l| json!({ "line": l.number, "command": l.text, "reply": l.reply.json() }))
+            .collect();
+    }
+    entry
 }
 
 fn check(scene: &Path, json: bool) -> ExitCode {

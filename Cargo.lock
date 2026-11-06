@@ -251,6 +251,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "orbe-scene",
+ "orbe-session",
  "serde_json",
  "tempfile",
 ]
@@ -266,6 +267,18 @@ dependencies = [
  "sim-circuit",
  "sim-core",
  "strsim",
+ "tempfile",
+]
+
+[[package]]
+name = "orbe-session"
+version = "0.1.0"
+dependencies = [
+ "orbe-scene",
+ "serde",
+ "serde_json",
+ "sim-circuit",
+ "sim-core",
  "tempfile",
 ]
 
