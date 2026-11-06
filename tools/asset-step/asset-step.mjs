@@ -40,6 +40,15 @@ function commitOf(models, rev) {
   return git(models, ['rev-parse', '--verify', `${rev}^{commit}`]).toString().trim();
 }
 
+/** The commit `id`'s asset.json records, or a `CheckFailed` when the models checkout lacks it. */
+function recorded(models, id, commit) {
+  try {
+    return commitOf(models, commit);
+  } catch {
+    throw new CheckFailed('source', `\`${id}\`'s asset.json records models commit ${commit}, which ${models} does not have; fetch it`);
+  }
+}
+
 function blob(models, commit, path) {
   try {
     return git(models, ['show', `${commit}:${path}`]);
@@ -109,7 +118,7 @@ async function childModels(models, partsDir, part, found = new Map()) {
     if (found.has(type)) continue;
     const asset = readAsset(partsDir, type);
     if (!asset) continue;
-    const src = source(models, asset.source.commit, type);
+    const src = source(models, recorded(models, type, asset.source.commit), type);
     if (!src) throw new CheckFailed('composition', `child type \`${type}\` has no GLB at the commit its asset.json records`);
     const child = readPart(partsDir, type);
     const nodes = partNodes((await io.readBinary(src.glb)).setLogger(quiet));
@@ -216,16 +225,17 @@ async function main() {
   const failedIds = new Set();
   for (const id of ids) {
     try {
-      const rev = pinned || readAsset(partsDir, id)?.source.commit;
-      if (!rev) {
+      const asset = pinned ? null : readAsset(partsDir, id);
+      const commit = pinned ?? (asset && recorded(values.models, id, asset.source.commit));
+      if (!commit) {
         if (positionals.length) throw new CheckFailed('source', 'no --commit given and no asset.json records one');
         console.log(`skip  ${id}  no --commit given and no asset.json records one`);
         continue;
       }
-      const src = source(values.models, commitOf(values.models, rev), id);
+      const src = source(values.models, commit, id);
       if (!src) {
-        if (positionals.length) throw new CheckFailed('source', `no GLB/parts/${id}.glb at ${rev}`);
-        console.log(`skip  ${id}  no GLB/parts/${id}.glb at ${rev}`);
+        if (positionals.length) throw new CheckFailed('source', `no GLB/parts/${id}.glb at ${commit}`);
+        console.log(`skip  ${id}  no GLB/parts/${id}.glb at ${commit}`);
         continue;
       }
       jobs.push({ part: readPart(partsDir, id), src });

@@ -102,9 +102,9 @@ async function fixture(t, specs) {
 
 function run(fx, ids, commit = fx.commit) {
   const args = [STEP, '--models', fx.models, '--parts', fx.parts, ...(commit ? ['--commit', commit] : []), ...ids];
-  const { status, stdout } = spawnSync(process.execPath, args, { encoding: 'utf8', env });
+  const { status, stdout, stderr } = spawnSync(process.execPath, args, { encoding: 'utf8', env });
   const lines = stdout.trimEnd().split('\n');
-  return { status, line: (id) => lines.find((l) => l.split(/\s+/)[1] === id) };
+  return { status, stderr, line: (id) => lines.find((l) => l.split(/\s+/)[1] === id) };
 }
 
 const files = (fx, id) => readdirSync(join(fx.parts, id)).sort();
@@ -191,6 +191,21 @@ test("composition places a child's own children", async (t) => {
   const out = run(fx, ['tilted', 'flat', 'mid', 'block']);
   assert.match(out.line('tilted'), /composition: placed by the layout, node `m\/b\/body` reaches z = -3\.420 mm/);
   assert.match(out.line('flat'), /^ok {4}flat {2}kept 0 nodes, 1, composed 3 draw calls/);
+});
+
+test('a recorded commit the models checkout lacks fails its part and the parts that hold it', async (t) => {
+  const fx = await fixture(t, { block: BLOCK, holder: board('holder', { u1: 'block' }, { u1: { at: [0, 0, 0] } }) });
+  assert.equal(run(fx, ['block', 'holder']).status, 0);
+  const missing = 'f'.repeat(40);
+  const record = asset(fx, 'block');
+  writeFileSync(join(fx.parts, 'block', 'asset.json'), JSON.stringify({ ...record, source: { ...record.source, commit: missing } }));
+  const why = `source: \`block\`'s asset.json records models commit ${missing}, which ${fx.models} does not have; fetch it`;
+  for (const ids of [['block'], ['holder']]) {
+    const out = run(fx, ids, null);
+    assert.equal(out.status, 1);
+    assert.equal(out.line(ids[0]), `FAIL  ${ids[0]}  ${why}`);
+    assert.equal(out.stderr, '');
+  }
 });
 
 test('a part whose body and children are all leads has no lowest node', async (t) => {

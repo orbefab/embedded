@@ -9,7 +9,7 @@ npm ci --prefix tools/asset-step
 node tools/asset-step/asset-step.mjs --models ../models --commit <models commit> [<id> ...]
 ```
 
-`--models` is a checkout of `orbefab/models`. The step reads `GLB/parts/<id>.glb` and `GLB/parts/<id>.anchors.json` at the commit with `git show`, so it never changes the checkout. With no ids, it runs every part in `parts/` that has a GLB at that commit. With no `--commit`, each part reruns from the commit its `asset.json` records.
+`--models` is a checkout of `orbefab/models`. The step reads `GLB/parts/<id>.glb` and `GLB/parts/<id>.anchors.json` at the commit with `git show`, so it never changes the checkout. With no ids, it runs every part in `parts/` that has a GLB at that commit. With no `--commit`, each part reruns from the commit its `asset.json` records, and fails if the checkout lacks that commit, which you then fetch.
 
 With no `--commit` and no ids, a part with no GLB at its commit, or with no `asset.json` to name a commit, is skipped. A part with no model yet does not fail the run.
 
@@ -38,7 +38,7 @@ A lead is the mesh of the node an anchor names. The anchors check takes a lead's
 | seating | No node reaches more than 0.01 mm below z = 0, except the nodes an anchor names. |
 | names | Each node that `view` and `joints` name exists once. |
 | merge | The merge keeps the nodes that `view` and `joints` name, and the `node` and `also` of each `leg` or `socket` anchor. Every other node loses its name and joins one mesh per material, and identical meshes are shared. Each kept node exists once afterwards, and the scene still has nodes to draw. |
-| composition | Only for a part with children. The part's model, each child's model and each model below those, placed by each parent's `layout` with its full rotation, stay within 0.01 mm of z = 0 or above, except at the nodes their anchors name, pads included. An `at` of two numbers sits at z = 0. Each child's model is its source GLB at the commit its `asset.json` records, which passed these checks, because the merge drops a pad's name. |
+| composition | Only for a part with children. The part's model, each child's model and each model below those, placed by each parent's `layout` with its full rotation, stay within 0.01 mm of z = 0 or above, except at the nodes their anchors name, pads included. An `at` of two numbers sits at z = 0. Each child's model is its source GLB at the commit its `asset.json` records, which passed these checks, because the merge drops a pad's name. A child whose recorded commit the models checkout lacks fails the part. |
 
 The step does not compare a composed part with the whole object the models repo also exports, such as the Nano. The models repo does that in its own `checks/nano_ref.py`.
 
