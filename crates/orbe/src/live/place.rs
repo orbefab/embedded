@@ -128,6 +128,33 @@ impl Place {
         names.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(names)
     }
+
+    /// Removes the start logs no process holds, of the sessions `of` picks, and returns them
+    /// sorted. The client that makes a start log locks it before the process starts, and the
+    /// process holds that lock for as long as it runs.
+    pub fn remove_left_logs(&self, of: impl Fn(&Name) -> bool) -> Vec<(Name, PathBuf)> {
+        use rustix::fs::{FlockOperation, Mode, OFlags};
+        let Ok(entries) = fs::read_dir(&self.dir) else {
+            return Vec::new();
+        };
+        let mut left: Vec<(Name, PathBuf)> = entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let file = entry.file_name();
+                let (stem, id) = file.to_str()?.rsplit_once(".log.")?;
+                id.parse::<u64>().ok()?;
+                let name = Name::parse(stem).ok().filter(|name| of(name))?;
+                let path = entry.path();
+                let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+                let fd = rustix::fs::open(&path, flags, Mode::empty()).ok()?;
+                rustix::fs::flock(&fd, FlockOperation::NonBlockingLockExclusive).ok()?;
+                fs::remove_file(&path).ok()?;
+                Some((name, path))
+            })
+            .collect();
+        left.sort_by(|a, b| a.1.cmp(&b.1));
+        left
+    }
 }
 
 /// The longest socket path: `sun_path`, less its closing NUL.

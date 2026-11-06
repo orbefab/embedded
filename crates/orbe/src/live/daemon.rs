@@ -10,7 +10,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::Duration;
@@ -26,6 +26,9 @@ const IDLE: Duration = Duration::from_secs(60 * 60);
 /// A process with no scene open ends this long after it starts listening, however many
 /// commands reach it, so one that no `open` reached does not wait out the hour.
 const UNOPENED: Duration = Duration::from_secs(5);
+
+/// How often a process with no scene, past `UNOPENED`, looks again for a request still being read.
+const RECHECK: Duration = Duration::from_millis(20);
 
 /// How long a reply waits for a client that does not read it.
 const WRITE: Duration = Duration::from_secs(5);
@@ -124,8 +127,8 @@ impl Job {
 }
 
 /// Runs the session. `start` names the log `open` gave this process for its stderr: once this
-/// process holds the socket, that log becomes the session's, and a process that finds the
-/// session already listening removes it.
+/// process holds the socket, that log becomes the session's, and a process that loses the
+/// socket to another start removes it.
 pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
     let found = Place::find().and_then(|place| {
         let start = start.map(|id| place.start_log(name, id));
@@ -141,9 +144,11 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
     let listener = match bind(&socket) {
         Ok(listener) => listener,
         Err(error) => {
-            if error.kind() == io::ErrorKind::AddrInUse
-                && let Some(start) = &start
-            {
+            let lost = matches!(
+                error.kind(),
+                io::ErrorKind::AddrInUse | io::ErrorKind::NotFound
+            );
+            if lost && let Some(start) = &start {
                 let _ = std::fs::remove_file(start);
             }
             eprintln!(
@@ -153,15 +158,25 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
             return ExitCode::from(3);
         }
     };
-    let own_log = start.and_then(|start| {
-        let identity = inode(&start);
-        std::fs::rename(&start, &log).ok().and(identity)
-    });
-    let bound = (inode(&socket), own_log);
-    let idle = test_idle().unwrap_or(IDLE);
+    let bound = (inode(&socket), start.as_deref().and_then(inode));
+    if let Some(start) = &start
+        && let Err(error) = std::fs::rename(start, &log)
+    {
+        if inode(&socket) == bound.0 {
+            let _ = std::fs::remove_file(&socket);
+        }
+        eprintln!(
+            "error[io_error]: cannot move the log {} to {}: {error}",
+            start.display(),
+            log.display()
+        );
+        return ExitCode::from(3);
+    }
+    let idle = test_duration("ORBE_TEST_IDLE_TIMEOUT").unwrap_or(IDLE);
     let (events, queue) = mpsc::channel();
-    let timer = unopened_timer(events.clone(), UNOPENED.min(idle));
-    thread::spawn(move || accept(&listener, &events));
+    let reading = Arc::new(AtomicUsize::new(0));
+    let timer = unopened_timer(events.clone(), UNOPENED.min(idle), Arc::clone(&reading));
+    thread::spawn(move || accept(&listener, &events, &reading));
     let mut held = Held {
         live: Live::new(name.as_str()),
         scene: None,
@@ -207,23 +222,30 @@ fn serve(held: &mut Held, queue: &Receiver<Event>, idle: Duration, timer: Sender
     }
 }
 
-/// Sends `Unopened` after `wait`, unless the first scene opens before then and drops the
-/// sender this returns.
-fn unopened_timer(events: Sender<Event>, wait: Duration) -> Sender<()> {
+/// Sends `Unopened` once `wait` has passed and no accepted connection is still being read,
+/// unless the first scene opens before then and drops the sender this returns.
+fn unopened_timer(events: Sender<Event>, wait: Duration, reading: Arc<AtomicUsize>) -> Sender<()> {
     let (timer, opened) = mpsc::channel();
     thread::spawn(move || {
-        if opened.recv_timeout(wait) == Err(RecvTimeoutError::Timeout) {
-            let _ = events.send(Event::Unopened);
+        let mut wait = wait;
+        while opened.recv_timeout(wait) == Err(RecvTimeoutError::Timeout) {
+            if reading.load(Ordering::SeqCst) == 0 {
+                let _ = events.send(Event::Unopened);
+                return;
+            }
+            wait = RECHECK;
         }
     });
     timer
 }
 
-fn test_idle() -> Option<Duration> {
-    std::env::var("ORBE_TEST_IDLE_TIMEOUT")
+/// `ORBE_TEST_IDLE_TIMEOUT`, which also caps `UNOPENED`, and `ORBE_TEST_READ_DELAY`, how long
+/// the process waits before it reads its first connection's request.
+fn test_duration(name: &str) -> Option<Duration> {
+    std::env::var(name)
         .ok()
         .and_then(|text| orbe_session::Duration::parse(&text).ok())
-        .map(|idle| Duration::from_nanos(idle.as_ps() / 1000))
+        .map(|duration| Duration::from_nanos(duration.as_ps() / 1000))
 }
 
 /// `ORBE_TEST_STOP` from the shell that ran `open`, a test seam for a stop shorter than 2 hours.
@@ -273,10 +295,19 @@ fn inode(path: &Path) -> Option<(u64, u64)> {
         .map(|m| (m.dev(), m.ino()))
 }
 
-fn accept(listener: &UnixListener, jobs: &Sender<Event>) {
+/// Counts each accepted connection in `reading` until its request is queued or it ends.
+fn accept(listener: &UnixListener, jobs: &Sender<Event>, reading: &Arc<AtomicUsize>) {
+    let mut delay = test_duration("ORBE_TEST_READ_DELAY");
     for stream in listener.incoming().flatten() {
-        let jobs = jobs.clone();
-        thread::spawn(move || connection(stream, &jobs));
+        reading.fetch_add(1, Ordering::SeqCst);
+        let (jobs, reading, delay) = (jobs.clone(), Arc::clone(reading), delay.take());
+        thread::spawn(move || {
+            if let Some(delay) = delay {
+                thread::sleep(delay);
+            }
+            connection(stream, &jobs);
+            reading.fetch_sub(1, Ordering::SeqCst);
+        });
     }
 }
 
