@@ -13,6 +13,7 @@ import { GLTF_TURN } from './geometry.mjs';
 const STEP = join(dirname(fileURLToPath(import.meta.url)), 'asset-step.mjs');
 const quiet = new Logger(Logger.Verbosity.ERROR);
 const io = new NodeIO().setLogger(quiet);
+const { FORCE_COLOR, NO_COLOR, ...env } = process.env;
 
 /** A GLB whose root carries glTF's turn, with `nodes` as `{name, points (mm), children}` under it. */
 async function glb(nodes) {
@@ -101,7 +102,7 @@ async function fixture(t, specs) {
 
 function run(fx, ids, commit = fx.commit) {
   const args = [STEP, '--models', fx.models, '--parts', fx.parts, ...(commit ? ['--commit', commit] : []), ...ids];
-  const { status, stdout } = spawnSync(process.execPath, args, { encoding: 'utf8' });
+  const { status, stdout } = spawnSync(process.execPath, args, { encoding: 'utf8', env });
   const lines = stdout.trimEnd().split('\n');
   return { status, line: (id) => lines.find((l) => l.split(/\s+/)[1] === id) };
 }
@@ -260,6 +261,7 @@ test('a --commit the models repo does not have is a usage error', async (t) => {
   const fx = await fixture(t, { good: leaded('good') });
   const { status, stderr } = spawnSync(process.execPath, [STEP, '--models', fx.models, '--parts', fx.parts, '--commit', 'no-such-rev'], {
     encoding: 'utf8',
+    env,
   });
   assert.equal(status, 2);
   assert.match(stderr, /^--commit no-such-rev is not a commit of /);
