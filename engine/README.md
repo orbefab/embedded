@@ -1,6 +1,6 @@
-# sim-engine
+# Engine
 
-sim-engine reads a resolved netlist and writes a deterministic run folder.
+The engine reads a resolved netlist and writes a deterministic run folder.
 
 The input is JSON. The folder holds `manifest.json`, `netlist.json`, `diagnostics.json`, and `observations.json`, and a transient run adds `traces/`. This tree solves resistors, voltage sources, current sources, diodes, LEDs, capacitors, and timed switches at one operating point or over time, and reports parts run past their ratings. A voltage source or a current source holds a DC value, a step, or a pulse.
 
@@ -16,7 +16,7 @@ The binary is `sim`.
 
 ## Check
 
-Run `scripts/check.sh` before every commit. From the repo root it runs:
+Run `scripts/check.sh` before every commit. It runs:
 
 ```sh
 cargo fmt --all --check
@@ -51,8 +51,6 @@ A clean run prints one JSON document and exits 0.
 }
 ```
 
-`sim doctor` runs that divider and checks that two renders of it are byte-identical. It exits 0 when both checks pass.
-
 `sim view <run> --out <dir>` writes `display-<part>.png` into `<dir>` for each display part of a finished run folder, what the panel's glass showed at the end. [docs/run-folder.md](docs/run-folder.md#what-the-glass-shows) says how it draws them.
 
 The process exits with one of these codes.
@@ -66,7 +64,7 @@ The process exits with one of these codes.
 
 Stdout for `run` repeats `diagnostics` in the same order as `diagnostics.json`.
 
-The schema is [docs/netlist.md](docs/netlist.md). How the engine steps, and how accurate it is, is [docs/engine.md](docs/engine.md). The folder is [docs/run-folder.md](docs/run-folder.md). The codes are [docs/diagnostics.md](docs/diagnostics.md). Which changes keep or bump each version is [docs/versions.md](docs/versions.md). The ngspice references are [docs/reference.md](docs/reference.md). The ATmega328P core behind the `atmega328p` kind is [docs/avr.md](docs/avr.md). The ESP32-S3 behind the `esp32s3` kind is [docs/esp32s3.md](docs/esp32s3.md). The development board fragment is [docs/board.md](docs/board.md). How to time a run is [docs/bench.md](docs/bench.md). The JavaScript package for a Worker is [docs/wasm.md](docs/wasm.md).
+The schema is [docs/netlist.md](docs/netlist.md). How the engine steps, and how accurate it is, is [docs/engine.md](docs/engine.md). The folder is [docs/run-folder.md](docs/run-folder.md). The codes are [docs/diagnostics.md](docs/diagnostics.md). Which changes keep or bump each version is [docs/versions.md](docs/versions.md). The ngspice references are [docs/reference.md](docs/reference.md). The ATmega328P core behind the `atmega328p` kind is [docs/avr.md](docs/avr.md). The ESP32-S3 behind the `esp32s3` kind is [docs/esp32s3.md](docs/esp32s3.md). How to time a run is [docs/bench.md](docs/bench.md). The JavaScript package for a Worker is [docs/wasm.md](docs/wasm.md).
 
 ## License
 

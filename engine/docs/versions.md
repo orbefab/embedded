@@ -20,7 +20,7 @@ A version names a set of valid documents and what each one means. A change that 
 
 Every other change bumps it. A new field on an existing object bumps it, because every field is required and an unknown field is an error.
 
-The engine reads the versions in a list. This engine reads `[0]`. `netlist.version`'s `data.supported` is that list, and `sim doctor` reports it as `netlist_versions`. A document whose `version` is not in the list yields only `netlist.version`. The engine reads an older listed version with that version's own rules, and gives it its old meaning.
+The engine reads the versions in a list. This engine reads `[0]`. `netlist.version`'s `data.supported` is that list. A document whose `version` is not in the list yields only `netlist.version`. The engine reads an older listed version with that version's own rules, and gives it its old meaning.
 
 ## Run format
 

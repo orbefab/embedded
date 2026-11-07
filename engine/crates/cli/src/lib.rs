@@ -1,4 +1,3 @@
-mod doctor;
 mod png;
 mod view;
 
@@ -10,7 +9,6 @@ use sim_core::blob::{Blobs, Sha256};
 use sim_core::diagnostic::{Diagnostic, Severity};
 use sim_core::run_folder::Results;
 
-pub use doctor::{Check, DoctorReport, doctor};
 pub use sim_circuit::{Completed, run, run_with};
 pub use view::{ViewReport, view};
 
@@ -66,7 +64,7 @@ pub enum Status {
     /// Exit 0. The run folder is complete. It may hold warnings.
     Ok,
     /// Exit 1. The run folder is complete and holds at least one error
-    /// diagnostic. Doctor: a check failed.
+    /// diagnostic.
     Failed,
     /// Exit 2. Bad command line. Nothing written.
     UsageError,

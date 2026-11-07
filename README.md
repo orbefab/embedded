@@ -1,15 +1,34 @@
 # orbefab/embedded
 
-Orbefab's **Embedded systems** branch: open-source mechatronics software built for AI agents. The repo is private for now; all tools go public eventually.
+A hardware simulator for AI agents. You describe a circuit as a scene file, flash it with real firmware, and drive it from the command line with `orbe`. Today it runs Arduino Nano and Uno scenes headless, or in a 3D page in the browser. The repo is private for now, and everything goes public later.
 
-## What will live here
+## Folders
 
-- **engine**: the simulator. Today it's `orbefab/sim-engine` ("micro-sim" was only a working name). Inside this repo it's just "engine". sim-engine isn't renamed; it gets archived once its code has moved.
-- **maker-sandbox**: the learning UI (web). Once both are here it builds against the current engine instead of a frozen copy.
-- **Orbe Blocks**: comes later, after the architecture and core decisions.
-- Skills, examples and parts (sim model, specs, 3D) follow.
+| Folder | What it holds |
+| --- | --- |
+| [`crates/`](crates/) | The `orbe` CLI in Rust. `orbe` is the binary. `orbe-scene` reads and checks scenes and part files and turns them into a netlist. `orbe-session` is a live session. |
+| [`engine/`](engine/) | The simulation engine in Rust: the circuit solver and the AVR and ESP32-S3 chip models. It has its own [`AGENTS.md`](engine/AGENTS.md). |
+| [`parts/`](parts/) | The parts catalog. Each folder is one real part: `part.jsonc`, its 3D model and `asset.json`. |
+| [`examples/`](examples/) | Scenes that run, each with its firmware and tests. |
+| [`packages/viewer`](packages/viewer/) | The 3D scene viewer, in React and three.js. |
+| [`apps/viewer`](apps/viewer/) | The page `orbe show` serves. |
+| [`tools/asset-step`](tools/asset-step/) | Imports each part's 3D model and checks it against the part's pins. |
+| [`scripts/`](scripts/) | The checks. `check.sh` gates every change. |
+| [`skills/orbe`](skills/orbe/SKILL.md) | The stub an agent installs. |
+| [`docs/`](docs/) | Finalized docs: [`decisions.md`](docs/decisions.md), [`viewer.md`](docs/viewer.md), [`asset-step.md`](docs/asset-step.md). |
 
-The engine lives in [`engine/`](engine/), with its own [`AGENTS.md`](engine/AGENTS.md) and docs. The rest is docs for now.
+## Build and check
+
+You need Rust (pinned in `rust-toolchain.toml`), Node 24 and pnpm.
+
+```sh
+pnpm install --frozen-lockfile
+pnpm --filter @orbe/viewer-page build
+cargo build -p orbe
+scripts/check.sh
+```
+
+An `orbe` built without the viewer page still runs every headless command, and `orbe show` then says how to build the page.
 
 ## Skills for agents
 
@@ -18,14 +37,3 @@ The engine lives in [`engine/`](engine/), with its own [`AGENTS.md`](engine/AGEN
 ## License
 
 The code is under either of the MIT license ([LICENSE-MIT](LICENSE-MIT)) or the Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE)), at your option. A contribution you submit for inclusion is under the same two licenses, with no other terms.
-
-## How we proceed
-
-1. **Investigations first.** See [`docs/investigations/`](docs/investigations/README.md).
-2. **Then migrate:** engine first, then sandbox, then the rest.
-
-## Docs
-
-- [`docs/decisions.md`](docs/decisions.md): what's decided so far.
-- [`docs/investigations/README.md`](docs/investigations/README.md): investigations to run before migrating code.
-- [`docs/open-questions.md`](docs/open-questions.md): what's still open.

@@ -175,29 +175,6 @@ fn the_docs_name_the_engine_version() {
     assert!(page("versions.md").contains(&format!("This engine is `{version}`.")));
 }
 
-#[test]
-fn doctor_exits_zero() {
-    let (code, stdout, stderr) = sim(&["doctor"]);
-    assert_eq!(code, 0, "{stdout}");
-    assert!(stderr.is_empty(), "{stderr}");
-    let doc = json(&stdout);
-    assert_eq!(doc["status"], "ok");
-    assert_eq!(doc["engine_version"], sim_core::run_folder::ENGINE_VERSION);
-    assert_eq!(doc["netlist_versions"], serde_json::json!([0]));
-    assert_eq!(doc["run_format"], 0);
-    assert_eq!(doc["checks"][0]["name"], "self_test.divider");
-    assert_eq!(doc["checks"][0]["ok"], true);
-    assert_eq!(doc["checks"][1]["name"], "determinism");
-    assert_eq!(doc["checks"][1]["ok"], true);
-    assert_eq!(
-        doc["checks"][1]["detail"],
-        "two renders byte-identical (4 files)"
-    );
-    let detail = doc["checks"][0]["detail"].as_str().unwrap();
-    assert!(detail.starts_with("#net.vout = "), "{detail}");
-    assert!(detail.contains("closed form"), "{detail}");
-}
-
 #[cfg(unix)]
 #[test]
 fn non_utf8_out_path_is_a_document() {
@@ -230,16 +207,23 @@ fn non_utf8_out_path_is_a_document() {
 
 #[test]
 fn closed_stdout_still_exits_from_status() {
+    let out = scratch("closed-stdout");
     let (read, write) = std::io::pipe().unwrap();
     drop(read);
     let output = Command::new(env!("CARGO_BIN_EXE_sim"))
-        .args(["doctor"])
+        .args([
+            "run",
+            example().to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
         .stdout(write)
         .stderr(Stdio::piped())
         .output()
         .expect("spawn sim");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let _ = fs::remove_dir_all(out);
 }
 
 #[test]
