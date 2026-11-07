@@ -28,11 +28,28 @@ pub(super) struct Bound {
     switches: Vec<String>,
 }
 
+/// A frame's `state`: the session's, or `stepping` for a frame read while a `step` runs, which
+/// no reply says.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FrameState {
+    Session(State),
+    Stepping,
+}
+
+impl FrameState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FrameState::Session(state) => state.as_str(),
+            FrameState::Stepping => "stepping",
+        }
+    }
+}
+
 /// The circuit at one time, as a frame shows it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Sample {
     pub t_ps: u64,
-    pub state: State,
+    pub state: FrameState,
     pub pins: Vec<u8>,
     /// Each LED's current in amperes, and its integral from t = 0 in ampere picoseconds.
     pub leds: Vec<(f64, f64)>,
@@ -119,7 +136,10 @@ impl Live {
 
 impl Progress<'_> {
     pub fn sample(&self) -> Sample {
-        self.open.sample()
+        Sample {
+            state: FrameState::Stepping,
+            ..self.open.sample()
+        }
     }
 }
 
@@ -219,7 +239,7 @@ impl Open {
         let bound = &self.channels;
         Sample {
             t_ps: self.engine.now().as_ps(),
-            state: self.state(),
+            state: FrameState::Session(self.state()),
             pins: bound
                 .pins
                 .iter()

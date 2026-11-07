@@ -151,12 +151,16 @@ export interface SceneMessage {
 
 export type RunState = "paused" | "playing" | "stopped" | "faulted";
 
+/** A frame's state: the session's, or `stepping` for a frame sent while a `step` runs, which no
+ * reply says. */
+export type FrameState = RunState | "stepping";
+
 /** The circuit at `t_ps`, indexed by the scene's `channels`. */
 export interface FrameMessage {
   readonly type: "frame";
   readonly seq: number;
   readonly t_ps: number;
-  readonly state: RunState;
+  readonly state: FrameState;
   /** 0 for low, 1 for high, per `channels.pins`. */
   readonly pins: readonly (0 | 1)[];
   /** Mean current in amperes since the previous frame, per `channels.leds`. The frame after a

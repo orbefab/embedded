@@ -32,7 +32,7 @@ mod frame;
 mod serial;
 mod step;
 
-pub use frame::{Channels, Frames, Pace, Sample};
+pub use frame::{Channels, FrameState, Frames, Pace, Sample};
 pub use step::{CHANGES, Progress};
 
 /// The serial lines a snapshot shows, from the end.

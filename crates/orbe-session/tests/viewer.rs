@@ -4,7 +4,7 @@
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
-use orbe_session::{Code, Command, Duration, Frames, Live, Reply, State};
+use orbe_session::{Code, Command, Duration, FrameState, Frames, Live, Reply, State};
 use serde_json::{Value, json};
 
 fn first_target() -> PathBuf {
@@ -74,6 +74,28 @@ fn frames_read_after_every_slice_change_no_reply() {
         sent.len() > 150,
         "one frame per 1 ms slice: {} frames",
         sent.len()
+    );
+}
+
+#[test]
+fn a_frame_inside_a_step_says_stepping() {
+    let mut live = opened();
+    let mut frames = Frames::default();
+    let mut inside = Vec::new();
+    let stepped = live.run_with(&command("step 5ms"), &mut |progress| {
+        inside.extend(frames.frame(progress.sample(), None));
+        ControlFlow::Continue(())
+    });
+    assert!(stepped.ok(), "{}", stepped.text());
+    assert_eq!(inside.len(), 5, "one frame per 1 ms slice");
+    assert!(
+        inside.iter().all(|f| f["state"] == "stepping"),
+        "{inside:?}"
+    );
+    let after = frames.frame(live.sample().unwrap(), None);
+    assert_eq!(
+        after.expect("a frame once the step ends")["state"],
+        "paused"
     );
 }
 
@@ -178,7 +200,11 @@ fn the_next_step_lists_what_play_ran() {
     assert!(text.contains(" nano.D13 high"), "{text}");
     assert!(text.contains(" led1 on"), "{text}");
     let again = live.run(&command("step 1ms"));
-    assert_eq!(again.text(), "t=66ms (from 65ms)", "each change is listed once");
+    assert_eq!(
+        again.text(),
+        "t=66ms (from 65ms)",
+        "each change is listed once"
+    );
 }
 
 #[test]
@@ -215,7 +241,7 @@ fn play_ends_at_the_stop() {
     let sample = live.sample().unwrap();
     assert_eq!(
         (sample.t_ps, sample.state),
-        (40_000_000_000, State::Stopped)
+        (40_000_000_000, FrameState::Session(State::Stopped))
     );
     let again = live.run(&Command::Play);
     assert_eq!(again.error.unwrap().code, Code::Ended);

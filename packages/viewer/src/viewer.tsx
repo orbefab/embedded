@@ -19,7 +19,7 @@ import {
   commandLine,
   errorText,
   type FrameMessage,
-  type RunState,
+  type FrameState,
   type SceneMessage,
   type SessionSource,
 } from "./protocol";
@@ -90,7 +90,7 @@ const seconds = (t_ps: number) => `${(t_ps / 1e12).toFixed(6)} s`;
 /** The session's state and time, and a button that plays or pauses it. It reads frames itself,
  * so a frame redraws only this bar. */
 function Controls({ source, send }: { source: SessionSource; send: (command: Command) => void }) {
-  const [now, setNow] = useState<{ state: RunState; t_ps: number } | null>(null);
+  const [now, setNow] = useState<{ state: FrameState; t_ps: number } | null>(null);
   useEffect(
     () =>
       source.subscribe((message) => {
