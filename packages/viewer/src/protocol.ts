@@ -159,7 +159,8 @@ export interface FrameMessage {
   readonly state: RunState;
   /** 0 for low, 1 for high, per `channels.pins`. */
   readonly pins: readonly (0 | 1)[];
-  /** Mean current in amperes since the previous frame, per `channels.leds`. */
+  /** Mean current in amperes since the previous frame, per `channels.leds`. The frame after a
+   * page joins carries the present current. */
   readonly led_a: readonly number[];
   /** 1 for closed, 0 for open, per `channels.switches`. */
   readonly switches: readonly (0 | 1)[];

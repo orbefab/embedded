@@ -121,6 +121,25 @@ impl Viewer {
         panic!("no message from the session in 200 reads of 50 ms");
     }
 
+    /// Closes the socket, and waits until the session answered the close.
+    fn leave(mut self) {
+        let _ = self.socket.close(None);
+        for _ in 0..200 {
+            match self.socket.read() {
+                Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
+                    return;
+                }
+                Err(tungstenite::Error::Io(e))
+                    if !matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
+                {
+                    return;
+                }
+                _ => {}
+            }
+        }
+        panic!("the session did not answer the close in 200 reads of 50 ms");
+    }
+
     /// Messages until one of `kind`, which it returns.
     fn until(&mut self, kind: &str, seen: &mut Vec<Value>) -> Value {
         loop {
@@ -369,6 +388,48 @@ fn play_then_pause_advances_time_at_wall_speed() {
         .ok()
         .json();
     assert_eq!(stepped["state"], "paused", "a step stops play");
+    runtime.orbe(dir.path(), &["close"]).ok();
+}
+
+/// Presses `@btn1` for 500 ms, then steps 50 ms past its release, and returns `get @led1`.
+fn pulse(runtime: &Runtime, dir: &Path) -> Value {
+    for args in [
+        &["press", "@btn1"][..],
+        &["step", "500ms"],
+        &["release", "@btn1"],
+        &["step", "50ms"],
+    ] {
+        runtime.orbe(dir, args).ok();
+    }
+    runtime.orbe(dir, &["get", "@led1", "--json"]).ok().json()
+}
+
+fn assert_drawn_as_read(frame: &Value, got: &Value) {
+    assert_eq!(frame["state"], "paused");
+    assert_eq!(frame["t_ps"], got["t_ps"]);
+    assert_eq!(
+        frame["led_a"][0], got["data"]["value"]["i"],
+        "the page draws @led1 at the current `get` reads: {frame}"
+    );
+}
+
+#[test]
+fn a_page_that_joins_late_draws_each_led_as_get_reads_it() {
+    let runtime = Runtime::new();
+    let (dir, _page, url) = opened(&runtime);
+    let first = Viewer::connect(&url);
+    first.leave();
+
+    let got = pulse(&runtime, dir.path());
+    assert_eq!(got["data"]["value"]["on"], false);
+    let mut late = Viewer::connect(&url);
+    assert_drawn_as_read(&late.until("frame", &mut Vec::new()), &got);
+
+    let got = pulse(&runtime, dir.path());
+    let mut seen = Vec::new();
+    while late.until("frame", &mut seen)["t_ps"] != got["t_ps"] {}
+    let mut second = Viewer::connect(&url);
+    assert_drawn_as_read(&second.until("frame", &mut Vec::new()), &got);
     runtime.orbe(dir.path(), &["close"]).ok();
 }
 

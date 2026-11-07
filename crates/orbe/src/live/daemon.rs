@@ -78,12 +78,13 @@ struct Held {
     ticked: Option<Instant>,
 }
 
-/// The viewers, and the frames they were sent.
+/// The viewers, and the frames they were sent. An LED's mean current runs from the frame
+/// before, and a viewer joining restarts it, so a new page never sees a mean over time no page
+/// watched.
 #[derive(Default)]
 struct Watchers {
     viewers: BTreeMap<u64, Sender<Out>>,
     frames: Frames,
-    last: Option<Arc<str>>,
     sent_at: Option<Instant>,
 }
 
@@ -99,7 +100,6 @@ impl Watchers {
         }
         if let Some(frame) = self.frames.frame(sample, pace) {
             let text: Arc<str> = frame.to_string().into();
-            self.last = Some(Arc::clone(&text));
             self.sent_at = Some(wall());
             self.send(|| Out::Frame(Arc::clone(&text)));
         }
@@ -277,11 +277,9 @@ impl Held {
                 if let Some(scene) = self.live.scene() {
                     let _ = out.send(Out::Text(scene.to_string().into()));
                 }
-                self.watchers.viewers.insert(id, out.clone());
+                self.watchers.viewers.insert(id, out);
+                self.watchers.frames.restart();
                 self.frame(None);
-                if let Some(frame) = &self.watchers.last {
-                    let _ = out.send(Out::Frame(Arc::clone(frame)));
-                }
             }
             Viewer::Command(id, request, command) => {
                 let reply = match command {

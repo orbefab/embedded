@@ -57,7 +57,7 @@ pub struct Frames {
 }
 
 impl Frames {
-    /// Forgets the last frame, for a new scene.
+    /// Forgets the last frame, so the next frame shows each LED's present current.
     pub fn restart(&mut self) {
         self.last = None;
     }
