@@ -11,14 +11,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
 use std::path::Path;
 
-use orbe_scene::{Code as SceneCode, RefMap};
+use orbe_scene::{Code as SceneCode, RefMap, View};
 use sim_circuit::{EdgeCursor, Input, Probe, Refused, Rejected, Session, Setting, Status};
 use sim_core::diagnostic::{Diagnostic as EngineDiagnostic, Excursion};
 use sim_core::logic::Level as EngineLevel;
 use sim_core::name::{Name, Quantity, Ref as EngineRef};
 use sim_core::netlist::{Analysis, Contact, RatingKind};
 
-use crate::command::Command;
+use crate::command::{Command, Step};
 use crate::condition::Unit;
 use crate::duration::Duration;
 use crate::reply::{
@@ -27,9 +27,11 @@ use crate::reply::{
 use crate::target::{QUANTITIES, Ref, Target, names, one_engine, reports_hint, resolve};
 
 mod bound;
+mod frame;
 mod serial;
 mod step;
 
+pub use frame::{Channels, Frames, Pace, Sample};
 pub use step::{CHANGES, Progress};
 
 /// The serial lines a snapshot shows, from the end.
@@ -47,6 +49,13 @@ pub struct Live {
 struct Open {
     engine: Session,
     refs: RefMap,
+    view: View,
+    channels: frame::Bound,
+    /// Each switch's contact edges, as `(at_ps, closed)`, after its initial contact: the
+    /// scene's events and each input `apply` landed. Bounce is left out.
+    contacts: BTreeMap<String, (bool, Vec<(u64, bool)>)>,
+    /// Time runs at real speed between commands, since a `play`.
+    playing: bool,
     scene: String,
     stop_ps: u64,
     max_step_ps: u64,
@@ -121,7 +130,15 @@ impl Live {
             (Command::Press(r), Some(open)) => open.contact(r, true),
             (Command::Release(r), Some(open)) => open.contact(r, false),
             (Command::Get(r), Some(open)) => open.get(r).map(Data::Got).map_err(fail),
-            (Command::Step(step), Some(open)) => open.step(step, during),
+            (Command::Step(step), Some(open)) => {
+                open.playing = false;
+                open.step(step, during)
+            }
+            (Command::Play, Some(open)) => open.play(),
+            (Command::Pause, Some(open)) => {
+                open.playing = false;
+                Ok(Data::Paced { playing: false })
+            }
             (Command::Snapshot, Some(open)) => Ok(open.snapshot()),
             (Command::Expect(condition), Some(open)) => open.expect(condition),
         };
@@ -136,17 +153,34 @@ impl Live {
         self.reply(Data::None, Some(error))
     }
 
+    /// A reply that carries what the session's process did for its client, such as `show`'s
+    /// address, with the session's time and state.
+    pub fn report(&self, data: Data) -> Reply {
+        self.reply(data, None)
+    }
+
+    /// Whether time runs between commands, since a `play`.
+    pub fn playing(&self) -> bool {
+        self.open.as_ref().is_some_and(|open| open.playing)
+    }
+
+    /// Advances a playing session by `ps`, or to its stop when that is nearer, as a `step`
+    /// would. Play ends at the stop or a fault. Returns whether it still plays.
+    pub fn tick(&mut self, ps: u64) -> bool {
+        let Some(open) = self.open.as_mut().filter(|open| open.playing) else {
+            return false;
+        };
+        let length = ps.min(open.stop_ps - open.engine.now().as_ps());
+        let step = Step::For(Duration::from_ps(length));
+        let ran = open.step(&step, &mut |_| ControlFlow::Continue(()));
+        open.playing = ran.is_ok() && open.engine.status() == Status::Running;
+        open.playing
+    }
+
     fn reply(&self, data: Data, error: Option<Error>) -> Reply {
         let (t_ps, state) = match &self.open {
             None => (0, State::Closed),
-            Some(open) => (
-                open.engine.now().as_ps(),
-                match open.engine.status() {
-                    Status::Running => State::Paused,
-                    Status::Stopped => State::Stopped,
-                    Status::Faulted => State::Faulted,
-                },
-            ),
+            Some(open) => (open.engine.now().as_ps(), open.state()),
         };
         Reply {
             session: self.name.clone(),
@@ -177,7 +211,7 @@ impl Live {
                 .json
                 .replacen(&at(orbe_scene::STOP_PS), &at(stop), 1);
         }
-        let open = Open::new(&netlist.json, netlist.refs, shown.clone())?;
+        let open = Open::new(&netlist.json, netlist.refs, netlist.view, shown.clone())?;
         let data = Data::Opened {
             scene: shown,
             parts: open.refs.top.clone(),
@@ -337,7 +371,7 @@ fn fail(error: Error) -> Box<Failed> {
 }
 
 impl Open {
-    fn new(json: &str, refs: RefMap, scene: String) -> Result<Open, Box<Failed>> {
+    fn new(json: &str, refs: RefMap, view: View, scene: String) -> Result<Open, Box<Failed>> {
         let engine = Session::open_document(json.as_bytes()).map_err(|refused| {
             let (code, message) = match &refused {
                 Refused::Op => (
@@ -385,9 +419,14 @@ impl Open {
         }
         let (signals, signal_pins) = signals(&engine, &refs);
         let edges = engine.edge_cursor();
-        Ok(Open {
+        let contacts = frame::contacts(json);
+        let mut open = Open {
             engine,
             refs,
+            view,
+            channels: frame::Bound::default(),
+            contacts,
+            playing: false,
             scene,
             stop_ps: transient.stop.as_ps(),
             max_step_ps: transient.max_step,
@@ -398,7 +437,49 @@ impl Open {
             edges,
             listed: edges,
             serial: Serial::default(),
-        })
+        };
+        open.channels = open.bind_channels();
+        Ok(open)
+    }
+
+    fn state(&self) -> State {
+        match self.engine.status() {
+            Status::Running if self.playing => State::Playing,
+            Status::Running => State::Paused,
+            Status::Stopped => State::Stopped,
+            Status::Faulted => State::Faulted,
+        }
+    }
+
+    /// The nets that join two or more of the scene's own parts.
+    fn wired_nets(&self) -> BTreeSet<&str> {
+        let mut owners: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+        for top in &self.refs.top {
+            for net in self.refs.parts[top].pins.values().flatten() {
+                owners.entry(net).or_default().insert(top);
+            }
+        }
+        owners
+            .into_iter()
+            .filter(|(_, tops)| tops.len() > 1)
+            .map(|(net, _)| net)
+            .collect()
+    }
+
+    fn play(&mut self) -> Outcome {
+        match self.engine.status() {
+            Status::Faulted => return Err(fail(self.faulted())),
+            Status::Stopped => {
+                return Err(fail(Error::new(
+                    Code::Ended,
+                    format!("the session reached its {} stop", self.stop_name()),
+                    "run `open` to start again",
+                )));
+            }
+            Status::Running => {}
+        }
+        self.playing = true;
+        Ok(Data::Paced { playing: true })
     }
 
     fn resolve(&self, r: &Ref) -> Result<Target, Error> {
@@ -471,6 +552,9 @@ impl Open {
             .engine
             .apply(&input)
             .map_err(|e| fail(rejected(e, &path)))?;
+        if let Some((_, edges)) = self.contacts.get_mut(&engine) {
+            edges.push((applied.at.as_ps(), pressed));
+        }
         let data = Data::Landed {
             target: path,
             pressed,
@@ -643,13 +727,7 @@ impl Open {
     }
 
     fn snapshot(&self) -> Data {
-        let mut owners: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-        for top in &self.refs.top {
-            for net in self.refs.parts[top].pins.values().flatten() {
-                owners.entry(net).or_default().insert(top);
-            }
-        }
-        let wired = |net: &str| owners.get(net).is_some_and(|tops| tops.len() > 1);
+        let wired = self.wired_nets();
         let mut parts = Vec::new();
         for top in &self.refs.top {
             let part = &self.refs.parts[top];
@@ -658,7 +736,7 @@ impl Open {
                 .iter()
                 .filter(|_| part.engine.is_empty())
                 .filter_map(|(pin, net)| {
-                    let net = net.as_deref().filter(|n| wired(n))?;
+                    let net = net.as_deref().filter(|n| wired.contains(n))?;
                     Some((pin.clone(), self.pin(top, pin, Some(net)).ok()?))
                 })
                 .collect();
@@ -738,7 +816,7 @@ mod tests {
         let json = netlist.json.replace(&stop, "\"stop_ps\": 50000000000");
         let mut live = Live::new("t");
         live.open = Some(
-            Open::new(&json, netlist.refs, "scene.jsonc".into())
+            Open::new(&json, netlist.refs, netlist.view, "scene.jsonc".into())
                 .unwrap_or_else(|f| panic!("{:?}", f.error)),
         );
         live

@@ -227,7 +227,7 @@ A test needs no background process, so it runs the same in CI. Each file's sessi
 
 ## Output and exit codes
 
-Every command prints text. With `--json` it prints one JSON object instead, `{"ok": true, "data": {...}}` or `{"ok": false, "error": {"code", "message", "hint"}}`, where `hint` can be missing or empty. A failed `orbe check scene.jsonc --json` is `scene_invalid`, with each finding, its code and hint in `data.diagnostics`. Live commands add `session`, `t_ps` (picoseconds) and `state`: `paused`, `stopped`, `faulted` or `closed`.
+Every command prints text. With `--json` it prints one JSON object instead, `{"ok": true, "data": {...}}` or `{"ok": false, "error": {"code", "message", "hint"}}`, where `hint` can be missing or empty. A failed `orbe check scene.jsonc --json` is `scene_invalid`, with each finding, its code and hint in `data.diagnostics`. Live commands add `session`, `t_ps` (picoseconds) and `state`: `paused`, `playing`, `stopped`, `faulted` or `closed`.
 
 Exit codes: 0 ok, 1 a failed check, `expect` or command, 2 a usage error, 3 a file or system error. `orbe test` exits with the worst file's code.
 

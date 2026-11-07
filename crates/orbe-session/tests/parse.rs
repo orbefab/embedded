@@ -197,7 +197,7 @@ fn a_bad_line_names_the_command_and_its_usage() {
     for (text, says) in [
         (
             "blink @led1",
-            "`blink` is not a command; the commands are open, close, press, release, get, step, snapshot, expect",
+            "`blink` is not a command; the commands are open, close, press, release, get, step, play, pause, snapshot, expect",
         ),
         (
             "press",

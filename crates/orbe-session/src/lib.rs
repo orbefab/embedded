@@ -13,7 +13,7 @@ pub mod test;
 pub use command::{COMMANDS, Command, Spec, Step, UNTIL_TIMEOUT, spec};
 pub use condition::{Amount, Condition, Needle, Op, State as Want, Unit};
 pub use duration::Duration;
-pub use live::{CHANGES, Live, Progress, SERIAL_LINES};
+pub use live::{CHANGES, Channels, Frames, Live, Pace, Progress, SERIAL_LINES, Sample};
 pub use reply::{
     Change, Check, Code, Data, Diagnostic, Error, Finding, Got, Level, Met, PartState, Reading,
     Reply, Snapshot, State, Stepped,

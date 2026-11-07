@@ -22,7 +22,7 @@ pub const CHANGES: usize = 20;
 
 /// Where a running step stands after a slice, for a caller that shows frames or stops it.
 pub struct Progress<'a> {
-    open: &'a Open,
+    pub(super) open: &'a Open,
     pub from_ps: u64,
     pub end_ps: u64,
 }
@@ -103,7 +103,7 @@ impl Open {
             .collect()
     }
 
-    fn stop_name(&self) -> String {
+    pub(super) fn stop_name(&self) -> String {
         if self.stop_ps == orbe_scene::STOP_PS {
             "2-hour".into()
         } else {

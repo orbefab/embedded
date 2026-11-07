@@ -25,6 +25,8 @@ pub enum State {
     /// No session is open.
     Closed,
     Paused,
+    /// Time runs at real speed, since a `play`.
+    Playing,
     /// The session reached its 2-hour stop.
     Stopped,
     Faulted,
@@ -35,6 +37,7 @@ impl State {
         match self {
             State::Closed => "closed",
             State::Paused => "paused",
+            State::Playing => "playing",
             State::Stopped => "stopped",
             State::Faulted => "faulted",
         }
@@ -128,6 +131,14 @@ pub enum Data {
     Invalid(Vec<Finding>),
     Closed {
         at_ps: u64,
+    },
+    /// `play` or `pause`: whether time runs now.
+    Paced {
+        playing: bool,
+    },
+    /// A viewer's address, which `show` gives.
+    Viewer {
+        url: String,
     },
     Landed {
         target: String,
@@ -499,6 +510,8 @@ impl Data {
                 })).collect::<Vec<_>>(),
             }),
             Data::Closed { at_ps } => json!({ "closed": true, "at_ps": at_ps }),
+            Data::Paced { playing } => json!({ "playing": playing }),
+            Data::Viewer { url } => json!({ "url": url }),
             Data::Landed {
                 target, landed_ps, ..
             } => json!({ "ref": format!("@{target}"), "landed_ps": landed_ps }),
@@ -568,6 +581,13 @@ impl Data {
             Data::Closed { at_ps } => {
                 let _ = write!(out, "closed at t={}", t(*at_ps));
             }
+            Data::Paced { playing: true } => {
+                let _ = write!(out, "playing from t={}", t(t_ps));
+            }
+            Data::Paced { playing: false } => {
+                let _ = write!(out, "paused at t={}", t(t_ps));
+            }
+            Data::Viewer { url } => out.push_str(url),
             Data::Landed {
                 target,
                 pressed,

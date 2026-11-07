@@ -18,6 +18,8 @@ pub enum Command {
     Release(Ref),
     Get(Ref),
     Step(Step),
+    Play,
+    Pause,
     Snapshot,
     Expect(Condition),
 }
@@ -87,6 +89,18 @@ pub const COMMANDS: &[Spec] = &[
         usage: "step <duration> | step --until <condition> [--timeout <duration>]",
         about: "Advances time and reports what changed.",
         parse: |args, _| parse_step(args).map(Command::Step),
+    },
+    Spec {
+        name: "play",
+        usage: "play",
+        about: "Runs time at real speed and returns at once. Time runs until `pause`, a `step`, the session's stop or a fault.",
+        parse: |args, _| none(args, Command::Play),
+    },
+    Spec {
+        name: "pause",
+        usage: "pause",
+        about: "Stops `play`, so time moves only in `step` again.",
+        parse: |args, _| none(args, Command::Pause),
     },
     Spec {
         name: "snapshot",

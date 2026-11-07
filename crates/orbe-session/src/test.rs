@@ -49,6 +49,11 @@ pub fn run(file: &Path, text: &str, root: &Path) -> Report {
     for (index, line) in text.lines().enumerate() {
         let reply = match Command::parse(line, root) {
             Ok(None) => continue,
+            Ok(Some(Command::Play | Command::Pause)) => live.refuse(Error::new(
+                Code::Usage,
+                "`play` and `pause` pace time to the wall clock, which a test does not run on",
+                "advance time with `step`, such as `step 100ms`",
+            )),
             Ok(Some(command)) => live.run(&command),
             Err(reason) => live.refuse(Error::new(Code::Usage, reason, "")),
         };

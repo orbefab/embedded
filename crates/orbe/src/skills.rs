@@ -339,14 +339,21 @@ mod tests {
         use orbe_session::State;
         // The match stops the build when a state is added, until it is listed here.
         let named = |state: State| match state {
-            State::Paused | State::Stopped | State::Faulted | State::Closed => {
+            State::Paused | State::Playing | State::Stopped | State::Faulted | State::Closed => {
                 format!("`{}`", state.as_str())
             }
         };
-        let states = [State::Paused, State::Stopped, State::Faulted, State::Closed].map(named);
+        let states = [
+            State::Paused,
+            State::Playing,
+            State::Stopped,
+            State::Faulted,
+            State::Closed,
+        ]
+        .map(named);
         let listed = format!(
-            "{}, {}, {} or {}",
-            states[0], states[1], states[2], states[3]
+            "{}, {}, {}, {} or {}",
+            states[0], states[1], states[2], states[3], states[4]
         );
         let core = find("core").unwrap().text();
         assert!(core.contains(&listed), "core does not list {listed}");
