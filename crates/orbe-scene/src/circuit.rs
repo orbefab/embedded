@@ -15,6 +15,7 @@ use crate::syntax::Node;
 use crate::units::Unit;
 
 mod engine;
+mod lint;
 mod map;
 mod view;
 
@@ -145,7 +146,12 @@ pub struct Netlist {
     pub view: View,
 }
 
-pub(crate) fn compile(project: &Project, out: &mut Findings) -> Option<Netlist> {
+/// With `lint`, the lint rules' warnings on a circuit that checks go there.
+pub(crate) fn compile(
+    project: &Project,
+    out: &mut Findings,
+    lint: Option<&mut Findings>,
+) -> Option<Netlist> {
     let scene = &project.scene;
     let root = Inst {
         path: Vec::new(),
@@ -177,7 +183,11 @@ pub(crate) fn compile(project: &Project, out: &mut Findings) -> Option<Netlist> 
     circuit.check_flat_names();
     circuit.report_long();
     let ground = circuit.ground(scene, &nets);
-    circuit.write(scene, &nets, ground)
+    let netlist = circuit.write(scene, &nets, ground)?;
+    if let Some(warnings) = lint {
+        circuit.lint(&nets, &netlist, warnings);
+    }
+    Some(netlist)
 }
 
 impl<'p> Circuit<'p> {

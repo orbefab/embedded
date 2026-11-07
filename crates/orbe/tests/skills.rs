@@ -288,7 +288,7 @@ fn help_lists_every_command_and_each_command_prints_its_usage() {
         .take_while(|l| !l.is_empty())
         .map(|l| l.split_whitespace().next().unwrap())
         .collect();
-    let mut want = vec!["check", "add"];
+    let mut want = vec!["check", "lint", "add"];
     want.extend(orbe_session::COMMANDS.iter().map(|s| s.name));
     want.extend(["show", "test", "skills", "help"]);
     assert_eq!(listed, want);
@@ -967,7 +967,11 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     fs::write(dir.join("scene.jsonc"), bare).unwrap();
     let runtime = Runtime::new();
     let orbe = |args: &[&str]| runtime.orbe(dir, args);
-    orbe(&["open"]).ok();
+    let lint = orbe(&["lint", "scene.jsonc"]).ok().stdout;
+    let caught = "warning[scene.led_no_resistor]: nothing limits the current through `led1`";
+    assert!(lint.contains(caught), "{lint}");
+    let open = orbe(&["open"]).ok().stdout;
+    assert!(!open.contains("scene.led_no_resistor"), "{open}");
     orbe(&["step", "100ms"]).ok();
     orbe(&["press", "@btn1"]).ok();
     let step = orbe(&["step", "--until", "@led1", "on", "--timeout", "50ms"])
@@ -1004,6 +1008,10 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
             pin["level"].as_str().unwrap(),
             if led["on"] == true { "on" } else { "off" },
         ),
+    );
+    says(
+        &core,
+        "`orbe lint` warns of it before any run, with `warning[scene.led_no_resistor]` on `led1`.",
     );
     says(
         &core,
@@ -1131,7 +1139,7 @@ fn orbe_test_leaves_an_open_session_alone_and_none_to_close() {
     says(
         &core,
         &format!(
-            "7. Run `orbe close` when the live work is done. A `{code}` error from it means nothing was open.\n8. Write what worked as `tests/<name>.test` and run `orbe test`. It leaves no session to close."
+            "8. Run `orbe close` when the live work is done. A `{code}` error from it means nothing was open.\n9. Write what worked as `tests/<name>.test` and run `orbe test`. It leaves no session to close."
         ),
     );
     says(
@@ -1164,4 +1172,61 @@ fn no_diagnostics_says_a_chip_warning_can_show_one_engine_step_late() {
         );
         runtime.orbe(dir, &["close"]).ok();
     }
+}
+
+/// The worked example with every lint rule broken once: D13 straight to the LED, a header with
+/// no model, and a turn past 180 degrees. Each code `orbe lint` prints is in the core skill's
+/// warnings table, the table names no other, and `orbe open` shows only `net.floating`.
+#[test]
+fn the_warnings_table_lists_the_codes_lint_prints_and_open_shows_only_the_engines() {
+    let project = worked_example();
+    let dir = project.path();
+    let scene = fs::read_to_string(dir.join("scene.jsonc")).unwrap();
+    let broken = scene
+        .replace("[\"nano.D13\", \"r1.a\"]", "[\"nano.D13\", \"led1.anode\"]")
+        .replace("[\"r1.b\", \"led1.anode\"],", "")
+        .replace(
+            "\"parts\": {",
+            "\"parts\": {\n    \"hdr\": { \"type\": \"pin-header-2x3\" },",
+        )
+        .replace(
+            "\"wires\": [",
+            "\"layout\": { \"btn1\": { \"at\": [0, 0, 0], \"rotate\": [0, 0, 270] } },\n  \"wires\": [",
+        );
+    assert_ne!(broken, scene);
+    fs::write(dir.join("scene.jsonc"), &broken).unwrap();
+    let runtime = Runtime::new();
+    let lint = runtime.orbe(dir, &["lint", "scene.jsonc"]).ok().stdout;
+    let code = |line: &str| {
+        let rest = line.split_once("warning[")?.1;
+        Some(rest.split(']').next()?.to_string())
+    };
+    let printed: BTreeSet<String> = lint.lines().filter_map(code).collect();
+    let core = skill("core");
+    let table: BTreeSet<String> = core
+        .split("## Warnings")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .unwrap()
+        .lines()
+        .filter_map(|l| l.strip_prefix("| `"))
+        .filter_map(|l| l.split('`').next())
+        .map(str::to_string)
+        .collect();
+    assert_eq!(printed, table, "{lint}");
+    let warnings = lint.lines().filter(|l| l.contains(": warning[")).count();
+    assert_eq!(lint.matches("\n  hint: ").count(), warnings, "{lint}");
+
+    let open = runtime.orbe(dir, &["open"]).ok().stdout;
+    runtime.orbe(dir, &["close"]).ok();
+    let shown: BTreeSet<String> = open.lines().filter_map(code).collect();
+    assert_eq!(
+        shown,
+        BTreeSet::from(["net.floating".to_string()]),
+        "{open}"
+    );
+    says(
+        &core,
+        "`orbe open` shows none of these warnings except `net.floating`.",
+    );
 }

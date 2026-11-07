@@ -4,7 +4,9 @@ use sim_core::netlist::Netlist;
 
 use crate::element;
 
-pub(crate) fn floating_nets(netlist: &Netlist) -> Vec<Diagnostic> {
+/// A `net.floating` warning for each net with no DC path to ground, found from the netlist
+/// alone, before any solve.
+pub fn floating_nets(netlist: &Netlist) -> Vec<Diagnostic> {
     let count = netlist.nets().len();
     let mut parent: Vec<usize> = (0..count).collect();
     for (_, part) in netlist.parts() {

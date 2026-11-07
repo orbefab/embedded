@@ -4,7 +4,8 @@ use std::fmt;
 
 use crate::source::{Sources, Span};
 
-/// What a finding is about. Every finding is an error: `orbe check` is type checking only.
+/// What a finding is about. Every code is an error except a [`Lint`], which only `orbe lint`
+/// reports and which never blocks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Code {
     /// The file is not the dialect, or a value has the wrong JSON shape or an unknown key.
@@ -30,6 +31,21 @@ pub enum Code {
     Io,
     /// The engine refused a value the reader wrote, and no param set it. The engine's own code.
     Engine(&'static str),
+    Lint(Lint),
+}
+
+/// A lint rule: the scene checks, and is likely wrong or unclear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Lint {
+    Unplaced,
+    Unconnected,
+    GroundUnnamed,
+    Rotation,
+    UnsimulatedPins,
+    NoModel,
+    /// The engine's own static check.
+    Floating,
+    LedNoResistor,
 }
 
 impl Code {
@@ -55,6 +71,21 @@ impl Code {
             Code::PartModified => "part_modified",
             Code::Io => "io_error",
             Code::Engine(code) => code,
+            Code::Lint(Lint::Unplaced) => "scene.unplaced",
+            Code::Lint(Lint::Unconnected) => "scene.unconnected",
+            Code::Lint(Lint::GroundUnnamed) => "scene.ground_unnamed",
+            Code::Lint(Lint::Rotation) => "scene.rotation",
+            Code::Lint(Lint::UnsimulatedPins) => "scene.unsimulated_pins",
+            Code::Lint(Lint::NoModel) => "scene.no_model",
+            Code::Lint(Lint::Floating) => "net.floating",
+            Code::Lint(Lint::LedNoResistor) => "scene.led_no_resistor",
+        }
+    }
+
+    pub fn severity(self) -> &'static str {
+        match self {
+            Code::Lint(_) => "warning",
+            _ => "error",
         }
     }
 }
@@ -81,8 +112,13 @@ impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{}:{}:{}: error[{}]: {}",
-            self.file, self.line, self.column, self.code, self.message
+            "{}:{}:{}: {}[{}]: {}",
+            self.file,
+            self.line,
+            self.column,
+            self.code.severity(),
+            self.code,
+            self.message
         )?;
         write!(f, "\n  hint: {}", self.hint)?;
         Ok(())

@@ -27,7 +27,7 @@ pub use circuit::{
     Amount, EnginePart, Instance, MapPart, Netlist, PartData, PinWhy, Placement, Reading, RefMap,
     View, Wire,
 };
-pub use diagnostic::{Code, Diagnostic};
+pub use diagnostic::{Code, Diagnostic, Lint};
 pub use model::STOP_PS;
 pub use project::{REGISTRY, folder_hash};
 pub use summary::{ParamDefault, ParamSummary, PartSummary, Takes, catalog_parts};
@@ -35,14 +35,27 @@ pub use summary::{ParamDefault, ParamSummary, PartSummary, Takes, catalog_parts}
 /// Type-checks a scene and every part file it reaches. On success, the netlist the engine
 /// opens. Otherwise every finding, sorted by file, line and column.
 pub fn read(scene: &Path) -> Result<Netlist, Vec<Diagnostic>> {
+    compile(scene, false).map(|(netlist, _)| netlist)
+}
+
+/// [`read`], then on a scene that reads, the lint rules' warnings, sorted by file, line and
+/// column. Otherwise `read`'s errors.
+pub fn lint(scene: &Path) -> Result<Vec<Diagnostic>, Vec<Diagnostic>> {
+    compile(scene, true).map(|(_, warnings)| warnings)
+}
+
+fn compile(scene: &Path, lint: bool) -> Result<(Netlist, Vec<Diagnostic>), Vec<Diagnostic>> {
     let mut findings = diagnostic::Findings::default();
     let project = match project::load(scene, &mut findings) {
         Ok(project) => project,
         Err(sources) => return Err(findings.into_diagnostics(&sources)),
     };
-    let netlist = circuit::compile(&project, &mut findings);
+    let mut warnings = diagnostic::Findings::default();
+    let netlist = circuit::compile(&project, &mut findings, lint.then_some(&mut warnings));
     match netlist {
-        Some(netlist) if findings.is_empty() => Ok(netlist),
+        Some(netlist) if findings.is_empty() => {
+            Ok((netlist, warnings.into_diagnostics(&project.sources)))
+        }
         _ => Err(findings.into_diagnostics(&project.sources)),
     }
 }
