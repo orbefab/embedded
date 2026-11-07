@@ -132,19 +132,60 @@ fn lint_warns_on_the_first_target_exits_zero_and_writes_nothing() {
 }
 
 /// The Uno's parts all have a model, a reason or `joins_only`, and its L LED has its resistor,
-/// so its example warns only of what the first target also leaves as it is.
+/// so its example warns only of what the first target also leaves as it is: the ground's name,
+/// placement, and AREF with nothing wired to it.
 #[test]
-fn lint_on_the_uno_example_warns_only_of_ground_and_placement() {
+fn lint_on_the_uno_example_warns_only_as_the_first_target_does() {
     let repo = common::repo();
     let run = orbe(&repo, &["lint", "examples/uno-button/scene.jsonc"]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     let codes: Vec<String> = warned(&run.stdout).into_iter().map(|(_, c)| c).collect();
     assert_eq!(
         codes,
-        ["scene.ground_unnamed", "scene.unplaced"],
+        ["scene.ground_unnamed", "scene.unplaced", "net.floating"],
         "{}",
         run.stdout
     );
+}
+
+/// A board runs its chip from its own supply, so one alone, blinking its L LED, is a whole
+/// circuit. A resistor alone does nothing.
+#[test]
+fn a_board_alone_is_not_unconnected_and_a_resistor_alone_is() {
+    for (part, ground, unconnected) in [
+        (
+            r#""type": "uno-board", "firmware": "build/blink.hex""#,
+            "",
+            false,
+        ),
+        (
+            r#""type": "nano-board", "firmware": "build/blink.hex""#,
+            "",
+            false,
+        ),
+        (
+            r#""type": "resistor-axial", "resistance": "10k""#,
+            r#", "ground": "alone.a""#,
+            true,
+        ),
+    ] {
+        let dir = project(&format!(
+            "{{ \"format\": 1, \"parts\": {{ \"alone\": {{ {part} }} }}{ground} }}\n"
+        ));
+        fs::copy(
+            common::repo().join("engine/firmware/sketch/blink.hex"),
+            dir.path().join("build/blink.hex"),
+        )
+        .unwrap();
+        let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+        assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+        assert_eq!(
+            !lines_warned(&run, "scene.unconnected").is_empty(),
+            unconnected,
+            "{part}: {}",
+            run.stdout
+        );
+    }
 }
 
 #[test]

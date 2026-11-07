@@ -86,18 +86,21 @@
     "d3": { "type": "diode-cd1206", "not_simulated": "It clamps the 16U2's reset, which is not simulated." },
     // L1 is a BLM21 ferrite bead, with no inductance to cite. Its values are placeholders.
     "l1": { "type": "inductor-0805", "inductance": "1u", "series_resistance": "0.1", "not_simulated": "It joins USB ground to the shield, which carries nothing the engine models." },
+    // L2 is on the Rev3e board file only, with no part number. Its resistance is a placeholder.
     "l2": {
       "type": "inductor-0805",
       "inductance": { "value": 1e-05, "unit": "H", "source": { "datasheet": { "doc": "Arduino UNO-TH_Rev3e board file", "at": "L2, 10uH", "basis": "nominal" } } },
-      "series_resistance": { "value": 0.5, "unit": "ohm", "source": { "closed_form": { "note": "A guess. The board file gives L2 only as 10uH, with no part number." } } },
+      "series_resistance": "0.5",
+      "not_simulated": "The revision 3 schematic ties AVCC straight to 5V, so the part does too. The engine's 328P draws nothing from AVCC, and an inductor into that pin alone slows the whole board's simulation about a thousandfold.",
     },
     "c1": { "type": "capacitor-0603", "capacitance": "100n", "not_simulated": "A rail capacitor. The engine's board example leaves rail capacitors out." },
     "c2": { "type": "capacitor-0603", "capacitance": "100n", "not_simulated": "A rail capacitor. The engine's board example leaves rail capacitors out." },
     "c3": { "type": "capacitor-0603", "capacitance": { "value": 1e-06, "unit": "F", "source": { "datasheet": { "doc": "development board schematic, revision 3", "at": "C3, 1 uF", "basis": "nominal" } } } },
+    // C4 has no held voltage, unlike the engine's board example. A 0 V hold would pull a rail
+    // wired to AREF to 0 V at t = 0.
     "c4": {
       "type": "capacitor-0603",
       "capacitance": { "value": 1e-07, "unit": "F", "source": { "datasheet": { "doc": "development board schematic, revision 3", "at": "C4, 100 nF", "basis": "nominal" } } },
-      "initial": { "value": 0.0, "unit": "V", "source": { "closed_form": { "note": "held at 0 V, so the operating point has a DC path on this net" } } },
     },
     "c5": { "type": "capacitor-0603", "capacitance": { "value": 1e-07, "unit": "F", "source": { "datasheet": { "doc": "development board schematic, revision 3", "at": "C5, 100 nF", "basis": "nominal" } } } },
     "c6": { "type": "capacitor-0603", "capacitance": "100n", "not_simulated": "A rail capacitor. The engine's board example leaves rail capacitors out." },
@@ -210,6 +213,8 @@
     ["mcu.AREF", "ioh.8", { "kind": "trace" }],
     ["mcu.AVCC", "c10.b", { "kind": "trace" }],
     ["mcu.AVCC", "l2.2", { "kind": "trace" }],
+    // A stand-in for L2 puts AVCC on the 5V rail, as the revision 3 schematic draws it.
+    ["mcu.AVCC", "usb_switch.S", { "kind": "trace" }],
     // Serial between the 16U2 and D0, D1
     ["usb_serial.PD3", "rn4.7", { "kind": "trace" }],
     ["usb_serial.PD2", "rn4.8", { "kind": "trace" }],

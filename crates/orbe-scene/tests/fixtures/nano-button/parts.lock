@@ -40,6 +40,6 @@ socket-strip-1x8 0.1.0 https://github.com/orbefab/embedded/releases/download/par
 tactile-switch-6mm 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:d0fd4cc9747de3038c0d38a6655dcf67aec3b17d8cdbe9441ffc30e5058ff461
 tactile-switch-smd 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:39cd39fa8b9e359404176bb12e8e7cf8d4f4568c25851cf0465fda63c30e0764
 tactile-switch-ts42 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:404f857697c694aa4834b30000dc51908484b6586d4e5c6276a7cc07e61bee1d
-uno-board 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:cb7fd74a2872841780dd3849c422806932fb6d026cc859a96389199d6a29ed68
+uno-board 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:32cab411eac95625fdc77013d15e68f39fe97af6e18aae7284cf74b468f2ed54
 usb-b-socket 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:cdfe5843c0d334c9b9708aa301199081cc210eb05ba479de5bf1b6f579656622
 usb-mini-b 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:4afcdd298d1980fa721adc1c39375797f06f0f98f1e8a20a8c9f33069b6cea8c
