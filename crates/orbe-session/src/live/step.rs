@@ -111,6 +111,8 @@ impl Open {
         }
     }
 
+    /// Steps as `step` asks. A step that runs ends `play`, and one refused before it runs
+    /// leaves it running.
     pub(super) fn step(
         &mut self,
         step: &Step,
@@ -153,6 +155,7 @@ impl Open {
                 })?,
             Step::Until { timeout, .. } => from.saturating_add(timeout.as_ps()).min(self.stop_ps),
         };
+        self.playing = false;
         let leds: Vec<(String, EngineRef, f64)> = self
             .refs
             .top

@@ -130,10 +130,7 @@ impl Live {
             (Command::Press(r), Some(open)) => open.contact(r, true),
             (Command::Release(r), Some(open)) => open.contact(r, false),
             (Command::Get(r), Some(open)) => open.get(r).map(Data::Got).map_err(fail),
-            (Command::Step(step), Some(open)) => {
-                open.playing = false;
-                open.step(step, during)
-            }
+            (Command::Step(step), Some(open)) => open.step(step, during),
             (Command::Play, Some(open)) => open.play(),
             (Command::Pause, Some(open)) => {
                 open.playing = false;

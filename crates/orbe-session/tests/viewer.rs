@@ -142,6 +142,26 @@ fn a_step_stops_play() {
 }
 
 #[test]
+fn a_refused_step_leaves_play_running() {
+    let mut live = opened();
+    assert!(live.run(&Command::Play).ok());
+    assert!(live.tick(16_000_000_000));
+    for (line, code) in [
+        ("step 10000s", Code::PastStop),
+        ("step --until @nope on", Code::UnknownRef),
+    ] {
+        let refused = live.run(&command(line));
+        assert_eq!(refused.error.unwrap().code, code, "{line}");
+        assert_eq!(
+            (refused.t_ps, refused.state),
+            (16_000_000_000, State::Playing),
+            "{line} takes no time and leaves play running"
+        );
+    }
+    assert!(live.tick(16_000_000_000));
+}
+
+#[test]
 fn play_ends_at_the_stop() {
     let mut live = Live::new("t");
     live.stop_at(Some((Duration::from_ms(40), "ORBE_TEST_STOP".into())));

@@ -244,7 +244,7 @@ A person can watch a live session in 3D and press its buttons. `orbe open --head
 
 - Several pages can watch one session. Closing a page leaves the session running, and `orbe close` ends every page.
 - A click on a button in the page is `press`, and letting go is `release`. They land at the session's time, as yours do, so read the session with `get` or `snapshot` as always.
-- `orbe play` runs time at real speed and returns at once, and `state` is `playing` meanwhile. Time runs until `orbe pause`, a `step`, the 2-hour stop or a fault. The page's Play button runs the same `play`.
+- `orbe play` runs time at real speed and returns at once, and `state` is `playing` meanwhile. Time runs until `orbe pause`, a `step` that runs, the 2-hour stop or a fault. A refused `step`, such as `past_stop` or an `unknown_ref` in `--until`, leaves it running. The page's Play button runs the same `play`.
 - A test file refuses `play` and `pause` with `usage`. Step time instead.
 - `show` failing with "this orbe was built without the viewer page" means this `orbe` has no page in it. Tell the user, since the fix is a rebuild of `orbe`.
 

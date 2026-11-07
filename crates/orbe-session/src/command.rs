@@ -93,7 +93,7 @@ pub const COMMANDS: &[Spec] = &[
     Spec {
         name: "play",
         usage: "play",
-        about: "Runs time at real speed and returns at once. Time runs until `pause`, a `step`, the session's stop or a fault.",
+        about: "Runs time at real speed and returns at once. Time runs until `pause`, a `step` that runs, the session's stop or a fault. A refused `step`, such as one past the stop, leaves it running.",
         parse: |args, _| none(args, Command::Play),
     },
     Spec {
