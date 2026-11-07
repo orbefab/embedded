@@ -4,7 +4,7 @@
   "part": "diode-1n4007",
   "version": "0.1.0",
   "title": "Rectifier diode, 1N4007",
-  "summary": "1 A, 1000 V rectifier in DO-41, with its leads bent to 10.16 mm (0.4 inch) for a breadboard. The band marks the cathode.",
+  "summary": "1 A, 1000 V rectifier in DO-41, with its leads bent to 10.16 mm (0.4 inch) for a breadboard. The band marks the cathode. The solver fails to converge (`solver.convergence`) when it feeds an LED from a 5V rail that has two capacitors on it. One decoupling capacitor on that rail, or the capacitors after the diode on its cathode, avoids it.",
   "tags": ["diode", "rectifier", "flyback", "reverse protection", "through-hole"],
   "license": "MIT OR Apache-2.0",
   "docs": { "Vishay 1N4001, Document Number 88503, Revision 29-Apr-2020": "https://www.vishay.com/docs/88503/1n4001.pdf" },
