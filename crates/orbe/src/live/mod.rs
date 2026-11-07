@@ -746,8 +746,6 @@ impl Client {
         self.refuse(Code::IoError, message, hint)
     }
 
-    /// A `no_session` reply, from a process with no scene yet or one that is ending, becomes
-    /// the client's own, and a hint to `open` again names the shell command.
     /// `show` to the session's process. A relative `ORBE_VIEWER_DIR` starts from this folder.
     fn show(&self) -> Result<Box<Reply>, Refusal> {
         let page = std::env::var_os(page::FOLDER)
@@ -777,6 +775,8 @@ impl Client {
         Ok(shown)
     }
 
+    /// A `no_session` reply, from a process with no scene yet or one that is ending, becomes
+    /// the client's own, and a hint to `open` again names the shell command.
     fn send(&self, stream: UnixStream, ask: Ask) -> Result<Box<Reply>, Refusal> {
         if let Ok(hangup) = stream.try_clone() {
             let pressed = AtomicBool::new(false);
