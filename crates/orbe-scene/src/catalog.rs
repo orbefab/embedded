@@ -301,17 +301,44 @@ mod tests {
             assert_eq!(entry.version.to_string(), "0.1.0");
             assert_eq!(entry.hash, folder_hash(&parts.join(&id)).unwrap(), "{id}");
         }
-        let nano = catalog
-            .get("nano-board", Version::parse("0.1.0").unwrap())
-            .unwrap();
-        assert_eq!(nano.uses.len(), 14);
-        assert!(!nano.sealed);
-        let uno = catalog
-            .get("uno-board", Version::parse("0.1.0").unwrap())
-            .unwrap();
-        assert_eq!(uno.uses.len(), 25);
-        assert!(!uno.sealed);
         assert!(catalog.newest("led-5mm").unwrap().sealed);
+    }
+
+    fn built_from(id: &str) -> BTreeSet<String> {
+        find(id)
+            .unwrap()
+            .tree
+            .get("parts")
+            .and_then(crate::syntax::Node::props)
+            .unwrap()
+            .iter()
+            .filter_map(|inst| inst.value.get("type").and_then(crate::syntax::Node::str))
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn board_uses_the_parts_it_is_built_from(id: &str) {
+        let catalog = Catalog::builtin();
+        let board = catalog.newest(id).unwrap();
+        assert!(!board.sealed, "{id}");
+        let used: BTreeSet<String> = board.uses.keys().cloned().collect();
+        assert_eq!(used, built_from(id), "{id}");
+        for (child, version) in &board.uses {
+            assert!(
+                catalog.get(child, *version).is_some(),
+                "{id} uses {child}@{version}, which the catalog lacks"
+            );
+        }
+    }
+
+    #[test]
+    fn nano_board_uses_the_parts_it_is_built_from() {
+        board_uses_the_parts_it_is_built_from("nano-board");
+    }
+
+    #[test]
+    fn uno_board_uses_the_parts_it_is_built_from() {
+        board_uses_the_parts_it_is_built_from("uno-board");
     }
 
     fn leads(pins: &Value) -> BTreeSet<u64> {
@@ -397,7 +424,11 @@ mod tests {
                 continue;
             }
             checked += 1;
-            let asset: Value = serde_json::from_slice(&entry.files["asset.json"])
+            let asset_bytes = entry
+                .files
+                .get("asset.json")
+                .unwrap_or_else(|| panic!("{id} is missing asset.json"));
+            let asset: Value = serde_json::from_slice(asset_bytes)
                 .unwrap_or_else(|e| panic!("{id}: asset.json: {e}"));
             let anchors_name = format!("{id}.anchors.json");
             let mut want = vec![glb.as_str()];
@@ -495,6 +526,12 @@ mod tests {
             let policy: Vec<String> = policy.into_iter().collect();
             assert_eq!(kept, policy, "{id}: kept_nodes against the keep policy");
         }
-        assert_eq!(checked, 45);
+        let parts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parts");
+        let with_body = catalog
+            .ids()
+            .into_iter()
+            .filter(|id| parts.join(id).join(format!("{id}.glb")).is_file())
+            .count();
+        assert_eq!(checked, with_body);
     }
 }
