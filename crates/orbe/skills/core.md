@@ -124,7 +124,7 @@ A scene is JSONC: JSON plus `//` comments and trailing commas, nothing more. Its
 - `parts`: each instance by name. `type` is a catalog id (the list below) or a `./` path to a part folder of your own. The other keys are the part's params. `"not_simulated": "<why>"` keeps a part in the scene for drawing but out of the simulation. Nothing may be wired to it. A wire to one of its pins is a `not_simulated` error that gives `<why>`.
 - `wires`: pairs of pins, `["nano.D2", "btn1.a"]`. orbe joins wired pins into nets. Two wires to one pin are fine. A third item, `{ "kind": "jumper" }`, `{ "kind": "trace" }` or `{ "kind": "contact" }`, only says how it is drawn. `jumper` is the default.
 - `nets` (optional): names a net by one of its pins, `"GND": "nano.GND"`. Other nets take the name of their smallest pin, with `.` written `__`, as `nano__GND`.
-- `layout` (optional): `"btn1": { "at": [x, y, z], "rotate": [rx, ry, rz] }` in mm and degrees, for drawing only.
+- `layout` (optional): `"btn1": { "at": [x, y, z], "rotate": [rx, ry, rz] }` in mm and degrees, for drawing only. The 3D page puts a part with no `layout` in a row to the right of the placed ones, and draws its wires to it, so a scene with no `layout` at all still shows every part and wire.
 - `sim` (optional): `{ "max_step": "1ms", "seed": 1 }`. `max_step` is the engine's largest step, 10 ms by default.
 
 A part name starts with a letter, takes letters, digits and `_`, and may not contain `__` or end in `_`. `i`, `v`, `p`, `pin`, `logic` and `net` are reserved. With two boards in a scene, wire their GND pins together, so both grounds are one net.
@@ -240,10 +240,10 @@ Exit codes: 0 ok, 1 a failed check, `expect` or command, 2 a usage error, 3 a fi
 
 ## Watching in 3D
 
-A person can watch a live session in 3D and press its buttons. `orbe open --headed` opens the scene, then a page in the default browser. `orbe show` opens the page on a session that already runs. Each prints the page's address, which only this machine can reach, and `--no-browser` prints it without opening a browser. Keep the address to yourself, since it holds the session's key.
+A person can watch a live session in 3D and press its buttons. `orbe open --headed` opens the scene, then a page in the default browser. `orbe show` opens the page on a session that already runs. Each prints the page's address, which only this machine can reach, and `--no-browser` prints it without opening a browser. The address holds the session's key, so give it only to the user who asked to watch. On another machine it works only through a tunnel to this one, such as `ssh -L <port>:127.0.0.1:<port>`, opened at `http://127.0.0.1:<port>/` with the same `#t=` key.
 
 - Several pages can watch one session. Closing a page leaves the session running, and `orbe close` ends every page.
-- A click on a button in the page is `press`, and letting go is `release`. They land at the session's time, as yours do, so read the session with `get` or `snapshot` as always.
+- A click on a button in the page is `press`, and letting go is `release`. They land at the session's time, as yours do, so read the session with `get` or `snapshot` as always. A session opens paused, and while it is paused a click changes no pin, because the firmware runs only as time moves. Before you hand a person the page, run `orbe play`, or tell them to press Play.
 - `orbe play` runs time at real speed and returns at once, and `state` is `playing` meanwhile. Time runs until `orbe pause`, a `step` that runs, the 2-hour stop or a fault. A refused `step`, such as `past_stop` or an `unknown_ref` in `--until`, leaves it running. The page's Play button runs the same `play`.
 - `play` reports nothing as time runs. The next `step` lists the changes since the `step` before it, play included, such as the pin edges, LED changes and diagnostics a press from the page caused, so its reply reads like `t=12.001s (from 2s)`. Like any step it lists the first 20, then `and N more`, so after a busy play the step's own changes can fall into that count. Run a short `step 1ms` first to list play's, then the step you meant. When play ran into the 2-hour stop or a fault, the `step` that is refused lists them. `pause` lists nothing, and `get` and `snapshot` read the state at any time.
 - A test file refuses `play` and `pause` with `usage`. Step time instead.
