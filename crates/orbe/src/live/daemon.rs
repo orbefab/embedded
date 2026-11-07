@@ -577,6 +577,6 @@ fn connection(stream: UnixStream, jobs: &Sender<Event>) {
 /// The wall clock, which paces `play`, spaces frames and times the waits. It decides when time
 /// moves, never what a reply at a given time says.
 #[expect(clippy::disallowed_methods, reason = "`play` runs on the wall clock")]
-fn wall() -> Instant {
+pub(super) fn wall() -> Instant {
     Instant::now()
 }

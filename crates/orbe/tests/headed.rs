@@ -334,6 +334,28 @@ fn the_server_serves_32_connections_at_once_and_drops_the_rest() {
     runtime.orbe(dir.path(), &["close"]).ok();
 }
 
+#[test]
+fn a_request_head_has_5_s_in_all() {
+    let runtime = Runtime::new();
+    let (dir, _page, url) = opened(&runtime);
+    let (host, _) = split(&url);
+    let mut slow = TcpStream::connect(&host).unwrap();
+    for byte in b"GET " {
+        let _ = slow.write_all(&[*byte]);
+        std::thread::sleep(Duration::from_millis(1750));
+    }
+    slow.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+    let read = slow.read(&mut [0; 64]);
+    assert!(
+        matches!(&read, Ok(0))
+            || read
+                .as_ref()
+                .is_err_and(|e| e.kind() == ErrorKind::ConnectionReset),
+        "a byte every 1.75 s is cut off 5 s after the first: {read:?}"
+    );
+    runtime.orbe(dir.path(), &["close"]).ok();
+}
+
 /// The CPU time the process has used, in clock ticks: utime plus stime, fields 14 and 15 of
 /// `/proc/<pid>/stat`, counted after the `) ` that ends the command name.
 fn cpu_ticks(pid: u32) -> u64 {

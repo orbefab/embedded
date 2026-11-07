@@ -22,12 +22,13 @@ use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::protocol::{CloseFrame, Role};
 use tungstenite::{Message, WebSocket};
 
-use super::daemon::Event;
+use super::daemon::{Event, wall};
 use super::page::Page;
 
 /// The longest request head the listener reads.
 const HEAD: usize = 16 * 1024;
-/// How long the listener waits for a request head, and for a viewer to take what it is sent.
+/// How long the listener waits for a whole request head, and for a viewer to take what it is
+/// sent.
 const WAIT: Duration = Duration::from_secs(5);
 /// The most connections the listener serves at once, page requests and viewers together. It
 /// closes any past these at once.
@@ -126,11 +127,16 @@ impl Head {
 /// Reads up to the blank line that ends the head, a byte at a time, so nothing past it is
 /// taken from a stream that becomes a WebSocket.
 fn read_head(stream: &mut TcpStream) -> Option<Head> {
-    stream.set_read_timeout(Some(WAIT)).ok()?;
+    let until = wall() + WAIT;
     let mut bytes = Vec::new();
     let mut byte = [0u8; 1];
     while !bytes.ends_with(b"\r\n\r\n") {
-        if bytes.len() >= HEAD || stream.read(&mut byte).ok()? == 0 {
+        let left = until.saturating_duration_since(wall());
+        if left.is_zero() || bytes.len() >= HEAD {
+            return None;
+        }
+        stream.set_read_timeout(Some(left)).ok()?;
+        if stream.read(&mut byte).ok()? == 0 {
             return None;
         }
         bytes.push(byte[0]);
