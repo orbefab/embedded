@@ -105,12 +105,12 @@ interface Held {
 
 const PRESS_ENDS = ["pointerup", "pointermove", "pointercancel", "lostpointercapture"] as const;
 
-// Every mouse button shares one pointer, so a mouse press ends when the primary button is
-// up. In a chord, the primary lifting arrives as a pointermove, not a pointerup.
+// A pointer's buttons share it, so a press ends when the primary (a mouse's left button,
+// a pen's tip, a finger's contact) is up. In a chord, the primary lifting arrives as a
+// pointermove, not a pointerup.
 function endsPress(event: PointerEvent): boolean {
   if (event.type !== "pointerup" && event.type !== "pointermove") return true;
-  if (event.pointerType === "mouse") return (event.buttons & 1) === 0;
-  return event.type === "pointerup";
+  return (event.buttons & 1) === 0;
 }
 
 export function SceneView({

@@ -167,7 +167,7 @@ export interface FrameMessage {
   /** Reserved until the engine has a play speed: simulated time over wall time, as the
    * session achieved it. */
   readonly ratio?: number;
-  /** Reserved until the engine has displays: per `channels.displays`, without pixels. */
+  /** Reserved until the session sends displays: per `channels.displays`, without pixels. */
   readonly displays?: readonly DisplayState[];
   /** How many warnings the session has. */
   readonly diagnostics?: number;

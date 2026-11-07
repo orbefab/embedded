@@ -377,6 +377,26 @@ try {
   await guarded(async () => {
     const { context, page, commands, cdp } = await open({ touch: true });
     const stem = await pointOn(page, "@btn1", "stem");
+    await touch(cdp, "touchStart", [{ ...stem, id: 1 }]);
+    await page.waitForTimeout(80);
+    for (let step = 1; step <= 5; step += 1) {
+      await touch(cdp, "touchMove", [{ x: stem.x + 3 * step, y: stem.y + 2 * step, id: 1 }]);
+      await page.waitForTimeout(40);
+    }
+    const afterMoves = commands();
+    await touch(cdp, "touchEnd", []);
+    await page.waitForTimeout(150);
+    check(
+      "a finger moving while it holds btn1 keeps the press, and its lift releases it",
+      same(afterMoves, ["press @btn1"]) && same(commands(), ["press @btn1", "release @btn1"]),
+      { afterMoves, final: commands() }
+    );
+    await context.close();
+  });
+
+  await guarded(async () => {
+    const { context, page, commands, cdp } = await open({ touch: true });
+    const stem = await pointOn(page, "@btn1", "stem");
     await watchPointer(page);
     await touch(cdp, "touchStart", [{ ...stem, id: 1 }]);
     await page.waitForTimeout(150);
