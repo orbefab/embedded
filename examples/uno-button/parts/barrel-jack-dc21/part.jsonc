@@ -1,0 +1,6 @@
+{
+  "format": 1, "part": "barrel-jack-dc21", "version": "0.1.0", "title": "DC barrel jack, 2.1 mm", "license": "MIT OR Apache-2.0",
+  "real": { "generic": true, "maker": null, "number": null, "datasheet": null },
+  "pins": { "sleeve": [1], "center": [2], "switch": [3] },
+  "not_simulated": [{ "what": "plug", "pins": ["sleeve", "center", "switch"], "why": "No plug is modelled, so the jack powers nothing." }],
+}

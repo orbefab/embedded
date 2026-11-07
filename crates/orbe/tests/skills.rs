@@ -205,6 +205,60 @@ fn the_nano_pins_the_skills_call_not_simulated_are_the_ones_the_reader_leaves_ou
 }
 
 #[test]
+fn the_uno_pins_the_skills_call_not_simulated_are_the_ones_the_reader_leaves_out() {
+    let scene = common::repo().join("examples/uno-button/scene.jsonc");
+    let netlist = orbe_scene::read(&scene).expect("the uno example checks");
+    let left_out: BTreeSet<&str> = netlist.refs.parts["uno"]
+        .pins
+        .iter()
+        .filter(|(_, net)| net.is_none())
+        .map(|(pin, _)| pin.as_str())
+        .collect();
+    assert_eq!(left_out, BTreeSet::from(["VIN"]));
+    let (core, arduino) = (skill("core"), skill("arduino"));
+    says(&core, "The Uno's VIN pin and barrel jack.");
+    says(&core, "The Uno's 3V3 works.");
+    says(&arduino, "On the Uno, VIN is not simulated");
+    says(&arduino, "3V3 comes from the board's 3.3 V regulator.");
+}
+
+/// The arduino skill says the Uno's L LED pulls D13 to about 1.45 V while D13 is an input
+/// with its pull-up on, so it reads low.
+#[test]
+fn the_uno_d13_with_its_pull_up_reads_low_as_the_arduino_skill_says() {
+    says(
+        &skill("arduino"),
+        "With `INPUT_PULLUP` on D13 the LED pulls the pin to about 1.45 V, so it reads low",
+    );
+    let project = tempfile::tempdir().unwrap();
+    let dir = project.path();
+    let example = common::repo().join("examples/uno-button");
+    common::copy_dir(&example.join("parts"), &dir.join("parts"));
+    fs::copy(example.join("parts.lock"), dir.join("parts.lock")).unwrap();
+    fs::copy(
+        common::repo().join("engine/firmware/pullup.hex"),
+        dir.join("pullup.hex"),
+    )
+    .unwrap();
+    write_file(
+        dir,
+        "scene.jsonc",
+        r#"{ "format": 1, "parts": { "uno": { "type": "uno-board", "firmware": "pullup.hex" } } }"#,
+    );
+    write_file(
+        dir,
+        "tests/pullup.test",
+        "open\nstep 10ms\nexpect @uno.D13 low\nexpect @uno.D13 > 1.4V\nexpect @uno.D13 < 1.5V\n",
+    );
+    let run = Runtime::new().orbe(dir, &["test"]).ok();
+    assert!(
+        run.stdout.ends_with("1 passed, 0 failed\n"),
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
 fn the_stub_follows_the_agent_skills_format_and_its_commands_work() {
     let path = common::repo().join("skills/orbe/SKILL.md");
     let stub = fs::read_to_string(&path).unwrap();
@@ -375,12 +429,17 @@ fn the_arduino_compile_command_writes_the_firmware_the_scene_names() {
         .nth(1)
         .expect("the compile command names an FQBN");
     assert!(text.contains(&format!("The Nano's FQBN is `{fqbn}`")));
-    let details = Command::new("arduino-cli")
-        .args(["board", "details", "-b", fqbn, "--format", "json"])
-        .output()
-        .unwrap();
-    let details: serde_json::Value = serde_json::from_slice(&details.stdout).unwrap();
-    assert_eq!(details["name"], "Arduino Nano", "{fqbn}");
+    let board_name = |fqbn: &str| {
+        let details = Command::new("arduino-cli")
+            .args(["board", "details", "-b", fqbn, "--format", "json"])
+            .output()
+            .unwrap();
+        let details: serde_json::Value = serde_json::from_slice(&details.stdout).unwrap();
+        details["name"].as_str().unwrap_or_default().to_string()
+    };
+    assert_eq!(board_name(fqbn), "Arduino Nano", "{fqbn}");
+    says(&text, "For the Uno, use `arduino:avr:uno` instead.");
+    assert_eq!(board_name("arduino:avr:uno"), "Arduino UNO");
 
     let project = tempfile::tempdir().unwrap();
     let dir = project.path();
@@ -1059,7 +1118,7 @@ fn part_readings_show_a_pin_edge_where_until_stops_and_led_l_follows_d13() {
     );
     says(
         &core,
-        "- `@nano.mcu.PB5`, `@nano.led_l`: a part inside a part, by its name in that part's file. The Nano's chip is `mcu`, and `led_l` is its L LED, which D13 drives.",
+        "- `@nano.mcu.PB5`, `@nano.led_l`: a part inside a part, by its name in that part's file. On the Nano and the Uno the chip is `mcu`, and `led_l` is the L LED, which D13 drives.",
     );
     let project = worked_example();
     let dir = project.path();

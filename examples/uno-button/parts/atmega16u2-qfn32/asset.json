@@ -1,0 +1,55 @@
+{
+  "part": "atmega16u2-qfn32",
+  "source": {
+    "repo": "https://github.com/orbefab/models",
+    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
+    "inputs": {
+      "glb": {
+        "path": "GLB/parts/atmega16u2-qfn32.glb",
+        "sha256": "44dcf6f80e0c6f66f2577955ce0538ec5ef3ea151958a8e3fee71b4494e9f0c3",
+        "bytes": 113012
+      },
+      "anchors": {
+        "path": "GLB/parts/atmega16u2-qfn32.anchors.json",
+        "sha256": "09cb671efeb94741569fdfcc766ee44daae0a3c575adc0201aae89a690da17cb",
+        "bytes": 3844
+      }
+    }
+  },
+  "files": {
+    "atmega16u2-qfn32.glb": {
+      "sha256": "1bff3195ffeeada69b720169a3f3ce4c6002ea7c7c03a9f7a498216f587dcc91",
+      "bytes": 24780
+    },
+    "atmega16u2-qfn32.anchors.json": {
+      "sha256": "09cb671efeb94741569fdfcc766ee44daae0a3c575adc0201aae89a690da17cb",
+      "bytes": 3844
+    }
+  },
+  "box": {
+    "min": [-2.5, -2.5, 0],
+    "max": [2.5, 2.5, 0.94]
+  },
+  "kept_nodes": [],
+  "draw_calls": 3,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 33,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0.05
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 210,
+      "primitives_out": 3
+    }
+  }
+}

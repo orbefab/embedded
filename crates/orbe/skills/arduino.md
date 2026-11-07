@@ -1,6 +1,6 @@
 # orbe: arduino
 
-orbe runs the firmware you build. It never compiles anything. For the `nano-board`, build with arduino-cli, then name the `.hex` it writes in the scene. `orbe skills get core` covers everything else.
+orbe runs the firmware you build. It never compiles anything. For the `nano-board` and the `uno-board`, build with arduino-cli, then name the `.hex` it writes in the scene. `orbe skills get core` covers everything else.
 
 ## Install arduino-cli
 
@@ -38,7 +38,7 @@ void loop() {
 }
 ```
 
-Build it from the project folder. The Nano's FQBN is `arduino:avr:nano`.
+Build it from the project folder. The Nano's FQBN is `arduino:avr:nano`. For the Uno, use `arduino:avr:uno` instead.
 
 ```sh
 arduino-cli compile --fqbn arduino:avr:nano --output-dir build button
@@ -64,12 +64,14 @@ The path starts from the scene's folder. After each change to the sketch, compil
 
 `cpu=atmega328old` in the FQBN changes only the bootloader used for upload. It builds the same `.hex`, so the simulation does not need it.
 
-## The simulated Nano
+## The simulated Nano and Uno
 
-- An ATmega328P at 16 MHz, as on the board. `millis()`, `delay()` and the timers run on simulated time, so `delay(1000)` takes `step 1s`.
-- D0 to D13 and A0 to A5 work as digital pins, with `INPUT`, `INPUT_PULLUP` and `OUTPUT`. A6, A7, 3V3 and VIN are not simulated. A wire to one is a `not_simulated` error, so do not use them.
+- An ATmega328P at 16 MHz, as on each board. `millis()`, `delay()` and the timers run on simulated time, so `delay(1000)` takes `step 1s`.
+- D0 to D13 and A0 to A5 work as digital pins, with `INPUT`, `INPUT_PULLUP` and `OUTPUT`. On the Nano, A6, A7, 3V3 and VIN are not simulated. A wire to one is a `not_simulated` error, so do not use them.
+- On the Uno, VIN is not simulated, and a wire to it is a `not_simulated` error. 3V3 comes from the board's 3.3 V regulator. IOREF is 5V. SDA and SCL are A4 and A5 on their own header pins.
 - An input that nothing drives keeps its last level here. On a real board it floats. Give each button a pull-down resistor, as the core example does, or use `INPUT_PULLUP` and wire the button to GND.
-- D13 also drives the board's own LED, `@nano.led_l`, which `get` and `expect` read.
+- D13 also drives the board's own LED, `@nano.led_l` or `@uno.led_l`, which `get` and `expect` read.
+- A real Uno buffers D13 through an op-amp before its L LED. The engine has no op-amp, so the simulated Uno drives the LED from D13 directly, as the Nano does. With `INPUT_PULLUP` on D13 the LED pulls the pin to about 1.45 V, so it reads low, where a real Uno reads high. Use another pin for an input with its pull-up.
 - `Serial` output reaches orbe as text. After `Serial.begin(115200)` and `Serial.println("ready")`, `expect serial contains "ready"` passes. `println` ends a line with `\r\n`, and `step` lists the D1 edges it makes. Serial can reach orbe up to 10 ms after the chip sends it. A `println` in `loop` prints on every pass, so its text repeats.
 - Nothing sends serial into the chip. `Serial.read()` never gets a byte.
 - The program starts at t = 0 with no bootloader delay.

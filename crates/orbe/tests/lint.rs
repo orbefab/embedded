@@ -131,6 +131,22 @@ fn lint_warns_on_the_first_target_exits_zero_and_writes_nothing() {
     assert_eq!(found[0]["file"], "examples/first-target/scene.jsonc");
 }
 
+/// The Uno's parts all have a model, a reason or `joins_only`, and its L LED has its resistor,
+/// so its example warns only of what the first target also leaves as it is.
+#[test]
+fn lint_on_the_uno_example_warns_only_of_ground_and_placement() {
+    let repo = common::repo();
+    let run = orbe(&repo, &["lint", "examples/uno-button/scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let codes: Vec<String> = warned(&run.stdout).into_iter().map(|(_, c)| c).collect();
+    assert_eq!(
+        codes,
+        ["scene.ground_unnamed", "scene.unplaced"],
+        "{}",
+        run.stdout
+    );
+}
+
 #[test]
 fn lint_on_a_scene_that_does_not_check_prints_and_exits_as_check_does() {
     let dir = project("{ \"format\": 1, \"parts\": { \"led1\": { \"type\": \"led-5mm\" } } }\n");

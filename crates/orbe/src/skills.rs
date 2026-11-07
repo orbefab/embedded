@@ -18,7 +18,7 @@ pub const SKILLS: &[Skill] = &[
     },
     Skill {
         name: "arduino",
-        about: "Building Arduino Nano firmware with arduino-cli and naming it in the scene.",
+        about: "Building Arduino Nano and Uno firmware with arduino-cli and naming it in the scene.",
         text: include_str!("../skills/arduino.md"),
     },
 ];

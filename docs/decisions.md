@@ -69,6 +69,13 @@ Type checking, linting and runtime diagnostics are separate.
 - A6 and A7 are not simulated yet, since the engine's 328P has the DIP's pins. A wire to them is an error that says so.
 - Its 16 MHz clock is a three-terminal ceramic resonator, until a clone's photo says otherwise.
 
+## The uno board (Nov 7 2026)
+- It is built from 25 leaf parts, 49 children in all. Its traces are the copper of Arduino's UNO-TH_Rev3e board file, net by net.
+- It runs from USB, as the Nano does. Its 3.3 V regulator runs on the engine's LP2985 fit, so 3V3 works. VIN, the barrel jack, the 5 V regulator and the comparator that switches USB off are not simulated, and a wire to VIN is an error that says so.
+- The engine has no op-amp, so a wire stands in for the follower between D13 and the L LED, as the engine's board example drives that LED from D13. D13 with its pull-up on then reads low, where the board reads high.
+- The engine has no P-channel MOSFET, so the USB switch is a resistor at its on resistance, always on, as in the engine's board example.
+- A part is simulated whole. RN1's sections divide VIN, so RN1 is out, and its RESET pull-up with it. The 328P's own pull-up holds RESET high.
+
 ## Later
 Mates between parts, joints between two parts, importing outside CAD, PCB routing, drawing traces, per-instance placement overrides, A6 and A7, and an `orbe lsp` for editors.
 

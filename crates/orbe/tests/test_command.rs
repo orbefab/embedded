@@ -18,6 +18,16 @@ fn the_first_target_example_passes() {
 }
 
 #[test]
+fn the_uno_example_passes() {
+    let run = orbe(&common::repo(), &["test", "examples/uno-button"]);
+    assert_eq!(
+        run.stdout,
+        "PASS examples/uno-button/tests/button.test\n1 passed, 0 failed\n"
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+}
+
+#[test]
 fn the_first_target_reads_the_engine_values_while_pressed() {
     let dir =
         project("open\nstep 50ms\npress @btn1\nstep 50ms\nget @nano.D13\nget @led1\nget @led1.i\n");

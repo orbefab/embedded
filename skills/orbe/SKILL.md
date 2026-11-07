@@ -1,6 +1,6 @@
 ---
 name: orbe
-description: Simulates a circuit and its microcontroller firmware with the orbe CLI, such as a button and an LED on an Arduino Nano. Use to build, run and test a hardware project without the hardware, or when a project has a scene.jsonc or tests/*.test files.
+description: Simulates a circuit and its microcontroller firmware with the orbe CLI, such as a button and an LED on an Arduino Nano or Uno. Use to build, run and test a hardware project without the hardware, or when a project has a scene.jsonc or tests/*.test files.
 ---
 
 # orbe
