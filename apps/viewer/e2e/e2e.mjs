@@ -341,7 +341,7 @@ try {
       window.realSend = source.send;
       source.send = async (command) =>
         command.cmd === "press"
-          ? { ok: false, error: { code: "usage", message: "no part @btn1", hint: "" } }
+          ? { ok: false, session: "s", t_ps: 0, state: "paused", error: { code: "unknown_ref", message: "@btn1: no part named `btn1`", hint: "parts: nano" } }
           : Promise.reject(new Error("the session closed"));
     });
     await click(page, stem);
@@ -352,7 +352,8 @@ try {
     await click(page, stem);
     check(
       "a press the session refuses and a release whose send rejects are both listed, and the next press works",
-      shown === "press @btn1: no part @btn1\nrelease @btn1: the session closed" && same(commands(), ["press @btn1", "release @btn1"]),
+      shown === "press @btn1: error[unknown_ref]: @btn1: no part named `btn1`\n  hint: parts: nano\nrelease @btn1: the session closed" &&
+        same(commands(), ["press @btn1", "release @btn1"]),
       { shown, commands: commands() }
     );
     await context.close();

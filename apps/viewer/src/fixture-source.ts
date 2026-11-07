@@ -46,11 +46,11 @@ export function fixtureSource(
     },
     async send(command: Command) {
       console.log(commandLine(command));
-      return { ok: true };
+      return { ok: true, session: scene.session, t_ps: latest?.t_ps ?? 0, state: latest?.state ?? "paused" };
     },
     push(message) {
       if (message.type === "scene") scene = message;
-      else latest = message;
+      else if (message.type === "frame") latest = message;
       broadcast(message);
     },
   };

@@ -14,7 +14,15 @@ import {
 import type { BuiltScene } from "./build";
 import type { CameraMode } from "./camera-frame";
 import { createHoverStore, type HoverStore } from "./hover";
-import { type Command, commandLine, type FrameMessage, type SceneMessage, type SessionSource } from "./protocol";
+import {
+  type Command,
+  commandLine,
+  errorText,
+  type FrameMessage,
+  type RunState,
+  type SceneMessage,
+  type SessionSource,
+} from "./protocol";
 import { SceneView } from "./scene-view";
 
 class ShowError extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -76,14 +84,72 @@ function Errors({ errors }: { errors: readonly string[] }) {
   );
 }
 
+/** `t_ps` in seconds, to the microsecond. */
+const seconds = (t_ps: number) => `${(t_ps / 1e12).toFixed(6)} s`;
+
+/** The session's state and time, and a button that plays or pauses it. It reads frames itself,
+ * so a frame redraws only this bar. */
+function Controls({ source, send }: { source: SessionSource; send: (command: Command) => void }) {
+  const [now, setNow] = useState<{ state: RunState; t_ps: number } | null>(null);
+  useEffect(
+    () =>
+      source.subscribe((message) => {
+        if (message.type === "frame") setNow({ state: message.state, t_ps: message.t_ps });
+      }),
+    [source]
+  );
+  if (now === null) return null;
+  const playing = now.state === "playing";
+  const ended = now.state === "stopped" || now.state === "faulted";
+  return (
+    <div
+      data-testid="controls"
+      style={{
+        position: "absolute",
+        top: 12,
+        left: 12,
+        display: "flex",
+        gap: 10,
+        alignItems: "center",
+        padding: "4px 6px 4px 10px",
+        borderRadius: 6,
+        background: "rgba(20, 22, 26, 0.92)",
+        border: "1px solid #3a3f47",
+        color: "#e6ebf2",
+        font: "12px ui-monospace, monospace",
+      }}
+    >
+      <span data-testid="state">{now.state}</span>
+      <span data-testid="time">t = {seconds(now.t_ps)}</span>
+      <button
+        data-testid="play"
+        disabled={ended}
+        onClick={() => send({ cmd: playing ? "pause" : "play" })}
+        style={{
+          font: "inherit",
+          color: "inherit",
+          background: "#2a2f37",
+          border: "1px solid #4a5058",
+          borderRadius: 4,
+          padding: "2px 10px",
+          cursor: ended ? "default" : "pointer",
+        }}
+        type="button"
+      >
+        {playing ? "Pause" : "Play"}
+      </button>
+    </div>
+  );
+}
+
 export interface ViewerProps {
   readonly source: SessionSource;
   /** Called once the canvas has its renderer, scene and camera. */
   readonly onCreated?: (state: RootState) => void;
 }
 
-/** Draws the session's scene and its frames, and sends presses back. `T` toggles the top
- * view. */
+/** Draws the session's scene and its frames, and sends presses, `play` and `pause` back. `T`
+ * toggles the top view. */
 export function Viewer({ source, onCreated }: ViewerProps) {
   const [scene, setScene] = useState<SceneMessage | null>(null);
   const [mode, setMode] = useState<CameraMode>("tilted");
@@ -91,6 +157,7 @@ export function Viewer({ source, onCreated }: ViewerProps) {
   const hover = useMemo(createHoverStore, []);
   const [partErrors, setPartErrors] = useState<readonly string[]>([]);
   const [sendErrors, setSendErrors] = useState<readonly string[]>([]);
+  const [closed, setClosed] = useState<string | null>(null);
   const onBuilt = useCallback((built: BuiltScene) => setPartErrors(built.errors), []);
   const send = useCallback(
     (command: Command) => {
@@ -101,7 +168,7 @@ export function Viewer({ source, onCreated }: ViewerProps) {
       };
       source.send(command).then(
         (reply) => {
-          if (!reply.ok) fail(reply.error.message);
+          if (!reply.ok) fail(errorText(reply.error));
         },
         (error: unknown) => fail(error instanceof Error ? error.message : String(error))
       );
@@ -116,8 +183,10 @@ export function Viewer({ source, onCreated }: ViewerProps) {
           frame.current = null;
           setSendErrors([]);
           setScene(message);
-        } else {
+        } else if (message.type === "frame") {
           frame.current = message;
+        } else {
+          setClosed(message.reason);
         }
       }),
     [source]
@@ -146,6 +215,15 @@ export function Viewer({ source, onCreated }: ViewerProps) {
         </Canvas>
       </ShowError>
       <Errors errors={[...partErrors, ...sendErrors]} />
+      {closed === null ? <Controls send={send} source={source} /> : null}
+      {closed === null ? null : (
+        <div
+          data-testid="closed"
+          style={{ ...overlay, inset: 0, display: "grid", placeItems: "center", background: "rgba(16, 17, 20, 0.8)", color: "#e6ebf2" }}
+        >
+          {`the session ended: ${closed}`}
+        </div>
+      )}
       <HoverLabel hover={hover} />
     </div>
   );
