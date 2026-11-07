@@ -1065,8 +1065,18 @@ fn every_catalog_part_file_reads_without_a_finding() {
 }
 
 #[test]
-#[expect(clippy::disallowed_methods, reason = "the clock is the measurement")]
 fn a_bad_item_at_the_end_of_a_long_list_is_placed_quickly() {
+    let short = bad_item_at_the_end_of(4_000);
+    let long = bad_item_at_the_end_of(32_000);
+    assert!(
+        long < short * 16,
+        "8 times the bytes took {long:?} against {short:?}; a search that grows with the square of the list is back"
+    );
+}
+
+/// Places the error on a 256 after `count - 1` good bytes, and returns how long reading took.
+#[expect(clippy::disallowed_methods, reason = "the clock is the measurement")]
+fn bad_item_at_the_end_of(count: usize) -> std::time::Duration {
     let project = with_scene(
         "\"led1\": { \"type\": \"led-5mm\", \"color\": \"red\" },",
         "\"led1\": { \"type\": \"led-5mm\", \"color\": \"red\" },\n    \"tx\": { \"type\": \"./parts/ser.jsonc\" },",
@@ -1078,7 +1088,7 @@ fn a_bad_item_at_the_end_of_a_long_list_is_placed_quickly() {
         1,
     );
     fs::write(&scene, text).unwrap();
-    let bytes = format!("{}256", "85,".repeat(31_999));
+    let bytes = format!("{}256", "85,".repeat(count - 1));
     let part = format!(
         r#"{{
   "format": 1,
@@ -1111,10 +1121,7 @@ fn a_bad_item_at_the_end_of_a_long_list_is_placed_quickly() {
         found[0].message
     );
     assert!(!found[0].hint.is_empty());
-    assert!(
-        took < std::time::Duration::from_secs(2),
-        "32,000 bytes took {took:?}; a search that grows with the square of the list is back"
-    );
+    took
 }
 
 /// The `good` fixture's SPI part with `params` in place of its own, used as `rp` with `args`.
