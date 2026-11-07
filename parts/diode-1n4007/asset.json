@@ -1,0 +1,55 @@
+{
+  "part": "diode-1n4007",
+  "source": {
+    "repo": "https://github.com/orbefab/models",
+    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
+    "inputs": {
+      "glb": {
+        "path": "GLB/parts/diode-1n4007.glb",
+        "sha256": "c5e97dcf149eb638fc3a011e182b6f8e28c2d1470aae3c29f8e1a0c90fc1c580",
+        "bytes": 47096
+      },
+      "anchors": {
+        "path": "GLB/parts/diode-1n4007.anchors.json",
+        "sha256": "54612b37eebf050ecbd071429d47b8827504198b296d9937c851a5fb3ad1f623",
+        "bytes": 292
+      }
+    }
+  },
+  "files": {
+    "diode-1n4007.glb": {
+      "sha256": "40dcb151e16140fb61e8021bc9b40665b498814b1d80059d4579242e1dacef04",
+      "bytes": 40304
+    },
+    "diode-1n4007.anchors.json": {
+      "sha256": "54612b37eebf050ecbd071429d47b8827504198b296d9937c851a5fb3ad1f623",
+      "bytes": 292
+    }
+  },
+  "box": {
+    "min": [-5.48, -1.346225, -8],
+    "max": [5.48, 1.346225, 2.7]
+  },
+  "kept_nodes": ["lead-1", "lead-2"],
+  "draw_calls": 4,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 2,
+      "largest_miss_mm": 0.004706
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 19,
+      "primitives_out": 4
+    }
+  }
+}
