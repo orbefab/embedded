@@ -309,7 +309,7 @@ fn a_lock_version_outside_the_catalog_is_an_error() {
     assert_eq!(found.len(), 1, "{found:#?}");
     assert_eq!(found[0].code, orbe_scene::Code::PartModified);
     assert_eq!(found[0].file, "parts.lock");
-    assert_eq!((found[0].line, found[0].column), (9, 1));
+    assert_eq!((found[0].line, found[0].column), (13, 1));
     assert!(found[0].message.contains("9.9.9"), "{}", found[0].message);
     assert!(
         found[0].message.contains("led-5mm@0.1.0"),
@@ -332,7 +332,7 @@ fn a_lock_registry_outside_the_catalog_is_an_error() {
     assert_eq!(found.len(), 1, "{found:#?}");
     assert_eq!(found[0].code, orbe_scene::Code::PartModified);
     assert_eq!(found[0].file, "parts.lock");
-    assert_eq!((found[0].line, found[0].column), (9, 1));
+    assert_eq!((found[0].line, found[0].column), (13, 1));
     assert!(
         found[0].message.contains("https://example.com/parts"),
         "{}",
@@ -1035,10 +1035,13 @@ fn every_catalog_part_file_reads_without_a_finding() {
         "the fixture locks every catalog part"
     );
     let required = |id: &str| match id {
-        "capacitor-0603" | "capacitor-tantalum-3216" => ", \"capacitance\": \"100n\"",
-        "resistor-axial" | "resistor-0603" => ", \"resistance\": \"1k\"",
+        "capacitor-0603"
+        | "capacitor-tantalum-3216"
+        | "capacitor-ceramic-disc"
+        | "capacitor-electrolytic-radial" => ", \"capacitance\": \"100n\"",
+        "resistor-axial" | "resistor-0603" | "potentiometer-wh148" => ", \"resistance\": \"1k\"",
         "atmega328p-tqfp32" | "nano-board" => ", \"firmware\": \"build/button.ino.hex\"",
-        "led-5mm" | "led-0603" => ", \"color\": \"red\"",
+        "led-5mm" | "led-0603" | "led-3mm" => ", \"color\": \"red\"",
         _ => "",
     };
     let parts: String = ids
