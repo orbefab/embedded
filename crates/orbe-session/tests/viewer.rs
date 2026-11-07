@@ -162,6 +162,46 @@ fn a_refused_step_leaves_play_running() {
 }
 
 #[test]
+fn the_next_step_lists_what_play_ran() {
+    let mut live = opened();
+    assert!(live.run(&Command::Play).ok());
+    assert!(live.run(&command("press @btn1")).ok());
+    for _ in 0..4 {
+        assert!(live.tick(16_000_000_000));
+    }
+    let paused = live.run(&Command::Pause);
+    assert_eq!(paused.text(), "paused at t=64ms");
+    let stepped = live.run(&command("step 1ms"));
+    assert!(stepped.ok(), "{}", stepped.text());
+    let text = stepped.text();
+    assert!(text.starts_with("t=65ms (from 0s)\n"), "{text}");
+    assert!(text.contains(" nano.D13 high"), "{text}");
+    assert!(text.contains(" led1 on"), "{text}");
+    let again = live.run(&command("step 1ms"));
+    assert_eq!(again.text(), "t=66ms (from 65ms)", "each change is listed once");
+}
+
+#[test]
+fn a_step_refused_at_the_stop_lists_what_play_ran() {
+    let mut live = Live::new("t");
+    live.stop_at(Some((Duration::from_ms(40), "ORBE_TEST_STOP".into())));
+    assert!(live.run(&command("open")).ok());
+    assert!(live.run(&Command::Play).ok());
+    assert!(live.run(&command("press @btn1")).ok());
+    while live.tick(16_000_000_000) {}
+    let ended = live.run(&command("step 1ms"));
+    assert_eq!(ended.error.as_ref().unwrap().code, Code::Ended);
+    let text = ended.text();
+    assert!(text.starts_with("t=40ms (from 0s)\n"), "{text}");
+    assert!(text.contains(" led1 on"), "{text}");
+    let again = live.run(&command("step 1ms"));
+    assert_eq!(
+        again.text(),
+        "error[ended]: the session reached its 40ms stop\n  hint: run `open` to start again"
+    );
+}
+
+#[test]
 fn play_ends_at_the_stop() {
     let mut live = Live::new("t");
     live.stop_at(Some((Duration::from_ms(40), "ORBE_TEST_STOP".into())));

@@ -23,6 +23,7 @@ use crate::condition::Unit;
 use crate::duration::Duration;
 use crate::reply::{
     Code, Data, Diagnostic, Error, Finding, Got, Level, PartState, Reading, Reply, Snapshot, State,
+    Stepped,
 };
 use crate::target::{QUANTITIES, Ref, Target, names, one_engine, reports_hint, resolve};
 
@@ -56,6 +57,9 @@ struct Open {
     contacts: BTreeMap<String, (bool, Vec<(u64, bool)>)>,
     /// Time runs at real speed between commands, since a `play`.
     playing: bool,
+    /// What `play`'s ticks ran since a `step` last listed changes, from where that step
+    /// ended. The next `step` lists these first.
+    unlisted: Option<Stepped>,
     scene: String,
     stop_ps: u64,
     max_step_ps: u64,
@@ -162,7 +166,8 @@ impl Live {
     }
 
     /// Advances a playing session by `ps`, or to its stop when that is nearer, as a `step`
-    /// would. Play ends at the stop or a fault. Returns whether it still plays.
+    /// would, and keeps its changes for the next `step` to list. Play ends at the stop or a
+    /// fault. Returns whether it still plays.
     pub fn tick(&mut self, ps: u64) -> bool {
         let Some(open) = self.open.as_mut().filter(|open| open.playing) else {
             return false;
@@ -171,6 +176,10 @@ impl Live {
         let step = Step::For(Duration::from_ps(length));
         let ran = open.step(&step, &mut |_| ControlFlow::Continue(()));
         open.playing = ran.is_ok() && open.engine.status() == Status::Running;
+        open.unlisted = match ran.map_err(|failed| failed.data) {
+            Ok(Data::Stepped(stepped)) | Err(Data::Stepped(stepped)) => Some(stepped),
+            _ => None,
+        };
         open.playing
     }
 
@@ -424,6 +433,7 @@ impl Open {
             channels: frame::Bound::default(),
             contacts,
             playing: false,
+            unlisted: None,
             scene,
             stop_ps: transient.stop.as_ps(),
             max_step_ps: transient.max_step,
