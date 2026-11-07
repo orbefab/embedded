@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 models=${1:?usage: scripts/check-assets.sh <path to an orbefab/models checkout>}
-npm ci --prefix tools/asset-step --no-audit --no-fund --silent
+pnpm install --frozen-lockfile
 node --test tools/asset-step/asset-step.test.mjs
 node tools/asset-step/asset-step.mjs --models "$models"
 changed=$(git status --porcelain -- parts)

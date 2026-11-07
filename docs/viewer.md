@@ -5,13 +5,13 @@ The viewer draws a scene in 3D from the messages a session sends, and turns a pe
 - `packages/viewer` is the viewer: React Three Fiber, three.js, drei and postprocessing, in TypeScript. Its bench pieces come from maker-sandbox, MIT, Copyright 2026 Alwurts, and each file adapted from it says so in its first line.
 - `apps/viewer` is the page. On a live session it runs the viewer on the session's WebSocket, and on its own it runs the viewer on a fixture of the first target. Vite builds it to static files in `apps/viewer/dist`.
 
-The two are npm workspaces of the repo's root `package.json`, pinned by `package-lock.json`.
+The two are packages in the repo's pnpm workspace, pinned by `pnpm-lock.yaml`.
 
 ## Run it
 
 ```bash
-npm ci
-npm run dev --workspace apps/viewer
+pnpm install --frozen-lockfile
+pnpm --filter @orbe/viewer-page dev
 ```
 
 The page replays the fixture's frames: idle, then `btn1` pressed with D13 high and `led1` lit, then released, one every 2 s. Add `?frame=idle`, `?frame=pressed` or `?frame=released` to the URL to hold one frame. Press `T` to switch between the 3D view and the top view. The browser console shows each command the viewer sends, such as `press @btn1`.
@@ -29,8 +29,8 @@ The dev server and `vite preview` serve each part's GLB from `parts/` at `/parts
 `orbe show` opens the page on a session that runs, and `orbe open --headed` is `orbe open` and then `orbe show`. When that `show` fails, the command fails with `show`'s error and exit code, the session stays open, and the hint says to run `orbe show` again or `orbe close`. The page is built into `orbe`, so build it before `orbe`:
 
 ```bash
-npm ci
-npm run build --workspace apps/viewer
+pnpm install --frozen-lockfile
+pnpm --filter @orbe/viewer-page build
 cargo build
 cd examples/first-target
 ../../target/debug/orbe open --headed
