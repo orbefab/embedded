@@ -46,6 +46,6 @@
     "on": { "of": "i", "above": { "value": 0.001, "unit": "A", "source": { "closed_form": { "note": "One tenth of the 10 mA rating current." } } } },
     "brightness": { "of": "i", "full": { "value": 0.01, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A", "at": "Electrical / Optical Characteristics, Iv rated at IF = 10 mA", "basis": "nominal" } } } },
   },
-  "view": { "glow": [{ "node": "body", "by": "brightness" }] },
+  "view": { "glow": [{ "node": "body", "by": "brightness" }], "tint": [{ "node": "body", "by": "color" }] },
   "not_simulated": [{ "what": "yellow and green", "why": "They use the red WP7113ID fit until a fit of their own exists." }],
 }
