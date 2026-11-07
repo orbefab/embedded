@@ -5,7 +5,7 @@ The asset step brings each part's 3D model from `orbefab/models` into the part's
 ## Run it
 
 ```bash
-npm ci --prefix tools/asset-step
+pnpm install --frozen-lockfile
 node tools/asset-step/asset-step.mjs --models ../models --commit <models commit> [<id> ...]
 ```
 

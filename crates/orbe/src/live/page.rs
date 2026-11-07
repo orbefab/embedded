@@ -36,7 +36,7 @@ impl Page {
             None if built.is_empty() => Err(Error::new(
                 Code::IoError,
                 "this orbe was built without the viewer page",
-                "in the orbe repo, run `npm ci` and `npm run build --workspace apps/viewer`, then build orbe again with `cargo build`",
+                "in the orbe repo, run `pnpm install --frozen-lockfile` and `pnpm --filter @orbe/viewer-page build`, then build orbe again with `cargo build`",
             )),
             None => Ok(Page::Built(built)),
         }
@@ -79,7 +79,7 @@ mod tests {
         assert_eq!(error.message, "this orbe was built without the viewer page");
         assert_eq!(
             error.hint,
-            "in the orbe repo, run `npm ci` and `npm run build --workspace apps/viewer`, then build orbe again with `cargo build`"
+            "in the orbe repo, run `pnpm install --frozen-lockfile` and `pnpm --filter @orbe/viewer-page build`, then build orbe again with `cargo build`"
         );
     }
 

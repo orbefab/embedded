@@ -21,7 +21,7 @@ const executable = process.env.ORBE_CHROMIUM ?? chromium.executablePath();
 if (!existsSync(executable)) {
   console.error(`No Chromium at ${executable}.`);
   console.error("This script installs no browser. Set ORBE_CHROMIUM to a Chromium or Chrome binary,");
-  console.error("or install the one playwright-core 1.64.1 expects with `npx playwright-core install chromium`.");
+  console.error("or install the one playwright-core 1.64.1 expects with `pnpm --filter @orbe/viewer-page exec playwright-core install chromium`.");
   process.exit(2);
 }
 
