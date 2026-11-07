@@ -108,7 +108,7 @@ pub(crate) fn convert(decl: &ParamDecl, arg: &Arg) -> Converted {
     }
 }
 
-fn number(
+pub(crate) fn number(
     unit: Unit,
     min_exclusive: Option<f64>,
     node: &Node,

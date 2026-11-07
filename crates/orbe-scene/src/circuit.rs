@@ -16,8 +16,10 @@ use crate::units::Unit;
 
 mod engine;
 mod map;
+mod view;
 
 pub use map::{Amount, EnginePart, MapPart, Reading, RefMap};
+pub use view::{Instance, PartData, PinWhy, Placement, View, Wire};
 
 const ROOT: usize = 0;
 const NAME_LIMIT: usize = 64;
@@ -71,6 +73,9 @@ struct Circuit<'p> {
     /// Instances with a finding about their own params or their part file, with its proof.
     /// Their engine findings may only repeat it, so they wait for the next run.
     failed: BTreeMap<usize, Reported>,
+    /// Each pin whose net, before the scene's wires join, reaches no engine pin and has a
+    /// reason, with the reason `orbe check` gives for a wire to it.
+    unsimulated: BTreeMap<usize, String>,
 }
 
 /// The value that set a model field, by the field's JSON pointer.
@@ -137,6 +142,7 @@ pub struct Netlist {
     /// Catalog copies with children and no model that differ from `parts.lock`.
     pub modified: Vec<String>,
     pub refs: RefMap,
+    pub view: View,
 }
 
 pub(crate) fn compile(project: &Project, out: &mut Findings) -> Option<Netlist> {
@@ -160,6 +166,7 @@ pub(crate) fn compile(project: &Project, out: &mut Findings) -> Option<Netlist> 
         long: BTreeMap::new(),
         built: BTreeMap::new(),
         failed: BTreeMap::new(),
+        unsimulated: BTreeMap::new(),
     };
     circuit.instantiate(ROOT, Owner::Scene);
     circuit.make_pins();
@@ -559,6 +566,11 @@ impl<'p> Circuit<'p> {
                 entry.1 = self.pins[key].reason.clone();
             }
         }
+        for key in 0..self.pins.len() {
+            if let Some((false, Some(reason))) = sets.get(&self.find(key)) {
+                self.unsimulated.insert(key, reason.clone());
+            }
+        }
         let mut joins = Vec::new();
         for wire in &scene.comp.wires {
             let ends: Vec<Option<usize>> =
@@ -851,6 +863,7 @@ impl<'p> Circuit<'p> {
         if !self.out.is_empty() || ground.is_none() {
             return None;
         }
+        let view = self.view(&text);
         Some(Netlist {
             json: text,
             parts: parts.len() - left_out.len(),
@@ -858,6 +871,7 @@ impl<'p> Circuit<'p> {
             ground: ground_name,
             modified: self.project.modified.clone(),
             refs: self.map(nets),
+            view,
         })
     }
 

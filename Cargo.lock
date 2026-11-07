@@ -331,6 +331,7 @@ version = "0.1.0"
 dependencies = [
  "jsonc-parser",
  "rustix",
+ "serde",
  "serde_json",
  "sha2",
  "sim-circuit",
