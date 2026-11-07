@@ -1,0 +1,52 @@
+{
+  "part": "uno-board",
+  "source": {
+    "repo": "https://github.com/orbefab/models",
+    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
+    "inputs": {
+      "glb": {
+        "path": "GLB/parts/uno-board.glb",
+        "sha256": "3d1288472df9252bbceb307631a3d4f039d4ab35c37245f30e0947bf658348d2",
+        "bytes": 521744
+      }
+    }
+  },
+  "files": {
+    "uno-board.glb": {
+      "sha256": "8e4360b54ab8b1deee55c1e5df245e6f1a5574f8e6dcb86300617486b0c04bc9",
+      "bytes": 470768
+    }
+  },
+  "box": {
+    "min": [-34.290001, -26.67, 0],
+    "max": [34.290001, 26.67, 1.6]
+  },
+  "kept_nodes": [],
+  "draw_calls": 1,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 0,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "pcb",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 120,
+      "primitives_out": 1
+    },
+    "composition": {
+      "children": 49,
+      "lowest_node": "pcb",
+      "z_mm": 0,
+      "draw_calls": 276
+    }
+  }
+}

@@ -18,6 +18,70 @@ fn the_first_target_example_passes() {
 }
 
 #[test]
+fn the_uno_example_passes() {
+    let run = orbe(&common::repo(), &["test", "examples/uno-button"]);
+    assert_eq!(
+        run.stdout,
+        "PASS examples/uno-button/tests/button.test\n1 passed, 0 failed\n"
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+}
+
+fn board_alone(board: &str, wires: &str, test: &str) -> tempfile::TempDir {
+    let dir = project(test);
+    fs::write(
+        dir.path().join("scene.jsonc"),
+        format!(
+            r#"{{ "format": 1, "parts": {{ "b": {{ "type": "{board}", "firmware": "build/button.ino.hex" }} }}, "wires": [{wires}] }}"#
+        ),
+    )
+    .unwrap();
+    dir
+}
+
+/// Each board's fastest of three runs is compared, so a burst of load on the machine does not
+/// decide it.
+#[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the clock compares the Uno's speed with the Nano's"
+)]
+fn an_uno_simulates_about_as_fast_as_a_nano() {
+    let fastest = |board: &str| {
+        let dir = board_alone(board, "", "open\nstep 50ms\n");
+        (0..3)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                let run = orbe(dir.path(), &["test"]);
+                assert_eq!(run.code, 0, "{board}: {}", run.stdout);
+                started.elapsed()
+            })
+            .min()
+            .unwrap()
+    };
+    let nano = fastest("nano-board");
+    let uno = fastest("uno-board");
+    assert!(
+        uno < nano * 5,
+        "the Uno took {uno:?} where the Nano took {nano:?}"
+    );
+}
+
+/// AREF tied to a rail is a common external reference.
+#[test]
+fn an_uno_with_aref_on_either_rail_raises_no_diagnostic() {
+    for rail in ["5V", "3V3"] {
+        let dir = board_alone(
+            "uno-board",
+            &format!(r#"["b.{rail}", "b.AREF"]"#),
+            "open\nexpect @b.5V high\nstep 10ms\nexpect no diagnostics\n",
+        );
+        let run = orbe(dir.path(), &["test"]);
+        assert_eq!(run.code, 0, "{rail}: {}", run.stdout);
+    }
+}
+
+#[test]
 fn the_first_target_reads_the_engine_values_while_pressed() {
     let dir =
         project("open\nstep 50ms\npress @btn1\nstep 50ms\nget @nano.D13\nget @led1\nget @led1.i\n");

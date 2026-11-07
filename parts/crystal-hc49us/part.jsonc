@@ -1,0 +1,6 @@
+{
+  "format": 1, "part": "crystal-hc49us", "version": "0.1.0", "title": "Crystal, 16 MHz, HC-49/US", "license": "MIT OR Apache-2.0",
+  "real": { "maker": "ECS", "number": "ECS-160-20-4X", "datasheet": null },
+  "pins": { "1": [1], "2": [2] },
+  "not_simulated": [{ "what": "crystal", "pins": ["1", "2"], "why": "The engine's chips take their clock as a value." }],
+}

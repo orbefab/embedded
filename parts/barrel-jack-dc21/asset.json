@@ -1,0 +1,55 @@
+{
+  "part": "barrel-jack-dc21",
+  "source": {
+    "repo": "https://github.com/orbefab/models",
+    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
+    "inputs": {
+      "glb": {
+        "path": "GLB/parts/barrel-jack-dc21.glb",
+        "sha256": "ed0bfb50398be4c11513c2fb389b8bfa88b8551adc082685ec160e7fde26130b",
+        "bytes": 26340
+      },
+      "anchors": {
+        "path": "GLB/parts/barrel-jack-dc21.anchors.json",
+        "sha256": "a79391aed0518271718c9c5660155af67643806ad45c62483940d239254c46f5",
+        "bytes": 418
+      }
+    }
+  },
+  "files": {
+    "barrel-jack-dc21.glb": {
+      "sha256": "eeb9eff931482788dc5fdf8ac530798163ae9acec928a85f76b626b22d8744a2",
+      "bytes": 14132
+    },
+    "barrel-jack-dc21.anchors.json": {
+      "sha256": "a79391aed0518271718c9c5660155af67643806ad45c62483940d239254c46f5",
+      "bytes": 418
+    }
+  },
+  "box": {
+    "min": [-6.75, -5.695, -3],
+    "max": [7.045, 4.5, 11]
+  },
+  "kept_nodes": ["lead-1", "lead-2", "lead-3"],
+  "draw_calls": 5,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 3,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 29,
+      "primitives_out": 5
+    }
+  }
+}

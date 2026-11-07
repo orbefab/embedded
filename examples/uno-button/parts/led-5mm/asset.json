@@ -1,0 +1,55 @@
+{
+  "part": "led-5mm",
+  "source": {
+    "repo": "https://github.com/orbefab/models",
+    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
+    "inputs": {
+      "glb": {
+        "path": "GLB/parts/led-5mm.glb",
+        "sha256": "b9b07676fb96739b311a10a335627de3bee7f9339f5e7134bf11440b64e866f7",
+        "bytes": 27220
+      },
+      "anchors": {
+        "path": "GLB/parts/led-5mm.anchors.json",
+        "sha256": "4d9811e9a7fef4fcbde89a272aafc61179b6514c6c11612cfe33fee70e74cd48",
+        "bytes": 289
+      }
+    }
+  },
+  "files": {
+    "led-5mm.glb": {
+      "sha256": "c3b9a466144f8eea93b57bd782b70085a4d293014b0272bbef3d1f8ff6bd778f",
+      "bytes": 20876
+    },
+    "led-5mm.anchors.json": {
+      "sha256": "4d9811e9a7fef4fcbde89a272aafc61179b6514c6c11612cfe33fee70e74cd48",
+      "bytes": 289
+    }
+  },
+  "box": {
+    "min": [-2.89194, -2.899968, -27.4],
+    "max": [2.5, 2.899968, 8.6]
+  },
+  "kept_nodes": ["body", "lead-1", "lead-2"],
+  "draw_calls": 3,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 2,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": ["body"]
+    },
+    "merge": {
+      "primitives_in": 18,
+      "primitives_out": 3
+    }
+  }
+}

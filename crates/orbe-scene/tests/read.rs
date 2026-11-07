@@ -249,6 +249,16 @@ fn scene_errors(root: &std::path::Path) -> Vec<orbe_scene::Diagnostic> {
         .unwrap_or_else(|| panic!("scene read with no findings"))
 }
 
+/// The 1-based line of `id` in the project's `parts.lock`.
+fn lock_row(root: &std::path::Path, id: &str) -> usize {
+    fs::read_to_string(root.join("parts.lock"))
+        .unwrap()
+        .lines()
+        .position(|l| l.starts_with(&format!("{id} ")))
+        .unwrap()
+        + 1
+}
+
 fn rewrite_lock(root: &std::path::Path, id: &str, version: &str, registry: &str) {
     let hash = orbe_scene::folder_hash(&root.join("parts").join(id)).unwrap();
     let new_line = format!("{id} {version} {registry} {hash}");
@@ -309,7 +319,10 @@ fn a_lock_version_outside_the_catalog_is_an_error() {
     assert_eq!(found.len(), 1, "{found:#?}");
     assert_eq!(found[0].code, orbe_scene::Code::PartModified);
     assert_eq!(found[0].file, "parts.lock");
-    assert_eq!((found[0].line, found[0].column), (13, 1));
+    assert_eq!(
+        (found[0].line, found[0].column),
+        (lock_row(project.path(), "led-5mm"), 1)
+    );
     assert!(found[0].message.contains("9.9.9"), "{}", found[0].message);
     assert!(
         found[0].message.contains("led-5mm@0.1.0"),
@@ -332,7 +345,10 @@ fn a_lock_registry_outside_the_catalog_is_an_error() {
     assert_eq!(found.len(), 1, "{found:#?}");
     assert_eq!(found[0].code, orbe_scene::Code::PartModified);
     assert_eq!(found[0].file, "parts.lock");
-    assert_eq!((found[0].line, found[0].column), (13, 1));
+    assert_eq!(
+        (found[0].line, found[0].column),
+        (lock_row(project.path(), "led-5mm"), 1)
+    );
     assert!(
         found[0].message.contains("https://example.com/parts"),
         "{}",
@@ -1038,10 +1054,17 @@ fn every_catalog_part_file_reads_without_a_finding() {
         "capacitor-0603"
         | "capacitor-tantalum-3216"
         | "capacitor-ceramic-disc"
-        | "capacitor-electrolytic-radial" => ", \"capacitance\": \"100n\"",
+        | "capacitor-electrolytic-radial"
+        | "capacitor-electrolytic-smd" => ", \"capacitance\": \"100n\"",
         "resistor-axial" | "resistor-0603" | "potentiometer-wh148" => ", \"resistance\": \"1k\"",
-        "atmega328p-tqfp32" | "nano-board" => ", \"firmware\": \"build/button.ino.hex\"",
-        "led-5mm" | "led-0603" | "led-3mm" => ", \"color\": \"red\"",
+        "resistor-array-4x0603" => {
+            ", \"resistance_a\": \"1k\", \"resistance_b\": \"1k\", \"resistance_c\": \"1k\", \"resistance_d\": \"1k\""
+        }
+        "inductor-0805" => ", \"inductance\": \"10u\", \"series_resistance\": \"0.5\"",
+        "atmega328p-tqfp32" | "atmega328p-dip28" | "nano-board" | "uno-board" => {
+            ", \"firmware\": \"build/button.ino.hex\""
+        }
+        "led-5mm" | "led-0603" | "led-0805" | "led-3mm" => ", \"color\": \"red\"",
         _ => "",
     };
     let parts: String = ids
@@ -1065,6 +1088,29 @@ fn every_catalog_part_file_reads_without_a_finding() {
             "{id} is in the fixture's parts.lock but not in parts/"
         );
     }
+}
+
+/// The two packages of the ATmega328P each hold a copy of the engine's values, and run the same.
+#[test]
+fn both_atmega328p_packages_give_the_engine_the_same_chip() {
+    let project = project("nano-button");
+    fs::write(
+        project.path().join("scene.jsonc"),
+        r#"{ "format": 1, "parts": {
+            "tqfp": { "type": "atmega328p-tqfp32", "firmware": "build/button.ino.hex" },
+            "dip": { "type": "atmega328p-dip28", "firmware": "build/button.ino.hex" },
+        }, "wires": [["tqfp.GND", "dip.GND"]], "ground": "tqfp.GND" }"#,
+    )
+    .unwrap();
+    let netlist = orbe_scene::read(&project.path().join("scene.jsonc")).unwrap();
+    let chip = |name: &str| {
+        let mut part = engine_part(&netlist, name);
+        let fields = part.as_object_mut().unwrap();
+        fields.remove("name");
+        fields.remove("pins");
+        part
+    };
+    assert_eq!(chip("tqfp"), chip("dip"));
 }
 
 #[test]

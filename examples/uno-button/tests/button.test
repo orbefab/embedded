@@ -1,0 +1,14 @@
+# Pressing the button lights the LED and the Uno's L LED, and releasing it turns both off.
+open
+step 100ms
+expect @led1 off
+expect @uno.led_l off
+press @btn1
+step --until @led1 on --timeout 50ms
+expect @uno.D13 high
+expect @uno.led_l on
+release @btn1
+step 50ms
+expect @led1 off
+expect @uno.led_l off
+expect no diagnostics

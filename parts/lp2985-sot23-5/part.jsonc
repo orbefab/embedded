@@ -1,0 +1,25 @@
+// The model's values and sources are the engine's LP2985-33, the legacy standard grade of
+// TI SLVS522S, from engine/examples/atmega-board-button/netlist.json, part `reg_3v3`.
+{
+  "format": 1, "part": "lp2985-sot23-5", "version": "0.1.0", "title": "LP2985 3.3 V regulator, SOT-23-5", "license": "MIT OR Apache-2.0",
+  "docs": { "TI SLVS522S": null },
+  "real": { "maker": "Texas Instruments", "number": "LP2985-33DBVR", "datasheet": "TI SLVS522S" },
+  "pins": { "IN": [1], "GND": [2], "ON_OFF": [3], "BYPASS": [4], "OUT": [5] },
+  "model": {
+    "kind": "linear_regulator",
+    "output_voltage": { "value": 3.3, "unit": "V", "source": { "datasheet": { "doc": "TI SLVS522S", "at": "p30 Table 8-1, 33 = 3.3 V. The p5 tolerance is around that nominal.", "basis": "nominal" } } },
+    "line_regulation": { "value": 0.000231, "unit": "1", "source": { "closed_form": { "note": "p5 legacy line regulation 0.007 %/V typical from VO(NOM)+1 V to 16 V, times 3.3 V" } } },
+    "output_resistance": { "value": 0.3322147651006711, "unit": "ohm", "source": { "closed_form": { "note": "p5 standard grade widens from ±1.5% at 1 mA to ±3.0% over 1 mA to 150 mA, the rated current. (0.030 - 0.015) * 3.3 V / 0.149 A. The 1 mA to 50 mA window is 0.673469387755102 ohm and is not this field. Page 25 figures 7-3 and 7-5 read about 0.26 ohm and 0.29 ohm." } } },
+    "dropout_voltage": { "value": 0.0051677852348993285, "unit": "V", "source": { "closed_form": { "note": "the line through p6 legacy typical dropout, 7 mV at 1 mA and 280 mV at 150 mA" } } },
+    "dropout_resistance": { "value": 1.8322147651006713, "unit": "ohm", "source": { "closed_form": { "note": "the line through p6 legacy typical dropout, 7 mV at 1 mA and 280 mV at 150 mA" } } },
+    "current_limit": { "value": 0.35, "unit": "A", "source": { "datasheet": { "doc": "TI SLVS522S", "at": "p7, legacy peak output current typical, VOUT at least VO(NOM) - 5%", "basis": "typical" } } },
+    "quiescent_current": { "value": 6.5e-05, "unit": "A", "source": { "datasheet": { "doc": "TI SLVS522S", "at": "p6, legacy GND pin current typical at IOUT = 0", "basis": "typical" } } },
+    "ground_current_ratio": { "value": 0.005233333333333334, "unit": "1", "source": { "closed_form": { "note": "p6 legacy GND pin current, 65 uA at 0 mA and 850 uA at 150 mA" } } },
+    "ratings": {
+      "current": { "value": 0.15, "unit": "A", "source": { "datasheet": { "doc": "TI SLVS522S", "at": "p4 section 5.3, output current maximum 150 mA", "basis": "max" } } },
+      "power": { "value": 0.48685491723466406, "unit": "W", "source": { "closed_form": { "note": "(125 C - 25 C) / 205.4 C/W, p4 section 5.3 recommended junction and p5 section 5.4 legacy DBV RθJA, ambient 25 C" } } },
+    },
+    "pins": { "in": "IN", "out": "OUT", "gnd": "GND" },
+  },
+  "not_simulated": [{ "what": "enable and noise bypass", "pins": ["ON_OFF", "BYPASS"], "why": "The engine's linear regulator has no enable or bypass pin, so it is always on." }],
+}

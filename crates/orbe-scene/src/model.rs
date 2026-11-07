@@ -922,8 +922,8 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
                     out.push(
                         Code::Param,
                         unit.span,
-                        "a param's unit is one of ohm, F, V, A, s, Hz, W and 1",
-                        "use one of ohm, F, V, A, s, Hz, W or 1".into(),
+                        "a param's unit is one of ohm, F, H, V, A, s, Hz, W and 1",
+                        "use one of ohm, F, H, V, A, s, Hz, W or 1".into(),
                     );
                     continue;
                 };

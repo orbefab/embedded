@@ -58,6 +58,16 @@ impl Scope<'_, '_> {
                 || at.children.values().any(|&child| self.simulates(child)))
     }
 
+    /// A board holds its own supply and a chip, so it runs with nothing wired to it.
+    fn runs_alone(&self, instance: &Instance) -> bool {
+        let holds = |kind: fn(&Model) -> bool| {
+            self.engine.parts().any(|(_, p)| {
+                kind(&p.model) && self.top_named(p.name.as_str()).name == instance.name
+            })
+        };
+        holds(|m| matches!(m, Model::VoltageSource(_))) && holds(|m| matches!(m, Model::Chip(_)))
+    }
+
     /// The scene instance an engine part sits in, by the first segment of its flat name.
     fn top_named(&self, flat: &str) -> &Instance {
         let top = flat.split("__").next().unwrap_or(flat);
@@ -174,6 +184,9 @@ fn unconnected(s: &Scope, out: &mut Findings) {
         };
         let name = &instance.name;
         let (message, hint) = if open.len() == nets.len() {
+            if s.runs_alone(instance) {
+                continue;
+            }
             (
                 format!("nothing is wired to `{name}`"),
                 format!(
