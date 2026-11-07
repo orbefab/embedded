@@ -474,7 +474,6 @@ mod tests {
             | Lint::Unconnected
             | Lint::GroundUnnamed
             | Lint::Rotation
-            | Lint::UnsimulatedPins
             | Lint::NoModel
             | Lint::Floating
             | Lint::LedNoResistor => Code::Lint(lint).as_str(),
@@ -484,7 +483,6 @@ mod tests {
             Lint::Unconnected,
             Lint::GroundUnnamed,
             Lint::Rotation,
-            Lint::UnsimulatedPins,
             Lint::NoModel,
             Lint::Floating,
             Lint::LedNoResistor,

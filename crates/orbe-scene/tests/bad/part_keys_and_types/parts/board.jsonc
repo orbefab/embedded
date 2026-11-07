@@ -12,4 +12,5 @@
   "layout": { "r": { "at": [0, -6.35, 0], "rotat": [0, 0, 90] } },
   "pins": { "a": "sw.a", "b": "sw.b", "gnd": "r.b" },
   "not_simulated": [{ "what": "force", "why": "A press is a contact change.", "pin": ["a"] }],
+  "joins_only": "yes",
 }

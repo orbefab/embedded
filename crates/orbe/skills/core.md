@@ -81,10 +81,11 @@ scene.jsonc: ok, 18 engine parts, 31 nets, ground nano__GND
 $ orbe lint scene.jsonc
 scene.jsonc:1:1: warning[scene.ground_unnamed]: the ground net is `nano__GND`, a name taken from a pin, because "nets" does not name it
   hint: add "GND": "nano.GND" to the scene's "nets", so refs and messages say GND
-scene.jsonc:4:5: warning[scene.unplaced]: `nano` has no position, so the viewer places it for drawing only and writes nothing
-  hint: place it in the scene's "layout", as "nano": { "at": [x, y, z] } in mm
-...
-9 warnings in scene.jsonc
+scene.jsonc:4:5: warning[scene.unplaced]: `nano`, `btn1`, `r2`, `r1` and `led1` have no position, so the 3D page places them in a row for drawing only
+  hint: place a part whose place matters in the scene's "layout", as "nano": { "at": [x, y, z] } in mm
+scene.jsonc:4:5: warning[net.floating]: #net.nano__AREF has no DC path to ground
+  hint: if a part reads `nano.AREF`, wire it to a source, or through a resistor to ground; a net nothing reads can stay as it is
+3 warnings in scene.jsonc
 $ orbe open
 opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (18 engine parts, 31 nets)
   warning[net.floating] #net.nano__AREF has no DC path to ground
@@ -120,7 +121,7 @@ PASS tests/button.test
 1 passed, 0 failed
 ```
 
-The example keeps its 9 warnings, since each is what it means: no `layout`, most Nano pins unused, and the ground named after `nano.GND`. The `net.floating` warning on `nano__AREF` is normal for the Nano. Nothing drives AREF.
+The example keeps its 3 warnings, since each is what it means: no `layout`, and the ground named after `nano.GND`. The `net.floating` warning on `nano__AREF` is normal for the Nano. Nothing drives AREF.
 
 With D13 wired straight to `led1.anode` and no `r1`, the LED draws 105 mA. `step` lists `warning[rating.current]` and `warning[rating.power]` for `led1`, and `expect no diagnostics` fails. The LED holds D13 at 2.4 V, so D13 reads `low` while the LED is on. `orbe lint` warns of it before any run, with `warning[scene.led_no_resistor]` on `led1`. Give each LED a series resistor, such as 220 ohm from a 5 V pin.
 
@@ -239,13 +240,12 @@ A test needs no background process, so it runs the same in CI. Each file's sessi
 
 | Code | What it means, and what to do |
 | --- | --- |
-| `scene.led_no_resistor` | An LED joins two driven nets, such as a pin and GND, with no resistor in series, so it can draw far over its rating. Put a resistor in series, such as 220 ohm from a 5 V pin. |
-| `scene.no_model` | A part has no engine model and no `not_simulated` reason, so the simulation runs nothing for it. Use a part with a model, or mark it `not_simulated`. A header that only joins wires can stay. |
-| `scene.unconnected` | Pins of a part in `parts` have no wire. Wire the ones the circuit uses. |
-| `scene.unsimulated_pins` | The pins of a part the engine does not simulate, once per part, with why. Leave them unwired. |
+| `scene.led_no_resistor` | An LED joins two driven nets, such as a pin and GND, with no resistor in series, so it can draw far over its rating. The path runs through diodes, switches, and a transistor whose emitter is on a driven net, as in a low-side NPN switch. A chip pin on a net that a resistor also feeds from a driven net counts as reading that net, not driving it. So A0 wired to read an LED's node does not hide its series resistor, and lint misses an LED wired straight to an output pin that also has a pull-up. Put a resistor in series, such as 220 ohm from a 5 V pin. |
+| `scene.no_model` | A part has no engine model, no `not_simulated` reason and no `"joins_only": true`, so the simulation runs nothing for it. Use a part with a model. A part of your own that only joins the wires that reach it, such as a jumper, takes `"joins_only": true` in its part file. A part nothing is wired to can take `"not_simulated": "<why>"` in the scene instead. |
+| `scene.unconnected` | Nothing is wired to a part, or a part with at most 3 nets, such as a resistor, LED, transistor or pot, has a net with no wire. Wire it, or leave it open when the circuit means it, as a pot used as a variable resistor. |
 | `net.floating` | A net has no DC path to ground. Fix it when a part reads that net. |
 | `scene.ground_unnamed` | The ground net is named after a pin. Name it in `nets`, as `"GND": "nano.GND"`. |
-| `scene.unplaced` | A part has no `layout` position, so the 3D page places it for drawing only. Give it one when its place matters. |
+| `scene.unplaced` | Parts have no `layout` position, so the 3D page places them in a row for drawing only. One warning names them all. Give a part a position when its place matters. |
 | `scene.rotation` | A `rotate` angle is outside -180 to 180 degrees. Write the same turn as the hint shows. |
 
 ## Output and exit codes

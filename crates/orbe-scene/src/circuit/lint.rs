@@ -9,16 +9,15 @@ use sim_core::netlist::{Model, Netlist};
 
 use super::{Circuit, ROOT};
 use crate::diagnostic::{Code, Findings, Lint};
-use crate::model::{Instance, Part};
+use crate::model::{Instance, Part, TypeRef};
 use crate::name::and_list;
 use crate::syntax::{self, Node};
 
-const RULES: [fn(&Scope, &mut Findings); 8] = [
+const RULES: [fn(&Scope, &mut Findings); 7] = [
     unplaced,
     unconnected,
     ground_unnamed,
     rotation,
-    unsimulated_pins,
     no_model,
     floating,
     led_no_resistor,
@@ -121,58 +120,75 @@ impl Circuit<'_> {
 
 fn unplaced(s: &Scope, out: &mut Findings) {
     let layout = s.scene.get("layout");
-    for (instance, _, _) in &s.tops {
-        let name = &instance.name;
-        if layout.and_then(|l| l.get(name)?.get("at")).is_none() {
-            out.push(
-                Code::Lint(Lint::Unplaced),
-                instance.name_span,
-                format!(
-                    "`{name}` has no position, so the viewer places it for drawing only and writes nothing"
-                ),
-                format!("place it in the scene's \"layout\", as \"{name}\": {{ \"at\": [x, y, z] }} in mm"),
-            );
-        }
-    }
+    let unplaced: Vec<&Instance> = s
+        .tops
+        .iter()
+        .map(|(instance, _, _)| *instance)
+        .filter(|i| layout.and_then(|l| l.get(&i.name)?.get("at")).is_none())
+        .collect();
+    let Some(first) = unplaced.first() else {
+        return;
+    };
+    let names: Vec<String> = unplaced.iter().map(|i| format!("`{}`", i.name)).collect();
+    let names = and_list(&names.iter().map(String::as_str).collect::<Vec<_>>());
+    let message = if unplaced.len() == 1 {
+        format!("{names} has no position, so the 3D page places it in a row for drawing only")
+    } else {
+        format!("{names} have no position, so the 3D page places them in a row for drawing only")
+    };
+    out.push(
+        Code::Lint(Lint::Unplaced),
+        first.name_span,
+        message,
+        format!(
+            "place a part whose place matters in the scene's \"layout\", as \"{}\": {{ \"at\": [x, y, z] }} in mm",
+            first.name
+        ),
+    );
 }
+
+/// A part with at most this many nets, such as a resistor, an LED or a transistor, uses each of
+/// them, so an open one is likely a mistake. A board leaves most of its pins open.
+const FEW_NETS: usize = 3;
 
 fn unconnected(s: &Scope, out: &mut Findings) {
     for &(instance, id, part) in &s.tops {
         if s.circuit.insts[id].dropped.is_some() {
             continue;
         }
-        let pins: Vec<&str> = part
-            .pins
+        let mut nets: Vec<(usize, &str)> = Vec::new();
+        for pin in &part.pins {
+            let key = s.circuit.keys[&(id, pin.name.clone())];
+            let root = s.root[key];
+            if !s.circuit.unsimulated.contains_key(&key) && nets.iter().all(|(r, _)| *r != root) {
+                nets.push((root, &pin.name));
+            }
+        }
+        let open: Vec<&str> = nets
             .iter()
-            .map(|p| p.name.as_str())
-            .filter(|pin| {
-                let key = s.circuit.keys[&(id, pin.to_string())];
-                !s.circuit.unsimulated.contains_key(&key)
-            })
-            .collect();
-        let open: Vec<&str> = pins
-            .iter()
-            .copied()
-            .filter(|pin| !s.wired.contains(&s.pin_root(id, pin)))
+            .filter(|(root, _)| !s.wired.contains(root))
+            .map(|(_, pin)| *pin)
             .collect();
         let Some(first) = open.first() else {
             continue;
         };
         let name = &instance.name;
-        let (message, hint) = if open.len() == pins.len() {
+        let (message, hint) = if open.len() == nets.len() {
             (
                 format!("nothing is wired to `{name}`"),
                 format!(
                     "wire it, as [\"{name}.{first}\", \"<part>.<pin>\"], or remove it from \"parts\""
                 ),
             )
-        } else {
+        } else if nets.len() <= FEW_NETS {
             (
                 format!("`{name}` has no wire on {}", and_list(&open)),
                 format!(
-                    "wire each pin the circuit uses, as [\"{name}.{first}\", \"<part>.<pin>\"]; a pin nothing reads can stay open"
+                    "wire it, as [\"{name}.{first}\", \"<part>.<pin>\"], or leave it open if the circuit means it, as a pot's third pin when the pot is a variable resistor"
                 ),
             )
+        } else {
+            continue;
         };
         out.push(
             Code::Lint(Lint::Unconnected),
@@ -257,60 +273,29 @@ fn rotation(s: &Scope, out: &mut Findings) {
     }
 }
 
-fn unsimulated_pins(s: &Scope, out: &mut Findings) {
-    let mut seen = BTreeSet::new();
-    for &(instance, id, part) in &s.tops {
-        if s.circuit.insts[id].dropped.is_some() || !seen.insert(&part.label) {
-            continue;
-        }
-        let mut reasons: Vec<(&str, Vec<&str>)> = Vec::new();
-        for pin in &part.pins {
-            let key = s.circuit.keys[&(id, pin.name.clone())];
-            let Some(why) = s.circuit.unsimulated.get(&key) else {
-                continue;
-            };
-            match reasons.iter_mut().find(|(w, _)| w == why) {
-                Some((_, pins)) => pins.push(&pin.name),
-                None => reasons.push((why, vec![&pin.name])),
-            }
-        }
-        if reasons.is_empty() {
-            continue;
-        }
-        let all: Vec<&str> = reasons
-            .iter()
-            .flat_map(|(_, p)| p.iter().copied())
-            .collect();
-        let why: Vec<String> = reasons
-            .iter()
-            .map(|(why, pins)| format!("{}: {why}", pins.join(", ")))
-            .collect();
-        out.push(
-            Code::Lint(Lint::UnsimulatedPins),
-            instance.name_span,
-            format!(
-                "{} does not simulate {}. {}",
-                part.label,
-                and_list(&all),
-                why.join(" ")
-            ),
-            format!(
-                "leave these pins of `{}` unwired; a wire to one is a `not_simulated` error",
-                instance.name
-            ),
-        );
-    }
-}
-
 fn no_model(s: &Scope, out: &mut Findings) {
     for &(instance, id, part) in &s.tops {
         if s.circuit.insts[id].dropped.is_some()
+            || part.joins_only
             || !part.not_simulated.is_empty()
             || s.simulates(id)
         {
             continue;
         }
         let name = &instance.name;
+        let wired = part
+            .pins
+            .iter()
+            .any(|pin| s.wired.contains(&s.pin_root(id, &pin.name)));
+        let hint = match (wired, &instance.ty) {
+            (false, _) => format!(
+                "use a part with a model if `{name}` should act in the circuit, or add \"not_simulated\": \"<why>\" to `{name}` to keep it for drawing only"
+            ),
+            (true, Some((TypeRef::Path(path), _))) => format!(
+                "use a part with a model if `{name}` should act in the circuit, or add \"joins_only\": true to its part file, {path}, if it only joins wires"
+            ),
+            (true, _) => format!("use a part with a model if `{name}` should act in the circuit"),
+        };
         out.push(
             Code::Lint(Lint::NoModel),
             instance.name_span,
@@ -318,9 +303,7 @@ fn no_model(s: &Scope, out: &mut Findings) {
                 "`{name}` is a {}, which has no engine model and no `not_simulated` reason, so the simulation runs nothing for it and its pins only join the wires that reach them",
                 part.label
             ),
-            format!(
-                "use a part with a model if `{name}` should act in the circuit, or add \"not_simulated\": \"<why>\" to `{name}` to keep it for drawing only"
-            ),
+            hint,
         );
     }
 }
@@ -346,13 +329,9 @@ fn floating(s: &Scope, out: &mut Findings) {
     }
 }
 
-/// A net an LED's current can come from or go to: ground, or one a source, a regulator or a
-/// chip pin holds.
-fn holds(model: &Model) -> bool {
-    matches!(
-        model,
-        Model::VoltageSource(_) | Model::LinearRegulator(_) | Model::Chip(_)
-    )
+/// A part that fixes the voltage of each net it is on, as ground does.
+fn fixes(model: &Model) -> bool {
+    matches!(model, Model::VoltageSource(_) | Model::LinearRegulator(_))
 }
 
 /// A part that carries an LED's current on without limiting it.
@@ -363,28 +342,45 @@ fn passes(model: &Model) -> bool {
     )
 }
 
+/// A transistor's collector and emitter, or drain and source, which it joins while it is on.
+fn switched(model: &Model) -> Option<(usize, usize)> {
+    match model {
+        Model::Npn(_) | Model::Pnp(_) | Model::Nmos(_) => {
+            let pins = model.pins();
+            Some((pins[0].index(), pins[2].index()))
+        }
+        _ => None,
+    }
+}
+
 fn limits(model: &Model) -> bool {
     matches!(model, Model::Resistor(_) | Model::Potentiometer(_))
 }
 
-/// An LED whose path, through other junctions and switches, joins two held nets with no
-/// resistor in series. A resistor with both ends on that path is in parallel, so it limits
-/// nothing.
+/// An LED whose path, through other junctions, switches and transistors switched to a held
+/// net, joins two driven nets with no resistor in series. A resistor with both ends on that
+/// path is in parallel, so it limits nothing. A chip pin drives its net unless a resistor feeds
+/// that net from a held net off the path, since then the pin more likely reads the net.
 fn led_no_resistor(s: &Scope, out: &mut Findings) {
     let engine = &s.engine;
-    let mut held = vec![false; engine.nets().len()];
+    let mut fixed = vec![false; engine.nets().len()];
+    let mut chip = vec![false; engine.nets().len()];
     let mut names = vec![""; engine.nets().len()];
     for (id, name) in engine.nets() {
-        held[id.index()] = id.is_ground();
+        fixed[id.index()] = id.is_ground();
         names[id.index()] = name.as_str();
     }
     for (_, part) in engine.parts() {
-        if holds(&part.model) {
-            for net in part.model.pins() {
-                held[net.index()] = true;
-            }
+        let marks = match part.model {
+            Model::Chip(_) => &mut chip,
+            ref model if fixes(model) => &mut fixed,
+            _ => continue,
+        };
+        for net in part.model.pins() {
+            marks[net.index()] = true;
         }
     }
+    let held = |net: usize| fixed[net] || chip[net];
     for (_, led) in engine.parts() {
         if !matches!(led.model, Model::Led(_)) {
             continue;
@@ -392,31 +388,50 @@ fn led_no_resistor(s: &Scope, out: &mut Findings) {
         let mut path: BTreeSet<usize> = led.model.pins().iter().map(|n| n.index()).collect();
         let mut next: Vec<usize> = path.iter().copied().collect();
         while let Some(net) = next.pop() {
-            if held[net] {
+            if held(net) {
                 continue;
             }
             for (_, part) in engine.parts() {
                 let pins = part.model.pins();
-                if passes(&part.model) && pins.iter().any(|n| n.index() == net) {
-                    for other in pins {
-                        if path.insert(other.index()) {
-                            next.push(other.index());
+                let reached: Vec<usize> =
+                    if passes(&part.model) && pins.iter().any(|n| n.index() == net) {
+                        pins.iter().map(|n| n.index()).collect()
+                    } else {
+                        match switched(&part.model) {
+                            Some((collector, emitter)) if collector == net && held(emitter) => {
+                                vec![emitter]
+                            }
+                            _ => Vec::new(),
                         }
+                    };
+                for other in reached {
+                    if path.insert(other) {
+                        next.push(other);
                     }
                 }
             }
         }
+        let fed = |net: usize| {
+            engine.parts().any(|(_, part)| {
+                let pins = part.model.pins();
+                limits(&part.model)
+                    && pins.iter().any(|n| n.index() == net)
+                    && pins
+                        .iter()
+                        .any(|n| !path.contains(&n.index()) && held(n.index()))
+            })
+        };
         let limited = engine.parts().any(|(_, part)| {
             let pins = part.model.pins();
             limits(&part.model)
                 && pins
                     .iter()
-                    .any(|n| path.contains(&n.index()) && !held[n.index()])
+                    .any(|n| path.contains(&n.index()) && !held(n.index()))
                 && pins.iter().any(|n| !path.contains(&n.index()))
         });
         let ends: Vec<String> = path
             .iter()
-            .filter(|&&net| held[net])
+            .filter(|&&net| fixed[net] || (chip[net] && !fed(net)))
             .map(|&net| format!("`{}`", names[net]))
             .collect();
         if limited || ends.len() < 2 {

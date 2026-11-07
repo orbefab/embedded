@@ -54,16 +54,19 @@ fn line_of(scene: &str, text: &str) -> usize {
         + 1
 }
 
-/// A project with the first target's parts and firmware, and `scene` as its scene.
+/// A project with every catalog part and the button firmware, and `scene` as its scene.
 fn project(scene: &str) -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    let first = common::repo().join("examples/first-target");
-    common::copy_dir(&first.join("parts"), &dir.path().join("parts"));
-    fs::copy(first.join("parts.lock"), dir.path().join("parts.lock")).unwrap();
-    fs::create_dir(dir.path().join("build")).unwrap();
-    fs::copy(common::firmware(), dir.path().join("build/button.hex")).unwrap();
+    let dir = common::project("nano-button");
     fs::write(dir.path().join("scene.jsonc"), scene).unwrap();
     dir
+}
+
+fn lines_warned(run: &Run, code: &str) -> Vec<usize> {
+    warned(&run.stdout)
+        .into_iter()
+        .filter(|(_, c)| c == code)
+        .map(|(line, _)| line)
+        .collect()
 }
 
 fn files(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
@@ -91,37 +94,21 @@ fn lint_warns_on_the_first_target_exits_zero_and_writes_nothing() {
     let scene = fs::read_to_string(example.join("scene.jsonc")).unwrap();
     let at = |text: &str| line_of(&scene, text);
     let nano = at("\"nano\":");
-    let mut want = vec![
+    let want: Vec<(usize, String)> = [
         (at("{"), "scene.ground_unnamed"),
         (nano, "scene.unplaced"),
-        (nano, "scene.unconnected"),
-        (nano, "scene.unsimulated_pins"),
         (nano, "net.floating"),
-    ];
-    for part in ["btn1", "r2", "r1", "led1"] {
-        want.push((at(&format!("\"{part}\":")), "scene.unplaced"));
-    }
-    let want: Vec<(usize, String)> = want.into_iter().map(|(l, c)| (l, c.into())).collect();
+    ]
+    .into_iter()
+    .map(|(l, c)| (l, c.into()))
+    .collect();
     assert_eq!(warned(&run.stdout), want, "{}", run.stdout);
     assert!(
         run.stdout
-            .ends_with("9 warnings in examples/first-target/scene.jsonc\n")
+            .ends_with("3 warnings in examples/first-target/scene.jsonc\n")
     );
-
-    let unwired = run
-        .stdout
-        .lines()
-        .find(|l| l.contains("warning[scene.unconnected]"))
-        .unwrap();
-    for pin in ["D3", "A0", "AREF", "RESET"] {
-        assert!(unwired.contains(&format!(" {pin},")), "{unwired}");
-    }
-    for pin in ["D2", "D13", "5V", "GND", "3V3", "VIN"] {
-        assert!(!unwired.contains(&format!(" {pin},")), "{unwired}");
-        assert!(!unwired.contains(&format!(" {pin}\n")), "{unwired}");
-    }
     assert!(run.stdout.contains(
-        "warning[scene.unsimulated_pins]: nano-board does not simulate 3V3, A6, A7 and VIN."
+        "warning[scene.unplaced]: `nano`, `btn1`, `r2`, `r1` and `led1` have no position"
     ));
     assert!(
         run.stdout
@@ -134,7 +121,7 @@ fn lint_warns_on_the_first_target_exits_zero_and_writes_nothing() {
     ));
     assert_eq!(envelope["ok"], true);
     let found = envelope["data"]["diagnostics"].as_array().unwrap();
-    assert_eq!(found.len(), 9);
+    assert_eq!(found.len(), 3);
     for d in found {
         let keys: Vec<&str> = d.as_object().unwrap().keys().map(String::as_str).collect();
         assert_eq!(keys, ["code", "column", "file", "hint", "line", "message"]);
@@ -171,11 +158,12 @@ fn each_rule_warns_where_the_scene_goes_wrong() {
     let scene = r#"{
   "format": 1,
   "parts": {
-    "nano": { "type": "nano-board", "firmware": "build/button.hex" },
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
     "led1": { "type": "led-5mm", "color": "red" },
     "led2": { "type": "led-5mm", "color": "red" },
     "hdr": { "type": "pin-header-2x3" },
     "r9": { "type": "resistor-axial", "resistance": "10k" },
+    "r8": { "type": "resistor-axial", "resistance": "10k" },
   },
   "nets": { "GND": "nano.GND" },
   "wires": [
@@ -184,12 +172,14 @@ fn each_rule_warns_where_the_scene_goes_wrong() {
     ["nano.D2", "r9.a"],
     ["r9.b", "nano.GND"],
     ["hdr.1", "nano.D3"],
+    ["nano.D4", "r8.a"],
   ],
   "layout": {
     "nano": { "at": [0, 0, 0], "rotate": [0, 0, 270] },
     "led1": { "at": [0, 0, 0], "rotate": [-180, 0, 540] },
     "hdr": { "at": [0, 0, 0] },
     "r9": { "at": [0, 0, 0], "rotate": [0, 0, 90] },
+    "r8": { "at": [0, 0, 0] },
   },
 }
 "#;
@@ -198,16 +188,13 @@ fn each_rule_warns_where_the_scene_goes_wrong() {
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     let at = |text: &str| line_of(scene, text);
     let want = [
-        (at("\"nano\": { \"type\""), "scene.unconnected"),
-        (at("\"nano\": { \"type\""), "scene.unsimulated_pins"),
         (at("\"nano\": { \"type\""), "net.floating"),
         (at("\"led1\": { \"type\""), "scene.led_no_resistor"),
         (at("\"led2\""), "scene.unplaced"),
         (at("\"led2\""), "scene.unconnected"),
         (at("\"led2\""), "net.floating"),
         (at("\"led2\""), "net.floating"),
-        (at("\"hdr\": { \"type\""), "scene.unconnected"),
-        (at("\"hdr\": { \"type\""), "scene.no_model"),
+        (at("\"r8\": { \"type\""), "scene.unconnected"),
         (at("[0, 0, 270]"), "scene.rotation"),
         (at("[-180, 0, 540]"), "scene.rotation"),
     ];
@@ -217,11 +204,227 @@ fn each_rule_warns_where_the_scene_goes_wrong() {
         "  hint: write \"rotate\": [0, 0, -90]",
         "  hint: write \"rotate\": [180, 0, 180]",
         "warning[scene.unconnected]: nothing is wired to `led2`",
+        "warning[scene.unconnected]: `r8` has no wire on b",
+        "warning[scene.unplaced]: `led2` has no position",
         "warning[scene.led_no_resistor]: nothing limits the current through `led1`: it joins `GND` and `nano__D13` with no resistor in series",
-        "warning[scene.no_model]: `hdr` is a pin-header-2x3, which has no engine model",
     ] {
         assert!(run.stdout.contains(line), "no `{line}` in\n{}", run.stdout);
     }
+}
+
+#[test]
+fn a_part_with_few_nets_warns_of_an_open_one_counted_by_net_not_by_pin() {
+    let scene = r#"{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "half": { "type": "./four-legs.jsonc" },
+    "whole": { "type": "./four-legs.jsonc" },
+    "btn": { "type": "tactile-switch-6mm" },
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["nano.D2", "half.a1"],
+    ["nano.D3", "half.a2"],
+    ["nano.D4", "whole.a1"],
+    ["whole.b2", "nano.GND"],
+    ["nano.D5", "btn.a"],
+  ],
+}
+"#;
+    let dir = project(scene);
+    fs::write(
+        dir.path().join("four-legs.jsonc"),
+        r#"{
+  "format": 1,
+  "parts": { "sw": { "type": "tactile-switch-6mm" } },
+  "pins": { "a1": "sw.a", "a2": "sw.a", "b1": "sw.b", "b2": "sw.b" },
+}
+"#,
+    )
+    .unwrap();
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        lines_warned(&run, "scene.unconnected"),
+        [line_of(scene, "\"half\""), line_of(scene, "\"btn\"")],
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout
+            .contains("warning[scene.unconnected]: `half` has no wire on b1\n"),
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
+fn a_part_that_only_joins_wires_has_no_model_warning_and_each_hint_checks() {
+    let scene = r#"{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "hdr": { "type": "pin-header-2x3" },
+    "row": { "type": "pin-header-1x15" },
+    "r": { "type": "resistor-axial", "resistance": "220" },
+    "led": { "type": "led-5mm", "color": "red" },
+    "jump": { "type": "./jumper.jsonc" },
+    "spare": { "type": "./jumper.jsonc" },
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["nano.D13", "r.a"],
+    ["r.b", "hdr.1"],
+    ["hdr.2", "row.1"],
+    ["row.2", "jump.a"],
+    ["jump.b", "led.anode"],
+    ["hdr.1", "hdr.2"],
+    ["row.1", "row.2"],
+    ["led.cathode", "nano.GND"],
+  ],
+}
+"#;
+    let dir = project(scene);
+    let jumper =
+        "{ \"format\": 1, \"pins\": { \"a\": [1], \"b\": [2] }, \"wires\": [[\"a\", \"b\"]] }\n";
+    fs::write(dir.path().join("jumper.jsonc"), jumper).unwrap();
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        lines_warned(&run, "scene.no_model"),
+        [line_of(scene, "\"jump\""), line_of(scene, "\"spare\"")],
+        "{}",
+        run.stdout
+    );
+    assert!(run.stdout.contains(
+        "use a part with a model if `jump` should act in the circuit, or add \"joins_only\": true to its part file, ./jumper.jsonc, if it only joins wires\n"
+    ), "{}", run.stdout);
+    assert!(
+        run.stdout
+            .contains("add \"not_simulated\": \"<why>\" to `spare` to keep it for drawing only\n"),
+        "{}",
+        run.stdout
+    );
+
+    let joins = jumper.replace("\"format\": 1,", "\"format\": 1, \"joins_only\": true,");
+    fs::write(dir.path().join("jumper.jsonc"), joins).unwrap();
+    let marked = scene.replace(
+        "\"spare\": { \"type\": \"./jumper.jsonc\" }",
+        "\"spare\": { \"type\": \"./jumper.jsonc\", \"not_simulated\": \"a spare\" }",
+    );
+    fs::write(dir.path().join("scene.jsonc"), &marked).unwrap();
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        lines_warned(&run, "scene.no_model"),
+        [0; 0],
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
+fn an_led_fed_through_a_resistor_or_a_pot_stays_quiet_when_a_chip_pin_reads_its_node() {
+    let scene = r#"{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "from_5v": { "type": "led-5mm", "color": "red" },
+    "r_5v": { "type": "resistor-axial", "resistance": "220" },
+    "from_pin": { "type": "led-5mm", "color": "red" },
+    "r_pin": { "type": "resistor-axial", "resistance": "220" },
+    "from_pot": { "type": "led-5mm", "color": "red" },
+    "pot": { "type": "potentiometer-wh148", "resistance": "10k" },
+    "bare": { "type": "led-5mm", "color": "red" },
+    "pulled": { "type": "led-5mm", "color": "red" },
+    "r_down": { "type": "resistor-axial", "resistance": "10k" },
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["nano.5V", "r_5v.a"],
+    ["r_5v.b", "from_5v.anode"],
+    ["from_5v.anode", "nano.A0"],
+    ["from_5v.cathode", "nano.GND"],
+    ["nano.D12", "r_pin.a"],
+    ["r_pin.b", "from_pin.anode"],
+    ["from_pin.anode", "nano.A1"],
+    ["from_pin.cathode", "nano.GND"],
+    ["nano.5V", "pot.a"],
+    ["pot.b", "nano.GND"],
+    ["pot.wiper", "from_pot.anode"],
+    ["pot.wiper", "nano.A2"],
+    ["from_pot.cathode", "nano.GND"],
+    ["nano.D11", "bare.anode"],
+    ["bare.cathode", "nano.GND"],
+    ["nano.D10", "pulled.anode"],
+    ["nano.D10", "r_down.a"],
+    ["r_down.b", "nano.GND"],
+    ["pulled.cathode", "nano.GND"],
+  ],
+}
+"#;
+    let dir = project(scene);
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        lines_warned(&run, "scene.led_no_resistor"),
+        [line_of(scene, "\"bare\""), line_of(scene, "\"pulled\"")],
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
+fn an_led_on_a_transistor_switch_warns_with_no_collector_resistor() {
+    let scene = r#"{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "held_on": { "type": "led-5mm", "color": "red" },
+    "q1": { "type": "npn-2n2222-to92" },
+    "rb1": { "type": "resistor-axial", "resistance": "10k" },
+    "on_pin": { "type": "led-5mm", "color": "red" },
+    "q2": { "type": "npn-2n2222-to92" },
+    "rb2": { "type": "resistor-axial", "resistance": "10k" },
+    "limited": { "type": "led-5mm", "color": "red" },
+    "rc3": { "type": "resistor-axial", "resistance": "220" },
+    "q3": { "type": "npn-2n2222-to92" },
+    "rb3": { "type": "resistor-axial", "resistance": "10k" },
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["nano.5V", "held_on.anode"],
+    ["held_on.cathode", "q1.collector"],
+    ["q1.emitter", "nano.GND"],
+    ["nano.5V", "rb1.a"],
+    ["rb1.b", "q1.base"],
+    ["nano.5V", "on_pin.anode"],
+    ["on_pin.cathode", "q2.collector"],
+    ["q2.emitter", "nano.GND"],
+    ["nano.D13", "rb2.a"],
+    ["rb2.b", "q2.base"],
+    ["nano.5V", "rc3.a"],
+    ["rc3.b", "limited.anode"],
+    ["limited.cathode", "q3.collector"],
+    ["q3.emitter", "nano.GND"],
+    ["nano.D12", "rb3.a"],
+    ["rb3.b", "q3.base"],
+  ],
+}
+"#;
+    let dir = project(scene);
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        lines_warned(&run, "scene.led_no_resistor"),
+        [line_of(scene, "\"held_on\""), line_of(scene, "\"on_pin\"")],
+        "{}",
+        run.stdout
+    );
+    assert!(run.stdout.contains(
+        "nothing limits the current through `held_on`: it joins `GND` and `nano__5V` with no resistor in series"
+    ), "{}", run.stdout);
 }
 
 #[test]
@@ -229,7 +432,7 @@ fn a_resistor_beside_an_led_limits_nothing_and_one_in_series_on_either_side_does
     let scene = r#"{
   "format": 1,
   "parts": {
-    "nano": { "type": "nano-board", "firmware": "build/button.hex" },
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
     "btn1": { "type": "tactile-switch-6mm" },
     "beside": { "type": "led-5mm", "color": "red" },
     "r_beside": { "type": "resistor-axial", "resistance": "1k" },
@@ -256,10 +459,10 @@ fn a_resistor_beside_an_led_limits_nothing_and_one_in_series_on_either_side_does
     let dir = project(scene);
     let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
-    let unlimited: Vec<usize> = warned(&run.stdout)
-        .into_iter()
-        .filter(|(_, code)| code == "scene.led_no_resistor")
-        .map(|(line, _)| line)
-        .collect();
-    assert_eq!(unlimited, [line_of(scene, "\"beside\":")], "{}", run.stdout);
+    assert_eq!(
+        lines_warned(&run, "scene.led_no_resistor"),
+        [line_of(scene, "\"beside\":")],
+        "{}",
+        run.stdout
+    );
 }

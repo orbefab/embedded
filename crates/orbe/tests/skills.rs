@@ -1174,8 +1174,8 @@ fn no_diagnostics_says_a_chip_warning_can_show_one_engine_step_late() {
     }
 }
 
-/// The worked example with every lint rule broken once: D13 straight to the LED, a header with
-/// no model, and a turn past 180 degrees. Each code `orbe lint` prints is in the core skill's
+/// The worked example with every lint rule broken once: D13 straight to the LED, a part of its
+/// own with no model, and a turn past 180 degrees. Each code `orbe lint` prints is in the core skill's
 /// warnings table, the table names no other, and `orbe open` shows only `net.floating`.
 #[test]
 fn the_warnings_table_lists_the_codes_lint_prints_and_open_shows_only_the_engines() {
@@ -1187,7 +1187,7 @@ fn the_warnings_table_lists_the_codes_lint_prints_and_open_shows_only_the_engine
         .replace("[\"r1.b\", \"led1.anode\"],", "")
         .replace(
             "\"parts\": {",
-            "\"parts\": {\n    \"hdr\": { \"type\": \"pin-header-2x3\" },",
+            "\"parts\": {\n    \"jump\": { \"type\": \"./jumper.jsonc\" },",
         )
         .replace(
             "\"wires\": [",
@@ -1195,6 +1195,11 @@ fn the_warnings_table_lists_the_codes_lint_prints_and_open_shows_only_the_engine
         );
     assert_ne!(broken, scene);
     fs::write(dir.join("scene.jsonc"), &broken).unwrap();
+    fs::write(
+        dir.join("jumper.jsonc"),
+        "{ \"format\": 1, \"pins\": { \"a\": [1], \"b\": [2] }, \"wires\": [[\"a\", \"b\"]] }\n",
+    )
+    .unwrap();
     let runtime = Runtime::new();
     let lint = runtime.orbe(dir, &["lint", "scene.jsonc"]).ok().stdout;
     let code = |line: &str| {
