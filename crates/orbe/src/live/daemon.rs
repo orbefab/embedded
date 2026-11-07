@@ -387,11 +387,14 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
         ticked: None,
     };
     thread::spawn(move || accept(&listener, &events, &reading));
-    let why = serve(&mut held, &queue, idle, timer);
+    let (why, unanswered) = serve(&mut held, &queue, idle, timer);
     for (path, identity) in [(&socket, bound.0), (&log, bound.1)] {
         if identity.is_some() && inode(path) == identity {
             let _ = std::fs::remove_file(path);
         }
+    }
+    if let Some((job, reply)) = unanswered {
+        job.answer(&reply);
     }
     held.farewell(why);
     let ending = held.live.refuse(Error::new(
@@ -411,13 +414,13 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
 /// or nothing comes and nothing plays for `idle` while no viewer watches. Before the first
 /// scene opens, every command but `open` gets `no_session` and changes nothing, and the process
 /// ends `UNOPENED` after it started. A session at its stop stays, so reads still answer there.
-/// Returns why it ended, for the viewers.
+/// Returns why it ended, for the viewers, and the `close` that ended it, still unanswered.
 fn serve(
     held: &mut Held,
     queue: &Receiver<Event>,
     idle: Duration,
     timer: Sender<()>,
-) -> &'static str {
+) -> (&'static str, Option<(Job, Reply)>) {
     let mut timer = Some(timer);
     let mut last = wall();
     loop {
@@ -434,26 +437,27 @@ fn serve(
             Ok(Event::Job(job)) => {
                 last = wall();
                 let reply = held.run(&job);
+                if let Data::Closed { .. } = reply.data {
+                    return ("`orbe close` ended the session", Some((job, reply)));
+                }
                 job.answer(&reply);
                 held.after(&reply);
-                match reply.data {
-                    Data::Opened { .. } => timer = None,
-                    Data::Closed { .. } => return "`orbe close` ended the session",
-                    _ => {}
+                if let Data::Opened { .. } = reply.data {
+                    timer = None;
                 }
             }
             Ok(Event::Viewer(viewer)) => {
                 last = wall();
                 held.viewer(viewer);
             }
-            Ok(Event::Unopened) if timer.is_some() => return "no scene was opened",
+            Ok(Event::Unopened) if timer.is_some() => return ("no scene was opened", None),
             Ok(Event::Unopened) => {}
             Err(RecvTimeoutError::Timeout) => {
                 if quiet.is_some_and(|at| at <= wall()) {
-                    return "the session ended after an hour with no command";
+                    return ("the session ended after an hour with no command", None);
                 }
             }
-            Err(RecvTimeoutError::Disconnected) => return "the session ended",
+            Err(RecvTimeoutError::Disconnected) => return ("the session ended", None),
         }
     }
 }
