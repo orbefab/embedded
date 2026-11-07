@@ -1,0 +1,55 @@
+{
+  "part": "capacitor-electrolytic-radial",
+  "source": {
+    "repo": "https://github.com/orbefab/models",
+    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
+    "inputs": {
+      "glb": {
+        "path": "GLB/parts/capacitor-electrolytic-radial.glb",
+        "sha256": "cb5655cfef52907e8f976e23459b8121380bc1702e621e73a2ddea7797ed012a",
+        "bytes": 38028
+      },
+      "anchors": {
+        "path": "GLB/parts/capacitor-electrolytic-radial.anchors.json",
+        "sha256": "2ec0c742ade106f3904f0fe22ee96be593e8d78ab329f5de38e35975bc1b9a54",
+        "bytes": 311
+      }
+    }
+  },
+  "files": {
+    "capacitor-electrolytic-radial.glb": {
+      "sha256": "1f9f0492d6d00b4e7605f54291581b5364722bbf64e65eea373fbcd4fe4982c7",
+      "bytes": 28420
+    },
+    "capacitor-electrolytic-radial.anchors.json": {
+      "sha256": "2ec0c742ade106f3904f0fe22ee96be593e8d78ab329f5de38e35975bc1b9a54",
+      "bytes": 311
+    }
+  },
+  "box": {
+    "min": [-3.15, -3.142989, -20],
+    "max": [3.142747, 3.142989, 11]
+  },
+  "kept_nodes": ["lead-1", "lead-2"],
+  "draw_calls": 5,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 2,
+      "largest_miss_mm": 0.002941
+    },
+    "seating": {
+      "lowest_node": "sleeve",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 23,
+      "primitives_out": 5
+    }
+  }
+}

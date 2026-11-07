@@ -1,0 +1,21 @@
+{
+  "format": 1,
+  "part": "potentiometer-wh148",
+  "version": "0.1.0",
+  "title": "Potentiometer, 16 mm rotary (WH148)",
+  "summary": "Linear rotary pot with a knob and three pins on 5 mm. Seen from the shaft with the pins down, `a` is the left pin, `wiper` the middle and `b` the right. Set its resistance, the value printed on the can (B10K is 10k). `position` is the wiper's place along the track, the share of `resistance` between `a` and `wiper`, above 0 and below 1.",
+  "tags": ["potentiometer", "knob", "variable resistor", "voltage divider", "input", "analog", "through-hole"],
+  "license": "MIT OR Apache-2.0",
+  "real": { "generic": true, "maker": null, "number": "WH148", "datasheet": null },
+  "pins": { "a": [1], "wiper": [2], "b": [3] },
+  "params": {
+    "resistance": { "unit": "ohm", "required": true, "min_exclusive": 0, "sets": "/resistance" },
+    "position": { "unit": "1", "default": 0.5, "min_exclusive": 0, "max_exclusive": 1, "sets": "/position" },
+  },
+  "model": { "kind": "potentiometer" },
+  "not_simulated": [
+    { "what": "turning the knob", "why": "No command moves the wiper in a session. `position` sets it for the whole run, from above 0 at `a` to below 1 at `b`, and the 3D knob does not turn." },
+    { "what": "power rating", "why": "The engine's potentiometer has no rating, so it never warns." },
+    { "what": "tolerance and end resistance", "why": "The value is exact, and the track reaches its ends." },
+  ],
+}

@@ -1,0 +1,1 @@
+scene.param scene.jsonc:6:78 | `pot.position`: 0 is out of range; it must be greater than 0 and less than 1 | write a value greater than 0 and less than 1

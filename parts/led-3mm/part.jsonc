@@ -1,0 +1,73 @@
+{
+  "format": 1,
+  "part": "led-3mm",
+  "version": "0.1.0",
+  "title": "3 mm LED",
+  "summary": "Round 3 mm (T-1) diffused through-hole LED, two leads on 2.54 mm. The longer lead is the anode, and the flat on the rim marks the cathode. Pick its colour. Red and yellow warn above 30 mA and 75 mW, green above 25 mA and 62.5 mW.",
+  "tags": ["led", "light", "indicator", "through-hole"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Kingbright L-934ID, Spec No DSAA4904, Rev V.12A": "https://static.rapidonline.com/pdf/55-0798.pdf",
+    "Kingbright L-934YD, Spec No DSAA9497, Rev V.11B": "https://static.rapidonline.com/pdf/55-0812.pdf",
+    "Kingbright L-934GD, Spec No DSAA6381, Rev V.15B": "https://static.rapidonline.com/pdf/55-0804.pdf",
+  },
+  "real": { "maker": "Kingbright", "number": "L-934", "datasheet": null },
+  "pins": { "anode": [1], "cathode": [2] },
+  "params": {
+    "color": {
+      "required": true,
+      "choices": {
+        "red": {
+          "real": { "number": "L-934ID", "datasheet": "Kingbright L-934ID, Spec No DSAA4904, Rev V.12A" },
+          "tint": "#d8342a",
+          "sets": {
+            "/saturation_current": { "value": 6.711e-10, "unit": "A", "source": { "datasheet": { "doc": "Kingbright L-934ID, Spec No DSAA4904, Rev V.12A", "at": "Fig. Forward Current vs. Forward Voltage, TA = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+            "/emission_coefficient": { "value": 4.427, "unit": "1", "source": { "datasheet": { "doc": "Kingbright L-934ID, Spec No DSAA4904, Rev V.12A", "at": "Fig. Forward Current vs. Forward Voltage, TA = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+            "/series_resistance": { "value": 2.115, "unit": "ohm", "source": { "datasheet": { "doc": "Kingbright L-934ID, Spec No DSAA4904, Rev V.12A", "at": "Fig. Forward Current vs. Forward Voltage, TA = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+            "/ratings/current": { "value": 0.03, "unit": "A", "source": { "datasheet": { "doc": "Kingbright L-934ID, Spec No DSAA4904, Rev V.12A", "at": "Absolute Maximum Ratings at TA = 25 C, DC forward current", "basis": "absolute_max" } } },
+            "/ratings/power": { "value": 0.075, "unit": "W", "source": { "datasheet": { "doc": "Kingbright L-934ID, Spec No DSAA4904, Rev V.12A", "at": "Absolute Maximum Ratings at TA = 25 C, power dissipation", "basis": "absolute_max" } } },
+          },
+        },
+        "yellow": {
+          "real": { "number": "L-934YD", "datasheet": "Kingbright L-934YD, Spec No DSAA9497, Rev V.11B" },
+          "tint": "#f2c12e",
+          "sets": {
+            "/saturation_current": { "value": 1.623e-30, "unit": "A", "source": { "datasheet": { "doc": "Kingbright L-934YD, Spec No DSAA9497, Rev V.11B", "at": "Fig. Forward Current vs. Forward Voltage, TA = 25 C; fit through (1.80 V, 2 mA), (1.95 V, 10 mA), (2.10 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+            "/emission_coefficient": { "value": 1.107, "unit": "1", "source": { "datasheet": { "doc": "Kingbright L-934YD, Spec No DSAA9497, Rev V.11B", "at": "Fig. Forward Current vs. Forward Voltage, TA = 25 C; fit through (1.80 V, 2 mA), (1.95 V, 10 mA), (2.10 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+            "/series_resistance": { "value": 13.03, "unit": "ohm", "source": { "datasheet": { "doc": "Kingbright L-934YD, Spec No DSAA9497, Rev V.11B", "at": "Fig. Forward Current vs. Forward Voltage, TA = 25 C; fit through (1.80 V, 2 mA), (1.95 V, 10 mA), (2.10 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+            "/ratings/current": { "value": 0.03, "unit": "A", "source": { "datasheet": { "doc": "Kingbright L-934YD, Spec No DSAA9497, Rev V.11B", "at": "Absolute Maximum Ratings at TA = 25 C, DC forward current", "basis": "absolute_max" } } },
+            "/ratings/power": { "value": 0.075, "unit": "W", "source": { "datasheet": { "doc": "Kingbright L-934YD, Spec No DSAA9497, Rev V.11B", "at": "Absolute Maximum Ratings at TA = 25 C, power dissipation", "basis": "absolute_max" } } },
+          },
+        },
+        "green": {
+          "real": { "number": "L-934GD", "datasheet": "Kingbright L-934GD, Spec No DSAA6381, Rev V.15B" },
+          "tint": "#3fae49",
+          "sets": {
+            "/saturation_current": { "value": 1.209e-23, "unit": "A", "source": { "datasheet": { "doc": "Kingbright L-934GD, Spec No DSAA6381, Rev V.15B", "at": "Fig. Forward Current vs. Forward Voltage, TA = 25 C; fit through (1.80 V, 2 mA), (2.00 V, 10 mA), (2.20 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+            "/emission_coefficient": { "value": 1.476, "unit": "1", "source": { "datasheet": { "doc": "Kingbright L-934GD, Spec No DSAA6381, Rev V.15B", "at": "Fig. Forward Current vs. Forward Voltage, TA = 25 C; fit through (1.80 V, 2 mA), (2.00 V, 10 mA), (2.20 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+            "/series_resistance": { "value": 17.37, "unit": "ohm", "source": { "datasheet": { "doc": "Kingbright L-934GD, Spec No DSAA6381, Rev V.15B", "at": "Fig. Forward Current vs. Forward Voltage, TA = 25 C; fit through (1.80 V, 2 mA), (2.00 V, 10 mA), (2.20 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+            "/ratings/current": { "value": 0.025, "unit": "A", "source": { "datasheet": { "doc": "Kingbright L-934GD, Spec No DSAA6381, Rev V.15B", "at": "Absolute Maximum Ratings at TA = 25 C, DC forward current", "basis": "absolute_max" } } },
+            "/ratings/power": { "value": 0.0625, "unit": "W", "source": { "datasheet": { "doc": "Kingbright L-934GD, Spec No DSAA6381, Rev V.15B", "at": "Absolute Maximum Ratings at TA = 25 C, power dissipation", "basis": "absolute_max" } } },
+          },
+        },
+      },
+    },
+  },
+  "model": {
+    "kind": "led",
+    "ratings": { "current": null, "power": null },
+  },
+  "readings": {
+    "on": { "of": "i", "above": { "value": 0.001, "unit": "A", "source": { "closed_form": { "note": "One tenth of the 10 mA at which each colour's datasheet rates its luminous intensity." } } } },
+    "brightness": { "of": "i", "full": { "value": 0.01, "unit": "A", "source": { "datasheet": { "doc": "Kingbright L-934GD, Spec No DSAA6381, Rev V.15B", "at": "Selection Guide, Iv rated at 10 mA, as for the L-934ID and the L-934YD", "basis": "nominal" } } } },
+  },
+  "view": {
+    "glow": [{ "node": "body", "by": "brightness" }],
+    "tint": [{ "node": "body", "by": "color" }],
+  },
+  "not_simulated": [
+    { "what": "light", "why": "The engine reports current. Brightness is the current over 10 mA, so 1 at 10 mA, and above that the LED blooms. The colours' intensities differ and are not modelled." },
+    { "what": "temperature", "why": "The fits are at 25 C and the engine has no temperature." },
+    { "what": "reverse breakdown", "why": "The engine's LED has no breakdown voltage. The datasheets rate 5 V reverse." },
+  ],
+}

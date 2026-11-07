@@ -64,6 +64,7 @@ const PARAM_KEYS: &[(&str, Shape)] = &[
     ("default", Shape::Any),
     ("required", Shape::Bool),
     ("min_exclusive", Shape::Num),
+    ("max_exclusive", Shape::Num),
     ("sets", Shape::Str),
 ];
 
@@ -98,7 +99,14 @@ const PARAM_KINDS: &[(ParamShape, &str, Option<&str>, &[&str])] = &[
         ParamShape::Number,
         "a number param",
         Some("unit"),
-        &["unit", "default", "required", "min_exclusive", "sets"],
+        &[
+            "unit",
+            "default",
+            "required",
+            "min_exclusive",
+            "max_exclusive",
+            "sets",
+        ],
     ),
     (
         ParamShape::Through,

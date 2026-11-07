@@ -1,0 +1,55 @@
+{
+  "part": "potentiometer-wh148",
+  "source": {
+    "repo": "https://github.com/orbefab/models",
+    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
+    "inputs": {
+      "glb": {
+        "path": "GLB/parts/potentiometer-wh148.glb",
+        "sha256": "ba4bd2c589a060d79808f6ba0aa06ec0c29d392723527f3fae92d34fc262f3f1",
+        "bytes": 106484
+      },
+      "anchors": {
+        "path": "GLB/parts/potentiometer-wh148.anchors.json",
+        "sha256": "1d7e5ca7b5044e0ab166e6856ec21191a180703e0abca9897f6acc0420935cc7",
+        "bytes": 409
+      }
+    }
+  },
+  "files": {
+    "potentiometer-wh148.glb": {
+      "sha256": "2882e3cbc99ff59361aa856e562ad5276e80579a969971cae5ee025ea4420c44",
+      "bytes": 56788
+    },
+    "potentiometer-wh148.anchors.json": {
+      "sha256": "1d7e5ca7b5044e0ab166e6856ec21191a180703e0abca9897f6acc0420935cc7",
+      "bytes": 409
+    }
+  },
+  "box": {
+    "min": [-8, -7.97763, -6],
+    "max": [8, 8, 29.02]
+  },
+  "kept_nodes": ["pin-1", "pin-2", "pin-3"],
+  "draw_calls": 9,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 3,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "base",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 120,
+      "primitives_out": 9
+    }
+  }
+}

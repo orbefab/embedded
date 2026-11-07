@@ -199,10 +199,9 @@ impl Circuit<'_> {
                     .iter()
                     .filter_map(|(key, arg)| {
                         let value = match &part.param(key)?.kind {
-                            ParamKind::Number {
-                                unit,
-                                min_exclusive,
-                            } => si(&number(*unit, *min_exclusive, &arg.node).ok()?)?.into(),
+                            ParamKind::Number { unit, range } => {
+                                si(&number(*unit, *range, &arg.node).ok()?)?.into()
+                            }
                             ParamKind::Choice(_) => Value::String(arg.node.str()?.to_string()),
                             ParamKind::File { .. } | ParamKind::Through => return None,
                         };

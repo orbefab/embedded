@@ -490,6 +490,6 @@ mod tests {
             let policy: Vec<String> = policy.into_iter().collect();
             assert_eq!(kept, policy, "{id}: kept_nodes against the keep policy");
         }
-        assert_eq!(checked, 18);
+        assert_eq!(checked, 24);
     }
 }

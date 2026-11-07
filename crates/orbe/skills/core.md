@@ -277,5 +277,6 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 - The Nano's 3V3, VIN, A6 and A7 pins. A wire to one is a `not_simulated` error.
 - USB, and serial into the chip. The chip's serial out (TX, D1) is read as text.
 - Light, temperature, a switch's force and travel, and part tolerances. An LED's `on` is its current over a threshold.
+- Turning a potentiometer during a session. Its `position` param sets the wiper for the whole run, so run `orbe open` again after you change it.
 - Any part the catalog above does not list.
 - orbe never builds firmware. Build it with your toolchain and name the output file in the scene.
