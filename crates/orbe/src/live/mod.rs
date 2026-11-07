@@ -146,9 +146,11 @@ pub fn main(spec: &Spec, args: &[String]) -> ExitCode {
             }
             let done = client.run(spec, &invocation.words)?;
             match done {
-                Done::Reply(opened) if invocation.headed && opened.ok() => {
-                    Ok(Answer::Headed(opened, client.show(), invocation.browser))
-                }
+                Done::Reply(opened) if invocation.headed && opened.ok() => Ok(Answer::Headed(
+                    opened,
+                    client.show_opened(),
+                    invocation.browser,
+                )),
                 done => Ok(Answer::One(done)),
             }
         });
@@ -207,8 +209,8 @@ pub fn show(session: Option<&str>, json: bool, browser: bool) -> ExitCode {
     }
 }
 
-/// `open`'s reply, then `show`'s URL or its error. With `--json`, one envelope: `open`'s, with
-/// the URL in `data.url`, or `show`'s error.
+/// `open`'s reply, then `show`'s URL or its error, with `show`'s exit code. With `--json`, one
+/// envelope: `open`'s, with the URL in `data.url`, or `ok: false` and `show`'s error.
 fn print_headed(
     opened: &Reply,
     shown: Result<Box<Reply>, Refusal>,
@@ -216,36 +218,32 @@ fn print_headed(
     browser: bool,
 ) -> ExitCode {
     let mut envelope = opened.json();
-    let exit = match &shown {
-        Ok(reply) => {
-            if let Data::Viewer { url } = &reply.data {
-                envelope["data"]["url"] = url.clone().into();
-            }
-            if !json {
-                println!(
-                    "{}
-{}",
-                    opened.text(),
-                    reply.text()
-                );
-            }
-            if browser {
-                open_browser(reply);
-            }
-            reply.exit()
-        }
-        Err(refused) => {
-            envelope["ok"] = false.into();
-            envelope["error"] = refused.json()["error"].clone();
-            if !json {
-                println!("{}", opened.text());
-                eprintln!("{}", refused.text());
-            }
-            refused.exit()
-        }
+    let (error, exit) = match &shown {
+        Ok(reply) => (reply.json()["error"].clone(), reply.exit()),
+        Err(refused) => (refused.json()["error"].clone(), refused.exit()),
     };
+    if let Ok(Reply {
+        data: Data::Viewer { url },
+        ..
+    }) = shown.as_deref()
+    {
+        envelope["data"]["url"] = url.clone().into();
+    }
+    if !error.is_null() {
+        envelope["ok"] = false.into();
+        envelope["error"] = error;
+    }
     if json {
         print_json(&envelope);
+    } else {
+        println!("{}", opened.text());
+        match &shown {
+            Ok(reply) => println!("{}", reply.text()),
+            Err(refused) => eprintln!("{}", refused.text()),
+        }
+    }
+    if browser && let Ok(reply) = &shown {
+        open_browser(reply);
     }
     ExitCode::from(exit)
 }
@@ -760,6 +758,23 @@ impl Client {
             Found::Missing => Err(self.no_session()),
             Found::Stale => Err(self.crashed("ended without closing")),
         }
+    }
+
+    /// `show` after `open --headed`. A `show` the session refused leaves it open, so the hint
+    /// says so. A refusal from this side, such as `no_session`, means it may not be open.
+    fn show_opened(&self) -> Result<Box<Reply>, Refusal> {
+        let mut shown = self.show()?;
+        if let Some(error) = &mut shown.error {
+            let flag = self.session_flag();
+            let open = format!(
+                "the session stays open, so run `orbe show{flag}` to try again, or `orbe close{flag}` to end it"
+            );
+            error.hint = match error.hint.as_str() {
+                "" => open,
+                hint => format!("{hint}; {open}"),
+            };
+        }
+        Ok(shown)
     }
 
     fn send(&self, stream: UnixStream, ask: Ask) -> Result<Box<Reply>, Refusal> {

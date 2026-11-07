@@ -247,7 +247,7 @@ A person can watch a live session in 3D and press its buttons. `orbe open --head
 - `orbe play` runs time at real speed and returns at once, and `state` is `playing` meanwhile. Time runs until `orbe pause`, a `step` that runs, the 2-hour stop or a fault. A refused `step`, such as `past_stop` or an `unknown_ref` in `--until`, leaves it running. The page's Play button runs the same `play`.
 - `play` reports nothing as time runs. The next `step` lists every change since the `step` before it, play included, such as the pin edges, LED changes and diagnostics a press from the page caused, so its reply reads like `t=12.001s (from 2s)`. When play ran into the 2-hour stop or a fault, the `step` that is refused lists them. `pause` lists nothing, and `get` and `snapshot` read the state at any time.
 - A test file refuses `play` and `pause` with `usage`. Step time instead.
-- `show` failing with "this orbe was built without the viewer page" means this `orbe` has no page in it. Tell the user, since the fix is a rebuild of `orbe`.
+- `show` failing with "this orbe was built without the viewer page" means this `orbe` has no page in it. Tell the user, since the fix is a rebuild of `orbe`. When `open --headed` fails that way, the scene is open anyway, so you can work headless or `orbe close` it.
 
 ## Errors
 

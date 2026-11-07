@@ -171,7 +171,7 @@ fn live_help(spec: &orbe_session::Spec) -> clap::Command {
                 Arg::new("headed")
                     .long("headed")
                     .action(ArgAction::SetTrue)
-                    .help("Then run `orbe show`, which opens a viewer on the session"),
+                    .help("Then run `orbe show`, which opens a viewer on the session. When `show` fails, the session stays open"),
             )
             .arg(
                 Arg::new("no-browser")

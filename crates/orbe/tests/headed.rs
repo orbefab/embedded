@@ -218,6 +218,56 @@ fn show_names_a_page_folder_with_no_index() {
 }
 
 #[test]
+fn open_headed_whose_show_fails_says_the_session_is_open() {
+    let runtime = Runtime::new();
+    let dir = project("open\n");
+    let empty = tempfile::tempdir().unwrap();
+    let headed = |json: bool| {
+        let mut args = vec!["open", "--headed", "--no-browser"];
+        args.extend(json.then_some("--json"));
+        let output = runtime
+            .command(dir.path(), &args)
+            .env("ORBE_VIEWER_DIR", empty.path())
+            .output()
+            .unwrap();
+        Run::new(output)
+    };
+    let hint = "build the page into that folder, or unset ORBE_VIEWER_DIR; the session stays open, so run `orbe show` to try again, or `orbe close` to end it";
+
+    let text = headed(false);
+    assert_eq!(text.code, 3, "{}{}", text.stdout, text.stderr);
+    let lines: Vec<&str> = text.stdout.lines().collect();
+    assert!(
+        lines[0].starts_with("opened scene.jsonc at t=0: "),
+        "{}",
+        text.stdout
+    );
+    assert_eq!(
+        lines[lines.len() - 2..],
+        [
+            format!(
+                "error[io_error]: ORBE_VIEWER_DIR={} holds no index.html",
+                empty.path().display()
+            ),
+            format!("  hint: {hint}"),
+        ]
+    );
+
+    let json = headed(true);
+    assert_eq!(json.code, 3, "{}{}", json.stdout, json.stderr);
+    let envelope = json.json();
+    assert_eq!(envelope["ok"], false, "{envelope}");
+    assert_eq!(envelope["state"], "paused");
+    assert_eq!(envelope["data"]["scene"], "scene.jsonc");
+    assert_eq!(envelope["error"]["code"], "io_error");
+    assert_eq!(envelope["error"]["hint"], hint);
+
+    let get = runtime.orbe(dir.path(), &["get", "@led1", "--json"]).ok();
+    assert_eq!(get.json()["state"], "paused", "the session is open");
+    runtime.orbe(dir.path(), &["close"]).ok();
+}
+
+#[test]
 fn the_server_refuses_a_wrong_token_host_or_origin() {
     let runtime = Runtime::new();
     let (dir, _page, url) = opened(&runtime);

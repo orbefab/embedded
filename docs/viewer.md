@@ -26,7 +26,7 @@ The dev server and `vite preview` serve each part's GLB from `parts/` at `/parts
 
 ## Watch a live session
 
-`orbe show` opens the page on a session that runs, and `orbe open --headed` is `orbe open` and then `orbe show`. The page is built into `orbe`, so build it before `orbe`:
+`orbe show` opens the page on a session that runs, and `orbe open --headed` is `orbe open` and then `orbe show`. When that `show` fails, the command fails with `show`'s error and exit code, the session stays open, and the hint says to run `orbe show` again or `orbe close`. The page is built into `orbe`, so build it before `orbe`:
 
 ```bash
 npm ci
