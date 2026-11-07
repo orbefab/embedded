@@ -249,6 +249,7 @@ mod tests {
                 match arg.as_str() {
                     "--json" => {}
                     "--all" if spec.name == "close" => {}
+                    "--headed" | "--no-browser" if spec.name == "open" => {}
                     "--session" => {
                         args.next().expect("`--session` takes a name");
                     }

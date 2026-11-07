@@ -166,7 +166,7 @@ In a shell, quote `<` and `>`, or the shell takes them as redirects, as in `orbe
 
 ## Time
 
-- The session is paused between commands. Time moves only inside `step`.
+- The session is paused between commands. Time moves only inside `step`, or while `play` runs (see "Watching in 3D").
 - `step <duration>` advances by that much and lists what changed, such as pin edges with their exact times, LED changes and diagnostics. It lists at most 20, then `and N more`, so serial edges on D1 can hide the rest. `get` and `snapshot` show the state after it. Durations take ps, ns, us, ms or s, such as `100ms`, `1.5ms`, `20us`.
 - A read at time t, by `get`, `expect` or `snapshot`, shows the circuit just before anything that happens at t. So `press` at t shows from t + 1 ps on, and its reply says "reads show it after t". Step after an input before you read its effect.
 - An input lands at the session's time or later, and its reply gives the time.
@@ -233,10 +233,20 @@ Exit codes: 0 ok, 1 a failed check, `expect` or command, 2 a usage error, 3 a fi
 
 ## Sessions
 
-- `orbe open` starts a background process that holds the session, and every later command talks to it. The process ends on `orbe close`, or after 1 hour with no command.
+- `orbe open` starts a background process that holds the session, and every later command talks to it. The process ends on `orbe close`, or after 1 hour with no command while no page watches it.
 - A session has a name. By default it comes from the project folder, the nearest one up with `scene.jsonc` or `parts.lock`, so each project gets its own, and its `tests/` folder shares it. Outside a project it comes from the git repository's root folder, else the current folder. `--session <name>` after the command, as `orbe open --session bench`, or `ORBE_SESSION=<name>`, picks another, so two sessions can run side by side. Live paths start from the shell's current folder, so run live commands from the project folder.
 - `orbe close --all` closes every session of this `orbe` and cleans up after crashed ones.
 - A command sent while a `step` runs waits for it. Ctrl-C during a long `step` stops it, and the session stays paused at the time it reached.
+
+## Watching in 3D
+
+A person can watch a live session in 3D and press its buttons. `orbe open --headed` opens the scene, then a page in the default browser. `orbe show` opens the page on a session that already runs. Each prints the page's address, which only this machine can reach, and `--no-browser` prints it without opening a browser. Keep the address to yourself, since it holds the session's key.
+
+- Several pages can watch one session. Closing a page leaves the session running, and `orbe close` ends every page.
+- A click on a button in the page is `press`, and letting go is `release`. They land at the session's time, as yours do, so read the session with `get` or `snapshot` as always.
+- `orbe play` runs time at real speed and returns at once, and `state` is `playing` meanwhile. Time runs until `orbe pause`, a `step`, the 2-hour stop or a fault. The page's Play button runs the same `play`.
+- A test file refuses `play` and `pause` with `usage`. Step time instead.
+- `show` failing with "this orbe was built without the viewer page" means this `orbe` has no page in it. Tell the user, since the fix is a rebuild of `orbe`.
 
 ## Errors
 
