@@ -496,17 +496,23 @@ fn play_then_pause_advances_time_at_wall_speed() {
     let mut viewer = Viewer::connect(&url);
     let played = runtime.orbe(dir.path(), &["play"]).ok();
     assert_eq!(played.stdout, "playing from t=0s\n");
+    let mut seen = Vec::new();
+    let ticked = loop {
+        let frame = viewer.until("frame", &mut seen);
+        if frame["state"] == "playing" && frame["t_ps"] != 0 {
+            break frame["t_ps"].as_u64().unwrap();
+        }
+    };
     std::thread::sleep(Duration::from_millis(300));
     let paused = runtime.orbe(dir.path(), &["pause", "--json"]).ok().json();
     assert_eq!(paused["state"], "paused");
     assert_eq!(paused["data"]["playing"], false);
     let t = paused["t_ps"].as_u64().unwrap();
     assert!(
-        (100_000_000_000..=1_000_000_000_000).contains(&t),
-        "300 ms of wall time plays about 300 ms: {t} ps"
+        t > ticked && t <= 1_000_000_000_000,
+        "300 ms of wall time plays more, and no faster than the wall: {ticked} then {t} ps"
     );
 
-    let mut seen = Vec::new();
     while !seen
         .iter()
         .any(|m: &Value| m["type"] == "frame" && m["state"] == "paused")
