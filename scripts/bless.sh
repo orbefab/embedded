@@ -23,7 +23,13 @@ if [[ $# -ne 0 ]]; then
   exit 2
 fi
 
-ORBE_BLESS=1 cargo test --locked -p orbe-scene --test read parts_lock_matches_the_catalog -- --exact
+log=$(mktemp)
+trap 'rm -f "$log"' EXIT
+ORBE_BLESS=1 cargo test --locked --color never -p orbe-scene --test read parts_lock_matches_the_catalog -- --exact 2>&1 | tee "$log"
+if ! grep -q 'test result: ok\. 1 passed;' "$log"; then
+  echo "scripts/bless.sh: parts_lock_matches_the_catalog did not pass once" >&2
+  exit 1
+fi
 
 cargo build --locked -p orbe
 orbe="$PWD/target/debug/orbe"

@@ -317,13 +317,13 @@ mod tests {
             .collect()
     }
 
-    fn board_uses_the_parts_it_is_built_from(id: &str) {
+    fn part_uses_the_parts_it_is_built_from(id: &str) {
         let catalog = Catalog::builtin();
-        let board = catalog.newest(id).unwrap();
-        assert!(!board.sealed, "{id}");
-        let used: BTreeSet<String> = board.uses.keys().cloned().collect();
+        let part = catalog.newest(id).unwrap();
+        assert!(!part.sealed, "{id}");
+        let used: BTreeSet<String> = part.uses.keys().cloned().collect();
         assert_eq!(used, built_from(id), "{id}");
-        for (child, version) in &board.uses {
+        for (child, version) in &part.uses {
             assert!(
                 catalog.get(child, *version).is_some(),
                 "{id} uses {child}@{version}, which the catalog lacks"
@@ -332,13 +332,17 @@ mod tests {
     }
 
     #[test]
-    fn nano_board_uses_the_parts_it_is_built_from() {
-        board_uses_the_parts_it_is_built_from("nano-board");
-    }
-
-    #[test]
-    fn uno_board_uses_the_parts_it_is_built_from() {
-        board_uses_the_parts_it_is_built_from("uno-board");
+    fn every_part_uses_the_parts_it_is_built_from() {
+        for id in Catalog::builtin().ids() {
+            let original = find(id).unwrap();
+            let children = original
+                .tree
+                .get("parts")
+                .and_then(crate::syntax::Node::props);
+            if children.is_some_and(|props| !props.is_empty()) {
+                part_uses_the_parts_it_is_built_from(id);
+            }
+        }
     }
 
     fn leads(pins: &Value) -> BTreeSet<u64> {
@@ -416,14 +420,12 @@ mod tests {
     #[test]
     fn every_body_model_matches_its_asset_record() {
         let catalog = Catalog::builtin();
-        let mut checked = 0;
         for id in catalog.ids() {
             let entry = catalog.newest(id).unwrap();
             let glb = format!("{id}.glb");
-            if !entry.files.contains_key(&glb) {
+            if !entry.files.contains_key(&glb) && !entry.files.contains_key("asset.json") {
                 continue;
             }
-            checked += 1;
             let asset_bytes = entry
                 .files
                 .get("asset.json")
@@ -441,7 +443,9 @@ mod tests {
             want.sort();
             assert_eq!(names, want, "{id}: asset.json lists these files");
             for (name, record) in listed {
-                let bytes = &entry.files[name];
+                let bytes = entry.files.get(name).unwrap_or_else(|| {
+                    panic!("{id}: asset.json lists {name}, which the folder lacks")
+                });
                 assert_eq!(record["bytes"], bytes.len(), "{id}: size of {name}");
                 assert_eq!(
                     record["sha256"],
@@ -526,12 +530,5 @@ mod tests {
             let policy: Vec<String> = policy.into_iter().collect();
             assert_eq!(kept, policy, "{id}: kept_nodes against the keep policy");
         }
-        let parts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parts");
-        let with_body = catalog
-            .ids()
-            .into_iter()
-            .filter(|id| parts.join(id).join(format!("{id}.glb")).is_file())
-            .count();
-        assert_eq!(checked, with_body);
     }
 }
