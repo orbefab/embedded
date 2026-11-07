@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Rewrites the parts.lock fixture from parts/ and refreshes each example with
-# `orbe add --overwrite`. The asset step is left out. It needs a checkout of
-# orbefab/models. Run scripts/check-assets.sh for that.
+# Rewrites the parts.lock fixture from parts/ and refreshes each example from
+# the catalog ids its scene names. A copy the scene no longer names is removed.
+# The asset step is left out. It needs a checkout of orbefab/models.
+# Run scripts/check-assets.sh for that.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -9,7 +10,8 @@ usage() {
   cat <<'EOF'
 usage: scripts/bless.sh
 
-Rewrite the parts.lock fixture from parts/, then refresh each example with orbe add --overwrite.
+Rewrite the parts.lock fixture from parts/, then refresh each example from the catalog ids its scene names.
+A copy the scene no longer names is removed.
 The asset step is left out. It needs a checkout of orbefab/models.
 EOF
 }
@@ -30,20 +32,3 @@ if ! grep -q 'test result: ok\. 1 passed;' "$log"; then
   echo "scripts/bless.sh: parts_lock_matches_the_catalog did not pass once" >&2
   exit 1
 fi
-
-cargo build --locked -p orbe
-orbe="$PWD/target/debug/orbe"
-
-for scene in examples/*/scene.jsonc; do
-  dir=$(dirname "$scene")
-  mapfile -t ids < <(
-    {
-      grep -oE '"type"[[:space:]]*:[[:space:]]*"[^"./][^"]*"' "$scene" \
-        | sed -E 's/.*"([^"]*)"$/\1/'
-      if [[ -f "$dir/parts.lock" ]]; then
-        awk 'NF { print $1 }' "$dir/parts.lock"
-      fi
-    } | sort -u
-  )
-  "$orbe" add -C "$dir" --overwrite "${ids[@]}"
-done
