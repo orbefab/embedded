@@ -1,6 +1,7 @@
 // The messages between a session and the viewer. A session builds `SceneMessage` once per
 // `open` and `FrameMessage` after each change, and the viewer sends `Command`s back. The JSON
-// keys are exactly these field names.
+// keys are exactly these field names. Over a session's WebSocket the viewer sends each command
+// as a `CommandMessage` and gets a `ReplyMessage`, and `ClosedMessage` is the last message.
 //
 // Lengths, positions and directions are in the part frame: mm, +Z up, the seating plane at
 // z = 0. Other quantities are SI numbers: ohms, amperes, picoseconds.
@@ -150,22 +151,27 @@ export interface SceneMessage {
 
 export type RunState = "paused" | "playing" | "stopped" | "faulted";
 
+/** A frame's state: the session's, or `stepping` for a frame sent while a `step` runs, which no
+ * reply says. */
+export type FrameState = RunState | "stepping";
+
 /** The circuit at `t_ps`, indexed by the scene's `channels`. */
 export interface FrameMessage {
   readonly type: "frame";
   readonly seq: number;
   readonly t_ps: number;
-  readonly state: RunState;
+  readonly state: FrameState;
   /** 0 for low, 1 for high, per `channels.pins`. */
   readonly pins: readonly (0 | 1)[];
-  /** Mean current in amperes since the previous frame, per `channels.leds`. */
+  /** Mean current in amperes since the previous frame, per `channels.leds`. The frame after a
+   * page joins carries the present current. */
   readonly led_a: readonly number[];
   /** 1 for closed, 0 for open, per `channels.switches`. */
   readonly switches: readonly (0 | 1)[];
-  /** Reserved until the engine has a play speed: the speed `play` asked for. */
+  /** On a frame from a `play` tick: the speed `play` runs at, always 1 for now. */
   readonly speed?: number | "max";
-  /** Reserved until the engine has a play speed: simulated time over wall time, as the
-   * session achieved it. */
+  /** On a frame from a `play` tick: simulated time over wall time in that tick, as the session
+   * achieved it. Under 1 when the engine runs slower than real time. */
   readonly ratio?: number;
   /** Reserved until the session sends displays: per `channels.displays`, without pixels. */
   readonly displays?: readonly DisplayState[];
@@ -181,23 +187,54 @@ export interface DisplayState {
   readonly brightness: number | null;
 }
 
-export type ToViewer = SceneMessage | FrameMessage;
+/** The session ended, with why, such as `` `orbe close` ended the session``. Nothing follows. */
+export interface ClosedMessage {
+  readonly type: "closed";
+  readonly reason: string;
+}
 
-/** The CLI's own input commands. The viewer sends `press` and `release`. */
+export type ToViewer = SceneMessage | FrameMessage | ClosedMessage;
+
+/** The CLI's own input commands. The viewer sends `press`, `release`, `play` and `pause`.
+ * `play` takes no speed yet. */
 export type Command =
   | { readonly cmd: "press" | "release"; readonly ref: Ref }
   | { readonly cmd: "set"; readonly ref: Ref; readonly value: string }
   | { readonly cmd: "play"; readonly speed?: number | "max" }
   | { readonly cmd: "pause" };
 
-/** A command's reply: the session's `--json` envelope, of which the viewer reads `ok` and,
- * on a refusal, `error`. */
-export type Reply =
-  | { readonly ok: true }
-  | {
-      readonly ok: false;
-      readonly error: { readonly code: string; readonly message: string; readonly hint: string };
-    };
+/** The session's state in a reply. `closed` is a session with no scene open. */
+export type SessionState = RunState | "closed";
+
+export interface ReplyError {
+  readonly code: string;
+  readonly message: string;
+  /** Empty when there is none. */
+  readonly hint: string;
+}
+
+/** A command's reply: the envelope `orbe <command> --json` prints. `data` is what the command
+ * returned, and is absent for a command with nothing to return. */
+export type Reply = {
+  readonly session: string;
+  readonly t_ps: number;
+  readonly state: SessionState;
+  readonly data?: Readonly<Record<string, unknown>>;
+} & ({ readonly ok: true } | { readonly ok: false; readonly error: ReplyError });
+
+/** A command as the viewer sends it on a session's WebSocket. `id` is the viewer's own and
+ * comes back on its reply. */
+export type CommandMessage = Command & { readonly id: number };
+
+/** The reply to the viewer's command `id`. Only the viewer that sent the command gets it. */
+export interface ReplyMessage {
+  readonly type: "reply";
+  readonly id: number;
+  readonly reply: Reply;
+}
+
+/** Everything a session's WebSocket sends. */
+export type FromSession = ToViewer | ReplyMessage;
 
 /** Where the viewer's messages come from and its commands go: a WebSocket to the session
  * process, a Worker in the sandbox, or a fixture. */
@@ -207,6 +244,12 @@ export interface SessionSource {
   subscribe(listener: (message: ToViewer) => void): () => void;
   /** Rejects when the command never reached the session. */
   send(command: Command): Promise<Reply>;
+}
+
+/** The reply's error as the CLI prints it, such as `error[ended]: …` with its hint below. */
+export function errorText(error: ReplyError): string {
+  const head = `error[${error.code}]: ${error.message}`;
+  return error.hint === "" ? head : `${head}\n  hint: ${error.hint}`;
 }
 
 /** The command as the CLI writes it, such as `press @btn1`. */

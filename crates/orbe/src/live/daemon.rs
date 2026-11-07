@@ -2,25 +2,33 @@
 //! commands in the order they arrive on one channel, and writes each reply itself, so every
 //! command it took is answered before it exits. Each connection carries one request, and a
 //! client that hangs up before its reply cancels a running `step`, or the command it queued.
+//!
+//! Viewers' commands, their comings and goings, and `play`'s ticks reach the same thread on the
+//! same channel, so a viewer's `press` runs between two commands or two ticks, never inside a
+//! `step`, and nothing needs a lock.
 
+use std::collections::BTreeMap;
 use std::io::{self, BufReader, Read, Write};
 use std::ops::ControlFlow;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use orbe_session::{Code, Command, Data, Error, Live, Reply};
+use orbe_session::{Code, Command, Data, Error, Frames, Live, Pace, Reply, Sample};
+use serde_json::json;
 
+use super::page::Page;
 use super::place::{Name, Place};
-use super::{Request, read_line};
+use super::viewer::{self, Models, Out, Viewer};
+use super::{Ask, Request, read_line};
 
-/// The process ends after this long with no command.
+/// The process ends after this long with no command and no `play` tick while no viewer watches.
 const IDLE: Duration = Duration::from_secs(60 * 60);
 
 /// A process with no scene open ends this long after it starts listening, however many
@@ -33,25 +41,77 @@ const RECHECK: Duration = Duration::from_millis(20);
 /// How long a reply waits for a client that does not read it.
 const WRITE: Duration = Duration::from_secs(5);
 
+/// `play` advances this much simulated time per tick at most, one tick of wall time at speed 1,
+/// so a slow engine plays in slow motion and a command waits at most one tick. A `step` sends
+/// viewers a frame at most this often.
+const TICK: Duration = Duration::from_millis(16);
+
+/// How long the ending process waits for its viewers to take their close.
+const FAREWELL: Duration = Duration::from_secs(1);
+
 /// A request, or why it did not read as one, with the connection its reply goes back on.
-struct Job {
+pub(super) struct Job {
     request: Result<Request, Error>,
     hung_up: Arc<AtomicBool>,
     client: UnixStream,
 }
 
-/// What the main thread waits for: a command, or the end of the time a process with no scene
-/// open may wait for one.
-enum Event {
+/// What the main thread waits for: a command, a viewer, or the end of the time a process with
+/// no scene open may wait for one.
+pub(super) enum Event {
     Job(Job),
+    Viewer(Viewer),
     Unopened,
 }
 
-/// The session's `Live`, and the open scene's real path with the folder `open` ran in, so a
-/// client in another folder sees the scene's path from there.
+/// The session's `Live`, the open scene's real path with the folder `open` ran in, so a client
+/// in another folder sees the scene's path from there, and the viewers that watch it.
 struct Held {
     live: Live,
     scene: Option<(PathBuf, PathBuf)>,
+    watchers: Watchers,
+    /// The page's URL, once `show` started the listener.
+    url: Option<String>,
+    models: Models,
+    events: Sender<Event>,
+    /// While `play` runs: when the last tick began.
+    ticked: Option<Instant>,
+}
+
+/// The viewers, and the frames they were sent. An LED's mean current runs from the frame
+/// before, and a viewer joining restarts it, so a new page never sees a mean over time no page
+/// watched.
+#[derive(Default)]
+struct Watchers {
+    viewers: BTreeMap<u64, Sender<Out>>,
+    frames: Frames,
+    sent_at: Option<Instant>,
+}
+
+impl Watchers {
+    fn send(&mut self, out: impl Fn() -> Out) {
+        self.viewers.retain(|_, viewer| viewer.send(out()).is_ok());
+    }
+
+    /// Sends a frame of `sample` when it shows something new.
+    fn frame(&mut self, sample: Sample, pace: Option<Pace>) {
+        if self.viewers.is_empty() {
+            return;
+        }
+        if let Some(frame) = self.frames.frame(sample, pace) {
+            let text: Arc<str> = frame.to_string().into();
+            self.sent_at = Some(wall());
+            self.send(|| Out::Frame(Arc::clone(&text)));
+        }
+    }
+
+    /// Whether a running `step` owes the viewers a frame.
+    fn due(&self) -> bool {
+        !self.viewers.is_empty()
+            && self
+                .sent_at
+                .is_none_or(|at| wall().duration_since(at) >= TICK)
+    }
 }
 
 impl Held {
@@ -65,12 +125,16 @@ impl Held {
         }
         let (cwd, command, stop) = match &job.request {
             Ok(Request {
+                ask: Ask::Show { page },
+                ..
+            }) => return self.show(page.as_deref()),
+            Ok(Request {
                 cwd,
-                command: Ok(command),
+                ask: Ask::Run(Ok(command)),
                 stop,
             }) => (Path::new(cwd), command, stop.as_deref()),
             Ok(Request {
-                command: Err(error),
+                ask: Ask::Run(Err(error)),
                 ..
             })
             | Err(error) => return self.live.refuse(error.clone()),
@@ -88,7 +152,11 @@ impl Held {
                 Err(error) => return self.live.refuse(error),
             }
         }
-        let mut reply = self.live.run_with(command, &mut |_| {
+        let watchers = &mut self.watchers;
+        let mut reply = self.live.run_with(command, &mut |progress| {
+            if watchers.due() {
+                watchers.frame(progress.sample(), None);
+            }
             if job.hung_up.load(Ordering::Relaxed) {
                 ControlFlow::Break(())
             } else {
@@ -113,6 +181,139 @@ impl Held {
             _ => {}
         }
         reply
+    }
+
+    /// Starts the listener on the first call, and gives the page's URL.
+    fn show(&mut self, page: Option<&Path>) -> Reply {
+        if self.live.scene().is_none() {
+            return self
+                .live
+                .refuse(Error::new(Code::NoSession, "no scene is open", ""));
+        }
+        if let Some(url) = &self.url {
+            return self.live.report(Data::Viewer { url: url.clone() });
+        }
+        let page = match Page::find(page) {
+            Ok(page) => page,
+            Err(error) => return self.live.refuse(error),
+        };
+        match viewer::start(page, Arc::clone(&self.models), self.events.clone()) {
+            Ok(url) => {
+                self.url = Some(url.clone());
+                self.live.report(Data::Viewer { url })
+            }
+            Err(error) => self.live.refuse(Error::new(
+                Code::IoError,
+                format!("cannot listen for viewers on 127.0.0.1: {error}"),
+                "",
+            )),
+        }
+    }
+
+    /// What follows a command that ran, from a client or a viewer: a new scene's message, the
+    /// play clock started or stopped, and a frame.
+    fn after(&mut self, reply: &Reply) {
+        if let Data::Opened { .. } = reply.data {
+            self.watchers.frames.restart();
+            self.models_from_scene();
+            if let Some(scene) = self.live.scene() {
+                let text: Arc<str> = scene.to_string().into();
+                self.watchers.send(|| Out::Text(Arc::clone(&text)));
+            }
+        }
+        self.ticked = match (self.live.playing(), self.ticked) {
+            (true, None) => Some(wall()),
+            (true, ticked) => ticked,
+            (false, _) => None,
+        };
+        self.frame(None);
+    }
+
+    fn frame(&mut self, pace: Option<Pace>) {
+        if let Some(sample) = self.live.sample() {
+            self.watchers.frame(sample, pace);
+        }
+    }
+
+    /// The part models the scene message names, each in the open scene's folder.
+    fn models_from_scene(&mut self) {
+        let folder = self.scene.as_ref().and_then(|(_, real)| real.parent());
+        let parts = self.live.scene().map(|scene| scene["parts"].clone());
+        let mut models = self.models.lock().unwrap();
+        models.clear();
+        let (Some(folder), Some(serde_json::Value::Object(parts))) = (folder, parts) else {
+            return;
+        };
+        for part in parts.values() {
+            if let Some(url) = part["model"].as_str() {
+                models.insert(url.to_string(), folder.join(url.trim_start_matches('/')));
+            }
+        }
+    }
+
+    /// One `play` tick: the wall time since the last, up to one tick, at speed 1.
+    fn tick(&mut self) {
+        let Some(ticked) = self.ticked else { return };
+        let now = wall();
+        let wall = now.duration_since(ticked);
+        let simulated = wall.min(TICK);
+        let playing = self.live.tick(simulated.as_nanos() as u64 * 1000);
+        self.ticked = playing.then_some(now);
+        let pace = Pace {
+            speed: 1.0,
+            ratio: simulated.as_secs_f64() / wall.as_secs_f64().max(f64::EPSILON),
+        };
+        self.frame(playing.then_some(pace));
+    }
+
+    /// When the next tick is due, while `play` runs.
+    fn next_tick(&self) -> Option<Instant> {
+        self.ticked.map(|at| at + TICK)
+    }
+
+    fn viewer(&mut self, event: Viewer) {
+        match event {
+            Viewer::Joined(id, out) => {
+                if let Some(scene) = self.live.scene() {
+                    let _ = out.send(Out::Text(scene.to_string().into()));
+                }
+                self.watchers.viewers.insert(id, out);
+                self.watchers.frames.restart();
+                self.frame(None);
+            }
+            Viewer::Command(id, request, command) => {
+                let reply = match command {
+                    Ok(command) => self.live.run(&command),
+                    Err(error) => self.live.refuse(error),
+                };
+                let message = json!({ "type": "reply", "id": request, "reply": reply.json() });
+                if let Some(viewer) = self.watchers.viewers.get(&id) {
+                    let _ = viewer.send(Out::Text(message.to_string().into()));
+                }
+                self.after(&reply);
+            }
+            Viewer::Left(id) => {
+                self.watchers.viewers.remove(&id);
+            }
+        }
+    }
+
+    /// Tells each viewer why the session ended, closes it, and waits a moment for them all.
+    fn farewell(&mut self, why: &str) {
+        let last: Arc<str> = json!({ "type": "closed", "reason": why })
+            .to_string()
+            .into();
+        let (done, heard) = mpsc::channel();
+        let count = self.watchers.viewers.len();
+        self.watchers
+            .send(|| Out::Close(Arc::clone(&last), done.clone()));
+        let until = wall() + FAREWELL;
+        for _ in 0..count {
+            let left = until.saturating_duration_since(wall());
+            if heard.recv_timeout(left).is_err() {
+                break;
+            }
+        }
     }
 }
 
@@ -176,17 +377,23 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
     let (events, queue) = mpsc::channel();
     let reading = Arc::new(AtomicUsize::new(0));
     let timer = unopened_timer(events.clone(), UNOPENED.min(idle), Arc::clone(&reading));
-    thread::spawn(move || accept(&listener, &events, &reading));
     let mut held = Held {
         live: Live::new(name.as_str()),
         scene: None,
+        watchers: Watchers::default(),
+        url: None,
+        models: Arc::new(Mutex::new(BTreeMap::new())),
+        events: events.clone(),
+        ticked: None,
     };
-    serve(&mut held, &queue, idle, timer);
+    thread::spawn(move || accept(&listener, &events, &reading));
+    let why = serve(&mut held, &queue, idle, timer);
     for (path, identity) in [(&socket, bound.0), (&log, bound.1)] {
         if identity.is_some() && inode(path) == identity {
             let _ = std::fs::remove_file(path);
         }
     }
+    held.farewell(why);
     let ending = held.live.refuse(Error::new(
         Code::NoSession,
         format!("session `{name}` has ended"),
@@ -200,24 +407,53 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Runs jobs in order until a `close` closes the scene, or no job comes for `idle`. Before the
-/// first scene opens, every command but `open` gets `no_session` and changes nothing, and the
-/// process ends `UNOPENED` after it started. A session at its stop stays, so reads still
-/// answer there.
-fn serve(held: &mut Held, queue: &Receiver<Event>, idle: Duration, timer: Sender<()>) {
+/// Runs jobs, viewers' commands and `play`'s ticks in order until a `close` closes the scene,
+/// or nothing comes and nothing plays for `idle` while no viewer watches. Before the first
+/// scene opens, every command but `open` gets `no_session` and changes nothing, and the process
+/// ends `UNOPENED` after it started. A session at its stop stays, so reads still answer there.
+/// Returns why it ended, for the viewers.
+fn serve(
+    held: &mut Held,
+    queue: &Receiver<Event>,
+    idle: Duration,
+    timer: Sender<()>,
+) -> &'static str {
     let mut timer = Some(timer);
-    while let Ok(event) = queue.recv_timeout(idle) {
-        let job = match event {
-            Event::Job(job) => job,
-            Event::Unopened if timer.is_some() => return,
-            Event::Unopened => continue,
+    let mut last = wall();
+    loop {
+        if held.next_tick().is_some_and(|at| at <= wall()) {
+            held.tick();
+            last = wall();
+        }
+        let quiet = held.watchers.viewers.is_empty().then(|| last + idle);
+        let event = match [quiet, held.next_tick()].into_iter().flatten().min() {
+            Some(at) => queue.recv_timeout(at.saturating_duration_since(wall())),
+            None => queue.recv().map_err(|_| RecvTimeoutError::Disconnected),
         };
-        let reply = held.run(&job);
-        job.answer(&reply);
-        match reply.data {
-            Data::Opened { .. } => timer = None,
-            Data::Closed { .. } => return,
-            _ => {}
+        match event {
+            Ok(Event::Job(job)) => {
+                last = wall();
+                let reply = held.run(&job);
+                job.answer(&reply);
+                held.after(&reply);
+                match reply.data {
+                    Data::Opened { .. } => timer = None,
+                    Data::Closed { .. } => return "`orbe close` ended the session",
+                    _ => {}
+                }
+            }
+            Ok(Event::Viewer(viewer)) => {
+                last = wall();
+                held.viewer(viewer);
+            }
+            Ok(Event::Unopened) if timer.is_some() => return "no scene was opened",
+            Ok(Event::Unopened) => {}
+            Err(RecvTimeoutError::Timeout) => {
+                if quiet.is_some_and(|at| at <= wall()) {
+                    return "the session ended after an hour with no command";
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => return "the session ended",
         }
     }
 }
@@ -336,4 +572,11 @@ fn connection(stream: UnixStream, jobs: &Sender<Event>) {
         hung_up,
         client: stream,
     }));
+}
+
+/// The wall clock, which paces `play`, spaces frames and times the waits. It decides when time
+/// moves, never what a reply at a given time says.
+#[expect(clippy::disallowed_methods, reason = "`play` runs on the wall clock")]
+pub(super) fn wall() -> Instant {
+    Instant::now()
 }

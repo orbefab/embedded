@@ -65,6 +65,10 @@ impl Sources {
         &self.files[id.0]
     }
 
+    pub(crate) fn files(&self) -> &[SourceFile] {
+        &self.files
+    }
+
     /// The 1-based line and column of a span's start, the column counted in characters.
     pub(crate) fn line_col(&self, span: Span) -> (usize, usize) {
         let text = &self.file(span.file).text;

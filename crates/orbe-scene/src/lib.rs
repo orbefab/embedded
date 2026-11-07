@@ -23,7 +23,10 @@ mod units;
 use std::path::Path;
 
 pub use add::{AddCode, Reply, Request, RunError, run as add_parts};
-pub use circuit::{Amount, EnginePart, MapPart, Netlist, Reading, RefMap};
+pub use circuit::{
+    Amount, EnginePart, Instance, MapPart, Netlist, PartData, PinWhy, Placement, Reading, RefMap,
+    View, Wire,
+};
 pub use diagnostic::{Code, Diagnostic};
 pub use model::STOP_PS;
 pub use project::{REGISTRY, folder_hash};

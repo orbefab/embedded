@@ -4,9 +4,13 @@
 //! The wire is JSON lines on a Unix socket: the client writes one `Request` line, the process
 //! writes one `Reply` line and closes. A client that hangs up first, as Ctrl-C does, cancels a
 //! running `step`, whose reply still comes back.
+//!
+//! `orbe show` asks the process for a viewer's URL and opens it in the default browser.
 
 mod daemon;
+mod page;
 mod place;
+mod viewer;
 
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
@@ -25,16 +29,23 @@ use serde_json::{Value, json};
 
 use place::{Name, Place};
 
-/// One request: a command, or the usage error its words gave, and the client's working
-/// folder. `open` reads its scene from that folder and `snapshot` shows the scene's path from
-/// it, so paths read as they would in `orbe test`. A usage error goes to the process only so
-/// the refusal can carry the session's real time and state. `stop` is `ORBE_TEST_STOP` from
-/// the shell that ran `open`.
+/// One request: what it asks, and the client's working folder. `open` reads its scene from
+/// that folder and `snapshot` shows the scene's path from it, so paths read as they would in
+/// `orbe test`. `stop` is `ORBE_TEST_STOP` from the shell that ran `open`.
 #[derive(Debug, Serialize, Deserialize)]
 struct Request {
     cwd: String,
-    command: Result<Command, Error>,
+    ask: Ask,
     stop: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+enum Ask {
+    /// A live command, or the usage error its words gave. A usage error goes to the process
+    /// only so the refusal can carry the session's real time and state.
+    Run(Result<Command, Error>),
+    /// The viewer's URL. `page` is the folder `ORBE_VIEWER_DIR` names, from the client's.
+    Show { page: Option<PathBuf> },
 }
 
 /// The longest line either side reads.
@@ -75,6 +86,9 @@ struct Invocation {
     words: Vec<String>,
     session: Option<String>,
     all: bool,
+    /// `open --headed`: `show` after it.
+    headed: bool,
+    browser: bool,
 }
 
 impl Invocation {
@@ -83,6 +97,8 @@ impl Invocation {
             words: Vec::new(),
             session: None,
             all: false,
+            headed: false,
+            browser: true,
         };
         let mut args = args.iter();
         while let Some(arg) = args.next() {
@@ -93,6 +109,8 @@ impl Invocation {
                     invocation.session = Some(name.clone());
                 }
                 "--all" if spec.name == "close" => invocation.all = true,
+                "--headed" if spec.name == "open" => invocation.headed = true,
+                "--no-browser" if spec.name == "open" => invocation.browser = false,
                 _ => match arg.strip_prefix("--session=") {
                     Some(name) => invocation.session = Some(name.to_string()),
                     None => invocation.words.push(arg.clone()),
@@ -101,6 +119,9 @@ impl Invocation {
         }
         if invocation.all && !invocation.words.is_empty() {
             return Err("`close --all` takes no other arguments".into());
+        }
+        if !invocation.browser && !invocation.headed {
+            return Err("`--no-browser` goes with `--headed`".into());
         }
         Ok(invocation)
     }
@@ -123,7 +144,15 @@ pub fn main(spec: &Spec, args: &[String]) -> ExitCode {
             if invocation.all {
                 return client.close_all().map(Answer::All);
             }
-            client.run(spec, &invocation.words).map(Answer::One)
+            let done = client.run(spec, &invocation.words)?;
+            match done {
+                Done::Reply(opened) if invocation.headed && opened.ok() => Ok(Answer::Headed(
+                    opened,
+                    client.show_opened(),
+                    invocation.browser,
+                )),
+                done => Ok(Answer::One(done)),
+            }
         });
     match answer {
         Ok(Answer::One(done)) => {
@@ -134,6 +163,7 @@ pub fn main(spec: &Spec, args: &[String]) -> ExitCode {
             }
             ExitCode::from(done.exit())
         }
+        Ok(Answer::Headed(opened, shown, browser)) => print_headed(&opened, shown, json, browser),
         Ok(Answer::All(closed)) => print_all(&closed, json),
         Err(refused) => {
             if json {
@@ -148,7 +178,96 @@ pub fn main(spec: &Spec, args: &[String]) -> ExitCode {
 
 enum Answer {
     One(Done),
+    /// `open --headed`: `open`'s reply, `show`'s, and whether to open a browser.
+    Headed(Box<Reply>, Result<Box<Reply>, Refusal>, bool),
     All(Vec<Result<Done, Refusal>>),
+}
+
+/// `orbe show [--session <name>] [--json] [--no-browser]`.
+pub fn show(session: Option<&str>, json: bool, browser: bool) -> ExitCode {
+    let shown = Client::new(session).and_then(|client| client.show());
+    match shown {
+        Ok(reply) => {
+            if json {
+                print_json(&reply.json());
+            } else {
+                println!("{}", reply.text());
+            }
+            if browser {
+                open_browser(&reply);
+            }
+            ExitCode::from(reply.exit())
+        }
+        Err(refused) => {
+            if json {
+                print_json(&refused.json());
+            } else {
+                eprintln!("{}", refused.text());
+            }
+            ExitCode::from(refused.exit())
+        }
+    }
+}
+
+/// `open`'s reply, then `show`'s URL or its error, with `show`'s exit code. With `--json`, one
+/// envelope: `open`'s, with the URL in `data.url`, or `ok: false` and `show`'s error.
+fn print_headed(
+    opened: &Reply,
+    shown: Result<Box<Reply>, Refusal>,
+    json: bool,
+    browser: bool,
+) -> ExitCode {
+    let mut envelope = opened.json();
+    let (error, exit) = match &shown {
+        Ok(reply) => (reply.json()["error"].clone(), reply.exit()),
+        Err(refused) => (refused.json()["error"].clone(), refused.exit()),
+    };
+    if let Ok(Reply {
+        data: Data::Viewer { url },
+        ..
+    }) = shown.as_deref()
+    {
+        envelope["data"]["url"] = url.clone().into();
+    }
+    if !error.is_null() {
+        envelope["ok"] = false.into();
+        envelope["error"] = error;
+    }
+    if json {
+        print_json(&envelope);
+    } else {
+        println!("{}", opened.text());
+        match &shown {
+            Ok(reply) => println!("{}", reply.text()),
+            Err(refused) => eprintln!("{}", refused.text()),
+        }
+    }
+    if browser && let Ok(reply) = &shown {
+        open_browser(reply);
+    }
+    ExitCode::from(exit)
+}
+
+/// Opens `show`'s URL in the default browser. A browser that does not start leaves the URL to
+/// open by hand.
+fn open_browser(reply: &Reply) {
+    let Data::Viewer { url } = &reply.data else {
+        return;
+    };
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let started = std::process::Command::new(program)
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    if let Err(error) = started {
+        eprintln!("could not run `{program}` to open a browser: {error}; open the URL above");
+    }
 }
 
 /// Printed on stdout.
@@ -381,7 +500,9 @@ impl Client {
             Command::Close => self.close(),
             Command::Open(_) => self.open(command).map(Done::Reply),
             _ => match self.find()? {
-                Found::Listening(stream) => self.send(stream, Ok(command)).map(Done::Reply),
+                Found::Listening(stream) => {
+                    self.send(stream, Ask::Run(Ok(command))).map(Done::Reply)
+                }
                 Found::Missing => Err(self.no_session()),
                 Found::Stale => Err(self.crashed("ended without closing")),
             },
@@ -434,10 +555,10 @@ impl Client {
         let mut started = None;
         for attempt in 1..=TRIES {
             let answered = match self.find()? {
-                Found::Listening(stream) => self.send(stream, Ok(command.clone())),
+                Found::Listening(stream) => self.send(stream, Ask::Run(Ok(command.clone()))),
                 Found::Missing | Found::Stale => self.start(attempt).and_then(|(stream, log)| {
                     started = Some(log);
-                    self.send(stream, Ok(command.clone()))
+                    self.send(stream, Ask::Run(Ok(command.clone())))
                 }),
             };
             match answered {
@@ -467,7 +588,9 @@ impl Client {
     /// holds output.
     fn close(&self) -> Result<Done, Refusal> {
         match self.find()? {
-            Found::Listening(stream) => self.send(stream, Ok(Command::Close)).map(Done::Reply),
+            Found::Listening(stream) => self
+                .send(stream, Ask::Run(Ok(Command::Close)))
+                .map(Done::Reply),
             Found::Missing => Err(self.no_session()),
             Found::Stale => {
                 fs::remove_file(&self.socket).map_err(|error| {
@@ -498,7 +621,7 @@ impl Client {
         let at = match self.find() {
             Ok(Found::Listening(stream)) => {
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
-                match self.send(stream, Err(error.clone())) {
+                match self.send(stream, Ask::Run(Err(error.clone()))) {
                     Ok(reply) => Some((reply.t_ps, reply.state)),
                     Err(refused) if refused.error.code == Code::NoSession => refused.at,
                     Err(_) => None,
@@ -623,13 +746,38 @@ impl Client {
         self.refuse(Code::IoError, message, hint)
     }
 
+    /// `show` to the session's process. A relative `ORBE_VIEWER_DIR` starts from this folder.
+    fn show(&self) -> Result<Box<Reply>, Refusal> {
+        let page = std::env::var_os(page::FOLDER)
+            .filter(|dir| !dir.is_empty())
+            .map(|dir| Path::new(&self.cwd).join(dir));
+        match self.find()? {
+            Found::Listening(stream) => self.send(stream, Ask::Show { page }),
+            Found::Missing => Err(self.no_session()),
+            Found::Stale => Err(self.crashed("ended without closing")),
+        }
+    }
+
+    /// `show` after `open --headed`. A `show` the session refused leaves it open, so the hint
+    /// says so. A refusal from this side, such as `no_session`, means it may not be open.
+    fn show_opened(&self) -> Result<Box<Reply>, Refusal> {
+        let mut shown = self.show()?;
+        if let Some(error) = &mut shown.error {
+            let flag = self.session_flag();
+            let open = format!(
+                "the session stays open, so run `orbe show{flag}` to try again, or `orbe close{flag}` to end it"
+            );
+            error.hint = match error.hint.as_str() {
+                "" => open,
+                hint => format!("{hint}; {open}"),
+            };
+        }
+        Ok(shown)
+    }
+
     /// A `no_session` reply, from a process with no scene yet or one that is ending, becomes
     /// the client's own, and a hint to `open` again names the shell command.
-    fn send(
-        &self,
-        stream: UnixStream,
-        command: Result<Command, Error>,
-    ) -> Result<Box<Reply>, Refusal> {
+    fn send(&self, stream: UnixStream, ask: Ask) -> Result<Box<Reply>, Refusal> {
         if let Ok(hangup) = stream.try_clone() {
             let pressed = AtomicBool::new(false);
             let _ = ctrlc::set_handler(move || {
@@ -639,12 +787,12 @@ impl Client {
                 let _ = hangup.shutdown(Shutdown::Write);
             });
         }
-        let stop = matches!(command, Ok(Command::Open(_)))
+        let stop = matches!(ask, Ask::Run(Ok(Command::Open(_))))
             .then(|| std::env::var("ORBE_TEST_STOP").ok())
             .flatten();
         let request = Request {
             cwd: self.cwd.clone(),
-            command,
+            ask,
             stop,
         };
         let mut wire = serde_json::to_string(&request).map_err(|error| {

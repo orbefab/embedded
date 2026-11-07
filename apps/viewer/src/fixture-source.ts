@@ -46,11 +46,13 @@ export function fixtureSource(
     },
     async send(command: Command) {
       console.log(commandLine(command));
-      return { ok: true };
+      const state = latest?.state ?? "paused";
+      // A reply comes once a step has ended, so it never says `stepping`.
+      return { ok: true, session: scene.session, t_ps: latest?.t_ps ?? 0, state: state === "stepping" ? "paused" : state };
     },
     push(message) {
       if (message.type === "scene") scene = message;
-      else latest = message;
+      else if (message.type === "frame") latest = message;
       broadcast(message);
     },
   };

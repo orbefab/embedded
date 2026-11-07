@@ -22,7 +22,7 @@ pub const CHANGES: usize = 20;
 
 /// Where a running step stands after a slice, for a caller that shows frames or stops it.
 pub struct Progress<'a> {
-    open: &'a Open,
+    pub(super) open: &'a Open,
     pub from_ps: u64,
     pub end_ps: u64,
 }
@@ -103,7 +103,7 @@ impl Open {
             .collect()
     }
 
-    fn stop_name(&self) -> String {
+    pub(super) fn stop_name(&self) -> String {
         if self.stop_ps == orbe_scene::STOP_PS {
             "2-hour".into()
         } else {
@@ -111,6 +111,9 @@ impl Open {
         }
     }
 
+    /// Steps as `step` asks. A step that runs ends `play`, and one refused before it runs
+    /// leaves it running. It lists what `play` ran since the last `step` first, and a step
+    /// refused at a fault or the stop lists those in its refusal, since no later step runs.
     pub(super) fn step(
         &mut self,
         step: &Step,
@@ -123,13 +126,14 @@ impl Open {
             }
         };
         match (self.engine.status(), step) {
-            (Status::Faulted, _) => return Err(fail(self.faulted())),
+            (Status::Faulted, _) => return Err(failed(self.faulted(), self.unlisted())),
             (Status::Stopped, Step::For(_)) => {
-                return Err(fail(Error::new(
+                let error = Error::new(
                     Code::Ended,
                     format!("the session reached its {} stop", self.stop_name()),
                     "run `open` to start again",
-                )));
+                );
+                return Err(failed(error, self.unlisted()));
             }
             _ => {}
         }
@@ -153,6 +157,7 @@ impl Open {
                 })?,
             Step::Until { timeout, .. } => from.saturating_add(timeout.as_ps()).min(self.stop_ps),
         };
+        self.playing = false;
         let leds: Vec<(String, EngineRef, f64)> = self
             .refs
             .top
@@ -166,8 +171,10 @@ impl Open {
         let mut was = self.lit(&leds, &probe);
         let mut known: BTreeSet<Key> = self.findings(&probe).iter().map(key).collect();
         drop(probe);
-        let mut changes = Vec::new();
-        let mut more = 0;
+        let (listed_from, mut changes, mut more) = match self.unlisted.take() {
+            Some(played) => (played.from_ps, played.changes, played.more),
+            None => (from, Vec::new(), 0),
+        };
         let mut list = |found: Vec<Change>| {
             for change in found {
                 if changes.len() < CHANGES {
@@ -247,7 +254,7 @@ impl Open {
             }
         });
         let data = Data::Stepped(Stepped {
-            from_ps: from,
+            from_ps: listed_from,
             met,
             changes,
             more,
@@ -283,6 +290,10 @@ impl Open {
             }
             _ => Ok(data),
         }
+    }
+
+    fn unlisted(&mut self) -> Data {
+        self.unlisted.take().map_or(Data::None, Data::Stepped)
     }
 
     /// Takes the edges and bytes the engine logged since the last drain. Every edge through
