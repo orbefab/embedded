@@ -290,7 +290,7 @@ fn help_lists_every_command_and_each_command_prints_its_usage() {
         .collect();
     let mut want = vec!["check", "add"];
     want.extend(orbe_session::COMMANDS.iter().map(|s| s.name));
-    want.extend(["test", "skills", "help"]);
+    want.extend(["show", "test", "skills", "help"]);
     assert_eq!(listed, want);
     for name in &want {
         for flag in ["--help", "-h"] {

@@ -73,6 +73,20 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Opens a viewer on a running session: a page the session's process serves on 127.0.0.1,
+    /// in the default browser. Prints the page's URL.
+    #[command(display_order = 19, after_help = SHOW_HELP)]
+    Show {
+        /// The session, instead of ORBE_SESSION or the project's default name.
+        #[arg(long, value_name = "NAME")]
+        session: Option<String>,
+        /// Print the URL, and open no browser.
+        #[arg(long)]
+        no_browser: bool,
+        /// Print one JSON envelope instead of text.
+        #[arg(long)]
+        json: bool,
+    },
     /// Prints the skills that tell an agent how to use orbe.
     #[command(display_order = 21)]
     Skills {
@@ -118,6 +132,8 @@ fn cli() -> clap::Command {
 
 const LIVE_HELP: &str = "Refs: @btn1, @nano.D13, @led1.i. Conditions: @led1 on, @nano.D13 high, @led1.i '>' 5mA, serial contains \"text\", no diagnostics. Durations: 100ms, 1.5ms, 20us. `orbe skills get core` explains each.";
 
+const SHOW_HELP: &str = "The URL holds a token that only this session's process accepts, so keep it to yourself. Several viewers may watch one session. Closing the page leaves the session running, and `orbe close` ends the viewers too. A person can press buttons in the page, and `play` and `pause` there are the CLI's own. ORBE_VIEWER_DIR serves a built page's folder in place of the one built into orbe.";
+
 const SWITCH_HELP: &str = "The input lands at the session's time t, and reads show it after t. On a switch with `bounce`, an input inside the bounce window of the one before lands after that window. The reply gives the time.";
 
 fn live_help(spec: &orbe_session::Spec) -> clap::Command {
@@ -148,6 +164,21 @@ fn live_help(spec: &orbe_session::Spec) -> clap::Command {
         .any(|word| spec.usage.contains(word))
     {
         command = command.after_help(LIVE_HELP);
+    }
+    if spec.name == "open" {
+        command = command
+            .arg(
+                Arg::new("headed")
+                    .long("headed")
+                    .action(ArgAction::SetTrue)
+                    .help("Then run `orbe show`, which opens a viewer on the session"),
+            )
+            .arg(
+                Arg::new("no-browser")
+                    .long("no-browser")
+                    .action(ArgAction::SetTrue)
+                    .help("With --headed, print the viewer's URL and open no browser"),
+            );
     }
     if spec.name == "close" {
         command = command.arg(
@@ -225,6 +256,11 @@ fn main() -> ExitCode {
                 json,
             } => run_tests(&paths, verbose, json),
             Command::Skills { command } => print_skill(command),
+            Command::Show {
+                session,
+                no_browser,
+                json,
+            } => show(session.as_deref(), json, !no_browser),
             Command::Daemon { session, start_log } => daemon(&session, start_log),
         },
         Err(err) => usage(err),
@@ -342,6 +378,11 @@ fn daemon(session: &str, start_log: Option<u64>) -> ExitCode {
     live::daemon(session, start_log)
 }
 
+#[cfg(unix)]
+fn show(session: Option<&str>, json: bool, browser: bool) -> ExitCode {
+    live::show(session, json, browser)
+}
+
 #[cfg(not(unix))]
 fn live_command(spec: &orbe_session::Spec, args: &[String]) -> ExitCode {
     let message = format!("`orbe {}` needs Unix for now", spec.name);
@@ -363,6 +404,12 @@ fn live_command(spec: &orbe_session::Spec, args: &[String]) -> ExitCode {
 #[cfg(not(unix))]
 fn daemon(_session: &str, _start_log: Option<u64>) -> ExitCode {
     eprintln!("error[usage]: the session process needs Unix for now");
+    ExitCode::from(USAGE)
+}
+
+#[cfg(not(unix))]
+fn show(_session: Option<&str>, _json: bool, _browser: bool) -> ExitCode {
+    eprintln!("error[usage]: `orbe show` needs Unix for now");
     ExitCode::from(USAGE)
 }
 
