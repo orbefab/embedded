@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::io::{self, ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -29,6 +29,12 @@ use super::page::Page;
 const HEAD: usize = 16 * 1024;
 /// How long the listener waits for a request head, and for a viewer to take what it is sent.
 const WAIT: Duration = Duration::from_secs(5);
+/// The most connections the listener serves at once, page requests and viewers together. It
+/// closes any past these at once.
+const CONNECTIONS: usize = 32;
+/// `accept` fails again at once while the process is out of files, so the listener waits this
+/// long instead of spinning.
+const BACKOFF: Duration = Duration::from_millis(100);
 /// How long a viewer's thread waits for a command before it sends what the session queued.
 const POLL: Duration = Duration::from_millis(5);
 /// RFC 6455's key suffix for `Sec-WebSocket-Accept`.
@@ -77,9 +83,21 @@ pub(super) fn start(page: Page, models: Models, events: Sender<Event>) -> io::Re
         token,
     });
     thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            let (site, events) = (Arc::clone(&site), events.clone());
-            thread::spawn(move || serve(stream, &site, &events));
+        let serving = Arc::new(AtomicUsize::new(0));
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else {
+                thread::sleep(BACKOFF);
+                continue;
+            };
+            if serving.load(Ordering::SeqCst) >= CONNECTIONS {
+                continue;
+            }
+            serving.fetch_add(1, Ordering::SeqCst);
+            let (site, events, serving) = (Arc::clone(&site), events.clone(), Arc::clone(&serving));
+            thread::spawn(move || {
+                serve(stream, &site, &events);
+                serving.fetch_sub(1, Ordering::SeqCst);
+            });
         }
     });
     Ok(url)

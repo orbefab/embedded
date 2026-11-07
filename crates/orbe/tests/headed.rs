@@ -307,6 +307,74 @@ fn the_server_refuses_a_wrong_token_host_or_origin() {
     runtime.orbe(dir.path(), &["close"]).ok();
 }
 
+/// Whether the server closed `stream` within a second, without a response.
+fn dropped(mut stream: &TcpStream) -> bool {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    matches!(stream.read(&mut [0; 64]), Ok(0))
+}
+
+#[test]
+fn the_server_serves_32_connections_at_once_and_drops_the_rest() {
+    let runtime = Runtime::new();
+    let (dir, _page, url) = opened(&runtime);
+    let (host, _) = split(&url);
+    let held: Vec<TcpStream> = (0..32)
+        .map(|_| TcpStream::connect(&host).unwrap())
+        .collect();
+    let over = TcpStream::connect(&host).unwrap();
+    assert!(dropped(&over), "a 33rd connection is closed at once");
+    assert!(!dropped(&held[31]), "the 32nd still waits for its request");
+    drop(held);
+    let get = format!("GET / HTTP/1.1\r\nHost: {host}\r\n\r\n");
+    wait_until("a connection is served again", || {
+        status(&host, &get) == "HTTP/1.1 200 OK"
+    });
+    runtime.orbe(dir.path(), &["close"]).ok();
+}
+
+/// The CPU time the process has used, in clock ticks: utime plus stime, fields 14 and 15 of
+/// `/proc/<pid>/stat`, counted after the `) ` that ends the command name.
+fn cpu_ticks(pid: u32) -> u64 {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    let fields: Vec<&str> = stat.rsplit(") ").next().unwrap().split(' ').collect();
+    fields[11].parse::<u64>().unwrap() + fields[12].parse::<u64>().unwrap()
+}
+
+#[test]
+fn a_listener_out_of_files_waits_instead_of_spinning() {
+    let runtime = Runtime::new();
+    let (dir, _page, url) = opened(&runtime);
+    let (host, _) = split(&url);
+    let pid = runtime.daemon();
+    let files = fs::read_dir(format!("/proc/{pid}/fd")).unwrap().count();
+    let limits = fs::read_to_string(format!("/proc/{pid}/limits")).unwrap();
+    let soft = limits
+        .lines()
+        .find_map(|line| line.strip_prefix("Max open files"))
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap()
+        .to_string();
+    let limit = |soft: &str| {
+        let status = std::process::Command::new("prlimit")
+            .args(["--pid", &pid.to_string(), &format!("--nofile={soft}:")])
+            .status()
+            .unwrap();
+        assert!(status.success(), "prlimit");
+    };
+    limit(&files.to_string());
+    let waiting: Vec<TcpStream> = (0..3).map(|_| TcpStream::connect(&host).unwrap()).collect();
+    std::thread::sleep(Duration::from_millis(200));
+    let before = cpu_ticks(pid);
+    std::thread::sleep(Duration::from_secs(1));
+    let used = cpu_ticks(pid) - before;
+    limit(&soft);
+    drop(waiting);
+    assert!(used < 20, "{used} ticks of CPU in 1 s of failing accepts");
+    runtime.orbe(dir.path(), &["close"]).ok();
+}
+
 #[test]
 fn a_viewer_press_is_a_cli_press() {
     let runtime = Runtime::new();
