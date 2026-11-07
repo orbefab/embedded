@@ -34,8 +34,6 @@ enum Command {
         #[arg(long)]
         out: PathBuf,
     },
-    /// Report engine version, formats, and self-checks.
-    Doctor,
 }
 
 fn main() -> ExitCode {
@@ -65,10 +63,6 @@ fn main() -> ExitCode {
             Ok(report) => emit(Status::Ok, &report),
             Err(failure) => emit(Status::IoError, &failure),
         },
-        Command::Doctor => {
-            let report = sim_cli::doctor();
-            emit(report.status(), &report)
-        }
     }
 }
 
