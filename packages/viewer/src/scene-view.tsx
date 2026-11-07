@@ -103,7 +103,15 @@ interface Held {
   readonly stop: () => void;
 }
 
-const PRESS_ENDS = ["pointerup", "pointercancel", "lostpointercapture"] as const;
+const PRESS_ENDS = ["pointerup", "pointermove", "pointercancel", "lostpointercapture"] as const;
+
+// Every mouse button shares one pointer, so a mouse press ends when the primary button is
+// up. In a chord, the primary lifting arrives as a pointermove, not a pointerup.
+function endsPress(event: PointerEvent): boolean {
+  if (event.type !== "pointerup" && event.type !== "pointermove") return true;
+  if (event.pointerType === "mouse") return (event.buttons & 1) === 0;
+  return event.type === "pointerup";
+}
 
 export function SceneView({
   scene,
@@ -187,10 +195,7 @@ export function SceneView({
     const { ref } = instance.tag;
     const { pointerId } = event;
     const end = (native: PointerEvent) => {
-      if (native.pointerId !== held.current?.pointerId) return;
-      // Every mouse button shares one pointer, so only the primary button lifting ends the press.
-      if (native.type === "pointerup" && native.pointerType === "mouse" && (native.buttons & 1) !== 0) return;
-      release();
+      if (native.pointerId === held.current?.pointerId && endsPress(native)) release();
     };
     for (const kind of PRESS_ENDS) canvas.addEventListener(kind, end);
     held.current = {

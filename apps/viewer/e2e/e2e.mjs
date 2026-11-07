@@ -119,12 +119,12 @@ const dispatchPointer = (page, type, init) =>
     [type, init]
   );
 
-/** The canvas's pointerup, pointercancel and lostpointercapture listeners, counted by type. */
+/** The canvas's pointerup, pointermove, pointercancel and lostpointercapture listeners, counted by type. */
 async function endListeners(cdp) {
   const { result } = await cdp.send("Runtime.evaluate", { expression: "window.orbeViewer.get().gl.domElement" });
   const { listeners } = await cdp.send("DOMDebugger.getEventListeners", { objectId: result.objectId });
   const by = {};
-  for (const { type } of listeners) if (["pointerup", "pointercancel", "lostpointercapture"].includes(type)) by[type] = (by[type] ?? 0) + 1;
+  for (const { type } of listeners) if (["pointerup", "pointermove", "pointercancel", "lostpointercapture"].includes(type)) by[type] = (by[type] ?? 0) + 1;
   return by;
 }
 
@@ -267,8 +267,8 @@ try {
     );
     const released = await endListeners(cdp);
     check(
-      "a press adds one pointerup, pointercancel and lostpointercapture listener to the canvas, and its release removes them",
-      same(held, { pointerup: 1, pointercancel: 1, lostpointercapture: 1 }) && same(released, {}),
+      "a press adds one pointerup, pointermove, pointercancel and lostpointercapture listener to the canvas, and its release removes them",
+      same(held, { pointerup: 1, pointermove: 1, pointercancel: 1, lostpointercapture: 1 }) && same(released, {}),
       { held, released }
     );
     const touchAction = await page.evaluate(() => getComputedStyle(document.querySelector('[data-testid="viewer"]')).touchAction);
@@ -308,6 +308,27 @@ try {
       "with the left button held on btn1, the right button going down and up does not release it, and the left up does",
       same(afterChord, ["press @btn1"]) && same(afterRightUp, ["press @btn1"]) && same(commands(), ["press @btn1", "release @btn1"]),
       { afterChord, rightUp, afterRightUp, afterLeftUp: commands() }
+    );
+    await context.close();
+  });
+
+  await guarded(async () => {
+    const { context, page, commands } = await open();
+    const stem = await pointOn(page, "@btn1", "stem");
+    await page.mouse.move(stem.x, stem.y);
+    await page.mouse.down();
+    await page.waitForTimeout(80);
+    await page.mouse.down({ button: "right" });
+    await page.waitForTimeout(80);
+    await page.mouse.up();
+    await page.waitForTimeout(80);
+    const afterLeftUp = commands();
+    await page.mouse.up({ button: "right" });
+    await page.waitForTimeout(80);
+    check(
+      "in a chord on btn1, the left button lifting first releases it while the right is still down",
+      same(afterLeftUp, ["press @btn1", "release @btn1"]) && same(commands(), ["press @btn1", "release @btn1"]),
+      { afterLeftUp, afterRightUp: commands() }
     );
     await context.close();
   });

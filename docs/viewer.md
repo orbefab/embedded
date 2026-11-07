@@ -22,7 +22,7 @@ The dev server and `vite preview` serve each part's GLB from `parts/` at `/parts
 
 `scripts/check-viewer.sh` runs the type check, the unit tests and the build. `scripts/check.sh` does not run it, so `check.sh` needs no Node.
 
-`scripts/check-viewer-e2e.sh` builds the page and drives it in Chromium through `apps/viewer/e2e/e2e.mjs`: mouse and touch presses, the right button and a chord, a cancelled touch and a `pointercancel` while the canvas keeps the capture, lost capture, a second finger on the held button, blur, the press listeners' removal, `touch-action`, a refused or failed send, a press held across a new scene, clicks that send nothing, the top view's axes and pan, hover reasons, the 0603 tints and where bloom starts. It installs no browser. It uses the Chromium that playwright-core expects under `~/.cache/ms-playwright`, or the binary in `ORBE_CHROMIUM`, and exits 2 when it finds neither. `--renders <dir>` also saves screenshots. `check-viewer.sh` does not run it, so `check-viewer.sh` needs no browser.
+`scripts/check-viewer-e2e.sh` builds the page and drives it in Chromium through `apps/viewer/e2e/e2e.mjs`: mouse and touch presses, the right button and both orders of a chord, a cancelled touch and a `pointercancel` while the canvas keeps the capture, lost capture, a second finger on the held button, blur, the press listeners' removal, `touch-action`, a refused or failed send, a press held across a new scene, clicks that send nothing, the top view's axes and pan, hover reasons, the 0603 tints and where bloom starts. It installs no browser. It uses the Chromium that playwright-core expects under `~/.cache/ms-playwright`, or the binary in `ORBE_CHROMIUM`, and exits 2 when it finds neither. `--renders <dir>` also saves screenshots. `check-viewer.sh` does not run it, so `check-viewer.sh` needs no browser.
 
 ## The messages
 
@@ -48,7 +48,7 @@ Lengths, positions and directions in the messages are in the part frame: mm, +Z 
 
 ## Clicks and hover
 
-- A primary-button `pointerdown` on a part with `controls.press` sends `press @<ref>` and captures the pointer. Another mouse button sends nothing. That pointer's `pointercancel` or lost capture, its `pointerup`, or the window losing focus, sends `release @<ref>`, once. A mouse `pointerup` releases only once the primary button is up. Another pointer lifting does not release it, and while one press is held, no other starts.
+- A primary-button `pointerdown` on a part with `controls.press` sends `press @<ref>` and captures the pointer. Another mouse button sends nothing. That pointer's `pointercancel` or lost capture, its `pointerup`, or the window losing focus, sends `release @<ref>`, once. A mouse press ends once the primary button is up, on a `pointerup` or, in a chord, on the `pointermove` that reports it. Another pointer lifting does not release it, and while one press is held, no other starts.
 - A command the session refuses, or whose send fails, is listed in red at the bottom of the canvas and in the console. A release clears the held press even then, and the viewer never resends it. A new `scene` clears the list.
 - A new `scene` drops a held press without a release, because it follows an `open`, which restarts the session.
 - A click on any other part sends nothing, even when that part holds a pressable child. A click on the Nano's reset button presses `@nano.sw_reset`. A click on the board around it does nothing.
