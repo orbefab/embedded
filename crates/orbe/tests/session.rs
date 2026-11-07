@@ -332,6 +332,31 @@ fn an_idle_session_ends_after_its_timeout() {
 }
 
 #[test]
+fn a_playing_session_outlives_its_idle_timeout() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    let run = runtime
+        .command(dir.path(), &["open", "--session", "idle"])
+        .env("ORBE_TEST_IDLE_TIMEOUT", "300ms")
+        .output()
+        .unwrap();
+    assert_eq!(Run::new(run).code, 0);
+    runtime
+        .orbe(dir.path(), &["play", "--session", "idle"])
+        .ok();
+    std::thread::sleep(Duration::from_millis(900));
+    let paused = runtime
+        .orbe(dir.path(), &["pause", "--session", "idle", "--json"])
+        .ok()
+        .json();
+    assert!(
+        paused["t_ps"].as_u64().unwrap() > 600_000_000_000,
+        "play ran past the idle timeout: {paused}"
+    );
+    wait_until("the paused process ends", || runtime.daemons().is_empty());
+}
+
+#[test]
 fn a_session_folder_that_is_a_symlink_is_refused_wherever_it_points() {
     let dir = project("open\n");
     let runtime = Runtime::new();

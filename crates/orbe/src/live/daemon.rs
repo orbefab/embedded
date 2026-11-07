@@ -28,7 +28,7 @@ use super::place::{Name, Place};
 use super::viewer::{self, Models, Out, Viewer};
 use super::{Ask, Request, read_line};
 
-/// The process ends after this long with no command while no viewer watches.
+/// The process ends after this long with no command and no `play` tick while no viewer watches.
 const IDLE: Duration = Duration::from_secs(60 * 60);
 
 /// A process with no scene open ends this long after it starts listening, however many
@@ -408,10 +408,10 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
 }
 
 /// Runs jobs, viewers' commands and `play`'s ticks in order until a `close` closes the scene,
-/// or nothing comes for `idle` while no viewer watches. Before the first scene opens, every
-/// command but `open` gets `no_session` and changes nothing, and the process ends `UNOPENED`
-/// after it started. A session at its stop stays, so reads still answer there. Returns why it
-/// ended, for the viewers.
+/// or nothing comes and nothing plays for `idle` while no viewer watches. Before the first
+/// scene opens, every command but `open` gets `no_session` and changes nothing, and the process
+/// ends `UNOPENED` after it started. A session at its stop stays, so reads still answer there.
+/// Returns why it ended, for the viewers.
 fn serve(
     held: &mut Held,
     queue: &Receiver<Event>,
@@ -423,6 +423,7 @@ fn serve(
     loop {
         if held.next_tick().is_some_and(|at| at <= wall()) {
             held.tick();
+            last = wall();
         }
         let quiet = held.watchers.viewers.is_empty().then(|| last + idle);
         let event = match [quiet, held.next_tick()].into_iter().flatten().min() {
