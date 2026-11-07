@@ -4,6 +4,7 @@
 pub(crate) enum Unit {
     Ohm,
     Farad,
+    Henry,
     Volt,
     Ampere,
     Second,
@@ -17,6 +18,7 @@ impl Unit {
         Some(match text {
             "ohm" => Unit::Ohm,
             "F" => Unit::Farad,
+            "H" => Unit::Henry,
             "V" => Unit::Volt,
             "A" => Unit::Ampere,
             "s" => Unit::Second,
@@ -31,6 +33,7 @@ impl Unit {
         match self {
             Unit::Ohm => "ohm",
             Unit::Farad => "F",
+            Unit::Henry => "H",
             Unit::Volt => "V",
             Unit::Ampere => "A",
             Unit::Second => "s",
@@ -44,6 +47,7 @@ impl Unit {
         match self {
             Unit::Ohm => &["ohm", "ohms", "Ω"],
             Unit::Farad => &["F"],
+            Unit::Henry => &["H"],
             Unit::Volt => &["V"],
             Unit::Ampere => &["A"],
             Unit::Second => &["s"],
@@ -58,6 +62,7 @@ impl Unit {
         match self {
             Unit::Ohm => "\"220\" or \"10k\"",
             Unit::Farad => "\"100n\" or \"10u\"",
+            Unit::Henry => "\"10u\" or \"10uH\"",
             Unit::Volt => "\"5\" or \"3.3V\"",
             Unit::Ampere => "\"20m\" or \"1mA\"",
             Unit::Second => "\"1ms\"",
