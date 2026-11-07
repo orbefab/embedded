@@ -1,0 +1,18 @@
+// The model's values and sources are the engine's D2, from
+// engine/examples/atmega-board-button/netlist.json, part `d_reset`.
+{
+  "format": 1, "part": "diode-cd1206", "version": "0.1.0", "title": "Switching diode, CD1206-S01575, 1206", "license": "MIT OR Apache-2.0",
+  "docs": { "Bourns CD1206-S01575": null },
+  "real": { "maker": "Bourns", "number": "CD1206-S01575", "datasheet": "Bourns CD1206-S01575" },
+  "pins": { "cathode": [1], "anode": [2] },
+  "model": {
+    "kind": "diode",
+    "saturation_current": { "value": 1.341e-12, "unit": "A", "source": { "datasheet": { "doc": "Bourns CD1206-S01575", "at": "Forward Characteristics, Ta = 25 C; fit through (0.82 V, 10 mA), (0.97 V, 100 mA), (1.07 V, 200 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+    "emission_coefficient": { "value": 1.391, "unit": "1", "source": { "datasheet": { "doc": "Bourns CD1206-S01575", "at": "Forward Characteristics, Ta = 25 C; fit through (0.82 V, 10 mA), (0.97 V, 100 mA), (1.07 V, 200 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+    "series_resistance": { "value": 0.7523, "unit": "ohm", "source": { "datasheet": { "doc": "Bourns CD1206-S01575", "at": "Forward Characteristics, Ta = 25 C; fit through (0.82 V, 10 mA), (0.97 V, 100 mA), (1.07 V, 200 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+    "ratings": {
+      "current": { "value": 4.0, "unit": "A", "source": { "datasheet": { "doc": "Bourns CD1206-S01575", "at": "Absolute Ratings, Forward Current, Surge", "basis": "absolute_max" } } },
+      "power": { "value": 0.4, "unit": "W", "source": { "datasheet": { "doc": "Bourns CD1206-S01575", "at": "Absolute Ratings, Power Dissipation", "basis": "absolute_max" } } },
+    },
+  },
+}

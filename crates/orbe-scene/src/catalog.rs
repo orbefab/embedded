@@ -306,6 +306,11 @@ mod tests {
             .unwrap();
         assert_eq!(nano.uses.len(), 14);
         assert!(!nano.sealed);
+        let uno = catalog
+            .get("uno-board", Version::parse("0.1.0").unwrap())
+            .unwrap();
+        assert_eq!(uno.uses.len(), 25);
+        assert!(!uno.sealed);
         assert!(catalog.newest("led-5mm").unwrap().sealed);
     }
 
@@ -490,6 +495,6 @@ mod tests {
             let policy: Vec<String> = policy.into_iter().collect();
             assert_eq!(kept, policy, "{id}: kept_nodes against the keep policy");
         }
-        assert_eq!(checked, 24);
+        assert_eq!(checked, 45);
     }
 }

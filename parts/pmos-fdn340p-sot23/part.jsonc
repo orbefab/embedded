@@ -1,0 +1,15 @@
+// The resistor is the engine's T1 stand-in, from engine/examples/atmega-board-button/netlist.json,
+// part `usb_switch`.
+{
+  "format": 1, "part": "pmos-fdn340p-sot23", "version": "0.1.0", "title": "FDN340P P-channel MOSFET, SOT-23", "license": "MIT OR Apache-2.0",
+  "docs": { "FDN340P Rev E1": null },
+  "real": { "maker": "onsemi", "number": "FDN340P", "datasheet": "FDN340P Rev E1" },
+  "pins": { "G": [1], "S": [2], "D": [3] },
+  "model": {
+    "kind": "resistor",
+    "resistance": { "value": 0.06, "unit": "ohm", "source": { "datasheet": { "doc": "FDN340P Rev E1", "at": "On Characteristics, RDS(on) at VGS = -4.5 V, ID = -2 A", "basis": "typical" } } },
+    "ratings": { "power": null },
+    "pins": { "a": "D", "b": "S" },
+  },
+  "not_simulated": [{ "what": "gate", "pins": ["G"], "why": "The engine has no P-channel MOSFET. A resistor at the on resistance stands in from drain to source, so it is always on." }],
+}

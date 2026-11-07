@@ -1,0 +1,15 @@
+// The resistance is the engine's F1, from engine/examples/atmega-board-button/netlist.json,
+// part `usb_fuse`.
+{
+  "format": 1, "part": "ptc-fuse-1812", "version": "0.1.0", "title": "Resettable fuse, 500 mA, 1812", "license": "MIT OR Apache-2.0",
+  "docs": { "Bourns MF-MSMF Series": null },
+  "real": { "maker": "Bourns", "number": "MF-MSMF050-2", "datasheet": "Bourns MF-MSMF Series" },
+  "pins": { "1": [1], "2": [2] },
+  "model": {
+    "kind": "resistor",
+    "resistance": { "value": 0.15, "unit": "ohm", "source": { "datasheet": { "doc": "Bourns MF-MSMF Series", "at": "MF-MSMF050 row, RMin at 23 C. The schematic part is MF-MSMF050-2. The -2 suffix is tape and reel packaged per EIA-481, which is why that row is this part.", "basis": "min" } } },
+    "ratings": { "power": null },
+    "pins": { "a": "1", "b": "2" },
+  },
+  "not_simulated": [{ "what": "trip", "why": "The resistance never rises with current, so the fuse never trips." }],
+}
