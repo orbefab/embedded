@@ -10,7 +10,7 @@
   "pins": { "a": [1], "wiper": [2], "b": [3] },
   "params": {
     "resistance": { "unit": "ohm", "required": true, "min_exclusive": 0, "sets": "/resistance" },
-    "position": { "unit": "1", "default": 0.5, "min_exclusive": 0, "sets": "/position" },
+    "position": { "unit": "1", "default": 0.5, "min_exclusive": 0, "max_exclusive": 1, "sets": "/position" },
   },
   "model": { "kind": "potentiometer" },
   "not_simulated": [

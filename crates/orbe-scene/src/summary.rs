@@ -28,9 +28,15 @@ pub struct ParamSummary {
 }
 
 pub enum Takes {
-    Number { unit: String, above: Option<String> },
+    Number {
+        unit: String,
+        above: Option<String>,
+        below: Option<String>,
+    },
     Choice(Vec<String>),
-    File { ext: Option<String> },
+    File {
+        ext: Option<String>,
+    },
 }
 
 pub enum ParamDefault {
@@ -127,6 +133,7 @@ fn param<'t>(
         Takes::Number {
             unit: unit.to_string(),
             above: decl.get("min_exclusive").map(|n| written(n, None)),
+            below: decl.get("max_exclusive").map(|n| written(n, None)),
         }
     } else {
         let child = tree.get("parts")?.props()?.iter().find_map(|inst| {

@@ -91,7 +91,7 @@ pub(crate) struct Body {
 pub(crate) enum ParamKind {
     Number {
         unit: Unit,
-        min_exclusive: Option<f64>,
+        range: Range,
     },
     Choice(Vec<(String, Vec<(String, Node)>)>),
     File {
@@ -99,6 +99,12 @@ pub(crate) enum ParamKind {
     },
     /// No `sets`: a part with children hands it to a child with `{ "param": "<name>" }`.
     Through,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Range {
+    pub(crate) above: Option<f64>,
+    pub(crate) below: Option<f64>,
 }
 
 pub(crate) struct ParamDecl {
@@ -920,7 +926,10 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
                 };
                 ParamKind::Number {
                     unit: parsed,
-                    min_exclusive: field("min_exclusive").and_then(Node::number),
+                    range: Range {
+                        above: field("min_exclusive").and_then(Node::number),
+                        below: field("max_exclusive").and_then(Node::number),
+                    },
                 }
             }
             ParamShape::Through => ParamKind::Through,

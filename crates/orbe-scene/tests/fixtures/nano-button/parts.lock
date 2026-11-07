@@ -15,7 +15,7 @@ nano-board 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha
 npn-2n2222-to92 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:4a415b7db512a386d24e96089b8493a3f06115c9cbe0c355fa77509f3176fbce
 pin-header-1x15 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:e7a2a9f52bafd03efd3feb51f052f69f9d3cdd2ad363971e9968d647316ad066
 pin-header-2x3 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:20be4e11e3306b32f92a4f2ec5a13b420dcdb81db7ee06c7eb5e78e2dd919dd8
-potentiometer-wh148 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:f817c77e71cc64b0e35cf1d55e4ab3be26fe9851153881401b56732db8159b1b
+potentiometer-wh148 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:2ea637e062776b92d84cdd0ea9118ff3efa058455238b5e466b9d28986995cf3
 resistor-0603 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:d0bdbb0c2fcb7fc880a46018dd2649e211a1964dac63efa18cd687c9ee72095d
 resistor-axial 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:865591323686d5ad6fe00584ae7d8c1c39cfdbb491874aa04d1cd0a972b4a956
 resonator-cstce 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:dd2f3e2cdce56afdd3fe1a0a2896ab95e2053a44fd86ebb6c5f9ccbfd5908be8

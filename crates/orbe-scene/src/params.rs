@@ -8,7 +8,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::diagnostic::Code;
-use crate::model::{ParamDecl, ParamKind};
+use crate::model::{ParamDecl, ParamKind, Range};
 use crate::name::did_you_mean;
 use crate::project::hex;
 use crate::syntax::Node;
@@ -37,10 +37,7 @@ pub(crate) fn convert(decl: &ParamDecl, arg: &Arg) -> Converted {
     let node = &arg.node;
     let pointer = decl.sets.clone().unwrap_or_default();
     match &decl.kind {
-        ParamKind::Number {
-            unit,
-            min_exclusive,
-        } => {
+        ParamKind::Number { unit, range } => {
             if node.is_null() {
                 return if decl.default.as_ref().is_some_and(Node::is_null) {
                     Ok(vec![(pointer, Value::Null)])
@@ -51,7 +48,7 @@ pub(crate) fn convert(decl: &ParamDecl, arg: &Arg) -> Converted {
                     ))
                 };
             }
-            number(*unit, *min_exclusive, node).map(|v| vec![(pointer, v)])
+            number(*unit, *range, node).map(|v| vec![(pointer, v)])
         }
         ParamKind::Choice(choices) => {
             let names: Vec<&str> = choices.iter().map(|(n, _)| n.as_str()).collect();
@@ -110,7 +107,7 @@ pub(crate) fn convert(decl: &ParamDecl, arg: &Arg) -> Converted {
 
 pub(crate) fn number(
     unit: Unit,
-    min_exclusive: Option<f64>,
+    range: Range,
     node: &Node,
 ) -> Result<Value, (Code, String, String)> {
     let example = || {
@@ -120,7 +117,7 @@ pub(crate) fn number(
         )
     };
     if node.props().is_some() {
-        return value_object(unit, min_exclusive, node);
+        return value_object(unit, range, node);
     }
     let text = match (node.str(), node.number()) {
         (Some(text), _) => text.to_string(),
@@ -153,14 +150,10 @@ pub(crate) fn number(
             format!("write a finite number, such as {}", unit.example()),
         ));
     }
-    bounded(unit, min_exclusive, &text, value)
+    bounded(unit, range, &text, value)
 }
 
-fn value_object(
-    unit: Unit,
-    min_exclusive: Option<f64>,
-    node: &Node,
-) -> Result<Value, (Code, String, String)> {
+fn value_object(unit: Unit, range: Range, node: &Node) -> Result<Value, (Code, String, String)> {
     let shape = "a value object is { \"value\", \"unit\", \"source\" }";
     let shape_hint = format!(
         "write value, unit and source, or a string such as {}",
@@ -211,7 +204,7 @@ fn value_object(
                 "write \"1ms\", or a value object with \"unit\": \"ps\"",
             ));
         }
-        below_min(min_exclusive, unit, shown, number / 1e12)?;
+        in_range(range, unit, shown, number / 1e12)?;
         return Ok(json!({ "value": number, "unit": "ps", "source": source.to_value() }));
     }
     if unit_text != unit.as_str() {
@@ -227,13 +220,13 @@ fn value_object(
             ),
         ));
     }
-    below_min(min_exclusive, unit, shown, number)?;
+    in_range(range, unit, shown, number)?;
     Ok(json!({ "value": number, "unit": unit_text, "source": source.to_value() }))
 }
 
 fn bounded(
     unit: Unit,
-    min_exclusive: Option<f64>,
+    range: Range,
     text: &str,
     value: f64,
 ) -> Result<Value, (Code, String, String)> {
@@ -248,28 +241,36 @@ fn bounded(
     } else {
         (value, unit.as_str())
     };
-    below_min(min_exclusive, unit, text, si)?;
+    in_range(range, unit, text, si)?;
     Ok(json!({ "value": value, "unit": unit_text, "source": "user" }))
 }
 
-fn below_min(
-    min_exclusive: Option<f64>,
-    unit: Unit,
-    text: &str,
-    si: f64,
-) -> Result<(), (Code, String, String)> {
-    if let Some(min) = min_exclusive
-        && si <= min
-    {
-        return Err(fail(
-            format!(
-                "{text} is out of range; it must be more than {min} {}",
-                unit.as_str()
-            ),
-            format!("write a value greater than {min} {}", unit.as_str()),
-        ));
+fn in_range(range: Range, unit: Unit, text: &str, si: f64) -> Result<(), (Code, String, String)> {
+    let low = range.above.is_some_and(|above| si <= above);
+    let high = range.below.is_some_and(|below| si >= below);
+    if !low && !high {
+        return Ok(());
     }
-    Ok(())
+    let amount = |bound: f64| match unit {
+        Unit::One => bound.to_string(),
+        unit => format!("{bound} {}", unit.as_str()),
+    };
+    let bounds = [
+        range
+            .above
+            .map(|above| format!("greater than {}", amount(above))),
+        range
+            .below
+            .map(|below| format!("less than {}", amount(below))),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" and ");
+    Err(fail(
+        format!("{text} is out of range; it must be {bounds}"),
+        format!("write a value {bounds}"),
+    ))
 }
 
 pub(crate) fn source_ok(node: &Node) -> bool {

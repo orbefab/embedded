@@ -82,13 +82,17 @@ fn parts(catalog: &[PartSummary]) -> String {
 
 fn param_text(param: &ParamSummary) -> String {
     let takes = match &param.takes {
-        Takes::Number { unit, above } => {
+        Takes::Number { unit, above, below } => {
             let mut text = match unit.as_str() {
                 "1" => "a number".to_string(),
                 unit => format!("a value in {unit}"),
             };
             if let Some(above) = above {
                 text.push_str(&format!(" above {above}"));
+            }
+            if let Some(below) = below {
+                let joint = if above.is_some() { " and" } else { "" };
+                text.push_str(&format!("{joint} below {below}"));
             }
             text
         }
@@ -465,6 +469,7 @@ mod tests {
         }
         assert!(text.contains("### `nano-board`: Nano (CH340 clone)"));
         assert!(text.contains("- `resistance`: a value in ohm above 0, required."));
+        assert!(text.contains("- `position`: a number above 0 and below 1, 0.5 by default."));
         assert!(text.contains("- It reads `on` while `i` is above 1 mA."));
         assert!(
             text.contains(
