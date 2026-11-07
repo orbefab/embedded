@@ -190,24 +190,24 @@ impl Held {
                 .live
                 .refuse(Error::new(Code::NoSession, "no scene is open", ""));
         }
-        if self.url.is_none() {
-            let page = match Page::find(page) {
-                Ok(page) => page,
-                Err(error) => return self.live.refuse(error),
-            };
-            match viewer::start(page, Arc::clone(&self.models), self.events.clone()) {
-                Ok(url) => self.url = Some(url),
-                Err(error) => {
-                    return self.live.refuse(Error::new(
-                        Code::IoError,
-                        format!("cannot listen for viewers on 127.0.0.1: {error}"),
-                        "",
-                    ));
-                }
-            }
+        if let Some(url) = &self.url {
+            return self.live.report(Data::Viewer { url: url.clone() });
         }
-        let url = self.url.clone().unwrap_or_default();
-        self.live.report(Data::Viewer { url })
+        let page = match Page::find(page) {
+            Ok(page) => page,
+            Err(error) => return self.live.refuse(error),
+        };
+        match viewer::start(page, Arc::clone(&self.models), self.events.clone()) {
+            Ok(url) => {
+                self.url = Some(url.clone());
+                self.live.report(Data::Viewer { url })
+            }
+            Err(error) => self.live.refuse(Error::new(
+                Code::IoError,
+                format!("cannot listen for viewers on 127.0.0.1: {error}"),
+                "",
+            )),
+        }
     }
 
     /// What follows a command that ran, from a client or a viewer: a new scene's message, the
