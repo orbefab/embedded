@@ -15,9 +15,9 @@ serde_json.workspace = true
 sha2.workspace = true
 strsim.workspace = true
 sim-core.workspace = true
+sim-circuit.workspace = true
 
 [dev-dependencies]
-sim-circuit.workspace = true
 tempfile.workspace = true
 
 [lints]

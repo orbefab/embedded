@@ -28,6 +28,7 @@ pub use session::{
     Session, Setting, Status,
 };
 pub use sim_core::serial::SerialByte;
+pub use topology::floating_nets;
 
 /// Accepted steps after t = 0, chip stops on those steps, and stiffen retries.
 ///

@@ -11,7 +11,7 @@ use crate::name::{NameKind, and_list, did_you_mean, problem};
 use crate::params::{Cover, Step, cover, dotted, pointer_of, step, tokens, within};
 use crate::shape::{self, ParamShape, schema, unknown_key};
 use crate::source::{FileId, Sources, Span};
-use crate::syntax::{Node, Prop};
+use crate::syntax::{Json, Node, Prop};
 use crate::units::{self, Unit};
 
 const SCENE_KEYS: &[&str] = &[
@@ -182,6 +182,7 @@ pub(crate) struct Part {
     pub(crate) params: Vec<ParamDecl>,
     /// Each `not_simulated` entry's reason with the pins it lists.
     pub(crate) not_simulated: Vec<(String, Vec<String>)>,
+    pub(crate) joins_only: bool,
     /// A finding in this part file, which the engine's findings on the part may repeat.
     pub(crate) reported: Option<Reported>,
 }
@@ -354,6 +355,7 @@ pub(crate) fn decode_part(
         bodies: Vec::new(),
         params: Vec::new(),
         not_simulated: Vec::new(),
+        joins_only: false,
         reported: None,
     };
     for prop in props {
@@ -379,6 +381,7 @@ pub(crate) fn decode_part(
             "model" => part.model = Some(value.clone()),
             "readings" => decode_names(value, "reading", out),
             "not_simulated" => part.not_simulated = decode_not_simulated(value, out),
+            "joins_only" => part.joins_only = matches!(value.json, Json::Bool(true)),
             _ => {}
         }
     }

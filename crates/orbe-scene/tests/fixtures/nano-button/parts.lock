@@ -13,8 +13,8 @@ led-3mm 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256
 led-5mm 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:f614df774ac9fd9ac1b29c71bfa65cebc12c2133638abbd3331e2371233c8e31
 nano-board 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:d38919f88370220be42a6df772c229effc9e63322d44b0d7f31d5fd18dba7410
 npn-2n2222-to92 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:ac11854444c13edd386cb6688aece8cc09080ed8a6d5eec039784d3af42b4bd0
-pin-header-1x15 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:e7a2a9f52bafd03efd3feb51f052f69f9d3cdd2ad363971e9968d647316ad066
-pin-header-2x3 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:20be4e11e3306b32f92a4f2ec5a13b420dcdb81db7ee06c7eb5e78e2dd919dd8
+pin-header-1x15 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:207da03031d8b1ae11cab5a1302cf16a8f0402de88f933d1888c10f2bf940310
+pin-header-2x3 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:43456a456757c7b16ed048bb0434d205146af87458fa92633779880340e1e9fd
 potentiometer-wh148 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:2ea637e062776b92d84cdd0ea9118ff3efa058455238b5e466b9d28986995cf3
 resistor-0603 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:d0bdbb0c2fcb7fc880a46018dd2649e211a1964dac63efa18cd687c9ee72095d
 resistor-axial 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:865591323686d5ad6fe00584ae7d8c1c39cfdbb491874aa04d1cd0a972b4a956

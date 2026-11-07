@@ -5,3 +5,4 @@ scene.syntax parts/board.jsonc:6:49 | a param declaration has no key `requird` |
 scene.wires parts/board.jsonc:11:31 | a wire's hint has no key `colr` | did you mean `color`?
 scene.layout parts/board.jsonc:12:43 | a placement has no key `rotat` | did you mean `rotate`?
 scene.syntax parts/board.jsonc:14:79 | a not_simulated entry has no key `pin` | did you mean `pins`?
+scene.syntax parts/board.jsonc:15:17 | `joins_only` takes true or false, found a string | write true or false

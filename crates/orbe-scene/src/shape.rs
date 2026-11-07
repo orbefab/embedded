@@ -237,6 +237,7 @@ pub(crate) const PART: &[(&str, Shape)] = &[
     ("facts", Shape::Map(&VALUE)),
     ("view", VIEW),
     ("not_simulated", Shape::List(&NOT_SIMULATED)),
+    ("joins_only", Shape::Bool),
 ];
 
 pub(crate) fn keys(fields: &[(&'static str, Shape)]) -> Vec<&'static str> {

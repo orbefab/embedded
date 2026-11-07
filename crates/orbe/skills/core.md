@@ -9,11 +9,12 @@ This text comes from the `orbe` you have installed, so it matches it. `orbe <com
 1. Make a project folder and write `scene.jsonc` in it.
 2. Build the firmware and name the built file in the scene. For an Arduino board, run `orbe skills get arduino` first.
 3. Run `orbe check scene.jsonc`. It prints every error with its file, line, column and a hint. A missing part is `part_missing`, and its hint is the `orbe add` command to run. Run it as printed, then check again.
-4. Run `orbe open` in the project folder. It opens `scene.jsonc` there, or the scene you name, as `orbe open path/to/scene.jsonc`. It checks the scene, starts a session at t = 0, paused, and lists the parts.
-5. Drive it with `orbe step`, `orbe press`, `orbe release`, `orbe get`, `orbe expect` and `orbe snapshot`.
-6. To fix something, edit the scene or the firmware, rebuild, and run `orbe open` again. It restarts the session at t = 0.
-7. Run `orbe close` when the live work is done. A `no_session` error from it means nothing was open.
-8. Write what worked as `tests/<name>.test` and run `orbe test`. It leaves no session to close.
+4. Run `orbe lint scene.jsonc`. It runs `orbe check` first, then warns of what checks but is likely wrong or unclear, such as an LED with no series resistor. Read each warning. Do what its hint says, or leave it when the scene means it. Run `orbe lint` again after every edit to the scene.
+5. Run `orbe open` in the project folder. It opens `scene.jsonc` there, or the scene you name, as `orbe open path/to/scene.jsonc`. It checks the scene, starts a session at t = 0, paused, and lists the parts.
+6. Drive it with `orbe step`, `orbe press`, `orbe release`, `orbe get`, `orbe expect` and `orbe snapshot`.
+7. To fix something, edit the scene or the firmware, rebuild, run `orbe lint`, and run `orbe open` again. It restarts the session at t = 0.
+8. Run `orbe close` when the live work is done. A `no_session` error from it means nothing was open.
+9. Write what worked as `tests/<name>.test` and run `orbe test`. It leaves no session to close.
 
 ## Worked example
 
@@ -77,6 +78,14 @@ wrote parts/nano-board 0.1.0
 wrote parts.lock
 $ orbe check scene.jsonc
 scene.jsonc: ok, 18 engine parts, 31 nets, ground nano__GND
+$ orbe lint scene.jsonc
+scene.jsonc:1:1: warning[scene.ground_unnamed]: the ground net is `nano__GND`, a name taken from a pin, because "nets" does not name it
+  hint: add "GND": "nano.GND" to the scene's "nets", so refs and messages say GND
+scene.jsonc:4:5: warning[scene.unplaced]: `nano`, `btn1`, `r2`, `r1` and `led1` have no position, so the 3D page places them in a row for drawing only
+  hint: place a part whose place matters in the scene's "layout", as "nano": { "at": [x, y, z] } in mm
+scene.jsonc:4:5: warning[net.floating]: #net.nano__AREF has no DC path to ground
+  hint: if a part reads `nano.AREF`, wire it to a source, or through a resistor to ground; a net nothing reads can stay as it is
+3 warnings in scene.jsonc
 $ orbe open
 opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (18 engine parts, 31 nets)
   warning[net.floating] #net.nano__AREF has no DC path to ground
@@ -112,9 +121,9 @@ PASS tests/button.test
 1 passed, 0 failed
 ```
 
-The `net.floating` warning on `nano__AREF` is normal for the Nano. Nothing drives AREF.
+The example keeps its 3 warnings, since each is what it means: no `layout`, and the ground named after `nano.GND`. The `net.floating` warning on `nano__AREF` is normal for the Nano. Nothing drives AREF.
 
-With D13 wired straight to `led1.anode` and no `r1`, the LED draws 105 mA. `step` lists `warning[rating.current]` and `warning[rating.power]` for `led1`, and `expect no diagnostics` fails. The LED holds D13 at 2.4 V, so D13 reads `low` while the LED is on. Give each LED a series resistor, such as 220 ohm from a 5 V pin.
+With D13 wired straight to `led1.anode` and no `r1`, the LED draws 105 mA. `step` lists `warning[rating.current]` and `warning[rating.power]` for `led1`, and `expect no diagnostics` fails. The LED holds D13 at 2.4 V, so D13 reads `low` while the LED is on. `orbe lint` warns of it before any run, with `warning[scene.led_no_resistor]` on `led1`. Give each LED a series resistor, such as 220 ohm from a 5 V pin.
 
 ## Scenes
 
@@ -225,9 +234,23 @@ FAIL tests/button.test:4: expect @led1 on
 
 A test needs no background process, so it runs the same in CI. Each file's session lives inside `orbe test` and ends with it. A session that `orbe open` started keeps running, untouched. `orbe test` takes no `--session` and ignores `ORBE_SESSION`.
 
+## Warnings
+
+`orbe lint` prints `warning[<code>]` with a `hint:` line for what checks but is likely wrong or unclear. Warnings never fail it. When the scene does not check, it prints and exits as `orbe check` does, with no warnings. It writes no file. `orbe open` shows none of these warnings except `net.floating`.
+
+| Code | What it means, and what to do |
+| --- | --- |
+| `scene.led_no_resistor` | An LED joins two driven nets, such as a pin and GND, with no resistor in series, so it can draw far over its rating. The path runs through diodes, switches, and a transistor whose emitter is on a driven net, as in a low-side NPN switch. A chip pin on a net that a resistor also feeds from a driven net counts as reading that net, not driving it. So A0 wired to read an LED's node does not hide its series resistor, and lint misses an LED wired straight to an output pin that also has a pull-up. Put a resistor in series, such as 220 ohm from a 5 V pin. |
+| `scene.no_model` | A part has no engine model, no `not_simulated` reason and no `"joins_only": true`, so the simulation runs nothing for it. Use a part with a model. A part of your own that only joins the wires that reach it, such as a jumper, takes `"joins_only": true` in its part file. A part nothing is wired to can take `"not_simulated": "<why>"` in the scene instead. |
+| `scene.unconnected` | Nothing is wired to a part, or a part with at most 3 nets, such as a resistor, LED, transistor or pot, has a net with no wire. Wire it, or leave it open when the circuit means it, as a pot used as a variable resistor. |
+| `net.floating` | A net has no DC path to ground. Fix it when a part reads that net. |
+| `scene.ground_unnamed` | The ground net is named after a pin. Name it in `nets`, as `"GND": "nano.GND"`. |
+| `scene.unplaced` | Parts have no `layout` position, so the 3D page places them in a row for drawing only. One warning names them all. Give a part a position when its place matters. |
+| `scene.rotation` | A `rotate` angle is outside -180 to 180 degrees. Write the same turn as the hint shows. |
+
 ## Output and exit codes
 
-Every command prints text. With `--json` it prints one JSON object instead, `{"ok": true, "data": {...}}` or `{"ok": false, "error": {"code", "message", "hint"}}`, where `hint` can be missing or empty. A failed `orbe check scene.jsonc --json` is `scene_invalid`, with each finding, its code and hint in `data.diagnostics`. Live commands add `session`, `t_ps` (picoseconds) and `state`: `paused`, `playing`, `stopped`, `faulted` or `closed`.
+Every command prints text. With `--json` it prints one JSON object instead, `{"ok": true, "data": {...}}` or `{"ok": false, "error": {"code", "message", "hint"}}`, where `hint` can be missing or empty. A failed `orbe check scene.jsonc --json` is `scene_invalid`, with each finding, its code and hint in `data.diagnostics`. `orbe lint scene.jsonc --json` on a scene that checks is `ok`, with each warning in `data.diagnostics` in the same shape. Live commands add `session`, `t_ps` (picoseconds) and `state`: `paused`, `playing`, `stopped`, `faulted` or `closed`.
 
 Exit codes: 0 ok, 1 a failed check, `expect` or command, 2 a usage error, 3 a file or system error. `orbe test` exits with the worst file's code.
 

@@ -1,4 +1,5 @@
-//! `orbe`, the CLI. `orbe check` type-checks a scene. `orbe add` copies catalog parts.
+//! `orbe`, the CLI. `orbe check` type-checks a scene, and `orbe lint` checks it, then warns of
+//! what is likely wrong or unclear. `orbe add` copies catalog parts.
 //! `orbe test` runs each test file's live commands in a fresh in-process session. The live
 //! commands, such as `orbe open` and `orbe step`, drive a session that a background process
 //! holds between commands. `orbe skills` prints the skills that tell an agent how to use it.
@@ -39,8 +40,18 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Copies catalog parts into `parts/` and writes `parts.lock`.
+    /// Runs `check`, then on a scene that checks prints each warning of what is likely wrong
+    /// or unclear. Warnings never fail it.
     #[command(display_order = 2)]
+    Lint {
+        /// The scene file, such as scene.jsonc.
+        scene: PathBuf,
+        /// Print one JSON envelope instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Copies catalog parts into `parts/` and writes `parts.lock`.
+    #[command(display_order = 3)]
     Add {
         /// Part ids. A version is `id@0.1.0`.
         ids: Vec<String>,
@@ -125,7 +136,7 @@ enum SkillsCommand {
 fn cli() -> clap::Command {
     let live = orbe_session::COMMANDS
         .iter()
-        .zip(3..)
+        .zip(4..)
         .map(|(spec, order)| live_help(spec).display_order(order));
     Cli::command().subcommands(live)
 }
@@ -233,6 +244,7 @@ fn main() -> ExitCode {
     match parsed {
         Ok(cli) => match cli.command {
             Command::Check { scene, json } => check(&scene, json),
+            Command::Lint { scene, json } => lint(&scene, json),
             Command::Add {
                 ids,
                 dir,
@@ -634,78 +646,120 @@ fn print_skill(command: SkillsCommand) -> ExitCode {
 }
 
 fn check(scene: &Path, json: bool) -> ExitCode {
-    if !scene.is_file() {
-        let message = format!("no scene file at {}", scene.display());
-        if json {
-            print_json(
-                &json!({ "ok": false, "error": { "code": "io_error", "message": message } }),
-            );
-        } else {
-            eprintln!("error[io_error]: {message}");
-        }
-        return ExitCode::from(IO);
+    if let Some(exit) = no_scene(scene, json) {
+        return exit;
     }
+    let netlist = match orbe_scene::read(scene) {
+        Ok(netlist) => netlist,
+        Err(errors) => return invalid(scene, errors, json),
+    };
+    if json {
+        print_json(&json!({
+            "ok": true,
+            "data": {
+                "scene": scene.display().to_string(),
+                "parts": netlist.parts,
+                "nets": netlist.nets.len(),
+                "ground": netlist.ground,
+                "modified": netlist.modified,
+            },
+        }));
+    } else {
+        println!(
+            "{}: ok, {} engine parts, {} nets, ground {}",
+            scene.display(),
+            netlist.parts,
+            netlist.nets.len(),
+            netlist.ground
+        );
+        for id in &netlist.modified {
+            println!(
+                "note: `{id}` differs from its parts.lock line; it has children and no model, so the edit is allowed"
+            );
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+fn lint(scene: &Path, json: bool) -> ExitCode {
+    if let Some(exit) = no_scene(scene, json) {
+        return exit;
+    }
+    let warnings = match orbe_scene::lint(scene) {
+        Ok(warnings) => placed(scene, warnings),
+        Err(errors) => return invalid(scene, errors, json),
+    };
+    if json {
+        print_json(&json!({
+            "ok": true,
+            "data": {
+                "scene": scene.display().to_string(),
+                "diagnostics": warnings.iter().map(diagnostic_json).collect::<Vec<_>>(),
+            },
+        }));
+    } else if warnings.is_empty() {
+        println!("{}: no warnings", scene.display());
+    } else {
+        for warning in &warnings {
+            println!("{warning}");
+        }
+        println!(
+            "{} in {}",
+            counted(warnings.len(), "warning"),
+            scene.display()
+        );
+    }
+    ExitCode::SUCCESS
+}
+
+fn no_scene(scene: &Path, json: bool) -> Option<ExitCode> {
+    if scene.is_file() {
+        return None;
+    }
+    let message = format!("no scene file at {}", scene.display());
+    if json {
+        print_json(&json!({ "ok": false, "error": { "code": "io_error", "message": message } }));
+    } else {
+        eprintln!("error[io_error]: {message}");
+    }
+    Some(ExitCode::from(IO))
+}
+
+/// Each finding with its file from the current folder rather than the scene's.
+fn placed(scene: &Path, found: Vec<Diagnostic>) -> Vec<Diagnostic> {
     let dir = scene.parent().unwrap_or(Path::new(""));
-    match orbe_scene::read(scene) {
-        Ok(netlist) => {
-            if json {
-                print_json(&json!({
-                    "ok": true,
-                    "data": {
-                        "scene": scene.display().to_string(),
-                        "parts": netlist.parts,
-                        "nets": netlist.nets.len(),
-                        "ground": netlist.ground,
-                        "modified": netlist.modified,
-                    },
-                }));
-            } else {
-                println!(
-                    "{}: ok, {} engine parts, {} nets, ground {}",
-                    scene.display(),
-                    netlist.parts,
-                    netlist.nets.len(),
-                    netlist.ground
-                );
-                for id in &netlist.modified {
-                    println!(
-                        "note: `{id}` differs from its parts.lock line; it has children and no model, so the edit is allowed"
-                    );
-                }
-            }
-            ExitCode::SUCCESS
+    found
+        .into_iter()
+        .map(|d| Diagnostic {
+            file: dir.join(&d.file).display().to_string(),
+            ..d
+        })
+        .collect()
+}
+
+fn counted(n: usize, noun: &str) -> String {
+    format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
+}
+
+fn diagnostic_json(d: &Diagnostic) -> Value {
+    json!({ "code": d.code.as_str(), "file": d.file, "line": d.line, "column": d.column, "message": d.message, "hint": d.hint })
+}
+
+fn invalid(scene: &Path, errors: Vec<Diagnostic>, json: bool) -> ExitCode {
+    let errors = placed(scene, errors);
+    let count = format!("{} in {}", counted(errors.len(), "error"), scene.display());
+    if json {
+        let found: Vec<Value> = errors.iter().map(diagnostic_json).collect();
+        print_json(
+            &json!({ "ok": false, "error": { "code": "scene_invalid", "message": count }, "data": { "diagnostics": found } }),
+        );
+    } else {
+        for error in &errors {
+            println!("{error}");
         }
-        Err(diagnostics) => {
-            let placed: Vec<Diagnostic> = diagnostics
-                .into_iter()
-                .map(|d| Diagnostic {
-                    file: dir.join(&d.file).display().to_string(),
-                    ..d
-                })
-                .collect();
-            let count = format!(
-                "{} error{} in {}",
-                placed.len(),
-                if placed.len() == 1 { "" } else { "s" },
-                scene.display()
-            );
-            if json {
-                let found: Vec<Value> = placed
-                    .iter()
-                    .map(|d| json!({ "code": d.code.as_str(), "file": d.file, "line": d.line, "column": d.column, "message": d.message, "hint": d.hint }))
-                    .collect();
-                print_json(
-                    &json!({ "ok": false, "error": { "code": "scene_invalid", "message": count }, "data": { "diagnostics": found } }),
-                );
-            } else {
-                for diagnostic in &placed {
-                    println!("{diagnostic}");
-                }
-                println!("{count}");
-            }
-            ExitCode::from(FAILED)
-        }
+        println!("{count}");
     }
+    ExitCode::from(FAILED)
 }
 
 fn add(dir: Option<&Path>, request: Request, json: bool) -> ExitCode {

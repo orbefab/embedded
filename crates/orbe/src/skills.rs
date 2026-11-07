@@ -443,12 +443,7 @@ mod tests {
             .chain(added.into_iter().map(add))
             .collect();
         let core = find("core").unwrap().text();
-        let table: Vec<&str> = core
-            .lines()
-            .skip_while(|l| !l.starts_with("| Code |"))
-            .skip(2)
-            .take_while(|l| l.starts_with('|'))
-            .collect();
+        let table = table_in(&core, "## Errors");
         assert!(table.len() > 10, "{} rows", table.len());
         let mut listed = std::collections::BTreeSet::new();
         for row in table {
@@ -458,6 +453,54 @@ mod tests {
                 assert!(listed.insert(code), "`{code}` has two rows");
             }
         }
+    }
+
+    /// The rows of the first table under `heading`.
+    fn table_in<'t>(text: &'t str, heading: &str) -> Vec<&'t str> {
+        text.lines()
+            .skip_while(|l| *l != heading)
+            .skip_while(|l| !l.starts_with("| Code |"))
+            .skip(2)
+            .take_while(|l| l.starts_with('|'))
+            .collect()
+    }
+
+    #[test]
+    fn the_core_warnings_table_has_one_row_for_each_lint_rule() {
+        use orbe_scene::{Code, Lint};
+        // The match stops the build when a rule is added, until it is listed here.
+        let code = |lint: Lint| match lint {
+            Lint::Unplaced
+            | Lint::Unconnected
+            | Lint::GroundUnnamed
+            | Lint::Rotation
+            | Lint::NoModel
+            | Lint::Floating
+            | Lint::LedNoResistor => Code::Lint(lint).as_str(),
+        };
+        let rules: std::collections::BTreeSet<&str> = [
+            Lint::Unplaced,
+            Lint::Unconnected,
+            Lint::GroundUnnamed,
+            Lint::Rotation,
+            Lint::NoModel,
+            Lint::Floating,
+            Lint::LedNoResistor,
+        ]
+        .map(code)
+        .into();
+        let core = find("core").unwrap().text();
+        let listed: Vec<&str> = table_in(&core, "## Warnings")
+            .into_iter()
+            .filter_map(|row| row.split('`').nth(1))
+            .collect();
+        assert_eq!(listed.len(), rules.len(), "{listed:?}");
+        assert_eq!(
+            listed
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            rules
+        );
     }
 
     #[test]
