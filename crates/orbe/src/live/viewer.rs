@@ -93,15 +93,32 @@ pub(super) fn start(page: Page, models: Models, events: Sender<Event>) -> io::Re
             if serving.load(Ordering::SeqCst) >= CONNECTIONS {
                 continue;
             }
-            serving.fetch_add(1, Ordering::SeqCst);
-            let (site, events, serving) = (Arc::clone(&site), events.clone(), Arc::clone(&serving));
+            let slot = Slot::take(&serving);
+            let (site, events) = (Arc::clone(&site), events.clone());
             thread::spawn(move || {
                 serve(stream, &site, &events);
-                serving.fetch_sub(1, Ordering::SeqCst);
+                drop(slot);
             });
         }
     });
     Ok(url)
+}
+
+/// One of the listener's connections, given back when dropped: when its thread ends, panics,
+/// or never starts.
+struct Slot(Arc<AtomicUsize>);
+
+impl Slot {
+    fn take(serving: &Arc<AtomicUsize>) -> Self {
+        serving.fetch_add(1, Ordering::SeqCst);
+        Self(Arc::clone(serving))
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 fn token() -> io::Result<String> {
