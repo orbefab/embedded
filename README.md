@@ -13,7 +13,7 @@ A hardware simulator for AI agents. You describe a circuit as a scene file, flas
 | [`packages/viewer`](packages/viewer/) | The 3D scene viewer, in React and three.js. |
 | [`apps/viewer`](apps/viewer/) | The page `orbe show` serves. |
 | [`tools/asset-step`](tools/asset-step/) | Imports each part's 3D model and checks it against the part's pins. |
-| [`scripts/`](scripts/) | The checks. `check.sh` gates every change. |
+| [`scripts/`](scripts/) | The checks. `check.sh` gates every change. Run `scripts/bless.sh` after adding or changing a part. |
 | [`skills/orbe`](skills/orbe/SKILL.md) | The stub an agent installs. |
 | [`docs/`](docs/) | Finalized docs: [`decisions.md`](docs/decisions.md), [`viewer.md`](docs/viewer.md), [`asset-step.md`](docs/asset-step.md). |
 

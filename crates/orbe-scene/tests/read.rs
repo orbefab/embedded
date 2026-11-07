@@ -9,11 +9,14 @@ use serde_json::Value;
 
 #[test]
 fn parts_lock_matches_the_catalog() {
-    let project = project("nano-button");
-    let lines: String = locked_ids(project.path())
-        .iter()
-        .map(|id| lock_line(project.path(), id) + "\n")
+    let root = common::repo();
+    let mut ids: Vec<String> = fs::read_dir(root.join("parts"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|id| root.join("parts").join(id).join("part.jsonc").is_file())
         .collect();
+    ids.sort();
+    let lines: String = ids.iter().map(|id| lock_line(&root, id) + "\n").collect();
     let committed = fixture("nano-button").join("parts.lock");
     if std::env::var_os("ORBE_BLESS").is_some() {
         fs::write(&committed, &lines).unwrap();
@@ -21,7 +24,7 @@ fn parts_lock_matches_the_catalog() {
     assert_eq!(
         fs::read_to_string(committed).unwrap(),
         lines,
-        "parts.lock is stale; rerun with ORBE_BLESS=1"
+        "parts.lock is stale; run scripts/bless.sh"
     );
 }
 
@@ -1037,10 +1040,39 @@ fn reordering_param_declarations_does_not_change_the_netlist() {
     }
 }
 
+fn required_args(part: &orbe_scene::PartSummary) -> String {
+    let mut fields = Vec::new();
+    for param in &part.params {
+        if !matches!(param.default, orbe_scene::ParamDefault::Required) {
+            continue;
+        }
+        let value = match &param.takes {
+            orbe_scene::Takes::Choice(choices) => serde_json::to_string(&choices[0]).unwrap(),
+            orbe_scene::Takes::File { .. } => "\"build/button.ino.hex\"".to_string(),
+            orbe_scene::Takes::Number { above, below, .. } => {
+                let bound = |text: &str| text.parse::<f64>().unwrap();
+                let number = match (above.as_deref(), below.as_deref()) {
+                    (Some(lo), Some(hi)) => (bound(lo) + bound(hi)) / 2.0,
+                    (Some(lo), None) => bound(lo) + 1.0,
+                    (None, Some(hi)) => bound(hi) - 1.0,
+                    (None, None) => 1.0,
+                };
+                serde_json::to_string(&number.to_string()).unwrap()
+            }
+        };
+        fields.push(format!("\"{}\": {value}", param.name));
+    }
+    if fields.is_empty() {
+        String::new()
+    } else {
+        format!(", {}", fields.join(", "))
+    }
+}
+
 #[test]
 fn every_catalog_part_file_reads_without_a_finding() {
     let project = project("nano-button");
-    let ids = common::locked_ids(project.path());
+    let ids = locked_ids(project.path());
     let catalog: Vec<String> = fs::read_dir(common::repo().join("parts"))
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
@@ -1050,27 +1082,17 @@ fn every_catalog_part_file_reads_without_a_finding() {
         catalog.len(),
         "the fixture locks every catalog part"
     );
-    let required = |id: &str| match id {
-        "capacitor-0603"
-        | "capacitor-tantalum-3216"
-        | "capacitor-ceramic-disc"
-        | "capacitor-electrolytic-radial"
-        | "capacitor-electrolytic-smd" => ", \"capacitance\": \"100n\"",
-        "resistor-axial" | "resistor-0603" | "potentiometer-wh148" => ", \"resistance\": \"1k\"",
-        "resistor-array-4x0603" => {
-            ", \"resistance_a\": \"1k\", \"resistance_b\": \"1k\", \"resistance_c\": \"1k\", \"resistance_d\": \"1k\""
-        }
-        "inductor-0805" => ", \"inductance\": \"10u\", \"series_resistance\": \"0.5\"",
-        "atmega328p-tqfp32" | "atmega328p-dip28" | "nano-board" | "uno-board" => {
-            ", \"firmware\": \"build/button.ino.hex\""
-        }
-        "led-5mm" | "led-0603" | "led-0805" | "led-3mm" => ", \"color\": \"red\"",
-        _ => "",
-    };
+    let summaries = orbe_scene::catalog_parts();
     let parts: String = ids
         .iter()
         .enumerate()
-        .map(|(i, id)| format!("\"u{i}\": {{ \"type\": \"{id}\"{} }}, ", required(id)))
+        .map(|(i, id)| {
+            let summary = summaries.iter().find(|part| part.id == *id).unwrap();
+            format!(
+                "\"u{i}\": {{ \"type\": \"{id}\"{} }}, ",
+                required_args(summary)
+            )
+        })
         .collect();
     fs::write(
         project.path().join("scene.jsonc"),
