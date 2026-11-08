@@ -1,24 +1,13 @@
 {
   "part": "barrel-jack-dc21",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/barrel-jack-dc21.glb",
-        "sha256": "ed0bfb50398be4c11513c2fb389b8bfa88b8551adc082685ec160e7fde26130b",
-        "bytes": 26340
-      },
-      "anchors": {
-        "path": "GLB/parts/barrel-jack-dc21.anchors.json",
-        "sha256": "a79391aed0518271718c9c5660155af67643806ad45c62483940d239254c46f5",
-        "bytes": 418
-      }
-    }
+    "script": "model.py",
+    "sha256": "c57928f1a3d095eeb812c592f376acf332227c48dbcd8c36f47ab5bb3c04ad44",
+    "bytes": 2218
   },
   "files": {
     "barrel-jack-dc21.glb": {
-      "sha256": "eeb9eff931482788dc5fdf8ac530798163ae9acec928a85f76b626b22d8744a2",
+      "sha256": "bd7898acaed57c431510aa29a3694198bb8ebc2365f48e117aec8e456974a841",
       "bytes": 14132
     },
     "barrel-jack-dc21.anchors.json": {
@@ -48,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 29,
+      "primitives_in": 5,
       "primitives_out": 5
     }
   }

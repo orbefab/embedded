@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Orbefab. SPDX-License-Identifier: MIT OR Apache-2.0
-"""Through-hole part pieces: leads, bent axial leads, a round LED body and TO-92.
+"""Through-hole part pieces: leads, bent axial leads, a socket liner, a round LED body and TO-92.
 
 Every part built from these sits on its seating plane: the board's or
 breadboard's top on z = 0, leads down -Z.
@@ -35,6 +35,15 @@ def axial_leads(body_length, body_d, lead_d, pitch=AXIAL_PITCH, below=8.0, lift=
         leg = cyl_z(x1, 0, -below, zc, r)
         leads.append(fuse([arm, leg]).clean())
     return leads
+
+
+def socket_liner(x, y, z_mouth, opening, depth, wall):
+    """A square tube `wall` thick around a square `opening`, `depth` deep,
+    its mouth at z = z_mouth and its other end toward -Z. Cut the housing
+    by the tube's outside so the two meet without overlapping."""
+    zc = z_mouth - depth / 2.0
+    outer = box(x, y, zc, opening + 2.0 * wall, opening + 2.0 * wall, depth)
+    return outer - box(x, y, zc, opening, opening, depth + 0.2)
 
 
 def led_body(d, flange_d, flange_h, height, flat_x=None):

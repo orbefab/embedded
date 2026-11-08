@@ -1,24 +1,13 @@
 {
   "part": "pin-header-1x15",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/pin-header-1x15.glb",
-        "sha256": "2475ceb50091394a5e1925d69f838658afd03535f3d0faa69ef716106a231de2",
-        "bytes": 146632
-      },
-      "anchors": {
-        "path": "GLB/parts/pin-header-1x15.anchors.json",
-        "sha256": "6e2ae2a33e8c00fc465f090ad394fc28741f2f073c8e28a8d420bb2fe8e28bfa",
-        "bytes": 1943
-      }
-    }
+    "script": "model.py",
+    "sha256": "dd5a7b72e32cf1b9624b479327dc8296278a046632868cb372567636e635545e",
+    "bytes": 691
   },
   "files": {
     "pin-header-1x15.glb": {
-      "sha256": "61d34e0dfe958ba3be19d96c18c85ce27820a00b5ffa5fa243d7fb170f40fc92",
+      "sha256": "9a4edc0a1db1e864d5c673254223f8ac9ab2219db67a336a56c6225bb95662c8",
       "bytes": 20148
     },
     "pin-header-1x15.anchors.json": {
@@ -48,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 135,
+      "primitives_in": 30,
       "primitives_out": 30
     }
   }

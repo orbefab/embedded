@@ -1,25 +1,14 @@
 {
   "part": "tactile-switch-6mm",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/tactile-switch-6mm.glb",
-        "sha256": "3cead8c31170ffdf1e7b657caa570d96fbc37b8bf3e5e0e0ec43b05a81db3339",
-        "bytes": 32696
-      },
-      "anchors": {
-        "path": "GLB/parts/tactile-switch-6mm.anchors.json",
-        "sha256": "6b2dc31ca5103063c9c06f53258f474741ae18ec82d3d7f3bb6f62c2a6905eda",
-        "bytes": 527
-      }
-    }
+    "script": "model.py",
+    "sha256": "9e4f5421bd7023a881c3027757869867ee6e38fe462f8150fc9bbff33b815cb2",
+    "bytes": 2795
   },
   "files": {
     "tactile-switch-6mm.glb": {
-      "sha256": "39d8bd6eab5ab28ff7c0b81fbeb7b71bd5ae1e2cbc12338a1926929601ba12b8",
-      "bytes": 15220
+      "sha256": "9ecc36a5c9c16446da89f81543de5190a2a3731c13474f998a7f1102c2f225b3",
+      "bytes": 15224
     },
     "tactile-switch-6mm.anchors.json": {
       "sha256": "6b2dc31ca5103063c9c06f53258f474741ae18ec82d3d7f3bb6f62c2a6905eda",
@@ -48,7 +37,7 @@
       "nodes": ["stem"]
     },
     "merge": {
-      "primitives_in": 40,
+      "primitives_in": 7,
       "primitives_out": 7
     }
   }

@@ -1,25 +1,14 @@
 {
   "part": "usb-b-socket",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/usb-b-socket.glb",
-        "sha256": "a5fc9e977b4c34ba8b941323a9ca3fa88c938320d95b680fd9ecbe10c605edf4",
-        "bytes": 29484
-      },
-      "anchors": {
-        "path": "GLB/parts/usb-b-socket.anchors.json",
-        "sha256": "6baebc5c5719136ae0c4b88a0367f0d5ecd67ea6acc11761d079025bb60c921d",
-        "bytes": 756
-      }
-    }
+    "script": "model.py",
+    "sha256": "71e7b38e3fe4fe55c9fca1251c9761f03960d1380931e4970c13952a927fdcc2",
+    "bytes": 2355
   },
   "files": {
     "usb-b-socket.glb": {
-      "sha256": "2db1d9aa9ac130f48465e5ad7b4abf62be5939d84de76ad6493b8e3181302894",
-      "bytes": 5936
+      "sha256": "0667e73ee7ec0304567df7e6c32df446d3b23226ee4b342958a80cee2dc62bd0",
+      "bytes": 5932
     },
     "usb-b-socket.anchors.json": {
       "sha256": "6baebc5c5719136ae0c4b88a0367f0d5ecd67ea6acc11761d079025bb60c921d",
@@ -48,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 53,
+      "primitives_in": 8,
       "primitives_out": 8
     }
   }
