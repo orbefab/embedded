@@ -3,7 +3,7 @@
     {
       "checked": "2026-11-08",
       "seller": "DigiKey",
-      "url": "https://www.digikey.ca/en/products/detail/yageo/CFR-25JB-52-220R/1295"
+      "url": "https://www.digikey.com/en/products/detail/yageo/CFR-25JB-52-220R/1295"
     }
   ],
   "categories": [
@@ -14,7 +14,7 @@
     "pull-down",
     "current limit"
   ],
-  "description": "Carbon-film resistor with leads bent to 10.16 mm (0.4 inch) for a breadboard. Set its resistance.",
+  "description": "Carbon-film resistor with leads bent to 10.16 mm (0.4 inch) for a breadboard. Set its resistance. The buy link is the 220 Ω value of the series.",
   "docs": [
     {
       "name": "Yageo CFR-25"

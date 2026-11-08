@@ -90,7 +90,7 @@ fn a_passive_a_chip_and_a_board_keep_only_what_their_files_say() {
     assert!(passive.ratings.iter().any(|rating| rating.name == "power"));
     assert_eq!(
         passive.buy.as_ref().map(|links| links[0].url.as_str()),
-        Some("https://www.digikey.ca/en/products/detail/yageo/CFR-25JB-52-220R/1295")
+        Some("https://www.digikey.com/en/products/detail/yageo/CFR-25JB-52-220R/1295")
     );
     assert!(passive.uses.is_empty());
     assert_eq!(passive.license, "MIT OR Apache-2.0");
