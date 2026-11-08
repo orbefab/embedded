@@ -219,10 +219,10 @@ fn spdx_parses(text: &str) -> bool {
             }
         }
         fn ident(&mut self) -> bool {
-            match self.word() {
-                Some(word) if !matches!(word.as_str(), "AND" | "OR" | "WITH") => true,
-                _ => false,
-            }
+            matches!(
+                self.word(),
+                Some(word) if !matches!(word.as_str(), "AND" | "OR" | "WITH")
+            )
         }
         fn primary(&mut self) -> bool {
             self.skip();
