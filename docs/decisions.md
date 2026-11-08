@@ -52,7 +52,14 @@ A command does what it names and nothing in the background. Where `orbe` could g
 - `orbe add <block>` installs a Block into a project. It copies the parts the scene names into `parts/` and records them in `parts.lock`, as `orbe add <part>` does, then writes `scene.jsonc`, `firmware/` and `tests/`. `block.jsonc` and `README.md` stay behind, so the installed project reads its own copies.
 - `orbe add` never merges a Block into a scene. A project that already holds a different `scene.jsonc`, or any other file the Block brings, is refused before anything is written, and the hint installs into an empty folder. A file already there with the Block's bytes is kept, so the same install run again finishes or changes nothing.
 - Parts and Blocks share `orbe add`, so a Block id is never a catalog part id. A test fails when one is both, and one word names one of them.
-- A published Block will carry the part versions it was tested with. That comes with the registry.
+- A Block's registry record lists every part its scene runs, at the versions in the same build, which are the versions its tests ran against.
+
+## Registry (Nov 8 2026)
+- `orbe registry build <src> <out>` builds a registry from any folder of `parts/` and `blocks/`, so another registry is built with the same `orbe` its users run. The code is the `orbe-registry` library, and the cards come from `orbe-scene`, the same as `orbe part` prints.
+- Item types are `part`, `block` and `model`, with shadcn's field names. `model` is in the schema before any model item exists.
+- A record sits at a stable address, `<id>@<version>` or a Block's `<id>`, and its files sit at `files/<sha256>`. Hash dedupe is the only optimisation.
+- A Block has no version in the registry either. Its record is replaced by each build.
+- `parts.lock` keeps one line per part id, so a project takes each id from one registry. Its registry field is the registry's URL template. [registry.md](registry.md) is the client contract.
 
 ## Scenes (Nov 4 2026)
 - A scene is its own kind of file, usually `scene.jsonc`. Its keys are `format`, `parts`, `wires`, `layout`, `sim` and `nets`. It has no `pins` or `params`, and no file can use a scene as a part.
