@@ -40,6 +40,6 @@ socket-strip-1x8 0.1.0 @orbefab sha256:a3abce2dacc1103a5d68914541d9c3ebe59ec5ce0
 tactile-switch-6mm 0.1.0 @orbefab sha256:f23466f767150a6579db296629938a34426e2649cd748813e18afc5bdbe22f8f
 tactile-switch-smd 0.1.0 @orbefab sha256:24bb3c448454bb7e8e6ab1f80ce23c95cc969e4656460b8ec1f29b793e031fe1
 tactile-switch-ts42 0.1.0 @orbefab sha256:4eaefdd5eb528baa5fcb29b7c841f142ccd7d7f5432ea0c9d21543304874bd2b
-uno-board 0.1.0 @orbefab sha256:467a33a01efd272d82e001f557c4a262cd371fb704b7528624129ff61714b094
+uno-board 0.1.0 @orbefab sha256:d3c8cc768d7a1559ca6be19fca569656c27ab61095bbcf57238f8e369d8141fb
 usb-b-socket 0.1.0 @orbefab sha256:16297c4c675d641f4bfc093b951249f8854b5625a5959726919df645d9d49dcb
 usb-mini-b 0.1.0 @orbefab sha256:6c6f4cb85ed04563e8747edd505fb65edb906c42c6a1e469e68156b5c1cbfc3d

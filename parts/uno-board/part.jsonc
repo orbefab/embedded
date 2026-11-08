@@ -1,4 +1,4 @@
-// The Uno R3. Frame: the board's underside on z = 0 and its top at z = 1.6, the outline's centre on
+// An Uno R3 compatible board. Frame: the board's underside on z = 0 and its top at z = 1.6, the outline's centre on
 // the origin, the USB and power jacks at -X, the digital header along +Y. The layout is the one
 // orbefab/models places its parts by.
 // The wires are the copper of Arduino's UNO-TH_Rev3e board file, net by net. Values that cite the
@@ -9,7 +9,7 @@
   "format": 1,
   "part": "uno-board",
   "version": "0.1.0",
-  "title": "Uno R3",
+  "title": "Uno R3 compatible board",
   "summary": "ATmega328P board, 68.6 x 53.3 mm, with female headers on top. D13 drives the L LED. Powered from USB, with 3V3 from its own regulator. The real board buffers D13 through an op-amp the engine does not have, so here D13 feeds the L LED directly, and D13 as an input with its pull-up reads low.",
   "tags": ["board", "microcontroller", "avr", "atmega328p", "usb"],
   "license": "MIT OR Apache-2.0",
