@@ -31,8 +31,9 @@ impl Files {
         Files(Store::Disk)
     }
 
-    /// Files by path. A path is read as written, with `.` dropped and `..` taking off the part
-    /// before it, and every folder above a file holds it. There are no links.
+    /// Files by path. A stored path drops `.` and applies `..` lexically. A read applies `..`
+    /// only through a directory the set contains, and a trailing separator names a directory.
+    /// Every folder above a file holds it. There are no links.
     pub fn memory<P: AsRef<Path>>(files: impl IntoIterator<Item = (P, Vec<u8>)>) -> Files {
         Files(Store::Memory(
             files
@@ -75,13 +76,16 @@ impl Files {
     pub(crate) fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
         match &self.0 {
             Store::Disk => fs::read(path),
-            Store::Memory(files) => match files.get(&normal(path)) {
-                Some(bytes) => Ok(bytes.clone()),
-                None if memory_kind(files, path) == Some(Kind::Dir) => {
-                    Err(io::ErrorKind::IsADirectory.into())
+            Store::Memory(files) => {
+                let path = resolve(files, path)?;
+                match files.get(&path) {
+                    Some(bytes) => Ok(bytes.clone()),
+                    None if lookup_exact(files, &path) == Some(Kind::Dir) => {
+                        Err(io::ErrorKind::IsADirectory.into())
+                    }
+                    None => Err(io::ErrorKind::NotFound.into()),
                 }
-                None => Err(io::ErrorKind::NotFound.into()),
-            },
+            }
         }
     }
 
@@ -104,10 +108,12 @@ impl Files {
                 .map(|entry| entry.map(|e| e.path()))
                 .collect(),
             Store::Memory(files) => {
-                if memory_kind(files, dir) != Some(Kind::Dir) {
-                    return Err(io::ErrorKind::NotFound.into());
+                let dir = resolve(files, dir)?;
+                match lookup_exact(files, &dir) {
+                    Some(Kind::Dir) => {}
+                    Some(_) => return Err(io::ErrorKind::NotADirectory.into()),
+                    None => return Err(io::ErrorKind::NotFound.into()),
                 }
-                let dir = normal(dir);
                 let names: BTreeSet<_> = files
                     .keys()
                     .filter_map(|path| path.strip_prefix(&dir).ok()?.components().next())
@@ -122,10 +128,13 @@ impl Files {
     pub(crate) fn real(&self, path: &Path) -> io::Result<PathBuf> {
         match &self.0 {
             Store::Disk => path.canonicalize(),
-            Store::Memory(files) => match memory_kind(files, path) {
-                Some(_) => Ok(normal(path)),
-                None => Err(io::ErrorKind::NotFound.into()),
-            },
+            Store::Memory(files) => {
+                let path = resolve(files, path)?;
+                match lookup_exact(files, &path) {
+                    Some(_) => Ok(path),
+                    None => Err(io::ErrorKind::NotFound.into()),
+                }
+            }
         }
     }
 }
@@ -140,15 +149,82 @@ fn disk_kind(meta: &fs::Metadata) -> Kind {
     }
 }
 
+fn memory_kind(files: &BTreeMap<PathBuf, Vec<u8>>, path: &Path) -> Option<Kind> {
+    lookup_exact(files, &resolve(files, path).ok()?)
+}
+
+/// The file or folder at `path` after `.` and `..`, or the error disk would return.
+/// `..` drops the name before it only when that name is a directory in `files`.
+fn resolve(files: &BTreeMap<PathBuf, Vec<u8>>, path: &Path) -> io::Result<PathBuf> {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {
+                if !out.as_os_str().is_empty() {
+                    require_dir(files, &out)?;
+                }
+            }
+            Component::ParentDir => out = parent_dir(files, out)?,
+            part => out = descend(files, out, part)?,
+        }
+    }
+    if ends_with_separator(path) {
+        require_dir(files, &out)?;
+    }
+    Ok(out)
+}
+
 /// Paths sort part by part, so the paths below a folder come right after it, and the first path
 /// from `path` on says whether it is a file, a folder or nothing.
-fn memory_kind(files: &BTreeMap<PathBuf, Vec<u8>>, path: &Path) -> Option<Kind> {
-    let path = normal(path);
-    let (first, _) = files.range(path.clone()..).next()?;
-    if *first == path {
+fn lookup_exact(files: &BTreeMap<PathBuf, Vec<u8>>, path: &Path) -> Option<Kind> {
+    if path.as_os_str().is_empty() {
+        return (!files.is_empty()).then_some(Kind::Dir);
+    }
+    let (first, _) = files.range(path.to_path_buf()..).next()?;
+    if first == path {
         Some(Kind::File)
     } else {
-        first.starts_with(&path).then_some(Kind::Dir)
+        first.starts_with(path).then_some(Kind::Dir)
+    }
+}
+
+fn require_dir(files: &BTreeMap<PathBuf, Vec<u8>>, path: &Path) -> io::Result<()> {
+    match lookup_exact(files, path) {
+        Some(Kind::Dir) => Ok(()),
+        Some(_) => Err(io::ErrorKind::NotADirectory.into()),
+        None => Err(io::ErrorKind::NotFound.into()),
+    }
+}
+
+fn descend(
+    files: &BTreeMap<PathBuf, Vec<u8>>,
+    mut out: PathBuf,
+    part: Component<'_>,
+) -> io::Result<PathBuf> {
+    if !out.as_os_str().is_empty() {
+        require_dir(files, &out)?;
+    }
+    out.push(part);
+    Ok(out)
+}
+
+fn parent_dir(files: &BTreeMap<PathBuf, Vec<u8>>, mut out: PathBuf) -> io::Result<PathBuf> {
+    if matches!(out.components().next_back(), Some(Component::Normal(_))) {
+        require_dir(files, &out)?;
+        out.pop();
+        Ok(out)
+    } else {
+        // Above the view, or at `/`, there is no directory here to drop.
+        out.push("..");
+        Ok(out)
+    }
+}
+
+fn ends_with_separator(path: &Path) -> bool {
+    match path.as_os_str().as_encoded_bytes().last() {
+        Some(b'/') => true,
+        Some(b'\\') if std::path::is_separator('\\') => true,
+        _ => false,
     }
 }
 
@@ -201,8 +277,15 @@ mod tests {
             ]
         );
         assert_eq!(
-            files.real(Path::new("p/parts/x/../led")).unwrap(),
+            files.real(Path::new("p/parts/led/../led")).unwrap(),
             Path::new("p/parts/led")
+        );
+        assert_eq!(
+            files
+                .real(Path::new("p/parts/x/../led"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
         );
         assert!(files.real(Path::new("p/parts/x")).is_err());
         assert_eq!(
