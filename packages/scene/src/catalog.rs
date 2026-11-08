@@ -100,28 +100,36 @@ impl Original {
     }
 }
 
-/// Three numbers. The first is the major version, including versions below 1.0.
+/// Three numbers. The first is the major version, including versions below 1.0. Versions order
+/// by number, so `0.10.0` is newer than `0.9.0`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct Version {
+pub struct Version {
     pub(crate) major: u64,
     pub(crate) minor: u64,
     pub(crate) patch: u64,
 }
 
 impl Version {
-    pub(crate) fn parse(text: &str) -> Option<Version> {
+    /// The pattern of a version's text: three numbers of ASCII digits, none with a sign or a
+    /// leading zero, so one version has one spelling.
+    pub const PATTERN: &str = r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$";
+
+    /// The version `text` spells, when it is in the one spelling [`Version::PATTERN`] allows.
+    pub fn parse(text: &str) -> Option<Version> {
+        let number = |part: Option<&str>| {
+            let part = part?;
+            let canonical = part == "0"
+                || (part.starts_with(|c: char| matches!(c, '1'..='9'))
+                    && part.bytes().all(|b| b.is_ascii_digit()));
+            if canonical { part.parse().ok() } else { None }
+        };
         let mut parts = text.split('.');
-        let major = parts.next()?.parse().ok()?;
-        let minor = parts.next()?.parse().ok()?;
-        let patch = parts.next()?.parse().ok()?;
-        if parts.next().is_some() || text.is_empty() {
-            return None;
-        }
-        Some(Version {
-            major,
-            minor,
-            patch,
-        })
+        let version = Version {
+            major: number(parts.next())?,
+            minor: number(parts.next())?,
+            patch: number(parts.next())?,
+        };
+        parts.next().is_none().then_some(version)
     }
 }
 
@@ -249,7 +257,9 @@ pub(crate) fn part_version(id: &str, tree: &Node) -> Result<Version, String> {
     tree.get("version")
         .and_then(Node::str)
         .and_then(Version::parse)
-        .ok_or_else(|| format!("`{id}` has no version of the form `0.1.0`"))
+        .ok_or_else(|| {
+            format!("`{id}` has no version of the form `0.1.0`: three numbers, with no sign and no leading zero")
+        })
 }
 
 #[cfg(unix)]
@@ -314,6 +324,33 @@ mod tests {
     use serde_json::Value;
     use sha2::{Digest, Sha256};
     use std::fs;
+
+    #[test]
+    fn a_version_has_one_spelling_and_orders_by_number() {
+        for good in ["0.1.0", "1.2.3", "10.0.0", "0.0.0"] {
+            assert_eq!(Version::parse(good).unwrap().to_string(), good);
+        }
+        for bad in [
+            "+01.2.3",
+            "01.2.3",
+            "1.02.3",
+            "1.2.03",
+            "+1.2.3",
+            "-1.2.3",
+            "1.2",
+            "1.2.3.4",
+            "",
+            "1..3",
+            "1.2.x",
+            " 1.2.3",
+            "1.2.3 ",
+            "١.2.3",
+            "99999999999999999999.0.0",
+        ] {
+            assert_eq!(Version::parse(bad), None, "{bad}");
+        }
+        assert!(Version::parse("0.10.0") > Version::parse("0.9.0"));
+    }
 
     #[test]
     fn the_builtin_catalog_matches_the_parts_tree() {

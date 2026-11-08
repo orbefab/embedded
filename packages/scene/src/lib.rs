@@ -30,6 +30,7 @@ use std::path::Path;
 
 #[cfg(unix)]
 pub use add::{AddCode, Reply, Request, RunError, run as add_parts};
+pub use catalog::Version;
 pub use circuit::{
     Amount, EnginePart, Instance, MapPart, Netlist, PartData, PinWhy, Placement, Reading, RefMap,
     View, Wire,
