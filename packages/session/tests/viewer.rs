@@ -4,7 +4,8 @@
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
-use orbe_session::{Code, Command, Duration, Files, FrameState, Frames, Live, Reply, State};
+use orbe_session::viewer::{self, Feed, TICK};
+use orbe_session::{Code, Command, Duration, Files, FrameState, Live, Reply, State};
 use serde_json::{Value, json};
 
 fn first_target() -> PathBuf {
@@ -36,7 +37,7 @@ const BUTTON_TEST: [&str; 8] = [
 #[test]
 fn frames_read_after_every_slice_change_no_reply() {
     let mut watched = opened();
-    let mut frames = Frames::default();
+    let mut frames = Feed::default();
     let mut sent: Vec<Value> = Vec::new();
     let watched_replies: Vec<Reply> = BUTTON_TEST
         .iter()
@@ -80,7 +81,7 @@ fn frames_read_after_every_slice_change_no_reply() {
 #[test]
 fn a_frame_inside_a_step_says_stepping() {
     let mut live = opened();
-    let mut frames = Frames::default();
+    let mut frames = Feed::default();
     let mut inside = Vec::new();
     let stepped = live.run_with(&command("step 5ms"), &mut |progress| {
         inside.extend(frames.frame(progress.sample(), None));
@@ -119,7 +120,7 @@ fn the_scene_message_names_each_channel() {
 #[test]
 fn a_frame_shows_a_press_after_it_lands_and_skips_a_repeat() {
     let mut live = opened();
-    let mut frames = Frames::default();
+    let mut frames = Feed::default();
     let first = frames.frame(live.sample().unwrap(), None).unwrap();
     assert_eq!(first["switches"], json!([0, 0]));
     assert!(frames.frame(live.sample().unwrap(), None).is_none());
@@ -142,12 +143,12 @@ fn play_ticks_until_pause() {
     assert!(played.ok(), "{}", played.text());
     assert_eq!(played.state, State::Playing);
     assert_eq!(played.text(), "playing from t=0s");
-    assert!(live.tick(16_000_000_000));
-    assert!(live.tick(16_000_000_000));
+    assert!(live.tick(TICK).is_some());
+    assert!(live.tick(TICK).is_some());
     let paused = live.run(&Command::Pause);
     assert_eq!((paused.t_ps, paused.state), (32_000_000_000, State::Paused));
     assert_eq!(paused.text(), "paused at t=32ms");
-    assert!(!live.tick(16_000_000_000), "a paused session does not tick");
+    assert!(live.tick(TICK).is_none(), "a paused session does not tick");
     assert_eq!(live.sample().unwrap().t_ps, 32_000_000_000);
 }
 
@@ -160,14 +161,14 @@ fn a_step_stops_play() {
         (stepped.t_ps, stepped.state),
         (5_000_000_000, State::Paused)
     );
-    assert!(!live.tick(16_000_000_000));
+    assert!(live.tick(TICK).is_none());
 }
 
 #[test]
 fn a_refused_step_leaves_play_running() {
     let mut live = opened();
     assert!(live.run(&Command::Play).ok());
-    assert!(live.tick(16_000_000_000));
+    assert!(live.tick(TICK).is_some());
     for (line, code) in [
         ("step 10000s", Code::PastStop),
         ("step --until @nope on", Code::UnknownRef),
@@ -180,7 +181,7 @@ fn a_refused_step_leaves_play_running() {
             "{line} takes no time and leaves play running"
         );
     }
-    assert!(live.tick(16_000_000_000));
+    assert!(live.tick(TICK).is_some());
 }
 
 #[test]
@@ -189,7 +190,7 @@ fn the_next_step_lists_what_play_ran() {
     assert!(live.run(&Command::Play).ok());
     assert!(live.run(&command("press @btn1")).ok());
     for _ in 0..4 {
-        assert!(live.tick(16_000_000_000));
+        assert!(live.tick(TICK).is_some());
     }
     let paused = live.run(&Command::Pause);
     assert_eq!(paused.text(), "paused at t=64ms");
@@ -214,7 +215,7 @@ fn a_step_refused_at_the_stop_lists_what_play_ran() {
     assert!(live.run(&command("open")).ok());
     assert!(live.run(&Command::Play).ok());
     assert!(live.run(&command("press @btn1")).ok());
-    while live.tick(16_000_000_000) {}
+    while live.tick(TICK).is_some() {}
     let ended = live.run(&command("step 1ms"));
     assert_eq!(ended.error.as_ref().unwrap().code, Code::Ended);
     let text = ended.text();
@@ -234,7 +235,7 @@ fn play_ends_at_the_stop() {
     assert!(live.run(&command("open")).ok());
     assert!(live.run(&Command::Play).ok());
     let mut ticks = 0;
-    while live.tick(16_000_000_000) {
+    while live.tick(TICK).is_some() {
         ticks += 1;
     }
     assert_eq!(ticks, 2, "16 ms, 32 ms, then the stop at 40 ms ends play");
@@ -256,4 +257,71 @@ fn a_test_file_refuses_play() {
     let error = failed.reply.error.as_ref().unwrap();
     assert_eq!(error.code, Code::Usage);
     assert_eq!(error.hint, "advance time with `step`, such as `step 100ms`");
+}
+
+#[test]
+fn a_joining_viewer_gets_the_scene_then_the_present() {
+    let live = opened();
+    let mut feed = Feed::default();
+    let joined = feed.join(&live);
+    let types: Vec<&str> = joined.iter().map(|m| m["type"].as_str().unwrap()).collect();
+    assert_eq!(types, ["scene", "frame"]);
+    assert_eq!(joined[1]["seq"], 0);
+    assert!(feed.now(&live, None).is_none(), "nothing new since");
+    let again = feed.join(&live);
+    assert_eq!(
+        again.len(),
+        2,
+        "a second viewer gets the scene and a frame too"
+    );
+    assert_eq!(again[1]["seq"], 1);
+}
+
+#[test]
+fn a_viewer_s_command_is_answered_by_its_id_and_followed_by_a_frame() {
+    let mut live = opened();
+    let mut feed = Feed::default();
+    feed.join(&live);
+    let (reply, message) = viewer::answer(&mut live, r#"{"id": 3, "cmd": "play"}"#);
+    assert_eq!(reply.state, State::Playing);
+    assert_eq!(message["type"], "reply");
+    assert_eq!(message["id"], 3);
+    assert_eq!(message["reply"], reply.json());
+    let after = feed.after(&live, &reply);
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0]["state"], "playing");
+
+    let (refused, message) = viewer::answer(&mut live, r#"{"id": 4, "cmd": "step"}"#);
+    assert_eq!(refused.error.unwrap().code, Code::Usage);
+    assert_eq!(message["reply"]["ok"], false);
+    assert_eq!(message["id"], 4);
+}
+
+#[test]
+fn an_open_restarts_the_feed_with_its_scene() {
+    let mut live = opened();
+    let mut feed = Feed::default();
+    feed.join(&live);
+    let reopened = live.run(&command("open"));
+    let after = feed.after(&live, &reopened);
+    let types: Vec<&str> = after.iter().map(|m| m["type"].as_str().unwrap()).collect();
+    assert_eq!(types, ["scene", "frame"]);
+}
+
+#[test]
+fn a_tick_runs_at_most_one_tick_of_simulated_time_and_says_its_pace() {
+    let mut live = opened();
+    assert!(live.run(&Command::Play).ok());
+    let pace = live.tick(TICK * 2).unwrap();
+    assert_eq!(live.sample().unwrap().t_ps, 16_000_000_000);
+    assert_eq!((pace.speed, pace.ratio), (1.0, 0.5));
+    let pace = live.tick(TICK / 2).unwrap();
+    assert_eq!(live.sample().unwrap().t_ps, 24_000_000_000);
+    assert_eq!(pace.ratio, 1.0);
+    let mut feed = Feed::default();
+    let frame = feed.now(&live, Some(pace)).unwrap();
+    assert_eq!(
+        (frame["speed"].as_f64(), frame["ratio"].as_f64()),
+        (Some(1.0), Some(1.0))
+    );
 }

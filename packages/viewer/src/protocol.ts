@@ -237,7 +237,7 @@ export interface ReplyMessage {
 export type FromSession = ToViewer | ReplyMessage;
 
 /** Where the viewer's messages come from and its commands go: a WebSocket to the session
- * process, a Worker in the sandbox, or a fixture. */
+ * process, orbe-wasm's Worker, or a fixture. */
 export interface SessionSource {
   /** Calls `listener` with every message from now on, and returns the unsubscribe. A source
    * sends the current scene, then the latest frame, to each new listener. */

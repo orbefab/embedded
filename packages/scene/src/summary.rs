@@ -426,7 +426,8 @@ pub fn search(query: &str) -> Vec<Card> {
 /// Catalog ids close to `name`, best first. The id itself is not one of them.
 pub fn near_names(name: &str) -> Vec<String> {
     let want = name.to_lowercase();
-    let mut scored: Vec<(f64, String)> = catalog::ids()
+    let mut scored: Vec<(f64, String)> = catalog::Source::Builtin
+        .ids()
         .filter(|id| id != name)
         .map(|id| (strsim::jaro_winkler(&want, &id.to_lowercase()), id))
         .filter(|(score, _)| *score >= 0.8)
@@ -439,7 +440,8 @@ pub fn near_names(name: &str) -> Vec<String> {
 /// Catalog ids that have `word` as one whole segment, such as `1n4007` in `diode-1n4007`.
 pub fn ids_with_segment(word: &str) -> Vec<String> {
     let want = word.to_lowercase();
-    let mut ids: Vec<String> = catalog::ids()
+    let mut ids: Vec<String> = catalog::Source::Builtin
+        .ids()
         .filter(|id| words_of(id).iter().any(|segment| segment == &want))
         .collect();
     ids.sort();

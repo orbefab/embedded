@@ -453,7 +453,7 @@ mod tests {
     /// `orbe add` reads one word as a part or a Block, so no word may be both.
     #[test]
     fn no_block_is_named_like_a_catalog_part() {
-        let parts: BTreeSet<String> = crate::catalog::ids().collect();
+        let parts: BTreeSet<String> = crate::catalog::Source::Builtin.ids().collect();
         let both: Vec<&str> = ids().filter(|id| parts.contains(*id)).collect();
         assert!(
             both.is_empty(),

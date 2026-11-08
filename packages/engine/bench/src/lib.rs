@@ -110,7 +110,6 @@ struct Job {
     example: String,
     variant: Variant,
     netlist: Netlist,
-    document: Vec<u8>,
 }
 
 struct Sample {
@@ -251,7 +250,6 @@ fn job(example: &str, variant: Variant, value: &serde_json::Value) -> Result<Job
         example: example.to_string(),
         variant,
         netlist: parse_document(example, &document)?,
-        document,
     })
 }
 
@@ -266,24 +264,6 @@ fn parse_document(example: &str, document: &[u8]) -> Result<Netlist, String> {
                 .join(", ")
         )
     })
-}
-
-/// Writes each live job's netlist under `dir/<example>/<variant>.json`.
-///
-/// The bytes are the document the job parses.
-pub fn write_live_netlists(examples: &[Example], dir: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|err| format!("{}: {err}", dir.display()))?;
-    for job in &jobs(examples)? {
-        let Variant::Live(_) = job.variant else {
-            continue;
-        };
-        let example_dir = dir.join(&job.example);
-        std::fs::create_dir_all(&example_dir)
-            .map_err(|err| format!("{}: {err}", example_dir.display()))?;
-        let path = example_dir.join(format!("{}.json", job.variant.label()));
-        std::fs::write(&path, &job.document).map_err(|err| format!("{}: {err}", path.display()))?;
-    }
-    Ok(())
 }
 
 fn json_u64(value: &serde_json::Value, field: &str) -> Result<u64, String> {
@@ -714,45 +694,5 @@ mod tests {
             )],
         };
         assert!(!markdown(&hidden).contains("wall seconds"));
-    }
-
-    #[test]
-    fn written_live_netlists_are_the_bytes_the_live_job_parses() {
-        let examples =
-            load_examples(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/circuits"))
-                .unwrap();
-        let dir =
-            std::env::temp_dir().join(format!("orbe-engine-bench-live-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        write_live_netlists(&examples, &dir).unwrap();
-        let jobs = jobs(&examples).unwrap();
-        let mut live = 0usize;
-        let mut files = 0usize;
-        for job in &jobs {
-            let path = dir
-                .join(&job.example)
-                .join(format!("{}.json", job.variant.label()));
-            match job.variant {
-                Variant::Live(_) => {
-                    live += 1;
-                    let bytes = std::fs::read(&path).unwrap();
-                    assert_eq!(bytes, job.document, "{}", path.display());
-                    let parsed = parse_document(&job.example, &bytes).unwrap();
-                    assert_eq!(parsed.analysis(), job.netlist.analysis());
-                }
-                Variant::Committed => assert!(!path.exists(), "{}", path.display()),
-            }
-        }
-        for example in std::fs::read_dir(&dir).unwrap() {
-            let example = example.unwrap();
-            for file in std::fs::read_dir(example.path()).unwrap() {
-                let file = file.unwrap();
-                assert!(file.path().extension().is_some_and(|ext| ext == "json"));
-                files += 1;
-            }
-        }
-        assert_eq!(files, live);
-        assert_eq!(live, EXAMPLES.len() + SERIAL_SECS.len());
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

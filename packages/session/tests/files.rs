@@ -122,6 +122,40 @@ fn each_block_reads_and_runs_the_same_from_memory() {
     }
 }
 
+/// The repo's part folders, as a catalog handed in, each file by `<id>/<path>`.
+fn given_catalog(skip: &str) -> Vec<(String, Vec<u8>)> {
+    let parts = repo().join("parts");
+    let mut files = Vec::new();
+    walk(&parts, &parts, &mut files);
+    files
+        .into_iter()
+        .map(|(path, bytes)| (path.to_str().unwrap().to_string(), bytes))
+        .filter(|(path, _)| !path.starts_with(&format!("{skip}/")))
+        .collect()
+}
+
+/// A Block handed its catalog as part folders, as a browser is, reads and runs as it does with
+/// the catalog built in.
+#[test]
+fn each_block_reads_and_runs_the_same_from_a_given_catalog() {
+    for block in BLOCKS {
+        let built_in = outcome(&memory(&repo(), block), Path::new(""), block);
+        let given = memory(&repo(), block).with_catalog(given_catalog(""));
+        assert_eq!(outcome(&given, Path::new(""), block), built_in, "{block}");
+    }
+}
+
+/// A given catalog replaces the built-in one, so a part it lacks is missing.
+#[test]
+fn a_given_catalog_without_a_part_finds_it_missing() {
+    let files = memory(&repo(), "nano-button-led").with_catalog(given_catalog("led-5mm"));
+    let scene = Path::new("blocks/nano-button-led/scene.jsonc");
+    assert_eq!(
+        messages(&files, scene),
+        ["part `led-5mm` is not in the catalog this Block reads"]
+    );
+}
+
 /// An installed Block reads its own copies, and reads and runs as the Block does.
 #[test]
 fn each_installed_block_reads_and_runs_the_same_from_memory() {

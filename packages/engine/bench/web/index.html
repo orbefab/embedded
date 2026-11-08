@@ -4,10 +4,7 @@
 <script>
 const log = document.getElementById("log");
 const params = new URLSearchParams(location.search);
-const worker =
-  params.get("job") === "session"
-    ? new Worker("session.js", { type: "module" })
-    : new Worker("worker.js");
+const worker = new Worker("worker.js");
 window.__bench = {
   crossOriginIsolated,
   start() {

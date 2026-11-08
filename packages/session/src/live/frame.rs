@@ -1,6 +1,6 @@
-//! What a viewer sees of a session: one `scene` message per `open`, and `frame` messages read
-//! from the circuit at `now`. A frame reads the probe, the levels and the switch edges only, so
-//! it never lands a step, and a run gives the same result with a viewer or without one.
+//! What a viewer sees of a session: one `scene` message per `open`, and the circuit at `now`,
+//! which a `frame` message shows. A sample reads the probe, the levels and the switch edges only,
+//! so it never lands a step, and a run gives the same result with a viewer or without one.
 
 use std::collections::BTreeMap;
 
@@ -63,59 +63,6 @@ pub struct Sample {
 pub struct Pace {
     pub speed: f64,
     pub ratio: f64,
-}
-
-/// Numbers the frames a session sends, and gives each LED its mean current since the frame
-/// before.
-#[derive(Default)]
-pub struct Frames {
-    seq: u64,
-    last: Option<Sample>,
-}
-
-impl Frames {
-    /// Forgets the last frame, so the next frame shows each LED's present current.
-    pub fn restart(&mut self) {
-        self.last = None;
-    }
-
-    /// The `frame` message for `sample`, or `None` when it shows what the last one did. An
-    /// LED's current is its mean since the last frame, or its present current when no time
-    /// passed.
-    pub fn frame(&mut self, sample: Sample, pace: Option<Pace>) -> Option<Value> {
-        if self.last.as_ref() == Some(&sample) {
-            return None;
-        }
-        let led_a: Vec<f64> = match &self.last {
-            Some(last) if sample.t_ps > last.t_ps && last.leds.len() == sample.leds.len() => {
-                let span = (sample.t_ps - last.t_ps) as f64;
-                sample
-                    .leds
-                    .iter()
-                    .zip(&last.leds)
-                    .map(|((_, now), (_, before))| (now - before) / span)
-                    .collect()
-            }
-            _ => sample.leds.iter().map(|(i, _)| *i).collect(),
-        };
-        let mut frame = json!({
-            "type": "frame",
-            "seq": self.seq,
-            "t_ps": sample.t_ps,
-            "state": sample.state.as_str(),
-            "pins": sample.pins,
-            "led_a": led_a,
-            "switches": sample.switches,
-            "diagnostics": sample.diagnostics,
-        });
-        if let Some(pace) = pace {
-            frame["speed"] = json!(pace.speed);
-            frame["ratio"] = json!(pace.ratio);
-        }
-        self.seq += 1;
-        self.last = Some(sample);
-        Some(frame)
-    }
 }
 
 impl Live {

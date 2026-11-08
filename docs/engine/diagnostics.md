@@ -174,8 +174,6 @@ A blob the part names is missing or is not the blob it names, as [netlist.md](ne
 - `hash`: every file under that name hashes to another digest.
 - `length`: the file's length is not `bytes`.
 
-A missing blob in the wasm package is `missing` too, and a file there is filed under its own hash, so the package never reports `hash`.
-
 ## netlist.same_net
 
 Severity `error`. Refs are two pins of one part, in order: the pin at fault, then the pin its kind ties it to, for example `#u1.pin.GND_22` and `#u1.pin.GND_8`. `t_ps` is `null`.

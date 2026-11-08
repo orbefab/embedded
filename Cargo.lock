@@ -732,17 +732,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "orbe-engine-wasm"
-version = "0.1.0"
-dependencies = [
- "orbe-circuit",
- "orbe-engine-core",
- "serde",
- "serde_json",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "orbe-espressif"
 version = "0.1.0"
 dependencies = [
@@ -790,6 +779,15 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "orbe-wasm"
+version = "0.1.0"
+dependencies = [
+ "orbe-session",
+ "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]

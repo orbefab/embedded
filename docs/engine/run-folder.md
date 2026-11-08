@@ -492,7 +492,7 @@ lo, hi = env[refs.index("#net.vout")]  # interval k spans t_ps[k] to t_ps[k + 1]
 
 ## What the glass shows
 
-The frame memory file is what the panel holds, not what a person sees. The engine draws what the glass shows, and a viewer only paints those pixels. `sim view <dir> --out <out>` reads a finished run folder and writes `display-<part>.png` into `<out>` for each entry of `observations.json` `displays`. It writes nothing into the run folder unless `<out>` is that folder. `Display::pixels` on a session and `displayPixels` in the wasm package give the same pixels from the same function, as [engine.md](engine.md#sessions) and [wasm.md](wasm.md) say.
+The frame memory file is what the panel holds, not what a person sees. The engine draws what the glass shows, and a viewer only paints those pixels. `sim view <dir> --out <out>` reads a finished run folder and writes `display-<part>.png` into `<out>` for each entry of `observations.json` `displays`. It writes nothing into the run folder unless `<out>` is that folder. `Display::pixels` on a session gives the same pixels from the same function, as [engine.md](engine.md#sessions) says.
 
 For an `st77916` the pixels are 360 rows of 360, rows top to bottom and each row left to right, each pixel red, green, blue and alpha, one byte each:
 

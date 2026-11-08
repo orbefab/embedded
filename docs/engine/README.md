@@ -14,7 +14,6 @@ The input is JSON. The folder holds `manifest.json`, `netlist.json`, `diagnostic
 | `packages/socs/avr` | `orbe-avr` | The ATmega328P. `orbe-circuit` runs it for each `atmega328p` part. |
 | `packages/socs/espressif` | `orbe-espressif` | The ESP32-S3 around `orbe-xtensa`: both cores in one time order, its memories, its peripherals and its boot path, from the captured state in `src/s3/boot/state.txt`. `orbe-circuit` runs it for each `esp32s3` part. [esp32s3.md](esp32s3.md) says what it models. |
 | `packages/engine/cli` | `orbe-engine-cli` | The `sim` binary. |
-| `packages/engine/wasm` | `orbe-engine-wasm` | The session and `sim run` for JavaScript. [wasm.md](wasm.md) is its guide. |
 | `packages/engine/bench` | `orbe-engine-bench` | Times native, WASI and browser Worker runs. [bench.md](bench.md) says how. |
 
 `packages/engine/tests/circuits` holds the netlists the tests and checks run, each with its blobs and references. `packages/engine/tests/firmware` holds their firmware sources and images. `packages/engine/scripts` holds the scripts that rebuild that firmware and check run folders apart from the engine.
@@ -69,16 +68,17 @@ The process exits with one of these codes.
 - `st77916_example.py --check` and `pattern_header.py --check`.
 - `sim run` on `st77916-replay`, `esp32s3-blink`, `esp32s3-pattern` and the seven ESP-IDF circuits, `esp32s3-hello`, `esp32s3-screen`, `esp32s3-encoder`, `esp32s3-touch`, `esp32s3-dualcore`, `esp32s3-echo` and `esp32s3-ring`, each checked by its script with `--check`.
 - the knob refs: it copies `packages/engine/tests/firmware/esp32s3/arduino/checks/knob/netlist.json` under `TMPDIR`, runs `esp32s3_knob.py script` on the refs into that copy, and fails when `cmp` shows a difference.
-- `packages/engine/scripts/wasm-check.sh`, which compares the wasm package with native `sim run` in node Workers.
+- `packages/engine/scripts/wasi-check.sh`, which runs `sim` built for `wasm32-wasip1` on every example in node and compares each folder with native `sim run`'s.
+- `scripts/check-wasm.sh`, the browser package's check, which [docs/wasm.md](../wasm.md#tests) describes.
 
 `ws2812_decode.py --self-test` is not in that list. `packages/engine/cli/tests/ws2812.rs` runs it, and that file is one of the five `full tier` targets above.
 
-`port-skip-check` is the check that a skipped store changes no pin. `fast` runs clippy with that feature. `full` runs the `orbe-avr` tests with it. `packages/engine/scripts/blobs.sh` runs first in both tiers. It fetches the ESP32-S3 ROM, which no circuit commits, into its cache when the cache lacks it. The dual-core probe test in `packages/socs/espressif/tests/dualcore.rs` runs the ROM from that cache. The `fast` tier needs uv, and `full` also needs ngspice-42 on `PATH`, node 22.7 or later, and rustup.
+`port-skip-check` is the check that a skipped store changes no pin. `fast` runs clippy with that feature. `full` runs the `orbe-avr` tests with it. `packages/engine/scripts/blobs.sh` runs first in both tiers. It fetches the ESP32-S3 ROM, which no circuit commits, into its cache when the cache lacks it. The dual-core probe test in `packages/socs/espressif/tests/dualcore.rs` runs the ROM from that cache. The `fast` tier needs uv, and `full` also needs ngspice-42 on `PATH`, node 24 or later, rustup with the `wasm32-wasip1` target, and the `wasm-bindgen` CLI that [docs/wasm.md](../wasm.md#build) names.
 
 Neither tier builds firmware. `packages/engine/scripts/esp32s3-firmware.sh` rebuilds the bare-metal programs and, with ESP-IDF v5.5.5, the ESP-IDF apps. `packages/engine/scripts/esp32s3-arduino.sh --check console` rebuilds the console sketch, runs `packages/engine/tests/firmware/esp32s3/arduino/checks/console/netlist.json`, and checks the folder with `esp32s3_arduino_console.py --check`. `packages/engine/scripts/esp32s3-arduino.sh --check knob LVGL_DIR` builds the knob sketch, runs `packages/engine/tests/firmware/esp32s3/arduino/checks/knob/netlist.json`, and checks the folder with `esp32s3_knob.py --check` against `refs.json`. Those refs come from a board session of three agreeing captures. Clockwise drives contact B.
 
 ## Pages
 
-The schema is [netlist.md](netlist.md). How the engine steps, and how accurate it is, is [engine.md](engine.md). The folder is [run-folder.md](run-folder.md). The codes are [diagnostics.md](diagnostics.md). The ngspice references are [reference.md](reference.md). The ATmega328P behind the `atmega328p` kind is [avr.md](avr.md). The ESP32-S3 behind the `esp32s3` kind is [esp32s3.md](esp32s3.md). How to time a run is [bench.md](bench.md). The JavaScript package for a Worker is [wasm.md](wasm.md).
+The schema is [netlist.md](netlist.md). How the engine steps, and how accurate it is, is [engine.md](engine.md). The folder is [run-folder.md](run-folder.md). The codes are [diagnostics.md](diagnostics.md). The ngspice references are [reference.md](reference.md). The ATmega328P behind the `atmega328p` kind is [avr.md](avr.md). The ESP32-S3 behind the `esp32s3` kind is [esp32s3.md](esp32s3.md). How to time a run is [bench.md](bench.md). The package that runs a Block in a browser Worker is [docs/wasm.md](../wasm.md).
 
 The compiled sketch images in `packages/engine/tests/firmware/sketch/` and in `blocks/*/firmware/` link third-party code under its own licenses. [NOTICE](../../packages/engine/tests/firmware/sketch/NOTICE) names the test images, and each Block's `firmware/NOTICE` names its image. The engine does not link that code.

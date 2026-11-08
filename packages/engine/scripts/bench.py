@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and run the native, WASI, Worker, and Worker session benchmarks."""
+"""Build and run the native, WASI, and Worker benchmarks."""
 
 import hashlib
 import importlib.metadata
@@ -89,14 +89,12 @@ def load_sentence(
     native: list[float],
     wasi: list[float],
     worker: list[float],
-    session: list[float],
     after: list[float],
 ) -> str:
     return (
         "Load before native was "
         f"{load_text(native)}, before WASI was {load_text(wasi)}, "
         f"before the Worker was {load_text(worker)}, "
-        f"before the Worker session was {load_text(session)}, "
         f"and after the last target was {load_text(after)}."
     )
 
@@ -161,7 +159,6 @@ def stage_web(stage: Path, wasm: Path, names: list[str]) -> None:
     (stage / "examples").mkdir(parents=True)
     shutil.copy(ROOT / "packages/engine/bench/web/index.html", stage / "index.html")
     shutil.copy(ROOT / "packages/engine/bench/web/worker.js", stage / "worker.js")
-    shutil.copy(ROOT / "packages/engine/bench/web/session.js", stage / "session.js")
     shutil.copy(wasm, stage / "orbe_engine_bench.wasm")
     (stage / "names.json").write_text(json.dumps(names))
     for name in names:
@@ -170,10 +167,10 @@ def stage_web(stage: Path, wasm: Path, names: list[str]) -> None:
         shutil.copy(ROOT / "packages/engine/tests/circuits" / name / "netlist.json", dest / "netlist.json")
 
 
-def run_worker(stage: Path, runs: int, out: Path, job: str | None = None) -> tuple[str, str, bool]:
+def run_worker(stage: Path, runs: int, out: Path) -> tuple[str, str, bool]:
     from playwright.sync_api import sync_playwright
 
-    query = f"runs={runs}" if job is None else f"runs={runs}&job={job}"
+    query = f"runs={runs}"
     server, port = serve(stage)
     try:
         with sync_playwright() as playwright:
@@ -262,35 +259,23 @@ def wall_per_sim(wall_ns: int, simulated_ps: int) -> float:
     return wall_ns / simulated_ps * 1e3
 
 
-def session_cells(rows: dict, example: str, variant: str, simulated_ps: int) -> tuple[str, str]:
-    row = rows.get((example, variant))
-    if row is None:
-        return "-", "-"
-    wall = row["wall_ns"]
-    return spread(wall), times_real(simulated_ps, wall["median"])
-
-
-def combined_table(native: dict, wasi: dict, worker: dict, session: dict) -> str:
+def combined_table(native: dict, wasi: dict, worker: dict) -> str:
     lines = [
-        "| example | variant | simulated | native | WASI | Worker | native x | WASI x | Worker x | Worker session | Worker session x | native core | WASI core | Worker core | landings | stops |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| example | variant | simulated | native | WASI | Worker | native x | WASI x | Worker x | native core | WASI core | Worker core | landings | stops |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     notes = []
     reports = (("native", native), ("WASI", wasi), ("Worker", worker))
     wasi_rows = index_rows(wasi)
     worker_rows = index_rows(worker)
-    session_rows = index_rows(session)
     for row in native["workloads"]:
         example, variant = row["example"], row["variant"]
         others = {
             "wasi": wasi_rows[(example, variant)],
             "worker": worker_rows[(example, variant)],
         }
-        session_time, session_ratio = session_cells(
-            session_rows, example, variant, row["simulated_ps"]
-        )
         lines.append(
-            "| {example} | {variant} | {sim:.3f} | {native} | {wasi} | {worker} | {nx} | {wx} | {kx} | {session} | {sx} | {nc} | {wc} | {kc} | {landings} | {stops} |".format(
+            "| {example} | {variant} | {sim:.3f} | {native} | {wasi} | {worker} | {nx} | {wx} | {kx} | {nc} | {wc} | {kc} | {landings} | {stops} |".format(
                 example=example,
                 variant=variant,
                 sim=row["simulated_ps"] / 1e12,
@@ -300,8 +285,6 @@ def combined_table(native: dict, wasi: dict, worker: dict, session: dict) -> str
                 nx=times_real(row["simulated_ps"], row["wall_ns"]["median"]),
                 wx=times_real(row["simulated_ps"], others["wasi"]["wall_ns"]["median"]),
                 kx=times_real(row["simulated_ps"], others["worker"]["wall_ns"]["median"]),
-                session=session_time,
-                sx=session_ratio,
                 nc=core_cell(row),
                 wc=core_cell(others["wasi"]),
                 kc=core_cell(others["worker"]),
@@ -324,143 +307,7 @@ def combined_table(native: dict, wasi: dict, worker: dict, session: dict) -> str
             )
         if found == 0:
             sys.exit(f"{label} report has no row with secs")
-    for row in native["workloads"]:
-        if row.get("secs") is None:
-            continue
-        session_row = session_rows.get((row["example"], row["variant"]))
-        if session_row is None:
-            continue
-        block = session_row["wall_ns"]
-        med = wall_per_sim(block["median"], row["simulated_ps"])
-        lo = wall_per_sim(block["min"], row["simulated_ps"])
-        hi = wall_per_sim(block["max"], row["simulated_ps"])
-        notes.append(
-            f"{row['example']} {row['variant']} takes {med:.3f} wall seconds per simulated second on Worker session ({lo:.3f} to {hi:.3f})."
-        )
     return "\n".join(lines + notes)
-
-
-def session_job_list(live_dir: Path, names: list[str]) -> list[dict]:
-    jobs = []
-    longs = 0
-    for name in names:
-        live = live_dir / name / "live.json"
-        if not live.is_file():
-            sys.exit(f"missing live netlist {live}")
-        jobs.append({"example": name, "variant": "live", "file": f"live/{name}/live.json"})
-        long = live_dir / name / "live-16s.json"
-        if long.is_file():
-            longs += 1
-            jobs.append(
-                {
-                    "example": name,
-                    "variant": "live-16s",
-                    "file": f"live/{name}/live-16s.json",
-                }
-            )
-    if longs != 1:
-        sys.exit(f"expected one live-16s netlist, found {longs}")
-    return jobs
-
-
-def stage_session(stage: Path, live_dir: Path, jobs: list[dict]) -> None:
-    package = stage / "pkg" / "orbe_engine_wasm.js"
-    if not package.is_file():
-        sys.exit(f"missing {package}")
-    for job in jobs:
-        src = live_dir / job["example"] / f"{job['variant']}.json"
-        dest = stage / job["file"]
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(src, dest)
-    (stage / "session-jobs.json").write_text(json.dumps(jobs))
-
-
-def session_frames(stop_ps: int) -> int:
-    return (stop_ps + FRAME_PS - 1) // FRAME_PS
-
-
-def session_field(row: dict, example: str, variant: str, key: str):
-    if key not in row:
-        sys.exit(f"{example} {variant} Worker session report has no {key}")
-    return row[key]
-
-
-def require_session(native: dict, session: dict) -> None:
-    if session.get("target") != "worker-session":
-        sys.exit(f"worker session report is labeled {session.get('target')}")
-    if session.get("runs") != native.get("runs"):
-        sys.exit("worker session runs do not match the native report")
-    rows = index_rows(session)
-    expected = []
-    for row in native["workloads"]:
-        if row["variant"] not in ("live", "live-16s"):
-            continue
-        expected.append((row["example"], row["variant"], row["simulated_ps"]))
-    if not any(variant == "live-16s" for _, variant, _ in expected):
-        sys.exit("native report has no live-16s row")
-    seen = set()
-    for example, variant, simulated in expected:
-        row = rows.get((example, variant))
-        if row is None:
-            sys.exit(f"{example} {variant} missing on the Worker session")
-        seen.add((example, variant))
-        if row.get("status") != "stopped":
-            sys.exit(f"{example} {variant} Worker session status is {row.get('status')}")
-        if int(row["now_ps"]) != simulated:
-            sys.exit(
-                f"{example} {variant} Worker session now is {row['now_ps']} and stop is {simulated}"
-            )
-        frames = int(session_field(row, example, variant, "frames"))
-        frame_ps = int(session_field(row, example, variant, "frame_ps"))
-        want_frames = session_frames(simulated)
-        if frame_ps != FRAME_PS or frames != want_frames:
-            ran = "frame" if frames == 1 else "frames"
-            want = "frame" if want_frames == 1 else "frames"
-            sys.exit(
-                f"{example} {variant} Worker session ran {frames} {ran} of {frame_ps} ps"
-                f" and stop {simulated} ps takes {want_frames} {want} of {FRAME_PS} ps"
-            )
-        if (
-            session_field(row, example, variant, "probe_reads") != frames
-            or session_field(row, example, variant, "level_reads") != frames
-            or session_field(row, example, variant, "serial_reads") != frames
-        ):
-            sys.exit(
-                f"{example} {variant} Worker session read probe {row['probe_reads']}, "
-                f"levels {row['level_reads']}, serial {row['serial_reads']} across {frames} frames"
-            )
-        serial_bytes = int(session_field(row, example, variant, "serial_bytes"))
-        cursor = int(session_field(row, example, variant, "cursor"))
-        if serial_bytes != cursor:
-            sys.exit(
-                f"{example} {variant} Worker session read {serial_bytes} serial bytes"
-                f" and the cursor is {cursor}"
-            )
-        if example == SERIAL_EXAMPLE and serial_bytes < 1:
-            sys.exit(f"{example} {variant} Worker session read no serial bytes")
-        refs = int(session_field(row, example, variant, "refs"))
-        signals = int(session_field(row, example, variant, "signals"))
-        probe_columns = int(session_field(row, example, variant, "probe_columns"))
-        level_count = int(session_field(row, example, variant, "level_count"))
-        if (
-            refs < 1
-            or signals < 1
-            or probe_columns != frames * refs
-            or level_count != frames * signals
-        ):
-            sys.exit(
-                f"{example} {variant} Worker session probe has {probe_columns} columns"
-                f" for {refs} refs and levels {level_count} for {signals} signals"
-                f" across {frames} frames"
-            )
-        wall = row["wall_ns"]
-        if wall["min"] > wall["median"] or wall["median"] > wall["max"]:
-            sys.exit(f"{example} {variant} Worker session spread is out of order")
-        if row["wall_ns"]["median"] <= 0:
-            sys.exit(f"{example} {variant} Worker session wall time is {row['wall_ns']['median']}")
-    extra = set(rows) - seen
-    if extra:
-        sys.exit(f"unexpected Worker session rows {sorted(extra)}")
 
 
 def parse_args(argv: list[str]) -> tuple[int, Path]:
@@ -543,7 +390,6 @@ def main() -> None:
         )
         stage = scratch / "stage"
         stage_web(stage, worker_wasm, names)
-        run(["packages/engine/scripts/wasm.sh", str(stage / "pkg")], target)
         native_out = scratch / "native.json"
         wasi_out = scratch / "wasi.json"
         worker_out = scratch / "worker.json"
@@ -594,29 +440,12 @@ if (code !== 0) process.exit(code);
             target,
         )
         shutil.copy(wasi_dir / "wasi.json", wasi_out)
-        live_dir = scratch / "live-netlists"
-        run(
-            [
-                str(native_bin),
-                "--examples",
-                str(ROOT / "packages/engine/tests/circuits"),
-                "--live-netlists",
-                str(live_dir),
-            ],
-            target,
-        )
-        session_jobs = session_job_list(live_dir, names)
-        stage_session(stage, live_dir, session_jobs)
         load_worker = read_load()
         browser_version, playwright_version, isolated = run_worker(stage, runs, worker_out)
-        session_out = scratch / "session.json"
-        load_session = read_load()
-        run_worker(stage, runs, session_out, job="session")
         load_after = read_load()
         native = json.loads(native_out.read_text())
         wasi = json.loads(wasi_out.read_text())
         worker = json.loads(worker_out.read_text())
-        session = json.loads(session_out.read_text())
         for label, report in ("native", native), ("wasi", wasi), ("worker", worker):
             if report["target"] != label:
                 sys.exit(f"{label} report is labeled {report['target']}")
@@ -624,9 +453,8 @@ if (code !== 0) process.exit(code);
                 if row["errors"]:
                     sys.exit(f"{label} {row['example']} {row['variant']} reported errors")
         require_same(native, wasi, worker)
-        require_session(native, session)
         recorded_load = load_sentence(
-            load_native, load_wasi, load_worker, load_session, load_after
+            load_native, load_wasi, load_worker, load_after
         )
         machine = {
             "cpu": cpu_model(),
@@ -636,7 +464,6 @@ if (code !== 0) process.exit(code);
                 "native": load_native,
                 "wasi": load_wasi,
                 "worker": load_worker,
-                "session": load_session,
                 "after": load_after,
             },
             "rustc": text_version(["rustc", "--version"]),
@@ -655,7 +482,7 @@ if (code !== 0) process.exit(code);
         print(f"node {machine['node']}")
         print(f"browser {machine['browser']}")
         print(f"playwright {machine['playwright']}")
-        table = combined_table(native, wasi, worker, session)
+        table = combined_table(native, wasi, worker)
         print(table)
         report = {
             "machine": machine,
@@ -663,7 +490,6 @@ if (code !== 0) process.exit(code);
             "native": native,
             "wasi": wasi,
             "worker": worker,
-            "session": session,
             "table": table,
         }
         out.write_text(json.dumps(report, indent=2) + "\n")
