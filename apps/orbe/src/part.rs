@@ -80,6 +80,13 @@ pub fn text(card: &Card) -> String {
         }
     }
     lines.push(String::new());
+    lines.push("buy".into());
+    let links = card.buy.as_deref().unwrap_or_default();
+    push_or_none(&mut lines, links.is_empty());
+    for link in links {
+        lines.push(format!("  {}  {}  {}", link.seller, link.url, link.checked));
+    }
+    lines.push(String::new());
     lines.push("files".into());
     for file in &card.files {
         lines.push(format!(

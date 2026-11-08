@@ -434,7 +434,7 @@ fn build<'a>(
         files: files(license, original),
         uses: uses(tree),
         used_by,
-        buy: None,
+        buy: buy_links(tree),
         on: on(tree),
         pressable: tree.get("controls").and_then(|c| c.get("press")).is_some(),
     }
@@ -721,6 +721,21 @@ fn gaps(tree: &Node) -> Vec<NotSimulated> {
             })
         })
         .collect()
+}
+
+fn buy_links(tree: &Node) -> Option<Vec<Buy>> {
+    let items = tree.get("buy")?.items()?;
+    let links: Vec<Buy> = items
+        .iter()
+        .filter_map(|item| {
+            Some(Buy {
+                seller: item.get("seller")?.str()?.to_string(),
+                url: item.get("url")?.str()?.to_string(),
+                checked: item.get("checked")?.str()?.to_string(),
+            })
+        })
+        .collect();
+    (!links.is_empty()).then_some(links)
 }
 
 fn docs(tree: &Node) -> Option<Vec<Doc>> {
