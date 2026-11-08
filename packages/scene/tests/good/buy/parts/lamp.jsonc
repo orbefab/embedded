@@ -2,8 +2,8 @@
   "format": 1,
   "joins_only": true,
   "buy": [
-    { "seller": "Shop", "url": "https://example.com/led", "checked": "2026-11-08" },
-    { "seller": "Shop", "url": "https://example.com/leap", "checked": "2024-02-29" },
-    { "seller": "Shop", "url": "https://example.com/y2k", "checked": "2000-02-29" },
+    { "seller": "DigiKey", "url": "https://www.digikey.com/led", "checked": "2026-11-08" },
+    { "seller": "DigiKey", "url": "https://www.digikey.com/leap", "checked": "2024-02-29" },
+    { "seller": "DigiKey", "url": "https://www.digikey.com/y2k", "checked": "2000-02-29" },
   ],
 }

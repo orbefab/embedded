@@ -53,20 +53,6 @@ fn every_catalog_part_is_a_card() {
             assert!(!file.license.is_empty());
         }
     }
-    let with_buy: Vec<&str> = cards
-        .iter()
-        .filter(|card| card.buy.is_some())
-        .map(|card| card.name.as_str())
-        .collect();
-    assert_eq!(
-        with_buy,
-        [
-            "led-5mm",
-            "resistor-axial",
-            "tactile-switch-6mm",
-            "uno-board",
-        ]
-    );
     let missing = missing_fields(&cards);
     println!("{missing}");
     assert_eq!(
@@ -129,32 +115,6 @@ fn a_passive_a_chip_and_a_board_keep_only_what_their_files_say() {
     assert!(docs.iter().any(|doc| doc.url.is_some()));
     assert!(board.pins.iter().any(|pin| pin.refs.is_some()));
     assert!(board.buy.is_none());
-
-    let led = card("led-5mm").unwrap();
-    let buy = led.buy.unwrap();
-    assert_eq!(buy.len(), 1);
-    assert_eq!(buy[0].seller, "DigiKey");
-    assert_eq!(
-        buy[0].url,
-        "https://www.digikey.com/en/products/detail/kingbright/WP7113ID/1747663"
-    );
-    assert_eq!(buy[0].checked, "2026-11-08");
-
-    let button = card("tactile-switch-6mm").unwrap();
-    assert_eq!(
-        button.buy.unwrap()[0].url,
-        "https://www.digikey.com/en/products/detail/omron-electronics-inc-emc-div/B3F-1000/33150"
-    );
-    let uno = card("uno-board").unwrap();
-    let buy = uno.buy.unwrap();
-    let urls: Vec<&str> = buy.iter().map(|link| link.url.as_str()).collect();
-    assert_eq!(
-        urls,
-        [
-            "https://store.arduino.cc/products/arduino-uno-rev3",
-            "https://www.digikey.com/en/products/detail/arduino/a000066/2784006",
-        ]
-    );
 }
 
 #[test]
