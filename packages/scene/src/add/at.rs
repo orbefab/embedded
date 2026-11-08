@@ -38,7 +38,41 @@ impl Folder {
         )?))
     }
 
-    fn sub(&self, name: &OsStr) -> io::Result<Folder> {
+    /// The folder the user named. A link at its last component is followed,
+    /// because that is the path the user chose. A later open from this folder
+    /// does not follow a link.
+    pub(super) fn open_chosen(path: &Path) -> io::Result<Folder> {
+        let flags = OFlags::RDONLY
+            .union(OFlags::DIRECTORY)
+            .union(OFlags::CLOEXEC);
+        Ok(Folder(rustix::fs::openat(CWD, path, flags, Mode::empty())?))
+    }
+
+    pub(super) fn dup(&self) -> io::Result<Folder> {
+        Ok(Folder(self.0.try_clone()?))
+    }
+
+    pub(super) fn mkdir(&self, name: &OsStr) -> io::Result<()> {
+        Ok(rustix::fs::mkdirat(&self.0, name, Mode::from(0o777))?)
+    }
+
+    /// A new file. An existing name, including a link, is an error, and a link
+    /// is not followed.
+    pub(super) fn create_new(&self, name: &OsStr) -> io::Result<File> {
+        let flags = OFlags::WRONLY
+            .union(OFlags::CREATE)
+            .union(OFlags::EXCL)
+            .union(OFlags::NOFOLLOW)
+            .union(OFlags::CLOEXEC);
+        let fd = rustix::fs::openat(&self.0, name, flags, Mode::from(0o666))?;
+        Ok(File::from(fd))
+    }
+
+    pub(super) fn rename_within(&self, from: &OsStr, to: &OsStr) -> io::Result<()> {
+        Ok(rustix::fs::renameat(&self.0, from, &self.0, to)?)
+    }
+
+    pub(super) fn sub(&self, name: &OsStr) -> io::Result<Folder> {
         Ok(Folder(rustix::fs::openat(
             &self.0,
             name,

@@ -1,14 +1,18 @@
-//! `orbe add <block>` installs a Block: it writes the Block's scene, firmware and tests into the
-//! project, then copies the parts the scene names as `orbe add <part>` does. A part id and a
-//! Block id never match, so one word names one of them.
+//! `orbe add <block>` installs a Block. It copies the parts the scene names, as `orbe add <part>`
+//! does, then writes the Block's scene, firmware and tests. A part id and a Block id never match,
+//! so one word names one of them.
 //!
-//! Every check that can refuse runs before anything is written. A file already there with the
-//! Block's bytes is kept, so running the same install again finishes one that stopped part way.
+//! Every check that can refuse runs before anything is written. A link where a directory would be
+//! created or entered, at the temp file, or at a destination is refused, and the writer never
+//! follows one. The project folder the user named may itself be a link. A file already there with
+//! the Block's bytes is kept, so running the same install again finishes one that stopped part way.
 
 use std::collections::BTreeSet;
-use std::fs;
-use std::io;
+use std::ffi::OsStr;
+use std::io::{self, Write};
 use std::path::Path;
+
+use super::at::{Folder, Found};
 
 use serde_json::{Value, json};
 
@@ -95,14 +99,22 @@ pub(super) fn install(
     let root = dir.unwrap_or(Path::new("."));
     let add = project::add_command(dir);
     let again = Again::new(dir, format!("{add} {}", block.id));
+    let opened = Folder::open_chosen(root).map_err(|error| io_at(root, error))?;
     let mut present = BTreeSet::new();
     for (rel, bytes) in &block.files {
-        match fs::read(root.join(rel)) {
-            Ok(found) if found == *bytes => {
+        let found = seen(&opened, rel, bytes).map_err(|error| io_at(&root.join(rel), error))?;
+        if let Seen::Link(at) = &found {
+            return Ok(Reply::Refuse(is_a_link(at, &again)));
+        }
+        if let Some(at) = temp_link(&opened, rel).map_err(|error| io_at(&root.join(rel), error))? {
+            return Ok(Reply::Refuse(is_a_link(&at, &again)));
+        }
+        match found {
+            Seen::Match => {
                 present.insert(*rel);
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            _ => return Ok(Reply::Refuse(in_the_way(&block, rel, &again))),
+            Seen::Blocked => return Ok(Reply::Refuse(in_the_way(&block, rel, &again))),
+            Seen::Missing | Seen::Link(_) => {}
         }
     }
     let parts = Request {
@@ -119,7 +131,7 @@ pub(super) fn install(
     for (rel, bytes) in &block.files {
         let wrote = !present.contains(rel);
         if wrote {
-            write(&root.join(rel), bytes).map_err(|error| RunError {
+            write(root, rel, bytes).map_err(|error| RunError {
                 message: format!(
                     "{error}. the parts are in, and the Block's other files may not be. run `{again}` again to finish"
                 ),
@@ -196,15 +208,198 @@ fn in_the_way(block: &Block, rel: &str, again: &Again) -> Refusal {
     }
 }
 
-/// Writes beside `path`, then renames over it, so a file is either whole or not there.
-fn write(path: &Path, bytes: &[u8]) -> Result<(), RunError> {
-    let parent = path.parent().unwrap_or(Path::new("."));
-    fs::create_dir_all(parent).map_err(|error| io_at(parent, error))?;
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let tmp = parent.join(format!(".{name}.orbe-add"));
-    fs::write(&tmp, bytes)
-        .and_then(|()| fs::rename(&tmp, path))
-        .map_err(|error| io_at(path, error))
+/// What is at one Block path, read without following a link.
+enum Seen {
+    Missing,
+    Match,
+    Blocked,
+    Link(String),
+}
+
+fn is_a_link(at: &str, again: &Again) -> Refusal {
+    let path = again.path(at);
+    Refusal {
+        code: AddCode::Symlink,
+        message: format!(
+            "{path} is a link, and orbe add does not write through a link. nothing was written"
+        ),
+        hint: format!("remove the link {path}, then run `{again}` again"),
+    }
+}
+
+fn component_names(rel: &str) -> io::Result<Vec<&str>> {
+    if rel.is_empty()
+        || rel
+            .split('/')
+            .any(|name| name.is_empty() || name == "." || name == "..")
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a Block path is not a file under the project",
+        ));
+    }
+    Ok(rel.split('/').collect())
+}
+
+fn missing(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::NotFound
+}
+
+/// The first link on `rel`, or what the file itself is when every component is real.
+fn seen(root: &Folder, rel: &str, want: &[u8]) -> io::Result<Seen> {
+    let names = component_names(rel)?;
+    let mut folder = root.dup()?;
+    let mut at = String::new();
+    for (index, name) in names.iter().enumerate() {
+        if !at.is_empty() {
+            at.push('/');
+        }
+        at.push_str(name);
+        let last = index + 1 == names.len();
+        match folder.find(OsStr::new(name)) {
+            Err(error) if missing(&error) => return Ok(Seen::Missing),
+            Ok(Found::Link(_)) => return Ok(Seen::Link(at)),
+            Ok(Found::Folder) if !last => folder = folder.sub(OsStr::new(name))?,
+            Ok(Found::File(found)) if last => {
+                return Ok(if found == want {
+                    Seen::Match
+                } else {
+                    Seen::Blocked
+                });
+            }
+            Ok(_) => return Ok(Seen::Blocked),
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(Seen::Missing)
+}
+
+/// The temp name beside `rel`, when that name is a link. A missing parent has no temp file.
+fn temp_link(root: &Folder, rel: &str) -> io::Result<Option<String>> {
+    let names = component_names(rel)?;
+    let file = names[names.len() - 1];
+    let mut folder = root.dup()?;
+    let mut at = String::new();
+    for name in &names[..names.len() - 1] {
+        if !at.is_empty() {
+            at.push('/');
+        }
+        at.push_str(name);
+        match folder.find(OsStr::new(name)) {
+            Err(error) if missing(&error) => return Ok(None),
+            Ok(Found::Link(_)) => return Ok(Some(at)),
+            Ok(Found::Folder) => folder = folder.sub(OsStr::new(name))?,
+            Ok(_) => return Ok(None),
+            Err(error) => return Err(error),
+        }
+    }
+    let tmp = format!(".{file}.orbe-add");
+    let tmp_at = if at.is_empty() {
+        tmp.clone()
+    } else {
+        format!("{at}/{tmp}")
+    };
+    match folder.find(OsStr::new(&tmp)) {
+        Ok(Found::Link(_)) => Ok(Some(tmp_at)),
+        Ok(_) => Ok(None),
+        Err(error) if missing(&error) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Writes `rel` under `root` without following a link. The temp file is created exclusively.
+fn write(root: &Path, rel: &str, bytes: &[u8]) -> Result<(), RunError> {
+    let mut folder = Folder::open_chosen(root).map_err(|error| io_at(root, error))?;
+    let names = component_names(rel).map_err(|error| io_at(&root.join(rel), error))?;
+    let file = names[names.len() - 1];
+    let mut at = String::new();
+    for name in &names[..names.len() - 1] {
+        if !at.is_empty() {
+            at.push('/');
+        }
+        at.push_str(name);
+        let path = root.join(&at);
+        match folder.find(OsStr::new(name)) {
+            Ok(Found::Folder) => {}
+            Ok(Found::Link(_)) => {
+                return Err(RunError {
+                    message: format!("{at} is a link, and orbe add does not write through a link"),
+                });
+            }
+            Err(error) if missing(&error) => {
+                folder
+                    .mkdir(OsStr::new(name))
+                    .map_err(|error| io_at(&path, error))?;
+            }
+            Ok(_) => {
+                return Err(io_at(
+                    &path,
+                    io::Error::new(io::ErrorKind::AlreadyExists, "not a folder"),
+                ));
+            }
+            Err(error) => return Err(io_at(&path, error)),
+        }
+        folder = folder
+            .sub(OsStr::new(name))
+            .map_err(|error| io_at(&path, error))?;
+    }
+    let tmp = format!(".{file}.orbe-add");
+    let tmp_rel = if at.is_empty() {
+        tmp.clone()
+    } else {
+        format!("{at}/{tmp}")
+    };
+    let tmp_path = root.join(&tmp_rel);
+    match folder.find(OsStr::new(&tmp)) {
+        Ok(Found::File(_)) => {
+            folder
+                .remove_file(OsStr::new(&tmp))
+                .map_err(|error| io_at(&tmp_path, error))?;
+        }
+        Ok(Found::Link(_)) => {
+            return Err(RunError {
+                message: format!("{tmp_rel} is a link, and orbe add does not write through a link"),
+            });
+        }
+        Err(error) if missing(&error) => {}
+        Ok(_) => {
+            return Err(io_at(
+                &tmp_path,
+                io::Error::new(io::ErrorKind::AlreadyExists, "not a file"),
+            ));
+        }
+        Err(error) => return Err(io_at(&tmp_path, error)),
+    }
+    let mut created = folder
+        .create_new(OsStr::new(&tmp))
+        .map_err(|error| io_at(&tmp_path, error))?;
+    created
+        .write_all(bytes)
+        .map_err(|error| io_at(&tmp_path, error))?;
+    drop(created);
+    let dest = root.join(rel);
+    match folder.find(OsStr::new(file)) {
+        Ok(Found::Link(_)) => {
+            let _ = folder.remove_file(OsStr::new(&tmp));
+            return Err(RunError {
+                message: format!("{rel} is a link, and orbe add does not write through a link"),
+            });
+        }
+        Err(error) if missing(&error) => {}
+        Ok(Found::File(_)) => {}
+        Ok(_) => {
+            let _ = folder.remove_file(OsStr::new(&tmp));
+            return Err(io_at(
+                &dest,
+                io::Error::new(io::ErrorKind::AlreadyExists, "not a file"),
+            ));
+        }
+        Err(error) => return Err(io_at(&dest, error)),
+    }
+    folder
+        .rename_within(OsStr::new(&tmp), OsStr::new(file))
+        .map_err(|error| io_at(&dest, error))?;
+    Ok(())
 }
 
 pub(super) fn text(reply: &BlockReply) -> String {

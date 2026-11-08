@@ -411,7 +411,8 @@ mod tests {
             | Add::UnknownVersion
             | Add::PartConflict
             | Add::PartDiffers
-            | Add::PartModified => code.as_str(),
+            | Add::PartModified
+            | Add::Symlink => code.as_str(),
         };
         let added = [
             Add::Busy,
@@ -419,6 +420,7 @@ mod tests {
             Add::NotAProject,
             Add::SceneExists,
             Add::FileExists,
+            Add::Symlink,
             Add::LockSyntax,
             Add::Registry,
             Add::UnknownPart,

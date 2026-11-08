@@ -149,7 +149,12 @@ fn shallow(dir: &Path) -> BTreeMap<String, Vec<u8>> {
     while let Some(at) = stack.pop() {
         for entry in fs::read_dir(&at).unwrap() {
             let path = entry.unwrap().path();
-            let rel = path.strip_prefix(dir).unwrap().to_str().unwrap().to_string();
+            let rel = path
+                .strip_prefix(dir)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string();
             let meta = fs::symlink_metadata(&path).unwrap();
             if meta.file_type().is_symlink() {
                 files.insert(rel, b"link".to_vec());
@@ -178,7 +183,11 @@ fn refuses_the_link(dir: &Path, outside: &Path, link: &str) {
     );
     assert!(!run.stdout.contains("kept"), "{}", run.stdout);
     assert_eq!(shallow(outside), before, "the link's target changed");
-    assert_eq!(shallow(dir), project_before, "the refusal wrote in the project");
+    assert_eq!(
+        shallow(dir),
+        project_before,
+        "the refusal wrote in the project"
+    );
 }
 
 #[test]
@@ -210,10 +219,7 @@ fn a_second_add_refuses_a_symlinked_destination() {
     let project = tempfile::tempdir().unwrap();
     let dir = project.path();
     fs::create_dir(dir.join("firmware")).unwrap();
-    let hex = fs::read(
-        common::repo().join("blocks/nano-button-led/firmware/button.hex"),
-    )
-    .unwrap();
+    let hex = fs::read(common::repo().join("blocks/nano-button-led/firmware/button.hex")).unwrap();
     let target = outside.path().join("button.hex");
     fs::write(&target, &hex).unwrap();
     symlink(&target, dir.join("firmware/button.hex")).unwrap();
@@ -229,6 +235,43 @@ fn a_block_refuses_a_symlinked_nested_directory() {
     fs::create_dir(dir.join("firmware")).unwrap();
     symlink(outside.path(), dir.join("firmware/button")).unwrap();
     refuses_the_link(dir, outside.path(), "firmware/button");
+}
+
+#[test]
+fn a_block_installs_when_the_project_path_is_a_symlink() {
+    let parent = tempfile::tempdir().unwrap();
+    let real = parent.path().join("real");
+    fs::create_dir(&real).unwrap();
+    symlink(&real, parent.path().join("link")).unwrap();
+    let run = orbe(parent.path(), &["add", "-C", "link", "nano-button-led"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(real.join("scene.jsonc").is_file());
+    assert!(real.join("firmware/button.hex").is_file());
+    assert!(
+        fs::symlink_metadata(parent.path().join("link"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[test]
+fn a_block_replaces_a_regular_temp_file_left_by_a_stopped_install() {
+    let project = tempfile::tempdir().unwrap();
+    let dir = project.path();
+    fs::create_dir(dir.join("firmware")).unwrap();
+    fs::write(dir.join("firmware/.button.hex.orbe-add"), b"OLD").unwrap();
+    let run = orbe(dir, &["add", "nano-button-led"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(!dir.join("firmware/.button.hex.orbe-add").exists());
+    let hex = fs::read(common::repo().join("blocks/nano-button-led/firmware/button.hex")).unwrap();
+    assert_eq!(fs::read(dir.join("firmware/button.hex")).unwrap(), hex);
+    assert!(
+        !fs::symlink_metadata(dir.join("firmware/button.hex"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
 }
 
 #[test]
