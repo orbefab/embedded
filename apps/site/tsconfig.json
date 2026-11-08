@@ -1,0 +1,9 @@
+{
+  "extends": "../../packages/viewer/tsconfig.json",
+  "compilerOptions": {
+    "resolveJsonModule": true,
+    "types": ["node", "vite/client"],
+    "paths": { "@/*": ["../../packages/brand/website/src/*"] }
+  },
+  "include": ["src", "vite.config.ts"]
+}
