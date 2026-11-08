@@ -381,6 +381,7 @@ pub(crate) fn decode_part(
             "model" => part.model = Some(value.clone()),
             "readings" => decode_names(value, "reading", out),
             "not_simulated" => part.not_simulated = decode_not_simulated(value, out),
+            "buy" => check_buy(value, out),
             "joins_only" => part.joins_only = matches!(value.json, Json::Bool(true)),
             _ => {}
         }
@@ -842,6 +843,139 @@ fn decode_names(node: &Node, what: &str, out: &mut Findings) {
     for prop in node.props().unwrap_or_default() {
         name_ok(&prop.key, prop.key_span, NameKind::Name, what, out);
     }
+}
+
+/// Seller, an https URL and the day that URL was checked. `shape` reports a wrong type or an
+/// unknown key. An empty list is refused: leave `buy` out instead.
+fn check_buy(node: &Node, out: &mut Findings) {
+    let Some(items) = node.items() else {
+        return;
+    };
+    if items.is_empty() {
+        out.push(
+            Code::Syntax,
+            node.span,
+            "`buy` is empty",
+            "leave `buy` out when the part has no link".into(),
+        );
+        return;
+    }
+    for item in items {
+        if item.props().is_none() {
+            continue;
+        }
+        for key in ["seller", "url", "checked"] {
+            if item.get(key).is_none() {
+                out.push(
+                    Code::Syntax,
+                    item.span,
+                    format!("a buy entry has no `{key}`"),
+                    "each entry needs `seller`, `url` and `checked`".into(),
+                );
+            }
+        }
+        if let Some(seller) = item.get("seller")
+            && seller.str().is_some_and(|text| text.trim().is_empty())
+        {
+            out.push(
+                Code::Syntax,
+                seller.span,
+                "a buy entry's `seller` is empty",
+                "name the seller".into(),
+            );
+        }
+        if let Some(url) = item.get("url") {
+            check_buy_url(url, out);
+        }
+        if let Some(checked) = item.get("checked")
+            && checked.str().is_some_and(|text| !calendar_date(text))
+        {
+            out.push(
+                Code::Syntax,
+                checked.span,
+                "a buy entry's `checked` is not a calendar date",
+                "write the day the link was checked, as \"2026-11-08\"".into(),
+            );
+        }
+    }
+}
+
+const BUY_URL_HINT: &str =
+    "write an https URL with no query and no fragment, which keeps affiliate and tracking tags out";
+
+fn check_buy_url(node: &Node, out: &mut Findings) {
+    let Some(url) = node.str() else {
+        return;
+    };
+    let https = url.starts_with("https://");
+    if !https {
+        out.push(
+            Code::Syntax,
+            node.span,
+            "`url` is not an https URL",
+            BUY_URL_HINT.into(),
+        );
+    } else {
+        let rest = &url["https://".len()..];
+        let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        if rest[..host_end].is_empty() {
+            out.push(
+                Code::Syntax,
+                node.span,
+                "`url` has no host",
+                BUY_URL_HINT.into(),
+            );
+        }
+    }
+    if url.contains('?') {
+        out.push(
+            Code::Syntax,
+            node.span,
+            "`url` has a query string",
+            BUY_URL_HINT.into(),
+        );
+    }
+    if url.contains('#') {
+        out.push(
+            Code::Syntax,
+            node.span,
+            "`url` has a fragment",
+            BUY_URL_HINT.into(),
+        );
+    }
+}
+
+/// `YYYY-MM-DD` that is a real day. There is no clock here, so a later day is still valid.
+fn calendar_date(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return false;
+    }
+    let digits = |slice: &[u8]| slice.iter().all(u8::is_ascii_digit);
+    if !digits(&bytes[..4]) || !digits(&bytes[5..7]) || !digits(&bytes[8..]) {
+        return false;
+    }
+    let Ok(year) = text[..4].parse::<u16>() else {
+        return false;
+    };
+    let Ok(month) = text[5..7].parse::<u8>() else {
+        return false;
+    };
+    let Ok(day) = text[8..].parse::<u8>() else {
+        return false;
+    };
+    if year == 0 {
+        return false;
+    }
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let last = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=last).contains(&day)
 }
 
 /// Each entry's reason with the pins it lists. `shape` reports the types.

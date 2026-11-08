@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "joins_only": true,
+  "buy": [
+    { "seller": "Shop", "url": "http://example.com/led", "checked": "2026-11-08" },
+    { "seller": "Shop", "url": "https://example.com/led?id=1", "checked": "2026-11-08" },
+    { "seller": "Shop", "url": "https://example.com/led#top", "checked": "2026-11-08" },
+    { "seller": "Shop", "url": "https://example.com/led", "checked": "2026-02-29" },
+    { "seller": "Shop", "url": "https://example.com/led", "checked": "1900-02-29" },
+    { "seller": "Shop", "url": "https://example.com/led", "checked": "2026-04-31" },
+    { "seller": "Shop", "url": "https://example.com/led", "checked": "2026-11-8" },
+    { "seller": "", "url": "https://example.com/led", "checked": "2026-11-08" },
+    { "seller": "Shop", "url": "https://example.com/led", "checked": "2026-11-08", "price": "1.00" },
+    { "seller": "Shop", "checked": "2026-11-08" },
+  ],
+}
