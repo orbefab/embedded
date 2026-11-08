@@ -1,5 +1,5 @@
 //! Finding and reading every part file a scene uses, and checking the catalog copies against
-//! `parts.lock`.
+//! `parts.lock`. A Block reads its catalog ids from this binary's catalog instead.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -18,6 +18,49 @@ use crate::syntax::{self, Node};
 /// The official catalog's registry, the one this repo's `parts/` publishes to.
 pub const REGISTRY: &str = "https://github.com/orbefab/embedded/releases/download/parts";
 
+/// The file that makes a folder a Block.
+pub const BLOCK: &str = "block.jsonc";
+
+/// Where a project reads the catalog ids its files name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Store {
+    /// The copies in `parts/<id>/`, each with a line in `parts.lock`.
+    Copies,
+    /// A Block: every id is the copy in this binary's catalog. A Block holds no `parts/` and no
+    /// `parts.lock`, so it always runs the catalog it ships with.
+    Catalog,
+}
+
+impl Store {
+    pub(crate) fn of(files: &Files, root: &Path) -> Store {
+        if files.is_file(&root.join(BLOCK)) {
+            Store::Catalog
+        } else {
+            Store::Copies
+        }
+    }
+
+    pub(crate) fn has(self, files: &Files, root: &Path, id: &str, rel: &str) -> bool {
+        match self {
+            Store::Copies => files.is_file(&root.join("parts").join(id).join(rel)),
+            Store::Catalog => catalog::file(id, rel).is_some(),
+        }
+    }
+
+    pub(crate) fn read(self, files: &Files, root: &Path, id: &str, rel: &str) -> Option<Vec<u8>> {
+        match self {
+            Store::Copies => files.read(&root.join("parts").join(id).join(rel)).ok(),
+            Store::Catalog => catalog::file(id, rel).map(<[u8]>::to_vec),
+        }
+    }
+}
+
+/// The file `rel` of the catalog part `id` as the project in `root` reads it: its copy in
+/// `parts/<id>/`, or in a Block, this binary's catalog's.
+pub fn part_file(files: &Files, root: &Path, id: &str, rel: &str) -> Option<Vec<u8>> {
+    Store::of(files, root).read(files, root, id, rel)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Owner {
     Scene,
@@ -26,6 +69,7 @@ pub(crate) enum Owner {
 
 pub(crate) struct Project<'f> {
     pub(crate) files: &'f Files,
+    pub(crate) store: Store,
     pub(crate) sources: Sources,
     pub(crate) scene: Scene,
     pub(crate) parts: Vec<Part>,
@@ -65,6 +109,7 @@ struct LockLine {
 
 struct Loader<'a> {
     files: &'a Files,
+    store: Store,
     out: &'a mut Findings,
     sources: Sources,
     scene_path: PathBuf,
@@ -93,8 +138,10 @@ pub(crate) fn load<'f>(
         .real(scene_path)
         .unwrap_or_else(|_| scene_path.to_path_buf());
     let root = scene_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let store = Store::of(files, &root);
     let mut loader = Loader {
         files,
+        store,
         out,
         sources: Sources::new(&root),
         scene_path: scene_path.clone(),
@@ -114,7 +161,10 @@ pub(crate) fn load<'f>(
     let Some(scene) = scene else {
         return Err(loader.sources);
     };
-    loader.read_lock(&root);
+    match store {
+        Store::Copies => loader.read_lock(&root),
+        Store::Catalog => loader.no_copies(&root, scene.file),
+    }
     let types: Vec<_> = scene.comp.parts.iter().map(|i| i.ty.clone()).collect();
     loader.resolve(Owner::Scene, &scene_path, false, types);
     loader.report_missing();
@@ -130,6 +180,7 @@ pub(crate) fn load<'f>(
     }
     Ok(Project {
         files,
+        store,
         sources: loader.sources,
         scene,
         parts: loader.parts,
@@ -161,6 +212,31 @@ impl Loader<'_> {
                 None
             }
         }
+    }
+
+    /// A Block reads every id from the catalog, so a copy or a lock beside it would not be read.
+    fn no_copies(&mut self, root: &Path, scene: FileId) {
+        for held in ["parts.lock", "parts"] {
+            if self.files.link_kind(&root.join(held)).is_some() {
+                self.out.push(
+                    Code::Role,
+                    Span::start_of(scene),
+                    format!(
+                        "this folder holds {BLOCK}, so it is a Block, which reads its parts from the catalog built into orbe, and it also holds `{held}`"
+                    ),
+                    format!(
+                        "remove `{held}`, or remove {BLOCK} to make the folder a project that reads its own copies"
+                    ),
+                );
+            }
+        }
+    }
+
+    /// A Block's catalog part, placed at the path its copy would have in a project.
+    fn read_catalog(&mut self, path: &Path, id: &str) -> Option<FileId> {
+        let bytes = catalog::file(id, "part.jsonc")?;
+        let text = String::from_utf8_lossy(bytes).into_owned();
+        Some(self.sources.add(path, text))
     }
 
     fn read_lock(&mut self, root: &Path) {
@@ -218,16 +294,19 @@ impl Loader<'_> {
             let found = match ty {
                 TypeRef::Id(id) => {
                     let path = root.join("parts").join(&id).join("part.jsonc");
-                    if !self.lock.contains_key(&id) || !self.files.is_file(&path) {
-                        self.missing.push((id, span));
-                        continue;
-                    }
-                    let found = self.load_part(
-                        &self.files.real(&path).unwrap_or(path),
-                        id.clone(),
-                        true,
-                        span,
-                    );
+                    let path = match self.store {
+                        Store::Copies
+                            if self.lock.contains_key(&id) && self.files.is_file(&path) =>
+                        {
+                            self.files.real(&path).unwrap_or(path)
+                        }
+                        Store::Catalog if catalog::file(&id, "part.jsonc").is_some() => path,
+                        _ => {
+                            self.missing.push((id, span));
+                            continue;
+                        }
+                    };
+                    let found = self.load_part(&path, id.clone(), true, span);
                     if found.is_some() {
                         self.used.insert(id);
                     }
@@ -323,7 +402,11 @@ impl Loader<'_> {
             return *loaded;
         }
         let id = label.clone();
-        let part = self.read(path).and_then(|file| {
+        let file = match self.store {
+            Store::Catalog if catalog => self.read_catalog(path, &id),
+            _ => self.read(path),
+        };
+        let part = file.and_then(|file| {
             let before = self.out.len();
             let mut part = syntax::parse(&self.sources, file, self.out)
                 .and_then(|tree| decode_part(&self.sources, file, label, &tree, self.out));
@@ -383,7 +466,9 @@ impl Loader<'_> {
         );
         let known: Vec<String> = self.lock.keys().cloned().chain(catalog::ids()).collect();
         let parts = root.join("parts");
-        let blocked = self.files.link_kind(&parts).is_some() && !self.files.is_dir(&parts);
+        let blocked = self.store == Store::Copies
+            && self.files.link_kind(&parts).is_some()
+            && !self.files.is_dir(&parts);
         for (id, span, why, _) in &found {
             let hint = if blocked {
                 "move `parts` out of the way, since part folders go in a folder named `parts`. then check again for the command that adds them".into()
@@ -401,6 +486,9 @@ impl Loader<'_> {
     /// What is at `parts/<id>` for an id that did not resolve, and whether `orbe add` has to
     /// replace it.
     fn why_missing(&self, root: &Path, id: &str) -> (String, bool) {
+        if self.store == Store::Catalog {
+            return ("is not in the catalog this Block reads".into(), false);
+        }
         let parts = root.join("parts");
         if let Some(kind) = self.files.link_kind(&parts)
             && !self.files.is_dir(&parts)

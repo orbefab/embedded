@@ -2,7 +2,8 @@
 //! the findings that stop it.
 //!
 //! A scene's folder is its project root. An id such as `led-5mm` reads `parts/led-5mm/` there
-//! and needs a line in `parts.lock`. A `./` or `../` path reads a part of the user's own,
+//! and needs a line in `parts.lock`. In a Block, a folder that holds `block.jsonc`, an id reads
+//! the copy in this binary's catalog. A `./` or `../` path reads a part of the user's own,
 //! relative to the file that names it.
 //!
 //! [`Files`] says where those files are read from. `orbe add`, which writes them, is on Unix only.
@@ -35,7 +36,7 @@ pub use circuit::{
 pub use diagnostic::{Code, Diagnostic, Lint};
 pub use files::Files;
 pub use model::STOP_PS;
-pub use project::{REGISTRY, folder_hash};
+pub use project::{BLOCK, REGISTRY, folder_hash, part_file};
 pub use summary::{
     Buy, Card, Choice, Doc, Literal, Missing, NotSimulated, On, Param, PartFile, Pin, Rating, Real,
     card, catalog_cards, ids_with_segment, missing_fields, near_names, param_sentence, search,

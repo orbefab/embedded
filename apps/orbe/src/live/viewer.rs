@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use orbe_scene::Files;
 use orbe_session::{Code, Command, Error};
 use serde_json::Value;
 use sha1::{Digest, Sha1};
@@ -59,7 +60,8 @@ pub(super) enum Viewer {
     Left(u64),
 }
 
-/// The part models the page may load, by URL path, such as `/parts/led-5mm/led-5mm.glb`.
+/// The part models the page may load, by URL path, such as `/parts/led-5mm/led-5mm.glb`, each
+/// with the project folder that reads it.
 pub(super) type Models = Arc<Mutex<BTreeMap<String, PathBuf>>>;
 
 struct Site {
@@ -205,8 +207,12 @@ fn serve(mut stream: TcpStream, site: &Site, events: &Sender<Event>) {
         return respond(&mut stream, 405, "text/plain", b"GET only", false);
     }
     let body = if head.path.starts_with("/parts/") {
-        let file = site.models.lock().unwrap().get(&head.path).cloned();
-        file.and_then(|f| std::fs::read(f).ok()).map(Cow::Owned)
+        let root = site.models.lock().unwrap().get(&head.path).cloned();
+        let (id, rel) = head.path["/parts/".len()..]
+            .split_once('/')
+            .unwrap_or_default();
+        root.and_then(|root| orbe_scene::part_file(&Files::disk(), &root, id, rel))
+            .map(Cow::Owned)
     } else {
         site.page.get(&head.path)
     };
