@@ -3,7 +3,7 @@
 The viewer draws a scene in 3D from the messages a session sends, and turns a person's clicks into the CLI's own commands. It computes no electrical value.
 
 - `packages/viewer` is the viewer: React Three Fiber, three.js, drei and postprocessing, in TypeScript. Its bench pieces come from maker-sandbox, MIT, Copyright 2026 Alwurts, and each file adapted from it says so in its first line.
-- `apps/viewer` is the page. On a live session it runs the viewer on the session's WebSocket, and on its own it runs the viewer on a fixture of the first target. Vite builds it to static files in `apps/viewer/dist`.
+- `apps/viewer` is the page. On a live session it runs the viewer on the session's WebSocket, with `?block=<id>` it runs a Block from a registry in a Web Worker, and on its own it runs the viewer on a fixture of the first target. Vite builds it to static files in `apps/viewer/dist`.
 
 The two are packages in the repo's pnpm workspace, pinned by `pnpm-lock.yaml`.
 
@@ -18,9 +18,9 @@ The page replays the fixture's frames: idle, then `btn1` pressed with D13 high a
 
 The 3D view orbits with the left button or one finger, pans with the right button, and zooms with the wheel or a pinch. The top view looks straight down, with the part frame's +X to the right and +Y up the screen. It pans with the left or right button or one finger, zooms with the wheel or a pinch, and does not orbit.
 
-The dev server and `vite preview` serve each part's GLB from `parts/` at `/parts/<id>/<id>.glb`. The build leaves the GLBs out.
+The dev server and `vite preview` serve each part's GLB from `parts/` at `/parts/<id>/<id>.glb`, and the folders `?block=` reads from `.scratch/wasm`, as [Run a Block in the page](#run-a-block-in-the-page) says. The build leaves both out.
 
-`scripts/check-viewer.sh` runs the type check, the unit tests and the build. `scripts/check.sh` does not run it. `scripts/check.sh fast` needs no Node. `scripts/check.sh full` needs node 22.7 or later, because it runs `packages/engine/scripts/wasm-check.sh`.
+`scripts/check-viewer.sh` runs the type check, the unit tests and the build. `scripts/check.sh` does not run it. `scripts/check.sh fast` needs no Node. `scripts/check.sh full` needs Node 24, because `scripts/check-wasm.sh` runs orbe-wasm in a Node worker thread with the viewer's TypeScript registry client.
 
 `scripts/check-viewer-e2e.sh` builds the page and drives it in Chromium through `apps/viewer/e2e/e2e.mjs`: mouse and touch presses, a finger moving while it holds a press, the right button and both orders of a chord, a cancelled touch and a `pointercancel` while the canvas keeps the capture, lost capture, a second finger on the held button, blur, the press listeners' removal, `touch-action`, a refused or failed send, a press held across a new scene, clicks that send nothing, the top view's axes and pan, hover reasons, the 0603 tints and where bloom starts. It installs no browser. It uses the Chromium that playwright-core expects under `~/.cache/ms-playwright`, or the binary in `ORBE_CHROMIUM`, and exits 2 when it finds neither. `--renders <dir>` also saves screenshots. `check-viewer.sh` does not run it, so `check-viewer.sh` needs no browser.
 
@@ -51,13 +51,35 @@ One thread owns the session. CLI commands, the pages' commands and `play`'s tick
 
 `scripts/check-headed.sh` builds the page and `orbe`, then drives a live session of the first target in Chromium through `apps/viewer/e2e/headed.mjs`. It runs `orbe open --headed --no-browser` in a runtime folder of its own, plays, holds `@btn1` until `@led1` lights, and checks that `orbe get @led1` reads the current the viewer glows at. It closes the session however it ends. It finds Chromium as `check-viewer-e2e.sh` does, and `--renders <dir>` saves screenshots.
 
+## Run a Block in the page
+
+With `?block=<id>`, the page loads the Block `id` from a registry that `orbe registry build` wrote, and runs it in orbe-wasm's Worker, the scene reader and the session `orbe` runs, compiled to WebAssembly. [wasm.md](wasm.md) describes the package. The page needs no `orbe` process and no server beyond static files.
+
+```bash
+pnpm install --frozen-lockfile
+scripts/wasm.sh .scratch/wasm/pkg
+cargo build -p orbe
+target/debug/orbe registry build . .scratch/wasm/registry
+pnpm --filter @orbe/viewer-page dev
+```
+
+Then open `/?block=nano-button-led`. The dev server and `vite preview` serve `.scratch/wasm/registry` at `/registry/` and `.scratch/wasm/pkg` at `/orbe-wasm/`, the folders the page reads by default. `?registry=<url>` and `?wasm=<url>` name others, each relative to the page.
+
+- `loadBlock` in `packages/viewer/src/registry.ts` reads `index.json`, picks the Block's newest version, and fetches its record, each file and each part it names, at the version it names. It checks each against [registry.md](registry.md#verify-what-you-fetch): the record's and each file's size and SHA-256, the folder hash, the path rules and the `files/<sha256>` URLs. One mismatch refuses the whole Block. Each part's files sit at `parts/<id>/<path>`, where the Worker reads its catalog. A part from another registry is refused.
+- `workerSource` starts the Worker, sends it the files, then the viewer's commands. The Worker has no server, so the source points each part model the scene names at an object URL of that model's bytes from the registry.
+- A Block that does not load or open, or a Worker that fails, ends the session, and the page says why, such as "the Block did not load: the registry has no no-such-block" or the refusal `orbe open` prints.
+
+The page loads the package at run time from its URL, so the page's build holds no WebAssembly, and neither does the page built into `orbe`.
+
+`scripts/check-block.sh` builds the page, the package and the registry into those folders, then drives `?block=nano-button-led` in Chromium through `apps/viewer/e2e/block.mjs`: paused at t = 0, play, hold `@btn1` until `@led1` glows, release until it goes dark, with no refused command and no page error. It also checks that a Block the registry lacks ends the session with why. It needs what [wasm.md](wasm.md#build) needs, and finds Chromium as `check-viewer-e2e.sh` does. `--renders <dir>` saves screenshots.
+
 ## The messages
 
-`packages/viewer/src/protocol.ts` defines every message, and its comments give each field's units. A session sends one `scene` message per `open` and a `frame` message after each change. The viewer sends a `Command` back. A `SessionSource` carries them both ways: `websocketSource` to the session process, a Worker in the sandbox, or the fixture. The page uses `websocketSource` when its URL's fragment holds `t=<token>`, and the fixture otherwise. `window.orbeFixture` exists only on the fixture page.
+`packages/viewer/src/protocol.ts` defines every message, and its comments give each field's units. A session sends one `scene` message per `open` and a `frame` message after each change. The viewer sends a `Command` back. A `SessionSource` carries them both ways: `websocketSource` to the session process, `workerSource` to orbe-wasm's Worker, or the fixture. Both live sources share `channelSource`, which keeps the latest scene and frame for a late subscriber and pairs each reply with its command. The page uses `websocketSource` when its URL's fragment holds `t=<token>`, `workerSource` with `?block=`, and the fixture otherwise. `window.orbeFixture` exists only on the fixture page.
 
 - **`scene`** lists the scene's instances, each with its children to any depth and its placement, or `null` for a part the scene does not place. An instance that is not simulated carries the reason, its own or its nearest marked ancestor's. `parts` holds one entry per part id: the GLB's URL, the anchors, the pins, `view`, `joints`, `controls`, the brightness reading, the colour tints and the part file's `not_simulated` entries. Those entries name features the engine leaves out, such as light or temperature, not a dropped part, and the viewer does not read them yet. `wires` lists every wire with its kind, and `channels` names the refs that each frame array follows. `not_simulated` lists each pin whose net reaches no simulated pin and has a reason, the one `orbe check` gives for a wire to it, such as `@nano.A6`. Each entry carries its `why`, and its `ref` is the one hover shows for the pin.
 - **`frame`** holds the pin levels, the LED currents and the switch contacts at `t_ps`, in the order of `channels`. An LED's current is its mean since the frame before. A page joining restarts that mean, so every page then gets a frame with each LED's present current, the one `orbe get` reads. It also carries the warning count. Its `state` is the session's, or `stepping` on a frame sent while a `step` runs, which no reply says. A frame from a `play` tick carries `speed` and `ratio`. `displays` is reserved until the session sends its displays.
-- **Over the WebSocket**, the viewer sends each command with an `id` of its own, as `{"id": 1, "cmd": "press", "ref": "@btn1"}`. The session answers that page alone with `{"type": "reply", "id": 1, "reply": ...}`, where `reply` is the envelope `orbe press @btn1 --json` prints: `ok`, `session`, `t_ps`, `state`, then `data` or `error`. The last message is `{"type": "closed", "reason": ...}`.
+- **Over the WebSocket or to the Worker**, the viewer sends each command with an `id` of its own, as `{"id": 1, "cmd": "press", "ref": "@btn1"}`. The session answers that page alone with `{"type": "reply", "id": 1, "reply": ...}`, where `reply` is the envelope `orbe press @btn1 --json` prints: `ok`, `session`, `t_ps`, `state`, then `data` or `error`. The last message is `{"type": "closed", "reason": ...}`.
 - The session's channels are the board pins `snapshot` shows that a chip pin drives and a wire reaches, every LED whose part data has a brightness reading, and every switch with `controls.press`.
 
 Lengths, positions and directions in the messages are in the part frame: mm, +Z up, with the seating plane at z = 0.
