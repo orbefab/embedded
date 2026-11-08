@@ -1,24 +1,13 @@
 {
   "part": "tactile-switch-smd",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/tactile-switch-smd.glb",
-        "sha256": "41ffb02637e197f0ad27c1597301672f5a9a4cb11710d10546cf8190dd4283a2",
-        "bytes": 22500
-      },
-      "anchors": {
-        "path": "GLB/parts/tactile-switch-smd.anchors.json",
-        "sha256": "61bfdb039c40ce8c589ceb3cfcd4af02537b76bc42dbc449625c0044304b5c04",
-        "bytes": 519
-      }
-    }
+    "script": "model.py",
+    "sha256": "ea99d1bc389711bcc5f5b25b8cf8755e9fc1aedae115d5e1762e88fd76014d51",
+    "bytes": 2410
   },
   "files": {
     "tactile-switch-smd.glb": {
-      "sha256": "869dfcf7163fe71df31c7368a9d315d8f279f7bfdb859c1d45efb624000ffa07",
+      "sha256": "79544bc075bac1cda9b71c01c03c107db20f1e4d5af833771675c04662605834",
       "bytes": 6388
     },
     "tactile-switch-smd.anchors.json": {
@@ -48,7 +37,7 @@
       "nodes": ["button"]
     },
     "merge": {
-      "primitives_in": 41,
+      "primitives_in": 6,
       "primitives_out": 2
     }
   }
