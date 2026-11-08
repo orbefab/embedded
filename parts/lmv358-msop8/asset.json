@@ -2,12 +2,12 @@
   "part": "lmv358-msop8",
   "source": {
     "script": "model.py",
-    "sha256": "c62786c1299b418fbc44dd41441299662c79bd504bcef5cb07e9e7fc20c1313c",
-    "bytes": 1416
+    "sha256": "05459cf827e7c956c465f3b46a0af01c98069515ee7be51b2da212a555c79633",
+    "bytes": 1389
   },
   "files": {
     "lmv358-msop8.glb": {
-      "sha256": "7c8b6cfcabbcdc99d979337339ea1306257616f943400e562c6570248ce7d17e",
+      "sha256": "77affa0b0ac7c73cf0003d0c6070e3cb68e3a83c98650aa945ec47e72b2ee66c",
       "bytes": 8624
     },
     "lmv358-msop8.anchors.json": {
@@ -37,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 60,
+      "primitives_in": 10,
       "primitives_out": 3
     }
   }

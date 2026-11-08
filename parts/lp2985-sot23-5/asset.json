@@ -2,12 +2,12 @@
   "part": "lp2985-sot23-5",
   "source": {
     "script": "model.py",
-    "sha256": "f33017931470566641ab3682bb10a80c0c6b3de7177c21f3d5c629c65a460027",
-    "bytes": 1444
+    "sha256": "ac8e26276f8b88a12adcf6bc51e42a88432c2c0d1270a72419a6682838d709fb",
+    "bytes": 1417
   },
   "files": {
     "lp2985-sot23-5.glb": {
-      "sha256": "096ef9ee16ab1176a4e52d8ffc424876dfde4fd350d90ad141a8a7e1c343349e",
+      "sha256": "7ee6de757cbc42e32ab95c18497f5443ec01584f18250e7309f8b5815bf68ae9",
       "bytes": 6708
     },
     "lp2985-sot23-5.anchors.json": {
@@ -37,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 42,
+      "primitives_in": 7,
       "primitives_out": 3
     }
   }

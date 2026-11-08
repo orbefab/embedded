@@ -54,5 +54,4 @@ if __name__ == "__main__":
         "ams1117-sot223",
         ams1117_sot223_anchors(),
         Path(sys.argv[1]),
-        merge_faces=False,
     )

@@ -2,12 +2,12 @@
   "part": "atmega328p-tqfp32",
   "source": {
     "script": "model.py",
-    "sha256": "0fd11c74210a549a16e7e7660548b498c428b2eb81b09940f569be3829245baf",
-    "bytes": 2134
+    "sha256": "57f901182eb61ab32b4b9c05127dbd8d6bcee613181db0b82e36d05ddcc3bd5d",
+    "bytes": 2107
   },
   "files": {
     "atmega328p-tqfp32.glb": {
-      "sha256": "00e9d335a6ee26ca0ae5a11256a3f9019158b3ff692c475eff5939f9d68dfb34",
+      "sha256": "110f2b513728589bd93a412500da0cae71d1f2fb95fed1be4b8214b3ce75958d",
       "bytes": 23928
     },
     "atmega328p-tqfp32.anchors.json": {
@@ -37,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 204,
+      "primitives_in": 34,
       "primitives_out": 2
     }
   }

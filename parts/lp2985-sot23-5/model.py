@@ -46,5 +46,4 @@ if __name__ == "__main__":
         "lp2985-sot23-5",
         lp2985_sot23_5_anchors(),
         Path(sys.argv[1]),
-        merge_faces=False,
     )

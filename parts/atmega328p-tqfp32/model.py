@@ -64,5 +64,4 @@ if __name__ == "__main__":
         "atmega328p-tqfp32",
         atmega328p_tqfp32_anchors(),
         Path(sys.argv[1]),
-        merge_faces=False,
     )

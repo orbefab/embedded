@@ -45,5 +45,4 @@ if __name__ == "__main__":
         "pmos-fdn340p-sot23",
         fdn340p_sot23_anchors(),
         Path(sys.argv[1]),
-        merge_faces=False,
     )

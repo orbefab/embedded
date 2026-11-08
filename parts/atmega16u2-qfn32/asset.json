@@ -2,12 +2,12 @@
   "part": "atmega16u2-qfn32",
   "source": {
     "script": "model.py",
-    "sha256": "5e2d8fe6827eb923de9b9fa12c95c7a6dcd7dfc89b91e3035bff544e2e6cf39a",
-    "bytes": 1445
+    "sha256": "50c7725e4a6bf996e14decbb2822ff21685540746a26a2e4beac48410ca521e4",
+    "bytes": 1418
   },
   "files": {
     "atmega16u2-qfn32.glb": {
-      "sha256": "1bff3195ffeeada69b720169a3f3ce4c6002ea7c7c03a9f7a498216f587dcc91",
+      "sha256": "99035e3e724ed3f2f777c24cbd1530be840fccb25844a5c323d25503ce734c3e",
       "bytes": 24780
     },
     "atmega16u2-qfn32.anchors.json": {
@@ -37,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 210,
+      "primitives_in": 35,
       "primitives_out": 3
     }
   }

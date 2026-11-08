@@ -3,14 +3,13 @@
 
 `write` exports the labelled shape as `<folder>/<part>.glb` and its leads as
 `<folder>/<part>.anchors.json`. Both are named by the part's id, because the
-viewer looks parts up by id. `merge_faces` joins faces of one colour. A part
-whose catalog mesh was saved as one primitive per face passes False, so the
-merged bytes stay the ones already in the catalog.
+viewer looks parts up by id. Faces of one colour in a node join into one
+primitive.
 
 The GLB is standard glTF: Y-up in metres, with glTF's -90° turn about X on
 its one root node, so the vertex data keeps the part frame's axes. Every
-label in the shape is a node name. With `merge_faces` on, each node's mesh
-holds one primitive per colour. With it off, each face stays its own primitive.
+label in the shape is a node name, and each node's mesh holds one primitive
+per colour.
 
 The anchors file is in the part frame: millimetres, +Z up, seated at z = 0.
 Each anchor is one lead: its number, the node that draws it (and any others
@@ -75,8 +74,8 @@ def _linear_colors(node) -> None:
         _linear_colors(child)
 
 
-def _writer(merge_faces: bool):
-    """OCCT's glTF writer, single-threaded, joining faces of one colour when asked.
+def _writer():
+    """OCCT's glTF writer, single-threaded, joining faces of one colour.
 
     build123d's export_gltf does not expose face merging. Left per face, a
     breadboard's 830 holes write some 40 000 accessors, most of its GLB.
@@ -87,7 +86,7 @@ def _writer(merge_faces: bool):
     class Writer(RWGltf_CafWriter):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            self.SetMergeFaces(merge_faces)
+            self.SetMergeFaces(True)
 
         def SetParallel(self, *args, **kwargs):
             super().SetParallel(False)
@@ -95,7 +94,7 @@ def _writer(merge_faces: bool):
     return Writer
 
 
-def write(shape, part: str, anchors: list[Anchor] | None, folder: Path, merge_faces: bool = True) -> None:
+def write(shape, part: str, anchors: list[Anchor] | None, folder: Path) -> None:
     """`anchors` is None for a part with no leads of its own, such as a bare board."""
     leads = sorted(a.lead for a in anchors or ())
     if leads != list(range(1, len(leads) + 1)):
@@ -106,7 +105,7 @@ def write(shape, part: str, anchors: list[Anchor] | None, folder: Path, merge_fa
     from build123d import exporters3d
 
     _linear_colors(shape)
-    with patch.object(exporters3d, "RWGltf_CafWriter", _writer(merge_faces)):
+    with patch.object(exporters3d, "RWGltf_CafWriter", _writer()):
         wrote = bd.export_gltf(
             shape,
             str(glb),

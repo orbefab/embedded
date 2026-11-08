@@ -46,5 +46,4 @@ if __name__ == "__main__":
         "atmega16u2-qfn32",
         atmega16u2_qfn32_anchors(),
         Path(sys.argv[1]),
-        merge_faces=False,
     )
