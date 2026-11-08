@@ -128,6 +128,6 @@ for dir in "$firmware"/*/; do
     "$dir/$name.ino" -o "$work/$name.o"
   "$bin/avr-gcc" "${link_flags[@]}" -o "$work/$name.elf" "$work/$name.o" "${archives[@]}" \
     "$core_a" -L"$work" -lm
-  "$bin/avr-objcopy" -O ihex -R .eeprom "$work/$name.elf" "$packages/engine/tests/firmware/$name.hex"
+  "$bin/avr-objcopy" -O ihex -R .eeprom "$work/$name.elf" "$firmware/$name.hex"
   "$bin/avr-size" "$work/$name.elf" | tail -n 1 | awk -v n="$name" '{print n ": " $1 + $2 " flash bytes"}'
 done
