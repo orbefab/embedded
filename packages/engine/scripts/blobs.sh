@@ -8,12 +8,14 @@
 # Each blob is a file named by its SHA-256. The one such blob is the ESP32-S3 revision 0 ROM ELF
 # from Espressif's esp-rom-elfs release 20241011, the archive ESP-IDF v5.5.5 pins in
 # tools/tools.json. `--from` takes that archive or the ELF itself, and either must hash to the
-# pinned value. Nothing is fetched while the cache holds a good copy.
+# pinned value. Nothing is fetched while the cache holds a good copy. The release URL is
+# tried first. If that request fails, the same asset is fetched from the GitHub API.
 set -euo pipefail
 
 rom_sha=c0ce0f338d1de1bdc6efbef1591779a2a42c1ab7d759d3c6ae8ae63a7dd34cfd
 rom_name=esp32s3_rev0_rom.elf
 archive_url=https://github.com/espressif/esp-rom-elfs/releases/download/20241011/esp-rom-elfs-20241011.tar.gz
+archive_api=https://api.github.com/repos/espressif/esp-rom-elfs/releases/assets/198395584
 archive_sha=921f000164a421c7628fbfee55b173384aafaa51883adc65cd27bf9b0af9e9a9
 
 cache=${ORBE_BLOBS:-${XDG_CACHE_HOME:-$HOME/.cache}/orbe/blobs}
@@ -51,7 +53,11 @@ elif [[ -n $from ]]; then
 else
     work=$(mktemp -d)
     trap 'rm -rf "$work"' EXIT
-    curl -fsSL --retry 5 --retry-delay 2 -o "$work/archive.tar.gz" "$archive_url"
+    if ! curl -fsSL --retry 5 --retry-delay 2 -o "$work/archive.tar.gz" "$archive_url"; then
+        curl -fsSL --retry 5 --retry-delay 2 \
+            -H 'Accept: application/octet-stream' -H 'User-Agent: orbe-blobs' \
+            -o "$work/archive.tar.gz" "$archive_api"
+    fi
     take "$work/archive.tar.gz"
 fi
 echo "$cache"

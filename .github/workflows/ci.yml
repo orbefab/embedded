@@ -39,5 +39,11 @@ jobs:
         with:
           workspaces: ". -> target"
 
+      - name: Cache engine blobs
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/orbe/blobs
+          key: orbe-blobs-${{ hashFiles('packages/engine/scripts/blobs.sh') }}
+
       - name: Check
         run: scripts/check.sh fast
