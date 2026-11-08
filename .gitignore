@@ -7,3 +7,5 @@
 /target
 node_modules/
 dist/
+__pycache__/
+packages/engine/tests/circuits/*/op.raw

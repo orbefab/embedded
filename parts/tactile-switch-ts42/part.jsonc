@@ -1,5 +1,5 @@
 // The contact values are tactile-switch-smd's, the engine's reset button, from
-// engine/examples/atmega-board-button/netlist.json, part `sw_reset`. No sheet for the part
+// packages/engine/tests/circuits/atmega-board-button/netlist.json, part `sw_reset`. No sheet for the part
 // number was found, so each value here is a guess with a note that says so.
 {
   "format": 1, "part": "tactile-switch-ts42", "version": "0.1.0", "title": "Push button, TS42, 5 pads", "license": "MIT OR Apache-2.0",

@@ -1,5 +1,5 @@
 // Every colour uses the red WP7113ID fit and ratings, the engine's values from
-// engine/examples/led-5v/netlist.json, as the engine's board example does for its L and ON LEDs.
+// packages/engine/tests/circuits/led-5v/netlist.json, as the engine's board example does for its L and ON LEDs.
 {
   "format": 1, "part": "led-0805", "version": "0.1.0", "title": "LED, 0805 chip", "license": "MIT OR Apache-2.0",
   "real": { "generic": true, "maker": "Kingbright", "number": "APT2012", "datasheet": null },

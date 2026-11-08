@@ -1,5 +1,5 @@
 // The model's values and sources are the engine's ATmega328P values, from
-// engine/examples/atmega-board-button/netlist.json, part `mcu`.
+// packages/engine/tests/circuits/atmega-board-button/netlist.json, part `mcu`.
 {
   "format": 1, "part": "atmega328p-tqfp32", "version": "0.1.0", "title": "ATmega328P, TQFP-32", "license": "MIT OR Apache-2.0",
   "docs": { "DS40002061B": null, "avr-1.8.6 boards.txt": null },

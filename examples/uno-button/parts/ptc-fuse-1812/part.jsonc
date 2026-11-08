@@ -1,4 +1,4 @@
-// The resistance is the engine's F1, from engine/examples/atmega-board-button/netlist.json,
+// The resistance is the engine's F1, from packages/engine/tests/circuits/atmega-board-button/netlist.json,
 // part `usb_fuse`.
 {
   "format": 1, "part": "ptc-fuse-1812", "version": "0.1.0", "title": "Resettable fuse, 500 mA, 1812", "license": "MIT OR Apache-2.0",

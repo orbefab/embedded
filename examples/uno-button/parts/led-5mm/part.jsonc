@@ -1,5 +1,5 @@
 // The red fit, the ratings and their sources are the engine's WP7113ID values, from
-// engine/examples/led-5v/netlist.json.
+// packages/engine/tests/circuits/led-5v/netlist.json.
 {
   "format": 1,
   "part": "led-5mm",

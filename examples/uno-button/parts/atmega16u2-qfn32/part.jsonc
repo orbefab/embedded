@@ -1,5 +1,5 @@
 // The two sources stand in for the USB-serial firmware a board runs on this chip. Their values
-// are the engine's U3 stand-ins, from engine/examples/atmega-board-button/netlist.json, parts
+// are the engine's U3 stand-ins, from packages/engine/tests/circuits/atmega-board-button/netlist.json, parts
 // `usb_tx` and `usb_dtr`.
 {
   "format": 1, "part": "atmega16u2-qfn32", "version": "0.1.0", "title": "ATmega16U2 USB controller, QFN-32", "license": "MIT OR Apache-2.0",

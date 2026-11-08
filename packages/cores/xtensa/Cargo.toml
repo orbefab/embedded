@@ -1,0 +1,24 @@
+[package]
+name = "orbe-xtensa"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+autotests = false
+
+[features]
+# Reads the lines on a step whose poll this crate skips, and panics if they moved.
+# That read is the one a normal build makes when it does poll, so the check settles and
+# stamps on that path. It does not run the stamp a skipped poll uses.
+poll-skip-check = []
+
+[dev-dependencies]
+sha2.workspace = true
+
+[[test]]
+name = "suite"
+path = "tests/main.rs"
+
+[lints]
+workspace = true

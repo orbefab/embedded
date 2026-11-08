@@ -6,14 +6,14 @@ The asset step brings each part's 3D model from `orbefab/models` into the part's
 
 ```bash
 pnpm install --frozen-lockfile
-node tools/asset-step/asset-step.mjs --models ../models --commit <models commit> [<id> ...]
+node packages/asset-step/asset-step.mjs --models ../models --commit <models commit> [<id> ...]
 ```
 
 `--models` is a checkout of `orbefab/models`. The step reads `GLB/parts/<id>.glb` and `GLB/parts/<id>.anchors.json` at the commit with `git show`, so it never changes the checkout. With no ids, it runs every part in `parts/` that has a GLB at that commit. With no `--commit`, each part reruns from the commit its `asset.json` records, and fails if the checkout lacks that commit, which you then fetch.
 
 With no `--commit` and no ids, a part with no GLB at its commit, or with no `asset.json` to name a commit, is skipped. A part with no model yet does not fail the run.
 
-`scripts/check-assets.sh <models checkout>` runs the step's tests, `tools/asset-step/asset-step.test.mjs`, then reruns every part from its recorded commit and fails if any file under `parts/` changes. Run it on a clean tree.
+`scripts/check-assets.sh <models checkout>` runs the step's tests, `packages/asset-step/asset-step.test.mjs`, then reruns every part from its recorded commit and fails if any file under `parts/` changes. Run it on a clean tree.
 
 ## What it writes
 
