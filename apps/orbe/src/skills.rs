@@ -61,18 +61,20 @@ fn parts(catalog: &[Card]) -> String {
                 si_amount(on.above, &on.unit)
             ));
         }
-        if !part.ratings.is_empty() {
-            let warns: Vec<String> = part
-                .ratings
-                .iter()
-                .map(|rating| {
-                    format!(
-                        "`rating.{}` above {}",
-                        rating.name,
-                        si_amount(rating.value, &rating.unit)
-                    )
-                })
-                .collect();
+        let warns: Vec<String> = part
+            .ratings
+            .iter()
+            .filter_map(|rating| {
+                let value = rating.value?;
+                let unit = rating.unit.as_deref()?;
+                Some(format!(
+                    "`rating.{}` above {}",
+                    rating.name,
+                    si_amount(value, unit)
+                ))
+            })
+            .collect();
+        if !warns.is_empty() {
             out.push_str(&format!("- It warns {}.\n", warns.join(" and ")));
         }
         if part.pressable {

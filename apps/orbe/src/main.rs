@@ -76,7 +76,7 @@ enum Command {
     /// Prints one catalog part.
     #[command(display_order = 4)]
     Part {
-        /// The catalog id, such as led-5mm.
+        /// Catalog id, such as `led-5mm`. A whole word of exactly one id, such as `1n4007`, names that part.
         id: String,
         /// Print one JSON envelope instead of text.
         #[arg(long)]
@@ -786,24 +786,38 @@ fn invalid(scene: &Path, errors: Vec<Diagnostic>, json: bool) -> ExitCode {
 }
 
 fn show_part(id: &str, json: bool) -> ExitCode {
-    let Some(card) = orbe_scene::card(id) else {
-        return unknown_part(id, json);
+    if let Some(card) = orbe_scene::card(id) {
+        return print_part(&card, json);
+    }
+    let matches = orbe_scene::ids_with_segment(id);
+    if matches.len() == 1
+        && let Some(card) = orbe_scene::card(&matches[0])
+    {
+        return print_part(&card, json);
+    }
+    let names = if matches.len() > 1 {
+        matches
+    } else {
+        orbe_scene::near_names(id)
     };
+    unknown_part(id, &names, json)
+}
+
+fn print_part(card: &orbe_scene::Card, json: bool) -> ExitCode {
     if json {
         print_json(&json!({ "ok": true, "data": card }));
     } else {
-        print!("{}", part::text(&card));
+        print!("{}", part::text(card));
     }
     ExitCode::SUCCESS
 }
 
-fn unknown_part(id: &str, json: bool) -> ExitCode {
-    let near = orbe_scene::near_names(id);
+fn unknown_part(id: &str, names: &[String], json: bool) -> ExitCode {
     let message = format!("no catalog part named `{id}`");
-    let hint = if near.is_empty() {
+    let hint = if names.is_empty() {
         "the catalog has no part with that id".to_string()
     } else {
-        let names = near
+        let names = names
             .iter()
             .map(|name| format!("`{name}`"))
             .collect::<Vec<_>>()

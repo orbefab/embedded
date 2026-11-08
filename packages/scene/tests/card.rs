@@ -3,7 +3,12 @@
 use std::fs;
 use std::path::PathBuf;
 
-use orbe_scene::{card, catalog_cards, missing_fields, near_names, search};
+use sha2::{Digest, Sha256};
+
+use orbe_scene::{
+    card, catalog_cards, folder_hash, ids_with_segment, missing_fields, near_names, param_sentence,
+    search,
+};
 
 fn parts_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../parts")
@@ -34,6 +39,9 @@ fn every_catalog_part_is_a_card() {
         assert!(json.get("used_by").is_some());
         assert!(json.get("not_simulated").is_some());
         assert!(!card.files.is_empty(), "{}", card.name);
+        assert!(!card.license.is_empty(), "{}", card.name);
+        assert!(card.hash.starts_with("sha256:"), "{}", card.name);
+        assert_eq!(card.hash.len(), 71, "{}", card.name);
         for file in &card.files {
             assert_eq!(file.sha256.len(), 64, "{} {}", card.name, file.path);
             assert!(file.sha256.chars().all(|c| c.is_ascii_hexdigit()));
@@ -59,6 +67,8 @@ fn a_passive_a_chip_and_a_board_keep_only_what_their_files_say() {
     assert!(docs[0].url.is_none());
     assert!(passive.ratings.iter().any(|rating| rating.name == "power"));
     assert!(passive.uses.is_empty());
+    assert_eq!(passive.license, "MIT OR Apache-2.0");
+    assert!(passive.hash.starts_with("sha256:"));
     assert!(
         passive
             .files
@@ -95,7 +105,7 @@ fn a_passive_a_chip_and_a_board_keep_only_what_their_files_say() {
 }
 
 #[test]
-fn search_ranks_an_exact_id_then_title_words_then_the_rest() {
+fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
     let led = search("led");
     let mut saw_rest = false;
     let mut title_hits = Vec::new();
@@ -121,32 +131,159 @@ fn search_ranks_an_exact_id_then_title_words_then_the_rest() {
     assert_eq!(search("LED-5MM")[0].name, "led-5mm");
 
     let resistors = search("resistor");
-    let mut previous = String::new();
-    let mut saw_rest = false;
-    for card in &resistors {
-        if title_word(&card.title, "resistor") {
-            assert!(!saw_rest);
-            assert!(previous < card.name);
-            previous = card.name.clone();
-        } else {
-            saw_rest = true;
+    let names: Vec<&str> = resistors.iter().map(|card| card.name.as_str()).collect();
+    assert_eq!(
+        &names[..4],
+        [
+            "potentiometer-wh148",
+            "resistor-0603",
+            "resistor-array-4x0603",
+            "resistor-axial",
+        ]
+    );
+
+    let switches = search("switch");
+    let names: Vec<&str> = switches.iter().map(|card| card.name.as_str()).collect();
+    assert_eq!(
+        &names[..4],
+        [
+            "npn-2n2222-to92",
+            "tactile-switch-6mm",
+            "tactile-switch-smd",
+            "tactile-switch-ts42",
+        ]
+    );
+    let diode = names
+        .iter()
+        .position(|name| *name == "diode-cd1206")
+        .unwrap();
+    assert!(diode > 3, "{names:?}");
+
+    let boards = search("board");
+    let names: Vec<&str> = boards.iter().map(|card| card.name.as_str()).collect();
+    assert_eq!(&names[..2], ["nano-board", "uno-board"]);
+    let diode = names
+        .iter()
+        .position(|name| *name == "diode-1n4007")
+        .unwrap();
+    let resistor = names
+        .iter()
+        .position(|name| *name == "resistor-axial")
+        .unwrap();
+    assert!(diode > 1 && resistor > 1, "{names:?}");
+}
+
+#[test]
+fn file_hashes_and_the_folder_hash_match_the_catalog() {
+    for card in catalog_cards() {
+        let dir = parts_dir().join(&card.name);
+        assert_eq!(card.hash, folder_hash(&dir).unwrap(), "{}", card.name);
+        for file in &card.files {
+            let bytes = fs::read(dir.join(&file.path)).unwrap();
+            assert_eq!(
+                file.bytes,
+                bytes.len() as u64,
+                "{} {}",
+                card.name,
+                file.path
+            );
+            let digest = Sha256::digest(&bytes);
+            let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+            assert_eq!(file.sha256, hex, "{} {}", card.name, file.path);
         }
     }
-    assert!(resistors.iter().any(|card| card.name == "resistor-axial"));
-    assert!(
-        resistors
+}
+
+#[test]
+fn used_by_matches_the_uses_graph() {
+    let cards = catalog_cards();
+    for card in &cards {
+        let mut expect: Vec<&str> = cards
             .iter()
-            .any(|card| card.name == "potentiometer-wh148")
+            .filter(|other| other.uses.contains_key(&card.name))
+            .map(|other| other.name.as_str())
+            .collect();
+        expect.sort();
+        let have: Vec<&str> = card.used_by.iter().map(String::as_str).collect();
+        assert_eq!(have, expect, "{}", card.name);
+    }
+}
+
+#[test]
+fn a_null_rating_stays_on_the_card_and_a_number_default_keeps_its_unit() {
+    let led = card("led-3mm").unwrap();
+    let names: Vec<&str> = led
+        .ratings
+        .iter()
+        .map(|rating| rating.name.as_str())
+        .collect();
+    assert_eq!(names, ["current", "power"]);
+    assert!(led.ratings.iter().all(|rating| rating.value.is_none()));
+
+    let diode = card("diode-1n4007").unwrap();
+    let current = diode
+        .ratings
+        .iter()
+        .find(|rating| rating.name == "current")
+        .unwrap();
+    let power = diode
+        .ratings
+        .iter()
+        .find(|rating| rating.name == "power")
+        .unwrap();
+    assert_eq!(current.value, Some(1.0));
+    assert!(power.value.is_none());
+
+    let pot = card("potentiometer-wh148").unwrap();
+    let position = pot
+        .params
+        .iter()
+        .find(|param| param.name == "position")
+        .unwrap();
+    let json = serde_json::to_value(position).unwrap();
+    assert_eq!(json["default"], serde_json::json!(0.5));
+    assert_eq!(json["above"], serde_json::json!(0));
+    assert_eq!(json["below"], serde_json::json!(1));
+    assert_eq!(json["unit"], "1");
+    assert_eq!(
+        param_sentence(position),
+        "a number above 0 and below 1, 0.5 by default"
     );
-    let axial = resistors
+
+    let switch = card("tactile-switch-6mm").unwrap();
+    let bounce = switch
+        .params
         .iter()
-        .position(|card| card.name == "resistor-axial")
+        .find(|param| param.name == "bounce")
         .unwrap();
-    let pot = resistors
+    let max_bounces = switch
+        .params
         .iter()
-        .position(|card| card.name == "potentiometer-wh148")
+        .find(|param| param.name == "max_bounces")
         .unwrap();
-    assert!(axial < pot);
+    assert!(serde_json::to_value(bounce).unwrap()["default"].is_null());
+    assert_eq!(
+        serde_json::to_value(max_bounces).unwrap()["default"],
+        serde_json::json!(2)
+    );
+    assert_eq!(param_sentence(bounce), "a value in s, not set by default");
+    assert_eq!(param_sentence(max_bounces), "a number, 2 by default");
+}
+
+#[test]
+fn one_id_segment_names_that_part_and_several_stay_a_list() {
+    let owned = |ids: &[&str]| -> Vec<String> { ids.iter().map(|id| (*id).to_string()).collect() };
+    assert_eq!(ids_with_segment("1n4007"), owned(&["diode-1n4007"]));
+    assert_eq!(ids_with_segment("1N4007"), owned(&["diode-1n4007"]));
+    assert_eq!(
+        ids_with_segment("switch"),
+        owned(&[
+            "tactile-switch-6mm",
+            "tactile-switch-smd",
+            "tactile-switch-ts42",
+        ])
+    );
+    assert!(ids_with_segment("not-a-part-zzzz").is_empty());
 }
 
 #[test]

@@ -19,24 +19,19 @@
   ],
   "files": [
     {
-      "bytes": 1109,
       "license": "MIT OR Apache-2.0",
-      "path": "asset.json",
-      "sha256": "885b231b09c7a5c0f669150fabd5381ce934b6fd859342ce7cba2c475e9b9b4d"
+      "path": "asset.json"
     },
     {
-      "bytes": 83996,
       "license": "MIT OR Apache-2.0",
-      "path": "nano-board.glb",
-      "sha256": "b134256067ec4fcb0a1b0d7fc276b2632ea3d168f690e367e1cedea2e1020061"
+      "path": "nano-board.glb"
     },
     {
-      "bytes": 10752,
       "license": "MIT OR Apache-2.0",
-      "path": "part.jsonc",
-      "sha256": "6d816a8938cf34f05602b17729cc60686b9a93997078b0fbaa48e5a46ed22616"
+      "path": "part.jsonc"
     }
   ],
+  "license": "MIT OR Apache-2.0",
   "name": "nano-board",
   "not_simulated": [],
   "params": [
@@ -226,7 +221,6 @@
     "number": "A000005"
   },
   "title": "Nano (CH340 clone)",
-  "used_by": [],
   "uses": {
     "ams1117-sot223": "0.1.0",
     "atmega328p-tqfp32": "0.1.0",

@@ -1060,11 +1060,14 @@ fn required_args(part: &orbe_scene::Card) -> String {
         } else if param.file.is_some() {
             "\"build/button.ino.hex\"".to_string()
         } else {
-            let bound = |text: &str| text.parse::<f64>().unwrap();
-            let number = match (param.above.as_deref(), param.below.as_deref()) {
-                (Some(lo), Some(hi)) => (bound(lo) + bound(hi)) / 2.0,
-                (Some(lo), None) => bound(lo) + 1.0,
-                (None, Some(hi)) => bound(hi) - 1.0,
+            let number_of = |bound: &Option<orbe_scene::Literal>| match bound {
+                Some(orbe_scene::Literal::Number(raw)) => Some(raw.parse::<f64>().unwrap()),
+                Some(orbe_scene::Literal::Name(_)) | None => None,
+            };
+            let number = match (number_of(&param.above), number_of(&param.below)) {
+                (Some(lo), Some(hi)) => (lo + hi) / 2.0,
+                (Some(lo), None) => lo + 1.0,
+                (None, Some(hi)) => hi - 1.0,
                 (None, None) => 1.0,
             };
             serde_json::to_string(&number.to_string()).unwrap()

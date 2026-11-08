@@ -12,6 +12,8 @@ pub fn text(card: &Card) -> String {
     if let Some(datasheet) = &card.real.datasheet {
         lines.push(format!("datasheet  {datasheet}"));
     }
+    lines.push(format!("license  {}", card.license));
+    lines.push(format!("hash  {}", card.hash));
     if let Some(description) = &card.description {
         lines.push(String::new());
         lines.push(description.clone());
@@ -50,11 +52,11 @@ pub fn text(card: &Card) -> String {
     lines.push("ratings".into());
     push_or_none(&mut lines, card.ratings.is_empty());
     for rating in &card.ratings {
-        lines.push(format!(
-            "  {}  {}",
-            rating.name,
-            si_amount(rating.value, &rating.unit)
-        ));
+        let shown = match (rating.value, rating.unit.as_deref()) {
+            (Some(value), Some(unit)) => si_amount(value, unit),
+            _ => "unrated".to_string(),
+        };
+        lines.push(format!("  {}  {shown}", rating.name));
     }
     lines.push(String::new());
     lines.push("not simulated".into());

@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -20,6 +20,8 @@ pub struct Card {
     pub name: String,
     pub title: String,
     pub version: String,
+    pub license: String,
+    pub hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -69,9 +71,9 @@ pub struct Param {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unit: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub above: Option<String>,
+    pub above: Option<Literal>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub below: Option<String>,
+    pub below: Option<Literal>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -79,7 +81,39 @@ pub struct Param {
     #[serde(skip_serializing_if = "skip_false")]
     pub required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default: Option<Option<String>>,
+    pub default: Option<Option<Literal>>,
+}
+
+/// A param bound or default. A number keeps the digits the part file wrote, and the
+/// param's `unit` stays beside it. A name is a choice.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Literal {
+    Number(String),
+    Name(String),
+}
+
+impl Literal {
+    fn sentence(&self, unit: Option<&str>) -> String {
+        match self {
+            Literal::Number(raw) => match unit {
+                Some("1") | None => raw.clone(),
+                Some(unit) => format!("{raw} {unit}"),
+            },
+            Literal::Name(name) => format!("\"{name}\""),
+        }
+    }
+}
+
+impl Serialize for Literal {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Literal::Number(raw) => {
+                let value: Value = serde_json::from_str(raw).map_err(serde::ser::Error::custom)?;
+                value.serialize(serializer)
+            }
+            Literal::Name(name) => serializer.serialize_str(name),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -94,8 +128,9 @@ pub struct Choice {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Rating {
     pub name: String,
-    pub value: f64,
-    pub unit: String,
+    pub value: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<Value>,
 }
@@ -203,7 +238,8 @@ pub fn card(name: &str) -> Option<Card> {
 }
 
 /// Parts whose id, title, maker, number, summary or tags contain every word.
-/// Exact id first, then parts whose title holds every word, then the rest. Ids break ties.
+/// An exact id comes first. Then every word is a whole word of the id, the title or a tag.
+/// Then the rest. Ids break ties.
 pub fn search(query: &str) -> Vec<Card> {
     let words: Vec<String> = query
         .split_whitespace()
@@ -232,6 +268,16 @@ pub fn near_names(name: &str) -> Vec<String> {
     scored.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
     scored.truncate(8);
     scored.into_iter().map(|(_, id)| id).collect()
+}
+
+/// Catalog ids that have `word` as one whole segment, such as `1n4007` in `diode-1n4007`.
+pub fn ids_with_segment(word: &str) -> Vec<String> {
+    let want = word.to_lowercase();
+    let mut ids: Vec<String> = catalog::ids()
+        .filter(|id| words_of(id).iter().any(|segment| segment == &want))
+        .collect();
+    ids.sort();
+    ids
 }
 
 pub fn missing_fields(cards: &[Card]) -> Missing {
@@ -283,11 +329,11 @@ pub fn param_sentence(param: &Param) -> String {
             Some(unit) => format!("a value in {unit}"),
         };
         if let Some(above) = &param.above {
-            text.push_str(&format!(" above {above}"));
+            text.push_str(&format!(" above {}", above.sentence(None)));
         }
         if let Some(below) = &param.below {
             let joint = if param.above.is_some() { " and" } else { "" };
-            text.push_str(&format!("{joint} below {below}"));
+            text.push_str(&format!("{joint} below {}", below.sentence(None)));
         }
         text
     };
@@ -296,7 +342,10 @@ pub fn param_sentence(param: &Param) -> String {
     } else if param.default.as_ref().is_some_and(Option::is_none) {
         format!("{takes}, not set by default")
     } else if let Some(Some(value)) = &param.default {
-        format!("{takes}, {value} by default")
+        format!(
+            "{takes}, {} by default",
+            value.sentence(param.unit.as_deref())
+        )
     } else {
         takes
     }
@@ -328,10 +377,16 @@ fn rank(card: &Card, words: &[String], joined: &str) -> Option<u8> {
     {
         return Some(0);
     }
-    let title = words_of(&card.title);
+    let mut whole = words_of(&card.name);
+    whole.extend(words_of(&card.title));
+    if let Some(categories) = &card.categories {
+        for category in categories {
+            whole.extend(words_of(category));
+        }
+    }
     if words
         .iter()
-        .all(|word| title.iter().any(|have| have == word))
+        .all(|word| whole.iter().any(|have| have == word))
     {
         return Some(1);
     }
@@ -360,6 +415,8 @@ fn build<'a>(
         name: id.to_string(),
         title: text(tree, "title").unwrap_or_default(),
         version: original.version.clone(),
+        license: license.to_string(),
+        hash: original.hash.clone(),
         description: text(tree, "summary"),
         categories: list(tree, "tags"),
         real: real(tree),
@@ -472,7 +529,7 @@ fn pins(tree: &Node) -> Vec<Pin> {
 enum OwnDefault {
     Required,
     Unset,
-    Value(String),
+    Value(Literal),
     Inherit,
 }
 
@@ -491,7 +548,7 @@ fn param<'t>(
     } else {
         match decl.get("default") {
             Some(node) if node.is_null() => OwnDefault::Unset,
-            Some(node) => OwnDefault::Value(written(node, unit)),
+            Some(node) => OwnDefault::Value(literal(node)),
             None => OwnDefault::Inherit,
         }
     };
@@ -550,8 +607,8 @@ fn param<'t>(
         let mut param = Param {
             name: name.to_string(),
             unit: Some(unit.to_string()),
-            above: decl.get("min_exclusive").map(|node| written(node, None)),
-            below: decl.get("max_exclusive").map(|node| written(node, None)),
+            above: decl.get("min_exclusive").and_then(literal_or_none),
+            below: decl.get("max_exclusive").and_then(literal_or_none),
             file: None,
             choices: None,
             required: false,
@@ -593,15 +650,15 @@ fn apply_default(param: &mut Param, own: OwnDefault) {
     }
 }
 
-fn written(node: &Node, unit: Option<&str>) -> String {
-    match (node.raw_number(), node.str()) {
-        (Some(raw), _) => match unit {
-            Some("1") | None => raw.to_string(),
-            Some(unit) => format!("{raw} {unit}"),
-        },
-        (_, Some(text)) => format!("\"{text}\""),
-        _ => node.to_value().to_string(),
+fn literal(node: &Node) -> Literal {
+    literal_or_none(node).unwrap_or_else(|| Literal::Name(node.to_value().to_string()))
+}
+
+fn literal_or_none(node: &Node) -> Option<Literal> {
+    if let Some(raw) = node.raw_number() {
+        return Some(Literal::Number(raw.to_string()));
     }
+    node.str().map(|text| Literal::Name(text.to_string()))
 }
 
 fn ratings(tree: &Node) -> Vec<Rating> {
@@ -611,8 +668,28 @@ fn ratings(tree: &Node) -> Vec<Rating> {
         .unwrap_or_default()
         .iter()
         .filter_map(|prop| {
-            let value = prop.value.get("value")?.number()?;
-            let unit = prop.value.get("unit")?.str()?.to_string();
+            if prop.value.is_null() {
+                return Some(Rating {
+                    name: prop.key.clone(),
+                    value: None,
+                    unit: None,
+                    source: None,
+                });
+            }
+            let value_node = prop.value.get("value")?;
+            let value = if value_node.is_null() {
+                None
+            } else {
+                Some(value_node.number()?)
+            };
+            let unit = prop
+                .value
+                .get("unit")
+                .and_then(Node::str)
+                .map(str::to_string);
+            if value.is_some() && unit.is_none() {
+                return None;
+            }
             Some(Rating {
                 name: prop.key.clone(),
                 value,
@@ -686,22 +763,31 @@ fn file_license(part_license: &str, bytes: &[u8]) -> String {
 fn spdx(bytes: &[u8]) -> Option<String> {
     let text = std::str::from_utf8(bytes).ok()?;
     for line in text.lines().take(40) {
-        let line = line.trim();
-        let line = line
-            .trim_start_matches("//")
-            .trim_start_matches('#')
-            .trim_start_matches("/*")
-            .trim_start_matches('*')
-            .trim();
+        let line = comment_text(line);
         let Some(rest) = line.strip_prefix("SPDX-License-Identifier:") else {
             continue;
         };
-        let id = rest.trim();
+        let id = comment_text(rest);
         if !id.is_empty() {
             return Some(id.to_string());
         }
     }
     None
+}
+
+fn comment_text(line: &str) -> String {
+    let line = line.trim();
+    let line = line
+        .trim_start_matches("<!--")
+        .trim_start_matches("//")
+        .trim_start_matches('#')
+        .trim_start_matches("/*")
+        .trim_start_matches('*')
+        .trim();
+    line.trim_end_matches("-->")
+        .trim_end_matches("*/")
+        .trim()
+        .to_string()
 }
 
 fn uses(tree: &Node) -> BTreeMap<String, String> {
@@ -746,6 +832,14 @@ mod tests {
         let bytes = b"// SPDX-License-Identifier: CC-BY-SA-4.0\n{}\n";
         assert_eq!(file_license("MIT OR Apache-2.0", bytes), "CC-BY-SA-4.0");
         assert_eq!(
+            spdx(b"/* SPDX-License-Identifier: MIT */\n"),
+            Some("MIT".into())
+        );
+        assert_eq!(
+            spdx(b"<!-- SPDX-License-Identifier: Apache-2.0 -->\n"),
+            Some("Apache-2.0".into())
+        );
+        assert_eq!(
             file_license(
                 "MIT OR Apache-2.0",
                 b"{\"license\": \"MIT OR Apache-2.0\"}\n"
@@ -753,5 +847,49 @@ mod tests {
             "MIT OR Apache-2.0"
         );
         assert_eq!(file_license("", b"not utf8 \xff"), PART_LICENSE);
+    }
+
+    #[test]
+    fn a_param_default_is_a_number_or_a_bare_choice_name() {
+        let mut sources = crate::source::Sources::new(std::path::Path::new(""));
+        let file = sources.add(
+            std::path::Path::new("part.jsonc"),
+            r#"{
+                "params": {
+                    "delay": { "unit": "s", "default": 0.001, "min_exclusive": 0, "max_exclusive": 1 },
+                    "color": { "default": "red", "choices": { "red": {}, "green": {} } },
+                    "initial": { "unit": "V", "default": null }
+                }
+            }"#
+            .to_string(),
+        );
+        let tree =
+            crate::syntax::parse(&sources, file, &mut crate::diagnostic::Findings::default())
+                .expect("fixture parses");
+        let none = |_name: &str| None;
+        let delay = param(&tree, "delay", &none).unwrap();
+        let json = serde_json::to_value(&delay).unwrap();
+        assert_eq!(json["default"], serde_json::json!(0.001));
+        assert_eq!(json["above"], serde_json::json!(0));
+        assert_eq!(json["below"], serde_json::json!(1));
+        assert_eq!(json["unit"], "s");
+        assert_eq!(json["default"].to_string(), "0.001");
+        assert_eq!(
+            param_sentence(&delay),
+            "a value in s above 0 and below 1, 0.001 s by default"
+        );
+
+        let color = param(&tree, "color", &none).unwrap();
+        let json = serde_json::to_value(&color).unwrap();
+        assert_eq!(json["default"], "red");
+        assert_eq!(
+            param_sentence(&color),
+            "one of `red`, `green`, \"red\" by default"
+        );
+
+        let initial = param(&tree, "initial", &none).unwrap();
+        let json = serde_json::to_value(&initial).unwrap();
+        assert!(json["default"].is_null());
+        assert_eq!(param_sentence(&initial), "a value in V, not set by default");
     }
 }
