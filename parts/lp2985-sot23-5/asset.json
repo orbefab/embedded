@@ -1,24 +1,13 @@
 {
   "part": "lp2985-sot23-5",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/lp2985-sot23-5.glb",
-        "sha256": "1f515f32156ecbb79fbdb78a44c8a2efa40e78a71aae4bf08423969c5e6d41ca",
-        "bytes": 24640
-      },
-      "anchors": {
-        "path": "GLB/parts/lp2985-sot23-5.anchors.json",
-        "sha256": "04841cebc8d382356f4a941767b301470945e922aa0afae0e15d3a226650450f",
-        "bytes": 631
-      }
-    }
+    "script": "model.py",
+    "sha256": "ac8e26276f8b88a12adcf6bc51e42a88432c2c0d1270a72419a6682838d709fb",
+    "bytes": 1417
   },
   "files": {
     "lp2985-sot23-5.glb": {
-      "sha256": "096ef9ee16ab1176a4e52d8ffc424876dfde4fd350d90ad141a8a7e1c343349e",
+      "sha256": "7ee6de757cbc42e32ab95c18497f5443ec01584f18250e7309f8b5815bf68ae9",
       "bytes": 6708
     },
     "lp2985-sot23-5.anchors.json": {
@@ -48,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 42,
+      "primitives_in": 7,
       "primitives_out": 3
     }
   }

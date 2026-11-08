@@ -1,24 +1,13 @@
 {
   "part": "lmv358-msop8",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/lmv358-msop8.glb",
-        "sha256": "d221a4e9a5490e501ffc74ebbc9f7388e07720c1b728af2b03b17489299f1b53",
-        "bytes": 34356
-      },
-      "anchors": {
-        "path": "GLB/parts/lmv358-msop8.anchors.json",
-        "sha256": "f61b6ffa824e89ebc7b7efcd1f67c56f5237e5ba91e03294113a5e44b00cbc55",
-        "bytes": 993
-      }
-    }
+    "script": "model.py",
+    "sha256": "05459cf827e7c956c465f3b46a0af01c98069515ee7be51b2da212a555c79633",
+    "bytes": 1389
   },
   "files": {
     "lmv358-msop8.glb": {
-      "sha256": "7c8b6cfcabbcdc99d979337339ea1306257616f943400e562c6570248ce7d17e",
+      "sha256": "77affa0b0ac7c73cf0003d0c6070e3cb68e3a83c98650aa945ec47e72b2ee66c",
       "bytes": 8624
     },
     "lmv358-msop8.anchors.json": {
@@ -48,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 60,
+      "primitives_in": 10,
       "primitives_out": 3
     }
   }

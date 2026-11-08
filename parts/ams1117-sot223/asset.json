@@ -1,24 +1,13 @@
 {
   "part": "ams1117-sot223",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/ams1117-sot223.glb",
-        "sha256": "25a02f6fbe83ed99a552f69ae99895fb711887869e995a145f8bf6814a38aef3",
-        "bytes": 17360
-      },
-      "anchors": {
-        "path": "GLB/parts/ams1117-sot223.anchors.json",
-        "sha256": "68084bb48473f9456504133524ea9adae100333001ade572b817fa7c1eb4b6b7",
-        "bytes": 521
-      }
-    }
+    "script": "model.py",
+    "sha256": "dd66e7a45a10c2320e1e5240dbb726377c656545e41c190878b9202ae53fdfec",
+    "bytes": 1895
   },
   "files": {
     "ams1117-sot223.glb": {
-      "sha256": "a00f296cc24a1cd85d649e65a5c07a38aad8554ed868ab6172ed8e78d049f4de",
+      "sha256": "00f074cf4abbb9e7d06d143b9ca6a3a0a58264465afc7fdefe4aace2fd0dd40b",
       "bytes": 5108
     },
     "ams1117-sot223.anchors.json": {
@@ -48,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 30,
+      "primitives_in": 5,
       "primitives_out": 2
     }
   }

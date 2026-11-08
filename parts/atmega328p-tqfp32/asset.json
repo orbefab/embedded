@@ -1,24 +1,13 @@
 {
   "part": "atmega328p-tqfp32",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/atmega328p-tqfp32.glb",
-        "sha256": "b857582f905da63e8da5b211d170ef7985a8472b3e7c1536742e2131fe38dee4",
-        "bytes": 116060
-      },
-      "anchors": {
-        "path": "GLB/parts/atmega328p-tqfp32.anchors.json",
-        "sha256": "18d213a3d99aed6240e66fb3e6724ef4082dde52d50ba62bfd7e4de41ee27ea7",
-        "bytes": 3764
-      }
-    }
+    "script": "model.py",
+    "sha256": "57f901182eb61ab32b4b9c05127dbd8d6bcee613181db0b82e36d05ddcc3bd5d",
+    "bytes": 2107
   },
   "files": {
     "atmega328p-tqfp32.glb": {
-      "sha256": "00e9d335a6ee26ca0ae5a11256a3f9019158b3ff692c475eff5939f9d68dfb34",
+      "sha256": "110f2b513728589bd93a412500da0cae71d1f2fb95fed1be4b8214b3ce75958d",
       "bytes": 23928
     },
     "atmega328p-tqfp32.anchors.json": {
@@ -48,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 204,
+      "primitives_in": 34,
       "primitives_out": 2
     }
   }

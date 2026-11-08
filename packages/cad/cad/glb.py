@@ -3,12 +3,13 @@
 
 `write` exports the labelled shape as `<folder>/<part>.glb` and its leads as
 `<folder>/<part>.anchors.json`. Both are named by the part's id, because the
-viewer looks parts up by id.
+viewer looks parts up by id. Faces of one colour in a node join into one
+primitive.
 
 The GLB is standard glTF: Y-up in metres, with glTF's -90° turn about X on
 its one root node, so the vertex data keeps the part frame's axes. Every
 label in the shape is a node name, and each node's mesh holds one primitive
-per colour, not one per B-rep face.
+per colour.
 
 The anchors file is in the part frame: millimetres, +Z up, seated at z = 0.
 Each anchor is one lead: its number, the node that draws it (and any others
@@ -74,7 +75,7 @@ def _linear_colors(node) -> None:
 
 
 def _writer():
-    """OCCT's glTF writer, single-threaded, with faces of one colour joined.
+    """OCCT's glTF writer, single-threaded, joining faces of one colour.
 
     build123d's export_gltf does not expose face merging. Left per face, a
     breadboard's 830 holes write some 40 000 accessors, most of its GLB.
