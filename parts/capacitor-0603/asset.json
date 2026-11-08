@@ -1,24 +1,13 @@
 {
   "part": "capacitor-0603",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/capacitor-0603.glb",
-        "sha256": "e4dfcbe7a0e185562f7a0bd6a3be8b79c23dd5a7dd7888504ad47fe75c3cc1aa",
-        "bytes": 10772
-      },
-      "anchors": {
-        "path": "GLB/parts/capacitor-0603.anchors.json",
-        "sha256": "57c56ac511c0ac4aebccda273016f2ef134636a2bfb5f90eb20d54f54785ddb0",
-        "bytes": 292
-      }
-    }
+    "script": "model.py",
+    "sha256": "90cc43b9470e51b55f05cdc9878595b22d6598c38423120207638f273c7c0908",
+    "bytes": 948
   },
   "files": {
     "capacitor-0603.glb": {
-      "sha256": "72fd4fda3769ef6ba5eb33e5e0c011dcefb2b1df255ba26baab177005ef9c3b4",
+      "sha256": "2c847c19e55ec3ca86d28af402f0909ac0d002f36cabb8620284fc4270201ed3",
       "bytes": 3808
     },
     "capacitor-0603.anchors.json": {
@@ -48,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 18,
+      "primitives_in": 3,
       "primitives_out": 2
     }
   }

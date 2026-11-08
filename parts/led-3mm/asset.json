@@ -1,24 +1,13 @@
 {
   "part": "led-3mm",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/led-3mm.glb",
-        "sha256": "55c724a674ef2a733b53cf07dc198c4f1cb35bd1b8b9314375c6b7507abac34a",
-        "bytes": 27252
-      },
-      "anchors": {
-        "path": "GLB/parts/led-3mm.anchors.json",
-        "sha256": "5a44cb018a0076999c131259d3f86fcf16b3d9c68fb9d82b2bab89cd5147cc36",
-        "bytes": 289
-      }
-    }
+    "script": "model.py",
+    "sha256": "5c43bc22967aec63dab8fed71164ab3bf9919f58202303eb14de5fc565a87e4a",
+    "bytes": 1633
   },
   "files": {
     "led-3mm.glb": {
-      "sha256": "2d34e0087de3026ecc20d8a1b6a0d83c51001d252492d8c21450dcdebc7b7849",
+      "sha256": "206774439c7af2d1fcd6d09830b2b1e0d002c48cdfb40cd8e259df02b125a48d",
       "bytes": 20852
     },
     "led-3mm.anchors.json": {
@@ -48,7 +37,7 @@
       "nodes": ["body"]
     },
     "merge": {
-      "primitives_in": 18,
+      "primitives_in": 3,
       "primitives_out": 3
     }
   }

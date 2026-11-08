@@ -1,24 +1,13 @@
 {
   "part": "capacitor-electrolytic-radial",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/capacitor-electrolytic-radial.glb",
-        "sha256": "cb5655cfef52907e8f976e23459b8121380bc1702e621e73a2ddea7797ed012a",
-        "bytes": 38028
-      },
-      "anchors": {
-        "path": "GLB/parts/capacitor-electrolytic-radial.anchors.json",
-        "sha256": "2ec0c742ade106f3904f0fe22ee96be593e8d78ab329f5de38e35975bc1b9a54",
-        "bytes": 311
-      }
-    }
+    "script": "model.py",
+    "sha256": "1101619eaee4ec883057aaedca87dc4c40a36deff5e064b521c0a2057da3e66b",
+    "bytes": 2498
   },
   "files": {
     "capacitor-electrolytic-radial.glb": {
-      "sha256": "1f9f0492d6d00b4e7605f54291581b5364722bbf64e65eea373fbcd4fe4982c7",
+      "sha256": "2798ee8cd5b413d35293b3fd5c56875411f4e2d8ec8f2a83d049851b9bfc4282",
       "bytes": 28420
     },
     "capacitor-electrolytic-radial.anchors.json": {
@@ -48,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 23,
+      "primitives_in": 5,
       "primitives_out": 5
     }
   }

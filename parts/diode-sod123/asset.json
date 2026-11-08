@@ -1,24 +1,13 @@
 {
   "part": "diode-sod123",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/diode-sod123.glb",
-        "sha256": "8ec92303961181a95cdabc1055db6793ffd517f037906720bcb7365dc4c1773a",
-        "bytes": 10860
-      },
-      "anchors": {
-        "path": "GLB/parts/diode-sod123.anchors.json",
-        "sha256": "d040d4c1c4acaa07d49354f8d4d6c5c608483d85e9f55683c3d685d844a2b76b",
-        "bytes": 290
-      }
-    }
+    "script": "model.py",
+    "sha256": "b5dbd8a07510726a552bff5a00372a31758240fdd0a633b39578a1dd0ff2f8c6",
+    "bytes": 948
   },
   "files": {
     "diode-sod123.glb": {
-      "sha256": "571792a5b5f89fad1e42966c7732f92e082d1cf0b0f62d7ed602ea7d748f899a",
+      "sha256": "56c3b7cb3d76faaa988cb6013fb348faaa6a9fa0e5045bb2aa201a9717bd7f79",
       "bytes": 3812
     },
     "diode-sod123.anchors.json": {
@@ -48,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 18,
+      "primitives_in": 3,
       "primitives_out": 2
     }
   }

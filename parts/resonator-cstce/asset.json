@@ -1,24 +1,13 @@
 {
   "part": "resonator-cstce",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/resonator-cstce.glb",
-        "sha256": "e7643d2fe120f9c8406a995efad7fc6d0f07438430ad8896ffb2135633c3518f",
-        "bytes": 13968
-      },
-      "anchors": {
-        "path": "GLB/parts/resonator-cstce.anchors.json",
-        "sha256": "5941360c852bc5ebbcbe07c95f42e2ecc94ef9b17a9431d353803706acc3f6e1",
-        "bytes": 404
-      }
-    }
+    "script": "model.py",
+    "sha256": "ef9cad41e00291b5992aa5690c0f55f3d8faad52e4c3bafb7ad340967e5797e5",
+    "bytes": 1554
   },
   "files": {
     "resonator-cstce.glb": {
-      "sha256": "eed4dd533341a5711eb5380e6c03a0a5339f5ea90a4df94ef989010568080677",
+      "sha256": "8198f8e52835d517a375b29fec8edeb4a2f84710635371c0d6e85bb0fafb3301",
       "bytes": 4436
     },
     "resonator-cstce.anchors.json": {
@@ -48,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 24,
+      "primitives_in": 4,
       "primitives_out": 2
     }
   }

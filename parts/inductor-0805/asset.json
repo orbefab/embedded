@@ -1,24 +1,13 @@
 {
   "part": "inductor-0805",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/inductor-0805.glb",
-        "sha256": "627dbb225a92d7ebe613db34a0d53fff73c6a54259d09c5c378a13fefb9ccd97",
-        "bytes": 10484
-      },
-      "anchors": {
-        "path": "GLB/parts/inductor-0805.anchors.json",
-        "sha256": "2750104ed446073c84231dc2551c04777ea6f3c951b65aff17ca821244f14d43",
-        "bytes": 291
-      }
-    }
+    "script": "model.py",
+    "sha256": "8008021cace22869e68b3762ee76c18f666e96fd46f489799cd346adcac1932d",
+    "bytes": 1085
   },
   "files": {
     "inductor-0805.glb": {
-      "sha256": "f373c38b87234a7f9f59480bcd768e8f14e7995ab1bad72bf5c32f17f1ccb70b",
+      "sha256": "bd8d72441609009e983f89b8ce4309a21f514214c2498883c53f1ea1d2c4204b",
       "bytes": 3788
     },
     "inductor-0805.anchors.json": {
@@ -48,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 18,
+      "primitives_in": 3,
       "primitives_out": 2
     }
   }

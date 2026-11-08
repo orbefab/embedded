@@ -1,20 +1,9 @@
 {
   "part": "crystal-3215",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/crystal-3215.glb",
-        "sha256": "5d416f157660efcaab55898d316f70f0f78b621b6b87c6de4d3875c0d655a9b1",
-        "bytes": 10508
-      },
-      "anchors": {
-        "path": "GLB/parts/crystal-3215.anchors.json",
-        "sha256": "596123c244f4e015977646c56aeeb11193c7e54da79ddb333d701cb0a95fd2e9",
-        "bytes": 290
-      }
-    }
+    "script": "model.py",
+    "sha256": "03fa8a89a33b01a1aed68aaedda53da7b70e93e236489a76c611a863881d794d",
+    "bytes": 922
   },
   "files": {
     "crystal-3215.glb": {
@@ -48,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 18,
+      "primitives_in": 3,
       "primitives_out": 1
     }
   }

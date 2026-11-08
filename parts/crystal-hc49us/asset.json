@@ -1,24 +1,13 @@
 {
   "part": "crystal-hc49us",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/crystal-hc49us.glb",
-        "sha256": "a028958a5fca47a642e0b963d289bcb409e76ce82890224c50d5a8cade886cec",
-        "bytes": 30232
-      },
-      "anchors": {
-        "path": "GLB/parts/crystal-hc49us.anchors.json",
-        "sha256": "437e5b733b1cf0d46dfca3fc837678f52785d5b271e2edb103d80ff04b8a33a2",
-        "bytes": 294
-      }
-    }
+    "script": "model.py",
+    "sha256": "e79a5add0c5077492f4dfb2532a56ebe6db446d510c62c4627db4519d5ad3990",
+    "bytes": 2068
   },
   "files": {
     "crystal-hc49us.glb": {
-      "sha256": "82efde9377b40aaafdb5ce3b34a1f62ed2d51eba5514e862d2e1826fef9a904e",
+      "sha256": "53e29bb93bb796282b66af8eabc23ef6ed03e31031095a6881ad30d321d9d735",
       "bytes": 18564
     },
     "crystal-hc49us.anchors.json": {
@@ -48,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 18,
+      "primitives_in": 4,
       "primitives_out": 4
     }
   }

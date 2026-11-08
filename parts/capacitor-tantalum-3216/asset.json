@@ -1,24 +1,13 @@
 {
   "part": "capacitor-tantalum-3216",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/capacitor-tantalum-3216.glb",
-        "sha256": "2fb3581ccdd83a0bfb1a63243cd20675a11ec1e6a5b2f95766468edd818c0260",
-        "bytes": 10820
-      },
-      "anchors": {
-        "path": "GLB/parts/capacitor-tantalum-3216.anchors.json",
-        "sha256": "b4f2571c0ae6aca703b3be324ff39d03bf157043ef3cc3938f1690aaf8ea4c5d",
-        "bytes": 301
-      }
-    }
+    "script": "model.py",
+    "sha256": "4dae1b65de758e87ec44279433c189a5c92f0b174ec1e1f861ba392f87988120",
+    "bytes": 1198
   },
   "files": {
     "capacitor-tantalum-3216.glb": {
-      "sha256": "bab602507ed5fcd0e13aca0e26dc1d63e81db7a6680de24d58f87ae01d6aeddf",
+      "sha256": "4005c30c7e1a76e65b255e40f0a757f3ee20719be6633a96884509d1ebac392f",
       "bytes": 3804
     },
     "capacitor-tantalum-3216.anchors.json": {
@@ -48,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 18,
+      "primitives_in": 3,
       "primitives_out": 2
     }
   }

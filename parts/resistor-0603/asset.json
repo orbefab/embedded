@@ -1,24 +1,13 @@
 {
   "part": "resistor-0603",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/resistor-0603.glb",
-        "sha256": "85ce59a991c1ba91df7606889417d6d5fc3b4909f2c9f3c1a169d873ffefd075",
-        "bytes": 10768
-      },
-      "anchors": {
-        "path": "GLB/parts/resistor-0603.anchors.json",
-        "sha256": "6b88af0a2abc0b6155417fe745a4b826c53a9f2f21d0414739f1b6b6757e7327",
-        "bytes": 291
-      }
-    }
+    "script": "model.py",
+    "sha256": "99e93f6ec947577ebb054324e6311ae0516b02ca980136e259d747444b97b4ef",
+    "bytes": 947
   },
   "files": {
     "resistor-0603.glb": {
-      "sha256": "5daaeec83d96386a345b635006663e695b1e07c9e2dc1983fe17b7e51cf28783",
+      "sha256": "6124583262019f1725871badd2cb87138adeed795490a2ced8bcfb786bcb3197",
       "bytes": 3812
     },
     "resistor-0603.anchors.json": {
@@ -48,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 18,
+      "primitives_in": 3,
       "primitives_out": 2
     }
   }

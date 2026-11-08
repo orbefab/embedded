@@ -149,17 +149,18 @@ function readAsset(partsDir, id) {
 }
 
 /**
- * The source model of every part below `part`, from the models commit its asset.json records,
- * which passed its checks when that asset.json was written.
+ * The model of every part below `part`. A child with `model.py` is the merged GLB in its
+ * folder. Any other child is the source GLB at the commit its `asset.json` records.
  */
 async function childModels(models, partsDir, part, found = new Map()) {
   for (const type of part.children.values()) {
     if (found.has(type)) continue;
     const asset = readAsset(partsDir, type);
     if (!asset) continue;
-    const src = hasScript(partsDir, type) || !asset.source?.commit
-      ? folderModel(partsDir, type)
-      : source(models, recorded(models, type, asset.source.commit), type);
+    const src =
+      hasScript(partsDir, type) || !asset.source?.commit
+        ? folderModel(partsDir, type)
+        : source(models, recorded(models, type, asset.source.commit), type);
     if (!src) {
       const where = hasScript(partsDir, type) ? 'in its folder' : 'at the commit its asset.json records';
       throw new CheckFailed('composition', `child type \`${type}\` has no GLB ${where}`);

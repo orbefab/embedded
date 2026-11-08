@@ -1,24 +1,13 @@
 {
   "part": "diode-m7-sma",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/diode-m7-sma.glb",
-        "sha256": "61b9aa0bc6e145b53f62839cfcd28783d9d900fd0a4f788da3e5410fc3023c58",
-        "bytes": 14628
-      },
-      "anchors": {
-        "path": "GLB/parts/diode-m7-sma.anchors.json",
-        "sha256": "5d34e914e6ebf6d9606bee9b9ffa5a7ac7d75ab47d777ca6fac162805fd9a4ca",
-        "bytes": 290
-      }
-    }
+    "script": "model.py",
+    "sha256": "2e74f343bac9e6e0fe335704cc5a84193e3b6d28822fa0bb7b94d1d69fd666cb",
+    "bytes": 1492
   },
   "files": {
     "diode-m7-sma.glb": {
-      "sha256": "5ee6c18a789d82b410ad72809e9fcfe0b489350036b9e9f71783fd66c6a92921",
+      "sha256": "c9c6e2a843ff29b803957d784f8220c54c772df952444d481996318666823702",
       "bytes": 4704
     },
     "diode-m7-sma.anchors.json": {
@@ -48,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 24,
+      "primitives_in": 4,
       "primitives_out": 3
     }
   }

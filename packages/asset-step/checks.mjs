@@ -173,8 +173,8 @@ export async function merge(doc, part, anchors) {
 /**
  * Places every child's checked source model by the part's layout, and each child's own children
  * by the child's layout, then seats the whole part. `model` and each entry of `models` are
- * `{part, nodes, anchors, drawCalls}`, with the nodes from the source GLB, so a pad's node still
- * has its name and is a lead here as it is in `seating`.
+ * `{part, nodes, anchors, drawCalls}`. A source GLB keeps a pad's name, so the pad is a lead here
+ * as it is in `seating`. A merged GLB from `model.py` does not, so its pads must not sink.
  */
 export function composition(model, models) {
   const placed = [];

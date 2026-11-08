@@ -73,17 +73,16 @@ def _linear_colors(node) -> None:
         _linear_colors(child)
 
 
-def _merged_writer():
-    """OCCT's glTF writer with each mesh's faces merged by material.
+def _writer():
+    """OCCT's glTF writer, single-threaded, with faces of one colour joined.
 
-    build123d's export_gltf does not expose the option. Left per face, a
+    build123d's export_gltf does not expose face merging. Left per face, a
     breadboard's 830 holes write some 40 000 accessors, most of its GLB.
-    The writer also runs single-threaded. Its parallel path does not repeat
-    the same bytes for the same shape.
+    The parallel path does not repeat the same bytes.
     """
     from OCP.RWGltf import RWGltf_CafWriter
 
-    class MergedWriter(RWGltf_CafWriter):
+    class Writer(RWGltf_CafWriter):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self.SetMergeFaces(True)
@@ -91,7 +90,7 @@ def _merged_writer():
         def SetParallel(self, *args, **kwargs):
             super().SetParallel(False)
 
-    return MergedWriter
+    return Writer
 
 
 def write(shape, part: str, anchors: list[Anchor] | None, folder: Path) -> None:
@@ -105,7 +104,7 @@ def write(shape, part: str, anchors: list[Anchor] | None, folder: Path) -> None:
     from build123d import exporters3d
 
     _linear_colors(shape)
-    with patch.object(exporters3d, "RWGltf_CafWriter", _merged_writer()):
+    with patch.object(exporters3d, "RWGltf_CafWriter", _writer()):
         wrote = bd.export_gltf(
             shape,
             str(glb),
