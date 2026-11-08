@@ -69,6 +69,7 @@ impl Original {
         }
         let mut extra = Vec::new();
         list(files, folder, folder, &mut extra);
+        extra.sort();
         for rel in extra
             .iter()
             .filter(|rel| !self.files.iter().any(|(r, _)| r == rel))
