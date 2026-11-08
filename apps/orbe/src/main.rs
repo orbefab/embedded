@@ -15,7 +15,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Arg, ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand};
-use orbe_scene::{Diagnostic, Files, Reply, Request};
+use orbe_scene::{Diagnostic, Files};
+#[cfg(unix)]
+use orbe_scene::{Reply, Request};
 use orbe_session::test::{self, Report};
 use serde_json::{Value, json};
 
@@ -273,16 +275,7 @@ fn main() -> ExitCode {
                 diff,
                 relock,
                 json,
-            } => add(
-                dir.as_deref(),
-                Request {
-                    ids,
-                    overwrite,
-                    diff,
-                    relock,
-                },
-                json,
-            ),
+            } => add(dir.as_deref(), ids, overwrite, diff, relock, json),
             Command::Part { id, json } => show_part(&id, json),
             Command::Search { words, json } => search_parts(&words, json),
             Command::Test {
@@ -845,13 +838,49 @@ fn search_parts(words: &[String], json: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn add(dir: Option<&Path>, request: Request, json: bool) -> ExitCode {
+#[cfg(unix)]
+fn add(
+    dir: Option<&Path>,
+    ids: Vec<String>,
+    overwrite: bool,
+    diff: bool,
+    relock: bool,
+    json: bool,
+) -> ExitCode {
+    let request = Request {
+        ids,
+        overwrite,
+        diff,
+        relock,
+    };
     match orbe_scene::add_parts(dir, &request) {
         Ok(reply) => print_reply(reply, json),
         Err(error) => io_exit(&error.to_string(), json),
     }
 }
 
+#[cfg(not(unix))]
+fn add(
+    _dir: Option<&Path>,
+    _ids: Vec<String>,
+    _overwrite: bool,
+    _diff: bool,
+    _relock: bool,
+    json: bool,
+) -> ExitCode {
+    let message = "`orbe add` needs Unix for now";
+    if json {
+        print_json(&json!({
+            "ok": false,
+            "error": { "code": "usage", "message": message }
+        }));
+    } else {
+        eprintln!("error[usage]: {message}");
+    }
+    ExitCode::from(USAGE)
+}
+
+#[cfg(unix)]
 fn print_reply(reply: Reply, json: bool) -> ExitCode {
     if json {
         print_json(&reply.json());
