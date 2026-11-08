@@ -81,4 +81,4 @@ Neither tier builds firmware. `packages/engine/scripts/esp32s3-firmware.sh` rebu
 
 The schema is [netlist.md](netlist.md). How the engine steps, and how accurate it is, is [engine.md](engine.md). The folder is [run-folder.md](run-folder.md). The codes are [diagnostics.md](diagnostics.md). The ngspice references are [reference.md](reference.md). The ATmega328P behind the `atmega328p` kind is [avr.md](avr.md). The ESP32-S3 behind the `esp32s3` kind is [esp32s3.md](esp32s3.md). How to time a run is [bench.md](bench.md). The JavaScript package for a Worker is [wasm.md](wasm.md).
 
-The compiled sketch images in `packages/engine/tests/firmware/sketch/` are test fixtures that link third-party code under its own licenses. [NOTICE](../../packages/engine/tests/firmware/sketch/NOTICE) names them. The engine does not link that code.
+The compiled sketch images in `packages/engine/tests/firmware/sketch/` and in `blocks/*/firmware/` link third-party code under its own licenses. [NOTICE](../../packages/engine/tests/firmware/sketch/NOTICE) names the test images, and each Block's `firmware/NOTICE` names its image. The engine does not link that code.

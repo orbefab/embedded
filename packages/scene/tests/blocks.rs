@@ -71,6 +71,13 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
         for key in ["title", "summary", "license"] {
             assert!(non_empty_text(&block[key]), "{id}: {key}");
         }
+        assert_eq!(
+            block["license"], "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",
+            "{id}: license is the SPDX expression for the sketch and the LGPL runtime"
+        );
+        assert!(spdx_parses(block["license"].as_str().unwrap()), "{id}");
+        assert!(!spdx_parses("MIT OR"), "{id}");
+        assert!(!spdx_parses("(MIT OR Apache-2.0"), "{id}");
         let tags = block["tags"].as_array().unwrap();
         assert!(
             !tags.is_empty() && tags.iter().all(non_empty_text),
@@ -141,6 +148,123 @@ fn each_block_firmware_is_the_engine_build_of_its_sketch() {
             }
         }
         assert!(images > 0, "{}", firmware.display());
+    }
+}
+
+/// Each Block notice names the runtime archive `sketches.sh` fetches, by the same URL and SHA-256.
+#[test]
+fn each_block_notice_names_the_runtime_sketches_sh_pins() {
+    let script =
+        fs::read_to_string(common::repo().join("packages/engine/scripts/sketches.sh")).unwrap();
+    let pin = |key: &str| {
+        script
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{key}=")))
+            .unwrap_or_else(|| panic!("{key} is not pinned in sketches.sh"))
+            .to_string()
+    };
+    let url = pin("runtime_url");
+    let sha = pin("runtime_sha256");
+    assert!(url.starts_with("https://"), "{url}");
+    assert_eq!(sha.len(), 64);
+    for entry in fs::read_dir(common::repo().join("blocks")).unwrap() {
+        let dir = entry.unwrap().path();
+        let notice = fs::read_to_string(dir.join("firmware/NOTICE")).unwrap();
+        assert!(
+            notice.contains(&url),
+            "{} notice does not name {url}",
+            dir.display()
+        );
+        assert!(
+            notice.contains(&sha),
+            "{} notice does not name {sha}",
+            dir.display()
+        );
+    }
+}
+
+/// SPDX license expression, enough to accept a Block's `license` and reject a broken one.
+/// `AND` binds tighter than `OR`.
+fn spdx_parses(text: &str) -> bool {
+    struct Scan<'a> {
+        text: &'a str,
+    }
+    impl Scan<'_> {
+        fn skip(&mut self) {
+            self.text = self.text.trim_start();
+        }
+        fn word(&mut self) -> Option<String> {
+            self.skip();
+            let end = self
+                .text
+                .find(|c: char| !(c.is_ascii_alphanumeric() || ".-+".contains(c)))
+                .unwrap_or(self.text.len());
+            if end == 0 {
+                return None;
+            }
+            let word = self.text[..end].to_string();
+            self.text = &self.text[end..];
+            Some(word)
+        }
+        fn op(&mut self, op: &str) -> bool {
+            self.skip();
+            let rest = self.text.get(op.len()..).unwrap_or("");
+            let boundary = rest.is_empty()
+                || rest.starts_with(|c: char| !(c.is_ascii_alphanumeric() || ".-+".contains(c)));
+            if self.text.starts_with(op) && boundary {
+                self.text = &self.text[op.len()..];
+                true
+            } else {
+                false
+            }
+        }
+        fn ident(&mut self) -> bool {
+            match self.word() {
+                Some(word) if !matches!(word.as_str(), "AND" | "OR" | "WITH") => true,
+                _ => false,
+            }
+        }
+        fn primary(&mut self) -> bool {
+            self.skip();
+            if self.text.starts_with('(') {
+                self.text = &self.text[1..];
+                return self.or() && self.op(")");
+            }
+            self.ident()
+        }
+        fn with(&mut self) -> bool {
+            if !self.primary() {
+                return false;
+            }
+            if self.op("WITH") { self.ident() } else { true }
+        }
+        fn and(&mut self) -> bool {
+            if !self.with() {
+                return false;
+            }
+            while self.op("AND") {
+                if !self.with() {
+                    return false;
+                }
+            }
+            true
+        }
+        fn or(&mut self) -> bool {
+            if !self.and() {
+                return false;
+            }
+            while self.op("OR") {
+                if !self.and() {
+                    return false;
+                }
+            }
+            true
+        }
+    }
+    let mut scan = Scan { text };
+    scan.or() && {
+        scan.skip();
+        scan.text.is_empty()
     }
 }
 

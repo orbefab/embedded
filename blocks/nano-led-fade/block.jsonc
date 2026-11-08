@@ -6,5 +6,5 @@
   "summary": "An LED on D9 of an Arduino Nano fades up and down by PWM.",
   "board": "nano-board",
   "tags": ["led", "pwm", "analog output", "nano"],
-  "license": "MIT OR Apache-2.0",
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",
 }
