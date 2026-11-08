@@ -2,21 +2,17 @@
   "part": "npn-2n2222-to92",
   "source": {
     "script": "model.py",
-    "sha256": "7e0ef0b4ddeb060a17c06e1e359d21abe3d8ed8c5611c43aa9d19bbf3884d4af",
-    "bytes": 1976
+    "sha256": "ea7ec587324892fe1c366d19b246bbdff486273d5178f9e26371a4fa5a64dfd8",
+    "bytes": 1957
   },
   "files": {
     "npn-2n2222-to92.glb": {
-      "sha256": "cb547bf46483faf995d92731d1dec76b6670c34ae84c18b3e839ed476e40fc27",
-      "bytes": 71200
+      "sha256": "9788e9405213e2ebb4e1b4b031a2904f57b05616464e7ff0c1bbbfe0f4f5741b",
+      "bytes": 71204
     },
     "npn-2n2222-to92.anchors.json": {
       "sha256": "97fec33cd750ea5b0bf2ebb08e8dfec515c8449bec1664a41569170d151c7404",
       "bytes": 413
-    },
-    "npn-2n2222-to92.source.glb": {
-      "sha256": "446988a74d539e25a7a87dc98073685080c66aff146f9d9ec81d901fc6d91ddb",
-      "bytes": 122064
     }
   },
   "box": {
@@ -41,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 114,
+      "primitives_in": 6,
       "primitives_out": 5
     }
   }

@@ -2,29 +2,25 @@
   "part": "inductor-0805",
   "source": {
     "script": "model.py",
-    "sha256": "3770caefa020efdcba0582d61d020d3f2b83c3633ce830886c76746f0d861aba",
-    "bytes": 1104
+    "sha256": "8008021cace22869e68b3762ee76c18f666e96fd46f489799cd346adcac1932d",
+    "bytes": 1085
   },
   "files": {
     "inductor-0805.glb": {
-      "sha256": "f373c38b87234a7f9f59480bcd768e8f14e7995ab1bad72bf5c32f17f1ccb70b",
-      "bytes": 3788
+      "sha256": "080795026c0fad951114eff506ab99fdbf26ddf77d970e15c3ea7b75d37c7441",
+      "bytes": 2788
     },
     "inductor-0805.anchors.json": {
       "sha256": "2750104ed446073c84231dc2551c04777ea6f3c951b65aff17ca821244f14d43",
       "bytes": 291
-    },
-    "inductor-0805.source.glb": {
-      "sha256": "627dbb225a92d7ebe613db34a0d53fff73c6a54259d09c5c378a13fefb9ccd97",
-      "bytes": 10484
     }
   },
   "box": {
     "min": [-1, -0.625, 0],
     "max": [1, 0.625, 0.88]
   },
-  "kept_nodes": [],
-  "draw_calls": 2,
+  "kept_nodes": ["lead-1", "lead-2"],
+  "draw_calls": 3,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -41,8 +37,8 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 18,
-      "primitives_out": 2
+      "primitives_in": 3,
+      "primitives_out": 3
     }
   }
 }

@@ -2,29 +2,25 @@
   "part": "ptc-fuse-1812",
   "source": {
     "script": "model.py",
-    "sha256": "a781b108c95120515c2e9f496a8f48f0009edb291541a03106622766b4cfd641",
-    "bytes": 1096
+    "sha256": "54bd36e16712b2774977476898a33e29a94114d61681853194d3d7990f4a1203",
+    "bytes": 1077
   },
   "files": {
     "ptc-fuse-1812.glb": {
-      "sha256": "860f8d10a37fdeca90c7778073f0eab5baa6c946ef182b286a3057f520ff6c8f",
-      "bytes": 3800
+      "sha256": "e87b596b3968836b02cb11725a26efd2ba93da9ec7c407137f11757f72299589",
+      "bytes": 2816
     },
     "ptc-fuse-1812.anchors.json": {
       "sha256": "acc43a309871d7d7f1440dfce4bcbf3280e6c21bf661ac02272e62a60b229b5d",
       "bytes": 293
-    },
-    "ptc-fuse-1812.source.glb": {
-      "sha256": "70b64c8fd9c274cb629d2e6ab3c86db67e4d63f08e7dbb1768197dcfe24f78d5",
-      "bytes": 10872
     }
   },
   "box": {
     "min": [-2.275, -1.62, 0],
     "max": [2.275, 1.62, 0.73]
   },
-  "kept_nodes": [],
-  "draw_calls": 2,
+  "kept_nodes": ["lead-1", "lead-2"],
+  "draw_calls": 3,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -41,8 +37,8 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 18,
-      "primitives_out": 2
+      "primitives_in": 3,
+      "primitives_out": 3
     }
   }
 }

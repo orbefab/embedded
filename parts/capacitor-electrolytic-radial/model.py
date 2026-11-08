@@ -74,5 +74,4 @@ if __name__ == "__main__":
         "capacitor-electrolytic-radial",
         cap_electrolytic_anchors(),
         Path(sys.argv[1]),
-        merge_faces=False,
     )

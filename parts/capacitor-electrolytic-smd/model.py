@@ -69,5 +69,4 @@ if __name__ == "__main__":
         "capacitor-electrolytic-smd",
         capacitor_electrolytic_smd_anchors(),
         Path(sys.argv[1]),
-        merge_faces=False,
     )

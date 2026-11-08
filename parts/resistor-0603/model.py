@@ -31,4 +31,4 @@ def resistor_0603_anchors():
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit(f"usage: {Path(__file__).name} <output-folder>")
-    glb.write(resistor_0603_shape(), "resistor-0603", resistor_0603_anchors(), Path(sys.argv[1]), merge_faces=False)
+    glb.write(resistor_0603_shape(), "resistor-0603", resistor_0603_anchors(), Path(sys.argv[1]))

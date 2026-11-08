@@ -482,7 +482,7 @@ mod tests {
     /// The asset step's record holds for every part with a body model: the hashes and sizes
     /// match the files, the anchors cover exactly the leads in `pins` and sit inside the box,
     /// and the GLB's named nodes are exactly the nodes the merge keeps: those `view` and `joints`
-    /// name, and the `node` and `also` of each leg or socket anchor, each once.
+    /// name, and the `node` and `also` of each anchor, each once.
     #[test]
     fn every_body_model_matches_its_asset_record() {
         let catalog = Catalog::builtin();
@@ -499,13 +499,9 @@ mod tests {
             let asset: Value = serde_json::from_slice(asset_bytes)
                 .unwrap_or_else(|e| panic!("{id}: asset.json: {e}"));
             let anchors_name = format!("{id}.anchors.json");
-            let source_name = format!("{id}.source.glb");
             let mut want = vec![glb.as_str()];
             if entry.files.contains_key(&anchors_name) {
                 want.push(&anchors_name);
-            }
-            if entry.files.contains_key(&source_name) {
-                want.push(source_name.as_str());
             }
             let listed = asset["files"].as_object().unwrap();
             let mut names: Vec<&str> = listed.keys().map(String::as_str).collect();
@@ -590,9 +586,6 @@ mod tests {
             let mut policy: BTreeSet<String> =
                 named_nodes(&part).into_iter().map(String::from).collect();
             for anchor in &anchors {
-                if !matches!(anchor["kind"].as_str(), Some("leg" | "socket")) {
-                    continue;
-                }
                 let also = anchor["also"].as_array().unwrap().iter();
                 for node in std::iter::once(&anchor["node"]).chain(also) {
                     let node = node.as_str().unwrap();

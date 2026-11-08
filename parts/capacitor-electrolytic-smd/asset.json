@@ -2,29 +2,25 @@
   "part": "capacitor-electrolytic-smd",
   "source": {
     "script": "model.py",
-    "sha256": "1354b246d1eb7ab64841f4d7b448994cf32606ff9a0eb57a89a0bf6c9eb6f6bc",
-    "bytes": 2345
+    "sha256": "450e1cb2bb43863aa4de5cb22618ad3ce9ab5ba6858f76d68f4a09d3a07808b6",
+    "bytes": 2318
   },
   "files": {
     "capacitor-electrolytic-smd.glb": {
-      "sha256": "38c61c4f66f7e0f37f0acb5815ca1443257544251a9aba780cd553dae8d8dce1",
-      "bytes": 10504
+      "sha256": "4c3731ea2c13ced9a3afa9a036520ba33f0d8f3ee3a4d08b4bd793d95020f66d",
+      "bytes": 9520
     },
     "capacitor-electrolytic-smd.anchors.json": {
       "sha256": "3f0f64fc467f8562434d7112c0c55e40681459e56a9a7be9e0b61ac8fb7b6766",
       "bytes": 304
-    },
-    "capacitor-electrolytic-smd.source.glb": {
-      "sha256": "a0f6ea26eb24b1e1001748a5d10bd600b025f446611ff32a3939ec0d263df018",
-      "bytes": 20784
     }
   },
   "box": {
     "min": [-3.6, -3.3, 0],
     "max": [3.6, 3.3, 5.44]
   },
-  "kept_nodes": [],
-  "draw_calls": 4,
+  "kept_nodes": ["lead-1", "lead-2"],
+  "draw_calls": 5,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -41,8 +37,8 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 27,
-      "primitives_out": 4
+      "primitives_in": 5,
+      "primitives_out": 5
     }
   }
 }

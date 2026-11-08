@@ -61,4 +61,4 @@ def diode_1n4007_shape():
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit(f"usage: {Path(__file__).name} <output-folder>")
-    glb.write(diode_1n4007_shape(), "diode-1n4007", diode_1n4007_anchors(), Path(sys.argv[1]), merge_faces=False)
+    glb.write(diode_1n4007_shape(), "diode-1n4007", diode_1n4007_anchors(), Path(sys.argv[1]))

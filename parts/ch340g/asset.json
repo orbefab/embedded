@@ -18,8 +18,8 @@
   },
   "files": {
     "ch340g.glb": {
-      "sha256": "6f32deb8cb761729c65b33f912023afbf790d138a06989e36daca0a5a8164ea7",
-      "bytes": 13528
+      "sha256": "d864bcb8abe2eb7fb48afb6522853c7cfb2646101caa86730cf836d588f2dd9a",
+      "bytes": 4796
     },
     "ch340g.anchors.json": {
       "sha256": "d0da8323f794331981cae3a5d9a26fd778093d0f90290159533ea0f8083dad29",
@@ -30,8 +30,8 @@
     "min": [-4.95, -3.15, 0],
     "max": [4.95, 3.15, 1.86]
   },
-  "kept_nodes": [],
-  "draw_calls": 2,
+  "kept_nodes": ["lead-1", "lead-10", "lead-11", "lead-12", "lead-13", "lead-14", "lead-15", "lead-16", "lead-2", "lead-3", "lead-4", "lead-5", "lead-6", "lead-7", "lead-8", "lead-9"],
+  "draw_calls": 18,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -49,7 +49,7 @@
     },
     "merge": {
       "primitives_in": 108,
-      "primitives_out": 2
+      "primitives_out": 18
     }
   }
 }

@@ -44,4 +44,4 @@ def resonator_cstce_anchors():
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit(f"usage: {Path(__file__).name} <output-folder>")
-    glb.write(resonator_cstce_shape(), "resonator-cstce", resonator_cstce_anchors(), Path(sys.argv[1]), merge_faces=False)
+    glb.write(resonator_cstce_shape(), "resonator-cstce", resonator_cstce_anchors(), Path(sys.argv[1]))

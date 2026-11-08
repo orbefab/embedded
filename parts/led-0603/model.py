@@ -32,4 +32,4 @@ def led_0603_anchors():
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit(f"usage: {Path(__file__).name} <output-folder>")
-    glb.write(led_0603_shape(), "led-0603", led_0603_anchors(), Path(sys.argv[1]), merge_faces=False)
+    glb.write(led_0603_shape(), "led-0603", led_0603_anchors(), Path(sys.argv[1]))

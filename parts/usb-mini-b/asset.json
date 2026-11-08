@@ -18,8 +18,8 @@
   },
   "files": {
     "usb-mini-b.glb": {
-      "sha256": "a64ae01482ce8818f40a7f60184bd023a6906e7d0c910caa3ae1f511eacffd03",
-      "bytes": 9028
+      "sha256": "927526bd2b56a88f6b0399621898f0bb99b56f372aa847beb1bdb677da71c210",
+      "bytes": 6904
     },
     "usb-mini-b.anchors.json": {
       "sha256": "3456cd3e90404e565c93d78ea4bab82c9407950cd49be9ad2ede4b52941006d2",
@@ -30,8 +30,8 @@
     "min": [-4.2, -4.4, 0],
     "max": [5.2, 4.4, 4]
   },
-  "kept_nodes": [],
-  "draw_calls": 2,
+  "kept_nodes": ["lead-1", "lead-2", "lead-3", "lead-4", "lead-5"],
+  "draw_calls": 7,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -49,7 +49,7 @@
     },
     "merge": {
       "primitives_in": 61,
-      "primitives_out": 2
+      "primitives_out": 7
     }
   }
 }

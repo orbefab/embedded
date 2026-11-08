@@ -31,4 +31,4 @@ def crystal_3215_anchors():
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit(f"usage: {Path(__file__).name} <output-folder>")
-    glb.write(crystal_3215_shape(), "crystal-3215", crystal_3215_anchors(), Path(sys.argv[1]), merge_faces=False)
+    glb.write(crystal_3215_shape(), "crystal-3215", crystal_3215_anchors(), Path(sys.argv[1]))

@@ -2,29 +2,25 @@
   "part": "led-0805",
   "source": {
     "script": "model.py",
-    "sha256": "35e70e3f3c882e9c7a913eefb3cb954330a3deb579eed646c9f6fac0b880344f",
-    "bytes": 1125
+    "sha256": "afd0b23f3a6468fc3a65300fd2ccf0ee943b944b226d6f3ceea0cbbf08502a87",
+    "bytes": 1106
   },
   "files": {
     "led-0805.glb": {
-      "sha256": "8bdc5a6d4ffa6ae3902514c896363c09d848c61463220f97a0e4f6581af5ac32",
-      "bytes": 3816
+      "sha256": "20ef4313096bd21efe089c9da1cddc5ed59876aaddb9cc68bef26cbf5aa2ceac",
+      "bytes": 2832
     },
     "led-0805.anchors.json": {
       "sha256": "69377feed33ff0dda7780a41604ea45dd0b7c8c8e4bf9014a547ebb67e0bdd10",
       "bytes": 286
-    },
-    "led-0805.source.glb": {
-      "sha256": "34d380f783672e7c3178b4704b7b7b77d6f1d196d914a04e29841e85bc4066d6",
-      "bytes": 10936
     }
   },
   "box": {
     "min": [-1, -0.625, 0],
     "max": [1, 0.625, 0.83]
   },
-  "kept_nodes": ["body"],
-  "draw_calls": 2,
+  "kept_nodes": ["body", "lead-1", "lead-2"],
+  "draw_calls": 3,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -41,8 +37,8 @@
       "nodes": ["body"]
     },
     "merge": {
-      "primitives_in": 18,
-      "primitives_out": 2
+      "primitives_in": 3,
+      "primitives_out": 3
     }
   }
 }

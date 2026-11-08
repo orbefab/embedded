@@ -2,21 +2,17 @@
   "part": "capacitor-ceramic-disc",
   "source": {
     "script": "model.py",
-    "sha256": "32f037edb5d15df43ea82e6bac3f38d9cb4b8492247f3c338dbd8fbac863e901",
-    "bytes": 2147
+    "sha256": "7457d3ca9162c5ba7d5fa598048a7b12d86630cd5472a2aec8485457dbc0dce5",
+    "bytes": 2120
   },
   "files": {
     "capacitor-ceramic-disc.glb": {
-      "sha256": "f7058c1cc5cbddde4917d8dcdf59cba360ef72f91e9b06bf0e3f1abb0a9822e7",
+      "sha256": "6c699f2d24443cd889b31032d7d78ea32ce9d5bb21d5ed46e064726c32049055",
       "bytes": 39424
     },
     "capacitor-ceramic-disc.anchors.json": {
       "sha256": "f6bb7b823499867fa2f7d433baac921dca67fd0459594945c017fbfeac6bad92",
       "bytes": 302
-    },
-    "capacitor-ceramic-disc.source.glb": {
-      "sha256": "120e6a82e27b4f5ee5559039855906ca10364f1dc02e0d43244ef646a9080abb",
-      "bytes": 58312
     }
   },
   "box": {
@@ -41,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 46,
+      "primitives_in": 4,
       "primitives_out": 4
     }
   }

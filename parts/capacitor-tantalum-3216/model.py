@@ -39,5 +39,4 @@ if __name__ == "__main__":
         "capacitor-tantalum-3216",
         capacitor_tantalum_3216_anchors(),
         Path(sys.argv[1]),
-        merge_faces=False,
     )

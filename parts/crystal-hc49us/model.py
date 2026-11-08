@@ -63,4 +63,4 @@ def crystal_hc49us_anchors():
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit(f"usage: {Path(__file__).name} <output-folder>")
-    glb.write(crystal_hc49us_shape(), "crystal-hc49us", crystal_hc49us_anchors(), Path(sys.argv[1]), merge_faces=False)
+    glb.write(crystal_hc49us_shape(), "crystal-hc49us", crystal_hc49us_anchors(), Path(sys.argv[1]))

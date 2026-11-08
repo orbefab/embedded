@@ -73,22 +73,19 @@ def _linear_colors(node) -> None:
         _linear_colors(child)
 
 
-def _writer(merge_faces: bool):
-    """OCCT's glTF writer, single-threaded.
+def _writer():
+    """OCCT's glTF writer, single-threaded, with faces of one colour joined.
 
     build123d's export_gltf does not expose face merging. Left per face, a
-    breadboard's 830 holes write some 40 000 accessors, most of its GLB, so
-    `merge_faces` joins them. A part whose GLB was first built from one
-    primitive per face leaves it off: joining here changes the buffer the
-    asset step writes. The parallel path does not repeat the same bytes.
+    breadboard's 830 holes write some 40 000 accessors, most of its GLB.
+    The parallel path does not repeat the same bytes.
     """
     from OCP.RWGltf import RWGltf_CafWriter
 
     class Writer(RWGltf_CafWriter):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            if merge_faces:
-                self.SetMergeFaces(True)
+            self.SetMergeFaces(True)
 
         def SetParallel(self, *args, **kwargs):
             super().SetParallel(False)
@@ -96,7 +93,7 @@ def _writer(merge_faces: bool):
     return Writer
 
 
-def write(shape, part: str, anchors: list[Anchor] | None, folder: Path, *, merge_faces: bool = True) -> None:
+def write(shape, part: str, anchors: list[Anchor] | None, folder: Path) -> None:
     """`anchors` is None for a part with no leads of its own, such as a bare board."""
     leads = sorted(a.lead for a in anchors or ())
     if leads != list(range(1, len(leads) + 1)):
@@ -107,7 +104,7 @@ def write(shape, part: str, anchors: list[Anchor] | None, folder: Path, *, merge
     from build123d import exporters3d
 
     _linear_colors(shape)
-    with patch.object(exporters3d, "RWGltf_CafWriter", _writer(merge_faces)):
+    with patch.object(exporters3d, "RWGltf_CafWriter", _writer()):
         wrote = bd.export_gltf(
             shape,
             str(glb),

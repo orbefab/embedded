@@ -2,29 +2,25 @@
   "part": "diode-cd1206",
   "source": {
     "script": "model.py",
-    "sha256": "5a8c47ff3f2501c596a366072e9e4b5bd4a1c5d3ec216babe4593618836d7729",
-    "bytes": 1474
+    "sha256": "d11deeb1926b1c7b12b47ea51248a14fb173cd054a91a07b0d9ebdc663024d61",
+    "bytes": 1455
   },
   "files": {
     "diode-cd1206.glb": {
-      "sha256": "92083239267132ff8eef3e316510c603b8745208965f430e87fbd787c6e7169d",
-      "bytes": 4668
+      "sha256": "beeffd02fe0b4ba21986ad08ccb7225e1884d41d15d29082754f2f10472f0bd3",
+      "bytes": 3668
     },
     "diode-cd1206.anchors.json": {
       "sha256": "56c8f10561fee4643f644d22531eb84acc4094ee1e0ffe609ef6b6809b8ec907",
       "bytes": 290
-    },
-    "diode-cd1206.source.glb": {
-      "sha256": "f380f0870c364600967fee5a09bf0eea916c88c19e52b5c235f4529c885a08d6",
-      "bytes": 13852
     }
   },
   "box": {
     "min": [-1.6, -0.75, 0],
     "max": [1.6, 0.75, 0.88]
   },
-  "kept_nodes": [],
-  "draw_calls": 3,
+  "kept_nodes": ["lead-1", "lead-2"],
+  "draw_calls": 4,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -41,8 +37,8 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 24,
-      "primitives_out": 3
+      "primitives_in": 4,
+      "primitives_out": 4
     }
   }
 }

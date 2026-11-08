@@ -52,4 +52,4 @@ def to92_2n2222_shape():
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit(f"usage: {Path(__file__).name} <output-folder>")
-    glb.write(to92_2n2222_shape(), "npn-2n2222-to92", to92_2n2222_anchors(), Path(sys.argv[1]), merge_faces=False)
+    glb.write(to92_2n2222_shape(), "npn-2n2222-to92", to92_2n2222_anchors(), Path(sys.argv[1]))

@@ -34,4 +34,4 @@ def ptc_fuse_1812_anchors():
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit(f"usage: {Path(__file__).name} <output-folder>")
-    glb.write(ptc_fuse_1812_shape(), "ptc-fuse-1812", ptc_fuse_1812_anchors(), Path(sys.argv[1]), merge_faces=False)
+    glb.write(ptc_fuse_1812_shape(), "ptc-fuse-1812", ptc_fuse_1812_anchors(), Path(sys.argv[1]))

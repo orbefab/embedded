@@ -18,8 +18,8 @@
   },
   "files": {
     "tactile-switch-smd.glb": {
-      "sha256": "869dfcf7163fe71df31c7368a9d315d8f279f7bfdb859c1d45efb624000ffa07",
-      "bytes": 6388
+      "sha256": "ef0c7f85104aa578f2b5f238e8006c7811e796324b304be29563cad9b16de2f8",
+      "bytes": 4832
     },
     "tactile-switch-smd.anchors.json": {
       "sha256": "61bfdb039c40ce8c589ceb3cfcd4af02537b76bc42dbc449625c0044304b5c04",
@@ -30,8 +30,8 @@
     "min": [-1.75, -3.15, 0],
     "max": [1.75, 3.15, 2.02]
   },
-  "kept_nodes": ["button"],
-  "draw_calls": 2,
+  "kept_nodes": ["button", "leg-1", "leg-2", "leg-3", "leg-4"],
+  "draw_calls": 6,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -49,7 +49,7 @@
     },
     "merge": {
       "primitives_in": 41,
-      "primitives_out": 2
+      "primitives_out": 6
     }
   }
 }

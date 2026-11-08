@@ -63,5 +63,4 @@ if __name__ == "__main__":
         "capacitor-ceramic-disc",
         cap_ceramic_104_anchors(),
         Path(sys.argv[1]),
-        merge_faces=False,
     )

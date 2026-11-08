@@ -44,4 +44,4 @@ def diode_m7_sma_anchors():
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit(f"usage: {Path(__file__).name} <output-folder>")
-    glb.write(diode_m7_sma_shape(), "diode-m7-sma", diode_m7_sma_anchors(), Path(sys.argv[1]), merge_faces=False)
+    glb.write(diode_m7_sma_shape(), "diode-m7-sma", diode_m7_sma_anchors(), Path(sys.argv[1]))

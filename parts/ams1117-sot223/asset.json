@@ -18,8 +18,8 @@
   },
   "files": {
     "ams1117-sot223.glb": {
-      "sha256": "a00f296cc24a1cd85d649e65a5c07a38aad8554ed868ab6172ed8e78d049f4de",
-      "bytes": 5108
+      "sha256": "614f97ed1b8d263b27e9e83b8fbb10ac82cd9c6a5c92321d8e94e4c3658a4361",
+      "bytes": 3660
     },
     "ams1117-sot223.anchors.json": {
       "sha256": "68084bb48473f9456504133524ea9adae100333001ade572b817fa7c1eb4b6b7",
@@ -30,8 +30,8 @@
     "min": [-3.5, -3.25, 0.05],
     "max": [2.725, 3.25, 1.65]
   },
-  "kept_nodes": [],
-  "draw_calls": 2,
+  "kept_nodes": ["lead-1", "lead-2", "lead-3", "lead-4"],
+  "draw_calls": 5,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -49,7 +49,7 @@
     },
     "merge": {
       "primitives_in": 30,
-      "primitives_out": 2
+      "primitives_out": 5
     }
   }
 }

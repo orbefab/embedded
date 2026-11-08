@@ -59,5 +59,4 @@ if __name__ == "__main__":
         "resistor-array-4x0603",
         resistor_array_cay16_anchors(),
         Path(sys.argv[1]),
-        merge_faces=False,
     )

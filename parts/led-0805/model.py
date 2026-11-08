@@ -34,4 +34,4 @@ def led_0805_anchors():
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit(f"usage: {Path(__file__).name} <output-folder>")
-    glb.write(led_0805_shape(), "led-0805", led_0805_anchors(), Path(sys.argv[1]), merge_faces=False)
+    glb.write(led_0805_shape(), "led-0805", led_0805_anchors(), Path(sys.argv[1]))

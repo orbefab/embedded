@@ -2,29 +2,25 @@
   "part": "resistor-0603",
   "source": {
     "script": "model.py",
-    "sha256": "94ebcf61a46bfb98139a5b0e6bf3c2a9602d3e253fdf87ccbf4c63063192c723",
-    "bytes": 966
+    "sha256": "99e93f6ec947577ebb054324e6311ae0516b02ca980136e259d747444b97b4ef",
+    "bytes": 947
   },
   "files": {
     "resistor-0603.glb": {
-      "sha256": "5daaeec83d96386a345b635006663e695b1e07c9e2dc1983fe17b7e51cf28783",
-      "bytes": 3812
+      "sha256": "dfbca4717d1ffd4fa83dd89102d1c611c2765949028b9832b21e56b9a229994b",
+      "bytes": 2812
     },
     "resistor-0603.anchors.json": {
       "sha256": "6b88af0a2abc0b6155417fe745a4b826c53a9f2f21d0414739f1b6b6757e7327",
       "bytes": 291
-    },
-    "resistor-0603.source.glb": {
-      "sha256": "85ce59a991c1ba91df7606889417d6d5fc3b4909f2c9f3c1a169d873ffefd075",
-      "bytes": 10768
     }
   },
   "box": {
     "min": [-0.8, -0.4, 0],
     "max": [0.8, 0.4, 0.48]
   },
-  "kept_nodes": [],
-  "draw_calls": 2,
+  "kept_nodes": ["lead-1", "lead-2"],
+  "draw_calls": 3,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -41,8 +37,8 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 18,
-      "primitives_out": 2
+      "primitives_in": 3,
+      "primitives_out": 3
     }
   }
 }
