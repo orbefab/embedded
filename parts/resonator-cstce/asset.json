@@ -1,20 +1,9 @@
 {
   "part": "resonator-cstce",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/resonator-cstce.glb",
-        "sha256": "e7643d2fe120f9c8406a995efad7fc6d0f07438430ad8896ffb2135633c3518f",
-        "bytes": 13968
-      },
-      "anchors": {
-        "path": "GLB/parts/resonator-cstce.anchors.json",
-        "sha256": "5941360c852bc5ebbcbe07c95f42e2ecc94ef9b17a9431d353803706acc3f6e1",
-        "bytes": 404
-      }
-    }
+    "script": "model.py",
+    "sha256": "a98b875dd9a6d1e57b02f76591f721b7f332519d6fa230666eb7821bd5ded6fd",
+    "bytes": 1573
   },
   "files": {
     "resonator-cstce.glb": {
@@ -24,6 +13,10 @@
     "resonator-cstce.anchors.json": {
       "sha256": "5941360c852bc5ebbcbe07c95f42e2ecc94ef9b17a9431d353803706acc3f6e1",
       "bytes": 404
+    },
+    "resonator-cstce.source.glb": {
+      "sha256": "e7643d2fe120f9c8406a995efad7fc6d0f07438430ad8896ffb2135633c3518f",
+      "bytes": 13968
     }
   },
   "box": {

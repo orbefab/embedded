@@ -1,20 +1,9 @@
 {
   "part": "capacitor-ceramic-disc",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/capacitor-ceramic-disc.glb",
-        "sha256": "120e6a82e27b4f5ee5559039855906ca10364f1dc02e0d43244ef646a9080abb",
-        "bytes": 58312
-      },
-      "anchors": {
-        "path": "GLB/parts/capacitor-ceramic-disc.anchors.json",
-        "sha256": "f6bb7b823499867fa2f7d433baac921dca67fd0459594945c017fbfeac6bad92",
-        "bytes": 302
-      }
-    }
+    "script": "model.py",
+    "sha256": "32f037edb5d15df43ea82e6bac3f38d9cb4b8492247f3c338dbd8fbac863e901",
+    "bytes": 2147
   },
   "files": {
     "capacitor-ceramic-disc.glb": {
@@ -24,6 +13,10 @@
     "capacitor-ceramic-disc.anchors.json": {
       "sha256": "f6bb7b823499867fa2f7d433baac921dca67fd0459594945c017fbfeac6bad92",
       "bytes": 302
+    },
+    "capacitor-ceramic-disc.source.glb": {
+      "sha256": "120e6a82e27b4f5ee5559039855906ca10364f1dc02e0d43244ef646a9080abb",
+      "bytes": 58312
     }
   },
   "box": {

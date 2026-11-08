@@ -1,20 +1,9 @@
 {
   "part": "ptc-fuse-1812",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/ptc-fuse-1812.glb",
-        "sha256": "70b64c8fd9c274cb629d2e6ab3c86db67e4d63f08e7dbb1768197dcfe24f78d5",
-        "bytes": 10872
-      },
-      "anchors": {
-        "path": "GLB/parts/ptc-fuse-1812.anchors.json",
-        "sha256": "acc43a309871d7d7f1440dfce4bcbf3280e6c21bf661ac02272e62a60b229b5d",
-        "bytes": 293
-      }
-    }
+    "script": "model.py",
+    "sha256": "a781b108c95120515c2e9f496a8f48f0009edb291541a03106622766b4cfd641",
+    "bytes": 1096
   },
   "files": {
     "ptc-fuse-1812.glb": {
@@ -24,6 +13,10 @@
     "ptc-fuse-1812.anchors.json": {
       "sha256": "acc43a309871d7d7f1440dfce4bcbf3280e6c21bf661ac02272e62a60b229b5d",
       "bytes": 293
+    },
+    "ptc-fuse-1812.source.glb": {
+      "sha256": "70b64c8fd9c274cb629d2e6ab3c86db67e4d63f08e7dbb1768197dcfe24f78d5",
+      "bytes": 10872
     }
   },
   "box": {

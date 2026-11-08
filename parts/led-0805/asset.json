@@ -1,20 +1,9 @@
 {
   "part": "led-0805",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/led-0805.glb",
-        "sha256": "34d380f783672e7c3178b4704b7b7b77d6f1d196d914a04e29841e85bc4066d6",
-        "bytes": 10936
-      },
-      "anchors": {
-        "path": "GLB/parts/led-0805.anchors.json",
-        "sha256": "69377feed33ff0dda7780a41604ea45dd0b7c8c8e4bf9014a547ebb67e0bdd10",
-        "bytes": 286
-      }
-    }
+    "script": "model.py",
+    "sha256": "35e70e3f3c882e9c7a913eefb3cb954330a3deb579eed646c9f6fac0b880344f",
+    "bytes": 1125
   },
   "files": {
     "led-0805.glb": {
@@ -24,6 +13,10 @@
     "led-0805.anchors.json": {
       "sha256": "69377feed33ff0dda7780a41604ea45dd0b7c8c8e4bf9014a547ebb67e0bdd10",
       "bytes": 286
+    },
+    "led-0805.source.glb": {
+      "sha256": "34d380f783672e7c3178b4704b7b7b77d6f1d196d914a04e29841e85bc4066d6",
+      "bytes": 10936
     }
   },
   "box": {

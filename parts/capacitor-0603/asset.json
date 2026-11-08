@@ -1,20 +1,9 @@
 {
   "part": "capacitor-0603",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/capacitor-0603.glb",
-        "sha256": "e4dfcbe7a0e185562f7a0bd6a3be8b79c23dd5a7dd7888504ad47fe75c3cc1aa",
-        "bytes": 10772
-      },
-      "anchors": {
-        "path": "GLB/parts/capacitor-0603.anchors.json",
-        "sha256": "57c56ac511c0ac4aebccda273016f2ef134636a2bfb5f90eb20d54f54785ddb0",
-        "bytes": 292
-      }
-    }
+    "script": "model.py",
+    "sha256": "fce97baaed2aecd968f23de7023630c233b01898d1351517c7b2c8e9a4cc66af",
+    "bytes": 967
   },
   "files": {
     "capacitor-0603.glb": {
@@ -24,6 +13,10 @@
     "capacitor-0603.anchors.json": {
       "sha256": "57c56ac511c0ac4aebccda273016f2ef134636a2bfb5f90eb20d54f54785ddb0",
       "bytes": 292
+    },
+    "capacitor-0603.source.glb": {
+      "sha256": "e4dfcbe7a0e185562f7a0bd6a3be8b79c23dd5a7dd7888504ad47fe75c3cc1aa",
+      "bytes": 10772
     }
   },
   "box": {

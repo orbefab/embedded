@@ -1,20 +1,9 @@
 {
   "part": "capacitor-tantalum-3216",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/capacitor-tantalum-3216.glb",
-        "sha256": "2fb3581ccdd83a0bfb1a63243cd20675a11ec1e6a5b2f95766468edd818c0260",
-        "bytes": 10820
-      },
-      "anchors": {
-        "path": "GLB/parts/capacitor-tantalum-3216.anchors.json",
-        "sha256": "b4f2571c0ae6aca703b3be324ff39d03bf157043ef3cc3938f1690aaf8ea4c5d",
-        "bytes": 301
-      }
-    }
+    "script": "model.py",
+    "sha256": "0c146d79298bdc552999d2c7361a71060f0b759b3aa2ee67cdeb836658f3afdb",
+    "bytes": 1225
   },
   "files": {
     "capacitor-tantalum-3216.glb": {
@@ -24,6 +13,10 @@
     "capacitor-tantalum-3216.anchors.json": {
       "sha256": "b4f2571c0ae6aca703b3be324ff39d03bf157043ef3cc3938f1690aaf8ea4c5d",
       "bytes": 301
+    },
+    "capacitor-tantalum-3216.source.glb": {
+      "sha256": "2fb3581ccdd83a0bfb1a63243cd20675a11ec1e6a5b2f95766468edd818c0260",
+      "bytes": 10820
     }
   },
   "box": {

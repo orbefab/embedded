@@ -1,20 +1,9 @@
 {
   "part": "inductor-0805",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/inductor-0805.glb",
-        "sha256": "627dbb225a92d7ebe613db34a0d53fff73c6a54259d09c5c378a13fefb9ccd97",
-        "bytes": 10484
-      },
-      "anchors": {
-        "path": "GLB/parts/inductor-0805.anchors.json",
-        "sha256": "2750104ed446073c84231dc2551c04777ea6f3c951b65aff17ca821244f14d43",
-        "bytes": 291
-      }
-    }
+    "script": "model.py",
+    "sha256": "3770caefa020efdcba0582d61d020d3f2b83c3633ce830886c76746f0d861aba",
+    "bytes": 1104
   },
   "files": {
     "inductor-0805.glb": {
@@ -24,6 +13,10 @@
     "inductor-0805.anchors.json": {
       "sha256": "2750104ed446073c84231dc2551c04777ea6f3c951b65aff17ca821244f14d43",
       "bytes": 291
+    },
+    "inductor-0805.source.glb": {
+      "sha256": "627dbb225a92d7ebe613db34a0d53fff73c6a54259d09c5c378a13fefb9ccd97",
+      "bytes": 10484
     }
   },
   "box": {

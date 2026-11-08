@@ -1,20 +1,9 @@
 {
   "part": "resistor-array-4x0603",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/resistor-array-4x0603.glb",
-        "sha256": "cdee4bb77ba4bf22c2b79316bfa9a8bf5d157a6110bd9ae63c1acf3c8431c35b",
-        "bytes": 49304
-      },
-      "anchors": {
-        "path": "GLB/parts/resistor-array-4x0603.anchors.json",
-        "sha256": "db061a0bd304f5164ca79185db9515d65fbb3eaa663a8ec23061b3b94d54c546",
-        "bytes": 978
-      }
-    }
+    "script": "model.py",
+    "sha256": "bf7ad2e85a02c784283772ff71037acdf03b29b854821c3552af188e477aef93",
+    "bytes": 2021
   },
   "files": {
     "resistor-array-4x0603.glb": {
@@ -24,6 +13,10 @@
     "resistor-array-4x0603.anchors.json": {
       "sha256": "db061a0bd304f5164ca79185db9515d65fbb3eaa663a8ec23061b3b94d54c546",
       "bytes": 978
+    },
+    "resistor-array-4x0603.source.glb": {
+      "sha256": "cdee4bb77ba4bf22c2b79316bfa9a8bf5d157a6110bd9ae63c1acf3c8431c35b",
+      "bytes": 49304
     }
   },
   "box": {

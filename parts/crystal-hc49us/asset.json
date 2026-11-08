@@ -1,20 +1,9 @@
 {
   "part": "crystal-hc49us",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/crystal-hc49us.glb",
-        "sha256": "a028958a5fca47a642e0b963d289bcb409e76ce82890224c50d5a8cade886cec",
-        "bytes": 30232
-      },
-      "anchors": {
-        "path": "GLB/parts/crystal-hc49us.anchors.json",
-        "sha256": "437e5b733b1cf0d46dfca3fc837678f52785d5b271e2edb103d80ff04b8a33a2",
-        "bytes": 294
-      }
-    }
+    "script": "model.py",
+    "sha256": "149296d500449bbbdb544df7ebcfd2f5545ba31574300f710b98c3380bf952d7",
+    "bytes": 2087
   },
   "files": {
     "crystal-hc49us.glb": {
@@ -24,6 +13,10 @@
     "crystal-hc49us.anchors.json": {
       "sha256": "437e5b733b1cf0d46dfca3fc837678f52785d5b271e2edb103d80ff04b8a33a2",
       "bytes": 294
+    },
+    "crystal-hc49us.source.glb": {
+      "sha256": "a028958a5fca47a642e0b963d289bcb409e76ce82890224c50d5a8cade886cec",
+      "bytes": 30232
     }
   },
   "box": {

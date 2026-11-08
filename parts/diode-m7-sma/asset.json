@@ -1,20 +1,9 @@
 {
   "part": "diode-m7-sma",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/diode-m7-sma.glb",
-        "sha256": "61b9aa0bc6e145b53f62839cfcd28783d9d900fd0a4f788da3e5410fc3023c58",
-        "bytes": 14628
-      },
-      "anchors": {
-        "path": "GLB/parts/diode-m7-sma.anchors.json",
-        "sha256": "5d34e914e6ebf6d9606bee9b9ffa5a7ac7d75ab47d777ca6fac162805fd9a4ca",
-        "bytes": 290
-      }
-    }
+    "script": "model.py",
+    "sha256": "753b8fd407a4e172454f539e1fc71585515948a94035804d97019ebfaec5dec8",
+    "bytes": 1511
   },
   "files": {
     "diode-m7-sma.glb": {
@@ -24,6 +13,10 @@
     "diode-m7-sma.anchors.json": {
       "sha256": "5d34e914e6ebf6d9606bee9b9ffa5a7ac7d75ab47d777ca6fac162805fd9a4ca",
       "bytes": 290
+    },
+    "diode-m7-sma.source.glb": {
+      "sha256": "61b9aa0bc6e145b53f62839cfcd28783d9d900fd0a4f788da3e5410fc3023c58",
+      "bytes": 14628
     }
   },
   "box": {

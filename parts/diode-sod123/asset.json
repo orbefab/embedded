@@ -1,20 +1,9 @@
 {
   "part": "diode-sod123",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/diode-sod123.glb",
-        "sha256": "8ec92303961181a95cdabc1055db6793ffd517f037906720bcb7365dc4c1773a",
-        "bytes": 10860
-      },
-      "anchors": {
-        "path": "GLB/parts/diode-sod123.anchors.json",
-        "sha256": "d040d4c1c4acaa07d49354f8d4d6c5c608483d85e9f55683c3d685d844a2b76b",
-        "bytes": 290
-      }
-    }
+    "script": "model.py",
+    "sha256": "d92af25b0bcb3872d46fa43005716e8125b9fffd9c92980c9d6b80e08ae33af9",
+    "bytes": 967
   },
   "files": {
     "diode-sod123.glb": {
@@ -24,6 +13,10 @@
     "diode-sod123.anchors.json": {
       "sha256": "d040d4c1c4acaa07d49354f8d4d6c5c608483d85e9f55683c3d685d844a2b76b",
       "bytes": 290
+    },
+    "diode-sod123.source.glb": {
+      "sha256": "8ec92303961181a95cdabc1055db6793ffd517f037906720bcb7365dc4c1773a",
+      "bytes": 10860
     }
   },
   "box": {
