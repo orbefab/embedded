@@ -1049,25 +1049,25 @@ fn reordering_param_declarations_does_not_change_the_netlist() {
     }
 }
 
-fn required_args(part: &orbe_scene::PartSummary) -> String {
+fn required_args(part: &orbe_scene::Card) -> String {
     let mut fields = Vec::new();
     for param in &part.params {
-        if !matches!(param.default, orbe_scene::ParamDefault::Required) {
+        if !param.required {
             continue;
         }
-        let value = match &param.takes {
-            orbe_scene::Takes::Choice(choices) => serde_json::to_string(&choices[0]).unwrap(),
-            orbe_scene::Takes::File { .. } => "\"build/button.ino.hex\"".to_string(),
-            orbe_scene::Takes::Number { above, below, .. } => {
-                let bound = |text: &str| text.parse::<f64>().unwrap();
-                let number = match (above.as_deref(), below.as_deref()) {
-                    (Some(lo), Some(hi)) => (bound(lo) + bound(hi)) / 2.0,
-                    (Some(lo), None) => bound(lo) + 1.0,
-                    (None, Some(hi)) => bound(hi) - 1.0,
-                    (None, None) => 1.0,
-                };
-                serde_json::to_string(&number.to_string()).unwrap()
-            }
+        let value = if let Some(choices) = &param.choices {
+            serde_json::to_string(&choices[0].name).unwrap()
+        } else if param.file.is_some() {
+            "\"build/button.ino.hex\"".to_string()
+        } else {
+            let bound = |text: &str| text.parse::<f64>().unwrap();
+            let number = match (param.above.as_deref(), param.below.as_deref()) {
+                (Some(lo), Some(hi)) => (bound(lo) + bound(hi)) / 2.0,
+                (Some(lo), None) => bound(lo) + 1.0,
+                (None, Some(hi)) => bound(hi) - 1.0,
+                (None, None) => 1.0,
+            };
+            serde_json::to_string(&number.to_string()).unwrap()
         };
         fields.push(format!("\"{}\": {value}", param.name));
     }
@@ -1091,12 +1091,12 @@ fn every_catalog_part_file_reads_without_a_finding() {
         catalog.len(),
         "the fixture locks every catalog part"
     );
-    let summaries = orbe_scene::catalog_parts();
+    let summaries = orbe_scene::catalog_cards();
     let parts: String = ids
         .iter()
         .enumerate()
         .map(|(i, id)| {
-            let summary = summaries.iter().find(|part| part.id == *id).unwrap();
+            let summary = summaries.iter().find(|part| part.name == *id).unwrap();
             format!(
                 "\"u{i}\": {{ \"type\": \"{id}\"{} }}, ",
                 required_args(summary)
