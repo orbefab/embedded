@@ -223,4 +223,58 @@ mod tests {
         assert_eq!(normal(Path::new("a/../../b/./c")), Path::new("../b/c"));
         assert_eq!(normal(Path::new("/a/../b")), Path::new("/b"));
     }
+
+    /// `missing/../a` is missing, and a trailing slash on a file is not a directory.
+    /// Disk and memory report the same kind, and a `..` through a real directory still reads.
+    #[test]
+    fn memory_matches_disk_on_a_missing_parent_and_a_trailing_slash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        fs::create_dir(root.join("sub")).unwrap();
+        fs::write(root.join("a"), b"A").unwrap();
+        fs::write(root.join("sub").join("b"), b"B").unwrap();
+        let disk = Files::disk();
+        let memory = Files::memory([
+            (root.join("a"), b"A".to_vec()),
+            (root.join("sub").join("b"), b"B".to_vec()),
+        ]);
+        let missing = root.join("missing").join("..").join("a");
+        let slash = PathBuf::from(format!("{}/", root.join("a").display()));
+        let through = root.join("sub").join("..").join("a");
+
+        for path in [&missing, &slash, &through] {
+            assert_eq!(
+                disk.is_file(path),
+                memory.is_file(path),
+                "is_file {}",
+                path.display()
+            );
+            assert_eq!(
+                outcome(disk.read(path)),
+                outcome(memory.read(path)),
+                "read {}",
+                path.display()
+            );
+            assert_eq!(
+                outcome(disk.real(path)),
+                outcome(memory.real(path)),
+                "real {}",
+                path.display()
+            );
+        }
+        assert_eq!(
+            memory.read(&missing).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            memory.read(&slash).unwrap_err().kind(),
+            io::ErrorKind::NotADirectory
+        );
+        assert_eq!(memory.read(&through).unwrap(), b"A");
+        assert_eq!(disk.real(&through).unwrap(), memory.real(&through).unwrap());
+    }
+
+    fn outcome(result: io::Result<impl Sized>) -> Result<(), io::ErrorKind> {
+        result.map(|_| ()).map_err(|error| error.kind())
+    }
 }

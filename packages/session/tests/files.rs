@@ -145,3 +145,87 @@ fn copy(from: &Path, to: &Path) {
         }
     }
 }
+
+fn messages(files: &Files, scene: &Path) -> Vec<String> {
+    match orbe_scene::read(files, scene) {
+        Ok(_) => vec!["read ok".to_string()],
+        Err(found) => found.into_iter().map(|d| d.message).collect(),
+    }
+}
+
+fn memory_of(root: &Path) -> Files {
+    let mut files = Vec::new();
+    walk(root, root, &mut files);
+    Files::memory(files)
+}
+
+/// Extra files in a sealed copy are named in sorted order, from disk and from memory.
+#[test]
+fn extra_files_in_a_sealed_copy_are_named_in_the_same_order() {
+    let tmp = TempDir::new().unwrap();
+    let base = tmp.path().canonicalize().unwrap();
+    let example = "first-target";
+    let dir = base.join("examples").join(example);
+    copy(&repo().join("examples").join(example), &dir);
+    let part = dir.join("parts/led-5mm");
+    fs::write(part.join("z-extra.txt"), "z").unwrap();
+    fs::write(part.join("a-extra.txt"), "a").unwrap();
+    let scene = dir.join("scene.jsonc");
+    let prefix = format!("{}/", base.display());
+    let disk: Vec<String> = messages(&Files::disk(), &scene)
+        .into_iter()
+        .map(|text| text.replace(&prefix, ""))
+        .collect();
+    let memory = messages(
+        &memory(&base, example),
+        &Path::new("examples").join(example).join("scene.jsonc"),
+    );
+    assert_eq!(disk, memory, "{example}");
+    let message = disk
+        .iter()
+        .find(|line| line.contains("a-extra.txt"))
+        .unwrap_or_else(|| panic!("{disk:#?}"));
+    let a = message.find("`a-extra.txt`").expect(message);
+    let z = message.find("`z-extra.txt`").expect(message);
+    assert!(a < z, "{message}");
+}
+
+/// `./missing/../mine.jsonc` is not a part, from disk and from memory.
+#[test]
+fn a_missing_parent_is_not_a_part_from_memory_either() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    fs::write(
+        root.join("scene.jsonc"),
+        "{ \"format\": 1, \"parts\": { \"m\": { \"type\": \"./missing/../mine.jsonc\" } } }\n",
+    )
+    .unwrap();
+    fs::write(root.join("mine.jsonc"), "{}\n").unwrap();
+    let disk = messages(&Files::disk(), &root.join("scene.jsonc"));
+    let memory = messages(&memory_of(&root), Path::new("scene.jsonc"));
+    assert_eq!(disk, memory);
+    assert_eq!(
+        disk,
+        vec!["`./missing/../mine.jsonc` is not a part file or a folder holding part.jsonc"]
+    );
+}
+
+/// `./mine.jsonc/` is not a part, from disk and from memory.
+#[test]
+fn a_trailing_slash_on_a_part_file_is_not_a_part_from_memory_either() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    fs::write(
+        root.join("scene.jsonc"),
+        "{ \"format\": 1, \"parts\": { \"m\": { \"type\": \"./mine.jsonc/\" } } }\n",
+    )
+    .unwrap();
+    fs::write(root.join("mine.jsonc"), "{}\n").unwrap();
+    let disk = messages(&Files::disk(), &root.join("scene.jsonc"));
+    let memory = messages(&memory_of(&root), Path::new("scene.jsonc"));
+    assert_eq!(disk, memory);
+    assert_eq!(
+        disk,
+        vec!["`./mine.jsonc/` is not a part file or a folder holding part.jsonc"]
+    );
+}
