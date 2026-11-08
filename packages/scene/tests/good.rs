@@ -7,6 +7,7 @@ mod common;
 
 use std::fs;
 
+use orbe_scene::Files;
 use serde_json::Value;
 
 #[test]
@@ -22,7 +23,7 @@ fn every_good_fixture_reads_with_its_values() {
             .and_then(|n| n.parse().ok())
             .unwrap_or_else(|| panic!("{name}: the first line is `<n> engine parts`"));
         let project = common::overlaid(&case);
-        let netlist = match orbe_scene::read(&project.path().join("scene.jsonc")) {
+        let netlist = match orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc")) {
             Ok(netlist) => netlist,
             Err(found) => {
                 failures.push(format!("{name}: {found:#?}"));

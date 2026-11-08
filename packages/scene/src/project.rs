@@ -2,7 +2,6 @@
 //! `parts.lock`.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -10,6 +9,7 @@ use sha2::{Digest, Sha256};
 
 use crate::catalog::{self, Version};
 use crate::diagnostic::{Code, Findings};
+use crate::files::{Files, Kind};
 use crate::model::{Comp, Part, Scene, TypeRef, decode_part, decode_scene};
 use crate::name::did_you_mean;
 use crate::source::{FileId, Sources, Span, display};
@@ -24,7 +24,8 @@ pub(crate) enum Owner {
     Part(usize),
 }
 
-pub(crate) struct Project {
+pub(crate) struct Project<'f> {
+    pub(crate) files: &'f Files,
     pub(crate) sources: Sources,
     pub(crate) scene: Scene,
     pub(crate) parts: Vec<Part>,
@@ -39,7 +40,7 @@ pub(crate) struct Project {
     pub(crate) unknown_part: bool,
 }
 
-impl Project {
+impl Project<'_> {
     pub(crate) fn comp(&self, owner: Owner) -> &Comp {
         match owner {
             Owner::Scene => &self.scene.comp,
@@ -63,6 +64,7 @@ struct LockLine {
 }
 
 struct Loader<'a> {
+    files: &'a Files,
     out: &'a mut Findings,
     sources: Sources,
     scene_path: PathBuf,
@@ -81,13 +83,18 @@ struct Loader<'a> {
 
 /// Reads the scene and everything it uses. When the scene itself does not read, the files
 /// read so far, so its findings can be placed.
-pub(crate) fn load(scene_path: &Path, out: &mut Findings) -> Result<Project, Sources> {
-    let add = add_command(hint_dir(scene_path).as_deref());
-    let scene_path = scene_path
-        .canonicalize()
+pub(crate) fn load<'f>(
+    files: &'f Files,
+    scene_path: &Path,
+    out: &mut Findings,
+) -> Result<Project<'f>, Sources> {
+    let add = add_command(hint_dir(files, scene_path).as_deref());
+    let scene_path = files
+        .real(scene_path)
         .unwrap_or_else(|_| scene_path.to_path_buf());
     let root = scene_path.parent().unwrap_or(Path::new(".")).to_path_buf();
     let mut loader = Loader {
+        files,
         out,
         sources: Sources::new(&root),
         scene_path: scene_path.clone(),
@@ -122,6 +129,7 @@ pub(crate) fn load(scene_path: &Path, out: &mut Findings) -> Result<Project, Sou
         }
     }
     Ok(Project {
+        files,
         sources: loader.sources,
         scene,
         parts: loader.parts,
@@ -134,7 +142,7 @@ pub(crate) fn load(scene_path: &Path, out: &mut Findings) -> Result<Project, Sou
 
 impl Loader<'_> {
     fn read(&mut self, path: &Path) -> Option<FileId> {
-        match fs::read_to_string(path) {
+        match self.files.read_to_string(path) {
             Ok(text) => Some(self.sources.add(path, text)),
             Err(error) => {
                 let file = self.sources.add(path, String::new());
@@ -157,7 +165,7 @@ impl Loader<'_> {
 
     fn read_lock(&mut self, root: &Path) {
         let path = root.join("parts.lock");
-        if !path.is_file() {
+        if !self.files.is_file(&path) {
             return;
         }
         let Some(file) = self.read(&path) else { return };
@@ -210,12 +218,12 @@ impl Loader<'_> {
             let found = match ty {
                 TypeRef::Id(id) => {
                     let path = root.join("parts").join(&id).join("part.jsonc");
-                    if !self.lock.contains_key(&id) || !path.is_file() {
+                    if !self.lock.contains_key(&id) || !self.files.is_file(&path) {
                         self.missing.push((id, span));
                         continue;
                     }
                     let found = self.load_part(
-                        &path.canonicalize().unwrap_or(path),
+                        &self.files.real(&path).unwrap_or(path),
                         id.clone(),
                         true,
                         span,
@@ -251,13 +259,13 @@ impl Loader<'_> {
 
     fn part_path(&mut self, owner_path: &Path, rel: &str, span: Span) -> Option<PathBuf> {
         let mut path = owner_path.parent().unwrap_or(Path::new(".")).join(rel);
-        if path.is_dir() {
+        if self.files.is_dir(&path) {
             path = path.join("part.jsonc");
         }
         let is_json = path
             .extension()
             .is_some_and(|e| e == "jsonc" || e == "json");
-        if !path.is_file() || !is_json {
+        if !self.files.is_file(&path) || !is_json {
             self.out.push(
                 Code::Type,
                 span,
@@ -266,7 +274,7 @@ impl Loader<'_> {
             );
             return None;
         }
-        let path = path.canonicalize().unwrap_or(path);
+        let path = self.files.real(&path).unwrap_or(path);
         if path == self.scene_path {
             self.out.push(
                 Code::Role,
@@ -375,7 +383,7 @@ impl Loader<'_> {
         );
         let known: Vec<String> = self.lock.keys().cloned().chain(catalog::ids()).collect();
         let parts = root.join("parts");
-        let blocked = fs::symlink_metadata(&parts).is_ok() && !parts.is_dir();
+        let blocked = self.files.link_kind(&parts).is_some() && !self.files.is_dir(&parts);
         for (id, span, why, _) in &found {
             let hint = if blocked {
                 "move `parts` out of the way, since part folders go in a folder named `parts`. then check again for the command that adds them".into()
@@ -394,10 +402,10 @@ impl Loader<'_> {
     /// replace it.
     fn why_missing(&self, root: &Path, id: &str) -> (String, bool) {
         let parts = root.join("parts");
-        if let Ok(meta) = fs::symlink_metadata(&parts)
-            && !parts.is_dir()
+        if let Some(kind) = self.files.link_kind(&parts)
+            && !self.files.is_dir(&parts)
         {
-            let what = if meta.is_file() {
+            let what = if kind == Kind::File {
                 "is a file, not a folder"
             } else {
                 "is not a folder"
@@ -406,7 +414,7 @@ impl Loader<'_> {
         }
         let folder = parts.join(id);
         let listed = self.lock.contains_key(id);
-        let Ok(meta) = fs::symlink_metadata(&folder) else {
+        let Some(kind) = self.files.link_kind(&folder) else {
             let why = if listed {
                 "has a parts.lock line but no folder"
             } else {
@@ -414,26 +422,26 @@ impl Loader<'_> {
             };
             return (why.into(), false);
         };
-        if meta.file_type().is_symlink() {
+        if kind == Kind::Link {
             return (
                 format!("is parts/{id}, which is a link, not a folder"),
                 true,
             );
         }
-        if !meta.is_dir() {
+        if kind != Kind::Dir {
             return (
                 format!("is parts/{id}, which is a file, not a folder"),
                 true,
             );
         }
-        if !folder.join("part.jsonc").is_file() {
+        if !self.files.is_file(&folder.join("part.jsonc")) {
             return (
                 format!("has a folder, parts/{id}, with no part.jsonc"),
                 true,
             );
         }
         let differs = catalog::find(id)
-            .is_none_or(|original| hash_folder(&folder).ok() != Some(original.hash));
+            .is_none_or(|original| hash_folder(self.files, &folder).ok() != Some(original.hash));
         ("is not in this project's parts.lock".into(), differs)
     }
 
@@ -477,9 +485,9 @@ impl Loader<'_> {
             }
             let folder = root.join("parts").join(id);
             let path = folder.join("part.jsonc");
-            let file = self.sources.find(&path.canonicalize().unwrap_or(path));
+            let file = self.sources.find(&self.files.real(&path).unwrap_or(path));
             let at = file.map_or(line.span, Span::start_of);
-            let hash = match hash_folder(&folder) {
+            let hash = match hash_folder(self.files, &folder) {
                 Ok(hash) => Some(hash),
                 Err((path, error)) => {
                     self.unhashable(id, &folder, &path, &error, at);
@@ -509,7 +517,7 @@ impl Loader<'_> {
                         ),
                         span,
                     ),
-                    None => match original.files_differing(&folder) {
+                    None => match original.files_differing(self.files, &folder) {
                         Some(files) => (
                             format!(
                                 "sealed part `{id}` differs from `{id}@{}` in {files}",
@@ -574,7 +582,7 @@ impl Loader<'_> {
         let link = path
             .ancestors()
             .take_while(|p| *p != folder && p.starts_with(folder))
-            .filter(|p| p.is_symlink())
+            .filter(|p| self.files.link_kind(p) == Some(Kind::Link))
             .last();
         let (shown, hint) = match link {
             Some(link) => {
@@ -730,31 +738,31 @@ fn first_difference(copy: &Node, original: &Node, path: String) -> Option<(Strin
 /// The SHA-256 over a folder's files, paths included: one line `<sha256>  <path>` per file,
 /// sorted by path, with `/` between path parts. Written as `sha256:<hex>`, as in `parts.lock`.
 pub fn folder_hash(dir: &Path) -> io::Result<String> {
-    hash_folder(dir).map_err(|(_, error)| error)
+    hash_folder(&Files::disk(), dir).map_err(|(_, error)| error)
 }
 
-/// [`folder_hash`], with the path that could not be read.
-fn hash_folder(dir: &Path) -> Result<String, (PathBuf, io::Error)> {
-    let mut files = Vec::new();
-    collect(dir, dir, &mut files)?;
+/// [`folder_hash`] in `files`, with the path that could not be read.
+fn hash_folder(files: &Files, dir: &Path) -> Result<String, (PathBuf, io::Error)> {
+    let mut found = Vec::new();
+    collect(files, dir, dir, &mut found)?;
     Ok(hash_files(
-        files.iter().map(|(p, b)| (p.as_str(), b.as_slice())),
+        found.iter().map(|(p, b)| (p.as_str(), b.as_slice())),
     ))
 }
 
 fn collect(
+    files: &Files,
     root: &Path,
     dir: &Path,
-    files: &mut Vec<(String, Vec<u8>)>,
+    found: &mut Vec<(String, Vec<u8>)>,
 ) -> Result<(), (PathBuf, io::Error)> {
     let at = |path: &Path, error| (path.to_path_buf(), error);
-    for entry in fs::read_dir(dir).map_err(|e| at(dir, e))? {
-        let path = entry.map_err(|e| at(dir, e))?.path();
-        if path.is_dir() {
-            collect(root, &path, files)?;
+    for path in files.list(dir).map_err(|e| at(dir, e))? {
+        if files.is_dir(&path) {
+            collect(files, root, &path, found)?;
         } else {
-            let bytes = fs::read(&path).map_err(|e| at(&path, e))?;
-            files.push((display(root, &path), bytes));
+            let bytes = files.read(&path).map_err(|e| at(&path, e))?;
+            found.push((display(root, &path), bytes));
         }
     }
     Ok(())
@@ -793,16 +801,14 @@ pub(crate) fn add_command(dir: Option<&Path>) -> String {
 /// It is the folder check reads parts from, the scene's real folder, as the scene path named it
 /// when that path names the same folder, else relative to the current folder. `None` when that
 /// is the current folder and the scene is `scene.jsonc`, which `orbe add` finds there by itself.
-fn hint_dir(scene: &Path) -> Option<PathBuf> {
+fn hint_dir(files: &Files, scene: &Path) -> Option<PathBuf> {
     let typed = scene
         .parent()
         .filter(|dir| !dir.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    let real = scene.canonicalize().ok();
+    let real = files.real(scene).ok();
     let dir = match real.as_deref().and_then(Path::parent) {
-        Some(real_dir) if typed.canonicalize().ok().as_deref() != Some(real_dir) => {
-            from_cwd(real_dir)
-        }
+        Some(real_dir) if files.real(typed).ok().as_deref() != Some(real_dir) => from_cwd(real_dir),
         _ => typed.to_path_buf(),
     };
     let found = real.as_deref().unwrap_or(scene).file_name() == Some("scene.jsonc".as_ref());

@@ -4,11 +4,14 @@
 //! A scene's folder is its project root. An id such as `led-5mm` reads `parts/led-5mm/` there
 //! and needs a line in `parts.lock`. A `./` or `../` path reads a part of the user's own,
 //! relative to the file that names it.
+//!
+//! [`Files`] says where those files are read from.
 
 mod add;
 mod catalog;
 mod circuit;
 mod diagnostic;
+mod files;
 mod kinds;
 mod model;
 mod name;
@@ -28,6 +31,7 @@ pub use circuit::{
     View, Wire,
 };
 pub use diagnostic::{Code, Diagnostic, Lint};
+pub use files::Files;
 pub use model::STOP_PS;
 pub use project::{REGISTRY, folder_hash};
 pub use summary::{
@@ -38,17 +42,17 @@ pub use summary::{
 
 /// Type-checks a scene and every part file it reaches. On success, the netlist the engine
 /// opens. Otherwise every finding, sorted by file, line and column.
-pub fn read(scene: &Path) -> Result<Netlist, Vec<Diagnostic>> {
-    compile(scene, false).map(|(netlist, _)| netlist)
+pub fn read(files: &Files, scene: &Path) -> Result<Netlist, Vec<Diagnostic>> {
+    compile(files, scene, false).map(|(netlist, _)| netlist)
 }
 
 /// The catalog part ids a scene names, including ids reached through other parts.
 /// A comment is not a name. The ids are in order. A missing catalog part is one of
 /// the ids, and so is a modified copy. An id the catalog does not have, and any
 /// other finding, is the error.
-pub fn catalog_ids(scene: &Path) -> Result<Vec<String>, Vec<Diagnostic>> {
+pub fn catalog_ids(files: &Files, scene: &Path) -> Result<Vec<String>, Vec<Diagnostic>> {
     let mut findings = diagnostic::Findings::default();
-    let project = match project::load(scene, &mut findings) {
+    let project = match project::load(files, scene, &mut findings) {
         Ok(project) => project,
         Err(sources) => return Err(findings.into_diagnostics(&sources)),
     };
@@ -66,13 +70,17 @@ pub fn catalog_ids(scene: &Path) -> Result<Vec<String>, Vec<Diagnostic>> {
 
 /// [`read`], then on a scene that reads, the lint rules' warnings, sorted by file, line and
 /// column. Otherwise `read`'s errors.
-pub fn lint(scene: &Path) -> Result<Vec<Diagnostic>, Vec<Diagnostic>> {
-    compile(scene, true).map(|(_, warnings)| warnings)
+pub fn lint(files: &Files, scene: &Path) -> Result<Vec<Diagnostic>, Vec<Diagnostic>> {
+    compile(files, scene, true).map(|(_, warnings)| warnings)
 }
 
-fn compile(scene: &Path, lint: bool) -> Result<(Netlist, Vec<Diagnostic>), Vec<Diagnostic>> {
+fn compile(
+    files: &Files,
+    scene: &Path,
+    lint: bool,
+) -> Result<(Netlist, Vec<Diagnostic>), Vec<Diagnostic>> {
     let mut findings = diagnostic::Findings::default();
-    let project = match project::load(scene, &mut findings) {
+    let project = match project::load(files, scene, &mut findings) {
         Ok(project) => project,
         Err(sources) => return Err(findings.into_diagnostics(&sources)),
     };

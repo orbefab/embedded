@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Arg, ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand};
-use orbe_scene::{Diagnostic, Reply, Request};
+use orbe_scene::{Diagnostic, Files, Reply, Request};
 use orbe_session::test::{self, Report};
 use serde_json::{Value, json};
 
@@ -546,7 +546,7 @@ fn run_tests(paths: &[PathBuf], verbose: bool, json: bool) -> ExitCode {
             Ok(text) => text,
             Err(error) => return io_exit(&format!("{}: {error}", file.display()), json),
         };
-        let report = test::run(file, &text, root);
+        let report = test::run(Files::disk(), file, &text, root);
         if !json {
             print_report(&report, verbose);
         }
@@ -672,7 +672,7 @@ fn check(scene: &Path, json: bool) -> ExitCode {
     if let Some(exit) = no_scene(scene, json) {
         return exit;
     }
-    let netlist = match orbe_scene::read(scene) {
+    let netlist = match orbe_scene::read(&Files::disk(), scene) {
         Ok(netlist) => netlist,
         Err(errors) => return invalid(scene, errors, json),
     };
@@ -708,7 +708,7 @@ fn lint(scene: &Path, json: bool) -> ExitCode {
     if let Some(exit) = no_scene(scene, json) {
         return exit;
     }
-    let warnings = match orbe_scene::lint(scene) {
+    let warnings = match orbe_scene::lint(&Files::disk(), scene) {
         Ok(warnings) => placed(scene, warnings),
         Err(errors) => return invalid(scene, errors, json),
     };

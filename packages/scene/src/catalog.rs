@@ -3,11 +3,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::fs;
 use std::path::Path;
 
 use crate::diagnostic::Findings;
-use crate::project::{self, hash_files};
+use crate::files::Files;
+use crate::project::hash_files;
 use crate::source::Sources;
 use crate::syntax::{self, Node};
 
@@ -54,10 +54,10 @@ impl Original {
 
     /// The files of `folder` that differ from this version's, for a message. `None` when
     /// every file matches.
-    pub(crate) fn files_differing(&self, folder: &Path) -> Option<String> {
+    pub(crate) fn files_differing(&self, files: &Files, folder: &Path) -> Option<String> {
         let mut names: Vec<String> = Vec::new();
         for (rel, bytes) in &self.files {
-            match fs::read(folder.join(rel)) {
+            match files.read(&folder.join(rel)) {
                 Ok(copy) if copy == *bytes => {}
                 Ok(_) if *rel == "part.jsonc" => {
                     names.push("the comments or spacing of `part.jsonc`".into())
@@ -67,7 +67,7 @@ impl Original {
             }
         }
         let mut extra = Vec::new();
-        list(folder, folder, &mut extra);
+        list(files, folder, folder, &mut extra);
         for rel in extra
             .iter()
             .filter(|rel| !self.files.iter().any(|(r, _)| r == rel))
@@ -131,7 +131,7 @@ pub(crate) struct Catalog {
 impl Catalog {
     pub(crate) fn official() -> Catalog {
         Catalog {
-            registry: project::REGISTRY.to_string(),
+            registry: crate::project::REGISTRY.to_string(),
             entries: BTreeMap::new(),
         }
     }
@@ -261,22 +261,17 @@ pub(crate) fn entry_from_files(
     Ok(CatalogEntry {
         id: id.to_string(),
         version,
-        sealed: project::is_sealed(&tree),
+        sealed: crate::project::is_sealed(&tree),
         files,
         hash,
         uses,
     })
 }
 
-fn list(root: &Path, dir: &Path, out: &mut Vec<String>) {
-    for path in fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-    {
-        if path.is_dir() {
-            list(root, &path, out);
+fn list(files: &Files, root: &Path, dir: &Path, out: &mut Vec<String>) {
+    for path in files.list(dir).into_iter().flatten() {
+        if files.is_dir(&path) {
+            list(files, root, &path, out);
         } else {
             out.push(crate::source::display(root, &path));
         }
@@ -289,6 +284,7 @@ mod tests {
     use crate::project::{folder_hash, hex};
     use serde_json::Value;
     use sha2::{Digest, Sha256};
+    use std::fs;
 
     #[test]
     fn the_builtin_catalog_matches_the_parts_tree() {

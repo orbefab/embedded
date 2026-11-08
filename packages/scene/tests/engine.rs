@@ -7,6 +7,7 @@ use orbe_circuit::{Input, Session, Setting, Status};
 use orbe_engine_core::name::{Name, Ref};
 use orbe_engine_core::netlist::Contact;
 use orbe_engine_core::time::Time;
+use orbe_scene::Files;
 
 /// The values while pressed, measured on engine 0.42.0, to the digits recorded then.
 const D13_PRESSED_V: f64 = 4.6218482;
@@ -27,7 +28,7 @@ fn read(session: &Session, r: &str) -> f64 {
 #[test]
 fn pressing_the_button_lights_led1() {
     let project = common::project("nano-button");
-    let netlist = orbe_scene::read(&project.path().join("scene.jsonc")).unwrap();
+    let netlist = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc")).unwrap();
     let mut session = Session::open_document(netlist.json.as_bytes()).unwrap();
     for (at, contact) in [(50, Contact::Closed), (150, Contact::Open)] {
         let input = Input {

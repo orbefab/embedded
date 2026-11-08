@@ -5,6 +5,7 @@ mod common;
 use std::fs;
 
 use common::{fixture, lock_line, locked_ids, project};
+use orbe_scene::Files;
 use serde_json::Value;
 
 #[test]
@@ -39,7 +40,7 @@ fn parts_lock_matches_the_catalog() {
 
 fn read(scene: &str) -> (orbe_scene::Netlist, Value) {
     let project = project("nano-button");
-    let netlist = orbe_scene::read(&project.path().join(scene))
+    let netlist = orbe_scene::read(&Files::disk(), &project.path().join(scene))
         .unwrap_or_else(|d| panic!("{scene} did not read: {d:#?}"));
     let json: Value = serde_json::from_str(&netlist.json).unwrap();
     (netlist, json)
@@ -190,7 +191,7 @@ fn an_edited_nano_copy_is_modified_and_still_reads() {
         ),
     )
     .unwrap();
-    let netlist = orbe_scene::read(&project.path().join("scene.jsonc")).unwrap();
+    let netlist = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc")).unwrap();
     assert_eq!(netlist.modified, vec!["nano-board".to_string()]);
 }
 
@@ -211,7 +212,7 @@ fn a_sealed_edit_with_its_lock_line_rewritten_is_still_modified() {
         .map(|l| if l.starts_with("led-5mm ") { lock_line(project.path(), "led-5mm") } else { l.to_string() } + "\n")
         .collect();
     fs::write(&lock, lines).unwrap();
-    let found = orbe_scene::read(&project.path().join("scene.jsonc"))
+    let found = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc"))
         .err()
         .unwrap();
     assert_eq!(found.len(), 1, "{found:#?}");
@@ -240,7 +241,7 @@ fn a_bounce_window_fills_the_switch_with_its_default_count() {
         ),
     )
     .unwrap();
-    let netlist = orbe_scene::read(&scene).unwrap();
+    let netlist = orbe_scene::read(&Files::disk(), &scene).unwrap();
     let json: Value = serde_json::from_str(&netlist.json).unwrap();
     let btn1 = json["parts"]
         .as_array()
@@ -256,7 +257,7 @@ fn a_bounce_window_fills_the_switch_with_its_default_count() {
 }
 
 fn scene_errors(root: &std::path::Path) -> Vec<orbe_scene::Diagnostic> {
-    orbe_scene::read(&root.join("scene.jsonc"))
+    orbe_scene::read(&Files::disk(), &root.join("scene.jsonc"))
         .err()
         .unwrap_or_else(|| panic!("scene read with no findings"))
 }
@@ -473,7 +474,7 @@ fn a_passed_through_bounce_default_matches_setting_it() {
         ),
     )
     .unwrap();
-    let direct = orbe_scene::read(&scene).unwrap();
+    let direct = orbe_scene::read(&Files::disk(), &scene).unwrap();
 
     let via = project("nano-button");
     fs::write(
@@ -492,7 +493,7 @@ fn a_passed_through_bounce_default_matches_setting_it() {
         ),
     )
     .unwrap();
-    let via = orbe_scene::read(&scene).unwrap_or_else(|d| panic!("{d:#?}"));
+    let via = orbe_scene::read(&Files::disk(), &scene).unwrap_or_else(|d| panic!("{d:#?}"));
     let bounce = |json: &str| {
         let value: Value = serde_json::from_str(json).unwrap();
         value["parts"]
@@ -603,7 +604,7 @@ fn a_hertz_value_reaches_an_integer_field_as_an_integer() {
         ),
     ] {
         let project = clock_project(clock);
-        let netlist = orbe_scene::read(&project.path().join("scene.jsonc"))
+        let netlist = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc"))
             .unwrap_or_else(|d| panic!("{clock:?}: {d:#?}"));
         let value = &engine_part(&netlist, "u2")["clock_hz"]["value"];
         assert_eq!(value.as_u64(), Some(hz), "{clock:?}: {value}");
@@ -616,8 +617,8 @@ fn a_whole_value_object_is_an_integer() {
         BTN1,
         "{ \"type\": \"tactile-switch-6mm\", \"bounce\": { \"value\": 1000000000.0, \"unit\": \"ps\", \"source\": \"user\" }, \"max_bounces\": { \"value\": 2.0, \"unit\": \"1\", \"source\": \"user\" } }",
     );
-    let netlist =
-        orbe_scene::read(&project.path().join("scene.jsonc")).unwrap_or_else(|d| panic!("{d:#?}"));
+    let netlist = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc"))
+        .unwrap_or_else(|d| panic!("{d:#?}"));
     let bounce = &engine_part(&netlist, "btn1")["bounce"];
     assert_eq!(
         bounce["window"]["value"].as_u64(),
@@ -653,8 +654,8 @@ fn a_set_bounce_takes_effect_whatever_its_default() {
         "{ \"type\": \"./parts/sw.jsonc\", \"bounce\": \"2ms\" }",
     );
     fs::write(direct.path().join("parts/sw.jsonc"), ON_SWITCH).unwrap();
-    let netlist =
-        orbe_scene::read(&direct.path().join("scene.jsonc")).unwrap_or_else(|d| panic!("{d:#?}"));
+    let netlist = orbe_scene::read(&Files::disk(), &direct.path().join("scene.jsonc"))
+        .unwrap_or_else(|d| panic!("{d:#?}"));
     let bounce = &engine_part(&netlist, "btn1")["bounce"];
     assert_eq!(
         bounce["window"]["value"].as_u64(),
@@ -675,7 +676,7 @@ fn a_set_bounce_takes_effect_whatever_its_default() {
             format!("{{\n  \"format\": 1,\n  \"params\": {{ \"bounce\": {{ \"default\": \"2ms\" }} }},\n  \"parts\": {{ \"sw\": {{ \"type\": \"{child}\", \"bounce\": {{ \"param\": \"bounce\" }} }} }},\n  \"pins\": {{ \"a\": \"sw.a\", \"b\": \"sw.b\" }}\n}}\n"),
         )
         .unwrap();
-        let netlist = orbe_scene::read(&via.path().join("scene.jsonc"))
+        let netlist = orbe_scene::read(&Files::disk(), &via.path().join("scene.jsonc"))
             .unwrap_or_else(|d| panic!("{child}: {d:#?}"));
         let bounce = &engine_part(&netlist, "btn1__sw")["bounce"];
         assert_eq!(
@@ -719,7 +720,7 @@ fn a_lock_line_the_scene_no_longer_uses_is_not_checked() {
         text = text.replacen(from, to, 1);
     }
     fs::write(&scene, text).unwrap();
-    let netlist = orbe_scene::read(&scene).unwrap_or_else(|d| panic!("{d:#?}"));
+    let netlist = orbe_scene::read(&Files::disk(), &scene).unwrap_or_else(|d| panic!("{d:#?}"));
     assert_eq!(netlist.parts, 17);
 }
 
@@ -826,8 +827,8 @@ fn jumper_board(root: &std::path::Path, drop_jumper: bool) {
 fn a_dropped_jumper_does_not_join_its_wires() {
     let kept = project("nano-button");
     jumper_board(kept.path(), false);
-    let kept =
-        orbe_scene::read(&kept.path().join("scene.jsonc")).unwrap_or_else(|d| panic!("{d:#?}"));
+    let kept = orbe_scene::read(&Files::disk(), &kept.path().join("scene.jsonc"))
+        .unwrap_or_else(|d| panic!("{d:#?}"));
     assert_eq!(
         pin_net(&kept.json, "board__ra", "a"),
         pin_net(&kept.json, "board__rb", "a")
@@ -835,8 +836,8 @@ fn a_dropped_jumper_does_not_join_its_wires() {
 
     let dropped = project("nano-button");
     jumper_board(dropped.path(), true);
-    let dropped =
-        orbe_scene::read(&dropped.path().join("scene.jsonc")).unwrap_or_else(|d| panic!("{d:#?}"));
+    let dropped = orbe_scene::read(&Files::disk(), &dropped.path().join("scene.jsonc"))
+        .unwrap_or_else(|d| panic!("{d:#?}"));
     assert_ne!(
         pin_net(&dropped.json, "board__ra", "a"),
         pin_net(&dropped.json, "board__rb", "a")
@@ -886,7 +887,8 @@ fn every_netlist_counts_the_parts_it_writes() {
         ", \"contacts\": \"gold\"",
     );
     netlists.push(
-        orbe_scene::read(&chosen.path().join("scene.jsonc")).unwrap_or_else(|d| panic!("{d:#?}")),
+        orbe_scene::read(&Files::disk(), &chosen.path().join("scene.jsonc"))
+            .unwrap_or_else(|d| panic!("{d:#?}")),
     );
     for netlist in netlists {
         let json: Value = serde_json::from_str(&netlist.json).unwrap();
@@ -919,7 +921,7 @@ fn a_choice_that_writes_the_whole_object_opens_it() {
         ),
     ] {
         let project = switch_project(&params, "null", "[]", values);
-        let netlist = orbe_scene::read(&project.path().join("scene.jsonc"))
+        let netlist = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc"))
             .unwrap_or_else(|d| panic!("{values}: {d:#?}"));
         let bounce = &engine_part(&netlist, "btn1")["bounce"];
         assert_eq!(bounce["window"]["value"].as_u64(), Some(window), "{bounce}");
@@ -939,8 +941,8 @@ fn a_choice_sets_a_list_item() {
         r#"[{ "t_ps": 1000000000, "state": "closed" }]"#,
         ", \"late\": \"yes\"",
     );
-    let netlist =
-        orbe_scene::read(&project.path().join("scene.jsonc")).unwrap_or_else(|d| panic!("{d:#?}"));
+    let netlist = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc"))
+        .unwrap_or_else(|d| panic!("{d:#?}"));
     assert_eq!(
         engine_part(&netlist, "btn1")["events"][0]["t_ps"].as_u64(),
         Some(2_000_000_000)
@@ -969,7 +971,7 @@ fn an_unset_null_default_keeps_the_model_value() {
 "#,
         )
         .unwrap();
-        let netlist = orbe_scene::read(&project.path().join("scene.jsonc"))
+        let netlist = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc"))
             .unwrap_or_else(|d| panic!("{values}: {d:#?}"));
         engine_part(&netlist, "r1")["resistance"]["value"].clone()
     };
@@ -1027,7 +1029,7 @@ fn reordering_param_declarations_does_not_change_the_netlist() {
         let mut seen = Vec::new();
         for order in orders(&params) {
             let project = switch_project(&order.join(", "), "null", "[]", values);
-            let netlist = orbe_scene::read(&project.path().join("scene.jsonc"))
+            let netlist = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc"))
                 .unwrap_or_else(|d| panic!("{values} {order:?}: {d:#?}"));
             seen.push(engine_part(&netlist, "btn1"));
         }
@@ -1111,7 +1113,7 @@ fn every_catalog_part_file_reads_without_a_finding() {
         format!("{{ \"format\": 1, \"parts\": {{ {parts} }} }}"),
     )
     .unwrap();
-    let found = orbe_scene::read(&project.path().join("scene.jsonc"))
+    let found = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc"))
         .err()
         .unwrap_or_default();
     let in_parts: Vec<_> = found.iter().filter(|d| d.file != "scene.jsonc").collect();
@@ -1136,7 +1138,7 @@ fn both_atmega328p_packages_give_the_engine_the_same_chip() {
         }, "wires": [["tqfp.GND", "dip.GND"]], "ground": "tqfp.GND" }"#,
     )
     .unwrap();
-    let netlist = orbe_scene::read(&project.path().join("scene.jsonc")).unwrap();
+    let netlist = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc")).unwrap();
     let chip = |name: &str| {
         let mut part = engine_part(&netlist, name);
         let fields = part.as_object_mut().unwrap();
@@ -1274,7 +1276,7 @@ fn choice_params_on_one_way_are_checked_in_time_that_follows_their_arms() {
         let send = send.clone();
         std::thread::spawn(move || {
             let started = std::time::Instant::now();
-            let found = orbe_scene::read(&project.path().join("scene.jsonc")).err();
+            let found = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc")).err();
             send.send((label, found, started.elapsed())).unwrap();
         });
     }
@@ -1320,7 +1322,7 @@ fn id_is_one_component(id: &str) -> bool {
 
 fn refresh_example(dir: &std::path::Path) {
     let scene = dir.join("scene.jsonc");
-    let ids = orbe_scene::catalog_ids(&scene).unwrap_or_else(|found| {
+    let ids = orbe_scene::catalog_ids(&Files::disk(), &scene).unwrap_or_else(|found| {
         panic!(
             "{} did not name its parts:\n{}",
             scene.display(),
@@ -1342,14 +1344,14 @@ fn refresh_example(dir: &std::path::Path) {
             panic!("{}", reply.text());
         }
     }
-    orbe_scene::read(&scene).unwrap_or_else(|found| {
+    orbe_scene::read(&Files::disk(), &scene).unwrap_or_else(|found| {
         panic!(
             "{} did not read after refresh:\n{}",
             scene.display(),
             show(&found)
         )
     });
-    let ids = orbe_scene::catalog_ids(&scene)
+    let ids = orbe_scene::catalog_ids(&Files::disk(), &scene)
         .unwrap_or_else(|found| panic!("{}:\n{}", scene.display(), show(&found)));
     let keep: std::collections::BTreeSet<&str> = ids.iter().map(String::as_str).collect();
     let path = dir.join("parts.lock");
@@ -1394,7 +1396,8 @@ fn a_comment_is_not_a_catalog_id_and_a_split_type_is() {
     let text =
         format!("// \"type\": \"potentiometer-wh148\"\n/* \"type\": \"diode-1n4007\" */\n{text}");
     fs::write(&scene, text).unwrap();
-    let ids = orbe_scene::catalog_ids(&scene).unwrap_or_else(|found| panic!("{found:#?}"));
+    let ids = orbe_scene::catalog_ids(&Files::disk(), &scene)
+        .unwrap_or_else(|found| panic!("{found:#?}"));
     assert!(ids.contains(&"led-5mm".to_string()), "{ids:?}");
     assert!(
         ids.contains(&"resistor-0603".to_string()),

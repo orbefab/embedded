@@ -9,6 +9,8 @@ mod common;
 use std::fs;
 use std::path::Path;
 
+use orbe_scene::Files;
+
 const CODES: &[&str] = &[
     "scene.syntax",
     "scene.format",
@@ -32,7 +34,7 @@ const CODES: &[&str] = &[
 
 fn run(case: &Path) -> (Vec<(String, String, String)>, String) {
     let project = common::overlaid(case);
-    let diagnostics = orbe_scene::read(&project.path().join("scene.jsonc"))
+    let diagnostics = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc"))
         .err()
         .unwrap_or_default();
     let found = diagnostics

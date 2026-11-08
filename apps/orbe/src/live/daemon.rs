@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use orbe_session::{Code, Command, Data, Error, Frames, Live, Pace, Reply, Sample};
+use orbe_session::{Code, Command, Data, Error, Files, Frames, Live, Pace, Reply, Sample};
 use serde_json::json;
 
 use super::page::Page;
@@ -378,7 +378,7 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
     let reading = Arc::new(AtomicUsize::new(0));
     let timer = unopened_timer(events.clone(), UNOPENED.min(idle), Arc::clone(&reading));
     let mut held = Held {
-        live: Live::new(name.as_str()),
+        live: Live::new(name.as_str(), Files::disk()),
         scene: None,
         watchers: Watchers::default(),
         url: None,
