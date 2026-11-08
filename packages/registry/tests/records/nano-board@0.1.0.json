@@ -39,6 +39,13 @@
       "license": "MIT OR Apache-2.0"
     },
     {
+      "path": "model.py",
+      "url": "files/<sha256>",
+      "sha256": "<sha256>",
+      "bytes": 0,
+      "license": "MIT OR Apache-2.0"
+    },
+    {
       "path": "nano-board.glb",
       "url": "files/<sha256>",
       "sha256": "<sha256>",
