@@ -58,11 +58,16 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
         assert_eq!(
             keys,
             [
-                "block", "board", "format", "license", "summary", "tags", "title"
+                "block", "board", "format", "license", "summary", "tags", "title", "version"
             ],
             "{id}"
         );
         assert_eq!(block["format"], json!(1), "{id}");
+        let version = block["version"].as_str().unwrap();
+        assert!(
+            orbe_scene::Version::parse(version).is_some(),
+            "{id}: version"
+        );
         assert_eq!(
             block["block"],
             json!(id),

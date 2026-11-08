@@ -185,6 +185,7 @@ const LAMP: &str = r#"{
   "part": "lamp",
   "version": "1.2.0",
   "title": "Lamp",
+  "license": "MIT",
   "pins": { "a": [1], "b": [2] },
   "model": { "kind": "resistor" },
 }
@@ -202,7 +203,7 @@ fn third_party() -> tempfile::TempDir {
     put(
         dir.path(),
         "blocks/lamp-demo/block.jsonc",
-        r#"{ "format": 1, "block": "lamp-demo", "title": "A lamp", "board": "lamp", "license": "MIT" }"#,
+        r#"{ "format": 1, "block": "lamp-demo", "version": "0.1.0", "title": "A lamp", "board": "lamp", "license": "MIT" }"#,
     );
     put(
         dir.path(),
@@ -227,7 +228,7 @@ fn another_folder_of_parts_and_blocks_builds_and_counts_what_it_lacks() {
     for absent in ["description", "categories", "docs", "buy"] {
         assert!(lamp.get(absent).is_none(), "{absent}");
     }
-    assert_eq!(lamp["license"], "MIT OR Apache-2.0");
+    assert_eq!(lamp["license"], "MIT");
 
     let report = &registry.report;
     assert_eq!((report.parts, report.blocks, report.models), (1, 1, 0));
@@ -352,7 +353,7 @@ fn a_part_that_uses_a_version_the_registry_lacks_does_not_build() {
     put(
         src.path(),
         "parts/lamp-pair/part.jsonc",
-        r#"{ "format": 1, "part": "lamp-pair", "version": "0.1.0", "title": "Two lamps", "uses": { "lamp": "1.0.0" }, "parts": { "a": { "type": "lamp" } } }"#,
+        r#"{ "format": 1, "part": "lamp-pair", "version": "0.1.0", "title": "Two lamps", "license": "MIT", "uses": { "lamp": "1.0.0" }, "parts": { "a": { "type": "lamp" } } }"#,
     );
     assert!(invalid(src.path()).contains("uses `lamp@1.0.0`, which these parts lack"));
 }

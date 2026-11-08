@@ -183,6 +183,7 @@ impl From<BlockCard> for Item {
             license,
             parts,
             files,
+            ..
         } = card;
         Item::Block(BlockItem {
             name,

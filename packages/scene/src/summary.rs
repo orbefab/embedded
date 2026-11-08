@@ -5,7 +5,6 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -17,8 +16,6 @@ use crate::syntax::Node;
 
 /// A folder's files, each by its `/`-separated path from the folder.
 pub type Folder = BTreeMap<String, Vec<u8>>;
-
-const PART_LICENSE: &str = "MIT OR Apache-2.0";
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Card {
@@ -49,43 +46,57 @@ pub struct Card {
     pub pressable: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Real {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub maker: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub number: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub datasheet: Option<String>,
     #[serde(skip_serializing_if = "skip_false")]
     pub generic: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Pin {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<u64>"))]
     pub leads: Option<Vec<u64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<String>"))]
     pub refs: Option<Vec<String>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Param {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub unit: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Literal"))]
     pub above: Option<Literal>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Literal"))]
     pub below: Option<Literal>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub file: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<Choice>"))]
     pub choices: Option<Vec<Choice>>,
     #[serde(skip_serializing_if = "skip_false")]
     pub required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<Literal>"))]
     pub default: Option<Option<Literal>>,
 }
 
@@ -121,50 +132,61 @@ impl Serialize for Literal {
     }
 }
 
-impl JsonSchema for Literal {
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for Literal {
     fn schema_name() -> std::borrow::Cow<'static, str> {
         "Literal".into()
     }
 
-    fn json_schema(_: &mut SchemaGenerator) -> Schema {
-        json_schema!({
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
             "description": "A number as the part file wrote it, or the name of a choice.",
             "type": ["number", "string"]
         })
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Choice {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub number: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub tint: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Rating {
     pub name: String,
     pub value: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub unit: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Value"))]
     pub source: Option<Value>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct NotSimulated {
     pub what: String,
     pub why: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<String>"))]
     pub pins: Option<Vec<String>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Doc {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub url: Option<String>,
 }
 
@@ -177,14 +199,16 @@ pub struct CardFile {
     pub license: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Buy {
     pub seller: String,
     pub url: String,
     pub checked: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct On {
     pub of: String,
     pub above: f64,
@@ -195,6 +219,9 @@ pub struct On {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct BlockCard {
     pub name: String,
+    pub version: String,
+    /// The folder hash over every file of the Block, as `sha256:<hex>`.
+    pub hash: String,
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -240,6 +267,11 @@ pub fn cards(parts: &BTreeMap<String, Folder>) -> Result<Vec<Card>, String> {
     for (id, files) in parts {
         let tree = catalog::jsonc(id, files, "part.jsonc")?;
         catalog::part_version(id, &tree)?;
+        if text(&tree, "license").is_none() {
+            return Err(format!(
+                "`{id}` part.jsonc has no `license`, and a published part names the SPDX licence its files carry"
+            ));
+        }
         if let Some(named) = tree.get("part").and_then(Node::str)
             && named != id
         {
@@ -282,7 +314,7 @@ pub fn cards(parts: &BTreeMap<String, Folder>) -> Result<Vec<Card>, String> {
 pub fn block_card(id: &str, files: &Folder, parts: &[Card]) -> Result<BlockCard, String> {
     let block = catalog::jsonc(id, files, BLOCK)?;
     let known = [
-        "format", "block", "title", "summary", "board", "tags", "license",
+        "format", "block", "version", "title", "summary", "board", "tags", "license",
     ];
     for prop in block.props().unwrap_or_default() {
         if !known.contains(&prop.key.as_str()) {
@@ -303,6 +335,14 @@ pub fn block_card(id: &str, files: &Folder, parts: &[Card]) -> Result<BlockCard,
             named.unwrap_or("")
         ));
     }
+    let version = block
+        .get("version")
+        .and_then(Node::str)
+        .filter(|version| crate::Version::parse(version).is_some())
+        .ok_or_else(|| {
+            format!("`{id}` {BLOCK} has no version of the form `0.1.0`: three numbers, with no sign and no leading zero")
+        })?
+        .to_string();
     let need =
         |key: &str| text(&block, key).ok_or_else(|| format!("`{id}` {BLOCK} has no `{key}`"));
     let title = need("title")?;
@@ -343,6 +383,12 @@ pub fn block_card(id: &str, files: &Folder, parts: &[Card]) -> Result<BlockCard,
     }
     Ok(BlockCard {
         name: id.to_string(),
+        version,
+        hash: hash_files(
+            files
+                .iter()
+                .map(|(path, bytes)| (path.as_str(), bytes.as_slice())),
+        ),
         title,
         description: text(&block, "summary"),
         categories: list(&block, "tags"),
@@ -527,15 +573,11 @@ fn build<'a>(
     used_by: Vec<String>,
     tree_of: &dyn Fn(&str) -> Option<&'a Node>,
 ) -> Card {
-    let license = tree
-        .get("license")
-        .and_then(Node::str)
-        .unwrap_or(PART_LICENSE);
+    let license = text(tree, "license").unwrap_or_default();
     Card {
         name: id.to_string(),
         title: text(tree, "title").unwrap_or_default(),
         version: text(tree, "version").unwrap_or_default(),
-        license: license.to_string(),
         hash: hash_files(
             files
                 .iter()
@@ -555,7 +597,8 @@ fn build<'a>(
         ratings: ratings(tree),
         not_simulated: gaps(tree),
         docs: docs(tree),
-        files: card_files(license, files),
+        files: card_files(&license, files),
+        license,
         uses: uses(tree),
         used_by,
         buy: buy_links(tree),
@@ -888,13 +931,7 @@ fn card_files(license: &str, files: &Folder) -> Vec<CardFile> {
 }
 
 fn file_license(part_license: &str, bytes: &[u8]) -> String {
-    spdx(bytes).unwrap_or_else(|| {
-        if part_license.is_empty() {
-            PART_LICENSE.to_string()
-        } else {
-            part_license.to_string()
-        }
-    })
+    spdx(bytes).unwrap_or_else(|| part_license.to_string())
 }
 
 fn spdx(bytes: &[u8]) -> Option<String> {
@@ -983,7 +1020,7 @@ mod tests {
             ),
             "MIT OR Apache-2.0"
         );
-        assert_eq!(file_license("", b"not utf8 \xff"), PART_LICENSE);
+        assert_eq!(file_license("MIT", b"not utf8 \xff"), "MIT");
     }
 
     #[test]

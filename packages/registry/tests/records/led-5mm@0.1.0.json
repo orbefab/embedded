@@ -129,6 +129,13 @@
     }
   ],
   "usedBy": [],
+  "buy": [
+    {
+      "seller": "DigiKey",
+      "url": "https://www.digikey.com/en/products/detail/kingbright/WP7113ID/1747663",
+      "checked": "2026-11-08"
+    }
+  ],
   "on": {
     "of": "i",
     "above": 0.001,
