@@ -44,6 +44,8 @@ if [[ ! -e packages/asset-step/node_modules/@gltf-transform/core && ! -e node_mo
   echo "scripts/model.sh: Node dependencies are missing. Run: pnpm install --frozen-lockfile" >&2
   exit 1
 fi
+# A model run must leave nothing in parts/<id>/ but the files it writes, because the folder hash counts every file.
+export PYTHONDONTWRITEBYTECODE=1
 py=packages/cad/.venv/bin/python
 if [[ ! -x "$py" ]] || ! UV_PYTHON_DOWNLOADS=never "$py" -c 'import build123d, cad' >/dev/null 2>&1; then
   echo "scripts/model.sh: the model environment is not installed. Run: uv sync --project packages/cad --frozen" >&2

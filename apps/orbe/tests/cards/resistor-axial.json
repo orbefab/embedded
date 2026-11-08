@@ -20,6 +20,10 @@
     },
     {
       "license": "MIT OR Apache-2.0",
+      "path": "model.py"
+    },
+    {
+      "license": "MIT OR Apache-2.0",
       "path": "part.jsonc"
     },
     {
