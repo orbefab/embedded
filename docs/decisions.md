@@ -44,6 +44,16 @@ A command does what it names and nothing in the background. Where `orbe` could g
 - Parts from other registries are named `@<registry>/<id>`. The first release reads the official registry only.
 - 3D models live in plain git, in the part's folder.
 
+## Blocks (Nov 8 2026)
+- A Block is a small circuit that works: a board, parts, firmware and tests. `blocks/<id>/` holds `block.jsonc`, `scene.jsonc`, `firmware/`, `tests/` and `README.md`. It replaces `examples/`.
+- `block.jsonc` holds what a Block's catalog card needs from the Block itself: `block` (its id, the folder's name), `title`, `summary`, `board`, `tags` and `license`. It does not list parts, since the scene names them.
+- A Block commits no part copies and no `parts.lock`. A folder that holds `block.jsonc` is a Block, and the reader resolves each catalog id its scene names from the catalog built into the same `orbe`. A Block in this repo then always runs the parts of the commit it sits in, so a part change that breaks a Block fails that commit's checks, and no lock or copies go stale beside the catalog.
+- A Block is self-contained. Its firmware sits in its own `firmware/` with the sketch it was built from and the licences that image carries, and its scene names it as `firmware/<name>.hex`, so the path works in the Block and after it is installed.
+- `orbe add <block>` installs a Block into a project: its `scene.jsonc`, `firmware/` and `tests/`, then the parts it uses copied into `parts/` and recorded in `parts.lock`, as `orbe add <part>` does. `block.jsonc` and `README.md` stay behind, so the installed project reads its own copies.
+- `orbe add` never merges a Block into a scene. A project that already holds a different `scene.jsonc`, or any other file the Block brings, is refused before anything is written, and the hint installs into an empty folder. A file already there with the Block's bytes is kept, so the same install run again finishes or changes nothing.
+- Parts and Blocks share `orbe add`, so a Block id is never a catalog part id. A test fails when one is both, and one word names one of them.
+- A published Block will carry the part versions it was tested with. That comes with the registry.
+
 ## Scenes (Nov 4 2026)
 - A scene is its own kind of file, usually `scene.jsonc`. Its keys are `format`, `parts`, `wires`, `layout`, `sim` and `nets`. It has no `pins` or `params`, and no file can use a scene as a part.
 - Scenes and part files are JSONC: JSON plus `//` comments and trailing commas, nothing more. `orbe` generates a JSON Schema, `parts/schema.json`, from the project's parts. A file's `$schema` key points editors at it for completion and value checks.
@@ -83,7 +93,7 @@ Type checking, linting and runtime diagnostics are separate.
 Mates between parts, joints between two parts, importing outside CAD, PCB routing, drawing traces, per-instance placement overrides, A6 and A7, and an `orbe lsp` for editors.
 
 ## Repo (Oct 31 2026)
-One private repo for the whole branch: `orbefab/embedded`. The current sim-engine code moves in first, then maker-sandbox, then the rest (Blocks, skills, examples). The sandbox then builds against the current engine instead of a frozen copy.
+One private repo for the whole branch: `orbefab/embedded`. The current sim-engine code moves in first, then maker-sandbox, then the rest (Blocks and skills). The sandbox then builds against the current engine instead of a frozen copy.
 
 ## Parts model (Oct 31 2026)
 Every part (circuit parts, sensors, dev boards) should eventually have its sim model, specs and 3D model, organized together. An inventory of what exists is the next step.

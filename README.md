@@ -17,7 +17,7 @@ A hardware simulator for AI agents. You describe a circuit as a scene file, flas
 | [`packages/asset-step`](packages/asset-step/) | Imports each part's 3D model and checks it against the part's pins. |
 | [`packages/cad`](packages/cad/) | Helpers for part models. A part's `model.py` uses build123d and these helpers. |
 | [`parts/`](parts/) | The parts catalog. Each folder is one real part: `part.jsonc`, `model.py` when the model is built here, its 3D model and `asset.json`. |
-| [`examples/`](examples/) | Scenes that run, each with its firmware and tests. |
+| [`blocks/`](blocks/) | Blocks: small circuits that work, each with its scene, firmware and tests. `orbe add <block>` installs one into a project. |
 | [`scripts/`](scripts/) | The checks. `check.sh fast` gates every change and is what CI runs, and `check.sh full` runs every check. `scripts/model.sh` builds a part's model. Run `scripts/bless.sh` after adding or changing a part. |
 | [`skills/orbe`](skills/orbe/SKILL.md) | The stub an agent installs. |
 | [`docs/`](docs/) | Finalized docs: [`decisions.md`](docs/decisions.md), [`viewer.md`](docs/viewer.md), [`asset-step.md`](docs/asset-step.md), [`engine/`](docs/engine/README.md). |
