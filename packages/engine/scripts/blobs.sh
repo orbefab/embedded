@@ -51,7 +51,7 @@ elif [[ -n $from ]]; then
 else
     work=$(mktemp -d)
     trap 'rm -rf "$work"' EXIT
-    curl -fsSL -o "$work/archive.tar.gz" "$archive_url"
+    curl -fsSL --retry 5 --retry-delay 2 -o "$work/archive.tar.gz" "$archive_url"
     take "$work/archive.tar.gz"
 fi
 echo "$cache"
