@@ -1,25 +1,14 @@
 {
   "part": "dip-socket-28",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/dip-socket-28.glb",
-        "sha256": "386ef2dfbff536931af5477ea52da4e01210381ff9eb947b691c131afcef9991",
-        "bytes": 332292
-      },
-      "anchors": {
-        "path": "GLB/parts/dip-socket-28.anchors.json",
-        "sha256": "add6e0209c72b8f6cd7a4cfe6335ac16150eacd181ecd99e2298cc079320ceeb",
-        "bytes": 3663
-      }
-    }
+    "script": "model.py",
+    "sha256": "ca8fd1afe2ad3c303810011973585629cd9b76688020805ef3a3ad2b0a9fe1b0",
+    "bytes": 2563
   },
   "files": {
     "dip-socket-28.glb": {
-      "sha256": "896eb444f66fb0da0cba5f9c0f59748b42c5307bd9310f7e4ebe46de6625765a",
-      "bytes": 57052
+      "sha256": "0fed7125d4308fb43f025afc9b1da6106d2f8364cf9904382222d75cf0f48e5c",
+      "bytes": 57040
     },
     "dip-socket-28.anchors.json": {
       "sha256": "add6e0209c72b8f6cd7a4cfe6335ac16150eacd181ecd99e2298cc079320ceeb",
@@ -48,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 602,
+      "primitives_in": 57,
       "primitives_out": 57
     }
   }
