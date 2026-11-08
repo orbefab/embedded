@@ -20,6 +20,9 @@ export const fetchBytes: Get = async (url) => {
 
 const FORMAT = 1;
 const RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/;
+// The id and version grammar of docs/registry.md, so a row cannot name a URL outside the index.
+const ID = /^(?!(index|con|prn|aux|nul|com[0-9]|lpt[0-9])$)[a-z][a-z0-9-]{0,63}$/;
+const VERSION = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 
 interface Row {
   readonly name: string;
@@ -54,6 +57,9 @@ export async function loadBlock(index: URL, id: string, get: Get = fetchBytes): 
   if (doc.format !== FORMAT) throw new Error(`the index is format ${doc.format}, and this client reads ${FORMAT}`);
   const seen = new Set<string>();
   for (const row of doc.items) {
+    if (!ID.test(row.name) || !VERSION.test(row.version)) {
+      throw new Error(`the index lists ${JSON.stringify(row.name)}@${JSON.stringify(row.version)}, which is not an id and a version`);
+    }
     const key = `${row.name}@${row.version}`;
     if (seen.has(key)) throw new Error(`the index lists ${key} twice`);
     seen.add(key);

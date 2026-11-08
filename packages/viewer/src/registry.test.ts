@@ -133,4 +133,12 @@ describe("loadBlock", () => {
     const foreign = await registry([block(["@acme/lamp@1.0.0"])]);
     await expect(loadBlock(index, "blink", getFrom(foreign))).rejects.toThrow("blink runs @acme/lamp@1.0.0, from another registry");
   });
+
+  test("refuses an index row whose name or version would point outside the index", async () => {
+    const rows: [string, string][] = [["https://evil.example/pwn", "0.1.0"], ["../blink", "0.1.0"], ["blink", "1.0.0-beta"], ["blink", "01.0.0"]];
+    for (const [name, version] of rows) {
+      const served = await registry([{ ...block([]), name, version }]);
+      await expect(loadBlock(index, "blink", getFrom(served)), `${name}@${version}`).rejects.toThrow(/which is not an id and a version/);
+    }
+  });
 });

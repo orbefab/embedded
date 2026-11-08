@@ -5,7 +5,7 @@
 # opens a desktop browser. Pass `--renders <dir>` to also save screenshots there.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-pnpm install --frozen-lockfile
+scripts/need-node-deps.sh scripts/check-headed.sh
 pnpm --filter @orbe/viewer-page build >/dev/null
 cargo build -p orbe --locked
 node apps/viewer/e2e/headed.mjs target/debug/orbe "$@"

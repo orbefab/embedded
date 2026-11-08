@@ -5,6 +5,6 @@
 # `--renders <dir>` to also save screenshots there. check-viewer.sh does not run this.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-pnpm install --frozen-lockfile
+scripts/need-node-deps.sh scripts/check-viewer-e2e.sh
 pnpm --filter @orbe/viewer-page build >/dev/null
 node apps/viewer/e2e/e2e.mjs "$@"

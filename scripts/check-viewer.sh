@@ -3,7 +3,7 @@
 # check.sh does not run this, so it needs neither.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-pnpm install --frozen-lockfile
+scripts/need-node-deps.sh scripts/check-viewer.sh
 pnpm --filter @orbe/viewer --filter @orbe/viewer-page typecheck
 pnpm --filter @orbe/viewer test
 pnpm --filter @orbe/viewer-page build

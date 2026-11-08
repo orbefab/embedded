@@ -7,7 +7,7 @@
 # check.sh does not run this. Pass `--renders <dir>` to also save screenshots there.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-pnpm install --frozen-lockfile
+scripts/need-node-deps.sh scripts/check-block.sh
 pnpm --filter @orbe/viewer-page build >/dev/null
 scripts/wasm.sh .scratch/wasm/pkg
 cargo build -p orbe --locked

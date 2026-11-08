@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 models=${1:?usage: scripts/check-assets.sh <path to an orbefab/models checkout>}
-pnpm install --frozen-lockfile
+scripts/need-node-deps.sh scripts/check-assets.sh
 node --test packages/asset-step/asset-step.test.mjs
 scripts/model.sh --all
 node packages/asset-step/asset-step.mjs --models "$models"
