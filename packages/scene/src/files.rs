@@ -1,14 +1,21 @@
 //! Where the reader reads a project from: the disk, or a set of files held in memory, such as a
-//! scene and its parts handed to a browser.
+//! scene and its parts handed to a browser. A Block reads its parts from a catalog, the one built
+//! into this binary unless the files name another.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
-/// The files a scene is read from.
+use crate::catalog;
+
+/// The files a scene is read from, and the catalog a Block among them reads.
 #[derive(Clone, Debug)]
-pub struct Files(Store);
+pub struct Files {
+    store: Store,
+    catalog: catalog::Source,
+}
 
 #[derive(Clone, Debug)]
 enum Store {
@@ -28,19 +35,39 @@ pub(crate) enum Kind {
 
 impl Files {
     pub fn disk() -> Files {
-        Files(Store::Disk)
+        Files {
+            store: Store::Disk,
+            catalog: catalog::Source::Builtin,
+        }
     }
 
     /// Files by path. A stored path drops `.` and applies `..` lexically. A read applies `..`
     /// only through a directory the set contains, and a trailing separator names a directory.
     /// Every folder above a file holds it. There are no links.
     pub fn memory<P: AsRef<Path>>(files: impl IntoIterator<Item = (P, Vec<u8>)>) -> Files {
-        Files(Store::Memory(
-            files
-                .into_iter()
-                .map(|(path, bytes)| (normal(path.as_ref()), bytes))
-                .collect(),
-        ))
+        Files {
+            store: Store::Memory(
+                files
+                    .into_iter()
+                    .map(|(path, bytes)| (normal(path.as_ref()), bytes))
+                    .collect(),
+            ),
+            catalog: catalog::Source::Builtin,
+        }
+    }
+
+    /// These files, with a Block's parts read from `parts` in place of the catalog built into
+    /// this binary. Each key is a part's id and a path in its folder, such as
+    /// `led-5mm/part.jsonc`.
+    pub fn with_catalog(self, parts: impl IntoIterator<Item = (String, Vec<u8>)>) -> Files {
+        Files {
+            catalog: catalog::Source::Given(Arc::new(parts.into_iter().collect())),
+            ..self
+        }
+    }
+
+    pub(crate) fn catalog(&self) -> &catalog::Source {
+        &self.catalog
     }
 
     pub fn is_file(&self, path: &Path) -> bool {
@@ -53,7 +80,7 @@ impl Files {
 
     /// What is at `path`, through any links.
     fn kind(&self, path: &Path) -> Option<Kind> {
-        match &self.0 {
+        match &self.store {
             Store::Disk => fs::metadata(path).ok().map(|meta| disk_kind(&meta)),
             Store::Memory(files) => memory_kind(files, path),
         }
@@ -61,7 +88,7 @@ impl Files {
 
     /// What is at `path` itself, a link not followed.
     pub(crate) fn link_kind(&self, path: &Path) -> Option<Kind> {
-        match &self.0 {
+        match &self.store {
             Store::Disk => fs::symlink_metadata(path).ok().map(|meta| {
                 if meta.file_type().is_symlink() {
                     Kind::Link
@@ -74,7 +101,7 @@ impl Files {
     }
 
     pub(crate) fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
-        match &self.0 {
+        match &self.store {
             Store::Disk => fs::read(path),
             Store::Memory(files) => {
                 let path = resolve(files, path)?;
@@ -90,7 +117,7 @@ impl Files {
     }
 
     pub(crate) fn read_to_string(&self, path: &Path) -> io::Result<String> {
-        match &self.0 {
+        match &self.store {
             Store::Disk => fs::read_to_string(path),
             Store::Memory(_) => String::from_utf8(self.read(path)?).map_err(|_| {
                 io::Error::new(
@@ -103,7 +130,7 @@ impl Files {
 
     /// The paths of what a folder holds, in no set order.
     pub(crate) fn list(&self, dir: &Path) -> io::Result<Vec<PathBuf>> {
-        match &self.0 {
+        match &self.store {
             Store::Disk => fs::read_dir(dir)?
                 .map(|entry| entry.map(|e| e.path()))
                 .collect(),
@@ -126,7 +153,7 @@ impl Files {
     /// The path with every link resolved, and with no `.` or `..`. An error when nothing is
     /// there.
     pub(crate) fn real(&self, path: &Path) -> io::Result<PathBuf> {
-        match &self.0 {
+        match &self.store {
             Store::Disk => path.canonicalize(),
             Store::Memory(files) => {
                 let path = resolve(files, path)?;

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::catalog::{self, Version};
+use crate::catalog::Version;
 use crate::diagnostic::{Code, Findings};
 use crate::files::{Files, Kind};
 use crate::model::{Comp, Part, Scene, TypeRef, decode_part, decode_scene};
@@ -44,14 +44,14 @@ impl Store {
     pub(crate) fn has(self, files: &Files, root: &Path, id: &str, rel: &str) -> bool {
         match self {
             Store::Copies => files.is_file(&root.join("parts").join(id).join(rel)),
-            Store::Catalog => catalog::file(id, rel).is_some(),
+            Store::Catalog => files.catalog().file(id, rel).is_some(),
         }
     }
 
     pub(crate) fn read(self, files: &Files, root: &Path, id: &str, rel: &str) -> Option<Vec<u8>> {
         match self {
             Store::Copies => files.read(&root.join("parts").join(id).join(rel)).ok(),
-            Store::Catalog => catalog::file(id, rel).map(<[u8]>::to_vec),
+            Store::Catalog => files.catalog().file(id, rel).map(<[u8]>::to_vec),
         }
     }
 }
@@ -173,7 +173,7 @@ pub(crate) fn load<'f>(
     let mut catalog_ids = loader.used;
     let mut unknown_part = false;
     for (id, _) in loader.missing {
-        if catalog::find(&id).is_some() {
+        if files.catalog().find(&id).is_some() {
             catalog_ids.insert(id);
         } else {
             unknown_part = true;
@@ -235,7 +235,7 @@ impl Loader<'_> {
 
     /// A Block's catalog part, placed at the path its copy would have in a project.
     fn read_catalog(&mut self, path: &Path, id: &str) -> Option<FileId> {
-        let bytes = catalog::file(id, "part.jsonc")?;
+        let bytes = self.files.catalog().file(id, "part.jsonc")?;
         let text = String::from_utf8_lossy(bytes).into_owned();
         Some(self.sources.add(path, text))
     }
@@ -313,7 +313,11 @@ impl Loader<'_> {
                         {
                             self.files.real(&path).unwrap_or(path)
                         }
-                        Store::Catalog if catalog::file(&id, "part.jsonc").is_some() => path,
+                        Store::Catalog
+                            if self.files.catalog().file(&id, "part.jsonc").is_some() =>
+                        {
+                            path
+                        }
                         _ => {
                             self.missing.push((id, span));
                             continue;
@@ -429,7 +433,11 @@ impl Loader<'_> {
             // A sealed copy that no longer reads was edited, and the fix is to restore it.
             if part.is_none()
                 && catalog
-                && catalog::find(&id).is_none_or(|original| is_sealed(&original.tree))
+                && self
+                    .files
+                    .catalog()
+                    .find(&id)
+                    .is_none_or(|original| is_sealed(&original.tree))
             {
                 self.out.rehint_since(before, &self.restore(&id, None));
             }
@@ -465,7 +473,7 @@ impl Loader<'_> {
         let mut ids: Vec<&str> = found
             .iter()
             .map(|(id, ..)| id.as_str())
-            .filter(|id| catalog::find(id).is_some())
+            .filter(|id| self.files.catalog().find(id).is_some())
             .collect();
         ids.sort();
         let overwrite = found
@@ -477,7 +485,12 @@ impl Loader<'_> {
             ids.join(" "),
             if overwrite { " --overwrite" } else { "" }
         );
-        let known: Vec<String> = self.lock.keys().cloned().chain(catalog::ids()).collect();
+        let known: Vec<String> = self
+            .lock
+            .keys()
+            .cloned()
+            .chain(self.files.catalog().ids())
+            .collect();
         let parts = root.join("parts");
         let blocked = self.store == Store::Copies
             && self.files.link_kind(&parts).is_some()
@@ -541,15 +554,17 @@ impl Loader<'_> {
                 true,
             );
         }
-        let differs = catalog::find(id)
-            .is_none_or(|original| hash_folder(self.files, &folder).ok() != Some(original.hash));
+        let differs =
+            self.files.catalog().find(id).is_none_or(|original| {
+                hash_folder(self.files, &folder).ok() != Some(original.hash)
+            });
         ("is not in this project's parts.lock".into(), differs)
     }
 
     /// The command that puts the catalog's copy back. It names the version when the copy's own
     /// version is in another major version, since `--overwrite` alone keeps the major.
     fn restore(&self, id: &str, copy: Option<&Node>) -> String {
-        if catalog::find(id).is_none() {
+        if self.files.catalog().find(id).is_none() {
             return format!(
                 "this binary's catalog has no `{id}` to restore. copy it to a path to make it your own"
             );
@@ -561,7 +576,7 @@ impl Loader<'_> {
     }
 
     fn restore_command(&self, id: &str, copy: Option<&Node>) -> String {
-        let named = catalog::find(id).and_then(|original| {
+        let named = self.files.catalog().find(id).and_then(|original| {
             let copy = Version::parse(copy?.get("version")?.str()?)?;
             let theirs = Version::parse(&original.version)?;
             (copy.major != theirs.major).then_some(original.version)
@@ -596,7 +611,7 @@ impl Loader<'_> {
                 }
             };
             let tree = file.and_then(|f| syntax::parse(&self.sources, f, &mut Findings::default()));
-            let Some(original) = catalog::find(id) else {
+            let Some(original) = self.files.catalog().find(id) else {
                 if self.note_unlisted(id, line, file, &tree, hash) {
                     modified.push(id.clone());
                 }

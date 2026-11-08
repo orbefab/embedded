@@ -1,11 +1,13 @@
-//! The catalog this binary was built with: the repo's `parts/`, embedded by `build.rs`. It is
-//! the registry's index for the versions it holds, so a sealed copy can be compared with it.
+//! The catalog a Block reads its parts from: the repo's `parts/`, embedded by `build.rs`, or the
+//! part folders a caller hands in, such as the ones a browser fetched from a registry. It is the
+//! registry's index for the versions it holds, so a sealed copy can be compared with it.
 
 use std::collections::BTreeMap;
 #[cfg(unix)]
 use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::diagnostic::Findings;
 use crate::files::Files;
@@ -15,50 +17,77 @@ use crate::syntax::{self, Node};
 
 include!(concat!(env!("OUT_DIR"), "/catalog.rs"));
 
-pub(crate) struct Original {
+/// Where a Block's catalog parts come from.
+#[derive(Clone, Debug, Default)]
+pub(crate) enum Source {
+    /// The catalog this binary was built with.
+    #[default]
+    Builtin,
+    /// Part folders handed in, each file by `<id>/<path>`.
+    Given(Arc<BTreeMap<String, Vec<u8>>>),
+}
+
+pub(crate) struct Original<'s> {
     pub(crate) version: String,
     pub(crate) hash: String,
     pub(crate) tree: Node,
-    files: Vec<(&'static str, &'static [u8])>,
+    files: Vec<(&'s str, &'s [u8])>,
 }
 
-pub(crate) fn ids() -> impl Iterator<Item = String> {
-    FILES
-        .iter()
-        .filter_map(|(path, _)| path.strip_suffix("/part.jsonc"))
-        .map(str::to_string)
+impl Source {
+    /// Each file by `<id>/<path>`, sorted.
+    fn files(&self) -> Box<dyn Iterator<Item = (&str, &[u8])> + '_> {
+        match self {
+            Source::Builtin => Box::new(FILES.iter().map(|(path, bytes)| (*path, *bytes))),
+            Source::Given(files) => Box::new(
+                files
+                    .iter()
+                    .map(|(path, bytes)| (path.as_str(), bytes.as_slice())),
+            ),
+        }
+    }
+
+    pub(crate) fn ids(&self) -> impl Iterator<Item = String> + '_ {
+        self.files()
+            .filter_map(|(path, _)| path.strip_suffix("/part.jsonc"))
+            .map(str::to_string)
+    }
+
+    /// The bytes of `rel` in the catalog's copy of `id`.
+    pub(crate) fn file(&self, id: &str, rel: &str) -> Option<&[u8]> {
+        let path = format!("{id}/{rel}");
+        match self {
+            Source::Builtin => FILES
+                .iter()
+                .find(|(name, _)| *name == path)
+                .map(|(_, bytes)| *bytes),
+            Source::Given(files) => files.get(&path).map(Vec::as_slice),
+        }
+    }
+
+    pub(crate) fn find(&self, id: &str) -> Option<Original<'_>> {
+        let prefix = format!("{id}/");
+        let files: Vec<(&str, &[u8])> = self
+            .files()
+            .filter_map(|(path, bytes)| path.strip_prefix(prefix.as_str()).map(|rel| (rel, bytes)))
+            .collect();
+        let text =
+            std::str::from_utf8(files.iter().find(|(rel, _)| *rel == "part.jsonc")?.1).ok()?;
+        let mut sources = Sources::new(Path::new(""));
+        let file = sources.add(Path::new("part.jsonc"), text.to_string());
+        let tree = syntax::parse(&sources, file, &mut Findings::default())?;
+        let version = tree.get("version")?.str()?.to_string();
+        let hash = hash_files(files.iter().copied());
+        Some(Original {
+            version,
+            hash,
+            tree,
+            files,
+        })
+    }
 }
 
-/// The bytes of `rel` in the catalog's copy of `id`.
-pub(crate) fn file(id: &str, rel: &str) -> Option<&'static [u8]> {
-    let path = format!("{id}/{rel}");
-    FILES
-        .iter()
-        .find(|(name, _)| *name == path)
-        .map(|(_, bytes)| *bytes)
-}
-
-pub(crate) fn find(id: &str) -> Option<Original> {
-    let prefix = format!("{id}/");
-    let files: Vec<(&'static str, &'static [u8])> = FILES
-        .iter()
-        .filter_map(|(path, bytes)| path.strip_prefix(prefix.as_str()).map(|rel| (rel, *bytes)))
-        .collect();
-    let text = std::str::from_utf8(files.iter().find(|(rel, _)| *rel == "part.jsonc")?.1).ok()?;
-    let mut sources = Sources::new(Path::new(""));
-    let file = sources.add(Path::new("part.jsonc"), text.to_string());
-    let tree = syntax::parse(&sources, file, &mut Findings::default())?;
-    let version = tree.get("version")?.str()?.to_string();
-    let hash = hash_files(files.iter().copied());
-    Some(Original {
-        version,
-        hash,
-        tree,
-        files,
-    })
-}
-
-/// The catalog's part folders by id, each file by its `/`-separated path from the folder.
+/// The built-in catalog's part folders by id, each file by its `/`-separated path from the folder.
 pub(crate) fn folders() -> BTreeMap<String, BTreeMap<String, Vec<u8>>> {
     let mut folders: BTreeMap<String, BTreeMap<String, Vec<u8>>> = BTreeMap::new();
     for (path, bytes) in FILES {
@@ -72,7 +101,7 @@ pub(crate) fn folders() -> BTreeMap<String, BTreeMap<String, Vec<u8>>> {
     folders
 }
 
-impl Original {
+impl Original<'_> {
     /// The files of `folder` that differ from this version's, for a message. `None` when
     /// every file matches.
     pub(crate) fn files_differing(&self, files: &Files, folder: &Path) -> Option<String> {
@@ -371,7 +400,8 @@ mod tests {
     }
 
     fn built_from(id: &str) -> BTreeSet<String> {
-        find(id)
+        Source::Builtin
+            .find(id)
             .unwrap()
             .tree
             .get("parts")
@@ -400,7 +430,7 @@ mod tests {
     #[test]
     fn every_part_uses_the_parts_it_is_built_from() {
         for id in Catalog::builtin().ids() {
-            let original = find(id).unwrap();
+            let original = Source::Builtin.find(id).unwrap();
             let children = original
                 .tree
                 .get("parts")
@@ -528,7 +558,7 @@ mod tests {
                 );
             }
 
-            let part = find(id).unwrap().tree.to_value();
+            let part = Source::Builtin.find(id).unwrap().tree.to_value();
             let anchors: Vec<Value> = match entry.files.get(&anchors_name) {
                 Some(bytes) => serde_json::from_slice::<Value>(bytes).unwrap()["anchors"]
                     .as_array()
