@@ -73,6 +73,7 @@ fn the_sketch_prints_the_points_and_the_decoder_agrees() {
         ]
     );
     let dir = scratch_dir();
+    let _ = std::fs::remove_dir_all(&dir);
     folder.write(&dir).unwrap();
     let output = Command::new("uv")
         .args(["run", "packages/engine/scripts/i2c_decode.py"])
@@ -163,6 +164,7 @@ fn a_20_mhz_twi_reads_the_chip_id_and_nacks() {
         );
     }
     let dir = scratch_dir().with_file_name("cst816-fast-check");
+    let _ = std::fs::remove_dir_all(&dir);
     folder.write(&dir).unwrap();
     let output = Command::new("uv")
         .args(["run", "packages/engine/scripts/i2c_decode.py"])
