@@ -1,20 +1,14 @@
 {
   "part": "nano-board",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/nano-board.glb",
-        "sha256": "526cd430ae1c58e1a82a0838c55042f7fad2c93666ee0fe8cfe83cceac708853",
-        "bytes": 158900
-      }
-    }
+    "script": "model.py",
+    "sha256": "a64f25b705a0456c1717919a2369f68ec95bf959b2e0c7f0ab2236fdddd7f4cf",
+    "bytes": 2439
   },
   "files": {
     "nano-board.glb": {
-      "sha256": "b134256067ec4fcb0a1b0d7fc276b2632ea3d168f690e367e1cedea2e1020061",
-      "bytes": 83996
+      "sha256": "f872772f03d0fa1b46afbc1562ccf0bc073405e3cdbac5d9a550a15831dd2aab",
+      "bytes": 59800
     }
   },
   "box": {
@@ -39,7 +33,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 166,
+      "primitives_in": 5,
       "primitives_out": 2
     },
     "composition": {
