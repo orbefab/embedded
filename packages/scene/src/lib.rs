@@ -10,6 +10,7 @@
 
 #[cfg(unix)]
 mod add;
+mod buy;
 mod catalog;
 mod circuit;
 mod diagnostic;

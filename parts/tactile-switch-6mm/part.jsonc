@@ -8,6 +8,9 @@
   "license": "MIT OR Apache-2.0",
   "docs": { "Omron B3F": "https://omronfs.omron.com/en_US/ecb/products/pdf/en-b3f.pdf" },
   "real": { "maker": "Omron", "number": "B3F-1000", "datasheet": "Omron B3F" },
+  "buy": [
+    { "seller": "DigiKey", "url": "https://www.digikey.com/en/products/detail/omron-electronics-inc-emc-div/B3F-1000/33150", "checked": "2026-11-08" },
+  ],
   "pins": { "a": [1, 2], "b": [3, 4] },
   "params": {
     "bounce": { "unit": "s", "default": null, "sets": "/bounce/window" },

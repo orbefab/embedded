@@ -10,6 +10,9 @@
   "license": "MIT OR Apache-2.0",
   "docs": { "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A": "https://www.kingbrightusa.com/images/catalog/SPEC/WP7113ID.pdf" },
   "real": { "maker": "Kingbright", "number": "WP7113", "datasheet": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A" },
+  "buy": [
+    { "seller": "DigiKey", "url": "https://www.digikey.com/en/products/detail/kingbright/WP7113ID/1747663", "checked": "2026-11-08" },
+  ],
   "pins": { "anode": [1], "cathode": [2] },
   "params": {
     "color": {

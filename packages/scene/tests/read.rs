@@ -304,7 +304,7 @@ fn a_sealed_edit_with_a_foreign_lock_version_is_part_modified() {
     assert_eq!(modified.len(), 1, "{found:#?}");
     let d = modified[0];
     assert_eq!(d.file, "parts/led-5mm/part.jsonc");
-    assert_eq!((d.line, d.column), (24, 46));
+    assert_eq!((d.line, d.column), (27, 46));
     assert!(
         d.message
             .contains("`params.color.choices.red.sets./series_resistance.value`"),
@@ -386,7 +386,7 @@ fn deleting_a_sealed_model_does_not_unseal_the_part() {
         .collect();
     assert_eq!(modified.len(), 1, "{found:#?}");
     assert_eq!(modified[0].file, "parts/resistor-axial/part.jsonc");
-    assert_eq!((modified[0].line, modified[0].column), (15, 3));
+    assert_eq!((modified[0].line, modified[0].column), (18, 3));
     assert!(
         modified[0].message.contains("resistor-axial@0.1.0"),
         "{}",
@@ -429,7 +429,7 @@ fn a_symlink_loop_in_a_sealed_copy_is_an_error() {
     );
     assert!(io[0].hint.contains("link"), "{}", io[0].hint);
     assert_eq!(modified.len(), 1, "{found:#?}");
-    assert_eq!((modified[0].line, modified[0].column), (24, 46));
+    assert_eq!((modified[0].line, modified[0].column), (27, 46));
     assert!(
         modified[0].message.contains("led-5mm@0.1.0"),
         "{}",

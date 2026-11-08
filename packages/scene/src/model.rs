@@ -381,6 +381,7 @@ pub(crate) fn decode_part(
             "model" => part.model = Some(value.clone()),
             "readings" => decode_names(value, "reading", out),
             "not_simulated" => part.not_simulated = decode_not_simulated(value, out),
+            "buy" => crate::buy::check(value, out),
             "joins_only" => part.joins_only = matches!(value.json, Json::Bool(true)),
             _ => {}
         }

@@ -62,6 +62,37 @@ fn part_json_matches_the_checked_in_cards() {
 }
 
 #[test]
+fn a_part_prints_where_to_buy_it_and_a_part_without_buy_says_none() {
+    let (code, stdout, stderr) = orbe(&["part", "led-5mm"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("\nbuy\n"), "{stdout}");
+    assert!(
+        stdout.contains("  DigiKey  https://www.digikey.com/en/products/detail/kingbright/WP7113ID/1747663  2026-11-08\n"),
+        "{stdout}"
+    );
+    let (code, stdout, stderr) = orbe(&["part", "led-5mm", "--json"]);
+    assert_eq!(code, 0, "{stderr}");
+    let data = card_json(&stdout);
+    assert_eq!(
+        data["buy"],
+        serde_json::json!([
+            {
+                "seller": "DigiKey",
+                "url": "https://www.digikey.com/en/products/detail/kingbright/WP7113ID/1747663",
+                "checked": "2026-11-08"
+            }
+        ])
+    );
+
+    let (code, stdout, stderr) = orbe(&["part", "atmega328p-dip28"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("\nbuy\n  none\n"), "{stdout}");
+    let (code, stdout, stderr) = orbe(&["part", "atmega328p-dip28", "--json"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(card_json(&stdout).get("buy").is_none());
+}
+
+#[test]
 fn a_chip_with_no_summary_prints_its_datasheet_name_and_no_url() {
     let (code, stdout, stderr) = orbe(&["part", "atmega328p-dip28"]);
     assert_eq!(code, 0, "{stderr}");

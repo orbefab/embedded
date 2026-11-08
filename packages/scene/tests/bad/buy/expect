@@ -1,0 +1,11 @@
+scene.syntax parts/empty.jsonc:4:10 | `buy` is empty | leave `buy` out
+scene.syntax parts/priced.jsonc:5:35 | `url` is not an https URL | lowercase https://
+scene.syntax parts/priced.jsonc:6:35 | `url` has a query string | query string
+scene.syntax parts/priced.jsonc:7:35 | `url` has a fragment | fragment
+scene.syntax parts/priced.jsonc:8:78 | not a calendar date | 2026-11-08
+scene.syntax parts/priced.jsonc:9:81 | not a calendar date | 2026-11-08
+scene.syntax parts/priced.jsonc:10:79 | not a calendar date | 2026-11-08
+scene.syntax parts/priced.jsonc:11:79 | not a calendar date | 2026-11-08
+scene.syntax parts/priced.jsonc:12:17 | `seller` is empty | name the seller
+scene.syntax parts/priced.jsonc:13:94 | has no key `price` | seller, url, checked
+scene.syntax parts/priced.jsonc:14:5 | has no `url` | `seller`, `url` and `checked`

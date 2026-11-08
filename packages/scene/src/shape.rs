@@ -210,6 +210,15 @@ const NOT_SIMULATED: Shape = Shape::Obj(
     ],
 );
 
+const BUY: Shape = Shape::Obj(
+    "a buy entry",
+    &[
+        ("seller", Shape::Str),
+        ("url", Shape::Str),
+        ("checked", Shape::Str),
+    ],
+);
+
 /// A part file's keys. `model` is the engine's, so the engine checks it.
 pub(crate) const PART: &[(&str, Shape)] = &[
     ("format", Shape::Any),
@@ -237,6 +246,7 @@ pub(crate) const PART: &[(&str, Shape)] = &[
     ("facts", Shape::Map(&VALUE)),
     ("view", VIEW),
     ("not_simulated", Shape::List(&NOT_SIMULATED)),
+    ("buy", Shape::List(&BUY)),
     ("joins_only", Shape::Bool),
 ];
 

@@ -20,6 +20,10 @@
     "Arduino UNO-TH_Rev3e board file": "https://docs.arduino.cc/hardware/uno-rev3/",
   },
   "real": { "maker": "Arduino", "number": "A000066", "datasheet": "Arduino UNO R3 A000066 datasheet" },
+  "buy": [
+    { "seller": "Arduino", "url": "https://store.arduino.cc/products/arduino-uno-rev3", "checked": "2026-11-08" },
+    { "seller": "DigiKey", "url": "https://www.digikey.com/en/products/detail/arduino/a000066/2784006", "checked": "2026-11-08" },
+  ],
   "uses": {
     "ams1117-sot223": "0.1.0", "atmega16u2-qfn32": "0.1.0", "atmega328p-dip28": "0.1.0",
     "barrel-jack-dc21": "0.1.0", "capacitor-0603": "0.1.0", "capacitor-electrolytic-smd": "0.1.0",
