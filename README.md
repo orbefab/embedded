@@ -10,6 +10,7 @@ A hardware simulator for AI agents. You describe a circuit as a scene file, flas
 | [`apps/viewer`](apps/viewer/) | The page `orbe show` serves. |
 | [`packages/scene`](packages/scene/) | `orbe-scene` reads and checks scenes and part files and turns them into a netlist. |
 | [`packages/session`](packages/session/) | `orbe-session` is a live session. |
+| [`packages/wasm`](packages/wasm/) | `orbe-wasm` runs a Block live in a browser Web Worker. [`docs/wasm.md`](docs/wasm.md) says how to build and load it. |
 | [`packages/registry`](packages/registry/) | `orbe-registry` builds a registry of parts and Blocks for `orbe registry build`. [`docs/registry.md`](docs/registry.md) is the contract a client reads it by. |
 | [`packages/engine`](packages/engine/) | The simulation engine in Rust: the netlist and run folder, the circuit solver, and its test circuits and firmware. [`docs/engine`](docs/engine/README.md) says how it fits together. |
 | [`packages/cores`](packages/cores/) | Instruction-set cores. `xtensa` runs the ESP32 and ESP32-S3 cores. A core never names a vendor's registers. |
@@ -22,7 +23,7 @@ A hardware simulator for AI agents. You describe a circuit as a scene file, flas
 | [`registry.jsonc`](registry.jsonc) | Names the official registry, `@orbefab`, that `orbe registry build .` builds from `parts/` and `blocks/`. |
 | [`scripts/`](scripts/) | The checks. `check.sh fast` gates every change and is what CI runs, and `check.sh full` runs every check. `scripts/model.sh` builds a part's model. Run `scripts/bless.sh` after adding or changing a part. |
 | [`skills/orbe`](skills/orbe/SKILL.md) | The stub an agent installs. |
-| [`docs/`](docs/) | Finalized docs: [`decisions.md`](docs/decisions.md), [`viewer.md`](docs/viewer.md), [`asset-step.md`](docs/asset-step.md), [`registry.md`](docs/registry.md), [`engine/`](docs/engine/README.md). |
+| [`docs/`](docs/) | Finalized docs: [`decisions.md`](docs/decisions.md), [`viewer.md`](docs/viewer.md), [`asset-step.md`](docs/asset-step.md), [`registry.md`](docs/registry.md), [`wasm.md`](docs/wasm.md), [`engine/`](docs/engine/README.md). |
 
 ## Build and check
 

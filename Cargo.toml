@@ -5,10 +5,10 @@ members = [
   "packages/scene",
   "packages/registry",
   "packages/session",
+  "packages/wasm",
   "packages/engine/core",
   "packages/engine/circuit",
   "packages/engine/cli",
-  "packages/engine/wasm",
   "packages/engine/bench",
   "packages/cores/*",
   "packages/socs/*",
@@ -47,8 +47,7 @@ clap = { version = "4", features = ["derive"] }
 tempfile = "3"
 ctrlc = "3.4"
 tungstenite = { version = "0.30", default-features = false }
-# Exact, because the `wasm-bindgen` CLI that `packages/engine/scripts/wasm.sh` runs must be the
-# same version.
+# Exact, because the `wasm-bindgen` CLI that `scripts/wasm.sh` runs must be the same version.
 wasm-bindgen = "=0.2.129"
 
 [workspace.lints.rust]

@@ -381,14 +381,6 @@ impl Session {
         Session::open_with(netlist, Some(document), BUDGET)
     }
 
-    /// Tests only: `open_document` with Newton's budget for each row and each probe between
-    /// steps lowered to `row`, so a test outside this crate can see a probe that fails twice.
-    #[cfg(feature = "row-budget")]
-    pub fn open_document_with_row_budget(json: &[u8], row: u32) -> Result<Session, Refused> {
-        let (document, netlist) = Document::parse(json).map_err(Refused::Invalid)?;
-        Session::open_with(netlist, Some(document), Budget { row, ..BUDGET })
-    }
-
     /// `open_document` with the trace and logic history `sim run` keeps, so `finish` can write
     /// its run folder. It also refuses a grid with more rows than a trace holds, with
     /// `trace.too_large`.
