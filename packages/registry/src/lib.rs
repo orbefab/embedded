@@ -88,7 +88,7 @@ pub struct Report {
     pub carried: usize,
     /// Files the built records list, once per record that lists them.
     pub listed: usize,
-    /// Files stored under `files/`, once per distinct content.
+    /// Files stored under `files/`, once per distinct content, carried ones included.
     pub stored: usize,
     /// Every file the registry holds: index, schemas, records and stored files.
     pub files: usize,
@@ -178,18 +178,21 @@ impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{} parts, {} Blocks and {} models: {} records list {} files, stored as {} by hash. ",
+            "{} parts, {} Blocks and {} models: {} records list {} files",
             self.parts,
             self.blocks,
             self.models,
             self.parts + self.blocks + self.models,
             self.listed,
-            self.stored,
         )?;
         if self.carried > 0 {
-            write!(f, "{} records carried forward. ", self.carried)?;
+            write!(f, ", and {} records are carried forward", self.carried)?;
         }
-        write!(f, "{} files, {} bytes in all", self.files, self.bytes)
+        write!(
+            f,
+            ". {} files are stored by hash. {} files, {} bytes in all",
+            self.stored, self.files, self.bytes
+        )
     }
 }
 

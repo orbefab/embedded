@@ -49,7 +49,7 @@ Both schemas are JSON Schema Draft 2020-12, generated from the types the build w
 
 ## Names
 
-- **An id** is kebab case: a lowercase ASCII letter, then lowercase ASCII letters, digits and `-`, at most 64 characters in all. These ids are reserved in every registry, and no item takes one: `index`, and the names Windows keeps for devices, `con`, `prn`, `aux`, `nul`, `com0` to `com9` and `lpt0` to `lpt9`.
+- **An id** is kebab case: a lowercase ASCII letter, then lowercase ASCII letters, digits and `-`, at most 64 characters in all. These ids are reserved in every registry, and no item takes one: `index`, and the names Windows keeps for devices, `con`, `prn`, `aux`, `nul`, `com0` to `com9` and `lpt0` to `lpt9`. An id has no `.`, so no record can take the name of `index.schema.json` or `item.schema.json`.
 - **A version** is three numbers separated by `.`. Each is ASCII digits with no sign and no leading zero, so `0` is a number and `01` is not. One version has one spelling.
 - **A registry name** is `@` and an id, such as `@orbefab`.
 - **A dependency** is `[@<registry>/]<id>@<version>`, such as `led-5mm@0.1.0` or `@acme/lamp@1.2.0`. With no `@<registry>/` it is in the same registry as the record that names it. A parser takes off a leading `@<registry>/` first, then splits the rest at its one `@`. The build writes only the bare form today.

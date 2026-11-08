@@ -132,7 +132,10 @@ fn previous_carries_a_build_forward_and_refuses_a_changed_version() {
         &path(&first),
     ]);
     assert_eq!(code, Some(0), "{stderr}");
-    assert!(stdout.contains("1 records carried forward"), "{stdout}");
+    assert!(
+        stdout.contains("and 1 records are carried forward"),
+        "{stdout}"
+    );
     assert!(second.join("lamp@1.0.0.json").is_file());
     assert!(second.join("lamp@1.1.0.json").is_file());
 
