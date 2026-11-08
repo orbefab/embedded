@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import type { FrameMessage, Reply, SceneMessage, ToViewer } from "./protocol";
 import type { BlockFiles } from "./registry";
 import { type OpenMessage, workerSource } from "./worker-source";
@@ -124,7 +124,11 @@ describe("workerSource", () => {
     expect(ended).toEqual([{ type: "closed", reason: "the session's Worker failed: out of memory" }]);
   });
 
-  test("ends with why when the Worker sends text that is not JSON", async () => {
+  test.each([
+    ["{not json", /^the session's Worker sent text that is not JSON: /],
+    ["null", /^the session's Worker sent JSON that is not a message: null$/],
+    ["[1]", /^the session's Worker sent JSON that is not a message: \[1\]$/],
+  ])("a message %s ends the session, terminates the Worker and revokes its model URLs", async (text, reason) => {
     const worker = new FakeWorker();
     const source = workerSource(
       () => worker as unknown as Worker,
@@ -133,9 +137,17 @@ describe("workerSource", () => {
     await settle();
     const got: ToViewer[] = [];
     source.subscribe((message) => got.push(message));
-    worker.receiveText("{not json");
-    expect(got).toHaveLength(1);
-    expect((got[0] as { reason: string }).reason).toMatch(/^the session's Worker sent text that is not JSON: /);
+    worker.receive(scene);
+    const url = (got[0] as SceneMessage).parts["led-5mm"]?.model ?? "";
+    worker.receiveText(text);
+    expect(got).toHaveLength(2);
+    expect((got[1] as { reason: string }).reason).toMatch(reason);
+    expect(worker.terminated).toBe(true);
+    await expect(fetch(url)).rejects.toThrow();
+    worker.receive(scene);
+    worker.receive(frame);
+    expect(got).toHaveLength(2);
+    await expect(source.send({ cmd: "play" })).rejects.toThrow(reason);
   });
 
   test("close terminates the Worker, revokes its model URLs and rejects commands", async () => {
@@ -156,6 +168,27 @@ describe("workerSource", () => {
     await expect(waiting).rejects.toThrow("the page closed the session");
     await expect(source.send({ cmd: "pause" })).rejects.toThrow("the page closed the session");
     expect(got).toHaveLength(1);
+  });
+
+  test("a scene the Worker sent before close allocates nothing once it arrives", async () => {
+    const worker = new FakeWorker();
+    const source = workerSource(
+      () => worker as unknown as Worker,
+      async () => block
+    );
+    await settle();
+    const got: ToViewer[] = [];
+    source.subscribe((message) => got.push(message));
+    const created = vi.spyOn(URL, "createObjectURL");
+    try {
+      source.close();
+      worker.receive(scene);
+      expect(worker.terminated).toBe(true);
+      expect(created).not.toHaveBeenCalled();
+      expect(got).toEqual([]);
+    } finally {
+      created.mockRestore();
+    }
   });
 
   test("a Block that loads after close is never posted", async () => {

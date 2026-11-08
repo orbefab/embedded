@@ -14,22 +14,27 @@ export interface Channel {
   close(): void;
 }
 
-/** Parses one message's JSON text from a session, or drops the channel with why. */
+/** Parses one message's JSON text from a session, or drops the channel with why. A message is
+ * a JSON object with a string `type`. */
 export function receive(inbox: Inbox, text: string, from: string): void {
-  let parsed: FromSession;
+  let parsed: unknown;
   try {
-    parsed = JSON.parse(text) as FromSession;
+    parsed = JSON.parse(text);
   } catch (error) {
     inbox.drop(`${from} sent text that is not JSON: ${error instanceof Error ? error.message : String(error)}`);
     return;
   }
-  inbox.message(parsed);
+  if (typeof parsed !== "object" || parsed === null || typeof (parsed as { type?: unknown }).type !== "string") {
+    inbox.drop(`${from} sent JSON that is not a message: ${text.slice(0, 80)}`);
+    return;
+  }
+  inbox.message(parsed as FromSession);
 }
 
 /** A session over a channel that carries its messages: `connect` opens the channel. A new
  * listener gets the current scene, then the latest frame. Once the session closes or the
- * channel drops, every listener gets a `closed` message, and commands reject. `close` frees the
- * channel, and listeners get nothing more. */
+ * channel drops, every listener gets a `closed` message, commands reject, and listeners get
+ * nothing more. A drop also frees the channel, as `close` does. */
 export function channelSource(connect: (inbox: Inbox) => Channel): SessionSource {
   const listeners = new Set<(message: ToViewer) => void>();
   const waiting = new Map<number, { resolve: (reply: Reply) => void; reject: (error: Error) => void }>();
@@ -49,8 +54,9 @@ export function channelSource(connect: (inbox: Inbox) => Channel): SessionSource
     broadcast(message);
   };
 
-  const channel = connect({
+  const channel: Channel = connect({
     message(message) {
+      if (closed !== null) return;
       switch (message.type) {
         case "scene":
           scene = message;
@@ -70,7 +76,10 @@ export function channelSource(connect: (inbox: Inbox) => Channel): SessionSource
           break;
       }
     },
-    drop: (reason) => end({ type: "closed", reason }),
+    drop(reason) {
+      end({ type: "closed", reason });
+      channel.close();
+    },
   });
 
   return {

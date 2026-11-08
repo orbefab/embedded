@@ -14,8 +14,9 @@ export interface OpenMessage {
  * files, and commands sent before they reach the Worker wait for them. The Worker has no server,
  * so each part model the scene names, a path in the Block's files such as
  * `/parts/led-5mm/led-5mm.glb`, is served from those files as an object URL. A Block that does
- * not load or open, a Worker that fails, or a message that is not JSON ends the session with why.
- * `close` terminates the Worker and revokes the object URLs. */
+ * not load or open, a Worker that fails, or a message that is not a JSON message ends the session
+ * with why, and frees it as `close` does. `close` terminates the Worker and revokes the object
+ * URLs, and a message the Worker sent before it ended is dropped unread. */
 export function workerSource(open: () => Worker, load: () => Promise<BlockFiles>): SessionSource {
   return channelSource((inbox) => {
     const worker = open();
@@ -39,12 +40,14 @@ export function workerSource(open: () => Worker, load: () => Promise<BlockFiles>
       return { ...scene, parts };
     };
 
-    worker.onmessage = (event: MessageEvent<string>) =>
+    worker.onmessage = (event: MessageEvent<string>) => {
+      if (closed) return;
       receive(
         { message: (message) => inbox.message(message.type === "scene" ? served(message) : message), drop: inbox.drop },
         event.data,
         "the session's Worker"
       );
+    };
     worker.onerror = (event) => {
       event.preventDefault();
       inbox.drop(`the session's Worker failed: ${event.message}`);
