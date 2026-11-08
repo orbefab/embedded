@@ -33,7 +33,12 @@ fn every_catalog_part_is_a_card() {
     assert_eq!(names, ids);
     for card in &cards {
         let json = serde_json::to_value(card).unwrap();
-        assert!(json.get("buy").is_none(), "{}", card.name);
+        assert_eq!(
+            json.get("buy").is_some(),
+            card.buy.is_some(),
+            "{}",
+            card.name
+        );
         assert!(json.get("name").is_some());
         assert!(json.get("uses").is_some());
         assert!(json.get("used_by").is_some());
@@ -47,11 +52,28 @@ fn every_catalog_part_is_a_card() {
             assert!(file.sha256.chars().all(|c| c.is_ascii_hexdigit()));
             assert!(!file.license.is_empty());
         }
-        assert!(card.buy.is_none());
     }
+    let with_buy: Vec<&str> = cards
+        .iter()
+        .filter(|card| card.buy.is_some())
+        .map(|card| card.name.as_str())
+        .collect();
+    assert_eq!(
+        with_buy,
+        [
+            "led-5mm",
+            "resistor-axial",
+            "tactile-switch-6mm",
+            "uno-board",
+        ]
+    );
     let missing = missing_fields(&cards);
     println!("{missing}");
-    assert_eq!(missing.buy, missing.parts);
+    assert_eq!(
+        missing.buy,
+        cards.iter().filter(|card| card.buy.is_none()).count()
+    );
+    assert!(missing.buy < missing.parts);
 }
 
 #[test]
@@ -66,6 +88,10 @@ fn a_passive_a_chip_and_a_board_keep_only_what_their_files_say() {
     assert_eq!(docs.len(), 1);
     assert!(docs[0].url.is_none());
     assert!(passive.ratings.iter().any(|rating| rating.name == "power"));
+    assert_eq!(
+        passive.buy.as_ref().map(|links| links[0].url.as_str()),
+        Some("https://www.digikey.ca/en/products/detail/yageo/CFR-25JB-52-220R/1295")
+    );
     assert!(passive.uses.is_empty());
     assert_eq!(passive.license, "MIT OR Apache-2.0");
     assert!(passive.hash.starts_with("sha256:"));
@@ -102,6 +128,33 @@ fn a_passive_a_chip_and_a_board_keep_only_what_their_files_say() {
     let docs = board.docs.unwrap();
     assert!(docs.iter().any(|doc| doc.url.is_some()));
     assert!(board.pins.iter().any(|pin| pin.refs.is_some()));
+    assert!(board.buy.is_none());
+
+    let led = card("led-5mm").unwrap();
+    let buy = led.buy.unwrap();
+    assert_eq!(buy.len(), 1);
+    assert_eq!(buy[0].seller, "DigiKey");
+    assert_eq!(
+        buy[0].url,
+        "https://www.digikey.com/en/products/detail/kingbright/WP7113ID/1747663"
+    );
+    assert_eq!(buy[0].checked, "2026-11-08");
+
+    let button = card("tactile-switch-6mm").unwrap();
+    assert_eq!(
+        button.buy.unwrap()[0].url,
+        "https://www.digikey.com/en/products/detail/omron-electronics-inc-emc-div/B3F-1000/33150"
+    );
+    let uno = card("uno-board").unwrap();
+    let buy = uno.buy.unwrap();
+    let urls: Vec<&str> = buy.iter().map(|link| link.url.as_str()).collect();
+    assert_eq!(
+        urls,
+        [
+            "https://store.arduino.cc/products/arduino-uno-rev3",
+            "https://www.digikey.com/en/products/detail/arduino/a000066/2784006",
+        ]
+    );
 }
 
 #[test]

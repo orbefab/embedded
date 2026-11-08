@@ -1,4 +1,11 @@
 {
+  "buy": [
+    {
+      "checked": "2026-11-08",
+      "seller": "DigiKey",
+      "url": "https://www.digikey.ca/en/products/detail/yageo/CFR-25JB-52-220R/1295"
+    }
+  ],
   "categories": [
     "resistor",
     "passive",
