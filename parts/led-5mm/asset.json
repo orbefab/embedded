@@ -1,16 +1,15 @@
 {
   "part": "led-5mm",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
+    "script": "model.py",
     "inputs": {
       "glb": {
-        "path": "GLB/parts/led-5mm.glb",
-        "sha256": "b9b07676fb96739b311a10a335627de3bee7f9339f5e7134bf11440b64e866f7",
-        "bytes": 27220
+        "path": "parts/led-5mm/led-5mm.glb",
+        "sha256": "f98d0c79e5fb9e1ddfade34d3422888ce0839d40fbd98a54d8cdaeafd013f5ab",
+        "bytes": 21236
       },
       "anchors": {
-        "path": "GLB/parts/led-5mm.anchors.json",
+        "path": "parts/led-5mm/led-5mm.anchors.json",
         "sha256": "4d9811e9a7fef4fcbde89a272aafc61179b6514c6c11612cfe33fee70e74cd48",
         "bytes": 289
       }
@@ -18,8 +17,8 @@
   },
   "files": {
     "led-5mm.glb": {
-      "sha256": "c3b9a466144f8eea93b57bd782b70085a4d293014b0272bbef3d1f8ff6bd778f",
-      "bytes": 20876
+      "sha256": "904195e5f713f1aa5c6f226be30a3f6bb669cdef5b8ef70f762a5d6026eecf65",
+      "bytes": 20872
     },
     "led-5mm.anchors.json": {
       "sha256": "4d9811e9a7fef4fcbde89a272aafc61179b6514c6c11612cfe33fee70e74cd48",
@@ -48,7 +47,7 @@
       "nodes": ["body"]
     },
     "merge": {
-      "primitives_in": 18,
+      "primitives_in": 3,
       "primitives_out": 3
     }
   }

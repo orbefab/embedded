@@ -1,16 +1,15 @@
 {
   "part": "resistor-axial",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
+    "script": "model.py",
     "inputs": {
       "glb": {
-        "path": "GLB/parts/resistor-axial.glb",
-        "sha256": "a3e4e4bc286ac3ce405fdf72758be19fa154abd9ce2a8e32e3cb5e74260591ac",
-        "bytes": 100520
+        "path": "parts/resistor-axial/resistor-axial.glb",
+        "sha256": "f177f4e2705617630ee05cce8f0f16ca100fc7618c5082c8a5fb3b557d28a935",
+        "bytes": 86832
       },
       "anchors": {
-        "path": "GLB/parts/resistor-axial.anchors.json",
+        "path": "parts/resistor-axial/resistor-axial.anchors.json",
         "sha256": "a98084ba09c2a467acca47216708850c932c505643e2f914f0c110e9273fb27a",
         "bytes": 294
       }
@@ -18,8 +17,8 @@
   },
   "files": {
     "resistor-axial.glb": {
-      "sha256": "997ce68413260ddfbde85d61daadbe560434131e2729c5f228bce9dc3aad293a",
-      "bytes": 77032
+      "sha256": "d63729bbe13c04018d2016e2361ba4c6cd327ba031a8464821207d076e7d65f1",
+      "bytes": 77028
     },
     "resistor-axial.anchors.json": {
       "sha256": "a98084ba09c2a467acca47216708850c932c505643e2f914f0c110e9273fb27a",
@@ -48,7 +47,7 @@
       "nodes": ["band1-brown", "band2-black", "band3-orange", "band4-gold"]
     },
     "merge": {
-      "primitives_in": 43,
+      "primitives_in": 13,
       "primitives_out": 7
     }
   }
