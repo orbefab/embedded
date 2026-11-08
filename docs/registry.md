@@ -70,7 +70,7 @@ A user lists registries in `registries.json`, in `$XDG_CONFIG_HOME/orbe/`, else 
 }
 ```
 
-A project names a part from that registry as `@acme/<id>`. A bare id names `@orbefab`, which needs no line. Its template is not set yet. It is set when the catalog site's domain is chosen, and until then nothing fetches from a registry.
+A project names a part from that registry as `@acme/<id>`. A bare id names `@orbefab`, which needs no line. Its template is `https://orbefab.com/embedded/r/{name}.json`. Nothing fetches from a registry yet.
 
 A template is an `https://` URL with exactly one `{name}`. `{name}` starts its last path segment and is followed only by a fixed suffix, such as `.json`. A template has no query and no fragment. A client replaces `{name}` with `index`, literally, to get the index's URL. It never builds another URL from the template. It takes each record's URL from its index row and each file's URL from its record, and resolves both against the URL of the document that holds them. A registry that `orbe registry build` wrote and that is served at `B/` has the template `B/{name}.json`.
 
@@ -81,7 +81,7 @@ A template is an `https://` URL with exactly one `{name}`. `{name}` starts its l
   "$schema": "index.schema.json",
   "format": 1,
   "name": "@orbefab",
-  "homepage": "https://github.com/orbefab/embedded",
+  "homepage": "https://orbefab.com/embedded",
   "items": [
     {
       "name": "led-5mm",
@@ -187,7 +187,6 @@ A project takes each part id from one registry, so `parts.lock` has at most one 
 
 - `orbe add @<registry>/<id>` from a registry: read `registries.json`, then follow [Verify what you fetch](#verify-what-you-fetch) and write the copy and its lock line.
 - `orbe search --refresh`: search registry indexes instead of the catalog built into `orbe`.
-- The template of `@orbefab`. It is set with the site's domain.
 - Model items: a source folder for them and their fields come with the device contract.
 - Type-checking and Block tests in the build: today it checks syntax, names, versions, licences and dependencies, and `orbe check` and `orbe test` check the rest.
 - A part or Block that uses a part from another registry. The dependency grammar has room for it, and the build refuses it today.
