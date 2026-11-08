@@ -6,26 +6,30 @@ A hardware simulator for AI agents. You describe a circuit as a scene file, flas
 
 | Folder | What it holds |
 | --- | --- |
-| [`crates/`](crates/) | The `orbe` CLI in Rust. `orbe` is the binary. `orbe-scene` reads and checks scenes and part files and turns them into a netlist. `orbe-session` is a live session. |
-| [`engine/`](engine/) | The simulation engine in Rust: the circuit solver and the AVR and ESP32-S3 chip models. It has its own [`AGENTS.md`](engine/AGENTS.md). |
+| [`apps/orbe`](apps/orbe/) | The `orbe` CLI in Rust. `orbe` is the binary. |
+| [`apps/viewer`](apps/viewer/) | The page `orbe show` serves. |
+| [`packages/scene`](packages/scene/) | `orbe-scene` reads and checks scenes and part files and turns them into a netlist. |
+| [`packages/session`](packages/session/) | `orbe-session` is a live session. |
+| [`packages/engine`](packages/engine/) | The simulation engine in Rust: the netlist and run folder, the circuit solver, and its test circuits and firmware. [`docs/engine`](docs/engine/README.md) says how it fits together. |
+| [`packages/cores`](packages/cores/) | Instruction-set cores. `xtensa` runs the ESP32 and ESP32-S3 cores. A core never names a vendor's registers. |
+| [`packages/socs`](packages/socs/) | Chips around a core. `avr` is the ATmega328P and `espressif` is the ESP32-S3. A chip never decodes an instruction. |
+| [`packages/viewer`](packages/viewer/) | The 3D scene viewer, in React and three.js. |
+| [`packages/asset-step`](packages/asset-step/) | Imports each part's 3D model and checks it against the part's pins. |
 | [`parts/`](parts/) | The parts catalog. Each folder is one real part: `part.jsonc`, its 3D model and `asset.json`. |
 | [`examples/`](examples/) | Scenes that run, each with its firmware and tests. |
-| [`packages/viewer`](packages/viewer/) | The 3D scene viewer, in React and three.js. |
-| [`apps/viewer`](apps/viewer/) | The page `orbe show` serves. |
-| [`tools/asset-step`](tools/asset-step/) | Imports each part's 3D model and checks it against the part's pins. |
-| [`scripts/`](scripts/) | The checks. `check.sh` gates every change. Run `scripts/bless.sh` after adding or changing a part. |
+| [`scripts/`](scripts/) | The checks. `check.sh fast` gates every change and is what CI runs, and `check.sh full` runs every check. Run `scripts/bless.sh` after adding or changing a part. |
 | [`skills/orbe`](skills/orbe/SKILL.md) | The stub an agent installs. |
-| [`docs/`](docs/) | Finalized docs: [`decisions.md`](docs/decisions.md), [`viewer.md`](docs/viewer.md), [`asset-step.md`](docs/asset-step.md). |
+| [`docs/`](docs/) | Finalized docs: [`decisions.md`](docs/decisions.md), [`viewer.md`](docs/viewer.md), [`asset-step.md`](docs/asset-step.md), [`engine/`](docs/engine/README.md). |
 
 ## Build and check
 
-You need Rust (pinned in `rust-toolchain.toml`), Node 24 and pnpm.
+You need Rust (pinned in `rust-toolchain.toml`), uv, Node 24 and pnpm.
 
 ```sh
 pnpm install --frozen-lockfile
 pnpm --filter @orbe/viewer-page build
 cargo build -p orbe
-scripts/check.sh
+scripts/check.sh fast
 ```
 
 An `orbe` built without the viewer page still runs every headless command, and `orbe show` then says how to build the page.
