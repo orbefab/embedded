@@ -6,7 +6,6 @@ import { GLTF_TURN, IDENTITY, apply, box, distance, lowest, mm, multiply, partNo
 
 const TIP_TOLERANCE = 0.01;
 const SEAT_TOLERANCE = 0.01;
-const KEPT_KINDS = new Set(['leg', 'socket']);
 
 export class CheckFailed extends Error {
   constructor(check, why) {
@@ -149,15 +148,13 @@ export function names(part, nodes) {
 }
 
 /**
- * Keeps the nodes `view` and `joints` name and the `node` and `also` of every leg or socket
- * anchor. Every other node and every mesh loses its name, so `join` merges them into one mesh
+ * Keeps the nodes `view` and `joints` name and the `node` and `also` of every anchor.
+ * Every other node and every mesh loses its name, so `join` merges them into one mesh
  * per material. `dedup` then shares identical meshes, such as a header's 15 pins.
  */
 export async function merge(doc, part, anchors) {
   const keep = new Set([...part.viewNodes, ...part.jointNodes]);
-  for (const a of anchors.anchors) {
-    if (KEPT_KINDS.has(a.kind)) [a.node, ...a.also].forEach((name) => keep.add(name));
-  }
+  for (const a of anchors.anchors) [a.node, ...a.also].forEach((name) => keep.add(name));
   const before = partNodes(doc).reduce((sum, n) => sum + n.primitives, 0);
   for (const mesh of doc.getRoot().listMeshes()) mesh.setName('');
   for (const node of doc.getRoot().listNodes()) if (!keep.has(node.getName())) node.setName('');
@@ -173,8 +170,8 @@ export async function merge(doc, part, anchors) {
 /**
  * Places every child's checked source model by the part's layout, and each child's own children
  * by the child's layout, then seats the whole part. `model` and each entry of `models` are
- * `{part, nodes, anchors, drawCalls}`, with the nodes from the source GLB, so a pad's node still
- * has its name and is a lead here as it is in `seating`.
+ * `{part, nodes, anchors, drawCalls}`. A pad stays a lead because the merge keeps the
+ * name of every node an anchor names.
  */
 export function composition(model, models) {
   const placed = [];

@@ -21,8 +21,7 @@ const io = new NodeIO().setLogger(quiet);
 const USAGE = `usage: asset-step.mjs (--models <checkout> | --local --raw <dir>) [--commit <rev>] [--parts <dir>] [<id> ...]
 
 --local reads <raw>/<id>/<id>.glb and <id>.anchors.json, the files model.py just wrote, and
-writes the merged GLB, <id>.source.glb (that export, so a pad keeps its name), the anchors and
-asset.json into the part folder after the checks pass.
+writes the merged GLB, the anchors and asset.json into the part folder after the checks pass.
 With no ids, every part that has model.py. It does not read the GLB already in the part folder.
 
 --models reads GLB/parts/<id>.glb and <id>.anchors.json at <rev> of that checkout, without
@@ -113,19 +112,6 @@ function folderModel(partsDir, id) {
   return { glb, anchors };
 }
 
-/**
- * A part built from model.py. Composition reads `<id>.source.glb`, the export before the merge,
- * so a pad node keeps the name the merge drops. A part from before that file falls back to the
- * merged GLB, which still names a leg or a socket.
- */
-function scriptModel(partsDir, id) {
-  const sourcePath = join(partsDir, id, `${id}.source.glb`);
-  if (!existsSync(sourcePath)) return folderModel(partsDir, id);
-  const anchorsPath = join(partsDir, id, `${id}.anchors.json`);
-  const anchors = existsSync(anchorsPath) ? readFileSync(anchorsPath) : null;
-  return { glb: readFileSync(sourcePath), anchors };
-}
-
 /** The raw export model.py wrote under `rawDir`, plus the hash of model.py. */
 function rawSource(rawDir, partsDir, id) {
   const glbPath = join(rawDir, id, `${id}.glb`);
@@ -163,19 +149,18 @@ function readAsset(partsDir, id) {
 }
 
 /**
- * The source model of every part below `part`, from the models commit its asset.json records,
- * which passed its checks when that asset.json was written.
+ * The model of every part below `part`. A child with `model.py` is the merged GLB in its
+ * folder. Any other child is the source GLB at the commit its `asset.json` records.
  */
 async function childModels(models, partsDir, part, found = new Map()) {
   for (const type of part.children.values()) {
     if (found.has(type)) continue;
     const asset = readAsset(partsDir, type);
     if (!asset) continue;
-    const src = hasScript(partsDir, type)
-      ? scriptModel(partsDir, type)
-      : asset.source?.commit
-        ? source(models, recorded(models, type, asset.source.commit), type)
-        : folderModel(partsDir, type);
+    const src =
+      hasScript(partsDir, type) || !asset.source?.commit
+        ? folderModel(partsDir, type)
+        : source(models, recorded(models, type, asset.source.commit), type);
     if (!src) {
       const where = hasScript(partsDir, type) ? 'in its folder' : 'at the commit its asset.json records';
       throw new CheckFailed('composition', `child type \`${type}\` has no GLB ${where}`);
@@ -207,7 +192,6 @@ async function step(part, src, models, partsDir) {
   const glb = Buffer.from(await io.writeBinary(doc));
   const files = { [`${part.id}.glb`]: digest(glb) };
   if (src.anchors) files[`${part.id}.anchors.json`] = digest(src.anchors);
-  if (src.script) files[`${part.id}.source.glb`] = digest(src.glb);
   const asset = {
     part: part.id,
     source: src.script
@@ -232,7 +216,6 @@ function write(partsDir, part, src, { glb, asset }) {
   const folder = join(partsDir, part.id);
   const files = [[`${part.id}.glb`, glb], ['asset.json', `${stringify(asset)}\n`]];
   if (src.anchors) files.push([`${part.id}.anchors.json`, src.anchors]);
-  if (src.script) files.push([`${part.id}.source.glb`, src.glb]);
   const paths = files.map(([name]) => join(folder, name));
   try {
     files.forEach(([, bytes], i) => writeFileSync(`${paths[i]}.tmp`, bytes));
