@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs the asset step's tests, then reruns the step from the models commit each part's asset.json
-# records, and fails if that changes any file under parts/. Needs Node 24 and a checkout of
-# orbefab/models, which it only reads. check.sh does not run this, so it needs neither.
+# records, and fails if that changes any file under parts/. A part with model.py is left as
+# scripts/model.sh wrote it. Needs Node 24 and a checkout of orbefab/models, which it only reads.
+# check.sh does not run this, so it needs neither.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 models=${1:?usage: scripts/check-assets.sh <path to an orbefab/models checkout>}

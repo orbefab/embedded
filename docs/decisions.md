@@ -91,6 +91,9 @@ Every part (circuit parts, sensors, dev boards) should eventually have its sim m
 ## 3D models (Oct 31 2026)
 `orbefab/models` is where 3D models are built. The finished models a part needs end up living in this repo with that part.
 
+## Part model scripts (Nov 8 2026)
+A part's 3D model is `parts/<id>/model.py`. The script uses build123d and the helpers in `packages/cad`. `scripts/model.sh` builds `<id>.glb` and runs the asset step. A part with no `model.py` yet still comes from the commit its `asset.json` records.
+
 ## Naming and nesting (Oct 31 2026)
 - Parts use generic names (e.g. `uno-board`, `led-5mm`), not brand or product names.
 - Everything is a part, and parts can nest.

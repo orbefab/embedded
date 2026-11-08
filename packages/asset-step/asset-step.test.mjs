@@ -333,3 +333,44 @@ test('a --commit the models repo does not have is a usage error', async (t) => {
   assert.equal(status, 2);
   assert.match(stderr, /^--commit no-such-rev is not a commit of /);
 });
+
+test('passing --models and --local is a usage error', () => {
+  const { status, stderr } = spawnSync(process.execPath, [STEP, '--models', 'x', '--local'], { encoding: 'utf8', env });
+  assert.equal(status, 2);
+  assert.match(stderr, /^pass either --models or --local/);
+});
+
+test('with no ids, a part with model.py is skipped', async (t) => {
+  const fx = await fixture(t, { good: leaded('good'), wired: leaded('wired') });
+  writeFileSync(join(fx.parts, 'wired', 'model.py'), '');
+  const out = run(fx, []);
+  assert.equal(out.status, 0);
+  assert.match(out.line('wired'), /^skip {2}wired {2}built from model.py/);
+  assert.match(out.line('good'), /^ok/);
+  assert.equal(existsSync(join(fx.parts, 'wired', 'wired.glb')), false);
+});
+
+test('naming a part with model.py without --local fails', async (t) => {
+  const fx = await fixture(t, { good: leaded('good') });
+  writeFileSync(join(fx.parts, 'good', 'model.py'), '');
+  const out = run(fx, ['good']);
+  assert.equal(out.status, 1);
+  assert.match(out.line('good'), /source: `good` is built from model.py\. Run scripts\/model\.sh good/);
+});
+
+test('--local reads the part folder and records model.py', async (t) => {
+  const spec = leaded('good');
+  const fx = await fixture(t, { good: spec });
+  const folder = join(fx.parts, 'good');
+  writeFileSync(join(folder, 'model.py'), '');
+  writeFileSync(join(folder, 'good.glb'), await glb(spec.nodes));
+  writeFileSync(join(folder, 'good.anchors.json'), JSON.stringify(spec.anchors));
+  const { status, stdout } = spawnSync(process.execPath, [STEP, '--local', '--parts', fx.parts, 'good'], { encoding: 'utf8', env });
+  assert.equal(status, 0, stdout);
+  assert.match(stdout, /^ok\s+good /);
+  const got = asset(fx, 'good');
+  assert.equal(got.source.script, 'model.py');
+  assert.equal(got.source.repo, undefined);
+  assert.equal(got.files['good.glb'].bytes, readFileSync(join(folder, 'good.glb')).length);
+  assert.equal(got.kept_nodes.includes('lead'), true);
+});

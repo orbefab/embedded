@@ -1,19 +1,36 @@
 # The asset step
 
-The asset step brings each part's 3D model from `orbefab/models` into the part's folder in `parts/`. Contributors run it when a model changes. Users never run it.
+The asset step checks a part's body model and writes the merged GLB and `asset.json`. A part with `model.py` is built in this repo. Any other part is read from the commit its `asset.json` records in `orbefab/models`. Contributors run this when a model changes. Users never run it.
 
-## Run it
+## A part built here
+
+```bash
+scripts/model.sh led-5mm
+scripts/model.sh --all
+```
+
+`scripts/model.sh` runs `parts/<id>/model.py`. The script uses build123d and the helpers in `packages/cad`, and writes `parts/<id>/<id>.glb` and `<id>.anchors.json`. The shell script then runs the asset step with `--local` on those parts. `--all` builds every part that has `model.py`.
+
+The shell script checks that uv is installed, that Node is 24 or newer, that the asset step's dependencies are installed, and that the `packages/cad` environment can import build123d. When one is missing it prints the install command and exits. It never installs anything itself.
+
+`--local` reads the GLB and anchors the script just wrote, runs the checks, and writes the merged GLB, the anchors and `asset.json` back into the part folder. The hash under `source.inputs.glb` is that export. The hash under `files` is the merged GLB that replaces it. With no ids, `--local` runs every part that has `model.py`.
+
+After it finishes, run `scripts/bless.sh`.
+
+The model build stays off CI.
+
+## A part still recorded by commit
 
 ```bash
 pnpm install --frozen-lockfile
-node packages/asset-step/asset-step.mjs --models ../models --commit <models commit> [<id> ...]
+node packages/asset-step/asset-step.mjs --models ../models [<id> ...]
 ```
 
-`--models` is a checkout of `orbefab/models`. The step reads `GLB/parts/<id>.glb` and `GLB/parts/<id>.anchors.json` at the commit with `git show`, so it never changes the checkout. With no ids, it runs every part in `parts/` that has a GLB at that commit. With no `--commit`, each part reruns from the commit its `asset.json` records, and fails if the checkout lacks that commit, which you then fetch.
+`--models` is a checkout of `orbefab/models`. The step reads `GLB/parts/<id>.glb` and `GLB/parts/<id>.anchors.json` at a commit with `git show`, so it never changes the checkout. With no `--commit`, each part reruns from the commit its `asset.json` records, and fails if the checkout lacks that commit, which you then fetch. With no ids, it runs every part in `parts/` that has a GLB at that commit, and skips a part that has `model.py`. Naming such a part fails and tells you to run `scripts/model.sh`.
 
 With no `--commit` and no ids, a part with no GLB at its commit, or with no `asset.json` to name a commit, is skipped. A part with no model yet does not fail the run.
 
-`scripts/check-assets.sh <models checkout>` runs the step's tests, `packages/asset-step/asset-step.test.mjs`, then reruns every part from its recorded commit and fails if any file under `parts/` changes. Run it on a clean tree.
+`scripts/check-assets.sh <models checkout>` runs the step's tests, then reruns every part that has no `model.py` from its recorded commit, and fails if any file under `parts/` changes. Parts with `model.py` are left as `scripts/model.sh` wrote them. The script still needs the models checkout for the other parts. Run it on a clean tree. `check.sh` does not run it.
 
 ## What it writes
 
@@ -21,7 +38,7 @@ For each part that passes every check, it writes three files:
 
 - `<id>.glb`, the merged model.
 - `<id>.anchors.json`, copied unchanged. A part with no leads of its own, such as `nano-board`, has none.
-- `asset.json`, with the source repo and commit, the path, SHA-256 and size of each input, the SHA-256 and size of each file written, the box in mm, the kept nodes, the draw calls and what each check measured.
+- `asset.json`, with the source, the path, SHA-256 and size of each input, the SHA-256 and size of each file written, the box in mm, the kept nodes, the draw calls and what each check measured. A part built here records `source.script` as `model.py`. A part still read from `orbefab/models` records that repo and commit.
 
 A part that fails a check gets no files. The step prints the check and the reason, goes on to the next part, and exits 1 at the end. Files from an earlier run stay as they were. An input the step cannot read, such as an anchors file with no `also` list, fails its part the same way.
 
@@ -38,9 +55,9 @@ A lead is the mesh of the node an anchor names. The anchors check takes a lead's
 | seating | No node reaches more than 0.01 mm below z = 0, except the nodes an anchor names. |
 | names | Each node that `view` and `joints` name exists once. |
 | merge | The merge keeps the nodes that `view` and `joints` name, and the `node` and `also` of each `leg` or `socket` anchor. Every other node loses its name and joins one mesh per material, and identical meshes are shared. Each kept node exists once afterwards, and the scene still has nodes to draw. |
-| composition | Only for a part with children. The part's model, each child's model and each model below those, placed by each parent's `layout` with its full rotation, stay within 0.01 mm of z = 0 or above, except at the nodes their anchors name, pads included. An `at` of two numbers sits at z = 0. Each child's model is its source GLB at the commit its `asset.json` records, which passed these checks, because the merge drops a pad's name. A child whose recorded commit the models checkout lacks fails the part, and so does a part that holds itself. |
+| composition | Only for a part with children. The part's model, each child's model and each model below those, placed by each parent's `layout` with its full rotation, stay within 0.01 mm of z = 0 or above, except at the nodes their anchors name, pads included. An `at` of two numbers sits at z = 0. A child with `model.py` is the GLB in its folder. Any other child is its source GLB at the commit its `asset.json` records, which passed these checks. The merge drops a pad's name, so a pad is a lead in that source GLB and not in the merged file. A child whose recorded commit the models checkout lacks fails the part, and so does a part that holds itself. |
 
-The step does not compare a composed part with the whole object the models repo also exports, such as the Nano. The models repo does that in its own `checks/nano_ref.py`.
+The step does not compare a composed part with the whole object the models repo also exports, such as the Nano.
 
 Composition needs each child's `asset.json`. A part with children and no body of its own has none, so a part that holds one fails composition, and the children below it are not placed. `part.jsonc` does not say whether a part has a body, so the step cannot tell such a part from one whose model has not been brought in yet.
 
@@ -48,4 +65,4 @@ Composition needs each child's `asset.json`. A part with children and no body of
 
 `cargo test` checks every catalog part with a GLB, without Node. The hashes and sizes in `asset.json` must match the files. The anchors' leads must equal the leads in `pins`, and each anchor's `at` must sit inside the box `asset.json` records, with a unit `axis`. The test reads the node names from the GLB's JSON chunk. They must equal `kept_nodes`, and `kept_nodes` must equal what the merge keeps by `part.jsonc` and the anchors, with each leg or socket anchor's `node` and `also` in the GLB once. The test reads no vertices, so the geometry checks stay with the asset step and `scripts/check-assets.sh`.
 
-`parts.lock` hashes every file in a part's folder. After a run, run `scripts/bless.sh`. It rewrites the lock fixture from `parts/` and refreshes each example's part copies and `parts.lock` from the catalog ids its scene names. A copy the scene no longer names is removed. Then run `./scripts/check.sh`.
+`parts.lock` hashes every file in a part's folder. After `scripts/model.sh`, run `scripts/bless.sh`. It rewrites the lock fixture from `parts/` and refreshes each example's part copies and `parts.lock` from the catalog ids its scene names. A copy the scene no longer names is removed. Then run `./scripts/check.sh`.
