@@ -3,6 +3,7 @@ resolver = "3"
 members = [
   "apps/orbe",
   "packages/scene",
+  "packages/registry",
   "packages/session",
   "packages/engine/core",
   "packages/engine/circuit",
@@ -22,6 +23,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 orbe-scene = { path = "packages/scene" }
+orbe-registry = { path = "packages/registry" }
 orbe-session = { path = "packages/session" }
 orbe-engine-core = { path = "packages/engine/core" }
 orbe-circuit = { path = "packages/engine/circuit" }
@@ -32,6 +34,7 @@ jsonc-parser = "=0.34.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 serde_path_to_error = "0.1"
+schemars = "1"
 sha1 = "0.10"
 sha2 = "0.10"
 # Exact, because a new libm can move the last bits of a run.

@@ -465,23 +465,27 @@ fn decode_instances(node: &Node, out: &mut Findings) -> Vec<Instance> {
     instances
 }
 
-fn is_id(text: &str) -> bool {
-    let plain = |s: &str| {
-        s.len() <= 64
-            && s.starts_with(|c: char| c.is_ascii_lowercase())
-            && s.chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-    };
+/// A part, Block or registry id: kebab case, starting with a letter, at most 64 characters.
+pub fn is_id(text: &str) -> bool {
+    text.len() <= 64
+        && text.starts_with(|c: char| c.is_ascii_lowercase())
+        && text
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// An id, or `@<registry>/<id>`.
+fn is_type_id(text: &str) -> bool {
     match text.strip_prefix('@').and_then(|t| t.split_once('/')) {
-        Some((registry, id)) => plain(registry) && plain(id),
-        None => plain(text),
+        Some((registry, id)) => is_id(registry) && is_id(id),
+        None => is_id(text),
     }
 }
 
 fn classify_type(text: &str, span: Span, out: &mut Findings) -> Option<TypeRef> {
     if text.starts_with("./") || text.starts_with("../") {
         Some(TypeRef::Path(text.to_string()))
-    } else if is_id(text) {
+    } else if is_type_id(text) {
         Some(TypeRef::Id(text.to_string()))
     } else {
         out.push(
