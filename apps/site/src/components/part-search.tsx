@@ -1,9 +1,6 @@
 import { useEffect, useState } from "react";
-import { type Searchable, search } from "../search";
-
-export interface Listed extends Searchable {
-  readonly href: string;
-}
+import type { Listed } from "../data";
+import { search } from "../search";
 
 /** Every part, and a box that finds parts as `orbe search` does. */
 export function PartSearch({ parts }: { parts: readonly Listed[] }) {

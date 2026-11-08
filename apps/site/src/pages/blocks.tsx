@@ -1,27 +1,20 @@
-import type { Catalog, Item } from "../catalog";
-import { Island } from "../islands";
+import { BlockPlayer } from "../components/block-player";
+import type { BlockCard, Linked } from "../data";
 import { at } from "../paths";
-import { type BlockRecord, dependencyId } from "../records";
+import { type BlockRecord, dependencyId, type Item, type Site } from "../records";
 import { Files } from "./files";
-import { Install, None, Section, type Site, Table } from "./layout";
+import { CliComing, Install, None, Section, Table } from "./layout";
 
-/** The files a Block's page shows as text: the scene, the firmware's sources and the tests,
- * and the README when its install lines can show. */
-function shownAsText(path: string, site: Site): boolean {
-  if (path === "README.md") return site.install;
-  return path === "scene.jsonc" || path.startsWith("tests/") || /^firmware\/.+\.(ino|c|cpp|h)$/.test(path);
-}
-
-export function BlockCards({ catalog }: { catalog: Catalog }) {
+export function BlockCards({ blocks }: { blocks: readonly BlockCard[] }) {
   return (
     <ul className="grid gap-4 sm:grid-cols-2">
-      {catalog.blocks.map(({ record }) => (
-        <li key={record.name}>
-          <a className="block h-full rounded-lg border border-border p-5 transition-colors hover:border-brand" href={at.block(record.name)}>
-            <span className="font-medium">{record.title}</span>
-            <span className="mt-2 block text-muted-foreground text-sm">{record.description ?? "No summary yet."}</span>
+      {blocks.map((block) => (
+        <li key={block.name}>
+          <a className="block h-full rounded-lg border border-border p-5 transition-colors hover:border-brand" href={at.block(block.name)}>
+            <span className="font-medium">{block.title}</span>
+            <span className="mt-2 block text-muted-foreground text-sm">{block.description ?? "No summary yet."}</span>
             <span className="mt-4 block font-mono text-muted-foreground text-xs">
-              {record.board}, {record.registryDependencies.length} parts
+              {block.board}, {block.parts} parts
             </span>
           </a>
         </li>
@@ -30,7 +23,7 @@ export function BlockCards({ catalog }: { catalog: Catalog }) {
   );
 }
 
-export function BlocksPage({ catalog }: { catalog: Catalog }) {
+export function BlocksPage({ blocks }: { blocks: readonly BlockCard[] }) {
   return (
     <>
       <h1 className="font-semibold text-3xl tracking-tight md:text-4xl">Blocks</h1>
@@ -38,17 +31,22 @@ export function BlocksPage({ catalog }: { catalog: Catalog }) {
         Small circuits that work, each with its scene, its firmware and its tests. Each one plays live in your browser on the real engine.
       </p>
       <div className="mt-10">
-        <BlockCards catalog={catalog} />
+        <BlockCards blocks={blocks} />
       </div>
     </>
   );
 }
 
-export function BlockPage({ site, catalog, item }: { site: Site; catalog: Catalog; item: Item<BlockRecord> }) {
+export interface BlockView {
+  readonly item: Item<BlockRecord>;
+  readonly links: Readonly<Record<string, Linked>>;
+  readonly texts: readonly { readonly path: string; readonly text: string }[];
+}
+
+export function BlockPage({ site, block }: { site: Site; block: BlockView }) {
+  const { item, links, texts } = block;
   const { record } = item;
-  const decoder = new TextDecoder();
-  const texts = record.files.filter((file) => shownAsText(file.path, site));
-  const title = (id: string) => catalog.parts.find((part) => part.record.name === id)?.record.title ?? id;
+  const title = (id: string) => links[id]?.title ?? id;
   return (
     <article>
       <p className="font-mono text-muted-foreground text-xs">
@@ -68,17 +66,18 @@ export function BlockPage({ site, catalog, item }: { site: Site; catalog: Catalo
       </p>
 
       <div className="mt-8">
-        <Island
-          name="block-player"
-          props={{ blocks: [{ name: record.name, title: record.title }], registry: at.registry, wasm: at.wasm }}
-        />
+        <BlockPlayer blocks={[{ name: record.name, title: record.title }]} registry={at.registry} wasm={at.wasm} />
         <p className="mt-3 text-muted-foreground text-sm">
           This is the real engine: orbe-wasm {site.engine.version} runs the Block's firmware in a Worker in your browser. Press the button.
         </p>
       </div>
 
       <Section title="Install">
-        <Install lines={[`orbe add ${record.name}`]} note="Run it in an empty folder. It copies the parts, then writes the scene, the firmware and the tests." site={site} />
+        {__ORBE_SITE_INSTALL__ ? (
+          <Install lines={[`orbe add ${record.name}`]} note="Run it in an empty folder. It copies the parts, then writes the scene, the firmware and the tests." />
+        ) : (
+          <CliComing />
+        )}
       </Section>
 
       <Section title="Parts">
@@ -111,7 +110,7 @@ export function BlockPage({ site, catalog, item }: { site: Site; catalog: Catalo
               <details className="rounded-lg border border-border" key={file.path} open={file.path === "scene.jsonc"}>
                 <summary className="cursor-pointer px-4 py-2 font-mono text-sm">{file.path}</summary>
                 <pre className="overflow-x-auto border-border border-t p-4 font-mono text-xs leading-relaxed">
-                  {decoder.decode(catalog.bytes(file.sha256))}
+                  {file.text}
                 </pre>
               </details>
             ))}

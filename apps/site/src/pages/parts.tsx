@@ -1,21 +1,7 @@
-import type { Catalog } from "../catalog";
-import { Island } from "../islands";
-import type { Listed } from "../islands/part-search";
-import { at } from "../paths";
-import type { PartRecord } from "../records";
+import { PartSearch } from "../components/part-search";
+import type { Listed } from "../data";
 
-const listed = (record: PartRecord): Listed => ({
-  name: record.name,
-  title: record.title,
-  maker: record.real.maker,
-  number: record.real.number,
-  description: record.description,
-  categories: record.categories,
-  href: at.part(record.name),
-});
-
-export function PartsPage({ catalog }: { catalog: Catalog }) {
-  const parts = [...catalog.parts].sort((a, b) => a.record.title.localeCompare(b.record.title)).map(({ record }) => listed(record));
+export function PartsPage({ parts }: { parts: readonly Listed[] }) {
   return (
     <>
       <h1 className="font-semibold text-3xl tracking-tight md:text-4xl">Parts</h1>
@@ -24,7 +10,7 @@ export function PartsPage({ catalog }: { catalog: Catalog }) {
         under its licence. The search finds what <code className="font-mono">orbe search</code> finds.
       </p>
       <div className="mt-10">
-        <Island name="part-search" props={{ parts }} />
+        <PartSearch parts={parts} />
       </div>
     </>
   );

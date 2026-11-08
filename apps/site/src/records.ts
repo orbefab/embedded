@@ -94,3 +94,28 @@ export interface IndexRow {
 
 /** A dependency's id, from `<id>@<version>`. */
 export const dependencyId = (dependency: string) => dependency.slice(0, dependency.lastIndexOf("@"));
+
+/** One item as its pages show it: its newest record, every version the registry serves, and
+ * the items whose newest record names it. */
+export interface Item<R extends ItemRecord> {
+  readonly record: R;
+  readonly versions: readonly string[];
+  readonly usedBy: readonly string[];
+}
+
+/** What every page knows of the build. */
+export interface Site {
+  /** The registry's name, such as `@orbefab`. */
+  readonly registry: string;
+  /** orbe-wasm's version and the commit it was built from. */
+  readonly engine: { readonly version: string; readonly commit: string | null };
+}
+
+/** Everything the pages render from, as the build reads it from one registry build. `texts`
+ * holds each Block text file a page can show, by its SHA-256. */
+export interface SiteData {
+  readonly site: Site;
+  readonly parts: readonly Item<PartRecord>[];
+  readonly blocks: readonly Item<BlockRecord>[];
+  readonly texts: Readonly<Record<string, string>>;
+}

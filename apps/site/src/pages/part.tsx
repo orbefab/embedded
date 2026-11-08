@@ -1,10 +1,15 @@
-import type { Catalog, Item } from "../catalog";
+import { PartModel } from "../components/part-model";
+import type { Linked } from "../data";
 import { paramSentence, si, sourceText } from "../format";
-import { Island } from "../islands";
 import { at } from "../paths";
-import { dependencyId, type PartRecord } from "../records";
+import { dependencyId, type Item, type PartRecord } from "../records";
 import { Files } from "./files";
-import { Code, Install, None, Section, type Site, Table } from "./layout";
+import { CliComing, Code, Install, None, Section, Table } from "./layout";
+
+export interface PartView {
+  readonly item: Item<PartRecord>;
+  readonly links: Readonly<Record<string, Linked>>;
+}
 
 /** The maker and number a part matches, in words. */
 export function matches(record: PartRecord): string {
@@ -15,16 +20,13 @@ export function matches(record: PartRecord): string {
 }
 
 /** Links to the items named, each to its own page. */
-function Links({ catalog, names }: { catalog: Catalog; names: readonly string[] }) {
-  const title = (name: string) =>
-    catalog.parts.find((item) => item.record.name === name)?.record.title ?? catalog.blocks.find((item) => item.record.name === name)?.record.title;
-  const href = (name: string) => (catalog.blocks.some((item) => item.record.name === name) ? at.block(name) : at.part(name));
+function Links({ links, names }: { links: PartView["links"]; names: readonly string[] }) {
   return (
     <ul className="grid gap-1 sm:grid-cols-2">
       {names.map((name) => (
         <li key={name}>
-          <a className="underline hover:text-brand" href={href(name)}>
-            {title(name) ?? name}
+          <a className="underline hover:text-brand" href={links[name]?.href ?? at.part(name)}>
+            {links[name]?.title ?? name}
           </a>{" "}
           <span className="font-mono text-muted-foreground text-xs">{name}</span>
         </li>
@@ -33,7 +35,8 @@ function Links({ catalog, names }: { catalog: Catalog; names: readonly string[] 
   );
 }
 
-export function PartPage({ site, catalog, item }: { site: Site; catalog: Catalog; item: Item<PartRecord> }) {
+export function PartPage({ part }: { part: PartView }) {
+  const { item, links } = part;
   const { record } = item;
   const children = record.registryDependencies.map(dependencyId);
   return (
@@ -63,7 +66,7 @@ export function PartPage({ site, catalog, item }: { site: Site; catalog: Catalog
       )}
 
       <div className="mt-8">
-        <Island name="part-model" props={{ url: at.partView(record.name) }} />
+        <PartModel url={at.partView(record.name)} />
       </div>
 
       <Section title="Pins">
@@ -151,11 +154,11 @@ export function PartPage({ site, catalog, item }: { site: Site; catalog: Catalog
 
       {children.length === 0 ? null : (
         <Section title="Built from">
-          <Links catalog={catalog} names={[...new Set(children)]} />
+          <Links links={links} names={[...new Set(children)]} />
         </Section>
       )}
       <Section title="Used by">
-        {item.usedBy.length === 0 ? <None>Nothing in the catalog uses it yet.</None> : <Links catalog={catalog} names={item.usedBy} />}
+        {item.usedBy.length === 0 ? <None>Nothing in the catalog uses it yet.</None> : <Links links={links} names={item.usedBy} />}
       </Section>
 
       <Section title="Files">
@@ -207,7 +210,18 @@ export function PartPage({ site, catalog, item }: { site: Site; catalog: Catalog
       </Section>
 
       <Section title="Install">
-        <Install lines={[`orbe add ${record.name}`]} note={<>It copies the part into the project's <Code>parts/</Code> and records it in <Code>parts.lock</Code>.</>} site={site} />
+        {__ORBE_SITE_INSTALL__ ? (
+          <Install
+            lines={[`orbe add ${record.name}`]}
+            note={
+              <>
+                It copies the part into the project's <Code>parts/</Code> and records it in <Code>parts.lock</Code>.
+              </>
+            }
+          />
+        ) : (
+          <CliComing />
+        )}
         <p className="mt-3 font-mono text-muted-foreground text-xs">versions {item.versions.join(", ")}</p>
       </Section>
     </article>

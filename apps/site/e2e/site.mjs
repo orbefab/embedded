@@ -1,24 +1,24 @@
-// Drives the built site in headless Chromium: the landing page plays a Block and frees its
-// Worker when another Block is shown, the parts search finds what `orbe search` finds, a part's
-// page and a board's page draw their 3D and list files, licences and sellers, and a Block's page
-// lights the LED on a press. It prints page weight and the time to the first Block frame.
-// scripts/check-site.sh builds the site first.
-// Usage: node site.mjs --orbe <orbe binary> [--base <url>] [--renders <dir>]
+// Drives the built site in headless Chromium through a server that serves it, `vite preview` or
+// `wrangler dev`: the landing page plays a Block and frees its Worker when another Block is shown,
+// the parts search finds what `orbe search` finds, a part's page and a board's page draw their 3D
+// and list files, licences and sellers, and a Block's page lights the LED on a press and lists
+// each file's own licence. It prints page weight and the time to the first Block frame.
+// scripts/check-site.sh builds the site and starts both servers.
+// Usage: node site.mjs --orbe <orbe binary> --base <url> [--renders <dir>]
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
-import { resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 import { chromium } from "playwright-core";
-import { preview } from "../preview.mjs";
 
 const arg = (name) => {
   const at = process.argv.indexOf(name);
   return at < 0 ? undefined : process.argv[at + 1];
 };
 const orbe = arg("--orbe");
+const base = arg("--base");
 const renders = arg("--renders");
-if (orbe === undefined) {
-  console.error("usage: node site.mjs --orbe <orbe binary> [--base <url>] [--renders <dir>]");
+if (orbe === undefined || base === undefined) {
+  console.error("usage: node site.mjs --orbe <orbe binary> --base <url> [--renders <dir>]");
   process.exit(2);
 }
 if (renders !== undefined) mkdirSync(renders, { recursive: true });
@@ -28,13 +28,6 @@ if (!existsSync(executable)) {
   console.error("`pnpm --filter @orbe/site exec playwright-core install chromium`.");
   process.exit(2);
 }
-if (arg("--base") === undefined && !existsSync(resolve(import.meta.dirname, "../dist/embedded/index.html"))) {
-  console.error("No apps/site/dist. Run scripts/site.sh first, or scripts/check-site.sh.");
-  process.exit(2);
-}
-
-const server = arg("--base") === undefined ? await preview() : null;
-const base = arg("--base") ?? server.url;
 const browser = await chromium.launch({ executablePath: executable, args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
 
 let failed = 0;
@@ -53,6 +46,9 @@ async function open(path) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const errors = [];
   const fetched = [];
+  const urls = [];
+  page.on("request", (request) => urls.push(request.url()));
+  page.urls = urls;
   page.on("requestfinished", (request) =>
     fetched.push(
       request
@@ -131,6 +127,12 @@ const pointOn = (page, ref, node) =>
     },
     [ref, node]
   );
+/** Each file in a page's Files table, with the licence it shows. */
+const licences = (page) =>
+  page
+    .locator("section", { has: page.locator("h2", { hasText: /^Files$/ }) })
+    .locator("tbody tr")
+    .evaluateAll((rows) => Object.fromEntries(rows.map((row) => [row.cells[0].textContent, row.cells[2].textContent])));
 const markAt = (page, name) => page.evaluate((name) => performance.getEntriesByName(name)[0]?.startTime ?? null, name);
 
 async function step(name, run) {
@@ -181,6 +183,12 @@ await step("landing", async () => {
   await page.waitForTimeout(1500);
   await shot(page, "site-landing-switched");
   check("the landing page logged no error", errors.length === 0, errors);
+  const own = (url) => url.startsWith(`${new URL(base).origin}/`);
+  const calls = page.urls.filter((url) => own(url) && /_serverFn|__tsr/.test(url));
+  check("the page asks no server for data", calls.length === 0, calls);
+  const outside = page.urls.filter((url) => own(url) && !new URL(url).pathname.startsWith("/embedded/"));
+  check("every file the page loads is under /embedded/", outside.length === 0, outside);
+  check("the wordmark's font loads from /embedded/fonts/", page.urls.some((url) => url.endsWith("/embedded/fonts/Syne-VariableFont_wght.ttf")), null);
   await page.close();
 });
 
@@ -248,6 +256,13 @@ await step("nano-board", async () => {
   await page.close();
   const uno = await open("/embedded/parts/uno-board/");
   check("the Uno is titled as a compatible board", (await uno.page.textContent("h1")) === "Uno R3 compatible board", await uno.page.textContent("h1"));
+  const unoFiles = await licences(uno.page);
+  check(
+    "the Uno's part.jsonc shows CC-BY-SA-4.0, the licence of the Arduino board file its wiring comes from",
+    unoFiles["part.jsonc"] === "CC-BY-SA-4.0" && unoFiles["uno-board.glb"] === "MIT OR Apache-2.0",
+    unoFiles
+  );
+  check("the Uno's page links Arduino's board file", /UNO-TH_Rev3e/.test(await text(uno.page)), null);
   await uno.page.close();
 });
 
@@ -256,7 +271,7 @@ await step("nano-button-led", async () => {
   await waitObject(page, "@btn1");
   await page.waitForFunction(() => document.querySelector('[data-testid="state"]')?.textContent === "playing", null, { timeout: 10_000 });
   check("the Block's page plays it", true, null);
-  await page.locator("[data-island]").scrollIntoViewIfNeeded();
+  await page.locator("canvas").scrollIntoViewIfNeeded();
   const stem = await pointOn(page, "@btn1", "stem");
   await page.mouse.move(stem.x, stem.y);
   await page.mouse.down();
@@ -277,6 +292,16 @@ await step("nano-button-led", async () => {
   const body = await text(page);
   check("the page shows the scene and the firmware source", /scene\.jsonc/.test(body) && /firmware\/button\/button\.ino/.test(body), null);
   check("it shows no install command and no README", !INSTALL.test(body) && !/README\.md\n/.test(body.split("Files")[0] ?? ""), body.match(INSTALL)?.[0]);
+  const files = await licences(page);
+  check(
+    "each Block file shows its own licence",
+    files["scene.jsonc"] === "MIT OR Apache-2.0" &&
+      files["firmware/button/button.ino"] === "MIT OR Apache-2.0" &&
+      files["firmware/button.hex"] === "LGPL-2.1-or-later" &&
+      files["firmware/LICENSE-runtime"] === "LGPL-2.1-or-later" &&
+      files["firmware/LICENSE-libc"] === "BSD-3-Clause",
+    files
+  );
   check("the session refused no command", (await page.locator('[data-testid="errors"]').count()) === 0, await page.locator('[data-testid="errors"]').allTextContents());
   check("the Block's page logged no error", errors.length === 0, errors);
   await page.close();
@@ -289,7 +314,31 @@ await step("not found", async () => {
   await page.close();
 });
 
+await step("cache", async () => {
+  const head = async (path, headers = {}) => {
+    const response = await fetch(`${base}${path}`, { headers, redirect: "manual" });
+    await response.arrayBuffer();
+    return { status: response.status, cache: response.headers.get("cache-control") ?? "", etag: response.headers.get("etag") };
+  };
+  const index = await (await fetch(`${base}/embedded/r/index.json`)).json();
+  const row = index.items.find((item) => item.name === "led-5mm");
+  const record = await (await fetch(new URL(row.url, `${base}/embedded/r/index.json`))).json();
+  const file = `/embedded/r/files/${record.files[0].sha256}`;
+  const hit = await head(file);
+  const again = await head(file, { "If-None-Match": hit.etag ?? "" });
+  check("a registry file revalidates against its ETag, and an unchanged one answers 304", hit.status === 200 && hit.etag !== null && again.status === 304, { hit, again });
+  const miss = await head("/embedded/r/files/0000000000000000000000000000000000000000000000000000000000000000");
+  check("a missing registry file answers 404 with no immutable cache", miss.status === 404 && !/immutable/.test(miss.cache), miss);
+  const css = await (await fetch(`${base}/embedded/`)).text();
+  const asset = css.match(/\/embedded\/assets\/[^"]+\.css/)?.[0];
+  const built = await head(asset);
+  check("a hashed build file keeps for a year", built.status === 200 && /max-age=31536000, immutable/.test(built.cache), { asset, built });
+  const at = await head("/embedded/r/led-5mm@0.1.0.json");
+  check("a path with @ answers 307 to the same path with %40", at.status === 307, at);
+  const outside = await head("/embeddedfoo");
+  check("a path that only starts with /embedded is not this site's", outside.status === 404, outside);
+});
+
 await browser.close();
-await server?.close();
 console.log(failed === 0 ? "all site checks passed" : `${failed} site checks failed`);
 process.exit(failed === 0 ? 0 : 1);

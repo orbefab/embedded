@@ -1,17 +1,7 @@
 import { Wordmark } from "@orbe/brand/mark";
 import type { ReactNode } from "react";
 import { at } from "../paths";
-
-/** What every page knows of the build. */
-export interface Site {
-  /** Whether the repo and the binaries are public, so install lines and repo links work. The
-   * build sets it from `ORBE_SITE_INSTALL=1`. */
-  readonly install: boolean;
-  /** The registry's name, such as `@orbefab`. */
-  readonly registry: string;
-  /** orbe-wasm's version and the commit it was built from. */
-  readonly engine: { readonly version: string; readonly commit: string | null };
-}
+import type { Site } from "../records";
 
 export function Header() {
   return (
@@ -43,11 +33,11 @@ export function Footer({ site }: { site: Site }) {
       <div className="mx-auto grid max-w-5xl gap-3 px-6 py-10 text-muted-foreground text-sm">
         <p>
           orbe and this catalog are open source under MIT OR Apache-2.0, unless a file says otherwise. Each file lists its own licence.
-          {site.install ? (
+          {__ORBE_SITE_INSTALL__ ? (
             <>
               {" "}
               The source is at{" "}
-              <a className="underline hover:text-foreground" href={at.repo}>
+              <a className="underline hover:text-foreground" href="https://github.com/orbefab/embedded">
                 github.com/orbefab/embedded
               </a>
               .
@@ -92,17 +82,20 @@ export function Code({ children }: { children: ReactNode }) {
   return <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.9em]">{children}</code>;
 }
 
-/** Install lines when the CLI is public, and else that it is coming, so the page never shows a
+/** Says the CLI is coming, where install lines show once it is public, so a page never shows a
  * command that fails. */
-export function Install({ site, lines, note }: { site: Site; lines: readonly string[]; note?: ReactNode }) {
-  if (!site.install) {
-    return (
-      <p className="text-muted-foreground" data-testid="cli-coming">
-        The orbe CLI is coming. Its source and binaries are not public yet, so there is nothing to install today. Until then, browse the parts and play
-        the Blocks here.
-      </p>
-    );
-  }
+export function CliComing() {
+  return (
+    <p className="text-muted-foreground" data-testid="cli-coming">
+      The orbe CLI is coming. Its source and binaries are not public yet, so there is nothing to install today. Until then, browse the parts and play
+      the Blocks here.
+    </p>
+  );
+}
+
+/** Install lines. Each page shows them only under `__ORBE_SITE_INSTALL__`, so a build without
+ * the flag holds none of them. */
+export function Install({ lines, note }: { lines: readonly string[]; note?: ReactNode }) {
   return (
     <div data-testid="install">
       <pre className="overflow-x-auto rounded-lg border border-border bg-muted p-4 font-mono text-sm">{lines.join("\n")}</pre>

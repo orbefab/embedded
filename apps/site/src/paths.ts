@@ -14,5 +14,4 @@ export const at = {
   wasm: `${BASE}orbe-wasm/`,
   asset: (path: string) => `${BASE}${path}`,
   website: "https://orbefab.com/",
-  repo: "https://github.com/orbefab/embedded",
 } as const;

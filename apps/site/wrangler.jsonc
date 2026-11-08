@@ -1,15 +1,21 @@
 // The Worker that serves orbefab.com/embedded and every path under it. It runs no code: it serves
-// dist/, which scripts/site.sh builds, as static assets. docs/site.md says how to deploy it.
+// dist/client, which scripts/site.sh builds, as static assets mounted at /embedded. The build
+// writes the deploy config, dist/client/wrangler.json, from this file. docs/site.md says how to
+// deploy it.
 {
+  "$schema": "node_modules/wrangler/config-schema.json",
   "name": "orbefab-embedded",
   "compatibility_date": "2026-11-01",
-  // A route, not a Custom Domain: the website's Worker holds orbefab.com, and a route runs
-  // before it for these paths.
-  "routes": [{ "pattern": "orbefab.com/embedded*", "zone_name": "orbefab.com" }],
+  // Routes, not a Custom Domain: the website's Worker holds orbefab.com, and a route runs before
+  // it for the paths it matches. `orbefab.com/embedded*` would also match /embeddedfoo.
+  "routes": [
+    { "pattern": "orbefab.com/embedded", "zone_name": "orbefab.com" },
+    { "pattern": "orbefab.com/embedded/*", "zone_name": "orbefab.com" },
+  ],
   "workers_dev": false,
   "preview_urls": false,
   "assets": {
-    "directory": "./dist",
+    "base_path": "/embedded",
     "html_handling": "auto-trailing-slash",
     "not_found_handling": "404-page",
   },
