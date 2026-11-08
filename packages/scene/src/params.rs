@@ -1,13 +1,13 @@
 //! A param's value, as an instance or a default writes it, turned into what it sets in the
 //! part's model.
 
-use std::fs;
 use std::path::PathBuf;
 
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::diagnostic::Code;
+use crate::files::Files;
 use crate::model::{ParamDecl, ParamKind, Range};
 use crate::name::did_you_mean;
 use crate::project::hex;
@@ -33,7 +33,7 @@ fn fail(message: impl Into<String>, hint: impl Into<String>) -> (Code, String, S
 }
 
 /// The pointers a param's value sets in the model, and what goes at each.
-pub(crate) fn convert(decl: &ParamDecl, arg: &Arg) -> Converted {
+pub(crate) fn convert(files: &Files, decl: &ParamDecl, arg: &Arg) -> Converted {
     let node = &arg.node;
     let pointer = decl.sets.clone().unwrap_or_default();
     match &decl.kind {
@@ -82,7 +82,7 @@ pub(crate) fn convert(decl: &ParamDecl, arg: &Arg) -> Converted {
                     "write a path relative to the file that sets it",
                 ));
             };
-            match fs::read(arg.dir.join(rel)) {
+            match files.read(&arg.dir.join(rel)) {
                 Ok(bytes) if *text => match String::from_utf8(bytes) {
                     Ok(text) => Ok(vec![(pointer, Value::String(text))]),
                     Err(_) => Err(fail(

@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 
 use super::{Circuit, ROOT};
 use crate::diagnostic::Findings;
+use crate::files::Files;
 use crate::model::{ParamKind, PinDef};
 use crate::params::number;
 use crate::project::{hash_files, hex};
@@ -226,10 +227,11 @@ impl Circuit<'_> {
         let id = &part.label;
         let folder = root.join("parts").join(id);
         let catalog = file == &folder.join("part.jsonc");
-        let model = (catalog && folder.join(format!("{id}.glb")).is_file())
+        let files = self.project.files;
+        let model = (catalog && files.is_file(&folder.join(format!("{id}.glb"))))
             .then(|| format!("/parts/{id}/{id}.glb"));
         let anchors = if catalog {
-            anchors(&folder.join(format!("{id}.anchors.json")))
+            anchors(files, &folder.join(format!("{id}.anchors.json")))
         } else {
             Vec::new()
         };
@@ -377,8 +379,9 @@ fn joint(written: &Value) -> Option<Joint> {
     })
 }
 
-fn anchors(path: &Path) -> Vec<Value> {
-    std::fs::read(path)
+fn anchors(files: &Files, path: &Path) -> Vec<Value> {
+    files
+        .read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .and_then(|file| file["anchors"].as_array().cloned())

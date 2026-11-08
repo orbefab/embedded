@@ -4,7 +4,7 @@
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
-use orbe_session::{Code, Command, Data, Live, Ref, Reply};
+use orbe_session::{Code, Command, Data, Files, Live, Ref, Reply};
 
 fn first_target() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-target")
@@ -15,7 +15,7 @@ fn command(line: &str) -> Command {
 }
 
 fn pressed_at_100ms() -> Live {
-    let mut live = Live::new("t");
+    let mut live = Live::new("t", Files::disk());
     for line in ["open", "step 100ms", "press @btn1"] {
         let reply = live.run(&command(line));
         assert!(reply.ok(), "{line}: {}", reply.text());
@@ -109,7 +109,7 @@ fn commands_and_replies_cross_the_wire_unchanged() {
         "close",
         "open missing.jsonc",
     ];
-    let mut live = Live::new("t");
+    let mut live = Live::new("t", Files::disk());
     let mut codes = Vec::new();
     for line in lines {
         let command = command(line);
@@ -123,7 +123,7 @@ fn commands_and_replies_cross_the_wire_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     let scene = dir.path().join("scene.jsonc");
     std::fs::copy(first_target().join("scene.jsonc"), &scene).unwrap();
-    let refused = Live::new("t").run(&Command::Open(scene));
+    let refused = Live::new("t", Files::disk()).run(&Command::Open(scene));
     assert!(
         matches!(&refused.data, Data::Invalid(found) if found.len() > 1),
         "{refused:?}"

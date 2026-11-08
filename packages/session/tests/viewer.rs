@@ -4,7 +4,7 @@
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
-use orbe_session::{Code, Command, Duration, FrameState, Frames, Live, Reply, State};
+use orbe_session::{Code, Command, Duration, Files, FrameState, Frames, Live, Reply, State};
 use serde_json::{Value, json};
 
 fn first_target() -> PathBuf {
@@ -16,7 +16,7 @@ fn command(line: &str) -> Command {
 }
 
 fn opened() -> Live {
-    let mut live = Live::new("t");
+    let mut live = Live::new("t", Files::disk());
     let reply = live.run(&command("open"));
     assert!(reply.ok(), "{}", reply.text());
     live
@@ -209,7 +209,7 @@ fn the_next_step_lists_what_play_ran() {
 
 #[test]
 fn a_step_refused_at_the_stop_lists_what_play_ran() {
-    let mut live = Live::new("t");
+    let mut live = Live::new("t", Files::disk());
     live.stop_at(Some((Duration::from_ms(40), "ORBE_TEST_STOP".into())));
     assert!(live.run(&command("open")).ok());
     assert!(live.run(&Command::Play).ok());
@@ -229,7 +229,7 @@ fn a_step_refused_at_the_stop_lists_what_play_ran() {
 
 #[test]
 fn play_ends_at_the_stop() {
-    let mut live = Live::new("t");
+    let mut live = Live::new("t", Files::disk());
     live.stop_at(Some((Duration::from_ms(40), "ORBE_TEST_STOP".into())));
     assert!(live.run(&command("open")).ok());
     assert!(live.run(&Command::Play).ok());
@@ -250,7 +250,7 @@ fn play_ends_at_the_stop() {
 #[test]
 fn a_test_file_refuses_play() {
     let file = first_target().join("tests/play.test");
-    let report = orbe_session::test::run(&file, "open\nplay\n", &first_target());
+    let report = orbe_session::test::run(Files::disk(), &file, "open\nplay\n", &first_target());
     let failed = report.failure().unwrap();
     assert_eq!(failed.text, "play");
     let error = failed.reply.error.as_ref().unwrap();

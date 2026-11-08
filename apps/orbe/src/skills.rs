@@ -350,6 +350,7 @@ mod tests {
         assert!(core.contains(&listed), "core does not list {listed}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn every_code_in_the_core_error_table_is_one_orbe_reports() {
         use orbe_scene::AddCode as Add;

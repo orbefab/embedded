@@ -16,7 +16,7 @@ use orbe_engine_core::diagnostic::{Diagnostic as EngineDiagnostic, Excursion};
 use orbe_engine_core::logic::Level as EngineLevel;
 use orbe_engine_core::name::{Name, Quantity, Ref as EngineRef};
 use orbe_engine_core::netlist::{Analysis, Contact, RatingKind};
-use orbe_scene::{Code as SceneCode, RefMap, View};
+use orbe_scene::{Code as SceneCode, Files, RefMap, View};
 
 use crate::command::{Command, Step};
 use crate::condition::Unit;
@@ -43,6 +43,7 @@ use serial::Serial;
 /// A named session that holds at most one open scene.
 pub struct Live {
     name: String,
+    files: Files,
     open: Option<Open>,
     stop: Option<(Duration, String)>,
 }
@@ -93,9 +94,11 @@ fn key(d: &EngineDiagnostic) -> Key {
 }
 
 impl Live {
-    pub fn new(name: impl Into<String>) -> Live {
+    /// A session that reads the scenes it opens from `files`.
+    pub fn new(name: impl Into<String>, files: Files) -> Live {
         Live {
             name: name.into(),
+            files,
             open: None,
             stop: None,
         }
@@ -201,7 +204,7 @@ impl Live {
     /// that was open as it was.
     fn open(&mut self, scene: &Path) -> Outcome {
         let shown = scene.display().to_string();
-        if !scene.is_file() {
+        if !self.files.is_file(scene) {
             return Err(fail(Error::new(
                 Code::IoError,
                 format!("no scene file at {shown}"),
@@ -209,7 +212,8 @@ impl Live {
             )));
         }
         let dir = scene.parent().unwrap_or(Path::new(""));
-        let mut netlist = orbe_scene::read(scene).map_err(|found| refused(dir, &shown, found))?;
+        let mut netlist =
+            orbe_scene::read(&self.files, scene).map_err(|found| refused(dir, &shown, found))?;
         if let Some((stop, variable)) = &self.stop {
             let stop = shorter_stop(&netlist.json, *stop, variable).map_err(fail)?;
             let at = |ps: u64| format!("\"stop_ps\": {ps}");
@@ -818,11 +822,11 @@ mod tests {
     fn stopping_at_50ms() -> Live {
         let scene = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../examples/first-target/scene.jsonc");
-        let netlist = orbe_scene::read(&scene).unwrap();
+        let netlist = orbe_scene::read(&Files::disk(), &scene).unwrap();
         let stop = format!("\"stop_ps\": {}", orbe_scene::STOP_PS);
         assert!(netlist.json.contains(&stop), "{}", netlist.json);
         let json = netlist.json.replace(&stop, "\"stop_ps\": 50000000000");
-        let mut live = Live::new("t");
+        let mut live = Live::new("t", Files::disk());
         live.open = Some(
             Open::new(&json, netlist.refs, netlist.view, "scene.jsonc".into())
                 .unwrap_or_else(|f| panic!("{:?}", f.error)),

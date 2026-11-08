@@ -3,6 +3,8 @@
 
 use std::path::{Component, Path, PathBuf};
 
+use orbe_scene::Files;
+
 use crate::command::Command;
 use crate::live::Live;
 use crate::reply::{Code, Error, Reply};
@@ -42,9 +44,10 @@ impl Report {
     }
 }
 
-/// Runs a test file's text. Paths in it start from `root`, the project folder above `tests/`.
-pub fn run(file: &Path, text: &str, root: &Path) -> Report {
-    let mut live = Live::new(file.display().to_string());
+/// Runs a test file's text on a scene in `files`. Paths in it start from `root`, the project
+/// folder above `tests/`.
+pub fn run(files: Files, file: &Path, text: &str, root: &Path) -> Report {
+    let mut live = Live::new(file.display().to_string(), files);
     let mut lines = Vec::new();
     for (index, line) in text.lines().enumerate() {
         let reply = match Command::parse(line, root) {

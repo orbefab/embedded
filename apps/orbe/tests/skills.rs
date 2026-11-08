@@ -17,6 +17,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use harness::{Run, Runtime};
+use orbe_scene::Files;
 
 fn skill(name: &str) -> String {
     let runtime = Runtime::new();
@@ -192,7 +193,7 @@ fn the_arduino_sketch_is_the_one_the_prebuilt_firmware_was_built_from() {
 #[test]
 fn the_nano_pins_the_skills_call_not_simulated_are_the_ones_the_reader_leaves_out() {
     let scene = common::repo().join("examples/first-target/scene.jsonc");
-    let netlist = orbe_scene::read(&scene).expect("the first target checks");
+    let netlist = orbe_scene::read(&Files::disk(), &scene).expect("the first target checks");
     let left_out: BTreeSet<&str> = netlist.refs.parts["nano"]
         .pins
         .iter()
@@ -207,7 +208,7 @@ fn the_nano_pins_the_skills_call_not_simulated_are_the_ones_the_reader_leaves_ou
 #[test]
 fn the_uno_pins_the_skills_call_not_simulated_are_the_ones_the_reader_leaves_out() {
     let scene = common::repo().join("examples/uno-button/scene.jsonc");
-    let netlist = orbe_scene::read(&scene).expect("the uno example checks");
+    let netlist = orbe_scene::read(&Files::disk(), &scene).expect("the uno example checks");
     let left_out: BTreeSet<&str> = netlist.refs.parts["uno"]
         .pins
         .iter()

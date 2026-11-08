@@ -61,7 +61,7 @@ struct PinInfo {
 }
 
 struct Circuit<'p> {
-    project: &'p Project,
+    project: &'p Project<'p>,
     out: &'p mut Findings,
     insts: Vec<Inst>,
     keys: BTreeMap<(usize, String), usize>,
@@ -192,7 +192,7 @@ pub(crate) fn compile(
 
 impl<'p> Circuit<'p> {
     fn part(&self, inst: usize) -> Option<&'p Part> {
-        let project: &'p Project = self.project;
+        let project: &'p Project<'p> = self.project;
         self.insts[inst].part.map(|p| &project.parts[p])
     }
 
@@ -1008,7 +1008,7 @@ impl<'p> Circuit<'p> {
                 (false, false, true) => Rank::Required,
                 (false, false, false) => Rank::Default,
             };
-            match convert(decl, &arg) {
+            match convert(self.project.files, decl, &arg) {
                 Ok(sets) => {
                     let setter = Setter::new(decl, &arg);
                     let opens = decl.opens() && !arg.node.is_null();
