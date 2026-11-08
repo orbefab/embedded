@@ -1,5 +1,5 @@
-import { channelSource } from "./channel-source";
-import type { FromSession, SceneMessage, SessionSource } from "./protocol";
+import { channelSource, receive } from "./channel-source";
+import type { SceneMessage, SessionSource } from "./protocol";
 import type { BlockFiles } from "./registry";
 
 /** What the source posts a Worker running orbe-wasm's `worker.js` first, before any command. */
@@ -14,12 +14,14 @@ export interface OpenMessage {
  * files, and commands sent before they reach the Worker wait for them. The Worker has no server,
  * so each part model the scene names, a path in the Block's files such as
  * `/parts/led-5mm/led-5mm.glb`, is served from those files as an object URL. A Block that does
- * not load or open, or a Worker that fails, ends the session with why. */
+ * not load or open, a Worker that fails, or a message that is not JSON ends the session with why.
+ * `close` terminates the Worker and revokes the object URLs. */
 export function workerSource(open: () => Worker, load: () => Promise<BlockFiles>): SessionSource {
-  return channelSource(({ message, drop }) => {
+  return channelSource((inbox) => {
     const worker = open();
     const queued: string[] = [];
     let files: BlockFiles | null = null;
+    let closed = false;
     const models = new Map<string, string>();
     const served = (scene: SceneMessage): SceneMessage => {
       const parts = Object.fromEntries(
@@ -37,27 +39,38 @@ export function workerSource(open: () => Worker, load: () => Promise<BlockFiles>
       return { ...scene, parts };
     };
 
-    worker.onmessage = (event: MessageEvent<string>) => {
-      const parsed = JSON.parse(event.data) as FromSession;
-      message(parsed.type === "scene" ? served(parsed) : parsed);
-    };
+    worker.onmessage = (event: MessageEvent<string>) =>
+      receive(
+        { message: (message) => inbox.message(message.type === "scene" ? served(message) : message), drop: inbox.drop },
+        event.data,
+        "the session's Worker"
+      );
     worker.onerror = (event) => {
       event.preventDefault();
-      drop(`the session's Worker failed: ${event.message}`);
+      inbox.drop(`the session's Worker failed: ${event.message}`);
     };
     load().then(
       (block) => {
+        if (closed) return;
         files = block;
         const opening: OpenMessage = { type: "open", name: block.name, files: [...block.files] };
         worker.postMessage(opening);
         for (const text of queued) worker.postMessage(text);
         queued.length = 0;
       },
-      (error: unknown) => drop(`the Block did not load: ${error instanceof Error ? error.message : String(error)}`)
+      (error: unknown) => inbox.drop(`the Block did not load: ${error instanceof Error ? error.message : String(error)}`)
     );
-    return (text) => {
-      if (files === null) queued.push(text);
-      else worker.postMessage(text);
+    return {
+      send(text) {
+        if (files === null) queued.push(text);
+        else worker.postMessage(text);
+      },
+      close() {
+        closed = true;
+        worker.terminate();
+        for (const url of models.values()) URL.revokeObjectURL(url);
+        models.clear();
+      },
     };
   });
 }

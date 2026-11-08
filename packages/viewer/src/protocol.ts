@@ -245,6 +245,10 @@ export interface SessionSource {
   subscribe(listener: (message: ToViewer) => void): () => void;
   /** Rejects when the command never reached the session. */
   send(command: Command): Promise<Reply>;
+  /** Frees what the source holds, such as its Worker and object URLs or its socket. Listeners
+   * get nothing more, and commands reject. A page calls it when it shows another session or
+   * unmounts. */
+  close(): void;
 }
 
 /** The reply's error as the CLI prints it, such as `error[ended]: …` with its hint below. */

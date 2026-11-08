@@ -8,11 +8,18 @@ class FakeWorker {
   posted: unknown[] = [];
   onmessage: ((event: { readonly data: string }) => void) | null = null;
   onerror: ((event: { readonly message: string; preventDefault(): void }) => void) | null = null;
+  terminated = false;
+  terminate() {
+    this.terminated = true;
+  }
   postMessage(data: unknown) {
     this.posted.push(typeof data === "string" ? JSON.parse(data) : data);
   }
   receive(message: unknown) {
     this.onmessage?.({ data: JSON.stringify(message) });
+  }
+  receiveText(text: string) {
+    this.onmessage?.({ data: text });
   }
 }
 
@@ -115,5 +122,52 @@ describe("workerSource", () => {
     two.subscribe((message) => ended.push(message));
     failing.onerror?.({ message: "out of memory", preventDefault() {} });
     expect(ended).toEqual([{ type: "closed", reason: "the session's Worker failed: out of memory" }]);
+  });
+
+  test("ends with why when the Worker sends text that is not JSON", async () => {
+    const worker = new FakeWorker();
+    const source = workerSource(
+      () => worker as unknown as Worker,
+      async () => block
+    );
+    await settle();
+    const got: ToViewer[] = [];
+    source.subscribe((message) => got.push(message));
+    worker.receiveText("{not json");
+    expect(got).toHaveLength(1);
+    expect((got[0] as { reason: string }).reason).toMatch(/^the session's Worker sent text that is not JSON: /);
+  });
+
+  test("close terminates the Worker, revokes its model URLs and rejects commands", async () => {
+    const worker = new FakeWorker();
+    const source = workerSource(
+      () => worker as unknown as Worker,
+      async () => block
+    );
+    await settle();
+    const got: ToViewer[] = [];
+    source.subscribe((message) => got.push(message));
+    worker.receive(scene);
+    const url = (got[0] as SceneMessage).parts["led-5mm"]?.model ?? "";
+    const waiting = source.send({ cmd: "play" });
+    source.close();
+    expect(worker.terminated).toBe(true);
+    await expect(fetch(url)).rejects.toThrow();
+    await expect(waiting).rejects.toThrow("the page closed the session");
+    await expect(source.send({ cmd: "pause" })).rejects.toThrow("the page closed the session");
+    expect(got).toHaveLength(1);
+  });
+
+  test("a Block that loads after close is never posted", async () => {
+    const worker = new FakeWorker();
+    let resolve: (files: BlockFiles) => void = () => {};
+    const source = workerSource(
+      () => worker as unknown as Worker,
+      () => new Promise((done) => (resolve = done))
+    );
+    source.close();
+    resolve(block);
+    await settle();
+    expect(worker.posted).toEqual([]);
   });
 });

@@ -8,11 +8,29 @@ export interface Inbox {
   drop(reason: string): void;
 }
 
-/** A session over a channel that carries its messages: `connect` opens the channel and returns
- * how to send one command's JSON text on it. A new listener gets the current scene, then the
- * latest frame. Once the session closes or the channel drops, every listener gets a `closed`
- * message, and commands reject. */
-export function channelSource(connect: (inbox: Inbox) => (text: string) => void): SessionSource {
+/** An open channel: how to send one command's JSON text on it, and how to free it. */
+export interface Channel {
+  send(text: string): void;
+  close(): void;
+}
+
+/** Parses one message's JSON text from a session, or drops the channel with why. */
+export function receive(inbox: Inbox, text: string, from: string): void {
+  let parsed: FromSession;
+  try {
+    parsed = JSON.parse(text) as FromSession;
+  } catch (error) {
+    inbox.drop(`${from} sent text that is not JSON: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+  inbox.message(parsed);
+}
+
+/** A session over a channel that carries its messages: `connect` opens the channel. A new
+ * listener gets the current scene, then the latest frame. Once the session closes or the
+ * channel drops, every listener gets a `closed` message, and commands reject. `close` frees the
+ * channel, and listeners get nothing more. */
+export function channelSource(connect: (inbox: Inbox) => Channel): SessionSource {
   const listeners = new Set<(message: ToViewer) => void>();
   const waiting = new Map<number, { resolve: (reply: Reply) => void; reject: (error: Error) => void }>();
   let scene: SceneMessage | null = null;
@@ -31,7 +49,7 @@ export function channelSource(connect: (inbox: Inbox) => (text: string) => void)
     broadcast(message);
   };
 
-  const send = connect({
+  const channel = connect({
     message(message) {
       switch (message.type) {
         case "scene":
@@ -71,8 +89,13 @@ export function channelSource(connect: (inbox: Inbox) => (text: string) => void)
       const text = JSON.stringify({ ...command, id });
       return new Promise<Reply>((resolve, reject) => {
         waiting.set(id, { resolve, reject });
-        send(text);
+        channel.send(text);
       });
+    },
+    close() {
+      listeners.clear();
+      end({ type: "closed", reason: "the page closed the session" });
+      channel.close();
     },
   };
 }
