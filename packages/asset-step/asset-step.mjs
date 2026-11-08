@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// The asset step: brings each part's body model from a commit of the models repo into
-// parts/<id>/, checked and merged. See docs/asset-step.md.
+// The asset step: checks a part's body model and writes the merged GLB and asset.json.
+// A part with model.py is built by scripts/model.sh. Any other part is read from the
+// commit its asset.json records. See docs/asset-step.md.
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -17,12 +18,17 @@ const REPO = 'https://github.com/orbefab/models';
 const quiet = new Logger(Logger.Verbosity.WARN);
 const io = new NodeIO().setLogger(quiet);
 
-const USAGE = `usage: asset-step.mjs --models <models checkout> [--commit <rev>] [--parts <dir>] [<id> ...]
+const USAGE = `usage: asset-step.mjs (--models <checkout> | --local --raw <dir>) [--commit <rev>] [--parts <dir>] [<id> ...]
 
-Reads GLB/parts/<id>.glb and <id>.anchors.json at <rev> of the models checkout, without
-checking it out, and writes parts/<id>/<id>.glb, <id>.anchors.json and asset.json. With no
---commit, each part is rerun from the commit its asset.json records. With no ids, every part
-in --parts (default: this repo's parts/) that has a GLB at that commit.`;
+--local reads <raw>/<id>/<id>.glb and <id>.anchors.json, the files model.py just wrote, and
+writes the merged GLB, the anchors and asset.json into the part folder after the checks pass.
+With no ids, every part that has model.py. It does not read the GLB already in the part folder.
+
+--models reads GLB/parts/<id>.glb and <id>.anchors.json at <rev> of that checkout, without
+checking it out. With no --commit, each part is rerun from the commit its asset.json records.
+With no ids, every part in --parts (default: this repo's parts/) that has a GLB at that commit.
+A part that has model.py is skipped, unless you name it, which fails and tells you to run
+scripts/model.sh.`;
 
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
@@ -92,6 +98,32 @@ function readPart(partsDir, id) {
   };
 }
 
+function hasScript(partsDir, id) {
+  return existsSync(join(partsDir, id, 'model.py'));
+}
+
+/** The merged GLB and anchors already in the part folder, for a child of a composed part. */
+function folderModel(partsDir, id) {
+  const glbPath = join(partsDir, id, `${id}.glb`);
+  if (!existsSync(glbPath)) return null;
+  const glb = readFileSync(glbPath);
+  const anchorsPath = join(partsDir, id, `${id}.anchors.json`);
+  const anchors = existsSync(anchorsPath) ? readFileSync(anchorsPath) : null;
+  return { glb, anchors };
+}
+
+/** The raw export model.py wrote under `rawDir`, plus the hash of model.py. */
+function rawSource(rawDir, partsDir, id) {
+  const glbPath = join(rawDir, id, `${id}.glb`);
+  const scriptPath = join(partsDir, id, 'model.py');
+  if (!existsSync(glbPath) || !existsSync(scriptPath)) return null;
+  const glb = readFileSync(glbPath);
+  const anchorsPath = join(rawDir, id, `${id}.anchors.json`);
+  const anchors = existsSync(anchorsPath) ? readFileSync(anchorsPath) : null;
+  const script = readFileSync(scriptPath);
+  return { script: 'model.py', sha256: sha256(script), bytes: script.length, glb, anchors };
+}
+
 function source(models, commit, id) {
   const glbPath = `GLB/parts/${id}.glb`;
   const anchorsPath = `GLB/parts/${id}.anchors.json`;
@@ -125,8 +157,13 @@ async function childModels(models, partsDir, part, found = new Map()) {
     if (found.has(type)) continue;
     const asset = readAsset(partsDir, type);
     if (!asset) continue;
-    const src = source(models, recorded(models, type, asset.source.commit), type);
-    if (!src) throw new CheckFailed('composition', `child type \`${type}\` has no GLB at the commit its asset.json records`);
+    const src = hasScript(partsDir, type) || !asset.source?.commit
+      ? folderModel(partsDir, type)
+      : source(models, recorded(models, type, asset.source.commit), type);
+    if (!src) {
+      const where = hasScript(partsDir, type) ? 'in its folder' : 'at the commit its asset.json records';
+      throw new CheckFailed('composition', `child type \`${type}\` has no GLB ${where}`);
+    }
     const child = readPart(partsDir, type);
     const nodes = partNodes((await io.readBinary(src.glb)).setLogger(quiet));
     found.set(type, { part: child, nodes, anchors: readAnchors(src, type), drawCalls: asset.draw_calls });
@@ -156,7 +193,9 @@ async function step(part, src, models, partsDir) {
   if (src.anchors) files[`${part.id}.anchors.json`] = digest(src.anchors);
   const asset = {
     part: part.id,
-    source: { repo: REPO, commit: src.commit, inputs: src.inputs },
+    source: src.script
+      ? { script: src.script, sha256: src.sha256, bytes: src.bytes }
+      : { repo: REPO, commit: src.commit, inputs: src.inputs },
     files,
     box: merged.box,
     kept_nodes: merged.kept,
@@ -208,21 +247,47 @@ function report(id, error) {
 
 async function main() {
   const { values, positionals } = parseArgs({
-    options: { models: { type: 'string' }, commit: { type: 'string' }, parts: { type: 'string' } },
+    options: {
+      models: { type: 'string' },
+      commit: { type: 'string' },
+      parts: { type: 'string' },
+      local: { type: 'boolean' },
+      raw: { type: 'string' },
+    },
     allowPositionals: true,
   });
-  if (!values.models) {
+  if (!values.models && !values.local) {
     console.error(USAGE);
+    return 2;
+  }
+  if (values.models && values.local) {
+    console.error(`pass either --models or --local\n\n${USAGE}`);
+    return 2;
+  }
+  if (values.local && values.commit) {
+    console.error(`--commit applies to --models\n\n${USAGE}`);
+    return 2;
+  }
+  if (values.local && !values.raw) {
+    console.error(`--local needs --raw <dir>\n\n${USAGE}`);
+    return 2;
+  }
+  if (values.raw && !values.local) {
+    console.error(`--raw applies to --local\n\n${USAGE}`);
     return 2;
   }
   const here = dirname(fileURLToPath(import.meta.url));
   const partsDir = resolve(values.parts ?? join(here, '../../parts'));
-  const ids = positionals.length ? positionals : readdirSync(partsDir).filter((id) => existsSync(join(partsDir, id, 'part.jsonc')));
-  try {
-    git(values.models, ['rev-parse', '--git-dir']);
-  } catch {
-    console.error(`--models ${values.models} is not a git checkout\n\n${USAGE}`);
-    return 2;
+  const ids = positionals.length
+    ? positionals
+    : readdirSync(partsDir).filter((id) => existsSync(join(partsDir, id, values.local ? 'model.py' : 'part.jsonc')));
+  if (values.models) {
+    try {
+      git(values.models, ['rev-parse', '--git-dir']);
+    } catch {
+      console.error(`--models ${values.models} is not a git checkout\n\n${USAGE}`);
+      return 2;
+    }
   }
   let pinned = null;
   if (values.commit) {
@@ -238,6 +303,17 @@ async function main() {
   const failedIds = new Set();
   for (const id of ids) {
     try {
+      if (values.local) {
+        const src = rawSource(values.raw, partsDir, id);
+        if (!src) throw new CheckFailed('source', `no raw export for ${id}. Run scripts/model.sh ${id}`);
+        jobs.push({ part: readPart(partsDir, id), src });
+        continue;
+      }
+      if (hasScript(partsDir, id)) {
+        if (positionals.length) throw new CheckFailed('source', `\`${id}\` is built from model.py. Run scripts/model.sh ${id}`);
+        console.log(`skip  ${id}  built from model.py`);
+        continue;
+      }
       const asset = pinned ? null : readAsset(partsDir, id);
       const commit = pinned ?? (asset && recorded(values.models, id, asset.source.commit));
       if (!commit) {
@@ -266,9 +342,10 @@ async function main() {
       write(partsDir, part, src, out);
       const composed = out.asset.checks.composition;
       const calls = composed ? `${out.asset.draw_calls}, composed ${composed.draw_calls}` : out.asset.draw_calls;
+      const origin = src.commit ? src.commit.slice(0, 7) : src.script;
       console.log(
         `ok    ${part.id}  kept ${out.asset.kept_nodes.length} nodes, ${calls} draw calls, ` +
-          `${out.glb.length} B, ${src.commit.slice(0, 7)}`,
+          `${out.glb.length} B, ${origin}`,
       );
     } catch (error) {
       report(part.id, error);

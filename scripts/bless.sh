@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Rewrites the parts.lock fixture from parts/ and refreshes each example from
 # the catalog ids its scene names. A copy the scene no longer names is removed.
-# The asset step is left out. It needs a checkout of orbefab/models.
-# Run scripts/check-assets.sh for that.
+# Build a part's model with scripts/model.sh first. This script does not.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -12,7 +11,7 @@ usage: scripts/bless.sh
 
 Rewrite the parts.lock fixture from parts/, then refresh each example from the catalog ids its scene names.
 A copy the scene no longer names is removed.
-The asset step is left out. It needs a checkout of orbefab/models.
+Build a part's model with scripts/model.sh first. This script does not.
 EOF
 }
 

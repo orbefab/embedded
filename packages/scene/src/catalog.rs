@@ -457,6 +457,14 @@ mod tests {
                     "{id}: sha256 of {name}"
                 );
             }
+            if let Some(script) = entry.files.get("model.py") {
+                let recorded = asset["source"]["sha256"].as_str().unwrap_or("");
+                assert_eq!(
+                    recorded,
+                    hex(&Sha256::digest(script)),
+                    "{id}: model.py does not match asset.json. Run scripts/model.sh {id}"
+                );
+            }
 
             let part = find(id).unwrap().tree.to_value();
             let anchors: Vec<Value> = match entry.files.get(&anchors_name) {

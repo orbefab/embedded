@@ -1,24 +1,13 @@
 {
   "part": "atmega328p-dip28",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/atmega328p-dip28.glb",
-        "sha256": "ca0b81ce4e47d7cb3f29f8fe4a6cf17f297413d2b5178c8f1452a6b29fec67d1",
-        "bytes": 168100
-      },
-      "anchors": {
-        "path": "GLB/parts/atmega328p-dip28.anchors.json",
-        "sha256": "eb3f2e2d14a02937f4962100f526dad3699c92125f478e56b64a4c647e0c9ab2",
-        "bytes": 3339
-      }
-    }
+    "script": "model.py",
+    "sha256": "1e50a885a7c31db0cb0c1d89fcec37c1290158afea21527ee21470dac8af9345",
+    "bytes": 1451
   },
   "files": {
     "atmega328p-dip28.glb": {
-      "sha256": "7adf81415ff44cd2b3d6245cc19bec9028a62b33f9d4c3f819b4a803705f4aeb",
+      "sha256": "b019537d95a891d1fd809edb72d59ce3eb9bfe9bb75ccdca5a15490d86852022",
       "bytes": 32032
     },
     "atmega328p-dip28.anchors.json": {
@@ -48,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 292,
+      "primitives_in": 30,
       "primitives_out": 30
     }
   }

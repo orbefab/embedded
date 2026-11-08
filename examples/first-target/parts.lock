@@ -6,12 +6,12 @@ ch340g 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:
 crystal-3215 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:35cb56aabcfef2103d783f47c9735ccd8cc9579d675fdeeb3690be8e66650253
 diode-sod123 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:26e5af396ea74a76cd91799de3cf3e4339dd878321e7fb1254b86d08659995c8
 led-0603 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:f52cf14465c4de6cfc4ec6519b7f8774671570e4b4bba739be805dcadea19a9f
-led-5mm 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:905ac937a9a60ca976ee7da9ac336714b2aa8d72128df5cae9da57e5195cdef7
+led-5mm 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:4f757e2b476e6903c34bd4da1d224277bf64596f277ba51195abb83664d8cf2f
 nano-board 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:703597c76f5e827293a0cf22f7f59e697f5a63b050d7fbbc55f29adc26f36590
 pin-header-1x15 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:207da03031d8b1ae11cab5a1302cf16a8f0402de88f933d1888c10f2bf940310
 pin-header-2x3 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:43456a456757c7b16ed048bb0434d205146af87458fa92633779880340e1e9fd
 resistor-0603 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:d0bdbb0c2fcb7fc880a46018dd2649e211a1964dac63efa18cd687c9ee72095d
-resistor-axial 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:865591323686d5ad6fe00584ae7d8c1c39cfdbb491874aa04d1cd0a972b4a956
+resistor-axial 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:fd867d5b71c891e6729dcec67dd9f94adbbba093b68f1c32ff4a96c94ac9d53f
 resonator-cstce 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:72ffb4bb7627d26c7146edce9b39a34abec8c625d90c650b7d7e64a0873da7be
 tactile-switch-6mm 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:d0fd4cc9747de3038c0d38a6655dcf67aec3b17d8cdbe9441ffc30e5058ff461
 tactile-switch-smd 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:c43e71193e42125561491427419e003b8aadc29acd0761204a135c9e84ee0152

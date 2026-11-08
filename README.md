@@ -15,9 +15,10 @@ A hardware simulator for AI agents. You describe a circuit as a scene file, flas
 | [`packages/socs`](packages/socs/) | Chips around a core. `avr` is the ATmega328P and `espressif` is the ESP32-S3. A chip never decodes an instruction. |
 | [`packages/viewer`](packages/viewer/) | The 3D scene viewer, in React and three.js. |
 | [`packages/asset-step`](packages/asset-step/) | Imports each part's 3D model and checks it against the part's pins. |
-| [`parts/`](parts/) | The parts catalog. Each folder is one real part: `part.jsonc`, its 3D model and `asset.json`. |
+| [`packages/cad`](packages/cad/) | Helpers for part models. A part's `model.py` uses build123d and these helpers. |
+| [`parts/`](parts/) | The parts catalog. Each folder is one real part: `part.jsonc`, `model.py` when the model is built here, its 3D model and `asset.json`. |
 | [`examples/`](examples/) | Scenes that run, each with its firmware and tests. |
-| [`scripts/`](scripts/) | The checks. `check.sh fast` gates every change and is what CI runs, and `check.sh full` runs every check. Run `scripts/bless.sh` after adding or changing a part. |
+| [`scripts/`](scripts/) | The checks. `check.sh fast` gates every change and is what CI runs, and `check.sh full` runs every check. `scripts/model.sh` builds a part's model. Run `scripts/bless.sh` after adding or changing a part. |
 | [`skills/orbe`](skills/orbe/SKILL.md) | The stub an agent installs. |
 | [`docs/`](docs/) | Finalized docs: [`decisions.md`](docs/decisions.md), [`viewer.md`](docs/viewer.md), [`asset-step.md`](docs/asset-step.md), [`engine/`](docs/engine/README.md). |
 
