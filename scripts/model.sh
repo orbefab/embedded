@@ -10,6 +10,7 @@ usage: scripts/model.sh <id>...
        scripts/model.sh --all
 
 Build each part's model.py into parts/<id>/<id>.glb, then run the asset step on those parts.
+Rebuild only the parts you changed. The same bytes on every run are proven on Linux x86_64.
 --all builds every part that has model.py.
 
 Needs uv, Node 24, and the installed environments. This script does not install them.
@@ -43,7 +44,8 @@ if [[ ! -e packages/asset-step/node_modules/@gltf-transform/core && ! -e node_mo
   echo "scripts/model.sh: Node dependencies are missing. Run: pnpm install --frozen-lockfile" >&2
   exit 1
 fi
-if ! uv run --project packages/cad --frozen --no-sync python -c 'import build123d, cad' >/dev/null 2>&1; then
+py=packages/cad/.venv/bin/python
+if [[ ! -x "$py" ]] || ! UV_PYTHON_DOWNLOADS=never "$py" -c 'import build123d, cad' >/dev/null 2>&1; then
   echo "scripts/model.sh: the model environment is not installed. Run: uv sync --project packages/cad --frozen" >&2
   exit 1
 fi
@@ -72,9 +74,12 @@ for id in "${ids[@]}"; do
   fi
 done
 
+raw=$(mktemp -d)
+trap 'rm -rf "$raw"' EXIT
 for id in "${ids[@]}"; do
-  uv run --project packages/cad --frozen --no-sync python "parts/$id/model.py"
+  mkdir -p "$raw/$id"
+  UV_PYTHON_DOWNLOADS=never "$py" "parts/$id/model.py" "$raw/$id"
 done
 
-node packages/asset-step/asset-step.mjs --local "${ids[@]}"
+node packages/asset-step/asset-step.mjs --local --raw "$raw" "${ids[@]}"
 echo "Run scripts/bless.sh."

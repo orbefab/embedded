@@ -10,12 +10,13 @@ From Kingbright's L-7113 (T-1¾) outline: body Φ5.0, flange Φ5.8 × 1.0,
 2 longer, `# verify`).
 """
 
+import sys
 from pathlib import Path
 
 import build123d as bd
-from cad.color import srgb
 
-from cad import glb, tht
+from cad import glb, paint, tht
+from cad.color import srgb
 
 L5_BODY = (5.0, 5.8, 1.0, 8.6)  # Φ, flange Φ, flange height, overall
 L5_FLAT = 2.5  # the flat's x on the cathode side  # verify
@@ -26,23 +27,19 @@ _RED = srgb("#D8342A")
 _TIN = srgb("#C5C8CE")
 
 
-def _paint(shape, label, color):
-    shape.label = label
-    shape.color = color
-    return shape
-
-
 def led_5mm_anchors():
     return [glb.Anchor(lead, f"lead-{lead}", (x, 0.0, -below)) for lead, x, below in L5_LEADS]
 
 
 def led_5mm_shape():
     d, fd, fh, h = L5_BODY
-    children = [_paint(tht.led_body(d, fd, fh, h, flat_x=L5_FLAT), "body", _RED)]
+    children = [paint(tht.led_body(d, fd, fh, h, flat_x=L5_FLAT), "body", _RED)]
     for lead, x, below in L5_LEADS:
-        children.append(_paint(tht.square_lead(x, 0, -below, 0.0, L5_LEAD), f"lead-{lead}", _TIN))
+        children.append(paint(tht.square_lead(x, 0, -below, 0.0, L5_LEAD), f"lead-{lead}", _TIN))
     return bd.Compound(children=children, label="led_5mm")
 
 
 if __name__ == "__main__":
-    glb.write(led_5mm_shape(), "led-5mm", led_5mm_anchors(), Path(__file__).resolve().parent)
+    if len(sys.argv) != 2:
+        raise SystemExit(f"usage: {Path(__file__).name} <output-folder>")
+    glb.write(led_5mm_shape(), "led-5mm", led_5mm_anchors(), Path(sys.argv[1]))

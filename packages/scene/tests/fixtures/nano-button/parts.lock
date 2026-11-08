@@ -1,6 +1,6 @@
 ams1117-sot223 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:468c1dc1ed4fc33de05ab0b69e625a14d3006520a6e28f5747af2c8f039a9986
 atmega16u2-qfn32 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:6f9307525bc15efc253c43e501e2e7da427df88ec55a2dd8896c9d7dc2b65794
-atmega328p-dip28 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:ac0dbd2a65de5a524f665b8da046b12502d213363b2c2398d30594e49245537c
+atmega328p-dip28 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:595d73c6647bcb83098c293b0a66c9ce8e56c5bc629dd37633a1244f5ff1919b
 atmega328p-tqfp32 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:3832d00c6aa747b25ccf6e3dca8e711b96489342a0aab946b93f42c47a47e036
 barrel-jack-dc21 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:9c838c539b9ed84c7064f8d993999bcca165227de3b6b1621bf9c6a353e44eca
 capacitor-0603 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:f09070049c45ede333b6bb8c9be62860df72fede3d207d5e39b8bd3421d7af29
@@ -20,7 +20,7 @@ inductor-0805 0.1.0 https://github.com/orbefab/embedded/releases/download/parts 
 led-0603 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:f52cf14465c4de6cfc4ec6519b7f8774671570e4b4bba739be805dcadea19a9f
 led-0805 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:36e1cf30a63bc4d33f01a7e00a128e33443e601b553c9cc7a6ce8ff0aa6d19d0
 led-3mm 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:503e517662eb47c92bcb8cdce29a63e77f6d8ed55ca1c7e1144889d78d54c796
-led-5mm 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:5aabef16fd008856b3f7c7d7555d2fdd6b95677bf9eff49f549cbb0f76471886
+led-5mm 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:aed2b77e286e8b9ecf1f3f911feb16732895f719e230a7da29de893511311245
 lmv358-msop8 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:a52952b29bd593723532a372e406cbae18e9a914f18c3a5e7a749ebaa948beed
 lp2985-sot23-5 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:82a18883db617228678147fb0673fb745ba7358b726bc1d37e8a95facc85920c
 nano-board 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:703597c76f5e827293a0cf22f7f59e697f5a63b050d7fbbc55f29adc26f36590
@@ -32,7 +32,7 @@ potentiometer-wh148 0.1.0 https://github.com/orbefab/embedded/releases/download/
 ptc-fuse-1812 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:e457e8df4a9f79edd9658189ca5a467a5e3fffda6574cd32060ac60a7a1c04ff
 resistor-0603 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:d0bdbb0c2fcb7fc880a46018dd2649e211a1964dac63efa18cd687c9ee72095d
 resistor-array-4x0603 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:6003a944c0ca55ab7643ab9c9a55b8daba4b95d57b0f44de8b985208e7914438
-resistor-axial 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:69be65d21b3761aca30c537f5001a24d0cd3ee7aa16f2f206e576dcd90ae889b
+resistor-axial 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:9f2ba0dcde7a82ac89ac468f3b6a4c9dfb8539d258b998484275447f04196412
 resonator-cstce 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:72ffb4bb7627d26c7146edce9b39a34abec8c625d90c650b7d7e64a0873da7be
 socket-strip-1x10 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:fb55ebb20dd6f244c6e04679663738608fb00bf2aa9513692af6ef3737f6cb58
 socket-strip-1x6 0.1.0 https://github.com/orbefab/embedded/releases/download/parts sha256:4454102f529cfda08f43cf038aeb3e450fad63115e43ea20cc6f80c552856479

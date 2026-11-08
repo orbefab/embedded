@@ -2,18 +2,8 @@
   "part": "led-5mm",
   "source": {
     "script": "model.py",
-    "inputs": {
-      "glb": {
-        "path": "parts/led-5mm/led-5mm.glb",
-        "sha256": "f98d0c79e5fb9e1ddfade34d3422888ce0839d40fbd98a54d8cdaeafd013f5ab",
-        "bytes": 21236
-      },
-      "anchors": {
-        "path": "parts/led-5mm/led-5mm.anchors.json",
-        "sha256": "4d9811e9a7fef4fcbde89a272aafc61179b6514c6c11612cfe33fee70e74cd48",
-        "bytes": 289
-      }
-    }
+    "sha256": "91dd4d0c8eebd1dd951944ba160e97ca26a327f54aabd7b1506a58a2aecc1e74",
+    "bytes": 1583
   },
   "files": {
     "led-5mm.glb": {

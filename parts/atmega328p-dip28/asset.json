@@ -2,18 +2,8 @@
   "part": "atmega328p-dip28",
   "source": {
     "script": "model.py",
-    "inputs": {
-      "glb": {
-        "path": "parts/atmega328p-dip28/atmega328p-dip28.glb",
-        "sha256": "1a44c100f7ef7e927b17168ab68175689312d4ac7e5b4410be682581224ff83f",
-        "bytes": 54760
-      },
-      "anchors": {
-        "path": "parts/atmega328p-dip28/atmega328p-dip28.anchors.json",
-        "sha256": "eb3f2e2d14a02937f4962100f526dad3699c92125f478e56b64a4c647e0c9ab2",
-        "bytes": 3339
-      }
-    }
+    "sha256": "1e50a885a7c31db0cb0c1d89fcec37c1290158afea21527ee21470dac8af9345",
+    "bytes": 1451
   },
   "files": {
     "atmega328p-dip28.glb": {

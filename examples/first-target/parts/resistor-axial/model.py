@@ -11,12 +11,13 @@ end caps, leads Φ0.54 (`# verify` for the neck and band widths).
 """
 
 import itertools
+import sys
 from pathlib import Path
 
 import build123d as bd
-from cad.color import srgb
 
-from cad import glb, tht
+from cad import glb, paint, tht
+from cad.color import srgb
 
 RQ_LENGTH = 6.3
 RQ_CAP_D = 2.4
@@ -32,12 +33,6 @@ RQ_BANDS = (  # x0, x1, colour, label
 
 _BODY = srgb("#D9C49A")
 _TIN = srgb("#C5C8CE")
-
-
-def _paint(shape, label, color):
-    shape.label = label
-    shape.color = color
-    return shape
 
 
 def _diameter(x0, x1):
@@ -63,10 +58,10 @@ def _body():
     for x0, x1 in itertools.pairwise(edges):
         if (x0, x1) in bands:
             color, label = bands[(x0, x1)]
-            parts.append(_paint(_segment(x0, x1), label, srgb(color)))
+            parts.append(paint(_segment(x0, x1), label, srgb(color)))
         else:
             k += 1
-            parts.append(_paint(_segment(x0, x1), f"body{k}", _BODY))
+            parts.append(paint(_segment(x0, x1), f"body{k}", _BODY))
     return parts
 
 
@@ -79,9 +74,11 @@ def resistor_qw_anchors():
 
 def resistor_qw_shape():
     leads = tht.axial_leads(RQ_LENGTH, RQ_CAP_D, RQ_LEAD_D, below=RQ_BELOW)
-    children = [*_body(), *(_paint(lead, f"lead-{k + 1}", _TIN) for k, lead in enumerate(leads))]
+    children = [*_body(), *(paint(lead, f"lead-{k + 1}", _TIN) for k, lead in enumerate(leads))]
     return bd.Compound(children=children, label="resistor_qw")
 
 
 if __name__ == "__main__":
-    glb.write(resistor_qw_shape(), "resistor-axial", resistor_qw_anchors(), Path(__file__).resolve().parent)
+    if len(sys.argv) != 2:
+        raise SystemExit(f"usage: {Path(__file__).name} <output-folder>")
+    glb.write(resistor_qw_shape(), "resistor-axial", resistor_qw_anchors(), Path(sys.argv[1]))

@@ -13,6 +13,7 @@ From the ATmega328P datasheet's 28P3 outline: body 34.544 to 34.798 long,
 an estimate (`# verify`). On the Uno it sits in `dip_socket_28`.
 """
 
+import sys
 from pathlib import Path
 
 import build123d as bd
@@ -37,9 +38,11 @@ def atmega328p_dip28_anchors():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        raise SystemExit(f"usage: {Path(__file__).name} <output-folder>")
     glb.write(
         atmega328p_dip28_shape(),
         "atmega328p-dip28",
         atmega328p_dip28_anchors(),
-        Path(__file__).resolve().parent,
+        Path(sys.argv[1]),
     )

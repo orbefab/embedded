@@ -2,6 +2,7 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -358,19 +359,62 @@ test('naming a part with model.py without --local fails', async (t) => {
   assert.match(out.line('good'), /source: `good` is built from model.py\. Run scripts\/model\.sh good/);
 });
 
-test('--local reads the part folder and records model.py', async (t) => {
+test('--local without --raw is a usage error', () => {
+  const { status, stderr } = spawnSync(process.execPath, [STEP, '--local'], { encoding: 'utf8', env });
+  assert.equal(status, 2);
+  assert.match(stderr, /^--local needs --raw/);
+});
+
+test('--local reads the raw export and records model.py', async (t) => {
   const spec = leaded('good');
   const fx = await fixture(t, { good: spec });
   const folder = join(fx.parts, 'good');
-  writeFileSync(join(folder, 'model.py'), '');
-  writeFileSync(join(folder, 'good.glb'), await glb(spec.nodes));
-  writeFileSync(join(folder, 'good.anchors.json'), JSON.stringify(spec.anchors));
-  const { status, stdout } = spawnSync(process.execPath, [STEP, '--local', '--parts', fx.parts, 'good'], { encoding: 'utf8', env });
-  assert.equal(status, 0, stdout);
-  assert.match(stdout, /^ok\s+good /);
+  const script = 'print("model")\n';
+  writeFileSync(join(folder, 'model.py'), script);
+  writeFileSync(join(folder, 'good.glb'), Buffer.from('already merged'));
+  const raw = join(fx.parts, '..', 'raw', 'good');
+  mkdirSync(raw, { recursive: true });
+  writeFileSync(join(raw, 'good.glb'), await glb(spec.nodes));
+  writeFileSync(join(raw, 'good.anchors.json'), JSON.stringify(spec.anchors));
+  const args = [STEP, '--local', '--raw', join(fx.parts, '..', 'raw'), '--parts', fx.parts, 'good'];
+  const first = spawnSync(process.execPath, args, { encoding: 'utf8', env });
+  assert.equal(first.status, 0, first.stdout);
+  assert.match(first.stdout, /^ok\s+good /);
   const got = asset(fx, 'good');
   assert.equal(got.source.script, 'model.py');
   assert.equal(got.source.repo, undefined);
-  assert.equal(got.files['good.glb'].bytes, readFileSync(join(folder, 'good.glb')).length);
+  assert.equal(got.source.inputs, undefined);
+  assert.equal(got.source.sha256, createHash('sha256').update(script).digest('hex'));
+  assert.equal(got.source.bytes, Buffer.byteLength(script));
+  const merged = readFileSync(join(folder, 'good.glb'));
+  const record = readFileSync(join(folder, 'asset.json'));
+  assert.notEqual(merged.toString(), 'already merged');
+  assert.equal(got.files['good.glb'].bytes, merged.length);
   assert.equal(got.kept_nodes.includes('lead'), true);
+  const again = spawnSync(process.execPath, args, { encoding: 'utf8', env });
+  assert.equal(again.status, 0, again.stdout);
+  assert.deepEqual(readFileSync(join(folder, 'good.glb')), merged);
+  assert.deepEqual(readFileSync(join(folder, 'asset.json')), record);
+});
+
+test('a failed --local check leaves the part folder untouched', async (t) => {
+  const spec = leaded('good');
+  const fx = await fixture(t, { good: spec });
+  const folder = join(fx.parts, 'good');
+  writeFileSync(join(folder, 'model.py'), 'x\n');
+  writeFileSync(join(folder, 'kept.txt'), 'stay\n');
+  const raw = join(fx.parts, '..', 'raw', 'good');
+  mkdirSync(raw, { recursive: true });
+  writeFileSync(join(raw, 'good.glb'), await glb(spec.nodes));
+  const anchors = { ...spec.anchors, anchors: [{ ...spec.anchors.anchors[0], at: [9, 9, 9] }] };
+  writeFileSync(join(raw, 'good.anchors.json'), JSON.stringify(anchors));
+  const before = readdirSync(folder).sort();
+  const { status, stdout } = spawnSync(process.execPath, [STEP, '--local', '--raw', join(fx.parts, '..', 'raw'), '--parts', fx.parts, 'good'], {
+    encoding: 'utf8',
+    env,
+  });
+  assert.equal(status, 1, stdout);
+  assert.match(stdout, /FAIL {2}good {2}anchors:/);
+  assert.deepEqual(readdirSync(folder).sort(), before);
+  assert.equal(readFileSync(join(folder, 'kept.txt'), 'utf8'), 'stay\n');
 });
