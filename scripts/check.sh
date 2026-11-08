@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Checks the repo. `fast` is what CI runs: rustfmt, clippy and the Rust tests, except the
-# `orbe-avr` tests and five engine targets marked `full tier`. `full` runs those too, then the
-# chip models' skip checks, the engine's Python checks and the wasm package check. Both need uv.
-# `full` also needs ngspice-42, node 22.7 or later and rustup.
+# Checks the repo. `fast` is what CI runs: rustfmt, clippy, clippy on orbe-scene and orbe-session
+# for wasm32, and the Rust tests, except the `orbe-avr` tests and five engine targets marked
+# `full tier`. `full` runs those too, then the chip models' skip checks, the engine's Python
+# checks and the wasm package check. Both need uv. `full` also needs ngspice-42, node 22.7 or
+# later and rustup.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -16,6 +17,7 @@ fast() {
   blobs=$(packages/engine/scripts/blobs.sh)
   cargo clippy --workspace --all-targets --locked -- -D warnings
   cargo clippy -p orbe-avr --all-targets --locked --features port-skip-check -- -D warnings
+  cargo clippy -p orbe-scene -p orbe-session --target wasm32-unknown-unknown --locked -- -D warnings
   cargo test --workspace --locked --exclude orbe-avr
 }
 

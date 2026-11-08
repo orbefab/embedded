@@ -9,13 +9,15 @@ publish.workspace = true
 
 [dependencies]
 jsonc-parser.workspace = true
-rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 strsim.workspace = true
 orbe-engine-core.workspace = true
 orbe-circuit.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
 
 [dev-dependencies]
 sha2.workspace = true

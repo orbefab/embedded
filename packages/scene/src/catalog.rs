@@ -1,6 +1,7 @@
 //! The catalog this binary was built with: the repo's `parts/`, embedded by `build.rs`. It is
 //! the registry's index for the versions it holds, so a sealed copy can be compared with it.
 
+#[cfg(unix)]
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
@@ -110,6 +111,7 @@ impl fmt::Display for Version {
 }
 
 /// One published version of a part. `hash` is the folder hash `parts.lock` records.
+#[cfg(unix)]
 #[derive(Clone, Debug)]
 pub(crate) struct CatalogEntry {
     pub(crate) id: String,
@@ -122,12 +124,14 @@ pub(crate) struct CatalogEntry {
 
 /// The parts `orbe add` can copy. The built-in catalog is this binary's `parts/`. Tests build
 /// one with several versions of an id.
+#[cfg(unix)]
 #[derive(Clone, Debug)]
 pub(crate) struct Catalog {
     registry: String,
     entries: BTreeMap<(String, Version), CatalogEntry>,
 }
 
+#[cfg(unix)]
 impl Catalog {
     pub(crate) fn official() -> Catalog {
         Catalog {
@@ -204,6 +208,7 @@ impl Catalog {
     }
 }
 
+#[cfg(unix)]
 pub(crate) fn entry_from_files(
     id: &str,
     files: BTreeMap<String, Vec<u8>>,

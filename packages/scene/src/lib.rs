@@ -5,8 +5,9 @@
 //! and needs a line in `parts.lock`. A `./` or `../` path reads a part of the user's own,
 //! relative to the file that names it.
 //!
-//! [`Files`] says where those files are read from.
+//! [`Files`] says where those files are read from. `orbe add`, which writes them, is on Unix only.
 
+#[cfg(unix)]
 mod add;
 mod catalog;
 mod circuit;
@@ -25,6 +26,7 @@ mod units;
 
 use std::path::Path;
 
+#[cfg(unix)]
 pub use add::{AddCode, Reply, Request, RunError, run as add_parts};
 pub use circuit::{
     Amount, EnginePart, Instance, MapPart, Netlist, PartData, PinWhy, Placement, Reading, RefMap,

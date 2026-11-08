@@ -659,6 +659,7 @@ pub(crate) struct LockFields {
     pub(crate) hash: String,
 }
 
+#[cfg(unix)]
 impl LockFields {
     pub(crate) fn line(&self) -> String {
         format!(
@@ -684,6 +685,7 @@ pub(crate) fn lock_fields(line: &str) -> Result<Option<LockFields>, ()> {
 }
 
 /// Lock text sorted by id, one line each, with a trailing newline when there is a line.
+#[cfg(unix)]
 pub(crate) fn render_lock(lines: &BTreeMap<String, LockFields>) -> String {
     let mut out = String::new();
     for line in lines.values() {
@@ -861,6 +863,7 @@ pub(crate) fn shell_word(word: &str) -> String {
 /// A path as one word a POSIX shell reads back as that path. A path that is not UTF-8, or holds
 /// a control character, is written `"$(printf '...')"` with those bytes as octal escapes. A
 /// command substitution drops trailing newlines, so those follow it inside single quotes.
+#[cfg(unix)]
 pub(crate) fn shell_path(path: &std::ffi::OsStr) -> String {
     use std::os::unix::ffi::OsStrExt;
     if let Some(word) = path.to_str()
