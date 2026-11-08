@@ -63,10 +63,13 @@ The process exits with one of these codes.
 `scripts/check.sh fast` runs rustfmt, clippy and every Rust test. `scripts/check.sh full` also runs:
 
 - the `orbe-xtensa`, `orbe-espressif` and `orbe-engine-cli` clippy and tests with `orbe-xtensa/poll-skip-check`. On a step whose poll is skipped, that build reads the interrupt lines and panics if they moved. The read is the one a normal build makes when it does poll, so it settles and stamps on that path. It does not run the stamp a skipped poll uses.
-- each script's `--self-test` in `packages/engine/scripts`, and `st77916_example.py --check` and `pattern_header.py --check`.
+- `--self-test` of `ngspice_refs.py`, `render_st77916.py`, `esp32s3_blink.py`, `esp32s3_hello.py`, `esp32s3_screen.py`, `esp32s3_encoder.py`, `i2c_decode.py`, `esp32s3_touch.py`, `esp32s3_dualcore.py`, `esp32s3_echo.py`, `esp32s3_ring.py`, `esp32s3_arduino_console.py` and `esp32s3_knob.py`.
+- `st77916_example.py --check` and `pattern_header.py --check`.
 - `sim run` on `st77916-replay`, `esp32s3-blink`, `esp32s3-pattern` and the seven ESP-IDF circuits, `esp32s3-hello`, `esp32s3-screen`, `esp32s3-encoder`, `esp32s3-touch`, `esp32s3-dualcore`, `esp32s3-echo` and `esp32s3-ring`, each checked by its script with `--check`.
 - the knob refs: it copies `packages/engine/tests/firmware/esp32s3/arduino/checks/knob/netlist.json` under `TMPDIR`, runs `esp32s3_knob.py script` on the refs into that copy, and fails when `cmp` shows a difference.
 - `packages/engine/scripts/wasm-check.sh`, which compares the wasm package with native `sim run` in node Workers.
+
+`ws2812_decode.py --self-test` is not in that list. `packages/engine/cli/tests/ws2812.rs` runs it, and `fast` runs that test.
 
 The `orbe-avr` tests in both tiers turn on `port-skip-check`, the check that a skipped store changes no pin. `packages/engine/scripts/blobs.sh` runs first in both tiers. It fetches the ESP32-S3 ROM, which no circuit commits, into its cache when the cache lacks it. The dual-core probe test in `packages/socs/espressif/tests/dualcore.rs` runs the ROM from that cache. The `fast` tier needs uv, and `full` also needs ngspice-42 on `PATH`, node 22.7 or later, and rustup.
 

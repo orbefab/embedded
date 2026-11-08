@@ -20,7 +20,7 @@ The 3D view orbits with the left button or one finger, pans with the right butto
 
 The dev server and `vite preview` serve each part's GLB from `parts/` at `/parts/<id>/<id>.glb`. The build leaves the GLBs out.
 
-`scripts/check-viewer.sh` runs the type check, the unit tests and the build. `scripts/check.sh` does not run it, so `check.sh` needs no Node.
+`scripts/check-viewer.sh` runs the type check, the unit tests and the build. `scripts/check.sh` does not run it. `scripts/check.sh fast` needs no Node. `scripts/check.sh full` needs node 22.7 or later, because it runs `packages/engine/scripts/wasm-check.sh`.
 
 `scripts/check-viewer-e2e.sh` builds the page and drives it in Chromium through `apps/viewer/e2e/e2e.mjs`: mouse and touch presses, a finger moving while it holds a press, the right button and both orders of a chord, a cancelled touch and a `pointercancel` while the canvas keeps the capture, lost capture, a second finger on the held button, blur, the press listeners' removal, `touch-action`, a refused or failed send, a press held across a new scene, clicks that send nothing, the top view's axes and pan, hover reasons, the 0603 tints and where bloom starts. It installs no browser. It uses the Chromium that playwright-core expects under `~/.cache/ms-playwright`, or the binary in `ORBE_CHROMIUM`, and exits 2 when it finds neither. `--renders <dir>` also saves screenshots. `check-viewer.sh` does not run it, so `check-viewer.sh` needs no browser.
 
