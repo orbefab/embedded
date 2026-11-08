@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 use crate::catalog;
 use crate::model::passed;
 use crate::project::{BLOCK, hash_files, hex};
+use crate::reuse::{self, Reuse};
 use crate::syntax::Node;
 
 /// A folder's files, each by its `/`-separated path from the folder.
@@ -299,13 +300,13 @@ pub fn cards(parts: &BTreeMap<String, Folder>) -> Result<Vec<Card>, String> {
         }
     }
     let tree_of = |want: &str| trees.get(want);
-    Ok(parts
+    parts
         .iter()
         .map(|(id, files)| {
             let used = used_by.get(id.as_str()).cloned().unwrap_or_default();
             build(id, &trees[id.as_str()], files, used, &tree_of)
         })
-        .collect())
+        .collect()
 }
 
 /// The card of the Block `id`, whose folder holds `files`, read against the cards [`cards`]
@@ -393,7 +394,7 @@ pub fn block_card(id: &str, files: &Folder, parts: &[Card]) -> Result<BlockCard,
         description: text(&block, "summary"),
         categories: list(&block, "tags"),
         board,
-        files: card_files(&license, files),
+        files: card_files(id, &license, files)?,
         license,
         parts: reached,
     })
@@ -574,9 +575,9 @@ fn build<'a>(
     files: &Folder,
     used_by: Vec<String>,
     tree_of: &dyn Fn(&str) -> Option<&'a Node>,
-) -> Card {
+) -> Result<Card, String> {
     let license = text(tree, "license").unwrap_or_default();
-    Card {
+    Ok(Card {
         name: id.to_string(),
         title: text(tree, "title").unwrap_or_default(),
         version: text(tree, "version").unwrap_or_default(),
@@ -599,14 +600,14 @@ fn build<'a>(
         ratings: ratings(tree),
         not_simulated: gaps(tree),
         docs: docs(tree),
-        files: card_files(&license, files),
+        files: card_files(id, &license, files)?,
         license,
         uses: uses(tree),
         used_by,
         buy: buy_links(tree),
         on: on(tree),
         pressable: tree.get("controls").and_then(|c| c.get("press")).is_some(),
-    }
+    })
 }
 
 fn text(tree: &Node, key: &str) -> Option<String> {
@@ -919,21 +920,32 @@ fn docs(tree: &Node) -> Option<Vec<Doc>> {
     (!docs.is_empty()).then_some(docs)
 }
 
-/// Each file by path, with its SPDX line's licence, or else the folder's.
-fn card_files(license: &str, files: &Folder) -> Vec<CardFile> {
-    files
+/// Each file by path, with its licence: what the folder's REUSE.toml says of it, as REUSE 3.3
+/// weighs that against the file's own SPDX line, or else that line, or else the item's.
+fn card_files(id: &str, license: &str, files: &Folder) -> Result<Vec<CardFile>, String> {
+    let reuse = match files.get(reuse::FILE) {
+        Some(bytes) => {
+            let text = std::str::from_utf8(bytes)
+                .map_err(|_| format!("`{id}` {} is not UTF-8", reuse::FILE))?;
+            Reuse::parse(text).map_err(|error| format!("`{id}` {error}"))?
+        }
+        None => Reuse::default(),
+    };
+    Ok(files
         .iter()
         .map(|(path, bytes)| CardFile {
             path: path.clone(),
             sha256: hex(&Sha256::digest(bytes)),
             bytes: bytes.len() as u64,
-            license: file_license(license, bytes),
+            license: file_license(&reuse, license, path, bytes),
         })
-        .collect()
+        .collect())
 }
 
-fn file_license(part_license: &str, bytes: &[u8]) -> String {
-    spdx(bytes).unwrap_or_else(|| part_license.to_string())
+fn file_license(reuse: &Reuse, item_license: &str, path: &str, bytes: &[u8]) -> String {
+    reuse
+        .license(path, spdx(bytes))
+        .unwrap_or_else(|| item_license.to_string())
 }
 
 fn spdx(bytes: &[u8]) -> Option<String> {
@@ -1006,7 +1018,11 @@ mod tests {
     #[test]
     fn a_file_spdx_line_overrides_the_part_license() {
         let bytes = b"// SPDX-License-Identifier: CC-BY-SA-4.0\n{}\n";
-        assert_eq!(file_license("MIT OR Apache-2.0", bytes), "CC-BY-SA-4.0");
+        let none = Reuse::default();
+        assert_eq!(
+            file_license(&none, "MIT OR Apache-2.0", "part.jsonc", bytes),
+            "CC-BY-SA-4.0"
+        );
         assert_eq!(
             spdx(b"/* SPDX-License-Identifier: MIT */\n"),
             Some("MIT".into())
@@ -1017,12 +1033,14 @@ mod tests {
         );
         assert_eq!(
             file_license(
+                &none,
                 "MIT OR Apache-2.0",
+                "part.jsonc",
                 b"{\"license\": \"MIT OR Apache-2.0\"}\n"
             ),
             "MIT OR Apache-2.0"
         );
-        assert_eq!(file_license("MIT", b"not utf8 \xff"), "MIT");
+        assert_eq!(file_license(&none, "MIT", "a.glb", b"not utf8 \xff"), "MIT");
     }
 
     #[test]

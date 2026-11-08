@@ -20,6 +20,7 @@ mod model;
 mod name;
 mod params;
 mod project;
+mod reuse;
 mod shape;
 mod source;
 mod summary;

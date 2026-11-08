@@ -122,9 +122,27 @@ fn every_url_holds_the_bytes_its_hash_names() {
         );
     }
     let block = record(&registry.output, "nano-button-led@0.1.0");
-    for file in block["files"].as_array().unwrap() {
-        assert_eq!(file["license"], "(MIT OR Apache-2.0) AND LGPL-2.1-or-later");
-    }
+    assert_eq!(
+        block["license"],
+        "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
+    );
+    let licence = |path: &str| {
+        block["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == path)
+            .map(|file| file["license"].clone())
+    };
+    assert_eq!(licence("scene.jsonc"), Some("MIT OR Apache-2.0".into()));
+    assert_eq!(
+        licence("firmware/button.hex"),
+        Some("LGPL-2.1-or-later".into())
+    );
+    assert_eq!(
+        licence("firmware/LICENSE-libc"),
+        Some("BSD-3-Clause".into())
+    );
 }
 
 #[test]

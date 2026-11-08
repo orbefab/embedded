@@ -317,3 +317,28 @@ fn an_unknown_id_names_the_closest_parts() {
     );
     assert!(near_names("not-a-part-zzzz").len() <= 8);
 }
+
+#[test]
+fn each_file_of_a_board_names_its_own_licence() {
+    let uno = card("uno-board").unwrap();
+    let licence = |path: &str| {
+        uno.files
+            .iter()
+            .find(|file| file.path == path)
+            .map(|file| file.license.as_str())
+    };
+    assert_eq!(
+        licence("part.jsonc"),
+        Some("CC-BY-SA-4.0"),
+        "its wiring is Arduino's board file"
+    );
+    assert_eq!(licence("uno-board.glb"), Some("MIT OR Apache-2.0"));
+    assert_eq!(licence("asset.json"), Some("MIT OR Apache-2.0"));
+    assert_eq!(uno.license, "CC-BY-SA-4.0 AND (MIT OR Apache-2.0)");
+    let nano = card("nano-board").unwrap();
+    assert!(
+        nano.files
+            .iter()
+            .all(|file| file.license == "MIT OR Apache-2.0")
+    );
+}

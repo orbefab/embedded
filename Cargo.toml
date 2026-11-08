@@ -42,6 +42,8 @@ sha2 = "0.10"
 # Exact, because a new libm can move the last bits of a run.
 libm = "=0.2.16"
 strsim = "0.11"
+# Reads a part's or a Block's REUSE.toml, which gives files with no SPDX line their licence.
+toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
 rustix = { version = "1", features = ["fs"] }
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"
