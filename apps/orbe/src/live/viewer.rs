@@ -16,8 +16,6 @@ use std::thread;
 use std::time::Duration;
 
 use orbe_scene::Files;
-use orbe_session::{Code, Command, Error};
-use serde_json::Value;
 use sha1::{Digest, Sha1};
 use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::protocol::{CloseFrame, Role};
@@ -55,8 +53,8 @@ pub(super) enum Out {
 /// What a viewer's thread tells the session.
 pub(super) enum Viewer {
     Joined(u64, Sender<Out>),
-    /// A command, with the id its reply carries back.
-    Command(u64, Value, Result<Command, Error>),
+    /// A command's text, as the viewer sent it.
+    Command(u64, String),
     Left(u64),
 }
 
@@ -350,8 +348,7 @@ fn relay(
         socket.flush()?;
         match socket.read() {
             Ok(Message::Text(text)) => {
-                let (request, command) = command(&text);
-                let event = Event::Viewer(Viewer::Command(id, request, command));
+                let event = Event::Viewer(Viewer::Command(id, text.to_string()));
                 if events.send(event).is_err() {
                     return Ok(());
                 }
@@ -368,38 +365,6 @@ fn relay(
     }
 }
 
-/// A viewer's command, `{"id": 1, "cmd": "press", "ref": "@btn1"}`, parsed by the CLI's own
-/// table, as `orbe press @btn1` would be. A viewer sends only `press`, `release`, `play` and
-/// `pause`.
-fn command(text: &str) -> (Value, Result<Command, Error>) {
-    let usage = |message: String| {
-        Error::new(
-            Code::Usage,
-            message,
-            "a viewer sends press, release, play or pause, as {\"id\": 1, \"cmd\": \"press\", \"ref\": \"@btn1\"}",
-        )
-    };
-    let Ok(message) = serde_json::from_str::<Value>(text) else {
-        return (
-            Value::Null,
-            Err(usage("a viewer's command is not JSON".into())),
-        );
-    };
-    let id = message["id"].clone();
-    let name = message["cmd"].as_str().unwrap_or_default();
-    let parsed = match orbe_session::spec(name) {
-        Some(spec) if ["press", "release", "play", "pause"].contains(&name) => {
-            let mut args: Vec<String> = Vec::new();
-            args.extend(message["ref"].as_str().map(String::from));
-            args.extend(message.get("speed").map(Value::to_string));
-            spec.command(&args, Path::new(""))
-                .map_err(|reason| Error::new(Code::Usage, reason, ""))
-        }
-        _ => Err(usage(format!("`{name}` is not a command a viewer sends"))),
-    };
-    (id, parsed)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,28 +377,5 @@ mod tests {
         );
         assert_eq!(base64(b"ab"), "YWI=");
         assert_eq!(base64(b"a"), "YQ==");
-    }
-
-    #[test]
-    fn a_viewer_s_command_parses_as_the_cli_s() {
-        let (id, press) = command(r#"{"id": 7, "cmd": "press", "ref": "@btn1"}"#);
-        assert_eq!(id, 7);
-        assert_eq!(
-            press.unwrap(),
-            Command::parse("press @btn1", Path::new(""))
-                .unwrap()
-                .unwrap()
-        );
-        let (_, play) = command(r#"{"id": 8, "cmd": "play"}"#);
-        assert_eq!(play.unwrap(), Command::Play);
-        let (_, step) = command(r#"{"id": 9, "cmd": "step", "ref": "1ms"}"#);
-        assert_eq!(
-            step.unwrap_err().message,
-            "`step` is not a command a viewer sends"
-        );
-        let (_, unnamed) = command(r#"{"id": 10, "cmd": "press", "ref": "btn1"}"#);
-        assert_eq!(unnamed.unwrap_err().code, Code::Usage);
-        let (_, fast) = command(r#"{"id": 11, "cmd": "play", "speed": 2}"#);
-        assert_eq!(fast.unwrap_err().message, "takes no arguments; usage: play");
     }
 }

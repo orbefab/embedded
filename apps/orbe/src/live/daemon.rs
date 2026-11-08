@@ -20,8 +20,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use orbe_session::{Code, Command, Data, Error, Files, Frames, Live, Pace, Reply, Sample};
-use serde_json::json;
+use orbe_session::viewer::{self as messages, Feed, TICK};
+use orbe_session::{Code, Command, Data, Error, Files, Live, Pace, Reply, Sample};
+use serde_json::Value;
 
 use super::page::Page;
 use super::place::{Name, Place};
@@ -40,11 +41,6 @@ const RECHECK: Duration = Duration::from_millis(20);
 
 /// How long a reply waits for a client that does not read it.
 const WRITE: Duration = Duration::from_secs(5);
-
-/// `play` advances this much simulated time per tick at most, one tick of wall time at speed 1,
-/// so a slow engine plays in slow motion and a command waits at most one tick. A `step` sends
-/// viewers a frame at most this often.
-const TICK: Duration = Duration::from_millis(16);
 
 /// How long the ending process waits for its viewers to take their close.
 const FAREWELL: Duration = Duration::from_secs(1);
@@ -78,13 +74,11 @@ struct Held {
     ticked: Option<Instant>,
 }
 
-/// The viewers, and the frames they were sent. An LED's mean current runs from the frame
-/// before, and a viewer joining restarts it, so a new page never sees a mean over time no page
-/// watched.
+/// The viewers, and the feed of messages they were sent.
 #[derive(Default)]
 struct Watchers {
     viewers: BTreeMap<u64, Sender<Out>>,
-    frames: Frames,
+    feed: Feed,
     sent_at: Option<Instant>,
 }
 
@@ -93,16 +87,26 @@ impl Watchers {
         self.viewers.retain(|_, viewer| viewer.send(out()).is_ok());
     }
 
+    /// Sends each viewer every message, a frame as the latest frame.
+    fn send_all(&mut self, messages: Vec<Value>) {
+        for message in messages {
+            let text: Arc<str> = message.to_string().into();
+            if message["type"] == "frame" {
+                self.sent_at = Some(wall());
+                self.send(|| Out::Frame(Arc::clone(&text)));
+            } else {
+                self.send(|| Out::Text(Arc::clone(&text)));
+            }
+        }
+    }
+
     /// Sends a frame of `sample` when it shows something new.
     fn frame(&mut self, sample: Sample, pace: Option<Pace>) {
         if self.viewers.is_empty() {
             return;
         }
-        if let Some(frame) = self.frames.frame(sample, pace) {
-            let text: Arc<str> = frame.to_string().into();
-            self.sent_at = Some(wall());
-            self.send(|| Out::Frame(Arc::clone(&text)));
-        }
+        let frame = self.feed.frame(sample, pace);
+        self.send_all(frame.into_iter().collect());
     }
 
     /// Whether a running `step` owes the viewers a frame.
@@ -210,23 +214,21 @@ impl Held {
         }
     }
 
-    /// What follows a command that ran, from a client or a viewer: a new scene's message, the
-    /// play clock started or stopped, and a frame.
+    /// What follows a command that ran, from a client or a viewer: the models a new scene
+    /// names, the play clock started or stopped, and what the viewers see of it.
     fn after(&mut self, reply: &Reply) {
         if let Data::Opened { .. } = reply.data {
-            self.watchers.frames.restart();
             self.models_from_scene();
-            if let Some(scene) = self.live.scene() {
-                let text: Arc<str> = scene.to_string().into();
-                self.watchers.send(|| Out::Text(Arc::clone(&text)));
-            }
         }
         self.ticked = match (self.live.playing(), self.ticked) {
             (true, None) => Some(wall()),
             (true, ticked) => ticked,
             (false, _) => None,
         };
-        self.frame(None);
+        if !self.watchers.viewers.is_empty() {
+            let after = self.watchers.feed.after(&self.live, reply);
+            self.watchers.send_all(after);
+        }
     }
 
     fn frame(&mut self, pace: Option<Pace>) {
@@ -251,19 +253,13 @@ impl Held {
         }
     }
 
-    /// One `play` tick: the wall time since the last, up to one tick, at speed 1.
+    /// One `play` tick, the wall time since the last.
     fn tick(&mut self) {
         let Some(ticked) = self.ticked else { return };
         let now = wall();
-        let wall = now.duration_since(ticked);
-        let simulated = wall.min(TICK);
-        let playing = self.live.tick(simulated.as_nanos() as u64 * 1000);
-        self.ticked = playing.then_some(now);
-        let pace = Pace {
-            speed: 1.0,
-            ratio: simulated.as_secs_f64() / wall.as_secs_f64().max(f64::EPSILON),
-        };
-        self.frame(playing.then_some(pace));
+        let pace = self.live.tick(now.duration_since(ticked));
+        self.ticked = pace.is_some().then_some(now);
+        self.frame(pace);
     }
 
     /// When the next tick is due, while `play` runs.
@@ -274,19 +270,20 @@ impl Held {
     fn viewer(&mut self, event: Viewer) {
         match event {
             Viewer::Joined(id, out) => {
-                if let Some(scene) = self.live.scene() {
-                    let _ = out.send(Out::Text(scene.to_string().into()));
+                let (scene, frame): (Vec<Value>, Vec<Value>) = self
+                    .watchers
+                    .feed
+                    .join(&self.live)
+                    .into_iter()
+                    .partition(|message| message["type"] == "scene");
+                for message in scene {
+                    let _ = out.send(Out::Text(message.to_string().into()));
                 }
                 self.watchers.viewers.insert(id, out);
-                self.watchers.frames.restart();
-                self.frame(None);
+                self.watchers.send_all(frame);
             }
-            Viewer::Command(id, request, command) => {
-                let reply = match command {
-                    Ok(command) => self.live.run(&command),
-                    Err(error) => self.live.refuse(error),
-                };
-                let message = json!({ "type": "reply", "id": request, "reply": reply.json() });
+            Viewer::Command(id, text) => {
+                let (reply, message) = messages::answer(&mut self.live, &text);
                 if let Some(viewer) = self.watchers.viewers.get(&id) {
                     let _ = viewer.send(Out::Text(message.to_string().into()));
                 }
@@ -300,9 +297,7 @@ impl Held {
 
     /// Tells each viewer why the session ended, closes it, and waits a moment for them all.
     fn farewell(&mut self, why: &str) {
-        let last: Arc<str> = json!({ "type": "closed", "reason": why })
-            .to_string()
-            .into();
+        let last: Arc<str> = messages::closed(why).to_string().into();
         let (done, heard) = mpsc::channel();
         let count = self.watchers.viewers.len();
         self.watchers

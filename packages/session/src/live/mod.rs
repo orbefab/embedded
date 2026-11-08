@@ -32,7 +32,7 @@ mod frame;
 mod serial;
 mod step;
 
-pub use frame::{Channels, FrameState, Frames, Pace, Sample};
+pub use frame::{Channels, FrameState, Pace, Sample};
 pub use step::{CHANGES, Progress};
 
 /// The serial lines a snapshot shows, from the end.
@@ -168,13 +168,14 @@ impl Live {
         self.open.as_ref().is_some_and(|open| open.playing)
     }
 
-    /// Advances a playing session by `ps`, or to its stop when that is nearer, as a `step`
-    /// would, and keeps its changes for the next `step` to list. Play ends at the stop or a
-    /// fault. Returns whether it still plays.
-    pub fn tick(&mut self, ps: u64) -> bool {
-        let Some(open) = self.open.as_mut().filter(|open| open.playing) else {
-            return false;
-        };
+    /// One `play` tick, `wall` after the one before: advances a playing session by as much
+    /// simulated time, up to one [`TICK`](crate::viewer::TICK) at speed 1, or to its stop when
+    /// that is nearer, as a `step` would, and keeps its changes for the next `step` to list. Play
+    /// ends at the stop or a fault. Returns the tick's pace while it still plays.
+    pub fn tick(&mut self, wall: std::time::Duration) -> Option<Pace> {
+        let open = self.open.as_mut().filter(|open| open.playing)?;
+        let simulated = wall.min(crate::viewer::TICK);
+        let ps = simulated.as_nanos() as u64 * 1000;
         let length = ps.min(open.stop_ps - open.engine.now().as_ps());
         let step = Step::For(Duration::from_ps(length));
         let ran = open.step(&step, &mut |_| ControlFlow::Continue(()));
@@ -183,7 +184,10 @@ impl Live {
             Ok(Data::Stepped(stepped)) | Err(Data::Stepped(stepped)) => Some(stepped),
             _ => None,
         };
-        open.playing
+        open.playing.then(|| Pace {
+            speed: 1.0,
+            ratio: simulated.as_secs_f64() / wall.as_secs_f64().max(f64::EPSILON),
+        })
     }
 
     fn reply(&self, data: Data, error: Option<Error>) -> Reply {
