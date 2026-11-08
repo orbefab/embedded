@@ -176,6 +176,43 @@ test('the tip is the centroid of the vertices within 0.001 mm of the furthest', 
   assert.equal(asset(fx, 'stepped').checks.anchors.largest_miss_mm, 0);
 });
 
+test("a model.py child's pads stay exempt when its parent is composed", async (t) => {
+  const sunk = {
+    part: { format: 1, part: 'sunk', pins: { a: [1] } },
+    nodes: [
+      { name: 'lead-1', points: [[-0.5, 0, -0.4], [0.5, 0, -0.4]] },
+      { name: 'body', points: [[0, 0, 1]] },
+    ],
+    anchors: {
+      part: 'sunk',
+      units: 'mm',
+      anchors: [leg({ node: 'lead-1', at: [0, 0, -0.4], kind: 'pad' })],
+    },
+  };
+  const fx = await fixture(t, {
+    sunk,
+    holder: board('holder', { c1: 'sunk' }, { c1: { at: [0, 0, 0] } }),
+  });
+  const folder = join(fx.parts, 'sunk');
+  writeFileSync(join(folder, 'model.py'), 'print("sunk")\n');
+  const raw = join(fx.parts, '..', 'raw', 'sunk');
+  mkdirSync(raw, { recursive: true });
+  writeFileSync(join(raw, 'sunk.glb'), await glb(sunk.nodes));
+  writeFileSync(join(raw, 'sunk.anchors.json'), JSON.stringify(sunk.anchors));
+  const local = spawnSync(process.execPath, [STEP, '--local', '--raw', join(fx.parts, '..', 'raw'), '--parts', fx.parts, 'sunk'], {
+    encoding: 'utf8',
+    env,
+  });
+  assert.equal(local.status, 0, local.stdout);
+  assert.deepEqual(asset(fx, 'sunk').kept_nodes, []);
+  const held = run(fx, ['holder']);
+  assert.equal(held.status, 0, held.line('holder'));
+  assert.equal(asset(fx, 'holder').checks.composition.lowest_node, 'pcb');
+  rmSync(join(folder, 'sunk.source.glb'));
+  const lost = run(fx, ['holder']);
+  assert.match(lost.line('holder'), /composition: placed by the layout, node `c1\/\(unnamed\)` reaches z = -0\.400 mm/);
+});
+
 test("a child's pads are leads when its parent is composed", async (t) => {
   const fx = await fixture(t, {
     capped: {
@@ -390,6 +427,8 @@ test('--local reads the raw export and records model.py', async (t) => {
   const record = readFileSync(join(folder, 'asset.json'));
   assert.notEqual(merged.toString(), 'already merged');
   assert.equal(got.files['good.glb'].bytes, merged.length);
+  assert.deepEqual(readFileSync(join(folder, 'good.source.glb')), readFileSync(join(raw, 'good.glb')));
+  assert.equal(got.files['good.source.glb'].bytes, readFileSync(join(raw, 'good.glb')).length);
   assert.equal(got.kept_nodes.includes('lead'), true);
   const again = spawnSync(process.execPath, args, { encoding: 'utf8', env });
   assert.equal(again.status, 0, again.stdout);

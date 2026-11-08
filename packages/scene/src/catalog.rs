@@ -499,9 +499,13 @@ mod tests {
             let asset: Value = serde_json::from_slice(asset_bytes)
                 .unwrap_or_else(|e| panic!("{id}: asset.json: {e}"));
             let anchors_name = format!("{id}.anchors.json");
+            let source_name = format!("{id}.source.glb");
             let mut want = vec![glb.as_str()];
             if entry.files.contains_key(&anchors_name) {
                 want.push(&anchors_name);
+            }
+            if entry.files.contains_key(&source_name) {
+                want.push(source_name.as_str());
             }
             let listed = asset["files"].as_object().unwrap();
             let mut names: Vec<&str> = listed.keys().map(String::as_str).collect();
