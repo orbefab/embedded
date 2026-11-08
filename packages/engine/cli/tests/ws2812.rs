@@ -102,6 +102,7 @@ fn scratch() -> PathBuf {
         .join("ws2812-check")
 }
 
+#[ignore = "full tier"]
 #[test]
 fn the_sketch_hex_is_the_one_the_example_runs() {
     let path = repo("packages/engine/tests/circuits/atmega-ws2812/netlist.json");
@@ -122,6 +123,7 @@ fn the_sketch_hex_is_the_one_the_example_runs() {
     );
 }
 
+#[ignore = "full tier"]
 #[test]
 fn the_decoder_passes_its_self_test() {
     let output = Command::new("uv")
@@ -140,6 +142,7 @@ fn the_decoder_passes_its_self_test() {
     );
 }
 
+#[ignore = "full tier"]
 #[test]
 fn the_bit_bang_and_the_replay_report_the_same_colours() {
     let bang = run("atmega-ws2812");
@@ -174,6 +177,7 @@ fn replay(edit: impl FnOnce(&mut serde_json::Value)) -> (String, serde_json::Val
     )
 }
 
+#[ignore = "full tier"]
 #[test]
 fn a_frame_split_across_two_events_writes_the_same_leds() {
     let whole = replay(|_| {});
@@ -193,6 +197,7 @@ fn a_frame_split_across_two_events_writes_the_same_leds() {
     }
 }
 
+#[ignore = "full tier"]
 #[test]
 fn an_idle_high_replay_writes_the_same_leds() {
     let low = replay(|_| {});
@@ -364,11 +369,13 @@ fn a_split_frame_writes_the_folder_of_the_whole_frame(idle: bool) {
     }
 }
 
+#[ignore = "full tier"]
 #[test]
 fn a_split_frame_on_an_idle_low_line_writes_the_folder_of_the_whole_frame() {
     a_split_frame_writes_the_folder_of_the_whole_frame(false);
 }
 
+#[ignore = "full tier"]
 #[test]
 fn a_split_frame_on_an_idle_high_line_writes_the_folder_of_the_whole_frame() {
     a_split_frame_writes_the_folder_of_the_whole_frame(true);
@@ -376,6 +383,7 @@ fn a_split_frame_on_an_idle_high_line_writes_the_folder_of_the_whole_frame() {
 
 /// A held idle-high line under an event that opens on a low: from power-on, and 1 ms after a
 /// frame. The line falls at the event's start with no bit, so the folder is the idle-low one.
+#[ignore = "full tier"]
 #[test]
 fn a_held_line_under_an_event_that_opens_low_writes_the_idle_low_folder() {
     const START: u64 = 1_000_000_000;
@@ -403,6 +411,7 @@ fn a_held_line_under_an_event_that_opens_low_writes_the_idle_low_folder() {
 
 /// A high in neither window right before a split with no gap. A run that stops at the split
 /// warns at the split, whether the frame is one event or two, as the pin would at that stop.
+#[ignore = "full tier"]
 #[test]
 fn a_bad_high_before_a_split_warns_the_same_when_the_run_stops_at_the_split() {
     const START: u64 = 1_000_000_000;
@@ -428,6 +437,7 @@ fn a_bad_high_before_a_split_warns_the_same_when_the_run_stops_at_the_split() {
 /// Idle high, one frame, the reset low split across two events. The return to idle ends the
 /// first low. The second low starts the reset again, so the frame never latches when what
 /// remains is within the reset, and it latches later when the remainder runs past it.
+#[ignore = "full tier"]
 #[test]
 fn an_idle_high_split_inside_the_reset_low_never_latches_or_latches_late() {
     const START: u64 = 1_000_000_000;
@@ -491,6 +501,7 @@ fn an_idle_high_split_inside_the_reset_low_never_latches_or_latches_late() {
 
 /// Idle high, and the event opens on a low the line was already holding. The fall at the
 /// record's start starts the reset, so a lead longer than the reset latches before the bits.
+#[ignore = "full tier"]
 #[test]
 fn a_held_fall_starts_the_reset_count() {
     const START: u64 = 1_000_000_000;

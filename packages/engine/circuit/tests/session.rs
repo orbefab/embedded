@@ -15,6 +15,7 @@ use orbe_engine_core::time::Time;
 use orbe_engine_core::timestamp::Timestamp;
 
 /// A worker thread runs a `Session`, so this stops compiling if `Session` is not `Send`.
+#[ignore = "full tier"]
 #[test]
 fn session_is_send() {
     fn assert_send<T: Send>() {}
@@ -151,6 +152,7 @@ fn reads_are_the_batch(name: &str, stop_ps: u64, seed: u64) {
     assert_eq!(session.level(&trace.columns()[0]), None);
 }
 
+#[ignore = "full tier"]
 #[test]
 fn a_live_potentiometer_sets_the_divider_voltage() {
     let json = r#"{
@@ -205,6 +207,7 @@ fn opened(json: &str) -> Session {
     Session::open(netlist::parse(json.as_bytes()).unwrap()).unwrap()
 }
 
+#[ignore = "full tier"]
 #[test]
 fn the_session_outlives_the_callers_netlist() {
     let json = transient(
@@ -223,11 +226,13 @@ fn the_session_outlives_the_callers_netlist() {
     assert_eq!(session.probe().get(&vin).unwrap().get(), 5.0);
 }
 
+#[ignore = "full tier"]
 #[test]
 fn atmega_analog_serial_reads_are_the_batch() {
     reads_are_the_batch("atmega-analog-serial", 10_000_000_000, 0x5eed_1001);
 }
 
+#[ignore = "full tier"]
 #[test]
 fn ne555_led_reads_are_the_batch() {
     reads_are_the_batch("ne555-led", u64::MAX, 0x5eed_1002);
@@ -246,12 +251,14 @@ fn refused(json: &str) -> Diagnostic {
     diagnostic
 }
 
+#[ignore = "full tier"]
 #[test]
 fn an_op_analysis_opens_no_session() {
     let netlist = netlist::parse(&std::fs::read(example_path("divider")).unwrap()).unwrap();
     assert!(matches!(Session::open(netlist), Err(Refused::Op)));
 }
 
+#[ignore = "full tier"]
 #[test]
 fn a_chain_one_past_the_dense_limit_opens_no_session() {
     let nets: Vec<String> = (0..4097).map(|k| format!(r#""n{k}""#)).collect();
@@ -288,6 +295,7 @@ fn huge_voltage_across(ohm: f64) -> String {
     )
 }
 
+#[ignore = "full tier"]
 #[test]
 fn an_operating_point_that_does_not_settle_opens_no_session() {
     let diagnostic = refused(&huge_voltage_across(1e-300));
@@ -295,6 +303,7 @@ fn an_operating_point_that_does_not_settle_opens_no_session() {
     assert_eq!(diagnostic.refs(), ["#net.vin".parse().unwrap()]);
 }
 
+#[ignore = "full tier"]
 #[test]
 fn an_operating_point_with_a_quantity_that_is_not_finite_opens_no_session() {
     let diagnostic = refused(&huge_voltage_across(1.0));
@@ -303,6 +312,7 @@ fn an_operating_point_with_a_quantity_that_is_not_finite_opens_no_session() {
 }
 
 /// A grid with more rows than a trace holds refuses `simulate`, and a session keeps no trace.
+#[ignore = "full tier"]
 #[test]
 fn a_grid_past_the_row_limit_still_opens_a_session() {
     let json = transient(
@@ -327,6 +337,7 @@ fn a_grid_past_the_row_limit_still_opens_a_session() {
 
 /// A session opened on a document exports it with each input in its switch's events. One
 /// opened on a netlist has no document to export.
+#[ignore = "full tier"]
 #[test]
 fn a_session_opened_on_a_document_exports_its_inputs() {
     let json = std::fs::read(example_path("rc-switch")).unwrap();
@@ -355,6 +366,7 @@ fn a_session_opened_on_a_document_exports_its_inputs() {
 
 /// `record_document` refuses what `open_document` refuses, and a grid with more rows than a
 /// trace holds, with the diagnostic `simulate` reports.
+#[ignore = "full tier"]
 #[test]
 fn a_recorded_session_refuses_an_op_an_invalid_document_and_a_grid_past_the_row_limit() {
     let divider = std::fs::read(example_path("divider")).unwrap();
@@ -386,6 +398,7 @@ fn a_recorded_session_refuses_an_op_an_invalid_document_and_a_grid_past_the_row_
     );
 }
 
+#[ignore = "full tier"]
 #[test]
 fn a_session_that_records_nothing_finishes_to_no_folder() {
     let json = std::fs::read(example_path("v-steps")).unwrap();
@@ -396,6 +409,7 @@ fn a_session_that_records_nothing_finishes_to_no_folder() {
 }
 
 /// A cursor is the count of bytes read, so a count read back resumes the log there.
+#[ignore = "full tier"]
 #[test]
 fn a_serial_cursor_is_the_count_of_bytes_read() {
     assert_eq!(SerialCursor::from(0), SerialCursor::default());
@@ -640,11 +654,13 @@ fn edge_list(session: &Session) -> Vec<orbe_engine_core::logic::Change> {
         .to_vec()
 }
 
+#[ignore = "full tier"]
 #[test]
 fn integrals_match_across_splits_of_atmega_fade() {
     integrals_match_across_splits("atmega-fade", 50_000_000_000);
 }
 
+#[ignore = "full tier"]
 #[test]
 fn integrals_match_across_splits_of_rc_switch() {
     integrals_match_across_splits("rc-switch", 50_000_000_000);
@@ -660,6 +676,7 @@ fn advance_at(session: &mut Session, times: &[u64]) {
 /// `open` and `record_document` on one chip netlist, each advanced in its own splits after the
 /// same position input, return the same `edges_since(0)`. The recorded list is what `logic.vcd`
 /// is written from.
+#[ignore = "full tier"]
 #[test]
 fn an_open_edge_log_matches_a_recorded_one() {
     let bytes = std::fs::read(example_path("atmega-analog-serial")).unwrap();
@@ -772,6 +789,7 @@ fn serial_floor(session: &mut Session, which: &str) {
 /// On a recorded session and on an unrecorded one, `forget_edges(f)` and `forget_serial(f)`
 /// leave `[f..]` readable, a cursor between `f` and the end reads that tail, and a forget past
 /// the end reads nothing and keeps the cursor.
+#[ignore = "full tier"]
 #[test]
 fn a_forget_reads_the_tail_through_the_floor() {
     let bytes = std::fs::read(example_path("atmega-analog-serial")).unwrap();
@@ -789,6 +807,7 @@ fn a_forget_reads_the_tail_through_the_floor() {
 }
 
 /// Two readers, a forget, and `levels` as the fold of the changes before `edge_cursor`.
+#[ignore = "full tier"]
 #[test]
 fn an_edge_cursor_is_the_count_of_changes_read() {
     let mut session = Session::open(example("atmega-blink", 1_000_000_000_000)).unwrap();
@@ -848,6 +867,7 @@ fn an_edge_cursor_is_the_count_of_changes_read() {
 }
 
 /// `forget_serial` and `forget_edges` leave the folder `finish` writes unchanged.
+#[ignore = "full tier"]
 #[test]
 fn a_recorded_finish_keeps_what_a_forget_dropped() {
     let stop = 5_000_000_000u64;
@@ -901,6 +921,7 @@ fn relative(got: f64, expect: f64) -> f64 {
     (got - expect).abs() / expect.abs()
 }
 
+#[ignore = "full tier"]
 #[test]
 fn a_divider_integrates_its_voltage() {
     let stop = 1_000_000_000u64;
@@ -938,6 +959,7 @@ fn a_divider_integrates_its_voltage() {
 }
 
 /// Accepted steps only. A reading between steps can be larger than the integral at the next one.
+#[ignore = "full tier"]
 #[test]
 fn a_non_negative_divider_integral_never_falls_on_accepted_steps() {
     let stop = 10_000_000u64;
@@ -990,6 +1012,7 @@ fn closing_switch(edge: u64, ohm: f64) -> String {
     )
 }
 
+#[ignore = "full tier"]
 #[test]
 fn a_switched_resistor_integrates_its_on_current() {
     let edge = 1_000_000u64;
@@ -1028,6 +1051,7 @@ fn a_switched_resistor_integrates_its_on_current() {
     assert!(error <= 1e-9, "{got} vs {expect}, relative {error}");
 }
 
+#[ignore = "full tier"]
 #[test]
 fn a_capacitor_integrates_its_charge() {
     let stop = 1_000_000_000u64;
@@ -1138,6 +1162,7 @@ fn folder_warnings(which: &str, bytes: &[u8], blobs: &Blobs, stop: Time) -> Vec<
     from_run
 }
 
+#[ignore = "full tier"]
 #[test]
 fn a_floating_net_is_listed_when_the_session_opens() {
     let json = transient(
@@ -1208,6 +1233,7 @@ fn pulsed_led() -> String {
     )
 }
 
+#[ignore = "full tier"]
 #[test]
 fn a_pulsed_over_current_is_the_same_for_one_call_frames_and_1_ps_calls_around_the_crossing() {
     let json = pulsed_led();
@@ -1272,6 +1298,7 @@ fn a_pulsed_over_current_is_the_same_for_one_call_frames_and_1_ps_calls_around_t
     );
 }
 
+#[ignore = "full tier"]
 #[test]
 fn an_input_keeps_a_rating_and_its_first_time() {
     let stop = 5_000_000u64;
@@ -1352,6 +1379,7 @@ fn notes_reporting(name: &str, found: &[Diagnostic], reporting: &mut Vec<String>
     }
 }
 
+#[ignore = "full tier"]
 #[test]
 fn diagnostics_at_the_stop_match_the_folder() {
     let mut reporting = Vec::new();
@@ -1442,6 +1470,7 @@ fn diagnostics_at_the_stop_match_the_folder() {
     );
 }
 
+#[ignore = "full tier"]
 #[test]
 fn a_nine_volt_led_transient_matches_its_folder() {
     let bytes = nine_volt_led_transient();

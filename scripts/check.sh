@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Checks the repo. `fast` is what CI runs: rustfmt, clippy and the Rust tests. `full` adds the
-# chip models' skip checks, the engine's Python checks of its test circuits and firmware, and the
-# wasm package check. Both need uv, `full` also ngspice-42, node 22.7 or later and rustup.
+# Checks the repo. `fast` is what CI runs: rustfmt, clippy and the Rust tests, except the
+# `orbe-avr` tests and five engine targets marked `full tier`. `full` runs those too, then the
+# chip models' skip checks, the engine's Python checks and the wasm package check. Both need uv.
+# `full` also needs ngspice-42, node 22.7 or later and rustup.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -16,7 +17,6 @@ fast() {
   cargo clippy --workspace --all-targets --locked -- -D warnings
   cargo clippy -p orbe-avr --all-targets --locked --features port-skip-check -- -D warnings
   cargo test --workspace --locked --exclude orbe-avr
-  cargo test -p orbe-avr --locked --features port-skip-check
 }
 
 run_check() {
@@ -32,6 +32,9 @@ run_check() {
 
 full() {
   fast
+  cargo test -p orbe-avr --locked --features port-skip-check
+  cargo test -p orbe-circuit --locked --test transient --test session -- --ignored
+  cargo test -p orbe-engine-cli --locked --test run --test session --test ws2812 -- --ignored
   cargo clippy -p orbe-xtensa -p orbe-espressif -p orbe-engine-cli --all-targets --locked \
     --features orbe-xtensa/poll-skip-check -- -D warnings
   cargo test -p orbe-xtensa -p orbe-espressif -p orbe-engine-cli --locked \

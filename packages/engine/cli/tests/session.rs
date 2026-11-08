@@ -150,6 +150,7 @@ fn example(path: &Path) -> (String, Vec<u8>, Blobs) {
     (name, json, example_files::blobs(path))
 }
 
+#[ignore = "full tier"]
 #[test]
 fn every_example_finishes_to_the_folder_sim_run_writes() {
     let examples: Vec<_> = examples().iter().map(|path| example(path)).collect();
@@ -225,6 +226,7 @@ fn run_ring_cut(
 /// cut, 600 ns later, is inside the same entry. The start comes from a full run. A session
 /// stopped at either time matches a batch run stopped there. No folder file holds the pairs a
 /// cut reads, since the chain writes only latched frames, so the RMT unit tests pin those pairs.
+#[ignore = "full tier"]
 #[test]
 fn a_session_cut_inside_frame_2_matches_a_batch_run() {
     let path = examples()
@@ -279,6 +281,7 @@ fn floating() -> serde_json::Value {
     json
 }
 
+#[ignore = "full tier"]
 #[test]
 fn floating_nets_and_ratings_finish_as_sim_run_reports_them() {
     let json = serde_json::to_vec(&floating()).unwrap();
@@ -309,6 +312,7 @@ fn refused_after_its_floating_nets(json: serde_json::Value, code: &str) {
 }
 
 /// The floating `v-steps` on a grid past the row limit, refused before any solve.
+#[ignore = "full tier"]
 #[test]
 fn a_grid_past_the_row_limit_reports_its_floating_nets() {
     let mut json = floating();
@@ -318,6 +322,7 @@ fn a_grid_past_the_row_limit_reports_its_floating_nets() {
 }
 
 /// The floating `v-steps` starting at 1e200 V, which faults the operating point at t = 0.
+#[ignore = "full tier"]
 #[test]
 fn a_fault_at_t_0_reports_its_floating_nets() {
     let mut json = floating();
@@ -326,6 +331,7 @@ fn a_fault_at_t_0_reports_its_floating_nets() {
 }
 
 /// `v-steps` whose second step is 1e200 V, which faults the run at that step.
+#[ignore = "full tier"]
 #[test]
 fn a_faulted_session_finishes_to_the_folder_sim_run_writes() {
     let mut json = v_steps();
@@ -357,6 +363,7 @@ fn finishes_partway_as_sim_run(name: &str, seed: u64, mut reject: impl FnMut(&mu
     assert_same_folder(name, &folder, &batch, CREATED_AT);
 }
 
+#[ignore = "full tier"]
 #[test]
 fn a_running_session_with_no_input_finishes_to_the_folder_sim_run_writes() {
     std::thread::scope(|scope| {
@@ -382,6 +389,7 @@ fn refuse_each(session: &mut Session, refusals: &[(&str, Option<Time>, Setting, 
 /// have, a new level on `v1` at `stop`, a contact on `v1`, and a level on `r1`.
 /// `atmega-analog-serial` refuses a position of 2 on `rv1`. That is every kind of refusal a
 /// running session gives.
+#[ignore = "full tier"]
 #[test]
 fn refused_inputs_finish_to_the_folder_sim_run_writes_for_the_opened_bytes() {
     let level = |value| Setting::Level(Finite::new(value).unwrap());
@@ -420,6 +428,7 @@ fn refused_inputs_finish_to_the_folder_sim_run_writes_for_the_opened_bytes() {
 
 /// `v-steps` advanced to its stop refuses a new level on `v1` with `Ended`, and finished a day
 /// after `created_at`, is `sim run`'s folder for the bytes read at that time.
+#[ignore = "full tier"]
 #[test]
 fn an_input_after_the_end_finishes_to_the_folder_sim_run_writes_for_the_opened_bytes() {
     let json = fs::read(common::repo(
@@ -541,6 +550,7 @@ fn finishes_as_sim_run_on_the_export(name: &str, part: &str, seed_kind: Seed, se
     assert_serial_rows(name, &folder, &rows);
 }
 
+#[ignore = "full tier"]
 #[test]
 fn inputs_finish_to_the_folder_sim_run_writes_for_the_export() {
     std::thread::scope(|scope| {
@@ -578,6 +588,7 @@ fn a_running_session_finishes_as_its_ended_export(
     assert_same_folder(name, &folder, &batch, CREATED_AT);
 }
 
+#[ignore = "full tier"]
 #[test]
 fn a_running_session_with_inputs_finishes_to_the_folder_of_its_ended_export() {
     std::thread::scope(|scope| {

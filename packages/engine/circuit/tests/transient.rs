@@ -81,6 +81,7 @@ const BOUNCE: &str = r#"{
   "max_bounces": { "value": 4, "unit": "1", "source": "user" }
 }"#;
 
+#[ignore = "full tier"]
 #[test]
 fn a_transient_writes_the_operating_point_and_every_contact_edge() {
     let results = simulate(&button(220.0, BOUNCE));
@@ -104,6 +105,7 @@ fn a_transient_writes_the_operating_point_and_every_contact_edge() {
     );
 }
 
+#[ignore = "full tier"]
 #[test]
 fn an_overloaded_led_is_over_for_exactly_the_time_the_button_is_closed() {
     let results = simulate(&button(22.0, BOUNCE));
@@ -124,6 +126,7 @@ fn an_overloaded_led_is_over_for_exactly_the_time_the_button_is_closed() {
     }
 }
 
+#[ignore = "full tier"]
 #[test]
 fn seed_moves_only_the_bounce_edges() {
     let seven = simulate(&button(220.0, BOUNCE));
@@ -149,6 +152,7 @@ fn example(name: &str) -> String {
     fs::read_to_string(example_dir(name).join("netlist.json")).unwrap()
 }
 
+#[ignore = "full tier"]
 #[test]
 fn every_example_writes_its_grid_and_its_steps_change_nothing_else() {
     for name in transient_examples() {
@@ -231,6 +235,7 @@ fn with_grid(json: &str, blobs: &Blobs, grid: u64) -> orbe_engine_core::netlist:
 /// breakpoint, and a grid with no row between t = 0 and `stop_ps`, every row and interval
 /// reads the steps run, and the runs take the same steps and stops and write the same
 /// diagnostics, observations and logic.
+#[ignore = "full tier"]
 #[test]
 fn a_grid_never_changes_the_run() {
     for name in transient_examples() {
@@ -320,6 +325,7 @@ fn rc_closed_form(t_ps: f64, farad: f64) -> (f64, f64) {
 
 /// On the committed grid and on one off every step, every row of `packages/engine/tests/circuits/rc-switch` follows
 /// the closed form, and so does each row no step lands on, which is a probe.
+#[ignore = "full tier"]
 #[test]
 fn the_rc_example_follows_its_closed_form_at_every_row() {
     let json = example("rc-switch");
@@ -375,6 +381,7 @@ fn rlc_closed_form(t_ps: f64, r: f64) -> f64 {
 /// The two series RLC controls follow the underdamped step, and no store turns stiff.
 /// The row bound is the measured drift of that ring. The step count is a ceiling, ten
 /// percent above the measured run, so a later policy can take fewer steps.
+#[ignore = "full tier"]
 #[test]
 fn the_rlc_controls_follow_the_underdamped_step() {
     for (name, r, steps) in [("rlc-q31", 1.0, 5329), ("rlc-q316", 0.1, 3482)] {
@@ -420,6 +427,7 @@ fn the_rlc_controls_follow_the_underdamped_step() {
 /// On the committed grid and on one off every step, every row of `packages/engine/tests/circuits/rl-step` follows
 /// the closed form within 1e-4 of its swing, and so does each row no step lands on, which is a
 /// probe. The current is held across the fall at 30 ms, so a coil that reset there would miss.
+#[ignore = "full tier"]
 #[test]
 fn the_rl_example_follows_its_closed_form_at_every_row() {
     let json = example("rl-step");
@@ -475,6 +483,7 @@ fn interpolate(t: &[f64], values: &[f64], at: f64) -> f64 {
     v0 + (v1 - v0) * (at - t0) / (t1 - t0)
 }
 
+#[ignore = "full tier"]
 #[test]
 fn halving_max_step_moves_each_example_by_under_1e_4_of_span() {
     assert_refines(&example("rc-switch"), "20000000", "10000000", 1e-4);
@@ -504,6 +513,7 @@ fn stiff_button(max_step: u64) -> String {
         )
 }
 
+#[ignore = "full tier"]
 #[test]
 fn a_stiff_mode_dies_out_after_each_edge_instead_of_ringing() {
     let coarse = simulate_steps(&stiff_button(1_000_000));
@@ -620,6 +630,7 @@ fn cluster_switches() -> String {
     )
 }
 
+#[ignore = "full tier"]
 #[test]
 fn a_cluster_of_edges_inside_one_nanosecond_settles_without_ringing() {
     let last = 200_000 + 50 * 11;
@@ -653,6 +664,7 @@ fn rc_with_loops() -> String {
     format!("{}{}{}", &json[..end], extra, &json[end + "}\n  ]".len()..])
 }
 
+#[ignore = "full tier"]
 #[test]
 fn capacitors_across_a_source_or_each_other_run_through_every_edge() {
     let results = simulate(&rc_with_loops());
@@ -712,6 +724,7 @@ fn held_current(trace: &Trace, name: &str, [a, b]: [&str; 2], farad: f64, initia
     current
 }
 
+#[ignore = "full tier"]
 #[test]
 fn a_held_capacitor_across_a_source_at_its_voltage_takes_no_current() {
     let json = held(
@@ -727,6 +740,7 @@ fn a_held_capacitor_across_a_source_at_its_voltage_takes_no_current() {
     assert!(current.abs() <= 1e-12, "{current}");
 }
 
+#[ignore = "full tier"]
 #[test]
 fn held_capacitors_in_parallel_share_their_current_by_capacitance() {
     let json = held(
@@ -750,6 +764,7 @@ fn held_capacitors_in_parallel_share_their_current_by_capacitance() {
     );
 }
 
+#[ignore = "full tier"]
 #[test]
 fn held_capacitors_in_parallel_at_different_voltages_start_from_their_shared_charge() {
     let json = held(
@@ -770,6 +785,7 @@ fn held_capacitors_in_parallel_at_different_voltages_start_from_their_shared_cha
     assert!((vout - shared).abs() <= 1e-9, "{vout}");
 }
 
+#[ignore = "full tier"]
 #[test]
 fn held_capacitors_in_series_across_a_source_split_its_voltage() {
     let json = held(

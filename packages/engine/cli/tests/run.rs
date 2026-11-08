@@ -67,6 +67,7 @@ fn assert_four_files(out: &Path) {
     }
 }
 
+#[ignore = "full tier"]
 #[test]
 fn ok_run_writes_the_folder_and_exits_zero() {
     let out = scratch("ok");
@@ -98,6 +99,7 @@ fn ok_run_writes_the_folder_and_exits_zero() {
     let _ = fs::remove_dir_all(&out);
 }
 
+#[ignore = "full tier"]
 #[test]
 fn rejected_netlist_exits_one_and_still_writes_diagnostics() {
     let out = scratch("rejected");
@@ -134,6 +136,7 @@ fn rejected_netlist_exits_one_and_still_writes_diagnostics() {
     let _ = fs::remove_dir_all(&out);
 }
 
+#[ignore = "full tier"]
 #[test]
 fn missing_file_exits_three_and_writes_nothing() {
     let out = scratch("missing-out");
@@ -153,6 +156,7 @@ fn missing_file_exits_three_and_writes_nothing() {
     assert!(!out.exists());
 }
 
+#[ignore = "full tier"]
 #[test]
 fn bad_argv_exits_two() {
     let (code, stdout, stderr) = sim(&[]);
@@ -165,6 +169,7 @@ fn bad_argv_exits_two() {
 }
 
 /// The pages that state the version state this one.
+#[ignore = "full tier"]
 #[test]
 fn the_docs_name_the_engine_version() {
     let version = orbe_engine_core::run_folder::ENGINE_VERSION;
@@ -175,6 +180,7 @@ fn the_docs_name_the_engine_version() {
 }
 
 #[cfg(unix)]
+#[ignore = "full tier"]
 #[test]
 fn non_utf8_out_path_is_a_document() {
     use std::ffi::OsString;
@@ -204,6 +210,7 @@ fn non_utf8_out_path_is_a_document() {
     let _ = fs::remove_dir_all(&out);
 }
 
+#[ignore = "full tier"]
 #[test]
 fn closed_stdout_still_exits_from_status() {
     let out = scratch("closed-stdout");
@@ -225,6 +232,7 @@ fn closed_stdout_still_exits_from_status() {
     let _ = fs::remove_dir_all(out);
 }
 
+#[ignore = "full tier"]
 #[test]
 fn a_floating_net_exits_zero_with_one_warning() {
     let dir = scratch("float");
@@ -264,6 +272,7 @@ fn a_floating_net_exits_zero_with_one_warning() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+#[ignore = "full tier"]
 #[test]
 fn two_runs_differ_only_in_created_at() {
     let netlist = example();
@@ -307,6 +316,7 @@ fn two_runs_differ_only_in_created_at() {
     let _ = fs::remove_dir_all(&second_out);
 }
 
+#[ignore = "full tier"]
 #[test]
 fn the_9v_led_breaks_three_ratings_and_still_writes_its_operating_point() {
     let out = scratch("led-9v");
@@ -353,6 +363,7 @@ fn the_9v_led_breaks_three_ratings_and_still_writes_its_operating_point() {
     let _ = fs::remove_dir_all(&out);
 }
 
+#[ignore = "full tier"]
 #[test]
 fn the_5v_led_is_within_its_ratings() {
     let out = scratch("led-5v");
@@ -373,6 +384,7 @@ fn the_5v_led_is_within_its_ratings() {
     let _ = fs::remove_dir_all(&out);
 }
 
+#[ignore = "full tier"]
 #[test]
 fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
     for name in transient_examples() {
@@ -514,6 +526,7 @@ fn assert_kept_resets(name: &str, doc: &serde_json::Value, count: usize) {
     }
 }
 
+#[ignore = "full tier"]
 #[test]
 fn two_runs_of_each_transient_example_differ_only_in_created_at() {
     let names = transient_examples();
