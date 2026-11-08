@@ -434,6 +434,7 @@ pub(super) fn json(reply: &BlockReply) -> Value {
             "block": reply.id,
             "files": { "written": files(true), "kept": files(false) },
             "parts": super::add_data(&reply.parts),
+            "next": reply.next,
         }
     })
 }

@@ -54,8 +54,8 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Copies catalog parts into `parts/` and writes `parts.lock`, or installs a Block: its
-    /// scene, firmware and tests, then its parts.
+    /// Copies catalog parts into `parts/` and writes `parts.lock`, or installs a Block by
+    /// copying its parts first, then writing its scene, firmware and tests.
     #[command(display_order = 3)]
     Add {
         /// Part ids, or one Block id. A part's version is `id@0.1.0`.

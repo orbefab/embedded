@@ -1,5 +1,5 @@
-//! `orbe add <block>` installs a Block into a project: its scene, firmware and tests, then a copy
-//! of each part it uses in `parts/`, listed in `parts.lock`.
+//! `orbe add <block>` installs a Block into a project. It copies each part the scene names into
+//! `parts/` and lists them in `parts.lock`, then writes the scene, firmware and tests.
 
 #![cfg(unix)]
 
@@ -99,6 +99,59 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
             "{id}: a second install changes nothing"
         );
     }
+}
+
+#[test]
+fn a_block_json_names_the_same_next_as_the_text() {
+    let text = orbe(
+        tempfile::tempdir().unwrap().path(),
+        &["add", "nano-button-led"],
+    );
+    assert_eq!(text.code, 0, "{}", text.stdout);
+    let next = text
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("installed the Block "))
+        .unwrap()
+        .split_once(". ")
+        .unwrap()
+        .1;
+    let envelope = orbe(
+        tempfile::tempdir().unwrap().path(),
+        &["add", "--json", "nano-button-led"],
+    )
+    .json();
+    assert_eq!(envelope["ok"], true);
+    assert_eq!(envelope["data"]["next"], next);
+}
+
+#[test]
+fn a_second_add_writes_the_scene_a_stopped_install_left_out() {
+    let project = tempfile::tempdir().unwrap();
+    let dir = project.path();
+    let first = orbe(dir, &["add", "nano-button-led"]);
+    assert_eq!(first.code, 0, "{}", first.stdout);
+    fs::remove_file(dir.join("scene.jsonc")).unwrap();
+    let again = orbe(dir, &["add", "nano-button-led"]);
+    assert_eq!(again.code, 0, "{}{}", again.stdout, again.stderr);
+    assert!(
+        again.stdout.contains("wrote scene.jsonc\n"),
+        "{}",
+        again.stdout
+    );
+    assert!(
+        again.stdout.contains("kept firmware/button.hex\n"),
+        "{}",
+        again.stdout
+    );
+    assert!(
+        again.stdout.contains("parts.lock unchanged\n"),
+        "{}",
+        again.stdout
+    );
+    assert!(!again.stdout.contains("wrote parts/"), "{}", again.stdout);
+    let check = orbe(dir, &["check", "scene.jsonc"]);
+    assert_eq!(check.code, 0, "{}", check.stdout);
 }
 
 #[test]
