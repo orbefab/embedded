@@ -7,6 +7,7 @@
 /target
 node_modules/
 dist/
+.wrangler/
 __pycache__/
 .venv/
 packages/engine/tests/circuits/*/op.raw

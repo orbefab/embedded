@@ -109,6 +109,17 @@ impl Session {
     }
 }
 
+/// The JSON text of the `scene` message of the catalog part `id` drawn on its own, with no
+/// session. `parts` holds the files of the part and of every part it is built from, each at
+/// `parts/<id>/<path>`. It takes the `Block`, which is freed. Throws an `Error` that lists the
+/// findings when the part is missing or does not parse.
+#[wasm_bindgen(js_name = partScene)]
+pub fn part_scene(id: &str, parts: Block) -> Result<String, JsError> {
+    viewer::part_scene(id, parts.parts)
+        .map(|message| message.to_string())
+        .map_err(|text| JsError::new(&text))
+}
+
 /// The wall time between two `play` ticks, in milliseconds.
 #[wasm_bindgen(js_name = tickMs)]
 pub fn tick_ms() -> f64 {

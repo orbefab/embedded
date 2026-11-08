@@ -3,6 +3,7 @@
 
 mod common;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -158,7 +159,7 @@ fn each_block_firmware_is_the_engine_build_of_its_sketch() {
 
 /// Each Block notice names the runtime archive `sketches.sh` fetches, by the same URL and SHA-256.
 #[test]
-fn each_block_notice_names_the_runtime_sketches_sh_pins() {
+fn each_block_notice_names_the_runtime_sketches_sh_pins_and_where_the_site_serves_it() {
     let script =
         fs::read_to_string(common::repo().join("packages/engine/scripts/sketches.sh")).unwrap();
     let pin = |key: &str| {
@@ -172,9 +173,18 @@ fn each_block_notice_names_the_runtime_sketches_sh_pins() {
     let sha = pin("runtime_sha256");
     assert!(url.starts_with("https://"), "{url}");
     assert_eq!(sha.len(), 64);
+    let hosted = format!(
+        "https://orbefab.com/embedded/sources/{}",
+        url.rsplit('/').next().unwrap()
+    );
     for entry in fs::read_dir(common::repo().join("blocks")).unwrap() {
         let dir = entry.unwrap().path();
         let notice = fs::read_to_string(dir.join("firmware/NOTICE")).unwrap();
+        assert!(
+            notice.contains(&hosted),
+            "{} notice does not name {hosted}, where scripts/site.sh serves the source",
+            dir.display()
+        );
         assert!(
             notice.contains(&url),
             "{} notice does not name {url}",
@@ -318,4 +328,41 @@ fn a_block_that_holds_a_lock_is_refused() {
         findings(dir.path())[0],
         "scene.role: this folder holds block.jsonc, so it is a Block, which reads its parts from the catalog built into orbe, and it also holds `parts.lock` | remove `parts.lock`, or remove block.jsonc to make the folder a project that reads its own copies"
     );
+}
+
+#[test]
+fn each_block_file_names_its_own_licence() {
+    fn walk(root: &Path, dir: &Path, into: &mut BTreeMap<String, Vec<u8>>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(root, &path, into);
+            } else {
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                into.insert(rel, fs::read(&path).unwrap());
+            }
+        }
+    }
+    let parts = orbe_scene::catalog_cards();
+    for entry in fs::read_dir(common::repo().join("blocks")).unwrap() {
+        let dir = entry.unwrap().path();
+        let id = dir.file_name().unwrap().to_string_lossy().into_owned();
+        let mut files = BTreeMap::new();
+        walk(&dir, &dir, &mut files);
+        let card = orbe_scene::block_card(&id, &files, &parts).unwrap();
+        for file in &card.files {
+            let want = if file.path.ends_with(".hex") || file.path == "firmware/LICENSE-runtime" {
+                "LGPL-2.1-or-later"
+            } else if file.path == "firmware/LICENSE-libc" {
+                "BSD-3-Clause"
+            } else {
+                "MIT OR Apache-2.0"
+            };
+            assert_eq!(file.license, want, "{id}/{}", file.path);
+        }
+    }
 }

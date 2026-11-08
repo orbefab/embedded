@@ -78,16 +78,17 @@ A bundler that copies `orbe_wasm.js` into one bundle must also emit `orbe_wasm_b
 | `session.playing()` | Whether `play` runs, so the caller keeps ticking. |
 | `session.messages()` | The JSON text of each message since the last call, in order. |
 | `tickMs()` | The tick, 16 ms. |
+| `partScene(id, block)` | The JSON text of the `scene` message of the catalog part `id` drawn on its own, with no session: one instance named `id` with each `-` written `_`, no `circuit_hash` and no channels. `block` holds the part's files and those of every part it is built from, at `parts/<id>/<path>`. It reads the part as far as its children, params and layout, and checks no param, firmware or ground, so a board with no firmware draws. It throws the findings when a part is missing or does not parse. A part's page draws the part with it. |
 
 A viewer sends only `press`, `release`, `play` and `pause`, each parsed by the CLI's own command table. Each object holds memory inside the module until `free()` or the garbage collector frees it.
 
 ## Errors
 
-`Session.open` throws an `Error` whose message is the refusal as `orbe open` prints it, such as `scene.jsonc:9:23: error[part_missing]: part `led-5mm` is not in the catalog this Block reads`, with its hint. `worker.js` posts that message as the `reason` of a `closed` message. A command the session refuses is not thrown: its `reply` carries `ok: false` and the error, as `orbe <command> --json` prints it. A command no viewer sends, or text that is not JSON, gets a `usage` error. A call on a freed object throws `null pointer passed to rust`.
+`Session.open` throws an `Error` whose message is the refusal as `orbe open` prints it, such as `scene.jsonc:9:23: error[part_missing]: part `led-5mm` is not in the catalog this Block reads`, with its hint. `worker.js` posts that message as the `reason` of a `closed` message. A command the session refuses is not thrown: its `reply` carries `ok: false` and the error, as `orbe <command> --json` prints it. A command no viewer sends, or text that is not JSON, gets a `usage` error. `partScene` throws an `Error` whose message lists each finding as `orbe check` prints it. A call on a freed object throws `null pointer passed to rust`.
 
 ## Tests
 
-`packages/wasm/tests/session.rs` runs the session natively in `scripts/check.sh fast`. It opens nano-button-led from its files and every catalog part, checks the `scene` then the first `frame`, plays in 16 ms ticks, presses `@btn1` until D13 is high and `@led1` carries over 5 mA, pauses, and checks that a paused session does not move and that `step` is refused. A Block without `led-5mm` is refused with the text `orbe open` prints. `scripts/check.sh fast` also runs clippy on `orbe-wasm` for `wasm32-unknown-unknown`.
+`packages/wasm/tests/session.rs` runs the session natively in `scripts/check.sh fast`. It opens nano-button-led from its files and every catalog part, checks the `scene` then the first `frame`, plays in 16 ms ticks, presses `@btn1` until D13 is high and `@led1` carries over 5 mA, pauses, and checks that a paused session does not move and that `step` is refused. A Block without `led-5mm` is refused with the text `orbe open` prints. It also draws nano-board on its own with its 28 children and no channel, and refuses it with `part_missing` when `led-0603` is gone. `scripts/check.sh fast` also runs clippy on `orbe-wasm` for `wasm32-unknown-unknown`.
 
 `scripts/check-wasm.sh [SCRATCH_DIR]` runs in `scripts/check.sh full`. It needs what `scripts/wasm.sh` needs and node 24 or later. It installs nothing.
 

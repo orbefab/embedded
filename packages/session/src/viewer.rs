@@ -7,8 +7,9 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::Files;
 use crate::command::{Command, spec};
-use crate::live::{Live, Pace, Sample};
+use crate::live::{Channels, Live, Pace, Sample};
 use crate::reply::{Code, Data, Error, Reply};
 
 /// `play` advances this much simulated time per tick at most, one tick of wall time at speed 1,
@@ -65,6 +66,32 @@ pub fn answer(live: &mut Live, text: &str) -> (Reply, Value) {
 /// The last message a viewer gets, with why the session ended.
 pub fn closed(reason: &str) -> Value {
     json!({ "type": "closed", "reason": reason })
+}
+
+/// The `scene` message of the catalog part `id` drawn on its own, as a part's page shows it,
+/// with no session behind it: the part is the one instance, named `id` with each `-` written
+/// `_`, and no channel follows it. `parts` holds each catalog part's files by `<id>/<path>`, the part's and every part it is
+/// built from. A part that is missing or does not parse is the error, as text.
+pub fn part_scene(id: &str, parts: Vec<(String, Vec<u8>)>) -> Result<Value, String> {
+    let block = json!({ "format": 1, "block": id, "version": "0.0.0", "title": id, "board": id, "license": "MIT" });
+    let scene = json!({ "format": 1, "parts": { id.replace('-', "_"): { "type": id } } });
+    let files = Files::memory([
+        (orbe_scene::BLOCK, block.to_string().into_bytes()),
+        ("scene.jsonc", scene.to_string().into_bytes()),
+    ])
+    .with_catalog(parts);
+    let view = orbe_scene::view(&files, Path::new("scene.jsonc")).map_err(|found| {
+        found
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
+    let mut message = serde_json::to_value(view).expect("a view serializes");
+    message["type"] = json!("scene");
+    message["session"] = json!(id);
+    message["channels"] = serde_json::to_value(Channels::default()).expect("channels");
+    Ok(message)
 }
 
 /// The `scene` and `frame` messages a session's viewers get. It numbers the frames, and gives

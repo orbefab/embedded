@@ -20,6 +20,7 @@ mod model;
 mod name;
 mod params;
 mod project;
+mod reuse;
 mod shape;
 mod source;
 mod summary;
@@ -71,6 +72,22 @@ pub fn catalog_ids(files: &Files, scene: &Path) -> Result<Vec<String>, Vec<Diagn
     } else {
         Ok(project.catalog_ids.into_iter().collect())
     }
+}
+
+/// What a viewer draws of a scene, read only as far as its instances, their params and its
+/// layout: no param, firmware or ground check and no netlist. A page draws one part this way,
+/// on its own. A file that does not parse, or a part the scene names that is missing, is the
+/// error.
+pub fn view(files: &Files, scene: &Path) -> Result<View, Vec<Diagnostic>> {
+    let mut findings = diagnostic::Findings::default();
+    let project = match project::load(files, scene, &mut findings) {
+        Ok(project) => project,
+        Err(sources) => return Err(findings.into_diagnostics(&sources)),
+    };
+    if !findings.is_empty() {
+        return Err(findings.into_diagnostics(&project.sources));
+    }
+    Ok(circuit::view_only(&project))
 }
 
 /// [`read`], then on a scene that reads, the lint rules' warnings, sorted by file, line and

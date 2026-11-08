@@ -1,5 +1,5 @@
-import { channelSource } from "./channel-source";
-import type { FromSession, SessionSource } from "./protocol";
+import { channelSource, receive } from "./channel-source";
+import type { SessionSource } from "./protocol";
 
 /** The address of the session's WebSocket for the page `orbe show` served, from the token in
  * its fragment, `#t=<token>`. `null` for a page with no token, such as the fixture page. */
@@ -18,7 +18,7 @@ export function sessionUrl(location: {
  * wait for it. Once the session closes or the socket drops, every listener gets a `closed`
  * message, and commands reject. */
 export function websocketSource(open: () => WebSocket): SessionSource {
-  return channelSource(({ message, drop }) => {
+  return channelSource((inbox) => {
     const socket = open();
     const queued: string[] = [];
     socket.onopen = () => {
@@ -26,12 +26,15 @@ export function websocketSource(open: () => WebSocket): SessionSource {
       queued.length = 0;
     };
     socket.onmessage = (event) => {
-      if (typeof event.data === "string") message(JSON.parse(event.data) as FromSession);
+      if (typeof event.data === "string") receive(inbox, event.data, "the session");
     };
-    socket.onclose = () => drop("the connection to the session dropped");
-    return (text) => {
-      if (socket.readyState === WebSocket.OPEN) socket.send(text);
-      else queued.push(text);
+    socket.onclose = () => inbox.drop("the connection to the session dropped");
+    return {
+      send(text) {
+        if (socket.readyState === WebSocket.OPEN) socket.send(text);
+        else queued.push(text);
+      },
+      close: () => socket.close(),
     };
   });
 }

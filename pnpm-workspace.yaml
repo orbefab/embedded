@@ -1,3 +1,8 @@
 packages:
   - "apps/*"
   - "packages/*"
+# wrangler's esbuild and workerd run from their platform packages, so their install scripts,
+# which only check or relink those binaries, stay off.
+allowBuilds:
+  esbuild: false
+  workerd: false

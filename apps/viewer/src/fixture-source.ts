@@ -50,6 +50,11 @@ export function fixtureSource(
       // A reply comes once a step has ended, so it never says `stepping`.
       return { ok: true, session: scene.session, t_ps: latest?.t_ps ?? 0, state: state === "stepping" ? "paused" : state };
     },
+    close() {
+      listeners.clear();
+      clearInterval(timer);
+      timer = undefined;
+    },
     push(message) {
       if (message.type === "scene") scene = message;
       else if (message.type === "frame") latest = message;

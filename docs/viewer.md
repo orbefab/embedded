@@ -67,7 +67,8 @@ Then open `/?block=nano-button-led`. The dev server and `vite preview` serve `.s
 
 - `loadBlock` in `packages/viewer/src/registry.ts` reads `index.json`, picks the Block's newest version, and fetches its record, each file and each part it names, at the version it names. It checks each against [registry.md](registry.md#verify-what-you-fetch): the record's and each file's size and SHA-256, the folder hash, the path rules and the `files/<sha256>` URLs. One mismatch refuses the whole Block. Each part's files sit at `parts/<id>/<path>`, where the Worker reads its catalog. A part from another registry is refused.
 - `workerSource` starts the Worker, sends it the files, then the viewer's commands. The Worker has no server, so the source points each part model the scene names at an object URL of that model's bytes from the registry.
-- A Block that does not load or open, or a Worker that fails, ends the session, and the page says why, such as "the Block did not load: the registry has no no-such-block" or the refusal `orbe open` prints.
+- `close` on a source terminates its Worker and revokes the object URLs, or closes its socket. A page calls it when it shows another session or unmounts. Its listeners get nothing more, and commands reject. A scene the Worker sent before `close` is dropped when it arrives, so it makes no object URL.
+- A Block that does not load or open, a Worker that fails, or a message that is not a JSON object with a string `type` ends the session, and the page says why, such as "the Block did not load: the registry has no no-such-block" or the refusal `orbe open` prints. The source then frees itself as `close` does.
 
 The page loads the package at run time from its URL, so the page's build holds no WebAssembly, and neither does the page built into `orbe`.
 

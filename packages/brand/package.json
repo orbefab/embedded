@@ -1,0 +1,21 @@
+{
+  "name": "@orbe/brand",
+  "private": true,
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "exports": {
+    "./styles.css": "./website/src/styles.css",
+    "./mark": "./website/src/components/brand/mark.tsx",
+    "./colors": "./website/src/lib/brand.ts"
+  },
+  "dependencies": {
+    "clsx": "2.1.1",
+    "tailwind-merge": "3.6.0"
+  },
+  "peerDependencies": {
+    "react": "19.2.7"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.17"
+  }
+}

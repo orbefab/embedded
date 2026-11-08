@@ -20,8 +20,9 @@ use crate::syntax;
 pub struct View {
     /// Over every file the reader read.
     pub scene_hash: String,
-    /// Over the netlist the engine opens.
-    pub circuit_hash: String,
+    /// Over the netlist the engine opens. Absent on a view read without one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub circuit_hash: Option<String>,
     pub instances: Vec<Instance>,
     /// Keyed by the part's id, or the path a file names it by.
     pub parts: BTreeMap<String, PartData>,
@@ -112,7 +113,7 @@ pub struct PinWhy {
 }
 
 impl Circuit<'_> {
-    pub(super) fn view(&self, netlist: &str) -> View {
+    pub(super) fn view(&self, netlist: Option<&str>) -> View {
         let sources = &self.project.sources;
         let trees: BTreeMap<FileId, Value> = std::iter::once(self.project.scene.file)
             .chain(self.project.parts.iter().map(|p| p.file))
@@ -152,7 +153,8 @@ impl Circuit<'_> {
                     .iter()
                     .map(|f| (f.display.as_str(), f.text.as_bytes())),
             ),
-            circuit_hash: format!("sha256:{}", hex(&Sha256::digest(netlist.as_bytes()))),
+            circuit_hash: netlist
+                .map(|text| format!("sha256:{}", hex(&Sha256::digest(text.as_bytes())))),
             instances: self.instances(ROOT, &trees),
             parts,
             wires,

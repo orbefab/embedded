@@ -12,7 +12,10 @@ class FakeSocket {
   send(data: string) {
     this.sent.push(JSON.parse(data));
   }
-  close() {}
+  closed = false;
+  close() {
+    this.closed = true;
+  }
   open() {
     this.readyState = 1;
     this.onopen?.();
@@ -92,5 +95,17 @@ describe("websocketSource", () => {
     const got: ToViewer[] = [];
     source.subscribe((message) => got.push(message));
     expect(got).toEqual([{ type: "closed", reason: "the connection to the session dropped" }]);
+  });
+
+  test("ends with why on text that is not JSON, and close closes the socket", () => {
+    const socket = new FakeSocket();
+    const source = websocketSource(() => socket as unknown as WebSocket);
+    socket.open();
+    const got: ToViewer[] = [];
+    source.subscribe((message) => got.push(message));
+    socket.onmessage?.({ data: "{not json" });
+    expect((got[0] as { reason: string }).reason).toMatch(/^the session sent text that is not JSON: /);
+    source.close();
+    expect(socket.closed).toBe(true);
   });
 });

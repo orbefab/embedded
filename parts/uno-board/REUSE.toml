@@ -1,0 +1,7 @@
+# Each file's licence, as REUSE 3.3 reads it (https://reuse.software/spec-3.3/). part.jsonc's own
+# SPDX line says CC-BY-SA-4.0, since its wiring comes from Arduino's board file.
+version = 1
+
+[[annotations]]
+path = "**"
+SPDX-License-Identifier = "MIT OR Apache-2.0"

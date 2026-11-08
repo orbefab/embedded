@@ -39,63 +39,70 @@
       "url": "files/<sha256>",
       "sha256": "<sha256>",
       "bytes": 0,
-      "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "path": "REUSE.toml",
+      "url": "files/<sha256>",
+      "sha256": "<sha256>",
+      "bytes": 0,
+      "license": "MIT OR Apache-2.0"
     },
     {
       "path": "block.jsonc",
       "url": "files/<sha256>",
       "sha256": "<sha256>",
       "bytes": 0,
-      "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
+      "license": "MIT OR Apache-2.0"
     },
     {
       "path": "firmware/LICENSE-libc",
       "url": "files/<sha256>",
       "sha256": "<sha256>",
       "bytes": 0,
-      "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
+      "license": "BSD-3-Clause"
     },
     {
       "path": "firmware/LICENSE-runtime",
       "url": "files/<sha256>",
       "sha256": "<sha256>",
       "bytes": 0,
-      "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
+      "license": "LGPL-2.1-or-later"
     },
     {
       "path": "firmware/NOTICE",
       "url": "files/<sha256>",
       "sha256": "<sha256>",
       "bytes": 0,
-      "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
+      "license": "MIT OR Apache-2.0"
     },
     {
       "path": "firmware/button.hex",
       "url": "files/<sha256>",
       "sha256": "<sha256>",
       "bytes": 0,
-      "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
+      "license": "LGPL-2.1-or-later"
     },
     {
       "path": "firmware/button/button.ino",
       "url": "files/<sha256>",
       "sha256": "<sha256>",
       "bytes": 0,
-      "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
+      "license": "MIT OR Apache-2.0"
     },
     {
       "path": "scene.jsonc",
       "url": "files/<sha256>",
       "sha256": "<sha256>",
       "bytes": 0,
-      "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
+      "license": "MIT OR Apache-2.0"
     },
     {
       "path": "tests/button.test",
       "url": "files/<sha256>",
       "sha256": "<sha256>",
       "bytes": 0,
-      "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
+      "license": "MIT OR Apache-2.0"
     }
   ],
   "hash": "sha256:<folder hash>",

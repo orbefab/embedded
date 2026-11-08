@@ -153,27 +153,7 @@ pub(crate) fn compile(
     lint: Option<&mut Findings>,
 ) -> Option<Netlist> {
     let scene = &project.scene;
-    let root = Inst {
-        path: Vec::new(),
-        part: None,
-        children: BTreeMap::new(),
-        args: BTreeMap::new(),
-        unset: BTreeMap::new(),
-        dropped: None,
-        top_span: Span::start_of(scene.file),
-    };
-    let mut circuit = Circuit {
-        project,
-        out,
-        insts: vec![root],
-        keys: BTreeMap::new(),
-        pins: Vec::new(),
-        parent: Vec::new(),
-        long: BTreeMap::new(),
-        built: BTreeMap::new(),
-        failed: BTreeMap::new(),
-        unsimulated: BTreeMap::new(),
-    };
+    let mut circuit = Circuit::new(project, out);
     circuit.instantiate(ROOT, Owner::Scene);
     circuit.make_pins();
     circuit.join_inside();
@@ -190,7 +170,44 @@ pub(crate) fn compile(
     Some(netlist)
 }
 
+/// What a viewer draws of the scene, read only as far as its instances, their params, its
+/// layout and the pins no simulated pin reaches. It checks no param, firmware or ground and
+/// writes no netlist, so its findings are left out.
+pub(crate) fn view_only(project: &Project) -> View {
+    let mut out = Findings::default();
+    let mut circuit = Circuit::new(project, &mut out);
+    circuit.instantiate(ROOT, Owner::Scene);
+    circuit.make_pins();
+    circuit.join_inside();
+    circuit.check_scene_wires(&project.scene);
+    circuit.view(None)
+}
+
 impl<'p> Circuit<'p> {
+    fn new(project: &'p Project<'p>, out: &'p mut Findings) -> Circuit<'p> {
+        let root = Inst {
+            path: Vec::new(),
+            part: None,
+            children: BTreeMap::new(),
+            args: BTreeMap::new(),
+            unset: BTreeMap::new(),
+            dropped: None,
+            top_span: Span::start_of(project.scene.file),
+        };
+        Circuit {
+            project,
+            out,
+            insts: vec![root],
+            keys: BTreeMap::new(),
+            pins: Vec::new(),
+            parent: Vec::new(),
+            long: BTreeMap::new(),
+            built: BTreeMap::new(),
+            failed: BTreeMap::new(),
+            unsimulated: BTreeMap::new(),
+        }
+    }
+
     fn part(&self, inst: usize) -> Option<&'p Part> {
         let project: &'p Project<'p> = self.project;
         self.insts[inst].part.map(|p| &project.parts[p])
@@ -873,7 +890,7 @@ impl<'p> Circuit<'p> {
         if !self.out.is_empty() || ground.is_none() {
             return None;
         }
-        let view = self.view(&text);
+        let view = self.view(Some(&text));
         Some(Netlist {
             json: text,
             parts: parts.len() - left_out.len(),

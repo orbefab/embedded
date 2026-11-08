@@ -3,9 +3,11 @@ It links the standard AVR runtime, version 1.8.6. The runtime is free software u
 Lesser General Public License, version 2.1 or any later version, whose text is in
 LICENSE-runtime. Its source is the archive at
 
-https://downloads.arduino.cc/cores/staging/avr-1.8.6.tar.bz2
+https://orbefab.com/embedded/sources/avr-1.8.6.tar.bz2
 
-with SHA-256 ff1d17274b5a952f172074bd36c3924336baefded0232e10982f8999c2f7c3b6. The image was
+with SHA-256 ff1d17274b5a952f172074bd36c3924336baefded0232e10982f8999c2f7c3b6, served with this
+image. It is the archive Arduino publishes at
+https://downloads.arduino.cc/cores/staging/avr-1.8.6.tar.bz2. The image was
 built with avr-gcc 7.3.0-atmel3.6.1-arduino7 by packages/engine/scripts/sketches.sh in
 https://github.com/orbefab/embedded, which pins both archives and relinks the sketch and the
 runtime, so the image can be rebuilt against a modified runtime. The sketch is under MIT or

@@ -144,3 +144,58 @@ fn a_block_missing_a_part_is_refused_as_orbe_open_says() {
         "{text}"
     );
 }
+
+/// Every catalog part's files by `<id>/<path>`, leaving out the part `without`.
+fn catalog(without: &str) -> Vec<(String, Vec<u8>)> {
+    fn walk(dir: &Path, prefix: &str, out: &mut Vec<(String, Vec<u8>)>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_str().unwrap();
+            if path.is_dir() {
+                walk(&path, &format!("{prefix}{name}/"), out);
+            } else {
+                out.push((format!("{prefix}{name}"), fs::read(&path).unwrap()));
+            }
+        }
+    }
+    let mut files = Vec::new();
+    for entry in fs::read_dir(repo().join("parts")).unwrap() {
+        let dir = entry.unwrap().path();
+        let part = dir.file_name().unwrap().to_str().unwrap().to_string();
+        if part != without {
+            walk(&dir, &format!("{part}/"), &mut files);
+        }
+    }
+    files
+}
+
+#[test]
+fn a_part_draws_on_its_own_with_its_children_and_no_channel() {
+    let scene = orbe_session::viewer::part_scene("nano-board", catalog("")).unwrap();
+    assert_eq!(scene["type"], "scene");
+    assert_eq!(scene["session"], "nano-board");
+    assert_eq!(
+        scene["channels"],
+        serde_json::json!({ "pins": [], "leds": [], "switches": [] })
+    );
+    assert!(scene.get("circuit_hash").is_none());
+    let instances = scene["instances"].as_array().unwrap();
+    assert_eq!(instances.len(), 1);
+    assert_eq!(instances[0]["name"], "nano_board");
+    assert_eq!(instances[0]["children"].as_array().unwrap().len(), 28);
+    assert_eq!(
+        scene["parts"]["nano-board"]["model"],
+        "/parts/nano-board/nano-board.glb"
+    );
+    assert!(scene["parts"]["led-0603"]["tints"]["color"].is_object());
+
+    let led = orbe_session::viewer::part_scene("led-5mm", catalog("")).unwrap();
+    assert_eq!(led["instances"][0]["params"], serde_json::json!({}));
+}
+
+#[test]
+fn a_missing_part_is_refused_with_the_finding() {
+    let error = orbe_session::viewer::part_scene("nano-board", catalog("led-0603")).unwrap_err();
+    assert!(error.contains("error[part_missing]"), "{error}");
+    assert!(error.contains("led-0603"), "{error}");
+}

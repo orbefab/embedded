@@ -8,6 +8,7 @@ A hardware simulator for AI agents. You describe a circuit as a scene file, flas
 | --- | --- |
 | [`apps/orbe`](apps/orbe/) | The `orbe` CLI in Rust. `orbe` is the binary. |
 | [`apps/viewer`](apps/viewer/) | The page `orbe show` serves. |
+| [`apps/site`](apps/site/) | The homepage at orbefab.com/embedded: the parts catalog, the Blocks live in 3D, and the registry. [`docs/site.md`](docs/site.md) says how to build, check and deploy it. |
 | [`packages/scene`](packages/scene/) | `orbe-scene` reads and checks scenes and part files and turns them into a netlist. |
 | [`packages/session`](packages/session/) | `orbe-session` is a live session. |
 | [`packages/wasm`](packages/wasm/) | `orbe-wasm` runs a Block live in a browser Web Worker. [`docs/wasm.md`](docs/wasm.md) says how to build and load it. |
@@ -16,6 +17,7 @@ A hardware simulator for AI agents. You describe a circuit as a scene file, flas
 | [`packages/cores`](packages/cores/) | Instruction-set cores. `xtensa` runs the ESP32 and ESP32-S3 cores. A core never names a vendor's registers. |
 | [`packages/socs`](packages/socs/) | Chips around a core. `avr` is the ATmega328P and `espressif` is the ESP32-S3. A chip never decodes an instruction. |
 | [`packages/viewer`](packages/viewer/) | The 3D scene viewer, in React and three.js. |
+| [`packages/brand`](packages/brand/README.md) | The Orbefab brand, copied unchanged from the website repo, with `scripts/brand.sh` to check and refresh the copy. |
 | [`packages/asset-step`](packages/asset-step/) | Imports each part's 3D model and checks it against the part's pins. |
 | [`packages/cad`](packages/cad/) | Helpers for part models. A part's `model.py` uses build123d and these helpers. |
 | [`parts/`](parts/) | The parts catalog. Each folder is one real part: `part.jsonc`, `model.py` when the model is built here, its 3D model and `asset.json`. |
@@ -23,7 +25,7 @@ A hardware simulator for AI agents. You describe a circuit as a scene file, flas
 | [`registry.jsonc`](registry.jsonc) | Names the official registry, `@orbefab`, that `orbe registry build .` builds from `parts/` and `blocks/`. |
 | [`scripts/`](scripts/) | The checks. `check.sh fast` gates every change and is what CI runs, and `check.sh full` runs every check. `scripts/model.sh` builds a part's model. Run `scripts/bless.sh` after adding or changing a part. |
 | [`skills/orbe`](skills/orbe/SKILL.md) | The stub an agent installs. |
-| [`docs/`](docs/) | Finalized docs: [`decisions.md`](docs/decisions.md), [`viewer.md`](docs/viewer.md), [`asset-step.md`](docs/asset-step.md), [`registry.md`](docs/registry.md), [`wasm.md`](docs/wasm.md), [`engine/`](docs/engine/README.md). |
+| [`docs/`](docs/) | Finalized docs: [`decisions.md`](docs/decisions.md), [`viewer.md`](docs/viewer.md), [`asset-step.md`](docs/asset-step.md), [`registry.md`](docs/registry.md), [`wasm.md`](docs/wasm.md), [`site.md`](docs/site.md), [`engine/`](docs/engine/README.md). |
 
 ## Build and check
 
