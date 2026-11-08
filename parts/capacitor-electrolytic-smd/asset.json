@@ -7,8 +7,8 @@
   },
   "files": {
     "capacitor-electrolytic-smd.glb": {
-      "sha256": "4c3731ea2c13ced9a3afa9a036520ba33f0d8f3ee3a4d08b4bd793d95020f66d",
-      "bytes": 9520
+      "sha256": "5f27931ff0bb9cabe7aee3c1cc053823b46f84560e6b6b98ac8f6cfdcc5f2809",
+      "bytes": 10504
     },
     "capacitor-electrolytic-smd.anchors.json": {
       "sha256": "3f0f64fc467f8562434d7112c0c55e40681459e56a9a7be9e0b61ac8fb7b6766",
@@ -19,8 +19,8 @@
     "min": [-3.6, -3.3, 0],
     "max": [3.6, 3.3, 5.44]
   },
-  "kept_nodes": ["lead-1", "lead-2"],
-  "draw_calls": 5,
+  "kept_nodes": [],
+  "draw_calls": 4,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -38,7 +38,7 @@
     },
     "merge": {
       "primitives_in": 5,
-      "primitives_out": 5
+      "primitives_out": 4
     }
   }
 }

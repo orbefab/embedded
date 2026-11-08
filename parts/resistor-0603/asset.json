@@ -7,8 +7,8 @@
   },
   "files": {
     "resistor-0603.glb": {
-      "sha256": "dfbca4717d1ffd4fa83dd89102d1c611c2765949028b9832b21e56b9a229994b",
-      "bytes": 2812
+      "sha256": "6124583262019f1725871badd2cb87138adeed795490a2ced8bcfb786bcb3197",
+      "bytes": 3812
     },
     "resistor-0603.anchors.json": {
       "sha256": "6b88af0a2abc0b6155417fe745a4b826c53a9f2f21d0414739f1b6b6757e7327",
@@ -19,8 +19,8 @@
     "min": [-0.8, -0.4, 0],
     "max": [0.8, 0.4, 0.48]
   },
-  "kept_nodes": ["lead-1", "lead-2"],
-  "draw_calls": 3,
+  "kept_nodes": [],
+  "draw_calls": 2,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -38,7 +38,7 @@
     },
     "merge": {
       "primitives_in": 3,
-      "primitives_out": 3
+      "primitives_out": 2
     }
   }
 }

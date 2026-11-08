@@ -38,7 +38,7 @@ With no `--commit` and no ids, a part with no GLB at its commit, or with no `ass
 
 For each part that passes every check, it writes:
 
-- `<id>.glb`, the merged model. The merge keeps the name of every node an anchor names, so a parent can still tell a pad from the body.
+- `<id>.glb`, the merged model. The merge keeps the names of the nodes that leg and socket anchors name, and merges pads into the body to save draw calls.
 - `<id>.anchors.json`, copied unchanged. A part with no leads of its own, such as `nano-board`, has none.
 - `asset.json`, with the source, the SHA-256 and size of each file written, the box in mm, the kept nodes, the draw calls and what each check measured. A part built here records `source.script` as `model.py` and `source.sha256` as that file's SHA-256. A part still read from `orbefab/models` records that repo, the commit, and each input's path, SHA-256 and size.
 
@@ -57,7 +57,7 @@ A lead is the mesh of the node an anchor names. The anchors check takes a lead's
 | seating | No node reaches more than 0.01 mm below z = 0, except the nodes an anchor names. |
 | names | Each node that `view` and `joints` name exists once. |
 | merge | The merge keeps the nodes that `view` and `joints` name, and the `node` and `also` of each anchor. Every other node loses its name and joins one mesh per material, and identical meshes are shared. Each kept node exists once afterwards, and the scene still has nodes to draw. |
-| composition | Only for a part with children. The part's model, each child's model and each model below those, placed by each parent's `layout` with its full rotation, stay within 0.01 mm of z = 0 or above, except at the nodes their anchors name, pads included. An `at` of two numbers sits at z = 0. A child with `model.py` is the merged GLB in its folder. Any other child is its source GLB at the commit its `asset.json` records, which passed these checks. A child whose recorded commit the models checkout lacks fails the part, and so does a part that holds itself. |
+| composition | Only for a part with children. The part's model, each child's model and each model below those, placed by each parent's `layout` with its full rotation, stay within 0.01 mm of z = 0 or above, except at the nodes their anchors name. An `at` of two numbers sits at z = 0. A child with `model.py` is the merged GLB in its folder, where pads have no names, so a pad of such a child that reaches below z = 0 fails composition by name. Any other child is its source GLB at the commit its `asset.json` records, which passed these checks. A child whose recorded commit the models checkout lacks fails the part, and so does a part that holds itself. |
 
 The step does not compare a composed part with the whole object the models repo also exports, such as the Nano.
 

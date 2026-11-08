@@ -18,8 +18,8 @@
   },
   "files": {
     "atmega16u2-qfn32.glb": {
-      "sha256": "2e5226a80dfacc4cc9f81cf80a275cd064fda7ddfa1ccb25e05c7b508be60e72",
-      "bytes": 7372
+      "sha256": "1bff3195ffeeada69b720169a3f3ce4c6002ea7c7c03a9f7a498216f587dcc91",
+      "bytes": 24780
     },
     "atmega16u2-qfn32.anchors.json": {
       "sha256": "09cb671efeb94741569fdfcc766ee44daae0a3c575adc0201aae89a690da17cb",
@@ -30,8 +30,8 @@
     "min": [-2.5, -2.5, 0],
     "max": [2.5, 2.5, 0.94]
   },
-  "kept_nodes": ["lead-1", "lead-10", "lead-11", "lead-12", "lead-13", "lead-14", "lead-15", "lead-16", "lead-17", "lead-18", "lead-19", "lead-2", "lead-20", "lead-21", "lead-22", "lead-23", "lead-24", "lead-25", "lead-26", "lead-27", "lead-28", "lead-29", "lead-3", "lead-30", "lead-31", "lead-32", "lead-33", "lead-4", "lead-5", "lead-6", "lead-7", "lead-8", "lead-9"],
-  "draw_calls": 35,
+  "kept_nodes": [],
+  "draw_calls": 3,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -49,7 +49,7 @@
     },
     "merge": {
       "primitives_in": 210,
-      "primitives_out": 35
+      "primitives_out": 3
     }
   }
 }

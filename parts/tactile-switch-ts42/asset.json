@@ -18,8 +18,8 @@
   },
   "files": {
     "tactile-switch-ts42.glb": {
-      "sha256": "a805ea382bfc8fd80dbe9dc78fe52b46450260b8c65cae8e367fb9fa827ee27a",
-      "bytes": 21572
+      "sha256": "6e1a0fb74387dea03f07211c352771036a26c53ae3f49b215235013f6fc0eafe",
+      "bytes": 22984
     },
     "tactile-switch-ts42.anchors.json": {
       "sha256": "6bedceeceefa283c9acba71a38f4671afc9a47316e047b8f755ac0d8ba836580",
@@ -30,8 +30,8 @@
     "min": [-4.6, -2.65, 0],
     "max": [4.6, 2.65, 2.7]
   },
-  "kept_nodes": ["button", "lead-1", "lead-2", "lead-3", "lead-4", "lead-5"],
-  "draw_calls": 8,
+  "kept_nodes": ["button"],
+  "draw_calls": 4,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -49,7 +49,7 @@
     },
     "merge": {
       "primitives_in": 48,
-      "primitives_out": 8
+      "primitives_out": 4
     }
   }
 }

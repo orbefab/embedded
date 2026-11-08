@@ -176,7 +176,7 @@ test('the tip is the centroid of the vertices within 0.001 mm of the furthest', 
   assert.equal(asset(fx, 'stepped').checks.anchors.largest_miss_mm, 0);
 });
 
-test("a model.py SMD child's pads are exempt only because the merge keeps their names", async (t) => {
+test("a model.py child's pad that sinks below its parent fails composition by name", async (t) => {
   const sunk = {
     part: { format: 1, part: 'sunk', pins: { a: [1] } },
     nodes: [
@@ -205,13 +205,7 @@ test("a model.py SMD child's pads are exempt only because the merge keeps their 
   });
   assert.equal(local.status, 0, local.stdout);
   assert.equal(existsSync(join(folder, 'sunk.source.glb')), false);
-  assert.deepEqual(asset(fx, 'sunk').kept_nodes, ['lead-1']);
-  const held = run(fx, ['holder']);
-  assert.equal(held.status, 0, held.line('holder'));
-  assert.equal(asset(fx, 'holder').checks.composition.lowest_node, 'pcb');
-  const doc = (await io.readBinary(readFileSync(join(folder, 'sunk.glb')))).setLogger(quiet);
-  for (const node of doc.getRoot().listNodes()) if (node.getName() === 'lead-1') node.setName('');
-  writeFileSync(join(folder, 'sunk.glb'), Buffer.from(await io.writeBinary(doc)));
+  assert.deepEqual(asset(fx, 'sunk').kept_nodes, []);
   const lost = run(fx, ['holder']);
   assert.match(lost.line('holder'), /composition: placed by the layout, node `c1\/\(unnamed\)` reaches z = -0\.400 mm/);
 });
@@ -230,7 +224,7 @@ test("a child's pads are leads when its parent is composed", async (t) => {
   });
   const out = run(fx, ['capped', 'holder']);
   assert.equal(out.status, 0, out.line('holder'));
-  assert.deepEqual(asset(fx, 'capped').kept_nodes, ['cap']);
+  assert.deepEqual(asset(fx, 'capped').kept_nodes, []);
   assert.equal(asset(fx, 'holder').checks.composition.lowest_node, 'pcb');
 });
 

@@ -7,8 +7,8 @@
   },
   "files": {
     "resistor-array-4x0603.glb": {
-      "sha256": "c811e2a275a151cb12b85eb7ba68fa71ecc2da497f614f54748452ba9e57c945",
-      "bytes": 9172
+      "sha256": "d521a28c1dd1392df70c07f2a3115d05a653a3fe7d8d6534f9a3ebe020055597",
+      "bytes": 13072
     },
     "resistor-array-4x0603.anchors.json": {
       "sha256": "db061a0bd304f5164ca79185db9515d65fbb3eaa663a8ec23061b3b94d54c546",
@@ -19,8 +19,8 @@
     "min": [-1.6, -0.8, 0],
     "max": [1.6, 0.8, 0.5]
   },
-  "kept_nodes": ["lead-1", "lead-2", "lead-3", "lead-4", "lead-5", "lead-6", "lead-7", "lead-8"],
-  "draw_calls": 9,
+  "kept_nodes": [],
+  "draw_calls": 2,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -38,7 +38,7 @@
     },
     "merge": {
       "primitives_in": 9,
-      "primitives_out": 9
+      "primitives_out": 2
     }
   }
 }

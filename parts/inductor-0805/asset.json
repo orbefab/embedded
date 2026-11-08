@@ -7,8 +7,8 @@
   },
   "files": {
     "inductor-0805.glb": {
-      "sha256": "080795026c0fad951114eff506ab99fdbf26ddf77d970e15c3ea7b75d37c7441",
-      "bytes": 2788
+      "sha256": "bd8d72441609009e983f89b8ce4309a21f514214c2498883c53f1ea1d2c4204b",
+      "bytes": 3788
     },
     "inductor-0805.anchors.json": {
       "sha256": "2750104ed446073c84231dc2551c04777ea6f3c951b65aff17ca821244f14d43",
@@ -19,8 +19,8 @@
     "min": [-1, -0.625, 0],
     "max": [1, 0.625, 0.88]
   },
-  "kept_nodes": ["lead-1", "lead-2"],
-  "draw_calls": 3,
+  "kept_nodes": [],
+  "draw_calls": 2,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -38,7 +38,7 @@
     },
     "merge": {
       "primitives_in": 3,
-      "primitives_out": 3
+      "primitives_out": 2
     }
   }
 }

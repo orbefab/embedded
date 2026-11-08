@@ -7,8 +7,8 @@
   },
   "files": {
     "ptc-fuse-1812.glb": {
-      "sha256": "e87b596b3968836b02cb11725a26efd2ba93da9ec7c407137f11757f72299589",
-      "bytes": 2816
+      "sha256": "5be64e864b6791d3477569f53385e524adb33d2cc921aa4e2646b51f5989b901",
+      "bytes": 3800
     },
     "ptc-fuse-1812.anchors.json": {
       "sha256": "acc43a309871d7d7f1440dfce4bcbf3280e6c21bf661ac02272e62a60b229b5d",
@@ -19,8 +19,8 @@
     "min": [-2.275, -1.62, 0],
     "max": [2.275, 1.62, 0.73]
   },
-  "kept_nodes": ["lead-1", "lead-2"],
-  "draw_calls": 3,
+  "kept_nodes": [],
+  "draw_calls": 2,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -38,7 +38,7 @@
     },
     "merge": {
       "primitives_in": 3,
-      "primitives_out": 3
+      "primitives_out": 2
     }
   }
 }

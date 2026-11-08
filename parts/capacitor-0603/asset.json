@@ -7,8 +7,8 @@
   },
   "files": {
     "capacitor-0603.glb": {
-      "sha256": "61a2b48a1b9cf1afabb0ad9ea14e8f3cc03630003ecd1b412a7f95105e584bea",
-      "bytes": 2824
+      "sha256": "2c847c19e55ec3ca86d28af402f0909ac0d002f36cabb8620284fc4270201ed3",
+      "bytes": 3808
     },
     "capacitor-0603.anchors.json": {
       "sha256": "57c56ac511c0ac4aebccda273016f2ef134636a2bfb5f90eb20d54f54785ddb0",
@@ -19,8 +19,8 @@
     "min": [-0.8, -0.4, 0],
     "max": [0.8, 0.4, 0.83]
   },
-  "kept_nodes": ["lead-1", "lead-2"],
-  "draw_calls": 3,
+  "kept_nodes": [],
+  "draw_calls": 2,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -38,7 +38,7 @@
     },
     "merge": {
       "primitives_in": 3,
-      "primitives_out": 3
+      "primitives_out": 2
     }
   }
 }

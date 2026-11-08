@@ -7,8 +7,8 @@
   },
   "files": {
     "led-0603.glb": {
-      "sha256": "26cb82bcea4fefd7fd95f5a4d5773e1e04cfd950e692e4af5ecfca20701e1179",
-      "bytes": 2836
+      "sha256": "5dc5f95bc294ea77a043be782c7e2012306d343cc4b6fc1eb34374b5401bb123",
+      "bytes": 3820
     },
     "led-0603.anchors.json": {
       "sha256": "80024bf82c5ae09770ac947e450df447a04a7dfe3f934d94955df9a54cc50739",
@@ -19,8 +19,8 @@
     "min": [-0.8, -0.4, 0],
     "max": [0.8, 0.4, 0.58]
   },
-  "kept_nodes": ["body", "lead-1", "lead-2"],
-  "draw_calls": 3,
+  "kept_nodes": ["body"],
+  "draw_calls": 2,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -38,7 +38,7 @@
     },
     "merge": {
       "primitives_in": 3,
-      "primitives_out": 3
+      "primitives_out": 2
     }
   }
 }

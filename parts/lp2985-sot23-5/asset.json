@@ -18,8 +18,8 @@
   },
   "files": {
     "lp2985-sot23-5.glb": {
-      "sha256": "365f19b13605a880be4fdd7222fb20bbfa05bc33fa56bc1080ded3b3bbcba783",
-      "bytes": 4028
+      "sha256": "096ef9ee16ab1176a4e52d8ffc424876dfde4fd350d90ad141a8a7e1c343349e",
+      "bytes": 6708
     },
     "lp2985-sot23-5.anchors.json": {
       "sha256": "04841cebc8d382356f4a941767b301470945e922aa0afae0e15d3a226650450f",
@@ -30,8 +30,8 @@
     "min": [-1.45, -1.4, 0],
     "max": [1.45, 1.4, 1.24]
   },
-  "kept_nodes": ["lead-1", "lead-2", "lead-3", "lead-4", "lead-5"],
-  "draw_calls": 7,
+  "kept_nodes": [],
+  "draw_calls": 3,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -49,7 +49,7 @@
     },
     "merge": {
       "primitives_in": 42,
-      "primitives_out": 7
+      "primitives_out": 3
     }
   }
 }

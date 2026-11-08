@@ -7,8 +7,8 @@
   },
   "files": {
     "diode-m7-sma.glb": {
-      "sha256": "0a5209bd5f6936ace99e28a10608bb305a1a50eb50b7a9c6bda2bb9530a853a0",
-      "bytes": 3720
+      "sha256": "c9c6e2a843ff29b803957d784f8220c54c772df952444d481996318666823702",
+      "bytes": 4704
     },
     "diode-m7-sma.anchors.json": {
       "sha256": "5d34e914e6ebf6d9606bee9b9ffa5a7ac7d75ab47d777ca6fac162805fd9a4ca",
@@ -19,8 +19,8 @@
     "min": [-2.15, -1.3, 0],
     "max": [2.15, 1.3, 2.18]
   },
-  "kept_nodes": ["lead-1", "lead-2"],
-  "draw_calls": 4,
+  "kept_nodes": [],
+  "draw_calls": 3,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -38,7 +38,7 @@
     },
     "merge": {
       "primitives_in": 4,
-      "primitives_out": 4
+      "primitives_out": 3
     }
   }
 }
