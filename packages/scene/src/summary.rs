@@ -1,5 +1,6 @@
-//! One card per catalog part. `orbe part` and `orbe search` print it and do not parse
-//! `part.jsonc`.
+//! One card per part and one per Block. `orbe part` and `orbe search` print the catalog's part
+//! cards and do not parse `part.jsonc`, and the registry's records are built from cards of any
+//! folder of parts and Blocks.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -8,12 +9,13 @@ use serde::{Serialize, Serializer};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::catalog::{self, Original};
+use crate::catalog;
 use crate::model::passed;
-use crate::project::hex;
+use crate::project::{BLOCK, hash_files, hex};
 use crate::syntax::Node;
 
-const PART_LICENSE: &str = "MIT OR Apache-2.0";
+/// A folder's files, each by its `/`-separated path from the folder.
+pub type Folder = BTreeMap<String, Vec<u8>>;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Card {
@@ -33,7 +35,7 @@ pub struct Card {
     pub not_simulated: Vec<NotSimulated>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub docs: Option<Vec<Doc>>,
-    pub files: Vec<PartFile>,
+    pub files: Vec<CardFile>,
     pub uses: BTreeMap<String, String>,
     pub used_by: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -45,42 +47,56 @@ pub struct Card {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Real {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub maker: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub number: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub datasheet: Option<String>,
     #[serde(skip_serializing_if = "skip_false")]
     pub generic: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Pin {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<u64>"))]
     pub leads: Option<Vec<u64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<String>"))]
     pub refs: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Param {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub unit: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Literal"))]
     pub above: Option<Literal>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Literal"))]
     pub below: Option<Literal>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub file: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<Choice>"))]
     pub choices: Option<Vec<Choice>>,
     #[serde(skip_serializing_if = "skip_false")]
     pub required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<Literal>"))]
     pub default: Option<Option<Literal>>,
 }
 
@@ -116,42 +132,67 @@ impl Serialize for Literal {
     }
 }
 
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for Literal {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Literal".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "A number as the part file wrote it, or the name of a choice.",
+            "type": ["number", "string"]
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Choice {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub number: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub tint: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Rating {
     pub name: String,
     pub value: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub unit: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Value"))]
     pub source: Option<Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct NotSimulated {
     pub what: String,
     pub why: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<String>"))]
     pub pins: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Doc {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub url: Option<String>,
 }
 
+/// A file in a part's or a Block's folder, with the licence it carries.
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct PartFile {
+pub struct CardFile {
     pub path: String,
     pub sha256: String,
     pub bytes: u64,
@@ -159,6 +200,7 @@ pub struct PartFile {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Buy {
     pub seller: String,
     pub url: String,
@@ -166,13 +208,34 @@ pub struct Buy {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct On {
     pub of: String,
     pub above: f64,
     pub unit: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// A Block's card: its `block.jsonc`, and the catalog parts its scene runs.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct BlockCard {
+    pub name: String,
+    pub version: String,
+    /// The folder hash over every file of the Block, as `sha256:<hex>`.
+    pub hash: String,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub categories: Option<Vec<String>>,
+    pub board: String,
+    pub license: String,
+    /// Every catalog part the scene reaches, by id, at the version the Block runs. A part a
+    /// board is built from is one of them.
+    pub parts: BTreeMap<String, String>,
+    pub files: Vec<CardFile>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Missing {
     pub parts: usize,
     pub description: usize,
@@ -186,7 +249,7 @@ impl fmt::Display for Missing {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{} catalog parts: {} lack a description, {} lack categories, {} lack a datasheet, {} lack a datasheet url, {} lack buy",
+            "{} parts: {} lack a description, {} lack categories, {} lack a datasheet, {} lack a datasheet url, {} lack buy",
             self.parts, self.description, self.categories, self.docs, self.datasheet_url, self.buy
         )
     }
@@ -194,43 +257,146 @@ impl fmt::Display for Missing {
 
 /// Every catalog part, by id.
 pub fn catalog_cards() -> Vec<Card> {
-    let loaded: Vec<(String, Original)> = catalog::ids()
-        .map(|id| {
-            let original = catalog::find(&id).expect("the built-in catalog parses");
-            (id, original)
-        })
-        .collect();
-    let mut used_by: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for (id, original) in &loaded {
-        for prop in original
-            .tree
-            .get("uses")
-            .and_then(Node::props)
-            .unwrap_or_default()
+    cards(&catalog::folders()).expect("the built-in catalog parses")
+}
+
+/// One card per part folder, by id. The error names the first part that does not read, or that
+/// uses a part and version the folders lack.
+pub fn cards(parts: &BTreeMap<String, Folder>) -> Result<Vec<Card>, String> {
+    let mut trees: BTreeMap<&str, Node> = BTreeMap::new();
+    for (id, files) in parts {
+        let tree = catalog::jsonc(id, files, "part.jsonc")?;
+        catalog::part_version(id, &tree)?;
+        if text(&tree, "license").is_none() {
+            return Err(format!(
+                "`{id}` part.jsonc has no `license`, and a published part names the SPDX licence its files carry"
+            ));
+        }
+        if let Some(named) = tree.get("part").and_then(Node::str)
+            && named != id
         {
+            return Err(format!(
+                "`{id}` part.jsonc names `{named}`, and `part` is the folder's name"
+            ));
+        }
+        trees.insert(id, tree);
+    }
+    let mut used_by: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for (id, tree) in &trees {
+        for prop in tree.get("uses").and_then(Node::props).unwrap_or_default() {
+            let version = prop.value.str().unwrap_or("");
+            let found = trees.get(prop.key.as_str()).and_then(|t| t.get("version"));
+            if found.and_then(Node::str) != Some(version) {
+                return Err(format!(
+                    "`{id}` uses `{}@{version}`, which these parts lack",
+                    prop.key
+                ));
+            }
             used_by
-                .entry(prop.key.clone())
+                .entry(prop.key.as_str())
                 .or_default()
-                .push(id.clone());
+                .push(id.to_string());
         }
     }
-    for names in used_by.values_mut() {
-        names.sort();
-    }
-    let mut cards: Vec<Card> = loaded
+    let tree_of = |want: &str| trees.get(want);
+    Ok(parts
         .iter()
-        .map(|(id, original)| {
-            let used = used_by.get(id).cloned().unwrap_or_default();
-            build(id, original, used, &|want| {
-                loaded
-                    .iter()
-                    .find(|(other, _)| other == want)
-                    .map(|(_, found)| &found.tree)
-            })
+        .map(|(id, files)| {
+            let used = used_by.get(id.as_str()).cloned().unwrap_or_default();
+            build(id, &trees[id.as_str()], files, used, &tree_of)
         })
-        .collect();
-    cards.sort_by(|a, b| a.name.cmp(&b.name));
-    cards
+        .collect())
+}
+
+/// The card of the Block `id`, whose folder holds `files`, read against the cards [`cards`]
+/// returned for the registry it is published with. The error says what in the Block does not
+/// read.
+pub fn block_card(id: &str, files: &Folder, parts: &[Card]) -> Result<BlockCard, String> {
+    let block = catalog::jsonc(id, files, BLOCK)?;
+    let known = [
+        "format", "block", "version", "title", "summary", "board", "tags", "license",
+    ];
+    for prop in block.props().unwrap_or_default() {
+        if !known.contains(&prop.key.as_str()) {
+            return Err(format!(
+                "`{id}` {BLOCK} has `{}`, and a Block file holds only {}",
+                prop.key,
+                quoted(&known.map(str::to_string))
+            ));
+        }
+    }
+    if block.get("format").and_then(Node::number) != Some(1.0) {
+        return Err(format!("`{id}` {BLOCK} needs `\"format\": 1`"));
+    }
+    let named = block.get("block").and_then(Node::str);
+    if named != Some(id) {
+        return Err(format!(
+            "`{id}` {BLOCK} names `{}`, and `block` is the folder's name",
+            named.unwrap_or("")
+        ));
+    }
+    let version = block
+        .get("version")
+        .and_then(Node::str)
+        .filter(|version| crate::Version::parse(version).is_some())
+        .ok_or_else(|| {
+            format!("`{id}` {BLOCK} has no version of the form `0.1.0`: three numbers, with no sign and no leading zero")
+        })?
+        .to_string();
+    let need =
+        |key: &str| text(&block, key).ok_or_else(|| format!("`{id}` {BLOCK} has no `{key}`"));
+    let title = need("title")?;
+    let board = need("board")?;
+    let license = need("license")?;
+    let scene = catalog::jsonc(id, files, "scene.jsonc")?;
+    let mut reached = BTreeMap::new();
+    let mut pending: Vec<String> = Vec::new();
+    for inst in scene.get("parts").and_then(Node::props).unwrap_or_default() {
+        let Some(ty) = inst.value.get("type").and_then(Node::str) else {
+            continue;
+        };
+        if ty.starts_with("./") || ty.starts_with("../") {
+            continue;
+        }
+        if ty.starts_with('@') {
+            return Err(format!(
+                "`{id}` scene.jsonc names `{ty}`, and a Block runs the parts of the registry it is published with"
+            ));
+        }
+        pending.push(ty.to_string());
+    }
+    while let Some(want) = pending.pop() {
+        if reached.contains_key(&want) {
+            continue;
+        }
+        let card = parts
+            .iter()
+            .find(|card| card.name == want)
+            .ok_or_else(|| format!("`{id}` uses the part `{want}`, which this registry lacks"))?;
+        pending.extend(card.uses.keys().cloned());
+        reached.insert(want, card.version.clone());
+    }
+    if !reached.contains_key(&board) {
+        return Err(format!(
+            "`{id}` {BLOCK} names the board `{board}`, which its scene does not use"
+        ));
+    }
+    Ok(BlockCard {
+        name: id.to_string(),
+        version,
+        hash: hash_files(
+            files
+                .iter()
+                .map(|(path, bytes)| (path.as_str(), bytes.as_slice())),
+        ),
+        title,
+        description: text(&block, "summary"),
+        categories: list(&block, "tags"),
+        board,
+        files: card_files(&license, files),
+        license,
+        parts: reached,
+    })
 }
 
 pub fn card(name: &str) -> Option<Card> {
@@ -402,21 +568,21 @@ fn words_of(text: &str) -> Vec<String> {
 
 fn build<'a>(
     id: &str,
-    original: &'a Original,
+    tree: &'a Node,
+    files: &Folder,
     used_by: Vec<String>,
     tree_of: &dyn Fn(&str) -> Option<&'a Node>,
 ) -> Card {
-    let tree = &original.tree;
-    let license = tree
-        .get("license")
-        .and_then(Node::str)
-        .unwrap_or(PART_LICENSE);
+    let license = text(tree, "license").unwrap_or_default();
     Card {
         name: id.to_string(),
         title: text(tree, "title").unwrap_or_default(),
-        version: original.version.clone(),
-        license: license.to_string(),
-        hash: original.hash.clone(),
+        version: text(tree, "version").unwrap_or_default(),
+        hash: hash_files(
+            files
+                .iter()
+                .map(|(path, bytes)| (path.as_str(), bytes.as_slice())),
+        ),
         description: text(tree, "summary"),
         categories: list(tree, "tags"),
         real: real(tree),
@@ -431,7 +597,8 @@ fn build<'a>(
         ratings: ratings(tree),
         not_simulated: gaps(tree),
         docs: docs(tree),
-        files: files(license, original),
+        files: card_files(&license, files),
+        license,
         uses: uses(tree),
         used_by,
         buy: buy_links(tree),
@@ -750,29 +917,21 @@ fn docs(tree: &Node) -> Option<Vec<Doc>> {
     (!docs.is_empty()).then_some(docs)
 }
 
-fn files(part_license: &str, original: &Original) -> Vec<PartFile> {
-    let mut files: Vec<PartFile> = original
-        .files()
+/// Each file by path, with its SPDX line's licence, or else the folder's.
+fn card_files(license: &str, files: &Folder) -> Vec<CardFile> {
+    files
         .iter()
-        .map(|(path, bytes)| PartFile {
-            path: (*path).to_string(),
+        .map(|(path, bytes)| CardFile {
+            path: path.clone(),
             sha256: hex(&Sha256::digest(bytes)),
             bytes: bytes.len() as u64,
-            license: file_license(part_license, bytes),
+            license: file_license(license, bytes),
         })
-        .collect();
-    files.sort_by(|a, b| a.path.cmp(&b.path));
-    files
+        .collect()
 }
 
 fn file_license(part_license: &str, bytes: &[u8]) -> String {
-    spdx(bytes).unwrap_or_else(|| {
-        if part_license.is_empty() {
-            PART_LICENSE.to_string()
-        } else {
-            part_license.to_string()
-        }
-    })
+    spdx(bytes).unwrap_or_else(|| part_license.to_string())
 }
 
 fn spdx(bytes: &[u8]) -> Option<String> {
@@ -861,7 +1020,7 @@ mod tests {
             ),
             "MIT OR Apache-2.0"
         );
-        assert_eq!(file_license("", b"not utf8 \xff"), PART_LICENSE);
+        assert_eq!(file_license("MIT", b"not utf8 \xff"), "MIT");
     }
 
     #[test]

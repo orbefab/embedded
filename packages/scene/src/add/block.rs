@@ -59,7 +59,7 @@ pub(super) fn named(request: &Request) -> Option<Result<Block, String>> {
     let alone = request.ids.len() == 1 && !request.overwrite && !request.diff && !request.relock;
     Some(if raw != block.id {
         Err(format!(
-            "`{}` is a Block, and a Block has no versions. run `orbe add {}`",
+            "`{}` is a Block, and orbe installs the one version of it built in. run `orbe add {}`",
             block.id, block.id
         ))
     } else if !alone {

@@ -30,18 +30,19 @@ use std::path::Path;
 
 #[cfg(unix)]
 pub use add::{AddCode, Reply, Request, RunError, run as add_parts};
+pub use catalog::Version;
 pub use circuit::{
     Amount, EnginePart, Instance, MapPart, Netlist, PartData, PinWhy, Placement, Reading, RefMap,
     View, Wire,
 };
 pub use diagnostic::{Code, Diagnostic, Lint};
 pub use files::Files;
-pub use model::STOP_PS;
-pub use project::{BLOCK, REGISTRY, folder_hash, part_file};
+pub use model::{STOP_PS, is_id};
+pub use project::{BLOCK, REGISTRY, folder_hash, is_registry_name, part_file};
 pub use summary::{
-    Buy, Card, Choice, Doc, Literal, Missing, NotSimulated, On, Param, PartFile, Pin, Rating, Real,
-    card, catalog_cards, ids_with_segment, missing_fields, near_names, param_sentence, search,
-    si_amount,
+    BlockCard, Buy, Card, CardFile, Choice, Doc, Folder, Literal, Missing, NotSimulated, On, Param,
+    Pin, Rating, Real, block_card, card, cards, catalog_cards, ids_with_segment, missing_fields,
+    near_names, param_sentence, search, si_amount,
 };
 
 /// Type-checks a scene and every part file it reaches. On success, the netlist the engine

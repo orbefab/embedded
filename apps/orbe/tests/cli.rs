@@ -557,6 +557,40 @@ fn a_folder_with_no_lock_line_is_part_missing() {
 }
 
 #[test]
+fn add_refuses_a_part_id_locked_twice_and_relock_keeps_one() {
+    let project = common::project("nano-button");
+    let lock = project.path().join("parts.lock");
+    let mut text = fs::read_to_string(&lock).unwrap();
+    let line = text
+        .lines()
+        .find(|line| line.starts_with("led-5mm "))
+        .unwrap()
+        .replace(orbe_scene::REGISTRY, "@acme");
+    text.push_str(&format!("{line}\n"));
+    fs::write(&lock, &text).unwrap();
+    let (output, stdout, _) = orbe_in(project.path(), &["add", "led-5mm"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(stdout.contains("second line for `led-5mm`"), "{stdout}");
+    assert!(stdout.contains("--relock"), "{stdout}");
+    assert_eq!(
+        fs::read_to_string(&lock).unwrap(),
+        text,
+        "nothing was written"
+    );
+    let (output, stdout, _) = orbe_in(project.path(), &["add", "--relock"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    let relocked = fs::read_to_string(&lock).unwrap();
+    assert_eq!(
+        relocked
+            .lines()
+            .filter(|l| l.starts_with("led-5mm "))
+            .count(),
+        1,
+        "{relocked}"
+    );
+}
+
+#[test]
 fn the_first_target_walk_from_the_folder_above() {
     let (workspace, proj) = first_target();
     let (output, stdout, _) = orbe_in(workspace.path(), &["check", "proj/scene.jsonc"]);

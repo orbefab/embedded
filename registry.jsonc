@@ -1,0 +1,7 @@
+// The registry this repo's parts/ and blocks/ build into, with `orbe registry build . <out>`.
+// docs/registry.md says what it holds.
+{
+  "format": 1,
+  "name": "@orbefab",
+  "homepage": "https://orbefab.com/embedded",
+}

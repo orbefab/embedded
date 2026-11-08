@@ -46,13 +46,27 @@ A command does what it names and nothing in the background. Where `orbe` could g
 
 ## Blocks (Nov 8 2026)
 - A Block is a small circuit that works: a board, parts, firmware and tests. `blocks/<id>/` holds `block.jsonc`, `scene.jsonc`, `firmware/`, `tests/` and `README.md`. It replaces `examples/`.
-- `block.jsonc` holds what a Block's catalog card needs from the Block itself: `block` (its id, the folder's name), `title`, `summary`, `board`, `tags` and `license`. It does not list parts, since the scene names them.
+- `block.jsonc` holds what a Block's catalog card needs from the Block itself: `block` (its id, the folder's name), `version`, `title`, `summary`, `board`, `tags` and `license`. It does not list parts, since the scene names them.
 - A Block commits no part copies and no `parts.lock`. A folder that holds `block.jsonc` is a Block, and the reader resolves each catalog id its scene names from the catalog built into the same `orbe`. A Block in this repo then always runs the parts of the commit it sits in, so a part change that breaks a Block fails that commit's checks, and no lock or copies go stale beside the catalog.
 - A Block is self-contained. Its firmware sits in its own `firmware/` with the sketch it was built from and the licences that image carries, and its scene names it as `firmware/<name>.hex`, so the path works in the Block and after it is installed.
 - `orbe add <block>` installs a Block into a project. It copies the parts the scene names into `parts/` and records them in `parts.lock`, as `orbe add <part>` does, then writes `scene.jsonc`, `firmware/` and `tests/`. `block.jsonc` and `README.md` stay behind, so the installed project reads its own copies.
 - `orbe add` never merges a Block into a scene. A project that already holds a different `scene.jsonc`, or any other file the Block brings, is refused before anything is written, and the hint installs into an empty folder. A file already there with the Block's bytes is kept, so the same install run again finishes or changes nothing.
 - Parts and Blocks share `orbe add`, so a Block id is never a catalog part id. A test fails when one is both, and one word names one of them.
-- A published Block will carry the part versions it was tested with. That comes with the registry.
+- A Block has a version, like a part. `orbe add <block>` installs the one version built into `orbe`.
+- A Block's registry record lists every part its scene runs, at the versions in the same build. The build does not run the Block's tests. In this repo `scripts/check.sh` runs them against the parts of the same commit.
+
+## Registry (Nov 8 2026)
+- `orbe registry build <src> <out>` builds a registry from any folder of `registry.jsonc`, `parts/` and `blocks/`, so another registry is built with the same `orbe` its users run. The code is the `orbe-registry` library, and the cards come from `orbe-scene`, the same as `orbe part` prints.
+- `registry.jsonc` names the registry, such as `@orbefab`, and its homepage, and the index carries both, so an index says which registry it is wherever it is mirrored or merged.
+- Item types are `part`, `block` and `model`, with shadcn's field names. `model` is in the schema before any model item exists.
+- Every record sits at `<id>@<version>` and never changes once served, and its files sit at `files/<sha256>`. Hash dedupe is the only optimisation. A record has no `usedBy`, since that grows with the registry.
+- A registry keeps every version it ever served. `--previous` carries an earlier build's records forward and refuses a version whose record would change.
+- The index and every record carry `"format": 1`. Clients ignore fields they do not know, and removing or changing a field raises the format, so the schemas allow fields they do not name.
+- A field with no value is left out, never `null`.
+- A dependency is `[@<registry>/]<id>@<version>`, though the build writes only bare ones today, so a parser written now reads cross-registry dependencies later.
+- The URL template has one `{name}`, in its last path segment. A client fills it only with `index` and takes every other URL from the index and the records.
+- Records stay camel case, as shadcn's are, and `orbe part --json` stays snake case. [registry.md](registry.md) gives the exact mapping and a test converts every catalog part both ways.
+- `parts.lock` keeps one line per part id, so a project takes each id from one registry. Its registry field is the registry's name, such as `@orbefab`, not a URL, so a registry that moves changes one line of config and no lock. [registry.md](registry.md) is the client contract.
 
 ## Scenes (Nov 4 2026)
 - A scene is its own kind of file, usually `scene.jsonc`. Its keys are `format`, `parts`, `wires`, `layout`, `sim` and `nets`. It has no `pins` or `params`, and no file can use a scene as a part.

@@ -15,8 +15,9 @@ use crate::name::did_you_mean;
 use crate::source::{FileId, Sources, Span, display};
 use crate::syntax::{self, Node};
 
-/// The official catalog's registry, the one this repo's `parts/` publishes to.
-pub const REGISTRY: &str = "https://github.com/orbefab/embedded/releases/download/parts";
+/// The name of the official registry, the one this repo's `parts/` publishes to. `parts.lock`
+/// records a registry by name, and a client maps the name to a URL when it fetches.
+pub const REGISTRY: &str = "@orbefab";
 
 /// The file that makes a folder a Block.
 pub const BLOCK: &str = "block.jsonc";
@@ -256,6 +257,18 @@ impl Loader<'_> {
             start += line.len();
             match lock_fields(line) {
                 Ok(None) => {}
+                Ok(Some(fields)) if self.lock.contains_key(&fields.id) => self.out.push(
+                    Code::Duplicate,
+                    span,
+                    format!(
+                        "parts.lock has a second line for `{}`, and a project takes each part id from one registry",
+                        fields.id
+                    ),
+                    format!(
+                        "keep the line of the registry the copy in `parts/{}/` came from, and delete the other",
+                        fields.id
+                    ),
+                ),
                 Ok(Some(fields)) => {
                     self.lock.insert(
                         fields.id,
@@ -270,7 +283,7 @@ impl Loader<'_> {
                 Err(()) => self.out.push(
                     Code::Syntax,
                     span,
-                    "a parts.lock line is `<id> <version> <registry> sha256:<hash>`",
+                    "a parts.lock line is `<id> <version> @<registry> sha256:<hash>`",
                     format!(
                         "`orbe add` writes this file. rebuild it with `{} --relock`",
                         self.add
@@ -757,17 +770,26 @@ impl LockFields {
     }
 }
 
+/// A registry's name: `@` and an id, such as `@orbefab`.
+pub fn is_registry_name(text: &str) -> bool {
+    text.strip_prefix('@').is_some_and(crate::model::is_id)
+}
+
 /// `Ok(None)` is a blank line. `Err` is a line that is not the lock format.
 pub(crate) fn lock_fields(line: &str) -> Result<Option<LockFields>, ()> {
     let fields: Vec<&str> = line.split_whitespace().collect();
     match fields.as_slice() {
         [] => Ok(None),
-        [id, version, registry, hash] if hash.starts_with("sha256:") => Ok(Some(LockFields {
-            id: (*id).to_string(),
-            version: (*version).to_string(),
-            registry: (*registry).to_string(),
-            hash: (*hash).to_string(),
-        })),
+        [id, version, registry, hash]
+            if hash.starts_with("sha256:") && is_registry_name(registry) =>
+        {
+            Ok(Some(LockFields {
+                id: (*id).to_string(),
+                version: (*version).to_string(),
+                registry: (*registry).to_string(),
+                hash: (*hash).to_string(),
+            }))
+        }
         _ => Err(()),
     }
 }

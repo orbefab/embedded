@@ -1,0 +1,145 @@
+{
+  "type": "part",
+  "$schema": "item.schema.json",
+  "format": 1,
+  "name": "led-5mm",
+  "version": "0.1.0",
+  "title": "5 mm LED",
+  "description": "Round 5 mm through-hole LED, two leads on 2.54 mm. The longer lead is the anode. Pick its colour.",
+  "categories": [
+    "led",
+    "light",
+    "indicator",
+    "through-hole"
+  ],
+  "license": "MIT OR Apache-2.0",
+  "registryDependencies": [],
+  "files": [
+    {
+      "path": "asset.json",
+      "url": "files/<sha256>",
+      "sha256": "<sha256>",
+      "bytes": 0,
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "path": "led-5mm.anchors.json",
+      "url": "files/<sha256>",
+      "sha256": "<sha256>",
+      "bytes": 0,
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "path": "led-5mm.glb",
+      "url": "files/<sha256>",
+      "sha256": "<sha256>",
+      "bytes": 0,
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "path": "model.py",
+      "url": "files/<sha256>",
+      "sha256": "<sha256>",
+      "bytes": 0,
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "path": "part.jsonc",
+      "url": "files/<sha256>",
+      "sha256": "<sha256>",
+      "bytes": 0,
+      "license": "MIT OR Apache-2.0"
+    }
+  ],
+  "hash": "sha256:<folder hash>",
+  "real": {
+    "maker": "Kingbright",
+    "number": "WP7113",
+    "datasheet": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A"
+  },
+  "pins": [
+    {
+      "name": "anode",
+      "leads": [
+        1
+      ]
+    },
+    {
+      "name": "cathode",
+      "leads": [
+        2
+      ]
+    }
+  ],
+  "params": [
+    {
+      "name": "color",
+      "choices": [
+        {
+          "name": "red",
+          "number": "WP7113ID",
+          "tint": "#d8342a"
+        }
+      ],
+      "required": true
+    }
+  ],
+  "ratings": [
+    {
+      "name": "current",
+      "value": 0.03,
+      "unit": "A",
+      "source": {
+        "datasheet": {
+          "at": "Absolute Maximum Ratings at Ta = 25 C, DC forward current",
+          "basis": "absolute_max",
+          "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A"
+        }
+      }
+    },
+    {
+      "name": "power",
+      "value": 0.075,
+      "unit": "W",
+      "source": {
+        "datasheet": {
+          "at": "Absolute Maximum Ratings at Ta = 25 C, power dissipation",
+          "basis": "absolute_max",
+          "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A"
+        }
+      }
+    }
+  ],
+  "notSimulated": [
+    {
+      "what": "light",
+      "why": "The engine reports current. Brightness is the current over 10 mA, so 1 at 10 mA, and above that the LED blooms."
+    },
+    {
+      "what": "temperature",
+      "why": "The fit is at 25 C and the engine has no temperature."
+    },
+    {
+      "what": "reverse breakdown",
+      "why": "The engine's LED has no breakdown voltage."
+    }
+  ],
+  "docs": [
+    {
+      "name": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
+      "url": "https://www.kingbrightusa.com/images/catalog/SPEC/WP7113ID.pdf"
+    }
+  ],
+  "buy": [
+    {
+      "seller": "DigiKey",
+      "url": "https://www.digikey.com/en/products/detail/kingbright/WP7113ID/1747663",
+      "checked": "2026-11-08"
+    }
+  ],
+  "on": {
+    "of": "i",
+    "above": 0.001,
+    "unit": "A"
+  }
+}

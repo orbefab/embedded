@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+orbe-registry.workspace = true
 orbe-scene.workspace = true
 orbe-session.workspace = true
 clap.workspace = true

@@ -1,6 +1,7 @@
 //! `orbe`, the CLI. `orbe check` type-checks a scene, and `orbe lint` checks it, then warns of
 //! what is likely wrong or unclear. `orbe add` copies catalog parts, or installs a Block. `orbe part` prints one
-//! catalog part, and `orbe search` finds parts.
+//! catalog part, and `orbe search` finds parts. `orbe registry build` turns a folder of parts and
+//! Blocks into a registry.
 //! `orbe test` runs each test file's live commands in a fresh in-process session. The live
 //! commands, such as `orbe open` and `orbe step`, drive a session that a background process
 //! holds between commands. `orbe skills` prints the skills that tell an agent how to use it.
@@ -122,6 +123,12 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Builds registries of parts and Blocks.
+    #[command(display_order = 22)]
+    Registry {
+        #[command(subcommand)]
+        command: RegistryCommand,
+    },
     /// Prints the skills that tell an agent how to use orbe.
     #[command(display_order = 21)]
     Skills {
@@ -135,6 +142,28 @@ enum Command {
         session: String,
         #[arg(long)]
         start_log: Option<u64>,
+    },
+}
+
+#[derive(Subcommand)]
+enum RegistryCommand {
+    /// Writes the registry `<SRC>/registry.jsonc` names, of the parts in `<SRC>/parts/` and the
+    /// Blocks in `<SRC>/blocks/`, into the empty folder `<OUT>`: an index, one record per item
+    /// version, and each file once by its SHA-256. Prints the file count, and warns of what
+    /// parts and Blocks lack and of hidden or large files they publish.
+    Build {
+        /// The folder that holds `registry.jsonc`, `parts/` and `blocks/`, such as this repo's root.
+        src: PathBuf,
+        /// The folder to write. It must be missing or empty.
+        out: PathBuf,
+        /// The folder of the build this one replaces. Every record it serves stays served: a
+        /// version `<SRC>` still holds must build to the same bytes, and older versions are
+        /// carried forward.
+        #[arg(long, value_name = "DIR")]
+        previous: Option<PathBuf>,
+        /// Print one JSON envelope instead of text.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -285,6 +314,15 @@ fn main() -> ExitCode {
                 json,
             } => run_tests(&paths, verbose, json),
             Command::Skills { command } => print_skill(command),
+            Command::Registry {
+                command:
+                    RegistryCommand::Build {
+                        src,
+                        out,
+                        previous,
+                        json,
+                    },
+            } => build_registry(&src, &out, previous.as_deref(), json),
             Command::Show {
                 session,
                 no_browser,
@@ -835,6 +873,57 @@ fn search_parts(words: &[String], json: bool) -> ExitCode {
         print_json(&json!({ "ok": true, "data": { "parts": found } }));
     } else {
         print!("{}", part::search_text(&found));
+    }
+    ExitCode::SUCCESS
+}
+
+fn build_registry(src: &Path, out: &Path, previous: Option<&Path>, json: bool) -> ExitCode {
+    let built = orbe_registry::build(src, previous).and_then(|registry| {
+        registry.write(out)?;
+        Ok(registry)
+    });
+    let registry = match built {
+        Ok(registry) => registry,
+        Err(error) => {
+            let (code, exit, hint) = match &error {
+                orbe_registry::Error::Invalid(_) => (
+                    "registry_invalid",
+                    FAILED,
+                    "fix the part or Block it names. docs/registry.md says what a registry holds",
+                ),
+                orbe_registry::Error::NotEmpty(_) => (
+                    "registry_out_not_empty",
+                    FAILED,
+                    "name a new folder, or empty this one first",
+                ),
+                orbe_registry::Error::Io(_) => ("io_error", IO, ""),
+            };
+            let message = error.to_string();
+            if json {
+                print_json(&json!({
+                    "ok": false,
+                    "error": { "code": code, "message": message, "hint": hint }
+                }));
+            } else if hint.is_empty() {
+                eprintln!("error[{code}]: {message}");
+            } else {
+                eprintln!("error[{code}]: {message}\n  hint: {hint}");
+            }
+            return ExitCode::from(exit);
+        }
+    };
+    let report = &registry.report;
+    let warnings = report.warnings();
+    if json {
+        print_json(&json!({
+            "ok": true,
+            "data": { "out": out, "report": report, "warnings": warnings }
+        }));
+    } else {
+        println!("wrote {}: {report}", out.display());
+        for warning in &warnings {
+            eprintln!("warning: {warning}");
+        }
     }
     ExitCode::SUCCESS
 }

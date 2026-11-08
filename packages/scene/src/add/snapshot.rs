@@ -185,12 +185,19 @@ fn read_lock(root: &Path) -> Result<Lock, RunError> {
     for line in text.lines() {
         match project::lock_fields(line) {
             Ok(None) => {}
+            Ok(Some(fields)) if lines.contains_key(&fields.id) => {
+                error = Some(format!(
+                    "parts.lock has a second line for `{}`, and a project takes each part id from one registry\n{line}",
+                    fields.id
+                ));
+                break;
+            }
             Ok(Some(fields)) => {
                 lines.insert(fields.id.clone(), fields);
             }
             Err(()) => {
                 error = Some(format!(
-                    "a parts.lock line is `<id> <version> <registry> sha256:<hash>`\n{line}"
+                    "a parts.lock line is `<id> <version> @<registry> sha256:<hash>`\n{line}"
                 ));
                 break;
             }

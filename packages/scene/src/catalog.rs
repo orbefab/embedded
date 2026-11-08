@@ -1,8 +1,9 @@
 //! The catalog this binary was built with: the repo's `parts/`, embedded by `build.rs`. It is
 //! the registry's index for the versions it holds, so a sealed copy can be compared with it.
 
+use std::collections::BTreeMap;
 #[cfg(unix)]
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 
@@ -57,11 +58,21 @@ pub(crate) fn find(id: &str) -> Option<Original> {
     })
 }
 
-impl Original {
-    pub(crate) fn files(&self) -> &[(&'static str, &'static [u8])] {
-        &self.files
+/// The catalog's part folders by id, each file by its `/`-separated path from the folder.
+pub(crate) fn folders() -> BTreeMap<String, BTreeMap<String, Vec<u8>>> {
+    let mut folders: BTreeMap<String, BTreeMap<String, Vec<u8>>> = BTreeMap::new();
+    for (path, bytes) in FILES {
+        if let Some((id, rel)) = path.split_once('/') {
+            folders
+                .entry(id.to_string())
+                .or_default()
+                .insert(rel.to_string(), bytes.to_vec());
+        }
     }
+    folders
+}
 
+impl Original {
     /// The files of `folder` that differ from this version's, for a message. `None` when
     /// every file matches.
     pub(crate) fn files_differing(&self, files: &Files, folder: &Path) -> Option<String> {
@@ -89,28 +100,36 @@ impl Original {
     }
 }
 
-/// Three numbers. The first is the major version, including versions below 1.0.
+/// Three numbers. The first is the major version, including versions below 1.0. Versions order
+/// by number, so `0.10.0` is newer than `0.9.0`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct Version {
+pub struct Version {
     pub(crate) major: u64,
     pub(crate) minor: u64,
     pub(crate) patch: u64,
 }
 
 impl Version {
-    pub(crate) fn parse(text: &str) -> Option<Version> {
+    /// The pattern of a version's text: three numbers of ASCII digits, none with a sign or a
+    /// leading zero, so one version has one spelling.
+    pub const PATTERN: &str = r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$";
+
+    /// The version `text` spells, when it is in the one spelling [`Version::PATTERN`] allows.
+    pub fn parse(text: &str) -> Option<Version> {
+        let number = |part: Option<&str>| {
+            let part = part?;
+            let canonical = part == "0"
+                || (part.starts_with(|c: char| matches!(c, '1'..='9'))
+                    && part.bytes().all(|b| b.is_ascii_digit()));
+            if canonical { part.parse().ok() } else { None }
+        };
         let mut parts = text.split('.');
-        let major = parts.next()?.parse().ok()?;
-        let minor = parts.next()?.parse().ok()?;
-        let patch = parts.next()?.parse().ok()?;
-        if parts.next().is_some() || text.is_empty() {
-            return None;
-        }
-        Some(Version {
-            major,
-            minor,
-            patch,
-        })
+        let version = Version {
+            major: number(parts.next())?,
+            minor: number(parts.next())?,
+            patch: number(parts.next())?,
+        };
+        parts.next().is_none().then_some(version)
     }
 }
 
@@ -152,18 +171,8 @@ impl Catalog {
 
     /// The repo's `parts/`, one version of each id, embedded at build time.
     pub(crate) fn builtin() -> Catalog {
-        let mut groups: BTreeMap<String, BTreeMap<String, Vec<u8>>> = BTreeMap::new();
-        for (path, bytes) in FILES {
-            let Some((id, rel)) = path.split_once('/') else {
-                continue;
-            };
-            groups
-                .entry(id.to_string())
-                .or_default()
-                .insert(rel.to_string(), bytes.to_vec());
-        }
         let mut catalog = Catalog::official();
-        for (id, files) in groups {
+        for (id, files) in folders() {
             let entry = entry_from_files(&id, files).expect("the built-in catalog parses");
             catalog.insert(entry);
         }
@@ -218,33 +227,48 @@ impl Catalog {
     }
 }
 
-#[cfg(unix)]
-pub(crate) fn entry_from_files(
+/// The file `rel` of the folder `id`, parsed. The error is a sentence that names the file.
+pub(crate) fn jsonc(
     id: &str,
-    files: BTreeMap<String, Vec<u8>>,
-) -> Result<CatalogEntry, String> {
+    files: &BTreeMap<String, Vec<u8>>,
+    rel: &str,
+) -> Result<Node, String> {
     let bytes = files
-        .get("part.jsonc")
-        .ok_or_else(|| format!("`{id}` has no part.jsonc"))?;
+        .get(rel)
+        .ok_or_else(|| format!("`{id}` has no {rel}"))?;
     let text = std::str::from_utf8(bytes)
-        .map_err(|_| format!("`{id}` part.jsonc is not UTF-8"))?
+        .map_err(|_| format!("`{id}` {rel} is not UTF-8"))?
         .to_string();
     let mut sources = Sources::new(Path::new(""));
-    let file = sources.add(Path::new("part.jsonc"), text);
+    let file = sources.add(Path::new(rel), text);
     let mut findings = Findings::default();
-    let tree = syntax::parse(&sources, file, &mut findings).ok_or_else(|| {
+    syntax::parse(&sources, file, &mut findings).ok_or_else(|| {
         let messages: Vec<String> = findings
             .into_diagnostics(&sources)
             .iter()
             .map(|d| d.message.clone())
             .collect();
-        format!("`{id}` part.jsonc did not parse: {}", messages.join("; "))
-    })?;
-    let version = tree
-        .get("version")
+        format!("`{id}` {rel} did not parse: {}", messages.join("; "))
+    })
+}
+
+/// A part's `version`, which has to be three numbers.
+pub(crate) fn part_version(id: &str, tree: &Node) -> Result<Version, String> {
+    tree.get("version")
         .and_then(Node::str)
         .and_then(Version::parse)
-        .ok_or_else(|| format!("`{id}` has no version of the form `0.1.0`"))?;
+        .ok_or_else(|| {
+            format!("`{id}` has no version of the form `0.1.0`: three numbers, with no sign and no leading zero")
+        })
+}
+
+#[cfg(unix)]
+pub(crate) fn entry_from_files(
+    id: &str,
+    files: BTreeMap<String, Vec<u8>>,
+) -> Result<CatalogEntry, String> {
+    let tree = jsonc(id, &files, "part.jsonc")?;
+    let version = part_version(id, &tree)?;
     let uses = match tree.get("uses") {
         None => BTreeMap::new(),
         Some(node) => {
@@ -300,6 +324,33 @@ mod tests {
     use serde_json::Value;
     use sha2::{Digest, Sha256};
     use std::fs;
+
+    #[test]
+    fn a_version_has_one_spelling_and_orders_by_number() {
+        for good in ["0.1.0", "1.2.3", "10.0.0", "0.0.0"] {
+            assert_eq!(Version::parse(good).unwrap().to_string(), good);
+        }
+        for bad in [
+            "+01.2.3",
+            "01.2.3",
+            "1.02.3",
+            "1.2.03",
+            "+1.2.3",
+            "-1.2.3",
+            "1.2",
+            "1.2.3.4",
+            "",
+            "1..3",
+            "1.2.x",
+            " 1.2.3",
+            "1.2.3 ",
+            "١.2.3",
+            "99999999999999999999.0.0",
+        ] {
+            assert_eq!(Version::parse(bad), None, "{bad}");
+        }
+        assert!(Version::parse("0.10.0") > Version::parse("0.9.0"));
+    }
 
     #[test]
     fn the_builtin_catalog_matches_the_parts_tree() {
