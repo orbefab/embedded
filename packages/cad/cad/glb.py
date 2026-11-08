@@ -73,28 +73,30 @@ def _linear_colors(node) -> None:
         _linear_colors(child)
 
 
-def _merged_writer():
-    """OCCT's glTF writer with each mesh's faces merged by material.
+def _writer(merge_faces: bool):
+    """OCCT's glTF writer, single-threaded.
 
-    build123d's export_gltf does not expose the option. Left per face, a
-    breadboard's 830 holes write some 40 000 accessors, most of its GLB.
-    The writer also runs single-threaded. Its parallel path does not repeat
-    the same bytes for the same shape.
+    build123d's export_gltf does not expose face merging. Left per face, a
+    breadboard's 830 holes write some 40 000 accessors, most of its GLB, so
+    `merge_faces` joins them. A part whose GLB was first built from one
+    primitive per face leaves it off: joining here changes the buffer the
+    asset step writes. The parallel path does not repeat the same bytes.
     """
     from OCP.RWGltf import RWGltf_CafWriter
 
-    class MergedWriter(RWGltf_CafWriter):
+    class Writer(RWGltf_CafWriter):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            self.SetMergeFaces(True)
+            if merge_faces:
+                self.SetMergeFaces(True)
 
         def SetParallel(self, *args, **kwargs):
             super().SetParallel(False)
 
-    return MergedWriter
+    return Writer
 
 
-def write(shape, part: str, anchors: list[Anchor] | None, folder: Path) -> None:
+def write(shape, part: str, anchors: list[Anchor] | None, folder: Path, *, merge_faces: bool = True) -> None:
     """`anchors` is None for a part with no leads of its own, such as a bare board."""
     leads = sorted(a.lead for a in anchors or ())
     if leads != list(range(1, len(leads) + 1)):
@@ -105,7 +107,7 @@ def write(shape, part: str, anchors: list[Anchor] | None, folder: Path) -> None:
     from build123d import exporters3d
 
     _linear_colors(shape)
-    with patch.object(exporters3d, "RWGltf_CafWriter", _merged_writer()):
+    with patch.object(exporters3d, "RWGltf_CafWriter", _writer(merge_faces)):
         wrote = bd.export_gltf(
             shape,
             str(glb),
