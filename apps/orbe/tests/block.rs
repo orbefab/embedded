@@ -7,6 +7,7 @@ mod live;
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::os::unix::fs::symlink;
 use std::path::Path;
 
 use live::{common, orbe};
@@ -139,6 +140,95 @@ fn a_block_refuses_a_file_in_its_way_and_writes_nothing() {
         run.stdout
     );
     assert_eq!(tree(dir), before);
+}
+
+/// Files under `dir`, without following a link. A link is recorded as the bytes `link`.
+fn shallow(dir: &Path) -> BTreeMap<String, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(at) = stack.pop() {
+        for entry in fs::read_dir(&at).unwrap() {
+            let path = entry.unwrap().path();
+            let rel = path.strip_prefix(dir).unwrap().to_str().unwrap().to_string();
+            let meta = fs::symlink_metadata(&path).unwrap();
+            if meta.file_type().is_symlink() {
+                files.insert(rel, b"link".to_vec());
+            } else if meta.is_dir() {
+                stack.push(path);
+            } else {
+                files.insert(rel, fs::read(&path).unwrap());
+            }
+        }
+    }
+    files
+}
+
+fn refuses_the_link(dir: &Path, outside: &Path, link: &str) {
+    let before = shallow(outside);
+    let project_before = shallow(dir);
+    let run = orbe(dir, &["add", "nano-button-led"]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.stdout,
+        format!(
+            "error[symlink]: {link} is a link, and orbe add does not write through a link. nothing was written\n  hint: remove the link {link}, then run `orbe add nano-button-led` again\n"
+        ),
+        "{}",
+        run.stdout
+    );
+    assert!(!run.stdout.contains("kept"), "{}", run.stdout);
+    assert_eq!(shallow(outside), before, "the link's target changed");
+    assert_eq!(shallow(dir), project_before, "the refusal wrote in the project");
+}
+
+#[test]
+fn a_block_refuses_a_symlinked_firmware_directory() {
+    let outside = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    symlink(outside.path(), project.path().join("firmware")).unwrap();
+    refuses_the_link(project.path(), outside.path(), "firmware");
+}
+
+#[test]
+fn a_block_refuses_a_symlink_at_its_temp_file() {
+    let outside = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let dir = project.path();
+    fs::create_dir(dir.join("firmware")).unwrap();
+    let seed = outside.path().join("seed");
+    fs::write(&seed, b"SEED").unwrap();
+    symlink(&seed, dir.join("firmware/.button.hex.orbe-add")).unwrap();
+    refuses_the_link(dir, outside.path(), "firmware/.button.hex.orbe-add");
+    assert_eq!(fs::read(&seed).unwrap(), b"SEED");
+}
+
+/// A destination that is a link is refused again, even when the target already holds the
+/// Block's bytes. The link stays, and the target is not rewritten.
+#[test]
+fn a_second_add_refuses_a_symlinked_destination() {
+    let outside = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let dir = project.path();
+    fs::create_dir(dir.join("firmware")).unwrap();
+    let hex = fs::read(
+        common::repo().join("blocks/nano-button-led/firmware/button.hex"),
+    )
+    .unwrap();
+    let target = outside.path().join("button.hex");
+    fs::write(&target, &hex).unwrap();
+    symlink(&target, dir.join("firmware/button.hex")).unwrap();
+    refuses_the_link(dir, outside.path(), "firmware/button.hex");
+    assert_eq!(fs::read(&target).unwrap(), hex);
+}
+
+#[test]
+fn a_block_refuses_a_symlinked_nested_directory() {
+    let outside = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let dir = project.path();
+    fs::create_dir(dir.join("firmware")).unwrap();
+    symlink(outside.path(), dir.join("firmware/button")).unwrap();
+    refuses_the_link(dir, outside.path(), "firmware/button");
 }
 
 #[test]
