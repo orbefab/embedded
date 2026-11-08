@@ -256,6 +256,18 @@ impl Loader<'_> {
             start += line.len();
             match lock_fields(line) {
                 Ok(None) => {}
+                Ok(Some(fields)) if self.lock.contains_key(&fields.id) => self.out.push(
+                    Code::Duplicate,
+                    span,
+                    format!(
+                        "parts.lock has a second line for `{}`, and a project takes each part id from one registry",
+                        fields.id
+                    ),
+                    format!(
+                        "keep the line of the registry the copy in `parts/{}/` came from, and delete the other",
+                        fields.id
+                    ),
+                ),
                 Ok(Some(fields)) => {
                     self.lock.insert(
                         fields.id,

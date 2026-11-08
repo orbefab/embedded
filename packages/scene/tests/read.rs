@@ -337,6 +337,36 @@ fn a_lock_version_outside_the_catalog_is_an_error() {
 }
 
 #[test]
+fn a_part_id_locked_from_two_registries_is_an_error() {
+    let project = project("nano-button");
+    let path = project.path().join("parts.lock");
+    let mut text = fs::read_to_string(&path).unwrap();
+    let line = text
+        .lines()
+        .find(|l| l.starts_with("led-5mm "))
+        .unwrap()
+        .replace(orbe_scene::REGISTRY, "https://example.com/r/{name}.json");
+    text.push_str(&line);
+    text.push('\n');
+    fs::write(&path, &text).unwrap();
+    let found = scene_errors(project.path());
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].code, orbe_scene::Code::Duplicate);
+    assert_eq!(found[0].file, "parts.lock");
+    assert_eq!((found[0].line, found[0].column), (text.lines().count(), 1));
+    assert!(
+        found[0].message.contains("second line for `led-5mm`"),
+        "{}",
+        found[0].message
+    );
+    assert!(
+        found[0].hint.contains("parts/led-5mm/"),
+        "{}",
+        found[0].hint
+    );
+}
+
+#[test]
 fn a_lock_registry_outside_the_catalog_is_an_error() {
     let project = project("nano-button");
     rewrite_lock(
