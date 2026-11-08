@@ -1,0 +1,178 @@
+//! `orbe add <block>` installs a Block into a project: its scene, firmware and tests, then a copy
+//! of each part it uses in `parts/`, listed in `parts.lock`.
+
+#![cfg(unix)]
+
+mod live;
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
+
+use live::{common, orbe};
+
+const BLOCKS: [&str; 3] = ["nano-button-led", "uno-button-led", "nano-led-fade"];
+
+/// Every file below `dir` with its bytes, by its path from `dir`.
+fn tree(dir: &Path) -> BTreeMap<String, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(at) = stack.pop() {
+        for entry in fs::read_dir(&at).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                let rel = path
+                    .strip_prefix(dir)
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_string();
+                files.insert(rel, fs::read(&path).unwrap());
+            }
+        }
+    }
+    files
+}
+
+#[test]
+fn a_block_installs_into_an_empty_folder_and_passes_there() {
+    for id in BLOCKS {
+        let project = tempfile::tempdir().unwrap();
+        let dir = project.path();
+        let run = orbe(dir, &["add", id]);
+        assert_eq!(run.code, 0, "{id}: {}{}", run.stdout, run.stderr);
+        assert!(
+            run.stdout.ends_with(&format!(
+                "installed the Block `{id}`. run `orbe check scene.jsonc` and `orbe test`\n"
+            )),
+            "{}",
+            run.stdout
+        );
+
+        let block = common::repo().join("blocks").join(id);
+        let installed = tree(dir);
+        for (rel, bytes) in tree(&block) {
+            if rel == "block.jsonc" || rel == "README.md" {
+                assert!(
+                    !installed.contains_key(&rel),
+                    "{id}: {rel} stays in the repo"
+                );
+            } else {
+                assert_eq!(installed.get(&rel), Some(&bytes), "{id}: {rel}");
+            }
+        }
+        let lock = fs::read_to_string(dir.join("parts.lock")).unwrap();
+        let locked: Vec<&str> = lock.lines().filter_map(|l| l.split(' ').next()).collect();
+        let mut copied: Vec<String> = fs::read_dir(dir.join("parts"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        copied.sort();
+        assert_eq!(locked, copied, "{id}: parts.lock lists each copy");
+        assert!(copied.iter().any(|part| part == "led-5mm"), "{id}");
+        for part in &copied {
+            assert_eq!(
+                tree(&dir.join("parts").join(part)),
+                tree(&common::repo().join("parts").join(part)),
+                "{id}: parts/{part} is the catalog's"
+            );
+        }
+
+        let check = orbe(dir, &["check", "scene.jsonc"]);
+        assert_eq!(check.code, 0, "{id}: {}", check.stdout);
+        let test = orbe(dir, &["test"]);
+        assert!(
+            test.stdout.ends_with("1 passed, 0 failed\n"),
+            "{id}: {}",
+            test.stdout
+        );
+
+        let again = orbe(dir, &["add", id]);
+        assert_eq!(again.code, 0, "{id}: {}", again.stdout);
+        assert!(!again.stdout.contains("wrote"), "{id}: {}", again.stdout);
+        assert_eq!(
+            tree(dir),
+            installed,
+            "{id}: a second install changes nothing"
+        );
+    }
+}
+
+#[test]
+fn a_block_refuses_a_folder_with_a_scene_and_writes_nothing() {
+    let project = tempfile::tempdir().unwrap();
+    let dir = project.path();
+    let installed = orbe(dir, &["add", "uno-button-led"]);
+    assert_eq!(installed.code, 0, "{}", installed.stdout);
+    let before = tree(dir);
+
+    let run = orbe(dir, &["add", "nano-button-led"]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.stdout,
+        "error[scene_exists]: scene.jsonc already holds a scene, and the Block `nano-button-led` brings its own. orbe does not merge scenes. nothing was written\n  hint: install it into an empty folder: `mkdir nano-button-led && orbe add -C nano-button-led nano-button-led`\n"
+    );
+    assert_eq!(tree(dir), before, "the refusal wrote nothing");
+
+    let envelope = orbe(dir, &["add", "nano-button-led", "--json"]).json();
+    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["error"]["code"], "scene_exists");
+    assert_eq!(tree(dir), before);
+}
+
+#[test]
+fn a_block_refuses_a_file_in_its_way_and_writes_nothing() {
+    let project = tempfile::tempdir().unwrap();
+    let dir = project.path();
+    fs::create_dir(dir.join("tests")).unwrap();
+    fs::write(dir.join("tests/button.test"), "open\n").unwrap();
+    let before = tree(dir);
+    let run = orbe(dir, &["add", "nano-button-led"]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert!(
+        run.stdout.starts_with(
+            "error[file_exists]: tests/button.test is already there and is not the Block `nano-button-led`'s. nothing was written\n"
+        ),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(tree(dir), before);
+}
+
+#[test]
+fn a_block_installs_alone() {
+    let project = tempfile::tempdir().unwrap();
+    for args in [
+        &["add", "nano-button-led", "led-5mm"][..],
+        &["add", "nano-button-led", "--overwrite"],
+        &["add", "nano-button-led@0.1.0"],
+    ] {
+        let run = orbe(project.path(), args);
+        assert_eq!(run.code, 2, "{args:?}: {}{}", run.stdout, run.stderr);
+        assert!(
+            run.stderr
+                .starts_with("error[usage]: `nano-button-led` is a Block"),
+            "{}",
+            run.stderr
+        );
+    }
+    assert_eq!(fs::read_dir(project.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn the_core_skill_names_each_block() {
+    let skill = fs::read_to_string(common::repo().join("apps/orbe/skills/core.md")).unwrap();
+    let ids: Vec<String> = BLOCKS.iter().map(|id| format!("`{id}`")).collect();
+    let listed = format!("The Blocks are {}, {} and {}.", ids[0], ids[1], ids[2]);
+    assert!(skill.contains(&listed), "{listed}");
+    let mut found: Vec<String> = fs::read_dir(common::repo().join("blocks"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    found.sort();
+    let mut want = BLOCKS.map(String::from).to_vec();
+    want.sort();
+    assert_eq!(found, want);
+}

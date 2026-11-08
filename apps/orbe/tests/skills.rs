@@ -119,13 +119,31 @@ fn run_shown(runtime: &Runtime, dir: &Path, transcript: &str) {
     }
 }
 
-/// The core skill's worked example, with its parts copied from the first target.
+/// Copies catalog parts into the project at `dir`, as `orbe add` does.
+fn add_parts(dir: &Path, ids: &[&str]) {
+    let request = orbe_scene::Request {
+        ids: ids.iter().map(|id| id.to_string()).collect(),
+        overwrite: false,
+        diff: false,
+        relock: false,
+    };
+    let reply = orbe_scene::add_parts(Some(dir), &request).unwrap();
+    assert_eq!(reply.code(), 0, "{}", reply.text());
+}
+
+/// The core skill's worked example, with its parts added.
 fn worked_example() -> tempfile::TempDir {
     let project = tempfile::tempdir().unwrap();
     let dir = project.path();
-    let first = common::repo().join("examples/first-target");
-    common::copy_dir(&first.join("parts"), &dir.join("parts"));
-    fs::copy(first.join("parts.lock"), dir.join("parts.lock")).unwrap();
+    add_parts(
+        dir,
+        &[
+            "led-5mm",
+            "nano-board",
+            "resistor-axial",
+            "tactile-switch-6mm",
+        ],
+    );
     let (_, scene) = blocks(&skill("core"))
         .into_iter()
         .find(|(info, _)| info == "jsonc scene.jsonc")
@@ -192,8 +210,8 @@ fn the_arduino_sketch_is_the_one_the_prebuilt_firmware_was_built_from() {
 
 #[test]
 fn the_nano_pins_the_skills_call_not_simulated_are_the_ones_the_reader_leaves_out() {
-    let scene = common::repo().join("examples/first-target/scene.jsonc");
-    let netlist = orbe_scene::read(&Files::disk(), &scene).expect("the first target checks");
+    let scene = common::repo().join("blocks/nano-button-led/scene.jsonc");
+    let netlist = orbe_scene::read(&Files::disk(), &scene).expect("the Nano Block checks");
     let left_out: BTreeSet<&str> = netlist.refs.parts["nano"]
         .pins
         .iter()
@@ -207,8 +225,8 @@ fn the_nano_pins_the_skills_call_not_simulated_are_the_ones_the_reader_leaves_ou
 
 #[test]
 fn the_uno_pins_the_skills_call_not_simulated_are_the_ones_the_reader_leaves_out() {
-    let scene = common::repo().join("examples/uno-button/scene.jsonc");
-    let netlist = orbe_scene::read(&Files::disk(), &scene).expect("the uno example checks");
+    let scene = common::repo().join("blocks/uno-button-led/scene.jsonc");
+    let netlist = orbe_scene::read(&Files::disk(), &scene).expect("the Uno Block checks");
     let left_out: BTreeSet<&str> = netlist.refs.parts["uno"]
         .pins
         .iter()
@@ -233,9 +251,7 @@ fn the_uno_d13_with_its_pull_up_reads_low_as_the_arduino_skill_says() {
     );
     let project = tempfile::tempdir().unwrap();
     let dir = project.path();
-    let example = common::repo().join("examples/uno-button");
-    common::copy_dir(&example.join("parts"), &dir.join("parts"));
-    fs::copy(example.join("parts.lock"), dir.join("parts.lock")).unwrap();
+    add_parts(dir, &["uno-board"]);
     fs::copy(
         common::repo().join("packages/engine/tests/firmware/pullup.hex"),
         dir.join("pullup.hex"),

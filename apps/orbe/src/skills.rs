@@ -403,6 +403,8 @@ mod tests {
             Add::Busy
             | Add::Unreadable
             | Add::NotAProject
+            | Add::SceneExists
+            | Add::FileExists
             | Add::LockSyntax
             | Add::Registry
             | Add::UnknownPart
@@ -415,6 +417,8 @@ mod tests {
             Add::Busy,
             Add::Unreadable,
             Add::NotAProject,
+            Add::SceneExists,
+            Add::FileExists,
             Add::LockSyntax,
             Add::Registry,
             Add::UnknownPart,

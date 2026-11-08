@@ -1,5 +1,6 @@
-//! Embeds the repo's `parts/` folder, the catalog this binary was built with. The reader compares
-//! a project's sealed copies against it to name the field an edit changed.
+//! Embeds the repo's `parts/` folder, the catalog this binary was built with, and its `blocks/`
+//! folder, the Blocks `orbe add` installs. The reader compares a project's sealed copies against
+//! the catalog to name the field an edit changed, and reads a Block's parts from it.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -7,33 +8,36 @@ use std::{env, fs};
 
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let parts = manifest.join("../../parts").canonicalize().unwrap();
-    println!("cargo:rerun-if-changed={}", parts.display());
+    let out = PathBuf::from(env::var("OUT_DIR").unwrap());
+    embed(&manifest.join("../../parts"), &out.join("catalog.rs"));
+    embed(&manifest.join("../../blocks"), &out.join("blocks.rs"));
+}
+
+/// Writes `FILES`, each file below `dir` by its `/`-separated path from `dir`, sorted.
+fn embed(dir: &Path, out: &Path) {
+    let dir = dir.canonicalize().unwrap();
+    println!("cargo:rerun-if-changed={}", dir.display());
     let mut files = Vec::new();
-    walk(&parts, &mut files);
+    walk(&dir, &mut files);
     files.sort();
-    let mut out = String::from("pub(crate) static FILES: &[(&str, &[u8])] = &[\n");
+    let mut text = String::from("pub(crate) static FILES: &[(&str, &[u8])] = &[\n");
     for file in &files {
         println!("cargo:rerun-if-changed={}", file.display());
-        let rel = file.strip_prefix(&parts).unwrap();
+        let rel = file.strip_prefix(&dir).unwrap();
         let rel = rel
             .components()
             .map(|c| c.as_os_str().to_str().unwrap())
             .collect::<Vec<_>>();
         writeln!(
-            out,
+            text,
             "    ({:?}, include_bytes!({:?})),",
             rel.join("/"),
             file.display().to_string()
         )
         .unwrap();
     }
-    out.push_str("];\n");
-    fs::write(
-        PathBuf::from(env::var("OUT_DIR").unwrap()).join("catalog.rs"),
-        out,
-    )
-    .unwrap();
+    text.push_str("];\n");
+    fs::write(out, text).unwrap();
 }
 
 fn walk(dir: &Path, files: &mut Vec<PathBuf>) {

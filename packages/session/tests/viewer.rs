@@ -8,7 +8,7 @@ use orbe_session::{Code, Command, Duration, Files, FrameState, Frames, Live, Rep
 use serde_json::{Value, json};
 
 fn first_target() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-target")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../blocks/nano-button-led")
 }
 
 fn command(line: &str) -> Command {

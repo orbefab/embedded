@@ -1,0 +1,10 @@
+// A Block: a small circuit that works. `orbe add uno-button-led` installs it into a project.
+{
+  "format": 1,
+  "block": "uno-button-led",
+  "title": "Button and LED on an Uno",
+  "summary": "A button on D2 lights a red LED on D13 of an Arduino Uno, and the board's own L LED with it.",
+  "board": "uno-board",
+  "tags": ["button", "led", "digital input", "uno"],
+  "license": "MIT OR Apache-2.0",
+}

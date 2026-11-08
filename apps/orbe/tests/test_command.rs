@@ -7,24 +7,25 @@ use std::fs;
 
 use live::{common, failed, orbe, project, replies};
 
+/// Every Block's tests pass where it sits in the repo, reading its parts from the catalog.
 #[test]
-fn the_first_target_example_passes() {
-    let run = orbe(&common::repo(), &["test", "examples/first-target"]);
-    assert_eq!(
-        run.stdout,
-        "PASS examples/first-target/tests/button.test\n1 passed, 0 failed\n"
-    );
-    assert_eq!(run.code, 0, "{}", run.stderr);
-}
-
-#[test]
-fn the_uno_example_passes() {
-    let run = orbe(&common::repo(), &["test", "examples/uno-button"]);
-    assert_eq!(
-        run.stdout,
-        "PASS examples/uno-button/tests/button.test\n1 passed, 0 failed\n"
-    );
-    assert_eq!(run.code, 0, "{}", run.stderr);
+fn each_block_passes() {
+    let mut ids: Vec<String> = fs::read_dir(common::repo().join("blocks"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    ids.sort();
+    assert_eq!(ids, ["nano-button-led", "nano-led-fade", "uno-button-led"]);
+    for id in &ids {
+        let run = orbe(&common::repo(), &["test", &format!("blocks/{id}")]);
+        assert!(
+            run.stdout.ends_with("1 passed, 0 failed\n"),
+            "{id}: {}{}",
+            run.stdout,
+            run.stderr
+        );
+        assert_eq!(run.code, 0, "{id}: {}", run.stderr);
+    }
 }
 
 fn board_alone(board: &str, wires: &str, test: &str) -> tempfile::TempDir {

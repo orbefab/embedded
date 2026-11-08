@@ -148,6 +148,8 @@ Param values:
 
 `orbe add <id>…` copies parts from the catalog built into this `orbe` into `parts/<id>/` and records them in `parts.lock`. It also copies the parts a part is built from. Commit `parts/` and `parts.lock` with the scene. Don't edit a copied part. A copy that differs, even in spacing, is a `part_modified` error. A board built from other parts, such as `nano-board`, is the exception. An edit to it checks, with a note. To change a part, copy it to a folder of your own and name it by its `./` path.
 
+`orbe add <block>` installs a Block, a small circuit that works, into an empty folder: its `scene.jsonc`, `firmware/` and `tests/`, then the parts it uses into `parts/` and `parts.lock`. The Blocks are `nano-button-led`, `uno-button-led` and `nano-led-fade`. A folder that already holds another `scene.jsonc` is `scene_exists`, since orbe does not merge scenes. Any other file of the Block that is already there with other bytes is `file_exists`. Either refusal writes nothing.
+
 `orbe part <id>` prints one catalog part: its title, maker and number, license, folder hash, pins, params, ratings, what is not simulated, datasheets, files, the parts it is built from and the parts that use it. A part with no summary or tags leaves those out. A rating set to null prints as unrated. A name that is not an id, and is a whole word of exactly one id, prints that part. `orbe part 1n4007` prints `diode-1n4007`. When several ids share that word, the command is `unknown_part` and the hint lists those ids. `orbe search <words>` lists parts whose id, title, maker, number, summary or tags hold every word. An exact id comes first. Then a part whose every word is a whole word of its id, its title or its tags. Then the rest. Ids break ties. `orbe part <id> --json` and `orbe search <words> --json` print the same card as JSON. Any other unknown id is `unknown_part`, and the hint names close ids.
 
 <!-- catalog parts -->
@@ -284,6 +286,7 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 | `part_missing` | Run the `orbe add` command in the hint. |
 | `unknown_part` | `orbe add` knows no part by that id. Pick one from the parts list above. |
 | `busy` | Another `orbe add` is at work in this project. Wait for it, then run yours again. |
+| `scene_exists`, `file_exists` | `orbe add <block>` found its files already here. Install into an empty folder, as the hint shows. |
 | `firmware_missing` | Build the firmware, or fix the path. It starts from the scene's folder. |
 | `not_simulated` | A wire reaches a pin the engine does not simulate, or a part marked `not_simulated`. Wire another pin, or remove the wire. |
 | `scene.unknown_pin`, `scene.param`, `scene.syntax` | A typo or a wrong value at that line and column. The hint names what is valid. |

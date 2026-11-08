@@ -84,7 +84,7 @@ const browser = await chromium.launch({
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
 });
 try {
-  const opened = orbe("open", "examples/first-target/scene.jsonc", "--headed", "--no-browser");
+  const opened = orbe("open", "blocks/nano-button-led/scene.jsonc", "--headed", "--no-browser");
   open = opened.ok || opened.state !== "closed";
   const url = opened.data?.url;
   check("`orbe open --headed --no-browser` opens the scene and gives the page's URL", opened.ok && /^http:\/\/127\.0\.0\.1:\d+\/#t=[0-9a-f]{64}$/.test(url ?? ""), {

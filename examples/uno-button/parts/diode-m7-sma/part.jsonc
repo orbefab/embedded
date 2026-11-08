@@ -1,6 +1,0 @@
-{
-  "format": 1, "part": "diode-m7-sma", "version": "0.1.0", "title": "Rectifier diode, M7 (1N4007), SMA", "license": "MIT OR Apache-2.0",
-  "real": { "maker": "Comchip", "number": "CGRA4007-G", "datasheet": null },
-  "pins": { "cathode": [1], "anode": [2] },
-  "not_simulated": [{ "what": "diode", "pins": ["cathode", "anode"], "why": "No M7 fit yet." }],
-}

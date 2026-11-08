@@ -1,6 +1,0 @@
-{
-  "format": 1, "part": "socket-strip-1x6", "version": "0.1.0", "title": "Socket strip, 1 x 6, 2.54 mm", "license": "MIT OR Apache-2.0",
-  "joins_only": true,
-  "real": { "generic": true, "maker": null, "number": null, "datasheet": null },
-  "pins": { "1": [1], "2": [2], "3": [3], "4": [4], "5": [5], "6": [6] },
-}

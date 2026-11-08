@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Rewrites the parts.lock fixture from parts/ and refreshes each example from
-# the catalog ids its scene names. A copy the scene no longer names is removed.
+# Rewrites the scene tests' parts.lock fixture from parts/. A Block has no parts.lock to bless,
+# since it reads its parts from the catalog built into orbe.
 # Build a part's model with scripts/model.sh first. This script does not.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -9,8 +9,7 @@ usage() {
   cat <<'EOF'
 usage: scripts/bless.sh
 
-Rewrite the parts.lock fixture from parts/, then refresh each example from the catalog ids its scene names.
-A copy the scene no longer names is removed.
+Rewrite the scene tests' parts.lock fixture from parts/.
 Build a part's model with scripts/model.sh first. This script does not.
 EOF
 }

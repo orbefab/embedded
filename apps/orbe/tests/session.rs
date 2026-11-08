@@ -21,21 +21,18 @@ use tempfile::TempDir;
 use harness::{Run, Runtime, kill, kill_daemon, wait_until};
 use live::{common, project};
 
-/// The first target laid out as in the repo, so `examples/first-target/scene.jsonc` names the
-/// same files from the folder's root, with `lines` as `tests/live.test`.
+/// The Nano button Block laid out as in the repo, so `blocks/nano-button-led/scene.jsonc` names
+/// the same files from the folder's root, with `lines` as `tests/live.test`.
 fn first_target(lines: &str) -> TempDir {
     let dir = tempfile::tempdir().unwrap();
-    let example = dir.path().join("examples/first-target");
-    common::copy_dir(&common::repo().join("examples/first-target"), &example);
-    let sketch = dir.path().join("packages/engine/tests/firmware/sketch");
-    fs::create_dir_all(&sketch).unwrap();
-    fs::copy(common::firmware(), sketch.join("button.hex")).unwrap();
-    fs::write(example.join("tests/live.test"), lines).unwrap();
+    let block = dir.path().join("blocks/nano-button-led");
+    common::copy_dir(&common::repo().join("blocks/nano-button-led"), &block);
+    fs::write(block.join("tests/live.test"), lines).unwrap();
     dir
 }
 
 const FIRST_TARGET: [&str; 8] = [
-    "open examples/first-target/scene.jsonc",
+    "open blocks/nano-button-led/scene.jsonc",
     "step 100ms",
     "expect @led1 off",
     "press @btn1",
@@ -49,7 +46,7 @@ const FIRST_TARGET: [&str; 8] = [
 fn verbose_replies(stdout: &str) -> Vec<String> {
     let mut replies: Vec<String> = Vec::new();
     for line in stdout.lines() {
-        if line.starts_with("examples/first-target/tests/live.test:") {
+        if line.starts_with("blocks/nano-button-led/tests/live.test:") {
             replies.push(String::new());
         } else if let (Some(reply), Some(text)) = (replies.last_mut(), line.strip_prefix("  ")) {
             reply.push_str(text);
@@ -63,7 +60,7 @@ fn verbose_replies(stdout: &str) -> Vec<String> {
 fn the_first_target_runs_live_one_process_per_command_as_orbe_test_runs_it() {
     let lines: String = FIRST_TARGET
         .iter()
-        .map(|l| format!("{}\n", l.replace("examples/first-target/", "")))
+        .map(|l| format!("{}\n", l.replace("blocks/nano-button-led/", "")))
         .collect();
     let dir = first_target(&lines);
     let root = dir.path();
@@ -71,7 +68,7 @@ fn the_first_target_runs_live_one_process_per_command_as_orbe_test_runs_it() {
     let tested = runtime
         .orbe(
             root,
-            &["test", "-v", "examples/first-target/tests/live.test"],
+            &["test", "-v", "blocks/nano-button-led/tests/live.test"],
         )
         .ok();
     let expected = verbose_replies(&tested.stdout);
@@ -98,7 +95,7 @@ fn the_first_target_runs_live_one_process_per_command_as_orbe_test_runs_it() {
                 "test",
                 "--json",
                 "-v",
-                "examples/first-target/tests/live.test",
+                "blocks/nano-button-led/tests/live.test",
             ],
         )
         .ok()
