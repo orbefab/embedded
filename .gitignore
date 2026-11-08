@@ -8,4 +8,5 @@
 node_modules/
 dist/
 __pycache__/
+.venv/
 packages/engine/tests/circuits/*/op.raw
