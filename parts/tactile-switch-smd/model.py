@@ -21,8 +21,8 @@ from cad.geom import box
 SMD_SW_CAN = (3.5, 4.7, 1.5)  # x, y, height
 SMD_SW_BUTTON = (1.7, 2.7)  # x, y
 SMD_SW_BUTTON_TOP = 2.02
-SMD_SW_TRAVEL = 0.2  # verify,  the button's press
-SMD_SW_POCKET = 0.3  # verify,  the can's pocket under the button
+SMD_SW_TRAVEL = 0.2  # verify, the button's press
+SMD_SW_POCKET = 0.3  # verify, the can's pocket under the button
 SMD_SW_LEG = (0.7, 0.8, 0.15)  # x, y out of the can, thickness  # verify
 SMD_SW_LEG_X = 1.1  # verify
 SMD_SW_LEGS = (

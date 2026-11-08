@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Orbefab. SPDX-License-Identifier: MIT OR Apache-2.0
 """2.54 mm pin header, one row of 15: the Nano's two side rows.
 
-The shape is `cad.header.row`. Lead 1 is the pin at -X.
+The shape is `cad.header.row_shape`. Lead 1 is the pin at -X.
 """
 
 import sys

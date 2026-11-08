@@ -2,8 +2,8 @@
   "part": "socket-strip-1x8",
   "source": {
     "script": "model.py",
-    "sha256": "dc12e67ca0b99fe3405c5766e7548f2b5d329d973074da8afce99a0015316535",
-    "bytes": 736
+    "sha256": "3dc9b832a0b6e11a77e35c8888d293ad1e442733610b20da263abd5a0a9ac99e",
+    "bytes": 742
   },
   "files": {
     "socket-strip-1x8.glb": {

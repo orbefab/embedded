@@ -2,8 +2,8 @@
   "part": "socket-strip-1x6",
   "source": {
     "script": "model.py",
-    "sha256": "972ef437a71ef5b7e93bcf612c9993ef4ec8d7ec4d48bf9711910d323b2aa475",
-    "bytes": 724
+    "sha256": "c97e26e39e9187d6f0367c06c5d740db51b5fd3d160490621886f93f5cc6a181",
+    "bytes": 730
   },
   "files": {
     "socket-strip-1x6.glb": {

@@ -20,7 +20,7 @@ from cad import glb, paint
 from cad.color import srgb
 from cad.geom import box
 
-BODY = (13.5, 9.0, 11.0)  # long, wide, tall  # verify,  tall
+BODY = (13.5, 9.0, 11.0)  # long, wide, tall  # verify, tall
 OPENING = (6.3, 9.0, 6.5)  # diameter, deep, axis height  # verify
 PIN = 2.1
 LEGS = {1: (3.748, -4.495), 2: (6.745, 0.509), 3: (0.751, 0.509)}  # lead: x, y

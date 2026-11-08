@@ -2,8 +2,8 @@
   "part": "pin-header-1x15",
   "source": {
     "script": "model.py",
-    "sha256": "782371ebe4c933fc979faef2443ae09187fa45456f9a734965a4780115a61e17",
-    "bytes": 685
+    "sha256": "dd5a7b72e32cf1b9624b479327dc8296278a046632868cb372567636e635545e",
+    "bytes": 691
   },
   "files": {
     "pin-header-1x15.glb": {

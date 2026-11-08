@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Orbefab. SPDX-License-Identifier: MIT OR Apache-2.0
 """2.54 mm socket strip, 1 × 8, 8.5 tall: the Uno's digital and power headers.
 
-The shape is `cad.header.socket_strip`. Lead 1 is the contact at -X.
+The shape is `cad.header.socket_strip_shape`. Lead 1 is the contact at -X.
 """
 
 import sys

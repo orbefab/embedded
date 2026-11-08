@@ -2,8 +2,8 @@
   "part": "pin-header-2x3",
   "source": {
     "script": "model.py",
-    "sha256": "2dfc307bdf3f52300218c4d2cf667247d3ff6d529625eaeda3ab9e372968b4c0",
-    "bytes": 668
+    "sha256": "27890fba3b1805d910365e67d834092bf409cfc3fbdb3a8ef0be6e4d8290c7e7",
+    "bytes": 674
   },
   "files": {
     "pin-header-2x3.glb": {

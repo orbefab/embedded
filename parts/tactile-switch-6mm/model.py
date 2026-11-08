@@ -22,13 +22,13 @@ from cad import glb, paint
 from cad.color import srgb
 from cad.geom import box, cyl_z
 
-SWITCH_BODY = 6.0  # verify,  square body
-SWITCH_BODY_H = 3.5  # verify,  underside to the top of the metal frame
-SWITCH_H = 7.0  # verify,  underside to the stem tip
+SWITCH_BODY = 6.0  # verify, square body
+SWITCH_BODY_H = 3.5  # verify, underside to the top of the metal frame
+SWITCH_H = 7.0  # verify, underside to the stem tip
 SWITCH_STEM_D = 3.5  # verify
 SWITCH_TRAVEL = 0.25
-SWITCH_LEG_PITCH = 4.5  # verify,  leg pairs along Y
-SWITCH_LEG_X = 3.25  # verify,  legs just outside the ±X faces
+SWITCH_LEG_PITCH = 4.5  # verify, leg pairs along Y
+SWITCH_LEG_X = 3.25  # verify, legs just outside the ±X faces
 SWITCH_LEG_L = 3.5  # verify
 SWITCH_LEG_W = 0.7
 SWITCH_LEG_T = 0.3

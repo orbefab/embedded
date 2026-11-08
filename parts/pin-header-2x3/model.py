@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Orbefab. SPDX-License-Identifier: MIT OR Apache-2.0
 """2.54 mm pin header, 2 × 3: the ICSP header.
 
-The shape is `cad.header.block_2x3`. Leads 1 and 2 sit on the +Y row.
+The shape is `cad.header.block_2x3_shape`. Leads 1 and 2 sit on the +Y row.
 """
 
 import sys

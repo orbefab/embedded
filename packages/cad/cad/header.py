@@ -18,8 +18,8 @@ PITCH = 2.54
 PIN = 0.64
 PLASTIC = 2.54  # verify
 HOUSING_R = 1.12
-PIN_BELOW = 8.0  # verify,  tip below the plastic's underside
-PIN_ABOVE = 3.0  # verify,  the tail above the plastic, through a 1.6 board
+PIN_BELOW = 8.0  # verify, tip below the plastic's underside
+PIN_ABOVE = 3.0  # verify, the tail above the plastic, through a 1.6 board
 ICSP_PIN_ABOVE = 3.2  # verify
 
 STRIP_HEIGHT = 8.5

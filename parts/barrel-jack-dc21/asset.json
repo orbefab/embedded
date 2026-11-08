@@ -2,8 +2,8 @@
   "part": "barrel-jack-dc21",
   "source": {
     "script": "model.py",
-    "sha256": "66a01326ef032f798051d03ecaa1edd895bf26abac68c469ca3c673eedfd3394",
-    "bytes": 2219
+    "sha256": "c57928f1a3d095eeb812c592f376acf332227c48dbcd8c36f47ab5bb3c04ad44",
+    "bytes": 2218
   },
   "files": {
     "barrel-jack-dc21.glb": {
