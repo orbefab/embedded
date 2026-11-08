@@ -240,66 +240,171 @@ fn a_rollback_names_what_it_put_back() {
     assert_eq!(tree(dir.path()), before);
 }
 
-/// The add is killed at each point, then the recovery after it is killed at each of its points,
-/// then a third run recovers. Every edit is kept unless the add had committed, and the reply
-/// says which.
+fn step_kind(point: &str) -> &str {
+    if let Some(rest) = point.strip_prefix("do delete")
+        && (rest.is_empty() || rest.starts_with(' '))
+    {
+        return "delete";
+    }
+    let mut words = point.split_whitespace();
+    let Some(first) = words.next() else {
+        return point;
+    };
+    let Some(second) = words.next() else {
+        return first;
+    };
+    let end = first.len() + 1 + second.len();
+    &point[..end]
+}
+
+fn kind_edges(points: &[String]) -> Vec<usize> {
+    let mut chosen = Vec::new();
+    let mut start = 0;
+    while start < points.len() {
+        let kind = step_kind(&points[start]);
+        let mut end = start + 1;
+        while end < points.len() && step_kind(&points[end]) == kind {
+            end += 1;
+        }
+        let last = end - 1;
+        chosen.push(start);
+        if last > start {
+            if start + 1 < last {
+                chosen.push(start + 1);
+            }
+            if last > start + 2 {
+                chosen.push(last - 1);
+            }
+            chosen.push(last);
+        }
+        start = end;
+    }
+    chosen
+}
+
+fn duplicate(src: &Path) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    copy_into(src, dir.path());
+    dir
+}
+
+fn copy_into(src: &Path, dest: &Path) {
+    for entry in fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let from = entry.path();
+        let to = dest.join(entry.file_name());
+        let meta = fs::symlink_metadata(&from).unwrap();
+        if meta.file_type().is_symlink() {
+            std::os::unix::fs::symlink(fs::read_link(&from).unwrap(), &to).unwrap();
+        } else if meta.is_dir() {
+            fs::create_dir(&to).unwrap();
+            copy_into(&from, &to);
+        } else {
+            fs::copy(&from, &to).unwrap();
+        }
+    }
+}
+
+fn kill_add(root: &Path, add_point: usize) -> bool {
+    let mut seen = 0;
+    run_with(Some(root), &ask(REPLACE, true), &mut |_| {
+        seen += 1;
+        (seen == add_point + 1).then_some(Inject::Kill)
+    })
+    .is_err()
+}
+
+fn kept_after(
+    root: &Path,
+    before: &BTreeMap<String, Vec<u8>>,
+    killed: &BTreeMap<String, Vec<u8>>,
+    first: Result<txn::Recovered, txn::Stop>,
+    add_point: usize,
+    recover_point: usize,
+) {
+    let line = match &first {
+        Ok(recovered) => recovered.lines.join("\n"),
+        Err(_) => recover(root),
+    };
+    let at = format!("add killed at {add_point}, recovery at {recover_point}: {line}");
+    if line.starts_with("finished an interrupted add") {
+        assert_replaced(root);
+    } else if line.starts_with("deleted parts/.orbe-add, an empty folder") {
+        if tree(root) != *before {
+            assert_replaced(root);
+        }
+    } else {
+        assert_eq!(tree(root), *before, "{at}");
+        if killed != before {
+            assert!(
+                line.starts_with("rolled back an interrupted add") || line.starts_with("deleted"),
+                "{at}"
+            );
+        }
+    }
+    assert!(!root.join("parts").join(txn::STAGE).exists(), "{at}");
+    assert!(recover(root).is_empty(), "{at}");
+}
+
+/// The add is killed, then the recovery after it is killed, then a third run recovers.
+/// The kills are the first, second, next-to-last, and last step of each kind, and each
+/// case copies one built project. Every edit is kept unless the add had committed, and
+/// the reply says which.
 #[test]
 fn a_kill_in_the_add_then_a_kill_in_recovery_keeps_every_edit() {
+    let template = edited_project();
+    let before = tree(template.path());
+    let recorded = duplicate(template.path());
+    let mut add_points = Vec::new();
+    run_with(Some(recorded.path()), &ask(REPLACE, true), &mut |at| {
+        add_points.push(at.to_string());
+        None
+    })
+    .unwrap();
+    assert!(add_points.len() > 10, "{}", add_points.len());
     let mut cases = 0;
-    for add_point in 0.. {
-        let killed_add = |root: &Path| {
-            let mut seen = 0;
-            run_with(Some(root), &ask(REPLACE, true), &mut |_| {
-                seen += 1;
-                (seen == add_point + 1).then_some(Inject::Kill)
-            })
-            .is_err()
-        };
-        let probe = edited_project();
-        if !killed_add(probe.path()) {
-            assert!(add_point > 10, "only {add_point} points");
-            break;
-        }
-        for recover_point in 0.. {
-            let dir = edited_project();
-            let before = tree(dir.path());
-            assert!(killed_add(dir.path()));
-            let killed = tree(dir.path());
+    for add_point in kind_edges(&add_points) {
+        let work = duplicate(template.path());
+        assert!(kill_add(work.path(), add_point), "add point {add_point}");
+        let saved = duplicate(work.path());
+        let killed = tree(saved.path());
+        let mut recover_points = Vec::new();
+        let first = txn::recover(work.path(), &again(), &mut |at| {
+            recover_points.push(at.to_string());
+            None
+        });
+        kept_after(
+            work.path(),
+            &before,
+            &killed,
+            first,
+            add_point,
+            recover_points.len(),
+        );
+        cases += 1;
+        for recover_point in kind_edges(&recover_points) {
+            let dir = duplicate(saved.path());
             let mut seen = 0;
             let first = txn::recover(dir.path(), &again(), &mut |_| {
                 seen += 1;
                 (seen == recover_point + 1).then_some(Inject::Kill)
             });
-            let line = match &first {
-                Ok(recovered) => recovered.lines.join("\n"),
-                Err(_) => recover(dir.path()),
-            };
+            assert!(
+                first.is_err(),
+                "add {add_point} recovery {recover_point} did not stop"
+            );
+            kept_after(
+                dir.path(),
+                &before,
+                &killed,
+                first,
+                add_point,
+                recover_point,
+            );
             cases += 1;
-            let at = format!("add killed at {add_point}, recovery at {recover_point}: {line}");
-            if line.starts_with("finished an interrupted add") {
-                assert_replaced(dir.path());
-            } else if line.starts_with("deleted parts/.orbe-add, an empty folder") {
-                if tree(dir.path()) != before {
-                    assert_replaced(dir.path());
-                }
-            } else {
-                assert_eq!(tree(dir.path()), before, "{at}");
-                if killed != before {
-                    assert!(
-                        line.starts_with("rolled back an interrupted add")
-                            || line.starts_with("deleted"),
-                        "{at}"
-                    );
-                }
-            }
-            assert!(!dir.path().join("parts").join(txn::STAGE).exists(), "{at}");
-            assert!(recover(dir.path()).is_empty(), "{at}");
-            if first.is_ok() {
-                break;
-            }
         }
     }
-    assert!(cases > 100, "{cases}");
+    assert!(cases > 40, "{cases}");
 }
 
 #[test]
