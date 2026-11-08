@@ -44,7 +44,7 @@
     },
     "composition": {
       "children": 28,
-      "lowest_node": "usb_serial/dot",
+      "lowest_node": "usb_serial/(unnamed)",
       "z_mm": 0.68,
       "draw_calls": 118
     }
