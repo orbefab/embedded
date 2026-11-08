@@ -32,6 +32,11 @@ pub(crate) struct Project {
     pub(crate) types: BTreeMap<(Owner, usize), usize>,
     /// Catalog copies with children and no model that differ from `parts.lock`.
     pub(crate) modified: Vec<String>,
+    /// Catalog ids the scene names, including ids named inside the parts it reaches.
+    /// A missing catalog id is included. An id the catalog does not have is not.
+    pub(crate) catalog_ids: BTreeSet<String>,
+    /// A `type` names an id the catalog does not have.
+    pub(crate) unknown_part: bool,
 }
 
 impl Project {
@@ -107,12 +112,23 @@ pub(crate) fn load(scene_path: &Path, out: &mut Findings) -> Result<Project, Sou
     loader.resolve(Owner::Scene, &scene_path, false, types);
     loader.report_missing();
     let modified = loader.check_copies(&root);
+    let mut catalog_ids = loader.used;
+    let mut unknown_part = false;
+    for (id, _) in loader.missing {
+        if catalog::find(&id).is_some() {
+            catalog_ids.insert(id);
+        } else {
+            unknown_part = true;
+        }
+    }
     Ok(Project {
         sources: loader.sources,
         scene,
         parts: loader.parts,
         types: loader.types,
         modified,
+        catalog_ids,
+        unknown_part,
     })
 }
 

@@ -38,6 +38,28 @@ pub fn read(scene: &Path) -> Result<Netlist, Vec<Diagnostic>> {
     compile(scene, false).map(|(netlist, _)| netlist)
 }
 
+/// The catalog part ids a scene names, including ids reached through other parts.
+/// A comment is not a name. The ids are in order. A missing catalog part is one of
+/// the ids, and so is a modified copy. An id the catalog does not have, and any
+/// other finding, is the error.
+pub fn catalog_ids(scene: &Path) -> Result<Vec<String>, Vec<Diagnostic>> {
+    let mut findings = diagnostic::Findings::default();
+    let project = match project::load(scene, &mut findings) {
+        Ok(project) => project,
+        Err(sources) => return Err(findings.into_diagnostics(&sources)),
+    };
+    let diagnostics = findings.into_diagnostics(&project.sources);
+    let blocked = project.unknown_part
+        || diagnostics
+            .iter()
+            .any(|d| !matches!(d.code, Code::PartMissing | Code::PartModified));
+    if blocked {
+        Err(diagnostics)
+    } else {
+        Ok(project.catalog_ids.into_iter().collect())
+    }
+}
+
 /// [`read`], then on a scene that reads, the lint rules' warnings, sorted by file, line and
 /// column. Otherwise `read`'s errors.
 pub fn lint(scene: &Path) -> Result<Vec<Diagnostic>, Vec<Diagnostic>> {
