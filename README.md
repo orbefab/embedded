@@ -32,7 +32,7 @@ cargo build -p orbe
 scripts/check.sh fast
 ```
 
-An `orbe` built without the viewer page still runs every headless command, and `orbe show` then says how to build the page.
+An `orbe` built without the viewer page still runs every headless command, and `orbe show` then says how to build the page. `orbe part <id>` prints one catalog part, and `orbe search <words>` finds parts by id, title, maker, number, summary and tags.
 
 ## Skills for agents
 

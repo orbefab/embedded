@@ -1,0 +1,222 @@
+{
+  "docs": [
+    {
+      "name": "DS40002061B"
+    },
+    {
+      "name": "avr-1.8.6 boards.txt"
+    }
+  ],
+  "files": [
+    {
+      "bytes": 1644,
+      "license": "MIT OR Apache-2.0",
+      "path": "asset.json",
+      "sha256": "eb0f8e0a903c96d13839ae60afbac87c3ac83e6161e8ca4fca088bf6b8f2aff1"
+    },
+    {
+      "bytes": 3339,
+      "license": "MIT OR Apache-2.0",
+      "path": "atmega328p-dip28.anchors.json",
+      "sha256": "eb3f2e2d14a02937f4962100f526dad3699c92125f478e56b64a4c647e0c9ab2"
+    },
+    {
+      "bytes": 32032,
+      "license": "MIT OR Apache-2.0",
+      "path": "atmega328p-dip28.glb",
+      "sha256": "7adf81415ff44cd2b3d6245cc19bec9028a62b33f9d4c3f819b4a803705f4aeb"
+    },
+    {
+      "bytes": 3001,
+      "license": "MIT OR Apache-2.0",
+      "path": "part.jsonc",
+      "sha256": "9ced94c37f96b9e500fdc4acfd2ae955ce7de9dfdf383d4a9149b0d176e7b553"
+    }
+  ],
+  "name": "atmega328p-dip28",
+  "not_simulated": [],
+  "params": [
+    {
+      "file": "hex",
+      "name": "firmware",
+      "required": true
+    }
+  ],
+  "pins": [
+    {
+      "leads": [
+        1
+      ],
+      "name": "PC6"
+    },
+    {
+      "leads": [
+        2
+      ],
+      "name": "PD0"
+    },
+    {
+      "leads": [
+        3
+      ],
+      "name": "PD1"
+    },
+    {
+      "leads": [
+        4
+      ],
+      "name": "PD2"
+    },
+    {
+      "leads": [
+        5
+      ],
+      "name": "PD3"
+    },
+    {
+      "leads": [
+        6
+      ],
+      "name": "PD4"
+    },
+    {
+      "leads": [
+        7
+      ],
+      "name": "VCC"
+    },
+    {
+      "leads": [
+        8,
+        22
+      ],
+      "name": "GND"
+    },
+    {
+      "leads": [
+        9
+      ],
+      "name": "PB6"
+    },
+    {
+      "leads": [
+        10
+      ],
+      "name": "PB7"
+    },
+    {
+      "leads": [
+        11
+      ],
+      "name": "PD5"
+    },
+    {
+      "leads": [
+        12
+      ],
+      "name": "PD6"
+    },
+    {
+      "leads": [
+        13
+      ],
+      "name": "PD7"
+    },
+    {
+      "leads": [
+        14
+      ],
+      "name": "PB0"
+    },
+    {
+      "leads": [
+        15
+      ],
+      "name": "PB1"
+    },
+    {
+      "leads": [
+        16
+      ],
+      "name": "PB2"
+    },
+    {
+      "leads": [
+        17
+      ],
+      "name": "PB3"
+    },
+    {
+      "leads": [
+        18
+      ],
+      "name": "PB4"
+    },
+    {
+      "leads": [
+        19
+      ],
+      "name": "PB5"
+    },
+    {
+      "leads": [
+        20
+      ],
+      "name": "AVCC"
+    },
+    {
+      "leads": [
+        21
+      ],
+      "name": "AREF"
+    },
+    {
+      "leads": [
+        23
+      ],
+      "name": "PC0"
+    },
+    {
+      "leads": [
+        24
+      ],
+      "name": "PC1"
+    },
+    {
+      "leads": [
+        25
+      ],
+      "name": "PC2"
+    },
+    {
+      "leads": [
+        26
+      ],
+      "name": "PC3"
+    },
+    {
+      "leads": [
+        27
+      ],
+      "name": "PC4"
+    },
+    {
+      "leads": [
+        28
+      ],
+      "name": "PC5"
+    }
+  ],
+  "ratings": [],
+  "real": {
+    "datasheet": "DS40002061B",
+    "maker": "Microchip",
+    "number": "ATmega328P-PU"
+  },
+  "title": "ATmega328P, PDIP-28",
+  "used_by": [
+    "uno-board"
+  ],
+  "uses": {},
+  "version": "0.1.0"
+}

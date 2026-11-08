@@ -1,0 +1,93 @@
+{
+  "categories": [
+    "resistor",
+    "passive",
+    "through-hole",
+    "pull-up",
+    "pull-down",
+    "current limit"
+  ],
+  "description": "Carbon-film resistor with leads bent to 10.16 mm (0.4 inch) for a breadboard. Set its resistance.",
+  "docs": [
+    {
+      "name": "Yageo CFR-25"
+    }
+  ],
+  "files": [
+    {
+      "bytes": 1469,
+      "license": "MIT OR Apache-2.0",
+      "path": "asset.json",
+      "sha256": "2adcaaebb17651261cec0b2a149532f796a88a69ece4afbdf66ddd6eff4886b8"
+    },
+    {
+      "bytes": 1176,
+      "license": "MIT OR Apache-2.0",
+      "path": "part.jsonc",
+      "sha256": "3f3ce85682dcf873e1b49c88946a8ca62f9ae25b1ef3f6b3a16093ea37a83049"
+    },
+    {
+      "bytes": 294,
+      "license": "MIT OR Apache-2.0",
+      "path": "resistor-axial.anchors.json",
+      "sha256": "a98084ba09c2a467acca47216708850c932c505643e2f914f0c110e9273fb27a"
+    },
+    {
+      "bytes": 77032,
+      "license": "MIT OR Apache-2.0",
+      "path": "resistor-axial.glb",
+      "sha256": "997ce68413260ddfbde85d61daadbe560434131e2729c5f228bce9dc3aad293a"
+    }
+  ],
+  "name": "resistor-axial",
+  "not_simulated": [
+    {
+      "what": "tolerance",
+      "why": "The value is exact. The fourth band is drawn gold, 5 %."
+    },
+    {
+      "what": "temperature coefficient",
+      "why": "The engine has no temperature."
+    }
+  ],
+  "params": [
+    {
+      "above": "0",
+      "name": "resistance",
+      "required": true,
+      "unit": "ohm"
+    }
+  ],
+  "pins": [
+    {
+      "leads": [
+        1
+      ],
+      "name": "a"
+    },
+    {
+      "leads": [
+        2
+      ],
+      "name": "b"
+    }
+  ],
+  "ratings": [
+    {
+      "name": "power",
+      "source": "user",
+      "unit": "W",
+      "value": 0.25
+    }
+  ],
+  "real": {
+    "datasheet": "Yageo CFR-25",
+    "generic": true,
+    "maker": "Yageo",
+    "number": "CFR-25"
+  },
+  "title": "Resistor, 1/4 W axial",
+  "used_by": [],
+  "uses": {},
+  "version": "0.1.0"
+}
