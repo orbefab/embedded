@@ -73,6 +73,11 @@ fn build_writes_a_registry_and_reports_its_files_and_gaps() {
 #[test]
 fn a_folder_with_no_parts_and_no_blocks_is_invalid() {
     let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("registry.jsonc"),
+        r#"{ "format": 1, "name": "@acme" }"#,
+    )
+    .unwrap();
     let out = dir.path().join("out");
     let (code, _, stderr) = orbe(&[
         "registry",
@@ -82,6 +87,69 @@ fn a_folder_with_no_parts_and_no_blocks_is_invalid() {
     ]);
     assert_eq!(code, Some(1), "{stderr}");
     assert!(stderr.starts_with("error[registry_invalid]: "), "{stderr}");
+    assert!(
+        stderr.contains("holds no part in parts/ and no Block in blocks/"),
+        "{stderr}"
+    );
     assert!(stderr.contains("hint: "), "{stderr}");
     assert!(!out.exists());
+}
+
+#[test]
+fn previous_carries_a_build_forward_and_refuses_a_changed_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    let part = src.join("parts/lamp");
+    std::fs::create_dir_all(&part).unwrap();
+    std::fs::write(
+        src.join("registry.jsonc"),
+        r#"{ "format": 1, "name": "@acme" }"#,
+    )
+    .unwrap();
+    let lamp = |version: &str, title: &str| {
+        std::fs::write(
+            part.join("part.jsonc"),
+            format!(
+                r#"{{ "format": 1, "part": "lamp", "version": "{version}", "title": "{title}", "license": "MIT", "pins": {{ "a": [1], "b": [2] }}, "model": {{ "kind": "resistor" }} }}"#
+            ),
+        )
+        .unwrap();
+    };
+    let path = |p: &Path| p.to_str().unwrap().to_string();
+    let first = dir.path().join("first");
+    lamp("1.0.0", "Lamp");
+    let (code, _, stderr) = orbe(&["registry", "build", &path(&src), &path(&first)]);
+    assert_eq!(code, Some(0), "{stderr}");
+
+    lamp("1.1.0", "Lamp");
+    let second = dir.path().join("second");
+    let (code, stdout, stderr) = orbe(&[
+        "registry",
+        "build",
+        &path(&src),
+        &path(&second),
+        "--previous",
+        &path(&first),
+    ]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stdout.contains("1 records carried forward"), "{stdout}");
+    assert!(second.join("lamp@1.0.0.json").is_file());
+    assert!(second.join("lamp@1.1.0.json").is_file());
+
+    lamp("1.1.0", "A brighter lamp");
+    let third = dir.path().join("third");
+    let (code, _, stderr) = orbe(&[
+        "registry",
+        "build",
+        &path(&src),
+        &path(&third),
+        "--previous",
+        &path(&second),
+    ]);
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(
+        stderr.contains("`lamp@1.1.0` builds to a record other than the one served"),
+        "{stderr}"
+    );
+    assert!(!third.exists(), "a refused build writes nothing");
 }

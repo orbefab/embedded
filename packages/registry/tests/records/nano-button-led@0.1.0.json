@@ -1,6 +1,9 @@
 {
   "type": "block",
+  "$schema": "item.schema.json",
+  "format": 1,
   "name": "nano-button-led",
+  "version": "0.1.0",
   "title": "Button and LED on a Nano",
   "description": "A button on D2 lights a red LED on D13 of an Arduino Nano, and releasing it turns the LED off.",
   "categories": [
@@ -95,5 +98,6 @@
       "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
     }
   ],
+  "hash": "sha256:<folder hash>",
   "board": "nano-board"
 }

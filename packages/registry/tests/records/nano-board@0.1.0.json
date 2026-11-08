@@ -1,5 +1,7 @@
 {
   "type": "part",
+  "$schema": "item.schema.json",
+  "format": 1,
   "name": "nano-board",
   "version": "0.1.0",
   "title": "Nano (CH340 clone)",
@@ -248,6 +250,5 @@
       "name": "Arduino Nano A000005 full pinout",
       "url": "https://docs.arduino.cc/resources/pinouts/A000005-full-pinout.pdf"
     }
-  ],
-  "usedBy": []
+  ]
 }

@@ -147,14 +147,20 @@ enum Command {
 
 #[derive(Subcommand)]
 enum RegistryCommand {
-    /// Writes a registry of the parts in `<SRC>/parts/` and the Blocks in `<SRC>/blocks/` into
-    /// the empty folder `<OUT>`: an index, one record per item version, and each file once by
-    /// its SHA-256. Prints the file count, and warns of what parts and Blocks lack.
+    /// Writes the registry `<SRC>/registry.jsonc` names, of the parts in `<SRC>/parts/` and the
+    /// Blocks in `<SRC>/blocks/`, into the empty folder `<OUT>`: an index, one record per item
+    /// version, and each file once by its SHA-256. Prints the file count, and warns of what
+    /// parts and Blocks lack and of hidden or large files they publish.
     Build {
-        /// The folder that holds `parts/` and `blocks/`, such as this repo's root.
+        /// The folder that holds `registry.jsonc`, `parts/` and `blocks/`, such as this repo's root.
         src: PathBuf,
         /// The folder to write. It must be missing or empty.
         out: PathBuf,
+        /// The folder of the build this one replaces. Every record it serves stays served: a
+        /// version `<SRC>` still holds must build to the same bytes, and older versions are
+        /// carried forward.
+        #[arg(long, value_name = "DIR")]
+        previous: Option<PathBuf>,
         /// Print one JSON envelope instead of text.
         #[arg(long)]
         json: bool,
@@ -309,8 +315,14 @@ fn main() -> ExitCode {
             } => run_tests(&paths, verbose, json),
             Command::Skills { command } => print_skill(command),
             Command::Registry {
-                command: RegistryCommand::Build { src, out, json },
-            } => build_registry(&src, &out, json),
+                command:
+                    RegistryCommand::Build {
+                        src,
+                        out,
+                        previous,
+                        json,
+                    },
+            } => build_registry(&src, &out, previous.as_deref(), json),
             Command::Show {
                 session,
                 no_browser,
@@ -865,8 +877,8 @@ fn search_parts(words: &[String], json: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn build_registry(src: &Path, out: &Path, json: bool) -> ExitCode {
-    let built = orbe_registry::build(src).and_then(|registry| {
+fn build_registry(src: &Path, out: &Path, previous: Option<&Path>, json: bool) -> ExitCode {
+    let built = orbe_registry::build(src, previous).and_then(|registry| {
         registry.write(out)?;
         Ok(registry)
     });
@@ -901,7 +913,7 @@ fn build_registry(src: &Path, out: &Path, json: bool) -> ExitCode {
         }
     };
     let report = &registry.report;
-    let warnings = report.missing.warnings();
+    let warnings = report.warnings();
     if json {
         print_json(&json!({
             "ok": true,

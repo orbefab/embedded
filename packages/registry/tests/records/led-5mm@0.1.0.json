@@ -1,5 +1,7 @@
 {
   "type": "part",
+  "$schema": "item.schema.json",
+  "format": 1,
   "name": "led-5mm",
   "version": "0.1.0",
   "title": "5 mm LED",
@@ -128,7 +130,6 @@
       "url": "https://www.kingbrightusa.com/images/catalog/SPEC/WP7113ID.pdf"
     }
   ],
-  "usedBy": [],
   "buy": [
     {
       "seller": "DigiKey",

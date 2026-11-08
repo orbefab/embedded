@@ -1,12 +1,110 @@
-//! The records a registry serves: one per item version, and the index that lists them.
+//! The records a registry serves, one per item version, and the index that lists them.
+
+use std::borrow::Cow;
+use std::fmt;
 
 use orbe_scene::{BlockCard, Buy, Card, CardFile, Doc, NotSimulated, On, Param, Pin, Rating, Real};
-use schemars::JsonSchema;
-use serde::Serialize;
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::pattern;
+use crate::{FORMAT, ITEM_SCHEMA};
 
 /// The URL of the file with this SHA-256, relative to the record that lists it.
 pub fn file_url(sha256: &str) -> String {
     format!("files/{sha256}")
+}
+
+/// The contract's version. Every index and record carries it as `"format": 1`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Format;
+
+impl Serialize for Format {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u32(FORMAT)
+    }
+}
+
+impl<'de> Deserialize<'de> for Format {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Format, D::Error> {
+        match u32::deserialize(deserializer)? {
+            FORMAT => Ok(Format),
+            other => Err(serde::de::Error::custom(format!(
+                "format {other}, and this orbe reads format {FORMAT}"
+            ))),
+        }
+    }
+}
+
+impl JsonSchema for Format {
+    fn schema_name() -> Cow<'static, str> {
+        "Format".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "description": "The contract's version. A client refuses a format it does not know.",
+            "const": FORMAT
+        })
+    }
+}
+
+/// An item a record depends on: `[@<registry>/]<id>@<version>`. Without a registry it is in
+/// the same registry as the record.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Dependency {
+    pub registry: Option<String>,
+    pub id: String,
+    pub version: orbe_scene::Version,
+}
+
+impl Dependency {
+    pub fn parse(text: &str) -> Option<Dependency> {
+        let (registry, rest) = match text.strip_prefix('@') {
+            Some(scoped) => {
+                let (registry, rest) = scoped.split_once('/')?;
+                (Some(format!("@{registry}")), rest)
+            }
+            None => (None, text),
+        };
+        let (id, version) = rest.split_once('@')?;
+        let named = registry.as_deref().is_none_or(orbe_scene::is_registry_name);
+        (named && orbe_scene::is_id(id)).then_some(())?;
+        Some(Dependency {
+            registry,
+            id: id.to_string(),
+            version: orbe_scene::Version::parse(version)?,
+        })
+    }
+}
+
+impl fmt::Display for Dependency {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(registry) = &self.registry {
+            write!(f, "{registry}/")?;
+        }
+        write!(f, "{}@{}", self.id, self.version)
+    }
+}
+
+impl Serialize for Dependency {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl JsonSchema for Dependency {
+    fn schema_name() -> Cow<'static, str> {
+        "Dependency".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "description": "[@<registry>/]<id>@<version>. Without a registry it is in the same registry as the record.",
+            "type": "string",
+            "pattern": pattern::DEPENDENCY
+        })
+    }
 }
 
 /// One record. `type` says which of the three it is.
@@ -19,27 +117,46 @@ pub enum Item {
     Model(ModelItem),
 }
 
+/// The fields every record has, whatever its type.
+#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Head {
+    /// Where an editor finds the record's schema: `item.schema.json`, beside the record.
+    #[serde(rename = "$schema")]
+    pub schema: String,
+    pub format: Format,
+    #[schemars(pattern(pattern::ID))]
+    pub name: String,
+    #[schemars(pattern(pattern::VERSION))]
+    pub version: String,
+    #[schemars(length(min = 1))]
+    pub title: String,
+    /// The item file's `summary`. Absent when it has none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String")]
+    pub description: Option<String>,
+    /// The item file's `tags`. Absent when it has none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Vec<String>")]
+    pub categories: Option<Vec<String>>,
+    /// The item's SPDX expression.
+    #[schemars(length(min = 1))]
+    pub license: String,
+    /// Each item this one is built from or runs.
+    pub registry_dependencies: Vec<Dependency>,
+    /// Every file in the item's folder, by path.
+    pub files: Vec<File>,
+    /// The folder hash over `files`, as `sha256:<hex>`. `parts.lock` records a part's.
+    #[schemars(pattern(pattern::HASH))]
+    pub hash: String,
+}
+
 /// A part at one version: what its page shows and what `orbe add` copies.
 #[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-#[schemars(deny_unknown_fields)]
 pub struct PartItem {
-    pub name: String,
-    pub version: String,
-    pub title: String,
-    /// The part file's `summary`. Absent when it has none.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// The part file's `tags`. Absent when it has none.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub categories: Option<Vec<String>>,
-    pub license: String,
-    /// Each part this part is built from, as `<name>@<version>`.
-    pub registry_dependencies: Vec<String>,
-    /// Every file in the part's folder. `orbe add` writes them to `parts/<name>/<path>`.
-    pub files: Vec<File>,
-    /// The folder hash `parts.lock` records, as `sha256:<hex>`.
-    pub hash: String,
+    #[serde(flatten)]
+    pub head: Head,
     pub real: Real,
     pub pins: Vec<Pin>,
     pub params: Vec<Param>,
@@ -47,69 +164,52 @@ pub struct PartItem {
     pub not_simulated: Vec<NotSimulated>,
     /// The part file's `docs`. A doc with no `url` is a name with no link.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Vec<Doc>")]
     pub docs: Option<Vec<Doc>>,
-    /// The parts in this registry that are built from this one.
-    pub used_by: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Vec<Buy>")]
     pub buy: Option<Vec<Buy>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "On")]
     pub on: Option<On>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub pressable: bool,
 }
 
-/// A Block: a board, parts, firmware and tests that work together. A Block has no version.
+/// A Block at one version: a board, parts, firmware and tests that work together.
 #[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-#[schemars(deny_unknown_fields)]
 pub struct BlockItem {
-    pub name: String,
-    pub title: String,
-    /// The Block file's `summary`. Absent when it has none.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// The Block file's `tags`. Absent when it has none.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub categories: Option<Vec<String>>,
-    pub license: String,
-    /// Every part the scene runs, as `<name>@<version>`: the versions the Block was tested with.
-    pub registry_dependencies: Vec<String>,
-    /// Every file in the Block's folder. `orbe add` writes each one but `block.jsonc` and
-    /// `README.md` to the project, at its `path`.
-    pub files: Vec<File>,
+    #[serde(flatten)]
+    pub head: Head,
     /// The part the Block's firmware runs on, one of `registryDependencies`.
+    #[schemars(pattern(pattern::ID))]
     pub board: String,
 }
 
 /// An engine model, shipped as WebAssembly. Its own fields come with the device contract.
 #[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-#[schemars(deny_unknown_fields)]
 pub struct ModelItem {
-    pub name: String,
-    pub version: String,
-    pub title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub categories: Option<Vec<String>>,
-    pub license: String,
-    pub registry_dependencies: Vec<String>,
-    pub files: Vec<File>,
+    #[serde(flatten)]
+    pub head: Head,
 }
 
 /// One file of an item.
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
-#[schemars(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct File {
     /// The `/`-separated path in the item's folder.
+    #[schemars(pattern(pattern::PATH))]
     pub path: String,
-    /// Where the bytes are, relative to the record's URL.
+    /// Where the bytes are, relative to the record's URL: `files/<sha256>`.
+    #[schemars(pattern(pattern::FILE_URL))]
     pub url: String,
     /// The SHA-256 of the bytes, as lowercase hex.
+    #[schemars(pattern(pattern::SHA256))]
     pub sha256: String,
     pub bytes: u64,
     /// The SPDX expression that covers this file.
+    #[schemars(length(min = 1))]
     pub license: String,
 }
 
@@ -125,7 +225,22 @@ impl From<CardFile> for File {
     }
 }
 
+/// Bare dependencies on `(id, version)` pairs, which the cards took from versions they checked.
+fn dependencies(versions: impl IntoIterator<Item = (String, String)>) -> Vec<Dependency> {
+    versions
+        .into_iter()
+        .map(|(id, version)| Dependency {
+            registry: None,
+            version: orbe_scene::Version::parse(&version)
+                .expect("a card names only versions in the canonical form"),
+            id,
+        })
+        .collect()
+}
+
 impl From<Card> for Item {
+    /// A record leaves out the card's `used_by`: a served record never changes, and the parts
+    /// that use a part grow with the registry.
     fn from(card: Card) -> Item {
         let Card {
             name,
@@ -143,28 +258,31 @@ impl From<Card> for Item {
             docs,
             files,
             uses,
-            used_by,
+            used_by: _,
             buy,
             on,
             pressable,
         } = card;
         Item::Part(Box::new(PartItem {
-            name,
-            version,
-            title,
-            description,
-            categories,
-            license,
-            registry_dependencies: addresses(uses),
-            files: files.into_iter().map(File::from).collect(),
-            hash,
+            head: Head {
+                schema: ITEM_SCHEMA.to_string(),
+                format: Format,
+                name,
+                version,
+                title,
+                description,
+                categories,
+                license,
+                registry_dependencies: dependencies(uses),
+                files: files.into_iter().map(File::from).collect(),
+                hash,
+            },
             real,
             pins,
             params,
             ratings,
             not_simulated,
             docs,
-            used_by,
             buy,
             on,
             pressable,
@@ -176,6 +294,8 @@ impl From<BlockCard> for Item {
     fn from(card: BlockCard) -> Item {
         let BlockCard {
             name,
+            version,
+            hash,
             title,
             description,
             categories,
@@ -183,103 +303,95 @@ impl From<BlockCard> for Item {
             license,
             parts,
             files,
-            ..
         } = card;
         Item::Block(BlockItem {
-            name,
-            title,
-            description,
-            categories,
-            license,
-            registry_dependencies: addresses(parts),
-            files: files.into_iter().map(File::from).collect(),
+            head: Head {
+                schema: ITEM_SCHEMA.to_string(),
+                format: Format,
+                name,
+                version,
+                title,
+                description,
+                categories,
+                license,
+                registry_dependencies: dependencies(parts),
+                files: files.into_iter().map(File::from).collect(),
+                hash,
+            },
             board,
         })
     }
 }
 
-fn addresses(versions: impl IntoIterator<Item = (String, String)>) -> Vec<String> {
-    versions
-        .into_iter()
-        .map(|(name, version)| format!("{name}@{version}"))
-        .collect()
-}
-
 impl Item {
-    pub fn name(&self) -> &str {
+    pub fn head(&self) -> &Head {
         match self {
-            Item::Part(item) => &item.name,
-            Item::Block(item) => &item.name,
-            Item::Model(item) => &item.name,
+            Item::Part(item) => &item.head,
+            Item::Block(item) => &item.head,
+            Item::Model(item) => &item.head,
         }
     }
 
-    pub fn version(&self) -> Option<&str> {
+    pub fn kind(&self) -> Kind {
         match self {
-            Item::Part(item) => Some(&item.version),
-            Item::Block(_) => None,
-            Item::Model(item) => Some(&item.version),
+            Item::Part(_) => Kind::Part,
+            Item::Block(_) => Kind::Block,
+            Item::Model(_) => Kind::Model,
         }
     }
 
-    /// What the URL template's `{name}` becomes for this record: `<name>@<version>`, or a
-    /// Block's name alone.
+    /// `<name>@<version>`, which names the record's file, `<name>@<version>.json`.
     pub fn address(&self) -> String {
-        match self.version() {
-            Some(version) => format!("{}@{version}", self.name()),
-            None => self.name().to_string(),
-        }
-    }
-
-    pub fn files(&self) -> &[File] {
-        match self {
-            Item::Part(item) => &item.files,
-            Item::Block(item) => &item.files,
-            Item::Model(item) => &item.files,
-        }
+        address(&self.head().name, &self.head().version)
     }
 
     /// The index row for this record, served as `bytes`.
     pub fn row(&self, bytes: &[u8]) -> Row {
-        let (kind, title, description, categories) = match self {
-            Item::Part(item) => (Kind::Part, &item.title, &item.description, &item.categories),
-            Item::Block(item) => (
-                Kind::Block,
-                &item.title,
-                &item.description,
-                &item.categories,
-            ),
-            Item::Model(item) => (
-                Kind::Model,
-                &item.title,
-                &item.description,
-                &item.categories,
-            ),
-        };
+        let head = self.head();
         Row {
-            name: self.name().to_string(),
-            kind,
-            version: self.version().map(str::to_string),
-            title: title.clone(),
-            description: description.clone(),
-            categories: categories.clone(),
-            url: format!("{}.json", self.address()),
+            name: head.name.clone(),
+            kind: self.kind(),
+            version: head.version.clone(),
+            title: head.title.clone(),
+            description: head.description.clone(),
+            categories: head.categories.clone(),
+            url: record_url(&head.name, &head.version),
             sha256: crate::sha256(bytes),
             bytes: bytes.len() as u64,
         }
     }
 }
 
-/// The index: one row per record, by name and then version.
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
-#[schemars(title = "Registry index", deny_unknown_fields)]
+pub(crate) fn address(name: &str, version: &str) -> String {
+    format!("{name}@{version}")
+}
+
+pub(crate) fn record_url(name: &str, version: &str) -> String {
+    format!("{}.json", address(name, version))
+}
+
+/// The index: which registry this is, and one row per record.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[schemars(title = "Registry index")]
 pub struct Index {
+    /// Where an editor finds the index's schema: `index.schema.json`, beside the index.
     #[serde(rename = "$schema")]
     pub schema: String,
+    pub format: Format,
+    /// The registry's name, such as `@orbefab`.
+    #[schemars(pattern(pattern::REGISTRY))]
+    pub name: String,
+    /// The registry's page for people. Absent when it has none.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[schemars(with = "String", pattern(pattern::HTTPS))]
+    pub homepage: Option<String>,
+    /// One row per record, by name and then by version, oldest first.
     pub items: Vec<Row>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, JsonSchema)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
     Part,
@@ -287,24 +399,38 @@ pub enum Kind {
     Model,
 }
 
+impl fmt::Display for Kind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Kind::Part => "part",
+            Kind::Block => "Block",
+            Kind::Model => "model",
+        })
+    }
+}
+
 /// One record, with what search shows and where to fetch it.
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
-#[schemars(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Row {
+    #[schemars(pattern(pattern::ID))]
     pub name: String,
     #[serde(rename = "type")]
     pub kind: Kind,
-    /// Absent for a Block, which has no version.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
+    #[schemars(pattern(pattern::VERSION))]
+    pub version: String,
+    #[schemars(length(min = 1))]
     pub title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[schemars(with = "String")]
     pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[schemars(with = "Vec<String>")]
     pub categories: Option<Vec<String>>,
-    /// The record's URL, relative to the index's.
+    /// The record's URL relative to the index's: `<name>@<version>.json`.
+    #[schemars(pattern(pattern::RECORD_URL))]
     pub url: String,
     /// The SHA-256 of the record's bytes, as lowercase hex.
+    #[schemars(pattern(pattern::SHA256))]
     pub sha256: String,
     pub bytes: u64,
 }

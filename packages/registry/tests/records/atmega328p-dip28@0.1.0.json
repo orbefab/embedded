@@ -1,5 +1,7 @@
 {
   "type": "part",
+  "$schema": "item.schema.json",
+  "format": 1,
   "name": "atmega328p-dip28",
   "version": "0.1.0",
   "title": "ATmega328P, PDIP-28",
@@ -229,8 +231,5 @@
     {
       "name": "avr-1.8.6 boards.txt"
     }
-  ],
-  "usedBy": [
-    "uno-board"
   ]
 }
