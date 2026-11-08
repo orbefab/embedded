@@ -1,20 +1,9 @@
 {
   "part": "atmega16u2-qfn32",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/atmega16u2-qfn32.glb",
-        "sha256": "44dcf6f80e0c6f66f2577955ce0538ec5ef3ea151958a8e3fee71b4494e9f0c3",
-        "bytes": 113012
-      },
-      "anchors": {
-        "path": "GLB/parts/atmega16u2-qfn32.anchors.json",
-        "sha256": "09cb671efeb94741569fdfcc766ee44daae0a3c575adc0201aae89a690da17cb",
-        "bytes": 3844
-      }
-    }
+    "script": "model.py",
+    "sha256": "5e2d8fe6827eb923de9b9fa12c95c7a6dcd7dfc89b91e3035bff544e2e6cf39a",
+    "bytes": 1445
   },
   "files": {
     "atmega16u2-qfn32.glb": {

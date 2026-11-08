@@ -1,20 +1,9 @@
 {
   "part": "atmega328p-tqfp32",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "99a17e2b94135d8cbab5db778b8eeacac41ad685",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/atmega328p-tqfp32.glb",
-        "sha256": "b857582f905da63e8da5b211d170ef7985a8472b3e7c1536742e2131fe38dee4",
-        "bytes": 116060
-      },
-      "anchors": {
-        "path": "GLB/parts/atmega328p-tqfp32.anchors.json",
-        "sha256": "18d213a3d99aed6240e66fb3e6724ef4082dde52d50ba62bfd7e4de41ee27ea7",
-        "bytes": 3764
-      }
-    }
+    "script": "model.py",
+    "sha256": "0fd11c74210a549a16e7e7660548b498c428b2eb81b09940f569be3829245baf",
+    "bytes": 2134
   },
   "files": {
     "atmega328p-tqfp32.glb": {

@@ -1,20 +1,9 @@
 {
   "part": "lmv358-msop8",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/lmv358-msop8.glb",
-        "sha256": "d221a4e9a5490e501ffc74ebbc9f7388e07720c1b728af2b03b17489299f1b53",
-        "bytes": 34356
-      },
-      "anchors": {
-        "path": "GLB/parts/lmv358-msop8.anchors.json",
-        "sha256": "f61b6ffa824e89ebc7b7efcd1f67c56f5237e5ba91e03294113a5e44b00cbc55",
-        "bytes": 993
-      }
-    }
+    "script": "model.py",
+    "sha256": "c62786c1299b418fbc44dd41441299662c79bd504bcef5cb07e9e7fc20c1313c",
+    "bytes": 1416
   },
   "files": {
     "lmv358-msop8.glb": {

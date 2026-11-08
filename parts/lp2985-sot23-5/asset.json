@@ -1,20 +1,9 @@
 {
   "part": "lp2985-sot23-5",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/lp2985-sot23-5.glb",
-        "sha256": "1f515f32156ecbb79fbdb78a44c8a2efa40e78a71aae4bf08423969c5e6d41ca",
-        "bytes": 24640
-      },
-      "anchors": {
-        "path": "GLB/parts/lp2985-sot23-5.anchors.json",
-        "sha256": "04841cebc8d382356f4a941767b301470945e922aa0afae0e15d3a226650450f",
-        "bytes": 631
-      }
-    }
+    "script": "model.py",
+    "sha256": "f33017931470566641ab3682bb10a80c0c6b3de7177c21f3d5c629c65a460027",
+    "bytes": 1444
   },
   "files": {
     "lp2985-sot23-5.glb": {
