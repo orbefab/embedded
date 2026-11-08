@@ -101,7 +101,14 @@ pub(super) fn install(
     let again = Again::new(dir, format!("{add} {}", block.id));
     let opened = Folder::open_chosen(root).map_err(|error| io_at(root, error))?;
     let mut present = BTreeSet::new();
-    for (rel, bytes) in &block.files {
+    // The scene goes first, so a project that has one hears `scene_exists`, whatever else differs.
+    let scene = |file: &&(&str, &[u8])| file.0 == "scene.jsonc";
+    let ordered = block
+        .files
+        .iter()
+        .filter(scene)
+        .chain(block.files.iter().filter(|file| !scene(file)));
+    for (rel, bytes) in ordered {
         let found = seen(&opened, rel, bytes).map_err(|error| io_at(&root.join(rel), error))?;
         if let Seen::Link(at) = &found {
             return Ok(Reply::Refuse(is_a_link(at, &again)));

@@ -174,6 +174,13 @@ fn a_block_refuses_a_folder_with_a_scene_and_writes_nothing() {
     assert_eq!(envelope["ok"], false);
     assert_eq!(envelope["error"]["code"], "scene_exists");
     assert_eq!(tree(dir), before);
+
+    let run = orbe(dir, &["add", "nano-led-fade", "--json"]).json();
+    assert_eq!(
+        run["error"]["code"], "scene_exists",
+        "the scene is named even when the firmware differs too"
+    );
+    assert_eq!(tree(dir), before);
 }
 
 #[test]
