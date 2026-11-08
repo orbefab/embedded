@@ -1,4 +1,4 @@
-// The resistor is the engine's T1 stand-in, from engine/examples/atmega-board-button/netlist.json,
+// The resistor is the engine's T1 stand-in, from packages/engine/tests/circuits/atmega-board-button/netlist.json,
 // part `usb_switch`.
 {
   "format": 1, "part": "pmos-fdn340p-sot23", "version": "0.1.0", "title": "FDN340P P-channel MOSFET, SOT-23", "license": "MIT OR Apache-2.0",

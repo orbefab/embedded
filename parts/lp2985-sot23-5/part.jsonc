@@ -1,5 +1,5 @@
 // The model's values and sources are the engine's LP2985-33, the legacy standard grade of
-// TI SLVS522S, from engine/examples/atmega-board-button/netlist.json, part `reg_3v3`.
+// TI SLVS522S, from packages/engine/tests/circuits/atmega-board-button/netlist.json, part `reg_3v3`.
 {
   "format": 1, "part": "lp2985-sot23-5", "version": "0.1.0", "title": "LP2985 3.3 V regulator, SOT-23-5", "license": "MIT OR Apache-2.0",
   "docs": { "TI SLVS522S": null },

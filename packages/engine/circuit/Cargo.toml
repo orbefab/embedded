@@ -1,0 +1,27 @@
+[package]
+name = "orbe-circuit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+libm.workspace = true
+orbe-engine-core.workspace = true
+orbe-avr.workspace = true
+orbe-espressif.workspace = true
+orbe-xtensa.workspace = true
+
+[features]
+# Tests only: `simulate_steps`, a row at every accepted step.
+step-rows = []
+# Tests only: `Session::open_document_with_row_budget`, a probe that can fail twice.
+row-budget = []
+
+[dev-dependencies]
+serde_json.workspace = true
+orbe-circuit = { path = ".", features = ["step-rows"] }
+
+[lints]
+workspace = true

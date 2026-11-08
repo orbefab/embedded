@@ -1,7 +1,7 @@
 // The Nano, CH340 clone. Seated frame: z = 0 is the header plastic's underside.
 // The plastic is 2.54 mm, so the board's underside is at z = 2.54 and its top at z = 4.14.
 // Child values with a schematic source are the engine's board example values by role, from
-// engine/examples/atmega-board-button/netlist.json.
+// packages/engine/tests/circuits/atmega-board-button/netlist.json.
 {
   "format": 1,
   "part": "nano-board",

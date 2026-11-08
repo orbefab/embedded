@@ -6,8 +6,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 models=${1:?usage: scripts/check-assets.sh <path to an orbefab/models checkout>}
 pnpm install --frozen-lockfile
-node --test tools/asset-step/asset-step.test.mjs
-node tools/asset-step/asset-step.mjs --models "$models"
+node --test packages/asset-step/asset-step.test.mjs
+node packages/asset-step/asset-step.mjs --models "$models"
 changed=$(git status --porcelain -- parts)
 if [ -n "$changed" ]; then
   echo "the asset step changed parts/:"

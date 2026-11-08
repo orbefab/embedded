@@ -1,7 +1,17 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
-exclude = ["engine"]
+members = [
+  "apps/orbe",
+  "packages/scene",
+  "packages/session",
+  "packages/engine/core",
+  "packages/engine/circuit",
+  "packages/engine/cli",
+  "packages/engine/wasm",
+  "packages/engine/bench",
+  "packages/cores/*",
+  "packages/socs/*",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,29 +21,44 @@ publish = false
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-orbe-scene = { path = "crates/orbe-scene" }
-orbe-session = { path = "crates/orbe-session" }
-sim-core = { path = "engine/crates/core" }
-sim-circuit = { path = "engine/crates/circuit" }
+orbe-scene = { path = "packages/scene" }
+orbe-session = { path = "packages/session" }
+orbe-engine-core = { path = "packages/engine/core" }
+orbe-circuit = { path = "packages/engine/circuit" }
+orbe-xtensa = { path = "packages/cores/xtensa" }
+orbe-avr = { path = "packages/socs/avr" }
+orbe-espressif = { path = "packages/socs/espressif" }
 jsonc-parser = "=0.34.0"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
+serde_path_to_error = "0.1"
 sha1 = "0.10"
 sha2 = "0.10"
+# Exact, because a new libm can move the last bits of a run.
+libm = "=0.2.16"
 strsim = "0.11"
 rustix = { version = "1", features = ["fs"] }
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"
 ctrlc = "3.4"
 tungstenite = { version = "0.30", default-features = false }
+# Exact, because the `wasm-bindgen` CLI that `packages/engine/scripts/wasm.sh` runs must be the
+# same version.
+wasm-bindgen = "=0.2.129"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
-# The engine runs the ATmega328P's firmware instruction by instruction, so the reader's tests
-# that run it optimise the engine.
-[profile.dev.package.sim-avr]
+# The chip models run firmware instruction by instruction, so builds without optimisation still
+# optimise the solver, the cores and the chips.
+[profile.dev.package.orbe-circuit]
 opt-level = 3
 
-[profile.dev.package.sim-circuit]
+[profile.dev.package.orbe-avr]
+opt-level = 3
+
+[profile.dev.package.orbe-xtensa]
+opt-level = 3
+
+[profile.dev.package.orbe-espressif]
 opt-level = 3

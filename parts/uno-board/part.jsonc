@@ -3,7 +3,7 @@
 // orbefab/models places its parts by.
 // The wires are the copper of Arduino's UNO-TH_Rev3e board file, net by net. Values that cite the
 // schematic are the engine's board example values by role, from
-// engine/examples/atmega-board-button/netlist.json, or read off the same sheet. Passives are
+// packages/engine/tests/circuits/atmega-board-button/netlist.json, or read off the same sheet. Passives are
 // named by designator, since one resistor array serves several roles.
 {
   "format": 1,

@@ -1,5 +1,5 @@
 // The model's values and sources are the engine's D2, from
-// engine/examples/atmega-board-button/netlist.json, part `d_reset`.
+// packages/engine/tests/circuits/atmega-board-button/netlist.json, part `d_reset`.
 {
   "format": 1, "part": "diode-cd1206", "version": "0.1.0", "title": "Switching diode, CD1206-S01575, 1206", "license": "MIT OR Apache-2.0",
   "docs": { "Bourns CD1206-S01575": null },
