@@ -30,7 +30,11 @@ pub use circuit::{
 pub use diagnostic::{Code, Diagnostic, Lint};
 pub use model::STOP_PS;
 pub use project::{REGISTRY, folder_hash};
-pub use summary::{ParamDefault, ParamSummary, PartSummary, Takes, catalog_parts};
+pub use summary::{
+    Buy, Card, Choice, Doc, Literal, Missing, NotSimulated, On, Param, PartFile, Pin, Rating, Real,
+    card, catalog_cards, ids_with_segment, missing_fields, near_names, param_sentence, search,
+    si_amount,
+};
 
 /// Type-checks a scene and every part file it reaches. On success, the netlist the engine
 /// opens. Otherwise every finding, sorted by file, line and column.

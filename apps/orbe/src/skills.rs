@@ -2,7 +2,7 @@
 //! parts section is rendered from the built-in catalog when it is printed, so it lists the
 //! parts `orbe add` can copy.
 
-use orbe_scene::{ParamDefault, ParamSummary, PartSummary, Takes, catalog_parts};
+use orbe_scene::{Card, catalog_cards, param_sentence, si_amount};
 
 pub struct Skill {
     pub name: &'static str,
@@ -35,33 +35,46 @@ pub fn names() -> String {
 
 impl Skill {
     pub fn text(&self) -> String {
-        self.text.replace(PARTS, &parts(&catalog_parts()))
+        self.text.replace(PARTS, &parts(&catalog_cards()))
     }
 }
 
 /// The parts a scene uses directly, in full, then the parts only other parts are built from.
-fn parts(catalog: &[PartSummary]) -> String {
-    let (top, inner): (Vec<&PartSummary>, Vec<&PartSummary>) =
-        catalog.iter().partition(|p| p.used_by.is_empty());
+fn parts(catalog: &[Card]) -> String {
+    let (top, inner): (Vec<&Card>, Vec<&Card>) =
+        catalog.iter().partition(|part| part.used_by.is_empty());
     let mut out = String::new();
     for part in top {
-        out.push_str(&format!("### `{}`: {}\n\n", part.id, part.title));
-        if let Some(summary) = &part.summary {
+        out.push_str(&format!("### `{}`: {}\n\n", part.name, part.title));
+        if let Some(summary) = &part.description {
             out.push_str(&format!("{summary}\n\n"));
         }
-        out.push_str(&format!("- Pins: {}.\n", quoted(&part.pins)));
+        let pins: Vec<String> = part.pins.iter().map(|pin| pin.name.clone()).collect();
+        out.push_str(&format!("- Pins: {}.\n", quoted(&pins)));
         for param in &part.params {
-            out.push_str(&format!("- `{}`: {}.\n", param.name, param_text(param)));
+            out.push_str(&format!("- `{}`: {}.\n", param.name, param_sentence(param)));
         }
-        if let Some((of, above)) = &part.on {
-            out.push_str(&format!("- It reads `on` while `{of}` is above {above}.\n"));
+        if let Some(on) = &part.on {
+            out.push_str(&format!(
+                "- It reads `on` while `{}` is above {}.\n",
+                on.of,
+                si_amount(on.above, &on.unit)
+            ));
         }
-        if !part.ratings.is_empty() {
-            let warns: Vec<String> = part
-                .ratings
-                .iter()
-                .map(|(name, above)| format!("`rating.{name}` above {above}"))
-                .collect();
+        let warns: Vec<String> = part
+            .ratings
+            .iter()
+            .filter_map(|rating| {
+                let value = rating.value?;
+                let unit = rating.unit.as_deref()?;
+                Some(format!(
+                    "`rating.{}` above {}",
+                    rating.name,
+                    si_amount(value, unit)
+                ))
+            })
+            .collect();
+        if !warns.is_empty() {
             out.push_str(&format!("- It warns {}.\n", warns.join(" and ")));
         }
         if part.pressable {
@@ -71,40 +84,13 @@ fn parts(catalog: &[PartSummary]) -> String {
     }
     let inner: Vec<String> = inner
         .iter()
-        .map(|p| format!("`{}` ({})", p.id, p.title))
+        .map(|p| format!("`{}` ({})", p.name, p.title))
         .collect();
     out.push_str(&format!(
         "The catalog also holds the parts the boards above are built from: {}. `orbe add` copies them with the board. Each one's pins and params are in its `parts/<id>/part.jsonc`.",
         inner.join(", ")
     ));
     out
-}
-
-fn param_text(param: &ParamSummary) -> String {
-    let takes = match &param.takes {
-        Takes::Number { unit, above, below } => {
-            let mut text = match unit.as_str() {
-                "1" => "a number".to_string(),
-                unit => format!("a value in {unit}"),
-            };
-            if let Some(above) = above {
-                text.push_str(&format!(" above {above}"));
-            }
-            if let Some(below) = below {
-                let joint = if above.is_some() { " and" } else { "" };
-                text.push_str(&format!("{joint} below {below}"));
-            }
-            text
-        }
-        Takes::Choice(choices) => format!("one of {}", quoted(choices)),
-        Takes::File { ext: Some(ext) } => format!("the path of a `.{ext}` file"),
-        Takes::File { ext: None } => "the path of a file".to_string(),
-    };
-    match &param.default {
-        ParamDefault::Required => format!("{takes}, required"),
-        ParamDefault::Unset => format!("{takes}, not set by default"),
-        ParamDefault::Value(value) => format!("{takes}, {value} by default"),
-    }
 }
 
 fn quoted(names: &[String]) -> String {
@@ -507,8 +493,8 @@ mod tests {
     fn the_core_skill_lists_every_catalog_part() {
         let text = find("core").unwrap().text();
         assert!(!text.contains(PARTS));
-        for part in catalog_parts() {
-            assert!(text.contains(&format!("`{}`", part.id)), "{}", part.id);
+        for part in catalog_cards() {
+            assert!(text.contains(&format!("`{}`", part.name)), "{}", part.name);
         }
         assert!(text.contains("### `nano-board`: Nano (CH340 clone)"));
         assert!(text.contains("- `resistance`: a value in ohm above 0, required."));

@@ -9,4 +9,6 @@ Run `orbe skills get core` and follow it before anything else. The `orbe` you ha
 
 Before you write or build Arduino firmware, also run `orbe skills get arduino`.
 
+`orbe part led-5mm` prints one catalog part. `orbe search led` finds parts by id, title, maker, number, summary and tags. Look a part up that way before you add it.
+
 `orbe skills list` lists every skill. If `orbe` is not found, it is not installed. Ask the user to install it.

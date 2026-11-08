@@ -148,6 +148,8 @@ Param values:
 
 `orbe add <id>…` copies parts from the catalog built into this `orbe` into `parts/<id>/` and records them in `parts.lock`. It also copies the parts a part is built from. Commit `parts/` and `parts.lock` with the scene. Don't edit a copied part. A copy that differs, even in spacing, is a `part_modified` error. A board built from other parts, such as `nano-board`, is the exception. An edit to it checks, with a note. To change a part, copy it to a folder of your own and name it by its `./` path.
 
+`orbe part <id>` prints one catalog part: its title, maker and number, license, folder hash, pins, params, ratings, what is not simulated, datasheets, files, the parts it is built from and the parts that use it. A part with no summary or tags leaves those out. A rating set to null prints as unrated. A name that is not an id, and is a whole word of exactly one id, prints that part. `orbe part 1n4007` prints `diode-1n4007`. When several ids share that word, the command is `unknown_part` and the hint lists those ids. `orbe search <words>` lists parts whose id, title, maker, number, summary or tags hold every word. An exact id comes first. Then a part whose every word is a whole word of its id, its title or its tags. Then the rest. Ids break ties. `orbe part <id> --json` and `orbe search <words> --json` print the same card as JSON. Any other unknown id is `unknown_part`, and the hint names close ids.
+
 <!-- catalog parts -->
 
 ## Refs

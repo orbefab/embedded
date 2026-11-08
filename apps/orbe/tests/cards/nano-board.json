@@ -1,0 +1,241 @@
+{
+  "categories": [
+    "board",
+    "microcontroller",
+    "avr",
+    "atmega328p",
+    "usb"
+  ],
+  "description": "ATmega328P board, 18 x 43.2 mm, 30 pins on two rows 15.24 mm apart. D13 drives the L LED. Powered from USB.",
+  "docs": [
+    {
+      "name": "Arduino Nano A000005 datasheet",
+      "url": "https://docs.arduino.cc/resources/datasheets/A000005-datasheet.pdf"
+    },
+    {
+      "name": "Arduino Nano A000005 full pinout",
+      "url": "https://docs.arduino.cc/resources/pinouts/A000005-full-pinout.pdf"
+    }
+  ],
+  "files": [
+    {
+      "license": "MIT OR Apache-2.0",
+      "path": "asset.json"
+    },
+    {
+      "license": "MIT OR Apache-2.0",
+      "path": "nano-board.glb"
+    },
+    {
+      "license": "MIT OR Apache-2.0",
+      "path": "part.jsonc"
+    }
+  ],
+  "license": "MIT OR Apache-2.0",
+  "name": "nano-board",
+  "not_simulated": [],
+  "params": [
+    {
+      "file": "hex",
+      "name": "firmware",
+      "required": true
+    }
+  ],
+  "pins": [
+    {
+      "name": "D1",
+      "refs": [
+        "j1.1"
+      ]
+    },
+    {
+      "name": "D0",
+      "refs": [
+        "j1.2"
+      ]
+    },
+    {
+      "name": "RESET",
+      "refs": [
+        "j1.3",
+        "j2.13"
+      ]
+    },
+    {
+      "name": "GND",
+      "refs": [
+        "j1.4",
+        "j2.14"
+      ]
+    },
+    {
+      "name": "D2",
+      "refs": [
+        "j1.5"
+      ]
+    },
+    {
+      "name": "D3",
+      "refs": [
+        "j1.6"
+      ]
+    },
+    {
+      "name": "D4",
+      "refs": [
+        "j1.7"
+      ]
+    },
+    {
+      "name": "D5",
+      "refs": [
+        "j1.8"
+      ]
+    },
+    {
+      "name": "D6",
+      "refs": [
+        "j1.9"
+      ]
+    },
+    {
+      "name": "D7",
+      "refs": [
+        "j1.10"
+      ]
+    },
+    {
+      "name": "D8",
+      "refs": [
+        "j1.11"
+      ]
+    },
+    {
+      "name": "D9",
+      "refs": [
+        "j1.12"
+      ]
+    },
+    {
+      "name": "D10",
+      "refs": [
+        "j1.13"
+      ]
+    },
+    {
+      "name": "D11",
+      "refs": [
+        "j1.14"
+      ]
+    },
+    {
+      "name": "D12",
+      "refs": [
+        "j1.15"
+      ]
+    },
+    {
+      "name": "D13",
+      "refs": [
+        "j2.1"
+      ]
+    },
+    {
+      "name": "3V3",
+      "refs": [
+        "j2.2"
+      ]
+    },
+    {
+      "name": "AREF",
+      "refs": [
+        "j2.3"
+      ]
+    },
+    {
+      "name": "A0",
+      "refs": [
+        "j2.4"
+      ]
+    },
+    {
+      "name": "A1",
+      "refs": [
+        "j2.5"
+      ]
+    },
+    {
+      "name": "A2",
+      "refs": [
+        "j2.6"
+      ]
+    },
+    {
+      "name": "A3",
+      "refs": [
+        "j2.7"
+      ]
+    },
+    {
+      "name": "A4",
+      "refs": [
+        "j2.8"
+      ]
+    },
+    {
+      "name": "A5",
+      "refs": [
+        "j2.9"
+      ]
+    },
+    {
+      "name": "A6",
+      "refs": [
+        "j2.10"
+      ]
+    },
+    {
+      "name": "A7",
+      "refs": [
+        "j2.11"
+      ]
+    },
+    {
+      "name": "5V",
+      "refs": [
+        "j2.12"
+      ]
+    },
+    {
+      "name": "VIN",
+      "refs": [
+        "j2.15"
+      ]
+    }
+  ],
+  "ratings": [],
+  "real": {
+    "datasheet": "Arduino Nano A000005 datasheet",
+    "generic": true,
+    "maker": "Arduino",
+    "number": "A000005"
+  },
+  "title": "Nano (CH340 clone)",
+  "uses": {
+    "ams1117-sot223": "0.1.0",
+    "atmega328p-tqfp32": "0.1.0",
+    "capacitor-0603": "0.1.0",
+    "capacitor-tantalum-3216": "0.1.0",
+    "ch340g": "0.1.0",
+    "crystal-3215": "0.1.0",
+    "diode-sod123": "0.1.0",
+    "led-0603": "0.1.0",
+    "pin-header-1x15": "0.1.0",
+    "pin-header-2x3": "0.1.0",
+    "resistor-0603": "0.1.0",
+    "resonator-cstce": "0.1.0",
+    "tactile-switch-smd": "0.1.0",
+    "usb-mini-b": "0.1.0"
+  },
+  "version": "0.1.0"
+}

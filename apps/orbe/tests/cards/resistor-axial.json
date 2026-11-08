@@ -1,0 +1,85 @@
+{
+  "categories": [
+    "resistor",
+    "passive",
+    "through-hole",
+    "pull-up",
+    "pull-down",
+    "current limit"
+  ],
+  "description": "Carbon-film resistor with leads bent to 10.16 mm (0.4 inch) for a breadboard. Set its resistance.",
+  "docs": [
+    {
+      "name": "Yageo CFR-25"
+    }
+  ],
+  "files": [
+    {
+      "license": "MIT OR Apache-2.0",
+      "path": "asset.json"
+    },
+    {
+      "license": "MIT OR Apache-2.0",
+      "path": "part.jsonc"
+    },
+    {
+      "license": "MIT OR Apache-2.0",
+      "path": "resistor-axial.anchors.json"
+    },
+    {
+      "license": "MIT OR Apache-2.0",
+      "path": "resistor-axial.glb"
+    }
+  ],
+  "license": "MIT OR Apache-2.0",
+  "name": "resistor-axial",
+  "not_simulated": [
+    {
+      "what": "tolerance",
+      "why": "The value is exact. The fourth band is drawn gold, 5 %."
+    },
+    {
+      "what": "temperature coefficient",
+      "why": "The engine has no temperature."
+    }
+  ],
+  "params": [
+    {
+      "above": 0,
+      "name": "resistance",
+      "required": true,
+      "unit": "ohm"
+    }
+  ],
+  "pins": [
+    {
+      "leads": [
+        1
+      ],
+      "name": "a"
+    },
+    {
+      "leads": [
+        2
+      ],
+      "name": "b"
+    }
+  ],
+  "ratings": [
+    {
+      "name": "power",
+      "source": "user",
+      "unit": "W",
+      "value": 0.25
+    }
+  ],
+  "real": {
+    "datasheet": "Yageo CFR-25",
+    "generic": true,
+    "maker": "Yageo",
+    "number": "CFR-25"
+  },
+  "title": "Resistor, 1/4 W axial",
+  "uses": {},
+  "version": "0.1.0"
+}

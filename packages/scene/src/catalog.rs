@@ -48,6 +48,10 @@ pub(crate) fn find(id: &str) -> Option<Original> {
 }
 
 impl Original {
+    pub(crate) fn files(&self) -> &[(&'static str, &'static [u8])] {
+        &self.files
+    }
+
     /// The files of `folder` that differ from this version's, for a message. `None` when
     /// every file matches.
     pub(crate) fn files_differing(&self, folder: &Path) -> Option<String> {

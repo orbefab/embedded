@@ -1,11 +1,13 @@
 //! `orbe`, the CLI. `orbe check` type-checks a scene, and `orbe lint` checks it, then warns of
-//! what is likely wrong or unclear. `orbe add` copies catalog parts.
+//! what is likely wrong or unclear. `orbe add` copies catalog parts. `orbe part` prints one
+//! catalog part, and `orbe search` finds parts.
 //! `orbe test` runs each test file's live commands in a fresh in-process session. The live
 //! commands, such as `orbe open` and `orbe step`, drive a session that a background process
 //! holds between commands. `orbe skills` prints the skills that tell an agent how to use it.
 
 #[cfg(unix)]
 mod live;
+mod part;
 mod skills;
 
 use std::ffi::OsString;
@@ -67,6 +69,25 @@ enum Command {
         /// Rebuild `parts.lock` from the part folders.
         #[arg(long)]
         relock: bool,
+        /// Print one JSON envelope instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Prints one catalog part.
+    #[command(display_order = 4)]
+    Part {
+        /// Catalog id, such as `led-5mm`. A whole word of exactly one id, such as `1n4007`, names that part.
+        id: String,
+        /// Print one JSON envelope instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Finds catalog parts whose id, title, maker, number, summary or tags hold every word.
+    #[command(display_order = 5)]
+    Search {
+        /// Words to match. Every word must appear.
+        #[arg(required = true)]
+        words: Vec<String>,
         /// Print one JSON envelope instead of text.
         #[arg(long)]
         json: bool,
@@ -136,7 +157,7 @@ enum SkillsCommand {
 fn cli() -> clap::Command {
     let live = orbe_session::COMMANDS
         .iter()
-        .zip(4..)
+        .zip(6..)
         .map(|(spec, order)| live_help(spec).display_order(order));
     Cli::command().subcommands(live)
 }
@@ -262,6 +283,8 @@ fn main() -> ExitCode {
                 },
                 json,
             ),
+            Command::Part { id, json } => show_part(&id, json),
+            Command::Search { words, json } => search_parts(&words, json),
             Command::Test {
                 paths,
                 verbose,
@@ -760,6 +783,66 @@ fn invalid(scene: &Path, errors: Vec<Diagnostic>, json: bool) -> ExitCode {
         println!("{count}");
     }
     ExitCode::from(FAILED)
+}
+
+fn show_part(id: &str, json: bool) -> ExitCode {
+    if let Some(card) = orbe_scene::card(id) {
+        return print_part(&card, json);
+    }
+    let matches = orbe_scene::ids_with_segment(id);
+    if matches.len() == 1
+        && let Some(card) = orbe_scene::card(&matches[0])
+    {
+        return print_part(&card, json);
+    }
+    let names = if matches.len() > 1 {
+        matches
+    } else {
+        orbe_scene::near_names(id)
+    };
+    unknown_part(id, &names, json)
+}
+
+fn print_part(card: &orbe_scene::Card, json: bool) -> ExitCode {
+    if json {
+        print_json(&json!({ "ok": true, "data": card }));
+    } else {
+        print!("{}", part::text(card));
+    }
+    ExitCode::SUCCESS
+}
+
+fn unknown_part(id: &str, names: &[String], json: bool) -> ExitCode {
+    let message = format!("no catalog part named `{id}`");
+    let hint = if names.is_empty() {
+        "the catalog has no part with that id".to_string()
+    } else {
+        let names = names
+            .iter()
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("did you mean {names}?")
+    };
+    if json {
+        print_json(&json!({
+            "ok": false,
+            "error": { "code": "unknown_part", "message": message, "hint": hint }
+        }));
+    } else {
+        eprintln!("error[unknown_part]: {message}\n  hint: {hint}");
+    }
+    ExitCode::from(FAILED)
+}
+
+fn search_parts(words: &[String], json: bool) -> ExitCode {
+    let found = orbe_scene::search(&words.join(" "));
+    if json {
+        print_json(&json!({ "ok": true, "data": { "parts": found } }));
+    } else {
+        print!("{}", part::search_text(&found));
+    }
+    ExitCode::SUCCESS
 }
 
 fn add(dir: Option<&Path>, request: Request, json: bool) -> ExitCode {
