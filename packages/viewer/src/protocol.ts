@@ -141,7 +141,8 @@ export interface SceneMessage {
   readonly type: "scene";
   readonly session: string;
   readonly scene_hash: string;
-  readonly circuit_hash: string;
+  /** Absent on a part drawn on its own, which has no circuit. */
+  readonly circuit_hash?: string;
   readonly instances: readonly Instance[];
   readonly parts: Readonly<Record<string, PartData>>;
   readonly wires: readonly Wire[];
