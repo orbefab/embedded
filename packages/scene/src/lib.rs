@@ -38,7 +38,7 @@ pub use circuit::{
 pub use diagnostic::{Code, Diagnostic, Lint};
 pub use files::Files;
 pub use model::{STOP_PS, is_id};
-pub use project::{BLOCK, REGISTRY, folder_hash, part_file};
+pub use project::{BLOCK, REGISTRY, folder_hash, is_registry_name, part_file};
 pub use summary::{
     BlockCard, Buy, Card, CardFile, Choice, Doc, Folder, Literal, Missing, NotSimulated, On, Param,
     Pin, Rating, Real, block_card, card, cards, catalog_cards, ids_with_segment, missing_fields,

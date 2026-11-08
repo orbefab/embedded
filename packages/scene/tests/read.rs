@@ -345,7 +345,7 @@ fn a_part_id_locked_from_two_registries_is_an_error() {
         .lines()
         .find(|l| l.starts_with("led-5mm "))
         .unwrap()
-        .replace(orbe_scene::REGISTRY, "https://example.com/r/{name}.json");
+        .replace(orbe_scene::REGISTRY, "@acme");
     text.push_str(&line);
     text.push('\n');
     fs::write(&path, &text).unwrap();
@@ -369,12 +369,7 @@ fn a_part_id_locked_from_two_registries_is_an_error() {
 #[test]
 fn a_lock_registry_outside_the_catalog_is_an_error() {
     let project = project("nano-button");
-    rewrite_lock(
-        project.path(),
-        "led-5mm",
-        "0.1.0",
-        "https://example.com/parts",
-    );
+    rewrite_lock(project.path(), "led-5mm", "0.1.0", "@acme");
     let found = scene_errors(project.path());
     assert_eq!(found.len(), 1, "{found:#?}");
     assert_eq!(found[0].code, orbe_scene::Code::PartModified);
@@ -384,7 +379,7 @@ fn a_lock_registry_outside_the_catalog_is_an_error() {
         (lock_row(project.path(), "led-5mm"), 1)
     );
     assert!(
-        found[0].message.contains("https://example.com/parts"),
+        found[0].message.contains("from `@acme`"),
         "{}",
         found[0].message
     );
@@ -394,6 +389,33 @@ fn a_lock_registry_outside_the_catalog_is_an_error() {
         found[0].message
     );
     assert!(!found[0].hint.is_empty());
+}
+
+#[test]
+fn a_lock_names_a_registry_by_name_not_by_url() {
+    let project = project("nano-button");
+    let lock = fs::read_to_string(project.path().join("parts.lock")).unwrap();
+    assert!(
+        lock.lines()
+            .all(|line| line.split(' ').nth(2) == Some(orbe_scene::REGISTRY)),
+        "{lock}"
+    );
+    assert_eq!(orbe_scene::REGISTRY, "@orbefab");
+    rewrite_lock(
+        project.path(),
+        "led-5mm",
+        "0.1.0",
+        "https://example.com/r/{name}.json",
+    );
+    let found = scene_errors(project.path());
+    assert_eq!(found[0].code, orbe_scene::Code::Syntax, "{found:#?}");
+    assert_eq!(found[0].file, "parts.lock");
+    assert!(
+        found[0].message.contains("@<registry>"),
+        "{}",
+        found[0].message
+    );
+    assert!(found[0].hint.contains("--relock"), "{}", found[0].hint);
 }
 
 #[test]

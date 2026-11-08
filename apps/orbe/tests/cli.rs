@@ -565,7 +565,7 @@ fn add_refuses_a_part_id_locked_twice_and_relock_keeps_one() {
         .lines()
         .find(|line| line.starts_with("led-5mm "))
         .unwrap()
-        .replace(orbe_scene::REGISTRY, "https://example.com/r/{name}.json");
+        .replace(orbe_scene::REGISTRY, "@acme");
     text.push_str(&format!("{line}\n"));
     fs::write(&lock, &text).unwrap();
     let (output, stdout, _) = orbe_in(project.path(), &["add", "led-5mm"]);

@@ -197,7 +197,7 @@ fn read_lock(root: &Path) -> Result<Lock, RunError> {
             }
             Err(()) => {
                 error = Some(format!(
-                    "a parts.lock line is `<id> <version> <registry> sha256:<hash>`\n{line}"
+                    "a parts.lock line is `<id> <version> @<registry> sha256:<hash>`\n{line}"
                 ));
                 break;
             }
