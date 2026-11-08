@@ -21,15 +21,6 @@ fn parts_lock_matches_the_catalog() {
     let committed = fixture("nano-button").join("parts.lock");
     if std::env::var_os("ORBE_BLESS").is_some() {
         fs::write(&committed, &lines).unwrap();
-        let mut dirs: Vec<_> = fs::read_dir(root.join("examples"))
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .filter(|dir| dir.join("scene.jsonc").is_file())
-            .collect();
-        dirs.sort();
-        for dir in dirs {
-            refresh_example(&dir);
-        }
     }
     assert_eq!(
         fs::read_to_string(committed).unwrap(),
@@ -1304,85 +1295,6 @@ fn choice_params_on_one_way_are_checked_in_time_that_follows_their_arms() {
     }
 }
 
-fn show(found: &[orbe_scene::Diagnostic]) -> String {
-    found
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn id_is_one_component(id: &str) -> bool {
-    let mut parts = std::path::Path::new(id).components();
-    matches!(
-        (parts.next(), parts.next()),
-        (Some(std::path::Component::Normal(name)), None) if name.to_str() == Some(id)
-    )
-}
-
-fn refresh_example(dir: &std::path::Path) {
-    let scene = dir.join("scene.jsonc");
-    let ids = orbe_scene::catalog_ids(&Files::disk(), &scene).unwrap_or_else(|found| {
-        panic!(
-            "{} did not name its parts:\n{}",
-            scene.display(),
-            show(&found)
-        )
-    });
-    if !ids.is_empty() {
-        let reply = orbe_scene::add_parts(
-            Some(dir),
-            &orbe_scene::Request {
-                ids,
-                overwrite: true,
-                diff: false,
-                relock: false,
-            },
-        )
-        .unwrap_or_else(|error| panic!("{error}"));
-        if !matches!(reply, orbe_scene::Reply::Add(_)) {
-            panic!("{}", reply.text());
-        }
-    }
-    orbe_scene::read(&Files::disk(), &scene).unwrap_or_else(|found| {
-        panic!(
-            "{} did not read after refresh:\n{}",
-            scene.display(),
-            show(&found)
-        )
-    });
-    let ids = orbe_scene::catalog_ids(&Files::disk(), &scene)
-        .unwrap_or_else(|found| panic!("{}:\n{}", scene.display(), show(&found)));
-    let keep: std::collections::BTreeSet<&str> = ids.iter().map(String::as_str).collect();
-    let path = dir.join("parts.lock");
-    let text = fs::read_to_string(&path).unwrap_or_default();
-    let mut kept = Vec::new();
-    for line in text.lines() {
-        let Some(id) = line.split_whitespace().next() else {
-            continue;
-        };
-        if keep.contains(id) {
-            kept.push(line);
-            continue;
-        }
-        assert!(
-            id_is_one_component(id),
-            "parts.lock id `{id}` is not a single folder name"
-        );
-        let folder = dir.join("parts").join(id);
-        if folder.is_dir() {
-            fs::remove_dir_all(&folder).unwrap();
-        }
-    }
-    let mut out = kept.join("\n");
-    if !out.is_empty() {
-        out.push('\n');
-    }
-    if out != text {
-        fs::write(&path, out).unwrap();
-    }
-}
-
 #[test]
 fn a_comment_is_not_a_catalog_id_and_a_split_type_is() {
     let project = project("nano-button");
@@ -1405,51 +1317,4 @@ fn a_comment_is_not_a_catalog_id_and_a_split_type_is() {
     );
     assert!(!ids.iter().any(|id| id == "potentiometer-wh148"), "{ids:?}");
     assert!(!ids.iter().any(|id| id == "diode-1n4007"), "{ids:?}");
-}
-
-#[test]
-fn bless_drops_a_commented_id_and_a_part_the_scene_no_longer_names() {
-    let project = project("nano-button");
-    let scene = project.path().join("scene.jsonc");
-    let text = fs::read_to_string(&scene).unwrap();
-    fs::write(
-        &scene,
-        format!("// \"type\": \"potentiometer-wh148\"\n{text}"),
-    )
-    .unwrap();
-    refresh_example(project.path());
-    let lock = fs::read_to_string(project.path().join("parts.lock")).unwrap();
-    assert!(!lock.contains("potentiometer-wh148"), "{lock}");
-    assert!(!project.path().join("parts/potentiometer-wh148").exists());
-    assert!(lock.contains("led-5mm "));
-    assert!(project.path().join("parts/led-5mm").is_dir());
-    assert!(lock.contains("resistor-0603 "));
-
-    let mut text = fs::read_to_string(&scene).unwrap();
-    for (from, to) in [
-        (
-            "\"led1\": { \"type\": \"led-5mm\", \"color\": \"red\" },",
-            "",
-        ),
-        ("[\"r1.b\", \"led1.anode\"],", "[\"r1.b\", \"nano.GND\"],"),
-        ("[\"led1.cathode\", \"nano.GND\"],", ""),
-    ] {
-        assert!(text.contains(from), "{from}");
-        text = text.replacen(from, to, 1);
-    }
-    fs::write(&scene, text).unwrap();
-    refresh_example(project.path());
-    let lock = fs::read_to_string(project.path().join("parts.lock")).unwrap();
-    assert!(!lock.contains("led-5mm"), "{lock}");
-    assert!(!project.path().join("parts/led-5mm").exists());
-    assert!(lock.contains("resistor-axial "));
-    assert!(project.path().join("parts/nano-board").is_dir());
-    let again = lock.clone();
-    refresh_example(project.path());
-    assert_eq!(
-        fs::read_to_string(project.path().join("parts.lock")).unwrap(),
-        again
-    );
-    assert!(!project.path().join("parts/led-5mm").exists());
-    assert!(!project.path().join("parts/potentiometer-wh148").exists());
 }

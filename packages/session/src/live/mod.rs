@@ -821,7 +821,7 @@ mod tests {
 
     fn stopping_at_50ms() -> Live {
         let scene = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../examples/first-target/scene.jsonc");
+            .join("../../blocks/nano-button-led/scene.jsonc");
         let netlist = orbe_scene::read(&Files::disk(), &scene).unwrap();
         let stop = format!("\"stop_ps\": {}", orbe_scene::STOP_PS);
         assert!(netlist.json.contains(&stop), "{}", netlist.json);

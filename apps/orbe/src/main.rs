@@ -1,5 +1,5 @@
 //! `orbe`, the CLI. `orbe check` type-checks a scene, and `orbe lint` checks it, then warns of
-//! what is likely wrong or unclear. `orbe add` copies catalog parts. `orbe part` prints one
+//! what is likely wrong or unclear. `orbe add` copies catalog parts, or installs a Block. `orbe part` prints one
 //! catalog part, and `orbe search` finds parts.
 //! `orbe test` runs each test file's live commands in a fresh in-process session. The live
 //! commands, such as `orbe open` and `orbe step`, drive a session that a background process
@@ -54,10 +54,11 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Copies catalog parts into `parts/` and writes `parts.lock`.
+    /// Copies catalog parts into `parts/` and writes `parts.lock`, or installs a Block by
+    /// copying its parts first, then writing its scene, firmware and tests.
     #[command(display_order = 3)]
     Add {
-        /// Part ids. A version is `id@0.1.0`.
+        /// Part ids, or one Block id. A part's version is `id@0.1.0`.
         ids: Vec<String>,
         /// The project folder, the one with scene.jsonc. The current folder by default.
         #[arg(short = 'C', value_name = "DIR", allow_hyphen_values = true)]

@@ -1,7 +1,0 @@
-{
-  "format": 1, "part": "diode-sod123", "version": "0.1.0", "title": "Schottky diode, SOD-123", "license": "MIT OR Apache-2.0",
-  "real": { "generic": true, "maker": null, "number": null, "datasheet": null },
-  "pins": { "cathode": [1], "anode": [2] },
-  "wires": [["anode", "cathode"]],
-  "not_simulated": [{ "what": "forward drop", "why": "No Schottky fit yet. A wire stands in, so the drop is 0 V." }],
-}

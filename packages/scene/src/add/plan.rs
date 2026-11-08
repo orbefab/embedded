@@ -233,7 +233,11 @@ fn unknown_specs(catalog: &Catalog, specs: &[Spec]) -> Option<Plan> {
         let mut lines = Vec::new();
         for id in &unknown {
             lines.push(format!("no catalog part named `{id}`"));
-            let suggestion = did_you_mean(id, catalog.ids(), "");
+            let mut names = catalog.ids();
+            for block in super::block::ids() {
+                names.insert(block);
+            }
+            let suggestion = did_you_mean(id, names, "");
             let suggestion = suggestion.trim();
             if !suggestion.is_empty() {
                 hints.push(suggestion.to_string());

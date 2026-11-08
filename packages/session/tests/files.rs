@@ -1,6 +1,6 @@
-//! Each example, read into a set of files in memory, reads, lints and runs its tests as it does
-//! from disk. Paths in memory start from the repo, so a disk path shows the same once the repo's
-//! folder is taken off it.
+//! Each Block, read into a set of files in memory, reads, lints and runs its tests as it does
+//! from disk, and so does each Block installed into a project. Paths in memory start from the
+//! repo, so a disk path shows the same once the repo's folder is taken off it.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,8 +8,7 @@ use std::path::{Path, PathBuf};
 use orbe_session::{Files, test};
 use tempfile::TempDir;
 
-const EXAMPLES: [&str; 2] = ["first-target", "uno-button"];
-const FIRMWARE: &str = "packages/engine/tests/firmware/sketch/button.hex";
+const BLOCKS: [&str; 3] = ["nano-button-led", "uno-button-led", "nano-led-fade"];
 
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -18,12 +17,26 @@ fn repo() -> PathBuf {
         .unwrap()
 }
 
-/// The example's folder and the firmware it names, by their paths from `base`.
-fn memory(base: &Path, example: &str) -> Files {
+/// The Block's folder, by its paths from `base`.
+fn memory(base: &Path, block: &str) -> Files {
     let mut files = Vec::new();
-    walk(base, &base.join("examples").join(example), &mut files);
-    walk(base, &base.join(FIRMWARE), &mut files);
+    walk(base, &base.join("blocks").join(block), &mut files);
     Files::memory(files)
+}
+
+/// The Block installed by `orbe add` into `<base>/blocks/<block>`, so it is no longer a Block.
+fn install(base: &Path, block: &str) -> PathBuf {
+    let dir = base.join("blocks").join(block);
+    fs::create_dir_all(&dir).unwrap();
+    let request = orbe_scene::Request {
+        ids: vec![block.to_string()],
+        overwrite: false,
+        diff: false,
+        relock: false,
+    };
+    let reply = orbe_scene::add_parts(Some(&dir), &request).unwrap();
+    assert_eq!(reply.code(), 0, "{}", reply.text());
+    dir
 }
 
 fn walk(base: &Path, path: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
@@ -37,9 +50,9 @@ fn walk(base: &Path, path: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
     }
 }
 
-/// What the reader and `orbe test` make of one example, as text.
-fn outcome(files: &Files, base: &Path, example: &str) -> Vec<String> {
-    let dir = base.join("examples").join(example);
+/// What the reader and `orbe test` make of one Block, as text.
+fn outcome(files: &Files, base: &Path, block: &str) -> Vec<String> {
+    let dir = base.join("blocks").join(block);
     let scene = dir.join("scene.jsonc");
     let mut out = vec![
         match orbe_scene::read(files, &scene) {
@@ -57,7 +70,7 @@ fn outcome(files: &Files, base: &Path, example: &str) -> Vec<String> {
         },
         format!("{:#?}", orbe_scene::lint(files, &scene)),
     ];
-    let tests = repo().join("examples").join(example).join("tests");
+    let tests = repo().join("blocks").join(block).join("tests");
     for entry in fs::read_dir(&tests).unwrap() {
         let path = entry.unwrap().path();
         let file = dir.join("tests").join(path.file_name().unwrap());
@@ -82,66 +95,75 @@ fn outcome(files: &Files, base: &Path, example: &str) -> Vec<String> {
     out
 }
 
-fn same_both_ways(base: &Path, example: &str) -> Vec<String> {
+fn same_both_ways(base: &Path, block: &str) -> Vec<String> {
     let prefix = format!("{}/", base.display());
-    let disk: Vec<String> = outcome(&Files::disk(), base, example)
+    let disk: Vec<String> = outcome(&Files::disk(), base, block)
         .into_iter()
         .map(|text| text.replace(&prefix, ""))
         .collect();
-    let memory = outcome(&memory(base, example), Path::new(""), example);
-    assert_eq!(disk.len(), memory.len(), "{example}");
+    let memory = outcome(&memory(base, block), Path::new(""), block);
+    assert_eq!(disk.len(), memory.len(), "{block}");
     for (disk, memory) in disk.iter().zip(&memory) {
-        assert_eq!(disk, memory, "{example}");
+        assert_eq!(disk, memory, "{block}");
     }
     disk
 }
 
+fn reads_and_passes(found: &[String], block: &str) {
+    assert!(found[0].starts_with('{'), "{block} reads: {}", found[0]);
+    assert!(found[1].starts_with("Ok("), "{block} lints: {}", found[1]);
+    assert!(found[2].ends_with(".test passed"), "{block}: {found:#?}");
+}
+
 #[test]
-fn each_example_reads_and_runs_the_same_from_memory() {
-    for example in EXAMPLES {
-        let found = same_both_ways(&repo(), example);
-        assert!(found[0].starts_with('{'), "{example} reads: {}", found[0]);
-        assert!(found[1].starts_with("Ok("), "{example} lints: {}", found[1]);
-        assert!(found[2].ends_with(".test passed"), "{example}: {found:#?}");
+fn each_block_reads_and_runs_the_same_from_memory() {
+    for block in BLOCKS {
+        reads_and_passes(&same_both_ways(&repo(), block), block);
+    }
+}
+
+/// An installed Block reads its own copies, and reads and runs as the Block does.
+#[test]
+fn each_installed_block_reads_and_runs_the_same_from_memory() {
+    let tmp = TempDir::new().unwrap();
+    let base = tmp.path().canonicalize().unwrap();
+    for block in BLOCKS {
+        install(&base, block);
+        let found = same_both_ways(&base, block);
+        reads_and_passes(&found, block);
+        let ours = same_both_ways(&repo(), block);
+        let netlist = |found: &[String]| found[0].rsplit_once('\n').unwrap().0.to_string();
+        assert_eq!(
+            netlist(&found),
+            netlist(&ours),
+            "{block}: the installed netlist"
+        );
     }
 }
 
 /// A missing part, edited and extra files in a sealed copy, and no firmware, each found the same
 /// way in memory as on disk.
 #[test]
-fn a_broken_example_finds_the_same_from_memory() {
+fn a_broken_install_finds_the_same_from_memory() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path().canonicalize().unwrap();
-    for example in EXAMPLES {
-        let dir = base.join("examples").join(example);
-        copy(&repo().join("examples").join(example), &dir);
-        fs::remove_dir_all(dir.join("parts/resistor-0603")).ok();
-        fs::remove_dir_all(dir.join("parts/resistor-axial")).ok();
+    for block in BLOCKS {
+        let dir = install(&base, block);
+        fs::remove_dir_all(dir.join("parts/resistor-0603")).unwrap();
+        fs::remove_dir_all(dir.join("parts/resistor-axial")).unwrap();
         let glb = dir.join("parts/led-5mm/led-5mm.glb");
         let mut bytes = fs::read(&glb).unwrap();
         bytes.push(0);
         fs::write(&glb, bytes).unwrap();
-        fs::write(dir.join("parts/tactile-switch-6mm/notes.txt"), "mine").unwrap();
-        let found = same_both_ways(&base, example);
+        fs::write(dir.join("parts/led-5mm/notes.txt"), "mine").unwrap();
+        fs::remove_dir_all(dir.join("firmware")).unwrap();
+        let found = same_both_ways(&base, block);
         for what in ["PartMissing", "PartModified", "FirmwareMissing"] {
             assert!(
                 found[0].contains(what),
-                "{example} finds {what}: {}",
+                "{block} finds {what}: {}",
                 found[0]
             );
-        }
-    }
-}
-
-fn copy(from: &Path, to: &Path) {
-    fs::create_dir_all(to).unwrap();
-    for entry in fs::read_dir(from).unwrap() {
-        let path = entry.unwrap().path();
-        let target = to.join(path.file_name().unwrap());
-        if path.is_dir() {
-            copy(&path, &target);
-        } else {
-            fs::copy(&path, &target).unwrap();
         }
     }
 }
@@ -164,9 +186,8 @@ fn memory_of(root: &Path) -> Files {
 fn extra_files_in_a_sealed_copy_are_named_in_the_same_order() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path().canonicalize().unwrap();
-    let example = "first-target";
-    let dir = base.join("examples").join(example);
-    copy(&repo().join("examples").join(example), &dir);
+    let block = "nano-button-led";
+    let dir = install(&base, block);
     let part = dir.join("parts/led-5mm");
     fs::write(part.join("z-extra.txt"), "z").unwrap();
     fs::write(part.join("a-extra.txt"), "a").unwrap();
@@ -177,10 +198,10 @@ fn extra_files_in_a_sealed_copy_are_named_in_the_same_order() {
         .map(|text| text.replace(&prefix, ""))
         .collect();
     let memory = messages(
-        &memory(&base, example),
-        &Path::new("examples").join(example).join("scene.jsonc"),
+        &memory(&base, block),
+        &Path::new("blocks").join(block).join("scene.jsonc"),
     );
-    assert_eq!(disk, memory, "{example}");
+    assert_eq!(disk, memory, "{block}");
     let message = disk
         .iter()
         .find(|line| line.contains("a-extra.txt"))

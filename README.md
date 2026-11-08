@@ -17,7 +17,7 @@ A hardware simulator for AI agents. You describe a circuit as a scene file, flas
 | [`packages/asset-step`](packages/asset-step/) | Imports each part's 3D model and checks it against the part's pins. |
 | [`packages/cad`](packages/cad/) | Helpers for part models. A part's `model.py` uses build123d and these helpers. |
 | [`parts/`](parts/) | The parts catalog. Each folder is one real part: `part.jsonc`, `model.py` when the model is built here, its 3D model and `asset.json`. |
-| [`examples/`](examples/) | Scenes that run, each with its firmware and tests. |
+| [`blocks/`](blocks/) | Blocks: small circuits that work, each with its scene, firmware and tests. `orbe add <block>` installs one into a project. |
 | [`scripts/`](scripts/) | The checks. `check.sh fast` gates every change and is what CI runs, and `check.sh full` runs every check. `scripts/model.sh` builds a part's model. Run `scripts/bless.sh` after adding or changing a part. |
 | [`skills/orbe`](skills/orbe/SKILL.md) | The stub an agent installs. |
 | [`docs/`](docs/) | Finalized docs: [`decisions.md`](docs/decisions.md), [`viewer.md`](docs/viewer.md), [`asset-step.md`](docs/asset-step.md), [`engine/`](docs/engine/README.md). |
@@ -41,4 +41,6 @@ An `orbe` built without the viewer page still runs every headless command, and `
 
 ## License
 
-The code is under either of the MIT license ([LICENSE-MIT](LICENSE-MIT)) or the Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE)), at your option. A contribution you submit for inclusion is under the same two licenses, with no other terms.
+The code is under MIT OR Apache-2.0, at your option, unless a file says otherwise. The MIT license is [LICENSE-MIT](LICENSE-MIT). The Apache License, Version 2.0 is [LICENSE-APACHE](LICENSE-APACHE). A contribution you submit for inclusion is under the same two licenses, with no other terms.
+
+The Block firmware images in `blocks/*/firmware/` and the engine's test sketch images in `packages/engine/tests/firmware/sketch/` say otherwise. Each image is statically linked to the Arduino AVR core, which is LGPL-2.1-or-later. See `firmware/NOTICE` beside those images.

@@ -7,6 +7,7 @@
 //! keeps a second run out while one is at work.
 
 mod at;
+mod block;
 mod diff;
 mod held;
 mod journal;
@@ -23,6 +24,7 @@ use serde_json::{Value, json};
 use crate::catalog::Catalog;
 use crate::project;
 
+pub use block::BlockReply;
 use held::Hold;
 use plan::Plan;
 #[cfg(test)]
@@ -40,6 +42,7 @@ pub struct Request {
 /// A reply the CLI prints as text or as one JSON envelope.
 pub enum Reply {
     Add(AddReply),
+    Block(BlockReply),
     Diff(DiffReply),
     Relock(RelockReply),
     Refuse(Refusal),
@@ -84,6 +87,9 @@ pub enum AddCode {
     Busy,
     Unreadable,
     NotAProject,
+    SceneExists,
+    FileExists,
+    Symlink,
     LockSyntax,
     Registry,
     UnknownPart,
@@ -99,6 +105,9 @@ impl AddCode {
             AddCode::Busy => "busy",
             AddCode::Unreadable => "unreadable",
             AddCode::NotAProject => "not_a_project",
+            AddCode::SceneExists => "scene_exists",
+            AddCode::FileExists => "file_exists",
+            AddCode::Symlink => "symlink",
             AddCode::LockSyntax => "lock_syntax",
             AddCode::Registry => "registry",
             AddCode::UnknownPart => "unknown_part",
@@ -135,6 +144,7 @@ impl Reply {
     pub fn text(&self) -> String {
         match self {
             Reply::Add(reply) => add_text(reply),
+            Reply::Block(reply) => block::text(reply),
             Reply::Diff(reply) => diff_text(reply),
             Reply::Relock(reply) => relock_text(reply),
             Reply::Refuse(refusal) => refuse_text(refusal),
@@ -144,15 +154,8 @@ impl Reply {
 
     pub fn json(&self) -> Value {
         match self {
-            Reply::Add(reply) => json!({
-                "ok": true,
-                "data": {
-                    "written": versions(&reply.parts, true),
-                    "skipped": versions(&reply.parts, false),
-                    "lock_written": reply.lock_written,
-                    "notes": reply.notes,
-                }
-            }),
+            Reply::Add(reply) => json!({ "ok": true, "data": add_data(reply) }),
+            Reply::Block(reply) => block::json(reply),
             Reply::Diff(reply) => json!({
                 "ok": true,
                 "data": { "diff": reply.files, "notes": reply.notes }
@@ -175,20 +178,31 @@ impl Reply {
     }
 }
 
-/// Copies parts into a project and writes `parts.lock`. A refusal writes nothing. `dir` is the
-/// folder `-C` named, as the user wrote it, so hints can repeat it. With none, the current
-/// folder must look like a project.
+/// Copies parts into a project and writes `parts.lock`, or installs the one Block the request
+/// names. A refusal writes nothing. `dir` is the folder `-C` named, as the user wrote it, so
+/// hints can repeat it. With none, the current folder must look like a project, unless the
+/// request installs a Block, which makes one.
 pub fn run(dir: Option<&Path>, request: &Request) -> Result<Reply, RunError> {
     run_with(dir, request, &mut |_| None)
 }
 
 fn run_with(dir: Option<&Path>, request: &Request, fault: &mut Fault) -> Result<Reply, RunError> {
+    match block::named(request) {
+        Some(Ok(block)) => return block::install(dir, block, fault),
+        Some(Err(message)) => return Ok(Reply::Usage(message)),
+        None => {}
+    }
     if let Some(message) = plan::usage(request) {
         return Ok(Reply::Usage(message));
     }
     if let Some(refusal) = not_a_project(dir, request) {
         return Ok(Reply::Refuse(refusal));
     }
+    run_in(dir, request, fault)
+}
+
+/// Adds the request's parts to the project in `dir`, which need not hold a scene yet.
+fn run_in(dir: Option<&Path>, request: &Request, fault: &mut Fault) -> Result<Reply, RunError> {
     let root = dir.unwrap_or(Path::new("."));
     let add = project::add_command(dir);
     let again = Again::new(dir, request_command(&add, request));
@@ -481,6 +495,10 @@ fn with_notes(reply: Reply, lines: Vec<String>) -> Reply {
             reply.notes.splice(0..0, lines);
             Reply::Add(reply)
         }
+        Reply::Block(mut reply) => {
+            reply.parts.notes.splice(0..0, lines);
+            Reply::Block(reply)
+        }
         Reply::Diff(mut reply) => {
             reply.notes.splice(0..0, lines);
             Reply::Diff(reply)
@@ -542,6 +560,15 @@ fn add_reply(
         lock_written,
         notes,
     }
+}
+
+fn add_data(reply: &AddReply) -> Value {
+    json!({
+        "written": versions(&reply.parts, true),
+        "skipped": versions(&reply.parts, false),
+        "lock_written": reply.lock_written,
+        "notes": reply.notes,
+    })
 }
 
 fn add_text(reply: &AddReply) -> String {

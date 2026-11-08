@@ -1,4 +1,4 @@
-// The first target, examples/first-target/scene.jsonc, written by hand as the scene message
+// The first target, blocks/nano-button-led/scene.jsonc, written by hand as the scene message
 // a session sends for it. Anchors come from each part's anchors file. Everything else is
 // copied from the part files.
 //

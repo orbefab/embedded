@@ -235,7 +235,7 @@ impl Held {
         }
     }
 
-    /// The part models the scene message names, each in the open scene's folder.
+    /// The part models the scene message names, each read from the open scene's folder.
     fn models_from_scene(&mut self) {
         let folder = self.scene.as_ref().and_then(|(_, real)| real.parent());
         let parts = self.live.scene().map(|scene| scene["parts"].clone());
@@ -246,7 +246,7 @@ impl Held {
         };
         for part in parts.values() {
             if let Some(url) = part["model"].as_str() {
-                models.insert(url.to_string(), folder.join(url.trim_start_matches('/')));
+                models.insert(url.to_string(), folder.to_path_buf());
             }
         }
     }

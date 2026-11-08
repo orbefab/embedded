@@ -1,6 +1,0 @@
-{
-  "format": 1, "part": "ams1117-sot223", "version": "0.1.0", "title": "AMS1117 regulator, SOT-223", "license": "MIT OR Apache-2.0",
-  "real": { "maker": "Advanced Monolithic Systems", "number": "AMS1117-5.0", "datasheet": null },
-  "pins": { "GND": [1], "OUT": [2, 4], "IN": [3] },
-  "not_simulated": [{ "what": "regulator", "pins": ["GND", "OUT", "IN"], "why": "No AMS1117 fit yet." }],
-}

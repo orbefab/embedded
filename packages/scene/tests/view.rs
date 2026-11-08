@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 fn first_target() -> Value {
     let scene =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-target/scene.jsonc");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../blocks/nano-button-led/scene.jsonc");
     let netlist =
         orbe_scene::read(&Files::disk(), &scene).unwrap_or_else(|found| panic!("{found:?}"));
     serde_json::to_value(&netlist.view).unwrap()

@@ -28,6 +28,15 @@ pub(crate) fn ids() -> impl Iterator<Item = String> {
         .map(str::to_string)
 }
 
+/// The bytes of `rel` in the catalog's copy of `id`.
+pub(crate) fn file(id: &str, rel: &str) -> Option<&'static [u8]> {
+    let path = format!("{id}/{rel}");
+    FILES
+        .iter()
+        .find(|(name, _)| *name == path)
+        .map(|(_, bytes)| *bytes)
+}
+
 pub(crate) fn find(id: &str) -> Option<Original> {
     let prefix = format!("{id}/");
     let files: Vec<(&'static str, &'static [u8])> = FILES

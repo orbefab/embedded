@@ -1,0 +1,10 @@
+// A Block: a small circuit that works. `orbe add nano-button-led` installs it into a project.
+{
+  "format": 1,
+  "block": "nano-button-led",
+  "title": "Button and LED on a Nano",
+  "summary": "A button on D2 lights a red LED on D13 of an Arduino Nano, and releasing it turns the LED off.",
+  "board": "nano-board",
+  "tags": ["button", "led", "digital input", "nano"],
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",
+}

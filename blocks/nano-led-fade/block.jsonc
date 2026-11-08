@@ -1,0 +1,10 @@
+// A Block: a small circuit that works. `orbe add nano-led-fade` installs it into a project.
+{
+  "format": 1,
+  "block": "nano-led-fade",
+  "title": "LED fade on a Nano",
+  "summary": "An LED on D9 of an Arduino Nano fades up and down by PWM.",
+  "board": "nano-board",
+  "tags": ["led", "pwm", "analog output", "nano"],
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",
+}

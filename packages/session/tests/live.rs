@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use orbe_session::{Code, Command, Data, Files, Live, Ref, Reply};
 
 fn first_target() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-target")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../blocks/nano-button-led")
 }
 
 fn command(line: &str) -> Command {

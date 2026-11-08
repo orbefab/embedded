@@ -1,0 +1,15 @@
+# The LED starts dark. Then PWM on D9 lights it for a short part of each 2 ms period, and as the
+# sketch fades it up, for most of each period.
+open
+step 10ms
+expect @led1 off
+step --until @nano.D9 high --timeout 50ms
+step 1ms
+expect @nano.D9 low
+expect @led1 off
+step 1400ms
+step --until @nano.D9 low --timeout 3ms
+step 1ms
+expect @nano.D9 high
+expect @led1 on
+expect no diagnostics
