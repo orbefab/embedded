@@ -1,24 +1,13 @@
 {
   "part": "socket-strip-1x8",
   "source": {
-    "repo": "https://github.com/orbefab/models",
-    "commit": "0cf558bcf59ff3b0efec8dd1e84054247dd769ae",
-    "inputs": {
-      "glb": {
-        "path": "GLB/parts/socket-strip-1x8.glb",
-        "sha256": "3bec0b88dbe962e44dd78360d988976bd57625ea0dfd237c4a6ca60002e1c854",
-        "bytes": 93912
-      },
-      "anchors": {
-        "path": "GLB/parts/socket-strip-1x8.anchors.json",
-        "sha256": "863a399021d63d2e5d6063fefbd695ea2321768c665f0379efedb98aba1fe2b8",
-        "bytes": 1065
-      }
-    }
+    "script": "model.py",
+    "sha256": "dc12e67ca0b99fe3405c5766e7548f2b5d329d973074da8afce99a0015316535",
+    "bytes": 736
   },
   "files": {
     "socket-strip-1x8.glb": {
-      "sha256": "f678b1a226640fea869eec5044bfd5d748688f2bd49cce0d01c2379e7e390f32",
+      "sha256": "9fa4eec2b69eeb201540a19412704530c5832e248adb1ac647a3cdc077b99032",
       "bytes": 18604
     },
     "socket-strip-1x8.anchors.json": {
@@ -48,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 174,
+      "primitives_in": 17,
       "primitives_out": 17
     }
   }
