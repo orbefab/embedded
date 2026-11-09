@@ -105,6 +105,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "led-9v",
             "ne555-led",
             "nmos-led",
+            "nmos-power-switch",
             "nmos-sweep",
             "npn-blinker",
             "npn-led",

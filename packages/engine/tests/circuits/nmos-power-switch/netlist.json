@@ -1,0 +1,275 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": {
+    "transient": {
+      "stop_ps": 5000000000,
+      "max_step_ps": 500000000,
+      "grid_ps": 10000000
+    }
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "vcc",
+    "pin",
+    "g",
+    "d1",
+    "d2"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vcc",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 5.0,
+        "unit": "V",
+        "source": "user"
+      }
+    },
+    {
+      "name": "vpin",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "pin",
+        "n": "gnd"
+      },
+      "voltage": {
+        "kind": "steps",
+        "initial": {
+          "value": 0.0,
+          "unit": "V",
+          "source": "user"
+        },
+        "events": [
+          {
+            "t_ps": 1000000000,
+            "level": {
+              "value": 5.0,
+              "unit": "V",
+              "source": "user"
+            }
+          },
+          {
+            "t_ps": 3000000000,
+            "level": {
+              "value": 0.0,
+              "unit": "V",
+              "source": "user"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "rg",
+      "kind": "resistor",
+      "pins": {
+        "a": "pin",
+        "b": "g"
+      },
+      "resistance": {
+        "value": 100.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "rl1",
+      "kind": "resistor",
+      "pins": {
+        "a": "vcc",
+        "b": "d1"
+      },
+      "resistance": {
+        "value": 10.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "rl2",
+      "kind": "resistor",
+      "pins": {
+        "a": "vcc",
+        "b": "d2"
+      },
+      "resistance": {
+        "value": 1.0,
+        "unit": "ohm",
+        "source": "user"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "m1",
+      "kind": "nmos",
+      "pins": {
+        "drain": "d1",
+        "gate": "g",
+        "source": "gnd"
+      },
+      "transconductance_parameter": {
+        "value": 1.259,
+        "unit": "A/V^2",
+        "source": {
+          "datasheet": {
+            "doc": "Vishay IRF520, Document Number 91017, S21-0819-Rev. C, 02-Aug-2021",
+            "at": "Fig. 3, Typical Transfer Characteristics, 25 C, VDS = 50 V, through (5.0 V, 2.24 A) and (6.0 V, 5.37 A), divided by 1 + 0.0014 * 50 for LAMBDA and rounded to 1.259 A/V^2. The model gives 1.17 A at a 4.5 V gate, where Fig. 3 reads 1.12 A, and 31 A at 10 V, where it reads about 20 A",
+            "basis": "typical"
+          }
+        }
+      },
+      "threshold_voltage": {
+        "value": 3.18,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "Vishay IRF520, Document Number 91017, S21-0819-Rev. C, 02-Aug-2021",
+            "at": "Fig. 3, Typical Transfer Characteristics, 25 C, VDS = 50 V, through (5.0 V, 2.24 A) and (6.0 V, 5.37 A), rounded to 3.18 V, inside Static VGS(th) of 2.0 V to 4.0 V at ID = 250 uA",
+            "basis": "typical"
+          }
+        }
+      },
+      "channel_length_modulation": {
+        "value": 0.0014,
+        "unit": "1/V",
+        "source": {
+          "datasheet": {
+            "doc": "Vishay IRF520, Document Number 91017, S21-0819-Rev. C, 02-Aug-2021",
+            "at": "Fig. 1, Typical Output Characteristics, TC = 25 C, the VGS = 5.0 V line through (3.0 V, 2.04 A) and (45 V, 2.16 A), rounded to 0.0014 1/V",
+            "basis": "typical"
+          }
+        }
+      },
+      "gate_source_capacitance": {
+        "value": 3.26e-10,
+        "unit": "F",
+        "source": {
+          "datasheet": {
+            "doc": "Vishay IRF520, Document Number 91017, S21-0819-Rev. C, 02-Aug-2021",
+            "at": "Dynamic, Ciss typical minus Crss typical, 360 pF minus 34 pF, VGS = 0 V, VDS = 25 V, f = 1.0 MHz",
+            "basis": "typical"
+          }
+        }
+      },
+      "gate_drain_capacitance": {
+        "value": 3.4e-11,
+        "unit": "F",
+        "source": {
+          "datasheet": {
+            "doc": "Vishay IRF520, Document Number 91017, S21-0819-Rev. C, 02-Aug-2021",
+            "at": "Dynamic, Crss typical, VGS = 0 V, VDS = 25 V, f = 1.0 MHz",
+            "basis": "typical"
+          }
+        }
+      },
+      "drain_source_capacitance": {
+        "value": 1.16e-10,
+        "unit": "F",
+        "source": {
+          "datasheet": {
+            "doc": "Vishay IRF520, Document Number 91017, S21-0819-Rev. C, 02-Aug-2021",
+            "at": "Dynamic, Coss typical minus Crss typical, 150 pF minus 34 pF, VGS = 0 V, VDS = 25 V, f = 1.0 MHz",
+            "basis": "typical"
+          }
+        }
+      },
+      "ratings": {
+        "current": null,
+        "power": null
+      }
+    },
+    {
+      "name": "m2",
+      "kind": "nmos",
+      "pins": {
+        "drain": "d2",
+        "gate": "g",
+        "source": "gnd"
+      },
+      "transconductance_parameter": {
+        "value": 1.259,
+        "unit": "A/V^2",
+        "source": {
+          "datasheet": {
+            "doc": "Vishay IRF520, Document Number 91017, S21-0819-Rev. C, 02-Aug-2021",
+            "at": "Fig. 3, Typical Transfer Characteristics, 25 C, VDS = 50 V, through (5.0 V, 2.24 A) and (6.0 V, 5.37 A), divided by 1 + 0.0014 * 50 for LAMBDA and rounded to 1.259 A/V^2. The model gives 1.17 A at a 4.5 V gate, where Fig. 3 reads 1.12 A, and 31 A at 10 V, where it reads about 20 A",
+            "basis": "typical"
+          }
+        }
+      },
+      "threshold_voltage": {
+        "value": 3.18,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "Vishay IRF520, Document Number 91017, S21-0819-Rev. C, 02-Aug-2021",
+            "at": "Fig. 3, Typical Transfer Characteristics, 25 C, VDS = 50 V, through (5.0 V, 2.24 A) and (6.0 V, 5.37 A), rounded to 3.18 V, inside Static VGS(th) of 2.0 V to 4.0 V at ID = 250 uA",
+            "basis": "typical"
+          }
+        }
+      },
+      "channel_length_modulation": {
+        "value": 0.0014,
+        "unit": "1/V",
+        "source": {
+          "datasheet": {
+            "doc": "Vishay IRF520, Document Number 91017, S21-0819-Rev. C, 02-Aug-2021",
+            "at": "Fig. 1, Typical Output Characteristics, TC = 25 C, the VGS = 5.0 V line through (3.0 V, 2.04 A) and (45 V, 2.16 A), rounded to 0.0014 1/V",
+            "basis": "typical"
+          }
+        }
+      },
+      "gate_source_capacitance": {
+        "value": 3.26e-10,
+        "unit": "F",
+        "source": {
+          "datasheet": {
+            "doc": "Vishay IRF520, Document Number 91017, S21-0819-Rev. C, 02-Aug-2021",
+            "at": "Dynamic, Ciss typical minus Crss typical, 360 pF minus 34 pF, VGS = 0 V, VDS = 25 V, f = 1.0 MHz",
+            "basis": "typical"
+          }
+        }
+      },
+      "gate_drain_capacitance": {
+        "value": 3.4e-11,
+        "unit": "F",
+        "source": {
+          "datasheet": {
+            "doc": "Vishay IRF520, Document Number 91017, S21-0819-Rev. C, 02-Aug-2021",
+            "at": "Dynamic, Crss typical, VGS = 0 V, VDS = 25 V, f = 1.0 MHz",
+            "basis": "typical"
+          }
+        }
+      },
+      "drain_source_capacitance": {
+        "value": 1.16e-10,
+        "unit": "F",
+        "source": {
+          "datasheet": {
+            "doc": "Vishay IRF520, Document Number 91017, S21-0819-Rev. C, 02-Aug-2021",
+            "at": "Dynamic, Coss typical minus Crss typical, 150 pF minus 34 pF, VGS = 0 V, VDS = 25 V, f = 1.0 MHz",
+            "basis": "typical"
+          }
+        }
+      },
+      "ratings": {
+        "current": null,
+        "power": null
+      }
+    }
+  ]
+}
