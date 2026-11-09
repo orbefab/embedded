@@ -11,11 +11,13 @@ Lengths below are (u, w): u from the jack edge toward the notched edge, w
 from the power and analog edge toward the digital edge. RobotDyn's UNO R3
 CH340G dimension diagram (14 Jun 2017) gives the board, 68.58 x 53.34, the
 four Φ3.2 holes, and the header rows: NC at u = 27.95, A0 to A5 from
-50.81 to 63.51, SCL at 18.76, a 4.10 gap between D8 and D7, D0 at 63.50,
-both rows 2.55 in from the long edges. It does not dimension the notched
-edge, the holes' w, or the second row of holes the clone carries inside
-each header; those are measured off the diagram and off the clone's
-photo (`# measured`).
+50.81 to 63.51, SCL at 18.76, a 4.10 gap between D8 and D7, D0 at 63.50.
+The diagram prints the header rows 2.55 from the long edges. This model
+places them 2.54 mm in, one pitch. It dimensions the w of the two holes at
+the notched end, 7.63 and 35.57, and `MOUNTING` uses those. It does not
+dimension the w of the two jack-end holes or the u of the two notched-end
+holes, the notched edge, or the second row of holes inside each header.
+Those are measured (`# measured`).
 """
 
 import sys
@@ -46,7 +48,8 @@ OUTLINE = (  # measured: the notched edge's steps and corners
     (0.0, UNO_W),
 )
 MOUNTING_D = 3.2
-MOUNTING = ((13.97, 2.54), (15.24, 50.8), (66.04, 7.63), (66.04, 35.57))  # w of each measured
+# (u, w). The diagram dimensions the jack-end u (13.97, 15.24) and the notched-end w (7.63, 35.57).
+MOUNTING = ((13.97, 2.54), (15.24, 50.8), (66.04, 7.63), (66.04, 35.57))
 
 INNER_DIGITAL_W = 48.3  # measured
 INNER_POWER_W = 6.0  # measured

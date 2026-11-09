@@ -1,6 +1,18 @@
 {
-  "format": 1, "part": "crystal-hc49us", "version": "0.1.0", "title": "Crystal, 16 MHz, HC-49/US", "license": "MIT OR Apache-2.0",
-  "real": { "maker": "ECS", "number": "ECS-160-20-4X", "datasheet": null },
+  "format": 1, "part": "crystal-hc49us", "version": "0.1.0", "title": "Crystal, HC-49/US", "license": "MIT OR Apache-2.0",
+  "real": { "generic": true, "maker": null, "number": null, "datasheet": null },
   "pins": { "1": [1], "2": [2] },
+  // The engine has no crystal. `frequency` is recorded on this stand-in, and each board marks
+  // the part not simulated, so the stand-in never reaches a netlist.
+  "params": {
+    "frequency": { "unit": "Hz", "required": true, "min_exclusive": 0, "sets": "/frequency" },
+  },
+  "model": {
+    "kind": "resistor",
+    "pins": { "a": "1", "b": "2" },
+    "resistance": { "value": 1e12, "unit": "ohm", "source": { "closed_form": { "note": "A stand-in, so frequency has a field to write. The crystal is not simulated." } } },
+    "ratings": { "power": null },
+    "frequency": { "value": 1, "unit": "Hz", "source": { "closed_form": { "note": "The board sets the frequency." } } },
+  },
   "not_simulated": [{ "what": "crystal", "pins": ["1", "2"], "why": "The engine's chips take their clock as a value." }],
 }

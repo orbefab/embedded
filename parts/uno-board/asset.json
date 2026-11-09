@@ -2,8 +2,8 @@
   "part": "uno-board",
   "source": {
     "script": "model.py",
-    "sha256": "f70ea6391dceb8fedc1f8488ffe44886b6dd8833914cc866d81a00f9097b9174",
-    "bytes": 4098
+    "sha256": "07efdfd6596418c751cddcb83978a27e9cb7d97bbee0ed9f113638d3b370e068",
+    "bytes": 4341
   },
   "files": {
     "uno-board.glb": {
@@ -37,10 +37,10 @@
       "primitives_out": 2
     },
     "composition": {
-      "children": 46,
+      "children": 50,
       "lowest_node": "pcb",
       "z_mm": 0,
-      "draw_calls": 265
+      "draw_calls": 273
     }
   }
 }

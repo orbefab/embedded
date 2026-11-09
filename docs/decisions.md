@@ -98,8 +98,8 @@ Type checking, linting and runtime diagnostics are separate.
 - Its 16 MHz clock is a three-terminal ceramic resonator, until a clone's photo says otherwise.
 
 ## The uno board (Nov 8 2026)
-- It is drawn as the common CH340G clone, with the ATmega328P in a DIP-28 socket, from public clone sources only: RobotDyn's UNO R3 CH340G schematic and dimension diagram, the CH340 clone schematic on mischianti.org, WCH's CH340 datasheet, and photos of the clone. Arduino's board and schematic files are not used, so every file of the part is MIT OR Apache-2.0.
-- Its bare board is its own `model.py`: the outline, the holes, and a printed pin legend with no names or logos. It holds 21 leaf parts, 46 children in all.
+- It is drawn as the common CH340G clone, with the ATmega328P in a DIP-28 socket. Its files transcribe connectivity, values by role and measured positions, and they copy no drawing, text or logo. The only licensed source is the CC0 photo of the clone. Arduino's board and schematic files are not used, so every file of the part is MIT OR Apache-2.0.
+- Its bare board is its own `model.py`: the outline, the holes, and a printed pin legend with no names or logos. It holds 21 leaf parts, 50 children in all.
 - It runs from USB through F1 and Q1, as the Nano does. 3V3 comes from its LP2985, on the engine's fit. VIN, the barrel jack and the 5 V regulator are not simulated, and a wire to VIN is an error that says so.
 - The engine has no P-channel MOSFET, so Q1 is a resistor at its on resistance, always on. R15 and R1, which bias its gate from VIN, are drawn but not simulated.
 - D13 drives the L LED through 1k, as on RobotDyn's board. D13 with its pull-up on then reads low, about 1.45 V. A clone that buffers D13 through an LM358 reads high there.

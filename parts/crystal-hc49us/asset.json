@@ -2,8 +2,8 @@
   "part": "crystal-hc49us",
   "source": {
     "script": "model.py",
-    "sha256": "e79a5add0c5077492f4dfb2532a56ebe6db446d510c62c4627db4519d5ad3990",
-    "bytes": 2068
+    "sha256": "d116be7163f492a72af9a845866becdabbdcc0ea08d67e8aa73cb79860022be2",
+    "bytes": 2052
   },
   "files": {
     "crystal-hc49us.glb": {
