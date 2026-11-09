@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Orbefab. SPDX-License-Identifier: MIT OR Apache-2.0
-"""HC-49/US low profile crystal. The board sets the frequency.
+"""HC-49/US low profile crystal, any frequency.
 
 Part frame: the base's underside (the seating plane) on z = 0, the can
 standing up +Z, centred on the origin, its length along X. Lead 1 is the

@@ -64,9 +64,9 @@
     "r_dm": { "type": "resistor-0603", "resistance": "22", "not_simulated": "It is in the USB D- line, which is not simulated." }, // R9
     "r_dp": { "type": "resistor-0603", "resistance": "22", "not_simulated": "It is in the USB D+ line, which is not simulated." }, // R10
     // X2, the CH340G's 12 MHz crystal, in the same HC-49/US can as the 328P's.
+    // 12 MHz: the WCH CH340 datasheet asks for a 12 MHz crystal between XI and XO.
     "crystal_usb": {
       "type": "crystal-hc49us",
-      "frequency": { "value": 12000000, "unit": "Hz", "source": { "datasheet": { "doc": "WCH CH340 datasheet", "at": "A crystal of 12 MHz between XI and XO", "basis": "nominal" } } },
       "not_simulated": "The engine's chips take their clock as a value.",
     },
     // R12 is across X2. The schematic prints no value. 1M is the role value mischianti prints across its 16 MHz crystal.
@@ -99,9 +99,9 @@
     "r_rx": { "type": "resistor-0603", "resistance": "1k", "not_simulated": "It feeds the RX LED, which is not simulated." },
     "mcu_socket": { "type": "dip-socket-28" },
     "mcu": { "type": "atmega328p-dip28", "firmware": { "param": "firmware" } }, // U4, the board's firmware reaches the 328P
+    // 16 MHz: the can by the 328P in the clone's top photo is marked 16.000.
     "crystal": {
       "type": "crystal-hc49us",
-      "frequency": { "value": 16000000, "unit": "Hz", "source": { "datasheet": { "doc": "CH340G clone, top photo", "at": "The can by the 328P is marked 16.000", "basis": "nominal" } } },
       "not_simulated": "The engine's chips take their clock as a value.",
     }, // Y1
     // The engine's chips take their clock as a value, so the crystal is not simulated. Its load
