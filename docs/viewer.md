@@ -72,7 +72,7 @@ Then open `/?block=nano-button-led`. The dev server and `vite preview` serve `.s
 
 The page loads the package at run time from its URL, so the page's build holds no WebAssembly, and neither does the page built into `orbe`.
 
-`scripts/check-block.sh` builds the page, the package and the registry into those folders, then drives `?block=nano-button-led` in Chromium through `apps/viewer/e2e/block.mjs`: paused at t = 0, play, hold `@btn1` until `@led1` glows, release until it goes dark, with no refused command and no page error. It also checks that a Block the registry lacks ends the session with why. It needs what [wasm.md](wasm.md#build) needs, and finds Chromium as `check-viewer-e2e.sh` does. `--renders <dir>` saves screenshots.
+`scripts/check-block.sh` builds the page, the package and the registry into those folders, then drives `?block=nano-button-led` in headless Chromium with `@playwright/test` (`apps/viewer/e2e/block.spec.ts`): paused at t = 0, play, hold `@btn1` until `@led1` glows, release until it goes dark, with no refused command and no page error. It also checks that a Block the registry lacks ends the session with why. It needs what [wasm.md](wasm.md#build) needs, and finds Chromium as `check-viewer-e2e.sh` does. `--renders <dir>` saves screenshots.
 
 ## The messages
 
