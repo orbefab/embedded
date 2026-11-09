@@ -93,3 +93,28 @@ fn a_net_reached_only_through_an_inductor_has_a_dc_path() {
         .collect();
     assert_eq!(codes, [("net.floating", "#net.top".to_string())]);
 }
+
+/// `inductor-open-end` is an 0805 coil, 10 uH and 0.5 ohm, from a 5 V rail with no capacitor
+/// into a net that draws nothing, the way an Uno's L2 feeds AVCC. A switch loads the rail with
+/// an LED from 1 ms to 3 ms. ngspice-42 accepts 76 timepoints on its reference deck run with
+/// the print step and the step cap both at the stop, and 106 at reltol=1e-9. The engine is held
+/// to 1.5 times the 76.
+#[test]
+fn a_coil_into_an_open_net_steps_about_as_often_as_ngspice() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../tests/circuits/inductor-open-end/netlist.json");
+    let bytes = std::fs::read(&path).unwrap();
+    let netlist = orbe_engine_core::netlist::parse(&bytes).unwrap();
+    let (results, stats) = orbe_circuit::simulate_stats(&netlist);
+    assert!(
+        results.diagnostics().is_empty(),
+        "{:?}",
+        results.diagnostics()
+    );
+    let bound = 76 * 3 / 2;
+    assert!(
+        stats.landings <= bound,
+        "{} steps, bound {bound}",
+        stats.landings
+    );
+}

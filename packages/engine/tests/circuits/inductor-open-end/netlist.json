@@ -1,0 +1,61 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": { "transient": { "stop_ps": 5000000000, "max_step_ps": 5000000000, "grid_ps": 10000000 } },
+  "ground": "gnd",
+  "nets": ["gnd", "vbus", "v5", "avcc", "sw", "vled"],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": { "p": "vbus", "n": "gnd" },
+      "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+    },
+    {
+      "name": "rs",
+      "kind": "resistor",
+      "pins": { "a": "vbus", "b": "v5" },
+      "resistance": { "value": 0.21, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
+    },
+    {
+      "name": "l1",
+      "kind": "inductor",
+      "pins": { "a": "v5", "b": "avcc" },
+      "inductance": { "value": 1e-5, "unit": "H", "source": "user" },
+      "series_resistance": { "value": 0.5, "unit": "ohm", "source": "user" }
+    },
+    {
+      "name": "s1",
+      "kind": "switch",
+      "pins": { "a": "v5", "b": "sw" },
+      "on_resistance": { "value": 0.1, "unit": "ohm", "source": "user" },
+      "off_resistance": { "value": 1000000000.0, "unit": "ohm", "source": "user" },
+      "initial": "open",
+      "events": [
+        { "t_ps": 1000000000, "state": "closed" },
+        { "t_ps": 3000000000, "state": "open" }
+      ],
+      "bounce": null
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": { "a": "sw", "b": "vled" },
+      "resistance": { "value": 150.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
+    },
+    {
+      "name": "led1",
+      "kind": "led",
+      "pins": { "anode": "vled", "cathode": "gnd" },
+      "saturation_current": { "value": 6.711e-10, "unit": "A", "source": "user" },
+      "emission_coefficient": { "value": 4.427, "unit": "1", "source": "user" },
+      "series_resistance": { "value": 2.115, "unit": "ohm", "source": "user" },
+      "ratings": {
+        "current": { "value": 0.03, "unit": "A", "source": "user" },
+        "power": { "value": 0.075, "unit": "W", "source": "user" }
+      }
+    }
+  ]
+}
