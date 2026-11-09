@@ -45,6 +45,8 @@ pub struct Card {
     pub on: Option<On>,
     #[serde(skip_serializing_if = "skip_false")]
     pub pressable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub holes: Option<Holes>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -206,6 +208,15 @@ pub struct Buy {
     pub seller: String,
     pub url: String,
     pub checked: String,
+}
+
+/// A board's holes, such as a breadboard's: how deep each is, and the holes each strip joins.
+/// Each hole is also one of the card's pins.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Holes {
+    pub depth: f64,
+    pub strips: Vec<Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -607,6 +618,7 @@ fn build<'a>(
         buy: buy_links(tree),
         on: on(tree),
         pressable: tree.get("controls").and_then(|c| c.get("press")).is_some(),
+        holes: holes(tree),
     })
 }
 
@@ -985,6 +997,28 @@ fn uses(tree: &Node) -> BTreeMap<String, String> {
         .iter()
         .filter_map(|prop| Some((prop.key.clone(), prop.value.str()?.to_string())))
         .collect()
+}
+
+fn holes(tree: &Node) -> Option<Holes> {
+    let holes = tree.get("holes")?;
+    let strips = holes
+        .get("strips")?
+        .items()?
+        .iter()
+        .map(|strip| {
+            strip
+                .items()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(Node::str)
+                .map(str::to_string)
+                .collect()
+        })
+        .collect();
+    Some(Holes {
+        depth: holes.get("depth")?.number()?,
+        strips,
+    })
 }
 
 fn on(tree: &Node) -> Option<On> {

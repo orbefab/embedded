@@ -23,8 +23,18 @@ pub fn text(card: &Card) -> String {
     }
     lines.push(String::new());
     lines.push("pins".into());
-    push_or_none(&mut lines, card.pins.is_empty());
-    for pin in &card.pins {
+    let hole = |name: &str| {
+        card.holes
+            .as_ref()
+            .is_some_and(|holes| holes.strips.iter().flatten().any(|h| h == name))
+    };
+    let pins: Vec<_> = card.pins.iter().filter(|pin| !hole(&pin.name)).collect();
+    if pins.is_empty() && card.holes.is_some() {
+        lines.push("  only its holes".into());
+    } else {
+        push_or_none(&mut lines, pins.is_empty());
+    }
+    for pin in pins {
         let detail = if let Some(leads) = &pin.leads {
             leads
                 .iter()
@@ -40,6 +50,25 @@ pub fn text(card: &Card) -> String {
             lines.push(format!("  {}", pin.name));
         } else {
             lines.push(format!("  {}  {detail}", pin.name));
+        }
+    }
+    if let Some(holes) = &card.holes {
+        lines.push(String::new());
+        lines.push(format!(
+            "holes  {} mm deep, each a pin with one lead; a strip joins its holes",
+            holes.depth
+        ));
+        let mut sizes: Vec<usize> = holes.strips.iter().map(Vec::len).collect();
+        sizes.sort_unstable();
+        sizes.dedup();
+        for size in sizes {
+            let strips: Vec<String> = holes
+                .strips
+                .iter()
+                .filter(|strip| strip.len() == size)
+                .filter_map(|strip| Some(format!("{} to {}", strip.first()?, strip.last()?)))
+                .collect();
+            lines.push(format!("  strips of {size}  {}", strips.join(", ")));
         }
     }
     lines.push(String::new());
