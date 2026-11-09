@@ -146,9 +146,23 @@ Param values:
 
 ## Breadboards
 
-`breadboard-400` (30 columns) and `breadboard-830` (63 columns) are parts, and every hole is one of their pins. A hole in the middle is named by its row and column, as `bb.c12`: rows `a` to `e` on one side of the centre channel, `f` to `j` on the other. A strip joins the five holes of a column on one side, so `bb.a12` to `bb.e12` are one net. The rails are `W` (-) and `X` (+) beside row a, and `Y` (+) and `Z` (-) beside row j. A rail hole takes the number of the column it sits beside, as `bb.X20`, and each rail joins its whole length. Rail holes come in groups of five, so a few numbers have none, such as `W6`. `orbe part breadboard-400` lists every strip.
+`breadboard-400` (30 columns) and `breadboard-830` (63 columns) are parts, and every hole is one of their pins. A hole in the middle is named by its row and column, as `bb.c12`: rows `a` to `e` on one side of the centre channel, `f` to `j` on the other. A strip joins the five holes of a column on one side, so `bb.a12` to `bb.e12` are one net. Each side has two rails, and each rail joins its whole length. Beside row a, the outer rail `W` is + and the inner rail `X` is -. Beside row j, the inner rail `Y` is + and the outer rail `Z` is -. A rail hole takes the number of the column it sits beside, as `bb.X20`. Rail holes come in groups of five with a gap at every sixth column, so some numbers have no hole, such as `W6` on the 400. `orbe part` prints the holes a board has, then each strip, `;` between strips. A rail lists its groups:
 
-Give the board an `at`. Then plug each part in with `on`, one of its pins and the hole that pin's leg goes into, and turn it about Z with `rotate` in quarter turns. Its other legs land where its shape puts them, each in its own hole, and each joins that hole's strip. A resistor's legs are 4 columns apart and an LED's 1, along the row at no turn. Wire the rest with jumpers between holes, and give a jumper `{ "color": "#d12b2b" }` to draw it red. The worked example on a breadboard, where the Nano straddles the channel over columns 1 to 15:
+```console
+$ orbe part breadboard-400
+...
+holes  8 mm deep, each a pin with one lead; a strip joins its holes
+  rows a to j at columns 1 to 30; rows W to Z at columns 1 to 5, 7 to 11, 13 to 17, 19 to 23, 25 to 29
+...
+  strips of 25  W1 to W5, W7 to W11, W13 to W17, W19 to W23, W25 to W29; X1 to X5, X7 to X11, X13 to X17, X19 to X23, X25 to X29; Y1 to Y5, Y7 to Y11, Y13 to Y17, Y19 to Y23, Y25 to Y29; Z1 to Z5, Z7 to Z11, Z13 to Z17, Z19 to Z23, Z25 to Z29
+...
+```
+
+Give the board an `at`. Then plug each part in with `on`, one of its pins and the hole that pin's leg goes into, and turn it about Z with `rotate` in quarter turns. Its other legs land where its shape puts them, each in its own hole, and each joins that hole's strip. A resistor's legs are 4 columns apart and an LED's 1, along the row at no turn. The part sits on the board's top. A leg longer than a hole is deep, 8 mm, stands the part up on its legs: an LED's 27.4 mm legs hold its body 19.4 mm above the board.
+
+A pin on two or more legs of one part goes in by its lowest lead. `orbe part` lists each pin's leads: a switch's `a` is on leads 1 and 2, so `"a": "bb.f22"` puts lead 1 in `f22`, and an `atmega328p-dip28`'s `GND` is on 8 and 22, so lead 8 goes in. Naming the hole another of its legs would land in moves the whole part: with `"a": "bb.e22"`, lead 1 goes in `e22`, lead 2 lands in `b22`, and the switch no longer crosses the channel. A label on legs of two parts, as the Nano's `GND` on two header pins, names no one hole, and `on` refuses it. Name a pin on one leg instead, as `D13`.
+
+Wire the rest with jumpers between holes, and give a jumper `{ "color": "#d12b2b" }` to draw it red. The worked example on a breadboard, where the Nano straddles the channel over columns 1 to 15:
 
 ```jsonc breadboard.jsonc
 {
@@ -164,23 +178,23 @@ Give the board an `at`. Then plug each part in with `on`, one of its pins and th
   "layout": {
     "bb": { "at": [0, 0, 0] },
     "nano": { "on": { "D13": "bb.d1" } }, // D2 lands in j11, 5V in a12, GND in a14
-    "btn1": { "on": { "a": "bb.f22" }, "rotate": [0, 0, 90] }, // a lands in f22 and e22, b in f20 and e20
-    "r2": { "on": { "a": "bb.a22" }, "rotate": [0, 0, -90] }, // b lands in W22, the - rail
+    "btn1": { "on": { "a": "bb.f22" }, "rotate": [0, 0, 90] }, // a's lead 1 in f22, its lead 2 in e22; b in f20 and e20
+    "r2": { "on": { "a": "bb.b22" }, "rotate": [0, 0, -90] }, // b lands in X22, the - rail
     "r1": { "on": { "a": "bb.d25" } }, // b lands in d29
     "led1": { "on": { "anode": "bb.c29" } }, // cathode lands in c30
   },
   "wires": [
-    ["bb.a12", "bb.X11"], // 5V to the + rail
-    ["bb.a14", "bb.W14"], // GND to the - rail
-    ["bb.a20", "bb.X20"], // btn1.b to 5V
+    ["bb.a12", "bb.W11"], // 5V to the + rail
+    ["bb.a14", "bb.X14"], // GND to the - rail
+    ["bb.a20", "bb.W20"], // btn1.b to 5V
     ["bb.j11", "bb.j22"], // D2 to btn1.a
     ["bb.c1", "bb.c25"], // D13 to r1.a
-    ["bb.a30", "bb.W29"], // led1.cathode to GND
+    ["bb.a30", "bb.X29"], // led1.cathode to GND
   ],
 }
 ```
 
-It is the same circuit as `scene.jsonc`, so it runs the same. Read a hole as a pin, as `orbe get @bb.a12`. `snapshot` lists no holes, and shows a board's pins that reach another part, as with wires. A leg that lands in the channel, off the board, between holes or in a hole another leg holds is an error that names the leg and the hole:
+It is the same circuit as `scene.jsonc`, so it runs the same. Read a hole as a pin, as `orbe get @bb.a12`. `snapshot` lists no holes, and shows a board's pins that reach another part, as with wires. A leg that lands in the channel, off the board, between holes or in a hole another leg holds is an error that names the leg and the hole. Its hint is a placement orbe tried that seats every leg with no strip joining two of the part's pins: a quarter turn from the same hole, else a hole within 10.16 mm and a turn, else it says no quarter turn seats the part there.
 
 ```console
 $ orbe add breadboard-400
@@ -189,7 +203,7 @@ $ orbe check breadboard.jsonc
 breadboard.jsonc: ok, 18 engine parts, 31 nets, ground nano__GND
 ```
 
-`orbe lint` warns `scene.shorted` when two pins of one part sit in one strip, such as a resistor turned along a column. A wire may still end on a pin off the board, such as an Uno's header pin.
+`orbe lint` warns `scene.shorted` when two pins of one part sit in one strip, such as a resistor turned along a column, and its hint is found the same way. A wire may still end on a pin off the board, such as an Uno's header pin.
 
 ## Parts
 
