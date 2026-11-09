@@ -108,9 +108,11 @@ full() {
   )
   packages/engine/scripts/wasi-check.sh
   local wasm=.scratch/wasm/full
-  scripts/check-wasm.sh "$wasm"
-  scripts/check-speed.sh "$wasm/pkg" "$wasm/registry"
-  rm -rf "$wasm"
+  (
+    trap 'rm -rf "$wasm"' EXIT
+    scripts/check-wasm.sh "$wasm"
+    scripts/check-speed.sh "$wasm/pkg" "$wasm/registry"
+  )
 }
 
 [[ $# -eq 1 ]] || usage
