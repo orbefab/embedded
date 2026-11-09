@@ -251,7 +251,8 @@ A test needs no background process, so it runs the same in CI. Each file's sessi
 | `scene.unconnected` | Nothing is wired to a part, or a part with at most 3 nets, such as a resistor, LED, transistor or pot, has a net with no wire. Wire it, or leave it open when the circuit means it, as a pot used as a variable resistor. A board runs its chip from its own supply, so a board alone, such as one blinking its L LED, gets no warning. |
 | `net.floating` | A net has no DC path to ground. Fix it when a part reads that net. |
 | `scene.ground_unnamed` | The ground net is named after a pin. Name it in `nets`, as `"GND": "nano.GND"`. |
-| `scene.unplaced` | Parts have no `layout` position, so the 3D page places them in a row for drawing only. One warning names them all. Give a part a position when its place matters. |
+| `scene.unplaced` | Parts have no `layout` position, so the 3D page places them in a row for drawing only. One warning names them all. A part plugged in with `on` has a position. Give a part a position when its place matters. |
+| `scene.shorted` | Two pins of one part sit in one breadboard strip, so the strip joins them, such as a resistor turned along a column. Turn the part a quarter turn, as the hint shows, or plug it in elsewhere. |
 | `scene.rotation` | A `rotate` angle is outside -180 to 180 degrees. Write the same turn as the hint shows. |
 
 ## Output and exit codes

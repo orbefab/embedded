@@ -523,3 +523,52 @@ fn a_resistor_beside_an_led_limits_nothing_and_one_in_series_on_either_side_does
         run.stdout
     );
 }
+
+/// A resistor plugged in along a column has both legs in one strip, which shorts it. Across the
+/// strips it does not. The breadboard's hundreds of empty holes warn of nothing either way.
+#[test]
+fn two_pins_of_a_part_in_one_breadboard_strip_warn_shorted() {
+    for (rotate, shorted) in [("90", true), ("0", false)] {
+        let scene = format!(
+            r#"{{
+  "format": 1,
+  "parts": {{
+    "bb": {{ "type": "breadboard-830" }},
+    "nano": {{ "type": "nano-board", "firmware": "build/button.ino.hex" }},
+    "r1": {{ "type": "resistor-axial", "resistance": "220" }},
+  }},
+  "nets": {{ "GND": "nano.GND" }},
+  "layout": {{
+    "bb": {{ "at": [0, 0, 0] }},
+    "nano": {{ "on": {{ "D13": "bb.d1" }} }},
+    "r1": {{ "on": {{ "a": "bb.a30" }}, "rotate": [0, 0, {rotate}] }},
+  }},
+  "wires": [["bb.c1", "bb.e30"], ["bb.e34", "bb.c14"], ["bb.b30", "bb.j40"], ["bb.a34", "bb.j41"]],
+}}
+"#
+        );
+        let dir = project(&scene);
+        let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+        assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+        let codes: Vec<String> = warned(&run.stdout).into_iter().map(|(_, c)| c).collect();
+        let want: &[&str] = if shorted {
+            &["net.floating", "scene.shorted"]
+        } else {
+            &["net.floating"]
+        };
+        assert_eq!(codes, want, "rotate {rotate}: {}", run.stdout);
+        if shorted {
+            assert!(
+                run.stdout.contains(
+                    "warning[scene.shorted]: `r1.a` and `r1.b` sit in one strip, bb.a30 to bb.e30, so the strip shorts them"
+                ) && run.stdout.contains("\"rotate\": [0, 0, 180]"),
+                "{}",
+                run.stdout
+            );
+            assert_eq!(
+                lines_warned(&run, "scene.shorted"),
+                [line_of(&scene, "\"r1\":")]
+            );
+        }
+    }
+}

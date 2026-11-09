@@ -25,6 +25,8 @@ const DOWN: f64 = -0.5;
 /// A part the scene plugs in, where it sits, and the hole under each leg.
 pub(super) struct Seated {
     pub(super) placement: Placement,
+    /// The turn about Z on the board, in degrees, as the scene wrote it.
+    pub(super) turn: f64,
     pub(super) contacts: Vec<Contact>,
 }
 
@@ -36,6 +38,10 @@ pub(super) struct Contact {
     pub(super) pin_key: usize,
     /// The leg's own pin as a scene ref, such as `nano.j1.1`.
     pub(super) leaf: String,
+    /// The pin as the plugged part names it, such as `nano.D1`.
+    pub(super) shown: String,
+    /// The strip the hole sits in, by its index in the board's `holes.strips`.
+    pub(super) strip: Option<usize>,
 }
 
 struct Hole {
@@ -330,6 +336,12 @@ impl Circuit<'_> {
         let count = legs.len() as f64;
         shift = [shift[0] + off[0] / count, shift[1] + off[1] / count];
         let mut contacts = Vec::new();
+        let mut strips: BTreeMap<&str, usize> = BTreeMap::new();
+        for (index, strip) in holes.strips.iter().enumerate() {
+            for hole in strip {
+                strips.insert(hole, index);
+            }
+        }
         for leg in &legs {
             let at = place(leg, shift);
             let (hole, distance) = nearest(at);
@@ -367,6 +379,8 @@ impl Circuit<'_> {
                     hole_key: hole.key,
                     pin_key: leg.pin_key,
                     leaf: leg.leaf.clone(),
+                    shown: leg.shown.clone(),
+                    strip: strips.get(hole.name.as_str()).copied(),
                 },
             ));
         }
@@ -384,6 +398,7 @@ impl Circuit<'_> {
                 at,
                 rotate: [0.0, 0.0, round(half_turns(board_at.rotate[2] + plug.turn))],
             },
+            turn: plug.turn,
             contacts: contacts
                 .into_iter()
                 .map(|(key, who, contact)| {
