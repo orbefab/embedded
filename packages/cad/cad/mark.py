@@ -37,8 +37,7 @@ def _refuse_font_fallback(report: Message_Report) -> None:
         raise RuntimeError("\n".join(lines))
 
 
-def text(x, y, z, s, size, rotation=0.0, bold=True, thickness=PRINT_T):
-    """Text centred on (x, y), standing `thickness` up from z."""
+def _sketch(s, size, rotation, bold):
     path = _SANS[bold]
     if not path.is_file():
         raise FileNotFoundError(f"bundled font missing: {path}")
@@ -52,4 +51,18 @@ def text(x, y, z, s, size, rotation=0.0, bold=True, thickness=PRINT_T):
             rotation=rotation,
         )
     _refuse_font_fallback(report)
-    return bd.Pos(x, y, z) * bd.extrude(sketch.sketch, amount=thickness)
+    return sketch.sketch
+
+
+def text(x, y, z, s, size, rotation=0.0, bold=True, thickness=PRINT_T):
+    """Text centred on (x, y), standing `thickness` up from z."""
+    return bd.Pos(x, y, z) * bd.extrude(_sketch(s, size, rotation, bold), amount=thickness)
+
+
+def print_face(x, y, z, s, size, rotation=0.0, bold=True):
+    """Text centred on (x, y), flat on z and facing +Z.
+
+    It has no walls and no underside, so a legend of many letters writes about
+    a fifth of the bytes the same letters extruded would.
+    """
+    return bd.Pos(x, y, z) * _sketch(s, size, rotation, bold)
