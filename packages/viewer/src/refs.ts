@@ -1,6 +1,6 @@
 // Refs as the CLI writes them, worked out from the scene message alone.
 
-import type { InstanceBase, PartData, Ref, SceneMessage } from "./protocol";
+import type { InstanceBase, PartData, Ref, SceneMessage, Vec3 } from "./protocol";
 
 /** An instance at every depth, with its path of role names from the scene's top. */
 export interface Placed {
@@ -75,4 +75,26 @@ export function leadRef(scene: SceneMessage, at: LeadAt): Ref | undefined {
     name = label;
   }
   return refOf([...path, name]);
+}
+
+/** Half the 2.54 mm pitch: a point further than this from every hole is over none. */
+const HOLE_REACH_MM = 1.27;
+
+/** A board's hole under `at`, a point in the board's part frame, and the holes its strip joins.
+ * A point counts from the hole's mouth down into the hole. */
+export function holeAt(part: PartData, at: Vec3): { readonly pin: string; readonly strip: readonly string[] } | undefined {
+  if (part.strips === undefined) return undefined;
+  let best: { lead: number; distance: number } | undefined;
+  for (const anchor of part.anchors) {
+    if (anchor.kind !== "socket" || at[2] > anchor.at[2] + 0.1) continue;
+    const distance = Math.hypot(anchor.at[0] - at[0], anchor.at[1] - at[1]);
+    if (distance <= HOLE_REACH_MM && (best === undefined || distance < best.distance)) {
+      best = { lead: anchor.lead, distance };
+    }
+  }
+  if (best === undefined) return undefined;
+  const lead = best.lead;
+  const pin = Object.entries(part.leads).find(([, leads]) => leads.includes(lead))?.[0];
+  if (pin === undefined) return undefined;
+  return { pin, strip: part.strips.find((strip) => strip.includes(pin)) ?? [pin] };
 }

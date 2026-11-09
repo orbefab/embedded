@@ -67,6 +67,7 @@ function HoverLabel({ hover }: { hover: HoverStore }) {
       }}
     >
       <div>{hovered.ref}</div>
+      {hovered.strip === undefined ? null : <div style={{ color: "#c9ced6" }}>{hovered.strip}</div>}
       {hovered.why === undefined ? null : <div style={{ color: "#c9ced6" }}>not simulated: {hovered.why}</div>}
       {hovered.error === undefined ? null : <div style={{ color: "#ff8a80" }}>error: {hovered.error}</div>}
     </div>

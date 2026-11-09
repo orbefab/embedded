@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { Child, PartData, SceneMessage } from "./protocol";
-import { leadRef, leadsOf } from "./refs";
+import { holeAt, leadRef, leadsOf } from "./refs";
 
 function part(fields: Partial<PartData>): PartData {
   return {
@@ -75,5 +75,32 @@ describe("leadRef", () => {
   test("names a lead no label reaches by its own pin", () => {
     expect(leadRef(scene, { path: ["nano", "r_l"], lead: 1 })).toBe("@nano.r_l.a");
     expect(leadRef(scene, { path: ["btn1"], lead: 4 })).toBe("@btn1.b");
+  });
+});
+
+describe("holeAt", () => {
+  const board = part({
+    anchors: [
+      { lead: 1, node: null, also: [], at: [0, 0, 8.5], axis: [0, 0, 1], kind: "socket" },
+      { lead: 2, node: null, also: [], at: [2.54, 0, 8.5], axis: [0, 0, 1], kind: "socket" },
+      { lead: 3, node: null, also: [], at: [0, 2.54, 8.5], axis: [0, 0, 1], kind: "socket" },
+    ],
+    leads: { a1: [1], a2: [2], b1: [3] },
+    strips: [["a1", "b1"]],
+  });
+
+  test("finds the hole nearest the point, and the strip it sits in", () => {
+    expect(holeAt(board, [0.3, 0.2, 8.5])).toEqual({ pin: "a1", strip: ["a1", "b1"] });
+    expect(holeAt(board, [0.1, 2.3, 5])).toEqual({ pin: "b1", strip: ["a1", "b1"] });
+  });
+
+  test("a hole in no strip is a strip of its own", () => {
+    expect(holeAt(board, [2.4, 0.1, 8.5])).toEqual({ pin: "a2", strip: ["a2"] });
+  });
+
+  test("a point between holes, above the board or on a part with no strips is over none", () => {
+    expect(holeAt(board, [1.27, 1.27, 8.5])).toBeUndefined();
+    expect(holeAt(board, [0, 0, 12])).toBeUndefined();
+    expect(holeAt(part({ anchors: board.anchors, leads: board.leads }), [0, 0, 8.5])).toBeUndefined();
   });
 });

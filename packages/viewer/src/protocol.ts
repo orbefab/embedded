@@ -49,8 +49,9 @@ export interface Child extends InstanceBase {
 /** One lead of a part's body model, copied from `<id>.anchors.json`. */
 export interface Anchor {
   readonly lead: number;
-  /** The GLB node of the lead. A pad's node is merged away and no longer in the GLB. */
-  readonly node: string;
+  /** The GLB node of the lead. A pad's node is merged away and no longer in the GLB. A socket
+   * cut into the body, such as a breadboard's hole, has none. */
+  readonly node: string | null;
   /** Other GLB nodes that belong to the lead, such as a header pin's housing. */
   readonly also: readonly string[];
   /** The lead's tip. */
@@ -109,11 +110,15 @@ export interface PartData {
   /** For each choice param, the `tint` of each choice that has one. */
   readonly tints: Readonly<Record<string, Readonly<Record<string, string>>>>;
   readonly not_simulated?: readonly NotSimulated[];
+  /** A board's strips, each the hole pins one clip joins, such as `["a1", "b1", "c1", "d1",
+   * "e1"]`. Absent on a part with no holes. */
+  readonly strips?: readonly (readonly string[])[];
 }
 
 /** A pin pair. Each end is a pin ref from the scene's top, without the `@`, such as
  * `nano.D2`. A jumper inside a part is listed here too, with its ends prefixed by the path to
- * that part. Only `jumper` is drawn. */
+ * that part. Only `jumper` is drawn. A part plugged into a breadboard has a `contact` from each
+ * leg's pin to its hole, such as `led1.anode` to `bb.f20`. */
 export interface Wire {
   readonly ends: readonly [string, string];
   readonly kind: "jumper" | "trace" | "contact";

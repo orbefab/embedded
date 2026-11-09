@@ -7,6 +7,8 @@ export interface Hovered {
   readonly why: string | undefined;
   /** Why the instance is not drawn as its part data says. */
   readonly error: string | undefined;
+  /** A breadboard hole's strip, such as `strip bb.a20 to bb.e20`. */
+  readonly strip?: string;
   readonly object: Object3D;
   /** The pointer, in client pixels. */
   readonly x: number;
