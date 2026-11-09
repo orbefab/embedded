@@ -66,7 +66,7 @@ The path starts from the scene's folder. After each change to the sketch, compil
 
 ## The simulated Nano and Uno
 
-<!-- boards -->
+<!-- boards nano-board uno-board -->
 - `millis()`, `delay()` and the timers run on simulated time, so `delay(1000)` takes `step 1s`.
 - D0 to D13 and A0 to A5 take `INPUT`, `INPUT_PULLUP` and `OUTPUT`.
 - An input that nothing drives keeps its last level here. On a real board it floats. Give each button a pull-down resistor, as the core example does, or use `INPUT_PULLUP` and wire the button to GND.

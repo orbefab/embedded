@@ -247,7 +247,22 @@
     }
   ],
   "ratings": [],
-  "notSimulated": [],
+  "notSimulated": [
+    {
+      "what": "3V3",
+      "why": "It is the CH340G's 3.3 V output. The engine has no USB-serial chip, so the pin supplies nothing.",
+      "pins": [
+        "3V3"
+      ]
+    },
+    {
+      "what": "VIN",
+      "why": "It feeds the AMS1117, which has no model yet. The board runs from USB.",
+      "pins": [
+        "VIN"
+      ]
+    }
+  ],
   "docs": [
     {
       "name": "Arduino Nano A000005 datasheet",

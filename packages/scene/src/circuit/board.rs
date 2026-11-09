@@ -1,10 +1,12 @@
 //! A catalog board as the circuit reader sees it.
 
+use std::path::Path;
+
 use crate::diagnostic::Findings;
 use crate::files::Files;
 use crate::model::ParamKind;
 use crate::params::{self, Arg};
-use crate::project::{self, BLOCK, Owner};
+use crate::project::{self, BLOCK};
 use crate::summary::card;
 use crate::syntax::Node;
 
@@ -46,50 +48,79 @@ pub struct BoardFacts {
     pub leds: Vec<BoardLed>,
 }
 
-/// The facts of catalog board `id`, from the same read a scene of that board gets.
-pub fn board_facts(id: &str) -> BoardFacts {
+/// Files of a Block whose scene holds one catalog part `id`. The scene file is `scene.jsonc`.
+pub fn one_part(id: &str) -> Files {
     let name = id.replace('-', "_");
     let block = format!(
         r#"{{ "format": 1, "block": "{id}", "version": "0.0.0", "title": "{id}", "board": "{id}", "license": "MIT" }}"#
     );
     let scene = format!(r#"{{ "format": 1, "parts": {{ "{name}": {{ "type": "{id}" }} }} }}"#);
-    let files = Files::memory([
+    Files::memory([
         (BLOCK, block.into_bytes()),
         ("scene.jsonc", scene.into_bytes()),
-    ]);
+    ])
+}
+
+/// The facts of catalog board `id`, from the same read a scene of that board gets.
+/// The error is a board that does not read, or one that has no direct `atmega328p` child
+/// with a clock.
+pub fn board_facts(id: &str) -> Result<BoardFacts, String> {
+    let files = one_part(id);
     let mut findings = Findings::default();
-    let project = project::load(&files, std::path::Path::new("scene.jsonc"), &mut findings)
-        .unwrap_or_else(|_| panic!("{id} did not load"));
+    let project = match project::load(&files, Path::new("scene.jsonc"), &mut findings) {
+        Ok(project) if findings.is_empty() => project,
+        Ok(project) => return Err(named(id, reported(findings, &project.sources))),
+        Err(sources) => return Err(named(id, reported(findings, &sources))),
+    };
     let mut out = Findings::default();
-    let mut circuit = Circuit::new(&project, &mut out);
-    circuit.instantiate(ROOT, Owner::Scene);
-    circuit.make_pins();
-    circuit.join_inside();
-    circuit.plug();
-    circuit.check_scene_wires(&project.scene);
+    let mut circuit = super::read_far(&project, &mut out);
     circuit.facts()
 }
 
+fn named(id: &str, error: String) -> String {
+    if error.contains(id) {
+        error
+    } else {
+        format!("`{id}`: {error}")
+    }
+}
+
+fn reported(findings: Findings, sources: &crate::source::Sources) -> String {
+    let text = findings
+        .into_diagnostics(sources)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.is_empty() {
+        "the board did not read".to_string()
+    } else {
+        text
+    }
+}
+
 impl Circuit<'_> {
-    fn facts(&mut self) -> BoardFacts {
+    fn facts(&mut self) -> Result<BoardFacts, String> {
         let mut root_of = vec![0; self.pins.len()];
         for (key, root) in root_of.iter_mut().enumerate() {
             *root = self.find(key);
         }
-        let board = self.insts[ROOT]
-            .children
-            .values()
-            .copied()
-            .next()
-            .expect("the scene names the board");
-        let id = self.part(board).expect("the board resolved").label.clone();
-        let title = card(&id).expect("the board is a catalog part").title;
-        let (chip, clock_hz) = self.chip(board);
+        let Some(board) = self.insts[ROOT].children.values().copied().next() else {
+            return Err("the scene names no board".into());
+        };
+        let Some(part) = self.part(board) else {
+            return Err("the board did not resolve".into());
+        };
+        let id = part.label.clone();
+        let Some(listed) = card(&id) else {
+            return Err(format!("`{id}` is not a catalog part"));
+        };
+        let (chip, clock_hz) = self.chip(board, &id)?;
         let pins = self.board_pins(board, &root_of);
         let (works, gaps, same) = split_pins(&pins);
-        BoardFacts {
+        Ok(BoardFacts {
             id,
-            title,
+            title: listed.title,
             chip,
             clock_hz,
             works,
@@ -97,10 +128,11 @@ impl Circuit<'_> {
             same,
             supplies: self.supplies(&pins, &root_of),
             leds: self.leds(board, &root_of),
-        }
+        })
     }
 
-    fn chip(&self, board: usize) -> (String, f64) {
+    /// The direct `atmega328p` child that names a clock, and that clock.
+    fn chip(&self, board: usize, id: &str) -> Result<(String, f64), String> {
         for &child in self.insts[board].children.values() {
             if self.insts[child].dropped.is_some() {
                 continue;
@@ -108,6 +140,9 @@ impl Circuit<'_> {
             let Some(part) = self.part(child) else {
                 continue;
             };
+            if !part.label.starts_with("atmega328p") {
+                continue;
+            }
             let Some(hz) = part
                 .model
                 .as_ref()
@@ -117,11 +152,15 @@ impl Circuit<'_> {
             else {
                 continue;
             };
-            let listed = card(&part.label).expect("the chip is a catalog part");
+            let Some(listed) = card(&part.label) else {
+                return Err(format!("`{}` is not a catalog part", part.label));
+            };
             let name = listed.real.number.unwrap_or(listed.title);
-            return (name, hz);
+            return Ok((name, hz));
         }
-        panic!("the board's chip names no clock")
+        Err(format!(
+            "`{id}` is not an AVR board with a direct atmega328p child and a clock"
+        ))
     }
 
     fn board_pins(&self, board: usize, root_of: &[usize]) -> Vec<PinRow> {
@@ -226,7 +265,9 @@ impl Circuit<'_> {
             if root_of[key] != root || self.insts[info.inst].dropped.is_some() {
                 continue;
             }
-            let part = self.part(info.inst)?;
+            let Some(part) = self.part(info.inst) else {
+                continue;
+            };
             if kind(part) != Some("resistor") {
                 continue;
             }
@@ -235,11 +276,19 @@ impl Circuit<'_> {
                 "b" => "a",
                 _ => continue,
             };
-            let other_key = self.keys.get(&(info.inst, other.to_string()))?;
-            let pin = self.digital_pin(board, root_of[*other_key], root_of)?;
-            let ohms = ohms(self, info.inst)?;
-            let resistor = self.insts[info.inst].path.last()?.clone();
-            return Some((resistor, ohms, pin));
+            let Some(&other_key) = self.keys.get(&(info.inst, other.to_string())) else {
+                continue;
+            };
+            let Some(pin) = self.digital_pin(board, root_of[other_key], root_of) else {
+                continue;
+            };
+            let Some(ohms) = ohms(self, info.inst) else {
+                continue;
+            };
+            let Some(resistor) = self.insts[info.inst].path.last() else {
+                continue;
+            };
+            return Some((resistor.clone(), ohms, pin));
         }
         None
     }
@@ -311,4 +360,88 @@ fn ohms(circuit: &Circuit, inst: usize) -> Option<f64> {
     params::number(unit, range, &arg.node)
         .ok()
         .and_then(|value| value.get("value")?.as_f64())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    #[test]
+    fn an_earlier_resistor_that_reaches_no_digital_pin_does_not_drop_the_led() {
+        let files = Files::memory([
+            (BLOCK, BLOCK_JSON.as_bytes().to_vec()),
+            ("scene.jsonc", SCENE_JSON.as_bytes().to_vec()),
+        ])
+        .with_catalog([
+            (
+                "resistor-0603/part.jsonc".into(),
+                RESISTOR.as_bytes().to_vec(),
+            ),
+            ("led-0603/part.jsonc".into(), LED.as_bytes().to_vec()),
+            ("two-r-board/part.jsonc".into(), BOARD.as_bytes().to_vec()),
+        ]);
+        let mut findings = Findings::default();
+        let project = match project::load(&files, Path::new("scene.jsonc"), &mut findings) {
+            Ok(project) if findings.is_empty() => project,
+            Ok(project) => panic!("{}", reported(findings, &project.sources)),
+            Err(sources) => panic!("{}", reported(findings, &sources)),
+        };
+        let mut out = Findings::default();
+        let mut circuit = super::super::read_far(&project, &mut out);
+        let board = circuit.insts[super::super::ROOT]
+            .children
+            .values()
+            .copied()
+            .next()
+            .unwrap();
+        let mut root_of = vec![0; circuit.pins.len()];
+        for (key, root) in root_of.iter_mut().enumerate() {
+            *root = circuit.find(key);
+        }
+        let leds = circuit.leds(board, &root_of);
+        assert_eq!(
+            leds.len(),
+            1,
+            "resistors {}",
+            leds.iter()
+                .map(|led| led.resistor.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        assert_eq!(leds[0].name, "led_l");
+        assert_eq!(leds[0].resistor, "r_l");
+        assert_eq!(leds[0].pin, "D13");
+        assert_eq!(leds[0].ohms, 1000.0);
+    }
+
+    const BLOCK_JSON: &str = r#"{ "format": 1, "block": "two-r-board", "version": "0.0.0", "title": "two-r-board", "license": "MIT" }"#;
+    const SCENE_JSON: &str =
+        r#"{ "format": 1, "parts": { "two_r_board": { "type": "two-r-board" } } }"#;
+    const RESISTOR: &str = r#"{
+  "format": 1, "part": "resistor-0603", "version": "0.1.0", "title": "R", "license": "MIT",
+  "pins": { "a": [1], "b": [2] },
+  "params": { "resistance": { "unit": "ohm", "required": true, "min_exclusive": 0, "sets": "/resistance" } },
+  "model": { "kind": "resistor" }
+}"#;
+    const LED: &str = r#"{
+  "format": 1, "part": "led-0603", "version": "0.1.0", "title": "L", "license": "MIT",
+  "pins": { "anode": [1], "cathode": [2] },
+  "model": { "kind": "led" }
+}"#;
+    const BOARD: &str = r#"{
+  "format": 1, "part": "two-r-board", "version": "0.1.0", "title": "Two resistors", "license": "MIT",
+  "parts": {
+    "r_a": { "type": "resistor-0603", "resistance": "1k" },
+    "r_l": { "type": "resistor-0603", "resistance": "1k" },
+    "led_l": { "type": "led-0603" }
+  },
+  "wires": [
+    ["r_a.a", "led_l.anode"],
+    ["r_l.a", "led_l.anode"],
+    ["r_l.b", "led_l.cathode"]
+  ],
+  "pins": { "D13": "r_l.b" }
+}"#;
 }

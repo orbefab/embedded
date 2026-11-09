@@ -221,8 +221,12 @@ fn the_nano_pins_the_skills_call_not_simulated_are_the_ones_the_reader_leaves_ou
     assert_eq!(left_out, BTreeSet::from(["3V3", "A6", "A7", "VIN"]));
     assert!(skill("core").contains("The Nano's 3V3, VIN, A6 and A7 pins"));
     let arduino = skill("arduino");
+    let nano = board_section(&arduino, "nano-board");
     for pin in &left_out {
-        assert!(arduino.contains(&format!("`{pin}`")), "{pin}");
+        assert!(
+            nano.contains(&format!("`{pin}`")),
+            "{pin} is missing from the Nano section"
+        );
     }
 }
 
@@ -237,13 +241,35 @@ fn the_uno_pins_the_skills_call_not_simulated_are_the_ones_the_reader_leaves_out
         .map(|(pin, _)| pin.as_str())
         .collect();
     assert_eq!(left_out, BTreeSet::from(["VIN"]));
-    let (core, arduino) = (skill("core"), skill("arduino"));
+    let core = skill("core");
+    let arduino = skill("arduino");
+    let uno = board_section(&arduino, "uno-board");
     says(&core, "The Uno's VIN pin and barrel jack.");
     says(&core, "The Uno's 3V3 works.");
     for pin in &left_out {
-        assert!(arduino.contains(&format!("`{pin}`")), "{pin}");
+        assert!(
+            uno.contains(&format!("`{pin}`")),
+            "{pin} is missing from the Uno section"
+        );
     }
-    says(&arduino, "`3V3` comes from `reg_3v3`, a 3.3 V regulator.");
+    says(uno, "`3V3` comes from `reg_3v3`, a 3.3 V regulator.");
+    assert!(
+        uno.contains("`D13` drives `led_l` through `r_l`"),
+        "the Uno section omits the L LED"
+    );
+}
+
+fn board_section<'a>(text: &'a str, id: &str) -> &'a str {
+    let head = format!("### `{id}`\n");
+    let start = text
+        .find(&head)
+        .unwrap_or_else(|| panic!("{id} has no section in the arduino skill"));
+    let from = &text[start..];
+    let end = from[head.len()..]
+        .find("\n### ")
+        .map(|at| head.len() + at)
+        .unwrap_or(from.len());
+    &from[..end]
 }
 
 /// The arduino skill says the Uno's L LED pulls D13 to about 1.45 V while D13 is an input

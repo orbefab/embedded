@@ -35,7 +35,7 @@ pub use add::{AddCode, Reply, Request, RunError, run as add_parts};
 pub use catalog::Version;
 pub use circuit::{
     Amount, BoardFacts, BoardLed, EnginePart, Gap, Instance, MapPart, Netlist, PartData, PinWhy,
-    Placement, Reading, RefMap, Supply, View, Wire, board_facts,
+    Placement, Reading, RefMap, Supply, View, Wire, board_facts, one_part,
 };
 pub use diagnostic::{Code, Diagnostic, Lint};
 pub use files::Files;
