@@ -156,7 +156,15 @@ Parse keeps only the fuse settings the model runs, and [netlist.md](netlist.md#a
 
 Every row carries its citation and is exact. There are 107 rows. The interrupt periods and the compare-to-interrupt lags are worked out from each program's loop phase under parameter 2, in `IsrLoop`. A model change that moves a row fails the suite, and a row's expected value moves only when the document reading behind it does.
 
-`cargo run --release -p orbe-avr --example throughput` reports how fast the core runs a timing-set program on the build machine. `scripts/check.sh` does not run it.
+## Throughput
+
+`packages/socs/avr/examples/throughput.rs` times one hex image on the chip. Run `cargo run --release -p orbe-avr --example throughput`.
+
+With no arguments the example loads `blocks/nano-led-fade/firmware/fade.hex`, resolving that path from the crate directory. The default cycle count is 16,000,000, one second at the 16 MHz clock `Cpu::new` uses. Pass a hex path, then a cycle count, to time another image or a longer run. A path you pass is relative to the current directory. The run stops on the instruction that crosses the cycle count, and the printed count is the median run's actual cycles.
+
+Each run is a new `Cpu`. Before `load_image`, the example calls `set_fuses` with the bytes in `parts/atmega328p-tqfp32/part.jsonc`, low `0xFF`, high `0xDF`, and extended `0xFD`. Those are the fuses on the `nano-board` chip. The example drains `take_pin` every `PIN_QUEUE_CAP` cycles, so a long run does not drop pin reports.
+
+The example discards one warm-up, times five runs, and prints the median wall time in milliseconds per simulated second, the minimum, the maximum, and the MHz of the median run. A simulated second is 16,000,000 cycles. The same line gives the pin-edge count of the median run. The process exits non-zero when a run stops before its cycle count or executes an unknown opcode. `scripts/check.sh` does not run the example.
 
 ## Compiled sketches
 
