@@ -15,5 +15,7 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["cad"]
 
-[tool.ruff.lint.isort]
-known-first-party = ["cad"]
+[dependency-groups]
+dev = [
+    "ruff==0.17.4",
+]
