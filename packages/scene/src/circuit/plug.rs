@@ -2,7 +2,7 @@
 //! goes into the hole `on` names, the part turns about Z by `rotate`, and every other leg must
 //! land in a hole too. Each leg's pin then joins its hole, as a `contact` wire would.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
@@ -25,8 +25,8 @@ const DOWN: f64 = -0.5;
 /// A part the scene plugs in, where it sits, and the hole under each leg.
 pub(super) struct Seated {
     pub(super) placement: Placement,
-    /// The turn about Z on the board, in degrees, as the scene wrote it.
-    pub(super) turn: f64,
+    /// When two of the part's pins sit in one strip, the hint that parts them.
+    pub(super) parted: Option<String>,
     pub(super) contacts: Vec<Contact>,
 }
 
@@ -48,6 +48,8 @@ struct Hole {
     name: String,
     key: usize,
     at: [f64; 3],
+    /// The strip the hole sits in, by its index in the board's `holes.strips`.
+    strip: Option<usize>,
 }
 
 struct Leg {
@@ -85,10 +87,10 @@ fn half_turns(angle: f64) -> f64 {
     }
 }
 
-/// The next quarter turn from `turn`, as a layout writes it.
-pub(super) fn quarter(turn: f64) -> f64 {
-    half_turns(turn + 90.0)
-}
+/// The turns about Z a hint tries, as a layout writes them.
+const QUARTERS: [f64; 4] = [0.0, 90.0, 180.0, -90.0];
+/// How far from the named hole a hint looks for another: four pitches.
+const NEARBY_MM: f64 = 10.16;
 
 fn pin_owner(leaf: &str) -> &str {
     leaf.rsplit_once('.').map_or(leaf, |(owner, _)| owner)
@@ -122,6 +124,181 @@ fn flat(a: [f64; 3], b: [f64; 2]) -> f64 {
 fn round(v: f64) -> f64 {
     let r = (v * 1e6).round() / 1e6;
     if r == 0.0 { 0.0 } else { r }
+}
+
+/// Where one leg lands.
+enum Landing<'h> {
+    /// Further than [`REACH_MM`] from every hole, at `at`.
+    Missed {
+        at: [f64; 3],
+        nearest: &'h Hole,
+        distance: f64,
+    },
+    /// Over `hole`, but further than [`FIT_MM`] from its centre once the part centres.
+    Bent {
+        hole: &'h Hole,
+        distance: f64,
+    },
+    In(&'h Hole),
+}
+
+/// A part with one leg in one hole and turned about Z: where it sits on the board, and where each
+/// of its legs lands, in the order of its legs.
+struct Fit<'h> {
+    shift: [f64; 2],
+    landings: Vec<Landing<'h>>,
+}
+
+impl Fit<'_> {
+    /// Whether every leg is in a hole, no two in one.
+    fn lands(&self) -> bool {
+        let mut seen = BTreeSet::new();
+        self.landings
+            .iter()
+            .all(|l| matches!(l, Landing::In(hole) if seen.insert(hole.key)))
+    }
+
+    /// Whether one strip holds legs of two of the part's pins.
+    fn shorts(&self, legs: &[Leg]) -> bool {
+        let mut pins: BTreeMap<usize, &str> = BTreeMap::new();
+        legs.iter()
+            .zip(&self.landings)
+            .any(|(leg, landing)| match landing {
+                Landing::In(Hole {
+                    strip: Some(strip), ..
+                }) => *pins.entry(*strip).or_insert(&leg.shown) != leg.shown,
+                _ => false,
+            })
+    }
+}
+
+fn nearest(holes: &[Hole], at: [f64; 3]) -> (&Hole, f64) {
+    holes
+        .iter()
+        .map(|h| (h, flat(at, [h.at[0], h.at[1]])))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .expect("a board with holes has one")
+}
+
+/// `named`'s leg in `hole` and the part turned `degrees` about Z on the board: each leg lands on
+/// the nearest hole, then the part shifts by the mean of its legs' offsets, as leads flex.
+fn fit<'h>(legs: &[Leg], named: &Leg, hole: &Hole, degrees: f64, holes: &'h [Hole]) -> Fit<'h> {
+    let turned = rotation([0.0, 0.0, degrees]);
+    let place = |leg: &Leg, shift: [f64; 2]| {
+        let t = turn(&turned, leg.tip);
+        [t[0] + shift[0], t[1] + shift[1], t[2]]
+    };
+    let tip = turn(&turned, named.tip);
+    let shift = [hole.at[0] - tip[0], hole.at[1] - tip[1]];
+    let first: Vec<([f64; 3], &Hole, f64)> = legs
+        .iter()
+        .map(|leg| {
+            let at = place(leg, shift);
+            let (hole, distance) = nearest(holes, at);
+            (at, hole, distance)
+        })
+        .collect();
+    if first.iter().any(|&(_, _, distance)| distance > REACH_MM) {
+        let landings = first
+            .into_iter()
+            .map(|(at, nearest, distance)| match distance > REACH_MM {
+                true => Landing::Missed {
+                    at,
+                    nearest,
+                    distance,
+                },
+                false => Landing::In(nearest),
+            })
+            .collect();
+        return Fit { shift, landings };
+    }
+    let count = legs.len() as f64;
+    let shift = [0, 1]
+        .map(|k| shift[k] + first.iter().map(|(at, h, _)| h.at[k] - at[k]).sum::<f64>() / count);
+    let landings = legs
+        .iter()
+        .map(|leg| match nearest(holes, place(leg, shift)) {
+            (hole, distance) if distance > FIT_MM => Landing::Bent { hole, distance },
+            (hole, _) => Landing::In(hole),
+        })
+        .collect();
+    Fit { shift, landings }
+}
+
+/// What a hint offers a part that misses its holes or shorts a strip, found by trying it.
+enum Remedy {
+    /// A quarter turn from the same hole.
+    Turn(f64),
+    /// Another hole near it, and a quarter turn.
+    Elsewhere {
+        hole: String,
+        turn: f64,
+    },
+    Nothing,
+}
+
+/// The first quarter turn from `from` that seats every leg in a free hole with no strip joining
+/// two pins, other than `now`, the turn that failed. Else the nearest hole within [`NEARBY_MM`]
+/// with a quarter turn that does, trying `now` first.
+fn remedy(
+    legs: &[Leg],
+    named: &Leg,
+    from: &Hole,
+    now: f64,
+    holes: &[Hole],
+    taken: &BTreeMap<usize, String>,
+) -> Remedy {
+    let now = half_turns(now);
+    let seats = |hole: &Hole, degrees: f64| {
+        let fit = fit(legs, named, hole, degrees, holes);
+        fit.lands()
+            && !fit.shorts(legs)
+            && fit.landings.iter().all(|l| match l {
+                Landing::In(hole) => !taken.contains_key(&hole.key),
+                _ => false,
+            })
+    };
+    let others = QUARTERS.into_iter().filter(|&t| (t - now).abs() > 1e-9);
+    if let Some(turn) = others.clone().find(|&t| seats(from, t)) {
+        return Remedy::Turn(turn);
+    }
+    let mut near: Vec<(&Hole, f64)> = holes
+        .iter()
+        .filter(|h| h.key != from.key)
+        .map(|h| (h, flat(h.at, [from.at[0], from.at[1]])))
+        .filter(|&(_, d)| d <= NEARBY_MM)
+        .collect();
+    near.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let turns: Vec<f64> = QUARTERS
+        .into_iter()
+        .filter(|&t| (t - now).abs() <= 1e-9)
+        .chain(others)
+        .collect();
+    for (hole, _) in near {
+        if let Some(&turn) = turns.iter().find(|&&t| seats(hole, t)) {
+            return Remedy::Elsewhere {
+                hole: hole.name.clone(),
+                turn,
+            };
+        }
+    }
+    Remedy::Nothing
+}
+
+impl Remedy {
+    fn hint(&self, part: &str, pin: &str, board: &str, from: &str) -> String {
+        match self {
+            Remedy::Turn(turn) => format!(
+                "turn `{part}` with \"rotate\": [0, 0, {turn}], and every leg lands in a hole with no strip joining two of its pins"
+            ),
+            Remedy::Elsewhere { hole, turn } => format!(
+                "no quarter turn seats `{part}` from {board}.{from}; plug it in as \"{part}\": {{ \"on\": {{ \"{pin}\": \"{board}.{hole}\" }}, \"rotate\": [0, 0, {turn}] }}"
+            ),
+            Remedy::Nothing => format!(
+                "no quarter turn seats `{part}` from {board}.{from}, nor from a hole within {NEARBY_MM} mm of it; plug `{part}.{pin}` into a hole where `{part}`'s other legs land in holes too"
+            ),
+        }
+    }
 }
 
 impl Circuit<'_> {
@@ -235,10 +412,9 @@ impl Circuit<'_> {
                 plug.hole.span,
                 format!("`{board_name}` has no hole `{hole_name}`"),
                 format!(
-                    "{hint}a {}'s holes are named by row and column, from {} to {}",
+                    "{hint}a {}'s holes are named row then column: {}",
                     board_part.label,
-                    board_holes.first().map_or("", |h| h.name.as_str()),
-                    board_holes.last().map_or("", |h| h.name.as_str())
+                    crate::holes::holes_text(board_holes.iter().map(|h| h.name.as_str()))
                 ),
             );
             return None;
@@ -293,81 +469,59 @@ impl Circuit<'_> {
             (Some(_), [first, ..], _) => *first,
         };
 
-        let turned = rotation([0.0, 0.0, plug.turn]);
-        let tip0 = turn(&turned, first.tip);
-        let mut shift = [first_hole.at[0] - tip0[0], first_hole.at[1] - tip0[1]];
-        let nearest = |at: [f64; 3]| -> (&Hole, f64) {
-            board_holes
-                .iter()
-                .map(|h| (h, flat(at, [h.at[0], h.at[1]])))
-                .min_by(|a, b| a.1.total_cmp(&b.1))
-                .expect("a board with holes has one")
+        let fit = fit(&legs, first, first_hole, plug.turn, &board_holes);
+        let remedy = || {
+            remedy(&legs, first, first_hole, plug.turn, &board_holes, taken).hint(
+                &plug.name,
+                &plug.pin,
+                board_name,
+                &first_hole.name,
+            )
         };
-        let place = |leg: &Leg, shift: [f64; 2]| {
-            let t = turn(&turned, leg.tip);
-            [t[0] + shift[0], t[1] + shift[1], t[2]]
-        };
-        let mut off = [0.0, 0.0];
-        let mut missed = false;
-        for leg in &legs {
-            let at = place(leg, shift);
-            let (hole, distance) = nearest(at);
-            if distance > REACH_MM {
-                let message = self.missed(&board_holes, at, board_name, hole, distance);
-                self.out.push(
-                    Code::Layout,
-                    plug.span,
-                    format!("{} {message}", leg.named(&legs)),
-                    format!(
-                        "plug `{shown}` into another hole, or turn `{}` with \"rotate\": [0, 0, {}], so every leg lands in a hole",
-                        plug.name,
-                        quarter(plug.turn)
-                    ),
-                );
-                missed = true;
-                continue;
-            }
-            off[0] += hole.at[0] - at[0];
-            off[1] += hole.at[1] - at[1];
+        let mut failed = false;
+        let mut hint = None;
+        for (leg, landing) in legs.iter().zip(&fit.landings) {
+            let message = match *landing {
+                Landing::Missed {
+                    at,
+                    nearest,
+                    distance,
+                } => self.missed(&board_holes, at, board_name, nearest, distance),
+                Landing::Bent { hole, distance } => format!(
+                    "lands {distance:.2} mm from the centre of {board_name}.{}, and a leg bends at most {FIT_MM} mm",
+                    hole.name
+                ),
+                Landing::In(_) => continue,
+            };
+            let hint = hint.get_or_insert_with(remedy).clone();
+            self.out.push(
+                Code::Layout,
+                plug.span,
+                format!("{} {message}", leg.named(&legs)),
+                hint,
+            );
+            failed = true;
         }
-        if missed {
+        if failed {
             return None;
         }
-        let count = legs.len() as f64;
-        shift = [shift[0] + off[0] / count, shift[1] + off[1] / count];
         let mut contacts = Vec::new();
-        let mut strips: BTreeMap<&str, usize> = BTreeMap::new();
-        for (index, strip) in holes.strips.iter().enumerate() {
-            for hole in strip {
-                strips.insert(hole, index);
-            }
-        }
-        for leg in &legs {
-            let at = place(leg, shift);
-            let (hole, distance) = nearest(at);
-            if distance > FIT_MM {
-                self.out.push(
-                    Code::Layout,
-                    plug.span,
-                    format!("{} lands {distance:.2} mm from the centre of {board_name}.{}, and a leg bends at most {FIT_MM} mm", leg.named(&legs), hole.name),
-                    format!("`{}`'s legs do not fit `{board_name}`'s 2.54 mm grid this way; turn it, or plug it in where its legs fit", plug.name),
-                );
-                missed = true;
+        for (leg, landing) in legs.iter().zip(&fit.landings) {
+            let Landing::In(hole) = *landing else {
                 continue;
-            }
+            };
             let who = leg.named(&legs);
             if let Some(other) = taken.get(&hole.key) {
                 self.out.push(
                     Code::Layout,
                     plug.span,
                     format!(
-                        "{} lands in {board_name}.{}, which {other} already holds",
-                        leg.named(&legs),
+                        "{who} lands in {board_name}.{}, which {other} already holds",
                         hole.name
                     ),
                     "a hole holds one leg; plug one of them into another hole".into(),
                 );
-                missed = true;
+                failed = true;
                 continue;
             }
             contacts.push((
@@ -380,13 +534,15 @@ impl Circuit<'_> {
                     pin_key: leg.pin_key,
                     leaf: leg.leaf.clone(),
                     shown: leg.shown.clone(),
-                    strip: strips.get(hole.name.as_str()).copied(),
+                    strip: hole.strip,
                 },
             ));
         }
-        if missed {
+        if failed {
             return None;
         }
+        let parted = fit.shorts(&legs).then(remedy);
+        let shift = fit.shift;
         let deepest = legs.iter().map(|l| -l.tip[2]).fold(0.0, f64::max);
         let rise = (deepest - holes.depth).max(0.0);
         let local = [shift[0], shift[1], first_hole.at[2] + rise];
@@ -398,7 +554,7 @@ impl Circuit<'_> {
                 at,
                 rotate: [0.0, 0.0, round(half_turns(board_at.rotate[2] + plug.turn))],
             },
-            turn: plug.turn,
+            parted,
             contacts: contacts
                 .into_iter()
                 .map(|(key, who, contact)| {
@@ -447,6 +603,12 @@ impl Circuit<'_> {
             .filter(|a| a["kind"] == "socket")
             .filter_map(|a| Some((a["lead"].as_u64()?, three(&a["at"])?)))
             .collect();
+        let strips: BTreeMap<&str, usize> = part
+            .holes
+            .iter()
+            .flat_map(|h| h.strips.iter().enumerate())
+            .flat_map(|(index, strip)| strip.iter().map(move |hole| (hole.as_str(), index)))
+            .collect();
         part.pins
             .iter()
             .filter_map(|pin| {
@@ -455,6 +617,7 @@ impl Circuit<'_> {
                     name: pin.name.clone(),
                     key: self.keys[&(board, pin.name.clone())],
                     at: *at.get(&lead)?,
+                    strip: strips.get(pin.name.as_str()).copied(),
                 })
             })
             .collect()

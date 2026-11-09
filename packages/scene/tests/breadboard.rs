@@ -90,7 +90,7 @@ fn net(netlist: &Netlist, part: &str, pin: &str) -> Option<String> {
 fn a_strip_joins_its_holes_and_a_leg_joins_its_strip() {
     let dir = scene(
         r#""nano": { "on": { "D13": "bb.d1" } }, "r1": { "on": { "a": "bb.a20" } }, "led1": { "on": { "anode": "bb.c24" } }"#,
-        r#"["bb.c1", "bb.e20"], ["bb.a25", "bb.W61"], ["bb.c14", "bb.W3"]"#,
+        r#"["bb.c1", "bb.e20"], ["bb.a25", "bb.X61"], ["bb.c14", "bb.X3"]"#,
     );
     let netlist = read(dir.path());
     let d13 = net(&netlist, "nano", "D13");
@@ -114,7 +114,7 @@ fn a_strip_joins_its_holes_and_a_leg_joins_its_strip() {
     let gnd = net(&netlist, "nano", "GND");
     assert_eq!(net(&netlist, "led1", "cathode"), gnd, "through the rail");
     assert_eq!(
-        net(&netlist, "bb", "W33"),
+        net(&netlist, "bb", "X33"),
         gnd,
         "the rail runs the whole length"
     );
@@ -141,7 +141,7 @@ fn a_strip_joins_its_holes_and_a_leg_joins_its_strip() {
 fn a_part_on_a_breadboard_sits_on_its_holes() {
     let dir = scene(
         r#""nano": { "on": { "D13": "bb.d1" } }, "r1": { "on": { "a": "bb.a20" } }, "led1": { "on": { "anode": "bb.c24" }, "rotate": [0, 0, 180] }"#,
-        r#"["bb.c1", "bb.e20"], ["bb.a25", "bb.W61"], ["bb.c14", "bb.W3"]"#,
+        r#"["bb.c1", "bb.e20"], ["bb.a25", "bb.X61"], ["bb.c14", "bb.X3"]"#,
     );
     let netlist = read(dir.path());
     let close = |got: Placement, at: [f64; 3], rotate: f64| {
@@ -163,4 +163,143 @@ fn a_part_on_a_breadboard_sits_on_its_holes() {
         [10.0 - y, 20.0 + x, 8.5 + 27.4 - 8.0],
         -90.0,
     );
+}
+
+/// A half-size board at the origin with `parts` beside it, laid out and wired as given.
+fn on_400(parts: &str, layout: &str, wires: &str) -> tempfile::TempDir {
+    let dir = common::project("nano-button");
+    let text = format!(
+        r#"{{
+  "format": 1,
+  "parts": {{
+    "bb": {{ "type": "breadboard-400" }},
+    "nano": {{ "type": "nano-board", "firmware": "build/button.ino.hex" }},
+    {parts}
+  }},
+  "layout": {{ "bb": {{ "at": [0, 0, 0] }}, {layout} }},
+  "wires": [{wires}],
+}}
+"#
+    );
+    fs::write(dir.path().join("scene.jsonc"), text).unwrap();
+    dir
+}
+
+/// The holes each pin of `part` sits in, by its contact wires.
+fn holes_of(netlist: &Netlist, part: &str, pin: &str) -> Vec<String> {
+    let me = format!("{part}.{pin}");
+    let mut holes: Vec<String> = netlist
+        .view
+        .wires
+        .iter()
+        .filter(|w| w.kind == "contact" && w.ends[0] == me)
+        .map(|w| w.ends[1].trim_start_matches("bb.").to_string())
+        .collect();
+    holes.sort();
+    holes
+}
+
+/// The hints of the findings that stop a scene, one per finding, without repeats.
+fn hints(dir: &tempfile::TempDir) -> Vec<String> {
+    let found = orbe_scene::read(&Files::disk(), &dir.path().join("scene.jsonc"))
+        .err()
+        .expect("the scene has findings");
+    let mut hints: Vec<String> = found.into_iter().map(|d| d.hint).collect();
+    hints.dedup();
+    hints
+}
+
+/// A pin on two legs, as a switch's `a` or a DIP's `GND`, goes in by its lowest lead, and the
+/// part's other legs follow from it. Naming the hole another of its legs sat in moves the part.
+#[test]
+fn a_pin_on_two_legs_goes_in_by_its_lowest_lead() {
+    let switch = |hole: &str| {
+        on_400(
+            r#""btn1": { "type": "tactile-switch-6mm" },"#,
+            &format!(r#""btn1": {{ "on": {{ "a": "bb.{hole}" }}, "rotate": [0, 0, 90] }}"#),
+            r#"["bb.j22", "nano.D2"], ["bb.j20", "nano.5V"]"#,
+        )
+    };
+    let across = read(switch("f22").path());
+    assert_eq!(
+        holes_of(&across, "btn1", "a"),
+        ["e22", "f22"],
+        "lead 1 in f22"
+    );
+    assert_eq!(holes_of(&across, "btn1", "b"), ["e20", "f20"]);
+    assert_eq!(net(&across, "btn1", "a"), net(&across, "nano", "D2"));
+    let moved = read(switch("e22").path());
+    assert_eq!(
+        holes_of(&moved, "btn1", "a"),
+        ["b22", "e22"],
+        "lead 1 in e22, so lead 2 lands in b22"
+    );
+    assert_ne!(net(&moved, "btn1", "a"), net(&moved, "nano", "D2"));
+
+    let dip = |hole: &str| {
+        on_400(
+            r#""u1": { "type": "atmega328p-dip28", "firmware": "build/button.ino.hex" },"#,
+            &format!(r#""u1": {{ "on": {{ "GND": "bb.{hole}" }} }}"#),
+            "",
+        )
+    };
+    let chip = read(dip("e16").path());
+    assert_eq!(
+        holes_of(&chip, "u1", "GND"),
+        ["e16", "f15"],
+        "lead 8 in e16, lead 22 across the channel"
+    );
+    let moved = read(dip("f15").path());
+    assert_eq!(holes_of(&moved, "u1", "GND"), ["f15", "i14"]);
+}
+
+/// A leg that misses gets a hint found by trying it: a quarter turn from the same hole when one
+/// seats every leg, else a nearby hole and turn that does, else a plain no.
+#[test]
+fn a_missed_leg_s_hint_names_only_a_placement_that_seats_the_part() {
+    let led = on_400(
+        r#""led1": { "type": "led-5mm", "color": "red" },"#,
+        r#""led1": { "on": { "anode": "bb.j30" } }"#,
+        "",
+    );
+    assert_eq!(
+        hints(&led),
+        [
+            "turn `led1` with \"rotate\": [0, 0, 180], and every leg lands in a hole with no strip joining two of its pins"
+        ],
+        "off the end, so it turns back along the row"
+    );
+    let resistor = on_400(
+        r#""r1": { "type": "resistor-axial", "resistance": "220" },"#,
+        r#""r1": { "on": { "a": "bb.d15" }, "rotate": [0, 0, 45] }"#,
+        "",
+    );
+    assert_eq!(
+        hints(&resistor),
+        [
+            "turn `r1` with \"rotate\": [0, 0, 0], and every leg lands in a hole with no strip joining two of its pins"
+        ],
+        "a quarter turn on the board's own grid, not 45 plus 90"
+    );
+    let nano = |hole: &str| {
+        on_400(
+            "",
+            &format!(r#""nano": {{ "on": {{ "D13": "bb.{hole}" }} }}"#),
+            "",
+        )
+    };
+    assert_eq!(
+        hints(&nano("a1")),
+        [
+            "no quarter turn seats `nano` from bb.a1; plug it in as \"nano\": { \"on\": { \"D13\": \"bb.b1\" }, \"rotate\": [0, 0, 0] }"
+        ]
+    );
+    assert_eq!(
+        hints(&nano("Z29")),
+        [
+            "no quarter turn seats `nano` from bb.Z29, nor from a hole within 10.16 mm of it; plug `nano.D13` into a hole where `nano`'s other legs land in holes too"
+        ]
+    );
+    let suggested = on_400("", r#""nano": { "on": { "D13": "bb.b1" } }"#, "");
+    read(suggested.path());
 }

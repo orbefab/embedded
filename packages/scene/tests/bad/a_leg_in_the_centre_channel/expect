@@ -1,1 +1,1 @@
-scene.layout scene.jsonc:11:21 | `led1.cathode` lands between bb.e20 and bb.f20, in the gap where `bb` has no hole | "rotate": [0, 0, 180]
+scene.layout scene.jsonc:11:21 | `led1.cathode` lands between bb.e20 and bb.f20, in the gap where `bb` has no hole | "rotate": [0, 0, 0]

@@ -15,6 +15,7 @@ mod catalog;
 mod circuit;
 mod diagnostic;
 mod files;
+mod holes;
 mod kinds;
 mod model;
 mod name;
@@ -38,6 +39,7 @@ pub use circuit::{
 };
 pub use diagnostic::{Code, Diagnostic, Lint};
 pub use files::Files;
+pub use holes::{holes_text, strip_text};
 pub use model::{STOP_PS, is_id};
 pub use project::{BLOCK, REGISTRY, folder_hash, is_registry_name, part_file};
 pub use summary::{

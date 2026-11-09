@@ -1,6 +1,6 @@
 //! Text for `orbe part` and `orbe search`.
 
-use orbe_scene::{Card, param_sentence, si_amount};
+use orbe_scene::{Card, holes_text, param_sentence, si_amount, strip_text};
 
 pub fn text(card: &Card) -> String {
     let mut lines = Vec::new();
@@ -58,6 +58,15 @@ pub fn text(card: &Card) -> String {
             "holes  {} mm deep, each a pin with one lead; a strip joins its holes",
             holes.depth
         ));
+        lines.push(format!(
+            "  {}",
+            holes_text(
+                card.pins
+                    .iter()
+                    .map(|p| p.name.as_str())
+                    .filter(|n| hole(n))
+            )
+        ));
         let mut sizes: Vec<usize> = holes.strips.iter().map(Vec::len).collect();
         sizes.sort_unstable();
         sizes.dedup();
@@ -66,9 +75,9 @@ pub fn text(card: &Card) -> String {
                 .strips
                 .iter()
                 .filter(|strip| strip.len() == size)
-                .filter_map(|strip| Some(format!("{} to {}", strip.first()?, strip.last()?)))
+                .map(|strip| strip_text(strip, ""))
                 .collect();
-            lines.push(format!("  strips of {size}  {}", strips.join(", ")));
+            lines.push(format!("  strips of {size}  {}", strips.join("; ")));
         }
     }
     lines.push(String::new());

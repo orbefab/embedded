@@ -554,7 +554,7 @@ fn two_pins_of_a_part_in_one_breadboard_strip_warn_shorted() {
             assert!(
                 run.stdout.contains(
                     "warning[scene.shorted]: `r1.a` and `r1.b` sit in one strip, bb.a30 to bb.e30, so the strip shorts them"
-                ) && run.stdout.contains("\"rotate\": [0, 0, 180]"),
+                ) && run.stdout.contains("\"rotate\": [0, 0, 0], and every leg lands in a hole"),
                 "{}",
                 run.stdout
             );

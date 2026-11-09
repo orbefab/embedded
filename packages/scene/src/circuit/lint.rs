@@ -194,10 +194,10 @@ fn shorted(s: &Scope, out: &mut Findings) {
                 .part(s.circuit.insts[ROOT].children[&board])
                 .and_then(|p| p.holes.as_ref())
                 .map(|h| &h.strips[strip]);
-            let span = match (holes.and_then(|h| h.first()), holes.and_then(|h| h.last())) {
-                (Some(first), Some(last)) => format!("{board}.{first} to {board}.{last}"),
-                _ => board.clone(),
-            };
+            let span = holes.map_or_else(
+                || board.clone(),
+                |h| crate::holes::strip_text(h, &format!("{board}.")),
+            );
             let shown: Vec<String> = pins.iter().map(|p| format!("`{p}`")).collect();
             out.push(
                 Code::Lint(Lint::Shorted),
@@ -206,11 +206,7 @@ fn shorted(s: &Scope, out: &mut Findings) {
                     "{} sit in one strip, {span}, so the strip shorts them",
                     and_list(&shown.iter().map(String::as_str).collect::<Vec<_>>())
                 ),
-                format!(
-                    "turn `{}` with \"rotate\": [0, 0, {}] so its legs cross the strips, or plug it in across the centre channel",
-                    instance.name,
-                    super::plug::quarter(seated.turn)
-                ),
+                seated.parted.clone().unwrap_or_default(),
             );
         }
     }
