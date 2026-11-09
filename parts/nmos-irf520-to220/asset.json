@@ -1,0 +1,44 @@
+{
+  "part": "nmos-irf520-to220",
+  "source": {
+    "script": "model.py",
+    "sha256": "426b832baa54be952516c86f1a5914602d152862d8522af36f50b041df1749cf",
+    "bytes": 2179
+  },
+  "files": {
+    "nmos-irf520-to220.glb": {
+      "sha256": "78bde9ae62ebbc6f0620db74908cc5d266cabfedf893779d4b417b6c4b975519",
+      "bytes": 63212
+    },
+    "nmos-irf520-to220.anchors.json": {
+      "sha256": "937af28ef66a7696540040c574a4aa0e13bef7f5d4d396ca3740ecca140a4b5f",
+      "bytes": 521
+    }
+  },
+  "box": {
+    "min": [-5, -2.27, -13],
+    "max": [5, 2.25, 15.65]
+  },
+  "kept_nodes": ["lead-1", "lead-2", "lead-3"],
+  "draw_calls": 6,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 4,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 6,
+      "primitives_out": 6
+    }
+  }
+}
