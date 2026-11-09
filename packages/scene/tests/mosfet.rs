@@ -176,9 +176,10 @@ fn every_gate_drive_switches_every_load_within_the_step_bound() {
 /// D7's edge at 100 ms restarts the solve with the gate-drain capacitor held. The capacitor's
 /// current comes out of that hold as 0.68 pA of roundoff, and the trapezoidal rule rings it
 /// between plus and minus that from then on. The error control reads the ring as truncation
-/// error and holds the step near 110 ns, so the 300 ms take 843688 steps.
+/// error and keeps the step far shorter than the other shapes take, so the 300 ms take 843688
+/// steps where they take at most 3297.
 #[test]
-#[ignore = "a sub-picoampere ring in a capacitor's current holds the step near 110 ns"]
+#[ignore = "a sub-picoampere ring in a capacitor's current holds the step short"]
 fn a_gate_through_100_ohm_switches_10_ohm_within_the_step_bound() {
     switches_on(Drive::Series, Load::Ohms("10"));
 }
