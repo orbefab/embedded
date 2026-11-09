@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { Child, PartData, SceneMessage } from "./protocol";
-import { holeAt, leadRef, leadsOf } from "./refs";
+import { holeAt, leadRef, leadsOf, stripText } from "./refs";
 
 function part(fields: Partial<PartData>): PartData {
   return {
@@ -102,5 +102,12 @@ describe("holeAt", () => {
     expect(holeAt(board, [1.27, 1.27, 8.5])).toBeUndefined();
     expect(holeAt(board, [0, 0, 12])).toBeUndefined();
     expect(holeAt(part({ anchors: board.anchors, leads: board.leads }), [0, 0, 8.5])).toBeUndefined();
+  });
+});
+
+describe("stripText", () => {
+  test("a column's strip is one run, and a rail lists its groups", () => {
+    expect(stripText(["a1", "b1", "c1", "d1", "e1"], "bb.")).toBe("bb.a1 to bb.e1");
+    expect(stripText(["W1", "W2", "W3", "W4", "W5", "W7", "W8", "W9", "W10", "W11"])).toBe("W1 to W5, W7 to W11");
   });
 });

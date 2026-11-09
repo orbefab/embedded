@@ -1,3 +1,4 @@
+import { stripText } from "@orbe/viewer/refs";
 import { PartModel } from "../components/part-model";
 import type { Linked } from "../data";
 import { paramSentence, si, sourceText } from "../format";
@@ -99,7 +100,7 @@ export function PartPage({ part }: { part: PartView }) {
             head={["Strip", "Holes"]}
             rows={record.holes.strips.map((strip) => [
               <span className="font-mono" key="strip">
-                {strip[0]} to {strip[strip.length - 1]}
+                {stripText(strip)}
               </span>,
               <span className="font-mono text-muted-foreground" key="holes">
                 {strip.join(", ")}

@@ -334,7 +334,7 @@ test.describe("breadboard-830", () => {
 
   test("a column's strip and a whole rail are among them", async () => {
     const body = await bodyText(page);
-    expect(/a1 to e1\s*a1, b1, c1, d1, e1/.test(body) && /W\d+ to W\d+/.test(body)).toBe(true);
+    expect(/a1 to e1\s*a1, b1, c1, d1, e1/.test(body) && /W3 to W7, W9 to W13, .*, W57 to W61\s*W3, W4/.test(body)).toBe(true);
   });
 
   test("breadboard-830's page logged no error", async () => {

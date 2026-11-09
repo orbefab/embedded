@@ -10,7 +10,7 @@ import { CameraRig } from "./camera-rig";
 import { glowIntensity, litColour } from "./glow";
 import type { Hovered, HoverStore } from "./hover";
 import type { Command, FrameMessage, Ref, SceneMessage, Vec3 } from "./protocol";
-import { holeAt, instanceAt, refOf } from "./refs";
+import { holeAt, instanceAt, refOf, stripText } from "./refs";
 import type { Box } from "./wire-geometry";
 import { WireMesh } from "./wire-mesh";
 
@@ -100,12 +100,11 @@ function holeUnder(scene: SceneMessage, ref: Ref, group: Object3D, event: ThreeE
   const hole = holeAt(placed.part, local);
   if (hole === undefined) return undefined;
   const board = refOf(path).slice(1);
-  const ends = [hole.strip[0], hole.strip[hole.strip.length - 1]];
   return {
     ref: refOf([...path, hole.pin]),
     why: undefined,
     error: undefined,
-    strip: `strip ${board}.${ends[0]} to ${board}.${ends[1]}`,
+    strip: `strip ${stripText(hole.strip, `${board}.`)}`,
     object: group,
     x: event.nativeEvent.clientX,
     y: event.nativeEvent.clientY,
