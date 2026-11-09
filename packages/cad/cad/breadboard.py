@@ -4,11 +4,13 @@
 Frame: the breadboard's underside on z = 0 and its top at z = height,
 centred on the origin in X and Y, columns along X. Columns count from 1 at
 -X. Rows a–e sit on the -Y side of the centre channel, f–j on +Y, e and f
-7.62 apart. Each side has two power rails, the outer one −, the inner one +,
-with a blue line outside and a red line inside. The rails are rows W (−,
-beside a), X (+, beside a), Y (+, beside j) and Z (−, beside j). A rail hole
-lines up with a column and takes its number, so X20 sits beside a20; every
-sixth column has no rail hole.
+7.62 apart. Each side has two power rails. From -Y to +Y they read as the
+BB830 datasheet (Rev 7) draws them, turned half a turn so that row a is at
+-Y and column 1 at -X: W (+, outer, beside a), X (−, inner), a–j, Y (+,
+inner) and Z (−, outer, beside j). Each rail's line runs on the side away
+from its partner rail, red for + and blue for −. A rail hole lines up with a
+column and takes its number, so X20 sits beside a20; every sixth column has
+no rail hole.
 
 Every hole is a socket, lead n, cut into the body with no node of its own,
 its anchor at the hole's mouth on the top face, axis +Z (out of the hole):
@@ -27,10 +29,13 @@ from cad.geom import box
 
 PITCH = 2.54
 ROWS = "abcdefghij"
-RAILS = (("W", -1, "-"), ("X", -1, "+"), ("Y", 1, "+"), ("Z", 1, "-"))
 CHANNEL = 7.62  # e to f
-RAIL_INNER = 21.59  # |y| of the + rail  # verify
-RAIL_OUTER = 24.13  # |y| of the − rail  # verify
+# The datasheet gives no rail-to-row dimension, so these are whole pitches: the inner rail 3
+# from row a or j, the outer 4. The Blocks rely on it: a 10.16 mm resistor from row b lands in X.
+RAIL_INNER = 21.59  # verify
+RAIL_OUTER = 24.13  # verify
+# name, side (-Y or +Y), |y|, polarity
+RAILS = (("W", -1, RAIL_OUTER, "+"), ("X", -1, RAIL_INNER, "-"), ("Y", 1, RAIL_INNER, "+"), ("Z", 1, RAIL_OUTER, "-"))
 HOLE = 1.0  # square opening  # verify
 HOLE_DEPTH = 8.0  # how far a leg goes in  # verify
 GROOVE = (2.6, 1.5)  # centre channel wide, deep  # verify
@@ -67,11 +72,10 @@ def holes(columns, rail_groups):
         for c in range(1, columns + 1)
     ]
     rail = rail_columns(columns, rail_groups)
-    for k, (row, side, polarity) in enumerate(RAILS):
-        y = side * (RAIL_INNER if polarity == "+" else RAIL_OUTER)
+    for k, (row, side, y, _) in enumerate(RAILS):
         for i, c in enumerate(rail):
             x, _ = terminal_xy(columns, c, "a")
-            out.append((10 * columns + k * len(rail) + i + 1, f"{row}{c}", x, y))
+            out.append((10 * columns + k * len(rail) + i + 1, f"{row}{c}", x, side * y))
     return out
 
 
@@ -106,13 +110,13 @@ def breadboard(columns, rail_groups, length, width, height):
     middle = (first + last) / 2.0
     span = last - first + 4.0
     sw, st = STRIPE
-    for side, tag in ((-1, "bottom"), (1, "top")):
-        shapes[f"stripe-red-{tag}"] = box(middle, side * (RAIL_INNER - 1.9), height + st / 2.0, span, sw, st)
-        shapes[f"stripe-blue-{tag}"] = box(middle, side * (RAIL_OUTER + 1.9), height + st / 2.0, span, sw, st)
+    for row, side, y, polarity in RAILS:
+        away = 1.9 if y == RAIL_OUTER else -1.9
+        color = "red" if polarity == "+" else "blue"
+        shapes[f"stripe-{color}-{row}"] = box(middle, side * (y + away), height + st / 2.0, span, sw, st)
         for end in (-1, 1):
             x = middle + end * (span / 2.0 + 1.6)
-            shapes[f"print-plus-{tag}{end:+d}"] = _print(x, side * RAIL_INNER, height, "+", PRINT_SIZE * 1.5)
-            shapes[f"print-minus-{tag}{end:+d}"] = _print(x, side * RAIL_OUTER, height, "-", PRINT_SIZE * 1.5)
+            shapes[f"print-{row}{end:+d}"] = _print(x, side * y, height, polarity, PRINT_SIZE * 1.5)
     letter_x = (columns + 1) / 2.0 * PITCH + 0.4
     for r in ROWS:
         for end in (-1, 1):

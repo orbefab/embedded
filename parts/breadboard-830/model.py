@@ -3,8 +3,9 @@
 
 Part frame: the underside on z = 0, the top at z = 8.5, centred on the
 origin in X and Y, columns 1–63 along X from -X. Rows a–e on -Y, f–j on +Y.
-Each side has a − rail outside and a + rail inside, 50 holes each in groups
-of five, one strip the whole length. `cad.breadboard` places and numbers
+Beside row a the outer rail is + and the inner −; beside row j the inner
+is + and the outer −, as the BB830 drawing has them. Each rail has 50 holes in
+groups of five, one strip the whole length. `cad.breadboard` places and numbers
 the holes: a1 is lead 1, j63 lead 630, then rails W, X, Y and Z of 50 each,
 leads 631 to 830.
 

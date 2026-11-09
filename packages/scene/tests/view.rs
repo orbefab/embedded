@@ -109,7 +109,7 @@ fn wires_hold_the_scene_s_and_each_part_s_with_prefixed_ends() {
     let wires = view["wires"].as_array().unwrap();
     assert_eq!(
         wires[0],
-        json!({ "ends": ["bb.a12", "bb.X11"], "kind": "jumper", "color": "#d12b2b" })
+        json!({ "ends": ["bb.a12", "bb.W11"], "kind": "jumper", "color": "#d12b2b" })
     );
     let jumpers = wires.iter().filter(|w| w["kind"] == "jumper").count();
     assert_eq!(jumpers, 7, "the scene's 6 and the Nano's diode bridge");

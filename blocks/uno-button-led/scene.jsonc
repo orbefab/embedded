@@ -14,16 +14,16 @@
     "uno": { "at": [-90, 0, 0] },
     "bb": { "at": [0, 0, 0] },
     "btn1": { "on": { "a": "bb.f16" }, "rotate": [0, 0, 90] }, // across the channel: a in column 16, b in 14
-    "r2": { "on": { "a": "bb.a16" }, "rotate": [0, 0, -90] }, // b in the - rail
+    "r2": { "on": { "a": "bb.b16" }, "rotate": [0, 0, -90] }, // b in X16, the - rail
     "r1": { "on": { "a": "bb.d22" } }, // b in column 26
     "led1": { "on": { "anode": "bb.c26" } }, // cathode in column 27
   },
   "wires": [
-    ["uno.5V", "bb.X3", { "color": "#d12b2b" }],
-    ["uno.GND", "bb.W3", { "color": "#161616" }],
-    ["bb.a14", "bb.X14", { "color": "#d12b2b" }], // btn1.b to 5V
+    ["uno.5V", "bb.W3", { "color": "#d12b2b" }],
+    ["uno.GND", "bb.X3", { "color": "#161616" }],
+    ["bb.a14", "bb.W14", { "color": "#d12b2b" }], // btn1.b to 5V
     ["uno.D2", "bb.j16"], // D2 to btn1.a
     ["uno.D13", "bb.c22"], // D13 to r1.a
-    ["bb.a27", "bb.W27", { "color": "#161616" }], // led1.cathode to GND
+    ["bb.a27", "bb.X27", { "color": "#161616" }], // led1.cathode to GND
   ],
 }

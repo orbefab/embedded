@@ -3,8 +3,9 @@
 
 Part frame: the underside on z = 0, the top at z = 8.5, centred on the
 origin in X and Y, columns 1–30 along X from -X. Rows a–e on -Y, f–j on +Y.
-Each side has a − rail outside and a + rail inside, 25 holes each in groups
-of five. `cad.breadboard` places and numbers the holes: a1 is lead 1, j30
+Beside row a the outer rail is + and the inner −; beside row j the inner
+is + and the outer −, as the BB830 drawing has them. Each rail has 25 holes in
+groups of five. `cad.breadboard` places and numbers the holes: a1 is lead 1, j30
 lead 300, then rails W, X, Y and Z of 25 each, leads 301 to 400.
 
 From half-size breadboard listings (3.25" × 2.15", 82.55 × 54.6 × 8.5), 300

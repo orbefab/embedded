@@ -2,13 +2,13 @@
   "part": "breadboard-830",
   "source": {
     "script": "model.py",
-    "sha256": "1442f7d62612c66c0a4ec680d3654a0f564b90e1305504a7de79adf983349edb",
-    "bytes": 1259
+    "sha256": "377794f014338a2cee1cfd328e227d4ee587457de7edba20914a96bf8ab23b94",
+    "bytes": 1344
   },
   "files": {
     "breadboard-830.glb": {
-      "sha256": "037e225301aba8fe9efb92a4b123b4efdcd1a98c2ab6c4f2501d3b206da74123",
-      "bytes": 740428
+      "sha256": "f263d7e0d6ecb7bd67cf6add1ab1836bd577fd147e68f820b58dc46fe94101b0",
+      "bytes": 739548
     },
     "breadboard-830.anchors.json": {
       "sha256": "22c38b6f2226ff02138bc10a5c6dec5f9d1c950bccc8ce61db3a5ffdc6be4c3f",
