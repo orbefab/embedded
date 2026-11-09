@@ -59,7 +59,7 @@ The process exits with one of these codes.
 
 ## Check
 
-`scripts/check.sh fast` runs rustfmt, clippy and the Rust tests other than the `orbe-avr` suite and five engine targets. `scripts/check.sh full` runs `fast`, then:
+`scripts/check.sh fast` runs shellcheck on every tracked shell script and ruff (`ruff check` and `ruff format --check`) on every tracked Python file, then rustfmt, clippy and the Rust tests other than the `orbe-avr` suite and five engine targets. shellcheck follows each script's source directive. ruff is the `packages/cad` dev dependency, run with `uv run --project packages/cad --frozen`, and its config is the repo's `ruff.toml`. `scripts/check.sh full` runs `fast`, then:
 
 - `cargo test -p orbe-avr --locked --features port-skip-check`.
 - `packages/engine/circuit/tests/transient.rs`, `packages/engine/circuit/tests/session.rs`, `packages/engine/cli/tests/run.rs`, `packages/engine/cli/tests/session.rs` and `packages/engine/cli/tests/ws2812.rs`. Each test in those files is `#[ignore = "full tier"]`, and `full` runs that set with `--ignored`.
@@ -73,7 +73,7 @@ The process exits with one of these codes.
 
 `ws2812_decode.py --self-test` is not in that list. `packages/engine/cli/tests/ws2812.rs` runs it, and that file is one of the five `full tier` targets above.
 
-`port-skip-check` is the check that a skipped store changes no pin. `fast` runs clippy with that feature. `full` runs the `orbe-avr` tests with it. `packages/engine/scripts/blobs.sh` runs first in both tiers. It fetches the ESP32-S3 ROM, which no circuit commits, into its cache when the cache lacks it. The dual-core probe test in `packages/socs/espressif/tests/dualcore.rs` runs the ROM from that cache. The `fast` tier needs uv, and `full` also needs ngspice-42 on `PATH`, node 24 or later, rustup with the `wasm32-wasip1` target, and the `wasm-bindgen` CLI that [docs/wasm.md](../wasm.md#build) names.
+`port-skip-check` is the check that a skipped store changes no pin. `fast` runs clippy with that feature. `full` runs the `orbe-avr` tests with it. `packages/engine/scripts/blobs.sh` runs before the Rust tests in both tiers. It fetches the ESP32-S3 ROM, which no circuit commits, into its cache when the cache lacks it. The dual-core probe test in `packages/socs/espressif/tests/dualcore.rs` runs the ROM from that cache. The `fast` tier needs uv and shellcheck. It installs neither. When shellcheck is missing it prints the install command and stops. `full` also needs ngspice-42 on `PATH`, node 24 or later, rustup with the `wasm32-wasip1` target, and the `wasm-bindgen` CLI that [docs/wasm.md](../wasm.md#build) names.
 
 Neither tier builds firmware. `packages/engine/scripts/esp32s3-firmware.sh` rebuilds the bare-metal programs and, with ESP-IDF v5.5.5, the ESP-IDF apps. `packages/engine/scripts/esp32s3-arduino.sh --check console` rebuilds the console sketch, runs `packages/engine/tests/firmware/esp32s3/arduino/checks/console/netlist.json`, and checks the folder with `esp32s3_arduino_console.py --check`. `packages/engine/scripts/esp32s3-arduino.sh --check knob LVGL_DIR` builds the knob sketch, runs `packages/engine/tests/firmware/esp32s3/arduino/checks/knob/netlist.json`, and checks the folder with `esp32s3_knob.py --check` against `refs.json`. Those refs come from a board session of three agreeing captures. Clockwise drives contact B.
 
