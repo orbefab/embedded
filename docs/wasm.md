@@ -90,7 +90,7 @@ A viewer sends only `press`, `release`, `play` and `pause`, each parsed by the C
 
 `packages/wasm/tests/session.rs` runs the session natively in `scripts/check.sh fast`. It opens nano-button-led from its files and every catalog part, checks the `scene` then the first `frame`, plays in 16 ms ticks, presses `@btn1` until D13 is high and `@led1` carries over 5 mA, pauses, and checks that a paused session does not move and that `step` is refused. A Block without `led-5mm` is refused with the text `orbe open` prints. It also draws nano-board on its own with its 28 children and no channel, and refuses it with `part_missing` when `led-0603` is gone. `scripts/check.sh fast` also runs clippy on `orbe-wasm` for `wasm32-unknown-unknown`.
 
-`scripts/check-wasm.sh [SCRATCH_DIR]` runs in `scripts/check.sh full`. It needs what `scripts/wasm.sh` needs and node 24 or later. It installs nothing.
+`scripts/check-wasm.sh [SCRATCH_DIR]` runs in `scripts/check.sh full`. It needs what `scripts/wasm.sh` needs and node 24 or later. It installs nothing. It removes its default `SCRATCH_DIR`, `.scratch/wasm/check`, when it passes. A `SCRATCH_DIR` the caller names keeps the package in `pkg` and the registry in `registry`.
 
 - It builds the package, then builds it again with a fresh target directory, and fails unless both folders hold the same bytes.
 - It checks `package.json`: the name, the version, `private`, the licence, `files`, each `exports` target, and a commit stamp when the directory is the checkout.
@@ -101,3 +101,30 @@ A viewer sends only `press`, `release`, `play` and `pause`, each parsed by the C
 `worker.mjs` loads each Block with the viewer's registry client, `packages/viewer/src/registry.ts`, which checks every size and hash as [registry.md](registry.md#verify-what-you-fetch) says, and opens it in the package's `worker.js` in a node worker thread, as a page does. nano-button-led and uno-button-led must open with D13, `@led1` and `@btn1` named, play to 100 ms with D13 low and `@led1` dark, light `@led1` past 5 mA with D13 high once `@btn1` is pressed, go dark once it is released, answer `pause`, and refuse `step` as `usage`. The Uno's `@uno.led_l` must light with `@led1`. nano-led-fade must show D9 both high and low while it plays to 1.5 s, and `@led1`'s mean current over 1.2 s to 1.5 s must be over 1 mA and over twice its mean over 20 ms to 300 ms. nano-button-led without `led-5mm` must post `closed` with the `part_missing` refusal. Last, it opens nano-button-led in a worker thread of its own, plays it, ticks 16 ms at a time as fast as the thread runs, and prints the wall time of one simulated second, three times.
 
 The page's headed check, `scripts/check-block.sh`, runs a Block from a registry in Chromium. [viewer.md](viewer.md#run-a-block-in-the-page) describes it.
+
+## Speed
+
+```sh
+scripts/check-speed.sh [--profile BLOCK] [PKG_DIR REGISTRY_DIR]
+```
+
+It checks that every Block in the registry plays live in a browser, so a change that slows the engine fails before it ships. `scripts/check.sh full` runs it on the package and registry `scripts/check-wasm.sh` built. With no directories it builds both under `.scratch/speed` and removes them after. It needs node 24 or later, the repo's Node dependencies, and the Chromium Playwright expects under `~/.cache/ms-playwright` or the binary in `ORBE_CHROMIUM`, as `scripts/check-viewer-e2e.sh` does. It installs nothing. CI does not run it.
+
+`packages/wasm/tests/speed.mjs` serves the package and a test page from `packages/wasm/tests/speed`, loads each Block with the viewer's registry client, and opens a fresh page in headless Chromium for each run. A run opens the Block in the package's own `worker.js`, plays it, and times the wall clock from the first `frame` at or past 200 ms of simulated time to the first at or past 2.2 s. It fails when the session leaves `playing` or when the span is not 2 s of 16 ms ticks.
+
+`worker.js` paces `play` by the wall clock, so on its own it never runs faster than real time. A timed run loads `packages/wasm/tests/speed/clock.js` first. That clock runs each timer on the next task and moves `performance.now` on by the timer's delay, so the ticks run back to back and each is still a full 16 ms tick. The Worker's work per tick is what a page gets: `tick`, `messages`, and a `frame` posted to the page.
+
+Each run is one row: the Block, the mode, the run number, and wall milliseconds per simulated second. There are two modes:
+
+| Mode | Where `worker.js` runs | CPU throttle | Bar at the median |
+| --- | --- | --- | --- |
+| Worker 1x | a dedicated module Worker | none | 1.5x real time, 667 ms per simulated s |
+| main thread 4x | the page's main thread | 4x, `Emulation.setCPUThrottlingRate` | 1.0x real time, 1000 ms per simulated s |
+
+Chrome's CPU throttle reaches only a page, not a Worker, so the throttled mode imports the same `worker.js` on the main thread. There, `self` is replaced with an object that hands the page each message `worker.js` posts.
+
+Every Block runs 5 times in each mode, interleaved: run 1 of every Block and mode, then run 2, and so on. The report prints the median, min and max of each Block and mode, and the real-time factor at the median, 1000 divided by the median. A median under its bar prints a `FAIL` line that names the Block, the mode and the factor, and the check exits 1. The whole check takes about a minute and a half.
+
+On the build machine, 12 threads at a load average under 2, the medians of three whole checks moved by at most 4%, and the runs inside one check by at most 9% from their median. A 1 s span gave the same medians within 1.5%, with wider spreads.
+
+`--profile BLOCK` instead runs BLOCK once on the main thread at 4x with Chrome's sampling profiler at 100 µs over the timed span, and prints the 15 functions with the most self time, as a share of the samples. Wasm functions carry their Rust names, so the profile names engine code such as `<orbe_avr::cpu::Cpu>::run`.

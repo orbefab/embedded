@@ -767,17 +767,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "orbe-engine-bench"
-version = "0.1.0"
-dependencies = [
- "orbe-avr",
- "orbe-circuit",
- "orbe-engine-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "orbe-engine-cli"
 version = "0.1.0"
 dependencies = [

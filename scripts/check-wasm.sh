@@ -19,7 +19,8 @@
 # Usage: scripts/check-wasm.sh [SCRATCH_DIR]
 #
 # SCRATCH_DIR defaults to .scratch/wasm/check in the repo, and the script removes it when it
-# passes. It needs what scripts/wasm.sh needs, and node 24 or later, which runs the viewer's
+# passes. A SCRATCH_DIR the caller names is kept, with the package in pkg and the registry in
+# registry, so scripts/check.sh full hands both to scripts/check-speed.sh. It needs what scripts/wasm.sh needs, and node 24 or later, which runs the viewer's
 # TypeScript registry client as it is. It installs nothing.
 #
 # Sourced, this file only defines orbe_wasm_check_manifest and orbe_wasm_reject_host_paths.
@@ -239,6 +240,7 @@ if ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 24 ? 0
 fi
 repo=$(cd "$(dirname "$0")/.." && pwd)
 scratch=${1:-$repo/.scratch/wasm/check}
+keep=${1:+1}
 mkdir -p "$scratch"
 scratch=$(cd "$scratch" && pwd)
 rm -rf "$scratch/pkg" "$scratch/again" "$scratch/target" "$scratch/registry"
@@ -306,4 +308,4 @@ target=$(cargo metadata --format-version 1 --no-deps |
   sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
 "$target/debug/orbe" registry build . "$scratch/registry" >/dev/null
 node packages/wasm/tests/worker.mjs "$scratch/pkg" "$scratch/registry"
-rm -rf "$scratch"
+[[ -n $keep ]] || rm -rf "$scratch"

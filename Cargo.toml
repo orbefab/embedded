@@ -9,7 +9,6 @@ members = [
   "packages/engine/core",
   "packages/engine/circuit",
   "packages/engine/cli",
-  "packages/engine/bench",
   "packages/cores/*",
   "packages/socs/*",
 ]
