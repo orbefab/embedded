@@ -106,7 +106,7 @@ Every record has these fields:
 
 | Field | Value |
 | --- | --- |
-| `type` | `part`, `block` or `model` |
+| `type` | `part` or `block` |
 | `$schema` | `item.schema.json` |
 | `format` | `1` |
 | `name` | the item's id |
@@ -136,8 +136,6 @@ A part record is what `orbe part --json` prints, changed in exactly these ways:
 Every other field keeps its name and its value. `orbe part --json` stays snake case. A test converts every catalog part both ways under this mapping.
 
 **A Block** adds `board`, the part its firmware runs on. `registryDependencies` lists every part the scene runs, a board's own parts included, at the versions those parts have in the same build. The build checks that each one is there. It does not run the Block's tests. In this repo, `scripts/check.sh` runs every Block's tests against the parts of the same commit, which is what the official registry is built from. `orbe add` writes each file except `block.jsonc` and `README.md` to the project at its `path`, then copies its parts.
-
-**A model** is an engine model shipped as WebAssembly. It has only the common fields. Its own fields come with the device contract.
 
 ### Absent fields and null
 
@@ -189,6 +187,5 @@ A project takes each part id from one registry, so `parts.lock` has at most one 
 
 - `orbe add @<registry>/<id>` from a registry: read `registries.json`, then follow [Verify what you fetch](#verify-what-you-fetch) and write the copy and its lock line.
 - `orbe search --refresh`: search registry indexes instead of the catalog built into `orbe`.
-- Model items: a source folder for them and their fields come with the device contract.
 - Type-checking and Block tests in the build: today it checks syntax, names, versions, licences and dependencies, and `orbe check` and `orbe test` check the rest.
 - A part or Block that uses a part from another registry. The dependency grammar has room for it, and the build refuses it today.

@@ -109,14 +109,13 @@ impl JsonSchema for Dependency {
     }
 }
 
-/// One record. `type` says which of the three it is.
+/// One record. `type` says which of the two it is.
 #[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
 #[schemars(title = "Registry item")]
 pub enum Item {
     Part(Box<PartItem>),
-    Block(BlockItem),
-    Model(ModelItem),
+    Block(Box<BlockItem>),
 }
 
 /// The fields every record has, whatever its type.
@@ -192,14 +191,6 @@ pub struct BlockItem {
     /// The part the Block's firmware runs on, one of `registryDependencies`.
     #[schemars(pattern(pattern::ID))]
     pub board: String,
-}
-
-/// An engine model, shipped as WebAssembly. Its own fields come with the device contract.
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelItem {
-    #[serde(flatten)]
-    pub head: Head,
 }
 
 /// One file of an item.
@@ -313,7 +304,7 @@ impl From<BlockCard> for Item {
             parts,
             files,
         } = card;
-        Item::Block(BlockItem {
+        Item::Block(Box::new(BlockItem {
             head: Head {
                 schema: ITEM_SCHEMA.to_string(),
                 format: Format,
@@ -328,7 +319,7 @@ impl From<BlockCard> for Item {
                 hash,
             },
             board,
-        })
+        }))
     }
 }
 
@@ -337,7 +328,6 @@ impl Item {
         match self {
             Item::Part(item) => &item.head,
             Item::Block(item) => &item.head,
-            Item::Model(item) => &item.head,
         }
     }
 
@@ -345,7 +335,6 @@ impl Item {
         match self {
             Item::Part(_) => Kind::Part,
             Item::Block(_) => Kind::Block,
-            Item::Model(_) => Kind::Model,
         }
     }
 
@@ -405,7 +394,6 @@ pub struct Index {
 pub enum Kind {
     Part,
     Block,
-    Model,
 }
 
 impl fmt::Display for Kind {
@@ -413,7 +401,6 @@ impl fmt::Display for Kind {
         f.write_str(match self {
             Kind::Part => "part",
             Kind::Block => "Block",
-            Kind::Model => "model",
         })
     }
 }

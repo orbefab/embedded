@@ -45,10 +45,7 @@ fn build_writes_a_registry_and_reports_its_files_and_gaps() {
         stdout.starts_with(&format!("wrote {}: ", out.display())),
         "{stdout}"
     );
-    assert!(
-        stdout.contains(" parts, 3 Blocks and 0 models: "),
-        "{stdout}"
-    );
+    assert!(stdout.contains(" parts and 3 Blocks: "), "{stdout}");
     assert!(stderr.starts_with("warning: "), "{stderr}");
     assert!(stderr.contains("lack buy"), "{stderr}");
     assert!(out.join("index.json").is_file());
