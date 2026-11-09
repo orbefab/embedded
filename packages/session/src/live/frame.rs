@@ -86,10 +86,16 @@ impl Live {
 }
 
 impl Progress<'_> {
+    /// A sample taken inside a step. It reads `stepping` unless the slice it follows stopped or
+    /// faulted the session, which it reports as is.
     pub fn sample(&self) -> Sample {
-        Sample {
-            state: FrameState::Stepping,
-            ..self.open.sample()
+        let sample = self.open.sample();
+        match sample.state {
+            FrameState::Stopped | FrameState::Faulted => sample,
+            _ => Sample {
+                state: FrameState::Stepping,
+                ..sample
+            },
         }
     }
 }

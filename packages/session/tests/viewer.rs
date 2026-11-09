@@ -385,3 +385,26 @@ fn a_faulted_session_s_frame_carries_the_fault() {
     assert_eq!(running["state"], "paused");
     assert!(running.get("fault").is_none(), "{running}");
 }
+
+/// A frame taken inside a step reads `stepping`, but the slice that ends the session reports the
+/// state it left, so a viewer never shows a stopped or faulted session as still stepping.
+#[test]
+fn a_step_s_last_frame_reports_the_stop_it_reached() {
+    let mut live = Live::new("t", Files::disk());
+    live.stop_at(Some((Duration::from_ms(40), "ORBE_TEST_STOP".into())));
+    assert!(live.run(&command("open")).ok());
+    let mut states = Vec::new();
+    let reply = live.run_with(&command("step 40ms"), &mut |progress| {
+        states.push(progress.sample().state);
+        ControlFlow::Continue(())
+    });
+    assert!(reply.ok(), "{}", reply.text());
+    assert!(states.len() > 1, "{states:?}");
+    assert!(
+        states[..states.len() - 1]
+            .iter()
+            .all(|state| *state == FrameState::Stepping),
+        "{states:?}"
+    );
+    assert_eq!(states.last(), Some(&FrameState::Stopped), "{states:?}");
+}
