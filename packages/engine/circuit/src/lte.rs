@@ -667,9 +667,9 @@ struct Judged {
 
 /// The error of a step of `h` ps from `(at, last)` to `next`, each store on its method in
 /// `segment`. A capacitor's tolerance is `SHARE` of its swing plus `VNTOL`. An inductor's
-/// current is held to `SHARE` of its swing plus `ABSTOL`, and the voltage that error implies,
-/// `L * error / h`, to `SHARE` of the voltage's swing plus `VNTOL`. A stiff store keeps
-/// Newton's tolerance.
+/// current is held to `SHARE` of its swing plus the larger of `ABSTOL` and `h * VNTOL / L`, and
+/// the voltage that error implies, `L * error / h`, to `SHARE` of the voltage's swing plus
+/// `VNTOL`. A stiff store keeps Newton's tolerance.
 pub(crate) fn error(
     charges: &Charges,
     segment: &Segment,
@@ -738,7 +738,10 @@ pub(crate) fn error(
             let ratio = match stiff(method) {
                 true => newton,
                 false => {
-                    let amps = error / (SHARE * swing.amps.size() + ABSTOL);
+                    // Newton resolves the voltage across the inductance to `VNTOL` at best, and
+                    // over the step that voltage moves the current by `h * VNTOL / L`.
+                    let floor = ABSTOL.max(h * VNTOL / flux.henry);
+                    let amps = error / (SHARE * swing.amps.size() + floor);
                     let volts = flux.henry * error / h / (SHARE * swing.volts.size() + VNTOL);
                     amps.max(volts)
                 }
@@ -1985,8 +1988,33 @@ mod tests {
             &next,
         );
         let error = seconds(h) / 2.0 * dv / henry;
-        let want = error / (SHARE * 5.0 / 70.0 + ABSTOL);
+        let floor = seconds(h) * VNTOL / henry;
+        let want = error / (SHARE * 5.0 / 70.0 + floor);
         assert!((got.ratio - want).abs() <= 1e-9 * want, "{got:?}");
+    }
+
+    /// A 10 uH coil into a net that draws nothing carries the 5 pA gmin lets through, and the
+    /// trapezoidal rule leaves the voltage across it flipping by `a` each way every step, 21.92 pV
+    /// on an Uno's AVCC coil. That ring reads as `h * a / 3L`, which grows with the step, so
+    /// against 1 pA it would cap the step at 1.37 us. Against `h * VNTOL / L` it reads `a / 3 nV`
+    /// at any step.
+    #[test]
+    fn a_ring_under_a_nanovolt_does_not_hold_a_coil_s_step() {
+        let (henry, a, amps) = (1e-5, 2.192e-11, 5e-12);
+        for h in [2_000_000, 2_000_000_000] {
+            let segment = coiled((Time::ZERO, point(a, amps)), [amps, amps], [-a, a]);
+            let got = error(
+                &coil(henry, 0.5),
+                &segment,
+                Time::from_ps(h),
+                &point(-a, amps),
+                h,
+                &point(a, amps),
+            );
+            let want = a / (3.0 * VNTOL);
+            assert!((got.ratio - want).abs() <= 1e-9 * want, "{h} ps {got:?}");
+            assert!(matches!(got.verdict(h), Verdict::Accept), "{h} ps {got:?}");
+        }
     }
 
     /// Each edge that keeps the segment adds `max_step * |dv| / L` to the coil's sum, for a
