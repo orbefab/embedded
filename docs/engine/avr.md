@@ -160,11 +160,13 @@ Every row carries its citation and is exact. There are 107 rows. The interrupt p
 
 `packages/socs/avr/examples/throughput.rs` times one hex image on the chip. Run `cargo run --release -p orbe-avr --example throughput`.
 
-With no arguments the example loads `blocks/nano-led-fade/firmware/fade.hex`, resolving that path from the crate directory. The default cycle count is 16,000,000, one second at the 16 MHz clock `Cpu::new` uses. Pass a hex path, then a cycle count, to time another image or a longer run. A path you pass is relative to the current directory. The run stops on the instruction that crosses the cycle count, and the printed count is the median run's actual cycles.
+With no arguments the example loads `blocks/nano-led-fade/firmware/fade.hex`, found from the crate directory. The default cycle count is 16,000,000, one second at the 16 MHz clock `Cpu::new` uses. Pass a hex path, then a cycle count, to time another image or a longer run. A path you pass is relative to the current directory. The run stops on the instruction that crosses the cycle count, and the printed count is the median run's actual cycles.
 
 Each run is a new `Cpu`. Before `load_image`, the example calls `set_fuses` with the bytes in `parts/atmega328p-tqfp32/part.jsonc`, low `0xFF`, high `0xDF`, and extended `0xFD`. Those are the fuses on the `nano-board` chip. The example drains `take_pin` every `PIN_QUEUE_CAP` cycles, so a long run does not drop pin reports.
 
 The example discards one warm-up, times five runs, and prints the median wall time in milliseconds per simulated second, the minimum, the maximum, and the MHz of the median run. A simulated second is 16,000,000 cycles. The same line gives the pin-edge count of the median run. The process exits non-zero when a run stops before its cycle count or executes an unknown opcode. `scripts/check.sh` does not run the example.
+
+The range describes one process only. Its five runs often sit within 1 ms of each other, while separate invocations of the same binary on a quiet machine give medians from about 104 to 114 ms on `fade.hex`. To compare two builds, alternate whole invocations, at least three of each, and take the spread of each build's medians as its noise. A difference counts only when the two sets of medians do not overlap.
 
 ## Compiled sketches
 

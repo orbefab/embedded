@@ -28,16 +28,23 @@ struct Sample {
 }
 
 fn main() {
-    let mut args = std::env::args().skip(1);
-    let hex_arg = args.next();
-    let cycles_arg = args.next();
-    if args.next().is_some() {
-        usage();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|arg| arg == "-h" || arg == "--help") {
+        usage(0);
     }
-    let cycles = match cycles_arg {
+    if args.len() > 2 {
+        eprintln!("throughput: at most two arguments, a hex path and a cycle count");
+        usage(2);
+    }
+    let mut args = args.into_iter();
+    let hex_arg = args.next();
+    let cycles = match args.next() {
         Some(text) => match text.parse::<u64>() {
             Ok(cycles) if cycles > 0 => cycles,
-            _ => usage(),
+            _ => {
+                eprintln!("throughput: the cycle count `{text}` is not a whole number above 0");
+                usage(2);
+            }
         },
         None => DEFAULT_CYCLES,
     };
@@ -67,7 +74,8 @@ fn main() {
 
 fn default_hex_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../blocks/nano-led-fade/firmware/fade.hex")
+        .join("../../..")
+        .join(DEFAULT_HEX)
 }
 
 fn read_image(path: &Path) -> Image {
@@ -123,11 +131,11 @@ fn ms_per_sim_s(sample: &Sample) -> f64 {
     sample.secs * 1000.0 * CPU_HZ as f64 / sample.cycles as f64
 }
 
-fn usage() -> ! {
+fn usage(code: i32) -> ! {
     eprintln!("usage: throughput [hex] [cycles]");
-    eprintln!("  hex defaults to {DEFAULT_HEX}, resolved from the crate directory");
+    eprintln!("  hex defaults to {DEFAULT_HEX}, resolved from the repo root");
     eprintln!("  cycles defaults to {DEFAULT_CYCLES}, one second at {CPU_HZ} Hz");
-    std::process::exit(2);
+    std::process::exit(code);
 }
 
 fn die(message: &str) -> ! {
