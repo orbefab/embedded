@@ -4,9 +4,10 @@
 # and the Rust tests through cargo-nextest, except the `orbe-avr` tests and five engine targets
 # marked `full tier`.
 # `full` runs those too, then the chip models' skip checks, the engine's Python checks, `sim` for
-# WASI against native, and the wasm package check. Both need uv, shellcheck and cargo-nextest.
-# `full` also needs ngspice-42, node 24 or later, rustup with the wasm32-wasip1 target, and the
-# wasm-bindgen CLI that scripts/wasm.sh names.
+# WASI against native, the wasm package check, and the browser speed check on the package that
+# check built. Both need uv, shellcheck and cargo-nextest. `full` also needs ngspice-42, node 24
+# or later, the repo's Node dependencies, a Chromium as scripts/check-speed.sh finds it, rustup
+# with the wasm32-wasip1 target, and the wasm-bindgen CLI that scripts/wasm.sh names.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -106,7 +107,12 @@ full() {
     cmp packages/engine/tests/firmware/esp32s3/arduino/checks/knob/netlist.json "$knob_dir/netlist.json"
   )
   packages/engine/scripts/wasi-check.sh
-  scripts/check-wasm.sh
+  local wasm=.scratch/wasm/full
+  (
+    trap 'rm -rf "$wasm"' EXIT
+    scripts/check-wasm.sh "$wasm"
+    scripts/check-speed.sh "$wasm/pkg" "$wasm/registry"
+  )
 }
 
 [[ $# -eq 1 ]] || usage
