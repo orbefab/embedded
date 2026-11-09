@@ -29,7 +29,7 @@ A hardware simulator for AI agents. You describe a circuit as a scene file, flas
 
 ## Build and check
 
-You need Rust (pinned in `rust-toolchain.toml`), uv, shellcheck, Node 24 and pnpm.
+You need Rust (pinned in `rust-toolchain.toml`), cargo-nextest at the version `.config/nextest.toml` names, uv, shellcheck, Node 24 and pnpm.
 
 ```sh
 pnpm install --frozen-lockfile

@@ -1,17 +1,32 @@
 #!/usr/bin/env bash
 # Checks the repo. `fast` is what CI runs: shellcheck on every tracked shell script, ruff on every
 # tracked Python file, rustfmt, clippy, clippy on orbe-scene, orbe-session and orbe-wasm for wasm32,
-# and the Rust tests, except the `orbe-avr` tests and five engine targets marked `full tier`.
+# and the Rust tests through cargo-nextest, except the `orbe-avr` tests and five engine targets
+# marked `full tier`.
 # `full` runs those too, then the chip models' skip checks, the engine's Python checks, `sim` for
-# WASI against native, and the wasm package check. Both need uv and shellcheck. `full` also needs
-# ngspice-42, node 24 or later, rustup with the wasm32-wasip1 target, and the wasm-bindgen CLI
-# that scripts/wasm.sh names.
+# WASI against native, and the wasm package check. Both need uv, shellcheck and cargo-nextest.
+# `full` also needs ngspice-42, node 24 or later, rustup with the wasm32-wasip1 target, and the
+# wasm-bindgen CLI that scripts/wasm.sh names.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 usage() {
   echo "usage: scripts/check.sh fast|full" >&2
   exit 2
+}
+
+need_nextest() {
+  if command -v cargo-nextest >/dev/null 2>&1; then
+    return 0
+  fi
+  local version
+  version=$(awk -F '"' '/^nextest-version[[:space:]]*=/ { print $2; exit }' .config/nextest.toml)
+  echo "scripts/check.sh: cargo-nextest is not installed. Install it (cargo install cargo-nextest --version ${version} --locked) and re-run." >&2
+  exit 1
+}
+
+rust_tests() {
+  cargo nextest run --profile ci --locked "$@"
 }
 
 lint_tracked() {
@@ -37,13 +52,14 @@ lint_tracked() {
 
 fast() {
   lint_tracked
+  need_nextest
   cargo fmt --all --check
   blobs=$(packages/engine/scripts/blobs.sh)
   cargo clippy --workspace --all-targets --locked -- -D warnings
   cargo clippy -p orbe-avr --all-targets --locked --features port-skip-check -- -D warnings
   cargo clippy -p orbe-scene -p orbe-session -p orbe-wasm --target wasm32-unknown-unknown --locked \
     -- -D warnings
-  cargo test --workspace --locked --exclude orbe-avr
+  rust_tests --workspace --exclude orbe-avr
 }
 
 run_check() {
@@ -59,12 +75,12 @@ run_check() {
 
 full() {
   fast
-  cargo test -p orbe-avr --locked --features port-skip-check
-  cargo test -p orbe-circuit --locked --test transient --test session -- --ignored
-  cargo test -p orbe-engine-cli --locked --test run --test session --test ws2812 -- --ignored
+  rust_tests -p orbe-avr --features port-skip-check
+  rust_tests -p orbe-circuit --test transient --test session --run-ignored only
+  rust_tests -p orbe-engine-cli --test run --test session --test ws2812 --run-ignored only
   cargo clippy -p orbe-xtensa -p orbe-espressif -p orbe-engine-cli --all-targets --locked \
     --features orbe-xtensa/poll-skip-check -- -D warnings
-  cargo test -p orbe-xtensa -p orbe-espressif -p orbe-engine-cli --locked \
+  rust_tests -p orbe-xtensa -p orbe-espressif -p orbe-engine-cli \
     --features orbe-xtensa/poll-skip-check
   local script name knob_dir
   for script in ngspice_refs render_st77916 esp32s3_blink esp32s3_hello esp32s3_screen \
