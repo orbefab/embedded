@@ -46,6 +46,21 @@ impl From<Ref> for String {
     }
 }
 
+#[cfg(test)]
+impl schemars::JsonSchema for Ref {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Ref".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "`@` and a dotted scene name, such as `@btn1` or `@nano.D13`.",
+            "type": "string",
+            "pattern": "^@",
+        })
+    }
+}
+
 impl fmt::Display for Ref {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "@{}", self.part)?;

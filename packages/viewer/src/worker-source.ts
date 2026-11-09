@@ -1,6 +1,7 @@
 import { channelSource, receive } from "./channel-source";
-import type { SceneMessage, SessionSource } from "./protocol";
+import type { SceneMessage } from "./protocol";
 import type { BlockFiles } from "./registry";
+import type { SessionSource } from "./session";
 
 /** What the source posts a Worker running orbe-wasm's `worker.js` first, before any command. */
 export interface OpenMessage {

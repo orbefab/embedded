@@ -9,6 +9,67 @@ use serde_json::{Value, json};
 use crate::condition::Unit;
 use crate::duration::Duration;
 
+/// A command's reply: the envelope `orbe <command> --json` prints. `data` is what the command
+/// returned, and is absent for a command with nothing to return.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema), schemars(rename = "Reply"))]
+pub(crate) struct Envelope<'a> {
+    session: &'a str,
+    t_ps: u64,
+    state: State,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<Value>,
+    #[serde(flatten)]
+    outcome: Outcome<'a>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[serde(untagged)]
+enum Outcome<'a> {
+    Done {
+        ok: Bool<true>,
+    },
+    Refused {
+        ok: Bool<false>,
+        error: ReplyError<'a>,
+    },
+}
+
+/// A refused command's error, as the CLI prints it: `error[<code>]: <message>`, then the hint.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+struct ReplyError<'a> {
+    code: &'a str,
+    message: &'a str,
+    /// Empty when there is none.
+    hint: &'a str,
+}
+
+/// The JSON `true` or `false`, as a type, so an envelope's `ok` says which outcome it has.
+struct Bool<const B: bool>;
+
+impl<const B: bool> Serialize for Bool<B> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bool(B)
+    }
+}
+
+#[cfg(test)]
+impl<const B: bool> schemars::JsonSchema for Bool<B> {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        B.to_string().into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({ "const": B })
+    }
+}
+
 /// A reply's wire form, for a session process and its client, is its serde form. `json` is
 /// the envelope a person or an agent reads.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -20,7 +81,10 @@ pub struct Reply {
     pub error: Option<Error>,
 }
 
+/// The session's state in a reply. `closed` is a session with no scene open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
 pub enum State {
     /// No session is open.
     Closed,
@@ -201,7 +265,7 @@ impl Diagnostic {
         }
     }
 
-    fn text(&self) -> String {
+    pub(crate) fn text(&self) -> String {
         let severity = self.json["severity"].as_str().unwrap_or("warning");
         let message = self.json["message"].as_str().unwrap_or_default();
         format!("{severity}[{}] {message}", self.code)
@@ -705,19 +769,28 @@ impl Reply {
     }
 
     pub fn json(&self) -> Value {
-        let mut envelope = json!({
-            "ok": self.ok(),
-            "session": self.session,
-            "t_ps": self.t_ps,
-            "state": self.state.as_str(),
-        });
-        if let Some(data) = self.data.json() {
-            envelope["data"] = data;
+        serde_json::to_value(self.envelope()).expect("an envelope serializes")
+    }
+
+    pub(crate) fn envelope(&self) -> Envelope<'_> {
+        let outcome = match &self.error {
+            None => Outcome::Done { ok: Bool },
+            Some(error) => Outcome::Refused {
+                ok: Bool,
+                error: ReplyError {
+                    code: error.code.as_str(),
+                    message: &error.message,
+                    hint: &error.hint,
+                },
+            },
+        };
+        Envelope {
+            session: &self.session,
+            t_ps: self.t_ps,
+            state: self.state,
+            data: self.data.json(),
+            outcome,
         }
-        if let Some(error) = &self.error {
-            envelope["error"] = json!({ "code": error.code.as_str(), "message": error.message, "hint": error.hint });
-        }
-        envelope
     }
 
     pub fn text(&self) -> String {

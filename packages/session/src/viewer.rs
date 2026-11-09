@@ -1,16 +1,19 @@
 //! What a session says to the viewers that watch it, and how it reads what they send. The CLI's
 //! WebSocket and a browser's Worker both speak through this, so a viewer gets the same messages
-//! from either. `packages/viewer/src/protocol.ts` types them.
+//! from either. `packages/viewer/src/protocol.ts` is generated from these types, and
+//! `scripts/bless.sh` rewrites it.
 
 use std::path::Path;
 use std::time::Duration;
 
+use orbe_scene::View;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::Files;
 use crate::command::{Command, spec};
-use crate::live::{Channels, Live, Pace, Sample};
-use crate::reply::{Code, Data, Error, Reply};
+use crate::live::{Channels, FrameState, Live, Pace, Sample};
+use crate::reply::{Code, Data, Envelope, Error, Reply};
 
 /// `play` advances this much simulated time per tick at most, one tick of wall time at speed 1,
 /// so a slow engine plays in slow motion and a command waits at most one tick. A `step` sends
@@ -18,11 +21,106 @@ use crate::reply::{Code, Data, Error, Reply};
 pub const TICK: Duration = Duration::from_millis(16);
 
 /// The commands a viewer sends.
-const SENT: [&str; 4] = ["press", "release", "play", "pause"];
+pub(crate) const SENT: [&str; 4] = ["press", "release", "play", "pause"];
+
+/// A message's `type`: a type with the one value `$name`.
+macro_rules! tag {
+    ($tag:ident, $name:literal) => {
+        #[derive(Serialize)]
+        #[cfg_attr(test, derive(schemars::JsonSchema), schemars(inline))]
+        pub(crate) enum $tag {
+            #[serde(rename = $name)]
+            Tag,
+        }
+    };
+}
+
+tag!(SceneTag, "scene");
+tag!(FrameTag, "frame");
+tag!(ReplyTag, "reply");
+tag!(ClosedTag, "closed");
+
+/// The scene a session opened, sent once per `open`, with the refs each frame array follows.
+#[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(schemars::JsonSchema),
+    schemars(extend("allOf" = [{ "$ref": "./view#/$defs/View" }]))
+)]
+pub(crate) struct SceneMessage<'a> {
+    r#type: SceneTag,
+    session: &'a str,
+    channels: &'a Channels,
+    #[serde(flatten)]
+    #[cfg_attr(test, schemars(skip))]
+    view: &'a View,
+}
+
+/// The `scene` message of `view` in the session `session`.
+pub(crate) fn scene_message(session: &str, channels: &Channels, view: &View) -> Value {
+    let message = SceneMessage {
+        r#type: SceneTag::Tag,
+        session,
+        channels,
+        view,
+    };
+    serde_json::to_value(message).expect("a scene message serializes")
+}
+
+/// The circuit at `t_ps`, indexed by the scene's `channels`.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+pub(crate) struct FrameMessage<'a> {
+    r#type: FrameTag,
+    seq: u64,
+    t_ps: u64,
+    state: FrameState,
+    /// 0 for low, 1 for high, per `channels.pins`.
+    #[cfg_attr(test, schemars(extend("items" = { "enum": [0, 1] })))]
+    pins: &'a [u8],
+    /// Mean current in amperes since the previous frame, per `channels.leds`. The frame after a
+    /// page joins carries the present current.
+    led_a: Vec<f64>,
+    /// 1 for closed, 0 for open, per `channels.switches`.
+    #[cfg_attr(test, schemars(extend("items" = { "enum": [0, 1] })))]
+    switches: &'a [u8],
+    /// On a frame from a `play` tick: the speed `play` runs at, always 1 for now.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    speed: Option<f64>,
+    /// On a frame from a `play` tick: simulated time over wall time in that tick, as the session
+    /// achieved it. Under 1 when the engine runs slower than real time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ratio: Option<f64>,
+    /// How many diagnostics the session has, warnings and the fault.
+    diagnostics: usize,
+    /// The diagnostic that faulted the session, as `orbe snapshot` prints it, such as
+    /// `error[solver.convergence] Newton did not converge ...`. Absent unless `state` is
+    /// `faulted`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fault: Option<&'a str>,
+}
+
+/// The reply to the viewer's command `id`. Only the viewer that sent the command gets it. `id`
+/// is null when the command was not JSON with a number `id`.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+pub(crate) struct ReplyMessage<'a> {
+    r#type: ReplyTag,
+    id: Option<u64>,
+    reply: Envelope<'a>,
+}
+
+/// The session ended, with why, such as `` `orbe close` ended the session``. Nothing follows.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+pub(crate) struct ClosedMessage<'a> {
+    r#type: ClosedTag,
+    reason: &'a str,
+}
 
 /// A viewer's command, `{"id": 1, "cmd": "press", "ref": "@btn1"}`, parsed by the CLI's own
 /// table, as `orbe press @btn1` would be, with the `id` its reply carries back.
-pub fn command(text: &str) -> (Value, Result<Command, Error>) {
+pub fn command(text: &str) -> (Option<u64>, Result<Command, Error>) {
     let usage = |message: String| {
         Error::new(
             Code::Usage,
@@ -31,12 +129,9 @@ pub fn command(text: &str) -> (Value, Result<Command, Error>) {
         )
     };
     let Ok(message) = serde_json::from_str::<Value>(text) else {
-        return (
-            Value::Null,
-            Err(usage("a viewer's command is not JSON".into())),
-        );
+        return (None, Err(usage("a viewer's command is not JSON".into())));
     };
-    let id = message["id"].clone();
+    let id = message["id"].as_u64();
     let name = message["cmd"].as_str().unwrap_or_default();
     let parsed = match spec(name) {
         Some(spec) if SENT.contains(&name) => {
@@ -59,13 +154,22 @@ pub fn answer(live: &mut Live, text: &str) -> (Reply, Value) {
         Ok(command) => live.run(&command),
         Err(error) => live.refuse(error),
     };
-    let message = json!({ "type": "reply", "id": id, "reply": reply.json() });
+    let message = ReplyMessage {
+        r#type: ReplyTag::Tag,
+        id,
+        reply: reply.envelope(),
+    };
+    let message = serde_json::to_value(message).expect("a reply message serializes");
     (reply, message)
 }
 
 /// The last message a viewer gets, with why the session ended.
 pub fn closed(reason: &str) -> Value {
-    json!({ "type": "closed", "reason": reason })
+    let message = ClosedMessage {
+        r#type: ClosedTag::Tag,
+        reason,
+    };
+    serde_json::to_value(message).expect("a closed message serializes")
 }
 
 /// The `scene` message of the catalog part `id` drawn on its own, as a part's page shows it,
@@ -87,11 +191,7 @@ pub fn part_scene(id: &str, parts: Vec<(String, Vec<u8>)>) -> Result<Value, Stri
             .collect::<Vec<_>>()
             .join("\n")
     })?;
-    let mut message = serde_json::to_value(view).expect("a view serializes");
-    message["type"] = json!("scene");
-    message["session"] = json!(id);
-    message["channels"] = serde_json::to_value(Channels::default()).expect("channels");
-    Ok(message)
+    Ok(scene_message(id, &Channels::default(), &view))
 }
 
 /// The `scene` and `frame` messages a session's viewers get. It numbers the frames, and gives
@@ -149,20 +249,20 @@ impl Feed {
             }
             _ => sample.leds.iter().map(|(i, _)| *i).collect(),
         };
-        let mut frame = json!({
-            "type": "frame",
-            "seq": self.seq,
-            "t_ps": sample.t_ps,
-            "state": sample.state.as_str(),
-            "pins": sample.pins,
-            "led_a": led_a,
-            "switches": sample.switches,
-            "diagnostics": sample.diagnostics,
-        });
-        if let Some(pace) = pace {
-            frame["speed"] = json!(pace.speed);
-            frame["ratio"] = json!(pace.ratio);
-        }
+        let frame = FrameMessage {
+            r#type: FrameTag::Tag,
+            seq: self.seq,
+            t_ps: sample.t_ps,
+            state: sample.state,
+            pins: &sample.pins,
+            led_a,
+            switches: &sample.switches,
+            speed: pace.map(|pace| pace.speed),
+            ratio: pace.map(|pace| pace.ratio),
+            diagnostics: sample.diagnostics,
+            fault: sample.fault.as_deref(),
+        };
+        let frame = serde_json::to_value(frame).expect("a frame serializes");
         self.seq += 1;
         self.last = Some(sample);
         Some(frame)
@@ -176,7 +276,7 @@ mod tests {
     #[test]
     fn a_viewer_s_command_parses_as_the_cli_s() {
         let (id, press) = command(r#"{"id": 7, "cmd": "press", "ref": "@btn1"}"#);
-        assert_eq!(id, 7);
+        assert_eq!(id, Some(7));
         assert_eq!(
             press.unwrap(),
             Command::parse("press @btn1", Path::new(""))
@@ -195,7 +295,7 @@ mod tests {
         let (_, fast) = command(r#"{"id": 11, "cmd": "play", "speed": 2}"#);
         assert_eq!(fast.unwrap_err().message, "takes no arguments; usage: play");
         let (none, garbled) = command("press");
-        assert_eq!(none, Value::Null);
+        assert_eq!(none, None);
         assert_eq!(
             garbled.unwrap_err().message,
             "a viewer's command is not JSON"
