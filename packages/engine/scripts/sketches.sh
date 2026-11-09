@@ -82,7 +82,8 @@ mkdir "$work/wire"
 
 # A clock other than 16 MHz. The 16 MHz archives above stay the ones every other sketch links.
 clock_archives() {
-  local cpu=$1 dest=$work/cpu-$cpu
+  local cpu=$1
+  local dest=$work/cpu-$cpu
   [[ -f $dest/core.a ]] && return
   mkdir -p "$dest/core" "$dest/wire"
   local clocked=(-mmcu=atmega328p -DF_CPU="${cpu}L" -I"$core" -I"$runtime/variants/standard")
