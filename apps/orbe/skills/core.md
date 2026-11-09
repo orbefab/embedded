@@ -133,7 +133,7 @@ A scene is JSONC: JSON plus `//` comments and trailing commas, nothing more. Its
 - `parts`: each instance by name. `type` is a catalog id (the list below) or a `./` path to a part folder of your own. The other keys are the part's params. `"not_simulated": "<why>"` keeps a part in the scene for drawing but out of the simulation. Nothing may be wired to it. A wire to one of its pins is a `not_simulated` error that gives `<why>`.
 - `wires`: pairs of pins, `["nano.D2", "btn1.a"]`. orbe joins wired pins into nets. Two wires to one pin are fine. A third item, `{ "kind": "jumper" }`, `{ "kind": "trace" }` or `{ "kind": "contact" }`, only says how it is drawn. `jumper` is the default.
 - `nets` (optional): names a net by one of its pins, `"GND": "nano.GND"`. Other nets take the name of their smallest pin, with `.` written `__`, as `nano__GND`.
-- `layout` (optional): `"btn1": { "at": [x, y, z], "rotate": [rx, ry, rz] }` in mm and degrees, for drawing only. The 3D page puts a part with no `layout` in a row to the right of the placed ones, and draws its wires to it, so a scene with no `layout` at all still shows every part and wire.
+- `layout` (optional): `"btn1": { "at": [x, y, z], "rotate": [rx, ry, rz] }` in mm and degrees, for drawing only, or `"r1": { "on": { "a": "bb.d25" } }` to plug a part into a breadboard, which also wires it (see "Breadboards"). The 3D page puts a part with no `layout` in a row to the right of the placed ones, and draws its wires to it, so a scene with no `layout` at all still shows every part and wire.
 - `sim` (optional): `{ "max_step": "1ms", "seed": 1 }`. `max_step` is the engine's largest step, 10 ms by default.
 
 A part name starts with a letter, takes letters, digits and `_`, and may not contain `__` or end in `_`. `i`, `v`, `p`, `pin`, `logic` and `net` are reserved. With two boards in a scene, wire their GND pins together, so both grounds are one net.
@@ -143,6 +143,67 @@ Param values:
 - A number with an optional SI prefix and unit, as a string or a number, such as `"10k"`, `"4.7 kohm"`, `"220"`, `220`, `"100n"`, `"1ms"`. Prefixes: p, n, u, m, k, M.
 - A choice by its name, as `"color": "red"`.
 - A file by its path, relative to the file that sets it, as `"firmware": "build/button.ino.hex"`.
+
+## Breadboards
+
+`breadboard-400` (30 columns) and `breadboard-830` (63 columns) are parts, and every hole is one of their pins. A hole in the middle is named by its row and column, as `bb.c12`: rows `a` to `e` on one side of the centre channel, `f` to `j` on the other. A strip joins the five holes of a column on one side, so `bb.a12` to `bb.e12` are one net. Each side has two rails, and each rail joins its whole length. Beside row a, the outer rail `W` is + and the inner rail `X` is -. Beside row j, the inner rail `Y` is + and the outer rail `Z` is -. A rail hole takes the number of the column it sits beside, as `bb.X20`. Rail holes come in groups of five with a gap at every sixth column, so some numbers have no hole, such as `W6` on the 400. `orbe part` prints the holes a board has, then each strip, `;` between strips. A rail lists its groups:
+
+```console
+$ orbe part breadboard-400
+...
+holes  8 mm deep, each a pin with one lead; a strip joins its holes
+  rows a to j at columns 1 to 30; rows W to Z at columns 1 to 5, 7 to 11, 13 to 17, 19 to 23, 25 to 29
+...
+  strips of 25  W1 to W5, W7 to W11, W13 to W17, W19 to W23, W25 to W29; X1 to X5, X7 to X11, X13 to X17, X19 to X23, X25 to X29; Y1 to Y5, Y7 to Y11, Y13 to Y17, Y19 to Y23, Y25 to Y29; Z1 to Z5, Z7 to Z11, Z13 to Z17, Z19 to Z23, Z25 to Z29
+...
+```
+
+Give the board an `at`. Then plug each part in with `on`, one of its pins and the hole that pin's leg goes into, and turn it about Z with `rotate` in quarter turns. Its other legs land where its shape puts them, each in its own hole, and each joins that hole's strip. A resistor's legs are 4 columns apart and an LED's 1, along the row at no turn. The part sits on the board's top. A leg longer than a hole is deep, 8 mm, stands the part up on its legs: an LED's 27.4 mm legs hold its body 19.4 mm above the board.
+
+A pin on two or more legs of one part goes in by its lowest lead. `orbe part` lists each pin's leads: a switch's `a` is on leads 1 and 2, so `"a": "bb.f22"` puts lead 1 in `f22`, and an `atmega328p-dip28`'s `GND` is on 8 and 22, so lead 8 goes in. Naming the hole another of its legs would land in moves the whole part: with `"a": "bb.e22"`, lead 1 goes in `e22`, lead 2 lands in `b22`, and the switch no longer crosses the channel. A label on legs of two parts, as the Nano's `GND` on two header pins, names no one hole, and `on` refuses it. Name a pin on one leg instead, as `D13`.
+
+Wire the rest with jumpers between holes, and give a jumper `{ "color": "#d12b2b" }` to draw it red. The worked example on a breadboard, where the Nano straddles the channel over columns 1 to 15:
+
+```jsonc breadboard.jsonc
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-400" },
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "btn1": { "type": "tactile-switch-6mm" },
+    "r2": { "type": "resistor-axial", "resistance": "10k" },
+    "r1": { "type": "resistor-axial", "resistance": "220" },
+    "led1": { "type": "led-5mm", "color": "red" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "D13": "bb.d1" } }, // D2 lands in j11, 5V in a12, GND in a14
+    "btn1": { "on": { "a": "bb.f22" }, "rotate": [0, 0, 90] }, // a's lead 1 in f22, its lead 2 in e22; b in f20 and e20
+    "r2": { "on": { "a": "bb.b22" }, "rotate": [0, 0, -90] }, // b lands in X22, the - rail
+    "r1": { "on": { "a": "bb.d25" } }, // b lands in d29
+    "led1": { "on": { "anode": "bb.c29" } }, // cathode lands in c30
+  },
+  "wires": [
+    ["bb.a12", "bb.W11"], // 5V to the + rail
+    ["bb.a14", "bb.X14"], // GND to the - rail
+    ["bb.a20", "bb.W20"], // btn1.b to 5V
+    ["bb.j11", "bb.j22"], // D2 to btn1.a
+    ["bb.c1", "bb.c25"], // D13 to r1.a
+    ["bb.a30", "bb.X29"], // led1.cathode to GND
+  ],
+}
+```
+
+It is the same circuit as `scene.jsonc`, so it runs the same. Read a hole as a pin, as `orbe get @bb.a12`. `snapshot` lists no holes, and shows a board's pins that reach another part, as with wires. A leg that lands in the channel, off the board, between holes or in a hole another leg holds is an error that names the leg and the hole. Its hint is a placement orbe tried that seats every leg with no strip joining two of the part's pins: a quarter turn from the same hole, else a hole within 10.16 mm and a turn, else it says no quarter turn seats the part there.
+
+```console
+$ orbe add breadboard-400
+...
+$ orbe check breadboard.jsonc
+breadboard.jsonc: ok, 18 engine parts, 31 nets, ground nano__GND
+```
+
+`orbe lint` warns `scene.shorted` when two pins of one part sit in one strip, such as a resistor turned along a column, and its hint is found the same way. A wire may still end on a pin off the board, such as an Uno's header pin.
 
 ## Parts
 
@@ -251,7 +312,8 @@ A test needs no background process, so it runs the same in CI. Each file's sessi
 | `scene.unconnected` | Nothing is wired to a part, or a part with at most 3 nets, such as a resistor, LED, transistor or pot, has a net with no wire. Wire it, or leave it open when the circuit means it, as a pot used as a variable resistor. A board runs its chip from its own supply, so a board alone, such as one blinking its L LED, gets no warning. |
 | `net.floating` | A net has no DC path to ground. Fix it when a part reads that net. |
 | `scene.ground_unnamed` | The ground net is named after a pin. Name it in `nets`, as `"GND": "nano.GND"`. |
-| `scene.unplaced` | Parts have no `layout` position, so the 3D page places them in a row for drawing only. One warning names them all. Give a part a position when its place matters. |
+| `scene.unplaced` | Parts have no `layout` position, so the 3D page places them in a row for drawing only. One warning names them all. A part plugged in with `on` has a position. Give a part a position when its place matters. |
+| `scene.shorted` | Two pins of one part sit in one breadboard strip, so the strip joins them, such as a resistor turned along a column. Turn the part a quarter turn, as the hint shows, or plug it in elsewhere. |
 | `scene.rotation` | A `rotate` angle is outside -180 to 180 degrees. Write the same turn as the hint shows. |
 
 ## Output and exit codes

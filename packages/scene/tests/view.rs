@@ -34,7 +34,7 @@ fn instances_carry_their_parsed_params_and_placements() {
         .collect();
     assert_eq!(
         names,
-        ["nano", "btn1", "r2", "r1", "led1"],
+        ["bb", "nano", "btn1", "r2", "r1", "led1"],
         "the scene's order"
     );
     assert_eq!(
@@ -47,8 +47,8 @@ fn instances_carry_their_parsed_params_and_placements() {
     );
     assert_eq!(
         instance(instances, "btn1")["placement"],
-        Value::Null,
-        "the scene has no layout"
+        json!({ "at": [13.97, 0.0, 8.5], "rotate": [0.0, 0.0, 90.0] }),
+        "plugged in across the breadboard's channel, on its top"
     );
 
     let nano = &instance(instances, "nano")["children"];
@@ -109,10 +109,16 @@ fn wires_hold_the_scene_s_and_each_part_s_with_prefixed_ends() {
     let wires = view["wires"].as_array().unwrap();
     assert_eq!(
         wires[0],
-        json!({ "ends": ["nano.D2", "btn1.a"], "kind": "jumper" })
+        json!({ "ends": ["bb.a12", "bb.W11"], "kind": "jumper", "color": "#d12b2b" })
     );
     let jumpers = wires.iter().filter(|w| w["kind"] == "jumper").count();
-    assert_eq!(jumpers, 8, "the scene's 7 and the Nano's diode bridge");
+    assert_eq!(jumpers, 7, "the scene's 6 and the Nano's diode bridge");
+    assert!(
+        wires
+            .iter()
+            .any(|w| w["ends"] == json!(["btn1.a", "bb.f22"]) && w["kind"] == "contact"),
+        "a leg in its hole"
+    );
     assert!(
         wires
             .iter()

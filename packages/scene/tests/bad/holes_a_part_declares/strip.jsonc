@@ -1,0 +1,9 @@
+{
+  "format": 1,
+  "joins_only": true,
+  "pins": { "h1": [1], "h2": [2], "h3": [3] },
+  "holes": {
+    "depth": 0,
+    "strips": [["h1", "h2"], ["h2", "h4"], ["h3"]],
+  },
+}

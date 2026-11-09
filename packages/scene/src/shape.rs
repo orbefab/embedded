@@ -219,6 +219,14 @@ const BUY: Shape = Shape::Obj(
     ],
 );
 
+const HOLES: Shape = Shape::Obj(
+    "`holes`",
+    &[
+        ("depth", Shape::Num),
+        ("strips", Shape::List(&Shape::List(&Shape::Str))),
+    ],
+);
+
 /// A part file's keys. `model` is the engine's, so the engine checks it.
 pub(crate) const PART: &[(&str, Shape)] = &[
     ("format", Shape::Any),
@@ -248,6 +256,7 @@ pub(crate) const PART: &[(&str, Shape)] = &[
     ("not_simulated", Shape::List(&NOT_SIMULATED)),
     ("buy", Shape::List(&BUY)),
     ("joins_only", Shape::Bool),
+    ("holes", HOLES),
 ];
 
 pub(crate) fn keys(fields: &[(&'static str, Shape)]) -> Vec<&'static str> {

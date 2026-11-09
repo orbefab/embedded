@@ -1,0 +1,44 @@
+{
+  "part": "breadboard-830",
+  "source": {
+    "script": "model.py",
+    "sha256": "377794f014338a2cee1cfd328e227d4ee587457de7edba20914a96bf8ab23b94",
+    "bytes": 1344
+  },
+  "files": {
+    "breadboard-830.glb": {
+      "sha256": "f263d7e0d6ecb7bd67cf6add1ab1836bd577fd147e68f820b58dc46fe94101b0",
+      "bytes": 739548
+    },
+    "breadboard-830.anchors.json": {
+      "sha256": "22c38b6f2226ff02138bc10a5c6dec5f9d1c950bccc8ce61db3a5ffdc6be4c3f",
+      "bytes": 95592
+    }
+  },
+  "box": {
+    "min": [-82.549997, -27.3, 0],
+    "max": [82.549997, 27.3, 8.55]
+  },
+  "kept_nodes": [],
+  "draw_calls": 4,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 830,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 59,
+      "primitives_out": 4
+    }
+  }
+}

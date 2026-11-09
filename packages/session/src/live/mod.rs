@@ -467,10 +467,19 @@ impl Open {
         }
     }
 
-    /// The nets that join two or more of the scene's own parts.
+    /// Whether a part is a board with holes, such as a breadboard. A leg in a hole joins the
+    /// hole's net, so the board would otherwise join every net a part plugged into it has.
+    fn holed(&self, top: &str) -> bool {
+        self.view
+            .parts
+            .get(&self.refs.parts[top].ty)
+            .is_some_and(|data| !data.strips.is_empty())
+    }
+
+    /// The nets that join two or more of the scene's own parts, a board with holes aside.
     fn wired_nets(&self) -> BTreeSet<&str> {
         let mut owners: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-        for top in &self.refs.top {
+        for top in self.refs.top.iter().filter(|top| !self.holed(top)) {
             for net in self.refs.parts[top].pins.values().flatten() {
                 owners.entry(net).or_default().insert(top);
             }
@@ -613,7 +622,12 @@ impl Open {
                     Error::new(
                         Code::NoReading,
                         format!("`{path}` has no reading of its own"),
-                        format!("read one of its {}", names(&self.refs.parts[&path], &[])),
+                        match self.refs.parts[&path].pins.keys().next() {
+                            Some(hole) if self.holed(&path) => {
+                                format!("read one of its holes, such as `{path}.{hole}`")
+                            }
+                            _ => format!("read one of its {}", names(&self.refs.parts[&path], &[])),
+                        },
                     )
                 })?;
                 (path, value)
@@ -750,7 +764,7 @@ impl Open {
             let pins = part
                 .pins
                 .iter()
-                .filter(|_| part.engine.is_empty())
+                .filter(|_| part.engine.is_empty() && !self.holed(top))
                 .filter_map(|(pin, net)| {
                     let net = net.as_deref().filter(|n| wired.contains(n))?;
                     Some((pin.clone(), self.pin(top, pin, Some(net)).ok()?))

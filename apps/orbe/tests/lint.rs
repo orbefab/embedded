@@ -94,22 +94,15 @@ fn lint_warns_on_the_nano_block_exits_zero_and_writes_nothing() {
     let scene = fs::read_to_string(block.join("scene.jsonc")).unwrap();
     let at = |text: &str| line_of(&scene, text);
     let nano = at("\"nano\":");
-    let want: Vec<(usize, String)> = [
-        (at("{"), "scene.ground_unnamed"),
-        (nano, "scene.unplaced"),
-        (nano, "net.floating"),
-    ]
-    .into_iter()
-    .map(|(l, c)| (l, c.into()))
-    .collect();
+    let want: Vec<(usize, String)> = [(at("{"), "scene.ground_unnamed"), (nano, "net.floating")]
+        .into_iter()
+        .map(|(l, c)| (l, c.into()))
+        .collect();
     assert_eq!(warned(&run.stdout), want, "{}", run.stdout);
     assert!(
         run.stdout
-            .ends_with("3 warnings in blocks/nano-button-led/scene.jsonc\n")
+            .ends_with("2 warnings in blocks/nano-button-led/scene.jsonc\n")
     );
-    assert!(run.stdout.contains(
-        "warning[scene.unplaced]: `nano`, `btn1`, `r2`, `r1` and `led1` have no position"
-    ));
     assert!(
         run.stdout
             .contains("add \"GND\": \"nano.GND\" to the scene's \"nets\"")
@@ -121,7 +114,7 @@ fn lint_warns_on_the_nano_block_exits_zero_and_writes_nothing() {
     ));
     assert_eq!(envelope["ok"], true);
     let found = envelope["data"]["diagnostics"].as_array().unwrap();
-    assert_eq!(found.len(), 3);
+    assert_eq!(found.len(), 2);
     for d in found {
         let keys: Vec<&str> = d.as_object().unwrap().keys().map(String::as_str).collect();
         assert_eq!(keys, ["code", "column", "file", "hint", "line", "message"]);
@@ -132,8 +125,8 @@ fn lint_warns_on_the_nano_block_exits_zero_and_writes_nothing() {
 }
 
 /// The Uno's parts all have a model, a reason or `joins_only`, and its L LED has its resistor,
-/// so its Block warns only of what the Nano Block also leaves as it is: the ground's name,
-/// placement, and AREF with nothing wired to it.
+/// so its Block warns only of what the Nano Block also leaves as it is: the ground's name, and
+/// AREF with nothing wired to it. The breadboard's empty holes warn of nothing.
 #[test]
 fn lint_on_the_uno_block_warns_only_as_the_nano_block_does() {
     let repo = common::repo();
@@ -142,7 +135,7 @@ fn lint_on_the_uno_block_warns_only_as_the_nano_block_does() {
     let codes: Vec<String> = warned(&run.stdout).into_iter().map(|(_, c)| c).collect();
     assert_eq!(
         codes,
-        ["scene.ground_unnamed", "scene.unplaced", "net.floating"],
+        ["scene.ground_unnamed", "net.floating"],
         "{}",
         run.stdout
     );
@@ -522,4 +515,53 @@ fn a_resistor_beside_an_led_limits_nothing_and_one_in_series_on_either_side_does
         "{}",
         run.stdout
     );
+}
+
+/// A resistor plugged in along a column has both legs in one strip, which shorts it. Across the
+/// strips it does not. The breadboard's hundreds of empty holes warn of nothing either way.
+#[test]
+fn two_pins_of_a_part_in_one_breadboard_strip_warn_shorted() {
+    for (rotate, shorted) in [("90", true), ("0", false)] {
+        let scene = format!(
+            r#"{{
+  "format": 1,
+  "parts": {{
+    "bb": {{ "type": "breadboard-830" }},
+    "nano": {{ "type": "nano-board", "firmware": "build/button.ino.hex" }},
+    "r1": {{ "type": "resistor-axial", "resistance": "220" }},
+  }},
+  "nets": {{ "GND": "nano.GND" }},
+  "layout": {{
+    "bb": {{ "at": [0, 0, 0] }},
+    "nano": {{ "on": {{ "D13": "bb.d1" }} }},
+    "r1": {{ "on": {{ "a": "bb.a30" }}, "rotate": [0, 0, {rotate}] }},
+  }},
+  "wires": [["bb.c1", "bb.e30"], ["bb.e34", "bb.c14"], ["bb.b30", "bb.j40"], ["bb.a34", "bb.j41"]],
+}}
+"#
+        );
+        let dir = project(&scene);
+        let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+        assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+        let codes: Vec<String> = warned(&run.stdout).into_iter().map(|(_, c)| c).collect();
+        let want: &[&str] = if shorted {
+            &["net.floating", "scene.shorted"]
+        } else {
+            &["net.floating"]
+        };
+        assert_eq!(codes, want, "rotate {rotate}: {}", run.stdout);
+        if shorted {
+            assert!(
+                run.stdout.contains(
+                    "warning[scene.shorted]: `r1.a` and `r1.b` sit in one strip, bb.a30 to bb.e30, so the strip shorts them"
+                ) && run.stdout.contains("\"rotate\": [0, 0, 0], and every leg lands in a hole"),
+                "{}",
+                run.stdout
+            );
+            assert_eq!(
+                lines_warned(&run, "scene.shorted"),
+                [line_of(&scene, "\"r1\":")]
+            );
+        }
+    }
 }

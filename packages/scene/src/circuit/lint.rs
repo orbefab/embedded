@@ -13,8 +13,9 @@ use crate::model::{Instance, Part, TypeRef};
 use crate::name::and_list;
 use crate::syntax::{self, Node};
 
-const RULES: [fn(&Scope, &mut Findings); 7] = [
+const RULES: [fn(&Scope, &mut Findings); 8] = [
     unplaced,
+    shorted,
     unconnected,
     ground_unnamed,
     rotation,
@@ -91,9 +92,16 @@ impl Circuit<'_> {
         let scene = &project.scene;
         let reached = scene.comp.wires.iter().flat_map(|w| &w.ends);
         let ends: Vec<_> = reached.chain(&scene.comp.ground).collect();
+        let contacts: Vec<usize> = self
+            .seated
+            .values()
+            .flat_map(|s| &s.contacts)
+            .flat_map(|c| [c.pin_key, c.hole_key])
+            .collect();
         let wired = ends
             .into_iter()
             .filter_map(|r| self.resolve(ROOT, r))
+            .chain(contacts)
             .map(|key| root[key])
             .collect();
         let tops = scene
@@ -133,6 +141,7 @@ fn unplaced(s: &Scope, out: &mut Findings) {
     let unplaced: Vec<&Instance> = s
         .tops
         .iter()
+        .filter(|(_, id, _)| !s.circuit.seated.contains_key(id))
         .map(|(instance, _, _)| *instance)
         .filter(|i| layout.and_then(|l| l.get(&i.name)?.get("at")).is_none())
         .collect();
@@ -155,6 +164,52 @@ fn unplaced(s: &Scope, out: &mut Findings) {
             first.name
         ),
     );
+}
+
+/// Two pins of one plugged part in one strip: the strip joins them, as a part plugged in along
+/// a column instead of across it.
+fn shorted(s: &Scope, out: &mut Findings) {
+    for &(instance, id, _) in &s.tops {
+        let Some(seated) = s.circuit.seated.get(&id) else {
+            continue;
+        };
+        let mut strips: BTreeMap<(usize, usize), Vec<&super::plug::Contact>> = BTreeMap::new();
+        for contact in &seated.contacts {
+            if let Some(strip) = contact.strip {
+                strips
+                    .entry((contact.board, strip))
+                    .or_default()
+                    .push(contact);
+            }
+        }
+        for ((board, strip), contacts) in strips {
+            let mut pins: Vec<&str> = contacts.iter().map(|c| c.shown.as_str()).collect();
+            pins.dedup();
+            if pins.len() < 2 {
+                continue;
+            }
+            let board = s.circuit.insts[board].dotted();
+            let holes = s
+                .circuit
+                .part(s.circuit.insts[ROOT].children[&board])
+                .and_then(|p| p.holes.as_ref())
+                .map(|h| &h.strips[strip]);
+            let span = holes.map_or_else(
+                || board.clone(),
+                |h| crate::holes::strip_text(h, &format!("{board}.")),
+            );
+            let shown: Vec<String> = pins.iter().map(|p| format!("`{p}`")).collect();
+            out.push(
+                Code::Lint(Lint::Shorted),
+                instance.name_span,
+                format!(
+                    "{} sit in one strip, {span}, so the strip shorts them",
+                    and_list(&shown.iter().map(String::as_str).collect::<Vec<_>>())
+                ),
+                seated.parted.clone().unwrap_or_default(),
+            );
+        }
+    }
 }
 
 /// A part with at most this many nets, such as a resistor, an LED or a transistor, uses each of
@@ -221,6 +276,7 @@ fn ground_unnamed(s: &Scope, out: &mut Findings) {
     let pin = s
         .tops
         .iter()
+        .filter(|(_, _, part)| part.holes.is_none())
         .find_map(|&(instance, id, part)| {
             let pin = part.pins.iter().find(|p| s.pin_root(id, &p.name) == root)?;
             Some(format!("{}.{}", instance.name, pin.name))
@@ -328,7 +384,10 @@ fn floating(s: &Scope, out: &mut Findings) {
         };
         let net = net.as_str();
         let root = s.net_root(net).expect("the reader named every net");
-        let span = s.circuit.insts[s.circuit.pins[root].inst].top_span;
+        let first = (0..s.circuit.pins.len())
+            .find(|&k| s.root[k] == root && !s.circuit.pins[k].hole)
+            .unwrap_or(root);
+        let span = s.circuit.insts[s.circuit.pins[first].inst].top_span;
         let value = serde_json::to_value(&found).unwrap_or_default();
         let pin = net.replace("__", ".");
         out.push(

@@ -1,0 +1,16 @@
+// r1's b leg lands in a9, where the LED's anode already is.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-400" },
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "led1": { "type": "led-5mm", "color": "red" },
+    "r1": { "type": "resistor-axial", "resistance": "220" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "led1": { "on": { "anode": "bb.a9" } },
+    "r1": { "on": { "a": "bb.a5" } },
+  },
+  "wires": [["bb.b5", "nano.D13"], ["bb.b10", "nano.GND"]],
+}

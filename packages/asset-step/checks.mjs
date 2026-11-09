@@ -5,6 +5,8 @@ import { dedup, join, prune } from '@gltf-transform/functions';
 import { GLTF_TURN, IDENTITY, apply, box, distance, lowest, mm, multiply, partNodes, placement, tip } from './geometry.mjs';
 
 const TIP_TOLERANCE = 0.01;
+/** How close a vertex of the model must come to a socket cut into the body, which has no node. */
+const CUT_REACH = 1;
 const SEAT_TOLERANCE = 0.01;
 const KEPT_KINDS = new Set(['leg', 'socket']);
 
@@ -62,7 +64,7 @@ const nodeName = (v) => typeof v === 'string' && v !== '';
 
 const ANCHOR_FIELDS = [
   ['lead', Number.isInteger, 'an integer'],
-  ['node', nodeName, 'a node name'],
+  ['node', (v, a) => nodeName(v) || (v === null && a.kind === 'socket'), 'a node name, or null on a socket cut into the body'],
   ['also', (v) => Array.isArray(v) && v.every(nodeName), 'a list of node names'],
   ['at', finite3, 'three finite numbers'],
   ['axis', finite3, 'three finite numbers'],
@@ -73,7 +75,7 @@ function anchorShape(anchors) {
   if (!Array.isArray(anchors?.anchors)) fail('anchors', 'the anchors file has no `anchors` list');
   anchors.anchors.forEach((a, i) => {
     for (const [field, ok, what] of ANCHOR_FIELDS) {
-      if (!ok(a?.[field])) fail('anchors', `anchor ${i + 1}'s \`${field}\` must be ${what}, and is ${JSON.stringify(a?.[field])}`);
+      if (!ok(a?.[field], a)) fail('anchors', `anchor ${i + 1}'s \`${field}\` must be ${what}, and is ${JSON.stringify(a?.[field])}`);
     }
   });
 }
@@ -96,8 +98,16 @@ export function anchorCheck(part, anchors, nodes) {
   if (extra.length) fail('anchors', `the anchors have ${leadList(extra)}, which \`pins\` does not have`);
 
   let largest = 0;
+  const vertices = anchors.anchors.some((a) => a.node === null) ? nodes.flatMap((n) => n.points) : [];
   for (const a of anchors.anchors) {
     if (Math.abs(Math.hypot(...a.axis) - 1) > 1e-9) fail('anchors', `lead ${a.lead}'s axis is not a unit vector`);
+    if (a.node === null) {
+      onceEach('anchors', nodes, a.also, `lead ${a.lead}'s \`also\``);
+      if (!vertices.some((p) => distance(p, a.at) <= CUT_REACH)) {
+        fail('anchors', `lead ${a.lead} is a socket cut into the body at (${a.at.join(', ')}), and no vertex of the model is within ${CUT_REACH} mm of it`);
+      }
+      continue;
+    }
     onceEach('anchors', nodes, [a.node, ...a.also], `lead ${a.lead}'s node and \`also\``);
     const { points } = nodes.find((n) => n.name === a.node);
     if (!points.length) {
@@ -118,7 +128,7 @@ export function anchorCheck(part, anchors, nodes) {
 }
 
 function leadNames(anchors) {
-  return new Set(anchors.anchors.flatMap((a) => [a.node, ...a.also]));
+  return new Set(anchors.anchors.flatMap((a) => [a.node, ...a.also]).filter((name) => name !== null));
 }
 
 /**
@@ -150,13 +160,13 @@ export function names(part, nodes) {
 
 /**
  * Keeps the nodes `view` and `joints` name and the `node` and `also` of every leg or socket
- * anchor. Every other node and every mesh loses its name, so `join` merges them into one mesh
+ * anchor. A socket cut into the body has no node, so a breadboard's holes keep none. Every other node and every mesh loses its name, so `join` merges them into one mesh
  * per material. `dedup` then shares identical meshes, such as a header's 15 pins.
  */
 export async function merge(doc, part, anchors) {
   const keep = new Set([...part.viewNodes, ...part.jointNodes]);
   for (const a of anchors.anchors) {
-    if (KEPT_KINDS.has(a.kind)) [a.node, ...a.also].forEach((name) => keep.add(name));
+    if (KEPT_KINDS.has(a.kind)) [a.node, ...a.also].filter((name) => name !== null).forEach((name) => keep.add(name));
   }
   const before = partNodes(doc).reduce((sum, n) => sum + n.primitives, 0);
   for (const mesh of doc.getRoot().listMeshes()) mesh.setName('');

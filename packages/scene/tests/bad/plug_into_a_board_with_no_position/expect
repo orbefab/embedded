@@ -1,0 +1,3 @@
+scene.layout scene.jsonc:13:32 | `bb` has no position, so `led1` has nowhere to sit
+scene.layout scene.jsonc:14:26 | `bb2` is tilted
+scene.layout scene.jsonc:15:13 | `r2` has both `at` and `on`

@@ -1,20 +1,30 @@
-// A button on D2 lights an LED on D13 of a Nano.
+// A button on D2 lights an LED on D13 of a Nano, built on a half-size breadboard.
+// The Nano straddles the centre channel over columns 1 to 15, so each of its pins has a strip of
+// free holes beside it: D13 is column 1 on the a to e side, D2 column 11 on the f to j side.
 {
   "format": 1,
   "parts": {
+    "bb": { "type": "breadboard-400" },
     "nano": { "type": "nano-board", "firmware": "firmware/button.hex" },
     "btn1": { "type": "tactile-switch-6mm" },
     "r2": { "type": "resistor-axial", "resistance": "10k" }, // pull-down, so D2 reads low while open
     "r1": { "type": "resistor-axial", "resistance": "220" },
     "led1": { "type": "led-5mm", "color": "red" },
   },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "D13": "bb.d1" } },
+    "btn1": { "on": { "a": "bb.f22" }, "rotate": [0, 0, 90] }, // across the channel: a in column 22, b in 20
+    "r2": { "on": { "a": "bb.b22" }, "rotate": [0, 0, -90] }, // b in X22, the - rail
+    "r1": { "on": { "a": "bb.d25" } }, // b in column 29
+    "led1": { "on": { "anode": "bb.c29" } }, // cathode in column 30
+  },
   "wires": [
-    ["nano.D2", "btn1.a"],
-    ["btn1.b", "nano.5V"],
-    ["nano.D2", "r2.a"],
-    ["r2.b", "nano.GND"],
-    ["nano.D13", "r1.a"],
-    ["r1.b", "led1.anode"],
-    ["led1.cathode", "nano.GND"],
+    ["bb.a12", "bb.W11", { "color": "#d12b2b" }], // 5V to the + rail
+    ["bb.a14", "bb.X14", { "color": "#161616" }], // GND to the - rail
+    ["bb.a20", "bb.W20", { "color": "#d12b2b" }], // btn1.b to 5V
+    ["bb.j11", "bb.j22"], // D2 to btn1.a
+    ["bb.c1", "bb.c25"], // D13 to r1.a
+    ["bb.a30", "bb.X29", { "color": "#161616" }], // led1.cathode to GND
   ],
 }

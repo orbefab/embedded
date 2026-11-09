@@ -1251,23 +1251,25 @@ fn no_diagnostics_says_a_chip_warning_can_show_one_engine_step_late() {
 }
 
 /// The worked example with every lint rule broken once: D13 straight to the LED, a part of its
-/// own with no model, and a turn past 180 degrees. Each code `orbe lint` prints is in the core skill's
+/// own with no model, a turn past 180 degrees, and the resistor left over plugged into one strip of
+/// a breadboard. Each code `orbe lint` prints is in the core skill's
 /// warnings table, the table names no other, and `orbe open` shows only `net.floating`.
 #[test]
 fn the_warnings_table_lists_the_codes_lint_prints_and_open_shows_only_the_engines() {
     let project = worked_example();
     let dir = project.path();
+    add_parts(dir, &["breadboard-400"]);
     let scene = fs::read_to_string(dir.join("scene.jsonc")).unwrap();
     let broken = scene
         .replace("[\"nano.D13\", \"r1.a\"]", "[\"nano.D13\", \"led1.anode\"]")
         .replace("[\"r1.b\", \"led1.anode\"],", "")
         .replace(
             "\"parts\": {",
-            "\"parts\": {\n    \"jump\": { \"type\": \"./jumper.jsonc\" },",
+            "\"parts\": {\n    \"jump\": { \"type\": \"./jumper.jsonc\" },\n    \"bb\": { \"type\": \"breadboard-400\" },",
         )
         .replace(
             "\"wires\": [",
-            "\"layout\": { \"btn1\": { \"at\": [0, 0, 0], \"rotate\": [0, 0, 270] } },\n  \"wires\": [",
+            "\"layout\": {\n    \"btn1\": { \"at\": [0, 0, 0], \"rotate\": [0, 0, 270] },\n    \"bb\": { \"at\": [0, 60, 0] },\n    \"r1\": { \"on\": { \"a\": \"bb.a5\" }, \"rotate\": [0, 0, 90] },\n  },\n  \"wires\": [",
         );
     assert_ne!(broken, scene);
     fs::write(dir.join("scene.jsonc"), &broken).unwrap();

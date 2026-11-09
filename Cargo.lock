@@ -828,6 +828,7 @@ name = "orbe-scene"
 version = "0.1.0"
 dependencies = [
  "jsonc-parser",
+ "libm",
  "orbe-circuit",
  "orbe-engine-core",
  "rustix",

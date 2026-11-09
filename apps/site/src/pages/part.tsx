@@ -1,3 +1,4 @@
+import { stripText } from "@orbe/viewer/refs";
 import { PartModel } from "../components/part-model";
 import type { Linked } from "../data";
 import { paramSentence, si, sourceText } from "../format";
@@ -39,6 +40,8 @@ export function PartPage({ part }: { part: PartView }) {
   const { item, links } = part;
   const { record } = item;
   const children = record.registryDependencies.map(dependencyId);
+  const holes = new Set(record.holes?.strips.flat());
+  const pins = record.pins.filter((pin) => !holes.has(pin.name));
   return (
     <article>
       <p className="font-mono text-muted-foreground text-xs">
@@ -70,18 +73,42 @@ export function PartPage({ part }: { part: PartView }) {
       </div>
 
       <Section title="Pins">
-        <Table
-          head={["Pin", record.pins.some((pin) => pin.refs) ? "Reaches" : "Leads"]}
-          rows={record.pins.map((pin) => [
-            <span className="font-mono" key="name">
-              {pin.name}
-            </span>,
-            <span className="font-mono text-muted-foreground" key="at">
-              {(pin.leads ?? pin.refs ?? []).join(", ")}
-            </span>,
-          ])}
-        />
+        {pins.length === 0 && record.holes ? (
+          <None>Only its holes.</None>
+        ) : (
+          <Table
+            head={["Pin", pins.some((pin) => pin.refs) ? "Reaches" : "Leads"]}
+            rows={pins.map((pin) => [
+              <span className="font-mono" key="name">
+                {pin.name}
+              </span>,
+              <span className="font-mono text-muted-foreground" key="at">
+                {(pin.leads ?? pin.refs ?? []).join(", ")}
+              </span>,
+            ])}
+          />
+        )}
       </Section>
+
+      {record.holes === undefined ? null : (
+        <Section title="Holes">
+          <p className="mb-3 text-muted-foreground text-sm">
+            Each hole is a pin with one lead, {record.holes.depth} mm deep. A strip joins its holes, so a leg in one hole joins every
+            other leg and jumper in its strip.
+          </p>
+          <Table
+            head={["Strip", "Holes"]}
+            rows={record.holes.strips.map((strip) => [
+              <span className="font-mono" key="strip">
+                {stripText(strip)}
+              </span>,
+              <span className="font-mono text-muted-foreground" key="holes">
+                {strip.join(", ")}
+              </span>,
+            ])}
+          />
+        </Section>
+      )}
 
       <Section title="Params">
         {record.params.length === 0 ? (

@@ -171,6 +171,14 @@ impl ParamDecl {
     }
 }
 
+/// A part whose pins are holes a leg plugs into, such as a breadboard's.
+pub(crate) struct Holes {
+    /// How far a leg goes in, in mm.
+    pub(crate) depth: f64,
+    /// Each strip's holes, the pins one clip joins.
+    pub(crate) strips: Vec<Vec<String>>,
+}
+
 pub(crate) struct Part {
     pub(crate) file: FileId,
     /// The id, or the path a scene names it by, for messages.
@@ -183,6 +191,7 @@ pub(crate) struct Part {
     /// Each `not_simulated` entry's reason with the pins it lists.
     pub(crate) not_simulated: Vec<(String, Vec<String>)>,
     pub(crate) joins_only: bool,
+    pub(crate) holes: Option<Holes>,
     /// A finding in this part file, which the engine's findings on the part may repeat.
     pub(crate) reported: Option<Reported>,
 }
@@ -223,11 +232,26 @@ impl Part {
     }
 }
 
+/// A layout entry's `on`: one pin's leg goes into a hole, such as `"on": { "anode": "bb.f20" }`.
+pub(crate) struct Plug {
+    /// The scene instance plugged in.
+    pub(crate) name: String,
+    /// The `on` object, where a finding about the whole plug points.
+    pub(crate) span: Span,
+    pub(crate) pin: String,
+    pub(crate) pin_span: Span,
+    /// The hole, as a board's name and a hole pin.
+    pub(crate) hole: Ref,
+    /// The turn about Z, in degrees.
+    pub(crate) turn: f64,
+}
+
 pub(crate) struct Scene {
     pub(crate) file: FileId,
     /// The scene's root object, where a finding about the whole scene points.
     pub(crate) span: Span,
     pub(crate) comp: Comp,
+    pub(crate) plugs: Vec<Plug>,
     pub(crate) nets: Vec<(String, Span, Ref)>,
     pub(crate) seed: u64,
     pub(crate) max_step_ps: u64,
@@ -305,6 +329,7 @@ pub(crate) fn decode_scene(
         file,
         span: root.span,
         comp: Comp::default(),
+        plugs: Vec::new(),
         nets: Vec::new(),
         seed: 0,
         max_step_ps: DEFAULT_MAX_STEP_PS,
@@ -327,7 +352,7 @@ pub(crate) fn decode_scene(
         }
     }
     if let Some(layout) = root.get("layout") {
-        decode_layout(layout, &scene.comp, out);
+        scene.plugs = decode_layout(layout, &scene.comp, true, out);
     }
     Some(scene)
 }
@@ -356,6 +381,7 @@ pub(crate) fn decode_part(
         params: Vec::new(),
         not_simulated: Vec::new(),
         joins_only: false,
+        holes: None,
         reported: None,
     };
     for prop in props {
@@ -383,6 +409,7 @@ pub(crate) fn decode_part(
             "not_simulated" => part.not_simulated = decode_not_simulated(value, out),
             "buy" => crate::buy::check(value, out),
             "joins_only" => part.joins_only = matches!(value.json, Json::Bool(true)),
+            "holes" => part.holes = Some(decode_holes(value)),
             _ => {}
         }
     }
@@ -394,9 +421,12 @@ pub(crate) fn decode_part(
         check_sets(&mut part, &model, out);
     }
     if let Some(layout) = root.get("layout") {
-        decode_layout(layout, &part.comp, out);
+        decode_layout(layout, &part.comp, false, out);
     }
     check_own_names(root, out);
+    if let (Some(holes), Some(node)) = (&part.holes, root.get("holes")) {
+        check_holes(holes, node, &part, out);
+    }
     for (_, pins) in &part.not_simulated {
         for pin in pins {
             if part.pin(pin).is_none() {
@@ -625,7 +655,9 @@ fn decode_wire_hint(hint: &Node, out: &mut Findings) {
     }
 }
 
-fn decode_layout(node: &Node, comp: &Comp, out: &mut Findings) {
+/// Checks every placement, and returns the scene's plugs. Only a scene plugs a part in.
+fn decode_layout(node: &Node, comp: &Comp, scene: bool, out: &mut Findings) -> Vec<Plug> {
+    let mut plugs = Vec::new();
     let Some(props) = node.props() else {
         out.push(
             Code::Layout,
@@ -633,7 +665,7 @@ fn decode_layout(node: &Node, comp: &Comp, out: &mut Findings) {
             "`layout` is an object of placements by part name",
             "each key is a part name and each value is { \"at\": [x, y] }".into(),
         );
-        return;
+        return plugs;
     };
     for prop in props {
         if !comp.parts.iter().any(|i| i.name == prop.key) {
@@ -675,6 +707,17 @@ fn decode_layout(node: &Node, comp: &Comp, out: &mut Findings) {
                     "`rotate` is [rx, ry, rz] in degrees",
                     "write [rx, ry, rz]".into(),
                 ),
+                "on" if scene => {
+                    if let Some(plug) = decode_on(&prop.key, &prop.value, field, out) {
+                        plugs.push(plug);
+                    }
+                }
+                "on" => out.push(
+                    Code::Layout,
+                    field.key_span,
+                    "only a scene's layout plugs a part in with `on`",
+                    "place a part's child with `at` and `rotate`".into(),
+                ),
                 "mate" => out.push(
                     Code::Layout,
                     field.key_span,
@@ -686,10 +729,150 @@ fn decode_layout(node: &Node, comp: &Comp, out: &mut Findings) {
                     field.key_span,
                     format!("a placement has no key `{key}`"),
                     format!(
-                        "{}its keys are at and rotate",
-                        did_you_mean(key, ["at", "rotate"], "")
+                        "{}its keys are at, rotate and on",
+                        did_you_mean(key, ["at", "rotate", "on"], "")
                     ),
                 ),
+            }
+        }
+    }
+    plugs
+}
+
+/// `"on": { "<pin>": "<board>.<hole>" }`, with the placement's `rotate` about Z only.
+fn decode_on(name: &str, placement: &Node, on: &Prop, out: &mut Findings) -> Option<Plug> {
+    let example =
+        "write \"on\": { \"<pin>\": \"<board>.<hole>\" }, such as { \"anode\": \"bb.f20\" }";
+    if let Some(at) = placement
+        .props()
+        .and_then(|p| p.iter().find(|f| f.key == "at"))
+    {
+        out.push(
+            Code::Layout,
+            at.key_span,
+            format!("`{name}` has both `at` and `on`; `on` places it on the board"),
+            "remove `at`".into(),
+        );
+        return None;
+    }
+    let entries = on.value.props().filter(|p| p.len() == 1);
+    let Some([entry]) = entries else {
+        out.push(
+            Code::Layout,
+            on.value.span,
+            "`on` names one pin and the hole its leg goes into",
+            example.into(),
+        );
+        return None;
+    };
+    let hole = decode_ref(&entry.value, out)?;
+    if hole.segs.len() != 2 {
+        out.push(
+            Code::Layout,
+            entry.value.span,
+            format!(
+                "`{}` is not a hole; a hole is a board's name and the hole, such as \"bb.f20\"",
+                hole.text
+            ),
+            example.into(),
+        );
+        return None;
+    }
+    let mut turn = 0.0;
+    if let Some(rotate) = placement.get("rotate") {
+        let angles: Option<Vec<f64>> = rotate
+            .items()
+            .and_then(|items| items.iter().map(Node::number).collect());
+        if let Some([rx, ry, rz]) = angles.as_deref() {
+            if *rx != 0.0 || *ry != 0.0 {
+                out.push(
+                    Code::Layout,
+                    rotate.span,
+                    format!("`{name}` sits on a board, so it turns about Z only"),
+                    format!("write \"rotate\": [0, 0, {rz}]"),
+                );
+                return None;
+            }
+            turn = *rz;
+        }
+    }
+    Some(Plug {
+        name: name.to_string(),
+        span: on.value.span,
+        pin: entry.key.clone(),
+        pin_span: entry.key_span,
+        hole,
+        turn,
+    })
+}
+
+fn decode_holes(node: &Node) -> Holes {
+    let strips = node
+        .get("strips")
+        .and_then(Node::items)
+        .unwrap_or_default()
+        .iter()
+        .map(|strip| {
+            strip
+                .items()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|hole| hole.str().map(str::to_string))
+                .collect()
+        })
+        .collect();
+    Holes {
+        depth: node.get("depth").and_then(Node::number).unwrap_or(0.0),
+        strips,
+    }
+}
+
+/// Each strip lists two or more holes, each a pin of the part on one lead, and no hole is in
+/// two strips. A board needs a depth above zero.
+fn check_holes(holes: &Holes, node: &Node, part: &Part, out: &mut Findings) {
+    let depth = node.get("depth");
+    if depth.and_then(Node::number).is_none_or(|d| d <= 0.0) {
+        out.push(
+            Code::Syntax,
+            depth.map_or(node.span, |d| d.span),
+            "`holes` needs a `depth` above 0, how far a leg goes in, in mm",
+            "write \"depth\": 8".into(),
+        );
+    }
+    let items = node.get("strips").and_then(Node::items).unwrap_or_default();
+    let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
+    for (index, (strip, written)) in holes.strips.iter().zip(items).enumerate() {
+        if strip.len() < 2 {
+            out.push(
+                Code::Syntax,
+                written.span,
+                "a strip joins two or more holes",
+                "list every hole one clip joins, such as [\"a1\", \"b1\", \"c1\", \"d1\", \"e1\"]"
+                    .into(),
+            );
+        }
+        for hole in strip {
+            let one_lead = part
+                .pin(hole)
+                .is_some_and(|pin| matches!(pin.def, PinDef::Leads));
+            if !one_lead {
+                out.push(
+                    Code::UnknownPin,
+                    written.span,
+                    format!(
+                        "strip {} lists `{hole}`, which is not a pin of this part",
+                        index + 1
+                    ),
+                    "each hole is a pin with one lead, as \"a1\": [1]".into(),
+                );
+            }
+            if let Some(first) = seen.insert(hole, index) {
+                out.push(
+                    Code::Duplicate,
+                    written.span,
+                    format!("`{hole}` is in strips {} and {}", first + 1, index + 1),
+                    "a hole sits in one strip".into(),
+                );
             }
         }
     }

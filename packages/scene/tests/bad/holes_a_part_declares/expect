@@ -1,0 +1,4 @@
+scene.syntax strip.jsonc:6:14 | `holes` needs a `depth` above 0
+scene.duplicate strip.jsonc:7:30 | `h2` is in strips 1 and 2
+scene.unknown_pin strip.jsonc:7:30 | strip 2 lists `h4`, which is not a pin of this part
+scene.syntax strip.jsonc:7:44 | a strip joins two or more holes

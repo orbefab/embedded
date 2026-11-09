@@ -3,7 +3,9 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use orbe_scene::{BlockCard, Buy, Card, CardFile, Doc, NotSimulated, On, Param, Pin, Rating, Real};
+use orbe_scene::{
+    BlockCard, Buy, Card, CardFile, Doc, Holes, NotSimulated, On, Param, Pin, Rating, Real,
+};
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -174,6 +176,11 @@ pub struct PartItem {
     pub on: Option<On>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub pressable: bool,
+    /// A board's holes, such as a breadboard's: how deep each is in mm, and the holes each
+    /// strip joins. Each hole is one of `pins`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Holes")]
+    pub holes: Option<Holes>,
 }
 
 /// A Block at one version: a board, parts, firmware and tests that work together.
@@ -262,6 +269,7 @@ impl From<Card> for Item {
             buy,
             on,
             pressable,
+            holes,
         } = card;
         Item::Part(Box::new(PartItem {
             head: Head {
@@ -286,6 +294,7 @@ impl From<Card> for Item {
             buy,
             on,
             pressable,
+            holes,
         }))
     }
 }

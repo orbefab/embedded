@@ -646,13 +646,13 @@ impl Data {
                             .iter()
                             .map(|(pin, r)| format!("{pin}={}", r.brief())),
                     );
-                    let _ = write!(
-                        out,
-                        "\n{:width$}  {:ty_width$}  {}",
+                    let line = format!(
+                        "{:width$}  {:ty_width$}  {}",
                         part.name,
                         part.ty,
                         words.join("  ")
                     );
+                    let _ = write!(out, "\n{}", line.trim_end());
                 }
                 if !snapshot.serial.is_empty() || snapshot.serial_held > 0 {
                     let _ = write!(out, "\nserial  {:?}", snapshot.serial);

@@ -1,6 +1,8 @@
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import type { BrowserContext, Page } from "@playwright/test";
-import { collectLogs, expect, ledGlow, orbeJson, pointOn, shot, test, waitGlow, waitState } from "../../../e2e/support";
+import { collectLogs, expect, ledGlow, orbeJson, pointOn, REPO, shot, test, waitGlow, waitState } from "../../../e2e/support";
 
 const INSTALL = /orbe add|cargo install|github\.com\/orbefab\/embedded/;
 const VIEW = { width: 1280, height: 900 };
@@ -205,7 +207,9 @@ test.describe("parts search", () => {
   });
 
   test("the parts page lists every part without a query", async () => {
-    expect(await page.locator("[data-part]").count()).toBe(45);
+    const parts = join(REPO, "parts");
+    const catalog = readdirSync(parts).filter((id) => existsSync(join(parts, id, "part.jsonc"))).length;
+    expect(await page.locator("[data-part]").count()).toBe(catalog);
   });
 
   for (const query of QUERIES) {
@@ -301,6 +305,41 @@ test.describe("led-5mm", () => {
     await shot(page, "site-part-led-5mm");
     await page.evaluate(() => [...document.querySelectorAll("h2")].find((heading) => heading.textContent === "Files")?.scrollIntoView());
     await shot(page, "site-part-led-5mm-files");
+    expect(errors, JSON.stringify(errors)).toEqual([]);
+  });
+});
+
+test.describe("breadboard-830", () => {
+  let context: BrowserContext;
+  let page: Page;
+  let errors: string[] = [];
+
+  test.beforeAll(async ({ browser, host }) => {
+    ({ context, page, errors } = await openTracked(browser, `${host.base}/embedded/parts/breadboard-830/`));
+    await page.waitForFunction(() => window.orbeViewer?.get().scene.getObjectByName("@breadboard_830") !== undefined, null, { timeout: 30_000 });
+  });
+
+  test.afterAll(async () => {
+    await context?.close();
+  });
+
+  test("its pins are only its holes", async () => {
+    expect(/Pins\s*Only its holes\./i.test(await bodyText(page))).toBe(true);
+  });
+
+  test("it lists each strip: two of five holes in each of 63 columns, and four rails", async () => {
+    const strips = page.locator("section", { has: page.locator("h2", { hasText: /^Holes$/ }) }).locator("tbody tr");
+    expect(await strips.count()).toBe(63 * 2 + 4);
+  });
+
+  test("a column's strip and a whole rail are among them", async () => {
+    const body = await bodyText(page);
+    expect(/a1 to e1\s*a1, b1, c1, d1, e1/.test(body) && /W3 to W7, W9 to W13, .*, W57 to W61\s*W3, W4/.test(body)).toBe(true);
+  });
+
+  test("breadboard-830's page logged no error", async () => {
+    await page.waitForTimeout(800);
+    await shot(page, "site-part-breadboard-830");
     expect(errors, JSON.stringify(errors)).toEqual([]);
   });
 });

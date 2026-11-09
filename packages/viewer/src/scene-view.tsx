@@ -8,8 +8,9 @@ import { type BuiltScene, buildScene, fromGltf, type Tag, tagOf } from "./build"
 import { type CameraMode, union } from "./camera-frame";
 import { CameraRig } from "./camera-rig";
 import { glowIntensity, litColour } from "./glow";
-import type { HoverStore } from "./hover";
-import type { Command, FrameMessage, Ref, SceneMessage } from "./protocol";
+import type { Hovered, HoverStore } from "./hover";
+import type { Command, FrameMessage, Ref, SceneMessage, Vec3 } from "./protocol";
+import { holeAt, instanceAt, refOf, stripText } from "./refs";
 import type { Box } from "./wire-geometry";
 import { WireMesh } from "./wire-mesh";
 
@@ -88,6 +89,26 @@ function nearest(object: Object3D, test: (tag: Tag) => boolean): { object: Objec
     if (found !== undefined && test(found)) return { object: at, tag: found };
   }
   return undefined;
+}
+
+/** A breadboard's hole under the pointer, as its ref and the strip it sits in. */
+function holeUnder(scene: SceneMessage, ref: Ref, group: Object3D, event: ThreeEvent<PointerEvent>): Hovered | undefined {
+  const path = ref.slice(1).split(".");
+  const placed = instanceAt(scene, path);
+  if (placed?.part.strips === undefined) return undefined;
+  const local = group.worldToLocal(event.point.clone()).toArray() as Vec3;
+  const hole = holeAt(placed.part, local);
+  if (hole === undefined) return undefined;
+  const board = refOf(path).slice(1);
+  return {
+    ref: refOf([...path, hole.pin]),
+    why: undefined,
+    error: undefined,
+    strip: `strip ${stripText(hole.strip, `${board}.`)}`,
+    object: group,
+    x: event.nativeEvent.clientX,
+    y: event.nativeEvent.clientY,
+  };
 }
 
 function modelUrls(scene: SceneMessage): string[] {
@@ -211,18 +232,13 @@ export function SceneView({
   const move = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
     const found = nearest(event.object, () => true);
-    hover.set(
-      found === undefined
-        ? null
-        : {
-            ref: found.tag.ref,
-            why: found.tag.why,
-            error: found.tag.error,
-            object: found.object,
-            x: event.nativeEvent.clientX,
-            y: event.nativeEvent.clientY,
-          }
-    );
+    if (found === undefined) {
+      hover.set(null);
+      return;
+    }
+    const at = { object: found.object, x: event.nativeEvent.clientX, y: event.nativeEvent.clientY };
+    const hole = found.tag.instance === undefined ? undefined : holeUnder(scene, found.tag.ref, found.object, event);
+    hover.set(hole ?? { ref: found.tag.ref, why: found.tag.why, error: found.tag.error, ...at });
   };
 
   return (
