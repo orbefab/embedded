@@ -58,28 +58,11 @@ cpp_flags=(-c -g -Os -w -std=gnu++11 -fpermissive -fno-exceptions -ffunction-sec
 s_flags=(-c -g -x assembler-with-cpp -flto)
 link_flags=(-w -Os -g -flto -fuse-linker-plugin "-Wl,--gc-sections" -mmcu=atmega328p)
 
-# Fail when .c, .cpp, or .S is absent so a renamed core file cannot be skipped.
-core_source_names() {
-  local dir=$1 pattern name any
-  local -a names=()
-  for pattern in '*.c' '*.cpp' '*.S'; do
-    any=0
-    while IFS= read -r -d '' name; do
-      names+=("${name##*/}")
-      any=1
-    done < <(find "$dir" -maxdepth 1 -type f -name "$pattern" -print0)
-    if [[ $any -eq 0 ]]; then
-      echo "sketches.sh: $dir has no $pattern file" >&2
-      return 1
-    fi
-  done
-  printf '%s\n' "${names[@]}" | LC_ALL=C sort
-}
-
 work=$(mktemp -d "$tools/build.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
-mapfile -t core_sources < <(core_source_names "$core")
+# A pattern that matches nothing stays literal, so its compile fails by name.
+mapfile -t core_sources < <(cd "$core" && printf '%s\n' *.c *.cpp *.S | LC_ALL=C sort)
 mkdir "$work/core"
 for source in "${core_sources[@]}"; do
   object=$work/core/$source.o
