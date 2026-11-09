@@ -1,0 +1,77 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": { "transient": { "stop_ps": 1000000000000, "max_step_ps": 10000000000, "grid_ps": 1000000000 } },
+  "ground": "gnd",
+  "nets": ["gnd", "vin", "vcc", "va", "vd", "vled"],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": { "p": "vin", "n": "gnd" },
+      "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+    },
+    {
+      "name": "rs",
+      "kind": "resistor",
+      "pins": { "a": "vin", "b": "vcc" },
+      "resistance": { "value": 0.21, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
+    },
+    {
+      "name": "c1",
+      "kind": "capacitor",
+      "pins": { "a": "vcc", "b": "gnd" },
+      "capacitance": { "value": 1e-7, "unit": "F", "source": "user" },
+      "initial": null
+    },
+    {
+      "name": "c2",
+      "kind": "capacitor",
+      "pins": { "a": "vcc", "b": "gnd" },
+      "capacitance": { "value": 1e-4, "unit": "F", "source": "user" },
+      "initial": null
+    },
+    {
+      "name": "sw1",
+      "kind": "switch",
+      "pins": { "a": "vcc", "b": "va" },
+      "on_resistance": { "value": 0.1, "unit": "ohm", "source": "user" },
+      "off_resistance": { "value": 1000000000.0, "unit": "ohm", "source": "user" },
+      "initial": "open",
+      "events": [
+        { "t_ps": 100000000, "state": "closed" },
+        { "t_ps": 500000000000, "state": "open" }
+      ],
+      "bounce": null
+    },
+    {
+      "name": "d1",
+      "kind": "diode",
+      "pins": { "anode": "va", "cathode": "vd" },
+      "saturation_current": { "value": 9.4334e-8, "unit": "A", "source": "user" },
+      "emission_coefficient": { "value": 2.0844, "unit": "1", "source": "user" },
+      "series_resistance": { "value": 0.0317, "unit": "ohm", "source": "user" },
+      "ratings": { "current": { "value": 1.0, "unit": "A", "source": "user" }, "power": null }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": { "a": "vd", "b": "vled" },
+      "resistance": { "value": 220.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
+    },
+    {
+      "name": "led1",
+      "kind": "led",
+      "pins": { "anode": "vled", "cathode": "gnd" },
+      "saturation_current": { "value": 6.711e-10, "unit": "A", "source": "user" },
+      "emission_coefficient": { "value": 4.427, "unit": "1", "source": "user" },
+      "series_resistance": { "value": 2.115, "unit": "ohm", "source": "user" },
+      "ratings": {
+        "current": { "value": 0.03, "unit": "A", "source": "user" },
+        "power": { "value": 0.075, "unit": "W", "source": "user" }
+      }
+    }
+  ]
+}
