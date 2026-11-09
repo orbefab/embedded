@@ -55,7 +55,7 @@ pnpm exec wrangler dev --local            # the same build, under wrangler
 
 ## Check it
 
-`scripts/check-site.sh` runs the type check and the brand check. It builds the site with `ORBE_SITE_INSTALL=1` and fails unless every part and Block in the registry has a page with its `orbe add` line, and the landing page shows `cargo install` and links the repo. It builds the site again without the flag. That build fails the check if a file of the site's own shows `orbe add`, `cargo install` or the repo, or if it does not serve the runtime source that sketches.sh pins and every Block's NOTICE names. Then `apps/site/e2e/site.mjs` drives that build in headless Chromium, once on `vite preview` and once on `wrangler dev --local`:
+`scripts/check-site.sh` runs the type check and the brand check. It builds the site with `ORBE_SITE_INSTALL=1` and fails unless every part and Block in the registry has a page with its `orbe add` line, and the landing page shows `cargo install` and links the repo. It builds the site again without the flag. That build fails the check if a file of the site's own shows `orbe add`, `cargo install` or the repo, or if it does not serve the runtime source that sketches.sh pins and every Block's NOTICE names. Then `@playwright/test` (`apps/site/e2e/site.spec.ts`) drives that build in headless Chromium, once on `vite preview` and once on `wrangler dev --local`:
 
 - the landing page plays nano-button-led, and its tab for nano-led-fade terminates the first Worker and revokes every object URL it made. The page asks no server for data, loads every file from under `/embedded/`, and draws the wordmark in Syne from `/embedded/fonts/`;
 - the parts search lists every part, and for ten queries shows the parts `orbe search --json` gives, in its order;
