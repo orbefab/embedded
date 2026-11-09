@@ -86,7 +86,7 @@ def check_timing(t_us: int, sent: list[tuple[int, int]], packets: list[tuple[int
     """Each byte sits 100 to 700 µs after a millisecond, and its echo meets both bounds."""
     if len(packets) != len(sent):
         raise ValueError(f"the console echoed {len(packets)} bytes, not {len(sent)}")
-    for (a_ps, byte), (got_ps, echoed) in zip(sent, packets):
+    for (a_ps, byte), (got_ps, echoed) in zip(sent, packets, strict=True):
         if echoed != byte:
             raise ValueError(f"got {echoed}, not {byte}")
         if a_ps % US != 0:

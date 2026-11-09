@@ -19,21 +19,78 @@ from pathlib import Path
 
 MASK = 0xFFFFFFFF
 RUST_KEYWORDS = {
-    "as", "async", "await", "break", "const", "continue", "crate", "dyn",
-    "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in",
-    "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return",
-    "self", "Self", "static", "struct", "super", "trait", "true", "type",
-    "unsafe", "use", "where", "while", "abstract", "become", "box", "do",
-    "final", "macro", "override", "priv", "typeof", "unsized", "virtual",
-    "yield", "try", "gen",
+    "as",
+    "async",
+    "await",
+    "break",
+    "const",
+    "continue",
+    "crate",
+    "dyn",
+    "else",
+    "enum",
+    "extern",
+    "false",
+    "fn",
+    "for",
+    "if",
+    "impl",
+    "in",
+    "let",
+    "loop",
+    "match",
+    "mod",
+    "move",
+    "mut",
+    "pub",
+    "ref",
+    "return",
+    "self",
+    "Self",
+    "static",
+    "struct",
+    "super",
+    "trait",
+    "true",
+    "type",
+    "unsafe",
+    "use",
+    "where",
+    "while",
+    "abstract",
+    "become",
+    "box",
+    "do",
+    "final",
+    "macro",
+    "override",
+    "priv",
+    "typeof",
+    "unsized",
+    "virtual",
+    "yield",
+    "try",
+    "gen",
 }
 BIN_PREC = {
-    "||": 1, "&&": 2, "|": 3, "^": 4, "&": 5,
-    "==": 6, "!=": 6,
-    "<": 7, ">": 7, "<=": 7, ">=": 7,
-    "<<": 8, ">>": 8,
-    "+": 9, "-": 9,
-    "*": 10, "/": 10, "%": 10,
+    "||": 1,
+    "&&": 2,
+    "|": 3,
+    "^": 4,
+    "&": 5,
+    "==": 6,
+    "!=": 6,
+    "<": 7,
+    ">": 7,
+    "<=": 7,
+    ">=": 7,
+    "<<": 8,
+    ">>": 8,
+    "+": 9,
+    "-": 9,
+    "*": 10,
+    "/": 10,
+    "%": 10,
 }
 CMP_OPS = {"==", "!=", "<", ">", "<=", ">="}
 # The register files and states each coprocessor owns, from the save-area lists of each chip's
@@ -41,11 +98,27 @@ CMP_OPS = {"==", "!=", "<", ">", "<=", ">="}
 # ACCX, QACC, SAR_BYTE, FFT_BIT_WIDTH, UA_STATE and q0 to q7. FCR and FSR are the FP states.
 COPROCESSOR_REGFILES = {"f": 0, "q": 3}
 COPROCESSOR_STATES = {
-    "RoundMode": 0, "InvalidEnable": 0, "DivZeroEnable": 0, "OverflowEnable": 0,
-    "UnderflowEnable": 0, "InexactEnable": 0, "InvalidFlag": 0, "DivZeroFlag": 0,
-    "OverflowFlag": 0, "UnderflowFlag": 0, "InexactFlag": 0, "FPreserved20": 0,
-    "FPreserved20a": 0, "FPreserved5": 0, "FPreserved7": 0,
-    "ACCX": 3, "QACC_H": 3, "QACC_L": 3, "SAR_BYTE": 3, "FFT_BIT_WIDTH": 3, "UA_STATE": 3,
+    "RoundMode": 0,
+    "InvalidEnable": 0,
+    "DivZeroEnable": 0,
+    "OverflowEnable": 0,
+    "UnderflowEnable": 0,
+    "InexactEnable": 0,
+    "InvalidFlag": 0,
+    "DivZeroFlag": 0,
+    "OverflowFlag": 0,
+    "UnderflowFlag": 0,
+    "InexactFlag": 0,
+    "FPreserved20": 0,
+    "FPreserved20a": 0,
+    "FPreserved5": 0,
+    "FPreserved7": 0,
+    "ACCX": 3,
+    "QACC_H": 3,
+    "QACC_L": 3,
+    "SAR_BYTE": 3,
+    "FFT_BIT_WIDTH": 3,
+    "UA_STATE": 3,
 }
 NO_COPROCESSOR = 255
 FLAGS = {
@@ -505,8 +578,12 @@ def ev(node, env):
             else:
                 a, b = left.bits, right.bits
             bit = {
-                "==": a == b, "!=": a != b, "<": a < b, ">": a > b,
-                "<=": a <= b, ">=": a >= b,
+                "==": a == b,
+                "!=": a != b,
+                "<": a < b,
+                ">": a > b,
+                "<=": a <= b,
+                ">=": a >= b,
             }[op]
             return V(1 if bit else 0, True)
         if both_signed and op in ("/", "%"):
@@ -846,17 +923,15 @@ def check_against_gcc(fns, tables, work):
         "#include <stdint.h>",
         "#include <stdio.h>",
         "typedef uint32_t uint32;",
-        "_Static_assert(sizeof(int) == 4, \"int\");",
-        "_Static_assert(sizeof(unsigned) == 4, \"unsigned\");",
+        '_Static_assert(sizeof(int) == 4, "int");',
+        '_Static_assert(sizeof(unsigned) == 4, "unsigned");',
     ]
     for name, vals in tables.items():
         body = ", ".join(f"0x{v:x}" for v in vals)
         lines.append(f"static const unsigned {name}[] = {{ {body} }};")
     for c_name, body, _uses_pc in fns:
         rust_name = sem_rust_name(c_name)
-        kept = "\n".join(
-            ln for ln in body.splitlines() if ln.strip() != "return 0;"
-        )
+        kept = "\n".join(ln for ln in body.splitlines() if ln.strip() != "return 0;")
         lines.append(f"static uint32_t {rust_name}(uint32_t val, uint32_t pc) {{")
         lines.append("  uint32_t *valp = &val;")
         lines.append("  (void)pc;")
@@ -864,7 +939,32 @@ def check_against_gcc(fns, tables, work):
         lines.append("  return *valp;")
         lines.append("}")
     lines.append("int main(void) {")
-    inputs = [0, 1, 2, 7, 8, 15, 16, 31, 32, 63, 64, 95, 96, 127, 128, 255, 256, 0xFFF, 0x7FFF, 0x8000, 0xFFFF, 0x3FFFF, 0x80000000, 0xFFFFFFFF]
+    inputs = [
+        0,
+        1,
+        2,
+        7,
+        8,
+        15,
+        16,
+        31,
+        32,
+        63,
+        64,
+        95,
+        96,
+        127,
+        128,
+        255,
+        256,
+        0xFFF,
+        0x7FFF,
+        0x8000,
+        0xFFFF,
+        0x3FFFF,
+        0x80000000,
+        0xFFFFFFFF,
+    ]
     pcs = [0, 1, 2, 3, 0x40080000, 0x40080001, 0x40080003]
     for c_name, _body, uses_pc in fns:
         rust_name = sem_rust_name(c_name)
@@ -872,7 +972,8 @@ def check_against_gcc(fns, tables, work):
         for val in inputs:
             for pc in use_pcs:
                 lines.append(
-                    f'  printf("%s %u %u %u\\n", "{rust_name}", (unsigned){val}u, (unsigned){pc}u, (unsigned){rust_name}({val}u, {pc}u));'
+                    f'  printf("%s %u %u %u\\n", "{rust_name}", (unsigned){val}u, '
+                    f"(unsigned){pc}u, (unsigned){rust_name}({val}u, {pc}u));"
                 )
     lines.append("  return 0;")
     lines.append("}")
@@ -1076,10 +1177,7 @@ def load_chip(text, work, wide, source_name, commit, sha):
     if digest != sha:
         fail(f"sha256 {digest} != {sha}")
     head = "\n".join(text.splitlines()[:22])
-    notice_ok = (
-        "Copyright (c) 2003-2016 Tensilica Inc." in head
-        or "Copyright (c) 2003-2021 Tensilica Inc." in head
-    )
+    notice_ok = "Copyright (c) 2003-2016 Tensilica Inc." in head or "Copyright (c) 2003-2021 Tensilica Inc." in head
     if not notice_ok or "Permission is hereby granted" not in head:
         fail("Tensilica MIT notice missing")
     if "GNU General Public License" in head:
@@ -1093,12 +1191,15 @@ def load_chip(text, work, wide, source_name, commit, sha):
     operands_enum = enum_members(text, "xtensa_operand_id")
     iclass_enum = enum_members(text, "xtensa_iclass_id")
     opcode_enum = enum_members(text, "xtensa_opcode_id")
-    if any(not name.startswith(p) for name, p in (
-        (fields[0], "FIELD_"),
-        (operands_enum[0], "OPERAND_"),
-        (iclass_enum[0], "ICLASS_"),
-        (opcode_enum[0], "OPCODE_"),
-    )):
+    if any(
+        not name.startswith(p)
+        for name, p in (
+            (fields[0], "FIELD_"),
+            (operands_enum[0], "OPERAND_"),
+            (iclass_enum[0], "ICLASS_"),
+            (opcode_enum[0], "OPCODE_"),
+        )
+    ):
         fail("enum prefix")
     zero_variant = rust_variant(opcode_enum[0][len("OPCODE_") :])
 
@@ -1114,7 +1215,7 @@ def load_chip(text, work, wide, source_name, commit, sha):
         op_rows.append((name[1], iclass[1]))
     if len(op_rows) != len(opcode_enum):
         fail(f"opcode count {len(op_rows)} != enum {len(opcode_enum)}")
-    for (mnem, _ic), enum_name in zip(op_rows, opcode_enum):
+    for (mnem, _ic), enum_name in zip(op_rows, opcode_enum, strict=True):
         suffix = enum_name[len("OPCODE_") :]
         folded = mnem.replace(".", "_").replace("-", "_").upper()
         if folded != suffix.upper():
@@ -1136,18 +1237,20 @@ def load_chip(text, work, wide, source_name, commit, sha):
             fail("operand shape")
         if width[1] < 0 or width[1] > 16:
             fail(f"operand width {name[1]}")
-        operand_rows.append({
-            "name": name[1],
-            "field": field[1],
-            "reg": None if reg[0] == "num" and reg[1] == -1 else reg[1],
-            "width": width[1],
-            "flags": flags,
-            "decode": None if decode[0] == "num" and decode[1] == 0 else decode[1],
-            "rtoa": None if rtoa[0] == "num" and rtoa[1] == 0 else rtoa[1],
-        })
+        operand_rows.append(
+            {
+                "name": name[1],
+                "field": field[1],
+                "reg": None if reg[0] == "num" and reg[1] == -1 else reg[1],
+                "width": width[1],
+                "flags": flags,
+                "decode": None if decode[0] == "num" and decode[1] == 0 else decode[1],
+                "rtoa": None if rtoa[0] == "num" and rtoa[1] == 0 else rtoa[1],
+            }
+        )
     if len(operand_rows) != len(operands_enum):
         fail("operand count")
-    for row, enum_name in zip(operand_rows, operands_enum):
+    for row, enum_name in zip(operand_rows, operands_enum, strict=True):
         suffix = enum_name[len("OPERAND_") :]
         folded = row["name"].replace("*", "_").replace(".", "_")
         if folded != suffix:
@@ -1163,14 +1266,16 @@ def load_chip(text, work, wide, source_name, commit, sha):
         if n[0] != "num":
             fail("iclass n")
         states_tok = atom(cols[3])
-        iclass_rows.append((
-            n[1],
-            None if args_tok[0] == "num" else args_tok[1],
-            None if states_tok[0] == "num" else states_tok[1],
-        ))
+        iclass_rows.append(
+            (
+                n[1],
+                None if args_tok[0] == "num" else args_tok[1],
+                None if states_tok[0] == "num" else states_tok[1],
+            )
+        )
     if len(iclass_rows) != len(iclass_enum):
         fail("iclass count")
-    for (n, args_sym, _states), enum_name in zip(iclass_rows, iclass_enum):
+    for (n, args_sym, _states), enum_name in zip(iclass_rows, iclass_enum, strict=True):
         if args_sym is None:
             if n != 0:
                 fail(f"{enum_name} has no args array but n={n}")
@@ -1444,7 +1549,8 @@ def load_chip(text, work, wide, source_name, commit, sha):
         # A decode rust fn named sem_* is fn(u32)->u32. Good.
         fi = field_index[row["field"]]
         out.append(
-            f"    Operand {{ field: {fi}, sem: {sem}, rtoa: {rtoa}, prefix: {prefix}, width: {row['width']}, pcrel: {str(pcrel).lower()}, visible: {str(visible).lower()} }},"
+            f"    Operand {{ field: {fi}, sem: {sem}, rtoa: {rtoa}, prefix: {prefix}, "
+            f"width: {row['width']}, pcrel: {str(pcrel).lower()}, visible: {str(visible).lower()} }},"
         )
     out.append("];")
     out.append("")
@@ -1455,13 +1561,11 @@ def load_chip(text, work, wide, source_name, commit, sha):
     out.append("")
     out.append(f"pub(crate) static ICLASS_OPS: [&[ArgUse]; {len(iclass_ops)}] = [")
     for ops in iclass_ops:
-        inner = ", ".join(
-            f"ArgUse {{ operand: {index}, show: {str(show).lower()} }}" for index, show in ops
-        )
+        inner = ", ".join(f"ArgUse {{ operand: {index}, show: {str(show).lower()} }}" for index, show in ops)
         out.append(f"    &[{inner}],")
     out.append("];")
     out.append("")
-    for c_name, (rust_name, code) in field_src.items():
+    for c_name, (_rust_name, code) in field_src.items():
         if c_name.startswith("Implicit_Field_") or c_name.startswith("Field_"):
             out.append(code)
             out.append("")
@@ -1475,9 +1579,7 @@ def load_chip(text, work, wide, source_name, commit, sha):
                 out.append(f"    Some({rust_name}),")
         out.append("];")
         out.append("")
-    out.append(
-        f"pub(crate) static FIELD: [&[Option<fn(u32) -> u32>]; {len(slot_tables)}] = ["
-    )
+    out.append(f"pub(crate) static FIELD: [&[Option<fn(u32) -> u32>]; {len(slot_tables)}] = [")
     for index in range(len(slot_tables)):
         out.append(f"    &FIELD_{index},")
     out.append("];")
@@ -1570,7 +1672,7 @@ def union_variants(chips):
 
 
 def assert_own_ops(chips, owns):
-    for chip, own in zip(chips, owns):
+    for chip, own in zip(chips, owns, strict=True):
         foreign = chip["named"] - own
         if foreign:
             sample = ", ".join(sorted(foreign)[:8])
@@ -1623,7 +1725,7 @@ def write_chip(path, chip, variants):
     owned = ["false"] * len(variants)
     coprocessor = [NO_COPROCESSOR] * len(variants)
     name_ok = set(chip["variants"])
-    for variant, iclass, cp in zip(chip["variants"], chip["op_class"], chip["op_coprocessor"]):
+    for variant, iclass, cp in zip(chip["variants"], chip["op_class"], chip["op_coprocessor"], strict=True):
         class_at[index_of[variant]] = iclass
         owned[index_of[variant]] = "true"
         coprocessor[index_of[variant]] = cp
@@ -1714,7 +1816,7 @@ def main():
     assert_own_ops(chips, owns)
     names = {}
     for chip in chips:
-        for variant, mnemonic in zip(chip["variants"], chip["mnemonics"]):
+        for variant, mnemonic in zip(chip["variants"], chip["mnemonics"], strict=True):
             prev = names.get(variant)
             if prev is not None and prev != mnemonic:
                 fail(f"mnemonic clash {variant} {prev} {mnemonic}")
@@ -1731,8 +1833,7 @@ def main():
     classic_n = next((c["opcode_count"] for c in chips if not c["wide"]), None)
     s3_n = next((c["opcode_count"] for c in chips if c["wide"]), None)
     print(
-        f"union opcodes={len(merged)} modules={','.join(module_names)} "
-        f"classic={classic_n} s3={s3_n}",
+        f"union opcodes={len(merged)} modules={','.join(module_names)} classic={classic_n} s3={s3_n}",
         flush=True,
     )
     if len(chips) == 2:

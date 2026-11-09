@@ -7,8 +7,9 @@
     uv run packages/engine/scripts/esp32s3_hello.py --check RUN_DIR
     uv run packages/engine/scripts/esp32s3_hello.py --self-test
 
-`packages/engine/tests/circuits/esp32s3-hello/console.json` holds the console text a board printed for the example's app,
-from its first log line through `Restarting now.`, with each IDF log time masked to `T`. The
+`packages/engine/tests/circuits/esp32s3-hello/console.json` holds the console text a board printed
+for the example's app, from its first log line through `Restarting now.`, with each IDF log time
+masked to `T`. The
 board's log times count from its power-on, which the run starts after, so only the masked text
 compares.
 
@@ -63,8 +64,8 @@ def lines(serial_csv: str) -> list[tuple[int, str]]:
 def check_text(got: list[tuple[int, str]], want: str) -> None:
     text = masked("".join(line for _, line in got))
     if text != want:
-        at = next((i for i, (a, b) in enumerate(zip(text, want)) if a != b), min(len(text), len(want)))
-        raise ValueError(f"the console differs from the board's at byte {at}: {text[at:at + 60]!r}")
+        at = next((i for i, (a, b) in enumerate(zip(text, want, strict=False)) if a != b), min(len(text), len(want)))
+        raise ValueError(f"the console differs from the board's at byte {at}: {text[at : at + 60]!r}")
 
 
 def check_times(got: list[tuple[int, str]], diagnostics: list[dict]) -> int:
@@ -76,7 +77,7 @@ def check_times(got: list[tuple[int, str]], diagnostics: list[dict]) -> int:
     if not diagnostics or diagnostics[-1]["code"] != "chip.restart":
         raise ValueError("the run does not end with chip.restart")
     stamps.append(diagnostics[-1]["t_ps"])
-    for before, after in zip(stamps, stamps[1:]):
+    for before, after in zip(stamps, stamps[1:], strict=False):
         if abs(after - before - SECOND_PS) > TICK_PS:
             raise ValueError(f"{after - before} ps between two countdown steps, not a second")
     return len(stamps) - 1
@@ -85,8 +86,10 @@ def check_times(got: list[tuple[int, str]], diagnostics: list[dict]) -> int:
 def check_manifest(manifest: dict, netlist: dict) -> None:
     part = next(part for part in netlist["parts"] if part["kind"] == "esp32s3")
     want = [{"role": "rom", **part["rom"]}]
-    want += [{"role": "flash", "sha256": r["sha256"], "bytes": r["bytes"], "offset": r["offset"]}
-             for r in part["firmware"]["flash"]]
+    want += [
+        {"role": "flash", "sha256": r["sha256"], "bytes": r["bytes"], "offset": r["offset"]}
+        for r in part["firmware"]["flash"]
+    ]
     if manifest["blobs"] != want:
         raise ValueError(f"manifest.json lists {manifest['blobs']}, not {want}")
 
@@ -97,7 +100,10 @@ def check(run: Path) -> None:
     check_text(got, want)
     steps = check_times(got, json.loads((run / "diagnostics.json").read_text()))
     check_manifest(json.loads((run / "manifest.json").read_text()), json.loads((EXAMPLE / "netlist.json").read_text()))
-    print(f"esp32s3-hello: {len(want)} console bytes as the board printed them, {steps} countdown lines a second apart, then chip.restart")
+    print(
+        f"esp32s3-hello: {len(want)} console bytes as the board printed them, "
+        f"{steps} countdown lines a second apart, then chip.restart"
+    )
 
 
 def serial_of(timed: list[tuple[int, str]]) -> str:
@@ -121,7 +127,10 @@ def self_test() -> int:
             return True
         return False
 
-    want = "I (T) cpu_start: Unicore app\r\nRestarting in 1 seconds...\r\nRestarting in 0 seconds...\r\nRestarting now.\r\n"
+    want = (
+        "I (T) cpu_start: Unicore app\r\nRestarting in 1 seconds...\r\n"
+        "Restarting in 0 seconds...\r\nRestarting now.\r\n"
+    )
     timed = [
         (5, "I (57) cpu_start: Unicore app\r\n"),
         (7 * TICK_PS, "Restarting in 1 seconds...\r\n"),
@@ -151,15 +160,25 @@ def self_test() -> int:
     expect("an error fails", raises(lambda: check_times(got, error)))
     other = serial_of(timed).replace("USB_SERIAL_JTAG", "USART0", 1)
     expect("another port fails", raises(lambda: lines(other)))
-    netlist = {"parts": [{"kind": "esp32s3", "rom": {"sha256": "r", "bytes": 1},
-                          "firmware": {"flash": [{"offset": 8, "sha256": "f", "bytes": 2}]}}]}
-    listed = {"blobs": [{"role": "rom", "sha256": "r", "bytes": 1},
-                        {"role": "flash", "sha256": "f", "bytes": 2, "offset": 8}]}
+    netlist = {
+        "parts": [
+            {
+                "kind": "esp32s3",
+                "rom": {"sha256": "r", "bytes": 1},
+                "firmware": {"flash": [{"offset": 8, "sha256": "f", "bytes": 2}]},
+            }
+        ]
+    }
+    listed = {
+        "blobs": [{"role": "rom", "sha256": "r", "bytes": 1}, {"role": "flash", "sha256": "f", "bytes": 2, "offset": 8}]
+    }
     expect("the manifest passes", not raises(lambda: check_manifest(listed, netlist)))
     unplaced = {"blobs": [listed["blobs"][0], {**listed["blobs"][1], "offset": None}]}
     expect("a region without its offset fails", raises(lambda: check_manifest(unplaced, netlist)))
-    expect("the committed console holds the countdown",
-           len(COUNTDOWN.findall(json.loads(CONSOLE.read_text())["transcript"])) == 11)
+    expect(
+        "the committed console holds the countdown",
+        len(COUNTDOWN.findall(json.loads(CONSOLE.read_text())["transcript"])) == 11,
+    )
     print("self-test passed" if not failures else f"self-test: {failures} failed")
     return 1 if failures else 0
 

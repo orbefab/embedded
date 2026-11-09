@@ -286,7 +286,7 @@ def pattern_events(doc):
         register(command["cmd"], command["data"])
     for rect in doc["rects"]:
         pixels = rect_pixels(rect)
-        if len(set(zip(pixels[::2], pixels[1::2]))) < 2:
+        if len(set(zip(pixels[::2], pixels[1::2], strict=True))) < 2:
             raise ValueError(f"rectangle {rect} is one value")
         for command, start, end in [(0x2A, rect["x0"], rect["x1"]), (0x2B, rect["y0"], rect["y1"])]:
             register(command, [start >> 8, start & 0xFF, end >> 8, end & 0xFF])
@@ -302,8 +302,18 @@ def link_rows(sender, pin, events):
     for event in events:
         phases = " ".join(f"{p['bits']}/{p['lanes']}:{p['value']:0{-(-p['bits'] // 4)}x}" for p in event["phases"])
         payload = bytes(event["bytes"])
-        rows.append([sender, pin, "spi", event["cs"], phases, str(len(payload)), hashlib.sha256(payload).hexdigest()[:16],
-                     str(event["lanes"])])
+        rows.append(
+            [
+                sender,
+                pin,
+                "spi",
+                event["cs"],
+                phases,
+                str(len(payload)),
+                hashlib.sha256(payload).hexdigest()[:16],
+                str(event["lanes"]),
+            ]
+        )
     return rows
 
 
@@ -323,7 +333,7 @@ def compare_link(rows, run_csv):
         return [f"link.csv has no column {got}"]
     if got == rows:
         return []
-    at = next((k for k, (g, r) in enumerate(zip(got, rows)) if g != r), min(len(got), len(rows)))
+    at = next((k for k, (g, r) in enumerate(zip(got, rows, strict=False)) if g != r), min(len(got), len(rows)))
     have = ",".join(got[at]) if at < len(got) else "no row"
     want = ",".join(rows[at]) if at < len(rows) else "no row"
     return [f"link.csv has {len(got)} rows for {len(rows)} expected, and row {at} is {have}, not {want}"]
@@ -403,24 +413,37 @@ def entry_for(state, sha):
 
 
 def self_test():
-    events = json.loads((Path(__file__).resolve().parents[3] / "packages/engine/tests/circuits/st77916-replay/events.json").read_text())
+    events = json.loads(
+        (Path(__file__).resolve().parents[3] / "packages/engine/tests/circuits/st77916-replay/events.json").read_text()
+    )
     rows, image, state = render(events)
     assert len(rows) >= 2, rows
     sha = hashlib.sha256(image).hexdigest()
-    run_csv = "t_ps," + ",".join(HEADER) + "\n" + "".join(f"{k},lcd1,{','.join(map(str, row))}\n" for k, row in enumerate(rows))
+    run_csv = (
+        "t_ps,"
+        + ",".join(HEADER)
+        + "\n"
+        + "".join(f"{k},lcd1,{','.join(map(str, row))}\n" for k, row in enumerate(rows))
+    )
     entry = entry_for(state, sha)
     assert compare("lcd1", rows, image, state, run_csv, image, entry) == [], "the right run passes"
     blank = bytes(len(image))
-    assert compare("lcd1", rows, image, state, run_csv, blank, entry_for(state, hashlib.sha256(blank).hexdigest())), "a blank frame fails"
+    assert compare("lcd1", rows, image, state, run_csv, blank, entry_for(state, hashlib.sha256(blank).hexdigest())), (
+        "a blank frame fails"
+    )
     missing, _, _ = render(events[:-1])
     assert len(missing) == len(rows) - 1
     _, short, _ = render([event for event in events if event is not last_rectangle(events)])
     assert short != image
-    assert compare("lcd1", rows, image, state, run_csv, short, entry_for(state, hashlib.sha256(short).hexdigest())), "a frame missing a rectangle fails"
+    assert compare("lcd1", rows, image, state, run_csv, short, entry_for(state, hashlib.sha256(short).hexdigest())), (
+        "a frame missing a rectangle fails"
+    )
     dropped = "\n".join(run_csv.splitlines()[:-1]) + "\n"
     assert compare("lcd1", rows, image, state, dropped, image, entry), "a missing row fails"
     assert compare("lcd1", [], image, state, run_csv, image, entry), "no expected row fails"
-    assert compare("lcd1", rows, blank, state, run_csv, blank, entry_for(state, hashlib.sha256(blank).hexdigest())), "a blank expected image fails"
+    assert compare("lcd1", rows, blank, state, run_csv, blank, entry_for(state, hashlib.sha256(blank).hexdigest())), (
+        "a blank expected image fails"
+    )
     bad_registers = entry_for(state, sha)
     bad_registers["registers"] = state["registers"] + 1
     assert compare("lcd1", rows, image, state, run_csv, image, bad_registers), "a wrong registers count fails"
@@ -472,7 +495,9 @@ def pattern_self_test():
     assert compare("lcd1", rows, image, state, wider, image, entry) == [], "a column past the known ones is ignored"
     assert compare("lcd1", rows, image, state, run_csv.replace(",hash", ",sha", 1), image, entry), "a lost column fails"
     blank = bytes(len(image))
-    assert compare("lcd1", rows, image, state, run_csv, blank, entry_for(state, hashlib.sha256(blank).hexdigest())), "a blank final image fails"
+    assert compare("lcd1", rows, image, state, run_csv, blank, entry_for(state, hashlib.sha256(blank).hexdigest())), (
+        "a blank final image fails"
+    )
     flat = {**doc, "rects": [{**doc["rects"][0], "fill": "bars", "colors": [0x1234, 0x1234]}]}
     try:
         pattern_events(flat)
@@ -486,7 +511,9 @@ def pattern_self_test():
     assert compare_link(want, link_header + "".join(link)) == [], "the right link.csv passes"
     wider = "".join(line.rstrip("\n") + ",x\n" for line in (link_header, *link))
     assert compare_link(want, wider) == [], "a column past the known ones is ignored"
-    assert compare_link(want, link_header.replace(",lanes", "") + "".join(link)), "a link.csv with no lanes column fails"
+    assert compare_link(want, link_header.replace(",lanes", "") + "".join(link)), (
+        "a link.csv with no lanes column fails"
+    )
     assert compare_link(want, link_header), "a link.csv with no row fails"
     assert compare_link(want, link_header + "".join(link[:-1])), "a missing transfer fails"
     assert compare_link(want, link_header + "".join(link) + link[-1]), "an extra transfer fails"

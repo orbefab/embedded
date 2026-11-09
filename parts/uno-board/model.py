@@ -106,10 +106,10 @@ def _legend():
         shape = print_face(x, y, top, word, LEGEND_SIZE, rotation=rotation)
         marks.append(paint(shape, f"silk-{len(marks)}", _WHITE))
 
-    digital = zip(DIGITAL_HIGH_U + DIGITAL_LOW_U, DIGITAL_HIGH + DIGITAL_LOW)
+    digital = zip(DIGITAL_HIGH_U + DIGITAL_LOW_U, DIGITAL_HIGH + DIGITAL_LOW, strict=True)
     for u, word in digital:
         mark(u, INNER_DIGITAL_W - 1.0 - len(word) * LEGEND_SIZE * 0.35, word, 90)
-    for u, word in zip(POWER_U + ANALOG_U, POWER + ANALOG):
+    for u, word in zip(POWER_U + ANALOG_U, POWER + ANALOG, strict=True):
         if word:
             mark(u, INNER_POWER_W + 1.0 + len(word) * LEGEND_SIZE * 0.35, word, 90)
     for word, w in LEDS:

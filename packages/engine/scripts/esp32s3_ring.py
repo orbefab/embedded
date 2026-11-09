@@ -117,9 +117,7 @@ def parse_source(text: str) -> tuple[list, tuple[int, int], tuple[int, int]]:
     high1, high0 = int(one[0][0]), int(one[0][1])
     low1, low0 = int(zero[0][0]), int(zero[0][1])
     if (high1, low1) != (8, 4) or (high0, low0) != (3, 9):
-        raise ValueError(
-            f"the symbols are 1={high1}/{low1} and 0={high0}/{low0}, not 8/4 and 3/9"
-        )
+        raise ValueError(f"the symbols are 1={high1}/{low1} and 0={high0}/{low0}, not 8/4 and 3/9")
     return table, (high1, low1), (high0, low0)
 
 
@@ -243,9 +241,7 @@ def falls(vcd: str) -> dict[str, int]:
     out = {}
     for key in want:
         if risen[key] or level[key] != "0" or len(fallen[key]) != 1:
-            raise ValueError(
-                f"{key[0]}.{key[1]} falls {fallen[key]} and rises {risen[key]}, not once"
-            )
+            raise ValueError(f"{key[0]}.{key[1]} falls {fallen[key]} and rises {risen[key]}, not once")
         out[f"{key[0]}.{key[1]}"] = fallen[key][0]
     if out["u1.GPIO0"] != out["ring.DIN"]:
         raise ValueError(f"GPIO0 and ring.DIN fall at {out}, not together")
@@ -266,14 +262,14 @@ def check_manifest(manifest: dict, netlist: dict) -> None:
 def check(run: Path, source: Path = SOURCE) -> None:
     frames, one, zero = parse_source(source.read_text())
     trains = [train(frame, one, zero) for frame in frames]
-    for index, (frame, pairs) in enumerate(zip(frames, trains)):
+    for index, (frame, pairs) in enumerate(zip(frames, trains, strict=True)):
         if decode(pairs) != frame:
             raise ValueError(f"frame {index} does not decode to its table row")
     link = list(csv.DictReader((run / "traces" / "link.csv").read_text().splitlines()))
     if len(link) != 3 or any(row["kind"] != "pulses" for row in link):
         raise ValueError(f"link.csv has {len(link)} rows, not 3 pulses rows")
     hashes = []
-    for index, (row, pairs) in enumerate(zip(link, trains)):
+    for index, (row, pairs) in enumerate(zip(link, trains, strict=True)):
         data = payload(pairs)
         digest = short_hash(data)
         hashes.append(digest)
@@ -298,20 +294,18 @@ def check(run: Path, source: Path = SOURCE) -> None:
     black = "0" * (SHAPE[1] * 6)
     expected = [black, *(grb_text(frame) for frame in frames)]
     times = [fall + RESET_PS]
-    for row, pairs in zip(link, trains):
+    for row, pairs in zip(link, trains, strict=True):
         if pairs[-1][0] != 0:
             raise ValueError("a frame does not end in a low")
         times.append(int(row["t_ps"]) - pairs[-1][1] + RESET_PS)
     starts = [int(row["start_ps"]) for row in link]
-    for index, (row, colour, at) in enumerate(zip(leds, expected, times)):
+    for index, (row, colour, at) in enumerate(zip(leds, expected, times, strict=True)):
         if row["part"] != "ring" or int(row["count"]) != SHAPE[1] or row["grb"] != colour:
             raise ValueError(f"leds row {index} is {row['grb']}, not {colour}")
         if int(row["t_ps"]) != at:
             raise ValueError(f"leds row {index} is at {row['t_ps']} ps, not {at}")
         if index < 3 and int(row["t_ps"]) >= starts[index]:
-            raise ValueError(
-                f"leds row {index} at {row['t_ps']} ps is not before record {index} at {starts[index]}"
-            )
+            raise ValueError(f"leds row {index} at {row['t_ps']} ps is not before record {index} at {starts[index]}")
     observations = json.loads((run / "observations.json").read_text())
     chain = observations["leds"]["ring"]
     pixels = [[green, red, blue] for red, green, blue in frames[2]]
@@ -348,16 +342,14 @@ def _write_run(folder: Path, source: Path, starts: list[int] | None = None) -> N
     if starts is None:
         starts = [120_000_000_000, 220_000_000_000, 320_000_000_000]
     rows = []
-    for start_ps, pairs in zip(starts, trains):
+    for start_ps, pairs in zip(starts, trains, strict=True):
         rows.append((start_ps + SPAN_PS, start_ps, payload(pairs)))
     link = ["t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash,lanes"]
     for end, start_ps, data in rows:
-        link.append(
-            f"{end},{start_ps},u1,GPIO0,pulses,,idle=0,{len(data)},{short_hash(data)},"
-        )
+        link.append(f"{end},{start_ps},u1,GPIO0,pulses,,idle=0,{len(data)},{short_hash(data)},")
     black_at = fall + RESET_PS
     led_rows = ["t_ps,part,count,grb", f"{black_at},ring,12,{'0' * 72}"]
-    for (_end, _start, _data), pairs, frame in zip(rows, trains, frames):
+    for (_end, _start, _data), pairs, frame in zip(rows, trains, frames, strict=True):
         at = _end - pairs[-1][1] + RESET_PS
         led_rows.append(f"{at},ring,12,{grb_text(frame)}")
     vcd = "\n".join(
@@ -367,7 +359,7 @@ def _write_run(folder: Path, source: Path, starts: list[int] | None = None) -> N
             "$var wire 1 ! GPIO0 $end",
             "$upscope $end",
             "$scope module ring $end",
-            "$var wire 1 \" DIN $end",
+            '$var wire 1 " DIN $end',
             "$upscope $end",
             "$enddefinitions $end",
             "#0",
@@ -386,9 +378,7 @@ def _write_run(folder: Path, source: Path, starts: list[int] | None = None) -> N
     for char in text:
         serial.append(f"0,u1,USB_SERIAL_JTAG,{ord(char)}")
     pixels = [[green, red, blue] for red, green, blue in frames[2]]
-    observations = {
-        "leds": {"ring": {"kind": "ws2812", "count": 12, "order": "grb", "pixels": pixels}}
-    }
+    observations = {"leds": {"ring": {"kind": "ws2812", "count": 12, "order": "grb", "pixels": pixels}}}
     netlist = {
         "parts": [
             {

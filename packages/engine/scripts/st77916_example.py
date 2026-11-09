@@ -60,8 +60,12 @@ def gradient(w, h):
 
 
 def checker(w, h):
-    tile = lambda x, y: (x // 8 + y // 8) % 2
-    return [byte for y in range(h) for x in range(w) for byte in (rgb565(31, 63, 0) if tile(x, y) else rgb565(0, 16, 31))]
+    def tile(x, y):
+        return (x // 8 + y // 8) % 2
+
+    return [
+        byte for y in range(h) for x in range(w) for byte in (rgb565(31, 63, 0) if tile(x, y) else rgb565(0, 16, 31))
+    ]
 
 
 def stripes(w, h):
@@ -95,7 +99,11 @@ def pattern():
     wrap = varying(2 * 3 + 1)
     follow = varying(4 * 2)
     return [
-        ([window(0x2A, 20, 99), window(0x2B, 24, 68)], gradient(80, 45), [Start(0x2C, 3600, True), Continue(3600, False)]),
+        (
+            [window(0x2A, 20, 99), window(0x2B, 24, 68)],
+            gradient(80, 45),
+            [Start(0x2C, 3600, True), Continue(3600, False)],
+        ),
         ([window(0x2A, 200, 239), window(0x2B, 40, 79)], checker(40, 40), [Start(0x2C, 3200, False)]),
         ([(0x36, [0x40]), window(0x2A, 60, 123), window(0x2B, 150, 181)], stripes(64, 32), [Start(0x2C, 4096, False)]),
         (
@@ -109,7 +117,9 @@ def pattern():
 
 
 def cycles(event):
-    over = lambda bits, lanes: -(-bits // lanes)
+    def over(bits, lanes):
+        return -(-bits // lanes)
+
     return sum(over(p["bits"], p["lanes"]) for p in event["phases"]) + over(8 * len(event["bytes"]), event["lanes"])
 
 
@@ -152,12 +162,14 @@ def events_text(items):
 
 
 def netlist_text(items):
-    stage = lambda volts, ohms: {
-        "high_drop": {"value": volts, "unit": "V", "source": "user"},
-        "high_resistance": {"value": ohms, "unit": "ohm", "source": "user"},
-        "low_drop": {"value": volts, "unit": "V", "source": "user"},
-        "low_resistance": {"value": ohms, "unit": "ohm", "source": "user"},
-    }
+    def stage(volts, ohms):
+        return {
+            "high_drop": {"value": volts, "unit": "V", "source": "user"},
+            "high_resistance": {"value": ohms, "unit": "ohm", "source": "user"},
+            "low_drop": {"value": volts, "unit": "V", "source": "user"},
+            "low_resistance": {"value": ohms, "unit": "ohm", "source": "user"},
+        }
+
     data = {"D0": "d0", "D1": "d1", "D2": "d2", "D3": "d3"}
     netlist = {
         "version": 0,
@@ -169,7 +181,16 @@ def netlist_text(items):
             {
                 "name": "lcd1",
                 "kind": "st77916",
-                "pins": {"VCC": "v3v3", "GND": "gnd", "CS": "cs", "SCLK": "sclk", **data, "RST": "rst", "TE": "te", "BLK": "v3v3"},
+                "pins": {
+                    "VCC": "v3v3",
+                    "GND": "gnd",
+                    "CS": "cs",
+                    "SCLK": "sclk",
+                    **data,
+                    "RST": "rst",
+                    "TE": "te",
+                    "BLK": "v3v3",
+                },
                 "output": stage(0.0, 25.0),
                 "input_threshold": {
                     "low": {"value": 0.3, "unit": "1", "source": "user"},

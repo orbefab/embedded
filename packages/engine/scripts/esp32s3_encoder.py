@@ -7,8 +7,8 @@
     uv run packages/engine/scripts/esp32s3_encoder.py --check RUN_DIR
     uv run packages/engine/scripts/esp32s3_encoder.py --self-test
 
-The app of `packages/engine/tests/firmware/esp32s3/idf/encoder` counts the closings of the knob's two contacts, `sw_a` on
-GPIO2 and `sw_b` on GPIO1, from a falling-edge interrupt on each pin, and prints
+The app of `packages/engine/tests/firmware/esp32s3/idf/encoder` counts the closings of the knob's two contacts,
+`sw_a` on GPIO2 and `sw_b` on GPIO1, from a falling-edge interrupt on each pin, and prints
 `edge a=<n> b=<m> t=<us>` for each, with the `esp_timer` time the interrupt took. A 3 ms
 `esp_timer` polls both pins and prints `poll a=<n> b=<m>` for each press it counts.
 
@@ -89,7 +89,7 @@ def check_console(got: list[tuple[int, str]], closed: list[tuple[int, int]]) -> 
     if len(edges) != len(closed):
         raise ValueError(f"{len(edges)} edge lines for {len(closed)} closings")
     counts = [0, 0]
-    for (at, k), (a, b, t) in zip(closed, edges):
+    for (at, k), (a, b, t) in zip(closed, edges, strict=True):
         counts[k] += 1
         if (a, b) != tuple(counts):
             raise ValueError(f"the edge at {at} ps counts a={a} b={b}, not a={counts[0]} b={counts[1]}")
@@ -98,7 +98,7 @@ def check_console(got: list[tuple[int, str]], closed: list[tuple[int, int]]) -> 
             raise ValueError(f"the edge at {at} ps took the time {t} us, not {start} to {start + LATENCY_US} us")
     if [counts for _, counts in polls] != [(a, b) for a, b, _ in edges]:
         raise ValueError(f"the polled presses {polls} are not the edges' counts")
-    for (closing, _), (at, _) in zip(closed, polls):
+    for (closing, _), (at, _) in zip(closed, polls, strict=True):
         start, end = closing + POLL_US * US_PS, closing + (2 * POLL_US + PRINT_SLACK_US) * US_PS
         if not start <= at <= end:
             raise ValueError(f"the poll after the closing at {closing} ps printed at {at} ps, not {start} to {end} ps")
@@ -108,8 +108,10 @@ def check_console(got: list[tuple[int, str]], closed: list[tuple[int, int]]) -> 
 def check_manifest(manifest: dict, netlist: dict) -> None:
     part = next(part for part in netlist["parts"] if part["kind"] == "esp32s3")
     want = [{"role": "rom", **part["rom"]}]
-    want += [{"role": "flash", "sha256": r["sha256"], "bytes": r["bytes"], "offset": r["offset"]}
-             for r in part["firmware"]["flash"]]
+    want += [
+        {"role": "flash", "sha256": r["sha256"], "bytes": r["bytes"], "offset": r["offset"]}
+        for r in part["firmware"]["flash"]
+    ]
     if manifest["blobs"] != want:
         raise ValueError(f"manifest.json lists {manifest['blobs']}, not {want}")
 
@@ -127,8 +129,9 @@ def check(run: Path) -> None:
     a, b = check_console(got, closed)
     check_diagnostics(json.loads((run / "diagnostics.json").read_text()))
     check_manifest(json.loads((run / "manifest.json").read_text()), netlist)
-    print(f"esp32s3-encoder: {a} closings of sw_a and {b} of sw_b, each an edge within {LATENCY_US} us "
-          f"and a polled press")
+    print(
+        f"esp32s3-encoder: {a} closings of sw_a and {b} of sw_b, each an edge within {LATENCY_US} us and a polled press"
+    )
 
 
 def serial_of(timed: list[tuple[int, str]]) -> str:
@@ -177,27 +180,62 @@ def self_test() -> int:
     expect("the closings come in time order", closed == [(200 * ms, 0), (300 * ms, 1), (400 * ms, 0)])
     expect("a good run passes", not raises(lambda: check_console(console(), closed)))
     expect("a good run counts each contact", check_console(console(), closed) == (2, 1))
-    expect("a late edge fails", raises(lambda: check_console(console(lambda l: l.replace("t=300001", "t=300011")), closed)))
-    expect("an early edge fails", raises(lambda: check_console(console(lambda l: l.replace("t=300001", "t=299999")), closed)))
-    expect("a miscounted edge fails", raises(lambda: check_console(console(lambda l: l.replace("edge a=1 b=1", "edge a=2 b=0")), closed)))
-    expect("a lost edge fails", raises(lambda: check_console(console(lambda l: "" if "t=400001" in l else l), closed)))
-    expect("a lost poll fails", raises(lambda: check_console(console(lambda l: "" if l == "poll a=1 b=1\r\n" else l), closed)))
+    expect(
+        "a late edge fails",
+        raises(lambda: check_console(console(lambda line: line.replace("t=300001", "t=300011")), closed)),
+    )
+    expect(
+        "an early edge fails",
+        raises(lambda: check_console(console(lambda line: line.replace("t=300001", "t=299999")), closed)),
+    )
+    expect(
+        "a miscounted edge fails",
+        raises(lambda: check_console(console(lambda line: line.replace("edge a=1 b=1", "edge a=2 b=0")), closed)),
+    )
+    expect(
+        "a lost edge fails",
+        raises(lambda: check_console(console(lambda line: "" if "t=400001" in line else line), closed)),
+    )
+    expect(
+        "a lost poll fails",
+        raises(lambda: check_console(console(lambda line: "" if line == "poll a=1 b=1\r\n" else line), closed)),
+    )
     late = [(at + 4 * ms if line == "poll a=1 b=1\r\n" else at, line) for at, line in timed]
     expect("a late poll fails", raises(lambda: check_console(lines(serial_of(late)), closed)))
-    expect("a miscounted poll fails", raises(lambda: check_console(console(lambda l: l.replace("poll a=2", "poll a=3")), closed)))
-    expect("a console without ready fails", raises(lambda: check_console(console(lambda l: "" if l == READY else l), closed)))
+    expect(
+        "a miscounted poll fails",
+        raises(lambda: check_console(console(lambda line: line.replace("poll a=2", "poll a=3")), closed)),
+    )
+    expect(
+        "a console without ready fails",
+        raises(lambda: check_console(console(lambda line: "" if line == READY else line), closed)),
+    )
     extra = netlist["parts"] + [switch("sw_c", [500 * ms])]
     expect("another switch is not a contact", closings({"parts": extra}) == closed)
-    expect("a third closing of sw_a fails", raises(lambda: check_console(
-        console(), closings({"parts": [switch("sw_a", [200 * ms, 400 * ms, 600 * ms]), switch("sw_b", [300 * ms])]}))))
+    expect(
+        "a third closing of sw_a fails",
+        raises(
+            lambda: check_console(
+                console(),
+                closings({"parts": [switch("sw_a", [200 * ms, 400 * ms, 600 * ms]), switch("sw_b", [300 * ms])]}),
+            )
+        ),
+    )
     expect("an error fails", raises(lambda: check_diagnostics([{"code": "chip.clock", "severity": "error"}])))
-    expect("a warning passes", not raises(lambda: check_diagnostics([{"code": "chip.unmodeled_register", "severity": "warning"}])))
+    expect(
+        "a warning passes",
+        not raises(lambda: check_diagnostics([{"code": "chip.unmodeled_register", "severity": "warning"}])),
+    )
     other = serial_of(timed).replace("USB_SERIAL_JTAG", "USART0", 1)
     expect("another port fails", raises(lambda: lines(other)))
-    part = {"kind": "esp32s3", "rom": {"sha256": "r", "bytes": 1},
-            "firmware": {"flash": [{"offset": 8, "sha256": "f", "bytes": 2}]}}
-    listed = {"blobs": [{"role": "rom", "sha256": "r", "bytes": 1},
-                        {"role": "flash", "sha256": "f", "bytes": 2, "offset": 8}]}
+    part = {
+        "kind": "esp32s3",
+        "rom": {"sha256": "r", "bytes": 1},
+        "firmware": {"flash": [{"offset": 8, "sha256": "f", "bytes": 2}]},
+    }
+    listed = {
+        "blobs": [{"role": "rom", "sha256": "r", "bytes": 1}, {"role": "flash", "sha256": "f", "bytes": 2, "offset": 8}]
+    }
     expect("the manifest passes", not raises(lambda: check_manifest(listed, {"parts": [part]})))
     unplaced = {"blobs": [listed["blobs"][0], {**listed["blobs"][1], "offset": None}]}
     expect("a region without its offset fails", raises(lambda: check_manifest(unplaced, {"parts": [part]})))

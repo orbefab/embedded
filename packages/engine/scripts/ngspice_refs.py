@@ -4,7 +4,8 @@
 # ///
 """Write each example's ngspice reference from its netlist.json.
 
-    uv run packages/engine/scripts/ngspice_refs.py [--check] [packages/engine/tests/circuits/<name> | packages/engine/cli/tests/fixtures/<name> ...]
+    uv run packages/engine/scripts/ngspice_refs.py [--check]
+        [packages/engine/tests/circuits/<name> | packages/engine/cli/tests/fixtures/<name> ...]
     uv run packages/engine/scripts/ngspice_refs.py --self-test
 
 For every example it translates netlist.json into deck.cir, runs `ngspice -b`
@@ -450,7 +451,7 @@ def generate(example, version):
     for stem, column in passed.items():
         ground = grounded[stem]
         values[f"{stem}.iout"] = [-value for value in column]
-        values[f"{stem}.iin"] = [p + g for p, g in zip(column, ground)]
+        values[f"{stem}.iin"] = [p + g for p, g in zip(column, ground, strict=True)]
     if transient:
         count = len(vectors["time"])
         values[f"#net.{netlist['ground']}"] = [0.0] * count
@@ -481,9 +482,7 @@ def generate(example, version):
         if chips or relays:
             reference["tran"]["grid_ps"] = reference_grid(netlist, bool(chips), spans is not None)
             logic = {
-                f"#{part['name']}.logic.out": crossings(
-                    dense["time"], dense[f"v(x_{part['name'].lower()}_q)"]
-                )
+                f"#{part['name']}.logic.out": crossings(dense["time"], dense[f"v(x_{part['name'].lower()}_q)"])
                 for part in chips
             }
             for part in relays:
@@ -525,9 +524,7 @@ def corner_times(netlist):
     """Each ramp corner in (0, stop], read from the netlist and not from the deck. A source jump
     or a contact edge ramps over EDGE_RAMP_PS from its picosecond."""
     stop = netlist["analysis"]["transient"]["stop_ps"]
-    starts = source_jumps(netlist) + [
-        edge["t_ps"] for edges in switches(netlist).values() for edge in edges
-    ]
+    starts = source_jumps(netlist) + [edge["t_ps"] for edges in switches(netlist).values() for edge in edges]
     return sorted({at for start in starts for at in (start, start + EDGE_RAMP_PS) if 0 < at <= stop})
 
 
@@ -542,7 +539,7 @@ def missed_corners(label, corners, times):
 def crossings(times, latch):
     """Each 0.5 crossing of a latch node, linear between ngspice's points, to the picosecond."""
     edges = []
-    for (t0, v0), (t1, v1) in zip(zip(times, latch), zip(times[1:], latch[1:])):
+    for (t0, v0), (t1, v1) in zip(zip(times, latch, strict=True), zip(times[1:], latch[1:], strict=True), strict=False):
         if (v0 - 0.5) * (v1 - 0.5) < 0:
             at = t0 + (0.5 - v0) * (t1 - t0) / (v1 - v0)
             edges.append({"level": "high" if v1 > 0.5 else "low", "t_ps": round(at * 1e12)})
@@ -561,7 +558,9 @@ def contact_edges(times, current, pull_in, drop_out):
     neg = current[0] < -pull_in
     closed = pos or neg
     edges = []
-    for (t0, i0), (t1, i1) in zip(zip(times, current), zip(times[1:], current[1:])):
+    for (t0, i0), (t1, i1) in zip(
+        zip(times, current, strict=True), zip(times[1:], current[1:], strict=True), strict=False
+    ):
         flips = []
         for sign, high in ((1.0, pos), (-1.0, neg)):
             s0, s1 = sign * i0, sign * i1
@@ -623,7 +622,7 @@ def part_voltages(label, netlist, values, count):
             raise SystemExit(f"{label}: no node voltage {missing}") from None
         if len(first) != count or len(second) != count:
             raise SystemExit(f"{label}: {part['name']} voltage has the wrong length")
-        values[f"#{part['name']}.v"] = [a - b for a, b in zip(first, second)]
+        values[f"#{part['name']}.v"] = [a - b for a, b in zip(first, second, strict=True)]
 
 
 def source_jumps(netlist):
@@ -646,9 +645,7 @@ def switches(netlist):
     """Every contact edge before the stop, per switch ref."""
     stop = netlist["analysis"]["transient"]["stop_ps"]
     return {
-        f"#{part['name']}": [
-            edge for edge in switch_edges(netlist["seed"], part) if edge["t_ps"] < stop
-        ]
+        f"#{part['name']}": [edge for edge in switch_edges(netlist["seed"], part) if edge["t_ps"] < stop]
         for part in netlist["parts"]
         if part["kind"] == "switch"
     }
@@ -928,9 +925,7 @@ def translate_shape(title, netlist):
         else:
             raise Skip(f"kind {kind} has no translation")
     if latches:
-        lines.append(
-            "* The engine's gmin on every node. A chip's ladder holds CONT flat, with no span to hide it."
-        )
+        lines.append("* The engine's gmin on every node. A chip's ladder holds CONT flat, with no span to hide it.")
         shunted = [node(net) for net in nets if net != ground] + [
             f"x_{p['name'].lower()}_lo" for p in parts if p["kind"] in CHIPS
         ]
@@ -956,7 +951,8 @@ def translate_shape(title, netlist):
         return "\n".join(lines) + "\n", mapping
     if corners and coils:
         lines.append(
-            "* One source per corner. Its first point is the corner, a breakpoint from t = 0, and its second point is the stop."
+            "* One source per corner. Its first point is the corner, "
+            "a breakpoint from t = 0, and its second point is the stop."
         )
         held = [at for at in sorted(corners) if at < transient["stop_ps"]]
         lines += [f"vbp{k} bp{k} 0 pwl({at}p 0 {transient['stop_ps']}p 0)" for k, at in enumerate(held)]
@@ -989,11 +985,7 @@ def translate_shape(title, netlist):
 
 
 def reject_duplicate_devices(lines):
-    names = [
-        line.split(None, 1)[0].lower()
-        for line in lines
-        if line and line[0] not in ".*"
-    ]
+    names = [line.split(None, 1)[0].lower() for line in lines if line and line[0] not in ".*"]
     if len(set(names)) != len(names):
         raise Skip("two device names are equal ignoring case")
 
@@ -1001,9 +993,7 @@ def reject_duplicate_devices(lines):
 def ne555_lines(name, part, node):
     """The engine's NE555 as B-sources. Each comparator reads high strictly above its threshold,
     as the engine's watches do. The latch state is a node held on 1 ohm / 1 pF."""
-    gnd, trig, out, reset, cont, thres, disch, vcc = (
-        node(net) for net in pin_nets(part)
-    )
+    gnd, trig, out, reset, cont, thres, disch, vcc = (node(net) for net in pin_nets(part))
     q = f"x_{name}_q"
     lower = f"x_{name}_lo"
     ladder = number(part["ladder_resistance"])
@@ -1022,12 +1012,18 @@ def ne555_lines(name, part, node):
         f"bx_{name}_s x_{name}_s 0 v = {latch}",
         f"rx_{name}_q x_{name}_s {q} 1",
         f"cx_{name}_q {q} 0 1e-12",
-        f"bx_{name}_oh {vcc} {out} i = ({high}) ? "
-        f"(V({vcc},{out}) - {number(output['high_drop'])}) / {number(output['high_resistance'])} : 0",
-        f"bx_{name}_ol {out} {gnd} i = ({high}) ? 0 : "
-        f"(V({out},{gnd}) - {number(output['low_drop'])}) / {number(output['low_resistance'])}",
-        f"bx_{name}_d {disch} {gnd} i = V({disch},{gnd}) / (({high}) ? "
-        f"{number(discharge['off_resistance'])} : {number(discharge['on_resistance'])})",
+        (
+            f"bx_{name}_oh {vcc} {out} i = ({high}) ? "
+            f"(V({vcc},{out}) - {number(output['high_drop'])}) / {number(output['high_resistance'])} : 0"
+        ),
+        (
+            f"bx_{name}_ol {out} {gnd} i = ({high}) ? 0 : "
+            f"(V({out},{gnd}) - {number(output['low_drop'])}) / {number(output['low_resistance'])}"
+        ),
+        (
+            f"bx_{name}_d {disch} {gnd} i = V({disch},{gnd}) / (({high}) ? "
+            f"{number(discharge['off_resistance'])} : {number(discharge['on_resistance'])})"
+        ),
     ]
 
 
@@ -1244,9 +1240,7 @@ def on_engine_grid(netlist, times, values, gate):
         if len(series) != len(times):
             raise SystemExit(f"{key} has {len(series)} points, time has {len(times)}")
         skip = int(key in held)
-        return [series[0]] * skip + [
-            interpolate_series(row, at_ps[skip:], series[skip:]) for row in rows[skip:]
-        ]
+        return [series[0]] * skip + [interpolate_series(row, at_ps[skip:], series[skip:]) for row in rows[skip:]]
 
     return (
         [row / 1e12 for row in rows],
@@ -1288,10 +1282,8 @@ def transient_power(part, values, gate):
     if part["kind"] == "linear_regulator":
         vin, vout, vgnd = (values[f"#net.{net}"] for net in pin_nets(part))
         iin, iout = values[f"{ref}.iin"], values[f"{ref}.iout"]
-        return [
-            (vin[k] - vgnd[k]) * iin[k] + (vout[k] - vgnd[k]) * iout[k] for k in range(len(iin))
-        ]
-    return [v * i for v, i in zip(values[f"{ref}.v"], values[f"{ref}.i"])]
+        return [(vin[k] - vgnd[k]) * iin[k] + (vout[k] - vgnd[k]) * iout[k] for k in range(len(iin))]
+    return [v * i for v, i in zip(values[f"{ref}.v"], values[f"{ref}.i"], strict=True)]
 
 
 def held_columns(netlist):
@@ -1345,9 +1337,7 @@ def run_ngspice(deck, raw_names, label):
         log = f"{done.stdout}{done.stderr}"
         fallback = op_fallback_lines(log)
         if fallback:
-            raise SystemExit(
-                f"{label}: ngspice operating point did not converge: {'; '.join(fallback)}"
-            )
+            raise SystemExit(f"{label}: ngspice operating point did not converge: {'; '.join(fallback)}")
         raws = [Path(tmp, name) for name in raw_names]
         if done.returncode != 0 or not all(raw.is_file() for raw in raws):
             raise SystemExit(f"ngspice failed ({done.returncode}):\n{log}")
@@ -1366,9 +1356,7 @@ def parse_raw(text):
     indices = tokens[::width]
     if not points or len(tokens) != points * width or indices != [str(k) for k in range(points)]:
         raise SystemExit(f"unexpected raw values: {tokens[: 2 * width]}")
-    return {
-        name: [float(token) for token in tokens[1 + j :: width]] for j, name in enumerate(names)
-    }
+    return {name: [float(token) for token in tokens[1 + j :: width]] for j, name in enumerate(names)}
 
 
 def write_atomic(path, text):
