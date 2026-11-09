@@ -50,10 +50,7 @@ def atmega328p_tqfp32_shape():
 
 def atmega328p_tqfp32_anchors():
     bottom = TQFP_LEAD_Z - TQFP_LEAD[2] / 2.0
-    return [
-        glb.Anchor(lead, f"lead-{lead}", (*_lead_xy(lead)[0], bottom), kind="pad")
-        for lead in range(1, 33)
-    ]
+    return [glb.Anchor(lead, f"lead-{lead}", (*_lead_xy(lead)[0], bottom), kind="pad") for lead in range(1, 33)]
 
 
 if __name__ == "__main__":

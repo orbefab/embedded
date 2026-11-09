@@ -2,8 +2,8 @@
   "part": "dip-socket-28",
   "source": {
     "script": "model.py",
-    "sha256": "ca8fd1afe2ad3c303810011973585629cd9b76688020805ef3a3ad2b0a9fe1b0",
-    "bytes": 2563
+    "sha256": "305212d21c964a4f1e9d1909fd8bf34d9d8b693fce913e93c21bf8ac63160602",
+    "bytes": 2541
   },
   "files": {
     "dip-socket-28.glb": {

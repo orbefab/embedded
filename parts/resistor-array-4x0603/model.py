@@ -35,8 +35,7 @@ def resistor_array_cay16_shape():
     length, width, height = CAY_BODY
     wide, deep = CAY_TERMINAL
     terminals = {
-        n: box(*_terminal_xy(x, side), height / 2.0, wide, deep, height)
-        for n, x, side in ic.dual_row(8, CAY_PITCH)
+        n: box(*_terminal_xy(x, side), height / 2.0, wide, deep, height) for n, x, side in ic.dual_row(8, CAY_PITCH)
     }
     body = box(0, 0, height / 2.0, length, width, height).cut(*terminals.values())
     children = [paint(body, "body", _BODY)]

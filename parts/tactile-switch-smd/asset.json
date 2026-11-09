@@ -2,8 +2,8 @@
   "part": "tactile-switch-smd",
   "source": {
     "script": "model.py",
-    "sha256": "1e5dad0ae52c13c4aa29800126c2ac9a003aa50d5d800e7fede19e34b01dabb6",
-    "bytes": 2408
+    "sha256": "9743d8c71f04ff5980374d8a1852ba08f3c6235602b44e3dfe1c68e4196cd0a6",
+    "bytes": 2386
   },
   "files": {
     "tactile-switch-smd.glb": {

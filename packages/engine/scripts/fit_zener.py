@@ -215,10 +215,7 @@ def main():
     print(f"knee impedance at 1 mA {knee:.4f} ohm, maximum 550 ohm")
     terminal, jf, jb = reverse_terminal(rs, rb, is_, n, isb, nbvt, 1.0)
     leakage = abs(terminal)
-    print(
-        f"leakage at 1 V, current entering the anode {terminal:.16e} A, "
-        f"GMIN included, maximum 10 uA"
-    )
+    print(f"leakage at 1 V, current entering the anode {terminal:.16e} A, GMIN included, maximum 10 uA")
     print(f"  forward device {jf:.16e} A, breakdown device {jb:.16e} A")
     print("estimate Rb = 4.9 ohm, beside the fit")
     for amps, curve in CURVE:

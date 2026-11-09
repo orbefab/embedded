@@ -254,18 +254,16 @@ printf '%s\n' '/cargo/registry' '/rustc/lib' '/orbe/packages/x' '/target/release
 caller_cargo=${CARGO_HOME:-$HOME/.cargo}
 caller_rustup=${RUSTUP_HOME:-$HOME/.rustup}
 for home in /cargo /rustc /orbe /target; do
-  if ! (
-    export CARGO_HOME=$caller_cargo RUSTUP_HOME=$caller_rustup HOME=$home
-    orbe_wasm_reject_host_paths "$home_case"
-  ); then
+  if ! CARGO_HOME=$caller_cargo RUSTUP_HOME=$caller_rustup HOME=$home \
+    orbe_wasm_reject_host_paths "$home_case"; then
     echo "check-wasm: HOME=$home rejected a package that only names replacements" >&2
     exit 1
   fi
 done
 printf '%s\n' '/probe-home/secret' >"$home_case/replaced.bin"
 if msg=$(
-  export CARGO_HOME=$caller_cargo RUSTUP_HOME=$caller_rustup HOME=/probe-home
-  orbe_wasm_reject_host_paths "$home_case" 2>&1
+  CARGO_HOME=$caller_cargo RUSTUP_HOME=$caller_rustup HOME=/probe-home \
+    orbe_wasm_reject_host_paths "$home_case" 2>&1
 ); then
   echo "check-wasm: HOME=/probe-home missed a host path" >&2
   exit 1

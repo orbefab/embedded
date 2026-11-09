@@ -60,7 +60,8 @@ def header(doc):
         palette = ", ".join(f"0x{c:04x}" for c in colors)
         fill = FILLS.index(rect["fill"])
         out.append(
-            f"    {{{x0}, {y0}, {x1}, {y1}, {fill}, {rect.get('cell', 0)}, {rect.get('blue', 0)}, {len(colors)}, {{{palette}}}}},"
+            f"    {{{x0}, {y0}, {x1}, {y1}, {fill}, {rect.get('cell', 0)}, "
+            f"{rect.get('blue', 0)}, {len(colors)}, {{{palette}}}}},"
         )
     out += ["};", f"#define RECTS {len(doc['rects'])}"]
     return "\n".join(out) + "\n"

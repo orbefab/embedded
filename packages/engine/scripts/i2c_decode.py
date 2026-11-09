@@ -263,21 +263,19 @@ def compare(decoded, rows, cycle_ps):
                 return matched, exact, problems
             phase = decoded[k]
             if phase["t_ps"] + cycle_ps < t:
-                problems.append(
-                    f"row {n + 1}: arbitration loss at {t} skips {phase['phase']} at {phase['t_ps']}"
-                )
+                problems.append(f"row {n + 1}: arbitration loss at {t} skips {phase['phase']} at {phase['t_ps']}")
                 return matched, exact, problems
             if abs(phase["t_ps"] - t) > cycle_ps:
                 problems.append(f"row {n + 1}: no decoded phase starts at the arbitration loss at {t}")
                 return matched, exact, problems
             if phase["phase"] not in ("address", "data", "bus_error"):
-                problems.append(
-                    f"row {n + 1}: arbitration loss at {t} matches a {phase['phase']}, not a byte"
-                )
+                problems.append(f"row {n + 1}: arbitration loss at {t} matches a {phase['phase']}, not a byte")
                 return matched, exact, problems
             if phase["phase"] == "bus_error" and not phase["read_low"]:
                 problems.append(
-                    f"row {n + 1}: arbitration loss at {t} matches a bus error with no low read on bits 7 to 0 of an address, on bits 7 to 0 of a write data byte, or on the ACK bit of a read data byte"
+                    f"row {n + 1}: arbitration loss at {t} matches a bus error with no low read "
+                    "on bits 7 to 0 of an address, on bits 7 to 0 of a write data byte, "
+                    "or on the ACK bit of a read data byte"
                 )
                 return matched, exact, problems
             matched += 1
@@ -307,7 +305,7 @@ def timing(scl, sda):
     """`(column, {name: [ps]}, holds)`, `holds` the tHD;DAT values on unstretched lows."""
     scl_high, sda_high, edges = merged(scl, sda)
     rises = [t for t, high in scl[1:] if high]
-    periods = [b - a for a, b in zip(rises, rises[1:])]
+    periods = [b - a for a, b in zip(rises, rises[1:], strict=False)]
     column = 0 if periods and statistics.median(periods) >= 10_000_000 else 1
     seen = {name: [] for name in TABLE}
     lows = []
@@ -482,7 +480,7 @@ def main():
     order = []
     for chip, scl, sda in atmega:
         name = chip["name"]
-        cycle_ps = -(-10**12 // chip["clock_hz"]["value"])
+        cycle_ps = -(-(10**12) // chip["clock_hz"]["value"])
         views[name] = decode(vcd[scl], vcd[sda])
         order.append(name)
         mine = [row for row in rows if row["part"] == name]
@@ -561,7 +559,10 @@ def self_test():
     )
     expect("100 kHz takes the master hold and the 300 ns hold", s3_problems(slow, 100_000) == [])
     expect("a 400 ns hold fails at 100 kHz", "tHD;DAT" in s3_problems({**slow, "tHD;DAT": [400_000]}, 100_000))
-    expect("a setup that is not the low minus its hold fails", "tSU;DAT" in s3_problems({**slow, "tSU;DAT": [950_000]}, 100_000))
+    expect(
+        "a setup that is not the low minus its hold fails",
+        "tSU;DAT" in s3_problems({**slow, "tSU;DAT": [950_000]}, 100_000),
+    )
     expect("another rate is rejected", s3_lengths(200_000) is None)
 
     import tempfile
@@ -587,11 +588,15 @@ def self_test():
         folder = Path(raw)
         (folder / "traces").mkdir()
         (folder / "traces" / "i2c.csv").write_text("t_ps,part,phase,address,read,byte,ack\n")
-        (folder / "traces" / "logic.vcd").write_text(vcd([
-            ("u1", ["PC5", "PC4"]),
-            ("u2", ["SCL", "SDA"]),
-            ("u3", ["GPIO10", "GPIO9"]),
-        ]))
+        (folder / "traces" / "logic.vcd").write_text(
+            vcd(
+                [
+                    ("u1", ["PC5", "PC4"]),
+                    ("u2", ["SCL", "SDA"]),
+                    ("u3", ["GPIO10", "GPIO9"]),
+                ]
+            )
+        )
         netlist = {
             "parts": [
                 {"name": "u1", "kind": "atmega328p", "clock_hz": {"value": 16_000_000}, "pins": {}},
@@ -604,20 +609,26 @@ def self_test():
 
         script = Path(__file__).resolve()
         out = subprocess.run([sys.executable, script, str(folder)], capture_output=True, text=True)
-        expect("a matching controller adds no line", out.returncode == 0 and out.stdout == (
-            "u1: 0 decoded phases, 0 rows in i2c.csv\n"
-            "u1: 0 of 0 rows match, 0 to the picosecond\n"
-        ))
+        expect(
+            "a matching controller adds no line",
+            out.returncode == 0
+            and out.stdout == ("u1: 0 decoded phases, 0 rows in i2c.csv\nu1: 0 of 0 rows match, 0 to the picosecond\n"),
+        )
         netlist["parts"] = netlist["parts"][1:]
         (folder / "netlist.json").write_text(json.dumps(netlist))
         out = subprocess.run([sys.executable, script, str(folder)], capture_output=True, text=True)
-        expect("an S3 run compares its views and does not open i2c.csv", out.returncode == 0 and out.stdout == (
-            "u2 and u3 decode the same phases: True\n"
-        ))
+        expect(
+            "an S3 run compares its views and does not open i2c.csv",
+            out.returncode == 0 and out.stdout == ("u2 and u3 decode the same phases: True\n"),
+        )
         (folder / "traces" / "i2c.csv").unlink()
-        out = subprocess.run([sys.executable, script, str(folder), "--timing-s3", "400000"], capture_output=True, text=True)
+        out = subprocess.run(
+            [sys.executable, script, str(folder), "--timing-s3", "400000"], capture_output=True, text=True
+        )
         expect("timing-s3 on an idle bus passes", out.returncode == 0 and "off=1" not in out.stdout)
-        out = subprocess.run([sys.executable, script, str(folder), "--timing-s3", "200000"], capture_output=True, text=True)
+        out = subprocess.run(
+            [sys.executable, script, str(folder), "--timing-s3", "200000"], capture_output=True, text=True
+        )
         expect("another timing-s3 rate exits 1", out.returncode == 1)
 
     print("self-test passed" if not failures else f"self-test: {failures} failed")

@@ -65,18 +65,14 @@ def potentiometer_wh148_shape():
     ]
     shaft = cyl_z(0, 0, deep, deep + shaft_l, shaft_d / 2.0)
     for k in range(18):
-        groove = bd.Pos(0, 0, deep + shaft_l - 3.5) * bd.Rot(0, 0, k * 20) * box(
-            shaft_d / 2.0, 0, 0, 0.4, 0.4, 7.2
-        )
+        groove = bd.Pos(0, 0, deep + shaft_l - 3.5) * bd.Rot(0, 0, k * 20) * box(shaft_d / 2.0, 0, 0, 0.4, 0.4, 7.2)
         shaft -= groove
     turning = [paint(shaft, "spindle", _STEEL)]
     radius, lug_w, lug_a, lug_h = POT_LUG
     children.append(paint(box(0, radius, deep + lug_h / 2.0, lug_w, lug_a, lug_h), "lug", _CAN))
     knob_d, knob_h, gap = POT_KNOB
     knob_z = deep + bushing_l + gap
-    knob = cyl_z(0, 0, knob_z, knob_z + knob_h, knob_d / 2.0) - cyl_z(
-        0, 0, knob_z - 0.1, deep + shaft_l, shaft_d / 2.0
-    )
+    knob = cyl_z(0, 0, knob_z, knob_z + knob_h, knob_d / 2.0) - cyl_z(0, 0, knob_z - 0.1, deep + shaft_l, shaft_d / 2.0)
     pointer = box(0, -knob_d / 4.0, knob_z + knob_h + 0.01, 0.8, knob_d / 2.0 - 1.0, 0.02)
     turning += [paint(knob, "knob", _KNOB), paint(pointer, "knob-pointer", _POINTER)]
     children.append(bd.Compound(children=turning, label="shaft"))

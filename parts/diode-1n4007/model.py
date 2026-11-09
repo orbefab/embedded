@@ -30,18 +30,12 @@ _TIN = srgb("#C5C8CE")
 
 
 def _segment(x0, x1):
-    return (
-        bd.Pos((x0 + x1) / 2.0, 0, D_DIA / 2.0)
-        * bd.Rot(0, 90, 0)
-        * bd.Cylinder(D_DIA / 2.0, x1 - x0)
-    )
+    return bd.Pos((x0 + x1) / 2.0, 0, D_DIA / 2.0) * bd.Rot(0, 90, 0) * bd.Cylinder(D_DIA / 2.0, x1 - x0)
 
 
 def diode_1n4007_anchors():
     x = tht.AXIAL_PITCH / 2.0
-    return [
-        glb.Anchor(lead, f"lead-{lead}", (s * x, 0.0, -D_BELOW)) for lead, s in ((1, -1), (2, 1))
-    ]
+    return [glb.Anchor(lead, f"lead-{lead}", (s * x, 0.0, -D_BELOW)) for lead, s in ((1, -1), (2, 1))]
 
 
 def diode_1n4007_shape():

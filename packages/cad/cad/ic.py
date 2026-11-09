@@ -71,9 +71,7 @@ def qfn(count, size, height, pitch, terminal=(0.25, 0.4), thick=0.05, exposed=No
     per = count // 4
     wide, deep = terminal
     half = size / 2.0
-    children = [
-        paint(box(0, 0, thick + (height - thick) / 2.0, size, size, height - thick), "body", BLACK)
-    ]
+    children = [paint(box(0, 0, thick + (height - thick) / 2.0, size, size, height - thick), "body", BLACK)]
     r = size * 0.08
     children.append(paint(box(-half + 2 * r, half - 2 * r, height + 0.02, r, r, 0.04), "dot", DOT))
     anchors = []

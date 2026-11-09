@@ -2,8 +2,8 @@
   "part": "resistor-axial",
   "source": {
     "script": "model.py",
-    "sha256": "f96881f37ae83994c65eacc5cd5b798bd65eac45b4ef1a8e2cba954b6b7ef4ed",
-    "bytes": 2542
+    "sha256": "69a78bb5a24106da60cf1eb9dc55f1e0d288f6a3f22c1c75b0f5efd977e35e40",
+    "bytes": 2510
   },
   "files": {
     "resistor-axial.glb": {

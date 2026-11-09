@@ -2,8 +2,8 @@
   "part": "potentiometer-wh148",
   "source": {
     "script": "model.py",
-    "sha256": "7b05e52b84aaaed9196c39ff017b644d09c21bd4fd1ec37c03f7b0f976fb9249",
-    "bytes": 3683
+    "sha256": "2bff2feca1a20635307168adf2daab93b682c0795c084059805f11e833b5bd26",
+    "bytes": 3647
   },
   "files": {
     "potentiometer-wh148.glb": {

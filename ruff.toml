@@ -1,0 +1,21 @@
+# Ruff walks up from each file and stops at the first config. This file is that
+# config for the whole repo. A [tool.ruff] table in packages/cad/pyproject.toml
+# would hide it from that package.
+line-length = 120
+target-version = "py312"
+
+[lint]
+select = [
+  "F",   # pyflakes
+  "E",   # pycodestyle errors
+  "W",   # pycodestyle warnings
+  "I",   # isort
+  "B",   # bugbear
+  "A",   # builtin shadowing
+  "ISC", # implicit string concatenation, usually a missing comma
+]
+# The formatter joins a single-line implicit concatenation, so ISC001 fights it.
+ignore = ["ISC001"]
+
+[lint.isort]
+known-first-party = ["cad"]

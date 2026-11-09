@@ -12,8 +12,9 @@ controller at 0x15. It prints `id b4` for register 0xA7, then ten `poll f=0` lin
 0x02, 33 ms apart. Each falling edge on TP_INT, GPIO7, prints `touch f=<n> x=<x> y=<y>`.
 
 `traces/serial.csv` must hold those lines in that order. Each touch line reads `f=1`, and its
-X and Y are a point of the run's own `netlist.json`, in time order. `packages/engine/scripts/i2c_decode.py --timing-s3 400000` must accept the run,
-and the bytes it decodes on the chip's pins must be those lines: a write of 0xA7 and a read of
+X and Y are a point of the run's own `netlist.json`, in time order.
+`packages/engine/scripts/i2c_decode.py --timing-s3 400000` must accept the run, and the bytes it
+decodes on the chip's pins must be those lines: a write of 0xA7 and a read of
 0xb4, ten writes of 0x02 and reads of five 0 bytes, then one write of 0x02 and the five bytes of
 each point. The run must hold no error and no `chip.unmodeled_register` for `FILTER_CFG`, and
 its `manifest.json` must list the netlist's ROM, then each flash region with its offset.
@@ -100,11 +101,16 @@ def point_bytes(fingers: int, x: int, y: int) -> list[int]:
 
 def console_reads(got: list[tuple[int, str]], touched: list[tuple[int, int]]) -> list[tuple[list[int], list[int]]]:
     """The register reads the console lines name, in order."""
-    matched = [(kind, match) for _, line in got for kind, match in (
-        ("id", ID.fullmatch(line)),
-        ("poll", POLL.fullmatch(line)),
-        ("touch", TOUCH.fullmatch(line)),
-    ) if match]
+    matched = [
+        (kind, match)
+        for _, line in got
+        for kind, match in (
+            ("id", ID.fullmatch(line)),
+            ("poll", POLL.fullmatch(line)),
+            ("touch", TOUCH.fullmatch(line)),
+        )
+        if match
+    ]
     ids = [match for kind, match in matched if kind == "id"]
     polls = [match for kind, match in matched if kind == "poll"]
     touches = [match for kind, match in matched if kind == "touch"]
@@ -116,7 +122,7 @@ def console_reads(got: list[tuple[int, str]], touched: list[tuple[int, int]]) ->
         raise ValueError("a poll line reads fingers other than 0")
     want = [([0xA7], [0xB4])]
     want += [([0x02], [0, 0, 0, 0, 0]) for _ in polls]
-    for match, (x, y) in zip(touches, touched):
+    for match, (x, y) in zip(touches, touched, strict=True):
         fingers, got_x, got_y = (int(match.group(k)) for k in (1, 2, 3))
         if fingers != 1:
             raise ValueError(f"a touch line reads f={fingers}, not f=1")
@@ -131,7 +137,8 @@ def check_diagnostics(diagnostics: list[dict]) -> None:
     if errors:
         raise ValueError(f"the run holds errors {errors}")
     named = [
-        item for item in diagnostics
+        item
+        for item in diagnostics
         if item["code"] == "chip.unmodeled_register" and item["data"]["address"] == FILTER_CFG
     ]
     if named:
@@ -230,27 +237,50 @@ def self_test() -> int:
 
     expect("a good console names the reads", console_reads(console(), touched)[-1] == ([0x02], point_bytes(1, 16, 32)))
     expect("a good bus matches the console", transfers(phases) == console_reads(console(), touched))
-    expect("a wrong x fails", raises(lambda: console_reads(console(lambda line: line.replace("x=291", "x=292")), touched)))
-    expect("a missing id fails", raises(lambda: console_reads(console(lambda line: "" if line.startswith("id") else line), touched)))
-    expect("a touch with no finger fails", raises(lambda: console_reads(console(lambda line: line.replace("touch f=1", "touch f=0", 1)), touched)))
-    expect("a poll with fingers fails", raises(lambda: console_reads(console(lambda line: line.replace("poll f=0", "poll f=1", 1)), touched)))
+    expect(
+        "a wrong x fails", raises(lambda: console_reads(console(lambda line: line.replace("x=291", "x=292")), touched))
+    )
+    expect(
+        "a missing id fails",
+        raises(lambda: console_reads(console(lambda line: "" if line.startswith("id") else line), touched)),
+    )
+    expect(
+        "a touch with no finger fails",
+        raises(lambda: console_reads(console(lambda line: line.replace("touch f=1", "touch f=0", 1)), touched)),
+    )
+    expect(
+        "a poll with fingers fails",
+        raises(lambda: console_reads(console(lambda line: line.replace("poll f=0", "poll f=1", 1)), touched)),
+    )
     expect("a short bus differs", transfers(phases[:-2]) != console_reads(console(), touched))
     expect("an error fails", raises(lambda: check_diagnostics([{"code": "chip.clock", "severity": "error"}])))
-    expect("another kept register passes", not raises(lambda: check_diagnostics([
-        {"code": "chip.unmodeled_register", "severity": "warning", "data": {"address": 0x60013004}}
-    ])))
-    expect("FILTER_CFG fails", raises(lambda: check_diagnostics([
-        {"code": "chip.unmodeled_register", "severity": "warning", "data": {"address": FILTER_CFG}}
-    ])))
+    expect(
+        "another kept register passes",
+        not raises(
+            lambda: check_diagnostics(
+                [{"code": "chip.unmodeled_register", "severity": "warning", "data": {"address": 0x60013004}}]
+            )
+        ),
+    )
+    expect(
+        "FILTER_CFG fails",
+        raises(
+            lambda: check_diagnostics(
+                [{"code": "chip.unmodeled_register", "severity": "warning", "data": {"address": FILTER_CFG}}]
+            )
+        ),
+    )
     part = {
         "kind": "esp32s3",
         "rom": {"sha256": "r", "bytes": 1},
         "firmware": {"flash": [{"offset": 8, "sha256": "f", "bytes": 2}]},
     }
-    listed = {"blobs": [
-        {"role": "rom", "sha256": "r", "bytes": 1},
-        {"role": "flash", "sha256": "f", "bytes": 2, "offset": 8},
-    ]}
+    listed = {
+        "blobs": [
+            {"role": "rom", "sha256": "r", "bytes": 1},
+            {"role": "flash", "sha256": "f", "bytes": 2, "offset": 8},
+        ]
+    }
     expect("the manifest passes", not raises(lambda: check_manifest(listed, {"parts": [part]})))
     unplaced = {"blobs": [listed["blobs"][0], {**listed["blobs"][1], "offset": None}]}
     expect("a region without its offset fails", raises(lambda: check_manifest(unplaced, {"parts": [part]})))

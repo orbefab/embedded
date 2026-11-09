@@ -2,8 +2,8 @@
   "part": "atmega328p-tqfp32",
   "source": {
     "script": "model.py",
-    "sha256": "57f901182eb61ab32b4b9c05127dbd8d6bcee613181db0b82e36d05ddcc3bd5d",
-    "bytes": 2107
+    "sha256": "1eb0194131741ad5f858370e8b2781515c83a0dbe16cd786f21a5b601a905770",
+    "bytes": 2085
   },
   "files": {
     "atmega328p-tqfp32.glb": {

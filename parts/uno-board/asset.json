@@ -2,8 +2,8 @@
   "part": "uno-board",
   "source": {
     "script": "model.py",
-    "sha256": "07efdfd6596418c751cddcb83978a27e9cb7d97bbee0ed9f113638d3b370e068",
-    "bytes": 4341
+    "sha256": "0927ff92c30b50769721dce6b751c0bdc2ad48d6749e290051c688b6bf4f12d1",
+    "bytes": 4367
   },
   "files": {
     "uno-board.glb": {

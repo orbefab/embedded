@@ -59,9 +59,7 @@ def dip_socket_28_shape():
 def dip_socket_28_anchors():
     top = SOCKET_BODY[2]
     return [
-        glb.Anchor(
-            n, f"socket-{n}", (x, y, top), axis=(0.0, 0.0, 1.0), kind="socket", also=(f"tail-{n}",)
-        )
+        glb.Anchor(n, f"socket-{n}", (x, y, top), axis=(0.0, 0.0, 1.0), kind="socket", also=(f"tail-{n}",))
         for n, x, y in _contacts()
     ]
 

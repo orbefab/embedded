@@ -53,9 +53,7 @@ def ch340g_shape():
 
 def ch340g_anchors():
     bottom = SOIC_LEAD_Z - SOIC_LEAD[2] / 2.0
-    return [
-        glb.Anchor(n, f"lead-{n}", (*_lead_xy(n), bottom), kind="pad") for n in range(1, 17)
-    ]
+    return [glb.Anchor(n, f"lead-{n}", (*_lead_xy(n), bottom), kind="pad") for n in range(1, 17)]
 
 
 if __name__ == "__main__":

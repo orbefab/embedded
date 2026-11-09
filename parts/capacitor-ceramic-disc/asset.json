@@ -2,8 +2,8 @@
   "part": "capacitor-ceramic-disc",
   "source": {
     "script": "model.py",
-    "sha256": "7457d3ca9162c5ba7d5fa598048a7b12d86630cd5472a2aec8485457dbc0dce5",
-    "bytes": 2120
+    "sha256": "b5fd0b3af089847c5ad0cf63ffe5dcce9634837fd53a3b7254dac554a844e0d7",
+    "bytes": 2098
   },
   "files": {
     "capacitor-ceramic-disc.glb": {

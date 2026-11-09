@@ -59,6 +59,7 @@ archive=$(pin runtime_url)
 archive=${archive##*/}
 [[ $(sha256sum "$dist/sources/$archive" | cut -d' ' -f1) == "$(pin runtime_sha256)" ]] ||
   fail "$dist/sources/$archive is not the runtime source sketches.sh pins"
+# shellcheck disable=SC2016 # javascript
 node -e '
 const [r, want] = process.argv.slice(1);
 const fs = require("node:fs");
@@ -90,6 +91,8 @@ export WRANGLER_SEND_METRICS=false
 free_port() {
   node -e 'const s = require("node:net").createServer().listen(0, "127.0.0.1", () => { process.stdout.write(String(s.address().port) + "\n"); s.close(); })'
 }
-export ORBE_SITE_VITE_PORT=$(free_port)
-export ORBE_SITE_WRANGLER_PORT=$(free_port)
+vite_port=$(free_port)
+wrangler_port=$(free_port)
+export ORBE_SITE_VITE_PORT=$vite_port
+export ORBE_SITE_WRANGLER_PORT=$wrangler_port
 pnpm exec playwright test

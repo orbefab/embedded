@@ -86,7 +86,7 @@ EOF
 bare_metal() {
   local gcc=${XTENSA_ESP32S3_GCC:-xtensa-esp32s3-elf-gcc}
   local flags=(-mabi=call0 -O2 -g0 -ffreestanding -nostdlib -nostartfiles -fno-builtin
-    -Wall -Wextra -Werror -Wl,-T,ram.ld -Wl,--build-id=none -Wl,-n)
+    -Wall -Wextra -Werror "-Wl,-T,ram.ld" "-Wl,--build-id=none" "-Wl,-n")
   (
     cd "$root/packages/engine/tests/firmware/esp32s3"
     "$gcc" "${flags[@]}" -DPERIOD=4000000 -o "$work/blink.elf" start.S blink.c

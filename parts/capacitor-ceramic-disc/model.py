@@ -33,10 +33,7 @@ _PRINT = srgb("#1A1A1A")
 
 
 def cap_ceramic_104_anchors():
-    return [
-        glb.Anchor(lead, f"lead-{lead}", (s * CC_PITCH / 2.0, 0.0, -CC_BELOW))
-        for lead, s in ((1, -1), (2, 1))
-    ]
+    return [glb.Anchor(lead, f"lead-{lead}", (s * CC_PITCH / 2.0, 0.0, -CC_BELOW)) for lead, s in ((1, -1), (2, 1))]
 
 
 def cap_ceramic_104_shape():

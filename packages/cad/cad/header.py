@@ -56,9 +56,7 @@ def row_shape(count):
 
 def row_anchors(count):
     return [
-        glb.Anchor(
-            lead, f"pin-{lead}", (_x(lead, count), 0.0, -PIN_BELOW), also=(f"housing-{lead}",)
-        )
+        glb.Anchor(lead, f"pin-{lead}", (_x(lead, count), 0.0, -PIN_BELOW), also=(f"housing-{lead}",))
         for lead in range(1, count + 1)
     ]
 
@@ -71,9 +69,7 @@ def _icsp_xy(lead):
 
 def block_2x3_shape():
     """One block. Pins stand `ICSP_PIN_ABOVE` above its top."""
-    children = [
-        paint(box(0, 0, PLASTIC / 2.0, 2 * PITCH, 3 * PITCH, PLASTIC), "housing", _BLACK)
-    ]
+    children = [paint(box(0, 0, PLASTIC / 2.0, 2 * PITCH, 3 * PITCH, PLASTIC), "housing", _BLACK)]
     for lead in range(1, 7):
         children.append(
             paint(
@@ -105,17 +101,12 @@ def socket_strip_shape(count):
     hole = opening + 2.0 * STRIP_WALL
     housing = box(0, 0, STRIP_HEIGHT / 2.0, count * PITCH, PITCH, STRIP_HEIGHT)
     housing = housing.cut(
-        *[
-            box(_x(n, count), 0, STRIP_HEIGHT - deep / 2.0, hole, hole, deep)
-            for n in range(1, count + 1)
-        ]
+        *[box(_x(n, count), 0, STRIP_HEIGHT - deep / 2.0, hole, hole, deep) for n in range(1, count + 1)]
     )
     children = [paint(housing, "housing", _BLACK)]
     for n in range(1, count + 1):
         x = _x(n, count)
-        children.append(
-            paint(socket_liner(x, 0, STRIP_HEIGHT, opening, deep, STRIP_WALL), f"socket-{n}", _GOLD)
-        )
+        children.append(paint(socket_liner(x, 0, STRIP_HEIGHT, opening, deep, STRIP_WALL), f"socket-{n}", _GOLD))
         children.append(paint(box(x, 0, -below / 2.0, tail, tail, below), f"tail-{n}", _TIN))
     return bd.Compound(children=children, label=f"socket_strip_1x{count}")
 
