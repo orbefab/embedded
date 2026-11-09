@@ -15,8 +15,9 @@ use orbe_scene::Files;
 
 const STOP_PS: u64 = 300_000_000_000;
 
-/// Accepted steps over the 300 ms. The shapes take 538 to 3297, apart from the one ignored below.
-const MOST_STEPS: u64 = 5_000;
+/// Accepted steps over the 300 ms, 1.5 times the most any shape takes. The shapes take 496 to
+/// 750.
+const MOST_STEPS: u64 = 750 * 3 / 2;
 
 /// The part's values, from `parts/nmos-irf520-to220/part.jsonc`.
 const KP: f64 = 1.259;
@@ -165,21 +166,7 @@ fn switches_on(drive: Drive, load: Load) {
 fn every_gate_drive_switches_every_load_within_the_step_bound() {
     for drive in DRIVES {
         for load in LOADS {
-            if matches!((drive, load), (Drive::Series, Load::Ohms("10"))) {
-                continue;
-            }
             switches_on(drive, load);
         }
     }
-}
-
-/// D7's edge at 100 ms restarts the solve with the gate-drain capacitor held. The capacitor's
-/// current comes out of that hold as 0.68 pA of roundoff, and the trapezoidal rule rings it
-/// between plus and minus that from then on. The error control reads the ring as truncation
-/// error and keeps the step far shorter than the other shapes take, so the 300 ms take 843688
-/// steps where they take at most 3297.
-#[test]
-#[ignore = "a sub-picoampere ring in a capacitor's current holds the step short"]
-fn a_gate_through_100_ohm_switches_10_ohm_within_the_step_bound() {
-    switches_on(Drive::Series, Load::Ohms("10"));
 }
