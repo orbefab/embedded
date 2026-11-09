@@ -362,16 +362,16 @@ test.describe("uno-board", () => {
     expect(await page.textContent("h1")).toBe("Uno R3 compatible board");
   });
 
-  test("the Uno's part.jsonc shows CC-BY-SA-4.0, the licence of the Arduino board file its wiring comes from", async () => {
+  test("every file of the Uno, its model.py and part.jsonc too, is MIT OR Apache-2.0", async () => {
     const unoFiles = await licences(page);
     expect(
-      unoFiles["part.jsonc"] === "CC-BY-SA-4.0" && unoFiles["uno-board.glb"] === "MIT OR Apache-2.0",
+      ["part.jsonc", "model.py", "uno-board.glb"].every((path) => unoFiles[path] === "MIT OR Apache-2.0"),
       JSON.stringify(unoFiles),
     ).toBe(true);
   });
 
-  test("the Uno's page links Arduino's board file", async () => {
-    expect(/UNO-TH_Rev3e/.test(await bodyText(page))).toBe(true);
+  test("the Uno's page links the clone schematic it is drawn from", async () => {
+    expect(/RobotDyn UNO R3 CH340G schematic/.test(await bodyText(page))).toBe(true);
   });
 });
 

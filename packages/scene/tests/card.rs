@@ -319,7 +319,7 @@ fn an_unknown_id_names_the_closest_parts() {
 }
 
 #[test]
-fn each_file_of_a_board_names_its_own_licence() {
+fn every_file_of_a_board_is_mit_or_apache() {
     let uno = card("uno-board").unwrap();
     let licence = |path: &str| {
         uno.files
@@ -327,14 +327,10 @@ fn each_file_of_a_board_names_its_own_licence() {
             .find(|file| file.path == path)
             .map(|file| file.license.as_str())
     };
-    assert_eq!(
-        licence("part.jsonc"),
-        Some("CC-BY-SA-4.0"),
-        "its wiring is Arduino's board file"
-    );
-    assert_eq!(licence("uno-board.glb"), Some("MIT OR Apache-2.0"));
-    assert_eq!(licence("asset.json"), Some("MIT OR Apache-2.0"));
-    assert_eq!(uno.license, "CC-BY-SA-4.0 AND (MIT OR Apache-2.0)");
+    for path in ["part.jsonc", "model.py", "uno-board.glb", "asset.json"] {
+        assert_eq!(licence(path), Some("MIT OR Apache-2.0"), "{path}");
+    }
+    assert_eq!(uno.license, "MIT OR Apache-2.0");
     let nano = card("nano-board").unwrap();
     assert!(
         nano.files
