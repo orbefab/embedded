@@ -297,6 +297,7 @@ const frame = (seq: number, t_ps: number, pressed: boolean): FrameMessage => ({
   pins: pressed ? [1, 1] : [0, 0],
   led_a: pressed ? [0.0122465581, 0.0028787405, PWR_A] : [0, 0, PWR_A],
   switches: pressed ? [1, 0] : [0, 0],
+  diagnostics: 0,
 });
 
 /** Idle, then btn1 held with D13 high, then released. */

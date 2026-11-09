@@ -837,6 +837,7 @@ dependencies = [
  "orbe-circuit",
  "orbe-engine-core",
  "orbe-scene",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",

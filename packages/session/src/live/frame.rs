@@ -4,18 +4,24 @@
 
 use std::collections::BTreeMap;
 
+use orbe_circuit::Status;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::{Live, Open, Progress};
-use crate::reply::{Code, Level, State};
+use crate::reply::{Code, Diagnostic, Level};
 use crate::target::{QUANTITIES, one_engine};
+use crate::viewer;
 
 /// The refs each frame array follows, in order.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct Channels {
+    #[cfg_attr(test, schemars(with = "Vec<crate::Ref>"))]
     pub pins: Vec<String>,
+    #[cfg_attr(test, schemars(with = "Vec<crate::Ref>"))]
     pub leds: Vec<String>,
+    #[cfg_attr(test, schemars(with = "Vec<crate::Ref>"))]
     pub switches: Vec<String>,
 }
 
@@ -29,20 +35,16 @@ pub(super) struct Bound {
 }
 
 /// A frame's `state`: the session's, or `stepping` for a frame read while a `step` runs, which
-/// no reply says.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// no reply says. A frame needs an open scene, so it is never `closed`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
 pub enum FrameState {
-    Session(State),
+    Paused,
+    Playing,
+    Stopped,
+    Faulted,
     Stepping,
-}
-
-impl FrameState {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            FrameState::Session(state) => state.as_str(),
-            FrameState::Stepping => "stepping",
-        }
-    }
 }
 
 /// The circuit at one time, as a frame shows it.
@@ -55,6 +57,8 @@ pub struct Sample {
     pub leds: Vec<(f64, f64)>,
     pub switches: Vec<u8>,
     pub diagnostics: usize,
+    /// The fault's diagnostic as `orbe snapshot` prints it, once the session faulted.
+    pub fault: Option<String>,
 }
 
 /// `play`'s pace for a frame: the speed it asked for, and simulated time over wall time as the
@@ -69,11 +73,11 @@ impl Live {
     /// The `scene` message for the open scene.
     pub fn scene(&self) -> Option<Value> {
         let open = self.open.as_ref()?;
-        let mut message = serde_json::to_value(&open.view).expect("a view serializes");
-        message["type"] = json!("scene");
-        message["session"] = json!(self.name);
-        message["channels"] = serde_json::to_value(&open.channels.names).expect("channels");
-        Some(message)
+        Some(viewer::scene_message(
+            &self.name,
+            &open.channels.names,
+            &open.view,
+        ))
     }
 
     pub fn sample(&self) -> Option<Sample> {
@@ -186,7 +190,12 @@ impl Open {
         let bound = &self.channels;
         Sample {
             t_ps: self.engine.now().as_ps(),
-            state: FrameState::Session(self.state()),
+            state: match self.engine.status() {
+                Status::Running if self.playing => FrameState::Playing,
+                Status::Running => FrameState::Paused,
+                Status::Stopped => FrameState::Stopped,
+                Status::Faulted => FrameState::Faulted,
+            },
             pins: bound
                 .pins
                 .iter()
@@ -203,6 +212,10 @@ impl Open {
                 .map(|engine| u8::from(self.closed(engine)))
                 .collect(),
             diagnostics: self.findings(&probe).len(),
+            fault: self
+                .engine
+                .fault()
+                .map(|fault| Diagnostic::new(fault).text()),
         }
     }
 }

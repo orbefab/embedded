@@ -1,4 +1,5 @@
-import type { ClosedMessage, Command, FrameMessage, FromSession, Reply, SceneMessage, SessionSource, ToViewer } from "./protocol";
+import type { ClosedMessage, Command, FrameMessage, FromSession, Reply, SceneMessage, ToViewer } from "./protocol";
+import type { SessionSource } from "./session";
 
 /** What a channel to a session tells its source. */
 export interface Inbox {
@@ -68,6 +69,7 @@ export function channelSource(connect: (inbox: Inbox) => Channel): SessionSource
           broadcast(message);
           break;
         case "reply":
+          if (message.id === null) break;
           waiting.get(message.id)?.resolve(message.reply);
           waiting.delete(message.id);
           break;

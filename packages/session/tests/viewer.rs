@@ -242,7 +242,7 @@ fn play_ends_at_the_stop() {
     let sample = live.sample().unwrap();
     assert_eq!(
         (sample.t_ps, sample.state),
-        (40_000_000_000, FrameState::Session(State::Stopped))
+        (40_000_000_000, FrameState::Stopped)
     );
     let again = live.run(&Command::Play);
     assert_eq!(again.error.unwrap().code, Code::Ended);
@@ -324,4 +324,64 @@ fn a_tick_runs_at_most_one_tick_of_simulated_time_and_says_its_pace() {
         (frame["speed"].as_f64(), frame["ratio"].as_f64()),
         (Some(1.0), Some(1.0))
     );
+}
+
+/// Each catalog part's files by `<id>/<path>`.
+fn catalog() -> Vec<(String, Vec<u8>)> {
+    fn walk(dir: &Path, prefix: &str, out: &mut Vec<(String, Vec<u8>)>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_str().unwrap();
+            if path.is_dir() {
+                walk(&path, &format!("{prefix}{name}/"), out);
+            } else {
+                out.push((format!("{prefix}{name}"), std::fs::read(&path).unwrap()));
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(&first_target().join("../../parts"), "", &mut files);
+    files
+}
+
+/// A Nano driving a 1e300 F capacitor from D13 faults as it opens. Its frame says `faulted` and
+/// carries the fault as `snapshot` prints it, and a session that runs has no fault in its frame.
+#[test]
+fn a_faulted_session_s_frame_carries_the_fault() {
+    let own = |path: &str| {
+        (
+            path.to_string(),
+            std::fs::read(first_target().join(path)).unwrap(),
+        )
+    };
+    let scene = r#"{
+      "format": 1,
+      "parts": {
+        "nano": { "type": "nano-board", "firmware": "firmware/button.hex" },
+        "c1": { "type": "capacitor-ceramic-disc", "capacitance": "1e300" },
+      },
+      "wires": [["c1.a", "nano.D13"], ["c1.b", "nano.GND"]],
+    }"#;
+    let files = Files::memory([
+        own("block.jsonc"),
+        own("firmware/button.hex"),
+        ("scene.jsonc".to_string(), scene.as_bytes().to_vec()),
+    ])
+    .with_catalog(catalog());
+    let mut live = Live::new("t", files);
+    let open = live.run(&Command::Open(PathBuf::from("scene.jsonc")));
+    assert!(open.ok(), "{}", open.text());
+    let snapshot = live.run(&command("snapshot")).text();
+    let frame = Feed::default().now(&live, None).unwrap();
+    let fault = frame["fault"].as_str().expect("a fault in the frame");
+    assert_eq!(frame["state"], "faulted");
+    assert!(fault.starts_with("error["), "{fault}");
+    assert!(
+        snapshot.lines().any(|line| line == fault),
+        "{fault}\nis not a line of\n{snapshot}"
+    );
+
+    let running = Feed::default().now(&opened(), None).unwrap();
+    assert_eq!(running["state"], "paused");
+    assert!(running.get("fault").is_none(), "{running}");
 }

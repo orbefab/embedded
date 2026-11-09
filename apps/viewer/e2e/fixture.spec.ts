@@ -463,6 +463,27 @@ test.describe("fixture page", () => {
     }
   });
 
+  test("a faulted frame shows its fault below the controls, and play is disabled", async ({ browser, host }) => {
+    const { context, page } = await open(browser, host.base);
+    try {
+      const fault = "error[solver.convergence] Newton did not converge at #net.led1__anode after 10 iterations; the time step halved to 1 ps";
+      await page.evaluate((fault) => {
+        const { source, script } = window.orbeFixture;
+        source.push({ ...script.idle, seq: 9, state: "faulted", diagnostics: 2, fault });
+      }, fault);
+      await page.waitForSelector('[data-testid="fault"]');
+      const shown = await page.evaluate(() => ({
+        state: document.querySelector('[data-testid="state"]')?.textContent ?? null,
+        fault: document.querySelector('[data-testid="fault"]')?.textContent ?? null,
+        play: (document.querySelector('[data-testid="play"]') as HTMLButtonElement | null)?.disabled ?? null,
+      }));
+      expect(shown).toEqual({ state: "faulted", fault, play: true });
+      await shot(page, "fixture-faulted");
+    } finally {
+      await context.close();
+    }
+  });
+
   test("a press held across a new scene sends no release, and the next press works", async ({ browser, host }) => {
     const { context, page, commands } = await open(browser, host.base);
     try {

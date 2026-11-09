@@ -9,6 +9,8 @@ mod live;
 mod reply;
 mod target;
 pub mod test;
+#[cfg(test)]
+mod typescript;
 pub mod viewer;
 
 pub use command::{COMMANDS, Command, Spec, Step, UNTIL_TIMEOUT, spec};

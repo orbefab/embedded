@@ -14,16 +14,9 @@ import {
 import type { BuiltScene } from "./build";
 import type { CameraMode } from "./camera-frame";
 import { createHoverStore, type HoverStore } from "./hover";
-import {
-  type Command,
-  commandLine,
-  errorText,
-  type FrameMessage,
-  type FrameState,
-  type SceneMessage,
-  type SessionSource,
-} from "./protocol";
+import type { Command, FrameMessage, FrameState, SceneMessage } from "./protocol";
 import { SceneView } from "./scene-view";
+import { commandLine, errorText, type SessionSource } from "./session";
 
 class ShowError extends Component<{ children: ReactNode }, { error: Error | null }> {
   override state = { error: null as Error | null };
@@ -88,14 +81,14 @@ function Errors({ errors }: { errors: readonly string[] }) {
 /** `t_ps` in seconds, to the microsecond. */
 const seconds = (t_ps: number) => `${(t_ps / 1e12).toFixed(6)} s`;
 
-/** The session's state and time, and a button that plays or pauses it. It reads frames itself,
- * so a frame redraws only this bar. */
+/** The session's state and time, a button that plays or pauses it, and the fault below once
+ * the session faulted. It reads frames itself, so a frame redraws only this bar. */
 function Controls({ source, send }: { source: SessionSource; send: (command: Command) => void }) {
-  const [now, setNow] = useState<{ state: FrameState; t_ps: number } | null>(null);
+  const [now, setNow] = useState<{ state: FrameState; t_ps: number; fault?: string } | null>(null);
   useEffect(
     () =>
       source.subscribe((message) => {
-        if (message.type === "frame") setNow({ state: message.state, t_ps: message.t_ps });
+        if (message.type === "frame") setNow({ state: message.state, t_ps: message.t_ps, fault: message.fault });
       }),
     [source]
   );
@@ -103,43 +96,50 @@ function Controls({ source, send }: { source: SessionSource; send: (command: Com
   const playing = now.state === "playing";
   const ended = now.state === "stopped" || now.state === "faulted";
   return (
-    <div
-      data-testid="controls"
-      style={{
-        position: "absolute",
-        top: 12,
-        left: 12,
-        display: "flex",
-        gap: 10,
-        alignItems: "center",
-        padding: "4px 6px 4px 10px",
-        borderRadius: 6,
-        background: "rgba(20, 22, 26, 0.92)",
-        border: "1px solid #3a3f47",
-        color: "#e6ebf2",
-        font: "12px ui-monospace, monospace",
-      }}
-    >
-      <span data-testid="state">{now.state}</span>
-      <span data-testid="time">t = {seconds(now.t_ps)}</span>
-      <button
-        data-testid="play"
-        disabled={ended}
-        onClick={() => send({ cmd: playing ? "pause" : "play" })}
+    <>
+      <div
+        data-testid="controls"
         style={{
-          font: "inherit",
-          color: "inherit",
-          background: "#2a2f37",
-          border: "1px solid #4a5058",
-          borderRadius: 4,
-          padding: "2px 10px",
-          cursor: ended ? "default" : "pointer",
+          position: "absolute",
+          top: 12,
+          left: 12,
+          display: "flex",
+          gap: 10,
+          alignItems: "center",
+          padding: "4px 6px 4px 10px",
+          borderRadius: 6,
+          background: "rgba(20, 22, 26, 0.92)",
+          border: "1px solid #3a3f47",
+          color: "#e6ebf2",
+          font: "12px ui-monospace, monospace",
         }}
-        type="button"
       >
-        {playing ? "Pause" : "Play"}
-      </button>
-    </div>
+        <span data-testid="state">{now.state}</span>
+        <span data-testid="time">t = {seconds(now.t_ps)}</span>
+        <button
+          data-testid="play"
+          disabled={ended}
+          onClick={() => send({ cmd: playing ? "pause" : "play" })}
+          style={{
+            font: "inherit",
+            color: "inherit",
+            background: "#2a2f37",
+            border: "1px solid #4a5058",
+            borderRadius: 4,
+            padding: "2px 10px",
+            cursor: ended ? "default" : "pointer",
+          }}
+          type="button"
+        >
+          {playing ? "Pause" : "Play"}
+        </button>
+      </div>
+      {now.fault === undefined ? null : (
+        <pre data-testid="fault" style={{ ...overlay, inset: "48px auto auto 12px", maxWidth: "calc(100% - 24px)", pointerEvents: "none" }}>
+          {now.fault}
+        </pre>
+      )}
+    </>
   );
 }
 
