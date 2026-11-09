@@ -97,14 +97,14 @@ Type checking, linting and runtime diagnostics are separate.
 - A6 and A7 are not simulated yet, since the engine's 328P has the DIP's pins. A wire to them is an error that says so.
 - Its 16 MHz clock is a three-terminal ceramic resonator, until a clone's photo says otherwise.
 
-## The uno board (Nov 7 2026)
-- It is built from 25 leaf parts, 49 children in all. Its traces are the copper of Arduino's UNO-TH_Rev3e board file, net by net.
-- It runs from USB, as the Nano does. Its 3.3 V regulator runs on the engine's LP2985 fit, so 3V3 works. VIN, the barrel jack, the 5 V regulator and the comparator that switches USB off are not simulated, and a wire to VIN is an error that says so.
-- The engine has no op-amp, so a wire stands in for the follower between D13 and the L LED, as the engine's board example drives that LED from D13. D13 with its pull-up on then reads low, where the board reads high.
-- The engine has no P-channel MOSFET, so the USB switch is a resistor at its on resistance, always on, as in the engine's board example.
-- A part is simulated whole. RN1's sections divide VIN, so RN1 is out, and its RESET pull-up with it. The 328P's own pull-up holds RESET high.
-- AVCC is on the 5V rail, as the revision 3 schematic draws it. L2, the inductor the Rev3e board file puts between them, is drawn but not simulated. The engine's 328P draws nothing from AVCC, and with L2 in place a step took about a thousand times as long.
-- C4 on AREF starts where the circuit's DC solution puts it, with no held voltage. A 0 V hold would pull a rail wired to AREF to 0 V at t = 0. AREF with nothing wired to it is then a floating net, as on the Nano.
+## The uno board (Nov 8 2026)
+- It is drawn as the common CH340G clone, with the ATmega328P in a DIP-28 socket. Its files transcribe connectivity, values by role and measured positions, and they copy no drawing, text or logo. The only licensed source is the CC0 photo of the clone. Arduino's board and schematic files are not used, so every file of the part is MIT OR Apache-2.0.
+- Its bare board is its own `model.py`: the outline, the holes, and a printed pin legend with no names or logos. It holds 21 leaf parts, 50 children in all.
+- It runs from USB through F1 and Q1, as the Nano does. 3V3 comes from its LP2985, on the engine's fit. VIN, the barrel jack and the 5 V regulator are not simulated, and a wire to VIN is an error that says so.
+- The engine has no P-channel MOSFET, so Q1 is a resistor at its on resistance, always on. R15 and R1, which bias its gate from VIN, are drawn but not simulated.
+- D13 drives the L LED through 1k, as on RobotDyn's board. D13 with its pull-up on then reads low, about 1.45 V. A clone that buffers D13 through an LM358 reads high there.
+- The 16 MHz clock is an HC-49 crystal, as the clone's photo shows. The crystal is not simulated. Its load capacitors are, held at 0 V as the resonator part holds its own, so each clock pin has a DC path.
+- The capacitor on AREF starts where the circuit's DC solution puts it, with no held voltage. A 0 V hold would pull a rail wired to AREF to 0 V at t = 0. AREF with nothing wired to it is then a floating net, as on the Nano.
 
 ## Later
 Mates between parts, joints between two parts, importing outside CAD, PCB routing, drawing traces, per-instance placement overrides, A6 and A7, and an `orbe lsp` for editors.

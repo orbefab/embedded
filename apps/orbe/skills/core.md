@@ -307,7 +307,7 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 
 - The Nano's 3V3, VIN, A6 and A7 pins. A wire to one is a `not_simulated` error.
 - The Uno's VIN pin and barrel jack. A wire to VIN is a `not_simulated` error. The Uno's 3V3 works.
-- The Uno's op-amp between D13 and the L LED. D13 drives the LED directly, so D13 as an input with its pull-up reads low, where a real Uno reads high.
+- The Uno's TX and RX LEDs and the gate of its USB switch. D13 feeds its L LED through 1k, so D13 as an input with its pull-up reads low.
 - USB, and serial into the chip. The chip's serial out (TX, D1) is read as text.
 - Light, temperature, a switch's force and travel, and part tolerances. An LED's `on` is its current over a threshold.
 - Turning a potentiometer during a session. Its `position` param sets the wiper for the whole run, so run `orbe open` again after you change it.
