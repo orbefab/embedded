@@ -41,11 +41,7 @@ def _diameter(x0, x1):
 
 def _segment(x0, x1):
     d = _diameter(x0, x1)
-    return (
-        bd.Pos((x0 + x1) / 2.0, 0, RQ_CAP_D / 2.0)
-        * bd.Rot(0, 90, 0)
-        * bd.Cylinder(d / 2.0, x1 - x0)
-    )
+    return bd.Pos((x0 + x1) / 2.0, 0, RQ_CAP_D / 2.0) * bd.Rot(0, 90, 0) * bd.Cylinder(d / 2.0, x1 - x0)
 
 
 def _body():

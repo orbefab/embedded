@@ -2,8 +2,8 @@
   "part": "resistor-array-4x0603",
   "source": {
     "script": "model.py",
-    "sha256": "93f8c2f5959148287ed9bdc25e1644b3e9dafac969692e1c59623944a754c893",
-    "bytes": 1994
+    "sha256": "7724092696d4d5144b7b630e1e3ea46d34909e04d1870f15506817d226d05a8c",
+    "bytes": 1986
   },
   "files": {
     "resistor-array-4x0603.glb": {

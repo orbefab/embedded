@@ -79,8 +79,10 @@ def check_console(got: list[str]) -> None:
 def check_manifest(manifest: dict, netlist: dict) -> None:
     part = next(part for part in netlist["parts"] if part["kind"] == "esp32s3")
     want = [{"role": "rom", **part["rom"]}]
-    want += [{"role": "flash", "sha256": r["sha256"], "bytes": r["bytes"], "offset": r["offset"]}
-             for r in part["firmware"]["flash"]]
+    want += [
+        {"role": "flash", "sha256": r["sha256"], "bytes": r["bytes"], "offset": r["offset"]}
+        for r in part["firmware"]["flash"]
+    ]
     if manifest["blobs"] != want:
         raise ValueError(f"manifest.json lists {manifest['blobs']}, not {want}")
 
@@ -160,13 +162,20 @@ def self_test() -> int:
         owned.append("done\r\n")
     expect("a done after that core's ticks passes", not raises(lambda: check_console(lines(serial_of("".join(owned))))))
     expect("an error fails", raises(lambda: check_diagnostics([{"code": "chip.clock", "severity": "error"}])))
-    expect("a warning passes", not raises(lambda: check_diagnostics([{"code": "chip.unmodeled_register", "severity": "warning"}])))
+    expect(
+        "a warning passes",
+        not raises(lambda: check_diagnostics([{"code": "chip.unmodeled_register", "severity": "warning"}])),
+    )
     other = serial_of(transcript()).replace("USB_SERIAL_JTAG", "USART0", 1)
     expect("another port fails", raises(lambda: lines(other)))
-    part = {"kind": "esp32s3", "rom": {"sha256": "r", "bytes": 1},
-            "firmware": {"flash": [{"offset": 8, "sha256": "f", "bytes": 2}]}}
-    listed = {"blobs": [{"role": "rom", "sha256": "r", "bytes": 1},
-                        {"role": "flash", "sha256": "f", "bytes": 2, "offset": 8}]}
+    part = {
+        "kind": "esp32s3",
+        "rom": {"sha256": "r", "bytes": 1},
+        "firmware": {"flash": [{"offset": 8, "sha256": "f", "bytes": 2}]},
+    }
+    listed = {
+        "blobs": [{"role": "rom", "sha256": "r", "bytes": 1}, {"role": "flash", "sha256": "f", "bytes": 2, "offset": 8}]
+    }
     expect("the manifest passes", not raises(lambda: check_manifest(listed, {"parts": [part]})))
     unplaced = {"blobs": [listed["blobs"][0], {**listed["blobs"][1], "offset": None}]}
     expect("a region without its offset fails", raises(lambda: check_manifest(unplaced, {"parts": [part]})))

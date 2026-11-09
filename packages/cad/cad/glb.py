@@ -119,8 +119,7 @@ def write(shape, part: str, anchors: list[Anchor] | None, folder: Path) -> None:
         print(f"wrote {glb}")
         return
     rows = ",\n".join(
-        "    " + json.dumps(a.as_json(), ensure_ascii=False)
-        for a in sorted(anchors, key=lambda a: a.lead)
+        "    " + json.dumps(a.as_json(), ensure_ascii=False) for a in sorted(anchors, key=lambda a: a.lead)
     )
     path = folder / f"{part}.anchors.json"
     path.write_text(

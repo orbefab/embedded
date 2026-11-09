@@ -44,10 +44,7 @@ def _leg_xy(sx, sy):
 
 
 def tactile_switch_6mm_anchors():
-    return [
-        glb.Anchor(lead, f"leg-{lead}", (*_leg_xy(sx, sy), -SWITCH_LEG_L))
-        for lead, sx, sy in SWITCH_LEGS
-    ]
+    return [glb.Anchor(lead, f"leg-{lead}", (*_leg_xy(sx, sy), -SWITCH_LEG_L)) for lead, sx, sy in SWITCH_LEGS]
 
 
 def tactile_switch_6mm_shape():

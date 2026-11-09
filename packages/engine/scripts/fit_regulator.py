@@ -76,11 +76,7 @@ def vo(vi, i):
     b = floor + KNEE_V * sp((raw - floor) / KNEE_V)
     d = LIMIT_FRACTION * ILIM
     rlim = LIMIT_HEADROOM * VOUT / ILIM
-    return (
-        smin(a, b)
-        - rlim * d * sp((i - ILIM) / d)
-        + BLOCK_OHM * BLOCK_A * sp(-i / BLOCK_A)
-    )
+    return smin(a, b) - rlim * d * sp((i - ILIM) / d) + BLOCK_OHM * BLOCK_A * sp(-i / BLOCK_A)
 
 
 def ig(vi, i):

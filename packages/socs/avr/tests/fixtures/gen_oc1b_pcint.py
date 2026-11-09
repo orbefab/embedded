@@ -68,9 +68,7 @@ def ihex(words):
     for offset in range(0, len(blob), 16):
         chunk = blob[offset : offset + 16]
         total = len(chunk) + (offset >> 8) + (offset & 0xFF) + sum(chunk)
-        lines.append(
-            ":%02X%04X00%s%02X" % (len(chunk), offset, chunk.hex().upper(), (-total) & 0xFF)
-        )
+        lines.append(":%02X%04X00%s%02X" % (len(chunk), offset, chunk.hex().upper(), (-total) & 0xFF))
     lines.append(":00000001FF")
     return "\n".join(lines) + "\n"
 

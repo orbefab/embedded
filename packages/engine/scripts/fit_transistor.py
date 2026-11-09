@@ -105,7 +105,8 @@ def fit(r):
 
 
 def print_nmos():
-    """The level-1 `VTO` and `KP` that `packages/engine/tests/circuits/nmos-led` carries, and the exact two-point line."""
+    """The level-1 `VTO` and `KP` that `packages/engine/tests/circuits/nmos-led` carries,
+    and the exact two-point line."""
     root = Path(__file__).resolve().parents[3]
     netlist = json.loads((root / "packages/engine/tests/circuits/nmos-led/netlist.json").read_text())
     part = next(item for item in netlist["parts"] if item["kind"] == "nmos")

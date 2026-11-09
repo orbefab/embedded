@@ -72,9 +72,7 @@ def to92(names, width=4.58, thick=3.6, height=4.58, lead=0.46, pitch=1.27, below
     flat face: (body, {name: lead}). The round's axis is the Z axis."""
     r = width / 2.0
     y_flat = r - thick
-    body = cyl_z(0, 0, 0, height, r) & box(
-        0, (y_flat + r) / 2.0, height / 2.0, width + 1.0, r - y_flat, height + 1.0
-    )
+    body = cyl_z(0, 0, 0, height, r) & box(0, (y_flat + r) / 2.0, height / 2.0, width + 1.0, r - y_flat, height + 1.0)
     n = len(names)
     y_lead = (y_flat + r) / 2.0
     leads = {

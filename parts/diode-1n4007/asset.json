@@ -2,8 +2,8 @@
   "part": "diode-1n4007",
   "source": {
     "script": "model.py",
-    "sha256": "0c4f6dbac553dd4855f19f0183f9556062f288a85f145c05c27ca3d0ba99a674",
-    "bytes": 1925
+    "sha256": "1359783657c60e4181cc4e6b57f9c3f8898079cee20d2712a3e18183a54e0e00",
+    "bytes": 1879
   },
   "files": {
     "diode-1n4007.glb": {

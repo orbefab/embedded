@@ -61,10 +61,7 @@ def tactile_switch_smd_shape():
 
 
 def tactile_switch_smd_anchors():
-    return [
-        glb.Anchor(lead, f"leg-{lead}", (*_leg_xy(sx, sy), 0.0), kind="pad")
-        for lead, sx, sy in SMD_SW_LEGS
-    ]
+    return [glb.Anchor(lead, f"leg-{lead}", (*_leg_xy(sx, sy), 0.0), kind="pad") for lead, sx, sy in SMD_SW_LEGS]
 
 
 if __name__ == "__main__":

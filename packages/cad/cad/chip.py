@@ -38,6 +38,5 @@ def chip(length, width, height, body, ends=TIN):
 def chip_anchors(length):
     offset = length / 2.0 - cap_length(length) / 2.0
     return [
-        glb.Anchor(lead, f"lead-{lead}", (sign * offset, 0.0, 0.0), kind="pad")
-        for lead, sign in ((1, -1.0), (2, 1.0))
+        glb.Anchor(lead, f"lead-{lead}", (sign * offset, 0.0, 0.0), kind="pad") for lead, sign in ((1, -1.0), (2, 1.0))
     ]

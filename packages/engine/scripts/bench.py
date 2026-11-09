@@ -261,7 +261,10 @@ def wall_per_sim(wall_ns: int, simulated_ps: int) -> float:
 
 def combined_table(native: dict, wasi: dict, worker: dict) -> str:
     lines = [
-        "| example | variant | simulated | native | WASI | Worker | native x | WASI x | Worker x | native core | WASI core | Worker core | landings | stops |",
+        (
+            "| example | variant | simulated | native | WASI | Worker | native x | WASI x | "
+            "Worker x | native core | WASI core | Worker core | landings | stops |"
+        ),
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     notes = []
@@ -275,7 +278,10 @@ def combined_table(native: dict, wasi: dict, worker: dict) -> str:
             "worker": worker_rows[(example, variant)],
         }
         lines.append(
-            "| {example} | {variant} | {sim:.3f} | {native} | {wasi} | {worker} | {nx} | {wx} | {kx} | {nc} | {wc} | {kc} | {landings} | {stops} |".format(
+            (
+                "| {example} | {variant} | {sim:.3f} | {native} | {wasi} | {worker} | {nx} | {wx} | "
+                "{kx} | {nc} | {wc} | {kc} | {landings} | {stops} |"
+            ).format(
                 example=example,
                 variant=variant,
                 sim=row["simulated_ps"] / 1e12,
@@ -303,7 +309,8 @@ def combined_table(native: dict, wasi: dict, worker: dict) -> str:
             lo = wall_per_sim(block["min"], row["simulated_ps"])
             hi = wall_per_sim(block["max"], row["simulated_ps"])
             notes.append(
-                f"{row['example']} {row['variant']} takes {med:.3f} wall seconds per simulated second on {label} ({lo:.3f} to {hi:.3f})."
+                f"{row['example']} {row['variant']} takes {med:.3f} wall seconds "
+                f"per simulated second on {label} ({lo:.3f} to {hi:.3f})."
             )
         if found == 0:
             sys.exit(f"{label} report has no row with secs")
@@ -453,9 +460,7 @@ if (code !== 0) process.exit(code);
                 if row["errors"]:
                     sys.exit(f"{label} {row['example']} {row['variant']} reported errors")
         require_same(native, wasi, worker)
-        recorded_load = load_sentence(
-            load_native, load_wasi, load_worker, load_after
-        )
+        recorded_load = load_sentence(load_native, load_wasi, load_worker, load_after)
         machine = {
             "cpu": cpu_model(),
             "cores": os.cpu_count(),
@@ -473,9 +478,7 @@ if (code !== 0) process.exit(code);
             "playwright": playwright_version,
             "cross_origin_isolated": isolated,
         }
-        print(
-            f"cpu {machine['cpu']}, cores {machine['cores']}, governor {machine['governor']}"
-        )
+        print(f"cpu {machine['cpu']}, cores {machine['cores']}, governor {machine['governor']}")
         print(recorded_load)
         print(f"rustc {machine['rustc']}")
         print(f"cargo {machine['cargo']}")

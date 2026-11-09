@@ -187,7 +187,9 @@ def self_test(refs):
             "part": bjt("q1", "npn", "x_q1_c", "a", "gnd"),
             "commit": [],
             "exit": 0,
-            "reason": "a deck with a transistor, an inductor, a zener or a linear regulator reserves names starting with x_",
+            "reason": (
+                "a deck with a transistor, an inductor, a zener or a linear regulator reserves names starting with x_"
+            ),
             "failure": None,
         },
         {
@@ -335,9 +337,7 @@ def engine_grid(refs):
     t_s, rows, _ = refs.on_engine_grid(netlist, times, values, {})
     refused = False
     try:
-        refs.on_engine_grid(
-            {"analysis": {"transient": {"stop_ps": 3, "grid_ps": 2}}, "parts": []}, times, {}, {}
-        )
+        refs.on_engine_grid({"analysis": {"transient": {"stop_ps": 3, "grid_ps": 2}}, "parts": []}, times, {}, {})
     except SystemExit:
         refused = True
     ok = (
@@ -468,10 +468,7 @@ def refusal_matches(refs, folder, lines):
     generation = exit_message(refs, folder, False)
     check = exit_message(refs, folder, True)
     written = sorted(path.name for path in folder.iterdir())
-    expected = (
-        f"{folder.resolve().as_posix()}: ngspice operating point did not converge: "
-        f"{'; '.join(lines)}"
-    )
+    expected = f"{folder.resolve().as_posix()}: ngspice operating point did not converge: {'; '.join(lines)}"
     ok = generation == expected and check == expected and written == ["netlist.json"]
     return ok, generation, check, written
 
@@ -619,8 +616,7 @@ def source_decks(refs):
         return [line for line in text.splitlines() if line.startswith(kept)], mapping
 
     corners = [
-        f"vbp{k} bp{k} 0 pwl({at}p 0 {at + 1}p 0)"
-        for k, at in enumerate((2000, 3000, 4000, 5000, 7000, 8000, 9000))
+        f"vbp{k} bp{k} 0 pwl({at}p 0 {at + 1}p 0)" for k, at in enumerate((2000, 3000, 4000, 5000, 7000, 8000, 9000))
     ]
     cases = [
         (deck(op, "voltage_source", "voltage", {"value": 5.0}), ["vs1 a 0 dc 5.0", "save all"]),
@@ -679,9 +675,7 @@ def source_decks(refs):
                     "kind": "serial",
                     "mark": {"value": 5.0},
                     "space": {"value": 0.0},
-                    "events": [
-                        {"t_ps": 2000, "baud": 500000000, "frame": "8N1", "bytes": [0]}
-                    ],
+                    "events": [{"t_ps": 2000, "baud": 500000000, "frame": "8N1", "bytes": [0]}],
                 },
             ),
             [
@@ -710,8 +704,7 @@ def source_decks(refs):
         (
             deck(tran, "current_source", "current", pulse),
             [
-                "is1 0 a dc 0.5 pwl(0p 0.5 2000p 0.5 3000p 1.0 4000p 1.0 5000p 0.5 7000p 0.5 "
-                "8000p 1.0 9000p 1.0)",
+                ("is1 0 a dc 0.5 pwl(0p 0.5 2000p 0.5 3000p 1.0 4000p 1.0 5000p 0.5 7000p 0.5 8000p 1.0 9000p 1.0)"),
                 *corners,
                 "save v(a) @is1[current]",
             ],
@@ -755,9 +748,7 @@ def serial_boundaries(refs):
         "kind": "serial",
         "mark": {"value": 5.0},
         "space": {"value": 0.0},
-        "events": [
-            {"t_ps": 5000000000, "baud": 9600, "frame": "8N1", "bytes": [0x30, 0x68, 0x69]}
-        ],
+        "events": [{"t_ps": 5000000000, "baud": 9600, "frame": "8N1", "bytes": [0x30, 0x68, 0x69]}],
     }
     times = [at for at, _, _ in refs.jumps(text)]
     ok = ok and 7083333333 in times
@@ -1083,10 +1074,7 @@ def transistor_deck(refs):
         "parts": [bjt("Q1", "npn", "C", "b", "gnd"), bjt("q2", "pnp", "gnd", "b", "e")],
     }
     text, mapping = refs.translate("bjt", netlist)
-    card = (
-        "is=1.0 bf=2.0 br=3.0 nf=4.0 nr=5.0 vaf=6.0 rb=7.0 rc=8.0 re=9.0 cje=10.0 cjc=11.0 "
-        "mje=0 mjc=0"
-    )
+    card = "is=1.0 bf=2.0 br=3.0 nf=4.0 nr=5.0 vaf=6.0 rb=7.0 rc=8.0 re=9.0 cje=10.0 cjc=11.0 mje=0 mjc=0"
     want = [
         "vx_q1_c c x_q1_c dc 0",
         "vx_q1_b b x_q1_b dc 0",
@@ -1195,7 +1183,10 @@ def inductor_deck(refs):
         "rx_l1_s a x_l1 70.0",
         "ll1 x_l1 0 0.5",
         "vv1 a 0 dc 0.0 pwl(0p 0.0 2000p 0.0 3000p 5.0)",
-        "* One source per corner. Its first point is the corner, a breakpoint from t = 0, and its second point is the stop.",
+        (
+            "* One source per corner. Its first point is the corner, "
+            "a breakpoint from t = 0, and its second point is the stop."
+        ),
         "vbp0 bp0 0 pwl(2000p 0 60000000p 0)",
         "vbp1 bp1 0 pwl(3000p 0 60000000p 0)",
         ".control",
@@ -1304,9 +1295,7 @@ def contact_edges(refs):
         {"level": "high", "t_ps": 750000},
     ]
     # The same interval ending at -20 mA opens once and stays open. -20 mA is below pull-in.
-    ok = ok and refs.contact_edges([0.0, 1e-6], [0.1, -0.02], 0.05, 0.01) == [
-        {"level": "low", "t_ps": 750000}
-    ]
+    ok = ok and refs.contact_edges([0.0, 1e-6], [0.1, -0.02], 0.05, 0.01) == [{"level": "low", "t_ps": 750000}]
     return {"name": "contact edges", "ok": ok}
 
 
