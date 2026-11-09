@@ -94,22 +94,15 @@ fn lint_warns_on_the_nano_block_exits_zero_and_writes_nothing() {
     let scene = fs::read_to_string(block.join("scene.jsonc")).unwrap();
     let at = |text: &str| line_of(&scene, text);
     let nano = at("\"nano\":");
-    let want: Vec<(usize, String)> = [
-        (at("{"), "scene.ground_unnamed"),
-        (nano, "scene.unplaced"),
-        (nano, "net.floating"),
-    ]
-    .into_iter()
-    .map(|(l, c)| (l, c.into()))
-    .collect();
+    let want: Vec<(usize, String)> = [(at("{"), "scene.ground_unnamed"), (nano, "net.floating")]
+        .into_iter()
+        .map(|(l, c)| (l, c.into()))
+        .collect();
     assert_eq!(warned(&run.stdout), want, "{}", run.stdout);
     assert!(
         run.stdout
-            .ends_with("3 warnings in blocks/nano-button-led/scene.jsonc\n")
+            .ends_with("2 warnings in blocks/nano-button-led/scene.jsonc\n")
     );
-    assert!(run.stdout.contains(
-        "warning[scene.unplaced]: `nano`, `btn1`, `r2`, `r1` and `led1` have no position"
-    ));
     assert!(
         run.stdout
             .contains("add \"GND\": \"nano.GND\" to the scene's \"nets\"")
@@ -121,7 +114,7 @@ fn lint_warns_on_the_nano_block_exits_zero_and_writes_nothing() {
     ));
     assert_eq!(envelope["ok"], true);
     let found = envelope["data"]["diagnostics"].as_array().unwrap();
-    assert_eq!(found.len(), 3);
+    assert_eq!(found.len(), 2);
     for d in found {
         let keys: Vec<&str> = d.as_object().unwrap().keys().map(String::as_str).collect();
         assert_eq!(keys, ["code", "column", "file", "hint", "line", "message"]);
@@ -132,8 +125,8 @@ fn lint_warns_on_the_nano_block_exits_zero_and_writes_nothing() {
 }
 
 /// The Uno's parts all have a model, a reason or `joins_only`, and its L LED has its resistor,
-/// so its Block warns only of what the Nano Block also leaves as it is: the ground's name,
-/// placement, and AREF with nothing wired to it.
+/// so its Block warns only of what the Nano Block also leaves as it is: the ground's name, and
+/// AREF with nothing wired to it. The breadboard's empty holes warn of nothing.
 #[test]
 fn lint_on_the_uno_block_warns_only_as_the_nano_block_does() {
     let repo = common::repo();
@@ -142,7 +135,7 @@ fn lint_on_the_uno_block_warns_only_as_the_nano_block_does() {
     let codes: Vec<String> = warned(&run.stdout).into_iter().map(|(_, c)| c).collect();
     assert_eq!(
         codes,
-        ["scene.ground_unnamed", "scene.unplaced", "net.floating"],
+        ["scene.ground_unnamed", "net.floating"],
         "{}",
         run.stdout
     );

@@ -114,7 +114,7 @@ fn the_scene_message_names_each_channel() {
             "switches": ["@btn1", "@nano.sw_reset"],
         })
     );
-    assert_eq!(scene["instances"][1]["name"], "btn1");
+    assert_eq!(scene["instances"][2]["name"], "btn1");
 }
 
 #[test]

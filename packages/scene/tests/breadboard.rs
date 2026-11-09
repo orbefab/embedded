@@ -1,4 +1,5 @@
-//! Parts plugged into a breadboard: where they sit, and which holes the strips join.
+//! Parts plugged into a breadboard: where they sit, which holes the strips join, and that a
+//! circuit on a breadboard is the circuit it is wired directly.
 
 mod common;
 
@@ -9,6 +10,44 @@ use orbe_scene::{Files, Netlist, Placement};
 fn read(dir: &std::path::Path) -> Netlist {
     orbe_scene::read(&Files::disk(), &dir.join("scene.jsonc"))
         .unwrap_or_else(|e| panic!("{}: {e:#?}", dir.display()))
+}
+
+/// Each Block's scene on its breadboard, and the same circuit wired pin to pin as
+/// `fixtures/wired/<block>.jsonc` holds it, give the engine the same netlist, byte for byte. So
+/// the same nets run the same simulation, and the board's empty holes add nothing to solve.
+#[test]
+fn each_block_on_its_breadboard_runs_the_netlist_of_its_circuit_wired_directly() {
+    for block in ["nano-button-led", "nano-led-fade", "uno-button-led"] {
+        let dir = tempfile::tempdir().unwrap();
+        common::copy_dir(&common::repo().join("blocks").join(block), dir.path());
+        let on_breadboard = read(dir.path());
+        let wired = common::fixture("wired").join(format!("{block}.jsonc"));
+        fs::copy(&wired, dir.path().join("scene.jsonc")).unwrap();
+        let direct = read(dir.path());
+        assert!(
+            on_breadboard.json == direct.json,
+            "{block}: the netlists differ"
+        );
+        assert_eq!(
+            on_breadboard.view.circuit_hash, direct.view.circuit_hash,
+            "{block}"
+        );
+        let parts = |n: &Netlist| {
+            n.view
+                .instances
+                .iter()
+                .map(|i| i.part.clone())
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            parts(&on_breadboard).contains(&"breadboard-400".to_string()),
+            "{block}"
+        );
+        assert!(
+            !parts(&direct).contains(&"breadboard-400".to_string()),
+            "{block}"
+        );
+    }
 }
 
 fn scene(layout: &str, wires: &str) -> tempfile::TempDir {

@@ -16,6 +16,7 @@
   "registryDependencies": [
     "ams1117-sot223@0.1.0",
     "atmega328p-tqfp32@0.1.0",
+    "breadboard-400@0.1.0",
     "capacitor-0603@0.1.0",
     "capacitor-tantalum-3216@0.1.0",
     "ch340g@0.1.0",
