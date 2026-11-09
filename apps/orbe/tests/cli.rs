@@ -955,6 +955,7 @@ fn a_second_add_is_busy_while_one_holds_the_lock() {
     assert_eq!(reply["error"]["code"], "busy");
     assert!(!project.path().join("parts").exists());
     assert!(!project.path().join("parts.lock").exists());
+    lock.unlock().unwrap();
     drop(lock);
     let (output, stdout, _) = orbe_in(project.path(), &["add", "led-5mm"]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
