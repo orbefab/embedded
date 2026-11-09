@@ -2,8 +2,8 @@
 # Checks the site. It runs the type check and the brand check, then a build with
 # ORBE_SITE_INSTALL=1 that must give every part and Block a page with its install line. Then it
 # runs the build as it deploys, whose own files must show no install line and no repo link, and
-# which must serve the AVR runtime source every Block's NOTICE names. apps/site/e2e/site.mjs then
-# drives that build in headless Chromium twice: on `vite preview`, and on `wrangler dev --local`.
+# which must serve the AVR runtime source every Block's NOTICE names. Playwright then drives that
+# build in headless Chromium twice: on `vite preview`, and on `wrangler dev --local`.
 #
 # The flag gates the site's own text and links: the pages, the build's scripts and styles, the
 # brand files and the part views. The registry under r/, orbe-wasm and the runtime source are data
@@ -31,7 +31,8 @@ dist=apps/site/dist/client
 own() { grep -rlE "$1" "$dist" --exclude-dir=r --exclude-dir=orbe-wasm --exclude-dir=sources || true; }
 pages() { find "$dist/$1" -mindepth 2 -name index.html | wc -l; }
 listed() {
-  node -e 'const index = require(process.argv[1]); console.log(new Set(index.items.filter((row) => row.type === process.argv[2]).map((row) => row.name)).size)' \
+  # console.log colors a number when FORCE_COLOR is set, and [[ ]] then rejects the count.
+  node -e 'const index = require(process.argv[1]); process.stdout.write(String(new Set(index.items.filter((row) => row.type === process.argv[2]).map((row) => row.name)).size) + "\n")' \
     "$PWD/$dist/r/index.json" "$1"
 }
 
@@ -74,31 +75,21 @@ echo "check-site: the build serves sources/$archive, the runtime source each Blo
 
 target=$(cargo metadata --format-version 1 --no-deps |
   sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
-server=
-stop() {
-  [[ -n $server ]] && kill -- "-$server" 2>/dev/null || true
-  server=
+while [[ $# -gt 0 ]]; do
+  if [[ $1 == --renders ]]; then
+    export ORBE_RENDERS=${2:-}
+    shift 2
+  else
+    shift
+  fi
+done
+export ORBE=$target/debug/orbe
+export ORBE_E2E=site
+export WRANGLER_SEND_METRICS=false
+# 8787 is wrangler's default and may already be taken. Ask the OS for two free ports.
+free_port() {
+  node -e 'const s = require("node:net").createServer().listen(0, "127.0.0.1", () => { process.stdout.write(String(s.address().port) + "\n"); s.close(); })'
 }
-trap stop EXIT
-# Starts a server on a free port in its own process group, waits for the landing page, and runs
-# the e2e against it.
-drive() {
-  local name=$1 port log
-  shift
-  port=$(node -e 'const s = require("node:net").createServer().listen(0, "127.0.0.1", () => { console.log(s.address().port); s.close(); })')
-  log=$(mktemp)
-  (cd apps/site && WRANGLER_SEND_METRICS=false exec setsid "$@" --port "$port" >"$log" 2>&1) &
-  server=$!
-  for _ in $(seq 120); do
-    curl -fs -o /dev/null "http://127.0.0.1:$port/embedded/" && break
-    sleep 0.5
-  done
-  curl -fs -o /dev/null "http://127.0.0.1:$port/embedded/" || { cat "$log" >&2; fail "$name did not serve /embedded/"; }
-  echo "check-site: driving the build on $name"
-  node apps/site/e2e/site.mjs --orbe "$target/debug/orbe" --base "http://127.0.0.1:$port" "${renders[@]}"
-  stop
-  rm -f "$log"
-}
-renders=("$@")
-drive "vite preview" node_modules/.bin/vite preview --strictPort --host 127.0.0.1
-drive "wrangler dev --local" node_modules/.bin/wrangler dev --local --ip 127.0.0.1
+export ORBE_SITE_VITE_PORT=$(free_port)
+export ORBE_SITE_WRANGLER_PORT=$(free_port)
+pnpm exec playwright test
