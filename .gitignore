@@ -7,6 +7,9 @@
 /target
 node_modules/
 dist/
+/test-results/
+/playwright-report/
+/blob-report/
 .wrangler/
 __pycache__/
 .venv/
