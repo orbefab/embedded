@@ -16,7 +16,7 @@ use std::thread;
 use std::time::Duration;
 
 use orbe_scene::Files;
-use sha1::{Digest, Sha1};
+use tungstenite::handshake::derive_accept_key;
 use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::protocol::{CloseFrame, Role};
 use tungstenite::{Message, WebSocket};
@@ -26,6 +26,8 @@ use super::page::Page;
 
 /// The longest request head the listener reads.
 const HEAD: usize = 16 * 1024;
+/// Headers in one request. A head past `HEAD`, or with more headers than this, is not a request.
+const HEADERS: usize = 128;
 /// How long the listener waits for a whole request head, and for a viewer to take what it is
 /// sent.
 const WAIT: Duration = Duration::from_secs(5);
@@ -37,8 +39,6 @@ const CONNECTIONS: usize = 32;
 const BACKOFF: Duration = Duration::from_millis(100);
 /// How long a viewer's thread waits for a command before it sends what the session queued.
 const POLL: Duration = Duration::from_millis(5);
-/// RFC 6455's key suffix for `Sec-WebSocket-Accept`.
-const ACCEPT: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 /// What the session sends one viewer.
 pub(super) enum Out {
@@ -141,44 +141,74 @@ impl Head {
     }
 }
 
-/// Reads up to the blank line that ends the head, a byte at a time, so nothing past it is
-/// taken from a stream that becomes a WebSocket.
-fn read_head(stream: &mut TcpStream) -> Option<Head> {
+enum HeadEnd {
+    /// The head is not complete.
+    More,
+    /// The bytes are not a request head.
+    Bad,
+    /// The head, and the index where the bytes after it start.
+    Ready(Head, usize),
+}
+
+/// The request head in `bytes`, when they hold one. Bytes after the head stay unparsed.
+fn take_head(bytes: &[u8]) -> HeadEnd {
+    let mut slots = [httparse::EMPTY_HEADER; HEADERS];
+    let mut request = httparse::Request::new(&mut slots);
+    let end = match request.parse(bytes) {
+        Ok(httparse::Status::Complete(end)) => end,
+        Ok(httparse::Status::Partial) => return HeadEnd::More,
+        Err(_) => return HeadEnd::Bad,
+    };
+    let (Some(method), Some(target)) = (request.method, request.path) else {
+        return HeadEnd::Bad;
+    };
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let mut headers = BTreeMap::new();
+    for header in request.headers.iter() {
+        let Ok(value) = str::from_utf8(header.value) else {
+            return HeadEnd::Bad;
+        };
+        headers.insert(header.name.to_ascii_lowercase(), value.trim().to_string());
+    }
+    HeadEnd::Ready(
+        Head {
+            method: method.to_string(),
+            path: path.to_string(),
+            query: query.to_string(),
+            headers,
+        },
+        end,
+    )
+}
+
+/// Reads a request head. Bytes after it that arrived in the same read are returned with it,
+/// so a WebSocket frame there is still read as a frame.
+fn read_head(stream: &mut TcpStream) -> Option<(Head, Vec<u8>)> {
     let until = wall() + WAIT;
     let mut bytes = Vec::new();
-    let mut byte = [0u8; 1];
-    while !bytes.ends_with(b"\r\n\r\n") {
+    loop {
+        match take_head(&bytes) {
+            HeadEnd::Ready(head, end) => return Some((head, bytes.split_off(end))),
+            HeadEnd::Bad => return None,
+            HeadEnd::More => {}
+        }
         let left = until.saturating_duration_since(wall());
         if left.is_zero() || bytes.len() >= HEAD {
             return None;
         }
         stream.set_read_timeout(Some(left)).ok()?;
-        if stream.read(&mut byte).ok()? == 0 {
+        let start = bytes.len();
+        bytes.resize(HEAD, 0);
+        let read = stream.read(&mut bytes[start..]).ok()?;
+        bytes.truncate(start + read);
+        if read == 0 {
             return None;
         }
-        bytes.push(byte[0]);
     }
-    let text = String::from_utf8(bytes).ok()?;
-    let mut lines = text.split("\r\n");
-    let mut first = lines.next()?.split(' ');
-    let (method, target) = (first.next()?, first.next()?);
-    let (path, query) = target.split_once('?').unwrap_or((target, ""));
-    let headers = lines
-        .filter_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            Some((name.trim().to_ascii_lowercase(), value.trim().to_string()))
-        })
-        .collect();
-    Some(Head {
-        method: method.to_string(),
-        path: path.to_string(),
-        query: query.to_string(),
-        headers,
-    })
 }
 
 fn serve(mut stream: TcpStream, site: &Site, events: &Sender<Event>) {
-    let Some(head) = read_head(&mut stream) else {
+    let Some((head, rest)) = read_head(&mut stream) else {
         return;
     };
     if stream.set_write_timeout(Some(WAIT)).is_err() {
@@ -193,10 +223,10 @@ fn serve(mut stream: TcpStream, site: &Site, events: &Sender<Event>) {
         };
         let accepted = format!(
             "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n",
-            accept(key)
+            derive_accept_key(key.as_bytes())
         );
         if stream.write_all(accepted.as_bytes()).is_ok() {
-            watch(stream, events);
+            watch(stream, rest, events);
         }
         return;
     }
@@ -242,29 +272,6 @@ fn same(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0, |diff, (x, y)| diff | (x ^ y)) == 0
 }
 
-fn accept(key: &str) -> String {
-    base64(&Sha1::digest(format!("{key}{ACCEPT}")))
-}
-
-fn base64(bytes: &[u8]) -> String {
-    const LETTERS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::new();
-    for chunk in bytes.chunks(3) {
-        let n = chunk
-            .iter()
-            .enumerate()
-            .fold(0u32, |n, (i, b)| n | u32::from(*b) << (16 - 8 * i));
-        for i in 0..4 {
-            if i <= chunk.len() {
-                out.push(char::from(LETTERS[(n >> (18 - 6 * i) & 63) as usize]));
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
-}
-
 fn content_type(path: &str) -> &'static str {
     let name = Path::new(path);
     match name.extension().and_then(|e| e.to_str()) {
@@ -302,11 +309,11 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 
 /// One viewer's WebSocket: what the session queues goes out, and each command goes to the
 /// session's queue, until either side closes.
-fn watch(stream: TcpStream, events: &Sender<Event>) {
+fn watch(stream: TcpStream, rest: Vec<u8>, events: &Sender<Event>) {
     if stream.set_read_timeout(Some(POLL)).is_err() {
         return;
     }
-    let mut socket = WebSocket::from_raw_socket(stream, Role::Server, None);
+    let mut socket = WebSocket::from_partially_read(stream, rest, Role::Server, None);
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let (out, queue) = mpsc::channel();
     if events.send(Event::Viewer(Viewer::Joined(id, out))).is_ok() {
@@ -367,15 +374,117 @@ fn relay(
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+
     use super::*;
 
+    /// A masked client text frame. The server refuses an unmasked one.
+    fn client_text(text: &str) -> Vec<u8> {
+        let mask = [0x11, 0x22, 0x33, 0x44];
+        let mut frame = vec![0x81, 0x80 | u8::try_from(text.len()).unwrap()];
+        frame.extend(mask);
+        for (i, byte) in text.bytes().enumerate() {
+            frame.push(byte ^ mask[i % 4]);
+        }
+        frame
+    }
+
     #[test]
-    fn the_accept_key_is_rfc_6455_s() {
-        assert_eq!(
-            accept("dGhlIHNhbXBsZSBub25jZQ=="),
-            "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+    fn a_head_keeps_the_frame_that_shares_its_buffer() {
+        let frame = client_text("hi");
+        let mut bytes = b"GET /session?t=abc HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\r\n".to_vec();
+        bytes.extend_from_slice(&frame);
+        let HeadEnd::Ready(head, end) = take_head(&bytes) else {
+            panic!("a complete head");
+        };
+        assert_eq!(head.path, "/session");
+        assert_eq!(head.query, "t=abc");
+        assert_eq!(head.header("host"), Some("127.0.0.1:9"));
+        assert_eq!(&bytes[end..], frame.as_slice());
+    }
+
+    #[test]
+    fn a_request_that_is_not_http_gets_no_response() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let host = format!("127.0.0.1:{port}");
+        let mut client = TcpStream::connect(&host).unwrap();
+        client.write_all(b"nope\r\n\r\n").unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let (events, _) = mpsc::channel();
+        let site = Arc::new(Site {
+            page: Page::Built(&[]),
+            models: Arc::new(Mutex::new(BTreeMap::new())),
+            host,
+            origin: "http://127.0.0.1".to_string(),
+            token: "abc".to_string(),
+        });
+        let served = thread::spawn(move || serve(server, &site, &events));
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut buf = [0; 8];
+        assert_eq!(client.read(&mut buf).unwrap(), 0);
+        served.join().unwrap();
+    }
+
+    /// The upgrade and the first frame share one write. The session still receives the text.
+    #[test]
+    fn a_frame_in_the_same_write_as_the_head_is_a_command() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let host = format!("127.0.0.1:{port}");
+        let token = "abc";
+        let mut bytes = format!(
+            "GET /session?t={token} HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\n\
+             Upgrade: websocket\r\nConnection: Upgrade\r\n\
+             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        )
+        .into_bytes();
+        bytes.extend(client_text("hi"));
+
+        let mut client = TcpStream::connect(&host).unwrap();
+        client.write_all(&bytes).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let (events, inbox) = mpsc::channel();
+        let site = Arc::new(Site {
+            page: Page::Built(&[]),
+            models: Arc::new(Mutex::new(BTreeMap::new())),
+            host: host.clone(),
+            origin: format!("http://{host}"),
+            token: token.to_string(),
+        });
+        let served = thread::spawn(move || serve(server, &site, &events));
+
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut response = Vec::new();
+        let mut byte = [0];
+        while !response.ends_with(b"\r\n\r\n") {
+            client.read_exact(&mut byte).unwrap();
+            response.push(byte[0]);
+        }
+        let response = String::from_utf8(response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 101"), "{response}");
+        assert!(
+            response.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="),
+            "{response}"
         );
-        assert_eq!(base64(b"ab"), "YWI=");
-        assert_eq!(base64(b"a"), "YQ==");
+
+        let mut command = None;
+        let until = wall() + Duration::from_secs(2);
+        while wall() < until {
+            if let Ok(Event::Viewer(Viewer::Command(_, text))) =
+                inbox.recv_timeout(Duration::from_millis(50))
+            {
+                command = Some(text);
+                break;
+            }
+        }
+        drop(client);
+        served.join().unwrap();
+        assert_eq!(command.as_deref(), Some("hi"));
     }
 }
