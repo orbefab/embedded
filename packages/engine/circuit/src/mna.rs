@@ -48,6 +48,8 @@ pub(crate) struct Layout {
     node_rows: Vec<usize>,
     /// The node rows that take gmin, ascending.
     gmin_rows: Vec<usize>,
+    /// The branch rows that carry a capacitor's current, ascending.
+    charge_rows: Vec<usize>,
     size: usize,
     junctions: usize,
     /// The passive chips, ascending. A chip's index here is its slot in `Conditions::chips`.
@@ -93,6 +95,7 @@ fn assemble<T: Device>(
     let mut flux = 0;
     let mut node_rows = Vec::new();
     let mut gmin_rows = Vec::new();
+    let mut charge_rows = Vec::new();
     let net_rows = netlist.nets().len().saturating_sub(1);
     for _ in 0..net_rows {
         node_rows.push(row);
@@ -118,6 +121,7 @@ fn assemble<T: Device>(
             row += 1;
         }
         let branch = row;
+        charge_rows.extend(branch..branch + charges);
         row += extra.branches;
         let junctions = junction..junction + extra.junctions;
         junction = junctions.end;
@@ -139,6 +143,7 @@ fn assemble<T: Device>(
         part_rows,
         node_rows,
         gmin_rows,
+        charge_rows,
         size: row,
         junctions: junction,
         chips,
@@ -194,6 +199,10 @@ impl Layout {
 
     pub(crate) fn junction_slots(&self, part: PartId) -> Range<usize> {
         self.part_rows[part.index()].junctions.clone()
+    }
+
+    pub(crate) fn is_charge_row(&self, row: usize) -> bool {
+        self.charge_rows.binary_search(&row).is_ok()
     }
 
     /// Net and internal rows hold volts. Branch rows hold amperes.

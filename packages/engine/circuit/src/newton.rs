@@ -409,7 +409,7 @@ impl Offender {
 ///
 /// Converged means three checks pass in one iteration: no unknown moved more
 /// than its tolerance, every junction's current check passed, and no junction
-/// was limited.
+/// was limited. A held capacitor's current is not one of those unknowns, as `worst_row` says.
 ///
 /// On a linear circuit the second iteration would stamp the first one's system, solve it to the
 /// same bits and pass every check, so the call returns after one solve with that iteration's
@@ -425,6 +425,7 @@ pub(crate) fn newton(
     let mut iterate = start;
     let mut offender = None;
     let mut system = System::new(layout);
+    let held = !matches!(conditions.history, History::Step(_));
     for iteration in 1..=budget {
         system.reset(layout, conditions.gmin);
         for (id, part) in circuit.netlist.parts() {
@@ -479,7 +480,8 @@ pub(crate) fn newton(
                 worst_junction = Some((score, id));
             }
         }
-        let (worst_row, row_ratio) = worst_row(layout, iterate.solution.components(), &solution);
+        let (worst_row, row_ratio) =
+            worst_row(layout, held, iterate.solution.components(), &solution);
 
         iterate = Iterate {
             solution,
@@ -508,10 +510,17 @@ pub(crate) fn newton(
     }))
 }
 
-/// The row whose step is largest against its tolerance, and that ratio.
-fn worst_row(layout: &Layout, old: &[f64], new: &Solution) -> (usize, f64) {
+/// The row whose step is largest against its tolerance, and that ratio. When `held`, every
+/// capacitor's current is left out. A held capacitor's current is the voltage across its hold
+/// times C / 1 fs, 1e8 S for 100 nF, and the voltages at its ends are checked. Its own 1 pA
+/// floor would need them to agree to 1e-20 V, far below one ulp of a volt, so only a solve
+/// that repeats to the bit passed it.
+fn worst_row(layout: &Layout, held: bool, old: &[f64], new: &Solution) -> (usize, f64) {
     let mut worst = (0, 0.0);
     for (row, (&before, &after)) in old.iter().zip(new.components()).enumerate() {
+        if held && layout.is_charge_row(row) {
+            continue;
+        }
         let floor = if layout.is_node_row(row) {
             VNTOL
         } else {
