@@ -1,8 +1,10 @@
 //! The skills this binary serves. Each is a markdown file compiled in. The `core` skill's
-//! parts section is rendered from the built-in catalog when it is printed, so it lists the
-//! parts `orbe add` can copy.
+//! parts section and the `arduino` skill's board section are rendered from the built-in
+//! catalog when a skill is printed.
 
-use orbe_scene::{Card, catalog_cards, param_sentence, si_amount};
+use std::collections::{BTreeMap, BTreeSet};
+
+use orbe_scene::{BoardFacts, Card, Gap, board_facts, catalog_cards, param_sentence, si_amount};
 
 pub struct Skill {
     pub name: &'static str,
@@ -24,6 +26,7 @@ pub const SKILLS: &[Skill] = &[
 ];
 
 const PARTS: &str = "<!-- catalog parts -->";
+const BOARDS: &str = "<!-- boards -->";
 
 pub fn find(name: &str) -> Option<&'static Skill> {
     SKILLS.iter().find(|s| s.name == name)
@@ -35,7 +38,160 @@ pub fn names() -> String {
 
 impl Skill {
     pub fn text(&self) -> String {
-        self.text.replace(PARTS, &parts(&catalog_cards()))
+        self.text
+            .replace(PARTS, &parts(&catalog_cards()))
+            .replace(BOARDS, &boards())
+    }
+}
+
+/// The Nano and the Uno, from their part files: the chip and its clock, the pins that work,
+/// the pins the reader leaves unsimulated, and the L LED.
+fn boards() -> String {
+    ["nano-board", "uno-board"]
+        .into_iter()
+        .map(board_facts)
+        .map(|board| board_text(&board))
+        .collect()
+}
+
+fn board_text(board: &BoardFacts) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "- `{}`, {}, runs {} {} at {}.\n",
+        board.id,
+        board.title,
+        article(&board.chip),
+        board.chip,
+        si_amount(board.clock_hz, "Hz"),
+    ));
+    out.push_str(&format!("- These pins work: {}.\n", pin_list(&board.works)));
+    for names in &board.same {
+        out.push_str(&format!("- {} are one net.\n", pin_list(names)));
+    }
+    for supply in &board.supplies {
+        out.push_str(&format!(
+            "- `{}` comes from `{}`, a {} regulator.\n",
+            supply.pin,
+            supply.from,
+            si_amount(supply.volts, "V"),
+        ));
+    }
+    for group in group_whys(&board.gaps) {
+        let names = pin_list(&group.0);
+        let verb = if group.0.len() == 1 { "is" } else { "are" };
+        let wire = if group.0.len() == 1 {
+            "A wire to it is a `not_simulated` error."
+        } else {
+            "A wire to one is a `not_simulated` error."
+        };
+        out.push_str(&format!(
+            "- {names} {verb} not simulated. {} {wire}\n",
+            group.1
+        ));
+    }
+    for led in &board.leds {
+        out.push_str(&format!(
+            "- `{}` drives `{}` through `{}`, {}.\n",
+            led.pin,
+            led.name,
+            led.resistor,
+            ohms_text(led.ohms),
+        ));
+    }
+    out
+}
+
+fn article(word: &str) -> &'static str {
+    match word.chars().next() {
+        Some('A' | 'E' | 'I' | 'O' | 'U' | 'a' | 'e' | 'i' | 'o' | 'u') => "an",
+        _ => "a",
+    }
+}
+
+/// Pins that share a reason, in the order the pins are listed.
+fn group_whys(gaps: &[Gap]) -> Vec<(Vec<String>, String)> {
+    let mut groups: Vec<(Vec<String>, String)> = Vec::new();
+    for gap in gaps {
+        if let Some(group) = groups.iter_mut().find(|group| group.1 == gap.why) {
+            group.0.push(gap.pin.clone());
+        } else {
+            groups.push((vec![gap.pin.clone()], gap.why.clone()));
+        }
+    }
+    groups
+}
+
+/// `` `D0` to `D13`, `RESET` and `5V` ``. A letter-and-number run of three or more with no
+/// gap inside it is one range.
+fn pin_list(names: &[String]) -> String {
+    let mut sets: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
+    for name in names {
+        if let Some((prefix, n)) = split_pin(name) {
+            sets.entry(prefix.to_string()).or_default().insert(n);
+        }
+    }
+    let mut items = Vec::new();
+    let mut seen = BTreeSet::new();
+    for name in names {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        if let Some((prefix, _)) = split_pin(name)
+            && let Some(set) = sets.get(prefix)
+            && set.len() >= 3
+            && run(set)
+        {
+            let start = set.iter().next().unwrap();
+            let end = set.iter().next_back().unwrap();
+            items.push(format!("`{prefix}{start}` to `{prefix}{end}`"));
+            for n in set {
+                seen.insert(format!("{prefix}{n}"));
+            }
+            continue;
+        }
+        items.push(format!("`{name}`"));
+    }
+    join_and(&items)
+}
+
+fn split_pin(name: &str) -> Option<(&str, u32)> {
+    let at = name.find(|c: char| c.is_ascii_digit())?;
+    let (prefix, rest) = name.split_at(at);
+    if prefix.is_empty() || !prefix.chars().all(|c| c.is_ascii_uppercase()) {
+        return None;
+    }
+    rest.parse().ok().map(|n| (prefix, n))
+}
+
+fn run(set: &BTreeSet<u32>) -> bool {
+    let (Some(&first), Some(&last)) = (set.iter().next(), set.iter().next_back()) else {
+        return false;
+    };
+    last - first + 1 == set.len() as u32
+}
+
+fn join_and(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [a, b] => format!("{a} and {b}"),
+        [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
+    }
+}
+
+fn ohms_text(ohms: f64) -> String {
+    let (scale, prefix) = if ohms >= 1_000_000.0 {
+        (1_000_000.0, "M")
+    } else if ohms >= 1_000.0 {
+        (1_000.0, "k")
+    } else {
+        (1.0, "")
+    };
+    let scaled = ohms / scale;
+    if scaled.fract() == 0.0 {
+        format!("{scaled:.0}{prefix}")
+    } else {
+        si_amount(ohms, "ohm")
     }
 }
 
@@ -496,6 +652,64 @@ mod tests {
                 .collect::<std::collections::BTreeSet<_>>(),
             rules
         );
+    }
+
+    /// Each board pin the reader leaves unsimulated, with the reason it gives, is in the
+    /// arduino skill. The chip's catalog number is too.
+    #[test]
+    fn the_arduino_skill_names_every_pin_a_board_leaves_unsimulated() {
+        let text = find("arduino").unwrap().text();
+        assert!(!text.contains("<!-- boards -->"));
+        for id in ["nano-board", "uno-board"] {
+            let view = drawn(id);
+            let pins: Vec<_> = view
+                .not_simulated
+                .iter()
+                .filter(|pin| pin.r#ref.chars().filter(|c| *c == '.').count() == 1)
+                .collect();
+            assert!(!pins.is_empty(), "{id} reports no unsimulated pin");
+            let missing: Vec<String> = pins
+                .iter()
+                .filter(|pin| {
+                    let name = pin.r#ref.rsplit('.').next().unwrap();
+                    !text.contains(&format!("`{name}`")) || !text.contains(&pin.why)
+                })
+                .map(|pin| format!("{}: {}", pin.r#ref, pin.why))
+                .collect();
+            assert!(missing.is_empty(), "{id} omits {missing:#?}");
+            let board = orbe_scene::card(id).unwrap();
+            let chip = board
+                .uses
+                .keys()
+                .find(|used| used.starts_with("atmega328p"))
+                .unwrap();
+            let number = orbe_scene::card(chip).unwrap().real.number.unwrap();
+            assert!(text.contains(&number), "{id} omits {number}");
+            assert!(text.contains("`led_l`"), "{id} omits the L LED");
+            assert!(text.contains("`r_l`"), "{id} omits the L LED's resistor");
+        }
+    }
+
+    fn drawn(id: &str) -> orbe_scene::View {
+        let name = id.replace('-', "_");
+        let block = format!(
+            r#"{{ "format": 1, "block": "{id}", "version": "0.0.0", "title": "{id}", "board": "{id}", "license": "MIT" }}"#
+        );
+        let scene = format!(r#"{{ "format": 1, "parts": {{ "{name}": {{ "type": "{id}" }} }} }}"#);
+        let files = orbe_scene::Files::memory([
+            (orbe_scene::BLOCK, block.into_bytes()),
+            ("scene.jsonc", scene.into_bytes()),
+        ]);
+        orbe_scene::view(&files, Path::new("scene.jsonc")).unwrap_or_else(|found| {
+            panic!(
+                "{id}: {}",
+                found
+                    .iter()
+                    .map(|d| d.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        })
     }
 
     #[test]

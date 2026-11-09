@@ -34,8 +34,8 @@ use std::path::Path;
 pub use add::{AddCode, Reply, Request, RunError, run as add_parts};
 pub use catalog::Version;
 pub use circuit::{
-    Amount, EnginePart, Instance, MapPart, Netlist, PartData, PinWhy, Placement, Reading, RefMap,
-    View, Wire,
+    Amount, BoardFacts, BoardLed, EnginePart, Gap, Instance, MapPart, Netlist, PartData, PinWhy,
+    Placement, Reading, RefMap, Supply, View, Wire, board_facts,
 };
 pub use diagnostic::{Code, Diagnostic, Lint};
 pub use files::Files;

@@ -14,12 +14,14 @@ use crate::source::Span;
 use crate::syntax::Node;
 use crate::units::Unit;
 
+mod board;
 mod engine;
 mod lint;
 mod map;
 mod plug;
 mod view;
 
+pub use board::{BoardFacts, BoardLed, Gap, Supply, board_facts};
 pub use map::{Amount, EnginePart, MapPart, Reading, RefMap};
 pub use view::{Instance, PartData, PinWhy, Placement, View, Wire};
 

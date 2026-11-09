@@ -220,7 +220,10 @@ fn the_nano_pins_the_skills_call_not_simulated_are_the_ones_the_reader_leaves_ou
         .collect();
     assert_eq!(left_out, BTreeSet::from(["3V3", "A6", "A7", "VIN"]));
     assert!(skill("core").contains("The Nano's 3V3, VIN, A6 and A7 pins"));
-    assert!(skill("arduino").contains("A6, A7, 3V3 and VIN are not simulated"));
+    let arduino = skill("arduino");
+    for pin in &left_out {
+        assert!(arduino.contains(&format!("`{pin}`")), "{pin}");
+    }
 }
 
 #[test]
@@ -237,8 +240,10 @@ fn the_uno_pins_the_skills_call_not_simulated_are_the_ones_the_reader_leaves_out
     let (core, arduino) = (skill("core"), skill("arduino"));
     says(&core, "The Uno's VIN pin and barrel jack.");
     says(&core, "The Uno's 3V3 works.");
-    says(&arduino, "On the Uno, VIN is not simulated");
-    says(&arduino, "3V3 comes from the board's 3.3 V regulator.");
+    for pin in &left_out {
+        assert!(arduino.contains(&format!("`{pin}`")), "{pin}");
+    }
+    says(&arduino, "`3V3` comes from `reg_3v3`, a 3.3 V regulator.");
 }
 
 /// The arduino skill says the Uno's L LED pulls D13 to about 1.45 V while D13 is an input
