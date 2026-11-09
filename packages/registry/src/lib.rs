@@ -18,8 +18,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub use item::{
-    BlockItem, Dependency, File, Format, Head, Index, Item, Kind, ModelItem, PartItem, Row,
-    file_url,
+    BlockItem, Dependency, File, Format, Head, Index, Item, Kind, PartItem, Row, file_url,
 };
 
 /// The contract's version, which every index and record carries.
@@ -83,7 +82,6 @@ pub struct Registry {
 pub struct Report {
     pub parts: usize,
     pub blocks: usize,
-    pub models: usize,
     /// Records carried from the previous build, at versions the source no longer holds.
     pub carried: usize,
     /// Files the built records list, once per record that lists them.
@@ -178,11 +176,10 @@ impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{} parts, {} Blocks and {} models: {} records list {} files",
+            "{} parts and {} Blocks: {} records list {} files",
             self.parts,
             self.blocks,
-            self.models,
-            self.parts + self.blocks + self.models,
+            self.parts + self.blocks,
             self.listed,
         )?;
         if self.carried > 0 {
@@ -325,7 +322,6 @@ pub fn build(src: &Path, previous: Option<&Path>) -> Result<Registry, Error> {
     let report = Report {
         parts: parts.len(),
         blocks: blocks.len(),
-        models: 0,
         carried,
         listed,
         stored,

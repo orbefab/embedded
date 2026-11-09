@@ -89,7 +89,7 @@ export type ItemRecord = PartRecord | BlockRecord;
 
 export interface IndexRow {
   readonly name: string;
-  readonly type: "part" | "block" | "model";
+  readonly type: "part" | "block";
   readonly version: string;
   readonly url: string;
 }

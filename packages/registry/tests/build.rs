@@ -180,7 +180,7 @@ fn a_block_depends_on_every_part_it_runs_at_the_versions_in_the_same_build() {
 }
 
 #[test]
-fn the_item_schema_has_the_part_block_and_model_types() {
+fn the_item_schema_has_the_part_and_block_types() {
     let registry = build(&repo(), None).unwrap();
     let schema: Value = serde_json::from_slice(&registry.output[ITEM_SCHEMA]).unwrap();
     let types: Vec<&Value> = schema["oneOf"]
@@ -189,8 +189,7 @@ fn the_item_schema_has_the_part_block_and_model_types() {
         .iter()
         .map(|variant| &variant["properties"]["type"]["const"])
         .collect();
-    assert_eq!(types, ["part", "block", "model"]);
-    assert_eq!(registry.report.models, 0);
+    assert_eq!(types, ["part", "block"]);
 }
 
 #[test]
@@ -214,7 +213,7 @@ fn another_folder_of_parts_and_blocks_builds_and_counts_what_it_lacks() {
     assert_eq!(lamp["license"], "MIT");
 
     let report = &registry.report;
-    assert_eq!((report.parts, report.blocks, report.models), (1, 1, 0));
+    assert_eq!((report.parts, report.blocks), (1, 1));
     let parts = &report.missing.parts;
     assert_eq!(
         [
@@ -504,7 +503,6 @@ fn every_item_is_a_part_or_a_block_of_the_repo() {
         match item {
             Item::Part(_) => p += 1,
             Item::Block(_) => b += 1,
-            Item::Model(_) => panic!("no folder holds a model"),
         }
     }
     assert_eq!((p, b), (parts, blocks));
