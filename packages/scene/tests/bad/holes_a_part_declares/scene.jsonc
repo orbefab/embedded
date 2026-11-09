@@ -1,0 +1,8 @@
+{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "strip": { "type": "./strip.jsonc" },
+  },
+  "wires": [["strip.h1", "nano.D2"]],
+}

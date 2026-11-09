@@ -619,9 +619,16 @@ mod tests {
                 if !matches!(anchor["kind"].as_str(), Some("leg" | "socket")) {
                     continue;
                 }
+                if anchor["node"].is_null() {
+                    assert_eq!(
+                        anchor["kind"], "socket",
+                        "{id}: lead {} has no node, which only a socket cut into the body may",
+                        anchor["lead"]
+                    );
+                }
                 let also = anchor["also"].as_array().unwrap().iter();
                 for node in std::iter::once(&anchor["node"]).chain(also) {
-                    let node = node.as_str().unwrap();
+                    let Some(node) = node.as_str() else { continue };
                     let times = in_glb.iter().filter(|name| *name == node).count();
                     assert_eq!(
                         times, 1,

@@ -164,6 +164,25 @@ test('a lead is the mesh of the node its anchor names', async (t) => {
   assert.match(out.line('decorated'), /seating: node `decoration` reaches z = -5\.000 mm/);
 });
 
+test('a socket cut into the body has no node, keeps none, and needs a vertex within 1 mm', async (t) => {
+  const socket = (over) => ({ lead: 1, node: null, also: [], at: [0, 0, 2], axis: [0, 0, 1], kind: 'socket', ...over });
+  const cut = (id, over, nodes = [{ name: 'body', points: [[0, 0, 0], [0.5, 0.5, 2]] }]) => ({
+    part: { format: 1, part: id, pins: { a: [1] } },
+    nodes,
+    anchors: { part: id, units: 'mm', anchors: [socket(over)] },
+  });
+  const fx = await fixture(t, {
+    holed: cut('holed', {}),
+    missed: cut('missed', { at: [5, 5, 2] }),
+    nodeless: cut('nodeless', { kind: 'leg', axis: [0, 0, -1], at: [0, 0, 0] }),
+  });
+  const out = run(fx, ['holed', 'missed', 'nodeless']);
+  assert.match(out.line('holed'), /^ok {4}holed {2}kept 0 nodes, 1 draw calls/);
+  assert.deepEqual(asset(fx, 'holed').kept_nodes, []);
+  assert.match(out.line('missed'), /anchors: lead 1 is a socket cut into the body at \(5, 5, 2\), and no vertex of the model is within 1 mm of it/);
+  assert.match(out.line('nodeless'), /anchors: anchor 1's `node` must be a node name, or null on a socket cut into the body, and is null/);
+});
+
 test('the tip is the centroid of the vertices within 0.001 mm of the furthest', async (t) => {
   const spiked = leaded('spiked');
   spiked.nodes[0].points = [...FACE.slice(0, 3), [-0.5, 0.5, -1.0002]];

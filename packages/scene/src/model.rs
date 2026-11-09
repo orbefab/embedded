@@ -171,6 +171,12 @@ impl ParamDecl {
     }
 }
 
+/// A part whose pins are holes a leg plugs into, such as a breadboard's.
+pub(crate) struct Holes {
+    /// Each strip's holes, the pins one clip joins.
+    pub(crate) strips: Vec<Vec<String>>,
+}
+
 pub(crate) struct Part {
     pub(crate) file: FileId,
     /// The id, or the path a scene names it by, for messages.
@@ -183,6 +189,7 @@ pub(crate) struct Part {
     /// Each `not_simulated` entry's reason with the pins it lists.
     pub(crate) not_simulated: Vec<(String, Vec<String>)>,
     pub(crate) joins_only: bool,
+    pub(crate) holes: Option<Holes>,
     /// A finding in this part file, which the engine's findings on the part may repeat.
     pub(crate) reported: Option<Reported>,
 }
@@ -356,6 +363,7 @@ pub(crate) fn decode_part(
         params: Vec::new(),
         not_simulated: Vec::new(),
         joins_only: false,
+        holes: None,
         reported: None,
     };
     for prop in props {
@@ -383,6 +391,7 @@ pub(crate) fn decode_part(
             "not_simulated" => part.not_simulated = decode_not_simulated(value, out),
             "buy" => crate::buy::check(value, out),
             "joins_only" => part.joins_only = matches!(value.json, Json::Bool(true)),
+            "holes" => part.holes = Some(decode_holes(value)),
             _ => {}
         }
     }
@@ -397,6 +406,9 @@ pub(crate) fn decode_part(
         decode_layout(layout, &part.comp, out);
     }
     check_own_names(root, out);
+    if let (Some(holes), Some(node)) = (&part.holes, root.get("holes")) {
+        check_holes(holes, node, &part, out);
+    }
     for (_, pins) in &part.not_simulated {
         for pin in pins {
             if part.pin(pin).is_none() {
@@ -621,6 +633,75 @@ fn decode_wire_hint(hint: &Node, out: &mut Findings) {
                     did_you_mean(key, ["kind", "color"], "")
                 ),
             ),
+        }
+    }
+}
+
+fn decode_holes(node: &Node) -> Holes {
+    let strips = node
+        .get("strips")
+        .and_then(Node::items)
+        .unwrap_or_default()
+        .iter()
+        .map(|strip| {
+            strip
+                .items()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|hole| hole.str().map(str::to_string))
+                .collect()
+        })
+        .collect();
+    Holes { strips }
+}
+
+/// Each strip lists two or more holes, each a pin of the part on one lead, and no hole is in
+/// two strips. A board needs a depth above zero.
+fn check_holes(holes: &Holes, node: &Node, part: &Part, out: &mut Findings) {
+    let depth = node.get("depth");
+    if depth.and_then(Node::number).is_none_or(|d| d <= 0.0) {
+        out.push(
+            Code::Syntax,
+            depth.map_or(node.span, |d| d.span),
+            "`holes` needs a `depth` above 0, how far a leg goes in, in mm",
+            "write \"depth\": 8".into(),
+        );
+    }
+    let items = node.get("strips").and_then(Node::items).unwrap_or_default();
+    let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
+    for (index, (strip, written)) in holes.strips.iter().zip(items).enumerate() {
+        if strip.len() < 2 {
+            out.push(
+                Code::Syntax,
+                written.span,
+                "a strip joins two or more holes",
+                "list every hole one clip joins, such as [\"a1\", \"b1\", \"c1\", \"d1\", \"e1\"]"
+                    .into(),
+            );
+        }
+        for hole in strip {
+            let one_lead = part
+                .pin(hole)
+                .is_some_and(|pin| matches!(pin.def, PinDef::Leads));
+            if !one_lead {
+                out.push(
+                    Code::UnknownPin,
+                    written.span,
+                    format!(
+                        "strip {} lists `{hole}`, which is not a pin of this part",
+                        index + 1
+                    ),
+                    "each hole is a pin with one lead, as \"a1\": [1]".into(),
+                );
+            }
+            if let Some(first) = seen.insert(hole, index) {
+                out.push(
+                    Code::Duplicate,
+                    written.span,
+                    format!("`{hole}` is in strips {} and {}", first + 1, index + 1),
+                    "a hole sits in one strip".into(),
+                );
+            }
         }
     }
 }

@@ -15,6 +15,7 @@ The anchors file is in the part frame: millimetres, +Z up, seated at z = 0.
 Each anchor is one lead: its number, the node that draws it (and any others
 that belong to it), the lead's tip, the direction a lead is inserted, and
 its kind (`leg` goes into a hole, `socket` takes a pin, `pad` is soldered).
+A socket cut into the body, such as a breadboard's hole, has no node.
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ ANGULAR_DEFLECTION = 0.3
 @dataclass(frozen=True)
 class Anchor:
     lead: int
-    node: str
+    node: str | None
     at: tuple[float, float, float]
     axis: tuple[float, float, float] = DOWN
     kind: Literal["leg", "socket", "pad"] = "leg"
