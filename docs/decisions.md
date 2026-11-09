@@ -61,7 +61,7 @@ A command does what it names and nothing in the background. Where `orbe` could g
 ## Registry (Nov 8 2026)
 - `orbe registry build <src> <out>` builds a registry from any folder of `registry.jsonc`, `parts/` and `blocks/`, so another registry is built with the same `orbe` its users run. The code is the `orbe-registry` library, and the cards come from `orbe-scene`, the same as `orbe part` prints.
 - `registry.jsonc` names the registry, such as `@orbefab`, and its homepage, and the index carries both, so an index says which registry it is wherever it is mirrored or merged.
-- Item types are `part`, `block` and `model`, with shadcn's field names. `model` is in the schema before any model item exists.
+- Item types are `part` and `block`, with shadcn's field names.
 - Every record sits at `<id>@<version>` and never changes once served, and its files sit at `files/<sha256>`. Hash dedupe is the only optimisation. A record has no `usedBy`, since that grows with the registry.
 - A registry keeps every version it ever served. `--previous` carries an earlier build's records forward and refuses a version whose record would change.
 - The index and every record carry `"format": 1`. Clients ignore fields they do not know, and removing or changing a field raises the format, so the schemas allow fields they do not name.
