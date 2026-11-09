@@ -19,7 +19,7 @@ sha2.workspace = true
 [target.'cfg(unix)'.dependencies]
 ctrlc.workspace = true
 rustix = { workspace = true, features = ["process"] }
-sha1.workspace = true
+httparse.workspace = true
 tungstenite.workspace = true
 
 [dev-dependencies]
