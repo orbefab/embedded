@@ -122,7 +122,7 @@ impl Open {
         let wired = self.wired_nets();
         for top in &self.refs.top {
             let part = &self.refs.parts[top];
-            if !part.engine.is_empty() {
+            if !part.engine.is_empty() || self.holed(top) {
                 continue;
             }
             for (pin, net) in &part.pins {

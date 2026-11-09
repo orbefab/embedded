@@ -1,0 +1,3 @@
+scene.layout scene.jsonc:12:23 | `nano.GND` is on 2 legs, so it names no one hole
+scene.layout scene.jsonc:13:54 | `led1` sits on a board, so it turns about Z only
+scene.layout scene.jsonc:14:19 | `on` names one pin and the hole its leg goes into

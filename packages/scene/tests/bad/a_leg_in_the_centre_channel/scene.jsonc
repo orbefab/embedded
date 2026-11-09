@@ -1,0 +1,14 @@
+// The LED turned along a column puts its cathode in the centre channel.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-400" },
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "led1": { "type": "led-5mm", "color": "red" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "led1": { "on": { "anode": "bb.e20" }, "rotate": [0, 0, 90] },
+  },
+  "wires": [["bb.a20", "nano.D13"], ["led1.cathode", "nano.GND"]],
+}

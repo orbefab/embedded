@@ -1,0 +1,3 @@
+scene.unknown_pin scene.jsonc:12:32 | `bb` has no hole `k1` | from a1 to Z29
+scene.layout scene.jsonc:13:26 | `nano` is a nano-board, which has no holes to plug into
+scene.unknown_pin scene.jsonc:14:21 | `r2` has no pin `z`

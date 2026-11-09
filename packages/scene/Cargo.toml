@@ -13,6 +13,7 @@ schema = ["dep:schemars"]
 
 [dependencies]
 jsonc-parser.workspace = true
+libm.workspace = true
 schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true

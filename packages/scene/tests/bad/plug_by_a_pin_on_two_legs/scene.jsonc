@@ -1,0 +1,17 @@
+// The Nano's GND is on two header pins, and a part with no anchors has no legs.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-400" },
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "led1": { "type": "led-5mm", "color": "red" },
+    "r1": { "type": "resistor-axial", "resistance": "220" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "GND": "bb.d1" } },
+    "led1": { "on": { "anode": "bb.a20" }, "rotate": [0, 10, 0] },
+    "r1": { "on": { "a": "bb.a20", "b": "bb.a24" } },
+  },
+  "wires": [["led1.anode", "nano.D13"], ["led1.cathode", "nano.GND"], ["r1.a", "r1.b"]],
+}

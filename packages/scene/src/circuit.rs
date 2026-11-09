@@ -17,6 +17,7 @@ use crate::units::Unit;
 mod engine;
 mod lint;
 mod map;
+mod plug;
 mod view;
 
 pub use map::{Amount, EnginePart, MapPart, Reading, RefMap};
@@ -58,6 +59,8 @@ struct PinInfo {
     label: bool,
     reason: Option<String>,
     engine: bool,
+    /// A hole of a board, such as a breadboard's, which never names a net.
+    hole: bool,
 }
 
 struct Circuit<'p> {
@@ -77,6 +80,8 @@ struct Circuit<'p> {
     /// Each pin whose net, before the scene's wires join, reaches no engine pin and has a
     /// reason, with the reason `orbe check` gives for a wire to it.
     unsimulated: BTreeMap<usize, String>,
+    /// Each scene instance the scene plugs into a board, by its id.
+    seated: BTreeMap<usize, plug::Seated>,
 }
 
 /// The value that set a model field, by the field's JSON pointer.
@@ -157,6 +162,7 @@ pub(crate) fn compile(
     circuit.instantiate(ROOT, Owner::Scene);
     circuit.make_pins();
     circuit.join_inside();
+    circuit.plug();
     circuit.check_scene_wires(scene);
     circuit.apply_models();
     let nets = circuit.name_nets(scene);
@@ -179,6 +185,7 @@ pub(crate) fn view_only(project: &Project) -> View {
     circuit.instantiate(ROOT, Owner::Scene);
     circuit.make_pins();
     circuit.join_inside();
+    circuit.plug();
     circuit.check_scene_wires(&project.scene);
     circuit.view(None)
 }
@@ -205,6 +212,7 @@ impl<'p> Circuit<'p> {
             built: BTreeMap::new(),
             failed: BTreeMap::new(),
             unsimulated: BTreeMap::new(),
+            seated: BTreeMap::new(),
         }
     }
 
@@ -420,6 +428,7 @@ impl<'p> Circuit<'p> {
                     label: matches!(pin.def, PinDef::Label(_)),
                     reason,
                     engine: false,
+                    hole: part.holes.is_some(),
                 });
             }
             if self.insts[inst].dropped.is_none() {
@@ -574,6 +583,15 @@ impl<'p> Circuit<'p> {
                     self.union(a, b);
                 }
             }
+            for strip in part.holes.iter().flat_map(|h| &h.strips) {
+                let keys: Vec<usize> = strip
+                    .iter()
+                    .filter_map(|hole| self.keys.get(&(inst, hole.clone())).copied())
+                    .collect();
+                for pair in keys.windows(2) {
+                    self.union(pair[0], pair[1]);
+                }
+            }
         }
     }
 
@@ -636,7 +654,8 @@ impl<'p> Circuit<'p> {
     }
 
     /// Each net with an engine pin, by its root, with its name: a `nets` name, else the
-    /// smallest label, else the smallest member pin, each flattened.
+    /// smallest label, else the smallest member pin, each flattened. A hole never names a net,
+    /// so a circuit on a breadboard has the names it has wired directly.
     fn name_nets(&mut self, scene: &Scene) -> BTreeMap<usize, String> {
         let mut named: BTreeMap<usize, String> = BTreeMap::new();
         let mut from_scene = BTreeSet::new();
@@ -676,7 +695,7 @@ impl<'p> Circuit<'p> {
         let mut labels: BTreeMap<usize, String> = BTreeMap::new();
         let mut members: BTreeMap<usize, String> = BTreeMap::new();
         for key in 0..self.pins.len() {
-            if !self.kept(key) {
+            if !self.kept(key) || self.pins[key].hole {
                 continue;
             }
             let root = self.find(key);

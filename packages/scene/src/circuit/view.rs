@@ -64,6 +64,9 @@ pub struct PartData {
     pub tints: BTreeMap<String, BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub not_simulated: Vec<Value>,
+    /// A board's strips, each the holes one clip joins, by hole pin.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub strips: Vec<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -139,6 +142,16 @@ impl Circuit<'_> {
                 wires.extend(written_wires(&trees[&part.file], &prefix));
             }
         }
+        for seated in self.seated.values() {
+            wires.extend(seated.contacts.iter().map(|c| Wire {
+                ends: [
+                    c.leaf.clone(),
+                    format!("{}.{}", self.insts[c.board].dotted(), c.hole),
+                ],
+                kind: "contact".into(),
+                color: None,
+            }));
+        }
         let mut idle: BTreeMap<String, String> = BTreeMap::new();
         for (&key, why) in &self.unsimulated {
             if !self.pins[key].label {
@@ -165,7 +178,7 @@ impl Circuit<'_> {
         }
     }
 
-    fn parents(&self) -> Vec<usize> {
+    pub(super) fn parents(&self) -> Vec<usize> {
         let mut parents = vec![ROOT; self.insts.len()];
         for (id, inst) in self.insts.iter().enumerate() {
             for &child in inst.children.values() {
@@ -188,7 +201,11 @@ impl Circuit<'_> {
                 let inst = &self.insts[id];
                 let part = self.part(id)?;
                 let name = inst.path.last().cloned().unwrap_or_default();
-                let placement = match (placement(&owner["layout"][&name]), parent) {
+                let seated = self.seated.get(&id).map(|s| s.placement);
+                let placement = match (
+                    seated.or_else(|| placement(&owner["layout"][&name])),
+                    parent,
+                ) {
                     (None, ROOT) => None,
                     (placed, _) => Some(placed.unwrap_or(Placement {
                         at: [0.0; 3],
@@ -223,18 +240,11 @@ impl Circuit<'_> {
 
     fn part_data(&self, part: &crate::model::Part, tree: &Value) -> PartData {
         let root = self.project.sources.root();
-        let file = &self.project.sources.file(part.file).path;
         let id = &part.label;
-        let folder = root.join("parts").join(id);
-        let catalog = file == &folder.join("part.jsonc");
         let (files, store) = (self.project.files, self.project.store);
-        let model = (catalog && store.has(files, root, id, &format!("{id}.glb")))
+        let model = (self.catalog(part) && store.has(files, root, id, &format!("{id}.glb")))
             .then(|| format!("/parts/{id}/{id}.glb"));
-        let anchors = if catalog {
-            anchors(store.read(files, root, id, &format!("{id}.anchors.json")))
-        } else {
-            Vec::new()
-        };
+        let anchors = self.anchors_of(part);
         let mut leads = BTreeMap::new();
         let mut labels = BTreeMap::new();
         for pin in &part.pins {
@@ -303,12 +313,35 @@ impl Circuit<'_> {
                 .as_array()
                 .cloned()
                 .unwrap_or_default(),
+            strips: part
+                .holes
+                .as_ref()
+                .map(|h| h.strips.clone())
+                .unwrap_or_default(),
         }
+    }
+
+    /// Whether a part is a catalog copy, whose folder holds its GLB and anchors.
+    fn catalog(&self, part: &crate::model::Part) -> bool {
+        let root = self.project.sources.root();
+        let file = &self.project.sources.file(part.file).path;
+        file == &root.join("parts").join(&part.label).join("part.jsonc")
+    }
+
+    /// `<id>.anchors.json`'s `anchors`, unchanged, or none for a part of the user's own.
+    pub(super) fn anchors_of(&self, part: &crate::model::Part) -> Vec<Value> {
+        if !self.catalog(part) {
+            return Vec::new();
+        }
+        let root = self.project.sources.root();
+        let id = &part.label;
+        let (files, store) = (self.project.files, self.project.store);
+        anchors(store.read(files, root, id, &format!("{id}.anchors.json")))
     }
 
     /// The ref hover shows for pin `pin` of `inst`: up through each parent's label that lists
     /// it, as far as one goes.
-    fn hover(&self, parents: &[usize], inst: usize, pin: &str) -> String {
+    pub(super) fn hover(&self, parents: &[usize], inst: usize, pin: &str) -> String {
         let (mut at, mut name) = (inst, pin.to_string());
         while parents[at] != ROOT {
             let parent = parents[at];
@@ -338,7 +371,7 @@ fn si(written: &Value) -> Option<f64> {
     })
 }
 
-fn placement(written: &Value) -> Option<Placement> {
+pub(super) fn placement(written: &Value) -> Option<Placement> {
     let three = |value: &Value| -> Option<[f64; 3]> {
         let numbers: Vec<f64> = value
             .as_array()?
