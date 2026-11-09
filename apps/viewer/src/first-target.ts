@@ -279,10 +279,10 @@ export const firstTarget: SceneMessage = {
   // The Nano's header pins whose nets reach no simulated pin, with the reasons `orbe check`
   // gives for a wire to each.
   not_simulated: [
-    { ref: "@nano.3V3", why: "The engine has no USB-serial chip. A serial source stands in for TXD and a steps source for DTR." },
+    { ref: "@nano.3V3", why: "It is the CH340G's 3.3 V output. The engine has no USB-serial chip, so the pin supplies nothing." },
     { ref: "@nano.A6", why: "The engine's atmega328p kind has the DIP's pins, with no ADC6 or ADC7 pad." },
     { ref: "@nano.A7", why: "The engine's atmega328p kind has the DIP's pins, with no ADC6 or ADC7 pad." },
-    { ref: "@nano.VIN", why: "No AMS1117 fit yet." },
+    { ref: "@nano.VIN", why: "It feeds the AMS1117, which has no model yet. The board runs from USB." },
   ],
 };
 

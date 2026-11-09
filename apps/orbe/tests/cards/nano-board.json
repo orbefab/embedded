@@ -37,7 +37,22 @@
   ],
   "license": "MIT OR Apache-2.0",
   "name": "nano-board",
-  "not_simulated": [],
+  "not_simulated": [
+    {
+      "pins": [
+        "3V3"
+      ],
+      "what": "3V3",
+      "why": "It is the CH340G's 3.3 V output. The engine has no USB-serial chip, so the pin supplies nothing."
+    },
+    {
+      "pins": [
+        "VIN"
+      ],
+      "what": "VIN",
+      "why": "It feeds the AMS1117, which has no model yet. The board runs from USB."
+    }
+  ],
   "params": [
     {
       "file": "hex",

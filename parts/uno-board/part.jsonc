@@ -342,5 +342,5 @@
     "IOREF": "power.2", "RESET": "power.3", "3V3": "power.4", "5V": "power.5", "VIN": "power.8",
     "A0": "ad.1", "A1": "ad.2", "A2": "ad.3", "A3": "ad.4", "A4": "ad.5", "A5": "ad.6",
   },
-  "not_simulated": [{ "what": "VIN", "pins": ["VIN"], "why": "VIN and the barrel jack are not simulated. The board runs from USB." }],
+  "not_simulated": [{ "what": "VIN", "pins": ["VIN"], "why": "The barrel jack feeds it. The board runs from USB." }],
 }

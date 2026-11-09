@@ -14,12 +14,14 @@ use crate::source::Span;
 use crate::syntax::Node;
 use crate::units::Unit;
 
+mod board;
 mod engine;
 mod lint;
 mod map;
 mod plug;
 mod view;
 
+pub use board::{BoardFacts, BoardLed, Gap, Supply, board_facts, one_part};
 pub use map::{Amount, EnginePart, MapPart, Reading, RefMap};
 pub use view::{Instance, PartData, PinWhy, Placement, View, Wire};
 
@@ -181,13 +183,19 @@ pub(crate) fn compile(
 /// writes no netlist, so its findings are left out.
 pub(crate) fn view_only(project: &Project) -> View {
     let mut out = Findings::default();
-    let mut circuit = Circuit::new(project, &mut out);
+    read_far(project, &mut out).view(None)
+}
+
+/// Instances, their pins, the joins inside each part, plugs, and which pins no simulated
+/// pin reaches. [`view_only`] and a board's facts both stop here.
+fn read_far<'p>(project: &'p Project<'p>, out: &'p mut Findings) -> Circuit<'p> {
+    let mut circuit = Circuit::new(project, out);
     circuit.instantiate(ROOT, Owner::Scene);
     circuit.make_pins();
     circuit.join_inside();
     circuit.plug();
     circuit.check_scene_wires(&project.scene);
-    circuit.view(None)
+    circuit
 }
 
 impl<'p> Circuit<'p> {

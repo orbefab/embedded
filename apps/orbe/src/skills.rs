@@ -1,8 +1,10 @@
 //! The skills this binary serves. Each is a markdown file compiled in. The `core` skill's
-//! parts section is rendered from the built-in catalog when it is printed, so it lists the
-//! parts `orbe add` can copy.
+//! parts section and the `arduino` skill's board section are rendered from the built-in
+//! catalog when a skill is printed.
 
-use orbe_scene::{Card, catalog_cards, param_sentence, si_amount};
+use std::collections::{BTreeMap, BTreeSet};
+
+use orbe_scene::{BoardFacts, Card, Gap, board_facts, catalog_cards, param_sentence, si_amount};
 
 pub struct Skill {
     pub name: &'static str,
@@ -34,8 +36,158 @@ pub fn names() -> String {
 }
 
 impl Skill {
-    pub fn text(&self) -> String {
-        self.text.replace(PARTS, &parts(&catalog_cards()))
+    pub fn text(&self) -> Result<String, String> {
+        fill_boards(&self.text.replace(PARTS, &parts(&catalog_cards())))
+    }
+}
+
+/// Replaces a `<!-- boards nano-board uno-board -->` marker with one block per named board.
+/// A skill with no marker is unchanged, so a board that does not read cannot break it.
+fn fill_boards(text: &str) -> Result<String, String> {
+    let Some(start) = text.find("<!-- boards") else {
+        return Ok(text.to_string());
+    };
+    let tail = &text[start..];
+    let Some(close) = tail.find("-->") else {
+        return Err("the boards marker does not close".into());
+    };
+    let body = tail["<!-- boards".len()..close].trim();
+    if body.is_empty() {
+        return Err("the boards marker names no board".into());
+    }
+    let ids: Vec<&str> = body.split_whitespace().collect();
+    let rendered = boards(&ids)?;
+    let mut out = String::with_capacity(text.len() + rendered.len());
+    out.push_str(&text[..start]);
+    out.push_str(&rendered);
+    out.push_str(&tail[close + 3..]);
+    Ok(out)
+}
+
+/// One heading and one list per board, from its part file: the chip and its clock, the pins
+/// that work, the pins the reader leaves unsimulated, and the L LED.
+fn boards(ids: &[&str]) -> Result<String, String> {
+    let mut blocks = Vec::with_capacity(ids.len());
+    for id in ids {
+        blocks.push(board_text(&board_facts(id)?));
+    }
+    Ok(blocks.join("\n"))
+}
+
+fn board_text(board: &BoardFacts) -> String {
+    let mut out = format!("### `{}`\n\n", board.id);
+    out.push_str(&format!(
+        "- `{}`, {}, runs the {} at {}.\n",
+        board.id,
+        board.title,
+        board.chip,
+        si_amount(board.clock_hz, "Hz"),
+    ));
+    out.push_str(&format!("- These pins work: {}.\n", pin_list(&board.works)));
+    for names in &board.same {
+        out.push_str(&format!("- {} are one net.\n", pin_list(names)));
+    }
+    for supply in &board.supplies {
+        out.push_str(&format!(
+            "- `{}` comes from `{}`, a {} regulator.\n",
+            supply.pin,
+            supply.from,
+            si_amount(supply.volts, "V"),
+        ));
+    }
+    for group in group_whys(&board.gaps) {
+        let names = pin_list(&group.0);
+        let verb = if group.0.len() == 1 { "is" } else { "are" };
+        let wire = if group.0.len() == 1 {
+            "A wire to it is a `not_simulated` error."
+        } else {
+            "A wire to one is a `not_simulated` error."
+        };
+        out.push_str(&format!(
+            "- {names} {verb} not simulated. {} {wire}\n",
+            group.1
+        ));
+    }
+    for led in &board.leds {
+        out.push_str(&format!(
+            "- `{}` drives `{}` through `{}`, {}.\n",
+            led.pin,
+            led.name,
+            led.resistor,
+            si_amount(led.ohms, "ohm"),
+        ));
+    }
+    out
+}
+
+/// Pins that share a reason, in the order the pins are listed.
+fn group_whys(gaps: &[Gap]) -> Vec<(Vec<String>, String)> {
+    let mut groups: Vec<(Vec<String>, String)> = Vec::new();
+    for gap in gaps {
+        if let Some(group) = groups.iter_mut().find(|group| group.1 == gap.why) {
+            group.0.push(gap.pin.clone());
+        } else {
+            groups.push((vec![gap.pin.clone()], gap.why.clone()));
+        }
+    }
+    groups
+}
+
+/// `` `D0` to `D13`, `RESET` and `5V` ``. A letter-and-number run of three or more with no
+/// gap inside it is one range.
+fn pin_list(names: &[String]) -> String {
+    let mut sets: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
+    for name in names {
+        if let Some((prefix, n)) = split_pin(name) {
+            sets.entry(prefix.to_string()).or_default().insert(n);
+        }
+    }
+    let mut items = Vec::new();
+    let mut seen = BTreeSet::new();
+    for name in names {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        if let Some((prefix, _)) = split_pin(name)
+            && let Some(set) = sets.get(prefix)
+            && set.len() >= 3
+            && run(set)
+        {
+            let start = set.iter().next().unwrap();
+            let end = set.iter().next_back().unwrap();
+            items.push(format!("`{prefix}{start}` to `{prefix}{end}`"));
+            for n in set {
+                seen.insert(format!("{prefix}{n}"));
+            }
+            continue;
+        }
+        items.push(format!("`{name}`"));
+    }
+    join_and(&items)
+}
+
+fn split_pin(name: &str) -> Option<(&str, u32)> {
+    let at = name.find(|c: char| c.is_ascii_digit())?;
+    let (prefix, rest) = name.split_at(at);
+    if prefix.is_empty() || !prefix.chars().all(|c| c.is_ascii_uppercase()) {
+        return None;
+    }
+    rest.parse().ok().map(|n| (prefix, n))
+}
+
+fn run(set: &BTreeSet<u32>) -> bool {
+    let (Some(&first), Some(&last)) = (set.iter().next(), set.iter().next_back()) else {
+        return false;
+    };
+    last - first + 1 == set.len() as u32
+}
+
+fn join_and(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [a, b] => format!("{a} and {b}"),
+        [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
     }
 }
 
@@ -276,7 +428,11 @@ mod tests {
     fn every_orbe_command_in_the_skills_and_the_stub_parses() {
         let stub = include_str!("../../../skills/orbe/SKILL.md");
         let mut seen = 0;
-        for text in SKILLS.iter().map(Skill::text).chain([stub.to_string()]) {
+        for text in SKILLS
+            .iter()
+            .map(|skill| skill.text().unwrap())
+            .chain([stub.to_string()])
+        {
             for line in command_lines(&text) {
                 check_line(&line);
                 seen += 1;
@@ -307,7 +463,7 @@ mod tests {
 
     #[test]
     fn the_limits_the_core_skill_states_are_this_binary_s() {
-        let core = find("core").unwrap().text();
+        let core = find("core").unwrap().text().unwrap();
         let says = |text: String| assert!(core.contains(&text), "core does not say `{text}`");
         says(format!("It lists at most {},", orbe_session::CHANGES));
         says(format!(
@@ -346,7 +502,7 @@ mod tests {
             "{}, {}, {}, {} or {}",
             states[0], states[1], states[2], states[3], states[4]
         );
-        let core = find("core").unwrap().text();
+        let core = find("core").unwrap().text().unwrap();
         assert!(core.contains(&listed), "core does not list {listed}");
     }
 
@@ -435,7 +591,7 @@ mod tests {
             .chain(scene.into_iter().map(|code| code.as_str()))
             .chain(added.into_iter().map(add))
             .collect();
-        let core = find("core").unwrap().text();
+        let core = find("core").unwrap().text().unwrap();
         let table = table_in(&core, "## Errors");
         assert!(table.len() > 10, "{} rows", table.len());
         let mut listed = std::collections::BTreeSet::new();
@@ -484,7 +640,7 @@ mod tests {
         ]
         .map(code)
         .into();
-        let core = find("core").unwrap().text();
+        let core = find("core").unwrap().text().unwrap();
         let listed: Vec<&str> = table_in(&core, "## Warnings")
             .into_iter()
             .filter_map(|row| row.split('`').nth(1))
@@ -498,9 +654,133 @@ mod tests {
         );
     }
 
+    /// Each board pin the reader leaves unsimulated, with the reason it gives, is in that
+    /// board's own list. The chip's catalog number and the L LED are too.
+    #[test]
+    fn the_arduino_skill_names_every_pin_a_board_leaves_unsimulated() {
+        let skill = find("arduino").unwrap();
+        let text = skill.text().unwrap();
+        assert!(!text.contains("<!-- boards"));
+        let ids = marker_ids(skill.text);
+        assert!(ids.len() >= 2, "{ids:?}");
+        for id in &ids {
+            let block = section(&text, id);
+            let bullets = bullet_list(block);
+            assert!(
+                bullets.iter().any(|line| line.contains("These pins work")),
+                "{id} list:\n{}",
+                bullets.join("\n")
+            );
+            assert!(
+                bullets
+                    .iter()
+                    .any(|line| line.contains("`led_l`") && line.contains("`r_l`")),
+                "{id} omits the L LED from its list"
+            );
+            let view = drawn(id);
+            let pins: Vec<_> = view
+                .not_simulated
+                .iter()
+                .filter(|pin| pin.r#ref.chars().filter(|c| *c == '.').count() == 1)
+                .collect();
+            assert!(!pins.is_empty(), "{id} reports no unsimulated pin");
+            let missing: Vec<String> = pins
+                .iter()
+                .filter(|pin| {
+                    let name = pin.r#ref.rsplit('.').next().unwrap();
+                    !bullets
+                        .iter()
+                        .any(|line| line.contains(&format!("`{name}`")) && line.contains(&pin.why))
+                })
+                .map(|pin| format!("{}: {}", pin.r#ref, pin.why))
+                .collect();
+            assert!(missing.is_empty(), "{id} omits {missing:#?}");
+            let board = orbe_scene::card(id).unwrap();
+            let chip = board
+                .uses
+                .keys()
+                .find(|used| used.starts_with("atmega328p"))
+                .unwrap();
+            let number = orbe_scene::card(chip).unwrap().real.number.unwrap();
+            assert!(block.contains(&number), "{id} omits {number}");
+        }
+    }
+
+    #[test]
+    fn a_board_the_marker_names_that_is_not_an_avr_board_is_an_error() {
+        let err = fill_boards("<!-- boards resistor-0603 -->\n").unwrap_err();
+        assert!(err.contains("resistor-0603"), "{err}");
+    }
+
+    #[test]
+    fn a_board_the_marker_names_that_does_not_read_is_an_error() {
+        let err = fill_boards("<!-- boards not-a-board -->\n").unwrap_err();
+        assert!(err.contains("not-a-board"), "{err}");
+    }
+
+    #[test]
+    fn a_boards_marker_that_names_nothing_is_an_error() {
+        let err = fill_boards("<!-- boards -->\n").unwrap_err();
+        assert!(err.contains("names no board"), "{err}");
+    }
+
+    #[test]
+    fn a_boards_marker_that_does_not_close_is_an_error() {
+        let err = fill_boards("<!-- boards nano-board").unwrap_err();
+        assert!(err.contains("does not close"), "{err}");
+    }
+
+    fn marker_ids(raw: &str) -> Vec<String> {
+        let start = raw
+            .find("<!-- boards")
+            .expect("the skill has a boards marker");
+        let tail = &raw[start..];
+        let close = tail.find("-->").expect("the boards marker closes");
+        tail["<!-- boards".len()..close]
+            .split_whitespace()
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn section<'a>(text: &'a str, id: &str) -> &'a str {
+        let head = format!("### `{id}`\n");
+        let start = text
+            .find(&head)
+            .unwrap_or_else(|| panic!("{id} has no section"));
+        let from = &text[start..];
+        let end = from[head.len()..]
+            .find("\n### ")
+            .map(|at| head.len() + at)
+            .unwrap_or(from.len());
+        &from[..end]
+    }
+
+    fn bullet_list(section: &str) -> Vec<&str> {
+        section
+            .lines()
+            .skip_while(|line| !line.starts_with("- "))
+            .take_while(|line| line.starts_with("- "))
+            .collect()
+    }
+
+    fn drawn(id: &str) -> orbe_scene::View {
+        orbe_scene::view(&orbe_scene::one_part(id), Path::new("scene.jsonc")).unwrap_or_else(
+            |found| {
+                panic!(
+                    "{id}: {}",
+                    found
+                        .iter()
+                        .map(|d| d.to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )
+            },
+        )
+    }
+
     #[test]
     fn the_core_skill_lists_every_catalog_part() {
-        let text = find("core").unwrap().text();
+        let text = find("core").unwrap().text().unwrap();
         assert!(!text.contains(PARTS));
         for part in catalog_cards() {
             assert!(text.contains(&format!("`{}`", part.name)), "{}", part.name);

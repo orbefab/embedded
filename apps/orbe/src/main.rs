@@ -688,12 +688,24 @@ fn print_skill(command: SkillsCommand) -> ExitCode {
                 }
                 return ExitCode::from(USAGE);
             };
+            let text = match skill.text() {
+                Ok(text) => text,
+                Err(message) => {
+                    if json {
+                        print_json(&json!({
+                            "ok": false,
+                            "error": { "code": "skill", "message": message }
+                        }));
+                    } else {
+                        eprintln!("error[skill]: {message}");
+                    }
+                    return ExitCode::from(FAILED);
+                }
+            };
             if json {
-                print_json(
-                    &json!({ "ok": true, "data": { "name": skill.name, "text": skill.text() } }),
-                );
+                print_json(&json!({ "ok": true, "data": { "name": skill.name, "text": text } }));
             } else {
-                print!("{}", skill.text());
+                print!("{text}");
             }
         }
     }
