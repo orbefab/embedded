@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Orbefab. SPDX-License-Identifier: MIT OR Apache-2.0
-"""Through-hole part pieces: leads, bent axial leads, a socket liner, a round LED body and TO-92.
+"""Through-hole part pieces: leads, bent axial leads, a socket liner, a round LED body, TO-92 and TO-220.
 
 Every part built from these sits on its seating plane: the board's or
 breadboard's top on z = 0, leads down -Z.
@@ -80,3 +80,32 @@ def to92(names, width=4.58, thick=3.6, height=4.58, lead=0.46, pitch=1.27, below
         for k, name in enumerate(names)
     }
     return body, leads
+
+
+def to220(
+    names,
+    body=(10.0, 4.5, 9.15),
+    tab=(10.0, 1.3, 6.5),
+    hole=(3.7, 2.8),
+    lead=(0.8, 0.5),
+    pitch=2.54,
+    below=13.0,
+):
+    """TO-220 standing up: the plastic's face toward -Y, the tab's back flush
+    with the body's at +Y, the hole through the tab; leads along X, names from
+    -X seen from the face: (body, tab, {name: lead})."""
+    bx, by, bh = body
+    tx, tt, th = tab
+    hd, hole_down = hole
+    y_back = by / 2.0
+    plastic = box(0, 0, bh / 2.0, bx, by, bh)
+    metal = box(0, y_back - tt / 2.0, bh + th / 2.0, tx, tt, th)
+    hz = bh + th - hole_down
+    metal -= bd.Pos(0, y_back - tt / 2.0, hz) * bd.Rot(90, 0, 0) * bd.Cylinder(hd / 2.0, tt + 1.0)
+    lw, lt = lead
+    n = len(names)
+    leads = {
+        name: square_lead((k - (n - 1) / 2.0) * pitch, y_back - tt / 2.0 - 0.6, -below, 0.0, lw, lt)
+        for k, name in enumerate(names)
+    }
+    return plastic, metal, leads
