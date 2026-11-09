@@ -37,11 +37,13 @@ check() {
   missing=$(LC_ALL=C comm -13 <(echo "$present") <(listed | LC_ALL=C sort))
   if [[ -n $unlisted ]]; then
     echo "brand: files in packages/brand/website that website.sha256 does not list:" >&2
+    # shellcheck disable=SC2001 # indent
     echo "$unlisted" | sed 's/^/  /' >&2
     failed=1
   fi
   if [[ -n $missing ]]; then
     echo "brand: files website.sha256 lists that packages/brand/website lacks:" >&2
+    # shellcheck disable=SC2001 # indent
     echo "$missing" | sed 's/^/  /' >&2
     failed=1
   fi
