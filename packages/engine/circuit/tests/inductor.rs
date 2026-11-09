@@ -96,8 +96,9 @@ fn a_net_reached_only_through_an_inductor_has_a_dc_path() {
 
 /// `inductor-open-end` is an 0805 coil, 10 uH and 0.5 ohm, from a 5 V rail with no capacitor
 /// into a net that draws nothing, the way an Uno's L2 feeds AVCC. A switch loads the rail with
-/// an LED from 1 ms to 3 ms. ngspice-42 takes 80 points on its reference deck with the step cap
-/// removed, t = 0 included, and 116 at reltol=1e-9. The engine is held to 1.5 times the 80.
+/// an LED from 1 ms to 3 ms. ngspice-42 accepts 76 timepoints on its reference deck run with
+/// the print step and the step cap both at the stop, and 106 at reltol=1e-9. The engine is held
+/// to 1.5 times the 76.
 #[test]
 fn a_coil_into_an_open_net_steps_about_as_often_as_ngspice() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -110,7 +111,7 @@ fn a_coil_into_an_open_net_steps_about_as_often_as_ngspice() {
         "{:?}",
         results.diagnostics()
     );
-    let bound = 80 * 3 / 2;
+    let bound = 76 * 3 / 2;
     assert!(
         stats.landings <= bound,
         "{} steps, bound {bound}",
