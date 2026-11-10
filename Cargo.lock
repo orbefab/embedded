@@ -754,6 +754,13 @@ name = "orbe-avr"
 version = "0.1.0"
 
 [[package]]
+name = "orbe-device-check"
+version = "0.1.0"
+dependencies = [
+ "orbe-model",
+]
+
+[[package]]
 name = "orbe-engine"
 version = "0.1.0"
 dependencies = [

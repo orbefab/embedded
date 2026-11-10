@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Checks the repo. `fast` is what CI runs: shellcheck on every tracked shell script, ruff on every
-# tracked Python file, rustfmt, clippy, clippy on orbe-scene, orbe-session and orbe-wasm for wasm32,
-# `scripts/core-deps.sh`, and the Rust tests through cargo-nextest, except the `orbe-microchip`
-# tests and the engine tests marked `full tier`. `orbe-avr` is in that workspace run.
+# tracked Python file, rustfmt, clippy, clippy on orbe-model, orbe-scene, orbe-session and
+# orbe-wasm for wasm32, `scripts/core-deps.sh`, and the Rust tests through cargo-nextest, except
+# the `orbe-microchip` tests and the engine tests marked `full tier`. `orbe-avr` is in that
+# workspace run.
 # `full` runs those too, then the chip models' skip checks, the engine's Python checks, `orbe-run`
 # for WASI against native, the wasm package check, and the browser speed check on the package that
 # check built. Both need uv, shellcheck and cargo-nextest. `full` also needs ngspice-42, node 24
@@ -60,8 +61,8 @@ fast() {
   cargo clippy --workspace --all-targets --locked -- -D warnings
   cargo clippy -p orbe-engine --all-targets --locked --features runner -- -D warnings
   cargo clippy -p orbe-microchip --all-targets --locked --features port-skip-check -- -D warnings
-  cargo clippy -p orbe-scene -p orbe-session -p orbe-wasm --target wasm32-unknown-unknown --locked \
-    -- -D warnings
+  cargo clippy -p orbe-model -p orbe-scene -p orbe-session -p orbe-wasm \
+    --target wasm32-unknown-unknown --locked -- -D warnings
   rust_tests --workspace --exclude orbe-microchip
 }
 
