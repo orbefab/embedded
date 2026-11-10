@@ -8,7 +8,7 @@ use crate::common;
 use common::Instructions;
 use common::{ldi as imm, lds, out, sts};
 
-use orbe_avr::{Cpu, Level, PIN_QUEUE_CAP};
+use orbe_microchip::{Cpu, Level, PIN_QUEUE_CAP};
 
 fn nop_sled(n: usize) -> Vec<u16> {
     vec![0x0000; n]

@@ -2,7 +2,7 @@
 
 use crate::common::{Instructions, UCSR0B, UDR0, cbi, in_io, ldi, lds, out, sbi, spin, sts};
 
-use orbe_avr::{Channel, Cpu, Halt, Level, PinDrive, Timeline};
+use orbe_microchip::{Channel, Cpu, Halt, Level, PinDrive, Timeline};
 
 const PINB: u16 = 0x03;
 const DDRB: u16 = 0x04;
@@ -884,7 +884,7 @@ fn image(path: &str) -> Cpu {
         "{}/../../engine/tests/firmware/{path}.hex",
         env!("CARGO_MANIFEST_DIR")
     );
-    let image = orbe_avr::parse_hex(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let image = orbe_microchip::parse_hex(&std::fs::read_to_string(path).unwrap()).unwrap();
     let mut cpu = Cpu::new();
     cpu.load_image(&image).unwrap();
     cpu
@@ -918,7 +918,7 @@ fn a_clone_from_across_runs_leaves_the_state_a_clone_does() {
         let mut cpu = cpu(&every_register());
         cpu.set_voltage(PD6, 3.0);
         cpu.set_voltage(PD7, 1.0);
-        let clock = orbe_avr::SpiClock {
+        let clock = orbe_microchip::SpiClock {
             period: 8,
             mode: 0,
             lsb_first: false,
@@ -938,7 +938,11 @@ fn a_clone_from_across_runs_leaves_the_state_a_clone_does() {
     let mut slow = cpu(&every_queue());
     slow.set_clock_hz(8_000_000);
     slow.set_vcc(3.3);
-    slow.set_host_serial(Channel::Usart0, 9_600, orbe_avr::SerialFrame::EIGHT_N_1);
+    slow.set_host_serial(
+        Channel::Usart0,
+        9_600,
+        orbe_microchip::SerialFrame::EIGHT_N_1,
+    );
     let mut slow = ran(slow, 2 * MS, &ARMED);
     slow.set_brown_out(true);
     while slow.run_until(3 * MS).is_some() {}

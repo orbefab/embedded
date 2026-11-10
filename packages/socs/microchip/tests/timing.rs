@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use orbe_avr::{Cpu, Level, PIN_QUEUE_CAP, Port, parse_hex};
+use orbe_microchip::{Cpu, Level, PIN_QUEUE_CAP, Port, parse_hex};
 
 use Read::*;
 

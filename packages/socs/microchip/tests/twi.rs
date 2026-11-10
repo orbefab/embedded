@@ -5,7 +5,7 @@
 //! launches the phase on that cycle. A [`Peer`] holds the bus high, answers as a target, and
 //! records each bus edge.
 
-use orbe_avr::{Cpu, FuseBytes, I2cNote, Level, Port, ResetKind, test_hooks};
+use orbe_microchip::{Cpu, FuseBytes, I2cNote, Level, Port, ResetKind, test_hooks};
 
 use crate::common;
 use crate::common::i2c::{Edge, Line, Peer, SCL, SDA};

@@ -13,7 +13,7 @@ use crate::common::runs::{
 use crate::common::{
     UCSR0B, UDR0, brbc, brbs, imm, in_io, ldi, lds, out, rr, sbi, sbic, sbis, sbrc, sbrs, sts,
 };
-use orbe_avr::{Cpu, Level, Port, SupplyChannel};
+use orbe_microchip::{Cpu, Level, Port, SupplyChannel};
 
 const TCCR0B: u16 = 0x25;
 const TCNT0: u16 = 0x26;

@@ -1,6 +1,6 @@
 # ATmega328P core
 
-`packages/socs/avr`, package `orbe-avr`, is a cycle-counted model of the ATmega328P. `orbe-engine` holds it behind the active chip seam, and each `atmega328p` part of a netlist runs one. It has no dependencies.
+`packages/socs/microchip`, package `orbe-microchip`, is a cycle-counted model of the ATmega328P. `orbe-engine` holds it behind the active chip seam, and each `atmega328p` part of a netlist runs one. It has no dependencies.
 
 The sources are two documents. DS40002061B is the datasheet, written DS here. DS40002198B is the instruction set manual, written ISM, and its AVRe column gives the cycle counts. A comment in the crate cites one of them, by section, table, or figure.
 
@@ -152,13 +152,13 @@ Parse keeps only the fuse settings the model runs, and [netlist.md](netlist.md#a
 
 ## The timing set
 
-`packages/socs/avr/tests/timing.rs` is the pass test. Thirty-nine programs written for it are in `tests/timing/asm`, and `tests/timing/hex` holds their builds for the ATmega328P, with no start files or libraries. The header of `timing.rs` gives the command that builds them, and every committed image is byte-identical to a fresh build of its source. Each program marks time with `out PORTB`, which drives the pin on the edge that ends the `out` (Figure 14-4). The test runs each image, reads the pin edges, and checks each row against the value the documents give. The rows cover instruction cycles, pin writes, interrupt entry and return, Timer0 and Timer1 overflow periods, CTC and fast-PWM waveforms with OCR0A at 0, 1, 99, and 0xFF, the compare-to-overflow lag, and clock-select timing. The timing set does not row-check phase-correct PWM, and `packages/socs/avr/tests/timers.rs` and `packages/engine/tests/circuit/runs/fade.rs` do.
+`packages/socs/microchip/tests/timing.rs` is the pass test. Thirty-nine programs written for it are in `tests/timing/asm`, and `tests/timing/hex` holds their builds for the ATmega328P, with no start files or libraries. The header of `timing.rs` gives the command that builds them, and every committed image is byte-identical to a fresh build of its source. Each program marks time with `out PORTB`, which drives the pin on the edge that ends the `out` (Figure 14-4). The test runs each image, reads the pin edges, and checks each row against the value the documents give. The rows cover instruction cycles, pin writes, interrupt entry and return, Timer0 and Timer1 overflow periods, CTC and fast-PWM waveforms with OCR0A at 0, 1, 99, and 0xFF, the compare-to-overflow lag, and clock-select timing. The timing set does not row-check phase-correct PWM, and `packages/socs/microchip/tests/timers.rs` and `packages/engine/tests/circuit/runs/fade.rs` do.
 
 Every row carries its citation and is exact. There are 107 rows. The interrupt periods and the compare-to-interrupt lags are worked out from each program's loop phase under parameter 2, in `IsrLoop`. A model change that moves a row fails the suite, and a row's expected value moves only when the document reading behind it does.
 
 ## Throughput
 
-`packages/socs/avr/examples/throughput.rs` times one hex image on the chip. Run `cargo run --release -p orbe-avr --example throughput`.
+`packages/socs/microchip/examples/throughput.rs` times one hex image on the chip. Run `cargo run --release -p orbe-microchip --example throughput`.
 
 With no arguments the example loads `blocks/nano-led-fade/firmware/fade.hex`, found from the crate directory. The default cycle count is 16,000,000, one second at the 16 MHz clock `Cpu::new` uses. Pass a hex path, then a cycle count, to time another image or a longer run. A path you pass is relative to the current directory. The run stops on the instruction that crosses the cycle count, and the printed count is the median run's actual cycles.
 
@@ -174,7 +174,7 @@ Every other test runs firmware written in assembly for the repo. `packages/engin
 
 `packages/engine/scripts/sketches.sh TOOLS_DIR` rebuilds every image. It pins a GCC 7.3.0 toolchain for Linux x86-64 and the runtime's 1.8.6 release by URL and SHA-256, fetches each archive once, and unpacks it under `TOOLS_DIR`. A rebuild is byte-identical to the committed hex. The engine and its tests read only the hex, so neither needs the toolchain. `packages/engine/tests/firmware/sketch/NOTICE` gives the runtime's license and its source.
 
-`packages/socs/avr/tests/sketches.rs` runs each image on the bare core and checks what a user would see on the pins, with every expected time worked out from the runtime's own timer and USART setup.
+`packages/socs/microchip/tests/sketches.rs` runs each image on the bare core and checks what a user would see on the pins, with every expected time worked out from the runtime's own timer and USART setup.
 
 - `blink` holds PB5 high and low for `delay(1000)` each, 16e6 cycles to within one 4 us `micros()` step and the code around it.
 - `blink_without_delay` toggles PB5 at the Timer0 overflow where `millis()` reaches each second. An overflow is 1.024 ms, and `millis()` carries the 24 us remainder as a fraction, so it reaches 1000 at overflow 977, 2000 at 1954, and 3000 at 2930.
@@ -185,4 +185,4 @@ Every other test runs firmware written in assembly for the repo. `packages/engin
 - `tone` plays `tone(8, 440, 500)` once a second. Timer2 runs CTC at /128 with `OCR2A` = 141, and the compare ISR toggles PB0 440 times, each within 128 cycles of an 18176-cycle grid.
 - `ws2812` bit-bangs PB0 for 13 LEDs and then holds the pin low. A 0 is high for 5 cycles and low for 15, and a 1 is high for 10 and low for 10, which sits in the WS2812E-1313 windows. `packages/engine/tests/circuit/runs/ws2812.rs` checks the colours. The bare-core tests above do not decode the chain.
 
-The timing windows are hundreds of cycles wide, and the serial tests also check frame spacing to the cycle. They catch a wrong timer, prescaler, `millis()` or baud, which moves an edge by hundreds to thousands of cycles. An interrupt entry one cycle late moves edges a few dozen cycles and stays inside the windows. The unit tests in `packages/socs/avr/src/irq.rs` and the `oc_pin`, `system`, `timeline`, `timers` and `timing` suites in `packages/socs/avr/tests` are cycle-exact and catch that.
+The timing windows are hundreds of cycles wide, and the serial tests also check frame spacing to the cycle. They catch a wrong timer, prescaler, `millis()` or baud, which moves an edge by hundreds to thousands of cycles. An interrupt entry one cycle late moves edges a few dozen cycles and stays inside the windows. The unit tests in `packages/socs/microchip/src/irq.rs` and the `oc_pin`, `system`, `timeline`, `timers` and `timing` suites in `packages/socs/microchip/tests` are cycle-exact and catch that.

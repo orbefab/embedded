@@ -9,7 +9,7 @@ use crate::common;
 use common::Instructions;
 use common::{DDRB, PORTB, clock_spi, in_io, ldi, out, spin, sts};
 
-use orbe_avr::{Channel, Cpu, Level, PinOrigin, Port, SpiClock, SupplyChannel};
+use orbe_microchip::{Channel, Cpu, Level, PinOrigin, Port, SpiClock, SupplyChannel};
 
 const SPCR: u16 = 0x004C;
 const SPSR: u16 = 0x004D;

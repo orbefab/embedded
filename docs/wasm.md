@@ -127,4 +127,4 @@ Every Block runs 5 times in each mode, interleaved: run 1 of every Block and mod
 
 On the build machine, 12 threads at a load average under 2, the medians of three whole checks moved by at most 4%, and the runs inside one check by at most 9% from their median. A 1 s span gave the same medians within 1.5%, with wider spreads.
 
-`--profile BLOCK` instead runs BLOCK once on the main thread at 4x with Chrome's sampling profiler at 100 µs over the timed span, and prints the 15 functions with the most self time, as a share of the samples. Wasm functions carry their Rust names, so the profile names engine code such as `<orbe_avr::cpu::Cpu>::run`.
+`--profile BLOCK` instead runs BLOCK once on the main thread at 4x with Chrome's sampling profiler at 100 µs over the timed span, and prints the 15 functions with the most self time, as a share of the samples. Wasm functions carry their Rust names, so the profile names engine code such as `<orbe_microchip::cpu::Cpu>::run`.

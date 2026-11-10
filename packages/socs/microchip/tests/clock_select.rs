@@ -9,7 +9,7 @@
 use crate::common;
 use common::Instructions;
 use common::{TCCR0B, TCNT0, TIFR0, ldi, out, sts};
-use orbe_avr::{Cpu, Level};
+use orbe_microchip::{Cpu, Level};
 
 const TCCR0A: u16 = 0x0044;
 const TCNT1L: u16 = 0x0084;

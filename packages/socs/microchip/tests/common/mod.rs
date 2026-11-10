@@ -107,13 +107,13 @@ pub fn spin() -> u16 {
 }
 
 /// One `LDS` into r17.
-pub fn read_reg(cpu: &mut orbe_avr::Cpu, addr: u16) -> u8 {
+pub fn read_reg(cpu: &mut orbe_microchip::Cpu, addr: u16) -> u8 {
     cpu.load_words(&lds(17, addr));
     cpu.insns(1);
     cpu.reg(17)
 }
 
-/// Run `n` instructions via [`orbe_avr::Cpu::step`].
+/// Run `n` instructions via [`orbe_microchip::Cpu::step`].
 ///
 /// One `step` is one instruction while the core can fetch.
 pub trait Instructions {
@@ -124,7 +124,11 @@ pub trait Instructions {
 ///
 /// An empty `bytes`, or a transfer already active, returns an empty vec and
 /// does not run.
-pub fn clock_spi(cpu: &mut orbe_avr::Cpu, bytes: &[u8], clock: orbe_avr::SpiClock) -> Vec<u8> {
+pub fn clock_spi(
+    cpu: &mut orbe_microchip::Cpu,
+    bytes: &[u8],
+    clock: orbe_microchip::SpiClock,
+) -> Vec<u8> {
     let start = cpu.cycles();
     if !cpu.queue_spi_master(start, bytes, clock) {
         return Vec::new();
@@ -133,13 +137,13 @@ pub fn clock_spi(cpu: &mut orbe_avr::Cpu, bytes: &[u8], clock: orbe_avr::SpiCloc
     let end = start + (bytes.len() as u64) * 16 * half + 1;
     cpu.run_until(end.saturating_add(1));
     let mut out = Vec::new();
-    while let Some((byte, _)) = cpu.take(orbe_avr::Channel::SpiHostMaster) {
+    while let Some((byte, _)) = cpu.take(orbe_microchip::Channel::SpiHostMaster) {
         out.push(byte);
     }
     out
 }
 
-impl Instructions for orbe_avr::Cpu {
+impl Instructions for orbe_microchip::Cpu {
     fn insns(&mut self, n: u32) {
         for _ in 0..n {
             if self.is_stopped() {

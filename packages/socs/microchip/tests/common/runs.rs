@@ -1,7 +1,7 @@
 //! The reference for the run tests: `run_until` and `run_to_news` against a loop of single
 //! `Cpu::step` calls, compared on every state the host can read.
 
-use orbe_avr::{Channel, Cpu, I2cStamp, PinReport, Sent};
+use orbe_microchip::{Channel, Cpu, I2cStamp, PinReport, Sent};
 
 pub const MAIN: usize = 0x34;
 

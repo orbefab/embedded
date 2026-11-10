@@ -9,7 +9,7 @@ use crate::common::runs::{
     MAIN, NOP, RETI, SEI, image, inc, matches_stepping, rjmp, seen, step_until,
 };
 use crate::common::{brbc, imm, in_io, ldi, out, rr, sbiw, sts};
-use orbe_avr::Cpu;
+use orbe_microchip::Cpu;
 use std::panic;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;

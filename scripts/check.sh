@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Checks the repo. `fast` is what CI runs: shellcheck on every tracked shell script, ruff on every
 # tracked Python file, rustfmt, clippy, clippy on orbe-scene, orbe-session and orbe-wasm for wasm32,
-# and the Rust tests through cargo-nextest, except the `orbe-avr` tests and the engine tests marked
-# `full tier`.
+# and the Rust tests through cargo-nextest, except the `orbe-microchip` tests and the engine tests
+# marked `full tier`.
 # `full` runs those too, then the chip models' skip checks, the engine's Python checks, `orbe-run`
 # for WASI against native, the wasm package check, and the browser speed check on the package that
 # check built. Both need uv, shellcheck and cargo-nextest. `full` also needs ngspice-42, node 24
@@ -58,10 +58,10 @@ fast() {
   blobs=$(packages/engine/scripts/blobs.sh)
   cargo clippy --workspace --all-targets --locked -- -D warnings
   cargo clippy -p orbe-engine --all-targets --locked --features runner -- -D warnings
-  cargo clippy -p orbe-avr --all-targets --locked --features port-skip-check -- -D warnings
+  cargo clippy -p orbe-microchip --all-targets --locked --features port-skip-check -- -D warnings
   cargo clippy -p orbe-scene -p orbe-session -p orbe-wasm --target wasm32-unknown-unknown --locked \
     -- -D warnings
-  rust_tests --workspace --exclude orbe-avr
+  rust_tests --workspace --exclude orbe-microchip
 }
 
 run_check() {
@@ -77,7 +77,7 @@ run_check() {
 
 full() {
   fast
-  rust_tests -p orbe-avr --features port-skip-check
+  rust_tests -p orbe-microchip --features port-skip-check
   rust_tests -p orbe-engine --test circuit --run-ignored only
   cargo clippy -p orbe-xtensa -p orbe-espressif -p orbe-engine --all-targets --locked \
     --features orbe-xtensa/poll-skip-check -- -D warnings

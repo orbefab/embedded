@@ -10,7 +10,7 @@ use crate::common;
 use common::Instructions;
 use common::{UCSR0B, UDR0, ldi, lds, spin, sts};
 
-use orbe_avr::{Channel, Cpu, Level, SupplyChannel};
+use orbe_microchip::{Channel, Cpu, Level, SupplyChannel};
 
 const UCSR0A: u16 = 0x00C0;
 const UCSR0C: u16 = 0x00C2;

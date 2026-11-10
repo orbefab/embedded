@@ -5,7 +5,7 @@ use crate::netlist::Netlist;
 
 use crate::diagnostic::Severity;
 
-use orbe_avr::{FuseBytes, Port};
+use orbe_microchip::{FuseBytes, Port};
 
 use super::active::{
     NS, US, after, at, capacitor, circuit, resistor, restarted, run_active, scripted, volts,

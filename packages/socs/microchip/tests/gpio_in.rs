@@ -8,7 +8,7 @@ use crate::common;
 use common::Instructions;
 use common::{PINB, TCCR0B, TCNT0, TIFR1, imm, in_io, ldi, lds, out, sbi, sts};
 
-use orbe_avr::{Cpu, FuseBytes, Level};
+use orbe_microchip::{Cpu, FuseBytes, Level};
 
 const DDRD: u16 = 0x002A;
 const PORTD: u16 = 0x002B;
@@ -343,7 +343,7 @@ fn each_328p_pcint_group_sets_its_own_flag() {
 fn edges_wait_while_the_io_clock_is_stopped() {
     let mut cpu = Cpu::new();
     arm_int0(&mut cpu, 0x03);
-    orbe_avr::test_hooks::set_io_clock_running(&mut cpu, false);
+    orbe_microchip::test_hooks::set_io_clock_running(&mut cpu, false);
     cpu.drive_pin(18, Level::High);
     cpu.load_words(&nops(4));
     cpu.insns(4);
@@ -352,7 +352,7 @@ fn edges_wait_while_the_io_clock_is_stopped() {
         0,
         "no edge flag while clkI/O is stopped"
     );
-    orbe_avr::test_hooks::set_io_clock_running(&mut cpu, true);
+    orbe_microchip::test_hooks::set_io_clock_running(&mut cpu, true);
     cpu.drive_pin(18, Level::Low);
     cpu.load_words(&nops(1));
     cpu.insns(1);
@@ -703,14 +703,14 @@ fn a_stopped_sample_keeps_the_level_and_sets_no_flag() {
     cpu.drive_pin(18, Level::High);
     cpu.load_words(&nops(8));
     cpu.run_until(1);
-    orbe_avr::test_hooks::set_io_clock_running(&mut cpu, false);
+    orbe_microchip::test_hooks::set_io_clock_running(&mut cpu, false);
     cpu.run_until(4);
     assert_eq!(
         cpu.peek(EIFR) & 1,
         0,
         "INTF0 stays clear through the sample"
     );
-    orbe_avr::test_hooks::set_io_clock_running(&mut cpu, true);
+    orbe_microchip::test_hooks::set_io_clock_running(&mut cpu, true);
     let at = cpu.cycles();
     cpu.drive_pin(18, Level::Low);
     cpu.run_until(at + 1);
@@ -727,10 +727,10 @@ fn a_stopped_sample_keeps_the_level_and_sets_no_flag() {
     let at = low.cycles();
     low.drive_pin(18, Level::Low);
     low.run_until(at + 1);
-    orbe_avr::test_hooks::set_io_clock_running(&mut low, false);
+    orbe_microchip::test_hooks::set_io_clock_running(&mut low, false);
     low.run_until(at + 4);
     assert_eq!(low.peek(EIFR) & 1, 0, "low level has no flag");
-    orbe_avr::test_hooks::set_io_clock_running(&mut low, true);
+    orbe_microchip::test_hooks::set_io_clock_running(&mut low, true);
     low.set_sreg(0x80);
     low.load_words(&[0xCFFF]);
     low.insns(1);
@@ -746,7 +746,7 @@ fn a_queued_edge_does_not_flag_after_the_io_clock_stops() {
     cpu.drive_pin(18, Level::High);
     cpu.load_words(&nops(8));
     cpu.run_until(1);
-    orbe_avr::test_hooks::set_io_clock_running(&mut cpu, false);
+    orbe_microchip::test_hooks::set_io_clock_running(&mut cpu, false);
     cpu.run_until(4);
     assert_eq!(
         cpu.peek(EIFR) & 1,
