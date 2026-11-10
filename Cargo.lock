@@ -750,6 +750,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbe-avr"
+version = "0.1.0"
+
+[[package]]
 name = "orbe-engine"
 version = "0.1.0"
 dependencies = [
@@ -776,6 +780,9 @@ dependencies = [
 [[package]]
 name = "orbe-microchip"
 version = "0.1.0"
+dependencies = [
+ "orbe-avr",
+]
 
 [[package]]
 name = "orbe-registry"

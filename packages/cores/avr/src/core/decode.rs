@@ -4,7 +4,7 @@
 //! address in the word.
 
 use super::execute::{Ptr, Update};
-use crate::bus::IO_BASE;
+use crate::IO_BASE;
 
 /// One instruction with its operands extracted. A target is the absolute word address. `skip` is
 /// the length, in words, of the instruction a skip passes over. `Countdown` is the `BRNE` that
@@ -539,16 +539,13 @@ fn bitop(word: u16, skip: u8) -> Option<Op> {
 mod tests {
     use std::sync::Arc;
 
+    use super::super::check::{BusCall, FNV_OFFSET, INITIAL_SP, MASK, Mem, Rig};
+    use super::super::execute::{Ptr, Update};
     use super::{Op, decode, table};
-    use crate::bus::Bus;
-    use crate::chip::RAMEND;
-    use crate::core::Core;
-    use crate::core::check::{FNV_OFFSET, MASK, Rig};
-    use crate::core::execute::{Ptr, Update};
+    use crate::{Bus, Core};
 
-    /// Two little-endian bytes for each word, folded from every run of it in [`Rig::cases`].
-    /// `record_the_effects` writes them. They were first recorded when every run matched the
-    /// decode chain this table replaced.
+    /// Two little-endian bytes for each word, folded from every run of it in [`Rig::cases`]
+    /// on the flat [`Mem`] bus. `record_the_effects` writes them.
     const RECORDED: &[u8] = include_bytes!("effects.bin");
 
     fn fingerprint(rig: &mut Rig, swept: u16) -> u16 {
@@ -918,10 +915,10 @@ mod tests {
         );
         let oversized = vec![0x0000; usize::from(MASK) + 9];
         assert_eq!(table(&oversized, MASK).len(), usize::from(MASK) + 1);
-        let mut core = Core::new(RAMEND, MASK);
+        let mut core = Core::new(INITIAL_SP, MASK);
         core.load_words(&[0x0000]);
         core.pc = 5;
-        let mut bus = Bus::new();
+        let mut bus = Mem::new();
         core.step(&mut bus);
         assert_eq!((core.pc, core.cycles), (6, 1));
     }
@@ -978,7 +975,7 @@ mod tests {
     /// Starts at the `BRNE` with `counter` already in the loop's registers. The jump leaves the
     /// last pass that keeps the counter above zero still to run.
     fn jumped(words: &[u16], counter: u64, k: u64) {
-        let mut core = Core::new(RAMEND, MASK);
+        let mut core = Core::new(INITIAL_SP, MASK);
         core.load_words(words);
         let at = u16::try_from(words.len() - 2).unwrap();
         let countdown = match core.op(at) {
@@ -1014,13 +1011,13 @@ mod tests {
     #[test]
     fn spm_leaves_the_table_on_the_loaded_image() {
         let image = [0x95E8, 0xE50A];
-        let mut core = Core::new(RAMEND, MASK);
+        let mut core = Core::new(INITIAL_SP, MASK);
         core.load_words(&image);
         let (flash, ops) = (Arc::clone(&core.flash), Arc::clone(&core.ops));
         core.set_reg(30, 2);
         core.set_reg(0, 0x34);
         core.set_reg(1, 0x12);
-        let mut bus = Bus::new();
+        let mut bus = Mem::new();
         core.step(&mut bus);
         assert_eq!(core.spm_notes().len(), 1);
         assert!(Arc::ptr_eq(&core.flash, &flash) && Arc::ptr_eq(&core.ops, &ops));
@@ -1028,5 +1025,75 @@ mod tests {
         assert_eq!(&core.ops[..], table(&image, MASK));
         core.step(&mut bus);
         assert_eq!(core.reg(16), 0x5A);
+    }
+
+    /// A stall the bus reports is part of the instruction. `WDR` tells the bus, and `SLEEP`
+    /// arms it only when the bus says sleep is enabled.
+    #[test]
+    fn the_bus_hears_halt_sleep_and_watchdog() {
+        let mut core = Core::new(INITIAL_SP, MASK);
+        core.load_words(&[0x0000]);
+        let mut bus = Mem::new();
+        bus.set_halt(4);
+        core.step(&mut bus);
+        assert_eq!(core.cycles(), 5);
+        assert_eq!(bus.cpu_halt(), 0);
+
+        core.load_words(&[0x95A8]);
+        core.pc = 0;
+        let mut bus = Mem::new();
+        core.step(&mut bus);
+        assert_eq!((core.wdr_executions(), bus.wdrs), (1, 1));
+
+        core.load_words(&[0x9588]);
+        core.pc = 0;
+        let mut asleep = Mem::new();
+        asleep.set_sleep_enabled(true);
+        core.step(&mut asleep);
+        assert!(asleep.sleep_armed());
+        assert!(core.is_sleeping());
+
+        let mut awake = Core::new(INITIAL_SP, MASK);
+        awake.load_words(&[0x9588]);
+        let mut open = Mem::new();
+        awake.step(&mut open);
+        assert!(!open.sleep_armed());
+        assert!(!awake.is_sleeping());
+    }
+
+    /// `SBI` and `CBI` are one `write_bit`. A load or a store would hide write-one-to-clear.
+    #[test]
+    fn sbi_and_cbi_use_write_bit() {
+        let mut set = Core::new(INITIAL_SP, MASK);
+        set.load_words(&[0x9A2A]);
+        let mut bus = Mem::new();
+        bus.poke(&mut set, 0x25, 0x01);
+        bus.record_touches();
+        set.step(&mut bus);
+        assert_eq!(bus.peek(&set, 0x25), 0x05);
+        assert_eq!(
+            bus.touches(),
+            &[BusCall::WriteBit {
+                addr: 0x25,
+                bit: 2,
+                set: true,
+            }]
+        );
+
+        let mut clear = Core::new(INITIAL_SP, MASK);
+        clear.load_words(&[0x983B]);
+        let mut bus = Mem::new();
+        bus.poke(&mut clear, 0x27, 0x08);
+        bus.record_touches();
+        clear.step(&mut bus);
+        assert_eq!(bus.peek(&clear, 0x27), 0x00);
+        assert_eq!(
+            bus.touches(),
+            &[BusCall::WriteBit {
+                addr: 0x27,
+                bit: 3,
+                set: false,
+            }]
+        );
     }
 }

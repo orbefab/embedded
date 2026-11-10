@@ -1,12 +1,13 @@
-//! Architectural state and the AVRe+ instruction set of this part.
+//! Architectural state and the AVRe+ instruction set.
 //!
 //! No `ELPM`, `EIJMP`, or `EICALL`. Cycle counts are the AVRe column in DS40002198,
-//! which is the same timing as AVRe+. Call and return add the extra cycle the chip
-//! table names. `SPM` does not write flash: that operation is selected by a control
-//! register, and its cycle count varies with the programming time, so the logged
-//! operation retires in one cycle. The core reads and writes data space only through
-//! the bus. Interrupt entry is not an instruction; the facade runs it between
-//! instructions.
+//! which is the same timing as AVRe+. `RCALL` takes 3, `CALL` takes 4, `ICALL` takes 3
+//! and `RET` takes 4. Those counts are for a 16-bit program counter, and the chip does
+//! not pass them in. A 22-bit program counter needs different counts and a three-byte
+//! return address. `SPM` does not write flash: the chip selects that operation, and its
+//! cycle count varies with the programming time, so the logged operation retires in
+//! one cycle. The core reads and writes data space only through [`crate::Bus`].
+//! Interrupt entry is not an instruction. The chip runs it between instructions.
 
 #[cfg(test)]
 mod check;
@@ -20,7 +21,7 @@ use decode::{Countdown, Op};
 
 /// What the core does between instructions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Activity {
+pub enum Activity {
     Fetch,
     /// `SLEEP` with `SE` set. Time jumps to the next wake.
     Sleep,
@@ -41,13 +42,13 @@ pub struct SpmNote {
 }
 
 /// An image and its op table, carried across a reset so the image is not decoded again.
-pub(crate) struct Program {
+pub struct Program {
     flash: Arc<[u16]>,
     ops: Arc<[Op]>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Core {
+pub struct Core {
     r: [u8; 32],
     sreg: u8,
     pc: u16,
@@ -86,7 +87,7 @@ struct Visit {
 }
 
 impl Core {
-    pub(crate) fn new(sp: u16, pc_mask: u16) -> Self {
+    pub fn new(sp: u16, pc_mask: u16) -> Self {
         Self {
             r: [0; 32],
             sreg: 0,
@@ -107,97 +108,98 @@ impl Core {
         }
     }
 
-    pub(crate) fn load_words(&mut self, words: &[u16]) {
+    pub fn load_words(&mut self, words: &[u16]) {
         self.set_flash(Arc::from(words));
     }
 
-    pub(crate) fn set_flash(&mut self, flash: Arc<[u16]>) {
+    pub fn set_flash(&mut self, flash: Arc<[u16]>) {
         self.ops = Arc::from(decode::table(&flash, self.pc_mask));
         self.flash = flash;
         self.pc = 0;
     }
 
-    pub(crate) fn program(&self) -> Program {
+    pub fn program(&self) -> Program {
         Program {
             flash: Arc::clone(&self.flash),
             ops: Arc::clone(&self.ops),
         }
     }
 
-    pub(crate) fn set_program(&mut self, program: Program) {
+    pub fn set_program(&mut self, program: Program) {
         self.flash = program.flash;
         self.ops = program.ops;
         self.pc = 0;
     }
 
-    pub(crate) fn reg(&self, index: u8) -> u8 {
+    pub fn reg(&self, index: u8) -> u8 {
         self.r.get(usize::from(index)).copied().unwrap_or(0)
     }
 
-    pub(crate) fn set_reg(&mut self, index: u8, value: u8) {
+    pub fn set_reg(&mut self, index: u8, value: u8) {
         if let Some(slot) = self.r.get_mut(usize::from(index)) {
             *slot = value;
         }
     }
 
-    pub(crate) fn sreg(&self) -> u8 {
+    pub fn sreg(&self) -> u8 {
         self.sreg
     }
 
-    pub(crate) fn set_sreg(&mut self, value: u8) {
+    pub fn set_sreg(&mut self, value: u8) {
         self.sreg = value;
     }
 
-    pub(crate) fn sp(&self) -> u16 {
+    pub fn sp(&self) -> u16 {
         self.sp
     }
 
-    pub(crate) fn set_sp_lo(&mut self, value: u8) {
+    pub fn set_sp_lo(&mut self, value: u8) {
         self.sp = (self.sp & 0xFF00) | u16::from(value);
     }
 
-    pub(crate) fn set_sp_hi(&mut self, value: u8) {
+    pub fn set_sp_hi(&mut self, value: u8) {
         self.sp = (self.sp & 0x00FF) | (u16::from(value) << 8);
     }
 
-    pub(crate) fn pc(&self) -> u16 {
+    pub fn pc(&self) -> u16 {
         self.pc
     }
 
-    pub(crate) fn cycles(&self) -> u64 {
+    pub fn cycles(&self) -> u64 {
         self.cycles
     }
 
-    pub(crate) fn advance_cycles(&mut self, n: u64) {
+    pub fn advance_cycles(&mut self, n: u64) {
         self.cycles = self.cycles.wrapping_add(n);
     }
 
-    pub(crate) fn set_cycles(&mut self, cycles: u64) {
+    pub fn set_cycles(&mut self, cycles: u64) {
         self.cycles = cycles;
     }
 
-    #[cfg(test)]
-    pub(crate) fn shares_image(&self, other: &Self) -> bool {
+    /// The two cores share one decoded image. A clone and a reset that keeps the program do.
+    #[doc(hidden)]
+    pub fn shares_image(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.flash, &other.flash) && Arc::ptr_eq(&self.ops, &other.ops)
     }
 
-    pub(crate) fn spm_notes(&self) -> &[SpmNote] {
+    pub fn spm_notes(&self) -> &[SpmNote] {
         &self.spm
     }
 
-    pub(crate) fn wdr_executions(&self) -> u32 {
+    pub fn wdr_executions(&self) -> u32 {
         self.wdr_executions
     }
 
-    pub(crate) fn set_wdr_executions(&mut self, n: u32) {
+    pub fn set_wdr_executions(&mut self, n: u32) {
         self.wdr_executions = n;
     }
 
-    pub(crate) fn activity(&self) -> Activity {
+    pub fn activity(&self) -> Activity {
         self.activity
     }
 
-    pub(crate) fn set_activity(&mut self, activity: Activity) {
+    pub fn set_activity(&mut self, activity: Activity) {
         self.fetching = matches!(activity, Activity::Fetch);
         self.sleeping = matches!(
             activity,
@@ -210,41 +212,41 @@ impl Core {
         self.activity = activity;
     }
 
-    pub(crate) fn is_held(&self) -> bool {
+    pub fn is_held(&self) -> bool {
         matches!(self.activity, Activity::Held)
     }
 
     #[inline]
-    pub(crate) fn can_fetch(&self) -> bool {
+    pub fn can_fetch(&self) -> bool {
         self.fetching
     }
 
-    pub(crate) fn is_sleeping(&self) -> bool {
+    pub fn is_sleeping(&self) -> bool {
         self.sleeping
     }
 
-    pub(crate) fn is_stopped(&self) -> bool {
+    pub fn is_stopped(&self) -> bool {
         self.stopped
     }
 
-    pub(crate) fn interrupts_enabled(&self) -> bool {
+    pub fn interrupts_enabled(&self) -> bool {
         self.sreg & 0x80 != 0
     }
 
-    pub(crate) fn irq_delay_pending(&self) -> bool {
+    pub fn irq_delay_pending(&self) -> bool {
         self.irq_delay
     }
 
-    pub(crate) fn unknown(&self) -> Option<u16> {
+    pub fn unknown(&self) -> Option<u16> {
         self.unknown
     }
 
-    pub(crate) fn flash_word(&self, addr: u16) -> u16 {
+    pub fn flash_word(&self, addr: u16) -> u16 {
         self.fetch(addr)
     }
 
     #[inline(always)]
-    pub(crate) fn step(&mut self, bus: &mut Bus) {
+    pub fn step<B: Bus>(&mut self, bus: &mut B) {
         if self.sleeping || self.stopped {
             return;
         }
@@ -252,11 +254,10 @@ impl Core {
         let op = self.op(pc);
         self.irq_delay = false;
         self.execute_op(bus, pc, op);
-        // The store that clears a halt is rare. Skipping it keeps the bus line
-        // clean on the ordinary instruction.
-        let halt = bus.cpu_halt();
+        // A non-zero stall is rare. The bus writes the clear only then, so an
+        // ordinary instruction does not store that byte.
+        let halt = bus.take_stall();
         if halt != 0 {
-            bus.clear_cpu_halt();
             self.cycles = self.cycles.wrapping_add(u64::from(halt));
         }
     }
@@ -265,7 +266,7 @@ impl Core {
     /// cycle `bound`. Returns the cycles of the op that reached `bound`, which the caller still
     /// retires through the bus, or `None` before any other op.
     #[inline(always)]
-    pub(crate) fn run_free(&mut self, bus: &Bus, bound: u64) -> Option<u64> {
+    pub fn run_free<B: Bus>(&mut self, bus: &B, bound: u64) -> Option<u64> {
         // When `SEI` or `RETI` set the delay, the first op this runs is the one it delays, and
         // stepping clears it before that op too. A `None` goes to `step`, which clears it.
         self.irq_delay = false;
@@ -311,7 +312,7 @@ impl Core {
     /// nothing. Every later pass reads the same values and takes the same path, so the passes
     /// that end before `bound` are skipped by their cycles.
     #[inline(never)]
-    fn run_steady(&mut self, bus: &Bus, bound: u64, mut last: Visit) -> Option<u64> {
+    fn run_steady<B: Bus>(&mut self, bus: &B, bound: u64, mut last: Visit) -> Option<u64> {
         let mut before = last.cycles;
         loop {
             while self.cycles < bound {
@@ -406,14 +407,14 @@ impl Core {
 
     /// DS40002198 §6.86: `STACK ← Rr`, then `SP ← SP − 1`. `cycles` is the
     /// length of the instruction that pushes.
-    fn push(&mut self, bus: &mut Bus, value: u8, cycles: u64) {
+    fn push<B: Bus>(&mut self, bus: &mut B, value: u8, cycles: u64) {
         let sp = self.sp;
         bus.store(self, sp, value, cycles);
         self.sp = sp.wrapping_sub(1);
     }
 
     /// DS40002198 §6.85: `SP ← SP + 1`, then `Rd ← STACK`.
-    fn pop(&mut self, bus: &mut Bus) -> u8 {
+    fn pop<B: Bus>(&mut self, bus: &mut B) -> u8 {
         self.sp = self.sp.wrapping_add(1);
         let sp = self.sp;
         bus.load(self, sp)

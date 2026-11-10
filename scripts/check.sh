@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Checks the repo. `fast` is what CI runs: shellcheck on every tracked shell script, ruff on every
 # tracked Python file, rustfmt, clippy, clippy on orbe-scene, orbe-session and orbe-wasm for wasm32,
-# and the Rust tests through cargo-nextest, except the `orbe-microchip` tests and the engine tests
-# marked `full tier`.
+# `scripts/core-deps.sh`, and the Rust tests through cargo-nextest, except the `orbe-microchip`
+# tests and the engine tests marked `full tier`. `orbe-avr` is in that workspace run.
 # `full` runs those too, then the chip models' skip checks, the engine's Python checks, `orbe-run`
 # for WASI against native, the wasm package check, and the browser speed check on the package that
 # check built. Both need uv, shellcheck and cargo-nextest. `full` also needs ngspice-42, node 24
@@ -53,6 +53,7 @@ lint_tracked() {
 
 fast() {
   lint_tracked
+  scripts/core-deps.sh
   need_nextest
   cargo fmt --all --check
   blobs=$(packages/engine/scripts/blobs.sh)

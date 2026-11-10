@@ -10,14 +10,15 @@ The input is JSON. The folder holds `manifest.json`, `netlist.json`, `diagnostic
 | --- | --- | --- |
 | `packages/engine` | `orbe-engine` | The netlist, the diagnostics, the run folder, and the solver: the operating point, the transient, and the session. It runs a chip model for each chip part. Its `runner` feature adds `orbe-run`, the binary the checks run. |
 | `packages/cores/xtensa` | `orbe-xtensa` | The Xtensa LX6 and LX7 core of the ESP32 and the ESP32-S3, with both generated opcode tables. `gen/regen.sh` regenerates the tables. |
-| `packages/socs/microchip` | `orbe-microchip` | The ATmega328P. `orbe-engine` runs it for each `atmega328p` part. |
+| `packages/cores/avr` | `orbe-avr` | The AVR instruction set. A chip implements its bus. |
+| `packages/socs/microchip` | `orbe-microchip` | The ATmega328P around `orbe-avr`. `orbe-engine` runs it for each `atmega328p` part. |
 | `packages/socs/espressif` | `orbe-espressif` | The ESP32-S3 around `orbe-xtensa`: both cores in one time order, its memories, its peripherals and its boot path, from the captured state in `src/s3/boot/state.txt`. `orbe-engine` runs it for each `esp32s3` part. [esp32s3.md](esp32s3.md) says what it models. |
 
 `packages/engine/tests/circuits` holds the netlists the tests and checks run, each with its blobs and references. `packages/engine/tests/firmware` holds their firmware sources and images. `packages/engine/scripts` holds the scripts that rebuild that firmware and check run folders apart from the engine.
 
 ## Cores and chips
 
-A core crate in `packages/cores` models one instruction set: it fetches, decodes and executes, and reaches memory only through the bus its chip gives it. It never names a vendor's registers or memory map. A chip crate in `packages/socs` models one vendor's chip around a core: its memories, its peripherals and their registers, its clocks and its pins. It never decodes an instruction. A chip that needs a new instruction set adds a core crate, and a new chip on an existing core adds only a chip crate.
+A core crate in `packages/cores` models one instruction set: it fetches, decodes and executes, and reaches memory only through the bus its chip gives it. It never names a vendor's registers or memory map. A chip crate in `packages/socs` models one vendor's chip around a core: its memories, its peripherals and their registers, its clocks and its pins. It never decodes a CPU's instructions. A chip that needs a new instruction set adds a core crate, and a new chip on an existing core adds only a chip crate. `scripts/check.sh fast` fails when a crate in `packages/cores` depends on a crate in `packages/socs`.
 
 ## Build and run
 
@@ -77,7 +78,7 @@ The runs go through `orbe-run`. `RUNNER` selects the binary `scripts/run-hashes.
 
 ## Check
 
-`scripts/check.sh fast` runs shellcheck on every tracked shell script and ruff (`ruff check` and `ruff format --check`) on every tracked Python file, then rustfmt, clippy, and `cargo nextest` for the Rust tests other than the `orbe-microchip` suite and the engine tests marked `full tier`. Clippy also builds `orbe-run` with `--features runner`. shellcheck follows each script's source directive. ruff is the `packages/cad` dev dependency, run with `uv run --project packages/cad --frozen`, and its config is the repo's `ruff.toml`. `scripts/check.sh full` runs `fast`, then:
+`scripts/check.sh fast` runs shellcheck on every tracked shell script and ruff (`ruff check` and `ruff format --check`) on every tracked Python file, then `scripts/core-deps.sh`, rustfmt, clippy, and `cargo nextest` for the Rust tests other than the `orbe-microchip` suite and the engine tests marked `full tier`. `scripts/core-deps.sh` fails when a crate in `packages/cores` depends on a crate in `packages/socs`. Clippy also builds `orbe-run` with `--features runner`. shellcheck follows each script's source directive. ruff is the `packages/cad` dev dependency, run with `uv run --project packages/cad --frozen`, and its config is the repo's `ruff.toml`. `scripts/check.sh full` runs `fast`, then:
 
 - `cargo nextest run --profile ci -p orbe-microchip --locked --features port-skip-check`.
 - the `full tier` tests of `orbe-engine`, in `packages/engine/tests/circuit/transient.rs`, `packages/engine/tests/circuit/session.rs`, `packages/engine/tests/circuit/runs/run.rs`, `packages/engine/tests/circuit/runs/session.rs` and `packages/engine/tests/circuit/runs/ws2812.rs`. Each is `#[ignore = "full tier"]`, and `full` runs them with `--run-ignored only`.

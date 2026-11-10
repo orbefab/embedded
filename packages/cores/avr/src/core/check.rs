@@ -4,10 +4,203 @@ use std::sync::Arc;
 
 use super::decode::{Op, decode};
 use super::{Activity, Core};
-use crate::bus::{Bus, IO_BASE};
-use crate::chip::{FLASH_WORDS, RAMEND, SPL};
+use crate::IO_BASE;
+use crate::bus::Bus;
 
-pub(super) const MASK: u16 = FLASH_WORDS - 1;
+/// Program-counter mask for this sweep, 16 Ki words.
+pub(super) const MASK: u16 = 16 * 1024 - 1;
+
+/// Stack pointer the sweep starts from. It sits inside the flat data space.
+pub(super) const INITIAL_SP: u16 = 0x08FF;
+
+const SRAM_BASE: u16 = 0x0100;
+const SRAM_END: u16 = 0x08FF;
+/// I/O address `0x3F`, the address the instruction set assigns to `SREG`.
+const SREG_ADDR: u16 = 0x005F;
+/// The two bytes under `SREG`. The sweep's stack pointer lives here.
+const SPL_ADDR: u16 = 0x005D;
+const SPH_ADDR: u16 = 0x005E;
+
+/// One data-space call the core made. `SBI` and `CBI` must be [`BusCall::WriteBit`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum BusCall {
+    Load(u16),
+    Store(u16),
+    WriteBit { addr: u16, bit: u8, set: bool },
+}
+
+/// Flat data space. The register file, `SREG` and the stack pointer stay in the core.
+#[derive(Clone)]
+pub(super) struct Mem {
+    data: Vec<u8>,
+    sleep_enabled: bool,
+    sleep_armed: bool,
+    halt: u8,
+    io_writes: Vec<(u16, u8)>,
+    /// Set by the `SBI`/`CBI` test. The instruction sweep leaves it clear, so a run records nothing.
+    record: bool,
+    touches: Vec<BusCall>,
+    pub(super) wdrs: u32,
+}
+
+impl Mem {
+    pub(super) fn new() -> Self {
+        Self {
+            data: vec![0; 1 << 16],
+            sleep_enabled: false,
+            sleep_armed: false,
+            halt: 0,
+            io_writes: Vec::new(),
+            record: false,
+            touches: Vec::new(),
+            wdrs: 0,
+        }
+    }
+
+    pub(super) fn sram(&self) -> &[u8] {
+        &self.data[usize::from(SRAM_BASE)..=usize::from(SRAM_END)]
+    }
+
+    pub(super) fn restore_sram(&mut self, bytes: &[u8]) {
+        self.data[usize::from(SRAM_BASE)..=usize::from(SRAM_END)].copy_from_slice(bytes);
+    }
+
+    /// A host write. It does not log, and it adds no stall.
+    pub(super) fn poke(&mut self, core: &mut Core, addr: u16, value: u8) {
+        self.write(core, addr, value, false);
+    }
+
+    pub(super) fn cpu_halt(&self) -> u8 {
+        self.halt
+    }
+
+    pub(super) fn set_halt(&mut self, halt: u8) {
+        self.halt = halt;
+    }
+
+    pub(super) fn sleep_armed(&self) -> bool {
+        self.sleep_armed
+    }
+
+    pub(super) fn set_sleep_enabled(&mut self, enabled: bool) {
+        self.sleep_enabled = enabled;
+    }
+
+    pub(super) fn io_writes(&self) -> &[(u16, u8)] {
+        &self.io_writes
+    }
+
+    /// The next bus calls are kept for [`Self::touches`].
+    pub(super) fn record_touches(&mut self) {
+        self.record = true;
+        self.touches.clear();
+    }
+
+    pub(super) fn touches(&self) -> &[BusCall] {
+        &self.touches
+    }
+
+    fn note(&mut self, call: BusCall) {
+        if self.record {
+            self.touches.push(call);
+        }
+    }
+
+    fn write(&mut self, core: &mut Core, addr: u16, value: u8, log: bool) {
+        if addr <= 0x001F {
+            core.set_reg(addr as u8, value);
+            return;
+        }
+        if addr == SREG_ADDR {
+            core.set_sreg(value);
+            return;
+        }
+        if addr == SPL_ADDR {
+            core.set_sp_lo(value);
+            return;
+        }
+        if addr == SPH_ADDR {
+            core.set_sp_hi(value);
+            return;
+        }
+        self.data[usize::from(addr)] = value;
+        if log && (IO_BASE..=0x00FF).contains(&addr) {
+            self.io_writes.push((addr, value));
+        }
+    }
+
+    fn read(&self, core: &Core, addr: u16) -> u8 {
+        if addr <= 0x001F {
+            return core.reg(addr as u8);
+        }
+        if addr == SREG_ADDR {
+            return core.sreg();
+        }
+        if addr == SPL_ADDR {
+            return core.sp() as u8;
+        }
+        if addr == SPH_ADDR {
+            return (core.sp() >> 8) as u8;
+        }
+        self.data[usize::from(addr)]
+    }
+}
+
+impl Bus for Mem {
+    #[inline(always)]
+    fn load(&mut self, core: &Core, addr: u16) -> u8 {
+        self.note(BusCall::Load(addr));
+        self.read(core, addr)
+    }
+
+    #[inline(always)]
+    fn store(&mut self, core: &mut Core, addr: u16, value: u8, _cycles: u64) {
+        self.note(BusCall::Store(addr));
+        self.write(core, addr, value, true);
+    }
+
+    #[inline(always)]
+    fn peek(&self, core: &Core, addr: u16) -> u8 {
+        self.read(core, addr)
+    }
+
+    #[inline(always)]
+    fn steady(&self, _addr: u16) -> bool {
+        true
+    }
+
+    #[inline(always)]
+    fn store_idle(&self, core: &Core, addr: u16, value: u8) -> bool {
+        self.read(core, addr) == value
+    }
+
+    fn write_bit(&mut self, core: &mut Core, addr: u16, bit: u8, set: bool) {
+        self.note(BusCall::WriteBit { addr, bit, set });
+        let current = self.read(core, addr);
+        let mask = 1u8 << (bit & 7);
+        let written = if set { current | mask } else { current & !mask };
+        self.write(core, addr, written, true);
+    }
+
+    fn sleep(&mut self) -> bool {
+        if self.sleep_enabled {
+            self.sleep_armed = true;
+        }
+        self.sleep_enabled
+    }
+
+    fn watchdog_reset_timer(&mut self) {
+        self.wdrs = self.wdrs.wrapping_add(1);
+    }
+
+    fn take_stall(&mut self) -> u8 {
+        let stall = self.halt;
+        if stall != 0 {
+            self.halt = 0;
+        }
+        stall
+    }
+}
 
 const SITES: [Site; 6] = [
     Site::Before(0x0000),
@@ -70,9 +263,9 @@ impl std::fmt::Display for Case {
     }
 }
 
-/// What a run reads and writes, from fixed starting states. The two seeds hold complementary SREG
-/// bytes and write complementary bytes to the I/O space below `SPL`. So each flag takes both
-/// values, as does each I/O bit that keeps what is written, and one seed has `SE` set.
+/// What a run reads and writes, from fixed starting states. The two seeds hold complementary `SREG`
+/// bytes and write complementary bytes to the I/O space below the stack pointer. So each flag
+/// takes both values, as does each I/O byte, and one seed has sleep enabled.
 pub(super) struct Rig {
     seeds: [Seed; 2],
     sram: Vec<u8>,
@@ -83,13 +276,13 @@ pub(super) struct Rig {
 /// the copy.
 struct Seed {
     core: Core,
-    bus: Bus,
-    quiet: Bus,
+    bus: Mem,
+    quiet: Mem,
 }
 
 impl Rig {
     pub(super) fn new() -> Self {
-        let mut bus = Bus::new();
+        let mut bus = Mem::new();
         let painted: Vec<u8> = (0..bus.sram().len())
             .map(|i| (i as u8).wrapping_add((i >> 8) as u8).wrapping_mul(17))
             .collect();
@@ -99,16 +292,15 @@ impl Rig {
         second.sreg = !first.sreg;
         let seeds = [(first, 0x00), (second, 0xFF)].map(|(mut core, flip)| {
             let mut bus = bus.clone();
-            for addr in IO_BASE..SPL {
+            for addr in IO_BASE..SPL_ADDR {
                 bus.poke(
                     &mut core,
                     addr,
                     (addr as u8).wrapping_mul(0x5B) ^ 0xA6 ^ flip,
                 );
             }
-            // The first pattern sets `EERE`, and the EEPROM read it strobes halts the core.
-            assert_eq!(bus.cpu_halt(), if flip == 0 { 4 } else { 0 });
-            bus.clear_cpu_halt();
+            // The second seed may sleep. The first may not.
+            bus.set_sleep_enabled(flip == 0xFF);
             Seed {
                 core,
                 quiet: bus.clone(),
@@ -118,7 +310,7 @@ impl Rig {
         Self {
             seeds,
             sram: painted,
-            top: Arc::from(vec![0u16; usize::from(FLASH_WORDS)]),
+            top: Arc::from(vec![0u16; usize::from(MASK) + 1]),
         }
     }
 
@@ -185,7 +377,7 @@ impl Rig {
     pub(super) fn effects(
         &mut self,
         case: &Case,
-        mut exec: impl FnMut(&mut Core, &mut Bus),
+        mut exec: impl FnMut(&mut Core, &mut Mem),
     ) -> [Effect; 2] {
         let sram = &self.sram;
         self.seeds.each_mut().map(|seed| {
@@ -276,7 +468,7 @@ fn reaches_bus(op: Op) -> bool {
 
 /// `pointers` are the bases of X, Y and Z. Each pointer is its base plus a byte from the seed.
 fn seeded(seed: u32, pointers: [u16; 3]) -> Core {
-    let mut core = Core::new(RAMEND, MASK);
+    let mut core = Core::new(INITIAL_SP, MASK);
     let mut x = seed.wrapping_mul(2_654_435_761).wrapping_add(1);
     for slot in &mut core.r {
         x ^= x << 13;
@@ -319,7 +511,7 @@ pub(super) struct Effect {
 }
 
 impl Effect {
-    fn of(core: &Core, bus: &Bus, painted: &[u8], io: bool) -> Self {
+    fn of(core: &Core, bus: &Mem, painted: &[u8], io: bool) -> Self {
         let mut sram = Vec::new();
         for (block, (now, was)) in bus.sram().chunks(64).zip(painted.chunks(64)).enumerate() {
             if now != was {
@@ -344,7 +536,7 @@ impl Effect {
             wdr_executions: core.wdr_executions,
             halt: bus.cpu_halt(),
             sleep_armed: bus.sleep_armed(),
-            io_writes: bus.io_writes().iter().map(|w| (w.addr, w.value)).collect(),
+            io_writes: bus.io_writes().to_vec(),
             sram,
             io: if io {
                 (0x20..=0xFF).map(|addr| bus.peek(core, addr)).collect()

@@ -1,6 +1,6 @@
-# ATmega328P core
+# ATmega328P
 
-`packages/socs/microchip`, package `orbe-microchip`, is a cycle-counted model of the ATmega328P. `orbe-engine` holds it behind the active chip seam, and each `atmega328p` part of a netlist runs one. It has no dependencies.
+`packages/socs/microchip`, package `orbe-microchip`, is a cycle-counted model of the ATmega328P. The instruction set is `packages/cores/avr`, package `orbe-avr`. The chip implements that core's bus: data memory, I/O, the stall a store can add, sleep and the watchdog. `orbe-engine` holds the chip behind the active chip seam, and each `atmega328p` part of a netlist runs one.
 
 The sources are two documents. DS40002061B is the datasheet, written DS here. DS40002198B is the instruction set manual, written ISM, and its AVRe column gives the cycle counts. A comment in the crate cites one of them, by section, table, or figure.
 

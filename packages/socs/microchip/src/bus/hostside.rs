@@ -2,7 +2,7 @@
 //!
 //! The host SPI master clocks a slave chip. The slave queue is the bytes that
 //! host returns on `MISO` while the chip is master. This lives on [`super::Bus`],
-//! beside the device list, because [`crate::core::Core::step`] only has `&mut Bus`
+//! beside the device list, because [`orbe_avr::Core::step`] only has `&mut Bus`
 //! and a master transfer starts from an `SPDR` store.
 
 use std::collections::VecDeque;

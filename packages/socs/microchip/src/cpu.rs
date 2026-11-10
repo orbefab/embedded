@@ -7,15 +7,16 @@
 
 use std::fmt;
 
+use orbe_avr::{Activity, Core, SpmNote};
+
 use crate::bus::Bus;
 use crate::chip::{FLASH_WORDS, IRQ_CYCLES, RAMEND, USART0, VECTORS};
-use crate::core::{Activity, Core};
 use crate::fuses::FuseBytes;
 use crate::image::Image;
 use crate::irq;
 use crate::periph::system::{BORF, EXTRF, PORF, WDRF};
 use crate::periph::usart::Sent;
-use crate::{IoWrite, Level, PinLevels, PinReport, SpmNote};
+use crate::{IoWrite, Level, PinLevels, PinReport};
 
 mod seam;
 

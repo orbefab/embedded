@@ -864,10 +864,7 @@ fn spm() {
     });
     expect(&cpu, 1, 0, &[(0, 0x34), (30, 0x02)]);
     assert_eq!(cpu.flash_word(1), 0x0000);
-    assert_eq!(
-        cpu.spm_notes(),
-        &[orbe_microchip::SpmNote { z: 2, word: 0x1234 }]
-    );
+    assert_eq!(cpu.spm_notes(), &[orbe_avr::SpmNote { z: 2, word: 0x1234 }]);
 }
 
 #[test]

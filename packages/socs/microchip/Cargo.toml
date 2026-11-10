@@ -7,6 +7,9 @@ license.workspace = true
 publish.workspace = true
 autotests = false
 
+[dependencies]
+orbe-avr.workspace = true
+
 [features]
 # Turns on the check that a skipped store changes no pin, and is off by default because the check costs about what the skip saves.
 port-skip-check = []

@@ -81,32 +81,6 @@ impl Epochs {
 }
 
 impl Bus {
-    #[inline]
-    pub(crate) fn cpu_halt(&self) -> u8 {
-        self.cpu_halt
-    }
-
-    #[inline]
-    pub(crate) fn clear_cpu_halt(&mut self) {
-        self.cpu_halt = 0;
-    }
-
-    pub(crate) fn sleep_enabled(&self) -> bool {
-        match self.system() {
-            Some(sys) => sys.se(),
-            None => true,
-        }
-    }
-
-    pub(crate) fn arm_sleep(&mut self) {
-        self.sleep_armed = true;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn sleep_armed(&self) -> bool {
-        self.sleep_armed
-    }
-
     pub(crate) fn take_sleep_arm(&mut self) -> bool {
         let armed = self.sleep_armed;
         self.sleep_armed = false;
@@ -167,15 +141,6 @@ impl Bus {
             return 0;
         };
         fuses.startup.cycles(crate::fuses::DelayKind::Reset, cpu_hz)
-    }
-
-    pub(crate) fn watchdog_reset_timer(&mut self) {
-        let now = self.cycle;
-        if let Some(sys) = self.system_mut() {
-            sys.wdr(now);
-        }
-        self.windows = true;
-        self.note_schedule();
     }
 
     pub(crate) fn take_wdt_reset(&mut self) -> bool {

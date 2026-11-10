@@ -14,8 +14,8 @@ A hardware simulator for AI agents. You describe a circuit as a scene file, flas
 | [`packages/wasm`](packages/wasm/) | `orbe-wasm` runs a Block live in a browser Web Worker. [`docs/wasm.md`](docs/wasm.md) says how to build and load it. |
 | [`packages/registry`](packages/registry/) | `orbe-registry` builds a registry of parts and Blocks for `orbe registry build`. [`docs/registry.md`](docs/registry.md) is the contract a client reads it by. |
 | [`packages/engine`](packages/engine/) | The simulation engine in Rust: the netlist and run folder, the circuit solver, and its test circuits and firmware. [`docs/engine`](docs/engine/README.md) says how it fits together. |
-| [`packages/cores`](packages/cores/) | Instruction-set cores. `xtensa` runs the ESP32 and ESP32-S3 cores. A core never names a vendor's registers. |
-| [`packages/socs`](packages/socs/) | Chips around a core. `espressif` is the ESP32-S3 and `microchip` is the ATmega328P. A chip never decodes an instruction. |
+| [`packages/cores`](packages/cores/) | Instruction-set cores. `xtensa` runs the ESP32 and ESP32-S3 cores, and `avr` runs the AVR instruction set. A core never names a vendor's registers. |
+| [`packages/socs`](packages/socs/) | Chips around a core. `espressif` is the ESP32-S3 and `microchip` is the ATmega328P. A chip never decodes a CPU's instructions. |
 | [`packages/viewer`](packages/viewer/) | The 3D scene viewer, in React and three.js. |
 | [`packages/brand`](packages/brand/README.md) | The Orbefab brand, copied unchanged from the website repo, with `scripts/brand.sh` to check and refresh the copy. |
 | [`packages/asset-step`](packages/asset-step/) | Imports each part's 3D model and checks it against the part's pins. |
