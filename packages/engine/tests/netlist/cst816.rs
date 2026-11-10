@@ -41,11 +41,14 @@ fn a_point_after_t_0_is_kept() {
     let Model::Chip(Chip::Cst816(dev)) = &netlist.parts().next().unwrap().1.model else {
         panic!("u2 is a cst816");
     };
-    assert_eq!(dev.touches.len(), 1);
-    assert_eq!(dev.touches[0].at.as_ps(), 2000);
-    assert_eq!(dev.touches[0].to.x, 291);
-    assert_eq!(dev.touches[0].to.y, 69);
-    assert!(dev.touches[0].to.down);
+    let [touch] = dev.events.all() else {
+        panic!("one touch");
+    };
+    assert_eq!(touch.at.as_ps(), 2000);
+    assert_eq!(touch.to.name(), "touch");
+    assert_eq!(touch.to.fields().int("x"), Some(291));
+    assert_eq!(touch.to.fields().int("y"), Some(69));
+    assert_eq!(touch.to.fields().bool("down"), Some(true));
 }
 
 #[test]

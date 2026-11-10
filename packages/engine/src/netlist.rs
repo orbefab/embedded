@@ -17,7 +17,7 @@ use crate::finite::Finite;
 use crate::name::{Name, Quantity};
 
 use crate::chip::{LinearRegulator, Ne555, Relay};
-use crate::device::{Cst816, PulsesReplay, SpiReplay, St77916, Touch, Ws2812};
+use crate::device::{Cst816, Declared, Events, PulsesReplay, Row, SpiReplay, St77916, Ws2812};
 use crate::mcu::{Atmega328p, Esp32s3};
 use crate::passive::{
     Capacitor, CurrentSource, Inductor, Potentiometer, Resistor, Switch, VoltageSource,
@@ -120,16 +120,16 @@ impl Netlist {
 
     /// Appends one event to part `id` at `at`. A contact goes on a switch, with the bounce
     /// parse draws for an event at that index. A level goes on a `steps` source or a
-    /// potentiometer. A serial send goes on a `serial` source. For a contact or a level,
-    /// `at` is a time `Schedule::earliest` returned for that part, and the event changes
-    /// the value in force. A serial send does not use that helper. Panics when the part
-    /// cannot take that event.
+    /// potentiometer. A serial send goes on a `serial` source. A device's event goes on a part
+    /// whose kind declares it. For a contact or a level, `at` is a time `Schedule::earliest`
+    /// returned for that part, and the event changes the value in force. A serial send does not
+    /// use that helper. Panics when the part cannot take that event.
     pub fn append(&mut self, id: PartId, at: Time, to: Appended) {
         match to {
             Appended::Contact(to) => self.append_contact(id, at, to),
             Appended::Level(level) => self.append_level(id, at, level),
             Appended::Serial(send) => self.append_serial(id, at, send),
-            Appended::Touch(touch) => self.append_touch(id, at, touch),
+            Appended::Event(event) => self.append_event(id, at, event),
         }
     }
 
@@ -165,14 +165,12 @@ impl Netlist {
         serial.push(at, send);
     }
 
-    fn append_touch(&mut self, id: PartId, at: Time, touch: Touch) {
+    fn append_event(&mut self, id: PartId, at: Time, event: Declared) {
         let part = &mut self.parts[id.index()];
-        let Model::Chip(Chip::Cst816(dev)) = &mut part.model else {
-            panic!("{} takes no touch", part.name.as_str());
+        let Some(events) = part.model.events_mut() else {
+            panic!("{} takes no event", part.name.as_str());
         };
-        debug_assert_eq!(dev.earliest(at), Some(at));
-        debug_assert!(touch.x <= Cst816::COORD_MAX && touch.y <= Cst816::COORD_MAX);
-        dev.touches.push(Event { at, to: touch });
+        events.push(at, event);
     }
 }
 
@@ -400,14 +398,17 @@ impl Model {
         current.into_iter().chain(power).collect()
     }
 
-    /// The next contact edge, source jump, potentiometer move, or touch strictly after `at`.
+    /// The next contact edge, source jump, potentiometer move, or device event strictly after
+    /// `at`.
     pub fn next_change_after(&self, at: Time) -> Option<Time> {
+        if let Some((_, events)) = self.device() {
+            return events.next_after(at);
+        }
         match self {
             Model::VoltageSource(source) => source.voltage.next_change_after(at),
             Model::CurrentSource(source) => source.current.next_change_after(at),
             Model::Switch(switch) => switch.schedule.next_change_after(at),
             Model::Potentiometer(pot) => pot.position.next_change_after(at),
-            Model::Chip(Chip::Cst816(dev)) => dev.next_touch_after(at),
             Model::Resistor(_)
             | Model::Diode(_)
             | Model::Led(_)
@@ -472,6 +473,32 @@ impl Model {
             | Model::Relay(_)
             | Model::Switch(_)
             | Model::Chip(_) => None,
+        }
+    }
+
+    /// The kind's row and the part's events, for a device on the `orbe-model` contract. This
+    /// is the device table: a new device kind adds its arm here.
+    pub(crate) fn device(&self) -> Option<(&'static Row, &Events)> {
+        let Model::Chip(chip) = self else {
+            return None;
+        };
+        match chip {
+            Chip::Cst816(dev) => Some((&crate::device::cst816::ROW, &dev.events)),
+            Chip::Ne555(_)
+            | Chip::Atmega328p(_)
+            | Chip::SpiReplay(_)
+            | Chip::St77916(_)
+            | Chip::Ws2812(_)
+            | Chip::PulsesReplay(_)
+            | Chip::Esp32s3(_) => None,
+        }
+    }
+
+    /// [`device`](Self::device)'s events, for appending one.
+    fn events_mut(&mut self) -> Option<&mut Events> {
+        match self {
+            Model::Chip(Chip::Cst816(dev)) => Some(&mut dev.events),
+            _ => None,
         }
     }
 
@@ -597,8 +624,8 @@ pub enum Appended {
     Level(Finite),
     /// Bytes a `serial` source sends from the appended time.
     Serial(SerialSend),
-    /// A point on a `cst816`.
-    Touch(Touch),
+    /// An event a device declares, such as a touch on a `cst816`.
+    Event(Declared),
 }
 
 impl Serialize for Edge {

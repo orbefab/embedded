@@ -5,29 +5,23 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use orbe_model::Time;
+use orbe_model::{Time, Value};
 
 use crate::runs::common;
 use common::atmega::logic_edges;
 use common::{read_vcd, repo};
-use orbe_engine::device::Touch;
 use orbe_engine::name::Name;
 use orbe_engine::run_folder::RunFolder;
 use orbe_engine::timestamp::Timestamp;
-use orbe_engine::{Input, Session, Setting, Status};
+use orbe_engine::{DeviceEvent, Input, Session, Setting, Status};
 
 const TEXT: &str = "1 291 69\r\n1 16 32\r\n";
 
-const FIRST: Touch = Touch {
-    x: 291,
-    y: 69,
-    down: true,
-};
-const SECOND: Touch = Touch {
-    x: 16,
-    y: 32,
-    down: true,
-};
+/// A point's `x`, `y` and `down`.
+type Point = (i64, i64, bool);
+
+const FIRST: Point = (291, 69, true);
+const SECOND: Point = (16, 32, true);
 
 const FIRST_AT: u64 = 20_000_000_000;
 const SECOND_AT: u64 = 41_000_000_000;
@@ -125,11 +119,18 @@ fn a_session_touch_finishes_as_a_batch_run_of_the_export() {
     assert_eq!(serial_text(folder.file("traces/serial.csv").unwrap()), TEXT);
 }
 
-fn touch(part: &Name, at: u64, point: Touch) -> Input {
+fn touch(part: &Name, at: u64, (x, y, down): Point) -> Input {
     Input {
         part: part.clone(),
         at: Time::from_ps(at),
-        setting: Setting::Touch(point),
+        setting: Setting::Event(DeviceEvent {
+            name: "touch".into(),
+            fields: vec![
+                ("x".into(), Value::Int(x)),
+                ("y".into(), Value::Int(y)),
+                ("down".into(), Value::Bool(down)),
+            ],
+        }),
     }
 }
 

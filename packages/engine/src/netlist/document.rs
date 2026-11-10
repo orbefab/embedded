@@ -1,9 +1,10 @@
 use serde_json::Value;
 
-use orbe_model::Time;
+use orbe_model::{Time, Value as FieldValue};
 
-use super::{Chip, Event, Model, Netlist, SerialEvent, Switch, Touch, Value as Level};
+use super::{Event, Model, Netlist, SerialEvent, Switch, Value as Level};
 use crate::blob::Blobs;
+use crate::device::{Declared, Events};
 use crate::diagnostic::Diagnostic;
 use crate::name::Name;
 
@@ -53,8 +54,8 @@ impl Document {
                     if let Some(serial) = model.serial() {
                         append_serial(&mut part[serial.field], serial.waveform.events());
                     }
-                    if let Model::Chip(Chip::Cst816(dev)) = model {
-                        append_touches(part, &dev.touches);
+                    if let Some((_, events)) = model.device() {
+                        append_events(part, events);
                     }
                 }
             }
@@ -116,32 +117,49 @@ fn append_serial(field: &mut Value, events: &[SerialEvent]) {
         .extend(appended.iter().map(serial_event));
 }
 
-fn append_touches(part: &mut Value, events: &[Event<Touch>]) {
-    let own = part
-        .get("touches")
-        .and_then(|touches| touches.as_array())
-        .map(|touches| touches.len())
-        .unwrap_or(0);
-    let appended = &events[own..];
-    if appended.is_empty() {
-        return;
+/// Each device event past the ones the document lists on its event's field, which it adds
+/// when absent.
+fn append_events(part: &mut Value, events: &Events) {
+    let mut by_field: Vec<(&str, Vec<&Event<Declared>>)> = Vec::new();
+    for event in events.all() {
+        let field = event.to.field();
+        match by_field.iter_mut().find(|(name, _)| *name == field) {
+            Some((_, list)) => list.push(event),
+            None => by_field.push((field, vec![event])),
+        }
     }
-    if part.get("touches").is_none() {
-        part["touches"] = serde_json::json!([]);
+    for (field, events) in by_field {
+        let own = part
+            .get(field)
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        let appended = &events[own..];
+        if appended.is_empty() {
+            continue;
+        }
+        if part.get(field).is_none() {
+            part[field] = serde_json::json!([]);
+        }
+        part[field]
+            .as_array_mut()
+            .expect("parsed events")
+            .extend(appended.iter().map(|event| device_event(event)));
     }
-    part["touches"]
-        .as_array_mut()
-        .expect("parsed touches")
-        .extend(appended.iter().map(touch_event));
 }
 
-fn touch_event(event: &Event<Touch>) -> Value {
-    serde_json::json!({
-        "t_ps": event.at.as_ps(),
-        "x": event.to.x,
-        "y": event.to.y,
-        "down": event.to.down,
-    })
+fn device_event(event: &Event<Declared>) -> Value {
+    let mut json = serde_json::Map::new();
+    json.insert("t_ps".into(), event.at.as_ps().into());
+    for &(name, value) in event.to.pairs() {
+        json.insert(
+            name.into(),
+            match value {
+                FieldValue::Int(int) => int.into(),
+                FieldValue::Bool(on) => on.into(),
+            },
+        );
+    }
+    Value::Object(json)
 }
 
 fn serial_event(event: &SerialEvent) -> Value {

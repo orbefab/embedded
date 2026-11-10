@@ -1,7 +1,7 @@
-use orbe_model::Time;
+use orbe_model::{Time, Value as FieldValue};
 
-use crate::device::{Cst816, Touch};
-use crate::netlist::{Appended, Baud, Chip, Contact, Frame, Model, Schedule, SerialSend, Value};
+use crate::device::Mismatch;
+use crate::netlist::{Appended, Baud, Contact, Frame, Model, Schedule, SerialSend, Value};
 use crate::passive::position_rule;
 
 use crate::diagnostic::ValueRule;
@@ -35,8 +35,16 @@ pub enum Setting {
     Level(Finite),
     /// 8N1 frames on a `serial` source.
     Serial(Serial),
-    /// A point on a `cst816`. `x` and `y` run from 0 to 4095.
-    Touch(Touch),
+    /// An event a device part declares, such as `touch` on a `cst816`.
+    Event(DeviceEvent),
+}
+
+/// An event by the name its device declares, with a value for each of the event's fields in any
+/// order. A `cst816` takes `touch` with integers `x` and `y` from 0 to 4095 and a bool `down`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeviceEvent {
+    pub name: String,
+    pub fields: Vec<(String, FieldValue)>,
 }
 
 /// An input in its part's events.
@@ -56,16 +64,17 @@ pub enum Rejected {
     /// No part has the input's name.
     UnknownPart,
     /// A setting on a part that takes none of any kind: a resistor, a capacitor, an inductor, a
-    /// relay, a junction, a `step` or `pulse` source, or a chip. A `cst816` takes only a touch,
-    /// so a contact, a level or a serial send on it is this too.
+    /// relay, a junction, a `step` or `pulse` source, or a chip. A device part takes only its
+    /// events, so a contact, a level or a serial send on a `cst816` is this too.
     NotSettable,
     /// A contact on a source or a potentiometer, a level on a switch, a serial send on a
     /// switch, a potentiometer, or a plain or `steps` source, or a contact or a level on a
-    /// `serial` source, or a touch on a switch, a potentiometer, a plain or `steps` source,
-    /// or a `serial` source.
+    /// `serial` source, or a device event on a switch, a potentiometer, a plain or `steps`
+    /// source, or a `serial` source. On a device part, an event it does not declare, or one
+    /// with a field missing, unknown, repeated or of the wrong kind.
     WrongSetting,
-    /// A position outside `(0, 1)`, a leg that breaks the resistance rules, or a touch
-    /// coordinate outside 0 to 4095.
+    /// A position outside `(0, 1)`, a leg that breaks the resistance rules, or a device event's
+    /// integer outside its span, such as a touch coordinate outside 0 to 4095.
     Value(ValueRule),
     /// It would land at or after `stop`, or a serial send's frames would not end inside a
     /// time the engine can store.
@@ -81,7 +90,7 @@ impl Session {
     /// potentiometer, in that field's unit. A serial send sets a `serial` source. It lands at the
     /// latest of that time and the end of the source's last event, so a send asked for while the
     /// last frames are still on the wire starts when the line is idle. The start bit is at that
-    /// time. A touch sets one point on a `cst816`, and a point equal to the last one still lands.
+    /// time. A device event lands on its part, and one equal to the last still lands.
     /// One call appends one event and solves the held step once, however many bytes it
     /// sends. A batch run of the export takes every accepted step there. The held step is solved
     /// again with the new edge, and every step that then lands by `now` is accepted. A level or a
@@ -124,7 +133,7 @@ impl Session {
     /// The document `open_document` read, with every applied input in its part. A switch event
     /// is appended to `events`. A plain `voltage`, `current` or `position` becomes `steps`, and
     /// a `steps` field gains the new levels. A `serial` field gains one event per applied send.
-    /// A `cst816` gains each applied point on `touches`.
+    /// A device part gains each applied event on its event's field, `touches` on a `cst816`.
     /// A part with nothing applied is unchanged. A plain source does not become a `serial` source.
     /// While the session runs, `stop_ps` is the held step's reach, at least `max_step_ps` and at
     /// most the document's `stop_ps`. No test pins the reach in that bound; the argument in `docs/engine/engine.md` Sessions covers it. A batch run of the export
@@ -165,14 +174,7 @@ fn decision(
             Ok(level_decision(&pot.position, *level, from))
         }
         (Model::Potentiometer(_), Setting::Contact(_)) => Err(Rejected::WrongSetting),
-        (Model::Chip(Chip::Cst816(dev)), Setting::Touch(touch)) => {
-            touch_decision(dev, *touch, from)
-        }
-        (_, Setting::Touch(_)) => Err(if takes_another_setting(model) {
-            Rejected::WrongSetting
-        } else {
-            Rejected::NotSettable
-        }),
+        (_, Setting::Event(event)) => event_decision(model, event, from),
         (_, Setting::Serial(send)) => serial_decision(model, send, from),
         (_, Setting::Contact(_)) => {
             if model.serial().is_some() || model.level().is_some() {
@@ -227,15 +229,30 @@ fn takes_another_setting(model: &Model) -> bool {
         || model.serial().is_some()
 }
 
-fn touch_decision(
-    dev: &Cst816,
-    touch: Touch,
+fn event_decision(
+    model: &Model,
+    event: &DeviceEvent,
     from: Time,
 ) -> Result<(Appended, Option<Time>, bool), Rejected> {
-    if touch.x > Cst816::COORD_MAX || touch.y > Cst816::COORD_MAX {
-        return Err(Rejected::Value(ValueRule::Span));
-    }
-    Ok((Appended::Touch(touch), dev.earliest(from), false))
+    let Some((row, events)) = model.device() else {
+        return Err(if takes_another_setting(model) {
+            Rejected::WrongSetting
+        } else {
+            Rejected::NotSettable
+        });
+    };
+    let spec = row
+        .events
+        .iter()
+        .find(|spec| spec.name == event.name)
+        .ok_or(Rejected::WrongSetting)?;
+    let declared = spec
+        .declared(&event.fields)
+        .map_err(|mismatch| match mismatch {
+            Mismatch::Shape => Rejected::WrongSetting,
+            Mismatch::Span => Rejected::Value(ValueRule::Span),
+        })?;
+    Ok((Appended::Event(declared), events.earliest(from), false))
 }
 
 fn level_decision(

@@ -52,8 +52,8 @@ use crate::tran::Rows;
 
 pub use crate::serial::SerialByte;
 pub use session::{
-    Applied, Display, EdgeCursor, Input, Leds, Probe, Refused, Rejected, Serial, SerialCursor,
-    Session, Setting, Status,
+    Applied, DeviceEvent, Display, EdgeCursor, Input, Leds, Probe, Refused, Rejected, Serial,
+    SerialCursor, Session, Setting, Status,
 };
 pub use topology::floating_nets;
 
