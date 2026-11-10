@@ -423,3 +423,28 @@ fn two_runs_of_each_transient_example_differ_only_in_created_at() {
         let _ = fs::remove_dir_all(right);
     }
 }
+
+/// The scripts that call `orbe-run` stop on any exit but 0, so the process's own exits are
+/// checked here: no arguments is a usage error, and a missing netlist is an io error that writes
+/// nothing.
+#[test]
+fn the_binary_exits_two_on_usage_and_three_on_a_missing_netlist() {
+    let bin = env!("CARGO_BIN_EXE_orbe-run");
+    let usage = std::process::Command::new(bin).output().unwrap();
+    assert_eq!(usage.status.code(), Some(2));
+    let doc: serde_json::Value = serde_json::from_slice(&usage.stdout).unwrap();
+    assert_eq!(doc["status"], "usage_error", "{doc}");
+
+    let out = scratch("missing-netlist");
+    let missing = std::process::Command::new(bin)
+        .arg("run")
+        .arg(scratch("no-such-netlist").join("netlist.json"))
+        .arg("--out")
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(3));
+    let doc: serde_json::Value = serde_json::from_slice(&missing.stdout).unwrap();
+    assert_eq!(doc["status"], "io_error", "{doc}");
+    assert!(!out.exists(), "{} was written", out.display());
+}
