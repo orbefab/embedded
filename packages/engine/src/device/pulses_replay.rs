@@ -1,19 +1,22 @@
 //! The `pulses_replay` chip behind the seam. `OUT` holds `idle` for the whole run, and the
 //! core stops at each event's end, where it sends the event as a `Pulses` record.
 
-use crate::netlist::PartId;
-
-use crate::chip::OutputStage;
-use crate::netlist::NetId;
-use crate::netlist::Value;
-
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::link::{Pulses, Record, RecordKind};
-
-use crate::time::Time;
+use serde::Deserialize;
 
 use crate::active::{Chip, Drive, Output, Stage, Stop, Takes};
+use crate::diagnostic::{Diagnostic, ScheduleRule, ValueRule};
+use crate::link::{Pulses, Record, RecordKind};
+use crate::name::{Name, Ref};
+use crate::netlist::NetId;
+use crate::netlist::PartId;
+use crate::netlist::Value;
+use crate::netlist::json::waveform::serial_schedule;
+use crate::netlist::json::{PinMap, resolve_pins};
+use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
+use crate::time::Time;
 
 const VCC: usize = 0;
 const GND: usize = 1;
@@ -147,19 +150,6 @@ pub struct PulseTrain {
 impl PulsesReplay {
     pub const PINS: [&'static str; 3] = ["VCC", "GND", "OUT"];
 }
-
-// The `pulses_replay` kind: its pins, its idle level, its output stage and its trains.
-
-use std::collections::BTreeMap;
-
-use serde::Deserialize;
-
-use crate::chip::stage::WireOutputStage;
-use crate::chip::stage::resolve_output_stage;
-use crate::diagnostic::{Diagnostic, ScheduleRule, ValueRule};
-use crate::name::{Name, Ref};
-use crate::netlist::json::waveform::serial_schedule;
-use crate::netlist::json::{PinMap, resolve_pins};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

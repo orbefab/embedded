@@ -209,7 +209,6 @@ pub(crate) struct WireCapacitor {
     pub(crate) name: String,
     pins: PinMap,
     capacitance: WireValue,
-    // Required but nullable, like the ratings below.
     #[serde(deserialize_with = "Option::deserialize")]
     initial: Option<WireValue>,
 }

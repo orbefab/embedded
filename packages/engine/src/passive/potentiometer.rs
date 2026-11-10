@@ -1,3 +1,10 @@
+use std::collections::BTreeMap;
+
+use serde::Deserialize;
+
+use crate::diagnostic::{Diagnostic, ValueRule};
+use crate::mna::Stamp;
+use crate::name::{Name, Ref};
 use crate::netlist::Model;
 use crate::netlist::NetId;
 use crate::netlist::Schedule;
@@ -5,22 +12,8 @@ use crate::netlist::Source;
 use crate::netlist::Value;
 use crate::netlist::broken_fraction;
 use crate::netlist::broken_positive;
-use serde::Deserialize;
-
-use crate::mna::Stamp;
-
-pub(crate) fn stamp(pot: &Potentiometer, stamp: &mut Stamp<'_>) {
-    let ohms = pot.resistance.si.get();
-    let position = stamp
-        .conditions
-        .side()
-        .read(&pot.position, stamp.conditions.at)
-        .si
-        .get();
-    let [a, wiper, b] = pot.pins;
-    stamp.conductance(a, wiper, 1.0 / (position * ohms));
-    stamp.conductance(wiper, b, 1.0 / ((1.0 - position) * ohms));
-}
+use crate::netlist::json::waveform::{WirePosition, WireSteps};
+use crate::netlist::json::{FRACTION_UNIT, PinMap, WireValue, resolve_pins, resolve_value};
 
 /// `a` to `wiper` is `position * resistance`. `wiper` to `b` is the rest.
 #[derive(Clone, Debug, PartialEq)]
@@ -90,15 +83,6 @@ pub(crate) struct WirePotentiometer {
     resistance: WireValue,
     position: WirePosition,
 }
-
-// The `potentiometer` kind: pins `a`, `wiper` and `b`, a resistance in `ohm`, and a position in `1`.
-
-use std::collections::BTreeMap;
-
-use crate::diagnostic::{Diagnostic, ValueRule};
-use crate::name::{Name, Ref};
-use crate::netlist::json::waveform::{WirePosition, WireSteps};
-use crate::netlist::json::{FRACTION_UNIT, PinMap, WireValue, resolve_pins, resolve_value};
 
 pub(crate) fn resolve_potentiometer(
     name: &Name,
@@ -219,4 +203,17 @@ fn refuse_fraction(
         value: number,
         rule: ValueRule::Fraction,
     });
+}
+
+pub(crate) fn stamp(pot: &Potentiometer, stamp: &mut Stamp<'_>) {
+    let ohms = pot.resistance.si.get();
+    let position = stamp
+        .conditions
+        .side()
+        .read(&pot.position, stamp.conditions.at)
+        .si
+        .get();
+    let [a, wiper, b] = pot.pins;
+    stamp.conductance(a, wiper, 1.0 / (position * ohms));
+    stamp.conductance(wiper, b, 1.0 / ((1.0 - position) * ohms));
 }

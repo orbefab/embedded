@@ -5,19 +5,24 @@
 //! A touch is applied by [`Core::touch`] at the schedule's time. The drive image does not change
 //! then. INT falls 1 ps later and rises after [`INT_PULSE_PS`]. That width is a guess.
 
-use crate::netlist::PartId;
+use std::collections::BTreeMap;
 
-use crate::netlist::Event;
-use crate::netlist::MIN_GAP_PS;
-use crate::netlist::NetId;
-use crate::netlist::Threshold;
-use crate::netlist::Value;
-
-use crate::time::Time;
+use serde::Deserialize;
 
 use crate::active::i2c::{self, Engine, Target};
 use crate::active::{Chip, Drive, Output, Stage, Stop};
+use crate::diagnostic::{Diagnostic, ScheduleRule, ValueRule};
 use crate::mna::Node;
+use crate::name::{Name, Ref};
+use crate::netlist::Event;
+use crate::netlist::MIN_GAP_PS;
+use crate::netlist::NetId;
+use crate::netlist::PartId;
+use crate::netlist::Threshold;
+use crate::netlist::Value;
+use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
+use crate::netlist::json::{PinMap, WireValue, resolve_pins, resolve_value};
+use crate::time::Time;
 use crate::watch::{Signal, Watch};
 
 const VCC: usize = 0;
@@ -961,17 +966,6 @@ impl Cst816 {
         Some(Time::from_ps(from.as_ps().max(first)))
     }
 }
-
-// The `cst816` kind: its pins, its open-drain low side, its input threshold and its touches.
-
-use std::collections::BTreeMap;
-
-use serde::Deserialize;
-
-use crate::diagnostic::{Diagnostic, ScheduleRule, ValueRule};
-use crate::name::{Name, Ref};
-use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
-use crate::netlist::json::{PinMap, WireValue, resolve_pins, resolve_value};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

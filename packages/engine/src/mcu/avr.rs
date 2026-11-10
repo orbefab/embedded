@@ -1,24 +1,27 @@
 //! The ATmega328P behind the seam. Its package pins become outputs, watches, and samples
 //! around `orbe_avr::Timeline`, and its oscillator converts between picoseconds and cycles.
 
-use crate::netlist::PartId;
+use std::collections::BTreeMap;
 
-use crate::chip::OutputStage;
+use serde::Deserialize;
+
+use crate::active::{Chip, Drive, Frame, Output, Phase, Stage, Stop, Takes};
+use crate::diagnostic::{Diagnostic, FirmwareRule, ValueRule};
+use crate::i2c::I2cPhase;
+use crate::mna::Node;
+use crate::name::{Name, Ref};
 use crate::netlist::IntValue;
 use crate::netlist::NetId;
+use crate::netlist::PartId;
 use crate::netlist::Threshold;
 use crate::netlist::Value;
 use crate::netlist::json::threshold::WireThreshold;
 use crate::netlist::json::threshold::resolve_threshold;
-
-use crate::i2c::I2cPhase;
-
+use crate::netlist::json::{PinMap, WireInt, WireValue, resolve_int, resolve_pins, resolve_value};
+use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
 use crate::time::Time;
-use orbe_avr::{Channel, Cpu, I2cNote, PinDrive, Port, Timeline};
-
-use crate::active::{Chip, Drive, Frame, Output, Phase, Stage, Stop, Takes};
-use crate::mna::Node;
 use crate::watch::{Signal, Watch};
+use orbe_avr::{Channel, Cpu, I2cNote, PinDrive, Port, Timeline};
 
 /// What a package pin is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -481,21 +484,6 @@ impl Fuses {
         self.high & 0x80 != 0
     }
 }
-
-// The `atmega328p` kind: its pins, its firmware as Intel HEX text, its clock and fuses, and
-// the values of its pin electrics.
-
-use std::collections::BTreeMap;
-
-use serde::Deserialize;
-
-use crate::chip::stage::WireOutputStage;
-use crate::chip::stage::resolve_output_stage;
-use crate::netlist::json::{PinMap, WireInt, WireValue, resolve_int, resolve_pins, resolve_value};
-
-use crate::diagnostic::{Diagnostic, FirmwareRule, ValueRule};
-
-use crate::name::{Name, Ref};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

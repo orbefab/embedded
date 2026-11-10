@@ -32,6 +32,7 @@ mod mna;
 mod newton;
 mod observe;
 mod op;
+mod output_stage;
 pub mod passive;
 mod ratings;
 #[cfg(feature = "runner")]
@@ -51,7 +52,6 @@ use crate::timestamp::Timestamp;
 use crate::tran::Rows;
 
 pub use crate::serial::SerialByte;
-pub use device::st77916;
 pub use session::{
     Applied, Display, EdgeCursor, Input, Leds, Probe, Refused, Rejected, Serial, SerialCursor,
     Session, Setting, Status,

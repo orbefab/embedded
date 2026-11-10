@@ -1,9 +1,6 @@
 //! The NE555 as its ladder, three comparators and TI SLFS022K Table 6-1. There is no
 //! propagation delay and no input current.
 
-use crate::chip::OutputStage;
-use crate::chip::stage::WireOutputStage;
-use crate::chip::stage::resolve_output_stage;
 use crate::diagnostic::Diagnostic;
 use crate::name::Name;
 use crate::name::Ref;
@@ -13,6 +10,7 @@ use crate::netlist::json::PinMap;
 use crate::netlist::json::WireValue;
 use crate::netlist::json::resolve_pins;
 use crate::netlist::json::resolve_value;
+use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 

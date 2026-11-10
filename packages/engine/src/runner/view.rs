@@ -10,7 +10,7 @@ use crate::name::Name;
 use serde::{Deserialize, Serialize};
 
 use super::{Failure, png};
-use crate::st77916;
+use crate::device::st77916;
 
 /// `orbe-run view` stdout body: the PNG it wrote for each display part, by part name.
 #[derive(Serialize)]

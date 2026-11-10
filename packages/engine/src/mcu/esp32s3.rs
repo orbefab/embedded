@@ -10,30 +10,36 @@
 //! A console packet has no line timing: every byte of one starts and ends at the cycle the
 //! firmware flushed it.
 
-use crate::netlist::PartId;
+use std::collections::BTreeMap;
 
-use crate::chip::OutputStage;
+use serde::Deserialize;
+
+use crate::active::{Chip, Drive, Frame, Output, Stage, Stop, Takes};
+use crate::blob::{Blob, Blobs, Role, Sha256};
+use crate::diagnostic::{
+    BlobRule, ChipSetting, Diagnostic, FirmwareRule, FlashRefusal, ResetReason, ScheduleRule,
+    Unsupported,
+};
+use crate::link::{self, Cs, Lanes, Record, RecordKind, Spi, SpiNets, SpiPhase};
+use crate::mna::Node;
+use crate::name::{Name, Ref};
 use crate::netlist::Event;
 use crate::netlist::NetId;
+use crate::netlist::PartId;
 use crate::netlist::Threshold;
 use crate::netlist::Value;
-use crate::netlist::elf;
-use crate::netlist::flash;
-
-use crate::diagnostic::{ChipSetting, Diagnostic, FlashRefusal, ResetReason, Unsupported};
-use crate::link::{self, Cs, Lanes, Record, RecordKind, Spi, SpiNets, SpiPhase};
-use crate::name::Ref;
-
+use crate::netlist::elf::{self, Elf};
+use crate::netlist::flash::{self, Flash};
+use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
+use crate::netlist::json::{PinMap, WireValue, resolve_value};
+use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
 use crate::time::Time;
+use crate::watch::{Signal, Watch};
 use orbe_espressif::s3::{
     self, CoreId, Duty, Fault, Halt, PadDrive, Pc, Refused, ResetCause, TICK_HZ, Tick, Touch,
     Train, Transfer,
 };
 use orbe_xtensa::Missing;
-
-use crate::active::{Chip, Drive, Frame, Output, Stage, Stop, Takes};
-use crate::mna::Node;
-use crate::watch::{Signal, Watch};
 
 /// The pin pairs the chip joins at DC, for `net.floating`, by pin index: each GPIO to `VCC`
 /// and to `GND` through its leakage. A part's GPIOs with nets take the first `2 * n`.
@@ -1131,24 +1137,6 @@ impl Esp32s3 {
         })
     }
 }
-
-// The `esp32s3` kind: its supply pins and the GPIOs it has nets on, its firmware as a blob
-// reference to an ELF executable or as blobs placed on its flash with the mask ROM's blob, and
-// the values of its pin electrics.
-
-use std::collections::BTreeMap;
-
-use serde::Deserialize;
-
-use crate::blob::{Blob, Blobs, Role, Sha256};
-use crate::chip::stage::WireOutputStage;
-use crate::chip::stage::resolve_output_stage;
-use crate::diagnostic::{BlobRule, FirmwareRule, ScheduleRule};
-use crate::name::Name;
-use crate::netlist::elf::Elf;
-use crate::netlist::flash::Flash;
-use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
-use crate::netlist::json::{PinMap, WireValue, resolve_value};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

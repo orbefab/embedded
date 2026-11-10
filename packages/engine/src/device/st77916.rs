@@ -10,27 +10,28 @@
 //! CS is released or when RST goes low. A register command runs when it closes. A pixel write
 //! puts each pixel in the frame memory as it arrives and adds a rectangle row when it closes.
 
-use crate::netlist::PartId;
-
-use crate::chip::OutputStage;
-use crate::netlist::NetId;
-use crate::netlist::Threshold;
-use crate::netlist::Value;
-
-mod glass;
-
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::diagnostic::ProtocolRule;
-use crate::display::{Brightness, Flags, Panel, RectangleHash};
-use crate::link::{Cs, Duty, Lanes, LinkRow, RecordKind, Spi};
-
-use crate::time::Time;
+use serde::Deserialize;
 
 use crate::active::{Chip, Drive, Output, SpiTarget, Stage, Takes};
+use crate::diagnostic::{Diagnostic, ProtocolRule};
+use crate::display::{Brightness, Flags, Panel, RectangleHash};
+use crate::link::{Cs, Duty, Lanes, LinkRow, RecordKind, Spi};
 use crate::mna::Node;
+use crate::name::{Name, Ref};
+use crate::netlist::NetId;
+use crate::netlist::PartId;
+use crate::netlist::Threshold;
+use crate::netlist::Value;
+use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
+use crate::netlist::json::{PinMap, resolve_pins};
+use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
+use crate::time::Time;
 use crate::watch::{Signal, Watch};
+
+mod glass;
 
 pub use glass::glass;
 
@@ -1260,17 +1261,6 @@ impl St77916 {
         "VCC", "GND", "CS", "SCLK", "D0", "D1", "D2", "D3", "RST", "TE", "BLK",
     ];
 }
-
-// The `st77916` kind: its pins, its `TE` output stage and its `RST` threshold.
-
-use serde::Deserialize;
-
-use crate::chip::stage::WireOutputStage;
-use crate::chip::stage::resolve_output_stage;
-use crate::diagnostic::Diagnostic;
-use crate::name::{Name, Ref};
-use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
-use crate::netlist::json::{PinMap, resolve_pins};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

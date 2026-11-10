@@ -9,21 +9,23 @@
 //! page 3, gives T1L as 220 ns to 420 ns. The chain checks neither low, so a train timed to
 //! either sheet decodes. A high outside both windows is rule `bit`, dropped, and warned once.
 
-use crate::netlist::PartId;
-
-use crate::netlist::NetId;
-use crate::netlist::Threshold;
-
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::diagnostic::ProtocolRule;
-use crate::leds::Chain as Observed;
-use crate::link::{LinkRow, Record, RecordKind};
-
-use crate::time::Time;
+use serde::Deserialize;
 
 use crate::active::{Chip, Drive, Stop, Takes};
+use crate::diagnostic::{Diagnostic, ProtocolRule, ValueRule};
+use crate::leds::Chain as Observed;
+use crate::link::{LinkRow, Record, RecordKind};
 use crate::mna::Node;
+use crate::name::{Name, Ref};
+use crate::netlist::NetId;
+use crate::netlist::PartId;
+use crate::netlist::Threshold;
+use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
+use crate::netlist::json::{PinMap, resolve_pins};
+use crate::time::Time;
 use crate::watch::{Signal, Watch};
 
 const VCC: usize = 0;
@@ -751,17 +753,6 @@ impl Ws2812 {
     /// The count a part omits.
     pub const LEDS_DEFAULT: u16 = 13;
 }
-
-// The `ws2812` kind: its pins, its LED count and its `DIN` threshold.
-
-use std::collections::BTreeMap;
-
-use serde::Deserialize;
-
-use crate::diagnostic::{Diagnostic, ValueRule};
-use crate::name::{Name, Ref};
-use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
-use crate::netlist::json::{PinMap, resolve_pins};
 
 fn default_leds() -> u16 {
     Ws2812::LEDS_DEFAULT

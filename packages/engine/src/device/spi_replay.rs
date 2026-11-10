@@ -1,20 +1,24 @@
 //! The `spi_replay` chip behind the seam. Its pins hold their idle levels for the whole run, and
 //! its core stops at each event's end, where it sends the event as a `Spi` record.
 
-use crate::netlist::PartId;
-
-use crate::chip::OutputStage;
-use crate::netlist::IntValue;
-use crate::netlist::NetId;
-use crate::netlist::Value;
-
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::link::{Record, RecordKind, Spi, SpiNets};
-
-use crate::time::Time;
+use serde::Deserialize;
 
 use crate::active::{Chip, Drive, Output, Stage, Stop, Takes};
+use crate::diagnostic::{Diagnostic, ScheduleRule};
+use crate::link::{Cs, Lanes, Record, RecordKind, Spi, SpiNets, SpiPhase};
+use crate::name::{Name, Ref};
+use crate::netlist::IntValue;
+use crate::netlist::NetId;
+use crate::netlist::PartId;
+use crate::netlist::Value;
+use crate::netlist::json::waveform::serial_schedule;
+use crate::netlist::json::{PinMap, WireInt, resolve_int, resolve_pins};
+use crate::netlist::waveform::boundary;
+use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
+use crate::time::Time;
 
 const VCC: usize = 0;
 const GND: usize = 1;
@@ -184,21 +188,6 @@ pub struct SpiEvent {
     pub data: Arc<[u8]>,
     pub cs: Cs,
 }
-
-// The `spi_replay` kind: its pins, its clock, its output stage and its transactions.
-
-use std::collections::BTreeMap;
-
-use serde::Deserialize;
-
-use crate::chip::stage::WireOutputStage;
-use crate::chip::stage::resolve_output_stage;
-use crate::diagnostic::{Diagnostic, ScheduleRule};
-use crate::link::{Cs, Lanes, SpiPhase};
-use crate::name::{Name, Ref};
-use crate::netlist::json::waveform::serial_schedule;
-use crate::netlist::json::{PinMap, WireInt, resolve_int, resolve_pins};
-use crate::netlist::waveform::boundary;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
