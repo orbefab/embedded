@@ -1,7 +1,7 @@
-"""Self-test cases for packages/engine/scripts/ngspice_refs.py.
+"""What `ngspice_refs` accepts and what it refuses.
 
-The self-test needs ngspice-42 on PATH. The operating-point cases run decks.
-The rest do not.
+Skip-path and deck-text cases do not run ngspice. The regulator deck and the
+operating-point cases do, and they fail when ngspice-42 is not on PATH.
 """
 
 import json
@@ -10,11 +10,12 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import ngspice_refs as refs
 from bounce import bounce_vectors
 
 
 def ngspice_requirement(refs):
-    """None when ngspice-42 is on PATH. Otherwise the reason the self-test stops."""
+    """None when ngspice-42 is on PATH. Otherwise why the ngspice cases stop."""
     if shutil.which("ngspice") is None:
         return "ngspice is not on PATH"
     try:
@@ -31,13 +32,8 @@ def ngspice_requirement(refs):
     return None
 
 
-def self_test(refs):
-    """Skip paths and the operating-point refusal. stdout is one JSON document."""
-    reason = ngspice_requirement(refs)
-    if reason is not None:
-        document = {"ok": False, "cases": [{"name": "ngspice 42", "ok": False, "reason": reason}]}
-        print(json.dumps(document, indent=2))
-        return 1
+def skip_reports():
+    """Each skip path's exit code, reason and failure."""
     specs = [
         {
             "name": "unknown kind",
@@ -283,28 +279,45 @@ def self_test(refs):
                     "failure": got_failure,
                 }
             )
-    cases.append(initial_conditions(refs))
-    cases.append(source_decks(refs))
-    cases.append(serial_boundaries(refs))
-    cases.append(source_jump_times(refs))
-    cases.append(potentiometer_deck(refs))
-    cases.append(diode_deck(refs))
-    cases.append(zener_deck(refs))
-    cases.append(regulator_deck(refs))
-    cases.append(transistor_deck(refs))
-    cases.append(nmos_deck(refs))
-    cases.append(inductor_deck(refs))
-    cases.append(corner_check(refs))
-    cases.append(relay_deck(refs))
-    cases.append(contact_edges(refs))
-    cases.append(bare_flyback(refs))
-    cases.append(bounce_vectors())
-    cases.append(vcd_reader(refs))
-    cases.append(engine_grid(refs))
-    cases.extend(operating_point_fallback(refs))
-    document = {"ok": all(case["ok"] for case in cases), "cases": cases}
-    print(json.dumps(document, indent=2))
-    return 0 if document["ok"] else 1
+    return cases
+
+
+def test_skip_paths():
+    for case in skip_reports():
+        assert case["ok"], case
+
+
+def test_decks_grid_and_bounce():
+    cases = [
+        initial_conditions(refs),
+        source_decks(refs),
+        serial_boundaries(refs),
+        source_jump_times(refs),
+        potentiometer_deck(refs),
+        diode_deck(refs),
+        zener_deck(refs),
+        transistor_deck(refs),
+        nmos_deck(refs),
+        inductor_deck(refs),
+        corner_check(refs),
+        relay_deck(refs),
+        contact_edges(refs),
+        bare_flyback(refs),
+        bounce_vectors(),
+        vcd_reader(refs),
+        engine_grid(refs),
+    ]
+    for case in cases:
+        assert case["ok"], case
+
+
+def test_regulator_and_operating_point():
+    reason = ngspice_requirement(refs)
+    assert reason is None, reason
+    case = regulator_deck(refs)
+    assert case["ok"], case
+    for case in operating_point_fallback(refs):
+        assert case["ok"], case
 
 
 def engine_grid(refs):

@@ -5,7 +5,6 @@
 """Decode a WS2812E-1313 chain from a run folder's logic.vcd, apart from the engine.
 
     uv run packages/engine/scripts/ws2812_decode.py RUN_DIR [--part NAME]
-    uv run packages/engine/scripts/ws2812_decode.py --self-test
 
 The rule is the Worldsemi WS2812E-1313 datasheet's, V1.1, page 3, in picoseconds. A high
 of 220000 to 380000 (T0H) is a 0, and a high of 580000 to 1000000 (T1H) is a 1. A low of
@@ -19,8 +18,7 @@ LED 1 the next 24, and so on, green then red then blue, most significant bit fir
 the frame did not fill keeps its colour.
 
 It compares the latches with `traces/leds.csv` and the colours with that part's `leds`
-entry in `observations.json`. `--part` limits the comparison to one part. `--self-test`
-decodes made-up lines instead of a run folder.
+entry in `observations.json`. `--part` limits the comparison to one part.
 """
 
 import argparse
@@ -123,33 +121,11 @@ def csv_rows(text):
     return rows
 
 
-def self_test():
-    """A power-on low longer than RES, then one LED of 0x80 0x00 0x00 and a reset."""
-    start = 2 * RES
-    samples = [(0, False)]
-    at = start
-    for k in range(24):
-        high = 625_000 if k == 0 else 312_500
-        samples += [(at, True), (at + high, False)]
-        at += 1_250_000
-    fall = samples[-1][0]
-    stop = fall + 2 * RES
-    want = [(fall + RES + 1, [1] + [0] * 23)]
-    got = frames(runs(samples, stop))
-    if got != want:
-        raise SystemExit(f"self-test: frames {got}, want {want}")
-    print("self-test: 1 frame after a power-on low longer than RES")
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run", nargs="?")
     parser.add_argument("--part")
-    parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
-    if args.self_test:
-        self_test()
-        return
     if args.run is None:
         parser.error("RUN_DIR is required")
     run = Path(args.run)

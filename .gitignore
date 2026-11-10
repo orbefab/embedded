@@ -12,5 +12,6 @@ dist/
 /blob-report/
 .wrangler/
 __pycache__/
+.pytest_cache/
 .venv/
 packages/engine/tests/circuits/*/op.raw

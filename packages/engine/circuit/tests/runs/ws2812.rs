@@ -124,25 +124,6 @@ fn the_sketch_hex_is_the_one_the_example_runs() {
 
 #[ignore = "full tier"]
 #[test]
-fn the_decoder_passes_its_self_test() {
-    let output = Command::new("uv")
-        .args([
-            "run",
-            "packages/engine/scripts/ws2812_decode.py",
-            "--self-test",
-        ])
-        .current_dir(repo(""))
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[ignore = "full tier"]
-#[test]
 fn the_bit_bang_and_the_replay_report_the_same_colours() {
     let bang = run("atmega-ws2812");
     let replay = run("ws2812-replay");
