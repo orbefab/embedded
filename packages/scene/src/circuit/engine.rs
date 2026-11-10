@@ -1,6 +1,6 @@
 //! The engine's findings on the netlist the reader wrote, placed in the files that wrote it.
 
-use orbe_engine_core::diagnostic::{Diagnostic, ScheduleRule};
+use orbe_engine::diagnostic::{Diagnostic, ScheduleRule};
 use serde_json::{Map, Value};
 
 use super::{Circuit, Head, SetBy, Setter, Written, setter_of};
@@ -83,7 +83,7 @@ impl<'p> Circuit<'p> {
                             .pointer("/bounce/max_bounces/value")
                             .and_then(Value::as_u64)
                             .unwrap_or(0);
-                        let least = duration(2 * edges * orbe_engine_core::netlist::MIN_GAP_PS);
+                        let least = duration(2 * edges * orbe_engine::netlist::MIN_GAP_PS);
                         (
                             fields,
                             message,
@@ -299,7 +299,7 @@ fn schedule_fields(kind: &str, field: &str, event: usize, rule: ScheduleRule) ->
 /// A schedule finding's message and fix in the terms of the part's kind. `at` is the event as
 /// the engine names it, such as `#rp events[0]`.
 fn schedule(kind: &str, rule: ScheduleRule, at: &str, message: &str) -> (String, String) {
-    let gap = orbe_engine_core::netlist::MIN_GAP_PS;
+    let gap = orbe_engine::netlist::MIN_GAP_PS;
     let last = u64::MAX;
     let sender = SENDERS.iter().find(|s| s.kind == kind);
     let switch = kind == "switch";
@@ -352,7 +352,7 @@ fn detail(value: &Value) -> String {
 /// The schema refusal of a netlist holding only `part`, if any.
 fn refusal(head: &Head, part: &Value) -> Option<String> {
     let text = serde_json::to_string(&head.with([part])).expect("a JSON value");
-    let diagnostics = orbe_engine_core::netlist::parse(text.as_bytes()).err()?;
+    let diagnostics = orbe_engine::netlist::parse(text.as_bytes()).err()?;
     diagnostics
         .iter()
         .find(|d| d.code() == "netlist.syntax")

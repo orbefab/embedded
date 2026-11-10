@@ -57,7 +57,7 @@ fast() {
   cargo fmt --all --check
   blobs=$(packages/engine/scripts/blobs.sh)
   cargo clippy --workspace --all-targets --locked -- -D warnings
-  cargo clippy -p orbe-circuit --all-targets --locked --features runner -- -D warnings
+  cargo clippy -p orbe-engine --all-targets --locked --features runner -- -D warnings
   cargo clippy -p orbe-avr --all-targets --locked --features port-skip-check -- -D warnings
   cargo clippy -p orbe-scene -p orbe-session -p orbe-wasm --target wasm32-unknown-unknown --locked \
     -- -D warnings
@@ -69,7 +69,7 @@ run_check() {
   shift 2
   run="${CARGO_TARGET_DIR:-target}/$circuit-check"
   rm -rf "$run"
-  cargo run -q -p orbe-circuit --features runner --bin orbe-run --locked -- \
+  cargo run -q -p orbe-engine --features runner --bin orbe-run --locked -- \
     run "packages/engine/tests/circuits/$circuit/netlist.json" --out "$run" --blobs "$blobs" >/dev/null
   uv run "packages/engine/scripts/$checker" "$@" --check "$run"
   rm -rf "$run"
@@ -78,11 +78,11 @@ run_check() {
 full() {
   fast
   rust_tests -p orbe-avr --features port-skip-check
-  rust_tests -p orbe-circuit --test transient --test session --test runs --run-ignored only
-  cargo clippy -p orbe-xtensa -p orbe-espressif -p orbe-circuit --all-targets --locked \
+  rust_tests -p orbe-engine --test circuit --run-ignored only
+  cargo clippy -p orbe-xtensa -p orbe-espressif -p orbe-engine --all-targets --locked \
     --features orbe-xtensa/poll-skip-check -- -D warnings
   rust_tests -p orbe-xtensa -p orbe-espressif --features orbe-xtensa/poll-skip-check
-  rust_tests -p orbe-circuit --test runs --features orbe-xtensa/poll-skip-check
+  rust_tests -p orbe-engine --test circuit -E 'test(/^runs::/)' --features orbe-xtensa/poll-skip-check
   local name knob_dir
   uv run --project packages/engine/scripts --frozen pytest --rootdir=packages/engine/scripts packages/engine/scripts/tests
   uv run packages/engine/scripts/st77916_example.py --check

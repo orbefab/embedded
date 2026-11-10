@@ -3,9 +3,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use orbe_engine_core::diagnostic::Diagnostic;
-use orbe_engine_core::name::Ref;
-use orbe_engine_core::netlist::{Model, Netlist};
+use orbe_engine::diagnostic::Diagnostic;
+use orbe_engine::name::Ref;
+use orbe_engine::netlist::{Model, Netlist};
 
 use super::{Circuit, ROOT};
 use crate::diagnostic::{Code, Findings, Lint};
@@ -126,7 +126,7 @@ impl Circuit<'_> {
             wired,
             tops,
             scene: tree,
-            engine: orbe_engine_core::netlist::parse(netlist.json.as_bytes())
+            engine: orbe_engine::netlist::parse(netlist.json.as_bytes())
                 .expect("the engine read this netlist when it checked"),
             ground: &netlist.ground,
         };
@@ -378,7 +378,7 @@ fn no_model(s: &Scope, out: &mut Findings) {
 }
 
 fn floating(s: &Scope, out: &mut Findings) {
-    for found in orbe_circuit::floating_nets(&s.engine) {
+    for found in orbe_engine::floating_nets(&s.engine) {
         let Diagnostic::NetFloating { net: Ref::Net(net) } = &found else {
             continue;
         };

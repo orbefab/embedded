@@ -1,6 +1,6 @@
 //! The engine's pin names for each part kind, from the engine's own tables.
 
-use orbe_engine_core::netlist::{
+use orbe_engine::netlist::{
     Atmega328p, Bjt, Capacitor, Cst816, CurrentSource, Inductor, Junction, LinearRegulator, Mosfet,
     Ne555, Potentiometer, PulsesReplay, Relay, Resistor, SpiReplay, St77916, Switch, VoltageSource,
     Ws2812,

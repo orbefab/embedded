@@ -3,10 +3,10 @@
 
 mod common;
 
-use orbe_circuit::{Input, Session, Setting, Status};
-use orbe_engine_core::name::{Name, Ref};
-use orbe_engine_core::netlist::Contact;
-use orbe_engine_core::time::Time;
+use orbe_engine::name::{Name, Ref};
+use orbe_engine::netlist::Contact;
+use orbe_engine::time::Time;
+use orbe_engine::{Input, Session, Setting, Status};
 use orbe_scene::Files;
 
 /// The values while pressed, measured on engine 0.42.0, to the digits recorded then.
@@ -116,13 +116,13 @@ fn the_engine_reads_whole_numbers_as_integers() {
         let Ok(text) = std::fs::read(&path) else {
             continue;
         };
-        if orbe_engine_core::netlist::parse(&text).is_err() {
+        if orbe_engine::netlist::parse(&text).is_err() {
             continue;
         }
         let mut json: serde_json::Value = serde_json::from_slice(&text).unwrap();
         integers(&mut json);
         let changed = serde_json::to_vec(&json).unwrap();
-        if let Err(found) = orbe_engine_core::netlist::parse(&changed) {
+        if let Err(found) = orbe_engine::netlist::parse(&changed) {
             panic!("{}: {found:?}", path.display());
         }
         for part in json["parts"].as_array().unwrap() {

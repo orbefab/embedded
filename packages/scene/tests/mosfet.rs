@@ -8,9 +8,9 @@ mod common;
 
 use std::fs;
 
-use orbe_circuit::RunStats;
-use orbe_engine_core::diagnostic::Severity;
-use orbe_engine_core::run_folder::Results;
+use orbe_engine::RunStats;
+use orbe_engine::diagnostic::Severity;
+use orbe_engine::run_folder::Results;
 use orbe_scene::Files;
 
 const STOP_PS: u64 = 300_000_000_000;
@@ -100,8 +100,8 @@ fn run(drive: Drive, load: Load) -> (Results, RunStats) {
     let netlist = orbe_scene::read(&Files::disk(), &path).unwrap();
     let mut json: serde_json::Value = serde_json::from_str(&netlist.json).unwrap();
     json["analysis"]["transient"]["stop_ps"] = STOP_PS.into();
-    let netlist = orbe_engine_core::netlist::parse(json.to_string().as_bytes()).unwrap();
-    orbe_circuit::simulate_stats(&netlist)
+    let netlist = orbe_engine::netlist::parse(json.to_string().as_bytes()).unwrap();
+    orbe_engine::simulate_stats(&netlist)
 }
 
 /// The value of `key` on the last row.

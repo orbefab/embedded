@@ -1,4 +1,4 @@
-"""The engine's seeded contact bounce, as packages/engine/core/src/netlist/bounce.rs expands it."""
+"""The engine's seeded contact bounce, as packages/engine/src/netlist/bounce.rs expands it."""
 
 # The engine's least time between two edges of one switch.
 MIN_GAP_PS = 2000
@@ -55,7 +55,7 @@ def switch_edges(seed, part):
 
 
 def bounce_vectors():
-    """The Rust unit tests in packages/engine/core/src/netlist/bounce.rs pin the same numbers."""
+    """The Rust unit tests in packages/engine/src/netlist/bounce.rs pin the same numbers."""
     rng = SplitMix64(0)
     first = [rng.next(), rng.next()]
     button = {

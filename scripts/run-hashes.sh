@@ -164,7 +164,7 @@ if [[ -z $target ]]; then
 fi
 
 if [[ -z ${RUNNER:-} ]]; then
-  cargo build -q -p orbe-circuit --features runner --release --locked --bin orbe-run
+  cargo build -q -p orbe-engine --features runner --release --locked --bin orbe-run
   RUNNER=$target/release/orbe-run
 fi
 if [[ ! -x $RUNNER ]]; then

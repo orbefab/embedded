@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use orbe_engine_core::name::Quantity;
+use orbe_engine::name::Quantity;
 use orbe_scene::{MapPart, RefMap};
 use serde::{Deserialize, Serialize};
 

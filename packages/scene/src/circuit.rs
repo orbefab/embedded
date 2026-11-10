@@ -875,7 +875,7 @@ impl<'p> Circuit<'p> {
                 .collect();
             let document = head.with(kept.iter().map(|&i| &parts[i].fields));
             let text = serde_json::to_string_pretty(&document).expect("a JSON value");
-            let Err(diagnostics) = orbe_engine_core::netlist::parse(text.as_bytes()) else {
+            let Err(diagnostics) = orbe_engine::netlist::parse(text.as_bytes()) else {
                 break text;
             };
             let quiet = !clean || !left_out.is_empty();

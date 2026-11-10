@@ -1,7 +1,7 @@
 //! The serial a session keeps: every byte since `open`, decoded as UTF-8 as it arrives. The
 //! replies show this text and `serial contains` searches it.
 
-use orbe_circuit::SerialCursor;
+use orbe_engine::SerialCursor;
 
 use crate::reply::{Change, held};
 

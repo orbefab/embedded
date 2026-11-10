@@ -6,8 +6,7 @@ members = [
   "packages/registry",
   "packages/session",
   "packages/wasm",
-  "packages/engine/core",
-  "packages/engine/circuit",
+  "packages/engine",
   "packages/cores/*",
   "packages/socs/*",
 ]
@@ -23,8 +22,7 @@ license = "MIT OR Apache-2.0"
 orbe-scene = { path = "packages/scene" }
 orbe-registry = { path = "packages/registry" }
 orbe-session = { path = "packages/session" }
-orbe-engine-core = { path = "packages/engine/core" }
-orbe-circuit = { path = "packages/engine/circuit" }
+orbe-engine = { path = "packages/engine" }
 orbe-xtensa = { path = "packages/cores/xtensa" }
 orbe-avr = { path = "packages/socs/avr" }
 orbe-espressif = { path = "packages/socs/espressif" }
@@ -56,7 +54,7 @@ unsafe_code = "forbid"
 
 # The chip models run firmware instruction by instruction, so builds without optimisation still
 # optimise the solver, the cores and the chips.
-[profile.dev.package.orbe-circuit]
+[profile.dev.package.orbe-engine]
 opt-level = 3
 
 [profile.dev.package.orbe-avr]
