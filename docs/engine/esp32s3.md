@@ -1,6 +1,6 @@
 # ESP32-S3 SoC
 
-`packages/socs/espressif`, package `orbe-espressif`, is the ESP32-S3 around the `orbe-xtensa` core. Its `s3` module is the chip. The circuit crate holds it behind the active chip seam, and each `esp32s3` part of a netlist runs one. [netlist.md](netlist.md#esp32-s3) describes the part.
+`packages/socs/espressif`, package `orbe-espressif`, is the ESP32-S3 around the `orbe-xtensa` core. Its `s3` module is the chip. `orbe-engine` holds it behind the active chip seam, and each `esp32s3` part of a netlist runs one. [netlist.md](netlist.md#esp32-s3) describes the part.
 
 The register addresses and bit positions come from IDF's `soc/esp32s3` headers, IDF v5.5.5. The electrical values in `packages/engine/tests/circuits/esp32s3-blink` come from the ESP32-S3 Series Datasheet v2.2, Table 5-4.
 

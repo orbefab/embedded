@@ -11,11 +11,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
 use std::path::Path;
 
-use orbe_circuit::{EdgeCursor, Input, Probe, Refused, Rejected, Session, Setting, Status};
-use orbe_engine_core::diagnostic::{Diagnostic as EngineDiagnostic, Excursion};
-use orbe_engine_core::logic::Level as EngineLevel;
-use orbe_engine_core::name::{Name, Quantity, Ref as EngineRef};
-use orbe_engine_core::netlist::{Analysis, Contact, RatingKind};
+use orbe_engine::diagnostic::{Diagnostic as EngineDiagnostic, Excursion};
+use orbe_engine::logic::Level as EngineLevel;
+use orbe_engine::name::{Name, Quantity, Ref as EngineRef};
+use orbe_engine::netlist::{Analysis, Contact, RatingKind};
+use orbe_engine::{EdgeCursor, Input, Probe, Refused, Rejected, Session, Setting, Status};
 use orbe_scene::{Code as SceneCode, Files, RefMap, View};
 
 use crate::command::{Command, Step};
@@ -241,7 +241,7 @@ impl Live {
 /// The engine runs no stop shorter than the scene's max step or trace grid.
 fn shorter_stop(json: &str, stop: Duration, variable: &str) -> Result<u64, Error> {
     let netlist =
-        orbe_engine_core::netlist::parse(json.as_bytes()).expect("the reader writes a netlist");
+        orbe_engine::netlist::parse(json.as_bytes()).expect("the reader writes a netlist");
     let Analysis::Transient(transient) = netlist.analysis() else {
         unreachable!("a session runs a transient");
     };
@@ -408,7 +408,7 @@ impl Open {
                 "report this with the scene",
             ))
         })?;
-        let netlist = orbe_engine_core::netlist::parse(json.as_bytes())
+        let netlist = orbe_engine::netlist::parse(json.as_bytes())
             .expect("the engine opened the same netlist");
         let Analysis::Transient(transient) = netlist.analysis() else {
             unreachable!("a session runs a transient");
@@ -543,7 +543,7 @@ impl Open {
             }
         }
         found.extend(self.engine.fault().cloned());
-        orbe_engine_core::run_folder::sort_diagnostics(&mut found);
+        orbe_engine::run_folder::sort_diagnostics(&mut found);
         found
     }
 

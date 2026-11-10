@@ -3,7 +3,7 @@
 
 use std::fmt::Write;
 
-use orbe_engine_core::name::Ref as EngineRef;
+use orbe_engine::name::Ref as EngineRef;
 
 use super::{Open, Outcome, engine_name, fail, failed, quantity, t, unit_of};
 use crate::condition::{Condition, Op, State as Want, Unit};

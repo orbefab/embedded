@@ -9,8 +9,7 @@ publish.workspace = true
 
 [dependencies]
 orbe-scene.workspace = true
-orbe-engine-core.workspace = true
-orbe-circuit.workspace = true
+orbe-engine.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

@@ -204,7 +204,7 @@ if ((check)); then
   (
     cd "$root"
     echo "rustc $(rustc --version)"
-    cargo run -q -p orbe-circuit --features runner --bin orbe-run --locked -- \
+    cargo run -q -p orbe-engine --features runner --bin orbe-run --locked -- \
       run "$netlist" --out "$run" --blobs "$cache"
   )
   if [[ $name == console ]]; then

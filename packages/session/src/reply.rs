@@ -258,7 +258,7 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
-    pub fn new(diagnostic: &orbe_engine_core::diagnostic::Diagnostic) -> Diagnostic {
+    pub fn new(diagnostic: &orbe_engine::diagnostic::Diagnostic) -> Diagnostic {
         Diagnostic {
             code: diagnostic.code().to_string(),
             json: serde_json::to_value(diagnostic).unwrap_or_default(),

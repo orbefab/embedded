@@ -1,0 +1,21 @@
+mod common;
+
+mod atmega328p;
+mod cst816;
+mod diagnostic;
+mod document;
+mod inductor;
+mod ne555;
+mod parse;
+mod parts;
+mod potentiometer;
+mod regulator;
+mod relay;
+mod sources;
+mod spi_replay;
+mod switch;
+mod transient;
+mod transistor;
+mod values;
+mod ws2812;
+mod zener;

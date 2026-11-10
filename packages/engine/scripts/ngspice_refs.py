@@ -5,13 +5,13 @@
 """Write each example's ngspice reference from its netlist.json.
 
     uv run packages/engine/scripts/ngspice_refs.py [--check]
-        [packages/engine/tests/circuits/<name> | packages/engine/circuit/tests/fixtures/<name> ...]
+        [packages/engine/tests/circuits/<name> | packages/engine/tests/circuit/fixtures/<name> ...]
 
 For every example it translates netlist.json into deck.cir, runs `ngspice -b`
 on it, and writes the operating point, or the transient waveforms, to
 ngspice.json. A chip's latch edges and a relay's contact edges go to tran.logic. With no example arguments
 it takes every packages/engine/tests/circuits/*/netlist.json, then every
-packages/engine/circuit/tests/fixtures/*/netlist.json, the circuits the reference tests
+packages/engine/tests/circuit/fixtures/*/netlist.json, the circuits the reference tests
 run. `--check` regenerates in memory and
 exits 1 if any committed byte differs, or if a skipped example already has
 deck.cir or ngspice.json. For an example with a chip it also runs the engine and exits 1
@@ -166,7 +166,7 @@ def main(argv):
     if not targets:
         targets = [
             p.parent
-            for folder in ("packages/engine/tests/circuits", "packages/engine/circuit/tests/fixtures")
+            for folder in ("packages/engine/tests/circuits", "packages/engine/tests/circuit/fixtures")
             for p in sorted((ROOT / folder).glob("*/netlist.json"))
         ]
     report = report_examples(targets, check, ngspice_version())
@@ -238,7 +238,7 @@ def logic_reads_back(example):
             "--locked",
             "--quiet",
             "-p",
-            "orbe-circuit",
+            "orbe-engine",
             "--features",
             "runner",
             "--bin",

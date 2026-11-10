@@ -1,0 +1,19 @@
+mod common;
+
+mod atmega328p;
+mod chip;
+mod contact;
+mod divider;
+mod inductor;
+mod junction;
+mod potentiometer;
+mod regulator;
+mod relay;
+mod runs;
+mod session;
+mod solver;
+mod sources;
+mod step;
+mod steps;
+mod transient;
+mod zener;

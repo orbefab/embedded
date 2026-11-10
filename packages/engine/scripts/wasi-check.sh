@@ -38,8 +38,8 @@ rm -rf "$scratch/native" "$scratch/wasi"
 
 cd "$repo"
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}
-cargo build -p orbe-circuit --features runner --bin orbe-run --release --locked
-cargo build -p orbe-circuit --features runner --bin orbe-run --release --locked --target wasm32-wasip1
+cargo build -p orbe-engine --features runner --bin orbe-run --release --locked
+cargo build -p orbe-engine --features runner --bin orbe-run --release --locked --target wasm32-wasip1
 target=$(cargo metadata --format-version 1 --no-deps |
   sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
 runner=$target/release/orbe-run
