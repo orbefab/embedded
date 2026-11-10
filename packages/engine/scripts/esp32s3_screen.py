@@ -224,7 +224,7 @@ def check(run: Path) -> str:
 def write_run(
     run: Path, link: list[tuple], display: list[tuple], image: bytes, console: str, diagnostics: list[dict]
 ) -> None:
-    """A run folder with those rows, frame, console text and diagnostics, as `sim run` lays it out."""
+    """A run folder with those rows, frame, console text and diagnostics, as `orbe-run run` lays it out."""
     traces = run / "traces"
     traces.mkdir(parents=True, exist_ok=True)
     (traces / "link.csv").write_text(

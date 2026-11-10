@@ -72,7 +72,7 @@ pub enum Source {
     /// A list the caller passed, such as the wasm package's.
     #[default]
     List,
-    /// The `blobs` folder beside the netlist and each `--blobs` folder, as `sim run` searches.
+    /// The `blobs` folder beside the netlist and each `--blobs` folder, as `orbe-run run` searches.
     Folders,
 }
 
@@ -82,7 +82,7 @@ impl Blobs {
         Blobs::default()
     }
 
-    /// None yet, from the folders `sim run` searches.
+    /// None yet, from the folders `orbe-run run` searches.
     pub fn from_folders() -> Blobs {
         Blobs {
             source: Source::Folders,

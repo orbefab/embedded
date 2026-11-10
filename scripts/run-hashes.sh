@@ -27,8 +27,7 @@
 # netlist. Leave --time off when you diff two manifests.
 #
 # RUNNER is the binary that accepts `run <netlist> --out <dir> [--blobs <dir>]`.
-# When RUNNER is unset, the script builds release orbe-run. Point RUNNER at
-# target/release/sim to hash that binary's folders instead.
+# When RUNNER is unset, the script builds release orbe-run.
 #
 # The script needs bash, python3, sha256sum and cargo. It installs nothing.
 set -euo pipefail

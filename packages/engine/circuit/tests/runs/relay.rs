@@ -1,11 +1,10 @@
 //! The relay with no diode. The coil rings faster than the 50 us grid, so the rows are not
 //! compared. The collector envelope and the release edge are.
 
-mod common;
-
 use std::fs;
 use std::path::Path;
 
+use crate::common;
 use orbe_engine_core::diagnostic::Severity;
 use orbe_engine_core::logic::{Level, Logic};
 use orbe_engine_core::timestamp::Timestamp;
@@ -74,7 +73,7 @@ fn the_bare_flyback_matches_ngspice_on_the_peak_the_minimum_and_the_release() {
     assert!(reference.get("tran").is_none(), "the rows are not stored");
     assert!(reference.get("op").is_none(), "the rows are not stored");
 
-    let done = orbe_engine_cli::run(&input, Timestamp::from_unix_seconds(0));
+    let done = orbe_circuit::run(&input, Timestamp::from_unix_seconds(0));
     assert!(
         done.results
             .diagnostics()

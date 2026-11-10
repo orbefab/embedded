@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn zener_overload_converges_on_plain_newton() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../cli/tests/fixtures/zener-overload/netlist.json");
+            .join("tests/fixtures/zener-overload/netlist.json");
         let bytes = std::fs::read(path).unwrap();
         let circuit = Circuit::new(netlist::parse(&bytes).unwrap()).unwrap();
         let converged = crate::newton::newton(

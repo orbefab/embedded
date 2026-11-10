@@ -3,9 +3,8 @@
 //! ATmega328P firmware examples.
 
 use std::fs;
-use std::process::Command;
 
-use super::{TransientFolder, records, repo, transient_folder};
+use super::{TransientFolder, records, repo, run_netlist, transient_folder};
 
 /// `k * T / q` at 298.15 K, with the exact SI values.
 const VT: f64 = 1.380649e-23 * 298.15 / 1.602176634e-19;
@@ -125,7 +124,7 @@ fn led_levels(netlist: &serde_json::Value) -> Levels {
     }
 }
 
-/// One `sim run` beside `simulate_steps` and a run of the same netlist with no row before
+/// One `orbe-run run` beside `simulate_steps` and a run of the same netlist with no row before
 /// `stop_ps`, all at once.
 pub struct Beside {
     pub netlist: serde_json::Value,
@@ -142,29 +141,22 @@ pub fn run_beside_steps(example: &str) -> Beside {
     let bytes = fs::read(&path).unwrap();
     let netlist: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let parsed = orbe_engine_core::netlist::parse(&bytes).unwrap();
-    let out =
-        std::env::temp_dir().join(format!("orbe-engine-cli-{example}-{}", std::process::id()));
+    let out = std::env::temp_dir().join(format!("orbe-circuit-{example}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&out);
     let mut gridless = netlist.clone();
     let stop = gridless["analysis"]["transient"]["stop_ps"].clone();
     gridless["analysis"]["transient"]["grid_ps"] = stop;
     let gridless = serde_json::to_vec(&gridless).unwrap();
     let gridless_parsed = orbe_engine_core::netlist::parse(&gridless).unwrap();
-    let (output, steps, (gridless_results, gridless_stats)) = std::thread::scope(|scope| {
+    let ((code, doc), steps, (gridless_results, gridless_stats)) = std::thread::scope(|scope| {
         let steps = scope.spawn(|| orbe_circuit::simulate_steps(&parsed));
         let gridless = scope.spawn(|| orbe_circuit::simulate_stats(&gridless_parsed));
-        let output = Command::new(env!("CARGO_BIN_EXE_sim"))
-            .args(["run".as_ref(), path.as_os_str()])
-            .args(["--out".as_ref(), out.as_os_str()])
-            .output()
-            .unwrap();
-        (output, steps.join().unwrap(), gridless.join().unwrap())
+        let ran = run_netlist(&path, &out, &[]);
+        (ran, steps.join().unwrap(), gridless.join().unwrap())
     });
-    assert_eq!(output.status.code(), Some(0), "{example}");
-    assert!(output.stderr.is_empty(), "{example}");
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["status"], "ok");
-    assert_eq!(stdout["diagnostics"], serde_json::json!([]));
+    assert_eq!(code, 0, "{example}");
+    assert_eq!(doc["status"], "ok");
+    assert_eq!(doc["diagnostics"], serde_json::json!([]));
 
     let folder = transient_folder(example, &out);
     fs::remove_dir_all(&out).unwrap();

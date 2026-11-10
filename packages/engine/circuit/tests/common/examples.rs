@@ -1,4 +1,4 @@
-//! The examples the tests scan. `packages/engine/cli/tests/common` includes this file by path, so it uses
+//! The examples the tests scan. `tests/runs/common` includes this file by path, so it uses
 //! only `orbe_engine_core` and `std`.
 
 use std::fs;
@@ -20,7 +20,7 @@ pub fn examples() -> Vec<PathBuf> {
 }
 
 /// The blobs an example's netlist names, each under its hash: from the example's `blobs` folder,
-/// which `sim run` reads beside the netlist, and the rest from the cache `packages/engine/scripts/blobs.sh`
+/// which `orbe-run run` reads beside the netlist, and the rest from the cache `packages/engine/scripts/blobs.sh`
 /// fills, which no example commits. Panics naming the script when the cache lacks one.
 pub fn blobs(example: &Path) -> Blobs {
     let json = fs::read(example.join("netlist.json")).unwrap();
@@ -43,18 +43,14 @@ pub fn blobs(example: &Path) -> Blobs {
     blobs
 }
 
-/// What `sim run` needs beside an example's netlist to find its blobs: `--blobs` and the cache
+/// The `--blobs` folders a run of an example needs beside its netlist: the cache
 /// `packages/engine/scripts/blobs.sh` fills, when the netlist names a blob its `blobs` folder lacks.
-pub fn blob_args(example: &Path) -> Vec<String> {
+pub fn blob_dirs(example: &Path) -> Vec<PathBuf> {
     let json = fs::read(example.join("netlist.json")).unwrap();
     let lacks = netlist::blob_names(&json)
         .iter()
         .any(|sha256| !example.join("blobs").join(sha256.to_string()).is_file());
-    if lacks {
-        vec!["--blobs".to_string(), cache().display().to_string()]
-    } else {
-        Vec::new()
-    }
+    if lacks { vec![cache()] } else { Vec::new() }
 }
 
 /// The folder `packages/engine/scripts/blobs.sh` fills and prints.
@@ -93,13 +89,13 @@ pub fn runs_a_core(netlist: &Netlist) -> bool {
     })
 }
 
-/// The examples the scans of every example leave out, by name. `packages/engine/cli/tests/blink.rs`,
-/// `packages/engine/cli/tests/button.rs` and `packages/engine/cli/tests/fade.rs` each run that example once
-/// through `sim run`, with its steps, its grid and a grid with no row before `stop_ps`
+/// The examples the scans of every example leave out, by name. `packages/engine/circuit/tests/runs/blink.rs`,
+/// `packages/engine/circuit/tests/runs/button.rs` and `packages/engine/circuit/tests/runs/fade.rs` each run that example once
+/// through `orbe-run run`, with its steps, its grid and a grid with no row before `stop_ps`
 /// beside it, all at once. They hold the envelope to the steps, and the gridless run's stats,
 /// diagnostics, observations, `logic.vcd`, `serial.csv` and `i2c.csv` to the grid's.
 /// `packages/engine/tests/circuits/npn-blinker` is here too. One run of it accepts on the order of 2e5 steps, and
-/// `packages/engine/cli/tests/blinker.rs` is the check. A scan that also keeps every step repeats that cost.
+/// `packages/engine/circuit/tests/runs/blinker.rs` is the check. A scan that also keeps every step repeats that cost.
 pub const CHECKED_ON_THEIR_OWN: &[&str] = &[
     "atmega-blink",
     "atmega-button",

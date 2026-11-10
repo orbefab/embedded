@@ -766,18 +766,6 @@ dependencies = [
  "orbe-xtensa",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "orbe-engine-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "libm",
- "orbe-circuit",
- "orbe-engine-core",
- "serde",
- "serde_json",
  "sha2",
 ]
 

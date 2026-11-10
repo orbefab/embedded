@@ -6,11 +6,42 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-// The scanner the circuit's tests use, so both crates see the same examples.
-#[path = "../../../circuit/tests/common/examples.rs"]
+use orbe_circuit::runner::{Envelope, RunReport, Status, run_file};
+
+// The scanner the other test binaries use, so every binary sees the same examples.
+#[path = "../../common/examples.rs"]
 pub mod examples;
 
 pub mod atmega;
+
+/// What `orbe-run run <netlist> --out <out>` with `--blobs` for each of `blobs` exits with and
+/// prints, run in this process.
+pub fn run_netlist(netlist: &Path, out: &Path, blobs: &[PathBuf]) -> (u8, serde_json::Value) {
+    let (status, doc) = match run_file(netlist, out, blobs) {
+        Ok(results) => {
+            let report = RunReport::new(out, &results);
+            let status = report.status();
+            (
+                status,
+                serde_json::to_value(Envelope {
+                    status,
+                    body: &report,
+                }),
+            )
+        }
+        Err(failure) => {
+            let status = Status::IoError;
+            (
+                status,
+                serde_json::to_value(Envelope {
+                    status,
+                    body: &failure,
+                }),
+            )
+        }
+    };
+    (status.exit_code(), doc.unwrap())
+}
 
 pub fn repo(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

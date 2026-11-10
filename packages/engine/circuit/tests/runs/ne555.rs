@@ -1,13 +1,12 @@
 //! The A3 astable, packages/engine/tests/circuits/ne555-led, against SLFS022K's formula and against the closed form
 //! of the behaviour the engine models.
 
-mod common;
-
 use std::fs;
 use std::path::PathBuf;
 
+use crate::common;
 use common::{read_vcd, summary};
-use orbe_engine_cli::Completed;
+use orbe_circuit::Completed;
 use orbe_engine_core::logic::Level;
 use orbe_engine_core::run_folder::Results;
 use orbe_engine_core::timestamp::Timestamp;
@@ -22,7 +21,7 @@ fn netlist() -> serde_json::Value {
 }
 
 fn run(netlist: &serde_json::Value) -> Completed {
-    let done = orbe_engine_cli::run(
+    let done = orbe_circuit::run(
         &serde_json::to_vec(netlist).unwrap(),
         Timestamp::from_unix_seconds(0),
     );
@@ -336,7 +335,7 @@ fn logic_vcd_reads_back_as_the_summary_and_two_runs_write_the_same_bytes() {
             "#u1.logic.trig"
         ]
     );
-    let second = orbe_engine_cli::run(
+    let second = orbe_circuit::run(
         &serde_json::to_vec(&netlist).unwrap(),
         Timestamp::from_unix_seconds(1),
     );

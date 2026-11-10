@@ -1,4 +1,10 @@
-//! The stdout of a run, and the blobs that run reads.
+//! What `orbe-run` reads and prints: the blobs a run reads, the report of a run, and the images
+//! of a run's displays.
+
+mod png;
+mod view;
+
+pub use view::{ViewReport, view};
 
 use std::fs;
 use std::io::{self, Write};
@@ -138,22 +144,14 @@ pub fn emit<T: Serialize>(status: Status, body: &T) -> ExitCode {
     ExitCode::from(status.exit_code())
 }
 
-/// Reads `netlist`, writes the run folder to `out`, and prints the report `sim run` prints.
-pub fn run_file(netlist: &Path, out: &Path, dirs: &[PathBuf]) -> ExitCode {
-    let input = match fs::read(netlist) {
-        Ok(bytes) => bytes,
-        Err(e) => return emit(Status::IoError, &io_failure(netlist, e)),
-    };
-    let blobs = match blobs(&input, netlist, dirs) {
-        Ok(blobs) => blobs,
-        Err((path, e)) => return emit(Status::IoError, &io_failure(&path, e)),
-    };
+/// Reads `netlist`, runs it with the blobs it names, and writes the run folder to `out`. The
+/// results are what `orbe-run run` reports. An `Err` is its `io_error`.
+pub fn run_file(netlist: &Path, out: &Path, dirs: &[PathBuf]) -> Result<Results, Failure> {
+    let input = fs::read(netlist).map_err(|e| io_failure(netlist, e))?;
+    let blobs = blobs(&input, netlist, dirs).map_err(|(path, e)| io_failure(&path, e))?;
     let done = run_with(&input, &blobs, Timestamp::now());
-    if let Err(e) = done.folder.write(out) {
-        return emit(Status::IoError, &io_failure(out, e));
-    }
-    let report = RunReport::new(out, &done.results);
-    emit(report.status(), &report)
+    done.folder.write(out).map_err(|e| io_failure(out, e))?;
+    Ok(done.results)
 }
 
 fn io_failure(path: &Path, e: io::Error) -> Failure {

@@ -1,11 +1,10 @@
-//! A recorded session, advanced in seeded chunks and finished, writes the run folder `sim run`
-//! writes. It uses only the public items a binding calls: `orbe_engine_cli::run` and `Session`.
-
-mod common;
+//! A recorded session, advanced in seeded chunks and finished, writes the run folder `orbe-run run`
+//! writes. It uses only the public items a binding calls: `orbe_circuit::run` and `Session`.
 
 use std::fs;
 use std::path::Path;
 
+use crate::common;
 use common::examples::{self as example_files, examples};
 use orbe_circuit::{Input, Refused, Rejected, Serial, SerialCursor, Session, Setting, Status};
 use orbe_engine_core::blob::Blobs;
@@ -126,10 +125,10 @@ fn assert_serial_rows(name: &str, folder: &RunFolder, rows: &[String]) {
     assert_eq!(rows, want, "{name}: serial rows");
 }
 
-/// `json` recorded with `blobs`, advanced in chunks with no input, and finished, is `sim run`'s
-/// folder. An `op` analysis opens no session, and `sim run` still writes its folder.
-fn finishes_as_sim_run(name: &str, json: &[u8], blobs: &Blobs, seed: u64) {
-    let batch = orbe_engine_cli::run_with(json, blobs, created_at()).folder;
+/// `json` recorded with `blobs`, advanced in chunks with no input, and finished, is `orbe-run run`'s
+/// folder. An `op` analysis opens no session, and `orbe-run run` still writes its folder.
+fn finishes_as_a_batch_run(name: &str, json: &[u8], blobs: &Blobs, seed: u64) {
+    let batch = orbe_circuit::run_with(json, blobs, created_at()).folder;
     let mut session = match Session::record_document_with(json, blobs) {
         Ok(session) => session,
         Err(Refused::Op) => {
@@ -152,12 +151,12 @@ fn example(path: &Path) -> (String, Vec<u8>, Blobs) {
 
 #[ignore = "full tier"]
 #[test]
-fn every_example_finishes_to_the_folder_sim_run_writes() {
+fn every_example_finishes_to_the_folder_a_batch_run_writes() {
     let examples: Vec<_> = examples().iter().map(|path| example(path)).collect();
     assert!(examples.len() >= 14);
     std::thread::scope(|scope| {
         for (k, (name, json, blobs)) in examples.iter().enumerate() {
-            scope.spawn(move || finishes_as_sim_run(name, json, blobs, 0x5eed_8000 + k as u64));
+            scope.spawn(move || finishes_as_a_batch_run(name, json, blobs, 0x5eed_8000 + k as u64));
         }
     });
 }
@@ -212,7 +211,7 @@ fn run_ring_cut(
     let mut doc: serde_json::Value = serde_json::from_slice(json).unwrap();
     doc["analysis"]["transient"]["stop_ps"] = serde_json::Value::from(cut);
     let cut_json = serde_json::to_vec(&doc).unwrap();
-    let batch = orbe_engine_cli::run_with(&cut_json, blobs, created_at()).folder;
+    let batch = orbe_circuit::run_with(&cut_json, blobs, created_at()).folder;
     assert_ring_cut(&label, full, &batch);
     let mut session = Session::record_document_with(&cut_json, blobs).unwrap();
     let rows = advance_in_chunks(&mut session, &cut_json, END, &mut Rng(seed), |_, _| {});
@@ -234,7 +233,7 @@ fn a_session_cut_inside_frame_2_matches_a_batch_run() {
         .find(|path| path.file_name().unwrap() == "esp32s3-ring")
         .expect("packages/engine/tests/circuits/esp32s3-ring");
     let (name, json, blobs) = example(&path);
-    let full = orbe_engine_cli::run_with(&json, &blobs, created_at()).folder;
+    let full = orbe_circuit::run_with(&json, &blobs, created_at()).folder;
     let link = std::str::from_utf8(full.file("traces/link.csv").unwrap()).unwrap();
     let pulses: Vec<Vec<&str>> = link
         .lines()
@@ -283,23 +282,23 @@ fn floating() -> serde_json::Value {
 
 #[ignore = "full tier"]
 #[test]
-fn floating_nets_and_ratings_finish_as_sim_run_reports_them() {
+fn floating_nets_and_ratings_finish_as_a_batch_run_reports_them() {
     let json = serde_json::to_vec(&floating()).unwrap();
-    let results = orbe_engine_cli::run(&json, created_at()).results;
+    let results = orbe_circuit::run(&json, created_at()).results;
     let codes: Vec<_> = results.diagnostics().iter().map(|d| d.code()).collect();
     assert_eq!(codes, ["net.floating", "net.floating", "rating.power"]);
-    finishes_as_sim_run("floating", &json, &Blobs::new(), 0x5eed_8100);
+    finishes_as_a_batch_run("floating", &json, &Blobs::new(), 0x5eed_8100);
 }
 
 /// `json`, the floating `v-steps` changed so it cannot open, is refused by `record_document` with
-/// `code`, and the folder `sim run` writes lists the floating nets, then `code`.
+/// `code`, and the folder `orbe-run run` writes lists the floating nets, then `code`.
 fn refused_after_its_floating_nets(json: serde_json::Value, code: &str) {
     let json = serde_json::to_vec(&json).unwrap();
     let Err(Refused::Failed(refused)) = Session::record_document(&json) else {
         panic!("a session opens");
     };
     assert_eq!(refused.code(), code);
-    let folder = orbe_engine_cli::run(&json, created_at()).folder;
+    let folder = orbe_circuit::run(&json, created_at()).folder;
     let diagnostics: serde_json::Value =
         serde_json::from_slice(folder.file("diagnostics.json").unwrap()).unwrap();
     let codes: Vec<_> = diagnostics
@@ -333,25 +332,25 @@ fn a_fault_at_t_0_reports_its_floating_nets() {
 /// `v-steps` whose second step is 1e200 V, which faults the run at that step.
 #[ignore = "full tier"]
 #[test]
-fn a_faulted_session_finishes_to_the_folder_sim_run_writes() {
+fn a_faulted_session_finishes_to_the_folder_a_batch_run_writes() {
     let mut json = v_steps();
     json["parts"][0]["voltage"]["events"][1]["level"]["value"] = 1e200.into();
     let json = serde_json::to_vec(&json).unwrap();
     let mut session = Session::record_document(&json).unwrap();
     assert_eq!(session.advance_to(END), Status::Faulted);
     assert_eq!(session.fault().unwrap().code(), "solver.nonfinite");
-    finishes_as_sim_run("fault", &json, &Blobs::new(), 0x5eed_8200);
+    finishes_as_a_batch_run("fault", &json, &Blobs::new(), 0x5eed_8200);
 }
 
 /// `packages/engine/tests/circuits/<name>` recorded, advanced in chunks to half its run, and finished while it runs,
-/// is `sim run`'s folder for its bytes. At each chunk end `reject` may apply inputs that are
+/// is `orbe-run run`'s folder for its bytes. At each chunk end `reject` may apply inputs that are
 /// refused, and those leave the bytes as they were.
-fn finishes_partway_as_sim_run(name: &str, seed: u64, mut reject: impl FnMut(&mut Session)) {
+fn finishes_partway_as_a_batch_run(name: &str, seed: u64, mut reject: impl FnMut(&mut Session)) {
     let json = fs::read(common::repo(&format!(
         "packages/engine/tests/circuits/{name}/netlist.json"
     )))
     .unwrap();
-    let batch = orbe_engine_cli::run(&json, created_at()).folder;
+    let batch = orbe_circuit::run(&json, created_at()).folder;
     let mut session = Session::record_document(&json).unwrap();
     let until = Time::from_ps(stop_ps(&json) / 2);
     advance_in_chunks(&mut session, &json, until, &mut Rng(seed), |session, _| {
@@ -365,10 +364,12 @@ fn finishes_partway_as_sim_run(name: &str, seed: u64, mut reject: impl FnMut(&mu
 
 #[ignore = "full tier"]
 #[test]
-fn a_running_session_with_no_input_finishes_to_the_folder_sim_run_writes() {
+fn a_running_session_with_no_input_finishes_to_the_folder_a_batch_run_writes() {
     std::thread::scope(|scope| {
         for (k, &(name, _, _)) in INPUTS.iter().enumerate() {
-            scope.spawn(move || finishes_partway_as_sim_run(name, 0x5eed_8500 + k as u64, |_| {}));
+            scope.spawn(move || {
+                finishes_partway_as_a_batch_run(name, 0x5eed_8500 + k as u64, |_| {})
+            });
         }
     });
 }
@@ -391,7 +392,7 @@ fn refuse_each(session: &mut Session, refusals: &[(&str, Option<Time>, Setting, 
 /// running session gives.
 #[ignore = "full tier"]
 #[test]
-fn refused_inputs_finish_to_the_folder_sim_run_writes_for_the_opened_bytes() {
+fn refused_inputs_finish_to_the_folder_a_batch_run_writes_for_the_opened_bytes() {
     let level = |value| Setting::Level(Finite::new(value).unwrap());
     let json = fs::read(common::repo(
         "packages/engine/tests/circuits/v-steps/netlist.json",
@@ -414,12 +415,12 @@ fn refused_inputs_finish_to_the_folder_sim_run_writes_for_the_opened_bytes() {
     )];
     std::thread::scope(|scope| {
         scope.spawn(|| {
-            finishes_partway_as_sim_run("v-steps", 0x5eed_8600, |session| {
+            finishes_partway_as_a_batch_run("v-steps", 0x5eed_8600, |session| {
                 refuse_each(session, &v_steps)
             })
         });
         scope.spawn(|| {
-            finishes_partway_as_sim_run("atmega-analog-serial", 0x5eed_8601, |session| {
+            finishes_partway_as_a_batch_run("atmega-analog-serial", 0x5eed_8601, |session| {
                 refuse_each(session, &pot)
             })
         });
@@ -427,16 +428,16 @@ fn refused_inputs_finish_to_the_folder_sim_run_writes_for_the_opened_bytes() {
 }
 
 /// `v-steps` advanced to its stop refuses a new level on `v1` with `Ended`, and finished a day
-/// after `created_at`, is `sim run`'s folder for the bytes read at that time.
+/// after `created_at`, is `orbe-run run`'s folder for the bytes read at that time.
 #[ignore = "full tier"]
 #[test]
-fn an_input_after_the_end_finishes_to_the_folder_sim_run_writes_for_the_opened_bytes() {
+fn an_input_after_the_end_finishes_to_the_folder_a_batch_run_writes_for_the_opened_bytes() {
     let json = fs::read(common::repo(
         "packages/engine/tests/circuits/v-steps/netlist.json",
     ))
     .unwrap();
     let a_day_later = Timestamp::from_unix_seconds(1_700_086_400);
-    let batch = orbe_engine_cli::run(&json, a_day_later).folder;
+    let batch = orbe_circuit::run(&json, a_day_later).folder;
     let mut session = Session::record_document(&json).unwrap();
     assert_eq!(session.advance_to(END), Status::Stopped);
     let level = Setting::Level(Finite::new(2.0).unwrap());
@@ -540,11 +541,11 @@ fn with_inputs(
     (session, rows)
 }
 
-/// The example with inputs, advanced to its end, exported, then finished, is `sim run`'s folder
+/// The example with inputs, advanced to its end, exported, then finished, is `orbe-run run`'s folder
 /// for that ended export, and the serial rows read are its `serial.csv`.
-fn finishes_as_sim_run_on_the_export(name: &str, part: &str, seed_kind: Seed, seed: u64) {
+fn finishes_as_a_batch_run_on_the_export(name: &str, part: &str, seed_kind: Seed, seed: u64) {
     let (session, rows) = with_inputs(name, part, seed_kind, END, seed);
-    let batch = orbe_engine_cli::run(&session.export().unwrap(), created_at()).folder;
+    let batch = orbe_circuit::run(&session.export().unwrap(), created_at()).folder;
     let folder = session.finish(created_at()).unwrap();
     assert_same_folder(name, &folder, &batch, CREATED_AT);
     assert_serial_rows(name, &folder, &rows);
@@ -552,11 +553,11 @@ fn finishes_as_sim_run_on_the_export(name: &str, part: &str, seed_kind: Seed, se
 
 #[ignore = "full tier"]
 #[test]
-fn inputs_finish_to_the_folder_sim_run_writes_for_the_export() {
+fn inputs_finish_to_the_folder_a_batch_run_writes_for_the_export() {
     std::thread::scope(|scope| {
         for (k, &(name, part, seed_kind)) in INPUTS.iter().enumerate() {
             scope.spawn(move || {
-                finishes_as_sim_run_on_the_export(name, part, seed_kind, 0x5eed_8300 + k as u64)
+                finishes_as_a_batch_run_on_the_export(name, part, seed_kind, 0x5eed_8300 + k as u64)
             });
         }
     });
@@ -583,7 +584,7 @@ fn a_running_session_finishes_as_its_ended_export(
     assert_eq!(twin.advance_to(END), Status::Stopped, "{name}");
     let ended = twin.export().unwrap();
     assert_ne!(running, ended, "{name}");
-    let batch = orbe_engine_cli::run(&ended, created_at()).folder;
+    let batch = orbe_circuit::run(&ended, created_at()).folder;
     let folder = session.finish(created_at()).unwrap();
     assert_same_folder(name, &folder, &batch, CREATED_AT);
 }

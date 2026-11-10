@@ -1,30 +1,15 @@
-mod common;
-
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use common::examples::{blob_args, transient_examples};
-use common::{display_parts, files, has_kind, led_parts, repo, sends_records, transient_folder};
-
-fn sim(args: &[&str]) -> (i32, String, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_sim"))
-        .args(args)
-        .output()
-        .expect("spawn sim");
-    let code = output.status.code().expect("sim exited by signal");
-    let stdout = String::from_utf8(output.stdout).expect("stdout is utf-8");
-    let stderr = String::from_utf8(output.stderr).expect("stderr is utf-8");
-    (code, stdout, stderr)
-}
-
-fn json(stdout: &str) -> serde_json::Value {
-    serde_json::from_str(stdout).unwrap_or_else(|e| panic!("{e} in {stdout}"))
-}
+use crate::common;
+use common::examples::{blob_dirs, transient_examples};
+use common::{
+    display_parts, files, has_kind, led_parts, repo, run_netlist, sends_records, transient_folder,
+};
 
 fn scratch(name: &str) -> PathBuf {
-    let path = std::env::temp_dir().join(format!("orbe-engine-cli-{name}-{}", std::process::id()));
+    let path = std::env::temp_dir().join(format!("orbe-circuit-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&path);
     path
 }
@@ -72,15 +57,8 @@ fn assert_four_files(out: &Path) {
 fn ok_run_writes_the_folder_and_exits_zero() {
     let out = scratch("ok");
     let netlist = example();
-    let (code, stdout, stderr) = sim(&[
-        "run",
-        netlist.to_str().unwrap(),
-        "--out",
-        out.to_str().unwrap(),
-    ]);
-    assert_eq!(code, 0, "{stdout}");
-    assert!(stderr.is_empty(), "{stderr}");
-    let doc = json(&stdout);
+    let (code, doc) = run_netlist(&netlist, &out, &[]);
+    assert_eq!(code, 0, "{doc}");
     assert_eq!(doc["status"], "ok");
     assert_eq!(doc["out"], out.to_str().unwrap());
     assert_eq!(doc["errors"], 0);
@@ -105,15 +83,8 @@ fn rejected_netlist_exits_one_and_still_writes_diagnostics() {
     let out = scratch("rejected");
     let netlist = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../core/tests/fixtures/invalid/several.json");
-    let (code, stdout, stderr) = sim(&[
-        "run",
-        netlist.to_str().unwrap(),
-        "--out",
-        out.to_str().unwrap(),
-    ]);
-    assert_eq!(code, 1, "{stdout}");
-    assert!(stderr.is_empty(), "{stderr}");
-    let doc = json(&stdout);
+    let (code, doc) = run_netlist(&netlist, &out, &[]);
+    assert_eq!(code, 1, "{doc}");
     assert_eq!(doc["status"], "failed");
     assert_eq!(doc["errors"], 2);
     assert_eq!(doc["warnings"], 0);
@@ -136,38 +107,6 @@ fn rejected_netlist_exits_one_and_still_writes_diagnostics() {
     let _ = fs::remove_dir_all(&out);
 }
 
-#[ignore = "full tier"]
-#[test]
-fn missing_file_exits_three_and_writes_nothing() {
-    let out = scratch("missing-out");
-    let missing = scratch("missing-file").join("netlist.json");
-    let (code, stdout, stderr) = sim(&[
-        "run",
-        missing.to_str().unwrap(),
-        "--out",
-        out.to_str().unwrap(),
-    ]);
-    assert_eq!(code, 3, "{stdout}");
-    assert!(stderr.is_empty(), "{stderr}");
-    let doc = json(&stdout);
-    assert_eq!(doc["status"], "io_error");
-    assert_eq!(doc["path"], missing.to_str().unwrap());
-    assert!(doc["message"].as_str().unwrap().contains("os error 2"));
-    assert!(!out.exists());
-}
-
-#[ignore = "full tier"]
-#[test]
-fn bad_argv_exits_two() {
-    let (code, stdout, stderr) = sim(&[]);
-    assert_eq!(code, 2, "{stdout}");
-    assert!(stderr.is_empty(), "{stderr}");
-    let doc = json(&stdout);
-    assert_eq!(doc["status"], "usage_error");
-    assert!(!doc["message"].as_str().unwrap().is_empty());
-    assert!(doc.get("path").is_none());
-}
-
 /// The pages that state the version state this one.
 #[ignore = "full tier"]
 #[test]
@@ -177,59 +116,6 @@ fn the_docs_name_the_engine_version() {
     let run_folder = page("run-folder.md");
     assert!(run_folder.contains(&format!("\"engine_version\": \"{version}\"")));
     assert!(run_folder.contains(&format!("The current values are 0 and `{version}`.")));
-}
-
-#[cfg(unix)]
-#[ignore = "full tier"]
-#[test]
-fn non_utf8_out_path_is_a_document() {
-    use std::ffi::OsString;
-    use std::os::unix::ffi::OsStringExt;
-
-    let mut bytes = scratch("utf8").into_os_string().into_vec();
-    bytes.push(0xff);
-    let out = PathBuf::from(OsString::from_vec(bytes));
-    let netlist = example();
-    let output = Command::new(env!("CARGO_BIN_EXE_sim"))
-        .arg("run")
-        .arg(&netlist)
-        .arg("--out")
-        .arg(&out)
-        .output()
-        .expect("spawn sim");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(output.status.code(), Some(0), "{stderr}");
-    let stdout = String::from_utf8(output.stdout).expect("stdout is utf-8");
-    let doc = json(&stdout);
-    assert_eq!(doc["status"], "ok");
-    assert!(
-        doc["out"].as_str().unwrap().contains('\u{FFFD}'),
-        "{stdout}"
-    );
-    assert!(out.join("manifest.json").is_file());
-    let _ = fs::remove_dir_all(&out);
-}
-
-#[ignore = "full tier"]
-#[test]
-fn closed_stdout_still_exits_from_status() {
-    let out = scratch("closed-stdout");
-    let (read, write) = std::io::pipe().unwrap();
-    drop(read);
-    let output = Command::new(env!("CARGO_BIN_EXE_sim"))
-        .args([
-            "run",
-            example().to_str().unwrap(),
-            "--out",
-            out.to_str().unwrap(),
-        ])
-        .stdout(write)
-        .stderr(Stdio::piped())
-        .output()
-        .expect("spawn sim");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(output.status.code(), Some(0), "{stderr}");
-    let _ = fs::remove_dir_all(out);
 }
 
 #[ignore = "full tier"]
@@ -251,15 +137,8 @@ fn a_floating_net_exits_zero_with_one_warning() {
     }"#,
     )
     .unwrap();
-    let (code, stdout, stderr) = sim(&[
-        "run",
-        netlist.to_str().unwrap(),
-        "--out",
-        out.to_str().unwrap(),
-    ]);
-    assert_eq!(code, 0, "{stdout}");
-    assert!(stderr.is_empty(), "{stderr}");
-    let doc = json(&stdout);
+    let (code, doc) = run_netlist(&netlist, &out, &[]);
+    assert_eq!(code, 0, "{doc}");
     assert_eq!(doc["status"], "ok");
     assert_eq!(doc["warnings"], 1);
     assert_eq!(doc["errors"], 0);
@@ -278,21 +157,11 @@ fn two_runs_differ_only_in_created_at() {
     let netlist = example();
     let first_out = scratch("twice-a");
     let second_out = scratch("twice-b");
-    let (code, stdout, _) = sim(&[
-        "run",
-        netlist.to_str().unwrap(),
-        "--out",
-        first_out.to_str().unwrap(),
-    ]);
-    assert_eq!(code, 0, "{stdout}");
+    let (code, doc) = run_netlist(&netlist, &first_out, &[]);
+    assert_eq!(code, 0, "{doc}");
     std::thread::sleep(Duration::from_millis(1100));
-    let (code, stdout, _) = sim(&[
-        "run",
-        netlist.to_str().unwrap(),
-        "--out",
-        second_out.to_str().unwrap(),
-    ]);
-    assert_eq!(code, 0, "{stdout}");
+    let (code, doc) = run_netlist(&netlist, &second_out, &[]);
+    assert_eq!(code, 0, "{doc}");
     for name in ["netlist.json", "diagnostics.json", "observations.json"] {
         assert_eq!(
             fs::read(first_out.join(name)).unwrap(),
@@ -321,15 +190,8 @@ fn two_runs_differ_only_in_created_at() {
 fn the_9v_led_breaks_three_ratings_and_still_writes_its_operating_point() {
     let out = scratch("led-9v");
     let netlist = named_example("led-9v");
-    let (code, stdout, stderr) = sim(&[
-        "run",
-        netlist.to_str().unwrap(),
-        "--out",
-        out.to_str().unwrap(),
-    ]);
-    assert_eq!(code, 0, "{stdout}");
-    assert!(stderr.is_empty(), "{stderr}");
-    let doc = json(&stdout);
+    let (code, doc) = run_netlist(&netlist, &out, &[]);
+    assert_eq!(code, 0, "{doc}");
     assert_eq!(doc["status"], "ok");
     assert_eq!(doc["errors"], 0);
     assert_eq!(doc["warnings"], 3);
@@ -368,14 +230,8 @@ fn the_9v_led_breaks_three_ratings_and_still_writes_its_operating_point() {
 fn the_5v_led_is_within_its_ratings() {
     let out = scratch("led-5v");
     let netlist = named_example("led-5v");
-    let (code, stdout, _) = sim(&[
-        "run",
-        netlist.to_str().unwrap(),
-        "--out",
-        out.to_str().unwrap(),
-    ]);
-    assert_eq!(code, 0, "{stdout}");
-    let doc = json(&stdout);
+    let (code, doc) = run_netlist(&netlist, &out, &[]);
+    assert_eq!(code, 0, "{doc}");
     assert_eq!(doc["diagnostics"], serde_json::json!([]));
     assert_eq!(fs::read(out.join("diagnostics.json")).unwrap(), b"[]\n");
     let observations: serde_json::Value =
@@ -390,18 +246,8 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
     for name in transient_examples() {
         let out = scratch(&format!("tran-{name}"));
         let netlist = named_example(&name);
-        let mut args = vec![
-            "run".to_string(),
-            netlist.display().to_string(),
-            "--out".to_string(),
-            out.display().to_string(),
-        ];
-        args.extend(blob_args(netlist.parent().unwrap()));
-        let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        let (code, stdout, stderr) = sim(&args);
-        assert_eq!(code, 0, "{stdout}");
-        assert!(stderr.is_empty(), "{stderr}");
-        let doc = json(&stdout);
+        let (code, doc) = run_netlist(&netlist, &out, &blob_dirs(netlist.parent().unwrap()));
+        assert_eq!(code, 0, "{doc}");
         let found = codes_and_refs(&doc);
         if name == "regulator-load-step" {
             assert_eq!(
@@ -536,16 +382,9 @@ fn two_runs_of_each_transient_example_differ_only_in_created_at() {
             .map(|name| {
                 let out = scratch(&format!("tran-twice-{name}-{round}"));
                 let netlist = named_example(name);
-                let mut args = vec![
-                    "run".to_string(),
-                    netlist.display().to_string(),
-                    "--out".to_string(),
-                    out.display().to_string(),
-                ];
-                args.extend(blob_args(netlist.parent().unwrap()));
-                let args: Vec<&str> = args.iter().map(String::as_str).collect();
-                let (code, stdout, _) = sim(&args);
-                assert_eq!(code, 0, "{stdout}");
+                let (code, doc) =
+                    run_netlist(&netlist, &out, &blob_dirs(netlist.parent().unwrap()));
+                assert_eq!(code, 0, "{doc}");
                 out
             })
             .collect()

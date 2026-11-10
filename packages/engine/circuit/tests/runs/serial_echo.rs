@@ -2,8 +2,7 @@
 //! `vrx` draws 8N1 frames through 1 kohm onto PD0. The RX vector echoes each byte
 //! on TXD and drives the LED on PB5 from `'1'` and `'0'`.
 
-mod common;
-
+use crate::common;
 use common::atmega::{
     assert_led_follows, chip_matches_fixture, cycle_ps, logic_edges, logic_vcd, run_beside_steps,
     serial_csv,
@@ -194,7 +193,7 @@ fn sent(csv: &[u8]) -> Vec<(u64, u8)> {
 }
 
 #[test]
-fn sim_run_echoes_each_byte_and_the_led_follows_one_and_zero() {
+fn a_run_echoes_each_byte_and_the_led_follows_one_and_zero() {
     let beside = run_beside_steps("atmega-serial-echo");
     let cycle = cycle_ps(&beside.netlist);
     let bit = 16 * (UBRR + 1) * cycle;
@@ -285,7 +284,7 @@ fn a_host_at_115200_returns_255_and_leaves_pb5_low() {
     for event in events.as_array_mut().unwrap() {
         event["baud"] = serde_json::json!(115200);
     }
-    let done = orbe_engine_cli::run(
+    let done = orbe_circuit::run(
         serde_json::to_vec(&netlist).unwrap().as_slice(),
         Timestamp::from_unix_seconds(0),
     );

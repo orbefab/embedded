@@ -1,33 +1,21 @@
-//! `esp32s3` parts through `sim run`: where the firmware blob is found, the `netlist.blob` error
+//! `esp32s3` parts through `orbe-run run`: where the firmware blob is found, the `netlist.blob` error
 //! when it is not, and the diagnostics a program raises when it leaves a watchdog running,
 //! touches a register the model does not keep, reaches an instruction the core does not run,
 //! starts an SPI2 transfer the model does not run, or jumps out of its memory, and an FPU op the
 //! core now runs.
 
-mod common;
-
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-use common::repo;
+use crate::common;
+use common::{repo, run_netlist};
 use orbe_circuit::{Refused, Session};
 use orbe_engine_core::blob::{Blobs, Sha256};
 use orbe_engine_core::time::Time;
 
-fn sim(args: &[&str]) -> (i32, serde_json::Value) {
-    let output = Command::new(env!("CARGO_BIN_EXE_sim"))
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
-    let doc = serde_json::from_slice(&output.stdout).unwrap();
-    (output.status.code().unwrap(), doc)
-}
-
 fn scratch(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
-        "orbe-engine-cli-esp32s3-{name}-{}",
+        "orbe-circuit-esp32s3-{name}-{}",
         std::process::id()
     ));
     let _ = fs::remove_dir_all(&path);
@@ -50,21 +38,11 @@ fn example_blobs() -> PathBuf {
 }
 
 /// Writes `netlist` into `dir` and runs it, with `--blobs` for each of `blobs`.
-fn run(dir: &Path, netlist: &serde_json::Value, blobs: &[&Path]) -> (i32, serde_json::Value) {
+fn run(dir: &Path, netlist: &serde_json::Value, blobs: &[&Path]) -> (u8, serde_json::Value) {
     let path = dir.join("netlist.json");
     fs::write(&path, serde_json::to_vec_pretty(netlist).unwrap()).unwrap();
-    let out = dir.join("out");
-    let mut args = vec![
-        "run".to_string(),
-        path.display().to_string(),
-        "--out".to_string(),
-        out.display().to_string(),
-    ];
-    for blob in blobs {
-        args.extend(["--blobs".to_string(), blob.display().to_string()]);
-    }
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    sim(&args)
+    let blobs: Vec<PathBuf> = blobs.iter().map(|blob| blob.to_path_buf()).collect();
+    run_netlist(&path, &dir.join("out"), &blobs)
 }
 
 fn diagnostics(doc: &serde_json::Value) -> Vec<serde_json::Value> {
@@ -409,7 +387,7 @@ fn replay_on(netlist: &mut serde_json::Value, event_ps: u64) {
     }
 }
 
-fn run_idle(name: &str, stop_ps: u64, event_ps: u64) -> (i32, serde_json::Value, String) {
+fn run_idle(name: &str, stop_ps: u64, event_ps: u64) -> (u8, serde_json::Value, String) {
     let bytes = program(&[], &IDLE);
     let mut netlist = netlist_for(&bytes, stop_ps);
     replay_on(&mut netlist, event_ps);

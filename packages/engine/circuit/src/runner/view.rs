@@ -1,25 +1,25 @@
-//! `sim view`: what each display part's glass showed at the end of a run, one PNG a part.
+//! `orbe-run view`: what each display part's glass showed at the end of a run, one PNG a part.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use orbe_circuit::st77916;
 use orbe_engine_core::blob::Sha256;
 use orbe_engine_core::display::Flags;
 use orbe_engine_core::name::Name;
 use serde::{Deserialize, Serialize};
 
-use crate::{Failure, png};
+use super::{Failure, png};
+use crate::st77916;
 
-/// `sim view` stdout body: the PNG it wrote for each display part, by part name.
+/// `orbe-run view` stdout body: the PNG it wrote for each display part, by part name.
 #[derive(Serialize)]
 pub struct ViewReport {
     pub out: String,
     pub images: BTreeMap<String, String>,
 }
 
-/// The `observations.json` keys `sim view` reads. A reader ignores the others.
+/// The `observations.json` keys `orbe-run view` reads. A reader ignores the others.
 #[derive(Deserialize)]
 struct Observations {
     #[serde(default)]
@@ -49,7 +49,7 @@ pub fn view(run: &Path, out: &Path) -> Result<ViewReport, Failure> {
         }
         if entry.kind != "st77916" {
             let message = format!(
-                "{part} has kind {}, which sim view does not draw",
+                "{part} has kind {}, which orbe-run view does not draw",
                 entry.kind
             );
             return Err(failure(&path, message));

@@ -9,7 +9,8 @@ mod newton;
 mod observe;
 mod op;
 mod ratings;
-pub mod report;
+#[cfg(feature = "runner")]
+pub mod runner;
 mod session;
 mod step;
 mod topology;
@@ -44,14 +45,14 @@ pub struct RunStats {
     pub stiffens: u64,
 }
 
-/// What `sim run` makes of netlist.json bytes: the results and the folder they render to.
+/// What `orbe-run run` makes of netlist.json bytes: the results and the folder they render to.
 pub struct Completed {
     pub results: Results,
     pub folder: RunFolder,
 }
 
-/// netlist.json bytes to a run folder, as `sim run` writes it. Never fails. A rejected netlist is
-/// a folder whose diagnostics say why.
+/// netlist.json bytes to a run folder, as `orbe-run run` writes it. Never fails. A rejected
+/// netlist is a folder whose diagnostics say why.
 pub fn run(input: &[u8], created_at: Timestamp) -> Completed {
     run_with(input, &Blobs::new(), created_at)
 }
@@ -82,7 +83,7 @@ pub fn simulate_stats(netlist: &Netlist) -> (Results, RunStats) {
 
 /// Tests only: the same steps as `simulate`, with a row at every accepted step. The solver's
 /// own tests read every step through this. `Cargo.toml` turns the feature on through a
-/// dev-dependency on this crate, so no build of `sim` has it.
+/// dev-dependency on this crate, so no build of `orbe-run` has it.
 #[cfg(feature = "step-rows")]
 pub fn simulate_steps(netlist: &Netlist) -> Results {
     simulate_with(netlist, Rows::Steps).0

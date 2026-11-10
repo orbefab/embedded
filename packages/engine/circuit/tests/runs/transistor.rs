@@ -1,7 +1,6 @@
-mod common;
-
 use std::fs;
 
+use crate::common;
 use common::repo;
 use orbe_engine_core::timestamp::Timestamp;
 
@@ -27,7 +26,7 @@ fn rated_switch() -> Vec<u8> {
 
 #[test]
 fn a_transistor_writes_ib_ic_and_its_pin_power_and_its_current_rating_bounds_ic() {
-    let done = orbe_engine_cli::run(&rated_switch(), Timestamp::from_unix_seconds(0));
+    let done = orbe_circuit::run(&rated_switch(), Timestamp::from_unix_seconds(0));
     let index: serde_json::Value =
         serde_json::from_slice(done.folder.file("traces/index.json").unwrap()).unwrap();
     let columns: Vec<(&str, &str)> = index["analog"]["columns"]
@@ -91,7 +90,7 @@ fn an_nmos_writes_id_and_its_pin_power_and_its_current_rating_bounds_id() {
         .find(|part| part["name"] == "m1")
         .unwrap();
     m1["ratings"]["current"]["value"] = 0.01.into();
-    let done = orbe_engine_cli::run(
+    let done = orbe_circuit::run(
         &serde_json::to_vec(&netlist).unwrap(),
         Timestamp::from_unix_seconds(0),
     );

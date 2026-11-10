@@ -2,11 +2,10 @@
 //! reports the same chain. `packages/engine/scripts/ws2812_decode.py` reads the bit-bang `logic.vcd`
 //! apart from the engine. Variants of the replay check what the records do between landings.
 
-mod common;
-
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::common;
 use common::repo;
 use orbe_circuit::simulate_stats;
 use orbe_engine_core::netlist;

@@ -1,36 +1,28 @@
-//! `sim view` on `packages/engine/tests/circuits/st77916-replay`: one PNG for its panel, whose pixels are what
-//! `st77916::glass` draws from the run folder, whose bytes are the same on every run, and which
-//! leaves the run folder as `sim run` wrote it.
+//! `orbe-run view` on `packages/engine/tests/circuits/st77916-replay`: one PNG for its panel, whose
+//! pixels are what `st77916::glass` draws from the run folder, whose bytes are the same on every
+//! run, and which leaves the run folder as `orbe-run run` wrote it.
 
-mod common;
-
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
 
+use orbe_circuit::runner::view;
 use orbe_circuit::st77916;
 
-use common::{files, repo};
+use crate::common;
+use common::{files, repo, run_netlist};
 
-fn sim(args: &[&Path]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_sim"))
-        .args(args)
-        .output()
-        .expect("spawn sim")
+/// Runs `netlist` into `run` and asserts it exits 0.
+fn run_into(netlist: &Path, run: &Path) {
+    let (code, doc) = run_netlist(netlist, run, &[]);
+    assert_eq!(code, 0, "{doc}");
 }
 
 fn scratch(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "orbe-engine-cli-view-{name}-{}",
-        std::process::id()
-    ))
+    std::env::temp_dir().join(format!("orbe-circuit-view-{name}-{}", std::process::id()))
 }
 
-fn stdout(output: &Output) -> serde_json::Value {
-    serde_json::from_slice(&output.stdout).unwrap()
-}
-
-/// The pixels of a PNG `sim view` writes: one IDAT of stored deflate blocks, each row behind
+/// The pixels of a PNG `orbe-run view` writes: one IDAT of stored deflate blocks, each row behind
 /// filter type 0. Checks each chunk's CRC and the stream's Adler-32 on the way.
 fn decode(png: &[u8]) -> (u32, u32, Vec<u8>) {
     assert_eq!(
@@ -104,23 +96,19 @@ fn the_replay_panel_is_one_png_of_its_glass_the_same_on_every_run() {
     let _ = fs::remove_dir_all(&dir);
     let run = dir.join("run");
     let netlist = repo("packages/engine/tests/circuits/st77916-replay/netlist.json");
-    let ran = sim(&[Path::new("run"), &netlist, Path::new("--out"), &run]);
-    assert!(ran.status.success(), "{ran:?}");
+    run_into(&netlist, &run);
     let before = files(&run);
 
     let (first, second) = (dir.join("first"), dir.join("second"));
     for out in [&first, &second] {
-        let viewed = sim(&[Path::new("view"), &run, Path::new("--out"), out]);
-        assert!(viewed.status.success(), "{viewed:?}");
+        let Ok(report) = view(&run, out) else {
+            panic!("view {}", run.display());
+        };
         let png = out.join("display-lcd1.png").display().to_string();
-        let want = serde_json::json!({
-            "status": "ok",
-            "out": out.display().to_string(),
-            "images": { "lcd1": png },
-        });
-        assert_eq!(stdout(&viewed), want);
+        assert_eq!(report.out, out.display().to_string());
+        assert_eq!(report.images, BTreeMap::from([("lcd1".to_string(), png)]));
     }
-    assert_eq!(files(&run), before, "the run folder is as sim run wrote it");
+    assert_eq!(files(&run), before, "the run folder is as the run wrote it");
     let png = fs::read(first.join("display-lcd1.png")).unwrap();
     assert_eq!(files(&first), files(&second), "two runs, the same bytes");
     assert_eq!(files(&first).len(), 1);
@@ -145,41 +133,13 @@ fn a_run_with_no_display_part_writes_no_image() {
     let _ = fs::remove_dir_all(&dir);
     let run = dir.join("run");
     let netlist = repo("packages/engine/tests/circuits/rc-switch/netlist.json");
-    assert!(
-        sim(&[Path::new("run"), &netlist, Path::new("--out"), &run])
-            .status
-            .success()
-    );
+    run_into(&netlist, &run);
     let out = dir.join("out");
-    let viewed = sim(&[Path::new("view"), &run, Path::new("--out"), &out]);
-    assert!(viewed.status.success(), "{viewed:?}");
-    assert_eq!(stdout(&viewed)["images"], serde_json::json!({}));
+    let Ok(report) = view(&run, &out) else {
+        panic!("view {}", run.display());
+    };
+    assert!(report.images.is_empty());
     assert!(!out.exists());
-    let _ = fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn view_without_out_is_a_usage_error_and_writes_nothing() {
-    let dir = scratch("no-out");
-    let _ = fs::remove_dir_all(&dir);
-    let run = dir.join("run");
-    let netlist = repo("packages/engine/tests/circuits/st77916-replay/netlist.json");
-    assert!(
-        sim(&[Path::new("run"), &netlist, Path::new("--out"), &run])
-            .status
-            .success()
-    );
-    let cwd = dir.join("cwd");
-    fs::create_dir(&cwd).unwrap();
-    let viewed = Command::new(env!("CARGO_BIN_EXE_sim"))
-        .current_dir(&cwd)
-        .args([Path::new("view"), run.as_path()])
-        .output()
-        .expect("spawn sim");
-    assert_eq!(viewed.status.code(), Some(2));
-    assert!(viewed.stderr.is_empty(), "{viewed:?}");
-    assert_eq!(stdout(&viewed)["status"], "usage_error");
-    assert!(fs::read_dir(&cwd).unwrap().next().is_none());
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -189,11 +149,7 @@ fn an_image_path_other_than_the_part_frame_is_an_io_error() {
     let _ = fs::remove_dir_all(&dir);
     let run = dir.join("run");
     let netlist = repo("packages/engine/tests/circuits/st77916-replay/netlist.json");
-    assert!(
-        sim(&[Path::new("run"), &netlist, Path::new("--out"), &run])
-            .status
-            .success()
-    );
+    run_into(&netlist, &run);
     let observations_path = run.join("observations.json");
     let mut observations: serde_json::Value =
         serde_json::from_slice(&fs::read(&observations_path).unwrap()).unwrap();
@@ -204,12 +160,11 @@ fn an_image_path_other_than_the_part_frame_is_an_io_error() {
     )
     .unwrap();
     let out = dir.join("out");
-    let viewed = sim(&[Path::new("view"), &run, Path::new("--out"), &out]);
-    assert_eq!(viewed.status.code(), Some(3));
-    let body = stdout(&viewed);
-    assert_eq!(body["status"], "io_error");
-    assert_eq!(body["path"], observations_path.display().to_string());
-    let message = body["message"].as_str().unwrap();
+    let Err(failure) = view(&run, &out) else {
+        panic!("the image path is not the part's frame");
+    };
+    assert_eq!(failure.path, Some(observations_path.display().to_string()));
+    let message = &failure.message;
     assert!(message.contains("traces/display-lcd1.rgb565"));
     assert!(!message.contains("display-other"));
     assert!(!out.exists());
@@ -217,37 +172,25 @@ fn an_image_path_other_than_the_part_frame_is_an_io_error() {
 }
 
 /// A folder with no `observations.json`, and a frame memory file that is not the one its entry
-/// names, are `io_error`, exit 3, and write no image.
+/// names, are failures, which `orbe-run view` reports as `io_error`, and write no image.
 #[test]
 fn an_unreadable_run_folder_is_an_io_error_and_writes_nothing() {
     let dir = scratch("broken");
     let _ = fs::remove_dir_all(&dir);
     let out = dir.join("out");
-    let missing = sim(&[
-        Path::new("view"),
-        &dir.join("absent"),
-        Path::new("--out"),
-        &out,
-    ]);
-    assert_eq!(missing.status.code(), Some(3));
-    assert_eq!(stdout(&missing)["status"], "io_error");
+    assert!(view(&dir.join("absent"), &out).is_err());
 
     let run = dir.join("run");
     let netlist = repo("packages/engine/tests/circuits/st77916-replay/netlist.json");
-    assert!(
-        sim(&[Path::new("run"), &netlist, Path::new("--out"), &run])
-            .status
-            .success()
-    );
+    run_into(&netlist, &run);
     let image = run.join("traces/display-lcd1.rgb565");
     let mut frame = fs::read(&image).unwrap();
     frame[0] ^= 1;
     fs::write(&image, frame).unwrap();
-    let stale = sim(&[Path::new("view"), &run, Path::new("--out"), &out]);
-    assert_eq!(stale.status.code(), Some(3));
-    let body = stdout(&stale);
-    assert_eq!(body["status"], "io_error");
-    assert_eq!(body["path"], image.display().to_string());
+    let Err(failure) = view(&run, &out) else {
+        panic!("the frame is not the one its entry names");
+    };
+    assert_eq!(failure.path, Some(image.display().to_string()));
     assert!(!out.exists());
     let _ = fs::remove_dir_all(&dir);
 }

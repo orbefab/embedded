@@ -5,10 +5,9 @@
 //! The bit table of `docs/engine/avr.md` gives the lengths. At `TWBR` 72, `T` is 160 cycles, `S` 72
 //! and `L` 88. At `TWBR` 12, `T` is 40, `S` 18 and `L` 22.
 
-mod common;
-
 use std::collections::BTreeMap;
 
+use crate::common;
 use common::atmega::{
     chip_matches_fixture, folder_file, i2c_csv, logic_edges, run_beside_steps, serial_csv,
 };
@@ -93,7 +92,7 @@ fn rendered(dir: &str) -> orbe_engine_core::run_folder::RunFolder {
 
 /// The run folder of the fixture `name`, rendered in memory.
 fn fixture(name: &str) -> orbe_engine_core::run_folder::RunFolder {
-    rendered(&format!("packages/engine/cli/tests/fixtures/{name}"))
+    rendered(&format!("packages/engine/circuit/tests/fixtures/{name}"))
 }
 
 /// `(t_ps, high)` of `part`'s `pin` in a `logic.vcd`.
@@ -181,7 +180,7 @@ fn the_fixtures_run_the_committed_hex() {
     ];
     for (name, part, hex) in cases {
         let path = repo(&format!(
-            "packages/engine/cli/tests/fixtures/{name}/netlist.json"
+            "packages/engine/circuit/tests/fixtures/{name}/netlist.json"
         ));
         let netlist: serde_json::Value =
             serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
@@ -212,7 +211,7 @@ fn decode(dir: &str) -> std::process::Output {
 /// `a_start_inside_a_byte_is_a_bus_error`.
 #[test]
 fn a_bit0_sda_change_decodes_as_a_bus_error() {
-    let output = decode("packages/engine/cli/tests/decode/i2c-bit0");
+    let output = decode("packages/engine/circuit/tests/decode/i2c-bit0");
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),
@@ -225,7 +224,7 @@ fn a_bit0_sda_change_decodes_as_a_bus_error() {
 /// An `arbitration_lost` row at a START's time is rejected. The row has to match a byte.
 #[test]
 fn an_arbitration_row_must_match_a_byte() {
-    let output = decode("packages/engine/cli/tests/decode/i2c-arbitration-kind");
+    let output = decode("packages/engine/circuit/tests/decode/i2c-arbitration-kind");
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -239,7 +238,7 @@ fn an_arbitration_row_must_match_a_byte() {
 /// before the first SCL rise. A later rise reads SDA low, and the byte is a bus error.
 #[test]
 fn an_arbitration_loss_on_a_leading_one_matches() {
-    let output = decode("packages/engine/cli/tests/decode/i2c-arbitration-high");
+    let output = decode("packages/engine/circuit/tests/decode/i2c-arbitration-high");
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -252,7 +251,7 @@ fn an_arbitration_loss_on_a_leading_one_matches() {
 /// A bus error whose bits 7 to 0 all read SDA high. A loss needs a low read on one of them.
 #[test]
 fn a_bus_error_with_no_low_read_rejects_the_arbitration_row() {
-    let output = decode("packages/engine/cli/tests/decode/i2c-arbitration-nolow");
+    let output = decode("packages/engine/circuit/tests/decode/i2c-arbitration-nolow");
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -269,7 +268,7 @@ fn a_bus_error_with_no_low_read_rejects_the_arbitration_row() {
 /// The only low read is the ninth bit, and that is not a loss.
 #[test]
 fn an_ack_low_does_not_mark_an_arbitration_loss() {
-    let output = decode("packages/engine/cli/tests/decode/i2c-arbitration-ack");
+    let output = decode("packages/engine/circuit/tests/decode/i2c-arbitration-ack");
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -286,7 +285,7 @@ fn an_ack_low_does_not_mark_an_arbitration_loss() {
 /// changes SDA. The master released those bits, so the low is not a loss.
 #[test]
 fn a_read_data_low_does_not_mark_an_arbitration_loss() {
-    let output = decode("packages/engine/cli/tests/decode/i2c-arbitration-read");
+    let output = decode("packages/engine/circuit/tests/decode/i2c-arbitration-read");
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -303,7 +302,7 @@ fn a_read_data_low_does_not_mark_an_arbitration_loss() {
 /// rises in that high. The master sends that ACK bit, so the loss matches.
 #[test]
 fn a_read_nack_low_marks_an_arbitration_loss() {
-    let output = decode("packages/engine/cli/tests/decode/i2c-arbitration-nack");
+    let output = decode("packages/engine/circuit/tests/decode/i2c-arbitration-nack");
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -318,7 +317,7 @@ fn a_read_nack_low_marks_an_arbitration_loss() {
 /// the ACK of a write data byte would accept this folder.
 #[test]
 fn a_write_ack_low_does_not_mark_an_arbitration_loss() {
-    let output = decode("packages/engine/cli/tests/decode/i2c-arbitration-write-ack");
+    let output = decode("packages/engine/circuit/tests/decode/i2c-arbitration-write-ack");
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -335,7 +334,7 @@ fn a_write_ack_low_does_not_mark_an_arbitration_loss() {
 /// The master sends bits 7 to 0 of that write, so the loss matches.
 #[test]
 fn a_write_data_low_marks_an_arbitration_loss() {
-    let output = decode("packages/engine/cli/tests/decode/i2c-arbitration-write");
+    let output = decode("packages/engine/circuit/tests/decode/i2c-arbitration-write");
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -348,7 +347,7 @@ fn a_write_data_low_marks_an_arbitration_loss() {
 /// The START before the loss has no row. The decoder names that skipped phase.
 #[test]
 fn an_arbitration_row_does_not_skip_an_earlier_phase() {
-    let output = decode("packages/engine/cli/tests/decode/i2c-arbitration-skip");
+    let output = decode("packages/engine/circuit/tests/decode/i2c-arbitration-skip");
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -626,7 +625,8 @@ fn a_master_that_nacks_a_shared_read_loses_arbitration() {
         .map(|row| row.t_ps)
         .collect();
     assert_eq!(starts[0], starts[1], "both masters' START is one SDA fall");
-    let out = std::env::temp_dir().join(format!("sim-i2c-read-ack-{}", std::process::id()));
+    let out =
+        std::env::temp_dir().join(format!("orbe-circuit-i2c-read-ack-{}", std::process::id()));
     if out.exists() {
         std::fs::remove_dir_all(&out).unwrap();
     }

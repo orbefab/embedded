@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Checks the repo. `fast` is what CI runs: shellcheck on every tracked shell script, ruff on every
 # tracked Python file, rustfmt, clippy, clippy on orbe-scene, orbe-session and orbe-wasm for wasm32,
-# and the Rust tests through cargo-nextest, except the `orbe-avr` tests and five engine targets
-# marked `full tier`.
+# and the Rust tests through cargo-nextest, except the `orbe-avr` tests and the engine tests marked
+# `full tier`.
 # `full` runs those too, then the chip models' skip checks, the engine's Python checks, `orbe-run`
 # for WASI against native, the wasm package check, and the browser speed check on the package that
 # check built. Both need uv, shellcheck and cargo-nextest. `full` also needs ngspice-42, node 24
@@ -78,12 +78,11 @@ run_check() {
 full() {
   fast
   rust_tests -p orbe-avr --features port-skip-check
-  rust_tests -p orbe-circuit --test transient --test session --run-ignored only
-  rust_tests -p orbe-engine-cli --test run --test session --test ws2812 --run-ignored only
-  cargo clippy -p orbe-xtensa -p orbe-espressif -p orbe-engine-cli --all-targets --locked \
+  rust_tests -p orbe-circuit --test transient --test session --test runs --run-ignored only
+  cargo clippy -p orbe-xtensa -p orbe-espressif -p orbe-circuit --all-targets --locked \
     --features orbe-xtensa/poll-skip-check -- -D warnings
-  rust_tests -p orbe-xtensa -p orbe-espressif -p orbe-engine-cli \
-    --features orbe-xtensa/poll-skip-check
+  rust_tests -p orbe-xtensa -p orbe-espressif --features orbe-xtensa/poll-skip-check
+  rust_tests -p orbe-circuit --test runs --features orbe-xtensa/poll-skip-check
   local script name knob_dir
   for script in ngspice_refs render_st77916 esp32s3_blink esp32s3_hello esp32s3_screen \
     esp32s3_encoder i2c_decode esp32s3_touch esp32s3_dualcore esp32s3_echo esp32s3_ring \

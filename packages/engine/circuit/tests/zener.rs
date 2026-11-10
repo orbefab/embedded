@@ -188,7 +188,7 @@ fn zener_examples_solve() {
 #[test]
 fn zener_overload_warns_on_current_and_power() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../cli/tests/fixtures/zener-overload/netlist.json");
+        .join("tests/fixtures/zener-overload/netlist.json");
     let bytes = std::fs::read(path).unwrap();
     let netlist = orbe_engine_core::netlist::parse(&bytes).unwrap();
     let results = orbe_circuit::simulate(&netlist);
