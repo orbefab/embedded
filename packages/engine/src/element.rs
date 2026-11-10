@@ -1,16 +1,12 @@
-mod capacitor;
-mod current_source;
-mod inductor;
-mod junction;
-mod potentiometer;
-mod regulator;
-mod resistor;
-mod switch;
-mod transistor;
-mod voltage_source;
-mod zener;
+use crate::chip::Relay;
+use crate::netlist::{Model, NetId, PartId};
 
-use crate::netlist::{Model, NetId, PartId, Relay};
+use crate::chip::regulator;
+
+use crate::passive::{
+    capacitor, current_source, inductor, potentiometer, resistor, switch, voltage_source,
+};
+use crate::semiconductor::{junction, transistor, zener};
 use crate::time::Time;
 
 use crate::chip;

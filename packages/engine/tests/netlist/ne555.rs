@@ -1,5 +1,7 @@
+use orbe_engine::chip::Ne555;
+use orbe_engine::netlist::{self, Chip, Model, Netlist, Source};
+
 use orbe_engine::diagnostic::Diagnostic;
-use orbe_engine::netlist::{self, Chip, Model, Ne555, Netlist, Source};
 
 /// One NE555 with every field, and `edit` applied to its JSON object.
 fn chip(edit: impl FnOnce(&mut serde_json::Value)) -> Result<Netlist, Vec<Diagnostic>> {

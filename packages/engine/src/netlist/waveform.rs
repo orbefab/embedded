@@ -295,7 +295,7 @@ pub(super) fn serial_end(start: u64, baud: u64, nbytes: usize) -> Option<u64> {
 
 /// Boundary `index` of a bit train from `start` at `baud` bits a second, or `None` when `baud`
 /// is 0 or the boundary does not fit in `u64`.
-pub(super) fn boundary(start: u64, baud: u64, index: u64) -> Option<u64> {
+pub(crate) fn boundary(start: u64, baud: u64, index: u64) -> Option<u64> {
     if baud == 0 {
         return None;
     }
@@ -501,9 +501,10 @@ fn earliest(rise: Option<u64>, fall: Option<u64>) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use crate::netlist::{Event, Source};
+
     use super::*;
     use crate::finite::Finite;
-    use crate::netlist::{Event, Source};
 
     fn level(v: f64) -> Value {
         Value {

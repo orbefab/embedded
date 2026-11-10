@@ -1,8 +1,10 @@
 //! Records between active chips: a receiver takes each record once, at its end, whatever the
 //! part order, the chunking, or the rewinds a landing makes.
 
-use crate::name::Name;
 use crate::netlist::{Contact, Netlist};
+
+use crate::name::Name;
+
 use crate::run_folder;
 use crate::serial::SerialByte;
 use crate::timestamp::Timestamp;

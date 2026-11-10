@@ -3,12 +3,13 @@
 //! The edges follow the synchronizer and the loop's cycle counts, and the LED current follows
 //! the closed form.
 
+use orbe_engine::netlist::{self, Contact, Model};
+
 use crate::runs::common;
 use common::atmega::{
     assert_led_follows, chip_matches_fixture, cycle_ps, logic_edges, logic_vcd, run_beside_steps,
     serial_csv,
 };
-use orbe_engine::netlist::{self, Contact, Model};
 
 /// Cycles from a pad change until `PINx` shows it. `PIN_SYNC_DELAY` in `packages/socs/avr/src/mux.rs`
 /// is that count, from DS40002061B §14.2.4. A change at cycle T is first visible to an

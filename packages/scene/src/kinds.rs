@@ -1,10 +1,12 @@
 //! The engine's pin names for each part kind, from the engine's own tables.
 
-use orbe_engine::netlist::{
-    Atmega328p, Bjt, Capacitor, Cst816, CurrentSource, Inductor, Junction, LinearRegulator, Mosfet,
-    Ne555, Potentiometer, PulsesReplay, Relay, Resistor, SpiReplay, St77916, Switch, VoltageSource,
-    Ws2812,
+use orbe_engine::chip::{LinearRegulator, Ne555, Relay};
+use orbe_engine::device::{Cst816, PulsesReplay, SpiReplay, St77916, Ws2812};
+use orbe_engine::mcu::Atmega328p;
+use orbe_engine::passive::{
+    Capacitor, CurrentSource, Inductor, Potentiometer, Resistor, Switch, VoltageSource,
 };
+use orbe_engine::semiconductor::{Bjt, Junction, Mosfet};
 
 /// Every kind whose pins are all required. An `esp32s3` lets pins go unwired and joins later.
 pub(crate) const KINDS: &[(&str, &[&str])] = &[

@@ -1,3 +1,5 @@
+use crate::netlist::{Analysis, Document, Netlist, Transient};
+
 use std::mem::size_of;
 
 use crate::blob::Blobs;
@@ -9,15 +11,16 @@ use crate::leds::{Latch, Leds as LedTrace};
 use crate::link::{Link, LinkRow};
 use crate::logic::{Change, Level};
 use crate::name::{Name, Ref};
-use crate::netlist::{Analysis, Document, Netlist, Transient};
+
 use crate::run_folder::{self, Observations, Results, RunFolder};
 use crate::serial::{Serial as Delivered, SerialByte};
 use crate::time::Time;
 use crate::timestamp::Timestamp;
 
 use crate::RunStats;
-use crate::active::{self, Actives, st77916, ws2812};
+use crate::active::{self, Actives};
 use crate::chip;
+use crate::device::{st77916, ws2812};
 use crate::lte::{self, Charges, Segment, Verdict};
 use crate::mna::{Memo, Solution};
 use crate::newton::{

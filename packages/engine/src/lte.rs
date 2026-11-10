@@ -14,6 +14,7 @@
 //! of the level it passes through.
 
 use crate::netlist::{Netlist, PartId};
+
 use crate::time::Time;
 
 use crate::element;
@@ -826,6 +827,8 @@ fn seconds(ps: u64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use crate::netlist::NetId;
+
     use super::*;
 
     /// The ids of two capacitors, `c1` and `c2`, in that order.
@@ -1578,8 +1581,6 @@ mod tests {
     /// `c_n` owns two capacitors. The second sits on `c_n`'s internal nodes. `d_o` is the
     /// next part's capacitor, so a charge cursor that advances by one collides with it.
     fn two_internal() -> (crate::netlist::Netlist, element::Pair, PartId, PartId) {
-        use crate::netlist::NetId;
-
         let netlist = crate::netlist::parse(
             br#"{
               "version": 0,
@@ -2170,7 +2171,6 @@ mod tests {
     /// the next part's capacitor, and `g_l` a later inductor across `a`. `e_s` and `f_s` hold
     /// `a` and `b`.
     fn shared() -> (crate::netlist::Netlist, element::Mixed, [PartId; 3]) {
-        use crate::netlist::NetId;
         use element::StoreEnd;
 
         let netlist = crate::netlist::parse(

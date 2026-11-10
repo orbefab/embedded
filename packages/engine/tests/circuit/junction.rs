@@ -285,7 +285,7 @@ fn a_tiny_saturation_current_solves_to_the_pre_cap_point() {
 /// voltage, the terminal voltage minus the drop on `Rs`.
 fn assert_on_shockley(i: f64, v: f64, is: f64, n: f64, rs: f64) {
     let vd = v - i * rs;
-    let nvt = n * orbe_engine::netlist::Junction::VT;
+    let nvt = n * orbe_engine::semiconductor::Junction::VT;
     let predicted = is * (libm::exp(vd / nvt) - 1.0) + 1e-12 * vd;
     let tol = 1e-6 * i.abs().max(predicted.abs()) + 1e-12;
     assert!((i - predicted).abs() <= tol, "{i} vs {predicted}");
@@ -296,14 +296,14 @@ fn assert_on_shockley(i: f64, v: f64, is: f64, n: f64, rs: f64) {
 /// taken as `volts`. The drop on `Rs` moves the current by under 1e-18 A.
 fn reverse_current(volts: f64, is: f64, n: f64, rs: f64) -> f64 {
     let gmin = 1e-12;
-    let arg = 3.0 * n * orbe_engine::netlist::Junction::VT / (volts * std::f64::consts::E);
+    let arg = 3.0 * n * orbe_engine::semiconductor::Junction::VT / (volts * std::f64::consts::E);
     (-is * (1.0 + arg * arg * arg) + gmin * volts) / (1.0 + gmin * rs)
 }
 
 /// Terminal current and voltage of a cathode-at-ground diode. The root is bracketed on the
 /// uncapped device law, so a clamped exponential cannot satisfy it.
 fn shockley_operating_point(volts: f64, ohms: Option<f64>, is: f64, n: f64) -> (f64, f64) {
-    let nvt = n * orbe_engine::netlist::Junction::VT;
+    let nvt = n * orbe_engine::semiconductor::Junction::VT;
     let gmin = 1e-12;
     let rs = 1.0;
     let residual = |vd: f64| {

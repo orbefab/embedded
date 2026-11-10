@@ -1,3 +1,5 @@
+use crate::netlist::{Document, Edge, Model, Netlist, PartId, Transient};
+
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, VecDeque};
 
@@ -5,7 +7,7 @@ use crate::diagnostic::Diagnostic;
 use crate::finite::Finite;
 use crate::logic::{Change, Level, Logic};
 use crate::name::Ref;
-use crate::netlist::{Document, Edge, Model, Netlist, PartId, Transient};
+
 use crate::run_folder::{Observations, OpPoint};
 use crate::time::Time;
 use crate::trace::Trace;

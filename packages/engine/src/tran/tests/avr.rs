@@ -1,16 +1,19 @@
 //! The ATmega328P through the seam, running the repo's firmware in `packages/engine/tests/firmware/`.
 
+use crate::mcu::Atmega328p;
+use crate::netlist::Netlist;
+
 use crate::diagnostic::Severity;
-use crate::netlist::{Atmega328p, Netlist};
+
 use orbe_avr::{FuseBytes, Port};
 
 use super::active::{
     NS, US, after, at, capacitor, circuit, resistor, restarted, run_active, scripted, volts,
 };
-use crate::active::avr::{self, PACKAGE, Pad, port_index};
 use crate::active::{self, Drive};
 use crate::diagnostic::Diagnostic;
 use crate::logic::Level;
+use crate::mcu::avr::{self, PACKAGE, Pad, port_index};
 use crate::name::Ref;
 use crate::newton::Circuit;
 use crate::trace::Trace;

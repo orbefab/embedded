@@ -5,16 +5,26 @@
 //! `active::chip`, and an `active::Core` variant. A relay is a passive chip that is its own
 //! netlist kind, not a `Chip`, so it answers `unknowns` and `dc_paths` as an element.
 
-mod ne555;
-mod relay;
+use crate::device::{Cst816, PulsesReplay, SpiReplay, St77916, Ws2812};
+use crate::mcu::{Atmega328p, Esp32s3};
+use crate::netlist::PartId;
+
+use crate::netlist::Chip;
+use crate::netlist::Model;
+
+pub(crate) mod ne555;
+pub(crate) mod regulator;
+pub(crate) mod relay;
+pub(crate) mod stage;
+
+pub use ne555::{Discharge, Ne555};
+pub use regulator::LinearRegulator;
+pub use relay::Relay;
+pub use stage::OutputStage;
 
 pub(crate) use relay::coil as relay_coil;
 
 use crate::logic::Level;
-use crate::netlist::{
-    Atmega328p, Chip, Cst816, Esp32s3, Model, Ne555, PartId, PulsesReplay, Relay, SpiReplay,
-    St77916, Ws2812,
-};
 
 use crate::mna::{Layout, Stamp, Unknowns};
 use crate::watch::Watch;
@@ -168,12 +178,12 @@ pub(crate) fn levels(chip: Passive<'_>, state: &State, watched: &[bool]) -> Vec<
 pub(crate) fn dc_paths(chip: &Chip) -> &'static [(usize, usize)] {
     match chip {
         Chip::Ne555(_) => &ne555::DC_PATHS,
-        Chip::Atmega328p(_) => &crate::active::avr::DC_PATHS,
-        Chip::SpiReplay(_) => &crate::active::replay::DC_PATHS,
-        Chip::St77916(_) => &crate::active::st77916::DC_PATHS,
-        Chip::Cst816(_) => &crate::active::cst816::DC_PATHS,
-        Chip::Esp32s3(mcu) => crate::active::esp32s3::dc_paths(mcu),
-        Chip::Ws2812(_) => &crate::active::ws2812::DC_PATHS,
-        Chip::PulsesReplay(_) => &crate::active::pulses::DC_PATHS,
+        Chip::Atmega328p(_) => &crate::mcu::avr::DC_PATHS,
+        Chip::SpiReplay(_) => &crate::device::spi_replay::DC_PATHS,
+        Chip::St77916(_) => &crate::device::st77916::DC_PATHS,
+        Chip::Cst816(_) => &crate::device::cst816::DC_PATHS,
+        Chip::Esp32s3(mcu) => crate::mcu::esp32s3::dc_paths(mcu),
+        Chip::Ws2812(_) => &crate::device::ws2812::DC_PATHS,
+        Chip::PulsesReplay(_) => &crate::device::pulses_replay::DC_PATHS,
     }
 }

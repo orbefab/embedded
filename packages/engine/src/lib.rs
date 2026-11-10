@@ -1,6 +1,9 @@
 //! The simulator: its data contracts and the solver that runs them.
 //! `Junction::VT` is the one thermal voltage, shared by the value rule and the solver.
 
+use crate::netlist::Analysis;
+use crate::netlist::Netlist;
+
 pub mod blob;
 pub mod diagnostic;
 pub mod display;
@@ -18,18 +21,22 @@ pub mod timestamp;
 pub mod trace;
 
 mod active;
-mod chip;
+pub mod chip;
 mod dense;
+pub mod device;
 mod element;
 mod ladder;
 mod lte;
+pub mod mcu;
 mod mna;
 mod newton;
 mod observe;
 mod op;
+pub mod passive;
 mod ratings;
 #[cfg(feature = "runner")]
 pub mod runner;
+pub mod semiconductor;
 mod session;
 mod step;
 mod topology;
@@ -37,14 +44,14 @@ mod tran;
 mod watch;
 
 use crate::blob::Blobs;
-use crate::netlist::{Analysis, Netlist};
+
 use crate::run_folder::{Observations, Results, RunFolder};
 use crate::timestamp::Timestamp;
 
 use crate::tran::Rows;
 
 pub use crate::serial::SerialByte;
-pub use active::st77916;
+pub use device::st77916;
 pub use session::{
     Applied, Display, EdgeCursor, Input, Leds, Probe, Refused, Rejected, Serial, SerialCursor,
     Session, Setting, Status,

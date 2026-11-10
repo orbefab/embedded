@@ -9,15 +9,20 @@
 //! page 3, gives T1L as 220 ns to 420 ns. The chain checks neither low, so a train timed to
 //! either sheet decodes. A high outside both windows is rule `bit`, dropped, and warned once.
 
+use crate::netlist::PartId;
+
+use crate::netlist::NetId;
+use crate::netlist::Threshold;
+
 use std::sync::Arc;
 
 use crate::diagnostic::ProtocolRule;
 use crate::leds::Chain as Observed;
 use crate::link::{LinkRow, Record, RecordKind};
-use crate::netlist::{PartId, Ws2812};
+
 use crate::time::Time;
 
-use super::{Chip, Drive, Stop, Takes};
+use crate::active::{Chip, Drive, Stop, Takes};
 use crate::mna::Node;
 use crate::watch::{Signal, Watch};
 
@@ -63,7 +68,7 @@ pub(crate) fn chip(part: PartId, chain: &Ws2812) -> Chip {
             duty: None,
             pulses: Some(pins[DIN]),
         },
-        core: super::Core::Ws2812(Box::new(Core::new(chain.leds))),
+        core: crate::active::Core::Ws2812(Box::new(Core::new(chain.leds))),
     }
 }
 
@@ -726,4 +731,80 @@ mod tests {
         assert_eq!(early.broke(), None);
         assert_eq!(early.observed().pixels, vec![[0x80, 0, 0]]);
     }
+}
+
+/// A chain of WS2812E-1313 LEDs, an active chip with no clock of its own. It reads `DIN`
+/// through `input_threshold`, fractions of its supply, and takes `Pulses` records on that net.
+/// Each LED keeps the first 24 bits, green then red then blue, and passes the rest on. A low
+/// longer than 280 µs latches. `leds` is from 1 to [`Ws2812::LED_MAX`]. Only parse builds one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ws2812 {
+    pub pins: [NetId; 3],
+    pub leds: u16,
+    pub input_threshold: Threshold,
+}
+
+impl Ws2812 {
+    pub const PINS: [&'static str; 3] = ["VCC", "GND", "DIN"];
+    /// The most LEDs one part holds.
+    pub const LED_MAX: u16 = 1024;
+    /// The count a part omits.
+    pub const LEDS_DEFAULT: u16 = 13;
+}
+
+// The `ws2812` kind: its pins, its LED count and its `DIN` threshold.
+
+use std::collections::BTreeMap;
+
+use serde::Deserialize;
+
+use crate::diagnostic::{Diagnostic, ValueRule};
+use crate::name::{Name, Ref};
+use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
+use crate::netlist::json::{PinMap, resolve_pins};
+
+fn default_leds() -> u16 {
+    Ws2812::LEDS_DEFAULT
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WireWs2812 {
+    pub(crate) name: String,
+    pins: PinMap,
+    #[serde(default = "default_leds")]
+    leds: u16,
+    input_threshold: WireThreshold,
+}
+
+pub(crate) fn resolve_ws2812(
+    name: &Name,
+    part_ref: &Ref,
+    wire: WireWs2812,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Ws2812> {
+    let pins = resolve_pins(name, Ws2812::PINS, &wire.pins.0, nets, out);
+    let input_threshold = resolve_threshold(
+        part_ref,
+        ["input_threshold.low", "input_threshold.high"],
+        wire.input_threshold,
+        out,
+    );
+    let leds = if (1..=Ws2812::LED_MAX).contains(&wire.leds) {
+        Some(wire.leds)
+    } else {
+        out.push(Diagnostic::NetlistValue {
+            part: part_ref.clone(),
+            field: "leds".into(),
+            value: f64::from(wire.leds),
+            rule: ValueRule::Leds,
+        });
+        None
+    };
+    Some(Ws2812 {
+        pins: pins?,
+        leds: leds?,
+        input_threshold: input_threshold?,
+    })
 }

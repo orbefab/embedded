@@ -1,4 +1,18 @@
-use crate::netlist::{Junction, junction_scale};
+use crate::diagnostic::Diagnostic;
+use crate::diagnostic::ValueRule;
+use crate::name::Name;
+use crate::name::Ref;
+use crate::netlist::NetId;
+use crate::netlist::Value;
+use crate::netlist::json::PinMap;
+use crate::netlist::json::WireJunctionRatings;
+use crate::netlist::json::WireValue;
+use crate::netlist::json::resolve_pins;
+use crate::netlist::json::resolve_rating;
+use crate::netlist::json::resolve_value;
+use serde::Deserialize;
+use std::collections::BTreeMap;
+use std::f64::consts::SQRT_2;
 
 use crate::element::Update;
 use crate::mna::{GMIN, Probe, Stamp};
@@ -11,14 +25,14 @@ const G_CAP: f64 = 1e100;
 
 /// One junction's current law. A diode has one, and a transistor one per junction.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct Shockley {
+pub(crate) struct Shockley {
     is: f64,
-    pub(super) nvt: f64,
-    pub(super) vcrit: f64,
+    pub(crate) nvt: f64,
+    pub(crate) vcrit: f64,
 }
 
 impl Shockley {
-    pub(super) fn new(emission: f64, is: f64) -> Shockley {
+    pub(crate) fn new(emission: f64, is: f64) -> Shockley {
         let scale = junction_scale(emission, is).expect("parse accepts only a finite junction");
         Shockley {
             is,
@@ -28,7 +42,7 @@ impl Shockley {
     }
 
     /// A junction whose saturation current, `n*VT` and `vcrit` are already known.
-    pub(super) fn from_parts(is: f64, nvt: f64, vcrit: f64) -> Shockley {
+    pub(crate) fn from_parts(is: f64, nvt: f64, vcrit: f64) -> Shockley {
         Shockley { is, nvt, vcrit }
     }
 
@@ -58,7 +72,7 @@ impl Shockley {
     /// ngspice-42's junction law, `dioload` with no breakdown voltage and each junction of
     /// `bjtload`. Below `-3 * nvt` the current is `-Is * (1 + (3 * nvt / (e * vj))^3)`, which
     /// meets the exponential there in current and slope. Returns what `exponential` does.
-    pub(super) fn evaluate(&self, vj: f64) -> (f64, f64, bool, f64) {
+    pub(crate) fn evaluate(&self, vj: f64) -> (f64, f64, bool, f64) {
         if vj >= -3.0 * self.nvt {
             return self.exponential(vj);
         }
@@ -79,7 +93,7 @@ fn shockley(junction: &Junction) -> Shockley {
 /// cathode, linearised at the voltage `evaluate` used. `GMIN` is across that
 /// junction. ngspice-42's `dioload` adds `CKTgmin` to `gd` and `CKTgmin * vd`
 /// to the current, and it puts no conductance from the internal node to ground.
-pub(super) fn stamp(junction: &Junction, stamp: &mut Stamp<'_>) {
+pub(crate) fn stamp(junction: &Junction, stamp: &mut Stamp<'_>) {
     let params = shockley(junction);
     let [anode, cathode] = junction.pins;
     let inner = stamp.internal(0);
@@ -92,13 +106,13 @@ pub(super) fn stamp(junction: &Junction, stamp: &mut Stamp<'_>) {
     stamp.current(inner, cathode, id - gd * voltage);
 }
 
-pub(super) fn initial(junction: &Junction) -> f64 {
+pub(crate) fn initial(junction: &Junction) -> f64 {
     shockley(junction).vcrit
 }
 
 /// Limits the solved junction voltage against `prior` and checks the
 /// linearised current against the device equation at the solved voltage.
-pub(super) fn update(junction: &Junction, probe: &Probe<'_>, prior: f64) -> (f64, Update) {
+pub(crate) fn update(junction: &Junction, probe: &Probe<'_>, prior: f64) -> (f64, Update) {
     let params = shockley(junction);
     let solved = probe.internal(0) - probe.v(junction.pins[1]);
     let (next, mut limited) = pnjlim(solved, prior, params.nvt, params.vcrit);
@@ -112,7 +126,7 @@ pub(super) fn update(junction: &Junction, probe: &Probe<'_>, prior: f64) -> (f64
 
 /// How far a linearised current is from the device equation, over Newton's tolerance on it.
 /// At most 1 passes. A ratio that is not finite is infinite.
-pub(super) fn mismatch(linear: f64, actual: f64) -> f64 {
+pub(crate) fn mismatch(linear: f64, actual: f64) -> f64 {
     let tolerance = RELTOL * linear.abs().max(actual.abs()) + ABSTOL;
     let mismatch = (linear - actual).abs() / tolerance;
     if mismatch.is_finite() {
@@ -123,7 +137,7 @@ pub(super) fn mismatch(linear: f64, actual: f64) -> f64 {
 }
 
 /// The current through Rs, entering the anode.
-pub(super) fn current(junction: &Junction, probe: &Probe<'_>) -> f64 {
+pub(crate) fn current(junction: &Junction, probe: &Probe<'_>) -> f64 {
     (probe.v(junction.pins[0]) - probe.internal(0)) / junction.series_resistance.si.get()
 }
 
@@ -316,4 +330,150 @@ mod tests {
         )
         .unwrap()
     }
+}
+
+/// A Shockley junction in series with a resistance, at 298.15 K with no temperature scaling.
+/// `i = Is * (exp(vj / (N * kT/q)) - 1)` down to `vj = -3 * N * kT/q`, ngspice-42's reverse law
+/// `i = -Is * (1 + (3 * N * kT/q / (e * vj))^3)` below it, and `V(anode) - V(cathode) = vj + i * Rs`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Junction {
+    /// Nets of pins `anode`, `cathode`.
+    pub pins: [NetId; 2],
+    /// Ampere, greater than 0.
+    pub saturation_current: Value,
+    /// Unit `1`, greater than 0.
+    pub emission_coefficient: Value,
+    /// Ohm, greater than 0.
+    pub series_resistance: Value,
+    /// Ampere, greater than 0. `None` is an explicit `"current": null`.
+    pub max_current: Option<Value>,
+    /// Watt, greater than 0. `None` is an explicit `"power": null`.
+    pub max_power: Option<Value>,
+}
+
+impl Junction {
+    pub const PINS: [&'static str; 2] = ["anode", "cathode"];
+
+    /// `k*T/q` at 298.15 K, from the exact SI values of `k` and `q`.
+    pub const VT: f64 = 1.380649e-23 * 298.15 / 1.602176634e-19;
+}
+
+/// `n*VT` and `vcrit` for a junction whose parameters are inside the domain.
+pub struct JunctionScale {
+    pub nvt: f64,
+    pub vcrit: f64,
+}
+
+/// Which junction field breaks `finite_junction`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JunctionFault {
+    EmissionCoefficient,
+    SaturationCurrent,
+}
+
+impl JunctionFault {
+    /// The field that breaks the rule. `emission` names the emission field, which is
+    /// `emission_coefficient` on a diode and `forward_emission` or `reverse_emission` on a
+    /// transistor.
+    pub fn field(self, emission: &'static str) -> &'static str {
+        match self {
+            JunctionFault::EmissionCoefficient => emission,
+            JunctionFault::SaturationCurrent => "saturation_current",
+        }
+    }
+
+    pub(crate) fn value(self, emission: f64, saturation: f64) -> f64 {
+        match self {
+            JunctionFault::EmissionCoefficient => emission,
+            JunctionFault::SaturationCurrent => saturation,
+        }
+    }
+}
+
+/// `n*VT` must be normal, and `vcrit = nvt*ln(nvt/(sqrt(2)*Is))` must be finite and positive.
+///
+/// `vcrit` is positive when `n*VT > sqrt(2)*Is`. A `vcrit` that fails the rule names
+/// `saturation_current` when `Is` is not normal, and `emission_coefficient` otherwise.
+/// `n*VT` itself names `emission_coefficient`.
+pub fn junction_scale(emission: f64, saturation: f64) -> Result<JunctionScale, JunctionFault> {
+    let nvt = emission * Junction::VT;
+    if !nvt.is_normal() {
+        return Err(JunctionFault::EmissionCoefficient);
+    }
+    let vcrit = nvt * libm::log(nvt / (SQRT_2 * saturation));
+    if !(vcrit.is_finite() && vcrit > 0.0) {
+        return Err(if saturation.is_normal() {
+            JunctionFault::EmissionCoefficient
+        } else {
+            JunctionFault::SaturationCurrent
+        });
+    }
+    Ok(JunctionScale { nvt, vcrit })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WireJunction {
+    pub(crate) name: String,
+    pins: PinMap,
+    saturation_current: WireValue,
+    emission_coefficient: WireValue,
+    series_resistance: WireValue,
+    ratings: WireJunctionRatings,
+}
+
+pub(crate) fn resolve_junction(
+    name: &Name,
+    part_ref: &Ref,
+    wire: WireJunction,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Junction> {
+    let pins = resolve_pins(name, Junction::PINS, &wire.pins.0, nets, out);
+    let is = resolve_value(
+        part_ref,
+        "saturation_current",
+        "A",
+        true,
+        wire.saturation_current,
+        out,
+    );
+    let n = resolve_value(
+        part_ref,
+        "emission_coefficient",
+        "1",
+        true,
+        wire.emission_coefficient,
+        out,
+    );
+    let rs = resolve_value(
+        part_ref,
+        "series_resistance",
+        "ohm",
+        true,
+        wire.series_resistance,
+        out,
+    );
+    let ratings = wire.ratings;
+    let max_current = resolve_rating(part_ref, "ratings.current", "A", ratings.current, out);
+    let max_power = resolve_rating(part_ref, "ratings.power", "W", ratings.power, out);
+    if let (Some(is), Some(n)) = (&is, &n)
+        && let Err(fault) = junction_scale(n.si.get(), is.si.get())
+    {
+        out.push(Diagnostic::NetlistValue {
+            part: part_ref.clone(),
+            field: fault.field("emission_coefficient").into(),
+            value: fault.value(n.si.get(), is.si.get()),
+            rule: ValueRule::FiniteJunction,
+        });
+        return None;
+    }
+    Some(Junction {
+        pins: pins?,
+        saturation_current: is?,
+        emission_coefficient: n?,
+        series_resistance: rs?,
+        max_current: max_current?,
+        max_power: max_power?,
+    })
 }

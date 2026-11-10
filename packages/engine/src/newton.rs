@@ -1,7 +1,9 @@
+use crate::netlist::{Contact, Model, Netlist, PartId, Schedule, Waveform};
+
 use crate::diagnostic::Diagnostic;
 use crate::logic::Level;
 use crate::name::{Name, Ref};
-use crate::netlist::{Contact, Model, Netlist, PartId, Schedule, Waveform};
+
 use crate::time::Time;
 
 use crate::active;

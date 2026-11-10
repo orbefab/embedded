@@ -1,10 +1,12 @@
 //! The `st77916` panel on records: its rows and image in any chunking, its reset pin, its
 //! backlight duty, and the transfers it drops with a warning.
 
+use crate::netlist::{Contact, Netlist};
+
 use crate::diagnostic::{Diagnostic, ProtocolRule};
 use crate::display::Brightness;
 use crate::name::Name;
-use crate::netlist::{Contact, Netlist};
+
 use crate::run_folder::{self, RunFolder};
 use crate::timestamp::Timestamp;
 

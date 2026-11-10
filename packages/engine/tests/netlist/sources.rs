@@ -1,7 +1,9 @@
+use orbe_engine::netlist::{self, Model, Netlist, Shape, Waveform};
+
 use crate::common;
 
 use common::{errors, with_parts};
-use orbe_engine::netlist::{self, Model, Netlist, Shape, Waveform};
+
 use orbe_engine::time::Time;
 
 fn level(value: f64, unit: &str) -> String {

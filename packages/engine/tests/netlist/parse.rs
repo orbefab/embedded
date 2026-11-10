@@ -1,8 +1,9 @@
+use orbe_engine::netlist::{self, Analysis, Basis, Model, Source};
+
 use std::fs;
 use std::path::PathBuf;
 
 use orbe_engine::name::Ref;
-use orbe_engine::netlist::{self, Analysis, Basis, Model, Source};
 
 fn fixture(name: &str) -> Vec<u8> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

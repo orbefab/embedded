@@ -8,6 +8,7 @@
 //! between 0.25 and 0.9. p is 1 for backward Euler and 2 for trapezoidal.
 
 use crate::netlist::Transient;
+
 use crate::time::Time;
 
 use crate::newton::Method;

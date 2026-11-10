@@ -16,6 +16,8 @@
 //!   leds.csv      when the netlist has a ws2812 part, see `leds`
 //! ```
 
+use crate::netlist::Transient;
+
 use serde::Serialize;
 
 use crate::display::Displays;
@@ -25,7 +27,7 @@ use crate::leds::Leds;
 use crate::link::Link;
 use crate::logic::Logic;
 use crate::name::{Quantity, Ref};
-use crate::netlist::Transient;
+
 use crate::serial::Serial;
 use crate::time::Time;
 

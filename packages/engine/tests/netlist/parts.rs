@@ -1,7 +1,8 @@
+use orbe_engine::netlist::{self, Model, RatingKind};
+
 use crate::common;
 
 use common::{errors, with_parts};
-use orbe_engine::netlist::{self, Model, RatingKind};
 
 #[test]
 fn unexpected_pin_on_an_unknown_net_reports_both() {

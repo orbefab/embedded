@@ -1,11 +1,12 @@
 //! The examples the tests scan. `tests/runs/common` includes this file by path, so it uses
 //! only `orbe_engine` and `std`.
 
+use orbe_engine::netlist::{self, Analysis, Chip, Model, Netlist};
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use orbe_engine::blob::Blobs;
-use orbe_engine::netlist::{self, Analysis, Chip, Model, Netlist};
 
 /// The directory of every example, sorted.
 pub fn examples() -> Vec<PathBuf> {

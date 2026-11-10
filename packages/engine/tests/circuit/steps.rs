@@ -1,9 +1,11 @@
+use orbe_engine::netlist::{self, Analysis, Model};
+
 use crate::common;
 
 use std::path::PathBuf;
 
 use common::{column, simulate, simulate_steps, span, trace};
-use orbe_engine::netlist::{self, Analysis, Model};
+
 use orbe_engine::run_folder::{RunFolder, render};
 use orbe_engine::time::Time;
 use orbe_engine::timestamp::Timestamp;

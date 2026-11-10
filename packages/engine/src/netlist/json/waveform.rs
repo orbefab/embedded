@@ -1,6 +1,8 @@
 //! A source's `voltage` or `current`: a value object, or an object with `kind`.
 //! A value object is a `steps` waveform with no events.
 
+use crate::netlist::{MIN_GAP_PS, Source, Value, Waveform};
+
 use std::borrow::Cow;
 use std::fmt;
 
@@ -11,17 +13,17 @@ use super::{WireValue, resolve_value};
 use crate::diagnostic::{Diagnostic, ScheduleRule, WaveformRule};
 use crate::name::Ref;
 use crate::netlist::waveform::{Baud, Frame, SerialEvent, serial_end};
-use crate::netlist::{MIN_GAP_PS, Source, Value, Waveform};
+
 use crate::time::Time;
 
-pub(super) enum WireWaveform {
+pub(crate) enum WireWaveform {
     Dc(WireValue),
     Shape(WireShape),
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(super) enum WireShape {
+pub(crate) enum WireShape {
     Step {
         initial: WireValue,
         #[serde(rename = "final")]
@@ -41,7 +43,7 @@ pub(super) enum WireShape {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct WireSerial {
+pub(crate) struct WireSerial {
     mark: WireValue,
     space: WireValue,
     events: Vec<WireSerialEvent>,
@@ -77,22 +79,22 @@ fn baud_at_least_one<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, 
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct WireSteps {
-    pub(super) initial: WireValue,
-    pub(super) events: Vec<WireLevel>,
+pub(crate) struct WireSteps {
+    pub(crate) initial: WireValue,
+    pub(crate) events: Vec<WireLevel>,
 }
 
 /// One `steps` event. `level` is a value object. `t_ps` is a JSON integer.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct WireLevel {
-    pub(super) t_ps: u64,
-    pub(super) level: WireValue,
+pub(crate) struct WireLevel {
+    pub(crate) t_ps: u64,
+    pub(crate) level: WireValue,
 }
 
 /// A potentiometer `position`: a value object, or `steps` and nothing else.
 /// `step` and `pulse` stay unknown variants, so they are `netlist.syntax`.
-pub(super) enum WirePosition {
+pub(crate) enum WirePosition {
     Value(WireValue),
     Steps(WireSteps),
 }
@@ -156,7 +158,7 @@ impl<'de> Visitor<'de> for ObjectVisitor {
 }
 
 /// The field names of one source key, for diagnostics.
-pub(super) struct Fields {
+pub(crate) struct Fields {
     key: &'static str,
     unit: &'static str,
     initial: &'static str,
@@ -174,7 +176,7 @@ pub(super) struct Fields {
 pub(crate) const VOLT: &str = "V";
 pub(crate) const AMPERE: &str = "A";
 
-pub(super) const VOLTAGE: Fields = Fields {
+pub(crate) const VOLTAGE: Fields = Fields {
     key: "voltage",
     unit: VOLT,
     initial: "voltage.initial",
@@ -189,7 +191,7 @@ pub(super) const VOLTAGE: Fields = Fields {
     space: "voltage.space",
 };
 
-pub(super) const CURRENT: Fields = Fields {
+pub(crate) const CURRENT: Fields = Fields {
     key: "current",
     unit: AMPERE,
     initial: "current.initial",
@@ -204,7 +206,7 @@ pub(super) const CURRENT: Fields = Fields {
     space: "current.space",
 };
 
-pub(super) fn resolve_waveform(
+pub(crate) fn resolve_waveform(
     part: &Ref,
     fields: &Fields,
     wire: WireWaveform,
@@ -397,7 +399,7 @@ fn resolve_serial(
     ok.then(|| Waveform::serial(mark, space, events))
 }
 
-pub(super) fn serial_schedule(
+pub(crate) fn serial_schedule(
     at: u64,
     bytes_empty: bool,
     previous_start: Option<u64>,

@@ -2,6 +2,8 @@
 //! `vrx` draws 8N1 frames through 1 kohm onto PD0. The RX vector echoes each byte
 //! on TXD and drives the LED on PB5 from `'1'` and `'0'`.
 
+use orbe_engine::netlist::{Baud, Frame};
+
 use crate::runs::common;
 use common::atmega::{
     assert_led_follows, chip_matches_fixture, cycle_ps, logic_edges, logic_vcd, run_beside_steps,
@@ -9,7 +11,7 @@ use common::atmega::{
 };
 use common::read_vcd;
 use orbe_engine::name::Name;
-use orbe_engine::netlist::{Baud, Frame};
+
 use orbe_engine::time::Time;
 use orbe_engine::timestamp::Timestamp;
 use orbe_engine::{Input, Serial, Session, Setting, Status};
