@@ -204,7 +204,8 @@ if ((check)); then
   (
     cd "$root"
     echo "rustc $(rustc --version)"
-    cargo run -q -p orbe-engine-cli --locked -- run "$netlist" --out "$run" --blobs "$cache"
+    cargo run -q -p orbe-circuit --features runner --bin orbe-run --locked -- \
+      run "$netlist" --out "$run" --blobs "$cache"
   )
   if [[ $name == console ]]; then
     uv run "$root/packages/engine/scripts/esp32s3_arduino_console.py" --check "$run"

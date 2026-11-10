@@ -757,12 +757,14 @@ version = "0.1.0"
 name = "orbe-circuit"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "libm",
  "orbe-avr",
  "orbe-circuit",
  "orbe-engine-core",
  "orbe-espressif",
  "orbe-xtensa",
+ "serde",
  "serde_json",
 ]
 

@@ -9,6 +9,7 @@ mod newton;
 mod observe;
 mod op;
 mod ratings;
+pub mod report;
 mod session;
 mod step;
 mod topology;

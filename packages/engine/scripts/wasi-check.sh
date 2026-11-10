@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds `sim` natively and for wasm32-wasip1, runs both on every example in
+# Builds `orbe-run` natively and for wasm32-wasip1, runs both on every example in
 # packages/engine/tests/circuits with the blob cache as --blobs, and requires the same folder from
 # each, file for file, after masking manifest.json's created_at. When that run exits non-zero, it
 # prints the run's diagnostics. It needs bash 4.2 or later, rustup with the wasm32-wasip1 target,
@@ -22,7 +22,7 @@ for tool in node rustup; do
   fi
 done
 if ! node --disable-warning=ExperimentalWarning --input-type=module -e 'import { WASI } from "node:wasi"' >/dev/null 2>&1; then
-  echo "wasi-check: skip WASI sim run, node:wasi is not available"
+  echo "wasi-check: skip WASI orbe-run, node:wasi is not available"
   exit 0
 fi
 if ! rustup target list --installed | grep -qx wasm32-wasip1; then
@@ -38,12 +38,12 @@ rm -rf "$scratch/native" "$scratch/wasi"
 
 cd "$repo"
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}
-cargo build -p orbe-engine-cli --release --locked
-cargo build -p orbe-engine-cli --release --locked --target wasm32-wasip1
+cargo build -p orbe-circuit --features runner --bin orbe-run --release --locked
+cargo build -p orbe-circuit --features runner --bin orbe-run --release --locked --target wasm32-wasip1
 target=$(cargo metadata --format-version 1 --no-deps |
   sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
-sim=$target/release/sim
-wasm=$target/wasm32-wasip1/release/sim.wasm
+runner=$target/release/orbe-run
+wasm=$target/wasm32-wasip1/release/orbe-run.wasm
 # The blobs no example commits, which every side reads from the cache.
 ORBE_BLOBS=$("$repo/packages/engine/scripts/blobs.sh")
 export ORBE_BLOBS
@@ -51,7 +51,7 @@ names=()
 for netlist in packages/engine/tests/circuits/*/netlist.json; do
   name=$(basename "$(dirname "$netlist")")
   names+=("$name")
-  "$sim" run "$netlist" --out "$scratch/native/$name" --blobs "$ORBE_BLOBS" >/dev/null
+  "$runner" run "$netlist" --out "$scratch/native/$name" --blobs "$ORBE_BLOBS" >/dev/null
 done
 mkdir -p "$scratch/wasi"
 node --disable-warning=ExperimentalWarning --input-type=module - "$wasm" "$repo" "$scratch/native" "$scratch/wasi" "$scratch/wasi-report" "$ORBE_BLOBS" "${names[@]}" <<'JS'
@@ -86,7 +86,7 @@ for (const name of names) {
   const reportFd = openSync(reportPath, 'w');
   const wasi = new WASI({
     version: 'preview1',
-    args: ['sim', 'run', `/repo/packages/engine/tests/circuits/${name}/netlist.json`, '--out', `/out/${name}`, '--blobs', '/blobs'],
+    args: ['orbe-run', 'run', `/repo/packages/engine/tests/circuits/${name}/netlist.json`, '--out', `/out/${name}`, '--blobs', '/blobs'],
     preopens: { '/repo': repo, '/out': wasiRoot, '/blobs': blobs },
     stdout: reportFd,
     returnOnExit: true,
@@ -97,13 +97,13 @@ for (const name of names) {
     code = wasi.start(inst);
   } catch (error) {
     closeSync(reportFd);
-    console.error(`wasi-check: WASI sim run packages/engine/tests/circuits/${name} failed: ${error.message ?? error}`);
+    console.error(`wasi-check: WASI orbe-run packages/engine/tests/circuits/${name} failed: ${error.message ?? error}`);
     process.exit(1);
   }
   closeSync(reportFd);
   if (code !== 0) {
     const report = (await readFile(reportPath, 'utf8')).trim();
-    console.error(`wasi-check: WASI sim run packages/engine/tests/circuits/${name} exited ${code ?? 'null'}`);
+    console.error(`wasi-check: WASI orbe-run packages/engine/tests/circuits/${name} exited ${code ?? 'null'}`);
     let why = report;
     try {
       const doc = JSON.parse(report);
@@ -156,6 +156,6 @@ for (const name of names) {
   }
 }
 
-console.log(`wasi-check: WASI sim run matches native on ${names.length} examples`);
+console.log(`wasi-check: WASI orbe-run matches native on ${names.length} examples`);
 JS
 rm -rf "$scratch"
