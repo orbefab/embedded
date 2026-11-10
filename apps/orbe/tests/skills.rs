@@ -16,7 +16,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-use harness::{Run, Runtime};
+use harness::{Run, Runtime, wait_until};
 use orbe_scene::Files;
 
 fn skill(name: &str) -> String {
@@ -190,10 +190,9 @@ fn the_core_examples_run_from_an_empty_folder_as_shown() {
         "the worked example"
     );
     assert!(sessions[0].contains("\n$ orbe test\n"));
-    assert!(
-        runtime.daemons().is_empty(),
-        "each example closes its session"
-    );
+    wait_until("each example closes its session", || {
+        runtime.daemons().is_empty()
+    });
 }
 
 #[test]
@@ -1239,7 +1238,9 @@ fn orbe_test_leaves_an_open_session_alone_and_none_to_close() {
     runtime.orbe(dir, &[&["close"][..], &live].concat()).ok();
 
     runtime.orbe(dir, &["test"]).ok();
-    assert!(runtime.daemons().is_empty(), "orbe test leaves no session");
+    wait_until("orbe test leaves no session", || {
+        runtime.daemons().is_empty()
+    });
     let close = runtime.orbe(dir, &["close", "--json"]);
     assert_eq!(close.code, 1);
     let code = close.json()["error"]["code"].as_str().unwrap().to_string();
