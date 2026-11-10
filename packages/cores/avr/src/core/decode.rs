@@ -539,10 +539,10 @@ fn bitop(word: u16, skip: u8) -> Option<Op> {
 mod tests {
     use std::sync::Arc;
 
-    use super::super::check::{FNV_OFFSET, INITIAL_SP, MASK, Mem, Rig};
+    use super::super::check::{BusCall, FNV_OFFSET, INITIAL_SP, MASK, Mem, Rig};
     use super::super::execute::{Ptr, Update};
     use super::{Op, decode, table};
-    use crate::Core;
+    use crate::{Bus, Core};
 
     /// Two little-endian bytes for each word, folded from every run of it in [`Rig::cases`]
     /// on the flat [`Mem`] bus. `record_the_effects` writes them.
@@ -1059,5 +1059,41 @@ mod tests {
         awake.step(&mut open);
         assert!(!open.sleep_armed());
         assert!(!awake.is_sleeping());
+    }
+
+    /// `SBI` and `CBI` are one `write_bit`. A load or a store would hide write-one-to-clear.
+    #[test]
+    fn sbi_and_cbi_use_write_bit() {
+        let mut set = Core::new(INITIAL_SP, MASK);
+        set.load_words(&[0x9A2A]);
+        let mut bus = Mem::new();
+        bus.poke(&mut set, 0x25, 0x01);
+        bus.record_touches();
+        set.step(&mut bus);
+        assert_eq!(bus.peek(&set, 0x25), 0x05);
+        assert_eq!(
+            bus.touches(),
+            &[BusCall::WriteBit {
+                addr: 0x25,
+                bit: 2,
+                set: true,
+            }]
+        );
+
+        let mut clear = Core::new(INITIAL_SP, MASK);
+        clear.load_words(&[0x983B]);
+        let mut bus = Mem::new();
+        bus.poke(&mut clear, 0x27, 0x08);
+        bus.record_touches();
+        clear.step(&mut bus);
+        assert_eq!(bus.peek(&clear, 0x27), 0x00);
+        assert_eq!(
+            bus.touches(),
+            &[BusCall::WriteBit {
+                addr: 0x27,
+                bit: 3,
+                set: false,
+            }]
+        );
     }
 }

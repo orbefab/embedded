@@ -154,122 +154,122 @@ clone_fields!(Bus {
     test_irq
 });
 
-/// Calls the struct methods. The trait impl is a different `load`, so the call stays out here,
-/// where the struct method is the one in scope.
-mod call {
-    use super::Bus;
-    use orbe_avr::Core;
-
-    #[inline(always)]
-    pub(super) fn load(bus: &mut Bus, core: &Core, addr: u16) -> u8 {
-        bus.load(core, addr)
-    }
-
-    #[inline(always)]
-    pub(super) fn store(bus: &mut Bus, core: &mut Core, addr: u16, value: u8, cycles: u64) {
-        bus.store(core, addr, value, cycles);
-    }
-
-    #[inline(always)]
-    pub(super) fn peek(bus: &Bus, core: &Core, addr: u16) -> u8 {
-        bus.peek(core, addr)
-    }
-
-    #[inline(always)]
-    pub(super) fn steady(bus: &Bus, addr: u16) -> bool {
-        bus.steady(addr)
-    }
-
-    #[inline(always)]
-    pub(super) fn store_idle(bus: &Bus, core: &Core, addr: u16, value: u8) -> bool {
-        bus.store_idle(core, addr, value)
-    }
-
-    #[inline(always)]
-    pub(super) fn write_bit(bus: &mut Bus, core: &mut Core, addr: u16, bit: u8, set: bool) {
-        bus.write_bit(core, addr, bit, set);
-    }
-
-    #[inline(always)]
-    pub(super) fn sleep_enabled(bus: &Bus) -> bool {
-        bus.sleep_enabled()
-    }
-
-    #[inline(always)]
-    pub(super) fn arm_sleep(bus: &mut Bus) {
-        bus.arm_sleep();
-    }
-
-    #[inline(always)]
-    pub(super) fn watchdog_reset_timer(bus: &mut Bus) {
-        bus.watchdog_reset_timer();
-    }
-
-    #[inline(always)]
-    pub(super) fn cpu_halt(bus: &Bus) -> u8 {
-        bus.cpu_halt()
-    }
-
-    #[inline(always)]
-    pub(super) fn clear_cpu_halt(bus: &mut Bus) {
-        bus.clear_cpu_halt();
-    }
-}
-
 impl orbe_avr::Bus for Bus {
     #[inline(always)]
     fn load(&mut self, core: &Core, addr: u16) -> u8 {
-        call::load(self, core, addr)
+        if (SRAM_BASE..=RAMEND).contains(&addr) {
+            return self.sram[usize::from(addr - SRAM_BASE)];
+        }
+        if addr <= 0x001F {
+            return core.reg(addr as u8);
+        }
+        if addr == SREG {
+            return core.sreg();
+        }
+        if let Some(byte) = self.sp_byte(core, addr) {
+            return byte;
+        }
+        if let Some(index) = io_index(addr) {
+            return self.load_io(index);
+        }
+        0
     }
 
     #[inline(always)]
     fn store(&mut self, core: &mut Core, addr: u16, value: u8, cycles: u64) {
-        call::store(self, core, addr, value, cycles);
+        self.store(core, addr, value, cycles);
     }
 
     #[inline(always)]
     fn peek(&self, core: &Core, addr: u16) -> u8 {
-        call::peek(self, core, addr)
+        self.peek(core, addr)
     }
 
+    /// A [`Self::load`] of `addr` changes nothing and reads what [`Self::peek`] reads. What it
+    /// reads changes only at the next event, on a store, or on a host call.
     #[inline(always)]
     fn steady(&self, addr: u16) -> bool {
-        call::steady(self, addr)
+        let Some(index) = io_index(addr) else {
+            return true;
+        };
+        if addr == SREG || addr == SPL || addr == SPH {
+            return true;
+        }
+        let slot = self.owners[index];
+        slot.dev == NO_DEV
+            || self.devices[usize::from(slot.dev)].steady(slot.reg, &self.mux, self.cycle)
     }
 
+    /// A [`Self::store`] of `value` to `addr` would change no state, pin, log entry, notice, or
+    /// schedule.
     #[inline(always)]
     fn store_idle(&self, core: &Core, addr: u16, value: u8) -> bool {
-        call::store_idle(self, core, addr, value)
+        if (SRAM_BASE..=RAMEND).contains(&addr)
+            || addr <= 0x001F
+            || addr == SREG
+            || addr == SPL
+            || addr == SPH
+        {
+            return self.peek(core, addr) == value;
+        }
+        let Some(index) = io_index(addr) else {
+            return true;
+        };
+        let slot = self.owners[index];
+        // A stepped store also logs unmodeled bits and delivers waiting edges and notices.
+        slot.dev != NO_DEV
+            && self.devices[usize::from(slot.dev)].store_idle(slot.reg, value, &self.mux)
+            && self.unmodeled[index] & value == 0
+            && !self.mux.has_pending_edges()
+            && !self.notices_wait()
     }
 
+    /// `SBI` writes a one into one bit. `CBI` writes a zero.
+    ///
+    /// Bits in the strobe mask are not copied from the current value, so a
+    /// write-one-to-clear flag register keeps its other flags (DS40002061B §7.4).
     #[inline(always)]
     fn write_bit(&mut self, core: &mut Core, addr: u16, bit: u8, set: bool) {
-        call::write_bit(self, core, addr, bit, set);
+        let current = self.peek(core, addr);
+        let w1c = self.strobe_at(addr);
+        let bit_mask = 1u8 << (bit & 7);
+        let written = if set {
+            (current & !w1c) | bit_mask
+        } else {
+            (current & !w1c) & !bit_mask
+        };
+        self.store(core, addr, written, 2);
     }
 
     #[inline(always)]
-    fn sleep_enabled(&self) -> bool {
-        call::sleep_enabled(self)
-    }
-
-    #[inline(always)]
-    fn arm_sleep(&mut self) {
-        call::arm_sleep(self);
+    fn sleep(&mut self) -> bool {
+        let enabled = match self.system() {
+            Some(sys) => sys.se(),
+            None => true,
+        };
+        if enabled {
+            self.sleep_armed = true;
+        }
+        enabled
     }
 
     #[inline(always)]
     fn watchdog_reset_timer(&mut self) {
-        call::watchdog_reset_timer(self);
+        let now = self.cycle;
+        if let Some(sys) = self.system_mut() {
+            sys.wdr(now);
+        }
+        self.windows = true;
+        self.note_schedule();
     }
 
     #[inline(always)]
-    fn cpu_halt(&self) -> u8 {
-        call::cpu_halt(self)
-    }
-
-    #[inline(always)]
-    fn clear_cpu_halt(&mut self) {
-        call::clear_cpu_halt(self);
+    fn take_stall(&mut self) -> u8 {
+        let stall = self.cpu_halt;
+        if stall != 0 {
+            self.cpu_halt = 0;
+        }
+        stall
     }
 }
 
@@ -798,45 +798,6 @@ impl Bus {
         0
     }
 
-    /// A [`Self::load`] of `addr` changes nothing and reads what [`Self::peek`] reads. What it
-    /// reads changes only at the next event, on a store, or on a host call.
-    #[inline(always)]
-    pub(crate) fn steady(&self, addr: u16) -> bool {
-        let Some(index) = io_index(addr) else {
-            return true;
-        };
-        if addr == SREG || addr == SPL || addr == SPH {
-            return true;
-        }
-        let slot = self.owners[index];
-        slot.dev == NO_DEV
-            || self.devices[usize::from(slot.dev)].steady(slot.reg, &self.mux, self.cycle)
-    }
-
-    /// A [`Self::store`] of `value` to `addr` would change no state, pin, log entry, notice, or
-    /// schedule.
-    #[inline(always)]
-    pub(crate) fn store_idle(&self, core: &Core, addr: u16, value: u8) -> bool {
-        if (SRAM_BASE..=RAMEND).contains(&addr)
-            || addr <= 0x001F
-            || addr == SREG
-            || addr == SPL
-            || addr == SPH
-        {
-            return self.peek(core, addr) == value;
-        }
-        let Some(index) = io_index(addr) else {
-            return true;
-        };
-        let slot = self.owners[index];
-        // A stepped store also logs unmodeled bits and delivers waiting edges and notices.
-        slot.dev != NO_DEV
-            && self.devices[usize::from(slot.dev)].store_idle(slot.reg, value, &self.mux)
-            && self.unmodeled[index] & value == 0
-            && !self.mux.has_pending_edges()
-            && !self.notices_wait()
-    }
-
     fn notices_wait(&self) -> bool {
         let n = usize::from(self.index.notice_n);
         self.index.notices[..n]
@@ -844,26 +805,6 @@ impl Bus {
             .copied()
             .flatten()
             .any(|slot| self.devices[usize::from(slot)].notice_waits())
-    }
-
-    #[inline(always)]
-    pub(crate) fn load(&mut self, core: &Core, addr: u16) -> u8 {
-        if (SRAM_BASE..=RAMEND).contains(&addr) {
-            return self.sram[usize::from(addr - SRAM_BASE)];
-        }
-        if addr <= 0x001F {
-            return core.reg(addr as u8);
-        }
-        if addr == SREG {
-            return core.sreg();
-        }
-        if let Some(byte) = self.sp_byte(core, addr) {
-            return byte;
-        }
-        if let Some(index) = io_index(addr) {
-            return self.load_io(index);
-        }
-        0
     }
 
     /// `cycles` is the storing instruction's length. A device write sees the
@@ -911,23 +852,6 @@ impl Bus {
         if let Some(index) = io_index(addr) {
             self.poke_io(index, value);
         }
-    }
-
-    /// `SBI` writes a one into one bit. `CBI` writes a zero.
-    ///
-    /// Bits in the strobe mask are not copied from the current value, so a
-    /// write-one-to-clear flag register keeps its other flags (DS40002061B §7.4).
-    #[inline(always)]
-    pub(crate) fn write_bit(&mut self, core: &mut Core, addr: u16, bit: u8, set: bool) {
-        let current = self.peek(core, addr);
-        let w1c = self.strobe_at(addr);
-        let bit_mask = 1u8 << (bit & 7);
-        let written = if set {
-            (current & !w1c) | bit_mask
-        } else {
-            (current & !w1c) & !bit_mask
-        };
-        self.store(core, addr, written, 2);
     }
 
     #[inline(never)]

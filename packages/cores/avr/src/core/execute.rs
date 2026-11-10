@@ -318,9 +318,8 @@ impl Core {
             }
             Op::Sleep => {
                 // §10.1. SE must be set.
-                if bus.sleep_enabled() {
+                if bus.sleep() {
                     self.set_activity(super::Activity::Sleep);
-                    bus.arm_sleep();
                 }
                 self.finish(next, 1);
             }
@@ -431,6 +430,7 @@ impl Core {
         }
     }
 
+    #[inline]
     fn load_ptr<B: Bus>(&mut self, bus: &mut B, pc: u16, d: u8, ptr: Ptr, update: Update) {
         let addr = self.ptr_addr(ptr, update);
         let value = bus.load(self, addr);
@@ -444,6 +444,7 @@ impl Core {
         self.finish(pc.wrapping_add(1), 2);
     }
 
+    #[inline]
     fn store_ptr<B: Bus>(&mut self, bus: &mut B, pc: u16, r: u8, ptr: Ptr, update: Update) {
         let value = self.at(r);
         let addr = self.ptr_addr(ptr, update);
@@ -454,6 +455,7 @@ impl Core {
         self.finish(pc.wrapping_add(1), 2);
     }
 
+    #[inline]
     fn ptr_addr(&mut self, ptr: Ptr, update: Update) -> u16 {
         let current = self.ptr_val(ptr);
         if update == Update::Pre {
@@ -506,12 +508,14 @@ impl Core {
 
     /// DS40002198 CALL / RCALL: the return address is stored with a
     /// post-decrement.
+    #[inline]
     fn push_pc<B: Bus>(&mut self, bus: &mut B, addr: u16, cycles: u64) {
         self.push(bus, addr as u8, cycles);
         self.push(bus, (addr >> 8) as u8, cycles);
     }
 
     /// DS40002198 RET / RETI: pre-increment.
+    #[inline]
     fn pop_pc<B: Bus>(&mut self, bus: &mut B) -> u16 {
         let hi = self.pop(bus);
         let lo = self.pop(bus);

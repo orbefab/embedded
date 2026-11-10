@@ -21,6 +21,14 @@ const SREG_ADDR: u16 = 0x005F;
 const SPL_ADDR: u16 = 0x005D;
 const SPH_ADDR: u16 = 0x005E;
 
+/// One data-space call the core made. `SBI` and `CBI` must be [`BusCall::WriteBit`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum BusCall {
+    Load(u16),
+    Store(u16),
+    WriteBit { addr: u16, bit: u8, set: bool },
+}
+
 /// Flat data space. The register file, `SREG` and the stack pointer stay in the core.
 #[derive(Clone)]
 pub(super) struct Mem {
@@ -29,6 +37,9 @@ pub(super) struct Mem {
     sleep_armed: bool,
     halt: u8,
     io_writes: Vec<(u16, u8)>,
+    /// Set by the `SBI`/`CBI` test. The instruction sweep leaves it clear, so a run records nothing.
+    record: bool,
+    touches: Vec<BusCall>,
     pub(super) wdrs: u32,
 }
 
@@ -40,6 +51,8 @@ impl Mem {
             sleep_armed: false,
             halt: 0,
             io_writes: Vec::new(),
+            record: false,
+            touches: Vec::new(),
             wdrs: 0,
         }
     }
@@ -75,6 +88,22 @@ impl Mem {
 
     pub(super) fn io_writes(&self) -> &[(u16, u8)] {
         &self.io_writes
+    }
+
+    /// The next bus calls are kept for [`Self::touches`].
+    pub(super) fn record_touches(&mut self) {
+        self.record = true;
+        self.touches.clear();
+    }
+
+    pub(super) fn touches(&self) -> &[BusCall] {
+        &self.touches
+    }
+
+    fn note(&mut self, call: BusCall) {
+        if self.record {
+            self.touches.push(call);
+        }
     }
 
     fn write(&mut self, core: &mut Core, addr: u16, value: u8, log: bool) {
@@ -120,11 +149,13 @@ impl Mem {
 impl Bus for Mem {
     #[inline(always)]
     fn load(&mut self, core: &Core, addr: u16) -> u8 {
+        self.note(BusCall::Load(addr));
         self.read(core, addr)
     }
 
     #[inline(always)]
     fn store(&mut self, core: &mut Core, addr: u16, value: u8, _cycles: u64) {
+        self.note(BusCall::Store(addr));
         self.write(core, addr, value, true);
     }
 
@@ -144,30 +175,30 @@ impl Bus for Mem {
     }
 
     fn write_bit(&mut self, core: &mut Core, addr: u16, bit: u8, set: bool) {
+        self.note(BusCall::WriteBit { addr, bit, set });
         let current = self.read(core, addr);
         let mask = 1u8 << (bit & 7);
         let written = if set { current | mask } else { current & !mask };
         self.write(core, addr, written, true);
     }
 
-    fn sleep_enabled(&self) -> bool {
+    fn sleep(&mut self) -> bool {
+        if self.sleep_enabled {
+            self.sleep_armed = true;
+        }
         self.sleep_enabled
-    }
-
-    fn arm_sleep(&mut self) {
-        self.sleep_armed = true;
     }
 
     fn watchdog_reset_timer(&mut self) {
         self.wdrs = self.wdrs.wrapping_add(1);
     }
 
-    fn cpu_halt(&self) -> u8 {
-        self.halt
-    }
-
-    fn clear_cpu_halt(&mut self) {
-        self.halt = 0;
+    fn take_stall(&mut self) -> u8 {
+        let stall = self.halt;
+        if stall != 0 {
+            self.halt = 0;
+        }
+        stall
     }
 }
 

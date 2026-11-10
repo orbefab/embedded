@@ -50,20 +50,18 @@ pub trait Bus {
     /// has it. `SBI` and `CBI` are the callers.
     fn write_bit(&mut self, core: &mut Core, addr: u16, bit: u8, set: bool);
 
-    /// Whether `SLEEP` may suspend the core. The enable bit lives in a chip register.
-    fn sleep_enabled(&self) -> bool;
-
-    /// `SLEEP` ran while [`Bus::sleep_enabled`] was set. The chip starts the sleep mode.
-    fn arm_sleep(&mut self);
+    /// `SLEEP` ran. Arms the chip's sleep mode when that mode is enabled, and
+    /// reports whether the core should suspend.
+    fn sleep(&mut self) -> bool;
 
     /// `WDR` ran. The chip restarts its watchdog timer.
     fn watchdog_reset_timer(&mut self);
 
-    /// Stall cycles the instruction that just retired still has to add.
-    /// [`Core::step`](crate::Core::step) adds them and then calls [`Bus::clear_cpu_halt`].
-    /// A free run does not ask: the chip starts one only when this is zero.
-    fn cpu_halt(&self) -> u8;
-
-    /// Clears the stall [`Bus::cpu_halt`] returned, after the core has counted it.
-    fn clear_cpu_halt(&mut self);
+    /// Stall cycles the instruction that just retired still has to add, then clears them.
+    ///
+    /// An ordinary instruction has none. The impl writes the clear only when the stall is
+    /// non-zero, so that instruction does not store the stall byte.
+    /// [`Core::step`](crate::Core::step) adds a non-zero result.
+    /// A free run does not ask: the chip starts one only when the stall is zero.
+    fn take_stall(&mut self) -> u8;
 }

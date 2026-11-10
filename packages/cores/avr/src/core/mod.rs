@@ -1,8 +1,10 @@
 //! Architectural state and the AVRe+ instruction set.
 //!
 //! No `ELPM`, `EIJMP`, or `EICALL`. Cycle counts are the AVRe column in DS40002198,
-//! which is the same timing as AVRe+. Call and return add the extra cycle the chip
-//! passes in. `SPM` does not write flash: the chip selects that operation, and its
+//! which is the same timing as AVRe+. `RCALL` takes 3, `CALL` takes 4, `ICALL` takes 3
+//! and `RET` takes 4. Those counts are for a 16-bit program counter, and the chip does
+//! not pass them in. A 22-bit program counter needs different counts and a three-byte
+//! return address. `SPM` does not write flash: the chip selects that operation, and its
 //! cycle count varies with the programming time, so the logged operation retires in
 //! one cycle. The core reads and writes data space only through [`crate::Bus`].
 //! Interrupt entry is not an instruction. The chip runs it between instructions.
@@ -252,11 +254,10 @@ impl Core {
         let op = self.op(pc);
         self.irq_delay = false;
         self.execute_op(bus, pc, op);
-        // The store that clears a halt is rare. Skipping it keeps the bus line
-        // clean on the ordinary instruction.
-        let halt = bus.cpu_halt();
+        // A non-zero stall is rare. The bus writes the clear only then, so an
+        // ordinary instruction does not store that byte.
+        let halt = bus.take_stall();
         if halt != 0 {
-            bus.clear_cpu_halt();
             self.cycles = self.cycles.wrapping_add(u64::from(halt));
         }
     }
