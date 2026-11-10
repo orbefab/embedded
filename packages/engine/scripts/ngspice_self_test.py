@@ -1330,7 +1330,7 @@ def bare_flyback(refs):
     file is absent. The summary reads the collector extreme and the one release
     from ngspice's own points.
     """
-    fixture = Path("packages/engine/cli/tests/fixtures/p-relay-npn-bare")
+    fixture = Path("packages/engine/circuit/tests/fixtures/p-relay-npn-bare")
     ok = refs.bare_fixture(fixture)
     ok = ok and refs.rows_skipped_reason(fixture) == "ringing at about 9 us sits on a 50 us grid"
     ok = ok and not refs.bare_fixture(Path("packages/engine/tests/circuits/relay-switch"))

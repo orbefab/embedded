@@ -3,8 +3,7 @@
 //! The edges follow the synchronizer and the loop's cycle counts, and the LED current follows
 //! the closed form.
 
-mod common;
-
+use crate::common;
 use common::atmega::{
     assert_led_follows, chip_matches_fixture, cycle_ps, logic_edges, logic_vcd, run_beside_steps,
     serial_csv,
@@ -138,9 +137,9 @@ fn sampled_pb5(pd2: &[(u64, bool)], cycle_ps: u64, stop_ps: u64) -> Sampled {
     Sampled { pb5, missed }
 }
 
-/// `sim run` and a steps run of the same netlist side by side, so the test costs one run.
+/// `orbe-run run` and a steps run of the same netlist side by side, so the test costs one run.
 #[test]
-fn sim_run_writes_pd2_and_pb5_at_the_picoseconds_the_loop_adds_up_to() {
+fn a_run_writes_pd2_and_pb5_at_the_picoseconds_the_loop_adds_up_to() {
     let beside = run_beside_steps("atmega-button");
     assert_eq!(
         serial_csv(&beside),

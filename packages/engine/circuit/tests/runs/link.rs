@@ -1,39 +1,26 @@
-//! packages/engine/tests/circuits/spi-replay: `sim run` writes each event of a `spi_replay` part to `link.csv`, one
+//! packages/engine/tests/circuits/spi-replay: `orbe-run run` writes each event of a `spi_replay` part to `link.csv`, one
 //! row per event at the end its clock gives. Two replays whose events end together write
 //! those rows by part name.
 
-mod common;
-
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use sha2::{Digest, Sha256};
 
-use common::repo;
+use crate::common;
+use common::{repo, run_netlist};
 
 fn run(netlist: &Path, out: &Path) -> Vec<u8> {
     let _ = fs::remove_dir_all(out);
-    let status = Command::new(env!("CARGO_BIN_EXE_sim"))
-        .args([
-            "run",
-            netlist.to_str().unwrap(),
-            "--out",
-            out.to_str().unwrap(),
-        ])
-        .output()
-        .expect("spawn sim");
-    assert!(status.status.success(), "{status:?}");
+    let (code, doc) = run_netlist(netlist, out, &[]);
+    assert_eq!(code, 0, "{doc}");
     let csv = fs::read(out.join("traces/link.csv")).unwrap();
     let _ = fs::remove_dir_all(out);
     csv
 }
 
 fn scratch(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "orbe-engine-cli-link-{name}-{}",
-        std::process::id()
-    ))
+    std::env::temp_dir().join(format!("orbe-circuit-link-{name}-{}", std::process::id()))
 }
 
 /// The row each event of a replay part writes, from the netlist alone: its end is its start

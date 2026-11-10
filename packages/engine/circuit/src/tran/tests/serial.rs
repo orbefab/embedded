@@ -583,7 +583,7 @@ fn two_chips_interleave_by_stop_bit_end_then_part() {
     assert_eq!(log(&session), rows(&want));
 }
 
-/// `sim run`'s `serial.csv` on two chips at 16 MHz and 8 MHz is the log of a session advanced to
+/// `orbe-run run`'s `serial.csv` on two chips at 16 MHz and 8 MHz is the log of a session advanced to
 /// `stop` through the writer, byte for byte, and its rows are the log's, which a later start
 /// can end ahead of.
 #[test]

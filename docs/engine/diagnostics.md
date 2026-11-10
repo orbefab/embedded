@@ -19,7 +19,7 @@ A session's `diagnostics()` returns the warnings found so far, and once the sess
 
 A run whose diagnostics are all warnings still writes the operating point. A run with an error writes the observations it reached, as [run-folder.md](run-folder.md#observationsjson) says. That is `{}` when nothing solved, as at t = 0. A transient keeps its grid rows before the error, and its last accepted step is the last row. Its observations end there. A warning found before that error is kept, including a rating sampled on any accepted step before it.
 
-Stdout of `sim run` lists the same objects in the same order.
+Stdout of `orbe-run run` lists the same objects in the same order.
 
 ## netlist.syntax
 
@@ -166,7 +166,7 @@ Parse stops at the first fault, so a part has at most one. [netlist.md](netlist.
 
 Severity `error`. Refs is the part. `t_ps` is `null`.
 
-A blob the part names is missing or is not the blob it names, as [netlist.md](netlist.md#blobs) says. The message names the part, the role and the hash. For a missing blob it is `{ref} {role} blob {sha256} is not in the blobs folder beside the netlist or in any --blobs folder`. For another hash it is `{ref} {role} blob {sha256}: no file under that name in the blobs folder beside the netlist or in a --blobs folder has that SHA-256`. For another length it is `{ref} {role} blob {sha256} in the blobs folder beside the netlist or a --blobs folder has {found} bytes; the netlist says {bytes}`. Those are the messages of `sim run`. The wasm package takes a blob list, so there a missing blob is `{ref} {role} blob {sha256} is not in the blob list` and another length is `{ref} {role} blob {sha256} in the blob list has {found} bytes; the netlist says {bytes}`.
+A blob the part names is missing or is not the blob it names, as [netlist.md](netlist.md#blobs) says. The message names the part, the role and the hash. For a missing blob it is `{ref} {role} blob {sha256} is not in the blobs folder beside the netlist or in any --blobs folder`. For another hash it is `{ref} {role} blob {sha256}: no file under that name in the blobs folder beside the netlist or in a --blobs folder has that SHA-256`. For another length it is `{ref} {role} blob {sha256} in the blobs folder beside the netlist or a --blobs folder has {found} bytes; the netlist says {bytes}`. Those are the messages of `orbe-run run`. The wasm package takes a blob list, so there a missing blob is `{ref} {role} blob {sha256} is not in the blob list` and another length is `{ref} {role} blob {sha256} in the blob list has {found} bytes; the netlist says {bytes}`.
 
 `data` holds `bytes`, `found`, `role`, `rule` and `sha256`. `bytes` is the netlist's length. `found` is the length of the file the run read under that name, or `null` when there is none. When no file under that name has the right hash, it is the first file found, in the search order of [netlist.md](netlist.md#blobs). `role` is `elf`. `sha256` is the hash the netlist names. `rule` is one of these.
 
@@ -260,7 +260,7 @@ A DC path is a chain of resistors, potentiometers, voltage sources, diodes, LEDs
 
 `net.floating` is a static check on the netlist's topology. It never depends on a solve, so its `t_ps` is always `null`. A run that reads an input nothing drives will report that under a code of its own.
 
-A resistor from `vin` to `lonely`, with a voltage source from `vin` to `gnd`, puts `lonely` on a path to ground. Two LEDs in series from `vled` to `gnd`, with a resistor from `vin` to `vled`, put `mid` on a path to ground. A net that no part names is floating. Two nets whose only part is a resistor between them are floating. The operating point is still written, and `sim run` exits 0.
+A resistor from `vin` to `lonely`, with a voltage source from `vin` to `gnd`, puts `lonely` on a path to ground. Two LEDs in series from `vled` to `gnd`, with a resistor from `vin` to `vled`, put `mid` on a path to ground. A net that no part names is floating. Two nets whose only part is a resistor between them are floating. The operating point is still written, and `orbe-run run` exits 0.
 
 ## solver.singular
 
@@ -537,13 +537,13 @@ The message is `{part} read {register} at {address}, which the model does not ke
 
 ## trace.too_large
 
-Severity `error`. No refs. For a `sim` build, `t_ps` is `null`.
+Severity `error`. No refs. For an `orbe-run` build, `t_ps` is `null`.
 
 The message is `the grid gives {rows} rows; the trace holds {limit} rows of {columns} columns; raise grid_ps or shorten stop_ps`.
 
 `data` holds `columns`, `limit` and `rows`. `rows` is `ceil(stop_ps / grid_ps) + 1`, the rows the grid gives. `limit` is the row cap, `min(1000000, 67108864 / columns)`. 67108864 is 2^26, so the stored f64 values of `analog.f64` stay within 512 MiB. `envelope.f64` adds at most twice that again, and writing the folder keeps a second copy of both. `columns` is the number of trace columns.
 
-The run checks the count before it solves anything, so a refused run writes `{}` to `observations.json` and no `traces/`. The rows depend only on `stop_ps` and `grid_ps`. Edges, jumps, chip events and the error control add steps, not rows, so a `sim` build that passes the check never runs out of rows. The test-only step-rows mode can also stop mid-run with `t_ps` the step that did not fit, keeping its rows.
+The run checks the count before it solves anything, so a refused run writes `{}` to `observations.json` and no `traces/`. The rows depend only on `stop_ps` and `grid_ps`. Edges, jumps, chip events and the error control add steps, not rows, so an `orbe-run` build that passes the check never runs out of rows. The test-only step-rows mode can also stop mid-run with `t_ps` the step that did not fit, keeping its rows.
 
 ## trace.row_interpolated
 
@@ -567,7 +567,7 @@ The message is:
 
 A transient checks every accepted step, not only the rows. Each step's value holds until the next accepted step. `t_ps` is the first step over the rating, and `over_ps` adds the time to the next step for every step over it. The last step adds nothing. So `t_ps` and `peak_ps` can fall between rows. At a switch edge the solve at the edge holds the old contact. With 22 ohm in place of 220 ohm in `packages/engine/tests/circuits/button-led`, `#led1.i` is first over 1 ns after the press, and `over_ps` is exactly the time the contact was closed.
 
-A quantity is over when its magnitude is above the rating. Equal is not over. `peak` is the largest magnitude. For an operating point it equals `abs(observations.op[ref])`. The operating point is still written, and `sim run` exits 0.
+A quantity is over when its magnitude is above the rating. Equal is not over. `peak` is the largest magnitude. For an operating point it equals `abs(observations.op[ref])`. The operating point is still written, and `orbe-run run` exits 0.
 
 The 9 V LED example puts about 0.55 A through an LED rated 0.03 A.
 

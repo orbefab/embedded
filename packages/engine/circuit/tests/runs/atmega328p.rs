@@ -1,7 +1,6 @@
-mod common;
-
 use std::fs;
 
+use crate::common;
 use common::{read_vcd, records, repo, summary};
 use orbe_engine_core::name::Ref;
 use orbe_engine_core::timestamp::Timestamp;
@@ -23,7 +22,7 @@ fn documented() -> String {
 
 #[test]
 fn the_documented_example_runs_with_no_diagnostics() {
-    let done = orbe_engine_cli::run(documented().as_bytes(), Timestamp::from_unix_seconds(0));
+    let done = orbe_circuit::run(documented().as_bytes(), Timestamp::from_unix_seconds(0));
     assert!(
         done.results.diagnostics().is_empty(),
         "{:?}",
@@ -58,7 +57,7 @@ fn probe(
     nets: &[&str],
     parts: serde_json::Value,
     edit: impl FnOnce(&mut serde_json::Value),
-) -> orbe_engine_cli::Completed {
+) -> orbe_circuit::Completed {
     let mut netlist: serde_json::Value = serde_json::from_str(&documented()).unwrap();
     netlist["analysis"] = serde_json::json!({ "op": {} });
     for net in nets {
@@ -69,7 +68,7 @@ fn probe(
         .unwrap()
         .extend(parts.as_array().unwrap().iter().cloned());
     edit(chip(&mut netlist));
-    orbe_engine_cli::run(
+    orbe_circuit::run(
         netlist.to_string().as_bytes(),
         Timestamp::from_unix_seconds(0),
     )
@@ -148,7 +147,7 @@ fn pb5_switches_at_the_picosecond_of_each_cycle_the_firmware_implies() {
 }
 
 /// The run folder's `logic.vcd` read back, and its `observations.json`.
-fn logic(done: &orbe_engine_cli::Completed) -> (serde_json::Value, serde_json::Value) {
+fn logic(done: &orbe_circuit::Completed) -> (serde_json::Value, serde_json::Value) {
     let vcd = done.folder.file("traces/logic.vcd").unwrap();
     let vcd = read_vcd(std::str::from_utf8(vcd).unwrap());
     let observations = done.folder.file("observations.json").unwrap();
@@ -181,7 +180,7 @@ fn the_documented_logic_vcd_has_pb5_change_where_its_node_crosses() {
         .collect();
     assert_eq!(crossings, edges);
 
-    let done = orbe_engine_cli::run(documented().as_bytes(), Timestamp::from_unix_seconds(0));
+    let done = orbe_circuit::run(documented().as_bytes(), Timestamp::from_unix_seconds(0));
     let (vcd, observations) = logic(&done);
     assert_eq!(vcd_edges(&vcd, "#u1.logic.PB5"), edges);
     assert_eq!(summary(&vcd), observations["logic"]);
@@ -243,7 +242,7 @@ fn an_ne555_and_an_atmega328p_in_one_netlist_both_write_their_signals() {
         }
         netlist["parts"].as_array_mut().unwrap().push(part);
     }
-    let done = orbe_engine_cli::run(
+    let done = orbe_circuit::run(
         netlist.to_string().as_bytes(),
         Timestamp::from_unix_seconds(0),
     );

@@ -1,11 +1,10 @@
-mod common;
-
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
+use crate::common;
 use common::examples::{examples, runs_a_core};
-use orbe_engine_cli::Completed;
+use orbe_circuit::Completed;
 use orbe_engine_core::logic::{Level, Logic};
 use orbe_engine_core::name::Ref;
 use orbe_engine_core::netlist::{self, Analysis, Model, Waveform, bounce};
@@ -267,7 +266,7 @@ fn matches_its_reference(example: &Path) {
         Some(options(&netlist::parse(&input).unwrap())),
         "{label} options"
     );
-    let done = orbe_engine_cli::run(&input, Timestamp::from_unix_seconds(0));
+    let done = orbe_circuit::run(&input, Timestamp::from_unix_seconds(0));
     let manifest: serde_json::Value =
         serde_json::from_slice(done.folder.file("manifest.json").unwrap()).unwrap();
     assert_eq!(

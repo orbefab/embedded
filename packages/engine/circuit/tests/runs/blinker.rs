@@ -1,10 +1,9 @@
 //! packages/engine/tests/circuits/npn-blinker. Two small-signal NPNs blink two LEDs.
 //! The supply steps from 0 V to 5 V at 1 ns.
 
-mod common;
-
 use std::sync::OnceLock;
 
+use crate::common;
 use orbe_engine_core::diagnostic::Diagnostic;
 use orbe_engine_core::netlist::{self, Analysis, Netlist};
 use orbe_engine_core::run_folder::Results;
@@ -170,7 +169,7 @@ fn blink() -> &'static Blink {
             let shipped = scope.spawn(|| solve(&netlist));
             let fine = scope.spawn(|| solve(&fine_netlist));
             let folder = scope.spawn(|| {
-                let done = orbe_engine_cli::run(&bytes, Timestamp::from_unix_seconds(0));
+                let done = orbe_circuit::run(&bytes, Timestamp::from_unix_seconds(0));
                 let rows = done
                     .results
                     .trace()

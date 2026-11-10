@@ -381,7 +381,7 @@ impl Session {
         Session::open_with(netlist, Some(document), BUDGET)
     }
 
-    /// `open_document` with the trace and logic history `sim run` keeps, so `finish` can write
+    /// `open_document` with the trace and logic history `orbe-run run` keeps, so `finish` can write
     /// its run folder. It also refuses a grid with more rows than a trace holds, with
     /// `trace.too_large`.
     pub fn record_document(json: &[u8]) -> Result<Session, Refused> {
@@ -766,7 +766,7 @@ impl Session {
         }
     }
 
-    /// Advances to `stop` and returns the run folder `sim run` writes for the netlist this
+    /// Advances to `stop` and returns the run folder `orbe-run run` writes for the netlist this
     /// session ran, stamped `created_at`. Its `netlist.json` is the bytes `record_document` read
     /// when no input was applied, and otherwise the export of the ended session. `None` for a
     /// session `open` or `open_document` made, which records nothing.

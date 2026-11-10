@@ -1,6 +1,6 @@
 # Run folder
 
-`sim run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and so do an ATmega328P and an ESP32-S3. It adds `traces/serial.csv` when a chip has a USART, as an ATmega328P does, or a console, as an ESP32-S3 does, `traces/i2c.csv` when a chip has a TWI, as an ATmega328P does, `traces/link.csv` when a chip can send records, as an SPI replay and an ESP32-S3 do, `traces/display.csv` and one `traces/display-<part>.rgb565` for each display part, an `st77916`, and `traces/leds.csv` when a `ws2812` is in the netlist.
+`orbe-run run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and so do an ATmega328P and an ESP32-S3. It adds `traces/serial.csv` when a chip has a USART, as an ATmega328P does, or a console, as an ESP32-S3 does, `traces/i2c.csv` when a chip has a TWI, as an ATmega328P does, `traces/link.csv` when a chip can send records, as an SPI replay and an ESP32-S3 do, `traces/display.csv` and one `traces/display-<part>.rgb565` for each display part, an `st77916`, and `traces/leds.csv` when a `ws2812` is in the netlist.
 
 ```text
 <dir>/
@@ -59,7 +59,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
   ],
 ```
 
-When parsing fails, `blobs` is absent. The folder copies no blob. A rerun from the folder alone fails with `netlist.blob`, so it names the blob folder, as in `sim run <run>/netlist.json --out <new> --blobs packages/engine/tests/circuits/esp32s3-blink/blobs`. A rerun from `packages/engine/tests/circuits/esp32s3-blink/netlist.json` finds the `blobs` folder beside it. No example commits the ROM, so a rerun of `packages/engine/tests/circuits/esp32s3-hello` also passes the folder `packages/engine/scripts/blobs.sh` prints, as in `sim run packages/engine/tests/circuits/esp32s3-hello/netlist.json --out <new> --blobs "$(packages/engine/scripts/blobs.sh)"`.
+When parsing fails, `blobs` is absent. The folder copies no blob. A rerun from the folder alone fails with `netlist.blob`, so it names the blob folder, as in `orbe-run run <run>/netlist.json --out <new> --blobs packages/engine/tests/circuits/esp32s3-blink/blobs`. A rerun from `packages/engine/tests/circuits/esp32s3-blink/netlist.json` finds the `blobs` folder beside it. No example commits the ROM, so a rerun of `packages/engine/tests/circuits/esp32s3-hello` also passes the folder `packages/engine/scripts/blobs.sh` prints, as in `orbe-run run packages/engine/tests/circuits/esp32s3-hello/netlist.json --out <new> --blobs "$(packages/engine/scripts/blobs.sh)"`.
 
 `seed` is the netlist seed. When parsing fails, `seed` is `null`.
 
@@ -492,7 +492,7 @@ lo, hi = env[refs.index("#net.vout")]  # interval k spans t_ps[k] to t_ps[k + 1]
 
 ## What the glass shows
 
-The frame memory file is what the panel holds, not what a person sees. The engine draws what the glass shows, and a viewer only paints those pixels. `sim view <dir> --out <out>` reads a finished run folder and writes `display-<part>.png` into `<out>` for each entry of `observations.json` `displays`. It writes nothing into the run folder unless `<out>` is that folder. `Display::pixels` on a session gives the same pixels from the same function, as [engine.md](engine.md#sessions) says.
+The frame memory file is what the panel holds, not what a person sees. The engine draws what the glass shows, and a viewer only paints those pixels. `orbe-run view <dir> --out <out>` reads a finished run folder and writes `display-<part>.png` into `<out>` for each entry of `observations.json` `displays`. It writes nothing into the run folder unless `<out>` is that folder. `Display::pixels` on a session gives the same pixels from the same function, as [engine.md](engine.md#sessions) says.
 
 For an `st77916` the pixels are 360 rows of 360, rows top to bottom and each row left to right, each pixel red, green, blue and alpha, one byte each:
 
@@ -506,9 +506,9 @@ The glass does not dim. `brightness` stays a separate number in the `displays` e
 
 `packages/engine/tests/circuits/st77916-replay` ends with `inverted` false, so its unwritten pixels, all zero bytes, show white on the glass.
 
-The PNG is 8-bit RGBA with no interlace. Every row has filter type 0, and the image data is one `IDAT` of stored deflate blocks, uncompressed. The same pixels always give the same bytes, so two `sim view` runs of one folder write identical files. An `st77916` PNG is 518863 bytes.
+The PNG is 8-bit RGBA with no interlace. Every row has filter type 0, and the image data is one `IDAT` of stored deflate blocks, uncompressed. The same pixels always give the same bytes, so two `orbe-run view` runs of one folder write identical files. An `st77916` PNG is 518863 bytes.
 
-`sim view` prints one JSON document. A clean view is `ok`, exit 0, with `out` and `images`, the PNG path written for each part, by part name. A run folder with no display part creates no `<out>`, writes no file, and prints `"images": {}`. A folder it cannot read is `io_error`, exit 3, with `message` and `path`, and it writes no file. That covers a missing or malformed `observations.json`, a display kind it does not draw, an `image` other than `traces/display-<part>.rgb565`, and a frame memory file that is missing, the wrong size, or not the bytes its `sha256` names.
+`orbe-run view` prints one JSON document. A clean view is `ok`, exit 0, with `out` and `images`, the PNG path written for each part, by part name. A run folder with no display part creates no `<out>`, writes no file, and prints `"images": {}`. A folder it cannot read is `io_error`, exit 3, with `message` and `path`, and it writes no file. That covers a missing or malformed `observations.json`, a display kind it does not draw, an `image` other than `traces/display-<part>.rgb565`, and a frame memory file that is missing, the wrong size, or not the bytes its `sha256` names.
 
 ## Determinism
 
@@ -520,7 +520,7 @@ Two CLI runs of one file differ only in `created_at`. That includes every byte o
 
 ## Replacing a directory
 
-`sim run` creates `<dir>`. It replaces an empty directory. It replaces a previous run, from any version of the engine. A previous run is a non-empty directory whose `manifest.json` is an object with three keys of this shape. `run_format` is an unsigned integer, of any value. `input` is an object whose `file` is `netlist.json`. `created_at` is `YYYY-MM-DDTHH:MM:SSZ`. Every other key is ignored.
+`orbe-run run` creates `<dir>`. It replaces an empty directory. It replaces a previous run, from any version of the engine. A previous run is a non-empty directory whose `manifest.json` is an object with three keys of this shape. `run_format` is an unsigned integer, of any value. `input` is an object whose `file` is `netlist.json`. `created_at` is `YYYY-MM-DDTHH:MM:SSZ`. Every other key is ignored.
 
 It leaves a non-directory path alone and returns `io_error`. It leaves any other non-empty directory alone and returns `io_error`. A `manifest.json` that only has `{"app":"web"}` is not a previous run.
 
@@ -528,7 +528,7 @@ A crash can leave `<dir>.partial.<digits>` or `<dir>.replacing.<digits>` next to
 
 Whether a directory is a previous run depends on its manifest alone, so a transient run replaces an operating point run and the other way round. A replaced run's `traces/` goes with it.
 
-`<dir>.partial.<digits>` and `<dir>.replacing.<digits>` belong to the engine. The engine may remove them. Concurrent `sim run` processes that share one `--out` are unsupported.
+`<dir>.partial.<digits>` and `<dir>.replacing.<digits>` belong to the engine. The engine may remove them. Concurrent `orbe-run run` processes that share one `--out` are unsupported.
 
 ## Run format
 
@@ -541,4 +541,4 @@ Whether a directory is a previous run depends on its manifest alone, so a transi
 
 `traces/index.json` keeps its own `format`. A change that bumps it also bumps `run_format`, so `run_format` alone answers whether a reader can read the folder.
 
-`sim run` replaces a previous run of any `run_format`. [Replacing a directory](#replacing-a-directory) says how it recognises one.
+`orbe-run run` replaces a previous run of any `run_format`. [Replacing a directory](#replacing-a-directory) says how it recognises one.

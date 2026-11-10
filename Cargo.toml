@@ -8,7 +8,6 @@ members = [
   "packages/wasm",
   "packages/engine/core",
   "packages/engine/circuit",
-  "packages/engine/cli",
   "packages/cores/*",
   "packages/socs/*",
 ]

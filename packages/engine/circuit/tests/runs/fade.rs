@@ -1,8 +1,7 @@
 //! packages/engine/tests/circuits/atmega-fade, `packages/engine/tests/firmware/fade.S` on an ATmega328P at 16 MHz with an LED on PB1.
 //! PB1 is OC1A. The edges follow the firmware's cycle counts and docs/engine/avr.md parameter 4.
 
-mod common;
-
+use crate::common;
 use common::atmega::{
     assert_led_follows, chip_matches_fixture, cycle_ps, logic_edges, logic_vcd, run_beside_steps,
     serial_csv,
@@ -117,9 +116,9 @@ fn edges(cycle_ps: u64, limit_cycles: u64) -> Vec<(u64, bool)> {
     edges
 }
 
-/// `sim run` and a steps run of the same netlist side by side, so the test costs one run.
+/// `orbe-run run` and a steps run of the same netlist side by side, so the test costs one run.
 #[test]
-fn sim_run_writes_pb1_and_the_led_at_the_picoseconds_fade_adds_up_to() {
+fn a_run_writes_pb1_and_the_led_at_the_picoseconds_fade_adds_up_to() {
     let beside = run_beside_steps("atmega-fade");
     assert_eq!(
         serial_csv(&beside),

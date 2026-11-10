@@ -2,10 +2,9 @@
 //! pulls `d2` low and `sw_b` pulls `d3` low, each against 10 kohm to `v5`, and
 //! `packages/engine/tests/firmware/sketch/knob.hex` prints both counts after each fall.
 
-mod common;
-
 use std::ops::RangeInclusive;
 
+use crate::common;
 use common::{records, repo};
 use orbe_circuit::{Input, Session, Setting, Status};
 use orbe_engine_core::name::Name;
@@ -95,7 +94,7 @@ fn the_sketch_prints_the_counts_the_script_gives() {
                 .unwrap()
         )
     );
-    let done = orbe_engine_cli::run(&example_bytes(), stamp());
+    let done = orbe_circuit::run(&example_bytes(), stamp());
     assert!(
         done.results.diagnostics().is_empty(),
         "{}",
@@ -105,7 +104,7 @@ fn the_sketch_prints_the_counts_the_script_gives() {
 }
 
 #[test]
-fn detents_applied_live_finish_as_sim_run_of_the_export() {
+fn detents_applied_live_finish_as_a_batch_run_of_the_export() {
     let mut netlist = netlist();
     let detents = detents(&netlist);
     for line in [Line::A, Line::B] {
@@ -131,13 +130,13 @@ fn detents_applied_live_finish_as_sim_run_of_the_export() {
     }
     assert_eq!(session.advance_to(Time::from_ps(u64::MAX)), Status::Stopped);
     let export = session.export().unwrap();
-    let batch = orbe_engine_cli::run(&export, stamp()).folder;
+    let batch = orbe_circuit::run(&export, stamp()).folder;
     let folder = session.finish(stamp()).unwrap();
     assert_eq!(paths(&folder), paths(&batch));
     for ((path, got), (_, want)) in folder.files().zip(batch.files()) {
-        assert!(got == want, "{path} differs from sim run of the export");
+        assert!(got == want, "{path} differs from a batch run of the export");
     }
-    let committed = orbe_engine_cli::run(&example_bytes(), stamp()).folder;
+    let committed = orbe_circuit::run(&example_bytes(), stamp()).folder;
     assert_eq!(paths(&folder), paths(&committed));
     for ((path, got), (_, want)) in folder.files().zip(committed.files()) {
         if path != "netlist.json" && path != "manifest.json" {

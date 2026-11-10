@@ -3,8 +3,7 @@
 //! The trace holds the divider's closed form, `logic.vcd` holds the 8N1 frames, and
 //! `serial.csv` holds each frame's start and byte.
 
-mod common;
-
+use crate::common;
 use common::atmega::{
     assert_holds, chip_matches_fixture, cycle_ps, logic_edges, logic_vcd, run_beside_steps,
     serial_csv, wiper_volts,
@@ -25,7 +24,7 @@ fn the_chip_is_the_tests_fixture_running_analog_serial_hex() {
 }
 
 #[test]
-fn sim_run_prints_the_adc_code_of_the_wiper_on_txd() {
+fn a_run_prints_the_adc_code_of_the_wiper_on_txd() {
     let beside = run_beside_steps("atmega-analog-serial");
     let (vin, vcc) = wiper_volts(&beside.netlist);
     assert_holds(&beside, "#net.pc0", vin);

@@ -438,7 +438,7 @@ fn fb_null_20000_stops_zigzagging_on_net_b() {
 #[test]
 fn the_bare_relay_stays_near_its_step_count() {
     let measured = 13_668;
-    let steps = accepted_steps("../cli/tests/fixtures/p-relay-npn-bare/netlist.json");
+    let steps = accepted_steps("tests/fixtures/p-relay-npn-bare/netlist.json");
     eprintln!("p-relay-npn-bare steps {steps}");
     assert!(
         steps <= measured + measured / 10,

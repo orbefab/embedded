@@ -13,14 +13,15 @@ orbe-engine-core.workspace = true
 orbe-avr.workspace = true
 orbe-espressif.workspace = true
 orbe-xtensa.workspace = true
-serde.workspace = true
-serde_json.workspace = true
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
 [features]
 # Tests only: `simulate_steps`, a row at every accepted step.
 step-rows = []
-# The `orbe-run` binary. `orbe` and `orbe-wasm` leave this off, so they do not build it.
-runner = ["dep:clap"]
+# The `orbe-run` binary and the run report it prints. `orbe` and `orbe-wasm` leave this off, so
+# they build neither.
+runner = ["dep:clap", "dep:serde", "dep:serde_json"]
 
 [[bin]]
 name = "orbe-run"
@@ -29,7 +30,8 @@ required-features = ["runner"]
 
 [dev-dependencies]
 serde_json.workspace = true
-orbe-circuit = { path = ".", features = ["step-rows"] }
+sha2.workspace = true
+orbe-circuit = { path = ".", features = ["step-rows", "runner"] }
 
 [lints]
 workspace = true

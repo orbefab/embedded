@@ -1,12 +1,11 @@
 //! `packages/engine/tests/circuits/atmega-cst816`: an ATmega328P at 3.3 V and 8 MHz reads a `cst816` over the TWI and
 //! prints the finger count and the point. The touches sit on the part, and a session that
-//! applies the same points writes the folder `sim run` writes for its export.
-
-mod common;
+//! applies the same points writes the folder `orbe-run run` writes for its export.
 
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::common;
 use common::atmega::logic_edges;
 use common::{read_vcd, repo};
 use orbe_circuit::{Input, Session, Setting, Status};
@@ -91,7 +90,7 @@ fn the_sketch_prints_the_points_and_the_decoder_agrees() {
 }
 
 #[test]
-fn a_session_touch_finishes_as_sim_run_of_the_export() {
+fn a_session_touch_finishes_as_a_batch_run_of_the_export() {
     let mut json: serde_json::Value = serde_json::from_slice(
         &std::fs::read(repo(
             "packages/engine/tests/circuits/atmega-cst816/netlist.json",
@@ -116,7 +115,7 @@ fn a_session_touch_finishes_as_sim_run_of_the_export() {
     assert_eq!(session.advance_to(Time::from_ps(u64::MAX)), Status::Stopped);
     let export = session.export().unwrap();
     let stamp = Timestamp::from_unix_seconds(1_700_000_000);
-    let batch = orbe_engine_cli::run(&export, stamp).folder;
+    let batch = orbe_circuit::run(&export, stamp).folder;
     let folder = session.finish(stamp).unwrap();
     assert_eq!(folder_paths(&folder), folder_paths(&batch));
     for ((path, got), (_, want)) in folder.files().zip(batch.files()) {
@@ -137,7 +136,7 @@ fn touch(part: &Name, at: u64, point: Touch) -> Input {
 fn a_20_mhz_twi_reads_the_chip_id_and_nacks() {
     let folder = render_bytes(
         &std::fs::read(repo(
-            "packages/engine/cli/tests/fixtures/i2c-cst816-fast/netlist.json",
+            "packages/engine/circuit/tests/fixtures/i2c-cst816-fast/netlist.json",
         ))
         .unwrap(),
     );
@@ -185,7 +184,7 @@ fn a_20_mhz_twi_reads_the_chip_id_and_nacks() {
 fn sda_while_scl_high_reaches_diagnostics_json() {
     let mut json: serde_json::Value = serde_json::from_slice(
         &std::fs::read(repo(
-            "packages/engine/cli/tests/fixtures/i2c-cst816-fast/netlist.json",
+            "packages/engine/circuit/tests/fixtures/i2c-cst816-fast/netlist.json",
         ))
         .unwrap(),
     )

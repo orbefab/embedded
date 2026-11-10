@@ -3,11 +3,10 @@
 //! `packages/engine/tests/circuits/atmega-board-button` adds a switch and a pull-down. Its LED lags are recorded.
 //! A live session advances, then sets `usb_dtr` to 0 V, and the blink sketch restarts.
 
-mod common;
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 
+use crate::common;
 use common::examples::examples;
 use common::read_vcd;
 use common::{records, repo};
@@ -199,7 +198,7 @@ fn walk_values(value: &serde_json::Value, at: &str) {
 }
 
 fn run(netlist: &serde_json::Value) -> orbe_circuit::Completed {
-    orbe_engine_cli::run(
+    orbe_circuit::run(
         &serde_json::to_vec(netlist).unwrap(),
         Timestamp::from_unix_seconds(0),
     )
