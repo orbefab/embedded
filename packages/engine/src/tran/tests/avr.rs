@@ -19,7 +19,6 @@ use crate::newton::Circuit;
 use crate::trace::Trace;
 
 const BLINK: &str = include_str!("../../../tests/firmware/blink.hex");
-const BUTTON: &str = include_str!("../../../tests/firmware/button.hex");
 const TOGGLE: &str = include_str!("../../../tests/firmware/toggle.hex");
 const PULL: &str = include_str!("../../../tests/firmware/pullup.hex");
 const ECHO: &str = include_str!("../../../tests/firmware/echo.hex");
@@ -888,71 +887,4 @@ fn blink_stops_once_for_its_output_and_once_per_edge() {
     );
     let edges = cycles.windows(2).filter(|w| w[0].1 != w[1].1).count();
     assert_eq!((stops.len(), edges), (5, 4));
-}
-
-/// Wall time of ten seconds of Blink, 160e6 cycles, on the bare core and through the seam.
-/// `cargo test --release -p orbe-engine --lib blink_throughput -- --ignored --nocapture`.
-#[test]
-#[ignore = "a measurement, not a check"]
-#[expect(clippy::disallowed_methods, reason = "the clock is the measurement")]
-fn blink_throughput() {
-    const CYCLES: u64 = 160_000_000;
-    let mut cpu = orbe_avr::Cpu::new();
-    cpu.set_fuses(FUSES.low, FUSES.high, FUSES.extended);
-    cpu.load_image(&orbe_avr::parse_hex(BLINK).unwrap())
-        .unwrap();
-    let start = std::time::Instant::now();
-    let mut edges = 0;
-    while cpu.cycles() < CYCLES {
-        cpu.run_until(CYCLES);
-        while cpu.take_pin().is_some() {
-            edges += 1;
-        }
-    }
-    let raw = start.elapsed().as_secs_f64();
-    let load = [resistor("rl", "pb5", "gnd", 1000.0)];
-    let mut core = core(&board(US, &[], &load, atmega("vcc", BLINK, MHZ_16, FUSES)));
-    let start = std::time::Instant::now();
-    let stops = stops(&mut core, ps(CYCLES, MHZ_16)).len();
-    let seam = start.elapsed().as_secs_f64();
-    println!(
-        "bare core {raw:.3} s, {:.1}e6 cycles/s, {edges} reports; through the seam {seam:.3} s, \
-         {:.1}e6 cycles/s, {stops} stops",
-        CYCLES as f64 / raw / 1e6,
-        CYCLES as f64 / seam / 1e6,
-    );
-}
-
-/// Wall time of 32e6 cycles of `button.S` on the bare core and through the seam.
-/// The example runs 16e6 cycles.
-/// `cargo test --release -p orbe-engine --lib button_throughput -- --ignored --nocapture`.
-#[test]
-#[ignore = "a measurement, not a check"]
-#[expect(clippy::disallowed_methods, reason = "the clock is the measurement")]
-fn button_throughput() {
-    const CYCLES: u64 = 32_000_000;
-    let mut cpu = orbe_avr::Cpu::new();
-    cpu.set_fuses(FUSES.low, FUSES.high, FUSES.extended);
-    cpu.load_image(&orbe_avr::parse_hex(BUTTON).unwrap())
-        .unwrap();
-    let start = std::time::Instant::now();
-    let mut edges = 0;
-    while cpu.cycles() < CYCLES {
-        cpu.run_until(CYCLES);
-        while cpu.take_pin().is_some() {
-            edges += 1;
-        }
-    }
-    let raw = start.elapsed().as_secs_f64();
-    let load = [resistor("rl", "pb5", "gnd", 1000.0)];
-    let mut core = core(&board(US, &[], &load, atmega("vcc", BUTTON, MHZ_16, FUSES)));
-    let start = std::time::Instant::now();
-    let stops = stops(&mut core, ps(CYCLES, MHZ_16)).len();
-    let seam = start.elapsed().as_secs_f64();
-    println!(
-        "bare core {raw:.3} s, {:.1}e6 cycles/s, {edges} reports; through the seam {seam:.3} s, \
-         {:.1}e6 cycles/s, {stops} stops",
-        CYCLES as f64 / raw / 1e6,
-        CYCLES as f64 / seam / 1e6,
-    );
 }
