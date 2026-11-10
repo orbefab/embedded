@@ -58,7 +58,11 @@ The process exits with one of these codes.
 
 ## The run manifest
 
-`scripts/run-hashes.sh` runs every netlist in `packages/engine/tests/circuits` and prints one `sha256  path` line per file those runs wrote. A `manifest.json` line is the hash of that JSON with `created_at` removed, the same removal `packages/engine/scripts/wasi-check.sh` uses when it compares two manifests. Every other file is hashed as written. Each Block adds `blocks/<id>/netlist.json`, the netlist v0 its scene resolves to, and `blocks/<id>/orbe-test`, the stdout of `orbe test -v` on that Block. That stdout includes each `expect`'s measured value. The script does not run a Block's scene. The scene stops at 7200 s on a 1 ms grid, and `orbe-run` rejects that trace. The paths are relative to the repo root, so two runs of one build print the same lines.
+`scripts/run-hashes.sh` runs every netlist in `packages/engine/tests/circuits` and prints one `sha256  path` line per file those runs wrote. A `manifest.json` line is the hash of that JSON with `created_at` removed, the same removal `packages/engine/scripts/wasi-check.sh` uses when it compares two manifests. Every other file is hashed as written. The lines are sorted by path, so one circuit's files sit together in a diff.
+
+Each Block adds three records. `blocks/<id>/netlist.json` is the netlist v0 its scene resolves to. `blocks/<id>/run/` is every file of that netlist run after `analysis.transient.stop_ps` is set to `2000000000000`, which is 2 s. The scene stops at 7200 s on a 1 ms grid, and `orbe-run` rejects that trace, so the manifest hashes this 2 s run instead. `blocks/<id>/orbe-test` is the stdout of `orbe test -v` on that Block. That stdout includes each `expect`'s measured value.
+
+A run that does not exit 0 stops the script. The script names the circuit and the exit code, prints the runner's report on stderr, and exits with that code. A Block test that fails prints its output on stderr and exits with the test's status. The paths are relative to the repo root, so two runs of one build print the same lines.
 
 ```sh
 scripts/run-hashes.sh > /tmp/engine-before

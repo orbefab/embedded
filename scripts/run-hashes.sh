@@ -6,12 +6,20 @@
 # Runs each netlist in packages/engine/tests/circuits. Prints one line per
 # run-folder file, `sha256  path`. A manifest.json line is the hash of its JSON
 # with created_at removed, which is how packages/engine/scripts/wasi-check.sh
-# compares two manifests. Every other file is hashed as written.
+# compares two manifests. Every other file is hashed as written. The lines are
+# sorted by path, so one circuit's files sit together.
 #
-# Each Block adds two lines. `blocks/<id>/netlist.json` is the netlist v0 its
-# scene resolves to. `blocks/<id>/orbe-test` is the stdout of `orbe test -v` on
-# that Block, which includes each expect's measured value. The scene itself is
-# not run: its stop is 7200 s on a 1 ms grid, and orbe-run rejects that trace.
+# Each Block adds its resolved netlist, a short run of that netlist, and the
+# stdout of `orbe test -v`. `blocks/<id>/netlist.json` is the netlist v0 its
+# scene resolves to. `blocks/<id>/run/` is every file of that netlist run after
+# analysis.transient.stop_ps is set to 2000000000000, which is 2 s. The scene
+# stops at 7200 s on a 1 ms grid, and orbe-run rejects that trace, so the
+# manifest hashes this 2 s run instead. `blocks/<id>/orbe-test` is the stdout
+# of `orbe test -v` on that Block, which includes each expect's measured value.
+#
+# A run that does not exit 0 stops the script. It names the circuit and the
+# exit code, prints the runner's report, and exits with that code. A Block
+# test that fails prints its output and exits with the test's status.
 # Paths are relative to the repo root. Stderr names each circuit and Block as it starts.
 #
 # --time adds, after those lines, `time circuits/<name> <milliseconds>` for
@@ -53,6 +61,38 @@ sys.stdout.write(json.dumps(doc, separators=(",", ":"), ensure_ascii=False))
 PY
 }
 
+# A Block scene stops at 7200 s. orbe-run rejects that trace, so the hashed run
+# is the same netlist with its stop cut to 2 s. The bytes other than stop_ps stay.
+cut_stop() {
+  python3 - "$1" "$2" <<'PY'
+import json
+import re
+import sys
+
+src, dest = sys.argv[1], sys.argv[2]
+stop = 2_000_000_000_000
+with open(src, encoding="utf-8") as handle:
+    text = handle.read()
+doc = json.loads(text)
+try:
+    doc["analysis"]["transient"]["stop_ps"] = stop
+except (KeyError, TypeError):
+    sys.stderr.write(f"run-hashes: {src} has no analysis.transient.stop_ps\n")
+    sys.exit(1)
+rewritten, count = re.subn(
+    r'("stop_ps"\s*:\s*)-?\d+',
+    lambda match: match.group(1) + str(stop),
+    text,
+    count=1,
+)
+if count != 1 or json.loads(rewritten) != doc:
+    sys.stderr.write(f"run-hashes: could not set stop_ps in {src}\n")
+    sys.exit(1)
+with open(dest, "w", encoding="utf-8") as handle:
+    handle.write(rewritten)
+PY
+}
+
 hash_tree() {
   local dir=$1 prefix=$2 file rel digest
   while IFS= read -r file; do
@@ -68,19 +108,19 @@ hash_tree() {
 }
 
 run_netlist() {
-  local netlist=$1 out=$2 code
+  local label=$1 netlist=$2 out=$3 code
   rm -rf "$out"
   set +e
   "$RUNNER" run "$netlist" --out "$out" --blobs "$blobs" >"$scratch/report.json"
   code=$?
   set -e
-  if ((code > 1)); then
-    echo "run-hashes: $netlist exited $code" >&2
+  if ((code != 0)); then
+    echo "run-hashes: $label exited $code" >&2
     cat "$scratch/report.json" >&2
     exit "$code"
   fi
   if [[ ! -f $out/manifest.json ]]; then
-    echo "run-hashes: $netlist wrote no manifest.json" >&2
+    echo "run-hashes: $label wrote no manifest.json" >&2
     exit 1
   fi
 }
@@ -145,13 +185,13 @@ for netlist in packages/engine/tests/circuits/*/netlist.json; do
     samples=()
     for _ in 1 2 3 4 5; do
       start=$(date +%s%N)
-      run_netlist "$netlist" "$out"
+      run_netlist "$netlist" "$netlist" "$out"
       end=$(date +%s%N)
       samples+=("$((end - start))")
     done
     printf 'time circuits/%s %s\n' "$name" "$(median_ms "${samples[@]}")" >>"$times"
   else
-    run_netlist "$netlist" "$out"
+    run_netlist "$netlist" "$netlist" "$out"
   fi
   hash_tree "$out" "circuits/$name" >>"$lines"
 done
@@ -163,13 +203,24 @@ for scene in blocks/*/scene.jsonc; do
   digest=$(sha256sum "$scratch/netlist.json")
   digest=${digest%% *}
   printf '%s  %s\n' "$digest" "blocks/$name/netlist.json" >>"$lines"
+  cut_stop "$scratch/netlist.json" "$scratch/short.json"
+  run_netlist "blocks/$name" "$scratch/short.json" "$scratch/run"
+  hash_tree "$scratch/run" "blocks/$name/run" >>"$lines"
+  set +e
   "$orbe" test -v "blocks/$name" >"$scratch/test.out"
+  code=$?
+  set -e
+  if ((code != 0)); then
+    echo "run-hashes: blocks/$name orbe test exited $code" >&2
+    cat "$scratch/test.out" >&2
+    exit "$code"
+  fi
   digest=$(sha256sum "$scratch/test.out")
   digest=${digest%% *}
   printf '%s  %s\n' "$digest" "blocks/$name/orbe-test" >>"$lines"
 done
 
-LC_ALL=C sort -o "$lines" "$lines"
+LC_ALL=C sort -k2 -o "$lines" "$lines"
 cat "$lines"
 if [[ $time_flag -eq 1 ]]; then
   LC_ALL=C sort -o "$times" "$times"
