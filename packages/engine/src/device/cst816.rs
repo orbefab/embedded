@@ -9,8 +9,10 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
+use orbe_model::{Drive, Stop, Time};
+
 use crate::active::i2c::{self, Engine, Target};
-use crate::active::{Chip, Drive, Output, Stage, Stop};
+use crate::active::{Chip, Output, Stage};
 use crate::diagnostic::{Diagnostic, ScheduleRule, ValueRule};
 use crate::mna::Node;
 use crate::name::{Name, Ref};
@@ -22,7 +24,6 @@ use crate::netlist::Threshold;
 use crate::netlist::Value;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
 use crate::netlist::json::{PinMap, WireValue, resolve_pins, resolve_value};
-use crate::time::Time;
 use crate::watch::{Signal, Watch};
 
 const VCC: usize = 0;

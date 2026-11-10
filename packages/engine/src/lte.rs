@@ -13,9 +13,9 @@
 //! swing on a large level is held to its own size, and a full swing is not held to a millionth
 //! of the level it passes through.
 
-use crate::netlist::{Netlist, PartId};
+use orbe_model::Time;
 
-use crate::time::Time;
+use crate::netlist::{Netlist, PartId};
 
 use crate::element;
 use crate::mna::{Layout, Node, Solution};

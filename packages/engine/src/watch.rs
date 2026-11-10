@@ -4,7 +4,7 @@
 
 use std::ops::Range;
 
-use crate::time::Time;
+use orbe_model::Time;
 
 use crate::mna::{Node, Solution};
 use crate::newton::{Converged, Failure};

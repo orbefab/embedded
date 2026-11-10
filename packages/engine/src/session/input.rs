@@ -1,3 +1,5 @@
+use orbe_model::Time;
+
 use crate::device::{Cst816, Touch};
 use crate::netlist::{Appended, Baud, Chip, Contact, Frame, Model, Schedule, SerialSend, Value};
 use crate::passive::position_rule;
@@ -5,8 +7,6 @@ use crate::passive::position_rule;
 use crate::diagnostic::ValueRule;
 use crate::finite::Finite;
 use crate::name::Name;
-
-use crate::time::Time;
 
 use super::{Session, State, Status};
 

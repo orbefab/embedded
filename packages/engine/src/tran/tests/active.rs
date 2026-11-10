@@ -1,5 +1,7 @@
 //! Each run keeps every accepted step, so a landing and a restart's 1 ns seed are both rows.
 
+use orbe_model::Drive;
+
 use crate::netlist::{NetId, Netlist};
 
 use crate::name::Name;
@@ -7,8 +9,8 @@ use crate::name::Name;
 use super::super::*;
 use super::fixtures::*;
 use crate::active;
+use crate::active::Actives;
 use crate::active::script::{self, Op, Sample, eager};
-use crate::active::{Actives, Drive};
 use crate::newton::{Circuit, Conditions, Iterate, newton};
 use crate::op;
 

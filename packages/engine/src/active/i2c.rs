@@ -11,9 +11,7 @@
 /// `tVD;DAT` for every mode. The target needs SCL low for more than this.
 pub(crate) const DATA_HOLD_PS: u64 = 300_000;
 
-use crate::time::Time;
-
-use super::Drive;
+use orbe_model::{Drive, Time};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AckKind {

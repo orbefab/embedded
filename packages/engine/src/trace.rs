@@ -16,6 +16,8 @@
 //!   leds.csv      when the netlist has a ws2812 part, see `leds`
 //! ```
 
+use orbe_model::Time;
+
 use crate::netlist::Transient;
 
 use serde::Serialize;
@@ -29,7 +31,6 @@ use crate::logic::Logic;
 use crate::name::{Quantity, Ref};
 
 use crate::serial::Serial;
-use crate::time::Time;
 
 /// Every observed quantity at each row: t = 0, every multiple of the grid, and the stop, or
 /// the last time a failed run solved.

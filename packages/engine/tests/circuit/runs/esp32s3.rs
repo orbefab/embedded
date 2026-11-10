@@ -7,10 +7,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use orbe_model::Time;
+
 use crate::runs::common;
 use common::{repo, run_netlist};
 use orbe_engine::blob::{Blobs, Sha256};
-use orbe_engine::time::Time;
 use orbe_engine::{Refused, Session};
 
 fn scratch(name: &str) -> PathBuf {

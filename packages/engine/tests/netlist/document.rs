@@ -1,3 +1,5 @@
+use orbe_model::Time;
+
 use orbe_engine::netlist::{
     self, Analysis, Appended, Baud, Contact, Document, Frame, Model, SerialSend,
 };
@@ -6,8 +8,6 @@ use crate::common;
 
 use common::with_parts;
 use orbe_engine::finite::Finite;
-
-use orbe_engine::time::Time;
 
 const ANALYSIS: &str =
     r#"{ "transient": { "stop_ps": 10000000, "max_step_ps": 100000, "grid_ps": 5000000 } }"#;

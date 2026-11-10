@@ -1,3 +1,5 @@
+use orbe_model::Time;
+
 use crate::netlist::{Analysis, Document, Netlist, Transient};
 
 use std::mem::size_of;
@@ -14,7 +16,6 @@ use crate::name::{Name, Ref};
 
 use crate::run_folder::{self, Observations, Results, RunFolder};
 use crate::serial::{Serial as Delivered, SerialByte};
-use crate::time::Time;
 use crate::timestamp::Timestamp;
 
 use crate::RunStats;

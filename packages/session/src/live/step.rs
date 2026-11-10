@@ -3,8 +3,9 @@
 use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 
+use orbe_model::Time;
+
 use orbe_engine::name::Ref as EngineRef;
-use orbe_engine::time::Time;
 use orbe_engine::{EdgeCursor, Probe, Status};
 
 use super::bound::Bound;

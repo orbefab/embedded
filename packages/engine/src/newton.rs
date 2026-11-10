@@ -1,10 +1,10 @@
+use orbe_model::Time;
+
 use crate::netlist::{Contact, Model, Netlist, PartId, Schedule, Waveform};
 
 use crate::diagnostic::Diagnostic;
 use crate::logic::Level;
 use crate::name::{Name, Ref};
-
-use crate::time::Time;
 
 use crate::active;
 use crate::chip;

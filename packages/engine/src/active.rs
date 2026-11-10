@@ -3,6 +3,8 @@
 //! picks. The circuit sees only its drive image, one `Drive` per output pin. `docs/engine/engine.md`,
 //! Active chips, holds the loop's protocol.
 
+use orbe_model::{Drive, Stop, Time};
+
 use crate::device::Touch;
 use crate::netlist::{NetId, PartId};
 
@@ -20,26 +22,11 @@ use crate::link::{LinkRow, Record, RecordKind};
 use crate::name::{Name, Ref};
 
 use crate::serial::SerialByte;
-use crate::time::Time;
 
 use crate::chip::Active;
 use crate::mna::{Solution, System};
 use crate::newton::Circuit;
 use crate::watch::{Levels, Signal, Watch};
-
-/// What one output pin does. The image, one per output pin, is all the stamp reads, and the
-/// only thing the restart test compares.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Drive {
-    /// Through the high stage from the chip's own VCC pin.
-    High,
-    /// Through the low stage into the chip's own GND pin.
-    Low,
-    /// Through the output's pull-up from the chip's own VCC pin.
-    PullUp,
-    /// No stage, only the leakage every drive state stamps.
-    Off,
-}
 
 /// One side of an output stage, through `resistance`. The high stage sits `drop` below VCC, and
 /// the low stage `drop` above GND.
@@ -111,26 +98,13 @@ pub(crate) struct Takes {
 impl Takes {
     fn record(self, record: &Record) -> bool {
         match &record.kind {
-            RecordKind::Spi(spi) => self.spi.is_some_and(|target| {
-                spi.nets.cs == Some(target.cs) && spi.nets.sclk == Some(target.sclk)
-            }),
-            RecordKind::Duty(duty) => self.duty == Some(duty.net),
-            RecordKind::Pulses(pulses) => self.pulses == Some(pulses.net),
+            RecordKind::Spi { nets, .. } => self
+                .spi
+                .is_some_and(|target| nets.cs == Some(target.cs) && nets.sclk == Some(target.sclk)),
+            RecordKind::Duty { net, .. } => self.duty == Some(*net),
+            RecordKind::Pulses { net, .. } => self.pulses == Some(*net),
         }
     }
-}
-
-/// Where a core stopped before its limit: at `at` its image may differ, it samples, or a record
-/// it sent ends.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Stop {
-    pub(crate) at: Time,
-    /// Whether it samples at `at`. It reads every one of its samples on the step's solution
-    /// there, before any change at `at`.
-    pub(crate) sample: bool,
-    /// Whether a record it sent ends at `at`. The image does not change at that stop for the
-    /// record's sake.
-    pub(crate) record: bool,
 }
 
 /// A core's state, everything it remembers. `Clone` is the checkpoint.

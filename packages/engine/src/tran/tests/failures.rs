@@ -1,8 +1,8 @@
+use orbe_model::Time;
+
 use crate::netlist::Netlist;
 
 use crate::diagnostic::Diagnostic;
-
-use crate::time::Time;
 
 use super::super::*;
 use super::fixtures::*;

@@ -6,9 +6,11 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-use crate::active::{Chip, Drive, Output, Stage, Stop, Takes};
+use orbe_model::{Cs, Drive, Lanes, Spi, SpiPhase, Stop, Time};
+
+use crate::active::{Chip, Output, Stage, Takes};
 use crate::diagnostic::{Diagnostic, ScheduleRule};
-use crate::link::{Cs, Lanes, Record, RecordKind, Spi, SpiNets, SpiPhase};
+use crate::link::{Record, RecordKind, SpiNets};
 use crate::name::{Name, Ref};
 use crate::netlist::IntValue;
 use crate::netlist::NetId;
@@ -18,7 +20,6 @@ use crate::netlist::json::waveform::serial_schedule;
 use crate::netlist::json::{PinMap, WireInt, resolve_int, resolve_pins};
 use crate::netlist::waveform::boundary;
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
-use crate::time::Time;
 
 const VCC: usize = 0;
 const GND: usize = 1;
@@ -85,14 +86,16 @@ pub(crate) fn chip(part: PartId, replay: &SpiReplay) -> Chip {
             start: event.at,
             end: event.end,
             pin: SpiReplay::PINS[CS],
-            kind: RecordKind::Spi(Spi {
-                phases: event.phases.clone(),
-                lanes: event.lanes,
-                data: event.data.clone(),
-                clock_hz,
-                cs: event.cs,
+            kind: RecordKind::Spi {
+                spi: Spi {
+                    phases: event.phases.clone(),
+                    lanes: event.lanes,
+                    data: event.data.clone(),
+                    clock_hz,
+                    cs: event.cs,
+                },
                 nets,
-            }),
+            },
         })
         .collect();
     Chip {

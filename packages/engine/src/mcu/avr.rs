@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use crate::active::{Chip, Drive, Frame, Output, Phase, Stage, Stop, Takes};
+use orbe_model::{Drive, Stop, Time};
+
+use crate::active::{Chip, Frame, Output, Phase, Stage, Takes};
 use crate::diagnostic::{Diagnostic, FirmwareRule, ValueRule};
 use crate::i2c::I2cPhase;
 use crate::mna::Node;
@@ -19,7 +21,6 @@ use crate::netlist::json::threshold::WireThreshold;
 use crate::netlist::json::threshold::resolve_threshold;
 use crate::netlist::json::{PinMap, WireInt, WireValue, resolve_int, resolve_pins, resolve_value};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
-use crate::time::Time;
 use crate::watch::{Signal, Watch};
 use orbe_microchip::{Channel, Cpu, I2cNote, PinDrive, Port, Timeline};
 

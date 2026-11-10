@@ -1,3 +1,5 @@
+use orbe_model::Time;
+
 use crate::diagnostic::Diagnostic;
 use crate::name::Name;
 use crate::name::Ref;
@@ -11,8 +13,6 @@ use crate::netlist::json::waveform::WireWaveform;
 use crate::netlist::json::waveform::resolve_waveform;
 use serde::Deserialize;
 use std::collections::BTreeMap;
-
-use crate::time::Time;
 
 use crate::mna::Stamp;
 use crate::newton::Side;

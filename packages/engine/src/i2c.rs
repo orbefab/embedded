@@ -12,8 +12,9 @@
 
 use std::fmt::Write;
 
+use orbe_model::Time;
+
 use crate::name::Name;
-use crate::time::Time;
 
 /// What a phase was on the bus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

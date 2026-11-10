@@ -13,8 +13,9 @@ use std::fmt::Write;
 
 use serde::Serialize;
 
+use orbe_model::Time;
+
 use crate::name::Name;
-use crate::time::Time;
 
 /// The colours of one chain a reader sees. `Session::leds` returns it, and each entry of
 /// `observations.json` `leds` is one.

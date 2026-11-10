@@ -1,9 +1,10 @@
 //! Seeded contact bounce. Integer arithmetic only, so the reference script
 //! reproduces it exactly. The constants are SplitMix64's and FNV-1a's.
 
+use orbe_model::Time;
+
 use super::{Bounce, Edge, MIN_GAP_PS};
 use crate::name::Name;
-use crate::time::Time;
 
 /// Every event with its bounce edges, ascending. `events` and `bounce` passed parse.
 pub fn expand(seed: u64, name: &Name, events: &[Edge], bounce: Option<&Bounce>) -> Vec<Edge> {

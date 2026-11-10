@@ -1,6 +1,8 @@
 //! Records between active chips: a receiver takes each record once, at its end, whatever the
 //! part order, the chunking, or the rewinds a landing makes.
 
+use orbe_model::Drive;
+
 use crate::netlist::{Contact, Netlist};
 
 use crate::name::Name;
@@ -14,7 +16,7 @@ use super::active::{NS, US, circuit, net, resistor, scripted};
 use super::fixtures::*;
 use super::session::{Rng, finish};
 use crate::active::script::{self, Op, Taken};
-use crate::active::{self, Core, Drive, SpiTarget};
+use crate::active::{self, Core, SpiTarget};
 use crate::session::{Budget, Input, SerialCursor, Setting, State, Status};
 
 const STOP: u64 = 10 * US;

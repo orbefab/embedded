@@ -1,0 +1,17 @@
+[package]
+name = "orbe-model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { workspace = true, optional = true }
+
+[features]
+# `Time` serializes as a bare integer. The engine turns this on for its run folder.
+serde = ["dep:serde"]
+
+[lints]
+workspace = true

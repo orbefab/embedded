@@ -5,13 +5,14 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use orbe_model::Time;
+
 use crate::runs::common;
 use common::atmega::logic_edges;
 use common::{read_vcd, repo};
 use orbe_engine::device::Touch;
 use orbe_engine::name::Name;
 use orbe_engine::run_folder::RunFolder;
-use orbe_engine::time::Time;
 use orbe_engine::timestamp::Timestamp;
 use orbe_engine::{Input, Session, Setting, Status};
 

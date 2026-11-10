@@ -1,9 +1,6 @@
-use serde::Serialize;
-
 /// A point on the simulation timeline, in integer picoseconds from t = 0.
-/// Serialized as a bare integer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-#[serde(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize), serde(transparent))]
 pub struct Time(u64);
 
 impl Time {

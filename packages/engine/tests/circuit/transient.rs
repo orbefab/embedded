@@ -669,10 +669,7 @@ fn rc_with_loops() -> String {
 fn capacitors_across_a_source_or_each_other_run_through_every_edge() {
     let results = simulate(&rc_with_loops());
     let trace = trace(&results);
-    assert_eq!(
-        trace.end(),
-        Some(orbe_engine::time::Time::from_ps(81_000_000_000))
-    );
+    assert_eq!(trace.end(), Some(orbe_model::Time::from_ps(81_000_000_000)));
     let (c1, c3) = (column(trace, "#c1.i"), column(trace, "#c3.i"));
     // Within Newton's current tolerance: 1e-6 relative plus 1 pA.
     for (row, (&one, &three)) in c1.iter().zip(c3).enumerate() {
@@ -706,10 +703,7 @@ fn held(nets: &str, parts: &[&str]) -> String {
 /// Row 0 of `#{name}.i`, after checking the run reached its stop and held `name`.
 /// The hold sits behind 1 fs / C ohm, so the voltage across moves by i * 1 fs / C.
 fn held_current(trace: &Trace, name: &str, [a, b]: [&str; 2], farad: f64, initial: f64) -> f64 {
-    assert_eq!(
-        trace.end(),
-        Some(orbe_engine::time::Time::from_ps(10_000_000))
-    );
+    assert_eq!(trace.end(), Some(orbe_model::Time::from_ps(10_000_000)));
     let node = |net: &str| match net {
         "gnd" => 0.0,
         net => column(trace, &format!("#net.{net}"))[0],

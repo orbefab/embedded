@@ -6,6 +6,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 
+use orbe_model::Time;
+
 use crate::runs::common;
 use common::examples::examples;
 use common::read_vcd;
@@ -13,7 +15,6 @@ use common::{records, repo};
 use orbe_engine::finite::Finite;
 use orbe_engine::name::{Name, Ref};
 use orbe_engine::run_folder::RunFolder;
-use orbe_engine::time::Time;
 use orbe_engine::timestamp::Timestamp;
 use orbe_engine::{Input, Session, Setting, Status};
 

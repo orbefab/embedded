@@ -1,3 +1,5 @@
+use orbe_model::Time;
+
 use crate::diagnostic::Diagnostic;
 use crate::diagnostic::ValueRule;
 use crate::name::Name;
@@ -19,8 +21,6 @@ use crate::netlist::json::resolve_pins;
 use crate::netlist::json::resolve_value;
 use serde::Deserialize;
 use std::collections::BTreeMap;
-
-use crate::time::Time;
 
 use crate::mna::{Probe, Stamp};
 use crate::newton::Side;

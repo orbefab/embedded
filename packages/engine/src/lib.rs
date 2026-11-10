@@ -16,7 +16,6 @@ pub mod name;
 pub mod netlist;
 pub mod run_folder;
 pub mod serial;
-pub mod time;
 pub mod timestamp;
 pub mod trace;
 

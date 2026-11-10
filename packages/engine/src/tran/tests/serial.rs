@@ -1,5 +1,7 @@
 //! The bytes a session delivers from each ATmega328P's USART, against each core run alone.
 
+use orbe_model::Time;
+
 use crate::netlist::{Contact, Netlist};
 
 use crate::finite::Finite;
@@ -8,7 +10,6 @@ use crate::name::{Name, Ref};
 
 use crate::run_folder;
 use crate::serial::{Serial, SerialByte};
-use crate::time::Time;
 use crate::timestamp::Timestamp;
 
 use super::active::{US, circuit, resistor};

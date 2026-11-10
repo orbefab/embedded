@@ -14,16 +14,14 @@
 //! `u64`. A `duty` row's `phases` is
 //! `<duty>/<steps>@<hz>`. Every other cell is empty.
 
+use orbe_model::{Cs, Duty, Pulses, Spi, SpiPhase, Time};
+
 use crate::netlist::NetId;
 
-use std::fmt::Write;
-use std::sync::Arc;
-
 use sha2::{Digest, Sha256};
+use std::fmt::Write;
 
 use crate::name::Name;
-
-use crate::time::Time;
 
 /// One record a chip's core made. `end` is a stop of its sender, where every chip whose record
 /// pins sit on its nets takes it.
@@ -38,61 +36,13 @@ pub struct Record {
     pub kind: RecordKind,
 }
 
+/// What a record holds, and the nets of the sender's pins when it sent. A receiver whose own
+/// record pins sit on those nets takes it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RecordKind {
-    Spi(Spi),
-    Pulses(Pulses),
-    Duty(Duty),
-}
-
-/// One SPI transaction as the host's registers set it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Spi {
-    /// The phases before the data, such as a command and an address, in the order they ran.
-    pub phases: Vec<SpiPhase>,
-    /// The data's lanes.
-    pub lanes: Lanes,
-    pub data: Arc<[u8]>,
-    pub clock_hz: u32,
-    /// The chip select at the transaction's end.
-    pub cs: Cs,
-    /// The nets of the host's pins when it sent.
-    pub nets: SpiNets,
-}
-
-/// One phase before the data: `bits` bits of `value`, most significant first, on `lanes`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SpiPhase {
-    /// From 1 to 32.
-    pub bits: u8,
-    pub lanes: Lanes,
-    /// Below `2^bits`.
-    pub value: u32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Lanes {
-    One,
-    Two,
-    Four,
-}
-
-impl Lanes {
-    pub fn count(self) -> u8 {
-        match self {
-            Lanes::One => 1,
-            Lanes::Two => 2,
-            Lanes::Four => 4,
-        }
-    }
-}
-
-/// Whether a transaction leaves its chip select asserted. A data-only transaction after one
-/// that ends `Held` continues it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cs {
-    Held,
-    Released,
+    Spi { spi: Spi, nets: SpiNets },
+    Pulses { pulses: Pulses, net: NetId },
+    Duty { duty: Duty, net: NetId },
 }
 
 /// The nets of an SPI host's CS, SCLK and data pins. A receiver takes the transaction when its
@@ -104,29 +54,6 @@ pub struct SpiNets {
     pub sclk: Option<NetId>,
     /// D0 to D3. `None` for a lane the host has no pin for.
     pub data: [Option<NetId>; 4],
-}
-
-/// A pulse train, as an RMT channel sends it: the idle level, then each pulse's level and
-/// duration in picoseconds.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Pulses {
-    pub idle: bool,
-    pub pulses: Arc<[(bool, u64)]>,
-    /// The net of the sender's pin when it sent. A receiver whose pulse pin sits on it takes
-    /// the record.
-    pub net: NetId,
-}
-
-/// A PWM duty as an LEDC channel sets it: `duty` of `2^resolution` steps at `hz`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Duty {
-    pub duty: u32,
-    /// Below 32.
-    pub resolution: u8,
-    pub hz: u32,
-    /// The net of the sender's pin when it sent. A receiver whose duty pin sits on it takes the
-    /// record.
-    pub net: NetId,
 }
 
 /// Why [`Link::csv`] cannot write a row.
@@ -173,7 +100,7 @@ impl Link {
             )
             .expect("a String takes every write");
             match &record.kind {
-                RecordKind::Spi(spi) => {
+                RecordKind::Spi { spi, .. } => {
                     let cs = match spi.cs {
                         Cs::Held => "held",
                         Cs::Released => "released",
@@ -188,7 +115,7 @@ impl Link {
                         spi.lanes.count()
                     )
                 }
-                RecordKind::Pulses(pulses) => {
+                RecordKind::Pulses { pulses, .. } => {
                     let payload: Vec<u8> = pulses
                         .pulses
                         .iter()
@@ -204,7 +131,7 @@ impl Link {
                         hash(&payload)
                     )
                 }
-                RecordKind::Duty(duty) => writeln!(
+                RecordKind::Duty { duty, .. } => writeln!(
                     text,
                     "duty,,{}/{}@{},,,",
                     duty.duty,
@@ -247,6 +174,7 @@ pub fn hash(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orbe_model::Lanes;
 
     fn spi(seq: u64, end: u64, cs: Cs, data: &[u8]) -> Record {
         Record {
@@ -254,29 +182,31 @@ mod tests {
             start: Time::from_ps(end - 100),
             end: Time::from_ps(end),
             pin: "CS",
-            kind: RecordKind::Spi(Spi {
-                phases: vec![
-                    SpiPhase {
-                        bits: 8,
-                        lanes: Lanes::One,
-                        value: 0x02,
-                    },
-                    SpiPhase {
-                        bits: 24,
-                        lanes: Lanes::One,
-                        value: 0x2c00,
-                    },
-                ],
-                lanes: Lanes::Four,
-                data: data.into(),
-                clock_hz: 40_000_000,
-                cs,
+            kind: RecordKind::Spi {
+                spi: Spi {
+                    phases: vec![
+                        SpiPhase {
+                            bits: 8,
+                            lanes: Lanes::One,
+                            value: 0x02,
+                        },
+                        SpiPhase {
+                            bits: 24,
+                            lanes: Lanes::One,
+                            value: 0x2c00,
+                        },
+                    ],
+                    lanes: Lanes::Four,
+                    data: data.into(),
+                    clock_hz: 40_000_000,
+                    cs,
+                },
                 nets: SpiNets {
                     cs: Some(NetId::GROUND),
                     sclk: Some(NetId::GROUND),
                     data: [Some(NetId::GROUND), None, None, None],
                 },
-            }),
+            },
         }
     }
 
@@ -295,11 +225,13 @@ mod tests {
                     start: Time::from_ps(600),
                     end: Time::from_ps(900),
                     pin: "GPIO0",
-                    kind: RecordKind::Pulses(Pulses {
-                        idle: false,
-                        pulses: vec![(true, 400), (false, 850)].into(),
+                    kind: RecordKind::Pulses {
+                        pulses: Pulses {
+                            idle: false,
+                            pulses: vec![(true, 400), (false, 850)].into(),
+                        },
                         net: NetId::GROUND,
-                    }),
+                    },
                 },
             },
             LinkRow {
@@ -309,12 +241,14 @@ mod tests {
                     start: Time::from_ps(1000),
                     end: Time::from_ps(1000),
                     pin: "GPIO21",
-                    kind: RecordKind::Duty(Duty {
-                        duty: 512,
-                        resolution: 10,
-                        hz: 5000,
+                    kind: RecordKind::Duty {
+                        duty: Duty {
+                            duty: 512,
+                            resolution: 10,
+                            hz: 5000,
+                        },
                         net: NetId::GROUND,
-                    }),
+                    },
                 },
             },
         ];
@@ -358,12 +292,14 @@ mod tests {
                     start: Time::from_ps(0),
                     end: Time::from_ps(1),
                     pin: "GPIO21",
-                    kind: RecordKind::Duty(Duty {
-                        duty: 1,
-                        resolution,
-                        hz: 1,
+                    kind: RecordKind::Duty {
+                        duty: Duty {
+                            duty: 1,
+                            resolution,
+                            hz: 1,
+                        },
                         net: NetId::GROUND,
-                    }),
+                    },
                 },
             }],
         )

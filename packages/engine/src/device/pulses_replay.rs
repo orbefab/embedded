@@ -6,9 +6,11 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-use crate::active::{Chip, Drive, Output, Stage, Stop, Takes};
+use orbe_model::{Drive, Pulses, Stop, Time};
+
+use crate::active::{Chip, Output, Stage, Takes};
 use crate::diagnostic::{Diagnostic, ScheduleRule, ValueRule};
-use crate::link::{Pulses, Record, RecordKind};
+use crate::link::{Record, RecordKind};
 use crate::name::{Name, Ref};
 use crate::netlist::NetId;
 use crate::netlist::PartId;
@@ -16,7 +18,6 @@ use crate::netlist::Value;
 use crate::netlist::json::waveform::serial_schedule;
 use crate::netlist::json::{PinMap, resolve_pins};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
-use crate::time::Time;
 
 const VCC: usize = 0;
 const GND: usize = 1;
@@ -50,11 +51,13 @@ pub(crate) fn chip(part: PartId, replay: &PulsesReplay) -> Chip {
             start: event.at,
             end: event.end,
             pin: PulsesReplay::PINS[OUT],
-            kind: RecordKind::Pulses(Pulses {
-                idle: replay.idle,
-                pulses: event.pulses.clone(),
+            kind: RecordKind::Pulses {
+                pulses: Pulses {
+                    idle: replay.idle,
+                    pulses: event.pulses.clone(),
+                },
                 net: pins[OUT],
-            }),
+            },
         })
         .collect();
     Chip {

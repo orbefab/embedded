@@ -1,3 +1,5 @@
+use orbe_model::Time;
+
 use crate::netlist::{Document, Edge, Model, Netlist, PartId, Transient};
 
 use std::cmp::Reverse;
@@ -9,7 +11,6 @@ use crate::logic::{Change, Level, Logic};
 use crate::name::Ref;
 
 use crate::run_folder::{Observations, OpPoint};
-use crate::time::Time;
 use crate::trace::Trace;
 
 use crate::RunStats;

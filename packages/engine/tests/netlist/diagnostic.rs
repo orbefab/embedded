@@ -1,9 +1,10 @@
+use orbe_model::Time;
+
 use orbe_engine::diagnostic::{
     AnalysisRule, ChipSetting, Diagnostic, Excursion, FlashRefusal, ProtocolRule, ResetReason,
     ScheduleRule, Severity, Solve, ValueRule, WaveformRule,
 };
 use orbe_engine::name::{Name, NameError, Ref};
-use orbe_engine::time::Time;
 
 fn name(text: &str) -> Name {
     Name::new(text).unwrap()

@@ -1,6 +1,8 @@
 //! A source's `voltage` or `current`: a value object, or an object with `kind`.
 //! A value object is a `steps` waveform with no events.
 
+use orbe_model::Time;
+
 use crate::netlist::{MIN_GAP_PS, Source, Value, Waveform};
 
 use std::borrow::Cow;
@@ -13,8 +15,6 @@ use super::{WireValue, resolve_value};
 use crate::diagnostic::{Diagnostic, ScheduleRule, WaveformRule};
 use crate::name::Ref;
 use crate::netlist::waveform::{Baud, Frame, SerialEvent, serial_end};
-
-use crate::time::Time;
 
 pub(crate) enum WireWaveform {
     Dc(WireValue),

@@ -1,3 +1,5 @@
+use orbe_model::Time;
+
 use orbe_engine::netlist::{self, Analysis, Contact, Model, Netlist};
 
 use crate::common;
@@ -10,7 +12,6 @@ use orbe_engine::diagnostic::{Diagnostic, Severity};
 use orbe_engine::finite::Finite;
 use orbe_engine::name::{Name, Ref};
 
-use orbe_engine::time::Time;
 use orbe_engine::timestamp::Timestamp;
 use orbe_engine::{EdgeCursor, Input, Refused, SerialCursor, Session, Setting, Status};
 

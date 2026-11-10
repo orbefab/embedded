@@ -9,11 +9,12 @@ pub(crate) mod waveform;
 
 use serde::{Deserialize, Serialize, Serializer};
 
+use orbe_model::Time;
+
 use crate::blob::{Blob, Blobs, Sha256};
 use crate::diagnostic::{Diagnostic, ValueRule};
 use crate::finite::Finite;
 use crate::name::{Name, Quantity};
-use crate::time::Time;
 
 use crate::chip::{LinearRegulator, Ne555, Relay};
 use crate::device::{Cst816, PulsesReplay, SpiReplay, St77916, Touch, Ws2812};

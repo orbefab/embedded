@@ -1,3 +1,5 @@
+use orbe_model::Drive;
+
 use crate::netlist::Netlist;
 
 use crate::run_folder::{self, Results};
@@ -8,7 +10,6 @@ use super::super::*;
 use super::active::{NS, US, capacitor, circuit, resistor, scripted};
 use super::fixtures::*;
 use crate::active;
-use crate::active::Drive;
 use crate::active::script::Op;
 use crate::lte::Segment;
 use crate::newton::Side;

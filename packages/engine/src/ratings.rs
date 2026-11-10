@@ -1,10 +1,10 @@
+use orbe_model::Time;
+
 use crate::netlist::{Netlist, RatingKind};
 
 use crate::diagnostic::{Diagnostic, Excursion};
 use crate::finite::Finite;
 use crate::name::Ref;
-
-use crate::time::Time;
 
 use crate::observe::Columns;
 

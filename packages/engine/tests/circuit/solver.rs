@@ -46,7 +46,7 @@ fn a_huge_voltage_across_one_ohm_is_nonfinite_at_the_resistor() {
     assert_eq!(found.code(), "solver.nonfinite");
     assert_eq!(found.severity(), Severity::Error);
     assert_eq!(found.refs(), vec!["#r1".parse().unwrap()]);
-    assert_eq!(found.at(), Some(orbe_engine::time::Time::ZERO));
+    assert_eq!(found.at(), Some(orbe_model::Time::ZERO));
 }
 
 #[test]
@@ -101,5 +101,5 @@ fn a_chain_one_past_the_dense_limit_is_too_large() {
         text.contains(r#""data":{"limit":4096,"unknowns":4097}"#),
         "{text}"
     );
-    assert_eq!(found.at(), Some(orbe_engine::time::Time::ZERO));
+    assert_eq!(found.at(), Some(orbe_model::Time::ZERO));
 }
