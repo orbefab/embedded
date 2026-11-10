@@ -9,7 +9,7 @@ use crate::common;
 use common::Instructions;
 
 use common::{SREG, TCCR0B, TIFR0, TIFR1, ldi};
-use orbe_avr::{Cpu, FuseBytes, Level, Port};
+use orbe_microchip::{Cpu, FuseBytes, Level, Port};
 
 const ADCL: u16 = 0x78;
 const ADCH: u16 = 0x79;
@@ -889,14 +889,14 @@ fn noise_reduction_hook_starts_a_single_conversion() {
     let mut cpu = fresh();
     cpu.set_voltage(PC0, 2.5);
     cpu.poke(ADCSRA, ADEN | 0x02);
-    orbe_avr::test_hooks::adc_noise_reduction(&mut cpu);
+    orbe_microchip::test_hooks::adc_noise_reduction(&mut cpu);
     assert!(adsc(&cpu));
     cpu.run_until(102);
     assert_eq!(result(&cpu), 512);
 
     let mut armed = fresh();
     armed.poke(ADCSRA, ADEN | ADATE | 0x02);
-    orbe_avr::test_hooks::adc_noise_reduction(&mut armed);
+    orbe_microchip::test_hooks::adc_noise_reduction(&mut armed);
     assert!(
         !adsc(&armed),
         "auto-trigger mode is not the noise-reduction start"
@@ -912,7 +912,7 @@ fn reset_aborts_a_conversion() {
     cpu.poke(ADCSRA, ADEN | ADSC | 0x02);
     cpu.run_until(10);
     assert!(adsc(&cpu));
-    orbe_avr::test_hooks::reset_cpu(&mut cpu, orbe_avr::ResetKind::PowerOn);
+    orbe_microchip::test_hooks::reset_cpu(&mut cpu, orbe_microchip::ResetKind::PowerOn);
     assert_eq!(cpu.cycles(), 0);
     assert_eq!(cpu.peek(ADCSRA), 0, "ADCSRA is 0 after reset");
     cpu.run_until(200);

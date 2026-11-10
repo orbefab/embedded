@@ -13,7 +13,7 @@ use crate::common::runs::{
     step_until,
 };
 use crate::common::{SREG, UCSR0B, UDR0, adiw, brbc, imm, in_io, ldi, out, rr, sts};
-use orbe_avr::{Channel, Cpu, Sent, parse_hex};
+use orbe_microchip::{Channel, Cpu, Sent, parse_hex};
 
 const EECR: u16 = 0x3F;
 const EIMSK: u16 = 0x3D;

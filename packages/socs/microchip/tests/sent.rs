@@ -7,7 +7,7 @@
 
 use crate::common::runs::{NOP, RETI, SEI, image};
 use crate::common::{UCSR0B, UDR0, ldi, spin, sts};
-use orbe_avr::{Channel, Cpu, FuseBytes, PinDrive, ResetKind, Sent, Timeline};
+use orbe_microchip::{Channel, Cpu, FuseBytes, PinDrive, ResetKind, Sent, Timeline};
 
 const UCSR0A: u16 = 0x00C0;
 const UCSR0C: u16 = 0x00C2;
@@ -283,7 +283,7 @@ fn a_power_on_reset_keeps_no_sent_frame() {
     let mut copy = cpu.clone();
     let ended = std::iter::from_fn(|| copy.take_sent(u64::MAX)).count();
     assert_eq!(ended, 2, "both frames ended");
-    orbe_avr::test_hooks::reset_cpu(&mut cpu, ResetKind::PowerOn);
+    orbe_microchip::test_hooks::reset_cpu(&mut cpu, ResetKind::PowerOn);
     assert_eq!(cpu.take_sent(u64::MAX), None);
 }
 

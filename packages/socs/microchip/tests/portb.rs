@@ -4,7 +4,7 @@ use crate::common;
 use common::Instructions;
 use common::{imm, in_io, ldi, out, sbi};
 
-use orbe_avr::{Channel, Cpu, Level, PinDrive};
+use orbe_microchip::{Channel, Cpu, Level, PinDrive};
 
 #[test]
 fn image_toggles_pin_5() {

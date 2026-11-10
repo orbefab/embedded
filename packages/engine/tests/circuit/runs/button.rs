@@ -11,9 +11,9 @@ use common::atmega::{
     serial_csv,
 };
 
-/// Cycles from a pad change until `PINx` shows it. `PIN_SYNC_DELAY` in `packages/socs/avr/src/mux.rs`
-/// is that count, from DS40002061B §14.2.4. A change at cycle T is first visible to an
-/// instruction that starts at T + 2.
+/// Cycles from a pad change until `PINx` shows it. `PIN_SYNC_DELAY` in
+/// `packages/socs/microchip/src/mux.rs` is that count, from DS40002061B §14.2.4. A change at
+/// cycle T is first visible to an instruction that starts at T + 2.
 const SYNC_CYCLES: u64 = 2;
 
 /// `button.S`, DS40002198B, AVRe column. `CBI` and each `SBI` take 2. The loop is `IN` 1,

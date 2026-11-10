@@ -4,7 +4,7 @@
 
 use std::collections::VecDeque;
 
-use orbe_avr::{Cpu, Level, PinDrive};
+use orbe_microchip::{Cpu, Level, PinDrive};
 
 pub const SDA: u32 = 12;
 pub const SCL: u32 = 13;

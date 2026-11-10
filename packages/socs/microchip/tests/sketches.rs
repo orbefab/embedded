@@ -13,7 +13,7 @@
 //! windows. The cycle-exact tests in `src/irq.rs`, `oc_pin`, `system`, `timeline`, `timers`
 //! and `timing` catch that.
 
-use orbe_avr::{Cpu, Level, parse_hex};
+use orbe_microchip::{Cpu, Level, parse_hex};
 
 const F_CPU: u64 = 16_000_000;
 const MS: u64 = F_CPU / 1000;

@@ -9,7 +9,7 @@ use common::Instructions;
 use common::{
     TCCR0B, TCNT0, TIFR0, TIFR2, UCSR0B, UDR0, in_io, ldi, out, read_reg, sbi, spin, sts,
 };
-use orbe_avr::{Channel, Cpu, FuseBytes, Level, ResetKind};
+use orbe_microchip::{Channel, Cpu, FuseBytes, Level, ResetKind};
 
 const EEARL: u16 = 0x0041;
 const EEDR: u16 = 0x0040;
@@ -234,7 +234,7 @@ fn reset_during_a_program_keeps_the_old_byte() {
     external.load_words(&write_program(0, 0x01, 0));
     external.run_until(80);
     assert_eq!(external.peek(EECR) & EEPE, EEPE);
-    orbe_avr::test_hooks::reset_cpu(&mut external, orbe_avr::ResetKind::External);
+    orbe_microchip::test_hooks::reset_cpu(&mut external, orbe_microchip::ResetKind::External);
     assert_eq!(external.eeprom()[0], 0x01, "external reset above VBOT");
     assert_eq!(external.peek(EECR) & EEPE, 0);
 
@@ -242,7 +242,7 @@ fn reset_during_a_program_keeps_the_old_byte() {
     watchdog.set_eeprom(&[0x77]);
     watchdog.load_words(&write_program(0, 0x02, 0));
     watchdog.run_until(80);
-    orbe_avr::test_hooks::reset_cpu(&mut watchdog, ResetKind::Watchdog);
+    orbe_microchip::test_hooks::reset_cpu(&mut watchdog, ResetKind::Watchdog);
     assert_eq!(watchdog.eeprom()[0], 0x02, "watchdog reset above VBOT");
 
     let mut brown = fresh();
@@ -342,7 +342,7 @@ fn wdton_forces_system_reset_and_wdrf_forces_wde() {
     );
 
     let mut flags = fresh();
-    orbe_avr::test_hooks::reset_cpu(&mut flags, ResetKind::Watchdog);
+    orbe_microchip::test_hooks::reset_cpu(&mut flags, ResetKind::Watchdog);
     assert_eq!(flags.peek(WDTCSR) & WDE, WDE, "WDRF forces WDE");
     // Flags clear by writing zero. A one does not set them (§11.9.1).
     flags.poke(MCUSR, 0);
@@ -390,17 +390,17 @@ fn wdr_restarts_the_count_and_wdif_clears_on_write_one() {
 fn each_reset_sets_its_mcusr_flag_and_keeps_the_others() {
     // §11.9.1. Power-on clears WDRF, BORF and EXTRF. The others accumulate.
     let mut cpu = fresh();
-    orbe_avr::test_hooks::reset_cpu(&mut cpu, orbe_avr::ResetKind::External);
+    orbe_microchip::test_hooks::reset_cpu(&mut cpu, orbe_microchip::ResetKind::External);
     assert_eq!(cpu.peek(MCUSR) & 0x0F, EXTRF | PORF);
     cpu.poke(0x0100, 0x5A);
     cpu.run_until(cpu.cycles() + crystal_reset_delay());
     assert_eq!(cpu.peek(0x0100), 0x5A, "SRAM survives an external reset");
 
-    orbe_avr::test_hooks::reset_cpu(&mut cpu, ResetKind::Watchdog);
+    orbe_microchip::test_hooks::reset_cpu(&mut cpu, ResetKind::Watchdog);
     assert_eq!(cpu.peek(MCUSR) & WDRF, WDRF);
     assert_eq!(cpu.peek(0x0100), 0x5A);
 
-    orbe_avr::test_hooks::reset_cpu(&mut cpu, orbe_avr::ResetKind::PowerOn);
+    orbe_microchip::test_hooks::reset_cpu(&mut cpu, orbe_microchip::ResetKind::PowerOn);
     assert_eq!(
         cpu.peek(MCUSR) & 0x0F,
         PORF,
@@ -417,7 +417,7 @@ fn startup_timeout_follows_the_crystal_fuses() {
     let mut cpu = fresh();
     let delay = crystal_reset_delay();
     assert_eq!(delay, 14 + 1_040_000);
-    orbe_avr::test_hooks::reset_cpu(&mut cpu, orbe_avr::ResetKind::External);
+    orbe_microchip::test_hooks::reset_cpu(&mut cpu, orbe_microchip::ResetKind::External);
     let at = cpu.cycles();
     cpu.load_words(&[0x0000]);
     cpu.run_until(at + delay - 1);
@@ -828,7 +828,7 @@ fn reset_releases_a_driven_pin() {
     }
     assert!(saw_high, "PORTB5 was driven");
     let at = cpu.cycles();
-    orbe_avr::test_hooks::reset_cpu(&mut cpu, orbe_avr::ResetKind::External);
+    orbe_microchip::test_hooks::reset_cpu(&mut cpu, orbe_microchip::ResetKind::External);
     let report = cpu.take_pin().expect("reset reports the released pin");
     assert_eq!(report.pin, 5);
     assert_eq!(report.level, Level::Released);
@@ -847,7 +847,7 @@ fn a_running_clkps_survives_a_fuse_override() {
     assert_eq!(cpu.clock_div(), 2);
     cpu.set_fuses(0x7F, FuseBytes::CRYSTAL.high, FuseBytes::CRYSTAL.extended);
     assert_eq!(cpu.clock_div(), 2, "mid-run CLKPS stays");
-    orbe_avr::test_hooks::reset_cpu(&mut cpu, orbe_avr::ResetKind::External);
+    orbe_microchip::test_hooks::reset_cpu(&mut cpu, orbe_microchip::ResetKind::External);
     assert_eq!(cpu.clock_div(), 8, "CKDIV8 applies on the reset");
 }
 
@@ -1078,7 +1078,7 @@ fn usart_after_reset_counts_phase_from_the_release() {
     warm.load_words(&[0x0000]);
     warm.run_until(30);
     let reset_at = warm.cycles();
-    orbe_avr::test_hooks::reset_cpu(&mut warm, orbe_avr::ResetKind::External);
+    orbe_microchip::test_hooks::reset_cpu(&mut warm, orbe_microchip::ResetKind::External);
     assert_eq!(warm.cycles(), reset_at);
     let release = reset_at + DELAY;
     warm.load_words(&program);

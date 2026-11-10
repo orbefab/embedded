@@ -9,8 +9,8 @@ publish.workspace = true
 [dependencies]
 clap = { workspace = true, optional = true }
 libm.workspace = true
-orbe-avr.workspace = true
 orbe-espressif.workspace = true
+orbe-microchip.workspace = true
 orbe-xtensa.workspace = true
 serde.workspace = true
 serde_json.workspace = true

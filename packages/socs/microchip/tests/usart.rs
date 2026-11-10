@@ -7,7 +7,7 @@ use crate::common;
 use common::Instructions;
 use common::{UCSR0B, UDR0, ldi, lds, out, read_reg, sbrs, sts};
 
-use orbe_avr::{Channel, Cpu, Level, Port, SerialFrame, SupplyChannel};
+use orbe_microchip::{Channel, Cpu, Level, Port, SerialFrame, SupplyChannel};
 
 const UCSR0A: u16 = 0x00C0;
 const UCSR0C: u16 = 0x00C2;
@@ -1974,7 +1974,7 @@ fn reset_clears_usart_state_waveform_queues_and_phase() {
     let start = send_bytes(&mut cpu, &[0x55]);
     cpu.supply(SupplyChannel::Usart0, &[0x11, 0x22]);
     cpu.run_until(start + 40);
-    orbe_avr::test_hooks::reset_cpu(&mut cpu, orbe_avr::ResetKind::PowerOn);
+    orbe_microchip::test_hooks::reset_cpu(&mut cpu, orbe_microchip::ResetKind::PowerOn);
     assert_eq!(cpu.cycles(), 0);
     assert_eq!(cpu.peek(UBRR0L), 0);
     assert_eq!(cpu.peek(UBRR0H), 0);
@@ -1998,7 +1998,7 @@ fn reset_clears_usart_state_waveform_queues_and_phase() {
     cpu.poke(UCSR0B, RXEN);
     cpu.supply(SupplyChannel::Usart0, &[0x5A]);
     cpu.run_until(40);
-    orbe_avr::test_hooks::reset_cpu(&mut cpu, orbe_avr::ResetKind::PowerOn);
+    orbe_microchip::test_hooks::reset_cpu(&mut cpu, orbe_microchip::ResetKind::PowerOn);
     let mut enable = vec![ldi(16, u16::from(RXEN))];
     enable.extend(sts(16, UCSR0B));
     enable.extend(lds(17, UDR0));

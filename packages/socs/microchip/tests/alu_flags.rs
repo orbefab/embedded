@@ -8,7 +8,7 @@
 use crate::common;
 use common::{adiw, imm, rr as reg_op};
 
-use orbe_avr::Cpu;
+use orbe_microchip::Cpu;
 
 const I: u8 = 1 << 7;
 const T: u8 = 1 << 6;

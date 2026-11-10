@@ -24,7 +24,7 @@ orbe-registry = { path = "packages/registry" }
 orbe-session = { path = "packages/session" }
 orbe-engine = { path = "packages/engine" }
 orbe-xtensa = { path = "packages/cores/xtensa" }
-orbe-avr = { path = "packages/socs/avr" }
+orbe-microchip = { path = "packages/socs/microchip" }
 orbe-espressif = { path = "packages/socs/espressif" }
 jsonc-parser = "=0.34.0"
 serde = { version = "1", features = ["derive"] }
@@ -57,7 +57,7 @@ unsafe_code = "forbid"
 [profile.dev.package.orbe-engine]
 opt-level = 3
 
-[profile.dev.package.orbe-avr]
+[profile.dev.package.orbe-microchip]
 opt-level = 3
 
 [profile.dev.package.orbe-xtensa]

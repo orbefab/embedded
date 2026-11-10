@@ -10,7 +10,7 @@
 //! (§14.2.4) adds 2. Idle wake entry is 8 cycles (§7.7), the vector `JMP` is
 //! 3, and `SBI` is 2: `10240 + 2 + 8 + 3 + 2 = 10255`.
 
-use orbe_avr::{Cpu, Level, parse_hex};
+use orbe_microchip::{Cpu, Level, parse_hex};
 
 fn edges(hex: &str, until: u64) -> Vec<(u32, Level, u64)> {
     let image = parse_hex(hex).unwrap();

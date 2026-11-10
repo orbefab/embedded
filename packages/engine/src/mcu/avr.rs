@@ -1,5 +1,5 @@
 //! The ATmega328P behind the seam. Its package pins become outputs, watches, and samples
-//! around `orbe_avr::Timeline`, and its oscillator converts between picoseconds and cycles.
+//! around `orbe_microchip::Timeline`, and its oscillator converts between picoseconds and cycles.
 
 use std::collections::BTreeMap;
 
@@ -21,7 +21,7 @@ use crate::netlist::json::{PinMap, WireInt, WireValue, resolve_int, resolve_pins
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
 use crate::time::Time;
 use crate::watch::{Signal, Watch};
-use orbe_avr::{Channel, Cpu, I2cNote, PinDrive, Port, Timeline};
+use orbe_microchip::{Channel, Cpu, I2cNote, PinDrive, Port, Timeline};
 
 /// What a package pin is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use orbe_avr::{Cpu, FuseBytes, Image, PIN_QUEUE_CAP, parse_hex};
+use orbe_microchip::{Cpu, FuseBytes, Image, PIN_QUEUE_CAP, parse_hex};
 
 /// CPU cycles in one simulated second.
 ///

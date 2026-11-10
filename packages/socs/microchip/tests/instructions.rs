@@ -8,7 +8,7 @@ use common::{
     in_io, ldd, out as out_reg, rr, sbi as sbi_word, sbiw as enc_sbiw,
 };
 
-use orbe_avr::Cpu;
+use orbe_microchip::Cpu;
 
 fn exec(words: &[u16], prep: impl FnOnce(&mut Cpu)) -> Cpu {
     let mut cpu = Cpu::new();
@@ -864,7 +864,10 @@ fn spm() {
     });
     expect(&cpu, 1, 0, &[(0, 0x34), (30, 0x02)]);
     assert_eq!(cpu.flash_word(1), 0x0000);
-    assert_eq!(cpu.spm_notes(), &[orbe_avr::SpmNote { z: 2, word: 0x1234 }]);
+    assert_eq!(
+        cpu.spm_notes(),
+        &[orbe_microchip::SpmNote { z: 2, word: 0x1234 }]
+    );
 }
 
 #[test]
@@ -1065,9 +1068,9 @@ fn unowned_and_reserved_stores_change_only_what_they_model() {
     // LDI, then STS r16, 0x0020 and RJMP back to that STS.
     flood.load_words(&[imm(0xE000, 16, 0x01), 0x9300, 0x0020, 0xCFFD]);
     let extra = 10u64;
-    let writes = orbe_avr::IO_LOG_CAP as u64 + extra;
+    let writes = orbe_microchip::IO_LOG_CAP as u64 + extra;
     flood.insns(u32::try_from(1 + writes * 2).unwrap());
-    assert_eq!(flood.io_writes().len(), orbe_avr::IO_LOG_CAP);
+    assert_eq!(flood.io_writes().len(), orbe_microchip::IO_LOG_CAP);
     assert_eq!(flood.io_write_drops(), extra);
 }
 

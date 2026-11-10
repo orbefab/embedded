@@ -7,7 +7,7 @@
 use crate::common;
 use common::{brbc, brbs};
 
-use orbe_avr::Cpu;
+use orbe_microchip::Cpu;
 
 #[derive(Clone, Copy)]
 enum Words {
