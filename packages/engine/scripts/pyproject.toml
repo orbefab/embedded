@@ -1,0 +1,19 @@
+[project]
+name = "orbe-engine-scripts"
+version = "0.0.0"
+description = "Checks and decoders for engine run folders."
+requires-python = ">=3.11"
+license = "MIT OR Apache-2.0"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "pytest==8.4.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

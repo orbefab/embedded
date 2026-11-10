@@ -458,10 +458,7 @@ def main():
         help="check the esp32s3 and cst816 views against IDF's lengths at HZ, read from its "
         "registers as the model reads them, so not an independent check of that reading",
     )
-    parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
-    if args.self_test:
-        sys.exit(self_test())
     if not args.run:
         parser.error("RUN_DIR is required")
     if args.timing_s3 is not None and s3_lengths(args.timing_s3) is None:
@@ -530,109 +527,6 @@ def main():
         for label, scl, sda in extra:
             failed |= report_s3(label, vcd[scl], vcd[sda], args.timing_s3)
     sys.exit(1 if failed else 0)
-
-
-def self_test():
-    """The S3 lengths, and that an ATmega view adds no line for a matching controller."""
-    failures = 0
-
-    def expect(name, ok):
-        nonlocal failures
-        if not ok:
-            print(f"FAIL {name}")
-            failures += 1
-
-    def seen_of(**rows):
-        base = {name: [] for name in (*TABLE,)}
-        base.update(rows)
-        return base
-
-    edge = 1_250_000
-    exact = seen_of(**{name: [edge] for name in S3_EDGES}, **{"tHD;DAT": [300_000], "tSU;DAT": [950_000]})
-    expect("400 kHz lengths pass", s3_problems(exact, 400_000) == [])
-    expect("a tLOW 1 ps off fails", "tLOW" in s3_problems({**exact, "tLOW": [edge + 1]}, 400_000))
-    expect("an empty interval passes", s3_problems(seen_of(), 400_000) == [])
-    expect("tBUF is not checked", s3_problems({**exact, "tBUF": [33_000_000_000]}, 400_000) == [])
-    slow = seen_of(
-        **{name: [5_000_000] for name in S3_EDGES},
-        **{"tHD;DAT": [1_250_000, 300_000], "tSU;DAT": [3_750_000, 4_700_000]},
-    )
-    expect("100 kHz takes the master hold and the 300 ns hold", s3_problems(slow, 100_000) == [])
-    expect("a 400 ns hold fails at 100 kHz", "tHD;DAT" in s3_problems({**slow, "tHD;DAT": [400_000]}, 100_000))
-    expect(
-        "a setup that is not the low minus its hold fails",
-        "tSU;DAT" in s3_problems({**slow, "tSU;DAT": [950_000]}, 100_000),
-    )
-    expect("another rate is rejected", s3_lengths(200_000) is None)
-
-    import tempfile
-
-    def vcd(scopes):
-        body = ["$timescale 1 ps $end"]
-        n = 0
-        codes = []
-        for scope, names in scopes:
-            body.append(f"$scope module {scope} $end")
-            for name in names:
-                code = chr(ord("!") + n)
-                n += 1
-                codes.append(code)
-                body.append(f"$var wire 1 {code} {name} $end")
-            body.append("$upscope $end")
-        body += ["$enddefinitions $end", "$dumpvars"]
-        body += [f"1{code}" for code in codes]
-        body.append("$end")
-        return "\n".join(body) + "\n"
-
-    with tempfile.TemporaryDirectory() as raw:
-        folder = Path(raw)
-        (folder / "traces").mkdir()
-        (folder / "traces" / "i2c.csv").write_text("t_ps,part,phase,address,read,byte,ack\n")
-        (folder / "traces" / "logic.vcd").write_text(
-            vcd(
-                [
-                    ("u1", ["PC5", "PC4"]),
-                    ("u2", ["SCL", "SDA"]),
-                    ("u3", ["GPIO10", "GPIO9"]),
-                ]
-            )
-        )
-        netlist = {
-            "parts": [
-                {"name": "u1", "kind": "atmega328p", "clock_hz": {"value": 16_000_000}, "pins": {}},
-                {"name": "u2", "kind": "cst816", "pins": {"SCL": "scl", "SDA": "sda"}},
-                {"name": "u3", "kind": "esp32s3", "pins": {"GPIO10": "scl", "GPIO9": "sda"}},
-            ]
-        }
-        (folder / "netlist.json").write_text(json.dumps(netlist))
-        import subprocess
-
-        script = Path(__file__).resolve()
-        out = subprocess.run([sys.executable, script, str(folder)], capture_output=True, text=True)
-        expect(
-            "a matching controller adds no line",
-            out.returncode == 0
-            and out.stdout == ("u1: 0 decoded phases, 0 rows in i2c.csv\nu1: 0 of 0 rows match, 0 to the picosecond\n"),
-        )
-        netlist["parts"] = netlist["parts"][1:]
-        (folder / "netlist.json").write_text(json.dumps(netlist))
-        out = subprocess.run([sys.executable, script, str(folder)], capture_output=True, text=True)
-        expect(
-            "an S3 run compares its views and does not open i2c.csv",
-            out.returncode == 0 and out.stdout == ("u2 and u3 decode the same phases: True\n"),
-        )
-        (folder / "traces" / "i2c.csv").unlink()
-        out = subprocess.run(
-            [sys.executable, script, str(folder), "--timing-s3", "400000"], capture_output=True, text=True
-        )
-        expect("timing-s3 on an idle bus passes", out.returncode == 0 and "off=1" not in out.stdout)
-        out = subprocess.run(
-            [sys.executable, script, str(folder), "--timing-s3", "200000"], capture_output=True, text=True
-        )
-        expect("another timing-s3 rate exits 1", out.returncode == 1)
-
-    print("self-test passed" if not failures else f"self-test: {failures} failed")
-    return 1 if failures else 0
 
 
 if __name__ == "__main__":

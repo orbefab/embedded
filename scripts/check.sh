@@ -83,12 +83,8 @@ full() {
     --features orbe-xtensa/poll-skip-check -- -D warnings
   rust_tests -p orbe-xtensa -p orbe-espressif --features orbe-xtensa/poll-skip-check
   rust_tests -p orbe-circuit --test runs --features orbe-xtensa/poll-skip-check
-  local script name knob_dir
-  for script in ngspice_refs render_st77916 esp32s3_blink esp32s3_hello esp32s3_screen \
-    esp32s3_encoder i2c_decode esp32s3_touch esp32s3_dualcore esp32s3_echo esp32s3_ring \
-    esp32s3_arduino_console esp32s3_knob; do
-    uv run "packages/engine/scripts/$script.py" --self-test
-  done
+  local name knob_dir
+  uv run --project packages/engine/scripts --frozen pytest --rootdir=packages/engine/scripts packages/engine/scripts/tests
   uv run packages/engine/scripts/st77916_example.py --check
   uv run packages/engine/scripts/pattern_header.py --check
   run_check st77916-replay render_st77916.py packages/engine/tests/circuits/st77916-replay/events.json

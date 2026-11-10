@@ -5,7 +5,6 @@
 """Check a run of the console sketch, apart from the engine.
 
     uv run packages/engine/scripts/esp32s3_arduino_console.py --check RUN_DIR
-    uv run packages/engine/scripts/esp32s3_arduino_console.py --self-test
 
 The sketch prints `tick <k> core <c>` from `loop` and echoes one byte each pass as `got <b>`.
 The check wants `tick 0 core 1` through `tick 10 core 1`, in order, and a `got` line for each
@@ -116,81 +115,10 @@ def check(run: Path) -> None:
     print(f"esp32s3-arduino console: ticks 0 to {LAST_TICK} on core 1, {echoed_phrase(len(sent_bytes(netlist)))}")
 
 
-def serial_of(text: str) -> str:
-    rows = "".join(f"0,u1,USB_SERIAL_JTAG,{ord(c)}\n" for c in text)
-    return "t_ps,part,usart,byte\n" + rows
-
-
-def transcript(end: str = "\n", ticks_through: int = LAST_TICK, core: int = 1, extra: str = "") -> str:
-    body = "".join(f"tick {k} core {core}{end}" for k in range(ticks_through + 1))
-    return body + extra
-
-
-def self_test() -> int:
-    failures = 0
-
-    def expect(name: str, ok: bool) -> None:
-        nonlocal failures
-        if not ok:
-            print(f"FAIL {name}")
-            failures += 1
-
-    def raises(fn) -> bool:
-        try:
-            fn()
-        except ValueError:
-            return True
-        return False
-
-    good = lines(serial_of("boot\n" + transcript()))
-    expect("ticks 0 to 10 pass", not raises(lambda: check_ticks(good)))
-    crlf = lines(serial_of(transcript(end="\r\n")))
-    expect("a carriage return passes", not raises(lambda: check_ticks(crlf)))
-    short = lines(serial_of(transcript(ticks_through=9)))
-    expect("a missing tick 10 fails", raises(lambda: check_ticks(short)))
-    other = lines(serial_of(transcript(core=0)))
-    expect("core 0 fails", raises(lambda: check_ticks(other)))
-    netlist = {"parts": [{"kind": "esp32s3", "console": [{"t_ps": 1, "bytes": [65, 66]}]}]}
-    echoed_text = lines(serial_of(transcript(extra="got 65\ngot 66\n")))
-    expect("the echoed bytes pass", not raises(lambda: check_echo(echoed_text, netlist)))
-    missed = lines(serial_of(transcript(extra="got 65\n")))
-    expect("a missing echo fails", raises(lambda: check_echo(missed, netlist)))
-    expect(
-        "an error fails",
-        raises(lambda: check_diagnostics([{"code": "chip.clock", "severity": "error"}])),
-    )
-    expect(
-        "a warning passes",
-        not raises(lambda: check_diagnostics([{"code": "chip.unmodeled_register", "severity": "warning"}])),
-    )
-    foreign = serial_of(transcript()).replace("USB_SERIAL_JTAG", "USART0", 1)
-    expect("another port fails", raises(lambda: lines(foreign)))
-    part = {
-        "kind": "esp32s3",
-        "rom": {"sha256": "r", "bytes": 1},
-        "firmware": {"flash": [{"offset": 8, "sha256": "f", "bytes": 2}]},
-    }
-    listed = {
-        "blobs": [
-            {"role": "rom", "sha256": "r", "bytes": 1},
-            {"role": "flash", "sha256": "f", "bytes": 2, "offset": 8},
-        ]
-    }
-    expect("the manifest passes", not raises(lambda: check_manifest(listed, {"parts": [part]})))
-    expect("one byte is singular", echoed_phrase(1) == "1 byte echoed")
-    expect("two bytes stay plural", echoed_phrase(2) == "2 bytes echoed")
-    print("self-test passed" if not failures else f"self-test: {failures} failed")
-    return 1 if failures else 0
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--check", type=Path, metavar="RUN_DIR")
-    group.add_argument("--self-test", action="store_true")
+    parser.add_argument("--check", type=Path, metavar="RUN_DIR", required=True)
     args = parser.parse_args()
-    if args.self_test:
-        return self_test()
     try:
         check(args.check)
     except (ValueError, OSError, KeyError, json.JSONDecodeError) as error:

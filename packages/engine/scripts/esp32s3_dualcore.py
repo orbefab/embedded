@@ -5,7 +5,6 @@
 """Check a run of `packages/engine/tests/circuits/esp32s3-dualcore` against its two tasks, apart from the engine.
 
     uv run packages/engine/scripts/esp32s3_dualcore.py --check RUN_DIR
-    uv run packages/engine/scripts/esp32s3_dualcore.py --self-test
 
 The app of `packages/engine/tests/firmware/esp32s3/idf/dualcore` pins one task to each core. Each prints
 `core <c> tick <k>` twenty times, `k` from 0, and then `done`. The two tasks may interleave.
@@ -102,95 +101,10 @@ def check(run: Path) -> None:
     print(f"esp32s3-dualcore: each core printed {TICKS} ticks, then done")
 
 
-def serial_of(text: str) -> str:
-    rows = "".join(f"0,u1,USB_SERIAL_JTAG,{ord(c)}\n" for c in text)
-    return "t_ps,part,usart,byte\n" + rows
-
-
-def transcript(end: str = "\r\n", swap: bool = False) -> str:
-    """Twenty ticks from each core, interleaved one line at a time, then both done lines."""
-    lines_out = []
-    order = (1, 0) if swap else (0, 1)
-    for k in range(TICKS):
-        for core in order:
-            lines_out.append(f"core {core} tick {k}{end}")
-    lines_out.append(f"done{end}")
-    lines_out.append(f"done{end}")
-    return "".join(lines_out)
-
-
-def self_test() -> int:
-    failures = 0
-
-    def expect(name: str, ok: bool) -> None:
-        nonlocal failures
-        if not ok:
-            print(f"FAIL {name}")
-            failures += 1
-
-    def raises(fn) -> bool:
-        try:
-            fn()
-        except ValueError:
-            return True
-        return False
-
-    good = lines(serial_of("I (57) boot\r\n" + transcript()))
-    expect("a good run passes", not raises(lambda: check_console(good)))
-    bare = lines(serial_of(transcript(end="\n")))
-    expect("a line feed passes", not raises(lambda: check_console(bare)))
-    swapped = lines(serial_of(transcript(swap=True)))
-    expect("the other core first passes", not raises(lambda: check_console(swapped)))
-    lost = lines(serial_of(transcript().replace("core 1 tick 7\r\n", "", 1)))
-    expect("a lost tick fails", raises(lambda: check_console(lost)))
-    disorder = lines(serial_of(transcript().replace("core 0 tick 3\r\n", "core 0 tick 4\r\n", 1)))
-    expect("a tick out of order fails", raises(lambda: check_console(disorder)))
-    one_done = lines(serial_of(transcript().replace("done\r\n", "", 1)))
-    expect("one done line fails", raises(lambda: check_console(one_done)))
-    early = []
-    for k in range(TICKS):
-        if k == TICKS - 1:
-            early.append("done\r\n")
-        for core in CORES:
-            early.append(f"core {core} tick {k}\r\n")
-    early.append("done\r\n")
-    expect("a done line before the last tick fails", raises(lambda: check_console(lines(serial_of("".join(early))))))
-    owned = []
-    for core in CORES:
-        for k in range(TICKS):
-            owned.append(f"core {core} tick {k}\r\n")
-        owned.append("done\r\n")
-    expect("a done after that core's ticks passes", not raises(lambda: check_console(lines(serial_of("".join(owned))))))
-    expect("an error fails", raises(lambda: check_diagnostics([{"code": "chip.clock", "severity": "error"}])))
-    expect(
-        "a warning passes",
-        not raises(lambda: check_diagnostics([{"code": "chip.unmodeled_register", "severity": "warning"}])),
-    )
-    other = serial_of(transcript()).replace("USB_SERIAL_JTAG", "USART0", 1)
-    expect("another port fails", raises(lambda: lines(other)))
-    part = {
-        "kind": "esp32s3",
-        "rom": {"sha256": "r", "bytes": 1},
-        "firmware": {"flash": [{"offset": 8, "sha256": "f", "bytes": 2}]},
-    }
-    listed = {
-        "blobs": [{"role": "rom", "sha256": "r", "bytes": 1}, {"role": "flash", "sha256": "f", "bytes": 2, "offset": 8}]
-    }
-    expect("the manifest passes", not raises(lambda: check_manifest(listed, {"parts": [part]})))
-    unplaced = {"blobs": [listed["blobs"][0], {**listed["blobs"][1], "offset": None}]}
-    expect("a region without its offset fails", raises(lambda: check_manifest(unplaced, {"parts": [part]})))
-    print("self-test passed" if not failures else f"self-test: {failures} failed")
-    return 1 if failures else 0
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--check", type=Path, metavar="RUN_DIR")
-    group.add_argument("--self-test", action="store_true")
+    parser.add_argument("--check", type=Path, metavar="RUN_DIR", required=True)
     args = parser.parse_args()
-    if args.self_test:
-        return self_test()
     try:
         check(args.check)
     except (ValueError, OSError, KeyError) as error:

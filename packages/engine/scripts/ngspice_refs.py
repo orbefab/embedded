@@ -6,7 +6,6 @@
 
     uv run packages/engine/scripts/ngspice_refs.py [--check]
         [packages/engine/tests/circuits/<name> | packages/engine/circuit/tests/fixtures/<name> ...]
-    uv run packages/engine/scripts/ngspice_refs.py --self-test
 
 For every example it translates netlist.json into deck.cir, runs `ngspice -b`
 on it, and writes the operating point, or the transient waveforms, to
@@ -27,11 +26,11 @@ Newton iteration, and `--check` exits the same way. The message names the
 example and ngspice's lines. A transient deck with an inductor or a relay takes
 reltol=1e-5, a breakpoint source per corner held to the stop, and a step cap of
 stop/60000, and the script exits when ngspice has no point at one of the
-netlist's corners. `--self-test` checks the skip paths, the source deck lines,
-the inductor and relay deck lines, the corner check, the contact edges, the bounce test vectors, the VCD
-reader and its summary, the bare flyback summary, and that refusal. The refusal case runs ngspice. The
-rest do not. Without ngspice-42 on PATH, `--self-test` prints one failed case
-and exits 1. A fixture directory that contains `rows-skipped` keeps the collector
+netlist's corners. `packages/engine/scripts/tests/test_ngspice_refs.py` checks the skip paths,
+the source deck lines, the inductor and relay deck lines, the corner check, the contact edges,
+the bounce test vectors, the VCD reader and its summary, the bare flyback summary, and that
+refusal. The regulator deck and the refusal cases run ngspice. The rest do not. Without
+ngspice-42 on PATH, those cases fail. A fixture directory that contains `rows-skipped` keeps the collector
 peak, the collector minimum and the release edge. `p-relay-npn-bare` is that
 fixture. Its rows are not stored. A fixture without that file keeps its rows.
 """
@@ -162,10 +161,6 @@ class RegulatorGround:
 
 
 def main(argv):
-    if "--self-test" in argv:
-        from ngspice_self_test import self_test
-
-        return self_test(sys.modules[__name__])
     check = "--check" in argv
     targets = [Path(a) for a in argv if a != "--check"]
     if not targets:
