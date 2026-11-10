@@ -3,23 +3,22 @@
 //! picks. The circuit sees only its drive image, one `Drive` per output pin. `docs/engine/engine.md`,
 //! Active chips, holds the loop's protocol.
 
-pub(crate) mod avr;
-pub(crate) mod cst816;
-pub(crate) mod esp32s3;
+use crate::device::Touch;
+use crate::netlist::{NetId, PartId};
+
 pub(crate) mod i2c;
-pub(crate) mod pulses;
-pub(crate) mod replay;
 #[cfg(test)]
 pub(crate) mod script;
-pub mod st77916;
-pub(crate) mod ws2812;
+
+use crate::device::{cst816, pulses_replay, spi_replay, st77916, ws2812};
+use crate::mcu::{avr, esp32s3};
 
 use crate::diagnostic::{Diagnostic, ProtocolRule};
 use crate::display::Rectangle;
 use crate::i2c::{I2cPhase, I2cRow};
 use crate::link::{LinkRow, Record, RecordKind};
 use crate::name::{Name, Ref};
-use crate::netlist::{NetId, PartId, Touch};
+
 use crate::serial::SerialByte;
 use crate::time::Time;
 
@@ -157,8 +156,8 @@ pub(crate) struct Stop {
 #[derive(Debug)]
 pub(crate) enum Core {
     Avr(Box<avr::Core>),
-    SpiReplay(replay::Core),
-    PulsesReplay(pulses::Core),
+    SpiReplay(spi_replay::Core),
+    PulsesReplay(pulses_replay::Core),
     St77916(Box<st77916::Core>),
     Cst816(Box<cst816::Core>),
     Esp32s3(Box<esp32s3::Core>),
@@ -374,8 +373,8 @@ pub(crate) struct Phase {
 pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
     match kind {
         Active::Atmega328p(mcu) => avr::chip(part, mcu),
-        Active::SpiReplay(replay) => replay::chip(part, replay),
-        Active::PulsesReplay(replay) => pulses::chip(part, replay),
+        Active::SpiReplay(replay) => spi_replay::chip(part, replay),
+        Active::PulsesReplay(replay) => pulses_replay::chip(part, replay),
         Active::St77916(panel) => st77916::chip(part, panel),
         Active::Cst816(dev) => cst816::chip(part, dev),
         Active::Esp32s3(mcu) => esp32s3::chip(part, mcu),
@@ -1113,7 +1112,7 @@ impl Actives {
 }
 
 /// The netlist part of an `esp32s3` chip.
-fn esp32s3_of<'c>(circuit: &'c Circuit, chip: &Chip) -> &'c crate::netlist::Esp32s3 {
+fn esp32s3_of<'c>(circuit: &'c Circuit, chip: &Chip) -> &'c crate::mcu::Esp32s3 {
     let part = chip.part.expect("an esp32s3 is a part");
     match &circuit.netlist.part(part).model {
         crate::netlist::Model::Chip(crate::netlist::Chip::Esp32s3(mcu)) => mcu,

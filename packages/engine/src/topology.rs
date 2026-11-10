@@ -1,6 +1,7 @@
+use crate::netlist::Netlist;
+
 use crate::diagnostic::Diagnostic;
 use crate::name::Ref;
-use crate::netlist::Netlist;
 
 use crate::element;
 

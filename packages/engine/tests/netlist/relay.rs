@@ -1,5 +1,6 @@
-use orbe_engine::name::Quantity;
 use orbe_engine::netlist::{self, Model};
+
+use orbe_engine::name::Quantity;
 
 const FIELDS: [(&str, &str, &str); 6] = [
     ("inductance", "H", "0.505"),

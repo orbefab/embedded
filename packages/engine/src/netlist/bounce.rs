@@ -86,8 +86,9 @@ fn stream(seed: u64, name: &Name, index: u64) -> SplitMix64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::netlist::{Contact, IntValue, Source};
+
+    use super::*;
 
     #[test]
     fn the_generators_match_the_reference_vectors() {

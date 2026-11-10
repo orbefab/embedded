@@ -1,20 +1,33 @@
-//! The chip seam: each question the loop asks a chip. `kind` alone says whether a netlist chip
-//! is passive or active, and every `Chip` answers `unknowns` and `dc_paths` here. A passive
-//! kind adds a `Passive` variant, a `chip/<kind>.rs`, an arm in `passive`, and an arm in each
-//! function that takes `Passive`. An active kind adds an `Active` variant, its arm in
-//! `active::chip`, and an `active::Core` variant. A relay is a passive chip that is its own
-//! netlist kind, not a `Chip`, so it answers `unknowns` and `dc_paths` as an element.
+//! Behavioural models of packaged parts, and the questions the loop asks a `Chip`.
+//!
+//! A file in this directory is one packaged part. `ne555` is a `Chip`. `relay` and `regulator`
+//! are their own `Model` variants, so neither adds a `Passive` variant.
+//!
+//! This file is the dispatch. `kind` says whether a netlist `Chip` is passive or active, and
+//! every `Chip` answers `unknowns` and `dc_paths` here. A passive `Chip` adds a `Passive`
+//! variant, a `chip/<kind>.rs`, an arm in `passive`, and an arm in each function that takes
+//! `Passive`. An active kind adds an `Active` variant, its arm in `active::chip`, and an
+//! `active::Core` variant. Most of those kinds live in `device/` and `mcu/`. The relay answers
+//! `unknowns` and `dc_paths` as an element.
 
-mod ne555;
-mod relay;
+use crate::device::{Cst816, PulsesReplay, SpiReplay, St77916, Ws2812};
+use crate::mcu::{Atmega328p, Esp32s3};
+use crate::netlist::PartId;
+
+use crate::netlist::Chip;
+use crate::netlist::Model;
+
+pub(crate) mod ne555;
+pub(crate) mod regulator;
+pub(crate) mod relay;
+
+pub use ne555::{Discharge, Ne555};
+pub use regulator::LinearRegulator;
+pub use relay::Relay;
 
 pub(crate) use relay::coil as relay_coil;
 
 use crate::logic::Level;
-use crate::netlist::{
-    Atmega328p, Chip, Cst816, Esp32s3, Model, Ne555, PartId, PulsesReplay, Relay, SpiReplay,
-    St77916, Ws2812,
-};
 
 use crate::mna::{Layout, Stamp, Unknowns};
 use crate::watch::Watch;
@@ -168,12 +181,12 @@ pub(crate) fn levels(chip: Passive<'_>, state: &State, watched: &[bool]) -> Vec<
 pub(crate) fn dc_paths(chip: &Chip) -> &'static [(usize, usize)] {
     match chip {
         Chip::Ne555(_) => &ne555::DC_PATHS,
-        Chip::Atmega328p(_) => &crate::active::avr::DC_PATHS,
-        Chip::SpiReplay(_) => &crate::active::replay::DC_PATHS,
-        Chip::St77916(_) => &crate::active::st77916::DC_PATHS,
-        Chip::Cst816(_) => &crate::active::cst816::DC_PATHS,
-        Chip::Esp32s3(mcu) => crate::active::esp32s3::dc_paths(mcu),
-        Chip::Ws2812(_) => &crate::active::ws2812::DC_PATHS,
-        Chip::PulsesReplay(_) => &crate::active::pulses::DC_PATHS,
+        Chip::Atmega328p(_) => &crate::mcu::avr::DC_PATHS,
+        Chip::SpiReplay(_) => &crate::device::spi_replay::DC_PATHS,
+        Chip::St77916(_) => &crate::device::st77916::DC_PATHS,
+        Chip::Cst816(_) => &crate::device::cst816::DC_PATHS,
+        Chip::Esp32s3(mcu) => crate::mcu::esp32s3::dc_paths(mcu),
+        Chip::Ws2812(_) => &crate::device::ws2812::DC_PATHS,
+        Chip::PulsesReplay(_) => &crate::device::pulses_replay::DC_PATHS,
     }
 }

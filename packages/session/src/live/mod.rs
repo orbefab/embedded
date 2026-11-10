@@ -7,6 +7,8 @@
 //! from S to E lists every edge in [S, E] once. `--until` first reads its condition as `get`
 //! would at S, and a pin's edge at t that meets it ends the step at t + 1 ps.
 
+use orbe_engine::netlist::{Analysis, Contact, RatingKind};
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
 use std::path::Path;
@@ -14,7 +16,7 @@ use std::path::Path;
 use orbe_engine::diagnostic::{Diagnostic as EngineDiagnostic, Excursion};
 use orbe_engine::logic::Level as EngineLevel;
 use orbe_engine::name::{Name, Quantity, Ref as EngineRef};
-use orbe_engine::netlist::{Analysis, Contact, RatingKind};
+
 use orbe_engine::{EdgeCursor, Input, Probe, Refused, Rejected, Session, Setting, Status};
 use orbe_scene::{Code as SceneCode, Files, RefMap, View};
 

@@ -1,6 +1,16 @@
-use crate::netlist::Capacitor;
+use crate::diagnostic::Diagnostic;
+use crate::name::{Name, Ref};
+use crate::netlist::Model;
+use crate::netlist::NetId;
+use crate::netlist::Value;
+use crate::netlist::json::PinMap;
+use crate::netlist::json::WireValue;
+use crate::netlist::json::resolve_pins;
+use crate::netlist::json::resolve_value;
+use serde::Deserialize;
+use std::collections::BTreeMap;
 
-use super::StoreEnd;
+use crate::element::StoreEnd;
 use crate::mna::{Probe, Stamp};
 use crate::newton::{History, Method, Store};
 
@@ -11,7 +21,7 @@ use crate::newton::{History, Method, Store};
 const HOLD: f64 = 1e-15;
 
 /// The element's only capacitor is branch 0.
-pub(super) fn stamp(capacitor: &Capacitor, stamp: &mut Stamp<'_>) {
+pub(crate) fn stamp(capacitor: &Capacitor, stamp: &mut Stamp<'_>) {
     let initial = capacitor.initial.as_ref().map(|initial| initial.si.get());
     stamp_capacitor(
         stamp,
@@ -71,12 +81,14 @@ fn companion(capacitance: f64, method: Method, h: f64, v0: f64, i0: f64) -> (f64
     }
 }
 
-pub(super) fn current(probe: &Probe<'_>) -> f64 {
+pub(crate) fn current(probe: &Probe<'_>) -> f64 {
     probe.branch(0)
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::netlist::{self};
+
     use super::*;
 
     #[test]
@@ -102,7 +114,6 @@ mod tests {
     #[test]
     fn a_step_stiffens_the_charge_index_and_not_the_part_index() {
         use crate::name::Name;
-        use crate::netlist::{self};
 
         use crate::mna::{Solution, System};
         use crate::newton::{ChargeIndex, Circuit, Conditions, Integration, Iterate, Store};
@@ -147,7 +158,7 @@ mod tests {
             let mut system = System::new(&circuit.layout);
             system.reset(&circuit.layout, conditions.gmin);
             for (id, part) in circuit.netlist.parts() {
-                super::super::stamp(
+                crate::element::stamp(
                     &part.model,
                     &mut Stamp::new(&mut system, &circuit.layout, id, &iterate, &conditions),
                 );
@@ -173,5 +184,61 @@ mod tests {
         );
         assert!((by_part - trapezoidal).abs() < 1e-12, "{by_part}");
         assert!((backward - trapezoidal).abs() > 1e-4);
+    }
+}
+
+/// An ideal capacitor.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Capacitor {
+    /// Nets of pins `a`, `b`.
+    pub pins: [NetId; 2],
+    /// Farad, greater than 0.
+    pub capacitance: Value,
+    /// Volt, any finite value. The operating point holds `V(a) - V(b)` here and solves the
+    /// current through it. `None` is an explicit `"initial": null`, open at the operating point.
+    pub initial: Option<Value>,
+}
+
+impl Capacitor {
+    pub const PINS: [&'static str; 2] = ["a", "b"];
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WireCapacitor {
+    pub(crate) name: String,
+    pins: PinMap,
+    capacitance: WireValue,
+    #[serde(deserialize_with = "Option::deserialize")]
+    initial: Option<WireValue>,
+}
+
+pub(crate) fn resolve_capacitor(
+    name: &Name,
+    part_ref: &Ref,
+    wire: WireCapacitor,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Model> {
+    let WireCapacitor {
+        pins,
+        capacitance,
+        initial,
+        ..
+    } = wire;
+
+    let pins = resolve_pins(name, Capacitor::PINS, &pins.0, nets, out);
+    let capacitance = resolve_value(part_ref, "capacitance", "F", true, capacitance, out);
+    let initial = match initial {
+        None => Some(None),
+        Some(initial) => resolve_value(part_ref, "initial", "V", false, initial, out).map(Some),
+    };
+    match (pins, capacitance, initial) {
+        (Some(pins), Some(capacitance), Some(initial)) => Some(Model::Capacitor(Capacitor {
+            pins,
+            capacitance,
+            initial,
+        })),
+        _ => None,
     }
 }

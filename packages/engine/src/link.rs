@@ -14,13 +14,15 @@
 //! `u64`. A `duty` row's `phases` is
 //! `<duty>/<steps>@<hz>`. Every other cell is empty.
 
+use crate::netlist::NetId;
+
 use std::fmt::Write;
 use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
 
 use crate::name::Name;
-use crate::netlist::NetId;
+
 use crate::time::Time;
 
 /// One record a chip's core made. `end` is a stop of its sender, where every chip whose record

@@ -10,20 +10,28 @@
 //! CS is released or when RST goes low. A register command runs when it closes. A pixel write
 //! puts each pixel in the frame memory as it arrives and adds a rectangle row when it closes.
 
-mod glass;
-
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::diagnostic::ProtocolRule;
+use serde::Deserialize;
+
+use crate::active::{Chip, Drive, Output, SpiTarget, Stage, Takes};
+use crate::diagnostic::{Diagnostic, ProtocolRule};
 use crate::display::{Brightness, Flags, Panel, RectangleHash};
 use crate::link::{Cs, Duty, Lanes, LinkRow, RecordKind, Spi};
-use crate::netlist::{NetId, PartId, St77916, Value};
-use crate::time::Time;
-
-use super::{Chip, Drive, Output, SpiTarget, Stage, Takes};
 use crate::mna::Node;
+use crate::name::{Name, Ref};
+use crate::netlist::NetId;
+use crate::netlist::PartId;
+use crate::netlist::Threshold;
+use crate::netlist::Value;
+use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
+use crate::netlist::json::{PinMap, resolve_pins};
+use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
+use crate::time::Time;
 use crate::watch::{Signal, Watch};
+
+mod glass;
 
 pub use glass::glass;
 
@@ -124,7 +132,7 @@ pub(crate) fn chip(part: PartId, panel: &St77916) -> Chip {
             duty: Some(pins[BLK]),
             pulses: None,
         },
-        core: super::Core::St77916(Box::new(Core::new(
+        core: crate::active::Core::St77916(Box::new(Core::new(
             [D0, D0 + 1, D0 + 2, D0 + 3].map(|k| pins[k]),
         ))),
     }
@@ -1235,4 +1243,52 @@ mod tests {
             [(ProtocolRule::Command, Time::from_ps(2))]
         );
     }
+}
+
+/// A 360 by 360 QSPI panel controller, an active chip with no clock of its own. It takes the
+/// `Spi` records on its `CS` and `SCLK` nets and the `Duty` records on `BLK`. It reads `RST`
+/// through `input_threshold`, fractions of its supply, and drives `TE` low through `output`
+/// from `VCC` and into `GND` for the whole run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct St77916 {
+    pub pins: [NetId; 11],
+    pub output: OutputStage,
+    pub input_threshold: Threshold,
+}
+
+impl St77916 {
+    pub const PINS: [&'static str; 11] = [
+        "VCC", "GND", "CS", "SCLK", "D0", "D1", "D2", "D3", "RST", "TE", "BLK",
+    ];
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WireSt77916 {
+    pub(crate) name: String,
+    pins: PinMap,
+    output: WireOutputStage,
+    input_threshold: WireThreshold,
+}
+
+pub(crate) fn resolve_st77916(
+    name: &Name,
+    part_ref: &Ref,
+    wire: WireSt77916,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<St77916> {
+    let pins = resolve_pins(name, St77916::PINS, &wire.pins.0, nets, out);
+    let output = resolve_output_stage(part_ref, wire.output, out);
+    let input_threshold = resolve_threshold(
+        part_ref,
+        ["input_threshold.low", "input_threshold.high"],
+        wire.input_threshold,
+        out,
+    );
+    Some(St77916 {
+        pins: pins?,
+        output: output?,
+        input_threshold: input_threshold?,
+    })
 }

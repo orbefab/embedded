@@ -1,5 +1,7 @@
+use orbe_engine::mcu::Atmega328p;
+use orbe_engine::netlist::{self, Chip, Model, Netlist};
+
 use orbe_engine::diagnostic::Diagnostic;
-use orbe_engine::netlist::{self, Atmega328p, Chip, Model, Netlist};
 
 const PART: &str = include_str!("fixtures/atmega328p.json");
 

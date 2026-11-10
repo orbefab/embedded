@@ -13,6 +13,8 @@
 //! `{"op"}` for an operating point, and `{"end_ps", "op", "switches", "logic"?, "displays"?}`
 //! for a transient that solved t = 0, whether or not it reached its stop.
 
+use crate::netlist::{self, Edge, Netlist};
+
 mod replace;
 
 use std::collections::BTreeMap;
@@ -26,7 +28,7 @@ use crate::display::Observed;
 use crate::finite::Finite;
 use crate::logic::LogicSummary;
 use crate::name::Ref;
-use crate::netlist::{self, Edge, Netlist};
+
 use crate::time::Time;
 use crate::timestamp::Timestamp;
 use crate::trace::Trace;

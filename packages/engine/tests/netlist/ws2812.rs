@@ -1,8 +1,9 @@
 //! A `ws2812` count defaults to 13. A count from 0 to 65535 outside 1 to 1024 is rule `leds`,
 //! and any other number is `netlist.syntax`.
 
-use orbe_engine::diagnostic::{Diagnostic, ValueRule};
 use orbe_engine::netlist::{self, Chip, Model};
+
+use orbe_engine::diagnostic::{Diagnostic, ValueRule};
 
 fn chain(leds: &str) -> String {
     format!(

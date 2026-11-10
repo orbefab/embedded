@@ -1,6 +1,8 @@
+use crate::netlist::Netlist;
+
 use crate::diagnostic::{Diagnostic, Solve};
 use crate::finite::Finite;
-use crate::netlist::Netlist;
+
 use crate::run_folder::OpPoint;
 use crate::time::Time;
 
@@ -197,11 +199,12 @@ pub(crate) fn climb(
 
 #[cfg(test)]
 mod tests {
+    use crate::netlist::{self, Appended, Netlist};
+
     use std::path::PathBuf;
 
     use crate::finite::Finite;
     use crate::name::Name;
-    use crate::netlist::{self, Appended, Netlist};
 
     use super::*;
     use crate::mna::{SOLVES, Solution};

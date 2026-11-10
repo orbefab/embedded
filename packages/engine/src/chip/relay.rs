@@ -1,8 +1,22 @@
 //! A relay as its coil and an SPDT contact that follows the coil current with hysteresis. The
 //! contact moves at the located crossing, with no armature travel and no bounce.
 
+use crate::diagnostic::Diagnostic;
+use crate::diagnostic::ValueRule;
+use crate::name::Name;
+use crate::name::Ref;
+use crate::netlist::Contact;
+use crate::netlist::NetId;
+use crate::netlist::Value;
+use crate::netlist::json::AMPERE;
+use crate::netlist::json::PinMap;
+use crate::netlist::json::WireValue;
+use crate::netlist::json::resolve_pins;
+use crate::netlist::json::resolve_value;
+use serde::Deserialize;
+use std::collections::BTreeMap;
+
 use crate::logic::Level;
-use crate::netlist::{Contact, Relay};
 
 use crate::element::{self, OwnedInductor};
 use crate::mna::{Node, Stamp};
@@ -76,4 +90,87 @@ pub(crate) fn react(levels: &[bool]) -> State {
 
 pub(crate) fn levels(state: State) -> [Level; 1] {
     [Level::from_bool(state.contact == Contact::Closed)]
+}
+
+/// A coil and an SPDT contact. The coil is `coil_a` through `coil_resistance`, then
+/// `inductance` to `coil_b`, as an `Inductor`. `com` meets `no` through `on_resistance` while
+/// the contact is closed, and `nc` while it is open. Each other pair takes `off_resistance`. The
+/// contact closes when the coil current's magnitude rises above `pull_in_current` and opens when
+/// it falls to `drop_out_current` or below.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Relay {
+    /// Nets of pins `coil_a`, `coil_b`, `com`, `no`, `nc`.
+    pub pins: [NetId; 5],
+    /// Henry, greater than 0.
+    pub inductance: Value,
+    /// Ohm, greater than 0.
+    pub coil_resistance: Value,
+    /// Ampere, greater than 0 and above `drop_out_current`.
+    pub pull_in_current: Value,
+    /// Ampere, greater than 0.
+    pub drop_out_current: Value,
+    /// Ohm, greater than 0.
+    pub on_resistance: Value,
+    /// Ohm, greater than 0.
+    pub off_resistance: Value,
+}
+
+impl Relay {
+    pub const PINS: [&'static str; 5] = ["coil_a", "coil_b", "com", "no", "nc"];
+    pub const COIL_A: usize = 0;
+    pub const COIL_B: usize = 1;
+    pub const COM: usize = 2;
+    pub const NO: usize = 3;
+    pub const NC: usize = 4;
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WireRelay {
+    pub(crate) name: String,
+    pins: PinMap,
+    inductance: WireValue,
+    coil_resistance: WireValue,
+    pull_in_current: WireValue,
+    drop_out_current: WireValue,
+    on_resistance: WireValue,
+    off_resistance: WireValue,
+}
+
+pub(crate) fn resolve_relay(
+    name: &Name,
+    part_ref: &Ref,
+    wire: WireRelay,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Relay> {
+    let pins = resolve_pins(name, Relay::PINS, &wire.pins.0, nets, out);
+    let mut positive =
+        |field: &'static str, unit, value| resolve_value(part_ref, field, unit, true, value, out);
+    let inductance = positive("inductance", "H", wire.inductance);
+    let coil_resistance = positive("coil_resistance", "ohm", wire.coil_resistance);
+    let pull_in_current = positive("pull_in_current", AMPERE, wire.pull_in_current);
+    let drop_out_current = positive("drop_out_current", AMPERE, wire.drop_out_current);
+    let on_resistance = positive("on_resistance", "ohm", wire.on_resistance);
+    let off_resistance = positive("off_resistance", "ohm", wire.off_resistance);
+    if let (Some(pull), Some(drop)) = (&pull_in_current, &drop_out_current)
+        && drop.si.get() >= pull.si.get()
+    {
+        out.push(Diagnostic::NetlistValue {
+            part: part_ref.clone(),
+            field: "drop_out_current".into(),
+            value: drop.si.get(),
+            rule: ValueRule::Hysteresis,
+        });
+        return None;
+    }
+    Some(Relay {
+        pins: pins?,
+        inductance: inductance?,
+        coil_resistance: coil_resistance?,
+        pull_in_current: pull_in_current?,
+        drop_out_current: drop_out_current?,
+        on_resistance: on_resistance?,
+        off_resistance: off_resistance?,
+    })
 }

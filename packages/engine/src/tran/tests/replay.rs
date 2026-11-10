@@ -1,6 +1,8 @@
+use crate::netlist::{Baud, Contact, Frame};
+
 use crate::logic::{Change, Level};
 use crate::name::Name;
-use crate::netlist::{Baud, Contact, Frame};
+
 use crate::run_folder::RunFolder;
 use crate::serial::SerialByte;
 use crate::timestamp::Timestamp;

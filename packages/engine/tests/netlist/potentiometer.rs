@@ -1,7 +1,9 @@
+use orbe_engine::netlist::{self, Model};
+
 use crate::common;
 
 use common::errors;
-use orbe_engine::netlist::{self, Model};
+
 use orbe_engine::time::Time;
 
 fn document(body: &str) -> String {

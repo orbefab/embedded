@@ -1,10 +1,12 @@
+use crate::netlist::MIN_GAP_PS;
+
 use std::borrow::Cow;
 
 use serde::{Serialize, Serializer};
 
 use crate::blob::{Role, Sha256, Source};
 use crate::name::{Name, NameError, Ref};
-use crate::netlist::MIN_GAP_PS;
+
 use crate::time::Time;
 
 /// `Error` means the engine has no trustworthy result.

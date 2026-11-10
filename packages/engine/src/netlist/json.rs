@@ -5,36 +5,18 @@ use std::fmt;
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
-mod atmega328p;
-mod cst816;
-mod esp32s3;
-mod potentiometer;
-mod pulses_replay;
-mod spi_replay;
-mod st77916;
-mod waveform;
-mod ws2812;
+pub(crate) mod threshold;
+pub(crate) mod waveform;
 
 use super::{
-    Analysis, Basis, Bjt, Bounce, BreakdownFault, Capacitor, Chip, Contact, CurrentSource,
-    Discharge, Edge, Event, Inductor, IntValue, Junction, LinearRegulator, MIN_GAP_PS, Model,
-    Mosfet, Ne555, NetId, Netlist, OutputStage, Part, Relay, Resistor, Schedule, Source, Switch,
-    Transient, Value, VoltageSource, Zener, bounce, breakdown_scale, junction_scale,
+    Analysis, Basis, Chip, Event, IntValue, MIN_GAP_PS, Model, NetId, Netlist, Part, Source,
+    Transient, Value,
 };
 use crate::blob::{Blobs, Sha256};
 use crate::diagnostic::{AnalysisRule, Diagnostic, ScheduleRule, ValueRule};
 use crate::finite::Finite;
 use crate::name::{Name, NameError, Ref};
 use crate::time::Time;
-use atmega328p::{WireAtmega328p, resolve_atmega328p};
-use cst816::{WireCst816, resolve_cst816};
-use esp32s3::{WireEsp32s3, resolve_esp32s3};
-use pulses_replay::{WirePulsesReplay, resolve_pulses_replay};
-use spi_replay::{WireSpiReplay, resolve_spi_replay};
-use st77916::{WireSt77916, resolve_st77916};
-use waveform::{CURRENT, VOLTAGE, WireWaveform, resolve_waveform};
-use ws2812::{WireWs2812, resolve_ws2812};
-
 pub(crate) use waveform::{AMPERE, VOLT};
 pub(crate) const FRACTION_UNIT: &str = "1";
 
@@ -76,233 +58,51 @@ struct WireTransient {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum WirePart {
-    Resistor {
-        name: String,
-        pins: PinMap,
-        resistance: WireValue,
-        ratings: WireResistorRatings,
-    },
-    Potentiometer {
-        name: String,
-        pins: PinMap,
-        resistance: WireValue,
-        position: waveform::WirePosition,
-    },
-    VoltageSource {
-        name: String,
-        pins: PinMap,
-        voltage: WireWaveform,
-    },
-    CurrentSource {
-        name: String,
-        pins: PinMap,
-        current: WireWaveform,
-    },
-    Diode(WireJunction),
-    Led(WireJunction),
-    Zener(Box<WireZener>),
-    LinearRegulator(Box<WireLinearRegulator>),
-    Npn(Box<WireBjt>),
-    Pnp(Box<WireBjt>),
-    Nmos(Box<WireMosfet>),
-    Capacitor {
-        name: String,
-        pins: PinMap,
-        capacitance: WireValue,
-        // Required but nullable, like the ratings below.
-        #[serde(deserialize_with = "Option::deserialize")]
-        initial: Option<WireValue>,
-    },
-    Inductor {
-        name: String,
-        pins: PinMap,
-        inductance: WireValue,
-        series_resistance: WireValue,
-    },
-    Relay(Box<WireRelay>),
-    Switch(WireSwitch),
-    Ne555(Box<WireNe555>),
-    Atmega328p(Box<WireAtmega328p>),
-    SpiReplay(Box<WireSpiReplay>),
-    St77916(Box<WireSt77916>),
-    Cst816(Box<WireCst816>),
-    Esp32s3(Box<WireEsp32s3>),
-    Ws2812(Box<WireWs2812>),
-    PulsesReplay(Box<WirePulsesReplay>),
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WireRelay {
-    name: String,
-    pins: PinMap,
-    inductance: WireValue,
-    coil_resistance: WireValue,
-    pull_in_current: WireValue,
-    drop_out_current: WireValue,
-    on_resistance: WireValue,
-    off_resistance: WireValue,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WireNe555 {
-    name: String,
-    pins: PinMap,
-    ladder_resistance: WireValue,
-    reset_threshold: WireValue,
-    discharge: WireDischarge,
-    supply_resistance: WireValue,
-    output: WireOutputStage,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WireDischarge {
-    on_resistance: WireValue,
-    off_resistance: WireValue,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WireOutputStage {
-    high_drop: WireValue,
-    high_resistance: WireValue,
-    low_drop: WireValue,
-    low_resistance: WireValue,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WireSwitch {
-    name: String,
-    pins: PinMap,
-    on_resistance: WireValue,
-    off_resistance: WireValue,
-    initial: Contact,
-    events: Vec<WireEvent>,
-    #[serde(deserialize_with = "Option::deserialize")]
-    bounce: Option<WireBounce>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WireEvent {
-    t_ps: u64,
-    state: Contact,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WireBounce {
-    window: WireInt<u64>,
-    max_bounces: WireInt<u8>,
+    Resistor(crate::passive::resistor::WireResistor),
+    Potentiometer(crate::passive::potentiometer::WirePotentiometer),
+    VoltageSource(crate::passive::voltage_source::WireVoltageSource),
+    CurrentSource(crate::passive::current_source::WireCurrentSource),
+    Diode(crate::semiconductor::junction::WireJunction),
+    Led(crate::semiconductor::junction::WireJunction),
+    Zener(Box<crate::semiconductor::zener::WireZener>),
+    LinearRegulator(Box<crate::chip::regulator::WireLinearRegulator>),
+    Npn(Box<crate::semiconductor::transistor::WireBjt>),
+    Pnp(Box<crate::semiconductor::transistor::WireBjt>),
+    Nmos(Box<crate::semiconductor::transistor::WireMosfet>),
+    Capacitor(crate::passive::capacitor::WireCapacitor),
+    Inductor(crate::passive::inductor::WireInductor),
+    Relay(Box<crate::chip::relay::WireRelay>),
+    Switch(crate::passive::switch::WireSwitch),
+    Ne555(Box<crate::chip::ne555::WireNe555>),
+    Atmega328p(Box<crate::mcu::avr::WireAtmega328p>),
+    SpiReplay(Box<crate::device::spi_replay::WireSpiReplay>),
+    St77916(Box<crate::device::st77916::WireSt77916>),
+    Cst816(Box<crate::device::cst816::WireCst816>),
+    Esp32s3(Box<crate::mcu::esp32s3::WireEsp32s3>),
+    Ws2812(Box<crate::device::ws2812::WireWs2812>),
+    PulsesReplay(Box<crate::device::pulses_replay::WirePulsesReplay>),
 }
 
 /// `value` must be a JSON integer in `T`'s range. Anything else is `netlist.syntax`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct WireInt<T> {
-    value: T,
-    unit: String,
-    source: WireSource,
+pub(crate) struct WireInt<T> {
+    pub(crate) value: T,
+    pub(crate) unit: String,
+    pub(crate) source: WireSource,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct WireJunction {
-    name: String,
-    pins: PinMap,
-    saturation_current: WireValue,
-    emission_coefficient: WireValue,
-    series_resistance: WireValue,
-    ratings: WireJunctionRatings,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WireLinearRegulator {
-    name: String,
-    pins: PinMap,
-    output_voltage: WireValue,
-    line_regulation: WireValue,
-    output_resistance: WireValue,
-    dropout_voltage: WireValue,
-    dropout_resistance: WireValue,
-    current_limit: WireValue,
-    quiescent_current: WireValue,
-    ground_current_ratio: WireValue,
-    ratings: WireJunctionRatings,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WireZener {
-    name: String,
-    pins: PinMap,
-    saturation_current: WireValue,
-    emission_coefficient: WireValue,
-    series_resistance: WireValue,
-    zener_voltage: WireValue,
-    zener_current: WireValue,
-    zener_impedance: WireValue,
-    breakdown_resistance: WireValue,
-    ratings: WireJunctionRatings,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WireBjt {
-    name: String,
-    pins: PinMap,
-    saturation_current: WireValue,
-    forward_beta: WireValue,
-    reverse_beta: WireValue,
-    forward_emission: WireValue,
-    reverse_emission: WireValue,
-    early_voltage: WireValue,
-    base_resistance: WireValue,
-    collector_resistance: WireValue,
-    emitter_resistance: WireValue,
-    base_emitter_capacitance: WireValue,
-    base_collector_capacitance: WireValue,
-    ratings: WireJunctionRatings,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WireMosfet {
-    name: String,
-    pins: PinMap,
-    transconductance_parameter: WireValue,
-    threshold_voltage: WireValue,
-    channel_length_modulation: WireValue,
-    gate_source_capacitance: WireValue,
-    gate_drain_capacitance: WireValue,
-    drain_source_capacitance: WireValue,
-    ratings: WireJunctionRatings,
-}
-
-// `Option::deserialize` makes each key required while its value may be `null`.
-// Plain `Option` would read a missing key as `None`.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WireResistorRatings {
+pub(crate) struct WireJunctionRatings {
     #[serde(deserialize_with = "Option::deserialize")]
-    power: Option<WireValue>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WireJunctionRatings {
+    pub(crate) current: Option<WireValue>,
     #[serde(deserialize_with = "Option::deserialize")]
-    current: Option<WireValue>,
-    #[serde(deserialize_with = "Option::deserialize")]
-    power: Option<WireValue>,
+    pub(crate) power: Option<WireValue>,
 }
 
 /// Pin objects reject a repeated key. `BTreeMap` would keep the last one.
-struct PinMap(BTreeMap<String, String>);
+pub(crate) struct PinMap(pub(crate) BTreeMap<String, String>);
 
 impl<'de> Deserialize<'de> for PinMap {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -332,15 +132,15 @@ impl<'de> Visitor<'de> for PinMapVisitor {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct WireValue {
-    value: Finite,
-    unit: String,
-    source: WireSource,
+pub(crate) struct WireValue {
+    pub(crate) value: Finite,
+    pub(crate) unit: String,
+    pub(crate) source: WireSource,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-enum WireSource {
+pub(crate) enum WireSource {
     User,
     ClosedForm {
         note: String,
@@ -354,7 +154,7 @@ enum WireSource {
 
 /// A later version adds its own wire types here, and a lift into the domain types. Nothing
 /// past this function sees a version.
-pub(super) fn parse(json: &[u8], blobs: &Blobs) -> Result<Netlist, Vec<Diagnostic>> {
+pub(crate) fn parse(json: &[u8], blobs: &Blobs) -> Result<Netlist, Vec<Diagnostic>> {
     if let Some(found) = probe_version(json)
         && !super::VERSIONS.contains(&found)
     {
@@ -374,7 +174,7 @@ pub(super) fn parse(json: &[u8], blobs: &Blobs) -> Result<Netlist, Vec<Diagnosti
     resolve(wire, blobs)
 }
 
-pub(super) fn blob_names(json: &[u8]) -> Vec<Sha256> {
+pub(crate) fn blob_names(json: &[u8]) -> Vec<Sha256> {
     let Ok(wire) = serde_json::from_slice::<WireNetlist>(json) else {
         return Vec::new();
     };
@@ -387,7 +187,7 @@ pub(super) fn blob_names(json: &[u8]) -> Vec<Sha256> {
         .collect()
 }
 
-pub(super) fn probe_version(json: &[u8]) -> Option<u64> {
+pub(crate) fn probe_version(json: &[u8]) -> Option<u64> {
     let mut de = serde_json::Deserializer::from_slice(json);
     serde_path_to_error::deserialize::<_, VersionProbe>(&mut de)
         .ok()
@@ -563,27 +363,27 @@ fn resolve_part(
     out: &mut Vec<Diagnostic>,
 ) -> Option<Part> {
     let raw_name = match &part {
-        WirePart::Resistor { name, .. }
-        | WirePart::Potentiometer { name, .. }
-        | WirePart::VoltageSource { name, .. }
-        | WirePart::CurrentSource { name, .. }
-        | WirePart::Capacitor { name, .. }
-        | WirePart::Inductor { name, .. } => name,
-        WirePart::Diode(junction) | WirePart::Led(junction) => &junction.name,
-        WirePart::Zener(zener) => &zener.name,
-        WirePart::LinearRegulator(regulator) => &regulator.name,
-        WirePart::Npn(bjt) | WirePart::Pnp(bjt) => &bjt.name,
-        WirePart::Nmos(mosfet) => &mosfet.name,
-        WirePart::Relay(relay) => &relay.name,
-        WirePart::Switch(switch) => &switch.name,
-        WirePart::Ne555(chip) => &chip.name,
-        WirePart::Atmega328p(chip) => &chip.name,
-        WirePart::SpiReplay(chip) => &chip.name,
-        WirePart::St77916(chip) => &chip.name,
-        WirePart::Cst816(chip) => &chip.name,
-        WirePart::Esp32s3(chip) => &chip.name,
-        WirePart::Ws2812(chip) => &chip.name,
-        WirePart::PulsesReplay(chip) => &chip.name,
+        WirePart::Resistor(wire) => &wire.name,
+        WirePart::Potentiometer(wire) => &wire.name,
+        WirePart::VoltageSource(wire) => &wire.name,
+        WirePart::CurrentSource(wire) => &wire.name,
+        WirePart::Capacitor(wire) => &wire.name,
+        WirePart::Inductor(wire) => &wire.name,
+        WirePart::Diode(wire) | WirePart::Led(wire) => &wire.name,
+        WirePart::Zener(wire) => &wire.name,
+        WirePart::LinearRegulator(wire) => &wire.name,
+        WirePart::Npn(wire) | WirePart::Pnp(wire) => &wire.name,
+        WirePart::Nmos(wire) => &wire.name,
+        WirePart::Relay(wire) => &wire.name,
+        WirePart::Switch(wire) => &wire.name,
+        WirePart::Ne555(wire) => &wire.name,
+        WirePart::Atmega328p(wire) => &wire.name,
+        WirePart::SpiReplay(wire) => &wire.name,
+        WirePart::St77916(wire) => &wire.name,
+        WirePart::Cst816(wire) => &wire.name,
+        WirePart::Esp32s3(wire) => &wire.name,
+        WirePart::Ws2812(wire) => &wire.name,
+        WirePart::PulsesReplay(wire) => &wire.name,
     };
     let path = format!("parts[{index}].name");
     let name = match Name::new(raw_name) {
@@ -613,145 +413,91 @@ fn resolve_part(
     }
     let part_ref = Ref::Part(name.clone());
     let model = match part {
-        WirePart::Resistor {
-            pins,
-            resistance,
-            ratings,
-            ..
-        } => {
-            let pins = resolve_pins(&name, Resistor::PINS, &pins.0, nets, out);
-            let resistance = resolve_value(&part_ref, "resistance", "ohm", true, resistance, out);
-            let max_power = resolve_rating(&part_ref, "ratings.power", "W", ratings.power, out);
-            match (pins, resistance, max_power) {
-                (Some(pins), Some(resistance), Some(max_power)) => {
-                    Some(Model::Resistor(Resistor {
-                        pins,
-                        resistance,
-                        max_power,
-                    }))
-                }
-                _ => None,
-            }
+        WirePart::Resistor(wire) => {
+            crate::passive::resistor::resolve_resistor(&name, &part_ref, wire, nets, out)
         }
-        WirePart::Potentiometer {
-            pins,
-            resistance,
-            position,
-            ..
-        } => potentiometer::resolve_potentiometer(
-            &name, &part_ref, pins, resistance, position, nets, out,
+        WirePart::Potentiometer(wire) => {
+            crate::passive::potentiometer::resolve_potentiometer(&name, &part_ref, wire, nets, out)
+        }
+        WirePart::VoltageSource(wire) => crate::passive::voltage_source::resolve_voltage_source(
+            &name, &part_ref, wire, nets, out,
         ),
-        WirePart::VoltageSource { pins, voltage, .. } => {
-            let pins = resolve_pins(&name, VoltageSource::PINS, &pins.0, nets, out);
-            let voltage = resolve_waveform(&part_ref, &VOLTAGE, voltage, out);
-            match (pins, voltage) {
-                (Some(pins), Some(voltage)) => {
-                    Some(Model::VoltageSource(VoltageSource { pins, voltage }))
-                }
-                _ => None,
-            }
+        WirePart::CurrentSource(wire) => crate::passive::current_source::resolve_current_source(
+            &name, &part_ref, wire, nets, out,
+        ),
+        WirePart::Diode(wire) => {
+            crate::semiconductor::junction::resolve_junction(&name, &part_ref, wire, nets, out)
+                .map(Model::Diode)
         }
-        WirePart::CurrentSource { pins, current, .. } => {
-            let pins = resolve_pins(&name, CurrentSource::PINS, &pins.0, nets, out);
-            let current = resolve_waveform(&part_ref, &CURRENT, current, out);
-            match (pins, current) {
-                (Some(pins), Some(current)) => {
-                    Some(Model::CurrentSource(CurrentSource { pins, current }))
-                }
-                _ => None,
-            }
+        WirePart::Led(wire) => {
+            crate::semiconductor::junction::resolve_junction(&name, &part_ref, wire, nets, out)
+                .map(Model::Led)
         }
-        WirePart::Diode(junction) => {
-            resolve_junction(&name, &part_ref, junction, nets, out).map(Model::Diode)
+        WirePart::Zener(wire) => {
+            crate::semiconductor::zener::resolve_zener(&name, &part_ref, *wire, nets, out)
+                .map(Model::Zener)
         }
-        WirePart::Led(junction) => {
-            resolve_junction(&name, &part_ref, junction, nets, out).map(Model::Led)
+        WirePart::LinearRegulator(wire) => {
+            crate::chip::regulator::resolve_regulator(&name, &part_ref, *wire, nets, out)
+                .map(Model::LinearRegulator)
         }
-        WirePart::Zener(zener) => {
-            resolve_zener(&name, &part_ref, *zener, nets, out).map(Model::Zener)
+        WirePart::Npn(wire) => {
+            crate::semiconductor::transistor::resolve_bjt(&name, &part_ref, *wire, nets, out)
+                .map(Model::Npn)
         }
-        WirePart::LinearRegulator(regulator) => {
-            resolve_regulator(&name, &part_ref, *regulator, nets, out).map(Model::LinearRegulator)
+        WirePart::Pnp(wire) => {
+            crate::semiconductor::transistor::resolve_bjt(&name, &part_ref, *wire, nets, out)
+                .map(Model::Pnp)
         }
-        WirePart::Npn(bjt) => resolve_bjt(&name, &part_ref, *bjt, nets, out).map(Model::Npn),
-        WirePart::Pnp(bjt) => resolve_bjt(&name, &part_ref, *bjt, nets, out).map(Model::Pnp),
-        WirePart::Nmos(mosfet) => {
-            resolve_mosfet(&name, &part_ref, *mosfet, nets, out).map(Model::Nmos)
+        WirePart::Nmos(wire) => {
+            crate::semiconductor::transistor::resolve_mosfet(&name, &part_ref, *wire, nets, out)
+                .map(Model::Nmos)
         }
-        WirePart::Capacitor {
-            pins,
-            capacitance,
-            initial,
-            ..
-        } => {
-            let pins = resolve_pins(&name, Capacitor::PINS, &pins.0, nets, out);
-            let capacitance = resolve_value(&part_ref, "capacitance", "F", true, capacitance, out);
-            let initial = match initial {
-                None => Some(None),
-                Some(initial) => {
-                    resolve_value(&part_ref, "initial", "V", false, initial, out).map(Some)
-                }
-            };
-            match (pins, capacitance, initial) {
-                (Some(pins), Some(capacitance), Some(initial)) => {
-                    Some(Model::Capacitor(Capacitor {
-                        pins,
-                        capacitance,
-                        initial,
-                    }))
-                }
-                _ => None,
-            }
+        WirePart::Capacitor(wire) => {
+            crate::passive::capacitor::resolve_capacitor(&name, &part_ref, wire, nets, out)
         }
-        WirePart::Inductor {
-            pins,
-            inductance,
-            series_resistance,
-            ..
-        } => {
-            let pins = resolve_pins(&name, Inductor::PINS, &pins.0, nets, out);
-            let inductance = resolve_value(&part_ref, "inductance", "H", true, inductance, out);
-            let series_resistance = resolve_value(
-                &part_ref,
-                "series_resistance",
-                "ohm",
-                true,
-                series_resistance,
-                out,
-            );
-            match (pins, inductance, series_resistance) {
-                (Some(pins), Some(inductance), Some(series_resistance)) => {
-                    Some(Model::Inductor(Inductor {
-                        pins,
-                        inductance,
-                        series_resistance,
-                    }))
-                }
-                _ => None,
-            }
+        WirePart::Inductor(wire) => {
+            crate::passive::inductor::resolve_inductor(&name, &part_ref, wire, nets, out)
         }
-        WirePart::Relay(relay) => {
-            resolve_relay(&name, &part_ref, *relay, nets, out).map(Model::Relay)
+        WirePart::Relay(wire) => {
+            crate::chip::relay::resolve_relay(&name, &part_ref, *wire, nets, out).map(Model::Relay)
         }
-        WirePart::Switch(switch) => {
-            resolve_switch(seed, &name, &part_ref, switch, nets, out).map(Model::Switch)
+        WirePart::Switch(wire) => {
+            crate::passive::switch::resolve_switch(seed, &name, &part_ref, wire, nets, out)
+                .map(Model::Switch)
         }
-        WirePart::Ne555(chip) => resolve_ne555(&name, &part_ref, *chip, nets, out)
-            .map(|chip| Model::Chip(Chip::Ne555(Box::new(chip)))),
-        WirePart::Atmega328p(chip) => resolve_atmega328p(&name, &part_ref, *chip, nets, out)
-            .map(|chip| Model::Chip(Chip::Atmega328p(Box::new(chip)))),
-        WirePart::SpiReplay(chip) => resolve_spi_replay(&name, &part_ref, *chip, nets, out)
-            .map(|chip| Model::Chip(Chip::SpiReplay(Box::new(chip)))),
-        WirePart::St77916(chip) => resolve_st77916(&name, &part_ref, *chip, nets, out)
-            .map(|chip| Model::Chip(Chip::St77916(Box::new(chip)))),
-        WirePart::Cst816(chip) => resolve_cst816(&name, &part_ref, *chip, nets, out)
-            .map(|chip| Model::Chip(Chip::Cst816(Box::new(chip)))),
-        WirePart::Esp32s3(chip) => resolve_esp32s3(&name, &part_ref, *chip, nets, blobs, out)
-            .map(|chip| Model::Chip(Chip::Esp32s3(Box::new(chip)))),
-        WirePart::Ws2812(chip) => resolve_ws2812(&name, &part_ref, *chip, nets, out)
-            .map(|chip| Model::Chip(Chip::Ws2812(Box::new(chip)))),
-        WirePart::PulsesReplay(chip) => resolve_pulses_replay(&name, &part_ref, *chip, nets, out)
-            .map(|chip| Model::Chip(Chip::PulsesReplay(Box::new(chip)))),
+        WirePart::Ne555(wire) => {
+            crate::chip::ne555::resolve_ne555(&name, &part_ref, *wire, nets, out)
+                .map(|chip| Model::Chip(Chip::Ne555(Box::new(chip))))
+        }
+        WirePart::Atmega328p(wire) => {
+            crate::mcu::avr::resolve_atmega328p(&name, &part_ref, *wire, nets, out)
+                .map(|chip| Model::Chip(Chip::Atmega328p(Box::new(chip))))
+        }
+        WirePart::SpiReplay(wire) => {
+            crate::device::spi_replay::resolve_spi_replay(&name, &part_ref, *wire, nets, out)
+                .map(|chip| Model::Chip(Chip::SpiReplay(Box::new(chip))))
+        }
+        WirePart::St77916(wire) => {
+            crate::device::st77916::resolve_st77916(&name, &part_ref, *wire, nets, out)
+                .map(|chip| Model::Chip(Chip::St77916(Box::new(chip))))
+        }
+        WirePart::Cst816(wire) => {
+            crate::device::cst816::resolve_cst816(&name, &part_ref, *wire, nets, out)
+                .map(|chip| Model::Chip(Chip::Cst816(Box::new(chip))))
+        }
+        WirePart::Esp32s3(wire) => {
+            crate::mcu::esp32s3::resolve_esp32s3(&name, &part_ref, *wire, nets, blobs, out)
+                .map(|chip| Model::Chip(Chip::Esp32s3(Box::new(chip))))
+        }
+        WirePart::Ws2812(wire) => {
+            crate::device::ws2812::resolve_ws2812(&name, &part_ref, *wire, nets, out)
+                .map(|chip| Model::Chip(Chip::Ws2812(Box::new(chip))))
+        }
+        WirePart::PulsesReplay(wire) => {
+            crate::device::pulses_replay::resolve_pulses_replay(&name, &part_ref, *wire, nets, out)
+                .map(|chip| Model::Chip(Chip::PulsesReplay(Box::new(chip))))
+        }
     };
     if duplicate || reserved {
         None
@@ -760,218 +506,8 @@ fn resolve_part(
     }
 }
 
-fn resolve_junction(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireJunction,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Junction> {
-    let pins = resolve_pins(name, Junction::PINS, &wire.pins.0, nets, out);
-    let is = resolve_value(
-        part_ref,
-        "saturation_current",
-        "A",
-        true,
-        wire.saturation_current,
-        out,
-    );
-    let n = resolve_value(
-        part_ref,
-        "emission_coefficient",
-        "1",
-        true,
-        wire.emission_coefficient,
-        out,
-    );
-    let rs = resolve_value(
-        part_ref,
-        "series_resistance",
-        "ohm",
-        true,
-        wire.series_resistance,
-        out,
-    );
-    let ratings = wire.ratings;
-    let max_current = resolve_rating(part_ref, "ratings.current", "A", ratings.current, out);
-    let max_power = resolve_rating(part_ref, "ratings.power", "W", ratings.power, out);
-    if let (Some(is), Some(n)) = (&is, &n)
-        && let Err(fault) = junction_scale(n.si.get(), is.si.get())
-    {
-        out.push(Diagnostic::NetlistValue {
-            part: part_ref.clone(),
-            field: fault.field("emission_coefficient").into(),
-            value: fault.value(n.si.get(), is.si.get()),
-            rule: ValueRule::FiniteJunction,
-        });
-        return None;
-    }
-    Some(Junction {
-        pins: pins?,
-        saturation_current: is?,
-        emission_coefficient: n?,
-        series_resistance: rs?,
-        max_current: max_current?,
-        max_power: max_power?,
-    })
-}
-
-fn resolve_zener(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireZener,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Zener> {
-    let pins = resolve_pins(name, Junction::PINS, &wire.pins.0, nets, out);
-    let mut positive =
-        |field: &'static str, unit, value| resolve_value(part_ref, field, unit, true, value, out);
-    let is = positive("saturation_current", "A", wire.saturation_current);
-    let n = positive("emission_coefficient", "1", wire.emission_coefficient);
-    let rs = positive("series_resistance", "ohm", wire.series_resistance);
-    let vz = positive("zener_voltage", "V", wire.zener_voltage);
-    let izt = positive("zener_current", "A", wire.zener_current);
-    let zzt = positive("zener_impedance", "ohm", wire.zener_impedance);
-    let rb = positive("breakdown_resistance", "ohm", wire.breakdown_resistance);
-    let max_current = resolve_rating(part_ref, "ratings.current", "A", wire.ratings.current, out);
-    let max_power = resolve_rating(part_ref, "ratings.power", "W", wire.ratings.power, out);
-    let mut rejected = false;
-    let mut breakdown = None;
-    if let (Some(is), Some(n), Some(rs), Some(vz), Some(izt), Some(zzt), Some(rb)) =
-        (&is, &n, &rs, &vz, &izt, &zzt, &rb)
-    {
-        if let Err(fault) = junction_scale(n.si.get(), is.si.get()) {
-            rejected = true;
-            out.push(Diagnostic::NetlistValue {
-                part: part_ref.clone(),
-                field: fault.field("emission_coefficient").into(),
-                value: fault.value(n.si.get(), is.si.get()),
-                rule: ValueRule::FiniteJunction,
-            });
-        }
-        let series = rs.si.get() + rb.si.get();
-        let resistance_ok = zzt.si.get() > series;
-        let drop_ok = vz.si.get() > izt.si.get() * series;
-        if !resistance_ok {
-            rejected = true;
-            out.push(Diagnostic::NetlistValue {
-                part: part_ref.clone(),
-                field: "zener_impedance".into(),
-                value: zzt.si.get(),
-                rule: ValueRule::AboveResistance,
-            });
-        }
-        if !drop_ok {
-            rejected = true;
-            out.push(Diagnostic::NetlistValue {
-                part: part_ref.clone(),
-                field: "zener_voltage".into(),
-                value: vz.si.get(),
-                rule: ValueRule::AboveDrop,
-            });
-        }
-        if resistance_ok && drop_ok {
-            match breakdown_scale(
-                rs.si.get(),
-                rb.si.get(),
-                vz.si.get(),
-                izt.si.get(),
-                zzt.si.get(),
-            ) {
-                Ok(found) => breakdown = Some(found),
-                Err(fault) => {
-                    rejected = true;
-                    let value = match fault {
-                        BreakdownFault::Impedance => zzt.si.get(),
-                        BreakdownFault::Voltage => vz.si.get(),
-                    };
-                    out.push(Diagnostic::NetlistValue {
-                        part: part_ref.clone(),
-                        field: fault.field().into(),
-                        value,
-                        rule: ValueRule::FiniteJunction,
-                    });
-                }
-            }
-        }
-    }
-    if rejected {
-        return None;
-    }
-    Some(Zener {
-        pins: pins?,
-        saturation_current: is?,
-        emission_coefficient: n?,
-        series_resistance: rs?,
-        zener_voltage: vz?,
-        zener_current: izt?,
-        zener_impedance: zzt?,
-        breakdown_resistance: rb?,
-        breakdown: breakdown?,
-        max_current: max_current?,
-        max_power: max_power?,
-    })
-}
-
-fn resolve_regulator(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireLinearRegulator,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<LinearRegulator> {
-    let pins = resolve_pins(name, LinearRegulator::PINS, &wire.pins.0, nets, out);
-    let mut positive =
-        |field: &'static str, unit, value| resolve_value(part_ref, field, unit, true, value, out);
-    let output_voltage = positive("output_voltage", "V", wire.output_voltage);
-    let output_resistance = positive("output_resistance", "ohm", wire.output_resistance);
-    let dropout_voltage = positive("dropout_voltage", "V", wire.dropout_voltage);
-    let dropout_resistance = positive("dropout_resistance", "ohm", wire.dropout_resistance);
-    let current_limit = positive("current_limit", "A", wire.current_limit);
-    let line_regulation = bounded(
-        part_ref,
-        "line_regulation",
-        "1",
-        wire.line_regulation,
-        |number| (number < 0.0 || number >= 1.0).then_some(ValueRule::BelowOne),
-        out,
-    );
-    let quiescent_current = bounded(
-        part_ref,
-        "quiescent_current",
-        "A",
-        wire.quiescent_current,
-        |number| (number < 0.0).then_some(ValueRule::NonNegative),
-        out,
-    );
-    let ground_current_ratio = bounded(
-        part_ref,
-        "ground_current_ratio",
-        "1",
-        wire.ground_current_ratio,
-        |number| (number < 0.0).then_some(ValueRule::NonNegative),
-        out,
-    );
-    let ratings = wire.ratings;
-    let max_current = resolve_rating(part_ref, "ratings.current", "A", ratings.current, out);
-    let max_power = resolve_rating(part_ref, "ratings.power", "W", ratings.power, out);
-    Some(LinearRegulator {
-        pins: pins?,
-        output_voltage: output_voltage?,
-        line_regulation: line_regulation?,
-        output_resistance: output_resistance?,
-        dropout_voltage: dropout_voltage?,
-        dropout_resistance: dropout_resistance?,
-        current_limit: current_limit?,
-        quiescent_current: quiescent_current?,
-        ground_current_ratio: ground_current_ratio?,
-        max_current: max_current?,
-        max_power: max_power?,
-    })
-}
-
 /// A field that is not a positive reciprocal, checked by `rule` after its unit. Zero can be legal.
-fn bounded(
+pub(crate) fn bounded(
     part: &Ref,
     field: &'static str,
     unit: &'static str,
@@ -994,359 +530,7 @@ fn bounded(
     })
 }
 
-fn resolve_bjt(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireBjt,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Bjt> {
-    let pins = resolve_pins(name, Bjt::PINS, &wire.pins.0, nets, out);
-    let mut positive =
-        |field: &'static str, unit, value| resolve_value(part_ref, field, unit, true, value, out);
-    let is = positive("saturation_current", "A", wire.saturation_current);
-    let bf = positive("forward_beta", "1", wire.forward_beta);
-    let br = positive("reverse_beta", "1", wire.reverse_beta);
-    let nf = positive("forward_emission", "1", wire.forward_emission);
-    let nr = positive("reverse_emission", "1", wire.reverse_emission);
-    let vaf = positive("early_voltage", "V", wire.early_voltage);
-    let rb = positive("base_resistance", "ohm", wire.base_resistance);
-    let rc = positive("collector_resistance", "ohm", wire.collector_resistance);
-    let re = positive("emitter_resistance", "ohm", wire.emitter_resistance);
-    let cje = positive(
-        "base_emitter_capacitance",
-        "F",
-        wire.base_emitter_capacitance,
-    );
-    let cjc = positive(
-        "base_collector_capacitance",
-        "F",
-        wire.base_collector_capacitance,
-    );
-    let ratings = wire.ratings;
-    let max_current = resolve_rating(part_ref, "ratings.current", "A", ratings.current, out);
-    let max_power = resolve_rating(part_ref, "ratings.power", "W", ratings.power, out);
-    let mut faults = Vec::new();
-    if let Some(is) = &is {
-        for (field, n) in [("forward_emission", &nf), ("reverse_emission", &nr)] {
-            if let Some(n) = n
-                && let Err(fault) = junction_scale(n.si.get(), is.si.get())
-            {
-                let at = (fault.field(field), fault.value(n.si.get(), is.si.get()));
-                // Both junctions share `saturation_current`, which breaks the rule once.
-                if !faults.contains(&at) {
-                    faults.push(at);
-                }
-            }
-        }
-    }
-    let junctions = faults.is_empty();
-    for (field, value) in faults {
-        out.push(Diagnostic::NetlistValue {
-            part: part_ref.clone(),
-            field: field.into(),
-            value,
-            rule: ValueRule::FiniteJunction,
-        });
-    }
-    if !junctions {
-        return None;
-    }
-    Some(Bjt {
-        pins: pins?,
-        saturation_current: is?,
-        forward_beta: bf?,
-        reverse_beta: br?,
-        forward_emission: nf?,
-        reverse_emission: nr?,
-        early_voltage: vaf?,
-        base_resistance: rb?,
-        collector_resistance: rc?,
-        emitter_resistance: re?,
-        base_emitter_capacitance: cje?,
-        base_collector_capacitance: cjc?,
-        max_current: max_current?,
-        max_power: max_power?,
-    })
-}
-
-fn resolve_mosfet(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireMosfet,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Mosfet> {
-    let pins = resolve_pins(name, Mosfet::PINS, &wire.pins.0, nets, out);
-    let lambda_number = wire.channel_length_modulation.value.get();
-    let (kp, cgs, cgd, cds) = {
-        let mut positive = |field: &'static str, unit, value| {
-            resolve_value(part_ref, field, unit, true, value, out)
-        };
-        (
-            positive(
-                "transconductance_parameter",
-                "A/V^2",
-                wire.transconductance_parameter,
-            ),
-            positive("gate_source_capacitance", "F", wire.gate_source_capacitance),
-            positive("gate_drain_capacitance", "F", wire.gate_drain_capacitance),
-            positive(
-                "drain_source_capacitance",
-                "F",
-                wire.drain_source_capacitance,
-            ),
-        )
-    };
-    let vto = resolve_value(
-        part_ref,
-        "threshold_voltage",
-        "V",
-        false,
-        wire.threshold_voltage,
-        out,
-    );
-    let lambda = resolve_value(
-        part_ref,
-        "channel_length_modulation",
-        "1/V",
-        false,
-        wire.channel_length_modulation,
-        out,
-    )
-    .and_then(|value| {
-        if lambda_number < 0.0 {
-            out.push(Diagnostic::NetlistValue {
-                part: part_ref.clone(),
-                field: "channel_length_modulation".into(),
-                value: lambda_number,
-                rule: ValueRule::NonNegative,
-            });
-            None
-        } else {
-            Some(value)
-        }
-    });
-    let ratings = wire.ratings;
-    let max_current = resolve_rating(part_ref, "ratings.current", "A", ratings.current, out);
-    let max_power = resolve_rating(part_ref, "ratings.power", "W", ratings.power, out);
-    Some(Mosfet {
-        pins: pins?,
-        transconductance_parameter: kp?,
-        threshold_voltage: vto?,
-        channel_length_modulation: lambda?,
-        gate_source_capacitance: cgs?,
-        gate_drain_capacitance: cgd?,
-        drain_source_capacitance: cds?,
-        max_current: max_current?,
-        max_power: max_power?,
-    })
-}
-
-fn resolve_ne555(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireNe555,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Ne555> {
-    let ohm = |field, value, out: &mut Vec<Diagnostic>| {
-        resolve_value(part_ref, field, "ohm", true, value, out)
-    };
-    let pins = resolve_pins(name, Ne555::PINS, &wire.pins.0, nets, out);
-    let ladder = ohm("ladder_resistance", wire.ladder_resistance, out);
-    let reset = resolve_value(
-        part_ref,
-        "reset_threshold",
-        "V",
-        true,
-        wire.reset_threshold,
-        out,
-    );
-    let on = ohm("discharge.on_resistance", wire.discharge.on_resistance, out);
-    let off = ohm(
-        "discharge.off_resistance",
-        wire.discharge.off_resistance,
-        out,
-    );
-    let supply = ohm("supply_resistance", wire.supply_resistance, out);
-    let output = resolve_output_stage(part_ref, wire.output, out);
-    Some(Ne555 {
-        pins: pins?,
-        ladder_resistance: ladder?,
-        reset_threshold: reset?,
-        discharge: Discharge {
-            on_resistance: on?,
-            off_resistance: off?,
-        },
-        supply_resistance: supply?,
-        output: output?,
-    })
-}
-
-fn resolve_output_stage(
-    part_ref: &Ref,
-    wire: WireOutputStage,
-    out: &mut Vec<Diagnostic>,
-) -> Option<OutputStage> {
-    let ohm = |field, value, out: &mut Vec<Diagnostic>| {
-        resolve_value(part_ref, field, "ohm", true, value, out)
-    };
-    let drop = |field: &'static str, value: WireValue, out: &mut Vec<Diagnostic>| {
-        let volts = value.value.get();
-        let value = resolve_value(part_ref, field, "V", false, value, out)?;
-        if volts < 0.0 {
-            out.push(Diagnostic::NetlistValue {
-                part: part_ref.clone(),
-                field: field.into(),
-                value: volts,
-                rule: ValueRule::NonNegative,
-            });
-            return None;
-        }
-        Some(value)
-    };
-    let high_drop = drop("output.high_drop", wire.high_drop, out);
-    let high_resistance = ohm("output.high_resistance", wire.high_resistance, out);
-    let low_drop = drop("output.low_drop", wire.low_drop, out);
-    let low_resistance = ohm("output.low_resistance", wire.low_resistance, out);
-    Some(OutputStage {
-        high_drop: high_drop?,
-        high_resistance: high_resistance?,
-        low_drop: low_drop?,
-        low_resistance: low_resistance?,
-    })
-}
-
-fn resolve_relay(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireRelay,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Relay> {
-    let pins = resolve_pins(name, Relay::PINS, &wire.pins.0, nets, out);
-    let mut positive =
-        |field: &'static str, unit, value| resolve_value(part_ref, field, unit, true, value, out);
-    let inductance = positive("inductance", "H", wire.inductance);
-    let coil_resistance = positive("coil_resistance", "ohm", wire.coil_resistance);
-    let pull_in_current = positive("pull_in_current", AMPERE, wire.pull_in_current);
-    let drop_out_current = positive("drop_out_current", AMPERE, wire.drop_out_current);
-    let on_resistance = positive("on_resistance", "ohm", wire.on_resistance);
-    let off_resistance = positive("off_resistance", "ohm", wire.off_resistance);
-    if let (Some(pull), Some(drop)) = (&pull_in_current, &drop_out_current)
-        && drop.si.get() >= pull.si.get()
-    {
-        out.push(Diagnostic::NetlistValue {
-            part: part_ref.clone(),
-            field: "drop_out_current".into(),
-            value: drop.si.get(),
-            rule: ValueRule::Hysteresis,
-        });
-        return None;
-    }
-    Some(Relay {
-        pins: pins?,
-        inductance: inductance?,
-        coil_resistance: coil_resistance?,
-        pull_in_current: pull_in_current?,
-        drop_out_current: drop_out_current?,
-        on_resistance: on_resistance?,
-        off_resistance: off_resistance?,
-    })
-}
-
-fn resolve_switch(
-    seed: u64,
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireSwitch,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Switch> {
-    let pins = resolve_pins(name, Switch::PINS, &wire.pins.0, nets, out);
-    let on = resolve_value(
-        part_ref,
-        "on_resistance",
-        "ohm",
-        true,
-        wire.on_resistance,
-        out,
-    );
-    let off = resolve_value(
-        part_ref,
-        "off_resistance",
-        "ohm",
-        true,
-        wire.off_resistance,
-        out,
-    );
-    let bounce = match wire.bounce {
-        None => Some(None),
-        Some(bounce) => resolve_bounce(part_ref, bounce, out).map(Some),
-    };
-    let window = match &bounce {
-        Some(Some(bounce)) => bounce.window.value,
-        _ => 0,
-    };
-    let events: Vec<Edge> = wire
-        .events
-        .iter()
-        .map(|event| Edge {
-            at: Time::from_ps(event.t_ps),
-            to: event.state,
-        })
-        .collect();
-    let events_ok = check_events(
-        part_ref,
-        "events",
-        wire.initial,
-        &events,
-        window,
-        |left, right| left == right,
-        out,
-    );
-    let bounce = bounce?;
-    if !events_ok {
-        return None;
-    }
-    let edges = bounce::expand(seed, name, &events, bounce.as_ref());
-    Some(Switch {
-        pins: pins?,
-        on_resistance: on?,
-        off_resistance: off?,
-        events: Schedule {
-            initial: wire.initial,
-            events,
-        },
-        bounce,
-        schedule: Schedule {
-            initial: wire.initial,
-            events: edges,
-        },
-    })
-}
-
-fn resolve_bounce(part: &Ref, wire: WireBounce, out: &mut Vec<Diagnostic>) -> Option<Bounce> {
-    let window = resolve_int(part, "bounce.window", "ps", wire.window, out);
-    let max_bounces = resolve_int(part, "bounce.max_bounces", "1", wire.max_bounces, out);
-    let (window, max_bounces) = (window?, max_bounces?);
-    if window.value < 2 * max_bounces.value * MIN_GAP_PS {
-        out.push(Diagnostic::NetlistValue {
-            part: part.clone(),
-            field: "bounce.window".into(),
-            value: window.value as f64,
-            rule: ValueRule::BounceRoom,
-        });
-        return None;
-    }
-    Some(Bounce {
-        window,
-        max_bounces,
-    })
-}
-
-fn resolve_schedule(
+pub(crate) fn resolve_schedule(
     part: &Ref,
     events_field: &'static str,
     initial_field: &'static str,
@@ -1381,7 +565,7 @@ fn resolve_schedule(
 /// One diagnostic per event that breaks a rule. True when none did.
 /// `same` says the event does not change the value in force. A switch compares contacts.
 /// A level compares the SI value.
-fn check_events<T: Clone>(
+pub(crate) fn check_events<T: Clone>(
     part: &Ref,
     field: &'static str,
     initial: T,
@@ -1436,7 +620,7 @@ fn check_events<T: Clone>(
     ok
 }
 
-fn resolve_int<T: Into<u64>>(
+pub(crate) fn resolve_int<T: Into<u64>>(
     part: &Ref,
     field: impl Into<Cow<'static, str>>,
     expected: &'static str,
@@ -1470,7 +654,7 @@ fn resolve_int<T: Into<u64>>(
     })
 }
 
-fn resolve_pins<const N: usize>(
+pub(crate) fn resolve_pins<const N: usize>(
     part: &Name,
     names: [&'static str; N],
     pins: &BTreeMap<String, String>,
@@ -1523,7 +707,7 @@ fn resolve_pins<const N: usize>(
 }
 
 /// `None` when the rating is invalid. `Some(None)` is an explicit `null`.
-fn resolve_rating(
+pub(crate) fn resolve_rating(
     part: &Ref,
     field: &'static str,
     expected: &'static str,
@@ -1536,7 +720,7 @@ fn resolve_rating(
     }
 }
 
-fn resolve_value(
+pub(crate) fn resolve_value(
     part: &Ref,
     field: impl Into<Cow<'static, str>>,
     expected: &'static str,
@@ -1574,7 +758,7 @@ fn resolve_value(
     })
 }
 
-fn resolve_fraction(
+pub(crate) fn resolve_fraction(
     part: &Ref,
     field: impl Into<Cow<'static, str>>,
     value: WireValue,

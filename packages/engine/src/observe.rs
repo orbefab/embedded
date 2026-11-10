@@ -1,7 +1,9 @@
+use crate::netlist::{NetId, Netlist};
+
 use crate::diagnostic::Diagnostic;
 use crate::finite::Finite;
 use crate::name::Ref;
-use crate::netlist::{NetId, Netlist};
+
 use crate::run_folder::OpPoint;
 use crate::time::Time;
 

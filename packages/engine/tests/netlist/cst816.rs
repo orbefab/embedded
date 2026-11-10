@@ -1,8 +1,9 @@
 //! A `cst816` touch schedule: each point is after t = 0, at least 2000 ps after the previous
 //! one, and each coordinate is from 0 to 4095.
 
-use orbe_engine::diagnostic::{Diagnostic, ScheduleRule, ValueRule};
 use orbe_engine::netlist::{self, Chip, Model};
+
+use orbe_engine::diagnostic::{Diagnostic, ScheduleRule, ValueRule};
 
 fn chip(touches: &str) -> String {
     format!(

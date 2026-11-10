@@ -5,12 +5,24 @@
 //! A touch is applied by [`Core::touch`] at the schedule's time. The drive image does not change
 //! then. INT falls 1 ps later and rises after [`INT_PULSE_PS`]. That width is a guess.
 
-use crate::netlist::{Cst816, PartId, Touch};
-use crate::time::Time;
+use std::collections::BTreeMap;
 
-use super::i2c::{self, Engine, Target};
-use super::{Chip, Drive, Output, Stage, Stop};
+use serde::Deserialize;
+
+use crate::active::i2c::{self, Engine, Target};
+use crate::active::{Chip, Drive, Output, Stage, Stop};
+use crate::diagnostic::{Diagnostic, ScheduleRule, ValueRule};
 use crate::mna::Node;
+use crate::name::{Name, Ref};
+use crate::netlist::Event;
+use crate::netlist::MIN_GAP_PS;
+use crate::netlist::NetId;
+use crate::netlist::PartId;
+use crate::netlist::Threshold;
+use crate::netlist::Value;
+use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
+use crate::netlist::json::{PinMap, WireValue, resolve_pins, resolve_value};
+use crate::time::Time;
 use crate::watch::{Signal, Watch};
 
 const VCC: usize = 0;
@@ -97,8 +109,8 @@ pub(crate) fn chip(part: PartId, dev: &Cst816) -> Chip {
         usarts: &[],
         twi: false,
         sends: false,
-        takes: super::Takes::default(),
-        core: super::Core::Cst816(Box::new(Core::new())),
+        takes: crate::active::Takes::default(),
+        core: crate::active::Core::Cst816(Box::new(Core::new())),
     }
 }
 
@@ -358,7 +370,7 @@ mod tests {
                 self.core
                     .input(Time::from_ps(self.t), &[self.scl, sda, true, self.rst_high]);
                 self.mark();
-                let limit = self.t.saturating_add(super::super::i2c::DATA_HOLD_PS + 2);
+                let limit = self.t.saturating_add(crate::active::i2c::DATA_HOLD_PS + 2);
                 while let Some(stop) = self.core.run_until(Time::from_ps(limit)) {
                     self.t = stop.at.as_ps();
                     self.mark();
@@ -740,7 +752,7 @@ mod tests {
         bus.byte(ADDRESS << 1);
         let fall = bus.t + 1_000;
         bus.set(fall, false, true);
-        bus.spin(fall + super::super::i2c::DATA_HOLD_PS);
+        bus.spin(fall + crate::active::i2c::DATA_HOLD_PS);
         assert!(bus.sda_low(), "the address ACK is driven");
         let rst_at = bus.t + 1_000;
         bus.rst_high = false;
@@ -752,7 +764,7 @@ mod tests {
             "INT releases 1 ps later"
         );
         assert!(bus.sda_low(), "SDA stays down through that picosecond");
-        bus.spin(rst_at + super::super::i2c::DATA_HOLD_PS);
+        bus.spin(rst_at + crate::active::i2c::DATA_HOLD_PS);
         assert!(!bus.sda_low(), "SDA releases after the hold");
         bus.rst_high = true;
         bus.set(bus.t + 1_000, true, true);
@@ -771,17 +783,17 @@ mod tests {
         let fall = bus.t + 1_000;
         bus.set(fall, false, true);
         bus.set(fall + 100_000, true, true);
-        bus.spin(fall + super::super::i2c::DATA_HOLD_PS + 2);
+        bus.spin(fall + crate::active::i2c::DATA_HOLD_PS + 2);
         assert!(!bus.sda_low(), "a 100 ns low leaves the ACK undriven");
         let first = bus.core.sda_blocked_at().expect("the rule is recorded");
-        assert_eq!(first.as_ps(), fall + super::super::i2c::DATA_HOLD_PS);
+        assert_eq!(first.as_ps(), fall + crate::active::i2c::DATA_HOLD_PS);
         bus.stop();
         bus.start();
         bus.byte(ADDRESS << 1);
         let fall = bus.t + 1_000;
         bus.set(fall, false, true);
         bus.set(fall + 100_000, true, true);
-        bus.spin(fall + super::super::i2c::DATA_HOLD_PS + 2);
+        bus.spin(fall + crate::active::i2c::DATA_HOLD_PS + 2);
         assert_eq!(
             bus.core.sda_blocked_at(),
             Some(first),
@@ -833,7 +845,7 @@ mod tests {
         bus.byte(ADDRESS << 1);
         let fall = bus.t + 1_000;
         bus.set(fall, false, true);
-        bus.spin(fall + super::super::i2c::DATA_HOLD_PS);
+        bus.spin(fall + crate::active::i2c::DATA_HOLD_PS);
         assert!(bus.sda_low(), "the address ACK is driven");
         let rise = bus.t + 1_000;
         bus.set(rise, true, true);
@@ -848,7 +860,7 @@ mod tests {
             "INT releases 1 ps later"
         );
         assert!(bus.sda_low(), "SDA stays down through that picosecond");
-        bus.spin(rst_at + super::super::i2c::DATA_HOLD_PS);
+        bus.spin(rst_at + crate::active::i2c::DATA_HOLD_PS);
         assert!(!bus.sda_low(), "SDA releases while SCL is high");
         assert_eq!(bus.core.sda_blocked_at(), None, "reset logs no warning");
     }
@@ -856,7 +868,7 @@ mod tests {
     fn lets_go_and_stops(bus: &mut Bus) {
         let fall = bus.t + 1_000;
         bus.set(fall, false, true);
-        bus.spin(fall + super::super::i2c::DATA_HOLD_PS + 2);
+        bus.spin(fall + crate::active::i2c::DATA_HOLD_PS + 2);
         assert!(!bus.sda_low(), "the target let go of SDA");
         bus.set(bus.t + 1_000, false, false);
         bus.set(bus.t + 1_000, true, false);
@@ -884,10 +896,10 @@ mod tests {
         let fall = bus.t + 1_000;
         bus.set(fall, false, true);
         bus.set(fall + 100_000, true, true);
-        bus.spin(fall + super::super::i2c::DATA_HOLD_PS + 2);
+        bus.spin(fall + crate::active::i2c::DATA_HOLD_PS + 2);
         assert!(bus.sda_low(), "the release is still the target's");
         let blocked = bus.core.sda_blocked_at().expect("the rule is recorded");
-        assert_eq!(blocked.as_ps(), fall + super::super::i2c::DATA_HOLD_PS);
+        assert_eq!(blocked.as_ps(), fall + crate::active::i2c::DATA_HOLD_PS);
         lets_go_and_stops(&mut bus);
         assert_eq!(bus.core.sda_blocked_at(), Some(blocked));
     }
@@ -900,9 +912,185 @@ mod tests {
         let fall = bus.t + 1_000;
         bus.set(fall, false, true);
         bus.set(fall + 100_000, true, true);
-        bus.spin(fall + super::super::i2c::DATA_HOLD_PS + 2);
+        bus.spin(fall + crate::active::i2c::DATA_HOLD_PS + 2);
         assert!(!bus.sda_low(), "the ACK stays undriven");
         assert!(bus.core.sda_blocked_at().is_some(), "the rule is recorded");
         lets_go_and_stops(&mut bus);
     }
+}
+
+/// A CST816 touch controller, an active chip with no clock of its own. It is an I2C target at
+/// address 0x15. `SDA` and `INT` are open drain into `GND` through `low_resistance` above
+/// `low_drop`. `SCL` is an input, and the part does not hold it. `RST` low clears it. It reads
+/// each of those four pins through `input_threshold`, fractions of its supply.
+///
+/// `touches` is the finger. Each event is one point, after t = 0 and at least [`MIN_GAP_PS`]
+/// after the previous event. `x` and `y` run from 0 to [`Cst816::COORD_MAX`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Cst816 {
+    pub pins: [NetId; 6],
+    /// Volt, at least 0. The open-drain low side.
+    pub low_drop: Value,
+    /// Ohm.
+    pub low_resistance: Value,
+    pub input_threshold: Threshold,
+    pub touches: Vec<Event<Touch>>,
+}
+
+/// One point of a [`Cst816`]: the finger is down at `(x, y)`, or up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Touch {
+    pub x: u16,
+    pub y: u16,
+    pub down: bool,
+}
+
+impl Cst816 {
+    pub const PINS: [&'static str; 6] = ["VCC", "GND", "SCL", "SDA", "INT", "RST"];
+    /// The largest `x` or `y`.
+    pub const COORD_MAX: u16 = 4095;
+
+    /// The next touch strictly after `at`.
+    pub fn next_touch_after(&self, at: Time) -> Option<Time> {
+        let k = self.touches.partition_point(|event| event.at <= at);
+        self.touches.get(k).map(|event| event.at)
+    }
+
+    /// The first time at or after `from` that one more touch passes the schedule rules.
+    /// With no touch that is 1 ps. After one it is that touch plus [`MIN_GAP_PS`].
+    pub fn earliest(&self, from: Time) -> Option<Time> {
+        let first = match self.touches.last() {
+            None => 1,
+            Some(last) => last.at.as_ps().checked_add(MIN_GAP_PS)?,
+        };
+        Some(Time::from_ps(from.as_ps().max(first)))
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WireCst816 {
+    pub(crate) name: String,
+    pins: PinMap,
+    low_drop: WireValue,
+    low_resistance: WireValue,
+    input_threshold: WireThreshold,
+    #[serde(default)]
+    touches: Vec<WireTouch>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireTouch {
+    t_ps: u64,
+    x: u16,
+    y: u16,
+    down: bool,
+}
+
+pub(crate) fn resolve_cst816(
+    name: &Name,
+    part_ref: &Ref,
+    wire: WireCst816,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Cst816> {
+    let pins = resolve_pins(name, Cst816::PINS, &wire.pins.0, nets, out);
+    let low_drop = resolve_drop(part_ref, wire.low_drop, out);
+    let low_resistance = resolve_value(
+        part_ref,
+        "low_resistance",
+        "ohm",
+        true,
+        wire.low_resistance,
+        out,
+    );
+    let input_threshold = resolve_threshold(
+        part_ref,
+        ["input_threshold.low", "input_threshold.high"],
+        wire.input_threshold,
+        out,
+    );
+    let touches = resolve_touches(part_ref, wire.touches, out);
+    Some(Cst816 {
+        pins: pins?,
+        low_drop: low_drop?,
+        low_resistance: low_resistance?,
+        input_threshold: input_threshold?,
+        touches: touches?,
+    })
+}
+
+fn resolve_drop(
+    part: &Ref,
+    wire: WireValue,
+    out: &mut Vec<Diagnostic>,
+) -> Option<crate::netlist::Value> {
+    let volts = wire.value.get();
+    let value = resolve_value(part, "low_drop", "V", false, wire, out)?;
+    if volts < 0.0 {
+        out.push(Diagnostic::NetlistValue {
+            part: part.clone(),
+            field: "low_drop".into(),
+            value: volts,
+            rule: ValueRule::NonNegative,
+        });
+        return None;
+    }
+    Some(value)
+}
+
+fn resolve_touches(
+    part: &Ref,
+    wires: Vec<WireTouch>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Vec<Event<Touch>>> {
+    let mut ok = true;
+    let mut previous: Option<u64> = None;
+    let mut earliest = Some(0u64);
+    let mut events = Vec::with_capacity(wires.len());
+    for (index, wire) in wires.into_iter().enumerate() {
+        let at = wire.t_ps;
+        let rule = if previous.is_some_and(|previous| at <= previous) {
+            Some(ScheduleRule::NotIncreasing)
+        } else if at == 0 {
+            Some(ScheduleRule::AtZero)
+        } else if earliest.is_none_or(|earliest| at < earliest) {
+            Some(ScheduleRule::TooClose)
+        } else {
+            None
+        };
+        if let Some(rule) = rule {
+            ok = false;
+            out.push(Diagnostic::NetlistSchedule {
+                part: part.clone(),
+                field: "touches",
+                event: index,
+                rule,
+                end_ps: 0,
+            });
+        }
+        for (axis, value) in [("x", wire.x), ("y", wire.y)] {
+            if value > Cst816::COORD_MAX {
+                ok = false;
+                out.push(Diagnostic::NetlistValue {
+                    part: part.clone(),
+                    field: format!("touches[{index}].{axis}").into(),
+                    value: f64::from(value),
+                    rule: ValueRule::Span,
+                });
+            }
+        }
+        events.push(Event {
+            at: Time::from_ps(at),
+            to: Touch {
+                x: wire.x,
+                y: wire.y,
+                down: wire.down,
+            },
+        });
+        previous = Some(at);
+        earliest = at.checked_add(MIN_GAP_PS);
+    }
+    ok.then_some(events)
 }

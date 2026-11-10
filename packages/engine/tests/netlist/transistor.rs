@@ -1,5 +1,6 @@
-use orbe_engine::name::Quantity;
 use orbe_engine::netlist::{self, Model, RatingKind};
+
+use orbe_engine::name::Quantity;
 
 /// Every field the `npn` and `pnp` kinds take, with its unit and a value that parses.
 const FIELDS: [(&str, &str, f64); 11] = [

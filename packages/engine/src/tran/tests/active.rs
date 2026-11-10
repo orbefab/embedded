@@ -1,7 +1,8 @@
 //! Each run keeps every accepted step, so a landing and a restart's 1 ns seed are both rows.
 
-use crate::name::Name;
 use crate::netlist::{NetId, Netlist};
+
+use crate::name::Name;
 
 use super::super::*;
 use super::fixtures::*;

@@ -1,6 +1,8 @@
 //! A recorded session, advanced in seeded chunks and finished, writes the run folder `orbe-run run`
 //! writes. It uses only the public items a binding calls: `orbe_engine::run` and `Session`.
 
+use orbe_engine::netlist::{Baud, Contact, Frame};
+
 use std::fs;
 use std::path::Path;
 
@@ -10,7 +12,7 @@ use orbe_engine::blob::Blobs;
 use orbe_engine::diagnostic::ValueRule;
 use orbe_engine::finite::Finite;
 use orbe_engine::name::Name;
-use orbe_engine::netlist::{Baud, Contact, Frame};
+
 use orbe_engine::run_folder::RunFolder;
 use orbe_engine::time::Time;
 use orbe_engine::timestamp::Timestamp;

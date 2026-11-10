@@ -1,6 +1,16 @@
-use crate::netlist::{Inductor, NetId};
+use crate::diagnostic::Diagnostic;
+use crate::name::{Name, Ref};
+use crate::netlist::Model;
+use crate::netlist::NetId;
+use crate::netlist::Value;
+use crate::netlist::json::PinMap;
+use crate::netlist::json::WireValue;
+use crate::netlist::json::resolve_pins;
+use crate::netlist::json::resolve_value;
+use serde::Deserialize;
+use std::collections::BTreeMap;
 
-use super::{OwnedInductor, StoreEnd};
+use crate::element::{OwnedInductor, StoreEnd};
 use crate::mna::{Probe, Stamp};
 use crate::newton::{History, Method, Store};
 
@@ -21,7 +31,7 @@ pub(crate) fn coil(b: NetId, henry: f64, ohm: f64) -> OwnedInductor {
     }
 }
 
-pub(super) fn owned(inductor: &Inductor) -> OwnedInductor {
+pub(crate) fn owned(inductor: &Inductor) -> OwnedInductor {
     coil(
         inductor.pins[1],
         inductor.inductance.si.get(),
@@ -29,7 +39,7 @@ pub(super) fn owned(inductor: &Inductor) -> OwnedInductor {
     )
 }
 
-pub(super) fn stamp(inductor: &Inductor, stamp: &mut Stamp<'_>) {
+pub(crate) fn stamp(inductor: &Inductor, stamp: &mut Stamp<'_>) {
     stamp_coil(stamp, inductor.pins[0], owned(inductor));
 }
 
@@ -77,7 +87,7 @@ fn companion(henry: f64, method: Method, h: f64, v0: f64, i0: f64) -> (f64, f64)
     }
 }
 
-pub(super) fn current(probe: &Probe<'_>) -> f64 {
+pub(crate) fn current(probe: &Probe<'_>) -> f64 {
     probe.branch(0)
 }
 
@@ -169,5 +179,66 @@ mod tests {
         let (i, v) = solved(|_| History::Start);
         assert!((i - 5.0 / 70.0).abs() <= 1e-12, "{i}");
         assert!(v.abs() <= 1e-12, "{v}");
+    }
+}
+
+/// An ideal inductance in series with a resistance. `a` reaches the inductance through the
+/// resistance. A short behind the resistance at the operating point.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Inductor {
+    /// Nets of pins `a`, `b`.
+    pub pins: [NetId; 2],
+    /// Henry, greater than 0.
+    pub inductance: Value,
+    /// Ohm, greater than 0.
+    pub series_resistance: Value,
+}
+
+impl Inductor {
+    pub const PINS: [&'static str; 2] = ["a", "b"];
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WireInductor {
+    pub(crate) name: String,
+    pins: PinMap,
+    inductance: WireValue,
+    series_resistance: WireValue,
+}
+
+pub(crate) fn resolve_inductor(
+    name: &Name,
+    part_ref: &Ref,
+    wire: WireInductor,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Model> {
+    let WireInductor {
+        pins,
+        inductance,
+        series_resistance,
+        ..
+    } = wire;
+
+    let pins = resolve_pins(name, Inductor::PINS, &pins.0, nets, out);
+    let inductance = resolve_value(part_ref, "inductance", "H", true, inductance, out);
+    let series_resistance = resolve_value(
+        part_ref,
+        "series_resistance",
+        "ohm",
+        true,
+        series_resistance,
+        out,
+    );
+    match (pins, inductance, series_resistance) {
+        (Some(pins), Some(inductance), Some(series_resistance)) => {
+            Some(Model::Inductor(Inductor {
+                pins,
+                inductance,
+                series_resistance,
+            }))
+        }
+        _ => None,
     }
 }

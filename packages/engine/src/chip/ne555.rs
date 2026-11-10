@@ -1,8 +1,20 @@
 //! The NE555 as its ladder, three comparators and TI SLFS022K Table 6-1. There is no
 //! propagation delay and no input current.
 
+use crate::diagnostic::Diagnostic;
+use crate::name::Name;
+use crate::name::Ref;
+use crate::netlist::NetId;
+use crate::netlist::Value;
+use crate::netlist::json::PinMap;
+use crate::netlist::json::WireValue;
+use crate::netlist::json::resolve_pins;
+use crate::netlist::json::resolve_value;
+use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
+use serde::Deserialize;
+use std::collections::BTreeMap;
+
 use crate::logic::Level;
-use crate::netlist::Ne555;
 
 use crate::mna::{Node, Stamp};
 use crate::watch::{Signal, Watch};
@@ -165,4 +177,105 @@ mod tests {
             [Level::High, Level::High, Level::Low, Level::High]
         );
     }
+}
+
+/// An NE555 timer, behavioural. Pins in package order, TI SLFS022K's pin functions.
+///
+/// Three equal resistors run VCC to CONT to a lower node to GND. THRES compares with CONT,
+/// TRIG with the lower node, and RESET with GND plus `reset_threshold`. The latch follows
+/// SLFS022K Table 6-1: RESET low resets it, then TRIG low sets it, then THRES high resets it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ne555 {
+    pub pins: [NetId; 8],
+    /// Ohm. Each of the three ladder resistors.
+    pub ladder_resistance: Value,
+    /// Volt, greater than 0. RESET more than this above GND lets the latch run.
+    pub reset_threshold: Value,
+    pub discharge: Discharge,
+    /// Ohm. VCC to GND, the supply current the ladder does not draw.
+    pub supply_resistance: Value,
+    pub output: OutputStage,
+}
+
+impl Ne555 {
+    pub const PINS: [&'static str; 8] = [
+        "gnd", "trig", "out", "reset", "cont", "thres", "disch", "vcc",
+    ];
+    pub const GND: usize = 0;
+    pub const TRIG: usize = 1;
+    pub const OUT: usize = 2;
+    pub const RESET: usize = 3;
+    pub const CONT: usize = 4;
+    pub const THRES: usize = 5;
+    pub const DISCH: usize = 6;
+    pub const VCC: usize = 7;
+}
+
+/// DISCH to GND: `on_resistance` while the latch is reset, `off_resistance` while it is set.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Discharge {
+    /// Ohm.
+    pub on_resistance: Value,
+    /// Ohm.
+    pub off_resistance: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WireNe555 {
+    pub(crate) name: String,
+    pins: PinMap,
+    ladder_resistance: WireValue,
+    reset_threshold: WireValue,
+    discharge: WireDischarge,
+    supply_resistance: WireValue,
+    output: WireOutputStage,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WireDischarge {
+    on_resistance: WireValue,
+    off_resistance: WireValue,
+}
+
+pub(crate) fn resolve_ne555(
+    name: &Name,
+    part_ref: &Ref,
+    wire: WireNe555,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Ne555> {
+    let ohm = |field, value, out: &mut Vec<Diagnostic>| {
+        resolve_value(part_ref, field, "ohm", true, value, out)
+    };
+    let pins = resolve_pins(name, Ne555::PINS, &wire.pins.0, nets, out);
+    let ladder = ohm("ladder_resistance", wire.ladder_resistance, out);
+    let reset = resolve_value(
+        part_ref,
+        "reset_threshold",
+        "V",
+        true,
+        wire.reset_threshold,
+        out,
+    );
+    let on = ohm("discharge.on_resistance", wire.discharge.on_resistance, out);
+    let off = ohm(
+        "discharge.off_resistance",
+        wire.discharge.off_resistance,
+        out,
+    );
+    let supply = ohm("supply_resistance", wire.supply_resistance, out);
+    let output = resolve_output_stage(part_ref, wire.output, out);
+    Some(Ne555 {
+        pins: pins?,
+        ladder_resistance: ladder?,
+        reset_threshold: reset?,
+        discharge: Discharge {
+            on_resistance: on?,
+            off_resistance: off?,
+        },
+        supply_resistance: supply?,
+        output: output?,
+    })
 }

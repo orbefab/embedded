@@ -2,12 +2,14 @@
 //! input pin, `in`. A drive at 0 is its power-on drive. A script can also send records and
 //! console bytes, take records, and log what it took.
 
+use crate::netlist::NetId;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::link::{Cs, Duty, Lanes, LinkRow, Record, RecordKind, Spi, SpiNets};
 use crate::name::Name;
-use crate::netlist::NetId;
+
 use crate::time::Time;
 
 use super::{Chip, Drive, Frame, Output, SpiTarget, Stage, Stop, Takes};

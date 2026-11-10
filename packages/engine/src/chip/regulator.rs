@@ -1,4 +1,17 @@
-use crate::netlist::LinearRegulator;
+use crate::diagnostic::Diagnostic;
+use crate::diagnostic::ValueRule;
+use crate::name::{Name, Ref};
+use crate::netlist::NetId;
+use crate::netlist::Value;
+use crate::netlist::json::PinMap;
+use crate::netlist::json::WireJunctionRatings;
+use crate::netlist::json::WireValue;
+use crate::netlist::json::bounded;
+use crate::netlist::json::resolve_pins;
+use crate::netlist::json::resolve_rating;
+use crate::netlist::json::resolve_value;
+use serde::Deserialize;
+use std::collections::BTreeMap;
 
 use crate::element::Update;
 use crate::mna::{Node, Probe, Stamp};
@@ -20,7 +33,7 @@ const LIMIT_HEADROOM: f64 = 100.0;
 const BLOCK_OHM: f64 = 1e9;
 const BLOCK_A: f64 = 1e-12;
 
-pub(super) struct Law {
+pub(crate) struct Law {
     vo: f64,
     dvo_di: f64,
     dvo_dvi: f64,
@@ -56,7 +69,7 @@ fn step(x: f64) -> (f64, f64) {
     }
 }
 
-pub(super) fn evaluate(reg: &LinearRegulator, i: f64, vi: f64) -> Law {
+pub(crate) fn evaluate(reg: &LinearRegulator, i: f64, vi: f64) -> Law {
     let vout = reg.output_voltage.si.get();
     let k = reg.line_regulation.si.get();
     let ro = reg.output_resistance.si.get();
@@ -101,7 +114,7 @@ pub(super) fn evaluate(reg: &LinearRegulator, i: f64, vi: f64) -> Law {
 
 /// The row is linearised at the last solution. The zero start sits on the reverse-block
 /// slope, and a stamp that does not re-read it repeats that row. A linear circuit accepts it.
-pub(super) fn stamp(reg: &LinearRegulator, stamp: &mut Stamp<'_>) {
+pub(crate) fn stamp(reg: &LinearRegulator, stamp: &mut Stamp<'_>) {
     let [pin_in, pin_out, pin_gnd] = reg.pins;
     let prior = stamp.prior();
     let i = prior.branch(0);
@@ -128,7 +141,7 @@ pub(super) fn stamp(reg: &LinearRegulator, stamp: &mut Stamp<'_>) {
 
 /// The branch equation is a voltage. The tolerance is the voltage one, so the check does not
 /// divide a milliohm slope into the ampere floor.
-pub(super) fn update(reg: &LinearRegulator, probe: &Probe<'_>) -> Update {
+pub(crate) fn update(reg: &LinearRegulator, probe: &Probe<'_>) -> Update {
     let [pin_in, pin_out, pin_gnd] = reg.pins;
     let i = probe.branch(0);
     let vi = probe.v(pin_in) - probe.v(pin_gnd);
@@ -144,7 +157,7 @@ pub(super) fn update(reg: &LinearRegulator, probe: &Probe<'_>) -> Update {
 }
 
 /// `iin` enters at `in`, `iout` enters at `out`, and `p` is the power entering at every pin.
-pub(super) fn observe(reg: &LinearRegulator, probe: &Probe<'_>) -> [f64; 3] {
+pub(crate) fn observe(reg: &LinearRegulator, probe: &Probe<'_>) -> [f64; 3] {
     let [pin_in, pin_out, pin_gnd] = reg.pins;
     let i = probe.branch(0);
     let vi = probe.v(pin_in) - probe.v(pin_gnd);
@@ -157,8 +170,9 @@ pub(super) fn observe(reg: &LinearRegulator, probe: &Probe<'_>) -> [f64; 3] {
 
 #[cfg(test)]
 mod tests {
-    use crate::name::Ref;
     use crate::netlist::{self, Model, NetId};
+
+    use crate::name::Ref;
 
     use crate::mna::{GMIN, Node, Solution, Stamp, System};
     use crate::newton::{Circuit, Conditions, Iterate};
@@ -246,7 +260,7 @@ mod tests {
         )
     }
 
-    fn device(ratio: f64) -> crate::netlist::LinearRegulator {
+    fn device(ratio: f64) -> crate::chip::LinearRegulator {
         let json = netlist(
             r#""gnd", "vin", "vout""#,
             &[
@@ -259,7 +273,7 @@ mod tests {
         owned(&parsed)
     }
 
-    fn owned(parsed: &crate::netlist::Netlist) -> crate::netlist::LinearRegulator {
+    fn owned(parsed: &crate::netlist::Netlist) -> crate::chip::LinearRegulator {
         let Model::LinearRegulator(reg) = parsed
             .parts()
             .find(|(_, part)| matches!(part.model, Model::LinearRegulator(_)))
@@ -758,4 +772,122 @@ mod tests {
         let vout = op_value(&hot_json, "#net.vout");
         assert!((p - (vin * iin + vout * iout)).abs() <= 1e-12, "{p}");
     }
+}
+
+/// A static linear regulator. The pass branch's voltage falls with its own current.
+/// `in` feeds the pass element and the ground current. `out` is the regulated pin.
+/// `gnd` is the reference for both voltages and the return for the ground current.
+///
+/// `vset = output_voltage + line_regulation * (V(in) - V(gnd) - output_voltage)`.
+/// The regulating line is `vset - output_resistance * i`. The dropout line is
+/// `V(in) - V(gnd) - dropout_voltage - dropout_resistance * i`. The pass voltage
+/// uses the smooth maximum of that line and `-Rf * i`, where `Rf` is a constant
+/// of the law, then the smooth minimum against the regulating line, a current
+/// limit and a reverse block. At no load the floor is the ground pin. A load
+/// that draws current with the input at the pin pulls the output below it.
+/// `i` is the current in the pass branch, from `in` to `out`. The ground current is
+/// `(quiescent_current + ground_current_ratio * i)` times a smooth step of
+/// `(V(in) - V(gnd)) / dropout_voltage`. The constants of that law are in the
+/// engine, not fields.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinearRegulator {
+    /// Nets of pins `in`, `out`, `gnd`.
+    pub pins: [NetId; 3],
+    /// Volt. The output at the line-regulation reference input, at no load.
+    pub output_voltage: Value,
+    /// Unit `1`. The change in the set voltage per volt of input, at least 0 and below 1.
+    pub line_regulation: Value,
+    /// Ohm. The fall of the regulating line per ampere.
+    pub output_resistance: Value,
+    /// Volt. The dropout line's intercept.
+    pub dropout_voltage: Value,
+    /// Ohm. The fall of the dropout line per ampere.
+    pub dropout_resistance: Value,
+    /// Ampere. The pass current the limit holds.
+    pub current_limit: Value,
+    /// Ampere. The ground current at no load, once the input is above `dropout_voltage`.
+    pub quiescent_current: Value,
+    /// Unit `1`. The extra ground current per ampere of pass current. Zero is a constant ground current.
+    pub ground_current_ratio: Value,
+    /// Ampere, greater than 0. Bounds `|iout|`. `None` is an explicit `"current": null`.
+    pub max_current: Option<Value>,
+    /// Watt, greater than 0. `None` is an explicit `"power": null`.
+    pub max_power: Option<Value>,
+}
+
+impl LinearRegulator {
+    pub const PINS: [&'static str; 3] = ["in", "out", "gnd"];
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WireLinearRegulator {
+    pub(crate) name: String,
+    pins: PinMap,
+    output_voltage: WireValue,
+    line_regulation: WireValue,
+    output_resistance: WireValue,
+    dropout_voltage: WireValue,
+    dropout_resistance: WireValue,
+    current_limit: WireValue,
+    quiescent_current: WireValue,
+    ground_current_ratio: WireValue,
+    ratings: WireJunctionRatings,
+}
+
+pub(crate) fn resolve_regulator(
+    name: &Name,
+    part_ref: &Ref,
+    wire: WireLinearRegulator,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<LinearRegulator> {
+    let pins = resolve_pins(name, LinearRegulator::PINS, &wire.pins.0, nets, out);
+    let mut positive =
+        |field: &'static str, unit, value| resolve_value(part_ref, field, unit, true, value, out);
+    let output_voltage = positive("output_voltage", "V", wire.output_voltage);
+    let output_resistance = positive("output_resistance", "ohm", wire.output_resistance);
+    let dropout_voltage = positive("dropout_voltage", "V", wire.dropout_voltage);
+    let dropout_resistance = positive("dropout_resistance", "ohm", wire.dropout_resistance);
+    let current_limit = positive("current_limit", "A", wire.current_limit);
+    let line_regulation = bounded(
+        part_ref,
+        "line_regulation",
+        "1",
+        wire.line_regulation,
+        |number| (number < 0.0 || number >= 1.0).then_some(ValueRule::BelowOne),
+        out,
+    );
+    let quiescent_current = bounded(
+        part_ref,
+        "quiescent_current",
+        "A",
+        wire.quiescent_current,
+        |number| (number < 0.0).then_some(ValueRule::NonNegative),
+        out,
+    );
+    let ground_current_ratio = bounded(
+        part_ref,
+        "ground_current_ratio",
+        "1",
+        wire.ground_current_ratio,
+        |number| (number < 0.0).then_some(ValueRule::NonNegative),
+        out,
+    );
+    let ratings = wire.ratings;
+    let max_current = resolve_rating(part_ref, "ratings.current", "A", ratings.current, out);
+    let max_power = resolve_rating(part_ref, "ratings.power", "W", ratings.power, out);
+    Some(LinearRegulator {
+        pins: pins?,
+        output_voltage: output_voltage?,
+        line_regulation: line_regulation?,
+        output_resistance: output_resistance?,
+        dropout_voltage: dropout_voltage?,
+        dropout_resistance: dropout_resistance?,
+        current_limit: current_limit?,
+        quiescent_current: quiescent_current?,
+        ground_current_ratio: ground_current_ratio?,
+        max_current: max_current?,
+        max_power: max_power?,
+    })
 }

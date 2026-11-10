@@ -1,5 +1,6 @@
-use orbe_engine::name::Quantity;
 use orbe_engine::netlist::{self, Model, RatingKind};
+
+use orbe_engine::name::Quantity;
 
 fn regulator(fields: &str) -> String {
     format!(

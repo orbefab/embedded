@@ -2,12 +2,14 @@
 //! pulls `d2` low and `sw_b` pulls `d3` low, each against 10 kohm to `v5`, and
 //! `packages/engine/tests/firmware/sketch/knob.hex` prints both counts after each fall.
 
+use orbe_engine::netlist::Contact;
+
 use std::ops::RangeInclusive;
 
 use crate::runs::common;
 use common::{records, repo};
 use orbe_engine::name::Name;
-use orbe_engine::netlist::Contact;
+
 use orbe_engine::run_folder::RunFolder;
 use orbe_engine::time::Time;
 use orbe_engine::timestamp::Timestamp;

@@ -1,13 +1,26 @@
-use crate::netlist::{Bjt, Mosfet};
+use crate::diagnostic::Diagnostic;
+use crate::diagnostic::ValueRule;
+use crate::name::{Name, Ref};
+use crate::netlist::NetId;
+use crate::netlist::Value;
+use crate::netlist::json::PinMap;
+use crate::netlist::json::WireJunctionRatings;
+use crate::netlist::json::WireValue;
+use crate::netlist::json::resolve_pins;
+use crate::netlist::json::resolve_rating;
+use crate::netlist::json::resolve_value;
+use crate::semiconductor::junction_scale;
+use serde::Deserialize;
+use std::collections::BTreeMap;
 
-use super::capacitor::stamp_capacitor;
-use super::junction::{Shockley, mismatch, pnjlim};
-use super::{OwnedCapacitor, StoreEnd, Update};
+use crate::element::{OwnedCapacitor, StoreEnd, Update};
 use crate::mna::{GMIN, Node, Probe, Stamp};
+use crate::passive::capacitor::stamp_capacitor;
+use crate::semiconductor::junction::{Shockley, mismatch, pnjlim};
 
 /// A `Bjt`'s kind. It sets the sign of every junction voltage and pin current.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Polarity {
+pub(crate) enum Polarity {
     Npn,
     Pnp,
 }
@@ -111,13 +124,13 @@ fn capacitors(bjt: &Bjt) -> [OwnedCapacitor; 2] {
     ]
 }
 
-pub(super) fn charges(bjt: &Bjt) -> Vec<OwnedCapacitor> {
+pub(crate) fn charges(bjt: &Bjt) -> Vec<OwnedCapacitor> {
     capacitors(bjt).to_vec()
 }
 
 /// Each series resistance, the substrate's `GMIN`, the two junctions linearised at the voltages
 /// `point` evaluated, and the two capacitors.
-pub(super) fn stamp(bjt: &Bjt, polarity: Polarity, stamp: &mut Stamp<'_>) {
+pub(crate) fn stamp(bjt: &Bjt, polarity: Polarity, stamp: &mut Stamp<'_>) {
     let params = Params::new(bjt);
     let [c, b, e] = bjt.pins;
     let (ci, bi, ei) = (stamp.internal(C), stamp.internal(B), stamp.internal(E));
@@ -157,13 +170,13 @@ pub(super) fn stamp(bjt: &Bjt, polarity: Polarity, stamp: &mut Stamp<'_>) {
 }
 
 /// `vbe` starts at its `vcrit` and `vbc` at 0.
-pub(super) fn initial(bjt: &Bjt, out: &mut [f64]) {
+pub(crate) fn initial(bjt: &Bjt, out: &mut [f64]) {
     out[BE] = Params::new(bjt).be.vcrit;
     out[BC] = 0.0;
 }
 
 /// Limits each junction against its own `vcrit`, and checks both terminal currents.
-pub(super) fn update(
+pub(crate) fn update(
     bjt: &Bjt,
     polarity: Polarity,
     probe: &Probe<'_>,
@@ -193,7 +206,7 @@ pub(super) fn update(
 
 /// `ib`, `ic` and `p`. Each current enters its pin through its series resistance, so it
 /// includes the capacitors' current.
-pub(super) fn observe(bjt: &Bjt, probe: &Probe<'_>) -> [f64; 3] {
+pub(crate) fn observe(bjt: &Bjt, probe: &Probe<'_>) -> [f64; 3] {
     let [c, b, e] = bjt.pins.map(|pin| probe.v(pin));
     let ib = (b - probe.internal(B)) / bjt.base_resistance.si.get();
     let ic = (c - probe.internal(C)) / bjt.collector_resistance.si.get();
@@ -290,12 +303,12 @@ fn mos_capacitors(mosfet: &Mosfet) -> [OwnedCapacitor; 3] {
     ]
 }
 
-pub(super) fn mos_charges(mosfet: &Mosfet) -> Vec<OwnedCapacitor> {
+pub(crate) fn mos_charges(mosfet: &Mosfet) -> Vec<OwnedCapacitor> {
     mos_capacitors(mosfet).to_vec()
 }
 
 /// The channel linearised at the slot voltages, then the three pin capacitors.
-pub(super) fn mos_stamp(mosfet: &Mosfet, stamp: &mut Stamp<'_>) {
+pub(crate) fn mos_stamp(mosfet: &Mosfet, stamp: &mut Stamp<'_>) {
     let model = Level1::new(mosfet);
     let (vgs, vds) = (stamp.junction(VGS), stamp.junction(VDS));
     let (id, gm, gds) = model.id(vgs, vds);
@@ -313,7 +326,7 @@ pub(super) fn mos_stamp(mosfet: &Mosfet, stamp: &mut Stamp<'_>) {
 }
 
 /// Both slots start at 0. The square law needs no `vcrit`.
-pub(super) fn mos_initial(out: &mut [f64]) {
+pub(crate) fn mos_initial(out: &mut [f64]) {
     out[VGS] = 0.0;
     out[VDS] = 0.0;
 }
@@ -321,7 +334,7 @@ pub(super) fn mos_initial(out: &mut [f64]) {
 /// Writes the solved terminal voltages through, and checks the drain current.
 ///
 /// No limiter. A pass that rebuilt `vds` as `vgs - vgd` moved the last bit and never converged.
-pub(super) fn mos_update(
+pub(crate) fn mos_update(
     mosfet: &Mosfet,
     probe: &Probe<'_>,
     prior: &[f64],
@@ -343,7 +356,7 @@ pub(super) fn mos_update(
 }
 
 /// `id` and `p`. `id` is the channel current plus the capacitor currents into the drain pin.
-pub(super) fn mos_observe(mosfet: &Mosfet, probe: &Probe<'_>) -> [f64; 2] {
+pub(crate) fn mos_observe(mosfet: &Mosfet, probe: &Probe<'_>) -> [f64; 2] {
     let [vd, vg, vs] = mosfet.pins.map(|pin| probe.v(pin));
     let id_channel = Level1::new(mosfet).id(vg - vs, vd - vs).0;
     let i_cgs = probe.branch(0);
@@ -356,8 +369,10 @@ pub(super) fn mos_observe(mosfet: &Mosfet, probe: &Probe<'_>) -> [f64; 2] {
 
 #[cfg(test)]
 mod tests {
+    use crate::netlist::{self, Model, Netlist, PartId};
+    use crate::semiconductor::{Junction, junction_scale};
+
     use crate::name::{Name, Ref};
-    use crate::netlist::{self, Junction, Model, Netlist, PartId, junction_scale};
 
     use super::*;
     use crate::mna::Solution;
@@ -1141,4 +1156,281 @@ mod tests {
         }
         assert!(gate_power > 1e-9, "{gate_power}");
     }
+}
+
+/// A bipolar transistor. `npn` and `pnp` share it, and the kind is the polarity.
+///
+/// SPICE's Gummel-Poon model at its defaults, which is the transport form of Ebers-Moll with a
+/// forward Early voltage, at 298.15 K with no temperature scaling. `RB`, `RC` and `RE` join
+/// each pin to its internal node `b'`, `c'` or `e'`. With `vbe = s * (V(b') - V(e'))`,
+/// `vbc = s * (V(b') - V(c'))`, `s` +1 for `npn` and -1 for `pnp`, and `VT` the junction's:
+///
+/// ```text
+/// ibe = IS * (exp(vbe / (NF*VT)) - 1)
+/// ibc = IS * (exp(vbc / (NR*VT)) - 1)
+/// ic  = (ibe - ibc) * (1 - vbc/VAF) - ibc/BR - GMIN*vbc
+/// ib  = ibe/BF + ibc/BR + GMIN*(vbe + vbc)
+/// ```
+///
+/// Below `vbe = -3 * NF*VT`, `ibe` takes a `Junction`'s reverse law.
+/// Below `vbc = -3 * NR*VT`, `ibc` does.
+///
+/// `s * ic` enters `c'` and `s * ib` enters `b'`. `CJE` is a constant capacitance from `b'` to
+/// `e'`, and `CJC` from `b'` to `c'`. Every value is positive, as in a SPICE model card.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bjt {
+    /// Nets of pins `collector`, `base`, `emitter`.
+    pub pins: [NetId; 3],
+    /// Ampere. `IS`.
+    pub saturation_current: Value,
+    /// Unit `1`. `BF`.
+    pub forward_beta: Value,
+    /// Unit `1`. `BR`.
+    pub reverse_beta: Value,
+    /// Unit `1`. `NF`.
+    pub forward_emission: Value,
+    /// Unit `1`. `NR`.
+    pub reverse_emission: Value,
+    /// Volt. `VAF`.
+    pub early_voltage: Value,
+    /// Ohm. `RB`.
+    pub base_resistance: Value,
+    /// Ohm. `RC`.
+    pub collector_resistance: Value,
+    /// Ohm. `RE`.
+    pub emitter_resistance: Value,
+    /// Farad. `CJE`.
+    pub base_emitter_capacitance: Value,
+    /// Farad. `CJC`.
+    pub base_collector_capacitance: Value,
+    /// Ampere, greater than 0. Bounds `|ic|`. `None` is an explicit `"current": null`.
+    pub max_current: Option<Value>,
+    /// Watt, greater than 0. `None` is an explicit `"power": null`.
+    pub max_power: Option<Value>,
+}
+
+impl Bjt {
+    pub const PINS: [&'static str; 3] = ["collector", "base", "emitter"];
+}
+
+/// An N-channel MOSFET. Level 1 with the bulk tied to the source, so `W/L` is folded into `KP`
+/// and there is no body effect. No temperature scaling.
+///
+/// With `vgs = V(gate) - V(source)` and `vds = V(drain) - V(source)`, and `vds >= 0`:
+///
+/// ```text
+/// cutoff, vgs <= VTO:                 id = 0
+/// saturation, vds >= vgs - VTO:       id = KP/2 * (vgs - VTO)^2 * (1 + LAMBDA*vds)
+/// linear:                             id = KP * vds * (vgs - VTO - vds/2) * (1 + LAMBDA*vds)
+/// ```
+///
+/// `vds < 0` swaps the terminals, `id = -f(vgs - vds, -vds)`. `id` then gains `GMIN * vds`,
+/// which is ngspice-42's drain-bulk `gmin` once the bulk sits on the source and `is` is 0.
+/// The gate draws no DC current. `CGS`, `CGD` and `CDS` are constant capacitances between the pins.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Mosfet {
+    /// Nets of pins `drain`, `gate`, `source`.
+    pub pins: [NetId; 3],
+    /// Ampere per volt squared. `KP`. Greater than 0.
+    pub transconductance_parameter: Value,
+    /// Volt. `VTO`. Any finite value, so a depletion device can state a negative threshold.
+    pub threshold_voltage: Value,
+    /// Per volt. `LAMBDA`. Zero is a flat saturation current.
+    pub channel_length_modulation: Value,
+    /// Farad. From gate to source.
+    pub gate_source_capacitance: Value,
+    /// Farad. From gate to drain.
+    pub gate_drain_capacitance: Value,
+    /// Farad. From drain to source.
+    pub drain_source_capacitance: Value,
+    /// Ampere, greater than 0. Bounds `|id|`. `None` is an explicit `"current": null`.
+    pub max_current: Option<Value>,
+    /// Watt, greater than 0. `None` is an explicit `"power": null`.
+    pub max_power: Option<Value>,
+}
+
+impl Mosfet {
+    pub const PINS: [&'static str; 3] = ["drain", "gate", "source"];
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WireBjt {
+    pub(crate) name: String,
+    pins: PinMap,
+    saturation_current: WireValue,
+    forward_beta: WireValue,
+    reverse_beta: WireValue,
+    forward_emission: WireValue,
+    reverse_emission: WireValue,
+    early_voltage: WireValue,
+    base_resistance: WireValue,
+    collector_resistance: WireValue,
+    emitter_resistance: WireValue,
+    base_emitter_capacitance: WireValue,
+    base_collector_capacitance: WireValue,
+    ratings: WireJunctionRatings,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WireMosfet {
+    pub(crate) name: String,
+    pins: PinMap,
+    transconductance_parameter: WireValue,
+    threshold_voltage: WireValue,
+    channel_length_modulation: WireValue,
+    gate_source_capacitance: WireValue,
+    gate_drain_capacitance: WireValue,
+    drain_source_capacitance: WireValue,
+    ratings: WireJunctionRatings,
+}
+
+pub(crate) fn resolve_bjt(
+    name: &Name,
+    part_ref: &Ref,
+    wire: WireBjt,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Bjt> {
+    let pins = resolve_pins(name, Bjt::PINS, &wire.pins.0, nets, out);
+    let mut positive =
+        |field: &'static str, unit, value| resolve_value(part_ref, field, unit, true, value, out);
+    let is = positive("saturation_current", "A", wire.saturation_current);
+    let bf = positive("forward_beta", "1", wire.forward_beta);
+    let br = positive("reverse_beta", "1", wire.reverse_beta);
+    let nf = positive("forward_emission", "1", wire.forward_emission);
+    let nr = positive("reverse_emission", "1", wire.reverse_emission);
+    let vaf = positive("early_voltage", "V", wire.early_voltage);
+    let rb = positive("base_resistance", "ohm", wire.base_resistance);
+    let rc = positive("collector_resistance", "ohm", wire.collector_resistance);
+    let re = positive("emitter_resistance", "ohm", wire.emitter_resistance);
+    let cje = positive(
+        "base_emitter_capacitance",
+        "F",
+        wire.base_emitter_capacitance,
+    );
+    let cjc = positive(
+        "base_collector_capacitance",
+        "F",
+        wire.base_collector_capacitance,
+    );
+    let ratings = wire.ratings;
+    let max_current = resolve_rating(part_ref, "ratings.current", "A", ratings.current, out);
+    let max_power = resolve_rating(part_ref, "ratings.power", "W", ratings.power, out);
+    let mut faults = Vec::new();
+    if let Some(is) = &is {
+        for (field, n) in [("forward_emission", &nf), ("reverse_emission", &nr)] {
+            if let Some(n) = n
+                && let Err(fault) = junction_scale(n.si.get(), is.si.get())
+            {
+                let at = (fault.field(field), fault.value(n.si.get(), is.si.get()));
+                // Both junctions share `saturation_current`, which breaks the rule once.
+                if !faults.contains(&at) {
+                    faults.push(at);
+                }
+            }
+        }
+    }
+    let junctions = faults.is_empty();
+    for (field, value) in faults {
+        out.push(Diagnostic::NetlistValue {
+            part: part_ref.clone(),
+            field: field.into(),
+            value,
+            rule: ValueRule::FiniteJunction,
+        });
+    }
+    if !junctions {
+        return None;
+    }
+    Some(Bjt {
+        pins: pins?,
+        saturation_current: is?,
+        forward_beta: bf?,
+        reverse_beta: br?,
+        forward_emission: nf?,
+        reverse_emission: nr?,
+        early_voltage: vaf?,
+        base_resistance: rb?,
+        collector_resistance: rc?,
+        emitter_resistance: re?,
+        base_emitter_capacitance: cje?,
+        base_collector_capacitance: cjc?,
+        max_current: max_current?,
+        max_power: max_power?,
+    })
+}
+
+pub(crate) fn resolve_mosfet(
+    name: &Name,
+    part_ref: &Ref,
+    wire: WireMosfet,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Mosfet> {
+    let pins = resolve_pins(name, Mosfet::PINS, &wire.pins.0, nets, out);
+    let lambda_number = wire.channel_length_modulation.value.get();
+    let (kp, cgs, cgd, cds) = {
+        let mut positive = |field: &'static str, unit, value| {
+            resolve_value(part_ref, field, unit, true, value, out)
+        };
+        (
+            positive(
+                "transconductance_parameter",
+                "A/V^2",
+                wire.transconductance_parameter,
+            ),
+            positive("gate_source_capacitance", "F", wire.gate_source_capacitance),
+            positive("gate_drain_capacitance", "F", wire.gate_drain_capacitance),
+            positive(
+                "drain_source_capacitance",
+                "F",
+                wire.drain_source_capacitance,
+            ),
+        )
+    };
+    let vto = resolve_value(
+        part_ref,
+        "threshold_voltage",
+        "V",
+        false,
+        wire.threshold_voltage,
+        out,
+    );
+    let lambda = resolve_value(
+        part_ref,
+        "channel_length_modulation",
+        "1/V",
+        false,
+        wire.channel_length_modulation,
+        out,
+    )
+    .and_then(|value| {
+        if lambda_number < 0.0 {
+            out.push(Diagnostic::NetlistValue {
+                part: part_ref.clone(),
+                field: "channel_length_modulation".into(),
+                value: lambda_number,
+                rule: ValueRule::NonNegative,
+            });
+            None
+        } else {
+            Some(value)
+        }
+    });
+    let ratings = wire.ratings;
+    let max_current = resolve_rating(part_ref, "ratings.current", "A", ratings.current, out);
+    let max_power = resolve_rating(part_ref, "ratings.power", "W", ratings.power, out);
+    Some(Mosfet {
+        pins: pins?,
+        transconductance_parameter: kp?,
+        threshold_voltage: vto?,
+        channel_length_modulation: lambda?,
+        gate_source_capacitance: cgs?,
+        gate_drain_capacitance: cgd?,
+        drain_source_capacitance: cds?,
+        max_current: max_current?,
+        max_power: max_power?,
+    })
 }

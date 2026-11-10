@@ -1,11 +1,12 @@
 //! The lint rules: what a scene that checks is likely to have wrong or left unclear. Each rule
 //! reads the checked circuit and pushes warnings. None of them blocks.
 
+use orbe_engine::netlist::{Model, Netlist};
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbe_engine::diagnostic::Diagnostic;
 use orbe_engine::name::Ref;
-use orbe_engine::netlist::{Model, Netlist};
 
 use super::{Circuit, ROOT};
 use crate::diagnostic::{Code, Findings, Lint};

@@ -1,7 +1,8 @@
+use crate::netlist::{NetId, Netlist, PartId};
+
 use std::ops::Range;
 
 use crate::name::Ref;
-use crate::netlist::{NetId, Netlist, PartId};
 
 use crate::chip;
 use crate::dense::{Matrix, Singular};

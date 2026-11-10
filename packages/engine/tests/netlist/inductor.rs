@@ -1,5 +1,6 @@
-use orbe_engine::name::Quantity;
 use orbe_engine::netlist::{self, Model};
+
+use orbe_engine::name::Quantity;
 
 /// `l1` from `vin` to ground, with one field's unit and value replaced when `changed` names it.
 fn inductor(changed: Option<(&str, &str, &str)>) -> String {

@@ -740,7 +740,7 @@ fn softplus(x: f64) -> f64 {
 
 /// Open-circuit output of the regulator law at `vi`, the current that `GMIN` draws there,
 /// and `dvo/di` at that current. The constants are the law's.
-fn regulator_open(reg: &orbe_engine::netlist::LinearRegulator, vi: f64) -> (f64, f64, f64) {
+fn regulator_open(reg: &orbe_engine::chip::LinearRegulator, vi: f64) -> (f64, f64, f64) {
     const KNEE_V: f64 = 1e-3;
     const FLOOR_OHM: f64 = 0.25;
     const LIMIT_FRACTION: f64 = 1e-3;

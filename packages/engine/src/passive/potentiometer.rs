@@ -1,24 +1,102 @@
-//! The `potentiometer` kind: pins `a`, `wiper` and `b`, a resistance in `ohm`, and a position in `1`.
-
 use std::collections::BTreeMap;
 
-use super::waveform::{WirePosition, WireSteps};
-use super::{FRACTION_UNIT, PinMap, WireValue, resolve_pins, resolve_value};
-use crate::diagnostic::{Diagnostic, ValueRule};
-use crate::name::{Name, Ref};
-use crate::netlist::{
-    Model, NetId, Potentiometer, Schedule, Source, Value, broken_fraction, position_rule,
-};
+use serde::Deserialize;
 
-pub(super) fn resolve_potentiometer(
-    name: &Name,
-    part_ref: &Ref,
+use crate::diagnostic::{Diagnostic, ValueRule};
+use crate::mna::Stamp;
+use crate::name::{Name, Ref};
+use crate::netlist::Model;
+use crate::netlist::NetId;
+use crate::netlist::Schedule;
+use crate::netlist::Source;
+use crate::netlist::Value;
+use crate::netlist::broken_fraction;
+use crate::netlist::broken_positive;
+use crate::netlist::json::waveform::{WirePosition, WireSteps};
+use crate::netlist::json::{FRACTION_UNIT, PinMap, WireValue, resolve_pins, resolve_value};
+
+/// `a` to `wiper` is `position * resistance`. `wiper` to `b` is the rest.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Potentiometer {
+    /// Nets of pins `a`, `wiper`, `b`.
+    pub pins: [NetId; 3],
+    /// Ohm, greater than 0.
+    pub resistance: Value,
+    /// Fraction of `resistance` from `a` to the wiper, in `(0, 1)`.
+    pub position: Schedule<Value>,
+}
+
+impl Potentiometer {
+    pub const PINS: [&'static str; 3] = ["a", "wiper", "b"];
+}
+
+/// A potentiometer position that breaks a rule, in the order parse reports them.
+/// The fraction is outside `(0, 1)`. Otherwise each leg is checked: `position * resistance`,
+/// then `(1 - position) * resistance`. A leg that is not positive is [`ValueRule::Positive`].
+/// A leg whose reciprocal is not finite is [`ValueRule::FiniteReciprocal`].
+pub struct PositionRule {
+    kind: PositionKind,
+}
+
+enum PositionKind {
+    Fraction,
+    Legs([(f64, Option<ValueRule>); 2]),
+}
+
+impl PositionRule {
+    /// The first broken rule. `None` when the position holds.
+    pub fn first(self) -> Option<ValueRule> {
+        match self.kind {
+            PositionKind::Fraction => Some(ValueRule::Fraction),
+            PositionKind::Legs(legs) => legs.into_iter().find_map(|(_, rule)| rule),
+        }
+    }
+
+    /// Both legs when the fraction holds. Each entry is the leg's ohms and the rule it breaks.
+    /// `None` when the fraction breaks, because the legs are not checked then.
+    pub fn legs(self) -> Option<[(f64, Option<ValueRule>); 2]> {
+        match self.kind {
+            PositionKind::Fraction => None,
+            PositionKind::Legs(legs) => Some(legs),
+        }
+    }
+}
+
+pub fn position_rule(position: f64, resistance: f64) -> PositionRule {
+    if broken_fraction(position).is_some() {
+        return PositionRule {
+            kind: PositionKind::Fraction,
+        };
+    }
+    let legs = [position * resistance, (1.0 - position) * resistance]
+        .map(|ohms| (ohms, broken_positive(ohms)));
+    PositionRule {
+        kind: PositionKind::Legs(legs),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WirePotentiometer {
+    pub(crate) name: String,
     pins: PinMap,
     resistance: WireValue,
     position: WirePosition,
+}
+
+pub(crate) fn resolve_potentiometer(
+    name: &Name,
+    part_ref: &Ref,
+    wire: WirePotentiometer,
     nets: &BTreeMap<String, NetId>,
     out: &mut Vec<Diagnostic>,
 ) -> Option<Model> {
+    let WirePotentiometer {
+        pins,
+        resistance,
+        position,
+        ..
+    } = wire;
     let pins = resolve_pins(name, Potentiometer::PINS, &pins.0, nets, out);
     let resistance = resolve_value(part_ref, "resistance", "ohm", true, resistance, out);
     let position = resolve_position(part_ref, resistance.as_ref(), position, out);
@@ -58,7 +136,7 @@ fn resolve_steps(
     steps: WireSteps,
     out: &mut Vec<Diagnostic>,
 ) -> Option<Schedule<Value>> {
-    super::resolve_schedule(
+    crate::netlist::json::resolve_schedule(
         part,
         "position.events",
         "position.initial",
@@ -125,4 +203,17 @@ fn refuse_fraction(
         value: number,
         rule: ValueRule::Fraction,
     });
+}
+
+pub(crate) fn stamp(pot: &Potentiometer, stamp: &mut Stamp<'_>) {
+    let ohms = pot.resistance.si.get();
+    let position = stamp
+        .conditions
+        .side()
+        .read(&pot.position, stamp.conditions.at)
+        .si
+        .get();
+    let [a, wiper, b] = pot.pins;
+    stamp.conductance(a, wiper, 1.0 / (position * ohms));
+    stamp.conductance(wiper, b, 1.0 / ((1.0 - position) * ohms));
 }

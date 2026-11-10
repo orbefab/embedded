@@ -1,11 +1,13 @@
 //! packages/engine/tests/circuits/npn-blinker. Two small-signal NPNs blink two LEDs.
 //! The supply steps from 0 V to 5 V at 1 ns.
 
+use orbe_engine::netlist::{self, Analysis, Netlist};
+
 use std::sync::OnceLock;
 
 use crate::runs::common;
 use orbe_engine::diagnostic::Diagnostic;
-use orbe_engine::netlist::{self, Analysis, Netlist};
+
 use orbe_engine::run_folder::Results;
 use orbe_engine::timestamp::Timestamp;
 

@@ -1,7 +1,9 @@
+use orbe_engine::netlist::{self, Contact, Model};
+
 use crate::common;
 
 use common::{errors, with_parts};
-use orbe_engine::netlist::{self, Contact, Model};
+
 use orbe_engine::time::Time;
 
 fn switch(events: &str, bounce: &str) -> String {
@@ -293,7 +295,7 @@ fn bounce_values_follow_the_value_rules() {
     assert!(text.contains("missing field `bounce`"), "{text}");
 }
 
-fn only_switch(netlist: &netlist::Netlist) -> &netlist::Switch {
+fn only_switch(netlist: &netlist::Netlist) -> &orbe_engine::passive::Switch {
     let Model::Switch(switch) = &netlist.parts().next().unwrap().1.model else {
         panic!("not a switch");
     };

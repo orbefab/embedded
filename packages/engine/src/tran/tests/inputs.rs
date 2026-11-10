@@ -1,3 +1,10 @@
+use crate::device::Cst816;
+use crate::netlist::{
+    self, Appended, Baud, Chip, Contact, Document, Frame, Model, Netlist, Part, Schedule,
+    SerialSend, Value,
+};
+use crate::passive::{Switch, position_rule};
+
 use std::collections::BTreeMap;
 
 use crate::diagnostic::{Diagnostic, ValueRule};
@@ -5,10 +12,7 @@ use crate::finite::Finite;
 use crate::logic::Level;
 use crate::name::Name;
 use crate::name::Ref;
-use crate::netlist::{
-    self, Appended, Baud, Chip, Contact, Cst816, Document, Frame, Model, Netlist, Part, Schedule,
-    SerialSend, Switch, Value, position_rule,
-};
+
 use crate::run_folder::Results;
 use crate::serial::SerialByte;
 use crate::trace::Trace;

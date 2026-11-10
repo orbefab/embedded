@@ -1,10 +1,12 @@
+use orbe_engine::netlist::{
+    self, Analysis, Appended, Baud, Contact, Document, Frame, Model, SerialSend,
+};
+
 use crate::common;
 
 use common::with_parts;
 use orbe_engine::finite::Finite;
-use orbe_engine::netlist::{
-    self, Analysis, Appended, Baud, Contact, Document, Frame, Model, SerialSend,
-};
+
 use orbe_engine::time::Time;
 
 const ANALYSIS: &str =
