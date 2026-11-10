@@ -32,11 +32,6 @@ impl Bus {
         self.sram.clone()
     }
 
-    #[cfg(test)]
-    pub(crate) fn sram(&self) -> &[u8] {
-        &self.sram
-    }
-
     pub(crate) fn restore_sram(&mut self, bytes: &[u8]) {
         let n = self.sram.len().min(bytes.len());
         self.sram[..n].copy_from_slice(&bytes[..n]);

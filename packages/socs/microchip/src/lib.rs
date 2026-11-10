@@ -34,7 +34,6 @@ macro_rules! clone_fields {
 mod analog;
 mod bus;
 mod chip;
-mod core;
 mod cpu;
 mod fuses;
 mod image;
@@ -44,7 +43,6 @@ mod periph;
 mod regs;
 mod timeline;
 
-pub use core::SpmNote;
 pub use cpu::{Channel, Cpu, LoadError, Parity, ResetKind, SerialFrame, SpiClock, SupplyChannel};
 pub use fuses::FuseBytes;
 pub use image::{IgnoredRegion, IgnoredSegment, Image, ImageError, parse_elf, parse_hex};

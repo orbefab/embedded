@@ -30,7 +30,7 @@ pub(super) enum Update {
 impl Core {
     /// Runs `op`, the decoded word at `pc`.
     #[inline(always)]
-    pub(super) fn execute_op(&mut self, bus: &mut Bus, pc: u16, op: Op) {
+    pub(super) fn execute_op<B: Bus>(&mut self, bus: &mut B, pc: u16, op: Op) {
         if op.is_free() {
             self.execute_free(pc, op);
         } else {
@@ -42,7 +42,7 @@ impl Core {
     /// reading through [`Bus::peek`] and leaving the bus as it is. Otherwise runs nothing and
     /// returns `false`.
     #[inline(always)]
-    pub(super) fn execute_steady(&mut self, bus: &Bus, pc: u16, op: Op) -> bool {
+    pub(super) fn execute_steady<B: Bus>(&mut self, bus: &B, pc: u16, op: Op) -> bool {
         let next = pc.wrapping_add(1);
         match op {
             Op::In { d, addr } if bus.steady(addr) => {
@@ -223,7 +223,7 @@ impl Core {
     }
 
     #[inline(always)]
-    fn execute_bus(&mut self, bus: &mut Bus, pc: u16, op: Op) {
+    fn execute_bus<B: Bus>(&mut self, bus: &mut B, pc: u16, op: Op) {
         let next = pc.wrapping_add(1);
         match op {
             Op::Ldd { d, ptr, q } => {
@@ -301,9 +301,7 @@ impl Core {
                 bus.write_bit(self, addr, b, false);
                 self.finish(next, 2);
             }
-            // SBIC/SBIS encode an I/O address in 0x00–0x1F (data 0x20–0x3F) and UDR0 is data
-            // 0xC6, so the DS40002061B §20.11.1 note that SBIC/SBIS on UDR pops the FIFO cannot
-            // apply. `peek` is the right read.
+            // SBIC/SBIS encode an I/O address in 0x00–0x1F (data 0x20–0x3F). `peek` is the read.
             Op::Sbic { addr, b, skip } => {
                 let set = bus.peek(self, addr) & (1 << b) != 0;
                 self.skip_if(!set, next, skip);
@@ -433,7 +431,7 @@ impl Core {
         }
     }
 
-    fn load_ptr(&mut self, bus: &mut Bus, pc: u16, d: u8, ptr: Ptr, update: Update) {
+    fn load_ptr<B: Bus>(&mut self, bus: &mut B, pc: u16, d: u8, ptr: Ptr, update: Update) {
         let addr = self.ptr_addr(ptr, update);
         let value = bus.load(self, addr);
         if update != Update::None {
@@ -446,7 +444,7 @@ impl Core {
         self.finish(pc.wrapping_add(1), 2);
     }
 
-    fn store_ptr(&mut self, bus: &mut Bus, pc: u16, r: u8, ptr: Ptr, update: Update) {
+    fn store_ptr<B: Bus>(&mut self, bus: &mut B, pc: u16, r: u8, ptr: Ptr, update: Update) {
         let value = self.at(r);
         let addr = self.ptr_addr(ptr, update);
         bus.store(self, addr, value, 2);
@@ -498,7 +496,7 @@ impl Core {
         }
     }
 
-    pub(crate) fn enter_interrupt(&mut self, bus: &mut Bus, word: u16, cycles: u64) {
+    pub fn enter_interrupt<B: Bus>(&mut self, bus: &mut B, word: u16, cycles: u64) {
         let return_pc = self.pc;
         self.push_pc(bus, return_pc, cycles);
         self.sreg &= !I;
@@ -508,13 +506,13 @@ impl Core {
 
     /// DS40002198 CALL / RCALL: the return address is stored with a
     /// post-decrement.
-    fn push_pc(&mut self, bus: &mut Bus, addr: u16, cycles: u64) {
+    fn push_pc<B: Bus>(&mut self, bus: &mut B, addr: u16, cycles: u64) {
         self.push(bus, addr as u8, cycles);
         self.push(bus, (addr >> 8) as u8, cycles);
     }
 
     /// DS40002198 RET / RETI: pre-increment.
-    fn pop_pc(&mut self, bus: &mut Bus) -> u16 {
+    fn pop_pc<B: Bus>(&mut self, bus: &mut B) -> u16 {
         let hi = self.pop(bus);
         let lo = self.pop(bus);
         u16::from(lo) | (u16::from(hi) << 8)
