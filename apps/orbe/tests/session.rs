@@ -85,7 +85,7 @@ fn the_first_target_runs_live_one_process_per_command_as_orbe_test_runs_it() {
         transcript.contains("$ orbe get @nano.D13\nnano.D13 high"),
         "{transcript}"
     );
-    assert!(runtime.daemons().is_empty(), "close ends the process");
+    wait_until("close ends the process", || runtime.daemons().is_empty());
     assert!(runtime.sockets().is_empty(), "close removes the socket");
 
     let tested = runtime
@@ -266,7 +266,7 @@ fn two_sessions_with_different_names_run_side_by_side() {
 
     runtime.orbe(dir.path(), &["close", "--session", "a"]).ok();
     by_env(&["close"]).ok();
-    assert!(runtime.daemons().is_empty());
+    wait_until("both processes end", || runtime.daemons().is_empty());
 }
 
 #[test]
@@ -871,7 +871,7 @@ fn close_all_ends_every_session_and_removes_stale_sockets() {
     ];
     lines.sort();
     assert_eq!(run.stdout, format!("{}\n", lines.join("\n")));
-    assert!(runtime.daemons().is_empty());
+    wait_until("every closed process ends", || runtime.daemons().is_empty());
     assert!(runtime.sockets().is_empty());
     let run = runtime.orbe(dir.path(), &["close", "--all"]).ok();
     assert_eq!(run.stdout, "no sessions are running\n");
