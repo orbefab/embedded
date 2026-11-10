@@ -357,10 +357,10 @@ fn accepted_steps(rel: &str) -> u64 {
     stats.landings
 }
 
-/// Measured 2670 accepted steps. The bound is 10 percent above that count, in integer math.
+/// Measured 1340 accepted steps. The bound is 10 percent above that count, in integer math.
 #[test]
 fn relay_flyback_stays_near_its_step_count() {
-    let measured = 2_670;
+    let measured = 1_340;
     let steps = accepted_steps("../tests/circuits/relay-flyback/netlist.json");
     eprintln!("relay-flyback steps {steps}");
     assert!(
@@ -399,10 +399,10 @@ fn fb_null_window(bytes: &[u8]) -> (u64, f64) {
     (steps, reversal)
 }
 
-/// Measured 13688 accepted steps. The bound is 10 percent above that count, in integer math.
+/// Measured 13868 accepted steps. The bound is 10 percent above that count, in integer math.
 #[test]
 fn the_bare_inductor_stays_near_its_step_count() {
-    let measured = 13_688;
+    let measured = 13_868;
     let steps = accepted_steps("tests/controls/bare-inductor.json");
     eprintln!("bare-inductor steps {steps}");
     assert!(
@@ -433,11 +433,11 @@ fn fb_null_20000_stops_zigzagging_on_net_b() {
     assert!(reversal < 1e-10, "reversal {reversal:e} V");
 }
 
-/// Measured 13764 accepted steps. The bound is 10 percent above that count, in integer math.
+/// Measured 13668 accepted steps. The bound is 10 percent above that count, in integer math.
 /// The fixture can carry a power warning, so the run check is the absence of an error.
 #[test]
 fn the_bare_relay_stays_near_its_step_count() {
-    let measured = 13_764;
+    let measured = 13_668;
     let steps = accepted_steps("../cli/tests/fixtures/p-relay-npn-bare/netlist.json");
     eprintln!("p-relay-npn-bare steps {steps}");
     assert!(

@@ -666,10 +666,11 @@ struct Judged {
 }
 
 /// The error of a step of `h` ps from `(at, last)` to `next`, each store on its method in
-/// `segment`. A capacitor's tolerance is `SHARE` of its swing plus `VNTOL`. An inductor's
-/// current is held to `SHARE` of its swing plus the larger of `ABSTOL` and `h * VNTOL / L`, and
-/// the voltage that error implies, `L * error / h`, to `SHARE` of the voltage's swing plus
-/// `VNTOL`. A stiff store keeps Newton's tolerance.
+/// `segment`. A capacitor's voltage is held to `SHARE` of its swing plus `VNTOL`, or plus the
+/// larger of `VNTOL` and `h * ABSTOL / C` on a step whose change in current reverses the one
+/// before. An inductor's current is held to `SHARE` of its swing plus the larger of `ABSTOL`
+/// and `h * VNTOL / L`, and the voltage that error implies, `L * error / h`, to `SHARE` of the
+/// voltage's swing plus `VNTOL`. A stiff store keeps Newton's tolerance.
 pub(crate) fn error(
     charges: &Charges,
     segment: &Segment,
@@ -716,7 +717,24 @@ pub(crate) fn error(
         let newton = error / (RELTOL * level + VNTOL);
         let ratio = match stiff(method) {
             true => newton,
-            false => error / (SHARE * swing.size() + VNTOL),
+            false => {
+                // A current that flips each step is the trapezoidal rule's own mode, which moves
+                // no charge. Newton resolves that current to `ABSTOL` at best, and over the step
+                // it moves the voltage by `h * ABSTOL / C`.
+                let current = |x: &Solution| x.get(cap.branch);
+                let flips = match segment {
+                    Segment::Smooth {
+                        before: (_, before),
+                        ..
+                    } => (current(next) - current(last)) * (current(last) - current(before)) < 0.0,
+                    Segment::Start { .. } => false,
+                };
+                let floor = match flips {
+                    true => VNTOL.max(h * ABSTOL / cap.farad),
+                    false => VNTOL,
+                };
+                error / (SHARE * swing.size() + floor)
+            }
         };
         Judged {
             store,
@@ -1991,6 +2009,50 @@ mod tests {
         let floor = seconds(h) * VNTOL / henry;
         let want = error / (SHARE * 5.0 / 70.0 + floor);
         assert!((got.ratio - want).abs() <= 1e-9 * want, "{got:?}");
+    }
+
+    /// After a restart solve that held it, an IRF520's 34 pF gate-drain capacitor sits at
+    /// 4.778 V with 0.675 pA of roundoff in its current, and the trapezoidal rule flips that
+    /// current by `a` each way every step. The ring reads as `h * a / 3C`, which grows with the
+    /// step, so against 1 nV it would cap the step at 151 ns. Against `h * ABSTOL / C` it
+    /// reads `a / 3 pA` at any step.
+    #[test]
+    fn a_ring_under_a_picoampere_does_not_hold_a_capacitor_s_step() {
+        let (farad, a, volts) = (34e-12, 6.75e-13, 4.778);
+        for h in [1_000_000, 1_000_000_000] {
+            let segment = swung((Time::ZERO, point(volts, a)), volts, volts);
+            let got = error(
+                &one(farad),
+                &segment,
+                Time::from_ps(h),
+                &point(volts, -a),
+                h,
+                &point(volts, a),
+            );
+            let want = a / (3.0 * ABSTOL);
+            assert!((got.ratio - want).abs() <= 1e-9 * want, "{h} ps {got:?}");
+            assert!(matches!(got.verdict(h), Verdict::Accept), "{h} ps {got:?}");
+        }
+    }
+
+    /// 1 pF charged by a current that grows from 0 to 0.1 pA to 0.3 pA over two 1 us steps. Its
+    /// change does not reverse, so the curve is real, and its error, `h * 0.1 pA / 12C`, 8.3 nV,
+    /// stays held to 1 nV.
+    #[test]
+    fn a_picoampere_curve_keeps_the_nanovolt_floor() {
+        let (farad, a, h) = (1e-12, 1e-13, 1_000_000);
+        let segment = swung((Time::ZERO, point(0.0, 0.0)), 0.0, 0.0);
+        let got = error(
+            &one(farad),
+            &segment,
+            Time::from_ps(h),
+            &point(0.0, a),
+            h,
+            &point(0.0, 3.0 * a),
+        );
+        let want = seconds(h) * a / (12.0 * farad) / VNTOL;
+        assert!((got.ratio - want).abs() <= 1e-9 * want, "{got:?}");
+        assert!(matches!(got.verdict(h), Verdict::Reject), "{got:?}");
     }
 
     /// A 10 uH coil into a net that draws nothing carries the 5 pA gmin lets through, and the

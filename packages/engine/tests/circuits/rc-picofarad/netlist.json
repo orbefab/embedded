@@ -1,0 +1,47 @@
+{
+  "version": 0,
+  "seed": 0,
+  "analysis": { "transient": { "stop_ps": 5000000000, "max_step_ps": 5000000000, "grid_ps": 10000000 } },
+  "ground": "gnd",
+  "nets": ["gnd", "vbus", "rail", "top"],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": { "p": "vbus", "n": "gnd" },
+      "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+    },
+    {
+      "name": "rs",
+      "kind": "resistor",
+      "pins": { "a": "vbus", "b": "rail" },
+      "resistance": { "value": 0.2, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
+    },
+    {
+      "name": "i1",
+      "kind": "current_source",
+      "pins": { "p": "rail", "n": "gnd" },
+      "current": {
+        "kind": "step",
+        "initial": { "value": 0.0, "unit": "A", "source": "user" },
+        "final": { "value": 0.0005, "unit": "A", "source": "user" },
+        "at_ps": 1000000000
+      }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": { "a": "rail", "b": "top" },
+      "resistance": { "value": 1.0, "unit": "ohm", "source": "user" },
+      "ratings": { "power": null }
+    },
+    {
+      "name": "c1",
+      "kind": "capacitor",
+      "pins": { "a": "top", "b": "gnd" },
+      "capacitance": { "value": 1e-12, "unit": "F", "source": "user" },
+      "initial": null
+    }
+  ]
+}

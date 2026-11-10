@@ -531,3 +531,27 @@ fn stiff_capacitors_that_share_a_slow_mode_stay_on_its_closed_form() {
         alone.rows()
     );
 }
+
+/// `rc-picofarad` is 1 pF behind 1 ohm on a 5 V rail of 0.2 ohm, which a 0.5 mA load steps at
+/// 1 ms. ngspice-42 accepts 63 timepoints on its reference deck run with the print step and the
+/// step cap both at the stop, at reltol 1e-3, 1e-5 and 1e-9 alike. The engine is held to three
+/// times that.
+#[test]
+fn a_picofarad_behind_an_ohm_steps_within_three_times_ngspice() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../tests/circuits/rc-picofarad/netlist.json");
+    let bytes = std::fs::read(&path).unwrap();
+    let netlist = orbe_engine_core::netlist::parse(&bytes).unwrap();
+    let (results, stats) = orbe_circuit::simulate_stats(&netlist);
+    assert!(
+        results.diagnostics().is_empty(),
+        "{:?}",
+        results.diagnostics()
+    );
+    let bound = 63 * 3;
+    assert!(
+        stats.landings <= bound,
+        "{} steps, bound {bound}",
+        stats.landings
+    );
+}

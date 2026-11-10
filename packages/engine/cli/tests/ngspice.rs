@@ -113,6 +113,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "npn-sweep",
             "pnp-load",
             "pnp-sweep",
+            "rc-picofarad",
             "rc-switch",
             "regulator-3v3",
             "regulator-dropout",
