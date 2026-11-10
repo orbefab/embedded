@@ -236,14 +236,26 @@ def has_logic(netlist):
 def logic_reads_back(example):
     """Runs the engine on the example and reads its logic.vcd back as observations.logic."""
     subprocess.run(
-        ["cargo", "build", "--release", "--locked", "--quiet", "-p", "orbe-engine-cli"],
+        [
+            "cargo",
+            "build",
+            "--release",
+            "--locked",
+            "--quiet",
+            "-p",
+            "orbe-circuit",
+            "--features",
+            "runner",
+            "--bin",
+            "orbe-run",
+        ],
         cwd=ROOT,
         check=True,
     )
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp, "run")
         subprocess.run(
-            [ROOT / "target/release/sim", "run", example / "netlist.json", "--out", out],
+            [ROOT / "target/release/orbe-run", "run", example / "netlist.json", "--out", out],
             capture_output=True,
             check=True,
         )

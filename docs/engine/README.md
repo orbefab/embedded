@@ -56,18 +56,43 @@ The process exits with one of these codes.
 
 `--help` and `--version` print plain text and exit 0. Stdout for `run` repeats `diagnostics` in the same order as `diagnostics.json`.
 
+## The run manifest
+
+`scripts/run-hashes.sh` runs every netlist in `packages/engine/tests/circuits` and prints one `sha256  path` line per file those runs wrote. A `manifest.json` line is the hash of that JSON with `created_at` removed, the same removal `packages/engine/scripts/wasi-check.sh` uses when it compares two manifests. Every other file is hashed as written. The lines are sorted by path, so one circuit's files sit together in a diff.
+
+Each Block adds three records. `blocks/<id>/netlist.json` is the netlist v0 its scene resolves to. `blocks/<id>/run/` is every file of that netlist run after `analysis.transient.stop_ps` is set to `2000000000000`, which is 2 s. The scene stops at 7200 s on a 1 ms grid, and `orbe-run` rejects that trace, so the manifest hashes this 2 s run instead. `blocks/<id>/orbe-test` is the stdout of `orbe test -v` on that Block. That stdout includes each `expect`'s measured value.
+
+A run that does not exit 0 stops the script. The script names the circuit and the exit code, prints the runner's report on stderr, and exits with that code. A Block test that fails prints its output on stderr and exits with the test's status. The paths are relative to the repo root, so two runs of one build print the same lines.
+
+```sh
+scripts/run-hashes.sh > /tmp/engine-before
+# rebuild the engine
+scripts/run-hashes.sh > /tmp/engine-after
+diff -u /tmp/engine-before /tmp/engine-after
+```
+
+`--time` adds a `time circuits/<name> <milliseconds>` line for each circuit after the hashes. The number is the median wall time of five runs. Leave `--time` off when you diff two manifests.
+
+The runs go through `orbe-run`. Build it with the `runner` feature of `orbe-circuit`. A build of `orbe` or `orbe-wasm` leaves the feature off, so neither binary builds `orbe-run`.
+
+```sh
+cargo build -p orbe-circuit --features runner --bin orbe-run
+```
+
+`orbe-run run <netlist> --out <dir> [--blobs <dir>]…` writes the same folder as `sim run`, and it uses the same exit codes. `RUNNER` selects the binary `scripts/run-hashes.sh` runs. When `RUNNER` is unset, the script builds release `orbe-run`.
+
 ## Check
 
-`scripts/check.sh fast` runs shellcheck on every tracked shell script and ruff (`ruff check` and `ruff format --check`) on every tracked Python file, then rustfmt, clippy, and `cargo nextest` for the Rust tests other than the `orbe-avr` suite and five engine targets. shellcheck follows each script's source directive. ruff is the `packages/cad` dev dependency, run with `uv run --project packages/cad --frozen`, and its config is the repo's `ruff.toml`. `scripts/check.sh full` runs `fast`, then:
+`scripts/check.sh fast` runs shellcheck on every tracked shell script and ruff (`ruff check` and `ruff format --check`) on every tracked Python file, then rustfmt, clippy, and `cargo nextest` for the Rust tests other than the `orbe-avr` suite and five engine targets. Clippy also builds `orbe-run` with `--features runner`. shellcheck follows each script's source directive. ruff is the `packages/cad` dev dependency, run with `uv run --project packages/cad --frozen`, and its config is the repo's `ruff.toml`. `scripts/check.sh full` runs `fast`, then:
 
 - `cargo nextest run --profile ci -p orbe-avr --locked --features port-skip-check`.
 - `packages/engine/circuit/tests/transient.rs`, `packages/engine/circuit/tests/session.rs`, `packages/engine/cli/tests/run.rs`, `packages/engine/cli/tests/session.rs` and `packages/engine/cli/tests/ws2812.rs`. Each test in those files is `#[ignore = "full tier"]`, and `full` runs that set with `--run-ignored only`.
 - the `orbe-xtensa`, `orbe-espressif` and `orbe-engine-cli` clippy and `cargo nextest` runs with `orbe-xtensa/poll-skip-check`. On a step whose poll is skipped, that build reads the interrupt lines and panics if they moved. The read is the one a normal build makes when it does poll, so it settles and stamps on that path. It does not run the stamp a skipped poll uses.
 - `--self-test` of `ngspice_refs.py`, `render_st77916.py`, `esp32s3_blink.py`, `esp32s3_hello.py`, `esp32s3_screen.py`, `esp32s3_encoder.py`, `i2c_decode.py`, `esp32s3_touch.py`, `esp32s3_dualcore.py`, `esp32s3_echo.py`, `esp32s3_ring.py`, `esp32s3_arduino_console.py` and `esp32s3_knob.py`.
 - `st77916_example.py --check` and `pattern_header.py --check`.
-- `sim run` on `st77916-replay`, `esp32s3-blink`, `esp32s3-pattern` and the seven ESP-IDF circuits, `esp32s3-hello`, `esp32s3-screen`, `esp32s3-encoder`, `esp32s3-touch`, `esp32s3-dualcore`, `esp32s3-echo` and `esp32s3-ring`, each checked by its script with `--check`.
+- `orbe-run run` on `st77916-replay`, `esp32s3-blink`, `esp32s3-pattern` and the seven ESP-IDF circuits, `esp32s3-hello`, `esp32s3-screen`, `esp32s3-encoder`, `esp32s3-touch`, `esp32s3-dualcore`, `esp32s3-echo` and `esp32s3-ring`, each checked by its script with `--check`.
 - the knob refs: it copies `packages/engine/tests/firmware/esp32s3/arduino/checks/knob/netlist.json` under `TMPDIR`, runs `esp32s3_knob.py script` on the refs into that copy, and fails when `cmp` shows a difference.
-- `packages/engine/scripts/wasi-check.sh`, which runs `sim` built for `wasm32-wasip1` on every example in node and compares each folder with native `sim run`'s.
+- `packages/engine/scripts/wasi-check.sh`, which runs `orbe-run` built for `wasm32-wasip1` on every example in node and compares each folder with native `orbe-run`.
 - `scripts/check-wasm.sh`, the browser package's check, which [docs/wasm.md](../wasm.md#tests) describes.
 - `scripts/check-speed.sh` on the package and registry that check built, which fails when a Block plays too slowly in Chromium, as [docs/wasm.md](../wasm.md#speed) says.
 

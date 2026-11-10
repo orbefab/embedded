@@ -3,8 +3,8 @@
 # tracked Python file, rustfmt, clippy, clippy on orbe-scene, orbe-session and orbe-wasm for wasm32,
 # and the Rust tests through cargo-nextest, except the `orbe-avr` tests and five engine targets
 # marked `full tier`.
-# `full` runs those too, then the chip models' skip checks, the engine's Python checks, `sim` for
-# WASI against native, the wasm package check, and the browser speed check on the package that
+# `full` runs those too, then the chip models' skip checks, the engine's Python checks, `orbe-run`
+# for WASI against native, the wasm package check, and the browser speed check on the package that
 # check built. Both need uv, shellcheck and cargo-nextest. `full` also needs ngspice-42, node 24
 # or later, the repo's Node dependencies, a Chromium as scripts/check-speed.sh finds it, rustup
 # with the wasm32-wasip1 target, and the wasm-bindgen CLI that scripts/wasm.sh names.
@@ -57,6 +57,7 @@ fast() {
   cargo fmt --all --check
   blobs=$(packages/engine/scripts/blobs.sh)
   cargo clippy --workspace --all-targets --locked -- -D warnings
+  cargo clippy -p orbe-circuit --all-targets --locked --features runner -- -D warnings
   cargo clippy -p orbe-avr --all-targets --locked --features port-skip-check -- -D warnings
   cargo clippy -p orbe-scene -p orbe-session -p orbe-wasm --target wasm32-unknown-unknown --locked \
     -- -D warnings
@@ -68,8 +69,8 @@ run_check() {
   shift 2
   run="${CARGO_TARGET_DIR:-target}/$circuit-check"
   rm -rf "$run"
-  cargo run -q -p orbe-engine-cli --locked -- run "packages/engine/tests/circuits/$circuit/netlist.json" \
-    --out "$run" --blobs "$blobs" >/dev/null
+  cargo run -q -p orbe-circuit --features runner --bin orbe-run --locked -- \
+    run "packages/engine/tests/circuits/$circuit/netlist.json" --out "$run" --blobs "$blobs" >/dev/null
   uv run "packages/engine/scripts/$checker" "$@" --check "$run"
   rm -rf "$run"
 }

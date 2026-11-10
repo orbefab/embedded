@@ -7,15 +7,25 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+clap = { workspace = true, optional = true }
 libm.workspace = true
 orbe-engine-core.workspace = true
 orbe-avr.workspace = true
 orbe-espressif.workspace = true
 orbe-xtensa.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [features]
 # Tests only: `simulate_steps`, a row at every accepted step.
 step-rows = []
+# The `orbe-run` binary. `orbe` and `orbe-wasm` leave this off, so they do not build it.
+runner = ["dep:clap"]
+
+[[bin]]
+name = "orbe-run"
+path = "src/bin/orbe-run.rs"
+required-features = ["runner"]
 
 [dev-dependencies]
 serde_json.workspace = true

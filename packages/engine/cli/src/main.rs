@@ -1,12 +1,8 @@
-use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use orbe_engine_cli::{Envelope, Failure, RunReport, Status};
-use orbe_engine_core::timestamp::Timestamp;
-use serde::Serialize;
+use orbe_engine_cli::{Failure, Status, emit, run_file};
 
 #[derive(Parser)]
 #[command(name = "sim", version, about = "Simulate a netlist into a run folder")]
@@ -58,42 +54,10 @@ fn main() -> ExitCode {
             netlist,
             out,
             blobs,
-        } => run(&netlist, &out, &blobs),
+        } => run_file(&netlist, &out, &blobs),
         Command::View { run, out } => match orbe_engine_cli::view(&run, &out) {
             Ok(report) => emit(Status::Ok, &report),
             Err(failure) => emit(Status::IoError, &failure),
         },
     }
-}
-
-fn run(netlist: &Path, out: &Path, dirs: &[PathBuf]) -> ExitCode {
-    let input = match fs::read(netlist) {
-        Ok(bytes) => bytes,
-        Err(e) => return emit(Status::IoError, &io_failure(netlist, e)),
-    };
-    let blobs = match orbe_engine_cli::blobs(&input, netlist, dirs) {
-        Ok(blobs) => blobs,
-        Err((path, e)) => return emit(Status::IoError, &io_failure(&path, e)),
-    };
-    let done = orbe_engine_cli::run_with(&input, &blobs, Timestamp::now());
-    if let Err(e) = done.folder.write(out) {
-        return emit(Status::IoError, &io_failure(out, e));
-    }
-    let report = RunReport::new(out, &done.results);
-    emit(report.status(), &report)
-}
-
-fn io_failure(path: &Path, e: std::io::Error) -> Failure {
-    Failure {
-        message: e.to_string(),
-        path: Some(path.display().to_string()),
-    }
-}
-
-fn emit<T: Serialize>(status: Status, body: &T) -> ExitCode {
-    let doc = Envelope { status, body };
-    let text = serde_json::to_string_pretty(&doc).expect("report types serialize");
-    let mut stdout = std::io::stdout().lock();
-    let _ = writeln!(stdout, "{text}");
-    ExitCode::from(status.exit_code())
 }
