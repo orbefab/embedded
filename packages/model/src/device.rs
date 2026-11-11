@@ -47,6 +47,15 @@ pub trait I2cTarget: Device {
     fn stop(&mut self, _cx: &mut Cx, _at: Time) {}
 }
 
+/// A device on a pulsed line. The host watches the line, times each level, and calls the device
+/// when a level ends. The device sees the level and how long it held.
+pub trait PulseTarget: Device {
+    /// A level that held for `width` picoseconds ended at `at`.
+    fn pulse(&mut self, cx: &mut Cx, at: Time, level: bool, width: u64);
+    /// The line has held `level` for the idle time the host was given, at `at`.
+    fn idle(&mut self, _cx: &mut Cx, _at: Time, _level: bool) {}
+}
+
 /// Which way a transfer goes, from the master's side.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dir {
@@ -61,12 +70,46 @@ pub enum Ack {
     No,
 }
 
-/// What a device may do during a call besides change its own state. Nothing yet: the calls that
-/// write to the run, such as sending a record or marking a rule broken, join with the first
-/// device that needs them.
+/// What a device may do during a call besides change its own state.
+///
+/// [`broke`](Cx::broke) names a rule and the time. The first call wins. [`view`](Cx::view)
+/// replaces the bytes the host reads after the call, such as a chain's colours at a latch.
 #[derive(Debug, Default)]
 pub struct Cx {
-    _private: (),
+    broken: Option<(&'static str, Time)>,
+    view: Vec<u8>,
+    viewed: bool,
+}
+
+impl Cx {
+    /// The rule `rule` broke at `at`. A later call in this same `Cx` changes nothing.
+    pub fn broke(&mut self, rule: &'static str, at: Time) {
+        if self.broken.is_none() {
+            self.broken = Some((rule, at));
+        }
+    }
+
+    /// Replaces the bytes the host reads after this call.
+    pub fn view(&mut self, bytes: &[u8]) {
+        self.viewed = true;
+        self.view.clear();
+        self.view.extend_from_slice(bytes);
+    }
+
+    /// The first rule named in this call, and its time.
+    pub fn broken(&self) -> Option<(&'static str, Time)> {
+        self.broken
+    }
+
+    /// The bytes of the last [`view`](Self::view) in this call.
+    pub fn view_bytes(&self) -> &[u8] {
+        &self.view
+    }
+
+    /// Whether this call ran [`view`](Self::view).
+    pub fn viewed(&self) -> bool {
+        self.viewed
+    }
 }
 
 /// A value of a param or an event field.
@@ -137,5 +180,19 @@ mod tests {
         assert_eq!(fields.bool("x"), None, "x is an int");
         assert_eq!(fields.int("y"), None, "no field y");
         assert_eq!(Fields::NONE.get("x"), None);
+    }
+
+    #[test]
+    fn the_first_broken_rule_wins_and_a_view_replaces_the_bytes() {
+        let mut cx = Cx::default();
+        assert_eq!(cx.broken(), None);
+        assert!(!cx.viewed());
+        cx.broke("bit", Time::from_ps(3));
+        cx.broke("other", Time::from_ps(4));
+        assert_eq!(cx.broken(), Some(("bit", Time::from_ps(3))));
+        cx.view(&[1, 2]);
+        cx.view(&[9]);
+        assert!(cx.viewed());
+        assert_eq!(cx.view_bytes(), &[9]);
     }
 }
