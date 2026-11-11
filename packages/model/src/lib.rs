@@ -9,7 +9,10 @@ mod pins;
 mod record;
 mod time;
 
-pub use device::{Ack, Cx, Device, Dir, Error, Event, Fields, I2cTarget, Params, State, Value};
+pub use device::{
+    Ack, Cx, Device, Dir, Error, Event, Fields, I2cTarget, Idle, Params, PulseTarget, Shows, State,
+    Value,
+};
 pub use pins::{Drive, Drives, Levels, Stop};
 pub use record::{Cs, Duty, Lanes, Pulses, Spi, SpiPhase};
 pub use time::Time;

@@ -484,11 +484,11 @@ impl Model {
         };
         match chip {
             Chip::Cst816(dev) => Some((&crate::device::cst816::ROW, &dev.events)),
+            Chip::Ws2812(_) => Some((&crate::device::ws2812::ROW, &crate::device::NO_EVENTS)),
             Chip::Ne555(_)
             | Chip::Atmega328p(_)
             | Chip::SpiReplay(_)
             | Chip::St77916(_)
-            | Chip::Ws2812(_)
             | Chip::PulsesReplay(_)
             | Chip::Esp32s3(_) => None,
         }

@@ -3,12 +3,13 @@
 //! picks. The circuit sees only its drive image, one `Drive` per output pin. `docs/engine/engine.md`,
 //! Active chips, holds the loop's protocol.
 
-use orbe_model::{Drive, Event, Stop, Time};
+use orbe_model::{Drive, Event, Shows, Stop, Time};
 
 use crate::netlist::{NetId, PartId};
 
 pub(crate) mod i2c;
 pub(crate) mod native;
+pub(crate) mod pulse;
 #[cfg(test)]
 pub(crate) mod script;
 
@@ -138,7 +139,6 @@ pub(crate) enum Core {
     /// A device on the `orbe-model` contract.
     Device(Box<dyn Hosted>),
     Esp32s3(Box<esp32s3::Core>),
-    Ws2812(Box<ws2812::Core>),
     #[cfg(test)]
     Script(script::Core),
 }
@@ -152,7 +152,6 @@ impl Clone for Core {
             Core::St77916(core) => Core::St77916(core.clone()),
             Core::Device(core) => Core::Device(core.boxed()),
             Core::Esp32s3(core) => Core::Esp32s3(core.clone()),
-            Core::Ws2812(core) => Core::Ws2812(core.clone()),
             #[cfg(test)]
             Core::Script(core) => Core::Script(core.clone()),
         }
@@ -182,7 +181,6 @@ impl Core {
             Core::St77916(_) => None,
             Core::Device(ref mut core) => core.run_until(limit),
             Core::Esp32s3(ref mut core) => core.run_until(limit),
-            Core::Ws2812(ref mut core) => core.run_until(limit),
             #[cfg(test)]
             Core::Script(ref mut core) => core.run_until(limit),
         }
@@ -196,7 +194,6 @@ impl Core {
             Core::St77916(ref core) => core.drive(),
             Core::Device(ref core) => core.drive(),
             Core::Esp32s3(ref core) => core.drive(),
-            Core::Ws2812(ref core) => core.drive(),
             #[cfg(test)]
             Core::Script(ref core) => core.drive(),
         }
@@ -207,11 +204,7 @@ impl Core {
         match *self {
             Core::Avr(ref mut core) => core.sample(at, volts),
             Core::Device(ref mut core) => core.sample(at, volts),
-            Core::SpiReplay(_)
-            | Core::PulsesReplay(_)
-            | Core::St77916(_)
-            | Core::Esp32s3(_)
-            | Core::Ws2812(_) => {
+            Core::SpiReplay(_) | Core::PulsesReplay(_) | Core::St77916(_) | Core::Esp32s3(_) => {
                 unreachable!("only a core with samples samples")
             }
             #[cfg(test)]
@@ -228,7 +221,6 @@ impl Core {
             Core::St77916(ref mut core) => core.input(at, levels),
             Core::Device(ref mut core) => core.input(at, levels),
             Core::Esp32s3(ref mut core) => core.input(at, levels),
-            Core::Ws2812(ref mut core) => core.input(at, levels),
             #[cfg(test)]
             Core::Script(ref mut core) => core.input(at, levels),
         }
@@ -241,11 +233,7 @@ impl Core {
         match *self {
             Core::Avr(ref mut core) => core.deliver(through, sent, saw),
             Core::Esp32s3(ref mut core) => core.deliver(through, sent),
-            Core::SpiReplay(_)
-            | Core::PulsesReplay(_)
-            | Core::St77916(_)
-            | Core::Device(_)
-            | Core::Ws2812(_) => {}
+            Core::SpiReplay(_) | Core::PulsesReplay(_) | Core::St77916(_) | Core::Device(_) => {}
             #[cfg(test)]
             Core::Script(ref mut core) => core.deliver(through, sent),
         }
@@ -254,7 +242,7 @@ impl Core {
     /// The records it sent that it still holds, in the order it sent them.
     fn records(&self) -> &[Record] {
         match *self {
-            Core::Avr(_) | Core::St77916(_) | Core::Device(_) | Core::Ws2812(_) => &[],
+            Core::Avr(_) | Core::St77916(_) | Core::Device(_) => &[],
             Core::Esp32s3(ref core) => core.records(),
             Core::SpiReplay(ref core) => core.records(),
             Core::PulsesReplay(ref core) => core.records(),
@@ -267,7 +255,7 @@ impl Core {
     /// order it sent them.
     fn drain_records(&mut self, through: Time, sent: impl FnMut(Record)) {
         match *self {
-            Core::Avr(_) | Core::St77916(_) | Core::Device(_) | Core::Ws2812(_) => {}
+            Core::Avr(_) | Core::St77916(_) | Core::Device(_) => {}
             Core::Esp32s3(ref mut core) => core.drain_records(through, sent),
             Core::SpiReplay(ref mut core) => core.drain_records(through, sent),
             Core::PulsesReplay(ref mut core) => core.drain_records(through, sent),
@@ -280,16 +268,14 @@ impl Core {
     /// then by sequence.
     fn take(&mut self, at: Time, records: &[LinkRow]) {
         match *self {
-            Core::Avr(_)
-            | Core::SpiReplay(_)
-            | Core::PulsesReplay(_)
-            | Core::Device(_)
-            | Core::Esp32s3(_) => unreachable!(
-                "a chip with no record pins took {} records at {at:?}",
-                records.len()
-            ),
+            Core::Device(ref mut core) => core.take(at, records),
+            Core::Avr(_) | Core::SpiReplay(_) | Core::PulsesReplay(_) | Core::Esp32s3(_) => {
+                unreachable!(
+                    "a chip with no record pins took {} records at {at:?}",
+                    records.len()
+                )
+            }
             Core::St77916(ref mut core) => core.take(at, records),
-            Core::Ws2812(ref mut core) => core.take(at, records),
             #[cfg(test)]
             Core::Script(ref mut core) => core.take(at, records),
         }
@@ -303,8 +289,21 @@ impl Core {
             | Core::SpiReplay(_)
             | Core::PulsesReplay(_)
             | Core::Device(_)
-            | Core::Esp32s3(_)
-            | Core::Ws2812(_) => {}
+            | Core::Esp32s3(_) => {}
+            #[cfg(test)]
+            Core::Script(_) => {}
+        }
+    }
+
+    /// The part of one `Pulses` record sent by `at`, where the run ends inside it.
+    fn cut(&mut self, at: Time, record: &Record) {
+        match self {
+            Core::Device(core) => core.cut(at, record),
+            Core::Avr(_)
+            | Core::SpiReplay(_)
+            | Core::PulsesReplay(_)
+            | Core::St77916(_)
+            | Core::Esp32s3(_) => {}
             #[cfg(test)]
             Core::Script(_) => {}
         }
@@ -318,8 +317,7 @@ impl Core {
             | Core::SpiReplay(_)
             | Core::PulsesReplay(_)
             | Core::St77916(_)
-            | Core::Esp32s3(_)
-            | Core::Ws2812(_) => {
+            | Core::Esp32s3(_) => {
                 unreachable!("only a device takes an event")
             }
             #[cfg(test)]
@@ -683,7 +681,7 @@ impl Actives {
                 if matches!(chip.core, Core::St77916(_)) {
                     displays.push(name(circuit, chip));
                 }
-                if matches!(chip.core, Core::Ws2812(_)) {
+                if matches!(core, Core::Device(dev) if matches!(dev.shows(), Shows::Leds { .. })) {
                     leds.push(name(circuit, chip));
                 }
                 Ahead {
@@ -747,9 +745,9 @@ impl Actives {
     }
 
     /// Each chain's committed core, in `led_names` order.
-    pub(crate) fn chains(&self) -> impl Iterator<Item = &ws2812::Core> {
+    pub(crate) fn chains(&self) -> impl Iterator<Item = &dyn Hosted> {
         self.committed.iter().filter_map(|core| match core {
-            Core::Ws2812(chain) => Some(&**chain),
+            Core::Device(dev) if matches!(dev.shows(), Shows::Leds { .. }) => Some(&**dev),
             _ => None,
         })
     }
@@ -785,15 +783,6 @@ impl Actives {
                 }
                 Core::Device(dev) => {
                     for (rule, at) in dev.broke() {
-                        found.push(Diagnostic::ChipProtocol {
-                            part: Ref::Part(name(circuit, chip)),
-                            at,
-                            rule,
-                        });
-                    }
-                }
-                Core::Ws2812(chain) => {
-                    if let Some((rule, at)) = chain.broke() {
                         found.push(Diagnostic::ChipProtocol {
                             part: Ref::Part(name(circuit, chip)),
                             at,
@@ -956,9 +945,9 @@ impl Actives {
             })
             .collect();
         for (core, chip) in self.committed.iter_mut().zip(&circuit.actives) {
-            if let Core::Ws2812(chain) = core {
+            if chip.takes.pulses.is_some() {
                 for record in flying.iter().filter(|record| chip.takes.record(record)) {
-                    chain.cut(at, record);
+                    core.cut(at, record);
                 }
             }
         }

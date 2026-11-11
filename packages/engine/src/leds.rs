@@ -13,7 +13,7 @@ use std::fmt::Write;
 
 use serde::Serialize;
 
-use orbe_model::Time;
+use orbe_model::{Shows, Time};
 
 use crate::name::Name;
 
@@ -27,6 +27,29 @@ pub struct Chain {
     pub order: &'static str,
     /// One `[green, red, blue]` per LED, LED 0 first.
     pub pixels: Vec<[u8; 3]>,
+}
+
+impl Chain {
+    /// What a device that shows `shows`, an LED chain, shows in `view`.
+    pub(crate) fn shown(shows: Shows, view: &[u8]) -> Chain {
+        let Shows::Leds { kind, order } = shows else {
+            panic!("only a device that shows leds is a chain");
+        };
+        let pixels = pixels(view);
+        Chain {
+            kind,
+            count: u16::try_from(pixels.len()).expect("a chain holds at most 1024 leds"),
+            order,
+            pixels,
+        }
+    }
+}
+
+/// Three bytes per LED, LED 0 first.
+pub(crate) fn pixels(view: &[u8]) -> Vec<[u8; 3]> {
+    let (pixels, rest) = view.as_chunks::<3>();
+    assert!(rest.is_empty(), "a chain shows three bytes per led");
+    pixels.to_vec()
 }
 
 /// One latch. `part` indexes the run's chains, in part order.

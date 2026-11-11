@@ -19,9 +19,10 @@ use crate::serial::{Serial as Delivered, SerialByte};
 use crate::timestamp::Timestamp;
 
 use crate::RunStats;
+use crate::active::native::Hosted;
 use crate::active::{self, Actives};
 use crate::chip;
-use crate::device::{st77916, ws2812};
+use crate::device::st77916;
 use crate::lte::{self, Charges, Segment, Verdict};
 use crate::mna::{Memo, Solution};
 use crate::newton::{
@@ -122,13 +123,13 @@ pub struct Display<'s> {
 
 /// An LED chain's colours, read from a session.
 pub struct Leds<'s> {
-    chain: &'s ws2812::Core,
+    chain: &'s dyn Hosted,
 }
 
 impl Leds<'_> {
     /// Its colours, as one `observations.json` `leds` entry.
     pub fn chain(&self) -> crate::leds::Chain {
-        self.chain.observed()
+        crate::leds::Chain::shown(self.chain.shows(), self.chain.view())
     }
 }
 
@@ -833,18 +834,25 @@ impl Session {
         }
         let names = self.actives.led_names();
         if !names.is_empty() {
+            let chains: Vec<&dyn Hosted> = self.actives.chains().collect();
+            debug_assert_eq!(names.len(), chains.len());
             let parts: Vec<_> = names
                 .iter()
-                .zip(self.actives.chains())
-                .map(|(name, chain)| (name.clone(), chain.observed()))
+                .zip(&chains)
+                .map(|(name, chain)| {
+                    (
+                        name.clone(),
+                        crate::leds::Chain::shown(chain.shows(), chain.view()),
+                    )
+                })
                 .collect();
             let mut rows = Vec::new();
-            for (index, chain) in self.actives.chains().enumerate() {
-                for latch in chain.latches() {
+            for (index, chain) in chains.iter().enumerate() {
+                for shown in chain.shown() {
                     rows.push(Latch {
-                        at: latch.at,
+                        at: shown.at,
                         part: u16::try_from(index).expect("a run has few chains"),
-                        pixels: latch.pixels.to_vec(),
+                        pixels: crate::leds::pixels(&shown.bytes),
                     });
                 }
             }

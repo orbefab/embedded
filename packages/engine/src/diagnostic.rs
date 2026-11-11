@@ -241,6 +241,19 @@ pub enum ProtocolRule {
     Bit,
 }
 
+impl ProtocolRule {
+    /// The rule a device names in `Cx::broke`, by its name in `diagnostics.json`.
+    pub(crate) fn named(name: &str) -> Option<ProtocolRule> {
+        match name {
+            "command" => Some(ProtocolRule::Command),
+            "pixel_format" => Some(ProtocolRule::PixelFormat),
+            "sda_while_scl_high" => Some(ProtocolRule::SdaWhileSclHigh),
+            "bit" => Some(ProtocolRule::Bit),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Diagnostic {
     /// JSON is malformed or does not match the v0 schema.
@@ -1615,5 +1628,23 @@ impl Serialize for Diagnostic {
             data: &data,
         }
         .serialize(serializer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_device_names_each_protocol_rule_as_diagnostics_json_does() {
+        for rule in [
+            ProtocolRule::Command,
+            ProtocolRule::PixelFormat,
+            ProtocolRule::SdaWhileSclHigh,
+            ProtocolRule::Bit,
+        ] {
+            assert_eq!(ProtocolRule::named(&rule_text(&rule)), Some(rule));
+        }
+        assert_eq!(ProtocolRule::named("glitch"), None);
     }
 }

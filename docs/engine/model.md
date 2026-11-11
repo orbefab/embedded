@@ -2,11 +2,11 @@
 
 `orbe-model`, in `packages/model`, is the contract a device implements. It is unstable: the crate is 0.x, and any release may change a trait or a type.
 
-A built-in device is a folder in `packages/engine/src/device/<kind>/`. `model.rs` is the device, written against `orbe_model` and `std` alone. `mod.rs` holds the netlist struct, the JSON wire type, and the device's `Row`, which names the events it takes. `Model::device` in `packages/engine/src/netlist.rs` is the table: one arm per device kind maps a part to its row. `orbe-device-check` builds every `model.rs` in a crate whose only dependency is `orbe-model`, so a `model.rs` that names the engine, or any other crate, fails the workspace build. The CST816 is the first device on the contract.
+A built-in device is a folder in `packages/engine/src/device/<kind>/`. `model.rs` is the device, written against `orbe_model` and `std` alone. `mod.rs` holds the netlist struct, the JSON wire type, and the device's `Row`, which names the events it takes. `Model::device` in `packages/engine/src/netlist.rs` is the table: one arm per device kind maps a part to its row. `orbe-device-check` builds every `model.rs` in a crate whose only dependency is `orbe-model`, so a `model.rs` that names the engine, or any other crate, fails the workspace build. The CST816 is the first device on the contract. It is an I2C target. The WS2812 is a pulse target.
 
 ## State
 
-A device is its state. `State` is `Copy + Send + 'static`: fixed-size plain data with no heap and no pointers. The engine keeps several copies of each part, runs one ahead, and keeps or drops it by copying, so a copy must be a whole checkpoint.
+A device is its state. `State` is `Copy + Send + 'static`: fixed-size plain data with no heap and no pointers. The engine keeps several copies of each part, runs one ahead, and keeps or drops it by copying, so a copy must be a whole checkpoint. A landing copies the state, so a device whose size depends on a param, such as an LED chain, takes its size as a const generic, and the engine builds the smallest that holds the part. The WS2812 comes in 16, 64, 256 and 1024 LEDs.
 
 ## Device
 
@@ -18,8 +18,13 @@ A device is its state. `State` is `Copy + Send + 'static`: fixed-size plain data
 | `input(cx, at, levels)` | Its watches' levels from `at` on. |
 | `sample(cx, at, volts)` | The volts of its samples at a stop that asked for them. |
 | `event(cx, at, event)` | An event it declares, with fields the engine has checked against the declaration. |
+| `view()` | What it shows now, laid out as `SHOWS` says. Empty by default. |
 
-`input`, `sample` and `event` never change the drives. What they cause comes at least 1 ps later, at a stop. The engine checks this and panics on a device that breaks it. `cx` is what a device may do during a call besides change its own state.
+`SHOWS` is what a device shows besides its drives: nothing by default, or `Leds { kind, order }`, an LED chain whose view is three bytes per LED in `order`. The engine lists a part as an LED chain only when its device declares one.
+
+Only `run_until` changes the drives. `input`, `sample`, `event`, and every call of a role, such as `write` or `pulse`, leave them alone. What they cause comes at least 1 ps later, at a stop. The engine checks this after each of those calls, in every build, and panics on a device that breaks it.
+
+`cx` is what a device may do during a call besides change its own state. The engine reads it after every call. `broke(rule, at)` names a rule and the time, and the first rule a device breaks in a run is its `chip.protocol` warning. The rule is the warning's `rule`, such as `bit`. A rule the engine does not know panics. `show()` says what the device shows changed. The engine copies `view()` after that call, at the call's time, as a row. A device that shows nothing and calls `show` panics. A row from `run_until` takes the time of the stop it returns.
 
 ## I2C targets
 
@@ -35,10 +40,21 @@ An `I2cTarget` is a device on an I2C bus. The engine runs the bus: it watches `S
 
 [engine.md](engine.md#i2c-targets) gives the order of the calls on the bus.
 
+## Pulse targets
+
+A `PulseTarget` is a device on a pulsed line. The engine watches the line, times each level, and calls the device when a level ends. The device sees the level and how long it held. `IDLE` declares the level the line rests at and how many picoseconds a rest lasts before the line is idle.
+
+| Method | What it does |
+| --- | --- |
+| `pulse(cx, at, level, width)` | A level that held for `width` picoseconds ended at `at`. |
+| `idle(cx, at, level)` | The line has rested at `level`, `IDLE`'s level, for `IDLE`'s time, at `at`. |
+
+The WS2812 is a pulse target whose line rests low. It reads `pulse` and `idle`, latches at `idle`, and shows its colours as an LED chain. [engine.md](engine.md#pulse-targets) gives what the engine keeps, and [engine.md](engine.md#records) gives the WS2812's windows.
+
 ## Events
 
 A device's row declares each event it takes: its name, the netlist field that schedules it, and its fields, each an integer with a span or a bool. A part's netlist schedules events on that field, and a session applies one as `Setting::Event`. The engine checks the fields and delivers the event to `event` at its time. A row whose events or fields repeat a name does not compile.
 
 ## Not built yet
 
-Nothing loads a device at run time. A built-in device is linked into the engine. The contract keeps loading possible later: state is plain data, a device file imports only `orbe_model` and `std`, and each call takes `cx` so a host can pass a context across a boundary. Not built: a macro that exports a device, a WebAssembly adapter and its host, commands that create, build and test a device, a browser loader, limits on a loaded device, and model items in the registry. `Cx` has no calls yet. A device that sends records, reports a broken rule or reads the world gets those calls when it lands.
+Nothing loads a device at run time. A built-in device is linked into the engine. The contract keeps loading possible later: state is plain data, a device file imports only `orbe_model` and `std`, and each call takes `cx` so a host can pass a context across a boundary. Not built: a macro that exports a device, a WebAssembly adapter and its host, commands that create, build and test a device, a browser loader, limits on a loaded device, and model items in the registry. A device that sends records or reads the world gets those calls when it lands.

@@ -8,6 +8,7 @@ mod fixtures;
 mod inputs;
 mod limits;
 mod link;
+mod pulse;
 mod replay;
 mod serial;
 mod session;

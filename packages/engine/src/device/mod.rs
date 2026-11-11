@@ -170,12 +170,18 @@ impl Declared {
     }
 }
 
+/// No events, for a device kind whose row is empty.
+pub(crate) static NO_EVENTS: Events = Events::EMPTY;
+
 /// A device part's events in time order. Only parse and `Netlist::append` build one, so each is
 /// after t = 0 and at least [`MIN_GAP_PS`] after the one before.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Events(Vec<Event<Declared>>);
 
 impl Events {
+    /// A part that takes no events.
+    pub(crate) const EMPTY: Events = Events(Vec::new());
+
     pub fn all(&self) -> &[Event<Declared>] {
         &self.0
     }
