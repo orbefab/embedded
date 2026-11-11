@@ -1,9 +1,17 @@
-use crate::{Drives, Levels, Stop, Time};
+use crate::{Drives, Duty, Levels, Spi, Stop, Time};
 
 /// Everything a device remembers: fixed-size plain data with no heap, so a copy of it is a
 /// checkpoint. The host keeps several copies of each part's state and runs, rewinds and commits
 /// them, so state must not point anywhere.
-pub trait State: Copy + Send + 'static {}
+pub trait State: Copy + Send + 'static {
+    /// Becomes `source`. The host copies a state only with this, and only onto a copy made
+    /// before or after it. The whole state by default. A state that holds [`Pages`](crate::Pages)
+    /// copies them with [`Pages::copy_from`](crate::Pages::copy_from), which skips the pages
+    /// that match, and the rest whole.
+    fn copy_from(&mut self, source: &Self) {
+        *self = *source;
+    }
+}
 
 /// A device on the circuit's clock. Each call reads nothing but the device and its arguments,
 /// so two equal devices given the same calls stay equal.
@@ -31,23 +39,75 @@ pub trait Device: State {
     fn sample(&mut self, _cx: &mut Cx, _at: Time, _volts: &[f64]) {}
     /// An event it declares, such as a touch, at `at`.
     fn event(&mut self, _cx: &mut Cx, _at: Time, _event: Event<'_>) {}
-    /// What it shows now, laid out as [`SHOWS`](Self::SHOWS) says. The host reads it after a
-    /// call that ran [`Cx::show`], and at the end of a run.
-    fn view(&self) -> &[u8] {
-        &[]
+    /// What it shows now, the [`View`] that [`SHOWS`](Self::SHOWS) declares. The host reads it
+    /// after a call that ran [`Cx::show`], and at the end of a run.
+    fn view(&self) -> View<'_> {
+        View::Nothing
     }
 }
 
-/// What a device shows besides its drives.
+/// What a device shows besides its drives. Its [`Device::view`] is the matching [`View`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shows {
     Nothing,
-    /// A chain of LEDs. [`Device::view`] is three bytes per LED, LED 0 first, in `order`, such
-    /// as `grb`. `kind` names the chain, such as `ws2812`.
+    /// A chain of LEDs. `kind` names the chain, such as `ws2812`, and `order` names its bytes,
+    /// such as `grb`.
     Leds {
         kind: &'static str,
         order: &'static str,
     },
+    /// A screen of `width` by `height` pixels whose frame memory holds each pixel in `format`,
+    /// such as `rgb565`. `kind` names its controller, such as `st77916`.
+    Screen {
+        kind: &'static str,
+        width: u16,
+        height: u16,
+        format: &'static str,
+    },
+}
+
+/// What a device shows now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum View<'a> {
+    Nothing,
+    /// Three bytes per LED, LED 0 first, in the declared order.
+    Leds(&'a [u8]),
+    /// The frame memory, rows top to bottom, each row left to right, and the panel's state.
+    Screen {
+        frame: &'a [u8],
+        panel: Panel,
+    },
+}
+
+/// A screen controller's state besides its frame memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Panel {
+    /// The display is on.
+    pub on: bool,
+    pub inverted: bool,
+    /// Its reset pin reads low.
+    pub reset: bool,
+    pub asleep: bool,
+    /// The memory access control byte, which orders and mirrors writes.
+    pub madctl: u8,
+    /// The pixel format byte.
+    pub colmod: u8,
+    /// How many registers hold a write it stores and does not run.
+    pub registers: u16,
+    /// The last duty its backlight pin took, `None` before the first.
+    pub backlight: Option<Duty>,
+}
+
+/// A pixel write a screen closed: its window, both ends included, before any mirroring, the
+/// bytes it took, and the first 8 bytes of their SHA-256, as [`Sha256`](crate::Sha256) makes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Drawn {
+    pub x0: u16,
+    pub y0: u16,
+    pub x1: u16,
+    pub y1: u16,
+    pub bytes: u64,
+    pub hash: [u8; 8],
 }
 
 /// A device that is an I2C target. The host runs the bus: it watches SCL and SDA, matches the
@@ -78,6 +138,20 @@ pub trait PulseTarget: Device {
     fn idle(&mut self, _cx: &mut Cx, _at: Time, _level: bool) {}
 }
 
+/// A device that is an SPI target. The host takes each transaction whose CS and SCLK sit on the
+/// device's pins, checks that each lane it used sits on the device's own data pin, and holds the
+/// bus while the device is in reset. The device sees whole transactions.
+pub trait SpiTarget: Device {
+    /// A transaction that ended at `at`.
+    fn transaction(&mut self, cx: &mut Cx, at: Time, spi: &Spi);
+}
+
+/// A device with a PWM input pin. The host gives it each duty a chip sets on that pin.
+pub trait DutyTarget: Device {
+    /// The duty set at `at`.
+    fn duty(&mut self, cx: &mut Cx, at: Time, duty: Duty);
+}
+
 /// When a pulsed line is idle: after it holds `level` for `after` picoseconds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Idle {
@@ -99,15 +173,16 @@ pub enum Ack {
     No,
 }
 
-/// What a device may do during a call besides change its own state. The host reads both after
+/// What a device may do during a call besides change its own state. The host reads it after
 /// every call.
 ///
 /// [`broke`](Cx::broke) names a rule and the time. The first call wins. [`show`](Cx::show) says
-/// what the device shows changed.
+/// what an LED chain shows changed. [`drew`](Cx::drew) is a pixel write a screen closed.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Cx {
     broken: Option<(&'static str, Time)>,
     shown: bool,
+    drawn: Option<Drawn>,
 }
 
 impl Cx {
@@ -125,6 +200,16 @@ impl Cx {
         self.shown = true;
     }
 
+    /// A screen closed the pixel write `drawn` during this call, at the call's time. A call
+    /// closes at most one.
+    pub fn drew(&mut self, drawn: Drawn) {
+        assert!(
+            self.drawn.is_none(),
+            "a call closes at most one pixel write"
+        );
+        self.drawn = Some(drawn);
+    }
+
     /// The first rule named in this call, and its time.
     pub fn broken(&self) -> Option<(&'static str, Time)> {
         self.broken
@@ -133,6 +218,11 @@ impl Cx {
     /// Whether this call ran [`show`](Self::show).
     pub fn shown(&self) -> bool {
         self.shown
+    }
+
+    /// The pixel write this call closed.
+    pub fn drawn(&self) -> Option<Drawn> {
+        self.drawn
     }
 }
 
@@ -216,5 +306,16 @@ mod tests {
         assert_eq!(cx.broken(), Some(("bit", Time::from_ps(3))));
         cx.show();
         assert!(cx.shown());
+        assert_eq!(cx.drawn(), None);
+        let drawn = Drawn {
+            x0: 1,
+            y0: 2,
+            x1: 3,
+            y1: 4,
+            bytes: 18,
+            hash: [9; 8],
+        };
+        cx.drew(drawn);
+        assert_eq!(cx.drawn(), Some(drawn));
     }
 }

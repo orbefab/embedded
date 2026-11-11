@@ -118,7 +118,7 @@ pub(crate) struct Landing {
 
 /// A display part's state, read from a session.
 pub struct Display<'s> {
-    panel: &'s st77916::Core,
+    screen: &'s dyn Hosted,
 }
 
 /// An LED chain's colours, read from a session.
@@ -136,17 +136,20 @@ impl Leds<'_> {
 impl Display<'_> {
     /// Its flags, registers and brightness.
     pub fn panel(&self) -> Panel {
-        self.panel.panel()
+        crate::display::panel(self.screen.shows(), self.screen.view())
     }
 
     /// Its frame memory, as `traces/display-<part>.rgb565` holds it.
     pub fn image(&self) -> Vec<u8> {
-        self.panel.frame().image()
+        crate::display::frame(self.screen.view()).to_vec()
     }
 
     /// What its glass shows, as [`st77916::glass`] draws its flags and frame memory.
     pub fn pixels(&self) -> Vec<u8> {
-        st77916::glass(self.panel.panel().flags, &self.image())
+        st77916::glass(
+            self.panel().flags,
+            crate::display::frame(self.screen.view()),
+        )
     }
 }
 
@@ -717,8 +720,8 @@ impl Session {
             .displays()
             .iter()
             .position(|name| name == part)?;
-        let panel = self.actives.panels().nth(k)?;
-        Some(Display { panel })
+        let screen = self.actives.screens().nth(k)?;
+        Some(Display { screen })
     }
 
     /// The LED chain `part` as it stands after the last accepted step, which is its colours at
@@ -823,8 +826,12 @@ impl Session {
         if !names.is_empty() {
             let parts = names
                 .iter()
-                .zip(self.actives.panels())
-                .map(|(name, panel)| (name.clone(), panel.panel(), panel.frame().image()))
+                .zip(self.actives.screens())
+                .map(|(name, screen)| {
+                    let view = screen.view();
+                    let panel = crate::display::panel(screen.shows(), view);
+                    (name.clone(), panel, crate::display::frame(view).to_vec())
+                })
                 .collect();
             let displays = Displays::new(parts, self.display);
             if let Observations::Transient { displays: seen, .. } = &mut observations {

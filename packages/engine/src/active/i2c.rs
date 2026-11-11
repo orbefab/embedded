@@ -403,8 +403,9 @@ impl<D: I2cTarget> Port<D> for Engine {
         Engine::due_at(*self)
     }
 
-    fn take_due(&mut self, _dev: &mut Hosting<D>, at: Time) {
+    fn take_due(&mut self, _dev: &mut Hosting<D>, at: Time) -> bool {
         Engine::take_due(self, at);
+        false
     }
 
     fn input(&mut self, dev: &mut Hosting<D>, at: Time, levels: &[bool]) {

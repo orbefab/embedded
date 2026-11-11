@@ -533,26 +533,28 @@ fn ruling(session: &Session, input: &Input) -> Result<Time, Rejected> {
             level_ruling(&pot.position, *level, from, stop)
         }
         (Model::Potentiometer(_), Setting::Contact(_)) => Err(Rejected::WrongSetting),
-        (_, Setting::Event(event)) => match model.device() {
-            Some((row, events)) => {
-                let spec = row.events.iter().find(|spec| spec.name == event.name);
-                match spec.map(|spec| spec.declared(&event.fields)) {
-                    None | Some(Err(Mismatch::Shape)) => Err(Rejected::WrongSetting),
-                    Some(Err(Mismatch::Span)) => Err(Rejected::Value(ValueRule::Span)),
-                    Some(Ok(_)) => landing(events.earliest(from), stop),
+        (_, Setting::Event(event)) => {
+            match model.device().filter(|(row, _)| !row.events.is_empty()) {
+                Some((row, events)) => {
+                    let spec = row.events.iter().find(|spec| spec.name == event.name);
+                    match spec.map(|spec| spec.declared(&event.fields)) {
+                        None | Some(Err(Mismatch::Shape)) => Err(Rejected::WrongSetting),
+                        Some(Err(Mismatch::Span)) => Err(Rejected::Value(ValueRule::Span)),
+                        Some(Ok(_)) => landing(events.earliest(from), stop),
+                    }
                 }
+                None => Err(
+                    if matches!(model, Model::Switch(_) | Model::Potentiometer(_))
+                        || model.level().is_some()
+                        || model.serial().is_some()
+                    {
+                        Rejected::WrongSetting
+                    } else {
+                        Rejected::NotSettable
+                    },
+                ),
             }
-            None => Err(
-                if matches!(model, Model::Switch(_) | Model::Potentiometer(_))
-                    || model.level().is_some()
-                    || model.serial().is_some()
-                {
-                    Rejected::WrongSetting
-                } else {
-                    Rejected::NotSettable
-                },
-            ),
-        },
+        }
         (_, Setting::Serial(send)) => serial_ruling(model, send, from, stop),
         (_, Setting::Contact(_)) => {
             if model.serial().is_some() || model.level().is_some() {

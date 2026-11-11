@@ -13,7 +13,7 @@ use std::fmt::Write;
 
 use serde::Serialize;
 
-use orbe_model::{Shows, Time};
+use orbe_model::{Shows, Time, View};
 
 use crate::name::Name;
 
@@ -31,8 +31,8 @@ pub struct Chain {
 
 impl Chain {
     /// What a device that shows `shows`, an LED chain, shows in `view`.
-    pub(crate) fn shown(shows: Shows, view: &[u8]) -> Chain {
-        let Shows::Leds { kind, order } = shows else {
+    pub(crate) fn shown(shows: Shows, view: View<'_>) -> Chain {
+        let (Shows::Leds { kind, order }, View::Leds(view)) = (shows, view) else {
             panic!("only a device that shows leds is a chain");
         };
         let pixels = pixels(view);

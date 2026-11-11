@@ -1,11 +1,11 @@
 //! A device on the `orbe-model` contract, as a core. [`Native`] runs a device linked into the
-//! engine beside the host engine of the bus it declares.
+//! engine beside the host engines of the buses it declares.
 
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-use orbe_model::{Cx, Device, Drive, Drives, Event, Levels, Shows, Stop, Time};
+use orbe_model::{Cx, Device, Drawn, Drive, Drives, Event, Levels, Shows, Stop, Time, View};
 
 use crate::diagnostic::ProtocolRule;
 use crate::link::{LinkRow, Record};
@@ -17,25 +17,37 @@ pub(crate) trait Hosted: Send + fmt::Debug {
     fn sample(&mut self, at: Time, volts: &[f64]);
     fn input(&mut self, at: Time, levels: &[bool]);
     fn event(&mut self, at: Time, event: Event<'_>);
-    /// One call per landing. The port walks each span on the concrete device.
+    /// One call per landing. The port walks each record on the concrete device.
     fn take(&mut self, at: Time, records: &[LinkRow]);
     /// The part of one record sent by `at`, where the run ends inside it.
     fn cut(&mut self, at: Time, record: &Record);
+    /// The records its port sent that it still holds, in the order it sent them.
+    fn records(&self) -> &[Record];
+    /// Hands over and drops each record it holds that ended at or before `through`.
+    fn drain_records(&mut self, through: Time, sent: &mut dyn FnMut(Record));
+    /// The record its port started by `at` and has not ended, when its stops up to `at` are done.
+    fn in_flight(&self, at: Time) -> Option<Record>;
+    /// Hands over and drops each pixel write it closed, with its time, in the order it closed
+    /// them.
+    fn drain_rows(&mut self, sent: &mut dyn FnMut(Time, Drawn));
     /// What the device shows, as it declares.
     fn shows(&self) -> Shows;
     /// What the device shows now.
-    fn view(&self) -> &[u8];
-    /// Each time what the device shows changed, in time order.
+    fn view(&self) -> View<'_>;
+    /// Each time what an LED chain shows changed, in time order.
     fn shown(&self) -> &[Shown];
     /// Each rule its port or its device saw broken, at the first time.
     fn broke(&self) -> Vec<(ProtocolRule, Time)>;
+    /// The first record its port dropped because a lane sat on another net than its pin, and
+    /// that record's sender, an index in the run's senders.
+    fn miswired(&self) -> Option<(Time, u16)>;
     fn boxed(&self) -> Box<dyn Hosted>;
     /// Becomes a copy of `source`, a core of the same device.
     fn copy_from(&mut self, source: &dyn Hosted);
     fn as_any(&self) -> &dyn Any;
 }
 
-/// What a device showed from `at` on.
+/// What an LED chain showed from `at` on.
 #[derive(Clone, Debug)]
 pub(crate) struct Shown {
     pub(crate) at: Time,
@@ -46,28 +58,34 @@ pub(crate) struct Shown {
 /// [`call`](Self::call) or [`run_until`](Self::run_until), which read its `Cx`.
 pub(crate) struct Hosting<D> {
     device: D,
-    /// The first rule a call broke, and its time.
-    broke: Option<(ProtocolRule, Time)>,
+    /// The first time a call broke each rule, by [`ProtocolRule::index`].
+    broke: [Option<Time>; ProtocolRule::ALL.len()],
     /// Shared with every copy, so a copy copies a pointer.
     shown: Arc<Vec<Shown>>,
+    /// The pixel writes it closed that a commit has not staged. A call that closes one is at a
+    /// landing that commits it, so a copy holds none.
+    drawn: Vec<(Time, Drawn)>,
 }
 
-impl<D: Clone> Clone for Hosting<D> {
+impl<D: Device> Clone for Hosting<D> {
     fn clone(&self) -> Self {
         Hosting {
-            device: self.device.clone(),
+            device: self.device,
             broke: self.broke,
             shown: Arc::clone(&self.shown),
+            drawn: self.drawn.clone(),
         }
     }
 
-    /// Keeps the pointer when it is already the source's, as it is on most commits.
+    /// Copies the device with [`State::copy_from`](orbe_model::State::copy_from), and keeps the
+    /// pointer when it is already the source's, as it is on most commits.
     fn clone_from(&mut self, source: &Self) {
-        self.device.clone_from(&source.device);
+        self.device.copy_from(&source.device);
         self.broke = source.broke;
         if !Arc::ptr_eq(&self.shown, &source.shown) {
             self.shown = Arc::clone(&source.shown);
         }
+        self.drawn.clone_from(&source.drawn);
     }
 }
 
@@ -75,8 +93,9 @@ impl<D: Device> Hosting<D> {
     fn new(device: D) -> Hosting<D> {
         Hosting {
             device,
-            broke: None,
+            broke: [None; ProtocolRule::ALL.len()],
             shown: Arc::new(Vec::new()),
+            drawn: Vec::new(),
         }
     }
 
@@ -100,7 +119,7 @@ impl<D: Device> Hosting<D> {
 
     #[inline]
     fn read(&mut self, at: Time, cx: Cx) {
-        if cx.broken().is_some() || cx.shown() {
+        if cx.broken().is_some() || cx.shown() || cx.drawn().is_some() {
             self.keep(at, cx);
         }
     }
@@ -111,23 +130,27 @@ impl<D: Device> Hosting<D> {
             let rule = ProtocolRule::named(name).unwrap_or_else(|| {
                 panic!("a device broke rule {name}, which the engine does not know")
             });
-            self.broke.get_or_insert((rule, when));
+            self.broke[rule.index()].get_or_insert(when);
         }
         if cx.shown() {
-            let bytes = self.device.view();
-            match D::SHOWS {
-                Shows::Nothing => panic!("a device that shows nothing ran show"),
-                Shows::Leds { .. } => {
-                    assert!(
-                        bytes.len().is_multiple_of(3),
-                        "a chain shows three bytes per led"
-                    );
-                }
-            }
+            let View::Leds(bytes) = self.device.view() else {
+                panic!("only an LED chain runs show");
+            };
+            assert!(
+                matches!(D::SHOWS, Shows::Leds { .. }) && bytes.len().is_multiple_of(3),
+                "a chain shows three bytes per led"
+            );
             Arc::make_mut(&mut self.shown).push(Shown {
                 at,
                 bytes: Arc::from(bytes),
             });
+        }
+        if let Some(drawn) = cx.drawn() {
+            assert!(
+                matches!(D::SHOWS, Shows::Screen { .. }),
+                "only a screen draws"
+            );
+            self.drawn.push((at, drawn));
         }
     }
 }
@@ -138,10 +161,12 @@ pub(crate) trait Port<D>: Clone + Send + 'static {
     /// How many outputs it drives.
     const PINS: usize;
     fn drive(&self, image: &mut [Drive]);
-    /// When a drive of its pins, or a call it makes on its own, is next due.
+    /// When a drive of its pins, a call it makes on its own, or the end of a record it sends is
+    /// next due.
     fn due_at(&self) -> Option<Time>;
-    /// Applies what is due at `at`: a drive, or a call on the device.
-    fn take_due(&mut self, dev: &mut Hosting<D>, at: Time);
+    /// Applies what is due at `at`: a drive, a call on the device, or a record's end. Returns
+    /// whether a record it sent ends there.
+    fn take_due(&mut self, dev: &mut Hosting<D>, at: Time) -> bool;
     /// The chip's watch levels from `at`. The port reads them before the device does.
     fn input(&mut self, dev: &mut Hosting<D>, at: Time, levels: &[bool]);
     /// Each rule the port saw broken, at the first time.
@@ -150,13 +175,88 @@ pub(crate) trait Port<D>: Clone + Send + 'static {
     fn take_records(&mut self, _dev: &mut Hosting<D>, _at: Time, _records: &[LinkRow]) {}
     /// The part of `record` sent by `at`. A port with no record pin does nothing.
     fn cut_record(&mut self, _dev: &mut Hosting<D>, _at: Time, _record: &Record) {}
+    /// The records it sent that it still holds. A port that sends none holds none.
+    fn records(&self) -> &[Record] {
+        &[]
+    }
+    /// Hands over and drops each record it holds that ended at or before `through`.
+    fn drain_records(&mut self, _through: Time, _sent: &mut dyn FnMut(Record)) {}
+    /// The record it started by `at` and has not ended.
+    fn in_flight(&self, _at: Time) -> Option<Record> {
+        None
+    }
+    /// The first record it dropped because a lane sat on another net than its pin.
+    fn miswired(&self) -> Option<(Time, u16)> {
+        None
+    }
+}
+
+/// Two host engines on one device, such as an SPI bus and a PWM pin. The first one's pins come
+/// first in the image. A device takes the records of a landing bus by bus.
+impl<D, A: Port<D>, B: Port<D>> Port<D> for (A, B) {
+    const PINS: usize = A::PINS + B::PINS;
+
+    fn drive(&self, image: &mut [Drive]) {
+        let (a, b) = image.split_at_mut(A::PINS);
+        self.0.drive(a);
+        self.1.drive(b);
+    }
+
+    fn due_at(&self) -> Option<Time> {
+        match (self.0.due_at(), self.1.due_at()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    fn take_due(&mut self, dev: &mut Hosting<D>, at: Time) -> bool {
+        let a = self.0.due_at() == Some(at) && self.0.take_due(dev, at);
+        let b = self.1.due_at() == Some(at) && self.1.take_due(dev, at);
+        a || b
+    }
+
+    fn input(&mut self, dev: &mut Hosting<D>, at: Time, levels: &[bool]) {
+        self.0.input(dev, at, levels);
+        self.1.input(dev, at, levels);
+    }
+
+    fn broke(&self, found: &mut Vec<(ProtocolRule, Time)>) {
+        self.0.broke(found);
+        self.1.broke(found);
+    }
+
+    fn take_records(&mut self, dev: &mut Hosting<D>, at: Time, records: &[LinkRow]) {
+        self.0.take_records(dev, at, records);
+        self.1.take_records(dev, at, records);
+    }
+
+    fn cut_record(&mut self, dev: &mut Hosting<D>, at: Time, record: &Record) {
+        self.0.cut_record(dev, at, record);
+        self.1.cut_record(dev, at, record);
+    }
+
+    fn records(&self) -> &[Record] {
+        debug_assert!(self.1.records().is_empty(), "one bus of a device sends");
+        self.0.records()
+    }
+
+    fn drain_records(&mut self, through: Time, sent: &mut dyn FnMut(Record)) {
+        self.0.drain_records(through, sent);
+    }
+
+    fn in_flight(&self, at: Time) -> Option<Record> {
+        self.0.in_flight(at)
+    }
+
+    fn miswired(&self) -> Option<(Time, u16)> {
+        self.0.miswired().or(self.1.miswired())
+    }
 }
 
 /// The most outputs a native device's image holds, its port's and its own.
 const IMAGE: usize = Drives::MAX + 8;
 
 /// A device linked into the engine, and its port. A copy is a checkpoint.
-#[derive(Clone)]
 pub(crate) struct Native<D, P> {
     dev: Hosting<D>,
     port: P,
@@ -165,6 +265,18 @@ pub(crate) struct Native<D, P> {
     /// The port's drives, then the device's, up to `len`.
     image: [Drive; IMAGE],
     len: usize,
+}
+
+impl<D: Device, P: Clone> Clone for Native<D, P> {
+    fn clone(&self) -> Self {
+        Native {
+            dev: self.dev.clone(),
+            port: self.port.clone(),
+            drives: self.drives,
+            image: self.image,
+            len: self.len,
+        }
+    }
 }
 
 impl<D: Device, P: Port<D>> Native<D, P> {
@@ -199,14 +311,16 @@ impl<D: Device, P: Port<D>> Native<D, P> {
         self.dev.device.drive() == self.drives
     }
 
-    /// What the port has due at `at`. A call it makes there leaves the device's drives alone.
-    fn take_due(&mut self, at: Time) {
+    /// What the port has due at `at`, and whether a record it sent ends there. A call it makes
+    /// there leaves the device's drives alone.
+    fn take_due(&mut self, at: Time) -> bool {
         let drives = self.dev.device.drive();
-        self.port.take_due(&mut self.dev, at);
+        let record = self.port.take_due(&mut self.dev, at);
         assert!(
             self.dev.device.drive() == drives,
             "a call the port makes never changes the drives"
         );
+        record
     }
 }
 
@@ -218,18 +332,18 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
         let stop = self.dev.run_until(due.unwrap_or(limit));
         let stop = match (stop, due) {
             (Some(stop), Some(due)) if stop.at == due => {
-                self.take_due(due);
-                stop
-            }
-            (Some(stop), _) => stop,
-            (None, Some(due)) => {
-                self.take_due(due);
+                let record = self.take_due(due);
                 Stop {
-                    at: due,
-                    sample: false,
-                    record: false,
+                    record: stop.record || record,
+                    ..stop
                 }
             }
+            (Some(stop), _) => stop,
+            (None, Some(due)) => Stop {
+                at: due,
+                sample: false,
+                record: self.take_due(due),
+            },
             (None, None) => return None,
         };
         self.refresh();
@@ -272,11 +386,29 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
         assert!(self.held(), "a record never changes the drives");
     }
 
+    fn records(&self) -> &[Record] {
+        self.port.records()
+    }
+
+    fn drain_records(&mut self, through: Time, sent: &mut dyn FnMut(Record)) {
+        self.port.drain_records(through, sent);
+    }
+
+    fn in_flight(&self, at: Time) -> Option<Record> {
+        self.port.in_flight(at)
+    }
+
+    fn drain_rows(&mut self, sent: &mut dyn FnMut(Time, Drawn)) {
+        for (at, drawn) in self.dev.drawn.drain(..) {
+            sent(at, drawn);
+        }
+    }
+
     fn shows(&self) -> Shows {
         D::SHOWS
     }
 
-    fn view(&self) -> &[u8] {
+    fn view(&self) -> View<'_> {
         self.dev.device.view()
     }
 
@@ -287,8 +419,17 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
     fn broke(&self) -> Vec<(ProtocolRule, Time)> {
         let mut found = Vec::new();
         self.port.broke(&mut found);
-        found.extend(self.dev.broke);
+        found.extend(
+            ProtocolRule::ALL
+                .into_iter()
+                .zip(self.dev.broke)
+                .filter_map(|(rule, at)| at.map(|at| (rule, at))),
+        );
         found
+    }
+
+    fn miswired(&self) -> Option<(Time, u16)> {
+        self.port.miswired()
     }
 
     fn boxed(&self) -> Box<dyn Hosted> {

@@ -125,7 +125,7 @@ pub(crate) fn chip(
         twi: false,
         sends: false,
         takes: Takes::default(),
-        core: super::Core::Script(Core::new(script, echo, out)),
+        core: super::Core::Script(Box::new(Core::new(script, echo, out))),
     }
 }
 

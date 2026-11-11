@@ -5,14 +5,18 @@
 //! implements and what is still to come.
 
 mod device;
+mod pages;
 mod pins;
 mod record;
+mod sha256;
 mod time;
 
 pub use device::{
-    Ack, Cx, Device, Dir, Error, Event, Fields, I2cTarget, Idle, Params, PulseTarget, Shows, State,
-    Value,
+    Ack, Cx, Device, Dir, Drawn, DutyTarget, Error, Event, Fields, I2cTarget, Idle, Panel, Params,
+    PulseTarget, Shows, SpiTarget, State, Value, View,
 };
+pub use pages::Pages;
 pub use pins::{Drive, Drives, Levels, Stop};
 pub use record::{Cs, Duty, Lanes, Pulses, Spi, SpiPhase};
+pub use sha256::Sha256;
 pub use time::Time;
