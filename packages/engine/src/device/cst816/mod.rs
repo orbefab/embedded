@@ -7,8 +7,6 @@ mod model;
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeMap;
-
 use serde::Deserialize;
 
 use orbe_model::{Device, Fields, Value as FieldValue};
@@ -19,11 +17,12 @@ use crate::active::native::Native;
 use crate::active::{Chip, Core, Output, Stage};
 use crate::diagnostic::{Diagnostic, ValueRule};
 use crate::mna::Node;
-use crate::name::{Name, Ref};
+use crate::name::Ref;
 use crate::netlist::NetId;
 use crate::netlist::PartId;
 use crate::netlist::Threshold;
 use crate::netlist::Value;
+use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
 use crate::netlist::json::{PinMap, WireValue, resolve_pins, resolve_value};
 use crate::watch::{Signal, Watch};
@@ -161,13 +160,14 @@ struct WireTouch {
     down: bool,
 }
 
-pub(crate) fn resolve_cst816(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireCst816,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Cst816> {
+pub(crate) fn resolve_cst816(ctx: ParseCtx<'_>, wire: WireCst816) -> Option<Cst816> {
+    let ParseCtx {
+        name,
+        part: part_ref,
+        nets,
+        out,
+        ..
+    } = ctx;
     let pins = resolve_pins(name, Cst816::PINS, &wire.pins.0, nets, out);
     let low_drop = resolve_drop(part_ref, wire.low_drop, out);
     let low_resistance = resolve_value(

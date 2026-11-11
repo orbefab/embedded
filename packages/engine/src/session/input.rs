@@ -225,9 +225,7 @@ fn serial_decision(
 }
 
 fn takes_another_setting(model: &Model) -> bool {
-    matches!(model, Model::Switch(_) | Model::Potentiometer(_))
-        || model.level().is_some()
-        || model.serial().is_some()
+    matches!(model, Model::Switch(_)) || model.level().is_some() || model.serial().is_some()
 }
 
 fn event_decision(

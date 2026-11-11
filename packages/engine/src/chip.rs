@@ -26,8 +26,6 @@ pub use ne555::{Discharge, Ne555};
 pub use regulator::LinearRegulator;
 pub use relay::Relay;
 
-pub(crate) use relay::coil as relay_coil;
-
 use crate::logic::Level;
 
 use crate::mna::{Layout, Stamp, Unknowns};

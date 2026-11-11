@@ -2,11 +2,12 @@ use serde_json::Value;
 
 use orbe_model::{Time, Value as FieldValue};
 
-use super::{Event, Model, Netlist, SerialEvent, Switch, Value as Level};
+use super::{Event, Model, Netlist, SerialEvent, Value as Level};
 use crate::blob::Blobs;
 use crate::device::{Declared, Events};
 use crate::diagnostic::Diagnostic;
 use crate::name::Name;
+use crate::passive::Switch;
 
 /// The JSON a netlist parsed from, kept so an export is the caller's document and not one
 /// written from a `Netlist`.

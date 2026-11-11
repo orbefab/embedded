@@ -1,6 +1,4 @@
-use crate::diagnostic::Diagnostic;
 use crate::diagnostic::ValueRule;
-use crate::name::{Name, Ref};
 use crate::netlist::NetId;
 use crate::netlist::Value;
 use crate::netlist::json::PinMap;
@@ -11,11 +9,15 @@ use crate::netlist::json::resolve_pins;
 use crate::netlist::json::resolve_rating;
 use crate::netlist::json::resolve_value;
 use serde::Deserialize;
-use std::collections::BTreeMap;
 
-use crate::element::Update;
-use crate::mna::{Node, Probe, Stamp};
-use crate::newton::{RELTOL, VNTOL};
+use orbe_model::Time;
+
+use crate::element::{Observed, OwnedCapacitor, OwnedInductor, Update};
+use crate::mna::{Node, Probe, Stamp, Unknowns};
+use crate::name::Quantity;
+use crate::netlist::json::ParseCtx;
+use crate::netlist::{Conduction, Kind};
+use crate::newton::{RELTOL, Side, VNTOL};
 
 /// Dropout knee, volt. The smooth minimum is within a millivolt of the corner.
 const KNEE_V: f64 = 1e-3;
@@ -110,62 +112,6 @@ pub(crate) fn evaluate(reg: &LinearRegulator, i: f64, vi: f64) -> Law {
         dig_di: ratio * h,
         dig_dvi: (iq + ratio * i) * hp / vdo,
     }
-}
-
-/// The row is linearised at the last solution. The zero start sits on the reverse-block
-/// slope, and a stamp that does not re-read it repeats that row. A linear circuit accepts it.
-pub(crate) fn stamp(reg: &LinearRegulator, stamp: &mut Stamp<'_>) {
-    let [pin_in, pin_out, pin_gnd] = reg.pins;
-    let prior = stamp.prior();
-    let i = prior.branch(0);
-    let vi = prior.v(pin_in) - prior.v(pin_gnd);
-    let law = evaluate(reg, i, vi);
-    let row = Node::Row(stamp.layout.branch_row(stamp.part, 0));
-    stamp.branch_current(pin_in, pin_out, 0);
-    stamp.branch_row(
-        pin_out,
-        pin_gnd,
-        0,
-        -law.dvo_di,
-        1.0,
-        law.vo - law.dvo_di * i - law.dvo_dvi * vi,
-    );
-    stamp.add(row, pin_in, -law.dvo_dvi);
-    stamp.add(row, pin_gnd, law.dvo_dvi);
-
-    stamp.current(pin_in, pin_gnd, law.ig - law.dig_di * i - law.dig_dvi * vi);
-    stamp.conductance(pin_in, pin_gnd, law.dig_dvi);
-    stamp.add(pin_in, row, law.dig_di);
-    stamp.add(pin_gnd, row, -law.dig_di);
-}
-
-/// The branch equation is a voltage. The tolerance is the voltage one, so the check does not
-/// divide a milliohm slope into the ampere floor.
-pub(crate) fn update(reg: &LinearRegulator, probe: &Probe<'_>) -> Update {
-    let [pin_in, pin_out, pin_gnd] = reg.pins;
-    let i = probe.branch(0);
-    let vi = probe.v(pin_in) - probe.v(pin_gnd);
-    let vo = probe.v(pin_out) - probe.v(pin_gnd);
-    let law = evaluate(reg, i, vi);
-    let finite = vo.is_finite() && law.vo.is_finite() && law.ig.is_finite();
-    let scale = RELTOL * vo.abs().max(law.vo.abs()) + VNTOL;
-    let voltage = (vo - law.vo).abs() / scale;
-    Update {
-        limited: false,
-        mismatch: if finite { voltage } else { f64::INFINITY },
-    }
-}
-
-/// `iin` enters at `in`, `iout` enters at `out`, and `p` is the power entering at every pin.
-pub(crate) fn observe(reg: &LinearRegulator, probe: &Probe<'_>) -> [f64; 3] {
-    let [pin_in, pin_out, pin_gnd] = reg.pins;
-    let i = probe.branch(0);
-    let vi = probe.v(pin_in) - probe.v(pin_gnd);
-    let vo = probe.v(pin_out) - probe.v(pin_gnd);
-    let ig = evaluate(reg, i, vi).ig;
-    let iin = i + ig;
-    let iout = -i;
-    [iin, iout, vi * iin + vo * iout]
 }
 
 #[cfg(test)]
@@ -492,7 +438,7 @@ mod tests {
         system.reset(&built.layout, GMIN);
         let conditions = Conditions::NOMINAL;
         let mut stamp = Stamp::new(&mut system, &built.layout, id, &iterate, &conditions);
-        crate::element::stamp(&built.netlist.part(id).model, &mut stamp);
+        crate::element::Device::stamp(&built.netlist.part(id).model, &mut stamp);
         let law = evaluate(reg, 0.1, 5.0);
         let got = system.term(branch, in_row);
         assert!(law.dvo_dvi.abs() > 1e-6, "line regulation dropped");
@@ -530,7 +476,7 @@ mod tests {
         system.reset(&built.layout, GMIN);
         let conditions = Conditions::NOMINAL;
         let mut stamp = Stamp::new(&mut system, &built.layout, id, &iterate, &conditions);
-        crate::element::stamp(&built.netlist.part(id).model, &mut stamp);
+        crate::element::Device::stamp(&built.netlist.part(id).model, &mut stamp);
         let law = evaluate(reg, 0.5, 5.0);
         let got = system.term(in_row, branch);
         assert!(law.dig_di > 0.01, "ratio dropped {}", law.dig_di);
@@ -550,7 +496,7 @@ mod tests {
         let conditions = Conditions::NOMINAL;
         for (id, part) in built.netlist.parts() {
             let mut stamp = Stamp::new(&mut system, &built.layout, id, &iterate, &conditions);
-            crate::element::stamp(&part.model, &mut stamp);
+            crate::element::Device::stamp(&part.model, &mut stamp);
         }
         let once = system.solve().unwrap();
         let first = voltage(&built, &once, "vout");
@@ -836,12 +782,16 @@ pub(crate) struct WireLinearRegulator {
 }
 
 pub(crate) fn resolve_regulator(
-    name: &Name,
-    part_ref: &Ref,
+    ctx: ParseCtx<'_>,
     wire: WireLinearRegulator,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
 ) -> Option<LinearRegulator> {
+    let ParseCtx {
+        name,
+        part: part_ref,
+        nets,
+        out,
+        ..
+    } = ctx;
     let pins = resolve_pins(name, LinearRegulator::PINS, &wire.pins.0, nets, out);
     let mut positive =
         |field: &'static str, unit, value| resolve_value(part_ref, field, unit, true, value, out);
@@ -890,4 +840,93 @@ pub(crate) fn resolve_regulator(
         max_current: max_current?,
         max_power: max_power?,
     })
+}
+
+impl Kind for LinearRegulator {
+    fn pins(&self) -> &[NetId] {
+        &self.pins
+    }
+    fn unknowns(&self) -> Unknowns {
+        Unknowns {
+            branches: 1,
+            ..Unknowns::default()
+        }
+    }
+    fn charges(&self) -> Vec<OwnedCapacitor> {
+        Vec::new()
+    }
+    fn inductors(&self) -> Vec<OwnedInductor> {
+        Vec::new()
+    }
+    /// The row is linearised at the last solution. The zero start sits on the reverse-block
+    /// slope, and a stamp that does not re-read it repeats that row. A linear circuit accepts it.
+    #[inline]
+    fn stamp(&self, stamp: &mut Stamp<'_>) {
+        let [pin_in, pin_out, pin_gnd] = self.pins;
+        let prior = stamp.prior();
+        let i = prior.branch(0);
+        let vi = prior.v(pin_in) - prior.v(pin_gnd);
+        let law = evaluate(self, i, vi);
+        let row = Node::Row(stamp.layout.branch_row(stamp.part, 0));
+        stamp.branch_current(pin_in, pin_out, 0);
+        stamp.branch_row(
+            pin_out,
+            pin_gnd,
+            0,
+            -law.dvo_di,
+            1.0,
+            law.vo - law.dvo_di * i - law.dvo_dvi * vi,
+        );
+        stamp.add(row, pin_in, -law.dvo_dvi);
+        stamp.add(row, pin_gnd, law.dvo_dvi);
+
+        stamp.current(pin_in, pin_gnd, law.ig - law.dig_di * i - law.dig_dvi * vi);
+        stamp.conductance(pin_in, pin_gnd, law.dig_dvi);
+        stamp.add(pin_in, row, law.dig_di);
+        stamp.add(pin_gnd, row, -law.dig_di);
+    }
+    fn reads_iterate(&self) -> bool {
+        true
+    }
+    fn initial(&self, _out: &mut [f64]) {}
+    /// The branch equation is a voltage. The tolerance is the voltage one, so the check does not
+    /// divide a milliohm slope into the ampere floor.
+    fn update(&self, probe: &Probe<'_>, _prior: &[f64], _next: &mut [f64]) -> Update {
+        let [pin_in, pin_out, pin_gnd] = self.pins;
+        let i = probe.branch(0);
+        let vi = probe.v(pin_in) - probe.v(pin_gnd);
+        let vo = probe.v(pin_out) - probe.v(pin_gnd);
+        let law = evaluate(self, i, vi);
+        let finite = vo.is_finite() && law.vo.is_finite() && law.ig.is_finite();
+        let scale = RELTOL * vo.abs().max(law.vo.abs()) + VNTOL;
+        let voltage = (vo - law.vo).abs() / scale;
+        Update {
+            limited: false,
+            mismatch: if finite { voltage } else { f64::INFINITY },
+        }
+    }
+    fn dc_paths(&self) -> &'static [(usize, usize)] {
+        &[(0, 2), (1, 2)]
+    }
+    fn quantities(&self) -> &'static [Quantity] {
+        &[Quantity::Iin, Quantity::Iout, Quantity::P]
+    }
+    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+        let current = self.max_current.as_ref().map(|v| (Quantity::Iout, v));
+        (current, self.max_power.as_ref())
+    }
+    /// `iin` enters at `in`, `iout` enters at `out`, and `p` is the power entering at every pin.
+    fn observe(&self, probe: &Probe<'_>, _at: Time, _side: Side) -> Option<Observed> {
+        let [pin_in, pin_out, pin_gnd] = self.pins;
+        let i = probe.branch(0);
+        let vi = probe.v(pin_in) - probe.v(pin_gnd);
+        let vo = probe.v(pin_out) - probe.v(pin_gnd);
+        let ig = evaluate(self, i, vi).ig;
+        let iin = i + ig;
+        let iout = -i;
+        Some(Observed::values([iin, iout, vi * iin + vo * iout], 3))
+    }
+    fn conduction(&self) -> Conduction {
+        Conduction::Fixes
+    }
 }

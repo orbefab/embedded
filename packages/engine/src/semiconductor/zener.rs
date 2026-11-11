@@ -1,7 +1,5 @@
 use crate::diagnostic::Diagnostic;
 use crate::diagnostic::ValueRule;
-use crate::name::Name;
-use crate::name::Ref;
 use crate::netlist::NetId;
 use crate::netlist::Value;
 use crate::netlist::json::PinMap;
@@ -13,11 +11,16 @@ use crate::netlist::json::resolve_value;
 use crate::semiconductor::Junction;
 use crate::semiconductor::junction_scale;
 use serde::Deserialize;
-use std::collections::BTreeMap;
 use std::f64::consts::SQRT_2;
 
-use crate::element::Update;
-use crate::mna::{GMIN, Probe, Stamp};
+use orbe_model::Time;
+
+use crate::element::{Observed, OwnedCapacitor, OwnedInductor, TWO_PIN, Update};
+use crate::mna::{GMIN, Probe, Stamp, Unknowns};
+use crate::name::Quantity;
+use crate::netlist::json::ParseCtx;
+use crate::netlist::{Conduction, Kind};
+use crate::newton::Side;
 use crate::semiconductor::junction::{Shockley, mismatch, pnjlim};
 
 fn forward(zener: &Zener) -> Shockley {
@@ -30,31 +33,6 @@ fn forward(zener: &Zener) -> Shockley {
 fn breakdown(zener: &Zener) -> Shockley {
     let derived = &zener.breakdown;
     Shockley::from_parts(derived.saturation_current, derived.nvt, derived.vcrit)
-}
-
-/// Rs from the anode to internal node 0, then the forward junction to the cathode.
-/// Rb from internal node 1 to the cathode, then the breakdown junction back to node 0.
-/// Each junction has its own `GMIN`. Neither internal node has node gmin.
-pub(crate) fn stamp(zener: &Zener, stamp: &mut Stamp<'_>) {
-    let jf = forward(zener);
-    let jb = breakdown(zener);
-    let [anode, cathode] = zener.pins;
-    let n0 = stamp.internal(0);
-    let n1 = stamp.internal(1);
-    stamp.conductance(anode, n0, 1.0 / zener.series_resistance.si.get());
-    let forward_voltage = stamp.junction(0);
-    let (id, gd, _, voltage) = jf.evaluate(forward_voltage);
-    stamp.conductance(n0, cathode, gd + GMIN);
-    stamp.current(n0, cathode, id - gd * voltage);
-    stamp.conductance(n1, cathode, 1.0 / zener.breakdown_resistance.si.get());
-    let breakdown_voltage = stamp.junction(1);
-    let (ib, gb, _, voltage) = jb.evaluate(breakdown_voltage);
-    stamp.conductance(n1, n0, gb + GMIN);
-    stamp.current(n1, n0, ib - gb * voltage);
-}
-
-pub(crate) fn initial(zener: &Zener) -> [f64; 2] {
-    [forward(zener).vcrit, breakdown(zener).vcrit]
 }
 
 /// Limits each solved junction voltage against its own prior and its own `vcrit`.
@@ -77,16 +55,16 @@ pub(crate) fn update(zener: &Zener, probe: &Probe<'_>, prior: &[f64]) -> ([f64; 
     )
 }
 
+/// The current through Rs, entering the anode.
+fn current(zener: &Zener, probe: &Probe<'_>) -> f64 {
+    (probe.v(zener.pins[0]) - probe.internal(0)) / zener.series_resistance.si.get()
+}
+
 fn junction_mismatch(params: &Shockley, prior: f64, solved: f64) -> (f64, bool) {
     let (id, gd, cap_prior, voltage) = params.evaluate(prior);
     let linear = id + gd * (solved - voltage);
     let (actual, _, cap_solved, _) = params.evaluate(solved);
     (mismatch(linear, actual), cap_prior || cap_solved)
-}
-
-/// The current through Rs, entering the anode.
-pub(crate) fn current(zener: &Zener, probe: &Probe<'_>) -> f64 {
-    (probe.v(zener.pins[0]) - probe.internal(0)) / zener.series_resistance.si.get()
 }
 
 #[cfg(test)]
@@ -187,7 +165,7 @@ mod tests {
         for (part_id, part) in circuit.netlist.parts() {
             let mut stamp =
                 Stamp::new(&mut system, &circuit.layout, part_id, &iterate, &conditions);
-            crate::element::stamp(&part.model, &mut stamp);
+            crate::element::Device::stamp(&part.model, &mut stamp);
         }
         let solution = system.solve().unwrap();
         let probe = Probe {
@@ -363,13 +341,14 @@ pub(crate) struct WireZener {
     ratings: WireJunctionRatings,
 }
 
-pub(crate) fn resolve_zener(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireZener,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Zener> {
+pub(crate) fn resolve_zener(ctx: ParseCtx<'_>, wire: WireZener) -> Option<Zener> {
+    let ParseCtx {
+        name,
+        part: part_ref,
+        nets,
+        out,
+        ..
+    } = ctx;
     let pins = resolve_pins(name, Junction::PINS, &wire.pins.0, nets, out);
     let mut positive =
         |field: &'static str, unit, value| resolve_value(part_ref, field, unit, true, value, out);
@@ -458,4 +437,72 @@ pub(crate) fn resolve_zener(
         max_current: max_current?,
         max_power: max_power?,
     })
+}
+
+impl Kind for Zener {
+    fn pins(&self) -> &[NetId] {
+        &self.pins
+    }
+    fn unknowns(&self) -> Unknowns {
+        Unknowns {
+            internal_nodes: 2,
+            bare_internal: true,
+            branches: 0,
+            junctions: 2,
+        }
+    }
+    fn charges(&self) -> Vec<OwnedCapacitor> {
+        Vec::new()
+    }
+    fn inductors(&self) -> Vec<OwnedInductor> {
+        Vec::new()
+    }
+    /// Rs from the anode to internal node 0, then the forward junction to the cathode.
+    /// Rb from internal node 1 to the cathode, then the breakdown junction back to node 0.
+    /// Each junction has its own `GMIN`. Neither internal node has node gmin.
+    #[inline]
+    fn stamp(&self, stamp: &mut Stamp<'_>) {
+        let jf = forward(self);
+        let jb = breakdown(self);
+        let [anode, cathode] = self.pins;
+        let n0 = stamp.internal(0);
+        let n1 = stamp.internal(1);
+        stamp.conductance(anode, n0, 1.0 / self.series_resistance.si.get());
+        let forward_voltage = stamp.junction(0);
+        let (id, gd, _, voltage) = jf.evaluate(forward_voltage);
+        stamp.conductance(n0, cathode, gd + GMIN);
+        stamp.current(n0, cathode, id - gd * voltage);
+        stamp.conductance(n1, cathode, 1.0 / self.breakdown_resistance.si.get());
+        let breakdown_voltage = stamp.junction(1);
+        let (ib, gb, _, voltage) = jb.evaluate(breakdown_voltage);
+        stamp.conductance(n1, n0, gb + GMIN);
+        stamp.current(n1, n0, ib - gb * voltage);
+    }
+    fn reads_iterate(&self) -> bool {
+        true
+    }
+    fn initial(&self, out: &mut [f64]) {
+        out[..2].copy_from_slice(&[forward(self).vcrit, breakdown(self).vcrit]);
+    }
+    fn update(&self, probe: &Probe<'_>, prior: &[f64], next: &mut [f64]) -> Update {
+        let (limited, update) = update(self, probe, prior);
+        next[..2].copy_from_slice(&limited);
+        update
+    }
+    fn dc_paths(&self) -> &'static [(usize, usize)] {
+        &[(0, 1)]
+    }
+    fn quantities(&self) -> &'static [Quantity] {
+        TWO_PIN
+    }
+    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+        let current = self.max_current.as_ref().map(|v| (Quantity::I, v));
+        (current, self.max_power.as_ref())
+    }
+    fn observe(&self, probe: &Probe<'_>, _at: Time, _side: Side) -> Option<Observed> {
+        Some(Observed::two_pin(self.pins, current(self, probe), probe))
+    }
+    fn conduction(&self) -> Conduction {
+        Conduction::Passes
+    }
 }

@@ -17,6 +17,7 @@ use crate::netlist::NetId;
 use crate::netlist::PartId;
 use crate::netlist::Threshold;
 use crate::netlist::Value;
+use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::WireThreshold;
 use crate::netlist::json::threshold::resolve_threshold;
 use crate::netlist::json::{PinMap, WireInt, WireValue, resolve_int, resolve_pins, resolve_value};
@@ -510,13 +511,14 @@ struct WireFuses {
     extended: u8,
 }
 
-pub(crate) fn resolve_atmega328p(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireAtmega328p,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Atmega328p> {
+pub(crate) fn resolve_atmega328p(ctx: ParseCtx<'_>, wire: WireAtmega328p) -> Option<Atmega328p> {
+    let ParseCtx {
+        name,
+        part: part_ref,
+        nets,
+        out,
+        ..
+    } = ctx;
     let ohm = |field, value, out: &mut Vec<Diagnostic>| {
         resolve_value(part_ref, field, "ohm", true, value, out)
     };

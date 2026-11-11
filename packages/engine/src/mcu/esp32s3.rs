@@ -32,6 +32,7 @@ use crate::netlist::Threshold;
 use crate::netlist::Value;
 use crate::netlist::elf::{self, Elf};
 use crate::netlist::flash::{self, Flash};
+use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
 use crate::netlist::json::{PinMap, WireValue, resolve_value};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
@@ -1215,14 +1216,15 @@ impl WireEsp32s3 {
     }
 }
 
-pub(crate) fn resolve_esp32s3(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireEsp32s3,
-    nets: &BTreeMap<String, NetId>,
-    blobs: &Blobs,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Esp32s3> {
+pub(crate) fn resolve_esp32s3(ctx: ParseCtx<'_>, wire: WireEsp32s3) -> Option<Esp32s3> {
+    let ParseCtx {
+        name,
+        part: part_ref,
+        nets,
+        blobs,
+        out,
+        ..
+    } = ctx;
     let ohm = |field, value, out: &mut Vec<Diagnostic>| {
         resolve_value(part_ref, field, "ohm", true, value, out)
     };

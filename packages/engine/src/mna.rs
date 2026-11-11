@@ -59,11 +59,11 @@ pub(crate) struct Layout {
 
 /// A part's unknowns, and how many capacitors and inductors it owns.
 fn shape(model: &impl Device) -> (Unknowns, usize, usize) {
-    let extra = element::unknowns(model);
+    let extra = element::Device::unknowns(model);
     (
         extra,
-        element::charges(model).len(),
-        element::inductors(model).len(),
+        element::Device::charges(model).len(),
+        element::Device::inductors(model).len(),
     )
 }
 

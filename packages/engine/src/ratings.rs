@@ -40,8 +40,8 @@ impl Ratings {
     pub(crate) fn new(netlist: &Netlist, columns: &Columns, timing: Timing) -> Ratings {
         let mut watches = Vec::new();
         for (_, part) in netlist.parts() {
-            for (kind, value) in part.model.ratings() {
-                let quantity = Ref::Quantity(part.name.clone(), part.model.rated(kind));
+            for (kind, quantity, value) in part.model.ratings() {
+                let quantity = Ref::Quantity(part.name.clone(), quantity);
                 let column = columns
                     .index(&quantity)
                     .expect("every part quantity is a column");

@@ -2,7 +2,6 @@
 //! its netlist struct, its JSON wire type, its row in the device table, and its trains as the
 //! records the host's replay engine sends.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -14,10 +13,11 @@ use crate::active::replay::Replay;
 use crate::active::{Chip, Core, Output, Stage, Takes};
 use crate::diagnostic::{Diagnostic, ScheduleRule, ValueRule};
 use crate::link::{Record, RecordKind};
-use crate::name::{Name, Ref};
+use crate::name::Ref;
 use crate::netlist::NetId;
 use crate::netlist::PartId;
 use crate::netlist::Value;
+use crate::netlist::json::ParseCtx;
 use crate::netlist::json::waveform::serial_schedule;
 use crate::netlist::json::{PinMap, resolve_pins};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
@@ -133,12 +133,16 @@ struct WirePulse {
 }
 
 pub(crate) fn resolve_pulses_replay(
-    name: &Name,
-    part_ref: &Ref,
+    ctx: ParseCtx<'_>,
     wire: WirePulsesReplay,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
 ) -> Option<PulsesReplay> {
+    let ParseCtx {
+        name,
+        part: part_ref,
+        nets,
+        out,
+        ..
+    } = ctx;
     let pins = resolve_pins(name, PulsesReplay::PINS, &wire.pins.0, nets, out);
     let output = resolve_output_stage(part_ref, wire.output, out);
     let events = resolve_events(part_ref, wire.events, out);

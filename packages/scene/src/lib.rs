@@ -16,7 +16,6 @@ mod circuit;
 mod diagnostic;
 mod files;
 mod holes;
-mod kinds;
 mod model;
 mod name;
 mod params;

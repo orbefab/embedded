@@ -83,9 +83,7 @@ impl Circuit {
             )
             .collect();
         logic.sort_unstable_by_key(|&(id, _)| id);
-        let linear = netlist
-            .parts()
-            .all(|(_, part)| !element::reads_iterate(&part.model));
+        let linear = netlist.parts().all(|(_, part)| !part.model.reads_iterate());
         let mut circuit = Circuit {
             netlist,
             layout,
@@ -354,7 +352,8 @@ impl Iterate {
         let layout = &circuit.layout;
         let mut junctions = vec![0.0; layout.junctions()];
         for (id, part) in circuit.netlist.parts() {
-            element::initial(&part.model, &mut junctions[layout.junction_slots(id)]);
+            part.model
+                .initial(&mut junctions[layout.junction_slots(id)]);
         }
         Iterate {
             solution: Solution::zeros(layout.size()),
@@ -431,7 +430,7 @@ pub(crate) fn newton(
     for iteration in 1..=budget {
         system.reset(layout, conditions.gmin);
         for (id, part) in circuit.netlist.parts() {
-            element::stamp(
+            element::Device::stamp(
                 &part.model,
                 &mut Stamp::new(&mut system, layout, id, &iterate, conditions),
             );
@@ -467,8 +466,7 @@ pub(crate) fn newton(
                 part: id,
                 x: &solution,
             };
-            let update = element::update(
-                &part.model,
+            let update = part.model.update(
                 &probe,
                 &iterate.junctions[slots.clone()],
                 &mut junctions[slots],

@@ -1,7 +1,7 @@
 //! The lint rules: what a scene that checks is likely to have wrong or left unclear. Each rule
 //! reads the checked circuit and pushes warnings. None of them blocks.
 
-use orbe_engine::netlist::{Model, Netlist};
+use orbe_engine::netlist::{Conduction, Model, Netlist};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -402,34 +402,6 @@ fn floating(s: &Scope, out: &mut Findings) {
     }
 }
 
-/// A part that fixes the voltage of each net it is on, as ground does.
-fn fixes(model: &Model) -> bool {
-    matches!(model, Model::VoltageSource(_) | Model::LinearRegulator(_))
-}
-
-/// A part that carries an LED's current on without limiting it.
-fn passes(model: &Model) -> bool {
-    matches!(
-        model,
-        Model::Led(_) | Model::Diode(_) | Model::Zener(_) | Model::Switch(_)
-    )
-}
-
-/// A transistor's collector and emitter, or drain and source, which it joins while it is on.
-fn switched(model: &Model) -> Option<(usize, usize)> {
-    match model {
-        Model::Npn(_) | Model::Pnp(_) | Model::Nmos(_) => {
-            let pins = model.pins();
-            Some((pins[0].index(), pins[2].index()))
-        }
-        _ => None,
-    }
-}
-
-fn limits(model: &Model) -> bool {
-    matches!(model, Model::Resistor(_) | Model::Potentiometer(_))
-}
-
 /// An LED whose path, through other junctions, switches and transistors switched to a held
 /// net, joins two driven nets with no resistor in series. A resistor with both ends on that
 /// path is in parallel, so it limits nothing. A chip pin drives its net unless a resistor feeds
@@ -446,7 +418,7 @@ fn led_no_resistor(s: &Scope, out: &mut Findings) {
     for (_, part) in engine.parts() {
         let marks = match part.model {
             Model::Chip(_) => &mut chip,
-            ref model if fixes(model) => &mut fixed,
+            ref model if model.conduction() == Conduction::Fixes => &mut fixed,
             _ => continue,
         };
         for net in part.model.pins() {
@@ -466,17 +438,17 @@ fn led_no_resistor(s: &Scope, out: &mut Findings) {
             }
             for (_, part) in engine.parts() {
                 let pins = part.model.pins();
-                let reached: Vec<usize> =
-                    if passes(&part.model) && pins.iter().any(|n| n.index() == net) {
+                let reached: Vec<usize> = match part.model.conduction() {
+                    Conduction::Passes if pins.iter().any(|n| n.index() == net) => {
                         pins.iter().map(|n| n.index()).collect()
-                    } else {
-                        match switched(&part.model) {
-                            Some((collector, emitter)) if collector == net && held(emitter) => {
-                                vec![emitter]
-                            }
-                            _ => Vec::new(),
-                        }
-                    };
+                    }
+                    Conduction::Switches(from, to)
+                        if pins[from].index() == net && held(pins[to].index()) =>
+                    {
+                        vec![pins[to].index()]
+                    }
+                    _ => Vec::new(),
+                };
                 for other in reached {
                     if path.insert(other) {
                         next.push(other);
@@ -487,7 +459,7 @@ fn led_no_resistor(s: &Scope, out: &mut Findings) {
         let fed = |net: usize| {
             engine.parts().any(|(_, part)| {
                 let pins = part.model.pins();
-                limits(&part.model)
+                part.model.conduction() == Conduction::Limits
                     && pins.iter().any(|n| n.index() == net)
                     && pins
                         .iter()
@@ -496,7 +468,7 @@ fn led_no_resistor(s: &Scope, out: &mut Findings) {
         };
         let limited = engine.parts().any(|(_, part)| {
             let pins = part.model.pins();
-            limits(&part.model)
+            part.model.conduction() == Conduction::Limits
                 && pins
                     .iter()
                     .any(|n| path.contains(&n.index()) && !held(n.index()))
