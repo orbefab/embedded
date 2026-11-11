@@ -1,18 +1,12 @@
-use crate::diagnostic::Diagnostic;
-use crate::name::{Name, Ref};
-use crate::netlist::Model;
-use crate::netlist::NetId;
-use crate::netlist::Value;
-use crate::netlist::json::PinMap;
-use crate::netlist::json::WireValue;
-use crate::netlist::json::resolve_pins;
-use crate::netlist::json::resolve_value;
+use orbe_model::Time;
 use serde::Deserialize;
-use std::collections::BTreeMap;
 
-use crate::element::{OwnedInductor, StoreEnd};
-use crate::mna::{Probe, Stamp};
-use crate::newton::{History, Method, Store};
+use crate::element::{Observed, OwnedCapacitor, OwnedInductor, StoreEnd, TWO_PIN, Update};
+use crate::mna::{Probe, Stamp, Unknowns};
+use crate::name::Quantity;
+use crate::netlist::json::{ParseCtx, PinMap, WireValue, resolve_pins, resolve_value};
+use crate::netlist::{Conduction, Kind, NetId, Value};
+use crate::newton::{History, Method, Side, Store};
 
 /// Seconds. A held inductor sits beside `HOLD / L` siemens, the backward Euler companion of a
 /// step this long, the dual of a held capacitor's `HOLD / C` ohm. An exact hold would leave two
@@ -31,16 +25,12 @@ pub(crate) fn coil(b: NetId, henry: f64, ohm: f64) -> OwnedInductor {
     }
 }
 
-pub(crate) fn owned(inductor: &Inductor) -> OwnedInductor {
+fn owned(inductor: &Inductor) -> OwnedInductor {
     coil(
         inductor.pins[1],
         inductor.inductance.si.get(),
         inductor.series_resistance.si.get(),
     )
-}
-
-pub(crate) fn stamp(inductor: &Inductor, stamp: &mut Stamp<'_>) {
-    stamp_coil(stamp, inductor.pins[0], owned(inductor));
 }
 
 /// `coil`'s resistance from `a` to internal node 0, and its inductance.
@@ -85,10 +75,6 @@ fn companion(henry: f64, method: Method, h: f64, v0: f64, i0: f64) -> (f64, f64)
             (g, i0 + g * v0)
         }
     }
-}
-
-pub(crate) fn current(probe: &Probe<'_>) -> f64 {
-    probe.branch(0)
 }
 
 #[cfg(test)]
@@ -151,7 +137,7 @@ mod tests {
         let mut system = System::new(layout);
         system.reset(layout, conditions.gmin);
         for (id, part) in circuit.netlist.parts() {
-            crate::element::stamp(
+            crate::element::Device::stamp(
                 &part.model,
                 &mut Stamp::new(&mut system, layout, id, &iterate, &conditions),
             );
@@ -207,13 +193,14 @@ pub(crate) struct WireInductor {
     series_resistance: WireValue,
 }
 
-pub(crate) fn resolve_inductor(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireInductor,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Model> {
+pub(crate) fn resolve_inductor(ctx: ParseCtx<'_>, wire: WireInductor) -> Option<Inductor> {
+    let ParseCtx {
+        name,
+        part: part_ref,
+        nets,
+        out,
+        ..
+    } = ctx;
     let WireInductor {
         pins,
         inductance,
@@ -232,13 +219,57 @@ pub(crate) fn resolve_inductor(
         out,
     );
     match (pins, inductance, series_resistance) {
-        (Some(pins), Some(inductance), Some(series_resistance)) => {
-            Some(Model::Inductor(Inductor {
-                pins,
-                inductance,
-                series_resistance,
-            }))
-        }
+        (Some(pins), Some(inductance), Some(series_resistance)) => Some(Inductor {
+            pins,
+            inductance,
+            series_resistance,
+        }),
         _ => None,
+    }
+}
+
+impl Kind for Inductor {
+    fn pins(&self) -> &[NetId] {
+        &self.pins
+    }
+    fn unknowns(&self) -> Unknowns {
+        Unknowns {
+            internal_nodes: 1,
+            branches: 1,
+            ..Unknowns::default()
+        }
+    }
+    fn charges(&self) -> Vec<OwnedCapacitor> {
+        Vec::new()
+    }
+    fn inductors(&self) -> Vec<OwnedInductor> {
+        vec![owned(self)]
+    }
+    #[inline]
+    fn stamp(&self, stamp: &mut Stamp<'_>) {
+        stamp_coil(stamp, self.pins[0], owned(self));
+    }
+    fn reads_iterate(&self) -> bool {
+        false
+    }
+    fn initial(&self, _out: &mut [f64]) {}
+    fn update(&self, _probe: &Probe<'_>, _prior: &[f64], _next: &mut [f64]) -> Update {
+        Update::default()
+    }
+    /// A short behind its resistance.
+    fn dc_paths(&self) -> &'static [(usize, usize)] {
+        &[(0, 1)]
+    }
+    fn quantities(&self) -> &'static [Quantity] {
+        TWO_PIN
+    }
+    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+        (None, None)
+    }
+    fn observe(&self, probe: &Probe<'_>, _at: Time, _side: Side) -> Option<Observed> {
+        Some(Observed::two_pin(self.pins, probe.branch(0), probe))
+    }
+    fn conduction(&self) -> Conduction {
+        Conduction::Other
     }
 }

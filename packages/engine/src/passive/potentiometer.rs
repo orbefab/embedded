@@ -1,19 +1,22 @@
-use std::collections::BTreeMap;
-
 use serde::Deserialize;
 
+use orbe_model::Time;
+
 use crate::diagnostic::{Diagnostic, ValueRule};
-use crate::mna::Stamp;
-use crate::name::{Name, Ref};
-use crate::netlist::Model;
+use crate::element::{Observed, OwnedCapacitor, OwnedInductor, Update};
+use crate::mna::{Probe, Stamp, Unknowns};
+use crate::name::{Quantity, Ref};
 use crate::netlist::NetId;
 use crate::netlist::Schedule;
 use crate::netlist::Source;
 use crate::netlist::Value;
 use crate::netlist::broken_fraction;
 use crate::netlist::broken_positive;
+use crate::netlist::json::ParseCtx;
 use crate::netlist::json::waveform::{WirePosition, WireSteps};
 use crate::netlist::json::{FRACTION_UNIT, PinMap, WireValue, resolve_pins, resolve_value};
+use crate::netlist::{Conduction, Kind, LevelField};
+use crate::newton::Side;
 
 /// `a` to `wiper` is `position * resistance`. `wiper` to `b` is the rest.
 #[derive(Clone, Debug, PartialEq)]
@@ -85,12 +88,16 @@ pub(crate) struct WirePotentiometer {
 }
 
 pub(crate) fn resolve_potentiometer(
-    name: &Name,
-    part_ref: &Ref,
+    ctx: ParseCtx<'_>,
     wire: WirePotentiometer,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Model> {
+) -> Option<Potentiometer> {
+    let ParseCtx {
+        name,
+        part: part_ref,
+        nets,
+        out,
+        ..
+    } = ctx;
     let WirePotentiometer {
         pins,
         resistance,
@@ -101,13 +108,11 @@ pub(crate) fn resolve_potentiometer(
     let resistance = resolve_value(part_ref, "resistance", "ohm", true, resistance, out);
     let position = resolve_position(part_ref, resistance.as_ref(), position, out);
     match (pins, resistance, position) {
-        (Some(pins), Some(resistance), Some(position)) => {
-            Some(Model::Potentiometer(Potentiometer {
-                pins,
-                resistance,
-                position,
-            }))
-        }
+        (Some(pins), Some(resistance), Some(position)) => Some(Potentiometer {
+            pins,
+            resistance,
+            position,
+        }),
         _ => None,
     }
 }
@@ -205,15 +210,65 @@ fn refuse_fraction(
     });
 }
 
-pub(crate) fn stamp(pot: &Potentiometer, stamp: &mut Stamp<'_>) {
-    let ohms = pot.resistance.si.get();
-    let position = stamp
-        .conditions
-        .side()
-        .read(&pot.position, stamp.conditions.at)
-        .si
-        .get();
-    let [a, wiper, b] = pot.pins;
-    stamp.conductance(a, wiper, 1.0 / (position * ohms));
-    stamp.conductance(wiper, b, 1.0 / ((1.0 - position) * ohms));
+impl Kind for Potentiometer {
+    fn pins(&self) -> &[NetId] {
+        &self.pins
+    }
+    fn unknowns(&self) -> Unknowns {
+        Unknowns::default()
+    }
+    fn charges(&self) -> Vec<OwnedCapacitor> {
+        Vec::new()
+    }
+    fn inductors(&self) -> Vec<OwnedInductor> {
+        Vec::new()
+    }
+    #[inline]
+    fn stamp(&self, stamp: &mut Stamp<'_>) {
+        let ohms = self.resistance.si.get();
+        let position = stamp
+            .conditions
+            .side()
+            .read(&self.position, stamp.conditions.at)
+            .si
+            .get();
+        let [a, wiper, b] = self.pins;
+        stamp.conductance(a, wiper, 1.0 / (position * ohms));
+        stamp.conductance(wiper, b, 1.0 / ((1.0 - position) * ohms));
+    }
+    fn reads_iterate(&self) -> bool {
+        false
+    }
+    fn initial(&self, _out: &mut [f64]) {}
+    fn update(&self, _probe: &Probe<'_>, _prior: &[f64], _next: &mut [f64]) -> Update {
+        Update::default()
+    }
+    fn dc_paths(&self) -> &'static [(usize, usize)] {
+        &[(0, 1), (1, 2)]
+    }
+    fn quantities(&self) -> &'static [Quantity] {
+        &[]
+    }
+    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+        (None, None)
+    }
+    fn observe(&self, _probe: &Probe<'_>, _at: Time, _side: Side) -> Option<Observed> {
+        None
+    }
+    fn conduction(&self) -> Conduction {
+        Conduction::Limits
+    }
+    fn next_change_after(&self, at: Time) -> Option<Time> {
+        self.position.next_change_after(at)
+    }
+    fn level(&self) -> Option<LevelField<'_>> {
+        Some(LevelField {
+            schedule: &self.position,
+            field: "position",
+            unit: FRACTION_UNIT,
+        })
+    }
+    fn level_mut(&mut self) -> Option<&mut Schedule<Value>> {
+        Some(&mut self.position)
+    }
 }

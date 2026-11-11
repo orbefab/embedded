@@ -2,8 +2,6 @@
 //! device in [`model`] keeps the bits and the colours, and shows the colours. The pulse engine
 //! times the line.
 
-use std::collections::BTreeMap;
-
 use serde::Deserialize;
 
 use orbe_model::{Device, Fields, Value};
@@ -13,7 +11,7 @@ use crate::active::pulse::Pulse;
 use crate::active::{Chip, Core, Takes};
 use crate::diagnostic::{Diagnostic, ValueRule};
 use crate::mna::Node;
-use crate::name::{Name, Ref};
+use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
 use crate::netlist::json::{PinMap, resolve_pins};
 use crate::netlist::{NetId, PartId, Threshold};
@@ -116,13 +114,14 @@ pub(crate) struct WireWs2812 {
     input_threshold: WireThreshold,
 }
 
-pub(crate) fn resolve_ws2812(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireWs2812,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Ws2812> {
+pub(crate) fn resolve_ws2812(ctx: ParseCtx<'_>, wire: WireWs2812) -> Option<Ws2812> {
+    let ParseCtx {
+        name,
+        part: part_ref,
+        nets,
+        out,
+        ..
+    } = ctx;
     let pins = resolve_pins(name, Ws2812::PINS, &wire.pins.0, nets, out);
     let input_threshold = resolve_threshold(
         part_ref,

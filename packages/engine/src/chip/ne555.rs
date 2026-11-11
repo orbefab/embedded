@@ -2,17 +2,15 @@
 //! propagation delay and no input current.
 
 use crate::diagnostic::Diagnostic;
-use crate::name::Name;
-use crate::name::Ref;
 use crate::netlist::NetId;
 use crate::netlist::Value;
+use crate::netlist::json::ParseCtx;
 use crate::netlist::json::PinMap;
 use crate::netlist::json::WireValue;
 use crate::netlist::json::resolve_pins;
 use crate::netlist::json::resolve_value;
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
 use serde::Deserialize;
-use std::collections::BTreeMap;
 
 use crate::logic::Level;
 
@@ -239,13 +237,14 @@ pub(crate) struct WireDischarge {
     off_resistance: WireValue,
 }
 
-pub(crate) fn resolve_ne555(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireNe555,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Ne555> {
+pub(crate) fn resolve_ne555(ctx: ParseCtx<'_>, wire: WireNe555) -> Option<Ne555> {
+    let ParseCtx {
+        name,
+        part: part_ref,
+        nets,
+        out,
+        ..
+    } = ctx;
     let ohm = |field, value, out: &mut Vec<Diagnostic>| {
         resolve_value(part_ref, field, "ohm", true, value, out)
     };

@@ -3,8 +3,6 @@ use crate::netlist::Netlist;
 use crate::diagnostic::Diagnostic;
 use crate::name::Ref;
 
-use crate::element;
-
 /// A `net.floating` warning for each net with no DC path to ground, found from the netlist
 /// alone, before any solve.
 pub fn floating_nets(netlist: &Netlist) -> Vec<Diagnostic> {
@@ -12,7 +10,7 @@ pub fn floating_nets(netlist: &Netlist) -> Vec<Diagnostic> {
     let mut parent: Vec<usize> = (0..count).collect();
     for (_, part) in netlist.parts() {
         let pins = part.model.pins();
-        for &(left, right) in element::dc_paths(&part.model) {
+        for &(left, right) in part.model.dc_paths() {
             unite(&mut parent, pins[left].index(), pins[right].index());
         }
     }

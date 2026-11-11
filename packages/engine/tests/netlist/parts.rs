@@ -1,3 +1,4 @@
+use orbe_engine::name::Quantity;
 use orbe_engine::netlist::{self, Model, RatingKind};
 
 use crate::common;
@@ -167,9 +168,9 @@ fn an_led_keeps_its_parameters_and_ratings() {
         .model
         .ratings()
         .into_iter()
-        .map(|(kind, value)| (kind, value.si.get()))
+        .map(|(kind, quantity, value)| (kind, quantity, value.si.get()))
         .collect();
-    assert_eq!(ratings, [(RatingKind::Current, 0.03)]);
+    assert_eq!(ratings, [(RatingKind::Current, Quantity::I, 0.03)]);
 }
 
 #[test]

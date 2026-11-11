@@ -418,11 +418,14 @@ impl Open {
         let ratings = netlist
             .parts()
             .flat_map(|(_, part)| {
-                part.model.ratings().into_iter().map(|(kind, value)| Rated {
-                    kind,
-                    quantity: EngineRef::Quantity(part.name.clone(), part.model.rated(kind)),
-                    limit: value.si.get(),
-                })
+                part.model
+                    .ratings()
+                    .into_iter()
+                    .map(|(kind, quantity, value)| Rated {
+                        kind,
+                        quantity: EngineRef::Quantity(part.name.clone(), quantity),
+                        limit: value.si.get(),
+                    })
             })
             .collect();
         let mut reports: BTreeMap<String, Vec<Quantity>> = BTreeMap::new();

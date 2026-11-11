@@ -3,8 +3,6 @@
 
 use crate::diagnostic::Diagnostic;
 use crate::diagnostic::ValueRule;
-use crate::name::Name;
-use crate::name::Ref;
 use crate::netlist::Contact;
 use crate::netlist::NetId;
 use crate::netlist::Value;
@@ -14,12 +12,17 @@ use crate::netlist::json::WireValue;
 use crate::netlist::json::resolve_pins;
 use crate::netlist::json::resolve_value;
 use serde::Deserialize;
-use std::collections::BTreeMap;
 
 use crate::logic::Level;
 
-use crate::element::{self, OwnedInductor};
-use crate::mna::{Node, Stamp};
+use orbe_model::Time;
+
+use crate::element::{self, Observed, OwnedCapacitor, OwnedInductor, TWO_PIN, Update};
+use crate::mna::{Node, Probe, Stamp, Unknowns};
+use crate::name::Quantity;
+use crate::netlist::json::ParseCtx;
+use crate::netlist::{Conduction, Kind};
+use crate::newton::Side;
 use crate::watch::{Signal, Watch};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,13 +140,14 @@ pub(crate) struct WireRelay {
     off_resistance: WireValue,
 }
 
-pub(crate) fn resolve_relay(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireRelay,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Relay> {
+pub(crate) fn resolve_relay(ctx: ParseCtx<'_>, wire: WireRelay) -> Option<Relay> {
+    let ParseCtx {
+        name,
+        part: part_ref,
+        nets,
+        out,
+        ..
+    } = ctx;
     let pins = resolve_pins(name, Relay::PINS, &wire.pins.0, nets, out);
     let mut positive =
         |field: &'static str, unit, value| resolve_value(part_ref, field, unit, true, value, out);
@@ -173,4 +177,56 @@ pub(crate) fn resolve_relay(
         on_resistance: on_resistance?,
         off_resistance: off_resistance?,
     })
+}
+
+impl Kind for Relay {
+    fn pins(&self) -> &[NetId] {
+        &self.pins
+    }
+    fn unknowns(&self) -> Unknowns {
+        Unknowns {
+            internal_nodes: 1,
+            branches: 1,
+            ..Unknowns::default()
+        }
+    }
+    fn charges(&self) -> Vec<OwnedCapacitor> {
+        Vec::new()
+    }
+    fn inductors(&self) -> Vec<OwnedInductor> {
+        vec![coil(self)]
+    }
+    #[inline]
+    fn stamp(&self, stamp: &mut Stamp<'_>) {
+        crate::chip::stamp(crate::chip::Passive::Relay(self), *stamp.chip(), stamp);
+    }
+    fn reads_iterate(&self) -> bool {
+        false
+    }
+    fn initial(&self, _out: &mut [f64]) {}
+    fn update(&self, _probe: &Probe<'_>, _prior: &[f64], _next: &mut [f64]) -> Update {
+        Update::default()
+    }
+    /// Its coil's ends, and `com` to `no` and to `nc` in either state.
+    fn dc_paths(&self) -> &'static [(usize, usize)] {
+        &[
+            (Relay::COIL_A, Relay::COIL_B),
+            (Relay::COM, Relay::NO),
+            (Relay::COM, Relay::NC),
+        ]
+    }
+    /// Its coil's.
+    fn quantities(&self) -> &'static [Quantity] {
+        TWO_PIN
+    }
+    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+        (None, None)
+    }
+    fn observe(&self, probe: &Probe<'_>, _at: Time, _side: Side) -> Option<Observed> {
+        let coil = [self.pins[Relay::COIL_A], self.pins[Relay::COIL_B]];
+        Some(Observed::two_pin(coil, probe.branch(0), probe))
+    }
+    fn conduction(&self) -> Conduction {
+        Conduction::Other
+    }
 }

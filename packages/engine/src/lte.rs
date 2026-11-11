@@ -55,10 +55,10 @@ impl Charges {
         let mut caps = Vec::new();
         let mut fluxes = Vec::new();
         for (id, part) in netlist.parts() {
-            for cap in element::charges(&part.model) {
+            for cap in element::Device::charges(&part.model) {
                 caps.push((id, cap));
             }
-            for inductor in element::inductors(&part.model) {
+            for inductor in element::Device::inductors(&part.model) {
                 fluxes.push((id, inductor));
             }
         }
@@ -1448,7 +1448,7 @@ mod tests {
         let charges = Charges::new(&netlist, &layout);
         let mut owned = Vec::new();
         for (id, part) in netlist.parts() {
-            for cap in element::charges(&part.model) {
+            for cap in element::Device::charges(&part.model) {
                 owned.push((id, cap.k, part.name.as_str()));
             }
         }
@@ -1652,7 +1652,7 @@ mod tests {
         use crate::newton::{Conditions, History, Integration, Iterate};
 
         let (netlist, pair, cn, later) = two_internal();
-        let reserved = element::unknowns(&pair);
+        let reserved = element::Device::unknowns(&pair);
         assert_eq!(reserved.internal_nodes, 2);
         assert_eq!(reserved.branches, 2);
         let fs = netlist
@@ -1662,7 +1662,7 @@ mod tests {
             .part_id(&crate::name::Name::new("g_s").unwrap())
             .unwrap();
         let layout = Layout::with_stand_in(&netlist, Vec::new(), cn, &pair);
-        let owned: Vec<_> = element::charges(&pair)
+        let owned: Vec<_> = element::Device::charges(&pair)
             .into_iter()
             .map(|cap| (cn, cap))
             .collect();
@@ -1727,7 +1727,7 @@ mod tests {
             for (id, part) in netlist.parts() {
                 let mut stamp = Stamp::new(&mut system, &layout, id, &iterate, &conditions);
                 if id == cn {
-                    element::stamp(&pair, &mut stamp);
+                    element::Device::stamp(&pair, &mut stamp);
                 } else if id == fs {
                     let node = layout.internal(cn, 0);
                     stamp.branch_current(node, Node::Ground, 0);
@@ -1737,7 +1737,7 @@ mod tests {
                     stamp.branch_current(node, Node::Ground, 0);
                     stamp.branch_row(node, Node::Ground, 0, 0.0, 1.0, 2.5 * scale);
                 } else {
-                    element::stamp(&part.model, &mut stamp);
+                    element::Device::stamp(&part.model, &mut stamp);
                 }
             }
             let solution = system.solve().expect("the held nodes are nonsingular");
@@ -1785,7 +1785,7 @@ mod tests {
             .model;
         let mut judged_owned = owned;
         judged_owned.extend(
-            element::charges(later_model)
+            element::Device::charges(later_model)
                 .into_iter()
                 .map(|cap| (later, cap)),
         );
@@ -2239,11 +2239,14 @@ mod tests {
         let (mut caps, mut fluxes) = (Vec::new(), Vec::new());
         for (id, model) in netlist.parts() {
             let (charges, inductors) = if id == part {
-                (element::charges(mixed), element::inductors(mixed))
+                (
+                    element::Device::charges(mixed),
+                    element::Device::inductors(mixed),
+                )
             } else {
                 (
-                    element::charges(&model.model),
-                    element::inductors(&model.model),
+                    element::Device::charges(&model.model),
+                    element::Device::inductors(&model.model),
                 )
             };
             caps.extend(charges.into_iter().map(|cap| (id, cap)));
@@ -2366,9 +2369,9 @@ mod tests {
             for (id, part) in netlist.parts() {
                 let mut stamp = Stamp::new(&mut system, &layout, id, &iterate, &conditions);
                 if id == cm {
-                    element::stamp(&mixed, &mut stamp);
+                    element::Device::stamp(&mixed, &mut stamp);
                 } else {
-                    element::stamp(&part.model, &mut stamp);
+                    element::Device::stamp(&part.model, &mut stamp);
                 }
             }
             let solution = system.solve().expect("the held nets are nonsingular");

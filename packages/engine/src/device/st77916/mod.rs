@@ -4,21 +4,18 @@
 //! The host's SPI engine takes the `Spi` records on its `CS` and `SCLK` nets, and its PWM pin the
 //! `Duty` records on `BLK`.
 
-use std::collections::BTreeMap;
-
 use serde::Deserialize;
 
 use orbe_model::{Device, Fields};
 
 use crate::active::native::Native;
 use crate::active::{Chip, Core, Output, SpiTarget, Stage, Takes, duty, spi};
-use crate::diagnostic::Diagnostic;
 use crate::mna::Node;
-use crate::name::{Name, Ref};
 use crate::netlist::NetId;
 use crate::netlist::PartId;
 use crate::netlist::Threshold;
 use crate::netlist::Value;
+use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
 use crate::netlist::json::{PinMap, resolve_pins};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
@@ -137,13 +134,14 @@ pub(crate) struct WireSt77916 {
     input_threshold: WireThreshold,
 }
 
-pub(crate) fn resolve_st77916(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireSt77916,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<St77916> {
+pub(crate) fn resolve_st77916(ctx: ParseCtx<'_>, wire: WireSt77916) -> Option<St77916> {
+    let ParseCtx {
+        name,
+        part: part_ref,
+        nets,
+        out,
+        ..
+    } = ctx;
     let pins = resolve_pins(name, St77916::PINS, &wire.pins.0, nets, out);
     let output = resolve_output_stage(part_ref, wire.output, out);
     let input_threshold = resolve_threshold(

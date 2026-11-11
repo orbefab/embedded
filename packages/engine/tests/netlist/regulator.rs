@@ -64,8 +64,31 @@ fn a_regulator_parses_and_rates_iout() {
         model.quantities(),
         [Quantity::Iin, Quantity::Iout, Quantity::P]
     );
-    assert_eq!(model.rated(RatingKind::Current), Quantity::Iout);
-    assert_eq!(model.rated(RatingKind::Power), Quantity::P);
+    let rated = fitted().replace(
+        r#""ratings": { "current": null, "power": null }"#,
+        r#""ratings": {
+            "current": { "value": 1.0, "unit": "A", "source": "user" },
+            "power": { "value": 2.0, "unit": "W", "source": "user" }
+        }"#,
+    );
+    let rated = netlist::parse(rated.as_bytes()).unwrap();
+    let bounds: Vec<_> = rated
+        .parts()
+        .next()
+        .unwrap()
+        .1
+        .model
+        .ratings()
+        .into_iter()
+        .map(|(kind, quantity, _)| (kind, quantity))
+        .collect();
+    assert_eq!(
+        bounds,
+        [
+            (RatingKind::Current, Quantity::Iout),
+            (RatingKind::Power, Quantity::P)
+        ]
+    );
     let Model::LinearRegulator(reg) = model else {
         panic!("not a regulator");
     };

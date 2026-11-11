@@ -8,7 +8,6 @@ use crate::name::Ref;
 
 use crate::run_folder::OpPoint;
 
-use crate::element;
 use crate::mna::{Probe, Solution};
 use crate::newton::{Circuit, Side};
 
@@ -81,10 +80,7 @@ pub(crate) fn row(
             part: id,
             x,
         };
-        for value in element::observe(&part.model, &probe, at, side)
-            .into_iter()
-            .flatten()
-        {
+        for value in part.model.observe(&probe, at, side).into_iter().flatten() {
             row.push(Finite::new(value).ok_or_else(|| Ref::Part(part.name.clone()))?);
         }
     }

@@ -2,7 +2,6 @@
 //! This file is its netlist struct, its JSON wire type, its row in the device table, and its
 //! events as the records the host's replay engine sends.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -14,11 +13,12 @@ use crate::active::replay::Replay;
 use crate::active::{Chip, Core, Output, Stage, Takes};
 use crate::diagnostic::{Diagnostic, ScheduleRule};
 use crate::link::{Record, RecordKind, SpiNets};
-use crate::name::{Name, Ref};
+use crate::name::Ref;
 use crate::netlist::IntValue;
 use crate::netlist::NetId;
 use crate::netlist::PartId;
 use crate::netlist::Value;
+use crate::netlist::json::ParseCtx;
 use crate::netlist::json::waveform::serial_schedule;
 use crate::netlist::json::{PinMap, WireInt, resolve_int, resolve_pins};
 use crate::netlist::waveform::boundary;
@@ -221,13 +221,14 @@ enum WireCs {
     Released,
 }
 
-pub(crate) fn resolve_spi_replay(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireSpiReplay,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<SpiReplay> {
+pub(crate) fn resolve_spi_replay(ctx: ParseCtx<'_>, wire: WireSpiReplay) -> Option<SpiReplay> {
+    let ParseCtx {
+        name,
+        part: part_ref,
+        nets,
+        out,
+        ..
+    } = ctx;
     let pins = resolve_pins(name, SpiReplay::PINS, &wire.pins.0, nets, out);
     let clock_hz = resolve_int(part_ref, "clock_hz", "Hz", wire.clock_hz, out);
     let output = resolve_output_stage(part_ref, wire.output, out);

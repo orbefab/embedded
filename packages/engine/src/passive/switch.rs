@@ -2,7 +2,6 @@ use orbe_model::Time;
 
 use crate::diagnostic::Diagnostic;
 use crate::diagnostic::ValueRule;
-use crate::name::Name;
 use crate::name::Ref;
 use crate::netlist::Bounce;
 use crate::netlist::Contact;
@@ -20,27 +19,16 @@ use crate::netlist::json::resolve_int;
 use crate::netlist::json::resolve_pins;
 use crate::netlist::json::resolve_value;
 use serde::Deserialize;
-use std::collections::BTreeMap;
 
-use crate::mna::{Probe, Stamp};
+use crate::element::{Observed, OwnedCapacitor, OwnedInductor, TWO_PIN, Update};
+use crate::mna::{Probe, Stamp, Unknowns};
+use crate::name::Quantity;
+use crate::netlist::json::ParseCtx;
+use crate::netlist::{Conduction, Kind};
 use crate::newton::Side;
 
 fn conductance(switch: &Switch, contact: Contact) -> f64 {
     1.0 / switch.resistance(contact).si.get()
-}
-
-/// A restart takes the contact after the edge at `at`. Every other solve takes the one before it.
-pub(crate) fn stamp(switch: &Switch, stamp: &mut Stamp<'_>) {
-    let contact = stamp
-        .conditions
-        .side()
-        .contact(&switch.schedule, stamp.conditions.at);
-    stamp.conductance(switch.pins[0], switch.pins[1], conductance(switch, contact));
-}
-
-pub(crate) fn current(switch: &Switch, probe: &Probe<'_>, at: Time, side: Side) -> f64 {
-    let g = conductance(switch, side.contact(&switch.schedule, at));
-    (probe.v(switch.pins[0]) - probe.v(switch.pins[1])) * g
 }
 
 /// A two-terminal contact: `on_resistance` closed, `off_resistance` open.
@@ -104,14 +92,15 @@ pub(crate) struct WireBounce {
     max_bounces: WireInt<u8>,
 }
 
-pub(crate) fn resolve_switch(
-    seed: u64,
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireSwitch,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Switch> {
+pub(crate) fn resolve_switch(ctx: ParseCtx<'_>, wire: WireSwitch) -> Option<Switch> {
+    let ParseCtx {
+        seed,
+        name,
+        part: part_ref,
+        nets,
+        out,
+        ..
+    } = ctx;
     let pins = resolve_pins(name, Switch::PINS, &wire.pins.0, nets, out);
     let on = resolve_value(
         part_ref,
@@ -196,4 +185,57 @@ pub(crate) fn resolve_bounce(
         window,
         max_bounces,
     })
+}
+
+impl Kind for Switch {
+    fn pins(&self) -> &[NetId] {
+        &self.pins
+    }
+    fn unknowns(&self) -> Unknowns {
+        Unknowns::default()
+    }
+    fn charges(&self) -> Vec<OwnedCapacitor> {
+        Vec::new()
+    }
+    fn inductors(&self) -> Vec<OwnedInductor> {
+        Vec::new()
+    }
+    /// A restart takes the contact after the edge at `at`. Every other solve takes the one
+    /// before it.
+    #[inline]
+    fn stamp(&self, stamp: &mut Stamp<'_>) {
+        let contact = stamp
+            .conditions
+            .side()
+            .contact(&self.schedule, stamp.conditions.at);
+        stamp.conductance(self.pins[0], self.pins[1], conductance(self, contact));
+    }
+    fn reads_iterate(&self) -> bool {
+        false
+    }
+    fn initial(&self, _out: &mut [f64]) {}
+    fn update(&self, _probe: &Probe<'_>, _prior: &[f64], _next: &mut [f64]) -> Update {
+        Update::default()
+    }
+    /// A resistor in either state.
+    fn dc_paths(&self) -> &'static [(usize, usize)] {
+        &[(0, 1)]
+    }
+    fn quantities(&self) -> &'static [Quantity] {
+        TWO_PIN
+    }
+    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+        (None, None)
+    }
+    fn observe(&self, probe: &Probe<'_>, at: Time, side: Side) -> Option<Observed> {
+        let g = conductance(self, side.contact(&self.schedule, at));
+        let i = (probe.v(self.pins[0]) - probe.v(self.pins[1])) * g;
+        Some(Observed::two_pin(self.pins, i, probe))
+    }
+    fn conduction(&self) -> Conduction {
+        Conduction::Passes
+    }
+    fn next_change_after(&self, at: Time) -> Option<Time> {
+        self.schedule.next_change_after(at)
+    }
 }

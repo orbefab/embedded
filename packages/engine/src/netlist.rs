@@ -7,12 +7,10 @@ pub mod flash;
 pub(crate) mod json;
 pub(crate) mod waveform;
 
-mod bodies;
 mod catalog;
 
-pub(crate) use bodies::ParseCtx;
 pub(crate) use catalog::Kind;
-pub use catalog::{Model, engine_kinds};
+pub use catalog::{Conduction, Model, engine_kinds};
 
 use serde::{Deserialize, Serialize, Serializer};
 
@@ -21,7 +19,7 @@ use orbe_model::Time;
 use crate::blob::{Blob, Blobs, Sha256};
 use crate::diagnostic::{Diagnostic, ValueRule};
 use crate::finite::Finite;
-use crate::name::{Name, Quantity};
+use crate::name::Name;
 
 use crate::chip::Ne555;
 use crate::device::{Cst816, Declared, Events, PulsesReplay, Row, SpiReplay, St77916, Ws2812};
@@ -253,18 +251,6 @@ pub struct Part {
 }
 
 impl Model {
-    /// The quantity a rating of `kind` bounds by magnitude. A current rating bounds `iout` on a
-    /// linear regulator, `ic` on a BJT, `id` on an `nmos`, and `i` on every other part.
-    pub fn rated(&self, kind: RatingKind) -> Quantity {
-        match (kind, self) {
-            (RatingKind::Current, Model::Npn(_) | Model::Pnp(_)) => Quantity::Ic,
-            (RatingKind::Current, Model::Nmos(_)) => Quantity::Id,
-            (RatingKind::Current, Model::LinearRegulator(_)) => Quantity::Iout,
-            (RatingKind::Current, _) => Quantity::I,
-            (RatingKind::Power, _) => Quantity::P,
-        }
-    }
-
     /// The blobs it names, in its own field order.
     pub fn blobs(&self) -> Vec<&Blob> {
         match self {

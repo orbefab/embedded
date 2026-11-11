@@ -1,36 +1,18 @@
-use crate::diagnostic::Diagnostic;
-use crate::name::{Name, Ref};
-use crate::netlist::Model;
-use crate::netlist::NetId;
-use crate::netlist::Value;
-use crate::netlist::json::PinMap;
-use crate::netlist::json::WireValue;
-use crate::netlist::json::resolve_pins;
-use crate::netlist::json::resolve_value;
+use orbe_model::Time;
 use serde::Deserialize;
-use std::collections::BTreeMap;
 
-use crate::element::StoreEnd;
-use crate::mna::{Probe, Stamp};
-use crate::newton::{History, Method, Store};
+use crate::element::{Observed, OwnedCapacitor, OwnedInductor, StoreEnd, TWO_PIN, Update};
+use crate::mna::{Probe, Stamp, Unknowns};
+use crate::name::Quantity;
+use crate::netlist::json::{ParseCtx, PinMap, WireValue, resolve_pins, resolve_value};
+use crate::netlist::{Conduction, Kind, NetId, Value};
+use crate::newton::{History, Method, Side, Store};
 
 /// Seconds. A held capacitor sits behind `HOLD / C` ohm, the backward Euler companion
 /// of a step this long. An exact hold would make a capacitor across a voltage source,
 /// or two in parallel, singular. The series resistance shares their current by
 /// capacitance, and moves the held voltage by the current times `HOLD / C`.
 const HOLD: f64 = 1e-15;
-
-/// The element's only capacitor is branch 0.
-pub(crate) fn stamp(capacitor: &Capacitor, stamp: &mut Stamp<'_>) {
-    let initial = capacitor.initial.as_ref().map(|initial| initial.si.get());
-    stamp_capacitor(
-        stamp,
-        0,
-        capacitor.pins.map(StoreEnd::Net),
-        capacitor.capacitance.si.get(),
-        initial,
-    );
-}
 
 /// Stamp capacitor `k` from `ends[0]` to `ends[1]`. Branch `k` is the current entering
 /// `ends[0]`. A held voltage scales with the sources. `initial` is the voltage held at
@@ -79,10 +61,6 @@ fn companion(capacitance: f64, method: Method, h: f64, v0: f64, i0: f64) -> (f64
             (g, -g * v0 - i0)
         }
     }
-}
-
-pub(crate) fn current(probe: &Probe<'_>) -> f64 {
-    probe.branch(0)
 }
 
 #[cfg(test)]
@@ -158,7 +136,7 @@ mod tests {
             let mut system = System::new(&circuit.layout);
             system.reset(&circuit.layout, conditions.gmin);
             for (id, part) in circuit.netlist.parts() {
-                crate::element::stamp(
+                crate::element::Device::stamp(
                     &part.model,
                     &mut Stamp::new(&mut system, &circuit.layout, id, &iterate, &conditions),
                 );
@@ -213,13 +191,14 @@ pub(crate) struct WireCapacitor {
     initial: Option<WireValue>,
 }
 
-pub(crate) fn resolve_capacitor(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireCapacitor,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Model> {
+pub(crate) fn resolve_capacitor(ctx: ParseCtx<'_>, wire: WireCapacitor) -> Option<Capacitor> {
+    let ParseCtx {
+        name,
+        part: part_ref,
+        nets,
+        out,
+        ..
+    } = ctx;
     let WireCapacitor {
         pins,
         capacitance,
@@ -234,11 +213,72 @@ pub(crate) fn resolve_capacitor(
         Some(initial) => resolve_value(part_ref, "initial", "V", false, initial, out).map(Some),
     };
     match (pins, capacitance, initial) {
-        (Some(pins), Some(capacitance), Some(initial)) => Some(Model::Capacitor(Capacitor {
+        (Some(pins), Some(capacitance), Some(initial)) => Some(Capacitor {
             pins,
             capacitance,
             initial,
-        })),
+        }),
         _ => None,
+    }
+}
+
+impl Kind for Capacitor {
+    fn pins(&self) -> &[NetId] {
+        &self.pins
+    }
+    fn unknowns(&self) -> Unknowns {
+        Unknowns {
+            branches: 1,
+            ..Unknowns::default()
+        }
+    }
+    fn charges(&self) -> Vec<OwnedCapacitor> {
+        vec![OwnedCapacitor {
+            k: 0,
+            ends: self.pins.map(StoreEnd::Net),
+            farad: self.capacitance.si.get(),
+        }]
+    }
+    fn inductors(&self) -> Vec<OwnedInductor> {
+        Vec::new()
+    }
+    /// Its only capacitor is branch 0.
+    #[inline]
+    fn stamp(&self, stamp: &mut Stamp<'_>) {
+        let initial = self.initial.as_ref().map(|initial| initial.si.get());
+        stamp_capacitor(
+            stamp,
+            0,
+            self.pins.map(StoreEnd::Net),
+            self.capacitance.si.get(),
+            initial,
+        );
+    }
+    fn reads_iterate(&self) -> bool {
+        false
+    }
+    fn initial(&self, _out: &mut [f64]) {}
+    fn update(&self, _probe: &Probe<'_>, _prior: &[f64], _next: &mut [f64]) -> Update {
+        Update::default()
+    }
+    /// Open unless the operating point holds it at `initial`.
+    fn dc_paths(&self) -> &'static [(usize, usize)] {
+        if self.initial.is_some() {
+            &[(0, 1)]
+        } else {
+            &[]
+        }
+    }
+    fn quantities(&self) -> &'static [Quantity] {
+        TWO_PIN
+    }
+    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+        (None, None)
+    }
+    fn observe(&self, probe: &Probe<'_>, _at: Time, _side: Side) -> Option<Observed> {
+        Some(Observed::two_pin(self.pins, probe.branch(0), probe))
+    }
+    fn conduction(&self) -> Conduction {
+        Conduction::Other
     }
 }

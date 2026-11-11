@@ -18,8 +18,18 @@ use crate::blob::{Blobs, Sha256};
 use crate::diagnostic::{AnalysisRule, Diagnostic, ScheduleRule, ValueRule};
 use crate::finite::Finite;
 use crate::name::{Name, NameError, Ref};
-pub(crate) use waveform::{AMPERE, VOLT};
+pub(crate) use waveform::AMPERE;
 pub(crate) const FRACTION_UNIT: &str = "1";
+
+/// What a kind's resolve function reads besides its wire payload.
+pub(crate) struct ParseCtx<'a> {
+    pub(crate) seed: u64,
+    pub(crate) name: &'a Name,
+    pub(crate) part: &'a Ref,
+    pub(crate) nets: &'a BTreeMap<String, NetId>,
+    pub(crate) blobs: &'a Blobs,
+    pub(crate) out: &'a mut Vec<Diagnostic>,
+}
 
 #[derive(Deserialize)]
 struct VersionProbe {
@@ -335,7 +345,7 @@ fn resolve_part(
     seen: &mut BTreeSet<String>,
     out: &mut Vec<Diagnostic>,
 ) -> Option<Part> {
-    let raw_name = super::catalog::wire_name(&part);
+    let raw_name = part.name();
     let path = format!("parts[{index}].name");
     let name = match Name::new(raw_name) {
         Ok(name) => name,
@@ -363,7 +373,14 @@ fn resolve_part(
         });
     }
     let part_ref = Ref::Part(name.clone());
-    let model = super::catalog::parse_wire(seed, &name, &part_ref, part, nets, blobs, out);
+    let model = part.resolve(ParseCtx {
+        seed,
+        name: &name,
+        part: &part_ref,
+        nets,
+        blobs,
+        out,
+    });
     if duplicate || reserved {
         None
     } else {

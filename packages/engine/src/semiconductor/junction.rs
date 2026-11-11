@@ -1,7 +1,5 @@
 use crate::diagnostic::Diagnostic;
 use crate::diagnostic::ValueRule;
-use crate::name::Name;
-use crate::name::Ref;
 use crate::netlist::NetId;
 use crate::netlist::Value;
 use crate::netlist::json::PinMap;
@@ -11,12 +9,16 @@ use crate::netlist::json::resolve_pins;
 use crate::netlist::json::resolve_rating;
 use crate::netlist::json::resolve_value;
 use serde::Deserialize;
-use std::collections::BTreeMap;
 use std::f64::consts::SQRT_2;
 
-use crate::element::Update;
-use crate::mna::{GMIN, Probe, Stamp};
-use crate::newton::{ABSTOL, RELTOL};
+use orbe_model::Time;
+
+use crate::element::{Observed, OwnedCapacitor, OwnedInductor, TWO_PIN, Update};
+use crate::mna::{GMIN, Probe, Stamp, Unknowns};
+use crate::name::Quantity;
+use crate::netlist::json::ParseCtx;
+use crate::netlist::{Conduction, Kind};
+use crate::newton::{ABSTOL, RELTOL, Side};
 
 /// `exp` overflows near 709.78. Stay under that.
 const ARG_MAX: f64 = 700.0;
@@ -89,27 +91,6 @@ fn shockley(junction: &Junction) -> Shockley {
     )
 }
 
-/// Rs from the anode to internal node 0, then the junction from there to the
-/// cathode, linearised at the voltage `evaluate` used. `GMIN` is across that
-/// junction. ngspice-42's `dioload` adds `CKTgmin` to `gd` and `CKTgmin * vd`
-/// to the current, and it puts no conductance from the internal node to ground.
-pub(crate) fn stamp(junction: &Junction, stamp: &mut Stamp<'_>) {
-    let params = shockley(junction);
-    let [anode, cathode] = junction.pins;
-    let inner = stamp.internal(0);
-    stamp.conductance(anode, inner, 1.0 / junction.series_resistance.si.get());
-    let vj = stamp.junction(0);
-    let (id, gd, _, voltage) = params.evaluate(vj);
-    stamp.conductance(inner, cathode, gd + GMIN);
-    // The companion is the derivative at the clamped voltage, not at an argument `exp` never saw.
-    // ngspice's is `cd - gd * vd` with `GMIN` in `cd` and `gd`, and `GMIN * vd` cancels there.
-    stamp.current(inner, cathode, id - gd * voltage);
-}
-
-pub(crate) fn initial(junction: &Junction) -> f64 {
-    shockley(junction).vcrit
-}
-
 /// Limits the solved junction voltage against `prior` and checks the
 /// linearised current against the device equation at the solved voltage.
 pub(crate) fn update(junction: &Junction, probe: &Probe<'_>, prior: f64) -> (f64, Update) {
@@ -134,11 +115,6 @@ pub(crate) fn mismatch(linear: f64, actual: f64) -> f64 {
     } else {
         f64::INFINITY
     }
-}
-
-/// The current through Rs, entering the anode.
-pub(crate) fn current(junction: &Junction, probe: &Probe<'_>) -> f64 {
-    (probe.v(junction.pins[0]) - probe.internal(0)) / junction.series_resistance.si.get()
 }
 
 /// Junction voltage limiting. Returns the voltage to stamp next and whether it differs from `vnew`.
@@ -422,13 +398,14 @@ pub(crate) struct WireJunction {
     ratings: WireJunctionRatings,
 }
 
-pub(crate) fn resolve_junction(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireJunction,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Junction> {
+pub(crate) fn resolve_junction(ctx: ParseCtx<'_>, wire: WireJunction) -> Option<Junction> {
+    let ParseCtx {
+        name,
+        part: part_ref,
+        nets,
+        out,
+        ..
+    } = ctx;
     let pins = resolve_pins(name, Junction::PINS, &wire.pins.0, nets, out);
     let is = resolve_value(
         part_ref,
@@ -476,4 +453,72 @@ pub(crate) fn resolve_junction(
         max_current: max_current?,
         max_power: max_power?,
     })
+}
+
+/// Diode and led. The equations match. The variant name does not.
+impl Kind for Junction {
+    fn pins(&self) -> &[NetId] {
+        &self.pins
+    }
+    fn unknowns(&self) -> Unknowns {
+        Unknowns {
+            internal_nodes: 1,
+            bare_internal: true,
+            branches: 0,
+            junctions: 1,
+        }
+    }
+    fn charges(&self) -> Vec<OwnedCapacitor> {
+        Vec::new()
+    }
+    fn inductors(&self) -> Vec<OwnedInductor> {
+        Vec::new()
+    }
+    /// Rs from the anode to internal node 0, then the junction from there to the
+    /// cathode, linearised at the voltage `evaluate` used. `GMIN` is across that
+    /// junction. ngspice-42's `dioload` adds `CKTgmin` to `gd` and `CKTgmin * vd`
+    /// to the current, and it puts no conductance from the internal node to ground.
+    #[inline]
+    fn stamp(&self, stamp: &mut Stamp<'_>) {
+        let params = shockley(self);
+        let [anode, cathode] = self.pins;
+        let inner = stamp.internal(0);
+        stamp.conductance(anode, inner, 1.0 / self.series_resistance.si.get());
+        let vj = stamp.junction(0);
+        let (id, gd, _, voltage) = params.evaluate(vj);
+        stamp.conductance(inner, cathode, gd + GMIN);
+        // The companion is the derivative at the clamped voltage, not at an argument `exp`
+        // never saw. ngspice's is `cd - gd * vd` with `GMIN` in `cd` and `gd`, and `GMIN * vd`
+        // cancels there.
+        stamp.current(inner, cathode, id - gd * voltage);
+    }
+    fn reads_iterate(&self) -> bool {
+        true
+    }
+    fn initial(&self, out: &mut [f64]) {
+        out[0] = shockley(self).vcrit;
+    }
+    fn update(&self, probe: &Probe<'_>, prior: &[f64], next: &mut [f64]) -> Update {
+        let (limited, update) = update(self, probe, prior[0]);
+        next[0] = limited;
+        update
+    }
+    fn dc_paths(&self) -> &'static [(usize, usize)] {
+        &[(0, 1)]
+    }
+    fn quantities(&self) -> &'static [Quantity] {
+        TWO_PIN
+    }
+    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+        let current = self.max_current.as_ref().map(|v| (Quantity::I, v));
+        (current, self.max_power.as_ref())
+    }
+    /// The current through Rs, entering the anode.
+    fn observe(&self, probe: &Probe<'_>, _at: Time, _side: Side) -> Option<Observed> {
+        let i = (probe.v(self.pins[0]) - probe.internal(0)) / self.series_resistance.si.get();
+        Some(Observed::two_pin(self.pins, i, probe))
+    }
+    fn conduction(&self) -> Conduction {
+        Conduction::Passes
+    }
 }

@@ -1,24 +1,18 @@
-use orbe_model::Time;
-
-use crate::netlist::{Model, NetId, PartId};
+use crate::name::Quantity;
+use crate::netlist::{NetId, PartId};
 
 use crate::mna::{Layout, Node, Probe, Stamp, Unknowns};
-use crate::newton::Side;
 pub(crate) use crate::passive::inductor::{coil, stamp_coil};
 #[cfg(test)]
 use crate::passive::{capacitor, inductor};
 
 /// What the layout and the stamp read from a part. A netlist `Model` is one. A test
-/// passes its own value through the same functions.
+/// passes its own value through the same calls.
 pub(crate) trait Device {
     fn unknowns(&self) -> Unknowns;
     fn charges(&self) -> Vec<OwnedCapacitor>;
     fn inductors(&self) -> Vec<OwnedInductor>;
     fn stamp(&self, stamp: &mut Stamp<'_>);
-}
-
-pub(crate) fn unknowns(model: &impl Device) -> Unknowns {
-    Device::unknowns(model)
 }
 
 /// One end of a capacitor or an inductor. A net, or internal node `k` of this part.
@@ -47,11 +41,6 @@ pub(crate) struct OwnedCapacitor {
     pub(crate) farad: f64,
 }
 
-/// The capacitors `model` owns, in index order. A part with none returns an empty list.
-pub(crate) fn charges(model: &impl Device) -> Vec<OwnedCapacitor> {
-    Device::charges(model)
-}
-
 /// One inductor a part owns. `k` is its index in that part's inductor list, and its current is
 /// branch `charges + k`, after the part's capacitors. `ohm` is the resistance in series with
 /// it, which bounds the current it can carry.
@@ -63,56 +52,6 @@ pub(crate) struct OwnedInductor {
     pub(crate) ohm: f64,
 }
 
-/// The inductors `model` owns, in index order. A part with none returns an empty list.
-pub(crate) fn inductors(model: &impl Device) -> Vec<OwnedInductor> {
-    Device::inductors(model)
-}
-
-pub(crate) fn stamp(model: &impl Device, stamp: &mut Stamp<'_>) {
-    Device::stamp(model, stamp);
-}
-
-impl Device for Model {
-    #[inline]
-    fn unknowns(&self) -> Unknowns {
-        Model::unknowns(self)
-    }
-
-    #[inline]
-    fn charges(&self) -> Vec<OwnedCapacitor> {
-        Model::charges(self)
-    }
-
-    #[inline]
-    fn inductors(&self) -> Vec<OwnedInductor> {
-        Model::inductors(self)
-    }
-
-    #[inline]
-    fn stamp(&self, stamp: &mut Stamp<'_>) {
-        Model::stamp(self, stamp);
-    }
-}
-
-/// Whether this part's stamp reads the Newton iterate. A junction reads it through
-/// `Stamp::junction`. A linear regulator reads its last branch current and input voltage
-/// through `Stamp::prior`. Every other stamp reads only the call's conditions, so on a
-/// circuit where no part reads the iterate every iteration of one call stamps the same system.
-#[inline]
-pub(crate) fn reads_iterate(model: &Model) -> bool {
-    model.reads_iterate()
-}
-
-/// Start voltages for this part's junction slots.
-pub(crate) fn initial(model: &Model, out: &mut [f64]) {
-    model.initial(out);
-}
-
-/// After a solve: limit this part's junctions from `prior` into `next`, and check their currents.
-pub(crate) fn update(model: &Model, probe: &Probe<'_>, prior: &[f64], next: &mut [f64]) -> Update {
-    model.update(probe, prior, next)
-}
-
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Update {
     pub(crate) limited: bool,
@@ -120,15 +59,8 @@ pub(crate) struct Update {
     pub(crate) mismatch: f64,
 }
 
-/// The pin pairs a part joins at DC. A chain of them is a DC path for `net.floating`.
-/// A capacitor is open unless the operating point holds it at `initial`. An inductor is a short
-/// behind its resistance. A switch is a resistor either way.
-/// A current source joins nothing. A BJT joins its base to each other pin, because each junction
-/// conducts. An `nmos` joins its drain to its source. Its gate does not. A relay joins its coil's
-/// ends, and `com` to `no` and to `nc` in either state.
-pub(crate) fn dc_paths(model: &Model) -> &'static [(usize, usize)] {
-    model.dc_paths()
-}
+/// The quantities a two-pin part has.
+pub(crate) const TWO_PIN: &[Quantity] = &[Quantity::I, Quantity::V, Quantity::P];
 
 /// The values `observe` contributes, in `quantities` order.
 /// `len` is `model.quantities().len()`. The third slot pads an `nmos`.
@@ -138,7 +70,9 @@ pub(crate) struct Observed {
 }
 
 impl Observed {
-    pub(crate) fn ivp(i: f64, v: f64) -> Self {
+    /// [`TWO_PIN`] for current `i` from `pins[0]` to `pins[1]`.
+    pub(crate) fn two_pin(pins: [NetId; 2], i: f64, probe: &Probe<'_>) -> Self {
+        let v = probe.v(pins[0]) - probe.v(pins[1]);
         Self {
             values: [i, v, v * i],
             len: 3,
@@ -157,12 +91,6 @@ impl IntoIterator for Observed {
     fn into_iter(self) -> Self::IntoIter {
         self.values.into_iter().take(self.len)
     }
-}
-
-/// `model.quantities()` at `at`, in that order. `None` for a part with none.
-/// Not checked for finiteness.
-pub(crate) fn observe(model: &Model, probe: &Probe<'_>, at: Time, side: Side) -> Option<Observed> {
-    model.observe(probe, at, side)
 }
 
 /// Two capacitors on one part. Tests only. Not a netlist kind. `branches` is the count

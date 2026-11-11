@@ -1,4 +1,5 @@
 use orbe_engine::netlist::{self, Model, RatingKind};
+use orbe_engine::semiconductor::{Npn, Pnp};
 
 use orbe_engine::name::Quantity;
 
@@ -74,7 +75,7 @@ fn rejected(json: &str) -> Vec<(String, String, String)> {
 fn an_npn_keeps_every_field_and_rates_ic_and_p() {
     let netlist = netlist::parse(transistor("npn", None).as_bytes()).unwrap();
     let (_, part) = netlist.parts().next().unwrap();
-    let Model::Npn(bjt) = &part.model else {
+    let Model::Npn(Npn(bjt)) = &part.model else {
         panic!("{:?}", part.model);
     };
     let got = [
@@ -101,7 +102,7 @@ fn an_npn_keeps_every_field_and_rates_ic_and_p() {
         .model
         .ratings()
         .into_iter()
-        .map(|(kind, value)| (kind, part.model.rated(kind), value.si.get()))
+        .map(|(kind, quantity, value)| (kind, quantity, value.si.get()))
         .collect();
     assert_eq!(
         ratings,
@@ -116,7 +117,7 @@ fn an_npn_keeps_every_field_and_rates_ic_and_p() {
 fn a_pnp_takes_the_same_fields_as_an_npn() {
     let npn = netlist::parse(transistor("npn", None).as_bytes()).unwrap();
     let pnp = netlist::parse(transistor("pnp", None).as_bytes()).unwrap();
-    let (Model::Npn(n), Model::Pnp(p)) = (
+    let (Model::Npn(Npn(n)), Model::Pnp(Pnp(p))) = (
         &npn.parts().next().unwrap().1.model,
         &pnp.parts().next().unwrap().1.model,
     ) else {
@@ -258,7 +259,7 @@ fn an_nmos_keeps_every_field_and_rates_id_and_p() {
         .model
         .ratings()
         .into_iter()
-        .map(|(kind, value)| (kind, part.model.rated(kind), value.si.get()))
+        .map(|(kind, quantity, value)| (kind, quantity, value.si.get()))
         .collect();
     assert_eq!(
         ratings,

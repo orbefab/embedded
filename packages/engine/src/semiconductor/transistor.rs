@@ -1,6 +1,5 @@
 use crate::diagnostic::Diagnostic;
 use crate::diagnostic::ValueRule;
-use crate::name::{Name, Ref};
 use crate::netlist::NetId;
 use crate::netlist::Value;
 use crate::netlist::json::PinMap;
@@ -11,10 +10,15 @@ use crate::netlist::json::resolve_rating;
 use crate::netlist::json::resolve_value;
 use crate::semiconductor::junction_scale;
 use serde::Deserialize;
-use std::collections::BTreeMap;
 
-use crate::element::{OwnedCapacitor, StoreEnd, Update};
-use crate::mna::{GMIN, Node, Probe, Stamp};
+use orbe_model::Time;
+
+use crate::element::{Observed, OwnedCapacitor, OwnedInductor, StoreEnd, Update};
+use crate::mna::{GMIN, Node, Probe, Stamp, Unknowns};
+use crate::name::Quantity;
+use crate::netlist::json::ParseCtx;
+use crate::netlist::{Conduction, Kind};
+use crate::newton::Side;
 use crate::passive::capacitor::stamp_capacitor;
 use crate::semiconductor::junction::{Shockley, mismatch, pnjlim};
 
@@ -303,34 +307,6 @@ fn mos_capacitors(mosfet: &Mosfet) -> [OwnedCapacitor; 3] {
     ]
 }
 
-pub(crate) fn mos_charges(mosfet: &Mosfet) -> Vec<OwnedCapacitor> {
-    mos_capacitors(mosfet).to_vec()
-}
-
-/// The channel linearised at the slot voltages, then the three pin capacitors.
-pub(crate) fn mos_stamp(mosfet: &Mosfet, stamp: &mut Stamp<'_>) {
-    let model = Level1::new(mosfet);
-    let (vgs, vds) = (stamp.junction(VGS), stamp.junction(VDS));
-    let (id, gm, gds) = model.id(vgs, vds);
-    let [d, g, s] = mosfet.pins.map(Node::from);
-    stamp.add(d, g, gm);
-    stamp.add(d, s, -gm - gds);
-    stamp.add(d, d, gds);
-    stamp.add(s, g, -gm);
-    stamp.add(s, s, gm + gds);
-    stamp.add(s, d, -gds);
-    stamp.current(d, s, id - gm * vgs - gds * vds);
-    for cap in mos_capacitors(mosfet) {
-        stamp_capacitor(stamp, cap.k, cap.ends, cap.farad, None);
-    }
-}
-
-/// Both slots start at 0. The square law needs no `vcrit`.
-pub(crate) fn mos_initial(out: &mut [f64]) {
-    out[VGS] = 0.0;
-    out[VDS] = 0.0;
-}
-
 /// Writes the solved terminal voltages through, and checks the drain current.
 ///
 /// No limiter. A pass that rebuilt `vds` as `vgs - vgd` moved the last bit and never converged.
@@ -353,18 +329,6 @@ pub(crate) fn mos_update(
         limited: false,
         mismatch: mismatch(linear, actual),
     }
-}
-
-/// `id` and `p`. `id` is the channel current plus the capacitor currents into the drain pin.
-pub(crate) fn mos_observe(mosfet: &Mosfet, probe: &Probe<'_>) -> [f64; 2] {
-    let [vd, vg, vs] = mosfet.pins.map(|pin| probe.v(pin));
-    let id_channel = Level1::new(mosfet).id(vg - vs, vd - vs).0;
-    let i_cgs = probe.branch(0);
-    let i_cgd = probe.branch(1);
-    let i_cds = probe.branch(2);
-    let id = id_channel + i_cds - i_cgd;
-    let ig = i_cgs + i_cgd;
-    [id, (vd - vs) * id + (vg - vs) * ig]
 }
 
 #[cfg(test)]
@@ -451,7 +415,7 @@ mod tests {
         let id = netlist.part_id(&Name::new("q1").unwrap()).unwrap();
         let (_, part) = netlist.parts().nth(id.index()).unwrap();
         match &part.model {
-            Model::Npn(bjt) | Model::Pnp(bjt) => (id, bjt),
+            Model::Npn(Npn(bjt)) | Model::Pnp(Pnp(bjt)) => (id, bjt),
             other => panic!("{other:?}"),
         }
     }
@@ -1213,6 +1177,14 @@ impl Bjt {
     pub const PINS: [&'static str; 3] = ["collector", "base", "emitter"];
 }
 
+/// A [`Bjt`] as an `npn`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Npn(pub Bjt);
+
+/// A [`Bjt`] as a `pnp`. Every junction voltage and pin current is an `npn`'s negated.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pnp(pub Bjt);
+
 /// An N-channel MOSFET. Level 1 with the bulk tied to the source, so `W/L` is folded into `KP`
 /// and there is no body effect. No temperature scaling.
 ///
@@ -1286,13 +1258,14 @@ pub(crate) struct WireMosfet {
     ratings: WireJunctionRatings,
 }
 
-pub(crate) fn resolve_bjt(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireBjt,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Bjt> {
+fn resolve_bjt(ctx: ParseCtx<'_>, wire: WireBjt) -> Option<Bjt> {
+    let ParseCtx {
+        name,
+        part: part_ref,
+        nets,
+        out,
+        ..
+    } = ctx;
     let pins = resolve_pins(name, Bjt::PINS, &wire.pins.0, nets, out);
     let mut positive =
         |field: &'static str, unit, value| resolve_value(part_ref, field, unit, true, value, out);
@@ -1362,13 +1335,22 @@ pub(crate) fn resolve_bjt(
     })
 }
 
-pub(crate) fn resolve_mosfet(
-    name: &Name,
-    part_ref: &Ref,
-    wire: WireMosfet,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<Mosfet> {
+pub(crate) fn resolve_npn(ctx: ParseCtx<'_>, wire: WireBjt) -> Option<Npn> {
+    resolve_bjt(ctx, wire).map(Npn)
+}
+
+pub(crate) fn resolve_pnp(ctx: ParseCtx<'_>, wire: WireBjt) -> Option<Pnp> {
+    resolve_bjt(ctx, wire).map(Pnp)
+}
+
+pub(crate) fn resolve_mosfet(ctx: ParseCtx<'_>, wire: WireMosfet) -> Option<Mosfet> {
+    let ParseCtx {
+        name,
+        part: part_ref,
+        nets,
+        out,
+        ..
+    } = ctx;
     let pins = resolve_pins(name, Mosfet::PINS, &wire.pins.0, nets, out);
     let lambda_number = wire.channel_length_modulation.value.get();
     let (kp, cgs, cgd, cds) = {
@@ -1433,4 +1415,138 @@ pub(crate) fn resolve_mosfet(
         max_current: max_current?,
         max_power: max_power?,
     })
+}
+
+macro_rules! bjt_kind {
+    ($kind:ident, $polarity:expr) => {
+        impl Kind for $kind {
+            fn pins(&self) -> &[NetId] {
+                &self.0.pins
+            }
+            fn unknowns(&self) -> Unknowns {
+                Unknowns {
+                    internal_nodes: 3,
+                    bare_internal: true,
+                    branches: 2,
+                    junctions: 2,
+                }
+            }
+            fn charges(&self) -> Vec<OwnedCapacitor> {
+                charges(&self.0)
+            }
+            fn inductors(&self) -> Vec<OwnedInductor> {
+                Vec::new()
+            }
+            #[inline]
+            fn stamp(&self, stamp: &mut Stamp<'_>) {
+                self::stamp(&self.0, $polarity, stamp);
+            }
+            fn reads_iterate(&self) -> bool {
+                true
+            }
+            fn initial(&self, out: &mut [f64]) {
+                initial(&self.0, out);
+            }
+            fn update(&self, probe: &Probe<'_>, prior: &[f64], next: &mut [f64]) -> Update {
+                update(&self.0, $polarity, probe, prior, next)
+            }
+            /// The base to each other pin, because each junction conducts.
+            fn dc_paths(&self) -> &'static [(usize, usize)] {
+                &[(0, 1), (1, 2)]
+            }
+            fn quantities(&self) -> &'static [Quantity] {
+                &[Quantity::Ib, Quantity::Ic, Quantity::P]
+            }
+            fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+                let current = self.0.max_current.as_ref().map(|v| (Quantity::Ic, v));
+                (current, self.0.max_power.as_ref())
+            }
+            fn observe(&self, probe: &Probe<'_>, _at: Time, _side: Side) -> Option<Observed> {
+                Some(Observed::values(observe(&self.0, probe), 3))
+            }
+            fn conduction(&self) -> Conduction {
+                Conduction::Switches(0, 2)
+            }
+        }
+    };
+}
+
+bjt_kind!(Npn, Polarity::Npn);
+bjt_kind!(Pnp, Polarity::Pnp);
+
+impl Kind for Mosfet {
+    fn pins(&self) -> &[NetId] {
+        &self.pins
+    }
+    fn unknowns(&self) -> Unknowns {
+        Unknowns {
+            internal_nodes: 0,
+            bare_internal: false,
+            branches: 3,
+            junctions: 2,
+        }
+    }
+    fn charges(&self) -> Vec<OwnedCapacitor> {
+        mos_capacitors(self).to_vec()
+    }
+    fn inductors(&self) -> Vec<OwnedInductor> {
+        Vec::new()
+    }
+    /// The channel linearised at the slot voltages, then the three pin capacitors.
+    #[inline]
+    fn stamp(&self, stamp: &mut Stamp<'_>) {
+        let model = Level1::new(self);
+        let (vgs, vds) = (stamp.junction(VGS), stamp.junction(VDS));
+        let (id, gm, gds) = model.id(vgs, vds);
+        let [d, g, s] = self.pins.map(Node::from);
+        stamp.add(d, g, gm);
+        stamp.add(d, s, -gm - gds);
+        stamp.add(d, d, gds);
+        stamp.add(s, g, -gm);
+        stamp.add(s, s, gm + gds);
+        stamp.add(s, d, -gds);
+        stamp.current(d, s, id - gm * vgs - gds * vds);
+        for cap in mos_capacitors(self) {
+            stamp_capacitor(stamp, cap.k, cap.ends, cap.farad, None);
+        }
+    }
+    fn reads_iterate(&self) -> bool {
+        true
+    }
+    /// Both slots start at 0. The square law needs no `vcrit`.
+    fn initial(&self, out: &mut [f64]) {
+        out[VGS] = 0.0;
+        out[VDS] = 0.0;
+    }
+    fn update(&self, probe: &Probe<'_>, prior: &[f64], next: &mut [f64]) -> Update {
+        mos_update(self, probe, prior, next)
+    }
+    /// The drain to the source. The gate joins nothing.
+    fn dc_paths(&self) -> &'static [(usize, usize)] {
+        &[(0, 2)]
+    }
+    fn quantities(&self) -> &'static [Quantity] {
+        &[Quantity::Id, Quantity::P]
+    }
+    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+        let current = self.max_current.as_ref().map(|v| (Quantity::Id, v));
+        (current, self.max_power.as_ref())
+    }
+    /// `id` and `p`. `id` is the channel current plus the capacitor currents into the drain pin.
+    fn observe(&self, probe: &Probe<'_>, _at: Time, _side: Side) -> Option<Observed> {
+        let [vd, vg, vs] = self.pins.map(|pin| probe.v(pin));
+        let id_channel = Level1::new(self).id(vg - vs, vd - vs).0;
+        let i_cgs = probe.branch(0);
+        let i_cgd = probe.branch(1);
+        let i_cds = probe.branch(2);
+        let id = id_channel + i_cds - i_cgd;
+        let ig = i_cgs + i_cgd;
+        Some(Observed::values(
+            [id, (vd - vs) * id + (vg - vs) * ig, 0.0],
+            2,
+        ))
+    }
+    fn conduction(&self) -> Conduction {
+        Conduction::Switches(0, 2)
+    }
 }
