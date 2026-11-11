@@ -646,8 +646,10 @@ mod tests {
         step.start(&mut dev);
         step.byte(&mut dev, 0x15 << 1);
         step.ack_clock(&mut dev);
+        assert!(step.driven, "the address is ACKed");
         step.byte(&mut dev, 0x10);
         step.ack_clock(&mut dev);
+        assert!(step.driven, "0x10 is ACKed");
         step.byte(&mut dev, 0x5A);
         step.ack_clock(&mut dev);
         assert!(step.driven, "0x5A is ACKed");
@@ -660,9 +662,11 @@ mod tests {
         step.ack_clock(&mut dev);
         step.byte(&mut dev, 0xA7);
         step.ack_clock(&mut dev);
+        assert!(step.driven, "0xA7 is ACKed");
         step.repeated_start(&mut dev);
         step.byte(&mut dev, (0x15 << 1) | 1);
         step.ack_clock(&mut dev);
+        assert!(step.driven, "the read address is ACKed");
         step.read_byte(&mut dev);
         step.master_ack(&mut dev, true);
         step.read_byte(&mut dev);

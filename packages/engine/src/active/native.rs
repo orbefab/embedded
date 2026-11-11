@@ -115,7 +115,7 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
 
     fn sample(&mut self, at: Time, volts: &[f64]) {
         self.device.sample(&mut Cx::default(), at, volts);
-        debug_assert!(self.held(), "a sample never changes the drives");
+        assert!(self.held(), "a sample never changes the drives");
     }
 
     fn input(&mut self, at: Time, levels: &[bool]) {
@@ -126,12 +126,12 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
         let mut cx = Cx::default();
         self.port.input(&mut self.device, &mut cx, at, levels);
         self.device.input(&mut cx, at, Levels::from_slice(levels));
-        debug_assert!(self.held(), "an input never changes the drives");
+        assert!(self.held(), "an input never changes the drives");
     }
 
     fn event(&mut self, at: Time, event: Event<'_>) {
         self.device.event(&mut Cx::default(), at, event);
-        debug_assert!(self.held(), "an event never changes the drives");
+        assert!(self.held(), "an event never changes the drives");
     }
 
     fn broke(&self) -> Vec<(ProtocolRule, Time)> {
