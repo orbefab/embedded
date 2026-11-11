@@ -7,6 +7,13 @@ pub mod flash;
 pub(crate) mod json;
 pub(crate) mod waveform;
 
+mod bodies;
+mod catalog;
+
+pub(crate) use bodies::ParseCtx;
+pub(crate) use catalog::Kind;
+pub use catalog::{Model, engine_kinds};
+
 use serde::{Deserialize, Serialize, Serializer};
 
 use orbe_model::Time;
@@ -16,13 +23,9 @@ use crate::diagnostic::{Diagnostic, ValueRule};
 use crate::finite::Finite;
 use crate::name::{Name, Quantity};
 
-use crate::chip::{LinearRegulator, Ne555, Relay};
+use crate::chip::Ne555;
 use crate::device::{Cst816, Declared, Events, PulsesReplay, Row, SpiReplay, St77916, Ws2812};
 use crate::mcu::{Atmega328p, Esp32s3};
-use crate::passive::{
-    Capacitor, CurrentSource, Inductor, Potentiometer, Resistor, Switch, VoltageSource,
-};
-use crate::semiconductor::{Bjt, Junction, Mosfet, Zener};
 
 pub use document::Document;
 pub use waveform::{Baud, Frame, Pulse, Serial, SerialEvent, SerialSend, Shape, Step, Waveform};
@@ -249,86 +252,7 @@ pub struct Part {
     pub model: Model,
 }
 
-/// The closed set of part kinds.
-/// Pin order is that kind's `PINS` const.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Model {
-    Resistor(Resistor),
-    Potentiometer(Potentiometer),
-    VoltageSource(VoltageSource),
-    CurrentSource(CurrentSource),
-    Diode(Junction),
-    /// The same device equation as `Diode`. Its own kind, so an LED-only quantity needs no flag.
-    Led(Junction),
-    /// A forward junction and a breakdown junction. See [`Zener`].
-    Zener(Zener),
-    /// A static linear regulator. See [`LinearRegulator`].
-    LinearRegulator(LinearRegulator),
-    Npn(Bjt),
-    /// The same device equations as `Npn`, with every junction voltage and pin current negated.
-    Pnp(Bjt),
-    /// An N-channel MOSFET. Level 1, bulk tied to the source.
-    Nmos(Mosfet),
-    Capacitor(Capacitor),
-    Inductor(Inductor),
-    /// A coil and a contact that follows the coil current. Passive, with one state.
-    Relay(Relay),
-    Switch(Switch),
-    /// A package modelled as a behavioural black box. A new chip kind is a `Chip` variant,
-    /// not a `Model` variant.
-    Chip(Chip),
-}
-
 impl Model {
-    /// Pin names in the order of `pins()`. An `esp32s3` lists only the pins it has nets on.
-    pub fn pin_names(&self) -> &[&'static str] {
-        match self {
-            Model::Resistor(_) => &Resistor::PINS,
-            Model::Potentiometer(_) => &Potentiometer::PINS,
-            Model::VoltageSource(_) => &VoltageSource::PINS,
-            Model::CurrentSource(_) => &CurrentSource::PINS,
-            Model::Diode(_) | Model::Led(_) | Model::Zener(_) => &Junction::PINS,
-            Model::LinearRegulator(_) => &LinearRegulator::PINS,
-            Model::Npn(_) | Model::Pnp(_) => &Bjt::PINS,
-            Model::Nmos(_) => &Mosfet::PINS,
-            Model::Capacitor(_) => &Capacitor::PINS,
-            Model::Inductor(_) => &Inductor::PINS,
-            Model::Relay(_) => &Relay::PINS,
-            Model::Switch(_) => &Switch::PINS,
-            Model::Chip(Chip::Ne555(_)) => &Ne555::PINS,
-            Model::Chip(Chip::Atmega328p(_)) => &Atmega328p::PINS,
-            Model::Chip(Chip::SpiReplay(_)) => &SpiReplay::PINS,
-            Model::Chip(Chip::St77916(_)) => &St77916::PINS,
-            Model::Chip(Chip::Cst816(_)) => &Cst816::PINS,
-            Model::Chip(Chip::Esp32s3(mcu)) => &mcu.names,
-            Model::Chip(Chip::Ws2812(_)) => &Ws2812::PINS,
-            Model::Chip(Chip::PulsesReplay(_)) => &PulsesReplay::PINS,
-        }
-    }
-
-    /// The quantities a run observes on this part, in `Quantity` order. A two-pin part has
-    /// `i`, `v` and `p`, and so does a relay, of its coil. A BJT has `ib`, `ic` and `p`. An `nmos`
-    /// has `id` and `p`. A linear regulator has `iin`, `iout` and `p`. A chip and a potentiometer
-    /// have none.
-    pub fn quantities(&self) -> &'static [Quantity] {
-        match self {
-            Model::Resistor(_)
-            | Model::VoltageSource(_)
-            | Model::CurrentSource(_)
-            | Model::Diode(_)
-            | Model::Led(_)
-            | Model::Zener(_)
-            | Model::Capacitor(_)
-            | Model::Inductor(_)
-            | Model::Relay(_)
-            | Model::Switch(_) => &[Quantity::I, Quantity::V, Quantity::P],
-            Model::LinearRegulator(_) => &[Quantity::Iin, Quantity::Iout, Quantity::P],
-            Model::Npn(_) | Model::Pnp(_) => &[Quantity::Ib, Quantity::Ic, Quantity::P],
-            Model::Nmos(_) => &[Quantity::Id, Quantity::P],
-            Model::Potentiometer(_) | Model::Chip(_) => &[],
-        }
-    }
-
     /// The quantity a rating of `kind` bounds by magnitude. A current rating bounds `iout` on a
     /// linear regulator, `ic` on a BJT, `id` on an `nmos`, and `i` on every other part.
     pub fn rated(&self, kind: RatingKind) -> Quantity {
@@ -341,138 +265,11 @@ impl Model {
         }
     }
 
-    pub fn pins(&self) -> &[NetId] {
-        match self {
-            Model::Resistor(r) => &r.pins,
-            Model::Potentiometer(p) => &p.pins,
-            Model::VoltageSource(v) => &v.pins,
-            Model::CurrentSource(c) => &c.pins,
-            Model::Diode(j) | Model::Led(j) => &j.pins,
-            Model::Zener(z) => &z.pins,
-            Model::LinearRegulator(r) => &r.pins,
-            Model::Npn(b) | Model::Pnp(b) => &b.pins,
-            Model::Nmos(m) => &m.pins,
-            Model::Capacitor(c) => &c.pins,
-            Model::Inductor(l) => &l.pins,
-            Model::Relay(k) => &k.pins,
-            Model::Switch(s) => &s.pins,
-            Model::Chip(Chip::Ne555(n)) => &n.pins,
-            Model::Chip(Chip::Atmega328p(m)) => &m.pins,
-            Model::Chip(Chip::SpiReplay(r)) => &r.pins,
-            Model::Chip(Chip::St77916(p)) => &p.pins,
-            Model::Chip(Chip::Cst816(dev)) => &dev.pins,
-            Model::Chip(Chip::Ws2812(chain)) => &chain.pins,
-            Model::Chip(Chip::PulsesReplay(replay)) => &replay.pins,
-            Model::Chip(Chip::Esp32s3(mcu)) => &mcu.pins,
-        }
-    }
-
     /// The blobs it names, in its own field order.
     pub fn blobs(&self) -> Vec<&Blob> {
         match self {
             Model::Chip(Chip::Esp32s3(mcu)) => mcu.firmware.blobs(),
             _ => Vec::new(),
-        }
-    }
-
-    /// Rated quantities in `RatingKind` order. A `null` rating is left out.
-    pub fn ratings(&self) -> Vec<(RatingKind, &Value)> {
-        let (current, power) = match self {
-            Model::Resistor(r) => (None, r.max_power.as_ref()),
-            Model::Potentiometer(_)
-            | Model::VoltageSource(_)
-            | Model::CurrentSource(_)
-            | Model::Capacitor(_)
-            | Model::Inductor(_)
-            | Model::Relay(_)
-            | Model::Switch(_)
-            | Model::Chip(_) => (None, None),
-            Model::Diode(j) | Model::Led(j) => (j.max_current.as_ref(), j.max_power.as_ref()),
-            Model::Zener(z) => (z.max_current.as_ref(), z.max_power.as_ref()),
-            Model::LinearRegulator(r) => (r.max_current.as_ref(), r.max_power.as_ref()),
-            Model::Npn(b) | Model::Pnp(b) => (b.max_current.as_ref(), b.max_power.as_ref()),
-            Model::Nmos(m) => (m.max_current.as_ref(), m.max_power.as_ref()),
-        };
-        let current = current.map(|v| (RatingKind::Current, v));
-        let power = power.map(|v| (RatingKind::Power, v));
-        current.into_iter().chain(power).collect()
-    }
-
-    /// The next contact edge, source jump, potentiometer move, or device event strictly after
-    /// `at`.
-    pub fn next_change_after(&self, at: Time) -> Option<Time> {
-        if let Some((_, events)) = self.device() {
-            return events.next_after(at);
-        }
-        match self {
-            Model::VoltageSource(source) => source.voltage.next_change_after(at),
-            Model::CurrentSource(source) => source.current.next_change_after(at),
-            Model::Switch(switch) => switch.schedule.next_change_after(at),
-            Model::Potentiometer(pot) => pot.position.next_change_after(at),
-            Model::Resistor(_)
-            | Model::Diode(_)
-            | Model::Led(_)
-            | Model::Zener(_)
-            | Model::LinearRegulator(_)
-            | Model::Npn(_)
-            | Model::Pnp(_)
-            | Model::Nmos(_)
-            | Model::Capacitor(_)
-            | Model::Inductor(_)
-            | Model::Relay(_)
-            | Model::Chip(_) => None,
-        }
-    }
-
-    /// The settable level schedule, with the document field that holds it and that field's unit.
-    /// A `steps` voltage, a `steps` current, or a potentiometer position. A `step`, `pulse`, or
-    /// `serial` source has none.
-    pub fn level(&self) -> Option<LevelField<'_>> {
-        match self {
-            Model::VoltageSource(source) => {
-                level_field(source.voltage.as_steps(), "voltage", json::VOLT)
-            }
-            Model::CurrentSource(source) => {
-                level_field(source.current.as_steps(), "current", json::AMPERE)
-            }
-            Model::Potentiometer(pot) => {
-                level_field(Some(&pot.position), "position", json::FRACTION_UNIT)
-            }
-            Model::Resistor(_)
-            | Model::Diode(_)
-            | Model::Led(_)
-            | Model::Zener(_)
-            | Model::LinearRegulator(_)
-            | Model::Npn(_)
-            | Model::Pnp(_)
-            | Model::Nmos(_)
-            | Model::Capacitor(_)
-            | Model::Inductor(_)
-            | Model::Relay(_)
-            | Model::Switch(_)
-            | Model::Chip(_) => None,
-        }
-    }
-
-    /// [`level`](Self::level)'s schedule, for appending one event.
-    pub fn level_mut(&mut self) -> Option<&mut Schedule<Value>> {
-        match self {
-            Model::VoltageSource(source) => source.voltage.steps_mut(),
-            Model::CurrentSource(source) => source.current.steps_mut(),
-            Model::Potentiometer(pot) => Some(&mut pot.position),
-            Model::Resistor(_)
-            | Model::Diode(_)
-            | Model::Led(_)
-            | Model::Zener(_)
-            | Model::LinearRegulator(_)
-            | Model::Npn(_)
-            | Model::Pnp(_)
-            | Model::Nmos(_)
-            | Model::Capacitor(_)
-            | Model::Inductor(_)
-            | Model::Relay(_)
-            | Model::Switch(_)
-            | Model::Chip(_) => None,
         }
     }
 
@@ -504,65 +301,6 @@ impl Model {
             _ => None,
         }
     }
-
-    /// The serial waveform, with the document field that holds it. A `serial` voltage or current.
-    pub fn serial(&self) -> Option<SerialField<'_>> {
-        match self {
-            Model::VoltageSource(source) => serial_field(source.voltage.as_serial(), "voltage"),
-            Model::CurrentSource(source) => serial_field(source.current.as_serial(), "current"),
-            Model::Resistor(_)
-            | Model::Potentiometer(_)
-            | Model::Diode(_)
-            | Model::Led(_)
-            | Model::Zener(_)
-            | Model::LinearRegulator(_)
-            | Model::Npn(_)
-            | Model::Pnp(_)
-            | Model::Nmos(_)
-            | Model::Capacitor(_)
-            | Model::Inductor(_)
-            | Model::Relay(_)
-            | Model::Switch(_)
-            | Model::Chip(_) => None,
-        }
-    }
-
-    fn serial_mut(&mut self) -> Option<&mut waveform::Serial> {
-        match self {
-            Model::VoltageSource(source) => source.voltage.serial_mut(),
-            Model::CurrentSource(source) => source.current.serial_mut(),
-            Model::Resistor(_)
-            | Model::Potentiometer(_)
-            | Model::Diode(_)
-            | Model::Led(_)
-            | Model::Zener(_)
-            | Model::LinearRegulator(_)
-            | Model::Npn(_)
-            | Model::Pnp(_)
-            | Model::Nmos(_)
-            | Model::Capacitor(_)
-            | Model::Inductor(_)
-            | Model::Relay(_)
-            | Model::Switch(_)
-            | Model::Chip(_) => None,
-        }
-    }
-}
-
-fn serial_field<'a>(waveform: Option<&'a Serial>, field: &'static str) -> Option<SerialField<'a>> {
-    waveform.map(|waveform| SerialField { waveform, field })
-}
-
-fn level_field<'a>(
-    schedule: Option<&'a Schedule<Value>>,
-    field: &'static str,
-    unit: &'static str,
-) -> Option<LevelField<'a>> {
-    schedule.map(|schedule| LevelField {
-        schedule,
-        field,
-        unit,
-    })
 }
 
 /// A part's settable level: its schedule, the document field, and the unit parse accepts there.

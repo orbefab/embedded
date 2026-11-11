@@ -10,9 +10,9 @@ pub(crate) mod waveform;
 
 use orbe_model::Time;
 
+use super::catalog::WirePart;
 use super::{
-    Analysis, Basis, Chip, Event, IntValue, MIN_GAP_PS, Model, NetId, Netlist, Part, Source,
-    Transient, Value,
+    Analysis, Basis, Event, IntValue, MIN_GAP_PS, NetId, Netlist, Part, Source, Transient, Value,
 };
 use crate::blob::{Blobs, Sha256};
 use crate::diagnostic::{AnalysisRule, Diagnostic, ScheduleRule, ValueRule};
@@ -54,34 +54,6 @@ struct WireTransient {
     stop_ps: u64,
     max_step_ps: u64,
     grid_ps: u64,
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-enum WirePart {
-    Resistor(crate::passive::resistor::WireResistor),
-    Potentiometer(crate::passive::potentiometer::WirePotentiometer),
-    VoltageSource(crate::passive::voltage_source::WireVoltageSource),
-    CurrentSource(crate::passive::current_source::WireCurrentSource),
-    Diode(crate::semiconductor::junction::WireJunction),
-    Led(crate::semiconductor::junction::WireJunction),
-    Zener(Box<crate::semiconductor::zener::WireZener>),
-    LinearRegulator(Box<crate::chip::regulator::WireLinearRegulator>),
-    Npn(Box<crate::semiconductor::transistor::WireBjt>),
-    Pnp(Box<crate::semiconductor::transistor::WireBjt>),
-    Nmos(Box<crate::semiconductor::transistor::WireMosfet>),
-    Capacitor(crate::passive::capacitor::WireCapacitor),
-    Inductor(crate::passive::inductor::WireInductor),
-    Relay(Box<crate::chip::relay::WireRelay>),
-    Switch(crate::passive::switch::WireSwitch),
-    Ne555(Box<crate::chip::ne555::WireNe555>),
-    Atmega328p(Box<crate::mcu::avr::WireAtmega328p>),
-    SpiReplay(Box<crate::device::spi_replay::WireSpiReplay>),
-    St77916(Box<crate::device::st77916::WireSt77916>),
-    Cst816(Box<crate::device::cst816::WireCst816>),
-    Esp32s3(Box<crate::mcu::esp32s3::WireEsp32s3>),
-    Ws2812(Box<crate::device::ws2812::WireWs2812>),
-    PulsesReplay(Box<crate::device::pulses_replay::WirePulsesReplay>),
 }
 
 /// `value` must be a JSON integer in `T`'s range. Anything else is `netlist.syntax`.
@@ -363,29 +335,7 @@ fn resolve_part(
     seen: &mut BTreeSet<String>,
     out: &mut Vec<Diagnostic>,
 ) -> Option<Part> {
-    let raw_name = match &part {
-        WirePart::Resistor(wire) => &wire.name,
-        WirePart::Potentiometer(wire) => &wire.name,
-        WirePart::VoltageSource(wire) => &wire.name,
-        WirePart::CurrentSource(wire) => &wire.name,
-        WirePart::Capacitor(wire) => &wire.name,
-        WirePart::Inductor(wire) => &wire.name,
-        WirePart::Diode(wire) | WirePart::Led(wire) => &wire.name,
-        WirePart::Zener(wire) => &wire.name,
-        WirePart::LinearRegulator(wire) => &wire.name,
-        WirePart::Npn(wire) | WirePart::Pnp(wire) => &wire.name,
-        WirePart::Nmos(wire) => &wire.name,
-        WirePart::Relay(wire) => &wire.name,
-        WirePart::Switch(wire) => &wire.name,
-        WirePart::Ne555(wire) => &wire.name,
-        WirePart::Atmega328p(wire) => &wire.name,
-        WirePart::SpiReplay(wire) => &wire.name,
-        WirePart::St77916(wire) => &wire.name,
-        WirePart::Cst816(wire) => &wire.name,
-        WirePart::Esp32s3(wire) => &wire.name,
-        WirePart::Ws2812(wire) => &wire.name,
-        WirePart::PulsesReplay(wire) => &wire.name,
-    };
+    let raw_name = super::catalog::wire_name(&part);
     let path = format!("parts[{index}].name");
     let name = match Name::new(raw_name) {
         Ok(name) => name,
@@ -413,93 +363,7 @@ fn resolve_part(
         });
     }
     let part_ref = Ref::Part(name.clone());
-    let model = match part {
-        WirePart::Resistor(wire) => {
-            crate::passive::resistor::resolve_resistor(&name, &part_ref, wire, nets, out)
-        }
-        WirePart::Potentiometer(wire) => {
-            crate::passive::potentiometer::resolve_potentiometer(&name, &part_ref, wire, nets, out)
-        }
-        WirePart::VoltageSource(wire) => crate::passive::voltage_source::resolve_voltage_source(
-            &name, &part_ref, wire, nets, out,
-        ),
-        WirePart::CurrentSource(wire) => crate::passive::current_source::resolve_current_source(
-            &name, &part_ref, wire, nets, out,
-        ),
-        WirePart::Diode(wire) => {
-            crate::semiconductor::junction::resolve_junction(&name, &part_ref, wire, nets, out)
-                .map(Model::Diode)
-        }
-        WirePart::Led(wire) => {
-            crate::semiconductor::junction::resolve_junction(&name, &part_ref, wire, nets, out)
-                .map(Model::Led)
-        }
-        WirePart::Zener(wire) => {
-            crate::semiconductor::zener::resolve_zener(&name, &part_ref, *wire, nets, out)
-                .map(Model::Zener)
-        }
-        WirePart::LinearRegulator(wire) => {
-            crate::chip::regulator::resolve_regulator(&name, &part_ref, *wire, nets, out)
-                .map(Model::LinearRegulator)
-        }
-        WirePart::Npn(wire) => {
-            crate::semiconductor::transistor::resolve_bjt(&name, &part_ref, *wire, nets, out)
-                .map(Model::Npn)
-        }
-        WirePart::Pnp(wire) => {
-            crate::semiconductor::transistor::resolve_bjt(&name, &part_ref, *wire, nets, out)
-                .map(Model::Pnp)
-        }
-        WirePart::Nmos(wire) => {
-            crate::semiconductor::transistor::resolve_mosfet(&name, &part_ref, *wire, nets, out)
-                .map(Model::Nmos)
-        }
-        WirePart::Capacitor(wire) => {
-            crate::passive::capacitor::resolve_capacitor(&name, &part_ref, wire, nets, out)
-        }
-        WirePart::Inductor(wire) => {
-            crate::passive::inductor::resolve_inductor(&name, &part_ref, wire, nets, out)
-        }
-        WirePart::Relay(wire) => {
-            crate::chip::relay::resolve_relay(&name, &part_ref, *wire, nets, out).map(Model::Relay)
-        }
-        WirePart::Switch(wire) => {
-            crate::passive::switch::resolve_switch(seed, &name, &part_ref, wire, nets, out)
-                .map(Model::Switch)
-        }
-        WirePart::Ne555(wire) => {
-            crate::chip::ne555::resolve_ne555(&name, &part_ref, *wire, nets, out)
-                .map(|chip| Model::Chip(Chip::Ne555(Box::new(chip))))
-        }
-        WirePart::Atmega328p(wire) => {
-            crate::mcu::avr::resolve_atmega328p(&name, &part_ref, *wire, nets, out)
-                .map(|chip| Model::Chip(Chip::Atmega328p(Box::new(chip))))
-        }
-        WirePart::SpiReplay(wire) => {
-            crate::device::spi_replay::resolve_spi_replay(&name, &part_ref, *wire, nets, out)
-                .map(|chip| Model::Chip(Chip::SpiReplay(Box::new(chip))))
-        }
-        WirePart::St77916(wire) => {
-            crate::device::st77916::resolve_st77916(&name, &part_ref, *wire, nets, out)
-                .map(|chip| Model::Chip(Chip::St77916(Box::new(chip))))
-        }
-        WirePart::Cst816(wire) => {
-            crate::device::cst816::resolve_cst816(&name, &part_ref, *wire, nets, out)
-                .map(|chip| Model::Chip(Chip::Cst816(Box::new(chip))))
-        }
-        WirePart::Esp32s3(wire) => {
-            crate::mcu::esp32s3::resolve_esp32s3(&name, &part_ref, *wire, nets, blobs, out)
-                .map(|chip| Model::Chip(Chip::Esp32s3(Box::new(chip))))
-        }
-        WirePart::Ws2812(wire) => {
-            crate::device::ws2812::resolve_ws2812(&name, &part_ref, *wire, nets, out)
-                .map(|chip| Model::Chip(Chip::Ws2812(Box::new(chip))))
-        }
-        WirePart::PulsesReplay(wire) => {
-            crate::device::pulses_replay::resolve_pulses_replay(&name, &part_ref, *wire, nets, out)
-                .map(|chip| Model::Chip(Chip::PulsesReplay(Box::new(chip))))
-        }
-    };
+    let model = super::catalog::parse_wire(seed, &name, &part_ref, part, nets, blobs, out);
     if duplicate || reserved {
         None
     } else {

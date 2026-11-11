@@ -1,20 +1,12 @@
 use orbe_model::Time;
 
-use crate::chip::Relay;
 use crate::netlist::{Model, NetId, PartId};
 
-use crate::chip::regulator;
-
-use crate::passive::{
-    capacitor, current_source, inductor, potentiometer, resistor, switch, voltage_source,
-};
-use crate::semiconductor::{junction, transistor, zener};
-
-use crate::chip;
 use crate::mna::{Layout, Node, Probe, Stamp, Unknowns};
 use crate::newton::Side;
-pub(crate) use inductor::{coil, stamp_coil};
-use transistor::Polarity;
+pub(crate) use crate::passive::inductor::{coil, stamp_coil};
+#[cfg(test)]
+use crate::passive::{capacitor, inductor};
 
 /// What the layout and the stamp read from a part. A netlist `Model` is one. A test
 /// passes its own value through the same functions.
@@ -81,120 +73,24 @@ pub(crate) fn stamp(model: &impl Device, stamp: &mut Stamp<'_>) {
 }
 
 impl Device for Model {
+    #[inline]
     fn unknowns(&self) -> Unknowns {
-        match self {
-            Model::Resistor(_)
-            | Model::Potentiometer(_)
-            | Model::CurrentSource(_)
-            | Model::Switch(_) => Unknowns::default(),
-            Model::VoltageSource(_) | Model::LinearRegulator(_) => Unknowns {
-                branches: 1,
-                ..Unknowns::default()
-            },
-            Model::Capacitor(_) => Unknowns {
-                branches: 1,
-                ..Unknowns::default()
-            },
-            Model::Inductor(_) | Model::Relay(_) => Unknowns {
-                internal_nodes: 1,
-                branches: 1,
-                ..Unknowns::default()
-            },
-            Model::Diode(_) | Model::Led(_) => Unknowns {
-                internal_nodes: 1,
-                bare_internal: true,
-                branches: 0,
-                junctions: 1,
-            },
-            Model::Zener(_) => Unknowns {
-                internal_nodes: 2,
-                bare_internal: true,
-                branches: 0,
-                junctions: 2,
-            },
-            Model::Npn(_) | Model::Pnp(_) => Unknowns {
-                internal_nodes: 3,
-                bare_internal: true,
-                branches: 2,
-                junctions: 2,
-            },
-            Model::Nmos(_) => Unknowns {
-                internal_nodes: 0,
-                bare_internal: false,
-                branches: 3,
-                junctions: 2,
-            },
-            Model::Chip(chip) => chip::unknowns(chip),
-        }
+        Model::unknowns(self)
     }
 
+    #[inline]
     fn charges(&self) -> Vec<OwnedCapacitor> {
-        match self {
-            Model::Capacitor(capacitor) => vec![OwnedCapacitor {
-                k: 0,
-                ends: capacitor.pins.map(StoreEnd::Net),
-                farad: capacitor.capacitance.si.get(),
-            }],
-            Model::Npn(bjt) | Model::Pnp(bjt) => transistor::charges(bjt),
-            Model::Nmos(mosfet) => transistor::mos_charges(mosfet),
-            Model::Resistor(_)
-            | Model::Potentiometer(_)
-            | Model::VoltageSource(_)
-            | Model::CurrentSource(_)
-            | Model::Diode(_)
-            | Model::Led(_)
-            | Model::Zener(_)
-            | Model::LinearRegulator(_)
-            | Model::Inductor(_)
-            | Model::Relay(_)
-            | Model::Switch(_)
-            | Model::Chip(_) => Vec::new(),
-        }
+        Model::charges(self)
     }
 
+    #[inline]
     fn inductors(&self) -> Vec<OwnedInductor> {
-        match self {
-            Model::Inductor(inductor) => vec![inductor::owned(inductor)],
-            Model::Relay(relay) => vec![chip::relay_coil(relay)],
-            Model::Resistor(_)
-            | Model::Potentiometer(_)
-            | Model::VoltageSource(_)
-            | Model::CurrentSource(_)
-            | Model::Diode(_)
-            | Model::Led(_)
-            | Model::Zener(_)
-            | Model::LinearRegulator(_)
-            | Model::Npn(_)
-            | Model::Pnp(_)
-            | Model::Nmos(_)
-            | Model::Capacitor(_)
-            | Model::Switch(_)
-            | Model::Chip(_) => Vec::new(),
-        }
+        Model::inductors(self)
     }
 
+    #[inline]
     fn stamp(&self, stamp: &mut Stamp<'_>) {
-        match self {
-            Model::Resistor(resistor) => resistor::stamp(resistor, stamp),
-            Model::Potentiometer(pot) => potentiometer::stamp(pot, stamp),
-            Model::VoltageSource(source) => voltage_source::stamp(source, stamp),
-            Model::CurrentSource(source) => current_source::stamp(source, stamp),
-            Model::Diode(j) | Model::Led(j) => junction::stamp(j, stamp),
-            Model::Zener(zener) => zener::stamp(zener, stamp),
-            Model::LinearRegulator(regulator) => regulator::stamp(regulator, stamp),
-            Model::Npn(bjt) => transistor::stamp(bjt, Polarity::Npn, stamp),
-            Model::Pnp(bjt) => transistor::stamp(bjt, Polarity::Pnp, stamp),
-            Model::Nmos(mosfet) => transistor::mos_stamp(mosfet, stamp),
-            Model::Capacitor(capacitor) => capacitor::stamp(capacitor, stamp),
-            Model::Inductor(inductor) => inductor::stamp(inductor, stamp),
-            Model::Switch(switch) => switch::stamp(switch, stamp),
-            // An active chip stamps its core's drive image, in `active::stamp`.
-            Model::Chip(_) | Model::Relay(_) => {
-                if let Some(passive) = chip::passive(self) {
-                    chip::stamp(passive, *stamp.chip(), stamp);
-                }
-            }
-        }
+        Model::stamp(self, stamp);
     }
 }
 
@@ -202,76 +98,19 @@ impl Device for Model {
 /// `Stamp::junction`. A linear regulator reads its last branch current and input voltage
 /// through `Stamp::prior`. Every other stamp reads only the call's conditions, so on a
 /// circuit where no part reads the iterate every iteration of one call stamps the same system.
+#[inline]
 pub(crate) fn reads_iterate(model: &Model) -> bool {
-    match model {
-        Model::Resistor(_)
-        | Model::Potentiometer(_)
-        | Model::VoltageSource(_)
-        | Model::CurrentSource(_)
-        | Model::Capacitor(_)
-        | Model::Inductor(_)
-        | Model::Relay(_)
-        | Model::Switch(_) => false,
-        Model::Diode(_)
-        | Model::Led(_)
-        | Model::Zener(_)
-        | Model::LinearRegulator(_)
-        | Model::Npn(_)
-        | Model::Pnp(_)
-        | Model::Nmos(_) => true,
-        Model::Chip(chip) => chip::reads_iterate(chip),
-    }
+    model.reads_iterate()
 }
 
 /// Start voltages for this part's junction slots.
 pub(crate) fn initial(model: &Model, out: &mut [f64]) {
-    match model {
-        Model::Resistor(_)
-        | Model::Potentiometer(_)
-        | Model::VoltageSource(_)
-        | Model::CurrentSource(_)
-        | Model::Capacitor(_)
-        | Model::Inductor(_)
-        | Model::Relay(_)
-        | Model::Switch(_)
-        | Model::LinearRegulator(_)
-        | Model::Chip(_) => {}
-        Model::Diode(j) | Model::Led(j) => out[0] = junction::initial(j),
-        Model::Zener(zener) => {
-            out[..2].copy_from_slice(&zener::initial(zener));
-        }
-        Model::Npn(bjt) | Model::Pnp(bjt) => transistor::initial(bjt, out),
-        Model::Nmos(_) => transistor::mos_initial(out),
-    }
+    model.initial(out);
 }
 
 /// After a solve: limit this part's junctions from `prior` into `next`, and check their currents.
 pub(crate) fn update(model: &Model, probe: &Probe<'_>, prior: &[f64], next: &mut [f64]) -> Update {
-    match model {
-        Model::Resistor(_)
-        | Model::Potentiometer(_)
-        | Model::VoltageSource(_)
-        | Model::CurrentSource(_)
-        | Model::Capacitor(_)
-        | Model::Inductor(_)
-        | Model::Relay(_)
-        | Model::Switch(_)
-        | Model::Chip(_) => Update::default(),
-        Model::Diode(j) | Model::Led(j) => {
-            let (limited, update) = junction::update(j, probe, prior[0]);
-            next[0] = limited;
-            update
-        }
-        Model::Zener(zener) => {
-            let (limited, update) = zener::update(zener, probe, prior);
-            next[..2].copy_from_slice(&limited);
-            update
-        }
-        Model::Npn(bjt) => transistor::update(bjt, Polarity::Npn, probe, prior, next),
-        Model::Pnp(bjt) => transistor::update(bjt, Polarity::Pnp, probe, prior, next),
-        Model::Nmos(mosfet) => transistor::mos_update(mosfet, probe, prior, next),
-        Model::LinearRegulator(regulator) => regulator::update(regulator, probe),
-    }
+    model.update(probe, prior, next)
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -288,28 +127,7 @@ pub(crate) struct Update {
 /// conducts. An `nmos` joins its drain to its source. Its gate does not. A relay joins its coil's
 /// ends, and `com` to `no` and to `nc` in either state.
 pub(crate) fn dc_paths(model: &Model) -> &'static [(usize, usize)] {
-    match model {
-        Model::Resistor(_)
-        | Model::VoltageSource(_)
-        | Model::Diode(_)
-        | Model::Led(_)
-        | Model::Zener(_)
-        | Model::Inductor(_)
-        | Model::Switch(_) => &[(0, 1)],
-        Model::Potentiometer(_) | Model::Npn(_) | Model::Pnp(_) => &[(0, 1), (1, 2)],
-        Model::Nmos(_) => &[(0, 2)],
-        // `in` to `gnd` is the ground current. `out` to `gnd` is the pass branch.
-        // Joining only `in` to `out` leaves a capacitor on each rail floating.
-        Model::LinearRegulator(_) => &[(0, 2), (1, 2)],
-        Model::Relay(_) => &[
-            (Relay::COIL_A, Relay::COIL_B),
-            (Relay::COM, Relay::NO),
-            (Relay::COM, Relay::NC),
-        ],
-        Model::Capacitor(capacitor) if capacitor.initial.is_some() => &[(0, 1)],
-        Model::Capacitor(_) | Model::CurrentSource(_) => &[],
-        Model::Chip(chip) => chip::dc_paths(chip),
-    }
+    model.dc_paths()
 }
 
 /// The values `observe` contributes, in `quantities` order.
@@ -317,6 +135,19 @@ pub(crate) fn dc_paths(model: &Model) -> &'static [(usize, usize)] {
 pub(crate) struct Observed {
     values: [f64; 3],
     len: usize,
+}
+
+impl Observed {
+    pub(crate) fn ivp(i: f64, v: f64) -> Self {
+        Self {
+            values: [i, v, v * i],
+            len: 3,
+        }
+    }
+
+    pub(crate) fn values(values: [f64; 3], len: usize) -> Self {
+        Self { values, len }
+    }
 }
 
 impl IntoIterator for Observed {
@@ -331,47 +162,7 @@ impl IntoIterator for Observed {
 /// `model.quantities()` at `at`, in that order. `None` for a part with none.
 /// Not checked for finiteness.
 pub(crate) fn observe(model: &Model, probe: &Probe<'_>, at: Time, side: Side) -> Option<Observed> {
-    let (pins, i) = match model {
-        Model::Chip(_) | Model::Potentiometer(_) => return None,
-        Model::Npn(bjt) | Model::Pnp(bjt) => {
-            return Some(Observed {
-                values: transistor::observe(bjt, probe),
-                len: 3,
-            });
-        }
-        Model::Nmos(mosfet) => {
-            let [id, p] = transistor::mos_observe(mosfet, probe);
-            let len = model.quantities().len();
-            debug_assert_eq!(len, 2);
-            return Some(Observed {
-                values: [id, p, 0.0],
-                len,
-            });
-        }
-        Model::LinearRegulator(regulator) => {
-            return Some(Observed {
-                values: regulator::observe(regulator, probe),
-                len: 3,
-            });
-        }
-        Model::Resistor(resistor) => (resistor.pins, resistor::current(resistor, probe)),
-        Model::VoltageSource(source) => (source.pins, voltage_source::current(probe)),
-        Model::CurrentSource(source) => (source.pins, current_source::current(source, at, side)),
-        Model::Diode(j) | Model::Led(j) => (j.pins, junction::current(j, probe)),
-        Model::Zener(zener) => (zener.pins, zener::current(zener, probe)),
-        Model::Capacitor(capacitor) => (capacitor.pins, capacitor::current(probe)),
-        Model::Inductor(inductor) => (inductor.pins, inductor::current(probe)),
-        Model::Relay(relay) => (
-            [relay.pins[Relay::COIL_A], relay.pins[Relay::COIL_B]],
-            inductor::current(probe),
-        ),
-        Model::Switch(switch) => (switch.pins, switch::current(switch, probe, at, side)),
-    };
-    let v = probe.v(pins[0]) - probe.v(pins[1]);
-    Some(Observed {
-        values: [i, v, v * i],
-        len: 3,
-    })
+    model.observe(probe, at, side)
 }
 
 /// Two capacitors on one part. Tests only. Not a netlist kind. `branches` is the count

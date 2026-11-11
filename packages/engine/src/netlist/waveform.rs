@@ -396,28 +396,28 @@ impl Waveform {
         &self.shape
     }
 
-    pub(super) fn as_steps(&self) -> Option<&Schedule<Value>> {
+    pub(crate) fn as_steps(&self) -> Option<&Schedule<Value>> {
         match &self.shape {
             Shape::Steps(schedule) => Some(schedule),
             Shape::Step(_) | Shape::Pulse(_) | Shape::Serial(_) => None,
         }
     }
 
-    pub(super) fn steps_mut(&mut self) -> Option<&mut Schedule<Value>> {
+    pub(crate) fn steps_mut(&mut self) -> Option<&mut Schedule<Value>> {
         match &mut self.shape {
             Shape::Steps(schedule) => Some(schedule),
             Shape::Step(_) | Shape::Pulse(_) | Shape::Serial(_) => None,
         }
     }
 
-    pub(super) fn as_serial(&self) -> Option<&Serial> {
+    pub(crate) fn as_serial(&self) -> Option<&Serial> {
         match &self.shape {
             Shape::Serial(serial) => Some(serial),
             Shape::Steps(_) | Shape::Step(_) | Shape::Pulse(_) => None,
         }
     }
 
-    pub(super) fn serial_mut(&mut self) -> Option<&mut Serial> {
+    pub(crate) fn serial_mut(&mut self) -> Option<&mut Serial> {
         match &mut self.shape {
             Shape::Serial(serial) => Some(serial),
             Shape::Steps(_) | Shape::Step(_) | Shape::Pulse(_) => None,

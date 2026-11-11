@@ -5,8 +5,9 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
+use orbe_engine::netlist::engine_kinds;
+
 use crate::diagnostic::{Code, Findings, Reported};
-use crate::kinds;
 use crate::name::{NameKind, and_list, did_you_mean, problem};
 use crate::params::{Cover, Step, cover, dotted, pointer_of, step, tokens, within};
 use crate::shape::{self, ParamShape, schema, unknown_key};
@@ -1781,14 +1782,19 @@ fn decode_body(name: Option<String>, node: &Node, part: &Part, out: &mut Finding
         schema(out, kind_node, "an engine kind such as \"resistor\"");
         return None;
     };
-    let Some(engine_pins) = kinds::pins(kind) else {
-        let named = did_you_mean(kind, kinds::KINDS.iter().map(|(k, _)| *k), "");
+    let kinds = engine_kinds();
+    let Some(engine_pins) = kinds
+        .iter()
+        .find(|(name, _)| *name == kind)
+        .map(|(_, pins)| *pins)
+    else {
+        let named = did_you_mean(kind, kinds.iter().map(|(name, _)| *name), "");
         let hint = if named.is_empty() {
             format!(
                 "the kinds are {}",
-                kinds::KINDS
+                kinds
                     .iter()
-                    .map(|(k, _)| *k)
+                    .map(|(name, _)| *name)
                     .collect::<Vec<_>>()
                     .join(", ")
             )
