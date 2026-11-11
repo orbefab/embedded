@@ -6,9 +6,10 @@
 //! This file is the dispatch. `kind` says whether a netlist `Chip` is passive or active, and
 //! every `Chip` answers `unknowns` and `dc_paths` here. A passive `Chip` adds a `Passive`
 //! variant, a `chip/<kind>.rs`, an arm in `passive`, and an arm in each function that takes
-//! `Passive`. An active kind adds an `Active` variant, its arm in `active::chip`, and an
-//! `active::Core` variant. Most of those kinds live in `device/` and `mcu/`. The relay answers
-//! `unknowns` and `dc_paths` as an element.
+//! `Passive`. An active kind adds an `Active` variant and its arm in `active::chip`. A device in
+//! `device/` builds an `active::Core::Device` and adds its row to `Model::device`. A chip in
+//! `mcu/` adds an `active::Core` variant. The relay answers `unknowns` and `dc_paths` as an
+//! element.
 
 use crate::device::{Cst816, PulsesReplay, SpiReplay, St77916, Ws2812};
 use crate::mcu::{Atmega328p, Esp32s3};

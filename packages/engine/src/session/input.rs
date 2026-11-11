@@ -64,8 +64,9 @@ pub enum Rejected {
     /// No part has the input's name.
     UnknownPart,
     /// A setting on a part that takes none of any kind: a resistor, a capacitor, an inductor, a
-    /// relay, a junction, a `step` or `pulse` source, or a chip. A device part takes only its
-    /// events, so a contact, a level or a serial send on a `cst816` is this too.
+    /// relay, a junction, a `step` or `pulse` source, a chip, or a device that declares no
+    /// event. A device part takes only its events, so a contact, a level or a serial send on a
+    /// `cst816` is this too.
     NotSettable,
     /// A contact on a source or a potentiometer, a level on a switch, a serial send on a
     /// switch, a potentiometer, or a plain or `steps` source, or a contact or a level on a
@@ -234,7 +235,7 @@ fn event_decision(
     event: &DeviceEvent,
     from: Time,
 ) -> Result<(Appended, Option<Time>, bool), Rejected> {
-    let Some((row, events)) = model.device() else {
+    let Some((row, events)) = model.device().filter(|(row, _)| !row.events.is_empty()) else {
         return Err(if takes_another_setting(model) {
             Rejected::WrongSetting
         } else {

@@ -6,7 +6,9 @@
 //! a 1 by its high alone. A high outside both windows is rule `bit` and is dropped. The line
 //! rests low, and a rest past RES is idle: the chain latches there.
 
-use orbe_model::{Cx, Device, Drives, Error, Idle, Params, PulseTarget, Shows, State, Stop, Time};
+use orbe_model::{
+    Cx, Device, Drives, Error, Idle, Params, PulseTarget, Shows, State, Stop, Time, View,
+};
 
 /// The most LEDs one part holds.
 pub const LED_MAX: u16 = 1024;
@@ -89,8 +91,8 @@ impl<const N: usize> Device for Ws2812<N> {
         Drives::OFF
     }
 
-    fn view(&self) -> &[u8] {
-        self.leds[..usize::from(self.count)].as_flattened()
+    fn view(&self) -> View<'_> {
+        View::Leds(self.leds[..usize::from(self.count)].as_flattened())
     }
 }
 

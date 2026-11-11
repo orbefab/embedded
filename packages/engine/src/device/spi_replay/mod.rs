@@ -1,14 +1,17 @@
-//! The `spi_replay` chip behind the seam. Its pins hold their idle levels for the whole run, and
-//! its core stops at each event's end, where it sends the event as a `Spi` record.
+//! The `spi_replay` part. [`model`] is the device, which holds the pins at their idle levels.
+//! This file is its netlist struct, its JSON wire type, its row in the device table, and its
+//! events as the records the host's replay engine sends.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde::Deserialize;
 
-use orbe_model::{Cs, Drive, Lanes, Spi, SpiPhase, Stop, Time};
+use orbe_model::{Cs, Device, Fields, Lanes, Spi, SpiPhase, Time};
 
-use crate::active::{Chip, Output, Stage, Takes};
+use crate::active::native::Native;
+use crate::active::replay::Replay;
+use crate::active::{Chip, Core, Output, Stage, Takes};
 use crate::diagnostic::{Diagnostic, ScheduleRule};
 use crate::link::{Record, RecordKind, SpiNets};
 use crate::name::{Name, Ref};
@@ -27,18 +30,13 @@ const CS: usize = 2;
 const SCLK: usize = 3;
 const D0: usize = 4;
 
-/// The outputs, by package index, in image order: `CS`, `SCLK`, then `D0` to `D3`.
-const OUTPUTS: [usize; 6] = [CS, SCLK, D0, D0 + 1, D0 + 2, D0 + 3];
+pub(crate) mod model;
 
-/// SPI mode 0's idle levels: `CS` high, `SCLK` and the data lanes low.
-const IDLE: [Drive; 6] = [
-    Drive::High,
-    Drive::Low,
-    Drive::Low,
-    Drive::Low,
-    Drive::Low,
-    Drive::Low,
-];
+/// The outputs, by package index, in image order: `CS`, `SCLK`, then `D0` to `D3`.
+const OUTPUTS: [usize; model::OUTPUTS] = [CS, SCLK, D0, D0 + 1, D0 + 2, D0 + 3];
+
+/// No events. A replay's transactions are its netlist's.
+pub(crate) const ROW: crate::device::Row = crate::device::Row::new(&[]);
 
 /// The pin pairs the chip joins at DC, for `net.floating`: each output to `VCC` and to `GND`,
 /// one of which its drive always stamps.
@@ -79,7 +77,7 @@ pub(crate) fn chip(part: PartId, replay: &SpiReplay) -> Chip {
         data: [D0, D0 + 1, D0 + 2, D0 + 3].map(|k| Some(pins[k])),
     };
     let clock_hz = u32::try_from(replay.clock_hz.value).expect("parse keeps the clock in u32");
-    let records = (0u64..)
+    let records: Arc<[Record]> = (0u64..)
         .zip(&replay.events)
         .map(|(seq, event)| Record {
             seq,
@@ -108,57 +106,11 @@ pub(crate) fn chip(part: PartId, replay: &SpiReplay) -> Chip {
         twi: false,
         sends: true,
         takes: Takes::default(),
-        core: crate::active::Core::SpiReplay(Core {
-            records,
-            made: 0,
-            sent: 0,
-        }),
-    }
-}
-
-/// The events as records, and how far it has walked them. Every stop is a record's end, so no
-/// stop changes the image.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Core {
-    records: Arc<[Record]>,
-    /// The records before this one have ended where the core reached.
-    made: usize,
-    /// The records before this one have left the core.
-    sent: usize,
-}
-
-impl Core {
-    pub(crate) fn run_until(&mut self, limit: Time) -> Option<Stop> {
-        let end = self.records.get(self.made)?.end;
-        if end > limit {
-            return None;
-        }
-        self.made += 1;
-        Some(Stop {
-            at: end,
-            sample: false,
-            record: true,
-        })
-    }
-
-    pub(crate) fn drive(&self) -> &[Drive] {
-        &IDLE
-    }
-
-    /// It watches nothing, so it takes only the power-on input, which has no level.
-    pub(crate) fn input(&mut self, _at: Time, levels: &[bool]) {
-        assert!(levels.is_empty(), "a replay watches no pin");
-    }
-
-    pub(crate) fn records(&self) -> &[Record] {
-        &self.records[self.sent..self.made]
-    }
-
-    pub(crate) fn drain_records(&mut self, through: Time, mut sent: impl FnMut(Record)) {
-        while self.sent < self.made && self.records[self.sent].end <= through {
-            sent(self.records[self.sent].clone());
-            self.sent += 1;
-        }
+        core: Core::Device(Box::new(Native::new(
+            model::SpiReplay::new(&Fields::NONE).expect("a spi_replay takes no params"),
+            Replay::new(records),
+            model::OUTPUTS,
+        ))),
     }
 }
 

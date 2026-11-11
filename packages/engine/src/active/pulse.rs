@@ -6,7 +6,7 @@
 //! One [`Hosted::take`](super::native::Hosted::take) or [`Hosted::cut`](super::native::Hosted::cut)
 //! enters per landing. The walk below then calls the device on the concrete type.
 
-use orbe_model::{PulseTarget, Time};
+use orbe_model::{Device, PulseTarget, Time};
 
 use super::native::{Hosting, Port};
 use crate::link::{LinkRow, Record, RecordKind};
@@ -32,11 +32,20 @@ enum Line {
 
 /// The device and the line before an idle a stop made. A record lands only at its end, so a
 /// record that started before that idle shows the rest was shorter, and both go back.
-#[derive(Clone)]
 struct Spare<D> {
     dev: Hosting<D>,
     line: Line,
     idle_at: Option<Time>,
+}
+
+impl<D: Device> Clone for Spare<D> {
+    fn clone(&self) -> Self {
+        Spare {
+            dev: self.dev.clone(),
+            line: self.line,
+            idle_at: self.idle_at,
+        }
+    }
 }
 
 /// The line of a [`PulseTarget`] `D`, which declares the level the line rests at and when that
@@ -49,7 +58,7 @@ pub(crate) struct Pulse<D> {
     undo: Option<Box<Spare<D>>>,
 }
 
-impl<D: Clone> Clone for Pulse<D> {
+impl<D: Device> Clone for Pulse<D> {
     fn clone(&self) -> Self {
         Pulse {
             line: self.line,
@@ -215,8 +224,9 @@ impl<D: PulseTarget> Port<D> for Pulse<D> {
         self.idle_at
     }
 
-    fn take_due(&mut self, dev: &mut Hosting<D>, at: Time) {
+    fn take_due(&mut self, dev: &mut Hosting<D>, at: Time) -> bool {
         self.fire(dev, at, true);
+        false
     }
 
     fn input(&mut self, dev: &mut Hosting<D>, at: Time, levels: &[bool]) {

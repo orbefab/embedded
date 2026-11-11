@@ -10,7 +10,7 @@ The input is JSON. The folder holds `manifest.json`, `netlist.json`, `diagnostic
 | --- | --- | --- |
 | `packages/engine` | `orbe-engine` | The netlist, the diagnostics, the run folder, and the solver: the operating point, the transient, and the session. It runs a chip model for each chip part. Its `runner` feature adds `orbe-run`, the binary the checks run. |
 | `packages/engine/device-check` | `orbe-device-check` | Builds each built-in device's `model.rs` with `orbe-model` and `std` alone, so a device that names anything else fails the workspace build. |
-| `packages/model` | `orbe-model` | Unstable, 0.x. The contract a device implements: `Device`, `I2cTarget`, `PulseTarget`, and the plain data they pass, `Time`, `Drive`, `Levels`, `Stop` and the records. [model.md](model.md) says what a device implements. |
+| `packages/model` | `orbe-model` | Unstable, 0.x. The contract a device implements: `Device`, `I2cTarget`, `PulseTarget`, `SpiTarget` and `DutyTarget`, the plain data they pass, `Time`, `Drive`, `Levels`, `Stop` and the records, and the state containers `Pages` and `Sha256`. [model.md](model.md) says what a device implements. |
 | `packages/cores/xtensa` | `orbe-xtensa` | The Xtensa LX6 and LX7 core of the ESP32 and the ESP32-S3, with both generated opcode tables. `gen/regen.sh` regenerates the tables. |
 | `packages/cores/avr` | `orbe-avr` | The AVR instruction set. A chip implements its bus. |
 | `packages/socs/microchip` | `orbe-microchip` | The ATmega328P around `orbe-avr`. `orbe-engine` runs it for each `atmega328p` part. |

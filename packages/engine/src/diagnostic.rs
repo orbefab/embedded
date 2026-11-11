@@ -242,6 +242,18 @@ pub enum ProtocolRule {
 }
 
 impl ProtocolRule {
+    pub(crate) const ALL: [ProtocolRule; 4] = [
+        ProtocolRule::Command,
+        ProtocolRule::PixelFormat,
+        ProtocolRule::SdaWhileSclHigh,
+        ProtocolRule::Bit,
+    ];
+
+    /// Its place in [`ALL`](Self::ALL).
+    pub(crate) const fn index(self) -> usize {
+        self as usize
+    }
+
     /// The rule a device names in `Cx::broke`, by its name in `diagnostics.json`.
     pub(crate) fn named(name: &str) -> Option<ProtocolRule> {
         match name {

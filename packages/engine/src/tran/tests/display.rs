@@ -16,7 +16,7 @@ use super::fixtures::*;
 use super::session::{Rng, example, finish};
 use crate::active::script::{self, Op, Taken};
 use crate::active::{Core, SpiTarget};
-use crate::session::{Input, Setting, State};
+use crate::session::{DeviceEvent, Input, Rejected, Setting, State};
 
 const STOP: u64 = 20 * US;
 /// One byte on one lane at 10 MHz.
@@ -337,4 +337,23 @@ fn a_part_that_is_no_display_reads_none() {
     let session = open(&netlist, Vec::new(), BUDGET);
     assert!(session.display(&Name::new("rp1").unwrap()).is_none());
     assert!(session.display(&lcd1()).is_some());
+}
+
+/// A panel and a replay declare no event, so an event setting on either is not settable, as on
+/// a part that takes no setting of any kind.
+#[test]
+fn an_event_on_a_device_that_declares_none_is_not_settable() {
+    let netlist = panel_netlist(&[], "d1", US);
+    let mut session = open(&netlist, Vec::new(), BUDGET);
+    for part in ["lcd1", "rp1"] {
+        let touch = Input {
+            part: Name::new(part).unwrap(),
+            at: Time::from_ps(US),
+            setting: Setting::Event(DeviceEvent {
+                name: "touch".to_string(),
+                fields: Vec::new(),
+            }),
+        };
+        assert_eq!(session.apply(&touch), Err(Rejected::NotSettable), "{part}");
+    }
 }

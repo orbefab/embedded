@@ -17,7 +17,7 @@ use std::fmt::Write;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use orbe_model::Time;
+use orbe_model::{Shows, Time, View};
 
 use crate::name::Name;
 
@@ -33,30 +33,6 @@ pub struct Rectangle {
     pub bytes: u64,
     /// The first eight bytes of the SHA-256 of the bytes.
     pub hash: [u8; 8],
-}
-
-/// The SHA-256 of a pixel write's bytes, fed as they arrive.
-#[derive(Clone, Debug, Default)]
-pub struct RectangleHash(Sha256);
-
-impl RectangleHash {
-    pub fn update(&mut self, bytes: &[u8]) {
-        self.0.update(bytes);
-    }
-
-    pub fn finish(self) -> [u8; 8] {
-        let digest = self.0.finalize();
-        let mut hash = [0; 8];
-        hash.copy_from_slice(&digest[..8]);
-        hash
-    }
-}
-
-/// Two hashes fed the same bytes are equal.
-impl PartialEq for RectangleHash {
-    fn eq(&self, other: &RectangleHash) -> bool {
-        self.0.clone().finalize() == other.0.clone().finalize()
-    }
 }
 
 /// The state of a pixel panel a reader sees: `Session::display` returns it, and each entry of
@@ -94,6 +70,53 @@ pub struct Brightness {
     pub duty: u32,
     pub steps: u64,
     pub hz: u32,
+}
+
+/// What a device that shows `shows`, a screen, shows in `view`, as a reader sees its panel.
+pub(crate) fn panel(shows: Shows, view: View<'_>) -> Panel {
+    let (
+        Shows::Screen {
+            kind,
+            width,
+            height,
+            format,
+        },
+        View::Screen { panel, .. },
+    ) = (shows, view)
+    else {
+        panic!("only a device that shows a screen is a display");
+    };
+    Panel {
+        kind,
+        width,
+        height,
+        format,
+        flags: Flags {
+            display_on: panel.on,
+            inverted: panel.inverted,
+            reset: panel.reset,
+            sleep: panel.asleep,
+        },
+        madctl: panel.madctl,
+        colmod: panel.colmod,
+        registers: u64::from(panel.registers),
+        brightness: panel.backlight.map(|duty| Brightness {
+            duty: duty.duty,
+            steps: 1u64
+                .checked_shl(u32::from(duty.resolution))
+                .filter(|_| duty.resolution < 32)
+                .expect("a duty resolution is below 32"),
+            hz: duty.hz,
+        }),
+    }
+}
+
+/// The frame memory a screen shows in `view`, rows top to bottom, each row left to right.
+pub(crate) fn frame(view: View<'_>) -> &[u8] {
+    let View::Screen { frame, .. } = view else {
+        panic!("only a screen has a frame memory");
+    };
+    frame
 }
 
 /// One `observations.json` `displays` entry.
@@ -199,7 +222,7 @@ mod tests {
 
     #[test]
     fn a_row_is_its_window_bytes_and_hash() {
-        let mut hash = RectangleHash::default();
+        let mut hash = orbe_model::Sha256::new();
         hash.update(b"a");
         hash.update(b"bc");
         let rows = vec![Rectangle {
@@ -210,7 +233,7 @@ mod tests {
             x1: 1,
             y1: 0,
             bytes: 3,
-            hash: hash.finish(),
+            hash: hash.finish()[..8].try_into().unwrap(),
         }];
         let displays = Displays::new(
             vec![(Name::new("lcd1").unwrap(), panel(), vec![1, 2, 3, 4])],
