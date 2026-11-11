@@ -5,8 +5,9 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
+use orbe_model::Time;
+
 use crate::name::{Name, Ref};
-use crate::time::Time;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]

@@ -17,8 +17,9 @@ use std::fmt::Write;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use orbe_model::Time;
+
 use crate::name::Name;
-use crate::time::Time;
 
 /// One closed pixel write. `part` indexes the run's display parts, in part order.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -1,10 +1,11 @@
+use orbe_model::Time;
+
 use crate::netlist::Netlist;
 
 use crate::diagnostic::{Diagnostic, Solve};
 use crate::finite::Finite;
 
 use crate::run_folder::OpPoint;
-use crate::time::Time;
 
 use crate::name::Ref;
 

@@ -7,9 +7,9 @@
 //! `0.9 * ratio^(-1/(p+1))`, at most 2, and a rejected one shrinks by the same rule,
 //! between 0.25 and 0.9. p is 1 for backward Euler and 2 for trapezoidal.
 
-use crate::netlist::Transient;
+use orbe_model::Time;
 
-use crate::time::Time;
+use crate::netlist::Transient;
 
 use crate::newton::Method;
 

@@ -1,3 +1,5 @@
+use orbe_model::Time;
+
 use orbe_engine::netlist::{self, Analysis, Model, Waveform, bounce};
 
 use std::collections::BTreeSet;
@@ -10,7 +12,6 @@ use orbe_engine::Completed;
 use orbe_engine::logic::{Level, Logic};
 use orbe_engine::name::Ref;
 
-use orbe_engine::time::Time;
 use orbe_engine::timestamp::Timestamp;
 use sha2::{Digest, Sha256};
 

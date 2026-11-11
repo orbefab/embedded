@@ -1,5 +1,7 @@
 //! The ATmega328P through the seam, running the repo's firmware in `packages/engine/tests/firmware/`.
 
+use orbe_model::Drive;
+
 use crate::mcu::Atmega328p;
 use crate::netlist::Netlist;
 
@@ -10,7 +12,7 @@ use orbe_microchip::{FuseBytes, Port};
 use super::active::{
     NS, US, after, at, capacitor, circuit, resistor, restarted, run_active, scripted, volts,
 };
-use crate::active::{self, Drive};
+use crate::active::{self};
 use crate::diagnostic::Diagnostic;
 use crate::logic::Level;
 use crate::mcu::avr::{self, PACKAGE, Pad, port_index};
@@ -443,7 +445,7 @@ fn a_clone_from_leaves_the_state_a_clone_does() {
     {
         let at = loop {
             let halt = core
-                .run_until(crate::time::Time::from_ps(20_000 * US))
+                .run_until(orbe_model::Time::from_ps(20_000 * US))
                 .expect("a stop before the end");
             if halt.sample {
                 core.sample(halt.at, &[3.3, 0.0, 0.0, 0.0, 0.0, 0.0, 5.0, 5.0]);
@@ -826,7 +828,7 @@ fn a_drive_at_stop_ps_is_not_in_the_run() {
 fn stops(core: &mut avr::Core, limit: u64) -> Vec<(u64, Drive)> {
     let pb5 = port_index(Pad::Port(Port::B, 5));
     let mut stops = Vec::new();
-    while let Some(stop) = core.run_until(crate::time::Time::from_ps(limit)) {
+    while let Some(stop) = core.run_until(orbe_model::Time::from_ps(limit)) {
         stops.push((stop.at.as_ps(), core.drive()[pb5]));
     }
     stops

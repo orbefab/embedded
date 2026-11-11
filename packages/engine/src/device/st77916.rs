@@ -15,10 +15,12 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-use crate::active::{Chip, Drive, Output, SpiTarget, Stage, Takes};
+use orbe_model::{Cs, Drive, Duty, Lanes, Spi, Time};
+
+use crate::active::{Chip, Output, SpiTarget, Stage, Takes};
 use crate::diagnostic::{Diagnostic, ProtocolRule};
 use crate::display::{Brightness, Flags, Panel, RectangleHash};
-use crate::link::{Cs, Duty, Lanes, LinkRow, RecordKind, Spi};
+use crate::link::{LinkRow, RecordKind, SpiNets};
 use crate::mna::Node;
 use crate::name::{Name, Ref};
 use crate::netlist::NetId;
@@ -28,7 +30,6 @@ use crate::netlist::Value;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
 use crate::netlist::json::{PinMap, resolve_pins};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
-use crate::time::Time;
 use crate::watch::{Signal, Watch};
 
 mod glass;
@@ -364,9 +365,9 @@ impl Core {
     pub(crate) fn take(&mut self, at: Time, records: &[LinkRow]) {
         for row in records {
             match &row.record.kind {
-                RecordKind::Spi(spi) => self.transaction(at, row.sender, spi),
-                RecordKind::Duty(duty) => self.duty(duty),
-                RecordKind::Pulses(_) => unreachable!("a panel takes no pulses"),
+                RecordKind::Spi { spi, nets } => self.transaction(at, row.sender, spi, nets),
+                RecordKind::Duty { duty, .. } => self.duty(duty),
+                RecordKind::Pulses { .. } => unreachable!("a panel takes no pulses"),
             }
         }
     }
@@ -424,11 +425,11 @@ impl Core {
         });
     }
 
-    fn transaction(&mut self, at: Time, sender: u16, spi: &Spi) {
+    fn transaction(&mut self, at: Time, sender: u16, spi: &Spi, nets: &SpiNets) {
         if self.reset {
             return;
         }
-        if !self.wired(spi) {
+        if !self.wired(spi, nets) {
             self.miswired.get_or_insert((at, sender));
             return;
         }
@@ -506,7 +507,7 @@ impl Core {
     }
 
     /// Whether each lane the transaction uses sits on this chip's own data pin.
-    fn wired(&self, spi: &Spi) -> bool {
+    fn wired(&self, spi: &Spi, nets: &SpiNets) -> bool {
         let used = spi
             .phases
             .iter()
@@ -514,7 +515,7 @@ impl Core {
             .chain([spi.lanes.count()])
             .max()
             .unwrap_or(1);
-        (0..usize::from(used)).all(|k| spi.nets.data[k] == Some(self.lanes[k]))
+        (0..usize::from(used)).all(|k| nets.data[k] == Some(self.lanes[k]))
     }
 
     fn begin(&mut self, at: Time, command: u8) -> Open {
@@ -674,7 +675,8 @@ fn advance(window: Window, (column, row): (u16, u16)) -> (u16, u16) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::link::{Lanes, Record, SpiNets, SpiPhase};
+    use crate::link::Record;
+    use orbe_model::SpiPhase;
 
     fn lanes() -> [NetId; 4] {
         [NetId::GROUND; 4]
@@ -688,25 +690,27 @@ mod tests {
                 start: Time::ZERO,
                 end: Time::ZERO,
                 pin: "CS",
-                kind: RecordKind::Spi(Spi {
-                    phases: phases
-                        .iter()
-                        .map(|&(bits, value)| SpiPhase {
-                            bits,
-                            lanes: Lanes::One,
-                            value,
-                        })
-                        .collect(),
-                    lanes: data_lanes,
-                    data: data.into(),
-                    clock_hz: 1,
-                    cs,
+                kind: RecordKind::Spi {
+                    spi: Spi {
+                        phases: phases
+                            .iter()
+                            .map(|&(bits, value)| SpiPhase {
+                                bits,
+                                lanes: Lanes::One,
+                                value,
+                            })
+                            .collect(),
+                        lanes: data_lanes,
+                        data: data.into(),
+                        clock_hz: 1,
+                        cs,
+                    },
                     nets: SpiNets {
                         cs: Some(NetId::GROUND),
                         sclk: Some(NetId::GROUND),
                         data: lanes().map(Some),
                     },
-                }),
+                },
             },
         }
     }
@@ -907,7 +911,7 @@ mod tests {
             Lanes::One,
             Cs::Released,
         );
-        if let RecordKind::Spi(spi) = &mut quad_phase.record.kind {
+        if let RecordKind::Spi { spi, .. } = &mut quad_phase.record.kind {
             spi.phases[1].lanes = Lanes::Four;
         }
         for (k, row) in [quad_bytes, quad_phase].into_iter().enumerate() {

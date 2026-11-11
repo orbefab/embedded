@@ -1,10 +1,10 @@
+use orbe_model::Time;
+
 use orbe_engine::netlist::{self, Analysis, Transient};
 
 use crate::common;
 
 use common::{errors, with_parts};
-
-use orbe_engine::time::Time;
 
 fn transient(stop_ps: &str, max_step_ps: &str, grid_ps: &str) -> String {
     with_parts(

@@ -8,6 +8,8 @@ use serde::{Deserialize, Deserializer};
 pub(crate) mod threshold;
 pub(crate) mod waveform;
 
+use orbe_model::Time;
+
 use super::{
     Analysis, Basis, Chip, Event, IntValue, MIN_GAP_PS, Model, NetId, Netlist, Part, Source,
     Transient, Value,
@@ -16,7 +18,6 @@ use crate::blob::{Blobs, Sha256};
 use crate::diagnostic::{AnalysisRule, Diagnostic, ScheduleRule, ValueRule};
 use crate::finite::Finite;
 use crate::name::{Name, NameError, Ref};
-use crate::time::Time;
 pub(crate) use waveform::{AMPERE, VOLT};
 pub(crate) const FRACTION_UNIT: &str = "1";
 

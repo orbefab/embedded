@@ -1,10 +1,9 @@
+use orbe_model::{Cs, Lanes, Time};
+
 use orbe_engine::device::SpiReplay;
 use orbe_engine::netlist::{self, Chip, Model, Netlist};
 
 use orbe_engine::diagnostic::Diagnostic;
-use orbe_engine::link::{Cs, Lanes};
-
-use orbe_engine::time::Time;
 
 const EXAMPLE: &str = include_str!("../circuits/spi-replay/netlist.json");
 

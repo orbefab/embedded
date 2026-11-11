@@ -7,6 +7,8 @@ members = [
   "packages/session",
   "packages/wasm",
   "packages/engine",
+  "packages/engine/device-check",
+  "packages/model",
   "packages/cores/*",
   "packages/socs/*",
 ]
@@ -23,6 +25,7 @@ orbe-scene = { path = "packages/scene" }
 orbe-registry = { path = "packages/registry" }
 orbe-session = { path = "packages/session" }
 orbe-engine = { path = "packages/engine" }
+orbe-model = { path = "packages/model" }
 orbe-xtensa = { path = "packages/cores/xtensa" }
 orbe-avr = { path = "packages/cores/avr" }
 orbe-microchip = { path = "packages/socs/microchip" }

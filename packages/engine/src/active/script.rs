@@ -2,17 +2,17 @@
 //! input pin, `in`. A drive at 0 is its power-on drive. A script can also send records and
 //! console bytes, take records, and log what it took.
 
+use orbe_model::{Cs, Drive, Duty, Lanes, Spi, Stop, Time};
+
 use crate::netlist::NetId;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::link::{Cs, Duty, Lanes, LinkRow, Record, RecordKind, Spi, SpiNets};
+use crate::link::{LinkRow, Record, RecordKind, SpiNets};
 use crate::name::Name;
 
-use crate::time::Time;
-
-use super::{Chip, Drive, Frame, Output, SpiTarget, Stage, Stop, Takes};
+use super::{Chip, Frame, Output, SpiTarget, Stage, Takes};
 use crate::mna::Node;
 use crate::watch::{Signal, Watch};
 
@@ -217,18 +217,22 @@ impl Core {
                 Op::Sample(sample) => self.sampling = Some(sample),
                 Op::Send(tag) => {
                     let bus = self.bus.expect("a sender has a bus");
-                    self.send(at, RecordKind::Spi(spi(bus, tag)));
+                    self.send(at, spi(bus, tag));
                     record = true;
                 }
                 Op::Duty(duty) => {
-                    let net = self.out;
                     let duty = Duty {
                         duty,
                         resolution: 10,
                         hz: 5000,
-                        net,
                     };
-                    self.send(at, RecordKind::Duty(duty));
+                    self.send(
+                        at,
+                        RecordKind::Duty {
+                            duty,
+                            net: self.out,
+                        },
+                    );
                     record = true;
                 }
                 Op::Bytes { first, count } => {
@@ -293,7 +297,7 @@ impl Core {
     pub(crate) fn take(&mut self, at: Time, records: &[LinkRow]) {
         assert_eq!(at, self.now, "a record arrives where the core is");
         for row in records {
-            let RecordKind::Spi(spi) = &row.record.kind else {
+            let RecordKind::Spi { spi, .. } = &row.record.kind else {
                 unreachable!("a script takes only SPI");
             };
             self.taken.push((at, spi.data.to_vec(), row.record.seq));
@@ -339,13 +343,15 @@ impl Core {
 }
 
 /// One byte, `tag`, on `bus`, on a lane the script names no pin for.
-fn spi(bus: SpiTarget, tag: u8) -> Spi {
-    Spi {
-        phases: Vec::new(),
-        lanes: Lanes::One,
-        data: vec![tag].into(),
-        clock_hz: 1,
-        cs: Cs::Released,
+fn spi(bus: SpiTarget, tag: u8) -> RecordKind {
+    RecordKind::Spi {
+        spi: Spi {
+            phases: Vec::new(),
+            lanes: Lanes::One,
+            data: vec![tag].into(),
+            clock_hz: 1,
+            cs: Cs::Released,
+        },
         nets: SpiNets {
             cs: Some(bus.cs),
             sclk: Some(bus.sclk),

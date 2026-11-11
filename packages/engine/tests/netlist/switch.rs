@@ -1,10 +1,10 @@
+use orbe_model::Time;
+
 use orbe_engine::netlist::{self, Contact, Model};
 
 use crate::common;
 
 use common::{errors, with_parts};
-
-use orbe_engine::time::Time;
 
 fn switch(events: &str, bounce: &str) -> String {
     with_parts(

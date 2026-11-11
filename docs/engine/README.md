@@ -9,6 +9,8 @@ The input is JSON. The folder holds `manifest.json`, `netlist.json`, `diagnostic
 | Folder | Crate | What it holds |
 | --- | --- | --- |
 | `packages/engine` | `orbe-engine` | The netlist, the diagnostics, the run folder, and the solver: the operating point, the transient, and the session. It runs a chip model for each chip part. Its `runner` feature adds `orbe-run`, the binary the checks run. |
+| `packages/engine/device-check` | `orbe-device-check` | Builds each built-in device's `model.rs` with `orbe-model` and `std` alone, so a device that names anything else fails the workspace build. |
+| `packages/model` | `orbe-model` | Unstable, 0.x. The contract a device implements: `Device`, `I2cTarget`, and the plain data they pass, `Time`, `Drive`, `Levels`, `Stop` and the records. [model.md](model.md) says what a device implements. |
 | `packages/cores/xtensa` | `orbe-xtensa` | The Xtensa LX6 and LX7 core of the ESP32 and the ESP32-S3, with both generated opcode tables. `gen/regen.sh` regenerates the tables. |
 | `packages/cores/avr` | `orbe-avr` | The AVR instruction set. A chip implements its bus. |
 | `packages/socs/microchip` | `orbe-microchip` | The ATmega328P around `orbe-avr`. `orbe-engine` runs it for each `atmega328p` part. |
@@ -99,6 +101,6 @@ Neither tier builds firmware. `packages/engine/scripts/esp32s3-firmware.sh` rebu
 
 ## Pages
 
-The schema is [netlist.md](netlist.md). How the engine steps, and how accurate it is, is [engine.md](engine.md). The folder is [run-folder.md](run-folder.md). The codes are [diagnostics.md](diagnostics.md). The ngspice references are [reference.md](reference.md). The ATmega328P behind the `atmega328p` kind is [avr.md](avr.md). The ESP32-S3 behind the `esp32s3` kind is [esp32s3.md](esp32s3.md). The package that runs a Block in a browser Worker, and the check that every Block keeps up with real time there, is [docs/wasm.md](../wasm.md).
+The schema is [netlist.md](netlist.md). How the engine steps, and how accurate it is, is [engine.md](engine.md). The folder is [run-folder.md](run-folder.md). The codes are [diagnostics.md](diagnostics.md). The ngspice references are [reference.md](reference.md). The ATmega328P behind the `atmega328p` kind is [avr.md](avr.md). The ESP32-S3 behind the `esp32s3` kind is [esp32s3.md](esp32s3.md). The contract a device implements is [model.md](model.md). The package that runs a Block in a browser Worker, and the check that every Block keeps up with real time there, is [docs/wasm.md](../wasm.md).
 
 The compiled sketch images in `packages/engine/tests/firmware/sketch/` and in `blocks/*/firmware/` link third-party code under its own licenses. [NOTICE](../../packages/engine/tests/firmware/sketch/NOTICE) names the test images, and each Block's `firmware/NOTICE` names its image. The engine does not link that code.

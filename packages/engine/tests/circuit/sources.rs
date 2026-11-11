@@ -1,11 +1,11 @@
+use orbe_model::Time;
+
 use orbe_engine::netlist::Model;
 
 use crate::common;
 
 use std::fs;
 use std::path::PathBuf;
-
-use orbe_engine::time::Time;
 
 use common::{column, resistor, simulate, simulate_steps, span, trace, transient};
 

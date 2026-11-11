@@ -1,5 +1,7 @@
 //! Each run keeps every accepted step, so a landing and a restart's 1 ns seed are both rows.
 
+use orbe_model::Drive;
+
 use crate::netlist::{NetId, Netlist};
 
 use crate::name::Name;
@@ -7,8 +9,8 @@ use crate::name::Name;
 use super::super::*;
 use super::fixtures::*;
 use crate::active;
+use crate::active::Actives;
 use crate::active::script::{self, Op, Sample, eager};
-use crate::active::{Actives, Drive};
 use crate::newton::{Circuit, Conditions, Iterate, newton};
 use crate::op;
 
@@ -671,7 +673,7 @@ fn a_core_that_stops_where_it_reached_is_caught() {
 
 #[test]
 #[should_panic(
-    expected = "a sample, an input, a record or a touch at a landing never changes an image"
+    expected = "a sample, an input, a record or an event at a landing never changes an image"
 )]
 fn a_sample_that_drives_at_its_read_is_caught() {
     let netlist = pin_into_rc(2 * US);

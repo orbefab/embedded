@@ -5,7 +5,7 @@
 //! waveform stores each frame the same way. A query walks bit boundaries. It does not
 //! store an edge list.
 
-use crate::time::Time;
+use orbe_model::Time;
 
 use super::{Event, Schedule, Value};
 

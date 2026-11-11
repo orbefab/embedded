@@ -1,4 +1,4 @@
-use crate::device::Cst816;
+use crate::device::Mismatch;
 use crate::netlist::{
     self, Appended, Baud, Chip, Contact, Document, Frame, Model, Netlist, Part, Schedule,
     SerialSend, Value,
@@ -533,22 +533,26 @@ fn ruling(session: &Session, input: &Input) -> Result<Time, Rejected> {
             level_ruling(&pot.position, *level, from, stop)
         }
         (Model::Potentiometer(_), Setting::Contact(_)) => Err(Rejected::WrongSetting),
-        (Model::Chip(Chip::Cst816(dev)), Setting::Touch(touch)) => {
-            if touch.x > Cst816::COORD_MAX || touch.y > Cst816::COORD_MAX {
-                return Err(Rejected::Value(ValueRule::Span));
+        (_, Setting::Event(event)) => match model.device() {
+            Some((row, events)) => {
+                let spec = row.events.iter().find(|spec| spec.name == event.name);
+                match spec.map(|spec| spec.declared(&event.fields)) {
+                    None | Some(Err(Mismatch::Shape)) => Err(Rejected::WrongSetting),
+                    Some(Err(Mismatch::Span)) => Err(Rejected::Value(ValueRule::Span)),
+                    Some(Ok(_)) => landing(events.earliest(from), stop),
+                }
             }
-            landing(dev.earliest(from), stop)
-        }
-        (_, Setting::Touch(_)) => Err(
-            if matches!(model, Model::Switch(_) | Model::Potentiometer(_))
-                || model.level().is_some()
-                || model.serial().is_some()
-            {
-                Rejected::WrongSetting
-            } else {
-                Rejected::NotSettable
-            },
-        ),
+            None => Err(
+                if matches!(model, Model::Switch(_) | Model::Potentiometer(_))
+                    || model.level().is_some()
+                    || model.serial().is_some()
+                {
+                    Rejected::WrongSetting
+                } else {
+                    Rejected::NotSettable
+                },
+            ),
+        },
         (_, Setting::Serial(send)) => serial_ruling(model, send, from, stop),
         (_, Setting::Contact(_)) => {
             if model.serial().is_some() || model.level().is_some() {
@@ -685,7 +689,11 @@ fn land(landings: &mut Netlist, input: &Input, at: Time) {
             frame: send.frame,
             bytes: send.bytes.clone(),
         }),
-        Setting::Touch(touch) => Appended::Touch(*touch),
+        Setting::Event(event) => {
+            let (row, _) = landings.part(id).model.device().unwrap();
+            let spec = row.events.iter().find(|spec| spec.name == event.name);
+            Appended::Event(spec.unwrap().declared(&event.fields).unwrap())
+        }
     };
     landings.append(id, at, to);
 }

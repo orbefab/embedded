@@ -1,13 +1,14 @@
 //! The first-target netlist runs in the engine with the button pressed from 50 ms to 150 ms,
 //! and lights the LED to the values measured on engine 0.42.0.
 
+use orbe_model::Time;
+
 use orbe_engine::netlist::Contact;
 
 mod common;
 
 use orbe_engine::name::{Name, Ref};
 
-use orbe_engine::time::Time;
 use orbe_engine::{Input, Session, Setting, Status};
 use orbe_scene::Files;
 

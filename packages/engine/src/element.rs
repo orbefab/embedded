@@ -1,3 +1,5 @@
+use orbe_model::Time;
+
 use crate::chip::Relay;
 use crate::netlist::{Model, NetId, PartId};
 
@@ -7,7 +9,6 @@ use crate::passive::{
     capacitor, current_source, inductor, potentiometer, resistor, switch, voltage_source,
 };
 use crate::semiconductor::{junction, transistor, zener};
-use crate::time::Time;
 
 use crate::chip;
 use crate::mna::{Layout, Node, Probe, Stamp, Unknowns};

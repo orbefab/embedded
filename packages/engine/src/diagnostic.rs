@@ -1,3 +1,5 @@
+use orbe_model::Time;
+
 use crate::netlist::MIN_GAP_PS;
 
 use std::borrow::Cow;
@@ -6,8 +8,6 @@ use serde::{Serialize, Serializer};
 
 use crate::blob::{Role, Sha256, Source};
 use crate::name::{Name, NameError, Ref};
-
-use crate::time::Time;
 
 /// `Error` means the engine has no trustworthy result.
 /// `Warning` means the result stands and the circuit still has a problem.
@@ -44,7 +44,8 @@ pub enum ValueRule {
     AboveDrop,
     /// A fuse byte selects a mode the model does not run.
     Unsupported,
-    /// A touch coordinate is outside 0 to 4095.
+    /// A device event's integer is outside its span, such as a touch coordinate outside 0 to
+    /// 4095.
     Span,
     /// An LED count is outside 1 to 1024.
     Leds,
@@ -191,7 +192,7 @@ pub enum AnalysisRule {
 }
 
 /// Which rule a schedule event broke. A switch, a `steps` source, a potentiometer, a
-/// `serial` source, and a `cst816` touch share it.
+/// `serial` source, and a device event such as a `cst816` touch share it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScheduleRule {

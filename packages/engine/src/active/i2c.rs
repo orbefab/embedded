@@ -1,5 +1,6 @@
-//! An I2C target on SCL and SDA. It matches a 7-bit address, drives SDA low for an ACK and for
-//! a zero bit of a read, and releases SDA otherwise. It never drives SCL.
+//! The host's I2C target engine on SCL and SDA. It matches the 7-bit address its device
+//! declares, drives SDA low for an ACK and for a zero bit of a read, and releases SDA otherwise.
+//! It never drives SCL. The device sees transfers and bytes, through [`Target`].
 //!
 //! A bit is sampled on the target's own SCL rise. SDA moves [`DATA_HOLD_PS`] after the
 //! target's own SCL fall. The image is unchanged at the input.
@@ -11,37 +12,62 @@
 /// `tVD;DAT` for every mode. The target needs SCL low for more than this.
 pub(crate) const DATA_HOLD_PS: u64 = 300_000;
 
-use crate::time::Time;
+use orbe_model::{Ack, Cx, Dir, Drive, I2cTarget, Time};
 
-use super::Drive;
+use super::native::Port;
+use crate::diagnostic::ProtocolRule;
 
+/// The bus a device declares: its address, and which of its watches are SCL, SDA and the pin
+/// that holds the bus in reset while it reads low.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AckKind {
-    Address,
-    Byte,
+pub(crate) struct Bus {
+    pub(crate) address: u8,
+    pub(crate) scl: usize,
+    pub(crate) sda: usize,
+    pub(crate) reset: Option<usize>,
 }
 
-/// What the target stores. The engine owns the bus phases and calls this for the bytes.
+/// What the engine calls for the bytes: a device's [`I2cTarget`], or a test's recorder.
 pub(crate) trait Target {
-    fn matches(&self, address: u8) -> bool;
-    fn reset(&mut self);
-    /// The address matched as a write. What the following [`Target::write`] bytes mean is the
-    /// target's own, such as a register pointer and then data.
-    fn start_write(&mut self) {}
-    fn start_read(&mut self) {}
-    /// The eighth SCL rise of a write delivered `byte`. Return whether to ACK it.
-    fn write(&mut self, at: Time, byte: u8) -> bool;
+    /// The address matched, to write to the target or to read from it.
+    fn start(&mut self, at: Time, dir: Dir);
+    /// The eighth SCL rise of a write delivered `byte`.
+    fn write(&mut self, at: Time, byte: u8) -> Ack;
     /// The SCL fall after an address ACK, or after a master ACK that asked for another byte.
     fn read(&mut self, at: Time) -> u8;
-    /// This target's own ACK rise. `kind` is the address or the data byte, and `accepted` is
-    /// whether this target drove the ACK. Another device's address does not call this.
-    fn on_ack(&mut self, _at: Time, _kind: AckKind, _accepted: bool) {}
-    /// The master's ACK or NACK rise during a read. `ack` is true when the master asked for
-    /// another byte. A target that samples its pins for the next byte does it here.
-    /// [`Target::read`] of that byte runs on the following fall.
-    fn on_read_ack(&mut self, _at: Time, _ack: bool) {}
+    /// The master's ACK or NACK rise during a read. `more` is true when the master asked for
+    /// another byte. [`Target::read`] of that byte runs on the following fall.
+    fn master_ack(&mut self, at: Time, more: bool);
     /// A STOP, from any phase.
-    fn on_stop(&mut self, _at: Time) {}
+    fn stop(&mut self, at: Time);
+}
+
+/// A device and the context of the call the engine makes on it.
+struct Called<'a, D> {
+    device: &'a mut D,
+    cx: &'a mut Cx,
+}
+
+impl<D: I2cTarget> Target for Called<'_, D> {
+    fn start(&mut self, at: Time, dir: Dir) {
+        self.device.start(self.cx, at, dir);
+    }
+
+    fn write(&mut self, at: Time, byte: u8) -> Ack {
+        self.device.write(self.cx, at, byte)
+    }
+
+    fn read(&mut self, at: Time) -> u8 {
+        self.device.read(self.cx, at)
+    }
+
+    fn master_ack(&mut self, at: Time, more: bool) {
+        self.device.master_ack(self.cx, at, more);
+    }
+
+    fn stop(&mut self, at: Time) {
+        self.device.stop(self.cx, at);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,13 +97,10 @@ enum Phase {
     DriveAck {
         ack: bool,
         next: Next,
-        address: bool,
     },
     /// The ACK level is on the wire. The next SCL fall ends it.
     HoldAck {
         next: Next,
-        kind: AckKind,
-        accepted: bool,
     },
     /// `bit` of `byte` is on the wire. The next SCL fall ends it.
     HoldBit {
@@ -119,6 +142,7 @@ impl Pending {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Engine {
+    bus: Bus,
     phase: Phase,
     seen: bool,
     in_reset: bool,
@@ -132,13 +156,10 @@ pub(crate) struct Engine {
     release_on_fall: bool,
 }
 
-pub(crate) struct Edge {
-    pub(crate) entered_reset: bool,
-}
-
 impl Engine {
-    pub(crate) const fn new() -> Engine {
+    pub(crate) const fn new(bus: Bus) -> Engine {
         Engine {
+            bus,
             phase: Phase::Idle,
             seen: false,
             in_reset: false,
@@ -149,14 +170,6 @@ impl Engine {
             sda_blocked_at: None,
             release_on_fall: false,
         }
-    }
-
-    pub(crate) fn sda_blocked_at(self) -> Option<Time> {
-        self.sda_blocked_at
-    }
-
-    pub(crate) fn in_reset(self) -> bool {
-        self.in_reset
     }
 
     pub(crate) fn due_at(self) -> Option<Time> {
@@ -192,28 +205,22 @@ impl Engine {
         sda: bool,
         reset: bool,
         dev: &mut impl Target,
-    ) -> Edge {
+    ) {
         if reset {
-            let entered = !self.in_reset;
-            self.in_reset = true;
-            if entered {
+            if !self.in_reset {
                 self.phase = Phase::Idle;
                 self.release_on_fall = false;
                 self.release_anyway(at);
-                dev.reset();
             }
+            self.in_reset = true;
             self.note(scl, sda);
-            return Edge {
-                entered_reset: entered,
-            };
+            return;
         }
         let left_reset = self.in_reset;
         self.in_reset = false;
         if !self.seen || left_reset {
             self.note(scl, sda);
-            return Edge {
-                entered_reset: false,
-            };
+            return;
         }
         let scl_rose = scl && !self.scl;
         let scl_fell = !scl && self.scl;
@@ -230,14 +237,11 @@ impl Engine {
         } else if self.scl && sda_rose {
             self.phase = Phase::Idle;
             self.want(at, false);
-            dev.on_stop(at);
+            dev.stop(at);
         } else if scl_rose {
             self.on_rise(at, dev);
         } else if scl_fell {
             self.on_fall(at, dev);
-        }
-        Edge {
-            entered_reset: false,
         }
     }
 
@@ -268,28 +272,23 @@ impl Engine {
                     Recv::Address => {
                         let address = shifter >> 1;
                         let read = shifter & 1 == 1;
-                        let matched = dev.matches(address);
+                        let matched = address == self.bus.address;
                         let next = if !matched {
                             Next::Idle
                         } else if read {
-                            dev.start_read();
+                            dev.start(at, Dir::Read);
                             Next::Read
                         } else {
-                            dev.start_write();
+                            dev.start(at, Dir::Write);
                             Next::Write
                         };
-                        Phase::DriveAck {
-                            ack: matched,
-                            next,
-                            address: true,
-                        }
+                        Phase::DriveAck { ack: matched, next }
                     }
                     Recv::Data => {
-                        let ack = dev.write(at, shifter);
+                        let ack = dev.write(at, shifter) == Ack::Yes;
                         Phase::DriveAck {
                             ack,
                             next: if ack { Next::Write } else { Next::Idle },
-                            address: false,
                         }
                     }
                 };
@@ -300,21 +299,12 @@ impl Engine {
                 } else {
                     let ack = !self.sda;
                     self.phase = Phase::AfterAck { cont: ack };
-                    dev.on_read_ack(at, ack);
-                }
-            }
-            Phase::HoldAck { kind, accepted, .. } => {
-                let on_wire = if accepted {
-                    self.sda_low
-                } else {
-                    !self.sda_low
-                };
-                if on_wire && !(kind == AckKind::Address && !accepted) {
-                    dev.on_ack(at, kind, accepted);
+                    dev.master_ack(at, ack);
                 }
             }
             Phase::Idle
             | Phase::DriveAck { .. }
+            | Phase::HoldAck { .. }
             | Phase::HoldBit { .. }
             | Phase::AfterAck { .. } => {}
         }
@@ -326,17 +316,9 @@ impl Engine {
             self.want(at, false);
         }
         match self.phase {
-            Phase::DriveAck { ack, next, address } => {
+            Phase::DriveAck { ack, next } => {
                 self.want(at, ack);
-                self.phase = Phase::HoldAck {
-                    next,
-                    kind: if address {
-                        AckKind::Address
-                    } else {
-                        AckKind::Byte
-                    },
-                    accepted: ack,
-                };
+                self.phase = Phase::HoldAck { next };
             }
             Phase::HoldAck { next, .. } => self.begin(at, next, dev),
             Phase::HoldBit { byte, bit } if bit > 0 => {
@@ -415,8 +397,42 @@ impl Engine {
     }
 }
 
-pub(crate) fn sda_drive(low: bool) -> Drive {
-    if low { Drive::Low } else { Drive::Off }
+/// SDA, the one pin the engine drives.
+impl<D: I2cTarget> Port<D> for Engine {
+    const PINS: usize = 1;
+
+    fn drive(&self, image: &mut [Drive]) {
+        image[0] = if self.sda_low { Drive::Low } else { Drive::Off };
+    }
+
+    fn due_at(&self) -> Option<Time> {
+        Engine::due_at(*self)
+    }
+
+    fn take_due(&mut self, at: Time) {
+        Engine::take_due(self, at);
+    }
+
+    fn input(&mut self, device: &mut D, cx: &mut Cx, at: Time, levels: &[bool]) {
+        let Bus {
+            scl, sda, reset, ..
+        } = self.bus;
+        let reset = reset.is_some_and(|pin| !levels[pin]);
+        self.edge(
+            at,
+            levels[scl],
+            levels[sda],
+            reset,
+            &mut Called { device, cx },
+        );
+    }
+
+    fn broke(&self, found: &mut Vec<(ProtocolRule, Time)>) {
+        found.extend(
+            self.sda_blocked_at
+                .map(|at| (ProtocolRule::SdaWhileSclHigh, at)),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -429,8 +445,7 @@ mod tests {
         StartRead,
         Write(u8),
         Read(u8),
-        Ack(AckKind, bool),
-        ReadAck(bool),
+        MasterAck(bool),
         Stop,
     }
 
@@ -457,34 +472,29 @@ mod tests {
     }
 
     impl Target for Dev {
-        fn matches(&self, address: u8) -> bool {
-            address == 0x15
+        fn start(&mut self, _at: Time, dir: Dir) {
+            match dir {
+                Dir::Write => {
+                    self.events.push(Ev::StartWrite);
+                    self.set_pointer = true;
+                }
+                Dir::Read => self.events.push(Ev::StartRead),
+            }
         }
 
-        fn reset(&mut self) {}
-
-        fn start_write(&mut self) {
-            self.events.push(Ev::StartWrite);
-            self.set_pointer = true;
-        }
-
-        fn start_read(&mut self) {
-            self.events.push(Ev::StartRead);
-        }
-
-        fn write(&mut self, _at: Time, byte: u8) -> bool {
+        fn write(&mut self, _at: Time, byte: u8) -> Ack {
             self.events.push(Ev::Write(byte));
             if self.set_pointer {
                 self.pointer = byte;
                 self.set_pointer = false;
-                return true;
+                return Ack::Yes;
             }
             if self.nack == Some(self.pointer) {
-                return false;
+                return Ack::No;
             }
             self.mem[usize::from(self.pointer)] = byte;
             self.pointer = self.pointer.wrapping_add(1);
-            true
+            Ack::Yes
         }
 
         fn read(&mut self, _at: Time) -> u8 {
@@ -494,15 +504,11 @@ mod tests {
             byte
         }
 
-        fn on_ack(&mut self, _at: Time, kind: AckKind, accepted: bool) {
-            self.events.push(Ev::Ack(kind, accepted));
+        fn master_ack(&mut self, _at: Time, more: bool) {
+            self.events.push(Ev::MasterAck(more));
         }
 
-        fn on_read_ack(&mut self, _at: Time, ack: bool) {
-            self.events.push(Ev::ReadAck(ack));
-        }
-
-        fn on_stop(&mut self, _at: Time) {
+        fn stop(&mut self, _at: Time) {
             self.events.push(Ev::Stop);
         }
     }
@@ -518,7 +524,12 @@ mod tests {
     impl Step {
         fn power(dev: &mut Dev) -> Step {
             let mut step = Step {
-                engine: Engine::new(),
+                engine: Engine::new(Bus {
+                    address: 0x15,
+                    scl: 0,
+                    sda: 1,
+                    reset: None,
+                }),
                 t: 0,
                 scl: true,
                 master: true,
@@ -617,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn another_address_does_not_call_on_ack() {
+    fn another_address_starts_no_transfer() {
         let mut dev = Dev::new();
         let mut step = Step::power(&mut dev);
         step.start(&mut dev);
@@ -628,28 +639,34 @@ mod tests {
     }
 
     #[test]
-    fn on_ack_names_the_byte_and_on_read_ack_precedes_the_next_read() {
+    fn a_refused_byte_is_nacked_and_a_master_ack_precedes_the_next_read() {
         let mut dev = Dev::new();
         dev.nack = Some(0x11);
         let mut step = Step::power(&mut dev);
         step.start(&mut dev);
         step.byte(&mut dev, 0x15 << 1);
         step.ack_clock(&mut dev);
+        assert!(step.driven, "the address is ACKed");
         step.byte(&mut dev, 0x10);
         step.ack_clock(&mut dev);
+        assert!(step.driven, "0x10 is ACKed");
         step.byte(&mut dev, 0x5A);
         step.ack_clock(&mut dev);
+        assert!(step.driven, "0x5A is ACKed");
         step.byte(&mut dev, 0x5B);
         step.ack_clock(&mut dev);
+        assert!(!step.driven, "0x5B, at the refused pointer, is NACKed");
         step.stop(&mut dev);
         step.start(&mut dev);
         step.byte(&mut dev, 0x15 << 1);
         step.ack_clock(&mut dev);
         step.byte(&mut dev, 0xA7);
         step.ack_clock(&mut dev);
+        assert!(step.driven, "0xA7 is ACKed");
         step.repeated_start(&mut dev);
         step.byte(&mut dev, (0x15 << 1) | 1);
         step.ack_clock(&mut dev);
+        assert!(step.driven, "the read address is ACKed");
         step.read_byte(&mut dev);
         step.master_ack(&mut dev, true);
         step.read_byte(&mut dev);
@@ -659,24 +676,17 @@ mod tests {
             dev.events,
             vec![
                 Ev::StartWrite,
-                Ev::Ack(AckKind::Address, true),
                 Ev::Write(0x10),
-                Ev::Ack(AckKind::Byte, true),
                 Ev::Write(0x5A),
-                Ev::Ack(AckKind::Byte, true),
                 Ev::Write(0x5B),
-                Ev::Ack(AckKind::Byte, false),
                 Ev::Stop,
                 Ev::StartWrite,
-                Ev::Ack(AckKind::Address, true),
                 Ev::Write(0xA7),
-                Ev::Ack(AckKind::Byte, true),
                 Ev::StartRead,
-                Ev::Ack(AckKind::Address, true),
                 Ev::Read(0xB4),
-                Ev::ReadAck(true),
+                Ev::MasterAck(true),
                 Ev::Read(0),
-                Ev::ReadAck(false),
+                Ev::MasterAck(false),
                 Ev::Stop,
             ]
         );
@@ -696,20 +706,14 @@ mod tests {
         step.read_byte(&mut dev);
         assert!(step.driven, "bit 0 of 0xB4 holds SDA");
         step.ack_rise_while_still_driving(&mut dev);
-        assert_eq!(
-            dev.events,
-            vec![
-                Ev::StartRead,
-                Ev::Ack(AckKind::Address, true),
-                Ev::Read(0xB4),
-            ]
-        );
+        let held = vec![Ev::StartRead, Ev::Read(0xB4)];
+        assert_eq!(dev.events, held);
         step.t += 1_000;
         step.scl = false;
         step.engine
             .edge(Time::from_ps(step.t), false, step.wire(), false, &mut dev);
         step.pump(&mut dev);
         assert!(!step.driven, "the target is not driving after the fall");
-        assert_eq!(dev.events.len(), 3, "no read ack and no further byte");
+        assert_eq!(dev.events, held, "no read ack and no further byte");
     }
 }

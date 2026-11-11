@@ -14,13 +14,15 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use crate::active::{Chip, Drive, Frame, Output, Stage, Stop, Takes};
+use orbe_model::{Cs, Drive, Lanes, Pulses, Spi, SpiPhase, Stop, Time};
+
+use crate::active::{Chip, Frame, Output, Stage, Takes};
 use crate::blob::{Blob, Blobs, Role, Sha256};
 use crate::diagnostic::{
     BlobRule, ChipSetting, Diagnostic, FirmwareRule, FlashRefusal, ResetReason, ScheduleRule,
     Unsupported,
 };
-use crate::link::{self, Cs, Lanes, Record, RecordKind, Spi, SpiNets, SpiPhase};
+use crate::link::{Record, RecordKind, SpiNets};
 use crate::mna::Node;
 use crate::name::{Name, Ref};
 use crate::netlist::Event;
@@ -33,7 +35,6 @@ use crate::netlist::flash::{self, Flash};
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
 use crate::netlist::json::{PinMap, WireValue, resolve_value};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
-use crate::time::Time;
 use crate::watch::{Signal, Watch};
 use orbe_espressif::s3::{
     self, CoreId, Duty, Fault, Halt, PadDrive, Pc, Refused, ResetCause, TICK_HZ, Tick, Touch,
@@ -320,11 +321,13 @@ impl Core {
             start: time(train.start),
             end: time(train.end),
             pin: Self::pin(train.pad).expect("a pad with a net has a pin"),
-            kind: RecordKind::Pulses(link::Pulses {
-                idle: train.idle,
-                pulses: std::sync::Arc::from(train.pulses),
+            kind: RecordKind::Pulses {
+                pulses: Pulses {
+                    idle: train.idle,
+                    pulses: std::sync::Arc::from(train.pulses),
+                },
                 net: self.nets[k],
-            }),
+            },
         }
     }
 
@@ -335,7 +338,7 @@ impl Core {
         debug_assert!(
             self.served != Some(at)
                 || self.records.iter().all(|record| {
-                    !matches!(record.kind, RecordKind::Pulses(_)) || record.end <= at
+                    !matches!(record.kind, RecordKind::Pulses { .. }) || record.end <= at
                 }),
             "a held record ends after the cut the copy stands on"
         );
@@ -359,11 +362,13 @@ impl Core {
                     start: time(flight.start),
                     end,
                     pin: Self::pin(pad)?,
-                    kind: RecordKind::Pulses(link::Pulses {
-                        idle: flight.idle,
-                        pulses: std::sync::Arc::from(flight.pulses.clone()),
+                    kind: RecordKind::Pulses {
+                        pulses: Pulses {
+                            idle: flight.idle,
+                            pulses: std::sync::Arc::from(flight.pulses.clone()),
+                        },
                         net: self.nets[k],
-                    }),
+                    },
                 })
             })
             .collect()
@@ -383,12 +388,14 @@ impl Core {
             start: time(duty.at),
             end: time(duty.at),
             pin: Self::pin(duty.pad).expect("a pad with a net has a pin"),
-            kind: RecordKind::Duty(link::Duty {
-                duty: duty.duty,
-                resolution: duty.resolution,
-                hz: duty.hz,
+            kind: RecordKind::Duty {
+                duty: orbe_model::Duty {
+                    duty: duty.duty,
+                    resolution: duty.resolution,
+                    hz: duty.hz,
+                },
                 net: self.nets[k],
-            }),
+            },
         }
     }
 
@@ -414,30 +421,32 @@ impl Core {
             start: time(transfer.start),
             end: time(transfer.end),
             pin,
-            kind: RecordKind::Spi(Spi {
-                phases: transfer
-                    .phases
-                    .iter()
-                    .map(|phase| SpiPhase {
-                        bits: phase.bits,
-                        lanes: lanes(phase.lanes),
-                        value: phase.value,
-                    })
-                    .collect(),
-                lanes: lanes(transfer.lanes),
-                data: transfer.data.into(),
-                clock_hz: transfer.clock_hz,
-                cs: if transfer.held {
-                    Cs::Held
-                } else {
-                    Cs::Released
+            kind: RecordKind::Spi {
+                spi: Spi {
+                    phases: transfer
+                        .phases
+                        .iter()
+                        .map(|phase| SpiPhase {
+                            bits: phase.bits,
+                            lanes: lanes(phase.lanes),
+                            value: phase.value,
+                        })
+                        .collect(),
+                    lanes: lanes(transfer.lanes),
+                    data: transfer.data.into(),
+                    clock_hz: transfer.clock_hz,
+                    cs: if transfer.held {
+                        Cs::Held
+                    } else {
+                        Cs::Released
+                    },
                 },
                 nets: SpiNets {
                     cs: net(pads.cs),
                     sclk: net(pads.sclk),
                     data: pads.data.map(net),
                 },
-            }),
+            },
         }
     }
 
@@ -883,9 +892,9 @@ mod tests {
         core
     }
 
-    fn pulses_of(record: &Record) -> &link::Pulses {
+    fn pulses_of(record: &Record) -> (&Pulses, NetId) {
         match &record.kind {
-            RecordKind::Pulses(pulses) => pulses,
+            RecordKind::Pulses { pulses, net } => (pulses, *net),
             other => panic!("{other:?}"),
         }
     }
@@ -906,10 +915,10 @@ mod tests {
         assert_eq!(record.seq, 0);
         assert_eq!(record.start, Time::from_ps(875_000));
         assert_eq!(record.end, Time::from_ps(2_475_000));
-        let pulses = pulses_of(&record);
+        let (pulses, net) = pulses_of(&record);
         assert!(!pulses.idle);
-        assert_eq!(pulses.net, NetId::GROUND);
-        assert_eq!(pulses.net, core.nets[0]);
+        assert_eq!(net, NetId::GROUND);
+        assert_eq!(net, core.nets[0]);
         let pair = [(true, 200_000u64), (false, 200_000)];
         assert_eq!(pulses.pulses.len(), 8);
         for (index, pulse) in pulses.pulses.iter().enumerate() {
@@ -938,8 +947,8 @@ mod tests {
         );
         assert!(core.records.is_empty(), "gpio1 sends no second record");
         assert_eq!(record.pin, "GPIO0");
-        assert_eq!(pulses_of(&record).net, core.nets[0]);
-        assert_eq!(pulses_of(&record).pulses.len(), 8);
+        assert_eq!(pulses_of(&record).1, core.nets[0]);
+        assert_eq!(pulses_of(&record).0.pulses.len(), 8);
     }
 
     #[test]
@@ -956,8 +965,8 @@ mod tests {
         assert_eq!(flying[0].pin, "GPIO0");
         assert_eq!(flying[0].start, Time::from_ps(875_000));
         assert_eq!(flying[0].end, Time::from_ps(mid.as_ps() + 1));
-        let pulses = pulses_of(&flying[0]);
-        assert_eq!(pulses.net, core.nets[0]);
+        let (pulses, net) = pulses_of(&flying[0]);
+        assert_eq!(net, core.nets[0]);
         assert_eq!(
             pulses.pulses.as_ref(),
             &[
@@ -1002,7 +1011,7 @@ mod tests {
         let flying = committed.in_flight(mid);
         assert_eq!(flying.len(), 1);
         assert_eq!(flying[0].end, Time::from_ps(mid.as_ps() + 1));
-        assert_eq!(pulses_of(&flying[0]).pulses.len(), 5);
+        assert_eq!(pulses_of(&flying[0]).0.pulses.len(), 5);
     }
 
     #[test]
@@ -1025,7 +1034,7 @@ mod tests {
         let flying = core.in_flight(mid);
         assert_eq!(flying.len(), 1);
         assert_eq!(
-            pulses_of(&flying[0]).pulses.as_ref(),
+            pulses_of(&flying[0]).0.pulses.as_ref(),
             &[
                 (true, 200_000),
                 (false, 200_000),

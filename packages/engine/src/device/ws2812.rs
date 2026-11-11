@@ -14,7 +14,9 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-use crate::active::{Chip, Drive, Stop, Takes};
+use orbe_model::{Drive, Stop, Time};
+
+use crate::active::{Chip, Takes};
 use crate::diagnostic::{Diagnostic, ProtocolRule, ValueRule};
 use crate::leds::Chain as Observed;
 use crate::link::{LinkRow, Record, RecordKind};
@@ -25,7 +27,6 @@ use crate::netlist::PartId;
 use crate::netlist::Threshold;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
 use crate::netlist::json::{PinMap, resolve_pins};
-use crate::time::Time;
 use crate::watch::{Signal, Watch};
 
 const VCC: usize = 0;
@@ -165,7 +166,7 @@ impl Core {
 
     pub(crate) fn take(&mut self, at: Time, records: &[LinkRow]) {
         for row in records {
-            let RecordKind::Pulses(pulses) = &row.record.kind else {
+            let RecordKind::Pulses { pulses, .. } = &row.record.kind else {
                 continue;
             };
             debug_assert_eq!(row.record.end, at);
@@ -176,7 +177,7 @@ impl Core {
     /// The part of `record` sent by `at`, where the run ends inside it. A record lands only at
     /// its end, so without this the run would keep a latch the record undoes.
     pub(crate) fn cut(&mut self, at: Time, record: &Record) {
-        let RecordKind::Pulses(pulses) = &record.kind else {
+        let RecordKind::Pulses { pulses, .. } = &record.kind else {
             return;
         };
         debug_assert!(record.start <= at && at < record.end);

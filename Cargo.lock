@@ -754,6 +754,13 @@ name = "orbe-avr"
 version = "0.1.0"
 
 [[package]]
+name = "orbe-device-check"
+version = "0.1.0"
+dependencies = [
+ "orbe-model",
+]
+
+[[package]]
 name = "orbe-engine"
 version = "0.1.0"
 dependencies = [
@@ -762,6 +769,7 @@ dependencies = [
  "orbe-engine",
  "orbe-espressif",
  "orbe-microchip",
+ "orbe-model",
  "orbe-xtensa",
  "serde",
  "serde_json",
@@ -785,6 +793,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbe-model"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "orbe-registry"
 version = "0.1.0"
 dependencies = [
@@ -805,6 +820,7 @@ dependencies = [
  "jsonc-parser",
  "libm",
  "orbe-engine",
+ "orbe-model",
  "rustix",
  "schemars",
  "serde",
@@ -820,6 +836,7 @@ name = "orbe-session"
 version = "0.1.0"
 dependencies = [
  "orbe-engine",
+ "orbe-model",
  "orbe-scene",
  "schemars",
  "serde",
