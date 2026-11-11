@@ -19,6 +19,7 @@ use crate::serial::{Serial as Delivered, SerialByte};
 use crate::timestamp::Timestamp;
 
 use crate::RunStats;
+use crate::active::native::Hosted;
 use crate::active::{self, Actives};
 use crate::chip;
 use crate::device::st77916;
@@ -121,14 +122,14 @@ pub struct Display<'s> {
 }
 
 /// An LED chain's colours, read from a session.
-pub struct Leds {
-    chain: crate::leds::Chain,
+pub struct Leds<'s> {
+    chain: &'s dyn Hosted,
 }
 
-impl Leds {
+impl Leds<'_> {
     /// Its colours, as one `observations.json` `leds` entry.
     pub fn chain(&self) -> crate::leds::Chain {
-        self.chain.clone()
+        crate::leds::Chain::shown(self.chain.shows(), self.chain.view())
     }
 }
 
@@ -722,16 +723,14 @@ impl Session {
 
     /// The LED chain `part` as it stands after the last accepted step, which is its colours at
     /// `now`. `None` when `part` is no chain.
-    pub fn leds(&self, part: &Name) -> Option<Leds> {
+    pub fn leds(&self, part: &Name) -> Option<Leds<'_>> {
         let k = self
             .actives
             .led_names()
             .iter()
             .position(|name| name == part)?;
         let chain = self.actives.chains().nth(k)?;
-        Some(Leds {
-            chain: chain.observed,
-        })
+        Some(Leds { chain })
     }
 
     /// Each USART, chips in part order, then each chip's in datasheet order: the part's name and
@@ -835,20 +834,25 @@ impl Session {
         }
         let names = self.actives.led_names();
         if !names.is_empty() {
-            let seen: Vec<_> = self.actives.chains().collect();
-            debug_assert_eq!(names.len(), seen.len());
+            let chains: Vec<&dyn Hosted> = self.actives.chains().collect();
+            debug_assert_eq!(names.len(), chains.len());
             let parts: Vec<_> = names
                 .iter()
-                .zip(&seen)
-                .map(|(name, chain)| (name.clone(), chain.observed.clone()))
+                .zip(&chains)
+                .map(|(name, chain)| {
+                    (
+                        name.clone(),
+                        crate::leds::Chain::shown(chain.shows(), chain.view()),
+                    )
+                })
                 .collect();
             let mut rows = Vec::new();
-            for (index, chain) in seen.iter().enumerate() {
-                for (at, pixels) in &chain.latches {
+            for (index, chain) in chains.iter().enumerate() {
+                for shown in chain.shown() {
                     rows.push(Latch {
-                        at: *at,
+                        at: shown.at,
                         part: u16::try_from(index).expect("a run has few chains"),
-                        pixels: pixels.clone(),
+                        pixels: crate::leds::pixels(&shown.bytes),
                     });
                 }
             }

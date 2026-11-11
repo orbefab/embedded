@@ -6,7 +6,7 @@ A built-in device is a folder in `packages/engine/src/device/<kind>/`. `model.rs
 
 ## State
 
-A device is its state. `State` is `Copy + Send + 'static`: fixed-size plain data with no heap and no pointers. The engine keeps several copies of each part, runs one ahead, and keeps or drops it by copying, so a copy must be a whole checkpoint.
+A device is its state. `State` is `Copy + Send + 'static`: fixed-size plain data with no heap and no pointers. The engine keeps several copies of each part, runs one ahead, and keeps or drops it by copying, so a copy must be a whole checkpoint. A landing copies the state, so a device whose size depends on a param, such as an LED chain, takes its size as a const generic, and the engine builds the smallest that holds the part. The WS2812 comes in 16, 64, 256 and 1024 LEDs.
 
 ## Device
 
@@ -18,8 +18,13 @@ A device is its state. `State` is `Copy + Send + 'static`: fixed-size plain data
 | `input(cx, at, levels)` | Its watches' levels from `at` on. |
 | `sample(cx, at, volts)` | The volts of its samples at a stop that asked for them. |
 | `event(cx, at, event)` | An event it declares, with fields the engine has checked against the declaration. |
+| `view()` | What it shows now, laid out as `SHOWS` says. Empty by default. |
 
-`input`, `sample` and `event` never change the drives. What they cause comes at least 1 ps later, at a stop. The engine checks this and panics on a device that breaks it. `cx` is what a device may do during a call besides change its own state. `broke` names a rule and the time, and the first call wins. `view` replaces the bytes the host reads after the call, such as a chain's colours at a latch.
+`SHOWS` is what a device shows besides its drives: nothing by default, or `Leds { kind, order }`, an LED chain whose view is three bytes per LED in `order`. The engine lists a part as an LED chain only when its device declares one.
+
+Only `run_until` changes the drives. `input`, `sample`, `event`, and every call of a role, such as `write` or `pulse`, leave them alone. What they cause comes at least 1 ps later, at a stop. The engine checks this after each of those calls, in every build, and panics on a device that breaks it.
+
+`cx` is what a device may do during a call besides change its own state. The engine reads it after every call. `broke(rule, at)` names a rule and the time, and the first rule a device breaks in a run is its `chip.protocol` warning. The rule is the warning's `rule`, such as `bit`. A rule the engine does not know panics. `show()` says what the device shows changed. The engine copies `view()` after that call, at the call's time, as a row. A device that shows nothing and calls `show` panics. A row from `run_until` takes the time of the stop it returns.
 
 ## I2C targets
 
@@ -37,14 +42,14 @@ An `I2cTarget` is a device on an I2C bus. The engine runs the bus: it watches `S
 
 ## Pulse targets
 
-A `PulseTarget` is a device on a pulsed line. The engine watches the line, times each level, and calls the device when a level ends. The device sees the level and how long it held.
+A `PulseTarget` is a device on a pulsed line. The engine watches the line, times each level, and calls the device when a level ends. The device sees the level and how long it held. `IDLE` declares the level the line rests at and how many picoseconds a rest lasts before the line is idle.
 
 | Method | What it does |
 | --- | --- |
 | `pulse(cx, at, level, width)` | A level that held for `width` picoseconds ended at `at`. |
-| `idle(cx, at, level)` | The line has held `level` for the idle time the host was given, at `at`. |
+| `idle(cx, at, level)` | The line has rested at `level`, `IDLE`'s level, for `IDLE`'s time, at `at`. |
 
-The WS2812 is the pulse target. It reads `pulse` and `idle`. [engine.md](engine.md#pulse-targets) gives what the engine keeps, and [engine.md](engine.md#records) gives the WS2812's windows.
+The WS2812 is a pulse target whose line rests low. It reads `pulse` and `idle`, latches at `idle`, and shows its colours as an LED chain. [engine.md](engine.md#pulse-targets) gives what the engine keeps, and [engine.md](engine.md#records) gives the WS2812's windows.
 
 ## Events
 

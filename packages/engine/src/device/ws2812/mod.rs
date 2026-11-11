@@ -1,5 +1,6 @@
 //! A `ws2812` chain behind the seam. It watches `DIN` and takes `Pulses` on that net. The
-//! device in [`model`] keeps the bits and the colours. The pulse engine times the line.
+//! device in [`model`] keeps the bits and the colours, and shows the colours. The pulse engine
+//! times the line.
 
 use std::collections::BTreeMap;
 
@@ -7,7 +8,7 @@ use serde::Deserialize;
 
 use orbe_model::{Device, Fields, Value};
 
-use crate::active::native::Native;
+use crate::active::native::{Hosted, Native};
 use crate::active::pulse::Pulse;
 use crate::active::{Chip, Core, Takes};
 use crate::diagnostic::{Diagnostic, ValueRule};
@@ -44,8 +45,6 @@ pub(crate) fn chip(part: PartId, chain: &Ws2812) -> Chip {
         offset: 0.0,
     };
     let threshold = &chain.input_threshold;
-    let device = model::Ws2812::new(&Fields::new(&[("leds", Value::Int(i64::from(chain.leds)))]))
-        .expect("leds is 1 to 1024");
     Chip {
         part: Some(part),
         outputs: Vec::new(),
@@ -63,12 +62,25 @@ pub(crate) fn chip(part: PartId, chain: &Ws2812) -> Chip {
             duty: None,
             pulses: Some(pins[DIN]),
         },
-        core: Core::Device(Box::new(Native::new(
-            device,
-            Pulse::<model::Ws2812>::ws2812(chain.leds),
-            0,
-        ))),
+        core: Core::Device(core(chain.leds)),
     }
+}
+
+/// The device sized to the chain: the smallest of 16, 64, 256 and 1024 LEDs that holds it. A
+/// landing copies the state, so a short chain copies little.
+fn core(leds: u16) -> Box<dyn Hosted> {
+    match leds {
+        0..=16 => sized::<16>(leds),
+        17..=64 => sized::<64>(leds),
+        65..=256 => sized::<256>(leds),
+        _ => sized::<{ Ws2812::LED_MAX as usize }>(leds),
+    }
+}
+
+fn sized<const N: usize>(leds: u16) -> Box<dyn Hosted> {
+    let device = model::Ws2812::<N>::new(&Fields::new(&[("leds", Value::Int(i64::from(leds)))]))
+        .expect("the state holds the chain");
+    Box::new(Native::new(device, Pulse::new(), 0))
 }
 
 /// A chain of WS2812E-1313 LEDs, an active chip with no clock of its own. It reads `DIN`

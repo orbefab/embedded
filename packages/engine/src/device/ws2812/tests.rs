@@ -1,13 +1,10 @@
-use orbe_model::{Device, Pulses, Stop, Time};
+use orbe_model::{Pulses, Stop, Time};
 
-use crate::active::native::{Hosted, Native};
-use crate::active::pulse::Pulse;
+use crate::active::native::Hosted;
 use crate::diagnostic::ProtocolRule;
-use crate::leds::Chain;
+use crate::leds::{self, Chain};
 use crate::link::{LinkRow, Record, RecordKind};
 use crate::netlist::NetId;
-
-use super::model::Ws2812;
 
 /// The sketch's bits, high then low.
 const ZERO: (u64, u64) = (312_500, 937_500);
@@ -17,8 +14,9 @@ const START: u64 = 1_000_000_000;
 /// RES is a low longer than this. Exactly this long is no reset.
 const RES: u64 = 280_000_000;
 
+/// A chain's core, as the engine builds it for a part of `count` LEDs.
 struct Core {
-    native: Native<Ws2812, Pulse<Ws2812>>,
+    hosted: Box<dyn Hosted>,
 }
 
 struct Latch {
@@ -29,54 +27,49 @@ struct Latch {
 impl Clone for Core {
     fn clone(&self) -> Self {
         Core {
-            native: self.native.clone(),
+            hosted: self.hosted.boxed(),
         }
     }
 }
 
 impl Core {
     fn new(count: u16) -> Core {
-        let device = Ws2812::new(&orbe_model::Fields::new(&[(
-            "leds",
-            orbe_model::Value::Int(i64::from(count)),
-        )]))
-        .expect("leds is 1 to 1024");
         Core {
-            native: Native::new(device, Pulse::ws2812(count), 0),
+            hosted: super::core(count),
         }
     }
 
     fn run_until(&mut self, limit: Time) -> Option<Stop> {
-        Hosted::run_until(&mut self.native, limit)
+        self.hosted.run_until(limit)
     }
 
     fn input(&mut self, at: Time, levels: &[bool]) {
-        Hosted::input(&mut self.native, at, levels);
+        self.hosted.input(at, levels);
     }
 
     fn land(&mut self, start: Time, idle: bool, pulses: &[(bool, u64)], end: Time) {
         let row = record(start.as_ps(), idle, pulses);
         debug_assert_eq!(row.record.end, end);
-        Hosted::take(&mut self.native, end, &[row]);
+        self.hosted.take(end, &[row]);
     }
 
     fn observed(&self) -> Chain {
-        Hosted::chain(&self.native)
-            .expect("a ws2812 is a pulse target")
-            .observed
+        Chain::shown(self.hosted.shows(), self.hosted.view())
     }
 
     fn latches(&self) -> Vec<Latch> {
-        Hosted::chain(&self.native)
-            .expect("a ws2812 is a pulse target")
-            .latches
-            .into_iter()
-            .map(|(at, pixels)| Latch { at, pixels })
+        self.hosted
+            .shown()
+            .iter()
+            .map(|shown| Latch {
+                at: shown.at,
+                pixels: leds::pixels(&shown.bytes),
+            })
             .collect()
     }
 
     fn broke(&self) -> Option<(ProtocolRule, Time)> {
-        let mut found = Hosted::broke(&self.native);
+        let mut found = self.hosted.broke();
         assert!(found.len() <= 1, "a chain warns once");
         found.pop()
     }

@@ -12,9 +12,9 @@
 /// `tVD;DAT` for every mode. The target needs SCL low for more than this.
 pub(crate) const DATA_HOLD_PS: u64 = 300_000;
 
-use orbe_model::{Ack, Cx, Dir, Drive, I2cTarget, Time};
+use orbe_model::{Ack, Dir, Drive, I2cTarget, Time};
 
-use super::native::Port;
+use super::native::{Hosting, Port};
 use crate::diagnostic::ProtocolRule;
 
 /// The bus a device declares: its address, and which of its watches are SCL, SDA and the pin
@@ -42,31 +42,25 @@ pub(crate) trait Target {
     fn stop(&mut self, at: Time);
 }
 
-/// A device and the context of the call the engine makes on it.
-struct Called<'a, D> {
-    device: &'a mut D,
-    cx: &'a mut Cx,
-}
-
-impl<D: I2cTarget> Target for Called<'_, D> {
+impl<D: I2cTarget> Target for Hosting<D> {
     fn start(&mut self, at: Time, dir: Dir) {
-        self.device.start(self.cx, at, dir);
+        self.call(at, |device, cx| device.start(cx, at, dir));
     }
 
     fn write(&mut self, at: Time, byte: u8) -> Ack {
-        self.device.write(self.cx, at, byte)
+        self.call(at, |device, cx| device.write(cx, at, byte))
     }
 
     fn read(&mut self, at: Time) -> u8 {
-        self.device.read(self.cx, at)
+        self.call(at, |device, cx| device.read(cx, at))
     }
 
     fn master_ack(&mut self, at: Time, more: bool) {
-        self.device.master_ack(self.cx, at, more);
+        self.call(at, |device, cx| device.master_ack(cx, at, more));
     }
 
     fn stop(&mut self, at: Time) {
-        self.device.stop(self.cx, at);
+        self.call(at, |device, cx| device.stop(cx, at));
     }
 }
 
@@ -409,22 +403,16 @@ impl<D: I2cTarget> Port<D> for Engine {
         Engine::due_at(*self)
     }
 
-    fn take_due(&mut self, _device: &mut D, _cx: &mut Cx, at: Time) {
+    fn take_due(&mut self, _dev: &mut Hosting<D>, at: Time) {
         Engine::take_due(self, at);
     }
 
-    fn input(&mut self, device: &mut D, cx: &mut Cx, at: Time, levels: &[bool]) {
+    fn input(&mut self, dev: &mut Hosting<D>, at: Time, levels: &[bool]) {
         let Bus {
             scl, sda, reset, ..
         } = self.bus;
         let reset = reset.is_some_and(|pin| !levels[pin]);
-        self.edge(
-            at,
-            levels[scl],
-            levels[sda],
-            reset,
-            &mut Called { device, cx },
-        );
+        self.edge(at, levels[scl], levels[sda], reset, dev);
     }
 
     fn broke(&self, found: &mut Vec<(ProtocolRule, Time)>) {

@@ -13,9 +13,11 @@ pub trait State: Copy + Send + 'static {}
 ///   `(reached, limit]` where its drives may change or it samples, or returns `None` once it has
 ///   done everything up to `limit`. Two calls to `l1` then `l2` leave the state one call to `l2`
 ///   does. All of a time's effects are one stop.
-/// - `input`, `sample` and `event` never change the drives. What they cause comes at least 1 ps
+/// - Only `run_until` changes the drives. What any other call causes comes at least 1 ps
 ///   later, at a stop.
 pub trait Device: State {
+    /// What it shows besides its drives. Nothing, unless it says otherwise.
+    const SHOWS: Shows = Shows::Nothing;
     /// Parses the part's logic params. Electrical params never reach the device.
     fn new(params: &Params<'_>) -> Result<Self, Error>;
     /// The first time in `(reached, limit]` where the drives may change or a sample is due.
@@ -29,6 +31,23 @@ pub trait Device: State {
     fn sample(&mut self, _cx: &mut Cx, _at: Time, _volts: &[f64]) {}
     /// An event it declares, such as a touch, at `at`.
     fn event(&mut self, _cx: &mut Cx, _at: Time, _event: Event<'_>) {}
+    /// What it shows now, laid out as [`SHOWS`](Self::SHOWS) says. The host reads it after a
+    /// call that ran [`Cx::show`], and at the end of a run.
+    fn view(&self) -> &[u8] {
+        &[]
+    }
+}
+
+/// What a device shows besides its drives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shows {
+    Nothing,
+    /// A chain of LEDs. [`Device::view`] is three bytes per LED, LED 0 first, in `order`, such
+    /// as `grb`. `kind` names the chain, such as `ws2812`.
+    Leds {
+        kind: &'static str,
+        order: &'static str,
+    },
 }
 
 /// A device that is an I2C target. The host runs the bus: it watches SCL and SDA, matches the
@@ -50,10 +69,20 @@ pub trait I2cTarget: Device {
 /// A device on a pulsed line. The host watches the line, times each level, and calls the device
 /// when a level ends. The device sees the level and how long it held.
 pub trait PulseTarget: Device {
+    /// The level the line rests at, and how long it holds that level before it is idle.
+    const IDLE: Idle;
     /// A level that held for `width` picoseconds ended at `at`.
     fn pulse(&mut self, cx: &mut Cx, at: Time, level: bool, width: u64);
-    /// The line has held `level` for the idle time the host was given, at `at`.
+    /// The line has held `level`, [`IDLE`](Self::IDLE)'s level, for its time, at `at`. A line
+    /// that rests from power-on is not idle: the host times it from the first change to it.
     fn idle(&mut self, _cx: &mut Cx, _at: Time, _level: bool) {}
+}
+
+/// When a pulsed line is idle: after it holds `level` for `after` picoseconds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Idle {
+    pub level: bool,
+    pub after: u64,
 }
 
 /// Which way a transfer goes, from the master's side.
@@ -70,30 +99,30 @@ pub enum Ack {
     No,
 }
 
-/// What a device may do during a call besides change its own state.
+/// What a device may do during a call besides change its own state. The host reads both after
+/// every call.
 ///
-/// [`broke`](Cx::broke) names a rule and the time. The first call wins. [`view`](Cx::view)
-/// replaces the bytes the host reads after the call, such as a chain's colours at a latch.
-#[derive(Debug, Default)]
+/// [`broke`](Cx::broke) names a rule and the time. The first call wins. [`show`](Cx::show) says
+/// what the device shows changed.
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Cx {
     broken: Option<(&'static str, Time)>,
-    view: Vec<u8>,
-    viewed: bool,
+    shown: bool,
 }
 
 impl Cx {
-    /// The rule `rule` broke at `at`. A later call in this same `Cx` changes nothing.
+    /// The rule `rule` broke at `at`. A later call in this same `Cx` changes nothing. The host
+    /// knows each rule by name and stops on one it does not know.
     pub fn broke(&mut self, rule: &'static str, at: Time) {
         if self.broken.is_none() {
             self.broken = Some((rule, at));
         }
     }
 
-    /// Replaces the bytes the host reads after this call.
-    pub fn view(&mut self, bytes: &[u8]) {
-        self.viewed = true;
-        self.view.clear();
-        self.view.extend_from_slice(bytes);
+    /// What the device shows changed during this call. The host reads [`Device::view`] after
+    /// it, at the call's time. A device that shows nothing never calls this.
+    pub fn show(&mut self) {
+        self.shown = true;
     }
 
     /// The first rule named in this call, and its time.
@@ -101,14 +130,9 @@ impl Cx {
         self.broken
     }
 
-    /// The bytes of the last [`view`](Self::view) in this call.
-    pub fn view_bytes(&self) -> &[u8] {
-        &self.view
-    }
-
-    /// Whether this call ran [`view`](Self::view).
-    pub fn viewed(&self) -> bool {
-        self.viewed
+    /// Whether this call ran [`show`](Self::show).
+    pub fn shown(&self) -> bool {
+        self.shown
     }
 }
 
@@ -183,16 +207,14 @@ mod tests {
     }
 
     #[test]
-    fn the_first_broken_rule_wins_and_a_view_replaces_the_bytes() {
+    fn the_first_broken_rule_wins_and_a_show_stays_shown() {
         let mut cx = Cx::default();
         assert_eq!(cx.broken(), None);
-        assert!(!cx.viewed());
+        assert!(!cx.shown());
         cx.broke("bit", Time::from_ps(3));
         cx.broke("other", Time::from_ps(4));
         assert_eq!(cx.broken(), Some(("bit", Time::from_ps(3))));
-        cx.view(&[1, 2]);
-        cx.view(&[9]);
-        assert!(cx.viewed());
-        assert_eq!(cx.view_bytes(), &[9]);
+        cx.show();
+        assert!(cx.shown());
     }
 }

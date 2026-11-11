@@ -3,7 +3,7 @@
 //! picks. The circuit sees only its drive image, one `Drive` per output pin. `docs/engine/engine.md`,
 //! Active chips, holds the loop's protocol.
 
-use orbe_model::{Drive, Event, Stop, Time};
+use orbe_model::{Drive, Event, Shows, Stop, Time};
 
 use crate::netlist::{NetId, PartId};
 
@@ -681,7 +681,7 @@ impl Actives {
                 if matches!(chip.core, Core::St77916(_)) {
                     displays.push(name(circuit, chip));
                 }
-                if chip.takes.pulses.is_some() {
+                if matches!(core, Core::Device(dev) if matches!(dev.shows(), Shows::Leds { .. })) {
                     leds.push(name(circuit, chip));
                 }
                 Ahead {
@@ -744,10 +744,10 @@ impl Actives {
         })
     }
 
-    /// Each chain's colours and latches, in `led_names` order.
-    pub(crate) fn chains(&self) -> impl Iterator<Item = pulse::Seen> {
+    /// Each chain's committed core, in `led_names` order.
+    pub(crate) fn chains(&self) -> impl Iterator<Item = &dyn Hosted> {
         self.committed.iter().filter_map(|core| match core {
-            Core::Device(dev) => dev.chain(),
+            Core::Device(dev) if matches!(dev.shows(), Shows::Leds { .. }) => Some(&**dev),
             _ => None,
         })
     }
