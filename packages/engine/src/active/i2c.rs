@@ -409,7 +409,7 @@ impl<D: I2cTarget> Port<D> for Engine {
         Engine::due_at(*self)
     }
 
-    fn take_due(&mut self, at: Time) {
+    fn take_due(&mut self, _device: &mut D, _cx: &mut Cx, at: Time) {
         Engine::take_due(self, at);
     }
 

@@ -6,7 +6,9 @@ use std::fmt;
 
 use orbe_model::{Cx, Device, Drive, Drives, Event, Levels, Stop, Time};
 
+use super::pulse::Seen;
 use crate::diagnostic::ProtocolRule;
+use crate::link::{LinkRow, Record};
 
 /// A device's core, with the contract every `Core` keeps.
 pub(crate) trait Hosted: Send + fmt::Debug {
@@ -15,6 +17,12 @@ pub(crate) trait Hosted: Send + fmt::Debug {
     fn sample(&mut self, at: Time, volts: &[f64]);
     fn input(&mut self, at: Time, levels: &[bool]);
     fn event(&mut self, at: Time, event: Event<'_>);
+    /// One call per landing. The port walks each span on the concrete device.
+    fn take(&mut self, at: Time, records: &[LinkRow]);
+    /// The part of one record sent by `at`, where the run ends inside it.
+    fn cut(&mut self, at: Time, record: &Record);
+    /// The chain a pulse target shows, when this device is one.
+    fn chain(&self) -> Option<Seen>;
     /// Each rule its port saw broken, at the first time.
     fn broke(&self) -> Vec<(ProtocolRule, Time)>;
     fn boxed(&self) -> Box<dyn Hosted>;
@@ -25,24 +33,32 @@ pub(crate) trait Hosted: Send + fmt::Debug {
 
 /// The host engine of the bus a device declares. It drives that bus's pins, ahead of the
 /// device's own outputs in the image, and turns the levels it watches into calls on the device.
-pub(crate) trait Port<D>: Copy + Send + 'static {
+pub(crate) trait Port<D>: Clone + Send + 'static {
     /// How many outputs it drives.
     const PINS: usize;
     fn drive(&self, image: &mut [Drive]);
     /// When a drive of its pins is next due.
     fn due_at(&self) -> Option<Time>;
-    /// Applies the drive due at `at`.
-    fn take_due(&mut self, at: Time);
+    /// Applies the drive due at `at`, on the device when that drive is a call.
+    fn take_due(&mut self, device: &mut D, cx: &mut Cx, at: Time);
     /// The chip's watch levels from `at`. The port reads them before the device does.
     fn input(&mut self, device: &mut D, cx: &mut Cx, at: Time, levels: &[bool]);
     fn broke(&self, found: &mut Vec<(ProtocolRule, Time)>);
+    /// The records that end at `at`. A port with no record pin does nothing.
+    fn take_records(&mut self, _device: &mut D, _at: Time, _records: &[LinkRow]) {}
+    /// The part of `record` sent by `at`. A port with no record pin does nothing.
+    fn cut_record(&mut self, _device: &mut D, _at: Time, _record: &Record) {}
+    /// The chain this port shows. A port that is not a pulse target returns none.
+    fn chain(&self) -> Option<Seen> {
+        None
+    }
 }
 
 /// The most outputs a native device's image holds, its port's and its own.
 const IMAGE: usize = Drives::MAX + 8;
 
 /// A device linked into the engine, and its port. A copy is a checkpoint.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct Native<D, P> {
     device: D,
     port: P,
@@ -52,6 +68,8 @@ pub(crate) struct Native<D, P> {
     image: [Drive; IMAGE],
     len: usize,
 }
+
+impl<D: Copy, P: Copy> Copy for Native<D, P> {}
 
 impl<D: Device, P: Port<D>> Native<D, P> {
     /// `device` at power-on, which drives `outputs` outputs of its own.
@@ -91,12 +109,14 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
             .run_until(&mut Cx::default(), due.unwrap_or(limit));
         let stop = match (stop, due) {
             (Some(stop), Some(due)) if stop.at == due => {
-                self.port.take_due(due);
+                self.port
+                    .take_due(&mut self.device, &mut Cx::default(), due);
                 stop
             }
             (Some(stop), _) => stop,
             (None, Some(due)) => {
-                self.port.take_due(due);
+                self.port
+                    .take_due(&mut self.device, &mut Cx::default(), due);
                 Stop {
                     at: due,
                     sample: false,
@@ -134,6 +154,18 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
         assert!(self.held(), "an event never changes the drives");
     }
 
+    fn take(&mut self, at: Time, records: &[LinkRow]) {
+        self.port.take_records(&mut self.device, at, records);
+    }
+
+    fn cut(&mut self, at: Time, record: &Record) {
+        self.port.cut_record(&mut self.device, at, record);
+    }
+
+    fn chain(&self) -> Option<Seen> {
+        self.port.chain()
+    }
+
     fn broke(&self) -> Vec<(ProtocolRule, Time)> {
         let mut found = Vec::new();
         self.port.broke(&mut found);
@@ -141,14 +173,19 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
     }
 
     fn boxed(&self) -> Box<dyn Hosted> {
-        Box::new(*self)
+        Box::new(self.clone())
     }
 
     fn copy_from(&mut self, source: &dyn Hosted) {
-        *self = *source
+        let source = source
             .as_any()
             .downcast_ref::<Native<D, P>>()
             .expect("a core copies only a core of its own device");
+        self.device = source.device;
+        self.port.clone_from(&source.port);
+        self.drives = source.drives;
+        self.image = source.image;
+        self.len = source.len;
     }
 
     fn as_any(&self) -> &dyn Any {

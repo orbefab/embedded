@@ -21,7 +21,7 @@ use crate::timestamp::Timestamp;
 use crate::RunStats;
 use crate::active::{self, Actives};
 use crate::chip;
-use crate::device::{st77916, ws2812};
+use crate::device::st77916;
 use crate::lte::{self, Charges, Segment, Verdict};
 use crate::mna::{Memo, Solution};
 use crate::newton::{
@@ -121,14 +121,14 @@ pub struct Display<'s> {
 }
 
 /// An LED chain's colours, read from a session.
-pub struct Leds<'s> {
-    chain: &'s ws2812::Core,
+pub struct Leds {
+    chain: crate::leds::Chain,
 }
 
-impl Leds<'_> {
+impl Leds {
     /// Its colours, as one `observations.json` `leds` entry.
     pub fn chain(&self) -> crate::leds::Chain {
-        self.chain.observed()
+        self.chain.clone()
     }
 }
 
@@ -722,14 +722,16 @@ impl Session {
 
     /// The LED chain `part` as it stands after the last accepted step, which is its colours at
     /// `now`. `None` when `part` is no chain.
-    pub fn leds(&self, part: &Name) -> Option<Leds<'_>> {
+    pub fn leds(&self, part: &Name) -> Option<Leds> {
         let k = self
             .actives
             .led_names()
             .iter()
             .position(|name| name == part)?;
         let chain = self.actives.chains().nth(k)?;
-        Some(Leds { chain })
+        Some(Leds {
+            chain: chain.observed,
+        })
     }
 
     /// Each USART, chips in part order, then each chip's in datasheet order: the part's name and
@@ -833,18 +835,20 @@ impl Session {
         }
         let names = self.actives.led_names();
         if !names.is_empty() {
+            let seen: Vec<_> = self.actives.chains().collect();
+            debug_assert_eq!(names.len(), seen.len());
             let parts: Vec<_> = names
                 .iter()
-                .zip(self.actives.chains())
-                .map(|(name, chain)| (name.clone(), chain.observed()))
+                .zip(&seen)
+                .map(|(name, chain)| (name.clone(), chain.observed.clone()))
                 .collect();
             let mut rows = Vec::new();
-            for (index, chain) in self.actives.chains().enumerate() {
-                for latch in chain.latches() {
+            for (index, chain) in seen.iter().enumerate() {
+                for (at, pixels) in &chain.latches {
                     rows.push(Latch {
-                        at: latch.at,
+                        at: *at,
                         part: u16::try_from(index).expect("a run has few chains"),
-                        pixels: latch.pixels.to_vec(),
+                        pixels: pixels.clone(),
                     });
                 }
             }
