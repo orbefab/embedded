@@ -170,7 +170,7 @@ for (const c of cells) {
   const pass = c.x >= c.how.bar;
   if (!pass) failed += 1;
   const ms = `${c.median.toFixed(1)} ms per simulated s (${c.min.toFixed(1)} to ${c.max.toFixed(1)})`;
-  console.log(`${pass ? "ok  " : "FAIL"} ${c.block.padEnd(width)}  ${c.how.label.padEnd(labelWidth)}  ${ms}, ${c.x.toFixed(2)}x real time, bar ${c.how.bar.toFixed(1)}x`);
+  console.log(`${pass ? "ok  " : "FAIL"} ${c.block.padEnd(width)}  ${c.how.label.padEnd(labelWidth)}  ${ms}, ${c.x.toFixed(2)}x real time, bar ${c.how.bar}x`);
 }
 console.log(failed === 0 ? "speed: every Block keeps up" : `speed: ${failed} of ${cells.length} medians miss their bar`);
 process.exit(failed === 0 ? 0 : 1);
