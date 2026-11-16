@@ -119,11 +119,13 @@ fn capacitors(bjt: &Bjt) -> [OwnedCapacitor; 2] {
             k: 0,
             ends: internal(B, E),
             farad: bjt.base_emitter_capacitance.si.get(),
+            sized_by_kind: false,
         },
         OwnedCapacitor {
             k: 1,
             ends: internal(B, C),
             farad: bjt.base_collector_capacitance.si.get(),
+            sized_by_kind: false,
         },
     ]
 }
@@ -299,6 +301,7 @@ fn mos_capacitors(mosfet: &Mosfet) -> [OwnedCapacitor; 3] {
         k,
         ends: [StoreEnd::Net(a), StoreEnd::Net(b)],
         farad,
+        sized_by_kind: false,
     };
     [
         between(0, g, s, mosfet.gate_source_capacitance.si.get()),

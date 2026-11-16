@@ -6,6 +6,7 @@ mod diagnostic;
 mod document;
 mod inductor;
 mod ne555;
+mod op_amp;
 mod parse;
 mod parts;
 mod potentiometer;

@@ -6,7 +6,7 @@ Copy the existing kind closest to yours. `packages/engine/src/passive/resistor.r
 
 ## Write the kind file
 
-Create `packages/engine/src/<group>/<kind>.rs`. `<group>` is `passive`, `semiconductor` or `chip`. The file holds these, in this order:
+Create `packages/engine/src/<group>/<kind>.rs`. `<group>` is `passive` for a linear part or a source, `semiconductor` for a junction device, or `chip` for a behavioural model of a packaged part, such as the linear regulator or the op-amp. The file holds these, in this order:
 
 1. The part struct. It has `pub pins: [NetId; N]` and one field per param, each a `Value` in SI units with its rule in a doc comment. `impl <Kind> { pub const PINS: [&'static str; N] }` names the pins in the order of `pins`.
 2. The wire struct, `Wire<Kind>`, which serde reads from the netlist. Derive `Deserialize` with `#[serde(deny_unknown_fields)]`. It has `pub(crate) name: String`, `pins: PinMap`, and one `WireValue` per param.
@@ -15,7 +15,7 @@ Create `packages/engine/src/<group>/<kind>.rs`. `<group>` is `passive`, `semicon
 
 Mark `stamp` `#[inline]`. It runs on every Newton iteration, and the release build splits the crate into several code units, so without the attribute the call can stay a call.
 
-Add `pub(crate) mod <kind>;` and `pub use <kind>::<Kind>;` to the group's `mod.rs`.
+Add `pub(crate) mod <kind>;` and `pub use <kind>::<Kind>;` to the group's module file: `passive/mod.rs`, `semiconductor/mod.rs` or `chip.rs`.
 
 ## Add the row
 
@@ -52,7 +52,7 @@ The compiler makes each kind answer every method. It cannot tell whether the ans
 ## Add the tests
 
 - Add `packages/engine/tests/netlist/<kind>.rs` and its `mod` line in `main.rs`. Parse a part with every field and check the fields, `pin_names`, `quantities` and `ratings`. Break each field and check its diagnostic.
-- Add an example under `packages/engine/tests/circuits/<name>/` that runs the kind. When ngspice has a model for it, add the kind's deck line and pins to `packages/engine/scripts/ngspice_refs.py` and commit `deck.cir` and `ngspice.json`. [reference.md](reference.md) says how. When it does not, list the example under that page's skips.
+- Add an example under `packages/engine/tests/circuits/<name>/` that runs the kind. When ngspice has a model for it, add the kind's deck line and pins to `packages/engine/scripts/ngspice_refs.py` and commit `deck.cir` and `ngspice.json`. [reference.md](reference.md) says how. When it does not, the script skips the example on its own. Say why under that page's skips, and add a branch for the kind to `matches_its_reference` in `packages/engine/tests/circuit/runs/ngspice.rs`, which otherwise fails on an example with no `ngspice.json`. Add the example's name to that file's list of examples too.
 - The catalog's tests need no edit. They check that every row has a unique name and unique pins, and that `orbe check` lists every wire kind except `esp32s3`.
 
 ## Write the docs

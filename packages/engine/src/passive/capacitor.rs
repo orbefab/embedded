@@ -237,6 +237,7 @@ impl Kind for Capacitor {
             k: 0,
             ends: self.pins.map(StoreEnd::Net),
             farad: self.capacitance.si.get(),
+            sized_by_kind: false,
         }]
     }
     fn inductors(&self) -> Vec<OwnedInductor> {

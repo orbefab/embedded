@@ -99,6 +99,49 @@ impl Charges {
         let (lo, hi) = volts.fold((0.0f64, 0.0f64), |(lo, hi), &v| (lo.min(v), hi.max(v)));
         hi - lo
     }
+
+    /// A warning for each capacitor a kind sizes on which Newton's current floor is a step error
+    /// near its tolerance, naming its part. Newton settles a current only to `ABSTOL`, so two
+    /// settled solutions can differ by that much. Backward Euler reads that change over a step
+    /// of `h` as `h * ABSTOL / (2C)` volts. At `max_step` that is held against the tolerance a
+    /// store gets for swinging the circuit's span at `solution`, `SHARE` of it plus `VNTOL`. Past
+    /// `FLOOR_NEAR` of it the step can stall on the floor rather than on the circuit. A
+    /// capacitance the netlist gives is the part's own and is not checked.
+    pub(crate) fn floor_warnings(
+        &self,
+        netlist: &Netlist,
+        solution: &Solution,
+        max_step: u64,
+    ) -> Vec<String> {
+        let tolerance = SHARE * self.span(solution) + VNTOL;
+        netlist
+            .parts()
+            .flat_map(|(_, part)| {
+                let name = part.name.as_str();
+                element::Device::charges(&part.model)
+                    .into_iter()
+                    .filter_map(move |cap| floor_warning(name, &cap, max_step, tolerance))
+            })
+            .collect()
+    }
+}
+
+/// [`Charges::floor_warnings`] for one capacitor of part `name`.
+fn floor_warning(
+    name: &str,
+    cap: &element::OwnedCapacitor,
+    max_step: u64,
+    tolerance: f64,
+) -> Option<String> {
+    let error = seconds(max_step) * ABSTOL / (2.0 * cap.farad);
+    (cap.sized_by_kind && error > FLOOR_NEAR * tolerance).then(|| {
+        format!(
+            "warning: `{name}` sizes an internal capacitor of {:e} F. Newton's {ABSTOL:e} A floor \
+             over the {max_step} ps longest step reads as {error:e} V of step error, against a \
+             tolerance of {tolerance:e} V. Raise the capacitance.",
+            cap.farad,
+        )
+    })
 }
 
 impl Charge {
@@ -121,6 +164,10 @@ impl Flux {
 /// so the error peaks 1.6 time constants after the edge at `0.039 * (12 * SHARE)^(2/3)` of the
 /// swing, 9.5e-5 here. A step never reads more than the whole swing, so this bounds it.
 const SHARE: f64 = 1e-5;
+
+/// The share of its tolerance that Newton's current floor may be on an internal capacitor
+/// before [`Charges::floor_warnings`] warns.
+const FLOOR_NEAR: f64 = 0.5;
 
 /// How far a store's state moves in its segment, a capacitor's voltage or an inductor's
 /// current. Its tolerance is `SHARE` of this, plus `VNTOL` or `ABSTOL`.
@@ -830,6 +877,74 @@ mod tests {
     use crate::netlist::NetId;
 
     use super::*;
+
+    /// A kind-sized capacitor on internal node 0, at a live session's 10 ms longest step in a
+    /// 5 V circuit. Newton's floor reads as 5e-3 V on 1 pF and 5e-6 V on 1 nF, against a
+    /// tolerance of 5.0001e-5 V, so 1 pF warns and 1 nF does not. A netlist's 1 pF is not
+    /// checked.
+    #[test]
+    fn a_kind_sized_capacitor_too_small_for_newton_s_floor_warns_with_its_part() {
+        let cap = |farad, sized_by_kind| element::OwnedCapacitor {
+            k: 0,
+            ends: [
+                element::StoreEnd::Internal(0),
+                element::StoreEnd::Net(NetId::GROUND),
+            ],
+            farad,
+            sized_by_kind,
+        };
+        let tolerance = SHARE * 5.0 + VNTOL;
+        let max_step = 10_000_000_000;
+        let warning = floor_warning("u1", &cap(1e-12, true), max_step, tolerance).unwrap();
+        assert!(warning.contains("`u1`"), "{warning}");
+        assert!(warning.contains("1e-12 F"), "{warning}");
+        assert_eq!(
+            floor_warning("u1", &cap(1e-9, true), max_step, tolerance),
+            None
+        );
+        assert_eq!(
+            floor_warning("c1", &cap(1e-12, false), max_step, tolerance),
+            None
+        );
+    }
+
+    /// The op-amp's integrator, at a 10 ms longest step with 5 V across the circuit.
+    #[test]
+    fn the_op_amp_s_integrator_does_not_warn() {
+        let netlist = crate::netlist::parse(
+            br#"{
+              "version": 0,
+              "seed": 0,
+              "analysis": { "transient": { "stop_ps": 10000000000, "max_step_ps": 10000000000, "grid_ps": 10000000000 } },
+              "ground": "gnd",
+              "nets": ["gnd", "vcc", "out"],
+              "parts": [
+                { "name": "vs", "kind": "voltage_source", "pins": { "p": "vcc", "n": "gnd" },
+                  "voltage": { "value": 5.0, "unit": "V", "source": "user" } },
+                { "name": "u1", "kind": "op_amp",
+                  "pins": { "in_p": "out", "in_n": "out", "out": "out", "vcc": "vcc", "gnd": "gnd" },
+                  "gain_bandwidth": { "value": 1e6, "unit": "Hz", "source": "user" },
+                  "slew_rate": { "value": 1e6, "unit": "V/s", "source": "user" },
+                  "open_loop_gain": { "value": 1e5, "unit": "1", "source": "user" },
+                  "input_bias_current": { "value": 1.5e-8, "unit": "A", "source": "user" },
+                  "swing_high": { "value": 0.0025, "unit": "V", "source": "user" },
+                  "swing_low": { "value": 0.051, "unit": "V", "source": "user" },
+                  "output_resistance": { "value": 30.0, "unit": "ohm", "source": "user" },
+                  "short_circuit_current": { "value": 0.04, "unit": "A", "source": "user" },
+                  "supply_current": { "value": 1.05e-4, "unit": "A", "source": "user" } }
+              ]
+            }"#,
+        )
+        .unwrap();
+        let layout = Layout::new(&netlist, Vec::new());
+        let charges = Charges::new(&netlist, &layout);
+        let mut x = vec![0.0; layout.size()];
+        x[0] = 5.0;
+        let solution = Solution::from(x);
+        assert_eq!(charges.span(&solution), 5.0);
+        let warnings = charges.floor_warnings(&netlist, &solution, 10_000_000_000);
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
 
     /// The ids of two capacitors, `c1` and `c2`, in that order.
     /// One capacitor of `farad` from row 0 to ground, its current in row 1.

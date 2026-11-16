@@ -477,6 +477,12 @@ impl Session {
             .map_err(fail)?;
         let actives = Actives::new(&circuit, &start.levels);
         let breakpoints = Breakpoints::new(&circuit.netlist, transient.stop);
+        if cfg!(debug_assertions) {
+            let solution = &start.iterate.solution;
+            for warning in charges.floor_warnings(&circuit.netlist, solution, transient.max_step) {
+                eprintln!("{warning}");
+            }
+        }
         let segment = Segment::start(&charges, &start.iterate.solution);
         let accepted = Accepted {
             at: Time::ZERO,
