@@ -1,0 +1,44 @@
+{
+  "part": "trimmer-3362p",
+  "source": {
+    "script": "model.py",
+    "sha256": "4137ca5a8f35bb2b3949fdfa143d441a9565229bbb47e770398d0c714d05794a",
+    "bytes": 3473
+  },
+  "files": {
+    "trimmer-3362p.glb": {
+      "sha256": "57d74940eefd94c6adbad75868c2364ddf49c656e4069d0825fade82cf045519",
+      "bytes": 32040
+    },
+    "trimmer-3362p.anchors.json": {
+      "sha256": "244a64a7ec4f6723c0ae69df591c6f5a1b8f99c319ad7d27803d4c1ddf5be798",
+      "bytes": 410
+    }
+  },
+  "box": {
+    "min": [-3.3, -3.84, -5.46],
+    "max": [3.3, 3.15, 4.88]
+  },
+  "kept_nodes": ["pin-1", "pin-2", "pin-3"],
+  "draw_calls": 5,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 3,
+      "largest_miss_mm": 0.002706
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 5,
+      "primitives_out": 5
+    }
+  }
+}

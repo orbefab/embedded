@@ -1,0 +1,44 @@
+{
+  "part": "ldr-5mm",
+  "source": {
+    "script": "model.py",
+    "sha256": "73daaefb65042098022de534213b87e004b921830faabb2b4e3cf5eba973637e",
+    "bytes": 2232
+  },
+  "files": {
+    "ldr-5mm.glb": {
+      "sha256": "461893aa064ac50a07f7fa475f0ad53e0bcbf7e94b0d1d77ca64a235b6da29ed",
+      "bytes": 14764
+    },
+    "ldr-5mm.anchors.json": {
+      "sha256": "cc382ff56705f3cb689ccc922b007d5f2d103d2551e52990777522e2fe0edeb9",
+      "bytes": 287
+    }
+  },
+  "box": {
+    "min": [-2.55, -2.15, -31.9],
+    "max": [2.55, 2.15, 2.12]
+  },
+  "kept_nodes": ["lead-1", "lead-2"],
+  "draw_calls": 4,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 2,
+      "largest_miss_mm": 0.002941
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 4,
+      "primitives_out": 4
+    }
+  }
+}

@@ -19,6 +19,7 @@ diode-m7-sma 0.1.0 @orbefab sha256:a7f154c8d33fdf4377d0cfa16e0e238e488a959fffbbb
 diode-sod123 0.1.0 @orbefab sha256:2f3eb8fed6fa5b168937a408a52669da91dd8936fc4dbd556abb5c188b0250f1
 dip-socket-28 0.1.0 @orbefab sha256:446c866be94aecc6a0e24688c1bf036d55c54a69577fa09699b8859528b6745c
 inductor-0805 0.1.0 @orbefab sha256:c3d39d40aa4a298ede2a986ef980b99f057917b02a0213d94d9a5b5edc601ccb
+ldr-5mm 0.1.0 @orbefab sha256:6408b27d3eed5a2fc8f535d7ad705650cacd1d0a0a4e532bf66d224c7a8ab12b
 led-0603 0.1.0 @orbefab sha256:238e87f02c6beec9bfe664efa0a5d6ae0538a68fad5c59eb3be88b79b845dfcb
 led-0805 0.1.0 @orbefab sha256:08a0da26072180492f1899f648bcf95ac98c12a0f05d65383902ed605cd3ef56
 led-3mm 0.1.0 @orbefab sha256:f11099f3f7c529bf4200110e1a120091ae1a5f51a885b7e55d4eb1ba2d197d53
@@ -44,6 +45,7 @@ socket-strip-1x8 0.1.0 @orbefab sha256:a3abce2dacc1103a5d68914541d9c3ebe59ec5ce0
 tactile-switch-6mm 0.1.0 @orbefab sha256:b3e89fc7a0d6ed4f91bbb0cb71fd9e3dbe1645d05a1a3c5945694213b558640d
 tactile-switch-smd 0.1.0 @orbefab sha256:02e2deadf249f191c0179fbe436891c7d3b110de60b1b6e728942baf7d9f2feb
 tactile-switch-ts42 0.1.0 @orbefab sha256:4eaefdd5eb528baa5fcb29b7c841f142ccd7d7f5432ea0c9d21543304874bd2b
+trimmer-3362p 0.1.0 @orbefab sha256:0ff277f31486e868d148b13af906ad6a1ca44db3f5648016d58df8a2ed055cab
 uno-board 0.1.0 @orbefab sha256:5eaf49aef11effc794b9f5eb5dd10ebb3c0fd46ae75b7970f346252165cece8f
 usb-b-socket 0.1.0 @orbefab sha256:16297c4c675d641f4bfc093b951249f8854b5625a5959726919df645d9d49dcb
 usb-mini-b 0.1.0 @orbefab sha256:6c6f4cb85ed04563e8747edd505fb65edb906c42c6a1e469e68156b5c1cbfc3d

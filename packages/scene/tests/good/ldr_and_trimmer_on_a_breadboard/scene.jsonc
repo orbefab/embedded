@@ -1,0 +1,27 @@
+// A light divider and a trimmer divider beside a Nano on a full-size breadboard. 10 kohm runs
+// from the + rail to column 22, and the LDR from column 22 to 23, which joins the - rail. The
+// trimmer's ends sit in columns 28 and 30, joined to the + and - rails, and its wiper in 29.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-830" },
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "rt": { "type": "resistor-axial", "resistance": "10k" },
+    "ldr": { "type": "ldr-5mm" },
+    "trim": { "type": "trimmer-3362p", "resistance": "10k" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "D13": "bb.d1" } },
+    "rt": { "on": { "a": "bb.a22" }, "rotate": [0, 0, -90] }, // b in W22, the + rail
+    "ldr": { "on": { "a": "bb.c22" } }, // b in column 23
+    "trim": { "on": { "a": "bb.c28" } }, // b in column 30, the wiper in d29
+  },
+  "wires": [
+    ["bb.a12", "bb.W11", { "color": "#d12b2b" }], // 5V to the + rail
+    ["bb.a14", "bb.X13", { "color": "#161616" }], // GND to the - rail
+    ["bb.a23", "bb.X23", { "color": "#161616" }], // ldr.b to GND
+    ["bb.a28", "bb.W28", { "color": "#d12b2b" }], // trim.a to 5V
+    ["bb.a30", "bb.X30", { "color": "#161616" }], // trim.b to GND
+  ],
+}
