@@ -9,8 +9,8 @@
 
 use std::fmt;
 
-use object::Endianness;
-use object::elf::FileHeader32;
+use object::LittleEndian as Le;
+use object::elf::{FileHeader32, PN_XNUM};
 use object::read::elf::{FileHeader, ProgramHeader};
 
 /// Flash image. Gaps between placed bytes are `0xFF` (erased flash).
@@ -245,92 +245,59 @@ fn hex(line: usize, detail: impl Into<String>) -> ImageError {
     }
 }
 
-/// Parse an ELF32 little-endian AVR file.
+/// Parse an ELF32 little-endian AVR file. `e_phnum` 0 is no program header table. A table at
+/// offset 0 or with the extended count `PN_XNUM` is refused.
 pub fn parse_elf(file: &[u8]) -> Result<Image, ImageError> {
-    if file.len() < ELF32_HEADER {
-        return Err(ImageError::Elf("truncated ELF header".to_string()));
-    }
-    if file[0..4] != [0x7F, b'E', b'L', b'F'] {
-        return Err(ImageError::Elf("not an ELF file".to_string()));
-    }
-    if file[4] != 1 {
-        return Err(ImageError::Elf("not ELF32".to_string()));
-    }
-    if file[5] != 1 {
-        return Err(ImageError::Elf("not little-endian".to_string()));
-    }
-    if file[6] != 1 {
-        return Err(ImageError::Elf("not an ELF file".to_string()));
-    }
-    let header = FileHeader32::<Endianness>::parse(file)
-        .map_err(|_| ImageError::Elf("not an ELF file".to_string()))?;
-    let endian = header
-        .endian()
-        .map_err(|_| ImageError::Elf("not an ELF file".to_string()))?;
-    let machine = header.e_machine(endian).0;
+    let header = FileHeader32::<Le>::parse(file)
+        .ok()
+        .filter(|header| header.endian().is_ok())
+        .ok_or_else(|| {
+            ImageError::Elf(match file {
+                _ if file.len() < ELF32_HEADER => "truncated ELF header".into(),
+                [0x7F, b'E', b'L', b'F', 1, 1, version, ..] => {
+                    format!("ELF version {version} is not 1")
+                }
+                [0x7F, b'E', b'L', b'F', 1, ..] => "not little-endian".into(),
+                [0x7F, b'E', b'L', b'F', ..] => "not ELF32".into(),
+                _ => "not an ELF file".into(),
+            })
+        })?;
+    let machine = header.e_machine(Le).0;
     if machine != EM_AVR {
         return Err(ImageError::Elf(format!(
             "e_machine {machine} is not EM_AVR ({EM_AVR})"
         )));
     }
-    let phoff = usize::try_from(u64::from(header.e_phoff(endian)))
-        .map_err(|_| ImageError::Elf("program header table overflows".to_string()))?;
-    let phentsize = usize::from(header.e_phentsize(endian));
-    let phnum = usize::from(header.e_phnum(endian));
-    if phentsize < PHDR32 {
-        return Err(ImageError::Elf(format!(
-            "program header size {phentsize} is below {PHDR32}"
-        )));
-    }
-    if phentsize != PHDR32 {
+    let phentsize = header.e_phentsize(Le);
+    if usize::from(phentsize) != PHDR32 {
         return Err(ImageError::Elf(format!(
             "program header size {phentsize} is not {PHDR32}"
         )));
     }
-    if header.e_phnum(endian) == object::elf::PN_XNUM {
-        return Err(ImageError::Elf(
-            "program header table overflows".to_string(),
-        ));
-    }
-    for index in 0..phnum {
-        let at = phoff
-            .checked_add(
-                index
-                    .checked_mul(PHDR32)
-                    .ok_or_else(|| ImageError::Elf("program header table overflows".to_string()))?,
-            )
-            .ok_or_else(|| ImageError::Elf("program header table overflows".to_string()))?;
-        let end = at.checked_add(PHDR32).ok_or_else(|| {
-            ImageError::Elf("program header extends past the end of the file".to_string())
-        })?;
-        if file.get(at..end).is_none() {
+    let programs = match (header.e_phoff(Le), header.e_phnum(Le)) {
+        (_, 0) => &[][..],
+        (0, phnum) => {
+            return Err(ImageError::Elf(format!(
+                "e_phoff is 0 with e_phnum {phnum}"
+            )));
+        }
+        (_, PN_XNUM) => {
             return Err(ImageError::Elf(
-                "program header extends past the end of the file".to_string(),
+                "extended e_phnum (PN_XNUM) is not supported".into(),
             ));
         }
-    }
-    // Offset 0 means there is no program header table.
-    let programs = if phoff == 0 {
-        &[][..]
-    } else {
-        header.program_headers(endian, file).map_err(|_| {
-            ImageError::Elf("program header extends past the end of the file".to_string())
-        })?
+        _ => header.program_headers(Le, file).map_err(|_| {
+            ImageError::Elf("program header extends past the end of the file".into())
+        })?,
     };
     let mut bytes = Vec::new();
     let mut notes = Vec::new();
     for program in programs {
-        if program.p_type(endian).0 != PT_LOAD {
+        if program.p_type(Le).0 != PT_LOAD {
             continue;
         }
-        let offset = u32::try_from(u64::from(program.p_offset(endian)))
-            .map_err(|_| ImageError::Elf("PT_LOAD file range overflows".to_string()))?;
-        let paddr = u32::try_from(u64::from(program.p_paddr(endian)))
-            .map_err(|_| ImageError::Elf("flash segment address overflows".to_string()))?;
-        let filesz = u32::try_from(u64::from(program.p_filesz(endian)))
-            .map_err(|_| ImageError::Elf("PT_LOAD file range overflows".to_string()))?;
-        let memsz = u32::try_from(u64::from(program.p_memsz(endian)))
-            .map_err(|_| ImageError::Elf("flash segment address overflows".to_string()))?;
+        let (offset, paddr) = (program.p_offset(Le), program.p_paddr(Le));
+        let (filesz, memsz) = (program.p_filesz(Le), program.p_memsz(Le));
         if memsz < filesz {
             return Err(ImageError::Elf(format!(
                 "PT_LOAD at {paddr:#x} has p_memsz {memsz} below p_filesz {filesz}"
@@ -357,11 +324,7 @@ pub fn parse_elf(file: &[u8]) -> Result<Image, ImageError> {
                 "flash segment at {paddr:#x} crosses {DATA_BASE:#x}"
             )));
         }
-        let file_at = offset as usize;
-        let file_end = file_at
-            .checked_add(filesz as usize)
-            .ok_or_else(|| ImageError::Elf("PT_LOAD file range overflows".to_string()))?;
-        let data = file.get(file_at..file_end).ok_or_else(|| {
+        let data = program.data(Le, file).map_err(|()| {
             ImageError::Elf(format!(
                 "PT_LOAD at file offset {offset:#x} extends past the end of the file"
             ))
@@ -500,6 +463,29 @@ mod tests {
                 .contains("program header extends past the end"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn elf_names_a_version_and_a_program_header_table_it_does_not_read() {
+        let good = elf_with(EM_AVR, &[(0, &[0x11, 0x22])], &[]);
+        let edits: [(usize, &[u8], &str); 4] = [
+            (6, &[0], "ELF version 0 is not 1"),
+            (42, &[48, 0], "program header size 48 is not 32"),
+            (28, &[0; 4], "e_phoff is 0 with e_phnum 1"),
+            (
+                44,
+                &[0xff, 0xff],
+                "extended e_phnum (PN_XNUM) is not supported",
+            ),
+        ];
+        for (at, value, text) in edits {
+            let mut file = good.clone();
+            file[at..at + value.len()].copy_from_slice(value);
+            assert_eq!(
+                parse_elf(&file).unwrap_err().to_string(),
+                format!("ELF: {text}")
+            );
+        }
     }
 
     #[test]
