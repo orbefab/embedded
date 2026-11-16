@@ -444,10 +444,11 @@ struct Column<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::i2c::{I2cPhase, I2cRow};
+    use crate::i2c::I2cRow;
     use crate::logic::Level;
     use crate::name::Name;
     use crate::serial::SerialByte;
+    use orbe_mcu::I2cPhase;
 
     fn finite(values: &[f64]) -> Vec<Finite> {
         values.iter().map(|&v| Finite::new(v).unwrap()).collect()

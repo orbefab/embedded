@@ -10,7 +10,8 @@
 //! and the start-up, `CLKPR`, watchdog, and brown-out values read out of them.
 //! `MCUCR.IVSEL` does not move the vectors. `image` parses Intel HEX and ELF
 //! into flash bytes. `timeline` runs the core on a host's clock, in oscillator
-//! cycles, and stops it at each change of a pin's drive.
+//! cycles, and stops it at each change of a pin's drive. `bridge` is the chip on
+//! the `orbe-mcu` contract: its package pins, and the timeline in picoseconds.
 
 /// `Clone` for a struct, field by field, with a `clone_from` that reuses each field's buffers.
 /// The derived `clone_from` clones a fresh value and drops the old one. The patterns name every
@@ -32,6 +33,7 @@ macro_rules! clone_fields {
 }
 
 mod analog;
+mod bridge;
 mod bus;
 mod chip;
 mod cpu;
@@ -43,6 +45,7 @@ mod periph;
 mod regs;
 mod timeline;
 
+pub use bridge::{Bridge, PACKAGE, PORT_PINS, Pad, port_index};
 pub use cpu::{Channel, Cpu, LoadError, Parity, ResetKind, SerialFrame, SpiClock, SupplyChannel};
 pub use fuses::FuseBytes;
 pub use image::{IgnoredRegion, IgnoredSegment, Image, ImageError, parse_elf, parse_hex};

@@ -27,6 +27,7 @@ mod analog;
 mod app;
 mod blocks;
 mod boot;
+mod bridge;
 mod calibration;
 mod clock;
 mod cores;
@@ -60,6 +61,7 @@ use soc::{Ending, Soc};
 use timers::{Action, Watchdogs};
 
 pub use boot::Segment;
+pub use bridge::{Bridge, PINS};
 pub use clock::{TICK_HZ, Tick};
 pub use gpio::PadDrive;
 pub use orbe_xtensa::CoreId;

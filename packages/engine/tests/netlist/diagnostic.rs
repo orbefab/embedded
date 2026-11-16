@@ -1,10 +1,11 @@
 use orbe_model::Time;
 
 use orbe_engine::diagnostic::{
-    AnalysisRule, ChipSetting, Diagnostic, Excursion, FlashRefusal, ProtocolRule, ResetReason,
-    ScheduleRule, Severity, Solve, ValueRule, WaveformRule,
+    AnalysisRule, Diagnostic, Excursion, ProtocolRule, ScheduleRule, Severity, Solve, ValueRule,
+    WaveformRule,
 };
 use orbe_engine::name::{Name, NameError, Ref};
+use orbe_mcu::{FlashRefusal, ResetReason, Setting};
 
 fn name(text: &str) -> Name {
     Name::new(text).unwrap()
@@ -512,19 +513,19 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
         app: false,
         symbol: None,
     };
-    let (message, data) = chip_json(setting(ChipSetting::Transfer("dma"), "SPI2"));
+    let (message, data) = chip_json(setting(Setting::Transfer("dma"), "SPI2"));
     assert_eq!(
         message,
         "#u1 started a SPI2 transfer with setting dma at 0x00000010, which the model does not run, at 5 ps"
     );
     assert_eq!(data["setting"], "dma");
-    let (message, data) = chip_json(setting(ChipSetting::Interrupt, "GDMA"));
+    let (message, data) = chip_json(setting(Setting::Interrupt, "GDMA"));
     assert_eq!(
         message,
         "#u1 enabled a GDMA interrupt at 0x00000010, which the model never raises, at 5 ps"
     );
     assert_eq!(data["setting"], "interrupt");
-    let (message, data) = chip_json(setting(ChipSetting::Register("clock_off"), "GDMA"));
+    let (message, data) = chip_json(setting(Setting::Register("clock_off"), "GDMA"));
     assert_eq!(
         message,
         "#u1 set GDMA clock_off at 0x00000010, which the model does not run, at 5 ps"
@@ -533,7 +534,7 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
         (&data["peripheral"], &data["setting"]),
         (&serde_json::json!("GDMA"), &serde_json::json!("clock_off"))
     );
-    let reset = ChipSetting::Register("reset_while_sending");
+    let reset = Setting::Register("reset_while_sending");
     let (message, data) = chip_json(setting(reset, "GDMA"));
     assert_eq!(
         message,
@@ -575,7 +576,7 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
         data,
         serde_json::json!({ "core": "app", "pc": 0x10, "symbol": null })
     );
-    let (message, data) = chip_json(setting(ChipSetting::Sleep, "RTC_CNTL"));
+    let (message, data) = chip_json(setting(Setting::Sleep, "RTC_CNTL"));
     assert_eq!(
         message,
         "#u1 put the chip to sleep at 0x00000010, which the model does not run, at 5 ps"

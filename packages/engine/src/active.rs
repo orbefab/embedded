@@ -3,6 +3,7 @@
 //! picks. The circuit sees only its drive image, one `Drive` per output pin. `docs/engine/engine.md`,
 //! Active chips, holds the loop's protocol.
 
+use orbe_mcu::{Frame, Phase};
 use orbe_model::{Drawn, Drive, Event, Shows, Stop, Time};
 
 use crate::netlist::{NetId, PartId};
@@ -17,13 +18,13 @@ pub(crate) mod script;
 pub(crate) mod spi;
 
 use crate::device::{cst816, pulses_replay, spi_replay, st77916, ws2812};
-use crate::mcu::{avr, esp32s3};
+use crate::mcu::{self, Mcu, atmega328p, esp32s3};
 use native::Hosted;
 
 use crate::device::Declared;
 use crate::diagnostic::Diagnostic;
 use crate::display::Rectangle;
-use crate::i2c::{I2cPhase, I2cRow};
+use crate::i2c::I2cRow;
 use crate::link::{LinkRow, Record, RecordKind};
 use crate::name::{Name, Ref};
 
@@ -135,10 +136,10 @@ impl Takes {
 ///   and a script core's script.
 #[derive(Debug)]
 pub(crate) enum Core {
-    Avr(Box<avr::Core>),
     /// A device on the `orbe-model` contract.
     Device(Box<dyn Hosted>),
-    Esp32s3(Box<esp32s3::Core>),
+    /// A microcontroller on the `orbe-mcu` contract.
+    Mcu(Mcu),
     #[cfg(test)]
     Script(Box<script::Core>),
 }
@@ -146,9 +147,8 @@ pub(crate) enum Core {
 impl Clone for Core {
     fn clone(&self) -> Self {
         match self {
-            Core::Avr(core) => Core::Avr(core.clone()),
             Core::Device(core) => Core::Device(core.boxed()),
-            Core::Esp32s3(core) => Core::Esp32s3(core.clone()),
+            Core::Mcu(mcu) => Core::Mcu(mcu.clone()),
             #[cfg(test)]
             Core::Script(core) => Core::Script(core.clone()),
         }
@@ -160,9 +160,8 @@ impl Clone for Core {
     /// starts that core empty.
     fn clone_from(&mut self, source: &Self) {
         match (self, source) {
-            (Core::Avr(core), Core::Avr(source)) => core.clone_from(source),
             (Core::Device(core), Core::Device(source)) => core.copy_from(&**source),
-            (Core::Esp32s3(core), Core::Esp32s3(source)) => core.clone_from(source),
+            (Core::Mcu(mcu), Core::Mcu(source)) => mcu.clone_from(source),
             (core, source) => *core = source.clone(),
         }
     }
@@ -171,9 +170,8 @@ impl Clone for Core {
 impl Core {
     fn run_until(&mut self, limit: Time) -> Option<Stop> {
         match *self {
-            Core::Avr(ref mut core) => core.run_until(limit),
             Core::Device(ref mut core) => core.run_until(limit),
-            Core::Esp32s3(ref mut core) => core.run_until(limit),
+            Core::Mcu(ref mut mcu) => mcu.run_until(limit),
             #[cfg(test)]
             Core::Script(ref mut core) => core.run_until(limit),
         }
@@ -181,9 +179,8 @@ impl Core {
 
     fn drive(&self) -> &[Drive] {
         match *self {
-            Core::Avr(ref core) => core.drive(),
             Core::Device(ref core) => core.drive(),
-            Core::Esp32s3(ref core) => core.drive(),
+            Core::Mcu(ref mcu) => mcu.drive(),
             #[cfg(test)]
             Core::Script(ref core) => core.drive(),
         }
@@ -192,9 +189,8 @@ impl Core {
     /// The volts of each of its samples at its stop at `at`.
     fn sample(&mut self, at: Time, volts: &[f64]) {
         match *self {
-            Core::Avr(ref mut core) => core.sample(at, volts),
             Core::Device(ref mut core) => core.sample(at, volts),
-            Core::Esp32s3(_) => unreachable!("only a core with samples samples"),
+            Core::Mcu(ref mut mcu) => mcu.sample(at, volts),
             #[cfg(test)]
             Core::Script(ref mut core) => core.sample(at, volts),
         }
@@ -203,9 +199,8 @@ impl Core {
     /// Its watches' levels from `at` on.
     fn input(&mut self, at: Time, levels: &[bool]) {
         match *self {
-            Core::Avr(ref mut core) => core.input(at, levels),
             Core::Device(ref mut core) => core.input(at, levels),
-            Core::Esp32s3(ref mut core) => core.input(at, levels),
+            Core::Mcu(ref mut mcu) => mcu.input(at, levels),
             #[cfg(test)]
             Core::Script(ref mut core) => core.input(at, levels),
         }
@@ -216,8 +211,7 @@ impl Core {
     /// ended. Drops every SPI byte, which no output reads.
     fn deliver(&mut self, through: Time, sent: impl FnMut(Frame), saw: impl FnMut(Phase)) {
         match *self {
-            Core::Avr(ref mut core) => core.deliver(through, sent, saw),
-            Core::Esp32s3(ref mut core) => core.deliver(through, sent),
+            Core::Mcu(ref mut mcu) => mcu.deliver(through, sent, saw),
             Core::Device(_) => {}
             #[cfg(test)]
             Core::Script(ref mut core) => core.deliver(through, sent),
@@ -227,9 +221,8 @@ impl Core {
     /// The records it sent that it still holds, in the order it sent them.
     fn records(&self) -> &[Record] {
         match *self {
-            Core::Avr(_) => &[],
             Core::Device(ref core) => core.records(),
-            Core::Esp32s3(ref core) => core.records(),
+            Core::Mcu(ref mcu) => mcu.records(),
             #[cfg(test)]
             Core::Script(ref core) => core.records(),
         }
@@ -239,9 +232,8 @@ impl Core {
     /// order it sent them.
     fn drain_records(&mut self, through: Time, mut sent: impl FnMut(Record)) {
         match *self {
-            Core::Avr(_) => {}
             Core::Device(ref mut core) => core.drain_records(through, &mut sent),
-            Core::Esp32s3(ref mut core) => core.drain_records(through, sent),
+            Core::Mcu(ref mut mcu) => mcu.drain_records(through, sent),
             #[cfg(test)]
             Core::Script(ref mut core) => core.drain_records(through, sent),
         }
@@ -252,7 +244,7 @@ impl Core {
     fn take(&mut self, at: Time, records: &[LinkRow]) {
         match *self {
             Core::Device(ref mut core) => core.take(at, records),
-            Core::Avr(_) | Core::Esp32s3(_) => {
+            Core::Mcu(_) => {
                 unreachable!(
                     "a chip with no record pins took {} records at {at:?}",
                     records.len()
@@ -267,7 +259,7 @@ impl Core {
     fn drain_rows(&mut self, mut sent: impl FnMut(Time, Drawn)) {
         match *self {
             Core::Device(ref mut core) => core.drain_rows(&mut sent),
-            Core::Avr(_) | Core::Esp32s3(_) => {}
+            Core::Mcu(_) => {}
             #[cfg(test)]
             Core::Script(_) => {}
         }
@@ -277,7 +269,7 @@ impl Core {
     fn cut(&mut self, at: Time, record: &Record) {
         match self {
             Core::Device(core) => core.cut(at, record),
-            Core::Avr(_) | Core::Esp32s3(_) => {}
+            Core::Mcu(_) => {}
             #[cfg(test)]
             Core::Script(_) => {}
         }
@@ -287,7 +279,7 @@ impl Core {
     fn shows(&self) -> Shows {
         match self {
             Core::Device(core) => core.shows(),
-            Core::Avr(_) | Core::Esp32s3(_) => Shows::Nothing,
+            Core::Mcu(_) => Shows::Nothing,
             #[cfg(test)]
             Core::Script(_) => Shows::Nothing,
         }
@@ -297,35 +289,16 @@ impl Core {
     fn event(&mut self, at: Time, event: Event<'_>) {
         match self {
             Core::Device(core) => core.event(at, event),
-            Core::Avr(_) | Core::Esp32s3(_) => unreachable!("only a device takes an event"),
+            Core::Mcu(_) => unreachable!("only a device takes an event"),
             #[cfg(test)]
             Core::Script(_) => unreachable!("only a device takes an event"),
         }
     }
 }
 
-/// A byte one of a core's USARTs sent, its start bit and the end of its stop bit on the run's
-/// clock.
-pub(crate) struct Frame {
-    /// The index in its chip's `usarts`.
-    pub(crate) usart: u8,
-    pub(crate) byte: u8,
-    pub(crate) start: Time,
-    pub(crate) end: Time,
-}
-
-/// A phase a core's TWI master saw, its first bus change and its end on the run's clock, and
-/// how many phases the core delivered before it.
-pub(crate) struct Phase {
-    pub(crate) phase: I2cPhase,
-    pub(crate) start: Time,
-    pub(crate) end: Time,
-    pub(crate) count: u64,
-}
-
 pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
     match kind {
-        Active::Atmega328p(mcu) => avr::chip(part, mcu),
+        Active::Atmega328p(mcu) => atmega328p::chip(part, mcu),
         Active::SpiReplay(replay) => spi_replay::chip(part, replay),
         Active::PulsesReplay(replay) => pulses_replay::chip(part, replay),
         Active::St77916(panel) => st77916::chip(part, panel),
@@ -737,10 +710,11 @@ impl Actives {
     pub(crate) fn warnings(&self, circuit: &Circuit, through: Time) -> Vec<Diagnostic> {
         let mut found = Vec::new();
         for ((core, ahead), chip) in self.committed.iter().zip(&self.ahead).zip(&circuit.actives) {
-            if let Core::Esp32s3(copy) = &ahead.core {
-                let part = Ref::Part(name(circuit, chip));
-                found.extend(copy.unmodeled(&part, esp32s3_of(circuit, chip), through));
-                found.extend(copy.restart(&part, esp32s3_of(circuit, chip), through));
+            if let Core::Mcu(copy) = &ahead.core {
+                let symbol = |pc| mcu::symbolize(model(circuit, chip), pc);
+                for (at, note) in copy.notes(through) {
+                    found.push(mcu::note(Ref::Part(name(circuit, chip)), at, note, symbol));
+                }
             }
             match core {
                 Core::Device(dev) => {
@@ -760,7 +734,7 @@ impl Actives {
                         });
                     }
                 }
-                Core::Avr(_) | Core::Esp32s3(_) => {}
+                Core::Mcu(_) => {}
                 #[cfg(test)]
                 Core::Script(_) => {}
             }
@@ -774,11 +748,16 @@ impl Actives {
         self.committed
             .iter()
             .zip(&circuit.actives)
-            .filter_map(|(core, chip)| match core {
-                Core::Esp32s3(mcu) => {
-                    mcu.fault(&Ref::Part(name(circuit, chip)), esp32s3_of(circuit, chip))
-                }
-                _ => None,
+            .filter_map(|(core, chip)| {
+                let Core::Mcu(core) = core else {
+                    return None;
+                };
+                let (at, fault) = core.fault()?;
+                let symbol = |pc| mcu::symbolize(model(circuit, chip), pc);
+                Some((
+                    at,
+                    mcu::fault(Ref::Part(name(circuit, chip)), at, fault, symbol),
+                ))
             })
             .min_by_key(|&(at, _)| at)
             .map(|(_, fault)| fault)
@@ -907,11 +886,12 @@ impl Actives {
             .zip(&self.ahead)
             .flat_map(|(core, ahead)| match core {
                 Core::Device(dev) => dev.in_flight(at).into_iter().collect(),
-                Core::Esp32s3(chip) => match &ahead.core {
-                    Core::Esp32s3(copy) if copy.no_train_through(at) => Vec::new(),
-                    _ => chip.in_flight(at),
+                Core::Mcu(chip) => match &ahead.core {
+                    Core::Mcu(copy) => chip.in_flight(copy, at),
+                    _ => unreachable!("a copy is of its core's kind"),
                 },
-                _ => Vec::new(),
+                #[cfg(test)]
+                Core::Script(_) => Vec::new(),
             })
             .filter(|record| matches!(record.kind, RecordKind::Pulses { .. }))
             .collect();
@@ -1042,12 +1022,12 @@ impl Actives {
     }
 }
 
-/// The netlist part of an `esp32s3` chip.
-fn esp32s3_of<'c>(circuit: &'c Circuit, chip: &Chip) -> &'c crate::mcu::Esp32s3 {
-    let part = chip.part.expect("an esp32s3 is a part");
+/// The netlist chip of a microcontroller's part.
+fn model<'c>(circuit: &'c Circuit, chip: &Chip) -> &'c crate::netlist::Chip {
+    let part = chip.part.expect("a microcontroller is a part");
     match &circuit.netlist.part(part).model {
-        crate::netlist::Model::Chip(crate::netlist::Chip::Esp32s3(mcu)) => mcu,
-        _ => unreachable!("an esp32s3 core belongs to an esp32s3 part"),
+        crate::netlist::Model::Chip(model) => model,
+        _ => unreachable!("a microcontroller's core belongs to a chip part"),
     }
 }
 

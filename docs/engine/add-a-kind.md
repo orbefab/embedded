@@ -70,4 +70,4 @@ The compiler makes each kind answer every method. It cannot tell whether the ans
 
 ## A chip or a device
 
-A chip kind, such as `ne555`, or a device on the `orbe-model` contract, is a row in the `chip` group of the same macro. Its resolve function returns the chip struct, and the row puts it in a `Chip` variant. Add that variant to `Chip` in `packages/engine/src/netlist.rs`. The compiler then names each `match` on `Chip` that needs an arm. [model.md](model.md) says what a device implements.
+A chip kind, such as `ne555`, or a device on the `orbe-model` contract, is a row in the `chip` group of the same macro. Its resolve function returns the chip struct, and the row puts it in a `Chip` variant. Add that variant to `Chip` in `packages/engine/src/netlist.rs`. The compiler then names each `match` on `Chip` that needs an arm. [model.md](model.md) says what a device implements. A microcontroller is a chip crate on the `orbe-mcu` contract and one row in the table in `packages/engine/src/mcu/mod.rs`, as [mcu.md](mcu.md#a-new-microcontroller) says.

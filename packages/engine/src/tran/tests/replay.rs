@@ -12,6 +12,7 @@ use super::fixtures::transient;
 use super::inputs::without_events;
 use super::session::{Rng, example};
 use crate::active;
+use crate::mcu::Mcu;
 use crate::session::{EdgeCursor, Input, Serial, SerialCursor, Setting, State, Status};
 
 /// One 60 Hz frame at 1x.
@@ -67,10 +68,10 @@ fn charging_button() -> Vec<u8> {
 
 /// The oscillator cycle the committed core of the run's only chip has reached.
 fn committed_cycles(session: &Session) -> u64 {
-    let active::Core::Avr(core) = &session.actives.cores()[0] else {
+    let active::Core::Mcu(Mcu::Atmega328p(host)) = &session.actives.cores()[0] else {
         panic!("an atmega328p core");
     };
-    core.cpu().cycles()
+    host.mcu.cpu().cycles()
 }
 
 fn contact(at: Time, to: Contact) -> Input {
