@@ -13,6 +13,18 @@ const H: u8 = 1 << 5;
 const T: u8 = 1 << 6;
 const I: u8 = 1 << 7;
 
+/// How [`Core::execute_steady`](super::Core::execute_steady) finished an op.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SteadyRun {
+    /// The op needs a retired load or store.
+    Stop,
+    /// The op ran, and a later pass of this run reads the same byte.
+    Same,
+    /// The op ran, and a later pass can read a different byte. The register-matched
+    /// pass skip does not apply to this run.
+    Varies,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Ptr {
     X,
@@ -38,15 +50,25 @@ impl Core {
         }
     }
 
-    /// Runs `op` when it is a load of a [`Bus::steady`] address or a [`Bus::store_idle`] store,
-    /// reading through [`Bus::peek`] and leaving the bus as it is. Otherwise runs nothing and
-    /// returns `false`.
+    /// Runs `op` when it is a load of a [`Bus::steady`] address, an `IN` [`Bus::projected`]
+    /// answers, or a [`Bus::store_idle`] store. A steady load reads [`Bus::peek`]. A projected
+    /// `IN` reads the core's cycle, which is ahead of the bus during a free run, and a later
+    /// pass can see a different byte. Otherwise runs nothing and returns [`SteadyRun::Stop`].
     #[inline(always)]
-    pub(super) fn execute_steady<B: Bus>(&mut self, bus: &B, pc: u16, op: Op) -> bool {
+    pub(super) fn execute_steady<B: Bus>(&mut self, bus: &B, pc: u16, op: Op) -> SteadyRun {
         let next = pc.wrapping_add(1);
+        let mut varies = false;
         match op {
-            Op::In { d, addr } if bus.steady(addr) => {
-                self.put(d, bus.peek(self, addr));
+            Op::In { d, addr } => {
+                let value = if bus.steady(addr) {
+                    bus.peek(self, addr)
+                } else if let Some(value) = bus.projected(self, addr) {
+                    varies = true;
+                    value
+                } else {
+                    return SteadyRun::Stop;
+                };
+                self.put(d, value);
                 self.finish(next, 1);
             }
             Op::Lds { d, addr } if bus.steady(addr) => {
@@ -65,9 +87,13 @@ impl Core {
             Op::Sts { r, addr } if bus.store_idle(self, addr, self.at(r)) => {
                 self.finish(pc.wrapping_add(2), 2);
             }
-            _ => return false,
+            _ => return SteadyRun::Stop,
         }
-        true
+        if varies {
+            SteadyRun::Varies
+        } else {
+            SteadyRun::Same
+        }
     }
 
     /// Runs `op`, which [`Op::is_free`].

@@ -320,6 +320,22 @@ impl Timer {
         self.peek(reg, cycle, clock)
     }
 
+    /// A load that writes nothing, as the byte [`Self::peek`] returns at `cycle`.
+    ///
+    /// A running 16-bit timer's `TCNTnL` or `ICRnL` latches `TEMP`, so that load is not here.
+    /// An 8-bit `TCNTnL` only projects the count.
+    pub(crate) fn pure(&self, reg: u8, cycle: u64, clock: &ClockView) -> Option<u8> {
+        let latches = self.is16() && (reg == TCNT_L || reg == ICR_L);
+        if latches && !self.prr_off() && self.io_clock() {
+            return None;
+        }
+        if reg == TCNT_L || latches {
+            Some(self.peek(reg, cycle, clock))
+        } else {
+            None
+        }
+    }
+
     /// Flags rise only when the timer fires, and `TCNTnH` and `ICRnH` read `TEMP`. Not `TCNTnL`,
     /// which counts with the cycle, or `ICRnL`, whose 16-bit read latches `TEMP`.
     pub(crate) fn steady(&self, reg: u8) -> bool {

@@ -407,6 +407,15 @@ impl Device {
         }
     }
 
+    /// A timer register whose load writes nothing. Every other device load either writes or
+    /// does not move with the cycle.
+    pub(crate) fn pure(&self, reg: u8, cycle: u64, clock: &ClockView) -> Option<u8> {
+        match self {
+            Device::Timer(timer) => timer.pure(reg, cycle, clock),
+            _ => None,
+        }
+    }
+
     pub(crate) fn peek(&self, reg: u8, mux: &PinMux, cycle: u64, clock: &ClockView) -> u8 {
         match self {
             Device::Port(port) => port.peek(reg, mux, cycle),

@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use crate::bus::Bus;
 use decode::{Countdown, Op};
+use execute::SteadyRun;
 
 /// What the core does between instructions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -302,11 +303,12 @@ impl Core {
             return None;
         }
         let last = self.visit();
-        if self.execute_steady(bus, self.pc, op) {
-            self.run_steady(bus, bound, last)
-        } else {
-            None
-        }
+        let varies = match self.execute_steady(bus, self.pc, op) {
+            SteadyRun::Stop => return None,
+            SteadyRun::Same => false,
+            SteadyRun::Varies => true,
+        };
+        self.run_steady(bus, bound, last, varies)
     }
 
     fn visit(&self) -> Visit {
@@ -322,9 +324,16 @@ impl Core {
     /// is the anchor. Each time the program counter is back at the anchor with the same registers
     /// and `SREG` as on the last visit, the stretch between the visits was a loop that changed
     /// nothing. Every later pass reads the same values and takes the same path, so the passes
-    /// that end before `bound` are skipped by their cycles.
+    /// that end before `bound` are skipped by their cycles. `varies` means a projected load
+    /// already ran, so a later pass can read a different byte and the skip does not apply.
     #[inline(never)]
-    fn run_steady<B: Bus>(&mut self, bus: &B, bound: u64, mut last: Visit) -> Option<u64> {
+    fn run_steady<B: Bus>(
+        &mut self,
+        bus: &B,
+        bound: u64,
+        mut last: Visit,
+        mut varies: bool,
+    ) -> Option<u64> {
         let mut before = last.cycles;
         loop {
             while self.cycles < bound {
@@ -338,17 +347,19 @@ impl Core {
             if self.cycles >= bound {
                 return Some(self.cycles.wrapping_sub(before));
             }
+            if !varies && self.pc == last.pc && (self.r, self.sreg) == (last.r, last.sreg) {
+                let pass = self.cycles.wrapping_sub(last.cycles);
+                let passes = (bound - 1 - self.cycles) / pass;
+                self.cycles = self.cycles.wrapping_add(passes * pass);
+            }
             if self.pc == last.pc {
-                if (self.r, self.sreg) == (last.r, last.sreg) {
-                    let pass = self.cycles.wrapping_sub(last.cycles);
-                    let passes = (bound - 1 - self.cycles) / pass;
-                    self.cycles = self.cycles.wrapping_add(passes * pass);
-                }
                 last = self.visit();
             }
             before = self.cycles;
-            if !self.execute_steady(bus, self.pc, self.op(self.pc)) {
-                return None;
+            match self.execute_steady(bus, self.pc, self.op(self.pc)) {
+                SteadyRun::Stop => return None,
+                SteadyRun::Varies => varies = true,
+                SteadyRun::Same => {}
             }
         }
     }
