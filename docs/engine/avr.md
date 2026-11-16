@@ -166,7 +166,7 @@ Each run is a new `Cpu`. Before `load_image`, the example calls `set_fuses` with
 
 The example discards one warm-up, times five runs, and prints the median wall time in milliseconds per simulated second, the minimum, the maximum, and the MHz of the median run. A simulated second is 16,000,000 cycles. The same line gives the pin-edge count of the median run. The process exits non-zero when a run stops before its cycle count or executes an unknown opcode. `scripts/check.sh` does not run the example.
 
-The range describes one process only. Its five runs often sit within 1 ms of each other, while separate invocations of the same binary on a quiet machine give medians from about 104 to 114 ms on `fade.hex`. To compare two builds, alternate whole invocations, at least three of each, and take the spread of each build's medians as its noise. A difference counts only when the two sets of medians do not overlap.
+The range describes one process only. Its five runs often sit within 1 ms of each other, while separate invocations of the same binary on a quiet machine give medians from about 98 to 105 ms on `fade.hex`. To compare two builds, run `scripts/compare-throughput.sh BIN_A BIN_B`. It alternates whole invocations, 15 of each by default, and prints each side's median, the range of those medians, and a two-sided Mann-Whitney p. The line also gives the 1-minute load, and a load above 2 is not a comparison. A difference counts when that p is below 0.05. Comparing a binary with itself shows no difference.
 
 ## Compiled sketches
 
