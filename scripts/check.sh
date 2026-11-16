@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-# Checks the repo. `fast` is what CI runs: shellcheck on every tracked shell script, ruff on every
-# tracked Python file, rustfmt, clippy, clippy on orbe-model, orbe-scene, orbe-session and
-# orbe-wasm for wasm32, `scripts/core-deps.sh`, and the Rust tests through cargo-nextest, except
-# the `orbe-microchip` tests and the engine tests marked `full tier`. `orbe-avr` is in that
-# workspace run.
-# `full` runs those too, then the chip models' skip checks, the engine's Python checks, `orbe-run`
+# Checks the repo. `lint` is what CI runs: shellcheck on every tracked shell script, ruff on every
+# tracked Python file, `scripts/core-deps.sh`, rustfmt, clippy, and clippy on orbe-model,
+# orbe-scene, orbe-session and orbe-wasm for wasm32.
+# `fast` runs `lint`, then the Rust tests through cargo-nextest, except the `orbe-microchip` tests
+# and the engine tests marked `full tier`. `orbe-avr` is in that workspace run.
+# `full` runs `fast`, then the chip models' skip checks, the engine's Python checks, `orbe-run`
 # for WASI against native, the wasm package check, and the browser speed check on the package that
-# check built. Both need uv, shellcheck and cargo-nextest. `full` also needs ngspice-42, node 24
-# or later, the repo's Node dependencies, a Chromium as scripts/check-speed.sh finds it, rustup
-# with the wasm32-wasip1 target, and the wasm-bindgen CLI that scripts/wasm.sh names.
+# check built. `lint` needs uv and shellcheck, and `fast` and `full` need cargo-nextest too.
+# `full` also needs ngspice-42, node 24 or later, the repo's Node dependencies, a Chromium as
+# scripts/check-speed.sh finds it, rustup with the wasm32-wasip1 target, and the wasm-bindgen CLI
+# that scripts/wasm.sh names.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 usage() {
-  echo "usage: scripts/check.sh fast|full" >&2
+  echo "usage: scripts/check.sh lint|fast|full" >&2
   exit 2
 }
 
@@ -52,17 +53,21 @@ lint_tracked() {
   uv run --project packages/cad --frozen ruff format --check "${py[@]}"
 }
 
-fast() {
+lint() {
   lint_tracked
   scripts/core-deps.sh
-  need_nextest
   cargo fmt --all --check
-  blobs=$(packages/engine/scripts/blobs.sh)
   cargo clippy --workspace --all-targets --locked -- -D warnings
   cargo clippy -p orbe-engine --all-targets --locked --features runner -- -D warnings
   cargo clippy -p orbe-microchip --all-targets --locked --features port-skip-check -- -D warnings
   cargo clippy -p orbe-model -p orbe-scene -p orbe-session -p orbe-wasm \
     --target wasm32-unknown-unknown --locked -- -D warnings
+}
+
+fast() {
+  need_nextest
+  lint
+  blobs=$(packages/engine/scripts/blobs.sh)
   rust_tests --workspace --exclude orbe-microchip
 }
 
@@ -115,6 +120,7 @@ full() {
 
 [[ $# -eq 1 ]] || usage
 case "$1" in
+  lint) lint ;;
   fast) fast ;;
   full) full ;;
   *) usage ;;
