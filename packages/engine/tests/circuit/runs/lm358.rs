@@ -26,7 +26,7 @@ const VCC: f64 = 5.0;
 const GBW: f64 = 700_000.0;
 /// V/s. SR typical, G = +1.
 const SLEW: f64 = 300_000.0;
-/// 1. AOL 100 V/mV typical at VS = 15 V, VO = 1 V to 11 V, RL at least 2 kohm.
+/// `1`. AOL 100 V/mV typical at VS = 15 V, VO = 1 V to 11 V, RL at least 2 kohm.
 /// Section 5.7 has no 5 V open-loop gain.
 const A0: f64 = 100_000.0;
 /// Ampere, leaving each input. IB typical is −20 nA into the pin at VO = 1.4 V.
