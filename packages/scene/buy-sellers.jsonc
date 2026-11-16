@@ -2,4 +2,5 @@
 {
   "Arduino": ["store.arduino.cc"],
   "DigiKey": ["www.digikey.com"],
+  "LCSC": ["www.lcsc.com"],
 }

@@ -605,6 +605,46 @@ fn test_paths_name_files_or_project_folders() {
     assert_eq!(run.json()["error"]["code"], "usage");
 }
 
+/// The catalog's GL5528 under 10 kohm, and a 10 kohm trimmer at half, seated on a breadboard.
+/// From the GL5528 sheet, R is 15 kohm at 10 lx, the centre of its 10 to 20 kohm, and falls 0.6
+/// decades per decade of light, to 3.768 kohm at 100 lx and 946.4 ohm at 1000 lx. In the dark
+/// it is 1 Mohm. `ldr.a` is `5V * R / (10k + R)`, and the wiper is 2.5 V.
+#[test]
+fn the_breadboard_ldr_follows_its_sheet_and_the_trimmer_divides() {
+    let dir = common::overlaid(
+        &common::repo().join("packages/scene/tests/good/ldr_and_trimmer_on_a_breadboard"),
+    );
+    fs::create_dir_all(dir.path().join("tests")).unwrap();
+    fs::write(
+        dir.path().join("tests/light.test"),
+        "\
+open
+expect @trim.wiper > 2.499V
+expect @trim.wiper < 2.501V
+set light 10
+step 1ms
+expect @ldr.a > 2.999V    # 15 kohm: 3.000 V
+expect @ldr.a < 3.001V
+set light 100
+step 1ms
+expect @ldr.a > 1.3673V   # 3.768 kohm: 1.3683 V
+expect @ldr.a < 1.3693V
+set light 1000
+step 1ms
+expect @ldr.a > 0.4313V   # 946.4 ohm: 0.4323 V
+expect @ldr.a < 0.4333V
+set light 0
+step 1ms
+expect @ldr.a > 4.9495V   # 1 Mohm: 4.9505 V
+expect @ldr.a < 4.9515V
+expect no diagnostics
+",
+    )
+    .unwrap();
+    let run = orbe(dir.path(), &["test"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+}
+
 /// The scene's 10 kohm over a light-dependent resistor, whose resistance is `10 kohm * 10 lx /
 /// light`. The scene holds 300 lx and steps to 50 lx at 20 ms. `ldr.v` is `5V * R / (10k + R)`.
 #[test]

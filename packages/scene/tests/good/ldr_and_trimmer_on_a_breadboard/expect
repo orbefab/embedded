@@ -1,0 +1,12 @@
+17 engine parts
+ldr /kind "resistor"
+ldr /resistance/quantity "light"
+ldr /resistance/curve/kind "power"
+ldr /resistance/curve/x/value 10
+ldr /resistance/curve/y/value 15000
+ldr /resistance/curve/exponent/value -0.6
+ldr /resistance/curve/max/value 1000000
+ldr /ratings/power/value 0.1
+trim /kind "potentiometer"
+trim /resistance/value 10000
+trim /position/value 0.5
