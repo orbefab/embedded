@@ -8,6 +8,7 @@ use orbe_model::{Drive, Time};
 
 use super::native::{Hosting, Port};
 use crate::link::Record;
+use crate::world::World;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Replay {
@@ -39,13 +40,13 @@ impl<D: orbe_model::Device> Port<D> for Replay {
         self.records.get(self.made).map(|record| record.end)
     }
 
-    fn take_due(&mut self, _dev: &mut Hosting<D>, at: Time) -> bool {
+    fn take_due(&mut self, _dev: &mut Hosting<D>, _world: &World, at: Time) -> bool {
         debug_assert_eq!(self.records[self.made].end, at);
         self.made += 1;
         true
     }
 
-    fn input(&mut self, _dev: &mut Hosting<D>, _at: Time, levels: &[bool]) {
+    fn input(&mut self, _dev: &mut Hosting<D>, _world: &World, _at: Time, levels: &[bool]) {
         assert!(levels.is_empty(), "a replay watches no pin");
     }
 

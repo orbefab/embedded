@@ -16,6 +16,7 @@ use orbe_model::{Ack, Dir, Drive, I2cTarget, Time};
 
 use super::native::{Hosting, Port};
 use crate::diagnostic::ProtocolRule;
+use crate::world::World;
 
 /// The bus a device declares: its address, and which of its watches are SCL, SDA and the pin
 /// that holds the bus in reset while it reads low.
@@ -42,25 +43,36 @@ pub(crate) trait Target {
     fn stop(&mut self, at: Time);
 }
 
-impl<D: I2cTarget> Target for Hosting<D> {
+/// A device's calls in one landing, in the world they read.
+struct Calls<'a, D> {
+    dev: &'a mut Hosting<D>,
+    world: &'a World,
+}
+
+impl<D: I2cTarget> Target for Calls<'_, D> {
     fn start(&mut self, at: Time, dir: Dir) {
-        self.call(at, |device, cx| device.start(cx, at, dir));
+        self.dev
+            .call(self.world, at, |device, cx| device.start(cx, at, dir));
     }
 
     fn write(&mut self, at: Time, byte: u8) -> Ack {
-        self.call(at, |device, cx| device.write(cx, at, byte))
+        self.dev
+            .call(self.world, at, |device, cx| device.write(cx, at, byte))
     }
 
     fn read(&mut self, at: Time) -> u8 {
-        self.call(at, |device, cx| device.read(cx, at))
+        self.dev
+            .call(self.world, at, |device, cx| device.read(cx, at))
     }
 
     fn master_ack(&mut self, at: Time, more: bool) {
-        self.call(at, |device, cx| device.master_ack(cx, at, more));
+        self.dev
+            .call(self.world, at, |device, cx| device.master_ack(cx, at, more));
     }
 
     fn stop(&mut self, at: Time) {
-        self.call(at, |device, cx| device.stop(cx, at));
+        self.dev
+            .call(self.world, at, |device, cx| device.stop(cx, at));
     }
 }
 
@@ -403,17 +415,23 @@ impl<D: I2cTarget> Port<D> for Engine {
         Engine::due_at(*self)
     }
 
-    fn take_due(&mut self, _dev: &mut Hosting<D>, at: Time) -> bool {
+    fn take_due(&mut self, _dev: &mut Hosting<D>, _world: &World, at: Time) -> bool {
         Engine::take_due(self, at);
         false
     }
 
-    fn input(&mut self, dev: &mut Hosting<D>, at: Time, levels: &[bool]) {
+    fn input(&mut self, dev: &mut Hosting<D>, world: &World, at: Time, levels: &[bool]) {
         let Bus {
             scl, sda, reset, ..
         } = self.bus;
         let reset = reset.is_some_and(|pin| !levels[pin]);
-        self.edge(at, levels[scl], levels[sda], reset, dev);
+        self.edge(
+            at,
+            levels[scl],
+            levels[sda],
+            reset,
+            &mut Calls { dev, world },
+        );
     }
 
     fn broke(&self, found: &mut Vec<(ProtocolRule, Time)>) {

@@ -10,6 +10,7 @@ use orbe_model::{Drive, Spi, SpiTarget, Time};
 use super::native::{Hosting, Port};
 use crate::link::{LinkRow, RecordKind, SpiNets};
 use crate::netlist::NetId;
+use crate::world::World;
 
 /// A target's data pins and its reset watch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,15 +62,15 @@ impl<D: SpiTarget> Port<D> for Engine {
         None
     }
 
-    fn take_due(&mut self, _dev: &mut Hosting<D>, _at: Time) -> bool {
+    fn take_due(&mut self, _dev: &mut Hosting<D>, _world: &World, _at: Time) -> bool {
         unreachable!("the SPI engine has nothing due")
     }
 
-    fn input(&mut self, _dev: &mut Hosting<D>, _at: Time, levels: &[bool]) {
+    fn input(&mut self, _dev: &mut Hosting<D>, _world: &World, _at: Time, levels: &[bool]) {
         self.reset = self.bus.reset.is_some_and(|watch| !levels[watch]);
     }
 
-    fn take_records(&mut self, dev: &mut Hosting<D>, at: Time, records: &[LinkRow]) {
+    fn take_records(&mut self, dev: &mut Hosting<D>, world: &World, at: Time, records: &[LinkRow]) {
         for row in records {
             let RecordKind::Spi { spi, nets } = &row.record.kind else {
                 continue;
@@ -81,7 +82,7 @@ impl<D: SpiTarget> Port<D> for Engine {
                 self.miswired.get_or_insert((at, row.sender));
                 continue;
             }
-            dev.call(at, |device, cx| device.transaction(cx, at, spi));
+            dev.call(world, at, |device, cx| device.transaction(cx, at, spi));
         }
     }
 

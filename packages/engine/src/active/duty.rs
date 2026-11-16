@@ -5,6 +5,7 @@ use orbe_model::{Drive, DutyTarget, Time};
 
 use super::native::{Hosting, Port};
 use crate::link::{LinkRow, RecordKind};
+use crate::world::World;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Pin;
@@ -18,16 +19,16 @@ impl<D: DutyTarget> Port<D> for Pin {
         None
     }
 
-    fn take_due(&mut self, _dev: &mut Hosting<D>, _at: Time) -> bool {
+    fn take_due(&mut self, _dev: &mut Hosting<D>, _world: &World, _at: Time) -> bool {
         unreachable!("a PWM pin has nothing due")
     }
 
-    fn input(&mut self, _dev: &mut Hosting<D>, _at: Time, _levels: &[bool]) {}
+    fn input(&mut self, _dev: &mut Hosting<D>, _world: &World, _at: Time, _levels: &[bool]) {}
 
-    fn take_records(&mut self, dev: &mut Hosting<D>, at: Time, records: &[LinkRow]) {
+    fn take_records(&mut self, dev: &mut Hosting<D>, world: &World, at: Time, records: &[LinkRow]) {
         for row in records {
             if let RecordKind::Duty { duty, .. } = &row.record.kind {
-                dev.call(at, |device, cx| device.duty(cx, at, *duty));
+                dev.call(world, at, |device, cx| device.duty(cx, at, *duty));
             }
         }
     }

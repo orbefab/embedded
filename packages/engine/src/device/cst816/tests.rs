@@ -1,3 +1,4 @@
+use crate::world::World;
 use orbe_model::{Drive, Time, Value};
 
 use super::model::{CHIP_ID, INT_PULSE_PS, REG_CHIP, REG_FINGERS};
@@ -25,7 +26,7 @@ fn power_on() -> Core {
         Engine::new(BUS),
         model::OUTPUTS,
     );
-    core.input(Time::ZERO, &[true, true, true, true]);
+    core.input(&World::default(), Time::ZERO, &[true, true, true, true]);
     core
 }
 
@@ -45,7 +46,7 @@ fn touch(core: &mut Core, at: Time, touch: Touch) {
         ("down".to_string(), Value::Bool(touch.down)),
     ];
     let event = EventSpec::declared(&TOUCH, &fields).unwrap();
-    core.event(at, event.event());
+    core.event(&World::default(), at, event.event());
 }
 
 /// Master levels, and the wire SDA after the part's own drive.
@@ -97,11 +98,14 @@ impl Bus {
         for _ in 0..4 {
             let drive = self.core.drive()[IMAGE_SDA];
             let sda = self.wire_sda();
-            self.core
-                .input(Time::from_ps(self.t), &[self.scl, sda, true, self.rst_high]);
+            self.core.input(
+                &World::default(),
+                Time::from_ps(self.t),
+                &[self.scl, sda, true, self.rst_high],
+            );
             self.mark();
             let limit = self.t.saturating_add(DATA_HOLD_PS + 2);
-            while let Some(stop) = self.core.run_until(Time::from_ps(limit)) {
+            while let Some(stop) = self.core.run_until(&World::default(), Time::from_ps(limit)) {
                 self.t = stop.at.as_ps();
                 self.mark();
             }
@@ -118,18 +122,24 @@ impl Bus {
         self.scl = scl;
         self.master_sda = master_sda;
         let sda = self.wire_sda();
-        self.core
-            .input(Time::from_ps(t), &[scl, sda, true, self.rst_high]);
+        self.core.input(
+            &World::default(),
+            Time::from_ps(t),
+            &[scl, sda, true, self.rst_high],
+        );
         self.mark();
     }
 
     fn spin(&mut self, limit: u64) {
-        while let Some(stop) = self.core.run_until(Time::from_ps(limit)) {
+        while let Some(stop) = self.core.run_until(&World::default(), Time::from_ps(limit)) {
             self.t = stop.at.as_ps();
             self.mark();
             let sda = self.wire_sda();
-            self.core
-                .input(Time::from_ps(self.t), &[self.scl, sda, true, self.rst_high]);
+            self.core.input(
+                &World::default(),
+                Time::from_ps(self.t),
+                &[self.scl, sda, true, self.rst_high],
+            );
         }
         self.t = limit;
     }
@@ -286,7 +296,7 @@ fn a_read_returns_the_byte_at_the_pointer_and_the_next() {
             down: true,
         },
     );
-    bus.core.run_until(Time::from_ps(501));
+    bus.core.run_until(&World::default(), Time::from_ps(501));
     bus.start();
     bus.byte(ADDRESS << 1);
     bus.ack_clock();
@@ -331,14 +341,21 @@ fn a_touch_leaves_the_image_and_pulses_int() {
         },
     );
     assert_eq!(core.drive(), &RELEASED);
-    assert_eq!(core.run_until(at), None, "no drive at the touch");
+    assert_eq!(
+        core.run_until(&World::default(), at),
+        None,
+        "no drive at the touch"
+    );
     let fall = Time::from_ps(at.as_ps() + 1);
-    let stop = core.run_until(fall).expect("INT falls");
+    let stop = core.run_until(&World::default(), fall).expect("INT falls");
     assert_eq!(stop.at, fall);
     assert_eq!(core.drive()[IMAGE_INT], Drive::Low);
     let rise = Time::from_ps(fall.as_ps() + INT_PULSE_PS);
-    assert_eq!(core.run_until(Time::from_ps(rise.as_ps() - 1)), None);
-    let stop = core.run_until(rise).expect("INT rises");
+    assert_eq!(
+        core.run_until(&World::default(), Time::from_ps(rise.as_ps() - 1)),
+        None
+    );
+    let stop = core.run_until(&World::default(), rise).expect("INT rises");
     assert_eq!(stop.at, rise);
     assert_eq!(core.drive()[IMAGE_INT], Drive::Off);
 }
@@ -355,12 +372,15 @@ fn reset_releases_int_and_clears_a_point() {
             down: true,
         },
     );
-    bus.core.run_until(Time::from_ps(1_001));
+    bus.core.run_until(&World::default(), Time::from_ps(1_001));
     assert_eq!(bus.core.drive()[IMAGE_INT], Drive::Low);
     bus.rst_high = false;
     bus.set(2_000, true, true);
     let release = Time::from_ps(2_001);
-    let stop = bus.core.run_until(release).expect("INT releases");
+    let stop = bus
+        .core
+        .run_until(&World::default(), release)
+        .expect("INT releases");
     assert_eq!(stop.at, release);
     assert_eq!(bus.core.drive(), &RELEASED);
     bus.rst_high = true;
@@ -403,7 +423,7 @@ fn a_finger_up_keeps_the_last_point() {
             down: true,
         },
     );
-    bus.core.run_until(Time::from_ps(501));
+    bus.core.run_until(&World::default(), Time::from_ps(501));
     touch(
         &mut bus.core,
         Time::from_ps(3_000),
@@ -413,7 +433,7 @@ fn a_finger_up_keeps_the_last_point() {
             down: false,
         },
     );
-    bus.core.run_until(Time::from_ps(3_001));
+    bus.core.run_until(&World::default(), Time::from_ps(3_001));
     bus.t = 3_001;
     assert_eq!(
         read_from(&mut bus, REG_FINGERS as u8, 5, true),
@@ -486,7 +506,7 @@ fn reset_during_a_transfer_releases_sda_after_the_hold() {
             down: true,
         },
     );
-    bus.core.run_until(Time::from_ps(1_001));
+    bus.core.run_until(&World::default(), Time::from_ps(1_001));
     assert_eq!(bus.core.drive()[IMAGE_INT], Drive::Low);
     bus.t = 1_001;
     bus.start();
@@ -580,7 +600,7 @@ fn reset_while_scl_is_high_releases_sda_and_logs_nothing() {
             down: true,
         },
     );
-    bus.core.run_until(Time::from_ps(1_001));
+    bus.core.run_until(&World::default(), Time::from_ps(1_001));
     assert_eq!(bus.core.drive()[IMAGE_INT], Drive::Low);
     bus.t = 1_001;
     bus.start();

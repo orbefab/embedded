@@ -5,22 +5,28 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-use orbe_model::{Cx, Device, Drawn, Drive, Drives, Event, Levels, Shows, Stop, Time, View};
+use orbe_model::{
+    Cx, Device, Drawn, Drive, Drives, Event, Levels, Pulses, Quantity, Shows, Stop, Time, View,
+};
 
 use crate::diagnostic::ProtocolRule;
 use crate::link::{LinkRow, Record};
+use crate::world::World;
 
-/// A device's core, with the contract every `Core` keeps.
+/// A device's core, with the contract every `Core` keeps. Each call that reaches the device
+/// takes the world, and the device reads the quantities it declares in it at the call's time.
 pub(crate) trait Hosted: Send + fmt::Debug {
-    fn run_until(&mut self, limit: Time) -> Option<Stop>;
+    fn run_until(&mut self, world: &World, limit: Time) -> Option<Stop>;
     fn drive(&self) -> &[Drive];
-    fn sample(&mut self, at: Time, volts: &[f64]);
-    fn input(&mut self, at: Time, levels: &[bool]);
-    fn event(&mut self, at: Time, event: Event<'_>);
+    fn sample(&mut self, world: &World, at: Time, volts: &[f64]);
+    fn input(&mut self, world: &World, at: Time, levels: &[bool]);
+    fn event(&mut self, world: &World, at: Time, event: Event<'_>);
     /// One call per landing. The port walks each record on the concrete device.
-    fn take(&mut self, at: Time, records: &[LinkRow]);
+    fn take(&mut self, world: &World, at: Time, records: &[LinkRow]);
     /// The part of one record sent by `at`, where the run ends inside it.
-    fn cut(&mut self, at: Time, record: &Record);
+    fn cut(&mut self, world: &World, at: Time, record: &Record);
+    /// The world quantities the device reads.
+    fn reads(&self) -> &'static [Quantity];
     /// The records its port sent that it still holds, in the order it sent them.
     fn records(&self) -> &[Record];
     /// Hands over and drops each record it holds that ended at or before `through`.
@@ -65,6 +71,9 @@ pub(crate) struct Hosting<D> {
     /// The pixel writes it closed that a commit has not staged. A call that closes one is at a
     /// landing that commits it, so a copy holds none.
     drawn: Vec<(Time, Drawn)>,
+    /// The train a call queued that its port has not taken. The port takes it in the same
+    /// call on the core, so a copy holds none.
+    queued: Option<(Time, Pulses)>,
 }
 
 impl<D: Device> Clone for Hosting<D> {
@@ -74,6 +83,7 @@ impl<D: Device> Clone for Hosting<D> {
             broke: self.broke,
             shown: Arc::clone(&self.shown),
             drawn: self.drawn.clone(),
+            queued: self.queued.clone(),
         }
     }
 
@@ -86,6 +96,7 @@ impl<D: Device> Clone for Hosting<D> {
             self.shown = Arc::clone(&source.shown);
         }
         self.drawn.clone_from(&source.drawn);
+        self.queued.clone_from(&source.queued);
     }
 }
 
@@ -96,30 +107,52 @@ impl<D: Device> Hosting<D> {
             broke: [None; ProtocolRule::ALL.len()],
             shown: Arc::new(Vec::new()),
             drawn: Vec::new(),
+            queued: None,
+        }
+    }
+
+    /// A context in which the device reads what it declares of `world` at `at`.
+    #[inline]
+    fn cx(world: &World, at: Time) -> Cx {
+        if D::WORLD.is_empty() {
+            Cx::default()
+        } else {
+            Cx::new(world.readings(D::WORLD, at))
         }
     }
 
     /// `call` on the device, then what it left in its `Cx`, at `at`.
     #[inline]
-    pub(crate) fn call<R>(&mut self, at: Time, call: impl FnOnce(&mut D, &mut Cx) -> R) -> R {
-        let mut cx = Cx::default();
+    pub(crate) fn call<R>(
+        &mut self,
+        world: &World,
+        at: Time,
+        call: impl FnOnce(&mut D, &mut Cx) -> R,
+    ) -> R {
+        let mut cx = Self::cx(world, at);
         let out = call(&mut self.device, &mut cx);
         self.read(at, cx);
         out
     }
 
     /// The device's next stop up to `limit`. What it left in its `Cx` is at that stop, or at
-    /// `limit` with none.
-    fn run_until(&mut self, limit: Time) -> Option<Stop> {
-        let mut cx = Cx::default();
+    /// `limit` with none. It reads the world at `limit`: a change of a quantity it reads lands
+    /// it, so no run crosses one.
+    fn run_until(&mut self, world: &World, limit: Time) -> Option<Stop> {
+        let mut cx = Self::cx(world, limit);
         let stop = self.device.run_until(&mut cx, limit);
         self.read(stop.map_or(limit, |stop| stop.at), cx);
         stop
     }
 
+    /// The train a call queued, which only its port takes.
+    pub(crate) fn take_queued(&mut self) -> Option<(Time, Pulses)> {
+        self.queued.take()
+    }
+
     #[inline]
     fn read(&mut self, at: Time, cx: Cx) {
-        if cx.broken().is_some() || cx.shown() || cx.drawn().is_some() {
+        if cx.broken().is_some() || cx.shown() || cx.drawn().is_some() || cx.queued().is_some() {
             self.keep(at, cx);
         }
     }
@@ -152,6 +185,14 @@ impl<D: Device> Hosting<D> {
             );
             self.drawn.push((at, drawn));
         }
+        if let Some((start, train)) = cx.queued() {
+            assert!(*start > at, "a train starts after the call that queues it");
+            assert!(
+                self.queued.is_none(),
+                "the port takes each train before the next call"
+            );
+            self.queued = Some((*start, train.clone()));
+        }
     }
 }
 
@@ -166,15 +207,25 @@ pub(crate) trait Port<D>: Clone + Send + 'static {
     fn due_at(&self) -> Option<Time>;
     /// Applies what is due at `at`: a drive, a call on the device, or a record's end. Returns
     /// whether a record it sent ends there.
-    fn take_due(&mut self, dev: &mut Hosting<D>, at: Time) -> bool;
+    fn take_due(&mut self, dev: &mut Hosting<D>, world: &World, at: Time) -> bool;
     /// The chip's watch levels from `at`. The port reads them before the device does.
-    fn input(&mut self, dev: &mut Hosting<D>, at: Time, levels: &[bool]);
+    fn input(&mut self, dev: &mut Hosting<D>, world: &World, at: Time, levels: &[bool]);
+    /// Takes the train a call on the device queued at `at`. Only a port that plays trains
+    /// takes one.
+    fn claim(&mut self, _dev: &mut Hosting<D>, _at: Time) {}
     /// Each rule the port saw broken, at the first time.
     fn broke(&self, _found: &mut Vec<(ProtocolRule, Time)>) {}
     /// The records that end at `at`. A port with no record pin does nothing.
-    fn take_records(&mut self, _dev: &mut Hosting<D>, _at: Time, _records: &[LinkRow]) {}
+    fn take_records(
+        &mut self,
+        _dev: &mut Hosting<D>,
+        _world: &World,
+        _at: Time,
+        _records: &[LinkRow],
+    ) {
+    }
     /// The part of `record` sent by `at`. A port with no record pin does nothing.
-    fn cut_record(&mut self, _dev: &mut Hosting<D>, _at: Time, _record: &Record) {}
+    fn cut_record(&mut self, _dev: &mut Hosting<D>, _world: &World, _at: Time, _record: &Record) {}
     /// The records it sent that it still holds. A port that sends none holds none.
     fn records(&self) -> &[Record] {
         &[]
@@ -209,15 +260,20 @@ impl<D, A: Port<D>, B: Port<D>> Port<D> for (A, B) {
         }
     }
 
-    fn take_due(&mut self, dev: &mut Hosting<D>, at: Time) -> bool {
-        let a = self.0.due_at() == Some(at) && self.0.take_due(dev, at);
-        let b = self.1.due_at() == Some(at) && self.1.take_due(dev, at);
+    fn take_due(&mut self, dev: &mut Hosting<D>, world: &World, at: Time) -> bool {
+        let a = self.0.due_at() == Some(at) && self.0.take_due(dev, world, at);
+        let b = self.1.due_at() == Some(at) && self.1.take_due(dev, world, at);
         a || b
     }
 
-    fn input(&mut self, dev: &mut Hosting<D>, at: Time, levels: &[bool]) {
-        self.0.input(dev, at, levels);
-        self.1.input(dev, at, levels);
+    fn input(&mut self, dev: &mut Hosting<D>, world: &World, at: Time, levels: &[bool]) {
+        self.0.input(dev, world, at, levels);
+        self.1.input(dev, world, at, levels);
+    }
+
+    fn claim(&mut self, dev: &mut Hosting<D>, at: Time) {
+        self.0.claim(dev, at);
+        self.1.claim(dev, at);
     }
 
     fn broke(&self, found: &mut Vec<(ProtocolRule, Time)>) {
@@ -225,14 +281,14 @@ impl<D, A: Port<D>, B: Port<D>> Port<D> for (A, B) {
         self.1.broke(found);
     }
 
-    fn take_records(&mut self, dev: &mut Hosting<D>, at: Time, records: &[LinkRow]) {
-        self.0.take_records(dev, at, records);
-        self.1.take_records(dev, at, records);
+    fn take_records(&mut self, dev: &mut Hosting<D>, world: &World, at: Time, records: &[LinkRow]) {
+        self.0.take_records(dev, world, at, records);
+        self.1.take_records(dev, world, at, records);
     }
 
-    fn cut_record(&mut self, dev: &mut Hosting<D>, at: Time, record: &Record) {
-        self.0.cut_record(dev, at, record);
-        self.1.cut_record(dev, at, record);
+    fn cut_record(&mut self, dev: &mut Hosting<D>, world: &World, at: Time, record: &Record) {
+        self.0.cut_record(dev, world, at, record);
+        self.1.cut_record(dev, world, at, record);
     }
 
     fn records(&self) -> &[Record] {
@@ -311,11 +367,21 @@ impl<D: Device, P: Port<D>> Native<D, P> {
         self.dev.device.drive() == self.drives
     }
 
+    /// Hands the port the train a call at `at` queued. A device on a port that plays no train
+    /// queues none.
+    fn claim(&mut self, at: Time) {
+        self.port.claim(&mut self.dev, at);
+        assert!(
+            self.dev.queued.is_none(),
+            "only a pulse target on an open-drain line queues a train"
+        );
+    }
+
     /// What the port has due at `at`, and whether a record it sent ends there. A call it makes
     /// there leaves the device's drives alone.
-    fn take_due(&mut self, at: Time) -> bool {
+    fn take_due(&mut self, world: &World, at: Time) -> bool {
         let drives = self.dev.device.drive();
-        let record = self.port.take_due(&mut self.dev, at);
+        let record = self.port.take_due(&mut self.dev, world, at);
         assert!(
             self.dev.device.drive() == drives,
             "a call the port makes never changes the drives"
@@ -327,12 +393,13 @@ impl<D: Device, P: Port<D>> Native<D, P> {
 impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
     /// The device's next stop and its port's next due time, whichever comes first. One that
     /// falls at the same time as the other is the same stop.
-    fn run_until(&mut self, limit: Time) -> Option<Stop> {
+    fn run_until(&mut self, world: &World, limit: Time) -> Option<Stop> {
         let due = self.port.due_at().filter(|&due| due <= limit);
-        let stop = self.dev.run_until(due.unwrap_or(limit));
+        let stop = self.dev.run_until(world, due.unwrap_or(limit));
+        self.claim(stop.map_or(due.unwrap_or(limit), |stop| stop.at));
         let stop = match (stop, due) {
             (Some(stop), Some(due)) if stop.at == due => {
-                let record = self.take_due(due);
+                let record = self.take_due(world, due);
                 Stop {
                     record: stop.record || record,
                     ..stop
@@ -342,7 +409,7 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
             (None, Some(due)) => Stop {
                 at: due,
                 sample: false,
-                record: self.take_due(due),
+                record: self.take_due(world, due),
             },
             (None, None) => return None,
         };
@@ -354,36 +421,47 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
         &self.image[..self.len]
     }
 
-    fn sample(&mut self, at: Time, volts: &[f64]) {
-        self.dev.call(at, |device, cx| device.sample(cx, at, volts));
+    fn sample(&mut self, world: &World, at: Time, volts: &[f64]) {
+        self.dev
+            .call(world, at, |device, cx| device.sample(cx, at, volts));
+        self.claim(at);
         assert!(self.held(), "a sample never changes the drives");
     }
 
-    fn input(&mut self, at: Time, levels: &[bool]) {
+    fn input(&mut self, world: &World, at: Time, levels: &[bool]) {
         debug_assert!(
             self.port.due_at().is_none_or(|due| due > at),
             "a landing skipped a drive"
         );
-        self.port.input(&mut self.dev, at, levels);
-        self.dev.call(at, |device, cx| {
+        self.port.input(&mut self.dev, world, at, levels);
+        self.dev.call(world, at, |device, cx| {
             device.input(cx, at, Levels::from_slice(levels));
         });
+        self.claim(at);
         assert!(self.held(), "an input never changes the drives");
     }
 
-    fn event(&mut self, at: Time, event: Event<'_>) {
-        self.dev.call(at, |device, cx| device.event(cx, at, event));
+    fn event(&mut self, world: &World, at: Time, event: Event<'_>) {
+        self.dev
+            .call(world, at, |device, cx| device.event(cx, at, event));
+        self.claim(at);
         assert!(self.held(), "an event never changes the drives");
     }
 
-    fn take(&mut self, at: Time, records: &[LinkRow]) {
-        self.port.take_records(&mut self.dev, at, records);
+    fn take(&mut self, world: &World, at: Time, records: &[LinkRow]) {
+        self.port.take_records(&mut self.dev, world, at, records);
+        self.claim(at);
         assert!(self.held(), "a record never changes the drives");
     }
 
-    fn cut(&mut self, at: Time, record: &Record) {
-        self.port.cut_record(&mut self.dev, at, record);
+    fn cut(&mut self, world: &World, at: Time, record: &Record) {
+        self.port.cut_record(&mut self.dev, world, at, record);
+        self.claim(at);
         assert!(self.held(), "a record never changes the drives");
+    }
+
+    fn reads(&self) -> &'static [Quantity] {
+        D::WORLD
     }
 
     fn records(&self) -> &[Record] {

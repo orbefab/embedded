@@ -385,7 +385,7 @@ pub fn engine_kinds() -> &'static [(&'static str, &'static [&'static str])] {
 
 fn chip_pin_names(chip: &Chip) -> &[&'static str] {
     use crate::chip::Ne555;
-    use crate::device::{Cst816, PulsesReplay, SpiReplay, St77916, Ws2812};
+    use crate::device::{Cst816, Dht22, PulsesReplay, SpiReplay, St77916, Ws2812};
     use crate::mcu::Atmega328p;
 
     match chip {
@@ -394,6 +394,7 @@ fn chip_pin_names(chip: &Chip) -> &[&'static str] {
         Chip::SpiReplay(_) => &SpiReplay::PINS,
         Chip::St77916(_) => &St77916::PINS,
         Chip::Cst816(_) => &Cst816::PINS,
+        Chip::Dht22(_) => &Dht22::PINS,
         Chip::Esp32s3(mcu) => &mcu.names,
         Chip::Ws2812(_) => &Ws2812::PINS,
         Chip::PulsesReplay(_) => &PulsesReplay::PINS,
@@ -407,6 +408,7 @@ fn chip_pins(chip: &Chip) -> &[NetId] {
         Chip::SpiReplay(part) => &part.pins,
         Chip::St77916(part) => &part.pins,
         Chip::Cst816(part) => &part.pins,
+        Chip::Dht22(part) => &part.pins,
         Chip::Ws2812(part) => &part.pins,
         Chip::PulsesReplay(part) => &part.pins,
         Chip::Esp32s3(part) => &part.pins,
@@ -493,6 +495,9 @@ define_kinds! {
         Cst816, "cst816",
             crate::device::cst816::WireCst816, crate::device::cst816::resolve_cst816,
             &crate::device::Cst816::PINS;
+        Dht22, "dht22",
+            crate::device::dht22::WireDht22, crate::device::dht22::resolve_dht22,
+            &crate::device::Dht22::PINS;
         Esp32s3 unlisted, "esp32s3",
             crate::mcu::esp32s3::WireEsp32s3, crate::mcu::esp32s3::resolve_esp32s3,
             &crate::mcu::Esp32s3::PINS;

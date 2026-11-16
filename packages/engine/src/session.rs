@@ -944,7 +944,10 @@ impl Session {
                 accepted.at,
                 self.breakpoints.next_after(&circuit.netlist, accepted.at),
             );
-            let at = self.actives.horizon(Time::from_ps(accepted.at.as_ps() + h));
+            let at = self.actives.horizon(
+                circuit.netlist.world(),
+                Time::from_ps(accepted.at.as_ps() + h),
+            );
             reach = reach.max(at);
             let h = at.as_ps() - accepted.at.as_ps();
             let cores = self.actives.cores();

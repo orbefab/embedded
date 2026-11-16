@@ -4,7 +4,7 @@
 //! Active chips, holds the loop's protocol.
 
 use orbe_mcu::{Frame, Phase};
-use orbe_model::{Drawn, Drive, Event, Shows, Stop, Time};
+use orbe_model::{Drawn, Drive, Event, Quantity, Shows, Stop, Time};
 
 use crate::netlist::{NetId, PartId};
 
@@ -17,7 +17,7 @@ pub(crate) mod replay;
 pub(crate) mod script;
 pub(crate) mod spi;
 
-use crate::device::{cst816, pulses_replay, spi_replay, st77916, ws2812};
+use crate::device::{cst816, dht22, pulses_replay, spi_replay, st77916, ws2812};
 use crate::mcu::{self, Mcu, atmega328p, esp32s3};
 use native::Hosted;
 
@@ -34,6 +34,7 @@ use crate::chip::Active;
 use crate::mna::{Solution, System};
 use crate::newton::Circuit;
 use crate::watch::{Levels, Signal, Watch};
+use crate::world::World;
 
 /// One side of an output stage, through `resistance`. The high stage sits `drop` below VCC, and
 /// the low stage `drop` above GND.
@@ -168,9 +169,9 @@ impl Clone for Core {
 }
 
 impl Core {
-    fn run_until(&mut self, limit: Time) -> Option<Stop> {
+    fn run_until(&mut self, world: &World, limit: Time) -> Option<Stop> {
         match *self {
-            Core::Device(ref mut core) => core.run_until(limit),
+            Core::Device(ref mut core) => core.run_until(world, limit),
             Core::Mcu(ref mut mcu) => mcu.run_until(limit),
             #[cfg(test)]
             Core::Script(ref mut core) => core.run_until(limit),
@@ -187,9 +188,9 @@ impl Core {
     }
 
     /// The volts of each of its samples at its stop at `at`.
-    fn sample(&mut self, at: Time, volts: &[f64]) {
+    fn sample(&mut self, world: &World, at: Time, volts: &[f64]) {
         match *self {
-            Core::Device(ref mut core) => core.sample(at, volts),
+            Core::Device(ref mut core) => core.sample(world, at, volts),
             Core::Mcu(ref mut mcu) => mcu.sample(at, volts),
             #[cfg(test)]
             Core::Script(ref mut core) => core.sample(at, volts),
@@ -197,9 +198,9 @@ impl Core {
     }
 
     /// Its watches' levels from `at` on.
-    fn input(&mut self, at: Time, levels: &[bool]) {
+    fn input(&mut self, world: &World, at: Time, levels: &[bool]) {
         match *self {
-            Core::Device(ref mut core) => core.input(at, levels),
+            Core::Device(ref mut core) => core.input(world, at, levels),
             Core::Mcu(ref mut mcu) => mcu.input(at, levels),
             #[cfg(test)]
             Core::Script(ref mut core) => core.input(at, levels),
@@ -241,9 +242,9 @@ impl Core {
 
     /// Takes the records that end at `at` on its record pins, ordered by end, then by sender name,
     /// then by sequence.
-    fn take(&mut self, at: Time, records: &[LinkRow]) {
+    fn take(&mut self, world: &World, at: Time, records: &[LinkRow]) {
         match *self {
-            Core::Device(ref mut core) => core.take(at, records),
+            Core::Device(ref mut core) => core.take(world, at, records),
             Core::Mcu(_) => {
                 unreachable!(
                     "a chip with no record pins took {} records at {at:?}",
@@ -266,9 +267,9 @@ impl Core {
     }
 
     /// The part of one `Pulses` record sent by `at`, where the run ends inside it.
-    fn cut(&mut self, at: Time, record: &Record) {
+    fn cut(&mut self, world: &World, at: Time, record: &Record) {
         match self {
-            Core::Device(core) => core.cut(at, record),
+            Core::Device(core) => core.cut(world, at, record),
             Core::Mcu(_) => {}
             #[cfg(test)]
             Core::Script(_) => {}
@@ -285,10 +286,20 @@ impl Core {
         }
     }
 
-    /// An event its device declares, at `at`. The image stays as it is.
-    fn event(&mut self, at: Time, event: Event<'_>) {
+    /// The world quantities its device reads. A chip reads none.
+    fn reads(&self) -> &'static [Quantity] {
         match self {
-            Core::Device(core) => core.event(at, event),
+            Core::Device(core) => core.reads(),
+            Core::Mcu(_) => &[],
+            #[cfg(test)]
+            Core::Script(_) => &[],
+        }
+    }
+
+    /// An event its device declares, at `at`. The image stays as it is.
+    fn event(&mut self, world: &World, at: Time, event: Event<'_>) {
+        match self {
+            Core::Device(core) => core.event(world, at, event),
             Core::Mcu(_) => unreachable!("only a device takes an event"),
             #[cfg(test)]
             Core::Script(_) => unreachable!("only a device takes an event"),
@@ -303,6 +314,7 @@ pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
         Active::PulsesReplay(replay) => pulses_replay::chip(part, replay),
         Active::St77916(panel) => st77916::chip(part, panel),
         Active::Cst816(dev) => cst816::chip(part, dev),
+        Active::Dht22(dev) => dht22::chip(part, dev),
         Active::Esp32s3(mcu) => esp32s3::chip(part, mcu),
         Active::Ws2812(chain) => ws2812::chip(part, chain),
     }
@@ -525,14 +537,14 @@ enum Reach {
 impl Ahead {
     /// Puts the copy at `at` with everything there done but the stop's sample and inputs. A
     /// copy that ran past `at` runs again from the committed core.
-    fn rewind(&mut self, committed: &Core, at: Time) {
+    fn rewind(&mut self, world: &World, committed: &Core, at: Time) {
         let reached = match self.reach {
             Reach::Done(reached) | Reach::Twin(reached) => reached,
             Reach::Stopped(stop) => stop.at,
         };
         if reached > at {
             self.core.clone_from(committed);
-            let early = self.core.run_until(at);
+            let early = self.core.run_until(world, at);
             assert_eq!(early, None, "a core stopped where its copy did not");
         }
         self.reach = Reach::Done(at);
@@ -553,10 +565,17 @@ impl Ahead {
 
     /// Its watches' levels from `at` on, after the landing at `at`, then committed. A twin of
     /// the committed core takes them on both cores, which leaves the state a fresh copy would.
-    fn input(&mut self, committed: &mut Core, at: Time, levels: &[bool], staged: &mut Staging) {
+    fn input(
+        &mut self,
+        world: &World,
+        committed: &mut Core,
+        at: Time,
+        levels: &[bool],
+        staged: &mut Staging,
+    ) {
         if !matches!(self.reach, Reach::Twin(twin) if twin == at) {
-            self.rewind(committed, at);
-            self.core.input(at, levels);
+            self.rewind(world, committed, at);
+            self.core.input(world, at, levels);
             assert_eq!(
                 self.core.drive(),
                 committed.drive(),
@@ -565,13 +584,13 @@ impl Ahead {
             self.commit(committed, staged);
             return;
         }
-        committed.input(at, levels);
+        committed.input(world, at, levels);
         assert_eq!(
             committed.drive(),
             self.core.drive(),
             "an input on the held solve never changes an image"
         );
-        self.core.input(at, levels);
+        self.core.input(world, at, levels);
     }
 
     /// Whether the copy has done everything up to `at`.
@@ -597,7 +616,11 @@ impl Actives {
             .enumerate()
             .map(|(k, chip)| {
                 let mut core = chip.core.clone();
-                core.input(Time::ZERO, levels.of(circuit.active_watches(k)));
+                core.input(
+                    circuit.netlist.world(),
+                    Time::ZERO,
+                    levels.of(circuit.active_watches(k)),
+                );
                 assert_eq!(
                     core.drive(),
                     chip.core.drive(),
@@ -780,13 +803,14 @@ impl Actives {
 
     /// The first stop of any core up to `limit`, or `limit`. A step from the accepted time to
     /// here solves with every image constant. Runs a core only past where it has reached.
-    pub(crate) fn horizon(&mut self, limit: Time) -> Time {
+    /// `limit` is never past the next change of a world quantity, so no run crosses one.
+    pub(crate) fn horizon(&mut self, world: &World, limit: Time) -> Time {
         let mut horizon = limit;
         for ahead in &mut self.ahead {
             if let Reach::Done(reached) | Reach::Twin(reached) = ahead.reach
                 && reached < limit
             {
-                ahead.reach = match ahead.core.run_until(limit) {
+                ahead.reach = match ahead.core.run_until(world, limit) {
                     Some(stop) => {
                         assert!(
                             stop.at > reached,
@@ -807,7 +831,9 @@ impl Actives {
     /// A step landed at `at`, no later than the last `horizon`, with `after` read on `x` and
     /// `before` in force until then. Each core that stops at `at` takes its sample from `x`,
     /// each core whose watches flipped takes them, and each core with a record pin on a record
-    /// that ends at `at` takes it. Each such core, and each sender, is committed at `at`. With
+    /// that ends at `at` takes it. So does each core whose device reads a world quantity that
+    /// changes at `at`, so a run from its commit never crosses a change. Each such core, and
+    /// each sender, is committed at `at`. With
     /// `keep`, so is every other core, and a later rewind runs again from `at` at the earliest.
     /// A copy that ran past `at`, as a retry shorter than its first try leaves it, runs again
     /// from its last commit to `at` first. Returns whether an image changed, and how many cores
@@ -826,6 +852,7 @@ impl Actives {
         after: &Levels,
         keep: bool,
     ) -> (bool, u64) {
+        let world = circuit.netlist.world();
         let mut incoming = self.incoming(circuit, at);
         let mut changed = false;
         let mut stops = 0u64;
@@ -839,7 +866,13 @@ impl Actives {
             };
             let records = incoming.get_mut(k).map(std::mem::take).unwrap_or_default();
             let event = Self::due_event(circuit, k, at);
-            if stop.is_none() && !flipped && records.is_empty() && event.is_none() && !keep {
+            if stop.is_none()
+                && !flipped
+                && records.is_empty()
+                && event.is_none()
+                && !keep
+                && !world.changes_at(committed.reads(), at)
+            {
                 continue;
             }
             if stop.is_some() {
@@ -847,7 +880,7 @@ impl Actives {
             }
             // A sender stopped at `at` has reached `at`, so this leaves its copy and the
             // records the first pass read in place.
-            ahead.rewind(committed, at);
+            ahead.rewind(world, committed, at);
             let image = ahead.core.drive().to_vec();
             changed |= image != committed.drive();
             if stop.is_some_and(|stop| stop.sample) {
@@ -856,16 +889,16 @@ impl Actives {
                     .iter()
                     .map(|signal| signal.at(x))
                     .collect();
-                ahead.core.sample(at, &volts);
+                ahead.core.sample(world, at, &volts);
             }
             if flipped {
-                ahead.core.input(at, levels);
+                ahead.core.input(world, at, levels);
             }
             if !records.is_empty() {
-                ahead.core.take(at, &records);
+                ahead.core.take(world, at, &records);
             }
             if let Some(event) = event {
-                ahead.core.event(at, event.event());
+                ahead.core.event(world, at, event.event());
             }
             assert_eq!(
                 ahead.core.drive(),
@@ -898,7 +931,7 @@ impl Actives {
         for (core, chip) in self.committed.iter_mut().zip(&circuit.actives) {
             if chip.takes.pulses.is_some() {
                 for record in flying.iter().filter(|record| chip.takes.record(record)) {
-                    core.cut(at, record);
+                    core.cut(circuit.netlist.world(), at, record);
                 }
             }
         }
@@ -967,7 +1000,13 @@ impl Actives {
             if before.of(watched) == levels {
                 continue;
             }
-            ahead.input(committed, at, levels, &mut self.staged);
+            ahead.input(
+                circuit.netlist.world(),
+                committed,
+                at,
+                levels,
+                &mut self.staged,
+            );
         }
     }
 
