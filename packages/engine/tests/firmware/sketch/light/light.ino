@@ -1,13 +1,17 @@
 const int sensePin = 2;
 
 int last = -1;
+int reports = 0;
 
 void report(int high) {
   if (high == last) {
     return;
   }
   last = high;
-  Serial.println(high ? "dark" : "light");
+  reports++;
+  Serial.print(high ? "dark" : "light");
+  Serial.print(' ');
+  Serial.println(reports);
 }
 
 void setup() {

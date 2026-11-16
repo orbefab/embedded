@@ -24,7 +24,7 @@
     "rbot": { "on": { "a": "bb.b22" }, "rotate": [0, 0, -90] }, // b in X22, the - rail
     "rset": { "on": { "a": "bb.a40" }, "rotate": [0, 0, -90] }, // b in W40, the + rail
     "trim": { "on": { "a": "bb.c40" } }, // b in c42, the wiper in d41
-    "rhys": { "on": { "a": "bb.b28" } }, // b in b32, jumpered back to IN1+
+    "rhys": { "on": { "a": "bb.b28" } }, // b in b32; c32 jumpers that strip back to IN1+
     "rled": { "on": { "a": "bb.d24" } }, // b in d28, OUT1
     "led1": { "on": { "anode": "bb.c24" } }, // cathode in c25
   },
@@ -39,14 +39,14 @@
     ["bb.a22", "bb.a29"], // ldr.b and rbot.a to IN1-
     ["bb.a42", "bb.X42", { "color": "#161616" }], // trim.b to GND
     ["bb.a41", "bb.a30"], // trim.wiper to IN1+
-    ["bb.b32", "bb.b30"], // rhys.b to IN1+
+    ["bb.c32", "bb.c30"], // rhys.b to IN1+, beside the resistor
     ["bb.a25", "bb.X25", { "color": "#161616" }], // led1.cathode to GND
-    ["bb.f28", "bb.Y28", { "color": "#d12b2b" }], // VCC to the + rail
-    ["bb.e31", "bb.X31", { "color": "#161616" }], // u1.GND to the - rail
-    ["bb.f31", "bb.e31"], // IN2+ to GND
-    ["bb.f30", "bb.f31"], // IN2- to GND, so the unused channel has a DC path
+    ["bb.j28", "bb.Y28", { "color": "#d12b2b" }], // VCC to the + rail, off the pin
+    ["bb.a31", "bb.X31", { "color": "#161616" }], // u1.GND to the - rail, off the pin
+    ["bb.j31", "bb.Z31", { "color": "#161616" }], // IN2+ to the - rail beside j
+    ["bb.j30", "bb.Z30", { "color": "#161616" }], // IN2- to that rail, so the unused channel has a DC path
     ["bb.j11", "bb.j20"], // D2 across to an empty column
-    ["bb.j20", "bb.a20"], // over the channel
+    ["bb.i20", "bb.b20"], // over the channel, one hole in from the runs
     ["bb.a20", "bb.a28"], // to OUT1, which is on the a to e side
   ],
 }

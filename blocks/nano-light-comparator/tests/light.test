@@ -9,7 +9,7 @@ expect @u1.IN1_N < 2.653V
 expect @u1.IN1_P > 1.620V
 expect @u1.IN1_P < 1.624V
 expect @u1.OUT1 < 0.008V
-expect serial contains "light"
+expect serial contains "light 1"
 # 80 lx is between the two thresholds, so the output stays low for this whole step.
 set light 80
 step 200ms
@@ -30,7 +30,7 @@ expect @u1.IN1_N > 0.637V
 expect @u1.IN1_N < 0.642V
 expect @u1.IN1_P > 1.784V
 expect @u1.IN1_P < 1.789V
-expect serial contains "dark"
+expect serial contains "dark 2"
 # The same 80 lx, reached from the dark, keeps the LED on.
 set light 80
 step 200ms
@@ -44,4 +44,5 @@ step 50ms
 expect @led1 off
 expect @nano.D2 low
 expect @nano.D2 < 0.2V
+expect serial contains "light 3"
 expect no diagnostics
