@@ -539,7 +539,7 @@ The stamp reads the last solution, as the regulator's does. Convergence compares
 | `short_circuit_current` | `Isc` | `A` |
 | `supply_current` | `Icc` | `A` |
 
-`gain_bandwidth`, `slew_rate`, `open_loop_gain` and `short_circuit_current` must be greater than 0, and each reciprocal must be finite. `input_bias_current`, `swing_high`, `swing_low`, `output_resistance` and `supply_current` must be at least 0. A negative value is `netlist.value` with rule `non_negative`.
+`gain_bandwidth`, `slew_rate`, `open_loop_gain`, `output_resistance` and `short_circuit_current` must be greater than 0, and each reciprocal must be finite. Zero or a negative value is `netlist.value` with rule `positive`. An output with no resistance is an ideal source below the current limit, and a short against another source has no solution. `input_bias_current`, `swing_high`, `swing_low` and `supply_current` must be at least 0. A negative value is `netlist.value` with rule `non_negative`.
 
 An op-amp has no quantities and no `ratings`. Read its pins' voltages, and its output current from what the output drives.
 
