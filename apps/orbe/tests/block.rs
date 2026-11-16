@@ -12,7 +12,12 @@ use std::path::Path;
 
 use live::{common, orbe};
 
-const BLOCKS: [&str; 3] = ["nano-button-led", "uno-button-led", "nano-led-fade"];
+const BLOCKS: [&str; 4] = [
+    "nano-button-led",
+    "uno-button-led",
+    "nano-led-fade",
+    "nano-light-comparator",
+];
 
 /// Every file below `dir` with its bytes, by its path from `dir`.
 fn tree(dir: &Path) -> BTreeMap<String, Vec<u8>> {
@@ -358,7 +363,10 @@ fn a_block_installs_alone() {
 fn the_core_skill_names_each_block() {
     let skill = fs::read_to_string(common::repo().join("apps/orbe/skills/core.md")).unwrap();
     let ids: Vec<String> = BLOCKS.iter().map(|id| format!("`{id}`")).collect();
-    let listed = format!("The Blocks are {}, {} and {}.", ids[0], ids[1], ids[2]);
+    let listed = format!(
+        "The Blocks are {}, {}, {} and {}.",
+        ids[0], ids[1], ids[2], ids[3]
+    );
     assert!(skill.contains(&listed), "{listed}");
     let mut found: Vec<String> = fs::read_dir(common::repo().join("blocks"))
         .unwrap()

@@ -1,0 +1,52 @@
+// An LDR divider and a trimmer divider feed an LM358 on a full-size breadboard beside a Nano.
+// The Nano straddles the centre channel over columns 1 to 15. D2 is j11, 5V is a12 and GND is a14.
+// The LM358 sits with pin 1 (OUT1) in e28, so IN1- is e29, IN1+ is e30, GND is e31, and VCC is f28.
+// Dark makes the LDR node fall below the trimmer, the output goes high, and the LED lights.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-830" },
+    "nano": { "type": "nano-board", "firmware": "firmware/light.hex" },
+    "u1": { "type": "lm358-dip8" },
+    "ldr": { "type": "ldr-5mm" },
+    "trim": { "type": "trimmer-3362p", "resistance": "10k", "position": "0.5" },
+    "rbot": { "type": "resistor-axial", "resistance": "2.2k" }, // under the LDR, so the node rises with the light
+    "rset": { "type": "resistor-axial", "resistance": "4.7k" }, // above the trimmer, so its top stays under 3.5 V
+    "rhys": { "type": "resistor-axial", "resistance": "68k" }, // output back to IN1+, so the threshold snaps
+    "rled": { "type": "resistor-axial", "resistance": "220" },
+    "led1": { "type": "led-5mm", "color": "red" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "D13": "bb.d1" } },
+    "u1": { "on": { "OUT1": "bb.e28" } }, // IN1- e29, IN1+ e30, GND e31, VCC f28, OUT2 f29, IN2- f30, IN2+ f31
+    "ldr": { "on": { "a": "bb.c21" } }, // b in c22
+    "rbot": { "on": { "a": "bb.b22" }, "rotate": [0, 0, -90] }, // b in X22, the - rail
+    "rset": { "on": { "a": "bb.a40" }, "rotate": [0, 0, -90] }, // b in W40, the + rail
+    "trim": { "on": { "a": "bb.c40" } }, // b in c42, the wiper in d41
+    "rhys": { "on": { "a": "bb.b28" } }, // b in b32, jumpered back to IN1+
+    "rled": { "on": { "a": "bb.d24" } }, // b in d28, OUT1
+    "led1": { "on": { "anode": "bb.c24" } }, // cathode in c25
+  },
+  "nets": { "GND": "nano.GND" },
+  "world": { "light": 300 },
+  "wires": [
+    ["bb.a12", "bb.W11", { "color": "#d12b2b" }], // 5V to the + rail beside a
+    ["bb.W12", "bb.Y12", { "color": "#d12b2b" }], // the same rail beside j, for VCC
+    ["bb.a14", "bb.X13", { "color": "#161616" }], // GND to the - rail beside a
+    ["bb.X61", "bb.Z61", { "color": "#161616" }], // the same rail beside j
+    ["bb.a21", "bb.W21", { "color": "#d12b2b" }], // ldr.a to 5V
+    ["bb.a22", "bb.a29"], // ldr.b and rbot.a to IN1-
+    ["bb.a42", "bb.X42", { "color": "#161616" }], // trim.b to GND
+    ["bb.a41", "bb.a30"], // trim.wiper to IN1+
+    ["bb.b32", "bb.b30"], // rhys.b to IN1+
+    ["bb.a25", "bb.X25", { "color": "#161616" }], // led1.cathode to GND
+    ["bb.f28", "bb.Y28", { "color": "#d12b2b" }], // VCC to the + rail
+    ["bb.e31", "bb.X31", { "color": "#161616" }], // u1.GND to the - rail
+    ["bb.f31", "bb.e31"], // IN2+ to GND
+    ["bb.f30", "bb.f31"], // IN2- to GND, so the unused channel has a DC path
+    ["bb.j11", "bb.j20"], // D2 across to an empty column
+    ["bb.j20", "bb.a20"], // over the channel
+    ["bb.a20", "bb.a28"], // to OUT1, which is on the a to e side
+  ],
+}

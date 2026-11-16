@@ -15,7 +15,15 @@ fn each_block_passes() {
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .collect();
     ids.sort();
-    assert_eq!(ids, ["nano-button-led", "nano-led-fade", "uno-button-led"]);
+    assert_eq!(
+        ids,
+        [
+            "nano-button-led",
+            "nano-led-fade",
+            "nano-light-comparator",
+            "uno-button-led",
+        ]
+    );
     for id in &ids {
         let run = orbe(&common::repo(), &["test", &format!("blocks/{id}")]);
         assert!(
