@@ -69,6 +69,8 @@ declare global {
     };
     lastPointer?: number;
     realSend?: unknown;
+    sets?: unknown[];
+    answer?: () => void;
   }
 }
 

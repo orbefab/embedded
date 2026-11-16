@@ -5,8 +5,6 @@
 use std::collections::BTreeMap;
 
 use orbe_engine::Status;
-use orbe_engine::finite::Finite;
-use orbe_engine::name::Ref;
 use orbe_engine::world::Quantity;
 use serde::Serialize;
 use serde_json::Value;
@@ -35,8 +33,6 @@ pub(super) struct Bound {
     pins: Vec<usize>,
     leds: Vec<usize>,
     switches: Vec<String>,
-    /// Probe columns of the world quantities the scene declares, in table order.
-    world: Vec<usize>,
 }
 
 /// A world quantity's name: `temperature`, `humidity` or `light`.
@@ -59,17 +55,48 @@ impl From<Quantity> for WorldName {
     }
 }
 
-/// One declared world quantity at a frame's `t_ps`.
+/// How a page's thumb walks a quantity's range.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum Scale {
+    /// Even steps of `step` from `min` to `max`.
+    Linear { step: f64 },
+    /// Round values: 0, then 1, 2, 3 and 5 times each power of ten, up to `max`.
+    Log,
+}
+
+/// A world quantity the scene declares, as a page shows it.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
-pub(crate) struct WorldReading {
+pub(crate) struct WorldQuantity {
     pub(crate) name: WorldName,
-    /// The unit `value`, `min` and `max` are in, such as `lx`.
+    /// The unit of `min`, `max`, `start` and a frame's values, as the CLI writes it, such as `lx`.
     pub(crate) unit: &'static str,
     pub(crate) min: f64,
     pub(crate) max: f64,
-    /// The value on the interval that ends at `t_ps`, before a change at `t_ps`.
-    pub(crate) value: f64,
+    /// The value the scene gives it at t = 0.
+    pub(crate) start: f64,
+    pub(crate) scale: Scale,
+}
+
+impl WorldQuantity {
+    fn new(quantity: Quantity, start: f64) -> Self {
+        let row = quantity.row();
+        let scale = match quantity {
+            Quantity::Temperature => Scale::Linear { step: 0.5 },
+            Quantity::Humidity => Scale::Linear { step: 1.0 },
+            Quantity::Light => Scale::Log,
+        };
+        WorldQuantity {
+            name: quantity.into(),
+            unit: row.unit,
+            min: row.min,
+            max: row.max,
+            start,
+            scale,
+        }
+    }
 }
 
 /// A frame's `state`: the session's, or `stepping` for a frame read while a `step` runs, which
@@ -94,8 +121,9 @@ pub struct Sample {
     /// Each LED's current in amperes, and its integral from t = 0 in ampere picoseconds.
     pub leds: Vec<(f64, f64)>,
     pub switches: Vec<u8>,
-    /// Each declared world quantity, in table order. Empty when the scene declares none.
-    pub(crate) world: Vec<WorldReading>,
+    /// Each declared world quantity's value from `t_ps` on, or from where its last `set` lands
+    /// when that is later, in table order. Empty when the scene declares none.
+    pub world: Vec<f64>,
     pub diagnostics: usize,
     /// The fault's diagnostic as `orbe snapshot` prints it, once the session faulted.
     pub fault: Option<String>,
@@ -113,9 +141,16 @@ impl Live {
     /// The `scene` message for the open scene.
     pub fn scene(&self) -> Option<Value> {
         let open = self.open.as_ref()?;
+        let world: Vec<WorldQuantity> = open
+            .engine
+            .world()
+            .declared()
+            .map(|(quantity, schedule)| WorldQuantity::new(quantity, schedule.initial().si.get()))
+            .collect();
         Some(viewer::scene_message(
             &self.name,
             &open.channels.names,
+            &world,
             &open.view,
         ))
     }
@@ -217,12 +252,6 @@ impl Open {
                 bound.switches.push(engine);
             }
         }
-        for quantity in Quantity::ALL {
-            let want = Ref::World(quantity);
-            if let Some(index) = probe.refs().iter().position(|r| *r == want) {
-                bound.world.push(index);
-            }
-        }
         bound
     }
 
@@ -263,10 +292,18 @@ impl Open {
                 .iter()
                 .map(|engine| u8::from(self.closed(engine)))
                 .collect(),
-            world: bound
-                .world
-                .iter()
-                .map(|&index| world_reading(probe.refs(), probe.values(), index))
+            world: self
+                .engine
+                .world()
+                .declared()
+                .map(|(quantity, schedule)| {
+                    let now = self.engine.now();
+                    let from = self
+                        .world_sets
+                        .get(&quantity)
+                        .map_or(now, |&at| at.max(now));
+                    schedule.after(from).si.get()
+                })
                 .collect(),
             diagnostics: self.findings(&probe).len(),
             fault: self
@@ -274,21 +311,6 @@ impl Open {
                 .fault()
                 .map(|fault| Diagnostic::new(fault).text()),
         }
-    }
-}
-
-fn world_reading(refs: &[Ref], values: &[Finite], index: usize) -> WorldReading {
-    let quantity = match refs[index] {
-        Ref::World(quantity) => quantity,
-        _ => panic!("a world channel is bound to a world column"),
-    };
-    let row = quantity.row();
-    WorldReading {
-        name: quantity.into(),
-        unit: row.unit,
-        min: row.min,
-        max: row.max,
-        value: values[index].get(),
     }
 }
 

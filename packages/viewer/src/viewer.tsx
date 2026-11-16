@@ -14,10 +14,10 @@ import {
 import type { BuiltScene } from "./build";
 import type { CameraMode } from "./camera-frame";
 import { createHoverStore, type HoverStore } from "./hover";
-import type { Command, FrameMessage, FrameState, Reply, SceneMessage } from "./protocol";
+import type { Command, FrameMessage, FrameState, Reply, SceneMessage, WorldName, WorldQuantity } from "./protocol";
 import { SceneView } from "./scene-view";
 import { commandLine, errorText, type SessionSource } from "./session";
-import { WORLD_STEPS, formatQuantity, snap, stepOf, valueAt, type Range } from "./world";
+import { formatValue, IDLE, nearest, nextThumb, parseValue, shownValue, stops, type Thumb, type ThumbEvent } from "./world";
 
 class ShowError extends Component<{ children: ReactNode }, { error: Error | null }> {
   override state = { error: null as Error | null };
@@ -82,150 +82,188 @@ function Errors({ errors }: { errors: readonly string[] }) {
 /** `t_ps` in seconds, to the microsecond. */
 const seconds = (t_ps: number) => `${(t_ps / 1e12).toFixed(6)} s`;
 
-interface SetReply {
-  readonly value: number;
-  readonly landed_ps: number;
-}
+/** How long a slider waits after the last key step before it sends, so a burst of presses or a
+ * held arrow sends one `set`. */
+const SETTLE_MS = 300;
 
-function acceptedSet(reply: Reply | null): SetReply | null {
-  if (reply === null || !reply.ok || typeof reply.data !== "object" || reply.data === null) return null;
-  const data = reply.data as { value?: unknown; landed_ps?: unknown };
-  if (typeof data.value !== "number" || typeof data.landed_ps !== "number") return null;
-  return { value: data.value, landed_ps: data.landed_ps };
-}
+const field = {
+  font: "inherit",
+  color: "inherit",
+  background: "#2a2f37",
+  border: "1px solid #4a5058",
+  borderRadius: 4,
+  padding: "1px 4px",
+} as const;
 
-/** One quantity's thumb. The number is the simulation's value. A drag previews, and the thumb
- * sends `set` once when it is released, because a `set` restarts the solve. */
+/** One quantity's thumb and its number. A pointer sends `set` when it lets go, the keyboard
+ * once no key is down for {@link SETTLE_MS}, and the number when Enter is pressed. From then
+ * until the session answers and a frame follows, the thumb holds the sent value. */
 function WorldSlider({
-  name,
-  range,
-  unit,
-  frameValue,
-  shown,
-  onCommit,
+  quantity,
+  frame,
+  off,
+  send,
 }: {
-  name: string;
-  range: Range;
-  unit: string;
-  frameValue: number;
-  shown: number;
-  onCommit: (value: number) => Promise<number | null>;
+  quantity: WorldQuantity;
+  frame: number;
+  off: boolean;
+  send: (quantity: WorldName, value: number) => Promise<boolean>;
 }) {
-  const input = useRef<HTMLInputElement>(null);
-  const commitRef = useRef(onCommit);
-  commitRef.current = onCommit;
-  const [dragStep, setDragStep] = useState<number | null>(null);
-  const [held, setHeld] = useState<number | null>(null);
-  useEffect(() => {
-    if (held !== null && shown === held) setHeld(null);
-  }, [held, shown]);
-  useEffect(() => {
-    const el = input.current;
-    if (el === null) return;
-    const preview = () => setDragStep(Number(el.value));
-    const commit = () => {
-      const snapped = valueAt(range, Number(el.value));
-      setDragStep(null);
-      void commitRef.current(snapped).then((accepted) => setHeld(accepted));
-    };
-    el.addEventListener("input", preview);
-    el.addEventListener("change", commit);
-    el.addEventListener("pointerup", commit);
-    el.addEventListener("keyup", commit);
-    return () => {
-      el.removeEventListener("input", preview);
-      el.removeEventListener("change", commit);
-      el.removeEventListener("pointerup", commit);
-      el.removeEventListener("keyup", commit);
-    };
-  }, [range.min, range.max]);
-  const value = dragStep !== null ? valueAt(range, dragStep) : (held ?? shown);
+  const values = useMemo(() => stops(quantity), [quantity]);
+  const [thumb, setThumb] = useState<Thumb>(IDLE);
+  const [typed, setTyped] = useState<string | null>(null);
+  const [why, setWhy] = useState<string | null>(null);
+  const live = useRef({ thumb, frame, pointer: false, keys: false, timer: 0 });
+  live.current.frame = frame;
+
+  const apply = useCallback(
+    (event: ThumbEvent) => {
+      const before = live.current.thumb;
+      const after = nextThumb(before, event);
+      live.current.thumb = after;
+      setThumb(after);
+      if (after.kind === "sending" && after !== before) {
+        const value = after.value;
+        void send(quantity.name, value).then((ok) => apply({ type: "replied", value, ok, frame: live.current.frame }));
+      }
+    },
+    [quantity.name, send]
+  );
+  useEffect(() => apply({ type: "frame" }), [apply, frame]);
+  useEffect(() => () => window.clearTimeout(live.current.timer), []);
+
+  const settle = () => {
+    window.clearTimeout(live.current.timer);
+    apply({ type: "settle", frame: live.current.frame });
+  };
+  const settleLater = () => {
+    window.clearTimeout(live.current.timer);
+    live.current.timer = window.setTimeout(settle, SETTLE_MS);
+  };
+  const letGo = () => {
+    live.current.pointer = false;
+    settle();
+  };
+
+  const shown = shownValue(thumb, frame);
+  const { name, unit } = quantity;
   return (
-    <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
-      <span style={{ width: 92 }}>{name}</span>
+    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      <label htmlFor={`world-${name}`} style={{ width: 84 }}>
+        {name}
+      </label>
       <input
-        ref={input}
+        id={`world-${name}`}
         data-testid={`world-${name}`}
         type="range"
         min={0}
-        max={WORLD_STEPS}
+        max={values.length - 1}
         step={1}
-        value={dragStep ?? stepOf(range, value)}
-        aria-label={name}
-        onChange={() => {}}
-        onPointerDown={(event) => event.currentTarget.setPointerCapture(event.pointerId)}
-        style={{ width: 160 }}
+        value={nearest(values, shown)}
+        disabled={off}
+        aria-valuetext={`${formatValue(shown)} ${unit}`}
+        onChange={(event) => {
+          const value = values[Number(event.currentTarget.value)];
+          if (value === undefined) return;
+          apply({ type: "move", value });
+          if (!live.current.pointer && !live.current.keys) settleLater();
+        }}
+        onPointerDown={(event) => {
+          live.current.pointer = true;
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerUp={letGo}
+        onPointerCancel={letGo}
+        onKeyDown={() => {
+          live.current.keys = true;
+          window.clearTimeout(live.current.timer);
+        }}
+        onKeyUp={() => {
+          live.current.keys = false;
+          settleLater();
+        }}
+        onBlur={settle}
+        style={{ width: "clamp(96px, 30vw, 180px)", margin: 0 }}
       />
-      <span data-testid={`world-${name}-value`} data-frame={String(frameValue)}>
-        {formatQuantity(range, value)} {unit}
-      </span>
-    </label>
+      <input
+        data-testid={`world-${name}-value`}
+        data-frame={String(frame)}
+        aria-label={`${name} in ${unit}`}
+        inputMode="decimal"
+        disabled={off}
+        value={typed ?? formatValue(shown)}
+        onFocus={(event) => event.currentTarget.select()}
+        onChange={(event) => {
+          setTyped(event.currentTarget.value);
+          setWhy(null);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            setTyped(null);
+            setWhy(null);
+          }
+          if (event.key !== "Enter" || typed === null) return;
+          const parsed = parseValue(quantity, typed);
+          if (!parsed.ok) {
+            setWhy(parsed.why);
+            return;
+          }
+          setTyped(null);
+          apply({ type: "send", value: parsed.value, frame: live.current.frame });
+        }}
+        onBlur={() => {
+          setTyped(null);
+          setWhy(null);
+        }}
+        style={{ ...field, width: 64, textAlign: "right", outline: why === null ? undefined : "1px solid #ff8a80" }}
+      />
+      <span>{unit}</span>
+      {why === null ? null : (
+        <div data-testid={`world-${name}-error`} style={{ flexBasis: "100%", color: "#ff8a80" }}>
+          {why}
+        </div>
+      )}
+    </div>
   );
 }
 
-/** One slider per declared world quantity. A scene that declares none draws nothing. */
+const sameValues = (a: readonly number[], b: readonly number[]) => a.length === b.length && a.every((value, i) => value === b[i]);
+
+/** One slider per world quantity the scene declares, off once the session stopped or faulted,
+ * since the session then refuses every `set`. */
 function WorldPanel({
+  quantities,
   source,
   send,
 }: {
+  quantities: readonly WorldQuantity[];
   source: SessionSource;
   send: (command: Command) => Promise<Reply | null>;
 }) {
-  const [rows, setRows] = useState<NonNullable<FrameMessage["world"]> | null>(null);
-  const [pending, setPending] = useState<Record<string, SetReply>>({});
-  const inflight = useRef<Record<string, number>>({});
+  const [now, setNow] = useState<{ values: readonly number[]; state: FrameState } | null>(null);
   useEffect(
     () =>
       source.subscribe((message) => {
-        if (message.type === "scene") {
-          setRows(null);
-          setPending({});
-          inflight.current = {};
-          return;
-        }
         if (message.type !== "frame") return;
-        const world = message.world ?? [];
-        setRows(world);
-        setPending((current) => {
-          let next: Record<string, SetReply> | null = null;
-          for (const [name, held] of Object.entries(current)) {
-            if (message.t_ps > held.landed_ps) {
-              next ??= { ...current };
-              delete next[name];
-            }
-          }
-          return next ?? current;
-        });
+        const values = message.world ?? [];
+        setNow((current) =>
+          current !== null && current.state === message.state && sameValues(current.values, values)
+            ? current
+            : { values, state: message.state }
+        );
       }),
     [source]
   );
-  const commit = useCallback(
-    (name: string, snapped: number): Promise<number | null> => {
-      const row = rows?.find((item) => item.name === name);
-      const authority = pending[name]?.value ?? row?.value;
-      if (row === undefined || authority === undefined) return Promise.resolve(null);
-      const resting = valueAt(row, stepOf(row, authority));
-      if (snapped === snap(row, authority) || snapped === resting) return Promise.resolve(null);
-      if (inflight.current[name] === snapped) return Promise.resolve(snapped);
-      inflight.current[name] = snapped;
-      return send({ cmd: "set", quantity: row.name, value: snapped }).then((reply) => {
-        if (inflight.current[name] === snapped) delete inflight.current[name];
-        const accepted = acceptedSet(reply);
-        if (accepted === null) return null;
-        setPending((current) => ({ ...current, [name]: accepted }));
-        return accepted.value;
-      });
-    },
-    [pending, rows, send]
+  const set = useCallback(
+    (quantity: WorldName, value: number) => send({ cmd: "set", quantity, value }).then((reply) => reply?.ok === true),
+    [send]
   );
-  if (rows === null || rows.length === 0) return null;
+  if (now === null) return null;
+  const off = now.state === "stopped" || now.state === "faulted";
   return (
     <div
       data-testid="world"
       style={{
-        position: "absolute",
-        top: 52,
-        left: 12,
         display: "flex",
         flexDirection: "column",
         gap: 6,
@@ -235,19 +273,23 @@ function WorldPanel({
         border: "1px solid #3a3f47",
         color: "#e6ebf2",
         font: "12px ui-monospace, monospace",
+        pointerEvents: "auto",
       }}
     >
-      {rows.map((row) => (
+      {quantities.map((quantity, index) => (
         <WorldSlider
-          key={row.name}
-          name={row.name}
-          range={row}
-          unit={row.unit}
-          frameValue={row.value}
-          shown={pending[row.name]?.value ?? row.value}
-          onCommit={(value) => commit(row.name, value)}
+          key={quantity.name}
+          quantity={quantity}
+          frame={now.values[index] ?? quantity.start}
+          off={off}
+          send={set}
         />
       ))}
+      {off ? (
+        <div data-testid="world-off" style={{ color: "#c9ced6" }}>
+          {`The session ${now.state}, so the world stays as it is.`}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -271,9 +313,6 @@ function Controls({ source, send }: { source: SessionSource; send: (command: Com
       <div
         data-testid="controls"
         style={{
-          position: "absolute",
-          top: 12,
-          left: 12,
           display: "flex",
           gap: 10,
           alignItems: "center",
@@ -283,6 +322,7 @@ function Controls({ source, send }: { source: SessionSource; send: (command: Com
           border: "1px solid #3a3f47",
           color: "#e6ebf2",
           font: "12px ui-monospace, monospace",
+          pointerEvents: "auto",
         }}
       >
         <span data-testid="state">{now.state}</span>
@@ -306,7 +346,7 @@ function Controls({ source, send }: { source: SessionSource; send: (command: Com
         </button>
       </div>
       {now.fault === undefined ? null : (
-        <pre data-testid="fault" style={{ ...overlay, inset: "48px auto auto 12px", maxWidth: "calc(100% - 24px)", pointerEvents: "none" }}>
+        <pre data-testid="fault" style={{ ...overlay, position: "static", padding: 0, maxWidth: "100%" }}>
           {now.fault}
         </pre>
       )}
@@ -320,7 +360,7 @@ export interface ViewerProps {
   readonly onCreated?: (state: RootState) => void;
 }
 
-/** Draws the session's scene and its frames, and sends presses, `play` and `pause` back. `T`
+/** Draws the session's scene and its frames, and sends presses, `set`, `play` and `pause` back. `T`
  * toggles the top view. */
 export function Viewer({ source, onCreated }: ViewerProps) {
   const [scene, setScene] = useState<SceneMessage | null>(null);
@@ -369,6 +409,7 @@ export function Viewer({ source, onCreated }: ViewerProps) {
   );
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (event.target instanceof HTMLInputElement) return;
       if (event.key === "t" || event.key === "T") setMode((current) => (current === "top" ? "tilted" : "top"));
     };
     window.addEventListener("keydown", onKey);
@@ -391,8 +432,24 @@ export function Viewer({ source, onCreated }: ViewerProps) {
         </Canvas>
       </ShowError>
       <Errors errors={[...partErrors, ...sendErrors]} />
-      {closed === null ? <Controls send={send} source={source} /> : null}
-      {closed === null ? <WorldPanel send={send} source={source} /> : null}
+      {closed === null ? (
+        <div
+          style={{
+            position: "absolute",
+            top: 12,
+            left: 12,
+            maxWidth: "calc(100% - 24px)",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-start",
+            gap: 8,
+            pointerEvents: "none",
+          }}
+        >
+          <Controls send={send} source={source} />
+          {scene?.world === undefined ? null : <WorldPanel quantities={scene.world} send={send} source={source} />}
+        </div>
+      ) : null}
       {closed === null ? null : (
         <div
           data-testid="closed"

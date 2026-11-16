@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::Files;
 use crate::command::{Command, spec};
-use crate::live::{Channels, FrameState, Live, Pace, Sample, WorldReading};
+use crate::live::{Channels, FrameState, Live, Pace, Sample, WorldQuantity};
 use crate::reply::{Code, Data, Envelope, Error, Reply};
 
 /// `play` advances this much simulated time per tick at most, one tick of wall time at speed 1,
@@ -51,17 +51,27 @@ pub(crate) struct SceneMessage<'a> {
     r#type: SceneTag,
     session: &'a str,
     channels: &'a Channels,
+    /// Each world quantity the scene declares, in table order, which each frame's `world`
+    /// follows. Absent when the scene declares none.
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    world: &'a [WorldQuantity],
     #[serde(flatten)]
     #[cfg_attr(test, schemars(skip))]
     view: &'a View,
 }
 
 /// The `scene` message of `view` in the session `session`.
-pub(crate) fn scene_message(session: &str, channels: &Channels, view: &View) -> Value {
+pub(crate) fn scene_message(
+    session: &str,
+    channels: &Channels,
+    world: &[WorldQuantity],
+    view: &View,
+) -> Value {
     let message = SceneMessage {
         r#type: SceneTag::Tag,
         session,
         channels,
+        world,
         view,
     };
     serde_json::to_value(message).expect("a scene message serializes")
@@ -84,10 +94,11 @@ pub(crate) struct FrameMessage<'a> {
     /// 1 for closed, 0 for open, per `channels.switches`.
     #[cfg_attr(test, schemars(extend("items" = { "enum": [0, 1] })))]
     switches: &'a [u8],
-    /// Each world quantity the scene declares, in table order, with its unit, range and value at
-    /// `t_ps`. Absent when the scene declares none.
+    /// Each value per the scene's `world`: the value from `t_ps` on, or from where the
+    /// quantity's last `set` lands when that is later, so a `set` shows while paused. Absent
+    /// when the scene declares none.
     #[serde(skip_serializing_if = "Option::is_none")]
-    world: Option<&'a [WorldReading]>,
+    world: Option<&'a [f64]>,
     /// On a frame from a `play` tick: the speed `play` runs at, always 1 for now.
     #[serde(skip_serializing_if = "Option::is_none")]
     speed: Option<f64>,
@@ -209,7 +220,7 @@ pub fn part_scene(id: &str, parts: Vec<(String, Vec<u8>)>) -> Result<Value, Stri
             .collect::<Vec<_>>()
             .join("\n")
     })?;
-    Ok(scene_message(id, &Channels::default(), &view))
+    Ok(scene_message(id, &Channels::default(), &[], &view))
 }
 
 /// The `scene` and `frame` messages a session's viewers get. It numbers the frames, and gives

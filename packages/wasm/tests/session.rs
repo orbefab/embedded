@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use orbe_wasm::{Block, Session};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -81,7 +81,7 @@ fn a_block_opens_with_its_scene_then_a_frame() {
         (Some(0), Some("paused"))
     );
     assert!(
-        opened[1].get("world").is_none(),
+        opened[0].get("world").is_none() && opened[1].get("world").is_none(),
         "a scene with no world omits world"
     );
     assert!(messages(&mut session).is_empty(), "messages drain");
@@ -101,7 +101,8 @@ fn light_divider() -> Block {
 fn set_light_is_on_the_next_frame() {
     let mut session = Session::start("light", light_divider()).unwrap();
     let opened = messages(&mut session);
-    assert_eq!(opened[1]["world"][0]["value"].as_f64(), Some(300.0));
+    assert_eq!(opened[0]["world"][0]["name"], "light");
+    assert_eq!(opened[1]["world"], json!([300.0]));
 
     session.command(r#"{"id": 1, "cmd": "play"}"#);
     assert_eq!(messages(&mut session)[0]["reply"]["state"], "playing");
@@ -118,7 +119,7 @@ fn set_light_is_on_the_next_frame() {
         .into_iter()
         .find(|message| message["type"] == "frame" && message["t_ps"].as_u64().unwrap() > landed)
         .expect("a frame after the set lands");
-    assert_eq!(frame["world"][0]["value"].as_f64(), Some(50.0));
+    assert_eq!(frame["world"], json!([50.0]));
 }
 
 #[test]

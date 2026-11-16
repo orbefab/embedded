@@ -115,6 +115,10 @@ fn the_scene_message_names_each_channel() {
         })
     );
     assert_eq!(scene["instances"][2]["name"], "btn1");
+    assert!(
+        scene.get("world").is_none(),
+        "a scene with no world omits world"
+    );
 }
 
 #[test]
@@ -168,23 +172,38 @@ fn close_to(found: f64, expected: f64) -> bool {
     (found - expected).abs() <= 1e-8 * expected.abs()
 }
 
-#[test]
-fn set_light_shows_on_the_next_frame_and_moves_the_divider() {
+fn light_divider() -> Live {
     let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/light-divider/scene.jsonc");
     let mut live = Live::new("t", Files::disk());
     let opened = live.run(&Command::Open(scene));
     assert!(opened.ok(), "{}", opened.text());
+    live
+}
 
+#[test]
+fn the_scene_message_describes_each_declared_quantity() {
+    let live = light_divider();
+    let scene = live.scene().unwrap();
+    assert_eq!(
+        scene["world"],
+        json!([{
+            "name": "light",
+            "unit": "lx",
+            "min": 0.0,
+            "max": 100_000.0,
+            "start": 300.0,
+            "scale": { "kind": "log" },
+        }])
+    );
+}
+
+#[test]
+fn a_paused_set_shows_on_the_next_frame_and_moves_the_divider_once_time_runs() {
+    let mut live = light_divider();
     let mut frames = Feed::default();
     let first = frames.frame(live.sample().unwrap(), None).unwrap();
-    assert_eq!(first["world"][0]["name"], "light");
-    assert_eq!(first["world"][0]["unit"], "lx");
-    assert_eq!(first["world"][0]["min"].as_f64(), Some(0.0));
-    assert_eq!(first["world"][0]["max"].as_f64(), Some(100_000.0));
-    assert_eq!(first["world"][0]["value"].as_f64(), Some(300.0));
-    assert_eq!(first["world"].as_array().map(Vec::len), Some(1));
+    assert_eq!(first["world"], json!([300.0]));
     let before = live.run(&command("get @ldr.a"));
-    assert!(before.ok(), "{}", before.text());
     assert!(
         close_to(pin_voltage(&before), mid(300.0)),
         "mid {} at 300 lx",
@@ -193,22 +212,52 @@ fn set_light_shows_on_the_next_frame_and_moves_the_divider() {
 
     let set = live.run(&command("set light 50"));
     assert!(set.ok(), "{}", set.text());
-    assert!(
-        frames.frame(live.sample().unwrap(), None).is_none(),
-        "a read at the landing still shows the light from before the set"
+    let paused = frames
+        .frame(live.sample().unwrap(), None)
+        .expect("a paused set sends a frame");
+    assert_eq!(
+        (paused["state"].as_str(), &paused["world"]),
+        (Some("paused"), &json!([50.0]))
     );
+
     let stepped = live.run(&command("step 1ms"));
     assert!(stepped.ok(), "{}", stepped.text());
     let after = frames.frame(live.sample().unwrap(), None).unwrap();
-    assert_eq!(after["world"][0]["value"].as_f64(), Some(50.0));
+    assert_eq!(after["world"], json!([50.0]));
     let got = live.run(&command("get @ldr.a"));
-    assert!(got.ok(), "{}", got.text());
     assert!(
         close_to(pin_voltage(&got), mid(50.0)),
         "mid {} at 50 lx, want {}",
         pin_voltage(&got),
         mid(50.0)
     );
+}
+
+#[test]
+fn a_change_the_scene_schedules_shows_only_once_time_reaches_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/light-divider");
+    for file in ["ldr.jsonc", "resistor.jsonc", "source.jsonc"] {
+        std::fs::copy(fixture.join(file), dir.path().join(file)).unwrap();
+    }
+    let scene = std::fs::read_to_string(fixture.join("scene.jsonc"))
+        .unwrap()
+        .replace(
+            r#""light": 300"#,
+            r#""light": { "initial": 300, "steps": [{ "at": "2ms", "to": 0 }] }"#,
+        );
+    std::fs::write(dir.path().join("scene.jsonc"), scene).unwrap();
+    let mut live = Live::new("t", Files::disk());
+    let opened = live.run(&Command::Open(dir.path().join("scene.jsonc")));
+    assert!(opened.ok(), "{}", opened.text());
+
+    let mut world = Vec::new();
+    for step in ["1ms", "500us", "1ms"] {
+        assert!(live.run(&command(&format!("step {step}"))).ok());
+        let mut frames = Feed::default();
+        world.push(frames.frame(live.sample().unwrap(), None).unwrap()["world"].clone());
+    }
+    assert_eq!(world, [json!([300.0]), json!([300.0]), json!([0.0])]);
 }
 
 #[test]

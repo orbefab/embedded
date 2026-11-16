@@ -211,17 +211,18 @@ async function fixtureFiles() {
 async function lightInWorker() {
   const session = open({ name: "light", files: await fixtureFiles() });
   try {
+    const scene = await session.until((m) => m.type === "scene", 10_000, "scene");
     const frame = await session.until((m) => m.type === "frame", 10_000, "frame");
-    check("worker: the first frame reads 300 lx", frame.world?.[0]?.name === "light" && frame.world[0].value === 300, frame.world);
+    check("worker: the scene declares light and the first frame reads 300 lx", scene.world?.[0]?.name === "light" && frame.world?.[0] === 300, { scene: scene.world, frame: frame.world });
     await session.send({ cmd: "play" });
     const set = await session.send({ cmd: "set", quantity: "light", value: 50 });
     const landed = set.data?.landed_ps ?? 0;
     const after = await session.until(
-      (m) => m.type === "frame" && m.t_ps > landed && m.world?.[0]?.value === 50,
+      (m) => m.type === "frame" && m.t_ps > landed && m.world?.[0] === 50,
       5_000,
       "frame after set light 50"
     );
-    check("worker: the next frame reads 50 lx", set.ok === true && after.world[0].value === 50, { set, world: after.world });
+    check("worker: a frame past the landing reads 50 lx", set.ok === true && after.world[0] === 50, { set, world: after.world });
   } catch (error) {
     check(`worker light: ${error.message}`, false, session.seen.slice(-4));
   } finally {
@@ -251,7 +252,7 @@ async function lightOnMainThread() {
   session.free();
   check(
     "main thread: set light 50 is on the next frame",
-    first?.world?.[0]?.value === 300 && reply?.reply?.ok === true && frame?.world?.[0]?.value === 50 && frame.t_ps > landed,
+    first?.world?.[0] === 300 && reply?.reply?.ok === true && frame?.world?.[0] === 50 && frame.t_ps > landed,
     { first: first?.world, reply: reply?.reply, frame: frame?.world, t: frame?.t_ps, landed }
   );
 }

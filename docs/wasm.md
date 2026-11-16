@@ -80,7 +80,7 @@ A bundler that copies `orbe_wasm.js` into one bundle must also emit `orbe_wasm_b
 | `tickMs()` | The tick, 16 ms. |
 | `partScene(id, block)` | The JSON text of the `scene` message of the catalog part `id` drawn on its own, with no session: one instance named `id` with each `-` written `_`, no `circuit_hash` and no channels. `block` holds the part's files and those of every part it is built from, at `parts/<id>/<path>`. It reads the part as far as its children, params and layout, and checks no param, firmware or ground, so a board with no firmware draws. It throws the findings when a part is missing or does not parse. A part's page draws the part with it. |
 
-A viewer sends only `press`, `release`, `set`, `play` and `pause`, each parsed by the CLI's own command table. `set` is `{"id": 1, "cmd": "set", "quantity": "light", "value": 50}`. It lands where a CLI `set` lands, and the next frame's `world` reads the new value. Each object holds memory inside the module until `free()` or the garbage collector frees it.
+A viewer sends only `press`, `release`, `set`, `play` and `pause`, each parsed by the CLI's own command table. `set` is `{"id": 1, "cmd": "set", "quantity": "light", "value": 50}`. It lands where a CLI `set` lands, and the next frame's `world` reads the new value, as [viewer.md](viewer.md) says. Each object holds memory inside the module until `free()` or the garbage collector frees it.
 
 ## Errors
 
