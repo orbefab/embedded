@@ -1,0 +1,44 @@
+{
+  "part": "lm358-dip8",
+  "source": {
+    "script": "model.py",
+    "sha256": "a74df61adfb6cfdc96889b968a9165a5463c7cc2de9b8875fc74afb5084850de",
+    "bytes": 1606
+  },
+  "files": {
+    "lm358-dip8.glb": {
+      "sha256": "7153e2183497dcec1552b5d31ac9ee570c03fd708b4c2fb7d6d803dfb5232676",
+      "bytes": 11692
+    },
+    "lm358-dip8.anchors.json": {
+      "sha256": "262e6742f9d25bb9c014c25d760773ccf4b558c2bfc7f1c6d6be1ee9e40475b2",
+      "bytes": 983
+    }
+  },
+  "box": {
+    "min": [-4.795, -3.935, -3.3],
+    "max": [4.795, 3.935, 5.12]
+  },
+  "kept_nodes": ["lead-1", "lead-2", "lead-3", "lead-4", "lead-5", "lead-6", "lead-7", "lead-8"],
+  "draw_calls": 10,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 8,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0.51
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 10,
+      "primitives_out": 10
+    }
+  }
+}

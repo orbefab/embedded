@@ -128,6 +128,7 @@ pub(crate) fn resolve_op_amp(ctx: ParseCtx<'_>, wire: WireOpAmp) -> Option<OpAmp
     let slew_rate = positive("slew_rate", "V/s", wire.slew_rate);
     let open_loop_gain = positive("open_loop_gain", "1", wire.open_loop_gain);
     let short_circuit_current = positive("short_circuit_current", "A", wire.short_circuit_current);
+    let output_resistance = positive("output_resistance", "ohm", wire.output_resistance);
     let mut non_negative = |field: &'static str, unit, value| {
         bounded(
             part_ref,
@@ -141,7 +142,6 @@ pub(crate) fn resolve_op_amp(ctx: ParseCtx<'_>, wire: WireOpAmp) -> Option<OpAmp
     let input_bias_current = non_negative("input_bias_current", "A", wire.input_bias_current);
     let swing_high = non_negative("swing_high", "V", wire.swing_high);
     let swing_low = non_negative("swing_low", "V", wire.swing_low);
-    let output_resistance = non_negative("output_resistance", "ohm", wire.output_resistance);
     let supply_current = non_negative("supply_current", "A", wire.supply_current);
     Some(OpAmp {
         pins: pins?,

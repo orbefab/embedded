@@ -77,11 +77,11 @@ fn each_field_rejects_a_bad_value_and_the_wrong_unit() {
         ("gain_bandwidth", "Hz", "kHz", positive),
         ("slew_rate", "V/s", "V/us", positive),
         ("open_loop_gain", "1", "V/mV", positive),
+        ("output_resistance", "ohm", "kohm", positive),
         ("short_circuit_current", "A", "mA", positive),
         ("input_bias_current", "A", "nA", non_negative),
         ("swing_high", "V", "mV", non_negative),
         ("swing_low", "V", "mV", non_negative),
-        ("output_resistance", "ohm", "kohm", non_negative),
         ("supply_current", "A", "uA", non_negative),
     ];
     for (field, unit, wrong, rejects) in cases {
@@ -102,7 +102,6 @@ fn each_field_rejects_a_bad_value_and_the_wrong_unit() {
         "input_bias_current",
         "swing_high",
         "swing_low",
-        "output_resistance",
         "supply_current",
     ] {
         netlist::parse(
@@ -110,7 +109,6 @@ fn each_field_rejects_a_bad_value_and_the_wrong_unit() {
                 field,
                 "0.0",
                 match field {
-                    "output_resistance" => "ohm",
                     "swing_high" | "swing_low" => "V",
                     _ => "A",
                 },
