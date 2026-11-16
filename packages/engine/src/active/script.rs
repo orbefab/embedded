@@ -2,6 +2,7 @@
 //! input pin, `in`. A drive at 0 is its power-on drive. A script can also send records and
 //! console bytes, take records, and log what it took.
 
+use orbe_mcu::Frame;
 use orbe_model::{Cs, Drive, Duty, Lanes, Spi, Stop, Time};
 
 use crate::netlist::NetId;
@@ -12,7 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::link::{LinkRow, Record, RecordKind, SpiNets};
 use crate::name::Name;
 
-use super::{Chip, Frame, Output, SpiTarget, Stage, Takes};
+use super::{Chip, Output, SpiTarget, Stage, Takes};
 use crate::mna::Node;
 use crate::watch::{Signal, Watch};
 

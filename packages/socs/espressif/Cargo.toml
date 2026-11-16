@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 sha2 = { workspace = true, features = ["compress"] }
 orbe-xtensa.workspace = true
+orbe-mcu.workspace = true
+orbe-model.workspace = true
 
 [lints]
 workspace = true

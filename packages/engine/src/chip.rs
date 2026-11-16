@@ -7,9 +7,9 @@
 //! every `Chip` answers `unknowns` and `dc_paths` here. A passive `Chip` adds a `Passive`
 //! variant, a `chip/<kind>.rs`, an arm in `passive`, and an arm in each function that takes
 //! `Passive`. An active kind adds an `Active` variant and its arm in `active::chip`. A device in
-//! `device/` builds an `active::Core::Device` and adds its row to `Model::device`. A chip in
-//! `mcu/` adds an `active::Core` variant. The relay answers `unknowns` and `dc_paths` as an
-//! element.
+//! `device/` builds an `active::Core::Device` and adds its row to `Model::device`. A
+//! microcontroller builds an `active::Core::Mcu` and adds its row to the table in `mcu/mod.rs`.
+//! The relay answers `unknowns` and `dc_paths` as an element.
 
 use crate::device::{Cst816, PulsesReplay, SpiReplay, St77916, Ws2812};
 use crate::mcu::{Atmega328p, Esp32s3};
@@ -182,7 +182,7 @@ pub(crate) fn levels(chip: Passive<'_>, state: &State, watched: &[bool]) -> Vec<
 pub(crate) fn dc_paths(chip: &Chip) -> &'static [(usize, usize)] {
     match chip {
         Chip::Ne555(_) => &ne555::DC_PATHS,
-        Chip::Atmega328p(_) => &crate::mcu::avr::DC_PATHS,
+        Chip::Atmega328p(_) => &crate::mcu::atmega328p::DC_PATHS,
         Chip::SpiReplay(_) => &crate::device::spi_replay::DC_PATHS,
         Chip::St77916(_) => &crate::device::st77916::DC_PATHS,
         Chip::Cst816(_) => &crate::device::cst816::DC_PATHS,

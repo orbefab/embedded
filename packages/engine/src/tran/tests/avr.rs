@@ -2,12 +2,13 @@
 
 use orbe_model::Drive;
 
-use crate::mcu::Atmega328p;
+use crate::mcu::{Atmega328p, Mcu};
 use crate::netlist::Netlist;
 
 use crate::diagnostic::Severity;
 
-use orbe_microchip::{FuseBytes, Port};
+use orbe_mcu::Mcu as _;
+use orbe_microchip::{Bridge, FuseBytes, PACKAGE, Pad, Port, port_index};
 
 use super::active::{
     NS, US, after, at, capacitor, circuit, resistor, restarted, run_active, scripted, volts,
@@ -15,7 +16,6 @@ use super::active::{
 use crate::active::{self};
 use crate::diagnostic::Diagnostic;
 use crate::logic::Level;
-use crate::mcu::avr::{self, PACKAGE, Pad, port_index};
 use crate::name::Ref;
 use crate::newton::Circuit;
 use crate::trace::Trace;
@@ -151,15 +151,15 @@ fn run(netlist: &Netlist) -> (Trace, Vec<Diagnostic>) {
     run_active(netlist, Vec::new())
 }
 
-fn core(netlist: &Netlist) -> avr::Core {
+fn core(netlist: &Netlist) -> Bridge {
     let circuit = Circuit::new(netlist.clone()).unwrap();
     let [chip] = &circuit.actives[..] else {
         unreachable!("one ATmega328P");
     };
-    let active::Core::Avr(core) = &chip.core else {
+    let active::Core::Mcu(Mcu::Atmega328p(host)) = &chip.core else {
         unreachable!("an ATmega328P");
     };
-    (**core).clone()
+    host.mcu.clone()
 }
 
 pub(super) fn ps(cycle: u64, clock_hz: u32) -> u64 {
@@ -825,7 +825,7 @@ fn a_drive_at_stop_ps_is_not_in_the_run() {
     assert_eq!(pb5(6_500_001), [(250_000, true), (6_500_000, false)]);
 }
 
-fn stops(core: &mut avr::Core, limit: u64) -> Vec<(u64, Drive)> {
+fn stops(core: &mut Bridge, limit: u64) -> Vec<(u64, Drive)> {
     let pb5 = port_index(Pad::Port(Port::B, 5));
     let mut stops = Vec::new();
     while let Some(stop) = core.run_until(orbe_model::Time::from_ps(limit)) {

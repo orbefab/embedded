@@ -1,15 +1,12 @@
-//! The ATmega328P behind the seam. Its package pins become outputs, watches, and samples
-//! around `orbe_microchip::Timeline`, and its oscillator converts between picoseconds and cycles.
+//! The `atmega328p` part: its netlist struct and how parse reads it, and the outputs, watches
+//! and samples its package pins give the circuit around `orbe_microchip::Bridge`.
 
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use orbe_model::{Drive, Stop, Time};
-
-use crate::active::{Chip, Frame, Output, Phase, Stage, Takes};
+use crate::active::{Chip, Output, Stage};
 use crate::diagnostic::{Diagnostic, FirmwareRule, ValueRule};
-use crate::i2c::I2cPhase;
 use crate::mna::Node;
 use crate::name::{Name, Ref};
 use crate::netlist::IntValue;
@@ -23,75 +20,10 @@ use crate::netlist::json::threshold::resolve_threshold;
 use crate::netlist::json::{PinMap, WireInt, WireValue, resolve_int, resolve_pins, resolve_value};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
 use crate::watch::{Signal, Watch};
-use orbe_microchip::{Channel, Cpu, I2cNote, PinDrive, Port, Timeline};
-
-/// What a package pin is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Pad {
-    /// `P<port><bit>`, which the chip drives and reads.
-    Port(Port, u8),
-    /// `PB6` or `PB7`, which the crystal holds.
-    Xtal,
-    Vcc,
-    /// Pin 8, the digital ground.
-    Gnd,
-    Avcc,
-    Aref,
-    /// Pin 22, the analog ground.
-    Agnd,
-}
-
-/// What each package pin is, in `Atmega328p::PINS` order, the DIP's. Pin 1 is `PC6`, which is
-/// `RESET` while the fuses keep it so.
-pub(crate) const PACKAGE: [Pad; 28] = [
-    Pad::Port(Port::C, 6),
-    Pad::Port(Port::D, 0),
-    Pad::Port(Port::D, 1),
-    Pad::Port(Port::D, 2),
-    Pad::Port(Port::D, 3),
-    Pad::Port(Port::D, 4),
-    Pad::Vcc,
-    Pad::Gnd,
-    Pad::Xtal,
-    Pad::Xtal,
-    Pad::Port(Port::D, 5),
-    Pad::Port(Port::D, 6),
-    Pad::Port(Port::D, 7),
-    Pad::Port(Port::B, 0),
-    Pad::Port(Port::B, 1),
-    Pad::Port(Port::B, 2),
-    Pad::Port(Port::B, 3),
-    Pad::Port(Port::B, 4),
-    Pad::Port(Port::B, 5),
-    Pad::Avcc,
-    Pad::Aref,
-    Pad::Agnd,
-    Pad::Port(Port::C, 0),
-    Pad::Port(Port::C, 1),
-    Pad::Port(Port::C, 2),
-    Pad::Port(Port::C, 3),
-    Pad::Port(Port::C, 4),
-    Pad::Port(Port::C, 5),
-];
+use orbe_microchip::{Bridge, FuseBytes, PACKAGE, PORT_PINS, Pad, Port, port_index};
 
 /// `RESET` while `RSTDISBL` is unprogrammed.
 const RESET: Pad = Pad::Port(Port::C, 6);
-
-/// The port pins in package order, each with the die's id for it. The image and the watches
-/// follow this order.
-const PORT_PINS: [(usize, u32); 21] = {
-    let mut pins = [(0, 0); 21];
-    let (mut k, mut n) = (0, 0);
-    while k < PACKAGE.len() {
-        if let Pad::Port(port, bit) = PACKAGE[k] {
-            pins[n] = (k, port.pin_id(bit));
-            n += 1;
-        }
-        k += 1;
-    }
-    assert!(n == pins.len());
-    pins
-};
 
 const VCC: usize = 6;
 const GND_8: usize = 7;
@@ -106,7 +38,7 @@ pub(crate) const DC_PATHS: [(usize, usize); 42] = {
     let mut paths = [(0, 0); 42];
     let mut k = 0;
     while k < PORT_PINS.len() {
-        let pin = PORT_PINS[k].0;
+        let pin = PORT_PINS[k];
         paths[2 * k] = (pin, VCC);
         paths[2 * k + 1] = (pin, GND_8);
         k += 1;
@@ -122,69 +54,20 @@ fn package_pin(pad: Pad) -> usize {
         .expect("a pad of the package")
 }
 
-/// The output and watch index of port pin `pad`.
-pub(crate) fn port_index(pad: Pad) -> usize {
-    PORT_PINS
-        .iter()
-        .position(|&(k, _)| PACKAGE[k] == pad)
-        .expect("a port pin")
-}
-
-#[derive(Debug)]
-pub(crate) struct Core {
-    timeline: Timeline,
-    clock_hz: u64,
-    image: [Drive; PORT_PINS.len()],
-    /// The levels it last took, in watch order. Empty before the power-on input.
-    levels: Vec<bool>,
-    /// How many TWI phases `deliver` has taken, which numbers the next one.
-    phases: u64,
-}
-
-/// By hand for `clone_from`, which reuses the timeline's buffers. The patterns name every field.
-impl Clone for Core {
-    fn clone(&self) -> Self {
-        let Core {
-            timeline,
-            clock_hz,
-            image,
-            levels,
-            phases,
-        } = self;
-        Core {
-            timeline: timeline.clone(),
-            clock_hz: *clock_hz,
-            image: *image,
-            levels: levels.clone(),
-            phases: *phases,
-        }
-    }
-
-    fn clone_from(&mut self, source: &Self) {
-        let Core {
-            timeline,
-            clock_hz,
-            image,
-            levels,
-            phases,
-        } = self;
-        timeline.clone_from(&source.timeline);
-        *clock_hz = source.clock_hz;
-        *image = source.image;
-        levels.clone_from(&source.levels);
-        *phases = source.phases;
-    }
-}
-
 pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
     let node = |pad: Pad| Node::from(mcu.pins[package_pin(pad)]);
     let (vcc, gnd) = (node(Pad::Vcc), node(Pad::Gnd));
     let clock_hz = u32::try_from(mcu.clock_hz.value).expect("parse keeps the clock in u32");
     let fuses = mcu.fuses;
-    let mut cpu = Cpu::new();
-    cpu.set_clock_hz(clock_hz);
-    cpu.set_fuses(fuses.low(), fuses.high(), fuses.extended());
-    cpu.load_flash(mcu.firmware.flash());
+    let bridge = Bridge::new(
+        clock_hz,
+        FuseBytes {
+            low: fuses.low(),
+            high: fuses.high(),
+            extended: fuses.extended(),
+        },
+        mcu.firmware.flash(),
+    );
 
     let stage = |drop: &Value, resistance: &Value| Stage {
         drop: drop.si.get(),
@@ -198,7 +81,7 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
     let outputs = PORT_PINS
         .iter()
         .enumerate()
-        .map(|(n, &(k, _))| Output {
+        .map(|(n, &k)| Output {
             pin: mcu.pins[k],
             vcc: mcu.pins[package_pin(Pad::Vcc)],
             gnd: mcu.pins[package_pin(Pad::Gnd)],
@@ -225,7 +108,7 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
     let mut watches: Vec<Watch> = PORT_PINS
         .iter()
         .enumerate()
-        .map(|(n, &(k, _))| {
+        .map(|(n, &k)| {
             let threshold = if reset == Some(n) {
                 &mcu.reset_threshold
             } else {
@@ -240,9 +123,9 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
     let mut signals: Vec<(&'static str, usize)> = PORT_PINS
         .iter()
         .enumerate()
-        .map(|(n, &(k, _))| (Atmega328p::PINS[k], n))
+        .map(|(n, &k)| (Atmega328p::PINS[k], n))
         .collect();
-    if let Some((below, above)) = cpu.brown_out_window() {
+    if let Some((below, above)) = bridge.cpu().brown_out_window() {
         signals.push((Atmega328p::PINS[VCC], watches.len()));
         let supply = |millivolts: u16| Signal {
             terms: vec![(vcc, 1.0), (gnd, -1.0)],
@@ -266,142 +149,7 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
         .map(to_agnd)
         .collect();
 
-    let mut core = Core {
-        timeline: Timeline::new(cpu),
-        clock_hz: u64::from(clock_hz),
-        image: [Drive::Off; PORT_PINS.len()],
-        levels: Vec::new(),
-        phases: 0,
-    };
-    core.refresh();
-    Chip {
-        part: Some(part),
-        outputs,
-        watches,
-        signals,
-        samples,
-        usarts: &["USART0"],
-        twi: true,
-        sends: false,
-        takes: Takes::default(),
-        core: crate::active::Core::Avr(Box::new(core)),
-    }
-}
-
-impl Core {
-    pub(crate) fn run_until(&mut self, limit: Time) -> Option<Stop> {
-        let halt = self.timeline.run_until(self.cycle(limit))?;
-        self.refresh();
-        Some(Stop {
-            at: self.time(halt.at),
-            sample: halt.sample,
-            record: false,
-        })
-    }
-
-    /// The last oscillator cycle at or before `at`.
-    fn cycle(&self, at: Time) -> u64 {
-        u64::try_from(u128::from(at.as_ps()) * u128::from(self.clock_hz) / 1_000_000_000_000)
-            .expect("an oscillator cycle count fits in u64")
-    }
-
-    /// The first picosecond at or after oscillator cycle `cycle`.
-    fn time(&self, cycle: u64) -> Time {
-        let at = (u128::from(cycle) * 1_000_000_000_000).div_ceil(u128::from(self.clock_hz));
-        Time::from_ps(u64::try_from(at).expect("a cycle inside the run"))
-    }
-
-    pub(crate) fn drive(&self) -> &[Drive] {
-        &self.image
-    }
-
-    /// ADC0 to ADC5, `AVCC`, and `AREF`, each against the analog GND.
-    pub(crate) fn sample(&mut self, _at: Time, volts: &[f64]) {
-        let v = |k: usize| volts[k] as f32;
-        self.timeline
-            .sample([v(0), v(1), v(2), v(3), v(4), v(5), 0.0, 0.0], v(6), v(7));
-    }
-
-    /// The port pins' levels in [`PORT_PINS`] order, then `VCC` above the brown-out window
-    /// when the fuses enable it.
-    pub(crate) fn input(&mut self, _at: Time, levels: &[bool]) {
-        for (k, &level) in levels.iter().enumerate() {
-            if self.levels.get(k) == Some(&level) {
-                continue;
-            }
-            match PORT_PINS.get(k) {
-                Some(&(_, pin)) => self.timeline.set_pad(pin, level),
-                None => self.timeline.set_brown_out(!level),
-            }
-        }
-        self.levels = levels.to_vec();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn cpu(&self) -> &Cpu {
-        self.timeline.cpu()
-    }
-
-    /// Takes the frames whose stop bit ended on a cycle at or before `through`'s last, which is
-    /// the same as that cycle's first picosecond being at or before `through`, and the TWI
-    /// phases that ended by then.
-    pub(crate) fn deliver(
-        &mut self,
-        through: Time,
-        mut sent: impl FnMut(Frame),
-        mut saw: impl FnMut(Phase),
-    ) {
-        let through = self.cycle(through);
-        while let Some(frame) = self.timeline.take_sent(through) {
-            sent(Frame {
-                usart: frame.usart,
-                byte: frame.byte,
-                start: self.time(frame.start),
-                end: self.time(frame.end),
-            });
-        }
-        for channel in [Channel::Spi, Channel::SpiHostMaster] {
-            while self.timeline.take(channel).is_some() {}
-        }
-        while let Some(stamp) = self.timeline.take_i2c_through(through) {
-            let phase = match stamp.note {
-                I2cNote::Start { repeated: false } => I2cPhase::Start,
-                I2cNote::Start { repeated: true } => I2cPhase::RepeatedStart,
-                I2cNote::Address { addr, read, ack } => I2cPhase::Address {
-                    address: addr,
-                    read,
-                    ack,
-                },
-                I2cNote::Data { byte, write, ack } => I2cPhase::Data {
-                    byte,
-                    read: !write,
-                    ack,
-                },
-                I2cNote::Stop => I2cPhase::Stop,
-                I2cNote::ArbitrationLost => I2cPhase::ArbitrationLost,
-                I2cNote::BusError => I2cPhase::BusError,
-            };
-            saw(Phase {
-                phase,
-                start: self.time(stamp.start),
-                end: self.time(stamp.at),
-                count: self.phases,
-            });
-            self.phases += 1;
-        }
-    }
-
-    fn refresh(&mut self) {
-        let drives = self.timeline.drives();
-        for (drive, &(_, pin)) in self.image.iter_mut().zip(&PORT_PINS) {
-            *drive = match drives[pin as usize] {
-                PinDrive::High => Drive::High,
-                PinDrive::Low => Drive::Low,
-                PinDrive::PullUp => Drive::PullUp,
-                PinDrive::Off => Drive::Off,
-            };
-        }
-    }
+    super::chip(part, outputs, watches, signals, samples, bridge)
 }
 
 /// An ATmega328P in its 28-pin DIP, running `firmware` from power-on. Microchip DS40002061B.

@@ -768,6 +768,7 @@ dependencies = [
  "libm",
  "orbe-engine",
  "orbe-espressif",
+ "orbe-mcu",
  "orbe-microchip",
  "orbe-model",
  "orbe-xtensa",
@@ -781,8 +782,17 @@ dependencies = [
 name = "orbe-espressif"
 version = "0.1.0"
 dependencies = [
+ "orbe-mcu",
+ "orbe-model",
  "orbe-xtensa",
  "sha2",
+]
+
+[[package]]
+name = "orbe-mcu"
+version = "0.1.0"
+dependencies = [
+ "orbe-model",
 ]
 
 [[package]]
@@ -790,6 +800,8 @@ name = "orbe-microchip"
 version = "0.1.0"
 dependencies = [
  "orbe-avr",
+ "orbe-mcu",
+ "orbe-model",
 ]
 
 [[package]]

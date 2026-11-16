@@ -482,7 +482,7 @@ define_kinds! {
             crate::chip::ne555::WireNe555, crate::chip::ne555::resolve_ne555,
             &crate::chip::Ne555::PINS;
         Atmega328p, "atmega328p",
-            crate::mcu::avr::WireAtmega328p, crate::mcu::avr::resolve_atmega328p,
+            crate::mcu::atmega328p::WireAtmega328p, crate::mcu::atmega328p::resolve_atmega328p,
             &crate::mcu::Atmega328p::PINS;
         SpiReplay, "spi_replay",
             crate::device::spi_replay::WireSpiReplay, crate::device::spi_replay::resolve_spi_replay,

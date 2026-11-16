@@ -12,31 +12,10 @@
 
 use std::fmt::Write;
 
+use orbe_mcu::I2cPhase;
 use orbe_model::Time;
 
 use crate::name::Name;
-
-/// What a phase was on the bus.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum I2cPhase {
-    Start,
-    RepeatedStart,
-    /// SLA+R/W. `ack` is the target's acknowledge.
-    Address {
-        address: u8,
-        read: bool,
-        ack: bool,
-    },
-    /// A data byte. On a write `ack` is the target's acknowledge, on a read the master's.
-    Data {
-        byte: u8,
-        read: bool,
-        ack: bool,
-    },
-    Stop,
-    ArbitrationLost,
-    BusError,
-}
 
 /// One phase: its first bus change, which TWI of the run saw it, and what it was.
 /// `twi` indexes the run's TWIs, chips in part order.

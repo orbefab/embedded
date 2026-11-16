@@ -17,9 +17,11 @@ use super::avr::{ANALOG_SERIAL, FUSES, MHZ_14_7456, MHZ_16, atmega, ps};
 use super::fixtures::*;
 use super::session::{Rng, batch, example, serial_of_one_call};
 use crate::active::{self, Actives};
+use crate::mcu::Mcu;
 use crate::newton::{Circuit, Conditions, Iterate};
 use crate::op;
 use crate::session::{BUDGET, Budget, Input, SerialCursor, Session, Setting, State, Status};
+use orbe_mcu::Mcu as _;
 
 const MHZ_8: u32 = 8_000_000;
 const MHZ_3_2: u32 = 3_200_000;
@@ -42,10 +44,10 @@ fn alone(netlist: &Netlist, clocks: &[u32], stop: Time) -> Vec<Frame> {
     let start = settled(&circuit);
     let mut frames = Vec::new();
     for (k, chip) in circuit.actives.iter().enumerate() {
-        let active::Core::Avr(core) = &chip.core else {
+        let active::Core::Mcu(Mcu::Atmega328p(host)) = &chip.core else {
             unreachable!("an ATmega328P");
         };
-        let mut core = (**core).clone();
+        let mut core = host.mcu.clone();
         let volts: Vec<f64> = chip
             .samples
             .iter()
@@ -144,10 +146,10 @@ fn analog_serial() -> Netlist {
 
 /// The async frames `core` holds.
 fn held(core: &active::Core) -> usize {
-    let active::Core::Avr(core) = core else {
+    let active::Core::Mcu(Mcu::Atmega328p(host)) = core else {
         unreachable!("an ATmega328P");
     };
-    let mut cpu = core.cpu().clone();
+    let mut cpu = host.mcu.cpu().clone();
     std::iter::from_fn(|| cpu.take_sent(u64::MAX)).count()
 }
 

@@ -1,3 +1,4 @@
+use orbe_mcu::{FlashRefusal, ResetReason, Setting, Unsupported};
 use orbe_model::Time;
 
 use crate::netlist::MIN_GAP_PS;
@@ -106,81 +107,6 @@ pub enum FirmwareRule {
     /// A `rom` that is not the one ROM the model runs, `rom` absent with `firmware.flash`, or
     /// `rom` present with `firmware.elf`.
     Rom,
-}
-
-/// What the model lacks to run an instruction a core reached.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Unsupported {
-    /// The op itself.
-    Op,
-    /// The op at an address that is not a multiple of its size.
-    Unaligned,
-    /// `l32r` while `LITBASE` is enabled.
-    Litbase,
-    /// The op as the last of a loop that loops back.
-    LoopEnd,
-}
-
-/// What a chip's firmware set that the model does not run.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ChipSetting {
-    /// A transfer setting, by name, that the store starting the transfer found.
-    Transfer(&'static str),
-    /// An interrupt of the peripheral that the model never raises.
-    Interrupt,
-    /// A register setting, by name, that the model does not run.
-    Register(&'static str),
-    /// Sleep.
-    Sleep,
-}
-
-impl ChipSetting {
-    pub fn name(self) -> &'static str {
-        match self {
-            ChipSetting::Transfer(name) => name,
-            ChipSetting::Register(name) => name,
-            ChipSetting::Interrupt => "interrupt",
-            ChipSetting::Sleep => "sleep",
-        }
-    }
-}
-
-/// Why a chip's flash command ends the run.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FlashRefusal {
-    /// A program, an erase, or a command the model does not know.
-    Unsupported,
-    /// A write of the flash's status registers, which can lock them for good.
-    StatusWrite,
-    /// A user command with no command phase.
-    NoCommandPhase,
-    /// One `SPI_MEM_CMD_REG` write that starts more than one command.
-    StartBits,
-    /// A read that reaches past the flash's end.
-    PastEnd,
-    /// An address phase longer than 32 bits.
-    AddressBits,
-    /// A command started on SPI0, the controller the cache reads the flash through.
-    Spi0,
-    /// A write that would take one of the flash's pads from SPI0 and SPI1.
-    Pads,
-    /// A user command while `CS0_DIS` is set or `CS1_DIS` is clear.
-    Cs,
-}
-
-/// Why firmware reset its chip, as ESP-IDF records it before the reset, when that ends the run.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ResetReason {
-    Panic,
-    InterruptWatchdog,
-    TaskWatchdog,
-    Watchdog,
-    Brownout,
-    /// The firmware recorded no reason the model can read.
-    Unreadable,
 }
 
 /// Why a blob a netlist names is not there.
@@ -456,7 +382,7 @@ pub enum Diagnostic {
         part: Ref,
         at: Time,
         peripheral: &'static str,
-        setting: ChipSetting,
+        setting: Setting,
         pc: u32,
         /// The APP CPU ran the code at `pc`, rather than the PRO CPU.
         app: bool,
@@ -1230,16 +1156,16 @@ impl Diagnostic {
                 symbol,
             } => {
                 let what = match setting {
-                    ChipSetting::Transfer(setting) => {
+                    Setting::Transfer(setting) => {
                         format!("started a {peripheral} transfer with setting {setting}")
                     }
-                    ChipSetting::Interrupt => format!("enabled a {peripheral} interrupt"),
-                    ChipSetting::Register(setting) => format!("set {peripheral} {setting}"),
-                    ChipSetting::Sleep => "put the chip to sleep".to_string(),
+                    Setting::Interrupt => format!("enabled a {peripheral} interrupt"),
+                    Setting::Register(setting) => format!("set {peripheral} {setting}"),
+                    Setting::Sleep => "put the chip to sleep".to_string(),
                 };
                 let why = match (*peripheral, *setting) {
-                    (_, ChipSetting::Interrupt) => "which the model never raises",
-                    ("GDMA", ChipSetting::Register("reset_while_sending")) => {
+                    (_, Setting::Interrupt) => "which the model never raises",
+                    ("GDMA", Setting::Register("reset_while_sending")) => {
                         "which the model does not run; ESP-IDF sets GDMA's reset when it restarts or panics, so the console holds any panic text"
                     }
                     _ => "which the model does not run",
@@ -1577,7 +1503,9 @@ impl Diagnostic {
                 pc,
                 symbol,
                 ..
-            } => serde_json::json!({ "op": op, "pc": pc, "reason": reason, "symbol": symbol }),
+            } => {
+                serde_json::json!({ "op": op, "pc": pc, "reason": reason.name(), "symbol": symbol })
+            }
             Diagnostic::ChipUnmappedFetch { pc, symbol, .. }
             | Diagnostic::ChipHalted { pc, symbol, .. } => {
                 serde_json::json!({ "pc": pc, "symbol": symbol })
@@ -1616,12 +1544,12 @@ impl Diagnostic {
             } => serde_json::json!({
                 "command": command,
                 "pc": pc,
-                "reason": reason,
+                "reason": reason.name(),
                 "symbol": symbol,
             }),
             Diagnostic::ChipFaultRestart {
                 reason, pc, symbol, ..
-            } => serde_json::json!({ "pc": pc, "reason": reason, "symbol": symbol }),
+            } => serde_json::json!({ "pc": pc, "reason": reason.name(), "symbol": symbol }),
             Diagnostic::ChipUnmappedLoad {
                 address,
                 pc,
