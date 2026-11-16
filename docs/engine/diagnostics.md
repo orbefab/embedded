@@ -155,7 +155,7 @@ The message is `{ref} firmware line {line} {what}`, or `{ref} firmware {what}` w
 
 An `esp32s3` part's `firmware.elf` blob has three rules, each with `line` `null`. `field` is still `firmware`.
 
-- `elf`: the blob is not a 32-bit little-endian Xtensa ELF executable with a loadable segment, or a header, a segment or the symbol table runs past the file.
+- `elf`: the blob is not a 32-bit little-endian version 1 Xtensa ELF executable with a loadable segment, or a header, a segment or the symbol table runs past the file. A program header table must be at a nonzero offset with 32-byte entries and a count below `0xffff`. A section table with entries must be at a nonzero offset with 40-byte entries.
 - `unmapped`: a loadable segment lies outside the chip's SRAM windows, or the entry lies in no segment on the instruction bus.
 - `overlap`: two loadable segments reach one byte of SRAM, through one window or both. The message is `{ref} firmware loads two segments onto one byte of memory`.
 

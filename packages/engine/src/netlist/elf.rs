@@ -3,15 +3,16 @@
 
 use std::ops::Range;
 
+use object::LittleEndian as Le;
+use object::elf::{
+    EM_XTENSA, ET_EXEC, FileHeader32, PN_XNUM, PT_LOAD, SHN_UNDEF, SHT_SYMTAB, STT_FUNC,
+    STT_NOTYPE, Sym32,
+};
+use object::read::ReadRef;
+use object::read::elf::{FileHeader, ProgramHeader, SectionHeader, Sym};
+
 use crate::blob::Blob;
 use crate::diagnostic::FirmwareRule;
-
-const EM_XTENSA: u16 = 94;
-const ET_EXEC: u16 = 2;
-const PT_LOAD: u32 = 1;
-const SHT_SYMTAB: u32 = 2;
-const STT_NOTYPE: u8 = 0;
-const STT_FUNC: u8 = 2;
 
 /// A parsed executable. Only parse builds one, so every loadable segment lies in the memory its
 /// kind names, no two share a byte there, and the entry is in one of them.
@@ -58,88 +59,17 @@ impl Elf {
     /// Reads `blob` as an executable for memory `windows`.
     pub fn parse(blob: Blob, windows: &[Window]) -> Result<Elf, FirmwareRule> {
         let bytes = &blob.bytes[..];
-        let header = Reader(bytes);
-        if bytes.get(..4) != Some(b"\x7fELF".as_slice())
-            || header.u8(4) != Some(1)
-            || header.u8(5) != Some(1)
-            || header.u16(16) != Some(ET_EXEC)
-            || header.u16(18) != Some(EM_XTENSA)
+        let header = FileHeader32::<Le>::parse(bytes).map_err(|_| FirmwareRule::Elf)?;
+        if header.endian().is_err()
+            || header.e_type(Le) != ET_EXEC
+            || header.e_machine(Le) != EM_XTENSA
         {
             return Err(FirmwareRule::Elf);
         }
-        let field = |at: usize| header.u32(at).ok_or(FirmwareRule::Elf);
-        let half = |at: usize| header.u16(at).ok_or(FirmwareRule::Elf);
-        let entry = field(24)?;
-        let (phoff, shoff) = (field(28)? as usize, field(32)? as usize);
-        let (phentsize, phnum) = (half(42)? as usize, half(44)? as usize);
-        let (shentsize, shnum) = (half(46)? as usize, half(48)? as usize);
-
-        let mut segments = Vec::new();
-        for k in 0..phnum {
-            let at = entry_at(phoff, k, phentsize)?;
-            if phentsize < 32 || header.u32(at) != Some(PT_LOAD) {
-                header.u32(at).ok_or(FirmwareRule::Elf)?;
-                continue;
-            }
-            let offset = field(at + 4)? as usize;
-            let (addr, filesz, memsz) = (field(at + 8)?, field(at + 16)?, field(at + 20)?);
-            if memsz == 0 {
-                continue;
-            }
-            let file = span(offset, filesz as usize)?;
-            if filesz > memsz || bytes.get(file.clone()).is_none() {
-                return Err(FirmwareRule::Elf);
-            }
-            segments.push(Segment { addr, memsz, file });
-        }
-        if segments.is_empty() {
-            return Err(FirmwareRule::Elf);
-        }
+        let entry = header.e_entry(Le);
+        let segments = segments(header, bytes)?;
         check_layout(&segments, entry, windows)?;
-
-        // An ELF file has at most one symbol table, so parse reads the first.
-        let mut symtab = None;
-        for k in 0..shnum {
-            let at = entry_at(shoff, k, shentsize)?;
-            if shentsize >= 40 && header.u32(at + 4) == Some(SHT_SYMTAB) {
-                symtab = Some(at);
-                break;
-            }
-        }
-        let mut symbols = Vec::new();
-        if let Some(at) = symtab {
-            let (offset, size) = (field(at + 16)? as usize, field(at + 20)? as usize);
-            let strings = entry_at(shoff, field(at + 24)? as usize, shentsize)?;
-            let (str_offset, str_size) = (field(strings + 16)?, field(strings + 20)?);
-            let strtab = span(str_offset as usize, str_size as usize)?;
-            let names = bytes.get(strtab.clone()).ok_or(FirmwareRule::Elf)?;
-            let table = bytes.get(span(offset, size)?).ok_or(FirmwareRule::Elf)?;
-            // A name that starts past the table's last NUL has no end.
-            let last_nul = names.iter().rposition(|&byte| byte == 0);
-            symbols.reserve_exact(table.len() / 16);
-            for entry in table.as_chunks::<16>().0 {
-                let entry = Reader(entry);
-                let (name, addr) = (entry.u32(0).unwrap_or(0), entry.u32(4).unwrap_or(0));
-                let (info, section) = (entry.u8(12).unwrap_or(0), entry.u16(14).unwrap_or(0));
-                if section == 0 || !matches!(info & 0xf, STT_NOTYPE | STT_FUNC) {
-                    continue;
-                }
-                let name = name as usize;
-                if last_nul.is_none_or(|nul| name > nul) {
-                    continue;
-                }
-                let text = &names[name..];
-                if text[0] == 0 || text[0] == b'$' || text.starts_with(b".L") {
-                    continue;
-                }
-                symbols.push(Symbol {
-                    addr,
-                    name: strtab.start + name..strtab.end,
-                });
-            }
-        }
-        symbols.sort_by_key(|symbol| symbol.addr);
-        symbols.dedup_by(|b, a| a.addr == b.addr);
+        let symbols = symbols(header, bytes)?;
         Ok(Elf {
             blob,
             entry,
@@ -216,36 +146,87 @@ fn check_layout(segments: &[Segment], entry: u32, windows: &[Window]) -> Result<
     Ok(())
 }
 
-/// Where entry `k` of a table at `offset` with entries of `size` bytes starts. A table that runs
-/// past the address space runs past the file.
-fn entry_at(offset: usize, k: usize, size: usize) -> Result<usize, FirmwareRule> {
-    k.checked_mul(size)
-        .and_then(|at| at.checked_add(offset))
-        .and_then(|at| at.checked_add(40))
-        .map(|end| end - 40)
-        .ok_or(FirmwareRule::Elf)
+/// Loadable segments, in program-header order. A table at offset 0 or with the extended count
+/// `PN_XNUM` is refused.
+fn segments(header: &FileHeader32<Le>, bytes: &[u8]) -> Result<Vec<Segment>, FirmwareRule> {
+    if header.e_phoff(Le) == 0 || header.e_phnum(Le) == PN_XNUM {
+        return Err(FirmwareRule::Elf);
+    }
+    let programs = header
+        .program_headers(Le, bytes)
+        .map_err(|_| FirmwareRule::Elf)?;
+    let mut segments = Vec::new();
+    for program in programs {
+        let (filesz, memsz) = (program.p_filesz(Le), program.p_memsz(Le));
+        if program.p_type(Le) != PT_LOAD || memsz == 0 {
+            continue;
+        }
+        let data = program.data(Le, bytes).map_err(|_| FirmwareRule::Elf)?;
+        if filesz > memsz {
+            return Err(FirmwareRule::Elf);
+        }
+        let start = program.p_offset(Le) as usize;
+        segments.push(Segment {
+            addr: program.p_vaddr(Le),
+            memsz,
+            file: start..start + data.len(),
+        });
+    }
+    if segments.is_empty() {
+        return Err(FirmwareRule::Elf);
+    }
+    Ok(segments)
 }
 
-/// `len` bytes from `offset`.
-fn span(offset: usize, len: usize) -> Result<Range<usize>, FirmwareRule> {
-    let end = offset.checked_add(len).ok_or(FirmwareRule::Elf)?;
-    Ok(offset..end)
-}
-
-struct Reader<'a>(&'a [u8]);
-
-impl Reader<'_> {
-    fn u8(&self, at: usize) -> Option<u8> {
-        self.0.get(at).copied()
+/// The first symbol table's code symbols. `e_shnum` 0 is no table, and the extended count is not
+/// read. A table at offset 0 is refused. A name is the string table from the name through the
+/// table's end, so the symbols hold no copy of it.
+fn symbols(header: &FileHeader32<Le>, bytes: &[u8]) -> Result<Vec<Symbol>, FirmwareRule> {
+    let sections = match (header.e_shoff(Le), header.e_shnum(Le)) {
+        (_, 0) => return Ok(Vec::new()),
+        (0, _) => return Err(FirmwareRule::Elf),
+        _ => header
+            .section_headers(Le, bytes)
+            .map_err(|_| FirmwareRule::Elf)?,
+    };
+    let Some(symtab) = sections.iter().find(|s| s.sh_type(Le) == SHT_SYMTAB) else {
+        return Ok(Vec::new());
+    };
+    let table: &[Sym32<Le>] = symtab
+        .data_as_array(Le, bytes)
+        .map_err(|_| FirmwareRule::Elf)?;
+    let strings = sections
+        .get(symtab.sh_link(Le) as usize)
+        .ok_or(FirmwareRule::Elf)?;
+    // By its file range even when its type says it has none, as `data` would read nothing.
+    let (start, size) = (strings.sh_offset(Le), strings.sh_size(Le));
+    let names = bytes
+        .read_bytes_at(start.into(), size.into())
+        .map_err(|_| FirmwareRule::Elf)?;
+    let start = start as usize;
+    // A name that starts past the table's last NUL has no end.
+    let last_nul = names.iter().rposition(|&byte| byte == 0);
+    let mut symbols = Vec::with_capacity(table.len());
+    for symbol in table {
+        let name = symbol.st_name(Le) as usize;
+        if symbol.st_shndx(Le) == SHN_UNDEF
+            || !matches!(symbol.st_type(), STT_NOTYPE | STT_FUNC)
+            || last_nul.is_none_or(|nul| name > nul)
+        {
+            continue;
+        }
+        let text = &names[name..];
+        if text[0] == 0 || text[0] == b'$' || text.starts_with(b".L") {
+            continue;
+        }
+        symbols.push(Symbol {
+            addr: symbol.st_value(Le),
+            name: start + name..start + names.len(),
+        });
     }
-
-    fn u16(&self, at: usize) -> Option<u16> {
-        Some(u16::from_le_bytes(self.0.get(at..at + 2)?.try_into().ok()?))
-    }
-
-    fn u32(&self, at: usize) -> Option<u32> {
-        Some(u32::from_le_bytes(self.0.get(at..at + 4)?.try_into().ok()?))
-    }
+    symbols.sort_by_key(|symbol| symbol.addr);
+    symbols.dedup_by(|later, earlier| earlier.addr == later.addr);
+    Ok(symbols)
 }
 
 #[cfg(test)]
@@ -283,7 +264,16 @@ pub(crate) mod tests {
         let mut headers = Vec::new();
         for &(addr, bytes, memsz) in segments {
             let offset = (data_at + data.len()) as u32;
-            for word in [PT_LOAD, offset, addr, addr, bytes.len() as u32, memsz, 7, 4] {
+            for word in [
+                PT_LOAD.0,
+                offset,
+                addr,
+                addr,
+                bytes.len() as u32,
+                memsz,
+                7,
+                4,
+            ] {
                 headers.extend(word.to_le_bytes());
             }
             data.extend_from_slice(bytes);
@@ -302,8 +292,8 @@ pub(crate) mod tests {
         }
         let mut file = vec![0u8; 52];
         file[..7].copy_from_slice(b"\x7fELF\x01\x01\x01");
-        file[16..18].copy_from_slice(&ET_EXEC.to_le_bytes());
-        file[18..20].copy_from_slice(&EM_XTENSA.to_le_bytes());
+        file[16..18].copy_from_slice(&ET_EXEC.0.to_le_bytes());
+        file[18..20].copy_from_slice(&EM_XTENSA.0.to_le_bytes());
         file[24..28].copy_from_slice(&entry.to_le_bytes());
         file[28..32].copy_from_slice(&(phoff as u32).to_le_bytes());
         file.extend(headers);
@@ -327,7 +317,7 @@ pub(crate) mod tests {
             header
         };
         file.extend(section(0, 0, 0, 0));
-        file.extend(section(SHT_SYMTAB, table_at, table.len() as u32, 2));
+        file.extend(section(SHT_SYMTAB.0, table_at, table.len() as u32, 2));
         file.extend(section(3, strings_at, strings.len() as u32, 0));
         file
     }
@@ -364,7 +354,7 @@ pub(crate) mod tests {
         file.extend(section(0, 0, 0, 0));
         for _ in 0..tables {
             file.extend(section(
-                SHT_SYMTAB,
+                SHT_SYMTAB.0,
                 table_at,
                 16 * (symbols + 1),
                 tables + 1,
@@ -438,6 +428,44 @@ pub(crate) mod tests {
         assert_eq!(parse(wrong_machine), Err(FirmwareRule::Elf));
         assert_eq!(parse(good[..60].to_vec()), Err(FirmwareRule::Elf));
         assert_eq!(parse(b"MZ".to_vec()), Err(FirmwareRule::Elf));
+    }
+
+    #[test]
+    fn a_header_or_table_that_does_not_read_as_written_is_refused() {
+        let good = build(0x4000, &[(0x4000, &[0; 4], 4)], &[("main", 0x4000)]);
+        assert_eq!(
+            parse(good.clone()).unwrap().symbolize(0x4000).as_deref(),
+            Some("main")
+        );
+        let mut extended = good.clone();
+        let shoff = u32::from_le_bytes(good[32..36].try_into().unwrap()) as usize;
+        // Section 0's `sh_info` holds the count `PN_XNUM` stands for.
+        extended[shoff + 28] = 1;
+        extended[44..46].copy_from_slice(&[0xff, 0xff]);
+        assert_eq!(
+            parse(extended),
+            Err(FirmwareRule::Elf),
+            "extended program header count"
+        );
+        let edits: [(&str, usize, &[u8]); 6] = [
+            ("64-bit class", 4, &[2]),
+            ("big-endian", 5, &[2]),
+            ("version 0", 6, &[0]),
+            ("48-byte program headers", 42, &[48, 0]),
+            ("section table at offset 0", 32, &[0, 0, 0, 0]),
+            ("64-byte section headers", 46, &[64, 0]),
+        ];
+        for (what, at, value) in edits {
+            let mut file = good.clone();
+            file[at..at + value.len()].copy_from_slice(value);
+            assert_eq!(parse(file), Err(FirmwareRule::Elf), "{what}");
+        }
+        let cut = good.len() - 20;
+        assert_eq!(
+            parse(good[..cut].to_vec()),
+            Err(FirmwareRule::Elf),
+            "truncated section table"
+        );
     }
 
     #[test]

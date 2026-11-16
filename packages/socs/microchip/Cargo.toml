@@ -11,6 +11,7 @@ autotests = false
 orbe-avr.workspace = true
 orbe-mcu.workspace = true
 orbe-model.workspace = true
+object.workspace = true
 
 [features]
 # Turns on the check that a skipped store changes no pin, and is off by default because the check costs about what the skip saves.

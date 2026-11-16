@@ -1,6 +1,10 @@
 //! A little-endian ELF32 reader for the probe images: the entry, the loadable bytes of each
 //! segment, and the symbol table.
 
+use object::LittleEndian as Le;
+use object::elf::{FileHeader32, PT_LOAD, SHT_SYMTAB, Sym32};
+use object::read::elf::{FileHeader, ProgramHeader, SectionHeader, Sym};
+
 pub struct Elf {
     pub entry: u32,
     pub segments: Vec<Segment>,
@@ -12,57 +16,36 @@ pub struct Segment {
     pub data: Vec<u8>,
 }
 
-const PT_LOAD: u32 = 1;
-const SHT_SYMTAB: u32 = 2;
-
 impl Elf {
     pub fn parse(bytes: &[u8]) -> Elf {
-        assert_eq!(&bytes[..4], b"\x7fELF", "ELF magic");
-        assert_eq!(bytes[4], 1, "ELF32");
-        assert_eq!(bytes[5], 1, "little-endian");
-        let entry = u32_at(bytes, 24);
-        let phoff = u32_at(bytes, 28) as usize;
-        let shoff = u32_at(bytes, 32) as usize;
-        let phentsize = u16_at(bytes, 42) as usize;
-        let phnum = u16_at(bytes, 44) as usize;
-        let shentsize = u16_at(bytes, 46) as usize;
-        let shnum = u16_at(bytes, 48) as usize;
-
-        let mut segments = Vec::new();
-        for i in 0..phnum {
-            let ph = phoff + i * phentsize;
-            if u32_at(bytes, ph) != PT_LOAD {
-                continue;
-            }
-            let offset = u32_at(bytes, ph + 4) as usize;
-            let addr = u32_at(bytes, ph + 8);
-            let filesz = u32_at(bytes, ph + 16) as usize;
-            segments.push(Segment {
-                addr,
-                data: bytes[offset..offset + filesz].to_vec(),
-            });
-        }
-
+        let header = FileHeader32::<Le>::parse(bytes).expect("ELF32 header");
+        header.endian().expect("little-endian");
+        let segments = header
+            .program_headers(Le, bytes)
+            .expect("program headers")
+            .iter()
+            .filter(|program| program.p_type(Le) == PT_LOAD)
+            .map(|program| Segment {
+                addr: program.p_vaddr(Le),
+                data: program.data(Le, bytes).expect("segment bytes").to_vec(),
+            })
+            .collect();
+        let sections = header.section_headers(Le, bytes).expect("section headers");
         let mut symbols = Vec::new();
-        for i in 0..shnum {
-            let sh = shoff + i * shentsize;
-            if u32_at(bytes, sh + 4) != SHT_SYMTAB {
-                continue;
-            }
-            let offset = u32_at(bytes, sh + 16) as usize;
-            let size = u32_at(bytes, sh + 20) as usize;
-            let link = u32_at(bytes, sh + 24) as usize;
-            let entsize = u32_at(bytes, sh + 36) as usize;
-            let strtab = u32_at(bytes, shoff + link * shentsize + 16) as usize;
-            for sym in (offset..offset + size).step_by(entsize) {
-                let name = c_str(&bytes[strtab + u32_at(bytes, sym) as usize..]);
+        for section in sections.iter().filter(|s| s.sh_type(Le) == SHT_SYMTAB) {
+            let syms: &[Sym32<Le>] = section.data_as_array(Le, bytes).expect("symbol table");
+            let strtab = sections[section.sh_link(Le) as usize]
+                .data(Le, bytes)
+                .expect("string table");
+            for sym in syms {
+                let name = c_str(&strtab[sym.st_name(Le) as usize..]);
                 if !name.is_empty() {
-                    symbols.push((name, u32_at(bytes, sym + 4)));
+                    symbols.push((name, sym.st_value(Le)));
                 }
             }
         }
         Elf {
-            entry,
+            entry: header.e_entry(Le),
             segments,
             symbols,
         }
@@ -88,14 +71,6 @@ impl Elf {
             .unwrap_or_else(|| panic!("symbol {name} is in the image"))
             .1
     }
-}
-
-fn u16_at(bytes: &[u8], at: usize) -> u16 {
-    u16::from_le_bytes([bytes[at], bytes[at + 1]])
-}
-
-fn u32_at(bytes: &[u8], at: usize) -> u32 {
-    u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
 }
 
 fn c_str(bytes: &[u8]) -> String {
