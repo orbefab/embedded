@@ -9,6 +9,10 @@
 
 use std::fmt;
 
+use object::Endianness;
+use object::elf::FileHeader32;
+use object::read::elf::{FileHeader, ProgramHeader};
+
 /// Flash image. Gaps between placed bytes are `0xFF` (erased flash).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Image {
@@ -255,44 +259,78 @@ pub fn parse_elf(file: &[u8]) -> Result<Image, ImageError> {
     if file[5] != 1 {
         return Err(ImageError::Elf("not little-endian".to_string()));
     }
-    let machine = read_u16(file, 18)?;
+    if file[6] != 1 {
+        return Err(ImageError::Elf("not an ELF file".to_string()));
+    }
+    let header = FileHeader32::<Endianness>::parse(file)
+        .map_err(|_| ImageError::Elf("not an ELF file".to_string()))?;
+    let endian = header
+        .endian()
+        .map_err(|_| ImageError::Elf("not an ELF file".to_string()))?;
+    let machine = header.e_machine(endian).0;
     if machine != EM_AVR {
         return Err(ImageError::Elf(format!(
             "e_machine {machine} is not EM_AVR ({EM_AVR})"
         )));
     }
-    let phoff = read_u32(file, 28)? as usize;
-    let phentsize = usize::from(read_u16(file, 42)?);
-    let phnum = usize::from(read_u16(file, 44)?);
+    let phoff = usize::try_from(u64::from(header.e_phoff(endian)))
+        .map_err(|_| ImageError::Elf("program header table overflows".to_string()))?;
+    let phentsize = usize::from(header.e_phentsize(endian));
+    let phnum = usize::from(header.e_phnum(endian));
     if phentsize < PHDR32 {
         return Err(ImageError::Elf(format!(
             "program header size {phentsize} is below {PHDR32}"
         )));
     }
-    let mut bytes = Vec::new();
-    let mut notes = Vec::new();
+    if phentsize != PHDR32 {
+        return Err(ImageError::Elf(format!(
+            "program header size {phentsize} is not {PHDR32}"
+        )));
+    }
+    if header.e_phnum(endian) == object::elf::PN_XNUM {
+        return Err(ImageError::Elf(
+            "program header table overflows".to_string(),
+        ));
+    }
     for index in 0..phnum {
         let at = phoff
             .checked_add(
                 index
-                    .checked_mul(phentsize)
+                    .checked_mul(PHDR32)
                     .ok_or_else(|| ImageError::Elf("program header table overflows".to_string()))?,
             )
             .ok_or_else(|| ImageError::Elf("program header table overflows".to_string()))?;
         let end = at.checked_add(PHDR32).ok_or_else(|| {
             ImageError::Elf("program header extends past the end of the file".to_string())
         })?;
-        let header = file.get(at..end).ok_or_else(|| {
+        if file.get(at..end).is_none() {
+            return Err(ImageError::Elf(
+                "program header extends past the end of the file".to_string(),
+            ));
+        }
+    }
+    // Offset 0 means there is no program header table.
+    let programs = if phoff == 0 {
+        &[][..]
+    } else {
+        header.program_headers(endian, file).map_err(|_| {
             ImageError::Elf("program header extends past the end of the file".to_string())
-        })?;
-        let kind = u32::from_le_bytes(header[0..4].try_into().expect("4 bytes"));
-        if kind != PT_LOAD {
+        })?
+    };
+    let mut bytes = Vec::new();
+    let mut notes = Vec::new();
+    for program in programs {
+        if program.p_type(endian).0 != PT_LOAD {
             continue;
         }
-        let offset = u32::from_le_bytes(header[4..8].try_into().expect("4 bytes"));
-        let paddr = u32::from_le_bytes(header[12..16].try_into().expect("4 bytes"));
-        let filesz = u32::from_le_bytes(header[16..20].try_into().expect("4 bytes"));
-        let memsz = u32::from_le_bytes(header[20..24].try_into().expect("4 bytes"));
+        let offset = u32::try_from(u64::from(program.p_offset(endian)))
+            .map_err(|_| ImageError::Elf("PT_LOAD file range overflows".to_string()))?;
+        let paddr = u32::try_from(u64::from(program.p_paddr(endian)))
+            .map_err(|_| ImageError::Elf("flash segment address overflows".to_string()))?;
+        let filesz = u32::try_from(u64::from(program.p_filesz(endian)))
+            .map_err(|_| ImageError::Elf("PT_LOAD file range overflows".to_string()))?;
+        let memsz = u32::try_from(u64::from(program.p_memsz(endian)))
+            .map_err(|_| ImageError::Elf("flash segment address overflows".to_string()))?;
         if memsz < filesz {
             return Err(ImageError::Elf(format!(
                 "PT_LOAD at {paddr:#x} has p_memsz {memsz} below p_filesz {filesz}"
@@ -346,20 +384,6 @@ fn ignored_region(paddr: u32) -> Option<IgnoredRegion> {
     } else {
         None
     }
-}
-
-fn read_u16(file: &[u8], at: usize) -> Result<u16, ImageError> {
-    let bytes = file
-        .get(at..at + 2)
-        .ok_or_else(|| ImageError::Elf("truncated ELF header".to_string()))?;
-    Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
-}
-
-fn read_u32(file: &[u8], at: usize) -> Result<u32, ImageError> {
-    let bytes = file
-        .get(at..at + 4)
-        .ok_or_else(|| ImageError::Elf("truncated ELF header".to_string()))?;
-    Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
 
 #[cfg(test)]

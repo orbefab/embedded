@@ -7,6 +7,10 @@
 
 use std::sync::Arc;
 
+use object::Endianness;
+use object::elf::FileHeader32;
+use object::read::elf::{FileHeader, SectionHeader};
+
 /// The instruction-bus window.
 pub(crate) const ROM: std::ops::Range<u32> = 0x4000_0000..0x4006_0000;
 /// The data-bus window and the ROM address of its first byte.
@@ -25,31 +29,51 @@ pub(crate) struct Image {
 /// Reads the ROM ELF, or names what it lacks. The netlist pins the ELF by its SHA-256, so a
 /// failure here means the pinned file itself changed shape.
 pub(crate) fn load(elf: &[u8], in_sram: impl Fn(u32, usize) -> bool) -> Result<Image, String> {
-    let u16_at = |at: usize| -> Result<u16, String> {
-        let bytes = elf.get(at..at + 2).ok_or("the ROM ELF ends early")?;
-        Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
-    };
-    let u32_at = |at: usize| -> Result<u32, String> {
-        let bytes = elf.get(at..at + 4).ok_or("the ROM ELF ends early")?;
-        Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-    };
     if elf.get(..4) != Some(b"\x7fELF".as_slice()) {
         return Err("the ROM is not an ELF file".into());
     }
-    let shoff = u32_at(32)? as usize;
-    let (shentsize, shnum) = (usize::from(u16_at(46)?), usize::from(u16_at(48)?));
+    // A class, endian, or version this loader does not read still has the ELF magic, so it is
+    // the early ending rather than "not an ELF file".
+    if elf.len() < 52 || elf[4] != 1 || elf[5] != 1 || elf[6] != 1 {
+        return Err("the ROM ELF ends early".into());
+    }
+    let header =
+        FileHeader32::<Endianness>::parse(elf).map_err(|_| "the ROM ELF ends early".to_string())?;
+    let endian = header
+        .endian()
+        .map_err(|_| "the ROM ELF ends early".to_string())?;
+    let shoff = u64::from(header.e_shoff(endian));
+    let shentsize = header.e_shentsize(endian);
+    let shnum = header.e_shnum(endian);
+    // `e_shnum` 0 is no table. The extended count in section 0 is not consulted, and offset 0
+    // is not a table either. A header size other than 40 does not place bytes.
+    let sections = if shnum == 0 || shoff == 0 {
+        &[][..]
+    } else if shentsize != 40 {
+        return Err("the ROM ELF ends early".into());
+    } else {
+        header
+            .section_headers(endian, elf)
+            .map_err(|_| "the ROM ELF ends early".to_string())?
+    };
     let mut rom = vec![0u8; (ROM.end - ROM.start) as usize];
     let mut data = Vec::new();
-    for k in 0..shnum {
-        let header = shoff + k * shentsize;
-        let (kind, addr) = (u32_at(header + 4)?, u32_at(header + 12)?);
-        let (offset, size) = (u32_at(header + 16)? as usize, u32_at(header + 20)? as usize);
-        if kind != SHT_PROGBITS || size == 0 {
+    for section in sections {
+        if section.sh_type(endian).0 != SHT_PROGBITS {
             continue;
         }
+        let size = usize::try_from(u64::from(section.sh_size(endian)))
+            .map_err(|_| "a ROM section lies past the file's end".to_string())?;
+        if size == 0 {
+            continue;
+        }
+        let offset = usize::try_from(u64::from(section.sh_offset(endian)))
+            .map_err(|_| "a ROM section lies past the file's end".to_string())?;
         let bytes = elf
             .get(offset..offset + size)
             .ok_or("a ROM section lies past the file's end")?;
+        let addr = u32::try_from(u64::from(section.sh_addr(endian)))
+            .map_err(|_| "a ROM section runs past the ROM's end".to_string())?;
         let at = if ROM.contains(&addr) {
             Some(addr)
         } else if DROM.contains(&addr) {

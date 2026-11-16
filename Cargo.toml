@@ -54,6 +54,8 @@ ctrlc = "3.4"
 tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 # Exact, because the `wasm-bindgen` CLI that `scripts/wasm.sh` runs must be the same version.
 wasm-bindgen = "=0.2.129"
+# Read-only ELF. `std` stays off, so a wasm32 build does not pull `memchr`'s std.
+object = { version = "=0.40.0", default-features = false, features = ["read_core", "elf"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
