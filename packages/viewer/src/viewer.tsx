@@ -14,9 +14,10 @@ import {
 import type { BuiltScene } from "./build";
 import type { CameraMode } from "./camera-frame";
 import { createHoverStore, type HoverStore } from "./hover";
-import type { Command, FrameMessage, FrameState, SceneMessage } from "./protocol";
+import type { Command, FrameMessage, FrameState, Reply, SceneMessage } from "./protocol";
 import { SceneView } from "./scene-view";
 import { commandLine, errorText, type SessionSource } from "./session";
+import { WORLD_STEPS, formatQuantity, snap, stepOf, valueAt, type Range } from "./world";
 
 class ShowError extends Component<{ children: ReactNode }, { error: Error | null }> {
   override state = { error: null as Error | null };
@@ -80,6 +81,176 @@ function Errors({ errors }: { errors: readonly string[] }) {
 
 /** `t_ps` in seconds, to the microsecond. */
 const seconds = (t_ps: number) => `${(t_ps / 1e12).toFixed(6)} s`;
+
+interface SetReply {
+  readonly value: number;
+  readonly landed_ps: number;
+}
+
+function acceptedSet(reply: Reply | null): SetReply | null {
+  if (reply === null || !reply.ok || typeof reply.data !== "object" || reply.data === null) return null;
+  const data = reply.data as { value?: unknown; landed_ps?: unknown };
+  if (typeof data.value !== "number" || typeof data.landed_ps !== "number") return null;
+  return { value: data.value, landed_ps: data.landed_ps };
+}
+
+/** One quantity's thumb. The number is the simulation's value. A drag previews, and the thumb
+ * sends `set` once when it is released, because a `set` restarts the solve. */
+function WorldSlider({
+  name,
+  range,
+  unit,
+  frameValue,
+  shown,
+  onCommit,
+}: {
+  name: string;
+  range: Range;
+  unit: string;
+  frameValue: number;
+  shown: number;
+  onCommit: (value: number) => Promise<number | null>;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  const commitRef = useRef(onCommit);
+  commitRef.current = onCommit;
+  const [dragStep, setDragStep] = useState<number | null>(null);
+  const [held, setHeld] = useState<number | null>(null);
+  useEffect(() => {
+    if (held !== null && shown === held) setHeld(null);
+  }, [held, shown]);
+  useEffect(() => {
+    const el = input.current;
+    if (el === null) return;
+    const preview = () => setDragStep(Number(el.value));
+    const commit = () => {
+      const snapped = valueAt(range, Number(el.value));
+      setDragStep(null);
+      void commitRef.current(snapped).then((accepted) => setHeld(accepted));
+    };
+    el.addEventListener("input", preview);
+    el.addEventListener("change", commit);
+    el.addEventListener("pointerup", commit);
+    el.addEventListener("keyup", commit);
+    return () => {
+      el.removeEventListener("input", preview);
+      el.removeEventListener("change", commit);
+      el.removeEventListener("pointerup", commit);
+      el.removeEventListener("keyup", commit);
+    };
+  }, [range.min, range.max]);
+  const value = dragStep !== null ? valueAt(range, dragStep) : (held ?? shown);
+  return (
+    <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <span style={{ width: 92 }}>{name}</span>
+      <input
+        ref={input}
+        data-testid={`world-${name}`}
+        type="range"
+        min={0}
+        max={WORLD_STEPS}
+        step={1}
+        value={dragStep ?? stepOf(range, value)}
+        aria-label={name}
+        onChange={() => {}}
+        onPointerDown={(event) => event.currentTarget.setPointerCapture(event.pointerId)}
+        style={{ width: 160 }}
+      />
+      <span data-testid={`world-${name}-value`} data-frame={String(frameValue)}>
+        {formatQuantity(range, value)} {unit}
+      </span>
+    </label>
+  );
+}
+
+/** One slider per declared world quantity. A scene that declares none draws nothing. */
+function WorldPanel({
+  source,
+  send,
+}: {
+  source: SessionSource;
+  send: (command: Command) => Promise<Reply | null>;
+}) {
+  const [rows, setRows] = useState<NonNullable<FrameMessage["world"]> | null>(null);
+  const [pending, setPending] = useState<Record<string, SetReply>>({});
+  const inflight = useRef<Record<string, number>>({});
+  useEffect(
+    () =>
+      source.subscribe((message) => {
+        if (message.type === "scene") {
+          setRows(null);
+          setPending({});
+          inflight.current = {};
+          return;
+        }
+        if (message.type !== "frame") return;
+        const world = message.world ?? [];
+        setRows(world);
+        setPending((current) => {
+          let next: Record<string, SetReply> | null = null;
+          for (const [name, held] of Object.entries(current)) {
+            if (message.t_ps > held.landed_ps) {
+              next ??= { ...current };
+              delete next[name];
+            }
+          }
+          return next ?? current;
+        });
+      }),
+    [source]
+  );
+  const commit = useCallback(
+    (name: string, snapped: number): Promise<number | null> => {
+      const row = rows?.find((item) => item.name === name);
+      const authority = pending[name]?.value ?? row?.value;
+      if (row === undefined || authority === undefined) return Promise.resolve(null);
+      const resting = valueAt(row, stepOf(row, authority));
+      if (snapped === snap(row, authority) || snapped === resting) return Promise.resolve(null);
+      if (inflight.current[name] === snapped) return Promise.resolve(snapped);
+      inflight.current[name] = snapped;
+      return send({ cmd: "set", quantity: row.name, value: snapped }).then((reply) => {
+        if (inflight.current[name] === snapped) delete inflight.current[name];
+        const accepted = acceptedSet(reply);
+        if (accepted === null) return null;
+        setPending((current) => ({ ...current, [name]: accepted }));
+        return accepted.value;
+      });
+    },
+    [pending, rows, send]
+  );
+  if (rows === null || rows.length === 0) return null;
+  return (
+    <div
+      data-testid="world"
+      style={{
+        position: "absolute",
+        top: 52,
+        left: 12,
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        padding: "8px 10px",
+        borderRadius: 6,
+        background: "rgba(20, 22, 26, 0.92)",
+        border: "1px solid #3a3f47",
+        color: "#e6ebf2",
+        font: "12px ui-monospace, monospace",
+      }}
+    >
+      {rows.map((row) => (
+        <WorldSlider
+          key={row.name}
+          name={row.name}
+          range={row}
+          unit={row.unit}
+          frameValue={row.value}
+          shown={pending[row.name]?.value ?? row.value}
+          onCommit={(value) => commit(row.name, value)}
+        />
+      ))}
+    </div>
+  );
+}
 
 /** The session's state and time, a button that plays or pauses it, and the fault below once
  * the session faulted. It reads frames itself, so a frame redraws only this bar. */
@@ -161,17 +332,21 @@ export function Viewer({ source, onCreated }: ViewerProps) {
   const [closed, setClosed] = useState<string | null>(null);
   const onBuilt = useCallback((built: BuiltScene) => setPartErrors(built.errors), []);
   const send = useCallback(
-    (command: Command) => {
+    (command: Command): Promise<Reply | null> => {
       const fail = (why: string) => {
         const line = `${commandLine(command)}: ${why}`;
         console.error(line);
         setSendErrors((errors) => [...errors, line]);
       };
-      source.send(command).then(
+      return source.send(command).then(
         (reply) => {
           if (!reply.ok) fail(errorText(reply.error));
+          return reply;
         },
-        (error: unknown) => fail(error instanceof Error ? error.message : String(error))
+        (error: unknown) => {
+          fail(error instanceof Error ? error.message : String(error));
+          return null;
+        }
       );
     },
     [source]
@@ -217,6 +392,7 @@ export function Viewer({ source, onCreated }: ViewerProps) {
       </ShowError>
       <Errors errors={[...partErrors, ...sendErrors]} />
       {closed === null ? <Controls send={send} source={source} /> : null}
+      {closed === null ? <WorldPanel send={send} source={source} /> : null}
       {closed === null ? null : (
         <div
           data-testid="closed"

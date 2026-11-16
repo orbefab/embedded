@@ -1,0 +1,6 @@
+{
+  "format": 1,
+  "pins": { "a": [1], "b": [2] },
+  "params": { "resistance": { "unit": "ohm", "required": true, "min_exclusive": 0, "sets": "/resistance" } },
+  "model": { "kind": "resistor", "ratings": { "power": null } }
+}

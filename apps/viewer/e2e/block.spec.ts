@@ -24,6 +24,7 @@ test.describe("nano-button-led", () => {
 
   test("the page draws nano-button-led from the registry, paused at t = 0", async () => {
     expect(await textOf(page, "time")).toBe("t = 0.000000 s");
+    expect(await page.locator('[data-testid="world"]').count()).toBe(0);
   });
 
   test("@led1's and @btn1's models load from the registry's files", async () => {

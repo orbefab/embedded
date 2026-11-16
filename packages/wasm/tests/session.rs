@@ -80,7 +80,45 @@ fn a_block_opens_with_its_scene_then_a_frame() {
         (opened[1]["t_ps"].as_u64(), opened[1]["state"].as_str()),
         (Some(0), Some("paused"))
     );
+    assert!(
+        opened[1].get("world").is_none(),
+        "a scene with no world omits world"
+    );
     assert!(messages(&mut session).is_empty(), "messages drain");
+}
+
+fn light_divider() -> Block {
+    let mut block = Block::new();
+    add_folder(
+        &mut block,
+        &repo().join("packages/session/tests/light-divider"),
+        "",
+    );
+    block
+}
+
+#[test]
+fn set_light_is_on_the_next_frame() {
+    let mut session = Session::start("light", light_divider()).unwrap();
+    let opened = messages(&mut session);
+    assert_eq!(opened[1]["world"][0]["value"].as_f64(), Some(300.0));
+
+    session.command(r#"{"id": 1, "cmd": "play"}"#);
+    assert_eq!(messages(&mut session)[0]["reply"]["state"], "playing");
+
+    session.command(r#"{"id": 2, "cmd": "set", "quantity": "light", "value": 50}"#);
+    let answered = messages(&mut session);
+    let reply = &answered[0]["reply"];
+    assert_eq!(reply["ok"], true);
+    assert_eq!(reply["data"]["value"].as_f64(), Some(50.0));
+    let landed = reply["data"]["landed_ps"].as_u64().unwrap();
+
+    session.tick(16.0);
+    let frame = messages(&mut session)
+        .into_iter()
+        .find(|message| message["type"] == "frame" && message["t_ps"].as_u64().unwrap() > landed)
+        .expect("a frame after the set lands");
+    assert_eq!(frame["world"][0]["value"].as_f64(), Some(50.0));
 }
 
 #[test]

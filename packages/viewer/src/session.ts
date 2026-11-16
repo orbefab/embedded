@@ -29,5 +29,7 @@ export function commandLine(command: Command): string {
     case "play":
     case "pause":
       return command.cmd;
+    case "set":
+      return `set ${command.quantity} ${command.value}`;
   }
 }

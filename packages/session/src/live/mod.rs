@@ -37,6 +37,9 @@ mod frame;
 mod serial;
 mod step;
 
+#[cfg(test)]
+pub(crate) use frame::WorldName;
+pub(crate) use frame::WorldReading;
 pub use frame::{Channels, FrameState, Pace, Sample};
 pub use step::{CHANGES, Progress};
 

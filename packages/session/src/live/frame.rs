@@ -5,6 +5,9 @@
 use std::collections::BTreeMap;
 
 use orbe_engine::Status;
+use orbe_engine::finite::Finite;
+use orbe_engine::name::Ref;
+use orbe_engine::world::Quantity;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -32,6 +35,41 @@ pub(super) struct Bound {
     pins: Vec<usize>,
     leds: Vec<usize>,
     switches: Vec<String>,
+    /// Probe columns of the world quantities the scene declares, in table order.
+    world: Vec<usize>,
+}
+
+/// A world quantity's name: `temperature`, `humidity` or `light`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WorldName {
+    Temperature,
+    Humidity,
+    Light,
+}
+
+impl From<Quantity> for WorldName {
+    fn from(quantity: Quantity) -> Self {
+        match quantity {
+            Quantity::Temperature => Self::Temperature,
+            Quantity::Humidity => Self::Humidity,
+            Quantity::Light => Self::Light,
+        }
+    }
+}
+
+/// One declared world quantity at a frame's `t_ps`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+pub(crate) struct WorldReading {
+    pub(crate) name: WorldName,
+    /// The unit `value`, `min` and `max` are in, such as `lx`.
+    pub(crate) unit: &'static str,
+    pub(crate) min: f64,
+    pub(crate) max: f64,
+    /// The value on the interval that ends at `t_ps`, before a change at `t_ps`.
+    pub(crate) value: f64,
 }
 
 /// A frame's `state`: the session's, or `stepping` for a frame read while a `step` runs, which
@@ -56,6 +94,8 @@ pub struct Sample {
     /// Each LED's current in amperes, and its integral from t = 0 in ampere picoseconds.
     pub leds: Vec<(f64, f64)>,
     pub switches: Vec<u8>,
+    /// Each declared world quantity, in table order. Empty when the scene declares none.
+    pub(crate) world: Vec<WorldReading>,
     pub diagnostics: usize,
     /// The fault's diagnostic as `orbe snapshot` prints it, once the session faulted.
     pub fault: Option<String>,
@@ -177,6 +217,12 @@ impl Open {
                 bound.switches.push(engine);
             }
         }
+        for quantity in Quantity::ALL {
+            let want = Ref::World(quantity);
+            if let Some(index) = probe.refs().iter().position(|r| *r == want) {
+                bound.world.push(index);
+            }
+        }
         bound
     }
 
@@ -217,11 +263,55 @@ impl Open {
                 .iter()
                 .map(|engine| u8::from(self.closed(engine)))
                 .collect(),
+            world: bound
+                .world
+                .iter()
+                .map(|&index| world_reading(probe.refs(), probe.values(), index))
+                .collect(),
             diagnostics: self.findings(&probe).len(),
             fault: self
                 .engine
                 .fault()
                 .map(|fault| Diagnostic::new(fault).text()),
         }
+    }
+}
+
+fn world_reading(refs: &[Ref], values: &[Finite], index: usize) -> WorldReading {
+    let quantity = match refs[index] {
+        Ref::World(quantity) => quantity,
+        _ => panic!("a world channel is bound to a world column"),
+    };
+    let row = quantity.row();
+    WorldReading {
+        name: quantity.into(),
+        unit: row.unit,
+        min: row.min,
+        max: row.max,
+        value: values[index].get(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn world_names_are_the_table() {
+        let wire: Vec<String> = Quantity::ALL
+            .into_iter()
+            .map(|quantity| {
+                serde_json::to_value(WorldName::from(quantity))
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        let names: Vec<&str> = Quantity::ALL
+            .iter()
+            .map(|quantity| quantity.name())
+            .collect();
+        assert_eq!(wire, names);
     }
 }

@@ -1,0 +1,6 @@
+{
+  "format": 1,
+  "pins": { "pos": [1], "neg": [2] },
+  "params": { "voltage": { "unit": "V", "required": true, "sets": "/voltage" } },
+  "model": { "kind": "voltage_source", "pins": { "p": "pos", "n": "neg" } }
+}

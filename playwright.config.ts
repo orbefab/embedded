@@ -71,6 +71,24 @@ const suites: Record<string, PlaywrightTestConfig> = {
       reuseExistingServer: false,
     },
   },
+  world: {
+    ...shared,
+    testDir: "apps/viewer/e2e",
+    testMatch: "world.spec.ts",
+    use: { ...shared.use, viewport: { width: 1280, height: 720 } },
+    webServer: {
+      command: "node e2e/headed-server.mjs",
+      env: {
+        ...process.env,
+        ORBE_SCENE: "packages/session/tests/light-divider/scene.jsonc",
+      },
+      wait: { stdout: /ORBE_SHOW_READY=1/ },
+      stdout: "pipe",
+      gracefulShutdown: { signal: "SIGTERM", timeout: 15_000 },
+      timeout: 60_000,
+      reuseExistingServer: false,
+    },
+  },
   site: {
     ...shared,
     testDir: "apps/site/e2e",
@@ -104,7 +122,7 @@ const suites: Record<string, PlaywrightTestConfig> = {
 };
 
 if (suite === undefined || !(suite in suites)) {
-  console.error("usage: ORBE_E2E=viewer|block|headed|site pnpm exec playwright test");
+  console.error("usage: ORBE_E2E=viewer|block|headed|world|site pnpm exec playwright test");
   process.exit(2);
 }
 
@@ -129,7 +147,7 @@ if (suite === "block") {
   }
 }
 
-if (suite === "headed") {
+if (suite === "headed" || suite === "world") {
   const orbe = process.env.ORBE ?? "";
   if (orbe === "" || !existsSync(orbe)) {
     console.error(`No orbe at ${orbe}. Usage: scripts/check-headed.sh [--renders <dir>]`);

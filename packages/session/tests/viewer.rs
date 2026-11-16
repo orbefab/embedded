@@ -5,7 +5,7 @@ use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
 use orbe_session::viewer::{self, Feed, TICK};
-use orbe_session::{Code, Command, Duration, Files, FrameState, Live, Reply, State};
+use orbe_session::{Code, Command, Data, Duration, Files, FrameState, Live, Reading, Reply, State};
 use serde_json::{Value, json};
 
 fn first_target() -> PathBuf {
@@ -123,6 +123,10 @@ fn a_frame_shows_a_press_after_it_lands_and_skips_a_repeat() {
     let mut frames = Feed::default();
     let first = frames.frame(live.sample().unwrap(), None).unwrap();
     assert_eq!(first["switches"], json!([0, 0]));
+    assert!(
+        first.get("world").is_none(),
+        "a scene with no world omits world"
+    );
     assert!(frames.frame(live.sample().unwrap(), None).is_none());
 
     assert!(live.run(&command("press @btn1")).ok());
@@ -134,6 +138,77 @@ fn a_frame_shows_a_press_after_it_lands_and_skips_a_repeat() {
     assert!(live.run(&command("step 1ms")).ok());
     let after = frames.frame(live.sample().unwrap(), None).unwrap();
     assert_eq!(after["switches"], json!([1, 0]));
+}
+
+/// `10000 * (10 / light)` ohm, at most 1 Mohm.
+fn ldr_ohm(light: f64) -> f64 {
+    if light == 0.0 {
+        1_000_000.0
+    } else {
+        (10_000.0 * (10.0 / light)).min(1_000_000.0)
+    }
+}
+
+fn mid(light: f64) -> f64 {
+    let ohm = ldr_ohm(light);
+    5.0 * ohm / (10_000.0 + ohm)
+}
+
+fn pin_voltage(reply: &Reply) -> f64 {
+    let Data::Got(got) = &reply.data else {
+        panic!("{}", reply.text());
+    };
+    let Reading::Pin { v, .. } = &got.value else {
+        panic!("{}", reply.text());
+    };
+    *v
+}
+
+fn close_to(found: f64, expected: f64) -> bool {
+    (found - expected).abs() <= 1e-8 * expected.abs()
+}
+
+#[test]
+fn set_light_shows_on_the_next_frame_and_moves_the_divider() {
+    let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/light-divider/scene.jsonc");
+    let mut live = Live::new("t", Files::disk());
+    let opened = live.run(&Command::Open(scene));
+    assert!(opened.ok(), "{}", opened.text());
+
+    let mut frames = Feed::default();
+    let first = frames.frame(live.sample().unwrap(), None).unwrap();
+    assert_eq!(first["world"][0]["name"], "light");
+    assert_eq!(first["world"][0]["unit"], "lx");
+    assert_eq!(first["world"][0]["min"].as_f64(), Some(0.0));
+    assert_eq!(first["world"][0]["max"].as_f64(), Some(100_000.0));
+    assert_eq!(first["world"][0]["value"].as_f64(), Some(300.0));
+    assert_eq!(first["world"].as_array().map(Vec::len), Some(1));
+    let before = live.run(&command("get @ldr.a"));
+    assert!(before.ok(), "{}", before.text());
+    assert!(
+        close_to(pin_voltage(&before), mid(300.0)),
+        "mid {} at 300 lx",
+        pin_voltage(&before)
+    );
+
+    let set = live.run(&command("set light 50"));
+    assert!(set.ok(), "{}", set.text());
+    assert!(
+        frames.frame(live.sample().unwrap(), None).is_none(),
+        "a read at the landing still shows the light from before the set"
+    );
+    let stepped = live.run(&command("step 1ms"));
+    assert!(stepped.ok(), "{}", stepped.text());
+    let after = frames.frame(live.sample().unwrap(), None).unwrap();
+    assert_eq!(after["world"][0]["value"].as_f64(), Some(50.0));
+    let got = live.run(&command("get @ldr.a"));
+    assert!(got.ok(), "{}", got.text());
+    assert!(
+        close_to(pin_voltage(&got), mid(50.0)),
+        "mid {} at 50 lx, want {}",
+        pin_voltage(&got),
+        mid(50.0)
+    );
 }
 
 #[test]

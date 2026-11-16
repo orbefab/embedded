@@ -21,7 +21,8 @@ export type Command =
   | { readonly cmd: "press"; readonly ref: Ref }
   | { readonly cmd: "release"; readonly ref: Ref }
   | { readonly cmd: "play" }
-  | { readonly cmd: "pause" };
+  | { readonly cmd: "pause" }
+  | { readonly cmd: "set"; readonly quantity: WorldName; readonly value: number };
 
 /** A command as the viewer sends it on a session's WebSocket. `id` is the viewer's own and comes
  * back on its reply. */
@@ -52,6 +53,9 @@ export interface FrameMessage {
   readonly switches: readonly (0 | 1)[];
   readonly t_ps: number;
   readonly type: "frame";
+  /** Each world quantity the scene declares, in table order, with its unit, range and value at
+   * `t_ps`. Absent when the scene declares none. */
+  readonly world?: readonly WorldReading[];
 }
 
 /** A frame's `state`: the session's, or `stepping` for a frame read while a `step` runs, which
@@ -108,3 +112,17 @@ export type State =
 
 /** Everything a viewer gets from its session's source. */
 export type ToViewer = SceneMessage | FrameMessage | ClosedMessage;
+
+/** A world quantity's name: `temperature`, `humidity` or `light`. */
+export type WorldName = "temperature" | "humidity" | "light";
+
+/** One declared world quantity at a frame's `t_ps`. */
+export interface WorldReading {
+  readonly max: number;
+  readonly min: number;
+  readonly name: WorldName;
+  /** The unit `value`, `min` and `max` are in, such as `lx`. */
+  readonly unit: string;
+  /** The value on the interval that ends at `t_ps`, before a change at `t_ps`. */
+  readonly value: number;
+}
