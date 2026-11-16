@@ -14,6 +14,7 @@ mod knob;
 mod link;
 mod ne555;
 mod ngspice;
+mod op_amp;
 mod regulator;
 mod relay;
 mod run;

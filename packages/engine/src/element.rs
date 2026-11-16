@@ -39,6 +39,10 @@ pub(crate) struct OwnedCapacitor {
     pub(crate) k: usize,
     pub(crate) ends: [StoreEnd; 2],
     pub(crate) farad: f64,
+    /// The kind fixes `farad` as a constant of its law, as the op-amp's integrator, and the
+    /// netlist does not give it. [`Charges::floor_warnings`](crate::lte::Charges::floor_warnings)
+    /// checks only these.
+    pub(crate) sized_by_kind: bool,
 }
 
 /// One inductor a part owns. `k` is its index in that part's inductor list, and its current is
@@ -124,6 +128,7 @@ impl Device for Pair {
                 k,
                 ends: *ends,
                 farad,
+                sized_by_kind: false,
             })
             .collect()
     }
@@ -170,6 +175,7 @@ impl Device for Mixed {
             k: 0,
             ends: self.capacitor,
             farad: self.farad,
+            sized_by_kind: false,
         }]
     }
 

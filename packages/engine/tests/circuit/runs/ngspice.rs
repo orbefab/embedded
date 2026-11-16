@@ -113,6 +113,15 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "npn-led",
             "npn-pulse",
             "npn-sweep",
+            "op-amp-bias",
+            "op-amp-gain-10k",
+            "op-amp-gain-200k",
+            "op-amp-hysteresis",
+            "op-amp-ramp",
+            "op-amp-short",
+            "op-amp-slew",
+            "op-amp-square",
+            "op-amp-swing",
             "pnp-load",
             "pnp-sweep",
             "rc-picofarad",
@@ -240,7 +249,15 @@ fn matches_its_reference(example: &Path) {
         );
         return;
     }
-    if runs_a_core(&common::examples::parse(example)) {
+    let parsed = common::examples::parse(example);
+    if (parsed.parts()).any(|(_, part)| matches!(part.model, Model::OpAmp(_))) {
+        assert!(
+            !reference_path.exists() && !example.join("deck.cir").exists(),
+            "{label} has an op_amp, which ngspice has no kind for, so it has no reference; runs/op_amp.rs checks it"
+        );
+        return;
+    }
+    if runs_a_core(&parsed) {
         assert!(
             !reference_path.exists() && !example.join("deck.cir").exists(),
             "{label} runs an active chip's core, which a deck has none of, so it has no reference"

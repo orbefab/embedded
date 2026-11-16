@@ -1,7 +1,7 @@
 //! Behavioural models of packaged parts, and the questions the loop asks a `Chip`.
 //!
-//! A file in this directory is one packaged part. `ne555` is a `Chip`. `relay` and `regulator`
-//! are their own `Model` variants, so neither adds a `Passive` variant.
+//! A file in this directory is one packaged part. `ne555` is a `Chip`. `relay`, `regulator` and
+//! `op_amp` are their own `Model` variants, so none adds a `Passive` variant.
 //!
 //! This file is the dispatch. `kind` says whether a netlist `Chip` is passive or active, and
 //! every `Chip` answers `unknowns` and `dc_paths` here. A passive `Chip` adds a `Passive`
@@ -19,10 +19,12 @@ use crate::netlist::Chip;
 use crate::netlist::Model;
 
 pub(crate) mod ne555;
+pub(crate) mod op_amp;
 pub(crate) mod regulator;
 pub(crate) mod relay;
 
 pub use ne555::{Discharge, Ne555};
+pub use op_amp::OpAmp;
 pub use regulator::LinearRegulator;
 pub use relay::Relay;
 

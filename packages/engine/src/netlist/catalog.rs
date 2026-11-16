@@ -186,8 +186,8 @@ macro_rules! define_kinds {
 
             /// The quantities a run observes on this part, in `Quantity` order. A two-pin part has
             /// `i`, `v` and `p`, and so does a relay, of its coil. A BJT has `ib`, `ic` and `p`. An
-            /// `nmos` has `id` and `p`. A linear regulator has `iin`, `iout` and `p`. A chip and a
-            /// potentiometer have none.
+            /// `nmos` has `id` and `p`. A linear regulator has `iin`, `iout` and `p`. A chip, an op-amp
+            /// and a potentiometer have none.
             pub fn quantities(&self) -> &'static [Quantity] {
                 match self {
                     $(Model::$variant(part) => <$ty as Kind>::quantities(part),)*
@@ -459,6 +459,10 @@ define_kinds! {
         Switch(crate::passive::Switch), "switch",
             crate::passive::switch::WireSwitch, crate::passive::switch::resolve_switch,
             &crate::passive::Switch::PINS;
+        #[doc = "One op-amp channel with one pole. See [`OpAmp`](crate::chip::OpAmp)."]
+        OpAmp(crate::chip::OpAmp), "op_amp",
+            crate::chip::op_amp::WireOpAmp, crate::chip::op_amp::resolve_op_amp,
+            &crate::chip::OpAmp::PINS;
     }
     chip {
         Ne555, "ne555",

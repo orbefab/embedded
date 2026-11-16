@@ -447,6 +447,49 @@ At 0.001 A and 4.3 V the law gives 3.299898785234899 V, inside 3.250499999999999
 
 The law cannot match the page 7 legacy ripple rejection of 45 dB at 1000 Hz, the output noise of 30 uVrms, or the shutdown ground current of 0.01 uA. The ON/OFF high typical is 1.4 V. The board ties that pin to the input, and the model has no enable. The legacy minimum output capacitor is 2.2 uF. The schematic's C3 is 1 uF. The law has no stability condition. Section 7.1.4 on page 21 allows the output 0.3 V above the input. Reverse current in the body diode is not limited, and the law blocks it. The ground-current ramp reaches its full value at `dropout_voltage`, 0.0051677852348993285 V. The legacy chip is specified from 2.2 V. The new chip's UVLO, 2.2 V typical and 2.4 V maximum rising, is not modelled, and the legacy column has none.
 
+### Op-amp
+
+`kind` is `op_amp`. Pins are `in_p`, `in_n`, `out`, `vcc` and `gnd`. One part is one channel. A dual part, such as `parts/lmv358-msop8`, maps two bodies, `a` and `b`, onto the same `vcc` and `gnd`.
+
+The part is a behavioural element with one pole. It has one internal node, the integrator `x`, with a capacitor `C` of 1 nF from `x` to `gnd`, and two branches. Branch 0 is that capacitor's current. Branch 1 is the output current `i`, which leaves the part at `out`, so `i` is positive while the part sources. `vd` is `V(in_p) - V(in_n)`, `u` is `V(x) - V(gnd)`, `s` is `V(vcc) - V(gnd)` and `vo` is `V(out) - V(gnd)`. `sp` and `ln` are as in [Linear regulator](#linear-regulator), and `sg(x)` is `1 / (1 + e^-x)`.
+
+```text
+C du/dt = Is * tanh(gm * vd / Is) - (u - s/2) / R - G * kc * (sp((u - s - 0.1) / kc) - sp((-0.1 - u) / kc))
+Is      = SR * C
+gm      = 2 * pi * GBW * C
+R       = A0 / gm
+t       = lo + k * sp((u - lo) / k) - k * sp((u - hi) / k),   lo = Vsl,  hi = s - Vsh
+vo      = t - Ro * i - Rl * d * sp((i - Isc) / d) + Rl * d * sp((-i - Isc) / d)
+```
+
+The integrator slews at `SR` while `|vd|` is large, and its unity-gain frequency is `GBW`, because `gm / (2 * pi * C)` is `GBW`. `R` to mid-supply sets the DC gain to `A0`. `C` cancels from every answer. `G` is `1e7 * C` siemens and `kc` is 0.01 V, a soft clamp that holds `u` within about 0.1 V of each rail. While the slew current runs into the clamp, `u` sits `0.1 + kc * ln(exp(SR / 1e5 V/s) - 1)` past the rail, 0.2 V at 1 V/us. `k` is 1e-3 V, the knee of the swing. `d` is `1e-3 * Isc` and `Rl` is `500 V / Isc`, so a short sits a little past `Isc`.
+
+The output current is drawn from `vcc` when the part sources and returned to `gnd` when it sinks: `vcc` gives `i * sg(i / 1 uA)` and `gnd` gives the rest. A bias current of `Ib * sg((V(vcc) - 0.8 - V(input)) / 0.05)` leaves each input, drawn from `vcc`, so it turns off as the input comes within 0.8 V of `vcc`. A conductance of `Icc / 5 V` joins `vcc` to `gnd`, so the supply current is `Icc` at a 5 V supply and scales with it. Every current enters and leaves at a pin. These numbers are constants of the law. They are not fields.
+
+The stamp reads the last solution, as the regulator's does. Convergence compares the solved `vo` with the law at the solved `u`, `s` and `i`. The internal node takes no node gmin.
+
+`out` joins `vcc` and `gnd`, and `vcc` joins `gnd`. These are DC paths. An input is not: a net reached only through an input is `net.floating`.
+
+| Field | Symbol | Unit |
+| --- | --- | --- |
+| `gain_bandwidth` | `GBW` | `Hz` |
+| `slew_rate` | `SR` | `V/s` |
+| `open_loop_gain` | `A0` | `1` |
+| `input_bias_current` | `Ib` | `A` |
+| `swing_high` | `Vsh` | `V` |
+| `swing_low` | `Vsl` | `V` |
+| `output_resistance` | `Ro` | `ohm` |
+| `short_circuit_current` | `Isc` | `A` |
+| `supply_current` | `Icc` | `A` |
+
+`gain_bandwidth`, `slew_rate`, `open_loop_gain` and `short_circuit_current` must be greater than 0, and each reciprocal must be finite. `input_bias_current`, `swing_high`, `swing_low`, `output_resistance` and `supply_current` must be at least 0. A negative value is `netlist.value` with rule `non_negative`.
+
+An op-amp has no quantities and no `ratings`. Read its pins' voltages, and its output current from what the output drives.
+
+Not modelled: input offset voltage, CMRR, PSRR and noise. A second internal pole and the phase margin: the law has one pole, so the part does not peak on its own. `Ro` and a capacitor on the output add a pole outside the part. A follower into 200 pF does not ring, and into 100 nF it rings near 230 kHz. Overdrive recovery past the clamp, and supply current that follows the output current beyond the split above. Temperature. The input headroom of 0.8 V is the LMV358's common-mode limit, SLOS263Y p7 VICR 4.2 V typical at 5 V, and it is a constant.
+
+`packages/engine/tests/circuits/op-amp-*` run the LMV358's values, the typicals of TI SLOS263Y p7 section 6.8 at VCC 5 V. `packages/engine/tests/circuit/runs/op_amp.rs` holds each to a band from that table and to the law above. `op-amp-bias` is a follower with `in_p` behind 1 Mohm from 2.5 V, and a second with `in_p` behind 1 Mohm from 4.95 V, where the bias current is off. `op-amp-swing` overdrives four channels into 10 kohm and 2 kohm to 2.5 V. `op-amp-slew` steps a follower from 0.5 V to 4.0 V and back. `op-amp-gain-10k` and `op-amp-gain-200k` drive a gain of 10 with a 64-level staircase of a 10 mV sine. `op-amp-short` holds one output at 0 V and one at 5 V. `op-amp-ramp`, `op-amp-square` and `op-amp-hysteresis` are comparators against 2.5 V, driven by a 500 V/s ramp, a 10 kHz square and the ramp with 10 kohm in and 100 kohm of feedback.
+
 ### NPN and PNP transistors
 
 `kind` is `npn` or `pnp`. Both take the same fields and solve the same equations. The kind is the polarity. Pins are `collector`, `base` and `emitter`, in SPICE order.
