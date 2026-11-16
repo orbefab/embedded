@@ -13,6 +13,7 @@
 mod check;
 mod decode;
 mod execute;
+mod spin;
 
 use std::sync::Arc;
 
@@ -300,6 +301,15 @@ impl Core {
             }
         }
         if !op.may_be_steady() {
+            // A `delay` spin calls a routine that reads a pure counter, subtracts a saved
+            // start, and branches back while the difference is still under a limit. The passes
+            // that still branch are cycles only. The pass that exits, or that would cross
+            // `bound`, runs so its registers and the stack are the ones a step would leave.
+            if let Op::Call(dest) = op
+                && matches!(self.op(self.pc.wrapping_add(2) & self.pc_mask), Op::Sub(..))
+            {
+                self.skip_spin(bus, bound, dest);
+            }
             return None;
         }
         let last = self.visit();

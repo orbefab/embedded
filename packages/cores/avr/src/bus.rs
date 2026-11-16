@@ -47,8 +47,17 @@ pub trait Bus {
     /// A free run leaves the bus cycle behind the core. [`Bus::peek`] reads the bus cycle, so a
     /// byte that moves with the core's cycle is not a peek. `None` means the load writes, or the
     /// byte is not fixed by that cycle. `IN` of `Some` runs inside the free run.
+    #[inline(always)]
     fn projected(&self, core: &Core, addr: u16) -> Option<u8> {
-        let _ = (core, addr);
+        self.projected_at(addr, core.cycles())
+    }
+
+    /// [`Bus::projected`] as if the core's cycle were `cycle`.
+    ///
+    /// A free run may ask for a later cycle that still ends before the next event. `None` has the
+    /// same meaning as [`Bus::projected`].
+    fn projected_at(&self, addr: u16, cycle: u64) -> Option<u8> {
+        let _ = (addr, cycle);
         None
     }
 
