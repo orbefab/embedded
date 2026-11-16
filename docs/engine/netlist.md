@@ -1,6 +1,6 @@
 # Netlist v0
 
-A netlist is fully resolved JSON. `version` is 0. [Version](#version) says which changes keep it. Every field is required, and an unknown field is an error. Nothing is filled in by default.
+A netlist is fully resolved JSON. `version` is 0. [Version](#version) says which changes keep it. Every field is required except the top-level `world`, and an unknown field is an error. Nothing is filled in by default. A netlist without `world` declares no world quantity, as [World](#world) says.
 
 The netlist is the engine's input. Data a part needs lives inside the document, with one exception. A large input, such as an `esp32s3` part's firmware or its mask ROM, is a blob, which the document names by its SHA-256 and length, as [Blobs](#blobs) says.
 
@@ -64,6 +64,8 @@ Values are SI numbers. `unit` must already be the field's unit. Integer values a
 
 `nets` lists every net name. `parts` lists every part.
 
+`world` is optional. It holds the world quantities the netlist declares, as [World](#world) says.
+
 The engine stores ground first and sorts the other nets by name. It sorts parts by name. Reordering `nets` or `parts` in the JSON does not change observations or diagnostics.
 
 ## Transient analysis
@@ -86,6 +88,61 @@ The rows are t = 0, every multiple of `grid_ps` before `stop_ps`, and `stop_ps`.
 
 The run solves the operating point at t = 0 first, with every capacitor open or held at its `initial` voltage, every switch at its `initial` contact, and every source at its value at t = 0, which is a waveform's `initial`. That is the initial condition. Then it steps to `stop_ps`. Every switch edge, every source jump, and every potentiometer move before `stop_ps` takes effect at its picosecond. [engine.md](engine.md) describes how the engine steps there, how it finds chip events, and how accurate it is.
 
+## World
+
+The world is the room the circuit sits in. Its quantities are a closed table, extended by a new engine version's rows, never by a netlist.
+
+| Quantity | Unit | Range | A scene's default |
+| --- | --- | --- | --- |
+| `temperature` | `degC` | -40 to 125 | 25 |
+| `humidity` | `%RH` | 0 to 100 | 50 |
+| `light` | `lx` | 0 to 100000 | 300 |
+
+`world` maps each quantity the netlist declares to a value object or a `steps` waveform in the quantity's unit, as a potentiometer's `position` is. A value holds at every time. A `steps` waveform holds `initial`, then each event's `level` from its `t_ps` on. A quantity the netlist leaves out has no value, no part may read it, and the run writes no column for it. `{}` declares none, as a missing `world` does.
+
+```json
+"world": {
+  "temperature": { "value": 25.0, "unit": "degC", "source": "user" },
+  "light": {
+    "kind": "steps",
+    "initial": { "value": 300.0, "unit": "lx", "source": "user" },
+    "events": [{ "t_ps": 20000000000, "level": { "value": 50.0, "unit": "lx", "source": "user" } }]
+  }
+}
+```
+
+A name the table lacks is `netlist.world` with rule `unknown`, field `world`. Each value is inside its quantity's range, both ends included. One outside is `netlist.value` with rule `range` on ref `#world.<quantity>`, field `value`, `initial` or `events[k].level`. A different unit is `netlist.unit` on the same ref and field. An event that breaks a schedule rule is `netlist.schedule` on ref `#world.<quantity>` and field `events`. The rules are a `steps` source's: `at_zero`, `not_increasing`, `same_state` and `too_close`, so two changes of one quantity are at least 2000 ps apart. A repeated name, and a `kind` other than `steps`, are `netlist.syntax`.
+
+Every change is a jump, as a `steps` source's is. A row at its time holds the value from before it, and the restart solve there holds the new one. A run writes one trace column per declared quantity, `#world.<quantity>` in its unit, after every part's quantities, and the operating point holds it too. A netlist that declares none writes the trace it wrote before the world existed.
+
+### World-driven fields
+
+A part field that the world drives holds `{"kind": "world", "quantity": ..., "curve": ...}` in place of its value object. The field then has a value on each interval of the quantity's schedule: the curve at the quantity's value there. Its changes are the quantity's changes. A resistor's `resistance` is the one such field so far.
+
+```json
+"resistance": {
+  "kind": "world",
+  "quantity": "light",
+  "curve": {
+    "kind": "power",
+    "x": { "value": 10.0, "unit": "lx", "source": "user" },
+    "y": { "value": 10000.0, "unit": "ohm", "source": "user" },
+    "exponent": { "value": -1.0, "unit": "1", "source": "user" },
+    "max": { "value": 1000000.0, "unit": "ohm", "source": "user" }
+  }
+}
+```
+
+A curve reads the quantity's value `w`. `x`, `x0` and `x1` are in the quantity's unit, and `y`, `y0`, `y1` and `max` in the field's.
+
+| `kind` | Value | Fields | For |
+| --- | --- | --- | --- |
+| `power` | `y * (w / x)^exponent`, at most `max` | `x`, `y`, `exponent` in `1`, `max` | a light-dependent resistor, whose dark resistance is `max` |
+| `beta` | `y * exp(beta * (1 / (w + 273.15) - 1 / (x + 273.15)))` | `x`, `y`, `beta` in `K` | an NTC thermistor's B equation, on `temperature` only |
+| `linear` | the line through `(x0, y0)` and `(x1, y1)` | `x0`, `y0`, `x1`, `y1` | a sensor with a linear output, such as an LM35's 10 mV per degC |
+
+Each curve is monotonic in `w`, so its values over the quantity's range lie between its values at the range's two ends. Parse checks the field's own rule at both ends, so every value a schedule or a session can set keeps it. An end that breaks it is `netlist.value` on field `<field>.curve at <end> <unit>`, such as `resistance.curve at 0.0 lx`, with the field's rule, or rule `finite` when the curve is not finite there. A quantity the netlist does not declare is `netlist.world` with rule `undeclared` on field `<field>.quantity`, and a name the table lacks is rule `unknown` there. A `beta` curve on another quantity is `netlist.world` with rule `temperature` on field `<field>.curve.kind`. A `power` curve's `x` at or below 0 is `netlist.value` with rule `positive`. A `linear` curve whose `x1` equals its `x0` is `netlist.value` with rule `distinct`. A unit that is not the one the table above names is `netlist.unit` on field `<field>.curve.<name>`. An unknown `kind`, a missing field and an unknown field are `netlist.syntax`.
+
 ## Names
 
 A name is an ASCII letter, then ASCII letters, digits, or `_`, from 1 to 64 bytes.
@@ -102,7 +159,7 @@ Two nets, or two parts, with the same name are `netlist.duplicate`. The ref is `
 
 `kind` is `resistor`. Pins are `a` and `b`, in that order for the sign rule.
 
-`resistance.value` is in `ohm`, greater than 0, and its reciprocal must be finite. Zero or a negative value is `netlist.value` with rule `positive`. A positive value whose reciprocal overflows is `netlist.value` with rule `finite_reciprocal`. A different unit is `netlist.unit`. A number outside the f64 range is `netlist.syntax`.
+`resistance.value` is in `ohm`, greater than 0, and its reciprocal must be finite. `resistance` may instead be a world-driven field, as [World-driven fields](#world-driven-fields) says, which keeps the same rule at both ends of its quantity's range. Zero or a negative value is `netlist.value` with rule `positive`. A positive value whose reciprocal overflows is `netlist.value` with rule `finite_reciprocal`. A different unit is `netlist.unit`. A number outside the f64 range is `netlist.syntax`.
 
 `ratings` holds `power`. See [Ratings](#ratings).
 
@@ -1257,8 +1314,9 @@ A potentiometer has no `i`, `v`, or `p`. Its pins and nets are observed as every
 A ref names one net, part, pin, quantity, or logic signal.
 
 ```text
-ref      = "#" ( "net." name | name [ "." ( quantity | "pin." name | "logic." name ) ] )
+ref      = "#" ( "net." name | "world." world | name [ "." ( quantity | "pin." name | "logic." name ) ] )
 quantity = "ib" | "ic" | "id" | "iin" | "iout" | "i" | "v" | "p"
+world    = "temperature" | "humidity" | "light"
 ```
 
 `#<part>.usart.<name>`, such as `#u1.usart.USART0`, is reserved and is not a ref.
@@ -1277,6 +1335,7 @@ quantity = "ib" | "ic" | "id" | "iin" | "iout" | "i" | "v" | "p"
 | `#m1.id` | Drain current of MOSFET `m1` |
 | `#u1.iin` | Current entering `in` of regulator `u1` |
 | `#u1.iout` | Current entering `out` of regulator `u1` |
+| `#world.light` | The world's `light` |
 | `#u1.logic.out` | Logic level of signal `out` of chip `u1` |
 | `#k1.logic.contact` | Logic level of the contact of relay `k1` |
 
@@ -1287,9 +1346,9 @@ These texts parse and format back to the same text. The following texts are reje
 - `#net.1vout`, `#1r`, because the name is illegal
 - `#r1.x`, `#r1.i.v`
 
-`#net.vout` is a net. `#net` is a part named `net`. `#u1.logic.out` is the level the chip drives on OUT, and `#u1.pin.out` is the pin itself. An NE555's signals are `out`, `reset`, `thres`, and `trig`. A relay's one signal is `contact`, high while the contact is closed. An ATmega328P's are named for its package pins: `PB0` to `PB5`, `PC0` to `PC6`, and `PD0` to `PD7`, each the level that pin reads, and `VCC` while `BODLEVEL` enables brown-out, the level its brown-out detector reads on the supply. `PB6` and `PB7` hold the crystal and have none. `#u1.logic.PB5` is the level PB5 reads, and `#u1.pin.PB5` is the pin itself. An ESP32-S3's are its GPIOs with nets, such as `GPIO21`.
+`#net.vout` is a net. `#net` is a part named `net`. `#world.light` is the world's light, and `#world` and `#world.i` are a part named `world`, since no world quantity shares a part quantity's name. `#u1.logic.out` is the level the chip drives on OUT, and `#u1.pin.out` is the pin itself. An NE555's signals are `out`, `reset`, `thres`, and `trig`. A relay's one signal is `contact`, high while the contact is closed. An ATmega328P's are named for its package pins: `PB0` to `PB5`, `PC0` to `PC6`, and `PD0` to `PD7`, each the level that pin reads, and `VCC` while `BODLEVEL` enables brown-out, the level its brown-out detector reads on the supply. `PB6` and `PB7` hold the crystal and have none. `#u1.logic.PB5` is the level PB5 reads, and `#u1.pin.PB5` is the pin itself. An ESP32-S3's are its GPIOs with nets, such as `GPIO21`.
 
-Map keys and diagnostic order use this order: nets, then parts, then pins, then quantities, then logic signals. Quantities sort `ib`, `ic`, `id`, `iin`, `iout`, `i`, `v`, then `p`. Names sort by byte order inside one group.
+Map keys and diagnostic order use this order: nets, then parts, then pins, then quantities, then world quantities in the table's order, then logic signals. Quantities sort `ib`, `ic`, `id`, `iin`, `iout`, `i`, `v`, then `p`. Names sort by byte order inside one group.
 
 ## Version
 
@@ -1300,7 +1359,8 @@ A version names a set of valid documents and what each one means. A change that 
 - a new analysis
 - a new value of a string enum, such as a `basis`
 - a rule that accepts more documents than before
+- an optional field whose absence keeps an older document's meaning, such as `world`
 
-Every other change bumps it. A new field on an existing object bumps it, because every field is required and an unknown field is an error.
+Every other change bumps it. A new required field on an existing object bumps it, because an unknown field is an error and an older document lacks it.
 
 The engine reads the versions in a list. This engine reads `[0]`. `netlist.version`'s `data.supported` is that list. A document whose `version` is not in the list yields only `netlist.version`. The engine reads an older listed version with that version's own rules, and gives it its old meaning.

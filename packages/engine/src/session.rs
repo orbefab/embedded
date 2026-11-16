@@ -37,7 +37,7 @@ use crate::watch::{self, Levels};
 
 mod input;
 
-pub use input::{Applied, DeviceEvent, Input, Rejected, Serial, Setting};
+pub use input::{Applied, DeviceEvent, Input, Rejected, Serial, Setting, WorldChange};
 
 const STEP_BUDGET: u32 = 50;
 

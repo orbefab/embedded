@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use orbe_engine::netlist::engine_kinds;
+use orbe_engine::netlist::{MIN_GAP_PS, engine_kinds};
+use orbe_engine::world::Quantity;
 
 use crate::diagnostic::{Code, Findings, Reported};
 use crate::name::{NameKind, and_list, did_you_mean, problem};
@@ -16,7 +17,7 @@ use crate::syntax::{Json, Node, Prop};
 use crate::units::{self, Unit};
 
 const SCENE_KEYS: &[&str] = &[
-    "format", "$schema", "parts", "wires", "layout", "ground", "nets", "sim",
+    "format", "$schema", "parts", "wires", "layout", "ground", "nets", "sim", "world",
 ];
 const FORMATS: &[u32] = &[1];
 const WIRE_KINDS: &[&str] = &["jumper", "trace", "contact"];
@@ -256,6 +257,15 @@ pub(crate) struct Scene {
     pub(crate) nets: Vec<(String, Span, Ref)>,
     pub(crate) seed: u64,
     pub(crate) max_step_ps: u64,
+    /// Each world quantity the scene sets, in the order it sets them.
+    pub(crate) world: Vec<Ambient>,
+}
+
+/// A world quantity the scene sets: its value at t = 0, then each step's time and value.
+pub(crate) struct Ambient {
+    pub(crate) quantity: Quantity,
+    pub(crate) initial: f64,
+    pub(crate) steps: Vec<(u64, f64)>,
 }
 
 impl Scene {
@@ -334,6 +344,7 @@ pub(crate) fn decode_scene(
         nets: Vec::new(),
         seed: 0,
         max_step_ps: DEFAULT_MAX_STEP_PS,
+        world: Vec::new(),
     };
     for prop in props {
         let value = &prop.value;
@@ -344,6 +355,7 @@ pub(crate) fn decode_scene(
             "ground" => scene.comp.ground = decode_ref(value, out),
             "nets" => scene.nets = decode_nets(value, out),
             "sim" => decode_sim(value, &mut scene, out),
+            "world" => scene.world = decode_world(value, out),
             key if shape::PART.iter().any(|(k, _)| *k == key) => out.push(
                 Code::Role,
                 prop.key_span,
@@ -389,7 +401,7 @@ pub(crate) fn decode_part(
         let value = &prop.value;
         let Some((_, value_shape)) = shape::PART.iter().find(|(k, _)| *k == prop.key) else {
             match prop.key.as_str() {
-                key @ ("sim" | "nets") => out.push(
+                key @ ("sim" | "nets" | "world") => out.push(
                     Code::Role,
                     prop.key_span,
                     format!("a part has no `{key}`; only a scene does"),
@@ -934,6 +946,204 @@ fn decode_sim(node: &Node, scene: &mut Scene, out: &mut Findings) {
             _ => unknown_key(out, prop, &["seed", "max_step"], "`sim`"),
         }
     }
+}
+
+const WORLD_KEYS: &[&str] = &["initial", "steps"];
+const STEP_KEYS: &[&str] = &["at", "to"];
+
+/// `"world": { "light": 300, "temperature": { "initial": 25, "steps": [{ "at": "2s", "to": 30 }] } }`.
+/// A value is a number in its quantity's unit. Steps come at least 2 ns apart, after t = 0 and
+/// before the 2-hour stop, and each changes the value.
+fn decode_world(node: &Node, out: &mut Findings) -> Vec<Ambient> {
+    let Some(props) = node.props() else {
+        schema(out, node, "an object of world quantities by name");
+        return Vec::new();
+    };
+    let names: Vec<&str> = Quantity::ALL.iter().map(|q| q.name()).collect();
+    let mut world = Vec::new();
+    for prop in props {
+        let Some(quantity) = Quantity::parse(&prop.key) else {
+            let hint = did_you_mean(&prop.key, names.iter().copied(), "");
+            out.push(
+                Code::World,
+                prop.key_span,
+                format!("`{}` is not a world quantity", prop.key),
+                format!("{hint}the quantities are {}", and_list(&names)),
+            );
+            continue;
+        };
+        if let Some(ambient) = decode_ambient(quantity, &prop.value, out) {
+            world.push(ambient);
+        }
+    }
+    world
+}
+
+fn decode_ambient(quantity: Quantity, node: &Node, out: &mut Findings) -> Option<Ambient> {
+    if node.number().is_some() {
+        let initial = world_value(quantity, node, out)?;
+        return Some(Ambient {
+            quantity,
+            initial,
+            steps: Vec::new(),
+        });
+    }
+    let Some(props) = node.props() else {
+        schema(
+            out,
+            node,
+            &format!(
+                "a number in {}, or {{ \"initial\", \"steps\" }}",
+                quantity.unit()
+            ),
+        );
+        return None;
+    };
+    let mut initial = None;
+    let mut steps = Some(Vec::new());
+    for prop in props {
+        match prop.key.as_str() {
+            "initial" => initial = world_value(quantity, &prop.value, out),
+            "steps" => steps = decode_steps(quantity, &prop.value, out),
+            _ => unknown_key(out, prop, WORLD_KEYS, &format!("`{}`", quantity.name())),
+        }
+    }
+    if node.get("initial").is_none() {
+        out.push(
+            Code::Syntax,
+            node.span,
+            format!("`{}` has no `initial`", quantity.name()),
+            format!("add \"initial\": {}", quantity.row().default),
+        );
+    }
+    let initial = initial?;
+    let steps = steps?;
+    let mut ok = true;
+    let mut last: Option<(u64, f64)> = None;
+    for (index, &(at, to)) in steps.iter().enumerate() {
+        let (before_ps, before) = last.unwrap_or((0, initial));
+        let problem = if last.is_some() && at < before_ps + MIN_GAP_PS {
+            Some(
+                "is not at least 2 ns after the step before it; steps go in order of `at`"
+                    .to_string(),
+            )
+        } else if to == before {
+            Some(format!("does not change {}", quantity.name()))
+        } else {
+            None
+        };
+        if let Some(problem) = problem {
+            ok = false;
+            let span = node
+                .get("steps")
+                .and_then(Node::items)
+                .and_then(|items| items.get(index))
+                .map_or(node.span, |item| item.span);
+            out.push(
+                Code::World,
+                span,
+                format!("step {index} of `{}` {problem}", quantity.name()),
+                "give each step a later `at` and a new `to`".into(),
+            );
+        }
+        last = Some((at, to));
+    }
+    ok.then_some(Ambient {
+        quantity,
+        initial,
+        steps,
+    })
+}
+
+fn decode_steps(quantity: Quantity, node: &Node, out: &mut Findings) -> Option<Vec<(u64, f64)>> {
+    let Some(items) = node.items() else {
+        schema(out, node, "a list of { \"at\", \"to\" }");
+        return None;
+    };
+    let mut steps = Vec::new();
+    let mut ok = true;
+    for item in items {
+        let Some(props) = item.props() else {
+            schema(out, item, "{ \"at\": \"1s\", \"to\": <value> }");
+            ok = false;
+            continue;
+        };
+        let mut at = None;
+        let mut to = None;
+        for prop in props {
+            match prop.key.as_str() {
+                "at" => at = step_time(&prop.value, out),
+                "to" => to = world_value(quantity, &prop.value, out),
+                _ => unknown_key(out, prop, STEP_KEYS, "a step"),
+            }
+        }
+        for key in STEP_KEYS {
+            if item.get(key).is_none() {
+                out.push(
+                    Code::Syntax,
+                    item.span,
+                    format!("a step has no `{key}`"),
+                    "write a step as { \"at\": \"1s\", \"to\": <value> }".into(),
+                );
+            }
+        }
+        match (at, to) {
+            (Some(at), Some(to)) => steps.push((at, to)),
+            _ => ok = false,
+        }
+    }
+    ok.then_some(steps)
+}
+
+/// A step's time: a duration after t = 0 and before the 2-hour stop, in whole picoseconds.
+fn step_time(node: &Node, out: &mut Findings) -> Option<u64> {
+    let ps = match node.str() {
+        Some(text) => units::parse(text, Unit::Second, 12),
+        None => Err(format!("found {}", node.what())),
+    };
+    match ps {
+        Ok(ps) if ps >= 1.0 && ps < STOP_PS as f64 => Some(ps.round() as u64),
+        Ok(_) => {
+            out.push(
+                Code::World,
+                node.span,
+                "a step's `at` is after 0 and before the 2-hour stop",
+                "write a duration such as \"1s\"".into(),
+            );
+            None
+        }
+        Err(reason) => {
+            out.push(
+                Code::Syntax,
+                node.span,
+                format!("a step's `at` is a duration, such as \"1s\": {reason}"),
+                "write a duration such as \"1s\"".into(),
+            );
+            None
+        }
+    }
+}
+
+/// A number in `quantity`'s unit, inside its range.
+fn world_value(quantity: Quantity, node: &Node, out: &mut Findings) -> Option<f64> {
+    let row = quantity.row();
+    let Some(value) = node.number() else {
+        schema(out, node, &format!("a number in {}", row.unit));
+        return None;
+    };
+    if !quantity.holds(value) {
+        out.push(
+            Code::World,
+            node.span,
+            format!(
+                "{} is from {} to {} {}, not {value}",
+                row.name, row.min, row.max, row.unit
+            ),
+            format!("write a value from {} to {}", row.min, row.max),
+        );
+        return None;
+    }
+    Some(value)
 }
 
 fn decode_pins(node: &Node, out: &mut Findings) -> Vec<Pin> {

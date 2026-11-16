@@ -604,3 +604,86 @@ fn test_paths_name_files_or_project_folders() {
     assert_eq!(run.code, 2);
     assert_eq!(run.json()["error"]["code"], "usage");
 }
+
+/// The scene's 10 kohm over a light-dependent resistor, whose resistance is `10 kohm * 10 lx /
+/// light`. The scene holds 300 lx and steps to 50 lx at 20 ms. `ldr.v` is `5V * R / (10k + R)`.
+#[test]
+fn set_light_moves_the_divider_to_the_curve_s_value() {
+    let dir = common::overlaid(&common::repo().join("packages/scene/tests/good/world_ldr"));
+    fs::create_dir_all(dir.path().join("tests")).unwrap();
+    fs::write(
+        dir.path().join("tests/light.test"),
+        "\
+open
+step 10ms
+expect @ldr.v > 0.15V   # 300 lx: 333 ohm, 0.161 V
+expect @ldr.v < 0.17V
+step 15ms
+expect @ldr.v > 0.82V   # 50 lx from 20 ms: 2 kohm, 0.833 V
+expect @ldr.v < 0.84V
+set light 1000
+step 1ms
+expect @ldr.v > 0.045V  # 100 ohm, 0.0495 V
+expect @ldr.v < 0.055V
+set light 0
+step 1ms
+expect @ldr.v > 4.9V    # the dark: 1 Mohm, 4.95 V
+",
+    )
+    .unwrap();
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout
+            .contains("\n  set light to 1000 lx at t=25ms; reads show it after t=25ms\n"),
+        "{}",
+        run.stdout
+    );
+
+    fs::write(
+        dir.path().join("tests/light.test"),
+        "open\nstep 1ms\nset light 80\n",
+    )
+    .unwrap();
+    let json = live::replies_in(&dir);
+    assert_eq!(
+        json[2]["data"],
+        serde_json::json!({ "quantity": "light", "value": 80.0, "unit": "lx", "landed_ps": 20_000_002_000u64 }),
+        "a set lands after the scene's last step, at 20 ms, plus the 2 ns gap"
+    );
+
+    fs::write(dir.path().join("tests/light.test"), "open\nset light 50\n").unwrap();
+    let run = orbe(dir.path(), &["test", "--json"]);
+    let error = &run.json()["data"]["tests"][0]["error"];
+    assert_eq!(error["code"], "no_change", "50 lx is the scene's last step");
+
+    let (error, _) = failed("open\nset humidity 40\n");
+    assert_eq!(error["code"], "not_settable");
+    assert_eq!(error["message"], "the scene does not declare humidity");
+}
+
+#[test]
+fn a_set_the_table_refuses_is_a_usage_error() {
+    for (line, message) in [
+        (
+            "set lite 50",
+            "`lite` is not a world quantity; the quantities are temperature, humidity, light; usage: set <quantity> <value>",
+        ),
+        (
+            "set light 200000",
+            "light is from 0 to 100000 lx, not 200000; usage: set <quantity> <value>",
+        ),
+        (
+            "set temperature warm",
+            "`warm` is not a number; write temperature in degC, such as 25; usage: set <quantity> <value>",
+        ),
+        (
+            "set light",
+            "takes a quantity and a value, such as `light 50`; usage: set <quantity> <value>",
+        ),
+    ] {
+        let (error, _) = failed(&format!("open\n{line}\n"));
+        assert_eq!(error["code"], "usage", "{line}");
+        assert_eq!(error["message"], message, "{line}");
+    }
+}

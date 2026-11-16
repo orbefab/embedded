@@ -21,6 +21,7 @@ const CODES: &[&str] = &[
     "scene.unknown_ref",
     "scene.unknown_pin",
     "scene.param",
+    "scene.world",
     "scene.layout",
     "scene.wires",
     "not_simulated",

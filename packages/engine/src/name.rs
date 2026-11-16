@@ -1,8 +1,9 @@
 //! Names and refs.
 //!
 //! ```text
-//! ref      = "#" ( "net." name | name [ "." ( quantity | "pin." name | "logic." name ) ] )
+//! ref      = "#" ( "net." name | "world." world | name [ "." ( quantity | "pin." name | "logic." name ) ] )
 //! quantity = "ib" | "ic" | "id" | "iin" | "iout" | "i" | "v" | "p"
+//! world    = "temperature" | "humidity" | "light"
 //! name     = ASCII letter, then ASCII letters, digits or "_"; 1..=64 bytes
 //! ```
 
@@ -87,14 +88,16 @@ impl Quantity {
 
 /// A stable name for something in a run.
 ///
-/// Derived order is nets, then parts, then pins, then quantities, then logic signals.
-/// Run-folder maps keyed by `Ref` serialize in that order.
+/// Derived order is nets, then parts, then pins, then quantities, then world quantities, then
+/// logic signals. Run-folder maps keyed by `Ref` serialize in that order.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Ref {
     Net(Name),
     Part(Name),
     Pin(Name, Name),
     Quantity(Name, Quantity),
+    /// A world quantity the netlist declares, such as `light`.
+    World(crate::world::Quantity),
     /// A chip's logic level, such as the level its comparator reads at an input pin.
     /// Not the physical pin, which is `Pin`.
     Logic(Name, Name),
@@ -114,6 +117,7 @@ impl fmt::Display for Ref {
             Ref::Quantity(part, quantity) => {
                 write!(f, "#{}.{}", part.as_str(), quantity.as_str())
             }
+            Ref::World(quantity) => write!(f, "#world.{}", quantity.name()),
             Ref::Logic(part, signal) => write!(f, "#{}.logic.{}", part.as_str(), signal.as_str()),
         }
     }
@@ -137,6 +141,13 @@ impl FromStr for Ref {
             && let Ok(name) = Name::new(rest)
         {
             return Ok(Ref::Net(name));
+        }
+        // A part may be named `world`. `world.` is the world only before a quantity's name,
+        // which no part quantity shares.
+        if let Some(rest) = body.strip_prefix("world.")
+            && let Some(quantity) = crate::world::Quantity::parse(rest)
+        {
+            return Ok(Ref::World(quantity));
         }
         if let Some((part, pin)) = body.split_once(".pin.") {
             let part = Name::new(part).map_err(|_| fail())?;
@@ -211,6 +222,10 @@ mod tests {
             "#u1.logic.out",
             "#logic.logic.pin",
             "#net.logic.out",
+            "#world.light",
+            "#world.temperature",
+            "#world.i",
+            "#world.pin.a",
         ] {
             let parsed: Ref = text.parse().unwrap();
             assert_eq!(parsed.to_string(), text, "{text}");
@@ -296,7 +311,13 @@ mod tests {
             pin < ib && ib < ic && ic < p,
             "a transistor's columns sort ib, ic, p"
         );
+        let light: Ref = "#world.light".parse().unwrap();
         let logic: Ref = "#a1.logic.out".parse().unwrap();
-        assert!(p < logic, "logic signals sort after every quantity");
+        assert!(p < light, "world quantities sort after every part quantity");
+        assert!(light < logic, "logic signals sort after the world");
+        assert!(matches!(
+            "#world.i".parse(),
+            Ok(Ref::Quantity(_, Quantity::I))
+        ));
     }
 }

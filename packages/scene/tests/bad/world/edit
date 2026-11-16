@@ -1,0 +1,3 @@
+scene.jsonc
+  ],
+  ], "world": { "lite": 300, "light": 200000, "humidity": { "initial": 50, "steps": [{ "at": "1s", "to": 60 }, { "at": "1s", "to": 70 }, { "at": "2s", "to": 70 }] }, "temperature": { "steps": [{ "at": "0s", "to": 30 }] } },

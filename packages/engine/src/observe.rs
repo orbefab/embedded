@@ -11,8 +11,9 @@ use crate::run_folder::OpPoint;
 use crate::mna::{Probe, Solution};
 use crate::newton::{Circuit, Side};
 
-/// Every observed ref in `Ref` order: each net, then each part's `quantities`.
-/// Fixed by the netlist. The `op` keys, trace columns and rating watches all index it.
+/// Every observed ref in `Ref` order: each net, then each part's `quantities`, then each world
+/// quantity the netlist declares. Fixed by the netlist. The `op` keys, trace columns and rating
+/// watches all index it.
 pub(crate) struct Columns {
     refs: Vec<Ref>,
     /// The nets in the order of their columns.
@@ -33,6 +34,7 @@ impl Columns {
                 refs.push(Ref::Quantity(part.name.clone(), quantity));
             }
         }
+        refs.extend(netlist.world().declared().map(|(q, _)| Ref::World(q)));
         debug_assert!(refs.is_sorted());
         Columns {
             refs,
@@ -83,6 +85,10 @@ pub(crate) fn row(
         for value in part.model.observe(&probe, at, side).into_iter().flatten() {
             row.push(Finite::new(value).ok_or_else(|| Ref::Part(part.name.clone()))?);
         }
+    }
+    let world = circuit.netlist.world();
+    for (_, schedule) in world.declared() {
+        row.push(side.read(schedule, at).si);
     }
     Ok(row)
 }

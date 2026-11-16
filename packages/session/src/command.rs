@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use orbe_engine::world::Quantity;
+
 use crate::condition::Condition;
 use crate::duration::Duration;
 use crate::target::Ref;
@@ -16,12 +18,20 @@ pub enum Command {
     Close,
     Press(Ref),
     Release(Ref),
+    Set(WorldSet),
     Get(Ref),
     Step(Step),
     Play,
     Pause,
     Snapshot,
     Expect(Condition),
+}
+
+/// A world quantity's new value, in its unit, inside its range.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WorldSet {
+    pub quantity: Quantity,
+    pub value: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -77,6 +87,12 @@ pub const COMMANDS: &[Spec] = &[
         usage: "release <ref>",
         about: "Opens a switch, named by its part, such as @btn1.",
         parse: |args, _| one_ref(args).map(Command::Release),
+    },
+    Spec {
+        name: "set",
+        usage: "set <quantity> <value>",
+        about: "Sets a world quantity the scene declares, from now on: temperature in degC, humidity in %RH or light in lx, such as `set light 50`.",
+        parse: |args, _| parse_set(args).map(Command::Set),
     },
     Spec {
         name: "get",
@@ -157,6 +173,40 @@ fn one_ref(args: &[String]) -> Result<Ref, String> {
         [r] => Ref::parse(r),
         _ => Err("takes one ref, such as `@btn1`".into()),
     }
+}
+
+fn parse_set(args: &[String]) -> Result<WorldSet, String> {
+    let names = || {
+        let names: Vec<&str> = Quantity::ALL.iter().map(|q| q.name()).collect();
+        names.join(", ")
+    };
+    let [name, value] = args else {
+        return Err("takes a quantity and a value, such as `light 50`".into());
+    };
+    let quantity = Quantity::parse(name).ok_or_else(|| {
+        format!(
+            "`{name}` is not a world quantity; the quantities are {}",
+            names()
+        )
+    })?;
+    let row = quantity.row();
+    let value = value
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite())
+        .ok_or_else(|| {
+            format!(
+                "`{value}` is not a number; write {} in {}, such as {}",
+                row.name, row.unit, row.default
+            )
+        })?;
+    if !quantity.holds(value) {
+        return Err(format!(
+            "{} is from {} to {} {}, not {value}",
+            row.name, row.min, row.max, row.unit
+        ));
+    }
+    Ok(WorldSet { quantity, value })
 }
 
 fn parse_step(args: &[String]) -> Result<Step, String> {

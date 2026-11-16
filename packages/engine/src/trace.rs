@@ -372,6 +372,7 @@ fn unit(reference: &Ref) -> &'static str {
         ) => "A",
         Ref::Quantity(_, Quantity::P) => "W",
         Ref::Net(_) | Ref::Quantity(_, Quantity::V) => "V",
+        Ref::World(quantity) => quantity.unit(),
         Ref::Part(_) | Ref::Pin(..) | Ref::Logic(..) => {
             panic!("{reference} is not an observed quantity")
         }

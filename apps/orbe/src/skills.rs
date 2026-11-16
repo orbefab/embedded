@@ -553,6 +553,7 @@ mod tests {
             Scene::FirmwareMissing,
             Scene::PartModified,
             Scene::Io,
+            Scene::World,
         ];
         // The match stops the build when an `orbe add` code is added, until it is listed here.
         let add = |code: Add| match code {
@@ -602,6 +603,55 @@ mod tests {
                 assert!(listed.insert(code), "`{code}` has two rows");
             }
         }
+    }
+
+    /// Each row of the world table under `## Scenes` is one `orbe set` reads: its default and
+    /// both ends set, and a value past either end is refused with the row's range and unit.
+    #[test]
+    fn the_core_world_table_is_the_one_set_reads() {
+        let core = find("core").unwrap().text().unwrap();
+        let rows: Vec<Vec<&str>> = core
+            .lines()
+            .skip_while(|l| *l != "## Scenes")
+            .map(str::trim_start)
+            .skip_while(|l| !l.starts_with("| Quantity |"))
+            .skip(2)
+            .take_while(|l| l.starts_with('|'))
+            .map(|l| {
+                l.split('|')
+                    .map(str::trim)
+                    .filter(|c| !c.is_empty())
+                    .collect()
+            })
+            .collect();
+        let names: Vec<&str> = rows.iter().map(|r| r[0].trim_matches('`')).collect();
+        assert_eq!(names, ["temperature", "humidity", "light"]);
+        let set = orbe_session::spec("set").unwrap();
+        let parse = |words: &[&str]| {
+            let words: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            set.command(&words, Path::new("."))
+        };
+        for row in &rows {
+            let (name, unit, default) = (row[0].trim_matches('`'), row[1], row[3]);
+            let (min, max) = row[2].split_once(" to ").unwrap();
+            for value in [min, max, default] {
+                parse(&[name, value]).unwrap_or_else(|e| panic!("set {name} {value}: {e}"));
+            }
+            let under = min.parse::<f64>().unwrap() - 1.0;
+            let over = max.parse::<f64>().unwrap() + 1.0;
+            for value in [under, over] {
+                let error = parse(&[name, &value.to_string()]).unwrap_err();
+                let says = format!("{name} is from {min} to {max} {unit}, not {value}");
+                assert!(error.starts_with(&says), "{error}");
+            }
+        }
+        let error = parse(&["lite", "50"]).unwrap_err();
+        assert!(
+            error.starts_with(
+                "`lite` is not a world quantity; the quantities are temperature, humidity, light"
+            ),
+            "{error}"
+        );
     }
 
     /// The rows of the first table under `heading`.

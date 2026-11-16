@@ -6,6 +6,8 @@ use std::fmt::{self, Write as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use orbe_engine::world::Quantity;
+
 use crate::condition::Unit;
 use crate::duration::Duration;
 
@@ -207,6 +209,12 @@ pub enum Data {
     Landed {
         target: String,
         pressed: bool,
+        landed_ps: u64,
+    },
+    /// A world quantity's value from `landed_ps` on, in its unit.
+    Set {
+        quantity: Quantity,
+        value: f64,
         landed_ps: u64,
     },
     Got(Got),
@@ -579,6 +587,16 @@ impl Data {
             Data::Landed {
                 target, landed_ps, ..
             } => json!({ "ref": format!("@{target}"), "landed_ps": landed_ps }),
+            Data::Set {
+                quantity,
+                value,
+                landed_ps,
+            } => json!({
+                "quantity": quantity.name(),
+                "value": value,
+                "unit": quantity.unit(),
+                "landed_ps": landed_ps,
+            }),
             Data::Got(got) => json!({
                 "ref": format!("@{}", got.target),
                 "kind": got.value.kind(),
@@ -660,6 +678,19 @@ impl Data {
                 let verb = if *pressed { "pressed" } else { "released" };
                 let at = t(*landed_ps);
                 let _ = write!(out, "{verb} {target} at t={at}; reads show it after t={at}");
+            }
+            Data::Set {
+                quantity,
+                value,
+                landed_ps,
+            } => {
+                let at = t(*landed_ps);
+                let _ = write!(
+                    out,
+                    "set {} to {value} {} at t={at}; reads show it after t={at}",
+                    quantity.name(),
+                    quantity.unit()
+                );
             }
             Data::Got(got) => {
                 let _ = write!(out, "{} {}", got.target, got.value.text());

@@ -18,6 +18,7 @@ mod switch;
 mod transient;
 mod transistor;
 mod values;
+mod world;
 mod ws2812;
 mod zener;
 
