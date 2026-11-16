@@ -17,7 +17,12 @@ fn read(dir: &std::path::Path) -> Netlist {
 /// the same nets run the same simulation, and the board's empty holes add nothing to solve.
 #[test]
 fn each_block_on_its_breadboard_runs_the_netlist_of_its_circuit_wired_directly() {
-    for block in ["nano-button-led", "nano-led-fade", "uno-button-led"] {
+    for block in [
+        "nano-button-led",
+        "nano-led-fade",
+        "nano-light-comparator",
+        "uno-button-led",
+    ] {
         let dir = tempfile::tempdir().unwrap();
         common::copy_dir(&common::repo().join("blocks").join(block), dir.path());
         let on_breadboard = read(dir.path());
@@ -39,12 +44,16 @@ fn each_block_on_its_breadboard_runs_the_netlist_of_its_circuit_wired_directly()
                 .map(|i| i.part.clone())
                 .collect::<Vec<_>>()
         };
+        let on_board = parts(&on_breadboard);
+        let direct_parts = parts(&direct);
         assert!(
-            parts(&on_breadboard).contains(&"breadboard-400".to_string()),
-            "{block}"
+            on_board.iter().any(|part| part.starts_with("breadboard-")),
+            "{block} has no breadboard"
         );
         assert!(
-            !parts(&direct).contains(&"breadboard-400".to_string()),
+            !direct_parts
+                .iter()
+                .any(|part| part.starts_with("breadboard-")),
             "{block}"
         );
     }

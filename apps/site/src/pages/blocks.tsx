@@ -68,7 +68,7 @@ export function BlockPage({ site, block }: { site: Site; block: BlockView }) {
       <div className="mt-8">
         <BlockPlayer blocks={[{ name: record.name, title: record.title }]} registry={at.registry} wasm={at.wasm} />
         <p className="mt-3 text-muted-foreground text-sm">
-          This is the real engine: orbe-wasm {site.engine.version} runs the Block's firmware in a Worker in your browser. Press the button.
+          This is the real engine: orbe-wasm {site.engine.version} runs the Block's firmware in a Worker in your browser. Use the controls in the view.
         </p>
       </div>
 

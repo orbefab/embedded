@@ -8,7 +8,12 @@ use std::path::{Path, PathBuf};
 use orbe_session::{Files, test};
 use tempfile::TempDir;
 
-const BLOCKS: [&str; 3] = ["nano-button-led", "uno-button-led", "nano-led-fade"];
+const BLOCKS: [&str; 4] = [
+    "nano-button-led",
+    "uno-button-led",
+    "nano-led-fade",
+    "nano-light-comparator",
+];
 
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
