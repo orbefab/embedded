@@ -6,10 +6,11 @@ standing up +Z, centred on the Z axis. The grille faces -Y. Seen from the
 grille, lead 1 (VDD) is at -X and lead 4 (GND) at +X, on 2.54. These are
 leads 1 to 4, `lead-1` to `lead-4`.
 
-The DHT22 sheet gives no drawing in its text. The sizes are the common
-15.1 wide, 7.7 deep and 25.1 tall body, leads 0.5 square, 6.5 below the
-seating plane, and a Φ3 mounting hole near the top (`# verify`, all of
-them). The grille is eight slots across the front.
+The sizes are from the drawing on page 1 of the AM2302 manual v1.1: a
+body 15.4 wide, 7.8 deep and 25.3 tall, leads 0.5 across the front and 0.3
+deep, and a Φ2.7 mounting hole near the top. The drawing gives no lead
+length or hole height, so 6.5 below the seating plane and 2.8 below the
+top are `# verify`. The grille is eight slots across the front.
 """
 
 import sys
@@ -21,11 +22,11 @@ from cad import glb, paint, tht
 from cad.color import srgb
 from cad.geom import box, fuse
 
-DHT_BODY = (15.1, 7.7, 25.1)  # wide, deep, tall  # verify
-DHT_LEAD = 0.5  # square  # verify
+DHT_BODY = (15.4, 7.8, 25.3)  # wide, deep, tall
+DHT_LEAD = (0.5, 0.3)  # across the front, deep
 DHT_BELOW = 6.5  # verify
 DHT_PITCH = 2.54
-DHT_HOLE = (3.0, 2.8)  # Φ, its centre below the top  # verify
+DHT_HOLE = (2.7, 2.8)  # Φ, its centre below the top  # verify, below
 DHT_GRILLE = (8, 11.0, 1.0, 0.6, 2.2)  # slots, long, wide, deep, pitch
 
 _WHITE = srgb("#EEEDE6")
@@ -64,7 +65,7 @@ def dht22_shape():
     backs = fuse([box(0, floor, s.center().Z, DHT_GRILLE[1], 0.1, DHT_GRILLE[2]) for s in slots.solids()])
     children = [paint(body, "body", _WHITE), paint(backs, "grille", _SLOT)]
     for lead in range(1, 5):
-        children.append(paint(tht.square_lead(_x(lead), 0, -DHT_BELOW, 0.0, DHT_LEAD), f"lead-{lead}", _TIN))
+        children.append(paint(tht.square_lead(_x(lead), 0, -DHT_BELOW, 0.0, *DHT_LEAD), f"lead-{lead}", _TIN))
     return bd.Compound(children=children, label="dht22")
 
 
