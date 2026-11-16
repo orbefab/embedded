@@ -11,7 +11,7 @@
 //! microcontroller builds an `active::Core::Mcu` and adds its row to the table in `mcu/mod.rs`.
 //! The relay answers `unknowns` and `dc_paths` as an element.
 
-use crate::device::{Cst816, PulsesReplay, SpiReplay, St77916, Ws2812};
+use crate::device::{Cst816, Dht22, PulsesReplay, SpiReplay, St77916, Ws2812};
 use crate::mcu::{Atmega328p, Esp32s3};
 use crate::netlist::PartId;
 
@@ -62,6 +62,7 @@ pub(crate) enum Active<'n> {
     SpiReplay(&'n SpiReplay),
     St77916(&'n St77916),
     Cst816(&'n Cst816),
+    Dht22(&'n Dht22),
     Esp32s3(&'n Esp32s3),
     Ws2812(&'n Ws2812),
     PulsesReplay(&'n PulsesReplay),
@@ -74,6 +75,7 @@ pub(crate) fn kind(chip: &Chip) -> Kind<'_> {
         Chip::SpiReplay(replay) => Kind::Active(Active::SpiReplay(replay)),
         Chip::St77916(panel) => Kind::Active(Active::St77916(panel)),
         Chip::Cst816(dev) => Kind::Active(Active::Cst816(dev)),
+        Chip::Dht22(dev) => Kind::Active(Active::Dht22(dev)),
         Chip::Esp32s3(mcu) => Kind::Active(Active::Esp32s3(mcu)),
         Chip::Ws2812(chain) => Kind::Active(Active::Ws2812(chain)),
         Chip::PulsesReplay(replay) => Kind::Active(Active::PulsesReplay(replay)),
@@ -104,6 +106,7 @@ pub(crate) fn unknowns(chip: &Chip) -> Unknowns {
         | Chip::SpiReplay(_)
         | Chip::St77916(_)
         | Chip::Cst816(_)
+        | Chip::Dht22(_)
         | Chip::Esp32s3(_)
         | Chip::Ws2812(_)
         | Chip::PulsesReplay(_) => Unknowns::default(),
@@ -119,6 +122,7 @@ pub(crate) fn reads_iterate(chip: &Chip) -> bool {
         | Chip::SpiReplay(_)
         | Chip::St77916(_)
         | Chip::Cst816(_)
+        | Chip::Dht22(_)
         | Chip::Esp32s3(_)
         | Chip::Ws2812(_)
         | Chip::PulsesReplay(_) => false,
@@ -186,6 +190,7 @@ pub(crate) fn dc_paths(chip: &Chip) -> &'static [(usize, usize)] {
         Chip::SpiReplay(_) => &crate::device::spi_replay::DC_PATHS,
         Chip::St77916(_) => &crate::device::st77916::DC_PATHS,
         Chip::Cst816(_) => &crate::device::cst816::DC_PATHS,
+        Chip::Dht22(_) => &crate::device::dht22::DC_PATHS,
         Chip::Esp32s3(mcu) => crate::mcu::esp32s3::dc_paths(mcu),
         Chip::Ws2812(_) => &crate::device::ws2812::DC_PATHS,
         Chip::PulsesReplay(_) => &crate::device::pulses_replay::DC_PATHS,

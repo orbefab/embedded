@@ -1,3 +1,4 @@
+use crate::world::World;
 use orbe_model::{Cs, Device, Drawn, Fields, Lanes, Panel, Sha256, Spi, SpiPhase, Time, View};
 
 use super::Port;
@@ -57,11 +58,11 @@ impl Core {
     }
 
     fn input(&mut self, at: Time, levels: &[bool]) {
-        self.native.input(at, levels);
+        self.native.input(&World::default(), at, levels);
     }
 
     fn take(&mut self, at: Time, records: &[LinkRow]) {
-        self.native.take(at, records);
+        self.native.take(&World::default(), at, records);
         let closed = &mut self.closed;
         self.native.drain_rows(&mut |at, drawn: Drawn| {
             closed.push(Closed {

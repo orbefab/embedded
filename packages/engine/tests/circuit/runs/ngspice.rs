@@ -83,6 +83,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "atmega-board-knob",
             "atmega-button",
             "atmega-cst816",
+            "atmega-dht22",
             "atmega-fade",
             "atmega-i2c-scan",
             "atmega-serial-echo",

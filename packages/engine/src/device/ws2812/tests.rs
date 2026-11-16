@@ -1,3 +1,4 @@
+use crate::world::World;
 use orbe_model::{Pulses, Stop, Time};
 
 use crate::active::native::Hosted;
@@ -40,17 +41,17 @@ impl Core {
     }
 
     fn run_until(&mut self, limit: Time) -> Option<Stop> {
-        self.hosted.run_until(limit)
+        self.hosted.run_until(&World::default(), limit)
     }
 
     fn input(&mut self, at: Time, levels: &[bool]) {
-        self.hosted.input(at, levels);
+        self.hosted.input(&World::default(), at, levels);
     }
 
     fn land(&mut self, start: Time, idle: bool, pulses: &[(bool, u64)], end: Time) {
         let row = record(start.as_ps(), idle, pulses);
         debug_assert_eq!(row.record.end, end);
-        self.hosted.take(end, &[row]);
+        self.hosted.take(&World::default(), end, &[row]);
     }
 
     fn observed(&self) -> Chain {

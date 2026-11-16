@@ -115,6 +115,8 @@ A name the table lacks is `netlist.world` with rule `unknown`, field `world`. Ea
 
 Every change is a jump, as a `steps` source's is. A row at its time holds the value from before it, and the restart solve there holds the new one. A run writes one trace column per declared quantity, `#world.<quantity>` in its unit, after every part's quantities, and the operating point holds it too. A netlist that declares none writes the trace it wrote before the world existed.
 
+A part whose device reads the world, such as a [`dht22`](#dht22), reads each quantity its device declares. A netlist with such a part must declare those quantities. One it leaves out is `netlist.world` with rule `undeclared` on the part and field `kind`, and the part is dropped.
+
 ### World-driven fields
 
 A part field that the world drives holds `{"kind": "world", "quantity": ..., "curve": ...}` in place of its value object. The field then has a value on each interval of the quantity's schedule: the curve at the quantity's value there. Its changes are the quantity's changes. A resistor's `resistance` is the one such field so far.
@@ -1120,6 +1122,47 @@ A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.u
 
 A `ws2812` has no `ratings` object and no `i`, `v`, or `p`. Its logic signal is `DIN`. It joins no pins, so `VCC`, `GND` and `DIN` each need another DC path.
 
+### DHT22
+
+`kind` is `dht22`, a DHT22 temperature and humidity sensor, also sold as the AM2302. It is an active chip with no clock of its own. Pins are `VCC`, `DATA` and `GND`. Every pin is required. `DATA` is open drain into `GND` behind `low_resistance`, and the part reads `DATA` through `input_threshold`, fractions of its supply. It reads the netlist's `temperature` and `humidity`, which the netlist's `world` must declare, as [World](#world) says. The sensor's internal pull-up is not part of this kind. A part file adds it as a resistor from `VCC` to `DATA`.
+
+Every time is the typical of Aosong's AM2302 product manual, version 1.1, table 6. A host low on `DATA` of at least 0.8 ms (`Tbe`) is a start. 30 us after the line rises (`Tgo`), the sensor pulls `DATA` low for 80 us and releases it for 80 us (`Trel`, `Treh`). Then each of 40 bits, most significant first, is low for 50 us (`TLOW`) and released for 26 us for a 0 or 70 us for a 1 (`TH0`, `TH1`). Last, the sensor pulls the line low for 50 us (`Ten`) and releases it. The bits are humidity in tenths of a %RH, then temperature in tenths of a degC, 16 bits each, then the low byte of the sum of those four bytes (table 5). Temperature's top bit is its sign and the 15 below it are the magnitude, so -10.1 degC is `0x8065`. A value rounds to the nearest tenth, and one outside 0 to 100 %RH or -40 to 80 degC reads as its nearer end.
+
+A read sends the last measurement, and the end of each reply starts the next one (the note under figure 6, and section 7.3). So a read sends what the sensor measured as the read before it ended. The first read sends what it measured at 2 s, the end of its warm-up (section 7.4). A measurement takes no time, and it reads the world at that time. The sensor answers no start inside the 2 s warm-up, or within 2 s of the last start it answered (section 7.1, note 3). Such a start gets no reply and is `chip.protocol` rule `interval` the first time. A low under 0.8 ms is no start and breaks no rule.
+
+`packages/engine/tests/circuits/atmega-dht22` is a Nano with a DHT22 on `D2`, the part's 45 kohm pull-up and 5.1 kohm more. `AREF` sits on `5V`, so no net floats. It runs `packages/engine/tests/firmware/sketch/dht22.hex`, which reads the sensor every 2 s and prints `n=1 t=23.4 h=61.7`. The world steps from 23.4 degC and 61.7 %RH to -10.1 degC and 40 %RH at 3 s, and the third read prints `n=3 t=-10.1 h=40.0`. The part is:
+
+```json
+{
+  "name": "dht__sensor",
+  "kind": "dht22",
+  "pins": { "VCC": "nano__5V", "DATA": "nano__D2", "GND": "nano__GND" },
+  "low_resistance": {
+    "value": 37.5, "unit": "ohm",
+    "source": { "closed_form": { "note": "table 4: low output voltage at most 300 mV, and output current 8 mA typical when on. 300 mV / 8 mA. The sheet gives no typical low voltage, so the open drain is its worst case" } }
+  },
+  "input_threshold": {
+    "low": {
+      "value": 0.3, "unit": "1",
+      "source": { "datasheet": { "doc": "Aosong AM2302 product manual v1.1", "at": "table 4, low input voltage, falling, at most 30 % of VDD", "basis": "max" } }
+    },
+    "high": {
+      "value": 0.7, "unit": "1",
+      "source": { "datasheet": { "doc": "Aosong AM2302 product manual v1.1", "at": "table 4, high input voltage, rising, at least 70 % of VDD", "basis": "min" } }
+    }
+  }
+}
+```
+
+| Field | Unit | Rule |
+| --- | --- | --- |
+| `low_resistance` | `ohm` | the resistor's |
+| `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+
+A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
+
+A `dht22` has no `ratings` object and no `i`, `v`, or `p`. Its logic signal is `DATA`. It joins `DATA` to `GND` through the stage its drive stamps. `VCC` draws no current, so it needs another DC path.
+
 ### Pulses replay
 
 `kind` is `pulses_replay`, a pin that replays a list of timed levels. It is an active chip with no clock of its own, and its records are the trains, as [engine.md](engine.md#records) says. Pins are `VCC`, `GND` and `OUT`. Every pin is required.
@@ -1255,7 +1298,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `linear_regulator` | `current`, `power` | `#<part>.iout`, `#<part>.p` |
 | `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
 | `nmos` | `current`, `power` | `#<part>.id`, `#<part>.p` |
-| `voltage_source`, `current_source`, `capacitor`, `inductor`, `relay`, `switch`, `ne555`, `atmega328p`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `pulses_replay`, `ws2812` | none | |
+| `voltage_source`, `current_source`, `capacitor`, `inductor`, `relay`, `switch`, `ne555`, `atmega328p`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `pulses_replay`, `ws2812`, `dht22` | none | |
 
 `current` is in `A`. `power` is in `W`. A rating must be greater than 0. A missing key, an unknown key, and a missing `ratings` object are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.current` or `ratings.power`. A value of 0 or below is `netlist.value` with the same field.
 

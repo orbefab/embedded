@@ -231,7 +231,7 @@ Severity `error`. Refs is the part whose field reads the quantity, or empty for 
 `data` holds `field`, `name`, and `rule`. `name` is the quantity's name as the netlist wrote it. `rule` is one of these.
 
 - `unknown`: the name is not a row of the [world table](netlist.md#world). The message is ``{field} names `{name}`, which is not a world quantity; the quantities are temperature, humidity, light``, with the ref before it for a part's field, for example ``#r1 resistance.quantity names `lite`, which is not a world quantity; the quantities are temperature, humidity, light``. `field` is `world` for a name in `world` and `<field>.quantity` for a part's.
-- `undeclared`: a part's field reads a quantity the netlist's `world` does not declare. The message is ``{ref} {field} reads {name}, which the netlist's `world` does not declare``. `field` is `<field>.quantity`.
+- `undeclared`: a part's field reads a quantity the netlist's `world` does not declare. The message is ``{ref} {field} reads {name}, which the netlist's `world` does not declare``. `field` is `<field>.quantity`, or `kind` when the part's device reads the quantity, as a `dht22` reads `temperature` and `humidity`.
 - `temperature`: a `beta` curve reads a quantity other than `temperature`. The message is `{ref} {field} is a B equation, which reads temperature, not {name}`. `field` is `<field>.curve.kind`.
 - `non_negative`: a `power` curve reads a quantity whose range goes below 0, which is `temperature`. The message is `{ref} {field} is a power curve, which reads a quantity that does not go below 0, not {name}`. `field` is `<field>.curve.kind`.
 
@@ -382,7 +382,7 @@ Severity `warning`. Refs are the chip. `t_ps` is the first time that rule fired.
 
 The message for a dropped transfer is `{part} dropped a transfer that broke rule {rule} at {t_ps} ps, the first time`.
 
-`data` holds `rule`. A chip that takes `Spi` records drops one that breaks its protocol, and the run reports each rule once per part, at its first time. An `st77916` has two rules, which [netlist.md](netlist.md#st77916) describes. A `cst816` has one more. Rule `sda_while_scl_high` means an `SDA` change came due while `SCL` was high, so the target left `SDA` where it was and went idle. A release it refused waits for the next `SCL` fall. A release while the part is in reset is not this rule. Its message is `{part} left SDA unmoved because SCL was high at {t_ps} ps, breaking rule sda_while_scl_high, the first time`. [engine.md](engine.md#i2c-targets) describes the hold. A `ws2812` has one more. Rule `bit` means a high, or a low after a high that was in a window, fell outside the WS2812E-1313 times, so that bit was dropped. Its message is `{part} dropped a bit that broke rule bit at {t_ps} ps, the first time`. [engine.md](engine.md#records) has the windows.
+`data` holds `rule`. A chip that takes `Spi` records drops one that breaks its protocol, and the run reports each rule once per part, at its first time. An `st77916` has two rules, which [netlist.md](netlist.md#st77916) describes. A `cst816` has one more. Rule `sda_while_scl_high` means an `SDA` change came due while `SCL` was high, so the target left `SDA` where it was and went idle. A release it refused waits for the next `SCL` fall. A release while the part is in reset is not this rule. Its message is `{part} left SDA unmoved because SCL was high at {t_ps} ps, breaking rule sda_while_scl_high, the first time`. [engine.md](engine.md#i2c-targets) describes the hold. A `ws2812` has one more. Rule `bit` means a high, or a low after a high that was in a window, fell outside the WS2812E-1313 times, so that bit was dropped. Its message is `{part} dropped a bit that broke rule bit at {t_ps} ps, the first time`. [engine.md](engine.md#records) has the windows. A `dht22` has one more. Rule `interval` means a start came inside the sensor's 2 s warm-up, or within 2 s of the last start it answered, so the sensor did not answer it. Its message is `{part} did not answer a read that broke rule interval at {t_ps} ps, the first time`. [netlist.md](netlist.md#dht22) has the times.
 
 | `rule` | What broke |
 | --- | --- |
@@ -390,6 +390,7 @@ The message for a dropped transfer is `{part} dropped a transfer that broke rule
 | `pixel_format` | It starts a pixel write while the pixel format is not 16 bits a pixel. |
 | `sda_while_scl_high` | An I2C target's `SDA` change came due while `SCL` was high. The target goes idle. A refused release waits for the next `SCL` fall. A release in reset is not this rule. |
 | `bit` | A `ws2812` high was in neither the WS2812E-1313 T0H window nor its T1H window. That bit is dropped, and its time is the fall that ended the high. The chain reports the first one. |
+| `interval` | A `dht22` start came within 2 s of power-on or of the last start it answered. The sensor does not answer it, and its time is the end of the start's low. |
 
 ## chip.link_miswired
 

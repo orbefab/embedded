@@ -3,22 +3,33 @@
 //! wire type and its [`Row`], which `Model::device` maps its parts to.
 
 pub(crate) mod cst816;
+pub(crate) mod dht22;
 pub(crate) mod pulses_replay;
 pub(crate) mod spi_replay;
 pub mod st77916;
 pub(crate) mod ws2812;
 
 pub use cst816::Cst816;
+pub use dht22::Dht22;
 pub use pulses_replay::{PulseTrain, PulsesReplay};
 pub use spi_replay::{SpiEvent, SpiReplay};
 pub use st77916::St77916;
 pub use ws2812::Ws2812;
 
-use orbe_model::{Event as ModelEvent, Fields, Time, Value};
+use orbe_model::{Device, Event as ModelEvent, Fields, Quantity, Time, Value};
 
 use crate::diagnostic::{Diagnostic, ScheduleRule, ValueRule};
 use crate::name::Ref;
 use crate::netlist::{Event, MIN_GAP_PS};
+
+/// The world quantities a part of the device kind `kind` reads, by its netlist name. A scene
+/// declares each one for every such part. None for a kind that is no device, or reads none.
+pub fn reads(kind: &str) -> &'static [Quantity] {
+    match kind {
+        "dht22" => dht22::model::Dht22::WORLD,
+        _ => &[],
+    }
+}
 
 /// One built-in device kind on the contract: what the engine reads of it for every part.
 #[derive(Debug, PartialEq)]

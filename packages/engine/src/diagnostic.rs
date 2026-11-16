@@ -186,14 +186,18 @@ pub enum ProtocolRule {
     SdaWhileSclHigh,
     /// A bit whose high or low sat outside the timing windows.
     Bit,
+    /// A read that came sooner than the sensor answers one: inside its warm-up after power-on,
+    /// or before its minimum interval after the last read it answered.
+    Interval,
 }
 
 impl ProtocolRule {
-    pub(crate) const ALL: [ProtocolRule; 4] = [
+    pub(crate) const ALL: [ProtocolRule; 5] = [
         ProtocolRule::Command,
         ProtocolRule::PixelFormat,
         ProtocolRule::SdaWhileSclHigh,
         ProtocolRule::Bit,
+        ProtocolRule::Interval,
     ];
 
     /// Its place in [`ALL`](Self::ALL).
@@ -208,6 +212,7 @@ impl ProtocolRule {
             "pixel_format" => Some(ProtocolRule::PixelFormat),
             "sda_while_scl_high" => Some(ProtocolRule::SdaWhileSclHigh),
             "bit" => Some(ProtocolRule::Bit),
+            "interval" => Some(ProtocolRule::Interval),
             _ => None,
         }
     }
@@ -1090,6 +1095,15 @@ impl Diagnostic {
                 rule_text(&ProtocolRule::Bit),
                 at.as_ps()
             ),
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::Interval,
+            } => format!(
+                "{part} did not answer a read that broke rule {} at {} ps, the first time",
+                rule_text(&ProtocolRule::Interval),
+                at.as_ps()
+            ),
             Diagnostic::ChipProtocol { part, at, rule } => format!(
                 "{part} dropped a transfer that broke rule {} at {} ps, the first time",
                 rule_text(rule),
@@ -1673,12 +1687,7 @@ mod tests {
 
     #[test]
     fn a_device_names_each_protocol_rule_as_diagnostics_json_does() {
-        for rule in [
-            ProtocolRule::Command,
-            ProtocolRule::PixelFormat,
-            ProtocolRule::SdaWhileSclHigh,
-            ProtocolRule::Bit,
-        ] {
+        for rule in ProtocolRule::ALL {
             assert_eq!(ProtocolRule::named(&rule_text(&rule)), Some(rule));
         }
         assert_eq!(ProtocolRule::named("glitch"), None);

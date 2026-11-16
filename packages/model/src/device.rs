@@ -1,4 +1,4 @@
-use crate::{Drives, Duty, Levels, Spi, Stop, Time};
+use crate::{Drives, Duty, Levels, Pulses, Quantity, Readings, Spi, Stop, Time};
 
 /// Everything a device remembers: fixed-size plain data with no heap, so a copy of it is a
 /// checkpoint. The host keeps several copies of each part's state and runs, rewinds and commits
@@ -26,6 +26,9 @@ pub trait State: Copy + Send + 'static {
 pub trait Device: State {
     /// What it shows besides its drives. Nothing, unless it says otherwise.
     const SHOWS: Shows = Shows::Nothing;
+    /// The world quantities it reads with [`Cx::world`]. A scene with a part of this device
+    /// declares each one. None, unless it says otherwise.
+    const WORLD: &'static [Quantity] = &[];
     /// Parses the part's logic params. Electrical params never reach the device.
     fn new(params: &Params<'_>) -> Result<Self, Error>;
     /// The first time in `(reached, limit]` where the drives may change or a sample is due.
@@ -128,9 +131,16 @@ pub trait I2cTarget: Device {
 
 /// A device on a pulsed line. The host watches the line, times each level, and calls the device
 /// when a level ends. The device sees the level and how long it held.
+///
+/// A device whose line is [`OPEN_DRAIN`](Self::OPEN_DRAIN) also answers on it: it queues a train
+/// with [`Cx::pulses`], and the host plays it. The host pulls the line low for each low level
+/// and releases it for each high one, and the line rises as its pull-up and its load let it.
 pub trait PulseTarget: Device {
     /// The level the line rests at, and how long it holds that level before it is idle.
     const IDLE: Idle;
+    /// Whether the device pulls its line low through an open drain, ahead of its own outputs in
+    /// the image. It does not, unless it says so.
+    const OPEN_DRAIN: bool = false;
     /// A level that held for `width` picoseconds ended at `at`.
     fn pulse(&mut self, cx: &mut Cx, at: Time, level: bool, width: u64);
     /// The line has held `level`, [`IDLE`](Self::IDLE)'s level, for its time, at `at`. A line
@@ -173,19 +183,44 @@ pub enum Ack {
     No,
 }
 
-/// What a device may do during a call besides change its own state. The host reads it after
-/// every call.
+/// What a device may do during a call besides change its own state, and what it reads of the
+/// world. The host fills it before every call and reads it after.
 ///
-/// [`broke`](Cx::broke) names a rule and the time. The first call wins. [`show`](Cx::show) says
-/// what an LED chain shows changed. [`drew`](Cx::drew) is a pixel write a screen closed.
-#[derive(Clone, Copy, Debug, Default)]
+/// [`world`](Cx::world) reads a quantity the device declares. [`broke`](Cx::broke) names a rule
+/// and the time. The first call wins. [`show`](Cx::show) says what an LED chain shows changed.
+/// [`drew`](Cx::drew) is a pixel write a screen closed. [`pulses`](Cx::pulses) queues a train
+/// on an open-drain line.
+#[derive(Clone, Debug, Default)]
 pub struct Cx {
+    world: Readings,
     broken: Option<(&'static str, Time)>,
     shown: bool,
     drawn: Option<Drawn>,
+    queued: Option<(Time, Pulses)>,
 }
 
 impl Cx {
+    /// A call in which the device reads `world`.
+    pub fn new(world: Readings) -> Cx {
+        Cx {
+            world,
+            ..Cx::default()
+        }
+    }
+
+    /// The value of `quantity`, in its unit, at the call's time: after every change strictly
+    /// before it. In `run_until`, the value holds from the time the device reached to the
+    /// limit, since a change of a quantity it reads stops every run there. Panics on a quantity
+    /// the device does not declare in [`Device::WORLD`].
+    pub fn world(&self, quantity: Quantity) -> f64 {
+        self.world.get(quantity).unwrap_or_else(|| {
+            panic!(
+                "a device reads only a quantity it declares, not {}",
+                quantity.name()
+            )
+        })
+    }
+
     /// The rule `rule` broke at `at`. A later call in this same `Cx` changes nothing. The host
     /// knows each rule by name and stops on one it does not know.
     pub fn broke(&mut self, rule: &'static str, at: Time) {
@@ -210,6 +245,16 @@ impl Cx {
         self.drawn = Some(drawn);
     }
 
+    /// Queues `train` on the device's open-drain line from `start`, after the call's time and
+    /// after the last train it queued has ended. A low level pulls the line low and a high one
+    /// releases it. The line is released after the train, so `train.idle` is high. A call
+    /// queues at most one.
+    pub fn pulses(&mut self, start: Time, train: Pulses) {
+        assert!(self.queued.is_none(), "a call queues at most one train");
+        assert!(train.idle, "an open-drain line is released after its train");
+        self.queued = Some((start, train));
+    }
+
     /// The first rule named in this call, and its time.
     pub fn broken(&self) -> Option<(&'static str, Time)> {
         self.broken
@@ -223,6 +268,11 @@ impl Cx {
     /// The pixel write this call closed.
     pub fn drawn(&self) -> Option<Drawn> {
         self.drawn
+    }
+
+    /// The train this call queued, and its start.
+    pub fn queued(&self) -> Option<&(Time, Pulses)> {
+        self.queued.as_ref()
     }
 }
 

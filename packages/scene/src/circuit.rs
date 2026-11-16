@@ -1331,17 +1331,22 @@ fn world<'a>(scene: &Scene, models: impl Iterator<Item = &'a Value>) -> Option<V
     Some(Value::Object(world))
 }
 
-/// Each quantity a `{"kind": "world", "quantity": ...}` field inside `value` reads.
+/// Each quantity a `{"kind": "world", "quantity": ...}` field inside `value` reads, and each
+/// one a device kind inside it reads.
 fn reads(value: &Value, out: &mut BTreeSet<Quantity>) {
     match value {
         Value::Object(map) => {
-            if map.get("kind").and_then(Value::as_str) == Some("world")
+            let kind = map.get("kind").and_then(Value::as_str);
+            if kind == Some("world")
                 && let Some(quantity) = map
                     .get("quantity")
                     .and_then(Value::as_str)
                     .and_then(Quantity::parse)
             {
                 out.insert(quantity);
+            }
+            if let Some(kind) = kind {
+                out.extend(orbe_engine::device::reads(kind));
             }
             map.values().for_each(|inner| reads(inner, out));
         }

@@ -7,6 +7,7 @@ mod blinker;
 mod board;
 mod button;
 mod cst816;
+mod dht22;
 mod esp32s3;
 mod fade;
 mod i2c;

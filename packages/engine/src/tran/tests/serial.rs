@@ -170,7 +170,7 @@ fn a_landing_delivers_what_its_core_sent_and_stop_delivers_the_rest() {
     let mut actives = Actives::new(&circuit, levels);
     let (mut at, mut committed) = (Time::ZERO, Time::ZERO);
     while at < stop {
-        at = actives.horizon(stop);
+        at = actives.horizon(circuit.netlist.world(), stop);
         let (_, stops) = actives.land(&circuit, at, x, levels, levels, false);
         if stops == 0 {
             continue;

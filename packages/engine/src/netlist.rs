@@ -23,7 +23,9 @@ use crate::name::Name;
 use crate::world::{Quantity, World};
 
 use crate::chip::Ne555;
-use crate::device::{Cst816, Declared, Events, PulsesReplay, Row, SpiReplay, St77916, Ws2812};
+use crate::device::{
+    Cst816, Declared, Dht22, Events, PulsesReplay, Row, SpiReplay, St77916, Ws2812,
+};
 use crate::mcu::{Atmega328p, Esp32s3};
 
 pub use document::Document;
@@ -291,6 +293,7 @@ impl Model {
         };
         match chip {
             Chip::Cst816(dev) => Some((&crate::device::cst816::ROW, &dev.events)),
+            Chip::Dht22(_) => Some((&crate::device::dht22::ROW, &crate::device::NO_EVENTS)),
             Chip::Ws2812(_) => Some((&crate::device::ws2812::ROW, &crate::device::NO_EVENTS)),
             Chip::St77916(_) => Some((&crate::device::st77916::ROW, &crate::device::NO_EVENTS)),
             Chip::SpiReplay(_) => {
@@ -493,6 +496,7 @@ pub enum Chip {
     SpiReplay(Box<SpiReplay>),
     St77916(Box<St77916>),
     Cst816(Box<Cst816>),
+    Dht22(Box<Dht22>),
     Ws2812(Box<Ws2812>),
     PulsesReplay(Box<PulsesReplay>),
     Esp32s3(Box<Esp32s3>),
