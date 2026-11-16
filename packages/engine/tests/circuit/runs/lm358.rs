@@ -10,7 +10,9 @@
 //! that has no limit.
 //!
 //! The circuits are the existing `op-amp-*` netlists. `netlist` writes these nine values
-//! over each op-amp and leaves every other part as the file has it.
+//! over each op-amp and leaves every other part as the file has it. `op-amp-swing` in
+//! the file returns its loads to 2.5 V. Section 5.7 returns RL to V−, so for that one
+//! circuit each load's far end moves to `gnd`.
 
 use std::f64::consts::PI;
 
@@ -52,10 +54,10 @@ const ICC: f64 = 350e-6;
 /// Ampere. IB maximum at 25 °C, −250 nA into the pin.
 const IB_MAX: f64 = 250e-9;
 /// Volt. VOH is at least VS − 1.5 V on the 5 V positive-rail row. Both swing loads are
-/// at least 2 kohm. The circuits return those loads to 2.5 V.
+/// at least 2 kohm, returned to V−.
 const VOH_MIN: f64 = 3.5;
 /// Volt. VOL is at most 20 mV on the 5 V negative-rail row, over 0 °C to 70 °C. Both
-/// swing loads are at most 10 kohm.
+/// swing loads are at most 10 kohm, returned to V−.
 const VOL_MAX: f64 = 0.020;
 /// Ampere. ISC maximum is ±60 mA at VS = 10 V, VO = VS / 2. The short circuit runs at 5 V.
 const ISC_MAX: f64 = 0.060;
@@ -126,8 +128,9 @@ fn transition_high() -> f64 {
     EDGE_HIGH_SHARE * (VCC - SWING_HIGH)
 }
 
+/// The output into `ohm` returned to `gnd`, with the integrator held at `t`.
 fn saturated(t: f64, ohm: f64) -> f64 {
-    (t + RO * 2.5 / ohm) / (1.0 + RO / ohm)
+    t / (1.0 + RO / ohm)
 }
 
 fn softplus(x: f64) -> f64 {
@@ -254,11 +257,13 @@ fn netlist(name: &str) -> Netlist {
     let mut doc: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     for part in doc["parts"].as_array_mut().unwrap() {
-        if part["kind"] != "op_amp" {
-            continue;
+        if part["kind"] == "op_amp" {
+            for &(field, value) in FIELDS {
+                part[field]["value"] = serde_json::json!(value);
+            }
         }
-        for &(field, value) in FIELDS {
-            part[field]["value"] = serde_json::json!(value);
+        if name == "op-amp-swing" && part["kind"] == "resistor" && part["pins"]["b"] == "vref" {
+            part["pins"]["b"] = serde_json::json!("gnd");
         }
     }
     orbe_engine::netlist::parse(&serde_json::to_vec(&doc).unwrap())
@@ -426,7 +431,8 @@ fn the_bias_current_leaves_each_input() {
     );
 }
 
-/// Circuit 2. Both loads meet the 5 V rows, so VOH is at least 3.5 V and VOL is at most 20 mV.
+/// Circuit 2. Both loads return to V− and meet the 5 V rows, so VOH is at least 3.5 V and
+/// VOL is at most 20 mV.
 #[test]
 fn the_output_swings_to_its_rails() {
     let read = operating_point("op-amp-swing");
