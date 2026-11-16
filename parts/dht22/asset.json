@@ -1,0 +1,44 @@
+{
+  "part": "dht22",
+  "source": {
+    "script": "model.py",
+    "sha256": "f768e44c8f7466067cdcbff63d2159f87b532e06823c57c006bb8b28b7410cb0",
+    "bytes": 2621
+  },
+  "files": {
+    "dht22.glb": {
+      "sha256": "9dd9702730caebb7de9b5180d5a24d113d45673251715b062385c036f577d310",
+      "bytes": 19756
+    },
+    "dht22.anchors.json": {
+      "sha256": "f70df30cf9c7c0b0bb8f08b40ddec09be0d8a4aea4d97f8e371fdadd1463f877",
+      "bytes": 512
+    }
+  },
+  "box": {
+    "min": [-7.55, -3.85, -6.5],
+    "max": [7.55, 3.85, 25.1]
+  },
+  "kept_nodes": ["lead-1", "lead-2", "lead-3", "lead-4"],
+  "draw_calls": 6,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 4,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 6,
+      "primitives_out": 6
+    }
+  }
+}

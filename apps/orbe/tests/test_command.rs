@@ -710,6 +710,55 @@ expect @ldr.v > 4.9V    # the dark: 1 Mohm, 4.95 V
     assert_eq!(error["message"], "the scene does not declare humidity");
 }
 
+/// A Nano reads a DHT22 every 2 s, from 2 s on, and prints what it read. A read sends what the
+/// sensor measured as the read before it ended, so a set after the first read shows on the third.
+#[test]
+fn set_temperature_and_humidity_change_a_later_dht22_reading() {
+    let dir = project(
+        "\
+open
+step 2100ms
+expect serial contains \"n=1 t=23.4 h=61.7\"
+set temperature 30
+set humidity 40
+step 2000ms
+expect serial contains \"n=2 t=23.4 h=61.7\"
+step 2000ms
+expect serial contains \"n=3 t=30.0 h=40.0\"
+expect no diagnostics
+",
+    );
+    fs::write(
+        dir.path().join("scene.jsonc"),
+        r#"{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/dht22.ino.hex" },
+    "dht": { "type": "dht22" },
+    "rp": { "type": "resistor-axial", "resistance": "5.1k" },
+  },
+  "wires": [
+    ["nano.5V", "dht.VDD"],
+    ["nano.GND", "dht.GND"],
+    ["nano.D2", "dht.DATA"],
+    ["nano.5V", "rp.a"],
+    ["rp.b", "dht.DATA"],
+    ["nano.5V", "nano.AREF"],
+  ],
+  "world": { "temperature": 23.4, "humidity": 61.7 },
+}
+"#,
+    )
+    .unwrap();
+    fs::copy(
+        common::repo().join("packages/engine/tests/firmware/sketch/dht22.hex"),
+        dir.path().join("build/dht22.ino.hex"),
+    )
+    .unwrap();
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+}
+
 #[test]
 fn a_set_the_table_refuses_is_a_usage_error() {
     for (line, message) in [
