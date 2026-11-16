@@ -7,7 +7,8 @@ use super::decode::Op;
 use crate::bus::Bus;
 
 /// One taken pass of the spin. `sample` is the cycle of the counter read, counted from the call.
-struct Spin {
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Spin {
     pass: u64,
     sample: u64,
     counter: u16,
@@ -32,11 +33,15 @@ struct Spin {
 }
 
 impl Core {
-    pub(super) fn skip_spin<B: Bus>(&mut self, bus: &B, bound: u64, dest: u16) {
+    /// At the [`Op::SpinCall`] of the program's spin `index`, skips the passes that still
+    /// branch and end before `bound`.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn skip_spin<B: Bus>(&mut self, bus: &B, bound: u64, index: u16) {
         if self.cycles >= bound {
             return;
         }
-        let Some(spin) = self.spin_at(dest) else {
+        let Some(&spin) = self.spins.get(usize::from(index)) else {
             return;
         };
         if self.reg(spin.zero) != 0 {
@@ -180,25 +185,53 @@ impl Core {
         })
     }
 
-    fn spin_at(&self, dest: u16) -> Option<Spin> {
-        let call = self.pc;
-        let mut pc = call.wrapping_add(2) & self.pc_mask;
-        let Op::Sub(d0, s0) = self.op(pc) else {
+    fn next_word(&self, pc: u16, words: u16) -> u16 {
+        pc.wrapping_add(words) & self.pc_mask
+    }
+}
+
+/// The decoded table, read while the image loads.
+struct Code<'a> {
+    ops: &'a [Op],
+    pc_mask: u16,
+}
+
+/// Replaces each `CALL` that a spin repeats with an [`Op::SpinCall`]. Returns the spins, in the
+/// order their calls index them.
+pub(super) fn mark(ops: &mut [Op], pc_mask: u16) -> Vec<Spin> {
+    let mut spins = Vec::new();
+    for at in 0..ops.len() {
+        let Op::Call(to) = ops[at] else {
+            continue;
+        };
+        let code = Code { ops, pc_mask };
+        if let Some(spin) = code.spin(at as u16, to)
+            && let Ok(index) = u16::try_from(spins.len())
+        {
+            ops[at] = Op::SpinCall { to, spin: index };
+            spins.push(spin);
+        }
+    }
+    spins
+}
+
+impl Code<'_> {
+    fn op(&self, pc: u16) -> Op {
+        self.ops.get(usize::from(pc)).copied().unwrap_or(Op::Nop)
+    }
+
+    fn next_word(&self, pc: u16, words: u16) -> u16 {
+        pc.wrapping_add(words) & self.pc_mask
+    }
+
+    /// The spin that the `CALL` at `call` to `dest` repeats. The caller subtracts the start from
+    /// the return, compares it with the limit, and branches back to the call while it is below.
+    fn spin(&self, call: u16, dest: u16) -> Option<Spin> {
+        let mut pc = self.next_word(call, 2);
+        let Op::SubChain(d0, s0) = self.op(pc) else {
             return None;
         };
-        if d0 > 28 || s0 > 28 {
-            return None;
-        }
-        pc = self.next_word(pc, 1);
-        for i in 1..4u8 {
-            let Op::Sbc(d, s) = self.op(pc) else {
-                return None;
-            };
-            if d != d0 + i || s != s0 + i {
-                return None;
-            }
-            pc = self.next_word(pc, 1);
-        }
+        pc = self.next_word(pc, 4);
         let Op::Cpi(d, lo) = self.op(pc) else {
             return None;
         };
@@ -361,16 +394,10 @@ impl Core {
         pc = self.next_word(pc, 1);
         cycles += 1;
         let loop_at = pc;
-        if self.op(pc) != Op::Add(d0, d0) {
+        if self.op(pc) != Op::AddChain(d0, d0) {
             return None;
         }
-        pc = self.next_word(pc, 1);
-        for i in 1..4u8 {
-            if self.op(pc) != Op::Adc(d0 + i, d0 + i) {
-                return None;
-            }
-            pc = self.next_word(pc, 1);
-        }
+        pc = self.next_word(pc, 4);
         if self.op(pc) != Op::Dec(shift_reg) {
             return None;
         }
@@ -414,10 +441,6 @@ impl Core {
             count,
             shift_reg,
         })
-    }
-
-    fn next_word(&self, pc: u16, words: u16) -> u16 {
-        pc.wrapping_add(words) & self.pc_mask
     }
 }
 

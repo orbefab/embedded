@@ -7,8 +7,15 @@ use super::execute::{Ptr, Update};
 use crate::IO_BASE;
 
 /// One instruction with its operands extracted. A target is the absolute word address. `skip` is
-/// the length, in words, of the instruction a skip passes over. `Countdown` is the `BRNE` that
-/// closes a [`Countdown`] loop. It is last, so every other op keeps its tag.
+/// the length, in words, of the instruction a skip passes over.
+///
+/// The ops from `Countdown` on are shapes the table finds when the image loads. Each steps as the
+/// instruction at its word, and a free run may run its whole shape at once. They are last, so
+/// every other op keeps its tag. `Countdown` is the `BRNE` that closes a [`Countdown`] loop.
+/// `AddChain`, `SubChain` and `CpChain` are an `ADD`, `SUB` or `CP` followed by three `ADC`,
+/// `SBC` or `CPC`, each on the next destination and source register. `SubiChain` is a `SUBI`
+/// followed by three `SBCI` on the next registers, with the four constants, low first.
+/// `SpinCall` is a `CALL` that a `delay` spin repeats, and `spin` indexes the program's spins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Op {
     Nop,
@@ -84,9 +91,14 @@ pub(super) enum Op {
     Break,
     Unknown(u16),
     Countdown(Countdown),
+    AddChain(u8, u8),
+    SubChain(u8, u8),
+    CpChain(u8, u8),
+    SubiChain(u8, [u8; 4]),
+    SpinCall { to: u16, spin: u16 },
 }
 
-// `Countdown` carries its loop's shape in the op without growing the table.
+// The shapes ride in the op without growing the table.
 const _: () = assert!(size_of::<Op>() == 6);
 
 /// The op at each word of `flash` a program counter reaches. A word past the image reads as 0,
@@ -107,50 +119,55 @@ pub(super) fn table(flash: &[u16], pc_mask: u16) -> Vec<Op> {
             ops[at] = Op::Countdown(countdown);
         }
     }
+    // A head is never a chain's later word, so marking one head leaves the others to find.
+    for at in 0..ops.len() {
+        if let Some(chain) = chain(&ops, at as u16, pc_mask) {
+            ops[at] = chain;
+        }
+    }
     ops
 }
 
-/// One byte per word of `ops`. `1` is `ADD` plus three `ADC`, `2` is `SUB` plus three `SBC`,
-/// `3` is `CP` plus three `CPC`, and `4` is `SUBI` plus three `SBCI`. `0` is not that chain.
-/// The run loop reads the byte instead of matching the three following words again.
-pub(super) fn chain_tags(ops: &[Op], pc_mask: u16) -> Vec<u8> {
-    (0..ops.len())
-        .map(|at| chain_kind(ops, at as u16, pc_mask))
-        .collect()
-}
-
-fn chain_kind(ops: &[Op], pc: u16, pc_mask: u16) -> u8 {
-    match ops.get(usize::from(pc)).copied().unwrap_or(Op::Nop) {
-        Op::Add(d, r) if d <= 28 && r <= 28 && reg_chain(ops, pc, d, r, pc_mask, 0) => 1,
-        Op::Sub(d, r) if d <= 28 && r <= 28 && reg_chain(ops, pc, d, r, pc_mask, 1) => 2,
-        Op::Cp(d, r) if d <= 28 && r <= 28 && reg_chain(ops, pc, d, r, pc_mask, 2) => 3,
-        Op::Subi(d, _) if d <= 28 && subi_chain(ops, pc, d, pc_mask) => 4,
-        _ => 0,
+/// The chain whose head is at `pc`. The registers it touches stay under 32.
+fn chain(ops: &[Op], pc: u16, pc_mask: u16) -> Option<Op> {
+    let tail = |i: u8| word_at(ops, pc.wrapping_add(u16::from(i)) & pc_mask);
+    let head = word_at(ops, pc);
+    if let Op::Subi(d, k0) = head {
+        let mut ks = [k0, 0, 0, 0];
+        for i in 1..4u8 {
+            match tail(i) {
+                Op::Sbci(dd, k) if d <= 28 && dd == d + i => ks[usize::from(i)] = k,
+                _ => return None,
+            }
+        }
+        return Some(Op::SubiChain(d, ks));
     }
+    let (Op::Add(d, r) | Op::Sub(d, r) | Op::Cp(d, r)) = head else {
+        return None;
+    };
+    if d > 28 || r > 28 {
+        return None;
+    }
+    for i in 1..4u8 {
+        let pair = match (head, tail(i)) {
+            (Op::Add(..), Op::Adc(dd, rr))
+            | (Op::Sub(..), Op::Sbc(dd, rr))
+            | (Op::Cp(..), Op::Cpc(dd, rr)) => (dd, rr),
+            _ => return None,
+        };
+        if pair != (d + i, r + i) {
+            return None;
+        }
+    }
+    Some(match head {
+        Op::Add(..) => Op::AddChain(d, r),
+        Op::Sub(..) => Op::SubChain(d, r),
+        _ => Op::CpChain(d, r),
+    })
 }
 
 fn word_at(ops: &[Op], addr: u16) -> Op {
     ops.get(usize::from(addr)).copied().unwrap_or(Op::Nop)
-}
-
-/// `kind` 0 is `ADC`, 1 is `SBC`, 2 is `CPC`.
-fn reg_chain(ops: &[Op], pc: u16, d: u8, r: u8, pc_mask: u16, kind: u8) -> bool {
-    (1..4u16).all(|i| {
-        let pair = match (kind, word_at(ops, pc.wrapping_add(i) & pc_mask)) {
-            (0, Op::Adc(dd, rr)) | (1, Op::Sbc(dd, rr)) | (2, Op::Cpc(dd, rr)) => (dd, rr),
-            _ => return false,
-        };
-        pair.0 == d + i as u8 && pair.1 == r + i as u8
-    })
-}
-
-fn subi_chain(ops: &[Op], pc: u16, d: u8, pc_mask: u16) -> bool {
-    (1..4u16).all(|i| {
-        matches!(
-            word_at(ops, pc.wrapping_add(i) & pc_mask),
-            Op::Sbci(dd, _) if dd == d + i as u8
-        )
-    })
 }
 
 /// A loop of `NOP`s and one counter decrement, closed by a `BRNE` `back` words after its first
@@ -258,6 +275,10 @@ macro_rules! free_op {
             | Op::Brbs { .. }
             | Op::Brbc { .. }
             | Op::Countdown(_)
+            | Op::AddChain(..)
+            | Op::SubChain(..)
+            | Op::CpChain(..)
+            | Op::SubiChain(..)
             | Op::Jmp(_)
             | Op::Ijmp
             | Op::Bst { .. }
@@ -293,6 +314,7 @@ macro_rules! bus_op {
             | Op::Push(_)
             | Op::Rcall(_)
             | Op::Call(_)
+            | Op::SpinCall { .. }
             | Op::Icall
             | Op::Ret
             | Op::Reti
@@ -320,12 +342,14 @@ impl Op {
         }
     }
 
-    /// [`Core::execute_steady`](super::Core::execute_steady) may run the op.
+    /// [`Core::execute_steady`](super::Core::execute_steady) may run the op, or for
+    /// [`Op::SpinCall`], skip passes of its spin.
     #[inline(always)]
     pub(super) fn may_be_steady(self) -> bool {
         matches!(
             self,
             Op::In { .. }
+                | Op::SpinCall { .. }
                 | Op::Lds { .. }
                 | Op::Sbic { .. }
                 | Op::Sbis { .. }
@@ -337,7 +361,7 @@ impl Op {
     /// The instruction's length in flash words.
     fn words(self) -> u8 {
         match self {
-            Op::Lds { .. } | Op::Sts { .. } | Op::Jmp(_) | Op::Call(_) => 2,
+            Op::Lds { .. } | Op::Sts { .. } | Op::Jmp(_) | Op::Call(_) | Op::SpinCall { .. } => 2,
             _ => 1,
         }
     }

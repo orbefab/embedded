@@ -20,6 +20,7 @@ use std::sync::Arc;
 use crate::bus::Bus;
 use decode::{Countdown, Op};
 use execute::SteadyRun;
+use spin::Spin;
 
 /// What the core does between instructions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,8 +48,7 @@ pub struct SpmNote {
 pub struct Program {
     flash: Arc<[u16]>,
     ops: Arc<[Op]>,
-    /// Four-byte add and subtract chains, one tag per word of `ops`.
-    chains: Arc<[u8]>,
+    spins: Arc<[Spin]>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,8 +59,8 @@ pub struct Core {
     flash: Arc<[u16]>,
     /// `flash` decoded, one op per word up to the program counter's reach.
     ops: Arc<[Op]>,
-    /// Four-byte add and subtract chains, one tag per word of `ops`.
-    chains: Arc<[u8]>,
+    /// The `delay` spins of `ops`, which each [`Op::SpinCall`] indexes.
+    spins: Arc<[Spin]>,
     /// Flash size in words, minus one.
     pc_mask: u16,
     /// Stack pointer. `SPL`/`SPH` on the bus read and write this word.
@@ -100,7 +100,7 @@ impl Core {
             pc: 0,
             flash: Arc::from([]),
             ops: Arc::from([]),
-            chains: Arc::from([]),
+            spins: Arc::from([]),
             pc_mask,
             sp,
             spm: Vec::new(),
@@ -120,10 +120,10 @@ impl Core {
     }
 
     pub fn set_flash(&mut self, flash: Arc<[u16]>) {
-        let ops = decode::table(&flash, self.pc_mask);
-        let chains = decode::chain_tags(&ops, self.pc_mask);
+        let mut ops = decode::table(&flash, self.pc_mask);
+        let spins = spin::mark(&mut ops, self.pc_mask);
         self.ops = Arc::from(ops);
-        self.chains = Arc::from(chains);
+        self.spins = Arc::from(spins);
         self.flash = flash;
         self.pc = 0;
     }
@@ -132,14 +132,14 @@ impl Core {
         Program {
             flash: Arc::clone(&self.flash),
             ops: Arc::clone(&self.ops),
-            chains: Arc::clone(&self.chains),
+            spins: Arc::clone(&self.spins),
         }
     }
 
     pub fn set_program(&mut self, program: Program) {
         self.flash = program.flash;
         self.ops = program.ops;
-        self.chains = program.chains;
+        self.spins = program.spins;
         self.pc = 0;
     }
 
@@ -194,7 +194,7 @@ impl Core {
     pub fn shares_image(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.flash, &other.flash)
             && Arc::ptr_eq(&self.ops, &other.ops)
-            && Arc::ptr_eq(&self.chains, &other.chains)
+            && Arc::ptr_eq(&self.spins, &other.spins)
     }
 
     pub fn spm_notes(&self) -> &[SpmNote] {
@@ -301,19 +301,10 @@ impl Core {
             }
         }
         if !op.may_be_steady() {
-            // A `delay` spin calls a routine that reads a pure counter, subtracts a saved
-            // start, and branches back while the difference is still under a limit. The passes
-            // that still branch are cycles only. The pass that exits, or that would cross
-            // `bound`, runs so its registers and the stack are the ones a step would leave.
-            if let Op::Call(dest) = op
-                && matches!(self.op(self.pc.wrapping_add(2) & self.pc_mask), Op::Sub(..))
-            {
-                self.skip_spin(bus, bound, dest);
-            }
             return None;
         }
         let last = self.visit();
-        let varies = match self.execute_steady(bus, self.pc, op) {
+        let varies = match self.execute_steady(bus, self.pc, op, bound) {
             SteadyRun::Stop => return None,
             SteadyRun::Same => false,
             SteadyRun::Varies => true,
@@ -366,7 +357,7 @@ impl Core {
                 last = self.visit();
             }
             before = self.cycles;
-            match self.execute_steady(bus, self.pc, self.op(self.pc)) {
+            match self.execute_steady(bus, self.pc, self.op(self.pc), bound) {
                 SteadyRun::Stop => return None,
                 SteadyRun::Varies => varies = true,
                 SteadyRun::Same => {}
@@ -377,18 +368,13 @@ impl Core {
     /// Runs `op`, which [`Op::is_free`], in a run that ends at cycle `bound`. When a
     /// [`Countdown`]'s `BRNE` branches back to the head before `bound`, it jumps all but the last
     /// of the passes that end before `bound` and leave the counter above zero, and the last one
-    /// runs. With fewer than two passes before `bound` it refuses before it reads the counter. The
-    /// jump sits in this op's arm so that no other op pays for it.
+    /// runs. With fewer than two passes before `bound` it refuses before it reads the counter. A
+    /// chain runs its four instructions as one op when they end strictly before `bound`. Landing
+    /// on `bound` is the op `run_free` retires on its own, and a whole chain would hand it four
+    /// cycles. Each shape's check sits in its own op's arm so that no other op pays for it.
     #[inline(always)]
     fn execute_in_run(&mut self, pc: u16, op: Op, bound: u64) {
-        // Four cycles must end strictly before `bound`. Landing on `bound` is the op
-        // `run_free` retires on its own, and a fused chunk would hand it four cycles.
-        if bound.saturating_sub(self.cycles) > 4
-            && matches!(op, Op::Add(..) | Op::Sub(..) | Op::Cp(..) | Op::Subi(..))
-            && self.fuse_tagged(pc, op)
-        {
-            return;
-        }
+        let whole = |core: &Self| bound.saturating_sub(core.cycles) > 4;
         match op {
             Op::Countdown(countdown) => {
                 self.execute_free(pc, op);
@@ -400,6 +386,10 @@ impl Core {
                     self.jump_passes(countdown, (bound - 1 - self.cycles) / pass);
                 }
             }
+            Op::AddChain(d, r) if whole(self) => self.run_add_chain(pc, d, r),
+            Op::SubChain(d, r) if whole(self) => self.run_sub_chain(pc, d, r, true),
+            Op::CpChain(d, r) if whole(self) => self.run_sub_chain(pc, d, r, false),
+            Op::SubiChain(d, ks) if whole(self) => self.run_subi_chain(pc, d, ks),
             _ => self.execute_free(pc, op),
         }
     }
