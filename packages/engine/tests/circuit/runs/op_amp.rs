@@ -143,6 +143,20 @@ fn the_bias_current_leaves_each_input() {
     );
 }
 
+/// Circuit 1, second channel. `u2` is a follower on its own 5 V supply whose `in_p` sits behind
+/// 1 Mohm from 4.95 V, within the 0.8 V headroom of `vcc`. The bias gate is
+/// `sg((5 - 0.8 - 4.95) / 0.05)`, about 3e-7, so the bias current falls below a thousandth of
+/// `Ib`, and 1 Mohm carries little more than the node gmin.
+#[test]
+fn the_bias_current_turns_off_near_the_positive_rail() {
+    let read = operating_point("op-amp-bias");
+    let on = -read("#rin.i");
+    let off = -read("#rinh.i") + GMIN * read("#net.inh");
+    eprintln!("op-amp-bias: bias at 2.5 V {on:e} A, at 4.95 V {off:e} A");
+    assert!(on >= 0.99 * IB, "{on}");
+    assert!(off.abs() <= 1e-3 * IB, "{off}");
+}
+
 /// Circuit 2. Overdriven open loop into 10 kohm and 2 kohm to 2.5 V. The datasheet's bands are VOH at
 /// least 4.900 V and VOL at most 0.180 V into 10 kohm, and 4.700 V and 0.300 V into 2 kohm.
 #[test]

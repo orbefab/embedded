@@ -47,6 +47,7 @@ The compiler makes each kind answer every method. It cannot tell whether the ans
 - `conduction` says how the part carries a steady current. `orbe check` follows it to find an LED with nothing in series to limit its current.
 - `dc_paths` lists the pin pairs that conduct at DC. A pair left out makes `net.floating` report a net that is driven.
 - `quantities` and `observe` must agree in order and count.
+- `charges` returns an `OwnedCapacitor` per capacitor the part owns. Set `sized_by_kind` to `true` on one whose value is a constant of the kind's law, such as the op-amp's integrator, and `false` on one a netlist field sets. A debug run warns when a capacitor marked `true` is small enough that Newton's current floor reads as step error.
 - A setting from a session goes through `level` or `serial`. A switch's contact is the one setting with its own arm, in `packages/engine/src/session/input.rs`.
 
 ## Add the tests
