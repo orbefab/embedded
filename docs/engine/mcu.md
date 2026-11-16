@@ -59,7 +59,7 @@ A `Fault` ends the run. A `Note` is a warning, and the run goes on. Each is a co
 
 ## Dispatch
 
-The table's `Mcu` holds one chip of any kind, and each call is a `match` on the kind. No call on a chip goes through a `dyn`, and the chip runs its instructions inside `run_until`, in its own crate.
+The table's `Mcu` holds one chip of any kind, and each call is a `match` on the kind. No call on a chip goes through a `dyn`, and the chip runs its instructions inside `run_until`, in its own crate. The engine calls `run_until` once per stop from another crate, and the release build does not inline across crates on its own, so a chip marks its `run_until` `#[inline]`. Without it the ESP32-S3's `esp32s3-pattern` run is about 7% slower.
 
 ## A new microcontroller
 

@@ -261,6 +261,7 @@ impl Mcu for Bridge {
     const USARTS: &'static [&'static str] = &["USB_SERIAL_JTAG"];
     const SENDS: bool = true;
 
+    #[inline]
     fn run_until(&mut self, limit: Time) -> Option<Stop> {
         if self.held.is_some() {
             return self.take_held(limit);

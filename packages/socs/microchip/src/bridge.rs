@@ -165,6 +165,7 @@ impl Mcu for Bridge {
     const USARTS: &'static [&'static str] = &["USART0"];
     const TWI: bool = true;
 
+    #[inline]
     fn run_until(&mut self, limit: Time) -> Option<Stop> {
         let halt = self.timeline.run_until(self.cycle(limit))?;
         self.refresh();
