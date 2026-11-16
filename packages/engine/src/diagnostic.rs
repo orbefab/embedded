@@ -68,6 +68,8 @@ pub enum WorldRule {
     Undeclared,
     /// A B-equation curve reads a quantity other than temperature.
     Temperature,
+    /// A power curve reads a quantity whose range goes below 0, where `w / x` is negative.
+    NonNegative,
 }
 
 /// Why `firmware` is not a program for the part's flash.
@@ -1063,6 +1065,11 @@ impl Diagnostic {
                     WorldRule::Temperature => {
                         format!("{at} is a B equation, which reads temperature, not {name}")
                     }
+                    WorldRule::NonNegative => {
+                        format!(
+                            "{at} is a power curve, which reads a quantity that does not go below 0, not {name}"
+                        )
+                    }
                 }
             }
             Diagnostic::NetlistWaveform {
@@ -1679,9 +1686,14 @@ fn rule_text(rule: &ProtocolRule) -> String {
         .expect("a rule serializes to its name")
 }
 
-/// The same characters `data.value` uses. `Display` for a subnormal is hundreds of digits.
+/// The same characters `data.value` uses. `Display` for a subnormal is hundreds of digits. A
+/// value that is not finite, which `data.value` holds as `null`, is `NaN`, `inf` or `-inf`.
 pub(crate) fn number_text(value: f64) -> String {
-    serde_json::to_string(&value).expect("a netlist value is a finite number")
+    if value.is_finite() {
+        serde_json::to_string(&value).expect("a finite number serializes")
+    } else {
+        value.to_string()
+    }
 }
 
 fn over_rating(excursion: &Excursion, unit: &str) -> String {

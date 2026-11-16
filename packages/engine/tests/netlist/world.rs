@@ -263,3 +263,94 @@ fn a_world_value_in_another_unit_is_netlist_unit() {
     let json = document(&format!(r#"{{ "temperature": {} }}"#, value(25.0, "K")), "");
     assert_eq!(one(&json).0, "netlist.unit");
 }
+
+fn temperature_power(exponent: f64) -> String {
+    format!(
+        r#"{{ "kind": "power", "x": {}, "y": {}, "exponent": {}, "max": {} }}"#,
+        value(10.0, "degC"),
+        value(1000.0, "ohm"),
+        value(exponent, "1"),
+        value(1e6, "ohm")
+    )
+}
+
+#[test]
+fn a_power_curve_on_a_quantity_that_goes_below_0_is_netlist_world() {
+    let to_zero = format!(
+        r#"{{ "kind": "steps", "initial": {}, "events": [{{ "t_ps": 5000, "level": {} }}] }}"#,
+        value(25.0, "degC"),
+        value(0.0, "degC")
+    );
+    let cold = format!(
+        r#"{{ "kind": "steps", "initial": {}, "events": [] }}"#,
+        value(-40.0, "degC")
+    );
+    for (schedule, exponent) in [(to_zero, 2.0), (cold, -0.7)] {
+        let json = document(
+            &format!(r#"{{ "temperature": {schedule} }}"#),
+            &resistor(&driven("temperature", &temperature_power(exponent))),
+        );
+        assert_eq!(
+            one(&json),
+            (
+                "netlist.world".into(),
+                "#r1 resistance.curve.kind is a power curve, which reads a quantity that does not go below 0, not temperature".into()
+            ),
+            "exponent {exponent}"
+        );
+    }
+}
+
+#[test]
+fn a_power_curve_that_is_not_a_number_at_an_end_is_netlist_value_finite() {
+    let zero = format!(
+        r#"{{ "kind": "power", "x": {}, "y": {}, "exponent": {}, "max": {} }}"#,
+        value(10.0, "lx"),
+        value(0.0, "ohm"),
+        value(-1.0, "1"),
+        value(1e6, "ohm")
+    );
+    let json = document(
+        &format!(r#"{{ "light": {} }}"#, value(300.0, "lx")),
+        &resistor(&driven("light", &zero)),
+    );
+    let found: Vec<String> = messages(&json).into_iter().map(|(_, m)| m).collect();
+    assert_eq!(
+        found,
+        [
+            "#r1 resistance.curve at 0.0 lx is NaN; it must be finite",
+            "#r1 resistance.curve at 100000.0 lx is 0.0; it must be positive",
+        ]
+    );
+}
+
+#[test]
+fn a_rejected_world_value_is_the_only_diagnostic_for_a_part_that_reads_it() {
+    let same = format!(
+        r#"{{ "kind": "steps", "initial": {}, "events": [{{ "t_ps": 5000, "level": {} }}] }}"#,
+        value(300.0, "lx"),
+        value(300.0, "lx")
+    );
+    let json = document(
+        &format!(r#"{{ "light": {same} }}"#),
+        &resistor(&driven("light", &power())),
+    );
+    assert_eq!(
+        one(&json),
+        (
+            "netlist.schedule".into(),
+            "#world.light events[0] does not change the level".into()
+        )
+    );
+    let json = document(
+        &format!(r#"{{ "light": {} }}"#, value(-5.0, "lx")),
+        &resistor(&driven("light", &power())),
+    );
+    assert_eq!(
+        one(&json),
+        (
+            "netlist.value".into(),
+            "#world.light value is -5.0 lx; light must be from 0.0 to 100000.0 lx".into()
+        )
+    );
+}

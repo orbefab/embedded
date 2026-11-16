@@ -7,6 +7,7 @@ use serde::de::{self, Deserializer};
 
 use super::{Curve, Driven, Param, Quantity, World};
 use crate::diagnostic::{Diagnostic, ValueRule, WorldRule};
+use crate::finite::Finite;
 use crate::name::Ref;
 use crate::netlist::json::waveform::{ObjectVisitor, WirePosition};
 use crate::netlist::json::{FRACTION_UNIT, WireValue, resolve_schedule, resolve_value};
@@ -122,9 +123,16 @@ pub(crate) fn resolve_world(wire: Option<WireWorld>, out: &mut Vec<Diagnostic>) 
             )
             .map(|(initial, events)| Schedule { initial, events }),
         };
-        if let Some(schedule) = schedule {
-            world.declare(quantity, schedule);
-        }
+        // A rejected field still declares its quantity, so a part that reads it reports only
+        // its own rules. Parse fails on the field's diagnostic, so no run sees the default.
+        let schedule = schedule.unwrap_or_else(|| Schedule {
+            initial: Value {
+                si: Finite::new(quantity.row().default).expect("a row's default is finite"),
+                source: Source::User,
+            },
+            events: Vec::new(),
+        });
+        world.declare(quantity, schedule);
     }
     world
 }
@@ -266,6 +274,15 @@ fn resolve_curve(
             let y = value("y", unit, y);
             let exponent = value("exponent", FRACTION_UNIT, exponent);
             let max = value("max", unit, max);
+            if quantity.row().min < 0.0 {
+                out.push(Diagnostic::NetlistWorld {
+                    part: Some(part.clone()),
+                    field: at("kind"),
+                    name: quantity.name().to_string(),
+                    rule: WorldRule::NonNegative,
+                });
+                return None;
+            }
             if x_number <= 0.0 {
                 out.push(Diagnostic::NetlistValue {
                     part: part.clone(),

@@ -69,13 +69,14 @@ impl Driven {
     }
 }
 
-/// How a field follows a world value `w`. Each curve is monotonic in `w`, so over a range its
-/// values lie between its values at the two ends. `x` is in the quantity's unit, and `y` and
-/// `max` in the field's.
+/// How a field follows a world value `w`. Each curve is monotonic in `w` over the range of a
+/// quantity it may read, so over that range its values lie between its values at the two ends.
+/// `x` is in the quantity's unit, and `y` and `max` in the field's.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Curve {
     /// `y * (w / x)^exponent`, at most `max`. A light-dependent resistor, whose resistance is
-    /// `max` in the dark.
+    /// `max` in the dark. It reads only a quantity that does not go below 0, so `w / x` is not
+    /// negative.
     Power {
         x: Value,
         y: Value,
@@ -106,7 +107,9 @@ impl Curve {
                 max,
             } => {
                 let y = y.si.get() * libm::pow(w / x.si.get(), exponent.si.get());
-                y.min(max.si.get())
+                let max = max.si.get();
+                // Not `f64::min`, which returns `max` for a NaN and so hides it from parse.
+                if y > max { max } else { y }
             }
             Curve::Beta { x, y, beta } => {
                 let inverse = 1.0 / (w + ZERO_C) - 1.0 / (x.si.get() + ZERO_C);
