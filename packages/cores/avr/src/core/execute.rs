@@ -547,6 +547,117 @@ impl Core {
         self.sreg & (1 << bit) != 0
     }
 
+    /// A four-byte add or subtract on consecutive registers: one dispatch, and flags
+    /// only from the last byte. `false` when `op` is not the head of that chain.
+    #[inline(always)]
+    pub(super) fn fuse_word(&mut self, pc: u16, op: Op) -> bool {
+        match op {
+            Op::Add(d, r) if d <= 28 && r <= 28 && self.reg_chain(pc, d, r, 0) => {
+                self.run_add_chain(pc, d, r);
+                true
+            }
+            Op::Sub(d, r) if d <= 28 && r <= 28 && self.reg_chain(pc, d, r, 1) => {
+                self.run_sub_chain(pc, d, r, true);
+                true
+            }
+            Op::Cp(d, r) if d <= 28 && r <= 28 && self.reg_chain(pc, d, r, 2) => {
+                self.run_sub_chain(pc, d, r, false);
+                true
+            }
+            Op::Subi(d, k) if d <= 28 && self.subi_chain(pc, d) => {
+                self.run_subi_chain(pc, d, k);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// `kind` 0 is `ADC`, 1 is `SBC`, 2 is `CPC`.
+    fn reg_chain(&self, pc: u16, d: u8, r: u8, kind: u8) -> bool {
+        (1..4u16).all(|i| {
+            let op = self.op(pc.wrapping_add(i) & self.pc_mask);
+            let pair = match (kind, op) {
+                (0, Op::Adc(dd, rr)) | (1, Op::Sbc(dd, rr)) | (2, Op::Cpc(dd, rr)) => (dd, rr),
+                _ => return false,
+            };
+            pair.0 == d + i as u8 && pair.1 == r + i as u8
+        })
+    }
+
+    fn subi_chain(&self, pc: u16, d: u8) -> bool {
+        (1..4u16).all(|i| {
+            matches!(self.op(pc.wrapping_add(i) & self.pc_mask), Op::Sbci(dd, _) if dd == d + i as u8)
+        })
+    }
+
+    #[inline(never)]
+    fn run_add_chain(&mut self, pc: u16, d: u8, r: u8) {
+        let mut carry = 0u8;
+        for i in 0..3u8 {
+            let rd = self.at(d + i);
+            let rr = self.at(r + i);
+            let result = rd.wrapping_add(rr).wrapping_add(carry);
+            self.put(d + i, result);
+            carry = add_carry_bit(rd, rr, result);
+        }
+        let rd = self.at(d + 3);
+        let rr = self.at(r + 3);
+        let result = rd.wrapping_add(rr).wrapping_add(carry);
+        self.put(d + 3, result);
+        self.add_flags(rd, rr, result);
+        self.finish(pc.wrapping_add(4), 4);
+    }
+
+    /// `store` is `SUB`/`SBC`. `CP`/`CPC` leaves the registers alone.
+    #[inline(never)]
+    fn run_sub_chain(&mut self, pc: u16, d: u8, r: u8, store: bool) {
+        // A later byte can read a register an earlier byte wrote, so each source is read in order.
+        self.run_sub_bytes(pc, d, |core, i| core.at(r + i), store);
+    }
+
+    #[inline(never)]
+    fn run_subi_chain(&mut self, pc: u16, d: u8, k0: u8) {
+        let mut ks = [k0, 0, 0, 0];
+        for i in 1..4u16 {
+            let Op::Sbci(_, k) = self.op(pc.wrapping_add(i) & self.pc_mask) else {
+                return;
+            };
+            ks[i as usize] = k;
+        }
+        self.run_sub_bytes(pc, d, |_, i| ks[usize::from(i)], true);
+    }
+
+    fn run_sub_bytes(
+        &mut self,
+        pc: u16,
+        d: u8,
+        mut rr_at: impl FnMut(&Self, u8) -> u8,
+        store: bool,
+    ) {
+        let mut cin = false;
+        let mut zin = false;
+        for i in 0..3u8 {
+            let rd = self.at(d + i);
+            let rr = rr_at(self, i);
+            let result = rd.wrapping_sub(rr).wrapping_sub(u8::from(cin));
+            if store {
+                self.put(d + i, result);
+            }
+            cin = sub_carry_bit(rd, rr, result);
+            let z_new = result == 0;
+            zin = if i == 0 { z_new } else { z_new && zin };
+        }
+        let rd = self.at(d + 3);
+        let rr = rr_at(self, 3);
+        let result = rd.wrapping_sub(rr).wrapping_sub(u8::from(cin));
+        if store {
+            self.put(d + 3, result);
+        }
+        self.set_flag_bit(1, zin);
+        self.sub_flags(rd, rr, result, true);
+        self.finish(pc.wrapping_add(4), 4);
+    }
+
     fn set_flag_bit(&mut self, bit: u8, value: bool) {
         if value {
             self.sreg |= 1 << bit;
@@ -635,6 +746,20 @@ impl Core {
         let keep = self.sreg & (I | T | H | S | V | N);
         self.sreg = keep | (z << 1) | c;
     }
+}
+
+fn add_carry_bit(rd: u8, rr: u8, result: u8) -> u8 {
+    let rd7 = rd >> 7;
+    let rr7 = rr >> 7;
+    let r7 = result >> 7;
+    (rd7 & rr7) | (rr7 & (1 - r7)) | ((1 - r7) & rd7)
+}
+
+fn sub_carry_bit(rd: u8, rr: u8, result: u8) -> bool {
+    let rd7 = rd >> 7;
+    let rr7 = rr >> 7;
+    let r7 = result >> 7;
+    (((1 - rd7) & rr7) | (rr7 & r7) | (r7 & (1 - rd7))) != 0
 }
 
 fn signed_pair(rd: u8, rr: u8) -> u16 {

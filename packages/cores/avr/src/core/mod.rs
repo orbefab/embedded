@@ -348,6 +348,11 @@ impl Core {
     /// jump sits in this op's arm so that no other op pays for it.
     #[inline(always)]
     fn execute_in_run(&mut self, pc: u16, op: Op, bound: u64) {
+        // Four cycles must end strictly before `bound`. Landing on `bound` is the op
+        // `run_free` retires on its own, and a fused chunk would hand it four cycles.
+        if bound.saturating_sub(self.cycles) > 4 && self.fuse_word(pc, op) {
+            return;
+        }
         match op {
             Op::Countdown(countdown) => {
                 self.execute_free(pc, op);
