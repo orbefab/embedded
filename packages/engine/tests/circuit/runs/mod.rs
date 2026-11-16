@@ -16,6 +16,7 @@ mod lm358;
 mod ne555;
 mod ngspice;
 mod op_amp;
+mod op_amp_sheet;
 mod regulator;
 mod relay;
 mod run;
