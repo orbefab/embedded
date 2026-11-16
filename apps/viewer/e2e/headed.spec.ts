@@ -43,6 +43,7 @@ test.describe("live session", () => {
     await waitState(page, "paused");
     await page.waitForTimeout(800);
     expect(await textOf(page, "time")).toBe("t = 0.000000 s");
+    expect(await page.locator('[data-testid="world"]').count()).toBe(0);
     await shot(page, "headed-opened");
   });
 

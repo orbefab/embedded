@@ -26,7 +26,8 @@ function call(...args) {
 
 let opened = { ok: false, error: { message: `No orbe at ${orbe}` }, data: {} };
 if (orbe !== "" && existsSync(orbe)) {
-  opened = call("open", "blocks/nano-button-led/scene.jsonc", "--headed", "--no-browser");
+  const scene = process.env.ORBE_SCENE ?? "blocks/nano-button-led/scene.jsonc";
+  opened = call("open", scene, "--headed", "--no-browser");
 }
 mkdirSync(dirname(sessionPath), { recursive: true });
 writeFileSync(

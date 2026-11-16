@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::Files;
 use crate::command::{Command, spec};
-use crate::live::{Channels, FrameState, Live, Pace, Sample};
+use crate::live::{Channels, FrameState, Live, Pace, Sample, WorldQuantity};
 use crate::reply::{Code, Data, Envelope, Error, Reply};
 
 /// `play` advances this much simulated time per tick at most, one tick of wall time at speed 1,
@@ -21,7 +21,7 @@ use crate::reply::{Code, Data, Envelope, Error, Reply};
 pub const TICK: Duration = Duration::from_millis(16);
 
 /// The commands a viewer sends.
-pub(crate) const SENT: [&str; 4] = ["press", "release", "play", "pause"];
+pub(crate) const SENT: [&str; 5] = ["press", "release", "play", "pause", "set"];
 
 /// A message's `type`: a type with the one value `$name`.
 macro_rules! tag {
@@ -51,17 +51,27 @@ pub(crate) struct SceneMessage<'a> {
     r#type: SceneTag,
     session: &'a str,
     channels: &'a Channels,
+    /// Each world quantity the scene declares, in table order, which each frame's `world`
+    /// follows. Absent when the scene declares none.
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    world: &'a [WorldQuantity],
     #[serde(flatten)]
     #[cfg_attr(test, schemars(skip))]
     view: &'a View,
 }
 
 /// The `scene` message of `view` in the session `session`.
-pub(crate) fn scene_message(session: &str, channels: &Channels, view: &View) -> Value {
+pub(crate) fn scene_message(
+    session: &str,
+    channels: &Channels,
+    world: &[WorldQuantity],
+    view: &View,
+) -> Value {
     let message = SceneMessage {
         r#type: SceneTag::Tag,
         session,
         channels,
+        world,
         view,
     };
     serde_json::to_value(message).expect("a scene message serializes")
@@ -84,6 +94,11 @@ pub(crate) struct FrameMessage<'a> {
     /// 1 for closed, 0 for open, per `channels.switches`.
     #[cfg_attr(test, schemars(extend("items" = { "enum": [0, 1] })))]
     switches: &'a [u8],
+    /// Each value per the scene's `world`: the value from `t_ps` on, or from where the
+    /// quantity's last `set` lands when that is later, so a `set` shows while paused. Absent
+    /// when the scene declares none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    world: Option<&'a [f64]>,
     /// On a frame from a `play` tick: the speed `play` runs at, always 1 for now.
     #[serde(skip_serializing_if = "Option::is_none")]
     speed: Option<f64>,
@@ -125,7 +140,7 @@ pub fn command(text: &str) -> (Option<u64>, Result<Command, Error>) {
         Error::new(
             Code::Usage,
             message,
-            "a viewer sends press, release, play or pause, as {\"id\": 1, \"cmd\": \"press\", \"ref\": \"@btn1\"}",
+            "a viewer sends press, release, play, pause or set, as {\"id\": 1, \"cmd\": \"press\", \"ref\": \"@btn1\"}",
         )
     };
     let Ok(message) = serde_json::from_str::<Value>(text) else {
@@ -134,16 +149,30 @@ pub fn command(text: &str) -> (Option<u64>, Result<Command, Error>) {
     let id = message["id"].as_u64();
     let name = message["cmd"].as_str().unwrap_or_default();
     let parsed = match spec(name) {
-        Some(spec) if SENT.contains(&name) => {
-            let mut args: Vec<String> = Vec::new();
-            args.extend(message["ref"].as_str().map(String::from));
-            args.extend(message.get("speed").map(Value::to_string));
-            spec.command(&args, Path::new(""))
-                .map_err(|reason| Error::new(Code::Usage, reason, ""))
-        }
+        Some(spec) if SENT.contains(&name) => spec
+            .command(&viewer_args(name, &message), Path::new(""))
+            .map_err(|reason| Error::new(Code::Usage, reason, "")),
         _ => Err(usage(format!("`{name}` is not a command a viewer sends"))),
     };
     (id, parsed)
+}
+
+/// The words after the command name. `set` takes `quantity` and `value`. The others take `ref`
+/// and, where the table allows it, `speed`.
+fn viewer_args(name: &str, message: &Value) -> Vec<String> {
+    if name == "set" {
+        let quantity = message["quantity"].as_str().unwrap_or("").to_string();
+        let value = match message.get("value") {
+            Some(Value::Number(number)) => number.to_string(),
+            Some(Value::String(text)) => text.clone(),
+            _ => String::new(),
+        };
+        return vec![quantity, value];
+    }
+    let mut args = Vec::new();
+    args.extend(message["ref"].as_str().map(String::from));
+    args.extend(message.get("speed").map(Value::to_string));
+    args
 }
 
 /// Runs a viewer's command text on `live`: the reply, and the message that carries it back to
@@ -191,7 +220,7 @@ pub fn part_scene(id: &str, parts: Vec<(String, Vec<u8>)>) -> Result<Value, Stri
             .collect::<Vec<_>>()
             .join("\n")
     })?;
-    Ok(scene_message(id, &Channels::default(), &view))
+    Ok(scene_message(id, &Channels::default(), &[], &view))
 }
 
 /// The `scene` and `frame` messages a session's viewers get. It numbers the frames, and gives
@@ -257,6 +286,7 @@ impl Feed {
             pins: &sample.pins,
             led_a,
             switches: &sample.switches,
+            world: (!sample.world.is_empty()).then_some(sample.world.as_slice()),
             speed: pace.map(|pace| pace.speed),
             ratio: pace.map(|pace| pace.ratio),
             diagnostics: sample.diagnostics,
@@ -294,6 +324,20 @@ mod tests {
         assert_eq!(unnamed.unwrap_err().code, Code::Usage);
         let (_, fast) = command(r#"{"id": 11, "cmd": "play", "speed": 2}"#);
         assert_eq!(fast.unwrap_err().message, "takes no arguments; usage: play");
+        let (_, set) = command(r#"{"id": 12, "cmd": "set", "quantity": "light", "value": 50}"#);
+        assert_eq!(
+            set.unwrap(),
+            Command::parse("set light 50", Path::new(""))
+                .unwrap()
+                .unwrap()
+        );
+        let (_, dark) = command(r#"{"id": 13, "cmd": "set", "quantity": "light", "value": "0"}"#);
+        assert_eq!(
+            dark.unwrap(),
+            Command::parse("set light 0", Path::new(""))
+                .unwrap()
+                .unwrap()
+        );
         let (none, garbled) = command("press");
         assert_eq!(none, None);
         assert_eq!(

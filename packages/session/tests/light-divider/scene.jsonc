@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "parts": {
+    "v1": { "type": "./source.jsonc", "voltage": "5" },
+    "rt": { "type": "./resistor.jsonc", "resistance": "10k" },
+    "ldr": { "type": "./ldr.jsonc" }
+  },
+  "wires": [
+    ["v1.pos", "rt.a"],
+    ["rt.b", "ldr.a"],
+    ["ldr.b", "v1.neg"]
+  ],
+  "ground": "v1.neg",
+  "world": { "light": 300 }
+}

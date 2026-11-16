@@ -14,6 +14,7 @@ use schemars::generate::SchemaSettings;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
+use crate::live::WorldName;
 use crate::target::Ref;
 use crate::viewer::{ClosedMessage, FrameMessage, ReplyMessage, SENT, SceneMessage};
 
@@ -45,6 +46,7 @@ enum Command {
     Release { r#ref: Ref },
     Play,
     Pause,
+    Set { quantity: WorldName, value: f64 },
 }
 
 /// A command as the viewer sends it on a session's WebSocket. `id` is the viewer's own and comes
@@ -327,6 +329,13 @@ fn every_command_the_type_allows_is_read_as_the_cli_reads_it() {
         (Command::Release { r#ref: btn }, "release @btn1"),
         (Command::Play, "play"),
         (Command::Pause, "pause"),
+        (
+            Command::Set {
+                quantity: WorldName::Light,
+                value: 50.0,
+            },
+            "set light 50",
+        ),
     ];
     let names: Vec<&str> = commands
         .iter()

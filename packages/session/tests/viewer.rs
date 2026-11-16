@@ -5,7 +5,7 @@ use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
 use orbe_session::viewer::{self, Feed, TICK};
-use orbe_session::{Code, Command, Duration, Files, FrameState, Live, Reply, State};
+use orbe_session::{Code, Command, Data, Duration, Files, FrameState, Live, Reading, Reply, State};
 use serde_json::{Value, json};
 
 fn first_target() -> PathBuf {
@@ -115,6 +115,10 @@ fn the_scene_message_names_each_channel() {
         })
     );
     assert_eq!(scene["instances"][2]["name"], "btn1");
+    assert!(
+        scene.get("world").is_none(),
+        "a scene with no world omits world"
+    );
 }
 
 #[test]
@@ -123,6 +127,10 @@ fn a_frame_shows_a_press_after_it_lands_and_skips_a_repeat() {
     let mut frames = Feed::default();
     let first = frames.frame(live.sample().unwrap(), None).unwrap();
     assert_eq!(first["switches"], json!([0, 0]));
+    assert!(
+        first.get("world").is_none(),
+        "a scene with no world omits world"
+    );
     assert!(frames.frame(live.sample().unwrap(), None).is_none());
 
     assert!(live.run(&command("press @btn1")).ok());
@@ -134,6 +142,122 @@ fn a_frame_shows_a_press_after_it_lands_and_skips_a_repeat() {
     assert!(live.run(&command("step 1ms")).ok());
     let after = frames.frame(live.sample().unwrap(), None).unwrap();
     assert_eq!(after["switches"], json!([1, 0]));
+}
+
+/// `10000 * (10 / light)` ohm, at most 1 Mohm.
+fn ldr_ohm(light: f64) -> f64 {
+    if light == 0.0 {
+        1_000_000.0
+    } else {
+        (10_000.0 * (10.0 / light)).min(1_000_000.0)
+    }
+}
+
+fn mid(light: f64) -> f64 {
+    let ohm = ldr_ohm(light);
+    5.0 * ohm / (10_000.0 + ohm)
+}
+
+fn pin_voltage(reply: &Reply) -> f64 {
+    let Data::Got(got) = &reply.data else {
+        panic!("{}", reply.text());
+    };
+    let Reading::Pin { v, .. } = &got.value else {
+        panic!("{}", reply.text());
+    };
+    *v
+}
+
+fn close_to(found: f64, expected: f64) -> bool {
+    (found - expected).abs() <= 1e-8 * expected.abs()
+}
+
+fn light_divider() -> Live {
+    let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/light-divider/scene.jsonc");
+    let mut live = Live::new("t", Files::disk());
+    let opened = live.run(&Command::Open(scene));
+    assert!(opened.ok(), "{}", opened.text());
+    live
+}
+
+#[test]
+fn the_scene_message_describes_each_declared_quantity() {
+    let live = light_divider();
+    let scene = live.scene().unwrap();
+    assert_eq!(
+        scene["world"],
+        json!([{
+            "name": "light",
+            "unit": "lx",
+            "min": 0.0,
+            "max": 100_000.0,
+            "start": 300.0,
+            "scale": { "kind": "log" },
+        }])
+    );
+}
+
+#[test]
+fn a_paused_set_shows_on_the_next_frame_and_moves_the_divider_once_time_runs() {
+    let mut live = light_divider();
+    let mut frames = Feed::default();
+    let first = frames.frame(live.sample().unwrap(), None).unwrap();
+    assert_eq!(first["world"], json!([300.0]));
+    let before = live.run(&command("get @ldr.a"));
+    assert!(
+        close_to(pin_voltage(&before), mid(300.0)),
+        "mid {} at 300 lx",
+        pin_voltage(&before)
+    );
+
+    let set = live.run(&command("set light 50"));
+    assert!(set.ok(), "{}", set.text());
+    let paused = frames
+        .frame(live.sample().unwrap(), None)
+        .expect("a paused set sends a frame");
+    assert_eq!(
+        (paused["state"].as_str(), &paused["world"]),
+        (Some("paused"), &json!([50.0]))
+    );
+
+    let stepped = live.run(&command("step 1ms"));
+    assert!(stepped.ok(), "{}", stepped.text());
+    let after = frames.frame(live.sample().unwrap(), None).unwrap();
+    assert_eq!(after["world"], json!([50.0]));
+    let got = live.run(&command("get @ldr.a"));
+    assert!(
+        close_to(pin_voltage(&got), mid(50.0)),
+        "mid {} at 50 lx, want {}",
+        pin_voltage(&got),
+        mid(50.0)
+    );
+}
+
+#[test]
+fn a_change_the_scene_schedules_shows_only_once_time_reaches_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/light-divider");
+    for file in ["ldr.jsonc", "resistor.jsonc", "source.jsonc"] {
+        std::fs::copy(fixture.join(file), dir.path().join(file)).unwrap();
+    }
+    let scene = std::fs::read_to_string(fixture.join("scene.jsonc"))
+        .unwrap()
+        .replace(
+            r#""light": 300"#,
+            r#""light": { "initial": 300, "steps": [{ "at": "2ms", "to": 0 }] }"#,
+        );
+    std::fs::write(dir.path().join("scene.jsonc"), scene).unwrap();
+    let mut live = Live::new("t", Files::disk());
+    let opened = live.run(&Command::Open(dir.path().join("scene.jsonc")));
+    assert!(opened.ok(), "{}", opened.text());
+
+    let mut world = Vec::new();
+    for step in ["1ms", "500us", "1ms"] {
+        assert!(live.run(&command(&format!("step {step}"))).ok());
+        let mut frames = Feed::default();
+        world.push(frames.frame(live.sample().unwrap(), None).unwrap()["world"].clone());
+    }
+    assert_eq!(world, [json!([300.0]), json!([300.0]), json!([0.0])]);
 }
 
 #[test]

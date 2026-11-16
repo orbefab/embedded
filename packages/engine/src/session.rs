@@ -535,6 +535,11 @@ impl Session {
         }
     }
 
+    /// The world's schedules, with each change `set` appended.
+    pub fn world(&self) -> &crate::world::World {
+        self.circuit.netlist.world()
+    }
+
     /// The time the step after the last accepted one lands, which a call accepts once it
     /// reaches that time. Edges and bytes join the logs only on an accepted step, so none
     /// arrives before it. `None` once the session has ended.

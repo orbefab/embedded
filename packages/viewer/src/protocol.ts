@@ -21,7 +21,8 @@ export type Command =
   | { readonly cmd: "press"; readonly ref: Ref }
   | { readonly cmd: "release"; readonly ref: Ref }
   | { readonly cmd: "play" }
-  | { readonly cmd: "pause" };
+  | { readonly cmd: "pause" }
+  | { readonly cmd: "set"; readonly quantity: WorldName; readonly value: number };
 
 /** A command as the viewer sends it on a session's WebSocket. `id` is the viewer's own and comes
  * back on its reply. */
@@ -52,6 +53,10 @@ export interface FrameMessage {
   readonly switches: readonly (0 | 1)[];
   readonly t_ps: number;
   readonly type: "frame";
+  /** Each value per the scene's `world`: the value from `t_ps` on, or from where the quantity's
+   * last `set` lands when that is later, so a `set` shows while paused. Absent when the scene
+   * declares none. */
+  readonly world?: readonly number[];
 }
 
 /** A frame's `state`: the session's, or `stepping` for a frame read while a `step` runs, which
@@ -89,11 +94,21 @@ export interface ReplyMessage {
   readonly type: "reply";
 }
 
+/** How a page's thumb walks a quantity's range. */
+export type Scale =
+  /** Even steps of `step` from `min` to `max`. */
+  | { readonly kind: "linear"; readonly step: number }
+  /** Round values: 0, then 1, 2, 3 and 5 times each power of ten, up to `max`. */
+  | { readonly kind: "log" };
+
 /** The scene a session opened, sent once per `open`, with the refs each frame array follows. */
 export type SceneMessage = View & {
   readonly channels: Channels;
   readonly session: string;
   readonly type: "scene";
+  /** Each world quantity the scene declares, in table order, which each frame's `world` follows.
+   * Absent when the scene declares none. */
+  readonly world?: readonly WorldQuantity[];
 };
 
 /** The session's state in a reply. `closed` is a session with no scene open. */
@@ -108,3 +123,18 @@ export type State =
 
 /** Everything a viewer gets from its session's source. */
 export type ToViewer = SceneMessage | FrameMessage | ClosedMessage;
+
+/** A world quantity's name: `temperature`, `humidity` or `light`. */
+export type WorldName = "temperature" | "humidity" | "light";
+
+/** A world quantity the scene declares, as a page shows it. */
+export interface WorldQuantity {
+  readonly max: number;
+  readonly min: number;
+  readonly name: WorldName;
+  readonly scale: Scale;
+  /** The value the scene gives it at t = 0. */
+  readonly start: number;
+  /** The unit of `min`, `max`, `start` and a frame's values, as the CLI writes it, such as `lx`. */
+  readonly unit: string;
+}

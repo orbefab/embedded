@@ -166,6 +166,39 @@ const pushScene = (page: Page, edit: string) =>
     fixture.push(new Function("scene", source)(firstTarget));
   }, edit);
 
+const WORLD = [
+  { name: "temperature", unit: "degC", min: -40, max: 125, start: 25, scale: { kind: "linear", step: 0.5 } },
+  { name: "humidity", unit: "%RH", min: 0, max: 100, start: 50, scale: { kind: "linear", step: 1 } },
+  { name: "light", unit: "lx", min: 0, max: 100_000, start: 300, scale: { kind: "log" } },
+];
+
+/** Opens the first target again with temperature, humidity and light declared, at 25 degC, 50 %RH
+ * and 300 lx, the frame changed by `frame`. */
+async function withWorld(page: Page, frame: Record<string, unknown> = {}) {
+  await page.evaluate(
+    ([world, frame]) => {
+      const { source, firstTarget, script } = window.orbeFixture;
+      source.push({ ...firstTarget, world });
+      source.push({ ...script.idle, seq: 9, world: [25, 50, 300], ...frame });
+    },
+    [WORLD, frame] as const,
+  );
+  await page.waitForSelector('[data-testid="world-light"]');
+}
+
+/** Each slider's number, its thumb's spoken value, the frame's value and whether it is off. */
+const worldShown = (page: Page) =>
+  page.evaluate(() => {
+    const rows: Record<string, { field: string; thumb: string | null; frame: string | null; disabled: boolean }> = {};
+    for (const name of ["temperature", "humidity", "light"]) {
+      const thumb = document.querySelector<HTMLInputElement>(`[data-testid="world-${name}"]`);
+      const field = document.querySelector<HTMLInputElement>(`[data-testid="world-${name}-value"]`);
+      if (thumb === null || field === null) continue;
+      rows[name] = { field: field.value, thumb: thumb.getAttribute("aria-valuetext"), frame: field.getAttribute("data-frame"), disabled: thumb.disabled && field.disabled };
+    }
+    return rows;
+  });
+
 test.describe("fixture page", () => {
   test.afterAll(async ({ browser, host }) => {
     if (rendersDir() === undefined) return;
@@ -479,6 +512,85 @@ test.describe("fixture page", () => {
       }));
       expect(shown).toEqual({ state: "faulted", fault, play: true });
       await shot(page, "fixture-faulted");
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("a scene's world quantities each get a slider at the frame's value", async ({ browser, host }) => {
+    const { context, page } = await open(browser, host.base);
+    try {
+      await withWorld(page);
+      expect(await worldShown(page)).toEqual({
+        temperature: { field: "25", thumb: "25 degC", frame: "25", disabled: false },
+        humidity: { field: "50", thumb: "50 %RH", frame: "50", disabled: false },
+        light: { field: "300", thumb: "300 lx", frame: "300", disabled: false },
+      });
+      await shot(page, "fixture-world");
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("five quick presses on the light thumb send one set, and the thumb holds it until a frame shows it", async ({ browser, host }) => {
+    const { context, page } = await open(browser, host.base);
+    try {
+      await withWorld(page);
+      await page.evaluate(() => {
+        const { source } = window.orbeFixture;
+        window.sets = [];
+        source.send = (command: { cmd: string; value: number }) =>
+          new Promise((done) => {
+            window.sets?.push(command);
+            window.answer = () => done({ ok: true, session: "s", t_ps: 0, state: "paused", data: { quantity: "light", value: command.value, landed_ps: 1 } });
+          });
+      });
+      await page.locator('[data-testid="world-light"]').focus();
+      for (let k = 0; k < 5; k += 1) await page.keyboard.press("ArrowRight");
+      await page.waitForTimeout(700);
+      const pending = { sets: await page.evaluate(() => window.sets), light: (await worldShown(page)).light };
+      await page.evaluate(() => window.answer?.());
+      await page.waitForTimeout(100);
+      const answered = (await worldShown(page)).light;
+      await page.evaluate(() => window.orbeFixture.source.push({ ...window.orbeFixture.script.idle, seq: 10, world: [25, 50, 5000] }));
+      await page.waitForTimeout(100);
+      const framed = (await worldShown(page)).light;
+      await page.evaluate(() => window.orbeFixture.source.push({ ...window.orbeFixture.script.idle, seq: 11, world: [25, 50, 20] }));
+      await page.waitForTimeout(100);
+      expect({ pending, answered, framed, elsewhere: (await worldShown(page)).light }).toEqual({
+        pending: {
+          sets: [{ cmd: "set", quantity: "light", value: 5000 }],
+          light: { field: "5000", thumb: "5000 lx", frame: "300", disabled: false },
+        },
+        answered: { field: "5000", thumb: "5000 lx", frame: "300", disabled: false },
+        framed: { field: "5000", thumb: "5000 lx", frame: "5000", disabled: false },
+        elsewhere: { field: "20", thumb: "20 lx", frame: "20", disabled: false },
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("a faulted session shows its fault clear of the world panel, with the sliders off and why", async ({ browser, host }) => {
+    const { context, page } = await open(browser, host.base);
+    try {
+      const fault = "error[solver.convergence] Newton did not converge at #net.out after 10 iterations\n  at @u1\n  hint: check the feedback network";
+      await withWorld(page, { state: "faulted", diagnostics: 1, fault });
+      await page.waitForSelector('[data-testid="world-off"]');
+      const boxes = await page.evaluate(() =>
+        ["controls", "fault", "world"].map((id) => {
+          const box = document.querySelector(`[data-testid="${id}"]`)?.getBoundingClientRect();
+          return box === undefined ? null : { top: box.top, bottom: box.bottom };
+        }),
+      );
+      const [controls, faultBox, world] = boxes;
+      const shown = await worldShown(page);
+      expect({
+        stacked: controls !== null && faultBox !== null && world !== null && controls.bottom <= faultBox.top && faultBox.bottom <= world.top,
+        off: Object.values(shown).every((row) => row.disabled),
+        why: await page.locator('[data-testid="world-off"]').textContent(),
+      }).toEqual({ stacked: true, off: true, why: "The session faulted, so the world stays as it is." });
+      await shot(page, "fixture-world-faulted");
     } finally {
       await context.close();
     }

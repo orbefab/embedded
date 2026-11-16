@@ -21,6 +21,7 @@ use orbe_engine::finite::Finite;
 use orbe_engine::{
     EdgeCursor, Input, Probe, Refused, Rejected, Session, Setting, Status, WorldChange,
 };
+use orbe_model::Time;
 use orbe_scene::{Code as SceneCode, Files, RefMap, View};
 
 use crate::command::{Command, Step, WorldSet};
@@ -37,6 +38,9 @@ mod frame;
 mod serial;
 mod step;
 
+#[cfg(test)]
+pub(crate) use frame::WorldName;
+pub(crate) use frame::WorldQuantity;
 pub use frame::{Channels, FrameState, Pace, Sample};
 pub use step::{CHANGES, Progress};
 
@@ -83,6 +87,9 @@ struct Open {
     /// Past every edge a step has listed, which is every edge through `now` once a step ran.
     listed: EdgeCursor,
     serial: Serial,
+    /// Where each quantity's last `set` landed, which can be after `now`. A frame shows the
+    /// value from there on, so a `set` shows while the session is paused.
+    world_sets: BTreeMap<orbe_engine::world::Quantity, Time>,
 }
 
 /// A rated quantity, checked against the probe at `now` as the engine checks accepted steps.
@@ -467,6 +474,7 @@ impl Open {
             edges,
             listed: edges,
             serial: Serial::default(),
+            world_sets: BTreeMap::new(),
         };
         open.channels = open.bind_channels();
         Ok(open)
@@ -615,6 +623,7 @@ impl Open {
             .engine
             .set(&change)
             .map_err(|e| fail(rejected(e, set.quantity.name())))?;
+        self.world_sets.insert(set.quantity, applied.at);
         let data = Data::Set {
             quantity: set.quantity,
             value: set.value,

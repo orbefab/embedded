@@ -2,8 +2,8 @@
 // page runs it: loaded and checked by the viewer's registry client, opened, played, pressed. Then
 // it times one simulated second of nano-button-led in a worker thread, ticking as fast as it can.
 // Usage: node packages/wasm/tests/worker.mjs PKG_DIR REGISTRY_DIR
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { readdir, readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { loadBlock } from "../../viewer/src/registry.ts";
@@ -199,10 +199,70 @@ async function speed(id) {
   console.log(`${id}: one simulated second takes ${sorted.map((ms) => ms.toFixed(0)).join(", ")} ms of wall time in a worker thread (median ${sorted[1].toFixed(0)} ms)`);
 }
 
+async function fixtureFiles() {
+  const dir = resolve("packages/session/tests/light-divider");
+  const names = await readdir(dir);
+  const files = [];
+  for (const name of names) files.push([name, new Uint8Array(await readFile(join(dir, name)))]);
+  return files;
+}
+
+/** `worker.js` accepts `set` and the next frame carries the new light. */
+async function lightInWorker() {
+  const session = open({ name: "light", files: await fixtureFiles() });
+  try {
+    const scene = await session.until((m) => m.type === "scene", 10_000, "scene");
+    const frame = await session.until((m) => m.type === "frame", 10_000, "frame");
+    check("worker: the scene declares light and the first frame reads 300 lx", scene.world?.[0]?.name === "light" && frame.world?.[0] === 300, { scene: scene.world, frame: frame.world });
+    await session.send({ cmd: "play" });
+    const set = await session.send({ cmd: "set", quantity: "light", value: 50 });
+    const landed = set.data?.landed_ps ?? 0;
+    const after = await session.until(
+      (m) => m.type === "frame" && m.t_ps > landed && m.world?.[0] === 50,
+      5_000,
+      "frame after set light 50"
+    );
+    check("worker: a frame past the landing reads 50 lx", set.ok === true && after.world[0] === 50, { set, world: after.world });
+  } catch (error) {
+    check(`worker light: ${error.message}`, false, session.seen.slice(-4));
+  } finally {
+    await session.close();
+  }
+}
+
+/** The main thread uses `Session.command` directly, the same call a page makes outside the Worker. */
+async function lightOnMainThread() {
+  const { readFileSync } = await import("node:fs");
+  const { initSync, Block, Session } = await import(new URL("orbe_wasm.js", pkg));
+  initSync({ module: readFileSync(new URL("orbe_wasm_bg.wasm", pkg)) });
+  const block = new Block();
+  for (const [path, bytes] of await fixtureFiles()) block.add(path, bytes);
+  const session = Session.open("light", block);
+  const opened = session.messages().map((text) => JSON.parse(text));
+  const first = opened.find((message) => message.type === "frame");
+  session.command(JSON.stringify({ id: 1, cmd: "play" }));
+  session.messages();
+  session.command(JSON.stringify({ id: 2, cmd: "set", quantity: "light", value: 50 }));
+  const answered = session.messages().map((text) => JSON.parse(text));
+  const reply = answered.find((message) => message.type === "reply" && message.id === 2);
+  const landed = reply?.reply?.data?.landed_ps ?? 0;
+  session.tick(16);
+  const after = session.messages().map((text) => JSON.parse(text));
+  const frame = after.find((message) => message.type === "frame" && message.t_ps > landed);
+  session.free();
+  check(
+    "main thread: set light 50 is on the next frame",
+    first?.world?.[0] === 300 && reply?.reply?.ok === true && frame?.world?.[0] === 50 && frame.t_ps > landed,
+    { first: first?.world, reply: reply?.reply, frame: frame?.world, t: frame?.t_ps, landed }
+  );
+}
+
 await buttonLed("nano-button-led", "nano");
 await buttonLed("uno-button-led", "uno", "@uno.led_l");
 await fade();
 await refused();
+await lightInWorker();
+await lightOnMainThread();
 await speed("nano-button-led");
 console.log(failed === 0 ? "all worker checks passed" : `${failed} worker checks failed`);
 process.exit(failed === 0 ? 0 : 1);
