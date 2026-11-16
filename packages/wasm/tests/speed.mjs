@@ -21,7 +21,7 @@ const PROFILE_INTERVAL_US = 100;
 /** Where a run plays, how hard the CPU is throttled, and the real-time factor its median needs. */
 const MODES = {
   worker: { label: "Worker 1x", where: "worker", throttle: 1, bar: 1.5 },
-  main4x: { label: "main thread 4x", where: "main", throttle: 4, bar: 1.0 },
+  main4x: { label: "main thread 4x", where: "main", throttle: 4, bar: 1.25 },
 };
 
 const args = process.argv.slice(2);
