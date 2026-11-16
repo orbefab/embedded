@@ -110,6 +110,49 @@ pub(super) fn table(flash: &[u16], pc_mask: u16) -> Vec<Op> {
     ops
 }
 
+/// One byte per word of `ops`. `1` is `ADD` plus three `ADC`, `2` is `SUB` plus three `SBC`,
+/// `3` is `CP` plus three `CPC`, and `4` is `SUBI` plus three `SBCI`. `0` is not that chain.
+/// The run loop reads the byte instead of matching the three following words again.
+pub(super) fn chain_tags(ops: &[Op], pc_mask: u16) -> Vec<u8> {
+    (0..ops.len())
+        .map(|at| chain_kind(ops, at as u16, pc_mask))
+        .collect()
+}
+
+fn chain_kind(ops: &[Op], pc: u16, pc_mask: u16) -> u8 {
+    match ops.get(usize::from(pc)).copied().unwrap_or(Op::Nop) {
+        Op::Add(d, r) if d <= 28 && r <= 28 && reg_chain(ops, pc, d, r, pc_mask, 0) => 1,
+        Op::Sub(d, r) if d <= 28 && r <= 28 && reg_chain(ops, pc, d, r, pc_mask, 1) => 2,
+        Op::Cp(d, r) if d <= 28 && r <= 28 && reg_chain(ops, pc, d, r, pc_mask, 2) => 3,
+        Op::Subi(d, _) if d <= 28 && subi_chain(ops, pc, d, pc_mask) => 4,
+        _ => 0,
+    }
+}
+
+fn word_at(ops: &[Op], addr: u16) -> Op {
+    ops.get(usize::from(addr)).copied().unwrap_or(Op::Nop)
+}
+
+/// `kind` 0 is `ADC`, 1 is `SBC`, 2 is `CPC`.
+fn reg_chain(ops: &[Op], pc: u16, d: u8, r: u8, pc_mask: u16, kind: u8) -> bool {
+    (1..4u16).all(|i| {
+        let pair = match (kind, word_at(ops, pc.wrapping_add(i) & pc_mask)) {
+            (0, Op::Adc(dd, rr)) | (1, Op::Sbc(dd, rr)) | (2, Op::Cpc(dd, rr)) => (dd, rr),
+            _ => return false,
+        };
+        pair.0 == d + i as u8 && pair.1 == r + i as u8
+    })
+}
+
+fn subi_chain(ops: &[Op], pc: u16, d: u8, pc_mask: u16) -> bool {
+    (1..4u16).all(|i| {
+        matches!(
+            word_at(ops, pc.wrapping_add(i) & pc_mask),
+            Op::Sbci(dd, _) if dd == d + i as u8
+        )
+    })
+}
+
 /// A loop of `NOP`s and one counter decrement, closed by a `BRNE` `back` words after its first
 /// op. The counter is `bytes` registers from `lo` up, low byte first, and each pass subtracts `k`
 /// from it. The decrement is `SBIW`, `DEC`, or `SUBI` and up to three `SBCI` of 0. The loop exits

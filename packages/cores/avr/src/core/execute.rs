@@ -547,47 +547,22 @@ impl Core {
         self.sreg & (1 << bit) != 0
     }
 
-    /// A four-byte add or subtract on consecutive registers: one dispatch, and flags
-    /// only from the last byte. `false` when `op` is not the head of that chain.
+    /// The decoded tag for `op` names a four-byte chain. Flags come from the last byte.
     #[inline(always)]
-    pub(super) fn fuse_word(&mut self, pc: u16, op: Op) -> bool {
-        match op {
-            Op::Add(d, r) if d <= 28 && r <= 28 && self.reg_chain(pc, d, r, 0) => {
-                self.run_add_chain(pc, d, r);
-                true
-            }
-            Op::Sub(d, r) if d <= 28 && r <= 28 && self.reg_chain(pc, d, r, 1) => {
-                self.run_sub_chain(pc, d, r, true);
-                true
-            }
-            Op::Cp(d, r) if d <= 28 && r <= 28 && self.reg_chain(pc, d, r, 2) => {
-                self.run_sub_chain(pc, d, r, false);
-                true
-            }
-            Op::Subi(d, k) if d <= 28 && self.subi_chain(pc, d) => {
-                self.run_subi_chain(pc, d, k);
-                true
-            }
-            _ => false,
+    pub(super) fn fuse_tagged(&mut self, pc: u16, op: Op) -> bool {
+        match (self.chain_at(pc), op) {
+            (1, Op::Add(d, r)) => self.run_add_chain(pc, d, r),
+            (2, Op::Sub(d, r)) => self.run_sub_chain(pc, d, r, true),
+            (3, Op::Cp(d, r)) => self.run_sub_chain(pc, d, r, false),
+            (4, Op::Subi(d, k)) => self.run_subi_chain(pc, d, k),
+            _ => return false,
         }
+        true
     }
 
-    /// `kind` 0 is `ADC`, 1 is `SBC`, 2 is `CPC`.
-    fn reg_chain(&self, pc: u16, d: u8, r: u8, kind: u8) -> bool {
-        (1..4u16).all(|i| {
-            let op = self.op(pc.wrapping_add(i) & self.pc_mask);
-            let pair = match (kind, op) {
-                (0, Op::Adc(dd, rr)) | (1, Op::Sbc(dd, rr)) | (2, Op::Cpc(dd, rr)) => (dd, rr),
-                _ => return false,
-            };
-            pair.0 == d + i as u8 && pair.1 == r + i as u8
-        })
-    }
-
-    fn subi_chain(&self, pc: u16, d: u8) -> bool {
-        (1..4u16).all(|i| {
-            matches!(self.op(pc.wrapping_add(i) & self.pc_mask), Op::Sbci(dd, _) if dd == d + i as u8)
-        })
+    #[inline(always)]
+    fn chain_at(&self, pc: u16) -> u8 {
+        self.chains.get(usize::from(pc)).copied().unwrap_or(0)
     }
 
     #[inline(never)]

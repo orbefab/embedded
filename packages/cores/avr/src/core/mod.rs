@@ -45,6 +45,8 @@ pub struct SpmNote {
 pub struct Program {
     flash: Arc<[u16]>,
     ops: Arc<[Op]>,
+    /// Four-byte add and subtract chains, one tag per word of `ops`.
+    chains: Arc<[u8]>,
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +57,8 @@ pub struct Core {
     flash: Arc<[u16]>,
     /// `flash` decoded, one op per word up to the program counter's reach.
     ops: Arc<[Op]>,
+    /// Four-byte add and subtract chains, one tag per word of `ops`.
+    chains: Arc<[u8]>,
     /// Flash size in words, minus one.
     pc_mask: u16,
     /// Stack pointer. `SPL`/`SPH` on the bus read and write this word.
@@ -94,6 +98,7 @@ impl Core {
             pc: 0,
             flash: Arc::from([]),
             ops: Arc::from([]),
+            chains: Arc::from([]),
             pc_mask,
             sp,
             spm: Vec::new(),
@@ -113,7 +118,10 @@ impl Core {
     }
 
     pub fn set_flash(&mut self, flash: Arc<[u16]>) {
-        self.ops = Arc::from(decode::table(&flash, self.pc_mask));
+        let ops = decode::table(&flash, self.pc_mask);
+        let chains = decode::chain_tags(&ops, self.pc_mask);
+        self.ops = Arc::from(ops);
+        self.chains = Arc::from(chains);
         self.flash = flash;
         self.pc = 0;
     }
@@ -122,12 +130,14 @@ impl Core {
         Program {
             flash: Arc::clone(&self.flash),
             ops: Arc::clone(&self.ops),
+            chains: Arc::clone(&self.chains),
         }
     }
 
     pub fn set_program(&mut self, program: Program) {
         self.flash = program.flash;
         self.ops = program.ops;
+        self.chains = program.chains;
         self.pc = 0;
     }
 
@@ -180,7 +190,9 @@ impl Core {
     /// The two cores share one decoded image. A clone and a reset that keeps the program do.
     #[doc(hidden)]
     pub fn shares_image(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.flash, &other.flash) && Arc::ptr_eq(&self.ops, &other.ops)
+        Arc::ptr_eq(&self.flash, &other.flash)
+            && Arc::ptr_eq(&self.ops, &other.ops)
+            && Arc::ptr_eq(&self.chains, &other.chains)
     }
 
     pub fn spm_notes(&self) -> &[SpmNote] {
@@ -350,7 +362,10 @@ impl Core {
     fn execute_in_run(&mut self, pc: u16, op: Op, bound: u64) {
         // Four cycles must end strictly before `bound`. Landing on `bound` is the op
         // `run_free` retires on its own, and a fused chunk would hand it four cycles.
-        if bound.saturating_sub(self.cycles) > 4 && self.fuse_word(pc, op) {
+        if bound.saturating_sub(self.cycles) > 4
+            && matches!(op, Op::Add(..) | Op::Sub(..) | Op::Cp(..) | Op::Subi(..))
+            && self.fuse_tagged(pc, op)
+        {
             return;
         }
         match op {
