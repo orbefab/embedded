@@ -1,6 +1,7 @@
 use orbe_model::Time;
 
 use crate::netlist::{Document, Edge, Model, Netlist, PartId, Transient};
+use crate::world::Quantity;
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, VecDeque};
@@ -291,29 +292,47 @@ impl Record {
     }
 }
 
-/// Where a step must land: every contact edge, source jump, and potentiometer move,
-/// 1 ns after t = 0 and after each one, and `stop`. The deck ramps a contact or a
-/// source over that nanosecond. It skips a moving potentiometer. Each part keeps its
-/// next edge only, so no edge list is built and none is capped. Time only moves forward.
+/// Where a step must land: every contact edge, source jump, potentiometer move and world
+/// change, 1 ns after t = 0 and after each one, and `stop`. The deck ramps a contact or a
+/// source over that nanosecond. It skips a moving potentiometer. Each part and each world
+/// quantity keeps its next edge only, so no edge list is built and none is capped. Time only
+/// moves forward.
 pub(crate) struct Breakpoints {
     stop: Time,
-    /// Each part's next edge before `stop`, earliest first. A part has at most one entry, so
-    /// no part is walked twice.
-    edges: BinaryHeap<Reverse<(Time, PartId)>>,
+    /// Each part's and each world quantity's next edge before `stop`, earliest first. Each has
+    /// at most one entry, so none is walked twice.
+    edges: BinaryHeap<Reverse<(Time, Changer)>>,
     /// 1 ns after t = 0 and after each edge passed, before `stop`, ascending.
     ramp_ends: VecDeque<Time>,
 }
 
+/// What changes at an edge: a part's contact, level or position, or a world quantity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Changer {
+    Part(PartId),
+    World(Quantity),
+}
+
+impl Changer {
+    fn next_change_after(self, netlist: &Netlist, at: Time) -> Option<Time> {
+        match self {
+            Changer::Part(id) => netlist.part(id).model.next_change_after(at),
+            Changer::World(quantity) => netlist.world().next_change_after(quantity, at),
+        }
+    }
+}
+
 impl Breakpoints {
     pub(crate) fn new(netlist: &Netlist, stop: Time) -> Breakpoints {
-        let mut edges = BinaryHeap::new();
-        for (id, part) in netlist.parts() {
-            if let Some(at) = part.model.next_change_after(Time::ZERO)
-                && at < stop
-            {
-                edges.push(Reverse((at, id)));
-            }
-        }
+        let parts = netlist.parts().map(|(id, _)| Changer::Part(id));
+        let world = netlist.world().declared().map(|(q, _)| Changer::World(q));
+        let edges = parts
+            .chain(world)
+            .filter_map(|changer| {
+                let at = changer.next_change_after(netlist, Time::ZERO)?;
+                (at < stop).then_some(Reverse((at, changer)))
+            })
+            .collect();
         let mut breakpoints = Breakpoints {
             stop,
             edges,
@@ -325,15 +344,15 @@ impl Breakpoints {
 
     /// The earliest landing after `now`, which is at most `stop`.
     pub(crate) fn next_after(&mut self, netlist: &Netlist, now: Time) -> Time {
-        while let Some(&Reverse((at, id))) = self.edges.peek()
+        while let Some(&Reverse((at, changer))) = self.edges.peek()
             && at <= now
         {
             self.edges.pop();
             self.ramp_after(at);
-            if let Some(next) = netlist.part(id).model.next_change_after(at)
+            if let Some(next) = changer.next_change_after(netlist, at)
                 && next < self.stop
             {
-                self.edges.push(Reverse((next, id)));
+                self.edges.push(Reverse((next, changer)));
             }
         }
         while self.ramp_ends.front().is_some_and(|&end| end <= now) {
@@ -344,11 +363,15 @@ impl Breakpoints {
         edge.min(ramp_end)
     }
 
-    /// Part `id`'s edge at `at`, appended after every change it had, which is before `stop`. A
-    /// part with an entry waits on an earlier change, and its walk reaches `at` in turn.
-    pub(crate) fn arm(&mut self, id: PartId, at: Time) {
-        if !self.edges.iter().any(|&Reverse((_, part))| part == id) {
-            self.edges.push(Reverse((at, id)));
+    /// `changer`'s edge at `at`, appended after every change it had, which is before `stop`. A
+    /// changer with an entry waits on an earlier change, and its walk reaches `at` in turn.
+    pub(crate) fn arm(&mut self, changer: Changer, at: Time) {
+        if !self
+            .edges
+            .iter()
+            .any(|&Reverse((_, other))| other == changer)
+        {
+            self.edges.push(Reverse((at, changer)));
         }
     }
 

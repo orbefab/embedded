@@ -4,18 +4,18 @@ use serde::Deserialize;
 use crate::element::{Observed, OwnedCapacitor, OwnedInductor, TWO_PIN, Update};
 use crate::mna::{Probe, Stamp, Unknowns};
 use crate::name::Quantity;
-use crate::netlist::json::{
-    ParseCtx, PinMap, WireValue, resolve_pins, resolve_rating, resolve_value,
-};
-use crate::netlist::{Conduction, Kind, NetId, Value};
+use crate::netlist::json::{ParseCtx, PinMap, WireValue, resolve_pins, resolve_rating};
+use crate::netlist::{Conduction, Kind, NetId, Value, broken_positive};
 use crate::newton::Side;
+use crate::world::json::{FieldRule, WireParam, resolve_param};
+use crate::world::{Driven, Param};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Resistor {
     /// Nets of pins `a`, `b`.
     pub pins: [NetId; 2],
-    /// Ohm, greater than 0.
-    pub resistance: Value,
+    /// Ohm, greater than 0 with a finite reciprocal, fixed or driven by a world quantity.
+    pub resistance: Param,
     /// Watt, greater than 0. `None` is an explicit `"power": null`.
     pub max_power: Option<Value>,
 }
@@ -38,7 +38,7 @@ pub(crate) struct WireResistorRatings {
 pub(crate) struct WireResistor {
     pub(crate) name: String,
     pins: PinMap,
-    resistance: WireValue,
+    resistance: WireParam,
     ratings: WireResistorRatings,
 }
 
@@ -47,6 +47,7 @@ pub(crate) fn resolve_resistor(ctx: ParseCtx<'_>, wire: WireResistor) -> Option<
         name,
         part: part_ref,
         nets,
+        world,
         out,
         ..
     } = ctx;
@@ -58,7 +59,12 @@ pub(crate) fn resolve_resistor(ctx: ParseCtx<'_>, wire: WireResistor) -> Option<
     } = wire;
 
     let pins = resolve_pins(name, Resistor::PINS, &pins.0, nets, out);
-    let resistance = resolve_value(part_ref, "resistance", "ohm", true, resistance, out);
+    let rule = FieldRule {
+        field: "resistance",
+        unit: "ohm",
+        broken: broken_positive,
+    };
+    let resistance = resolve_param(part_ref, rule, world, resistance, out);
     let max_power = resolve_rating(part_ref, "ratings.power", "W", ratings.power, out);
     match (pins, resistance, max_power) {
         (Some(pins), Some(resistance), Some(max_power)) => Some(Resistor {
@@ -85,7 +91,8 @@ impl Kind for Resistor {
     }
     #[inline]
     fn stamp(&self, stamp: &mut Stamp<'_>) {
-        let g = 1.0 / self.resistance.si.get();
+        let conditions = stamp.conditions;
+        let g = 1.0 / self.resistance.read(conditions.side(), conditions.at);
         stamp.conductance(self.pins[0], self.pins[1], g);
     }
     fn reads_iterate(&self) -> bool {
@@ -104,11 +111,15 @@ impl Kind for Resistor {
     fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
         (None, self.max_power.as_ref())
     }
-    fn observe(&self, probe: &Probe<'_>, _at: Time, _side: Side) -> Option<Observed> {
-        let i = (probe.v(self.pins[0]) - probe.v(self.pins[1])) / self.resistance.si.get();
+    fn observe(&self, probe: &Probe<'_>, at: Time, side: Side) -> Option<Observed> {
+        let ohms = self.resistance.read(side, at);
+        let i = (probe.v(self.pins[0]) - probe.v(self.pins[1])) / ohms;
         Some(Observed::two_pin(self.pins, i, probe))
     }
     fn conduction(&self) -> Conduction {
         Conduction::Limits
+    }
+    fn driven_mut(&mut self) -> Option<&mut Driven> {
+        self.resistance.driven_mut()
     }
 }

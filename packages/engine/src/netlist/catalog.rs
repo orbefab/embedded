@@ -14,11 +14,13 @@ use crate::element::{Device, Observed, OwnedCapacitor, OwnedInductor, Update};
 use crate::mna::{Probe, Stamp, Unknowns};
 use crate::name::Quantity;
 use crate::newton::Side;
+use crate::world::Driven;
 
 /// What an analog kind answers. One impl per kind, in the kind's own file.
 ///
 /// Every method without a default is required, so a kind that leaves one out does not compile.
-/// The defaults are the schedule answers, which only a source, a switch and a potentiometer have.
+/// The defaults are the schedule answers, which only a source, a switch and a potentiometer have,
+/// and the world-driven field, which only a resistor has.
 pub(crate) trait Kind {
     /// Its nets, in the order of its `PINS`.
     fn pins(&self) -> &[NetId];
@@ -74,6 +76,10 @@ pub(crate) trait Kind {
     }
     /// [`serial`](Self::serial)'s waveform, for appending one send.
     fn serial_mut(&mut self) -> Option<&mut Serial> {
+        None
+    }
+    /// Its field a world quantity drives, for following that quantity's schedule.
+    fn driven_mut(&mut self) -> Option<&mut Driven> {
         None
     }
 }
@@ -265,6 +271,13 @@ macro_rules! define_kinds {
             pub(super) fn serial_mut(&mut self) -> Option<&mut Serial> {
                 match self {
                     $(Model::$variant(part) => <$ty as Kind>::serial_mut(part),)*
+                    Model::Chip(_) => None,
+                }
+            }
+
+            pub(super) fn driven_mut(&mut self) -> Option<&mut Driven> {
+                match self {
+                    $(Model::$variant(part) => <$ty as Kind>::driven_mut(part),)*
                     Model::Chip(_) => None,
                 }
             }

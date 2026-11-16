@@ -129,7 +129,7 @@ fn divider_is_canonical_and_keeps_its_source() {
         .find(|(_, p)| p.name.as_str() == "r1")
         .unwrap();
     match &r1.model {
-        Model::Resistor(r) => match &r.resistance.source {
+        Model::Resistor(r) => match &r.resistance.fixed().unwrap().source {
             Source::Datasheet { doc, at, basis } => {
                 assert_eq!(doc, "resistor-nominal");
                 assert_eq!(at, "Table 1, nominal");

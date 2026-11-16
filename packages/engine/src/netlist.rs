@@ -20,6 +20,7 @@ use crate::blob::{Blob, Blobs, Sha256};
 use crate::diagnostic::{Diagnostic, ValueRule};
 use crate::finite::Finite;
 use crate::name::Name;
+use crate::world::{Quantity, World};
 
 use crate::chip::Ne555;
 use crate::device::{Cst816, Declared, Events, PulsesReplay, Row, SpiReplay, St77916, Ws2812};
@@ -65,6 +66,7 @@ pub struct Netlist {
     analysis: Analysis,
     nets: Vec<Name>,
     parts: Vec<Part>,
+    world: World,
 }
 
 impl Netlist {
@@ -79,6 +81,28 @@ impl Netlist {
 
     pub fn analysis(&self) -> &Analysis {
         &self.analysis
+    }
+
+    /// The world quantities the netlist declares, each with its schedule.
+    pub fn world(&self) -> &World {
+        &self.world
+    }
+
+    /// Appends a change of declared quantity `quantity` to `level` at `at`, a time
+    /// `Schedule::earliest` returned for it, and moves every part field that reads it.
+    pub fn append_world(&mut self, quantity: Quantity, at: Time, level: Finite) {
+        self.world.append(quantity, at, level);
+        let schedule = self
+            .world
+            .schedule(quantity)
+            .expect("an appended quantity is declared");
+        for part in &mut self.parts {
+            if let Some(driven) = part.model.driven_mut()
+                && driven.quantity == quantity
+            {
+                driven.follow(schedule);
+            }
+        }
     }
 
     /// All nets in canonical order, ground first.
@@ -447,7 +471,7 @@ impl<T> Schedule<T> {
 }
 
 impl Schedule<Value> {
-    fn append_level(&mut self, at: Time, level: Finite) {
+    pub(crate) fn append_level(&mut self, at: Time, level: Finite) {
         debug_assert_eq!(self.earliest(at, 0), Some(at));
         debug_assert_ne!(self.after(at).si, level);
         self.events.push(Event {

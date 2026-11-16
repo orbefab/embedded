@@ -17,10 +17,13 @@ use orbe_engine::diagnostic::{Diagnostic as EngineDiagnostic, Excursion};
 use orbe_engine::logic::Level as EngineLevel;
 use orbe_engine::name::{Name, Quantity, Ref as EngineRef};
 
-use orbe_engine::{EdgeCursor, Input, Probe, Refused, Rejected, Session, Setting, Status};
+use orbe_engine::finite::Finite;
+use orbe_engine::{
+    EdgeCursor, Input, Probe, Refused, Rejected, Session, Setting, Status, WorldChange,
+};
 use orbe_scene::{Code as SceneCode, Files, RefMap, View};
 
-use crate::command::{Command, Step};
+use crate::command::{Command, Step, WorldSet};
 use crate::condition::Unit;
 use crate::duration::Duration;
 use crate::reply::{
@@ -138,6 +141,7 @@ impl Live {
             )),
             (Command::Press(r), Some(open)) => open.contact(r, true),
             (Command::Release(r), Some(open)) => open.contact(r, false),
+            (Command::Set(set), Some(open)) => open.set(set),
             (Command::Get(r), Some(open)) => open.get(r).map(Data::Got).map_err(fail),
             (Command::Step(step), Some(open)) => open.step(step, during),
             (Command::Play, Some(open)) => open.play(),
@@ -367,6 +371,11 @@ fn rejected(rejected: Rejected, target: &str) -> Error {
             format!("`{target}` is already in that state"),
             "",
         ),
+        Rejected::Undeclared => (
+            Code::NotSettable,
+            format!("the scene does not declare {target}"),
+            "set it in the scene's \"world\", or use a part that reads it, then `open` again",
+        ),
     };
     Error::new(code, message, hint)
 }
@@ -588,6 +597,27 @@ impl Open {
         let data = Data::Landed {
             target: path,
             pressed,
+            landed_ps: applied.at.as_ps(),
+        };
+        match applied.status {
+            Status::Faulted => Err(failed(self.faulted(), data)),
+            _ => Ok(data),
+        }
+    }
+
+    fn set(&mut self, set: &WorldSet) -> Outcome {
+        let change = WorldChange {
+            quantity: set.quantity,
+            at: self.engine.now(),
+            value: Finite::new(set.value).expect("the command's value is finite"),
+        };
+        let applied = self
+            .engine
+            .set(&change)
+            .map_err(|e| fail(rejected(e, set.quantity.name())))?;
+        let data = Data::Set {
+            quantity: set.quantity,
+            value: set.value,
             landed_ps: applied.at.as_ps(),
         };
         match applied.status {

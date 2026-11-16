@@ -18,6 +18,8 @@ pub enum Code {
     UnknownRef,
     UnknownPin,
     Param,
+    /// A `world` quantity the table lacks, a value outside its range, or a step out of order.
+    World,
     Layout,
     Wires,
     NotSimulated,
@@ -61,6 +63,7 @@ impl Code {
             Code::UnknownRef => "scene.unknown_ref",
             Code::UnknownPin => "scene.unknown_pin",
             Code::Param => "scene.param",
+            Code::World => "scene.world",
             Code::Layout => "scene.layout",
             Code::Wires => "scene.wires",
             Code::NotSimulated => "not_simulated",

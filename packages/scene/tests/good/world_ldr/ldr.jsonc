@@ -1,0 +1,20 @@
+{
+  "format": 1,
+  "pins": { "a": [1], "b": [2] },
+  "model": {
+    "kind": "resistor",
+    // 10 kohm at 10 lx, inverse in the light, 1 Mohm in the dark.
+    "resistance": {
+      "kind": "world",
+      "quantity": "light",
+      "curve": {
+        "kind": "power",
+        "x": { "value": 10, "unit": "lx", "source": "user" },
+        "y": { "value": 10000, "unit": "ohm", "source": "user" },
+        "exponent": { "value": -1, "unit": "1", "source": "user" },
+        "max": { "value": 1000000, "unit": "ohm", "source": "user" },
+      },
+    },
+    "ratings": { "power": null },
+  },
+}

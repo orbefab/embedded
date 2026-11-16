@@ -18,6 +18,7 @@ use crate::blob::{Blobs, Sha256};
 use crate::diagnostic::{AnalysisRule, Diagnostic, ScheduleRule, ValueRule};
 use crate::finite::Finite;
 use crate::name::{Name, NameError, Ref};
+use crate::world::World;
 pub(crate) use waveform::AMPERE;
 pub(crate) const FRACTION_UNIT: &str = "1";
 
@@ -28,6 +29,7 @@ pub(crate) struct ParseCtx<'a> {
     pub(crate) part: &'a Ref,
     pub(crate) nets: &'a BTreeMap<String, NetId>,
     pub(crate) blobs: &'a Blobs,
+    pub(crate) world: &'a World,
     pub(crate) out: &'a mut Vec<Diagnostic>,
 }
 
@@ -45,6 +47,9 @@ struct WireNetlist {
     ground: String,
     nets: Vec<String>,
     parts: Vec<WirePart>,
+    /// Optional: a netlist without it declares no world quantity.
+    #[serde(default)]
+    world: Option<crate::world::json::WireWorld>,
 }
 
 #[derive(Deserialize)]
@@ -206,18 +211,17 @@ fn resolve(wire: WireNetlist, blobs: &Blobs) -> Result<Netlist, Vec<Diagnostic>>
         .collect();
 
     let analysis = resolve_analysis(&wire.analysis, &mut out);
+    let world = crate::world::json::resolve_world(wire.world, &mut out);
+    let shared = Shared {
+        seed: wire.seed,
+        nets: &net_ids,
+        blobs,
+        world: &world,
+    };
     let mut seen_parts = BTreeSet::new();
     let mut parts = Vec::new();
     for (index, part) in wire.parts.into_iter().enumerate() {
-        if let Some(part) = resolve_part(
-            wire.seed,
-            index,
-            part,
-            &net_ids,
-            blobs,
-            &mut seen_parts,
-            &mut out,
-        ) {
+        if let Some(part) = resolve_part(&shared, index, part, &mut seen_parts, &mut out) {
             parts.push(part);
         }
     }
@@ -233,6 +237,7 @@ fn resolve(wire: WireNetlist, blobs: &Blobs) -> Result<Netlist, Vec<Diagnostic>>
         analysis: analysis.expect("an analysis without diagnostics resolved"),
         nets,
         parts,
+        world,
     })
 }
 
@@ -336,12 +341,18 @@ fn canonical_nets(mut valid: Vec<Name>, ground: Option<&Name>) -> Vec<Name> {
     valid
 }
 
-fn resolve_part(
+/// What every part's resolve reads besides its own wire payload.
+struct Shared<'a> {
     seed: u64,
+    nets: &'a BTreeMap<String, NetId>,
+    blobs: &'a Blobs,
+    world: &'a World,
+}
+
+fn resolve_part(
+    shared: &Shared<'_>,
     index: usize,
     part: WirePart,
-    nets: &BTreeMap<String, NetId>,
-    blobs: &Blobs,
     seen: &mut BTreeSet<String>,
     out: &mut Vec<Diagnostic>,
 ) -> Option<Part> {
@@ -374,11 +385,12 @@ fn resolve_part(
     }
     let part_ref = Ref::Part(name.clone());
     let model = part.resolve(ParseCtx {
-        seed,
+        seed: shared.seed,
         name: &name,
         part: &part_ref,
-        nets,
-        blobs,
+        nets: shared.nets,
+        blobs: shared.blobs,
+        world: shared.world,
         out,
     });
     if duplicate || reserved {

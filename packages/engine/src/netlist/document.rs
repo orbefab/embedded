@@ -31,7 +31,8 @@ impl Document {
     /// `stop_ps` set to `stop`, and `grid_ps` cut to `stop`. A switch event is appended to
     /// `events`. A plain `voltage`, `current` or `position` becomes `steps`, with that value
     /// object as `initial`. A `steps` field gains the new levels. A `serial` field gains the new
-    /// frames on `events`. A part with nothing appended is left as it was. `netlist` parsed from
+    /// frames on `events`. A world quantity's changes join its field as a level's do. A part
+    /// or a quantity with nothing appended is left as it was. `netlist` parsed from
     /// this document and has only had events appended,
     /// and `stop` is from `max_step_ps` to `stop_ps`. Keys come out sorted and numbers reprinted.
     pub fn export(&self, netlist: &Netlist, stop: Time) -> Vec<u8> {
@@ -40,6 +41,10 @@ impl Document {
         transient["stop_ps"] = stop.as_ps().into();
         let grid = transient["grid_ps"].as_u64().expect("a parsed grid");
         transient["grid_ps"] = grid.min(stop.as_ps()).into();
+        for (quantity, schedule) in netlist.world().declared() {
+            let field = &mut json["world"][quantity.name()];
+            append_levels(field, schedule.events(), quantity.unit());
+        }
         let parts = json["parts"].as_array_mut().expect("parsed parts");
         for part in parts.iter_mut() {
             let name = part["name"].as_str().and_then(|name| Name::new(name).ok());

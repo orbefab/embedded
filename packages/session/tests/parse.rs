@@ -197,7 +197,23 @@ fn a_bad_line_names_the_command_and_its_usage() {
     for (text, says) in [
         (
             "blink @led1",
-            "`blink` is not a command; the commands are open, close, press, release, get, step, play, pause, snapshot, expect",
+            "`blink` is not a command; the commands are open, close, press, release, set, get, step, play, pause, snapshot, expect",
+        ),
+        (
+            "set lite 50",
+            "`lite` is not a world quantity; the quantities are temperature, humidity, light",
+        ),
+        (
+            "set light 200000",
+            "light is from 0 to 100000 lx, not 200000",
+        ),
+        (
+            "set temperature warm",
+            "`warm` is not a number; write temperature in degC, such as 25",
+        ),
+        (
+            "set light",
+            "takes a quantity and a value, such as `light 50`; usage: set <quantity> <value>",
         ),
         (
             "press",

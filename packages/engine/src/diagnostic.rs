@@ -49,6 +49,27 @@ pub enum ValueRule {
     Span,
     /// An LED count is outside 1 to 1024.
     Leds,
+    /// A world quantity's value, or a B equation's reference temperature, is outside the range
+    /// its quantity's row of the table gives.
+    Range,
+    /// A world-driven field's curve is not finite at an end of its quantity's range.
+    Finite,
+    /// A linear curve's two points share their world value.
+    Distinct,
+}
+
+/// Which rule a world quantity's name broke.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorldRule {
+    /// The name is not a quantity of the table.
+    Unknown,
+    /// A part reads a quantity the netlist's `world` does not declare.
+    Undeclared,
+    /// A B-equation curve reads a quantity other than temperature.
+    Temperature,
+    /// A power curve reads a quantity whose range goes below 0, where `w / x` is negative.
+    NonNegative,
 }
 
 /// Why `firmware` is not a program for the part's flash.
@@ -353,6 +374,14 @@ pub enum Diagnostic {
         rule: ScheduleRule,
         end_ps: u64,
     },
+    /// A world quantity's name breaks a rule. `part` is the part whose field reads it, or `None`
+    /// for a name in `world`.
+    NetlistWorld {
+        part: Option<Ref>,
+        field: Cow<'static, str>,
+        name: String,
+        rule: WorldRule,
+    },
     /// A source waveform's time field breaks a rule. `field` is owned when it names one event.
     NetlistWaveform {
         part: Ref,
@@ -598,6 +627,7 @@ impl Diagnostic {
             Diagnostic::NetlistAnalysis { .. } => "netlist.analysis",
             Diagnostic::NetlistSchedule { .. } => "netlist.schedule",
             Diagnostic::NetlistWaveform { .. } => "netlist.waveform",
+            Diagnostic::NetlistWorld { .. } => "netlist.world",
             Diagnostic::NetFloating { .. } => "net.floating",
             Diagnostic::SolverSingular { .. } => "solver.singular",
             Diagnostic::SolverNonFinite { .. } => "solver.nonfinite",
@@ -651,6 +681,7 @@ impl Diagnostic {
             | Diagnostic::NetlistAnalysis { .. }
             | Diagnostic::NetlistSchedule { .. }
             | Diagnostic::NetlistWaveform { .. }
+            | Diagnostic::NetlistWorld { .. }
             | Diagnostic::SolverSingular { .. }
             | Diagnostic::SolverNonFinite { .. }
             | Diagnostic::SolverTooLarge { .. }
@@ -713,6 +744,7 @@ impl Diagnostic {
             | Diagnostic::NetlistAnalysis { .. }
             | Diagnostic::NetlistSchedule { .. }
             | Diagnostic::NetlistWaveform { .. }
+            | Diagnostic::NetlistWorld { .. }
             | Diagnostic::NetFloating { .. } => None,
         }
     }
@@ -734,6 +766,7 @@ impl Diagnostic {
             | Diagnostic::NetlistBlob { part, .. }
             | Diagnostic::NetlistSchedule { part, .. }
             | Diagnostic::NetlistWaveform { part, .. } => vec![part.clone()],
+            Diagnostic::NetlistWorld { part, .. } => part.iter().cloned().collect(),
             Diagnostic::NetFloating { net } => vec![net.clone()],
             Diagnostic::SolverSingular { unknown, .. }
             | Diagnostic::SolverNonFinite { unknown, .. }
@@ -863,6 +896,27 @@ impl Diagnostic {
                     ValueRule::Leds => {
                         format!("{part} {field} is {count}; it must be from 1 to 1024")
                     }
+                    ValueRule::Range => {
+                        let quantity = match part {
+                            Ref::World(quantity) => *quantity,
+                            _ => crate::world::Quantity::Temperature,
+                        };
+                        let row = quantity.row();
+                        format!(
+                            "{part} {field} is {value} {}; {} must be from {} to {} {}",
+                            row.unit,
+                            row.name,
+                            number_text(row.min),
+                            number_text(row.max),
+                            row.unit
+                        )
+                    }
+                    ValueRule::Finite => {
+                        format!("{part} {field} is {value}; it must be finite")
+                    }
+                    ValueRule::Distinct => {
+                        format!("{part} {field} is {value}; it must differ from x0")
+                    }
                 }
             }
             Diagnostic::NetlistFirmware { part, line, rule } => {
@@ -958,23 +1012,23 @@ impl Diagnostic {
                 rule,
                 end_ps,
             } => {
+                // A switch's events have a bounce window. A world quantity's are levels.
+                let switch = *field == "events" && !matches!(part, Ref::World(_));
                 let what = match rule {
                     ScheduleRule::AtZero => {
                         "is at 0 ps; an event must come after t = 0".to_string()
                     }
-                    ScheduleRule::SameState if *field == "events" => {
-                        "does not change the contact".to_string()
-                    }
+                    ScheduleRule::SameState if switch => "does not change the contact".to_string(),
                     ScheduleRule::SameState => "does not change the level".to_string(),
                     ScheduleRule::NotIncreasing => "is not after the previous event".to_string(),
-                    ScheduleRule::TooClose if *field == "events" => format!(
+                    ScheduleRule::TooClose if switch => format!(
                         "is less than {} ps after the previous event and its bounce window",
                         MIN_GAP_PS
                     ),
                     ScheduleRule::TooClose => {
                         format!("is less than {} ps after the previous event", MIN_GAP_PS)
                     }
-                    ScheduleRule::Overflow if *field == "events" => {
+                    ScheduleRule::Overflow if switch => {
                         "has a bounce window that ends past the largest time".to_string()
                     }
                     ScheduleRule::Overflow => "ends past the largest time".to_string(),
@@ -983,6 +1037,40 @@ impl Diagnostic {
                     }
                 };
                 format!("{part} {field}[{event}] {what}")
+            }
+            Diagnostic::NetlistWorld {
+                part,
+                field,
+                name,
+                rule,
+            } => {
+                let at = match part {
+                    Some(part) => format!("{part} {field}"),
+                    None => field.to_string(),
+                };
+                match rule {
+                    WorldRule::Unknown => {
+                        let names: Vec<&str> = crate::world::Quantity::ALL
+                            .iter()
+                            .map(|q| q.name())
+                            .collect();
+                        format!(
+                            "{at} names `{name}`, which is not a world quantity; the quantities are {}",
+                            names.join(", ")
+                        )
+                    }
+                    WorldRule::Undeclared => {
+                        format!("{at} reads {name}, which the netlist's `world` does not declare")
+                    }
+                    WorldRule::Temperature => {
+                        format!("{at} is a B equation, which reads temperature, not {name}")
+                    }
+                    WorldRule::NonNegative => {
+                        format!(
+                            "{at} is a power curve, which reads a quantity that does not go below 0, not {name}"
+                        )
+                    }
+                }
             }
             Diagnostic::NetlistWaveform {
                 part,
@@ -1451,6 +1539,9 @@ impl Diagnostic {
             Diagnostic::NetlistWaveform {
                 field, value, rule, ..
             } => serde_json::json!({ "field": field, "rule": rule, "value": value }),
+            Diagnostic::NetlistWorld {
+                field, name, rule, ..
+            } => serde_json::json!({ "field": field, "name": name, "rule": rule }),
             Diagnostic::SolverSingular { .. } | Diagnostic::SolverNonFinite { .. } => {
                 serde_json::json!({})
             }
@@ -1595,9 +1686,14 @@ fn rule_text(rule: &ProtocolRule) -> String {
         .expect("a rule serializes to its name")
 }
 
-/// The same characters `data.value` uses. `Display` for a subnormal is hundreds of digits.
-fn number_text(value: f64) -> String {
-    serde_json::to_string(&value).expect("a netlist value is a finite number")
+/// The same characters `data.value` uses. `Display` for a subnormal is hundreds of digits. A
+/// value that is not finite, which `data.value` holds as `null`, is `NaN`, `inf` or `-inf`.
+pub(crate) fn number_text(value: f64) -> String {
+    if value.is_finite() {
+        serde_json::to_string(&value).expect("a finite number serializes")
+    } else {
+        value.to_string()
+    }
 }
 
 fn over_rating(excursion: &Excursion, unit: &str) -> String {

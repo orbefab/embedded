@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value, json};
 
+use orbe_engine::world::Quantity;
+
 use crate::diagnostic::{Code, Findings, Reported};
 use crate::model::{Comp, ParamDecl, ParamKind, Part, PinDef, Ref, Scene, passed};
 use crate::name::did_you_mean;
@@ -860,13 +862,17 @@ impl<'p> Circuit<'p> {
             .unwrap_or_default();
         names.retain(|n| *n != ground_name);
         names.insert(0, ground_name.clone());
-        let head = Head(json!({
+        let mut head = json!({
             "version": 0,
             "seed": scene.seed,
             "analysis": { "transient": { "stop_ps": Scene::STOP_PS, "max_step_ps": scene.max_step_ps, "grid_ps": GRID_PS } },
             "ground": ground_name,
             "nets": names,
-        }));
+        });
+        if let Some(world) = world(scene, parts.iter().map(|part| &part.fields)) {
+            head["world"] = world;
+        }
+        let head = Head(head);
         let clean = self.out.is_empty();
         let mut left_out: BTreeMap<usize, Reported> = BTreeMap::new();
         let text = loop {
@@ -1286,6 +1292,61 @@ fn shown(node: &Node) -> String {
     ) {
         (Some(value), Some(unit)) => format!("{value} {unit}"),
         _ => node.what().to_string(),
+    }
+}
+
+/// The netlist's `world`: each quantity the scene sets, and each one a part's model reads, at
+/// its default unless the scene sets it, in table order. `None` when there is none, so a scene
+/// with no world writes the netlist it wrote before there was one.
+fn world<'a>(scene: &Scene, models: impl Iterator<Item = &'a Value>) -> Option<Value> {
+    let mut read = BTreeSet::new();
+    for model in models {
+        reads(model, &mut read);
+    }
+    read.extend(scene.world.iter().map(|ambient| ambient.quantity));
+    if read.is_empty() {
+        return None;
+    }
+    let level = |quantity: Quantity, value: f64| json!({ "value": value, "unit": quantity.unit(), "source": "user" });
+    let mut world = Map::new();
+    for quantity in read {
+        let set = scene
+            .world
+            .iter()
+            .find(|ambient| ambient.quantity == quantity);
+        let field = match set {
+            None => level(quantity, quantity.row().default),
+            Some(ambient) if ambient.steps.is_empty() => level(quantity, ambient.initial),
+            Some(ambient) => json!({
+                "kind": "steps",
+                "initial": level(quantity, ambient.initial),
+                "events": ambient.steps.iter().map(|&(at, to)| json!({
+                    "t_ps": at,
+                    "level": level(quantity, to),
+                })).collect::<Vec<_>>(),
+            }),
+        };
+        world.insert(quantity.name().into(), field);
+    }
+    Some(Value::Object(world))
+}
+
+/// Each quantity a `{"kind": "world", "quantity": ...}` field inside `value` reads.
+fn reads(value: &Value, out: &mut BTreeSet<Quantity>) {
+    match value {
+        Value::Object(map) => {
+            if map.get("kind").and_then(Value::as_str) == Some("world")
+                && let Some(quantity) = map
+                    .get("quantity")
+                    .and_then(Value::as_str)
+                    .and_then(Quantity::parse)
+            {
+                out.insert(quantity);
+            }
+            map.values().for_each(|inner| reads(inner, out));
+        }
+        Value::Array(items) => items.iter().for_each(|inner| reads(inner, out)),
+        _ => {}
     }
 }
 

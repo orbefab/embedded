@@ -9,6 +9,8 @@ use crate::finite::Finite;
 use crate::name::Name;
 
 use super::{Session, State, Status};
+use crate::tran::Changer;
+use crate::world::Quantity;
 
 /// A change to one part, asked for from `at` on.
 #[derive(Clone, Debug, PartialEq)]
@@ -47,6 +49,15 @@ pub struct DeviceEvent {
     pub fields: Vec<(String, FieldValue)>,
 }
 
+/// A world quantity's value from `at` on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldChange {
+    pub quantity: Quantity,
+    pub at: Time,
+    /// In the quantity's unit.
+    pub value: Finite,
+}
+
 /// An input in its part's events.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Applied {
@@ -74,14 +85,19 @@ pub enum Rejected {
     /// source, or a `serial` source. On a device part, an event it does not declare, or one
     /// with a field missing, unknown, repeated or of the wrong kind.
     WrongSetting,
-    /// A position outside `(0, 1)`, a leg that breaks the resistance rules, or a device event's
-    /// integer outside its span, such as a touch coordinate outside 0 to 4095.
+    /// A position outside `(0, 1)`, a leg that breaks the resistance rules, a device event's
+    /// integer outside its span, such as a touch coordinate outside 0 to 4095, or a world value
+    /// outside its quantity's range.
     Value(ValueRule),
     /// It would land at or after `stop`, or a serial send's frames would not end inside a
     /// time the engine can store.
     PastStop,
     /// The setting equals the value after the part's last event, or a serial send has no bytes.
+    /// A world change equals the value after its quantity's last change.
     NoChange,
+    /// The netlist does not declare the world quantity, so no part reads it and the trace has
+    /// no column for it.
+    Undeclared,
 }
 
 impl Session {
@@ -99,30 +115,70 @@ impl Session {
     /// re-solve. A failed restart ends the session at the landing. Any other fault ends it at the
     /// accepted step.
     pub fn apply(&mut self, input: &Input) -> Result<Applied, Rejected> {
-        let State::Running { accepted, now, .. } = &self.state else {
-            return Err(Rejected::Ended);
-        };
+        let from = self.from(input.at)?;
         let netlist = &self.circuit.netlist;
         let id = netlist.part_id(&input.part).ok_or(Rejected::UnknownPart)?;
-        let after_accepted = Time::from_ps(accepted.at.as_ps() + 1);
-        let from = input.at.max(*now).max(after_accepted).max(accepted.reach);
         let (appended, at, same) = decision(&netlist.part(id).model, &input.setting, from)?;
         if same {
             return Err(Rejected::NoChange);
         }
-        let at = at
-            .filter(|&at| at < self.transient.stop)
-            .ok_or(Rejected::PastStop)?;
+        let at = self.before_stop(at)?;
         self.circuit.netlist.append(id, at, appended);
+        Ok(self.land(Changer::Part(id), at))
+    }
+
+    /// Appends `change` to its quantity's schedule at the first time from the one it asks for
+    /// that `apply` would land an input at, and solves the held step again, as `apply` does. A
+    /// world change is a jump, so that solve restarts, and every part field that reads the
+    /// quantity takes its new value there.
+    pub fn set(&mut self, change: &WorldChange) -> Result<Applied, Rejected> {
+        let from = self.from(change.at)?;
+        let quantity = change.quantity;
+        let schedule = self
+            .circuit
+            .netlist
+            .world()
+            .schedule(quantity)
+            .ok_or(Rejected::Undeclared)?;
+        if !quantity.holds(change.value.get()) {
+            return Err(Rejected::Value(ValueRule::Range));
+        }
+        if schedule.after_last().si == change.value {
+            return Err(Rejected::NoChange);
+        }
+        let at = self.before_stop(schedule.earliest(from, 0))?;
+        self.circuit
+            .netlist
+            .append_world(quantity, at, change.value);
+        Ok(self.land(Changer::World(quantity), at))
+    }
+
+    /// The first time an input asked for at `asked` may land: after the accepted step, at or
+    /// after `now`, and at or after the accepted step's reach.
+    fn from(&self, asked: Time) -> Result<Time, Rejected> {
+        let State::Running { accepted, now, .. } = &self.state else {
+            return Err(Rejected::Ended);
+        };
+        let after_accepted = Time::from_ps(accepted.at.as_ps() + 1);
+        Ok(asked.max(*now).max(after_accepted).max(accepted.reach))
+    }
+
+    fn before_stop(&self, at: Option<Time>) -> Result<Time, Rejected> {
+        at.filter(|&at| at < self.transient.stop)
+            .ok_or(Rejected::PastStop)
+    }
+
+    /// Arms `changer`'s new edge at `at` and solves the held step again from the accepted one.
+    fn land(&mut self, changer: Changer, at: Time) -> Applied {
         self.opened = None;
-        self.breakpoints.arm(id, at);
+        self.breakpoints.arm(changer, at);
         let State::Running { accepted, now, .. } = std::mem::replace(&mut self.state, State::TAKEN)
         else {
             unreachable!("the session runs");
         };
         self.state = self.solved(accepted);
         let status = self.advance_to(now);
-        Ok(Applied { at, status })
+        Applied { at, status }
     }
 
     /// Whether the session has a document for `export` to write, as `open_document` and

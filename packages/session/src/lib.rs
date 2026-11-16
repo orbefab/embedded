@@ -13,7 +13,7 @@ pub mod test;
 mod typescript;
 pub mod viewer;
 
-pub use command::{COMMANDS, Command, Spec, Step, UNTIL_TIMEOUT, spec};
+pub use command::{COMMANDS, Command, Spec, Step, UNTIL_TIMEOUT, WorldSet, spec};
 pub use condition::{Amount, Condition, Needle, Op, State as Want, Unit};
 pub use duration::Duration;
 pub use live::{CHANGES, Channels, FrameState, Live, Pace, Progress, SERIAL_LINES, Sample};

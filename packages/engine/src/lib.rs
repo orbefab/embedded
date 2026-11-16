@@ -42,6 +42,7 @@ mod step;
 mod topology;
 mod tran;
 mod watch;
+pub mod world;
 
 use crate::blob::Blobs;
 
@@ -53,7 +54,7 @@ use crate::tran::Rows;
 pub use crate::serial::SerialByte;
 pub use session::{
     Applied, DeviceEvent, Display, EdgeCursor, Input, Leds, Probe, Refused, Rejected, Serial,
-    SerialCursor, Session, Setting, Status,
+    SerialCursor, Session, Setting, Status, WorldChange,
 };
 pub use topology::floating_nets;
 

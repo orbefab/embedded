@@ -136,7 +136,7 @@ impl<'de> Deserialize<'de> for WireWaveform {
 }
 
 /// A JSON object that rejects a repeated key, as a derived struct does. A map keeps the last.
-struct ObjectVisitor;
+pub(crate) struct ObjectVisitor;
 
 impl<'de> Visitor<'de> for ObjectVisitor {
     type Value = serde_json::Map<String, serde_json::Value>;

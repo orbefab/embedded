@@ -587,6 +587,7 @@ fn a_flag_on_a_test_line_is_a_usage_error_except_as_serial_text() {
         "close",
         "press @btn1",
         "release @btn1",
+        "set light 50",
         "get @led1",
         "step 10ms",
         "step --until @led1 on",

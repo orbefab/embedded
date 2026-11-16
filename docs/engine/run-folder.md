@@ -75,7 +75,7 @@ A JSON array of diagnostics, in the order defined in [diagnostics.md](diagnostic
 
 ## observations.json
 
-A successful operating point is one object under `op`. That object maps each ref to a number. Keys follow the ref order in [netlist.md](netlist.md).
+A successful operating point is one object under `op`. That object maps each ref to a number. Keys follow the ref order in [netlist.md](netlist.md). A netlist that declares a world quantity adds `#world.<quantity>`, its value at t = 0, in the quantity's unit.
 
 The divider in [netlist.md](netlist.md) writes:
 
@@ -281,7 +281,7 @@ A row at the time of a contact edge, a source jump or a chip event holds the sta
 - `analog.f64` holds `rows` IEEE 754 binary64 little-endian values per column, column after column. Column `j` occupies bytes `j * rows * 8` up to `(j + 1) * rows * 8`.
 - `envelope.f64` holds one interval per pair of consecutive rows, `rows - 1` of them, as IEEE 754 binary64 little-endian values per column. The intervals' minima come first, then their maxima. Column `j` occupies bytes `j * (rows - 1) * 16` up to `(j + 1) * (rows - 1) * 16`. The first half of that span is the minima and the second half is the maxima. Interval `k` lies between rows `k` and `k + 1`. `time.u64` gives both boundaries. A trace with one row writes an empty file and still has the `envelope` key.
 - An interval's minimum and maximum cover its two rows and every accepted step strictly between them. A row's probe is one of those rows, so it is a sample. A located chip event is an accepted step, so it is a sample. A restart solve is not, and neither is a refused step or a probe locating a chip event. The envelope has no column list. Its columns are `analog.columns`, in that order.
-- `columns` are a subset of the keys of `observations.op`, in ref order. Read them from the index. Today every key of `op` is a column. A net or a `.v` is `V`, a `.i`, `.ib`, `.ic`, `.id`, `.iin` or `.iout` is `A`, and a `.p` is `W`. Row 0 holds exactly the numbers in `op`.
+- `columns` are a subset of the keys of `observations.op`, in ref order. Read them from the index. Today every key of `op` is a column. A net or a `.v` is `V`, a `.i`, `.ib`, `.ic`, `.id`, `.iin` or `.iout` is `A`, a `.p` is `W`, and a `#world.<quantity>` is the quantity's unit, such as `lx`. A world column comes only from a netlist that declares the quantity, so a run without a `world` has the columns it had before the world existed. A world row at a change reads the value from before it, as [netlist.md](netlist.md#world) says. Row 0 holds exactly the numbers in `op`.
 - Every value of `analog.f64` and `envelope.f64` is finite. `-0.0` is written as `0.0`.
 - There is no header and no compression.
 - A chip adds no column. Its pins are nets, which have their columns, and its internal ladder node is not observed.

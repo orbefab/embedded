@@ -11,7 +11,7 @@ This text comes from the `orbe` you have installed, so it matches it. `orbe <com
 3. Run `orbe check scene.jsonc`. It prints every error with its file, line, column and a hint. A missing part is `part_missing`, and its hint is the `orbe add` command to run. Run it as printed, then check again.
 4. Run `orbe lint scene.jsonc`. It runs `orbe check` first, then warns of what checks but is likely wrong or unclear, such as an LED with no series resistor. Read each warning. Do what its hint says, or leave it when the scene means it. Run `orbe lint` again after every edit to the scene.
 5. Run `orbe open` in the project folder. It opens `scene.jsonc` there, or the scene you name, as `orbe open path/to/scene.jsonc`. It checks the scene, starts a session at t = 0, paused, and lists the parts.
-6. Drive it with `orbe step`, `orbe press`, `orbe release`, `orbe get`, `orbe expect` and `orbe snapshot`.
+6. Drive it with `orbe step`, `orbe press`, `orbe release`, `orbe set`, `orbe get`, `orbe expect` and `orbe snapshot`.
 7. To fix something, edit the scene or the firmware, rebuild, run `orbe lint`, and run `orbe open` again. It restarts the session at t = 0.
 8. Run `orbe close` when the live work is done. A `no_session` error from it means nothing was open.
 9. Write what worked as `tests/<name>.test` and run `orbe test`. It leaves no session to close.
@@ -135,6 +135,15 @@ A scene is JSONC: JSON plus `//` comments and trailing commas, nothing more. Its
 - `nets` (optional): names a net by one of its pins, `"GND": "nano.GND"`. Other nets take the name of their smallest pin, with `.` written `__`, as `nano__GND`.
 - `layout` (optional): `"btn1": { "at": [x, y, z], "rotate": [rx, ry, rz] }` in mm and degrees, for drawing only, or `"r1": { "on": { "a": "bb.d25" } }` to plug a part into a breadboard, which also wires it (see "Breadboards"). The 3D page puts a part with no `layout` in a row to the right of the placed ones, and draws its wires to it, so a scene with no `layout` at all still shows every part and wire.
 - `sim` (optional): `{ "max_step": "1ms", "seed": 1 }`. `max_step` is the engine's largest step, 10 ms by default.
+- `world` (optional): the room the circuit sits in, the same for every part. Each quantity holds a number, or an `initial` and timed `steps`:
+
+  | Quantity | Unit | Range | Default |
+  | --- | --- | --- | --- |
+  | `temperature` | degC | -40 to 125 | 25 |
+  | `humidity` | %RH | 0 to 100 | 50 |
+  | `light` | lx | 0 to 100000 | 300 |
+
+  `"world": { "light": 300, "temperature": { "initial": 25, "steps": [{ "at": "2s", "to": 30 }] } }`. A step's `at` is after 0 and within 2 hours, at least 2 ns after the step before it, and changes the value. A quantity the scene leaves out holds its default when a part reads it. `orbe set` changes one during a session.
 
 A part name starts with a letter, takes letters, digits and `_`, and may not contain `__` or end in `_`. `i`, `v`, `p`, `pin`, `logic` and `net` are reserved. With two boards in a scene, wire their GND pins together, so both grounds are one net.
 
@@ -228,6 +237,8 @@ A ref names something in the open scene. It starts with `@`, which a shell leave
 
 `press @btn1` and `release @btn1` close and open a switch.
 
+`orbe set <quantity> <value>` changes the scene's `world`, as `orbe set light 50` or `orbe set temperature 30`. The value is a plain number in the quantity's unit, inside its range. Read its effect on the circuit, such as a pin's voltage. Only a quantity the scene's `world` names, or a part reads, can be set.
+
 ## Conditions
 
 `expect` and `step --until` take the same conditions:
@@ -245,10 +256,10 @@ In a shell, quote `<` and `>`, or the shell takes them as redirects, as in `orbe
 - The session is paused between commands. Time moves only inside `step`, or while `play` runs (see "Watching in 3D").
 - `step <duration>` advances by that much and lists what changed, such as pin edges with their exact times, LED changes and diagnostics. It lists at most 20, then `and N more`, so serial edges on D1 can hide the rest. `get` and `snapshot` show the state after it. Durations take ps, ns, us, ms or s, such as `100ms`, `1.5ms`, `20us`.
 - A read at time t, by `get`, `expect` or `snapshot`, shows the circuit just before anything that happens at t. So `press` at t shows from t + 1 ps on, and its reply says "reads show it after t". Step after an input before you read its effect.
-- An input lands at the session's time or later, and its reply gives the time.
+- An input lands at the session's time or later, and its reply gives the time. A `set` also lands after the last change the scene's `steps` schedule, so it never undoes one.
 - `step --until <condition> [--timeout <duration>]` first reads the condition now. If it holds, it takes no time. Otherwise it steps until it holds, up to the timeout, 10s by default. A pin condition stops 1 ps after the exact edge, and part readings such as `@led1 on` already show the edge there, with no extra `step`. Other conditions are read every 1 ms, so the reply says `by 101ms`. A timeout is the error `until_timeout`.
 - Serial can reach orbe up to one engine step (10 ms) after the chip sends it. Step a little past a print before you expect it.
-- A session stops at 2 hours of simulated time. Reads still work there, and `press`, `release` and `step` fail with `ended`. A `step` that would pass the stop fails with `past_stop`. Run `orbe open` to start again.
+- A session stops at 2 hours of simulated time. Reads still work there, and `press`, `release`, `set` and `step` fail with `ended`. A `step` that would pass the stop fails with `past_stop`. Run `orbe open` to start again.
 
 A switch with `bounce` set bounces up to `max_bounces` times within that window after each `press` and `release`, and an input on it lands after the window of the one before. With this one-line change to the worked example's `scene.jsonc`,
 
@@ -355,11 +366,13 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 | `firmware_missing` | Build the firmware, or fix the path. It starts from the scene's folder. |
 | `not_simulated` | A wire reaches a pin the engine does not simulate, or a part marked `not_simulated`. Wire another pin, or remove the wire. |
 | `scene.unknown_pin`, `scene.param`, `scene.syntax` | A typo or a wrong value at that line and column. The hint names what is valid. |
+| `scene.world` | A `world` quantity that does not exist, a value outside its range, or a step at 0, too close to the one before it, or that does not change the value. The hint names what is valid. |
 | `part_modified` | A copied part was edited. Run `orbe add <id> --overwrite` to restore it, or copy it to a folder of your own. |
 | `no_session` | No session runs under this name. Run the `orbe open` in the hint. |
 | `session_crashed` | The session's process died. Run `orbe open` again. |
 | `unknown_ref`, `no_reading` | The ref names nothing, or nothing to read. The hint lists what exists. |
-| `not_settable` | `press` and `release` work only on a switch, by its part name. |
+| `not_settable` | `press` and `release` work only on a switch, by its part name. `set` works only on a quantity the scene's `world` names or a part reads. |
+| `no_change` | The input asks for the state already there, such as `set light 50` when the light is already 50. |
 | `expect_failed`, `until_timeout` | The condition did not hold. Compare `actual`, then fix the circuit or the firmware, or step longer. |
 | `ended`, `past_stop` | The session reached its 2-hour stop. Run `orbe open`. |
 | `cancelled` | Ctrl-C stopped a `step`. The session stays at the time it reached. Step again. |
@@ -371,7 +384,7 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 - The Uno's VIN pin and barrel jack. A wire to VIN is a `not_simulated` error. The Uno's 3V3 works.
 - The Uno's TX and RX LEDs and the gate of its USB switch. D13 feeds its L LED through 1k, so D13 as an input with its pull-up reads low.
 - USB, and serial into the chip. The chip's serial out (TX, D1) is read as text.
-- Light, temperature, a switch's force and travel, and part tolerances. An LED's `on` is its current over a threshold.
+- A switch's force and travel, and part tolerances. An LED's `on` is its current over a threshold. Light, temperature and humidity reach only a part whose file reads them from the scene's `world`.
 - Turning a potentiometer during a session. Its `position` param sets the wiper for the whole run, so run `orbe open` again after you change it.
 - Any part the catalog above does not list.
 - orbe never builds firmware. Build it with your toolchain and name the output file in the scene.

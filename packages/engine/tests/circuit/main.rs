@@ -16,6 +16,7 @@ mod sources;
 mod step;
 mod steps;
 mod transient;
+mod world;
 mod zener;
 
 #[path = "../support/declare.rs"]

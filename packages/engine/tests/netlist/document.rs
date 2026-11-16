@@ -121,7 +121,7 @@ fn ohms(netlist: &netlist::Netlist, name: &str) -> f64 {
     let Model::Resistor(resistor) = &netlist.part(id).model else {
         panic!("{name} is not a resistor");
     };
-    resistor.resistance.si.get()
+    resistor.resistance.fixed().unwrap().si.get()
 }
 
 /// The appended events follow each switch's own, in the caller's part order. `stop_ps` is the
