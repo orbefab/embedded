@@ -506,7 +506,7 @@ The law cannot match the page 7 legacy ripple rejection of 45 dB at 1000 Hz, the
 
 ### Op-amp
 
-`kind` is `op_amp`. Pins are `in_p`, `in_n`, `out`, `vcc` and `gnd`. One part is one channel. A dual part, such as `parts/lmv358-msop8`, maps two bodies, `a` and `b`, onto the same `vcc` and `gnd`.
+`kind` is `op_amp`. Pins are `in_p`, `in_n`, `out`, `vcc` and `gnd`. One part is one channel. A dual part, such as `parts/lmv358-msop8` or `parts/lm358-dip8`, maps two bodies, `a` and `b`, onto the same `vcc` and `gnd`.
 
 The part is a behavioural element with one pole. It has one internal node, the integrator `x`, with a capacitor `C` of 1 nF from `x` to `gnd`, and two branches. Branch 0 is that capacitor's current. Branch 1 is the output current `i`, which leaves the part at `out`, so `i` is positive while the part sources. `vd` is `V(in_p) - V(in_n)`, `u` is `V(x) - V(gnd)`, `s` is `V(vcc) - V(gnd)` and `vo` is `V(out) - V(gnd)`. `sp` and `ln` are as in [Linear regulator](#linear-regulator), and `sg(x)` is `1 / (1 + e^-x)`.
 
