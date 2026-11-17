@@ -11,6 +11,7 @@ mod cst816;
 mod dht22;
 mod esp32s3;
 mod fade;
+mod floating_input;
 mod i2c;
 mod knob;
 mod link;

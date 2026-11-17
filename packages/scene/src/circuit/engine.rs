@@ -16,6 +16,7 @@ const REPEATS: &[&str] = &[
     "netlist.duplicate",
     "netlist.unknown_net",
     "netlist.ground",
+    "net.short",
 ];
 
 impl<'p> Circuit<'p> {
@@ -47,6 +48,18 @@ impl<'p> Circuit<'p> {
             return;
         };
         if self.failed.contains_key(&origin.inst) {
+            return;
+        }
+        if let Diagnostic::NetShort { .. } = diagnostic {
+            // The scene's wires short a supply where the reader saw them join it. This one is
+            // a part whose own wires put both pins of its source on one net.
+            let part = &self.insts[origin.inst];
+            self.out.push(
+                Code::Engine(code),
+                part.top_span,
+                format!("`{}`: {message}", part.dotted()),
+                "give the source's two pins separate nets".into(),
+            );
             return;
         }
         // The fields the rule reads, the message, what it asks of a value that set one of
