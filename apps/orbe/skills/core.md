@@ -216,7 +216,7 @@ breadboard.jsonc: ok, 18 engine parts, 31 nets, ground nano__GND
 
 ## Parts
 
-`orbe add <id>…` copies parts from the catalog built into this `orbe` into `parts/<id>/` and records them in `parts.lock`. It also copies the parts a part is built from. Commit `parts/` and `parts.lock` with the scene. Don't edit a copied part. A copy that differs, even in spacing, is a `part_modified` error. A board built from other parts, such as `nano-board`, is the exception. An edit to it checks, with a note. To change a part, copy it to a folder of your own and name it by its `./` path.
+`orbe add <id>…` copies parts from the catalog built into this `orbe` into `parts/<id>/` and records them in `parts.lock`. It also copies the parts a part is built from. Commit `parts/` and `parts.lock` with the scene. Don't edit a copied part. A copy that differs, even in spacing, is a `part_modified` error. A board built from other parts, such as `nano-board`, is the exception. An edit to it checks, with a note. A copy that matches its `parts.lock` line and not the part this orbe carries is a `part_outdated` error. The message names both versions. Its hint is one `orbe add` command that names every such id. Run it as printed, then check again. The same version with different bytes is still `part_modified` for a sealed part: a registry refuses that change and asks for a new version. A board stays the exception above. To change a part, copy it to a folder of your own and name it by its `./` path.
 
 `orbe add <block>` installs a Block, a small circuit that works. It copies the parts the scene names into `parts/` and records them in `parts.lock`, then writes the Block's `scene.jsonc`, `firmware/` and `tests/`. The Blocks are `nano-button-led`, `uno-button-led`, `nano-led-fade` and `nano-light-comparator`. A folder that already holds another `scene.jsonc` is `scene_exists`, since orbe does not merge scenes. A file already there with other bytes is `file_exists`. Either refusal writes nothing. A file already there with the Block's bytes is kept, so running the same install again finishes one that stopped part way. A new folder is only for a file whose bytes differ.
 
@@ -367,6 +367,7 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 | `not_simulated` | A wire reaches a pin the engine does not simulate, or a part marked `not_simulated`. Wire another pin, or remove the wire. |
 | `scene.unknown_pin`, `scene.param`, `scene.syntax` | A typo or a wrong value at that line and column. The hint names what is valid. |
 | `scene.world` | A `world` quantity that does not exist, a value outside its range, or a step at 0, too close to the one before it, or that does not change the value. The hint names what is valid. |
+| `part_outdated` | The copy matches its `parts.lock` line and is not the copy this orbe carries. The message names both versions. Run the one `orbe add` command in the hint. It names every outdated id. |
 | `part_modified` | A copied part was edited. Run `orbe add <id> --overwrite` to restore it, or copy it to a folder of your own. |
 | `no_session` | No session runs under this name. Run the `orbe open` in the hint. |
 | `session_crashed` | The session's process died. Run `orbe open` again. |

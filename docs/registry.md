@@ -170,7 +170,7 @@ TLS to the registry's host is the trust root. The index is not signed. Its hashe
 
 - A record at `<id>@<version>` never changes once it is served. A change to the item is a new version.
 - Versions order by number: by the first, then the second, then the third. `0.10.0` is newer than `0.9.0`. The latest version of an item is the highest.
-- A registry keeps serving every version it ever served, so every `parts.lock` that pins one can still be filled. `--previous <dir>` makes the build keep that rule. It reads the build in `<dir>`, checks each record and file against its hashes, and carries forward every record the source no longer holds, with its files. A version the source still holds must build to the same bytes as the record `<dir>` serves, or the build refuses and asks for a new version.
+- A registry keeps serving every version it ever served, so every `parts.lock` that pins one can still be filled. `--previous <dir>` makes the build keep that rule. It reads the build in `<dir>`, checks each record and file against its hashes, and carries forward every record the source no longer holds, with its files. A version the source still holds must build to the same bytes as the record `<dir>` serves, or the build refuses and asks for a new version. A binary built from a part whose bytes changed without a new version still carries that `id@version`. `orbe check` then reports `part_modified` for a sealed copy of that version that matches its lock, and names the field that differs.
 - A Block record names the versions of its parts, so a Block whose parts get new versions takes a new version too.
 
 ## Caching
