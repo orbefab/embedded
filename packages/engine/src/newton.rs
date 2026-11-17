@@ -98,6 +98,26 @@ impl Circuit {
             .chain(circuit.actives.iter().map(|chip| chip.watches.clone()))
             .collect();
         circuit.watches = Watches::new(watches);
+        // The pattern at t = 0 with every chip at power-on, from which the solve takes its
+        // elimination order.
+        // Each chip stamps with the core it holds, so no core is copied.
+        let chips = circuit.power_on();
+        let conditions = Conditions {
+            chips: &chips,
+            ..Conditions::NOMINAL
+        };
+        let mut system = System::new(&circuit.layout);
+        system.reset(&circuit.layout, conditions.gmin);
+        stamp_parts(
+            &circuit,
+            &mut system,
+            &conditions,
+            &Iterate::initial(&circuit),
+        );
+        for chip in &circuit.actives {
+            active::stamp(chip, &chip.core, &mut system, conditions.source_scale);
+        }
+        circuit.layout.order_by(&system);
         Ok(circuit)
     }
 
@@ -429,20 +449,7 @@ pub(crate) fn newton(
     let held = !matches!(conditions.history, History::Step(_));
     for iteration in 1..=budget {
         system.reset(layout, conditions.gmin);
-        for (id, part) in circuit.netlist.parts() {
-            element::Device::stamp(
-                &part.model,
-                &mut Stamp::new(&mut system, layout, id, &iterate, conditions),
-            );
-        }
-        for (k, chip) in circuit.actives.iter().enumerate() {
-            active::stamp(
-                chip,
-                &conditions.cores[k],
-                &mut system,
-                conditions.source_scale,
-            );
-        }
+        stamp(circuit, &mut system, conditions, &iterate);
         // A linear circuit's systems repeat whenever its sources, contacts, drives, step and
         // held voltages do. With a junction they seldom repeat, and a miss copies the system.
         let solved = match memo.as_deref_mut() {
@@ -508,6 +515,24 @@ pub(crate) fn newton(
         iterations: budget,
         offender: offender.expect("budget is at least one iteration"),
     }))
+}
+
+/// Stamps every part and every active chip into `system`, linearised at `iterate`.
+fn stamp(circuit: &Circuit, system: &mut System, conditions: &Conditions, iterate: &Iterate) {
+    stamp_parts(circuit, system, conditions, iterate);
+    for (k, chip) in circuit.actives.iter().enumerate() {
+        active::stamp(chip, &conditions.cores[k], system, conditions.source_scale);
+    }
+}
+
+/// Stamps every netlist part into `system`, linearised at `iterate`.
+fn stamp_parts(circuit: &Circuit, system: &mut System, conditions: &Conditions, iterate: &Iterate) {
+    for (id, part) in circuit.netlist.parts() {
+        element::Device::stamp(
+            &part.model,
+            &mut Stamp::new(system, &circuit.layout, id, iterate, conditions),
+        );
+    }
 }
 
 /// The row whose step is largest against its tolerance, and that ratio. When `held`, every

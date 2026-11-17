@@ -1268,7 +1268,7 @@ fn a_resistor_over_its_power_rating_warns_as_its_parts_line_says() {
     let open = runtime.orbe(dir, &["open", "hot.jsonc"]).ok().stdout;
     assert!(
         open.contains(
-            "warning[rating.power] #r9.p peaks at 2.158099861018878 W, over its 0.25 W rating"
+            "warning[rating.power] #r9.p peaks at 2.158099861018882 W, over its 0.25 W rating"
         ),
         "{open}"
     );

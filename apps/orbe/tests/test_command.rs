@@ -98,17 +98,18 @@ fn the_first_target_reads_the_engine_values_while_pressed() {
     assert_eq!(run.code, 0, "{}", run.stdout);
     assert!(
         run.stdout
-            .contains("\n  nano.D13 high 4.400713547712635 V\n"),
+            .contains("\n  nano.D13 high 4.400713547712648 V\n"),
         "{}",
         run.stdout
     );
     assert!(
-        run.stdout.contains("\n  led1 on i=0.0112925043880606 A v="),
+        run.stdout
+            .contains("\n  led1 on i=0.011292504388060703 A v="),
         "{}",
         run.stdout
     );
     assert!(
-        run.stdout.contains("\n  led1.i 0.0112925043880606 A\n"),
+        run.stdout.contains("\n  led1.i 0.011292504388060703 A\n"),
         "{}",
         run.stdout
     );
@@ -118,12 +119,12 @@ fn the_first_target_reads_the_engine_values_while_pressed() {
     assert_eq!(json[4]["data"]["ref"], "@nano.D13");
     assert_eq!(json[4]["data"]["kind"], "pin");
     assert_eq!(json[4]["data"]["value"]["level"], "high");
-    assert_eq!(json[4]["data"]["value"]["v"], 4.400713547712635);
+    assert_eq!(json[4]["data"]["value"]["v"], 4.400713547712648);
     assert_eq!(json[5]["data"]["kind"], "part");
     assert_eq!(json[5]["data"]["value"]["on"], true);
-    assert_eq!(json[5]["data"]["value"]["i"], 0.0112925043880606);
+    assert_eq!(json[5]["data"]["value"]["i"], 0.011292504388060703);
     assert_eq!(json[6]["data"]["kind"], "quantity");
-    assert_eq!(json[6]["data"]["value"], 0.0112925043880606);
+    assert_eq!(json[6]["data"]["value"], 0.011292504388060703);
     assert_eq!(json[6]["t_ps"], 100_000_000_000u64);
 }
 

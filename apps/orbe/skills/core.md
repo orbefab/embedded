@@ -92,7 +92,7 @@ opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (19 engine parts, 32 nets)
 $ orbe step 100ms
 t=100ms (from 0s)
 $ orbe expect @led1 off
-passed @led1 off (led1 off, i=1.2775403141980628e-13 A)
+passed @led1 off (led1 off, i=1.2775403302175985e-13 A)
 $ orbe press @btn1
 pressed btn1 at t=100ms; reads show it after t=100ms
 $ orbe step --until @led1 on --timeout 50ms
@@ -101,17 +101,17 @@ t=101ms (from 100ms), @led1 on by 101ms
   100.0040625ms nano.D13 high
   by 101ms led1 on
 $ orbe get @nano.D13
-nano.D13 high 4.400713547712636 V
+nano.D13 high 4.400713547712646 V
 $ orbe get @led1
-led1 on i=0.0112925043880606 A v=1.9163625819177152 V p=0.02164053286542094 W
+led1 on i=0.0112925043880606 A v=1.9163625819177128 V p=0.021640532865420913 W
 $ orbe expect @led1.i '>' 5mA
 passed @led1.i > 5mA (led1.i = 0.0112925043880606 A)
 $ orbe snapshot
 t=101ms  scene=scene.jsonc
 nano  nano-board          5V=high  D13=high  D2=high  GND=0.0V
-btn1  tactile-switch-6mm  i=-0.00047583015649443894 A
-r2    resistor-axial      i=0.0004749665847758714 A
-r1    resistor-axial      i=0.011292504389976912 A
+btn1  tactile-switch-6mm  i=-0.00047583015647667537 A
+r2    resistor-axial      i=0.0004749665847758726 A
+r1    resistor-axial      i=0.011292504389976967 A
 led1  led-5mm             on i=0.0112925043880606 A
 warning[net.floating] #net.nano__AREF has no DC path to ground
 $ orbe close
@@ -316,7 +316,7 @@ A test file is `tests/<name>.test` in the project folder. Each line is a live co
 FAIL tests/button.test:4: expect @led1 on
   error[expect_failed]: expected @led1 on
     expected: @led1 on
-    actual:   led1 off, i=1.2775403141980628e-13 A
+    actual:   led1 off, i=1.2775403302175985e-13 A
 0 passed, 1 failed
 ```
 
