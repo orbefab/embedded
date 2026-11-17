@@ -29,11 +29,27 @@ The build fails, and writes nothing, when:
 - a part `uses` a part and version the registry lacks;
 - a `block.jsonc` holds a key other than `format`, `block`, `version`, `title`, `summary`, `board`, `tags` and `license`, lacks `version`, `title`, `board` or `license`, or names another folder in `block`;
 - a Block's `scene.jsonc` does not parse or the scene reader refuses it, with that same finding, or the scene names a part the registry lacks, or an `@<registry>/<id>`, or does not use the Block's `board`;
-- installing the part or the Block and running `orbe check` would refuse it. The build places each part in a scene and reads each Block scene from these folders, and the finding has the same code and message;
+- a file param names a path outside the folder of the item that writes it: an absolute path, or a `..` that leaves `parts/<id>/` for a part's default or a part file's value, or leaves the Block's folder for a Block's scene. An install copies only that folder, so the installed copy would not have the file. This is `registry_invalid`, and it names the file, the place and the path. `orbe check` in the author's own tree reads such a path when the file happens to be there, so it can pass there and still be refused here;
+- a required param with no default declares `min_exclusive` and `max_exclusive` that hold no value: no finite number lies strictly between them, or, for a duration in `s`, no whole number of picoseconds, zero or more, does. `orbe check` refuses every value a scene could set it to. The finding is `scene.param` at the param's key in `parts/<id>/part.jsonc`;
+- installing the part or the Block and running `orbe check` would refuse it, as [What the build checks](#what-the-build-checks) says. The finding has the same code, place and message;
 - a part and a Block share a name;
 - with `--previous`, the earlier build does not check out, or a version it serves would build to a different record (see [Versions](#versions)).
 
 It prints the item counts and the file counts: files the records list, files stored by hash, and every file in `<out>`, which is the number a static host counts. It warns with counts of the parts that lack a summary, tags, docs, a datasheet URL or buy links, and of the Blocks that lack a summary or tags. It also names, per item, each hidden file (a path segment that starts with `.`) and each file over 1 MB, since every file in an item's folder is published and cached by its hash. `--json` prints the same as one envelope.
+
+### What the build checks
+
+The build reads each Block's scene the way `orbe check` reads it after a project installs the Block: the project holds the registry's part folders, the Block's own files and a lock line for each part. Every finding `orbe check` would print refuses the Block, in `blocks/<id>/scene.jsonc`. A Block's scene sets every value it uses and names its ground, so this is the whole check.
+
+A part has no scene of its own, so the build places it alone, as `r1` in a scene that sets nothing and names no ground, in a project that holds the registry's part folders and their lock lines. That read is `orbe check`'s except for what only a user's scene supplies:
+
+- A param with a default takes that default, which the author wrote, and is checked in full: its range, its file and the model field it sets. When every param of a model has a value this way, the engine's rules on the model are checked too.
+- A required param with no default has no value until a user's scene sets one. The build does not make one up. The part's model is then not whole, so the engine's rules on it, and on any part inside it that the param is passed to, are not checked here. A Block that places the part and sets the param checks them. Only the declaration is checked, as the list above says. A rule that joins a value to another field, such as a bounce window of at least 4 ns for each bounce, or a value the engine takes only as a whole number, such as `max_bounces`, waits for the value.
+- The scene names no ground. When the part or a part inside it names one, those grounds must agree, as they must in a scene that only places the part. When none does, that is not a finding, since a user's scene names its own.
+
+Everything else is checked as `orbe check` checks it, whatever the params: the part file and every part file it reaches, its children and their lock lines, its pins and wires, its grounds, its file params, and the engine's rules on every model that has all its values. A finding names `parts/<id>/part.jsonc`, or the file it is in. One about the grounds names `scene.jsonc`, the file `orbe check` reads after an install.
+
+In the official catalog, 19 of 52 parts have a required param with no default. 17 are parts with one model and no children: the resistance of `resistor-axial`, `resistor-0603`, `resistor-array-4x0603` (four), `potentiometer-wh148` and `trimmer-3362p`, the capacitance of `capacitor-ceramic-disc`, `capacitor-electrolytic-radial`, `capacitor-electrolytic-smd`, `capacitor-0603` and `capacitor-tantalum-3216`, the inductance and series resistance of `inductor-0805`, the color of `led-3mm`, `led-5mm`, `led-0603` and `led-0805`, and the firmware of `atmega328p-dip28` and `atmega328p-tqfp32`. For each, the build checks the part file, its sealed lock line and its pins, and leaves its model to a scene that sets the value. The other two, `nano-board` and `uno-board`, pass `firmware` to their ATmega328P. The build leaves that chip's model to a scene, and checks the rest of the board in full, every other child's model included. The catalog's Blocks set the value for `resistor-axial`, `led-5mm`, `trimmer-3362p`, `nano-board` and `uno-board`.
 
 ## Layout
 
@@ -190,5 +206,5 @@ A project takes each part id from one registry, so `parts.lock` has at most one 
 
 - `orbe add @<registry>/<id>` from a registry: read `registries.json`, then follow [Verify what you fetch](#verify-what-you-fetch) and write the copy and its lock line.
 - `orbe search --refresh`: search registry indexes instead of the catalog built into `orbe`.
-- Running a Block's tests during the build. `orbe test` checks those. The build runs the same check as `orbe check` on every part and every Block scene.
+- Running a Block's tests during the build. `orbe test` checks those. The build runs the same check as `orbe check` on every Block scene, and on every part up to the values a user's scene sets, as [What the build checks](#what-the-build-checks) says.
 - A part or Block that uses a part from another registry. The dependency grammar has room for it, and the build refuses it today.

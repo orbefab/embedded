@@ -1,55 +1,88 @@
 //! What `orbe check` runs on a part or Block after a project installs it.
 //!
 //! The part-file reader and the scene reader have already accepted these folders. This places
-//! each part in a scene, and reads each Block's scene, through [`orbe_scene::read`]. The parts
-//! are the folders being built, so a board's children and a Block's parts resolve from this
-//! source. A Block's project is those part folders, the Block's own files and the lock. The
-//! ground and the firmware beside a part are files this build writes for that part's scene
-//! alone. A catalog part there would make one part's fields look like every part failed.
+//! each part in a scene, and reads each Block's scene, through the reader `orbe check` uses. The
+//! parts are the folders being built, so a board's children and a Block's parts resolve from this
+//! source. A Block's project is those part folders, the Block's own files and the lock.
+//!
+//! A part is read as placed, before a user's scene sets it: a required param with no default
+//! has no value, so a model that needs one is not compiled, and a scene ground is not needed.
+//! A Block's scene sets what it uses, so it is read in full.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
-use jsonc_parser::{JsonValue, ParseOptions, parse_to_value};
-use orbe_scene::{Card, Diagnostic, Files, Folder, Literal, Param, REGISTRY};
-use serde_json::{Map, Value, json};
+use orbe_scene::{Card, Diagnostic, FilePath, Files, Folder, REGISTRY};
+use serde_json::json;
 
-/// A text file a required file param can name. `read` only checks that the path is text.
-const FIRMWARE: &[u8] = include_bytes!("../../../packages/engine/tests/firmware/sketch/button.hex");
+/// Each part placed, and each Block scene, as `orbe check` reads it after an install. A file
+/// param that names a path outside its part's or its Block's folder is
+/// [`Refusal::Outside`], since an install does not copy it. Otherwise the findings `orbe check`
+/// would print, with file paths that name the source folder.
+pub(crate) enum Refusal {
+    Outside(Vec<String>),
+    Check(Vec<Diagnostic>),
+}
 
-/// Findings `orbe check` would print for an install of these folders. Empty when every part
-/// and every Block scene reads. File paths name the source folder.
-pub(crate) fn findings(
+pub(crate) fn refusal(
     registry: &str,
     parts: &BTreeMap<String, Folder>,
     blocks: &BTreeMap<String, Folder>,
     cards: &[Card],
-) -> Vec<Diagnostic> {
+) -> Option<Refusal> {
     let catalog = orbe_scene::catalog_cards();
     let official: BTreeSet<&str> = catalog.iter().map(|card| card.name.as_str()).collect();
     // An id this binary catalogs locks as `@orbefab`, the line an install of that part uses.
     // `read` then runs the lock check, so a sealed folder that differs from this binary is
     // refused the same way that install is. A line this build does not write is not a finding.
     let project = project_files(parts, &lock_text(cards, &official, registry));
-    let mut found = Vec::new();
-    for card in cards {
-        let Some(folder) = parts.get(&card.name) else {
-            continue;
-        };
-        let named = names_ground(folder) || nested_ground(parts, &card.name);
-        let scene = scene_for(card, named);
-        found.extend(read_scene(&project, &scene, card, folder));
+    let mut read = Vec::new();
+    for card in cards.iter().filter(|card| parts.contains_key(&card.name)) {
+        let placed = orbe_scene::read_placed(&part_project(&project, card), Path::new(SCENE), true);
+        read.push((Item::Part, placed));
     }
     for (id, folder) in blocks {
-        found.extend(name_block(id, read_block(&project, folder)));
+        let files = block_project(&project, folder);
+        let placed = orbe_scene::read_placed(&files, Path::new(SCENE), false);
+        read.push((Item::Block(id), placed));
+    }
+
+    let mut away: Vec<String> = read
+        .iter()
+        .flat_map(|(item, placed)| {
+            placed
+                .file_paths
+                .iter()
+                .filter_map(|path| outside(path, item))
+        })
+        .collect();
+    if !away.is_empty() {
+        away.sort();
+        away.dedup();
+        return Some(Refusal::Outside(away));
+    }
+
+    let mut found = Vec::new();
+    for card in cards {
+        if let Some(folder) = parts.get(&card.name) {
+            found.extend(orbe_scene::unusable_params(&card.name, folder));
+        }
+    }
+    for (item, placed) in read {
+        found.extend(match item {
+            Item::Part => placed.findings,
+            Item::Block(id) => name_block(id, placed.findings),
+        });
     }
     found.sort_by(|a, b| {
         (&a.file, a.line, a.column, a.code, &a.message)
             .cmp(&(&b.file, b.line, b.column, b.code, &b.message))
     });
     found.dedup();
-    found
+    (!found.is_empty()).then_some(Refusal::Check(found))
 }
+
+const SCENE: &str = "scene.jsonc";
 
 fn project_files(parts: &BTreeMap<String, Folder>, lock: &str) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut files = BTreeMap::new();
@@ -82,471 +115,126 @@ fn lock_text(cards: &[Card], official: &BTreeSet<&str>, registry: &str) -> Strin
     }
 }
 
-const PROBE_GROUND_FILE: &str = "probe-ground.jsonc";
-const PROBE_FIRMWARE_FILE: &str = "firmware.hex";
-
-fn read_scene(
-    project: &BTreeMap<PathBuf, Vec<u8>>,
-    scene: &str,
-    card: &Card,
-    folder: &Folder,
-) -> Vec<Diagnostic> {
+/// The project with a scene that places the part and sets nothing.
+fn part_project(project: &BTreeMap<PathBuf, Vec<u8>>, card: &Card) -> Files {
+    let scene = json!({
+        "format": current_format(),
+        "parts": { "r1": { "type": card.name } },
+    });
+    let mut text = serde_json::to_string_pretty(&scene).unwrap();
+    text.push('\n');
     let mut files = project.clone();
-    files.insert(PathBuf::from("scene.jsonc"), scene.as_bytes().to_vec());
-    // Only this generated scene names these. A Block's project does not have them, and a
-    // `..` walk from a part file cannot land on them.
-    files.insert(PathBuf::from(PROBE_GROUND_FILE), probe_ground());
-    files.insert(PathBuf::from(PROBE_FIRMWARE_FILE), FIRMWARE.to_vec());
-    let held = Files::memory(files).hide_from_parent_walk([PROBE_GROUND_FILE, PROBE_FIRMWARE_FILE]);
-    match orbe_scene::read(&held, Path::new("scene.jsonc")) {
-        Ok(_) => Vec::new(),
-        Err(found) => place_part(card, folder, found),
-    }
+    files.insert(PathBuf::from(SCENE), text.into_bytes());
+    Files::memory(files)
 }
 
-/// A finding on the generated scene quotes a value this probe wrote. One that names a param
-/// whose bounds hold no number is the part's, at that param. Any other out-of-range line
-/// there is the stand-in, and the registry has no `scene.jsonc` to blame.
-fn place_part(card: &Card, folder: &Folder, found: Vec<Diagnostic>) -> Vec<Diagnostic> {
-    found
-        .into_iter()
-        .filter_map(|mut diagnostic| {
-            if diagnostic.file != "scene.jsonc"
-                || diagnostic.code != orbe_scene::Code::Param
-                || !diagnostic.message.contains("is out of range")
-            {
-                return Some(diagnostic);
-            }
-            let name = probed_param(&diagnostic.message)?;
-            if !card
-                .params
-                .iter()
-                .any(|param| param.name == name && interval_empty(param))
-            {
-                return None;
-            }
-            let text = std::str::from_utf8(folder.get("part.jsonc")?).ok()?;
-            let (line, column) = key_at(text, name)?;
-            diagnostic.file = format!("parts/{}/part.jsonc", card.name);
-            diagnostic.line = line;
-            diagnostic.column = column;
-            Some(diagnostic)
-        })
-        .collect()
-}
-
-fn probed_param(message: &str) -> Option<&str> {
-    message
-        .strip_prefix('`')?
-        .split_once('`')?
-        .0
-        .strip_prefix("r1.")
-}
-
-fn key_at(text: &str, key: &str) -> Option<(usize, usize)> {
-    let pattern = format!("\"{key}\"");
-    let start = text.find(&pattern)?;
-    let line = text[..start].matches('\n').count() + 1;
-    let line_start = text[..start].rfind('\n').map_or(0, |index| index + 1);
-    let column = text[line_start..start].chars().count() + 1;
-    Some((line, column))
-}
-
-fn interval_empty(param: &Param) -> bool {
-    match (
-        param.above.as_ref().and_then(literal_f64),
-        param.below.as_ref().and_then(literal_f64),
-    ) {
-        (Some(low), Some(high)) => low >= high,
-        _ => false,
-    }
-}
-
-fn read_block(project: &BTreeMap<PathBuf, Vec<u8>>, folder: &Folder) -> Vec<Diagnostic> {
+/// The project an install of the Block makes: the part folders, the Block's files and the lock.
+fn block_project(project: &BTreeMap<PathBuf, Vec<u8>>, folder: &Folder) -> Files {
     let mut files = project.clone();
     for (rel, bytes) in folder {
         if rel == "block.jsonc" || rel == "parts.lock" || rel.starts_with("parts/") {
             continue;
         }
-        let path = if rel == "scene.jsonc" {
-            PathBuf::from("scene.jsonc")
-        } else {
-            PathBuf::from(rel)
-        };
-        files.insert(path, bytes.clone());
+        files.insert(PathBuf::from(rel), bytes.clone());
     }
-    let held = Files::memory(files);
-    match orbe_scene::read(&held, Path::new("scene.jsonc")) {
-        Ok(_) => Vec::new(),
-        Err(found) => found,
-    }
-}
-
-fn name_block(id: &str, found: Vec<Diagnostic>) -> Vec<Diagnostic> {
-    found
-        .into_iter()
-        .map(|mut diagnostic| {
-            if diagnostic.file == "scene.jsonc" {
-                diagnostic.file = format!("blocks/{id}/scene.jsonc");
-            }
-            diagnostic
-        })
-        .collect()
-}
-
-fn names_ground(files: &Folder) -> bool {
-    utf8(files, "part.jsonc").is_some_and(|text| text_names_ground(&text))
-}
-
-fn text_names_ground(text: &str) -> bool {
-    let Ok(Some(JsonValue::Object(props))) = parse_to_value(text, &ParseOptions::default()) else {
-        return false;
-    };
-    props
-        .into_iter()
-        .any(|(key, value)| key == "ground" && matches!(value, JsonValue::String(_)))
-}
-
-/// A nested part names a ground. The scene's own ground would hide it, so the probe leaves
-/// its source out and those grounds are compared, the way a scene that only places the part does.
-fn nested_ground(parts: &BTreeMap<String, Folder>, id: &str) -> bool {
-    let mut seen = BTreeSet::new();
-    seen.insert(id.to_string());
-    let Some(folder) = parts.get(id) else {
-        return false;
-    };
-    children_name_ground(parts, folder, "part.jsonc", &mut seen)
-}
-
-fn children_name_ground(
-    parts: &BTreeMap<String, Folder>,
-    folder: &Folder,
-    file: &str,
-    seen: &mut BTreeSet<String>,
-) -> bool {
-    let Some(text) = utf8(folder, file) else {
-        return false;
-    };
-    let dir = parent_key(file);
-    child_types(&text)
-        .into_iter()
-        .any(|ty| type_names_ground(parts, folder, &dir, &ty, seen))
-}
-
-fn type_names_ground(
-    parts: &BTreeMap<String, Folder>,
-    folder: &Folder,
-    dir: &str,
-    ty: &str,
-    seen: &mut BTreeSet<String>,
-) -> bool {
-    if ty.starts_with("./") || ty.starts_with("../") {
-        // A path that leaves this folder is not one of the part's files. The probe's own
-        // files sit outside it, and a `..` walk must not treat them as the author's ground.
-        let Some(key) = path_inside(dir, ty).and_then(|key| json_key(folder, &key)) else {
-            return false;
-        };
-        let Some(text) = utf8(folder, &key) else {
-            return false;
-        };
-        return text_names_ground(&text) || children_name_ground(parts, folder, &key, seen);
-    }
-    let Some(id) = part_id(ty) else {
-        return false;
-    };
-    if !seen.insert(id.to_string()) {
-        return false;
-    }
-    let Some(child) = parts.get(id) else {
-        return false;
-    };
-    names_ground(child) || children_name_ground(parts, child, "part.jsonc", seen)
-}
-
-fn child_types(text: &str) -> Vec<String> {
-    let Ok(Some(JsonValue::Object(props))) = parse_to_value(text, &ParseOptions::default()) else {
-        return Vec::new();
-    };
-    let mut types = Vec::new();
-    for (key, value) in props {
-        if key != "parts" {
-            continue;
-        }
-        let JsonValue::Object(children) = value else {
-            return Vec::new();
-        };
-        for (_, child) in children {
-            let JsonValue::Object(fields) = child else {
-                continue;
-            };
-            for (key, value) in fields {
-                if key == "type"
-                    && let JsonValue::String(ty) = value
-                {
-                    types.push(ty.into_owned());
-                }
-            }
-        }
-    }
-    types
-}
-
-fn part_id(ty: &str) -> Option<&str> {
-    let id = match ty.strip_prefix('@').and_then(|rest| rest.split_once('/')) {
-        Some((registry, id)) if orbe_scene::is_id(registry) => id,
-        Some(_) => return None,
-        None => ty,
-    };
-    orbe_scene::is_id(id).then_some(id)
-}
-
-/// `rel` joined onto `dir`, when every `..` stays inside the part folder.
-fn path_inside(dir: &str, rel: &str) -> Option<String> {
-    let mut stack: Vec<&str> = if dir.is_empty() {
-        Vec::new()
-    } else {
-        dir.split('/').collect()
-    };
-    for part in Path::new(rel).components() {
-        match part {
-            Component::CurDir => {}
-            Component::Normal(name) => stack.push(name.to_str()?),
-            Component::ParentDir => {
-                stack.pop()?;
-            }
-            _ => return None,
-        }
-    }
-    Some(stack.join("/"))
-}
-
-fn json_key(folder: &Folder, key: &str) -> Option<String> {
-    let json = |name: &str| name.ends_with(".json") || name.ends_with(".jsonc");
-    if json(key) && folder.contains_key(key) {
-        return Some(key.to_string());
-    }
-    let nested = if key.is_empty() {
-        "part.jsonc".to_string()
-    } else {
-        format!("{key}/part.jsonc")
-    };
-    folder.contains_key(&nested).then_some(nested)
-}
-
-fn parent_key(file: &str) -> String {
-    match file.rfind('/') {
-        Some(index) => file[..index].to_string(),
-        None => String::new(),
-    }
-}
-
-fn utf8(folder: &Folder, key: &str) -> Option<String> {
-    std::str::from_utf8(folder.get(key)?)
-        .ok()
-        .map(str::to_string)
+    Files::memory(files)
 }
 
 fn current_format() -> u32 {
     orbe_scene::FORMATS.iter().copied().max().unwrap_or(1)
 }
 
-fn probe_ground() -> Vec<u8> {
-    let value = json!({
-        "format": current_format(),
-        "pins": { "pos": [1], "neg": [2] },
-        "model": {
-            "kind": "voltage_source",
-            "voltage": { "value": 0, "unit": "V", "source": "user" },
-            "pins": { "p": "pos", "n": "neg" }
+enum Item<'a> {
+    Part,
+    Block(&'a str),
+}
+
+/// A sentence for a file param path read from outside the folder of the item that wrote it. A
+/// path written in `parts/<id>/` must stay in that folder, and a Block's must stay in the
+/// Block's. An absolute path never does.
+fn outside(path: &FilePath, item: &Item) -> Option<String> {
+    let mut written = path.file.split('/');
+    let (home, at, site, what) = match (written.next(), written.next()) {
+        (Some("parts"), Some(id)) => {
+            let site = match item {
+                // `r1` is the generated scene's, not a name the author wrote.
+                Item::Part => path.site.strip_prefix("r1.").unwrap_or(&path.site),
+                Item::Block(_) => &path.site,
+            };
+            (
+                PathBuf::from("parts").join(id),
+                path.file.clone(),
+                site,
+                "a part's files must ship in its folder",
+            )
         }
-    });
-    let mut text = serde_json::to_string_pretty(&value).unwrap();
-    text.push('\n');
-    text.into_bytes()
-}
-
-fn scene_for(card: &Card, own_ground: bool) -> String {
-    let mut instance = Map::new();
-    instance.insert("type".into(), Value::String(card.name.clone()));
-    for param in card.params.iter().filter(|param| param.required) {
-        instance.insert(param.name.clone(), param_value(param));
-    }
-    let mut parts = Map::new();
-    parts.insert("r1".into(), Value::Object(instance));
-    let mut root = Map::new();
-    root.insert("format".into(), json!(current_format()));
-    if !own_ground {
-        parts.insert("g".into(), json!({ "type": "./probe-ground.jsonc" }));
-        root.insert("ground".into(), json!("g.neg"));
-    }
-    root.insert("parts".into(), Value::Object(parts));
-    let mut text = serde_json::to_string_pretty(&Value::Object(root)).unwrap();
-    text.push('\n');
-    text
-}
-
-fn param_value(param: &Param) -> Value {
-    if let Some(choices) = &param.choices {
-        let name = choices
-            .first()
-            .map(|choice| choice.name.clone())
-            .unwrap_or_default();
-        return Value::String(name);
-    }
-    if param.file.is_some() {
-        return json!("firmware.hex");
-    }
-    json!(number_text(param))
-}
-
-fn number_text(param: &Param) -> String {
-    let low = param.above.as_ref().and_then(literal_f64);
-    let high = param.below.as_ref().and_then(literal_f64);
-    let guess = match param.unit.as_deref() {
-        Some("F") | Some("H") => 1e-6,
-        Some("s") => 1e-3,
-        _ => 1000.0,
+        _ => {
+            let Item::Block(id) = item else {
+                return None;
+            };
+            (
+                PathBuf::new(),
+                format!("blocks/{id}/{}", path.file),
+                path.site.as_str(),
+                "a Block's files must ship in its folder",
+            )
+        }
     };
-    stand_in(guess, low, high).to_string()
+    let folder = Path::new(&path.file).parent().unwrap_or(Path::new(""));
+    if within(&folder.join(&path.path), &home) {
+        return None;
+    }
+    Some(format!(
+        "{at}:{}:{}: `{site}` names `{}`, outside the folder an install copies; {what}",
+        path.line, path.column, path.path
+    ))
 }
 
-/// A number strictly inside the exclusive bounds. The guess stays when it is already inside.
-/// An empty interval has no such number, and the guess is what the finding quotes.
-fn stand_in(guess: f64, low: Option<f64>, high: Option<f64>) -> f64 {
-    if inside(guess, low, high) {
-        return guess;
-    }
-    match (low, high) {
-        (Some(low), Some(high)) if low < high => {
-            let mid = low + (high - low) / 2.0;
-            if inside(mid, Some(low), Some(high)) {
-                mid
-            } else {
-                let under = below_high(high);
-                if inside(under, Some(low), Some(high)) {
-                    under
-                } else {
-                    let over = above_low(low);
-                    if inside(over, Some(low), Some(high)) {
-                        over
-                    } else {
-                        guess
-                    }
+/// `path` stays inside `home` once each `.` and `..` is taken in order.
+fn within(path: &Path, home: &Path) -> bool {
+    let mut stack: Vec<&std::ffi::OsStr> = Vec::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::Normal(name) => stack.push(name),
+            Component::ParentDir => {
+                if stack.pop().is_none() {
+                    return false;
                 }
             }
+            Component::RootDir | Component::Prefix(_) => return false,
         }
-        (Some(low), None) => above_low(low),
-        (None, Some(high)) => below_high(high),
-        _ => guess,
     }
+    stack.iter().collect::<PathBuf>().starts_with(home)
 }
 
-fn inside(value: f64, low: Option<f64>, high: Option<f64>) -> bool {
-    value.is_finite()
-        && low.is_none_or(|bound| value > bound)
-        && high.is_none_or(|bound| value < bound)
-}
-
-fn above_low(low: f64) -> f64 {
-    low + low.abs() + 1.0
-}
-
-fn below_high(high: f64) -> f64 {
-    if high == 0.0 {
-        -1.0
-    } else if high > 0.0 {
-        high / 2.0
-    } else {
-        high - high.abs() - 1.0
-    }
-}
-
-fn literal_f64(literal: &Literal) -> Option<f64> {
-    match literal {
-        Literal::Number(raw) => raw.parse().ok(),
-        Literal::Name(_) => None,
-    }
+fn name_block(id: &str, found: Vec<Diagnostic>) -> Vec<Diagnostic> {
+    found
+        .into_iter()
+        .map(|mut diagnostic| {
+            if diagnostic.file == SCENE {
+                diagnostic.file = format!("blocks/{id}/{SCENE}");
+            }
+            diagnostic
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{nested_ground, number_text};
-    use orbe_scene::{Folder, Literal, Param};
-    use std::collections::BTreeMap;
-
-    fn param(unit: &str, low: Option<&str>, high: Option<&str>) -> Param {
-        Param {
-            name: "voltage".into(),
-            unit: Some(unit.into()),
-            above: low.map(|raw| Literal::Number(raw.into())),
-            below: high.map(|raw| Literal::Number(raw.into())),
-            file: None,
-            choices: None,
-            required: true,
-            default: None,
-        }
-    }
+    use super::within;
+    use std::path::Path;
 
     #[test]
-    fn a_stand_in_sits_inside_the_exclusive_bounds() {
-        let cases = [
-            (None, Some("0"), "-1"),
-            (None, Some("-5"), "-11"),
-            (None, Some("5"), "2.5"),
-            (Some("-10"), Some("-1"), "-5.5"),
-            (Some("0"), Some("5"), "2.5"),
-            (Some("0"), None, "1000"),
-            (Some("2000"), None, "4001"),
-            (None, None, "1000"),
-        ];
-        for (low, high, expect) in cases {
-            let text = number_text(&param("V", low, high));
-            assert_eq!(text, expect, "bounds {low:?} .. {high:?}");
-            let value: f64 = text.parse().unwrap();
-            if let Some(low) = low {
-                assert!(value > low.parse::<f64>().unwrap(), "{text}");
-            }
-            if let Some(high) = high {
-                assert!(value < high.parse::<f64>().unwrap(), "{text}");
-            }
-        }
-        assert_eq!(number_text(&param("F", None, None)), "0.000001");
-        assert_eq!(number_text(&param("H", None, None)), "0.000001");
-        assert_eq!(number_text(&param("s", None, None)), "0.001");
-    }
-
-    #[test]
-    fn a_child_ground_counts_and_a_path_out_of_the_folder_does_not() {
-        let mut left: Folder = BTreeMap::new();
-        left.insert(
-            "part.jsonc".into(),
-            br#"{"ground": "a", "parts": {"g": {"type": "../../probe-ground.jsonc"}}}"#.to_vec(),
-        );
-        let mut twin: Folder = BTreeMap::new();
-        twin.insert(
-            "part.jsonc".into(),
-            br#"{"parts": {"l": {"type": "left"}, "r": {"type": "right"}}}"#.to_vec(),
-        );
-        twin.insert("inner.jsonc".into(), br#"{"ground": "b"}"#.to_vec());
-        let mut boxed: Folder = BTreeMap::new();
-        boxed.insert(
-            "part.jsonc".into(),
-            br#"{"parts": {"n": {"type": "./inner.jsonc"}}}"#.to_vec(),
-        );
-        boxed.insert("inner.jsonc".into(), br#"{"ground": "b"}"#.to_vec());
-        let mut plain: Folder = BTreeMap::new();
-        plain.insert(
-            "part.jsonc".into(),
-            br#"{"parts": {"g": {"type": "../../probe-ground.jsonc"}}}"#.to_vec(),
-        );
-        let mut parts = BTreeMap::new();
-        parts.insert("left".into(), left);
-        parts.insert("twin".into(), twin);
-        parts.insert("boxed".into(), boxed);
-        parts.insert("plain".into(), plain);
-        assert!(nested_ground(&parts, "twin"));
-        assert!(nested_ground(&parts, "boxed"));
-        assert!(!nested_ground(&parts, "left"));
-        assert!(!nested_ground(&parts, "plain"));
+    fn a_path_stays_within_its_folder_only_while_every_walk_does() {
+        let lamp = Path::new("parts/lamp");
+        assert!(within(Path::new("parts/lamp/fw.hex"), lamp));
+        assert!(within(Path::new("parts/lamp/./sub/../fw.hex"), lamp));
+        assert!(!within(Path::new("parts/lamp/../other/fw.hex"), lamp));
+        assert!(!within(Path::new("parts/lamp/../../fw.hex"), lamp));
+        assert!(!within(Path::new("/home/fw.hex"), lamp));
+        assert!(within(Path::new("fw.hex"), Path::new("")));
+        assert!(!within(Path::new("../fw.hex"), Path::new("")));
+        assert!(!within(Path::new("sketch/../../fw.hex"), Path::new("")));
     }
 }

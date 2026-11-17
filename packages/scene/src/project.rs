@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use crate::catalog::Version;
 use crate::diagnostic::{Code, Diagnostic, Findings};
 use crate::files::{Files, Kind};
-use crate::model::{Comp, Part, Scene, TypeRef, decode_part, decode_scene};
+use crate::model::{Comp, ParamKind, Part, Scene, TypeRef, decode_part, decode_scene};
 use crate::name::did_you_mean;
 use crate::source::{FileId, Sources, Span, display};
 use crate::syntax::{self, Node};
@@ -151,6 +151,36 @@ pub(crate) fn part_diagnostics(id: &str, text: &str) -> Vec<Diagnostic> {
         text,
         |sources, file, out| {
             parse_part(sources, file, id.to_string(), out, "orbe add");
+        },
+    )
+}
+
+/// A finding at each required number param with no default in the text of
+/// `parts/<id>/part.jsonc` whose bounds hold no value a scene could set. Empty when the file does
+/// not read, since [`part_diagnostics`] reports why.
+pub(crate) fn unusable_params(id: &str, text: &str) -> Vec<Diagnostic> {
+    reader_diagnostics(
+        &format!("parts/{id}/part.jsonc"),
+        text,
+        |sources, file, out| {
+            let mut quiet = Findings::default();
+            let Some(part) = parse_part(sources, file, id.to_string(), &mut quiet, "orbe add")
+            else {
+                return;
+            };
+            for decl in part.params.iter().filter(|decl| decl.default.is_none()) {
+                let ParamKind::Number { unit, range } = decl.kind else {
+                    continue;
+                };
+                if let Some((why, hint)) = crate::params::no_value(unit, range) {
+                    out.push(
+                        Code::Param,
+                        decl.span,
+                        format!("param `{}` takes no value: {why}", decl.name),
+                        hint,
+                    );
+                }
+            }
         },
     )
 }

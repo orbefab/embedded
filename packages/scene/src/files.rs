@@ -15,8 +15,6 @@ use crate::catalog;
 pub struct Files {
     store: Store,
     catalog: catalog::Source,
-    /// Resolved paths a request that walks `..` cannot see. Empty unless a caller asks.
-    concealed: BTreeSet<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -40,7 +38,6 @@ impl Files {
         Files {
             store: Store::Disk,
             catalog: catalog::Source::Builtin,
-            concealed: BTreeSet::new(),
         }
     }
 
@@ -56,19 +53,7 @@ impl Files {
                     .collect(),
             ),
             catalog: catalog::Source::Builtin,
-            concealed: BTreeSet::new(),
         }
-    }
-
-    /// These paths stay hidden from a read that reaches them through `..`.
-    /// A path that names one directly, or through `.` only, still reads it.
-    pub fn hide_from_parent_walk<P: AsRef<Path>>(
-        mut self,
-        paths: impl IntoIterator<Item = P>,
-    ) -> Files {
-        self.concealed
-            .extend(paths.into_iter().map(|path| normal(path.as_ref())));
-        self
     }
 
     /// These files, with a Block's parts read from `parts` in place of the catalog built into
@@ -102,9 +87,6 @@ impl Files {
 
     /// What is at `path`, through any links.
     fn kind(&self, path: &Path) -> Option<Kind> {
-        if self.concealed_from(path) {
-            return None;
-        }
         match &self.store {
             Store::Disk => fs::metadata(path).ok().map(|meta| disk_kind(&meta)),
             Store::Memory(files) => memory_kind(files, path),
@@ -121,13 +103,7 @@ impl Files {
                     disk_kind(&meta)
                 }
             }),
-            Store::Memory(files) => {
-                if self.concealed_from(path) {
-                    None
-                } else {
-                    memory_kind(files, path)
-                }
-            }
+            Store::Memory(files) => memory_kind(files, path),
         }
     }
 
@@ -135,9 +111,6 @@ impl Files {
         match &self.store {
             Store::Disk => fs::read(path),
             Store::Memory(files) => {
-                if self.concealed_from(path) {
-                    return Err(io::ErrorKind::NotFound.into());
-                }
                 let path = resolve(files, path)?;
                 match files.get(&path) {
                     Some(bytes) => Ok(bytes.clone()),
@@ -169,7 +142,6 @@ impl Files {
                 .map(|entry| entry.map(|e| e.path()))
                 .collect(),
             Store::Memory(files) => {
-                let walked = walks_parent(dir);
                 let dir = resolve(files, dir)?;
                 match lookup_exact(files, &dir) {
                     Some(Kind::Dir) => {}
@@ -180,11 +152,7 @@ impl Files {
                     .keys()
                     .filter_map(|path| path.strip_prefix(&dir).ok()?.components().next())
                     .collect();
-                Ok(names
-                    .into_iter()
-                    .map(|name| dir.join(name))
-                    .filter(|path| !(walked && self.concealed.contains(path)))
-                    .collect())
+                Ok(names.into_iter().map(|name| dir.join(name)).collect())
             }
         }
     }
@@ -195,9 +163,6 @@ impl Files {
         match &self.store {
             Store::Disk => path.canonicalize(),
             Store::Memory(files) => {
-                if self.concealed_from(path) {
-                    return Err(io::ErrorKind::NotFound.into());
-                }
                 let path = resolve(files, path)?;
                 match lookup_exact(files, &path) {
                     Some(_) => Ok(path),
@@ -206,22 +171,6 @@ impl Files {
             }
         }
     }
-
-    /// `path` walks `..` and lands on a path [`Self::hide_from_parent_walk`] hid.
-    fn concealed_from(&self, path: &Path) -> bool {
-        if self.concealed.is_empty() || !walks_parent(path) {
-            return false;
-        }
-        let Store::Memory(files) = &self.store else {
-            return false;
-        };
-        resolve(files, path).is_ok_and(|resolved| self.concealed.contains(&resolved))
-    }
-}
-
-fn walks_parent(path: &Path) -> bool {
-    path.components()
-        .any(|part| matches!(part, Component::ParentDir))
 }
 
 fn disk_kind(meta: &fs::Metadata) -> Kind {
@@ -440,38 +389,6 @@ mod tests {
         );
         assert_eq!(memory.read(&through).unwrap(), b"A");
         assert_eq!(disk.real(&through).unwrap(), memory.real(&through).unwrap());
-    }
-
-    /// A file the scene names directly stays readable. A `..` walk from a part file does not
-    /// land on it, and a listing reached through `..` leaves it out.
-    #[test]
-    fn a_parent_walk_cannot_read_a_hidden_file() {
-        let files = Files::memory([
-            ("parts/lamp/part.jsonc", b"{}".to_vec()),
-            ("firmware.hex", b"hex".to_vec()),
-            ("probe-ground.jsonc", b"{}".to_vec()),
-        ])
-        .hide_from_parent_walk(["firmware.hex", "probe-ground.jsonc"]);
-        assert!(files.is_file(Path::new("firmware.hex")));
-        assert!(files.is_file(Path::new("./probe-ground.jsonc")));
-        assert_eq!(files.read(Path::new("firmware.hex")).unwrap(), b"hex");
-        assert!(!files.is_file(Path::new("parts/lamp/../../firmware.hex")));
-        assert_eq!(
-            files
-                .read(Path::new("parts/lamp/../../probe-ground.jsonc"))
-                .unwrap_err()
-                .kind(),
-            io::ErrorKind::NotFound
-        );
-        assert!(files.is_file(Path::new("parts/lamp/part.jsonc")));
-        let walked = files.list(Path::new("parts/lamp/../..")).unwrap();
-        assert!(
-            walked.iter().all(
-                |path| !path.ends_with("firmware.hex") && !path.ends_with("probe-ground.jsonc")
-            )
-        );
-        let root = files.list(Path::new(".")).unwrap();
-        assert!(root.iter().any(|path| path.ends_with("firmware.hex")));
     }
 
     fn outcome(result: io::Result<impl Sized>) -> Result<(), io::ErrorKind> {
