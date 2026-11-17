@@ -27,6 +27,7 @@ A command does what it names and nothing in the background. Where `orbe` could g
 
 ## Parts (Nov 4 2026)
 - A part is one real physical object, defined in one file, `part.jsonc`. Every field is optional except `format`. A part may have an engine model, children (`parts`, `wires`, `layout`), both or neither.
+- A part's `format` covers its `model`. A netlist change that an existing part file cannot survive raises the part `format`.
 - A part with no model that only joins the wires that reach its pins, such as a pin header, says so with `"joins_only": true`. `orbe lint` then asks it for no model.
 - A scene is not a part. We ship parts only.
 - A param is a number, a choice or a file. A choice picks a named set of values, such as an LED's colour, and may tint the 3D model. A param never changes pins or shape. An LED's colour is required.

@@ -19,7 +19,8 @@ use crate::units::{self, Unit};
 const SCENE_KEYS: &[&str] = &[
     "format", "$schema", "parts", "wires", "layout", "ground", "nets", "sim", "world",
 ];
-const FORMATS: &[u32] = &[1];
+/// Part and scene `format` values this binary reads. A part's `format` covers its `model`.
+pub const FORMATS: &[u32] = &[1];
 const WIRE_KINDS: &[&str] = &["jumper", "trace", "contact"];
 /// A live session's stop, investigation 1's 2-hour cap.
 pub const STOP_PS: u64 = 7_200 * 1_000_000_000_000;
@@ -270,40 +271,111 @@ impl Scene {
     pub(crate) const STOP_PS: u64 = STOP_PS;
 }
 
-/// Checks `format`. A file in another format is not read further.
-fn format_ok(file: FileId, root: &Node, out: &mut Findings) -> bool {
+/// Checks `format`. A file in another format is not read further. `part` is the part's label
+/// when the file is a part; a scene passes `None` and keeps [`Code::Format`].
+fn format_ok(file: FileId, root: &Node, out: &mut Findings, part: Option<&str>) -> bool {
     let reads = FORMATS
         .iter()
         .map(u32::to_string)
         .collect::<Vec<_>>()
         .join(", ");
-    match root.get("format") {
-        None => {
-            out.push(
-                Code::Format,
-                Span::start_of(file),
-                "the file has no `format`",
-                format!("add \"format\": 1; this binary reads format {reads}"),
-            );
-            false
-        }
-        Some(node)
-            if node
-                .number()
-                .is_some_and(|n| FORMATS.iter().any(|f| f64::from(*f) == n)) =>
-        {
-            true
-        }
-        Some(node) => {
-            out.push(
-                Code::Format,
-                node.span,
-                format!("format {} is not one this binary reads", node.to_value()),
-                format!("this binary reads format {reads}"),
-            );
-            false
-        }
+    let Some(node) = root.get("format") else {
+        report_format(
+            out,
+            part,
+            Span::start_of(file),
+            "the file has no `format`".into(),
+            format!("add \"format\": 1; this binary reads format {reads}"),
+        );
+        return false;
+    };
+    if node
+        .number()
+        .is_some_and(|n| FORMATS.iter().any(|f| f64::from(*f) == n))
+    {
+        return true;
     }
+    let (message, hint) = format_refusal(root, node, part, &reads);
+    report_format(out, part, node.span, message, hint);
+    false
+}
+
+fn report_format(
+    out: &mut Findings,
+    part: Option<&str>,
+    span: Span,
+    message: String,
+    hint: String,
+) {
+    let code = if part.is_some() {
+        Code::PartFormat
+    } else {
+        Code::Format
+    };
+    out.push(code, span, message, hint);
+}
+
+/// What to say when `format` is present and not one [`FORMATS`] lists. A whole number below
+/// the oldest is an older orbe, and one above the newest is a newer orbe. Anything else, a
+/// gap included, stays the plain refusal.
+fn format_refusal(root: &Node, node: &Node, part: Option<&str>, reads: &str) -> (String, String) {
+    let plain = (
+        format!("format {} is not one this binary reads", node.to_value()),
+        format!("this binary reads format {reads}"),
+    );
+    let Some(n) = whole_format(node) else {
+        return plain;
+    };
+    let Some((min, max)) = format_bounds() else {
+        return plain;
+    };
+    if n < min {
+        let id = part.map(|label| part_id(root, label));
+        let message = match &id {
+            Some(id) => format!("{id} is written for an older orbe"),
+            None => format!("format {n} is written for an older orbe"),
+        };
+        let hint = match id {
+            Some(id) if is_id(&id) => format!("run `orbe add {id} --overwrite`"),
+            _ => format!("this binary reads format {reads}"),
+        };
+        return (message, hint);
+    }
+    if n > max {
+        return (
+            format!("format {n} is newer than this binary reads; this project needs a newer orbe"),
+            format!("this binary reads format {reads}"),
+        );
+    }
+    plain
+}
+
+fn format_bounds() -> Option<(u32, u32)> {
+    Some((
+        FORMATS.iter().copied().min()?,
+        FORMATS.iter().copied().max()?,
+    ))
+}
+
+fn whole_format(node: &Node) -> Option<u32> {
+    let n = node.number()?;
+    if n.is_finite() && n >= 0.0 && n.fract() == 0.0 && n <= f64::from(u32::MAX) {
+        Some(n as u32)
+    } else {
+        None
+    }
+}
+
+/// The catalog id a format error names: the label when that is an id, else the file's `part`.
+fn part_id(root: &Node, label: &str) -> String {
+    if is_id(label) {
+        return label.to_string();
+    }
+    root.get("part")
+        .and_then(Node::str)
+        .filter(|text| is_id(text))
+        .unwrap_or(label)
+        .to_string()
 }
 
 fn name_ok(name: &str, span: Span, kind: NameKind, what: &str, out: &mut Findings) -> bool {
@@ -331,7 +403,7 @@ pub(crate) fn decode_scene(
         schema(out, root, "an object");
         return None;
     };
-    if !format_ok(file, root, out) {
+    if !format_ok(file, root, out, None) {
         return None;
     }
     let mut scene = Scene {
@@ -379,7 +451,7 @@ pub(crate) fn decode_part(
         schema(out, root, "an object");
         return None;
     };
-    if !format_ok(file, root, out) {
+    if !format_ok(file, root, out, Some(&label)) {
         return None;
     }
     let mut part = Part {

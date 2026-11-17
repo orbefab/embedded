@@ -563,6 +563,7 @@ mod tests {
             Scene::PartMissing,
             Scene::FirmwareMissing,
             Scene::PartModified,
+            Scene::PartFormat,
             Scene::Io,
             Scene::World,
         ];
