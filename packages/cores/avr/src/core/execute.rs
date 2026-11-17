@@ -54,18 +54,8 @@ impl Core {
     /// answers, or a [`Bus::store_idle`] store. A steady load reads [`Bus::peek`]. A projected
     /// `IN` reads the core's cycle, which is ahead of the bus during a free run, and a later
     /// pass can see a different byte. Otherwise runs nothing and returns [`SteadyRun::Stop`].
-    ///
-    /// At an [`Op::SpinCall`] it first skips the passes of the `delay` spin that still branch and
-    /// end before `bound`, leaving what the last of them leaves. The call itself then steps.
-    /// This test shares the dispatch on `op`, so the free loop before it pays nothing for it.
     #[inline(always)]
-    pub(super) fn execute_steady<B: Bus>(
-        &mut self,
-        bus: &B,
-        pc: u16,
-        op: Op,
-        bound: u64,
-    ) -> SteadyRun {
+    pub(super) fn execute_steady<B: Bus>(&mut self, bus: &B, pc: u16, op: Op) -> SteadyRun {
         let next = pc.wrapping_add(1);
         let mut varies = false;
         match op {
@@ -97,10 +87,6 @@ impl Core {
             Op::Sts { r, addr } if bus.store_idle(self, addr, self.at(r)) => {
                 self.finish(pc.wrapping_add(2), 2);
             }
-            Op::SpinCall { spin, .. } => {
-                self.skip_spin(bus, bound, spin);
-                return SteadyRun::Stop;
-            }
             _ => return SteadyRun::Stop,
         }
         if varies {
@@ -116,7 +102,7 @@ impl Core {
         let next = pc.wrapping_add(1);
         match op {
             Op::Nop => self.finish(next, 1),
-            Op::Add(d, r) | Op::AddChain(d, r) => {
+            Op::Add(d, r) => {
                 let (rd, rr) = (self.at(d), self.at(r));
                 let result = rd.wrapping_add(rr);
                 self.put(d, result);
@@ -130,11 +116,11 @@ impl Core {
                 self.add_flags(rd, rr, result);
                 self.finish(next, 1);
             }
-            Op::Sub(d, r) | Op::SubChain(d, r) => self.subtract(next, d, self.at(r), false, true),
+            Op::Sub(d, r) => self.subtract(next, d, self.at(r), false, true),
             Op::Sbc(d, r) => self.subtract(next, d, self.at(r), true, true),
-            Op::Cp(d, r) | Op::CpChain(d, r) => self.subtract(next, d, self.at(r), false, false),
+            Op::Cp(d, r) => self.subtract(next, d, self.at(r), false, false),
             Op::Cpc(d, r) => self.subtract(next, d, self.at(r), true, false),
-            Op::Subi(d, k) | Op::SubiChain(d, [k, ..]) => self.subtract(next, d, k, false, true),
+            Op::Subi(d, k) => self.subtract(next, d, k, false, true),
             Op::Sbci(d, k) => self.subtract(next, d, k, true, true),
             Op::Cpi(d, k) => self.subtract(next, d, k, false, false),
             Op::And(d, r) => self.logic(next, d, self.at(d) & self.at(r)),
@@ -587,70 +573,6 @@ impl Core {
         self.sreg & (1 << bit) != 0
     }
 
-    /// [`Op::AddChain`] as one op. Flags come from the last byte, with `Z` from that byte alone.
-    #[inline(never)]
-    pub(super) fn run_add_chain(&mut self, pc: u16, d: u8, r: u8) {
-        let mut carry = 0u8;
-        for i in 0..3u8 {
-            let rd = self.at(d + i);
-            let rr = self.at(r + i);
-            let result = rd.wrapping_add(rr).wrapping_add(carry);
-            self.put(d + i, result);
-            carry = add_carry_bit(rd, rr, result);
-        }
-        let rd = self.at(d + 3);
-        let rr = self.at(r + 3);
-        let result = rd.wrapping_add(rr).wrapping_add(carry);
-        self.put(d + 3, result);
-        self.add_flags(rd, rr, result);
-        self.finish(pc.wrapping_add(4), 4);
-    }
-
-    /// [`Op::SubChain`] or, without `store`, [`Op::CpChain`] as one op. `Z` is set only when
-    /// every byte is zero.
-    #[inline(never)]
-    pub(super) fn run_sub_chain(&mut self, pc: u16, d: u8, r: u8, store: bool) {
-        // A later byte can read a register an earlier byte wrote, so each source is read in order.
-        self.run_sub_bytes(pc, d, |core, i| core.at(r + i), store);
-    }
-
-    /// [`Op::SubiChain`] as one op.
-    #[inline(never)]
-    pub(super) fn run_subi_chain(&mut self, pc: u16, d: u8, ks: [u8; 4]) {
-        self.run_sub_bytes(pc, d, |_, i| ks[usize::from(i)], true);
-    }
-
-    fn run_sub_bytes(
-        &mut self,
-        pc: u16,
-        d: u8,
-        mut rr_at: impl FnMut(&Self, u8) -> u8,
-        store: bool,
-    ) {
-        let mut cin = false;
-        let mut zin = false;
-        for i in 0..3u8 {
-            let rd = self.at(d + i);
-            let rr = rr_at(self, i);
-            let result = rd.wrapping_sub(rr).wrapping_sub(u8::from(cin));
-            if store {
-                self.put(d + i, result);
-            }
-            cin = sub_carry_bit(rd, rr, result);
-            let z_new = result == 0;
-            zin = if i == 0 { z_new } else { z_new && zin };
-        }
-        let rd = self.at(d + 3);
-        let rr = rr_at(self, 3);
-        let result = rd.wrapping_sub(rr).wrapping_sub(u8::from(cin));
-        if store {
-            self.put(d + 3, result);
-        }
-        self.set_flag_bit(1, zin);
-        self.sub_flags(rd, rr, result, true);
-        self.finish(pc.wrapping_add(4), 4);
-    }
-
     fn set_flag_bit(&mut self, bit: u8, value: bool) {
         if value {
             self.sreg |= 1 << bit;
@@ -739,20 +661,6 @@ impl Core {
         let keep = self.sreg & (I | T | H | S | V | N);
         self.sreg = keep | (z << 1) | c;
     }
-}
-
-fn add_carry_bit(rd: u8, rr: u8, result: u8) -> u8 {
-    let rd7 = rd >> 7;
-    let rr7 = rr >> 7;
-    let r7 = result >> 7;
-    (rd7 & rr7) | (rr7 & (1 - r7)) | ((1 - r7) & rd7)
-}
-
-fn sub_carry_bit(rd: u8, rr: u8, result: u8) -> bool {
-    let rd7 = rd >> 7;
-    let rr7 = rr >> 7;
-    let r7 = result >> 7;
-    (((1 - rd7) & rr7) | (rr7 & r7) | (r7 & (1 - rd7))) != 0
 }
 
 fn signed_pair(rd: u8, rr: u8) -> u16 {

@@ -304,12 +304,23 @@ impl Core {
             return None;
         }
         let last = self.visit();
-        let varies = match self.execute_steady(bus, self.pc, op, bound) {
+        let varies = match self.execute_steady(bus, self.pc, op) {
             SteadyRun::Stop => return None,
             SteadyRun::Same => false,
             SteadyRun::Varies => true,
         };
         self.run_steady(bus, bound, last, varies)
+    }
+
+    /// At an [`Op::SpinCall`], skips the passes of its `delay` spin that still branch and end
+    /// before `bound`, and leaves what the last of them leaves. The call itself then steps. A
+    /// caller runs this where [`Self::run_free`] returned `None`, with the same bus and bound, so
+    /// the run's loop pays nothing for it.
+    #[inline(always)]
+    pub fn skip_spin_at<B: Bus>(&mut self, bus: &B, bound: u64) {
+        if let Op::SpinCall { spin, .. } = self.op(self.pc) {
+            self.skip_spin(bus, bound, spin);
+        }
     }
 
     fn visit(&self) -> Visit {
@@ -357,7 +368,7 @@ impl Core {
                 last = self.visit();
             }
             before = self.cycles;
-            match self.execute_steady(bus, self.pc, self.op(self.pc), bound) {
+            match self.execute_steady(bus, self.pc, self.op(self.pc)) {
                 SteadyRun::Stop => return None,
                 SteadyRun::Varies => varies = true,
                 SteadyRun::Same => {}
@@ -368,13 +379,10 @@ impl Core {
     /// Runs `op`, which [`Op::is_free`], in a run that ends at cycle `bound`. When a
     /// [`Countdown`]'s `BRNE` branches back to the head before `bound`, it jumps all but the last
     /// of the passes that end before `bound` and leave the counter above zero, and the last one
-    /// runs. With fewer than two passes before `bound` it refuses before it reads the counter. A
-    /// chain runs its four instructions as one op when they end strictly before `bound`. Landing
-    /// on `bound` is the op `run_free` retires on its own, and a whole chain would hand it four
-    /// cycles. Each shape's check sits in its own op's arm so that no other op pays for it.
+    /// runs. With fewer than two passes before `bound` it refuses before it reads the counter. The
+    /// jump sits in this op's arm so that no other op pays for it.
     #[inline(always)]
     fn execute_in_run(&mut self, pc: u16, op: Op, bound: u64) {
-        let whole = |core: &Self| bound.saturating_sub(core.cycles) > 4;
         match op {
             Op::Countdown(countdown) => {
                 self.execute_free(pc, op);
@@ -386,10 +394,6 @@ impl Core {
                     self.jump_passes(countdown, (bound - 1 - self.cycles) / pass);
                 }
             }
-            Op::AddChain(d, r) if whole(self) => self.run_add_chain(pc, d, r),
-            Op::SubChain(d, r) if whole(self) => self.run_sub_chain(pc, d, r, true),
-            Op::CpChain(d, r) if whole(self) => self.run_sub_chain(pc, d, r, false),
-            Op::SubiChain(d, ks) if whole(self) => self.run_subi_chain(pc, d, ks),
             _ => self.execute_free(pc, op),
         }
     }

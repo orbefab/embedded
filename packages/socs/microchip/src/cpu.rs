@@ -776,6 +776,9 @@ impl Cpu {
         let room = self.bus.next_event().saturating_sub(self.bus.cycle());
         let bound = limit.min(start.saturating_add(room));
         let last = self.core.run_free(&self.bus, bound);
+        if last.is_none() {
+            self.core.skip_spin_at(&self.bus, bound);
+        }
         let passed = self.core.cycles().wrapping_sub(start);
         match last {
             None => {

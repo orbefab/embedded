@@ -9,13 +9,10 @@ use crate::IO_BASE;
 /// One instruction with its operands extracted. A target is the absolute word address. `skip` is
 /// the length, in words, of the instruction a skip passes over.
 ///
-/// The ops from `Countdown` on are shapes the table finds when the image loads. Each steps as the
-/// instruction at its word, and a free run may run its whole shape at once. They are last, so
-/// every other op keeps its tag. `Countdown` is the `BRNE` that closes a [`Countdown`] loop.
-/// `AddChain`, `SubChain` and `CpChain` are an `ADD`, `SUB` or `CP` followed by three `ADC`,
-/// `SBC` or `CPC`, each on the next destination and source register. `SubiChain` is a `SUBI`
-/// followed by three `SBCI` on the next registers, with the four constants, low first.
-/// `SpinCall` is a `CALL` that a `delay` spin repeats, and `spin` indexes the program's spins.
+/// The ops from `Countdown` on are shapes found when the image loads. Each steps as the
+/// instruction at its word. They are last, so every other op keeps its tag. `Countdown` is the
+/// `BRNE` that closes a [`Countdown`] loop. `SpinCall` is a `CALL` that a `delay` spin repeats,
+/// and `spin` indexes the program's spins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Op {
     Nop,
@@ -91,10 +88,6 @@ pub(super) enum Op {
     Break,
     Unknown(u16),
     Countdown(Countdown),
-    AddChain(u8, u8),
-    SubChain(u8, u8),
-    CpChain(u8, u8),
-    SubiChain(u8, [u8; 4]),
     SpinCall { to: u16, spin: u16 },
 }
 
@@ -119,55 +112,7 @@ pub(super) fn table(flash: &[u16], pc_mask: u16) -> Vec<Op> {
             ops[at] = Op::Countdown(countdown);
         }
     }
-    // A head is never a chain's later word, so marking one head leaves the others to find.
-    for at in 0..ops.len() {
-        if let Some(chain) = chain(&ops, at as u16, pc_mask) {
-            ops[at] = chain;
-        }
-    }
     ops
-}
-
-/// The chain whose head is at `pc`. The registers it touches stay under 32.
-fn chain(ops: &[Op], pc: u16, pc_mask: u16) -> Option<Op> {
-    let tail = |i: u8| word_at(ops, pc.wrapping_add(u16::from(i)) & pc_mask);
-    let head = word_at(ops, pc);
-    if let Op::Subi(d, k0) = head {
-        let mut ks = [k0, 0, 0, 0];
-        for i in 1..4u8 {
-            match tail(i) {
-                Op::Sbci(dd, k) if d <= 28 && dd == d + i => ks[usize::from(i)] = k,
-                _ => return None,
-            }
-        }
-        return Some(Op::SubiChain(d, ks));
-    }
-    let (Op::Add(d, r) | Op::Sub(d, r) | Op::Cp(d, r)) = head else {
-        return None;
-    };
-    if d > 28 || r > 28 {
-        return None;
-    }
-    for i in 1..4u8 {
-        let pair = match (head, tail(i)) {
-            (Op::Add(..), Op::Adc(dd, rr))
-            | (Op::Sub(..), Op::Sbc(dd, rr))
-            | (Op::Cp(..), Op::Cpc(dd, rr)) => (dd, rr),
-            _ => return None,
-        };
-        if pair != (d + i, r + i) {
-            return None;
-        }
-    }
-    Some(match head {
-        Op::Add(..) => Op::AddChain(d, r),
-        Op::Sub(..) => Op::SubChain(d, r),
-        _ => Op::CpChain(d, r),
-    })
-}
-
-fn word_at(ops: &[Op], addr: u16) -> Op {
-    ops.get(usize::from(addr)).copied().unwrap_or(Op::Nop)
 }
 
 /// A loop of `NOP`s and one counter decrement, closed by a `BRNE` `back` words after its first
@@ -275,10 +220,6 @@ macro_rules! free_op {
             | Op::Brbs { .. }
             | Op::Brbc { .. }
             | Op::Countdown(_)
-            | Op::AddChain(..)
-            | Op::SubChain(..)
-            | Op::CpChain(..)
-            | Op::SubiChain(..)
             | Op::Jmp(_)
             | Op::Ijmp
             | Op::Bst { .. }
@@ -342,14 +283,12 @@ impl Op {
         }
     }
 
-    /// [`Core::execute_steady`](super::Core::execute_steady) may run the op, or for
-    /// [`Op::SpinCall`], skip passes of its spin.
+    /// [`Core::execute_steady`](super::Core::execute_steady) may run the op.
     #[inline(always)]
     pub(super) fn may_be_steady(self) -> bool {
         matches!(
             self,
             Op::In { .. }
-                | Op::SpinCall { .. }
                 | Op::Lds { .. }
                 | Op::Sbic { .. }
                 | Op::Sbis { .. }

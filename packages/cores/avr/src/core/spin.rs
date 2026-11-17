@@ -224,13 +224,22 @@ impl Code<'_> {
         pc.wrapping_add(words) & self.pc_mask
     }
 
+    /// The three words after `pc` hold `byte(1)` to `byte(3)`, the carry ops of a four-byte
+    /// subtract or add.
+    fn carries(&self, pc: u16, byte: impl Fn(u8) -> Op) -> bool {
+        (1..4u8).all(|i| self.op(self.next_word(pc, u16::from(i))) == byte(i))
+    }
+
     /// The spin that the `CALL` at `call` to `dest` repeats. The caller subtracts the start from
     /// the return, compares it with the limit, and branches back to the call while it is below.
     fn spin(&self, call: u16, dest: u16) -> Option<Spin> {
         let mut pc = self.next_word(call, 2);
-        let Op::SubChain(d0, s0) = self.op(pc) else {
+        let Op::Sub(d0, s0) = self.op(pc) else {
             return None;
         };
+        if d0 > 28 || s0 > 28 || !self.carries(pc, |i| Op::Sbc(d0 + i, s0 + i)) {
+            return None;
+        }
         pc = self.next_word(pc, 4);
         let Op::Cpi(d, lo) = self.op(pc) else {
             return None;
@@ -394,7 +403,7 @@ impl Code<'_> {
         pc = self.next_word(pc, 1);
         cycles += 1;
         let loop_at = pc;
-        if self.op(pc) != Op::AddChain(d0, d0) {
+        if self.op(pc) != Op::Add(d0, d0) || !self.carries(pc, |i| Op::Adc(d0 + i, d0 + i)) {
             return None;
         }
         pc = self.next_word(pc, 4);
