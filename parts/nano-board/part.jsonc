@@ -13,6 +13,7 @@
   "docs": {
     "Arduino Nano A000005 datasheet": "https://docs.arduino.cc/resources/datasheets/A000005-datasheet.pdf",
     "Arduino Nano A000005 full pinout": "https://docs.arduino.cc/resources/pinouts/A000005-full-pinout.pdf",
+    "Arduino Nano schematic, revision 3.0": "https://www.arduino.cc/en/uploads/Main/ArduinoNano30Schematic.pdf",
   },
   // A clone has no maker's sheet. The official board is the representative for size and pinout.
   "real": { "generic": true, "maker": "Arduino", "number": "A000005", "datasheet": "Arduino Nano A000005 datasheet" },
@@ -45,13 +46,13 @@
     "led_tx": { "type": "led-0603", "color": "green", "not_simulated": "The CH340G drives it, and its model covers only TXD and DTR." },
     "led_rx": { "type": "led-0603", "color": "red", "not_simulated": "The CH340G drives it, and its model covers only TXD and DTR." },
     "crystal": { "type": "crystal-3215" },
-    "diode": { "type": "diode-sod123" },
+    "diode": { "type": "diode-sod123" }, // D1, MBR0520 in Arduino Nano schematic revision 3.0, "+5V AUTO SELECTOR"
     "c_usb_a": { "type": "capacitor-0603", "capacitance": "100n", "not_simulated": "The clone's schematic is not cited, so its value and net are unknown." },
     "c_usb_b": { "type": "capacitor-0603", "capacitance": "100n", "not_simulated": "The clone's schematic is not cited, so its value and net are unknown." },
     "c_bulk_usb": { "type": "capacitor-tantalum-3216", "capacitance": "10u", "not_simulated": "A rail capacitor. The engine's board example leaves rail capacitors out." },
     "r_txd": { "type": "resistor-0603", "resistance": { "value": 1000, "unit": "ohm", "source": { "datasheet": { "doc": "development board schematic, revision 3", "at": "RN4B, 1K", "basis": "nominal" } } } },
     "r_rxd": { "type": "resistor-0603", "resistance": "1k", "not_simulated": "Its far end is the CH340G's RXD, which its model does not cover." },
-    "c_reset": { "type": "capacitor-0603", "capacitance": { "value": 1e-7, "unit": "F", "source": { "datasheet": { "doc": "development board schematic, revision 3", "at": "C5, 100 nF", "basis": "nominal" } } } },
+    "c_reset": { "type": "capacitor-0603", "not_simulated": "It carries the CH340G's DTR pulse to RESET for an upload, and upload is not simulated, so DTR never moves. Left in, it would only settle RESET by microvolts after each move of the 5V rail.", "capacitance": { "value": 1e-7, "unit": "F", "source": { "datasheet": { "doc": "development board schematic, revision 3", "at": "C5, 100 nF", "basis": "nominal" } } } },
     "r_reset": { "type": "resistor-0603", "resistance": { "value": 10000, "unit": "ohm", "source": { "datasheet": { "doc": "development board schematic, revision 3", "at": "RN1D, 10K", "basis": "nominal" } } } },
     "c_bulk_reg": { "type": "capacitor-tantalum-3216", "capacitance": "10u", "not_simulated": "It sits on the AMS1117 path, which is not modelled." },
     "c_reg": { "type": "capacitor-0603", "capacitance": "100n", "not_simulated": "It sits on the AMS1117 path, which is not modelled." },
@@ -170,6 +171,7 @@
   },
   "not_simulated": [
     { "what": "3V3", "pins": ["3V3"], "why": "It is the CH340G's 3.3 V output. The engine has no USB-serial chip, so the pin supplies nothing." },
-    { "what": "VIN", "pins": ["VIN"], "why": "It feeds the AMS1117, which has no model yet. The board runs from USB." }
+    { "what": "VIN", "pins": ["VIN"], "why": "It feeds the AMS1117, which has no model yet. The board runs from USB." },
+    { "what": "a measured USB rail", "pins": ["5V"], "why": "The 5V pin sits one MBR0520 drop under the host's ideal 5.0 V, about 4.76 V at the board's own 26 mA. The drop is a fit to the diode's typical datasheet curve and the draw is the chips' datasheet typicals, not a reading off a real board. A USB port may give 4.75 V to 5.25 V and a clone may fit another Schottky, so a real board's 5V pin can read anywhere from about 4.5 V to 5.0 V." },
   ],
 }
