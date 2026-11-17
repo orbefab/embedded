@@ -221,7 +221,7 @@ impl Circuit<'_> {
                                 si(&number(*unit, *range, &arg.node).ok()?)?.into()
                             }
                             ParamKind::Choice(_) => Value::String(arg.node.str()?.to_string()),
-                            ParamKind::File { .. } | ParamKind::Through => return None,
+                            ParamKind::File | ParamKind::Through => return None,
                         };
                         Some((key.clone(), value))
                     })
