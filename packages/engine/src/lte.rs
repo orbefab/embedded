@@ -931,7 +931,8 @@ mod tests {
                   "swing_low": { "value": 0.051, "unit": "V", "source": "user" },
                   "output_resistance": { "value": 30.0, "unit": "ohm", "source": "user" },
                   "short_circuit_current": { "value": 0.04, "unit": "A", "source": "user" },
-                  "supply_current": { "value": 1.05e-4, "unit": "A", "source": "user" } }
+                  "supply_current": { "value": 1.05e-4, "unit": "A", "source": "user" },
+                  "input_headroom": { "value": 0.0, "unit": "V", "source": "user" } }
               ]
             }"#,
         )

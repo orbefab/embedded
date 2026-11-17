@@ -14,6 +14,7 @@ use orbe_scene::Files;
 const CODES: &[&str] = &[
     "scene.syntax",
     "scene.format",
+    "part_format",
     "scene.name",
     "scene.duplicate",
     "scene.type",

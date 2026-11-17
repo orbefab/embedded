@@ -381,13 +381,7 @@ fn flag_before_command(args: &[OsString]) -> Option<ExitCode> {
             line.extend(unit);
         }
     }
-    let shown = |words: &[&str]| {
-        words
-            .iter()
-            .map(|w| quoted(w))
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
+    let shown = |words: &[&str]| orbe_scene::shell_join(words);
     let message = format!("`{}` is before the command name", shown(&words[..at]));
     let hint = format!("put it after the command name, as `orbe {}`", shown(&line));
     if words.contains(&"--json") {
@@ -409,16 +403,6 @@ fn names(arg: &Arg, flag: &str) -> bool {
             .chars()
             .nth(1)
             .is_some_and(|c| arg.get_short() == Some(c)),
-    }
-}
-
-/// The word as `sh` reads it back.
-fn quoted(word: &str) -> String {
-    let plain = |c: char| c.is_ascii_alphanumeric() || "@%+=:,./_-".contains(c);
-    if !word.is_empty() && word.chars().all(plain) {
-        word.to_string()
-    } else {
-        format!("'{}'", word.replace('\'', "'\\''"))
     }
 }
 

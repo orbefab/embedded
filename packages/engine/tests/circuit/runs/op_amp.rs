@@ -60,9 +60,10 @@ fn the_bias_current_leaves_each_input() {
 }
 
 /// Circuit 1, second channel. `u2` is a follower on its own 5 V supply whose `in_p` sits behind
-/// 1 Mohm from 4.95 V, within the 0.8 V headroom of `vcc`. The bias gate is
+/// 1 Mohm from 4.95 V, within the 0.8 V bias gate of `vcc`. The gate is
 /// `sg((5 - 0.8 - 4.95) / 0.05)`, about 3e-7, so the bias current falls below a thousandth of
-/// `Ib`, and 1 Mohm carries little more than the node gmin.
+/// `Ib`, and 1 Mohm carries little more than the node gmin. The netlist's `input_headroom` is 0,
+/// which rates no common-mode ceiling.
 #[test]
 fn the_bias_current_turns_off_near_the_positive_rail() {
     super::op_amp_sheet::bias_off(&lmv358());
@@ -119,4 +120,131 @@ fn the_output_current_is_limited_both_ways() {
 #[test]
 fn a_comparator_switches_in_few_steps_at_its_threshold() {
     super::op_amp_sheet::comparators(&lmv358());
+}
+
+/// An LM358-shaped comparator on 5 V. `input_headroom` is the only thing that moves. The
+/// differential stage stays the ideal law, so the output still follows which input is higher.
+fn comparator(headroom: f64, vp: f64, vn: f64) -> (Vec<orbe_engine::diagnostic::Diagnostic>, f64) {
+    let value = |number: f64, unit: &str| serde_json::json!({ "value": number, "unit": unit, "source": "user" });
+    let source = |name: &str, net: &str, volts: f64| {
+        serde_json::json!({
+            "name": name,
+            "kind": "voltage_source",
+            "pins": { "p": net, "n": "gnd" },
+            "voltage": value(volts, "V"),
+        })
+    };
+    let doc = serde_json::json!({
+        "version": 0,
+        "seed": 0,
+        "analysis": { "op": {} },
+        "ground": "gnd",
+        "nets": ["gnd", "vcc", "inp", "inn", "out"],
+        "parts": [
+            source("vs", "vcc", 5.0),
+            source("vp", "inp", vp),
+            source("vn", "inn", vn),
+            {
+                "name": "load",
+                "kind": "resistor",
+                "pins": { "a": "out", "b": "gnd" },
+                "resistance": value(10_000.0, "ohm"),
+                "ratings": { "power": null },
+            },
+            {
+                "name": "u1",
+                "kind": "op_amp",
+                "pins": { "in_p": "inp", "in_n": "inn", "out": "out", "vcc": "vcc", "gnd": "gnd" },
+                "gain_bandwidth": value(1e6, "Hz"),
+                "slew_rate": value(1e6, "V/s"),
+                "open_loop_gain": value(1e5, "1"),
+                "input_bias_current": value(1.5e-8, "A"),
+                "swing_high": value(0.0025, "V"),
+                "swing_low": value(0.051, "V"),
+                "output_resistance": value(30.0, "ohm"),
+                "short_circuit_current": value(0.04, "A"),
+                "supply_current": value(1.05e-4, "A"),
+                "input_headroom": value(headroom, "V"),
+            },
+        ],
+    });
+    let netlist = orbe_engine::netlist::parse(&serde_json::to_vec(&doc).unwrap())
+        .unwrap_or_else(|errors| panic!("{errors:?}"));
+    let results = orbe_engine::simulate(&netlist);
+    let op = results
+        .observations()
+        .op()
+        .unwrap_or_else(|| panic!("{:?}", results.diagnostics()));
+    let out = op.values[&"#net.out".parse().unwrap()].get();
+    (results.diagnostics().to_vec(), out)
+}
+
+fn warned_pins(found: &[orbe_engine::diagnostic::Diagnostic]) -> Vec<String> {
+    found
+        .iter()
+        .map(|diagnostic| {
+            assert_eq!(diagnostic.code(), "rating.voltage", "{diagnostic:?}");
+            diagnostic.refs()[0].to_string()
+        })
+        .collect()
+}
+
+/// Both inputs at 4 V on a 5 V supply sit above the LM358's 1.5 V headroom. The output is
+/// still the comparison. A pin exactly on 3.5 V is inside, and so is 4.2 V at the LMV358's
+/// 0.8 V headroom. Headroom 0 rates no ceiling, so an input above the supply does not warn.
+#[test]
+fn an_input_above_the_common_mode_range_warns_and_the_stage_still_compares() {
+    use orbe_engine::diagnostic::{Diagnostic, VoltageExcursion};
+    use orbe_model::Time;
+
+    let (both, out) = comparator(1.5, 4.0, 3.9);
+    assert_eq!(
+        warned_pins(&both),
+        ["#u1.pin.in_n", "#u1.pin.in_p"],
+        "{both:?}"
+    );
+    assert!(out > 4.5, "{out}");
+    let Diagnostic::RatingVoltage(VoltageExcursion {
+        low,
+        high,
+        peak,
+        first,
+        over_ps,
+        ..
+    }) = &both[1]
+    else {
+        unreachable!();
+    };
+    assert_eq!(low, &None);
+    assert_eq!(high, &Some(3.5));
+    assert_eq!(peak, &4.0);
+    assert_eq!((first, over_ps), (&Time::ZERO, &None));
+    let message = serde_json::to_value(&both[1]).unwrap()["message"].clone();
+    assert_eq!(
+        message,
+        "#u1.pin.in_p reaches 4 V over the chip's ground, outside its 3.5 V ceiling"
+    );
+
+    let (inverted, low_out) = comparator(1.5, 3.9, 4.0);
+    assert_eq!(warned_pins(&inverted), ["#u1.pin.in_n", "#u1.pin.in_p"]);
+    assert!(low_out < 0.2, "{low_out}");
+
+    let (edge, _) = comparator(1.5, 3.5, 3.5);
+    assert!(edge.is_empty(), "{edge:?}");
+
+    let (one, one_out) = comparator(1.5, 4.0, 2.5);
+    assert_eq!(warned_pins(&one), ["#u1.pin.in_p"]);
+    assert!(one_out > 4.5, "{one_out}");
+
+    let (typical, _) = comparator(0.8, 4.2, 2.5);
+    assert!(typical.is_empty(), "{typical:?}");
+    let (past_typical, _) = comparator(0.8, 4.201, 2.5);
+    assert_eq!(warned_pins(&past_typical), ["#u1.pin.in_p"]);
+
+    let (unrated, _) = comparator(0.0, 6.0, 2.5);
+    assert!(unrated.is_empty(), "{unrated:?}");
+    let (on_one_volt, _) = comparator(1.0, 4.0, 2.5);
+    assert!(on_one_volt.is_empty(), "{on_one_volt:?}");
+    let (past_one_volt, _) = comparator(1.0, 4.001, 2.5);
+    assert_eq!(warned_pins(&past_one_volt), ["#u1.pin.in_p"]);
 }

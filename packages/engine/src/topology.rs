@@ -26,7 +26,7 @@ pub fn floating_nets(netlist: &Netlist) -> Vec<Diagnostic> {
     out
 }
 
-fn find(parent: &mut [usize], mut index: usize) -> usize {
+pub(crate) fn find(parent: &mut [usize], mut index: usize) -> usize {
     let mut root = index;
     while parent[root] != root {
         root = parent[root];
@@ -39,7 +39,7 @@ fn find(parent: &mut [usize], mut index: usize) -> usize {
     root
 }
 
-fn unite(parent: &mut [usize], left: usize, right: usize) {
+pub(crate) fn unite(parent: &mut [usize], left: usize, right: usize) {
     let left = find(parent, left);
     let right = find(parent, right);
     if left != right {

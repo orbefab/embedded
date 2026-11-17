@@ -34,7 +34,7 @@ use crate::chip::{ClockDomain, DEVICES, DeviceSpec, ModuleGate, RAMEND, SPH, SPL
 use crate::mux::PinMux;
 use crate::periph::usart::{Sent, Shifted};
 use crate::periph::{Device, IoWrite, Notice, StoreAt, Touch, push_pin, rows_of};
-use crate::regs::OwnedReg;
+use crate::regs::{GPIO_PIN, OwnedReg};
 use crate::{Level, PIN_QUEUE_CAP, PinLevels, PinOrigin, PinReport};
 
 /// Data-space address of I/O register 0.
@@ -43,6 +43,8 @@ pub(crate) use orbe_avr::IO_BASE;
 const IO_END: u16 = 0x00FF;
 const SRAM_BASE: u16 = 0x0100;
 const IO_LEN: usize = 0xE0;
+// `PinMux::unread` holds one bit per I/O index in four words.
+const _: () = assert!(IO_LEN <= 256);
 const NO_DEV: u8 = 0xFF;
 
 #[derive(Debug, Clone, Copy)]
@@ -170,6 +172,7 @@ impl orbe_avr::Bus for Bus {
             return byte;
         }
         if let Some(index) = io_index(addr) {
+            self.note_read(index);
             return self.load_io(index);
         }
         0
@@ -180,8 +183,13 @@ impl orbe_avr::Bus for Bus {
         self.store(core, addr, value, cycles);
     }
 
+    /// The core peeks only for an instruction it runs, so a peek of `PINx` is the firmware's
+    /// read, as a load is.
     #[inline(always)]
     fn peek(&self, core: &Core, addr: u16) -> u8 {
+        if let Some(index) = io_index(addr) {
+            self.note_read(index);
+        }
         self.peek(core, addr)
     }
 
@@ -319,6 +327,15 @@ impl Bus {
                 unmodeled[slot] = row.unmodeled;
             }
         }
+        let mut pinx = [0u64; 4];
+        for (slot, owner) in owners.iter().enumerate() {
+            if owner.dev != NO_DEV
+                && owner.reg == GPIO_PIN
+                && matches!(devices[usize::from(owner.dev)], Device::Port(_))
+            {
+                pinx[slot >> 6] |= 1 << (slot & 63);
+            }
+        }
         let sram_len = usize::from(RAMEND - SRAM_BASE) + 1;
         let mut bus = Self {
             next_event: u64::MAX,
@@ -355,6 +372,7 @@ impl Bus {
             #[cfg(test)]
             test_irq: crate::periph::probe::Probe::new(),
         };
+        bus.mux.set_pinx(pinx);
         bus.note_schedule();
         bus
     }
@@ -580,6 +598,56 @@ impl Bus {
             Some(Device::ExtInt(ext)) => ext.waiting(),
             _ => 0,
         }
+    }
+
+    /// Marks each pin of the port whose `PINx` sits at I/O `index` read, as
+    /// [`PinMux::note_read`] says, at the first load since a drive last turned off. A steady
+    /// load in a free run is marked at the cycle the run began on. Every load and peek passes
+    /// here, so any other load costs one bit test.
+    #[inline(always)]
+    fn note_read(&self, index: usize) {
+        if self.mux.unread(index) {
+            self.note_port_read(index);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn note_port_read(&self, index: usize) {
+        self.mux.loaded(index);
+        let slot = self.owners[index];
+        if let Device::Port(port) = &self.devices[usize::from(slot.dev)] {
+            let now = self.epochs.oscillator_cycles(self.cycle);
+            self.mux.note_read(0xFF << port.port().pin_id(0), now);
+        }
+    }
+
+    /// Hands the mux the pins an enabled external or pin-change interrupt now watches.
+    fn note_sensed(&mut self) {
+        let Some(Device::ExtInt(ext)) = self.slot_dev(self.index.extint) else {
+            return;
+        };
+        let sensed = ext.sensed();
+        let now = self.epochs.oscillator_cycles(self.cycle);
+        self.mux.set_watched(sensed, now);
+    }
+
+    /// The oscillator cycle the firmware first read pin `pin` at since its drive last turned
+    /// off, as [`PinMux::off_read`] says: a load of its port's `PINx`, or an enabled `INTn` or
+    /// pin-change interrupt that watches it, while it is an input with its pull-up off and its
+    /// digital input on.
+    pub(crate) fn pin_read_at(&self, pin: u32) -> Option<u64> {
+        self.mux.off_read(pin)
+    }
+
+    /// Each pin's [`Self::pin_read_at`] while its drive is off, for [`Self::carry_off_reads`].
+    pub(crate) fn off_reads(&self) -> [u64; crate::PIN_COUNT] {
+        self.mux.off_reads()
+    }
+
+    /// After a reset, keeps the reads from before it of each pin whose drive stayed off.
+    pub(crate) fn carry_off_reads(&mut self, before: [u64; crate::PIN_COUNT]) {
+        self.mux.carry_off_reads(before);
     }
 
     #[cfg(test)]
@@ -1161,6 +1229,9 @@ impl Bus {
             let mut ctx = host.ctx(epochs);
             devices[usize::from(slot.dev)].write(slot.reg, value, &mut ctx, mux, at, &clock, addr)
         };
+        if Some(slot.dev) == self.index.extint {
+            self.note_sensed();
+        }
         // §9.11 puts the new division in force `T1 + T2` to `T1 + 2·T2` after the write.
         // One more cycle at the old division after the store retires, then the new one, lands
         // the second edge on `T1 + T2` whichever way the clock changes.

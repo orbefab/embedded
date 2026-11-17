@@ -187,7 +187,7 @@ pub fn run(dir: Option<&Path>, request: &Request) -> Result<Reply, RunError> {
 }
 
 fn run_with(dir: Option<&Path>, request: &Request, fault: &mut Fault) -> Result<Reply, RunError> {
-    match block::named(request) {
+    match block::named(dir, request) {
         Some(Ok(block)) => return block::install(dir, block, fault),
         Some(Err(message)) => return Ok(Reply::Usage(message)),
         None => {}
@@ -288,13 +288,9 @@ fn run_in(dir: Option<&Path>, request: &Request, fault: &mut Fault) -> Result<Re
             .map(|id| format!("parts/{id}"))
             .collect::<Vec<_>>()
             .join(", ");
-        let ids = holes
-            .iter()
-            .map(|id| project::shell_word(id))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let command = project::add_writing(&add, &holes, false).expect("a missing part");
         notes.push(format!(
-            "parts.lock lists {}, and {folders} {} missing. run `{add} {ids}` to copy {} back",
+            "parts.lock lists {}, and {folders} {} missing. run `{command}` to copy {} back",
             holes.join(", "),
             if holes.len() == 1 { "is" } else { "are" },
             if holes.len() == 1 { "it" } else { "them" },
@@ -431,7 +427,10 @@ fn not_a_project(dir: Option<&Path>, request: &Request) -> Option<Refusal> {
             "run `{}`",
             request_command(&project::add_command(Some(&dir)), request)
         ),
-        None => "run it in the project's folder, the one with scene.jsonc, or name that folder with `orbe add -C <folder>`".into(),
+        None => format!(
+            "run it in the project's folder, the one with scene.jsonc, or name that folder with `{}`",
+            project::add_command(Some(Path::new("<folder>")))
+        ),
     };
     Some(Refusal {
         code: AddCode::NotAProject,
@@ -472,18 +471,60 @@ fn up(dir: &Path) -> PathBuf {
 }
 
 fn request_command(add: &str, request: &Request) -> String {
-    let mut args = vec![add.to_string()];
-    args.extend(request.ids.iter().map(|id| project::shell_word(id)));
-    for (on, flag) in [
-        (request.overwrite, "--overwrite"),
-        (request.diff, "--diff"),
-        (request.relock, "--relock"),
-    ] {
-        if on {
-            args.push(flag.into());
+    project::format_add(
+        add,
+        &request.ids,
+        request.overwrite,
+        request.diff,
+        request.relock,
+    )
+    .expect("a request names an id or is --relock")
+}
+
+/// The command a missing-part hint prints for `ids`. It is the command planning an add of
+/// those ids would print, so a child that differs is named with `--overwrite`. `None` when
+/// the folders cannot be read or the lock itself does not parse; `--relock` is that
+/// finding's own hint. A plan that would write names the requested ids, not every child.
+pub(crate) fn repair_command(root: &Path, add: &str, ids: &[String]) -> Option<String> {
+    if ids.is_empty() {
+        return None;
+    }
+    let request = Request {
+        ids: ids.to_vec(),
+        overwrite: false,
+        diff: false,
+        relock: false,
+    };
+    if plan::usage(&request).is_some() {
+        return None;
+    }
+    let catalog = Catalog::builtin();
+    let wanted = plan::wanted(&catalog, &request);
+    let snapshot = snapshot::load(root, &wanted).ok()?;
+    match plan::plan(&catalog, &snapshot, &request, add) {
+        Plan::Add(_) => project::add_writing(add, ids, false),
+        Plan::Refuse(refusal) if refusal.code == AddCode::LockSyntax => None,
+        Plan::Refuse(refusal) => command_in(&refusal.hint),
+        _ => None,
+    }
+}
+
+/// The first backquoted `orbe add` in `text` that names an id.
+fn command_in(text: &str) -> Option<String> {
+    let mut rest = text;
+    while let Some(at) = rest.find("`orbe add") {
+        rest = &rest[at + 1..];
+        let end = rest.find('`')?;
+        let command = &rest[..end];
+        rest = &rest[end + 1..];
+        let names_id = command.split_whitespace().any(|word| {
+            !word.starts_with('-') && word != "orbe" && word != "add" && !word.starts_with('\'')
+        });
+        if names_id {
+            return Some(command.to_string());
         }
     }
-    args.join(" ")
+    None
 }
 
 fn with_notes(reply: Reply, lines: Vec<String>) -> Reply {

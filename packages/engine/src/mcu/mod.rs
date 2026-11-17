@@ -258,4 +258,8 @@ impl Mcu {
     pub(crate) fn notes(&self, through: Time) -> Vec<(Time, Note)> {
         each!(self, host => host.mcu.notes(through))
     }
+
+    pub(crate) fn read(&self, output: usize) -> Option<Time> {
+        each!(self, host => host.mcu.read(output))
+    }
 }

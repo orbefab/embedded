@@ -187,6 +187,17 @@ impl Core {
         }
     }
 
+    /// When its firmware first read output `output`'s pin as a digital input since the pin's
+    /// drive last turned off, as far as it has run. Only a microcontroller says so.
+    fn read(&self, output: usize) -> Option<Time> {
+        match *self {
+            Core::Mcu(ref mcu) => mcu.read(output),
+            Core::Device(_) => None,
+            #[cfg(test)]
+            Core::Script(_) => None,
+        }
+    }
+
     /// The volts of each of its samples at its stop at `at`.
     fn sample(&mut self, world: &World, at: Time, volts: &[f64]) {
         match *self {
@@ -699,6 +710,16 @@ impl Actives {
 
     pub(crate) fn cores(&self) -> &[Core] {
         &self.committed
+    }
+
+    /// When active chip `k`'s firmware first read output `output`'s pin since its drive last
+    /// turned off. It asks the copy run ahead, which is never behind the accepted time: a
+    /// landing commits only a core that stops there, so the committed core of a chip that
+    /// polls a pin without changing a drive can sit far back. The copy is past no change of
+    /// its image but at most the one at its stop, so the stretch it names is the one that
+    /// holds the accepted time whenever the committed drive there is off.
+    pub(crate) fn read(&self, k: usize, output: usize) -> Option<Time> {
+        self.ahead[k].core.read(output)
     }
 
     pub(crate) fn displays(&self) -> &[Name] {

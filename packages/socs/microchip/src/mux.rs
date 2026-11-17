@@ -22,6 +22,8 @@
 //! External interrupt, pin change, input capture, and `T0`/`T1` read them.
 //! ADC auto-trigger is a flag event on the bus.
 
+use std::cell::Cell;
+
 use crate::Port;
 use crate::periph::Ctx;
 use crate::{Level, PinDrive};
@@ -226,6 +228,16 @@ pub(crate) struct PinMux {
     /// `RSTDISBL` is unprogrammed, so `PC6` is `RESET`: an input with its own pull-up that
     /// `DDRC6`, `PORTC6`, and `PUD` do not move, and `PINC6` reads 0 (Table 14-7, §14.3.2).
     reset_pin: bool,
+    /// By pin id, the oscillator cycle the firmware first read the pin at since its drive last
+    /// turned off, or `u64::MAX`. A load reads through `&self`, so the record sits in a `Cell`.
+    off_reads: Cell<[u64; crate::PIN_COUNT]>,
+    /// One bit per I/O index where a port's `PINx` sits, which the bus sets.
+    pinx: [u64; 4],
+    /// The bits of `pinx` the firmware has not loaded since a drive last turned off. A load
+    /// reads through `&self`, so the set sits in a `Cell`.
+    unread: Cell<[u64; 4]>,
+    /// The pins an enabled `INTn` or pin-change interrupt watches, one bit per pin id.
+    watched: u64,
 }
 
 const RESET_PORT: Port = Port::C;
@@ -243,6 +255,10 @@ impl PinMux {
             }; EDGE_CAP],
             edge_len: 0,
             reset_pin: false,
+            off_reads: Cell::new([u64::MAX; crate::PIN_COUNT]),
+            pinx: [0; 4],
+            unread: Cell::new([0; 4]),
+            watched: 0,
         };
         mux.set_reset_pin(true);
         mux
@@ -562,6 +578,118 @@ impl PinMux {
         }
     }
 
+    /// The pins whose digital input `PINx` and the edge detectors see, one bit per pin id: not
+    /// a pin whose buffer `DIDRn` turns off, nor `PC6` while it is `RESET`.
+    pub(crate) fn sensing(&self) -> u64 {
+        let mut pins = 0u64;
+        for port in [Port::B, Port::C, Port::D] {
+            let on = !self.ports[port.index()].buf_off;
+            pins |= u64::from(on) << port.pin_id(0);
+        }
+        if self.reset_pin {
+            pins &= !(1 << RESET_PORT.pin_id(RESET_BIT));
+        }
+        pins
+    }
+
+    /// Pin id `pin`'s drive turned off at oscillator cycle `at`: no read before counts for it
+    /// now, and an interrupt that watches it reads it from here.
+    fn turned_off(&mut self, pin: u32, at: u64) {
+        self.unread.set(self.pinx);
+        let mut reads = self.off_reads.get();
+        reads[pin as usize] = u64::MAX;
+        self.off_reads.set(reads);
+        self.note_read(self.watched & (1 << pin), at);
+    }
+
+    /// The I/O indices where a port's `PINx` sits, one bit each, all unread.
+    pub(crate) fn set_pinx(&mut self, pinx: [u64; 4]) {
+        self.pinx = pinx;
+        self.unread.set(pinx);
+    }
+
+    /// Whether I/O `index` is a `PINx` the firmware has not loaded since a drive last turned
+    /// off. Every load and peek asks, so this is one bit test.
+    #[inline(always)]
+    pub(crate) fn unread(&self, index: usize) -> bool {
+        self.unread.get()[index >> 6] & (1 << (index & 63)) != 0
+    }
+
+    /// I/O `index` was loaded.
+    pub(crate) fn loaded(&self, index: usize) {
+        let mut unread = self.unread.get();
+        unread[index >> 6] &= !(1 << (index & 63));
+        self.unread.set(unread);
+    }
+
+    /// Marks each pin of `pins`, one bit per pin id, read at oscillator cycle `at` when its
+    /// drive is off and its digital input on, unless it was read since its drive turned off. A
+    /// pin with its pull-up on or driven reads a held level, and a pin whose input buffer is
+    /// off reads 0, so neither is a read of a floating pin.
+    pub(crate) fn note_read(&self, pins: u64, at: u64) {
+        let pins = pins & self.sensing();
+        if pins == 0 {
+            return;
+        }
+        let mut reads = self.off_reads.get();
+        for port in [Port::B, Port::C, Port::D] {
+            for bit in 0..8u8 {
+                let pin = port.pin_id(bit);
+                let off = self.ports[port.index()].reported[usize::from(bit)].1 == PinDrive::Off;
+                let read = &mut reads[pin as usize];
+                if pins & (1 << pin) != 0 && off && *read == u64::MAX {
+                    *read = at;
+                }
+            }
+        }
+        self.off_reads.set(reads);
+    }
+
+    /// The pins an enabled interrupt watches from oscillator cycle `at` on. Each one whose
+    /// drive is off is read there.
+    pub(crate) fn set_watched(&mut self, pins: u64, at: u64) {
+        self.watched = pins;
+        self.note_read(pins, at);
+    }
+
+    /// The oscillator cycle the firmware first read pin id `pin` at since its drive last
+    /// turned off, as far as the chip has run. A pin whose drive is not off now keeps the read
+    /// of the stretch that just ended.
+    pub(crate) fn off_read(&self, pin: u32) -> Option<u64> {
+        let at = *self.off_reads.get().get(pin as usize)?;
+        (at != u64::MAX).then_some(at)
+    }
+
+    /// Each pin's [`Self::off_read`], `u64::MAX` for none, and `u64::MAX` too for a pin whose
+    /// drive is not off.
+    pub(crate) fn off_reads(&self) -> [u64; crate::PIN_COUNT] {
+        let mut reads = self.off_reads.get();
+        for (pin, read) in reads.iter_mut().enumerate() {
+            let off = Port::from_pin(pin as u32).is_some_and(|(port, bit)| {
+                self.ports[port.index()].reported[usize::from(bit)].1 == PinDrive::Off
+            });
+            if !off {
+                *read = u64::MAX;
+            }
+        }
+        reads
+    }
+
+    /// After a reset, the reads of [`Self::off_reads`] from before it for each pin whose drive
+    /// stayed off: the reset did not end its stretch.
+    pub(crate) fn carry_off_reads(&mut self, before: [u64; crate::PIN_COUNT]) {
+        let mut reads = self.off_reads.get();
+        for (pin, (read, &kept)) in reads.iter_mut().zip(&before).enumerate() {
+            let off = Port::from_pin(pin as u32).is_some_and(|(port, bit)| {
+                self.ports[port.index()].reported[usize::from(bit)].1 == PinDrive::Off
+            });
+            if off && kept != u64::MAX {
+                *read = (*read).min(kept);
+            }
+        }
+        self.off_reads.set(reads);
+    }
+
     /// What `PINx` and the edge detectors see of `level`.
     fn digital(&self, port: Port, bit: u8, level: Level) -> Level {
         if self.ports[port.index()].buf_off & (1 << bit) != 0 || self.is_reset_pin(port.pin_id(bit))
@@ -616,7 +744,11 @@ impl PinMux {
             if *reported == now {
                 continue;
             }
+            let was_off = reported.1 == PinDrive::Off;
             *reported = now;
+            if now.1 == PinDrive::Off && !was_off {
+                self.turned_off(pin, ctx.oscillator_cycles(at));
+            }
             if emit {
                 ctx.emit_pin(pin, now, report_at, self.origin_of(port, bit));
             }
