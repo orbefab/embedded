@@ -24,7 +24,7 @@ pub struct MapPart {
     pub pins: BTreeMap<String, Option<String>>,
     /// The engine parts this instance's own model writes.
     pub engine: Vec<EnginePart>,
-    /// The part file's `readings`, such as an LED's `on`.
+    /// The part file's `readings`, such as an LED's `lit`.
     pub readings: BTreeMap<String, Reading>,
 }
 
@@ -36,7 +36,7 @@ pub struct EnginePart {
     pub pins: BTreeMap<String, String>,
 }
 
-/// A reading a part states, such as `on` while `i` is above 1 mA.
+/// A reading a part states, such as `lit` while `i` is above 2 mA.
 #[derive(Clone, Debug)]
 pub struct Reading {
     /// The engine quantity it reads, such as `i`.

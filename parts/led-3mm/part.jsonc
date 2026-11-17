@@ -58,7 +58,8 @@
     "ratings": { "current": null, "power": null },
   },
   "readings": {
-    "on": { "of": "i", "above": { "value": 0.001, "unit": "A", "source": { "closed_form": { "note": "One tenth of the 10 mA at which each colour's datasheet rates its luminous intensity." } } } },
+    "lit": { "of": "i", "above": { "value": 0.002, "unit": "A", "source": { "datasheet": { "doc": "Kingbright L-934ID, Spec No DSAA4904, Rev V.12A", "at": "The lowest point of each colour's forward-voltage fit, 2 mA. Fig. Luminous Intensity vs. Forward Current is the same straight line on the L-934ID, the L-934YD (DSAA9497 Rev V.11B) and the L-934GD (DSAA6381 Rev V.15B), from 0 to 20 mA normalized at 10 mA, so 2 mA is 0.2 of that intensity.", "basis": "typical" } } } },
+    "dim": { "of": "i", "above": { "value": 0.0001, "unit": "A", "source": { "datasheet": { "doc": "Kingbright L-934ID, Spec No DSAA4904, Rev V.12A", "at": "1 percent of the 10 mA at which each colour rates Iv. The same figure on all three datasheets puts 100 uA at 0.01 of that intensity. Reverse current is 10 uA max at VR = 5 V on all three, so the floor is ten times that leakage.", "basis": "typical" } } } },
     "brightness": { "of": "i", "full": { "value": 0.01, "unit": "A", "source": { "datasheet": { "doc": "Kingbright L-934GD, Spec No DSAA6381, Rev V.15B", "at": "Selection Guide, Iv rated at 10 mA, as for the L-934ID and the L-934YD", "basis": "nominal" } } } },
   },
   "view": {
@@ -66,7 +67,7 @@
     "tint": [{ "node": "body", "by": "color" }],
   },
   "not_simulated": [
-    { "what": "light", "why": "The engine reports current. Brightness is the current over 10 mA, so 1 at 10 mA, and above that the LED blooms. The colours' intensities differ and are not modelled." },
+    { "what": "light", "why": "The engine reports current, not luminous intensity. The drawing scales current by 10 mA, so the glow is 1 at 10 mA and blooms above that. The colours' intensities differ and are not modelled. Each colour's forward curve is fitted from 2 mA to 20 mA through the three points named on its fit. Below 2 mA and above 20 mA the current is that curve extended. A threshold at 1 mA would sit outside the fit. Luminous intensity versus forward current is drawn as a straight line from 0 mA on each datasheet, so the extended current still glows in proportion." },
     { "what": "temperature", "why": "The fits are at 25 C and the engine has no temperature." },
     { "what": "reverse breakdown", "why": "The engine's LED has no breakdown voltage. The datasheets rate 5 V reverse." },
   ],

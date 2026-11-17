@@ -22,9 +22,9 @@ expect @u1.IN1_N > 1.53V
 expect @u1.IN1_N < 1.63V
 # 10 lx puts the node at 0.61 V, under both thresholds, so the LED comes on.
 set light 10
-step --until @led1 on --timeout 100ms
+step --until @led1 lit --timeout 100ms
 step 50ms
-expect @led1 on
+expect @led1 lit
 expect @nano.D2 high
 expect @nano.D2 > 3.0V
 expect @u1.OUT1 > 3.14V
@@ -37,7 +37,7 @@ expect serial contains "dark 2"
 # The same 80 lx, reached from the dark, keeps the LED on.
 set light 80
 step 200ms
-expect @led1 on
+expect @led1 lit
 expect @nano.D2 > 3.0V
 expect @u1.IN1_P > 1.61V
 expect @u1.IN1_P < 1.72V

@@ -1,15 +1,19 @@
-# The LED starts dark. Then PWM on D9 lights it for a short part of each 2 ms period, and as the
-# sketch fades it up, for most of each period.
+# The sketch adds 5 to the PWM duty every 30 ms, up to 255 and back down. brightness is the
+# average forward current over 20 ms, so the rise and the fall can be checked. One sample of
+# D9 cannot, because analogWrite on D9 is about 490 Hz.
 open
 step 10ms
 expect @led1 off
-step --until @nano.D9 high --timeout 50ms
-step 1ms
-expect @nano.D9 low
-expect @led1 off
-step 1400ms
-step --until @nano.D9 low --timeout 3ms
-step 1ms
-expect @nano.D9 high
-expect @led1 on
+expect @led1.brightness < 100uA
+step 590ms
+expect @led1 lit
+expect @led1.brightness > 3mA
+expect @led1.brightness < 7mA
+step 940ms
+expect @led1 lit
+expect @led1.brightness > 10mA
+step 1470ms
+expect @led1 dim
+expect @led1.brightness > 100uA
+expect @led1.brightness < 2mA
 expect no diagnostics

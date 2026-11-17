@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbe_scene::{BoardFacts, Card, Gap, board_facts, catalog_cards, param_sentence, si_amount};
+use orbe_session::BRIGHTNESS_WINDOW;
 
 pub struct Skill {
     pub name: &'static str,
@@ -221,11 +222,11 @@ fn parts(catalog: &[Card]) -> String {
         for param in &part.params {
             out.push_str(&format!("- `{}`: {}.\n", param.name, param_sentence(param)));
         }
-        if let Some(on) = &part.on {
+        if let (Some(lit), Some(dim)) = (&part.lit, &part.dim) {
+            let lit_above = si_amount(lit.above, &lit.unit);
+            let dim_above = si_amount(dim.above, &dim.unit);
             out.push_str(&format!(
-                "- It reads `on` while `{}` is above {}.\n",
-                on.of,
-                si_amount(on.above, &on.unit)
+                "- It reads `lit` while its average `i` over {BRIGHTNESS_WINDOW} is above {lit_above}, `dim` while that average is above {dim_above} and at or below {lit_above}, and `off` at or below {dim_above}. `brightness` is that average.\n",
             ));
         }
         let warns: Vec<String> = part
@@ -852,7 +853,9 @@ mod tests {
         assert!(text.contains("### `nano-board`: Nano (CH340 clone)"));
         assert!(text.contains("- `resistance`: a value in ohm above 0, required."));
         assert!(text.contains("- `position`: a number above 0 and below 1, 0.5 by default."));
-        assert!(text.contains("- It reads `on` while `i` is above 1 mA."));
+        assert!(text.contains(
+            "- It reads `lit` while its average `i` over 20ms is above 2 mA, `dim` while that average is above 100 uA and at or below 2 mA, and `off` at or below 100 uA. `brightness` is that average."
+        ));
         assert!(
             text.contains(
                 "- It warns `rating.current` above 30 mA and `rating.power` above 75 mW."

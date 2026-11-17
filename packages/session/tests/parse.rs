@@ -70,8 +70,8 @@ fn a_duration_prints_in_the_largest_unit_it_fills() {
 fn each_condition_form_parses() {
     let led = Ref::parse("@led1").unwrap();
     assert_eq!(
-        Condition::parse(&words("@led1 on")).unwrap(),
-        Condition::State(led, Want::On)
+        Condition::parse(&words("@led1 lit")).unwrap(),
+        Condition::State(led, Want::Lit)
     );
     assert_eq!(
         Condition::parse(&words("@nano.D13 low")).unwrap(),
@@ -121,15 +121,15 @@ fn an_amount_reads_the_numbers_a_reply_prints() {
 #[test]
 fn a_bad_condition_says_what_to_write() {
     for (text, says) in [
-        ("@led1 bright", "use on, off, high or low"),
+        ("@led1 bright", "use lit, dim, off, high or low"),
         ("@led1.i == 5mA", "use <, <=, > or >="),
         ("@led1.i > 5", "not a value with a unit"),
         ("@led1.i > 5mOhm", "not a value with a unit"),
         ("@led1.i > 1e400A", "not a value with a unit"),
         ("@led1.i > 1e-A", "not a value with a unit"),
-        ("led1 on", "not a condition"),
-        ("@ on", "empty name"),
-        ("@led1. on", "empty name"),
+        ("led1 off", "not a condition"),
+        ("@ off", "empty name"),
+        ("@led1. off", "empty name"),
         ("", "missing"),
     ] {
         let error = Condition::parse(&words(text)).unwrap_err();
@@ -146,9 +146,9 @@ fn step_takes_a_duration_or_a_condition_with_a_timeout() {
         Some(Command::Step(Step::For(Duration::from_ms(100))))
     );
     assert_eq!(
-        line("step --until @led1 on --timeout 50ms").unwrap(),
+        line("step --until @led1 lit --timeout 50ms").unwrap(),
         Some(Command::Step(Step::Until {
-            condition: Condition::State(Ref::parse("@led1").unwrap(), Want::On),
+            condition: Condition::State(Ref::parse("@led1").unwrap(), Want::Lit),
             timeout: Duration::from_ms(50),
         }))
     );
@@ -262,7 +262,7 @@ fn the_wire_refuses_what_the_parser_refuses() {
         "press @btn1",
         "expect @led1.i > 5mA",
         "expect serial contains \"ready\"",
-        "step --until @led1 on --timeout 50ms",
+        "step --until @led1 lit --timeout 50ms",
     ] {
         let command = line_ok(line);
         let wire = serde_json::to_value(&command).unwrap();

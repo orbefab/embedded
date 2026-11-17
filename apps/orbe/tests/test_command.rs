@@ -104,7 +104,7 @@ fn the_first_target_reads_the_engine_values_while_pressed() {
     );
     assert!(
         run.stdout
-            .contains("\n  led1 on i=0.011292504388060703 A v="),
+            .contains("\n  led1 lit i=0.011292504388060703 A v="),
         "{}",
         run.stdout
     );
@@ -121,8 +121,10 @@ fn the_first_target_reads_the_engine_values_while_pressed() {
     assert_eq!(json[4]["data"]["value"]["level"], "high");
     assert_eq!(json[4]["data"]["value"]["v"], 4.400713547712648);
     assert_eq!(json[5]["data"]["kind"], "part");
-    assert_eq!(json[5]["data"]["value"]["on"], true);
+    assert_eq!(json[5]["data"]["value"]["state"], "lit");
     assert_eq!(json[5]["data"]["value"]["i"], 0.011292504388060703);
+    assert_eq!(json[5]["data"]["value"]["brightness"], 0.011292504388060728);
+    assert_eq!(json[5]["data"]["value"]["over_ps"], 20_000_000_000u64);
     assert_eq!(json[6]["data"]["kind"], "quantity");
     assert_eq!(json[6]["data"]["value"], 0.011292504388060703);
     assert_eq!(json[6]["t_ps"], 100_000_000_000u64);
@@ -134,7 +136,7 @@ open
 step 100ms
 expect @led1 off
 press @btn1
-step --until @led1 on --timeout 50ms
+step --until @led1 lit --timeout 50ms
 expect @nano.D13 high
 expect @led1.i > 5mA
 snapshot
@@ -161,7 +163,16 @@ fn each_command_replies_in_text() {
         block(0)[2],
         "    warning[net.floating] #net.nano__AREF has no DC path to ground"
     );
-    assert_eq!(block(1), ["3> step 100ms", "  t=100ms (from 0s)"]);
+    assert_eq!(
+        block(1),
+        [
+            "3> step 100ms",
+            "  t=100ms (from 0s)",
+            "    brightness led1 off 1.2775403302174304e-13 A over 20ms",
+            "    brightness nano.led_l off 1.2775344350286488e-13 A over 20ms",
+            "    brightness nano.led_pwr lit 0.0030136985454632045 A over 20ms",
+        ]
+    );
     assert_eq!(block(2)[0], "4> expect @led1 off");
     assert!(
         block(2)[1].starts_with("  passed @led1 off (led1 off, i="),
@@ -177,15 +188,22 @@ fn each_command_replies_in_text() {
     );
 
     let until = block(4);
-    assert_eq!(until[0], "6> step --until @led1 on --timeout 50ms");
-    assert_eq!(until[1], "  t=101ms (from 100ms), @led1 on by 101ms");
+    assert_eq!(until[0], "6> step --until @led1 lit --timeout 50ms");
+    assert_eq!(until[1], "  t=104ms (from 100ms), @led1 lit by 104ms");
     assert_eq!(until[2], "    100ms nano.D2 high");
     assert!(
         until[3].starts_with("    100.") && until[3].ends_with("ms nano.D13 high"),
         "{}",
         until[3]
     );
-    assert_eq!(until[4], "    by 101ms led1 on");
+    assert_eq!(
+        until[4],
+        "    by 103ms led1 dim, brightness=0.0016915818683638896 A over 20ms"
+    );
+    assert_eq!(
+        until[6],
+        "    by 104ms led1 lit, brightness=0.0022562070877605346 A over 20ms"
+    );
 
     assert_eq!(
         block(5),
@@ -204,7 +222,7 @@ fn each_command_replies_in_text() {
 
     let snapshot = block(7);
     assert_eq!(snapshot[0], "9> snapshot");
-    assert_eq!(snapshot[1], "  t=101ms  scene=scene.jsonc");
+    assert_eq!(snapshot[1], "  t=104ms  scene=scene.jsonc");
     assert_eq!(
         snapshot[2],
         "  nano  nano-board          5V=high  D13=high  D2=high  GND=0.0V"
@@ -226,7 +244,7 @@ fn each_command_replies_in_text() {
     );
     assert_eq!(
         snapshot[6],
-        "  led1  led-5mm             on i=0.0112925043880606 A"
+        "  led1  led-5mm             lit i=0.0112925043880606 A brightness=0.0022562070877605346 A over 20ms"
     );
     assert_eq!(
         snapshot[7],
@@ -237,7 +255,7 @@ fn each_command_replies_in_text() {
         block(8),
         [
             "10> release @btn1",
-            "  released btn1 at t=101ms; reads show it after t=101ms"
+            "  released btn1 at t=104ms; reads show it after t=104ms"
         ]
     );
     let step = block(9);
@@ -245,11 +263,14 @@ fn each_command_replies_in_text() {
         step[..3],
         [
             "11> step 50ms",
-            "  t=151ms (from 101ms)",
-            "    101ms nano.D2 low"
+            "  t=154ms (from 104ms)",
+            "    104ms nano.D2 low"
         ]
     );
-    assert_eq!(step[4], "    by 102ms led1 off");
+    assert_eq!(
+        step[5],
+        "    by 126ms led1 off, brightness=1.277543604373932e-13 A over 20ms"
+    );
     assert_eq!(
         block(10),
         [
@@ -257,7 +278,7 @@ fn each_command_replies_in_text() {
             "  passed no diagnostics (no diagnostics; a chip warning can show up to 10ms late)"
         ]
     );
-    assert_eq!(block(11)[..2], ["13> close", "  closed at t=151ms"]);
+    assert_eq!(block(11)[..2], ["13> close", "  closed at t=154ms"]);
     assert_eq!(
         run.stdout.lines().rev().take(2).collect::<Vec<_>>(),
         ["1 passed, 0 failed", "PASS tests/a.test"]
@@ -311,7 +332,19 @@ fn each_command_replies_with_one_json_envelope() {
     assert_eq!(step["t_ps"], 100_000_000_000u64);
     assert_eq!(
         step["data"],
-        serde_json::json!({ "from_ps": 0, "met_at_ps": null, "met_by_ps": null, "sent_at_ps": null, "changes": [], "more": 0 })
+        serde_json::json!({
+            "from_ps": 0,
+            "met_at_ps": null,
+            "met_by_ps": null,
+            "sent_at_ps": null,
+            "changes": [],
+            "more": 0,
+            "leds": [
+                { "ref": "@led1", "state": "off", "brightness": 1.2775403302174304e-13, "over_ps": 20_000_000_000u64 },
+                { "ref": "@nano.led_l", "state": "off", "brightness": 1.2775344350286488e-13, "over_ps": 20_000_000_000u64 },
+                { "ref": "@nano.led_pwr", "state": "lit", "brightness": 0.0030136985454632045, "over_ps": 20_000_000_000u64 },
+            ]
+        })
     );
     assert_eq!(expect["data"]["passed"], true);
     assert_eq!(expect["data"]["expected"], "@led1 off");
@@ -320,9 +353,9 @@ fn each_command_replies_with_one_json_envelope() {
         serde_json::json!({ "ref": "@btn1", "landed_ps": 100_000_000_000u64 })
     );
 
-    assert_eq!(until["t_ps"], 101_000_000_000u64);
+    assert_eq!(until["t_ps"], 104_000_000_000u64);
     assert_eq!(until["data"]["from_ps"], 100_000_000_000u64);
-    assert_eq!(until["data"]["met_by_ps"], 101_000_000_000u64);
+    assert_eq!(until["data"]["met_by_ps"], 104_000_000_000u64);
     assert_eq!(until["data"]["check"]["passed"], true);
     let changes = until["data"]["changes"].as_array().unwrap();
     assert_eq!(
@@ -332,7 +365,14 @@ fn each_command_replies_with_one_json_envelope() {
     assert_eq!(changes[1]["ref"], "@nano.D13");
     assert_eq!(
         changes[2],
-        serde_json::json!({ "kind": "led", "by_ps": 101_000_000_000u64, "ref": "@led1", "on": true })
+        serde_json::json!({
+            "kind": "led",
+            "by_ps": 103_000_000_000u64,
+            "ref": "@led1",
+            "state": "dim",
+            "brightness": 0.0016915818683638896,
+            "over_ps": 20_000_000_000u64
+        })
     );
 
     assert_eq!(high["data"]["actual"], "nano.D13 high");
@@ -342,11 +382,12 @@ fn each_command_replies_with_one_json_envelope() {
     assert_eq!(parts[0]["ref"], "@nano");
     assert_eq!(parts[0]["type"], "nano-board");
     assert_eq!(parts[0]["pins"]["D13"]["level"], "high");
-    assert_eq!(parts[4]["value"]["on"], true);
+    assert_eq!(parts[4]["value"]["state"], "lit");
+    assert_eq!(parts[4]["value"]["brightness"], 0.0022562070877605346);
     assert_eq!(snapshot["data"]["serial"], "");
     assert_eq!(snapshot["data"]["diagnostics"][0]["code"], "net.floating");
 
-    assert_eq!(release["data"]["landed_ps"], 101_000_000_000u64);
+    assert_eq!(release["data"]["landed_ps"], 104_000_000_000u64);
     assert_eq!(step2["data"]["changes"][0]["level"], "low");
     assert_eq!(
         clean["data"]["actual"],
@@ -354,7 +395,7 @@ fn each_command_replies_with_one_json_envelope() {
     );
     assert_eq!(
         close["data"],
-        serde_json::json!({ "closed": true, "at_ps": 151_000_000_000u64 })
+        serde_json::json!({ "closed": true, "at_ps": 154_000_000_000u64 })
     );
     assert_eq!(
         (close["state"].as_str(), close["t_ps"].as_u64()),
@@ -371,13 +412,13 @@ fn step_until_a_condition_that_already_holds_takes_no_time() {
 
 #[test]
 fn a_failing_test_reports_its_line_with_expected_and_actual() {
-    let dir = project("open\nstep 10ms\nexpect @led1 on\nexpect @led1 off\n");
+    let dir = project("open\nstep 10ms\nexpect @led1 lit\nexpect @led1 off\n");
     let run = orbe(dir.path(), &["test"]);
     assert_eq!(run.code, 1);
     let lines: Vec<&str> = run.stdout.lines().collect();
-    assert_eq!(lines[0], "FAIL tests/a.test:3: expect @led1 on");
-    assert_eq!(lines[1], "  error[expect_failed]: expected @led1 on");
-    assert_eq!(lines[2], "    expected: @led1 on");
+    assert_eq!(lines[0], "FAIL tests/a.test:3: expect @led1 lit");
+    assert_eq!(lines[1], "  error[expect_failed]: expected @led1 lit");
+    assert_eq!(lines[2], "    expected: @led1 lit");
     assert!(
         lines[3].starts_with("    actual:   led1 off, i="),
         "{}",
@@ -399,8 +440,8 @@ fn a_failing_test_reports_its_line_with_expected_and_actual() {
     let entry = &json["data"]["tests"][0];
     assert_eq!(entry["file"], "tests/a.test");
     assert_eq!(entry["line"], 3);
-    assert_eq!(entry["command"], "expect @led1 on");
-    assert_eq!(entry["expected"], "@led1 on");
+    assert_eq!(entry["command"], "expect @led1 lit");
+    assert_eq!(entry["expected"], "@led1 lit");
     assert!(
         entry["actual"]
             .as_str()
@@ -473,9 +514,9 @@ fn each_error_code() {
             "`nano` has no pin or part named `D99`",
         ),
         (
-            "open\nexpect @r1 on",
+            "open\nexpect @r1 lit",
             "no_reading",
-            "`r1` states no `on` reading",
+            "`r1` states no `lit` reading",
         ),
         (
             "open\nexpect @led1 high",
@@ -503,9 +544,9 @@ fn each_error_code() {
             "the engine reports no `nano.mcu.i`",
         ),
         (
-            "open\nexpect @led1 on",
+            "open\nexpect @led1 lit",
             "expect_failed",
-            "expected @led1 on",
+            "expected @led1 lit",
         ),
         (
             "open\nexpect serial contains \"ready\"",
@@ -513,7 +554,7 @@ fn each_error_code() {
             "expected serial contains \"ready\"",
         ),
         (
-            "open\nstep --until @led1 on --timeout 5ms",
+            "open\nstep --until @led1 lit --timeout 5ms",
             "until_timeout",
             "did not hold within 5ms",
         ),
@@ -584,12 +625,12 @@ fn a_scene_that_does_not_check_refuses_to_open() {
 #[test]
 fn test_paths_name_files_or_project_folders() {
     let dir = project("open\nexpect @led1 off\n");
-    fs::write(dir.path().join("tests/b.test"), "open\nexpect @led1 on\n").unwrap();
+    fs::write(dir.path().join("tests/b.test"), "open\nexpect @led1 lit\n").unwrap();
     let run = orbe(dir.path(), &["test"]);
     assert_eq!(run.code, 1);
     assert!(
         run.stdout
-            .starts_with("PASS tests/a.test\nFAIL tests/b.test:2: expect @led1 on\n"),
+            .starts_with("PASS tests/a.test\nFAIL tests/b.test:2: expect @led1 lit\n"),
         "{}",
         run.stdout
     );

@@ -60,7 +60,7 @@ test.describe("live session", () => {
     await shot(page, "headed-playing");
   });
 
-  test("held and paused, `orbe get @led1` reads on at the current the viewer glows at", async () => {
+  test("held and paused, `orbe get @led1` reads lit at the current the viewer glows at", async () => {
     const stem = await pointOn(page, "@btn1", "stem");
     await page.mouse.move(stem.x, stem.y);
     await page.mouse.down();
@@ -79,9 +79,9 @@ test.describe("live session", () => {
     const read = (lit.data?.value?.i ?? 0) / LED_FULL_A;
     expect({
       paused: paused.ok,
-      on: lit.data?.value?.on,
+      state: lit.data?.value?.state,
       close: Math.abs(drawn - read) <= 0.05 * read,
-    }).toEqual({ paused: true, on: true, close: true });
+    }).toEqual({ paused: true, state: "lit", close: true });
     await shot(page, "headed-paused-lit");
   });
 
@@ -95,7 +95,7 @@ test.describe("live session", () => {
       { timeout: 10_000 },
     );
     const off = orbe("get", "@led1");
-    expect(off.data?.value?.on).toBe(false);
+    expect(off.data?.value?.state).toBe("off");
     await shot(page, "headed-released");
   });
 

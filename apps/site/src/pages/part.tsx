@@ -12,6 +12,27 @@ export interface PartView {
   readonly links: Readonly<Record<string, Linked>>;
 }
 
+/** The brightness ranges an LED's page states. */
+function brightnessText(record: PartRecord): string | null {
+  const lit = record.lit;
+  const dim = record.dim;
+  if (lit === undefined && dim === undefined) return null;
+  const of = lit?.of ?? dim?.of;
+  let text = `brightness is the average ${of} over 20 ms.`;
+  if (lit !== undefined) {
+    text += ` It reads lit while that average is above ${si(lit.above, lit.unit)}.`;
+  }
+  if (dim !== undefined) {
+    const above = si(dim.above, dim.unit);
+    text +=
+      lit === undefined
+        ? ` It reads dim while that average is above ${above}.`
+        : ` It reads dim while that average is above ${above} and at or below ${si(lit.above, lit.unit)}.`;
+    text += ` It reads off while that average is at or below ${above}.`;
+  }
+  return text;
+}
+
 /** The maker and number a part matches, in words. */
 export function matches(record: PartRecord): string {
   const { maker, number, generic } = record.real;
@@ -156,10 +177,9 @@ export function PartPage({ part }: { part: PartView }) {
             ])}
           />
         )}
-        {record.on === undefined ? null : (
+        {record.lit === undefined && record.dim === undefined ? null : (
           <p className="mt-4 text-muted-foreground text-sm">
-            It reads as on while {record.on.of} is {record.on.above === undefined ? "below" : "above"}{" "}
-            {si(record.on.above ?? record.on.below ?? 0, record.on.unit)}.
+            {brightnessText(record)}
           </p>
         )}
       </Section>

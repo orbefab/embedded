@@ -3,7 +3,7 @@ open
 step 100ms
 expect @led1 off
 press @btn1
-step --until @led1 on --timeout 50ms
+step --until @led1 lit --timeout 50ms
 expect @nano.D13 high
 release @btn1
 step 50ms
