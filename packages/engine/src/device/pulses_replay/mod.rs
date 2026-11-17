@@ -74,6 +74,7 @@ pub(crate) fn chip(part: PartId, replay: &PulsesReplay) -> Chip {
         usarts: &[],
         twi: false,
         sends: true,
+        supply: None,
         takes: Takes::default(),
         core: Core::Device(Box::new(Native::new(
             model::PulsesReplay::new(&Fields::new(&[("idle", FieldValue::Bool(replay.idle))]))

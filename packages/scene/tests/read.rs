@@ -17,9 +17,9 @@ fn read(scene: &str) -> (orbe_scene::Netlist, Value) {
 }
 
 #[test]
-fn first_target_has_18_parts_and_31_nets() {
+fn first_target_has_19_parts_and_32_nets() {
     let (netlist, json) = read("scene.jsonc");
-    assert_eq!(netlist.parts, 18);
+    assert_eq!(netlist.parts, 19);
     assert_eq!(netlist.ground, "nano__GND");
     let mut nets = netlist.nets.clone();
     nets.sort();
@@ -29,12 +29,13 @@ fn first_target_has_18_parts_and_31_nets() {
         "nano__5V",
         "nano__AREF",
         "nano__RESET",
-        "nano__c_reset__a",
+        "nano__diode__anode",
         "nano__led_l__anode",
         "nano__led_pwr__anode",
         "nano__mcu__PB6",
         "nano__mcu__PB7",
         "nano__r_txd__a",
+        "nano__usb_serial__DTR",
     ]
     .into_iter()
     .map(str::to_string)
@@ -59,6 +60,8 @@ fn first_target_has_18_parts_and_31_nets() {
         "nano__usb__host",
         "nano__usb_serial__host_tx",
         "nano__usb_serial__host_dtr",
+        "nano__usb_serial__supply",
+        "nano__diode",
         "nano__resonator__load_in",
     ] {
         assert!(names.contains(&name), "no engine part {name}: {names:?}");
@@ -100,7 +103,14 @@ fn scene_params_are_user_values_and_defaults_fill_the_rest() {
         Value::Null,
         "bounce stays off without `bounce`"
     );
-    assert_eq!(part("nano__c_reset")["initial"], Value::Null);
+    assert!(
+        json["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["name"] != "nano__c_reset"),
+        "c_reset is not simulated"
+    );
     assert_eq!(
         part("nano__r_l")["resistance"]["source"]["datasheet"]["at"],
         "RN2A, 1K"
@@ -110,8 +120,8 @@ fn scene_params_are_user_values_and_defaults_fill_the_rest() {
 #[test]
 fn two_buttons_ground_is_btn1_gnd() {
     let (netlist, json) = read("two-buttons.jsonc");
-    assert_eq!(netlist.parts, 18);
-    assert_eq!(netlist.nets.len(), 30);
+    assert_eq!(netlist.parts, 19);
+    assert_eq!(netlist.nets.len(), 31);
     assert_eq!(netlist.ground, "btn1__gnd");
     for net in ["btn1__out", "btn1__vcc", "btn2__out"] {
         assert!(netlist.nets.contains(&net.to_string()), "no net {net}");
@@ -140,7 +150,7 @@ fn two_buttons_ground_is_btn1_gnd() {
 #[test]
 fn two_buttons_with_nets_names_ground_gnd() {
     let (netlist, _) = read("two-buttons-nets.jsonc");
-    assert_eq!(netlist.nets.len(), 30);
+    assert_eq!(netlist.nets.len(), 31);
     assert_eq!(netlist.ground, "GND");
     for net in ["VCC", "btn1__out", "btn2__out"] {
         assert!(netlist.nets.contains(&net.to_string()), "no net {net}");
@@ -462,6 +472,68 @@ fn an_outdated_board_is_an_error_and_not_a_note() {
     assert_eq!(
         found[0].message,
         "this orbe carries `nano-board@0.1.0` and the project holds `nano-board@0.0.9`"
+    );
+}
+
+#[test]
+fn bytecode_does_not_make_orbe_add_replace_a_sealed_copy() {
+    let project = project("nano-button");
+    let led = project.path().join("parts/led-5mm");
+    fs::write(led.join("a.pyc"), b"bytecode").unwrap();
+    fs::create_dir(led.join("__pycache__")).unwrap();
+    fs::write(
+        led.join("__pycache__").join("led.cpython-312.pyc"),
+        b"cached",
+    )
+    .unwrap();
+    let before = fs::read(led.join("part.jsonc")).unwrap();
+    let reply = orbe_scene::add_parts(
+        Some(project.path()),
+        &orbe_scene::Request {
+            ids: vec!["led-5mm".into()],
+            overwrite: false,
+            diff: false,
+            relock: false,
+        },
+    )
+    .unwrap();
+    let text = reply.text();
+    assert_eq!(reply.code(), 0, "{text}");
+    assert!(text.contains("skipped parts/led-5mm 0.1.0"), "{text}");
+    assert!(text.contains("parts.lock unchanged"), "{text}");
+    assert_eq!(fs::read(led.join("part.jsonc")).unwrap(), before);
+    assert!(led.join("a.pyc").is_file());
+}
+
+#[test]
+fn bytecode_in_a_sealed_copy_is_not_part_modified_and_an_author_file_is() {
+    let project = project("nano-button");
+    let led = project.path().join("parts/led-5mm");
+    fs::write(led.join("a.pyc"), b"bytecode").unwrap();
+    fs::create_dir(led.join("__pycache__")).unwrap();
+    fs::write(
+        led.join("__pycache__").join("led.cpython-312.pyc"),
+        b"cached",
+    )
+    .unwrap();
+    assert!(
+        orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc")).is_ok(),
+        "bytecode is not part of the sealed copy"
+    );
+
+    fs::write(led.join("notes.txt"), b"an author file\n").unwrap();
+    let found = scene_errors(project.path());
+    assert!(
+        found
+            .iter()
+            .any(|d| d.code == orbe_scene::Code::PartModified && d.message.contains("notes.txt")),
+        "{found:#?}"
+    );
+    assert!(
+        found
+            .iter()
+            .all(|d| !d.message.contains(".pyc") && !d.message.contains("__pycache__")),
+        "{found:#?}"
     );
 }
 
@@ -913,7 +985,7 @@ fn a_lock_line_the_scene_no_longer_uses_is_not_checked() {
     }
     fs::write(&scene, text).unwrap();
     let netlist = orbe_scene::read(&Files::disk(), &scene).unwrap_or_else(|d| panic!("{d:#?}"));
-    assert_eq!(netlist.parts, 17);
+    assert_eq!(netlist.parts, 18);
 }
 
 fn unreadable(path: &std::path::Path) {

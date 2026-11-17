@@ -1,6 +1,7 @@
 use crate::netlist::{NetId, Netlist, PartId};
 
 use std::ops::Range;
+use std::sync::Arc;
 
 use crate::name::Ref;
 
@@ -55,6 +56,9 @@ pub(crate) struct Layout {
     junctions: usize,
     /// The passive chips, ascending. A chip's index here is its slot in `Conditions::chips`.
     chips: Vec<PartId>,
+    /// Each unknown's place in the order the solve eliminates them, which is its row and column
+    /// in a [`System`]'s storage. The layout's own order until [`Layout::order_by`] sets it.
+    place: Arc<[usize]>,
 }
 
 /// A part's unknowns, and how many capacitors and inductors it owns.
@@ -148,6 +152,7 @@ fn assemble<T: Device>(
         size: row,
         junctions: junction,
         chips,
+        place: (0..row).collect(),
     }
 }
 
@@ -155,6 +160,51 @@ impl Layout {
     /// The passive chips in slot order.
     pub(crate) fn chips(&self) -> &[PartId] {
         &self.chips
+    }
+
+    /// Sets the order the solve eliminates the unknowns in from `system`, stamped in the
+    /// layout's own order: the node rows by how many other unknowns `system` couples each to,
+    /// fewest first and ties in row order, then the branch rows in row order.
+    ///
+    /// Eliminating an unknown fills each row that touches it with every unknown its pivot row
+    /// touches. A net that many parts touch, such as a supply rail behind a diode, couples to
+    /// each of them, so eliminating it early fills nearly the whole matrix, and eliminating it
+    /// after them fills almost nothing. A branch row of a voltage source has no entry on its diagonal, so the
+    /// branch rows stay after every node row, as in the layout's own order. The order changes
+    /// which rounding each solution carries, never what it solves.
+    pub(crate) fn order_by(&mut self, system: &System) {
+        let n = self.size;
+        assert!(
+            system
+                .place
+                .iter()
+                .enumerate()
+                .all(|(k, &place)| k == place),
+            "the pattern is read in the layout's own order"
+        );
+        let a = system.a.entries();
+        let mut order: Vec<(usize, usize)> = self
+            .node_rows
+            .iter()
+            .map(|&row| {
+                let coupled = (0..n)
+                    .filter(|&col| {
+                        col != row && (a[row * n + col] != 0.0 || a[col * n + row] != 0.0)
+                    })
+                    .count();
+                (coupled, row)
+            })
+            .collect();
+        order.sort_unstable();
+        let rows = order
+            .into_iter()
+            .map(|(_, row)| row)
+            .chain((0..n).filter(|&row| !self.is_node_row(row)));
+        let mut place = vec![0; n];
+        for (k, row) in rows.enumerate() {
+            place[row] = k;
+        }
+        self.place = place.into();
     }
 
     /// `part`'s internal node `k`.
@@ -248,9 +298,13 @@ impl From<NetId> for Node {
     }
 }
 
+/// A linear system, stored with each unknown at its place in the layout's elimination order.
+/// Every method takes and gives the layout's own rows.
 pub(crate) struct System {
     a: Matrix,
     b: Vec<f64>,
+    /// The layout's `place`.
+    place: Arc<[usize]>,
 }
 
 impl System {
@@ -258,7 +312,7 @@ impl System {
     #[cfg(test)]
     pub(crate) fn term(&self, row: usize, col: usize) -> f64 {
         let n = self.b.len();
-        self.a.entries()[row * n + col]
+        self.a.entries()[self.place[row] * n + self.place[col]]
     }
 
     /// Empty storage. `reset` loads `gmin` before each stamp.
@@ -266,7 +320,18 @@ impl System {
         System {
             a: Matrix::zeros(layout.size()),
             b: vec![0.0; layout.size()],
+            place: Arc::clone(&layout.place),
         }
+    }
+
+    /// Adds `value` to the coefficient of column `col` on row `row`.
+    fn add(&mut self, row: usize, col: usize, value: f64) {
+        self.a.add(self.place[row], self.place[col], value);
+    }
+
+    /// Adds `value` to row `row` of the right-hand side.
+    fn add_rhs(&mut self, row: usize, value: f64) {
+        self.b[self.place[row]] += value;
     }
 
     /// Drop the last factorization and stamp `gmin` on every net row and on each internal row
@@ -275,7 +340,7 @@ impl System {
         self.a.clear();
         self.b.fill(0.0);
         for &row in &layout.gmin_rows {
-            self.a.add(row, row, gmin);
+            self.add(row, row, gmin);
         }
     }
 
@@ -290,10 +355,10 @@ impl System {
     /// `amps` flows out of `from`, through the element, into `to`.
     pub(crate) fn current(&mut self, from: impl Into<Node>, to: impl Into<Node>, amps: f64) {
         if let Node::Row(row) = from.into() {
-            self.b[row] -= amps;
+            self.b[self.place[row]] -= amps;
         }
         if let Node::Row(row) = to.into() {
-            self.b[row] += amps;
+            self.add_rhs(row, amps);
         }
     }
 
@@ -301,16 +366,27 @@ impl System {
         let (Node::Row(row), Node::Row(col)) = (row, col) else {
             return;
         };
-        self.a.add(row, col, value);
+        self.add(row, col, value);
     }
 
+    /// The solution in the layout's own rows. A singular system names the unknown whose place
+    /// had no pivot.
     pub(crate) fn solve(&mut self) -> Result<Solution, Singular> {
         #[cfg(test)]
         SOLVES.with(|solves| solves.set(solves.get() + 1));
-        Ok(Solution::from(crate::dense::solve(
-            &mut self.a,
-            &mut self.b,
-        )?))
+        let x = crate::dense::solve(&mut self.a, &mut self.b).map_err(|singular| Singular {
+            row: self
+                .place
+                .iter()
+                .position(|&place| place == singular.row)
+                .expect("every place holds an unknown"),
+        })?;
+        Ok(Solution::from(
+            self.place
+                .iter()
+                .map(|&place| x[place])
+                .collect::<Vec<f64>>(),
+        ))
     }
 }
 
@@ -538,10 +614,10 @@ impl<'a> Stamp<'a> {
     pub(crate) fn branch_current(&mut self, p: impl Into<Node>, n: impl Into<Node>, k: usize) {
         let row = self.rows().branch + k;
         if let Node::Row(prow) = p.into() {
-            self.sys.a.add(prow, row, 1.0);
+            self.sys.add(prow, row, 1.0);
         }
         if let Node::Row(nrow) = n.into() {
-            self.sys.a.add(nrow, row, -1.0);
+            self.sys.add(nrow, row, -1.0);
         }
     }
 
@@ -557,15 +633,15 @@ impl<'a> Stamp<'a> {
     ) {
         let row = self.rows().branch + k;
         if ci != 0.0 {
-            self.sys.a.add(row, row, ci);
+            self.sys.add(row, row, ci);
         }
         if let Node::Row(prow) = p.into() {
-            self.sys.a.add(row, prow, cv);
+            self.sys.add(row, prow, cv);
         }
         if let Node::Row(nrow) = n.into() {
-            self.sys.a.add(row, nrow, -cv);
+            self.sys.add(row, nrow, -cv);
         }
-        self.sys.b[row] += rhs;
+        self.sys.add_rhs(row, rhs);
     }
 
     fn rows(&self) -> &PartRows {
@@ -610,7 +686,11 @@ mod tests {
                 a.add(k, k + 1, above);
             }
         }
-        System { a, b: vec![rhs; n] }
+        System {
+            a,
+            b: vec![rhs; n],
+            place: (0..n).collect(),
+        }
     }
 
     fn bits(solution: &Solution) -> Vec<u64> {

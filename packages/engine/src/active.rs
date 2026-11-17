@@ -61,6 +61,28 @@ pub(crate) struct Output {
     pub(crate) leakage: Option<f64>,
 }
 
+/// A chip's own draw: a conductance from its supply pin to its ground pin.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Supply {
+    pub(crate) vcc: NetId,
+    pub(crate) gnd: NetId,
+    /// Siemens, greater than 0, while it runs.
+    pub(crate) conductance: f64,
+    /// Siemens, greater than 0, while a reset holds it.
+    pub(crate) held: f64,
+}
+
+impl Supply {
+    /// The conductance in force for `core`.
+    pub(crate) fn conductance(&self, core: &Core) -> f64 {
+        if core.held() {
+            self.held
+        } else {
+            self.conductance
+        }
+    }
+}
+
 /// An active chip as the circuit sees it. Read-only for the whole analysis.
 #[derive(Clone, Debug)]
 pub(crate) struct Chip {
@@ -80,6 +102,9 @@ pub(crate) struct Chip {
     pub(crate) twi: bool,
     /// Whether its core sends records, which go to `link.csv`.
     pub(crate) sends: bool,
+    /// Its own draw from its supply, one conductance while it runs and another while a reset
+    /// holds it. `None` on a chip that draws nothing but what its outputs pass.
+    pub(crate) supply: Option<Supply>,
     /// The records it takes.
     pub(crate) takes: Takes,
     /// The core at power-on.
@@ -184,6 +209,17 @@ impl Core {
             Core::Mcu(ref mcu) => mcu.drive(),
             #[cfg(test)]
             Core::Script(ref core) => core.drive(),
+        }
+    }
+
+    /// Whether a reset holds it, which changes its own draw as a drive change does. Only a
+    /// microcontroller says so, and only at a stop.
+    pub(crate) fn held(&self) -> bool {
+        match *self {
+            Core::Mcu(ref mcu) => mcu.held(),
+            Core::Device(_) => false,
+            #[cfg(test)]
+            Core::Script(_) => false,
         }
     }
 
@@ -335,6 +371,9 @@ pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
 pub(crate) fn stamp(chip: &Chip, core: &Core, sys: &mut System, source_scale: f64) {
     let drive = core.drive();
     debug_assert_eq!(drive.len(), chip.outputs.len());
+    if let Some(supply) = chip.supply {
+        sys.conductance(supply.vcc, supply.gnd, supply.conductance(core));
+    }
     for (output, drive) in chip.outputs.iter().zip(drive) {
         if let Some(ohm) = output.leakage {
             sys.conductance(output.pin, output.vcc, 1.0 / ohm);
@@ -903,7 +942,7 @@ impl Actives {
             // records the first pass read in place.
             ahead.rewind(world, committed, at);
             let image = ahead.core.drive().to_vec();
-            changed |= image != committed.drive();
+            changed |= image != committed.drive() || ahead.core.held() != committed.held();
             if stop.is_some_and(|stop| stop.sample) {
                 let volts: Vec<f64> = circuit.actives[k]
                     .samples

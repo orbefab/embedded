@@ -149,6 +149,7 @@ where
         usarts: M::USARTS,
         twi: M::TWI,
         sends: M::SENDS,
+        supply: None,
         takes: Takes::default(),
         core: crate::active::Core::Mcu(Mcu::from(host)),
     }
@@ -224,6 +225,11 @@ impl Mcu {
     #[inline]
     pub(crate) fn drive(&self) -> &[Drive] {
         each!(self, host => host.mcu.drive())
+    }
+
+    #[inline]
+    pub(crate) fn held(&self) -> bool {
+        each!(self, host => host.mcu.held())
     }
 
     pub(crate) fn sample(&mut self, at: Time, volts: &[f64]) {

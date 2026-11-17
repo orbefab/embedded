@@ -8,8 +8,8 @@
 
 use crate::{Channel, Cpu, I2cStamp, Level, PIN_COUNT, PinDrive, Sent};
 
-/// Where [`Timeline::run_until`] stopped: at oscillator cycle `at` a drive changed, or the ADC
-/// samples, or both.
+/// Where [`Timeline::run_until`] stopped: at oscillator cycle `at` a drive changed, the chip
+/// went into or out of a held reset, or the ADC samples.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Halt {
     pub at: u64,
@@ -27,6 +27,11 @@ pub struct Timeline {
     /// Drive changes the core made past `reached`: oscillator cycle, pin, drive. Ascending
     /// cycle, and in the order the core made them within one.
     pending: Vec<(u64, u32, PinDrive)>,
+    /// Whether a reset holds the chip at `reached`.
+    held: bool,
+    /// Changes of `held` past `reached`: oscillator cycle, and held or not from it. Ascending
+    /// cycle, each a change from the one before.
+    holds: Vec<(u64, bool)>,
     /// The oscillator cycle of a sample-and-hold the host has not answered.
     sample: Option<u64>,
 }
@@ -36,6 +41,8 @@ clone_fields!(Timeline {
     reached,
     drives,
     pending,
+    held,
+    holds,
     sample
 });
 
@@ -46,17 +53,21 @@ impl Timeline {
         cpu.ask_for_samples();
         let levels = cpu.pin_levels();
         let drives = std::array::from_fn(|pin| levels.drive(pin as u32).unwrap_or(PinDrive::Off));
+        let held = cpu.is_held_in_reset();
         Timeline {
             cpu,
             reached: 0,
             drives,
             pending: Vec::new(),
+            held,
+            holds: Vec::new(),
             sample: None,
         }
     }
 
     /// Runs from where it reached and stops at the first oscillator cycle in `(reached, limit]`
-    /// where a drive changes or the ADC samples. `None` once everything up to `limit` is done.
+    /// where a drive changes, the chip goes into or out of a held reset, or the ADC samples.
+    /// `None` once everything up to `limit` is done.
     /// Two calls to `l1` then `l2` leave the state one call to `l2` does.
     pub fn run_until(&mut self, limit: u64) -> Option<Halt> {
         assert!(
@@ -69,7 +80,8 @@ impl Timeline {
         );
         loop {
             let edge = self.pending.first().map(|&(at, _, _)| at);
-            match edge.into_iter().chain(self.sample).min() {
+            let hold = self.holds.first().map(|&(at, _)| at);
+            match edge.into_iter().chain(hold).chain(self.sample).min() {
                 Some(at) if at <= limit => {
                     if at <= self.done() {
                         return Some(self.halt(at));
@@ -88,6 +100,11 @@ impl Timeline {
     /// Each pin's drive, by pin id, at the cycle it reached.
     pub fn drives(&self) -> &[PinDrive; PIN_COUNT] {
         &self.drives
+    }
+
+    /// Whether a reset, from `RESET` or brown-out, holds the chip at the cycle it reached.
+    pub fn held(&self) -> bool {
+        self.held
     }
 
     /// The volts of ADC0 to ADC7, `AVCC`, and `AREF` at the halt that asked for them.
@@ -157,6 +174,11 @@ impl Timeline {
         for (_, pin, drive) in self.pending.drain(..due) {
             self.drives[pin as usize] = drive;
         }
+        let due = self.holds.partition_point(|&(when, _)| when <= at);
+        if let Some(&(_, held)) = self.holds[..due].last() {
+            self.held = held;
+        }
+        self.holds.drain(..due);
         self.reached = at;
         Halt {
             at,
@@ -197,6 +219,23 @@ impl Timeline {
             && let Some(cycle) = self.cpu.sample_due()
         {
             self.sample = Some(self.cpu.oscillator_cycle_of(cycle).max(floor));
+        }
+        // A reset holds the chip from where the core sits, past the cycle the host reached. A
+        // change back on the cycle of the last one cancels it.
+        let held = self.cpu.is_held_in_reset();
+        let last = self.holds.last().map_or(self.held, |&(_, held)| held);
+        if held != last {
+            let at = self
+                .cpu
+                .oscillator_cycles()
+                .max(floor)
+                .max(self.reached + 1)
+                .max(self.holds.last().map_or(0, |&(at, _)| at));
+            if self.holds.last().is_some_and(|&(when, _)| when == at) {
+                self.holds.pop();
+            } else {
+                self.holds.push((at, held));
+            }
         }
     }
 }
