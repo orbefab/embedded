@@ -845,6 +845,61 @@ fn an_older_board_overwrite_does_not_pin_a_newer_major() {
     assert_eq!(refused.hint, "run `orbe add board --overwrite`");
     assert!(!refused.hint.contains("chip"), "{}", refused.hint);
     assert!(!refused.message.contains("chip@"), "{}", refused.message);
+    assert!(
+        refused.message.contains(&kept_note("chip", "1.0.0")),
+        "{}",
+        refused.message
+    );
+}
+
+/// A newer board is kept. The child that still differs is what the hint names, and the
+/// refusal says the board was left.
+#[test]
+fn a_newer_board_plain_add_names_the_child_that_differs() {
+    let chip = leaf("chip", "0.1.0", "chip");
+    let board = board("board", "0.1.0", &[("chip", "0.1.0")]);
+    let led = leaf("led", "0.1.0", "lamp");
+    let catalog = catalog_of(vec![chip.clone(), board.clone(), led.clone()]);
+    let held_board = at_version(&board, "0.2.0");
+    let held_chip = at_version(&chip, "0.0.9");
+    let mut snapshot = empty();
+    install(&mut snapshot, &catalog, &held_board);
+    install(&mut snapshot, &catalog, &held_chip);
+    install(&mut snapshot, &catalog, &led);
+    seal(&mut snapshot);
+
+    let refused = refusal(plan(
+        &catalog,
+        &snapshot,
+        &ask(&["board"], false, false),
+        ADD,
+    ));
+    assert_eq!(refused.hint, "run `orbe add chip --overwrite`");
+    assert!(
+        refused.message.contains(&kept_note("board", "0.2.0")),
+        "{}",
+        refused.message
+    );
+    assert!(
+        refused.message.contains("`chip` is 0.0.9"),
+        "{}",
+        refused.message
+    );
+
+    let refused = refusal(plan(
+        &catalog,
+        &snapshot,
+        &ask(&["board", "led"], false, false),
+        ADD,
+    ));
+    assert_eq!(refused.hint, "run `orbe add chip --overwrite`");
+    assert!(!refused.hint.contains("led"), "{}", refused.hint);
+    assert!(!refused.hint.contains("board"), "{}", refused.hint);
+    assert!(
+        refused.message.contains(&kept_note("board", "0.2.0")),
+        "{}",
+        refused.message
+    );
 }
 
 #[test]

@@ -479,12 +479,8 @@ impl Loader<'_> {
         let overwrite = found
             .iter()
             .any(|(id, _, _, overwrite)| *overwrite && ids.contains(&id.as_str()));
-        let command = format!(
-            "{} {}{}",
-            self.add,
-            ids.join(" "),
-            if overwrite { " --overwrite" } else { "" }
-        );
+        let specs: Vec<String> = ids.iter().map(|id| (*id).to_string()).collect();
+        let command = add_writing(&self.add, &specs, overwrite);
         let known: Vec<String> = self
             .lock
             .keys()
@@ -498,7 +494,7 @@ impl Loader<'_> {
         for (id, span, why, _) in &found {
             let hint = if blocked {
                 "move `parts` out of the way, since part folders go in a folder named `parts`. then check again for the command that adds them".into()
-            } else if ids.contains(&id.as_str()) {
+            } else if let Some(command) = command.as_ref().filter(|_| ids.contains(&id.as_str())) {
                 format!("run `{command}`")
             } else {
                 let close = did_you_mean(id, known.iter().map(String::as_str), "");
@@ -576,15 +572,18 @@ impl Loader<'_> {
     }
 
     fn restore_command(&self, id: &str, copy: Option<&Node>) -> String {
-        let named = self.files.catalog().find(id).and_then(|original| {
-            let copy = Version::parse(copy?.get("version")?.str()?)?;
-            let theirs = Version::parse(&original.version)?;
-            (copy.major != theirs.major).then_some(original.version)
-        });
-        match named {
-            Some(version) => format!("{} {id}@{version} --overwrite", self.add),
-            None => format!("{} {id} --overwrite", self.add),
-        }
+        let carried = self
+            .files
+            .catalog()
+            .find(id)
+            .map(|original| original.version.clone())
+            .unwrap_or_default();
+        let held = copy
+            .and_then(|copy| copy.get("version"))
+            .and_then(Node::str)
+            .unwrap_or("");
+        let spec = add_spec(id, held, &carried);
+        add_writing(&self.add, &[spec], true).expect("the id is named")
     }
 
     /// Hashes the folder of every catalog copy the scene uses. A missing folder is the
@@ -734,9 +733,10 @@ impl Loader<'_> {
     }
 
     fn official_restore(&self, id: &str, carried: &str) -> String {
+        let command =
+            add_writing(&self.add, &[format!("{id}@{carried}")], true).expect("the id is named");
         format!(
-            "this binary knows `{id}@{carried}` from the official registry. restore the catalog's copy with `{} {id}@{carried} --overwrite`",
-            self.add
+            "this binary knows `{id}@{carried}` from the official registry. restore the catalog's copy with `{command}`"
         )
     }
 
@@ -752,12 +752,14 @@ impl Loader<'_> {
         if !older.is_empty() {
             let mut order: Vec<&(String, Span, String, String)> = older.iter().collect();
             order.sort_by(|a, b| a.0.cmp(&b.0));
-            let args = order
+            let specs: Vec<String> = order
                 .iter()
-                .map(|(id, _, held, _)| self.outdated_spec(id, held))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let hint = format!("run `{} {args} --overwrite`", self.add);
+                .map(|(id, _, held, carried)| add_spec(id, held, carried))
+                .collect();
+            let hint = match add_writing(&self.add, &specs, true) {
+                Some(command) => format!("run `{command}`"),
+                None => "this project needs a newer orbe".into(),
+            };
             for (id, span, held, carried) in older {
                 self.out.push(
                     Code::PartOutdated,
@@ -784,19 +786,6 @@ impl Loader<'_> {
         }
     }
 
-    /// `id`, or `id@version` when the copy's major version is not the one this binary carries.
-    fn outdated_spec(&self, id: &str, held: &str) -> String {
-        let pin = self.files.catalog().find(id).and_then(|original| {
-            let held = Version::parse(held)?;
-            let carried = Version::parse(&original.version)?;
-            (held.major != carried.major).then_some(original.version.clone())
-        });
-        match pin {
-            Some(version) => format!("{id}@{version}"),
-            None => id.to_string(),
-        }
-    }
-
     /// A file in a copy that cannot be read. A link on its path is named, since a link that
     /// loops is the usual cause.
     fn unhashable(&mut self, id: &str, folder: &Path, path: &Path, error: &io::Error, at: Span) {
@@ -812,8 +801,8 @@ impl Loader<'_> {
                 (
                     link.clone(),
                     format!(
-                        "remove the link that loops at {link}, or restore the folder with `{} {id} --overwrite`",
-                        self.add
+                        "remove the link that loops at {link}, or restore the folder with `{}`",
+                        add_writing(&self.add, &[id.to_string()], true).expect("the id is named")
                     ),
                 )
             }
@@ -824,7 +813,10 @@ impl Loader<'_> {
             }
             None => (
                 display(&root, path),
-                format!("restore the folder with `{} {id} --overwrite`", self.add),
+                format!(
+                    "restore the folder with `{}`",
+                    add_writing(&self.add, &[id.to_string()], true).expect("the id is named")
+                ),
             ),
         };
         self.out.push(
@@ -1017,6 +1009,37 @@ pub(crate) fn hash_files<'a>(files: impl Iterator<Item = (&'a str, &'a [u8])>) -
 
 pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The `orbe add` command that writes `specs`. Each spec is an id, or `id@version` when the
+/// copy is in another major version and `--overwrite` has to name it. `None` when `specs` is
+/// empty, so a hint never prints `orbe add` with no part id. Check and add both build that
+/// command here, from the ids the add would write.
+pub(crate) fn add_writing(add: &str, specs: &[String], overwrite: bool) -> Option<String> {
+    let specs: Vec<&str> = specs
+        .iter()
+        .map(String::as_str)
+        .filter(|spec| !spec.is_empty())
+        .collect();
+    if specs.is_empty() {
+        return None;
+    }
+    let mut command = format!("{add} {}", specs.join(" "));
+    if overwrite {
+        command.push_str(" --overwrite");
+    }
+    Some(command)
+}
+
+/// `id`, or `id@version` when the two versions are in different major versions.
+pub(crate) fn add_spec(id: &str, held: &str, carried: &str) -> String {
+    let pin = Version::parse(held)
+        .zip(Version::parse(carried))
+        .and_then(|(held, carried)| (held.major != carried.major).then_some(carried));
+    match pin {
+        Some(version) => format!("{id}@{version}"),
+        None => id.to_string(),
+    }
 }
 
 /// `orbe add` as a hint prints it, with `-C <dir>` when a folder is named. A folder that starts

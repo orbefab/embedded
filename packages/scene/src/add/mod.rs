@@ -288,13 +288,10 @@ fn run_in(dir: Option<&Path>, request: &Request, fault: &mut Fault) -> Result<Re
             .map(|id| format!("parts/{id}"))
             .collect::<Vec<_>>()
             .join(", ");
-        let ids = holes
-            .iter()
-            .map(|id| project::shell_word(id))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let specs: Vec<String> = holes.iter().map(|id| project::shell_word(id)).collect();
+        let command = project::add_writing(&add, &specs, false).expect("a missing part");
         notes.push(format!(
-            "parts.lock lists {}, and {folders} {} missing. run `{add} {ids}` to copy {} back",
+            "parts.lock lists {}, and {folders} {} missing. run `{command}` to copy {} back",
             holes.join(", "),
             if holes.len() == 1 { "is" } else { "are" },
             if holes.len() == 1 { "it" } else { "them" },

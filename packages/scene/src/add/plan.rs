@@ -268,9 +268,6 @@ struct Selection {
     chosen: BTreeMap<String, Version>,
     notes: Vec<String>,
     tests_may_change: bool,
-    /// Lock-matching copies newer than anything this add would write. They stay out of
-    /// `chosen`, so the lock line and the folder are left as they are, and out of every hint.
-    kept: BTreeSet<String>,
 }
 
 /// An id named without a version takes the newest version within the major version of the
@@ -374,13 +371,18 @@ fn select(
         }
     }
     if !clashes.is_empty() {
+        let mut message = clashes
+            .iter()
+            .map(|clash| clash.message.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !notes.is_empty() {
+            message.push('\n');
+            message.push_str(&notes.join("\n"));
+        }
         return Err(Plan::Refuse(Refusal {
             code: AddCode::PartConflict,
-            message: clashes
-                .iter()
-                .map(|clash| clash.message.clone())
-                .collect::<Vec<_>>()
-                .join("\n"),
+            message,
             hint: clash_hint(specs, &clashes, add, &kept),
         }));
     }
@@ -388,7 +390,6 @@ fn select(
         chosen,
         notes,
         tests_may_change,
-        kept,
     })
 }
 
@@ -560,23 +561,39 @@ fn join_and(items: &[String]) -> String {
 fn clash_hint(specs: &[Spec], clashes: &[Clash], add: &str, leave: &BTreeSet<String>) -> String {
     let cross: Vec<&Clash> = clashes.iter().filter(|clash| clash.cross_major).collect();
     if cross.is_empty() {
-        return format!("run `{}`", command_for(add, specs, &[], true, leave));
+        let command = command_for(add, specs, &[], true, leave).or_else(|| {
+            let specs = clashes
+                .iter()
+                .filter(|clash| !leave.contains(&clash.id))
+                .map(|clash| clash.id.clone())
+                .collect::<Vec<_>>();
+            project::add_writing(add, &specs, true)
+        });
+        return run_hint(command);
     }
     if cross.len() == 1 {
         let clash = cross[0];
         let commands: Vec<String> = clash
             .versions
             .iter()
-            .map(|version| {
-                format!(
-                    "`{}`",
-                    command_for(add, specs, &[(clash.id.clone(), *version)], true, leave)
-                )
+            .filter_map(|version| {
+                command_for(add, specs, &[(clash.id.clone(), *version)], true, leave)
             })
+            .map(|command| format!("`{command}`"))
             .collect();
+        if commands.is_empty() {
+            return "this project needs a newer orbe".into();
+        }
         return format!("run {}", join_or(&commands));
     }
     "name one version of each id with `@<version> --overwrite`".into()
+}
+
+fn run_hint(command: Option<String>) -> String {
+    match command {
+        Some(command) => format!("run `{command}`"),
+        None => "this project needs a newer orbe".into(),
+    }
 }
 
 fn join_or(items: &[String]) -> String {
@@ -591,15 +608,16 @@ fn join_or(items: &[String]) -> String {
     }
 }
 
-/// `pins` replaces or appends `id@version` for ids that must be named. `leave` is a
-/// lock-matching copy newer than this binary, and no hint names it.
+/// The ids a clash command names: the request's ids, without a lock-matching copy newer
+/// than this binary, with `id@version` where `pins` says the major version has to be named.
+/// Empty is not a command.
 fn command_for(
     add: &str,
     specs: &[Spec],
     pins: &[(String, Version)],
     overwrite: bool,
     leave: &BTreeSet<String>,
-) -> String {
+) -> Option<String> {
     let mut args = Vec::new();
     let mut pending: BTreeSet<&str> = pins
         .iter()
@@ -622,10 +640,7 @@ fn command_for(
             args.push(format!("{id}@{version}"));
         }
     }
-    if overwrite {
-        args.push("--overwrite".into());
-    }
-    format!("{add} {}", args.join(" "))
+    project::add_writing(add, &args, overwrite)
 }
 
 /// How `parts/<id>` differs from the version the add would write.
@@ -653,6 +668,7 @@ fn plan_add(
     let mut write = Vec::new();
     let mut skip = Vec::new();
     let mut refused: Vec<(String, Version, Differ)> = Vec::new();
+    let mut hint_specs = Vec::new();
     let mut notes = selection.notes.clone();
     let mut tests_may_change = selection.tests_may_change;
     for (id, &version) in &selection.chosen {
@@ -667,12 +683,23 @@ fn plan_add(
                     version,
                     replacing: None,
                 });
+                hint_specs.push(id.clone());
             } else {
                 skip.push((id.clone(), version));
+                // The folder is the catalog's, but the lock line may still name another
+                // registry or version. The command that finishes this add has to name it.
+                if !lock_matches(catalog, snapshot, id, entry) {
+                    hint_specs.push(id.clone());
+                }
             }
             continue;
         };
         let named = explicit.contains(id.as_str());
+        let spec = if differ.crosses {
+            format!("{id}@{version}")
+        } else {
+            id.clone()
+        };
         if overwrite && (!differ.crosses || named) {
             tests_may_change |= differ.crosses;
             write.push(Write {
@@ -680,27 +707,35 @@ fn plan_add(
                 version,
                 replacing: Some(differ.was),
             });
+            hint_specs.push(spec);
             continue;
         }
         refused.push((id.clone(), version, differ));
+        hint_specs.push(spec);
     }
     if !refused.is_empty() {
-        let pins: Vec<(String, Version)> = refused
-            .iter()
-            .filter(|(_, _, differ)| differ.crosses)
-            .map(|(id, version, _)| (id.clone(), *version))
-            .collect();
         let lines: Vec<&str> = refused
             .iter()
             .map(|(_, _, differ)| differ.line.as_str())
             .collect();
+        let mut message = format!("nothing was written\n{}", lines.join("\n"));
+        if !notes.is_empty() {
+            message.push('\n');
+            message.push_str(&notes.join("\n"));
+        }
+        // The same ids this loop would write, including a child the request did not name.
+        // A kept newer copy is not among them. It stays in the note above.
+        let hint = match project::add_writing(add, &hint_specs, true) {
+            Some(command) => format!("run `{command}`"),
+            None if notes.iter().any(|note| note.contains("newer orbe")) => {
+                "this project needs a newer orbe".into()
+            }
+            None => String::new(),
+        };
         return Plan::Refuse(Refusal {
             code: AddCode::PartDiffers,
-            message: format!("nothing was written\n{}", lines.join("\n")),
-            hint: format!(
-                "run `{}`",
-                command_for(add, specs, &pins, true, &selection.kept)
-            ),
+            message,
+            hint,
         });
     }
     for spec in specs.iter().filter(|spec| spec.version.is_none()) {
@@ -709,8 +744,10 @@ fn plan_add(
         };
         let newest = catalog.newest(&spec.id).expect("a catalog id").version;
         if newest.major != chosen.major {
+            let command = project::add_writing(add, &[format!("{}@{newest}", spec.id)], true)
+                .expect("the id is named");
             notes.push(format!(
-                "the catalog also has `{id}` {newest}, a new major version. `{add} {id}@{newest} --overwrite` takes it, and tests may change",
+                "the catalog also has `{id}` {newest}, a new major version. `{command}` takes it, and tests may change",
                 id = spec.id
             ));
         }
@@ -725,6 +762,15 @@ fn plan_add(
         skip,
         lock,
         notes,
+    })
+}
+
+/// The lock line already records the catalog copy `entry`, so writing it would change nothing.
+fn lock_matches(catalog: &Catalog, snapshot: &Snapshot, id: &str, entry: &CatalogEntry) -> bool {
+    snapshot.lock.get(id).is_some_and(|line| {
+        line.version == entry.version.to_string()
+            && line.registry == catalog.registry()
+            && line.hash == entry.hash
     })
 }
 
@@ -935,9 +981,9 @@ fn plan_relock(catalog: &Catalog, snapshot: &Snapshot, add: &str) -> Plan {
         let hint = sealed
             .iter()
             .map(|id| {
-                format!(
-                    "restore it with `{add} {id} --overwrite`, or copy it to a path to make it your own"
-                )
+                let command = project::add_writing(add, std::slice::from_ref(id), true)
+                    .expect("the id is named");
+                format!("restore it with `{command}`, or copy it to a path to make it your own")
             })
             .collect::<Vec<_>>()
             .join("\n");

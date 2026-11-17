@@ -98,7 +98,10 @@ pub(super) fn install(
     }
     let root = dir.unwrap_or(Path::new("."));
     let add = project::add_command(dir);
-    let again = Again::new(dir, format!("{add} {}", block.id));
+    let again = Again::new(
+        dir,
+        project::add_writing(&add, &[block.id.to_string()], false).expect("a block id"),
+    );
     let opened = Folder::open_chosen(root).map_err(|error| io_at(root, error))?;
     let mut present = BTreeSet::new();
     // The scene goes first, so a project that has one hears `scene_exists`, whatever else differs.
