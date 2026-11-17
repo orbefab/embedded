@@ -63,8 +63,11 @@ pub trait Mcu: Clone + Send + std::fmt::Debug + 'static {
     fn fault(&self) -> Option<(Time, Fault)> {
         None
     }
-    /// The time the firmware first read output `output`'s pin as a digital input, as far as the
-    /// chip has run. A chip that never says reads none, and the engine checks no input of it.
+    /// The time the firmware first read output `output`'s pin as a digital input since the
+    /// pin's drive last turned off, as far as the chip has run. A read while the drive is not
+    /// off reads a held level, so it does not count. Once the drive is no longer off, it is
+    /// still the read of the stretch that just ended. A chip that never says reads none, and
+    /// the engine checks no input of it.
     fn read(&self, _output: usize) -> Option<Time> {
         None
     }

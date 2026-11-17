@@ -88,7 +88,7 @@ fn a_read_input_with_its_pull_up_off_and_its_button_open_warns_once_naming_its_p
     let message = json["message"].as_str().unwrap();
     assert!(
         message.starts_with(&format!(
-            "#u1.pin.PD2 reads #net.pd2 as a digital input at {at} ps while nothing drives it"
+            "#u1.pin.PD2 floats on #net.pd2 at {at} ps, and the firmware has taken in its level since the pin last became an input with its pull-up off"
         )),
         "{message}"
     );
@@ -145,4 +145,45 @@ fn a_closed_button_holds_the_input_until_it_opens() {
     assert_eq!(found.len(), 1, "{found:?}");
     let at = found[0].at().unwrap().as_ps();
     assert!((500_000_000..600_000_000).contains(&at), "at {at} ps");
+}
+
+/// `sbi PORTD,2`, `in r16,PIND`, `cbi PORTD,2`, `rjmp .`: the only read of PD2 is while its
+/// pull-up is on, and the pull-up then turns off for good.
+const READ_UNDER_PULL_UP: &str = ":080000005A9A09B15A98FFCF8A\n:00000001FF\n";
+
+/// `in r16,PIND`, `sbi PORTD,2`, `rjmp .`: PD2 is read while its pull-up is still off, then
+/// the pull-up turns on.
+const READ_THEN_PULL_UP: &str = ":0600000009B15A9AFFCF7E\n:00000001FF\n";
+
+/// `in r16,PIND`, `sbi PORTD,2`, `cbi PORTD,2`, `rjmp .`: PD2 is read with its pull-up off,
+/// then the pull-up turns on and off again, and PD2 is never read after.
+const READ_THEN_PULL_UP_ON_AND_OFF: &str = ":0800000009B15A9A5A98FFCF8A\n:00000001FF\n";
+
+/// A read under the pull-up reads a held level. Once the pull-up turns off nothing reads PD2,
+/// so the open button warns of nothing.
+#[test]
+fn a_read_under_the_pull_up_is_no_read_once_the_pull_up_turns_off() {
+    let mut netlist = netlist(false, "open", None);
+    part(&mut netlist, "u1")["firmware"] = READ_UNDER_PULL_UP.into();
+    assert_eq!(floating(&netlist), []);
+}
+
+/// The read is while PD2 floats, so the step where the pull-up turns on still warns.
+#[test]
+fn a_read_before_the_pull_up_turns_on_warns() {
+    let mut netlist = netlist(false, "open", None);
+    part(&mut netlist, "u1")["firmware"] = READ_THEN_PULL_UP.into();
+    let found = floating(&netlist);
+    assert_eq!(found.len(), 1, "{found:?}");
+    let at = found[0].at().unwrap().as_ps();
+    assert!(at <= 1_000_000, "at {at} ps");
+}
+
+/// The closed button holds PD2 at its only read. The pull-up turns on and off after it, so
+/// once the button opens at 0.5 ms PD2 floats with no read since its pull-up went off.
+#[test]
+fn a_read_before_the_pull_up_turned_on_and_off_is_no_read_of_the_later_float() {
+    let mut netlist = netlist(false, "closed", Some(500_000_000));
+    part(&mut netlist, "u1")["firmware"] = READ_THEN_PULL_UP_ON_AND_OFF.into();
+    assert_eq!(floating(&netlist), []);
 }

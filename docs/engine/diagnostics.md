@@ -295,6 +295,7 @@ The message is:
 
 Parse checks it, so the netlist is refused and nothing solves. An ideal source across one net has a branch row of zeros, which the solve would report as `solver.singular` at the source. A wire from a board's 5V straight to its GND does this on a board whose USB source feeds 5V with nothing in between. A source of 0 V across one net is the same short.
 
+## solver.singular
 
 Severity `error`. Refs is the unknown the zero pivot names, a net or a part. `t_ps` is 0 for the operating point. In a transient it is the end of the step that failed, the probe's time for a probe locating a chip event, or the restart's time for the restart solve after a switch edge, a source jump or a chip drive change.
 
@@ -420,16 +421,18 @@ Severity `warning`. Refs are the chip's pin, then `#net.<name>`, the pin's net. 
 The message is:
 
 ```text
-{pin} reads {net} as a digital input at {t_ps} ps while nothing drives it: its pull-up is off and no part joins the net to a supply or to ground, so it reads whatever level leakage and noise leave; add a pull-up or a pull-down resistor, or turn the pin's pull-up on
+{pin} floats on {net} at {t_ps} ps, and the firmware has taken in its level since the pin last became an input with its pull-up off, alone or with the rest of its port: no part joins the net to a supply or to ground, so the level is whatever leakage and noise leave; add a pull-up or a pull-down resistor, or turn the pin's pull-up on
 ```
 
 `data` is `{}`. The run reports each pin once, at the first accepted step where all three hold:
 
 - The pin's drive is off: an input with its pull-up off.
-- Its firmware has read the pin at or before that step. An ATmega328P reads every pin of a port from the first instruction that loads its `PINx`, since `digitalRead` loads the whole byte, and each pin an `INTn` or pin-change interrupt watches from the store that enables it. A pin whose digital input is off, `PC6` while it is `RESET` or a pin `DIDR0` turns off, is not read. A chip on the [contract](mcu.md) that says nothing reads no pin, so the check covers the ATmega328P alone. The engine asks the copy of the core it runs ahead, which has always reached the step, since a landing commits only a core that stops there.
+- Its firmware has read the pin at or before that step, since its drive last turned off. A read while the pin drives or pulls up takes in a level the chip holds, so it does not count, and neither does a read from before the pull-up last came and went. An ATmega328P counts a read of a pin when an instruction loads its port's `PINx` while the pin's drive is off and its digital input is on, and for as long as an enabled `INTn` or pin-change interrupt watches it with its drive off. A pin whose digital input is off, `PC6` while it is `RESET` or a pin `DIDR0` turns off, is not read. A chip on the [contract](mcu.md) that says nothing reads no pin, so the check covers the ATmega328P alone. The engine asks the copy of the core it runs ahead, which has always reached the step, since a landing commits only a core that stops there. That copy is past no change of its drive but the one at its stop, so while the committed drive is off at the step, the copy's stretch with the drive off is the one that holds the step.
 - The pin's net reaches ground through no DC path but chips' leakage. The paths are those of [`net.floating`](#netfloating), less every active chip's and every capacitor's. A switch joins its pins only while its contact is closed on that step, and an active chip joins an output's net to its own supply while it drives high or pulls up, and to its own ground while it drives low.
 
-A static check cannot tell this: a sketch sets `INPUT` or `INPUT_PULLUP` as it runs, and a pin the sketch never reads may float harmlessly. A net that holds only the pin, with no other part, is not checked. A button from the pin to 5V with no pull-down warns at the first read while the button is open. With a pull-down, an external pull-up, `INPUT_PULLUP`, or a pin the firmware never reads, it does not.
+A load of `PINx` takes in all eight pins of the port, and the chip cannot tell which of them the firmware keeps: `digitalRead` loads the whole byte and masks its bit in software, with a mask it looks up at run time. So a load counts for every pin of the port whose drive is off then, and the message says the firmware took the level in with the rest of its port rather than that it read that pin. That level is in the byte the firmware holds, and DS40002061B §14.2.6 asks for a defined level on every unused pin, since a floating input draws current in every mode where the digital inputs are on. A pin `D4` with only a capacitor to ground, on a Nano whose sketch reads only `D2`, warns once the sketch first reads `D2`.
+
+A static check cannot tell this: a sketch sets `INPUT` or `INPUT_PULLUP` as it runs, and a pin the sketch never reads may float harmlessly. A net that holds only the pin, with no other part, is not checked. A button from the pin to 5V with no pull-down warns at the first read while the button is open. With a pull-down, an external pull-up, `INPUT_PULLUP`, or a pin the firmware never reads, it does not. A sketch that calls `digitalRead` under `INPUT_PULLUP` and then sets `INPUT` without reading again does not warn. One that reads first and sets `INPUT_PULLUP` after warns at the step where the pull-up comes on.
 
 ## chip.unsupported_instruction
 
@@ -612,12 +615,12 @@ The message is one of:
 
 ```text
 {ref} peaks at {peak} A, over its {limit} A rating for {over_ps} ps
-{ref} carries {peak} A RMS over the last 1 ms, over its {limit} A rating for {over_ps} ps
+{ref} carries {peak} A RMS over the last 10.2 ms, over its {limit} A rating for {over_ps} ps
 ```
 
 The second is a DC rating's, below. ` for {over_ps} ps` is left out for an operating point, and while `over_ps` is 0, as on the step where the quantity first goes over. A session's `diagnostics()` writes each message as it stands through the last accepted step, so a warning seen early reads a shorter time, or none, than the run folder's.
 
-`data` holds `limit`, `over_ps`, `peak`, `peak_ps`, and `window_ps`. `limit` is the rating. `peak` is the largest magnitude of the quantity, or of its RMS for a DC rating. `peak_ps` is when it peaked. `over_ps` is `null` for an operating point, which has no duration. `window_ps` is 1000000000 for a DC rating and `null` for any other.
+`data` holds `limit`, `over_ps`, `peak`, `peak_ps`, and `window_ps`. `limit` is the rating. `peak` is the largest magnitude of the quantity, or of its RMS for a DC rating. `peak_ps` is when it peaked. `over_ps` is `null` for an operating point, which has no duration. `window_ps` is 10200000000 for a DC rating and `null` for any other.
 
 A transient checks every accepted step, not only the rows. Each step's value holds until the next accepted step. `t_ps` is the first step over the rating, and `over_ps` adds the time to the next step for every step over it. The last step adds nothing. So `t_ps` and `peak_ps` can fall between rows. At a switch edge the solve at the edge holds the old contact. With 22 ohm in place of 220 ohm in `packages/engine/tests/circuits/button-led`, `#led1.i` is first over 1 ns after the press, and `over_ps` is exactly the time the contact was closed.
 
@@ -625,9 +628,11 @@ A quantity is over when its magnitude is above the rating. Equal is not over. `p
 
 ### DC ratings
 
-An `atmega328p`'s `pin_current` and `supply_current` and a voltage source's `current` are DC ratings. DS40002061B §29.1 gives 40 mA and 200 mA as DC currents and gives no pulse rating, and a supply's rating is the current it delivers steadily. What a DC current rating guards against is heat, in the output transistors, the metal and the bond wires, and electromigration, which follows the mean current. Heat follows `i^2` over time. So a transient checks a DC rating against the current's RMS over the 1 ms before each accepted step, not against each step's value. RMS is never below the mean, so it covers electromigration too. Each step's value holds until the next, as above, and the window starts full of the operating point, which is DC. `t_ps` is the first step whose RMS is over, `peak` the largest RMS, and `over_ps` the time the RMS was over. An operating point's RMS is its value.
+An `atmega328p`'s `pin_current` and `supply_current` and a voltage source's `current` are DC ratings. DS40002061B §29.1 gives 40 mA and 200 mA as DC currents and gives no pulse rating, and a supply's rating is the current it delivers steadily. What a DC current rating guards against is heat, in the output transistors, the metal and the bond wires, and electromigration, which follows the mean current. Heat follows `i^2` over time. So a transient checks a DC rating against the current's RMS over the 10.2 ms before each accepted step, not against each step's value. RMS is never below the mean, so it covers electromigration too. Each step's value holds until the next, as above, and the window starts full of the operating point, which is DC. `t_ps` is the first step whose RMS is over, `peak` the largest RMS, and `over_ps` the time the RMS was over. An operating point's RMS is its value.
 
-1 ms is long next to a switching edge and short next to any load a circuit holds. A capacitor that a pin charges through its stage, `R` ohm, takes `I0^2 * R * C / 2` of `i^2 * t` an edge. On the model's 25 ohm stage, 100 pF takes 0.2 A for a few nanoseconds, which over 1 ms is under 1 mA RMS, and a 1 uF load on a 490 Hz PWM pin stays well under 40 mA. 10 uF and 47 uF on that pin go over, as such a load does on a real pin. A load held at `k` times the rating goes over once `1 / k^2` of the window has filled: 69 mA from a pin into 47 ohm after 0.33 ms, five LEDs taking 44 mA from one pin after 0.81 ms, and a pin driving low on 5V, 200 mA, after 40 us.
+The window is 10.2 ms because PWM is the load a pin most often switches. Judging a PWM load by its RMS, as a DC rating's heat asks, assumes the pin heats slower than one period, so the window has to hold whole periods. The slowest PWM an Arduino core makes by default is Timer1's and Timer2's phase correct PWM on D3, D9, D10 and D11, 16 MHz / (2 * 64 * 255), 490.2 Hz, a period of exactly 2.04 ms, and 10.2 ms is five of those periods. For a steady 490 Hz PWM the RMS over the window is the RMS of its period, whatever the window's phase. Timer0's fast PWM on D5 and D6, 976.6 Hz, a period of 1.024 ms, fits 9.96 times, so its RMS over the window is within 0.4% of its period's, and faster PWM, such as 62.5 kHz, is closer still. `analogWrite(9, 128)` into 75 ohm is 50 mA at 128 / 255 duty, 35.4 mA RMS, under 40 mA, though each of its pulses lasts 1.02 ms. Into 47 ohm it is 69 mA at the same duty, 49 mA RMS, which is the number the warning gives.
+
+An absolute maximum DC rating is a current the part bears for as long as it flows, and it says nothing of shorter currents. A longer window would read a PWM load the same, but would warn later of a load held over the rating and spread a lone pulse thinner, so the window is the shortest that holds whole periods of every default PWM with margin. A pulse longer than the window fills it, so it counts at its full value: 100 mA for 20 ms reads 100 mA RMS. A pulse shorter than the window counts by its share: 100 mA for 1 ms reads 31 mA RMS and does not warn, and the datasheet gives no pulse rating to hold it to. A capacitor that a pin charges through its stage, `R` ohm, takes `I0^2 * R * C / 2` of `i^2 * t` an edge. On the model's 25 ohm stage, 100 pF takes 0.2 A for a few nanoseconds, which over 10.2 ms is well under 1 mA RMS, and a 1 uF load on a 490 Hz PWM pin stays well under 40 mA. 10 uF and 47 uF on that pin go over, as such a load does on a real pin, since every edge charges it again. A pin that charges 10 uF once from 0 V stays under; 47 uF and 100 uF go over. A load held at `k` times the rating goes over once `1 / k^2` of the window has filled: 69 mA from a pin into 47 ohm after 3.4 ms, five LEDs taking 44 mA from one pin after 8.4 ms, and a pin driving low on 5V, 200 mA, after 0.41 ms.
 
 Every other current and power rating is checked on each accepted step. An LED's `current` is its DC forward current. An LED datasheet gives a higher peak forward current for short pulses at a low duty, which this model does not carry, so a pulse over the DC current warns.
 
@@ -639,10 +644,10 @@ An `atmega328p` with `ratings.pin_current` names each port pin whose RMS is over
 
 The number is the model's. The stage is linear, 25 ohm from its rail, so a pin shorted to the other rail reads 200 mA at 5 V. A real driver saturates, and a short draws about half that. Both are far over the 40 mA rating, so the warning holds. The rating is the datasheet's absolute maximum, which [avr.md](avr.md#ratings) names. A pin held over it can be damaged.
 
-A Nano running a sketch that drives D9 high into 47 ohm to ground reads, 10 ms in:
+A Nano running a sketch that drives D9 high into 47 ohm to ground reads, 40 ms in:
 
 ```text
-#nano__mcu.pin.PB1 carries 0.06944434799653014 A RMS over the last 1 ms, over its 0.04 A rating for 7864320000 ps
+#nano__mcu.pin.PB1 carries 0.06944434799653014 A RMS over the last 10.2 ms, over its 0.04 A rating for 32582912000 ps
 ```
 
 The time over runs through the last accepted step, which a chip's core can leave behind the session's time.

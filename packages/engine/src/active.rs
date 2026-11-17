@@ -187,8 +187,8 @@ impl Core {
         }
     }
 
-    /// When its firmware first read output `output`'s pin as a digital input, as far as it
-    /// has run. Only a microcontroller says so.
+    /// When its firmware first read output `output`'s pin as a digital input since the pin's
+    /// drive last turned off, as far as it has run. Only a microcontroller says so.
     fn read(&self, output: usize) -> Option<Time> {
         match *self {
             Core::Mcu(ref mcu) => mcu.read(output),
@@ -712,10 +712,12 @@ impl Actives {
         &self.committed
     }
 
-    /// When active chip `k`'s firmware first read output `output`'s pin. It asks the copy run
-    /// ahead, which is never behind the accepted time: a landing commits only a core that
-    /// stops there, so the committed core of a chip that polls a pin without changing a drive
-    /// can sit far back.
+    /// When active chip `k`'s firmware first read output `output`'s pin since its drive last
+    /// turned off. It asks the copy run ahead, which is never behind the accepted time: a
+    /// landing commits only a core that stops there, so the committed core of a chip that
+    /// polls a pin without changing a drive can sit far back. The copy is past no change of
+    /// its image but at most the one at its stop, so the stretch it names is the one that
+    /// holds the accepted time whenever the committed drive there is off.
     pub(crate) fn read(&self, k: usize, output: usize) -> Option<Time> {
         self.ahead[k].core.read(output)
     }

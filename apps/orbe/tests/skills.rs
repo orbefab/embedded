@@ -1127,7 +1127,8 @@ fn a_button_with_no_pull_down_warns_that_its_input_floats() {
     orbe(&["open"]).ok();
     let step = orbe(&["step", "20ms"]).ok();
     orbe(&["close"]).ok();
-    let said = "warning[chip.floating_input] #nano__mcu.pin.PD2 (nano.D2) reads #net.nano__D2 as a digital input at ";
+    let said =
+        "warning[chip.floating_input] #nano__mcu.pin.PD2 (nano.D2) floats on #net.nano__D2 at ";
     assert!(step.stdout.contains(said), "{}", step.stdout);
     assert!(
         step.stdout
@@ -1137,7 +1138,7 @@ fn a_button_with_no_pull_down_warns_that_its_input_floats() {
     );
     says(
         &skill("arduino"),
-        "`step` warns `chip.floating_input`, naming the pin, as in `#nano__mcu.pin.PD2 (nano.D2) reads #net.nano__D2 as a digital input at ... ps while nothing drives it`.",
+        "`step` warns `chip.floating_input`, naming the pin, as in `#nano__mcu.pin.PD2 (nano.D2) floats on #net.nano__D2 at ... ps, and the firmware has taken in its level`.",
     );
 
     fs::write(dir.join("scene.jsonc"), &scene).unwrap();
@@ -1195,12 +1196,13 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     ] {
         assert!(step.contains(warning), "{step}");
     }
-    // The pin's rating is DC: its RMS over the last 1 ms crosses 40 mA within that window,
-    // and a chip warning can show up to one 10 ms engine step late.
-    let held = orbe(&["step", "10ms"]).ok().stdout;
+    // The pin's rating is DC: its RMS over the last 10.2 ms crosses 40 mA (40 / 105)^2 of the
+    // window after the press, 1.5 ms, and a chip warning can show up to one 10 ms engine step
+    // late.
+    let held = orbe(&["step", "20ms"]).ok().stdout;
     for warning in [
         "warning[rating.current] #nano__mcu.pin.PB5 (nano.D13) carries ",
-        "A RMS over the last 1 ms, over its 0.04 A rating",
+        "A RMS over the last 10.2 ms, over its 0.04 A rating",
     ] {
         assert!(held.contains(warning), "{held}");
     }
@@ -1221,7 +1223,7 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     says(
         &core,
         &format!(
-            "With D13 wired straight to `led1.anode` and no `r1`, the LED draws {:.0} mA. `step` lists `warning[rating.current]` and `warning[rating.power]` for `led1`, and `step 10ms` after it lists `warning[rating.current]` for `#nano__mcu.pin.PB5 (nano.D13)`, the chip pin behind D13, over its 40 mA rating. `expect no diagnostics` fails. The LED holds D13 at {:.1} V, so D13 reads `{}` while the LED is {}.",
+            "With D13 wired straight to `led1.anode` and no `r1`, the LED draws {:.0} mA. `step` lists `warning[rating.current]` and `warning[rating.power]` for `led1`, and `step 20ms` after it lists `warning[rating.current]` for `#nano__mcu.pin.PB5 (nano.D13)`, the chip pin behind D13, over its 40 mA rating. `expect no diagnostics` fails. The LED holds D13 at {:.1} V, so D13 reads `{}` while the LED is {}.",
             led["i"].as_f64().unwrap() * 1e3,
             pin["v"].as_f64().unwrap(),
             pin["level"].as_str().unwrap(),

@@ -95,10 +95,13 @@ impl Inputs {
     }
 
     /// Checks the accepted step at `at`, solved with the drives `cores` hold. `read(k, output)`
-    /// is when active chip `k`'s firmware first read that output's pin, from a copy of its core
-    /// that has run at least to `at`. A candidate warns once, at the first step where its drive
-    /// is off, its firmware has read it by then, and its net reaches ground through neither a
-    /// closed switch nor another output's drive.
+    /// is when active chip `k`'s firmware first read that output's pin since its drive last
+    /// turned off, from a copy of its core that has run at least to `at`. While the drive is
+    /// off at `at`, that stretch holds `at`, so a read at or before `at` was taken with the pin
+    /// floating as it is now: a read under the pull-up, or before a pull-up came and went,
+    /// does not count. A candidate warns once, at the first step where its drive is off, its
+    /// firmware has read it in that stretch by then, and its net reaches ground through
+    /// neither a closed switch nor another output's drive.
     pub(crate) fn sample(
         &mut self,
         at: Time,

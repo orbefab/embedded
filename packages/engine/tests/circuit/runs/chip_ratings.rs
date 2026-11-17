@@ -114,8 +114,8 @@ fn refs(found: &[Diagnostic]) -> Vec<String> {
         .collect()
 }
 
-/// The window a DC current rating's RMS runs over, 1 ms.
-const WINDOW_PS: u64 = 1_000_000_000;
+/// The window a DC current rating's RMS runs over, 10.2 ms.
+const WINDOW_PS: u64 = 10_200_000_000;
 
 /// `ldi r16,0x20`, `out DDRB,r16`, `rjmp .-2`: PB5 an output, low, from cycle 2 on.
 const PB5_LOW: &str = ":0600000000E204B9FFCF8D\n:00000001FF\n";
@@ -166,7 +166,7 @@ fn the_documented_example_is_inside_every_rating() {
 
 /// `toggle.S` drives PB5 high from 250 ns to 6.5 us and from 12.75 us to 19 us of the 20 us run.
 /// Into 47 ohm that is 69 mA, the stage's closed form, for 12.5 us in all: well under 40 mA
-/// over the 1 ms window, as a capacitor's charging pulse is.
+/// over the 10.2 ms window, as a capacitor's charging pulse is.
 #[test]
 fn an_overload_shorter_than_the_window_stays_inside_the_pin_rating() {
     let mut netlist = rated();
@@ -174,9 +174,9 @@ fn an_overload_shorter_than_the_window_stays_inside_the_pin_rating() {
     assert_eq!(run(&netlist), []);
 }
 
-/// Run on to 3 ms, `toggle.S` keeps PB5 high half of each 12.5 us. Into 47 ohm that is 69 mA,
-/// the stage's closed form, so its RMS over the window settles at 69 mA / sqrt(2), 48.8 mA,
-/// and first crosses 40 mA once (40 / 48.8)^2 of the window, 0.67 ms, has filled.
+/// Run on to three windows, `toggle.S` keeps PB5 high half of each 12.5 us. Into 47 ohm that
+/// is 69 mA, the stage's closed form, so its RMS over the window settles at 69 mA / sqrt(2),
+/// 48.8 mA, and first crosses 40 mA once (40 / 48.8)^2 of the window, 6.85 ms, has filled.
 #[test]
 fn a_port_pin_over_its_current_for_its_window_is_named_with_the_stage_s_rms() {
     let mut netlist = rated();
@@ -206,7 +206,7 @@ fn a_port_pin_over_its_current_for_its_window_is_named_with_the_stage_s_rms() {
     assert_eq!(
         message,
         format!(
-            "#u1.pin.PB5 carries {} A RMS over the last 1 ms, over its 0.04 A rating for {over} ps",
+            "#u1.pin.PB5 carries {} A RMS over the last 10.2 ms, over its 0.04 A rating for {over} ps",
             pin.peak
         )
     );
@@ -338,7 +338,7 @@ fn reset_and_vcc_take_their_own_ceilings() {
 }
 
 /// Between accepted steps a session checks the chip's pins at the probe, its window running
-/// to the probe. PB5's RMS into 47 ohm crosses 40 mA at about 0.67 ms.
+/// to the probe. PB5's RMS into 47 ohm crosses 40 mA at about 6.85 ms.
 #[test]
 fn a_session_checks_the_pins_at_its_probe() {
     let mut netlist = rated();
@@ -352,9 +352,9 @@ fn a_session_checks_the_pins_at_its_probe() {
         assert_eq!(probe.at(), Time::from_ps(ps));
         refs(&session.over_ratings(&probe))
     };
-    assert_eq!(over_at(&mut session, 500_333_333), Vec::<String>::new());
+    assert_eq!(over_at(&mut session, 5_100_333_333), Vec::<String>::new());
     assert_eq!(
-        over_at(&mut session, 1_500_333_333),
+        over_at(&mut session, 15_300_333_333),
         ["rating.current #u1.pin.PB5"]
     );
 }

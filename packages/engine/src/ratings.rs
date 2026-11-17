@@ -20,8 +20,8 @@ use crate::observe::Columns;
 /// A DC current rating, a chip pin's, a chip supply's or a supply source's, bounds the heat
 /// the current makes, which follows its square over time. So it is checked on the current's
 /// RMS over the last [`DC_WINDOW_PS`], not on each sample: the pulse that charges a
-/// capacitor through a pin stays under it, and a load that holds the current over its rating
-/// for a fraction of the window goes over.
+/// capacitor through a pin stays under it, a PWM load counts by the RMS of its period, and a
+/// load that holds the current over its rating for a fraction of the window goes over.
 #[derive(Clone)]
 pub(crate) struct Ratings {
     timing: Timing,
@@ -31,10 +31,14 @@ pub(crate) struct Ratings {
     last: Option<Time>,
 }
 
-/// The window a DC current rating averages over, 1 ms. A pin that holds a capacitor's
-/// charging pulse, `I0^2 * tau / 2` of `i^2 * t`, stays well under it, and a steady load over
-/// the rating crosses it within a fraction of it.
-pub(crate) const DC_WINDOW_PS: u64 = 1_000_000_000;
+/// The window a DC current rating averages over, 10.2 ms: five periods of the slowest PWM an
+/// Arduino core makes by default, 490.2 Hz (16 MHz / (2 * 64 * 255), 2.04 ms), and ten of
+/// the 976.6 Hz one, within 0.4%. Judging a PWM load by its RMS assumes the pin heats slower
+/// than one period, so the window holds whole periods and the RMS it reports for a steady PWM
+/// is the period's. A pulse longer than the window fills it and counts at its full value. A
+/// pin that holds a capacitor's charging pulse, `I0^2 * tau / 2` of `i^2 * t`, stays well
+/// under it, and a steady load over the rating crosses it within a fraction of it.
+pub(crate) const DC_WINDOW_PS: u64 = 10_200_000_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Timing {
@@ -629,8 +633,8 @@ mod tests {
         close(square.rms(Time::from_ps(3 * DC_WINDOW_PS / 2), 0.0), 0.0);
     }
 
-    /// A pin into 100 pF carries about 0.2 A for 4 ns, which is 0.2 * sqrt(4 ns / 1 ms), 0.4 mA
-    /// RMS over the window.
+    /// A pin into 100 pF carries about 0.2 A for 4 ns, which is 0.2 * sqrt(4 ns / 10.2 ms),
+    /// 0.13 mA RMS over the window.
     #[test]
     fn a_short_pulse_counts_by_its_share_of_the_window() {
         let mut square = Square::default();
@@ -675,6 +679,89 @@ mod tests {
             excursion.over_ps,
             Some(1 + 2_000 * step - excursion.first.as_ps())
         );
+    }
+
+    /// Arduino's default PWM on D3, D9, D10 and D11 is phase correct at 16 MHz / (2 * 64 *
+    /// 255), 490.2 Hz: 2.04 ms a period, high for `duty / 255` of it.
+    const PWM_490_PS: u64 = 2_040_000_000;
+
+    // The window holds a whole number of those periods, at least four.
+    const _: () =
+        assert!(DC_WINDOW_PS.is_multiple_of(PWM_490_PS) && DC_WINDOW_PS >= 4 * PWM_490_PS);
+
+    /// `ratings` with its one watch a 40 mA DC rating, a port pin's, sampled at each edge of
+    /// a PWM of `period` ps, high at `peak` amperes for `high` ps of each period, until `stop`
+    /// ps.
+    fn pwm(peak: f64, period: u64, high: u64, stop: u64) -> Vec<Diagnostic> {
+        let (mut ratings, columns) = ratings(Timing::Run);
+        ratings.watches[0].window = Some(Square::default());
+        ratings.watches[0].limit = 0.04;
+        let values = |current| row(&columns, current);
+        ratings.sample(Time::ZERO, &values(0.0), &[]);
+        let mut start = 1;
+        while start + period <= stop {
+            ratings.sample(Time::from_ps(start), &values(peak), &[]);
+            ratings.sample(Time::from_ps(start + high), &values(0.0), &[]);
+            start += period;
+        }
+        ratings.sample(Time::from_ps(start), &values(0.0), &[]);
+        ratings.findings()
+    }
+
+    /// `analogWrite(9, 128)` into 75 ohm behind the 25 ohm stage is 50 mA for 128 / 255 of
+    /// each period: 35.4 mA RMS, under 40 mA, though each pulse is over 1 ms long.
+    #[test]
+    fn a_490_hz_pwm_under_its_rating_on_its_period_rms_is_not_over() {
+        assert_eq!(
+            pwm(0.05, PWM_490_PS, PWM_490_PS * 128 / 255, 100 * PWM_490_PS),
+            []
+        );
+    }
+
+    /// The window holds a whole number of 490 Hz periods, so the RMS it reports for a steady
+    /// 490 Hz PWM is the period's: 69.4 mA into 47 ohm at 128 / 255 is 49.2 mA RMS.
+    #[test]
+    fn a_490_hz_pwm_over_its_rating_reads_its_period_rms() {
+        let found = pwm(0.0694, PWM_490_PS, PWM_490_PS * 128 / 255, 100 * PWM_490_PS);
+        let [Diagnostic::RatingCurrent(excursion)] = found.as_slice() else {
+            panic!("not one current finding: {found:?}");
+        };
+        let rms = 0.0694 * (128.0f64 / 255.0).sqrt();
+        assert!(
+            (excursion.peak / rms - 1.0).abs() < 1e-6,
+            "{}",
+            excursion.peak
+        );
+    }
+
+    /// Timer0's fast PWM on D5 and D6, 16 MHz / (64 * 256), is 976.6 Hz, high for
+    /// `(duty + 1) / 256` of each 1.024 ms. Its RMS over the window is within 1% of the
+    /// period's.
+    #[test]
+    fn a_980_hz_pwm_reads_within_a_percent_of_its_period_rms() {
+        let period = 1_024_000_000;
+        let high = period * 129 / 256;
+        let found = pwm(0.0694, period, high, 200 * period);
+        let [Diagnostic::RatingCurrent(excursion)] = found.as_slice() else {
+            panic!("not one current finding: {found:?}");
+        };
+        let rms = 0.0694 * (129.0f64 / 256.0).sqrt();
+        assert!(
+            (excursion.peak / rms - 1.0).abs() < 0.01,
+            "{}",
+            excursion.peak
+        );
+        assert_eq!(pwm(0.05, period, high, 200 * period), []);
+    }
+
+    /// A pulse longer than the window fills it, so it counts at its full value.
+    #[test]
+    fn a_pulse_longer_than_the_window_counts_at_its_value() {
+        let found = pwm(0.1, 4 * DC_WINDOW_PS, 2 * DC_WINDOW_PS, 8 * DC_WINDOW_PS);
+        let [Diagnostic::RatingCurrent(excursion)] = found.as_slice() else {
+            panic!("not one current finding: {found:?}");
+        };
+        close(excursion.peak, 0.1);
     }
 
     #[test]

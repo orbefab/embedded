@@ -196,8 +196,8 @@ impl Mcu for Bridge {
         self.levels = levels.to_vec();
     }
 
-    /// A port pin is read once the firmware loads its port's `PINx`, which holds all eight, or
-    /// enables its `INTn` or `PCINTn` interrupt.
+    /// A port pin is read while its drive is off once the firmware loads its port's `PINx`,
+    /// which holds all eight, or while its `INTn` or `PCINTn` interrupt is enabled.
     fn read(&self, output: usize) -> Option<Time> {
         let pin = *DIE.get(output)?;
         self.cpu().pin_read_at(pin).map(|cycle| self.time(cycle))

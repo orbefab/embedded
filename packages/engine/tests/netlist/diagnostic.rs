@@ -182,6 +182,19 @@ fn codes_are_unique_and_match_the_grammar() {
     assert_eq!(seen.len(), 24);
 }
 
+/// `docs/engine/diagnostics.md` gives each code its own `## <code>` heading.
+#[test]
+fn each_code_has_its_heading_in_the_diagnostics_doc() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/engine/diagnostics.md"),
+    )
+    .unwrap();
+    for diagnostic in samples() {
+        let heading = format!("\n## {}\n", diagnostic.code());
+        assert!(doc.contains(&heading), "no heading {heading:?}");
+    }
+}
+
 #[test]
 fn severity_refs_and_time_follow_the_variant() {
     let found = samples();
