@@ -158,12 +158,13 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
     let switches = search("switch");
     let names: Vec<&str> = switches.iter().map(|card| card.name.as_str()).collect();
     assert_eq!(
-        &names[..6],
+        &names[..7],
         [
             "nmos-irf520-to220",
             "npn-2n2222-to92",
             "npn-l8050-sot23",
             "tactile-switch-6mm",
+            "tactile-switch-ntc013",
             "tactile-switch-smd",
             "tactile-switch-ts42",
         ]
@@ -172,7 +173,7 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
         .iter()
         .position(|name| *name == "diode-cd1206")
         .unwrap();
-    assert!(diode > 5, "{names:?}");
+    assert!(diode > 6, "{names:?}");
 
     let boards = search("board");
     let names: Vec<&str> = boards.iter().map(|card| card.name.as_str()).collect();
@@ -294,6 +295,7 @@ fn one_id_segment_names_that_part_and_several_stay_a_list() {
         ids_with_segment("switch"),
         owned(&[
             "tactile-switch-6mm",
+            "tactile-switch-ntc013",
             "tactile-switch-smd",
             "tactile-switch-ts42",
         ])
