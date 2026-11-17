@@ -654,3 +654,160 @@ fn linked(path: &Path) -> Error {
         path.display()
     ))
 }
+
+/// The file at the root of a registry source that records each part and Block a release served.
+/// One line per item, `<id> <version> sha256:<hash>`, sorted by id. It is empty until the first
+/// release, because nothing has been served, and `scripts/released.sh` rewrites it at a tag.
+pub const RELEASED: &str = "released.lock";
+
+struct ReleasedItem {
+    id: String,
+    version: String,
+    hash: String,
+    /// `parts/<id>/part.jsonc` or `blocks/<id>/block.jsonc`, where a bump is written.
+    version_file: String,
+}
+
+/// The parts and Blocks in `src`, in id order. The hash is the folder hash `parts.lock` records.
+fn released_items(src: &Path) -> Result<Vec<ReleasedItem>, Error> {
+    let parts = folders(src, "parts")?;
+    let blocks = folders(src, "blocks")?;
+    if let Some(id) = parts.keys().find(|id| blocks.contains_key(*id)) {
+        return Err(Error::Invalid(format!(
+            "`{id}` is both a part and a Block, and one name names one item"
+        )));
+    }
+    let cards = orbe_scene::cards(&parts).map_err(Error::Invalid)?;
+    let mut items = Vec::new();
+    for card in &cards {
+        items.push(ReleasedItem {
+            id: card.name.clone(),
+            version: card.version.clone(),
+            hash: card.hash.clone(),
+            version_file: format!("parts/{}/part.jsonc", card.name),
+        });
+    }
+    for (id, files) in &blocks {
+        let card = orbe_scene::block_card(id, files, &cards).map_err(Error::Invalid)?;
+        items.push(ReleasedItem {
+            id: card.name,
+            version: card.version,
+            hash: card.hash,
+            version_file: format!("blocks/{id}/block.jsonc"),
+        });
+    }
+    items.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(items)
+}
+
+/// `released.lock` for `src`: one line per part and Block, or an empty string when `src` has
+/// neither. The hash is the folder hash `parts.lock` records.
+pub fn released_lock(src: &Path) -> Result<String, Error> {
+    let mut text = String::new();
+    for item in released_items(src)? {
+        text.push_str(&format!("{} {} {}\n", item.id, item.version, item.hash));
+    }
+    Ok(text)
+}
+
+struct ReleasedLine {
+    version: Version,
+    spelled: String,
+    hash: String,
+}
+
+/// The lines of `src/released.lock`. A blank line is skipped. A missing file is an error, so
+/// deleting the file does not turn the check off.
+fn read_released(src: &Path) -> Result<BTreeMap<String, ReleasedLine>, Error> {
+    let path = src.join(RELEASED);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(Error::Invalid(format!(
+                "{} is missing. It is empty until the first tag, and scripts/released.sh writes it when you tag a release",
+                path.display()
+            )));
+        }
+        Err(error) => return Err(io_error(&path, error)),
+    };
+    let mut lines = BTreeMap::new();
+    for (index, line) in text.lines().enumerate() {
+        if line.is_empty() {
+            continue;
+        }
+        let at = index + 1;
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let [id, version, hash] = fields.as_slice() else {
+            return Err(Error::Invalid(format!(
+                "{RELEASED}:{at} is `{line}`, and a line is `<id> <version> sha256:<hash>`"
+            )));
+        };
+        let Some(parsed) = Version::parse(version) else {
+            return Err(Error::Invalid(format!(
+                "{RELEASED}:{at} gives `{id}` the version `{version}`, and a version is three numbers, such as `0.1.0`"
+            )));
+        };
+        let hex = hash
+            .strip_prefix("sha256:")
+            .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()));
+        let lower = hash.bytes().all(|b| !b.is_ascii_uppercase());
+        if !hex || !lower {
+            return Err(Error::Invalid(format!(
+                "{RELEASED}:{at} gives `{id}` the hash `{hash}`, and a hash is `sha256:` and 64 lowercase hex digits"
+            )));
+        }
+        if lines
+            .insert(
+                (*id).to_string(),
+                ReleasedLine {
+                    version: parsed,
+                    spelled: (*version).to_string(),
+                    hash: (*hash).to_string(),
+                },
+            )
+            .is_some()
+        {
+            return Err(Error::Invalid(format!(
+                "{RELEASED} lists `{id}` twice, and it has one line per item"
+            )));
+        }
+    }
+    Ok(lines)
+}
+
+/// The items in `src` whose folder differs from `released.lock` at the version that file
+/// records. A line that names no folder is left, and an item with no line passes. A folder at a
+/// newer version than its line passes. The same version with another hash asks for a bump.
+pub fn released_changes(src: &Path) -> Result<Vec<String>, Error> {
+    let lines = read_released(src)?;
+    let mut changes = Vec::new();
+    for item in released_items(src)? {
+        let Some(line) = lines.get(&item.id) else {
+            continue;
+        };
+        let version = Version::parse(&item.version).ok_or_else(|| {
+            Error::Invalid(format!(
+                "`{}` has version `{}`, and a version is three numbers, such as `0.1.0`",
+                item.id, item.version
+            ))
+        })?;
+        if version > line.version {
+            continue;
+        }
+        if version == line.version && item.hash == line.hash {
+            continue;
+        }
+        if version == line.version {
+            changes.push(format!(
+                "{} {} differs from the hash released.lock records. Bump its version in {}",
+                item.id, item.version, item.version_file
+            ));
+        } else {
+            changes.push(format!(
+                "{} is {}, and released.lock records {}, which is newer. A released version does not go backwards",
+                item.id, item.version, line.spelled
+            ));
+        }
+    }
+    Ok(changes)
+}
