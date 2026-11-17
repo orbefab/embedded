@@ -1,0 +1,44 @@
+{
+  "part": "cp2102n-qfn28",
+  "source": {
+    "script": "model.py",
+    "sha256": "d431142868f90016fdc0cf0747aec507cbe753465db5a98c44d15a7f2f9f7334",
+    "bytes": 1419
+  },
+  "files": {
+    "cp2102n-qfn28.glb": {
+      "sha256": "1ab59a830ca13e2530c7b5c9c4e68cd0596d194bae944d442451d80f848288f8",
+      "bytes": 22220
+    },
+    "cp2102n-qfn28.anchors.json": {
+      "sha256": "247b97ab0205116293976f38be440ab1c7b80ee5e6403322ae680c29082b2653",
+      "bytes": 3407
+    }
+  },
+  "box": {
+    "min": [-2.5, -2.5, 0],
+    "max": [2.5, 2.5, 0.79]
+  },
+  "kept_nodes": [],
+  "draw_calls": 3,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 29,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0.05
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 31,
+      "primitives_out": 3
+    }
+  }
+}
