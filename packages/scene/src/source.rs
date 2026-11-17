@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
-use crate::syntax::Node;
+use crate::syntax::Cached;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct FileId(usize);
@@ -36,8 +36,8 @@ pub(crate) struct SourceFile {
 pub(crate) struct Sources {
     root: PathBuf,
     files: Vec<SourceFile>,
-    /// `None` until [`crate::syntax::parse`] has read the file. `Some(None)` did not parse.
-    trees: RefCell<Vec<Option<Option<Node>>>>,
+    /// `None` until [`crate::syntax::parse`] has read the file.
+    trees: RefCell<Vec<Option<Cached>>>,
 }
 
 impl Sources {
@@ -49,20 +49,20 @@ impl Sources {
         }
     }
 
-    /// The tree from the first parse of `file`, once one has run.
-    pub(crate) fn parsed(&self, file: FileId) -> Option<Option<Node>> {
+    /// The first parse of `file`, once one has run.
+    pub(crate) fn parsed(&self, file: FileId) -> Option<Cached> {
         self.trees
             .borrow()
             .get(file.0)
             .and_then(|slot| slot.clone())
     }
 
-    pub(crate) fn remember(&self, file: FileId, node: &Option<Node>) {
+    pub(crate) fn remember(&self, file: FileId, cached: Cached) {
         let mut trees = self.trees.borrow_mut();
         if trees.len() <= file.0 {
             trees.resize(file.0 + 1, None);
         }
-        trees[file.0] = Some(node.clone());
+        trees[file.0] = Some(cached);
     }
 
     pub(crate) fn root(&self) -> &Path {
