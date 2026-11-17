@@ -476,6 +476,68 @@ fn an_outdated_board_is_an_error_and_not_a_note() {
 }
 
 #[test]
+fn bytecode_does_not_make_orbe_add_replace_a_sealed_copy() {
+    let project = project("nano-button");
+    let led = project.path().join("parts/led-5mm");
+    fs::write(led.join("a.pyc"), b"bytecode").unwrap();
+    fs::create_dir(led.join("__pycache__")).unwrap();
+    fs::write(
+        led.join("__pycache__").join("led.cpython-312.pyc"),
+        b"cached",
+    )
+    .unwrap();
+    let before = fs::read(led.join("part.jsonc")).unwrap();
+    let reply = orbe_scene::add_parts(
+        Some(project.path()),
+        &orbe_scene::Request {
+            ids: vec!["led-5mm".into()],
+            overwrite: false,
+            diff: false,
+            relock: false,
+        },
+    )
+    .unwrap();
+    let text = reply.text();
+    assert_eq!(reply.code(), 0, "{text}");
+    assert!(text.contains("skipped parts/led-5mm 0.1.0"), "{text}");
+    assert!(text.contains("parts.lock unchanged"), "{text}");
+    assert_eq!(fs::read(led.join("part.jsonc")).unwrap(), before);
+    assert!(led.join("a.pyc").is_file());
+}
+
+#[test]
+fn bytecode_in_a_sealed_copy_is_not_part_modified_and_an_author_file_is() {
+    let project = project("nano-button");
+    let led = project.path().join("parts/led-5mm");
+    fs::write(led.join("a.pyc"), b"bytecode").unwrap();
+    fs::create_dir(led.join("__pycache__")).unwrap();
+    fs::write(
+        led.join("__pycache__").join("led.cpython-312.pyc"),
+        b"cached",
+    )
+    .unwrap();
+    assert!(
+        orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc")).is_ok(),
+        "bytecode is not part of the sealed copy"
+    );
+
+    fs::write(led.join("notes.txt"), b"an author file\n").unwrap();
+    let found = scene_errors(project.path());
+    assert!(
+        found
+            .iter()
+            .any(|d| d.code == orbe_scene::Code::PartModified && d.message.contains("notes.txt")),
+        "{found:#?}"
+    );
+    assert!(
+        found
+            .iter()
+            .all(|d| !d.message.contains(".pyc") && !d.message.contains("__pycache__")),
+        "{found:#?}"
+    );
+}
+
+#[test]
 fn the_same_version_with_different_bytes_is_part_modified() {
     let project = project("nano-button");
     edit_led_resistance(project.path());

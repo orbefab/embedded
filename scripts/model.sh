@@ -44,7 +44,7 @@ if [[ ! -e packages/asset-step/node_modules/@gltf-transform/core && ! -e node_mo
   echo "scripts/model.sh: Node dependencies are missing. Run: pnpm install --frozen-lockfile" >&2
   exit 1
 fi
-# A model run must leave nothing in parts/<id>/ but the files it writes, because the folder hash counts every file.
+# Bytecode is not a published file of the part. Leaving it unwritten keeps the folder clean.
 export PYTHONDONTWRITEBYTECODE=1
 py=packages/cad/.venv/bin/python
 if [[ ! -x "$py" ]] || ! UV_PYTHON_DOWNLOADS=never "$py" -c 'import build123d, cad' >/dev/null 2>&1; then
