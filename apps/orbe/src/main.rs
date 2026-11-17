@@ -194,7 +194,7 @@ fn cli() -> clap::Command {
     Cli::command().subcommands(live)
 }
 
-const LIVE_HELP: &str = "Refs: @btn1, @nano.D13, @led1.i. Conditions: @led1 on, @nano.D13 high, @led1.i '>' 5mA, serial contains \"text\", no diagnostics. Durations: 100ms, 1.5ms, 20us. `orbe skills get core` explains each.";
+const LIVE_HELP: &str = "Refs: @btn1, @nano.D13, @led1.i, @led1.brightness. Conditions: @led1 lit, @led1 dim, @nano.D13 high, @led1.brightness '>' 2mA, serial contains \"text\", no diagnostics. Durations: 100ms, 1.5ms, 20us. `orbe skills get core` explains each.";
 
 const SHOW_HELP: &str = "The URL holds a token that only this session's process accepts, so keep it to yourself. Several viewers may watch one session. Closing the page leaves the session running, and `orbe close` ends the viewers too. A person can press buttons in the page, and `play` and `pause` there are the CLI's own. ORBE_VIEWER_DIR serves a built page's folder in place of the one built into orbe. An orbe built without the page says how to build it.";
 

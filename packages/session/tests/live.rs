@@ -41,7 +41,7 @@ fn a_step_reports_each_slice_and_ends_where_an_unwatched_step_does() {
         times,
         (101..=105).map(|ms| ms * 1_000_000_000).collect::<Vec<_>>()
     );
-    assert!(seen[4].1.starts_with("on i="), "{seen:?}");
+    assert!(seen[4].1.starts_with("lit i="), "{seen:?}");
 
     let mut plain = pressed_at_100ms();
     assert_eq!(reply, plain.run(&command("step 5ms")));
@@ -96,7 +96,7 @@ fn commands_and_replies_cross_the_wire_unchanged() {
         "step 100ms",
         "expect @led1 off",
         "press @btn1",
-        "step --until @led1 on --timeout 50ms",
+        "step --until @led1 lit --timeout 50ms",
         "get @nano.D13",
         "get @led1.i",
         "expect @led1.i > 3.2687677014840023e-7A",

@@ -123,7 +123,7 @@ Each entry of `files` is `{ "path", "url", "sha256", "bytes", "license" }`. `pat
 
 This repo's parts carry `MIT OR Apache-2.0`, every file of them. A Block is `(MIT OR Apache-2.0) AND LGPL-2.1-or-later` as a whole, and its `REUSE.toml` gives each file its own: its firmware images and `firmware/LICENSE-runtime` are `LGPL-2.1-or-later`, `firmware/LICENSE-libc` is `BSD-3-Clause`, and every other file is `MIT OR Apache-2.0`.
 
-**A part** adds what its page shows: `real`, `pins`, `params`, `ratings`, `notSimulated`, `docs`, `buy`, `on`, `pressable` and `holes`. `holes` is a board's, such as a breadboard's: `depth` in mm, and `strips`, the holes each strip joins, each of them also in `pins`. `docs`, `buy`, `on` and `holes` are absent when the part has none, `pressable` is absent when false, and a doc with no `url` is a name with no link. `orbe add` writes each file to `parts/<id>/<path>`.
+**A part** adds what its page shows: `real`, `pins`, `params`, `ratings`, `notSimulated`, `docs`, `buy`, `lit`, `dim`, `pressable` and `holes`. `lit` and `dim` are an LED's brightness thresholds, each `{ "of", "above", "unit" }`. `holes` is a board's, such as a breadboard's: `depth` in mm, and `strips`, the holes each strip joins, each of them also in `pins`. `docs`, `buy`, `lit`, `dim` and `holes` are absent when the part has none, `pressable` is absent when false, and a doc with no `url` is a name with no link. `orbe add` writes each file to `parts/<id>/<path>`.
 
 A part record is what `orbe part --json` prints, changed in exactly these ways:
 

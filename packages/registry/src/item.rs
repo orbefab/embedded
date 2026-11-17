@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::fmt;
 
 use orbe_scene::{
-    BlockCard, Buy, Card, CardFile, Doc, Holes, NotSimulated, On, Param, Pin, Rating, Real,
+    BlockCard, Buy, Card, CardFile, Doc, Holes, NotSimulated, Param, Pin, Rating, Real, Threshold,
 };
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -171,8 +171,11 @@ pub struct PartItem {
     #[schemars(with = "Vec<Buy>")]
     pub buy: Option<Vec<Buy>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "On")]
-    pub on: Option<On>,
+    #[schemars(with = "Threshold")]
+    pub lit: Option<Threshold>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Threshold")]
+    pub dim: Option<Threshold>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub pressable: bool,
     /// A board's holes, such as a breadboard's: how deep each is in mm, and the holes each
@@ -258,7 +261,8 @@ impl From<Card> for Item {
             uses,
             used_by: _,
             buy,
-            on,
+            lit,
+            dim,
             pressable,
             holes,
         } = card;
@@ -283,7 +287,8 @@ impl From<Card> for Item {
             not_simulated,
             docs,
             buy,
-            on,
+            lit,
+            dim,
             pressable,
             holes,
         }))

@@ -1,6 +1,7 @@
 //! Text for `orbe part` and `orbe search`.
 
 use orbe_scene::{Card, holes_text, param_sentence, si_amount, strip_text};
+use orbe_session::BRIGHTNESS_WINDOW;
 
 pub fn text(card: &Card) -> String {
     let mut lines = Vec::new();
@@ -146,13 +147,28 @@ pub fn text(card: &Card) -> String {
             lines.push(format!("  {id}"));
         }
     }
-    if let Some(on) = &card.on {
+    if card.lit.is_some() || card.dim.is_some() {
         lines.push(String::new());
-        lines.push(format!(
-            "on while {} is above {}",
-            on.of,
-            si_amount(on.above, &on.unit)
-        ));
+        lines.push("brightness".into());
+        lines.push(format!("  the average i over {BRIGHTNESS_WINDOW}"));
+        if let Some(lit) = &card.lit {
+            lines.push(format!(
+                "  lit while that average is above {}",
+                si_amount(lit.above, &lit.unit)
+            ));
+        }
+        if let Some(dim) = &card.dim {
+            let above = si_amount(dim.above, &dim.unit);
+            if let Some(lit) = &card.lit {
+                lines.push(format!(
+                    "  dim while that average is above {above} and at or below {}",
+                    si_amount(lit.above, &lit.unit)
+                ));
+            } else {
+                lines.push(format!("  dim while that average is above {above}"));
+            }
+            lines.push(format!("  off while that average is at or below {above}"));
+        }
     }
     if card.pressable {
         lines.push("press and release close and open it".into());

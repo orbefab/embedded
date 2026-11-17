@@ -70,9 +70,18 @@ fn a_part_prints_where_to_buy_it_and_a_part_without_buy_says_none() {
         stdout.contains("  DigiKey  https://www.digikey.com/en/products/detail/kingbright/WP7113ID/1747663  2026-11-08\n"),
         "{stdout}"
     );
+    assert!(
+        stdout.contains(
+            "\nbrightness\n  the average i over 20ms\n  lit while that average is above 2 mA\n  dim while that average is above 100 uA and at or below 2 mA\n  off while that average is at or below 100 uA\n"
+        ),
+        "{stdout}"
+    );
     let (code, stdout, stderr) = orbe(&["part", "led-5mm", "--json"]);
     assert_eq!(code, 0, "{stderr}");
     let data = card_json(&stdout);
+    assert_eq!(data["lit"]["above"], 0.002);
+    assert_eq!(data["lit"]["of"], "i");
+    assert_eq!(data["dim"]["above"], 0.0001);
     assert_eq!(
         data["buy"],
         serde_json::json!([

@@ -55,7 +55,7 @@ open
 step 100ms
 expect @led1 off
 press @btn1
-step --until @led1 on --timeout 50ms
+step --until @led1 lit --timeout 50ms
 expect @nano.D13 high
 release @btn1
 step 50ms
@@ -91,31 +91,37 @@ opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (18 engine parts, 31 nets)
   warning[net.floating] #net.nano__AREF has no DC path to ground
 $ orbe step 100ms
 t=100ms (from 0s)
+  brightness led1 off 1.3413115705356304e-13 A over 20ms
+  brightness nano.led_l off 1.34130540301447e-13 A over 20ms
+  brightness nano.led_pwr lit 0.0032425854395092503 A over 20ms
 $ orbe expect @led1 off
-passed @led1 off (led1 off, i=1.341311570535588e-13 A)
+passed @led1 off (led1 off, i=1.341311570535588e-13 A, brightness=1.3413115705356304e-13 A over 20ms)
 $ orbe press @btn1
 pressed btn1 at t=100ms; reads show it after t=100ms
-$ orbe step --until @led1 on --timeout 50ms
-t=101ms (from 100ms), @led1 on by 101ms
+$ orbe step --until @led1 lit --timeout 50ms
+t=104ms (from 100ms), @led1 lit by 104ms
   100ms nano.D2 high
   100.0040625ms nano.D13 high
-  by 101ms led1 on
+  by 103ms led1 dim, brightness=0.0018344961364796203 A over 20ms
+...
+  by 104ms led1 lit, brightness=0.002446824042634368 A over 20ms
+...
 $ orbe get @nano.D13
 nano.D13 high 4.621848245658706 V
 $ orbe get @led1
-led1 on i=0.012246558123229083 A v=1.9276054581242548 V p=0.02360653228157231 W
+led1 lit i=0.012246558123229083 A v=1.9276054581242548 V p=0.02360653228157231 W brightness=0.002446824042634368 A over 20ms
 $ orbe expect @led1.i '>' 5mA
 passed @led1.i > 5mA (led1.i = 0.012246558123229083 A)
 $ orbe snapshot
-t=101ms  scene=scene.jsonc
+t=104ms  scene=scene.jsonc
 nano  nano-board          5V=high  D13=high  D2=high  GND=0.0V
 btn1  tactile-switch-6mm  i=-0.0005009040686676514 A
 r2    resistor-axial      i=0.0004999949909593132 A
 r1    resistor-axial      i=0.012246558125156596 A
-led1  led-5mm             on i=0.012246558123229083 A
+led1  led-5mm             lit i=0.012246558123229083 A brightness=0.002446824042634368 A over 20ms
 warning[net.floating] #net.nano__AREF has no DC path to ground
 $ orbe close
-closed at t=101ms
+closed at t=104ms
 $ orbe test
 PASS tests/button.test
 1 passed, 0 failed
@@ -123,7 +129,7 @@ PASS tests/button.test
 
 The example keeps its 3 warnings, since each is what it means: no `layout`, and the ground named after `nano.GND`. The `net.floating` warning on `nano__AREF` is normal for the Nano and the Uno. Nothing drives AREF until you wire it.
 
-With D13 wired straight to `led1.anode` and no `r1`, the LED draws 105 mA. `step` lists `warning[rating.current]` and `warning[rating.power]` for `led1`, and `step 20ms` after it lists `warning[rating.current]` for `#nano__mcu.pin.PB5 (nano.D13)`, the chip pin behind D13, over its 40 mA rating. `expect no diagnostics` fails. The LED holds D13 at 2.4 V, so D13 reads `low` while the LED is on. `orbe lint` warns of it before any run, with `warning[scene.led_no_resistor]` on `led1`. Give each LED a series resistor, such as 220 ohm from a 5 V pin.
+With D13 wired straight to `led1.anode` and no `r1`, the LED draws 105 mA. `step` lists `warning[rating.current]` and `warning[rating.power]` for `led1`, and `step 20ms` after it lists `warning[rating.current]` for `#nano__mcu.pin.PB5 (nano.D13)`, the chip pin behind D13, over its 40 mA rating. `expect no diagnostics` fails. The LED holds D13 at 2.4 V, so D13 reads `low` while the LED is lit. `orbe lint` warns of it before any run, with `warning[scene.led_no_resistor]` on `led1`. Give each LED a series resistor, such as 220 ohm from a 5 V pin.
 
 The board's ATmega328P has the datasheet's absolute maximum ratings, and a run warns when a circuit breaks one. The current ratings are DC ratings, so the run checks a pin's current, and the supply's, by its RMS over the last 10.2 ms. That is five periods of the 490 Hz PWM `analogWrite` makes on D3, D9, D10 and D11, so a PWM load counts by its RMS, not its peak: `analogWrite(9, 128)` into 75 ohm peaks at 50 mA and stays under. The pulse that charges a capacitor on a pin, 0.2 A for a few nanoseconds into 100 pF, stays well under; a load held over the rating warns within those 10.2 ms:
 
@@ -230,7 +236,7 @@ breadboard.jsonc: ok, 18 engine parts, 31 nets, ground nano__GND
 
 `orbe add <block>` installs a Block, a small circuit that works. It copies the parts the scene names into `parts/` and records them in `parts.lock`, then writes the Block's `scene.jsonc`, `firmware/` and `tests/`. The Blocks are `nano-button-led`, `uno-button-led`, `nano-led-fade` and `nano-light-comparator`. A folder that already holds another `scene.jsonc` is `scene_exists`, since orbe does not merge scenes. A file already there with other bytes is `file_exists`. Either refusal writes nothing. A file already there with the Block's bytes is kept, so running the same install again finishes one that stopped part way. A new folder is only for a file whose bytes differ.
 
-`orbe part <id>` prints one catalog part: its title, maker and number, license, folder hash, pins, params, ratings, what is not simulated, datasheets, where to buy it, files, the parts it is built from and the parts that use it. A part with no summary or tags leaves those out. A rating set to null prints as unrated. A part with no `buy` prints `none`. A name that is not an id, and is a whole word of exactly one id, prints that part. `orbe part 1n4007` prints `diode-1n4007`. When several ids share that word, the command is `unknown_part` and the hint lists those ids. `orbe search <words>` lists parts whose id, title, maker, number, summary or tags hold every word. An exact id comes first. Then a part whose every word is a whole word of its id, its title or its tags. Then the rest. Ids break ties. `orbe part <id> --json` and `orbe search <words> --json` print the same card as JSON. Any other unknown id is `unknown_part`, and the hint names close ids.
+`orbe part <id>` prints one catalog part: its title, maker and number, license, folder hash, pins, params, ratings, what is not simulated, datasheets, where to buy it, files, the parts it is built from and the parts that use it. An LED's print names `brightness`, the average `i` over 20 ms, and the `lit`, `dim` and `off` ranges. A part with no summary or tags leaves those out. A rating set to null prints as unrated. A part with no `buy` prints `none`. A name that is not an id, and is a whole word of exactly one id, prints that part. `orbe part 1n4007` prints `diode-1n4007`. When several ids share that word, the command is `unknown_part` and the hint lists those ids. `orbe search <words>` lists parts whose id, title, maker, number, summary or tags hold every word. An exact id comes first. Then a part whose every word is a whole word of its id, its title or its tags. Then the rest. Ids break ties. `orbe part <id> --json` and `orbe search <words> --json` print the same card as JSON. Any other unknown id is `unknown_part`, and the hint names close ids.
 
 `buy` is optional on a part. Leave it out when there is no link. An empty list is an error. Each entry has `seller`, `url` and `checked`. `checked` is the day the link was checked, as `YYYY-MM-DD`. `seller` is a name in `packages/scene/buy-sellers.jsonc`, and the URL's host is one of that seller's hosts. A new seller is a one-line addition to that file, reviewed for affiliate and tracking links. `url` is a lowercase `https://` URL with no userinfo, no whitespace, no query and no fragment. Userinfo is an `@` before the host. An entry has no price. A repeated entry is an error.
 
@@ -240,7 +246,7 @@ breadboard.jsonc: ok, 18 engine parts, 31 nets, ground nano__GND
 
 A ref names something in the open scene. It starts with `@`, which a shell leaves alone.
 
-- `@led1`: a part. `get` prints its reading, such as `on` or `off`, and its current `i`, voltage `v` and power `p`.
+- `@led1`: a part. `get` prints its state, `lit`, `dim` or `off`, its current `i`, voltage `v` and power `p`, and `brightness`, the average current over the span the reply names.
 - `@nano.D13`, `@led1.anode`: a pin. `get` prints its logic level, `high` or `low`, when a chip pin is on its net, and its voltage.
 - `@led1.i`: a quantity of a part: `i`, `v`, `p`, and for some parts `ib`, `ic`, `id`, `iin`, `iout`. An unknown one gets an error that lists what the part reports.
 - `@nano.mcu.PB5`, `@nano.led_l`: a part inside a part, by its name in that part's file. On the Nano and the Uno the chip is `mcu`, and `led_l` is the L LED, which D13 drives.
@@ -253,7 +259,8 @@ A ref names something in the open scene. It starts with `@`, which a shell leave
 
 `expect` and `step --until` take the same conditions:
 
-- `@led1 on`, `@led1 off`: a part's `on` reading.
+- `@led1 lit`, `@led1 dim`, `@led1 off`: an LED's light state. See "LED brightness".
+- `@led1.brightness > 2mA`: that average forward current, in A.
 - `@nano.D13 high`, `@nano.D13 low`: a pin's logic level.
 - `@led1.i > 5mA`, `@nano.D2 < 1V`: a quantity or a pin's voltage, with `<`, `<=`, `>` or `>=`, and a value in A, V or W with an optional prefix (p, n, u, m, k, M). A value as `get` prints it, written without the space, such as `2.27e-5V`, parses too.
 - `serial contains "text"`: all the serial text the chip has sent since `open`, line endings included. Text printed earlier still matches. `snapshot` shows the last 10 lines of it, joined with `\n`.
@@ -261,13 +268,28 @@ A ref names something in the open scene. It starts with `@`, which a shell leave
 
 In a shell, quote `<` and `>`, or the shell takes them as redirects, as in `orbe expect @led1.i '>' 5mA`. A test file needs no quotes for them.
 
+## LED brightness
+
+`brightness` is an LED's average forward current over the last 20 ms, or over the time since t = 0 when the session is younger than that. The reply names the span, as `over 20ms` or `over 14ms`. The window is 20 ms rather than the length of the `step`. A 1 ms step aliases a fade near 490 Hz, a step of seconds would smear a fade that takes seconds, and `get` has no step. `orbe part led-5mm` prints those ranges.
+
+- `lit` while that average is above 2 mA. 2 mA is the lowest current of the forward fit, so a threshold at 1 mA would sit outside the fit.
+- `dim` while that average is above 100 uA and at or below 2 mA, and `off` at or below 100 uA. 100 uA is a hundredth of the 10 mA at which the datasheet rates luminous intensity, and ten times the 10 uA reverse-current maximum. The datasheet draws luminous intensity against current as a straight line from 0 mA, so a current below the fit still glows in proportion.
+
+Right after `step --until @led1 lit` the pin is already high and `i` is about 12 mA, while `brightness` is only about 2.4 mA, because most of the 20 ms was still dark. `expect @led1.brightness > 5mA` fails there. `step 20ms` fills the window, and `brightness` then matches `i`.
+
+`@led1.i` shows the current 1 ps after a pin edge. The light state follows the average, so it does not change on that same edge. `step` lists a new state once it has held for 2 ms. `step --until` on that LED stops on the slice where the average crosses. `get` and `expect` read the average as it stands, with no wait.
+
+`analogWrite` on D9 and D10 runs at about 490 Hz, a period near 2 ms. One sample of the pin aliases it. 20 ms covers about ten cycles, so `brightness` reads the duty. The fade sketch adds 5 to the duty every 30 ms and turns around at 0 and 255, so samples a few hundred milliseconds apart show the rise and the fall. Near 600 ms the LED is `lit` at about 4.7 mA. Near 1.54 s it is about 12.4 mA. Near 3.01 s it is `dim` at about 0.65 mA. `expect @led1.brightness > 3mA` and `expect @led1.brightness < 7mA` check a point on that rise. A brightness within about 0.6 mA of a threshold can read either neighbouring state, because one cycle is a small part of the window and the window can catch its edge on either side.
+
+An LED behind 10 kohm from 5 V carries about 0.35 mA and reads `dim`. When `step --until` times out and the average covers a full 20 ms, the hint names that measurement, the state, and the range the wanted state needs: `led1 carries 0.35 mA averaged over the last 20ms and glows dimly. lit needs the average above 2 mA. Check the circuit with snapshot.` A window shorter than 20 ms says to step longer with `--timeout`, or to check the circuit with `snapshot`. The same sentence names `lit`, `dim` and `off`. At t = 0 the average is the instantaneous current. Before 20 ms it averages the time since t = 0, and from 20 ms on it averages at least the last 20 ms. The reading prints the exact span, and a source that changes inside that span moves it.
+
 ## Time
 
 - The session is paused between commands. Time moves only inside `step`, or while `play` runs (see "Watching in 3D").
-- `step <duration>` advances by that much and lists what changed, such as pin edges with their exact times, LED changes and diagnostics. It lists at most 20, then `and N more`, so serial edges on D1 can hide the rest. `get` and `snapshot` show the state after it. Durations take ps, ns, us, ms or s, such as `100ms`, `1.5ms`, `20us`.
+- `step <duration>` advances by that much and lists what changed, such as pin edges with their exact times, LED changes and diagnostics. It lists at most 20, then `and N more`, so serial edges on D1 can hide the rest. It then lists every LED's `brightness`, and those lines are not part of the 20. `get` and `snapshot` show the state after it. Durations take ps, ns, us, ms or s, such as `100ms`, `1.5ms`, `20us`.
 - A read at time t, by `get`, `expect` or `snapshot`, shows the circuit just before anything that happens at t. So `press` at t shows from t + 1 ps on, and its reply says "reads show it after t". Step after an input before you read its effect.
 - An input lands at the session's time or later, and its reply gives the time. A `set` also lands after the last change the scene's `steps` schedule, so it never undoes one.
-- `step --until <condition> [--timeout <duration>]` first reads the condition now. If it holds, it takes no time. Otherwise it steps until it holds, up to the timeout, 10s by default. A pin condition stops 1 ps after the exact edge, and part readings such as `@led1 on` already show the edge there, with no extra `step`. Other conditions are read every 1 ms, so the reply says `by 101ms`. A timeout is the error `until_timeout`.
+- `step --until <condition> [--timeout <duration>]` first reads the condition now. If it holds, it takes no time. Otherwise it steps until it holds, up to the timeout, 10s by default. A pin condition stops 1 ps after the exact edge. `@led1.i` shows that current there, and the light state follows the average over 20 ms. Other conditions are read every 1 ms, so the reply says `by 104ms`. A timeout is the error `until_timeout`.
 - Serial can reach orbe up to one engine step (10 ms) after the chip sends it. Step a little past a print before you expect it.
 - A session stops at 2 hours of simulated time. Reads still work there, and `press`, `release`, `set` and `step` fail with `ended`. A `step` that would pass the stop fails with `past_stop`. Run `orbe open` to start again.
 
@@ -278,45 +300,49 @@ A switch with `bounce` set bounces up to `max_bounces` times within that window 
 +    "btn1": { "type": "tactile-switch-6mm", "bounce": "2ms" },
 ```
 
-a `release` and a `press` with no `step` between land 2 ms apart, and `step --until @led1 on` stops at the first contact, which opens again inside the window:
+a `release` and a `press` with no `step` between land 2 ms apart. `step --until @led1 lit` stops once the average crosses 2 mA, after the first contact has opened again inside the bounce window:
 
 ```console
 $ orbe open
 ...
 $ orbe step 100ms
 t=100ms (from 0s)
+...
 $ orbe press @btn1
 pressed btn1 at t=100ms; reads show it after t=100ms
-$ orbe step --until @led1 on
-t=101ms (from 100ms), @led1 on by 101ms
-...
-$ orbe release @btn1
-released btn1 at t=102.000002ms; reads show it after t=102.000002ms
-$ orbe press @btn1
-pressed btn1 at t=104.000004ms; reads show it after t=104.000004ms
-$ orbe step 6ms
-t=107ms (from 101ms)
+$ orbe step --until @led1 lit
+t=104ms (from 100ms), @led1 lit by 104ms
+  100ms nano.D2 high
+  100.0040625ms nano.D13 high
   101.028757825ms nano.D2 low
 ...
-$ orbe expect @led1 on
-passed @led1 on (led1 on, i=0.012246558123229083 A)
+$ orbe release @btn1
+released btn1 at t=104ms; reads show it after t=104ms
+$ orbe press @btn1
+pressed btn1 at t=106.000002ms; reads show it after t=106.000002ms
+$ orbe step 6ms
+t=110ms (from 104ms)
+  104ms nano.D2 low
+...
+$ orbe expect @led1 lit
+passed @led1 lit (led1 lit, i=0.012246558123229083 A, brightness=0.004410406555696104 A over 20ms)
 $ orbe close
-closed at t=107ms
+closed at t=110ms
 ```
 
-To read a bouncing switch settled, step past the time in the last input's reply plus the window. Here that is 104.000004ms + 2ms, so `step 6ms` from 101ms.
+To read a bouncing switch settled, step past the time in the last input's reply plus the window. Here that is 106.000002ms + 2ms, so `step 6ms` from 104ms.
 
 ## Test files
 
 A test file is `tests/<name>.test` in the project folder. Each line is a live command without `orbe`. `--json`, `--session`, `--help` or `-h` on a line is a usage error, except as the text after `serial contains`. Live, `--help` anywhere prints help, so `orbe expect serial contains --help` prints help, while the same test line looks for that text. `#` starts a comment. `"..."` holds spaces, and inside it only `\"` and `\\` escape, so a test cannot name a line ending. To tell lines apart, print text that only one line has, such as `led=on`. Paths start from the project folder, and `open` alone opens `scene.jsonc`.
 
-`orbe test` runs every `tests/*.test` of the project in the current folder, each in a fresh session, and stops a file at its first failed line. `orbe test <file or folder>…` runs those. `-v` prints every command with its reply. A failure prints the line, the expected and the actual value. With the first `expect` in `tests/button.test` changed to `expect @led1 on`:
+`orbe test` runs every `tests/*.test` of the project in the current folder, each in a fresh session, and stops a file at its first failed line. `orbe test <file or folder>…` runs those. `-v` prints every command with its reply. A failure prints the line, the expected and the actual value. With the first `expect` in `tests/button.test` changed to `expect @led1 lit`:
 
 ```
-FAIL tests/button.test:4: expect @led1 on
-  error[expect_failed]: expected @led1 on
-    expected: @led1 on
-    actual:   led1 off, i=1.341311570535588e-13 A
+FAIL tests/button.test:4: expect @led1 lit
+  error[expect_failed]: expected @led1 lit
+    expected: @led1 lit
+    actual:   led1 off, i=1.341311570535588e-13 A, brightness=1.3413115705356304e-13 A over 20ms
 0 passed, 1 failed
 ```
 
@@ -386,7 +412,7 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 | `unknown_ref`, `no_reading` | The ref names nothing, or nothing to read. The hint lists what exists. |
 | `not_settable` | `press` and `release` work only on a switch, by its part name. `set` works only on a quantity the scene's `world` names or a part reads. |
 | `no_change` | The input asks for the state already there, such as `set light 50` when the light is already 50. |
-| `expect_failed`, `until_timeout` | The condition did not hold. Compare `actual`, then fix the circuit or the firmware, or step longer. |
+| `expect_failed`, `until_timeout` | The condition did not hold. Compare `actual`. When an LED timeout covers a full 20 ms, the hint names the measured average, the state, and the range the wanted state needs, and says to check the circuit with `snapshot`. A shorter window says to step longer. Otherwise fix the circuit or the firmware, or step longer. |
 | `ended`, `past_stop` | The session reached its 2-hour stop. Run `orbe open`. |
 | `cancelled` | Ctrl-C stopped a `step`. The session stays at the time it reached. Step again. |
 | `faulted` | The engine stopped the session. The message names why. Fix it and run `orbe open`. |
@@ -398,7 +424,7 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 - The Uno's TX and RX LEDs and the gate of its USB switch. D13 feeds its L LED through 1k, so D13 as an input with its pull-up reads low.
 - USB, and serial into the chip. The chip's serial out (TX, D1) is read as text.
 - The chip's clamp diodes and its own supply current. A pin pulled past VCC or GND draws no clamp current, and `rating.voltage` names it. The current through the chip's VCC and GND is its pins' alone.
-- A switch's force and travel, and part tolerances. An LED's `on` is its current over a threshold. Light, temperature and humidity reach only a part whose file reads them from the scene's `world`.
+- A switch's force and travel, and part tolerances. An LED's `brightness` is its average forward current over the last 20 ms. It reads `lit` above 2 mA, `dim` above 100 uA and at or below 2 mA, and `off` at or below 100 uA. Light, temperature and humidity reach only a part whose file reads them from the scene's `world`.
 - Turning a potentiometer during a session. Its `position` param sets the wiper for the whole run, so run `orbe open` again after you change it.
 - Any part the catalog above does not list.
 - orbe never builds firmware. Build it with your toolchain and name the output file in the scene.
