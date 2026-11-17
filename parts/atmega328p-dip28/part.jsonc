@@ -32,6 +32,7 @@
     },
     "pins": { "GND_8": "GND", "GND_22": "GND" },
     "active_current": { "value": 0.0114, "unit": "A", "source": { "closed_form": { "note": "DS40002061B page 502, Figure 31-333, Active Supply Current vs. Frequency: 9.6 mA on the 5.0 V curve at 16 MHz, measured with every PRR bit set. The Arduino core leaves PRR at its reset value 0x00, so the seven modules it gates draw 18.3 % more, page 506, Table 31-16: 9.6 mA x 1.183" } } },
+    "reset_current": { "value": 0.002, "unit": "A", "source": { "datasheet": { "doc": "DS40002061B", "at": "page 525, Figure 31-377, Reset Supply Current vs. Frequency: about 2.0 mA on the 5.0 V curve at 16 MHz", "basis": "typical" } } },
     "ratings": {
       "pin_current": { "value": 0.04, "unit": "A", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: DC Current per I/O Pin, 40.0 mA", "basis": "absolute_max" } } },
       "supply_current": { "value": 0.2, "unit": "A", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: DC Current VCC and GND Pins, 200.0 mA", "basis": "absolute_max" } } },
@@ -43,6 +44,6 @@
   "not_simulated": [
     { "what": "output saturation", "why": "Each output stage is linear, 25 ohm from its rail, read at 20 mA. A real driver saturates far past that, so a pin shorted to the other rail reads 200 mA at 5 V, about twice a real pin's current. `rating.current` reads the model's current." },
     { "what": "clamp diodes", "why": "No protection diode conducts, so a pin driven past VCC or below GND draws no clamp current. `rating.voltage` reports the pin." },
-    { "what": "supply current", "why": "The core's own draw is a conductance from VCC to GND that draws the sheet's typical 11.4 mA at 5 V and 16 MHz, so it scales with VCC. A real chip's draw moves with the sketch, sleep modes, the clock and the part, and the sheet's typical curves are not tested limits. The ratings sum this draw with the pins' currents through VCC and GND." },
+    { "what": "supply current", "why": "The core's own draw is a conductance from VCC to GND that draws the sheet's typical 11.4 mA at 5 V and 16 MHz while it runs, and its typical 2.0 mA while RESET or a brown-out holds it in reset, so each scales with VCC. A real chip's draw moves with the sketch, sleep modes, the clock and the part, and the sheet's typical curves are not tested limits. The ratings sum this draw with the pins' currents through VCC and GND." },
   ],
 }

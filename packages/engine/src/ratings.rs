@@ -123,8 +123,8 @@ struct Gauge {
     /// Its index among the circuit's active chips, which is its core's index.
     active: usize,
     outputs: Vec<Pin>,
-    /// The columns of its supply and ground nets and the conductance of its own draw.
-    supply: Option<(usize, usize, f64)>,
+    /// The columns of its supply and ground nets and its own draw.
+    supply: Option<(usize, usize, active::Supply)>,
     /// Each output's current out of its pin, then the current into the supply pin, then the
     /// current out of the ground pin. Set by the last sample.
     currents: Vec<f64>,
@@ -240,13 +240,9 @@ impl Ratings {
                     .iter()
                     .map(|output| Pin::new(output, columns))
                     .collect(),
-                supply: chip.supply.map(|supply| {
-                    (
-                        columns.net(supply.vcc),
-                        columns.net(supply.gnd),
-                        supply.conductance,
-                    )
-                }),
+                supply: chip
+                    .supply
+                    .map(|supply| (columns.net(supply.vcc), columns.net(supply.gnd), supply)),
                 currents: vec![0.0; outputs + 2],
             });
         }
@@ -292,7 +288,7 @@ impl Ratings {
     /// whose drive was in force for `row`.
     pub(crate) fn sample(&mut self, at: Time, row: &[Finite], cores: &[active::Core]) {
         for gauge in &mut self.chips {
-            gauge.read(row, cores[gauge.active].drive());
+            gauge.read(row, &cores[gauge.active]);
         }
         let elapsed = |over: bool, over_ps: Option<&mut u64>, last: Option<Time>| {
             if over && let (Some(last), Some(over_ps)) = (last, over_ps) {
@@ -516,7 +512,8 @@ impl Pin {
 impl Gauge {
     /// Each output's current under `drive`, as `active::stamp` stamps its stage at nominal
     /// sources, and the sums through the supply and ground pins.
-    fn read(&mut self, row: &[Finite], drive: &[Drive]) {
+    fn read(&mut self, row: &[Finite], core: &active::Core) {
+        let drive = core.drive();
         debug_assert_eq!(drive.len(), self.outputs.len());
         let (mut supply, mut ground) = (0.0, 0.0);
         for ((pin, &drive), current) in self.outputs.iter().zip(drive).zip(&mut self.currents) {
@@ -541,8 +538,8 @@ impl Gauge {
             supply += from_vcc;
             ground += into_gnd;
         }
-        if let Some((vcc, gnd, conductance)) = self.supply {
-            let own = (row[vcc].get() - row[gnd].get()) * conductance;
+        if let Some((vcc, gnd, own)) = self.supply {
+            let own = (row[vcc].get() - row[gnd].get()) * own.conductance(core);
             supply += own;
             ground += own;
         }

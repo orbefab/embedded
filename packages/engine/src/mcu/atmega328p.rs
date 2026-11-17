@@ -25,7 +25,8 @@ use crate::ratings::{Ceiling, PinRatings, PinWindow};
 use crate::watch::{Signal, Watch};
 use orbe_microchip::{Bridge, FuseBytes, PACKAGE, PORT_PINS, Pad, Port, port_index};
 
-/// The supply at which the chip's own conductance draws `active_current`, volt.
+/// The supply at which the chip's own conductance draws `active_current` or `reset_current`,
+/// volt.
 const ACTIVE_AT: f64 = 5.0;
 
 /// `RESET` while `RSTDISBL` is unprogrammed.
@@ -158,10 +159,14 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
         .collect();
 
     let mut chip = super::chip(part, outputs, watches, signals, samples, bridge);
-    chip.supply = mcu.active_current.as_ref().map(|current| Supply {
+    let conductance = |current: Option<&Value>| current.map(|c| c.si.get() / ACTIVE_AT);
+    let running = conductance(mcu.active_current.as_ref());
+    let held = conductance(mcu.reset_current.as_ref()).or(running);
+    chip.supply = held.map(|held| Supply {
         vcc: mcu.pins[VCC],
         gnd: mcu.pins[GND_8],
-        conductance: current.si.get() / ACTIVE_AT,
+        conductance: running.unwrap_or(0.0),
+        held,
     });
     chip
 }
@@ -231,10 +236,15 @@ pub struct Atmega328p {
     pub input_threshold: Threshold,
     /// `PC6`'s while it is `RESET`.
     pub reset_threshold: Threshold,
-    /// Ampere, greater than 0. The core's own draw at `VCC` = 5 V, a conductance from `VCC` to
-    /// `GND_8` in every state. `None` when the part leaves it out, and the chip then draws only
-    /// what its pins pass.
+    /// Ampere, greater than 0. The core's own draw at `VCC` = 5 V while it runs, a conductance
+    /// from `VCC` to `GND_8`. `None` when the part leaves it out, and the chip then draws only
+    /// what its pins pass while it runs.
     pub active_current: Option<Value>,
+    /// Ampere, greater than 0. The core's own draw at `VCC` = 5 V while a reset, from `RESET`
+    /// or brown-out, holds it, a conductance from `VCC` to `GND_8` in place of
+    /// `active_current`'s. `None` when the part leaves it out, and the chip then draws
+    /// `active_current` while held too.
+    pub reset_current: Option<Value>,
     /// The absolute maximum ratings the run checks. `None` when the part has no `ratings`
     /// object, which leaves the chip unrated.
     pub ratings: Option<Atmega328pRatings>,
@@ -327,6 +337,9 @@ pub(crate) struct WireAtmega328p {
     /// Optional, so a netlist written before the chip drew its own current keeps its meaning.
     #[serde(default)]
     active_current: Option<WireValue>,
+    /// Optional, so a netlist written before the chip drew less in reset keeps its meaning.
+    #[serde(default)]
+    reset_current: Option<WireValue>,
     /// Optional, so a netlist written before the chip had ratings keeps its meaning.
     #[serde(default)]
     ratings: Option<WireRatings>,
@@ -406,6 +419,10 @@ pub(crate) fn resolve_atmega328p(ctx: ParseCtx<'_>, wire: WireAtmega328p) -> Opt
         None => Some(None),
         Some(value) => resolve_value(part_ref, "active_current", "A", true, value, out).map(Some),
     };
+    let reset_current = match wire.reset_current {
+        None => Some(None),
+        Some(value) => resolve_value(part_ref, "reset_current", "A", true, value, out).map(Some),
+    };
     let ratings = match wire.ratings {
         None => Some(None),
         Some(wire) => resolve_ratings(part_ref, wire, out).map(Some),
@@ -422,6 +439,7 @@ pub(crate) fn resolve_atmega328p(ctx: ParseCtx<'_>, wire: WireAtmega328p) -> Opt
         input_threshold: input_threshold?,
         reset_threshold: reset_threshold?,
         active_current: active_current?,
+        reset_current: reset_current?,
         ratings: ratings?,
     })
 }

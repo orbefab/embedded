@@ -227,6 +227,11 @@ impl Mcu {
         each!(self, host => host.mcu.drive())
     }
 
+    #[inline]
+    pub(crate) fn held(&self) -> bool {
+        each!(self, host => host.mcu.held())
+    }
+
     pub(crate) fn sample(&mut self, at: Time, volts: &[f64]) {
         each!(self, host => host.mcu.sample(at, volts))
     }
