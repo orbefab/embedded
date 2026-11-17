@@ -174,9 +174,8 @@ impl Log {
     /// The timeout hint when `want` is unmet at `end`. `None` when the average does not
     /// yet cover a full window, so the caller asks for a longer step.
     ///
-    /// A full window states the measured average and the range `want` needs. It does not
-    /// say that average held. Samples a millisecond apart miss a pulse inside one gap,
-    /// and that pulse can move the average, or the state, between the samples.
+    /// A full window states the measured average, the state that average reads, and the
+    /// range `want` needs, then says to check the circuit with `snapshot`.
     pub(super) fn steady_hint(&self, index: usize, want: Light, end: Glow) -> Option<String> {
         if end.over_ps < BRIGHTNESS_WINDOW.as_ps() {
             return None;
@@ -229,8 +228,7 @@ fn average(samples: &VecDeque<Span>, now: u64, integral_now: f64, instant: f64) 
     ((integral_now - start.integral) / dt as f64, dt)
 }
 
-/// What a full window measured, and what `want` would take. The last sentence is
-/// conditional, because a moving average can still reach `want` on a longer step.
+/// What a full window measured, and the range `want` needs.
 fn steady_sentence(part: &str, want: Light, end: Glow, lit: f64, dim: f64) -> String {
     let need = match want {
         Light::Lit => format!("lit needs the average above {}", si_amount(lit, "A")),
@@ -247,15 +245,18 @@ fn steady_sentence(part: &str, want: Light, end: Glow, lit: f64, dim: f64) -> St
         Light::Off => "is off",
     };
     format!(
-        "{part} carries {} averaged over the last {} and {how}. {need}. If the current is steady, a longer step will not reach {}; check the circuit with snapshot.",
-        amperes_text(end.amperes),
+        "{part} carries {} averaged over the last {} and {how}. {need}. Check the circuit with snapshot.",
+        amperes_text(end.amperes, lit, dim),
         Duration::from_ps(end.over_ps),
-        want.as_str(),
     )
 }
 
 /// Three significant figures. From 0.1 mA up this is milliamps, so 0.34 mA rather than 340 uA.
-fn amperes_text(amperes: f64) -> String {
+/// Trailing zeros are dropped. When that rounding would fall in another light state than the
+/// exact current, more digits are kept so the printed number stays in the real state. The
+/// state is a strict `>` of each threshold, the same rule as [`Light::from_average`].
+fn amperes_text(amperes: f64, lit: f64, dim: f64) -> String {
+    let state = Light::from_average(amperes, lit, dim);
     let abs = amperes.abs();
     let (scale, unit) = if abs == 0.0 || abs >= 1e-4 {
         (1e-3, "mA")
@@ -267,18 +268,35 @@ fn amperes_text(amperes: f64) -> String {
         (1.0, "A")
     };
     let value = amperes / scale;
-    let digits = if value.abs() >= 100.0 {
+    let start = if value.abs() >= 100.0 {
         0
     } else if value.abs() >= 10.0 {
         1
     } else {
         2
     };
-    let mut text = format!("{value:.digits$}");
-    if text.contains('.') {
-        text = text.trim_end_matches('0').trim_end_matches('.').to_string();
+    for extra in 0..=16 {
+        let digits = start + extra;
+        let rendered = format!("{value:.digits$}");
+        let text = if rendered.contains('.') {
+            rendered
+                .trim_end_matches('0')
+                .trim_end_matches('.')
+                .to_string()
+        } else {
+            rendered
+        };
+        if printed_state(&text, scale, lit, dim) == Some(state) {
+            return format!("{text} {unit}");
+        }
     }
-    format!("{text} {unit}")
+    format!("{value} {unit}")
+}
+
+/// The light state of the number `text` denotes, in the unit `scale` amperes per unit.
+fn printed_state(text: &str, scale: f64, lit: f64, dim: f64) -> Option<Light> {
+    let value: f64 = text.parse().ok()?;
+    Some(Light::from_average(value * scale, lit, dim))
 }
 
 #[cfg(test)]
@@ -405,9 +423,9 @@ mod tests {
         log.steady_hint(0, want, reading(log, end_ms))
     }
 
-    fn measured(part: &str, current: &str, how: &str, need: &str, want: &str) -> String {
+    fn measured(part: &str, current: &str, how: &str, need: &str) -> String {
         format!(
-            "{part} carries {current} averaged over the last 20ms and {how}. {need}. If the current is steady, a longer step will not reach {want}; check the circuit with snapshot."
+            "{part} carries {current} averaged over the last 20ms and {how}. {need}. Check the circuit with snapshot."
         )
     }
 
@@ -421,7 +439,6 @@ mod tests {
                 "0.34 mA",
                 "glows dimly",
                 "lit needs the average above 2 mA",
-                "lit"
             )
         );
         let first = lamp_log("led10k", flat(3.5e-4, 20));
@@ -432,7 +449,6 @@ mod tests {
                 "0.35 mA",
                 "glows dimly",
                 "lit needs the average above 2 mA",
-                "lit"
             )
         );
         let lit = lamp_log("led220", flat(0.0139, 40));
@@ -443,7 +459,6 @@ mod tests {
                 "13.9 mA",
                 "is lit",
                 "off needs the average at or below 100 uA",
-                "off"
             )
         );
         assert_eq!(
@@ -453,7 +468,6 @@ mod tests {
                 "13.9 mA",
                 "is lit",
                 "dim needs the average above 100 uA and at or below 2 mA",
-                "dim"
             )
         );
         let from_zero = lamp_log("led220", flat(0.0139, 30));
@@ -469,7 +483,6 @@ mod tests {
                 "37.6 uA",
                 "is off",
                 "lit needs the average above 2 mA",
-                "lit"
             )
         );
     }
@@ -486,7 +499,6 @@ mod tests {
                 "1.5 mA",
                 "glows dimly",
                 "lit needs the average above 2 mA",
-                "lit"
             )
         );
     }
@@ -499,7 +511,6 @@ mod tests {
             "1.62 mA",
             "glows dimly",
             "lit needs the average above 2 mA",
-            "lit",
         );
         let log = lamp_log("led1", square(20, 20, peak, 50));
         assert_eq!(reading(&log, 40).state, Light::Lit);
@@ -518,7 +529,6 @@ mod tests {
                 "1.99 mA",
                 "glows dimly",
                 "lit needs the average above 2 mA",
-                "lit"
             )
         );
     }
@@ -531,11 +541,43 @@ mod tests {
             "1.62 mA",
             "glows dimly",
             "lit needs the average above 2 mA",
-            "lit",
         );
         for until in [30, 40, 50, 60] {
             let log = lamp_log("led1", square(10, 10, peak, until));
             assert_eq!(hint(&log, Light::Lit).unwrap(), named, "until {until} ms");
         }
+    }
+
+    /// 1650 ohm is lit at 2.0001 mA. Three figures print `2 mA`, which reads as dim.
+    /// 36440 ohm is dim at 100.025 uA. Three figures print `0.1 mA`, which reads as off.
+    #[test]
+    fn a_current_next_to_a_threshold_keeps_enough_digits_to_stay_in_its_state() {
+        let lit = 0.0020001029114928505;
+        let dim = 0.00010002478304662982;
+        let glow = |amperes: f64| Glow {
+            state: Light::from_average(amperes, 0.002, 0.0001),
+            amperes,
+            over_ps: BRIGHTNESS_WINDOW.as_ps(),
+        };
+        assert_eq!(glow(lit).state, Light::Lit);
+        assert_eq!(glow(dim).state, Light::Dim);
+        assert_eq!(
+            steady_sentence("led1", Light::Dim, glow(lit), 0.002, 0.0001),
+            measured(
+                "led1",
+                "2.0001 mA",
+                "is lit",
+                "dim needs the average above 100 uA and at or below 2 mA",
+            )
+        );
+        assert_eq!(
+            steady_sentence("led1", Light::Off, glow(dim), 0.002, 0.0001),
+            measured(
+                "led1",
+                "0.10002 mA",
+                "glows dimly",
+                "off needs the average at or below 100 uA",
+            )
+        );
     }
 }
