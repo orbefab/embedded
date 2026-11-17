@@ -17,8 +17,11 @@ use crate::netlist::Value;
 use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::WireThreshold;
 use crate::netlist::json::threshold::resolve_threshold;
-use crate::netlist::json::{PinMap, WireInt, WireValue, resolve_int, resolve_pins, resolve_value};
+use crate::netlist::json::{
+    PinMap, WireInt, WireValue, resolve_int, resolve_pins, resolve_rating, resolve_value,
+};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
+use crate::ratings::{Ceiling, PinRatings, PinWindow};
 use crate::watch::{Signal, Watch};
 use orbe_microchip::{Bridge, FuseBytes, PACKAGE, PORT_PINS, Pad, Port, port_index};
 
@@ -27,8 +30,10 @@ const RESET: Pad = Pad::Port(Port::C, 6);
 
 const VCC: usize = 6;
 const GND_8: usize = 7;
+const GND_22: usize = 21;
 const _: () = assert!(matches!(PACKAGE[VCC], Pad::Vcc));
 const _: () = assert!(matches!(PACKAGE[GND_8], Pad::Gnd));
+const _: () = assert!(matches!(PACKAGE[GND_22], Pad::Agnd));
 
 /// The pin pairs the chip joins at DC, for `net.floating`, by package index: each port pin to
 /// VCC and to `GND_8` through its leakage, which every drive state stamps. The crystal pins and
@@ -152,6 +157,44 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
     super::chip(part, outputs, watches, signals, samples, bridge)
 }
 
+/// The part's ratings on its package pins, `None` when it has no `ratings` object. Each port
+/// pin is an output, in `PORT_PINS` order. Every pin but the two ground pins has a window over
+/// `GND_8`: `rail_margin` below it, and `rail_margin` above `VCC`, but for `VCC`, whose
+/// ceiling is `supply_voltage`, and `PC6` while it is `RESET`, whose ceiling is
+/// `reset_voltage` (DS40002061B §29.1).
+pub(crate) fn pin_ratings(mcu: &Atmega328p) -> Option<PinRatings> {
+    let ratings = mcu.ratings.as_ref()?;
+    let si = |value: &Option<Value>| value.as_ref().map(|value| value.si.get());
+    let margin = si(&ratings.rail_margin);
+    let reset = mcu.fuses.has_reset().then(|| package_pin(RESET));
+    let windows = (0..Atmega328p::PINS.len())
+        .filter(|&k| k != GND_8 && k != GND_22)
+        .filter_map(|k| {
+            let above = if k == VCC {
+                si(&ratings.supply_voltage).map(Ceiling::Fixed)
+            } else if Some(k) == reset {
+                si(&ratings.reset_voltage).map(Ceiling::Fixed)
+            } else {
+                margin.map(Ceiling::OverSupply)
+            };
+            (margin.is_some() || above.is_some()).then(|| PinWindow {
+                pin: Atmega328p::PINS[k],
+                net: mcu.pins[k],
+                below: margin,
+                above,
+            })
+        })
+        .collect();
+    Some(PinRatings {
+        outputs: PORT_PINS.iter().map(|&k| Atmega328p::PINS[k]).collect(),
+        pin_current: si(&ratings.pin_current),
+        supply_current: si(&ratings.supply_current),
+        vcc: (Atmega328p::PINS[VCC], mcu.pins[VCC]),
+        gnd: (Atmega328p::PINS[GND_8], mcu.pins[GND_8]),
+        windows,
+    })
+}
+
 /// An ATmega328P in its 28-pin DIP, running `firmware` from power-on. Microchip DS40002061B.
 ///
 /// Each I/O pin drives through `output` from VCC and into `GND_8`, pulls up through
@@ -179,6 +222,25 @@ pub struct Atmega328p {
     pub input_threshold: Threshold,
     /// `PC6`'s while it is `RESET`.
     pub reset_threshold: Threshold,
+    /// The absolute maximum ratings the run checks. `None` when the part has no `ratings`
+    /// object, which leaves the chip unrated.
+    pub ratings: Option<Atmega328pRatings>,
+}
+
+/// An ATmega328P's absolute maximum ratings. Each is `None` when the part leaves it unrated.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Atmega328pRatings {
+    /// Ampere. The current through any one port pin.
+    pub pin_current: Option<Value>,
+    /// Ampere. The current through `VCC`, and the current through the ground pins.
+    pub supply_current: Option<Value>,
+    /// Volt. How far a pin may go below `GND_8`, and every pin but `VCC` and `RESET` above
+    /// `VCC`.
+    pub rail_margin: Option<Value>,
+    /// Volt. The most `PC6` may sit above `GND_8` while it is `RESET`.
+    pub reset_voltage: Option<Value>,
+    /// Volt. The most `VCC` may sit above `GND_8`.
+    pub supply_voltage: Option<Value>,
 }
 
 impl Atmega328p {
@@ -249,6 +311,25 @@ pub(crate) struct WireAtmega328p {
     leakage_resistance: WireValue,
     input_threshold: WireThreshold,
     reset_threshold: WireThreshold,
+    /// Optional, so a netlist written before the chip had ratings keeps its meaning.
+    #[serde(default)]
+    ratings: Option<WireRatings>,
+}
+
+/// Every key is required, and `null` leaves that rating out.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireRatings {
+    #[serde(deserialize_with = "Option::deserialize")]
+    pin_current: Option<WireValue>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    supply_current: Option<WireValue>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    rail_margin: Option<WireValue>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    reset_voltage: Option<WireValue>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    supply_voltage: Option<WireValue>,
 }
 
 #[derive(Deserialize)]
@@ -305,6 +386,10 @@ pub(crate) fn resolve_atmega328p(ctx: ParseCtx<'_>, wire: WireAtmega328p) -> Opt
         wire.reset_threshold,
         out,
     );
+    let ratings = match wire.ratings {
+        None => Some(None),
+        Some(wire) => resolve_ratings(part_ref, wire, out).map(Some),
+    };
     Some(Atmega328p {
         pins: pins?,
         firmware: firmware?,
@@ -316,6 +401,38 @@ pub(crate) fn resolve_atmega328p(ctx: ParseCtx<'_>, wire: WireAtmega328p) -> Opt
         leakage_resistance: leakage?,
         input_threshold: input_threshold?,
         reset_threshold: reset_threshold?,
+        ratings: ratings?,
+    })
+}
+
+fn resolve_ratings(
+    part: &Ref,
+    wire: WireRatings,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Atmega328pRatings> {
+    let pin_current = resolve_rating(part, "ratings.pin_current", "A", wire.pin_current, out);
+    let supply_current = resolve_rating(
+        part,
+        "ratings.supply_current",
+        "A",
+        wire.supply_current,
+        out,
+    );
+    let rail_margin = resolve_rating(part, "ratings.rail_margin", "V", wire.rail_margin, out);
+    let reset_voltage = resolve_rating(part, "ratings.reset_voltage", "V", wire.reset_voltage, out);
+    let supply_voltage = resolve_rating(
+        part,
+        "ratings.supply_voltage",
+        "V",
+        wire.supply_voltage,
+        out,
+    );
+    Some(Atmega328pRatings {
+        pin_current: pin_current?,
+        supply_current: supply_current?,
+        rail_margin: rail_margin?,
+        reset_voltage: reset_voltage?,
+        supply_voltage: supply_voltage?,
     })
 }
 

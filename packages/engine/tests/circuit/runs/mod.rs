@@ -6,6 +6,7 @@ mod blink;
 mod blinker;
 mod board;
 mod button;
+mod chip_ratings;
 mod cst816;
 mod dht22;
 mod esp32s3;

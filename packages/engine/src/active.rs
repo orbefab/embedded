@@ -178,7 +178,7 @@ impl Core {
         }
     }
 
-    fn drive(&self) -> &[Drive] {
+    pub(crate) fn drive(&self) -> &[Drive] {
         match *self {
             Core::Device(ref core) => core.drive(),
             Core::Mcu(ref mcu) => mcu.drive(),

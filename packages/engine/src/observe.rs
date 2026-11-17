@@ -49,6 +49,14 @@ impl Columns {
     pub(crate) fn index(&self, reference: &Ref) -> Option<usize> {
         self.refs.binary_search(reference).ok()
     }
+
+    /// The column of `net`'s voltage. The nets are the first columns.
+    pub(crate) fn net(&self, net: NetId) -> usize {
+        self.nets
+            .iter()
+            .position(|&id| id == net)
+            .expect("every net is a column")
+    }
 }
 
 /// One solution as a row aligned with `columns`. A part quantity that is not

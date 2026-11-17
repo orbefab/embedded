@@ -21,7 +21,7 @@ use crate::link::{Record, RecordKind, SpiNets};
 use crate::netlist::{NetId, PartId};
 use crate::watch::{Signal, Watch};
 
-pub use atmega328p::{Atmega328p, Firmware, Fuses};
+pub use atmega328p::{Atmega328p, Atmega328pRatings, Firmware, Fuses};
 pub use esp32s3::{Esp32s3, Esp32s3Firmware};
 pub(crate) use report::{fault, note, symbolize};
 
