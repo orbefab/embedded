@@ -8,7 +8,7 @@ use orbe_model::Time;
 use orbe_engine::{EdgeCursor, Status};
 
 use super::bound::Bound;
-use super::light::{LIGHT_HOLD, SAMPLE_EVERY};
+use super::light::LIGHT_HOLD;
 use super::serial::Arrived;
 use super::{Key, Open, Outcome, fail, failed, key, level, t};
 use crate::command::Step;
@@ -17,8 +17,8 @@ use crate::reply::{Change, Check, Code, Data, Error, Got, LedRead, Level, Light,
 use crate::target::Ref;
 
 /// `step` advances in slices this long, so `--until` and a caller see each one.
-/// Each slice records an LED sample, and a held-current hint uses the same interval.
-const SLICE: Duration = SAMPLE_EVERY;
+/// Each slice records an LED sample.
+const SLICE: Duration = Duration::from_ms(1);
 /// The most changes one `step` lists.
 pub const CHANGES: usize = 20;
 

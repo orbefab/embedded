@@ -20,10 +20,6 @@ use crate::target::one_engine;
 /// How long an LED's brightness averages its current.
 pub const BRIGHTNESS_WINDOW: Duration = Duration::from_ms(20);
 
-/// How far apart `step` records an LED sample. A held-current hint names a span
-/// only when the samples across it are at most this far apart.
-pub(super) const SAMPLE_EVERY: Duration = Duration::from_ms(1);
-
 /// A light-state change is listed once it has held this long, about one cycle of the slowest
 /// Arduino PWM, so one sample of that ripple is not listed as lit and then off. `--until` on
 /// that state lists it at the slice where the condition holds.
@@ -44,7 +40,7 @@ struct Span {
     instant: f64,
 }
 
-/// The forward-current integral of each lamp, sampled as time advances, kept for two windows.
+/// The forward-current integral of each lamp, sampled as time advances, kept for one window.
 pub(super) struct Log {
     lamps: Vec<Lamp>,
     samples: Vec<VecDeque<Span>>,
@@ -56,7 +52,6 @@ pub(super) struct Glow {
     pub state: Light,
     pub amperes: f64,
     pub over_ps: u64,
-    pub at_ps: u64,
 }
 
 impl Log {
@@ -131,12 +126,11 @@ impl Log {
     }
 
     /// Records each lamp's integral at the probe's time. A second record at the same time
-    /// replaces the first. Samples older than two windows are dropped, except the newest one
-    /// at or before that. The current average needs the first window, and a timeout hint
-    /// walks both: the samples it checks still have the anchor their average needs.
+    /// replaces the first. Samples older than the window are dropped, except the newest one
+    /// at or before that, which is the anchor [`average`] subtracts.
     pub(super) fn note(&mut self, probe: &Probe) {
         let now = probe.at().as_ps();
-        let horizon = now.saturating_sub(BRIGHTNESS_WINDOW.as_ps().saturating_mul(2));
+        let horizon = now.saturating_sub(BRIGHTNESS_WINDOW.as_ps());
         for (lamp, samples) in self.lamps.iter().zip(self.samples.iter_mut()) {
             let integral = integral(probe, &lamp.column);
             let instant = probe.get(&lamp.column).expect("a checked column").get();
@@ -168,7 +162,6 @@ impl Log {
             state: Light::from_average(amperes, lamp.lit, lamp.dim),
             amperes,
             over_ps,
-            at_ps: now,
         }
     }
 
@@ -178,67 +171,18 @@ impl Log {
             .collect()
     }
 
-    /// The timeout hint when `want` is unmet at `end`. `None` asks for the ordinary
-    /// "step longer" hint.
+    /// The timeout hint when `want` is unmet at `end`. `None` when the average does not
+    /// yet cover a full window, so the caller asks for a longer step.
     ///
-    /// The sentence names the span from the start of the window one window before
-    /// `end` through `end`. It does that only when every sample from that earlier
-    /// window through `end` shows the same average, within 2%, and the same state.
-    /// Each of those windows lies inside the span, and the log still holds its
-    /// anchor. A sample whose window starts before the span measures time the
-    /// sentence does not name. Samples farther apart than [`SAMPLE_EVERY`] leave
-    /// a gap that was not seen, so this names no shorter span.
+    /// A full window states the measured average and the range `want` needs. It does not
+    /// say that average held. Samples a millisecond apart miss a pulse inside one gap,
+    /// and that pulse can move the average, or the state, between the samples.
     pub(super) fn steady_hint(&self, index: usize, want: Light, end: Glow) -> Option<String> {
         if end.over_ps < BRIGHTNESS_WINDOW.as_ps() {
             return None;
         }
-        let earlier = end.at_ps.saturating_sub(BRIGHTNESS_WINDOW.as_ps());
-        let start = self.glow_at(index, earlier)?;
         let lamp = &self.lamps[index];
-        let mut prev = None;
-        let mut saw_end = false;
-        for span in self.samples[index]
-            .iter()
-            .filter(|span| (start.at_ps..=end.at_ps).contains(&span.t_ps))
-        {
-            if let Some(prev) = prev {
-                if span.t_ps - prev > SAMPLE_EVERY.as_ps() {
-                    return None;
-                }
-            } else if span.t_ps != start.at_ps {
-                return None;
-            }
-            let (amperes, _) =
-                average(&self.samples[index], span.t_ps, span.integral, span.instant);
-            let state = Light::from_average(amperes, lamp.lit, lamp.dim);
-            let scale = amperes.abs().max(end.amperes.abs()).max(1e-6);
-            if state != end.state || (amperes - end.amperes).abs() > scale * 0.02 {
-                return None;
-            }
-            prev = Some(span.t_ps);
-            saw_end = span.t_ps == end.at_ps;
-        }
-        if !saw_end {
-            return None;
-        }
-        Some(steady_sentence(
-            &lamp.path, want, start, end, lamp.lit, lamp.dim,
-        ))
-    }
-
-    /// The brightness at the newest sample at or before `t_ps`. Used to see whether the
-    /// average one window ago still matches, after an edge that the `--until` itself started on.
-    pub(super) fn glow_at(&self, index: usize, t_ps: u64) -> Option<Glow> {
-        let lamp = &self.lamps[index];
-        let samples = &self.samples[index];
-        let end = samples.iter().rev().find(|span| span.t_ps <= t_ps)?;
-        let (amperes, over_ps) = average(samples, end.t_ps, end.integral, end.instant);
-        Some(Glow {
-            state: Light::from_average(amperes, lamp.lit, lamp.dim),
-            amperes,
-            over_ps,
-            at_ps: end.t_ps,
-        })
+        Some(steady_sentence(&lamp.path, want, end, lamp.lit, lamp.dim))
     }
 }
 
@@ -285,11 +229,9 @@ fn average(samples: &VecDeque<Span>, now: u64, integral_now: f64, instant: f64) 
     ((integral_now - start.integral) / dt as f64, dt)
 }
 
-/// The held-current sentence. `start` is one window before `end`, not the moment
-/// `--until` began: that moment is often the edge that turned the LED on. The span
-/// is the two windows together. The caller has already checked that the average held
-/// at every sample across it.
-fn steady_sentence(part: &str, want: Light, start: Glow, end: Glow, lit: f64, dim: f64) -> String {
+/// What a full window measured, and what `want` would take. The last sentence is
+/// conditional, because a moving average can still reach `want` on a longer step.
+fn steady_sentence(part: &str, want: Light, end: Glow, lit: f64, dim: f64) -> String {
     let need = match want {
         Light::Lit => format!("lit needs the average above {}", si_amount(lit, "A")),
         Light::Dim => format!(
@@ -304,15 +246,11 @@ fn steady_sentence(part: &str, want: Light, start: Glow, end: Glow, lit: f64, di
         Light::Dim => "glows dimly",
         Light::Off => "is off",
     };
-    let held = end
-        .at_ps
-        .saturating_sub(start.at_ps)
-        .saturating_add(start.over_ps);
     format!(
-        "{part} carries {} over {} and {how}. {need}. The average has held at that value for the last {}.",
+        "{part} carries {} averaged over the last {} and {how}. {need}. If the current is steady, a longer step will not reach {}; check the circuit with snapshot.",
         amperes_text(end.amperes),
         Duration::from_ps(end.over_ps),
-        Duration::from_ps(held),
+        want.as_str(),
     )
 }
 
@@ -380,22 +318,14 @@ mod tests {
 
     #[test]
     fn the_first_window_uses_the_current_at_t_0() {
-        let log = Log {
-            lamps: vec![Lamp {
-                path: "led10k".into(),
-                column: "#led10k.i".parse().expect("a current ref"),
-                lit: 0.002,
-                dim: 0.0001,
-            }],
-            samples: vec![[span(0, 3.5e-4), span(20, 3.5e-4)].into()],
-        };
-        let at_start = log.glow_at(0, 0).expect("the t = 0 sample");
-        assert_eq!(at_start.state, Light::Dim);
-        assert_eq!(at_start.over_ps, 0);
-        assert_eq!(at_start.amperes, 3.5e-4);
-        let window = log.glow_at(0, 20_000_000_000).expect("the 20 ms sample");
-        assert_eq!(window.over_ps, BRIGHTNESS_WINDOW.as_ps());
-        assert_eq!(window.amperes, 3.5e-4);
+        let samples: VecDeque<Span> = [span(0, 3.5e-4), span(20, 3.5e-4)].into_iter().collect();
+        let (amperes, over) = average(&samples, 0, 0.0, 3.5e-4);
+        assert_eq!((amperes, over), (3.5e-4, 0));
+        assert_eq!(Light::from_average(amperes, 0.002, 0.0001), Light::Dim);
+        let now = 20_000_000_000;
+        let (amperes, over) = average(&samples, now, 3.5e-4 * now as f64, 3.5e-4);
+        assert_eq!(over, BRIGHTNESS_WINDOW.as_ps());
+        assert_eq!(amperes, 3.5e-4);
     }
 
     /// Samples every 1 ms through `until_ms`. The window average at each sample is `avg_at`.
@@ -454,109 +384,158 @@ mod tests {
         }
     }
 
-    fn hint(log: &Log, want: Light) -> Option<String> {
-        let end_t = log.samples[0].back().expect("a sample").t_ps;
-        let end = log.glow_at(0, end_t).expect("the last sample");
-        log.steady_hint(0, want, end)
+    fn reading(log: &Log, ms: u64) -> Glow {
+        let lamp = &log.lamps[0];
+        let t_ps = ms * 1_000_000_000;
+        let span = log.samples[0]
+            .iter()
+            .rev()
+            .find(|span| span.t_ps <= t_ps)
+            .expect("a sample");
+        let (amperes, over_ps) = average(&log.samples[0], span.t_ps, span.integral, span.instant);
+        Glow {
+            state: Light::from_average(amperes, lamp.lit, lamp.dim),
+            amperes,
+            over_ps,
+        }
     }
 
-    fn at(log: &Log, ms: u64) -> Glow {
-        log.glow_at(0, ms * 1_000_000_000).expect("a sample")
+    fn hint(log: &Log, want: Light) -> Option<String> {
+        let end_ms = log.samples[0].back().expect("a sample").t_ps / 1_000_000_000;
+        log.steady_hint(0, want, reading(log, end_ms))
+    }
+
+    fn measured(part: &str, current: &str, how: &str, need: &str, want: &str) -> String {
+        format!(
+            "{part} carries {current} averaged over the last 20ms and {how}. {need}. If the current is steady, a longer step will not reach {want}; check the circuit with snapshot."
+        )
     }
 
     #[test]
-    fn a_settled_current_is_named_for_lit_dim_and_off() {
+    fn a_full_window_names_the_measured_average_for_lit_dim_and_off() {
         let dim = lamp_log("led1", flat(3.4156866910256e-4, 40));
         assert_eq!(
             hint(&dim, Light::Lit).unwrap(),
-            "led1 carries 0.34 mA over 20ms and glows dimly. lit needs the average above 2 mA. The average has held at that value for the last 40ms."
+            measured(
+                "led1",
+                "0.34 mA",
+                "glows dimly",
+                "lit needs the average above 2 mA",
+                "lit"
+            )
         );
         let first = lamp_log("led10k", flat(3.5e-4, 20));
         assert_eq!(
             hint(&first, Light::Lit).unwrap(),
-            "led10k carries 0.35 mA over 20ms and glows dimly. lit needs the average above 2 mA. The average has held at that value for the last 20ms."
+            measured(
+                "led10k",
+                "0.35 mA",
+                "glows dimly",
+                "lit needs the average above 2 mA",
+                "lit"
+            )
         );
         let lit = lamp_log("led220", flat(0.0139, 40));
         assert_eq!(
             hint(&lit, Light::Off).unwrap(),
-            "led220 carries 13.9 mA over 20ms and is lit. off needs the average at or below 100 uA. The average has held at that value for the last 40ms."
+            measured(
+                "led220",
+                "13.9 mA",
+                "is lit",
+                "off needs the average at or below 100 uA",
+                "off"
+            )
         );
         assert_eq!(
             hint(&lit, Light::Dim).unwrap(),
-            "led220 carries 13.9 mA over 20ms and is lit. dim needs the average above 100 uA and at or below 2 mA. The average has held at that value for the last 40ms."
+            measured(
+                "led220",
+                "13.9 mA",
+                "is lit",
+                "dim needs the average above 100 uA and at or below 2 mA",
+                "dim"
+            )
         );
         let from_zero = lamp_log("led220", flat(0.0139, 30));
         assert_eq!(
             hint(&from_zero, Light::Off).unwrap(),
-            "led220 carries 13.9 mA over 20ms and is lit. off needs the average at or below 100 uA. The average has held at that value for the last 30ms."
+            hint(&lit, Light::Off).unwrap()
         );
         let off = lamp_log("led1", flat(3.76e-5, 40));
         assert_eq!(
             hint(&off, Light::Lit).unwrap(),
-            "led1 carries 37.6 uA over 20ms and is off. lit needs the average above 2 mA. The average has held at that value for the last 40ms."
+            measured(
+                "led1",
+                "37.6 uA",
+                "is off",
+                "lit needs the average above 2 mA",
+                "lit"
+            )
         );
     }
 
     #[test]
-    fn a_moving_or_young_led_has_no_steady_hint() {
-        let moving = lamp_log("led1", series(40, |ms| 1e-3 + 0.5e-3 * (ms as f64) / 40.0));
-        assert!(hint(&moving, Light::Lit).is_none());
+    fn a_short_window_asks_for_a_longer_step_and_a_moving_one_names_its_average() {
         let young = lamp_log("led1", flat(1e-3, 5));
         assert!(hint(&young, Light::Lit).is_none());
+        let moving = lamp_log("led1", series(40, |ms| 1e-3 + 0.5e-3 * (ms as f64) / 40.0));
+        assert_eq!(
+            hint(&moving, Light::Lit).unwrap(),
+            measured(
+                "led1",
+                "1.5 mA",
+                "glows dimly",
+                "lit needs the average above 2 mA",
+                "lit"
+            )
+        );
     }
 
     #[test]
-    fn a_twenty_millisecond_pulse_between_equal_windows_is_not_held() {
+    fn a_pulse_between_equal_windows_names_the_end_average() {
         let peak = 3.242585439509286e-3;
+        let half = measured(
+            "led1",
+            "1.62 mA",
+            "glows dimly",
+            "lit needs the average above 2 mA",
+            "lit",
+        );
         let log = lamp_log("led1", square(20, 20, peak, 50));
-        let start = at(&log, 30);
-        let end = at(&log, 50);
-        let mid = at(&log, 40);
-        assert_eq!(start.state, Light::Dim);
-        assert_eq!(end.state, Light::Dim);
-        assert!((start.amperes - end.amperes).abs() < 1e-12);
-        assert_eq!(mid.state, Light::Lit);
-        assert!(hint(&log, Light::Lit).is_none());
-    }
+        assert_eq!(reading(&log, 40).state, Light::Lit);
+        assert_eq!(reading(&log, 50).state, Light::Dim);
+        assert_eq!(hint(&log, Light::Lit).unwrap(), half);
 
-    #[test]
-    fn a_pulse_that_crosses_state_between_equal_windows_is_not_held() {
-        let log = lamp_log(
+        let crossed = lamp_log(
             "led1",
             series(50, |ms| if ms == 40 { 2.01e-3 } else { 1.99e-3 }),
         );
-        let start = at(&log, 30);
-        let end = at(&log, 50);
-        let mid = at(&log, 40);
-        assert_eq!((start.amperes, start.state), (1.99e-3, Light::Dim));
-        assert_eq!((end.amperes, end.state), (1.99e-3, Light::Dim));
-        assert_eq!(mid.state, Light::Lit);
-        let scale = mid.amperes.abs().max(end.amperes.abs());
-        assert!((mid.amperes - end.amperes).abs() <= scale * 0.02);
-        assert!(hint(&log, Light::Lit).is_none());
-    }
-
-    #[test]
-    fn a_ten_millisecond_square_wave_is_held_once_every_window_matches() {
-        let peak = 3.242585439509286e-3;
-        let rising = lamp_log("led1", square(10, 10, peak, 30));
-        assert!(hint(&rising, Light::Lit).is_none());
-        let held = "led1 carries 1.62 mA over 20ms and glows dimly. lit needs the average above 2 mA. The average has held at that value for the last 40ms.";
-        for until in [40, 50, 60] {
-            let steady = lamp_log("led1", square(10, 10, peak, until));
-            assert_eq!(hint(&steady, Light::Lit).unwrap(), held, "until {until} ms");
-        }
-    }
-
-    #[test]
-    fn samples_only_at_the_window_ends_are_not_a_held_span() {
-        let log = lamp_log(
-            "led1",
-            [span(0, 1e-3), span(20, 1e-3), span(40, 1e-3)]
-                .into_iter()
-                .collect(),
+        assert_eq!(reading(&crossed, 40).state, Light::Lit);
+        assert_eq!(
+            hint(&crossed, Light::Lit).unwrap(),
+            measured(
+                "led1",
+                "1.99 mA",
+                "glows dimly",
+                "lit needs the average above 2 mA",
+                "lit"
+            )
         );
-        assert_eq!(at(&log, 20).amperes, at(&log, 40).amperes);
-        assert!(hint(&log, Light::Lit).is_none());
+    }
+
+    #[test]
+    fn a_ten_millisecond_square_wave_names_its_average_on_a_full_window() {
+        let peak = 3.242585439509286e-3;
+        let named = measured(
+            "led1",
+            "1.62 mA",
+            "glows dimly",
+            "lit needs the average above 2 mA",
+            "lit",
+        );
+        for until in [30, 40, 50, 60] {
+            let log = lamp_log("led1", square(10, 10, peak, until));
+            assert_eq!(hint(&log, Light::Lit).unwrap(), named, "until {until} ms");
+        }
     }
 }
