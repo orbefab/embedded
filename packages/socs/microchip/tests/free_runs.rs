@@ -13,7 +13,7 @@ use crate::common::runs::{
     step_until,
 };
 use crate::common::{SREG, UCSR0B, UDR0, adiw, brbc, imm, in_io, ldi, out, rr, sts};
-use orbe_microchip::{Channel, Cpu, Sent, parse_hex};
+use orbe_microchip::{Channel, Cpu, FuseBytes, Sent, parse_hex};
 
 const EECR: u16 = 0x3F;
 const EIMSK: u16 = 0x3D;
@@ -399,6 +399,58 @@ fn shipped_and_interrupt_heavy_images_run_as_stepped() {
         let image = parse_hex(&std::fs::read_to_string(&path).unwrap()).unwrap();
         matches_stepping_from(
             &|cpu| cpu.load_image(&image).unwrap(),
+            &boundaries,
+            &path.display().to_string(),
+        );
+    }
+}
+
+/// The Blocks' firmware and every other image whose `delay()` spins on `micros()`, run to
+/// boundaries a few cycles to a few thousand cycles apart. A boundary lands inside every part of
+/// a spin pass, and a run between two boundaries can skip from none to dozens of passes. Each
+/// state the host can read, registers, `SREG` and the stack included, must match stepping.
+#[test]
+fn delay_images_run_as_stepped_at_dense_boundaries() {
+    // `parts/atmega328p-tqfp32/part.jsonc` `model.fuses`, the chip on the Nano and Uno boards.
+    const PART_FUSES: FuseBytes = FuseBytes {
+        low: 0xFF,
+        high: 0xDF,
+        extended: 0xFD,
+    };
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let mut images: Vec<_> = std::fs::read_dir(root.join("blocks"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path().join("firmware"))
+        .flat_map(|dir| std::fs::read_dir(dir).unwrap())
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|e| e == "hex"))
+        .collect();
+    images.sort();
+    assert!(images.len() >= 4, "every Block's firmware is there");
+    let sketch = root.join("packages/engine/tests/firmware/sketch");
+    for name in ["blink", "tone", "dht22", "analog_read_serial", "cst816"] {
+        images.push(sketch.join(format!("{name}.hex")));
+    }
+    for name in ["split", "pulse"] {
+        images.push(root.join(format!("apps/orbe/tests/firmware/{name}/{name}.hex")));
+    }
+    let gaps = [89, 1, 151, 7, 397, 2, 1009, 13, 2003, 3];
+    let boundaries: Vec<u64> = gaps
+        .iter()
+        .cycle()
+        .scan(0, |at, gap| {
+            *at += gap;
+            Some(*at)
+        })
+        .take_while(|&at| at <= 1_000_000)
+        .collect();
+    for path in images {
+        let image = parse_hex(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        matches_stepping_from(
+            &|cpu| {
+                cpu.set_fuses(PART_FUSES.low, PART_FUSES.high, PART_FUSES.extended);
+                cpu.load_image(&image).unwrap();
+            },
             &boundaries,
             &path.display().to_string(),
         );

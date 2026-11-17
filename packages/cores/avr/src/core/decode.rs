@@ -7,8 +7,12 @@ use super::execute::{Ptr, Update};
 use crate::IO_BASE;
 
 /// One instruction with its operands extracted. A target is the absolute word address. `skip` is
-/// the length, in words, of the instruction a skip passes over. `Countdown` is the `BRNE` that
-/// closes a [`Countdown`] loop. It is last, so every other op keeps its tag.
+/// the length, in words, of the instruction a skip passes over.
+///
+/// The ops from `Countdown` on are shapes found when the image loads. Each steps as the
+/// instruction at its word. They are last, so every other op keeps its tag. `Countdown` is the
+/// `BRNE` that closes a [`Countdown`] loop. `SpinCall` is a `CALL` that a `delay` spin repeats,
+/// and `spin` indexes the program's spins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Op {
     Nop,
@@ -84,9 +88,10 @@ pub(super) enum Op {
     Break,
     Unknown(u16),
     Countdown(Countdown),
+    SpinCall { to: u16, spin: u16 },
 }
 
-// `Countdown` carries its loop's shape in the op without growing the table.
+// The shapes ride in the op without growing the table.
 const _: () = assert!(size_of::<Op>() == 6);
 
 /// The op at each word of `flash` a program counter reaches. A word past the image reads as 0,
@@ -250,6 +255,7 @@ macro_rules! bus_op {
             | Op::Push(_)
             | Op::Rcall(_)
             | Op::Call(_)
+            | Op::SpinCall { .. }
             | Op::Icall
             | Op::Ret
             | Op::Reti
@@ -294,7 +300,7 @@ impl Op {
     /// The instruction's length in flash words.
     fn words(self) -> u8 {
         match self {
-            Op::Lds { .. } | Op::Sts { .. } | Op::Jmp(_) | Op::Call(_) => 2,
+            Op::Lds { .. } | Op::Sts { .. } | Op::Jmp(_) | Op::Call(_) | Op::SpinCall { .. } => 2,
             _ => 1,
         }
     }

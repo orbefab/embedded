@@ -200,6 +200,19 @@ impl orbe_avr::Bus for Bus {
             || self.devices[usize::from(slot.dev)].steady(slot.reg, &self.mux, self.cycle)
     }
 
+    /// A pure device load at `cycle`. The bus cycle lags during a free run, and an 8-bit counter
+    /// read is the byte at the cycle the core asks for.
+    #[inline(always)]
+    fn projected_at(&self, addr: u16, cycle: u64) -> Option<u8> {
+        let index = io_index(addr)?;
+        let slot = self.owners[index];
+        if slot.dev == NO_DEV {
+            return None;
+        }
+        let clock = self.clock_view();
+        self.devices[usize::from(slot.dev)].pure(slot.reg, cycle, &clock)
+    }
+
     /// A [`Self::store`] of `value` to `addr` would change no state, pin, log entry, notice, or
     /// schedule.
     #[inline(always)]

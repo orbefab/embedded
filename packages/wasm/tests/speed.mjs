@@ -21,7 +21,7 @@ const PROFILE_INTERVAL_US = 100;
 /** Where a run plays, how hard the CPU is throttled, and the real-time factor its median needs. */
 const MODES = {
   worker: { label: "Worker 1x", where: "worker", throttle: 1, bar: 1.5 },
-  main4x: { label: "main thread 4x", where: "main", throttle: 4, bar: 1.0 },
+  main4x: { label: "main thread 4x", where: "main", throttle: 4, bar: 1.25 },
 };
 
 const args = process.argv.slice(2);
@@ -170,7 +170,7 @@ for (const c of cells) {
   const pass = c.x >= c.how.bar;
   if (!pass) failed += 1;
   const ms = `${c.median.toFixed(1)} ms per simulated s (${c.min.toFixed(1)} to ${c.max.toFixed(1)})`;
-  console.log(`${pass ? "ok  " : "FAIL"} ${c.block.padEnd(width)}  ${c.how.label.padEnd(labelWidth)}  ${ms}, ${c.x.toFixed(2)}x real time, bar ${c.how.bar.toFixed(1)}x`);
+  console.log(`${pass ? "ok  " : "FAIL"} ${c.block.padEnd(width)}  ${c.how.label.padEnd(labelWidth)}  ${ms}, ${c.x.toFixed(2)}x real time, bar ${c.how.bar}x`);
 }
 console.log(failed === 0 ? "speed: every Block keeps up" : `speed: ${failed} of ${cells.length} medians miss their bar`);
 process.exit(failed === 0 ? 0 : 1);

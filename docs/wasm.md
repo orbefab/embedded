@@ -119,7 +119,7 @@ Each run is one row: the Block, the mode, the run number, and wall milliseconds 
 | Mode | Where `worker.js` runs | CPU throttle | Bar at the median |
 | --- | --- | --- | --- |
 | Worker 1x | a dedicated module Worker | none | 1.5x real time, 667 ms per simulated s |
-| main thread 4x | the page's main thread | 4x, `Emulation.setCPUThrottlingRate` | 1.0x real time, 1000 ms per simulated s |
+| main thread 4x | the page's main thread | 4x, `Emulation.setCPUThrottlingRate` | 1.25x real time, 800 ms per simulated s |
 
 Chrome's CPU throttle reaches only a page, not a Worker, so the throttled mode imports the same `worker.js` on the main thread. There, `self` is replaced with an object that hands the page each message `worker.js` posts.
 

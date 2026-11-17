@@ -42,6 +42,25 @@ pub trait Bus {
     /// steady address run inside a free run.
     fn steady(&self, addr: u16) -> bool;
 
+    /// The byte a load of `addr` would return at the core's cycle, when that load changes nothing.
+    ///
+    /// A free run leaves the bus cycle behind the core. [`Bus::peek`] reads the bus cycle, so a
+    /// byte that moves with the core's cycle is not a peek. `None` means the load writes, or the
+    /// byte is not fixed by that cycle. `IN` of `Some` runs inside the free run.
+    #[inline(always)]
+    fn projected(&self, core: &Core, addr: u16) -> Option<u8> {
+        self.projected_at(addr, core.cycles())
+    }
+
+    /// [`Bus::projected`] as if the core's cycle were `cycle`.
+    ///
+    /// A free run may ask for a later cycle that still ends before the next event. `None` has the
+    /// same meaning as [`Bus::projected`].
+    fn projected_at(&self, addr: u16, cycle: u64) -> Option<u8> {
+        let _ = (addr, cycle);
+        None
+    }
+
     /// A store of `value` at `addr` would change nothing the chip keeps. An idle `OUT` or `STS`
     /// runs inside a free run and writes nothing.
     fn store_idle(&self, core: &Core, addr: u16, value: u8) -> bool;
