@@ -29,6 +29,9 @@ pub enum Code {
     PartMissing,
     FirmwareMissing,
     PartModified,
+    /// The copy matches its lock line and is another version than this binary carries.
+    /// A run reads the version in the binary, so this stops check, open and test.
+    PartOutdated,
     /// A project file that exists could not be read.
     Io,
     /// The engine refused a value the reader wrote, and no param set it. The engine's own code.
@@ -73,6 +76,7 @@ impl Code {
             Code::PartMissing => "part_missing",
             Code::FirmwareMissing => "firmware_missing",
             Code::PartModified => "part_modified",
+            Code::PartOutdated => "part_outdated",
             Code::Io => "io_error",
             Code::Engine(code) => code,
             Code::Lint(Lint::Unplaced) => "scene.unplaced",

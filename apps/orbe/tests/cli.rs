@@ -81,6 +81,33 @@ fn run_printed(cwd: &Path, command: &str) -> (Output, String, String) {
     orbe_in(cwd, &words[1..])
 }
 
+/// Writes `version` into one copy and rewrites its lock line so the copy matches that line.
+fn hold(project: &Path, id: &str, version: &str) {
+    let file = project.join("parts").join(id).join("part.jsonc");
+    let text = fs::read_to_string(&file).unwrap();
+    let edited = text.replacen(
+        "\"version\": \"0.1.0\"",
+        &format!("\"version\": \"{version}\""),
+        1,
+    );
+    assert_ne!(text, edited, "{id}");
+    fs::write(&file, edited).unwrap();
+    let lock = project.join("parts.lock");
+    let lines: String = fs::read_to_string(&lock)
+        .unwrap()
+        .lines()
+        .map(|line| {
+            if line.split_whitespace().next() == Some(id) {
+                common::lock_line(project, id)
+            } else {
+                line.to_string()
+            }
+        })
+        .map(|line| format!("{line}\n"))
+        .collect();
+    fs::write(&lock, lines).unwrap();
+}
+
 /// The one `orbe add` command in a `part_missing` hint. Every hint names the same command.
 fn add_command(stdout: &str) -> String {
     let commands: Vec<String> = stdout
@@ -742,6 +769,89 @@ fn every_part_missing_and_part_modified_hint_makes_the_next_check_pass() {
         let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
         assert_eq!(output.status.code(), Some(0), "{name}: {stdout}");
     }
+}
+
+#[test]
+fn an_outdated_copy_names_one_add_and_a_hand_edit_stays_modified() {
+    let project = common::project("nano-button");
+    hold(project.path(), "led-5mm", "0.0.9");
+    hold(project.path(), "resistor-axial", "0.0.8");
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(stdout.contains("error[part_outdated]"), "{stdout}");
+    assert!(
+        stdout.contains("this orbe carries `led-5mm@0.1.0` and the project holds `led-5mm@0.0.9`"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "this orbe carries `resistor-axial@0.1.0` and the project holds `resistor-axial@0.0.8`"
+        ),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("part_modified"), "{stdout}");
+    let command = add_command(&stdout);
+    assert_eq!(command, "orbe add led-5mm resistor-axial --overwrite");
+    let (output, out, err) = run_printed(project.path(), &command);
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+
+    let path = project.path().join("parts/led-5mm/part.jsonc");
+    let text = fs::read_to_string(&path).unwrap();
+    let edited = text.replace("5 mm LED", "5 mm LED edited");
+    assert_ne!(text, edited);
+    fs::write(&path, edited).unwrap();
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(stdout.contains("error[part_modified]"), "{stdout}");
+    assert!(
+        stdout.contains("differs from `led-5mm@0.1.0` in `title`"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("part_outdated"), "{stdout}");
+}
+
+#[test]
+fn check_json_reports_part_outdated() {
+    let project = common::project("nano-button");
+    hold(project.path(), "led-5mm", "0.0.9");
+    hold(project.path(), "tactile-switch-6mm", "0.0.7");
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc", "--json"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["error"]["code"], "scene_invalid");
+    let diagnostics = reply["data"]["diagnostics"].as_array().unwrap();
+    assert_eq!(diagnostics.len(), 2, "{stdout}");
+    assert!(
+        diagnostics.iter().all(|d| d["code"] == "part_outdated"),
+        "{stdout}"
+    );
+    let hint = diagnostics[0]["hint"].as_str().unwrap();
+    assert!(diagnostics.iter().all(|d| d["hint"] == hint), "{stdout}");
+    assert!(
+        hint.contains("orbe add led-5mm tactile-switch-6mm --overwrite"),
+        "{hint}"
+    );
+}
+
+#[test]
+fn an_outdated_part_in_another_major_is_fixed_by_the_hint() {
+    let project = common::project("nano-button");
+    hold(project.path(), "led-5mm", "1.0.0");
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(
+        stdout.contains("this orbe carries `led-5mm@0.1.0` and the project holds `led-5mm@1.0.0`"),
+        "{stdout}"
+    );
+    let command = add_command(&stdout);
+    assert_eq!(command, "orbe add led-5mm@0.1.0 --overwrite");
+    let (output, out, err) = run_printed(project.path(), &command);
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
 }
 
 #[test]

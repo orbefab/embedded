@@ -589,11 +589,13 @@ impl Loader<'_> {
 
     /// Hashes the folder of every catalog copy the scene uses. A missing folder is the
     /// scene's `part_missing`, and a lock line for an id the scene does not use is not
-    /// checked. A sealed catalog part is compared with the copy this binary embeds, and a lock
-    /// line for one of those ids has to name that copy. Returns the unsealed copies that
+    /// checked. A copy that matches its lock line and is another version than this binary
+    /// carries is `part_outdated`. A copy that differs from its lock line, or the same
+    /// version with different bytes, is `part_modified`. Returns the unsealed copies that
     /// differ and whose lock line still matches.
     fn check_copies(&mut self, root: &Path) -> Vec<String> {
         let mut modified = Vec::new();
+        let mut outdated = Vec::new();
         let lock = std::mem::take(&mut self.lock);
         for (id, line) in &lock {
             if !self.used.contains(id) {
@@ -620,6 +622,23 @@ impl Loader<'_> {
             let diff = tree
                 .as_ref()
                 .and_then(|t| first_difference(t, &original.tree, String::new()));
+            let copy_version = tree
+                .as_ref()
+                .and_then(|t| t.get("version").and_then(Node::str));
+            let matches_lock = hash.as_ref().is_some_and(|h| h == &line.hash)
+                && copy_version == Some(line.version.as_str());
+            if matches_lock
+                && hash.as_ref().is_some_and(|h| h != &original.hash)
+                && line.version != original.version
+            {
+                outdated.push((
+                    id.clone(),
+                    line.span,
+                    line.version.clone(),
+                    original.version.clone(),
+                ));
+                continue;
+            }
             let bytes_differ = hash
                 .as_ref()
                 .is_some_and(|h| h != &line.hash || h != &original.hash);
@@ -654,9 +673,6 @@ impl Loader<'_> {
                 continue;
             }
             let indexed = line.registry == REGISTRY && line.version == original.version;
-            let copy_version = tree
-                .as_ref()
-                .and_then(|t| t.get("version").and_then(Node::str));
             let version_problem =
                 tree.as_ref().is_some() && copy_version != Some(line.version.as_str());
             if !indexed || version_problem {
@@ -687,8 +703,47 @@ impl Loader<'_> {
                 modified.push(id.clone());
             }
         }
+        self.report_outdated(&outdated);
         self.lock = lock;
         modified
+    }
+
+    /// One finding per outdated id, and one `orbe add --overwrite` that names all of them.
+    /// `--overwrite` stays in the copy's major version, so an id in another major names the
+    /// version this binary carries. Otherwise the command would not take it.
+    fn report_outdated(&mut self, found: &[(String, Span, String, String)]) {
+        if found.is_empty() {
+            return;
+        }
+        let mut order: Vec<&(String, Span, String, String)> = found.iter().collect();
+        order.sort_by(|a, b| a.0.cmp(&b.0));
+        let args = order
+            .iter()
+            .map(|(id, _, held, _)| self.outdated_spec(id, held))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let hint = format!("run `{} {args} --overwrite`", self.add);
+        for (id, span, held, carried) in found {
+            self.out.push(
+                Code::PartOutdated,
+                *span,
+                format!("this orbe carries `{id}@{carried}` and the project holds `{id}@{held}`"),
+                hint.clone(),
+            );
+        }
+    }
+
+    /// `id`, or `id@version` when the copy's major version is not the one this binary carries.
+    fn outdated_spec(&self, id: &str, held: &str) -> String {
+        let pin = self.files.catalog().find(id).and_then(|original| {
+            let held = Version::parse(held)?;
+            let carried = Version::parse(&original.version)?;
+            (held.major != carried.major).then_some(original.version.clone())
+        });
+        match pin {
+            Some(version) => format!("{id}@{version}"),
+            None => id.to_string(),
+        }
     }
 
     /// A file in a copy that cannot be read. A link on its path is named, since a link that
