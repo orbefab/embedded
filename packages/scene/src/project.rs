@@ -280,15 +280,15 @@ impl Loader<'_> {
                         },
                     );
                 }
-                Err(()) => self.out.push(
-                    Code::Syntax,
-                    span,
-                    "a parts.lock line is `<id> <version> @<registry> sha256:<hash>`",
-                    format!(
-                        "`orbe add` writes this file. rebuild it with `{} --relock`",
-                        self.add
-                    ),
-                ),
+                Err(()) => {
+                    let relock = format_add(&self.add, &[], false, false, true).expect("relock");
+                    self.out.push(
+                        Code::Syntax,
+                        span,
+                        "a parts.lock line is `<id> <version> @<registry> sha256:<hash>`",
+                        format!("an add writes this file. rebuild it with `{relock}`"),
+                    );
+                }
             }
         }
     }
@@ -479,12 +479,8 @@ impl Loader<'_> {
         let overwrite = found
             .iter()
             .any(|(id, _, _, overwrite)| *overwrite && ids.contains(&id.as_str()));
-        let command = format!(
-            "{} {}{}",
-            self.add,
-            ids.join(" "),
-            if overwrite { " --overwrite" } else { "" }
-        );
+        let specs: Vec<String> = ids.iter().map(|id| (*id).to_string()).collect();
+        let command = self.missing_command(&root, &specs, overwrite);
         let known: Vec<String> = self
             .lock
             .keys()
@@ -498,7 +494,7 @@ impl Loader<'_> {
         for (id, span, why, _) in &found {
             let hint = if blocked {
                 "move `parts` out of the way, since part folders go in a folder named `parts`. then check again for the command that adds them".into()
-            } else if ids.contains(&id.as_str()) {
+            } else if let Some(command) = command.as_ref().filter(|_| ids.contains(&id.as_str())) {
                 format!("run `{command}`")
             } else {
                 let close = did_you_mean(id, known.iter().map(String::as_str), "");
@@ -507,6 +503,29 @@ impl Loader<'_> {
             self.out
                 .push(Code::PartMissing, *span, format!("part `{id}` {why}"), hint);
         }
+    }
+
+    /// The command that repairs these missing catalog ids. On disk it is the command
+    /// `orbe add` of those ids would print, so a child that differs is named there too.
+    fn missing_command(&self, root: &Path, specs: &[String], overwrite: bool) -> Option<String> {
+        self.disk_repair(root, specs)
+            .or_else(|| add_writing(&self.add, specs, overwrite))
+    }
+
+    /// The command `orbe add` of these ids would print, when this project is a folder on disk.
+    /// A memory set and a non-unix build keep the ids check already gathered.
+    #[cfg(unix)]
+    fn disk_repair(&self, root: &Path, specs: &[String]) -> Option<String> {
+        if self.store == Store::Copies && self.files.is_disk() {
+            crate::add::repair_command(root, &self.add, specs)
+        } else {
+            None
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn disk_repair(&self, _root: &Path, _specs: &[String]) -> Option<String> {
+        None
     }
 
     /// What is at `parts/<id>` for an id that did not resolve, and whether `orbe add` has to
@@ -576,24 +595,33 @@ impl Loader<'_> {
     }
 
     fn restore_command(&self, id: &str, copy: Option<&Node>) -> String {
-        let named = self.files.catalog().find(id).and_then(|original| {
-            let copy = Version::parse(copy?.get("version")?.str()?)?;
-            let theirs = Version::parse(&original.version)?;
-            (copy.major != theirs.major).then_some(original.version)
-        });
-        match named {
-            Some(version) => format!("{} {id}@{version} --overwrite", self.add),
-            None => format!("{} {id} --overwrite", self.add),
-        }
+        let carried = self
+            .files
+            .catalog()
+            .find(id)
+            .map(|original| original.version.clone())
+            .unwrap_or_default();
+        let held = copy
+            .and_then(|copy| copy.get("version"))
+            .and_then(Node::str)
+            .unwrap_or("");
+        let spec = add_spec(id, held, &carried);
+        add_writing(&self.add, &[spec], true).expect("the id is named")
     }
 
     /// Hashes the folder of every catalog copy the scene uses. A missing folder is the
     /// scene's `part_missing`, and a lock line for an id the scene does not use is not
-    /// checked. A sealed catalog part is compared with the copy this binary embeds, and a lock
-    /// line for one of those ids has to name that copy. Returns the unsealed copies that
-    /// differ and whose lock line still matches.
+    /// checked. A copy that matches an official lock line and is an older version than
+    /// this binary carries is `part_outdated`. A newer one is `part_newer`. `--overwrite`
+    /// leaves that copy, including a child reached only through a board, and says the
+    /// project needs a newer orbe for it. A line from another registry keeps the
+    /// message that names that registry. A copy that differs from its lock line, or the
+    /// same version with different bytes, is `part_modified`. Returns the unsealed copies
+    /// that differ and whose lock line still matches.
     fn check_copies(&mut self, root: &Path) -> Vec<String> {
         let mut modified = Vec::new();
+        let mut older = Vec::new();
+        let mut newer = Vec::new();
         let lock = std::mem::take(&mut self.lock);
         for (id, line) in &lock {
             if !self.used.contains(id) {
@@ -620,6 +648,37 @@ impl Loader<'_> {
             let diff = tree
                 .as_ref()
                 .and_then(|t| first_difference(t, &original.tree, String::new()));
+            let copy_version = tree
+                .as_ref()
+                .and_then(|t| t.get("version").and_then(Node::str));
+            let matches_lock = hash.as_ref().is_some_and(|h| h == &line.hash)
+                && copy_version == Some(line.version.as_str());
+            if matches_lock
+                && hash.as_ref().is_some_and(|h| h != &original.hash)
+                && line.version != original.version
+            {
+                if line.registry != REGISTRY {
+                    self.report_other_registry(id, line, &original.version);
+                    continue;
+                }
+                let found = (
+                    id.clone(),
+                    line.span,
+                    line.version.clone(),
+                    original.version.clone(),
+                );
+                match version_order(&line.version, &original.version) {
+                    Some(std::cmp::Ordering::Less) => {
+                        older.push(found);
+                        continue;
+                    }
+                    Some(std::cmp::Ordering::Greater) => {
+                        newer.push(found);
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
             let bytes_differ = hash
                 .as_ref()
                 .is_some_and(|h| h != &line.hash || h != &original.hash);
@@ -654,41 +713,100 @@ impl Loader<'_> {
                 continue;
             }
             let indexed = line.registry == REGISTRY && line.version == original.version;
-            let copy_version = tree
-                .as_ref()
-                .and_then(|t| t.get("version").and_then(Node::str));
             let version_problem =
                 tree.as_ref().is_some() && copy_version != Some(line.version.as_str());
             if !indexed || version_problem {
-                let message = if !indexed {
-                    format!(
-                        "parts.lock lists `{id}` at `{}` from `{}`, and this binary's catalog has `{id}@{}`",
-                        line.version, line.registry, original.version
-                    )
+                if !indexed {
+                    self.report_other_registry(id, line, &original.version);
                 } else {
-                    format!(
-                        "parts.lock lists `{id}` at `{}`, and the copy's version is `{}`",
-                        line.version,
-                        copy_version.unwrap_or("")
-                    )
-                };
-                self.out.push(
-                    Code::PartModified,
-                    line.span,
-                    message,
-                    format!(
-                        "this binary knows `{id}@{}` from the official registry. restore the catalog's copy with `{} {id}@{} --overwrite`",
-                        original.version, self.add, original.version
-                    ),
-                );
+                    self.out.push(
+                        Code::PartModified,
+                        line.span,
+                        format!(
+                            "parts.lock lists `{id}` at `{}`, and the copy's version is `{}`",
+                            line.version,
+                            copy_version.unwrap_or("")
+                        ),
+                        self.official_restore(id, &original.version),
+                    );
+                }
                 continue;
             }
             if !is_sealed(&original.tree) && (diff.is_some() || bytes_differ) {
                 modified.push(id.clone());
             }
         }
+        self.report_version_gap(&older, &newer);
         self.lock = lock;
         modified
+    }
+
+    /// A lock line whose registry or version is not the catalog's. The message names the
+    /// registry on the line, and the hint restores this binary's copy.
+    fn report_other_registry(&mut self, id: &str, line: &LockLine, carried: &str) {
+        self.out.push(
+            Code::PartModified,
+            line.span,
+            format!(
+                "parts.lock lists `{id}` at `{}` from `{}`, and this binary's catalog has `{id}@{carried}`",
+                line.version, line.registry
+            ),
+            self.official_restore(id, carried),
+        );
+    }
+
+    fn official_restore(&self, id: &str, carried: &str) -> String {
+        let command =
+            add_writing(&self.add, &[format!("{id}@{carried}")], true).expect("the id is named");
+        format!(
+            "this binary knows `{id}@{carried}` from the official registry. restore the catalog's copy with `{command}`"
+        )
+    }
+
+    /// One finding per id. Older ids share one `orbe add --overwrite`, and a newer id is
+    /// never in it. That command leaves a lock-matching newer copy where it is, including
+    /// a child the named part uses. `--overwrite` stays in the copy's major version, so an
+    /// older id in another major names the version this binary carries.
+    fn report_version_gap(
+        &mut self,
+        older: &[(String, Span, String, String)],
+        newer: &[(String, Span, String, String)],
+    ) {
+        if !older.is_empty() {
+            let mut order: Vec<&(String, Span, String, String)> = older.iter().collect();
+            order.sort_by(|a, b| a.0.cmp(&b.0));
+            let specs: Vec<String> = order
+                .iter()
+                .map(|(id, _, held, carried)| add_spec(id, held, carried))
+                .collect();
+            let hint = match add_writing(&self.add, &specs, true) {
+                Some(command) => format!("run `{command}`"),
+                None => "this project needs a newer orbe".into(),
+            };
+            for (id, span, held, carried) in older {
+                self.out.push(
+                    Code::PartOutdated,
+                    *span,
+                    format!(
+                        "this orbe carries `{id}@{carried}` and the project holds `{id}@{held}`"
+                    ),
+                    hint.clone(),
+                );
+            }
+        }
+        if !newer.is_empty() {
+            let hint = "this project needs a newer orbe".to_string();
+            for (id, span, held, carried) in newer {
+                self.out.push(
+                    Code::PartNewer,
+                    *span,
+                    format!(
+                        "this project holds `{id}@{held}` and this orbe carries `{id}@{carried}`"
+                    ),
+                    hint.clone(),
+                );
+            }
+        }
     }
 
     /// A file in a copy that cannot be read. A link on its path is named, since a link that
@@ -706,8 +824,8 @@ impl Loader<'_> {
                 (
                     link.clone(),
                     format!(
-                        "remove the link that loops at {link}, or restore the folder with `{} {id} --overwrite`",
-                        self.add
+                        "remove the link that loops at {link}, or restore the folder with `{}`",
+                        add_writing(&self.add, &[id.to_string()], true).expect("the id is named")
                     ),
                 )
             }
@@ -718,7 +836,10 @@ impl Loader<'_> {
             }
             None => (
                 display(&root, path),
-                format!("restore the folder with `{} {id} --overwrite`", self.add),
+                format!(
+                    "restore the folder with `{}`",
+                    add_writing(&self.add, &[id.to_string()], true).expect("the id is named")
+                ),
             ),
         };
         self.out.push(
@@ -862,6 +983,12 @@ fn first_difference(copy: &Node, original: &Node, path: String) -> Option<(Strin
     }
 }
 
+/// The held version against the one this binary carries: major, then minor, then patch,
+/// so `0.10.0` is newer than `0.9.0`. `None` when either spelling is not a version.
+fn version_order(held: &str, carried: &str) -> Option<std::cmp::Ordering> {
+    Some(Version::parse(held)?.cmp(&Version::parse(carried)?))
+}
+
 /// The SHA-256 over a folder's files, paths included: one line `<sha256>  <path>` per file,
 /// sorted by path, with `/` between path parts. Written as `sha256:<hex>`, as in `parts.lock`.
 pub fn folder_hash(dir: &Path) -> io::Result<String> {
@@ -905,6 +1032,69 @@ pub(crate) fn hash_files<'a>(files: impl Iterator<Item = (&'a str, &'a [u8])>) -
 
 pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The `orbe add` command that writes `specs`. Each spec is an id, or `id@version` when the
+/// copy is in another major version and `--overwrite` has to name it. `None` when `specs` is
+/// empty, so a hint never prints `orbe add` with no part id. Check and add both build that
+/// command here, from the ids the add would write.
+pub(crate) fn add_writing(add: &str, specs: &[String], overwrite: bool) -> Option<String> {
+    format_add(add, specs, overwrite, false, false)
+}
+
+/// A printed `orbe add`. `add` is already `orbe add` or `orbe add -C <folder>`. Each id is
+/// one shell word. Flags follow the ids, in the order `--overwrite`, `--diff`, `--relock`.
+/// An empty id list is a command only when the command is `--relock`.
+pub(crate) fn format_add(
+    add: &str,
+    ids: &[String],
+    overwrite: bool,
+    diff: bool,
+    relock: bool,
+) -> Option<String> {
+    let ids: Vec<&str> = ids
+        .iter()
+        .map(String::as_str)
+        .filter(|id| !id.is_empty())
+        .collect();
+    if ids.is_empty() && !relock {
+        return None;
+    }
+    let mut command = add.to_string();
+    for id in ids {
+        command.push(' ');
+        command.push_str(&shell_word(id));
+    }
+    if overwrite {
+        command.push_str(" --overwrite");
+    }
+    if diff {
+        command.push_str(" --diff");
+    }
+    if relock {
+        command.push_str(" --relock");
+    }
+    Some(command)
+}
+
+/// Shell words joined by one space.
+pub fn shell_join(words: &[&str]) -> String {
+    words
+        .iter()
+        .map(|word| shell_word(word))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `id`, or `id@version` when the two versions are in different major versions.
+pub(crate) fn add_spec(id: &str, held: &str, carried: &str) -> String {
+    let pin = Version::parse(held)
+        .zip(Version::parse(carried))
+        .and_then(|(held, carried)| (held.major != carried.major).then_some(carried));
+    match pin {
+        Some(version) => format!("{id}@{version}"),
+        None => id.to_string(),
+    }
 }
 
 /// `orbe add` as a hint prints it, with `-C <dir>` when a folder is named. A folder that starts
