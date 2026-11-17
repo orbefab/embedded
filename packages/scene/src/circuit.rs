@@ -8,7 +8,7 @@ use serde_json::{Map, Value, json};
 use orbe_engine::world::Quantity;
 
 use crate::diagnostic::{Code, Findings, Reported};
-use crate::model::{Comp, ParamDecl, ParamKind, Part, PinDef, Ref, Scene, passed};
+use crate::model::{Body, Comp, ParamDecl, ParamKind, Part, PinDef, Ref, Scene, passed};
 use crate::name::did_you_mean;
 use crate::params::{Arg, Cover, blocked, convert, cover, dotted, set, within};
 use crate::project::{Owner, Project};
@@ -42,7 +42,8 @@ struct Inst {
     /// passed down, and its name.
     unset: BTreeMap<String, (Span, String)>,
     /// Required params that have no value yet, when only a placement is read: a scene's
-    /// instance left them out, or a param above passes one of them on. Its model is not whole.
+    /// instance left them out, or a param above passes one of them on. Each body such a
+    /// param writes is not whole.
     waiting: BTreeSet<String>,
     /// Why this instance or one above it is left out.
     dropped: Option<String>,
@@ -1037,7 +1038,12 @@ impl<'p> Circuit<'p> {
             let Some((model, set_by)) = self.built.get(&inst).cloned() else {
                 continue;
             };
-            for body in &part.bodies {
+            let waiting = self.waiting_bodies(inst, part);
+            for body in part
+                .bodies
+                .iter()
+                .filter(|body| !waiting.contains(&body.name))
+            {
                 let mut flat = self.insts[inst].flat();
                 let mut fields = model.clone();
                 let mut set_here = SetBy::new();
@@ -1182,11 +1188,47 @@ impl<'p> Circuit<'p> {
             if let Some(reported) = self.out.since(before) {
                 self.failed.entry(inst).or_insert(reported);
             }
-            // A model still waiting for a value is not whole, so the engine does not see it.
-            if self.insts[inst].waiting.is_empty() {
+            // Hold back each body a waiting param writes. That field has no value yet, so
+            // the body is not whole. A pointer into a body writes it, a pointer of `/`
+            // writes every body, and a param that sets several writes each of them. A param
+            // a parent passed down is already in `waiting`, and its own pointers decide.
+            // A sibling stays. Each of its engine pins sits on a pin of the part, and the
+            // nets were named from every body before one is held back, so the engine checks
+            // the sibling as its own part. It does not take a pin net from the body that waits.
+            let every_body_waits = part
+                .bodies
+                .iter()
+                .all(|body| self.body_waits(inst, part, body));
+            if !every_body_waits {
                 self.built.insert(inst, (model, set_by));
             }
         }
+    }
+
+    /// The bodies a waiting param writes, by the name `Body::name` uses. `None` is the
+    /// one engine part of a model that is not a map of named parts.
+    fn waiting_bodies(&self, inst: usize, part: &Part) -> BTreeSet<Option<String>> {
+        part.bodies
+            .iter()
+            .filter(|body| self.body_waits(inst, part, body))
+            .map(|body| body.name.clone())
+            .collect()
+    }
+
+    /// Whether `body` is not whole: a param still waiting for a value writes it.
+    fn body_waits(&self, inst: usize, part: &Part, body: &Body) -> bool {
+        let waiting = &self.insts[inst].waiting;
+        if waiting.is_empty() {
+            return false;
+        }
+        part.params.iter().any(|decl| {
+            waiting.contains(&decl.name)
+                && decl
+                    .pointers()
+                    .iter()
+                    .copied()
+                    .any(|pointer| pointer_writes_body(pointer, body))
+        })
     }
 
     /// Flat part names are checked even when a wire is wrong.
@@ -1490,6 +1532,16 @@ fn fate(w: &Write, writes: &[Write]) -> Fate {
         }
     }
     Fate::Lands { opens }
+}
+
+/// Whether `pointer` writes `body`. One engine part is the whole model, so every pointer
+/// writes it. In a model of named parts, a pointer writes the body it lands in, and `/`
+/// writes every body because it replaces the model.
+fn pointer_writes_body(pointer: &str, body: &Body) -> bool {
+    let Some(name) = &body.name else {
+        return true;
+    };
+    pointer == "/" || within(pointer, &format!("/{name}"))
 }
 
 /// The pointers of the objects `pointer` passes through, outermost first: `/a` and `/a/b` for

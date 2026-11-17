@@ -6,8 +6,8 @@
 //! source. A Block's project is those part folders, the Block's own files and the lock.
 //!
 //! A part is read as placed, before a user's scene sets it: a required param with no default
-//! has no value, so a model that needs one is not compiled, and a scene ground is not needed.
-//! A Block's scene sets what it uses, so it is read in full.
+//! has no value, so a body that param writes is not compiled, and a scene ground is not needed.
+//! A body it does not write is compiled. A Block's scene sets what it uses, so it is read in full.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};

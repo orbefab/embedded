@@ -1309,3 +1309,211 @@ fn disagreeing_child_grounds_are_not_published() {
     );
     refuse_installed(&src, &project, "scene.jsonc", "different nets");
 }
+
+/// A source and a resistor in one model. `voltage` writes only the source.
+fn combo_part() -> &'static str {
+    r#"{
+  "format": 1,
+  "part": "combo",
+  "version": "0.1.0",
+  "title": "Combo",
+  "summary": "A source and a resistor",
+  "license": "MIT",
+  "pins": { "pos": [1], "neg": [2], "a": [3], "b": [4] },
+  "params": { "voltage": { "unit": "V", "required": true, "sets": "/src/voltage" } },
+  "model": {
+    "src": { "kind": "voltage_source", "pins": { "p": "pos", "n": "neg" } },
+    "r": { "kind": "resistor", "resistance": "220", "pins": { "a": "a", "b": "b" } }
+  }
+}
+"#
+}
+
+/// The resistor beside a waiting voltage is the same error `orbe check` prints once a scene
+/// sets that voltage. The source itself is not whole, so a missing voltage is not a finding.
+#[test]
+fn a_sibling_body_a_waiting_param_does_not_write_is_not_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let folder = put_part(&src, "combo", combo_part());
+    let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"combo\", \"voltage\": \"5\" } }, \"ground\": \"r1.neg\" }\n";
+    let project = dir.path().join("project");
+    project_locked(&project, scene, &[("combo", &folder, "0.1.0", "@acme")]);
+    refuse_installed(&src, &project, "parts/combo/part.jsonc", "string \"220\"");
+}
+
+/// The waiting param writes the only body, so the build has nothing else to refuse and the
+/// part is published. A scene that sets the value checks.
+#[test]
+fn a_part_whose_waiting_param_writes_its_only_body_is_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let folder = put_part(
+        &src,
+        "src",
+        &required_part(
+            "src",
+            SOURCE_PINS,
+            "voltage",
+            r#""unit": "V", "required": true, "sets": "/voltage""#,
+            SOURCE_MODEL,
+        ),
+    );
+    let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"src\", \"voltage\": \"5\" } }, \"ground\": \"r1.neg\" }\n";
+    let project = dir.path().join("project");
+    project_locked(&project, scene, &[("src", &folder, "0.1.0", "@acme")]);
+    assert_published(
+        &src,
+        &project,
+        Checked {
+            parts: 1,
+            nets: 2,
+            ground: "r1__neg".into(),
+        },
+    );
+}
+
+const FIT_CHOICE: &str = r#"{ "value": 5, "unit": "V", "source": "user" }"#;
+const OHM_CHOICE: &str = r#"{ "value": 220, "unit": "ohm", "source": "user" }"#;
+
+/// One choice writes the source and the first resistor. The third body is not one of those
+/// pointers, so its string resistance is still refused.
+#[test]
+fn a_param_that_sets_several_bodies_still_checks_one_it_does_not_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let part = format!(
+        r#"{{
+  "format": 1,
+  "part": "combo",
+  "version": "0.1.0",
+  "title": "Combo",
+  "summary": "A source and two resistors",
+  "license": "MIT",
+  "pins": {{ "pos": [1], "neg": [2], "a": [3], "b": [4], "c": [5], "d": [6] }},
+  "params": {{
+    "fit": {{
+      "required": true,
+      "choices": {{
+        "five": {{
+          "sets": {{
+            "/src/voltage": {FIT_CHOICE},
+            "/r/resistance": {OHM_CHOICE}
+          }}
+        }}
+      }}
+    }}
+  }},
+  "model": {{
+    "src": {{ "kind": "voltage_source", "pins": {{ "p": "pos", "n": "neg" }} }},
+    "r": {{ "kind": "resistor", "resistance": "220", "pins": {{ "a": "a", "b": "b" }} }},
+    "k": {{ "kind": "resistor", "resistance": "220", "pins": {{ "a": "c", "b": "d" }} }}
+  }}
+}}
+"#
+    );
+    let folder = put_part(&src, "combo", &part);
+    let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"combo\", \"fit\": \"five\" } }, \"ground\": \"r1.neg\" }\n";
+    let project = dir.path().join("project");
+    project_locked(&project, scene, &[("combo", &folder, "0.1.0", "@acme")]);
+    refuse_installed(&src, &project, "parts/combo/part.jsonc", "string \"220\"");
+}
+
+/// The same choice writes both bodies, and the resistor's string is what the choice replaces.
+/// The build does not pick the choice, so it does not treat that string as the value.
+#[test]
+fn a_body_a_waiting_choice_writes_is_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let part = format!(
+        r#"{{
+  "format": 1,
+  "part": "combo",
+  "version": "0.1.0",
+  "title": "Combo",
+  "summary": "A source and a resistor",
+  "license": "MIT",
+  "pins": {{ "pos": [1], "neg": [2], "a": [3], "b": [4] }},
+  "params": {{
+    "fit": {{
+      "required": true,
+      "choices": {{
+        "five": {{
+          "sets": {{
+            "/src/voltage": {FIT_CHOICE},
+            "/r/resistance": {OHM_CHOICE}
+          }}
+        }}
+      }}
+    }}
+  }},
+  "model": {{
+    "src": {{ "kind": "voltage_source", "pins": {{ "p": "pos", "n": "neg" }} }},
+    "r": {{ "kind": "resistor", "resistance": "220", "ratings": {{ "power": null }}, "pins": {{ "a": "a", "b": "b" }} }}
+  }}
+}}
+"#
+    );
+    let folder = put_part(&src, "combo", &part);
+    let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"combo\", \"fit\": \"five\" } }, \"ground\": \"r1.neg\" }\n";
+    let project = dir.path().join("project");
+    project_locked(&project, scene, &[("combo", &folder, "0.1.0", "@acme")]);
+    assert_published(
+        &src,
+        &project,
+        Checked {
+            parts: 2,
+            nets: 4,
+            ground: "r1__neg".into(),
+        },
+    );
+}
+
+/// `voltage` is passed to the child source. The wrapper's own resistor is not that pointer,
+/// so the build refuses it on the same line `orbe check` does once the scene sets the value.
+#[test]
+fn a_body_stays_checked_when_the_waiting_param_is_passed_to_a_child() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let source = put_part(
+        &src,
+        "src",
+        &required_part(
+            "src",
+            SOURCE_PINS,
+            "voltage",
+            r#""unit": "V", "required": true, "sets": "/voltage""#,
+            SOURCE_MODEL,
+        ),
+    );
+    let wrap = r#"{
+  "format": 1,
+  "part": "wrap",
+  "version": "0.1.0",
+  "title": "Wrap",
+  "summary": "A source and a resistor",
+  "license": "MIT",
+  "pins": { "pos": "s.pos", "neg": "s.neg", "a": [1], "b": [2] },
+  "params": { "voltage": {} },
+  "parts": { "s": { "type": "src", "voltage": { "param": "voltage" } } },
+  "model": { "kind": "resistor", "resistance": "220", "pins": { "a": "a", "b": "b" } }
+}
+"#;
+    let folder = put_part(&src, "wrap", wrap);
+    let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"wrap\", \"voltage\": \"5\" } }, \"ground\": \"r1.neg\" }\n";
+    let project = dir.path().join("project");
+    project_locked(
+        &project,
+        scene,
+        &[
+            ("src", &source, "0.1.0", "@acme"),
+            ("wrap", &folder, "0.1.0", "@acme"),
+        ],
+    );
+    refuse_installed(&src, &project, "parts/wrap/part.jsonc", "string \"220\"");
+}
