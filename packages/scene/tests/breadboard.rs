@@ -3,9 +3,11 @@
 
 mod common;
 
+use std::collections::BTreeMap;
 use std::fs;
+use std::path::Path;
 
-use orbe_scene::{Files, Netlist, Placement};
+use orbe_scene::{Code, Diagnostic, Files, Netlist, Placement};
 
 fn read(dir: &std::path::Path) -> Netlist {
     orbe_scene::read(&Files::disk(), &dir.join("scene.jsonc"))
@@ -311,4 +313,283 @@ fn a_missed_leg_s_hint_names_only_a_placement_that_seats_the_part() {
     );
     let suggested = on_400("", r#""nano": { "on": { "D13": "bb.b1" } }"#, "");
     read(suggested.path());
+}
+
+fn findings(dir: &Path) -> Vec<Diagnostic> {
+    orbe_scene::read(&Files::disk(), &dir.join("scene.jsonc"))
+        .err()
+        .unwrap_or_default()
+}
+
+fn layout_of(dir: &Path) -> Vec<Diagnostic> {
+    findings(dir)
+        .into_iter()
+        .filter(|d| d.code == Code::Layout)
+        .collect()
+}
+
+/// The byte offset of a 1-based line and character column.
+fn at_line_col(text: &str, line: usize, column: usize) -> usize {
+    let mut rest = text;
+    let mut offset = 0;
+    for _ in 1..line {
+        let step = rest.find('\n').expect("the finding's line") + 1;
+        offset += step;
+        rest = &rest[step..];
+    }
+    offset
+        + rest
+            .chars()
+            .take(column - 1)
+            .map(char::len_utf8)
+            .sum::<usize>()
+}
+
+/// Move each shared lead to the hole its hint names. The hints of one check name different
+/// holes, and the scene checks once every one of them is applied.
+fn apply_every_hint(dir: &Path) -> Vec<String> {
+    let found = findings(dir);
+    let layout: Vec<&Diagnostic> = found.iter().filter(|d| d.code == Code::Layout).collect();
+    assert!(!layout.is_empty(), "no shared hole:\n{found:#?}");
+    let mut suggested = Vec::new();
+    let mut edits: BTreeMap<String, Vec<(usize, usize, String)>> = BTreeMap::new();
+    for d in &layout {
+        let hole = d
+            .hint
+            .split("such as ")
+            .nth(1)
+            .unwrap_or_else(|| panic!("no hole in {}", d.hint));
+        suggested.push(hole.to_string());
+        let path = dir.join(&d.file);
+        let text = fs::read_to_string(&path).unwrap();
+        let offset = at_line_col(&text, d.line, d.column);
+        let literal = &text[offset..];
+        assert!(
+            literal.starts_with('"'),
+            "{}:{}:{} is not a wire end",
+            d.file,
+            d.line,
+            d.column
+        );
+        let end = literal[1..].find('"').expect("the end of the wire ref") + 1;
+        edits
+            .entry(d.file.clone())
+            .or_default()
+            .push((offset + 1, offset + end, hole.to_string()));
+    }
+    let mut unique = suggested.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        suggested.len(),
+        "two hints name one hole: {suggested:?}"
+    );
+    for (file, mut spans) in edits {
+        spans.sort_by_key(|span| std::cmp::Reverse(span.0));
+        let path = dir.join(file);
+        let mut text = fs::read_to_string(&path).unwrap();
+        for (start, end, hole) in spans {
+            text.replace_range(start..end, &hole);
+        }
+        fs::write(path, text).unwrap();
+    }
+    orbe_scene::read(&Files::disk(), &dir.join("scene.jsonc")).unwrap_or_else(|found| {
+        panic!(
+            "after every hint:\n{}",
+            found
+                .iter()
+                .map(|d| format!("{d}\n  hint was applied from {suggested:?}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    });
+    suggested
+}
+
+/// One check's hints name different holes, including the two `e31` ends and the two `f31`
+/// ends, and both orders of a wire whose other end is the nearest hole.
+#[test]
+fn applying_every_hint_in_one_check_leaves_each_hole_with_one_lead() {
+    let case = common::repo().join("packages/scene/tests/bad/a_hole_holds_one_lead");
+    let dir = common::overlaid(&case);
+    let holes = apply_every_hint(dir.path());
+    assert_eq!(holes.iter().filter(|hole| *hole == "bb.d31").count(), 1);
+    assert_eq!(holes.iter().filter(|hole| *hole == "bb.g31").count(), 1);
+
+    for (first, second) in [("X22", "X21"), ("X21", "X22")] {
+        let dir = on_400(
+            r#""r2": { "type": "resistor-axial", "resistance": "220" },"#,
+            r#""r2": { "on": { "a": "bb.b22" }, "rotate": [0, 0, -90] }"#,
+            &format!(r#"["bb.{first}", "bb.{second}"]"#),
+        );
+        let holes = apply_every_hint(dir.path());
+        assert_eq!(holes.len(), 1, "{first} then {second}: {holes:?}");
+        assert_ne!(holes[0], format!("bb.{first}"));
+        assert_ne!(holes[0], format!("bb.{second}"));
+    }
+}
+
+fn loose(kind: &str, parts: &str, layout: &str, wires: &str, ground: &str) -> tempfile::TempDir {
+    let dir = common::project("nano-button");
+    let text = format!(
+        r#"{{
+  "format": 1,
+  "parts": {{
+    "bb": {{ "type": "{kind}" }},
+    {parts}
+  }},
+  "layout": {{ "bb": {{ "at": [0, 0, 0] }}, {layout} }},
+  "wires": [{wires}],
+  "ground": "{ground}",
+}}
+"#
+    );
+    fs::write(dir.path().join("scene.jsonc"), text).unwrap();
+    dir
+}
+
+/// A column of five and the 400's 25-hole X rail, each already full, say so.
+#[test]
+fn a_full_strip_says_the_strip_is_full() {
+    let full = "a hole holds one lead; the strip is full, so move one lead to another strip";
+    let column = loose(
+        "breadboard-400",
+        r#""r1": { "type": "resistor-axial", "resistance": "220" },"#,
+        r#""r1": { "on": { "a": "bb.a30" }, "rotate": [0, 0, 90] }"#,
+        r#"["bb.b30", "bb.j1"], ["bb.c30", "bb.j2"], ["bb.d30", "bb.j3"], ["bb.a30", "bb.j4"]"#,
+        "r1.a",
+    );
+    let found = layout_of(column.path());
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].hint, full);
+    assert!(found[0].message.contains("bb.a30"), "{}", found[0].message);
+
+    let columns: Vec<u32> = (1..=29).filter(|n| n % 6 != 0).collect();
+    assert_eq!(columns.len(), 25);
+    let mut wires: Vec<String> = columns
+        .iter()
+        .enumerate()
+        .map(|(i, col)| format!(r#"["bb.X{col}", "bb.a{}"]"#, i + 1))
+        .collect();
+    wires.push(r#"["bb.X1", "bb.j30"]"#.to_string());
+    let rail = loose(
+        "breadboard-400",
+        r#""r1": { "type": "resistor-axial", "resistance": "220" },"#,
+        "",
+        &wires.join(", "),
+        "r1.a",
+    );
+    let found = layout_of(rail.path());
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].hint, full, "{}", found[0].message);
+    assert!(
+        found[0].message.contains("names bb.X1"),
+        "{}",
+        found[0].message
+    );
+}
+
+fn kit(part: &str, scene: &str) -> tempfile::TempDir {
+    let dir = common::project("nano-button");
+    fs::write(dir.path().join("parts/kit.jsonc"), part).unwrap();
+    fs::write(dir.path().join("scene.jsonc"), scene).unwrap();
+    dir
+}
+
+/// A breadboard that is a child of a part follows the same rule for that part's wires and
+/// for a scene wire into one of its holes. A header pin inside a part still takes two wires.
+#[test]
+fn a_breadboard_inside_a_part_holds_one_lead_per_hole() {
+    let two = kit(
+        r#"{
+  "format": 1,
+  "joins_only": true,
+  "parts": { "bb": { "type": "breadboard-830" } },
+  "wires": [
+    ["bb.a1", "bb.b2"],
+    ["bb.a1", "bb.c3"],
+  ],
+}
+"#,
+        r#"{
+  "format": 1,
+  "parts": {
+    "kit": { "type": "./parts/kit.jsonc" },
+    "r1": { "type": "resistor-axial", "resistance": "220" },
+  },
+  "ground": "r1.a",
+}
+"#,
+    );
+    let found = layout_of(two.path());
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert!(
+        found[0].message.contains(
+            "the wire from `kit.bb.a1` to `kit.bb.c3` names kit.bb.a1, which the wire from `kit.bb.a1` to `kit.bb.b2` already holds"
+        ),
+        "{}",
+        found[0].message
+    );
+    assert!(found[0].hint.contains("such as bb.b1"), "{}", found[0].hint);
+    apply_every_hint(two.path());
+
+    let shared = kit(
+        r#"{
+  "format": 1,
+  "joins_only": true,
+  "parts": { "bb": { "type": "breadboard-830" } },
+  "wires": [["bb.a1", "bb.b2"]],
+}
+"#,
+        r#"{
+  "format": 1,
+  "parts": {
+    "kit": { "type": "./parts/kit.jsonc" },
+    "r1": { "type": "resistor-axial", "resistance": "220" },
+  },
+  "wires": [["kit.bb.a1", "r1.a"]],
+  "ground": "r1.a",
+}
+"#,
+    );
+    let found = layout_of(shared.path());
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert!(
+        found[0].message.contains(
+            "the wire from `kit.bb.a1` to `r1.a` names kit.bb.a1, which the wire from `kit.bb.a1` to `kit.bb.b2` already holds"
+        ),
+        "{}",
+        found[0].message
+    );
+    assert!(
+        found[0].hint.contains("such as kit.bb.b1"),
+        "{}",
+        found[0].hint
+    );
+    apply_every_hint(shared.path());
+
+    let header = kit(
+        r#"{
+  "format": 1,
+  "joins_only": true,
+  "parts": { "hdr": { "type": "pin-header-1x15" } },
+  "wires": [
+    ["hdr.1", "hdr.2"],
+    ["hdr.1", "hdr.3"],
+  ],
+}
+"#,
+        r#"{
+  "format": 1,
+  "parts": {
+    "kit": { "type": "./parts/kit.jsonc" },
+    "r1": { "type": "resistor-axial", "resistance": "220" },
+  },
+  "wires": [["kit.hdr.1", "r1.a"]],
+  "ground": "r1.a",
+}
+"#,
+    );
+    read(header.path());
 }
