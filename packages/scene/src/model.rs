@@ -96,9 +96,7 @@ pub(crate) enum ParamKind {
         range: Range,
     },
     Choice(Vec<(String, Vec<(String, Node)>)>),
-    File {
-        text: bool,
-    },
+    File,
     /// No `sets`: a part with children hands it to a child with `{ "param": "<name>" }`.
     Through,
 }
@@ -1298,18 +1296,14 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
                 ParamKind::Choice(field("choices").map(decode_choices).unwrap_or_default())
             }
             ParamShape::File => match field("as").map(Node::str) {
-                Some(Some("text")) => ParamKind::File { text: true },
-                Some(Some("blob")) => ParamKind::File { text: false },
+                Some(Some("text")) => ParamKind::File,
                 Some(_) => continue,
                 None => {
                     out.push(
                         Code::Param,
                         prop.key_span,
-                        format!(
-                            "file param `{}` needs \"as\": \"text\" or \"blob\"",
-                            prop.key
-                        ),
-                        "add \"as\": \"text\" or \"as\": \"blob\"".into(),
+                        format!("file param `{}` needs \"as\": \"text\"", prop.key),
+                        "add \"as\": \"text\"".into(),
                     );
                     continue;
                 }
@@ -1337,7 +1331,7 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
             ParamShape::Through => ParamKind::Through,
         };
         let sets = match kind {
-            ParamKind::Number { .. } | ParamKind::File { .. } => {
+            ParamKind::Number { .. } | ParamKind::File => {
                 field("sets").and_then(Node::str).map(str::to_string)
             }
             ParamKind::Choice(_) | ParamKind::Through => None,

@@ -4,13 +4,11 @@
 use std::path::PathBuf;
 
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::diagnostic::Code;
 use crate::files::Files;
 use crate::model::{ParamDecl, ParamKind, Range};
 use crate::name::did_you_mean;
-use crate::project::hex;
 use crate::syntax::Node;
 use crate::units::{self, Unit};
 
@@ -75,7 +73,7 @@ pub(crate) fn convert(files: &Files, decl: &ParamDecl, arg: &Arg) -> Converted {
                 }
             }
         }
-        ParamKind::File { text } => {
+        ParamKind::File => {
             let Some(rel) = node.str() else {
                 return Err(fail(
                     format!("a file param takes a path, found {}", node.what()),
@@ -83,17 +81,13 @@ pub(crate) fn convert(files: &Files, decl: &ParamDecl, arg: &Arg) -> Converted {
                 ));
             };
             match files.read(&arg.dir.join(rel)) {
-                Ok(bytes) if *text => match String::from_utf8(bytes) {
+                Ok(bytes) => match String::from_utf8(bytes) {
                     Ok(text) => Ok(vec![(pointer, Value::String(text))]),
                     Err(_) => Err(fail(
                         format!("`{rel}` is not text"),
                         "save it as UTF-8 text",
                     )),
                 },
-                Ok(bytes) => Ok(vec![(
-                    pointer,
-                    json!({ "sha256": hex(&Sha256::digest(&bytes)), "bytes": bytes.len() }),
-                )]),
                 Err(_) => Err((
                     Code::FirmwareMissing,
                     format!("no file at `{rel}`"),

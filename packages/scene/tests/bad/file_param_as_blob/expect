@@ -1,0 +1,1 @@
+scene.syntax parts/blob-chip.jsonc:4:47 | `blob` is not one of "text" | write "text"
