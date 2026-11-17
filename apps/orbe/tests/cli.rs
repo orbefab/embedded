@@ -1142,7 +1142,7 @@ fn add_refuses_a_folder_that_is_not_a_project() {
         reply["error"]["hint"]
             .as_str()
             .unwrap()
-            .contains("orbe add -C <folder>"),
+            .contains("orbe add -C '<folder>'"),
         "{stdout}"
     );
     assert_eq!(fs::read_dir(lonely.path()).unwrap().count(), 0);

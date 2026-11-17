@@ -196,10 +196,13 @@ fn read_lock(root: &Path) -> Result<Lock, RunError> {
                 lines.insert(fields.id.clone(), fields);
             }
             Err(()) => {
-                error = Some(format!(
-                    "a parts.lock line is `<id> <version> @<registry> sha256:<hash>`\n{line}"
-                ));
-                break;
+                // A later line can still be the lock-matching newer copy `--relock` keeps.
+                // The first bad line stays the error.
+                if error.is_none() {
+                    error = Some(format!(
+                        "a parts.lock line is `<id> <version> @<registry> sha256:<hash>`\n{line}"
+                    ));
+                }
             }
         }
     }

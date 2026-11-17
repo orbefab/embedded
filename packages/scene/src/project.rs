@@ -280,15 +280,15 @@ impl Loader<'_> {
                         },
                     );
                 }
-                Err(()) => self.out.push(
-                    Code::Syntax,
-                    span,
-                    "a parts.lock line is `<id> <version> @<registry> sha256:<hash>`",
-                    format!(
-                        "`orbe add` writes this file. rebuild it with `{} --relock`",
-                        self.add
-                    ),
-                ),
+                Err(()) => {
+                    let relock = format_add(&self.add, &[], false, false, true).expect("relock");
+                    self.out.push(
+                        Code::Syntax,
+                        span,
+                        "a parts.lock line is `<id> <version> @<registry> sha256:<hash>`",
+                        format!("an add writes this file. rebuild it with `{relock}`"),
+                    );
+                }
             }
         }
     }
@@ -480,7 +480,7 @@ impl Loader<'_> {
             .iter()
             .any(|(id, _, _, overwrite)| *overwrite && ids.contains(&id.as_str()));
         let specs: Vec<String> = ids.iter().map(|id| (*id).to_string()).collect();
-        let command = add_writing(&self.add, &specs, overwrite);
+        let command = self.missing_command(&root, &specs, overwrite);
         let known: Vec<String> = self
             .lock
             .keys()
@@ -503,6 +503,29 @@ impl Loader<'_> {
             self.out
                 .push(Code::PartMissing, *span, format!("part `{id}` {why}"), hint);
         }
+    }
+
+    /// The command that repairs these missing catalog ids. On disk it is the command
+    /// `orbe add` of those ids would print, so a child that differs is named there too.
+    fn missing_command(&self, root: &Path, specs: &[String], overwrite: bool) -> Option<String> {
+        self.disk_repair(root, specs)
+            .or_else(|| add_writing(&self.add, specs, overwrite))
+    }
+
+    /// The command `orbe add` of these ids would print, when this project is a folder on disk.
+    /// A memory set and a non-unix build keep the ids check already gathered.
+    #[cfg(unix)]
+    fn disk_repair(&self, root: &Path, specs: &[String]) -> Option<String> {
+        if self.store == Store::Copies && self.files.is_disk() {
+            crate::add::repair_command(root, &self.add, specs)
+        } else {
+            None
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn disk_repair(&self, _root: &Path, _specs: &[String]) -> Option<String> {
+        None
     }
 
     /// What is at `parts/<id>` for an id that did not resolve, and whether `orbe add` has to
@@ -1016,19 +1039,51 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 /// empty, so a hint never prints `orbe add` with no part id. Check and add both build that
 /// command here, from the ids the add would write.
 pub(crate) fn add_writing(add: &str, specs: &[String], overwrite: bool) -> Option<String> {
-    let specs: Vec<&str> = specs
+    format_add(add, specs, overwrite, false, false)
+}
+
+/// A printed `orbe add`. `add` is already `orbe add` or `orbe add -C <folder>`. Each id is
+/// one shell word. Flags follow the ids, in the order `--overwrite`, `--diff`, `--relock`.
+/// An empty id list is a command only when the command is `--relock`.
+pub(crate) fn format_add(
+    add: &str,
+    ids: &[String],
+    overwrite: bool,
+    diff: bool,
+    relock: bool,
+) -> Option<String> {
+    let ids: Vec<&str> = ids
         .iter()
         .map(String::as_str)
-        .filter(|spec| !spec.is_empty())
+        .filter(|id| !id.is_empty())
         .collect();
-    if specs.is_empty() {
+    if ids.is_empty() && !relock {
         return None;
     }
-    let mut command = format!("{add} {}", specs.join(" "));
+    let mut command = add.to_string();
+    for id in ids {
+        command.push(' ');
+        command.push_str(&shell_word(id));
+    }
     if overwrite {
         command.push_str(" --overwrite");
     }
+    if diff {
+        command.push_str(" --diff");
+    }
+    if relock {
+        command.push_str(" --relock");
+    }
     Some(command)
+}
+
+/// Shell words joined by one space.
+pub fn shell_join(words: &[&str]) -> String {
+    words
+        .iter()
+        .map(|word| shell_word(word))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// `id`, or `id@version` when the two versions are in different major versions.

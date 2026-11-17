@@ -78,6 +78,13 @@ impl Files {
         self.kind(path) == Some(Kind::Dir)
     }
 
+    /// Whether reads come from the real filesystem. A hint that plans an add reads folders
+    /// the same way `orbe add` does, which a memory set cannot. Planning an add is unix-only.
+    #[cfg(unix)]
+    pub(crate) fn is_disk(&self) -> bool {
+        matches!(self.store, Store::Disk)
+    }
+
     /// What is at `path`, through any links.
     fn kind(&self, path: &Path) -> Option<Kind> {
         match &self.store {

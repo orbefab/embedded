@@ -180,7 +180,7 @@ TLS to the registry's host is the trust root. The index is not signed. Its hashe
 
 ## Which registry a part came from
 
-A `parts.lock` line is `<id> <version> @<registry> sha256:<hash>`. `@<registry>` is the registry's name, and the parts of the catalog built into `orbe` lock as `@orbefab`. A client maps the name to a template through `registries.json` when it fetches, so a lock reads the same on every machine and a registry that moves changes one line of config, never a lock. A line whose registry field is not `@` and an id is an error, and `orbe add --relock` rebuilds the lock.
+A `parts.lock` line is `<id> <version> @<registry> sha256:<hash>`. `@<registry>` is the registry's name, and the parts of the catalog built into `orbe` lock as `@orbefab`. A client maps the name to a template through `registries.json` when it fetches, so a lock reads the same on every machine and a registry that moves changes one line of config, never a lock. A line whose registry field is not `@` and an id is an error, and `orbe add --relock` rebuilds the lock. A folder that matches its line and is newer than the part this orbe carries keeps that line.
 
 A project takes each part id from one registry, so `parts.lock` has at most one line per id. Two registries can both serve `led-5mm`, and a project holds one of the two. `orbe check` reports a second line for an id as `scene.duplicate`, and `orbe add` refuses to run until the line is gone or `orbe add --relock` rebuilds the lock.
 

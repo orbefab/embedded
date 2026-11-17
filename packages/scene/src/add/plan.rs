@@ -74,7 +74,11 @@ pub(super) fn usage(request: &Request) -> Option<String> {
             .then(|| "orbe add --relock takes no part ids, --diff, or --overwrite".to_string());
     }
     if request.ids.is_empty() {
-        return Some("orbe add takes at least one part id, such as `orbe add led-5mm`".into());
+        let example = project::add_writing("orbe add", &["led-5mm".to_string()], false)
+            .expect("the id is named");
+        return Some(format!(
+            "orbe add takes at least one part id, such as `{example}`"
+        ));
     }
     parse_specs(&request.ids).err()
 }
@@ -119,7 +123,10 @@ pub(super) fn plan(catalog: &Catalog, snapshot: &Snapshot, request: &Request, ad
         return Plan::Refuse(Refusal {
             code: AddCode::LockSyntax,
             message,
-            hint: format!("run `{add} --relock`"),
+            hint: format!(
+                "run `{}`",
+                project::format_add(add, &[], false, false, true).expect("relock")
+            ),
         });
     }
     let selection = match select(catalog, snapshot, &specs, request.overwrite, add) {
@@ -927,6 +934,28 @@ fn change_note(id: &str, from: Option<Version>, to: Version) -> String {
     }
 }
 
+/// A folder that matches its own lock line and is newer than every version this catalog
+/// carries. `--relock` keeps that line. An older version the catalog lacks, another
+/// registry, or a folder that does not match the line stays an error.
+fn kept_newer_line(
+    catalog: &Catalog,
+    snapshot: &Snapshot,
+    id: &str,
+    version: Version,
+) -> Option<LockFields> {
+    let folder = snapshot.folder(id)?;
+    let line = snapshot.lock.get(id)?;
+    if line.registry != catalog.registry() {
+        return None;
+    }
+    let held = Version::parse(&line.version)?;
+    if folder.version != Some(held) || held != version || !folder.is(&line.hash) {
+        return None;
+    }
+    let newest = catalog.newest(id)?.version;
+    (held > newest).then(|| line.clone())
+}
+
 fn plan_relock(catalog: &Catalog, snapshot: &Snapshot, add: &str) -> Plan {
     let mut lines = BTreeMap::new();
     let mut modified = Vec::new();
@@ -941,6 +970,10 @@ fn plan_relock(catalog: &Catalog, snapshot: &Snapshot, add: &str) -> Plan {
             continue;
         };
         let Some(entry) = catalog.get(id, version) else {
+            if let Some(line) = kept_newer_line(catalog, snapshot, id, version) {
+                lines.insert(id.clone(), line);
+                continue;
+            }
             problems.push(format!("the catalog has no `{id}@{version}`"));
             continue;
         };
