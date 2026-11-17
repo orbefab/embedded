@@ -426,8 +426,9 @@ fn grounded(id: &str) -> String {
 }
 
 /// The project an install of these folders would check: the part folders, a lock line per
-/// folder, and `scene.jsonc` read from the project directory.
-fn project_of(project: &Path, scene: &str, parts: &[(&str, &Path, &str, &str)]) {
+/// folder, and `scene.jsonc` read from the project directory. No probe file is written. A
+/// scene that names `./probe-ground.jsonc` uses [`project_of`].
+fn project_locked(project: &Path, scene: &str, parts: &[(&str, &Path, &str, &str)]) {
     std::fs::create_dir_all(project).unwrap();
     let mut lines = Vec::new();
     for (id, folder, version, registry) in parts {
@@ -436,12 +437,73 @@ fn project_of(project: &Path, scene: &str, parts: &[(&str, &Path, &str, &str)]) 
     }
     lines.sort();
     std::fs::write(project.join("scene.jsonc"), scene).unwrap();
-    std::fs::write(project.join("probe-ground.jsonc"), PROBE_GROUND).unwrap();
     std::fs::write(
         project.join("parts.lock"),
         format!("{}\n", lines.join("\n")),
     )
     .unwrap();
+}
+
+fn project_of(project: &Path, scene: &str, parts: &[(&str, &Path, &str, &str)]) {
+    project_locked(project, scene, parts);
+    std::fs::write(project.join("probe-ground.jsonc"), PROBE_GROUND).unwrap();
+}
+
+struct Checked {
+    parts: u64,
+    nets: u64,
+    ground: String,
+}
+
+fn check_clean(project: &Path) -> Checked {
+    let output = Command::new(env!("CARGO_BIN_EXE_orbe"))
+        .args(["check", "scene.jsonc"])
+        .current_dir(project)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    let json = Command::new(env!("CARGO_BIN_EXE_orbe"))
+        .args(["check", "--json", "scene.jsonc"])
+        .current_dir(project)
+        .output()
+        .unwrap();
+    let body = String::from_utf8(json.stdout).unwrap();
+    let err = String::from_utf8(json.stderr).unwrap();
+    assert_eq!(json.status.code(), Some(0), "{body}{err}");
+    let reply: Value = serde_json::from_str(body.trim()).unwrap();
+    assert_eq!(reply["ok"], true, "{body}");
+    let data = &reply["data"];
+    let parts = data["parts"].as_u64().unwrap();
+    let nets = data["nets"].as_u64().unwrap();
+    let ground = data["ground"].as_str().unwrap().to_string();
+    assert_eq!(data["scene"], "scene.jsonc");
+    assert_eq!(
+        stdout.trim(),
+        format!("scene.jsonc: ok, {parts} engine parts, {nets} nets, ground {ground}")
+    );
+    Checked {
+        parts,
+        nets,
+        ground,
+    }
+}
+
+fn assert_published(src: &Path, project: &Path, expect: Checked) {
+    let got = check_clean(project);
+    assert_eq!(got.parts, expect.parts);
+    assert_eq!(got.nets, expect.nets);
+    assert_eq!(got.ground, expect.ground);
+    let out = src.join("out");
+    let path = |p: &Path| p.to_str().unwrap().to_string();
+    let (code, stdout, stderr) = orbe(&["registry", "build", &path(src), &path(&out)]);
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    assert!(
+        stdout.starts_with(&format!("wrote {}: ", out.display())),
+        "{stdout}"
+    );
+    assert!(out.join("index.json").is_file(), "{stdout}");
 }
 
 fn check_at(project: &Path, snippet: &str) -> Found {
@@ -724,4 +786,148 @@ fn a_changed_sealed_catalog_part_is_not_published() {
         "parts/resistor-axial/part.jsonc",
         "in `title`",
     );
+}
+
+#[test]
+fn a_block_that_names_the_probe_firmware_is_not_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let folder = src.join("parts/atmega328p-dip28");
+    copy_tree(&repo().join("parts/atmega328p-dip28"), &folder);
+    let scene = "{ \"format\": 1, \"parts\": { \"mcu\": { \"type\": \"atmega328p-dip28\", \"firmware\": \"firmware.hex\" } }, \"ground\": \"mcu.GND\" }\n";
+    put_block(&src, "blink", "atmega328p-dip28", scene);
+    let project = dir.path().join("project");
+    project_locked(
+        &project,
+        scene,
+        &[("atmega328p-dip28", &folder, "0.1.0", "@orbefab")],
+    );
+    refuse_installed(&src, &project, "blocks/blink/scene.jsonc", "firmware.hex");
+}
+
+#[test]
+fn a_block_that_names_the_probe_ground_is_not_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let folder = put_part(&src, "lamp", LAMP);
+    let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"lamp\" }, \"g\": { \"type\": \"./probe-ground.jsonc\" } }, \"ground\": \"g.neg\" }\n";
+    put_block(&src, "blink", "lamp", scene);
+    let project = dir.path().join("project");
+    project_locked(&project, scene, &[("lamp", &folder, "1.2.0", "@acme")]);
+    refuse_installed(
+        &src,
+        &project,
+        "blocks/blink/scene.jsonc",
+        "probe-ground.jsonc",
+    );
+}
+
+#[test]
+fn a_part_path_that_walks_up_to_a_probe_file_is_not_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let part = r#"{
+  "format": 1,
+  "part": "lamp",
+  "version": "1.2.0",
+  "title": "Lamp",
+  "summary": "A lamp",
+  "license": "MIT",
+  "pins": { "a": [1], "b": [2] },
+  "params": {
+    "resistance": { "unit": "ohm", "default": "220", "min_exclusive": 0, "sets": "/resistance" },
+    "note": { "file": "txt", "as": "text", "default": "../../firmware.hex", "sets": "/note" }
+  },
+  "model": { "kind": "resistor", "ratings": { "power": null }, "note": "" }
+}
+"#;
+    let folder = put_part(&src, "lamp", part);
+    let scene =
+        "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"lamp\" } }, \"ground\": \"r1.a\" }\n";
+    let project = dir.path().join("project");
+    project_locked(&project, scene, &[("lamp", &folder, "1.2.0", "@acme")]);
+    refuse_installed(&src, &project, "parts/lamp/part.jsonc", "firmware.hex");
+}
+
+#[test]
+fn a_required_voltage_below_zero_is_published() {
+    let cases = [
+        (r#""max_exclusive": 0"#, "-2"),
+        (r#""max_exclusive": -5"#, "-6"),
+        (r#""min_exclusive": -10, "max_exclusive": -1"#, "-5"),
+        (r#""min_exclusive": 0, "max_exclusive": 5"#, "2"),
+    ];
+    for (bounds, voltage) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        manifest(&src);
+        let part = format!(
+            r#"{{
+  "format": 1,
+  "part": "src",
+  "version": "0.1.0",
+  "title": "Source",
+  "summary": "A source",
+  "license": "MIT",
+  "pins": {{ "pos": [1], "neg": [2] }},
+  "params": {{ "voltage": {{ "unit": "V", "required": true, {bounds}, "sets": "/voltage" }} }},
+  "model": {{ "kind": "voltage_source", "pins": {{ "p": "pos", "n": "neg" }} }}
+}}
+"#
+        );
+        let folder = put_part(&src, "src", &part);
+        let scene = format!(
+            "{{ \"format\": 1, \"parts\": {{ \"r1\": {{ \"type\": \"src\", \"voltage\": \"{voltage}\" }} }}, \"ground\": \"r1.neg\" }}\n"
+        );
+        let project = dir.path().join("project");
+        project_locked(&project, &scene, &[("src", &folder, "0.1.0", "@acme")]);
+        assert_published(
+            &src,
+            &project,
+            Checked {
+                parts: 1,
+                nets: 2,
+                ground: "r1__neg".into(),
+            },
+        );
+    }
+}
+
+#[test]
+fn disagreeing_child_grounds_are_not_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let grounded_lamp = |id: &str| {
+        LAMP.replacen("\"part\": \"lamp\"", &format!("\"part\": \"{id}\""), 1)
+            .replacen("\"model\":", "\"ground\": \"a\",\n  \"model\":", 1)
+    };
+    let left = put_part(&src, "left", &grounded_lamp("left"));
+    let right = put_part(&src, "right", &grounded_lamp("right"));
+    let twin = r#"{
+  "format": 1,
+  "part": "twin",
+  "version": "0.1.0",
+  "title": "Twin",
+  "license": "MIT",
+  "pins": { "a": "l.a", "b": "r.b" },
+  "parts": { "l": { "type": "left" }, "r": { "type": "right" } }
+}
+"#;
+    let folder = put_part(&src, "twin", twin);
+    let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"twin\" } } }\n";
+    let project = dir.path().join("project");
+    project_locked(
+        &project,
+        scene,
+        &[
+            ("left", &left, "1.2.0", "@acme"),
+            ("right", &right, "1.2.0", "@acme"),
+            ("twin", &folder, "0.1.0", "@acme"),
+        ],
+    );
+    refuse_installed(&src, &project, "scene.jsonc", "different nets");
 }
