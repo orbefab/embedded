@@ -35,7 +35,7 @@ pin-header-1x15 0.1.0 @orbefab sha256:f579fa90b8bf1321d3d67a6e1c2e6350861a00baf3
 pin-header-2x3 0.1.0 @orbefab sha256:cb0257661e022f8a04df8388c6cc2197a53fd660bcbb314b45ba864f297fefee
 pmos-fdn340p-sot23 0.1.0 @orbefab sha256:ad4f8828ae8fde20ee1c5e334dbe3ab763e04c75081b38fbc3cf5949127b2ae7
 potentiometer-wh148 0.1.0 @orbefab sha256:43bc4a87efcb4ee1943c6984456246135c6add35117fb6342af4dbc0d761f9e8
-ptc-fuse-1812 0.1.0 @orbefab sha256:6b594e90492888f73cf327f8df4ca17f38d3982fdd80110230f3abe31699700e
+ptc-fuse-1812 0.1.0 @orbefab sha256:fd6a0cd0b937a7b7e03fbb56c3edb96c96e27e2e8a5919e23df2139b326e73e4
 resistor-0603 0.1.0 @orbefab sha256:9ed5c183a4755e03dabcf37d986e00a760a5d16cffe8fb840d5177136424435f
 resistor-array-4x0603 0.1.0 @orbefab sha256:26a4a1f3638de807d9fa94b6985eb5ae152c4a0b7f88d366ed14a2c1b39173a3
 resistor-axial 0.1.0 @orbefab sha256:3429b0eacc8601daceef7a6882d601157f71f9f76651c58ba98b148964e389fa
@@ -48,5 +48,5 @@ tactile-switch-smd 0.1.0 @orbefab sha256:02e2deadf249f191c0179fbe436891c7d3b110d
 tactile-switch-ts42 0.1.0 @orbefab sha256:4eaefdd5eb528baa5fcb29b7c841f142ccd7d7f5432ea0c9d21543304874bd2b
 trimmer-3362p 0.1.0 @orbefab sha256:32bae2c3583b52cd3ea6f9846cca0915cb7e919370a873c3a4d21d1f49dcfeed
 uno-board 0.1.0 @orbefab sha256:5eaf49aef11effc794b9f5eb5dd10ebb3c0fd46ae75b7970f346252165cece8f
-usb-b-socket 0.1.0 @orbefab sha256:16297c4c675d641f4bfc093b951249f8854b5625a5959726919df645d9d49dcb
-usb-mini-b 0.1.0 @orbefab sha256:6c6f4cb85ed04563e8747edd505fb65edb906c42c6a1e469e68156b5c1cbfc3d
+usb-b-socket 0.1.0 @orbefab sha256:80e13d260489b43d6af2ea0fecfe825c874f5d69742a5fa7cfe3c21a84af082c
+usb-mini-b 0.1.0 @orbefab sha256:c7fbdd2b378ce6e4e8a3a3cccb59903aee87206fb1b548b017186d4090d8cac4

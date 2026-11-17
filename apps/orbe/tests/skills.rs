@@ -1049,6 +1049,68 @@ fn a_failed_test_prints_what_core_shows() {
 }
 
 #[test]
+fn a_load_over_the_usb_supply_warns_and_a_wire_across_it_is_a_short() {
+    let project = worked_example();
+    let dir = project.path();
+    add_parts(dir, &["resistor-axial"]);
+    let scene = fs::read_to_string(dir.join("scene.jsonc")).unwrap();
+    let cathode = "[\"led1.cathode\", \"nano.GND\"],";
+    let loaded = scene
+        .replace(
+            "\"led1\": {",
+            "\"rl\": { \"type\": \"resistor-axial\", \"resistance\": \"2.5\" },\n    \"led1\": {",
+        )
+        .replace(
+            cathode,
+            &format!("{cathode} [\"nano.5V\", \"rl.a\"], [\"rl.b\", \"nano.GND\"],"),
+        );
+    assert!(loaded.contains("\"rl.a\"") && loaded.contains("\"rl\": {"));
+    fs::write(dir.join("scene.jsonc"), &loaded).unwrap();
+    let runtime = Runtime::new();
+    let orbe = |args: &[&str]| runtime.orbe(dir, args);
+    let open = orbe(&["open", "--json"]).ok().json();
+    let supply = open["data"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["code"] == "rating.current")
+        .unwrap_or_else(|| panic!("{open}"))
+        .clone();
+    orbe(&["close"]).ok();
+    let message = supply["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("#nano__usb__host.i (nano.usb) "),
+        "{message}"
+    );
+    let peak = supply["data"]["peak"].as_f64().unwrap();
+    assert_eq!(supply["data"]["limit"], 0.5);
+
+    let shorted = scene.replace(cathode, &format!("{cathode} [\"nano.5V\", \"nano.GND\"],"));
+    fs::write(dir.join("scene.jsonc"), &shorted).unwrap();
+    let check = orbe(&["check", "scene.jsonc"]);
+    assert_eq!(check.code, 1);
+    for said in [
+        "error[net.short]: the wire from `nano.5V` to `nano.GND` shorts the supply `nano.usb`, which holds the two apart",
+        "hint: remove the wire; a load from `nano.5V` to `nano.GND` needs a part that limits its current, such as a resistor",
+    ] {
+        assert!(check.stdout.contains(said), "{}", check.stdout);
+    }
+    assert_eq!(orbe(&["open"]).code, 1);
+
+    let core = skill("core");
+    says(
+        &core,
+        &format!(
+            "A load over that on 5V, such as 2.5 ohm from 5V to GND ({peak:.1} A), warns `rating.current` on the supply, `#nano__usb__host.i (nano.usb)`, at {peak:.1} A over its 0.5 A rating."
+        ),
+    );
+    says(
+        &core,
+        "A wire from the Nano's 5V straight to GND is a short: `orbe check` and `orbe open` refuse the scene with `net.short`, naming the wire.",
+    );
+}
+
+#[test]
 fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     let project = worked_example();
     let dir = project.path();

@@ -183,7 +183,9 @@ A potentiometer has no `ratings` field. It has no `i`, `v`, or `p`. Both legs ar
 
 `voltage` is a value in `V`, which may be any finite number, including 0 and negative values. Or it is a waveform in `V`, described in [Source waveforms](#source-waveforms). A different unit is `netlist.unit`.
 
-A voltage source has no `ratings` field.
+`p` and `n` must be on two nets. A source with both on one net is `net.short`, an error, because no solve can hold one net apart from itself.
+
+`ratings` is optional. When present it holds `current`, the most the supply delivers, which bounds `|i|`. A netlist without the object leaves the source unrated, as one written before sources had ratings does. See [Ratings](#ratings).
 
 ### Current source
 
@@ -1311,7 +1313,7 @@ A blob the document names that no folder has, a name whose every file hashes to 
 
 ## Ratings
 
-A rating bounds the stress on a part. Every key of a kind's `ratings` object is required. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, where it is optional.
+A rating bounds the stress on a part. Every key of a kind's `ratings` object is required. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p` and `voltage_source`, where it is optional.
 
 | Kind | Keys | Checked quantity |
 | --- | --- | --- |
@@ -1320,8 +1322,9 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `linear_regulator` | `current`, `power` | `#<part>.iout`, `#<part>.p` |
 | `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
 | `nmos` | `current`, `power` | `#<part>.id`, `#<part>.p` |
+| `voltage_source` | `current` | `#<part>.i` |
 | `atmega328p` | `pin_current`, `supply_current`, `rail_margin`, `reset_voltage`, `supply_voltage` | each port pin's current, the current through `VCC` and `GND_8`, and each pin's voltage over `GND_8`, each named `#<part>.pin.<pin>` |
-| `voltage_source`, `current_source`, `capacitor`, `inductor`, `relay`, `switch`, `ne555`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `pulses_replay`, `ws2812`, `dht22` | none | |
+| `current_source`, `capacitor`, `inductor`, `relay`, `switch`, `ne555`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `pulses_replay`, `ws2812`, `dht22` | none | |
 
 `current`, `pin_current` and `supply_current` are in `A`. `power` is in `W`. `rail_margin`, `reset_voltage` and `supply_voltage` are in `V`. A rating must be greater than 0. A missing key, an unknown key, and a missing `ratings` object where it is required are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.<key>`, such as `ratings.current`. A value of 0 or below is `netlist.value` with the same field.
 

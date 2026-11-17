@@ -281,7 +281,20 @@ A DC path is a chain of resistors, potentiometers, voltage sources, diodes, LEDs
 
 A resistor from `vin` to `lonely`, with a voltage source from `vin` to `gnd`, puts `lonely` on a path to ground. Two LEDs in series from `vled` to `gnd`, with a resistor from `vin` to `vled`, put `mid` on a path to ground. A net that no part names is floating. Two nets whose only part is a resistor between them are floating. The operating point is still written, and `orbe-run run` exits 0.
 
-## solver.singular
+## net.short
+
+Severity `error`. Refs are the voltage source, then `#net.<name>`, the net both its pins are on. `t_ps` is `null`.
+
+The message is:
+
+```text
+{part} holds `p` and `n` apart, but both are on {net}, so the circuit shorts it
+```
+
+`data` is `{}`.
+
+Parse checks it, so the netlist is refused and nothing solves. An ideal source across one net has a branch row of zeros, which the solve would report as `solver.singular` at the source. A wire from a board's 5V straight to its GND does this on a board whose USB source feeds 5V with nothing in between. A source of 0 V across one net is the same short.
+
 
 Severity `error`. Refs is the unknown the zero pivot names, a net or a part. `t_ps` is 0 for the operating point. In a transient it is the end of the step that failed, the probe's time for a probe locating a chip event, or the restart's time for the restart solve after a switch edge, a source jump or a chip drive change.
 
@@ -289,7 +302,7 @@ The message is `singular matrix at {ref}`.
 
 `data` is `{}`.
 
-Two voltage sources in parallel, set to different voltages, are singular. With `v1` at 5 V and `v2` at 3 V, both from `vin` to `gnd`, the ref is `#v2`.
+A voltage source whose two pins are on one net never gets here. Parse refuses it as [net.short](#netshort). Two voltage sources in parallel, set to different voltages, are singular. With `v1` at 5 V and `v2` at 3 V, both from `vin` to `gnd`, the ref is `#v2`.
 
 ## solver.nonfinite
 
@@ -575,7 +588,7 @@ The message is `the row at {t_ps} ps did not solve; it is the line between the s
 
 ## rating.current
 
-Severity `warning`. Refs is the rated quantity, `#<part>.i`, `#<part>.ic` for a bipolar transistor, `#<part>.id` for an `nmos`, `#<part>.iout` for a linear regulator, or a chip pin, `#<part>.pin.<pin>`, for an `atmega328p`. `t_ps` is the first time over the rating, 0 for the operating point.
+Severity `warning`. Refs is the rated quantity, `#<part>.i` (a voltage source's too), `#<part>.ic` for a bipolar transistor, `#<part>.id` for an `nmos`, `#<part>.iout` for a linear regulator, or a chip pin, `#<part>.pin.<pin>`, for an `atmega328p`. `t_ps` is the first time over the rating, 0 for the operating point.
 
 The message is:
 
@@ -590,6 +603,8 @@ A transient checks every accepted step, not only the rows. Each step's value hol
 A quantity is over when its magnitude is above the rating. Equal is not over. `peak` is the largest magnitude. For an operating point it equals `abs(observations.op[ref])`. The operating point is still written, and `orbe-run run` exits 0.
 
 The 9 V LED example puts about 0.55 A through an LED rated 0.03 A.
+
+A voltage source with `ratings.current` names its current, `#<part>.i`, over that rating. The USB sources of the catalog's boards carry 0.5 A, the most a high-power USB 2.0 function draws (Table 7-7, `ICCHPF`). A 2.5 ohm load from a Nano's 5V to its GND draws 2 A, and `#nano__usb__host.i` is over.
 
 An `atmega328p` with `ratings.pin_current` names each port pin over it, such as `#u1.pin.PB1`. A pin's current is the current out of the pin into the circuit, through its output stage in the state the firmware drives, its pull-up and its leakage to both rails, as [netlist.md](netlist.md#atmega328p) stamps them. With `ratings.supply_current`, `#u1.pin.VCC` is the sum of every port pin's current drawn from `VCC`, and `#u1.pin.GND_8` the sum of every port pin's current into `GND_8`, which carries `GND_22` too. The core draws no supply current of its own, so neither sum holds one. A row is solved with the drive the firmware had in force until that step, so a pin that changes drive on a step is checked with its new drive from the next step on.
 

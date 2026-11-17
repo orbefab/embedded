@@ -322,6 +322,8 @@ pub enum Diagnostic {
     },
     /// The net has no DC path to ground. Its voltage is held only by gmin.
     NetFloating { net: Ref },
+    /// A voltage source's `p` and `n` are both on `net`, so the circuit shorts it.
+    NetShort { part: Ref, net: Ref },
     /// The MNA matrix is singular at `unknown`.
     SolverSingular { at: Time, unknown: Ref },
     /// A solution component or an observed quantity is not finite.
@@ -582,6 +584,7 @@ impl Diagnostic {
             Diagnostic::NetlistWaveform { .. } => "netlist.waveform",
             Diagnostic::NetlistWorld { .. } => "netlist.world",
             Diagnostic::NetFloating { .. } => "net.floating",
+            Diagnostic::NetShort { .. } => "net.short",
             Diagnostic::SolverSingular { .. } => "solver.singular",
             Diagnostic::SolverNonFinite { .. } => "solver.nonfinite",
             Diagnostic::SolverTooLarge { .. } => "solver.too_large",
@@ -637,6 +640,7 @@ impl Diagnostic {
             | Diagnostic::NetlistSchedule { .. }
             | Diagnostic::NetlistWaveform { .. }
             | Diagnostic::NetlistWorld { .. }
+            | Diagnostic::NetShort { .. }
             | Diagnostic::SolverSingular { .. }
             | Diagnostic::SolverNonFinite { .. }
             | Diagnostic::SolverTooLarge { .. }
@@ -701,7 +705,8 @@ impl Diagnostic {
             | Diagnostic::NetlistSchedule { .. }
             | Diagnostic::NetlistWaveform { .. }
             | Diagnostic::NetlistWorld { .. }
-            | Diagnostic::NetFloating { .. } => None,
+            | Diagnostic::NetFloating { .. }
+            | Diagnostic::NetShort { .. } => None,
         }
     }
 
@@ -724,6 +729,7 @@ impl Diagnostic {
             | Diagnostic::NetlistWaveform { part, .. } => vec![part.clone()],
             Diagnostic::NetlistWorld { part, .. } => part.iter().cloned().collect(),
             Diagnostic::NetFloating { net } => vec![net.clone()],
+            Diagnostic::NetShort { part, net } => vec![part.clone(), net.clone()],
             Diagnostic::SolverSingular { unknown, .. }
             | Diagnostic::SolverNonFinite { unknown, .. }
             | Diagnostic::SolverConvergence { unknown, .. } => vec![unknown.clone()],
@@ -1051,6 +1057,9 @@ impl Diagnostic {
                 }
             },
             Diagnostic::NetFloating { net } => format!("{net} has no DC path to ground"),
+            Diagnostic::NetShort { part, net } => format!(
+                "{part} holds `p` and `n` apart, but both are on {net}, so the circuit shorts it"
+            ),
             Diagnostic::SolverSingular { unknown, .. } => format!("singular matrix at {unknown}"),
             Diagnostic::SolverNonFinite { unknown, .. } => {
                 format!("non-finite number at {unknown}")
@@ -1454,7 +1463,9 @@ impl Diagnostic {
             } => {
                 serde_json::json!({ "path": path, "name": name, "problem": problem })
             }
-            Diagnostic::NetlistDuplicate { .. } | Diagnostic::NetFloating { .. } => {
+            Diagnostic::NetlistDuplicate { .. }
+            | Diagnostic::NetFloating { .. }
+            | Diagnostic::NetShort { .. } => {
                 serde_json::json!({})
             }
             Diagnostic::NetlistUnknownNet { net, .. } => serde_json::json!({ "net": net }),

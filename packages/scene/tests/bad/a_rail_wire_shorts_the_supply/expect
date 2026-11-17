@@ -1,0 +1,1 @@
+net.short scene.jsonc:19:6 | the wire from `btn1.b` to `r2.b` joins `nano.5V` to `nano.GND`, which the supply `nano.usb` holds apart | remove the wire

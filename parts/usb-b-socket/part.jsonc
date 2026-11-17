@@ -6,6 +6,9 @@
     "host": {
       "kind": "voltage_source",
       "voltage": { "value": 5.0, "unit": "V", "source": { "datasheet": { "doc": "USB 2.0 specification", "at": "VBUS nominal 5.0 V, the center of the high-power range 4.75 V to 5.25 V", "basis": "nominal" } } },
+      // The current is the host's, out of VBUS. The board is a high-power function, which may draw
+      // 500 mA once configured. A port's over-current protection removes power somewhere above that.
+      "ratings": { "current": { "value": 0.5, "unit": "A", "source": { "datasheet": { "doc": "USB 2.0 specification", "at": "Table 7-7, page 178: ICCHPF, High-power Function (in), 500 mA max", "basis": "max" } } } },
       "pins": { "p": "VBUS", "n": "GND" },
     },
   },

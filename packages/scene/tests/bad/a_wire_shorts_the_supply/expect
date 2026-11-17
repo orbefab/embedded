@@ -1,0 +1,1 @@
+net.short scene.jsonc:19:6 | the wire from `nano.5V` to `nano.GND` shorts the supply `nano.usb`, which holds the two apart | remove the wire; a load from `nano.5V` to `nano.GND`

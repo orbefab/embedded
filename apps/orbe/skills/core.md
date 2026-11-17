@@ -131,6 +131,8 @@ The board's ATmega328P has the datasheet's absolute maximum ratings, and a run w
 - `rating.current` on `VCC` or `GND` when the pins together pass over 200 mA, such as six pins at 34 mA each.
 - `rating.voltage` on a pin below -0.5 V or above the chip's VCC + 0.5 V, such as 9 V through a resistor into A0.
 
+The board's USB supply is rated at 500 mA, the most a USB port gives a high-power device. A load over that on 5V, such as 2.5 ohm from 5V to GND (2.0 A), warns `rating.current` on the supply, `#nano__usb__host.i (nano.usb)`, at 2.0 A over its 0.5 A rating. A wire from the Nano's 5V straight to GND is a short: `orbe check` and `orbe open` refuse the scene with `net.short`, naming the wire. On the Uno the same wire runs through the board's fuse and USB switch, about 0.2 ohm, and warns `rating.current` at about 24 A. Remove the wire, and feed any load through a part that limits its current.
+
 The message names the chip pin, then the board's pins on its net, as in `#nano__mcu.pin.PB1 (nano.D9) peaks at 0.0694 A, over its 0.04 A rating`. A pin wired to 5V lists both, `(nano.5V, nano.D10)`. The current is the model's. Its output stage is linear, 25 ohm from its rail, so a short reads 200 mA, about twice what a real pin gives. Either is past the rating, and a real pin can be damaged there. The run does not warn at 20 mA. That is where the datasheet specifies a pin's output voltage, and above it the pin's high or low level sags, as it does here. Keep a pin at 20 mA or less when a level matters, and drive a larger load through a transistor.
 
 ## Scenes
