@@ -8,7 +8,7 @@ use crate::target::Ref;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Condition {
-    /// `@led1 on`, `@nano.D13 high`.
+    /// `@led1 lit`, `@nano.D13 high`.
     State(Ref, State),
     /// `@led1.i > 5mA`.
     Compare(Ref, Op, Amount),
@@ -20,7 +20,8 @@ pub enum Condition {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum State {
-    On,
+    Lit,
+    Dim,
     Off,
     High,
     Low,
@@ -29,15 +30,26 @@ pub enum State {
 impl State {
     pub fn as_str(self) -> &'static str {
         match self {
-            State::On => "on",
+            State::Lit => "lit",
+            State::Dim => "dim",
             State::Off => "off",
             State::High => "high",
             State::Low => "low",
         }
     }
 
+    /// The light state, for a part that states `lit` and `dim`.
+    pub fn light(self) -> Option<crate::reply::Light> {
+        match self {
+            State::Lit => Some(crate::reply::Light::Lit),
+            State::Dim => Some(crate::reply::Light::Dim),
+            State::Off => Some(crate::reply::Light::Off),
+            State::High | State::Low => None,
+        }
+    }
+
     fn parse(word: &str) -> Option<State> {
-        [State::On, State::Off, State::High, State::Low]
+        [State::Lit, State::Dim, State::Off, State::High, State::Low]
             .into_iter()
             .find(|s| s.as_str() == word)
     }
@@ -204,8 +216,9 @@ impl Condition {
             ["no", "diagnostics"] => Ok(Condition::NoDiagnostics),
             ["serial", "contains", text] => Ok(Condition::SerialContains(Needle::parse(text)?)),
             [r, word] if r.starts_with('@') => {
-                let state = State::parse(word)
-                    .ok_or_else(|| format!("`{word}` is not a state; use on, off, high or low"))?;
+                let state = State::parse(word).ok_or_else(|| {
+                    format!("`{word}` is not a state; use lit, dim, off, high or low")
+                })?;
                 Ok(Condition::State(Ref::parse(r)?, state))
             }
             [r, op, value] if r.starts_with('@') => {
@@ -219,7 +232,7 @@ impl Condition {
             }
             [] => Err("a condition is missing".to_string()),
             _ => Err(format!(
-                "`{}` is not a condition; write `@led1 on`, `@led1.i > 5mA`, `serial contains \"text\"` or `no diagnostics`",
+                "`{}` is not a condition; write `@led1 lit`, `@led1.brightness > 2mA`, `serial contains \"text\"` or `no diagnostics`",
                 words.join(" ")
             )),
         }

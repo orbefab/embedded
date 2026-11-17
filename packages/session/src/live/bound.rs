@@ -7,16 +7,22 @@ use orbe_engine::name::Ref as EngineRef;
 
 use super::{Open, Outcome, engine_name, fail, failed, quantity, t, unit_of};
 use crate::condition::{Condition, Op, State as Want, Unit};
-use crate::reply::{Check, Code, Data, Diagnostic, Error, Level, number};
+use crate::reply::{Check, Code, Data, Diagnostic, Error, Level, Light, number};
 use crate::target::Target;
 
 /// What a condition reads, resolved against the open scene.
 pub(super) enum Bound {
-    On {
+    Light {
         part: String,
-        i: EngineRef,
-        above: f64,
-        want: bool,
+        index: usize,
+        want: Light,
+    },
+    /// `@led1.brightness > 2mA`, the average forward current.
+    Brightness {
+        label: String,
+        index: usize,
+        op: Op,
+        value: f64,
     },
     Level {
         pin: String,
@@ -41,13 +47,12 @@ impl Open {
             Condition::SerialContains(text) => Bound::SerialContains(text.as_str().to_string()),
             Condition::State(r, want) => {
                 match (self.resolve(r)?, want) {
-                    (Target::Part(path), Want::On | Want::Off) => {
-                        let (i, above) = self.on_threshold(&path)?;
-                        Bound::On {
+                    (Target::Part(path), want) if want.light().is_some() => {
+                        let index = self.light.require(&self.refs, &path)?;
+                        Bound::Light {
                             part: path,
-                            i,
-                            above,
-                            want: *want == Want::On,
+                            index,
+                            want: want.light().expect("just matched"),
                         }
                     }
                     (
@@ -91,7 +96,7 @@ impl Open {
                         return Err(Error::new(
                             Code::NoReading,
                             format!("{r} cannot be {}", want.as_str()),
-                            "a part with an `on` reading is on or off, and a pin on a chip's net is high or low",
+                            "a part with `lit` and `dim` readings is lit, dim or off, and a pin on a chip's net is high or low",
                         ));
                     }
                 }
@@ -107,6 +112,26 @@ impl Open {
                         EngineRef::Net(engine_name(&net)),
                         Unit::Volt,
                     ),
+                    Target::Brightness { path } => {
+                        let index = self.light.require(&self.refs, &path)?;
+                        if amount.unit != Unit::Ampere {
+                            return Err(Error::new(
+                                Code::NoReading,
+                                format!(
+                                    "{r} is in {}, not {}",
+                                    Unit::Ampere.as_str(),
+                                    amount.unit.as_str()
+                                ),
+                                format!("write the value in {}", Unit::Ampere.as_str()),
+                            ));
+                        }
+                        return Ok(Bound::Brightness {
+                            label: format!("{path}.brightness"),
+                            index,
+                            op: *op,
+                            value: amount.value,
+                        });
+                    }
                     Target::Quantity {
                         path,
                         engine,
@@ -125,7 +150,7 @@ impl Open {
                         return Err(Error::new(
                             Code::NoReading,
                             format!("{r} has no one value to compare"),
-                            "compare a pin's voltage or a quantity, such as `@led1.i > 5mA`",
+                            "compare a pin's voltage, a quantity or a brightness, such as `@led1.i > 5mA` or `@led1.brightness > 2mA`",
                         ));
                     }
                 };
@@ -150,20 +175,38 @@ impl Open {
     /// Whether the condition holds now, and what was seen.
     pub(super) fn observe(&self, bound: &Bound) -> (bool, String) {
         match bound {
-            Bound::On {
-                part,
-                i,
-                above,
-                want,
-            } => {
-                let value = self.read(i);
-                let on = value > *above;
+            Bound::Light { part, index, want } => {
+                let probe = self.engine.probe();
+                let glow = self.light.glow(*index, &probe);
+                let instant = probe
+                    .get(&self.light.lamps()[*index].column)
+                    .expect("a checked column")
+                    .get();
                 (
-                    on == *want,
+                    glow.state == *want,
                     format!(
-                        "{part} {}, i={} A",
-                        if on { "on" } else { "off" },
-                        number(value)
+                        "{part} {}, i={} A, brightness={} A over {}",
+                        glow.state.as_str(),
+                        number(instant),
+                        number(glow.amperes),
+                        t(glow.over_ps)
+                    ),
+                )
+            }
+            Bound::Brightness {
+                label,
+                index,
+                op,
+                value,
+            } => {
+                let probe = self.engine.probe();
+                let glow = self.light.glow(*index, &probe);
+                (
+                    op.holds(glow.amperes, *value),
+                    format!(
+                        "{label} = {} A over {}",
+                        number(glow.amperes),
+                        t(glow.over_ps)
                     ),
                 )
             }

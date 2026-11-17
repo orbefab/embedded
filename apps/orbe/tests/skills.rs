@@ -590,7 +590,7 @@ fn a_flag_on_a_test_line_is_a_usage_error_except_as_serial_text() {
         "set light 50",
         "get @led1",
         "step 10ms",
-        "step --until @led1 on",
+        "step --until @led1 lit",
         "snapshot",
         "expect @led1 off",
     ];
@@ -918,7 +918,7 @@ fn a_bouncing_switch_reads_settled_where_core_says() {
     let core = skill("core");
     for sentence in [
         "an input on it lands after the window of the one before.",
-        "a `release` and a `press` with no `step` between land 2 ms apart, and `step --until @led1 on` stops at the first contact, which opens again inside the window",
+        "a `release` and a `press` with no `step` between land 2 ms apart. `step --until @led1 lit` stops once the average crosses 2 mA, after the first contact has opened again inside the bounce window",
         "To read a bouncing switch settled, step past the time in the last input's reply plus the window.",
     ] {
         says(&core, sentence);
@@ -955,11 +955,11 @@ fn a_bouncing_switch_reads_settled_where_core_says() {
             let past = last.unwrap() + window_ps + 1;
             orbe(&["step", &format!("{}ps", past - now)]);
             let (pin, led) = match inputs.last() {
-                Some(&"press") => ("high", "on"),
+                Some(&"press") => ("high", "lit"),
                 _ => ("low", "off"),
             };
             orbe(&["expect", "@nano.D2", pin]);
-            now = orbe(&["step", "1ms"])["t_ps"].as_u64().unwrap();
+            now = orbe(&["step", "20ms"])["t_ps"].as_u64().unwrap();
             orbe(&["expect", "@led1", led]);
         }
         orbe(&["close"]);
@@ -1032,7 +1032,7 @@ fn a_failed_test_prints_what_core_shows() {
     let core = skill("core");
     says(
         &core,
-        "With the first `expect` in `tests/button.test` changed to `expect @led1 on`:",
+        "With the first `expect` in `tests/button.test` changed to `expect @led1 lit`:",
     );
     let blocks = blocks(&core);
     let block =
@@ -1041,7 +1041,7 @@ fn a_failed_test_prints_what_core_shows() {
     let shown = block(|(info, body)| info.is_empty() && body.starts_with("FAIL "));
     let project = worked_example();
     let dir = project.path();
-    let failing = test.replacen("expect @led1 off", "expect @led1 on", 1);
+    let failing = test.replacen("expect @led1 off", "expect @led1 lit", 1);
     write_file(dir, "tests/button.test", &failing);
     let run = Runtime::new().orbe(dir, &["test"]);
     assert_eq!(run.code, 1);
@@ -1185,7 +1185,7 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     assert!(!open.contains("scene.led_no_resistor"), "{open}");
     orbe(&["step", "100ms"]).ok();
     orbe(&["press", "@btn1"]).ok();
-    let step = orbe(&["step", "--until", "@led1", "on", "--timeout", "50ms"])
+    let step = orbe(&["step", "--until", "@led1", "lit", "--timeout", "50ms"])
         .ok()
         .stdout;
     for warning in [
@@ -1227,7 +1227,7 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
             led["i"].as_f64().unwrap() * 1e3,
             pin["v"].as_f64().unwrap(),
             pin["level"].as_str().unwrap(),
-            if led["on"] == true { "on" } else { "off" },
+            led["state"].as_str().unwrap(),
         ),
     );
     says(
@@ -1276,7 +1276,7 @@ fn part_readings_show_a_pin_edge_where_until_stops_and_led_l_follows_d13() {
     let core = skill("core");
     says(
         &core,
-        "A pin condition stops 1 ps after the exact edge, and part readings such as `@led1 on` already show the edge there, with no extra `step`.",
+        "A pin condition stops 1 ps after the exact edge. `@led1.i` shows that current there, and the light state follows the average over 20 ms.",
     );
     says(
         &core,
@@ -1288,15 +1288,21 @@ fn part_readings_show_a_pin_edge_where_until_stops_and_led_l_follows_d13() {
     let orbe = |args: &[&str]| runtime.orbe(dir, args).ok();
     orbe(&["open"]);
     orbe(&["step", "100ms"]);
-    for (input, level, before, after) in [
-        ("press", "high", "off", "on"),
-        ("release", "low", "on", "off"),
+    for (input, level, before, after, cmp) in [
+        ("press", "high", "off", "lit", ">"),
+        ("release", "low", "lit", "off", "<"),
     ] {
         for led in ["@led1", "@nano.led_l"] {
             orbe(&["expect", led, before]);
         }
         orbe(&[input, "@btn1"]);
         orbe(&["step", "--until", "@nano.D13", level]);
+        for led in ["@led1", "@nano.led_l"] {
+            orbe(&["expect", led, before]);
+        }
+        let bound = if cmp == ">" { "5mA" } else { "100uA" };
+        orbe(&["expect", "@led1.i", cmp, bound]);
+        orbe(&["step", "20ms"]);
         for led in ["@led1", "@nano.led_l"] {
             orbe(&["expect", led, after]);
         }

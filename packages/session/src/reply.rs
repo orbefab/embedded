@@ -293,6 +293,37 @@ pub struct Got {
     pub value: Reading,
 }
 
+/// An LED's state from its average forward current. `lit` is above the part's `lit` reading,
+/// `dim` above its `dim` reading, and `off` at or below that.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Light {
+    Lit,
+    Dim,
+    Off,
+}
+
+impl Light {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Light::Lit => "lit",
+            Light::Dim => "dim",
+            Light::Off => "off",
+        }
+    }
+
+    /// Strictly above each threshold, so a current exactly on one stays in the lower state.
+    pub fn from_average(amperes: f64, lit: f64, dim: f64) -> Light {
+        if amperes > lit {
+            Light::Lit
+        } else if amperes > dim {
+            Light::Dim
+        } else {
+            Light::Off
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Reading {
     /// A pin: the chip's logic level when a chip pin shares its net, and its voltage.
@@ -304,9 +335,15 @@ pub enum Reading {
         unit: Unit,
         value: f64,
     },
-    /// A part: its `on` reading when it states one, and each engine quantity by name.
+    /// An LED's average forward current, and the span it covers.
+    Brightness {
+        value: f64,
+        over_ps: u64,
+    },
+    /// A part: its light state and brightness when it states them, and each engine quantity.
     Part {
-        on: Option<bool>,
+        state: Option<Light>,
+        brightness: Option<(f64, u64)>,
         quantities: Vec<(String, Unit, f64)>,
     },
 }
@@ -335,6 +372,18 @@ pub struct Stepped {
     pub more: usize,
     /// `--until`'s condition as it stood at the end.
     pub check: Option<Check>,
+    /// Each simulated LED at the end of the step, apart from `changes`, so a fade that stays
+    /// in one state still shows its brightness.
+    pub leds: Vec<LedRead>,
+}
+
+/// One LED at the end of a step.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LedRead {
+    pub part: String,
+    pub state: Light,
+    pub brightness: f64,
+    pub over_ps: u64,
 }
 
 /// When `--until`'s condition first held.
@@ -345,15 +394,15 @@ pub enum Met {
     /// A pin's edge. Reads show it from 1 ps later, where the step ends unless that is past
     /// its timeout or the stop.
     Edge(u64),
-    /// The slice end it was read at, for a condition read from the circuit, such as an `on`
-    /// reading: it began to hold after the slice before and by then.
+    /// The slice end it was read at, for a condition read from the circuit, such as a light
+    /// state: it began to hold after the slice before and by then.
     By(u64),
     /// The slice end where the byte that completed the match first reached the session, and
     /// that byte's start bit.
     Serial { by_ps: u64, sent_at_ps: u64 },
 }
 
-/// What a step saw. An edge carries the engine's own time, `at_ps`. An `on` reading, a
+/// What a step saw. An edge carries the engine's own time, `at_ps`. A light state, a
 /// diagnostic and serial text are found at a slice end, so they carry `by_ps`: the change
 /// happened after the slice before and by then.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -366,7 +415,9 @@ pub enum Change {
     Led {
         by_ps: u64,
         part: String,
-        on: bool,
+        state: Light,
+        brightness: f64,
+        over_ps: u64,
     },
     /// Text, by the slice end it reached the session at, with the start bit of its last byte.
     Serial {
@@ -432,10 +483,19 @@ impl Reading {
         match self {
             Reading::Pin { level, v } => json!({ "level": level.map(Level::as_str), "v": v }),
             Reading::Quantity { value, .. } => json!(value),
-            Reading::Part { on, quantities } => {
+            Reading::Brightness { value, over_ps } => json!({ "a": value, "over_ps": over_ps }),
+            Reading::Part {
+                state,
+                brightness,
+                quantities,
+            } => {
                 let mut map = serde_json::Map::new();
-                if let Some(on) = on {
-                    map.insert("on".into(), json!(on));
+                if let Some(state) = state {
+                    map.insert("state".into(), json!(state.as_str()));
+                }
+                if let Some((value, over_ps)) = brightness {
+                    map.insert("brightness".into(), json!(value));
+                    map.insert("over_ps".into(), json!(over_ps));
                 }
                 for (name, _, value) in quantities {
                     map.insert(name.clone(), json!(value));
@@ -449,20 +509,26 @@ impl Reading {
         match self {
             Reading::Pin { .. } => "pin",
             Reading::Quantity { .. } => "quantity",
+            Reading::Brightness { .. } => "brightness",
             Reading::Part { .. } => "part",
         }
     }
 
-    /// A snapshot's short form: a pin's level, else its voltage, and a part's state and `i`.
+    /// A snapshot's short form: a pin's level, else its voltage, and a part's state, `i` and brightness.
     fn brief(&self) -> String {
         match self {
             Reading::Pin {
                 level: Some(level), ..
             } => level.as_str().to_string(),
             Reading::Pin { level: None, v } => format!("{}V", number(*v)),
-            Reading::Quantity { .. } => self.text(),
-            Reading::Part { on, quantities } => Reading::Part {
-                on: *on,
+            Reading::Quantity { .. } | Reading::Brightness { .. } => self.text(),
+            Reading::Part {
+                state,
+                brightness,
+                quantities,
+            } => Reading::Part {
+                state: *state,
+                brightness: *brightness,
                 quantities: quantities
                     .iter()
                     .filter(|(n, ..)| n == "i")
@@ -473,7 +539,7 @@ impl Reading {
         }
     }
 
-    /// `high 4.62 V`, `0.0122 A`, `on i=0.0122 A v=1.93 V`.
+    /// `high 4.62 V`, `0.0122 A`, `lit i=0.0122 A v=1.93 V brightness=0.0122 A over 20ms`.
     pub fn text(&self) -> String {
         match self {
             Reading::Pin {
@@ -482,9 +548,16 @@ impl Reading {
             } => format!("{} {} V", level.as_str(), number(*v)),
             Reading::Pin { level: None, v } => format!("{} V", number(*v)),
             Reading::Quantity { unit, value } => format!("{} {}", number(*value), unit.as_str()),
-            Reading::Part { on, quantities } => {
-                let mut words: Vec<String> = on
-                    .map(|on| if on { "on" } else { "off" }.to_string())
+            Reading::Brightness { value, over_ps } => {
+                format!("{} A over {}", number(*value), t(*over_ps))
+            }
+            Reading::Part {
+                state,
+                brightness,
+                quantities,
+            } => {
+                let mut words: Vec<String> = state
+                    .map(|state| state.as_str().to_string())
                     .into_iter()
                     .collect();
                 words.extend(
@@ -492,6 +565,13 @@ impl Reading {
                         .iter()
                         .map(|(n, u, v)| format!("{n}={} {}", number(*v), u.as_str())),
                 );
+                if let Some((value, over_ps)) = brightness {
+                    words.push(format!(
+                        "brightness={} A over {}",
+                        number(*value),
+                        t(*over_ps)
+                    ));
+                }
                 words.join(" ")
             }
         }
@@ -520,8 +600,21 @@ impl Change {
             Change::Edge { at_ps, pin, level } => {
                 json!({ "kind": "edge", "at_ps": at_ps, "ref": format!("@{pin}"), "level": level.as_str() })
             }
-            Change::Led { by_ps, part, on } => {
-                json!({ "kind": "led", "by_ps": by_ps, "ref": format!("@{part}"), "on": on })
+            Change::Led {
+                by_ps,
+                part,
+                state,
+                brightness,
+                over_ps,
+            } => {
+                json!({
+                    "kind": "led",
+                    "by_ps": by_ps,
+                    "ref": format!("@{part}"),
+                    "state": state.as_str(),
+                    "brightness": brightness,
+                    "over_ps": over_ps,
+                })
             }
             Change::Serial {
                 by_ps,
@@ -539,9 +632,19 @@ impl Change {
     fn text(&self) -> String {
         match self {
             Change::Edge { at_ps, pin, level } => format!("{} {pin} {}", t(*at_ps), level.as_str()),
-            Change::Led { by_ps, part, on } => {
-                format!("by {} {part} {}", t(*by_ps), if *on { "on" } else { "off" })
-            }
+            Change::Led {
+                by_ps,
+                part,
+                state,
+                brightness,
+                over_ps,
+            } => format!(
+                "by {} {part} {}, brightness={} A over {}",
+                t(*by_ps),
+                state.as_str(),
+                number(*brightness),
+                t(*over_ps)
+            ),
             Change::Serial {
                 by_ps,
                 sent_at_ps,
@@ -618,6 +721,12 @@ impl Data {
                     "sent_at_ps": sent,
                     "changes": stepped.changes.iter().map(Change::json).collect::<Vec<_>>(),
                     "more": stepped.more,
+                    "leds": stepped.leds.iter().map(|led| json!({
+                        "ref": format!("@{}", led.part),
+                        "state": led.state.as_str(),
+                        "brightness": led.brightness,
+                        "over_ps": led.over_ps,
+                    })).collect::<Vec<_>>(),
                 });
                 if let Some(check) = &stepped.check {
                     value["check"] = check.json();
@@ -723,6 +832,16 @@ impl Data {
                 }
                 if stepped.more > 0 {
                     let _ = write!(out, "\n  and {} more", stepped.more);
+                }
+                for led in &stepped.leds {
+                    let _ = write!(
+                        out,
+                        "\n  brightness {} {} {} A over {}",
+                        led.part,
+                        led.state.as_str(),
+                        number(led.brightness),
+                        t(led.over_ps)
+                    );
                 }
             }
             Data::Snapshot(snapshot) => {

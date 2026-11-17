@@ -4,9 +4,10 @@ step 100ms
 expect @led1 off
 expect @uno.led_l off
 press @btn1
-step --until @led1 on --timeout 50ms
+step --until @led1 lit --timeout 50ms
 expect @uno.D13 high
-expect @uno.led_l on
+step 20ms
+expect @uno.led_l lit
 release @btn1
 step 50ms
 expect @led1 off

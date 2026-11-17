@@ -84,6 +84,8 @@ pub enum Target {
         engine: String,
         quantity: Quantity,
     },
+    /// The average forward current of a part that states `lit` and `dim`.
+    Brightness { path: String },
 }
 
 pub(crate) const QUANTITIES: [Quantity; 8] = [
@@ -126,6 +128,9 @@ pub fn resolve(
                 pin: seg.clone(),
                 net: net.clone(),
             });
+        }
+        if last && seg == "brightness" && part.readings.contains_key("lit") {
+            return Ok(Target::Brightness { path });
         }
         if last && let Some(&quantity) = QUANTITIES.iter().find(|q| q.as_str() == seg) {
             let engine = one_engine(&path, part, Code::NoReading)?;
@@ -208,6 +213,9 @@ pub(crate) fn names(part: &MapPart, reported: &[Quantity]) -> String {
     if !reported.is_empty() {
         let names: Vec<&str> = reported.iter().map(|q| q.as_str()).collect();
         found.push(format!("quantities: {}", names.join(", ")));
+    }
+    if part.readings.contains_key("lit") {
+        found.push("brightness".to_string());
     }
     found.join("; ")
 }

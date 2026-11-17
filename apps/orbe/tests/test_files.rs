@@ -184,9 +184,9 @@ fn an_unreadable_tests_folder_is_an_io_error() {
 #[test]
 fn a_test_exits_as_orbe_check_does() {
     let exit = |test: &str| orbe(project(test).path(), &["test"]).code;
-    assert_eq!(exit("open\nexpect @led1 on\n"), 1, "a failed expect");
+    assert_eq!(exit("open\nexpect @led1 lit\n"), 1, "a failed expect");
     assert_eq!(
-        exit("open\nstep --until @led1 on --timeout 1ms\n"),
+        exit("open\nstep --until @led1 lit --timeout 1ms\n"),
         1,
         "a failed until"
     );
@@ -199,7 +199,7 @@ fn a_test_exits_as_orbe_check_does() {
     );
     assert_eq!(exit("open nope.jsonc\n"), 3, "a missing scene");
 
-    let dir = project("open\nexpect @led1 on\n");
+    let dir = project("open\nexpect @led1 lit\n");
     fs::write(dir.path().join("tests/b.test"), "open nope.jsonc\n").unwrap();
     assert_eq!(
         orbe(dir.path(), &["test"]).code,
