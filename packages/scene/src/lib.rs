@@ -55,7 +55,7 @@ pub fn read(files: &Files, scene: &Path) -> Result<Netlist, Vec<Diagnostic>> {
 
 /// The catalog part ids a scene names, including ids reached through other parts.
 /// A comment is not a name. The ids are in order. A missing catalog part is one of
-/// the ids, and so is a modified or outdated copy. An id the catalog does not have, and any
+/// the ids, and so is a modified, outdated or newer copy. An id the catalog does not have, and any
 /// other finding, is the error.
 pub fn catalog_ids(files: &Files, scene: &Path) -> Result<Vec<String>, Vec<Diagnostic>> {
     let mut findings = diagnostic::Findings::default();
@@ -68,7 +68,7 @@ pub fn catalog_ids(files: &Files, scene: &Path) -> Result<Vec<String>, Vec<Diagn
         || diagnostics.iter().any(|d| {
             !matches!(
                 d.code,
-                Code::PartMissing | Code::PartModified | Code::PartOutdated
+                Code::PartMissing | Code::PartModified | Code::PartOutdated | Code::PartNewer
             )
         });
     if blocked {

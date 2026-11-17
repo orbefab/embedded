@@ -312,6 +312,45 @@ fn overwrite_takes_the_newest_version_within_the_copys_major() {
 }
 
 #[test]
+fn a_version_outside_the_catalog_that_matches_its_lock_is_not_a_local_edit() {
+    let carried = leaf("led", "0.1.0", "lamp");
+    let held = leaf("led", "0.0.9", "lamp");
+    let catalog = catalog_of(vec![carried]);
+    let mut snapshot = empty();
+    put(&mut snapshot, "led", held.files.clone());
+    snapshot.lock.insert(
+        "led".into(),
+        LockFields {
+            id: "led".into(),
+            version: "0.0.9".into(),
+            registry: catalog.registry().to_string(),
+            hash: held.hash.clone(),
+        },
+    );
+    let planned = added(plan(&catalog, &snapshot, &ask(&["led"], true, false), ADD));
+    assert_eq!(replacing(&planned, "led"), Some("0.0.9"));
+
+    let mut edited_copy = empty();
+    put(&mut edited_copy, "led", edited(&held));
+    edited_copy.lock.insert(
+        "led".into(),
+        LockFields {
+            id: "led".into(),
+            version: "0.0.9".into(),
+            registry: catalog.registry().to_string(),
+            hash: held.hash.clone(),
+        },
+    );
+    let planned = added(plan(
+        &catalog,
+        &edited_copy,
+        &ask(&["led"], true, false),
+        ADD,
+    ));
+    assert_eq!(replacing(&planned, "led"), Some("0.0.9 with local edits"));
+}
+
+#[test]
 fn a_clean_older_copy_is_reported_by_version_only() {
     let a = leaf("led", "0.1.0", "a");
     let b = leaf("led", "0.2.0", "b");

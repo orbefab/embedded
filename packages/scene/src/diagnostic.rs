@@ -29,9 +29,12 @@ pub enum Code {
     PartMissing,
     FirmwareMissing,
     PartModified,
-    /// The copy matches its lock line and is another version than this binary carries.
+    /// The copy matches its lock line and is an older version than this binary carries.
     /// A run reads the version in the binary, so this stops check, open and test.
     PartOutdated,
+    /// The copy matches its lock line and is a newer version than this binary carries.
+    /// `--overwrite` would replace it with the older copy, so the hint names no `orbe add`.
+    PartNewer,
     /// A project file that exists could not be read.
     Io,
     /// The engine refused a value the reader wrote, and no param set it. The engine's own code.
@@ -77,6 +80,7 @@ impl Code {
             Code::FirmwareMissing => "firmware_missing",
             Code::PartModified => "part_modified",
             Code::PartOutdated => "part_outdated",
+            Code::PartNewer => "part_newer",
             Code::Io => "io_error",
             Code::Engine(code) => code,
             Code::Lint(Lint::Unplaced) => "scene.unplaced",

@@ -389,22 +389,83 @@ fn a_copy_that_matches_its_lock_and_not_the_catalog_is_outdated() {
 }
 
 #[test]
-fn an_outdated_part_in_another_major_names_the_version_this_orbe_carries() {
+fn a_newer_locked_copy_is_part_newer_and_names_no_add() {
+    for version in ["0.1.1", "0.2.0", "1.0.0"] {
+        let project = project("nano-button");
+        hold(project.path(), "led-5mm", version);
+        let found = scene_errors(project.path());
+        assert_eq!(found.len(), 1, "{version}: {found:#?}");
+        let d = &found[0];
+        assert_eq!(d.code, orbe_scene::Code::PartNewer, "{version}");
+        assert_eq!(d.file, "parts.lock");
+        assert_eq!(
+            d.message,
+            format!("this project holds `led-5mm@{version}` and this orbe carries `led-5mm@0.1.0`")
+        );
+        assert_eq!(d.hint, "this project needs a newer orbe");
+        assert!(!d.hint.contains("orbe add"), "{}", d.hint);
+    }
+}
+
+#[test]
+fn a_mixed_hint_names_only_the_older_ids() {
     let project = project("nano-button");
     hold(project.path(), "led-5mm", "1.0.0");
+    hold(project.path(), "resistor-axial", "0.0.8");
     let found = scene_errors(project.path());
-    assert_eq!(found.len(), 1, "{found:#?}");
-    assert_eq!(found[0].code, orbe_scene::Code::PartOutdated);
-    assert_eq!(found[0].file, "parts.lock");
+    assert_eq!(found.len(), 2, "{found:#?}");
+    let older = found
+        .iter()
+        .find(|d| d.message.contains("resistor-axial"))
+        .unwrap();
+    let newer = found
+        .iter()
+        .find(|d| d.message.contains("led-5mm"))
+        .unwrap();
+    assert_eq!(older.code, orbe_scene::Code::PartOutdated);
     assert_eq!(
-        found[0].message,
-        "this orbe carries `led-5mm@0.1.0` and the project holds `led-5mm@1.0.0`"
+        older.message,
+        "this orbe carries `resistor-axial@0.1.0` and the project holds `resistor-axial@0.0.8`"
     );
     assert!(
-        found[0].hint.contains("led-5mm@0.1.0 --overwrite"),
+        older.hint.contains("resistor-axial --overwrite"),
         "{}",
-        found[0].hint
+        older.hint
     );
+    assert_eq!(older.hint.matches("orbe add").count(), 1, "{}", older.hint);
+    assert!(!older.hint.contains("led-5mm"), "{}", older.hint);
+    assert_eq!(newer.code, orbe_scene::Code::PartNewer);
+    assert_eq!(
+        newer.message,
+        "this project holds `led-5mm@1.0.0` and this orbe carries `led-5mm@0.1.0`"
+    );
+    assert_eq!(newer.hint, "this project needs a newer orbe");
+    assert!(!newer.hint.contains("orbe add"), "{}", newer.hint);
+}
+
+#[test]
+fn a_lock_from_another_registry_at_another_version_names_the_registry() {
+    for id in ["led-5mm", "nano-board"] {
+        let project = project("nano-button");
+        hold(project.path(), id, "0.0.9");
+        rewrite_lock(project.path(), id, "0.0.9", "@acme");
+        let found = scene_errors(project.path());
+        assert_eq!(found.len(), 1, "{id}: {found:#?}");
+        let d = &found[0];
+        assert_eq!(d.code, orbe_scene::Code::PartModified, "{id}");
+        assert_eq!(d.file, "parts.lock");
+        assert!(
+            d.message
+                .contains(&format!("lists `{id}` at `0.0.9` from `@acme`")),
+            "{id}: {}",
+            d.message
+        );
+        assert!(
+            d.message.contains(&format!("`{id}@0.1.0`")),
+            "{id}: {}",
+            d.message
+        );
+    }
 }
 
 #[test]

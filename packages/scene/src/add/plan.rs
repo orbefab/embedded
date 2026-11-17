@@ -606,7 +606,8 @@ fn plan_add(
         let entry = catalog
             .get(id, version)
             .expect("select only keeps catalog versions");
-        let Some(differ) = differ(catalog, snapshot.target(id), entry) else {
+        let lock_hash = snapshot.lock.get(id).map(|line| line.hash.as_str());
+        let Some(differ) = differ(catalog, snapshot.target(id), entry, lock_hash) else {
             if matches!(snapshot.target(id), Target::Absent) {
                 write.push(Write {
                     id: id.clone(),
@@ -670,7 +671,12 @@ fn plan_add(
 }
 
 /// `None` when `parts/<id>` is absent or already holds exactly `entry`.
-fn differ(catalog: &Catalog, target: &Target, entry: &CatalogEntry) -> Option<Differ> {
+fn differ(
+    catalog: &Catalog,
+    target: &Target,
+    entry: &CatalogEntry,
+    lock_hash: Option<&str>,
+) -> Option<Differ> {
     let id = &entry.id;
     let folder = match target {
         Target::Absent => return None,
@@ -704,25 +710,26 @@ fn differ(catalog: &Catalog, target: &Target, entry: &CatalogEntry) -> Option<Di
     let crosses = copy.major != entry.version.major;
     let original = catalog.get(id, copy);
     let clean = original.is_some_and(|original| folder.is(&original.hash));
+    // A folder that matches its lock line is the version the lock records, even when this
+    // binary does not carry that version. "with local edits" is only a folder the lock
+    // does not hash.
+    let matches_lock = lock_hash.is_some_and(|hash| folder.is(hash));
+    let locked = clean || matches_lock;
     let edits = differing_names(folder, original.unwrap_or(entry));
-    let (line, was) = match (copy == entry.version, clean) {
-        (true, _) => (
-            format!("`{id}` is {copy} in the project and differs in {edits}"),
-            format!("{copy} with local edits"),
+    let was = if locked {
+        copy.to_string()
+    } else {
+        format!("{copy} with local edits")
+    };
+    let line = match (copy == entry.version, locked) {
+        (true, _) => format!("`{id}` is {copy} in the project and differs in {edits}"),
+        (false, true) => format!(
+            "`{id}` is {copy} in the project, {} in the catalog",
+            entry.version
         ),
-        (false, true) => (
-            format!(
-                "`{id}` is {copy} in the project, {} in the catalog",
-                entry.version
-            ),
-            copy.to_string(),
-        ),
-        (false, false) => (
-            format!(
-                "`{id}` is {copy} in the project, {} in the catalog, and the copy differs from {copy} in {edits}",
-                entry.version
-            ),
-            format!("{copy} with local edits"),
+        (false, false) => format!(
+            "`{id}` is {copy} in the project, {} in the catalog, and the copy differs from {copy} in {edits}",
+            entry.version
         ),
     };
     Some(Differ { line, was, crosses })

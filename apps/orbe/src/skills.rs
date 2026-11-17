@@ -553,6 +553,7 @@ mod tests {
             Scene::FirmwareMissing,
             Scene::PartModified,
             Scene::PartOutdated,
+            Scene::PartNewer,
             Scene::Io,
             Scene::World,
         ];
