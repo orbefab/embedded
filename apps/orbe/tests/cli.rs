@@ -81,17 +81,8 @@ fn run_printed(cwd: &Path, command: &str) -> (Output, String, String) {
     orbe_in(cwd, &words[1..])
 }
 
-/// Writes `version` into one copy and rewrites its lock line so the copy matches that line.
-fn hold(project: &Path, id: &str, version: &str) {
-    let file = project.join("parts").join(id).join("part.jsonc");
-    let text = fs::read_to_string(&file).unwrap();
-    let edited = text.replacen(
-        "\"version\": \"0.1.0\"",
-        &format!("\"version\": \"{version}\""),
-        1,
-    );
-    assert_ne!(text, edited, "{id}");
-    fs::write(&file, edited).unwrap();
+/// Rewrites `id`'s lock line so it matches the folder now on disk.
+fn relock(project: &Path, id: &str) {
     let lock = project.join("parts.lock");
     let lines: String = fs::read_to_string(&lock)
         .unwrap()
@@ -106,6 +97,33 @@ fn hold(project: &Path, id: &str, version: &str) {
         .map(|line| format!("{line}\n"))
         .collect();
     fs::write(&lock, lines).unwrap();
+}
+
+/// Writes `title` into one copy and rewrites its lock line so the copy matches that line.
+fn retitle(project: &Path, id: &str, title: &str) {
+    let path = project.join("parts").join(id).join("part.jsonc");
+    let text = fs::read_to_string(&path).unwrap();
+    let marker = "\"title\": \"";
+    let start = text.find(marker).expect("title") + marker.len();
+    let end = start + text[start..].find('"').expect("title end");
+    let edited = format!("{}{title}{}", &text[..start], &text[end..]);
+    assert_ne!(text, edited, "{id}");
+    fs::write(&path, edited).unwrap();
+    relock(project, id);
+}
+
+/// Writes `version` into one copy and rewrites its lock line so the copy matches that line.
+fn hold(project: &Path, id: &str, version: &str) {
+    let file = project.join("parts").join(id).join("part.jsonc");
+    let text = fs::read_to_string(&file).unwrap();
+    let edited = text.replacen(
+        "\"version\": \"0.1.0\"",
+        &format!("\"version\": \"{version}\""),
+        1,
+    );
+    assert_ne!(text, edited, "{id}");
+    fs::write(&file, edited).unwrap();
+    relock(project, id);
 }
 
 /// The one `orbe add` command in a `part_missing` hint. Every hint names the same command.
@@ -902,6 +920,133 @@ fn a_mix_of_older_and_newer_overwrites_only_the_older() {
     assert!(stdout.contains("error[part_newer]"), "{stdout}");
     assert!(!stdout.contains("part_outdated"), "{stdout}");
     assert!(!stdout.contains("orbe add"), "{stdout}");
+}
+
+#[test]
+fn an_overwrite_of_an_older_board_leaves_a_newer_child() {
+    for (version, title) in [("0.2.0", "NEWER CHIP"), ("1.0.0", "MAJOR CHIP")] {
+        let project = common::project("nano-button");
+        let root = project.path();
+        hold(root, "nano-board", "0.0.9");
+        hold(root, "atmega328p-tqfp32", version);
+        retitle(root, "atmega328p-tqfp32", title);
+        let chip_before = fs::read(root.join("parts/atmega328p-tqfp32/part.jsonc")).unwrap();
+        let lock_before = fs::read_to_string(root.join("parts.lock")).unwrap();
+        let chip_line = lock_before
+            .lines()
+            .find(|line| line.starts_with("atmega328p-tqfp32 "))
+            .unwrap()
+            .to_string();
+
+        let (output, stdout, _) = orbe_in(root, &["check", "scene.jsonc"]);
+        assert_eq!(output.status.code(), Some(1), "{version}: {stdout}");
+        assert!(stdout.contains("error[part_newer]"), "{version}: {stdout}");
+        assert!(
+            stdout.contains("error[part_outdated]"),
+            "{version}: {stdout}"
+        );
+        let command = add_command(&stdout);
+        assert_eq!(
+            command, "orbe add nano-board --overwrite",
+            "{version}: {stdout}"
+        );
+        assert!(!command.contains("atmega328p-tqfp32"), "{command}");
+
+        let (output, out, err) = run_printed(root, &command);
+        assert_eq!(output.status.code(), Some(0), "{version}: {out}{err}");
+        assert!(
+            out.contains("wrote parts/nano-board 0.1.0, replacing 0.0.9"),
+            "{version}: {out}"
+        );
+        assert!(
+            !out.contains("wrote parts/atmega328p-tqfp32")
+                && !out.contains("skipped parts/atmega328p-tqfp32"),
+            "{version}: {out}"
+        );
+        assert!(
+            out.contains(&format!(
+                "left `atmega328p-tqfp32` at {version}. this project needs a newer orbe for it"
+            )),
+            "{version}: {out}"
+        );
+        assert!(!out.contains("atmega328p-tqfp32@"), "{version}: {out}");
+        assert_eq!(
+            fs::read(root.join("parts/atmega328p-tqfp32/part.jsonc")).unwrap(),
+            chip_before,
+            "{version}"
+        );
+        let lock = fs::read_to_string(root.join("parts.lock")).unwrap();
+        assert!(
+            lock.lines().any(|line| line == chip_line),
+            "{version}: {lock}"
+        );
+
+        let (output, stdout, _) = orbe_in(root, &["check", "scene.jsonc"]);
+        assert_eq!(output.status.code(), Some(1), "{version}: {stdout}");
+        assert!(stdout.contains("error[part_newer]"), "{version}: {stdout}");
+        assert!(
+            stdout.contains(&format!(
+                "this project holds `atmega328p-tqfp32@{version}` and this orbe carries `atmega328p-tqfp32@0.1.0`"
+            )),
+            "{version}: {stdout}"
+        );
+        assert!(!stdout.contains("part_outdated"), "{version}: {stdout}");
+        assert!(!stdout.contains("orbe add"), "{version}: {stdout}");
+    }
+}
+
+#[test]
+fn a_named_overwrite_leaves_a_newer_locked_copy() {
+    let chip = "atmega328p-tqfp32";
+    let named = ["add", chip, "--overwrite"];
+    let pinned = ["add", "atmega328p-tqfp32@0.1.0", "--overwrite"];
+    let board = ["add", "nano-board", "--overwrite"];
+    for args in [named.as_slice(), pinned.as_slice(), board.as_slice()] {
+        let project = common::project("nano-button");
+        let root = project.path();
+        hold(root, chip, "0.2.0");
+        retitle(root, chip, "NEWER CHIP");
+        let before = fs::read(root.join("parts").join(chip).join("part.jsonc")).unwrap();
+        let (output, out, err) = orbe_in(root, args);
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {out}{err}");
+        assert!(
+            out.contains(
+                "left `atmega328p-tqfp32` at 0.2.0. this project needs a newer orbe for it"
+            ),
+            "{args:?}: {out}"
+        );
+        assert!(
+            !out.contains("wrote parts/atmega328p-tqfp32"),
+            "{args:?}: {out}"
+        );
+        assert!(!out.contains("atmega328p-tqfp32@"), "{args:?}: {out}");
+        assert_eq!(
+            fs::read(root.join("parts").join(chip).join("part.jsonc")).unwrap(),
+            before,
+            "{args:?}"
+        );
+        let (output, stdout, _) = orbe_in(root, &["check", "scene.jsonc"]);
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {stdout}");
+        assert!(stdout.contains("error[part_newer]"), "{args:?}: {stdout}");
+        assert!(!stdout.contains("part_outdated"), "{args:?}: {stdout}");
+        assert!(!stdout.contains("orbe add"), "{args:?}: {stdout}");
+    }
+
+    let project = common::project("nano-button");
+    let root = project.path();
+    hold(root, chip, "0.2.0");
+    retitle(root, chip, "NEWER CHIP");
+    let before = fs::read(root.join("parts").join(chip).join("part.jsonc")).unwrap();
+    let (output, stdout, stderr) = orbe_in(root, &["add", "nano-button-led", "--overwrite"]);
+    assert_eq!(output.status.code(), Some(2), "{stdout}{stderr}");
+    assert!(
+        stderr.starts_with("error[usage]: `nano-button-led` is a Block"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read(root.join("parts").join(chip).join("part.jsonc")).unwrap(),
+        before
+    );
 }
 
 #[test]

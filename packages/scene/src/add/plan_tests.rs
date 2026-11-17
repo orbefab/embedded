@@ -729,3 +729,254 @@ fn a_bad_version_token_is_usage() {
         other => panic!("{}", name(&other)),
     }
 }
+
+/// A copy this binary does not carry, with its lock line rewritten to match the folder.
+fn at_version(entry: &CatalogEntry, version: &str) -> CatalogEntry {
+    let mut files = entry.files.clone();
+    let text = String::from_utf8(files["part.jsonc"].clone()).unwrap();
+    let from = format!("\"version\": \"{}\"", entry.version);
+    let next = text.replacen(&from, &format!("\"version\": \"{version}\""), 1);
+    assert_ne!(text, next, "{}", entry.id);
+    files.insert("part.jsonc".into(), next.into_bytes());
+    catalog::entry_from_files(&entry.id, files).unwrap()
+}
+
+fn seal(snapshot: &mut Snapshot) {
+    let mut text = String::new();
+    for line in snapshot.lock.values() {
+        text.push_str(&line.line());
+        text.push('\n');
+    }
+    snapshot.lock_text = Some(text);
+}
+
+fn kept_note(id: &str, version: &str) -> String {
+    format!("left `{id}` at {version}. this project needs a newer orbe for it")
+}
+
+/// `board` 0.0.9 is older than the catalog. `chip` matches its lock line and is newer.
+fn older_board_newer_chip(chip_version: &str) -> (Catalog, Snapshot, CatalogEntry) {
+    let chip = leaf("chip", "0.1.0", "chip");
+    let board = board("board", "0.1.0", &[("chip", "0.1.0")]);
+    let catalog = catalog_of(vec![chip.clone(), board.clone()]);
+    let held_board = at_version(&board, "0.0.9");
+    let held_chip = at_version(&chip, chip_version);
+    let mut snapshot = empty();
+    install(&mut snapshot, &catalog, &held_board);
+    install(&mut snapshot, &catalog, &held_chip);
+    seal(&mut snapshot);
+    (catalog, snapshot, held_chip)
+}
+
+#[test]
+fn an_older_board_overwrite_leaves_a_newer_child() {
+    let (catalog, snapshot, held) = older_board_newer_chip("0.2.0");
+    let planned = added(plan(
+        &catalog,
+        &snapshot,
+        &ask(&["board"], true, false),
+        ADD,
+    ));
+    assert_eq!(wrote(&planned, "board"), Some(v("0.1.0")));
+    assert_eq!(replacing(&planned, "board"), Some("0.0.9"));
+    assert_eq!(wrote(&planned, "chip"), None);
+    assert!(
+        planned.notes.contains(&kept_note("chip", "0.2.0")),
+        "{:?}",
+        planned.notes
+    );
+    assert!(
+        !planned.notes.iter().any(|note| note.contains("orbe add")),
+        "{:?}",
+        planned.notes
+    );
+    let lock = planned.lock.unwrap();
+    assert!(
+        lock.contains(&format!("chip 0.2.0 {} {}", catalog.registry(), held.hash)),
+        "{lock}"
+    );
+    assert!(!lock.contains("chip 0.1.0"), "{lock}");
+    assert!(lock.contains("board 0.1.0"), "{lock}");
+
+    let diff = match plan(&catalog, &snapshot, &ask(&["board"], true, true), ADD) {
+        Plan::Diff(diff) => diff,
+        other => panic!("{}", name(&other)),
+    };
+    assert!(!diff.files.contains("parts/chip/"), "{}", diff.files);
+    assert!(
+        diff.notes.contains(&kept_note("chip", "0.2.0")),
+        "{:?}",
+        diff.notes
+    );
+}
+
+#[test]
+fn an_older_board_overwrite_does_not_pin_a_newer_major() {
+    let (catalog, snapshot, held) = older_board_newer_chip("1.0.0");
+    let planned = added(plan(
+        &catalog,
+        &snapshot,
+        &ask(&["board"], true, false),
+        ADD,
+    ));
+    assert_eq!(wrote(&planned, "board"), Some(v("0.1.0")));
+    assert_eq!(wrote(&planned, "chip"), None);
+    assert!(planned.notes.contains(&kept_note("chip", "1.0.0")));
+    assert!(
+        planned
+            .notes
+            .iter()
+            .all(|note| !note.contains("chip@") && note != TESTS_MAY_CHANGE),
+        "{:?}",
+        planned.notes
+    );
+    let lock = planned.lock.unwrap();
+    assert!(
+        lock.contains(&format!("chip 1.0.0 {} {}", catalog.registry(), held.hash)),
+        "{lock}"
+    );
+
+    let refused = refusal(plan(
+        &catalog,
+        &snapshot,
+        &ask(&["board"], false, false),
+        ADD,
+    ));
+    assert_eq!(refused.hint, "run `orbe add board --overwrite`");
+    assert!(!refused.hint.contains("chip"), "{}", refused.hint);
+    assert!(!refused.message.contains("chip@"), "{}", refused.message);
+}
+
+#[test]
+fn a_named_newer_copy_is_left_even_when_pinned() {
+    let chip = leaf("chip", "0.1.0", "chip");
+    let catalog = catalog_of(vec![chip.clone()]);
+    let held = at_version(&chip, "0.2.0");
+    let mut snapshot = empty();
+    install(&mut snapshot, &catalog, &held);
+    seal(&mut snapshot);
+    for (ids, version) in [
+        (["chip"].as_slice(), "0.2.0"),
+        (["chip@0.1.0"].as_slice(), "0.2.0"),
+    ] {
+        let planned = added(plan(&catalog, &snapshot, &ask(ids, true, false), ADD));
+        assert!(planned.write.is_empty(), "{ids:?}");
+        assert!(planned.lock.is_none(), "{ids:?} lock was rewritten");
+        assert_eq!(planned.notes, vec![kept_note("chip", version)]);
+    }
+
+    let held_major = at_version(&chip, "1.0.0");
+    let mut major = empty();
+    install(&mut major, &catalog, &held_major);
+    seal(&mut major);
+    let planned = added(plan(
+        &catalog,
+        &major,
+        &ask(&["chip@0.1.0"], true, false),
+        ADD,
+    ));
+    assert!(planned.write.is_empty());
+    assert!(planned.lock.is_none());
+    assert_eq!(planned.notes, vec![kept_note("chip", "1.0.0")]);
+    assert!(!planned.notes.iter().any(|note| note == TESTS_MAY_CHANGE));
+}
+
+#[test]
+fn a_folder_that_differs_from_its_lock_is_still_replaced() {
+    let chip = leaf("chip", "0.1.0", "chip");
+    let catalog = catalog_of(vec![chip.clone()]);
+    let held = at_version(&chip, "0.2.0");
+    let mut snapshot = empty();
+    put(&mut snapshot, "chip", edited(&held));
+    snapshot.lock.insert(
+        "chip".into(),
+        LockFields {
+            id: "chip".into(),
+            version: "0.2.0".into(),
+            registry: catalog.registry().to_string(),
+            hash: held.hash.clone(),
+        },
+    );
+    let planned = added(plan(&catalog, &snapshot, &ask(&["chip"], true, false), ADD));
+    assert_eq!(wrote(&planned, "chip"), Some(v("0.1.0")));
+    assert_eq!(replacing(&planned, "chip"), Some("0.2.0 with local edits"));
+    assert!(
+        !planned.notes.iter().any(|note| note.contains("newer orbe")),
+        "{:?}",
+        planned.notes
+    );
+}
+
+#[test]
+fn a_newer_line_from_another_registry_is_still_replaced() {
+    let chip = leaf("chip", "0.1.0", "chip");
+    let catalog = catalog_of(vec![chip.clone()]);
+    let held = at_version(&chip, "0.2.0");
+    let mut snapshot = empty();
+    install(&mut snapshot, &catalog, &held);
+    snapshot.lock.get_mut("chip").unwrap().registry = "@acme".into();
+    let planned = added(plan(&catalog, &snapshot, &ask(&["chip"], true, false), ADD));
+    assert_eq!(wrote(&planned, "chip"), Some(v("0.1.0")));
+    assert!(
+        !planned.notes.iter().any(|note| note.contains("newer orbe")),
+        "{:?}",
+        planned.notes
+    );
+}
+
+#[test]
+fn an_older_locked_child_is_still_replaced() {
+    let (catalog, mut snapshot, _) = older_board_newer_chip("0.0.9");
+    // The helper parks the chip at 0.0.9 and the board at 0.0.9. Put the board back
+    // at the catalog copy so the only write is the older child.
+    let board = board("board", "0.1.0", &[("chip", "0.1.0")]);
+    install(&mut snapshot, &catalog, &board);
+    seal(&mut snapshot);
+    let planned = added(plan(
+        &catalog,
+        &snapshot,
+        &ask(&["board"], true, false),
+        ADD,
+    ));
+    assert_eq!(wrote(&planned, "chip"), Some(v("0.1.0")));
+    assert_eq!(replacing(&planned, "chip"), Some("0.0.9"));
+    assert_eq!(wrote(&planned, "board"), None);
+    assert!(
+        !planned.notes.iter().any(|note| note.contains("newer orbe")),
+        "{:?}",
+        planned.notes
+    );
+}
+
+#[test]
+fn two_catalog_versions_do_not_pin_a_newer_locked_copy() {
+    let old = leaf("chip", "0.1.0", "old");
+    let major = leaf("chip", "1.0.0", "major");
+    let nano = board("nano", "0.1.0", &[("chip", "0.1.0")]);
+    let mega = board("mega", "0.1.0", &[("chip", "1.0.0")]);
+    let catalog = catalog_of(vec![old, major.clone(), nano.clone(), mega.clone()]);
+    let held = at_version(&major, "2.0.0");
+    let mut snapshot = empty();
+    install(&mut snapshot, &catalog, &held);
+    seal(&mut snapshot);
+    let planned = added(plan(
+        &catalog,
+        &snapshot,
+        &ask(&["nano", "mega"], true, false),
+        ADD,
+    ));
+    assert_eq!(wrote(&planned, "nano"), Some(nano.version));
+    assert_eq!(wrote(&planned, "mega"), Some(mega.version));
+    assert_eq!(wrote(&planned, "chip"), None);
+    assert!(planned.notes.contains(&kept_note("chip", "2.0.0")));
+    assert!(
+        planned.notes.iter().all(|note| !note.contains("chip@")),
+        "{:?}",
+        planned.notes
+    );
+    let lock = planned.lock.unwrap();
+    assert!(
+        lock.contains(&format!("chip 2.0.0 {} {}", catalog.registry(), held.hash)),
+        "{lock}"
+    );
+}
