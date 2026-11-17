@@ -1332,7 +1332,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 "ratings": { "power": { "value": 0.25, "unit": "W", "source": "user" } }
 ```
 
-The run compares the magnitude of each rated quantity with its rating, and each rated pin's voltage with its window. Going over is a warning, `rating.current`, `rating.power` or `rating.voltage`, in [diagnostics.md](diagnostics.md).
+The run compares the magnitude of each rated quantity with its rating, and each rated pin's voltage with its window. A DC rating, an `atmega328p`'s `pin_current` and `supply_current` and a `voltage_source`'s `current`, is compared through the quantity's RMS over the last 1 ms. Going over is a warning, `rating.current`, `rating.power` or `rating.voltage`, in [diagnostics.md](diagnostics.md).
 
 ## Sources
 

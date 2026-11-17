@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use orbe_model::{Drive, Time};
 
 use crate::active::{self, Output, Stage};
@@ -14,6 +16,12 @@ use crate::observe::Columns;
 /// It reads the observed row, so a part's rating is checked against the number the run
 /// writes. A chip's pin ratings read the row's net voltages and the drive its core had in
 /// force for that row, and work out each pin's current the way `active::stamp` stamps it.
+///
+/// A DC current rating, a chip pin's, a chip supply's or a supply source's, bounds the heat
+/// the current makes, which follows its square over time. So it is checked on the current's
+/// RMS over the last [`DC_WINDOW_PS`], not on each sample: the pulse that charges a
+/// capacitor through a pin stays under it, and a load that holds the current over its rating
+/// for a fraction of the window goes over.
 #[derive(Clone)]
 pub(crate) struct Ratings {
     timing: Timing,
@@ -22,6 +30,11 @@ pub(crate) struct Ratings {
     chips: Vec<Gauge>,
     last: Option<Time>,
 }
+
+/// The window a DC current rating averages over, 1 ms. A pin that holds a capacitor's
+/// charging pulse, `I0^2 * tau / 2` of `i^2 * t`, stays well under it, and a steady load over
+/// the rating crosses it within a fraction of it.
+pub(crate) const DC_WINDOW_PS: u64 = 1_000_000_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Timing {
@@ -71,9 +84,24 @@ struct Watch {
     quantity: Ref,
     read: Read,
     limit: f64,
+    /// `Some` for a DC rating, checked on the RMS over its window.
+    window: Option<Square>,
     /// Whether the last sample was over.
     over: bool,
     excursion: Option<Excursion>,
+}
+
+/// A current's square over the last [`DC_WINDOW_PS`], each sample held until the next. The
+/// window starts full of the first sample, the operating point, which is DC.
+#[derive(Clone, Default)]
+struct Square {
+    /// Spans `(from_ps, to_ps, i^2)`, oldest first, which tile the window. A span may start
+    /// before t = 0.
+    spans: VecDeque<(i64, i64, f64)>,
+    /// `i^2 * t` over the spans, in A^2 ps.
+    sum: f64,
+    /// The last sample's time and square.
+    held: Option<(i64, f64)>,
 }
 
 /// Where a watch reads its value.
@@ -131,6 +159,8 @@ impl Ratings {
     ) -> Ratings {
         let mut watches = Vec::new();
         for (_, part) in netlist.parts() {
+            // A supply source's current rating is the most it delivers steadily.
+            let dc = matches!(part.model, Model::VoltageSource(_));
             for (kind, quantity, value) in part.model.ratings() {
                 let quantity = Ref::Quantity(part.name.clone(), quantity);
                 let column = columns
@@ -141,6 +171,7 @@ impl Ratings {
                     quantity,
                     Read::Column(column),
                     value.si.get(),
+                    dc,
                 ));
             }
         }
@@ -167,6 +198,7 @@ impl Ratings {
                         pin(name),
                         Read::Gauge { gauge, k },
                         limit,
+                        true,
                     ));
                 }
             }
@@ -178,6 +210,7 @@ impl Ratings {
                         pin(name),
                         Read::Gauge { gauge, k },
                         limit,
+                        true,
                     ));
                 }
             }
@@ -213,9 +246,10 @@ impl Ratings {
         }
     }
 
-    /// Over means a magnitude above the limit, or a voltage outside its window. The first
-    /// time over stays; the peak rises. A sample that was over adds the time until this one
-    /// to `over_ps`. `cores` are the active chips' cores whose drive was in force for `row`.
+    /// Over means a magnitude above the limit, the RMS over the window for a DC rating, or a
+    /// voltage outside its window. The first time over stays; the peak rises. A sample that was
+    /// over adds the time until this one to `over_ps`. `cores` are the active chips' cores
+    /// whose drive was in force for `row`.
     pub(crate) fn sample(&mut self, at: Time, row: &[Finite], cores: &[active::Core]) {
         for gauge in &mut self.chips {
             gauge.read(row, cores[gauge.active].drive());
@@ -231,11 +265,14 @@ impl Ratings {
                 watch.excursion.as_mut().and_then(|e| e.over_ps.as_mut()),
                 self.last,
             );
-            let magnitude = match watch.read {
+            let mut magnitude = match watch.read {
                 Read::Column(column) => row[column].get(),
                 Read::Gauge { gauge, k } => self.chips[gauge].currents[k],
             }
             .abs();
+            if let Some(window) = &mut watch.window {
+                magnitude = window.rms(at, magnitude);
+            }
             watch.over = magnitude > watch.limit;
             if !watch.over {
                 continue;
@@ -249,6 +286,7 @@ impl Ratings {
                         peak_at: at,
                         first: at,
                         over_ps: self.timing.over_ps(),
+                        window_ps: watch.window.as_ref().map(|_| DC_WINDOW_PS),
                     });
                 }
                 Some(excursion) if magnitude > excursion.peak => {
@@ -321,8 +359,9 @@ impl Ratings {
         currents.chain(voltages).collect()
     }
 
-    /// The findings of one sample at `at` alone, each with no duration. With no `cores` it
-    /// leaves the chips' pin ratings out.
+    /// The findings of one sample at `at` alone, each with no duration. A DC rating's window
+    /// runs through the last sample to `at`. With no `cores` it leaves the chips' pin ratings
+    /// out.
     pub(crate) fn point(
         &self,
         at: Time,
@@ -364,15 +403,59 @@ impl Timing {
 }
 
 impl Watch {
-    fn new(kind: RatingKind, quantity: Ref, read: Read, limit: f64) -> Watch {
+    fn new(kind: RatingKind, quantity: Ref, read: Read, limit: f64, dc: bool) -> Watch {
         Watch {
             kind,
             quantity,
             read,
             limit,
+            window: dc.then(Square::default),
             over: false,
             excursion: None,
         }
+    }
+}
+
+impl Square {
+    /// Takes `magnitude` at `at`, and returns the RMS over the window that ends there. The
+    /// sample held since the last one fills the time up to `at`.
+    fn rms(&mut self, at: Time, magnitude: f64) -> f64 {
+        let window = DC_WINDOW_PS as i64;
+        let at = i64::try_from(at.as_ps()).expect("a run's time fits in i64 ps");
+        let square = magnitude * magnitude;
+        match self.held {
+            None => {
+                self.spans.push_back((at - window, at, square));
+                self.sum = square * window as f64;
+            }
+            Some((last, held)) if at > last => {
+                match self.spans.back_mut() {
+                    Some((_, to, back)) if *to == last && *back == held => *to = at,
+                    _ => self.spans.push_back((last, at, held)),
+                }
+                self.sum += held * (at - last) as f64;
+                let start = at - window;
+                while let Some((from, to, square)) = self.spans.front_mut() {
+                    if *to <= start {
+                        self.sum -= *square * (*to - *from) as f64;
+                        self.spans.pop_front();
+                    } else {
+                        if *from < start {
+                            self.sum -= *square * (start - *from) as f64;
+                            *from = start;
+                        }
+                        break;
+                    }
+                }
+                // One span left is a steady current, whose sum is exact again.
+                if let (1, Some(&(from, to, square))) = (self.spans.len(), self.spans.front()) {
+                    self.sum = square * (to - from) as f64;
+                }
+            }
+            Some(_) => {}
+        }
+        self.held = Some((at, square));
+        (self.sum.max(0.0) / window as f64).sqrt()
     }
 }
 
@@ -502,6 +585,7 @@ mod tests {
                 peak_at: Time::from_ps(20),
                 first: Time::from_ps(10),
                 over_ps: None,
+                window_ps: None,
             })]
         );
     }
@@ -523,6 +607,74 @@ mod tests {
         assert_eq!(excursion.first, Time::from_ps(10));
         assert_eq!(excursion.peak_at, Time::from_ps(25));
         assert_eq!(excursion.over_ps, Some(15 + 5 + 5));
+    }
+
+    fn close(got: f64, want: f64) {
+        assert!(
+            (got - want).abs() <= 1e-12 * want.max(1.0),
+            "{got} against {want}"
+        );
+    }
+
+    /// The window starts full of the operating point, which is DC.
+    #[test]
+    fn a_window_starts_full_of_its_first_sample() {
+        let mut square = Square::default();
+        close(square.rms(Time::ZERO, 0.3), 0.3);
+        close(square.rms(Time::from_ps(DC_WINDOW_PS / 2), 0.0), 0.3);
+        close(
+            square.rms(Time::from_ps(DC_WINDOW_PS), 0.0),
+            0.3 / 2f64.sqrt(),
+        );
+        close(square.rms(Time::from_ps(3 * DC_WINDOW_PS / 2), 0.0), 0.0);
+    }
+
+    /// A pin into 100 pF carries about 0.2 A for 4 ns, which is 0.2 * sqrt(4 ns / 1 ms), 0.4 mA
+    /// RMS over the window.
+    #[test]
+    fn a_short_pulse_counts_by_its_share_of_the_window() {
+        let mut square = Square::default();
+        square.rms(Time::ZERO, 0.0);
+        square.rms(Time::from_ps(1_000), 0.2);
+        let rms = square.rms(Time::from_ps(5_000), 0.0);
+        close(rms, 0.2 * (4_000.0 / DC_WINDOW_PS as f64).sqrt());
+        assert!(rms < 0.001);
+        square.rms(Time::from_ps(DC_WINDOW_PS + 2_000), 0.0);
+        close(
+            square.rms(Time::from_ps(DC_WINDOW_PS + 3_000), 0.0),
+            0.2 * (2_000.0 / DC_WINDOW_PS as f64).sqrt(),
+        );
+        close(square.rms(Time::from_ps(DC_WINDOW_PS + 5_000), 0.0), 0.0);
+    }
+
+    /// A steady 69 mA from 0 crosses 40 mA once (40 / 69)^2 of the window has filled.
+    #[test]
+    fn a_steady_overload_crosses_its_rating_inside_the_window() {
+        let (mut ratings, columns) = ratings(Timing::Run);
+        ratings.watches[0].window = Some(Square::default());
+        let values = |current| row(&columns, current);
+        ratings.sample(Time::ZERO, &values(0.0), &[]);
+        ratings.sample(Time::from_ps(1), &values(0.069), &[]);
+        let step = DC_WINDOW_PS / 1_000;
+        for k in 1..=2_000 {
+            ratings.sample(Time::from_ps(1 + k * step), &values(0.069), &[]);
+        }
+        let found = ratings.findings();
+        let [Diagnostic::RatingCurrent(excursion)] = found.as_slice() else {
+            panic!("not one current finding: {found:?}");
+        };
+        let crossing = (0.03f64 / 0.069) * (0.03 / 0.069) * DC_WINDOW_PS as f64;
+        assert!(
+            excursion.first.as_ps().abs_diff(crossing as u64) <= step,
+            "{:?}",
+            excursion.first
+        );
+        close(excursion.peak, 0.069);
+        assert_eq!(excursion.window_ps, Some(DC_WINDOW_PS));
+        assert_eq!(
+            excursion.over_ps,
+            Some(1 + 2_000 * step - excursion.first.as_ps())
+        );
     }
 
     #[test]

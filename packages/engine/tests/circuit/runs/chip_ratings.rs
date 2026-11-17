@@ -114,6 +114,17 @@ fn refs(found: &[Diagnostic]) -> Vec<String> {
         .collect()
 }
 
+/// The window a DC current rating's RMS runs over, 1 ms.
+const WINDOW_PS: u64 = 1_000_000_000;
+
+/// `ldi r16,0x20`, `out DDRB,r16`, `rjmp .-2`: PB5 an output, low, from cycle 2 on.
+const PB5_LOW: &str = ":0600000000E204B9FFCF8D\n:00000001FF\n";
+
+/// `netlist` run to `stop_ps` on its own step.
+fn lasting(netlist: &mut serde_json::Value, stop_ps: u64) {
+    netlist["analysis"]["transient"]["stop_ps"] = stop_ps.into();
+}
+
 /// PB5 high into `load` to ground: the stage and the two leakages against the load.
 fn high_into(load: f64) -> f64 {
     let up = 1.0 / STAGE + 1.0 / LEAKAGE;
@@ -154,35 +165,61 @@ fn the_documented_example_is_inside_every_rating() {
 }
 
 /// `toggle.S` drives PB5 high from 250 ns to 6.5 us and from 12.75 us to 19 us of the 20 us run.
-/// Into 47 ohm that is 69 mA, the stage's closed form. Each sample holds until the next, so the
-/// time over is those 12.5 us, give or take a step at each edge.
+/// Into 47 ohm that is 69 mA, the stage's closed form, for 12.5 us in all: well under 40 mA
+/// over the 1 ms window, as a capacitor's charging pulse is.
 #[test]
-fn a_port_pin_over_its_current_is_named_with_the_stage_s_current() {
+fn an_overload_shorter_than_the_window_stays_inside_the_pin_rating() {
     let mut netlist = rated();
     part(&mut netlist, "r1")["resistance"]["value"] = 47.0.into();
+    assert_eq!(run(&netlist), []);
+}
+
+/// Run on to 3 ms, `toggle.S` keeps PB5 high half of each 12.5 us. Into 47 ohm that is 69 mA,
+/// the stage's closed form, so its RMS over the window settles at 69 mA / sqrt(2), 48.8 mA,
+/// and first crosses 40 mA once (40 / 48.8)^2 of the window, 0.67 ms, has filled.
+#[test]
+fn a_port_pin_over_its_current_for_its_window_is_named_with_the_stage_s_rms() {
+    let mut netlist = rated();
+    part(&mut netlist, "r1")["resistance"]["value"] = 47.0.into();
+    lasting(&mut netlist, 3 * WINDOW_PS);
     let found = run(&netlist);
     assert_eq!(refs(&found), ["rating.current #u1.pin.PB5"]);
     let [pin] = currents(&found)[..] else {
         unreachable!()
     };
-    assert_eq!(pin.limit, 0.04);
+    assert_eq!((pin.limit, pin.window_ps), (0.04, Some(WINDOW_PS)));
+    let rms = high_into(47.0) / 2f64.sqrt();
     assert!(
-        (pin.peak - high_into(47.0)).abs() < 1e-9,
-        "{} against {}",
-        pin.peak,
-        high_into(47.0)
+        (pin.peak / rms - 1.0).abs() < 0.01,
+        "{} against {rms}",
+        pin.peak
     );
-    // The first step after the rise at cycle 4, 250 ns.
-    assert!(pin.first > Time::from_ps(250_000) && pin.first < Time::from_ps(1_250_000));
+    let first = ((0.04 / rms) * (0.04 / rms) * WINDOW_PS as f64) as u64;
+    assert!(
+        pin.first.as_ps().abs_diff(first) < 20_000_000,
+        "{:?}",
+        pin.first
+    );
     let over = pin.over_ps.unwrap();
-    assert!(over.abs_diff(12_500_000) < 2_000_000, "{over}");
+    assert!(over.abs_diff(3 * WINDOW_PS - first) < 20_000_000, "{over}");
+    let message = serde_json::to_value(&found[0]).unwrap()["message"].clone();
+    assert_eq!(
+        message,
+        format!(
+            "#u1.pin.PB5 carries {} A RMS over the last 1 ms, over its 0.04 A rating for {over} ps",
+            pin.peak
+        )
+    );
 }
 
-/// PB5 driving low on the supply's net sinks 5 V across 25 ohm, the 200 mA rating of the
-/// ground pin, and the leakages of the other pins put `GND_8` just over it.
+/// PB5 held low on the supply's net sinks 5 V across 25 ohm, the 200 mA rating of the ground
+/// pin, and the leakages of the other pins put `GND_8` just over it. Held past the window, the
+/// RMS is the steady current.
 #[test]
 fn a_pin_driving_low_on_the_supply_is_over_and_so_is_its_ground() {
     let mut netlist = rated();
+    chip(&mut netlist)["firmware"] = PB5_LOW.into();
+    lasting(&mut netlist, 2 * WINDOW_PS);
     chip(&mut netlist)["pins"]["PB5"] = "vcc".into();
     part(&mut netlist, "r1")["pins"]["a"] = "vcc".into();
     netlist["nets"]
@@ -192,9 +229,9 @@ fn a_pin_driving_low_on_the_supply_is_over_and_so_is_its_ground() {
     let found = run(&netlist);
     assert_eq!(
         refs(&found),
-        ["rating.current #u1.pin.GND_8", "rating.current #u1.pin.PB5"]
+        ["rating.current #u1.pin.PB5", "rating.current #u1.pin.GND_8"]
     );
-    let [ground, pin] = currents(&found)[..] else {
+    let [pin, ground] = currents(&found)[..] else {
         unreachable!()
     };
     assert!(
@@ -219,6 +256,7 @@ fn six_pins_inside_their_rating_put_vcc_over_its_own() {
         .map(|k| resistor(&format!("rd{k}"), &format!("pd{k}"), "gnd", 120.0))
         .collect();
     add(&mut netlist, &[], serde_json::Value::Array(loads));
+    lasting(&mut netlist, 2 * WINDOW_PS);
     let found = run(&netlist);
     assert_eq!(refs(&found), ["rating.current #u1.pin.VCC"]);
     let [vcc] = currents(&found)[..] else {
@@ -299,12 +337,13 @@ fn reset_and_vcc_take_their_own_ceilings() {
     assert_eq!(windows(&found)[0].high, Some(6.0));
 }
 
-/// Between accepted steps a session checks the chip's pins at the probe, with the drive in
-/// force there. PB5 is high from 250 ns to 6.5 us and low from 6.5 us to 12.75 us.
+/// Between accepted steps a session checks the chip's pins at the probe, its window running
+/// to the probe. PB5's RMS into 47 ohm crosses 40 mA at about 0.67 ms.
 #[test]
 fn a_session_checks_the_pins_at_its_probe() {
     let mut netlist = rated();
     part(&mut netlist, "r1")["resistance"]["value"] = 47.0.into();
+    lasting(&mut netlist, 2 * WINDOW_PS);
     let mut session =
         Session::open(netlist::parse(netlist.to_string().as_bytes()).unwrap()).unwrap();
     let over_at = |session: &mut Session, ps: u64| {
@@ -313,9 +352,9 @@ fn a_session_checks_the_pins_at_its_probe() {
         assert_eq!(probe.at(), Time::from_ps(ps));
         refs(&session.over_ratings(&probe))
     };
+    assert_eq!(over_at(&mut session, 500_333_333), Vec::<String>::new());
     assert_eq!(
-        over_at(&mut session, 3_333_333),
+        over_at(&mut session, 1_500_333_333),
         ["rating.current #u1.pin.PB5"]
     );
-    assert_eq!(over_at(&mut session, 9_333_333), Vec::<String>::new());
 }

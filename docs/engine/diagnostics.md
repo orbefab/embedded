@@ -608,31 +608,44 @@ The message is `the row at {t_ps} ps did not solve; it is the line between the s
 
 Severity `warning`. Refs is the rated quantity, `#<part>.i` (a voltage source's too), `#<part>.ic` for a bipolar transistor, `#<part>.id` for an `nmos`, `#<part>.iout` for a linear regulator, or a chip pin, `#<part>.pin.<pin>`, for an `atmega328p`. `t_ps` is the first time over the rating, 0 for the operating point.
 
-The message is:
+The message is one of:
 
 ```text
-{ref} peaks at {peak} A, over its {limit} A rating
+{ref} peaks at {peak} A, over its {limit} A rating for {over_ps} ps
+{ref} carries {peak} A RMS over the last 1 ms, over its {limit} A rating for {over_ps} ps
 ```
 
-`data` holds `limit`, `over_ps`, `peak`, and `peak_ps`. `limit` is the rating. `peak` is the largest magnitude of the quantity. `peak_ps` is when it peaked. `over_ps` is `null` for an operating point, which has no duration.
+The second is a DC rating's, below. ` for {over_ps} ps` is left out for an operating point, and while `over_ps` is 0, as on the step where the quantity first goes over. A session's `diagnostics()` writes each message as it stands through the last accepted step, so a warning seen early reads a shorter time, or none, than the run folder's.
+
+`data` holds `limit`, `over_ps`, `peak`, `peak_ps`, and `window_ps`. `limit` is the rating. `peak` is the largest magnitude of the quantity, or of its RMS for a DC rating. `peak_ps` is when it peaked. `over_ps` is `null` for an operating point, which has no duration. `window_ps` is 1000000000 for a DC rating and `null` for any other.
 
 A transient checks every accepted step, not only the rows. Each step's value holds until the next accepted step. `t_ps` is the first step over the rating, and `over_ps` adds the time to the next step for every step over it. The last step adds nothing. So `t_ps` and `peak_ps` can fall between rows. At a switch edge the solve at the edge holds the old contact. With 22 ohm in place of 220 ohm in `packages/engine/tests/circuits/button-led`, `#led1.i` is first over 1 ns after the press, and `over_ps` is exactly the time the contact was closed.
 
 A quantity is over when its magnitude is above the rating. Equal is not over. `peak` is the largest magnitude. For an operating point it equals `abs(observations.op[ref])`. The operating point is still written, and `orbe-run run` exits 0.
 
+### DC ratings
+
+An `atmega328p`'s `pin_current` and `supply_current` and a voltage source's `current` are DC ratings. DS40002061B §29.1 gives 40 mA and 200 mA as DC currents and gives no pulse rating, and a supply's rating is the current it delivers steadily. What a DC current rating guards against is heat, in the output transistors, the metal and the bond wires, and electromigration, which follows the mean current. Heat follows `i^2` over time. So a transient checks a DC rating against the current's RMS over the 1 ms before each accepted step, not against each step's value. RMS is never below the mean, so it covers electromigration too. Each step's value holds until the next, as above, and the window starts full of the operating point, which is DC. `t_ps` is the first step whose RMS is over, `peak` the largest RMS, and `over_ps` the time the RMS was over. An operating point's RMS is its value.
+
+1 ms is long next to a switching edge and short next to any load a circuit holds. A capacitor that a pin charges through its stage, `R` ohm, takes `I0^2 * R * C / 2` of `i^2 * t` an edge. On the model's 25 ohm stage, 100 pF takes 0.2 A for a few nanoseconds, which over 1 ms is under 1 mA RMS, and a 1 uF load on a 490 Hz PWM pin stays well under 40 mA. 10 uF and 47 uF on that pin go over, as such a load does on a real pin. A load held at `k` times the rating goes over once `1 / k^2` of the window has filled: 69 mA from a pin into 47 ohm after 0.33 ms, five LEDs taking 44 mA from one pin after 0.81 ms, and a pin driving low on 5V, 200 mA, after 40 us.
+
+Every other current and power rating is checked on each accepted step. An LED's `current` is its DC forward current. An LED datasheet gives a higher peak forward current for short pulses at a low duty, which this model does not carry, so a pulse over the DC current warns.
+
 The 9 V LED example puts about 0.55 A through an LED rated 0.03 A.
 
 A voltage source with `ratings.current` names its current, `#<part>.i`, over that rating. The USB sources of the catalog's boards carry 0.5 A, the most a high-power USB 2.0 function draws (Table 7-7, `ICCHPF`). A 2.5 ohm load from a Nano's 5V to its GND draws 2 A, and `#nano__usb__host.i` is over.
 
-An `atmega328p` with `ratings.pin_current` names each port pin over it, such as `#u1.pin.PB1`. A pin's current is the current out of the pin into the circuit, through its output stage in the state the firmware drives, its pull-up and its leakage to both rails, as [netlist.md](netlist.md#atmega328p) stamps them. With `ratings.supply_current`, `#u1.pin.VCC` is the sum of every port pin's current drawn from `VCC`, and `#u1.pin.GND_8` the sum of every port pin's current into `GND_8`, which carries `GND_22` too. The core draws no supply current of its own, so neither sum holds one. A row is solved with the drive the firmware had in force until that step, so a pin that changes drive on a step is checked with its new drive from the next step on.
+An `atmega328p` with `ratings.pin_current` names each port pin whose RMS is over it, such as `#u1.pin.PB1`. A pin's current is the current out of the pin into the circuit, through its output stage in the state the firmware drives, its pull-up and its leakage to both rails, as [netlist.md](netlist.md#atmega328p) stamps them. With `ratings.supply_current`, `#u1.pin.VCC` is the sum of every port pin's current drawn from `VCC`, and `#u1.pin.GND_8` the sum of every port pin's current into `GND_8`, which carries `GND_22` too. The core draws no supply current of its own, so neither sum holds one. A row is solved with the drive the firmware had in force until that step, so a pin that changes drive on a step is checked with its new drive from the next step on.
 
-The number is the model's. The stage is linear, 25 ohm from its rail, so a pin shorted to the other rail reads 200 mA at 5 V. A real driver saturates, and a short draws about half that. Both are far over the 40 mA rating, so the warning holds. The rating is the datasheet's absolute maximum, which [avr.md](avr.md#ratings) names. A pin over it can be damaged.
+The number is the model's. The stage is linear, 25 ohm from its rail, so a pin shorted to the other rail reads 200 mA at 5 V. A real driver saturates, and a short draws about half that. Both are far over the 40 mA rating, so the warning holds. The rating is the datasheet's absolute maximum, which [avr.md](avr.md#ratings) names. A pin held over it can be damaged.
 
-A Nano running a sketch that drives D9 high into 47 ohm to ground reads:
+A Nano running a sketch that drives D9 high into 47 ohm to ground reads, 10 ms in:
 
 ```text
-#nano__mcu.pin.PB1 peaks at 0.06944434799653014 A, over its 0.04 A rating
+#nano__mcu.pin.PB1 carries 0.06944434799653014 A RMS over the last 1 ms, over its 0.04 A rating for 7864320000 ps
 ```
+
+The time over runs through the last accepted step, which a chip's core can leave behind the session's time.
 
 Six pins each driving 120 ohm to ground carry 34.5 mA each, under the pin rating, and 207 mA together, so `#nano__mcu.pin.VCC` is over its 0.2 A.
 
@@ -643,10 +656,10 @@ Severity `warning`. Refs is the rated quantity, `#<part>.p`. `t_ps` is the first
 The message is:
 
 ```text
-{ref} peaks at {peak} W, over its {limit} W rating
+{ref} peaks at {peak} W, over its {limit} W rating for {over_ps} ps
 ```
 
-`data` is the same as `rating.current`.
+` for {over_ps} ps` is left out as for `rating.current`. `data` is the same as `rating.current`, with `window_ps` `null`: a power rating is checked on each accepted step.
 
 The 9 V LED example reports `#led1.p` over its 0.075 W rating and `#r1.p` over its 0.25 W rating.
 
@@ -657,16 +670,16 @@ Severity `warning`. Refs is the chip pin, `#<part>.pin.<pin>`. `t_ps` is the fir
 The message is:
 
 ```text
-{ref} reaches {peak} V over the chip's ground, outside its {low} V to {high} V rating
+{ref} reaches {peak} V over the chip's ground, outside its {low} V to {high} V rating for {over_ps} ps
 ```
 
-A window with no floor ends `outside its {high} V ceiling`, and one with no ceiling `outside its {low} V floor`.
+A window with no floor reads `outside its {high} V ceiling`, and one with no ceiling `outside its {low} V floor`. ` for {over_ps} ps` is left out as for `rating.current`. A voltage window is checked on each accepted step: a pin past a rail conducts into its clamp at once.
 
 `data` holds `high`, `low`, `over_ps`, `peak`, and `peak_ps`. Each voltage is over the chip's ground pin, `GND_8` on an `atmega328p`. `peak` is the pin's voltage where it was farthest outside the window, and `peak_ps` is when. `low` and `high` are the window at that time, and either is `null` when the part rates none. `over_ps` is `null` for an operating point, which has no duration, and counts the time outside the window as `rating.current` counts the time over.
 
 An `atmega328p` with a `ratings` object checks every pin but its two ground pins. The floor is `ratings.rail_margin` below ground. The ceiling is `ratings.rail_margin` above the chip's own `VCC`, so it follows the supply. `VCC`'s ceiling is `ratings.supply_voltage`, and `PC6`'s is `ratings.reset_voltage` while it is `RESET`. A pin exactly on the edge is inside. The model has no clamp diodes, so a pin outside the window draws no clamp current and its voltage is what the circuit drives. A real pin conducts into its clamp there, which is the damage the rating guards against.
 
-A Nano with a 9 V source through 1 kohm on A0 reads:
+A Nano with a 9 V source through 1 kohm on A0 reads, at the operating point:
 
 ```text
 #nano__mcu.pin.PC0 reaches 8.997637213833697 V over the chip's ground, outside its -0.5 V to 5.5 V rating

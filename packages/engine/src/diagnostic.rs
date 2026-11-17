@@ -539,13 +539,15 @@ pub struct Excursion {
     pub quantity: Ref,
     /// The rating, in SI units.
     pub limit: f64,
-    /// Largest magnitude seen.
+    /// Largest magnitude seen, or for a DC rating the largest RMS over `window_ps`.
     pub peak: f64,
     pub peak_at: Time,
     /// First sample over the limit.
     pub first: Time,
     /// Total time over the limit. `None` for an operating point, which has no duration.
     pub over_ps: Option<u64>,
+    /// The window a DC rating's RMS runs over, or `None` for a rating checked on each sample.
+    pub window_ps: Option<u64>,
 }
 
 /// One chip pin outside its rated voltage window, merged over the whole run. Volts are over
@@ -1651,6 +1653,7 @@ impl Diagnostic {
                     "over_ps": excursion.over_ps,
                     "peak": excursion.peak,
                     "peak_ps": excursion.peak_at,
+                    "window_ps": excursion.window_ps,
                 })
             }
             Diagnostic::RatingVoltage(excursion) => {
@@ -1702,9 +1705,30 @@ fn over_rating(excursion: &Excursion, unit: &str) -> String {
         quantity,
         limit,
         peak,
+        over_ps,
+        window_ps,
         ..
     } = excursion;
-    format!("{quantity} peaks at {peak} {unit}, over its {limit} {unit} rating")
+    let reading = match window_ps {
+        Some(window) => format!(
+            "{quantity} carries {peak} {unit} RMS over the last {} ms",
+            *window as f64 / 1e9
+        ),
+        None => format!("{quantity} peaks at {peak} {unit}"),
+    };
+    format!(
+        "{reading}, over its {limit} {unit} rating{}",
+        for_time(*over_ps)
+    )
+}
+
+/// ` for {over_ps} ps` once a run has been over for some time. Nothing for an operating
+/// point, which has no duration, or for a finding first over on the last accepted step.
+fn for_time(over_ps: Option<u64>) -> String {
+    match over_ps {
+        Some(over) if over > 0 => format!(" for {over} ps"),
+        _ => String::new(),
+    }
 }
 
 fn outside_window(excursion: &VoltageExcursion) -> String {
@@ -1713,6 +1737,7 @@ fn outside_window(excursion: &VoltageExcursion) -> String {
         low,
         high,
         peak,
+        over_ps,
         ..
     } = excursion;
     let window = match (low, high) {
@@ -1721,7 +1746,10 @@ fn outside_window(excursion: &VoltageExcursion) -> String {
         (None, Some(high)) => format!("its {high} V ceiling"),
         (None, None) => unreachable!("a window rates a floor or a ceiling"),
     };
-    format!("{pin} reaches {peak} V over the chip's ground, outside {window}")
+    format!(
+        "{pin} reaches {peak} V over the chip's ground, outside {window}{}",
+        for_time(*over_ps)
+    )
 }
 
 fn name_problem(problem: NameError) -> &'static str {
