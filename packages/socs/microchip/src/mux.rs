@@ -231,9 +231,11 @@ pub(crate) struct PinMux {
     /// By pin id, the oscillator cycle the firmware first read the pin at since its drive last
     /// turned off, or `u64::MAX`. A load reads through `&self`, so the record sits in a `Cell`.
     off_reads: Cell<[u64; crate::PIN_COUNT]>,
-    /// How many times any pin's drive has turned off. The bus compares it to know when a port
-    /// it has read holds a pin to read again.
-    offs: u64,
+    /// One bit per I/O index where a port's `PINx` sits, which the bus sets.
+    pinx: [u64; 4],
+    /// The bits of `pinx` the firmware has not loaded since a drive last turned off. A load
+    /// reads through `&self`, so the set sits in a `Cell`.
+    unread: Cell<[u64; 4]>,
     /// The pins an enabled `INTn` or pin-change interrupt watches, one bit per pin id.
     watched: u64,
 }
@@ -254,7 +256,8 @@ impl PinMux {
             edge_len: 0,
             reset_pin: false,
             off_reads: Cell::new([u64::MAX; crate::PIN_COUNT]),
-            offs: 0,
+            pinx: [0; 4],
+            unread: Cell::new([0; 4]),
             watched: 0,
         };
         mux.set_reset_pin(true);
@@ -592,16 +595,31 @@ impl PinMux {
     /// Pin id `pin`'s drive turned off at oscillator cycle `at`: no read before counts for it
     /// now, and an interrupt that watches it reads it from here.
     fn turned_off(&mut self, pin: u32, at: u64) {
-        self.offs += 1;
+        self.unread.set(self.pinx);
         let mut reads = self.off_reads.get();
         reads[pin as usize] = u64::MAX;
         self.off_reads.set(reads);
         self.note_read(self.watched & (1 << pin), at);
     }
 
-    /// How many times any pin's drive has turned off.
-    pub(crate) fn offs(&self) -> u64 {
-        self.offs
+    /// The I/O indices where a port's `PINx` sits, one bit each, all unread.
+    pub(crate) fn set_pinx(&mut self, pinx: [u64; 4]) {
+        self.pinx = pinx;
+        self.unread.set(pinx);
+    }
+
+    /// Whether I/O `index` is a `PINx` the firmware has not loaded since a drive last turned
+    /// off. Every load and peek asks, so this is one bit test.
+    #[inline(always)]
+    pub(crate) fn unread(&self, index: usize) -> bool {
+        self.unread.get()[index >> 6] & (1 << (index & 63)) != 0
+    }
+
+    /// I/O `index` was loaded.
+    pub(crate) fn loaded(&self, index: usize) {
+        let mut unread = self.unread.get();
+        unread[index >> 6] &= !(1 << (index & 63));
+        self.unread.set(unread);
     }
 
     /// Marks each pin of `pins`, one bit per pin id, read at oscillator cycle `at` when its

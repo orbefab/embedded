@@ -19,7 +19,6 @@ mod power;
 mod record;
 mod seam;
 
-use std::cell::Cell;
 use std::collections::VecDeque;
 
 use hostside::HostSide;
@@ -44,7 +43,7 @@ pub(crate) use orbe_avr::IO_BASE;
 const IO_END: u16 = 0x00FF;
 const SRAM_BASE: u16 = 0x0100;
 const IO_LEN: usize = 0xE0;
-// `Bus::unread` holds one bit per I/O index in four words.
+// `PinMux::unread` holds one bit per I/O index in four words.
 const _: () = assert!(IO_LEN <= 256);
 const NO_DEV: u8 = 0xFF;
 
@@ -120,13 +119,6 @@ pub(crate) struct Bus {
     host_side: HostSide,
     /// Oscillator hertz. `cpu_hz` is this divided by `div`.
     osc_hz: u32,
-    /// One bit per I/O index where a port's `PINx` sits.
-    pinx: [u64; 4],
-    /// The bits of `pinx` the firmware has not loaded since [`PinMux::offs`] last moved. A
-    /// steady load reads through `&self`, so the set sits in a `Cell`.
-    unread: Cell<[u64; 4]>,
-    /// [`PinMux::offs`] when `unread` was last filled.
-    offs_seen: Cell<u64>,
     /// The last two `CLKPR` divisions. CPU cycles stay 1; wall time scales.
     epochs: Epochs,
     /// Schedule-and-ack source for the `irq` tests. Not a device, and not on `tick`.
@@ -159,9 +151,6 @@ clone_fields!(Bus {
     wdt_reset,
     host_side,
     osc_hz,
-    pinx,
-    unread,
-    offs_seen,
     epochs,
     #[cfg(test)]
     test_irq
@@ -379,13 +368,11 @@ impl Bus {
             wdt_reset: false,
             host_side: HostSide::idle(),
             osc_hz: 16_000_000,
-            pinx,
-            unread: Cell::new(pinx),
-            offs_seen: Cell::new(0),
             epochs: Epochs::START,
             #[cfg(test)]
             test_irq: crate::periph::probe::Probe::new(),
         };
+        bus.mux.set_pinx(pinx);
         bus.note_schedule();
         bus
     }
@@ -616,12 +603,10 @@ impl Bus {
     /// Marks each pin of the port whose `PINx` sits at I/O `index` read, as
     /// [`PinMux::note_read`] says, at the first load since a drive last turned off. A steady
     /// load in a free run is marked at the cycle the run began on. Every load and peek passes
-    /// here, so any other load costs one bit test and one compare.
+    /// here, so any other load costs one bit test.
     #[inline(always)]
     fn note_read(&self, index: usize) {
-        if self.unread.get()[index >> 6] & (1 << (index & 63)) != 0
-            || self.mux.offs() != self.offs_seen.get()
-        {
+        if self.mux.unread(index) {
             self.note_port_read(index);
         }
     }
@@ -629,18 +614,7 @@ impl Bus {
     #[cold]
     #[inline(never)]
     fn note_port_read(&self, index: usize) {
-        let mut unread = self.unread.get();
-        if self.mux.offs() != self.offs_seen.get() {
-            self.offs_seen.set(self.mux.offs());
-            unread = self.pinx;
-        }
-        let bit = 1 << (index & 63);
-        if unread[index >> 6] & bit == 0 {
-            self.unread.set(unread);
-            return;
-        }
-        unread[index >> 6] &= !bit;
-        self.unread.set(unread);
+        self.mux.loaded(index);
         let slot = self.owners[index];
         if let Device::Port(port) = &self.devices[usize::from(slot.dev)] {
             let now = self.epochs.oscillator_cycles(self.cycle);
