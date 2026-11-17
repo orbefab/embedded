@@ -1,6 +1,9 @@
 //! The project files the reader read, and spans into them.
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+
+use crate::syntax::Node;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct FileId(usize);
@@ -33,6 +36,8 @@ pub(crate) struct SourceFile {
 pub(crate) struct Sources {
     root: PathBuf,
     files: Vec<SourceFile>,
+    /// `None` until [`crate::syntax::parse`] has read the file. `Some(None)` did not parse.
+    trees: RefCell<Vec<Option<Option<Node>>>>,
 }
 
 impl Sources {
@@ -40,7 +45,24 @@ impl Sources {
         Sources {
             root: root.to_path_buf(),
             files: Vec::new(),
+            trees: RefCell::new(Vec::new()),
         }
+    }
+
+    /// The tree from the first parse of `file`, once one has run.
+    pub(crate) fn parsed(&self, file: FileId) -> Option<Option<Node>> {
+        self.trees
+            .borrow()
+            .get(file.0)
+            .and_then(|slot| slot.clone())
+    }
+
+    pub(crate) fn remember(&self, file: FileId, node: &Option<Node>) {
+        let mut trees = self.trees.borrow_mut();
+        if trees.len() <= file.0 {
+            trees.resize(file.0 + 1, None);
+        }
+        trees[file.0] = Some(node.clone());
     }
 
     pub(crate) fn root(&self) -> &Path {

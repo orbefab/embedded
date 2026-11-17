@@ -116,3 +116,33 @@ fn compile(
         _ => Err(findings.into_diagnostics(&project.sources)),
     }
 }
+
+#[cfg(test)]
+mod parse_once {
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    use crate::files::Files;
+
+    #[test]
+    fn a_read_parses_each_file_once() {
+        let scene = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../blocks/nano-light-comparator/scene.jsonc");
+        crate::syntax::take_parses();
+        let read = crate::read(&Files::disk(), &scene);
+        assert!(read.is_ok(), "the comparator scene reads");
+        let mut counts = BTreeMap::<String, usize>::new();
+        for path in crate::syntax::take_parses() {
+            *counts.entry(path).or_default() += 1;
+        }
+        let repeated: Vec<_> = counts.iter().filter(|(_, n)| **n > 1).collect();
+        assert!(
+            !counts.is_empty(),
+            "a read parsed nothing, so the count did not see the parse"
+        );
+        assert!(
+            repeated.is_empty(),
+            "a read parsed a file more than once: {repeated:?}"
+        );
+    }
+}
