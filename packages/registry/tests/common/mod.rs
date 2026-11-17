@@ -41,7 +41,8 @@ pub const LAMP: &str = r#"{
   "title": "Lamp",
   "license": "MIT",
   "pins": { "a": [1], "b": [2] },
-  "model": { "kind": "resistor" },
+  "params": { "resistance": { "unit": "ohm", "default": "220", "min_exclusive": 0, "sets": "/resistance" } },
+  "model": { "kind": "resistor", "ratings": { "power": null } }
 }
 "#;
 
@@ -58,7 +59,7 @@ pub fn third_party() -> tempfile::TempDir {
     put(
         dir.path(),
         "blocks/lamp-demo/scene.jsonc",
-        r#"{ "format": 1, "parts": { "l1": { "type": "lamp" } } }"#,
+        r#"{ "format": 1, "parts": { "l1": { "type": "lamp" } }, "ground": "l1.a" }"#,
     );
     dir
 }

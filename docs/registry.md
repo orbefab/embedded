@@ -29,6 +29,7 @@ The build fails, and writes nothing, when:
 - a part `uses` a part and version the registry lacks;
 - a `block.jsonc` holds a key other than `format`, `block`, `version`, `title`, `summary`, `board`, `tags` and `license`, lacks `version`, `title`, `board` or `license`, or names another folder in `block`;
 - a Block's `scene.jsonc` does not parse or the scene reader refuses it, with that same finding, or the scene names a part the registry lacks, or an `@<registry>/<id>`, or does not use the Block's `board`;
+- installing the part or the Block and running `orbe check` would refuse it. The build places each part in a scene and reads each Block scene from these folders, and the finding has the same code and message;
 - a part and a Block share a name;
 - with `--previous`, the earlier build does not check out, or a version it serves would build to a different record (see [Versions](#versions)).
 
@@ -189,5 +190,5 @@ A project takes each part id from one registry, so `parts.lock` has at most one 
 
 - `orbe add @<registry>/<id>` from a registry: read `registries.json`, then follow [Verify what you fetch](#verify-what-you-fetch) and write the copy and its lock line.
 - `orbe search --refresh`: search registry indexes instead of the catalog built into `orbe`.
-- Type-checking and Block tests in the build: today it checks syntax, names, versions, licences and dependencies, and `orbe check` and `orbe test` check the rest.
+- Running a Block's tests during the build. `orbe test` checks those. The build runs the same check as `orbe check` on every part and every Block scene.
 - A part or Block that uses a part from another registry. The dependency grammar has room for it, and the build refuses it today.

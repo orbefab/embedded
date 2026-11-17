@@ -3,6 +3,7 @@
 //! the JSON Schemas of both records and index. `docs/registry.md` is the contract a client
 //! reads it by.
 
+mod installed;
 mod item;
 pub mod pattern;
 
@@ -253,7 +254,7 @@ fn manifest(src: &Path) -> Result<Manifest, Error> {
 /// files. With `previous`, a folder an earlier build wrote, every record it serves stays served:
 /// a version the source still holds must build to the same bytes, and the others are carried
 /// forward with their files. The error is a sentence that says what does not read, or the
-/// findings `orbe check` would print for a part file or a Block scene.
+/// findings `orbe check` would print for an installed copy of a part or a Block.
 pub fn build(src: &Path, previous: Option<&Path>) -> Result<Registry, Error> {
     let manifest = manifest(src)?;
     let parts = folders(src, "parts")?;
@@ -269,7 +270,7 @@ pub fn build(src: &Path, previous: Option<&Path>) -> Result<Registry, Error> {
             "`{id}` is both a part and a Block, and one name names one item"
         )));
     }
-    // `cards` parses a part file and does not read its shape. Stop on the reader `orbe check` uses.
+    // The reader `orbe check` starts with. A file it refuses is not also compiled.
     let refused = reader_findings(&parts, &blocks);
     if !refused.is_empty() {
         return Err(Error::Check(refused));
@@ -278,6 +279,11 @@ pub fn build(src: &Path, previous: Option<&Path>) -> Result<Registry, Error> {
     let mut block_cards = Vec::new();
     for (id, files) in &blocks {
         block_cards.push(orbe_scene::block_card(id, files, &cards).map_err(Error::Invalid)?);
+    }
+    // The rest of `orbe check`: load the folders and compile, once per part and once per Block.
+    let refused = installed::findings(&manifest.name, &parts, &blocks, &cards);
+    if !refused.is_empty() {
+        return Err(Error::Check(refused));
     }
     let gaps = Gaps {
         parts: orbe_scene::missing_fields(&cards),

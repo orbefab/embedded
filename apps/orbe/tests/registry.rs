@@ -107,7 +107,7 @@ fn previous_carries_a_build_forward_and_refuses_a_changed_version() {
         std::fs::write(
             part.join("part.jsonc"),
             format!(
-                r#"{{ "format": 1, "part": "lamp", "version": "{version}", "title": "{title}", "license": "MIT", "pins": {{ "a": [1], "b": [2] }}, "model": {{ "kind": "resistor" }} }}"#
+                r#"{{ "format": 1, "part": "lamp", "version": "{version}", "title": "{title}", "license": "MIT", "pins": {{ "a": [1], "b": [2] }}, "params": {{ "resistance": {{ "unit": "ohm", "default": "220", "min_exclusive": 0, "sets": "/resistance" }} }}, "model": {{ "kind": "resistor", "ratings": {{ "power": null }} }} }}"#
             ),
         )
         .unwrap();
@@ -342,4 +342,386 @@ fn assert_refused(src: &Path, out: &Path, file: &str, found: &Found) {
     });
     assert!(same.is_some(), "{stdout}");
     assert!(!out.exists(), "a refused build writes nothing");
+}
+
+/// A lamp `orbe check` accepts. Each refusal below changes one thing on this part, or on a
+/// Block that places it.
+const LAMP: &str = r#"{
+  "format": 1,
+  "part": "lamp",
+  "version": "1.2.0",
+  "title": "Lamp",
+  "summary": "A lamp",
+  "license": "MIT",
+  "pins": { "a": [1], "b": [2] },
+  "params": { "resistance": { "unit": "ohm", "default": "220", "min_exclusive": 0, "sets": "/resistance" } },
+  "model": { "kind": "resistor", "ratings": { "power": null } }
+}
+"#;
+
+const PROBE_GROUND: &str = r#"{
+  "format": 1,
+  "pins": { "pos": [1], "neg": [2] },
+  "model": {
+    "kind": "voltage_source",
+    "voltage": { "value": 0, "unit": "V", "source": "user" },
+    "pins": { "p": "pos", "n": "neg" }
+  }
+}
+"#;
+
+fn manifest(dir: &Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(
+        dir.join("registry.jsonc"),
+        "{ \"format\": 1, \"name\": \"@acme\" }\n",
+    )
+    .unwrap();
+}
+
+fn put_part(root: &Path, id: &str, text: &str) -> PathBuf {
+    let folder = root.join("parts").join(id);
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("part.jsonc"), text).unwrap();
+    folder
+}
+
+fn put_block(root: &Path, id: &str, board: &str, scene: &str) {
+    let folder = root.join("blocks").join(id);
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("scene.jsonc"), scene).unwrap();
+    std::fs::write(
+        folder.join("block.jsonc"),
+        format!(
+            "{{ \"format\": 1, \"block\": \"{id}\", \"version\": \"0.1.0\", \"title\": \"Block\", \"board\": \"{board}\", \"license\": \"MIT\" }}\n"
+        ),
+    )
+    .unwrap();
+}
+
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let dest = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_tree(&entry.path(), &dest);
+        } else {
+            std::fs::copy(entry.path(), &dest).unwrap();
+        }
+    }
+}
+
+fn lock_line(folder: &Path, id: &str, version: &str, registry: &str) -> String {
+    format!(
+        "{id} {version} {registry} {}",
+        orbe_scene::folder_hash(folder).unwrap()
+    )
+}
+
+fn grounded(id: &str) -> String {
+    format!(
+        "{{ \"format\": 1, \"parts\": {{ \"r1\": {{ \"type\": \"{id}\" }}, \"g\": {{ \"type\": \"./probe-ground.jsonc\" }} }}, \"ground\": \"g.neg\" }}\n"
+    )
+}
+
+/// The project an install of these folders would check: the part folders, a lock line per
+/// folder, and `scene.jsonc` read from the project directory.
+fn project_of(project: &Path, scene: &str, parts: &[(&str, &Path, &str, &str)]) {
+    std::fs::create_dir_all(project).unwrap();
+    let mut lines = Vec::new();
+    for (id, folder, version, registry) in parts {
+        copy_tree(folder, &project.join("parts").join(id));
+        lines.push(lock_line(folder, id, version, registry));
+    }
+    lines.sort();
+    std::fs::write(project.join("scene.jsonc"), scene).unwrap();
+    std::fs::write(project.join("probe-ground.jsonc"), PROBE_GROUND).unwrap();
+    std::fs::write(
+        project.join("parts.lock"),
+        format!("{}\n", lines.join("\n")),
+    )
+    .unwrap();
+}
+
+fn check_at(project: &Path, snippet: &str) -> Found {
+    let output = Command::new(env!("CARGO_BIN_EXE_orbe"))
+        .args(["check", "--json", "scene.jsonc"])
+        .current_dir(project)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
+    let found = reply["data"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["message"].as_str().unwrap_or("").contains(snippet))
+        .unwrap_or_else(|| panic!("no finding containing {snippet} in {stdout}"));
+    Found {
+        code: found["code"].as_str().unwrap().to_string(),
+        line: found["line"].as_u64().unwrap(),
+        column: found["column"].as_u64().unwrap(),
+        message: found["message"].as_str().unwrap().to_string(),
+        hint: found["hint"].as_str().unwrap_or("").to_string(),
+    }
+}
+
+fn refuse_installed(src: &Path, project: &Path, file: &str, snippet: &str) {
+    let found = check_at(project, snippet);
+    assert_refused(src, &src.join("out"), file, &found);
+}
+
+#[test]
+fn a_model_that_omits_a_field_the_engine_needs_is_not_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let part = r#"{
+  "format": 1,
+  "part": "lamp",
+  "version": "1.2.0",
+  "title": "Lamp",
+  "summary": "A lamp",
+  "license": "MIT",
+  "pins": { "a": [1], "b": [2] },
+  "model": { "kind": "resistor" }
+}
+"#;
+    let folder = put_part(&src, "lamp", part);
+    let project = dir.path().join("project");
+    project_of(
+        &project,
+        &grounded("lamp"),
+        &[("lamp", &folder, "1.2.0", "@acme")],
+    );
+    refuse_installed(&src, &project, "parts/lamp/part.jsonc", "nothing writes it");
+}
+
+#[test]
+fn a_model_field_of_the_wrong_type_is_not_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let part = r#"{
+  "format": 1,
+  "part": "lamp",
+  "version": "1.2.0",
+  "title": "Lamp",
+  "summary": "A lamp",
+  "license": "MIT",
+  "pins": { "a": [1], "b": [2] },
+  "model": { "kind": "resistor", "resistance": "220" }
+}
+"#;
+    let folder = put_part(&src, "lamp", part);
+    let project = dir.path().join("project");
+    project_of(
+        &project,
+        &grounded("lamp"),
+        &[("lamp", &folder, "1.2.0", "@acme")],
+    );
+    refuse_installed(&src, &project, "parts/lamp/part.jsonc", "invalid type");
+}
+
+#[test]
+fn a_param_default_outside_its_range_is_not_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let folder = put_part(&src, "lamp", &LAMP.replace("\"220\"", "\"-1\""));
+    let project = dir.path().join("project");
+    project_of(
+        &project,
+        &grounded("lamp"),
+        &[("lamp", &folder, "1.2.0", "@acme")],
+    );
+    refuse_installed(&src, &project, "parts/lamp/part.jsonc", "out of range");
+}
+
+#[test]
+fn a_block_scene_param_outside_its_range_is_not_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let folder = put_part(&src, "lamp", LAMP);
+    let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"lamp\", \"resistance\": \"-1\" } }, \"ground\": \"r1.a\" }\n";
+    put_block(&src, "bad-range", "lamp", scene);
+    let project = dir.path().join("project");
+    project_of(&project, scene, &[("lamp", &folder, "1.2.0", "@acme")]);
+    refuse_installed(
+        &src,
+        &project,
+        "blocks/bad-range/scene.jsonc",
+        "out of range",
+    );
+}
+
+#[test]
+fn a_file_param_that_names_nothing_is_not_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let part = r#"{
+  "format": 1,
+  "part": "lamp",
+  "version": "1.2.0",
+  "title": "Lamp",
+  "summary": "A lamp",
+  "license": "MIT",
+  "pins": { "a": [1], "b": [2] },
+  "params": {
+    "resistance": { "unit": "ohm", "default": "220", "min_exclusive": 0, "sets": "/resistance" },
+    "note": { "file": "txt", "as": "text", "default": "missing.txt", "sets": "/note" }
+  },
+  "model": { "kind": "resistor", "ratings": { "power": null }, "note": "" }
+}
+"#;
+    let folder = put_part(&src, "lamp", part);
+    let project = dir.path().join("project");
+    project_of(
+        &project,
+        &grounded("lamp"),
+        &[("lamp", &folder, "1.2.0", "@acme")],
+    );
+    refuse_installed(&src, &project, "parts/lamp/part.jsonc", "missing.txt");
+}
+
+#[test]
+fn a_part_that_names_a_missing_child_is_not_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let part = r#"{
+  "format": 1,
+  "part": "lamp",
+  "version": "1.2.0",
+  "title": "Lamp",
+  "license": "MIT",
+  "pins": { "a": "r1.a", "b": "r1.b" },
+  "parts": { "r1": { "type": "missing-child" } },
+  "params": { "resistance": { "unit": "ohm", "default": "220", "min_exclusive": 0, "sets": "/resistance" } },
+  "model": { "kind": "resistor", "ratings": { "power": null } }
+}
+"#;
+    let folder = put_part(&src, "lamp", part);
+    let project = dir.path().join("project");
+    project_of(
+        &project,
+        &grounded("lamp"),
+        &[("lamp", &folder, "1.2.0", "@acme")],
+    );
+    refuse_installed(&src, &project, "parts/lamp/part.jsonc", "missing-child");
+}
+
+#[test]
+fn a_part_wire_to_an_unknown_pin_is_not_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let lamp = put_part(&src, "lamp", LAMP);
+    let wrap = r#"{
+  "format": 1,
+  "part": "wrap",
+  "version": "0.1.0",
+  "title": "Wrap",
+  "license": "MIT",
+  "pins": { "a": "r1.a", "b": "r1.b" },
+  "parts": { "r1": { "type": "lamp" } },
+  "wires": [["r1.nope", "r1.a"]]
+}
+"#;
+    let folder = put_part(&src, "wrap", wrap);
+    let project = dir.path().join("project");
+    project_of(
+        &project,
+        &grounded("wrap"),
+        &[
+            ("lamp", &lamp, "1.2.0", "@acme"),
+            ("wrap", &folder, "0.1.0", "@acme"),
+        ],
+    );
+    refuse_installed(&src, &project, "parts/wrap/part.jsonc", "nope");
+}
+
+#[test]
+fn a_block_scene_wire_to_an_unknown_pin_is_not_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let folder = put_part(&src, "lamp", LAMP);
+    let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"lamp\" } }, \"wires\": [[\"r1.nope\", \"r1.a\"]], \"ground\": \"r1.a\" }\n";
+    put_block(&src, "bad-pin", "lamp", scene);
+    let project = dir.path().join("project");
+    project_of(&project, scene, &[("lamp", &folder, "1.2.0", "@acme")]);
+    refuse_installed(&src, &project, "blocks/bad-pin/scene.jsonc", "nope");
+}
+
+#[test]
+fn a_block_scene_with_no_ground_is_not_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let folder = put_part(&src, "lamp", LAMP);
+    let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"lamp\" } } }\n";
+    put_block(&src, "no-gnd", "lamp", scene);
+    let project = dir.path().join("project");
+    project_of(&project, scene, &[("lamp", &folder, "1.2.0", "@acme")]);
+    refuse_installed(
+        &src,
+        &project,
+        "blocks/no-gnd/scene.jsonc",
+        "nothing in the scene names a ground",
+    );
+}
+
+#[test]
+fn a_block_scene_that_names_an_unknown_hole_is_not_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let lamp = put_part(&src, "lamp", LAMP);
+    let board = src.join("parts/breadboard-400");
+    copy_tree(&repo().join("parts/breadboard-400"), &board);
+    let scene = "{ \"format\": 1, \"parts\": { \"bb\": { \"type\": \"breadboard-400\" }, \"r1\": { \"type\": \"lamp\" } }, \"layout\": { \"bb\": { \"at\": [0, 0, 0] }, \"r1\": { \"on\": { \"a\": \"bb.zz99\" } } }, \"ground\": \"r1.b\" }\n";
+    put_block(&src, "bad-hole", "breadboard-400", scene);
+    let project = dir.path().join("project");
+    project_of(
+        &project,
+        scene,
+        &[
+            ("breadboard-400", &board, "0.1.0", "@orbefab"),
+            ("lamp", &lamp, "1.2.0", "@acme"),
+        ],
+    );
+    refuse_installed(&src, &project, "blocks/bad-hole/scene.jsonc", "zz99");
+}
+
+#[test]
+fn a_changed_sealed_catalog_part_is_not_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let folder = src.join("parts/resistor-axial");
+    copy_tree(&repo().join("parts/resistor-axial"), &folder);
+    let path = folder.join("part.jsonc");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let edited = text.replacen("Resistor, 1/4 W axial", "Resistor, edited", 1);
+    assert_ne!(text, edited);
+    std::fs::write(&path, edited).unwrap();
+    let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"resistor-axial\", \"resistance\": \"220\" } }, \"ground\": \"r1.b\" }\n";
+    let project = dir.path().join("project");
+    project_of(
+        &project,
+        scene,
+        &[("resistor-axial", &folder, "0.1.0", "@orbefab")],
+    );
+    refuse_installed(
+        &src,
+        &project,
+        "parts/resistor-axial/part.jsonc",
+        "in `title`",
+    );
 }
