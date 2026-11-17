@@ -1,5 +1,6 @@
 //! A temporary project built from a fixture, as `orbe add` would leave it: the fixture's own
-//! files, a copy of each catalog part its `parts.lock` lists, and the firmware build output.
+//! files, a copy of every catalog part, and the firmware build output. `parts.lock` is written
+//! from those copies, so a part change does not rewrite a committed lock.
 
 #![allow(dead_code)]
 
@@ -38,7 +39,7 @@ pub fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
-/// The ids a fixture's `parts.lock` lists.
+/// The ids a project's `parts.lock` lists.
 pub fn locked_ids(project: &Path) -> Vec<String> {
     fs::read_to_string(project.join("parts.lock"))
         .unwrap()
@@ -66,12 +67,20 @@ pub fn lock_line(project: &Path, id: &str) -> String {
 pub fn project(name: &str) -> TempDir {
     let dir = tempfile::tempdir().unwrap();
     copy_dir(&fixture(name), dir.path());
-    for id in locked_ids(dir.path()) {
-        copy_dir(
-            &repo().join("parts").join(&id),
-            &dir.path().join("parts").join(&id),
-        );
+    let catalog = repo().join("parts");
+    let mut ids: Vec<String> = fs::read_dir(&catalog)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|id| catalog.join(id).join("part.jsonc").is_file())
+        .collect();
+    ids.sort();
+    let mut lines = String::new();
+    for id in &ids {
+        copy_dir(&catalog.join(id), &dir.path().join("parts").join(id));
+        lines.push_str(&lock_line(dir.path(), id));
+        lines.push('\n');
     }
+    fs::write(dir.path().join("parts.lock"), lines).unwrap();
     fs::create_dir_all(dir.path().join("build")).unwrap();
     fs::copy(firmware(), dir.path().join("build/button.ino.hex")).unwrap();
     dir

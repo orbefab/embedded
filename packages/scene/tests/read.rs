@@ -4,30 +4,9 @@ mod common;
 
 use std::fs;
 
-use common::{fixture, lock_line, locked_ids, project};
+use common::{lock_line, locked_ids, project};
 use orbe_scene::Files;
 use serde_json::Value;
-
-#[test]
-fn parts_lock_matches_the_catalog() {
-    let root = common::repo();
-    let mut ids: Vec<String> = fs::read_dir(root.join("parts"))
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-        .filter(|id| root.join("parts").join(id).join("part.jsonc").is_file())
-        .collect();
-    ids.sort();
-    let lines: String = ids.iter().map(|id| lock_line(&root, id) + "\n").collect();
-    let committed = fixture("nano-button").join("parts.lock");
-    if std::env::var_os("ORBE_BLESS").is_some() {
-        fs::write(&committed, &lines).unwrap();
-    }
-    assert_eq!(
-        fs::read_to_string(committed).unwrap(),
-        lines,
-        "parts.lock is stale; run scripts/bless.sh"
-    );
-}
 
 fn read(scene: &str) -> (orbe_scene::Netlist, Value) {
     let project = project("nano-button");
@@ -1137,7 +1116,7 @@ fn every_catalog_part_file_reads_without_a_finding() {
     assert_eq!(
         ids.len(),
         catalog.len(),
-        "the fixture locks every catalog part"
+        "the project locks every catalog part"
     );
     let summaries = orbe_scene::catalog_cards();
     let parts: String = ids
@@ -1164,7 +1143,7 @@ fn every_catalog_part_file_reads_without_a_finding() {
     for id in &ids {
         assert!(
             catalog.contains(id),
-            "{id} is in the fixture's parts.lock but not in parts/"
+            "{id} is in the project's parts.lock but not in parts/"
         );
     }
 }
