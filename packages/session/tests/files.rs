@@ -1,6 +1,7 @@
 //! Each Block, read into a set of files in memory, reads, lints and runs its tests as it does
 //! from disk, and so does each Block installed into a project. Paths in memory start from the
-//! repo, so a disk path shows the same once the repo's folder is taken off it.
+//! repo, so a disk path shows the same once the repo's folder is taken off it. A Block is a
+//! folder under `blocks/` that holds `block.jsonc`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,18 +9,35 @@ use std::path::{Path, PathBuf};
 use orbe_session::{Files, test};
 use tempfile::TempDir;
 
-const BLOCKS: [&str; 4] = [
-    "nano-button-led",
-    "uno-button-led",
-    "nano-led-fade",
-    "nano-light-comparator",
-];
-
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
         .unwrap()
+}
+
+/// Every Block in `dir`, by folder name. A Block is a folder that holds `block.jsonc`.
+fn blocks_in(dir: &Path) -> Vec<String> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(dir).unwrap_or_else(|err| panic!("reading {}: {err}", dir.display()))
+    {
+        let path = entry.unwrap().path();
+        if path.join(orbe_scene::BLOCK).is_file() {
+            found.push(path.file_name().unwrap().to_str().unwrap().to_string());
+        }
+    }
+    found.sort();
+    assert!(
+        !found.is_empty(),
+        "no Block in {}: a Block is a folder with {}",
+        dir.display(),
+        orbe_scene::BLOCK
+    );
+    found
+}
+
+fn blocks() -> Vec<String> {
+    blocks_in(&repo().join("blocks"))
 }
 
 /// The Block's folder, by its paths from `base`.
@@ -55,11 +73,10 @@ fn walk(base: &Path, path: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
     }
 }
 
-/// What the reader and `orbe test` make of one Block, as text.
-fn outcome(files: &Files, base: &Path, block: &str) -> Vec<String> {
-    let dir = base.join("blocks").join(block);
-    let scene = dir.join("scene.jsonc");
-    let mut out = vec![
+/// What the reader makes of one Block, as text. This does not play the Block's tests.
+fn reading(files: &Files, base: &Path, block: &str) -> Vec<String> {
+    let scene = base.join("blocks").join(block).join("scene.jsonc");
+    vec![
         match orbe_scene::read(files, &scene) {
             Ok(netlist) => format!(
                 "{}\n{} {:?} {} {:?}\n{:?}\n{}",
@@ -74,10 +91,20 @@ fn outcome(files: &Files, base: &Path, block: &str) -> Vec<String> {
             Err(found) => format!("{found:#?}"),
         },
         format!("{:#?}", orbe_scene::lint(files, &scene)),
-    ];
+    ]
+}
+
+/// What `orbe test` makes of one Block. The test text is the Block's own, in the repo.
+fn played(files: &Files, base: &Path, block: &str) -> Vec<String> {
+    let dir = base.join("blocks").join(block);
     let tests = repo().join("blocks").join(block).join("tests");
-    for entry in fs::read_dir(&tests).unwrap() {
-        let path = entry.unwrap().path();
+    let mut paths: Vec<_> = fs::read_dir(&tests)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    paths.sort();
+    let mut out = Vec::new();
+    for path in paths {
         let file = dir.join("tests").join(path.file_name().unwrap());
         let report = test::run(
             files.clone(),
@@ -100,18 +127,44 @@ fn outcome(files: &Files, base: &Path, block: &str) -> Vec<String> {
     out
 }
 
-fn same_both_ways(base: &Path, block: &str) -> Vec<String> {
+/// The read, the lint and the test run.
+fn outcome(files: &Files, base: &Path, block: &str) -> Vec<String> {
+    let mut out = reading(files, base, block);
+    out.extend(played(files, base, block));
+    out
+}
+
+/// Disk paths with `base/` taken off, so they match the paths memory stored.
+fn shown(base: &Path, lines: Vec<String>) -> Vec<String> {
     let prefix = format!("{}/", base.display());
-    let disk: Vec<String> = outcome(&Files::disk(), base, block)
+    lines
         .into_iter()
         .map(|text| text.replace(&prefix, ""))
-        .collect();
-    let memory = outcome(&memory(base, block), Path::new(""), block);
+        .collect()
+}
+
+fn same_lines(block: &str, disk: Vec<String>, memory: Vec<String>) -> Vec<String> {
     assert_eq!(disk.len(), memory.len(), "{block}");
     for (disk, memory) in disk.iter().zip(&memory) {
         assert_eq!(disk, memory, "{block}");
     }
     disk
+}
+
+fn same_reading(base: &Path, block: &str) -> Vec<String> {
+    same_lines(
+        block,
+        shown(base, reading(&Files::disk(), base, block)),
+        reading(&memory(base, block), Path::new(""), block),
+    )
+}
+
+fn same_both_ways(base: &Path, block: &str) -> Vec<String> {
+    same_lines(
+        block,
+        shown(base, outcome(&Files::disk(), base, block)),
+        outcome(&memory(base, block), Path::new(""), block),
+    )
 }
 
 fn reads_and_passes(found: &[String], block: &str) {
@@ -121,8 +174,30 @@ fn reads_and_passes(found: &[String], block: &str) {
 }
 
 #[test]
+#[should_panic(expected = "no Block in")]
+fn a_directory_with_no_block_is_an_error() {
+    let tmp = TempDir::new().unwrap();
+    fs::create_dir(tmp.path().join("skip")).unwrap();
+    fs::write(tmp.path().join("readme.txt"), "hi").unwrap();
+    blocks_in(tmp.path());
+}
+
+#[test]
+fn each_folder_with_block_jsonc_is_a_block() {
+    let tmp = TempDir::new().unwrap();
+    for name in ["zeta", "alpha"] {
+        fs::create_dir(tmp.path().join(name)).unwrap();
+        fs::write(tmp.path().join(name).join(orbe_scene::BLOCK), "{}\n").unwrap();
+    }
+    fs::create_dir(tmp.path().join("skip")).unwrap();
+    fs::write(tmp.path().join("loose.txt"), "no").unwrap();
+    assert_eq!(blocks_in(tmp.path()), ["alpha", "zeta"]);
+}
+
+#[test]
 fn each_block_reads_and_runs_the_same_from_memory() {
-    for block in BLOCKS {
+    for block in blocks() {
+        let block = block.as_str();
         reads_and_passes(&same_both_ways(&repo(), block), block);
     }
 }
@@ -143,7 +218,8 @@ fn given_catalog(skip: &str) -> Vec<(String, Vec<u8>)> {
 /// the catalog built in.
 #[test]
 fn each_block_reads_and_runs_the_same_from_a_given_catalog() {
-    for block in BLOCKS {
+    for block in blocks() {
+        let block = block.as_str();
         let built_in = outcome(&memory(&repo(), block), Path::new(""), block);
         let given = memory(&repo(), block).with_catalog(given_catalog(""));
         assert_eq!(outcome(&given, Path::new(""), block), built_in, "{block}");
@@ -166,11 +242,12 @@ fn a_given_catalog_without_a_part_finds_it_missing() {
 fn each_installed_block_reads_and_runs_the_same_from_memory() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path().canonicalize().unwrap();
-    for block in BLOCKS {
+    for block in blocks() {
+        let block = block.as_str();
         install(&base, block);
         let found = same_both_ways(&base, block);
         reads_and_passes(&found, block);
-        let ours = same_both_ways(&repo(), block);
+        let ours = shown(&repo(), reading(&Files::disk(), &repo(), block));
         let netlist = |found: &[String]| found[0].rsplit_once('\n').unwrap().0.to_string();
         assert_eq!(
             netlist(&found),
@@ -186,7 +263,8 @@ fn each_installed_block_reads_and_runs_the_same_from_memory() {
 fn a_broken_install_finds_the_same_from_memory() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path().canonicalize().unwrap();
-    for block in BLOCKS {
+    for block in blocks() {
+        let block = block.as_str();
         let dir = install(&base, block);
         fs::remove_dir_all(dir.join("parts/resistor-0603")).unwrap();
         fs::remove_dir_all(dir.join("parts/resistor-axial")).unwrap();
@@ -196,7 +274,7 @@ fn a_broken_install_finds_the_same_from_memory() {
         fs::write(&glb, bytes).unwrap();
         fs::write(dir.join("parts/led-5mm/notes.txt"), "mine").unwrap();
         fs::remove_dir_all(dir.join("firmware")).unwrap();
-        let found = same_both_ways(&base, block);
+        let found = same_reading(&base, block);
         for what in ["PartMissing", "PartModified", "FirmwareMissing"] {
             assert!(
                 found[0].contains(what),
