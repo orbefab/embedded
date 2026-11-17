@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds parts/<id>/model.py into parts/<id>/<id>.glb, then runs the asset step
-# on those parts. Prints the bless command when it finishes. Never installs anything.
+# on those parts. Says to run scripts/check.sh fast when it finishes. Never installs anything.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -84,4 +84,4 @@ for id in "${ids[@]}"; do
 done
 
 node packages/asset-step/asset-step.mjs --local --raw "$raw" "${ids[@]}"
-echo "Run scripts/bless.sh."
+echo "Run scripts/check.sh fast."
