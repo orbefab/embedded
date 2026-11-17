@@ -191,6 +191,21 @@ fn join_and(items: &[String]) -> String {
     }
 }
 
+/// What a part warns of at a rating, by the rating's key. A chip's pin ratings warn under
+/// `rating.current` and `rating.voltage`, not under their own keys.
+fn rating_warning(key: &str, amount: &str) -> String {
+    match key {
+        "pin_current" => format!("`rating.current` above {amount} on a pin"),
+        "supply_current" => format!("`rating.current` above {amount} through VCC or GND"),
+        "rail_margin" => {
+            format!("`rating.voltage` on a pin more than {amount} below GND or above VCC")
+        }
+        "reset_voltage" => format!("`rating.voltage` above {amount} on RESET"),
+        "supply_voltage" => format!("`rating.voltage` above {amount} on VCC"),
+        _ => format!("`rating.{key}` above {amount}"),
+    }
+}
+
 /// The parts a scene uses directly, in full, then the parts only other parts are built from.
 fn parts(catalog: &[Card]) -> String {
     let (top, inner): (Vec<&Card>, Vec<&Card>) =
@@ -219,11 +234,7 @@ fn parts(catalog: &[Card]) -> String {
             .filter_map(|rating| {
                 let value = rating.value?;
                 let unit = rating.unit.as_deref()?;
-                Some(format!(
-                    "`rating.{}` above {}",
-                    rating.name,
-                    si_amount(value, unit)
-                ))
+                Some(rating_warning(&rating.name, &si_amount(value, unit)))
             })
             .collect();
         if !warns.is_empty() {
@@ -847,5 +858,21 @@ mod tests {
             )
         );
         assert!(text.contains("- It warns `rating.power` above 250 mW."));
+    }
+
+    #[test]
+    fn a_chip_rating_names_the_code_it_warns_under() {
+        assert_eq!(
+            rating_warning("pin_current", "40 mA"),
+            "`rating.current` above 40 mA on a pin"
+        );
+        assert_eq!(
+            rating_warning("rail_margin", "500 mV"),
+            "`rating.voltage` on a pin more than 500 mV below GND or above VCC"
+        );
+        assert_eq!(
+            rating_warning("power", "75 mW"),
+            "`rating.power` above 75 mW"
+        );
     }
 }

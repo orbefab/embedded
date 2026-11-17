@@ -123,7 +123,15 @@ PASS tests/button.test
 
 The example keeps its 3 warnings, since each is what it means: no `layout`, and the ground named after `nano.GND`. The `net.floating` warning on `nano__AREF` is normal for the Nano and the Uno. Nothing drives AREF until you wire it.
 
-With D13 wired straight to `led1.anode` and no `r1`, the LED draws 105 mA. `step` lists `warning[rating.current]` and `warning[rating.power]` for `led1`, and `expect no diagnostics` fails. The LED holds D13 at 2.4 V, so D13 reads `low` while the LED is on. `orbe lint` warns of it before any run, with `warning[scene.led_no_resistor]` on `led1`. Give each LED a series resistor, such as 220 ohm from a 5 V pin.
+With D13 wired straight to `led1.anode` and no `r1`, the LED draws 105 mA. `step` lists `warning[rating.current]` and `warning[rating.power]` for `led1`, and `warning[rating.current]` for `#nano__mcu.pin.PB5 (nano.D13)`, the chip pin behind D13, over its 40 mA rating. `expect no diagnostics` fails. The LED holds D13 at 2.4 V, so D13 reads `low` while the LED is on. `orbe lint` warns of it before any run, with `warning[scene.led_no_resistor]` on `led1`. Give each LED a series resistor, such as 220 ohm from a 5 V pin.
+
+The board's ATmega328P has the datasheet's absolute maximum ratings, and a run warns when a circuit breaks one:
+
+- `rating.current` on a pin that sources or sinks over 40 mA, such as D9 into 47 ohm (69 mA), a pin driving low wired to 5V, or five LEDs with their own 220 ohm on one pin (each LED is inside its rating, the pin is not).
+- `rating.current` on `VCC` or `GND` when the pins together pass over 200 mA, such as six pins at 34 mA each.
+- `rating.voltage` on a pin below -0.5 V or above the chip's VCC + 0.5 V, such as 9 V through a resistor into A0.
+
+The message names the chip pin, then the board's pins on its net, as in `#nano__mcu.pin.PB1 (nano.D9) peaks at 0.0694 A, over its 0.04 A rating`. A pin wired to 5V lists both, `(nano.5V, nano.D10)`. The current is the model's. Its output stage is linear, 25 ohm from its rail, so a short reads 200 mA, about twice what a real pin gives. Either is past the rating, and a real pin can be damaged there. The run does not warn at 20 mA. That is where the datasheet specifies a pin's output voltage, and above it the pin's high or low level sags, as it does here. Keep a pin at 20 mA or less when a level matters, and drive a larger load through a transistor.
 
 ## Scenes
 
@@ -247,7 +255,7 @@ A ref names something in the open scene. It starts with `@`, which a shell leave
 - `@nano.D13 high`, `@nano.D13 low`: a pin's logic level.
 - `@led1.i > 5mA`, `@nano.D2 < 1V`: a quantity or a pin's voltage, with `<`, `<=`, `>` or `>=`, and a value in A, V or W with an optional prefix (p, n, u, m, k, M). A value as `get` prints it, written without the space, such as `2.27e-5V`, parses too.
 - `serial contains "text"`: all the serial text the chip has sent since `open`, line endings included. Text printed earlier still matches. `snapshot` shows the last 10 lines of it, joined with `\n`.
-- `no diagnostics`: no runtime warning has come up, such as a current over a part's rating. A chip warning can show up to one engine step (10 ms) late, so step that far past its cause first.
+- `no diagnostics`: no runtime warning has come up, such as a current over a part's or a chip pin's rating. A chip warning can show up to one engine step (10 ms) late, so step that far past its cause first.
 
 In a shell, quote `<` and `>`, or the shell takes them as redirects, as in `orbe expect @led1.i '>' 5mA`. A test file needs no quotes for them.
 
@@ -386,6 +394,7 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 - The Uno's VIN pin and barrel jack. A wire to VIN is a `not_simulated` error. The Uno's 3V3 works.
 - The Uno's TX and RX LEDs and the gate of its USB switch. D13 feeds its L LED through 1k, so D13 as an input with its pull-up reads low.
 - USB, and serial into the chip. The chip's serial out (TX, D1) is read as text.
+- The chip's clamp diodes and its own supply current. A pin pulled past VCC or GND draws no clamp current, and `rating.voltage` names it. The current through the chip's VCC and GND is its pins' alone.
 - A switch's force and travel, and part tolerances. An LED's `on` is its current over a threshold. Light, temperature and humidity reach only a part whose file reads them from the scene's `world`.
 - Turning a potentiometer during a session. Its `position` param sets the wiper for the whole run, so run `orbe open` again after you change it.
 - Any part the catalog above does not list.

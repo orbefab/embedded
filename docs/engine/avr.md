@@ -165,7 +165,11 @@ Parse keeps only the fuse settings the model runs, and [netlist.md](netlist.md#a
 
 ## Ratings
 
-§29.1 rates the part at 40 mA DC through any one I/O pin and 200 mA DC through the `VCC` and `GND` pins, as absolute maxima. It limits the voltage on any pin but `RESET` to -0.5 V to VCC + 0.5 V with respect to ground, and on `RESET` to -0.5 V to 13.0 V. The netlist kind has no `ratings` object yet, and the run does not check these. A later change checks them.
+§29.1, page 308, rates the part at 40 mA DC through any one I/O pin and 200 mA DC through the `VCC` and `GND` pins, as absolute maxima. It limits the voltage on any pin but `RESET` to -0.5 V to VCC + 0.5 V with respect to ground, on `RESET` to -0.5 V to 13.0 V, and `VCC` to 6.0 V. The part files carry these five numbers in the `atmega328p` kind's `ratings` object, and the run checks them on every accepted step, as [netlist.md](netlist.md#atmega328p) says. A port pin over 40 mA, or `VCC` or `GND_8` over 200 mA, is `rating.current` on that pin. A pin outside its window is `rating.voltage`.
+
+The adapter works the currents out from the row, not from the core. A pin's current is what its stage, pull-up and leakage carry under the drive the core had in force for that row, and `VCC`'s and `GND_8`'s are the sums over the port pins. The core sees none of it. These are the model's currents. The stage is linear at 25 ohm, read off Figures 31-353 and 31-355 at 20 mA. A real driver saturates well past that, so a pin shorted to the other rail reads 200 mA at 5 V in the model, about twice a real part's. A pin into 47 ohm reads 69 mA. Both are past the rating. The model has no clamp diodes, so a pin driven past a rail carries no clamp current, and `rating.voltage` is the warning for it. The core draws no supply current, so the sums through `VCC` and `GND_8` are the pins' alone.
+
+The run warns at the absolute maxima only. Table 30-1 specifies `VOH` and `VOL` at 20 mA at VCC = 5 V, and its notes 3 and 4 (page 323) say a pin can source and sink more than that test condition in steady state, with `VOH` and `VOL` then unspecified, and cap each port group's sum at 150 mA sourced and 100 mA sunk. 20 mA is where the output voltage stops being guaranteed, not a stress limit, and the model already shows the droop, 0.5 V at 20 mA through 25 ohm. A `rating.*` warning means the part can be damaged, so a warning at 20 mA would teach that a 22 mA LED harms the chip. The port-group sums are not checked either. They are a recommendation, not an absolute maximum.
 
 ## The timing set
 

@@ -1089,6 +1089,8 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
         "A, over its 0.03 A rating",
         "warning[rating.power] #led1.p peaks at ",
         "W, over its 0.075 W rating",
+        "warning[rating.current] #nano__mcu.pin.PB5 (nano.D13) peaks at ",
+        "A, over its 0.04 A rating",
     ] {
         assert!(step.contains(warning), "{step}");
     }
@@ -1099,7 +1101,7 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     assert!(
         expect
             .stdout
-            .contains("actual:   rating.current, rating.power"),
+            .contains("actual:   rating.current, rating.current, rating.power"),
         "{}",
         expect.stdout
     );
@@ -1109,7 +1111,7 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     says(
         &core,
         &format!(
-            "With D13 wired straight to `led1.anode` and no `r1`, the LED draws {:.0} mA. `step` lists `warning[rating.current]` and `warning[rating.power]` for `led1`, and `expect no diagnostics` fails. The LED holds D13 at {:.1} V, so D13 reads `{}` while the LED is {}.",
+            "With D13 wired straight to `led1.anode` and no `r1`, the LED draws {:.0} mA. `step` lists `warning[rating.current]` and `warning[rating.power]` for `led1`, and `warning[rating.current]` for `#nano__mcu.pin.PB5 (nano.D13)`, the chip pin behind D13, over its 40 mA rating. `expect no diagnostics` fails. The LED holds D13 at {:.1} V, so D13 reads `{}` while the LED is {}.",
             led["i"].as_f64().unwrap() * 1e3,
             pin["v"].as_f64().unwrap(),
             pin["level"].as_str().unwrap(),

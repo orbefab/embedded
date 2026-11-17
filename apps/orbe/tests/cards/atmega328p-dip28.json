@@ -31,7 +31,20 @@
   ],
   "license": "MIT OR Apache-2.0",
   "name": "atmega328p-dip28",
-  "not_simulated": [],
+  "not_simulated": [
+    {
+      "what": "output saturation",
+      "why": "Each output stage is linear, 25 ohm from its rail, read at 20 mA. A real driver saturates far past that, so a pin shorted to the other rail reads 200 mA at 5 V, about twice a real pin's current. `rating.current` reads the model's current."
+    },
+    {
+      "what": "clamp diodes",
+      "why": "No protection diode conducts, so a pin driven past VCC or below GND draws no clamp current. `rating.voltage` reports the pin."
+    },
+    {
+      "what": "supply current",
+      "why": "The core draws nothing from VCC. The current the ratings sum through VCC and GND is the pins' alone."
+    }
+  ],
   "params": [
     {
       "file": "hex",
@@ -204,7 +217,68 @@
       "name": "PC5"
     }
   ],
-  "ratings": [],
+  "ratings": [
+    {
+      "name": "pin_current",
+      "source": {
+        "datasheet": {
+          "at": "§29.1 Absolute Maximum Ratings, page 308: DC Current per I/O Pin, 40.0 mA",
+          "basis": "absolute_max",
+          "doc": "DS40002061B"
+        }
+      },
+      "unit": "A",
+      "value": 0.04
+    },
+    {
+      "name": "supply_current",
+      "source": {
+        "datasheet": {
+          "at": "§29.1 Absolute Maximum Ratings, page 308: DC Current VCC and GND Pins, 200.0 mA",
+          "basis": "absolute_max",
+          "doc": "DS40002061B"
+        }
+      },
+      "unit": "A",
+      "value": 0.2
+    },
+    {
+      "name": "rail_margin",
+      "source": {
+        "datasheet": {
+          "at": "§29.1 Absolute Maximum Ratings, page 308: Voltage on any Pin except RESET with respect to Ground, -0.5 V to VCC + 0.5 V",
+          "basis": "absolute_max",
+          "doc": "DS40002061B"
+        }
+      },
+      "unit": "V",
+      "value": 0.5
+    },
+    {
+      "name": "reset_voltage",
+      "source": {
+        "datasheet": {
+          "at": "§29.1 Absolute Maximum Ratings, page 308: Voltage on RESET with respect to Ground, -0.5 V to +13.0 V",
+          "basis": "absolute_max",
+          "doc": "DS40002061B"
+        }
+      },
+      "unit": "V",
+      "value": 13.0
+    },
+    {
+      "name": "supply_voltage",
+      "source": {
+        "datasheet": {
+          "at": "§29.1 Absolute Maximum Ratings, page 308: Maximum Operating Voltage, 6.0 V",
+          "basis": "absolute_max",
+          "doc": "DS40002061B"
+        }
+      },
+      "unit": "V",
+      "value": 6.0
+    }
+  ],
   "real": {
     "datasheet": "DS40002061B",
     "maker": "Microchip",

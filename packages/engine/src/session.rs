@@ -469,13 +469,13 @@ impl Session {
         let signals = circuit.logic_refs();
         let logic = circuit.logic_levels(&start.chips, &start.levels);
         let integrals = vec![0.0; columns.refs().len()];
-        let mut ratings = Ratings::new(&circuit.netlist, &columns, Timing::Run);
-        ratings.sample(Time::ZERO, &row);
+        let actives = Actives::new(&circuit, &start.levels);
+        let mut ratings = Ratings::new(&circuit.netlist, &circuit.actives, &columns, Timing::Run);
+        ratings.sample(Time::ZERO, &row, actives.cores());
         let record = rows
             .map(|rows| Record::start(transient, &columns, rows, &row, &signals, &logic))
             .transpose()
             .map_err(fail)?;
-        let actives = Actives::new(&circuit, &start.levels);
         let breakpoints = Breakpoints::new(&circuit.netlist, transient.stop);
         if cfg!(debug_assertions) {
             let solution = &start.iterate.solution;
@@ -585,6 +585,22 @@ impl Session {
         found.extend(self.actives.warnings(&self.circuit, self.accepted()));
         crate::run_folder::sort_diagnostics(&mut found);
         found
+    }
+
+    /// Each rating `probe` is over at its time alone, as a `rating.*` warning with no duration.
+    /// A chip's pin ratings are checked only between accepted steps, where the probe was
+    /// solved with the drive the cores now hold. At an accepted step [`Self::diagnostics`]
+    /// already has them, from the drive that step was solved with.
+    pub fn over_ratings(&self, probe: &Probe<'_>) -> Vec<Diagnostic> {
+        let between = matches!(
+            &self.state,
+            State::Running { accepted, .. } if probe.at() > accepted.at
+        );
+        self.ratings.point(
+            probe.at(),
+            probe.values(),
+            between.then(|| self.actives.cores()),
+        )
     }
 
     /// The error that ended a faulted session. `None` while it runs and once it stops.
@@ -1086,7 +1102,9 @@ impl Session {
         {
             return self.ended(accepted.at, accepted.row, End::Fault(fault));
         }
-        self.ratings.sample(landing.at, &landing.row);
+        // The landing was solved with the drive the cores hold until `land` below.
+        self.ratings
+            .sample(landing.at, &landing.row, self.actives.cores());
         // A refused step ends on the accepted row, so it is not counted. The count is before
         // the restart solve, so a failed restart still includes the landing it ends on.
         let left = accepted.restart_row.as_ref().unwrap_or(&accepted.row);

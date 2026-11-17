@@ -265,7 +265,7 @@ fn each_value_names_its_dotted_field() {
 }
 
 #[test]
-fn a_clock_is_a_whole_number_of_hertz_and_there_is_no_ratings_object() {
+fn a_clock_is_a_whole_number_of_hertz_and_a_ratings_object_names_every_key() {
     let syntax = |edit: fn(&mut serde_json::Value)| {
         let errors = errors(edit);
         assert_eq!(errors.len(), 1);
@@ -275,6 +275,69 @@ fn a_clock_is_a_whole_number_of_hertz_and_there_is_no_ratings_object() {
     syntax(|part| part["clock_hz"]["value"] = 5_000_000_000_u64.into());
     syntax(|part| part["ratings"] = serde_json::json!({}));
     syntax(|part| part["fuses"]["low"] = 256.into());
+}
+
+fn ratings() -> serde_json::Value {
+    let value = |value: f64, unit: &str| serde_json::json!({ "value": value, "unit": unit, "source": "user" });
+    serde_json::json!({
+        "pin_current": value(0.04, "A"),
+        "supply_current": value(0.2, "A"),
+        "rail_margin": value(0.5, "V"),
+        "reset_voltage": value(13.0, "V"),
+        "supply_voltage": value(6.0, "V"),
+    })
+}
+
+#[test]
+fn a_part_with_no_ratings_object_is_unrated() {
+    assert_eq!(values(&chip(|_| {}).unwrap()).ratings, None);
+}
+
+#[test]
+fn the_ratings_are_read_in_si_and_a_null_key_is_unrated() {
+    let chip = values(
+        &chip(|part| {
+            part["ratings"] = ratings();
+            part["ratings"]["reset_voltage"] = serde_json::Value::Null;
+        })
+        .unwrap(),
+    );
+    let ratings = chip.ratings.unwrap();
+    let si = |value: Option<orbe_engine::netlist::Value>| value.map(|value| value.si.get());
+    assert_eq!(si(ratings.pin_current), Some(0.04));
+    assert_eq!(si(ratings.supply_current), Some(0.2));
+    assert_eq!(si(ratings.rail_margin), Some(0.5));
+    assert_eq!(si(ratings.reset_voltage), None);
+    assert_eq!(si(ratings.supply_voltage), Some(6.0));
+}
+
+#[test]
+fn each_rating_names_its_dotted_field() {
+    assert_eq!(
+        errors(|part| {
+            part["ratings"] = ratings();
+            part["ratings"]["pin_current"]["unit"] = "V".into();
+            part["ratings"]["rail_margin"]["value"] = 0.0.into();
+            part["ratings"]["supply_voltage"]["value"] = (-6.0).into();
+        }),
+        [
+            r##""netlist.unit" ["#u1"] {"expected":"A","field":"ratings.pin_current","found":"V"}"##,
+            r##""netlist.value" ["#u1"] {"field":"ratings.rail_margin","rule":"positive","value":0.0}"##,
+            r##""netlist.value" ["#u1"] {"field":"ratings.supply_voltage","rule":"positive","value":-6.0}"##,
+        ]
+    );
+    let missing = errors(|part| {
+        part["ratings"] = ratings();
+        part["ratings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("supply_current");
+    });
+    assert_eq!(missing.len(), 1);
+    assert!(
+        missing[0].starts_with(r##""netlist.syntax""##),
+        "{missing:?}"
+    );
 }
 
 #[test]

@@ -917,7 +917,29 @@ Table 30-1's limits are wider. The pull-up there is 20 to 50 kohm and the reset 
 
 Each port pin, `PC6` included, is a DC path to `VCC` and to `GND_8` in every drive state, through its leakage, and the solve stamps that leakage in every state. An output stage beside it moves the pin by about 5 ppm of the supply. A net that only an off pin holds solves on that leakage, not on gmin. `PB6`, `PB7` and `AREF` join nothing, so a net reached only through them is `net.floating`. So is a net reached only through `AVCC`. §1.1.7 makes `AVCC` the supply of the ADC and of `PC3` to `PC0`, and says it must be connected to `VCC` even when the ADC is unused. The model draws every pin's stages, `PC3` to `PC0` included, from `VCC`, and reads `AVCC` only at an ADC sample, so it joins nothing. That is the datasheet's circuit while `AVCC` is wired to `VCC`, and an `AVCC` left on a net of its own is reported. An unused port pin on a net of its own is not. An off pin with no load sits at half the supply, inside the band between the defaults' `input_threshold.low` and `input_threshold.high`, so it reads low from power-on and then keeps its last level. Thresholds that put half the supply outside the band read it as that side.
 
-An ATmega328P has no `ratings` object. [avr.md](avr.md#ratings) names its ratings, and a later PR checks them. It has no `i`, `v`, or `p`. Its logic signals are its watched pins, described in [Refs](#refs).
+`ratings` is optional, and a part without it is unrated. Its five keys are required, and each is a value object or `null`, as [Ratings](#ratings) says. `pin_current` bounds each port pin's current, and `supply_current` the current through `VCC` and through `GND_8`, both in `A`. `rail_margin` is how far, in `V`, a pin may go below `GND_8`, and every pin but `VCC` and `RESET` above `VCC`. `reset_voltage` is the most `PC6` may sit above `GND_8` while it is `RESET`, and `supply_voltage` the most `VCC` may. The documented values are DS40002061B §29.1's absolute maxima, page 308:
+
+| Key | Value | §29.1 |
+| --- | --- | --- |
+| `pin_current` | 0.04 A | DC Current per I/O Pin, 40.0 mA |
+| `supply_current` | 0.2 A | DC Current VCC and GND Pins, 200.0 mA |
+| `rail_margin` | 0.5 V | Voltage on any Pin except RESET with respect to Ground, -0.5 V to VCC + 0.5 V |
+| `reset_voltage` | 13.0 V | Voltage on RESET with respect to Ground, -0.5 V to +13.0 V |
+| `supply_voltage` | 6.0 V | Maximum Operating Voltage, 6.0 V |
+
+```json
+"ratings": {
+  "pin_current": { "value": 0.04, "unit": "A", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: DC Current per I/O Pin, 40.0 mA", "basis": "absolute_max" } } },
+  "supply_current": { "value": 0.2, "unit": "A", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: DC Current VCC and GND Pins, 200.0 mA", "basis": "absolute_max" } } },
+  "rail_margin": { "value": 0.5, "unit": "V", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: Voltage on any Pin except RESET with respect to Ground, -0.5 V to VCC + 0.5 V", "basis": "absolute_max" } } },
+  "reset_voltage": { "value": 13.0, "unit": "V", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: Voltage on RESET with respect to Ground, -0.5 V to +13.0 V", "basis": "absolute_max" } } },
+  "supply_voltage": { "value": 6.0, "unit": "V", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: Maximum Operating Voltage, 6.0 V", "basis": "absolute_max" } } }
+}
+```
+
+The run works out each port pin's current from the row and the drive the firmware has in force: the output stage, the pull-up and both leakages above, out of the pin into the circuit. `VCC`'s current is the sum every port pin draws from `VCC`, and `GND_8`'s the sum every port pin sinks into it. The core's own supply current is not modelled, so neither sum holds it. [diagnostics.md](diagnostics.md#ratingcurrent) says how the run reports a current over its rating, and [diagnostics.md](diagnostics.md#ratingvoltage) a pin outside its window. These are the model's numbers. The stage is linear, so a pin shorted to the other rail reads 200 mA at 5 V, about twice a real driver's. No clamp diode conducts, so a pin past a rail draws no clamp current.
+
+An ATmega328P has no `i`, `v`, or `p`. Its logic signals are its watched pins, described in [Refs](#refs).
 
 `packages/engine/tests/circuits/atmega-board-blink` places this part on the development board fragment and runs `packages/engine/tests/firmware/sketch/blink.hex`. `packages/engine/tests/circuits/atmega-board-button` is that fragment running `packages/engine/tests/firmware/sketch/button.hex`, with a switch from `d2` to `v5` and a 10 kohm pull-down to `gnd`. `packages/engine/tests/circuits/atmega-board-knob` is that fragment running `packages/engine/tests/firmware/sketch/knob.hex`, with a knob's two contacts on `d2` and `d3`, and the sketch prints a count for each.
 
@@ -1289,7 +1311,7 @@ A blob the document names that no folder has, a name whose every file hashes to 
 
 ## Ratings
 
-A rating bounds the stress on a part. Every key of a kind's `ratings` object is required. Each value is a value object, or `null` for a part that is deliberately unrated.
+A rating bounds the stress on a part. Every key of a kind's `ratings` object is required. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, where it is optional.
 
 | Kind | Keys | Checked quantity |
 | --- | --- | --- |
@@ -1298,15 +1320,16 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `linear_regulator` | `current`, `power` | `#<part>.iout`, `#<part>.p` |
 | `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
 | `nmos` | `current`, `power` | `#<part>.id`, `#<part>.p` |
-| `voltage_source`, `current_source`, `capacitor`, `inductor`, `relay`, `switch`, `ne555`, `atmega328p`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `pulses_replay`, `ws2812`, `dht22` | none | |
+| `atmega328p` | `pin_current`, `supply_current`, `rail_margin`, `reset_voltage`, `supply_voltage` | each port pin's current, the current through `VCC` and `GND_8`, and each pin's voltage over `GND_8`, each named `#<part>.pin.<pin>` |
+| `voltage_source`, `current_source`, `capacitor`, `inductor`, `relay`, `switch`, `ne555`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `pulses_replay`, `ws2812`, `dht22` | none | |
 
-`current` is in `A`. `power` is in `W`. A rating must be greater than 0. A missing key, an unknown key, and a missing `ratings` object are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.current` or `ratings.power`. A value of 0 or below is `netlist.value` with the same field.
+`current`, `pin_current` and `supply_current` are in `A`. `power` is in `W`. `rail_margin`, `reset_voltage` and `supply_voltage` are in `V`. A rating must be greater than 0. A missing key, an unknown key, and a missing `ratings` object where it is required are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.<key>`, such as `ratings.current`. A value of 0 or below is `netlist.value` with the same field.
 
 ```json
 "ratings": { "power": { "value": 0.25, "unit": "W", "source": "user" } }
 ```
 
-The run compares the magnitude of each rated quantity with its rating. Going over is a warning, `rating.current` or `rating.power`, in [diagnostics.md](diagnostics.md).
+The run compares the magnitude of each rated quantity with its rating, and each rated pin's voltage with its window. Going over is a warning, `rating.current`, `rating.power` or `rating.voltage`, in [diagnostics.md](diagnostics.md).
 
 ## Sources
 

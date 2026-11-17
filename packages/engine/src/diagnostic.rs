@@ -511,6 +511,8 @@ pub enum Diagnostic {
     RatingCurrent(Excursion),
     /// A rated power went over its limit.
     RatingPower(Excursion),
+    /// A chip pin's voltage left its rated window.
+    RatingVoltage(VoltageExcursion),
 }
 
 /// The solve that did not converge.
@@ -527,7 +529,8 @@ pub enum Solve {
 /// One rated quantity over its limit, merged over the whole run.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Excursion {
-    /// `#<part>.i` or `#<part>.p`, which is also the observation key.
+    /// A part quantity such as `#<part>.i` or `#<part>.p`, which is also the observation key,
+    /// or a chip pin, `#<part>.pin.<pin>`, whose current the run works out from its stage.
     pub quantity: Ref,
     /// The rating, in SI units.
     pub limit: f64,
@@ -537,6 +540,25 @@ pub struct Excursion {
     /// First sample over the limit.
     pub first: Time,
     /// Total time over the limit. `None` for an operating point, which has no duration.
+    pub over_ps: Option<u64>,
+}
+
+/// One chip pin outside its rated voltage window, merged over the whole run. Volts are over
+/// the chip's ground pin.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VoltageExcursion {
+    /// `#<part>.pin.<pin>`.
+    pub pin: Ref,
+    /// The window's floor at the peak, or `None` when the part rates no floor.
+    pub low: Option<f64>,
+    /// The window's ceiling at the peak, or `None` when the part rates no ceiling.
+    pub high: Option<f64>,
+    /// The pin's voltage where it was farthest outside the window.
+    pub peak: f64,
+    pub peak_at: Time,
+    /// First sample outside the window.
+    pub first: Time,
+    /// Total time outside the window. `None` for an operating point, which has no duration.
     pub over_ps: Option<u64>,
 }
 
@@ -584,6 +606,7 @@ impl Diagnostic {
             Diagnostic::TraceRowInterpolated { .. } => "trace.row_interpolated",
             Diagnostic::RatingCurrent(_) => "rating.current",
             Diagnostic::RatingPower(_) => "rating.power",
+            Diagnostic::RatingVoltage(_) => "rating.voltage",
         }
     }
 
@@ -596,7 +619,8 @@ impl Diagnostic {
             | Diagnostic::ChipRestart { .. }
             | Diagnostic::TraceRowInterpolated { .. }
             | Diagnostic::RatingCurrent(_)
-            | Diagnostic::RatingPower(_) => Severity::Warning,
+            | Diagnostic::RatingPower(_)
+            | Diagnostic::RatingVoltage(_) => Severity::Warning,
             Diagnostic::NetlistSyntax { .. }
             | Diagnostic::NetlistVersion { .. }
             | Diagnostic::NetlistName { .. }
@@ -660,6 +684,7 @@ impl Diagnostic {
             Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
                 Some(excursion.first)
             }
+            Diagnostic::RatingVoltage(excursion) => Some(excursion.first),
             Diagnostic::NetlistSyntax { .. }
             | Diagnostic::NetlistVersion { .. }
             | Diagnostic::NetlistName { .. }
@@ -724,6 +749,7 @@ impl Diagnostic {
             Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
                 vec![excursion.quantity.clone()]
             }
+            Diagnostic::RatingVoltage(excursion) => vec![excursion.pin.clone()],
         }
     }
 
@@ -1375,6 +1401,7 @@ impl Diagnostic {
             ),
             Diagnostic::RatingCurrent(excursion) => over_rating(excursion, "A"),
             Diagnostic::RatingPower(excursion) => over_rating(excursion, "W"),
+            Diagnostic::RatingVoltage(excursion) => outside_window(excursion),
         }
     }
 
@@ -1603,6 +1630,15 @@ impl Diagnostic {
                     "peak_ps": excursion.peak_at,
                 })
             }
+            Diagnostic::RatingVoltage(excursion) => {
+                serde_json::json!({
+                    "high": excursion.high,
+                    "low": excursion.low,
+                    "over_ps": excursion.over_ps,
+                    "peak": excursion.peak,
+                    "peak_ps": excursion.peak_at,
+                })
+            }
         }
     }
 }
@@ -1646,6 +1682,23 @@ fn over_rating(excursion: &Excursion, unit: &str) -> String {
         ..
     } = excursion;
     format!("{quantity} peaks at {peak} {unit}, over its {limit} {unit} rating")
+}
+
+fn outside_window(excursion: &VoltageExcursion) -> String {
+    let VoltageExcursion {
+        pin,
+        low,
+        high,
+        peak,
+        ..
+    } = excursion;
+    let window = match (low, high) {
+        (Some(low), Some(high)) => format!("its {low} V to {high} V rating"),
+        (Some(low), None) => format!("its {low} V floor"),
+        (None, Some(high)) => format!("its {high} V ceiling"),
+        (None, None) => unreachable!("a window rates a floor or a ceiling"),
+    };
+    format!("{pin} reaches {peak} V over the chip's ground, outside {window}")
 }
 
 fn name_problem(problem: NameError) -> &'static str {

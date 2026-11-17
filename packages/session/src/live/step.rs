@@ -13,7 +13,7 @@ use super::serial::Arrived;
 use super::{Key, Open, Outcome, fail, failed, key, level, t};
 use crate::command::Step;
 use crate::duration::Duration;
-use crate::reply::{Change, Check, Code, Data, Diagnostic, Error, Got, Level, Met, Stepped};
+use crate::reply::{Change, Check, Code, Data, Error, Got, Level, Met, Stepped};
 use crate::target::Ref;
 
 /// `step` advances in slices this long, so `--until` and a caller see each one.
@@ -223,7 +223,7 @@ impl Open {
                 if d.at().is_some() && known.insert(key(&d)) {
                     found.push(Change::Diagnostic {
                         by_ps: d.at().map_or(now, Time::as_ps),
-                        diagnostic: Diagnostic::new(&d),
+                        diagnostic: self.diagnostic(&d),
                     });
                 }
             }

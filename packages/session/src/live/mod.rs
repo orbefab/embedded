@@ -7,13 +7,13 @@
 //! from S to E lists every edge in [S, E] once. `--until` first reads its condition as `get`
 //! would at S, and a pin's edge at t that meets it ends the step at t + 1 ps.
 
-use orbe_engine::netlist::{Analysis, Contact, RatingKind};
+use orbe_engine::netlist::{Analysis, Contact};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
 use std::path::Path;
 
-use orbe_engine::diagnostic::{Diagnostic as EngineDiagnostic, Excursion};
+use orbe_engine::diagnostic::Diagnostic as EngineDiagnostic;
 use orbe_engine::logic::Level as EngineLevel;
 use orbe_engine::name::{Name, Quantity, Ref as EngineRef};
 
@@ -80,7 +80,9 @@ struct Open {
     signals: BTreeMap<String, usize>,
     /// The pin each logic signal is named by in `step`'s changes.
     signal_pins: Vec<String>,
-    ratings: Vec<Rated>,
+    /// The board pins on the net of each pin of an engine part inside a board, such as
+    /// `nano.D9` for `#nano__mcu.pin.PB1`.
+    pin_names: BTreeMap<String, String>,
     /// Past every edge before `now`. A read leaves out an edge at `now` until time moves
     /// past it.
     edges: EdgeCursor,
@@ -90,13 +92,6 @@ struct Open {
     /// Where each quantity's last `set` landed, which can be after `now`. A frame shows the
     /// value from there on, so a `set` shows while the session is paused.
     world_sets: BTreeMap<orbe_engine::world::Quantity, Time>,
-}
-
-/// A rated quantity, checked against the probe at `now` as the engine checks accepted steps.
-struct Rated {
-    kind: RatingKind,
-    quantity: EngineRef,
-    limit: f64,
 }
 
 type Key = (&'static str, Vec<String>);
@@ -431,19 +426,6 @@ impl Open {
         let Analysis::Transient(transient) = netlist.analysis() else {
             unreachable!("a session runs a transient");
         };
-        let ratings = netlist
-            .parts()
-            .flat_map(|(_, part)| {
-                part.model
-                    .ratings()
-                    .into_iter()
-                    .map(|(kind, quantity, value)| Rated {
-                        kind,
-                        quantity: EngineRef::Quantity(part.name.clone(), quantity),
-                        limit: value.si.get(),
-                    })
-            })
-            .collect();
         let mut reports: BTreeMap<String, Vec<Quantity>> = BTreeMap::new();
         for column in engine.probe().refs() {
             if let EngineRef::Quantity(part, q) = column {
@@ -454,6 +436,7 @@ impl Open {
             }
         }
         let (signals, signal_pins) = signals(&engine, &refs);
+        let pin_names = pin_names(&refs);
         let edges = engine.edge_cursor();
         let contacts = frame::contacts(json);
         let mut open = Open {
@@ -470,7 +453,7 @@ impl Open {
             reports,
             signals,
             signal_pins,
-            ratings,
+            pin_names,
             edges,
             listed: edges,
             serial: Serial::default(),
@@ -535,31 +518,12 @@ impl Open {
         })
     }
 
-    /// The engine's diagnostics, the fault, and each rated quantity the probe has over its
-    /// rating that the engine has not yet found on an accepted step.
+    /// The engine's diagnostics, the fault, and each rating the probe is over that the engine
+    /// has not yet found on an accepted step.
     fn findings(&self, probe: &Probe) -> Vec<EngineDiagnostic> {
         let mut found = self.engine.diagnostics();
         let known: BTreeSet<Key> = found.iter().map(key).collect();
-        let at = probe.at();
-        for rated in &self.ratings {
-            let Some(magnitude) = probe.get(&rated.quantity).map(|v| v.get().abs()) else {
-                continue;
-            };
-            if magnitude <= rated.limit {
-                continue;
-            }
-            let excursion = Excursion {
-                quantity: rated.quantity.clone(),
-                limit: rated.limit,
-                peak: magnitude,
-                peak_at: at,
-                first: at,
-                over_ps: None,
-            };
-            let over = match rated.kind {
-                RatingKind::Current => EngineDiagnostic::RatingCurrent(excursion),
-                RatingKind::Power => EngineDiagnostic::RatingPower(excursion),
-            };
+        for over in self.engine.over_ratings(probe) {
             if !known.contains(&key(&over)) {
                 found.push(over);
             }
@@ -570,7 +534,27 @@ impl Open {
     }
 
     fn diagnostics(&self, probe: &Probe) -> Vec<Diagnostic> {
-        self.findings(probe).iter().map(Diagnostic::new).collect()
+        self.findings(probe)
+            .iter()
+            .map(|d| self.diagnostic(d))
+            .collect()
+    }
+
+    /// `d`, with the scene pin after each engine pin its message names, as in
+    /// `#nano__mcu.pin.PB1 (nano.D9) peaks at ...`.
+    fn diagnostic(&self, d: &EngineDiagnostic) -> Diagnostic {
+        let mut diagnostic = Diagnostic::new(d);
+        if let Some(message) = diagnostic.json["message"].as_str() {
+            let mut message = message.to_string();
+            for r in d.refs() {
+                let r = r.to_string();
+                if let Some(scene) = self.pin_names.get(&r) {
+                    message = message.replacen(&r, &format!("{r} ({scene})"), 1);
+                }
+            }
+            diagnostic.json["message"] = message.into();
+        }
+        diagnostic
     }
 
     fn contact(&mut self, r: &Ref, pressed: bool) -> Outcome {
@@ -831,6 +815,36 @@ impl Open {
             diagnostics: self.diagnostics(&self.engine.probe()),
         })
     }
+}
+
+/// Each pin of an engine part inside a board, as its ref text, with the board's pins on its
+/// net, such as `nano.5V, nano.D10` when the scene wires D10 to 5V. A pin with no board pin
+/// on its net is left out.
+fn pin_names(refs: &RefMap) -> BTreeMap<String, String> {
+    let mut names = BTreeMap::new();
+    for (path, part) in &refs.parts {
+        let top = path.split('.').next().unwrap_or(path);
+        for engine in &part.engine {
+            if engine.name == top {
+                continue;
+            }
+            for (pin, net) in &engine.pins {
+                let (Ok(part), Ok(pin)) = (Name::new(&engine.name), Name::new(pin)) else {
+                    continue;
+                };
+                let on_net: Vec<String> = refs.parts[top]
+                    .pins
+                    .iter()
+                    .filter(|(_, n)| n.as_deref() == Some(net.as_str()))
+                    .map(|(p, _)| format!("{top}.{p}"))
+                    .collect();
+                if !on_net.is_empty() {
+                    names.insert(EngineRef::Pin(part, pin).to_string(), on_net.join(", "));
+                }
+            }
+        }
+    }
+    names
 }
 
 /// Each chip logic signal by the net its pin sits on, and the pin each is named by: the one

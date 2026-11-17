@@ -27,39 +27,45 @@ const SETTLE_ROUNDS: u32 = 8;
 /// The operating point, with a finding per rating it breaks.
 pub(crate) fn run(netlist: &Netlist, diagnostics: &mut Vec<Diagnostic>) -> Option<OpPoint> {
     let columns = Columns::new(netlist);
-    let row = match solve(netlist, &columns) {
-        Ok(row) => row,
+    let (circuit, cores, row) = match solve(netlist, &columns) {
+        Ok(solved) => solved,
         Err(diagnostic) => {
             diagnostics.push(diagnostic);
             return None;
         }
     };
-    let mut ratings = Ratings::new(netlist, &columns, Timing::Point);
-    ratings.sample(Time::ZERO, &row);
+    let mut ratings = Ratings::new(netlist, &circuit.actives, &columns, Timing::Point);
+    ratings.sample(Time::ZERO, &row, &cores);
     diagnostics.extend(ratings.findings());
     Some(observe::op_point(&columns, &row))
 }
 
-fn solve(netlist: &Netlist, columns: &Columns) -> Result<Vec<Finite>, Diagnostic> {
+/// The operating point's row, with the circuit and the power-on cores it was solved with.
+fn solve(
+    netlist: &Netlist,
+    columns: &Columns,
+) -> Result<(Circuit, Vec<active::Core>, Vec<Finite>), Diagnostic> {
     let circuit = Circuit::new(netlist.clone())?;
     let start = Iterate::initial(&circuit);
+    let cores = Actives::power_on(&circuit);
     let settled = settle(
         &circuit,
         None,
         Conditions::NOMINAL,
         start,
         circuit.power_on(),
-        &Actives::power_on(&circuit),
+        &cores,
         None,
         OP_BUDGET,
     )?;
-    observe::observe(
+    let row = observe::observe(
         &circuit,
         columns,
         &settled.iterate.solution,
         Time::ZERO,
         Side::Before,
-    )
+    )?;
+    Ok((circuit, cores, row))
 }
 
 /// A solve the chips agree with: its chip states, and the levels they read on it.
