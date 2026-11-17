@@ -257,8 +257,109 @@ fn each_installed_block_reads_and_runs_the_same_from_memory() {
     }
 }
 
-/// A missing part, edited and extra files in a sealed copy, and no firmware, each found the same
-/// way in memory as on disk.
+/// Part folders `install` wrote, sorted by folder name. A directory with no `part.jsonc` is not one.
+fn part_folders(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir.join("parts")) else {
+        return Vec::new();
+    };
+    let mut found: Vec<_> = entries
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.join("part.jsonc").is_file())
+        .collect();
+    found.sort();
+    found
+}
+
+/// Every file under `dir`, in sorted order.
+fn files_in(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(current) = pending.pop() {
+        for entry in fs::read_dir(&current).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.is_file() {
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// Appends a byte to one file of `part` and writes an extra file beside it. The file is the
+/// first in sorted order that is not `part.jsonc`, so the part still parses. Returns whether
+/// a file was there to edit.
+fn edit_part(part: &Path) -> bool {
+    let files = files_in(part);
+    let Some(file) = files
+        .iter()
+        .find(|path| path.file_name().is_some_and(|name| name != "part.jsonc"))
+        .or(files.first())
+    else {
+        return false;
+    };
+    let mut bytes = fs::read(file).unwrap();
+    bytes.push(0);
+    fs::write(file, bytes).unwrap();
+    fs::write(part.join("notes.txt"), "mine").unwrap();
+    true
+}
+
+/// Removes one installed part, edits a file of another, and removes `firmware/` when `install`
+/// wrote it. Each flag is whether that break can produce its finding. `lack` says why it cannot.
+fn break_install(dir: &Path) -> [(&'static str, bool, &'static str); 3] {
+    let parts = part_folders(dir);
+    let missing = if let Some(part) = parts.first() {
+        fs::remove_dir_all(part).unwrap();
+        true
+    } else {
+        false
+    };
+    let (modified, modified_lack) = if parts.len() < 2 {
+        (
+            false,
+            if parts.is_empty() {
+                "no part folder"
+            } else {
+                "a single part"
+            },
+        )
+    } else if edit_part(&parts[1]) {
+        (true, "")
+    } else {
+        (false, "no file in the other part")
+    };
+    let firmware = dir.join("firmware");
+    let firmware_missing = if firmware.is_dir() {
+        fs::remove_dir_all(&firmware).unwrap();
+        true
+    } else {
+        false
+    };
+    [
+        ("PartMissing", missing, "no part folder"),
+        ("PartModified", modified, modified_lack),
+        ("FirmwareMissing", firmware_missing, "no firmware folder"),
+    ]
+}
+
+fn finds(block: &str, reading: &str, code: &str, present: bool, lack: &str) {
+    if present {
+        assert!(reading.contains(code), "{block} finds {code}: {reading}");
+    } else {
+        assert!(
+            !reading.contains(code),
+            "{block} has {lack}, so it does not find {code}: {reading}"
+        );
+    }
+}
+
+/// A missing part, an edited file and an extra file in another installed part, and no firmware,
+/// each found the same way in memory as on disk. The part removed and the part edited are folders
+/// `install` wrote, in sorted order. A Block with no part folder, a single part, or no firmware
+/// folder says so, and the read still has to show every finding that Block can produce.
 #[test]
 fn a_broken_install_finds_the_same_from_memory() {
     let tmp = TempDir::new().unwrap();
@@ -266,21 +367,10 @@ fn a_broken_install_finds_the_same_from_memory() {
     for block in blocks() {
         let block = block.as_str();
         let dir = install(&base, block);
-        fs::remove_dir_all(dir.join("parts/resistor-0603")).unwrap();
-        fs::remove_dir_all(dir.join("parts/resistor-axial")).unwrap();
-        let glb = dir.join("parts/led-5mm/led-5mm.glb");
-        let mut bytes = fs::read(&glb).unwrap();
-        bytes.push(0);
-        fs::write(&glb, bytes).unwrap();
-        fs::write(dir.join("parts/led-5mm/notes.txt"), "mine").unwrap();
-        fs::remove_dir_all(dir.join("firmware")).unwrap();
+        let broken = break_install(&dir);
         let found = same_reading(&base, block);
-        for what in ["PartMissing", "PartModified", "FirmwareMissing"] {
-            assert!(
-                found[0].contains(what),
-                "{block} finds {what}: {}",
-                found[0]
-            );
+        for (code, present, lack) in broken {
+            finds(block, &found[0], code, present, lack);
         }
     }
 }
