@@ -351,7 +351,7 @@ pub enum Diagnostic {
     /// A chip whose CS and SCLK sit on `sender`'s nets dropped an SPI transaction whose data
     /// lanes are not on its own data pins, first at `at`.
     ChipLinkMiswired { part: Ref, at: Time, sender: Name },
-    /// `pin` floats at `at`: it is an input with its pull-up off, nothing joins `net` to a
+    /// `pin` floats at `at`: it is an input with its pull-up off, no DC path joins `net` to a
     /// supply or to ground but the chip's own leakage, and its firmware has taken in its level
     /// since it last became such an input, alone or with the rest of its port. Once per pin.
     ChipFloatingInput { pin: Ref, net: Ref, at: Time },
@@ -1155,7 +1155,7 @@ impl Diagnostic {
                 at.as_ps()
             ),
             Diagnostic::ChipFloatingInput { pin, net, at } => format!(
-                "{pin} floats on {net} at {} ps, and the firmware has taken in its level since the pin last became an input with its pull-up off, alone or with the rest of its port: no part joins the net to a supply or to ground, so the level is whatever leakage and noise leave; add a pull-up or a pull-down resistor, or turn the pin's pull-up on",
+                "{pin} floats on {net} at {} ps, and the firmware has taken in its level since the pin last became an input with its pull-up off, alone or with the rest of its port: there is no DC path to a supply or to ground, and a capacitor does not hold the pin's level, so the level is whatever leakage and noise leave; add a pull-up or a pull-down resistor, or turn the pin's pull-up on",
                 at.as_ps()
             ),
             Diagnostic::ChipLinkMiswired { part, at, sender } => format!(
