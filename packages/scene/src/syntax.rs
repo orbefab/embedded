@@ -51,6 +51,17 @@ fn options() -> ParseOptions {
 }
 
 pub(crate) fn parse(sources: &Sources, file: FileId, out: &mut Findings) -> Option<Node> {
+    if let Some(cached) = sources.parsed(file) {
+        return cached;
+    }
+    #[cfg(test)]
+    record_parse(&sources.file(file).display);
+    let node = parse_fresh(sources, file, out);
+    sources.remember(file, &node);
+    node
+}
+
+fn parse_fresh(sources: &Sources, file: FileId, out: &mut Findings) -> Option<Node> {
     let text = &sources.file(file).text;
     let parsed = match parse_to_ast(text, &CollectOptions::default(), &options()) {
         Ok(parsed) => parsed,
@@ -204,6 +215,21 @@ fn check_duplicate_keys(sources: &Sources, node: &Node, out: &mut Findings) {
             .for_each(|item| check_duplicate_keys(sources, item, out)),
         _ => {}
     }
+}
+
+#[cfg(test)]
+pub(crate) fn take_parses() -> Vec<String> {
+    PARSES.with(|parses| std::mem::take(&mut *parses.borrow_mut()))
+}
+
+#[cfg(test)]
+thread_local! {
+    static PARSES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn record_parse(path: &str) {
+    PARSES.with(|parses| parses.borrow_mut().push(path.to_string()));
 }
 
 impl Node {

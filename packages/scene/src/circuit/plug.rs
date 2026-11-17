@@ -609,10 +609,11 @@ impl Circuit<'_> {
             .flat_map(|h| h.strips.iter().enumerate())
             .flat_map(|(index, strip)| strip.iter().map(move |hole| (hole.as_str(), index)))
             .collect();
+        let tree = self.part_tree(part);
         part.pins
             .iter()
             .filter_map(|pin| {
-                let lead = self.lead_of(part, &pin.name)?;
+                let lead = Self::lead_of(&tree, &pin.name)?;
                 Some(Hole {
                     name: pin.name.clone(),
                     key: self.keys[&(board, pin.name.clone())],
@@ -624,8 +625,7 @@ impl Circuit<'_> {
     }
 
     /// The one lead of a pin on one lead.
-    fn lead_of(&self, part: &Part, pin: &str) -> Option<u64> {
-        let tree = self.part_tree(part);
+    fn lead_of(tree: &Value, pin: &str) -> Option<u64> {
         let leads = tree["pins"][pin].as_array()?;
         match leads[..] {
             [ref lead] => lead.as_u64(),
