@@ -614,6 +614,82 @@ impl<'p> Circuit<'p> {
         }
     }
 
+    /// The holes of the strip `key` sits in, when `key` is a hole of a board.
+    fn strip_of(&self, key: usize) -> Option<Vec<String>> {
+        let inst = self.pins[key].inst;
+        let name = self.pins[key].name.clone();
+        let holes = self.part(inst)?.holes.as_ref()?;
+        holes
+            .strips
+            .iter()
+            .find(|strip| strip.iter().any(|hole| hole == &name))
+            .cloned()
+    }
+
+    /// `board.hole` for the hole pin `key`.
+    fn hole_label(&self, key: usize) -> String {
+        let pin = &self.pins[key];
+        format!("{}.{}", self.insts[pin.inst].dotted(), pin.name)
+    }
+
+    /// The nearest hole of `key`'s strip that no lead names yet, as `board.hole`.
+    fn free_hole(&self, key: usize, held: &BTreeMap<usize, String>) -> Option<String> {
+        let strip = self.strip_of(key)?;
+        let inst = self.pins[key].inst;
+        let at = strip.iter().position(|hole| hole == &self.pins[key].name)?;
+        let board = self.insts[inst].dotted();
+        let mut best: Option<(usize, &str)> = None;
+        for (index, hole) in strip.iter().enumerate() {
+            let Some(&hole_key) = self.keys.get(&(inst, hole.clone())) else {
+                continue;
+            };
+            if held.contains_key(&hole_key) {
+                continue;
+            }
+            let distance = index.abs_diff(at);
+            if best.is_none_or(|(nearest, name)| {
+                distance < nearest || (distance == nearest && hole.as_str() < name)
+            }) {
+                best = Some((distance, hole));
+            }
+        }
+        best.map(|(_, hole)| format!("{board}.{hole}"))
+    }
+
+    /// A breadboard hole holds one lead. A wire end that names a hole a plugged leg or another
+    /// wire end already names is an error. Two pins of one part in one strip is a different
+    /// fault, reported later as `scene.shorted`.
+    fn claim_hole(
+        &mut self,
+        key: usize,
+        span: Span,
+        lead: &str,
+        held: &mut BTreeMap<usize, String>,
+    ) {
+        if self.strip_of(key).is_none() {
+            return;
+        }
+        let Some(other) = held.get(&key).cloned() else {
+            held.insert(key, lead.to_string());
+            return;
+        };
+        let hole = self.hole_label(key);
+        let hint = match self.free_hole(key, held) {
+            Some(free) => format!(
+                "a hole holds one lead; move one of them to a free hole in the same strip, such as {free}"
+            ),
+            None => {
+                "a hole holds one lead; move one of them to a free hole in the same strip".into()
+            }
+        };
+        self.out.push(
+            Code::Layout,
+            span,
+            format!("{lead} names {hole}, which {other} already holds"),
+            hint,
+        );
+    }
+
     /// Each scene wire end is checked against the net it reaches inside its part, before the
     /// scene's own wires join anything. Then the scene's wires join.
     fn check_scene_wires(&mut self, scene: &Scene) {
@@ -635,6 +711,12 @@ impl<'p> Circuit<'p> {
                 self.unsimulated.insert(key, reason.clone());
             }
         }
+        let mut held: BTreeMap<usize, String> = BTreeMap::new();
+        for seated in self.seated.values() {
+            for contact in &seated.contacts {
+                held.insert(contact.hole_key, format!("`{}`", contact.shown));
+            }
+        }
         let mut joins = Vec::new();
         for wire in &scene.comp.wires {
             let ends: Vec<Option<usize>> =
@@ -650,6 +732,14 @@ impl<'p> Circuit<'p> {
                         "wire to a pin the engine simulates".into(),
                     );
                 }
+            }
+            let lead = format!(
+                "the wire from `{}` to `{}`",
+                wire.ends[0].text, wire.ends[1].text
+            );
+            for (r, key) in wire.ends.iter().zip(&ends) {
+                let Some(key) = *key else { continue };
+                self.claim_hole(key, r.span, &lead, &mut held);
             }
             if let [Some(a), Some(b)] = ends[..] {
                 joins.push((a, b, wire));

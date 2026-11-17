@@ -1,0 +1,9 @@
+scene.layout scene.jsonc:19:6 | the wire from `bb.b32` to `bb.b30` names bb.b32, which `rhys.b` already holds | a hole holds one lead; move one of them to a free hole in the same strip, such as bb.a32
+scene.layout scene.jsonc:20:6 | the wire from `bb.f28` to `bb.Y28` names bb.f28, which `u1.VCC` already holds | a hole holds one lead; move one of them to a free hole in the same strip, such as bb.g28
+scene.layout scene.jsonc:21:6 | the wire from `bb.e31` to `bb.X31` names bb.e31, which `u1.GND` already holds | a hole holds one lead; move one of them to a free hole in the same strip, such as bb.d31
+scene.layout scene.jsonc:22:6 | the wire from `bb.f31` to `bb.e31` names bb.f31, which `u1.IN2_P` already holds | a hole holds one lead; move one of them to a free hole in the same strip, such as bb.g31
+scene.layout scene.jsonc:22:16 | the wire from `bb.f31` to `bb.e31` names bb.e31, which `u1.GND` already holds | a hole holds one lead; move one of them to a free hole in the same strip, such as bb.d31
+scene.layout scene.jsonc:23:6 | the wire from `bb.f30` to `bb.f31` names bb.f30, which `u1.IN2_N` already holds | a hole holds one lead; move one of them to a free hole in the same strip, such as bb.g30
+scene.layout scene.jsonc:23:16 | the wire from `bb.f30` to `bb.f31` names bb.f31, which `u1.IN2_P` already holds | a hole holds one lead; move one of them to a free hole in the same strip, such as bb.g31
+scene.layout scene.jsonc:25:6 | the wire from `bb.j20` to `bb.a20` names bb.j20, which the wire from `bb.j11` to `bb.j20` already holds | a hole holds one lead; move one of them to a free hole in the same strip, such as bb.i20
+scene.layout scene.jsonc:26:6 | the wire from `bb.a20` to `bb.a28` names bb.a20, which the wire from `bb.j20` to `bb.a20` already holds | a hole holds one lead; move one of them to a free hole in the same strip, such as bb.b20

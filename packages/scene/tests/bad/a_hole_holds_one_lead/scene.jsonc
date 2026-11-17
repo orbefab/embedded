@@ -1,0 +1,28 @@
+// Seven holes each hold two leads. A wire end shares a leg's hole at b32, f28, e31, f31 and
+// f30, and two wire ends share j20 and a20. Each of those is one strip, so a free hole beside
+// the lead is the same net.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-830" },
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "u1": { "type": "lm358-dip8" },
+    "rhys": { "type": "resistor-axial", "resistance": "68k" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "D13": "bb.d1" } },
+    "u1": { "on": { "OUT1": "bb.e28" } }, // IN1- e29, IN1+ e30, GND e31, VCC f28, OUT2 f29, IN2- f30, IN2+ f31
+    "rhys": { "on": { "a": "bb.b28" } }, // b in b32
+  },
+  "wires": [
+    ["bb.b32", "bb.b30"], // into rhys.b
+    ["bb.f28", "bb.Y28"], // into u1.VCC
+    ["bb.e31", "bb.X31"], // into u1.GND
+    ["bb.f31", "bb.e31"], // into u1.IN2_P and u1.GND
+    ["bb.f30", "bb.f31"], // into u1.IN2_N and u1.IN2_P
+    ["bb.j11", "bb.j20"],
+    ["bb.j20", "bb.a20"], // j20 again
+    ["bb.a20", "bb.a28"], // a20 again
+  ],
+}
