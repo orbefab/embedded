@@ -18,10 +18,10 @@ Sparse parts render as they are. A missing summary, tag, doc or seller shows as 
 
 ```sh
 pnpm install --frozen-lockfile
-scripts/site.sh
+scripts/site.sh --first-deploy
 ```
 
-`scripts/site.sh` fetches the AVR runtime's source into the blob cache, builds `orbe`, writes this repo's registry with `orbe registry build . .scratch/site/registry`, builds orbe-wasm with `scripts/wasm.sh .scratch/site/wasm`, then runs `vite build` in `apps/site`. It needs what [wasm.md](wasm.md#build) needs, Node 24 and pnpm, and installs nothing. Arguments go to `orbe registry build`, so `scripts/site.sh --previous <dir>` keeps every version an earlier build served, as [registry.md](registry.md#versions) says.
+`scripts/site.sh` fetches the AVR runtime's source into the blob cache, builds `orbe`, writes this repo's registry with `orbe registry build . .scratch/site/registry`, builds orbe-wasm with `scripts/wasm.sh .scratch/site/wasm`, then runs `vite build` in `apps/site`. It needs what [wasm.md](wasm.md#build) needs, Node 24 and pnpm, and installs nothing. It requires either `--previous <dir>` or `--first-deploy`. `--previous <dir>` is the registry the live site serves, and the build keeps every version that registry served, as [registry.md](registry.md#versions) says. `--first-deploy` is the first deploy, which has no earlier registry.
 
 The site is a [TanStack Start](https://tanstack.com/start/latest) app, set up as the website is: file routes in `src/routes`, `@cloudflare/vite-plugin`, Tailwind 4 and `@vitejs/plugin-react`.
 
@@ -34,7 +34,7 @@ The site is a [TanStack Start](https://tanstack.com/start/latest) app, set up as
 
 ### Install lines
 
-Until the repo and the binaries are public, an install command would fail, so the site shows none. `ORBE_SITE_INSTALL=1 scripts/site.sh` shows them: `orbe add <id>` on each part and Block page, `cargo install`, the releases page and the repo on the landing page, the repo in the footer, and a Block's README. Without it, each of those places says the CLI is coming. The build defines the flag as a literal, `__ORBE_SITE_INSTALL__`, so a build without it holds none of that text, in its pages or in its scripts.
+Until the repo and the binaries are public, an install command would fail, so the site shows none. `ORBE_SITE_INSTALL=1 scripts/site.sh --first-deploy` shows them: `orbe add <id>` on each part and Block page, `cargo install`, the releases page and the repo on the landing page, the repo in the footer, and a Block's README. Without it, each of those places says the CLI is coming. The build defines the flag as a literal, `__ORBE_SITE_INSTALL__`, so a build without it holds none of that text, in its pages or in its scripts.
 
 The flag gates the site's own text and links. The registry's files are data, served as `orbe registry build` wrote them, so a Block's `README.md` and `block.jsonc` still say `orbe add`, and its `firmware/NOTICE` names the repo. `scripts/check-site.sh` checks every file under `dist/client` except `r/`, `orbe-wasm/` and `sources/`.
 
@@ -88,7 +88,7 @@ cd apps/site
 pnpm exec wrangler deploy          # reads dist/client/wrangler.json, which the build wrote
 ```
 
-`check-site.sh` leaves the deploy build, without install lines, in `apps/site/dist`. `wrangler deploy` in `apps/site` follows `.wrangler/deploy/config.json`, which the build wrote, to `dist/client/wrangler.json`, so it uploads `dist/client` as assets and no Worker code. Do not pass `--config wrangler.jsonc`, which skips the built config. Keep a copy of `dist/client/r` from each deploy, and pass it to the next one as `scripts/check-site.sh --previous <copy>`, so the registry keeps serving every version it served. The first deploy has none.
+`check-site.sh` leaves the deploy build, without install lines, in `apps/site/dist`. `wrangler deploy` in `apps/site` follows `.wrangler/deploy/config.json`, which the build wrote, to `dist/client/wrangler.json`, so it uploads `dist/client` as assets and no Worker code. Do not pass `--config wrangler.jsonc`, which skips the built config. Keep a copy of `dist/client/r` from each deploy, and pass it to the next one as `scripts/check-site.sh --previous <copy>`, so the registry keeps serving every version it served. The first deploy passes no `--previous`, and the build runs as `scripts/site.sh --first-deploy`.
 
 After a deploy:
 

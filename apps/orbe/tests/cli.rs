@@ -330,13 +330,10 @@ fn adding_parts_for_the_first_target() {
             }
         }
     }
-    let fixture_lock: String =
-        fs::read_to_string(common::fixture("nano-button").join("parts.lock"))
-            .unwrap()
-            .lines()
-            .filter(|line| copied.iter().any(|id| line.split(' ').next() == Some(id)))
-            .map(|line| format!("{line}\n"))
-            .collect();
+    let fixture_lock: String = copied
+        .iter()
+        .map(|id| format!("{}\n", common::lock_line(&common::repo(), id)))
+        .collect();
     let lock_path = dir.path().join("parts.lock");
     assert_eq!(fs::read_to_string(&lock_path).unwrap(), fixture_lock);
     for id in &copied {

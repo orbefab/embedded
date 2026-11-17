@@ -17,7 +17,7 @@ The shell script checks that uv is installed, that Node is 24 or newer, that the
 
 `--local` reads the raw GLB and anchors from `--raw`, runs the checks, and writes the merged GLB, the anchors and `asset.json` into the part folder only after that part's checks pass. `source.sha256` is the SHA-256 of `model.py`. The hashes under `files` cover the merged GLB and the anchors. With no ids, `--local` runs every part that has `model.py`, and it still needs `--raw`. It does not read the GLB already in the part folder.
 
-After it finishes, run `scripts/bless.sh`.
+After it finishes, run `scripts/check.sh fast`.
 
 The model build stays off CI.
 
@@ -67,4 +67,4 @@ Composition needs each child's `asset.json`. A part with children and no body of
 
 `cargo test` checks every catalog part with a GLB, without Node. The hashes and sizes in `asset.json` must match the files. When the part has `model.py`, that file's SHA-256 must equal `source.sha256`, and a mismatch tells you to run `scripts/model.sh <id>`. The anchors' leads must equal the leads in `pins`, and each anchor's `at` must sit inside the box `asset.json` records, with a unit `axis`. The test reads the node names from the GLB's JSON chunk. They must equal `kept_nodes`, and `kept_nodes` must equal what the merge keeps by `part.jsonc` and the anchors, with each anchor's `node` and `also` in the GLB once. The test reads no vertices, so the geometry checks stay with the asset step and `scripts/check-assets.sh`.
 
-`parts.lock` hashes every file in a part's folder. After `scripts/model.sh`, run `scripts/bless.sh`. It rewrites the lock fixture from `parts/` and refreshes each example's part copies and `parts.lock` from the catalog ids its scene names. A copy the scene no longer names is removed. Then run `./scripts/check.sh`.
+`parts.lock` hashes every file in a part's folder. The scene tests write that lock from `parts/` when they run, so a model change does not rewrite a committed lock. Run `scripts/check.sh fast` after `scripts/model.sh`.

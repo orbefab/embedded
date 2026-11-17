@@ -10,17 +10,58 @@
 # the site serves unchanged, so a Block's README or block.jsonc still says `orbe add`.
 #
 # Needs what scripts/site.sh needs, and a Chromium found as check-viewer-e2e.sh finds it. It
-# installs nothing. check.sh does not run this. Pass `--previous <dir>` first to build the
-# registry on the one the live site serves, as scripts/site.sh does, and `--renders <dir>` to
-# save screenshots there.
+# installs nothing. check.sh does not run this. `--previous <dir>` builds the registry on
+# the one the live site serves. With no `--previous`, the build is a first deploy
+# (`scripts/site.sh --first-deploy`). `--renders <dir>` saves screenshots there. The
+# arguments can be in any order. An unknown argument is an error.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-scripts/need-node-deps.sh scripts/check-site.sh
 previous=()
-if [[ ${1:-} == --previous ]]; then
-  previous=(--previous "$2")
-  shift 2
+first=0
+renders=""
+saw_renders=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --first-deploy)
+      first=1
+      shift
+      ;;
+    --previous)
+      if [[ $# -lt 2 || -z ${2:-} || ${2:-} == --* ]]; then
+        echo "check-site: --previous needs a directory" >&2
+        exit 2
+      fi
+      previous=(--previous "$2")
+      shift 2
+      ;;
+    --renders)
+      if [[ $# -lt 2 || -z ${2:-} || ${2:-} == --* ]]; then
+        echo "check-site: --renders needs a directory" >&2
+        exit 2
+      fi
+      renders=$2
+      saw_renders=1
+      shift 2
+      ;;
+    *)
+      echo "check-site: unknown argument $1" >&2
+      exit 2
+      ;;
+  esac
+done
+if [[ $first -eq 1 && ${#previous[@]} -gt 0 ]]; then
+  echo "check-site: pass --previous or --first-deploy, not both" >&2
+  exit 2
 fi
+if [[ ${#previous[@]} -gt 0 ]]; then
+  site=("${previous[@]}")
+else
+  site=(--first-deploy)
+fi
+if [[ $saw_renders -eq 1 ]]; then
+  export ORBE_RENDERS=$renders
+fi
+scripts/need-node-deps.sh scripts/check-site.sh
 fail() {
   echo "check-site: $1" >&2
   exit 1
@@ -36,7 +77,7 @@ listed() {
     "$PWD/$dist/r/index.json" "$1"
 }
 
-ORBE_SITE_INSTALL=1 scripts/site.sh "${previous[@]}" >/dev/null
+ORBE_SITE_INSTALL=1 scripts/site.sh "${site[@]}" >/dev/null
 parts=$(pages parts)
 blocks=$(pages blocks)
 [[ $parts -eq $(listed part) && $blocks -eq $(listed block) ]] ||
@@ -49,7 +90,7 @@ grep -q 'href="https://github.com/orbefab/embedded"' "$dist/index.html" ||
   fail "with ORBE_SITE_INSTALL=1, the landing page links no repo"
 echo "check-site: ORBE_SITE_INSTALL=1 shows orbe add on $parts part and $blocks Block pages, and cargo install and the repo on the landing page"
 
-scripts/site.sh "${previous[@]}"
+scripts/site.sh "${site[@]}"
 shown=$(own 'orbe add|cargo install|github\.com/orbefab/embedded')
 [[ -z $shown ]] || fail "these files of the site's own show an install line or a repo link with ORBE_SITE_INSTALL unset: $shown"
 echo "check-site: no file of the site's own shows an install line or a repo link with ORBE_SITE_INSTALL unset"
@@ -76,14 +117,6 @@ echo "check-site: the build serves sources/$archive, the runtime source each Blo
 
 target=$(cargo metadata --format-version 1 --no-deps |
   sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
-while [[ $# -gt 0 ]]; do
-  if [[ $1 == --renders ]]; then
-    export ORBE_RENDERS=${2:-}
-    shift 2
-  else
-    shift
-  fi
-done
 export ORBE=$target/debug/orbe
 export ORBE_E2E=site
 export WRANGLER_SEND_METRICS=false
