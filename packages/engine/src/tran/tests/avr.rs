@@ -135,6 +135,55 @@ fn reset_releases_at_its_own_threshold() {
     assert_eq!(edges(&trace, "PC6"), [(US, true)]);
 }
 
+/// A chip held in reset draws `reset_current`, and from the stop where `RESET` lets go,
+/// `active_current`. `RESET` rises to 5 V at 2 us, and with `SUT` 01 the reset delay is 14
+/// cycles. The chip runs from 5 V through 1 ohm, so that resistor's volts are its amperes.
+#[test]
+fn a_chip_held_in_reset_draws_its_reset_current() {
+    let step = r#"{ "name": "vr", "kind": "voltage_source", "pins": { "p": "src", "n": "gnd" },
+          "voltage": { "kind": "step", "initial": { "value": 0.0, "unit": "V", "source": "user" },
+                       "final": { "value": 5.0, "unit": "V", "source": "user" }, "at_ps": 2000000 } }"#;
+    let mut mcu: serde_json::Value = serde_json::from_str(&atmega(
+        "chip",
+        TOGGLE,
+        MHZ_16,
+        FuseBytes { low: 0xDF, ..FUSES },
+    ))
+    .unwrap();
+    mcu["active_current"] = serde_json::json!({ "value": 0.0114, "unit": "A", "source": "user" });
+    mcu["reset_current"] = serde_json::json!({ "value": 0.002, "unit": "A", "source": "user" });
+    let netlist = board(
+        4 * US,
+        &["src", "chip"],
+        &[
+            step.to_string(),
+            resistor("rr", "src", "pc6", 1000.0),
+            resistor("rs", "vcc", "chip", 1.0),
+        ],
+        mcu.to_string(),
+    );
+    let (trace, diagnostics) = run(&netlist);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let chip = volts(&trace, "chip");
+    let drawn = |volts: f64| 5.0 - volts;
+    // `RESET` is low at power-on, so the hold starts at the first stop, one cycle in. Held, the
+    // chip also feeds its `RESET` pull-up, about 0.1 mA into the low pin.
+    let held = drawn(after(&chip, 62_500));
+    assert!(held > 0.0019 && held < 0.0023, "{held} A while held");
+    // The hold ends one cycle after `RESET` rises. That stop's row is the last held one.
+    let release = 2 * US + 62_500;
+    let before = drawn(at(&chip, release));
+    assert!(
+        before > 0.0019 && before < 0.0021,
+        "{before} A at the release"
+    );
+    let running = drawn(after(&chip, release));
+    assert!(
+        running > 0.0113 && running < 0.0115,
+        "{running} A while running"
+    );
+}
+
 fn board(stop_ps: u64, nets: &[&str], parts: &[String], mcu: String) -> Netlist {
     let pins: Vec<String> = pin_nets().map(|(net, _)| net).collect();
     let nets: Vec<&str> = pins

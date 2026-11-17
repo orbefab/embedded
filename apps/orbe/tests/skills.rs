@@ -1069,21 +1069,24 @@ fn a_load_over_the_usb_supply_warns_and_a_wire_across_it_is_a_short() {
     let runtime = Runtime::new();
     let orbe = |args: &[&str]| runtime.orbe(dir, args);
     let open = orbe(&["open", "--json"]).ok().json();
-    let supply = open["data"]["diagnostics"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|d| d["code"] == "rating.current")
-        .unwrap_or_else(|| panic!("{open}"))
-        .clone();
+    let over = |part: &str| {
+        open["data"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| {
+                d["code"] == "rating.current" && d["message"].as_str().unwrap().starts_with(part)
+            })
+            .unwrap_or_else(|| panic!("{open}"))
+            .clone()
+    };
+    // The same current passes the USB supply and the Schottky behind 5V, each rated 0.5 A.
+    let supply = over("#nano__usb__host.i (nano.usb) ");
+    let diode = over("#nano__diode.i (nano.diode) ");
     orbe(&["close"]).ok();
-    let message = supply["message"].as_str().unwrap();
-    assert!(
-        message.starts_with("#nano__usb__host.i (nano.usb) "),
-        "{message}"
-    );
     let peak = supply["data"]["peak"].as_f64().unwrap();
     assert_eq!(supply["data"]["limit"], 0.5);
+    assert_eq!(diode["data"]["limit"], 0.5);
 
     let shorted = scene.replace(cathode, &format!("{cathode} [\"nano.5V\", \"nano.GND\"],"));
     fs::write(dir.join("scene.jsonc"), &shorted).unwrap();
@@ -1101,7 +1104,7 @@ fn a_load_over_the_usb_supply_warns_and_a_wire_across_it_is_a_short() {
     says(
         &core,
         &format!(
-            "A load over that on 5V, such as 2.5 ohm from 5V to GND ({peak:.1} A), warns `rating.current` on the supply, `#nano__usb__host.i (nano.usb)`, at {peak:.1} A over its 0.5 A rating."
+            "A load over that on 5V, such as 2.5 ohm from 5V to GND ({peak:.1} A), warns `rating.current` on the supply, `#nano__usb__host.i (nano.usb)`, at {peak:.1} A over its 0.5 A rating, and on the Schottky behind 5V, `#nano__diode.i (nano.diode)`, which is rated 0.5 A too."
         ),
     );
     says(
@@ -1196,8 +1199,8 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     ] {
         assert!(step.contains(warning), "{step}");
     }
-    // The pin's rating is DC: its RMS over the last 10.2 ms crosses 40 mA (40 / 105)^2 of the
-    // window after the press, 1.5 ms, and a chip warning can show up to one 10 ms engine step
+    // The pin's rating is DC: its RMS over the last 10.2 ms crosses 40 mA (40 / 94)^2 of the
+    // window after the press, 1.8 ms, and a chip warning can show up to one 10 ms engine step
     // late.
     let held = orbe(&["step", "20ms"]).ok().stdout;
     for warning in [
@@ -1264,7 +1267,9 @@ fn a_resistor_over_its_power_rating_warns_as_its_parts_line_says() {
     let runtime = Runtime::new();
     let open = runtime.orbe(dir, &["open", "hot.jsonc"]).ok().stdout;
     assert!(
-        open.contains("warning[rating.power] #r9.p peaks at 2.5 W, over its 0.25 W rating"),
+        open.contains(
+            "warning[rating.power] #r9.p peaks at 2.158099861018882 W, over its 0.25 W rating"
+        ),
         "{open}"
     );
     runtime.orbe(dir, &["close"]).ok();
