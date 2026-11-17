@@ -130,7 +130,16 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
             saw_rest = true;
         }
     }
-    assert_eq!(title_hits, ["led-0603", "led-0805", "led-3mm", "led-5mm"]);
+    assert_eq!(
+        title_hits,
+        [
+            "led-0603",
+            "led-0805",
+            "led-3mm",
+            "led-5mm",
+            "sk68xxmini-hs",
+        ]
+    );
     let rest: Vec<&str> = led
         .iter()
         .skip(title_hits.len())
