@@ -654,3 +654,209 @@ fn linked(path: &Path) -> Error {
         path.display()
     ))
 }
+
+/// The file at the root of a registry source that records each part and Block a release served.
+/// One line per item, `<id> <version> sha256:<hash>`, sorted by id. The hash is the SHA-256 of
+/// the record [`build`] writes for that id and version. It is empty until the first release,
+/// because nothing has been served, and `scripts/released.sh` rewrites it at a tag. A line stays
+/// once written, including when its folder is gone.
+pub const RELEASED: &str = "released.lock";
+
+struct RecordPin {
+    version: String,
+    /// SHA-256 of the record bytes, as `sha256:<hex>`, the index row's digest with that prefix.
+    hash: String,
+    /// `parts/<id>/part.jsonc` or `blocks/<id>/block.jsonc`, where a bump is written.
+    version_file: String,
+}
+
+fn record_hash(bytes: &[u8]) -> String {
+    format!("sha256:{}", sha256(bytes))
+}
+
+/// The record [`build`] would write for each part and Block in `src`, by id. An empty source
+/// has none, so a rewrite can keep lines when every folder is gone. The hash is of the record
+/// bytes, not the folder: the record already carries the folder hash, and a folder hash cannot
+/// see the part versions a Block's record names.
+fn record_pins(src: &Path) -> Result<BTreeMap<String, RecordPin>, Error> {
+    if folders(src, "parts")?.is_empty() && folders(src, "blocks")?.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let registry = build(src, None)?;
+    let mut pins = BTreeMap::new();
+    for item in &registry.items {
+        let name = &item.head().name;
+        let bytes = registry
+            .output
+            .get(&format!("{}.json", item.address()))
+            .expect("build stores each item's record");
+        pins.insert(
+            name.clone(),
+            RecordPin {
+                version: item.head().version.clone(),
+                hash: record_hash(bytes),
+                version_file: match item.kind() {
+                    Kind::Part => format!("parts/{name}/part.jsonc"),
+                    Kind::Block => format!("blocks/{name}/block.jsonc"),
+                },
+            },
+        );
+    }
+    Ok(pins)
+}
+
+/// `released.lock` for `src`. Each current item is added, or its line advanced when its version
+/// is newer. A line at the same version keeps the hash already recorded, so a same-version edit
+/// is not written over. A line whose folder is gone stays. A version never moves backwards.
+pub fn released_lock(src: &Path) -> Result<String, Error> {
+    let pins = record_pins(src)?;
+    let mut lines = match load_released(src)? {
+        Some(text) => parse_released(&text)?,
+        None => BTreeMap::new(),
+    };
+    for (id, pin) in &pins {
+        let parsed = Version::parse(&pin.version).ok_or_else(|| {
+            Error::Invalid(format!(
+                "`{id}` has version `{}`, and a version is three numbers, such as `0.1.0`",
+                pin.version
+            ))
+        })?;
+        if let Some(line) = lines.get(id) {
+            if parsed < line.version {
+                return Err(Error::Invalid(format!(
+                    "{id} is {}, and {RELEASED} records {}, which is newer. A released version does not go backwards",
+                    pin.version, line.spelled
+                )));
+            }
+            if parsed == line.version {
+                continue;
+            }
+        }
+        lines.insert(
+            id.clone(),
+            ReleasedLine {
+                version: parsed,
+                spelled: pin.version.clone(),
+                hash: pin.hash.clone(),
+            },
+        );
+    }
+    let mut text = String::new();
+    for (id, line) in &lines {
+        text.push_str(&format!("{id} {} {}\n", line.spelled, line.hash));
+    }
+    Ok(text)
+}
+
+struct ReleasedLine {
+    version: Version,
+    spelled: String,
+    hash: String,
+}
+
+/// The text of `src/released.lock`, or `None` when the file is missing.
+fn load_released(src: &Path) -> Result<Option<String>, Error> {
+    let path = src.join(RELEASED);
+    match fs::read_to_string(&path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(io_error(&path, error)),
+    }
+}
+
+/// The lines of `text`. A blank line is skipped.
+fn parse_released(text: &str) -> Result<BTreeMap<String, ReleasedLine>, Error> {
+    let mut lines = BTreeMap::new();
+    for (index, line) in text.lines().enumerate() {
+        if line.is_empty() {
+            continue;
+        }
+        let at = index + 1;
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let [id, version, hash] = fields.as_slice() else {
+            return Err(Error::Invalid(format!(
+                "{RELEASED}:{at} is `{line}`, and a line is `<id> <version> sha256:<hash>`"
+            )));
+        };
+        let Some(parsed) = Version::parse(version) else {
+            return Err(Error::Invalid(format!(
+                "{RELEASED}:{at} gives `{id}` the version `{version}`, and a version is three numbers, such as `0.1.0`"
+            )));
+        };
+        let hex = hash
+            .strip_prefix("sha256:")
+            .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()));
+        let lower = hash.bytes().all(|b| !b.is_ascii_uppercase());
+        if !hex || !lower {
+            return Err(Error::Invalid(format!(
+                "{RELEASED}:{at} gives `{id}` the hash `{hash}`, and a hash is `sha256:` and 64 lowercase hex digits"
+            )));
+        }
+        if lines
+            .insert(
+                (*id).to_string(),
+                ReleasedLine {
+                    version: parsed,
+                    spelled: (*version).to_string(),
+                    hash: (*hash).to_string(),
+                },
+            )
+            .is_some()
+        {
+            return Err(Error::Invalid(format!(
+                "{RELEASED} lists `{id}` twice, and it has one line per item"
+            )));
+        }
+    }
+    Ok(lines)
+}
+
+/// The lines of `src/released.lock`. A blank line is skipped. A missing file is an error, so
+/// deleting the file does not turn the check off.
+fn read_released(src: &Path) -> Result<BTreeMap<String, ReleasedLine>, Error> {
+    match load_released(src)? {
+        Some(text) => parse_released(&text),
+        None => Err(Error::Invalid(format!(
+            "{} is missing. It is empty until the first tag, and scripts/released.sh writes it when you tag a release",
+            src.join(RELEASED).display()
+        ))),
+    }
+}
+
+/// The items in `src` whose record differs from `released.lock` at the version that file
+/// records. The record is the one [`build`] writes, so this refuses a tree `--previous` would
+/// refuse. A line that names no folder is left, and an item with no line passes. A folder at a
+/// newer version than its line passes. The same version with another record asks for a bump.
+pub fn released_changes(src: &Path) -> Result<Vec<String>, Error> {
+    let lines = read_released(src)?;
+    let mut changes = Vec::new();
+    for (id, pin) in record_pins(src)? {
+        let Some(line) = lines.get(&id) else {
+            continue;
+        };
+        let version = Version::parse(&pin.version).ok_or_else(|| {
+            Error::Invalid(format!(
+                "`{id}` has version `{}`, and a version is three numbers, such as `0.1.0`",
+                pin.version
+            ))
+        })?;
+        if version > line.version {
+            continue;
+        }
+        if version == line.version && pin.hash == line.hash {
+            continue;
+        }
+        if version == line.version {
+            changes.push(format!(
+                "`{id}@{}` builds to a record other than the one {RELEASED} records. A served version never changes, so bump its version in {}",
+                pin.version, pin.version_file
+            ));
+        } else {
+            changes.push(format!(
+                "{id} is {}, and {RELEASED} records {}, which is newer. A released version does not go backwards",
+                pin.version, line.spelled
+            ));
+        }
+    }
+    Ok(changes)
+}

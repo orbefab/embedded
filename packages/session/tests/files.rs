@@ -1,6 +1,7 @@
 //! Each Block, read into a set of files in memory, reads, lints and runs its tests as it does
 //! from disk, and so does each Block installed into a project. Paths in memory start from the
-//! repo, so a disk path shows the same once the repo's folder is taken off it.
+//! repo, so a disk path shows the same once the repo's folder is taken off it. A Block is a
+//! folder under `blocks/` that holds `block.jsonc`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,18 +9,35 @@ use std::path::{Path, PathBuf};
 use orbe_session::{Files, test};
 use tempfile::TempDir;
 
-const BLOCKS: [&str; 4] = [
-    "nano-button-led",
-    "uno-button-led",
-    "nano-led-fade",
-    "nano-light-comparator",
-];
-
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
         .unwrap()
+}
+
+/// Every Block in `dir`, by folder name. A Block is a folder that holds `block.jsonc`.
+fn blocks_in(dir: &Path) -> Vec<String> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(dir).unwrap_or_else(|err| panic!("reading {}: {err}", dir.display()))
+    {
+        let path = entry.unwrap().path();
+        if path.join(orbe_scene::BLOCK).is_file() {
+            found.push(path.file_name().unwrap().to_str().unwrap().to_string());
+        }
+    }
+    found.sort();
+    assert!(
+        !found.is_empty(),
+        "no Block in {}: a Block is a folder with {}",
+        dir.display(),
+        orbe_scene::BLOCK
+    );
+    found
+}
+
+fn blocks() -> Vec<String> {
+    blocks_in(&repo().join("blocks"))
 }
 
 /// The Block's folder, by its paths from `base`.
@@ -55,11 +73,10 @@ fn walk(base: &Path, path: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
     }
 }
 
-/// What the reader and `orbe test` make of one Block, as text.
-fn outcome(files: &Files, base: &Path, block: &str) -> Vec<String> {
-    let dir = base.join("blocks").join(block);
-    let scene = dir.join("scene.jsonc");
-    let mut out = vec![
+/// What the reader makes of one Block, as text. This does not play the Block's tests.
+fn reading(files: &Files, base: &Path, block: &str) -> Vec<String> {
+    let scene = base.join("blocks").join(block).join("scene.jsonc");
+    vec![
         match orbe_scene::read(files, &scene) {
             Ok(netlist) => format!(
                 "{}\n{} {:?} {} {:?}\n{:?}\n{}",
@@ -74,10 +91,15 @@ fn outcome(files: &Files, base: &Path, block: &str) -> Vec<String> {
             Err(found) => format!("{found:#?}"),
         },
         format!("{:#?}", orbe_scene::lint(files, &scene)),
-    ];
-    let tests = repo().join("blocks").join(block).join("tests");
-    for entry in fs::read_dir(&tests).unwrap() {
-        let path = entry.unwrap().path();
+    ]
+}
+
+/// What `orbe test` makes of one Block. The test text is the Block's own, in the repo.
+/// A missing `tests/` directory contributes nothing, and so does an entry that is not a file.
+fn played(files: &Files, base: &Path, block: &str) -> Vec<String> {
+    let dir = base.join("blocks").join(block);
+    let mut out = Vec::new();
+    for path in test_files(block) {
         let file = dir.join("tests").join(path.file_name().unwrap());
         let report = test::run(
             files.clone(),
@@ -100,13 +122,38 @@ fn outcome(files: &Files, base: &Path, block: &str) -> Vec<String> {
     out
 }
 
-fn same_both_ways(base: &Path, block: &str) -> Vec<String> {
+/// Files directly in the Block's `tests/` folder, in sorted order. A missing directory is
+/// none, and so is an entry that is not a file.
+fn test_files(block: &str) -> Vec<PathBuf> {
+    let tests = repo().join("blocks").join(block).join("tests");
+    let Ok(entries) = fs::read_dir(&tests) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<_> = entries
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_file())
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// The read, the lint and the test run.
+fn outcome(files: &Files, base: &Path, block: &str) -> Vec<String> {
+    let mut out = reading(files, base, block);
+    out.extend(played(files, base, block));
+    out
+}
+
+/// Disk paths with `base/` taken off, so they match the paths memory stored.
+fn shown(base: &Path, lines: Vec<String>) -> Vec<String> {
     let prefix = format!("{}/", base.display());
-    let disk: Vec<String> = outcome(&Files::disk(), base, block)
+    lines
         .into_iter()
         .map(|text| text.replace(&prefix, ""))
-        .collect();
-    let memory = outcome(&memory(base, block), Path::new(""), block);
+        .collect()
+}
+
+fn same_lines(block: &str, disk: Vec<String>, memory: Vec<String>) -> Vec<String> {
     assert_eq!(disk.len(), memory.len(), "{block}");
     for (disk, memory) in disk.iter().zip(&memory) {
         assert_eq!(disk, memory, "{block}");
@@ -114,15 +161,59 @@ fn same_both_ways(base: &Path, block: &str) -> Vec<String> {
     disk
 }
 
+fn same_both_ways(base: &Path, block: &str) -> Vec<String> {
+    same_lines(
+        block,
+        shown(base, outcome(&Files::disk(), base, block)),
+        outcome(&memory(base, block), Path::new(""), block),
+    )
+}
+
+/// The read starts with `{` and the lint with `Ok(`. The first played line passed. A Block
+/// with no test file has nothing to play, and the assertion names that lack.
 fn reads_and_passes(found: &[String], block: &str) {
     assert!(found[0].starts_with('{'), "{block} reads: {}", found[0]);
     assert!(found[1].starts_with("Ok("), "{block} lints: {}", found[1]);
-    assert!(found[2].ends_with(".test passed"), "{block}: {found:#?}");
+    if test_files(block).is_empty() {
+        assert!(
+            found.get(2).is_none(),
+            "{block} has no test file, so there is no play to compare: {found:#?}"
+        );
+        return;
+    }
+    assert!(
+        found
+            .get(2)
+            .is_some_and(|line| line.ends_with(".test passed")),
+        "{block}: {found:#?}"
+    );
+}
+
+#[test]
+#[should_panic(expected = "no Block in")]
+fn a_directory_with_no_block_is_an_error() {
+    let tmp = TempDir::new().unwrap();
+    fs::create_dir(tmp.path().join("skip")).unwrap();
+    fs::write(tmp.path().join("readme.txt"), "hi").unwrap();
+    blocks_in(tmp.path());
+}
+
+#[test]
+fn each_folder_with_block_jsonc_is_a_block() {
+    let tmp = TempDir::new().unwrap();
+    for name in ["zeta", "alpha"] {
+        fs::create_dir(tmp.path().join(name)).unwrap();
+        fs::write(tmp.path().join(name).join(orbe_scene::BLOCK), "{}\n").unwrap();
+    }
+    fs::create_dir(tmp.path().join("skip")).unwrap();
+    fs::write(tmp.path().join("loose.txt"), "no").unwrap();
+    assert_eq!(blocks_in(tmp.path()), ["alpha", "zeta"]);
 }
 
 #[test]
 fn each_block_reads_and_runs_the_same_from_memory() {
-    for block in BLOCKS {
+    for block in blocks() {
+        let block = block.as_str();
         reads_and_passes(&same_both_ways(&repo(), block), block);
     }
 }
@@ -143,7 +234,8 @@ fn given_catalog(skip: &str) -> Vec<(String, Vec<u8>)> {
 /// the catalog built in.
 #[test]
 fn each_block_reads_and_runs_the_same_from_a_given_catalog() {
-    for block in BLOCKS {
+    for block in blocks() {
+        let block = block.as_str();
         let built_in = outcome(&memory(&repo(), block), Path::new(""), block);
         let given = memory(&repo(), block).with_catalog(given_catalog(""));
         assert_eq!(outcome(&given, Path::new(""), block), built_in, "{block}");
@@ -166,11 +258,12 @@ fn a_given_catalog_without_a_part_finds_it_missing() {
 fn each_installed_block_reads_and_runs_the_same_from_memory() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path().canonicalize().unwrap();
-    for block in BLOCKS {
+    for block in blocks() {
+        let block = block.as_str();
         install(&base, block);
         let found = same_both_ways(&base, block);
         reads_and_passes(&found, block);
-        let ours = same_both_ways(&repo(), block);
+        let ours = shown(&repo(), reading(&Files::disk(), &repo(), block));
         let netlist = |found: &[String]| found[0].rsplit_once('\n').unwrap().0.to_string();
         assert_eq!(
             netlist(&found),
@@ -180,31 +273,187 @@ fn each_installed_block_reads_and_runs_the_same_from_memory() {
     }
 }
 
-/// A missing part, edited and extra files in a sealed copy, and no firmware, each found the same
-/// way in memory as on disk.
+/// Part folders `install` wrote, sorted by folder name. A directory with no `part.jsonc` is not one.
+fn part_folders(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir.join("parts")) else {
+        return Vec::new();
+    };
+    let mut found: Vec<_> = entries
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.join("part.jsonc").is_file())
+        .collect();
+    found.sort();
+    found
+}
+
+/// Every file under `dir`, in sorted order.
+fn files_in(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(current) = pending.pop() {
+        for entry in fs::read_dir(&current).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.is_file() {
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// Appends a byte to one file of `part` and writes an extra file beside it. The file is the
+/// first in sorted order that is not `part.jsonc`, so the part still parses. When `part.jsonc`
+/// is the only file, the extra file is the whole edit and `part.jsonc` is left as it is. The
+/// reader decides whether the edit is `PartModified`. Returns whether the part had a file.
+fn edit_part(part: &Path) -> bool {
+    let files = files_in(part);
+    if files.is_empty() {
+        return false;
+    }
+    if let Some(file) = files
+        .iter()
+        .find(|path| path.file_name().is_some_and(|name| name != "part.jsonc"))
+    {
+        let mut bytes = fs::read(file).unwrap();
+        bytes.push(0);
+        fs::write(file, bytes).unwrap();
+    }
+    fs::write(part.join("notes.txt"), "mine").unwrap();
+    true
+}
+
+/// Removes one installed part, edits a file of a part the reader reports as `PartModified`,
+/// and removes `firmware/` when `install` wrote it. Each flag is whether that break can
+/// produce its finding. `lack` says why it cannot.
+fn break_install(dir: &Path) -> [(&'static str, bool, &'static str); 3] {
+    let parts = part_folders(dir);
+    let missing = if let Some(part) = parts.first() {
+        fs::remove_dir_all(part).unwrap();
+        true
+    } else {
+        false
+    };
+    let (modified, modified_lack) = edit_until_modified(dir, &parts);
+    let firmware = dir.join("firmware");
+    let firmware_missing = if firmware.is_dir() {
+        fs::remove_dir_all(&firmware).unwrap();
+        true
+    } else {
+        false
+    };
+    [
+        ("PartMissing", missing, "no part folder"),
+        ("PartModified", modified, modified_lack),
+        ("FirmwareMissing", firmware_missing, "no firmware folder"),
+    ]
+}
+
+fn finds(block: &str, reading: &str, code: &str, present: bool, lack: &str) {
+    if present {
+        assert!(reading.contains(code), "{block} finds {code}: {reading}");
+    } else {
+        assert!(
+            !reading.contains(code),
+            "{block} has {lack}, so it does not find {code}: {reading}"
+        );
+    }
+}
+
+/// A missing part, an edited file and an extra file in a part the reader reports as
+/// `PartModified`, and no firmware, each found the same way in memory as on disk, and so is
+/// the test transcript. The part removed is the first folder `install` wrote. The part edited
+/// is the first remaining folder for which the reader reports `PartModified`; a folder it does
+/// not is put back and the next is tried. A Block with no part folder, a single part, no such
+/// folder, or no firmware folder says so, and the read still has to show every finding that
+/// Block can produce. The transcript is the Block's own test file: its passed or failed line,
+/// each source line's number, and every reply. The read has already failed, so the run does
+/// not start.
 #[test]
 fn a_broken_install_finds_the_same_from_memory() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path().canonicalize().unwrap();
-    for block in BLOCKS {
+    for block in blocks() {
+        let block = block.as_str();
         let dir = install(&base, block);
-        fs::remove_dir_all(dir.join("parts/resistor-0603")).unwrap();
-        fs::remove_dir_all(dir.join("parts/resistor-axial")).unwrap();
-        let glb = dir.join("parts/led-5mm/led-5mm.glb");
-        let mut bytes = fs::read(&glb).unwrap();
-        bytes.push(0);
-        fs::write(&glb, bytes).unwrap();
-        fs::write(dir.join("parts/led-5mm/notes.txt"), "mine").unwrap();
-        fs::remove_dir_all(dir.join("firmware")).unwrap();
+        let broken = break_install(&dir);
         let found = same_both_ways(&base, block);
-        for what in ["PartMissing", "PartModified", "FirmwareMissing"] {
-            assert!(
-                found[0].contains(what),
-                "{block} finds {what}: {}",
-                found[0]
-            );
+        for (code, present, lack) in broken {
+            finds(block, &found[0], code, present, lack);
         }
     }
+}
+
+fn folder_name(path: &Path) -> &str {
+    path.file_name().unwrap().to_str().unwrap()
+}
+
+/// Every file under `part`, so an edit the reader does not report can be put back.
+fn saved_files(part: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    files_in(part)
+        .into_iter()
+        .map(|path| {
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect()
+}
+
+fn put_back(part: &Path, saved: &[(PathBuf, Vec<u8>)]) {
+    for path in files_in(part) {
+        if !saved.iter().any(|(kept, _)| kept == &path) {
+            fs::remove_file(path).unwrap();
+        }
+    }
+    for (path, bytes) in saved {
+        fs::write(path, bytes).unwrap();
+    }
+}
+
+/// The reader reports `PartModified` for `id` in this installed project.
+fn reader_reports_modified(dir: &Path, id: &str) -> bool {
+    let scene = dir.join("scene.jsonc");
+    let Err(found) = orbe_scene::read(&Files::disk(), &scene) else {
+        return false;
+    };
+    let named = format!("`{id}`");
+    found
+        .iter()
+        .any(|d| d.code == orbe_scene::Code::PartModified && d.message.contains(&named))
+}
+
+/// Edits the first remaining folder for which the reader reports `PartModified`. The folders
+/// are the ones `install` wrote, in sorted order, after the one this test removed. A folder
+/// the reader does not report that way is put back, and the next is tried.
+fn edit_until_modified(dir: &Path, parts: &[PathBuf]) -> (bool, &'static str) {
+    if parts.is_empty() {
+        return (false, "no part folder");
+    }
+    if parts.len() == 1 {
+        return (false, "a single part");
+    }
+    let mut edited = false;
+    for part in parts.iter().skip(1) {
+        let saved = saved_files(part);
+        if !edit_part(part) {
+            continue;
+        }
+        edited = true;
+        if reader_reports_modified(dir, folder_name(part)) {
+            return (true, "");
+        }
+        put_back(part, &saved);
+    }
+    (
+        false,
+        if edited {
+            "no sealed part"
+        } else {
+            "no file in the sealed part"
+        },
+    )
 }
 
 fn messages(files: &Files, scene: &Path) -> Vec<String> {

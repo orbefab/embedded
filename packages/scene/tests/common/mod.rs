@@ -1,10 +1,12 @@
 //! A temporary project built from a fixture, as `orbe add` would leave it: the fixture's own
-//! files, a copy of each catalog part its `parts.lock` lists, and the firmware build output.
+//! files, a copy of every catalog part, and the firmware build output. `parts.lock` is written
+//! from those copies, so a part change does not rewrite a committed lock.
 
 #![allow(dead_code)]
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use orbe_scene::{REGISTRY, folder_hash};
 use tempfile::TempDir;
@@ -38,7 +40,7 @@ pub fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
-/// The ids a fixture's `parts.lock` lists.
+/// The ids a project's `parts.lock` lists.
 pub fn locked_ids(project: &Path) -> Vec<String> {
     fs::read_to_string(project.join("parts.lock"))
         .unwrap()
@@ -50,28 +52,52 @@ pub fn locked_ids(project: &Path) -> Vec<String> {
 
 /// The `parts.lock` line `orbe add` will write for the catalog copy at `parts/<id>/`.
 pub fn lock_line(project: &Path, id: &str) -> String {
-    let folder = project.join("parts").join(id);
+    line_for(&project.join("parts").join(id), id)
+}
+
+fn line_for(folder: &Path, id: &str) -> String {
     let text = fs::read_to_string(folder.join("part.jsonc")).unwrap();
     let version = text
         .split("\"version\": \"")
         .nth(1)
         .and_then(|s| s.split('"').next())
         .unwrap();
-    format!(
-        "{id} {version} {REGISTRY} {}",
-        folder_hash(&folder).unwrap()
-    )
+    format!("{id} {version} {REGISTRY} {}", folder_hash(folder).unwrap())
+}
+
+/// The catalog's `parts.lock` text. A process hashes each part once.
+fn catalog_lock() -> &'static str {
+    static LOCK: OnceLock<String> = OnceLock::new();
+    LOCK.get_or_init(|| compute_catalog_lock(&repo().join("parts")))
+}
+
+fn compute_catalog_lock(catalog: &Path) -> String {
+    let mut ids: Vec<String> = fs::read_dir(catalog)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|id| catalog.join(id).join("part.jsonc").is_file())
+        .collect();
+    ids.sort();
+    let mut lines = String::new();
+    for id in &ids {
+        lines.push_str(&line_for(&catalog.join(id), id));
+        lines.push('\n');
+    }
+    lines
 }
 
 pub fn project(name: &str) -> TempDir {
     let dir = tempfile::tempdir().unwrap();
     copy_dir(&fixture(name), dir.path());
-    for id in locked_ids(dir.path()) {
-        copy_dir(
-            &repo().join("parts").join(&id),
-            &dir.path().join("parts").join(&id),
-        );
+    let catalog = repo().join("parts");
+    let lock = catalog_lock();
+    for id in lock
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+    {
+        copy_dir(&catalog.join(id), &dir.path().join("parts").join(id));
     }
+    fs::write(dir.path().join("parts.lock"), lock).unwrap();
     fs::create_dir_all(dir.path().join("build")).unwrap();
     fs::copy(firmware(), dir.path().join("build/button.ino.hex")).unwrap();
     dir
