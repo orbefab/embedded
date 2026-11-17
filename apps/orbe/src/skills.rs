@@ -223,10 +223,10 @@ fn parts(catalog: &[Card]) -> String {
             out.push_str(&format!("- `{}`: {}.\n", param.name, param_sentence(param)));
         }
         if let (Some(lit), Some(dim)) = (&part.lit, &part.dim) {
+            let lit_above = si_amount(lit.above, &lit.unit);
+            let dim_above = si_amount(dim.above, &dim.unit);
             out.push_str(&format!(
-                "- It reads `lit` while its average `i` over {BRIGHTNESS_WINDOW} is above {}, and `dim` while that average is above {}. `brightness` is that average.\n",
-                si_amount(lit.above, &lit.unit),
-                si_amount(dim.above, &dim.unit),
+                "- It reads `lit` while its average `i` over {BRIGHTNESS_WINDOW} is above {lit_above}, `dim` while that average is above {dim_above} and at or below {lit_above}, and `off` at or below {dim_above}. `brightness` is that average.\n",
             ));
         }
         let warns: Vec<String> = part
@@ -851,7 +851,7 @@ mod tests {
         assert!(text.contains("- `resistance`: a value in ohm above 0, required."));
         assert!(text.contains("- `position`: a number above 0 and below 1, 0.5 by default."));
         assert!(text.contains(
-            "- It reads `lit` while its average `i` over 20ms is above 2 mA, and `dim` while that average is above 100 uA. `brightness` is that average."
+            "- It reads `lit` while its average `i` over 20ms is above 2 mA, `dim` while that average is above 100 uA and at or below 2 mA, and `off` at or below 100 uA. `brightness` is that average."
         ));
         assert!(
             text.contains(

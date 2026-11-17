@@ -158,10 +158,16 @@ pub fn text(card: &Card) -> String {
             ));
         }
         if let Some(dim) = &card.dim {
-            lines.push(format!(
-                "  dim while that average is above {}",
-                si_amount(dim.above, &dim.unit)
-            ));
+            let above = si_amount(dim.above, &dim.unit);
+            if let Some(lit) = &card.lit {
+                lines.push(format!(
+                    "  dim while that average is above {above} and at or below {}",
+                    si_amount(lit.above, &lit.unit)
+                ));
+            } else {
+                lines.push(format!("  dim while that average is above {above}"));
+            }
+            lines.push(format!("  off while that average is at or below {above}"));
         }
     }
     if card.pressable {

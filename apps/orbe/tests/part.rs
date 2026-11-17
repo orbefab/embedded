@@ -72,7 +72,7 @@ fn a_part_prints_where_to_buy_it_and_a_part_without_buy_says_none() {
     );
     assert!(
         stdout.contains(
-            "\nbrightness\n  the average i over 20ms\n  lit while that average is above 2 mA\n  dim while that average is above 100 uA\n"
+            "\nbrightness\n  the average i over 20ms\n  lit while that average is above 2 mA\n  dim while that average is above 100 uA and at or below 2 mA\n  off while that average is at or below 100 uA\n"
         ),
         "{stdout}"
     );
