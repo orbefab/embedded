@@ -29,6 +29,12 @@ pub enum Code {
     PartMissing,
     FirmwareMissing,
     PartModified,
+    /// The copy matches its lock line and is an older version than this binary carries.
+    /// A run reads the version in the binary, so this stops check, open and test.
+    PartOutdated,
+    /// The copy matches its lock line and is a newer version than this binary carries.
+    /// `--overwrite` leaves it, so the hint names no `orbe add`.
+    PartNewer,
     /// A part file's `format` is older or newer than the formats this binary reads.
     PartFormat,
     /// A project file that exists could not be read.
@@ -75,6 +81,8 @@ impl Code {
             Code::PartMissing => "part_missing",
             Code::FirmwareMissing => "firmware_missing",
             Code::PartModified => "part_modified",
+            Code::PartOutdated => "part_outdated",
+            Code::PartNewer => "part_newer",
             Code::PartFormat => "part_format",
             Code::Io => "io_error",
             Code::Engine(code) => code,

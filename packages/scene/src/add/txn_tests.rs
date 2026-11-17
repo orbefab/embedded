@@ -1903,7 +1903,12 @@ fn diff_names_the_steps_the_next_add_takes_before_it_stops() {
         ..ask(&["resistor-0603"], false)
     };
     let preview = text(&run(Some(dir.path()), &request).unwrap());
-    let command = format!("{} resistor-0603", project::add_command(Some(dir.path())));
+    let command = project::add_writing(
+        &project::add_command(Some(dir.path())),
+        &["resistor-0603".to_string()],
+        false,
+    )
+    .expect("the id is named");
     assert!(
         preview.contains(&format!(
             "the next `{command}` without --diff names what it cannot prove the add made, and stops"
@@ -1915,7 +1920,12 @@ fn diff_names_the_steps_the_next_add_takes_before_it_stops() {
     fs::remove_dir_all(dir.path().join("parts/led-5mm")).unwrap();
     edit(dir.path(), "resistor-axial");
     let preview = text(&run(Some(dir.path()), &request).unwrap());
-    let command = format!("{} resistor-0603", project::add_command(Some(dir.path())));
+    let command = project::add_writing(
+        &project::add_command(Some(dir.path())),
+        &["resistor-0603".to_string()],
+        false,
+    )
+    .expect("the id is named");
     assert!(
         preview.contains(&format!(
             "the next `{command}` without --diff puts back parts/led-5mm, then names what it cannot prove the add made, and stops"

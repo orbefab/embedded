@@ -51,20 +51,24 @@ fn find(id: &str) -> Option<Block> {
 }
 
 /// The Block a request names, or the usage error when it names one with anything else.
-pub(super) fn named(request: &Request) -> Option<Result<Block, String>> {
+/// `dir` is the folder `-C` named, so the hint repeats it.
+pub(super) fn named(dir: Option<&Path>, request: &Request) -> Option<Result<Block, String>> {
     let (raw, block) = request.ids.iter().find_map(|raw| {
         let id = raw.split('@').next().unwrap_or(raw);
         Some((raw, find(id)?))
     })?;
     let alone = request.ids.len() == 1 && !request.overwrite && !request.diff && !request.relock;
     Some(if raw != block.id {
+        let command =
+            project::add_writing(&project::add_command(dir), &[block.id.to_string()], false)
+                .expect("a block id");
         Err(format!(
-            "`{}` is a Block, and orbe installs the one version of it built in. run `orbe add {}`",
-            block.id, block.id
+            "`{}` is a Block, and orbe installs the one version of it built in. run `{command}`",
+            block.id
         ))
     } else if !alone {
         Err(format!(
-            "`{}` is a Block. `orbe add` installs a Block on its own, with no other id and no --overwrite, --diff or --relock",
+            "`{}` is a Block. orbe installs a Block on its own, with no other id and no --overwrite, --diff or --relock",
             block.id
         ))
     } else {
@@ -98,7 +102,10 @@ pub(super) fn install(
     }
     let root = dir.unwrap_or(Path::new("."));
     let add = project::add_command(dir);
-    let again = Again::new(dir, format!("{add} {}", block.id));
+    let again = Again::new(
+        dir,
+        project::add_writing(&add, &[block.id.to_string()], false).expect("a block id"),
+    );
     let opened = Folder::open_chosen(root).map_err(|error| io_at(root, error))?;
     let mut present = BTreeSet::new();
     // The scene goes first, so a project that has one hears `scene_exists`, whatever else differs.
@@ -187,8 +194,14 @@ impl Block {
 /// since two scenes' names and wires would collide, so the way out is an empty folder.
 fn in_the_way(block: &Block, rel: &str, again: &Again) -> Refusal {
     let fresh = format!(
-        "mkdir {id} && orbe add -C {id} {id}",
-        id = project::shell_word(block.id)
+        "mkdir {id} && {cmd}",
+        id = project::shell_word(block.id),
+        cmd = project::add_writing(
+            &project::add_command(Some(Path::new(block.id))),
+            &[block.id.to_string()],
+            false,
+        )
+        .expect("a block id"),
     );
     if rel == "scene.jsonc" {
         return Refusal {

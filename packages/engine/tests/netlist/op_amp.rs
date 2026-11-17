@@ -37,7 +37,7 @@ fn edited(field: &str, value: &str, unit: &str) -> String {
 }
 
 #[test]
-fn an_op_amp_parses_its_nine_fields_with_no_quantities_or_ratings() {
+fn an_op_amp_parses_its_ten_fields_with_no_quantities_or_ratings() {
     let netlist = netlist::parse(op_amp().as_bytes()).unwrap();
     let model = &netlist
         .parts()
@@ -61,11 +61,14 @@ fn an_op_amp_parses_its_nine_fields_with_no_quantities_or_ratings() {
         &op.output_resistance,
         &op.short_circuit_current,
         &op.supply_current,
+        &op.input_headroom,
     ]
     .map(|value| value.si.get());
     assert_eq!(
         fields,
-        [1e6, 1e6, 1e5, 1.5e-8, 0.0025, 0.051, 30.0, 0.04, 1.05e-4]
+        [
+            1e6, 1e6, 1e5, 1.5e-8, 0.0025, 0.051, 30.0, 0.04, 1.05e-4, 0.0
+        ]
     );
 }
 
@@ -83,6 +86,7 @@ fn each_field_rejects_a_bad_value_and_the_wrong_unit() {
         ("swing_high", "V", "mV", non_negative),
         ("swing_low", "V", "mV", non_negative),
         ("supply_current", "A", "uA", non_negative),
+        ("input_headroom", "V", "mV", non_negative),
     ];
     for (field, unit, wrong, rejects) in cases {
         assert_eq!(
@@ -103,13 +107,14 @@ fn each_field_rejects_a_bad_value_and_the_wrong_unit() {
         "swing_high",
         "swing_low",
         "supply_current",
+        "input_headroom",
     ] {
         netlist::parse(
             edited(
                 field,
                 "0.0",
                 match field {
-                    "swing_high" | "swing_low" => "V",
+                    "swing_high" | "swing_low" | "input_headroom" => "V",
                     _ => "A",
                 },
             )

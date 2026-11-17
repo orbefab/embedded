@@ -273,7 +273,7 @@ impl Scene {
 
 /// Checks `format`. A file in another format is not read further. `part` is the part's label
 /// when the file is a part; a scene passes `None` and keeps [`Code::Format`].
-fn format_ok(file: FileId, root: &Node, out: &mut Findings, part: Option<&str>) -> bool {
+fn format_ok(file: FileId, root: &Node, out: &mut Findings, part: Option<&str>, add: &str) -> bool {
     let reads = FORMATS
         .iter()
         .map(u32::to_string)
@@ -295,7 +295,7 @@ fn format_ok(file: FileId, root: &Node, out: &mut Findings, part: Option<&str>) 
     {
         return true;
     }
-    let (message, hint) = format_refusal(node, part, &reads);
+    let (message, hint) = format_refusal(node, part, &reads, add);
     report_format(out, part, node.span, message, hint);
     false
 }
@@ -322,8 +322,9 @@ fn report_format(
 /// A label that is not an id was opened by path. That file is the user's. `orbe add` writes
 /// `parts/<id>/`, so it would replace a catalog copy, or fail `unknown_part`, and leave this
 /// file at the old format. The hint tells them to update the file, or to point the scene at
-/// the catalog part when the file is a copy of one.
-fn format_refusal(node: &Node, part: Option<&str>, reads: &str) -> (String, String) {
+/// the catalog part when the file is a copy of one. A catalog id is named in the `orbe add`
+/// the other hints print, so the folder and the quoting match.
+fn format_refusal(node: &Node, part: Option<&str>, reads: &str, add: &str) -> (String, String) {
     let plain = (
         format!("format {} is not one this binary reads", node.to_value()),
         format!("this binary reads format {reads}"),
@@ -343,7 +344,9 @@ fn format_refusal(node: &Node, part: Option<&str>, reads: &str) -> (String, Stri
         };
         let message = format!("{label} is written for an older orbe");
         let hint = if is_id(label) {
-            format!("run `orbe add {label} --overwrite`")
+            let command = crate::project::add_writing(add, &[label.to_string()], true)
+                .expect("the id is named");
+            format!("run `{command}`")
         } else {
             format!(
                 "update this file to format {max}, including its model. if it copies a catalog part, point the scene at that id instead of this path"
@@ -401,7 +404,7 @@ pub(crate) fn decode_scene(
         schema(out, root, "an object");
         return None;
     };
-    if !format_ok(file, root, out, None) {
+    if !format_ok(file, root, out, None, "") {
         return None;
     }
     let mut scene = Scene {
@@ -444,12 +447,13 @@ pub(crate) fn decode_part(
     label: String,
     root: &Node,
     out: &mut Findings,
+    add: &str,
 ) -> Option<Part> {
     let Some(props) = root.props() else {
         schema(out, root, "an object");
         return None;
     };
-    if !format_ok(file, root, out, Some(&label)) {
+    if !format_ok(file, root, out, Some(&label), add) {
         return None;
     }
     let mut part = Part {

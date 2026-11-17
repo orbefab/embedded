@@ -204,6 +204,33 @@ impl Ratings {
                 currents: vec![0.0; outputs + 2],
             });
         }
+        // An input above `vcc - input_headroom` is the same window as a chip pin above its
+        // ceiling. The differential stage does not read the field. Zero rates no ceiling:
+        // the law examples use that, and a step can carry a node a little past the supply.
+        for (_, part) in netlist.parts() {
+            let Model::OpAmp(op) = &part.model else {
+                continue;
+            };
+            if op.input_headroom.si.get() == 0.0 {
+                continue;
+            }
+            let pin =
+                |name: &str| Ref::Pin(part.name.clone(), Name::new(name).expect("a pin name"));
+            let (inputs, vcc, gnd) = op.common_mode();
+            for (name, net) in inputs {
+                windows.push(Window {
+                    pin: pin(name),
+                    column: columns.net(net),
+                    vcc: columns.net(vcc),
+                    gnd: columns.net(gnd),
+                    below: None,
+                    above: Some(Ceiling::OverSupply(-op.input_headroom.si.get())),
+                    worst: 0.0,
+                    over: false,
+                    excursion: None,
+                });
+            }
+        }
         Ratings {
             timing,
             watches,

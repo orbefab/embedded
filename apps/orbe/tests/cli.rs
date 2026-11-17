@@ -81,6 +81,51 @@ fn run_printed(cwd: &Path, command: &str) -> (Output, String, String) {
     orbe_in(cwd, &words[1..])
 }
 
+/// Rewrites `id`'s lock line so it matches the folder now on disk.
+fn relock(project: &Path, id: &str) {
+    let lock = project.join("parts.lock");
+    let lines: String = fs::read_to_string(&lock)
+        .unwrap()
+        .lines()
+        .map(|line| {
+            if line.split_whitespace().next() == Some(id) {
+                common::lock_line(project, id)
+            } else {
+                line.to_string()
+            }
+        })
+        .map(|line| format!("{line}\n"))
+        .collect();
+    fs::write(&lock, lines).unwrap();
+}
+
+/// Writes `title` into one copy and rewrites its lock line so the copy matches that line.
+fn retitle(project: &Path, id: &str, title: &str) {
+    let path = project.join("parts").join(id).join("part.jsonc");
+    let text = fs::read_to_string(&path).unwrap();
+    let marker = "\"title\": \"";
+    let start = text.find(marker).expect("title") + marker.len();
+    let end = start + text[start..].find('"').expect("title end");
+    let edited = format!("{}{title}{}", &text[..start], &text[end..]);
+    assert_ne!(text, edited, "{id}");
+    fs::write(&path, edited).unwrap();
+    relock(project, id);
+}
+
+/// Writes `version` into one copy and rewrites its lock line so the copy matches that line.
+fn hold(project: &Path, id: &str, version: &str) {
+    let file = project.join("parts").join(id).join("part.jsonc");
+    let text = fs::read_to_string(&file).unwrap();
+    let edited = text.replacen(
+        "\"version\": \"0.1.0\"",
+        &format!("\"version\": \"{version}\""),
+        1,
+    );
+    assert_ne!(text, edited, "{id}");
+    fs::write(&file, edited).unwrap();
+    relock(project, id);
+}
+
 /// The one `orbe add` command in a `part_missing` hint. Every hint names the same command.
 fn add_command(stdout: &str) -> String {
     let commands: Vec<String> = stdout
@@ -742,6 +787,318 @@ fn every_part_missing_and_part_modified_hint_makes_the_next_check_pass() {
 }
 
 #[test]
+fn an_outdated_copy_names_one_add_and_a_hand_edit_stays_modified() {
+    let project = common::project("nano-button");
+    hold(project.path(), "led-5mm", "0.0.9");
+    hold(project.path(), "resistor-axial", "0.0.8");
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(stdout.contains("error[part_outdated]"), "{stdout}");
+    assert!(
+        stdout.contains("this orbe carries `led-5mm@0.1.0` and the project holds `led-5mm@0.0.9`"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "this orbe carries `resistor-axial@0.1.0` and the project holds `resistor-axial@0.0.8`"
+        ),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("part_modified"), "{stdout}");
+    let command = add_command(&stdout);
+    assert_eq!(command, "orbe add led-5mm resistor-axial --overwrite");
+    let (output, out, err) = run_printed(project.path(), &command);
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+
+    let path = project.path().join("parts/led-5mm/part.jsonc");
+    let text = fs::read_to_string(&path).unwrap();
+    let edited = text.replace("5 mm LED", "5 mm LED edited");
+    assert_ne!(text, edited);
+    fs::write(&path, edited).unwrap();
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(stdout.contains("error[part_modified]"), "{stdout}");
+    assert!(
+        stdout.contains("differs from `led-5mm@0.1.0` in `title`"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("part_outdated"), "{stdout}");
+}
+
+#[test]
+fn check_json_reports_part_outdated() {
+    let project = common::project("nano-button");
+    hold(project.path(), "led-5mm", "0.0.9");
+    hold(project.path(), "tactile-switch-6mm", "0.0.7");
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc", "--json"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["error"]["code"], "scene_invalid");
+    let diagnostics = reply["data"]["diagnostics"].as_array().unwrap();
+    assert_eq!(diagnostics.len(), 2, "{stdout}");
+    assert!(
+        diagnostics.iter().all(|d| d["code"] == "part_outdated"),
+        "{stdout}"
+    );
+    let hint = diagnostics[0]["hint"].as_str().unwrap();
+    assert!(diagnostics.iter().all(|d| d["hint"] == hint), "{stdout}");
+    assert!(
+        hint.contains("orbe add led-5mm tactile-switch-6mm --overwrite"),
+        "{hint}"
+    );
+}
+
+#[test]
+fn a_newer_major_is_not_pinned_into_an_overwrite() {
+    let project = common::project("nano-button");
+    hold(project.path(), "led-5mm", "1.0.0");
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(stdout.contains("error[part_newer]"), "{stdout}");
+    assert!(
+        stdout.contains("this project holds `led-5mm@1.0.0` and this orbe carries `led-5mm@0.1.0`"),
+        "{stdout}"
+    );
+    assert_eq!(
+        stdout
+            .lines()
+            .find(|line| line.contains("hint:"))
+            .unwrap()
+            .trim(),
+        "hint: this project needs a newer orbe"
+    );
+    assert!(!stdout.contains("orbe add"), "{stdout}");
+    assert!(!stdout.contains("led-5mm@0.1.0 --overwrite"), "{stdout}");
+    let text = fs::read_to_string(project.path().join("parts/led-5mm/part.jsonc")).unwrap();
+    assert!(text.contains("\"version\": \"1.0.0\""), "{text}");
+}
+
+#[test]
+fn a_newer_copy_is_not_an_overwrite() {
+    let project = common::project("nano-button");
+    hold(project.path(), "led-5mm", "0.2.0");
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc", "--json"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
+    let diagnostics = reply["data"]["diagnostics"].as_array().unwrap();
+    assert_eq!(diagnostics.len(), 1, "{stdout}");
+    assert_eq!(diagnostics[0]["code"], "part_newer");
+    assert_eq!(
+        diagnostics[0]["message"],
+        "this project holds `led-5mm@0.2.0` and this orbe carries `led-5mm@0.1.0`"
+    );
+    assert_eq!(diagnostics[0]["hint"], "this project needs a newer orbe");
+    assert!(!stdout.contains("orbe add"), "{stdout}");
+    let text = fs::read_to_string(project.path().join("parts/led-5mm/part.jsonc")).unwrap();
+    assert!(text.contains("\"version\": \"0.2.0\""), "{text}");
+}
+
+#[test]
+fn a_mix_of_older_and_newer_overwrites_only_the_older() {
+    let project = common::project("nano-button");
+    hold(project.path(), "led-5mm", "1.0.0");
+    hold(project.path(), "resistor-axial", "0.0.8");
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(stdout.contains("error[part_outdated]"), "{stdout}");
+    assert!(stdout.contains("error[part_newer]"), "{stdout}");
+    let command = add_command(&stdout);
+    assert_eq!(command, "orbe add resistor-axial --overwrite");
+    let (output, out, err) = run_printed(project.path(), &command);
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    assert!(!out.contains("led-5mm"), "the newer id was written: {out}");
+    let led = fs::read_to_string(project.path().join("parts/led-5mm/part.jsonc")).unwrap();
+    assert!(led.contains("\"version\": \"1.0.0\""), "{led}");
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(stdout.contains("error[part_newer]"), "{stdout}");
+    assert!(!stdout.contains("part_outdated"), "{stdout}");
+    assert!(!stdout.contains("orbe add"), "{stdout}");
+}
+
+#[test]
+fn an_overwrite_of_an_older_board_leaves_a_newer_child() {
+    for (version, title) in [("0.2.0", "NEWER CHIP"), ("1.0.0", "MAJOR CHIP")] {
+        let project = common::project("nano-button");
+        let root = project.path();
+        hold(root, "nano-board", "0.0.9");
+        hold(root, "atmega328p-tqfp32", version);
+        retitle(root, "atmega328p-tqfp32", title);
+        let chip_before = fs::read(root.join("parts/atmega328p-tqfp32/part.jsonc")).unwrap();
+        let lock_before = fs::read_to_string(root.join("parts.lock")).unwrap();
+        let chip_line = lock_before
+            .lines()
+            .find(|line| line.starts_with("atmega328p-tqfp32 "))
+            .unwrap()
+            .to_string();
+
+        let (output, stdout, _) = orbe_in(root, &["check", "scene.jsonc"]);
+        assert_eq!(output.status.code(), Some(1), "{version}: {stdout}");
+        assert!(stdout.contains("error[part_newer]"), "{version}: {stdout}");
+        assert!(
+            stdout.contains("error[part_outdated]"),
+            "{version}: {stdout}"
+        );
+        let command = add_command(&stdout);
+        assert_eq!(
+            command, "orbe add nano-board --overwrite",
+            "{version}: {stdout}"
+        );
+        assert!(!command.contains("atmega328p-tqfp32"), "{command}");
+
+        let (output, out, err) = run_printed(root, &command);
+        assert_eq!(output.status.code(), Some(0), "{version}: {out}{err}");
+        assert!(
+            out.contains("wrote parts/nano-board 0.1.0, replacing 0.0.9"),
+            "{version}: {out}"
+        );
+        assert!(
+            !out.contains("wrote parts/atmega328p-tqfp32")
+                && !out.contains("skipped parts/atmega328p-tqfp32"),
+            "{version}: {out}"
+        );
+        assert!(
+            out.contains(&format!(
+                "left `atmega328p-tqfp32` at {version}. this project needs a newer orbe for it"
+            )),
+            "{version}: {out}"
+        );
+        assert!(!out.contains("atmega328p-tqfp32@"), "{version}: {out}");
+        assert_eq!(
+            fs::read(root.join("parts/atmega328p-tqfp32/part.jsonc")).unwrap(),
+            chip_before,
+            "{version}"
+        );
+        let lock = fs::read_to_string(root.join("parts.lock")).unwrap();
+        assert!(
+            lock.lines().any(|line| line == chip_line),
+            "{version}: {lock}"
+        );
+
+        let (output, stdout, _) = orbe_in(root, &["check", "scene.jsonc"]);
+        assert_eq!(output.status.code(), Some(1), "{version}: {stdout}");
+        assert!(stdout.contains("error[part_newer]"), "{version}: {stdout}");
+        assert!(
+            stdout.contains(&format!(
+                "this project holds `atmega328p-tqfp32@{version}` and this orbe carries `atmega328p-tqfp32@0.1.0`"
+            )),
+            "{version}: {stdout}"
+        );
+        assert!(!stdout.contains("part_outdated"), "{version}: {stdout}");
+        assert!(!stdout.contains("orbe add"), "{version}: {stdout}");
+    }
+}
+
+#[test]
+fn a_named_overwrite_leaves_a_newer_locked_copy() {
+    let chip = "atmega328p-tqfp32";
+    let named = ["add", chip, "--overwrite"];
+    let pinned = ["add", "atmega328p-tqfp32@0.1.0", "--overwrite"];
+    let board = ["add", "nano-board", "--overwrite"];
+    for args in [named.as_slice(), pinned.as_slice(), board.as_slice()] {
+        let project = common::project("nano-button");
+        let root = project.path();
+        hold(root, chip, "0.2.0");
+        retitle(root, chip, "NEWER CHIP");
+        let before = fs::read(root.join("parts").join(chip).join("part.jsonc")).unwrap();
+        let (output, out, err) = orbe_in(root, args);
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {out}{err}");
+        assert!(
+            out.contains(
+                "left `atmega328p-tqfp32` at 0.2.0. this project needs a newer orbe for it"
+            ),
+            "{args:?}: {out}"
+        );
+        assert!(
+            !out.contains("wrote parts/atmega328p-tqfp32"),
+            "{args:?}: {out}"
+        );
+        assert!(!out.contains("atmega328p-tqfp32@"), "{args:?}: {out}");
+        assert_eq!(
+            fs::read(root.join("parts").join(chip).join("part.jsonc")).unwrap(),
+            before,
+            "{args:?}"
+        );
+        let (output, stdout, _) = orbe_in(root, &["check", "scene.jsonc"]);
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {stdout}");
+        assert!(stdout.contains("error[part_newer]"), "{args:?}: {stdout}");
+        assert!(!stdout.contains("part_outdated"), "{args:?}: {stdout}");
+        assert!(!stdout.contains("orbe add"), "{args:?}: {stdout}");
+    }
+
+    let project = common::project("nano-button");
+    let root = project.path();
+    hold(root, chip, "0.2.0");
+    retitle(root, chip, "NEWER CHIP");
+    let before = fs::read(root.join("parts").join(chip).join("part.jsonc")).unwrap();
+    let (output, stdout, stderr) = orbe_in(root, &["add", "nano-button-led", "--overwrite"]);
+    assert_eq!(output.status.code(), Some(2), "{stdout}{stderr}");
+    assert!(
+        stderr.starts_with("error[usage]: `nano-button-led` is a Block"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read(root.join("parts").join(chip).join("part.jsonc")).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn an_outdated_add_does_not_call_a_lock_match_a_local_edit() {
+    let project = common::project("nano-button");
+    hold(project.path(), "led-5mm", "0.0.9");
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    let command = add_command(&stdout);
+    assert_eq!(command, "orbe add led-5mm --overwrite");
+    let (output, out, err) = run_printed(project.path(), &command);
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    assert!(
+        out.contains("wrote parts/led-5mm 0.1.0, replacing 0.0.9\n"),
+        "{out}"
+    );
+    assert!(!out.contains("local edits"), "{out}");
+
+    let edited = common::project("nano-button");
+    let path = edited.path().join("parts/led-5mm/part.jsonc");
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(&path, text.replace("5 mm LED", "5 mm LED edited")).unwrap();
+    let (output, stdout, _) = orbe_in(edited.path(), &["check", "scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    let command = stdout
+        .lines()
+        .find_map(|line| {
+            let start = line.find("`orbe add ")? + 1;
+            let end = line[start..].find('`')? + start;
+            Some(line[start..end].to_string())
+        })
+        .unwrap_or_else(|| panic!("{stdout}"));
+    let (output, out, err) = run_printed(edited.path(), &command);
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    assert!(out.contains("replacing 0.1.0 with local edits"), "{out}");
+}
+
+#[test]
+fn a_foreign_registry_at_another_version_names_that_registry() {
+    let project = common::project("nano-button");
+    hold(project.path(), "led-5mm", "0.0.9");
+    let lock = project.path().join("parts.lock");
+    let text = fs::read_to_string(&lock).unwrap().replace(
+        &format!("led-5mm 0.0.9 {}", orbe_scene::REGISTRY),
+        "led-5mm 0.0.9 @acme",
+    );
+    fs::write(&lock, text).unwrap();
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(stdout.contains("from `@acme`"), "{stdout}");
+    assert!(!stdout.contains("part_outdated"), "{stdout}");
+    assert!(!stdout.contains("part_newer"), "{stdout}");
+}
+
+#[test]
 fn a_scene_id_the_catalog_lacks_gets_a_suggestion_and_stays_out_of_the_command() {
     let (_workspace, proj) = first_target();
     let scene = proj.join("scene.jsonc");
@@ -785,7 +1142,7 @@ fn add_refuses_a_folder_that_is_not_a_project() {
         reply["error"]["hint"]
             .as_str()
             .unwrap()
-            .contains("orbe add -C <folder>"),
+            .contains("orbe add -C '<folder>'"),
         "{stdout}"
     );
     assert_eq!(fs::read_dir(lonely.path()).unwrap().count(), 0);

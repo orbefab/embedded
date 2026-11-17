@@ -27,7 +27,8 @@ const LIMIT_FRACTION: f64 = 1e-3;
 const LIMIT_HEADROOM: f64 = 500.0;
 /// The output current over which the supply share moves from `gnd` to `vcc`, ampere.
 const SPLIT_A: f64 = 1e-6;
-/// The input pair turns off above `vcc` less this, volt.
+/// The bias current turns off above `vcc` less this, volt. A constant of the law, not
+/// `input_headroom`.
 const INPUT_HEADROOM: f64 = 0.8;
 const INPUT_KNEE: f64 = 0.05;
 /// The supply at which the supply conductance draws `supply_current`, volt.
@@ -91,10 +92,22 @@ pub struct OpAmp {
     pub short_circuit_current: Value,
     /// Ampere, at least 0. One channel's supply current at a 5 V supply.
     pub supply_current: Value,
+    /// Volt, at least 0. Above 0, an input past `V(vcc) - input_headroom` is `rating.voltage`.
+    /// Zero rates no ceiling. The differential stage does not read it.
+    pub input_headroom: Value,
 }
 
 impl OpAmp {
     pub const PINS: [&'static str; 5] = ["in_p", "in_n", "out", "vcc", "gnd"];
+
+    /// `in_p` and `in_n`, then `vcc` and `gnd`. The common-mode window reads these.
+    pub(crate) fn common_mode(&self) -> ([(&'static str, NetId); 2], NetId, NetId) {
+        (
+            [("in_p", self.pins[IN_P]), ("in_n", self.pins[IN_N])],
+            self.pins[VCC],
+            self.pins[GND],
+        )
+    }
 }
 
 #[derive(Deserialize)]
@@ -111,6 +124,7 @@ pub(crate) struct WireOpAmp {
     output_resistance: WireValue,
     short_circuit_current: WireValue,
     supply_current: WireValue,
+    input_headroom: WireValue,
 }
 
 pub(crate) fn resolve_op_amp(ctx: ParseCtx<'_>, wire: WireOpAmp) -> Option<OpAmp> {
@@ -143,6 +157,7 @@ pub(crate) fn resolve_op_amp(ctx: ParseCtx<'_>, wire: WireOpAmp) -> Option<OpAmp
     let swing_high = non_negative("swing_high", "V", wire.swing_high);
     let swing_low = non_negative("swing_low", "V", wire.swing_low);
     let supply_current = non_negative("supply_current", "A", wire.supply_current);
+    let input_headroom = non_negative("input_headroom", "V", wire.input_headroom);
     Some(OpAmp {
         pins: pins?,
         gain_bandwidth: gain_bandwidth?,
@@ -154,6 +169,7 @@ pub(crate) fn resolve_op_amp(ctx: ParseCtx<'_>, wire: WireOpAmp) -> Option<OpAmp
         output_resistance: output_resistance?,
         short_circuit_current: short_circuit_current?,
         supply_current: supply_current?,
+        input_headroom: input_headroom?,
     })
 }
 
