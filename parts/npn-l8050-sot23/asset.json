@@ -1,0 +1,44 @@
+{
+  "part": "npn-l8050-sot23",
+  "source": {
+    "script": "model.py",
+    "sha256": "03e7663d25afbaf74fa1cef1f164d2a7e124b0d2c14873a63584847c959c4277",
+    "bytes": 1597
+  },
+  "files": {
+    "npn-l8050-sot23.glb": {
+      "sha256": "6d7bab6c5f3b870b0d6eea4f71bf43b5d8b01a2a07ea1ae972e9913b4738896d",
+      "bytes": 5384
+    },
+    "npn-l8050-sot23.anchors.json": {
+      "sha256": "8cc16169bdb5fd718d7c94cbce8032c9a500ea40140a1b00df4ff5ec3b4b07fe",
+      "bytes": 417
+    }
+  },
+  "box": {
+    "min": [-1.45, -1.185, 0],
+    "max": [1.45, 1.185, 1.045]
+  },
+  "kept_nodes": [],
+  "draw_calls": 3,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 3,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0.055
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 5,
+      "primitives_out": 3
+    }
+  }
+}
