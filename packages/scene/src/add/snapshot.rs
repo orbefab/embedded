@@ -147,6 +147,9 @@ fn read_tree(
             }
         };
         let shown = rel(root, &path);
+        if !crate::published::is_published(&shown) {
+            continue;
+        }
         match fs::symlink_metadata(&path) {
             Ok(meta) if meta.file_type().is_symlink() => {
                 odd.push(format!("`{shown}`, which is a link"));
