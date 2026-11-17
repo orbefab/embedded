@@ -91,6 +91,15 @@ struct Circuit<'p> {
 /// The value that set a model field, by the field's JSON pointer.
 type SetBy = BTreeMap<String, Setter>;
 
+/// A voltage source the parts' own wires keep on two nets: its instance, its `p` and `n` pins,
+/// and a name for each net.
+struct HeldApart {
+    inst: usize,
+    p: usize,
+    n: usize,
+    names: [String; 2],
+}
+
 #[derive(Clone)]
 struct Setter {
     span: Span,
@@ -643,12 +652,105 @@ impl<'p> Circuit<'p> {
                 }
             }
             if let [Some(a), Some(b)] = ends[..] {
-                joins.push((a, b));
+                joins.push((a, b, wire));
             }
         }
-        for (a, b) in joins {
+        let mut supplies = self.held_apart();
+        for (a, b, wire) in joins {
             self.union(a, b);
+            let shorted: Vec<HeldApart> = supplies
+                .extract_if(.., |supply| self.find(supply.p) == self.find(supply.n))
+                .collect();
+            for supply in &shorted {
+                self.short(supply, wire);
+            }
         }
+    }
+
+    /// Each voltage source whose two pins the parts' own wires keep on two nets, with a name
+    /// for each of those nets. A scene wire that joins them is a short: no solve can hold two
+    /// pins of one net apart.
+    fn held_apart(&mut self) -> Vec<HeldApart> {
+        let mut out = Vec::new();
+        for inst in 1..self.insts.len() {
+            let Some(part) = self.part(inst) else {
+                continue;
+            };
+            if self.insts[inst].dropped.is_some() {
+                continue;
+            }
+            for body in part.bodies.iter().filter(|b| b.kind == "voltage_source") {
+                let pin = |name: &str| {
+                    body.pins
+                        .iter()
+                        .find(|(engine, _)| *engine == name)
+                        .map(|(_, pin)| self.keys[&(inst, pin.clone())])
+                };
+                let (Some(p), Some(n)) = (pin("p"), pin("n")) else {
+                    continue;
+                };
+                if self.find(p) == self.find(n) {
+                    continue;
+                }
+                out.push(HeldApart {
+                    inst,
+                    p,
+                    n,
+                    names: [self.side_name(p), self.side_name(n)],
+                });
+            }
+        }
+        out
+    }
+
+    /// A name for the net `key` is on before the scene's wires join anything: the smallest pin
+    /// of a scene part on it, such as `nano.5V`, else `key` itself.
+    fn side_name(&mut self, key: usize) -> String {
+        let root = self.find(key);
+        let mut top = Vec::new();
+        for k in 0..self.pins.len() {
+            let inst = &self.insts[self.pins[k].inst];
+            if inst.path.len() != 1 || self.pins[k].hole || inst.dropped.is_some() {
+                continue;
+            }
+            let name = format!("{}.{}", inst.dotted(), self.pins[k].name);
+            if self.find(k) == root {
+                top.push(name);
+            }
+        }
+        top.into_iter().min().unwrap_or_else(|| {
+            format!(
+                "{}.{}",
+                self.insts[self.pins[key].inst].dotted(),
+                self.pins[key].name
+            )
+        })
+    }
+
+    fn short(&mut self, supply: &HeldApart, wire: &crate::model::Wire) {
+        let [p, n] = &supply.names;
+        let source = self.insts[supply.inst].dotted();
+        let [a, b] = &wire.ends;
+        let ends = [a.text.as_str(), b.text.as_str()];
+        let message = if ends == [p.as_str(), n.as_str()] || ends == [n.as_str(), p.as_str()] {
+            format!(
+                "the wire from `{}` to `{}` shorts the supply `{source}`, which holds the two apart",
+                a.text, b.text
+            )
+        } else {
+            format!(
+                "the wire from `{}` to `{}` joins `{p}` to `{n}`, which the supply `{source}` holds apart, so it shorts that supply",
+                a.text, b.text
+            )
+        };
+        self.out.push(
+            Code::Engine("net.short"),
+            a.span,
+            message,
+            format!(
+                "remove the wire; a load from `{p}` to `{n}` needs a part that limits its current, such as a resistor"
+            ),
+        );
     }
 
     fn flat_pin(&self, key: usize) -> String {

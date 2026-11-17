@@ -452,6 +452,16 @@ impl Cpu {
         self.bus.peek(&self.core, addr)
     }
 
+    /// The oscillator cycle the firmware first read pin id `pin` at since the pin's drive last
+    /// turned off, as far as the core has run: the first instruction since then to load its
+    /// port's `PINx`, or the first cycle since then that an enabled `INTn` or `PCINTn`
+    /// interrupt watched it. Each counts only while the pin is an input with its pull-up off
+    /// and its digital input on. A pin whose drive is no longer off keeps the read of the
+    /// stretch that just ended. [`Self::peek`] does not count.
+    pub fn pin_read_at(&self, pin: u32) -> Option<u64> {
+        self.bus.pin_read_at(pin)
+    }
+
     pub fn flash_word(&self, addr: u16) -> u16 {
         self.core.flash_word(addr)
     }
@@ -643,6 +653,7 @@ impl Cpu {
         let host = self.host_serial;
         let asks = self.bus.asks_for_samples();
         let pins = self.bus.pin_levels();
+        let off_reads = self.bus.off_reads();
         let pads = self.bus.host_levels();
         let sent = self.bus.take_sent_across_reset();
         let i2c = self.bus.take_i2c_across_reset();
@@ -696,6 +707,7 @@ impl Cpu {
                 }
             }
             self.bus.note_reset_pins(pins, now);
+            self.bus.carry_off_reads(off_reads);
         }
     }
 

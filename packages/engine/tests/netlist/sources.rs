@@ -830,3 +830,72 @@ fn a_malformed_serial_waveform_is_one_syntax_error() {
         assert!(found.contains(detail), "{found} lacks {detail}");
     }
 }
+
+fn rated_source(pins: &str, ratings: &str) -> String {
+    with_parts(
+        r#"{ "op": {} }"#,
+        &format!(
+            r#"{{ "name": "v1", "kind": "voltage_source", "pins": {pins},
+                 "voltage": {}{ratings} }},
+               {{ "name": "r1", "kind": "resistor", "pins": {{ "a": "a", "b": "gnd" }},
+                 "resistance": {}, "ratings": {{ "power": null }} }}"#,
+            level(5.0, "V"),
+            level(2.5, "ohm"),
+        ),
+    )
+}
+
+fn v1(netlist: &Netlist) -> &Model {
+    let (_, part) = netlist
+        .parts()
+        .find(|(_, part)| part.name.as_str() == "v1")
+        .unwrap();
+    &part.model
+}
+
+#[test]
+fn a_voltage_source_rates_its_current_when_it_has_a_ratings_object() {
+    let pins = r#"{ "p": "a", "n": "gnd" }"#;
+    let unrated = parse(&rated_source(pins, ""));
+    assert!(v1(&unrated).ratings().is_empty());
+
+    let rated = parse(&rated_source(
+        pins,
+        &format!(r#", "ratings": {{ "current": {} }}"#, level(0.5, "A")),
+    ));
+    let ratings = v1(&rated).ratings();
+    let [(kind, quantity, value)] = ratings.as_slice() else {
+        panic!("{ratings:?}");
+    };
+    assert_eq!(*kind, netlist::RatingKind::Current);
+    assert_eq!(quantity.as_str(), "i");
+    assert_eq!(value.si.get(), 0.5);
+
+    let null = parse(&rated_source(pins, r#", "ratings": { "current": null }"#));
+    assert!(v1(&null).ratings().is_empty());
+    assert_eq!(
+        errors(&rated_source(
+            pins,
+            &format!(r#", "ratings": {{ "current": {} }}"#, level(0.5, "V"))
+        )),
+        [r##""netlist.unit" ["#v1"] {"expected":"A","field":"ratings.current","found":"V"}"##]
+    );
+}
+
+#[test]
+fn a_voltage_source_with_both_pins_on_one_net_is_a_short() {
+    let json = rated_source(r#"{ "p": "gnd", "n": "gnd" }"#, "");
+    let found = netlist::parse(json.as_bytes()).unwrap_err();
+    let [short] = found.as_slice() else {
+        panic!("{found:?}");
+    };
+    let short = serde_json::to_value(short).unwrap();
+    assert_eq!(short["code"], "net.short");
+    assert_eq!(short["severity"], "error");
+    assert_eq!(short["refs"], serde_json::json!(["#v1", "#net.gnd"]));
+    assert_eq!(short["t_ps"], serde_json::Value::Null);
+    assert_eq!(
+        short["message"],
+        "#v1 holds `p` and `n` apart, but both are on #net.gnd, so the circuit shorts it"
+    );
+}

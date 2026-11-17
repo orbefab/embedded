@@ -322,6 +322,8 @@ pub enum Diagnostic {
     },
     /// The net has no DC path to ground. Its voltage is held only by gmin.
     NetFloating { net: Ref },
+    /// A voltage source's `p` and `n` are both on `net`, so the circuit shorts it.
+    NetShort { part: Ref, net: Ref },
     /// The MNA matrix is singular at `unknown`.
     SolverSingular { at: Time, unknown: Ref },
     /// A solution component or an observed quantity is not finite.
@@ -349,6 +351,10 @@ pub enum Diagnostic {
     /// A chip whose CS and SCLK sit on `sender`'s nets dropped an SPI transaction whose data
     /// lanes are not on its own data pins, first at `at`.
     ChipLinkMiswired { part: Ref, at: Time, sender: Name },
+    /// `pin` floats at `at`: it is an input with its pull-up off, no DC path joins `net` to a
+    /// supply or to ground but the chip's own leakage, and its firmware has taken in its level
+    /// since it last became such an input, alone or with the rest of its port. Once per pin.
+    ChipFloatingInput { pin: Ref, net: Ref, at: Time },
     /// A chip's core reached `op` at `pc`, which the model does not run there. `reason` says
     /// what is missing. It ends the run.
     ChipUnsupportedInstruction {
@@ -534,13 +540,15 @@ pub struct Excursion {
     pub quantity: Ref,
     /// The rating, in SI units.
     pub limit: f64,
-    /// Largest magnitude seen.
+    /// Largest magnitude seen, or for a DC rating the largest RMS over `window_ps`.
     pub peak: f64,
     pub peak_at: Time,
     /// First sample over the limit.
     pub first: Time,
     /// Total time over the limit. `None` for an operating point, which has no duration.
     pub over_ps: Option<u64>,
+    /// The window a DC rating's RMS runs over, or `None` for a rating checked on each sample.
+    pub window_ps: Option<u64>,
 }
 
 /// One chip pin outside its rated voltage window, merged over the whole run. Volts are over
@@ -582,6 +590,7 @@ impl Diagnostic {
             Diagnostic::NetlistWaveform { .. } => "netlist.waveform",
             Diagnostic::NetlistWorld { .. } => "netlist.world",
             Diagnostic::NetFloating { .. } => "net.floating",
+            Diagnostic::NetShort { .. } => "net.short",
             Diagnostic::SolverSingular { .. } => "solver.singular",
             Diagnostic::SolverNonFinite { .. } => "solver.nonfinite",
             Diagnostic::SolverTooLarge { .. } => "solver.too_large",
@@ -590,6 +599,7 @@ impl Diagnostic {
             Diagnostic::ChipUnsettled { .. } => "chip.unsettled",
             Diagnostic::ChipProtocol { .. } => "chip.protocol",
             Diagnostic::ChipLinkMiswired { .. } => "chip.link_miswired",
+            Diagnostic::ChipFloatingInput { .. } => "chip.floating_input",
             Diagnostic::ChipUnsupportedInstruction { .. } => "chip.unsupported_instruction",
             Diagnostic::ChipUnmappedFetch { .. } => "chip.unmapped_fetch",
             Diagnostic::ChipHalted { .. } => "chip.halted",
@@ -615,6 +625,7 @@ impl Diagnostic {
             Diagnostic::NetFloating { .. }
             | Diagnostic::ChipProtocol { .. }
             | Diagnostic::ChipLinkMiswired { .. }
+            | Diagnostic::ChipFloatingInput { .. }
             | Diagnostic::ChipUnmodeledRegister { .. }
             | Diagnostic::ChipRestart { .. }
             | Diagnostic::TraceRowInterpolated { .. }
@@ -637,6 +648,7 @@ impl Diagnostic {
             | Diagnostic::NetlistSchedule { .. }
             | Diagnostic::NetlistWaveform { .. }
             | Diagnostic::NetlistWorld { .. }
+            | Diagnostic::NetShort { .. }
             | Diagnostic::SolverSingular { .. }
             | Diagnostic::SolverNonFinite { .. }
             | Diagnostic::SolverTooLarge { .. }
@@ -667,6 +679,7 @@ impl Diagnostic {
             | Diagnostic::ChipUnsettled { at, .. }
             | Diagnostic::ChipProtocol { at, .. }
             | Diagnostic::ChipLinkMiswired { at, .. }
+            | Diagnostic::ChipFloatingInput { at, .. }
             | Diagnostic::ChipUnsupportedInstruction { at, .. }
             | Diagnostic::ChipUnmappedFetch { at, .. }
             | Diagnostic::ChipHalted { at, .. }
@@ -701,7 +714,8 @@ impl Diagnostic {
             | Diagnostic::NetlistSchedule { .. }
             | Diagnostic::NetlistWaveform { .. }
             | Diagnostic::NetlistWorld { .. }
-            | Diagnostic::NetFloating { .. } => None,
+            | Diagnostic::NetFloating { .. }
+            | Diagnostic::NetShort { .. } => None,
         }
     }
 
@@ -724,6 +738,8 @@ impl Diagnostic {
             | Diagnostic::NetlistWaveform { part, .. } => vec![part.clone()],
             Diagnostic::NetlistWorld { part, .. } => part.iter().cloned().collect(),
             Diagnostic::NetFloating { net } => vec![net.clone()],
+            Diagnostic::ChipFloatingInput { pin, net, .. } => vec![pin.clone(), net.clone()],
+            Diagnostic::NetShort { part, net } => vec![part.clone(), net.clone()],
             Diagnostic::SolverSingular { unknown, .. }
             | Diagnostic::SolverNonFinite { unknown, .. }
             | Diagnostic::SolverConvergence { unknown, .. } => vec![unknown.clone()],
@@ -1051,6 +1067,9 @@ impl Diagnostic {
                 }
             },
             Diagnostic::NetFloating { net } => format!("{net} has no DC path to ground"),
+            Diagnostic::NetShort { part, net } => format!(
+                "{part} holds `p` and `n` apart, but both are on {net}, so the circuit shorts it"
+            ),
             Diagnostic::SolverSingular { unknown, .. } => format!("singular matrix at {unknown}"),
             Diagnostic::SolverNonFinite { unknown, .. } => {
                 format!("non-finite number at {unknown}")
@@ -1133,6 +1152,10 @@ impl Diagnostic {
             Diagnostic::ChipProtocol { part, at, rule } => format!(
                 "{part} dropped a transfer that broke rule {} at {} ps, the first time",
                 rule_text(rule),
+                at.as_ps()
+            ),
+            Diagnostic::ChipFloatingInput { pin, net, at } => format!(
+                "{pin} floats on {net} at {} ps, and the firmware has taken in its level since the pin last became an input with its pull-up off, alone or with the rest of its port: there is no DC path to a supply or to ground, and a capacitor does not hold the pin's level, so the level is whatever leakage and noise leave; add a pull-up or a pull-down resistor, or turn the pin's pull-up on",
                 at.as_ps()
             ),
             Diagnostic::ChipLinkMiswired { part, at, sender } => format!(
@@ -1454,7 +1477,10 @@ impl Diagnostic {
             } => {
                 serde_json::json!({ "path": path, "name": name, "problem": problem })
             }
-            Diagnostic::NetlistDuplicate { .. } | Diagnostic::NetFloating { .. } => {
+            Diagnostic::NetlistDuplicate { .. }
+            | Diagnostic::NetFloating { .. }
+            | Diagnostic::NetShort { .. }
+            | Diagnostic::ChipFloatingInput { .. } => {
                 serde_json::json!({})
             }
             Diagnostic::NetlistUnknownNet { net, .. } => serde_json::json!({ "net": net }),
@@ -1628,6 +1654,7 @@ impl Diagnostic {
                     "over_ps": excursion.over_ps,
                     "peak": excursion.peak,
                     "peak_ps": excursion.peak_at,
+                    "window_ps": excursion.window_ps,
                 })
             }
             Diagnostic::RatingVoltage(excursion) => {
@@ -1679,9 +1706,30 @@ fn over_rating(excursion: &Excursion, unit: &str) -> String {
         quantity,
         limit,
         peak,
+        over_ps,
+        window_ps,
         ..
     } = excursion;
-    format!("{quantity} peaks at {peak} {unit}, over its {limit} {unit} rating")
+    let reading = match window_ps {
+        Some(window) => format!(
+            "{quantity} carries {peak} {unit} RMS over the last {} ms",
+            *window as f64 / 1e9
+        ),
+        None => format!("{quantity} peaks at {peak} {unit}"),
+    };
+    format!(
+        "{reading}, over its {limit} {unit} rating{}",
+        for_time(*over_ps)
+    )
+}
+
+/// ` for {over_ps} ps` once a run has been over for some time. Nothing for an operating
+/// point, which has no duration, or for a finding first over on the last accepted step.
+fn for_time(over_ps: Option<u64>) -> String {
+    match over_ps {
+        Some(over) if over > 0 => format!(" for {over} ps"),
+        _ => String::new(),
+    }
 }
 
 fn outside_window(excursion: &VoltageExcursion) -> String {
@@ -1690,6 +1738,7 @@ fn outside_window(excursion: &VoltageExcursion) -> String {
         low,
         high,
         peak,
+        over_ps,
         ..
     } = excursion;
     let window = match (low, high) {
@@ -1698,7 +1747,10 @@ fn outside_window(excursion: &VoltageExcursion) -> String {
         (None, Some(high)) => format!("its {high} V ceiling"),
         (None, None) => unreachable!("a window rates a floor or a ceiling"),
     };
-    format!("{pin} reaches {peak} V over the chip's ground, outside {window}")
+    format!(
+        "{pin} reaches {peak} V over the chip's ground, outside {window}{}",
+        for_time(*over_ps)
+    )
 }
 
 fn name_problem(problem: NameError) -> &'static str {

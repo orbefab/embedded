@@ -24,6 +24,7 @@ pub mod chip;
 mod dense;
 pub mod device;
 mod element;
+mod inputs;
 mod ladder;
 mod lte;
 pub mod mcu;

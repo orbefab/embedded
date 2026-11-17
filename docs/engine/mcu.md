@@ -24,8 +24,9 @@ A chip is its state. `Mcu` needs `Clone`, and a copy is a checkpoint. The engine
 | `in_flight(ahead, at)` | The records it started by `at` and has not ended, where the run ends at `at`. `ahead` is its copy run on from there. Empty by default. |
 | `fault()` | The fault that ended its run, and its time. `None` by default. |
 | `notes(through)` | What it noted at or before `through`, each at its time. Empty by default. |
+| `read(output)` | When its firmware first read that output's pin as a digital input since the pin's drive last turned off, as far as it has run. A read while the drive is not off does not count. Once the drive is no longer off, it is still the read of the stretch that just ended. `None` by default, so the engine checks no input of a chip that keeps it. [diagnostics.md](diagnostics.md#chipfloating_input) says what the engine does with it. |
 
-That is three constants and nine methods, five of them with defaults. A clocked chip runs to cycle `floor(limit_ps * f / 1e12)` and puts a stop at cycle `c` at `ceil(c * 1e12 / f)` ps, counting from its clock domain's last frequency change, as [engine.md](engine.md#active-chips) says. The chip converts between picoseconds and its own cycles.
+That is three constants and ten methods, six of them with defaults. A clocked chip runs to cycle `floor(limit_ps * f / 1e12)` and puts a stop at cycle `c` at `ceil(c * 1e12 / f)` ps, counting from its clock domain's last frequency change, as [engine.md](engine.md#active-chips) says. The chip converts between picoseconds and its own cycles.
 
 Only `run_until` changes the drives. `input` and `sample` leave them alone, and what they cause comes at least 1 ps later, at a stop. The engine checks this after each of those calls, in every build, and panics on a chip that breaks it.
 

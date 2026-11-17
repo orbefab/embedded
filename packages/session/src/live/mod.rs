@@ -541,14 +541,21 @@ impl Open {
     }
 
     /// `d`, with the scene pin after each engine pin its message names, as in
-    /// `#nano__mcu.pin.PB1 (nano.D9) peaks at ...`.
+    /// `#nano__mcu.pin.PB1 (nano.D9) peaks at ...`, and the scene part after each quantity of
+    /// a part inside a board, as in `#uno__usb__host.i (uno.usb) peaks at ...`.
     fn diagnostic(&self, d: &EngineDiagnostic) -> Diagnostic {
         let mut diagnostic = Diagnostic::new(d);
         if let Some(message) = diagnostic.json["message"].as_str() {
             let mut message = message.to_string();
             for r in d.refs() {
+                // A part's quantity is named by the part's ref, as `#uno__usb__host` for
+                // `#uno__usb__host.i`.
+                let named = match &r {
+                    EngineRef::Quantity(part, _) => EngineRef::Part(part.clone()).to_string(),
+                    _ => r.to_string(),
+                };
                 let r = r.to_string();
-                if let Some(scene) = self.pin_names.get(&r) {
+                if let Some(scene) = self.pin_names.get(&named) {
                     message = message.replacen(&r, &format!("{r} ({scene})"), 1);
                 }
             }
@@ -819,7 +826,8 @@ impl Open {
 
 /// Each pin of an engine part inside a board, as its ref text, with the board's pins on its
 /// net, such as `nano.5V, nano.D10` when the scene wires D10 to 5V. A pin with no board pin
-/// on its net is left out.
+/// on its net is left out. Each such engine part, as its ref text, with its scene path, such as
+/// `uno.usb`.
 fn pin_names(refs: &RefMap) -> BTreeMap<String, String> {
     let mut names = BTreeMap::new();
     for (path, part) in &refs.parts {
@@ -827,6 +835,9 @@ fn pin_names(refs: &RefMap) -> BTreeMap<String, String> {
         for engine in &part.engine {
             if engine.name == top {
                 continue;
+            }
+            if let Ok(name) = Name::new(&engine.name) {
+                names.insert(EngineRef::Part(name).to_string(), path.clone());
             }
             for (pin, net) in &engine.pins {
                 let (Ok(part), Ok(pin)) = (Name::new(&engine.name), Name::new(pin)) else {

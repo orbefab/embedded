@@ -1027,3 +1027,182 @@ fn a_rise_on_the_last_cycle_of_the_time_out_reaches_a_first_sts_to_eicra() {
     );
     assert_eq!(cpu.peek(EIFR) & 1, 1, "the rise reaches INTF0");
 }
+
+/// The pins with a first read, one bit per pin id.
+fn read(cpu: &Cpu) -> u64 {
+    (0..24)
+        .filter(|&pin| cpu.pin_read_at(pin).is_some())
+        .fold(0, |pins, pin| pins | 1 << pin)
+}
+
+/// Port B's pin ids are 0 to 7, port C's 8 to 15 and port D's 16 to 23.
+const PORT_B: u64 = 0xFF;
+const PORT_D: u64 = 0xFF << 16;
+
+/// A load of `PINx` reads every pin of its port whose drive is off, all of them after a reset,
+/// by `IN`, by `LDS` and by `SBIS`, at the cycle the instruction starts. A load of `PORTx` or
+/// `DDRx` reads no pin.
+#[test]
+fn a_load_of_pinx_marks_every_pin_of_its_port_read() {
+    let mut cpu = Cpu::new();
+    cpu.load_words(&[
+        in_io(16, 0x0B),
+        in_io(16, 0x0A),
+        in_io(16, 0x03),
+        in_io(16, 0x03),
+    ]);
+    cpu.insns(2);
+    assert_eq!(read(&cpu), 0, "PORTD and DDRD are no input");
+    cpu.insns(2);
+    assert_eq!(read(&cpu), PORT_B);
+    assert_eq!(
+        cpu.pin_read_at(0),
+        Some(2),
+        "the first IN PINB, not the second"
+    );
+
+    let mut cpu = Cpu::new();
+    cpu.load_words(&lds(16, 0x29));
+    cpu.insns(1);
+    assert_eq!(read(&cpu), PORT_D);
+
+    let mut cpu = Cpu::new();
+    cpu.load_words(&[common::sbis(0x09, 2), 0, 0]);
+    cpu.insns(1);
+    assert_eq!(read(&cpu), PORT_D);
+
+    let cpu = Cpu::new();
+    let _ = cpu.peek(0x29);
+    assert_eq!(read(&cpu), 0, "the host's peek is no read");
+}
+
+/// A free run reads a steady `PINx` without stepping, and that read counts.
+#[test]
+fn a_free_run_that_polls_pind_marks_port_d_read() {
+    let mut cpu = Cpu::new();
+    cpu.load_words(&[in_io(16, 0x09), common::runs::rjmp(1, 0)]);
+    cpu.run_until(cpu.cycles() + 1_000);
+    assert_eq!(read(&cpu), PORT_D);
+}
+
+/// `PC6` is `RESET` while the fuses keep it so, and `DIDR0` turns off `PC0`'s digital input:
+/// `PINC` reads neither, so neither counts.
+#[test]
+fn a_pin_whose_digital_input_is_off_is_not_read() {
+    let mut cpu = Cpu::new();
+    let mut program = vec![ldi(16, 0x01)];
+    program.extend(sts(16, 0x7E));
+    program.push(in_io(17, 0x06));
+    cpu.load_words(&program);
+    cpu.insns(3);
+    assert_eq!(read(&cpu), 0xBE << 8);
+}
+
+/// An enabled `INTn` or pin-change interrupt reads its pin from the store that enables it, and
+/// the pin stays read once the interrupt is off.
+#[test]
+fn an_enabled_pin_interrupt_reads_its_pin() {
+    let mut cpu = Cpu::new();
+    let mut program = vec![ldi(16, 0x01)];
+    program.extend(sts(16, EIMSK));
+    program.extend(sts(16, PCMSK0));
+    program.extend(sts(16, PCICR));
+    program.push(ldi(16, 0x00));
+    program.extend(sts(16, EIMSK));
+    cpu.load_words(&program);
+    cpu.insns(2);
+    assert_eq!(read(&cpu), 1u64 << PD2, "INT0 is PD2");
+    cpu.insns(1);
+    assert_eq!(read(&cpu), 1u64 << PD2, "PCMSK0 alone enables nothing");
+    cpu.insns(1);
+    assert_eq!(read(&cpu), 1u64 << PD2 | 1, "PCINT0 is PB0");
+    cpu.insns(2);
+    assert_eq!(read(&cpu), 1u64 << PD2 | 1);
+}
+
+const PORTD_IO: u16 = 0x0B;
+const DDRD_IO: u16 = 0x0A;
+const PIND_IO: u16 = 0x09;
+
+/// A load of `PIND` while `PD2`'s pull-up is on reads a held level, and turning the pull-up
+/// off starts a stretch with no read. `PD3`, off throughout, keeps its read.
+#[test]
+fn a_read_under_the_pull_up_is_no_read_of_the_stretch_after_it() {
+    let mut cpu = Cpu::new();
+    cpu.load_words(&[
+        sbi(PORTD_IO, 2),
+        in_io(16, PIND_IO),
+        common::cbi(PORTD_IO, 2),
+    ]);
+    cpu.insns(2);
+    assert_eq!(cpu.pin_read_at(PD2), None, "the pull-up holds PD2");
+    assert_eq!(cpu.pin_read_at(PD2 + 1), Some(2));
+    cpu.insns(1);
+    assert_eq!(
+        cpu.pin_read_at(PD2),
+        None,
+        "no read since the pull-up went off"
+    );
+    assert_eq!(cpu.pin_read_at(PD2 + 1), Some(2));
+}
+
+/// A read while `PD2` floats stays the read of that stretch once the pull-up turns on, and
+/// a new stretch off counts only its own reads.
+#[test]
+fn each_stretch_with_the_drive_off_counts_its_own_first_read() {
+    let mut cpu = Cpu::new();
+    cpu.load_words(&[
+        in_io(16, PIND_IO),
+        sbi(PORTD_IO, 2),
+        common::cbi(PORTD_IO, 2),
+        in_io(16, PIND_IO),
+        in_io(16, PIND_IO),
+    ]);
+    cpu.insns(2);
+    assert_eq!(cpu.pin_read_at(PD2), Some(0), "read off, then pulled up");
+    cpu.insns(1);
+    assert_eq!(cpu.pin_read_at(PD2), None, "off again, not yet read");
+    cpu.insns(2);
+    assert_eq!(cpu.pin_read_at(PD2), Some(5), "the first IN after the CBI");
+}
+
+/// An output is no input, so a load of its port's `PINx` does not read it.
+#[test]
+fn a_load_of_pinx_does_not_read_an_output() {
+    let mut cpu = Cpu::new();
+    cpu.load_words(&[sbi(DDRD_IO, 2), in_io(16, PIND_IO)]);
+    cpu.insns(2);
+    assert_eq!(cpu.pin_read_at(PD2), None);
+    assert_eq!(cpu.pin_read_at(PD2 + 1), Some(2));
+}
+
+/// `INT0` enabled while `PD2`'s pull-up is on watches a held level. The store that turns the
+/// pull-up off starts a stretch the interrupt reads from its start.
+#[test]
+fn an_interrupt_reads_its_pin_from_where_its_drive_turns_off() {
+    let mut cpu = Cpu::new();
+    let mut program = vec![sbi(PORTD_IO, 2), ldi(16, 0x01)];
+    program.extend(sts(16, EIMSK));
+    program.push(common::cbi(PORTD_IO, 2));
+    cpu.load_words(&program);
+    cpu.insns(3);
+    assert_eq!(cpu.pin_read_at(PD2), None, "the pull-up holds PD2");
+    cpu.insns(1);
+    assert!(
+        cpu.pin_read_at(PD2).is_some(),
+        "INT0 watches it once it is off"
+    );
+}
+
+/// A reset returns every port pin to an input with its pull-up off. A pin that was off before
+/// it stays off, so its read stands; an output that the reset turns off starts unread.
+#[test]
+fn a_reset_keeps_the_read_of_a_pin_it_leaves_off() {
+    let mut cpu = Cpu::new();
+    cpu.load_words(&[sbi(DDRD_IO, 2), in_io(16, PIND_IO), 0]);
+    cpu.insns(2);
+    assert_eq!(cpu.pin_read_at(PD2 + 1), Some(2));
+    cpu.pull_reset();
+    assert_eq!(cpu.pin_read_at(PD2 + 1), Some(2), "PD3 stayed off");
+    assert_eq!(cpu.pin_read_at(PD2), None, "PD2 was an output");
+}

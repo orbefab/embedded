@@ -23,6 +23,7 @@ use crate::active::native::Hosted;
 use crate::active::{self, Actives};
 use crate::chip;
 use crate::device::st77916;
+use crate::inputs::Inputs;
 use crate::lte::{self, Charges, Segment, Verdict};
 use crate::mna::{Memo, Solution};
 use crate::newton::{
@@ -211,6 +212,9 @@ pub struct Session {
     pub(crate) warnings: Vec<Diagnostic>,
     /// Rated quantities, sampled at t = 0 and on each accepted step.
     ratings: Ratings,
+    /// The digital inputs a firmware read with nothing driving them, checked on each accepted
+    /// step.
+    inputs: Inputs,
     pub(crate) state: State,
 }
 
@@ -472,6 +476,7 @@ impl Session {
         let actives = Actives::new(&circuit, &start.levels);
         let mut ratings = Ratings::new(&circuit.netlist, &circuit.actives, &columns, Timing::Run);
         ratings.sample(Time::ZERO, &row, actives.cores());
+        let inputs = Inputs::new(&circuit.netlist, &circuit.actives);
         let record = rows
             .map(|rows| Record::start(transient, &columns, rows, &row, &signals, &logic))
             .transpose()
@@ -520,6 +525,7 @@ impl Session {
             opened: None,
             warnings,
             ratings,
+            inputs,
             state: State::TAKEN,
         };
         session.state = session.solved(accepted);
@@ -582,6 +588,7 @@ impl Session {
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
         let mut found = self.warnings.clone();
         found.extend(self.ratings.findings());
+        found.extend_from_slice(self.inputs.findings());
         found.extend(self.actives.warnings(&self.circuit, self.accepted()));
         crate::run_folder::sort_diagnostics(&mut found);
         found
@@ -834,6 +841,7 @@ impl Session {
         };
         diagnostics.extend(self.warnings);
         diagnostics.extend(self.ratings.findings());
+        diagnostics.extend_from_slice(self.inputs.findings());
         diagnostics.extend(self.actives.warnings(&self.circuit, at));
         let (mut observations, mut trace) =
             record.finish(&self.circuit.netlist, at, &row, diagnostics);
@@ -1105,6 +1113,13 @@ impl Session {
         // The landing was solved with the drive the cores hold until `land` below.
         self.ratings
             .sample(landing.at, &landing.row, self.actives.cores());
+        self.inputs.sample(
+            landing.at,
+            &self.circuit.netlist,
+            &self.circuit.actives,
+            self.actives.cores(),
+            |k, output| self.actives.read(k, output),
+        );
         // A refused step ends on the accepted row, so it is not counted. The count is before
         // the restart solve, so a failed restart still includes the landing it ends on.
         let left = accepted.restart_row.as_ref().unwrap_or(&accepted.row);
