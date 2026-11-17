@@ -20,6 +20,10 @@ use crate::target::one_engine;
 /// How long an LED's brightness averages its current.
 pub const BRIGHTNESS_WINDOW: Duration = Duration::from_ms(20);
 
+/// How far apart `step` records an LED sample. A held-current hint names a span
+/// only when the samples across it are at most this far apart.
+pub(super) const SAMPLE_EVERY: Duration = Duration::from_ms(1);
+
 /// A light-state change is listed once it has held this long, about one cycle of the slowest
 /// Arduino PWM, so one sample of that ripple is not listed as lit and then off. `--until` on
 /// that state lists it at the slice where the condition holds.
@@ -129,7 +133,7 @@ impl Log {
     /// Records each lamp's integral at the probe's time. A second record at the same time
     /// replaces the first. Samples older than two windows are dropped, except the newest one
     /// at or before that. The current average needs the first window, and a timeout hint
-    /// compares it with the average one window earlier.
+    /// walks both: the samples it checks still have the anchor their average needs.
     pub(super) fn note(&mut self, probe: &Probe) {
         let now = probe.at().as_ps();
         let horizon = now.saturating_sub(BRIGHTNESS_WINDOW.as_ps().saturating_mul(2));
@@ -176,11 +180,50 @@ impl Log {
 
     /// The timeout hint when `want` is unmet at `end`. `None` asks for the ordinary
     /// "step longer" hint.
+    ///
+    /// The sentence names the span from the start of the window one window before
+    /// `end` through `end`. It does that only when every sample from that earlier
+    /// window through `end` shows the same average, within 2%, and the same state.
+    /// Each of those windows lies inside the span, and the log still holds its
+    /// anchor. A sample whose window starts before the span measures time the
+    /// sentence does not name. Samples farther apart than [`SAMPLE_EVERY`] leave
+    /// a gap that was not seen, so this names no shorter span.
     pub(super) fn steady_hint(&self, index: usize, want: Light, end: Glow) -> Option<String> {
+        if end.over_ps < BRIGHTNESS_WINDOW.as_ps() {
+            return None;
+        }
         let earlier = end.at_ps.saturating_sub(BRIGHTNESS_WINDOW.as_ps());
         let start = self.glow_at(index, earlier)?;
         let lamp = &self.lamps[index];
-        steady_sentence(&lamp.path, want, start, end, lamp.lit, lamp.dim)
+        let mut prev = None;
+        let mut saw_end = false;
+        for span in self.samples[index]
+            .iter()
+            .filter(|span| (start.at_ps..=end.at_ps).contains(&span.t_ps))
+        {
+            if let Some(prev) = prev {
+                if span.t_ps - prev > SAMPLE_EVERY.as_ps() {
+                    return None;
+                }
+            } else if span.t_ps != start.at_ps {
+                return None;
+            }
+            let (amperes, _) =
+                average(&self.samples[index], span.t_ps, span.integral, span.instant);
+            let state = Light::from_average(amperes, lamp.lit, lamp.dim);
+            let scale = amperes.abs().max(end.amperes.abs()).max(1e-6);
+            if state != end.state || (amperes - end.amperes).abs() > scale * 0.02 {
+                return None;
+            }
+            prev = Some(span.t_ps);
+            saw_end = span.t_ps == end.at_ps;
+        }
+        if !saw_end {
+            return None;
+        }
+        Some(steady_sentence(
+            &lamp.path, want, start, end, lamp.lit, lamp.dim,
+        ))
     }
 
     /// The brightness at the newest sample at or before `t_ps`. Used to see whether the
@@ -242,26 +285,11 @@ fn average(samples: &VecDeque<Span>, now: u64, integral_now: f64, instant: f64) 
     ((integral_now - start.integral) / dt as f64, dt)
 }
 
-/// The timeout hint when a light condition is unmet and the last two windows agree.
-/// `start` is one window before `end`, not the moment `--until` began: that moment is often
-/// the edge that turned the LED on. The sentence names the span those windows cover. `None`
-/// asks for the ordinary "step longer" hint: the window is not full yet, or the average is
-/// still moving.
-fn steady_sentence(
-    part: &str,
-    want: Light,
-    start: Glow,
-    end: Glow,
-    lit: f64,
-    dim: f64,
-) -> Option<String> {
-    if end.over_ps < BRIGHTNESS_WINDOW.as_ps() {
-        return None;
-    }
-    let scale = start.amperes.abs().max(end.amperes.abs()).max(1e-6);
-    if (start.amperes - end.amperes).abs() > scale * 0.02 {
-        return None;
-    }
+/// The held-current sentence. `start` is one window before `end`, not the moment
+/// `--until` began: that moment is often the edge that turned the LED on. The span
+/// is the two windows together. The caller has already checked that the average held
+/// at every sample across it.
+fn steady_sentence(part: &str, want: Light, start: Glow, end: Glow, lit: f64, dim: f64) -> String {
     let need = match want {
         Light::Lit => format!("lit needs the average above {}", si_amount(lit, "A")),
         Light::Dim => format!(
@@ -280,12 +308,12 @@ fn steady_sentence(
         .at_ps
         .saturating_sub(start.at_ps)
         .saturating_add(start.over_ps);
-    Some(format!(
+    format!(
         "{part} carries {} over {} and {how}. {need}. The average has held at that value for the last {}.",
         amperes_text(end.amperes),
         Duration::from_ps(end.over_ps),
         Duration::from_ps(held),
-    ))
+    )
 }
 
 /// Three significant figures. From 0.1 mA up this is milliamps, so 0.34 mA rather than 340 uA.

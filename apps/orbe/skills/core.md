@@ -279,7 +279,7 @@ Right after `step --until @led1 lit` the pin is already high and `i` is about 12
 
 `analogWrite` on D9 and D10 runs at about 490 Hz, a period near 2 ms. One sample of the pin aliases it. 20 ms covers about ten cycles, so `brightness` reads the duty. The fade sketch adds 5 to the duty every 30 ms and turns around at 0 and 255, so samples a few hundred milliseconds apart show the rise and the fall. Near 600 ms the LED is `lit` at about 4.7 mA. Near 1.54 s it is about 12.4 mA. Near 3.01 s it is `dim` at about 0.65 mA. `expect @led1.brightness > 3mA` and `expect @led1.brightness < 7mA` check a point on that rise. A brightness within about 0.6 mA of a threshold can read either neighbouring state, because one cycle is a small part of the window and the window can catch its edge on either side.
 
-An LED behind 10 kohm from 5 V carries about 0.34 mA and reads `dim`. When `step --until` times out and the average agrees with the window before it, the hint names the current and the span those windows cover. Two full windows cover 40 ms: `led1 carries 0.34 mA over 20ms and glows dimly. lit needs the average above 2 mA. The average has held at that value for the last 40ms.` The first full window, at 20 ms, covers 20 ms, because the earlier sample is the current at t = 0. The sentence says what held over that span. A window shorter than 20 ms, or an average that is still moving, says to step longer. `lit`, `dim` and `off` are named the same way.
+An LED behind 10 kohm from 5 V carries about 0.34 mA and reads `dim`. When `step --until` times out and that average has held across the span the hint names, the hint names the current and that span. Two full windows cover 40 ms: `led1 carries 0.34 mA over 20ms and glows dimly. lit needs the average above 2 mA. The average has held at that value for the last 40ms.` The first full window, at 20 ms, covers 20 ms, because the earlier sample is the current at t = 0. A window shorter than 20 ms, or an average that moved during the span, says to step longer. `lit`, `dim` and `off` are named the same way.
 
 ## Time
 
@@ -407,7 +407,7 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 | `unknown_ref`, `no_reading` | The ref names nothing, or nothing to read. The hint lists what exists. |
 | `not_settable` | `press` and `release` work only on a switch, by its part name. `set` works only on a quantity the scene's `world` names or a part reads. |
 | `no_change` | The input asks for the state already there, such as `set light 50` when the light is already 50. |
-| `expect_failed`, `until_timeout` | The condition did not hold. Compare `actual`. When an LED's average has held, the hint names that current and the span the windows cover. A window shorter than 20 ms, or an average that is still moving, says to step longer. Otherwise fix the circuit or the firmware, or step longer. |
+| `expect_failed`, `until_timeout` | The condition did not hold. Compare `actual`. When an LED's average has held across the span the hint names, the hint names that current and that span. A window shorter than 20 ms, or an average that moved during the span, says to step longer. Otherwise fix the circuit or the firmware, or step longer. |
 | `ended`, `past_stop` | The session reached its 2-hour stop. Run `orbe open`. |
 | `cancelled` | Ctrl-C stopped a `step`. The session stays at the time it reached. Step again. |
 | `faulted` | The engine stopped the session. The message names why. Fix it and run `orbe open`. |
