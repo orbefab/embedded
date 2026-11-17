@@ -122,6 +122,22 @@ fn high_into(load: f64) -> f64 {
 }
 
 #[test]
+fn the_documented_ratings_are_the_part_files() {
+    let ratings = block("\"ratings\"");
+    for part in ["atmega328p-dip28", "atmega328p-tqfp32"] {
+        let file = fs::read_to_string(repo(&format!("parts/{part}/part.jsonc"))).unwrap();
+        for line in ratings
+            .lines()
+            .skip(1)
+            .filter(|line| line.contains("\"value\""))
+        {
+            let line = line.trim().trim_end_matches(',');
+            assert!(file.contains(line), "{part} lacks {line}");
+        }
+    }
+}
+
+#[test]
 fn a_chip_with_no_ratings_object_is_unrated() {
     let mut netlist = rated();
     chip(&mut netlist)
