@@ -376,7 +376,7 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 | `scene.unknown_pin`, `scene.param`, `scene.syntax` | A typo or a wrong value at that line and column. The hint names what is valid. |
 | `scene.world` | A `world` quantity that does not exist, a value outside its range, or a step at 0, too close to the one before it, or that does not change the value. The hint names what is valid. |
 | `part_modified` | A copied part was edited. Run `orbe add <id> --overwrite` to restore it, or copy it to a folder of your own. |
-| `part_format` | The part file's format is not one this orbe reads. An older part is written for an older orbe: run `orbe add <id> --overwrite`. A newer part means this project needs a newer orbe. |
+| `part_format` | The part file's format is not one this orbe reads. An older catalog copy is written for an older orbe: run `orbe add <id> --overwrite`. A part opened by a `./` path is the user's file: update that file to the format this orbe reads, including its model, or point the scene at the catalog id if the file copies one. A newer part means this project needs a newer orbe. |
 | `no_session` | No session runs under this name. Run the `orbe open` in the hint. |
 | `session_crashed` | The session's process died. Run `orbe open` again. |
 | `unknown_ref`, `no_reading` | The ref names nothing, or nothing to read. The hint lists what exists. |

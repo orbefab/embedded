@@ -295,7 +295,7 @@ fn format_ok(file: FileId, root: &Node, out: &mut Findings, part: Option<&str>) 
     {
         return true;
     }
-    let (message, hint) = format_refusal(root, node, part, &reads);
+    let (message, hint) = format_refusal(node, part, &reads);
     report_format(out, part, node.span, message, hint);
     false
 }
@@ -318,7 +318,12 @@ fn report_format(
 /// What to say when `format` is present and not one [`FORMATS`] lists. A whole number below
 /// the oldest is an older orbe, and one above the newest is a newer orbe. Anything else, a
 /// gap included, stays the plain refusal.
-fn format_refusal(root: &Node, node: &Node, part: Option<&str>, reads: &str) -> (String, String) {
+///
+/// A label that is not an id was opened by path. That file is the user's. `orbe add` writes
+/// `parts/<id>/`, so it would replace a catalog copy, or fail `unknown_part`, and leave this
+/// file at the old format. The hint tells them to update the file, or to point the scene at
+/// the catalog part when the file is a copy of one.
+fn format_refusal(node: &Node, part: Option<&str>, reads: &str) -> (String, String) {
     let plain = (
         format!("format {} is not one this binary reads", node.to_value()),
         format!("this binary reads format {reads}"),
@@ -330,14 +335,19 @@ fn format_refusal(root: &Node, node: &Node, part: Option<&str>, reads: &str) -> 
         return plain;
     };
     if n < min {
-        let id = part.map(|label| part_id(root, label));
-        let message = match &id {
-            Some(id) => format!("{id} is written for an older orbe"),
-            None => format!("format {n} is written for an older orbe"),
+        let Some(label) = part else {
+            return (
+                format!("format {n} is written for an older orbe"),
+                format!("this binary reads format {reads}"),
+            );
         };
-        let hint = match id {
-            Some(id) if is_id(&id) => format!("run `orbe add {id} --overwrite`"),
-            _ => format!("this binary reads format {reads}"),
+        let message = format!("{label} is written for an older orbe");
+        let hint = if is_id(label) {
+            format!("run `orbe add {label} --overwrite`")
+        } else {
+            format!(
+                "update this file to format {max}, including its model. if it copies a catalog part, point the scene at that id instead of this path"
+            )
         };
         return (message, hint);
     }
@@ -364,18 +374,6 @@ fn whole_format(node: &Node) -> Option<u32> {
     } else {
         None
     }
-}
-
-/// The catalog id a format error names: the label when that is an id, else the file's `part`.
-fn part_id(root: &Node, label: &str) -> String {
-    if is_id(label) {
-        return label.to_string();
-    }
-    root.get("part")
-        .and_then(Node::str)
-        .filter(|text| is_id(text))
-        .unwrap_or(label)
-        .to_string()
 }
 
 fn name_ok(name: &str, span: Span, kind: NameKind, what: &str, out: &mut Findings) -> bool {

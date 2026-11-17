@@ -1,9 +1,10 @@
-//! Every catalog part, and every part `released.lock` still has a folder for, loads under this
-//! engine, or its `format` is no longer one this binary reads. The lock holds a served record's
-//! hash. The record is rebuilt from the part file in source, so this reads that file.
+//! Every part under `parts/` is in a format this binary reads, and loads under this engine.
+//! A `released.lock` id whose folder is an older format this binary stopped reading is the one
+//! skip: that file is refused on purpose, and loading it would only repeat the refusal.
 
 mod common;
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
@@ -13,7 +14,7 @@ use orbe_scene::{Diagnostic, Files, Literal, Param, catalog_cards};
 use serde_json::{Map, Value, json};
 
 #[test]
-fn every_catalog_part_and_released_part_loads_or_its_format_was_raised() {
+fn every_part_under_parts_loads_in_a_format_this_binary_reads() {
     let root = repo();
     let ids = part_ids(&root);
     assert!(
@@ -26,17 +27,30 @@ fn every_catalog_part_and_released_part_loads_or_its_format_was_raised() {
         "{ \"format\": 1, \"block\": \"probe\", \"version\": \"0.1.0\", \"title\": \"Probe\", \"board\": \"probe\", \"license\": \"MIT\" }\n",
     )
     .unwrap();
+    fs::write(
+        dir.path().join("probe-ground.jsonc"),
+        serde_json::to_string_pretty(&probe_ground()).unwrap(),
+    )
+    .unwrap();
     fs::copy(
         root.join("packages/engine/tests/firmware/sketch/button.hex"),
         dir.path().join("firmware.hex"),
     )
     .unwrap();
+    let released = released_ids(&root);
     let cards = catalog_cards();
     let mut loaded = 0usize;
     let mut failures = Vec::new();
     for id in &ids {
         let text = fs::read_to_string(root.join("parts").join(id).join("part.jsonc")).unwrap();
-        if raised(&text) {
+        if released_older(id, &text, &released) {
+            continue;
+        }
+        if !reads_format(&text) {
+            failures.push(format!(
+                "{id}: format {} is not one this binary reads. Every part under parts/ has to be in a format this binary reads, and load. The only skip is a released.lock id whose file is an older format this binary stopped reading.",
+                format_token(&text)
+            ));
             continue;
         }
         let card = cards
@@ -58,6 +72,39 @@ fn every_catalog_part_and_released_part_loads_or_its_format_was_raised() {
     );
 }
 
+#[test]
+fn an_enum_refusal_names_the_field_the_engine_does_not_read() {
+    let message = "`u1`: the engine does not read `emission_coefficient.source.datasheet.basis`: unknown variant `typical`, expected one of `typ`";
+    assert_eq!(
+        field_names(message),
+        vec!["emission_coefficient.source.datasheet.basis".to_string()]
+    );
+}
+
+/// The newest format this binary reads. The probe scene and its ground use it, so dropping an
+/// older format does not make the probe itself a `scene.format` error.
+fn current_format() -> u32 {
+    orbe_scene::FORMATS
+        .iter()
+        .copied()
+        .max()
+        .expect("this binary reads a format")
+}
+
+/// A voltage source the test writes. A catalog part here would fail every probe when that
+/// part's fields change, and again when that part's format is no longer one this binary reads.
+fn probe_ground() -> Value {
+    json!({
+        "format": current_format(),
+        "pins": { "pos": [1], "neg": [2] },
+        "model": {
+            "kind": "voltage_source",
+            "voltage": { "value": 0, "unit": "V", "source": "user" },
+            "pins": { "p": "pos", "n": "neg" }
+        }
+    })
+}
+
 /// Part ids in `parts/`, plus any `released.lock` part whose folder is still there. A line
 /// whose folder is gone cannot be rebuilt. A Block has no `model`.
 fn part_ids(root: &Path) -> Vec<String> {
@@ -66,25 +113,39 @@ fn part_ids(root: &Path) -> Vec<String> {
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .filter(|id| root.join("parts").join(id).join("part.jsonc").is_file())
         .collect();
-    let lock = fs::read_to_string(root.join("released.lock")).unwrap_or_default();
-    for line in lock.lines().filter(|line| !line.is_empty()) {
-        let Some(id) = line.split_whitespace().next() else {
-            continue;
-        };
-        if root.join("parts").join(id).join("part.jsonc").is_file()
-            && !ids.iter().any(|seen| seen == id)
+    for id in released_ids(root) {
+        if root.join("parts").join(&id).join("part.jsonc").is_file()
+            && !ids.iter().any(|seen| seen == &id)
         {
-            ids.push(id.to_string());
+            ids.push(id);
         }
     }
     ids.sort();
     ids
 }
 
-/// A whole `format` this binary does not read. That is the raise: the old file is refused
-/// before the engine sees it.
-fn raised(text: &str) -> bool {
-    declared_format(text).is_some_and(|n| !orbe_scene::FORMATS.contains(&n))
+fn released_ids(root: &Path) -> BTreeSet<String> {
+    let lock = fs::read_to_string(root.join("released.lock")).unwrap_or_default();
+    lock.lines()
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| line.split_whitespace().next().map(str::to_string))
+        .collect()
+}
+
+/// `id` is in `released.lock` and its file's format is older than every format this binary
+/// reads. The binary refuses that file on purpose.
+fn released_older(id: &str, text: &str, released: &BTreeSet<String>) -> bool {
+    let Some(n) = declared_format(text) else {
+        return false;
+    };
+    let Some(oldest) = orbe_scene::FORMATS.iter().copied().min() else {
+        return false;
+    };
+    released.contains(id) && n < oldest
+}
+
+fn reads_format(text: &str) -> bool {
+    declared_format(text).is_some_and(|n| orbe_scene::FORMATS.contains(&n))
 }
 
 fn declared_format(text: &str) -> Option<u32> {
@@ -96,6 +157,15 @@ fn declared_format(text: &str) -> Option<u32> {
         Some(n as u32)
     } else {
         None
+    }
+}
+
+fn format_token(text: &str) -> String {
+    match top_level(text, "format") {
+        Some(JsonValue::Number(raw)) => raw.to_string(),
+        Some(JsonValue::String(raw)) => format!("\"{raw}\""),
+        Some(_) => "unreadable".into(),
+        None => "missing".into(),
     }
 }
 
@@ -120,13 +190,12 @@ fn scene_for(card: &orbe_scene::Card, own_ground: bool) -> String {
     let mut parts = Map::new();
     parts.insert("u1".into(), Value::Object(instance(card)));
     let mut root = Map::new();
-    root.insert("format".into(), json!(1));
+    root.insert("format".into(), json!(current_format()));
     if !own_ground {
-        parts.insert(
-            "g".into(),
-            json!({ "type": "resistor-axial", "resistance": "1k" }),
-        );
-        root.insert("ground".into(), json!("g.a"));
+        // The ground is a file this test writes, not a catalog part. A catalog resistor here
+        // makes a resistor field change look like every part broke.
+        parts.insert("g".into(), json!({ "type": "./probe-ground.jsonc" }));
+        root.insert("ground".into(), json!("g.neg"));
     }
     root.insert("parts".into(), Value::Object(parts));
     serde_json::to_string_pretty(&Value::Object(root)).unwrap()
@@ -191,7 +260,7 @@ fn explain(id: &str, diagnostics: &[Diagnostic]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "{id}: field {fields}. Raise the part format in parts/{id}/part.jsonc, and drop that format from the formats this binary reads, so an old copy is refused with `orbe add {id} --overwrite` instead of a field error.\n{shown}"
+        "{id}: field {fields}. Raise parts/{id}/part.jsonc to the next format, move its model onto what this binary reads, and drop the format that file leaves. Add that format to the formats this binary reads. Drop an older format from those formats only once every part under parts/ has left it, apart from a released.lock id whose file is an older format this binary no longer reads. An old copy of {id} is then refused with `orbe add {id} --overwrite` instead of a field error.\n{shown}"
     )
 }
 
@@ -211,6 +280,8 @@ fn fields_of(diagnostics: &[Diagnostic]) -> String {
     }
 }
 
+/// The field a message names in backticks after `field `, `needs `, or `read `. The engine's
+/// schema refusal is `the engine does not read `<field>``, and an unknown variant is that shape.
 fn field_names(message: &str) -> Vec<String> {
     let mut found = Vec::new();
     let mut rest = message;
@@ -221,7 +292,11 @@ fn field_names(message: &str) -> Vec<String> {
         };
         let key = &after[..end];
         let before = &rest[..at];
-        if !key.is_empty() && (before.ends_with("field ") || before.ends_with("needs ")) {
+        if !key.is_empty()
+            && (before.ends_with("field ")
+                || before.ends_with("needs ")
+                || before.ends_with("read "))
+        {
             found.push(key.to_string());
         }
         rest = &after[end + 1..];
