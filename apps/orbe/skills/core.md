@@ -378,6 +378,7 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 | `part_outdated` | The copy matches its `parts.lock` line and is an older version than this orbe carries. The message names both versions. Run the one `orbe add` command in the hint. It names every older id, and no newer one. |
 | `part_newer` | The copy matches its `parts.lock` line and is a newer version than this orbe carries. The message names both versions. This project needs a newer orbe. The hint names no `orbe add` command. `--overwrite` leaves the copy, and says so. |
 | `part_modified` | A copied part was edited. Run `orbe add <id> --overwrite` to restore it, or copy it to a folder of your own. |
+| `part_format` | The part file's format is not one this orbe reads. An older catalog copy is written for an older orbe: run `orbe add <id> --overwrite`. A part opened by a `./` path is the user's file: update that file to the format this orbe reads, including its model, or point the scene at the catalog id if the file copies one. A newer part means this project needs a newer orbe. |
 | `no_session` | No session runs under this name. Run the `orbe open` in the hint. |
 | `session_crashed` | The session's process died. Run `orbe open` again. |
 | `unknown_ref`, `no_reading` | The ref names nothing, or nothing to read. The hint lists what exists. |

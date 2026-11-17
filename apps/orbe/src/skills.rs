@@ -565,6 +565,7 @@ mod tests {
             Scene::PartModified,
             Scene::PartOutdated,
             Scene::PartNewer,
+            Scene::PartFormat,
             Scene::Io,
             Scene::World,
         ];

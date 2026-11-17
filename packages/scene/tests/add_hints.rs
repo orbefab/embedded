@@ -12,8 +12,10 @@
 //! - 15: `orbe add` of a Block, of that Block with a version, and with `--overwrite`, into
 //!   four mixed projects and an empty folder.
 //! - 4: `--relock` beside a lock line that does not parse.
+//! - 2: a catalog copy at format 0, a sealed part and a board. Each check prints an
+//!   `orbe add`. A part opened by a `./` path prints none, so it is not here.
 //!
-//! 64 + 96 + 48 + 15 + 4 = 227. A printed command names an id, unless it is `--relock`.
+//! 64 + 96 + 48 + 15 + 4 + 2 = 229. A printed command names an id, unless it is `--relock`.
 //! Running it must not put a part at an older version, and must not print that same
 //! command again. A check that prints a command already run is a loop. The project then
 //! checks, or it reports only `part_newer` for a lock-matching copy this binary does not carry.
@@ -54,7 +56,7 @@ const CARRIED: Ver = (0, 1, 0);
 
 const STATES: [State; 4] = [State::Older, State::Newer, State::Edited, State::Other];
 
-const COMBINATIONS: usize = 227;
+const COMBINATIONS: usize = 229;
 
 #[test]
 fn printed_add_hints_leave_a_check_that_is_clean_or_only_newer() {
@@ -141,6 +143,10 @@ fn printed_add_hints_leave_a_check_that_is_clean_or_only_newer() {
     for case in 0..4 {
         let name = format!("relock {}", relock_name(case));
         fail(name, relock_case(case));
+    }
+    for id in ["led-5mm", "nano-board"] {
+        let name = format!("format-0 {id}");
+        fail(name, format_case(id));
     }
 
     assert_eq!(tried, COMBINATIONS, "the matrix above");
@@ -297,6 +303,39 @@ fn block_empty(mode: BlockMode) -> Vec<String> {
         &mut problems,
     );
     problems
+}
+
+/// A catalog copy at format 0. Check prints one `orbe add`, and running it restores the copy.
+fn format_case(id: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+    let (_scratch, outside, project) = placed();
+    set_format(&project, id);
+    let (diagnostics, commands) = scene_hints(&project);
+    if !diagnostics.iter().any(|d| d.code == Code::PartFormat) {
+        problems.push(format!("check reported no part_format for {id}"));
+    }
+    if commands.is_empty() {
+        problems.push(format!("part_format for {id} printed no orbe add"));
+    }
+    let before = versions(&project);
+    drive(
+        &outside,
+        &project,
+        None,
+        &before,
+        &BTreeSet::new(),
+        false,
+        &mut problems,
+    );
+    problems
+}
+
+fn set_format(project: &Path, id: &str) {
+    let file = project.join("parts").join(id).join("part.jsonc");
+    let text = fs::read_to_string(&file).unwrap();
+    let edited = text.replacen("\"format\": 1", "\"format\": 0", 1);
+    assert_ne!(text, edited, "{id}");
+    fs::write(&file, edited).unwrap();
 }
 
 fn relock_case(case: usize) -> Vec<String> {
