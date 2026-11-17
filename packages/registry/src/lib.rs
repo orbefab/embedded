@@ -12,7 +12,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use orbe_scene::{Folder, Missing, Version};
+use orbe_scene::{Diagnostic, Folder, Missing, Version};
 use schemars::generate::SchemaSettings;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -45,6 +45,8 @@ pub enum Error {
     /// parts are missing, two items with one name. Or `--previous` is not a registry this
     /// build can carry forward.
     Invalid(String),
+    /// A part file or a Block scene the reader `orbe check` uses would refuse, with those findings.
+    Check(Vec<Diagnostic>),
     /// The output folder already holds files.
     NotEmpty(PathBuf),
     /// A file could not be read or written.
@@ -55,6 +57,15 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Invalid(message) | Error::Io(message) => f.write_str(message),
+            Error::Check(found) => {
+                for (i, diagnostic) in found.iter().enumerate() {
+                    if i > 0 {
+                        writeln!(f)?;
+                    }
+                    write!(f, "{diagnostic}")?;
+                }
+                Ok(())
+            }
             Error::NotEmpty(out) => write!(
                 f,
                 "{} is not empty, and a registry is written into an empty folder",
@@ -241,7 +252,8 @@ fn manifest(src: &Path) -> Result<Manifest, Error> {
 /// a registry. Only folders there are items. Every file in an item's folder is one of its
 /// files. With `previous`, a folder an earlier build wrote, every record it serves stays served:
 /// a version the source still holds must build to the same bytes, and the others are carried
-/// forward with their files. The error is a sentence that says what does not read.
+/// forward with their files. The error is a sentence that says what does not read, or the
+/// findings `orbe check` would print for a part file or a Block scene.
 pub fn build(src: &Path, previous: Option<&Path>) -> Result<Registry, Error> {
     let manifest = manifest(src)?;
     let parts = folders(src, "parts")?;
@@ -256,6 +268,11 @@ pub fn build(src: &Path, previous: Option<&Path>) -> Result<Registry, Error> {
         return Err(Error::Invalid(format!(
             "`{id}` is both a part and a Block, and one name names one item"
         )));
+    }
+    // `cards` parses a part file and does not read its shape. Stop on the reader `orbe check` uses.
+    let refused = reader_findings(&parts, &blocks);
+    if !refused.is_empty() {
+        return Err(Error::Check(refused));
     }
     let cards = orbe_scene::cards(&parts).map_err(Error::Invalid)?;
     let mut block_cards = Vec::new();
@@ -335,6 +352,26 @@ pub fn build(src: &Path, previous: Option<&Path>) -> Result<Registry, Error> {
         output,
         report,
     })
+}
+
+/// Findings the part-file reader and the scene reader report, in the order `orbe check` prints.
+fn reader_findings(
+    parts: &BTreeMap<String, Folder>,
+    blocks: &BTreeMap<String, Folder>,
+) -> Vec<Diagnostic> {
+    let mut found = Vec::new();
+    for (id, files) in parts {
+        found.extend(orbe_scene::part_findings(id, files));
+    }
+    for (id, files) in blocks {
+        found.extend(orbe_scene::block_findings(id, files));
+    }
+    found.sort_by(|a, b| {
+        (&a.file, a.line, a.column, a.code, &a.message)
+            .cmp(&(&b.file, b.line, b.column, b.code, &b.message))
+    });
+    found.dedup();
+    found
 }
 
 fn notice(item: &Item, file: &File) -> Vec<Notice> {

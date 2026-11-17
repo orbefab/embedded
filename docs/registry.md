@@ -25,10 +25,10 @@ The build fails, and writes nothing, when:
 - `registry.jsonc` is missing, holds a key other than `format`, `name` and `homepage`, or has a bad `name` or `homepage`;
 - an item folder's name is not an id, or is reserved (see [Names](#names));
 - a file path in an item is one some platform cannot hold (see step 5 of [Verify what you fetch](#verify-what-you-fetch)), or two paths differ only in case;
-- a `part.jsonc` does not parse, has no version in the one spelling, has no `license`, or names another folder in `part`;
+- a `part.jsonc` does not parse, the part-file reader refuses it, it has no version in the one spelling, it has no `license`, or it names another folder in `part`. The reader is the one `orbe check` uses, and the finding has the same code, place and message;
 - a part `uses` a part and version the registry lacks;
 - a `block.jsonc` holds a key other than `format`, `block`, `version`, `title`, `summary`, `board`, `tags` and `license`, lacks `version`, `title`, `board` or `license`, or names another folder in `block`;
-- a Block's scene names a part the registry lacks, or an `@<registry>/<id>`, or does not use the Block's `board`;
+- a Block's `scene.jsonc` does not parse or the scene reader refuses it, with that same finding, or the scene names a part the registry lacks, or an `@<registry>/<id>`, or does not use the Block's `board`;
 - a part and a Block share a name;
 - with `--previous`, the earlier build does not check out, or a version it serves would build to a different record (see [Versions](#versions)).
 

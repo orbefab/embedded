@@ -47,6 +47,30 @@ pub use summary::{
     missing_fields, near_names, param_sentence, search, si_amount,
 };
 
+/// Findings the part-file reader reports for `parts/<id>/part.jsonc` in `files`. [`read`] uses
+/// that reader on a part a project installed. Empty when the file is missing or not UTF-8.
+pub fn part_findings(id: &str, files: &Folder) -> Vec<Diagnostic> {
+    let Some(text) = utf8_file(files, "part.jsonc") else {
+        return Vec::new();
+    };
+    project::part_diagnostics(id, &text)
+}
+
+/// Findings the scene reader reports for `blocks/<id>/scene.jsonc` in `files`. [`read`] uses
+/// that reader on a scene. Empty when the file is missing or not UTF-8.
+pub fn block_findings(id: &str, files: &Folder) -> Vec<Diagnostic> {
+    let Some(text) = utf8_file(files, "scene.jsonc") else {
+        return Vec::new();
+    };
+    project::scene_diagnostics(id, &text)
+}
+
+fn utf8_file(files: &Folder, rel: &str) -> Option<String> {
+    std::str::from_utf8(files.get(rel)?)
+        .ok()
+        .map(str::to_string)
+}
+
 /// Type-checks a scene and every part file it reaches. On success, the netlist the engine
 /// opens. Otherwise every finding, sorted by file, line and column.
 pub fn read(files: &Files, scene: &Path) -> Result<Netlist, Vec<Diagnostic>> {

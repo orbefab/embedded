@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use crate::catalog::Version;
-use crate::diagnostic::{Code, Findings};
+use crate::diagnostic::{Code, Diagnostic, Findings};
 use crate::files::{Files, Kind};
 use crate::model::{Comp, Part, Scene, TypeRef, decode_part, decode_scene};
 use crate::name::did_you_mean;
@@ -127,6 +127,56 @@ struct Loader<'a> {
     add: String,
 }
 
+/// Parses `file` and reads it as a part. This is the part-file reader `orbe check` runs.
+pub(crate) fn parse_part(
+    sources: &Sources,
+    file: FileId,
+    label: String,
+    out: &mut Findings,
+) -> Option<Part> {
+    syntax::parse(sources, file, out).and_then(|tree| decode_part(sources, file, label, &tree, out))
+}
+
+/// Parses `file` and reads it as a scene. This is the scene reader `orbe check` runs.
+pub(crate) fn parse_scene(sources: &Sources, file: FileId, out: &mut Findings) -> Option<Scene> {
+    syntax::parse(sources, file, out).and_then(|tree| decode_scene(sources, file, &tree, out))
+}
+
+/// Findings [`parse_part`] reports for the text of `parts/<id>/part.jsonc`.
+pub(crate) fn part_diagnostics(id: &str, text: &str) -> Vec<Diagnostic> {
+    reader_diagnostics(
+        &format!("parts/{id}/part.jsonc"),
+        text,
+        |sources, file, out| {
+            parse_part(sources, file, id.to_string(), out);
+        },
+    )
+}
+
+/// Findings [`parse_scene`] reports for the text of `blocks/<id>/scene.jsonc`.
+pub(crate) fn scene_diagnostics(id: &str, text: &str) -> Vec<Diagnostic> {
+    reader_diagnostics(
+        &format!("blocks/{id}/scene.jsonc"),
+        text,
+        |sources, file, out| {
+            parse_scene(sources, file, out);
+        },
+    )
+}
+
+fn reader_diagnostics(
+    rel: &str,
+    text: &str,
+    decode: impl FnOnce(&Sources, FileId, &mut Findings),
+) -> Vec<Diagnostic> {
+    let root = Path::new("registry");
+    let mut sources = Sources::new(root);
+    let file = sources.add(&root.join(rel), text.to_string());
+    let mut out = Findings::default();
+    decode(&sources, file, &mut out);
+    out.into_diagnostics(&sources)
+}
+
 /// Reads the scene and everything it uses. When the scene itself does not read, the files
 /// read so far, so its findings can be placed.
 pub(crate) fn load<'f>(
@@ -155,10 +205,9 @@ pub(crate) fn load<'f>(
         used: BTreeSet::new(),
         add,
     };
-    let scene = loader.read(&scene_path).and_then(|file| {
-        let tree = syntax::parse(&loader.sources, file, loader.out)?;
-        decode_scene(&loader.sources, file, &tree, loader.out)
-    });
+    let scene = loader
+        .read(&scene_path)
+        .and_then(|file| parse_scene(&loader.sources, file, loader.out));
     let Some(scene) = scene else {
         return Err(loader.sources);
     };
@@ -425,8 +474,7 @@ impl Loader<'_> {
         };
         let part = file.and_then(|file| {
             let before = self.out.len();
-            let mut part = syntax::parse(&self.sources, file, self.out)
-                .and_then(|tree| decode_part(&self.sources, file, label, &tree, self.out));
+            let mut part = parse_part(&self.sources, file, label, self.out);
             if let Some(part) = &mut part {
                 part.reported = self.out.since(before);
             }

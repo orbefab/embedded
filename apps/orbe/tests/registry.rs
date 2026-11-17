@@ -153,3 +153,193 @@ fn previous_carries_a_build_forward_and_refuses_a_changed_version() {
     );
     assert!(!third.exists(), "a refused build writes nothing");
 }
+
+/// A part file, or a Block scene, that `orbe check` refuses is not published. The build exits
+/// with the same finding and writes nothing.
+#[test]
+fn a_part_check_would_refuse_is_not_published() {
+    let parts = [
+        (
+            "blob-chip",
+            r#"{
+  "format": 1,
+  "part": "blob-chip",
+  "version": "0.1.0",
+  "title": "Blob",
+  "license": "MIT",
+  "pins": { "a": [1], "b": [2] },
+  "params": { "image": { "file": "bin", "as": "blob", "default": "image.bin", "sets": "/note" } },
+  "model": { "kind": "resistor" }
+}
+"#,
+            "blob",
+        ),
+        (
+            "odd-key",
+            r#"{
+  "format": 1,
+  "part": "odd-key",
+  "version": "0.1.0",
+  "title": "Odd",
+  "license": "MIT",
+  "pins": { "a": [1], "b": [2] },
+  "extra": 1,
+  "model": { "kind": "resistor" }
+}
+"#,
+            "extra",
+        ),
+        (
+            "bad-pin",
+            r#"{
+  "format": 1,
+  "part": "bad-pin",
+  "version": "0.1.0",
+  "title": "Pin",
+  "license": "MIT",
+  "pins": { "a": true },
+  "model": { "kind": "resistor" }
+}
+"#,
+            "found a boolean",
+        ),
+    ];
+    for (id, part, snippet) in parts {
+        refused_part(id, part, snippet);
+    }
+    refused_block();
+}
+
+fn refused_part(id: &str, part: &str, snippet: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    let folder = src.join("parts").join(id);
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        src.join("registry.jsonc"),
+        r#"{ "format": 1, "name": "@acme" }"#,
+    )
+    .unwrap();
+    std::fs::write(folder.join("part.jsonc"), part).unwrap();
+
+    let project = dir.path().join("project");
+    let copy = project.join("parts").join(id);
+    std::fs::create_dir_all(&copy).unwrap();
+    std::fs::write(copy.join("part.jsonc"), part).unwrap();
+    std::fs::write(
+        project.join("scene.jsonc"),
+        format!(
+            "{{ \"format\": 1, \"parts\": {{ \"chip\": {{ \"type\": \"./parts/{id}/part.jsonc\" }} }} }}\n"
+        ),
+    )
+    .unwrap();
+    let found = check_finding(&project.join("scene.jsonc"), snippet);
+    let out = dir.path().join("out");
+    assert_refused(&src, &out, &format!("parts/{id}/part.jsonc"), &found);
+}
+
+fn refused_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    std::fs::create_dir_all(src.join("parts/lamp")).unwrap();
+    std::fs::create_dir_all(src.join("blocks/bad-block")).unwrap();
+    std::fs::write(
+        src.join("registry.jsonc"),
+        r#"{ "format": 1, "name": "@acme" }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        src.join("parts/lamp/part.jsonc"),
+        r#"{
+  "format": 1,
+  "part": "lamp",
+  "version": "1.2.0",
+  "title": "Lamp",
+  "license": "MIT",
+  "pins": { "a": [1], "b": [2] },
+  "model": { "kind": "resistor" }
+}
+"#,
+    )
+    .unwrap();
+    let scene = r#"{
+  "format": 1,
+  "parts": { "l1": { "type": "lamp" } },
+  "titel": "no"
+}
+"#;
+    std::fs::write(src.join("blocks/bad-block/scene.jsonc"), scene).unwrap();
+    std::fs::write(
+        src.join("blocks/bad-block/block.jsonc"),
+        r#"{ "format": 1, "block": "bad-block", "version": "0.1.0", "title": "A lamp", "board": "lamp", "license": "MIT" }"#,
+    )
+    .unwrap();
+
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("scene.jsonc"), scene).unwrap();
+    let found = check_finding(&project.join("scene.jsonc"), "titel");
+    let out = dir.path().join("out");
+    assert_refused(&src, &out, "blocks/bad-block/scene.jsonc", &found);
+}
+
+struct Found {
+    code: String,
+    line: u64,
+    column: u64,
+    message: String,
+    hint: String,
+}
+
+fn check_finding(scene: &Path, snippet: &str) -> Found {
+    let (code, stdout, stderr) = orbe(&["check", "--json", scene.to_str().unwrap()]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
+    let found = reply["data"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["message"].as_str().unwrap().contains(snippet))
+        .unwrap_or_else(|| panic!("no finding containing {snippet} in {stdout}"));
+    Found {
+        code: found["code"].as_str().unwrap().to_string(),
+        line: found["line"].as_u64().unwrap(),
+        column: found["column"].as_u64().unwrap(),
+        message: found["message"].as_str().unwrap().to_string(),
+        hint: found["hint"].as_str().unwrap().to_string(),
+    }
+}
+
+fn assert_refused(src: &Path, out: &Path, file: &str, found: &Found) {
+    let path = |p: &Path| p.to_str().unwrap().to_string();
+    let (code, stdout, stderr) = orbe(&["registry", "build", &path(src), &path(out)]);
+    let got = format!("{stdout}{stderr}");
+    assert_eq!(code, Some(1), "{got}");
+    assert!(
+        got.contains(&format!(
+            "{file}:{}:{}: error[{}]: {}",
+            found.line, found.column, found.code, found.message
+        )),
+        "{got}"
+    );
+    assert!(got.contains(&format!("hint: {}", found.hint)), "{got}");
+    assert!(!out.exists(), "a refused build writes nothing: {got}");
+
+    let (code, stdout, stderr) = orbe(&["registry", "build", "--json", &path(src), &path(out)]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["error"]["code"], "scene_invalid");
+    let diagnostics = reply["data"]["diagnostics"].as_array().unwrap();
+    let same = diagnostics.iter().find(|d| {
+        d["code"] == found.code
+            && d["message"] == found.message
+            && d["hint"] == found.hint
+            && d["line"] == found.line
+            && d["column"] == found.column
+            && d["file"] == file
+    });
+    assert!(same.is_some(), "{stdout}");
+    assert!(!out.exists(), "a refused build writes nothing");
+}
