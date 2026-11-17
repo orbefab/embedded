@@ -425,8 +425,9 @@ impl Loader<'_> {
         };
         let part = file.and_then(|file| {
             let before = self.out.len();
-            let mut part = syntax::parse(&self.sources, file, self.out)
-                .and_then(|tree| decode_part(&self.sources, file, label, &tree, self.out));
+            let mut part = syntax::parse(&self.sources, file, self.out).and_then(|tree| {
+                decode_part(&self.sources, file, label, &tree, self.out, &self.add)
+            });
             if let Some(part) = &mut part {
                 part.reported = self.out.since(before);
             }

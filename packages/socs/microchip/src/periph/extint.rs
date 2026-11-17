@@ -136,6 +136,25 @@ clone_fields!(ExtInt {
 });
 
 impl ExtInt {
+    /// The pins an enabled interrupt watches, one bit per pin id: each `INTn` line `EIMSK`
+    /// enables, and each pin `PCMSKn` selects in a group `PCICR` enables.
+    pub(crate) fn sensed(&self) -> u64 {
+        let lines = self
+            .cfg
+            .lines
+            .iter()
+            .filter(|line| self.eimsk & (1 << line.bit) != 0)
+            .fold(0u64, |pins, line| pins | 1 << line.pin);
+        self.cfg
+            .groups
+            .iter()
+            .filter(|group| self.pcicr & (1 << group.bit) != 0)
+            .fold(lines, |pins, group| {
+                let mask = self.pcmsk[usize::from(group.index)] & group.valid;
+                pins | u64::from(mask) << group.port.pin_id(0)
+            })
+    }
+
     pub(crate) fn new(cfg: ExtIntCfg) -> Self {
         Self {
             cfg,

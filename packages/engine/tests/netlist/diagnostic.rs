@@ -92,6 +92,7 @@ fn samples() -> Vec<Diagnostic> {
             peak_at: Time::ZERO,
             first: Time::ZERO,
             over_ps: None,
+            window_ps: None,
         }),
         Diagnostic::RatingPower(Excursion {
             quantity: "#r1.p".parse().unwrap(),
@@ -100,6 +101,7 @@ fn samples() -> Vec<Diagnostic> {
             peak_at: Time::from_ps(7),
             first: Time::from_ps(5),
             over_ps: Some(4),
+            window_ps: None,
         }),
         Diagnostic::NetlistSchedule {
             part: part("sw1"),
@@ -178,6 +180,19 @@ fn codes_are_unique_and_match_the_grammar() {
         assert!(seen.insert(code), "duplicate code {code}");
     }
     assert_eq!(seen.len(), 24);
+}
+
+/// `docs/engine/diagnostics.md` gives each code its own `## <code>` heading.
+#[test]
+fn each_code_has_its_heading_in_the_diagnostics_doc() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/engine/diagnostics.md"),
+    )
+    .unwrap();
+    for diagnostic in samples() {
+        let heading = format!("\n## {}\n", diagnostic.code());
+        assert!(doc.contains(&heading), "no heading {heading:?}");
+    }
 }
 
 #[test]
@@ -300,7 +315,7 @@ fn severity_refs_and_time_follow_the_variant() {
     let current = serde_json::to_string(by_code(&found, "rating.current")).unwrap();
     assert!(
         current.contains(
-            r##""message":"#led1.i peaks at 0.5 A, over its 0.03 A rating","data":{"limit":0.03,"over_ps":null,"peak":0.5,"peak_ps":0}"##
+            r##""message":"#led1.i peaks at 0.5 A, over its 0.03 A rating","data":{"limit":0.03,"over_ps":null,"peak":0.5,"peak_ps":0,"window_ps":null}"##
         ),
         "{current}"
     );
@@ -350,7 +365,7 @@ fn severity_refs_and_time_follow_the_variant() {
     let power = serde_json::to_string(by_code(&found, "rating.power")).unwrap();
     assert!(
         power.contains(
-            r##""refs":["#r1.p"],"t_ps":5,"message":"#r1.p peaks at 3 W, over its 0.25 W rating","data":{"limit":0.25,"over_ps":4,"peak":3.0,"peak_ps":7}"##
+            r##""refs":["#r1.p"],"t_ps":5,"message":"#r1.p peaks at 3 W, over its 0.25 W rating for 4 ps","data":{"limit":0.25,"over_ps":4,"peak":3.0,"peak_ps":7,"window_ps":null}"##
         ),
         "{power}"
     );

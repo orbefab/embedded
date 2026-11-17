@@ -1,23 +1,29 @@
 use orbe_model::Time;
 use serde::Deserialize;
 
+use crate::diagnostic::Diagnostic;
 use crate::element::{Observed, OwnedCapacitor, OwnedInductor, TWO_PIN, Update};
 use crate::mna::{Probe, Stamp, Unknowns};
 use crate::name::Quantity;
+use crate::name::{Name, Ref};
 use crate::netlist::json::waveform::{VOLT, VOLTAGE, WireWaveform, resolve_waveform};
-use crate::netlist::json::{ParseCtx, PinMap, resolve_pins};
+use crate::netlist::json::{ParseCtx, PinMap, WireValue, resolve_pins, resolve_rating};
 use crate::netlist::{
     Conduction, Kind, LevelField, NetId, Schedule, Serial, SerialField, Value, Waveform,
 };
 use crate::newton::Side;
 
-/// Ideal voltage source. V(p) - V(n) = voltage.
+/// Ideal voltage source. V(p) - V(n) = voltage. Only parse builds one, so `p` and `n` are on two
+/// nets.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VoltageSource {
     /// Nets of pins `p`, `n`.
     pub pins: [NetId; 2],
     /// Volt. Any finite value.
     pub voltage: Waveform,
+    /// Ampere, greater than 0: the most the supply delivers, which bounds `i`. `None` when the
+    /// part has no `ratings` object or its `current` is `null`.
+    pub max_current: Option<Value>,
 }
 
 impl VoltageSource {
@@ -30,6 +36,17 @@ pub(crate) struct WireVoltageSource {
     pub(crate) name: String,
     pins: PinMap,
     voltage: WireWaveform,
+    /// Optional, so a source written before sources had ratings keeps its meaning.
+    #[serde(default)]
+    ratings: Option<WireVoltageSourceRatings>,
+}
+
+/// The key is required, and `null` leaves the source unrated.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WireVoltageSourceRatings {
+    #[serde(deserialize_with = "Option::deserialize")]
+    current: Option<WireValue>,
 }
 
 pub(crate) fn resolve_voltage_source(
@@ -43,12 +60,39 @@ pub(crate) fn resolve_voltage_source(
         out,
         ..
     } = ctx;
-    let WireVoltageSource { pins, voltage, .. } = wire;
+    let WireVoltageSource {
+        pins,
+        voltage,
+        ratings,
+        ..
+    } = wire;
 
-    let pins = resolve_pins(name, VoltageSource::PINS, &pins.0, nets, out);
+    let pins = resolve_pins(name, VoltageSource::PINS, &pins.0, nets, out).and_then(|pins| {
+        if pins[0] != pins[1] {
+            return Some(pins);
+        }
+        // Both pins on one net make the source's branch row zero, which no solve can take.
+        let (net, _) = nets
+            .iter()
+            .find(|&(_, &id)| id == pins[0])
+            .expect("a resolved pin's net is named");
+        out.push(Diagnostic::NetShort {
+            part: part_ref.clone(),
+            net: Ref::Net(Name::new(net).expect("a resolved net name")),
+        });
+        None
+    });
     let voltage = resolve_waveform(part_ref, &VOLTAGE, voltage, out);
-    match (pins, voltage) {
-        (Some(pins), Some(voltage)) => Some(VoltageSource { pins, voltage }),
+    let max_current = match ratings {
+        None => Some(None),
+        Some(ratings) => resolve_rating(part_ref, "ratings.current", "A", ratings.current, out),
+    };
+    match (pins, voltage, max_current) {
+        (Some(pins), Some(voltage), Some(max_current)) => Some(VoltageSource {
+            pins,
+            voltage,
+            max_current,
+        }),
         _ => None,
     }
 }
@@ -88,7 +132,7 @@ impl Kind for VoltageSource {
         TWO_PIN
     }
     fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
-        (None, None)
+        (self.max_current.as_ref().map(|v| (Quantity::I, v)), None)
     }
     fn observe(&self, probe: &Probe<'_>, _at: Time, _side: Side) -> Option<Observed> {
         Some(Observed::two_pin(self.pins, probe.branch(0), probe))

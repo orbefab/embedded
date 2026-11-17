@@ -1049,6 +1049,113 @@ fn a_failed_test_prints_what_core_shows() {
 }
 
 #[test]
+fn a_load_over_the_usb_supply_warns_and_a_wire_across_it_is_a_short() {
+    let project = worked_example();
+    let dir = project.path();
+    add_parts(dir, &["resistor-axial"]);
+    let scene = fs::read_to_string(dir.join("scene.jsonc")).unwrap();
+    let cathode = "[\"led1.cathode\", \"nano.GND\"],";
+    let loaded = scene
+        .replace(
+            "\"led1\": {",
+            "\"rl\": { \"type\": \"resistor-axial\", \"resistance\": \"2.5\" },\n    \"led1\": {",
+        )
+        .replace(
+            cathode,
+            &format!("{cathode} [\"nano.5V\", \"rl.a\"], [\"rl.b\", \"nano.GND\"],"),
+        );
+    assert!(loaded.contains("\"rl.a\"") && loaded.contains("\"rl\": {"));
+    fs::write(dir.join("scene.jsonc"), &loaded).unwrap();
+    let runtime = Runtime::new();
+    let orbe = |args: &[&str]| runtime.orbe(dir, args);
+    let open = orbe(&["open", "--json"]).ok().json();
+    let over = |part: &str| {
+        open["data"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| {
+                d["code"] == "rating.current" && d["message"].as_str().unwrap().starts_with(part)
+            })
+            .unwrap_or_else(|| panic!("{open}"))
+            .clone()
+    };
+    // The same current passes the USB supply and the Schottky behind 5V, each rated 0.5 A.
+    let supply = over("#nano__usb__host.i (nano.usb) ");
+    let diode = over("#nano__diode.i (nano.diode) ");
+    orbe(&["close"]).ok();
+    let peak = supply["data"]["peak"].as_f64().unwrap();
+    assert_eq!(supply["data"]["limit"], 0.5);
+    assert_eq!(diode["data"]["limit"], 0.5);
+
+    let shorted = scene.replace(cathode, &format!("{cathode} [\"nano.5V\", \"nano.GND\"],"));
+    fs::write(dir.join("scene.jsonc"), &shorted).unwrap();
+    let check = orbe(&["check", "scene.jsonc"]);
+    assert_eq!(check.code, 1);
+    for said in [
+        "error[net.short]: the wire from `nano.5V` to `nano.GND` shorts the supply `nano.usb`, which holds the two apart",
+        "hint: remove the wire; a load from `nano.5V` to `nano.GND` needs a part that limits its current, such as a resistor",
+    ] {
+        assert!(check.stdout.contains(said), "{}", check.stdout);
+    }
+    assert_eq!(orbe(&["open"]).code, 1);
+
+    let core = skill("core");
+    says(
+        &core,
+        &format!(
+            "A load over that on 5V, such as 2.5 ohm from 5V to GND ({peak:.1} A), warns `rating.current` on the supply, `#nano__usb__host.i (nano.usb)`, at {peak:.1} A over its 0.5 A rating, and on the Schottky behind 5V, `#nano__diode.i (nano.diode)`, which is rated 0.5 A too."
+        ),
+    );
+    says(
+        &core,
+        "A wire from the Nano's 5V straight to GND is a short: `orbe check` and `orbe open` refuse the scene with `net.short`, naming the wire.",
+    );
+}
+
+#[test]
+fn a_button_with_no_pull_down_warns_that_its_input_floats() {
+    let project = worked_example();
+    let dir = project.path();
+    let scene = fs::read_to_string(dir.join("scene.jsonc")).unwrap();
+    let bare: String = scene
+        .lines()
+        .filter(|l| !l.contains("\"r2"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert!(bare.contains("\"btn1\"") && !bare.contains("r2"));
+    fs::write(dir.join("scene.jsonc"), &bare).unwrap();
+    let runtime = Runtime::new();
+    let orbe = |args: &[&str]| runtime.orbe(dir, args);
+    orbe(&["open"]).ok();
+    let step = orbe(&["step", "20ms"]).ok();
+    orbe(&["close"]).ok();
+    let said =
+        "warning[chip.floating_input] #nano__mcu.pin.PD2 (nano.D2) floats on #net.nano__D2 at ";
+    assert!(step.stdout.contains(said), "{}", step.stdout);
+    assert!(
+        step.stdout
+            .contains("add a pull-up or a pull-down resistor, or turn the pin's pull-up on"),
+        "{}",
+        step.stdout
+    );
+    says(
+        &skill("arduino"),
+        "`step` warns `chip.floating_input`, naming the pin, as in `#nano__mcu.pin.PD2 (nano.D2) floats on #net.nano__D2 at ... ps, and the firmware has taken in its level`.",
+    );
+
+    fs::write(dir.join("scene.jsonc"), &scene).unwrap();
+    orbe(&["open"]).ok();
+    let step = orbe(&["step", "20ms"]).ok();
+    orbe(&["close"]).ok();
+    assert!(
+        !step.stdout.contains("chip.floating_input"),
+        "{}",
+        step.stdout
+    );
+}
+
+#[test]
 fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     let project = worked_example();
     let dir = project.path();
@@ -1089,10 +1196,18 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
         "A, over its 0.03 A rating",
         "warning[rating.power] #led1.p peaks at ",
         "W, over its 0.075 W rating",
-        "warning[rating.current] #nano__mcu.pin.PB5 (nano.D13) peaks at ",
-        "A, over its 0.04 A rating",
     ] {
         assert!(step.contains(warning), "{step}");
+    }
+    // The pin's rating is DC: its RMS over the last 10.2 ms crosses 40 mA (40 / 94)^2 of the
+    // window after the press, 1.8 ms, and a chip warning can show up to one 10 ms engine step
+    // late.
+    let held = orbe(&["step", "20ms"]).ok().stdout;
+    for warning in [
+        "warning[rating.current] #nano__mcu.pin.PB5 (nano.D13) carries ",
+        "A RMS over the last 10.2 ms, over its 0.04 A rating",
+    ] {
+        assert!(held.contains(warning), "{held}");
     }
     let led = orbe(&["get", "@led1", "--json"]).ok().json()["data"]["value"].clone();
     let pin = orbe(&["get", "@nano.D13", "--json"]).ok().json()["data"]["value"].clone();
@@ -1101,7 +1216,7 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     assert!(
         expect
             .stdout
-            .contains("actual:   rating.current, rating.current, rating.power"),
+            .contains("actual:   rating.current, rating.power, rating.current"),
         "{}",
         expect.stdout
     );
@@ -1111,7 +1226,7 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     says(
         &core,
         &format!(
-            "With D13 wired straight to `led1.anode` and no `r1`, the LED draws {:.0} mA. `step` lists `warning[rating.current]` and `warning[rating.power]` for `led1`, and `warning[rating.current]` for `#nano__mcu.pin.PB5 (nano.D13)`, the chip pin behind D13, over its 40 mA rating. `expect no diagnostics` fails. The LED holds D13 at {:.1} V, so D13 reads `{}` while the LED is {}.",
+            "With D13 wired straight to `led1.anode` and no `r1`, the LED draws {:.0} mA. `step` lists `warning[rating.current]` and `warning[rating.power]` for `led1`, and `step 20ms` after it lists `warning[rating.current]` for `#nano__mcu.pin.PB5 (nano.D13)`, the chip pin behind D13, over its 40 mA rating. `expect no diagnostics` fails. The LED holds D13 at {:.1} V, so D13 reads `{}` while the LED is {}.",
             led["i"].as_f64().unwrap() * 1e3,
             pin["v"].as_f64().unwrap(),
             pin["level"].as_str().unwrap(),

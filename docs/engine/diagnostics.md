@@ -15,7 +15,7 @@ A diagnostic is one JSON object. The fields are written in this order.
 
 The run sorts diagnostics by `t_ps`, then `code`, then `refs`, then the JSON bytes of the whole object. A `null` time sorts before a number, so every input finding precedes a solver finding.
 
-A session's `diagnostics()` returns the warnings found so far, and once the session ends they are that list's. While it runs, a `Pulses` record still in flight is not yet counted, as [engine.md](engine.md#sessions) says. The folder's warnings are `net.floating`, `trace.row_interpolated`, `rating.current`, `rating.power`, `rating.voltage`, `chip.protocol`, `chip.link_miswired`, `chip.unmodeled_register` and `chip.restart`. `diagnostics()` returns all but `trace.row_interpolated`. It leaves out `trace.row_interpolated`, because that warning names a grid row whose probe failed twice, and only a recorded trace defines those rows. An open session has no grid. The accepted steps do not depend on the grid, and neither do the warnings `diagnostics()` returns. Every other code on this page is an error. The error that ends a run is `fault` on the session, and `diagnostics()` does not return it. [engine.md](engine.md#sessions) says when the samples are taken.
+A session's `diagnostics()` returns the warnings found so far, and once the session ends they are that list's. While it runs, a `Pulses` record still in flight is not yet counted, as [engine.md](engine.md#sessions) says. The folder's warnings are `net.floating`, `trace.row_interpolated`, `rating.current`, `rating.power`, `rating.voltage`, `chip.protocol`, `chip.link_miswired`, `chip.floating_input`, `chip.unmodeled_register` and `chip.restart`. `diagnostics()` returns all but `trace.row_interpolated`. It leaves out `trace.row_interpolated`, because that warning names a grid row whose probe failed twice, and only a recorded trace defines those rows. An open session has no grid. The accepted steps do not depend on the grid, and neither do the warnings `diagnostics()` returns. Every other code on this page is an error. The error that ends a run is `fault` on the session, and `diagnostics()` does not return it. [engine.md](engine.md#sessions) says when the samples are taken.
 
 A run whose diagnostics are all warnings still writes the operating point. A run with an error writes the observations it reached, as [run-folder.md](run-folder.md#observationsjson) says. That is `{}` when nothing solved, as at t = 0. A transient keeps its grid rows before the error, and its last accepted step is the last row. Its observations end there. A warning found before that error is kept, including a rating sampled on any accepted step before it.
 
@@ -277,9 +277,23 @@ The message is `{ref} has no DC path to ground`.
 
 A DC path is a chain of resistors, potentiometers, voltage sources, diodes, LEDs, zeners, linear regulators, transistors, inductors, relays, and switches from the net to ground. A resistor, voltage source, diode, LED, zener, inductor, or switch joins its two pins. A linear regulator joins `in` to `gnd` and `out` to `gnd`. An inductor joins them through its series resistance, because its inductance is a short at DC. A relay joins `coil_a` to `coil_b` through its coil, and `com` to `no` and `com` to `nc` in either state, so a net on a contact's open side is not floating. A potentiometer joins `a` to `wiper` and `wiper` to `b`. An `npn` or a `pnp` joins `collector` to `base` and `base` to `emitter`, through its junctions. An `nmos` joins `drain` to `source`. Its gate joins nothing, so a net reached only through gates and capacitors is `net.floating`. A switch joins its pins open or closed. An NE555 joins VCC to CONT, CONT to GND, VCC to GND, OUT to VCC, OUT to GND, and DISCH to GND, in either latch state, and joins nothing to TRIG, THRES, or RESET. An ATmega328P joins each port pin, `PC6` included, to VCC and to `GND_8`, through the leakage it stamps in every drive state. Its `GND_22` is on the net of its `GND_8`. It joins nothing to `PB6`, `PB7`, `AREF`, or `AVCC`, as [netlist.md](netlist.md#atmega328p) explains. An SPI replay joins `CS`, `SCLK` and `D0` to `D3` each to `VCC` and to `GND`, through the stage it drives. A capacitor with `"initial": null` does not join its pins, because it is open at DC. Neither does a current source. A capacitor with an `initial` voltage joins them, because the operating point holds it. gmin, 1e-12 S from every node to ground, is separate from that chain.
 
-`net.floating` is a static check on the netlist's topology. It never depends on a solve, so its `t_ps` is always `null`. A run that reads an input nothing drives will report that under a code of its own.
+`net.floating` is a static check on the netlist's topology. It never depends on a solve, so its `t_ps` is always `null`. Because a port pin's leakage joins its net to both rails, a net that only a chip's input and an open button hold is never `net.floating`. A run whose firmware reads such an input reports [`chip.floating_input`](#chipfloating_input).
 
 A resistor from `vin` to `lonely`, with a voltage source from `vin` to `gnd`, puts `lonely` on a path to ground. Two LEDs in series from `vled` to `gnd`, with a resistor from `vin` to `vled`, put `mid` on a path to ground. A net that no part names is floating. Two nets whose only part is a resistor between them are floating. The operating point is still written, and `orbe-run run` exits 0.
+
+## net.short
+
+Severity `error`. Refs are the voltage source, then `#net.<name>`, the net both its pins are on. `t_ps` is `null`.
+
+The message is:
+
+```text
+{part} holds `p` and `n` apart, but both are on {net}, so the circuit shorts it
+```
+
+`data` is `{}`.
+
+Parse checks it, so the netlist is refused and nothing solves. An ideal source across one net has a branch row of zeros, which the solve would report as `solver.singular` at the source. A wire from a board's 5V straight to its GND does this on a board whose USB source feeds 5V with nothing in between. A source of 0 V across one net is the same short.
 
 ## solver.singular
 
@@ -289,7 +303,7 @@ The message is `singular matrix at {ref}`.
 
 `data` is `{}`.
 
-Two voltage sources in parallel, set to different voltages, are singular. With `v1` at 5 V and `v2` at 3 V, both from `vin` to `gnd`, the ref is `#v2`.
+A voltage source whose two pins are on one net never gets here. Parse refuses it as [net.short](#netshort). Two voltage sources in parallel, set to different voltages, are singular. With `v1` at 5 V and `v2` at 3 V, both from `vin` to `gnd`, the ref is `#v2`.
 
 ## solver.nonfinite
 
@@ -399,6 +413,26 @@ Severity `warning`. Refs are the chip that dropped a transaction. `t_ps` is the 
 The message is `{part} dropped an SPI transaction from #{sender} whose data lanes are not on its own data pins at {t_ps} ps, the first time`.
 
 `data` holds `sender`, the part name of the chip that sent it. A transaction goes to every chip whose `CS` and `SCLK` are on the sender's. A lane it uses, up to the most lanes any of its phases or its data take, must be on the receiver's pin of the same number, `D0` to `D3`. Otherwise the receiver drops it, and the run reports the first such drop once per part.
+
+## chip.floating_input
+
+Severity `warning`. Refs are the chip's pin, then `#net.<name>`, the pin's net. `t_ps` is the first accepted step that found it.
+
+The message is:
+
+```text
+{pin} floats on {net} at {t_ps} ps, and the firmware has taken in its level since the pin last became an input with its pull-up off, alone or with the rest of its port: there is no DC path to a supply or to ground, and a capacitor does not hold the pin's level, so the level is whatever leakage and noise leave; add a pull-up or a pull-down resistor, or turn the pin's pull-up on
+```
+
+`data` is `{}`. The run reports each pin once, at the first accepted step where all three hold:
+
+- The pin's drive is off: an input with its pull-up off.
+- Its firmware has read the pin at or before that step, since its drive last turned off. A read while the pin drives or pulls up takes in a level the chip holds, so it does not count, and neither does a read from before the pull-up last came and went. An ATmega328P counts a read of a pin when an instruction loads its port's `PINx` while the pin's drive is off and its digital input is on, and for as long as an enabled `INTn` or pin-change interrupt watches it with its drive off. A pin whose digital input is off, `PC6` while it is `RESET` or a pin `DIDR0` turns off, is not read. A chip on the [contract](mcu.md) that says nothing reads no pin, so the check covers the ATmega328P alone. The engine asks the copy of the core it runs ahead, which has always reached the step, since a landing commits only a core that stops there. That copy is past no change of its drive but the one at its stop, so while the committed drive is off at the step, the copy's stretch with the drive off is the one that holds the step.
+- The pin's net reaches ground through no DC path but chips' leakage. The paths are those of [`net.floating`](#netfloating), less every active chip's and every capacitor's. A switch joins its pins only while its contact is closed on that step, and an active chip joins an output's net to its own supply while it drives high or pulls up, and to its own ground while it drives low.
+
+A load of `PINx` takes in all eight pins of the port, and the chip cannot tell which of them the firmware keeps: `digitalRead` loads the whole byte and masks its bit in software, with a mask it looks up at run time. So a load counts for every pin of the port whose drive is off then, and the message says the firmware took the level in with the rest of its port rather than that it read that pin. That level is in the byte the firmware holds, and DS40002061B §14.2.6 asks for a defined level on every unused pin, since a floating input draws current in every mode where the digital inputs are on. A pin `D4` with only a capacitor to ground, on a Nano whose sketch reads only `D2`, warns once the sketch first reads `D2`.
+
+A static check cannot tell this: a sketch sets `INPUT` or `INPUT_PULLUP` as it runs, and a pin the sketch never reads may float harmlessly. A net that holds only the pin, with no other part, is not checked. A button from the pin to 5V with no pull-down warns at the first read while the button is open. With a pull-down, an external pull-up, `INPUT_PULLUP`, or a pin the firmware never reads, it does not. A sketch that calls `digitalRead` under `INPUT_PULLUP` and then sets `INPUT` without reading again does not warn. One that reads first and sets `INPUT_PULLUP` after warns at the step where the pull-up comes on.
 
 ## chip.unsupported_instruction
 
@@ -575,31 +609,48 @@ The message is `the row at {t_ps} ps did not solve; it is the line between the s
 
 ## rating.current
 
-Severity `warning`. Refs is the rated quantity, `#<part>.i`, `#<part>.ic` for a bipolar transistor, `#<part>.id` for an `nmos`, `#<part>.iout` for a linear regulator, or a chip pin, `#<part>.pin.<pin>`, for an `atmega328p`. `t_ps` is the first time over the rating, 0 for the operating point.
+Severity `warning`. Refs is the rated quantity, `#<part>.i` (a voltage source's too), `#<part>.ic` for a bipolar transistor, `#<part>.id` for an `nmos`, `#<part>.iout` for a linear regulator, or a chip pin, `#<part>.pin.<pin>`, for an `atmega328p`. `t_ps` is the first time over the rating, 0 for the operating point.
 
-The message is:
+The message is one of:
 
 ```text
-{ref} peaks at {peak} A, over its {limit} A rating
+{ref} peaks at {peak} A, over its {limit} A rating for {over_ps} ps
+{ref} carries {peak} A RMS over the last 10.2 ms, over its {limit} A rating for {over_ps} ps
 ```
 
-`data` holds `limit`, `over_ps`, `peak`, and `peak_ps`. `limit` is the rating. `peak` is the largest magnitude of the quantity. `peak_ps` is when it peaked. `over_ps` is `null` for an operating point, which has no duration.
+The second is a DC rating's, below. ` for {over_ps} ps` is left out for an operating point, and while `over_ps` is 0, as on the step where the quantity first goes over. A session's `diagnostics()` writes each message as it stands through the last accepted step, so a warning seen early reads a shorter time, or none, than the run folder's.
+
+`data` holds `limit`, `over_ps`, `peak`, `peak_ps`, and `window_ps`. `limit` is the rating. `peak` is the largest magnitude of the quantity, or of its RMS for a DC rating. `peak_ps` is when it peaked. `over_ps` is `null` for an operating point, which has no duration. `window_ps` is 10200000000 for a DC rating and `null` for any other.
 
 A transient checks every accepted step, not only the rows. Each step's value holds until the next accepted step. `t_ps` is the first step over the rating, and `over_ps` adds the time to the next step for every step over it. The last step adds nothing. So `t_ps` and `peak_ps` can fall between rows. At a switch edge the solve at the edge holds the old contact. With 22 ohm in place of 220 ohm in `packages/engine/tests/circuits/button-led`, `#led1.i` is first over 1 ns after the press, and `over_ps` is exactly the time the contact was closed.
 
 A quantity is over when its magnitude is above the rating. Equal is not over. `peak` is the largest magnitude. For an operating point it equals `abs(observations.op[ref])`. The operating point is still written, and `orbe-run run` exits 0.
 
+### DC ratings
+
+An `atmega328p`'s `pin_current` and `supply_current` and a voltage source's `current` are DC ratings. DS40002061B §29.1 gives 40 mA and 200 mA as DC currents and gives no pulse rating, and a supply's rating is the current it delivers steadily. What a DC current rating guards against is heat, in the output transistors, the metal and the bond wires, and electromigration, which follows the mean current. Heat follows `i^2` over time. So a transient checks a DC rating against the current's RMS over the 10.2 ms before each accepted step, not against each step's value. RMS is never below the mean, so it covers electromigration too. Each step's value holds until the next, as above, and the window starts full of the operating point, which is DC. `t_ps` is the first step whose RMS is over, `peak` the largest RMS, and `over_ps` the time the RMS was over. An operating point's RMS is its value.
+
+The window is 10.2 ms because PWM is the load a pin most often switches. Judging a PWM load by its RMS, as a DC rating's heat asks, assumes the pin heats slower than one period, so the window has to hold whole periods. The slowest PWM an Arduino core makes by default is Timer1's and Timer2's phase correct PWM on D3, D9, D10 and D11, 16 MHz / (2 * 64 * 255), 490.2 Hz, a period of exactly 2.04 ms, and 10.2 ms is five of those periods. For a steady 490 Hz PWM the RMS over the window is the RMS of its period, whatever the window's phase. Timer0's fast PWM on D5 and D6, 976.6 Hz, a period of 1.024 ms, fits 9.96 times, so its RMS over the window is within 0.4% of its period's, and faster PWM, such as 62.5 kHz, is closer still. `analogWrite(9, 128)` into 75 ohm is 50 mA at 128 / 255 duty, 35.4 mA RMS, under 40 mA, though each of its pulses lasts 1.02 ms. Into 47 ohm it is 69 mA at the same duty, 49 mA RMS, which is the number the warning gives.
+
+An absolute maximum DC rating is a current the part bears for as long as it flows, and it says nothing of shorter currents. A longer window would read a PWM load the same when its period fits in the window, which every default Arduino PWM does, but would warn later of a load held over the rating and spread a lone pulse thinner, so the window is the shortest that holds whole periods of every default PWM with margin. A slower PWM, such as a software PWM toggled with `delay`, counts each pulse longer than the window as a held level. A pulse longer than the window fills it, so it counts at its full value: 100 mA for 20 ms reads 100 mA RMS. A pulse shorter than the window counts by its share: 100 mA for 1 ms reads 31 mA RMS and does not warn, and the datasheet gives no pulse rating to hold it to. A capacitor that a pin charges through its stage, `R` ohm, takes `I0^2 * R * C / 2` of `i^2 * t` an edge. On the model's 25 ohm stage, 100 pF takes 0.2 A for a few nanoseconds, which over 10.2 ms is well under 1 mA RMS, and a 1 uF load on a 490 Hz PWM pin stays well under 40 mA. 10 uF and 47 uF on that pin go over, as such a load does on a real pin, since every edge charges it again. A pin that charges 10 uF once from 0 V stays under; 47 uF and 100 uF go over. A load held at `k` times the rating goes over once `1 / k^2` of the window has filled: 69 mA from a pin into 47 ohm after 3.4 ms, five LEDs taking 44 mA from one pin after 8.4 ms, and a pin driving low on 5V, 200 mA, after 0.41 ms.
+
+Every other current and power rating is checked on each accepted step. An LED's `current` is its DC forward current. An LED datasheet gives a higher peak forward current for short pulses at a low duty, which this model does not carry, so a pulse over the DC current warns.
+
 The 9 V LED example puts about 0.55 A through an LED rated 0.03 A.
 
-An `atmega328p` with `ratings.pin_current` names each port pin over it, such as `#u1.pin.PB1`. A pin's current is the current out of the pin into the circuit, through its output stage in the state the firmware drives, its pull-up and its leakage to both rails, as [netlist.md](netlist.md#atmega328p) stamps them. With `ratings.supply_current`, `#u1.pin.VCC` is the sum of every port pin's current drawn from `VCC`, and `#u1.pin.GND_8` the sum of every port pin's current into `GND_8`, which carries `GND_22` too. With `active_current`, the chip's own draw through its conductance from `VCC` to `GND_8` is in both sums. A row is solved with the drive the firmware had in force until that step, so a pin that changes drive on a step is checked with its new drive from the next step on.
+A voltage source with `ratings.current` names its current, `#<part>.i`, over that rating. The USB sources of the catalog's boards carry 0.5 A, the most a high-power USB 2.0 function draws (Table 7-7, `ICCHPF`). A 2.5 ohm load from a Nano's 5V to its GND draws 1.8 A through the board's USB Schottky, so `#nano__usb__host.i` is over, and so is `#nano__diode.i`, the Schottky's own 0.5 A average forward current.
 
-The number is the model's. The stage is linear, 25 ohm from its rail, so a pin shorted to the other rail reads 200 mA at 5 V. A real driver saturates, and a short draws about half that. Both are far over the 40 mA rating, so the warning holds. The rating is the datasheet's absolute maximum, which [avr.md](avr.md#ratings) names. A pin over it can be damaged.
+An `atmega328p` with `ratings.pin_current` names each port pin whose RMS is over it, such as `#u1.pin.PB1`. A pin's current is the current out of the pin into the circuit, through its output stage in the state the firmware drives, its pull-up and its leakage to both rails, as [netlist.md](netlist.md#atmega328p) stamps them. With `ratings.supply_current`, `#u1.pin.VCC` is the sum of every port pin's current drawn from `VCC`, and `#u1.pin.GND_8` the sum of every port pin's current into `GND_8`, which carries `GND_22` too. With `active_current`, the chip's own draw through its conductance from `VCC` to `GND_8` is in both sums. A row is solved with the drive the firmware had in force until that step, so a pin that changes drive on a step is checked with its new drive from the next step on.
 
-A Nano running a sketch that drives D9 high into 47 ohm to ground reads:
+The number is the model's. The stage is linear, 25 ohm from its rail, so a pin shorted to the other rail reads 200 mA at 5 V. A real driver saturates, and a short draws about half that. Both are far over the 40 mA rating, so the warning holds. The rating is the datasheet's absolute maximum, which [avr.md](avr.md#ratings) names. A pin held over it can be damaged.
+
+A Nano running a sketch that drives D9 high into 47 ohm to ground reads, 40 ms in:
 
 ```text
-#nano__mcu.pin.PB1 peaks at 0.06944434799653014 A, over its 0.04 A rating
+#nano__mcu.pin.PB1 carries 0.06944434799653014 A RMS over the last 10.2 ms, over its 0.04 A rating for 32582912000 ps
 ```
+
+The time over runs through the last accepted step, which a chip's core can leave behind the session's time.
 
 Six pins each driving 120 ohm to ground carry 34.5 mA each, under the pin rating, and 207 mA together, so `#nano__mcu.pin.VCC` is over its 0.2 A.
 
@@ -610,10 +661,10 @@ Severity `warning`. Refs is the rated quantity, `#<part>.p`. `t_ps` is the first
 The message is:
 
 ```text
-{ref} peaks at {peak} W, over its {limit} W rating
+{ref} peaks at {peak} W, over its {limit} W rating for {over_ps} ps
 ```
 
-`data` is the same as `rating.current`.
+` for {over_ps} ps` is left out as for `rating.current`. `data` is the same as `rating.current`, with `window_ps` `null`: a power rating is checked on each accepted step.
 
 The 9 V LED example reports `#led1.p` over its 0.075 W rating and `#r1.p` over its 0.25 W rating.
 
@@ -624,16 +675,16 @@ Severity `warning`. Refs is the chip pin, `#<part>.pin.<pin>`. `t_ps` is the fir
 The message is:
 
 ```text
-{ref} reaches {peak} V over the chip's ground, outside its {low} V to {high} V rating
+{ref} reaches {peak} V over the chip's ground, outside its {low} V to {high} V rating for {over_ps} ps
 ```
 
-A window with no floor ends `outside its {high} V ceiling`, and one with no ceiling `outside its {low} V floor`.
+A window with no floor reads `outside its {high} V ceiling`, and one with no ceiling `outside its {low} V floor`. ` for {over_ps} ps` is left out as for `rating.current`. A voltage window is checked on each accepted step: a pin past a rail conducts into its clamp at once.
 
 `data` holds `high`, `low`, `over_ps`, `peak`, and `peak_ps`. Each voltage is over the chip's ground pin, `GND_8` on an `atmega328p`. `peak` is the pin's voltage where it was farthest outside the window, and `peak_ps` is when. `low` and `high` are the window at that time, and either is `null` when the part rates none. `over_ps` is `null` for an operating point, which has no duration, and counts the time outside the window as `rating.current` counts the time over.
 
 An `atmega328p` with a `ratings` object checks every pin but its two ground pins. The floor is `ratings.rail_margin` below ground. The ceiling is `ratings.rail_margin` above the chip's own `VCC`, so it follows the supply. `VCC`'s ceiling is `ratings.supply_voltage`, and `PC6`'s is `ratings.reset_voltage` while it is `RESET`. A pin exactly on the edge is inside. The model has no clamp diodes, so a pin outside the window draws no clamp current and its voltage is what the circuit drives. A real pin conducts into its clamp there, which is the damage the rating guards against.
 
-A Nano with a 9 V source through 1 kohm on A0 reads:
+A Nano with a 9 V source through 1 kohm on A0 reads, at the operating point:
 
 ```text
 #nano__mcu.pin.PC0 reaches 8.997637213833697 V over the chip's ground, outside its -0.5 V to 5.5 V rating
