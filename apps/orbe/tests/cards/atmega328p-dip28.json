@@ -42,7 +42,7 @@
     },
     {
       "what": "supply current",
-      "why": "The core draws nothing from VCC. The current the ratings sum through VCC and GND is the pins' alone."
+      "why": "The core's own draw is a conductance from VCC to GND that draws the sheet's typical 11.4 mA at 5 V and 16 MHz, so it scales with VCC. A real chip's draw moves with the sketch, sleep modes, the clock and the part, and the sheet's typical curves are not tested limits. The ratings sum this draw with the pins' currents through VCC and GND."
     }
   ],
   "params": [

@@ -61,6 +61,15 @@ pub(crate) struct Output {
     pub(crate) leakage: Option<f64>,
 }
 
+/// A chip's own draw: a conductance from its supply pin to its ground pin.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Supply {
+    pub(crate) vcc: NetId,
+    pub(crate) gnd: NetId,
+    /// Siemens, greater than 0.
+    pub(crate) conductance: f64,
+}
+
 /// An active chip as the circuit sees it. Read-only for the whole analysis.
 #[derive(Clone, Debug)]
 pub(crate) struct Chip {
@@ -80,6 +89,9 @@ pub(crate) struct Chip {
     pub(crate) twi: bool,
     /// Whether its core sends records, which go to `link.csv`.
     pub(crate) sends: bool,
+    /// Its own draw from its supply, in every state. `None` on a chip that draws nothing but
+    /// what its outputs pass.
+    pub(crate) supply: Option<Supply>,
     /// The records it takes.
     pub(crate) takes: Takes,
     /// The core at power-on.
@@ -324,6 +336,9 @@ pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
 pub(crate) fn stamp(chip: &Chip, core: &Core, sys: &mut System, source_scale: f64) {
     let drive = core.drive();
     debug_assert_eq!(drive.len(), chip.outputs.len());
+    if let Some(supply) = chip.supply {
+        sys.conductance(supply.vcc, supply.gnd, supply.conductance);
+    }
     for (output, drive) in chip.outputs.iter().zip(drive) {
         if let Some(ohm) = output.leakage {
             sys.conductance(output.pin, output.vcc, 1.0 / ohm);

@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use crate::active::{Chip, Output, Stage};
+use crate::active::{Chip, Output, Stage, Supply};
 use crate::diagnostic::{Diagnostic, FirmwareRule, ValueRule};
 use crate::mna::Node;
 use crate::name::{Name, Ref};
@@ -24,6 +24,9 @@ use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
 use crate::ratings::{Ceiling, PinRatings, PinWindow};
 use crate::watch::{Signal, Watch};
 use orbe_microchip::{Bridge, FuseBytes, PACKAGE, PORT_PINS, Pad, Port, port_index};
+
+/// The supply at which the chip's own conductance draws `active_current`, volt.
+const ACTIVE_AT: f64 = 5.0;
 
 /// `RESET` while `RSTDISBL` is unprogrammed.
 const RESET: Pad = Pad::Port(Port::C, 6);
@@ -154,7 +157,13 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
         .map(to_agnd)
         .collect();
 
-    super::chip(part, outputs, watches, signals, samples, bridge)
+    let mut chip = super::chip(part, outputs, watches, signals, samples, bridge);
+    chip.supply = mcu.active_current.as_ref().map(|current| Supply {
+        vcc: mcu.pins[VCC],
+        gnd: mcu.pins[GND_8],
+        conductance: current.si.get() / ACTIVE_AT,
+    });
+    chip
 }
 
 /// The part's ratings on its package pins, `None` when it has no `ratings` object. Each port
@@ -222,6 +231,10 @@ pub struct Atmega328p {
     pub input_threshold: Threshold,
     /// `PC6`'s while it is `RESET`.
     pub reset_threshold: Threshold,
+    /// Ampere, greater than 0. The core's own draw at `VCC` = 5 V, a conductance from `VCC` to
+    /// `GND_8` in every state. `None` when the part leaves it out, and the chip then draws only
+    /// what its pins pass.
+    pub active_current: Option<Value>,
     /// The absolute maximum ratings the run checks. `None` when the part has no `ratings`
     /// object, which leaves the chip unrated.
     pub ratings: Option<Atmega328pRatings>,
@@ -311,6 +324,9 @@ pub(crate) struct WireAtmega328p {
     leakage_resistance: WireValue,
     input_threshold: WireThreshold,
     reset_threshold: WireThreshold,
+    /// Optional, so a netlist written before the chip drew its own current keeps its meaning.
+    #[serde(default)]
+    active_current: Option<WireValue>,
     /// Optional, so a netlist written before the chip had ratings keeps its meaning.
     #[serde(default)]
     ratings: Option<WireRatings>,
@@ -386,6 +402,10 @@ pub(crate) fn resolve_atmega328p(ctx: ParseCtx<'_>, wire: WireAtmega328p) -> Opt
         wire.reset_threshold,
         out,
     );
+    let active_current = match wire.active_current {
+        None => Some(None),
+        Some(value) => resolve_value(part_ref, "active_current", "A", true, value, out).map(Some),
+    };
     let ratings = match wire.ratings {
         None => Some(None),
         Some(wire) => resolve_ratings(part_ref, wire, out).map(Some),
@@ -401,6 +421,7 @@ pub(crate) fn resolve_atmega328p(ctx: ParseCtx<'_>, wire: WireAtmega328p) -> Opt
         leakage_resistance: leakage?,
         input_threshold: input_threshold?,
         reset_threshold: reset_threshold?,
+        active_current: active_current?,
         ratings: ratings?,
     })
 }

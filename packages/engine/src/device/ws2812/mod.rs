@@ -55,6 +55,7 @@ pub(crate) fn chip(part: PartId, chain: &Ws2812) -> Chip {
         usarts: &[],
         twi: false,
         sends: false,
+        supply: None,
         takes: Takes {
             spi: None,
             duty: None,

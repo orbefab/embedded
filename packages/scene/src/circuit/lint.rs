@@ -403,7 +403,8 @@ fn floating(s: &Scope, out: &mut Findings) {
 }
 
 /// An LED whose path, through other junctions, switches and transistors switched to a held
-/// net, joins two driven nets with no resistor in series. A resistor with both ends on that
+/// net, joins two driven nets with no resistor in series. A diode's cathode is driven when its
+/// anode is a source's net. A resistor with both ends on that
 /// path is in parallel, so it limits nothing. A chip pin drives its net unless a resistor feeds
 /// that net from a held net off the path, since then the pin more likely reads the net.
 fn led_no_resistor(s: &Scope, out: &mut Findings) {
@@ -423,6 +424,25 @@ fn led_no_resistor(s: &Scope, out: &mut Findings) {
         };
         for net in part.model.pins() {
             marks[net.index()] = true;
+        }
+    }
+    // A diode from a source's net holds its cathode about a drop under that source, as the
+    // Nano's Schottky holds its 5V rail under USB. Ground holds nothing this way, since a diode
+    // from ground is a clamp.
+    let mut more = true;
+    while more {
+        more = false;
+        for (_, part) in engine.parts() {
+            if !matches!(part.model, Model::Diode(_)) {
+                continue;
+            }
+            let [anode, cathode] = part.model.pins()[..] else {
+                continue;
+            };
+            if fixed[anode.index()] && !anode.is_ground() && !fixed[cathode.index()] {
+                fixed[cathode.index()] = true;
+                more = true;
+            }
         }
     }
     let held = |net: usize| fixed[net] || chip[net];

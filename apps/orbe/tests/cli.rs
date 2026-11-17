@@ -150,7 +150,7 @@ fn a_scene_that_reads_is_ok() {
     let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        stdout.contains("ok, 18 engine parts, 31 nets, ground nano__GND"),
+        stdout.contains("ok, 19 engine parts, 32 nets, ground nano__GND"),
         "{stdout}"
     );
 
@@ -158,8 +158,8 @@ fn a_scene_that_reads_is_ok() {
     assert_eq!(output.status.code(), Some(0));
     let reply: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(reply["ok"], true);
-    assert_eq!(reply["data"]["parts"], 18);
-    assert_eq!(reply["data"]["nets"], 31);
+    assert_eq!(reply["data"]["parts"], 19);
+    assert_eq!(reply["data"]["nets"], 32);
     assert_eq!(reply["data"]["ground"], "nano__GND");
 }
 
@@ -391,7 +391,7 @@ fn adding_parts_for_the_first_target() {
     let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        stdout.contains("ok, 18 engine parts, 31 nets, ground nano__GND"),
+        stdout.contains("ok, 19 engine parts, 32 nets, ground nano__GND"),
         "{stdout}"
     );
 
@@ -459,7 +459,7 @@ fn adding_parts_for_the_first_target() {
     let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        stdout.contains("ok, 18 engine parts, 31 nets, ground nano__GND"),
+        stdout.contains("ok, 19 engine parts, 32 nets, ground nano__GND"),
         "{stdout}"
     );
 
@@ -520,7 +520,7 @@ fn adding_parts_for_the_first_target() {
     let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        stdout.contains("ok, 18 engine parts, 31 nets, ground nano__GND"),
+        stdout.contains("ok, 19 engine parts, 32 nets, ground nano__GND"),
         "{stdout}"
     );
     assert!(
@@ -653,7 +653,7 @@ fn the_first_target_walk_from_the_folder_above() {
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert_eq!(
         stdout,
-        "proj/scene.jsonc: ok, 18 engine parts, 31 nets, ground nano__GND\n"
+        "proj/scene.jsonc: ok, 19 engine parts, 32 nets, ground nano__GND\n"
     );
     assert!(proj.join("parts.lock").is_file());
 }
@@ -780,7 +780,7 @@ fn every_part_missing_and_part_modified_hint_makes_the_next_check_pass() {
             Some(0),
             "{name}: {commands:?}\n{stdout}"
         );
-        assert!(stdout.contains("ok, 18 engine parts"), "{name}: {stdout}");
+        assert!(stdout.contains("ok, 19 engine parts"), "{name}: {stdout}");
         let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
         assert_eq!(output.status.code(), Some(0), "{name}: {stdout}");
     }
@@ -1197,7 +1197,7 @@ fn a_scene_not_named_scene_jsonc_gets_a_hint_that_runs() {
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert_eq!(
         stdout,
-        "blinky.jsonc: ok, 18 engine parts, 31 nets, ground nano__GND\n"
+        "blinky.jsonc: ok, 19 engine parts, 32 nets, ground nano__GND\n"
     );
 }
 

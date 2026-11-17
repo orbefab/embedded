@@ -39,7 +39,7 @@ pub(crate) struct PinRatings {
     pub(crate) pin_current: Option<f64>,
     /// Ampere, through the supply pin and through the ground pin. Every output draws its high
     /// side, its pull-up and its leakage from the one and sinks its low side and its leakage
-    /// into the other.
+    /// into the other, and the chip's own draw passes through both.
     pub(crate) supply_current: Option<f64>,
     /// The supply pin and its net.
     pub(crate) vcc: (&'static str, NetId),
@@ -91,6 +91,8 @@ struct Gauge {
     /// Its index among the circuit's active chips, which is its core's index.
     active: usize,
     outputs: Vec<Pin>,
+    /// The columns of its supply and ground nets and the conductance of its own draw.
+    supply: Option<(usize, usize, f64)>,
     /// Each output's current out of its pin, then the current into the supply pin, then the
     /// current out of the ground pin. Set by the last sample.
     currents: Vec<f64>,
@@ -201,6 +203,13 @@ impl Ratings {
                     .iter()
                     .map(|output| Pin::new(output, columns))
                     .collect(),
+                supply: chip.supply.map(|supply| {
+                    (
+                        columns.net(supply.vcc),
+                        columns.net(supply.gnd),
+                        supply.conductance,
+                    )
+                }),
                 currents: vec![0.0; outputs + 2],
             });
         }
@@ -444,6 +453,11 @@ impl Gauge {
             *current = from_vcc - into_gnd;
             supply += from_vcc;
             ground += into_gnd;
+        }
+        if let Some((vcc, gnd, conductance)) = self.supply {
+            let own = (row[vcc].get() - row[gnd].get()) * conductance;
+            supply += own;
+            ground += own;
         }
         let outputs = self.outputs.len();
         self.currents[outputs] = supply;

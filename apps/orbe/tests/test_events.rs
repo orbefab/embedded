@@ -234,7 +234,7 @@ fn hot(test: &str) -> tempfile::TempDir {
 #[test]
 fn no_diagnostics_fails_while_a_part_is_over_its_rating_now() {
     let dir = hot(
-        "open\nstep 100ms\npress @btn1\nstep 9ms\nexpect @led1.i > 70mA\nexpect no diagnostics\n",
+        "open\nstep 100ms\npress @btn1\nstep 9ms\nexpect @led1.i > 60mA\nexpect no diagnostics\n",
     );
     let run = orbe(dir.path(), &["test", "--json"]);
     assert_eq!(run.code, 1, "{}", run.stdout);

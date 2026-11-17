@@ -149,6 +149,7 @@ where
         usarts: M::USARTS,
         twi: M::TWI,
         sends: M::SENDS,
+        supply: None,
         takes: Takes::default(),
         core: crate::active::Core::Mcu(Mcu::from(host)),
     }
