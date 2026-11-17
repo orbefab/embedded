@@ -1,5 +1,6 @@
 {
   "format": 1,
+  "files": { "rom": "esp32s3_rev0_rom.elf" },
   "titel": "Pulled button",
   "tags": "button",
   "real": { "maker": "Omron", "nuber": "B3F-1000" },
