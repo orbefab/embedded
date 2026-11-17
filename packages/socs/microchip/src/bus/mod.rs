@@ -19,6 +19,7 @@ mod power;
 mod record;
 mod seam;
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 
 use hostside::HostSide;
@@ -34,7 +35,7 @@ use crate::chip::{ClockDomain, DEVICES, DeviceSpec, ModuleGate, RAMEND, SPH, SPL
 use crate::mux::PinMux;
 use crate::periph::usart::{Sent, Shifted};
 use crate::periph::{Device, IoWrite, Notice, StoreAt, Touch, push_pin, rows_of};
-use crate::regs::OwnedReg;
+use crate::regs::{GPIO_PIN, OwnedReg};
 use crate::{Level, PIN_QUEUE_CAP, PinLevels, PinOrigin, PinReport};
 
 /// Data-space address of I/O register 0.
@@ -43,7 +44,11 @@ pub(crate) use orbe_avr::IO_BASE;
 const IO_END: u16 = 0x00FF;
 const SRAM_BASE: u16 = 0x0100;
 const IO_LEN: usize = 0xE0;
+// `Bus::unread` holds one bit per I/O index in four words.
+const _: () = assert!(IO_LEN <= 256);
 const NO_DEV: u8 = 0xFF;
+/// Pin ids `PB0` to `PD7`.
+const PIN_IDS: usize = 24;
 
 #[derive(Debug, Clone, Copy)]
 struct Slot {
@@ -117,6 +122,11 @@ pub(crate) struct Bus {
     host_side: HostSide,
     /// Oscillator hertz. `cpu_hz` is this divided by `div`.
     osc_hz: u32,
+    /// One bit per I/O index: a port's `PINx` sits there and the firmware has not loaded it
+    /// since power-on. A steady load reads through `&self`, so the set sits in a `Cell`.
+    unread: Cell<[u64; 4]>,
+    /// By pin id, the oscillator cycle the firmware first read the pin at, or `u64::MAX`.
+    read_at: Cell<[u64; PIN_IDS]>,
     /// The last two `CLKPR` divisions. CPU cycles stay 1; wall time scales.
     epochs: Epochs,
     /// Schedule-and-ack source for the `irq` tests. Not a device, and not on `tick`.
@@ -149,6 +159,8 @@ clone_fields!(Bus {
     wdt_reset,
     host_side,
     osc_hz,
+    unread,
+    read_at,
     epochs,
     #[cfg(test)]
     test_irq
@@ -170,6 +182,7 @@ impl orbe_avr::Bus for Bus {
             return byte;
         }
         if let Some(index) = io_index(addr) {
+            self.note_read(index);
             return self.load_io(index);
         }
         0
@@ -180,8 +193,13 @@ impl orbe_avr::Bus for Bus {
         self.store(core, addr, value, cycles);
     }
 
+    /// The core peeks only for an instruction it runs, so a peek of `PINx` is the firmware's
+    /// read, as a load is.
     #[inline(always)]
     fn peek(&self, core: &Core, addr: u16) -> u8 {
+        if let Some(index) = io_index(addr) {
+            self.note_read(index);
+        }
         self.peek(core, addr)
     }
 
@@ -319,6 +337,15 @@ impl Bus {
                 unmodeled[slot] = row.unmodeled;
             }
         }
+        let mut unread = [0u64; 4];
+        for (slot, owner) in owners.iter().enumerate() {
+            if owner.dev != NO_DEV
+                && owner.reg == GPIO_PIN
+                && matches!(devices[usize::from(owner.dev)], Device::Port(_))
+            {
+                unread[slot >> 6] |= 1 << (slot & 63);
+            }
+        }
         let sram_len = usize::from(RAMEND - SRAM_BASE) + 1;
         let mut bus = Self {
             next_event: u64::MAX,
@@ -351,6 +378,8 @@ impl Bus {
             wdt_reset: false,
             host_side: HostSide::idle(),
             osc_hz: 16_000_000,
+            unread: Cell::new(unread),
+            read_at: Cell::new([u64::MAX; PIN_IDS]),
             epochs: Epochs::START,
             #[cfg(test)]
             test_irq: crate::periph::probe::Probe::new(),
@@ -580,6 +609,58 @@ impl Bus {
             Some(Device::ExtInt(ext)) => ext.waiting(),
             _ => 0,
         }
+    }
+
+    /// Marks every pin of the port whose `PINx` sits at I/O `index` read, the first time. A
+    /// steady load in a free run is marked at the cycle the run began on. Every load and peek
+    /// passes here, so any other index costs one bit test.
+    #[inline(always)]
+    fn note_read(&self, index: usize) {
+        if self.unread.get()[index >> 6] & (1 << (index & 63)) != 0 {
+            self.note_port_read(index);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn note_port_read(&self, index: usize) {
+        let mut unread = self.unread.get();
+        unread[index >> 6] &= !(1 << (index & 63));
+        self.unread.set(unread);
+        let slot = self.owners[index];
+        if let Device::Port(port) = &self.devices[usize::from(slot.dev)] {
+            self.mark_read(0xFF << port.port().pin_id(0));
+        }
+    }
+
+    /// Marks each pin of `pins`, one bit per pin id, read now, unless it was read before.
+    fn mark_read(&self, pins: u64) {
+        let now = self.epochs.oscillator_cycles(self.cycle);
+        let mut read_at = self.read_at.get();
+        for (pin, at) in read_at.iter_mut().enumerate() {
+            if pins & (1 << pin) != 0 && *at == u64::MAX {
+                *at = now;
+            }
+        }
+        self.read_at.set(read_at);
+    }
+
+    /// Marks each pin an enabled external or pin-change interrupt now watches read.
+    fn note_sensed(&self) {
+        if let Some(Device::ExtInt(ext)) = self.slot_dev(self.index.extint) {
+            let sensed = ext.sensed();
+            if sensed != 0 {
+                self.mark_read(sensed);
+            }
+        }
+    }
+
+    /// The oscillator cycle the firmware first read pin `pin` at: the first load of its port's
+    /// `PINx`, which holds all eight, or the first time an enabled `INTn` or pin-change
+    /// interrupt watched it. `None` when it has not, or while the pin's digital input is off.
+    pub(crate) fn pin_read_at(&self, pin: u32) -> Option<u64> {
+        let at = *self.read_at.get().get(pin as usize)?;
+        (at != u64::MAX && self.mux.sensing() & (1 << pin) != 0).then_some(at)
     }
 
     #[cfg(test)]
@@ -1161,6 +1242,9 @@ impl Bus {
             let mut ctx = host.ctx(epochs);
             devices[usize::from(slot.dev)].write(slot.reg, value, &mut ctx, mux, at, &clock, addr)
         };
+        if Some(slot.dev) == self.index.extint {
+            self.note_sensed();
+        }
         // §9.11 puts the new division in force `T1 + T2` to `T1 + 2·T2` after the write.
         // One more cycle at the old division after the store retires, then the new one, lands
         // the second edge on `T1 + T2` whichever way the clock changes.

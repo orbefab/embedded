@@ -1111,6 +1111,47 @@ fn a_load_over_the_usb_supply_warns_and_a_wire_across_it_is_a_short() {
 }
 
 #[test]
+fn a_button_with_no_pull_down_warns_that_its_input_floats() {
+    let project = worked_example();
+    let dir = project.path();
+    let scene = fs::read_to_string(dir.join("scene.jsonc")).unwrap();
+    let bare: String = scene
+        .lines()
+        .filter(|l| !l.contains("\"r2"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert!(bare.contains("\"btn1\"") && !bare.contains("r2"));
+    fs::write(dir.join("scene.jsonc"), &bare).unwrap();
+    let runtime = Runtime::new();
+    let orbe = |args: &[&str]| runtime.orbe(dir, args);
+    orbe(&["open"]).ok();
+    let step = orbe(&["step", "20ms"]).ok();
+    orbe(&["close"]).ok();
+    let said = "warning[chip.floating_input] #nano__mcu.pin.PD2 (nano.D2) reads #net.nano__D2 as a digital input at ";
+    assert!(step.stdout.contains(said), "{}", step.stdout);
+    assert!(
+        step.stdout
+            .contains("add a pull-up or a pull-down resistor, or turn the pin's pull-up on"),
+        "{}",
+        step.stdout
+    );
+    says(
+        &skill("arduino"),
+        "`step` warns `chip.floating_input`, naming the pin, as in `#nano__mcu.pin.PD2 (nano.D2) reads #net.nano__D2 as a digital input at ... ps while nothing drives it`.",
+    );
+
+    fs::write(dir.join("scene.jsonc"), &scene).unwrap();
+    orbe(&["open"]).ok();
+    let step = orbe(&["step", "20ms"]).ok();
+    orbe(&["close"]).ok();
+    assert!(
+        !step.stdout.contains("chip.floating_input"),
+        "{}",
+        step.stdout
+    );
+}
+
+#[test]
 fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     let project = worked_example();
     let dir = project.path();

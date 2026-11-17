@@ -22,6 +22,10 @@ impl GpioPort {
         Self { port }
     }
 
+    pub(crate) fn port(&self) -> Port {
+        self.port
+    }
+
     pub(crate) fn read(&mut self, reg: u8, mux: &PinMux, cycle: u64) -> u8 {
         self.peek(reg, mux, cycle)
     }

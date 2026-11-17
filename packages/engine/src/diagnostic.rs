@@ -351,6 +351,9 @@ pub enum Diagnostic {
     /// A chip whose CS and SCLK sit on `sender`'s nets dropped an SPI transaction whose data
     /// lanes are not on its own data pins, first at `at`.
     ChipLinkMiswired { part: Ref, at: Time, sender: Name },
+    /// A chip's firmware read `pin` as a digital input at `at` while its pull-up was off and
+    /// nothing joined `net` to a supply or to ground, but the chip's own leakage. Once per pin.
+    ChipFloatingInput { pin: Ref, net: Ref, at: Time },
     /// A chip's core reached `op` at `pc`, which the model does not run there. `reason` says
     /// what is missing. It ends the run.
     ChipUnsupportedInstruction {
@@ -593,6 +596,7 @@ impl Diagnostic {
             Diagnostic::ChipUnsettled { .. } => "chip.unsettled",
             Diagnostic::ChipProtocol { .. } => "chip.protocol",
             Diagnostic::ChipLinkMiswired { .. } => "chip.link_miswired",
+            Diagnostic::ChipFloatingInput { .. } => "chip.floating_input",
             Diagnostic::ChipUnsupportedInstruction { .. } => "chip.unsupported_instruction",
             Diagnostic::ChipUnmappedFetch { .. } => "chip.unmapped_fetch",
             Diagnostic::ChipHalted { .. } => "chip.halted",
@@ -618,6 +622,7 @@ impl Diagnostic {
             Diagnostic::NetFloating { .. }
             | Diagnostic::ChipProtocol { .. }
             | Diagnostic::ChipLinkMiswired { .. }
+            | Diagnostic::ChipFloatingInput { .. }
             | Diagnostic::ChipUnmodeledRegister { .. }
             | Diagnostic::ChipRestart { .. }
             | Diagnostic::TraceRowInterpolated { .. }
@@ -671,6 +676,7 @@ impl Diagnostic {
             | Diagnostic::ChipUnsettled { at, .. }
             | Diagnostic::ChipProtocol { at, .. }
             | Diagnostic::ChipLinkMiswired { at, .. }
+            | Diagnostic::ChipFloatingInput { at, .. }
             | Diagnostic::ChipUnsupportedInstruction { at, .. }
             | Diagnostic::ChipUnmappedFetch { at, .. }
             | Diagnostic::ChipHalted { at, .. }
@@ -729,6 +735,7 @@ impl Diagnostic {
             | Diagnostic::NetlistWaveform { part, .. } => vec![part.clone()],
             Diagnostic::NetlistWorld { part, .. } => part.iter().cloned().collect(),
             Diagnostic::NetFloating { net } => vec![net.clone()],
+            Diagnostic::ChipFloatingInput { pin, net, .. } => vec![pin.clone(), net.clone()],
             Diagnostic::NetShort { part, net } => vec![part.clone(), net.clone()],
             Diagnostic::SolverSingular { unknown, .. }
             | Diagnostic::SolverNonFinite { unknown, .. }
@@ -1144,6 +1151,10 @@ impl Diagnostic {
                 rule_text(rule),
                 at.as_ps()
             ),
+            Diagnostic::ChipFloatingInput { pin, net, at } => format!(
+                "{pin} reads {net} as a digital input at {} ps while nothing drives it: its pull-up is off and no part joins the net to a supply or to ground, so it reads whatever level leakage and noise leave; add a pull-up or a pull-down resistor, or turn the pin's pull-up on",
+                at.as_ps()
+            ),
             Diagnostic::ChipLinkMiswired { part, at, sender } => format!(
                 "{part} dropped an SPI transaction from #{} whose data lanes are not on its own data pins at {} ps, the first time",
                 sender.as_str(),
@@ -1465,7 +1476,8 @@ impl Diagnostic {
             }
             Diagnostic::NetlistDuplicate { .. }
             | Diagnostic::NetFloating { .. }
-            | Diagnostic::NetShort { .. } => {
+            | Diagnostic::NetShort { .. }
+            | Diagnostic::ChipFloatingInput { .. } => {
                 serde_json::json!({})
             }
             Diagnostic::NetlistUnknownNet { net, .. } => serde_json::json!({ "net": net }),

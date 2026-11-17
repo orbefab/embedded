@@ -15,7 +15,7 @@ A diagnostic is one JSON object. The fields are written in this order.
 
 The run sorts diagnostics by `t_ps`, then `code`, then `refs`, then the JSON bytes of the whole object. A `null` time sorts before a number, so every input finding precedes a solver finding.
 
-A session's `diagnostics()` returns the warnings found so far, and once the session ends they are that list's. While it runs, a `Pulses` record still in flight is not yet counted, as [engine.md](engine.md#sessions) says. The folder's warnings are `net.floating`, `trace.row_interpolated`, `rating.current`, `rating.power`, `rating.voltage`, `chip.protocol`, `chip.link_miswired`, `chip.unmodeled_register` and `chip.restart`. `diagnostics()` returns all but `trace.row_interpolated`. It leaves out `trace.row_interpolated`, because that warning names a grid row whose probe failed twice, and only a recorded trace defines those rows. An open session has no grid. The accepted steps do not depend on the grid, and neither do the warnings `diagnostics()` returns. Every other code on this page is an error. The error that ends a run is `fault` on the session, and `diagnostics()` does not return it. [engine.md](engine.md#sessions) says when the samples are taken.
+A session's `diagnostics()` returns the warnings found so far, and once the session ends they are that list's. While it runs, a `Pulses` record still in flight is not yet counted, as [engine.md](engine.md#sessions) says. The folder's warnings are `net.floating`, `trace.row_interpolated`, `rating.current`, `rating.power`, `rating.voltage`, `chip.protocol`, `chip.link_miswired`, `chip.floating_input`, `chip.unmodeled_register` and `chip.restart`. `diagnostics()` returns all but `trace.row_interpolated`. It leaves out `trace.row_interpolated`, because that warning names a grid row whose probe failed twice, and only a recorded trace defines those rows. An open session has no grid. The accepted steps do not depend on the grid, and neither do the warnings `diagnostics()` returns. Every other code on this page is an error. The error that ends a run is `fault` on the session, and `diagnostics()` does not return it. [engine.md](engine.md#sessions) says when the samples are taken.
 
 A run whose diagnostics are all warnings still writes the operating point. A run with an error writes the observations it reached, as [run-folder.md](run-folder.md#observationsjson) says. That is `{}` when nothing solved, as at t = 0. A transient keeps its grid rows before the error, and its last accepted step is the last row. Its observations end there. A warning found before that error is kept, including a rating sampled on any accepted step before it.
 
@@ -277,7 +277,7 @@ The message is `{ref} has no DC path to ground`.
 
 A DC path is a chain of resistors, potentiometers, voltage sources, diodes, LEDs, zeners, linear regulators, transistors, inductors, relays, and switches from the net to ground. A resistor, voltage source, diode, LED, zener, inductor, or switch joins its two pins. A linear regulator joins `in` to `gnd` and `out` to `gnd`. An inductor joins them through its series resistance, because its inductance is a short at DC. A relay joins `coil_a` to `coil_b` through its coil, and `com` to `no` and `com` to `nc` in either state, so a net on a contact's open side is not floating. A potentiometer joins `a` to `wiper` and `wiper` to `b`. An `npn` or a `pnp` joins `collector` to `base` and `base` to `emitter`, through its junctions. An `nmos` joins `drain` to `source`. Its gate joins nothing, so a net reached only through gates and capacitors is `net.floating`. A switch joins its pins open or closed. An NE555 joins VCC to CONT, CONT to GND, VCC to GND, OUT to VCC, OUT to GND, and DISCH to GND, in either latch state, and joins nothing to TRIG, THRES, or RESET. An ATmega328P joins each port pin, `PC6` included, to VCC and to `GND_8`, through the leakage it stamps in every drive state. Its `GND_22` is on the net of its `GND_8`. It joins nothing to `PB6`, `PB7`, `AREF`, or `AVCC`, as [netlist.md](netlist.md#atmega328p) explains. An SPI replay joins `CS`, `SCLK` and `D0` to `D3` each to `VCC` and to `GND`, through the stage it drives. A capacitor with `"initial": null` does not join its pins, because it is open at DC. Neither does a current source. A capacitor with an `initial` voltage joins them, because the operating point holds it. gmin, 1e-12 S from every node to ground, is separate from that chain.
 
-`net.floating` is a static check on the netlist's topology. It never depends on a solve, so its `t_ps` is always `null`. A run that reads an input nothing drives will report that under a code of its own.
+`net.floating` is a static check on the netlist's topology. It never depends on a solve, so its `t_ps` is always `null`. Because a port pin's leakage joins its net to both rails, a net that only a chip's input and an open button hold is never `net.floating`. A run whose firmware reads such an input reports [`chip.floating_input`](#chipfloating_input).
 
 A resistor from `vin` to `lonely`, with a voltage source from `vin` to `gnd`, puts `lonely` on a path to ground. Two LEDs in series from `vled` to `gnd`, with a resistor from `vin` to `vled`, put `mid` on a path to ground. A net that no part names is floating. Two nets whose only part is a resistor between them are floating. The operating point is still written, and `orbe-run run` exits 0.
 
@@ -412,6 +412,24 @@ Severity `warning`. Refs are the chip that dropped a transaction. `t_ps` is the 
 The message is `{part} dropped an SPI transaction from #{sender} whose data lanes are not on its own data pins at {t_ps} ps, the first time`.
 
 `data` holds `sender`, the part name of the chip that sent it. A transaction goes to every chip whose `CS` and `SCLK` are on the sender's. A lane it uses, up to the most lanes any of its phases or its data take, must be on the receiver's pin of the same number, `D0` to `D3`. Otherwise the receiver drops it, and the run reports the first such drop once per part.
+
+## chip.floating_input
+
+Severity `warning`. Refs are the chip's pin, then `#net.<name>`, the pin's net. `t_ps` is the first accepted step that found it.
+
+The message is:
+
+```text
+{pin} reads {net} as a digital input at {t_ps} ps while nothing drives it: its pull-up is off and no part joins the net to a supply or to ground, so it reads whatever level leakage and noise leave; add a pull-up or a pull-down resistor, or turn the pin's pull-up on
+```
+
+`data` is `{}`. The run reports each pin once, at the first accepted step where all three hold:
+
+- The pin's drive is off: an input with its pull-up off.
+- Its firmware has read the pin at or before that step. An ATmega328P reads every pin of a port from the first instruction that loads its `PINx`, since `digitalRead` loads the whole byte, and each pin an `INTn` or pin-change interrupt watches from the store that enables it. A pin whose digital input is off, `PC6` while it is `RESET` or a pin `DIDR0` turns off, is not read. A chip on the [contract](mcu.md) that says nothing reads no pin, so the check covers the ATmega328P alone. The engine asks the copy of the core it runs ahead, which has always reached the step, since a landing commits only a core that stops there.
+- The pin's net reaches ground through no DC path but chips' leakage. The paths are those of [`net.floating`](#netfloating), less every active chip's and every capacitor's. A switch joins its pins only while its contact is closed on that step, and an active chip joins an output's net to its own supply while it drives high or pulls up, and to its own ground while it drives low.
+
+A static check cannot tell this: a sketch sets `INPUT` or `INPUT_PULLUP` as it runs, and a pin the sketch never reads may float harmlessly. A net that holds only the pin, with no other part, is not checked. A button from the pin to 5V with no pull-down warns at the first read while the button is open. With a pull-down, an external pull-up, `INPUT_PULLUP`, or a pin the firmware never reads, it does not.
 
 ## chip.unsupported_instruction
 

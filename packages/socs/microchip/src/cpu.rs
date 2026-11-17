@@ -452,6 +452,14 @@ impl Cpu {
         self.bus.peek(&self.core, addr)
     }
 
+    /// The oscillator cycle the firmware first read pin id `pin` at: the first instruction to
+    /// load its port's `PINx`, or the first store that let an `INTn` or `PCINTn` interrupt
+    /// watch it. `None` when it has not, or while the pin's digital input is off.
+    /// [`Self::peek`] does not count.
+    pub fn pin_read_at(&self, pin: u32) -> Option<u64> {
+        self.bus.pin_read_at(pin)
+    }
+
     pub fn flash_word(&self, addr: u16) -> u16 {
         self.core.flash_word(addr)
     }

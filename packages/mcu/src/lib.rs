@@ -63,6 +63,11 @@ pub trait Mcu: Clone + Send + std::fmt::Debug + 'static {
     fn fault(&self) -> Option<(Time, Fault)> {
         None
     }
+    /// The time the firmware first read output `output`'s pin as a digital input, as far as the
+    /// chip has run. A chip that never says reads none, and the engine checks no input of it.
+    fn read(&self, _output: usize) -> Option<Time> {
+        None
+    }
     /// What it noted at or before `through`, each at its time, in the order the engine reports
     /// them.
     fn notes(&self, _through: Time) -> Vec<(Time, Note)> {

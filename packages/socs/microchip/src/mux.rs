@@ -562,6 +562,20 @@ impl PinMux {
         }
     }
 
+    /// The pins whose digital input `PINx` and the edge detectors see, one bit per pin id: not
+    /// a pin whose buffer `DIDRn` turns off, nor `PC6` while it is `RESET`.
+    pub(crate) fn sensing(&self) -> u64 {
+        let mut pins = 0u64;
+        for port in [Port::B, Port::C, Port::D] {
+            let on = !self.ports[port.index()].buf_off;
+            pins |= u64::from(on) << port.pin_id(0);
+        }
+        if self.reset_pin {
+            pins &= !(1 << RESET_PORT.pin_id(RESET_BIT));
+        }
+        pins
+    }
+
     /// What `PINx` and the edge detectors see of `level`.
     fn digital(&self, port: Port, bit: u8, level: Level) -> Level {
         if self.ports[port.index()].buf_off & (1 << bit) != 0 || self.is_reset_pin(port.pin_id(bit))

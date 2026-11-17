@@ -196,6 +196,13 @@ impl Mcu for Bridge {
         self.levels = levels.to_vec();
     }
 
+    /// A port pin is read once the firmware loads its port's `PINx`, which holds all eight, or
+    /// enables its `INTn` or `PCINTn` interrupt.
+    fn read(&self, output: usize) -> Option<Time> {
+        let pin = *DIE.get(output)?;
+        self.cpu().pin_read_at(pin).map(|cycle| self.time(cycle))
+    }
+
     /// ADC0 to ADC5, `AVCC`, and `AREF`, each against the analog GND.
     fn sample(&mut self, _at: Time, volts: &[f64]) {
         let v = |k: usize| volts[k] as f32;
