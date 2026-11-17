@@ -222,8 +222,82 @@
       "required": true
     }
   ],
-  "ratings": [],
-  "notSimulated": [],
+  "ratings": [
+    {
+      "name": "pin_current",
+      "value": 0.04,
+      "unit": "A",
+      "source": {
+        "datasheet": {
+          "at": "§29.1 Absolute Maximum Ratings, page 308: DC Current per I/O Pin, 40.0 mA",
+          "basis": "absolute_max",
+          "doc": "DS40002061B"
+        }
+      }
+    },
+    {
+      "name": "supply_current",
+      "value": 0.2,
+      "unit": "A",
+      "source": {
+        "datasheet": {
+          "at": "§29.1 Absolute Maximum Ratings, page 308: DC Current VCC and GND Pins, 200.0 mA",
+          "basis": "absolute_max",
+          "doc": "DS40002061B"
+        }
+      }
+    },
+    {
+      "name": "rail_margin",
+      "value": 0.5,
+      "unit": "V",
+      "source": {
+        "datasheet": {
+          "at": "§29.1 Absolute Maximum Ratings, page 308: Voltage on any Pin except RESET with respect to Ground, -0.5 V to VCC + 0.5 V",
+          "basis": "absolute_max",
+          "doc": "DS40002061B"
+        }
+      }
+    },
+    {
+      "name": "reset_voltage",
+      "value": 13.0,
+      "unit": "V",
+      "source": {
+        "datasheet": {
+          "at": "§29.1 Absolute Maximum Ratings, page 308: Voltage on RESET with respect to Ground, -0.5 V to +13.0 V",
+          "basis": "absolute_max",
+          "doc": "DS40002061B"
+        }
+      }
+    },
+    {
+      "name": "supply_voltage",
+      "value": 6.0,
+      "unit": "V",
+      "source": {
+        "datasheet": {
+          "at": "§29.1 Absolute Maximum Ratings, page 308: Maximum Operating Voltage, 6.0 V",
+          "basis": "absolute_max",
+          "doc": "DS40002061B"
+        }
+      }
+    }
+  ],
+  "notSimulated": [
+    {
+      "what": "output saturation",
+      "why": "Each output stage is linear, 25 ohm from its rail, read at 20 mA. A real driver saturates far past that, so a pin shorted to the other rail reads 200 mA at 5 V, about twice a real pin's current. `rating.current` reads the model's current."
+    },
+    {
+      "what": "clamp diodes",
+      "why": "No protection diode conducts, so a pin driven past VCC or below GND draws no clamp current. `rating.voltage` reports the pin."
+    },
+    {
+      "what": "supply current",
+      "why": "The core draws nothing from VCC. The current the ratings sum through VCC and GND is the pins' alone."
+    }
+  ],
   "docs": [
     {
       "name": "DS40002061B"

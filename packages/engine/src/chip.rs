@@ -196,3 +196,18 @@ pub(crate) fn dc_paths(chip: &Chip) -> &'static [(usize, usize)] {
         Chip::PulsesReplay(_) => &crate::device::pulses_replay::DC_PATHS,
     }
 }
+
+/// The ratings a chip puts on its package pins, or `None` for a chip whose part rates none.
+pub(crate) fn pin_ratings(chip: &Chip) -> Option<crate::ratings::PinRatings> {
+    match chip {
+        Chip::Atmega328p(mcu) => crate::mcu::atmega328p::pin_ratings(mcu),
+        Chip::Ne555(_)
+        | Chip::SpiReplay(_)
+        | Chip::St77916(_)
+        | Chip::Cst816(_)
+        | Chip::Dht22(_)
+        | Chip::Esp32s3(_)
+        | Chip::Ws2812(_)
+        | Chip::PulsesReplay(_) => None,
+    }
+}
