@@ -761,9 +761,12 @@ impl<'p> Circuit<'p> {
 
     /// Each voltage source whose two pins the parts' own wires keep on two nets, with a name
     /// for each of those nets. A scene wire that joins them is a short: no solve can hold two
-    /// pins of one net apart.
+    /// pins of one net apart. A net a diode feeds from the source's `p` net, such as the Nano's
+    /// 5V rail behind its USB Schottky, is held apart from `n` the same way, since a wire from it
+    /// to `n` puts the source across the diode alone.
     fn held_apart(&mut self) -> Vec<HeldApart> {
-        let mut out = Vec::new();
+        let mut sources = Vec::new();
+        let mut diodes = Vec::new();
         for inst in 1..self.insts.len() {
             let Some(part) = self.part(inst) else {
                 continue;
@@ -771,19 +774,47 @@ impl<'p> Circuit<'p> {
             if self.insts[inst].dropped.is_some() {
                 continue;
             }
-            for body in part.bodies.iter().filter(|b| b.kind == "voltage_source") {
+            for body in &part.bodies {
                 let pin = |name: &str| {
                     body.pins
                         .iter()
                         .find(|(engine, _)| *engine == name)
                         .map(|(_, pin)| self.keys[&(inst, pin.clone())])
                 };
-                let (Some(p), Some(n)) = (pin("p"), pin("n")) else {
-                    continue;
-                };
-                if self.find(p) == self.find(n) {
-                    continue;
+                match body.kind.as_str() {
+                    "voltage_source" => {
+                        if let (Some(p), Some(n)) = (pin("p"), pin("n")) {
+                            sources.push((inst, p, n));
+                        }
+                    }
+                    "diode" => {
+                        if let (Some(anode), Some(cathode)) = (pin("anode"), pin("cathode")) {
+                            diodes.push((anode, cathode));
+                        }
+                    }
+                    _ => {}
                 }
+            }
+        }
+        let mut out = Vec::new();
+        for (inst, p, n) in sources {
+            if self.find(p) == self.find(n) {
+                continue;
+            }
+            let mut held = vec![p];
+            let mut more = true;
+            while more {
+                more = false;
+                for &(anode, cathode) in &diodes {
+                    let fed = held.iter().any(|&net| self.find(net) == self.find(anode));
+                    let known = held.iter().any(|&net| self.find(net) == self.find(cathode));
+                    if fed && !known && self.find(cathode) != self.find(n) {
+                        held.push(cathode);
+                        more = true;
+                    }
+                }
+            }
+            for p in held {
                 out.push(HeldApart {
                     inst,
                     p,

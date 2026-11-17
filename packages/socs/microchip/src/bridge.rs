@@ -181,6 +181,12 @@ impl Mcu for Bridge {
         &self.image
     }
 
+    /// Held while `RESET` is low or `VCC` is under the brown-out window, from the cycle the
+    /// timeline stops at for it.
+    fn held(&self) -> bool {
+        self.timeline.held()
+    }
+
     /// The port pins' levels in [`PORT_PINS`] order, then `VCC` above the brown-out window
     /// when the fuses enable it.
     fn input(&mut self, _at: Time, levels: &[bool]) {

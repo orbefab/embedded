@@ -98,18 +98,18 @@ fn the_first_target_reads_the_engine_values_while_pressed() {
     assert_eq!(run.code, 0, "{}", run.stdout);
     assert!(
         run.stdout
-            .contains("\n  nano.D13 high 4.621848245658706 V\n"),
+            .contains("\n  nano.D13 high 4.400713547712648 V\n"),
         "{}",
         run.stdout
     );
     assert!(
         run.stdout
-            .contains("\n  led1 lit i=0.012246558123229083 A v="),
+            .contains("\n  led1 lit i=0.011292504388060703 A v="),
         "{}",
         run.stdout
     );
     assert!(
-        run.stdout.contains("\n  led1.i 0.012246558123229083 A\n"),
+        run.stdout.contains("\n  led1.i 0.011292504388060703 A\n"),
         "{}",
         run.stdout
     );
@@ -119,14 +119,14 @@ fn the_first_target_reads_the_engine_values_while_pressed() {
     assert_eq!(json[4]["data"]["ref"], "@nano.D13");
     assert_eq!(json[4]["data"]["kind"], "pin");
     assert_eq!(json[4]["data"]["value"]["level"], "high");
-    assert_eq!(json[4]["data"]["value"]["v"], 4.621848245658706);
+    assert_eq!(json[4]["data"]["value"]["v"], 4.400713547712648);
     assert_eq!(json[5]["data"]["kind"], "part");
     assert_eq!(json[5]["data"]["value"]["state"], "lit");
-    assert_eq!(json[5]["data"]["value"]["i"], 0.012246558123229083);
-    assert_eq!(json[5]["data"]["value"]["brightness"], 0.012246558123229083);
+    assert_eq!(json[5]["data"]["value"]["i"], 0.011292504388060703);
+    assert_eq!(json[5]["data"]["value"]["brightness"], 0.011292504388060728);
     assert_eq!(json[5]["data"]["value"]["over_ps"], 20_000_000_000u64);
     assert_eq!(json[6]["data"]["kind"], "quantity");
-    assert_eq!(json[6]["data"]["value"], 0.012246558123229083);
+    assert_eq!(json[6]["data"]["value"], 0.011292504388060703);
     assert_eq!(json[6]["t_ps"], 100_000_000_000u64);
 }
 
@@ -157,7 +157,7 @@ fn each_command_replies_in_text() {
     assert_eq!(block(0)[0], "2> open");
     assert_eq!(
         block(0)[1],
-        "  opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (18 engine parts, 31 nets)"
+        "  opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (19 engine parts, 32 nets)"
     );
     assert_eq!(
         block(0)[2],
@@ -168,9 +168,9 @@ fn each_command_replies_in_text() {
         [
             "3> step 100ms",
             "  t=100ms (from 0s)",
-            "    brightness led1 off 1.3413115705356304e-13 A over 20ms",
-            "    brightness nano.led_l off 1.34130540301447e-13 A over 20ms",
-            "    brightness nano.led_pwr lit 0.0032425854395092503 A over 20ms",
+            "    brightness led1 off 1.2775403302174304e-13 A over 20ms",
+            "    brightness nano.led_l off 1.2775344350286488e-13 A over 20ms",
+            "    brightness nano.led_pwr lit 0.0030136985454632045 A over 20ms",
         ]
     );
     assert_eq!(block(2)[0], "4> expect @led1 off");
@@ -198,11 +198,11 @@ fn each_command_replies_in_text() {
     );
     assert_eq!(
         until[4],
-        "    by 103ms led1 dim, brightness=0.0018344961364796203 A over 20ms"
+        "    by 103ms led1 dim, brightness=0.0016915818683638896 A over 20ms"
     );
     assert_eq!(
         until[6],
-        "    by 104ms led1 lit, brightness=0.002446824042634368 A over 20ms"
+        "    by 104ms led1 lit, brightness=0.0022562070877605346 A over 20ms"
     );
 
     assert_eq!(
@@ -216,7 +216,7 @@ fn each_command_replies_in_text() {
         block(6),
         [
             "8> expect @led1.i > 5mA",
-            "  passed @led1.i > 5mA (led1.i = 0.012246558123229083 A)"
+            "  passed @led1.i > 5mA (led1.i = 0.0112925043880606 A)"
         ]
     );
 
@@ -244,7 +244,7 @@ fn each_command_replies_in_text() {
     );
     assert_eq!(
         snapshot[6],
-        "  led1  led-5mm             lit i=0.012246558123229083 A brightness=0.002446824042634368 A over 20ms"
+        "  led1  led-5mm             lit i=0.0112925043880606 A brightness=0.0022562070877605346 A over 20ms"
     );
     assert_eq!(
         snapshot[7],
@@ -269,7 +269,7 @@ fn each_command_replies_in_text() {
     );
     assert_eq!(
         step[5],
-        "    by 126ms led1 off, brightness=1.341313123703003e-13 A over 20ms"
+        "    by 126ms led1 off, brightness=1.277543604373932e-13 A over 20ms"
     );
     assert_eq!(
         block(10),
@@ -325,7 +325,7 @@ fn each_command_replies_with_one_json_envelope() {
             open["data"]["engine_parts"].as_u64(),
             open["data"]["nets"].as_u64()
         ),
-        (Some(18), Some(31))
+        (Some(19), Some(32))
     );
     assert_eq!(open["data"]["diagnostics"][0]["code"], "net.floating");
 
@@ -340,9 +340,9 @@ fn each_command_replies_with_one_json_envelope() {
             "changes": [],
             "more": 0,
             "leds": [
-                { "ref": "@led1", "state": "off", "brightness": 1.3413115705356304e-13, "over_ps": 20_000_000_000u64 },
-                { "ref": "@nano.led_l", "state": "off", "brightness": 1.34130540301447e-13, "over_ps": 20_000_000_000u64 },
-                { "ref": "@nano.led_pwr", "state": "lit", "brightness": 0.0032425854395092503, "over_ps": 20_000_000_000u64 },
+                { "ref": "@led1", "state": "off", "brightness": 1.2775403302174304e-13, "over_ps": 20_000_000_000u64 },
+                { "ref": "@nano.led_l", "state": "off", "brightness": 1.2775344350286488e-13, "over_ps": 20_000_000_000u64 },
+                { "ref": "@nano.led_pwr", "state": "lit", "brightness": 0.0030136985454632045, "over_ps": 20_000_000_000u64 },
             ]
         })
     );
@@ -370,20 +370,20 @@ fn each_command_replies_with_one_json_envelope() {
             "by_ps": 103_000_000_000u64,
             "ref": "@led1",
             "state": "dim",
-            "brightness": 0.0018344961364796203,
+            "brightness": 0.0016915818683638896,
             "over_ps": 20_000_000_000u64
         })
     );
 
     assert_eq!(high["data"]["actual"], "nano.D13 high");
-    assert_eq!(compare["data"]["actual"], "led1.i = 0.012246558123229083 A");
+    assert_eq!(compare["data"]["actual"], "led1.i = 0.0112925043880606 A");
 
     let parts = snapshot["data"]["parts"].as_array().unwrap();
     assert_eq!(parts[0]["ref"], "@nano");
     assert_eq!(parts[0]["type"], "nano-board");
     assert_eq!(parts[0]["pins"]["D13"]["level"], "high");
     assert_eq!(parts[4]["value"]["state"], "lit");
-    assert_eq!(parts[4]["value"]["brightness"], 0.002446824042634368);
+    assert_eq!(parts[4]["value"]["brightness"], 0.0022562070877605346);
     assert_eq!(snapshot["data"]["serial"], "");
     assert_eq!(snapshot["data"]["diagnostics"][0]["code"], "net.floating");
 
@@ -657,7 +657,8 @@ fn test_paths_name_files_or_project_folders() {
 /// The catalog's GL5528 under 10 kohm, and a 10 kohm trimmer at half, seated on a breadboard.
 /// From the GL5528 sheet, R is 15 kohm at 10 lx, the centre of its 10 to 20 kohm, and falls 0.6
 /// decades per decade of light, to 3.768 kohm at 100 lx and 946.4 ohm at 1000 lx. In the dark
-/// it is 1 Mohm. `ldr.a` is `5V * R / (10k + R)`, and the wiper is 2.5 V.
+/// it is 1 Mohm. `ldr.a` is `V(5V) * R / (10k + R)` and the wiper is half the 5V pin, which sits
+/// one USB diode drop under the host's 5 V, at 4.761 V.
 #[test]
 fn the_breadboard_ldr_follows_its_sheet_and_the_trimmer_divides() {
     let dir = common::overlaid(
@@ -668,24 +669,24 @@ fn the_breadboard_ldr_follows_its_sheet_and_the_trimmer_divides() {
         dir.path().join("tests/light.test"),
         "\
 open
-expect @trim.wiper > 2.499V
-expect @trim.wiper < 2.501V
+expect @trim.wiper > 2.3797V   # 4.761 V / 2: 2.3807 V
+expect @trim.wiper < 2.3817V
 set light 10
 step 1ms
-expect @ldr.a > 2.999V    # 15 kohm: 3.000 V
-expect @ldr.a < 3.001V
+expect @ldr.a > 2.8560V   # 15 kohm: 2.8570 V
+expect @ldr.a < 2.8580V
 set light 100
 step 1ms
-expect @ldr.a > 1.3673V   # 3.768 kohm: 1.3683 V
-expect @ldr.a < 1.3693V
+expect @ldr.a > 1.3021V   # 3.768 kohm: 1.3031 V
+expect @ldr.a < 1.3041V
 set light 1000
 step 1ms
-expect @ldr.a > 0.4313V   # 946.4 ohm: 0.4323 V
-expect @ldr.a < 0.4333V
+expect @ldr.a > 0.4107V   # 946.4 ohm: 0.4117 V
+expect @ldr.a < 0.4127V
 set light 0
 step 1ms
-expect @ldr.a > 4.9495V   # 1 Mohm: 4.9505 V
-expect @ldr.a < 4.9515V
+expect @ldr.a > 4.7136V   # 1 Mohm: 4.7146 V
+expect @ldr.a < 4.7156V
 expect no diagnostics
 ",
     )
@@ -695,7 +696,8 @@ expect no diagnostics
 }
 
 /// The scene's 10 kohm over a light-dependent resistor, whose resistance is `10 kohm * 10 lx /
-/// light`. The scene holds 300 lx and steps to 50 lx at 20 ms. `ldr.v` is `5V * R / (10k + R)`.
+/// light`. The scene holds 300 lx and steps to 50 lx at 20 ms. `ldr.v` is `V(5V) * R / (10k + R)`,
+/// with the Nano's 5V pin at 4.761 V on USB.
 #[test]
 fn set_light_moves_the_divider_to_the_curve_s_value() {
     let dir = common::overlaid(&common::repo().join("packages/scene/tests/good/world_ldr"));
@@ -705,18 +707,18 @@ fn set_light_moves_the_divider_to_the_curve_s_value() {
         "\
 open
 step 10ms
-expect @ldr.v > 0.15V   # 300 lx: 333 ohm, 0.161 V
-expect @ldr.v < 0.17V
+expect @ldr.v > 0.15V   # 300 lx: 333 ohm, 0.154 V
+expect @ldr.v < 0.16V
 step 15ms
-expect @ldr.v > 0.82V   # 50 lx from 20 ms: 2 kohm, 0.833 V
-expect @ldr.v < 0.84V
+expect @ldr.v > 0.78V   # 50 lx from 20 ms: 2 kohm, 0.794 V
+expect @ldr.v < 0.80V
 set light 1000
 step 1ms
-expect @ldr.v > 0.045V  # 100 ohm, 0.0495 V
-expect @ldr.v < 0.055V
+expect @ldr.v > 0.045V  # 100 ohm, 0.0471 V
+expect @ldr.v < 0.050V
 set light 0
 step 1ms
-expect @ldr.v > 4.9V    # the dark: 1 Mohm, 4.95 V
+expect @ldr.v > 4.7V    # the dark: 1 Mohm, 4.715 V
 ",
     )
     .unwrap();

@@ -17,6 +17,7 @@ A chip is its state. `Mcu` needs `Clone`, and a copy is a checkpoint. The engine
 | `SENDS` | Whether it sends records, which go to `link.csv`. `false` by default. |
 | `run_until(limit)` | Runs from the last time it reached. Returns the first stop in `(reached, limit]` where its drives may change, it samples, or a record it sent ends, or `None` once it has done everything up to `limit`. A run split at any limit is the same run. |
 | `drive()` | One `Drive` per output, in the order the engine built its outputs. |
+| `held()` | Whether a reset holds it, which changes its own supply current. `false` by default. |
 | `input(at, levels)` | Its watches' levels from `at` on, in the order the engine built its watches. |
 | `sample(at, volts)` | The volts of its samples at a stop that asked for them. A chip that never asks keeps the default, which does nothing. |
 | `deliver(through, sent, saw)` | Hands over each USART byte whose stop bit ended at or before `through`, as a `Frame`, and each TWI phase that ended by then, as a `Phase`. |
@@ -26,9 +27,9 @@ A chip is its state. `Mcu` needs `Clone`, and a copy is a checkpoint. The engine
 | `notes(through)` | What it noted at or before `through`, each at its time. Empty by default. |
 | `read(output)` | When its firmware first read that output's pin as a digital input since the pin's drive last turned off, as far as it has run. A read while the drive is not off does not count. Once the drive is no longer off, it is still the read of the stretch that just ended. `None` by default, so the engine checks no input of a chip that keeps it. [diagnostics.md](diagnostics.md#chipfloating_input) says what the engine does with it. |
 
-That is three constants and ten methods, six of them with defaults. A clocked chip runs to cycle `floor(limit_ps * f / 1e12)` and puts a stop at cycle `c` at `ceil(c * 1e12 / f)` ps, counting from its clock domain's last frequency change, as [engine.md](engine.md#active-chips) says. The chip converts between picoseconds and its own cycles.
+That is three constants and eleven methods, seven of them with defaults. A clocked chip runs to cycle `floor(limit_ps * f / 1e12)` and puts a stop at cycle `c` at `ceil(c * 1e12 / f)` ps, counting from its clock domain's last frequency change, as [engine.md](engine.md#active-chips) says. The chip converts between picoseconds and its own cycles.
 
-Only `run_until` changes the drives. `input` and `sample` leave them alone, and what they cause comes at least 1 ps later, at a stop. The engine checks this after each of those calls, in every build, and panics on a chip that breaks it.
+Only `run_until` changes the drives and `held()`. `input` and `sample` leave them alone, and what they cause comes at least 1 ps later, at a stop. The ATmega328P stops where `RESET` low or a brown-out starts holding it and where the hold ends, so the engine stamps its reset draw from that stop, as it does a new drive. The engine checks this after each of those calls, in every build, and panics on a chip that breaks it.
 
 ## Records
 

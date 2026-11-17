@@ -1,34 +1,49 @@
 {
   "format": 1, "part": "ch340g", "version": "0.1.0", "title": "CH340G USB to serial, SOIC-16", "license": "MIT OR Apache-2.0",
-  "real": { "maker": "WCH", "number": "CH340G", "datasheet": null },
+  "docs": { "WCH CH340 datasheet (the first), English, version 1D": "https://cdn.sparkfun.com/datasheets/Dev/Arduino/Other/CH340DS1.PDF" },
+  "real": { "maker": "WCH", "number": "CH340G", "datasheet": "WCH CH340 datasheet (the first), English, version 1D" },
   "pins": {
     "GND": [1], "TXD": [2], "RXD": [3], "V3": [4], "UDP": [5], "UDM": [6], "XI": [7], "XO": [8],
     "CTS": [9], "DSR": [10], "RI": [11], "DCD": [12], "DTR": [13], "RTS": [14], "R232": [15], "VCC": [16],
   },
+  // The chip's outputs drive high to its own VCC, so TXD and DTR are sources from VCC. The board's
+  // 5V rail sits a Schottky drop under USB, and a source from GND would hold them above it.
   "model": {
     "host_tx": {
       "kind": "voltage_source",
       "voltage": {
         "kind": "serial",
-        "mark": { "value": 5.0, "unit": "V", "source": { "closed_form": { "note": "The chip runs from the 5 V rail, so a mark is that rail and a space is ground. Its sheet is not cited." } } },
-        "space": { "value": 0.0, "unit": "V", "source": { "closed_form": { "note": "The chip runs from the 5 V rail, so a mark is that rail and a space is ground. Its sheet is not cited." } } },
+        "mark": { "value": 0.0, "unit": "V", "source": { "closed_form": { "note": "A mark is the chip's own VCC, 0 V above it. Its sheet is not cited." } } },
+        "space": { "value": -5.0, "unit": "V", "source": { "closed_form": { "note": "A space is ground, 5 V under VCC on a 5 V rail. The board gives no events, so no space is sent. Its sheet is not cited." } } },
         "events": [],
       },
-      "pins": { "p": "TXD", "n": "GND" },
+      "pins": { "p": "TXD", "n": "VCC" },
     },
     "host_dtr": {
       "kind": "voltage_source",
       "voltage": {
         "kind": "steps",
-        "initial": { "value": 5.0, "unit": "V", "source": { "closed_form": { "note": "DTR idles high on the 5 V rail. Its sheet is not cited." } } },
+        "initial": { "value": 0.0, "unit": "V", "source": { "closed_form": { "note": "DTR idles high at the chip's own VCC, 0 V above it. Its sheet is not cited." } } },
         "events": [],
       },
-      "pins": { "p": "DTR", "n": "GND" },
+      "pins": { "p": "DTR", "n": "VCC" },
+    },
+    // The chip's own draw: a resistance from VCC to GND that draws the sheet's typical
+    // working current at 5 V.
+    "supply": {
+      "kind": "resistor",
+      "resistance": { "value": 416.67, "unit": "ohm", "source": { "closed_form": { "note": "WCH CH340 datasheet (the first), English, version 1D, page 4, 6.2 Electrical parameter, TA = 25 C, VCC = 5 V: ICC, total source current when working, 12 mA typical, 30 mA maximum. 5 V / 12 mA" } } },
+      "ratings": { "power": null },
+      "pins": { "a": "VCC", "b": "GND" },
     },
   },
   "not_simulated": [{
     "what": "USB to serial",
-    "pins": ["RXD", "V3", "UDP", "UDM", "XI", "XO", "CTS", "DSR", "RI", "DCD", "RTS", "R232", "VCC"],
-    "why": "The engine has no USB-serial chip. A serial source stands in for TXD and a steps source for DTR.",
+    "pins": ["RXD", "V3", "UDP", "UDM", "XI", "XO", "CTS", "DSR", "RI", "DCD", "RTS", "R232"],
+    "why": "The engine has no USB-serial chip. A serial source from VCC stands in for TXD and a steps source from VCC for DTR, each idle high at VCC.",
+  }, {
+    "what": "supply current",
+    "pins": ["VCC"],
+    "why": "A resistance draws the sheet's typical 12 mA at 5 V, so the draw scales with VCC. The real draw depends on USB traffic and is up to 30 mA, and 0.15 mA while the host suspends USB.",
   }],
 }

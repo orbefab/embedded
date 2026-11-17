@@ -185,14 +185,14 @@ fn a_failed_step_shows_the_changes_it_saw() {
 fn an_led_change_is_labeled_as_sampled_at_the_slice_end() {
     let json = replies("open\nstep 10ms\npress @btn1\nstep 5ms\n");
     let led = change(&json[3], "led", "@led1");
-    assert_eq!(led["by_ps"], 14_000_000_000u64, "{led}");
+    assert_eq!(led["by_ps"], 15_000_000_000u64, "{led}");
     assert!(led["at_ps"].is_null(), "{led}");
 
     let dir = project("open\nstep 10ms\npress @btn1\nstep 5ms\n");
     let run = orbe(dir.path(), &["test", "-v"]);
     assert!(
         run.stdout
-            .contains("\n    by 14ms led1 lit, brightness=0.003491198757089587 A over 14ms\n"),
+            .contains("\n    by 15ms led1 lit, brightness=0.003757439911374387 A over 15ms\n"),
         "{}",
         run.stdout
     );
@@ -235,7 +235,7 @@ fn hot(test: &str) -> tempfile::TempDir {
 #[test]
 fn no_diagnostics_fails_while_a_part_is_over_its_rating_now() {
     let dir = hot(
-        "open\nstep 100ms\npress @btn1\nstep 9ms\nexpect @led1.i > 70mA\nexpect no diagnostics\n",
+        "open\nstep 100ms\npress @btn1\nstep 9ms\nexpect @led1.i > 60mA\nexpect no diagnostics\n",
     );
     let run = orbe(dir.path(), &["test", "--json"]);
     assert_eq!(run.code, 1, "{}", run.stdout);
