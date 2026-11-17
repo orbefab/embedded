@@ -72,6 +72,7 @@
     {
       "name": "uh10k",
       "kind": "op_amp",
+      "input_headroom": { "value": 0.0, "unit": "V", "source": "user" },
       "pins": {
         "in_p": "hi",
         "in_n": "lo",
@@ -190,6 +191,7 @@
     {
       "name": "ul10k",
       "kind": "op_amp",
+      "input_headroom": { "value": 0.0, "unit": "V", "source": "user" },
       "pins": {
         "in_p": "lo",
         "in_n": "hi",
@@ -308,6 +310,7 @@
     {
       "name": "uh2k",
       "kind": "op_amp",
+      "input_headroom": { "value": 0.0, "unit": "V", "source": "user" },
       "pins": {
         "in_p": "hi",
         "in_n": "lo",
@@ -426,6 +429,7 @@
     {
       "name": "ul2k",
       "kind": "op_amp",
+      "input_headroom": { "value": 0.0, "unit": "V", "source": "user" },
       "pins": {
         "in_p": "lo",
         "in_n": "hi",

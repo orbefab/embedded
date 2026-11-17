@@ -1,6 +1,7 @@
 //! The seven `op-amp-*` circuits, once, for whichever part a [`Sheet`] names.
-//! The LMV358 sheet keeps the netlists as committed. The LM358 sheet writes its nine values
-//! over each op-amp and returns the swing loads to `gnd`.
+//! The LMV358 sheet keeps the netlists as committed. The LM358 sheet writes its nine electrical
+//! values over each op-amp, leaves `input_headroom` as the netlist has it, and returns the swing
+//! loads to `gnd`.
 
 use std::f64::consts::PI;
 
@@ -19,7 +20,8 @@ const MIN_STEP_PS: f64 = 100.0;
 const MAX_TRANSITION_STEPS: usize = 2000;
 const HYSTERESIS_LAW_V: f64 = 1e-3;
 
-/// The nine `op_amp` fields, in SI.
+/// The nine electrical `op_amp` fields the sheet overwrites, in SI. `input_headroom` stays
+/// the netlist's. The examples set it to 0, which rates no common-mode ceiling.
 #[derive(Clone, Copy)]
 pub struct Values {
     pub gain_bandwidth: f64,
