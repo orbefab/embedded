@@ -6,7 +6,7 @@ use jsonc_parser::errors::ParseErrorKind;
 use jsonc_parser::{CollectOptions, ParseOptions, parse_to_ast};
 use serde_json::Value;
 
-use crate::diagnostic::{Code, Findings};
+use crate::diagnostic::{Code, Finding, Findings};
 use crate::source::{FileId, Sources, Span};
 
 #[derive(Clone, Debug)]
@@ -33,6 +33,14 @@ pub(crate) struct Prop {
     pub(crate) value: Node,
 }
 
+/// The first parse of one file. The tree is `None` when the file did not parse. `findings`
+/// is what that parse pushed, so a later call reports the same ones.
+#[derive(Clone)]
+pub(crate) struct Cached {
+    node: Option<Node>,
+    findings: Vec<Finding>,
+}
+
 /// JSON as RFC 8259 defines it, plus `//` and `/* */` comments and trailing commas. Every
 /// looser option jsonc-parser has is off, so a missing comma is an error and not read quietly.
 fn options() -> ParseOptions {
@@ -52,12 +60,20 @@ fn options() -> ParseOptions {
 
 pub(crate) fn parse(sources: &Sources, file: FileId, out: &mut Findings) -> Option<Node> {
     if let Some(cached) = sources.parsed(file) {
-        return cached;
+        out.extend_from(&cached.findings);
+        return cached.node;
     }
     #[cfg(test)]
     record_parse(&sources.file(file).display);
+    let mark = out.len();
     let node = parse_fresh(sources, file, out);
-    sources.remember(file, &node);
+    sources.remember(
+        file,
+        Cached {
+            node: node.clone(),
+            findings: out.copied_since(mark),
+        },
+    );
     node
 }
 

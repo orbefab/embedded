@@ -129,6 +129,7 @@ impl fmt::Display for Diagnostic {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct Finding {
     code: Code,
     span: Span,
@@ -167,6 +168,16 @@ impl Findings {
     /// Proof of a finding pushed after `mark`, a [`Findings::len`] taken earlier.
     pub(crate) fn since(&self, mark: usize) -> Option<Reported> {
         (self.0.len() > mark).then_some(Reported(()))
+    }
+
+    /// A copy of every finding pushed after `mark`, in that order.
+    pub(crate) fn copied_since(&self, mark: usize) -> Vec<Finding> {
+        self.0[mark..].to_vec()
+    }
+
+    /// Pushes `findings` in order.
+    pub(crate) fn extend_from(&mut self, findings: &[Finding]) {
+        self.0.extend_from_slice(findings);
     }
 
     /// Gives every finding pushed after `mark` this hint.
