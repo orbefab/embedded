@@ -1,0 +1,44 @@
+{
+  "part": "lesd5d5-sod523",
+  "source": {
+    "script": "model.py",
+    "sha256": "c236babdc5fe4aad89cc492ea24a5d149c76fa204f46f707519637e1086a4b1b",
+    "bytes": 949
+  },
+  "files": {
+    "lesd5d5-sod523.glb": {
+      "sha256": "682b759efde9205bb02da4461c1585cd36643d0ef43175689ddcc8a930c5df2a",
+      "bytes": 3808
+    },
+    "lesd5d5-sod523.anchors.json": {
+      "sha256": "0dcef4725595903f564ce0074dae02f984a81eb634efdbf93ae6f4b7f2b3f539",
+      "bytes": 292
+    }
+  },
+  "box": {
+    "min": [-0.6, -0.4, 0],
+    "max": [0.6, 0.4, 0.63]
+  },
+  "kept_nodes": [],
+  "draw_calls": 2,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 2,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 3,
+      "primitives_out": 2
+    }
+  }
+}
