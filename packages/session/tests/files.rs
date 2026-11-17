@@ -3,6 +3,7 @@
 //! repo, so a disk path shows the same once the repo's folder is taken off it. A Block is a
 //! folder under `blocks/` that holds `block.jsonc`.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -151,12 +152,45 @@ fn same_lines(block: &str, disk: Vec<String>, memory: Vec<String>) -> Vec<String
     disk
 }
 
-fn same_reading(base: &Path, block: &str) -> Vec<String> {
-    same_lines(
-        block,
-        shown(base, reading(&Files::disk(), base, block)),
-        reading(&memory(base, block), Path::new(""), block),
-    )
+/// The reply `open` returns for each of the Block's test files. On a broken install the read
+/// has already failed, so `open` returns without starting the run.
+fn open_replies(files: &Files, base: &Path, block: &str) -> Vec<String> {
+    let dir = base.join("blocks").join(block);
+    let tests = repo().join("blocks").join(block).join("tests");
+    let Ok(entries) = fs::read_dir(&tests) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<_> = entries.map(|entry| entry.unwrap().path()).collect();
+    paths.sort();
+    let mut out = Vec::new();
+    for path in paths {
+        if !path.is_file() {
+            continue;
+        }
+        let file = dir.join("tests").join(path.file_name().unwrap());
+        let report = test::run(files.clone(), &file, "open\n", &dir);
+        for line in &report.lines {
+            let reply = serde_json::to_string(&line.reply).unwrap();
+            out.push(format!("{}: {reply}", line.text));
+        }
+        out.extend(
+            report
+                .refused
+                .map(|reply| serde_json::to_string(&reply).unwrap()),
+        );
+    }
+    out
+}
+
+/// The read, the lint and the `open` reply, from disk and from memory.
+fn same_reading_and_open(base: &Path, block: &str) -> Vec<String> {
+    let disk = Files::disk();
+    let held = memory(base, block);
+    let mut disk_lines = reading(&disk, base, block);
+    disk_lines.extend(open_replies(&disk, base, block));
+    let mut memory_lines = reading(&held, Path::new(""), block);
+    memory_lines.extend(open_replies(&held, Path::new(""), block));
+    same_lines(block, shown(base, disk_lines), memory_lines)
 }
 
 fn same_both_ways(base: &Path, block: &str) -> Vec<String> {
@@ -307,8 +341,9 @@ fn edit_part(part: &Path) -> bool {
     true
 }
 
-/// Removes one installed part, edits a file of another, and removes `firmware/` when `install`
-/// wrote it. Each flag is whether that break can produce its finding. `lack` says why it cannot.
+/// Removes one installed part, edits a file of a sealed copy the reader still compares with
+/// its lock line, and removes `firmware/` when `install` wrote it. Each flag is whether that
+/// break can produce its finding. `lack` says why it cannot.
 fn break_install(dir: &Path) -> [(&'static str, bool, &'static str); 3] {
     let parts = part_folders(dir);
     let missing = if let Some(part) = parts.first() {
@@ -317,19 +352,21 @@ fn break_install(dir: &Path) -> [(&'static str, bool, &'static str); 3] {
     } else {
         false
     };
-    let (modified, modified_lack) = if parts.len() < 2 {
-        (
-            false,
-            if parts.is_empty() {
-                "no part folder"
-            } else {
-                "a single part"
-            },
-        )
-    } else if edit_part(&parts[1]) {
-        (true, "")
+    let (modified, modified_lack) = if parts.is_empty() {
+        (false, "no part folder")
+    } else if parts.len() == 1 {
+        (false, "a single part")
     } else {
-        (false, "no file in the other part")
+        match sealed_to_edit(dir, &parts) {
+            Ok(part) => {
+                if edit_part(part) {
+                    (true, "")
+                } else {
+                    (false, "no file in the sealed part")
+                }
+            }
+            Err(lack) => (false, lack),
+        }
     };
     let firmware = dir.join("firmware");
     let firmware_missing = if firmware.is_dir() {
@@ -356,9 +393,10 @@ fn finds(block: &str, reading: &str, code: &str, present: bool, lack: &str) {
     }
 }
 
-/// A missing part, an edited file and an extra file in another installed part, and no firmware,
-/// each found the same way in memory as on disk. The part removed and the part edited are folders
-/// `install` wrote, in sorted order. A Block with no part folder, a single part, or no firmware
+/// A missing part, an edited file and an extra file in a sealed copy, and no firmware, each
+/// found the same way in memory as on disk, and so is the `open` reply. The part removed is the
+/// first folder `install` wrote. The part edited is a sealed copy the reader still compares with
+/// its lock line. A Block with no part folder, a single part, no such sealed copy, or no firmware
 /// folder says so, and the read still has to show every finding that Block can produce.
 #[test]
 fn a_broken_install_finds_the_same_from_memory() {
@@ -368,11 +406,208 @@ fn a_broken_install_finds_the_same_from_memory() {
         let block = block.as_str();
         let dir = install(&base, block);
         let broken = break_install(&dir);
-        let found = same_reading(&base, block);
+        let found = same_reading_and_open(&base, block);
         for (code, present, lack) in broken {
             finds(block, &found[0], code, present, lack);
         }
     }
+}
+
+/// `part.jsonc` as JSON. A part file may use comments and trailing commas.
+fn jsonc(path: &Path) -> Option<serde_json::Value> {
+    let text = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&strip_trailing_commas(&strip_jsonc(&text))).ok()
+}
+
+/// Drops `//` and `/* */` comments. A string is copied through, so a comment mark inside one stays.
+fn strip_jsonc(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    let mut string = false;
+    let mut escape = false;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if string {
+            out.push(c);
+            if escape {
+                escape = false;
+            } else if c == b'\\' {
+                escape = true;
+            } else if c == b'"' {
+                string = false;
+            }
+            i += 1;
+            continue;
+        }
+        if c == b'"' {
+            string = true;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == b'/' && bytes.get(i + 1) == Some(&b'/') {
+            i += 2;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if c == b'/' && bytes.get(i + 1) == Some(&b'*') {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i = (i + 2).min(bytes.len());
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_default()
+}
+
+fn strip_trailing_commas(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    let mut string = false;
+    let mut escape = false;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if string {
+            out.push(c);
+            if escape {
+                escape = false;
+            } else if c == b'\\' {
+                escape = true;
+            } else if c == b'"' {
+                string = false;
+            }
+            i += 1;
+            continue;
+        }
+        if c == b'"' {
+            string = true;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == b',' {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j < bytes.len() && (bytes[j] == b'}' || bytes[j] == b']') {
+                i += 1;
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_default()
+}
+
+fn folder_name(path: &Path) -> &str {
+    path.file_name().unwrap().to_str().unwrap()
+}
+
+/// Ids on `parts.lock`. The reader compares a sealed copy with its line.
+fn lock_ids(dir: &Path) -> BTreeSet<String> {
+    let Ok(text) = fs::read_to_string(dir.join("parts.lock")) else {
+        return BTreeSet::new();
+    };
+    text.lines()
+        .filter_map(|line| line.split_whitespace().next().map(str::to_string))
+        .collect()
+}
+
+/// Catalog ids named by `parts` in a scene or a part file.
+fn named_parts(value: &serde_json::Value) -> Vec<String> {
+    let Some(parts) = value.get("parts").and_then(serde_json::Value::as_object) else {
+        return Vec::new();
+    };
+    parts
+        .values()
+        .filter_map(|inst| inst.get("type").and_then(serde_json::Value::as_str))
+        .filter(|ty| orbe_scene::is_id(ty))
+        .map(str::to_string)
+        .collect()
+}
+
+/// A sealed copy has a model, or no parts of its own. An unsealed board has `parts` and no model,
+/// and an edit of one is not `PartModified`.
+fn is_sealed_copy(part: &Path) -> bool {
+    let Some(value) = jsonc(&part.join("part.jsonc")) else {
+        return false;
+    };
+    let Some(obj) = value.as_object() else {
+        return false;
+    };
+    obj.contains_key("model") || !obj.contains_key("parts")
+}
+
+fn has_other_file(part: &Path) -> bool {
+    files_in(part)
+        .iter()
+        .any(|path| path.file_name().is_some_and(|name| name != "part.jsonc"))
+}
+
+/// Parts the reader still loads once `removed` is gone. A part only the removed folder named
+/// is not compared with its lock line.
+fn still_loaded(dir: &Path, removed: &str) -> BTreeSet<String> {
+    let mut children = BTreeMap::new();
+    if let Ok(entries) = fs::read_dir(dir.join("parts")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if name == removed {
+                continue;
+            }
+            let Some(value) = jsonc(&path.join("part.jsonc")) else {
+                continue;
+            };
+            children.insert(name.to_string(), named_parts(&value));
+        }
+    }
+    let mut stack = jsonc(&dir.join("scene.jsonc"))
+        .map(|value| named_parts(&value))
+        .unwrap_or_default();
+    let mut seen = BTreeSet::new();
+    while let Some(id) = stack.pop() {
+        if id == removed || !seen.insert(id.clone()) {
+            continue;
+        }
+        if let Some(kids) = children.get(&id) {
+            stack.extend(kids.iter().cloned());
+        }
+    }
+    seen
+}
+
+/// The sealed copy to edit, or why this Block has none the reader would still compare.
+fn sealed_to_edit<'a>(dir: &Path, parts: &'a [PathBuf]) -> Result<&'a Path, &'static str> {
+    let loaded = still_loaded(dir, folder_name(&parts[0]));
+    let locked = lock_ids(dir);
+    let mut saw = false;
+    for part in parts.iter().skip(1) {
+        let name = folder_name(part);
+        if !loaded.contains(name) || !locked.contains(name) || !is_sealed_copy(part) {
+            continue;
+        }
+        saw = true;
+        if has_other_file(part) {
+            return Ok(part);
+        }
+    }
+    Err(if saw {
+        "no file in the sealed part"
+    } else {
+        "no sealed part"
+    })
 }
 
 fn messages(files: &Files, scene: &Path) -> Vec<String> {
