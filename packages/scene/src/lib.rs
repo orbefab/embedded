@@ -145,4 +145,42 @@ mod parse_once {
             "a read parsed a file more than once: {repeated:?}"
         );
     }
+
+    #[test]
+    fn a_cached_parse_still_reports_its_findings() {
+        let root = Path::new("proj");
+        let path = Path::new("proj/dup.jsonc");
+        let text = "{\n  \"color\": \"red\",\n  \"color\": \"blue\"\n}\n";
+        let mut sources = crate::source::Sources::new(root);
+        let file = sources.add(path, text.to_string());
+
+        crate::syntax::take_parses();
+        let mut quiet = crate::diagnostic::Findings::default();
+        let first = crate::syntax::parse(&sources, file, &mut quiet);
+        assert!(first.is_some(), "a duplicate key still parses");
+
+        let mut reported = crate::diagnostic::Findings::default();
+        let second = crate::syntax::parse(&sources, file, &mut reported);
+        assert!(second.is_some(), "the cached parse returns the tree");
+
+        let parses = crate::syntax::take_parses();
+        assert_eq!(
+            parses,
+            vec!["dup.jsonc".to_string()],
+            "the second call is a cache hit"
+        );
+
+        let got = reported.into_diagnostics(&sources);
+        assert_eq!(
+            got,
+            quiet.into_diagnostics(&sources),
+            "a cache hit reports the same findings as the first parse"
+        );
+        assert!(
+            got.iter().any(|d| {
+                d.code == crate::Code::Duplicate && d.message == "`color` is listed twice"
+            }),
+            "the hit reports the duplicate key, got {got:?}"
+        );
+    }
 }
