@@ -11,14 +11,18 @@
 #
 # Needs what scripts/site.sh needs, and a Chromium found as check-viewer-e2e.sh finds it. It
 # installs nothing. check.sh does not run this. Pass `--previous <dir>` first to build the
-# registry on the one the live site serves, as scripts/site.sh does, and `--renders <dir>` to
-# save screenshots there.
+# registry on the one the live site serves. With no `--previous`, the build is a first deploy
+# (`scripts/site.sh --first-deploy`). `--renders <dir>` saves screenshots there.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 scripts/need-node-deps.sh scripts/check-site.sh
-previous=()
+site=(--first-deploy)
 if [[ ${1:-} == --previous ]]; then
-  previous=(--previous "$2")
+  if [[ $# -lt 2 || -z ${2:-} ]]; then
+    echo "check-site: --previous needs a directory" >&2
+    exit 2
+  fi
+  site=(--previous "$2")
   shift 2
 fi
 fail() {
@@ -36,7 +40,7 @@ listed() {
     "$PWD/$dist/r/index.json" "$1"
 }
 
-ORBE_SITE_INSTALL=1 scripts/site.sh "${previous[@]}" >/dev/null
+ORBE_SITE_INSTALL=1 scripts/site.sh "${site[@]}" >/dev/null
 parts=$(pages parts)
 blocks=$(pages blocks)
 [[ $parts -eq $(listed part) && $blocks -eq $(listed block) ]] ||
@@ -49,7 +53,7 @@ grep -q 'href="https://github.com/orbefab/embedded"' "$dist/index.html" ||
   fail "with ORBE_SITE_INSTALL=1, the landing page links no repo"
 echo "check-site: ORBE_SITE_INSTALL=1 shows orbe add on $parts part and $blocks Block pages, and cargo install and the repo on the landing page"
 
-scripts/site.sh "${previous[@]}"
+scripts/site.sh "${site[@]}"
 shown=$(own 'orbe add|cargo install|github\.com/orbefab/embedded')
 [[ -z $shown ]] || fail "these files of the site's own show an install line or a repo link with ORBE_SITE_INSTALL unset: $shown"
 echo "check-site: no file of the site's own shows an install line or a repo link with ORBE_SITE_INSTALL unset"
