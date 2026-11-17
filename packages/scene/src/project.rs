@@ -590,8 +590,9 @@ impl Loader<'_> {
     /// Hashes the folder of every catalog copy the scene uses. A missing folder is the
     /// scene's `part_missing`, and a lock line for an id the scene does not use is not
     /// checked. A copy that matches an official lock line and is an older version than
-    /// this binary carries is `part_outdated`. A newer one is `part_newer`: `--overwrite`
-    /// would replace it with the older copy. A line from another registry keeps the
+    /// this binary carries is `part_outdated`. A newer one is `part_newer`. `--overwrite`
+    /// leaves that copy, including a child reached only through a board, and says the
+    /// project needs a newer orbe for it. A line from another registry keeps the
     /// message that names that registry. A copy that differs from its lock line, or the
     /// same version with different bytes, is `part_modified`. Returns the unsealed copies
     /// that differ and whose lock line still matches.
@@ -740,9 +741,9 @@ impl Loader<'_> {
     }
 
     /// One finding per id. Older ids share one `orbe add --overwrite`, and a newer id is
-    /// never in it: that command would replace the newer copy with the one this binary
-    /// carries. `--overwrite` stays in the copy's major version, so an older id in another
-    /// major names the version this binary carries.
+    /// never in it. That command leaves a lock-matching newer copy where it is, including
+    /// a child the named part uses. `--overwrite` stays in the copy's major version, so an
+    /// older id in another major names the version this binary carries.
     fn report_version_gap(
         &mut self,
         older: &[(String, Span, String, String)],

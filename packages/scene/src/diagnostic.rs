@@ -33,7 +33,7 @@ pub enum Code {
     /// A run reads the version in the binary, so this stops check, open and test.
     PartOutdated,
     /// The copy matches its lock line and is a newer version than this binary carries.
-    /// `--overwrite` would replace it with the older copy, so the hint names no `orbe add`.
+    /// `--overwrite` leaves it, so the hint names no `orbe add`.
     PartNewer,
     /// A project file that exists could not be read.
     Io,

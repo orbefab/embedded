@@ -268,6 +268,9 @@ struct Selection {
     chosen: BTreeMap<String, Version>,
     notes: Vec<String>,
     tests_may_change: bool,
+    /// Lock-matching copies newer than anything this add would write. They stay out of
+    /// `chosen`, so the lock line and the folder are left as they are, and out of every hint.
+    kept: BTreeSet<String>,
 }
 
 /// An id named without a version takes the newest version within the major version of the
@@ -334,7 +337,23 @@ fn select(
     let mut notes = Vec::new();
     let mut tests_may_change = false;
     let mut clashes = Vec::new();
+    let mut kept = BTreeSet::new();
     for (id, group) in &demands {
+        let demanded = group
+            .iter()
+            .map(|demand| demand.version)
+            .max()
+            .expect("a demand");
+        // A lock-matching copy newer than every version this add would write is not
+        // replaced, named or pinned. The folder differs from its lock line, or the line
+        // is from another registry: that stays an overwrite, as before.
+        if let Some(held) = lock_matching_newer(catalog, snapshot, id, demanded) {
+            notes.push(format!(
+                "left `{id}` at {held}. this project needs a newer orbe for it"
+            ));
+            kept.insert(id.clone());
+            continue;
+        }
         let held = snapshot
             .lock
             .get(id)
@@ -362,14 +381,34 @@ fn select(
                 .map(|clash| clash.message.clone())
                 .collect::<Vec<_>>()
                 .join("\n"),
-            hint: clash_hint(specs, &clashes, add),
+            hint: clash_hint(specs, &clashes, add, &kept),
         }));
     }
     Ok(Selection {
         chosen,
         notes,
         tests_may_change,
+        kept,
     })
+}
+
+/// The version of `id` in the project when the folder matches its own official lock line
+/// and that version is newer than `than`. This binary would otherwise write `than` or
+/// older over it. A folder that does not match the lock line is the user's edit. A line
+/// from another registry is not this copy.
+fn lock_matching_newer(
+    catalog: &Catalog,
+    snapshot: &Snapshot,
+    id: &str,
+    than: Version,
+) -> Option<Version> {
+    let folder = snapshot.folder(id)?;
+    let line = snapshot.lock.get(id)?;
+    if line.registry != catalog.registry() || !folder.is(&line.hash) {
+        return None;
+    }
+    let held = Version::parse(&line.version)?;
+    (folder.version == Some(held) && held > than).then_some(held)
 }
 
 /// A part already in the project keeps needing the versions its `uses` names. Its lock line
@@ -518,10 +557,10 @@ fn join_and(items: &[String]) -> String {
     }
 }
 
-fn clash_hint(specs: &[Spec], clashes: &[Clash], add: &str) -> String {
+fn clash_hint(specs: &[Spec], clashes: &[Clash], add: &str, leave: &BTreeSet<String>) -> String {
     let cross: Vec<&Clash> = clashes.iter().filter(|clash| clash.cross_major).collect();
     if cross.is_empty() {
-        return format!("run `{}`", command_for(add, specs, &[], true));
+        return format!("run `{}`", command_for(add, specs, &[], true, leave));
     }
     if cross.len() == 1 {
         let clash = cross[0];
@@ -531,7 +570,7 @@ fn clash_hint(specs: &[Spec], clashes: &[Clash], add: &str) -> String {
             .map(|version| {
                 format!(
                     "`{}`",
-                    command_for(add, specs, &[(clash.id.clone(), *version)], true)
+                    command_for(add, specs, &[(clash.id.clone(), *version)], true, leave)
                 )
             })
             .collect();
@@ -552,11 +591,25 @@ fn join_or(items: &[String]) -> String {
     }
 }
 
-/// `pins` replaces or appends `id@version` for ids that must be named.
-fn command_for(add: &str, specs: &[Spec], pins: &[(String, Version)], overwrite: bool) -> String {
+/// `pins` replaces or appends `id@version` for ids that must be named. `leave` is a
+/// lock-matching copy newer than this binary, and no hint names it.
+fn command_for(
+    add: &str,
+    specs: &[Spec],
+    pins: &[(String, Version)],
+    overwrite: bool,
+    leave: &BTreeSet<String>,
+) -> String {
     let mut args = Vec::new();
-    let mut pending: BTreeSet<&str> = pins.iter().map(|(id, _)| id.as_str()).collect();
+    let mut pending: BTreeSet<&str> = pins
+        .iter()
+        .filter(|(id, _)| !leave.contains(id))
+        .map(|(id, _)| id.as_str())
+        .collect();
     for spec in specs {
+        if leave.contains(&spec.id) {
+            continue;
+        }
         if let Some((_, version)) = pins.iter().find(|(id, _)| id == &spec.id) {
             args.push(format!("{}@{version}", spec.id));
             pending.remove(spec.id.as_str());
@@ -644,11 +697,16 @@ fn plan_add(
         return Plan::Refuse(Refusal {
             code: AddCode::PartDiffers,
             message: format!("nothing was written\n{}", lines.join("\n")),
-            hint: format!("run `{}`", command_for(add, specs, &pins, true)),
+            hint: format!(
+                "run `{}`",
+                command_for(add, specs, &pins, true, &selection.kept)
+            ),
         });
     }
     for spec in specs.iter().filter(|spec| spec.version.is_none()) {
-        let chosen = selection.chosen[&spec.id];
+        let Some(&chosen) = selection.chosen.get(&spec.id) else {
+            continue;
+        };
         let newest = catalog.newest(&spec.id).expect("a catalog id").version;
         if newest.major != chosen.major {
             notes.push(format!(
