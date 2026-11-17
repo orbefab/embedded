@@ -50,7 +50,7 @@
     },
     {
       "what": "bit times",
-      "why": "The kind uses the Worldsemi WS2812E-1313 V1.1 windows, a 0 for a high of 220 ns to 380 ns and a 1 for 580 ns to 1 us. Section 12 of this sheet gives T0H as 0.2 / 0.32 / 0.4 us and T1H as 0.62 / 0.64 / 1.0 us, and fDIN typical 800 kHz. The typical highs sit inside those windows. T0H maximum, 0.4 us, does not."
+      "why": "The kind uses the Worldsemi WS2812E-1313 V1.1 windows, a 0 for a high of 220 ns to 380 ns and a 1 for 580 ns to 1 us. Section 12 of this sheet gives T0H as 0.2 / 0.32 / 0.4 us and T1H as 0.62 / 0.64 / 1.0 us, and section 11 gives fDIN typical 800 kHz. The typical highs sit inside those windows. T0H maximum, 0.4 us, does not."
     }
   ]
 }
