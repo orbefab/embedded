@@ -7,6 +7,9 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
+#[path = "src/published.rs"]
+mod published;
+
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -23,15 +26,17 @@ fn main() {
     );
 }
 
-/// Writes `FILES`, each file below `dir` by its `/`-separated path from `dir`, sorted, or none.
+/// Writes `FILES`, each published file below `dir` by its `/`-separated path from `dir`, sorted,
+/// or none. Build output is left out.
 fn embed(dir: &Path, out: &Path, none: bool) {
     let dir = dir.canonicalize().unwrap();
     println!("cargo:rerun-if-changed={}", dir.display());
-    let mut files = Vec::new();
-    if !none {
-        walk(&dir, &mut files);
-    }
-    files.sort();
+    let files = if none {
+        Vec::new()
+    } else {
+        watch(&dir);
+        published::published_paths(&dir).unwrap()
+    };
     let mut text = String::from("pub(crate) static FILES: &[(&str, &[u8])] = &[\n");
     for file in &files {
         println!("cargo:rerun-if-changed={}", file.display());
@@ -52,14 +57,17 @@ fn embed(dir: &Path, out: &Path, none: bool) {
     fs::write(out, text).unwrap();
 }
 
-fn walk(dir: &Path, files: &mut Vec<PathBuf>) {
-    for entry in fs::read_dir(dir).unwrap() {
+/// Watches every path under `dir`, build output included, so a new file rebuilds the catalog.
+/// [`published::published_paths`] decides which of them are embedded.
+fn watch(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries {
         let path = entry.unwrap().path();
         println!("cargo:rerun-if-changed={}", path.display());
         if path.is_dir() {
-            walk(&path, files);
-        } else {
-            files.push(path);
+            watch(&path);
         }
     }
 }

@@ -1069,10 +1069,22 @@ fn version_order(held: &str, carried: &str) -> Option<std::cmp::Ordering> {
     Some(Version::parse(held)?.cmp(&Version::parse(carried)?))
 }
 
-/// The SHA-256 over a folder's files, paths included: one line `<sha256>  <path>` per file,
-/// sorted by path, with `/` between path parts. Written as `sha256:<hex>`, as in `parts.lock`.
+/// The SHA-256 over a folder's published files, paths included: one line `<sha256>  <path>`
+/// per file, sorted by path, with `/` between path parts. Written as `sha256:<hex>`, as in
+/// `parts.lock`. Build output is left out. The paths are [`crate::published::published_paths`],
+/// the same set the catalog embeds.
 pub fn folder_hash(dir: &Path) -> io::Result<String> {
-    hash_folder(&Files::disk(), dir).map_err(|(_, error)| error)
+    let paths = crate::published::published_paths(dir)?;
+    let mut found = Vec::new();
+    for path in &paths {
+        let bytes = std::fs::read(path)?;
+        found.push((display(dir, path), bytes));
+    }
+    Ok(hash_files(
+        found
+            .iter()
+            .map(|(path, bytes)| (path.as_str(), bytes.as_slice())),
+    ))
 }
 
 /// [`folder_hash`] in `files`, with the path that could not be read.
@@ -1092,6 +1104,9 @@ fn collect(
 ) -> Result<(), (PathBuf, io::Error)> {
     let at = |path: &Path, error| (path.to_path_buf(), error);
     for path in files.list(dir).map_err(|e| at(dir, e))? {
+        if !crate::published::is_published(&display(root, &path)) {
+            continue;
+        }
         if files.is_dir(&path) {
             collect(files, root, &path, found)?;
         } else {

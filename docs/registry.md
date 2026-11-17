@@ -18,7 +18,7 @@ orbe registry build <src> <out> [--previous <dir>]
 }
 ```
 
-`name` is `@` and an id. `homepage` is an `https://` URL and may be left out. Only folders in `parts/` and `blocks/` are items. Every file in an item's folder is one of its files, and a link anywhere is an error. `<out>` must be missing or empty. The build writes into a sibling folder and renames it to `<out>` once every file is written, so a failed build leaves nothing to serve. The same `<src>` always writes the same bytes.
+`name` is `@` and an id. `homepage` is an `https://` URL and may be left out. Only folders in `parts/` and `blocks/` are items. Every published file in an item's folder is one of its files, and a link among those files is an error. `<out>` must be missing or empty. The build writes into a sibling folder and renames it to `<out>` once every file is written, so a failed build leaves nothing to serve. The same `<src>` always writes the same bytes.
 
 The build fails, and writes nothing, when:
 
@@ -35,7 +35,7 @@ The build fails, and writes nothing, when:
 - a part and a Block share a name;
 - with `--previous`, the earlier build does not check out, or a version it serves would build to a different record (see [Versions](#versions)).
 
-It prints the item counts and the file counts: files the records list, files stored by hash, and every file in `<out>`, which is the number a static host counts. It warns with counts of the parts that lack a summary, tags, docs, a datasheet URL or buy links, and of the Blocks that lack a summary or tags. It also names, per item, each hidden file (a path segment that starts with `.`) and each file over 1 MB, since every file in an item's folder is published and cached by its hash. `--json` prints the same as one envelope.
+It prints the item counts and the file counts: files the records list, files stored by hash, and every file in `<out>`, which is the number a static host counts. It warns with counts of the parts that lack a summary, tags, docs, a datasheet URL or buy links, and of the Blocks that lack a summary or tags. It also names, per item, each hidden file (a path segment that starts with `.`) and each file over 1 MB, since a file in an item's folder is published, apart from build output, and cached by its hash. `--json` prints the same as one envelope.
 
 ### What the build checks
 
@@ -133,7 +133,7 @@ Every record has these fields:
 | `categories` | the item file's `tags`; absent when there are none |
 | `license` | the item's SPDX expression |
 | `registryDependencies` | the items it is built from or runs, as dependencies |
-| `files` | every file in the item's folder, sorted by path |
+| `files` | every published file in the item's folder, sorted by path |
 | `hash` | the folder hash over `files`, as `sha256:<hex>` |
 
 Each entry of `files` is `{ "path", "url", "sha256", "bytes", "license" }`. `path` is the file's `/`-separated path in the item's folder. `url` is `files/<sha256>`, relative to the record's URL. `license` is the file's licence as [REUSE 3.3](https://reuse.software/spec-3.3/) reads it from the item's folder. When the folder holds a `REUSE.toml`, the last of its `[[annotations]]` whose `path` matches the file gives the licence, weighed against the file's own `SPDX-License-Identifier:` line by the annotation's `precedence`: `closest`, the default, keeps the file's own line, `override` keeps the annotation's, and `aggregate` joins both with `AND`. A file no annotation matches takes the expression on its `SPDX-License-Identifier:` line within its first 40 lines, else the item's `license`. A `REUSE.toml` that does not read fails the build. A file that cannot carry a line of its own, such as a firmware image or a licence text, gets its licence this way. A part names its `license` in `part.jsonc`, and the build refuses a part that does not, so no record carries a licence its author did not write.
@@ -168,6 +168,7 @@ In the index and in a record, `$schema` names the schema file beside it, for edi
 
 - A file's SHA-256 is over its bytes, in lowercase hex. The file is stored once at `files/<sha256>`, however many records list it.
 - A record's `hash` is the SHA-256 of one line `<sha256>  <path>\n` per entry of `files`, sorted by path, written as `sha256:<hex>`. A part's is the hash `parts.lock` records.
+- Build output in the folder is not one of those files. A `__pycache__` directory, a `.pyc` file, and a `.pytest_cache` or `.venv` directory are left out of `files`, out of the folder hash, and out of what `orbe add` copies. Any other file counts, including one an author added beside `part.jsonc`. The names are fixed. A project has no copy of this repo's `.gitignore`.
 - A record's SHA-256 is in its index row.
 
 ## Verify what you fetch

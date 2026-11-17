@@ -69,7 +69,10 @@ impl Source {
         let prefix = format!("{id}/");
         let files: Vec<(&str, &[u8])> = self
             .files()
-            .filter_map(|(path, bytes)| path.strip_prefix(prefix.as_str()).map(|rel| (rel, bytes)))
+            .filter_map(|(path, bytes)| {
+                let rel = path.strip_prefix(prefix.as_str())?;
+                crate::published::is_published(rel).then_some((rel, bytes))
+            })
             .collect();
         let text =
             std::str::from_utf8(files.iter().find(|(rel, _)| *rel == "part.jsonc")?.1).ok()?;
@@ -91,7 +94,9 @@ impl Source {
 pub(crate) fn folders() -> BTreeMap<String, BTreeMap<String, Vec<u8>>> {
     let mut folders: BTreeMap<String, BTreeMap<String, Vec<u8>>> = BTreeMap::new();
     for (path, bytes) in FILES {
-        if let Some((id, rel)) = path.split_once('/') {
+        if let Some((id, rel)) = path.split_once('/')
+            && crate::published::is_published(rel)
+        {
             folders
                 .entry(id.to_string())
                 .or_default()
@@ -338,10 +343,14 @@ pub(crate) fn entry_from_files(
 
 fn list(files: &Files, root: &Path, dir: &Path, out: &mut Vec<String>) {
     for path in files.list(dir).into_iter().flatten() {
+        let rel = crate::source::display(root, &path);
+        if !crate::published::is_published(&rel) {
+            continue;
+        }
         if files.is_dir(&path) {
             list(files, root, &path, out);
         } else {
-            out.push(crate::source::display(root, &path));
+            out.push(rel);
         }
     }
 }
@@ -379,6 +388,64 @@ mod tests {
             assert_eq!(Version::parse(bad), None, "{bad}");
         }
         assert!(Version::parse("0.10.0") > Version::parse("0.9.0"));
+    }
+
+    #[test]
+    fn the_embedded_catalog_is_the_published_part_files() {
+        let parts = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../parts")
+            .canonicalize()
+            .unwrap();
+        let got: BTreeSet<String> = FILES.iter().map(|(path, _)| (*path).to_string()).collect();
+        let want: BTreeSet<String> = crate::published::published_paths(&parts)
+            .unwrap()
+            .iter()
+            .map(|path| {
+                path.strip_prefix(&parts)
+                    .unwrap()
+                    .components()
+                    .map(|component| component.as_os_str().to_str().unwrap())
+                    .collect::<Vec<_>>()
+                    .join("/")
+            })
+            .collect();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn build_output_does_not_enter_the_catalog_embed() {
+        let dir = tempfile::tempdir().unwrap();
+        let lamp = dir.path().join("lamp");
+        fs::create_dir(&lamp).unwrap();
+        fs::write(lamp.join("part.jsonc"), "{}\n").unwrap();
+        fs::write(lamp.join("notes.txt"), b"kept\n").unwrap();
+        fs::write(lamp.join("a.pyc"), b"bytecode").unwrap();
+        fs::create_dir(lamp.join("__pycache__")).unwrap();
+        fs::write(
+            lamp.join("__pycache__").join("part.cpython-312.pyc"),
+            b"cached",
+        )
+        .unwrap();
+        fs::create_dir(lamp.join(".pytest_cache")).unwrap();
+        fs::write(lamp.join(".pytest_cache").join("v"), b"cache").unwrap();
+        fs::create_dir(lamp.join(".venv")).unwrap();
+        fs::write(lamp.join(".venv").join("pyvenv.cfg"), b"home = /tmp\n").unwrap();
+        let rels: Vec<String> = crate::published::published_paths(dir.path())
+            .unwrap()
+            .iter()
+            .map(|path| {
+                path.strip_prefix(dir.path())
+                    .unwrap()
+                    .components()
+                    .map(|component| component.as_os_str().to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("/")
+            })
+            .collect();
+        assert_eq!(
+            rels,
+            vec!["lamp/notes.txt".to_string(), "lamp/part.jsonc".to_string()]
+        );
     }
 
     #[test]

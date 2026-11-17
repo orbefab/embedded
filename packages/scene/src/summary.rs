@@ -235,7 +235,7 @@ pub struct Threshold {
 pub struct BlockCard {
     pub name: String,
     pub version: String,
-    /// The folder hash over every file of the Block, as `sha256:<hex>`.
+    /// The folder hash over the Block's published files, as `sha256:<hex>`.
     pub hash: String,
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -20,6 +20,7 @@ mod model;
 mod name;
 mod params;
 mod project;
+mod published;
 mod reuse;
 mod shape;
 mod source;
@@ -41,6 +42,7 @@ pub use files::Files;
 pub use holes::{holes_text, strip_text};
 pub use model::{FORMATS, STOP_PS, is_id};
 pub use project::{BLOCK, REGISTRY, folder_hash, is_registry_name, part_file, shell_join};
+pub use published::is_published;
 pub use summary::{
     BlockCard, Buy, Card, CardFile, Choice, Doc, Folder, Holes, Literal, Missing, NotSimulated,
     Param, Pin, Rating, Real, Threshold, block_card, card, cards, catalog_cards, ids_with_segment,

@@ -177,7 +177,7 @@ impl fmt::Display for Notice {
         match self.why {
             Why::Hidden => write!(
                 f,
-                "{item} publishes the hidden file `{path}`, since every file in an item's folder is published"
+                "{item} publishes the hidden file `{path}`, since a file in an item's folder is published unless it is build output"
             ),
             Why::Large => write!(f, "{item} publishes `{path}`, {bytes} bytes, over 1 MB"),
         }
@@ -250,11 +250,12 @@ fn manifest(src: &Path) -> Result<Manifest, Error> {
 }
 
 /// Reads `src`, which holds `registry.jsonc` and `parts/<id>/` and `blocks/<id>/` folders, into
-/// a registry. Only folders there are items. Every file in an item's folder is one of its
-/// files. With `previous`, a folder an earlier build wrote, every record it serves stays served:
-/// a version the source still holds must build to the same bytes, and the others are carried
-/// forward with their files. The error is a sentence that says what does not read, or the
-/// findings `orbe check` would print for an installed copy of a part or a Block.
+/// a registry. Only folders there are items. Every published file in an item's folder is one of
+/// its files, and build output is left out. With `previous`, a folder an earlier build wrote,
+/// every record it serves stays served: a version the source still holds must build to the same
+/// bytes, and the others are carried forward with their files. The error is a sentence that
+/// says what does not read, or the findings `orbe check` would print for an installed copy of a
+/// part or a Block.
 pub fn build(src: &Path, previous: Option<&Path>) -> Result<Registry, Error> {
     let manifest = manifest(src)?;
     let parts = folders(src, "parts")?;
@@ -617,8 +618,8 @@ pub fn path_problem(path: &str) -> Option<&'static str> {
     None
 }
 
-/// The item folders in `src/<kind>/`, by id, each with every file below it. A missing
-/// `src/<kind>/` holds none.
+/// The item folders in `src/<kind>/`, by id, each with every published file below it.
+/// Build output is left out. A missing `src/<kind>/` holds none.
 fn folders(src: &Path, kind: &str) -> Result<BTreeMap<String, Folder>, Error> {
     let dir = src.join(kind);
     let mut found = BTreeMap::new();
@@ -674,6 +675,9 @@ fn walk(dir: &Path, prefix: &str, files: &mut Folder) -> Result<(), Error> {
         let entry = entry.map_err(|e| io_error(dir, e))?;
         let path = entry.path();
         let rel = format!("{prefix}{}", utf8(&path, entry.file_name())?);
+        if !orbe_scene::is_published(&rel) {
+            continue;
+        }
         let kind = entry.file_type().map_err(|e| io_error(&path, e))?;
         if kind.is_symlink() {
             return Err(linked(&path));

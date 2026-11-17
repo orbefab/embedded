@@ -265,6 +265,39 @@ fn another_folder_of_parts_and_blocks_builds_and_counts_what_it_lacks() {
 }
 
 #[test]
+fn build_output_in_a_part_folder_is_not_in_the_registry() {
+    let src = third_party();
+    let bytecode = "bytecode";
+    let cached = "cached";
+    put(src.path(), "parts/lamp/a.pyc", bytecode);
+    put(
+        src.path(),
+        "parts/lamp/__pycache__/lamp.cpython-312.pyc",
+        cached,
+    );
+    put(src.path(), "parts/lamp/notes.txt", "an author file");
+    let registry = build(src.path(), None).unwrap();
+    let lamp = record(&registry.output, "lamp@1.2.0");
+    let paths: Vec<&str> = lamp["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths, vec!["notes.txt", "part.jsonc"]);
+    assert!(
+        !registry
+            .output
+            .contains_key(&format!("files/{}", sha256(bytecode.as_bytes())))
+    );
+    assert!(
+        !registry
+            .output
+            .contains_key(&format!("files/{}", sha256(cached.as_bytes())))
+    );
+}
+
+#[test]
 fn a_hidden_or_large_file_is_named_in_the_warnings() {
     let src = third_party();
     put(src.path(), "parts/lamp/.env", "TOKEN=secret");
@@ -289,7 +322,7 @@ fn a_hidden_or_large_file_is_named_in_the_warnings() {
     );
     let warnings = registry.report.warnings();
     assert!(
-        warnings.contains(&"lamp@1.2.0 publishes the hidden file `.env`, since every file in an item's folder is published".to_string()),
+        warnings.contains(&"lamp@1.2.0 publishes the hidden file `.env`, since a file in an item's folder is published unless it is build output".to_string()),
         "{warnings:?}"
     );
     assert!(
