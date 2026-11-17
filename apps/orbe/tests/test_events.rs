@@ -185,13 +185,14 @@ fn a_failed_step_shows_the_changes_it_saw() {
 fn an_led_change_is_labeled_as_sampled_at_the_slice_end() {
     let json = replies("open\nstep 10ms\npress @btn1\nstep 5ms\n");
     let led = change(&json[3], "led", "@led1");
-    assert_eq!(led["by_ps"], 11_000_000_000u64, "{led}");
+    assert_eq!(led["by_ps"], 14_000_000_000u64, "{led}");
     assert!(led["at_ps"].is_null(), "{led}");
 
     let dir = project("open\nstep 10ms\npress @btn1\nstep 5ms\n");
     let run = orbe(dir.path(), &["test", "-v"]);
     assert!(
-        run.stdout.contains("\n    by 11ms led1 on\n"),
+        run.stdout
+            .contains("\n    by 14ms led1 lit, brightness=0.003491198757089587 A over 14ms\n"),
         "{}",
         run.stdout
     );
@@ -400,15 +401,15 @@ fn an_until_whose_edge_ends_its_timeout_says_reads_show_it_after() {
 
 #[test]
 fn a_sampled_until_says_by() {
-    let dir = project("open\nstep 100ms\npress @btn1\nstep --until @led1 on --timeout 50ms\n");
+    let dir = project("open\nstep 100ms\npress @btn1\nstep --until @led1 lit --timeout 50ms\n");
     let json = replies_in(&dir);
     let until = &json[3]["data"];
-    assert_eq!(until["met_by_ps"], 101_000_000_000u64, "{until}");
+    assert_eq!(until["met_by_ps"], 104_000_000_000u64, "{until}");
     assert!(until["met_at_ps"].is_null(), "{until}");
     let run = orbe(dir.path(), &["test", "-v"]);
     assert!(
         run.stdout
-            .contains("  t=101ms (from 100ms), @led1 on by 101ms\n"),
+            .contains("  t=104ms (from 100ms), @led1 lit by 104ms\n"),
         "{}",
         run.stdout
     );

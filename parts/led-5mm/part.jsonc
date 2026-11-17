@@ -38,7 +38,8 @@
     },
   },
   "readings": {
-    "on": { "of": "i", "above": { "value": 0.001, "unit": "A", "source": { "closed_form": { "note": "One tenth of the 10 mA rating current." } } } },
+    "lit": { "of": "i", "above": { "value": 0.002, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A", "at": "Fig. Forward Current vs. Forward Voltage, the lowest fitted point, 2 mA. Fig. Luminous Intensity vs. Forward Current is a straight line from 0 to 20 mA normalized at 10 mA, so 2 mA is 0.2 of that intensity.", "basis": "typical" } } } },
+    "dim": { "of": "i", "above": { "value": 0.0001, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A", "at": "1 percent of the 10 mA at which Iv is rated. Fig. Luminous Intensity vs. Forward Current is a straight line from 0 to 20 mA normalized at 10 mA, so 100 uA is 0.01 of that intensity. Reverse current is 10 uA max at VR = 5 V, so the floor is ten times that leakage.", "basis": "typical" } } } },
     "brightness": { "of": "i", "full": { "value": 0.01, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A", "at": "Electrical / Optical Characteristics, Iv rated at IF = 10 mA", "basis": "nominal" } } } },
   },
   "view": {
@@ -46,7 +47,7 @@
     "tint": [{ "node": "body", "by": "color" }],
   },
   "not_simulated": [
-    { "what": "light", "why": "The engine reports current. Brightness is the current over 10 mA, so 1 at 10 mA, and above that the LED blooms." },
+    { "what": "light", "why": "The engine reports current, not luminous intensity. The drawing scales current by 10 mA, so the glow is 1 at 10 mA and blooms above that. The forward curve is fitted from 2 mA to 20 mA through (1.70 V, 2 mA), (1.90 V, 10 mA) and (2.00 V, 20 mA). Below 2 mA and above 20 mA the current is that curve extended. A threshold at 1 mA would sit outside the fit. Luminous intensity versus forward current is drawn as a straight line from 0 mA, so the extended current still glows in proportion." },
     { "what": "temperature", "why": "The fit is at 25 C and the engine has no temperature." },
     { "what": "reverse breakdown", "why": "The engine's LED has no breakdown voltage." },
   ],

@@ -27,7 +27,7 @@ const BUTTON_TEST: [&str; 8] = [
     "step 100ms",
     "expect @led1 off",
     "press @btn1",
-    "step --until @led1 on --timeout 50ms",
+    "step --until @led1 lit --timeout 50ms",
     "expect @nano.D13 high",
     "release @btn1",
     "step 50ms",
@@ -295,7 +295,7 @@ fn a_refused_step_leaves_play_running() {
     assert!(live.tick(TICK).is_some());
     for (line, code) in [
         ("step 10000s", Code::PastStop),
-        ("step --until @nope on", Code::UnknownRef),
+        ("step --until @nope off", Code::UnknownRef),
     ] {
         let refused = live.run(&command(line));
         assert_eq!(refused.error.unwrap().code, code, "{line}");
@@ -323,12 +323,20 @@ fn the_next_step_lists_what_play_ran() {
     let text = stepped.text();
     assert!(text.starts_with("t=65ms (from 0s)\n"), "{text}");
     assert!(text.contains(" nano.D13 high"), "{text}");
-    assert!(text.contains(" led1 on"), "{text}");
+    assert!(text.contains(" led1 lit"), "{text}");
     let again = live.run(&command("step 1ms"));
-    assert_eq!(
-        again.text(),
-        "t=66ms (from 65ms)",
-        "each change is listed once"
+    let again_text = again.text();
+    let changes: Vec<_> = again_text
+        .lines()
+        .filter(|line| line.starts_with("  ") && !line.starts_with("  brightness "))
+        .collect();
+    assert!(
+        changes.is_empty(),
+        "each change is listed once: {again_text}"
+    );
+    assert!(
+        again_text.starts_with("t=66ms (from 65ms)\n"),
+        "{again_text}"
     );
 }
 
@@ -344,7 +352,7 @@ fn a_step_refused_at_the_stop_lists_what_play_ran() {
     assert_eq!(ended.error.as_ref().unwrap().code, Code::Ended);
     let text = ended.text();
     assert!(text.starts_with("t=40ms (from 0s)\n"), "{text}");
-    assert!(text.contains(" led1 on"), "{text}");
+    assert!(text.contains(" led1 lit"), "{text}");
     let again = live.run(&command("step 1ms"));
     assert_eq!(
         again.text(),

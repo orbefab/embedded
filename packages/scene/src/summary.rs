@@ -42,7 +42,9 @@ pub struct Card {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buy: Option<Vec<Buy>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub on: Option<On>,
+    pub lit: Option<Threshold>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dim: Option<Threshold>,
     #[serde(skip_serializing_if = "skip_false")]
     pub pressable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -219,9 +221,10 @@ pub struct Holes {
     pub strips: Vec<Vec<String>>,
 }
 
+/// A light threshold: `lit` or `dim` while `of` is above `above`.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct On {
+pub struct Threshold {
     pub of: String,
     pub above: f64,
     pub unit: String,
@@ -616,7 +619,8 @@ fn build<'a>(
         uses: uses(tree),
         used_by,
         buy: buy_links(tree),
-        on: on(tree),
+        lit: threshold(tree, "lit"),
+        dim: threshold(tree, "dim"),
         pressable: tree.get("controls").and_then(|c| c.get("press")).is_some(),
         holes: holes(tree),
     })
@@ -1021,13 +1025,13 @@ fn holes(tree: &Node) -> Option<Holes> {
     })
 }
 
-fn on(tree: &Node) -> Option<On> {
-    let on = tree
+fn threshold(tree: &Node, name: &str) -> Option<Threshold> {
+    let reading = tree
         .get("readings")
-        .and_then(|readings| readings.get("on"))?;
-    let above = on.get("above")?;
-    Some(On {
-        of: on.get("of")?.str()?.to_string(),
+        .and_then(|readings| readings.get(name))?;
+    let above = reading.get("above")?;
+    Some(Threshold {
+        of: reading.get("of")?.str()?.to_string(),
         above: above.get("value")?.number()?,
         unit: above.get("unit")?.str()?.to_string(),
     })

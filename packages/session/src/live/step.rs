@@ -5,15 +5,15 @@ use std::ops::ControlFlow;
 
 use orbe_model::Time;
 
-use orbe_engine::name::Ref as EngineRef;
-use orbe_engine::{EdgeCursor, Probe, Status};
+use orbe_engine::{EdgeCursor, Status};
 
 use super::bound::Bound;
+use super::light::{self, LIGHT_HOLD};
 use super::serial::Arrived;
 use super::{Key, Open, Outcome, fail, failed, key, level, t};
 use crate::command::Step;
 use crate::duration::Duration;
-use crate::reply::{Change, Check, Code, Data, Error, Got, Level, Met, Stepped};
+use crate::reply::{Change, Check, Code, Data, Error, Got, LedRead, Level, Light, Met, Stepped};
 use crate::target::Ref;
 
 /// `step` advances in slices this long, so `--until` and a caller see each one.
@@ -43,6 +43,12 @@ impl Progress<'_> {
 struct Slice {
     changes: Vec<Change>,
     arrived: Arrived,
+}
+
+/// The light state a step has listed, and a newer state waiting out [`LIGHT_HOLD`].
+struct Held {
+    shown: Light,
+    since: Option<(Light, u64)>,
 }
 
 impl Open {
@@ -96,12 +102,6 @@ impl Open {
                 .map(|sent_at_ps| Met::Serial { by_ps, sent_at_ps }),
             _ => self.observe(bound).0.then_some(Met::By(by_ps)),
         }
-    }
-
-    fn lit(&self, leds: &[(String, EngineRef, f64)], probe: &Probe) -> Vec<bool> {
-        leds.iter()
-            .map(|(_, i, above)| probe.get(i).expect("a checked column").get() > *above)
-            .collect()
     }
 
     pub(super) fn stop_name(&self) -> String {
@@ -159,17 +159,17 @@ impl Open {
             Step::Until { timeout, .. } => from.saturating_add(timeout.as_ps()).min(self.stop_ps),
         };
         self.playing = false;
-        let leds: Vec<(String, EngineRef, f64)> = self
-            .refs
-            .top
-            .iter()
-            .filter_map(|p| {
-                let (i, above) = self.on_threshold(p).ok()?;
-                Some((p.clone(), i, above))
+        self.light.note(&self.engine.probe());
+        let probe = self.engine.probe();
+        let mut held: Vec<Held> = self
+            .light
+            .glows(&probe)
+            .into_iter()
+            .map(|glow| Held {
+                shown: glow.state,
+                since: None,
             })
             .collect();
-        let probe = self.engine.probe();
-        let mut was = self.lit(&leds, &probe);
         let mut known: BTreeSet<Key> = self.findings(&probe).iter().map(key).collect();
         drop(probe);
         let (listed_from, mut changes, mut more) = match self.unlisted.take() {
@@ -207,18 +207,39 @@ impl Open {
                 met = edge.map(Met::Edge).or_else(|| self.met_in(bound, &slice));
             }
             let mut found = slice.changes;
+            self.light.note(&self.engine.probe());
             let probe = self.engine.probe();
-            let lit = self.lit(&leds, &probe);
-            for (((part, ..), before), after) in leds.iter().zip(&was).zip(&lit) {
-                if before != after {
+            let glows = self.light.glows(&probe);
+            let met_light = until.as_ref().and_then(|(_, _, bound)| match bound {
+                Bound::Light { index, want, .. } => met.is_some().then_some((*index, *want)),
+                _ => None,
+            });
+            for (index, glow) in glows.iter().enumerate() {
+                let track = &mut held[index];
+                if glow.state == track.shown {
+                    track.since = None;
+                    continue;
+                }
+                let since = match track.since {
+                    Some((state, since)) if state == glow.state => since,
+                    _ => {
+                        track.since = Some((glow.state, now));
+                        now
+                    }
+                };
+                let asked = met_light.is_some_and(|(i, want)| i == index && want == glow.state);
+                if asked || now.saturating_sub(since) >= LIGHT_HOLD.as_ps() {
                     found.push(Change::Led {
                         by_ps: now,
-                        part: part.clone(),
-                        on: *after,
+                        part: self.light.lamps()[index].path.clone(),
+                        state: glow.state,
+                        brightness: glow.amperes,
+                        over_ps: glow.over_ps,
                     });
+                    track.shown = glow.state;
+                    track.since = None;
                 }
             }
-            was = lit;
             for d in self.findings(&probe) {
                 if d.at().is_some() && known.insert(key(&d)) {
                     found.push(Change::Diagnostic {
@@ -254,12 +275,41 @@ impl Open {
                 actual,
             }
         });
+        let glows = {
+            let probe = self.engine.probe();
+            self.light.glows(&probe)
+        };
+        let leds = glows
+            .into_iter()
+            .enumerate()
+            .map(|(index, glow)| LedRead {
+                part: self.light.lamps()[index].path.clone(),
+                state: glow.state,
+                brightness: glow.amperes,
+                over_ps: glow.over_ps,
+            })
+            .collect();
+        let steady = until.as_ref().and_then(|(_, _, bound)| {
+            let Bound::Light { index, want, .. } = bound else {
+                return None;
+            };
+            let probe = self.engine.probe();
+            let end = self.light.glow(*index, &probe);
+            let earlier = probe
+                .at()
+                .as_ps()
+                .saturating_sub(light::BRIGHTNESS_WINDOW.as_ps());
+            let start = self.light.glow_at(*index, earlier)?;
+            let lamp = &self.light.lamps()[*index];
+            light::steady_hint(&lamp.path, *want, start, end, lamp.lit, lamp.dim)
+        });
         let data = Data::Stepped(Stepped {
             from_ps: listed_from,
             met,
             changes,
             more,
             check,
+            leds,
         });
         if cancelled {
             return Err(failed(
@@ -284,7 +334,10 @@ impl Open {
                     Error::new(
                         Code::UntilTimeout,
                         format!("the condition did not hold within {timeout}"),
-                        "step longer with `--timeout`, or check the circuit with `snapshot`",
+                        steady.unwrap_or_else(|| {
+                            "step longer with `--timeout`, or check the circuit with `snapshot`"
+                                .to_string()
+                        }),
                     )
                 };
                 Err(failed(error, data))

@@ -156,10 +156,11 @@ export function PartPage({ part }: { part: PartView }) {
             ])}
           />
         )}
-        {record.on === undefined ? null : (
+        {record.lit === undefined && record.dim === undefined ? null : (
           <p className="mt-4 text-muted-foreground text-sm">
-            It reads as on while {record.on.of} is {record.on.above === undefined ? "below" : "above"}{" "}
-            {si(record.on.above ?? record.on.below ?? 0, record.on.unit)}.
+            brightness is the average {record.lit?.of ?? record.dim?.of} over 20 ms.
+            {record.lit === undefined ? null : ` It reads lit while that average is above ${si(record.lit.above, record.lit.unit)}.`}
+            {record.dim === undefined ? null : ` It reads dim while that average is above ${si(record.dim.above, record.dim.unit)}.`}
           </p>
         )}
       </Section>

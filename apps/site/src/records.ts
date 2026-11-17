@@ -74,7 +74,8 @@ export interface PartRecord extends Common {
   readonly notSimulated: readonly { readonly what: string; readonly why: string }[];
   readonly docs?: readonly { readonly name: string; readonly url?: string }[];
   readonly buy?: readonly { readonly seller: string; readonly url: string; readonly checked: string }[];
-  readonly on?: { readonly of: string; readonly above?: number; readonly below?: number; readonly unit: string };
+  readonly lit?: { readonly of: string; readonly above: number; readonly unit: string };
+  readonly dim?: { readonly of: string; readonly above: number; readonly unit: string };
   readonly pressable?: true;
   /** A board's holes, such as a breadboard's. Each hole is also one of `pins`. */
   readonly holes?: { readonly depth: number; readonly strips: readonly (readonly string[])[] };

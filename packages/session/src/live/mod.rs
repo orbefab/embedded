@@ -5,7 +5,9 @@
 //! loop holds pin levels to it too: `get` and `expect` leave out an edge at `now` until time
 //! moves past it. So an event at t, an edge or a `press`, shows in reads from t + 1 ps. A step
 //! from S to E lists every edge in [S, E] once. `--until` first reads its condition as `get`
-//! would at S, and a pin's edge at t that meets it ends the step at t + 1 ps.
+//! would at S, and a pin's edge at t that meets it ends the step at t + 1 ps. An LED's `lit`,
+//! `dim` and `off` follow its average current over the last 20 ms, or since t = 0 when the
+//! session is younger. `@part.i` stays the current at the read.
 
 use orbe_engine::netlist::{Analysis, Contact};
 
@@ -31,12 +33,15 @@ use crate::reply::{
     Code, Data, Diagnostic, Error, Finding, Got, Level, PartState, Reading, Reply, Snapshot, State,
     Stepped,
 };
-use crate::target::{QUANTITIES, Ref, Target, names, one_engine, reports_hint, resolve};
+use crate::target::{Ref, Target, names, one_engine, reports_hint, resolve};
 
 mod bound;
 mod frame;
+mod light;
 mod serial;
 mod step;
+
+pub use light::BRIGHTNESS_WINDOW;
 
 #[cfg(test)]
 pub(crate) use frame::WorldName;
@@ -92,6 +97,8 @@ struct Open {
     /// Where each quantity's last `set` landed, which can be after `now`. A frame shows the
     /// value from there on, so a `set` shows while the session is paused.
     world_sets: BTreeMap<orbe_engine::world::Quantity, Time>,
+    /// Each LED's forward-current integral, sampled as time advances, for its brightness.
+    light: light::Log,
 }
 
 type Key = (&'static str, Vec<String>);
@@ -439,6 +446,8 @@ impl Open {
         let pin_names = pin_names(&refs);
         let edges = engine.edge_cursor();
         let contacts = frame::contacts(json);
+        let mut light = light::Log::build(&refs, &reports);
+        light.note(&engine.probe());
         let mut open = Open {
             engine,
             refs,
@@ -458,6 +467,7 @@ impl Open {
             listed: edges,
             serial: Serial::default(),
             world_sets: BTreeMap::new(),
+            light,
         };
         open.channels = open.bind_channels();
         Ok(open)
@@ -645,6 +655,17 @@ impl Open {
                     value: self.read(&quantity(&engine, q)),
                 },
             ),
+            Target::Brightness { path } => {
+                let index = self.light.require(&self.refs, &path)?;
+                let glow = self.light.glow(index, &self.engine.probe());
+                (
+                    format!("{path}.brightness"),
+                    Reading::Brightness {
+                        value: glow.amperes,
+                        over_ps: glow.over_ps,
+                    },
+                )
+            }
             Target::Part(path) => {
                 let value = self.part(&path).ok_or_else(|| {
                     Error::new(
@@ -729,7 +750,7 @@ impl Open {
         )
     }
 
-    /// A part's `on` reading and its engine quantities. `None` when it has neither.
+    /// A part's light state, its brightness, and its engine quantities. `None` when it has none.
     fn part(&self, path: &str) -> Option<Reading> {
         let engine = one_engine(path, &self.refs.parts[path], Code::NoReading).ok()?;
         let probe = self.engine.probe();
@@ -742,46 +763,17 @@ impl Open {
                 (q.as_str().to_string(), unit_of(q), value.get())
             })
             .collect();
-        let on = self
-            .on_threshold(path)
-            .ok()
-            .map(|(i, above)| probe.get(&i).expect("a checked column").get() > above);
-        (on.is_some() || !quantities.is_empty()).then_some(Reading::Part { on, quantities })
-    }
-
-    /// The column and threshold of a part's `on` reading.
-    fn on_threshold(&self, path: &str) -> Result<(EngineRef, f64), Error> {
-        let part = &self.refs.parts[path];
-        let missing = || {
-            Error::new(
-                Code::NoReading,
-                format!("`{path}` states no `on` reading"),
-                format!(
-                    "{} has no readings.on with `above` in its part file",
-                    part.ty
-                ),
-            )
-        };
-        let reading = part.readings.get("on").ok_or_else(missing)?;
-        let above = reading.above.as_ref().ok_or_else(missing)?;
-        let q = QUANTITIES
-            .into_iter()
-            .find(|q| q.as_str() == reading.of)
-            .ok_or_else(missing)?;
-        if above.unit != unit_of(q).as_str() {
-            return Err(Error::new(
-                Code::NoReading,
-                format!(
-                    "`{path}`'s `on` reading is in {}, but `{}` is in {}",
-                    above.unit,
-                    reading.of,
-                    unit_of(q).as_str()
-                ),
-                format!("fix readings.on in {}", part.ty),
-            ));
-        }
-        let engine = one_engine(path, part, Code::NoReading)?;
-        Ok((self.column(path, &engine, q)?, above.value))
+        let glow = self
+            .light
+            .position(path)
+            .map(|index| self.light.glow(index, &probe));
+        let state = glow.map(|glow| glow.state);
+        let brightness = glow.map(|glow| (glow.amperes, glow.over_ps));
+        (state.is_some() || !quantities.is_empty()).then_some(Reading::Part {
+            state,
+            brightness,
+            quantities,
+        })
     }
 
     fn snapshot(&self) -> Data {
@@ -945,7 +937,7 @@ mod tests {
             "a condition that holds takes no time"
         );
 
-        let reached = step(&mut live, "--until @led1 on --timeout 10ms");
+        let reached = step(&mut live, "--until @led1 lit --timeout 10ms");
         let error = reached.error.as_ref().unwrap();
         assert_eq!(error.code, Code::Ended, "{}", reached.text());
         assert_eq!(
@@ -964,9 +956,16 @@ mod tests {
         assert!(step(&mut live, "50ms").ok());
         let held = step(&mut live, "--until @led1 off --timeout 0s");
         assert!(held.ok(), "{}", held.text());
-        assert_eq!(held.text(), "t=50ms (from 50ms), @led1 off at 50ms");
+        assert_eq!(
+            held.text(),
+            "\
+t=50ms (from 50ms), @led1 off at 50ms
+  brightness led1 off 1.3413115705356304e-13 A over 20ms
+  brightness nano.led_l off 1.34130540301447e-13 A over 20ms
+  brightness nano.led_pwr lit 0.003242585439509242 A over 20ms"
+        );
 
-        let unmet = step(&mut live, "--until @led1 on");
+        let unmet = step(&mut live, "--until @led1 lit");
         assert_eq!(unmet.error.as_ref().unwrap().code, Code::Ended);
         let actual = &unmet.check().unwrap().actual;
         assert!(actual.starts_with("led1 off, i="), "{}", unmet.text());

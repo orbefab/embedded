@@ -36,7 +36,7 @@ const FIRST_TARGET: [&str; 8] = [
     "step 100ms",
     "expect @led1 off",
     "press @btn1",
-    "step --until @led1 on --timeout 50ms",
+    "step --until @led1 lit --timeout 50ms",
     "expect @nano.D13 high",
     "get @nano.D13",
     "close",
@@ -184,7 +184,15 @@ fn open_replaces_the_socket_a_killed_process_left() {
     let run = runtime
         .orbe(dir.path(), &[&["step", "10ms"][..], &session].concat())
         .ok();
-    assert_eq!(run.stdout, "t=10ms (from 0s)\n");
+    assert_eq!(
+        run.stdout,
+        "\
+t=10ms (from 0s)
+  brightness led1 off 3.7195630468366763e-10 A over 10ms
+  brightness nano.led_l off 3.711244399491297e-10 A over 10ms
+  brightness nano.led_pwr lit 0.0032425854395093144 A over 10ms
+"
+    );
     runtime
         .orbe(dir.path(), &[&["close"][..], &session].concat())
         .ok();

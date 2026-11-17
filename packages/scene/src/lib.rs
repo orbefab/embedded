@@ -42,8 +42,8 @@ pub use holes::{holes_text, strip_text};
 pub use model::{STOP_PS, is_id};
 pub use project::{BLOCK, REGISTRY, folder_hash, is_registry_name, part_file};
 pub use summary::{
-    BlockCard, Buy, Card, CardFile, Choice, Doc, Folder, Holes, Literal, Missing, NotSimulated, On,
-    Param, Pin, Rating, Real, block_card, card, cards, catalog_cards, ids_with_segment,
+    BlockCard, Buy, Card, CardFile, Choice, Doc, Folder, Holes, Literal, Missing, NotSimulated,
+    Param, Pin, Rating, Real, Threshold, block_card, card, cards, catalog_cards, ids_with_segment,
     missing_fields, near_names, param_sentence, search, si_amount,
 };
 

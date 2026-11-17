@@ -446,7 +446,7 @@ const LINES: [&str; 7] = [
     "step 100ms",
     "expect @led1 off",
     "press @btn1",
-    "step --until @led1 on --timeout 50ms",
+    "step --until @led1 lit --timeout 50ms",
     "expect @nano.D13 high",
     "release @btn1",
     "step 300ms",
@@ -567,7 +567,7 @@ fn a_page_that_joins_late_draws_each_led_as_get_reads_it() {
     first.leave();
 
     let got = pulse(&runtime, dir.path());
-    assert_eq!(got["data"]["value"]["on"], false);
+    assert_eq!(got["data"]["value"]["state"], "off");
     let mut late = Viewer::connect(&url);
     assert_drawn_as_read(&late.until("frame", &mut Vec::new()), &got);
 

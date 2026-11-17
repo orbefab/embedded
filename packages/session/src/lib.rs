@@ -16,10 +16,12 @@ pub mod viewer;
 pub use command::{COMMANDS, Command, Spec, Step, UNTIL_TIMEOUT, WorldSet, spec};
 pub use condition::{Amount, Condition, Needle, Op, State as Want, Unit};
 pub use duration::Duration;
-pub use live::{CHANGES, Channels, FrameState, Live, Pace, Progress, SERIAL_LINES, Sample};
+pub use live::{
+    BRIGHTNESS_WINDOW, CHANGES, Channels, FrameState, Live, Pace, Progress, SERIAL_LINES, Sample,
+};
 pub use orbe_scene::Files;
 pub use reply::{
-    Change, Check, Code, Data, Diagnostic, Error, Finding, Got, Level, Met, PartState, Reading,
-    Reply, Snapshot, State, Stepped,
+    Change, Check, Code, Data, Diagnostic, Error, Finding, Got, LedRead, Level, Light, Met,
+    PartState, Reading, Reply, Snapshot, State, Stepped,
 };
 pub use target::{Ref, Target, resolve};
