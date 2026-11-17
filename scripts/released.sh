@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Writes released.lock from the parts and Blocks in a registry source. Run it when tagging a
 # release, then commit the file. Until the first tag the committed file is empty, because no
-# version has been served. The hash is the folder hash parts.lock records.
+# version has been served. The hash is the SHA-256 of the record the registry build writes.
+# A line for an item that is no longer in the tree stays. A version never moves backwards.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -10,9 +11,12 @@ usage() {
 usage: scripts/released.sh [<src>]
 
 Write <src>/released.lock, one line `<id> <version> sha256:<hash>` per part and
-Block in <src>, sorted by id. <src> defaults to this repo. Run it when tagging
-a release, and commit the file with the tag. Until the first tag the committed
-file is empty, because no version has been served.
+Block a release served, sorted by id. The hash is the SHA-256 of the record
+`orbe registry build` writes for that id and version. A line whose folder is
+gone stays. A line is added or advanced, and a version never moves backwards.
+<src> defaults to this repo. Run it when tagging a release, and commit the file
+with the tag. Until the first tag the committed file is empty, because no
+version has been served.
 EOF
 }
 
