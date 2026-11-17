@@ -638,3 +638,11 @@ A Nano with a 9 V source through 1 kohm on A0 reads:
 ```text
 #nano__mcu.pin.PC0 reaches 8.997637213833697 V over the chip's ground, outside its -0.5 V to 5.5 V rating
 ```
+
+An `op_amp` uses the same code on `in_p` and `in_n` when `input_headroom` is positive. The ceiling is `V(vcc) - input_headroom` and there is no floor. The voltage is over the part's `gnd` pin, which the message calls the chip's ground. The differential stage does not change, so the output is still the comparison. An input exactly on the ceiling is inside. Zero rates no ceiling.
+
+An LM358 comparator on a 5 V supply, `input_headroom` 1.5 V, with `in_p` at 4 V and `in_n` at 3.9 V, reads:
+
+```text
+#u1.pin.in_p reaches 4 V over the chip's ground, outside its 3.5 V ceiling
+```

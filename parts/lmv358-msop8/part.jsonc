@@ -1,6 +1,7 @@
 // One op_amp body per channel, both on the shared supply pins. The values are the typicals of
 // TI SLOS263Y p7 section 6.8 at VCC 5 V, and the swing and output resistance are lines fitted
-// through its VOH and VOL rows, as each field's source says.
+// through its VOH and VOL rows, as each field's source says. input_headroom is 5 V minus the
+// VICR typical upper end of 4.2 V. The stage keeps comparing above it, and the run warns.
 {
   "format": 1, "part": "lmv358-msop8", "version": "0.1.0", "title": "LMV358 dual op-amp, MSOP-8", "license": "MIT OR Apache-2.0",
   "docs": { "TI SLOS263Y": "https://www.ti.com/lit/ds/symlink/lmv358.pdf" },
@@ -18,6 +19,7 @@
       "output_resistance": { "value": 30.0, "unit": "ohm", "source": { "closed_form": { "note": "the slope of the swing_high line, 30 mV over 0.98 mA, rounded" } } },
       "short_circuit_current": { "value": 0.04, "unit": "A", "source": { "datasheet": { "doc": "TI SLOS263Y", "at": "p7 section 6.8, IOS 40 mA typical sourcing at VO 0 V and sinking at VO 5 V", "basis": "typical" } } },
       "supply_current": { "value": 0.000105, "unit": "A", "source": { "closed_form": { "note": "p7 section 6.8 ICC 210 uA typical at VCC 5 V for both channels of the LMV358, halved" } } },
+      "input_headroom": { "value": 0.8, "unit": "V", "source": { "closed_form": { "note": "p7 section 6.8 VICR at VCC 5 V, CMRR at least 50 dB, TA 25 C. The typical upper end is 4.2 V and the guaranteed upper end is 4 V. The field is 5 - 4.2" } } },
       "pins": { "in_p": "IN1_P", "in_n": "IN1_N", "out": "OUT1", "vcc": "VCC", "gnd": "GND" },
     },
     "b": {
@@ -31,7 +33,11 @@
       "output_resistance": { "value": 30.0, "unit": "ohm", "source": { "closed_form": { "note": "the slope of the swing_high line, 30 mV over 0.98 mA, rounded" } } },
       "short_circuit_current": { "value": 0.04, "unit": "A", "source": { "datasheet": { "doc": "TI SLOS263Y", "at": "p7 section 6.8, IOS 40 mA typical sourcing at VO 0 V and sinking at VO 5 V", "basis": "typical" } } },
       "supply_current": { "value": 0.000105, "unit": "A", "source": { "closed_form": { "note": "p7 section 6.8 ICC 210 uA typical at VCC 5 V for both channels of the LMV358, halved" } } },
+      "input_headroom": { "value": 0.8, "unit": "V", "source": { "closed_form": { "note": "p7 section 6.8 VICR at VCC 5 V, CMRR at least 50 dB, TA 25 C. The typical upper end is 4.2 V and the guaranteed upper end is 4 V. The field is 5 - 4.2" } } },
       "pins": { "in_p": "IN2_P", "in_n": "IN2_N", "out": "OUT2", "vcc": "VCC", "gnd": "GND" },
     },
   },
+  "not_simulated": [
+    { "what": "common-mode failure", "why": "The input stage keeps comparing above input_headroom, and the run warns rating.voltage. TI SLOS263Y section 6.8 states the common-mode range at VCC 5 V, a typical upper end of 4.2 V and a guaranteed upper end of 4 V, and states no law for the output once an input leaves it." },
+  ],
 }

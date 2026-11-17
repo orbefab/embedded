@@ -134,6 +134,7 @@
     {
       "name": "u1",
       "kind": "op_amp",
+      "input_headroom": { "value": 0.0, "unit": "V", "source": "user" },
       "pins": {
         "in_p": "inp",
         "in_n": "vref",

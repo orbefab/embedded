@@ -1,18 +1,21 @@
 //! The LM358's values and the bands the `op-amp-*` circuits must meet on them.
-//! The nine values are read from `parts/lm358-dip8/part.jsonc`, both bodies. TI SLOS068AB p10
-//! section 5.7, the LM358 column, not the LM358A. The table header is VS = 5 V and TA = 25 °C
-//! unless a row says otherwise. A typical is 25 °C (note 2).
+//! The nine electrical values are read from `parts/lm358-dip8/part.jsonc`, both bodies. TI
+//! SLOS068AB p10 section 5.7, the LM358 column, not the LM358A. The table header is VS = 5 V
+//! and TA = 25 °C unless a row says otherwise. A typical is 25 °C (note 2).
 //!
-//! The common-mode range at 25 °C is (V−) to (V+) − 1.5 V. The law's input headroom stays
-//! 0.8 V. None of these bands turns on that difference. 4.95 V is above that range, so the
+//! The part's `input_headroom` is 1.5 V, the VCM maximum of (V+) − 1.5 V at 25 °C. The sheet
+//! does not copy it onto the circuits. Those netlists set it to 0, which rates no common-mode
+//! ceiling, so these bands do not warn. The law's bias gate stays 0.8 V.
+//! None of these bands turns on that difference. 4.95 V is above the common-mode range, so the
 //! bias there is printed and not held to a band.
 //!
 //! A width around a typical is the acceptance where section 5.7 prints no minimum and no
 //! maximum. It is fixed with the row, at the same fraction `op_amp.rs` uses for a typical
 //! that has no limit.
 //!
-//! The circuits are the existing `op-amp-*` netlists. The sheet writes the part's nine values
-//! over each op-amp and leaves every other part as the file has it. `op-amp-swing` in the file
+//! The circuits are the existing `op-amp-*` netlists. The sheet writes the part's nine electrical
+//! values over each op-amp and leaves `input_headroom` and every other part as the file has it.
+//! `op-amp-swing` in the file
 //! returns its loads to 2.5 V. Section 5.7 returns RL to V−, so for that one circuit each
 //! load's far end moves to `gnd`.
 
@@ -90,6 +93,26 @@ fn json_of_jsonc(text: &str) -> String {
     out
 }
 
+/// `field` on both bodies of a part file. The bodies match apart from `pins`.
+fn catalog_value(rel: &str, field: &str, unit: &str) -> f64 {
+    let path = super::common::repo(rel);
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("{}: {err}", path.display()));
+    let doc: serde_json::Value = serde_json::from_str(&json_of_jsonc(&text))
+        .unwrap_or_else(|err| panic!("{}: {err}", path.display()));
+    let body = &doc["model"]["a"][field];
+    assert_eq!(
+        body,
+        &doc["model"]["b"][field],
+        "{}: model.b {field} differs from model.a",
+        path.display()
+    );
+    assert_eq!(body["unit"].as_str().unwrap_or(""), unit, "{rel} {field}");
+    body["value"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("{rel} {field} has no number"))
+}
+
 /// Both bodies of `parts/lm358-dip8/part.jsonc`, which have to carry one set of values.
 fn part_values() -> Values {
     let path = super::common::repo("parts/lm358-dip8/part.jsonc");
@@ -165,7 +188,8 @@ fn lm358() -> Sheet {
 }
 
 /// The part file carries section 5.7's typicals, and the hand-solved law meets the rows that
-/// print a limit. The nine numbers are the file's, not a second copy.
+/// print a limit. The nine numbers are the file's, not a second copy. `input_headroom` is the
+/// part's too, and the LMV358's is its own.
 #[test]
 fn the_pass_bands_are_the_sheet_limits() {
     let path = "parts/lm358-dip8/part.jsonc";
@@ -187,6 +211,14 @@ fn the_pass_bands_are_the_sheet_limits() {
             "{path} {name} is {got}, section 5.7 typical {want}"
         );
     }
+    assert_eq!(
+        catalog_value("parts/lm358-dip8/part.jsonc", "input_headroom", "V"),
+        1.5
+    );
+    assert_eq!(
+        catalog_value("parts/lmv358-msop8/part.jsonc", "input_headroom", "V"),
+        0.8
+    );
 
     let past = op_amp_sheet::clamp_past_rail(v.slew_rate);
     assert!(near(past, 0.129489308190573, 1e-12), "{past}");
