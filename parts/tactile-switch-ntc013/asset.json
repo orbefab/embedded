@@ -1,0 +1,44 @@
+{
+  "part": "tactile-switch-ntc013",
+  "source": {
+    "script": "model.py",
+    "sha256": "834849739e04f9a0a864ef271cd8e86139eb0d21419eda224d5e582a248e6089",
+    "bytes": 2707
+  },
+  "files": {
+    "tactile-switch-ntc013.glb": {
+      "sha256": "18c14dad73d4c0beb47ad9b28fd6735c5ea8333e6cca86be2e16d463c9e43963",
+      "bytes": 7136
+    },
+    "tactile-switch-ntc013.anchors.json": {
+      "sha256": "5462e41367e8ffef9967b89bdeeb9312f0cb7dbd04cd156e801268867740f794",
+      "bytes": 526
+    }
+  },
+  "box": {
+    "min": [-2.6, -1.9, 0],
+    "max": [2.6, 1.9, 2.5]
+  },
+  "kept_nodes": ["button"],
+  "draw_calls": 3,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 4,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": ["button"]
+    },
+    "merge": {
+      "primitives_in": 6,
+      "primitives_out": 3
+    }
+  }
+}

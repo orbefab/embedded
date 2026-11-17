@@ -1,0 +1,56 @@
+{
+  "format": 1,
+  "part": "sk68xxmini-hs",
+  "version": "0.1.0",
+  "title": "SK68XXMINI-HS addressable RGB LED",
+  "summary": "One addressable RGB LED in a 3.7 x 3.5 x 1.95 mm package. Pin 1 is GND, pin 2 DIN, pin 3 VDD and pin 4 DOUT. The sheet's supply is 3.7 V to 5.5 V. The engine times the bits as a Worldsemi WS2812E, and this sheet's longest 0-bit high is 0.4 us, past that window.",
+  "tags": ["led", "rgb", "addressable", "ws2812"],
+  "license": "MIT OR Apache-2.0",
+  "docs": { "SPC / SK68XX MINI-HS Rev. 04": null },
+  "real": { "maker": "SPC", "number": "SK68XXMINI-HS", "datasheet": "SPC / SK68XX MINI-HS Rev. 04" },
+  "pins": { "GND": [1], "DIN": [2], "VDD": [3], "DOUT": [4] },
+  "model": {
+    "kind": "ws2812",
+    "leds": 1,
+    "pins": { "VCC": "VDD", "GND": "GND", "DIN": "DIN" },
+    "input_threshold": {
+      "low": {
+        "value": 0.3,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "SPC / SK68XX MINI-HS Rev. 04",
+            "at": "Section 10, VIL 0.3 VDD maximum, test condition VDD = 5.0 V",
+            "basis": "max"
+          }
+        }
+      },
+      "high": {
+        "value": 0.7,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "SPC / SK68XX MINI-HS Rev. 04",
+            "at": "Section 10, VIH 0.7 VDD minimum, test condition VDD = 5.0 V",
+            "basis": "min"
+          }
+        }
+      }
+    }
+  },
+  "not_simulated": [
+    {
+      "what": "data output",
+      "pins": ["DOUT"],
+      "why": "The ws2812 kind has no DOUT pin. Section 11 gives the DIN to DOUT delay as 500 ns maximum, and a one-LED part discards the bits past its own 24."
+    },
+    {
+      "what": "supply and current",
+      "why": "Section 8 lists VDD from +3.7 V to +5.5 V. The ESP32-S3-DevKitC-1 ties this LED to 3.3 V, which is below that range, and the kind does not check the supply. Section 9 names SK6805MINI-HS at 5 mA and SK6812MINI-HS at 12 mA. Section 10's static IDD typical is 1 mA. The part does not pick one of those currents."
+    },
+    {
+      "what": "bit times",
+      "why": "The kind uses the Worldsemi WS2812E-1313 V1.1 windows, a 0 for a high of 220 ns to 380 ns and a 1 for 580 ns to 1 us. Section 12 of this sheet gives T0H as 0.2 / 0.32 / 0.4 us and T1H as 0.62 / 0.64 / 1.0 us, and section 11 gives fDIN typical 800 kHz. The typical highs sit inside those windows. T0H maximum, 0.4 us, does not."
+    }
+  ]
+}
