@@ -174,6 +174,15 @@ impl Log {
             .collect()
     }
 
+    /// The timeout hint when `want` is unmet at `end`. `None` asks for the ordinary
+    /// "step longer" hint.
+    pub(super) fn steady_hint(&self, index: usize, want: Light, end: Glow) -> Option<String> {
+        let earlier = end.at_ps.saturating_sub(BRIGHTNESS_WINDOW.as_ps());
+        let start = self.glow_at(index, earlier)?;
+        let lamp = &self.lamps[index];
+        steady_sentence(&lamp.path, want, start, end, lamp.lit, lamp.dim)
+    }
+
     /// The brightness at the newest sample at or before `t_ps`. Used to see whether the
     /// average one window ago still matches, after an edge that the `--until` itself started on.
     pub(super) fn glow_at(&self, index: usize, t_ps: u64) -> Option<Glow> {
@@ -238,7 +247,7 @@ fn average(samples: &VecDeque<Span>, now: u64, integral_now: f64, instant: f64) 
 /// the edge that turned the LED on. The sentence names the span those windows cover. `None`
 /// asks for the ordinary "step longer" hint: the window is not full yet, or the average is
 /// still moving.
-pub(super) fn steady_hint(
+fn steady_sentence(
     part: &str,
     want: Light,
     start: Glow,
@@ -319,15 +328,6 @@ mod tests {
         }
     }
 
-    fn glow_at(amperes: f64, state: Light, over_ms: u64, at_ms: u64) -> Glow {
-        Glow {
-            state,
-            amperes,
-            over_ps: Duration::from_ms(over_ms).as_ps(),
-            at_ps: Duration::from_ms(at_ms).as_ps(),
-        }
-    }
-
     #[test]
     fn a_constant_current_averages_to_itself_over_the_window() {
         let samples: VecDeque<Span> = [span(0, 0.01), span(80, 0.01), span(100, 0.01)]
@@ -370,45 +370,165 @@ mod tests {
         assert_eq!(window.amperes, 3.5e-4);
     }
 
+    /// Samples every 1 ms through `until_ms`. The window average at each sample is `avg_at`.
+    fn series(until_ms: u64, avg_at: impl Fn(u64) -> f64) -> VecDeque<Span> {
+        let mut integral = vec![0.0; until_ms as usize + 1];
+        for ms in 1..=until_ms {
+            let avg = avg_at(ms);
+            let t_ps = ms as f64 * 1_000_000_000.0;
+            if ms >= 20 {
+                integral[ms as usize] = integral[ms as usize - 20] + avg * 20_000_000_000.0;
+            } else {
+                integral[ms as usize] = avg * t_ps;
+            }
+        }
+        (0..=until_ms)
+            .map(|ms| Span {
+                t_ps: ms * 1_000_000_000,
+                integral: integral[ms as usize],
+                instant: avg_at(ms),
+            })
+            .collect()
+    }
+
+    fn flat(amperes: f64, until_ms: u64) -> VecDeque<Span> {
+        series(until_ms, |_| amperes)
+    }
+
+    /// Low for `low_ms`, then high at `peak` for `high_ms`, repeating. The level on the
+    /// millisecond that ends at a sample is the level before that sample.
+    fn square(low_ms: u64, high_ms: u64, peak: f64, until_ms: u64) -> VecDeque<Span> {
+        let period = low_ms + high_ms;
+        series(until_ms, |t| {
+            if t == 0 {
+                return 0.0;
+            }
+            let from = t.saturating_sub(20);
+            let mut on = 0u64;
+            for k in (from + 1)..=t {
+                if (k - 1) % period >= low_ms {
+                    on += 1;
+                }
+            }
+            peak * on as f64 / (t - from) as f64
+        })
+    }
+
+    fn lamp_log(path: &str, samples: VecDeque<Span>) -> Log {
+        Log {
+            lamps: vec![Lamp {
+                path: path.into(),
+                column: "#led1.i".parse().expect("a current ref"),
+                lit: 0.002,
+                dim: 0.0001,
+            }],
+            samples: vec![samples],
+        }
+    }
+
+    fn hint(log: &Log, want: Light) -> Option<String> {
+        let end_t = log.samples[0].back().expect("a sample").t_ps;
+        let end = log.glow_at(0, end_t).expect("the last sample");
+        log.steady_hint(0, want, end)
+    }
+
+    fn at(log: &Log, ms: u64) -> Glow {
+        log.glow_at(0, ms * 1_000_000_000).expect("a sample")
+    }
+
     #[test]
     fn a_settled_current_is_named_for_lit_dim_and_off() {
-        let dim_then = glow_at(3.4156866910256e-4, Light::Dim, 20, 20);
-        let dim_now = glow_at(3.4156866910256e-4, Light::Dim, 20, 40);
+        let dim = lamp_log("led1", flat(3.4156866910256e-4, 40));
         assert_eq!(
-            steady_hint("led1", Light::Lit, dim_then, dim_now, 0.002, 0.0001).unwrap(),
+            hint(&dim, Light::Lit).unwrap(),
             "led1 carries 0.34 mA over 20ms and glows dimly. lit needs the average above 2 mA. The average has held at that value for the last 40ms."
         );
-        let first = glow_at(3.5e-4, Light::Dim, 0, 0);
-        let full = glow_at(3.5e-4, Light::Dim, 20, 20);
+        let first = lamp_log("led10k", flat(3.5e-4, 20));
         assert_eq!(
-            steady_hint("led10k", Light::Lit, first, full, 0.002, 0.0001).unwrap(),
+            hint(&first, Light::Lit).unwrap(),
             "led10k carries 0.35 mA over 20ms and glows dimly. lit needs the average above 2 mA. The average has held at that value for the last 20ms."
         );
-        let lit = glow_at(0.0139, Light::Lit, 20, 40);
-        let lit_then = glow_at(0.0139, Light::Lit, 20, 20);
+        let lit = lamp_log("led220", flat(0.0139, 40));
         assert_eq!(
-            steady_hint("led220", Light::Off, lit_then, lit, 0.002, 0.0001).unwrap(),
+            hint(&lit, Light::Off).unwrap(),
             "led220 carries 13.9 mA over 20ms and is lit. off needs the average at or below 100 uA. The average has held at that value for the last 40ms."
         );
         assert_eq!(
-            steady_hint("led220", Light::Dim, lit_then, lit, 0.002, 0.0001).unwrap(),
+            hint(&lit, Light::Dim).unwrap(),
             "led220 carries 13.9 mA over 20ms and is lit. dim needs the average above 100 uA and at or below 2 mA. The average has held at that value for the last 40ms."
         );
-        let off_then = glow_at(3.76e-5, Light::Off, 20, 20);
-        let off = glow_at(3.76e-5, Light::Off, 20, 40);
+        let from_zero = lamp_log("led220", flat(0.0139, 30));
         assert_eq!(
-            steady_hint("led1", Light::Lit, off_then, off, 0.002, 0.0001).unwrap(),
+            hint(&from_zero, Light::Off).unwrap(),
+            "led220 carries 13.9 mA over 20ms and is lit. off needs the average at or below 100 uA. The average has held at that value for the last 30ms."
+        );
+        let off = lamp_log("led1", flat(3.76e-5, 40));
+        assert_eq!(
+            hint(&off, Light::Lit).unwrap(),
             "led1 carries 37.6 uA over 20ms and is off. lit needs the average above 2 mA. The average has held at that value for the last 40ms."
         );
     }
 
     #[test]
     fn a_moving_or_young_led_has_no_steady_hint() {
-        let dim = glow_at(1e-3, Light::Dim, 20, 20);
-        let later = glow_at(1.5e-3, Light::Dim, 20, 40);
-        assert!(steady_hint("led1", Light::Lit, dim, later, 0.002, 0.0001).is_none());
-        let young = glow_at(1e-3, Light::Dim, 5, 5);
-        let young_then = glow_at(1e-3, Light::Dim, 0, 0);
-        assert!(steady_hint("led1", Light::Lit, young_then, young, 0.002, 0.0001).is_none());
+        let moving = lamp_log("led1", series(40, |ms| 1e-3 + 0.5e-3 * (ms as f64) / 40.0));
+        assert!(hint(&moving, Light::Lit).is_none());
+        let young = lamp_log("led1", flat(1e-3, 5));
+        assert!(hint(&young, Light::Lit).is_none());
+    }
+
+    #[test]
+    fn a_twenty_millisecond_pulse_between_equal_windows_is_not_held() {
+        let peak = 3.242585439509286e-3;
+        let log = lamp_log("led1", square(20, 20, peak, 50));
+        let start = at(&log, 30);
+        let end = at(&log, 50);
+        let mid = at(&log, 40);
+        assert_eq!(start.state, Light::Dim);
+        assert_eq!(end.state, Light::Dim);
+        assert!((start.amperes - end.amperes).abs() < 1e-12);
+        assert_eq!(mid.state, Light::Lit);
+        assert!(hint(&log, Light::Lit).is_none());
+    }
+
+    #[test]
+    fn a_pulse_that_crosses_state_between_equal_windows_is_not_held() {
+        let log = lamp_log(
+            "led1",
+            series(50, |ms| if ms == 40 { 2.01e-3 } else { 1.99e-3 }),
+        );
+        let start = at(&log, 30);
+        let end = at(&log, 50);
+        let mid = at(&log, 40);
+        assert_eq!((start.amperes, start.state), (1.99e-3, Light::Dim));
+        assert_eq!((end.amperes, end.state), (1.99e-3, Light::Dim));
+        assert_eq!(mid.state, Light::Lit);
+        let scale = mid.amperes.abs().max(end.amperes.abs());
+        assert!((mid.amperes - end.amperes).abs() <= scale * 0.02);
+        assert!(hint(&log, Light::Lit).is_none());
+    }
+
+    #[test]
+    fn a_ten_millisecond_square_wave_is_held_once_every_window_matches() {
+        let peak = 3.242585439509286e-3;
+        let rising = lamp_log("led1", square(10, 10, peak, 30));
+        assert!(hint(&rising, Light::Lit).is_none());
+        let held = "led1 carries 1.62 mA over 20ms and glows dimly. lit needs the average above 2 mA. The average has held at that value for the last 40ms.";
+        for until in [40, 50, 60] {
+            let steady = lamp_log("led1", square(10, 10, peak, until));
+            assert_eq!(hint(&steady, Light::Lit).unwrap(), held, "until {until} ms");
+        }
+    }
+
+    #[test]
+    fn samples_only_at_the_window_ends_are_not_a_held_span() {
+        let log = lamp_log(
+            "led1",
+            [span(0, 1e-3), span(20, 1e-3), span(40, 1e-3)]
+                .into_iter()
+                .collect(),
+        );
+        assert_eq!(at(&log, 20).amperes, at(&log, 40).amperes);
+        assert!(hint(&log, Light::Lit).is_none());
     }
 }

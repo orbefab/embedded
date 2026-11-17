@@ -8,7 +8,7 @@ use orbe_model::Time;
 use orbe_engine::{EdgeCursor, Status};
 
 use super::bound::Bound;
-use super::light::{self, LIGHT_HOLD};
+use super::light::LIGHT_HOLD;
 use super::serial::Arrived;
 use super::{Key, Open, Outcome, fail, failed, key, level, t};
 use crate::command::Step;
@@ -295,13 +295,7 @@ impl Open {
             };
             let probe = self.engine.probe();
             let end = self.light.glow(*index, &probe);
-            let earlier = probe
-                .at()
-                .as_ps()
-                .saturating_sub(light::BRIGHTNESS_WINDOW.as_ps());
-            let start = self.light.glow_at(*index, earlier)?;
-            let lamp = &self.light.lamps()[*index];
-            light::steady_hint(&lamp.path, *want, start, end, lamp.lit, lamp.dim)
+            self.light.steady_hint(*index, *want, end)
         });
         let data = Data::Stepped(Stepped {
             from_ps: listed_from,
