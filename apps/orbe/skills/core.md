@@ -6,15 +6,20 @@ This text comes from the `orbe` you have installed, so it matches it. `orbe <com
 
 ## The loop
 
-1. Make a project folder and write `scene.jsonc` in it.
-2. Build the firmware and name the built file in the scene. For an Arduino board, run `orbe skills get arduino` first.
-3. Run `orbe check scene.jsonc`. It prints every error with its file, line, column and a hint. A missing part is `part_missing`, and its hint is the `orbe add` command to run. Run it as printed, then check again.
-4. Run `orbe lint scene.jsonc`. It runs `orbe check` first, then warns of what checks but is likely wrong or unclear, such as an LED with no series resistor. Read each warning. Do what its hint says, or leave it when the scene means it. Run `orbe lint` again after every edit to the scene.
-5. Run `orbe open` in the project folder. It opens `scene.jsonc` there, or the scene you name, as `orbe open path/to/scene.jsonc`. It checks the scene, starts a session at t = 0, paused, and lists the parts.
-6. Drive it with `orbe step`, `orbe press`, `orbe release`, `orbe set`, `orbe get`, `orbe expect` and `orbe snapshot`.
-7. To fix something, edit the scene or the firmware, rebuild, run `orbe lint`, and run `orbe open` again. It restarts the session at t = 0.
-8. Run `orbe close` when the live work is done. A `no_session` error from it means nothing was open.
-9. Write what worked as `tests/<name>.test` and run `orbe test`. It leaves no session to close.
+1. When a Block is close to the circuit, run `orbe add <block>` in an empty folder. It writes a scene, firmware and a test that already work. Then run `orbe check scene.jsonc` and `orbe test`. Otherwise start at the next step.
+   - `nano-button-led`: a button on D2 lights a red LED on D13 of an Arduino Nano, and releasing it turns the LED off.
+   - `uno-button-led`: a button on D2 lights a red LED on D13 of an Arduino Uno, and the board's own L LED with it.
+   - `nano-led-fade`: an LED on D9 of an Arduino Nano fades up and down by PWM.
+   - `nano-light-comparator`: an LDR and a trimmer set a threshold. An LM358 lights a red LED in the dark, and a Nano on D2 prints dark or light.
+2. Make a project folder and write `scene.jsonc` in it.
+3. Build the firmware and name the built file in the scene. For an Arduino board, run `orbe skills get arduino` first.
+4. Run `orbe check scene.jsonc`. It prints every error with its file, line, column and a hint. A missing part is `part_missing`, and its hint is the `orbe add` command to run. Run it as printed, then check again.
+5. Run `orbe lint scene.jsonc`. It runs `orbe check` first, then warns of what checks but is likely wrong or unclear, such as an LED with no series resistor. Read each warning. Do what its hint says, or leave it when the scene means it. Run `orbe lint` again after every edit to the scene.
+6. Run `orbe open` in the project folder. It opens `scene.jsonc` there, or the scene you name, as `orbe open path/to/scene.jsonc`. It checks the scene, starts a session at t = 0, paused, and lists the parts.
+7. Drive it with `orbe step`, `orbe press`, `orbe release`, `orbe set`, `orbe get`, `orbe expect` and `orbe snapshot`.
+8. To fix something, edit the scene or the firmware, rebuild, run `orbe lint`, and run `orbe open` again. It restarts the session at t = 0.
+9. Run `orbe close` when the live work is done. A `no_session` error from it means nothing was open.
+10. Write what worked as `tests/<name>.test` and run `orbe test`. It leaves no session to close.
 
 ## Worked example
 
