@@ -1,0 +1,9 @@
+{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "listed": { "type": "./parts/listed.jsonc" },
+    "empty": { "type": "./parts/empty.jsonc" },
+  },
+  "ground": "nano.GND",
+}

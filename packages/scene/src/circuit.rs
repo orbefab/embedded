@@ -1421,13 +1421,15 @@ impl<'p> Circuit<'p> {
             return None;
         }
         let view = self.view(Some(&text));
+        let mut refs = self.map(nets);
+        refs.quiet_floating = self.quiet_floating(nets);
         Some(Netlist {
             json: text,
             parts: parts.len() - left_out.len(),
             nets: names,
             ground: ground_name,
             modified: self.project.modified.clone(),
-            refs: self.map(nets),
+            refs,
             view,
         })
     }
