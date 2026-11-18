@@ -63,6 +63,7 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
             high,
             low,
             pull_up: Some(mcu.pull_up_resistance.si.get()),
+            pull_down: None,
             leakage: Some(mcu.leakage_resistance.si.get()),
         })
         .collect();

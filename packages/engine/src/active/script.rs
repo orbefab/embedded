@@ -114,6 +114,7 @@ pub(crate) fn chip(
             high: stage,
             low: stage,
             pull_up: None,
+            pull_down: None,
             leakage: None,
         }],
         watches: vec![Watch::comparator(Signal {
