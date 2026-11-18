@@ -19,6 +19,11 @@
 //! Running it must not put a part at an older version, and must not print that same
 //! command again. A check that prints a command already run is a loop. The project then
 //! checks, or it reports only `part_newer` for a lock-matching copy this binary does not carry.
+//!
+//! A part file that cannot be read prints `chmod u+r` instead of an `orbe add`. That command
+//! is run with `sh` and `bash`, from the parent of a project named `it's $HOME` and from
+//! inside it. `orbe add --relock` on that file prints the read error and the same chmod.
+//! Mode 000 is still readable for root, so those cases are skipped then.
 
 mod common;
 
@@ -58,8 +63,16 @@ const STATES: [State; 4] = [State::Older, State::Newer, State::Edited, State::Ot
 
 const COMBINATIONS: usize = 229;
 
+/// The chmod test changes the process directory. The matrix reads that directory for
+/// hint paths, so the two tests do not run at the same time.
+fn one_directory() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
 #[test]
 fn printed_add_hints_leave_a_check_that_is_clean_or_only_newer() {
+    let _directory = one_directory();
     let split = shell_split("orbe add -C '/tmp/my proj' led-5mm --overwrite").unwrap();
     assert_eq!(
         split,
@@ -587,6 +600,14 @@ fn execute(
             }
             continue;
         }
+        if words.first().map(String::as_str) == Some("chmod") {
+            for shell in ["sh", "bash"] {
+                if let Err(error) = run_shell(shell, outside, piece) {
+                    problems.push(format!("`{piece}`: {error}"));
+                }
+            }
+            continue;
+        }
         if words.len() < 2 || words[0] != "orbe" || words[1] != "add" {
             problems.push(format!("not an add command `{piece}`"));
             continue;
@@ -749,7 +770,8 @@ fn commands_in(text: &str) -> Vec<String> {
         };
         let span = rest[..end].to_string();
         rest = &rest[end + 1..];
-        if span.contains("orbe add") && !commands.contains(&span) {
+        let command = span.contains("orbe add") || span.starts_with("chmod ");
+        if command && !commands.contains(&span) {
             commands.push(span);
         }
     }
@@ -975,13 +997,141 @@ fn spoil_lock(project: &Path) {
 }
 
 fn placed() -> (tempfile::TempDir, PathBuf, PathBuf) {
+    placed_named("my proj")
+}
+
+fn placed_named(name: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
     let scratch = tempfile::tempdir().unwrap();
     let outside = scratch.path().join("outside");
     fs::create_dir(&outside).unwrap();
-    let project = outside.join("my proj");
+    let project = outside.join(name);
     let built = common::project("nano-button");
     fs::rename(built.path(), &project).unwrap();
     (scratch, outside, project)
+}
+
+/// A project folder whose name holds a space, a quote and `$`. The printed chmod is run
+/// from the parent and from inside the project. Each shell starts from mode 000.
+#[test]
+fn an_unreadable_part_file_chmod_works_where_orbe_ran() {
+    if common::mode_000_reads() {
+        return;
+    }
+    let _directory = one_directory();
+    let (_scratch, outside, project) = placed_named("it's $HOME");
+    let file = project.join("parts/led-5mm/part.jsonc");
+    let restore = cwd_guard();
+    std::env::set_current_dir(&outside).unwrap();
+    hide(&file);
+    let parent_chmod = chmod_from_check(Path::new("it's $HOME/scene.jsonc"));
+    assert_eq!(
+        parent_chmod,
+        "chmod u+r 'it'\\''s $HOME/parts/led-5mm/part.jsonc'"
+    );
+    let relock = relock_text(Some(Path::new("it's $HOME")));
+    assert!(
+        relock.contains("cannot read parts/led-5mm/part.jsonc"),
+        "{relock}"
+    );
+    assert!(relock.contains("Permission denied"), "{relock}");
+    assert!(relock.contains(&format!("`{parent_chmod}`")), "{relock}");
+    assert!(!relock.contains("has no version"), "{relock}");
+    assert_eq!(mode_bits(&file), 0);
+    for shell in ["sh", "bash"] {
+        hide(&file);
+        run_shell(shell, &outside, &parent_chmod).unwrap();
+        assert!(fs::read(&file).is_ok(), "{shell} left the file unreadable");
+    }
+    read(&Files::disk(), Path::new("it's $HOME/scene.jsonc")).unwrap();
+
+    std::env::set_current_dir(&project).unwrap();
+    hide(&file);
+    let inside_chmod = chmod_from_check(Path::new("scene.jsonc"));
+    assert_eq!(inside_chmod, "chmod u+r parts/led-5mm/part.jsonc");
+    let relock = relock_text(None);
+    assert!(
+        relock.contains("cannot read parts/led-5mm/part.jsonc"),
+        "{relock}"
+    );
+    assert!(relock.contains(&format!("`{inside_chmod}`")), "{relock}");
+    assert!(!relock.contains("has no version"), "{relock}");
+    for shell in ["sh", "bash"] {
+        hide(&file);
+        run_shell(shell, &project, &inside_chmod).unwrap();
+        assert!(fs::read(&file).is_ok(), "{shell} left the file unreadable");
+    }
+    read(&Files::disk(), Path::new("scene.jsonc")).unwrap();
+    drop(restore);
+}
+
+fn chmod_from_check(scene: &Path) -> String {
+    let diagnostics = match read(&Files::disk(), scene) {
+        Ok(_) => panic!("the part file is mode 000"),
+        Err(diagnostics) => diagnostics,
+    };
+    let text = diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let commands = commands_in(&text);
+    assert_eq!(commands.len(), 1, "{text}");
+    commands[0].clone()
+}
+
+fn relock_text(dir: Option<&Path>) -> String {
+    let reply = add_parts(
+        dir,
+        &Request {
+            ids: Vec::new(),
+            overwrite: false,
+            diff: false,
+            relock: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(reply.code(), 1, "{}", reply.text());
+    reply.text()
+}
+
+fn hide(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o000)).unwrap();
+}
+
+fn mode_bits(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+struct CwdGuard(PathBuf);
+
+fn cwd_guard() -> CwdGuard {
+    CwdGuard(std::env::current_dir().unwrap())
+}
+
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.0);
+    }
+}
+
+fn run_shell(shell: &str, cwd: &Path, command: &str) -> Result<(), String> {
+    let output = std::process::Command::new(shell)
+        .arg("-c")
+        .arg(command)
+        .current_dir(cwd)
+        .output()
+        .map_err(|error| format!("{shell}: {error}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{shell} exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ))
+    }
 }
 
 fn empty_project() -> (tempfile::TempDir, PathBuf, PathBuf) {

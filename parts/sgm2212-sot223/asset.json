@@ -1,0 +1,44 @@
+{
+  "part": "sgm2212-sot223",
+  "source": {
+    "script": "model.py",
+    "sha256": "1391800c67ff680846e4be1f74e4b0c13953390ec879e169f63508df3afcc758",
+    "bytes": 2220
+  },
+  "files": {
+    "sgm2212-sot223.glb": {
+      "sha256": "f4cc23c6888e0303f4c6ecab09ae7439bb1a3d71caa5580e82d3dce4a9e69f95",
+      "bytes": 5104
+    },
+    "sgm2212-sot223.anchors.json": {
+      "sha256": "4a397241418e44fc274872177c58fb48fa84280108301726643ea7fc19c3c551",
+      "bytes": 521
+    }
+  },
+  "box": {
+    "min": [-4.5, -3.25, 0],
+    "max": [2.5, 3.25, 1.66]
+  },
+  "kept_nodes": [],
+  "draw_calls": 2,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 4,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0.06
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 5,
+      "primitives_out": 2
+    }
+  }
+}

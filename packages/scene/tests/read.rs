@@ -995,8 +995,12 @@ fn unreadable(path: &std::path::Path) {
 
 #[test]
 fn an_unreadable_part_file_is_one_io_error() {
+    if common::mode_000_reads() {
+        return;
+    }
     let project = project("nano-button");
-    unreadable(&project.path().join("parts/led-5mm/part.jsonc"));
+    let file = project.path().join("parts/led-5mm/part.jsonc");
+    unreadable(&file);
     let found = scene_errors(project.path());
     assert_eq!(found.len(), 1, "{found:#?}");
     assert_eq!(found[0].code, orbe_scene::Code::Io);
@@ -1008,15 +1012,14 @@ fn an_unreadable_part_file_is_one_io_error() {
         "{}",
         found[0].message
     );
-    assert!(
-        found[0].hint.contains("chmod u+r parts/led-5mm/part.jsonc"),
-        "{}",
-        found[0].hint
-    );
+    assert_chmod_names(&found[0].hint, &file);
 }
 
 #[test]
 fn an_unreadable_file_in_a_copy_is_one_io_error_that_names_it() {
+    if common::mode_000_reads() {
+        return;
+    }
     let project = project("nano-button");
     let extra = project.path().join("parts/led-5mm/datasheet.txt");
     fs::write(&extra, "kept").unwrap();
@@ -1031,14 +1034,25 @@ fn an_unreadable_file_in_a_copy_is_one_io_error_that_names_it() {
         "{}",
         found[0].message
     );
-    assert!(
-        found[0]
-            .hint
-            .contains("chmod u+r parts/led-5mm/datasheet.txt"),
-        "{}",
-        found[0].hint
-    );
+    assert_chmod_names(&found[0].hint, &extra);
     assert!(!found[0].hint.contains("link"), "{}", found[0].hint);
+}
+
+/// The chmod in `hint`, run from the current directory, names `file`.
+fn assert_chmod_names(hint: &str, file: &std::path::Path) {
+    let command = hint
+        .split('`')
+        .nth(1)
+        .unwrap_or_else(|| panic!("no command in {hint}"));
+    let path = command
+        .strip_prefix("chmod u+r ")
+        .unwrap_or_else(|| panic!("not a chmod: {hint}"));
+    let resolved = std::env::current_dir().unwrap().join(path);
+    assert_eq!(
+        resolved.canonicalize().unwrap(),
+        file.canonicalize().unwrap(),
+        "{hint}"
+    );
 }
 
 fn pin_net(json: &str, part: &str, pin: &str) -> String {

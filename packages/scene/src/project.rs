@@ -125,6 +125,9 @@ struct Loader<'a> {
     used: BTreeSet<String>,
     /// `orbe add`, run from where the scene was named, as hints print it.
     add: String,
+    /// The project folder as the user named it, when that is not the current folder.
+    /// Printed commands are relative to where `orbe` ran, and `chmod` has no `-C`.
+    hint_at: Option<PathBuf>,
 }
 
 /// Reads the scene and everything it uses. When the scene itself does not read, the files
@@ -134,7 +137,8 @@ pub(crate) fn load<'f>(
     scene_path: &Path,
     out: &mut Findings,
 ) -> Result<Project<'f>, Sources> {
-    let add = add_command(hint_dir(files, scene_path).as_deref());
+    let hint_at = hint_dir(files, scene_path);
+    let add = add_command(hint_at.as_deref());
     let scene_path = files
         .real(scene_path)
         .unwrap_or_else(|_| scene_path.to_path_buf());
@@ -154,6 +158,7 @@ pub(crate) fn load<'f>(
         missing: Vec::new(),
         used: BTreeSet::new(),
         add,
+        hint_at,
     };
     let scene = loader.read(&scene_path).and_then(|file| {
         let tree = syntax::parse(&loader.sources, file, loader.out)?;
@@ -200,7 +205,7 @@ impl Loader<'_> {
                 let file = self.sources.add(path, String::new());
                 let shown = display(self.sources.root(), path);
                 let hint = if error.kind() == io::ErrorKind::PermissionDenied {
-                    format!("make it readable, such as `chmod u+r {shown}`")
+                    chmod_hint(self.hint_at.as_deref(), Path::new(&shown))
                 } else {
                     "check that the path exists and is readable".into()
                 };
@@ -832,7 +837,7 @@ impl Loader<'_> {
             }
             None if error.kind() == io::ErrorKind::PermissionDenied => {
                 let shown = display(&root, path);
-                let hint = format!("make it readable, such as `chmod u+r {shown}`");
+                let hint = chmod_hint(self.hint_at.as_deref(), Path::new(&shown));
                 (shown, hint)
             }
             None => (
@@ -1146,6 +1151,43 @@ fn hint_dir(files: &Files, scene: &Path) -> Option<PathBuf> {
     };
     let found = real.as_deref().unwrap_or(scene).file_name() == Some("scene.jsonc".as_ref());
     (!found || dir != Path::new(".")).then_some(dir)
+}
+
+/// The `chmod` hint for `rel`, a path from the project root. `dir` is the project folder as
+/// the user named it from where `orbe` ran, or `None` when that folder is the current one.
+/// The command has to work from that directory: `chmod` has no `-C`.
+pub(crate) fn chmod_hint(dir: Option<&Path>, rel: &Path) -> String {
+    let path = chmod_path(dir, rel);
+    format!(
+        "make it readable, such as `chmod u+r {}`",
+        quote_path(&path)
+    )
+}
+
+/// `rel` joined onto the project folder, from where `orbe` ran. A path that starts with `-`
+/// gets `./` first, so `chmod` does not read it as an option.
+fn chmod_path(dir: Option<&Path>, rel: &Path) -> PathBuf {
+    let dir = dir.filter(|dir| !dir.as_os_str().is_empty() && *dir != Path::new("."));
+    let path = match dir {
+        Some(dir) => dir.join(rel),
+        None => rel.to_path_buf(),
+    };
+    if path.to_string_lossy().starts_with('-') {
+        Path::new(".").join(path)
+    } else {
+        path
+    }
+}
+
+fn quote_path(path: &Path) -> String {
+    #[cfg(unix)]
+    {
+        shell_path(path.as_os_str())
+    }
+    #[cfg(not(unix))]
+    {
+        shell_word(&path.to_string_lossy())
+    }
 }
 
 /// `dir`, an absolute path, relative to the current folder.

@@ -33,7 +33,7 @@ A command does what it names and nothing in the background. Where `orbe` could g
 - A param is a number, a choice or a file. A choice picks a named set of values, such as an LED's colour, and may tint the 3D model. A param never changes pins or shape. An LED's colour is required.
 - A part with children passes a param to a child with `{ "param": "<name>" }` on the child, as a prop passes through a component. The whole value passes, with no arithmetic for now.
 - Catalog parts name the real object in `real` (maker, part number, datasheet), and every model value cites its source.
-- A part's files, such as the ESP32-S3 ROM, live in its folder. `files` maps a name to a path.
+- A part's files, such as the ESP32-S3 ROM, live in its folder. A file param's `default` names one, as a path relative to the part file.
 - A part states its readings, such as an LED's `lit` above 2 mA and `dim` above 100 uA. `brightness` is the average forward current over the last 20 ms, the time since t = 0 when the session is younger. 2 mA is the lowest current of the forward fit. 100 uA is a hundredth of the 10 mA at which the datasheet rates luminous intensity, and ten times the 10 uA reverse-current maximum.
 - `joints` say what moves, such as a button's plunger, and `controls.press` names the joint it drives. Joints between two parts come later.
 - Versions are three numbers. A patch or minor version can't change a passing test.
@@ -83,7 +83,7 @@ A command does what it names and nothing in the background. Where `orbe` could g
 - Nested names flatten for the engine by joining with `__`, so `@nano.D13` is the net `nano__D13`. Names may not contain `__`.
 - A viewer edit goes to the file that holds what it changes. If that file is used more than once, the viewer asks first. Sealed parts refuse edits. A part with no position is placed by the viewer for drawing only, and nothing is written until a person drags it.
 - Two hashes: one over every project file read, which guards writes, and one over the netlist, which says whether the simulation is current.
-- The ESP32-S3 takes one file param per flash image, `partitions` and `app`. Its ROM comes from the chip part's files.
+- The ESP32-S3 takes one file param per flash image, `partitions` and `app`. Its ROM is a file in the chip part's folder, named by a file param's `default`.
 
 ## Checking (Nov 4 2026)
 Type checking, linting and runtime diagnostics are separate.

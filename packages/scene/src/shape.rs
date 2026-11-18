@@ -243,7 +243,6 @@ pub(crate) const PART: &[(&str, Shape)] = &[
     ("pins", Shape::Any),
     ("model", Shape::Any),
     ("params", Shape::Map(&PARAM)),
-    ("files", Shape::Map(&Shape::Str)),
     ("parts", Shape::Any),
     ("wires", Shape::Any),
     ("layout", Shape::Any),

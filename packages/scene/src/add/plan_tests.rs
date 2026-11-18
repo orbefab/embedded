@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use super::*;
-use crate::add::snapshot::Folder;
+use crate::add::snapshot::{Folder, Unreadable};
 use crate::catalog;
 
 const ADD: &str = "orbe add";
@@ -51,6 +52,7 @@ fn empty() -> Snapshot {
         lock: BTreeMap::new(),
         lock_text: None,
         lock_error: None,
+        root: PathBuf::from("."),
     }
 }
 
@@ -719,6 +721,48 @@ fn relock_refuses_a_sealed_edit_and_records_a_composite_edit() {
     assert!(text.contains(&hash), "{text}");
     assert!(text.contains(&sealed.hash), "{text}");
     assert!(text.starts_with("board "), "{text}");
+}
+
+#[test]
+fn relock_of_an_unreadable_part_file_names_the_read_and_a_chmod() {
+    let led = leaf("led-5mm", "0.1.0", "lamp");
+    let catalog = catalog_of(vec![led]);
+    let mut folder = Folder::from_files(BTreeMap::new());
+    folder.unreadable.push(Unreadable {
+        rel: "part.jsonc".into(),
+        error: "Permission denied (os error 13)".into(),
+        permission: true,
+    });
+    let mut snapshot = empty();
+    snapshot.root = PathBuf::from("it's $HOME");
+    snapshot
+        .targets
+        .insert("led-5mm".into(), Target::Folder(folder));
+    let refused = refusal(plan(&catalog, &snapshot, &relock(), ADD));
+    assert_eq!(refused.code.as_str(), "unreadable");
+    assert_eq!(
+        refused.message,
+        "cannot read parts/led-5mm/part.jsonc: Permission denied (os error 13)"
+    );
+    assert_eq!(
+        refused.hint,
+        "make it readable, such as `chmod u+r 'it'\\''s $HOME/parts/led-5mm/part.jsonc'`"
+    );
+    assert!(!refused.message.contains("has no version"));
+}
+
+#[test]
+fn relock_of_a_folder_with_no_part_file_still_has_no_version() {
+    let led = leaf("led", "0.1.0", "lamp");
+    let catalog = catalog_of(vec![led]);
+    let mut snapshot = empty();
+    snapshot.targets.insert(
+        "led".into(),
+        Target::Folder(Folder::from_files(BTreeMap::new())),
+    );
+    let refused = refusal(plan(&catalog, &snapshot, &relock(), ADD));
+    assert_eq!(refused.code.as_str(), "unknown_version");
+    assert_eq!(refused.message, "`led` has no version");
 }
 
 #[test]
