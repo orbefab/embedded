@@ -15,7 +15,8 @@ const CAP: &str = r#"{
   "title": "Cap",
   "license": "MIT",
   "pins": { "a": [1], "b": [2] },
-  "model": { "kind": "resistor" },
+  "params": { "resistance": { "unit": "ohm", "default": "220", "min_exclusive": 0, "sets": "/resistance" } },
+  "model": { "kind": "resistor", "ratings": { "power": null } }
 }
 "#;
 
