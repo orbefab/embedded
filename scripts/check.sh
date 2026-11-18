@@ -2,8 +2,9 @@
 # Checks the repo. `lint` is what CI runs: shellcheck on every tracked shell script, ruff on every
 # tracked Python file, `scripts/core-deps.sh`, rustfmt, clippy, and clippy on orbe-model,
 # orbe-scene, orbe-session and orbe-wasm for wasm32.
-# `fast` runs `lint`, then the Rust tests through cargo-nextest, except the `orbe-microchip` tests
-# and the engine tests marked `full tier`. `orbe-avr` is in that workspace run.
+# `fast` runs `lint`, then the Rust tests through cargo-nextest, except the engine tests marked
+# `full tier`. `orbe-avr` and `orbe-microchip` are in that workspace run. `full` runs the
+# microchip tests once, in their `port-skip-check` build, instead of in the workspace run.
 # `full` runs `fast`, then the chip models' skip checks, the engine's Python checks, `orbe-run`
 # for WASI against native, the wasm package check, and the browser speed check on the package that
 # check built. `lint` needs uv and shellcheck, and `fast` and `full` need cargo-nextest too.
@@ -74,7 +75,7 @@ fast() {
   need_nextest
   lint
   blobs=$(packages/engine/scripts/blobs.sh)
-  rust_tests --workspace --exclude orbe-microchip
+  rust_tests --workspace "$@"
 }
 
 run_check() {
@@ -89,7 +90,8 @@ run_check() {
 }
 
 full() {
-  fast
+  # The microchip tests run once, with the port skip check built in.
+  fast --exclude orbe-microchip
   rust_tests -p orbe-microchip --features port-skip-check
   rust_tests -p orbe-engine --test circuit --run-ignored only
   cargo clippy -p orbe-xtensa -p orbe-espressif -p orbe-engine --all-targets --locked \
