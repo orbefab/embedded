@@ -74,6 +74,8 @@ pub(super) struct Snapshot {
     pub(super) lock: BTreeMap<String, LockFields>,
     pub(super) lock_text: Option<String>,
     pub(super) lock_error: Option<String>,
+    /// `parts.lock` exists and this process cannot read it. The string is the I/O error.
+    pub(super) lock_denied: Option<String>,
     /// The project folder as the user named it, from the directory `orbe` ran in.
     pub(super) root: PathBuf,
 }
@@ -102,12 +104,13 @@ pub(super) fn load(root: &Path, ids: &BTreeSet<String>) -> Result<Snapshot, RunE
     for id in ids {
         targets.insert(id.clone(), target(&parts.join(id)));
     }
-    let (lock_text, lock, lock_error) = read_lock(root)?;
+    let (lock_text, lock, lock_error, lock_denied) = read_lock(root)?;
     Ok(Snapshot {
         targets,
         lock,
         lock_text,
         lock_error,
+        lock_denied,
         root: root.to_path_buf(),
     })
 }
@@ -196,17 +199,28 @@ fn rel(root: &Path, path: &Path) -> String {
     if shown.is_empty() { ".".into() } else { shown }
 }
 
-type Lock = (Option<String>, BTreeMap<String, LockFields>, Option<String>);
+type Lock = (
+    Option<String>,
+    BTreeMap<String, LockFields>,
+    Option<String>,
+    Option<String>,
+);
 
 fn read_lock(root: &Path) -> Result<Lock, RunError> {
     let path = root.join("parts.lock");
     if !path.exists() {
-        return Ok((None, BTreeMap::new(), None));
+        return Ok((None, BTreeMap::new(), None, None));
     }
     if !path.is_file() {
         return Err(io_at(&path, io::Error::other("`parts.lock` is not a file")));
     }
-    let text = fs::read_to_string(&path).map_err(|error| io_at(&path, error))?;
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            return Ok((None, BTreeMap::new(), None, Some(error.to_string())));
+        }
+        Err(error) => return Err(io_at(&path, error)),
+    };
     let mut lines = BTreeMap::new();
     let mut error = None;
     for line in text.lines() {
@@ -233,7 +247,7 @@ fn read_lock(root: &Path) -> Result<Lock, RunError> {
             }
         }
     }
-    Ok((Some(text), lines, error))
+    Ok((Some(text), lines, error, None))
 }
 
 fn version_of(bytes: &[u8]) -> Option<Version> {

@@ -3,8 +3,12 @@ import { head } from "../head";
 import { NotFoundPage } from "../pages/home";
 import { BASE } from "../paths";
 
-// The page Workers static assets serve, as 404.html, for a path that holds no file.
+// The page Workers static assets serve, as 404.html, for a path that holds no file. The
+// orbe-not-found marker tells the client this document is that render. See router.tsx.
 export const Route = createFileRoute("/404")({
-  head: () => head({ title: "Not here", description: "Nothing is at this address.", path: `${BASE}404.html` }),
+  head: () => {
+    const page = head({ title: "Not here", description: "Nothing is at this address.", path: `${BASE}404.html` });
+    return { ...page, meta: [...page.meta, { name: "orbe-not-found", content: "1" }] };
+  },
   component: NotFoundPage,
 });

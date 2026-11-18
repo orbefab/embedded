@@ -76,6 +76,8 @@ pub(crate) struct Core {
     pending: Vec<(Time, Drive)>,
     sampling: Option<Sample>,
     drive: [Drive; 1],
+    /// Whether `out` pulls down. A script that does not reports none.
+    pulled: [bool; 1],
     /// The part name a sender or a console sorts by.
     name: Option<&'static str>,
     /// The nets its records name.
@@ -114,6 +116,7 @@ pub(crate) fn chip(
             high: stage,
             low: stage,
             pull_up: None,
+            pull_down: None,
             leakage: None,
         }],
         watches: vec![Watch::comparator(Signal {
@@ -177,6 +180,7 @@ impl Core {
             sampling: None,
             eager: false,
             drive: [Drive::Off],
+            pulled: [false; 1],
             name: None,
             bus: None,
             out,
@@ -315,6 +319,11 @@ impl Core {
         &self.drive
     }
 
+    /// `out`'s pull-down, or empty when it does not pull down.
+    pub(crate) fn pulled_down(&self) -> &[bool] {
+        if self.pulled[0] { &self.pulled } else { &[] }
+    }
+
     pub(crate) fn sample(&mut self, at: Time, volts: &[f64]) {
         assert_eq!(at, self.now, "a sample arrives where the core is");
         let Sample { after, threshold } = self.sampling.take().expect("a stop named the sample");
@@ -364,6 +373,15 @@ fn spi(bus: SpiTarget, tag: u8) -> RecordKind {
 
 pub(crate) fn eager(mut chip: Chip) -> Chip {
     script(&mut chip).eager = true;
+    chip
+}
+
+/// Gives `out` its pull resistors, in ohm. A pull-down makes the core report one from the start.
+pub(crate) fn pulls(mut chip: Chip, up: Option<f64>, down: Option<f64>) -> Chip {
+    let output = &mut chip.outputs[0];
+    output.pull_up = up;
+    output.pull_down = down;
+    script(&mut chip).pulled[0] = down.is_some();
     chip
 }
 

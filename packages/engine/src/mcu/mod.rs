@@ -228,6 +228,11 @@ impl Mcu {
     }
 
     #[inline]
+    pub(crate) fn pulled_down(&self) -> &[bool] {
+        each!(self, host => host.mcu.pulled_down())
+    }
+
+    #[inline]
     pub(crate) fn held(&self) -> bool {
         each!(self, host => host.mcu.held())
     }

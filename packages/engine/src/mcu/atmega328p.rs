@@ -101,6 +101,7 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
             } else {
                 mcu.pull_up_resistance.si.get()
             }),
+            pull_down: None,
             leakage: Some(mcu.leakage_resistance.si.get()),
         })
         .collect();

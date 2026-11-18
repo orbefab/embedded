@@ -846,6 +846,43 @@ fn an_spi2_transfer_with_a_setting_the_model_does_not_run_ends_the_run() {
     );
 }
 
+/// The blink part names no `pull_down_resistance`, and GPIO21 has a net. A store of `FUN_WPD`
+/// to its IO_MUX word ends the run and writes nothing.
+#[test]
+fn a_pull_down_on_a_part_that_names_none_ends_the_run() {
+    // l32r a2 <- GPIO21's IO_MUX; l32r a3 <- FUN_WPD; s32i a3, a2, 0.
+    let doc = run_program(
+        "pull-down",
+        &[0x6000_9058, 1 << 7],
+        &[
+            [0x21, 0xfe, 0xff, 0x31, 0xfe, 0xff, 0x32, 0x62, 0x00].as_slice(),
+            &IDLE,
+        ]
+        .concat(),
+        10_000_000_000,
+    );
+    assert_eq!(doc["status"], "failed", "{doc}");
+    let found = diagnostics(&doc);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["code"], "chip.unsupported_setting");
+    assert_eq!(found[0]["severity"], "error");
+    assert_eq!(found[0]["refs"], serde_json::json!(["#u1"]));
+    assert_eq!(found[0]["t_ps"], 50_000);
+    assert_eq!(
+        found[0]["data"],
+        serde_json::json!({
+            "peripheral": "IO_MUX",
+            "pc": IRAM + 8 + 6,
+            "setting": "pull_down",
+            "symbol": "main+0x6",
+        })
+    );
+    assert_eq!(
+        found[0]["message"],
+        "#u1 set IO_MUX pull_down at 0x4038000e in main+0x6, which the model does not run, at 50000 ps"
+    );
+}
+
 #[test]
 fn a_jump_out_of_the_instruction_window_ends_the_run() {
     // movi a2, 0; jx a2.

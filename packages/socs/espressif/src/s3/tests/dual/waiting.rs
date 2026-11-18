@@ -295,7 +295,7 @@ fn two_waiting_cores_reach_each_limit_and_take_a_pad_input() {
     let mut ticks = Vec::new();
     for step in [100, 1, 7, 37] {
         let mut chip = chip(&pro, &boot_rom(), &[&app, &handler]);
-        chip.soc.gpio.write_io_mux(0x4 + 4 * 4, 0xa00);
+        chip.soc.gpio.write_io_mux(0x4 + 4 * 4, 0xa00).unwrap();
         arm_alarm(&mut chip, CoreId::Pro, SECOND, 0);
         let alarm = systimer_due(&mut chip);
         let mut limit = 0;
@@ -546,7 +546,7 @@ const FALL_ENABLED: u32 = 2 << 7 | 1 << 13;
 
 /// GPIO4 high with its input on and a falling-edge interrupt.
 fn falling_gpio4(chip: &mut Esp32s3) {
-    chip.soc.gpio.write_io_mux(0x4 + 4 * 4, 0xa00);
+    chip.soc.gpio.write_io_mux(0x4 + 4 * 4, 0xa00).unwrap();
     chip.input(Tick(0), [(4, true)]);
     chip.soc.gpio.write(0x74 + 4 * 4, FALL_ENABLED).unwrap();
 }
@@ -652,7 +652,7 @@ fn a_gpio_interrupt_on_the_app_cpu_runs_its_own_map() {
     for taker in [CoreId::App, CoreId::Pro] {
         let make = || {
             let mut chip = chip(&pro, &boot_rom(), &[&app, &app_handler, &pro_handler]);
-            chip.soc.gpio.write_io_mux(0x4 + 4 * 5, 0xa00);
+            chip.soc.gpio.write_io_mux(0x4 + 4 * 5, 0xa00).unwrap();
             chip.soc.gpio.write(0x74 + 4 * 5, FALL_ENABLED).unwrap();
             let map = match taker {
                 CoreId::Pro => INTERRUPT_CORE0,
