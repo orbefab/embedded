@@ -10,7 +10,7 @@
 # the site serves unchanged, so a Block's README or block.jsonc still says `orbe add`.
 #
 # Needs what scripts/site.sh needs, and a Chromium found as check-viewer-e2e.sh finds it. It
-# installs nothing. check.sh does not run this. `--previous <dir>` builds the registry on
+# installs nothing. scripts/check.sh web runs this. `--previous <dir>` builds the registry on
 # the one the live site serves. With no `--previous`, the build is a first deploy
 # (`scripts/site.sh --first-deploy`). `--renders <dir>` saves screenshots there. The
 # arguments can be in any order. An unknown argument is an error.

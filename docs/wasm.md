@@ -100,7 +100,7 @@ A viewer sends only `press`, `release`, `set`, `play` and `pause`, each parsed b
 
 `worker.mjs` loads each Block with the viewer's registry client, `packages/viewer/src/registry.ts`, which checks every size and hash as [registry.md](registry.md#verify-what-you-fetch) says, and opens it in the package's `worker.js` in a node worker thread, as a page does. nano-button-led and uno-button-led must open with D13, `@led1` and `@btn1` named, play to 100 ms with D13 low and `@led1` dark, light `@led1` past 5 mA with D13 high once `@btn1` is pressed, go dark once it is released, answer `pause`, and refuse `step` as `usage`. The Uno's `@uno.led_l` must light with `@led1`. nano-led-fade must show D9 both high and low while it plays to 1.5 s, and `@led1`'s mean current over 1.2 s to 1.5 s must be over 1 mA and over twice its mean over 20 ms to 300 ms. nano-button-led without `led-5mm` must post `closed` with the `part_missing` refusal. Last, it opens nano-button-led in a worker thread of its own, plays it, ticks 16 ms at a time as fast as the thread runs, and prints the wall time of one simulated second, three times.
 
-The page's headed check, `scripts/check-block.sh`, runs a Block from a registry in Chromium. [viewer.md](viewer.md#run-a-block-in-the-page) describes it.
+The page's headed check, `scripts/check-block.sh`, runs every Block from a registry in Chromium. [viewer.md](viewer.md#run-a-block-in-the-page) describes it. `scripts/check.sh web` runs it.
 
 ## Speed
 

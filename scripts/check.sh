@@ -5,17 +5,22 @@
 # `fast` runs `lint`, then the Rust tests through cargo-nextest, except the engine tests marked
 # `full tier`. `orbe-avr` and `orbe-microchip` are in that workspace run. `full` runs the
 # microchip tests once, in their `port-skip-check` build, instead of in the workspace run.
+# `web` runs the viewer unit tests and the viewer and site checks, each once: `check-viewer.sh`,
+# `check-viewer-e2e.sh`, `check-block.sh`, `check-headed.sh` and `check-site.sh`.
+# `check-assets.sh` stays separate, because it needs a models checkout.
 # `full` runs `fast`, then the chip models' skip checks, the engine's Python checks, `orbe-run`
-# for WASI against native, the wasm package check, and the browser speed check on the package that
-# check built. `lint` needs uv and shellcheck, and `fast` and `full` need cargo-nextest too.
-# `full` also needs ngspice-42, node 24 or later, the repo's Node dependencies, a Chromium as
-# scripts/check-speed.sh finds it, rustup with the wasm32-wasip1 target, and the wasm-bindgen CLI
+# for WASI against native, the wasm package check, the browser speed check on the package that
+# check built, and `web`. The wasm package check and the speed check run once, not again in `web`.
+# `lint` needs uv and shellcheck, and `fast` and `full` need cargo-nextest too.
+# `web` needs Node 24, pnpm, the repo's Node dependencies, a Chromium as
+# scripts/check-viewer-e2e.sh finds it, and what scripts/wasm.sh and scripts/site.sh need.
+# `full` also needs ngspice-42, rustup with the wasm32-wasip1 target, and the wasm-bindgen CLI
 # that scripts/wasm.sh names.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 usage() {
-  echo "usage: scripts/check.sh lint|fast|full" >&2
+  echo "usage: scripts/check.sh lint|fast|full|web" >&2
   exit 2
 }
 
@@ -124,6 +129,15 @@ full() {
     scripts/check-wasm.sh "$wasm"
     scripts/check-speed.sh "$wasm/pkg" "$wasm/registry"
   )
+  web
+}
+
+web() {
+  scripts/check-viewer.sh
+  scripts/check-viewer-e2e.sh
+  scripts/check-block.sh
+  scripts/check-headed.sh
+  scripts/check-site.sh
 }
 
 [[ $# -eq 1 ]] || usage
@@ -131,5 +145,6 @@ case "$1" in
   lint) lint ;;
   fast) fast ;;
   full) full ;;
+  web) web ;;
   *) usage ;;
 esac

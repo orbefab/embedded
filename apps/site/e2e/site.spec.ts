@@ -1,8 +1,8 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import type { BrowserContext, Page } from "@playwright/test";
-import { collectLogs, expect, ledGlow, orbeJson, pointOn, REPO, shot, test, waitGlow, waitState } from "../../../e2e/support";
+import { collectLogs, expect, orbeJson, rendersDir, REPO, repoBlocks, shot, showBlock, test, waitState } from "../../../e2e/support";
 
 const INSTALL = /orbe add|cargo install|github\.com\/orbefab\/embedded|orbefab\.com\/embedded\/install\.sh/;
 const VIEW = { width: 1280, height: 900 };
@@ -431,6 +431,58 @@ test.describe("uno-board", () => {
   });
 });
 
+for (const block of repoBlocks()) {
+  test.describe(`${block.id} on its page`, () => {
+    let context: BrowserContext;
+    let page: Page;
+    let errors: string[] = [];
+
+    test.beforeAll(async ({ browser, host }) => {
+      const renders = rendersDir();
+      const record = renders !== undefined && block.kind === "light" && host.name === "vite preview" ? renders : undefined;
+      if (record !== undefined) mkdirSync(record, { recursive: true });
+      context = await browser.newContext({
+        viewport: VIEW,
+        ...(record !== undefined ? { recordVideo: { dir: record, size: VIEW } } : {}),
+      });
+      page = await context.newPage();
+      errors = collectLogs(page, "errors");
+      await page.goto(`${host.base}/embedded/blocks/${block.id}/`);
+      await page.waitForFunction(
+        (kind) => {
+          const scene = window.orbeViewer?.get().scene;
+          const led = scene?.getObjectByName("@led1")?.getObjectByName("body") !== undefined;
+          const button = kind !== "button" || scene?.getObjectByName("@btn1")?.getObjectByName("stem") !== undefined;
+          return led && button;
+        },
+        block.kind,
+        { timeout: 120_000 },
+      );
+      await waitState(page, "playing");
+    });
+
+    test.afterAll(async () => {
+      const video = page?.video() ?? null;
+      await context?.close();
+      const renders = rendersDir();
+      if (video === null || renders === undefined) return;
+      const dest = join(renders, `${block.id}-slider.webm`);
+      await video.saveAs(dest);
+      const raw = await video.path();
+      if (raw !== dest) rmSync(raw, { force: true });
+    });
+
+    test("opens, plays and shows what it does", async () => {
+      await showBlock(page, block, true, `site-${block.id}-playing`);
+      expect(await page.locator('[data-testid="errors"]').count()).toBe(0);
+    });
+
+    test("the page logged no error", () => {
+      expect(errors, JSON.stringify(errors)).toEqual([]);
+    });
+  });
+}
+
 test.describe("nano-button-led", () => {
   let context: BrowserContext;
   let page: Page;
@@ -438,32 +490,11 @@ test.describe("nano-button-led", () => {
 
   test.beforeAll(async ({ browser, host }) => {
     ({ context, page, errors } = await openTracked(browser, `${host.base}/embedded/blocks/nano-button-led/`));
+    await page.waitForFunction(() => window.orbeViewer?.get().scene.getObjectByName("@btn1") !== undefined, null, { timeout: 120_000 });
   });
 
   test.afterAll(async () => {
     await context?.close();
-  });
-
-  test("the Block's page plays it", async () => {
-    await page.waitForFunction(() => window.orbeViewer?.get().scene.getObjectByName("@btn1") !== undefined, null, { timeout: 30_000 });
-    await waitState(page, "playing");
-    expect(await page.locator('[data-testid="state"]').textContent()).toBe("playing");
-  });
-
-  test("held, the button lights @led1", async () => {
-    await page.locator("canvas").scrollIntoViewIfNeeded();
-    const stem = await pointOn(page, "@btn1", "stem", true);
-    await page.mouse.move(stem.x, stem.y);
-    await page.mouse.down();
-    await waitGlow(page, true);
-    expect(await ledGlow(page)).toBeGreaterThan(0.5);
-    await shot(page, "site-block-pressed-lit");
-  });
-
-  test("released, @led1 goes dark", async () => {
-    await page.mouse.up();
-    await waitGlow(page, false);
-    expect(await ledGlow(page)).toBeLessThan(0.05);
   });
 
   test("the page shows the scene and the firmware source", async () => {
