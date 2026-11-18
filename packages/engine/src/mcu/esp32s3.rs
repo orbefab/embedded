@@ -301,16 +301,21 @@ fn default_efuse() -> s3::EfuseSet {
     s3::EfuseSet::default()
 }
 
-/// The eFuse set a name picks.
+/// The eFuse set a name picks. A section that does not parse is the same `netlist.syntax`
+/// failure as an unknown name, with the parse error as the message, and it does not panic.
 fn efuse<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<s3::EfuseSet, D::Error> {
     let name = String::deserialize(deserializer)?;
-    s3::EfuseSet::named(&name).ok_or_else(|| {
-        let names: Vec<&str> = s3::EfuseSet::names().collect();
-        serde::de::Error::custom(format!(
-            "`{name}` is not an eFuse set; the sets are {}",
-            names.join(", ")
-        ))
-    })
+    match s3::EfuseSet::named(&name) {
+        Ok(Some(set)) => Ok(set),
+        Ok(None) => {
+            let names: Vec<&str> = s3::EfuseSet::names().collect();
+            Err(serde::de::Error::custom(format!(
+                "`{name}` is not an eFuse set; the sets are {}",
+                names.join(", ")
+            )))
+        }
+        Err(error) => Err(serde::de::Error::custom(error.to_string())),
+    }
 }
 
 #[derive(Deserialize)]

@@ -53,7 +53,11 @@ const FIELDS: &[(&str, Pieces)] = &[
     ("FLASH_CAP", &[(1, 123, 3)]),
     ("FLASH_TEMP", &[(1, 126, 2)]),
     ("FLASH_VENDOR", &[(1, 128, 3)]),
-    ("PSRAM_CAP", &[(1, 131, 2), (1, 179, 1)]),
+    // Two fields in the csv, and two lines of `espefuse summary`. The 2-bit piece is
+    // `PSRAM_CAP`; bit 179 is `PSRAM_CAP_3`. Summary's `PSRAM_CAPACITY` is calculated
+    // from them and is not a field.
+    ("PSRAM_CAP", &[(1, 131, 2)]),
+    ("PSRAM_CAP_3", &[(1, 179, 1)]),
     ("PSRAM_TEMP", &[(1, 133, 2)]),
     ("PSRAM_VENDOR", &[(1, 135, 2)]),
     ("K_RTC_LDO", &[(1, 141, 7)]),
@@ -88,6 +92,42 @@ const FIELDS: &[(&str, Pieces)] = &[
 /// The sets, as `efuse.txt` gives them.
 const SETS: &str = include_str!("efuse.txt");
 
+/// Names `espefuse summary` prints that are not fields of the csv. They are an error, not a
+/// skipped line: the calculated number can disagree with the pieces IDF reads.
+const CALCULATED: &[(&str, &str)] = &[
+    (
+        "PSRAM_CAPACITY",
+        "PSRAM_CAP and PSRAM_CAP_3 (PSRAM_CAP_3 << 2 | PSRAM_CAP)",
+    ),
+    (
+        "WAFER_VERSION_MINOR",
+        "WAFER_VERSION_MINOR_LO and WAFER_VERSION_MINOR_HI (HI << 3 | LO)",
+    ),
+];
+
+/// Why a section of `efuse.txt` could not be read. A netlist that names the set reports this
+/// as `netlist.syntax` and does not panic.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EfuseParseError {
+    message: String,
+}
+
+impl EfuseParseError {
+    fn new(message: impl Into<String>) -> EfuseParseError {
+        EfuseParseError {
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for EfuseParseError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for EfuseParseError {}
+
 /// The eFuses of one chip: blocks 0, 1 and 2, block 0 all 0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EfuseSet {
@@ -101,47 +141,52 @@ impl EfuseSet {
 
     /// The name of every set, in `efuse.txt` order.
     pub fn names() -> impl Iterator<Item = &'static str> {
-        sections().map(|(name, _)| name)
+        sections()
+            .expect("efuse.txt starts each set with its name")
+            .into_iter()
+            .map(|(name, _)| name)
     }
 
-    /// The set called `name`, if there is one.
-    pub fn named(name: &str) -> Option<EfuseSet> {
-        let (name, lines) = sections().find(|&(found, _)| found == name)?;
-        let mut set = EfuseSet {
-            name,
-            words: [0; WORDS],
+    /// The set called `name`, if there is one. `Err` when that section does not parse, which a
+    /// netlist reports instead of panicking.
+    pub fn named(name: &str) -> Result<Option<EfuseSet>, EfuseParseError> {
+        let sections = sections()?;
+        let Some((name, lines)) = sections.into_iter().find(|(found, _)| *found == name) else {
+            return Ok(None);
         };
-        for line in lines {
-            let (field, value) = line
-                .split_once(char::is_whitespace)
-                .unwrap_or_else(|| panic!("`{line}` in [{name}] is a field and a value"));
-            let value = value.trim();
-            let value = if field == "MAC" {
-                mac(value)
-            } else {
-                number(value)
-            }
-            .unwrap_or_else(|| panic!("`{value}` of {field} in [{name}] is not a value"));
-            set.set(field, value);
-        }
-        Some(set)
+        Ok(Some(fill(name, &lines)?))
     }
 
     pub fn name(&self) -> &'static str {
         self.name
     }
 
-    /// The pieces of `field`.
-    fn pieces(field: &str) -> &'static [(usize, u32, u32)] {
+    /// The pieces of `field`, when it is one csv field.
+    fn pieces(field: &str) -> Option<&'static [(usize, u32, u32)]> {
         FIELDS
             .iter()
             .find(|&&(name, _)| name == field)
             .map(|&(_, pieces)| pieces)
-            .unwrap_or_else(|| panic!("{field} is not a field of block 1 or block 2"))
     }
 
-    fn set(&mut self, field: &str, mut value: u128) {
-        for &(block, start, len) in Self::pieces(field) {
+    fn set(&mut self, field: &str, mut value: u128) -> Result<(), EfuseParseError> {
+        if let Some(from) = CALCULATED
+            .iter()
+            .find(|&&(name, _)| name == field)
+            .map(|&(_, from)| from)
+        {
+            return Err(EfuseParseError::new(format!(
+                "{field} in [{}] is calculated by espefuse from {from}, and it is not a field IDF reads",
+                self.name
+            )));
+        }
+        let Some(pieces) = Self::pieces(field) else {
+            return Err(EfuseParseError::new(format!(
+                "{field} in [{}] is not a field of block 1 or block 2",
+                self.name
+            )));
+        };
+        for &(block, start, len) in pieces {
             for bit in start..start + len {
                 let at = BLOCK_WORD[block] + (bit / 32) as usize;
                 self.words[at] &= !(1 << (bit % 32));
@@ -149,17 +194,20 @@ impl EfuseSet {
                 value >>= 1;
             }
         }
-        assert_eq!(
-            value, 0,
-            "{field} in [{}] is wider than its bits",
-            self.name
-        );
+        if value != 0 {
+            return Err(EfuseParseError::new(format!(
+                "{field} in [{}] is wider than its bits",
+                self.name
+            )));
+        }
+        Ok(())
     }
 
     /// This set with `field` at `value`.
     #[cfg(test)]
     pub(crate) fn with(mut self, field: &str, value: u128) -> EfuseSet {
-        self.set(field, value);
+        self.set(field, value)
+            .unwrap_or_else(|error| panic!("{error}"));
         self
     }
 
@@ -167,7 +215,9 @@ impl EfuseSet {
     pub(crate) fn field(&self, field: &str) -> u128 {
         let mut value = 0;
         let mut shift = 0;
-        for &(block, start, len) in Self::pieces(field) {
+        let pieces = Self::pieces(field)
+            .unwrap_or_else(|| panic!("{field} is not a field of block 1 or block 2"));
+        for &(block, start, len) in pieces {
             for bit in start..start + len {
                 let at = BLOCK_WORD[block] + (bit / 32) as usize;
                 value |= u128::from(self.words[at] >> (bit % 32) & 1) << shift;
@@ -180,12 +230,43 @@ impl EfuseSet {
 
 impl Default for EfuseSet {
     fn default() -> EfuseSet {
-        EfuseSet::named(EfuseSet::DEFAULT).expect("efuse.txt has the default set")
+        match EfuseSet::named(EfuseSet::DEFAULT) {
+            Ok(Some(set)) => set,
+            Ok(None) => panic!("efuse.txt has the default set"),
+            Err(error) => panic!("the default eFuse set did not parse: {error}"),
+        }
     }
 }
 
+/// One set from its lines. `name` is stored on the set and named in an error.
+fn fill(name: &'static str, lines: &[&str]) -> Result<EfuseSet, EfuseParseError> {
+    let mut set = EfuseSet {
+        name,
+        words: [0; WORDS],
+    };
+    for line in lines {
+        let Some((field, value)) = line.split_once(char::is_whitespace) else {
+            return Err(EfuseParseError::new(format!(
+                "`{line}` in [{name}] is a field and a value"
+            )));
+        };
+        let value = value.trim();
+        let Some(value) = (if field == "MAC" {
+            mac(value)
+        } else {
+            number(value)
+        }) else {
+            return Err(EfuseParseError::new(format!(
+                "`{value}` of {field} in [{name}] is not a value"
+            )));
+        };
+        set.set(field, value)?;
+    }
+    Ok(set)
+}
+
 /// Each `[name]` section of `efuse.txt`, with its lines that are not blank or a comment.
-fn sections() -> impl Iterator<Item = (&'static str, Vec<&'static str>)> {
+fn sections() -> Result<Vec<(&'static str, Vec<&'static str>)>, EfuseParseError> {
     let lines = SETS
         .lines()
         .map(str::trim)
@@ -197,14 +278,17 @@ fn sections() -> impl Iterator<Item = (&'static str, Vec<&'static str>)> {
             .and_then(|rest| rest.strip_suffix(']'))
         {
             Some(name) => sections.push((name, Vec::new())),
-            None => sections
-                .last_mut()
-                .expect("efuse.txt starts each set with its name")
-                .1
-                .push(line),
+            None => {
+                let Some(section) = sections.last_mut() else {
+                    return Err(EfuseParseError::new(
+                        "efuse.txt names a field before a set".to_string(),
+                    ));
+                };
+                section.1.push(line);
+            }
         }
     }
-    sections.into_iter()
+    Ok(sections)
 }
 
 fn number(text: &str) -> Option<u128> {
@@ -353,9 +437,70 @@ mod tests {
         let names: Vec<&str> = EfuseSet::names().collect();
         assert!(names.contains(&EfuseSet::DEFAULT));
         for name in names {
-            assert_eq!(EfuseSet::named(name).map(|set| set.name()), Some(name));
+            let set = EfuseSet::named(name).unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(set.map(|set| set.name()), Some(name));
         }
-        assert_eq!(EfuseSet::named("no such set"), None);
+        assert_eq!(EfuseSet::named("no such set").unwrap(), None);
+    }
+
+    /// `format-test` in `efuse.txt` is a made-up summary excerpt, not a board. `0x81` stays the
+    /// unsigned 129 IDF reads.
+    #[test]
+    fn a_summary_excerpt_parses_to_the_raw_unsigned_words() {
+        let set = EfuseSet::named("format-test")
+            .unwrap_or_else(|error| panic!("{error}"))
+            .expect("format-test");
+        assert_eq!(set.field("MAC"), 0x5544_3322_1102);
+        assert_eq!(set.field("PSRAM_CAP"), 0b01);
+        assert_eq!(set.field("PSRAM_CAP_3"), 1);
+        assert_eq!(set.field("ADC1_INIT_CODE_ATTEN0"), 129);
+        assert_eq!(
+            set.words,
+            [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0x2233_4455,
+                0x0000_0211,
+                0,
+                0,
+                0x8,
+                0x0008_0000,
+                0,
+                0,
+                0,
+                0,
+                0x1020_0000,
+                0,
+                0,
+                0,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_calculated_or_unknown_field_is_an_error() {
+        let calculated = fill("excerpt", &["PSRAM_CAPACITY 0b101"]).unwrap_err();
+        assert!(
+            calculated.to_string().contains("PSRAM_CAPACITY"),
+            "{calculated}"
+        );
+        assert!(
+            calculated.to_string().contains("PSRAM_CAP_3"),
+            "{calculated}"
+        );
+        let wafer = fill("excerpt", &["WAFER_VERSION_MINOR 2"]).unwrap_err();
+        assert!(
+            wafer.to_string().contains("WAFER_VERSION_MINOR_LO"),
+            "{wafer}"
+        );
+        let unknown = fill("excerpt", &["NOT_A_FIELD 1"]).unwrap_err();
+        assert!(unknown.to_string().contains("NOT_A_FIELD"), "{unknown}");
+        let wide = fill("excerpt", &["PSRAM_CAP 0b101"]).unwrap_err();
+        assert!(wide.to_string().contains("wider than its bits"), "{wide}");
     }
 
     #[test]
@@ -364,10 +509,12 @@ mod tests {
             name: "test",
             words: [0; WORDS],
         };
-        set.set("PSRAM_CAP", 0b101);
-        set.set("ADC2_CAL_VOL_ATTEN3", 0b10_0001);
-        set.set("ADC1_INIT_CODE_ATTEN0", 0xa5);
-        assert_eq!(set.field("PSRAM_CAP"), 0b101);
+        set.set("PSRAM_CAP", 0b01).unwrap();
+        set.set("PSRAM_CAP_3", 0b1).unwrap();
+        set.set("ADC2_CAL_VOL_ATTEN3", 0b10_0001).unwrap();
+        set.set("ADC1_INIT_CODE_ATTEN0", 0xa5).unwrap();
+        assert_eq!(set.field("PSRAM_CAP"), 0b01);
+        assert_eq!(set.field("PSRAM_CAP_3"), 1);
         assert_eq!(set.words[6 + 131 / 32] >> (131 % 32) & 0b11, 0b01);
         assert_eq!(set.words[6 + 179 / 32] >> (179 % 32) & 1, 1);
         assert_eq!(set.field("ADC2_CAL_VOL_ATTEN3"), 0b10_0001);
