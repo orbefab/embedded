@@ -113,6 +113,11 @@ pub(super) fn plan(catalog: &Catalog, snapshot: &Snapshot, request: &Request, ad
     if let Some(message) = usage(request) {
         return Plan::Usage(message);
     }
+    // A file add or `--relock` would compare, and could not read. Say so before a missing
+    // `part.jsonc`, a differ, or a missing version. Those would hide the read.
+    if let Some(refusal) = unreadable_files(snapshot) {
+        return Plan::Refuse(refusal);
+    }
     if request.relock {
         return plan_relock(catalog, snapshot, add);
     }
@@ -958,11 +963,6 @@ fn kept_newer_line(
 }
 
 fn plan_relock(catalog: &Catalog, snapshot: &Snapshot, add: &str) -> Plan {
-    // A file that cannot be read has no version in the snapshot. The file may still
-    // have one, so report the read before calling the version missing.
-    if let Some(refusal) = unreadable_copy(snapshot) {
-        return Plan::Refuse(refusal);
-    }
     let mut lines = BTreeMap::new();
     let mut modified = Vec::new();
     let mut problems = Vec::new();
@@ -1047,18 +1047,26 @@ fn plan_relock(catalog: &Catalog, snapshot: &Snapshot, add: &str) -> Plan {
     })
 }
 
-/// Every part folder that has no version because a file in it could not be read.
-fn unreadable_copy(snapshot: &Snapshot) -> Option<Refusal> {
+/// `part.jsonc`, `asset.json`, `model.py`, or `parts.lock`, when add or `--relock` could not
+/// read it. Another unreadable file stays on the path that moves a copy aside.
+fn unreadable_files(snapshot: &Snapshot) -> Option<Refusal> {
     let mut messages = Vec::new();
     let mut hints = Vec::new();
+    if let Some(error) = &snapshot.lock_denied {
+        messages.push(format!("cannot read parts.lock: {error}"));
+        hints.push(project::chmod_hint(
+            Some(&snapshot.root),
+            Path::new("parts.lock"),
+        ));
+    }
     for (id, target) in &snapshot.targets {
         let Target::Folder(folder) = target else {
             continue;
         };
-        if folder.version.is_some() || folder.unreadable.is_empty() {
-            continue;
-        }
         for file in &folder.unreadable {
+            if !matches!(file.rel.as_str(), "part.jsonc" | "asset.json" | "model.py") {
+                continue;
+            }
             let rel = format!("parts/{id}/{}", file.rel);
             messages.push(format!("cannot read {rel}: {}", file.error));
             if file.permission {
