@@ -126,8 +126,8 @@ pub(super) fn plan(catalog: &Catalog, snapshot: &Snapshot, request: &Request, ad
     if let Some(message) = usage(request) {
         return Plan::Usage(message);
     }
-    // A file add or `--relock` would compare, and could not read. Say so before a missing
-    // `part.jsonc`, a differ, or a missing version. Those would hide the read.
+    // A file or directory add or `--relock` would read, and could not. Say so before a
+    // missing `part.jsonc`, a differ, or a missing version. Those would hide the read.
     if let Some(refusal) = unreadable_files(snapshot) {
         return Plan::Refuse(refusal);
     }
@@ -1060,33 +1060,59 @@ fn plan_relock(catalog: &Catalog, snapshot: &Snapshot, add: &str) -> Plan {
     })
 }
 
-/// `part.jsonc`, `asset.json`, `model.py`, or `parts.lock`, when add or `--relock` could not
-/// read it. Another unreadable file stays on the path that moves a copy aside.
+/// `parts/`, a part directory, or a subdirectory, and `part.jsonc`, `asset.json`, `model.py`,
+/// or `parts.lock`, when add or `--relock` could not read it. Another unreadable file stays
+/// on the path that moves a copy aside. A directory that could not be listed is never an
+/// absent part: that is what replaced `parts.lock` with an empty file.
 fn unreadable_files(snapshot: &Snapshot) -> Option<Refusal> {
     let mut messages = Vec::new();
     let mut hints = Vec::new();
+    if let Some(denied) = &snapshot.parts_denied {
+        note_read(
+            &mut messages,
+            &mut hints,
+            snapshot,
+            "parts",
+            &denied.error,
+            denied.permission,
+            true,
+        );
+    }
     if let Some(error) = &snapshot.lock_denied {
-        messages.push(format!("cannot read parts.lock: {error}"));
-        hints.push(project::chmod_hint(
-            Some(&snapshot.root),
-            Path::new("parts.lock"),
-        ));
+        note_read(
+            &mut messages,
+            &mut hints,
+            snapshot,
+            "parts.lock",
+            error,
+            true,
+            false,
+        );
     }
     for (id, target) in &snapshot.targets {
         let Target::Folder(folder) = target else {
             continue;
         };
         for file in &folder.unreadable {
-            if !matches!(file.rel.as_str(), "part.jsonc" | "asset.json" | "model.py") {
-                continue;
-            }
-            let rel = format!("parts/{id}/{}", file.rel);
-            messages.push(format!("cannot read {rel}: {}", file.error));
-            if file.permission {
-                hints.push(project::chmod_hint(Some(&snapshot.root), Path::new(&rel)));
+            let directory = file.directory;
+            let rel = if directory && (file.rel == "." || file.rel.is_empty()) {
+                format!("parts/{id}")
+            } else if directory
+                || matches!(file.rel.as_str(), "part.jsonc" | "asset.json" | "model.py")
+            {
+                format!("parts/{id}/{}", file.rel)
             } else {
-                hints.push("check that the path exists and is readable".into());
-            }
+                continue;
+            };
+            note_read(
+                &mut messages,
+                &mut hints,
+                snapshot,
+                &rel,
+                &file.error,
+                file.permission,
+                directory,
+            );
         }
     }
     if messages.is_empty() {
@@ -1097,6 +1123,27 @@ fn unreadable_files(snapshot: &Snapshot) -> Option<Refusal> {
         message: messages.join("\n"),
         hint: hints.join("\n"),
     })
+}
+
+fn note_read(
+    messages: &mut Vec<String>,
+    hints: &mut Vec<String>,
+    snapshot: &Snapshot,
+    rel: &str,
+    error: &str,
+    permission: bool,
+    directory: bool,
+) {
+    messages.push(format!("cannot read {rel}: {error}"));
+    if permission {
+        hints.push(project::chmod_hint(
+            Some(&snapshot.root),
+            Path::new(rel),
+            directory,
+        ));
+    } else {
+        hints.push("check that the path exists and is readable".into());
+    }
 }
 
 #[cfg(test)]
