@@ -68,6 +68,19 @@ struct Demand {
     by: By,
 }
 
+/// An id, version or registry the catalog does not have. This is the request's own error, so
+/// it is reported before any look at the project folder. A missing project would hide it.
+pub(super) fn refuse_unknown(request: &Request) -> Option<Refusal> {
+    if request.relock {
+        return None;
+    }
+    let specs = parse_specs(&request.ids).ok()?;
+    match unknown_specs(&Catalog::builtin(), &specs) {
+        Some(Plan::Refuse(refusal)) => Some(refusal),
+        _ => None,
+    }
+}
+
 /// The usage error in a request, which no project state changes.
 pub(super) fn usage(request: &Request) -> Option<String> {
     if request.relock {
