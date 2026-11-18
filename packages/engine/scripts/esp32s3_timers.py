@@ -12,6 +12,9 @@ cycles are from the `CCOUNT` sample taken immediately before `gptimer_start` to 
 It then prints `equal <cycles>` and `behind <cycles>` for an alarm armed at the current count and
 an alarm armed behind it, and `above <first> <gap>` for an auto-reload whose load is above the
 alarm. It then prints `rng <k> nz` for eight reads of `WDEV_RND_REG`, and `TIMERS DONE`.
+Lines after `TIMERS DONE` are ignored. A second `g`, which this circuit does not send, prints
+`rng_on <8 hex digits>`, `rng_off <8 hex digits>` and `RNG OFF DONE`. The check does not compare
+those words. The same lines before `TIMERS DONE` fail.
 
 The alarm is 1000 counts. The app's sdkconfig runs the CPU at 240 MHz, so one APB cycle is 3 CPU
 cycles, and the period is `1000 * divider * 3`. Each auto-reload step after the first must equal
@@ -32,7 +35,8 @@ cycles of the board's. 4000 cycles is 16.7 µs, room for several instruction-cac
 80 MHz flash, and less than one extra alarm at divider 2, which is 6000 cycles, so a missed alarm
 still fails. The three new lines are checked by the closed form above, not against the board's
 numbers. The board's `rng` lines must say `nz`. The words are not printed. A board's register is
-truly random, so the check does not compare them. Without the file, that comparison is skipped.
+truly random, so the check does not compare them. Lines after `TIMERS DONE` in `board.txt` are
+ignored too, including `rng_on` and `rng_off`. Without the file, that comparison is skipped.
 """
 
 import argparse
@@ -69,6 +73,7 @@ EQUAL = re.compile(r"equal (\d+)")
 BEHIND = re.compile(r"behind (\d+)")
 ABOVE = re.compile(r"above (\d+) (\d+)")
 RNG = re.compile(r"rng (\d+) (nz|z)")
+CLOCK = re.compile(r"rng_o(?:n|ff) [0-9a-fA-F]{8}")
 
 
 def period(divider: int) -> int:
@@ -98,6 +103,10 @@ def rows_of(text: str) -> tuple[list[tuple[int, str, int, int]], tuple[int, int,
     equal = behind = above = None
     for raw in text.splitlines():
         line = raw.rstrip("\r")
+        if done:
+            break
+        if line == "RNG OFF DONE" or CLOCK.fullmatch(line):
+            raise ValueError(f"{line} comes before TIMERS DONE")
         div = DIV.fullmatch(line)
         eq = EQUAL.fullmatch(line)
         beh = BEHIND.fullmatch(line)
