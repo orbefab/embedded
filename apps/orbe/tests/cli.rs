@@ -1133,19 +1133,64 @@ fn add_refuses_a_folder_that_is_not_a_project() {
     assert!(proj.join("parts/led-5mm/part.jsonc").is_file());
     assert!(!build.join("parts").exists());
 
+    let empty = tempfile::tempdir().unwrap();
+    let (output, stdout, _) = orbe_in(empty.path(), &["add", "no-such-part"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert_eq!(
+        stdout,
+        "error[unknown_part]: no catalog part named `no-such-part`\n  hint: the catalog has no part with that id\n"
+    );
+    assert_eq!(fs::read_dir(empty.path()).unwrap().count(), 0);
+    let build_typo = build.join("deeper");
+    fs::create_dir(&build_typo).unwrap();
+    let (output, stdout, _) = orbe_in(&build_typo, &["add", "nano-button-lde"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert_eq!(
+        stdout,
+        "error[unknown_part]: no catalog part named `nano-button-lde`\n  hint: did you mean `nano-button-led`?\n"
+    );
+    assert_eq!(fs::read_dir(&build_typo).unwrap().count(), 0);
+
     let lonely = tempfile::tempdir().unwrap();
-    let (output, stdout, _) = orbe_in(lonely.path(), &["add", "--json", "led-5mm"]);
+    let (output, stdout, _) = orbe_in(lonely.path(), &["add", "--json", "led-5m"]);
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
-    assert_eq!(reply["error"]["code"], "not_a_project");
+    assert_eq!(reply["error"]["code"], "unknown_part");
+    assert_eq!(reply["error"]["message"], "no catalog part named `led-5m`");
+    assert_eq!(reply["error"]["hint"], "did you mean `led-5mm`?");
+    assert_eq!(fs::read_dir(lonely.path()).unwrap().count(), 0);
+
+    let (output, stdout, stderr) = orbe_in(lonely.path(), &["add", "led-5mm"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(stdout.contains("wrote parts/led-5mm 0.1.0\n"), "{stdout}");
+    assert!(stdout.contains("wrote parts.lock\n"), "{stdout}");
+    assert!(lonely.path().join("parts/led-5mm/part.jsonc").is_file());
+    assert!(!lonely.path().join("scene.jsonc").exists());
+
+    let demo = tempfile::tempdir().unwrap();
+    let (output, stdout, stderr) = orbe_in(demo.path(), &["add", "nano-button-led"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(stdout.contains("wrote scene.jsonc\n"), "{stdout}");
+    assert!(stdout.contains("wrote tests/button.test\n"), "{stdout}");
+    assert!(stdout.contains("wrote parts.lock\n"), "{stdout}");
     assert!(
-        reply["error"]["hint"]
-            .as_str()
-            .unwrap()
-            .contains("orbe add -C '<folder>'"),
+        stdout.ends_with(
+            "installed the Block `nano-button-led`. run `orbe check scene.jsonc` and `orbe test`\n"
+        ),
         "{stdout}"
     );
-    assert_eq!(fs::read_dir(lonely.path()).unwrap().count(), 0);
+    assert!(demo.path().join("scene.jsonc").is_file());
+    assert!(demo.path().join("parts.lock").is_file());
+    assert!(demo.path().join("firmware/button.hex").is_file());
+
+    let relock = tempfile::tempdir().unwrap();
+    let (output, stdout, _) = orbe_in(relock.path(), &["add", "--relock"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert_eq!(
+        stdout,
+        "error[not_a_project]: the current folder is not an orbe project. it has no scene.jsonc and no parts.lock\n  hint: run it in the project's folder, the one with scene.jsonc, or name that folder with `orbe add -C '<folder>'`\n"
+    );
+    assert_eq!(fs::read_dir(relock.path()).unwrap().count(), 0);
 }
 
 #[test]
