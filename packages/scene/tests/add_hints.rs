@@ -22,7 +22,8 @@
 //!
 //! A part file that cannot be read prints `chmod u+r` instead of an `orbe add`. That command
 //! is run with `sh` and `bash`, from the parent of a project named `it's $HOME` and from
-//! inside it. `orbe add --relock` on that file prints the read error and the same chmod.
+//! inside it. `orbe add` and `orbe add --relock` on an unreadable `part.jsonc`, `asset.json`,
+//! `model.py` or `parts.lock` print the read error and the same chmod.
 //! Mode 000 is still readable for root, so those cases are skipped then.
 
 mod common;
@@ -1062,6 +1063,101 @@ fn an_unreadable_part_file_chmod_works_where_orbe_ran() {
     }
     read(&Files::disk(), Path::new("scene.jsonc")).unwrap();
     drop(restore);
+}
+
+/// Plain `orbe add` and `--relock` name an unreadable `part.jsonc`, `asset.json`, `model.py`
+/// or `parts.lock`, with the chmod `orbe check` prints. A missing `part.jsonc` is a different
+/// error, and this one does not say the folder has none.
+#[test]
+fn an_unreadable_part_asset_model_or_lock_names_the_read_and_a_chmod() {
+    if common::mode_000_reads() {
+        return;
+    }
+    let _directory = one_directory();
+    let (_scratch, outside, project) = placed();
+    let restore = cwd_guard();
+    std::env::set_current_dir(&project).unwrap();
+    for rel in ["part.jsonc", "asset.json", "model.py"] {
+        let path = project.join("parts/led-5mm").join(rel);
+        hide(&path);
+        let text = refused(None, &["led-5mm"], false);
+        assert!(
+            text.contains(&format!(
+                "cannot read parts/led-5mm/{rel}: Permission denied"
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("chmod u+r parts/led-5mm/{rel}")),
+            "{text}"
+        );
+        assert!(!text.contains("no part.jsonc"), "{text}");
+        assert!(!text.contains("differs in"), "{text}");
+        let relock = refused(None, &[], true);
+        assert!(
+            relock.contains(&format!(
+                "cannot read parts/led-5mm/{rel}: Permission denied"
+            )),
+            "{relock}"
+        );
+        assert!(
+            relock.contains(&format!("chmod u+r parts/led-5mm/{rel}")),
+            "{relock}"
+        );
+        assert!(!relock.contains("cannot cover"), "{relock}");
+        show(&path);
+    }
+
+    let lock = project.join("parts.lock");
+    hide(&lock);
+    let text = refused(None, &["led-5mm"], false);
+    assert!(
+        text.contains("cannot read parts.lock: Permission denied"),
+        "{text}"
+    );
+    assert!(text.contains("`chmod u+r parts.lock`"), "{text}");
+    let relock = refused(None, &[], true);
+    assert!(relock.contains("`chmod u+r parts.lock`"), "{relock}");
+    show(&lock);
+
+    std::env::set_current_dir(&outside).unwrap();
+    let part = project.join("parts/led-5mm/part.jsonc");
+    hide(&part);
+    let text = refused(Some(Path::new("my proj")), &["led-5mm"], false);
+    assert!(
+        text.contains("chmod u+r 'my proj/parts/led-5mm/part.jsonc'"),
+        "{text}"
+    );
+    assert!(!text.contains("no part.jsonc"), "{text}");
+    show(&part);
+    hide(&lock);
+    let relock = refused(Some(Path::new("my proj")), &[], true);
+    assert!(
+        relock.contains("chmod u+r 'my proj/parts.lock'"),
+        "{relock}"
+    );
+    show(&lock);
+    drop(restore);
+}
+
+fn refused(dir: Option<&Path>, ids: &[&str], relock: bool) -> String {
+    let reply = add_parts(
+        dir,
+        &Request {
+            ids: ids.iter().map(|id| (*id).to_string()).collect(),
+            overwrite: false,
+            diff: false,
+            relock,
+        },
+    )
+    .unwrap();
+    assert_eq!(reply.code(), 1, "{}", reply.text());
+    reply.text()
+}
+
+fn show(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o644)).unwrap();
 }
 
 fn chmod_from_check(scene: &Path) -> String {

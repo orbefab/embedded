@@ -52,6 +52,7 @@ fn empty() -> Snapshot {
         lock: BTreeMap::new(),
         lock_text: None,
         lock_error: None,
+        lock_denied: None,
         root: PathBuf::from("."),
     }
 }
@@ -749,6 +750,91 @@ fn relock_of_an_unreadable_part_file_names_the_read_and_a_chmod() {
         "make it readable, such as `chmod u+r 'it'\\''s $HOME/parts/led-5mm/part.jsonc'`"
     );
     assert!(!refused.message.contains("has no version"));
+}
+
+#[test]
+fn add_of_an_unreadable_part_file_names_the_read_and_a_chmod() {
+    let led = leaf("led-5mm", "0.1.0", "lamp");
+    let catalog = catalog_of(vec![led]);
+    let mut folder = Folder::from_files(BTreeMap::new());
+    folder.unreadable.push(denied("part.jsonc"));
+    let mut snapshot = empty();
+    snapshot
+        .targets
+        .insert("led-5mm".into(), Target::Folder(folder));
+    let refused = refusal(plan(
+        &catalog,
+        &snapshot,
+        &ask(&["led-5mm"], false, false),
+        ADD,
+    ));
+    assert_eq!(refused.code.as_str(), "unreadable");
+    assert_eq!(
+        refused.message,
+        "cannot read parts/led-5mm/part.jsonc: Permission denied (os error 13)"
+    );
+    assert_eq!(
+        refused.hint,
+        "make it readable, such as `chmod u+r parts/led-5mm/part.jsonc`"
+    );
+    assert!(!refused.message.contains("no part.jsonc"));
+}
+
+#[test]
+fn add_and_relock_of_an_unreadable_asset_or_model_name_the_read() {
+    let led = leaf("led-5mm", "0.1.0", "lamp");
+    let catalog = catalog_of(vec![led.clone()]);
+    for rel in ["asset.json", "model.py"] {
+        let mut folder = Folder::from_files(led.files.clone());
+        folder.unreadable.push(denied(rel));
+        let mut snapshot = empty();
+        snapshot
+            .targets
+            .insert("led-5mm".into(), Target::Folder(folder));
+        for request in [ask(&["led-5mm"], false, false), relock()] {
+            let refused = refusal(plan(&catalog, &snapshot, &request, ADD));
+            assert_eq!(refused.code.as_str(), "unreadable", "{rel}");
+            assert_eq!(
+                refused.message,
+                format!("cannot read parts/led-5mm/{rel}: Permission denied (os error 13)")
+            );
+            assert_eq!(
+                refused.hint,
+                format!("make it readable, such as `chmod u+r parts/led-5mm/{rel}`")
+            );
+            assert!(!refused.message.contains("differs"));
+            assert!(!refused.message.contains("cannot cover"));
+        }
+    }
+}
+
+#[test]
+fn add_and_relock_of_an_unreadable_lock_name_the_read_and_a_chmod() {
+    let led = leaf("led-5mm", "0.1.0", "lamp");
+    let catalog = catalog_of(vec![led]);
+    let mut snapshot = empty();
+    snapshot.root = PathBuf::from("ops");
+    snapshot.lock_denied = Some("Permission denied (os error 13)".into());
+    for request in [ask(&["led-5mm"], false, false), relock()] {
+        let refused = refusal(plan(&catalog, &snapshot, &request, ADD));
+        assert_eq!(refused.code.as_str(), "unreadable");
+        assert_eq!(
+            refused.message,
+            "cannot read parts.lock: Permission denied (os error 13)"
+        );
+        assert_eq!(
+            refused.hint,
+            "make it readable, such as `chmod u+r ops/parts.lock`"
+        );
+    }
+}
+
+fn denied(rel: &str) -> Unreadable {
+    Unreadable {
+        rel: rel.into(),
+        error: "Permission denied (os error 13)".into(),
+        permission: true,
+    }
 }
 
 #[test]
