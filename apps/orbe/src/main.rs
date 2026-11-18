@@ -796,6 +796,33 @@ fn diagnostic_json(d: &Diagnostic) -> Value {
     json!({ "code": d.code.as_str(), "file": d.file, "line": d.line, "column": d.column, "message": d.message, "hint": d.hint })
 }
 
+/// A part or Block the reader `orbe check` uses would refuse, printed the same way.
+fn scene_refused(errors: &[Diagnostic], json: bool) -> ExitCode {
+    if json {
+        let found: Vec<Value> = errors.iter().map(diagnostic_json).collect();
+        let file = errors
+            .first()
+            .map(|error| error.file.as_str())
+            .unwrap_or("");
+        let where_ = if !file.is_empty() && errors.iter().all(|error| error.file == file) {
+            format!(" in {file}")
+        } else {
+            String::new()
+        };
+        let message = format!("{}{where_}", counted(errors.len(), "error"));
+        print_json(&json!({
+            "ok": false,
+            "error": { "code": "scene_invalid", "message": message },
+            "data": { "diagnostics": found }
+        }));
+    } else {
+        for error in errors {
+            println!("{error}");
+        }
+    }
+    ExitCode::from(FAILED)
+}
+
 fn invalid(scene: &Path, errors: Vec<Diagnostic>, json: bool) -> ExitCode {
     let errors = placed(scene, errors);
     let count = format!("{} in {}", counted(errors.len(), "error"), scene.display());
@@ -882,6 +909,7 @@ fn build_registry(src: &Path, out: &Path, previous: Option<&Path>, json: bool) -
         Ok(registry) => registry,
         Err(error) => {
             let (code, exit, hint) = match &error {
+                orbe_registry::Error::Check(errors) => return scene_refused(errors, json),
                 orbe_registry::Error::Invalid(_) => (
                     "registry_invalid",
                     FAILED,

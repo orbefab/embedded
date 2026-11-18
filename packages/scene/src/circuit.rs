@@ -8,9 +8,9 @@ use serde_json::{Map, Value, json};
 use orbe_engine::world::Quantity;
 
 use crate::diagnostic::{Code, Findings, Reported};
-use crate::model::{Comp, ParamDecl, ParamKind, Part, PinDef, Ref, Scene, passed};
+use crate::model::{Body, Comp, ParamDecl, ParamKind, Part, PinDef, Ref, Scene, passed};
 use crate::name::did_you_mean;
-use crate::params::{Arg, Cover, blocked, convert, cover, dotted, set, within};
+use crate::params::{Arg, Cover, blocked, convert, cover, dotted, set, tokens, within};
 use crate::project::{Owner, Project};
 use crate::source::Span;
 use crate::syntax::Node;
@@ -41,6 +41,10 @@ struct Inst {
     /// unset at a null default: each with the `{ "param": ... }` where that unset param is
     /// passed down, and its name.
     unset: BTreeMap<String, (Span, String)>,
+    /// Required params that have no value yet, when only a placement is read: a scene's
+    /// instance left them out, or a param above passes one of them on. Each body such a
+    /// param writes is not whole.
+    waiting: BTreeSet<String>,
     /// Why this instance or one above it is left out.
     dropped: Option<String>,
     /// The name of the scene's instance this one sits in, for a finding about its flat name.
@@ -86,6 +90,16 @@ struct Circuit<'p> {
     unsimulated: BTreeMap<usize, String>,
     /// Each scene instance the scene plugs into a board, by its id.
     seated: BTreeMap<usize, plug::Seated>,
+    /// Only the placement of the scene's parts is read, before a scene gives them a value for
+    /// each required param and a ground. See [`crate::read_placed`].
+    placing: bool,
+}
+
+/// What [`Circuit::args`] gives an instance, field by field of [`Inst`].
+struct Taken {
+    args: BTreeMap<String, Arg>,
+    unset: BTreeMap<String, (Span, String)>,
+    waiting: BTreeSet<String>,
 }
 
 /// The value that set a model field, by the field's JSON pointer.
@@ -164,15 +178,23 @@ pub struct Netlist {
     pub view: View,
 }
 
-/// With `lint`, the lint rules' warnings on a circuit that checks go there.
+/// With `lint`, the lint rules' warnings on a circuit that checks go there. With `placing`,
+/// only the placement of the scene's parts is read, as [`crate::read_placed`] says. With
+/// `paths`, each path a file param takes goes there.
 pub(crate) fn compile(
     project: &Project,
     out: &mut Findings,
     lint: Option<&mut Findings>,
+    placing: bool,
+    paths: Option<&mut Vec<FilePath>>,
 ) -> Option<Netlist> {
     let scene = &project.scene;
     let mut circuit = Circuit::new(project, out);
+    circuit.placing = placing;
     circuit.instantiate(ROOT, Owner::Scene);
+    if let Some(paths) = paths {
+        *paths = circuit.file_paths();
+    }
     circuit.make_pins();
     circuit.join_inside();
     circuit.plug();
@@ -187,6 +209,60 @@ pub(crate) fn compile(
         circuit.lint(&nets, &netlist, warnings);
     }
     Some(netlist)
+}
+
+/// A path a file param takes in a scene or a part file it reaches.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FilePath {
+    /// The file that writes the path, from the project root.
+    pub file: String,
+    pub line: usize,
+    pub column: usize,
+    /// The param, such as `mcu.firmware`.
+    pub site: String,
+    /// The path as written, relative to the folder of `file` unless it is absolute.
+    pub path: String,
+}
+
+impl Circuit<'_> {
+    /// Each path a file param of a simulated instance takes: the value the instance gets, or
+    /// else its part's default. These are the paths [`compile`] reads.
+    fn file_paths(&self) -> Vec<FilePath> {
+        let project = self.project;
+        let mut paths = Vec::new();
+        for inst in &self.insts[1..] {
+            if inst.dropped.is_some() {
+                continue;
+            }
+            let Some(part) = inst.part.map(|p| &project.parts[p]) else {
+                continue;
+            };
+            for decl in &part.params {
+                if !matches!(decl.kind, ParamKind::File) {
+                    continue;
+                }
+                let (node, site) = match (inst.args.get(&decl.name), &decl.default) {
+                    (Some(arg), _) => (&arg.node, arg.site.clone()),
+                    (None, Some(default)) => (default, format!("{}.{}", inst.dotted(), decl.name)),
+                    (None, None) => continue,
+                };
+                let Some(path) = node.str() else {
+                    continue;
+                };
+                let (line, column) = project.sources.line_col(node.span);
+                paths.push(FilePath {
+                    file: project.sources.file(node.span.file).display.clone(),
+                    line,
+                    column,
+                    site,
+                    path: path.to_string(),
+                });
+            }
+        }
+        paths.sort_by(|a, b| (&a.file, a.line, a.column).cmp(&(&b.file, b.line, b.column)));
+        paths.dedup();
+        paths
+    }
 }
 
 /// What a viewer draws of the scene, read only as far as its instances, their params, its
@@ -217,6 +293,7 @@ impl<'p> Circuit<'p> {
             children: BTreeMap::new(),
             args: BTreeMap::new(),
             unset: BTreeMap::new(),
+            waiting: BTreeSet::new(),
             dropped: None,
             top_span: Span::start_of(project.scene.file),
         };
@@ -232,6 +309,7 @@ impl<'p> Circuit<'p> {
             failed: BTreeMap::new(),
             unsimulated: BTreeMap::new(),
             seated: BTreeMap::new(),
+            placing: false,
         }
     }
 
@@ -269,13 +347,14 @@ impl<'p> Circuit<'p> {
                 children: BTreeMap::new(),
                 args: BTreeMap::new(),
                 unset: BTreeMap::new(),
+                waiting: BTreeSet::new(),
                 dropped,
                 top_span,
             };
             let before = self.out.len();
             if let Some(part) = part {
-                (inst.args, inst.unset) =
-                    self.args(parent, owner, &dir, &inst, instance, &project.parts[part]);
+                let taken = self.args(parent, owner, &dir, &inst, instance, &project.parts[part]);
+                (inst.args, inst.unset, inst.waiting) = (taken.args, taken.unset, taken.waiting);
             }
             self.insts.push(inst);
             let id = self.insts.len() - 1;
@@ -295,7 +374,8 @@ impl<'p> Circuit<'p> {
     /// The values an instance's params take, each passed-through value replaced by the one
     /// its parent got. A parent's default is passed on as a default, and a parent param left
     /// unset with a null default leaves the child's param unset too, through any number of
-    /// params that only pass it on. Returns the values, and the params left unset that way.
+    /// params that only pass it on. Returns the values, the params left unset that way, and the
+    /// params still waiting for a value when only a placement is read.
     fn args(
         &mut self,
         parent: usize,
@@ -304,10 +384,11 @@ impl<'p> Circuit<'p> {
         inst: &Inst,
         instance: &crate::model::Instance,
         part: &Part,
-    ) -> (BTreeMap<String, Arg>, BTreeMap<String, (Span, String)>) {
+    ) -> Taken {
         let project = self.project;
         let mut args = BTreeMap::new();
         let mut unset = BTreeMap::new();
+        let mut waiting = BTreeSet::new();
         for prop in &instance.params {
             if part.param(&prop.key).is_none() {
                 let names: Vec<&str> = part.params.iter().map(|p| p.name.as_str()).collect();
@@ -360,6 +441,10 @@ impl<'p> Circuit<'p> {
                 );
                 continue;
             };
+            if self.insts[parent].waiting.contains(name) {
+                waiting.insert(prop.key.clone());
+                continue;
+            }
             let left_unset = self.insts[parent]
                 .unset
                 .get(name)
@@ -416,6 +501,10 @@ impl<'p> Circuit<'p> {
         }
         for decl in part.params.iter().filter(|d| d.default.is_none()) {
             if !instance.params.iter().any(|p| p.key == decl.name) {
+                if self.placing && matches!(owner, Owner::Scene) {
+                    waiting.insert(decl.name.clone());
+                    continue;
+                }
                 let names: Vec<&str> = part.params.iter().map(|p| p.name.as_str()).collect();
                 self.out.push(
                     Code::Param,
@@ -425,7 +514,11 @@ impl<'p> Circuit<'p> {
                 );
             }
         }
-        (args, unset)
+        Taken {
+            args,
+            unset,
+            waiting,
+        }
     }
 
     fn make_pins(&mut self) {
@@ -894,7 +987,7 @@ impl<'p> Circuit<'p> {
             .map(|(k, text)| (k.map(|k| self.find(k)).and_then(|r| nets.get(&r)), text))
             .collect();
         let Some((first, first_text)) = roots.first().copied() else {
-            if self.insts[1..].iter().all(|i| i.part.is_some()) {
+            if !self.placing && self.insts[1..].iter().all(|i| i.part.is_some()) {
                 self.out.push(
                     Code::Ground,
                     span,
@@ -945,7 +1038,12 @@ impl<'p> Circuit<'p> {
             let Some((model, set_by)) = self.built.get(&inst).cloned() else {
                 continue;
             };
-            for body in &part.bodies {
+            let waiting = self.waiting_bodies(inst, part);
+            for body in part
+                .bodies
+                .iter()
+                .filter(|body| !waiting.contains(&body.name))
+            {
                 let mut flat = self.insts[inst].flat();
                 let mut fields = model.clone();
                 let mut set_here = SetBy::new();
@@ -988,6 +1086,11 @@ impl<'p> Circuit<'p> {
             }
         }
         let mut names: Vec<String> = nets.values().cloned().collect();
+        // A placement with no simulated net has no ground for the engine to take, and no part
+        // with an engine pin for it to check.
+        if self.placing && names.is_empty() {
+            return None;
+        }
         names.sort();
         let ground_name = ground
             .clone()
@@ -1085,8 +1188,47 @@ impl<'p> Circuit<'p> {
             if let Some(reported) = self.out.since(before) {
                 self.failed.entry(inst).or_insert(reported);
             }
-            self.built.insert(inst, (model, set_by));
+            // Hold back each body a waiting param writes. That field has no value yet, so
+            // the body is not whole. A pointer into a body writes it, and a param that sets
+            // several writes each of them. A param a parent passed down is already in
+            // `waiting`, and its own pointers decide.
+            // A sibling stays. Each of its engine pins sits on a pin of the part, and the
+            // nets were named from every body before one is held back, so the engine checks
+            // the sibling as its own part. It does not take a pin net from the body that waits.
+            let every_body_waits = part
+                .bodies
+                .iter()
+                .all(|body| self.body_waits(inst, part, body));
+            if !every_body_waits {
+                self.built.insert(inst, (model, set_by));
+            }
         }
+    }
+
+    /// The bodies a waiting param writes, by the name `Body::name` uses. `None` is the
+    /// one engine part of a model that is not a map of named parts.
+    fn waiting_bodies(&self, inst: usize, part: &Part) -> BTreeSet<Option<String>> {
+        part.bodies
+            .iter()
+            .filter(|body| self.body_waits(inst, part, body))
+            .map(|body| body.name.clone())
+            .collect()
+    }
+
+    /// Whether `body` is not whole: a param still waiting for a value writes it.
+    fn body_waits(&self, inst: usize, part: &Part, body: &Body) -> bool {
+        let waiting = &self.insts[inst].waiting;
+        if waiting.is_empty() {
+            return false;
+        }
+        part.params.iter().any(|decl| {
+            waiting.contains(&decl.name)
+                && decl
+                    .pointers()
+                    .iter()
+                    .copied()
+                    .any(|pointer| pointer_writes_body(pointer, body))
+        })
     }
 
     /// Flat part names are checked even when a wire is wrong.
@@ -1390,6 +1532,20 @@ fn fate(w: &Write, writes: &[Write]) -> Fate {
         }
     }
     Fate::Lands { opens }
+}
+
+/// Whether `pointer` writes `body`. This is what [`set`] writes, and [`tokens`] is how `set`
+/// reads the pointer. One engine part is the whole model, so a pointer `tokens` accepts writes
+/// it. In a model of named parts, the first token is the body `set` walks into. A pointer
+/// `tokens` refuses writes nothing.
+fn pointer_writes_body(pointer: &str, body: &Body) -> bool {
+    let Ok(tokens) = tokens(pointer) else {
+        return false;
+    };
+    match &body.name {
+        None => true,
+        Some(name) => tokens.first().copied() == Some(name.as_str()),
+    }
 }
 
 /// The pointers of the objects `pointer` passes through, outermost first: `/a` and `/a/b` for
