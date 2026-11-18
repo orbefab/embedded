@@ -518,7 +518,9 @@ fn a_resistor_beside_an_led_limits_nothing_and_one_in_series_on_either_side_does
 }
 
 /// A resistor plugged in along a column has both legs in one strip, which shorts it. Across the
-/// strips it does not. The breadboard's hundreds of empty holes warn of nothing either way.
+/// strips it does not. The breadboard's hundreds of empty holes warn of nothing either way. The
+/// jumpers use a free hole of each strip: along the row `r1.b` is `a34`, and along the column it
+/// is `e30`.
 #[test]
 fn two_pins_of_a_part_in_one_breadboard_strip_warn_shorted() {
     for (rotate, shorted) in [("90", true), ("0", false)] {
@@ -536,7 +538,7 @@ fn two_pins_of_a_part_in_one_breadboard_strip_warn_shorted() {
     "nano": {{ "on": {{ "D13": "bb.d1" }} }},
     "r1": {{ "on": {{ "a": "bb.a30" }}, "rotate": [0, 0, {rotate}] }},
   }},
-  "wires": [["bb.c1", "bb.e30"], ["bb.e34", "bb.c14"], ["bb.b30", "bb.j40"], ["bb.a34", "bb.j41"]],
+  "wires": [["bb.c1", "bb.d30"], ["bb.e34", "bb.c14"], ["bb.b30", "bb.j40"], ["bb.b34", "bb.j41"]],
 }}
 "#
         );

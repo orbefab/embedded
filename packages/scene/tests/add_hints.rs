@@ -24,7 +24,9 @@
 //! is run with `sh` and `bash`, from the parent of a project named `it's $HOME` and from
 //! inside it. `orbe add` and `orbe add --relock` on an unreadable `part.jsonc`, `asset.json`,
 //! `model.py` or `parts.lock` print the read error and the same chmod.
-//! Mode 000 is still readable for root, so those cases are skipped then.
+//! A directory `parts/`, `parts/<id>/`, or a subdirectory that cannot be listed prints
+//! `chmod u+rx` the same way, and writes nothing. Mode 000 is still readable for root, so
+//! those cases are skipped then.
 
 mod common;
 
@@ -1138,6 +1140,167 @@ fn an_unreadable_part_asset_model_or_lock_names_the_read_and_a_chmod() {
     );
     show(&lock);
     drop(restore);
+}
+
+/// `parts/`, a part directory, or a subdirectory at mode 000. `--relock` used to replace
+/// `parts.lock` with an empty file when `parts/` could not be listed. The refusal prints
+/// `chmod u+rx`, `sh` of that hint makes the next command succeed, and the lock bytes
+/// stay until then. `orbe check` prints the same chmod.
+#[test]
+fn an_unreadable_directory_refuses_and_the_chmod_keeps_the_lock() {
+    if common::mode_000_reads() {
+        return;
+    }
+    let _directory = one_directory();
+    let restore = cwd_guard();
+    let (_scratch, outside, project) = placed_named("it's $HOME");
+    let lock_path = project.join("parts.lock");
+    let part_path = project.join("parts/led-5mm/part.jsonc");
+    let lock = fs::read(&lock_path).unwrap();
+    let part = fs::read(&part_path).unwrap();
+    let notes = project.join("parts/led-5mm/notes");
+    fs::create_dir(&notes).unwrap();
+
+    std::env::set_current_dir(&project).unwrap();
+    refuse_dir(&project.join("parts"), &lock, "chmod u+rx parts");
+    show_dir(&project.join("parts"));
+    assert_eq!(fs::read(&part_path).unwrap(), part);
+
+    refuse_dir(
+        &project.join("parts/led-5mm"),
+        &lock,
+        "chmod u+rx parts/led-5mm",
+    );
+    show_dir(&project.join("parts/led-5mm"));
+    assert_eq!(fs::read(&part_path).unwrap(), part);
+    assert_eq!(fs::read(&lock_path).unwrap(), lock);
+
+    hide(&notes);
+    let add = refused(None, &["led-5mm"], false);
+    assert!(
+        add.contains("cannot read parts/led-5mm/notes: Permission denied"),
+        "{add}"
+    );
+    assert!(add.contains("`chmod u+rx parts/led-5mm/notes`"), "{add}");
+    assert!(!add.contains("differs"), "{add}");
+    assert_eq!(fs::read(&lock_path).unwrap(), lock);
+    let relock = refused(None, &[], true);
+    assert!(
+        relock.contains("cannot read parts/led-5mm/notes: Permission denied"),
+        "{relock}"
+    );
+    assert!(
+        relock.contains("`chmod u+rx parts/led-5mm/notes`"),
+        "{relock}"
+    );
+    assert!(!relock.contains("cannot cover"), "{relock}");
+    assert!(!relock.contains("differs"), "{relock}");
+    assert_eq!(fs::read(&lock_path).unwrap(), lock);
+    assert_eq!(mode_bits(&notes), 0);
+    let check = check_text(Path::new("scene.jsonc"));
+    assert!(
+        check.contains("`chmod u+rx parts/led-5mm/notes`"),
+        "{check}"
+    );
+    run_shell("sh", &project, "chmod u+rx parts/led-5mm/notes").unwrap();
+    let reply = add_parts(
+        None,
+        &Request {
+            ids: Vec::new(),
+            overwrite: false,
+            diff: false,
+            relock: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(reply.code(), 0, "{}", reply.text());
+    assert!(
+        reply.text().contains("parts.lock unchanged"),
+        "{}",
+        reply.text()
+    );
+    assert_eq!(fs::read(&lock_path).unwrap(), lock);
+
+    std::env::set_current_dir(&outside).unwrap();
+    hide(&project.join("parts"));
+    let relock = refused(Some(Path::new("it's $HOME")), &[], true);
+    let chmod = "chmod u+rx 'it'\\''s $HOME/parts'";
+    assert!(
+        relock.contains("cannot read parts: Permission denied"),
+        "{relock}"
+    );
+    assert!(relock.contains(&format!("`{chmod}`")), "{relock}");
+    assert_eq!(fs::read(&lock_path).unwrap(), lock);
+    assert!(!project.join("parts/.orbe-add").exists());
+    let check = check_text(Path::new("it's $HOME/scene.jsonc"));
+    assert!(check.contains(&format!("`{chmod}`")), "{check}");
+    run_shell("sh", &outside, chmod).unwrap();
+    assert!(
+        !project.join("parts/.orbe-add").exists(),
+        "the refusal wrote parts/.orbe-add"
+    );
+    let reply = add_parts(
+        Some(Path::new("it's $HOME")),
+        &Request {
+            ids: vec!["led-5mm".into()],
+            overwrite: false,
+            diff: false,
+            relock: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(reply.code(), 0, "{}", reply.text());
+    assert!(
+        reply.text().contains("skipped parts/led-5mm"),
+        "{}",
+        reply.text()
+    );
+    assert_eq!(fs::read(&lock_path).unwrap(), lock);
+    assert_eq!(fs::read(&part_path).unwrap(), part);
+    drop(restore);
+}
+
+/// Hides `dir`, checks add, relock and check, and runs the printed chmod.
+fn refuse_dir(dir: &Path, lock: &[u8], chmod: &str) {
+    hide(dir);
+    let add = refused(None, &["led-5mm"], false);
+    assert!(add.contains("Permission denied"), "{add}");
+    assert!(add.contains(&format!("`{chmod}`")), "{add}");
+    assert!(!add.contains("no part.jsonc"), "{add}");
+    assert!(!add.contains(".orbe-add"), "{add}");
+    assert!(!add.contains("--overwrite"), "{add}");
+    assert_eq!(mode_bits(dir), 0);
+    let relock = refused(None, &[], true);
+    assert!(relock.contains(&format!("`{chmod}`")), "{relock}");
+    assert!(!relock.contains("wrote parts.lock"), "{relock}");
+    let lock_path = std::env::current_dir().unwrap().join("parts.lock");
+    assert_eq!(fs::read(&lock_path).unwrap(), lock);
+    let check = check_text(Path::new("scene.jsonc"));
+    assert!(check.contains(&format!("`{chmod}`")), "{check}");
+    run_shell("sh", &std::env::current_dir().unwrap(), chmod).unwrap();
+    assert!(fs::read_dir(dir).is_ok(), "{chmod} left {dir:?} unreadable");
+    let cwd = std::env::current_dir().unwrap();
+    assert!(
+        !cwd.join("parts/.orbe-add").exists(),
+        "the refusal wrote parts/.orbe-add"
+    );
+}
+
+fn check_text(scene: &Path) -> String {
+    let diagnostics = match read(&Files::disk(), scene) {
+        Ok(_) => panic!("the directory is mode 000"),
+        Err(diagnostics) => diagnostics,
+    };
+    diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn show_dir(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 fn refused(dir: Option<&Path>, ids: &[&str], relock: bool) -> String {

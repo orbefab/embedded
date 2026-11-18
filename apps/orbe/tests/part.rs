@@ -159,6 +159,50 @@ fn search_prints_title_matches_before_the_rest() {
     assert_eq!(code, 0);
     let envelope: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(envelope["data"]["parts"].as_array().unwrap().len(), 0);
+    assert_eq!(envelope["data"]["blocks"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn search_finds_a_block_and_part_describes_it() {
+    let (code, stdout, stderr) = orbe(&["search", "fade"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(stdout, "nano-led-fade  LED fade on a Nano\n");
+    let (code, stdout, _) = orbe(&["search", "fade", "--json"]);
+    assert_eq!(code, 0);
+    let envelope: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(envelope["data"]["parts"].as_array().unwrap().len(), 0);
+    assert_eq!(envelope["data"]["blocks"][0]["name"], "nano-led-fade");
+
+    let (code, stdout, stderr) = orbe(&["blocks"]);
+    assert_eq!(code, 0, "{stderr}");
+    for id in [
+        "nano-button-led",
+        "nano-led-fade",
+        "nano-light-comparator",
+        "uno-button-led",
+    ] {
+        assert!(stdout.contains(id), "{stdout}");
+    }
+
+    let (code, stdout, stderr) = orbe(&["part", "nano-led-fade"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("LED fade on a Nano\n"), "{stdout}");
+    assert!(
+        stdout.contains("An LED on D9 of an Arduino Nano fades up and down by PWM.\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("a Block. install it with `orbe add nano-led-fade` in an empty folder\n"),
+        "{stdout}"
+    );
+    let (code, stdout, stderr) = orbe(&["part", "fade"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.starts_with("nano-led-fade  "), "{stdout}");
+
+    let (code, stdout, stderr) = orbe(&["part", "nano-led-fad"]);
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("did you mean `nano-led-fade`"), "{stderr}");
 }
 
 fn names_of(stdout: &str) -> Vec<&str> {
