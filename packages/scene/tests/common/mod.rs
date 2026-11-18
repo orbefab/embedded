@@ -86,6 +86,17 @@ fn compute_catalog_lock(catalog: &Path) -> String {
     lines
 }
 
+/// True when this process can read a file with mode 000. Root can, so a chmod test
+/// would not be the repair.
+pub fn mode_000_reads() -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hidden");
+    fs::write(&path, b"x").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+    fs::read(&path).is_ok()
+}
+
 pub fn project(name: &str) -> TempDir {
     let dir = tempfile::tempdir().unwrap();
     copy_dir(&fixture(name), dir.path());
