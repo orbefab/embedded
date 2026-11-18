@@ -10,7 +10,7 @@ use orbe_engine::world::Quantity;
 use crate::diagnostic::{Code, Findings, Reported};
 use crate::model::{Body, Comp, ParamDecl, ParamKind, Part, PinDef, Ref, Scene, passed};
 use crate::name::did_you_mean;
-use crate::params::{Arg, Cover, blocked, convert, cover, dotted, set, within};
+use crate::params::{Arg, Cover, blocked, convert, cover, dotted, set, tokens, within};
 use crate::project::{Owner, Project};
 use crate::source::Span;
 use crate::syntax::Node;
@@ -1189,9 +1189,9 @@ impl<'p> Circuit<'p> {
                 self.failed.entry(inst).or_insert(reported);
             }
             // Hold back each body a waiting param writes. That field has no value yet, so
-            // the body is not whole. A pointer into a body writes it, a pointer of `/`
-            // writes every body, and a param that sets several writes each of them. A param
-            // a parent passed down is already in `waiting`, and its own pointers decide.
+            // the body is not whole. A pointer into a body writes it, and a param that sets
+            // several writes each of them. A param a parent passed down is already in
+            // `waiting`, and its own pointers decide.
             // A sibling stays. Each of its engine pins sits on a pin of the part, and the
             // nets were named from every body before one is held back, so the engine checks
             // the sibling as its own part. It does not take a pin net from the body that waits.
@@ -1534,14 +1534,18 @@ fn fate(w: &Write, writes: &[Write]) -> Fate {
     Fate::Lands { opens }
 }
 
-/// Whether `pointer` writes `body`. One engine part is the whole model, so every pointer
-/// writes it. In a model of named parts, a pointer writes the body it lands in, and `/`
-/// writes every body because it replaces the model.
+/// Whether `pointer` writes `body`. This is what [`set`] writes, and [`tokens`] is how `set`
+/// reads the pointer. One engine part is the whole model, so a pointer `tokens` accepts writes
+/// it. In a model of named parts, the first token is the body `set` walks into. A pointer
+/// `tokens` refuses writes nothing.
 fn pointer_writes_body(pointer: &str, body: &Body) -> bool {
-    let Some(name) = &body.name else {
-        return true;
+    let Ok(tokens) = tokens(pointer) else {
+        return false;
     };
-    pointer == "/" || within(pointer, &format!("/{name}"))
+    match &body.name {
+        None => true,
+        Some(name) => tokens.first().copied() == Some(name.as_str()),
+    }
 }
 
 /// The pointers of the objects `pointer` passes through, outermost first: `/a` and `/a/b` for

@@ -344,12 +344,21 @@ pub(crate) fn source_ok(node: &Node) -> bool {
     }
 }
 
-/// The tokens of a pointer into a model, such as `/bounce/window`.
+/// The tokens of a pointer into a model, such as `/bounce/window`. Each token is a field name.
+/// An empty one, as in `/`, `//x` or `/a/`, names no field.
 pub(crate) fn tokens(pointer: &str) -> Result<Vec<&str>, String> {
-    pointer
-        .strip_prefix('/')
-        .map(|rest| rest.split('/').collect())
-        .ok_or_else(|| format!("`{pointer}` is not a pointer into `model`; it starts with /"))
+    let Some(rest) = pointer.strip_prefix('/') else {
+        return Err(format!(
+            "`{pointer}` is not a pointer into `model`; it starts with /"
+        ));
+    };
+    let tokens: Vec<&str> = rest.split('/').collect();
+    if tokens.iter().any(|token| token.is_empty()) {
+        return Err(format!(
+            "`{pointer}` is not a pointer into `model`; a pointer names a model field, and this name is empty"
+        ));
+    }
+    Ok(tokens)
 }
 
 /// The pointer made of `tokens`, such as `/bounce`.

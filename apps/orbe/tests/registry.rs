@@ -490,15 +490,41 @@ fn assert_published(src: &Path, project: &Path, expect: Checked) {
     assert!(out.join("index.json").is_file(), "{stdout}");
 }
 
-fn check_at(project: &Path, snippet: &str) -> Found {
+fn run_here(dir: &Path, args: &[&str]) -> (Option<i32>, String, String) {
     let output = Command::new(env!("CARGO_BIN_EXE_orbe"))
-        .args(["check", "--json", "scene.jsonc"])
-        .current_dir(project)
+        .args(args)
+        .current_dir(dir)
         .output()
         .unwrap();
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    (
+        output.status.code(),
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
+}
+
+/// `orbe lint` prints the same errors as `orbe check` when the scene does not check.
+fn assert_lint_matches_check(project: &Path) {
+    for json in [false, true] {
+        let mut check_args = vec!["check", "scene.jsonc"];
+        let mut lint_args = vec!["lint", "scene.jsonc"];
+        if json {
+            check_args.insert(1, "--json");
+            lint_args.insert(1, "--json");
+        }
+        let check = run_here(project, &check_args);
+        let lint = run_here(project, &lint_args);
+        assert_eq!(
+            (lint.0, lint.1, lint.2),
+            (check.0, check.1, check.2),
+            "lint differs from check"
+        );
+    }
+}
+
+fn check_at(project: &Path, snippet: &str) -> Found {
+    let (code, stdout, stderr) = run_here(project, &["check", "--json", "scene.jsonc"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
     let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
     let found = reply["data"]["diagnostics"]
         .as_array()
@@ -1516,4 +1542,155 @@ fn a_body_stays_checked_when_the_waiting_param_is_passed_to_a_child() {
         ],
     );
     refuse_installed(&src, &project, "parts/wrap/part.jsonc", "string \"220\"");
+}
+
+const BROKEN_COMBO: &str = r#"{
+  "src": { "kind": "voltage_source", "pins": { "p": "pos", "n": "neg" } },
+  "r": { "kind": "resistor", "resistance": "220", "pins": { "a": "a", "b": "b" } }
+}"#;
+
+const VALID_COMBO: &str = r#"{
+  "src": {
+    "kind": "voltage_source",
+    "voltage": { "value": 5, "unit": "V", "source": "user" },
+    "pins": { "p": "pos", "n": "neg" }
+  },
+  "r": {
+    "kind": "resistor",
+    "resistance": { "value": 220, "unit": "ohm", "source": "user" },
+    "ratings": { "power": null },
+    "pins": { "a": "a", "b": "b" }
+  }
+}"#;
+
+fn combo_shell(params: &str, model: &str) -> String {
+    format!(
+        r#"{{
+  "format": 1,
+  "part": "combo",
+  "version": "0.1.0",
+  "title": "Combo",
+  "summary": "A source and a resistor",
+  "license": "MIT",
+  "pins": {{ "pos": [1], "neg": [2], "a": [3], "b": [4] }},
+  "params": {params},
+  "model": {model}
+}}
+"#
+    )
+}
+
+/// The empty-name finding, alone, at the same line and column in the build and in check.
+/// `absent` must not appear in check's JSON. Lint prints check's text.
+fn refuse_empty_sets(part: &str, scene: &str, pointer: &str, absent: &[&str]) {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    manifest(&src);
+    let folder = put_part(&src, "combo", part);
+    let project = dir.path().join("project");
+    project_locked(&project, scene, &[("combo", &folder, "0.1.0", "@acme")]);
+    let found = check_at(&project, "this name is empty");
+    assert_eq!(found.code, "scene.param");
+    assert!(
+        found.message.contains(&format!(
+            "`{pointer}` is not a pointer into `model`; a pointer names a model field, and this name is empty"
+        )),
+        "{}",
+        found.message
+    );
+    assert!(
+        found
+            .hint
+            .contains("point `sets` at a field of an object in `model`"),
+        "{}",
+        found.hint
+    );
+    let (code, stdout, stderr) = run_here(&project, &["check", "--json", "scene.jsonc"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
+    let diagnostics = reply["data"]["diagnostics"].as_array().unwrap();
+    assert_eq!(diagnostics.len(), 1, "{stdout}");
+    for snippet in absent {
+        assert!(!stdout.contains(snippet), "{snippet} in {stdout}");
+    }
+    refuse_installed(
+        &src,
+        &project,
+        "parts/combo/part.jsonc",
+        "this name is empty",
+    );
+    assert_lint_matches_check(&project);
+}
+
+/// A required number `sets` `/`. The name is empty, so check and the build refuse it at the
+/// param and the build writes nothing. `set` writes no field, so the value cannot replace the
+/// model; the part's own finding is the one both sides print.
+#[test]
+fn a_required_param_that_sets_slash_is_refused() {
+    let part = combo_shell(
+        r#"{ "voltage": { "unit": "V", "required": true, "sets": "/" } }"#,
+        BROKEN_COMBO,
+    );
+    let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"combo\", \"voltage\": \"5\" } }, \"ground\": \"r1.neg\" }\n";
+    refuse_empty_sets(&part, scene, "/", &["string \"220\"", "nothing writes it"]);
+}
+
+/// A choice arm `sets` `/` to a whole model. The name is empty, so the arm is refused and
+/// does not replace the broken model.
+#[test]
+fn a_choice_that_sets_slash_is_refused() {
+    let params = r#"{
+  "fit": {
+    "required": true,
+    "choices": {
+      "good": {
+        "sets": {
+          "/": {
+            "src": {
+              "kind": "voltage_source",
+              "voltage": { "value": 5, "unit": "V", "source": "user" },
+              "pins": { "p": "pos", "n": "neg" }
+            },
+            "r": {
+              "kind": "resistor",
+              "resistance": { "value": 220, "unit": "ohm", "source": "user" },
+              "ratings": { "power": null },
+              "pins": { "a": "a", "b": "b" }
+            }
+          }
+        }
+      }
+    }
+  }
+}"#;
+    let part = combo_shell(params, BROKEN_COMBO);
+    let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"combo\", \"fit\": \"good\" } }, \"ground\": \"r1.neg\" }\n";
+    refuse_empty_sets(&part, scene, "/", &["string \"220\"", "nothing writes it"]);
+}
+
+/// The model is already valid, and a choice `sets` `/` to a broken one. The broken value is
+/// not what the build checks, and the empty name is still refused, so nothing is published.
+#[test]
+fn a_choice_that_sets_slash_on_a_valid_model_is_refused() {
+    let params = r#"{ "fit": { "required": true, "choices": { "bad": { "sets": { "/": { "src": { "kind": "voltage_source", "pins": { "p": "pos", "n": "neg" } }, "r": { "kind": "resistor", "resistance": "220", "pins": { "a": "a", "b": "b" } } } } } } } }"#;
+    let part = combo_shell(params, VALID_COMBO);
+    let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"combo\", \"fit\": \"bad\" } }, \"ground\": \"r1.neg\" }\n";
+    refuse_empty_sets(&part, scene, "/", &["invalid type", "nothing writes it"]);
+}
+
+/// `//x` and `/a/` are empty names, refused the same way `/` is.
+#[test]
+fn a_sets_pointer_with_an_empty_name_is_refused() {
+    for pointer in ["//x", "/a/"] {
+        let params =
+            format!(r#"{{ "note": {{ "unit": "1", "required": true, "sets": "{pointer}" }} }}"#);
+        let part = combo_shell(&params, VALID_COMBO);
+        let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"combo\", \"note\": \"1\" } }, \"ground\": \"r1.neg\" }\n";
+        refuse_empty_sets(
+            &part,
+            scene,
+            pointer,
+            &["invalid type", "nothing writes it"],
+        );
+    }
 }
