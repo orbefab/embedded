@@ -6,15 +6,20 @@
 # folder when it exits.
 #
 # The same script runs on Linux and on macOS. It uses mktemp with a template,
-# and sha256sum or shasum -a 256. It needs bash and curl or wget.
+# and sha256sum or shasum -a 256. It needs bash and curl. wget can fetch the
+# page when curl is absent, and the session check still needs curl.
 #
 # Usage: scripts/check-release.sh <orbe-or-archive>
 #
 # `show --no-browser` prints the page URL and opens no browser. The script
-# fetches that page and the module script it names. A .wasm file named by the
-# page or that script is fetched too, and must be WebAssembly. The page built
-# into orbe is HTML and one script. It names no wasm file: the browser package
-# loads for a Block page, not for this session.
+# fetches that page and the script it names. The token in the URL's fragment
+# is the session: the viewer opens ws://<host>/session?t=<token>, then loads
+# each part model from /parts/<id>/<id>.glb. The script checks that upgrade,
+# that a wrong token is refused, and that one model comes back as glTF.
+#
+# Each orbe command has a deadline. macOS has no timeout(1), so the wait is a
+# bash loop that kills the command when the time is up. Stopping this script
+# stops that command too, then closes the session and removes the work folder.
 set -euo pipefail
 
 usage() {
@@ -41,11 +46,69 @@ usage_error() {
 work=
 project=
 orbe_bin=
+# The orbe command this script is waiting on, when one is running.
+cmd_pid=
+cmd_out=
+
+# Signals one process and the children it started. Used when the command
+# could not be put in its own process group, so a group kill would hit us.
+signal_tree() {
+  local pid=$1 how=$2 child kids
+  kids=$(ps -ax -o pid=,ppid= | awk -v p="$pid" '$2 == p { print $1 }')
+  for child in $kids; do
+    signal_tree "$child" "$how"
+  done
+  if [[ $how == KILL ]]; then
+    kill -KILL "$pid" 2>/dev/null || true
+  else
+    kill -TERM "$pid" 2>/dev/null || true
+  fi
+}
+
+# Stops the command this script is waiting on, and its children, and waits
+# until that command is gone. A command that already exited leaves cmd_pid
+# empty, so this does nothing and the caller still closes and removes the folder.
+stop_cmd() {
+  local pid=${cmd_pid:-}
+  [[ -n $pid ]] || return 0
+  cmd_pid=
+  if ! kill -0 "$pid" 2>/dev/null; then
+    wait "$pid" 2>/dev/null || true
+    return 0
+  fi
+  local pgid shell_pgid
+  pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)
+  shell_pgid=$(ps -o pgid= -p $$ | tr -d '[:space:]' || true)
+  if [[ -n $pgid && $pgid != 0 && $pgid != "$shell_pgid" ]]; then
+    kill -TERM -"$pgid" 2>/dev/null || signal_tree "$pid" TERM
+  else
+    signal_tree "$pid" TERM
+  fi
+  local n=0
+  while kill -0 "$pid" 2>/dev/null && [[ $n -lt 50 ]]; do
+    sleep 0.1
+    n=$((n + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    if [[ -n $pgid && $pgid != 0 && $pgid != "$shell_pgid" ]]; then
+      kill -KILL -"$pgid" 2>/dev/null || signal_tree "$pid" KILL
+    else
+      signal_tree "$pid" KILL
+    fi
+  fi
+  wait "$pid" 2>/dev/null || true
+}
 
 cleanup() {
   status=$?
+  trap - EXIT INT TERM
+  # The command still running holds nothing we need for close. Stop it first
+  # so a killed script does not leave it behind, then close the session.
+  stop_cmd
   if [[ -n $orbe_bin && -d $project ]]; then
-    (cd "$project" && "$orbe_bin" close) >/dev/null 2>&1 || true
+    # Farewell inside the daemon is one second. The rest is starting the
+    # binary again. A close that never returns must not block removing the folder.
+    await_orbe 15 quiet 1 "$orbe_bin" close || true
   fi
   if [[ -n $work ]]; then
     rm -rf "$work" || true
@@ -63,36 +126,109 @@ hash_file() {
   fi
 }
 
-# Prints the command, keeps its stdout, and stops when it exits non-zero.
-capture() {
-  echo "scripts/check-release.sh: $*" >&2
-  local out
-  out=$("$@") && true
-  status=$?
+# Runs "$@" and waits up to $1 seconds. $2 is capture, stream, or quiet.
+# $3 is 1 when the command runs in $project. Stdout of a capture or quiet
+# command is left in $cmd_out. Returns 0, the command's status, or 124 when
+# the deadline passes.
+#
+# The command is a background job in its own process group. macOS has no
+# timeout(1) and no setsid(1). Job control is what gives us the group, so a
+# kill later reaches a child the command started. The loop sleeps a tenth of
+# a second, which macOS sleep accepts, and SECONDS is the clock so the wait
+# does not drift. A command that exits is reaped on the next check.
+await_orbe() {
+  local limit=$1 mode=$2 in_project=$3
+  shift 3
+  local outf=$work/cmd.out
+  : >"$outf"
+  set -m
+  if [[ $in_project -eq 1 ]]; then
+    if [[ $mode == quiet ]]; then
+      (cd "$project" && "$@") >"$outf" 2>&1 &
+    elif [[ $mode == capture ]]; then
+      (cd "$project" && "$@") >"$outf" &
+    else
+      (cd "$project" && "$@") &
+    fi
+  else
+    if [[ $mode == quiet ]]; then
+      "$@" >"$outf" 2>&1 &
+    elif [[ $mode == capture ]]; then
+      "$@" >"$outf" &
+    else
+      "$@" &
+    fi
+  fi
+  cmd_pid=$!
+  set +m
+  local start=$SECONDS
+  while kill -0 "$cmd_pid" 2>/dev/null; do
+    if [[ $((SECONDS - start)) -ge $limit ]]; then
+      stop_cmd
+      if [[ $mode != stream ]]; then
+        cmd_out=$(cat "$outf" 2>/dev/null || true)
+      fi
+      return 124
+    fi
+    sleep 0.1
+  done
+  local status=0
+  wait "$cmd_pid" || status=$?
+  cmd_pid=
+  if [[ $mode != stream ]]; then
+    cmd_out=$(cat "$outf" 2>/dev/null || true)
+  fi
+  return "$status"
+}
+
+# Prints the command, keeps its stdout, and stops when it exits non-zero
+# or says nothing for $1 seconds. The text is left in $cmd_out. This runs
+# in the current shell so the cleanup trap can see the command's pid.
+finish_orbe() {
+  local limit=$1
+  local in_project=$2
+  shift 2
+  local status=0
+  await_orbe "$limit" capture "$in_project" "$@" || status=$?
+  if [[ $status -eq 124 ]]; then
+    if [[ -n $cmd_out ]]; then
+      printf '%s\n' "$cmd_out" >&2
+    fi
+    echo "scripts/check-release.sh: failed: $* (no answer after ${limit} s)" >&2
+    exit 1
+  fi
   if [[ $status -ne 0 ]]; then
-    printf '%s\n' "$out" >&2
+    printf '%s\n' "$cmd_out" >&2
     echo "scripts/check-release.sh: failed: $* (exit $status)" >&2
     exit 1
   fi
-  printf '%s\n' "$out"
+}
+
+capture() {
+  local limit=$1
+  shift
+  echo "scripts/check-release.sh: $*" >&2
+  finish_orbe "$limit" 0 "$@"
 }
 
 capture_in() {
+  local limit=$1
+  shift
   echo "scripts/check-release.sh: $*  [$project]" >&2
-  local out
-  out=$(cd "$project" && "$@") && true
-  status=$?
-  if [[ $status -ne 0 ]]; then
-    printf '%s\n' "$out" >&2
-    echo "scripts/check-release.sh: failed: $* (exit $status)" >&2
-    exit 1
-  fi
-  printf '%s\n' "$out"
+  finish_orbe "$limit" 1 "$@"
 }
 
 run_in() {
+  local limit=$1
+  shift
   echo "scripts/check-release.sh: $*  [$project]" >&2
-  if ! (cd "$project" && "$@"); then
+  local status=0
+  await_orbe "$limit" stream 1 "$@" || status=$?
+  if [[ $status -eq 124 ]]; then
+    echo "scripts/check-release.sh: failed: $* (no answer after ${limit} s)" >&2
+    exit 1
+  fi
+  if [[ $status -ne 0 ]]; then
     echo "scripts/check-release.sh: failed: $*" >&2
     exit 1
   fi
@@ -154,6 +290,29 @@ page_answers() {
   fi
 }
 
+# The status line from a WebSocket upgrade, or nothing if the socket never
+# answered. sessionUrl in the viewer builds ws://<host>/session?t=<token>
+# from the fragment. Curl speaks HTTP/1.1 to that path, with the upgrade
+# headers the server requires. A 101 leaves the socket open, so --max-time
+# ends the wait. Two seconds is enough for a listener on this machine to
+# answer, and it stops a socket that accepts and then says nothing. Curl's
+# exit is not the result: timing out after a 101 still means it switched.
+# The key only has to be present. The server checks the token, Host and Origin.
+upgrade_status() {
+  local url=$1 from=$2 hdr=$work/upgrade.hdr
+  : >"$hdr"
+  env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
+    curl --http1.1 --noproxy '*' -sS -D "$hdr" -o /dev/null \
+      --max-time 2 \
+      -H "Origin: $from" \
+      -H 'Connection: Upgrade' \
+      -H 'Upgrade: websocket' \
+      -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+      -H 'Sec-WebSocket-Version: 13' \
+      "$url" >"$work/upgrade.body" 2>"$work/upgrade.err" || true
+  awk 'NR==1 { sub(/\r$/, ""); print; exit }' "$hdr"
+}
+
 input=
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -188,6 +347,8 @@ esac
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/orbe-check-release.XXXXXX")
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 want_version=
 if [[ $input == *.tar.gz ]]; then
@@ -241,7 +402,9 @@ else
   orbe_bin=$input
 fi
 
-reported=$(capture "$orbe_bin" --version)
+# Prints the version and exits. The cost is starting the binary.
+capture 15 "$orbe_bin" --version
+reported=$cmd_out
 printf '%s\n' "$reported"
 case $reported in
   "orbe "[0-9]*) ;;
@@ -253,29 +416,42 @@ if [[ -n $want_version && $got_version != "$want_version" ]]; then
   fail "orbe --version is $got_version, and the archive name says $want_version"
 fi
 
-skill=$(capture "$orbe_bin" skills get core)
+# Same startup, then one embedded file.
+capture 15 "$orbe_bin" skills get core
+skill=$cmd_out
 [[ -n $skill ]] || fail "orbe skills get core printed nothing"
 echo "scripts/check-release.sh: skills get core printed ${#skill} bytes" >&2
 
 project=$work/project
 mkdir -p "$project"
 
-run_in "$orbe_bin" add nano-button-led
-run_in "$orbe_bin" check scene.jsonc
-run_in "$orbe_bin" lint scene.jsonc
-run_in "$orbe_bin" test
+# Copies the Block's part files, including each model.
+run_in 30 "$orbe_bin" add nano-button-led
+# Reads the scene and every part it names.
+run_in 30 "$orbe_bin" check scene.jsonc
+# The same read, then the warning pass.
+run_in 20 "$orbe_bin" lint scene.jsonc
+# Opens a session and steps the Nano across the button press and release.
+run_in 30 "$orbe_bin" test
 
-opened=$(capture_in "$orbe_bin" open)
+# Starts the session daemon and waits until the scene is open.
+capture_in 15 "$orbe_bin" open
+opened=$cmd_out
 printf '%s\n' "$opened"
 case $opened in
   opened\ *) ;;
   *) fail "orbe open did not open the scene: $opened" ;;
 esac
-run_in "$orbe_bin" step 100ms
-reading=$(capture_in "$orbe_bin" get @led1)
+# 100 ms on the Nano. The session is already up, so this is the step itself.
+run_in 20 "$orbe_bin" step 100ms
+# One read from the open session.
+capture_in 15 "$orbe_bin" get @led1
+reading=$cmd_out
 printf '%s\n' "$reading"
 [[ -n $reading ]] || fail "orbe get @led1 printed nothing"
-closed=$(capture_in "$orbe_bin" close)
+# The daemon's farewell is one second, then the client returns.
+capture_in 15 "$orbe_bin" close
+closed=$cmd_out
 printf '%s\n' "$closed"
 case $closed in
   *"closed at t="*) ;;
@@ -284,13 +460,16 @@ esac
 
 # show serves the page for the session open just above, so open again after
 # that close. The close after the fetch is what stops the server.
-opened=$(capture_in "$orbe_bin" open)
+capture_in 15 "$orbe_bin" open
+opened=$cmd_out
 printf '%s\n' "$opened"
 case $opened in
   opened\ *) ;;
   *) fail "orbe open did not open the scene: $opened" ;;
 esac
-shown=$(capture_in "$orbe_bin" show --no-browser)
+# Prints the page URL once the listener is bound. It does not wait for a browser.
+capture_in 15 "$orbe_bin" show --no-browser
+shown=$cmd_out
 printf '%s\n' "$shown"
 url=$(printf '%s\n' "$shown" | awk 'match($0, /http:\/\/127\.0\.0\.1:[0-9]+\/#t=[0-9a-f]+/) { print substr($0, RSTART, RLENGTH); exit }')
 [[ -n $url ]] || fail "orbe show --no-browser printed no page URL: $shown"
@@ -319,48 +498,42 @@ EOF
 [[ $script_n -gt 0 ]] || fail "the page names no script"
 echo "scripts/check-release.sh: script loaded" >&2
 
-: >"$work/wasm-refs"
-scan_wasm() {
-  local file=$1 base=$2 ref resolved
-  while IFS= read -r ref || [[ -n $ref ]]; do
-    [[ -n $ref ]] || continue
-    resolved=$(resolve_url "$base" "$ref")
-    case $resolved in
-      "$origin"/*) ;;
-      *) fail "the page names $ref, which is not on $origin" ;;
-    esac
-    printf '%s\n' "$resolved"
-  done <<EOF
-$(grep -oE '[A-Za-z0-9_./+-]+\.wasm' "$file" || true)
-EOF
-}
-scan_wasm "$work/page.html" "$page" >>"$work/wasm-refs"
-i=0
-while [[ $i -lt $script_n ]]; do
-  script_url=$(sed -n 's/.*src="\([^"]*\)".*/\1/p' "$work/page.html" | awk -v n="$((i + 1))" 'NR==n { print; exit }')
-  script_url=$(resolve_url "$page" "$script_url")
-  scan_wasm "$work/script-$i" "$script_url" >>"$work/wasm-refs"
-  i=$((i + 1))
-done
-
-wasm_n=0
-if [[ -s $work/wasm-refs ]]; then
-  sort -u "$work/wasm-refs" -o "$work/wasm-refs"
-  while IFS= read -r wasm_url || [[ -n $wasm_url ]]; do
-    [[ -n $wasm_url ]] || continue
-    fetch "$wasm_url" "$work/wasm-$wasm_n"
-    magic=$(od -An -tx1 -N 4 "$work/wasm-$wasm_n" | tr -d ' \n' | tr 'A-F' 'a-f')
-    [[ $magic == 0061736d ]] || fail "$wasm_url is not WebAssembly (first bytes $magic)"
-    wasm_n=$((wasm_n + 1))
-  done <"$work/wasm-refs"
+# The fragment is #t=<token>. The viewer opens /session?t=<token> on this host.
+command -v curl >/dev/null 2>&1 || fail "need curl to open the session socket"
+token=${url#*#t=}
+case $token in
+  *0) wrong_token=${token%0}1 ;;
+  *) wrong_token=${token%?}0 ;;
+esac
+session_url="http://${origin#http://}/session?t=${token}"
+wrong_url="http://${origin#http://}/session?t=${wrong_token}"
+session_status=$(upgrade_status "$session_url" "$origin")
+if [[ $session_status != "HTTP/1.1 101 Switching Protocols" ]]; then
+  if [[ -s $work/upgrade.err ]]; then
+    cat "$work/upgrade.err" >&2
+  fi
+  fail "the session socket did not answer 101${session_status:+: $session_status}"
 fi
-if [[ $wasm_n -eq 0 ]]; then
-  echo "scripts/check-release.sh: the page names no wasm file" >&2
-else
-  echo "scripts/check-release.sh: wasm loaded ($wasm_n)" >&2
+echo "scripts/check-release.sh: the session answered 101" >&2
+refused=$(upgrade_status "$wrong_url" "$origin")
+if [[ $refused != "HTTP/1.1 403 Forbidden" ]]; then
+  if [[ -s $work/upgrade.err ]]; then
+    cat "$work/upgrade.err" >&2
+  fi
+  fail "a wrong token was not refused${refused:+: $refused}"
 fi
+echo "scripts/check-release.sh: a wrong token was refused" >&2
 
-closed=$(capture_in "$orbe_bin" close)
+# The scene names each model as /parts/<id>/<id>.glb. nano-board is the board
+# in this Block. The bytes are the glTF binary magic.
+model_url="$origin/parts/nano-board/nano-board.glb"
+fetch "$model_url" "$work/model.glb"
+magic=$(od -An -tx1 -N 4 "$work/model.glb" | tr -d '[:space:]' | tr 'A-F' 'a-f')
+[[ $magic == 676c5446 ]] || fail "$model_url does not start with the glTF magic (first bytes ${magic:-none})"
+echo "scripts/check-release.sh: model loaded" >&2
+
+capture_in 15 "$orbe_bin" close
+closed=$cmd_out
 printf '%s\n' "$closed"
 case $closed in
   *"closed at t="*) ;;
