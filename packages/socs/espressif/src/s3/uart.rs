@@ -14,7 +14,9 @@
 //! average bit length and not which bits are the long ones, so the accumulator is this model's
 //! rule. It also omits the APB-to-baud synchronizer, so a start bit is not delayed past the
 //! write. Turning the baud clock off drops a frame that has not finished, and that byte is
-//! not logged. A peripheral reset returns the port to power-on.
+//! not logged. A peripheral reset returns the port to power-on. A flash boot whose capture
+//! names no UART register programs UART0 from the captured `UartDev.baut_rate` the way ROM
+//! `Uart_Init` did, and a later reset still returns the silicon divider.
 
 use std::collections::VecDeque;
 
@@ -930,6 +932,25 @@ impl Uarts {
         self.ports[index].sent = sent;
     }
 
+    /// ROM `Uart_Init` programs a console port from `UartDev.baut_rate` on the 40 MHz
+    /// crystal before the app runs: `(40_000_000 << 4) / baud`, `sclk_div_num` 0 and
+    /// `sclk_sel` 3. A flash boot whose capture holds no UART register applies that to
+    /// UART0. [`reset`](Self::reset) still returns the silicon divider.
+    pub(crate) fn apply_rom_baud(&mut self, index: usize, baud: u32) {
+        if baud == 0 {
+            return;
+        }
+        let div = (40_000_000u64 << 4) / u64::from(baud);
+        let integer = u32::try_from(div >> 4).unwrap_or(u32::MAX);
+        if integer == 0 || integer > 0xfff {
+            return;
+        }
+        let frag = (div as u32) & 0xf;
+        let port = &mut self.ports[index];
+        port.words[slot(CLKDIV)] = integer | frag << 20;
+        port.words[slot(CLK)] = CLK_RESET & !(0xff << 12);
+    }
+
     /// The earliest undriven TXD change at or before `now`.
     pub(crate) fn next_edge(&self, now: Tick) -> Option<Edge> {
         self.ports
@@ -1141,6 +1162,25 @@ mod tests {
         assert!(port.tx.is_none());
         assert!(port.sent.is_empty());
         assert!(port.wire);
+    }
+
+    #[test]
+    fn rom_init_programs_uart0_for_115200_on_the_crystal() {
+        let mut uarts = Uarts::new();
+        uarts.apply_rom_baud(0, 115200);
+        let port = &uarts.ports[0];
+        assert_eq!(port.clkdiv(), 347);
+        assert_eq!(port.frag(), 3);
+        assert_eq!(port.sclk_div(), 0);
+        assert_eq!(port.sclk_sel(), 3);
+        assert_eq!(uarts.ports[1].clkdiv(), 694);
+        assert_eq!(uarts.ports[1].sclk_div(), 1);
+        assert_eq!(uarts.ports[2].clkdiv(), 694);
+        uarts.reset(0);
+        assert_eq!(uarts.ports[0].clkdiv(), 694);
+        assert_eq!(uarts.ports[0].sclk_div(), 1);
+        uarts.apply_rom_baud(0, 0);
+        assert_eq!(uarts.ports[0].clkdiv(), 694);
     }
 
     #[test]

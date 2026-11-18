@@ -302,6 +302,7 @@ impl Esp32s3 {
         soc.flash = Some(Flash::new(boot.flash));
         let mut core = Core::new();
         boot::apply(&state, &mut core, &mut soc);
+        boot::program_rom_uart(&state, &mut soc);
         for segment in boot.segments {
             let flash = soc.flash.as_mut().expect("attached");
             if segment.mapped() {

@@ -166,6 +166,27 @@ pub(crate) fn apply(state: &[Value], core: &mut Core<Esp32s3>, soc: &mut Soc) {
     core.set_special(Sr::Interrupt, interrupt);
 }
 
+/// `UartDev.baut_rate` in the captured SRAM. ROM `Uart_Init` reads it for UART0.
+const UARTDEV_BAUT_RATE: u32 = 0x3fce_f134;
+
+/// Programs UART0 the way ROM `Uart_Init` did when the capture holds that baud and
+/// no UART0 register. A capture that already names a UART0 register is left alone.
+pub(crate) fn program_rom_uart(state: &[Value], soc: &mut Soc) {
+    let captured = state.iter().any(|value| {
+        matches!(value, Value::Register(addr, _) if (0x6000_0000..0x6000_0084).contains(addr))
+    });
+    if captured {
+        return;
+    }
+    let Some(baud) = state.iter().find_map(|value| match *value {
+        Value::Word(UARTDEV_BAUT_RATE, word) => Some(word),
+        _ => None,
+    }) else {
+        return;
+    };
+    soc.uart.apply_rom_baud(0, baud);
+}
+
 /// A segment of the app image: `len` bytes at bus address `addr`, from flash offset `offset`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Segment {
@@ -203,5 +224,12 @@ mod tests {
         assert_eq!((core, registers, words), (77, 612, 7234));
         assert!(values.contains(&Value::Core("a1", 0x3fce_b340)));
         assert!(values.contains(&Value::Register(0x600c_0060, 0x000a_8400)));
+        assert!(values.contains(&Value::Word(UARTDEV_BAUT_RATE, 115200)));
+        assert!(
+            values.iter().all(|value| {
+                !matches!(value, Value::Register(addr, _) if (0x6000_0000..0x6000_0084).contains(addr))
+            }),
+            "the capture names no UART0 register"
+        );
     }
 }
