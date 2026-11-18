@@ -4,7 +4,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use orbe_scene::{BoardFacts, Card, Gap, board_facts, catalog_cards, param_sentence, si_amount};
+use orbe_scene::{
+    BoardFacts, Card, Gap, board_facts, catalog_cards, holes_text, param_sentence, si_amount,
+};
 use orbe_session::BRIGHTNESS_WINDOW;
 
 pub struct Skill {
@@ -217,8 +219,7 @@ fn parts(catalog: &[Card]) -> String {
         if let Some(summary) = &part.description {
             out.push_str(&format!("{summary}\n\n"));
         }
-        let pins: Vec<String> = part.pins.iter().map(|pin| pin.name.clone()).collect();
-        out.push_str(&format!("- Pins: {}.\n", quoted(&pins)));
+        out.push_str(&format!("- Pins: {}.\n", pin_text(part)));
         for param in &part.params {
             out.push_str(&format!("- `{}`: {}.\n", param.name, param_sentence(param)));
         }
@@ -263,6 +264,33 @@ fn quoted(names: &[String]) -> String {
         .map(|n| format!("`{n}`"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// A part's pins. A breadboard's holes are one range per row, the same text `orbe part` prints,
+/// instead of a name for every hole.
+fn pin_text(part: &Card) -> String {
+    let Some(holes) = &part.holes else {
+        let pins: Vec<String> = part.pins.iter().map(|pin| pin.name.clone()).collect();
+        return quoted(&pins);
+    };
+    let is_hole = |name: &str| holes.strips.iter().flatten().any(|hole| hole == name);
+    let pins: Vec<String> = part
+        .pins
+        .iter()
+        .filter(|pin| !is_hole(&pin.name))
+        .map(|pin| pin.name.clone())
+        .collect();
+    let ranges = holes_text(
+        part.pins
+            .iter()
+            .map(|pin| pin.name.as_str())
+            .filter(|name| is_hole(name)),
+    );
+    if pins.is_empty() {
+        ranges
+    } else {
+        format!("{}; {ranges}", quoted(&pins))
+    }
 }
 
 #[cfg(test)]
