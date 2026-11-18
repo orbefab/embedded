@@ -63,7 +63,10 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
             high,
             low,
             pull_up: Some(mcu.pull_up_resistance.si.get()),
-            pull_down: None,
+            pull_down: mcu
+                .pull_down_resistance
+                .as_ref()
+                .map(|value| value.si.get()),
             leakage: Some(mcu.leakage_resistance.si.get()),
         })
         .collect();
@@ -161,7 +164,8 @@ mod tests {
 ///
 /// `VCC` and `GND` need nets, and every GPIO is optional. A GPIO with no net is neither stamped
 /// nor watched. One with a net drives through `output` from `VCC` and into `GND`, pulls up
-/// through `pull_up_resistance`, or is off, as the firmware sets it, leaks to `VCC` and to `GND`
+/// through `pull_up_resistance`, pulls down through `pull_down_resistance` when the part has
+/// one, pulls both ways, or is off, as the firmware sets it, leaks to `VCC` and to `GND`
 /// through `leakage_resistance`, and reads its level through `input_threshold`. `console` is
 /// what the host sends its console: each event's bytes, in order, after t = 0 and after the
 /// previous event. Only parse builds one.
@@ -175,6 +179,9 @@ pub struct Esp32s3 {
     pub output: OutputStage,
     /// Ohm. Every GPIO's pull-up.
     pub pull_up_resistance: Value,
+    /// Ohm. Every GPIO's pull-down. `None` in a netlist written before the field, whose pads
+    /// never pull down.
+    pub pull_down_resistance: Option<Value>,
     /// Ohm. Every GPIO's to `VCC` and again to `GND`, in every drive state.
     pub leakage_resistance: Value,
     pub input_threshold: Threshold,
@@ -259,6 +266,8 @@ pub(crate) struct WireEsp32s3 {
     firmware: WireFirmware,
     output: WireOutputStage,
     pull_up_resistance: WireValue,
+    #[serde(default)]
+    pull_down_resistance: Option<WireValue>,
     leakage_resistance: WireValue,
     input_threshold: WireThreshold,
     #[serde(default)]
@@ -333,6 +342,10 @@ pub(crate) fn resolve_esp32s3(ctx: ParseCtx<'_>, wire: WireEsp32s3) -> Option<Es
     let firmware = resolve_firmware(part_ref, wire.rom, wire.firmware, blobs, out);
     let output = resolve_output_stage(part_ref, wire.output, out);
     let pull_up = ohm("pull_up_resistance", wire.pull_up_resistance, out);
+    let pull_down = match wire.pull_down_resistance {
+        None => Some(None),
+        Some(value) => ohm("pull_down_resistance", value, out).map(Some),
+    };
     let leakage = ohm("leakage_resistance", wire.leakage_resistance, out);
     let input_threshold = resolve_threshold(
         part_ref,
@@ -348,6 +361,7 @@ pub(crate) fn resolve_esp32s3(ctx: ParseCtx<'_>, wire: WireEsp32s3) -> Option<Es
         firmware: firmware?,
         output: output?,
         pull_up_resistance: pull_up?,
+        pull_down_resistance: pull_down?,
         leakage_resistance: leakage?,
         input_threshold: input_threshold?,
         console: console?,

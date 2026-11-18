@@ -8,7 +8,8 @@
 //! unless `OEN_SEL` hands the enable to `GPIO_ENABLE`. A pad routed to any other signal, or to
 //! another IO_MUX function, drives nothing. A pad whose `GPIO_PINn` sets `PAD_DRIVER` is open
 //! drain, and drives nothing for a high level. A pad that does not drive pulls up when `FUN_WPU`
-//! is set. `FUN_WPD` is kept and not stamped, since the seam has no pull-down drive.
+//! is set, pulls down when `FUN_WPD` is set, and pulls both ways when both are, through both
+//! resistors to their rails.
 //!
 //! Each change that can move a level senses the pads, and latches each edge its pad's
 //! `INT_TYPE` names into `GPIO_STATUS`. A level type is pending while its level holds.
@@ -46,6 +47,7 @@ const PIN_BITS: u32 = (1 << 18) - 1;
 /// at the tick it changes, through no synchronizer.
 pub(crate) const PIN_UNRUN: u32 = 0x3 | 0x3 << 3 | 0x3 << 11;
 
+const FUN_WPD: u32 = 1 << 7;
 const FUN_WPU: u32 = 1 << 8;
 const FUN_IE: u32 = 1 << 9;
 const MCU_SEL_SHIFT: u32 = 12;
@@ -64,6 +66,9 @@ pub enum PadDrive {
     High,
     Low,
     PullUp,
+    PullDown,
+    /// Both pulls, each to its rail.
+    PullBoth,
     Off,
 }
 
@@ -372,19 +377,32 @@ impl Gpio {
         match self.output(pad) {
             (true, true) if !open_drain => PadDrive::High,
             (true, false) => PadDrive::Low,
-            _ if self.io_mux[pad] & FUN_WPU != 0 => PadDrive::PullUp,
-            _ => PadDrive::Off,
+            _ => match (
+                self.io_mux[pad] & FUN_WPU != 0,
+                self.io_mux[pad] & FUN_WPD != 0,
+            ) {
+                (true, true) => PadDrive::PullBoth,
+                (true, false) => PadDrive::PullUp,
+                (false, true) => PadDrive::PullDown,
+                (false, false) => PadDrive::Off,
+            },
         }
     }
 
     /// `GPIO_IN` and `GPIO_IN1` as one word. A pad with its input disabled reads 0. One with a
-    /// net reads its net. One with no net reads what it drives, else its pull-up.
+    /// net reads its net. One with no net reads what it drives, else its pull. With both pulls
+    /// it keeps the level it read last, since two equal pulls hold it at half the supply,
+    /// between the input thresholds.
     fn sample(&self) -> u64 {
         (0..PADS)
             .filter(|&pad| self.io_mux[pad] & FUN_IE != 0)
             .filter(|&pad| match self.pads[pad] {
                 Some(level) => level,
-                None => matches!(self.drive(pad), PadDrive::High | PadDrive::PullUp),
+                None => match self.drive(pad) {
+                    PadDrive::High | PadDrive::PullUp => true,
+                    PadDrive::PullBoth => self.levels >> pad & 1 != 0,
+                    PadDrive::Low | PadDrive::PullDown | PadDrive::Off => false,
+                },
             })
             .fold(0, |bits, pad| bits | 1 << pad)
     }
@@ -567,6 +585,49 @@ mod tests {
         );
         gpio.write(0x30, 1 << (43 - 32)).unwrap();
         assert_eq!(gpio.drive(43), PadDrive::Off, "GPIO_ENABLE set, inverted");
+    }
+
+    #[test]
+    fn a_pad_that_does_not_drive_pulls_down_up_or_both_ways() {
+        let mut gpio = gpio21();
+        let mux = |pulls: u32| (0x4 + 4 * 21, GPIO_FUNC | FUN_IE | pulls);
+        let (offset, value) = mux(FUN_WPD);
+        gpio.write_io_mux(offset, value);
+        assert_eq!(gpio.drive(21), PadDrive::PullDown);
+        let (offset, value) = mux(FUN_WPU | FUN_WPD);
+        gpio.write_io_mux(offset, value);
+        assert_eq!(gpio.drive(21), PadDrive::PullBoth);
+        let (offset, value) = mux(FUN_WPU);
+        gpio.write_io_mux(offset, value);
+        assert_eq!(gpio.drive(21), PadDrive::PullUp);
+        let (offset, value) = mux(FUN_WPD);
+        gpio.write_io_mux(offset, value);
+        gpio.write(0x24, 1 << 21).unwrap();
+        gpio.write(0x08, 1 << 21).unwrap();
+        assert_eq!(gpio.drive(21), PadDrive::High, "a driven pad does not pull");
+        gpio.write(0x0c, 1 << 21).unwrap();
+        assert_eq!(gpio.drive(21), PadDrive::Low);
+        gpio.write(0x74 + 4 * 21, PAD_DRIVER).unwrap();
+        gpio.write(0x08, 1 << 21).unwrap();
+        assert_eq!(
+            gpio.drive(21),
+            PadDrive::PullDown,
+            "an open-drain high pulls down"
+        );
+    }
+
+    #[test]
+    fn a_pad_with_no_net_reads_its_pull_down_and_keeps_its_level_under_both() {
+        let mut gpio = Gpio::new(&[]);
+        let mux = |pulls: u32| GPIO_FUNC | FUN_IE | pulls;
+        gpio.write_io_mux(0x4 + 4 * 5, mux(FUN_WPU));
+        assert_eq!(gpio.read(0x3c).unwrap() & 1 << 5, 1 << 5);
+        gpio.write_io_mux(0x4 + 4 * 5, mux(FUN_WPU | FUN_WPD));
+        assert_eq!(gpio.read(0x3c).unwrap() & 1 << 5, 1 << 5, "kept high");
+        gpio.write_io_mux(0x4 + 4 * 5, mux(FUN_WPD));
+        assert_eq!(gpio.read(0x3c).unwrap() & 1 << 5, 0);
+        gpio.write_io_mux(0x4 + 4 * 5, mux(FUN_WPU | FUN_WPD));
+        assert_eq!(gpio.read(0x3c).unwrap() & 1 << 5, 0, "kept low");
     }
 
     fn pin4(gpio: &mut Gpio, trigger: u32, enabled: bool) {
