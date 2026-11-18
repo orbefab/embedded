@@ -23,10 +23,18 @@ pub(super) enum Target {
     Other(&'static str),
 }
 
-/// A file under a part folder that exists and could not be read.
+/// A file or directory under a part folder that exists and could not be read.
 pub(super) struct Unreadable {
-    /// Path relative to the part folder, with `/` between parts.
+    /// Path relative to the part folder, with `/` between parts. `.` is the part folder.
     pub(super) rel: String,
+    pub(super) error: String,
+    pub(super) permission: bool,
+    /// `rel` is a directory that could not be listed. A file is `false`.
+    pub(super) directory: bool,
+}
+
+/// A directory `add` tried to list, and the I/O error.
+pub(super) struct Denied {
     pub(super) error: String,
     pub(super) permission: bool,
 }
@@ -76,6 +84,9 @@ pub(super) struct Snapshot {
     pub(super) lock_error: Option<String>,
     /// `parts.lock` exists and this process cannot read it. The string is the I/O error.
     pub(super) lock_denied: Option<String>,
+    /// `parts/` exists and this process cannot list it. The ids under it were not read,
+    /// so a missing folder is not the same thing as a part that is absent.
+    pub(super) parts_denied: Option<Denied>,
     /// The project folder as the user named it, from the directory `orbe` ran in.
     pub(super) root: PathBuf,
 }
@@ -93,16 +104,28 @@ impl Snapshot {
     }
 }
 
-/// Reads `parts.lock` and `parts/<id>` for each id. A folder that cannot be read whole is
-/// still a target, one that differs.
+/// Reads `parts.lock` and `parts/<id>` for each id. A directory that cannot be listed is
+/// [`Denied`] or an [`Unreadable`] directory. It is not an absent part.
 pub(super) fn load(root: &Path, ids: &BTreeSet<String>) -> Result<Snapshot, RunError> {
     let parts = root.join("parts");
-    if parts.exists() && !parts.is_dir() {
-        return Err(io_at(&parts, io::Error::other("`parts` is not a folder")));
-    }
+    let parts_denied = match fs::metadata(&parts) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => Some(denied(error)),
+        Ok(meta) if !meta.is_dir() => {
+            return Err(io_at(&parts, io::Error::other("`parts` is not a folder")));
+        }
+        Ok(_) => match fs::read_dir(&parts) {
+            Ok(_) => None,
+            Err(error) => Some(denied(error)),
+        },
+    };
     let mut targets = BTreeMap::new();
-    for id in ids {
-        targets.insert(id.clone(), target(&parts.join(id)));
+    // A directory that cannot be listed hides every id. Walking them would record each
+    // one as absent, and `--relock` would write a lock with those parts removed.
+    if parts_denied.is_none() {
+        for id in ids {
+            targets.insert(id.clone(), target(&parts.join(id)));
+        }
     }
     let (lock_text, lock, lock_error, lock_denied) = read_lock(root)?;
     Ok(Snapshot {
@@ -111,13 +134,25 @@ pub(super) fn load(root: &Path, ids: &BTreeSet<String>) -> Result<Snapshot, RunE
         lock_text,
         lock_error,
         lock_denied,
+        parts_denied,
         root: root.to_path_buf(),
     })
 }
 
+fn denied(error: io::Error) -> Denied {
+    Denied {
+        permission: error.kind() == io::ErrorKind::PermissionDenied,
+        error: error.to_string(),
+    }
+}
+
 fn target(path: &Path) -> Target {
-    let Ok(meta) = fs::symlink_metadata(path) else {
-        return Target::Absent;
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Target::Absent,
+        // A failure other than "nothing is there" is not an absent part. Treating it as
+        // absent is what let `--relock` drop the part from the lock.
+        Err(error) => return Target::Folder(unreadable_folder(".", error)),
     };
     if meta.file_type().is_symlink() {
         return Target::Other("a link");
@@ -148,10 +183,7 @@ fn read_tree(
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) => {
-            odd.push(format!(
-                "`{}`, which cannot be read: {error}",
-                rel(root, dir)
-            ));
+            push_directory(unreadable, rel(root, dir), error);
             return;
         }
     };
@@ -159,10 +191,7 @@ fn read_tree(
         let path = match entry {
             Ok(entry) => entry.path(),
             Err(error) => {
-                odd.push(format!(
-                    "`{}`, which cannot be read: {error}",
-                    rel(root, dir)
-                ));
+                push_directory(unreadable, rel(root, dir), error);
                 continue;
             }
         };
@@ -185,13 +214,45 @@ fn read_tree(
                         rel: shown,
                         error: error.to_string(),
                         permission: error.kind() == io::ErrorKind::PermissionDenied,
+                        directory: false,
                     });
                 }
             },
             Ok(_) => odd.push(format!("`{shown}`, which is not a file")),
-            Err(error) => odd.push(format!("`{shown}`, which cannot be read: {error}")),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                odd.push(format!("`{shown}`, which cannot be read: {error}"));
+            }
+            Err(error) => unreadable.push(Unreadable {
+                rel: shown,
+                error: error.to_string(),
+                permission: error.kind() == io::ErrorKind::PermissionDenied,
+                directory: false,
+            }),
         }
     }
+}
+
+/// A directory that could not be listed. It is not recorded as an odd entry, which would
+/// read as a content difference and hide the read.
+fn push_directory(unreadable: &mut Vec<Unreadable>, rel: String, error: io::Error) {
+    if unreadable
+        .iter()
+        .any(|item| item.directory && item.rel == rel)
+    {
+        return;
+    }
+    unreadable.push(Unreadable {
+        rel,
+        error: error.to_string(),
+        permission: error.kind() == io::ErrorKind::PermissionDenied,
+        directory: true,
+    });
+}
+
+fn unreadable_folder(rel: &str, error: io::Error) -> Folder {
+    let mut folder = Folder::from_files(BTreeMap::new());
+    push_directory(&mut folder.unreadable, rel.to_string(), error);
+    folder
 }
 
 fn rel(root: &Path, path: &Path) -> String {

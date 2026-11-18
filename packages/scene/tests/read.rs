@@ -993,6 +993,16 @@ fn unreadable(path: &std::path::Path) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o000)).unwrap();
 }
 
+/// Puts a directory back to mode 755 so the test directory can be removed.
+struct OpenDir(std::path::PathBuf);
+
+impl Drop for OpenDir {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+    }
+}
+
 #[test]
 fn an_unreadable_part_file_is_one_io_error() {
     if common::mode_000_reads() {
@@ -1013,6 +1023,88 @@ fn an_unreadable_part_file_is_one_io_error() {
         found[0].message
     );
     assert_chmod_names(&found[0].hint, &file);
+}
+
+#[test]
+fn an_unreadable_parts_directory_is_one_io_error() {
+    if common::mode_000_reads() {
+        return;
+    }
+    let project = project("nano-button");
+    let parts = project.path().join("parts");
+    unreadable(&parts);
+    let _open = OpenDir(parts.clone());
+    let found = scene_errors(project.path());
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].code, orbe_scene::Code::Io);
+    assert_eq!(found[0].file, "parts");
+    assert!(
+        found[0].message.contains("cannot read parts:"),
+        "{}",
+        found[0].message
+    );
+    assert!(
+        found[0].message.contains("Permission denied"),
+        "{}",
+        found[0].message
+    );
+    assert_chmod_dir(&found[0].hint, &parts);
+    assert!(!found[0].hint.contains("orbe add"), "{}", found[0].hint);
+}
+
+#[test]
+fn an_unreadable_part_directory_is_one_io_error() {
+    if common::mode_000_reads() {
+        return;
+    }
+    let project = project("nano-button");
+    let folder = project.path().join("parts/led-5mm");
+    unreadable(&folder);
+    let _open = OpenDir(folder.clone());
+    let found = scene_errors(project.path());
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].code, orbe_scene::Code::Io);
+    assert_eq!(found[0].file, "parts/led-5mm");
+    assert!(
+        found[0].message.contains("cannot read parts/led-5mm:"),
+        "{}",
+        found[0].message
+    );
+    assert_chmod_dir(&found[0].hint, &folder);
+    assert!(
+        !found[0].message.contains("no part.jsonc"),
+        "{}",
+        found[0].message
+    );
+    assert!(!found[0].hint.contains("--overwrite"), "{}", found[0].hint);
+}
+
+#[test]
+fn an_unreadable_subdirectory_is_one_io_error() {
+    if common::mode_000_reads() {
+        return;
+    }
+    let project = project("nano-button");
+    let notes = project.path().join("parts/led-5mm/notes");
+    fs::create_dir(&notes).unwrap();
+    unreadable(&notes);
+    let _open = OpenDir(notes.clone());
+    let found = scene_errors(project.path());
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].code, orbe_scene::Code::Io);
+    assert!(
+        found[0]
+            .message
+            .contains("cannot read parts/led-5mm/notes:"),
+        "{}",
+        found[0].message
+    );
+    assert_chmod_dir(&found[0].hint, &notes);
+    assert!(
+        !found[0].message.contains("cannot hash"),
+        "{}",
+        found[0].message
+    );
 }
 
 #[test]
@@ -1040,13 +1132,22 @@ fn an_unreadable_file_in_a_copy_is_one_io_error_that_names_it() {
 
 /// The chmod in `hint`, run from the current directory, names `file`.
 fn assert_chmod_names(hint: &str, file: &std::path::Path) {
+    assert_chmod_mode(hint, file, "u+r");
+}
+
+/// The chmod in `hint` is `u+rx` and names `dir`.
+fn assert_chmod_dir(hint: &str, dir: &std::path::Path) {
+    assert_chmod_mode(hint, dir, "u+rx");
+}
+
+fn assert_chmod_mode(hint: &str, file: &std::path::Path, mode: &str) {
     let command = hint
         .split('`')
         .nth(1)
         .unwrap_or_else(|| panic!("no command in {hint}"));
     let path = command
-        .strip_prefix("chmod u+r ")
-        .unwrap_or_else(|| panic!("not a chmod: {hint}"));
+        .strip_prefix(&format!("chmod {mode} "))
+        .unwrap_or_else(|| panic!("not a chmod {mode}: {hint}"));
     let resolved = std::env::current_dir().unwrap().join(path);
     assert_eq!(
         resolved.canonicalize().unwrap(),
