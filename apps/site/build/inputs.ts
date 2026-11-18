@@ -15,7 +15,7 @@ const REPO = resolve(import.meta.dirname, "../../..");
 const INPUT = join(REPO, ".scratch/site");
 /** The folder Vite serves at the base and copies into the build: the brand's public files, the
  * registry at r/, orbe-wasm at orbe-wasm/, each part's view.json, the runtime source and
- * _headers. */
+ * _headers. When install lines show, it also holds install.sh, served at /embedded/install.sh. */
 export const PUBLIC = join(INPUT, "public");
 const MODULE = "virtual:orbe-site";
 
@@ -73,6 +73,7 @@ async function assemble(install: boolean): Promise<SiteData> {
     mkdirSync(join(PUBLIC, "parts", id), { recursive: true });
     writeFileSync(join(PUBLIC, "parts", id, "view.json"), view);
   }
+  if (install) cpSync(join(REPO, "scripts/install.sh"), join(PUBLIC, "install.sh"));
   writeFileSync(join(PUBLIC, "_headers"), HEADERS);
 
   const commit = engine.orbe?.commit ?? null;
