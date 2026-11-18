@@ -734,7 +734,13 @@ impl Soc {
                 self.ending = Some(Ending::Refused(Refused::Register("GPIO", setting)));
                 true
             }),
-            IO_MUX => self.gpio.write_io_mux(offset, value),
+            IO_MUX => self
+                .gpio
+                .write_io_mux(offset, value)
+                .unwrap_or_else(|setting| {
+                    self.ending = Some(Ending::Refused(Refused::Register("IO_MUX", setting)));
+                    true
+                }),
             RTC_CNTL => self
                 .watchdogs
                 .write_rtc(now, offset, value)

@@ -37,6 +37,8 @@ pub struct Bridge {
     /// The GPIO of each output and watch.
     gpios: Vec<u8>,
     image: Vec<Drive>,
+    /// Whether each output pulls down, beside its drive in `image`.
+    pulled_down: Vec<bool>,
     /// The levels it last took, in watch order. Empty before the power-on input.
     levels: Vec<bool>,
     /// The fault that ended its run, once a stop reported it.
@@ -104,6 +106,7 @@ impl Bridge {
         let mut bridge = Bridge {
             chip,
             image: vec![Drive::Off; gpios.len()],
+            pulled_down: vec![false; gpios.len()],
             gpios,
             levels: Vec::new(),
             fault: None,
@@ -247,12 +250,15 @@ impl Bridge {
     }
 
     fn refresh(&mut self) {
-        for (drive, &gpio) in self.image.iter_mut().zip(&self.gpios) {
-            *drive = match self.chip.drive(gpio) {
-                PadDrive::High => Drive::High,
-                PadDrive::Low => Drive::Low,
-                PadDrive::PullUp => Drive::PullUp,
-                PadDrive::Off => Drive::Off,
+        let outputs = self.image.iter_mut().zip(&mut self.pulled_down);
+        for ((drive, pulled_down), &gpio) in outputs.zip(&self.gpios) {
+            (*drive, *pulled_down) = match self.chip.drive(gpio) {
+                PadDrive::High => (Drive::High, false),
+                PadDrive::Low => (Drive::Low, false),
+                PadDrive::PullUp => (Drive::PullUp, false),
+                PadDrive::PullDown => (Drive::Off, true),
+                PadDrive::PullBoth => (Drive::PullUp, true),
+                PadDrive::Off => (Drive::Off, false),
             };
         }
     }
@@ -306,6 +312,11 @@ impl Mcu for Bridge {
     #[inline]
     fn drive(&self) -> &[Drive] {
         &self.image
+    }
+
+    #[inline]
+    fn pulled_down(&self) -> &[bool] {
+        &self.pulled_down
     }
 
     /// Its GPIOs' levels, in watch order.

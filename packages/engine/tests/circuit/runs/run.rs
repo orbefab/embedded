@@ -345,8 +345,8 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
             let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 14];
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
             assert_kept_resets(&name, &doc, 7);
-        } else if name == "esp32s3-ring" {
-            // The 6 registers the app touches that the model does not keep, the write that sets
+        } else if name == "esp32s3-ring" || name == "esp32s3-pulls" {
+            // The 6 registers each app touches that the model does not keep, the write that sets
             // the reset of SYSTEM_WDG at start-up, and the 6 writes that pulse the resets of
             // SYSTIMER, TIMG0 and TIMG1 at start-up.
             let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 13];

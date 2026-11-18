@@ -317,6 +317,12 @@ impl Esp32s3 {
         Esp32s3::with(core, soc)
     }
 
+    /// The part names no pull-down resistor. A store that sets `FUN_WPD` on a pad with a net
+    /// ends the run and writes nothing. A pad with no net keeps the bit.
+    pub fn omit_pull_down(&mut self) {
+        self.soc.gpio.omit_pull_down();
+    }
+
     fn with(core: Core<orbe_xtensa::Esp32s3>, soc: Soc) -> Esp32s3 {
         Esp32s3 {
             cores: Cores::new(core),

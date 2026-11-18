@@ -1274,10 +1274,11 @@ A `pulses_replay` has no `ratings` object and no `i`, `v`, or `p`. It has no log
 | `output.high_drop`, `output.low_drop` | `V` | at least 0, else rule `non_negative` |
 | `output.high_resistance`, `output.low_resistance` | `ohm` | the resistor's |
 | `pull_up_resistance` | `ohm` | the resistor's |
+| `pull_down_resistance` | `ohm` | optional, the resistor's |
 | `leakage_resistance` | `ohm` | the resistor's |
 | `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
 
-A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
+A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`. `pull_down_resistance` may be absent. A store that sets `FUN_WPD` on a pad with a net, while the part names none, ends the run with `chip.unsupported_setting`, `IO_MUX` `pull_down`, and writes nothing. A pad with no net is never stamped, so that store is kept. A netlist that never turns a netted pad's pull-down on keeps the meaning it had before the field, and the version stays 0.
 
 `firmware.elf` names a 32-bit little-endian Xtensa ELF executable. Parse loads each loadable segment with a nonzero memory size. A segment must lie inside one SRAM window, from `0x4037_0000` to `0x403e_0000` on the instruction bus or from `0x3fc8_8000` to `0x3fd0_0000` on the data bus, and no two segments may reach the same byte of SRAM through either window. The entry must lie in a segment on the instruction bus. A blob that is not such an executable is `netlist.firmware` rule `elf`, a segment or an entry outside those windows is rule `unmapped`, and two segments on one byte are rule `overlap`, each with `line` `null`. The function symbols and untyped labels of the symbol table name a PC in a diagnostic.
 
@@ -1291,7 +1292,7 @@ A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.u
 
 `rom` names the mask ROM's ELF, which Espressif publishes for each chip revision. The model runs one ROM, revision 0's, so `rom` must have its SHA-256 and length, `c0ce0f338d1de1bdc6efbef1591779a2a42c1ab7d759d3c6ae8ae63a7dd34cfd` and 949,552 bytes. Another value, `rom` beside `firmware.elf`, or no `rom` beside `firmware.flash` is rule `rom`. No example commits the ROM. `packages/engine/scripts/blobs.sh` fetches it from Espressif's release into a cache folder by pinned hash, and prints that folder for `--blobs`.
 
-Each GPIO with a net drives high through `output.high_resistance` from `VCC`, drives low through `output.low_resistance` into `GND`, pulls up through `pull_up_resistance` to `VCC`, or is off, as the firmware sets it. In each of those states it also leaks through `leakage_resistance` to `VCC` and through another to `GND`. It reads high above `input_threshold.high` times `V(VCC) - V(GND)` over `GND`, and low at or below `input_threshold.low` times it.
+Each GPIO with a net drives high through `output.high_resistance` from `VCC`, drives low through `output.low_resistance` into `GND`, pulls up through `pull_up_resistance` to `VCC`, pulls down through `pull_down_resistance` to `GND`, pulls both ways through both, or is off, as the firmware sets it. In each of those states it also leaks through `leakage_resistance` to `VCC` and through another to `GND`. It reads high above `input_threshold.high` times `V(VCC) - V(GND)` over `GND`, and low at or below `input_threshold.low` times it.
 
 The example's values are Table 5-4 of the ESP32-S3 Series Datasheet v2.2, at 3.3 V and 25 C.
 
@@ -1301,6 +1302,7 @@ The example's values are Table 5-4 of the ESP32-S3 Series Datasheet v2.2, at 3.3
 | `output.low_resistance` | 17.68 ohm | `IOL` 28 mA at `VOL` 0.495 V with drive strength 3, so 0.495 V over 28 mA. |
 | `output.*_drop` | 0 V | Each stage is a resistance from its rail. |
 | `pull_up_resistance` | 45 kohm | `RPU`, typical. |
+| `pull_down_resistance` | 45 kohm | `RPD`, typical. The example leaves it out, and `packages/engine/tests/circuits/esp32s3-pulls` names it. |
 | `leakage_resistance` | 66 Mohm | `IIH` and `IIL` at most 50 nA, so 3.3 V over 50 nA. |
 | `input_threshold` | 0.25 and 0.75 | `VIL` at most 0.25 VDD and `VIH` at least 0.75 VDD. |
 

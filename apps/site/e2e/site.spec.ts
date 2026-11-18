@@ -138,6 +138,23 @@ test.describe("landing", () => {
     await shot(page, "site-landing");
   });
 
+  test("a card counts the parts the scene places", async () => {
+    const counts = await page.locator('a[href^="/embedded/blocks/"]').evaluateAll((links) =>
+      Object.fromEntries(
+        links.flatMap((link) => {
+          const count = link.querySelector("span.font-mono")?.textContent;
+          return count?.endsWith(" parts") ? [[link.getAttribute("href"), count]] : [];
+        }),
+      ),
+    );
+    expect(counts).toEqual({
+      "/embedded/blocks/nano-button-led/": "nano-board, 6 parts",
+      "/embedded/blocks/nano-led-fade/": "nano-board, 4 parts",
+      "/embedded/blocks/nano-light-comparator/": "nano-board, 10 parts",
+      "/embedded/blocks/uno-button-led/": "uno-board, 6 parts",
+    });
+  });
+
   test("switching to nano-led-fade terminates the first Worker and revokes every object URL it made", async () => {
     await page.click('[data-block="nano-led-fade"]');
     await page.waitForFunction(() => performance.getEntriesByName("orbe:first-frame:nano-led-fade").length > 0, null, { timeout: 30_000 });
@@ -454,10 +471,10 @@ test.describe("nano-button-led", () => {
     expect(/scene\.jsonc/.test(body) && /firmware\/button\/button\.ino/.test(body)).toBe(true);
   });
 
-  test("it shows no install command and no README", async () => {
+  test("it shows the README and no install command", async () => {
     const body = await bodyText(page);
     expect(
-      !INSTALL.test(body) && !/README\.md\n/.test(body.split("Files")[0] ?? ""),
+      body.includes("A 10k pull-down holds D2 low") && !body.includes("Install it into a project") && !INSTALL.test(body),
       body.match(INSTALL)?.[0] ?? "",
     ).toBe(true);
   });
@@ -483,12 +500,61 @@ test.describe("nano-button-led", () => {
   });
 });
 
-test("an unknown path answers 404 with the site's page", async ({ browser, host }) => {
+const README = {
+  "/embedded/blocks/nano-button-led/": "A 10k pull-down holds D2 low",
+  "/embedded/blocks/nano-led-fade/": "fades up and down about every 3 seconds",
+  "/embedded/blocks/nano-light-comparator/": "prints dark and a count",
+  "/embedded/blocks/uno-button-led/": "the Uno's L LED",
+} as const;
+
+test("every Block page shows its README and no install line", async ({ browser, host }) => {
+  for (const [path, sentence] of Object.entries(README)) {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.goto(`${host.base}${path}`);
+    const body = await bodyText(page);
+    expect(body.includes(sentence) && !body.includes("Install it into a project") && !INSTALL.test(body), `${path} ${body.match(INSTALL)?.[0] ?? ""}`).toBe(
+      true,
+    );
+    await context.close();
+  }
+});
+
+test("the Blocks page counts the parts each scene places", async ({ browser, host }) => {
   const context = await browser.newContext();
   const page = await context.newPage();
-  const response = await page.goto(`${host.base}/embedded/no-such-page`);
-  expect(response?.status() === 404 && (await page.textContent("h1")) === "Not here", String(response?.status())).toBe(true);
+  await page.goto(`${host.base}/embedded/blocks/`);
+  const counts = await page.locator('a[href^="/embedded/blocks/"]').evaluateAll((links) =>
+    Object.fromEntries(
+      links.flatMap((link) => {
+        const count = link.querySelector("span.font-mono")?.textContent;
+        return count?.endsWith(" parts") ? [[link.getAttribute("href"), count]] : [];
+      }),
+    ),
+  );
+  expect(counts).toEqual({
+    "/embedded/blocks/nano-button-led/": "nano-board, 6 parts",
+    "/embedded/blocks/nano-led-fade/": "nano-board, 4 parts",
+    "/embedded/blocks/nano-light-comparator/": "nano-board, 10 parts",
+    "/embedded/blocks/uno-button-led/": "uno-board, 6 parts",
+  });
   await context.close();
+});
+
+test("an unknown path answers 404 with the site's page and logs no page error", async ({ browser, host }) => {
+  for (const path of ["/embedded/no-such-page", "/embedded/parts/no-such-part/"]) {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    const response = await page.goto(`${host.base}${path}`);
+    await page.waitForTimeout(1000);
+    expect(
+      response?.status() === 404 && (await page.textContent("h1")) === "Not here" && (await page.title()) === "Not here | orbe" && pageErrors.length === 0,
+      JSON.stringify({ path, status: response?.status(), title: await page.title(), pageErrors }),
+    ).toBe(true);
+    await context.close();
+  }
 });
 
 test.describe("cache", () => {
