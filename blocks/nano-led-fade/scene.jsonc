@@ -14,6 +14,7 @@
     "r1": { "on": { "a": "bb.i20" } }, // b in column 24
     "led1": { "on": { "anode": "bb.h24" } }, // cathode in column 25
   },
+  "nets": { "GND": "nano.GND" },
   "wires": [
     ["bb.j4", "bb.j20"], // D9 to r1.a
     ["bb.j12", "bb.Z13", { "color": "#161616" }], // GND to the - rail

@@ -255,6 +255,7 @@ pub(crate) const PART: &[(&str, Shape)] = &[
     ("not_simulated", Shape::List(&NOT_SIMULATED)),
     ("buy", Shape::List(&BUY)),
     ("joins_only", Shape::Bool),
+    ("open", Shape::List(&Shape::Str)),
     ("holes", HOLES),
 ];
 

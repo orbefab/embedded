@@ -18,6 +18,7 @@
     "r1": { "on": { "a": "bb.d22" } }, // b in column 26
     "led1": { "on": { "anode": "bb.c26" } }, // cathode in column 27
   },
+  "nets": { "GND": "uno.GND" },
   "wires": [
     ["uno.5V", "bb.W3", { "color": "#d12b2b" }],
     ["uno.GND", "bb.X3", { "color": "#161616" }],
