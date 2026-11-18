@@ -99,9 +99,9 @@ impl Inputs {
     /// turned off, from a copy of its core that has run at least to `at`. While the drive is
     /// off at `at`, that stretch holds `at`, so a read at or before `at` was taken with the pin
     /// floating as it is now: a read under the pull-up, or before a pull-up came and went,
-    /// does not count. A candidate warns once, at the first step where its drive is off, its
-    /// firmware has read it in that stretch by then, and its net reaches ground through
-    /// neither a closed switch nor another output's drive.
+    /// does not count. A candidate warns once, at the first step where its drive is off and it
+    /// does not pull down, its firmware has read it in that stretch by then, and its net reaches
+    /// ground through neither a closed switch nor another output's drive or pull-down.
     pub(crate) fn sample(
         &mut self,
         at: Time,
@@ -114,7 +114,12 @@ impl Inputs {
         let mut k = 0;
         while k < self.candidates.len() {
             let candidate = &self.candidates[k];
-            let off = cores[candidate.active].drive()[candidate.output] == Drive::Off;
+            let core = &cores[candidate.active];
+            let pulled_down = actives[candidate.active].outputs[candidate.output]
+                .pull_down
+                .is_some()
+                && core.pulls_down(candidate.output);
+            let off = core.drive()[candidate.output] == Drive::Off && !pulled_down;
             let read_by_now =
                 read(candidate.active, candidate.output).is_some_and(|first| first <= at);
             if !off || !read_by_now {
@@ -132,7 +137,10 @@ impl Inputs {
                     }
                 }
                 for (chip, core) in actives.iter().zip(cores) {
-                    for (out, &drive) in chip.outputs.iter().zip(core.drive()) {
+                    for (n, (out, &drive)) in chip.outputs.iter().zip(core.drive()).enumerate() {
+                        if out.pull_down.is_some() && core.pulls_down(n) {
+                            unite(&mut joined, out.pin.index(), out.gnd.index());
+                        }
                         let rail = match drive {
                             Drive::High | Drive::PullUp => out.vcc,
                             Drive::Low => out.gnd,

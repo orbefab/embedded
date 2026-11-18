@@ -315,6 +315,7 @@ fn answer(netlist: &Netlist) -> active::Chip {
             high: stage,
             low: stage,
             pull_up: None,
+            pull_down: None,
             leakage: None,
         }],
         watches: vec![Watch::comparator(Signal {
