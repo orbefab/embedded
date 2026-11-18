@@ -44,6 +44,12 @@ lint_tracked() {
     exit 1
   fi
   shellcheck -x "${scripts[@]}"
+  # A download cut short through `curl | sh` must run nothing, so the installer does all its
+  # work in main and calls it on its last line.
+  [[ $(grep -v '^[[:space:]]*$' scripts/install.sh | tail -n 1) == 'main "$@"' ]] || {
+    echo "scripts/check.sh: scripts/install.sh must end with the line: main \"\$@\"" >&2
+    exit 1
+  }
   mapfile -t py < <(git ls-files '*.py')
   if [[ ${#py[@]} -eq 0 ]]; then
     echo "scripts/check.sh: no tracked Python file" >&2

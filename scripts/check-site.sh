@@ -84,14 +84,18 @@ blocks=$(pages blocks)
   fail "the build has $parts part and $blocks Block pages, and the registry lists $(listed part) and $(listed block)"
 [[ $(grep -rlE 'orbe add [a-z]' "$dist/parts" "$dist/blocks" --include=index.html | wc -l) -eq $((parts + blocks)) ]] ||
   fail "with ORBE_SITE_INSTALL=1, not every part and Block page shows its orbe add line"
-grep -q 'cargo install --locked --git https://github.com/orbefab/embedded orbe' "$dist/index.html" ||
+grep -q 'curl -fsSL https://orbefab.com/embedded/install.sh | sh' "$dist/index.html" ||
   fail "with ORBE_SITE_INSTALL=1, the landing page shows no install line"
+[[ -f $dist/install.sh ]] || fail "with ORBE_SITE_INSTALL=1, the build does not serve install.sh"
+cmp -s scripts/install.sh "$dist/install.sh" ||
+  fail "with ORBE_SITE_INSTALL=1, install.sh is not scripts/install.sh"
 grep -q 'href="https://github.com/orbefab/embedded"' "$dist/index.html" ||
   fail "with ORBE_SITE_INSTALL=1, the landing page links no repo"
-echo "check-site: ORBE_SITE_INSTALL=1 shows orbe add on $parts part and $blocks Block pages, and cargo install and the repo on the landing page"
+echo "check-site: ORBE_SITE_INSTALL=1 shows orbe add on $parts part and $blocks Block pages, and the install script and the repo on the landing page"
 
 scripts/site.sh "${site[@]}"
-shown=$(own 'orbe add|cargo install|github\.com/orbefab/embedded')
+[[ ! -e $dist/install.sh ]] || fail "install.sh is served with ORBE_SITE_INSTALL unset"
+shown=$(own 'orbe add|cargo install|github\.com/orbefab/embedded|orbefab\.com/embedded/install\.sh')
 [[ -z $shown ]] || fail "these files of the site's own show an install line or a repo link with ORBE_SITE_INSTALL unset: $shown"
 echo "check-site: no file of the site's own shows an install line or a repo link with ORBE_SITE_INSTALL unset"
 
