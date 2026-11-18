@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { test as base, expect, chromium, type Page } from "@playwright/test";
 
@@ -67,6 +67,8 @@ declare global {
       created: string[];
       revoked: Set<string>;
     };
+    orbeGlowSpan?: { min: number; max: number };
+    orbeGlowTimer?: number;
     lastPointer?: number;
     realSend?: unknown;
     sets?: unknown[];
@@ -162,4 +164,138 @@ export function orbeJson(binary: string, args: string[], env: NodeJS.ProcessEnv 
 
 export function headedSession(): { ok: boolean; url: string | null; error: unknown; state?: string; runtime: string } {
   return JSON.parse(readFileSync(HEADED_SESSION, "utf8"));
+}
+
+export type BlockKind = "button" | "fade" | "light";
+
+export interface RepoBlock {
+  id: string;
+  kind: BlockKind;
+}
+
+/** Blocks under `blocks/`. A scene this cannot classify fails the check. */
+export function repoBlocks(): RepoBlock[] {
+  const root = join(REPO, "blocks");
+  const ids = readdirSync(root)
+    .filter((id) => existsSync(join(root, id, "block.jsonc")))
+    .sort();
+  if (ids.length === 0) throw new Error("blocks/ has no Block");
+  return ids.map((id) => ({ id, kind: kindOf(readFileSync(join(root, id, "scene.jsonc"), "utf8"), id) }));
+}
+
+function kindOf(scene: string, id: string): BlockKind {
+  const code = scene
+    .split("\n")
+    .map((line) => line.replace(/\/\/.*$/, ""))
+    .join("\n");
+  if (/"world"\s*:\s*\{[^}]*"light"\s*:/.test(code)) return "light";
+  if (/"btn1"\s*:/.test(code)) return "button";
+  if (/"led1"\s*:/.test(code)) return "fade";
+  throw new Error(`${id} names no button, no fading LED and no light`);
+}
+
+export async function simulatedSeconds(page: Page): Promise<number> {
+  const text = await textOf(page, "time");
+  const time = Number(text?.match(/t = ([0-9.]+) s/)?.[1]);
+  if (!Number.isFinite(time)) throw new Error(`no simulated time in ${text}`);
+  return time;
+}
+
+export function waitSimulatedPast(page: Page, seconds: number): Promise<unknown> {
+  return page.waitForFunction(
+    (seconds) => {
+      const text = document.querySelector('[data-testid="time"]')?.textContent ?? "";
+      const time = Number(text.match(/t = ([0-9.]+) s/)?.[1]);
+      return Number.isFinite(time) && time > seconds;
+    },
+    seconds,
+    { timeout: 30_000 },
+  );
+}
+
+const LIGHT = '[data-testid="world-light"]';
+const LIGHT_VALUE = '[data-testid="world-light-value"]';
+
+// Six stops separate 300 lx from 10 lx on the log light slider.
+const LIGHT_STEPS = 6;
+
+async function stepLight(page: Page, key: "ArrowLeft" | "ArrowRight", want: string): Promise<void> {
+  const thumb = page.locator(LIGHT);
+  await thumb.scrollIntoViewIfNeeded();
+  await thumb.focus();
+  for (let k = 0; k < LIGHT_STEPS; k += 1) await page.keyboard.press(key);
+  await page.waitForFunction(
+    ([field, want]) => document.querySelector(field)?.getAttribute("data-frame") === want,
+    [LIGHT_VALUE, want] as const,
+    { timeout: 10_000 },
+  );
+}
+
+/** Play, require simulated time to move, and check the behaviour the scene declares. */
+export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, shotName: string | null): Promise<void> {
+  await page.locator("canvas").scrollIntoViewIfNeeded();
+  if ((await textOf(page, "state")) !== "playing") {
+    await page.click('[data-testid="play"]');
+    await waitState(page, "playing");
+  }
+  // The site is already playing when its page opens, so measure from here, not from t = 0.
+  const start = await simulatedSeconds(page);
+  if (block.kind === "fade") {
+    await page.evaluate(() => {
+      window.orbeGlowSpan = undefined;
+      const sample = () => {
+        const glow = Number(window.orbeViewer.get().scene.getObjectByName("@led1").getObjectByName("body").material.emissiveIntensity);
+        const span = window.orbeGlowSpan ?? { min: glow, max: glow };
+        span.min = Math.min(span.min, glow);
+        span.max = Math.max(span.max, glow);
+        window.orbeGlowSpan = span;
+      };
+      sample();
+      window.orbeGlowTimer = window.setInterval(sample, 50);
+    });
+    try {
+      await waitSimulatedPast(page, start + 1.4);
+    } finally {
+      await page.evaluate(() => window.clearInterval(window.orbeGlowTimer));
+    }
+    const span = await page.evaluate(() => window.orbeGlowSpan ?? { min: 0, max: 0 });
+    expect(span.max - span.min, `${block.id} brightness`).toBeGreaterThan(0.2);
+    expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(Math.max(1, start + 1.4));
+    if (shotName !== null) {
+      await page.locator("canvas").scrollIntoViewIfNeeded();
+      await shot(page, shotName);
+    }
+    return;
+  }
+  await waitSimulatedPast(page, Math.max(1, start));
+  expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(1);
+  if (block.kind === "button") {
+    const stem = await pointOn(page, "@btn1", "stem", canvas);
+    await page.mouse.move(stem.x, stem.y);
+    await page.mouse.down();
+    await waitGlow(page, true);
+    expect(await ledGlow(page)).toBeGreaterThan(0.5);
+    if (shotName !== null) {
+      await page.locator("canvas").scrollIntoViewIfNeeded();
+      await shot(page, shotName);
+    }
+    await page.mouse.up();
+    await waitGlow(page, false);
+    expect(await ledGlow(page)).toBeLessThan(0.05);
+    return;
+  }
+  await page.waitForSelector(LIGHT, { timeout: 30_000 });
+  const frame = await page.locator(LIGHT_VALUE).getAttribute("data-frame");
+  expect(frame, `${block.id} starts in the light`).toBe("300");
+  await waitGlow(page, false);
+  await stepLight(page, "ArrowLeft", "10");
+  await waitGlow(page, true);
+  expect(await ledGlow(page)).toBeGreaterThan(0.5);
+  if (shotName !== null) {
+    await page.locator("canvas").scrollIntoViewIfNeeded();
+    await shot(page, shotName);
+  }
+  await stepLight(page, "ArrowRight", "300");
+  await waitGlow(page, false);
+  expect(await ledGlow(page)).toBeLessThan(0.05);
 }

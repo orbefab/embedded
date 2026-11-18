@@ -62,11 +62,11 @@ pnpm exec wrangler dev --local            # the same build, under wrangler
 - the parts search lists every part, and for ten queries shows the parts `orbe search --json` gives, in its order;
 - led-5mm's page draws its model, lists its five files with their licences, serves a download whose SHA-256 is the record's, and lists DigiKey with its checked date and the not-affiliated line;
 - nano-board's page draws the board with its children. The Uno is titled as a compatible board, shows `MIT OR Apache-2.0` on its `part.jsonc`, `model.py` and GLB, and links the clone schematic it is drawn from;
-- nano-button-led's page plays, and holding `@btn1` lights `@led1`, which goes dark on release. Its files show their own licences: the image and `LICENSE-runtime` LGPL-2.1-or-later, `LICENSE-libc` BSD-3-Clause, the scene and the sketch MIT OR Apache-2.0;
+- every Block's page plays it in the Worker. A button lights `@led1` while it is held, the fade's LED changes brightness as it plays, and the light comparator's slider lights `@led1` in the dark and turns it off in the light. nano-button-led's files show their own licences: the image and `LICENSE-runtime` LGPL-2.1-or-later, `LICENSE-libc` BSD-3-Clause, the scene and the sketch MIT OR Apache-2.0;
 - an unknown path answers 404 with the site's page and logs no page error, and `/embeddedfoo` is not the site's;
 - a registry file answers 304 to its own ETag, a missing one answers 404 with no immutable cache, a hashed build file keeps for a year, and a record's `@` path answers 307.
 
-It prints each page's requests and bytes, uncompressed and gzipped, and the time to the first Block frame. It finds Chromium as `check-viewer-e2e.sh` does. `--renders <dir>` saves screenshots. `scripts/check.sh` does not run it.
+It prints each page's requests and bytes, uncompressed and gzipped, and the time to the first Block frame. It finds Chromium as `check-viewer-e2e.sh` does. `--renders <dir>` saves screenshots. `scripts/check.sh web` runs it.
 
 ## Hosting
 
