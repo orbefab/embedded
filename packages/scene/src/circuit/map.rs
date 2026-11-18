@@ -14,8 +14,11 @@ pub struct RefMap {
     /// The scene's own instances, in the scene's order.
     pub top: Vec<String>,
     /// Nets `net.floating` leaves out of lint and of a live session. The engine still reports
-    /// them. Every pin on such a net, other than a hole, belongs to one part that holds both a
-    /// source and a chip, and no scene wire reaches the net.
+    /// them. A part lists those pins in `open`, and the net stays out while no scene wire
+    /// reaches it and every other pin on it, other than a hole, belongs to that part or a part
+    /// inside it. A hole that only seats that pin, with nothing else in its strip, does not
+    /// reach the net. A scene wire, another part's pin, or a wire to a hole on the net still
+    /// warns.
     pub quiet_floating: BTreeSet<String>,
 }
 

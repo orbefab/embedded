@@ -139,14 +139,12 @@ impl Circuit<'_> {
         }
     }
 
-    /// Net names `net.floating` leaves out. Every pin on such a net, other than a hole, belongs
-    /// to one part that holds both a source and a chip, and no scene wire reaches the net. A
-    /// hole that only seats the part's own pin does not count, and neither does the ground ref.
-    pub(super) fn quiet_floating(
-        &mut self,
-        nets: &BTreeMap<usize, String>,
-        engine: &Netlist,
-    ) -> BTreeSet<String> {
+    /// Net names `net.floating` leaves out. A part lists those pins in `open`. The net of one
+    /// stays out while no scene wire reaches it and every other pin on it, other than a hole,
+    /// belongs to that part or a part inside it. A hole that only seats that pin, with nothing
+    /// else in its strip, does not reach the net. A scene wire, another part's pin, or a wire
+    /// to a hole on the net still warns. The ground ref does not reach a net.
+    pub(super) fn quiet_floating(&mut self, nets: &BTreeMap<usize, String>) -> BTreeSet<String> {
         let keys: Vec<usize> = self
             .project
             .scene
@@ -159,43 +157,46 @@ impl Circuit<'_> {
         let root_of: Vec<usize> = (0..self.pins.len()).map(|key| self.find(key)).collect();
         let reached: BTreeSet<usize> = keys.into_iter().map(|key| root_of[key]).collect();
         let mut quiet = BTreeSet::new();
-        for (&root, name) in nets {
-            if reached.contains(&root) {
+        for inst in 1..self.insts.len() {
+            if self.insts[inst].dropped.is_some() {
                 continue;
             }
-            let mut owners = BTreeSet::new();
-            for (key, pin) in self.pins.iter().enumerate() {
-                if root_of[key] != root || pin.hole || self.insts[pin.inst].dropped.is_some() {
-                    continue;
-                }
-                let Some(top) = self.insts[pin.inst].path.first() else {
+            let open = match self.part(inst) {
+                Some(part) if !part.open.is_empty() => part.open.clone(),
+                _ => continue,
+            };
+            for pin_name in open {
+                let Some(&key) = self.keys.get(&(inst, pin_name)) else {
                     continue;
                 };
-                owners.insert(self.insts[ROOT].children[top]);
-            }
-            if owners.len() != 1 {
-                continue;
-            }
-            let owner = *owners.iter().next().expect("the set holds one owner");
-            if holds_source_and_chip(engine, &self.insts[owner].path[0]) {
-                quiet.insert(name.clone());
+                let root = root_of[key];
+                if reached.contains(&root) {
+                    continue;
+                }
+                let contained = (0..self.pins.len()).all(|other| {
+                    if root_of[other] != root {
+                        return true;
+                    }
+                    let pin = &self.pins[other];
+                    pin.hole
+                        || self.insts[pin.inst].dropped.is_some()
+                        || inside(self, pin.inst, inst)
+                });
+                if contained && let Some(name) = nets.get(&root) {
+                    quiet.insert(name.clone());
+                }
             }
         }
         quiet
     }
 }
 
-/// A part that holds both a supply and a chip, such as a board. The kinds are the engine's,
-/// so the check does not read a part name or a board id.
-fn holds_source_and_chip(engine: &Netlist, top: &str) -> bool {
-    let holds = |kind: fn(&Model) -> bool| {
-        engine.parts().any(|(_, part)| {
-            let name = part.name.as_str();
-            kind(&part.model) && name.split("__").next().unwrap_or(name) == top
-        })
-    };
-    holds(|model| matches!(model, Model::VoltageSource(_)))
-        && holds(|model| matches!(model, Model::Chip(_)))
+/// `inst` is `parent`, or a part inside it. The paths are segments, so `nano` does not
+/// contain `nano2`.
+fn inside(circuit: &Circuit, inst: usize, parent: usize) -> bool {
+    let child = circuit.insts[inst].path.as_slice();
+    let of = circuit.insts[parent].path.as_slice();
+    child.len() >= of.len() && child[..of.len()] == of[..]
 }
 
 fn unplaced(s: &Scope, out: &mut Findings) {

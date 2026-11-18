@@ -1422,9 +1422,7 @@ impl<'p> Circuit<'p> {
         }
         let view = self.view(Some(&text));
         let mut refs = self.map(nets);
-        let engine =
-            orbe_engine::netlist::parse(text.as_bytes()).expect("the engine read this netlist");
-        refs.quiet_floating = self.quiet_floating(nets, &engine);
+        refs.quiet_floating = self.quiet_floating(nets);
         Some(Netlist {
             json: text,
             parts: parts.len() - left_out.len(),

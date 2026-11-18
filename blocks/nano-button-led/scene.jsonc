@@ -19,6 +19,7 @@
     "r1": { "on": { "a": "bb.d25" } }, // b in column 29
     "led1": { "on": { "anode": "bb.c29" } }, // cathode in column 30
   },
+  "nets": { "GND": "nano.GND" },
   "wires": [
     ["bb.a12", "bb.W11", { "color": "#d12b2b" }], // 5V to the + rail
     ["bb.a14", "bb.X14", { "color": "#161616" }], // GND to the - rail
