@@ -5,7 +5,8 @@
 // gptimer_start to the first instruction of the alarm callback. Eight one-shots, then eight
 // auto-reload callbacks, at each divider. Then an alarm armed at the current count, an alarm
 // armed behind the count, and an auto-reload whose load is above the alarm. The RNG lines say
-// only whether the word was zero.
+// only whether the word was zero. A second 'g' prints one word with the clock on and one word
+// with SYSTEM_WIFI_CLK_RNG_EN clear.
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -16,6 +17,7 @@
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "soc/syscon_reg.h"
 #include "soc/timer_group_reg.h"
 #include "soc/wdev_reg.h"
 
@@ -56,6 +58,14 @@ static uint32_t mask_below_timer(void)
 {
     uint32_t old;
     asm volatile("rsil %0, 2" : "=a"(old));
+    return old;
+}
+
+// The USB Serial/JTAG ISR can be level 1, 2 or 3. Level 15 keeps it out of the clock-off read.
+static uint32_t mask_all(void)
+{
+    uint32_t old;
+    asm volatile("rsil %0, 15" : "=a"(old));
     return old;
 }
 
@@ -224,6 +234,31 @@ static void run_above(void)
     ESP_ERROR_CHECK(gptimer_del_timer(timer));
 }
 
+// One read with the RNG clock on, then one read with SYSTEM_WIFI_CLK_RNG_EN clear.
+// The off word is formatted while the bit is clear and printed after the bit is set, so the
+// console driver does not run in that window.
+static void read_clock_off(void)
+{
+    uint32_t on = REG_READ(WDEV_RND_REG);
+    print_line("rng_on %08x\n", (unsigned)on);
+
+    char line[] = "rng_off 00000000\n";
+    char *digits = line + (sizeof "rng_off " - 1);
+    uint32_t old = mask_all();
+    REG_CLR_BIT(SYSTEM_WIFI_CLK_EN_REG, SYSTEM_WIFI_CLK_RNG_EN);
+    uint32_t word = REG_READ(WDEV_RND_REG);
+    for (int index = 0; index < 8; index++) {
+        unsigned digit = (word >> (4 * (7 - index))) & 0xf;
+        digits[index] = (char)(digit + (digit < 10 ? '0' : 'a' - 10));
+    }
+    // Pin the digits before the bit is set again. A later print stays outside the window.
+    asm volatile("" ::: "memory");
+    REG_SET_BIT(SYSTEM_WIFI_CLK_EN_REG, SYSTEM_WIFI_CLK_RNG_EN);
+    restore_ps(old);
+    write_all(line);
+    write_all("RNG OFF DONE\n");
+}
+
 void app_main(void)
 {
     usb_serial_jtag_driver_config_t usb = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
@@ -246,4 +281,11 @@ void app_main(void)
         print_line("rng %d %s\n", k, word == 0 ? "z" : "nz");
     }
     write_all("TIMERS DONE\n");
+    for (;;) {
+        uint8_t byte = 0;
+        if (usb_serial_jtag_read_bytes(&byte, 1, portMAX_DELAY) == 1 && byte == 'g') {
+            break;
+        }
+    }
+    read_clock_off();
 }
