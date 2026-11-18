@@ -34,8 +34,7 @@ const GRID_PS: u64 = 1_000_000_000;
 /// write at the finding, and each hint in one check names a different hole.
 const HOLE_HINT: &str = "a hole holds one lead; move one of them to a free hole in the same strip";
 /// A shared hole whose strip has no free hole left.
-const FULL_STRIP_HINT: &str =
-    "a hole holds one lead; this strip is full, so wire it to a strip with a free hole and move one lead there";
+const FULL_STRIP_HINT: &str = "a hole holds one lead; this strip is full, so wire it to a strip with a free hole and move one lead there";
 
 struct Inst {
     path: Vec<String>,
