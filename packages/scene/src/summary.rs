@@ -1,6 +1,6 @@
 //! One card per part and one per Block. `orbe part` and `orbe search` print the catalog's part
-//! cards and do not parse `part.jsonc`, and the registry's records are built from cards of any
-//! folder of parts and Blocks.
+//! cards and the Blocks built into this binary, and do not parse `part.jsonc`. The registry's
+//! records are built from cards of any folder of parts and Blocks.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -418,18 +418,33 @@ pub fn card(name: &str) -> Option<Card> {
     catalog_cards().into_iter().find(|card| card.name == name)
 }
 
+/// The Blocks built into this binary, by id.
+pub fn builtin_blocks() -> Vec<BlockCard> {
+    let parts = catalog_cards();
+    let mut cards: Vec<BlockCard> = crate::blocks::ids()
+        .map(|id| {
+            let files = crate::blocks::folder(id).expect("a built-in block has files");
+            block_card(id, &files, &parts).expect("a built-in block reads")
+        })
+        .collect();
+    cards.sort_by(|a, b| a.name.cmp(&b.name));
+    cards
+}
+
+/// The Block `id` built into this binary.
+pub fn builtin_block(id: &str) -> Option<BlockCard> {
+    let files = crate::blocks::folder(id)?;
+    let parts = catalog_cards();
+    Some(block_card(id, &files, &parts).expect("a built-in block reads"))
+}
+
 /// Parts whose id, title, maker, number, summary or tags contain every word.
 /// An exact id comes first. Then every word is a whole word of the id, the title or a tag.
 /// Then the rest. Ids break ties.
 pub fn search(query: &str) -> Vec<Card> {
-    let words: Vec<String> = query
-        .split_whitespace()
-        .map(|word| word.to_lowercase())
-        .collect();
-    if words.is_empty() {
+    let Some((words, joined)) = query_words(query) else {
         return Vec::new();
-    }
-    let joined = words.join(" ");
+    };
     let mut found: Vec<(u8, Card)> = catalog_cards()
         .into_iter()
         .filter_map(|card| rank(&card, &words, &joined).map(|rank| (rank, card)))
@@ -438,11 +453,37 @@ pub fn search(query: &str) -> Vec<Card> {
     found.into_iter().map(|(_, card)| card).collect()
 }
 
-/// Catalog ids close to `name`, best first. The id itself is not one of them.
+/// Blocks whose id, title, summary or tags contain every word, in the same order as [`search`].
+pub fn search_blocks(query: &str) -> Vec<BlockCard> {
+    let Some((words, joined)) = query_words(query) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(u8, BlockCard)> = builtin_blocks()
+        .into_iter()
+        .filter_map(|card| rank_block(&card, &words, &joined).map(|rank| (rank, card)))
+        .collect();
+    found.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.name.cmp(&b.1.name)));
+    found.into_iter().map(|(_, card)| card).collect()
+}
+
+fn query_words(query: &str) -> Option<(Vec<String>, String)> {
+    let words: Vec<String> = query
+        .split_whitespace()
+        .map(|word| word.to_lowercase())
+        .collect();
+    if words.is_empty() {
+        return None;
+    }
+    let joined = words.join(" ");
+    Some((words, joined))
+}
+
+/// Part and Block ids close to `name`, best first. The id itself is not one of them.
 pub fn near_names(name: &str) -> Vec<String> {
     let want = name.to_lowercase();
     let mut scored: Vec<(f64, String)> = catalog::Source::Builtin
         .ids()
+        .chain(crate::blocks::ids().map(str::to_string))
         .filter(|id| id != name)
         .map(|id| (strsim::jaro_winkler(&want, &id.to_lowercase()), id))
         .filter(|(score, _)| *score >= 0.8)
@@ -452,14 +493,16 @@ pub fn near_names(name: &str) -> Vec<String> {
     scored.into_iter().map(|(_, id)| id).collect()
 }
 
-/// Catalog ids that have `word` as one whole segment, such as `1n4007` in `diode-1n4007`.
+/// Part and Block ids that have `word` as one whole segment, such as `1n4007` in `diode-1n4007`.
 pub fn ids_with_segment(word: &str) -> Vec<String> {
     let want = word.to_lowercase();
     let mut ids: Vec<String> = catalog::Source::Builtin
         .ids()
+        .chain(crate::blocks::ids().map(str::to_string))
         .filter(|id| words_of(id).iter().any(|segment| segment == &want))
         .collect();
     ids.sort();
+    ids.dedup();
     ids
 }
 
@@ -535,16 +578,43 @@ pub fn param_sentence(param: &Param) -> String {
 }
 
 fn rank(card: &Card, words: &[String], joined: &str) -> Option<u8> {
-    let haystack = [
-        card.name.as_str(),
-        card.title.as_str(),
-        card.real.maker.as_deref().unwrap_or(""),
-        card.real.number.as_deref().unwrap_or(""),
-        card.description.as_deref().unwrap_or(""),
-    ]
-    .join("\n");
-    let mut haystack = haystack.to_lowercase();
-    if let Some(categories) = &card.categories {
+    rank_fields(
+        &card.name,
+        &card.title,
+        &[
+            card.real.maker.as_deref().unwrap_or(""),
+            card.real.number.as_deref().unwrap_or(""),
+            card.description.as_deref().unwrap_or(""),
+        ],
+        card.categories.as_deref(),
+        words,
+        joined,
+    )
+}
+
+fn rank_block(card: &BlockCard, words: &[String], joined: &str) -> Option<u8> {
+    rank_fields(
+        &card.name,
+        &card.title,
+        &[card.description.as_deref().unwrap_or("")],
+        card.categories.as_deref(),
+        words,
+        joined,
+    )
+}
+
+fn rank_fields(
+    name: &str,
+    title: &str,
+    extras: &[&str],
+    categories: Option<&[String]>,
+    words: &[String],
+    joined: &str,
+) -> Option<u8> {
+    let mut fields = vec![name, title];
+    fields.extend_from_slice(extras);
+    let mut haystack = fields.join("\n").to_lowercase();
+    if let Some(categories) = categories {
         for category in categories {
             haystack.push('\n');
             haystack.push_str(&category.to_lowercase());
@@ -553,16 +623,13 @@ fn rank(card: &Card, words: &[String], joined: &str) -> Option<u8> {
     if !words.iter().all(|word| haystack.contains(word)) {
         return None;
     }
-    if card.name.eq_ignore_ascii_case(joined)
-        || words
-            .iter()
-            .any(|word| card.name.eq_ignore_ascii_case(word))
+    if name.eq_ignore_ascii_case(joined) || words.iter().any(|word| name.eq_ignore_ascii_case(word))
     {
         return Some(0);
     }
-    let mut whole = words_of(&card.name);
-    whole.extend(words_of(&card.title));
-    if let Some(categories) = &card.categories {
+    let mut whole = words_of(name);
+    whole.extend(words_of(title));
+    if let Some(categories) = categories {
         for category in categories {
             whole.extend(words_of(category));
         }

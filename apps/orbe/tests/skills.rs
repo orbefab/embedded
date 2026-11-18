@@ -389,7 +389,7 @@ fn help_lists_every_command_and_each_command_prints_its_usage() {
         .take_while(|l| !l.is_empty())
         .map(|l| l.split_whitespace().next().unwrap())
         .collect();
-    let mut want = vec!["check", "lint", "add", "part", "search"];
+    let mut want = vec!["check", "lint", "add", "part", "search", "blocks"];
     want.extend(orbe_session::COMMANDS.iter().map(|s| s.name));
     want.extend(["show", "test", "skills", "registry", "help"]);
     assert_eq!(listed, want);

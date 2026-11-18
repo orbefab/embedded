@@ -135,7 +135,7 @@ A part record is what `orbe part --json` prints, changed in exactly these ways:
 
 Every other field keeps its name and its value. `orbe part --json` stays snake case. A test converts every catalog part both ways under this mapping.
 
-**A Block** adds `board`, the part its firmware runs on. `registryDependencies` lists every part the scene runs, a board's own parts included, at the versions those parts have in the same build. The build checks that each one is there. It does not run the Block's tests. In this repo, `scripts/check.sh` runs every Block's tests against the parts of the same commit, which is what the official registry is built from. `orbe add` writes each file except `block.jsonc` and `README.md` to the project at its `path`, then copies its parts.
+**A Block** adds `board`, the part its firmware runs on. `registryDependencies` lists every part the scene runs, a board's own parts included, at the versions those parts have in the same build. The build checks that each one is there. It does not run the Block's tests. In this repo, `scripts/check.sh` runs every Block's tests against the parts of the same commit, which is what the official registry is built from. `orbe add` writes each file except `block.jsonc` to the project at its `path`, including `README.md`, then copies its parts.
 
 ### Absent fields and null
 

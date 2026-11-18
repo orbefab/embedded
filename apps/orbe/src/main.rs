@@ -1,6 +1,7 @@
 //! `orbe`, the CLI. `orbe check` type-checks a scene, and `orbe lint` checks it, then warns of
 //! what is likely wrong or unclear. `orbe add` copies catalog parts, or installs a Block. `orbe part` prints one
-//! catalog part, and `orbe search` finds parts. `orbe registry build` turns a folder of parts and
+//! catalog part or one Block, `orbe search` finds either, and `orbe blocks` lists the Blocks.
+//! `orbe registry build` turns a folder of parts and
 //! Blocks into a registry.
 //! `orbe test` runs each test file's live commands in a fresh in-process session. The live
 //! commands, such as `orbe open` and `orbe step`, drive a session that a background process
@@ -56,7 +57,7 @@ enum Command {
         json: bool,
     },
     /// Copies catalog parts into `parts/` and writes `parts.lock`, or installs a Block by
-    /// copying its parts first, then writing its scene, firmware and tests.
+    /// copying its parts first, then writing its scene, firmware, tests and README.
     #[command(display_order = 3)]
     Add {
         /// Part ids, or one Block id. A part's version is `id@0.1.0`.
@@ -77,21 +78,29 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Prints one catalog part.
+    /// Prints one catalog part, or one Block.
     #[command(display_order = 4)]
     Part {
-        /// Catalog id, such as `led-5mm`. A whole word of exactly one id, such as `1n4007`, names that part.
+        /// Catalog id, such as `led-5mm`, or a Block id, such as `nano-led-fade`. A whole word of exactly one id, such as `1n4007`, names it.
         id: String,
         /// Print one JSON envelope instead of text.
         #[arg(long)]
         json: bool,
     },
-    /// Finds catalog parts whose id, title, maker, number, summary or tags hold every word.
+    /// Finds catalog parts and Blocks whose id, title, summary or tags hold every word.
+    /// A part also matches its maker and number.
     #[command(display_order = 5)]
     Search {
         /// Words to match. Every word must appear.
         #[arg(required = true)]
         words: Vec<String>,
+        /// Print one JSON envelope instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Lists the Blocks this orbe installs.
+    #[command(display_order = 6)]
+    Blocks {
         /// Print one JSON envelope instead of text.
         #[arg(long)]
         json: bool,
@@ -308,6 +317,7 @@ fn main() -> ExitCode {
             } => add(dir.as_deref(), ids, overwrite, diff, relock, json),
             Command::Part { id, json } => show_part(&id, json),
             Command::Search { words, json } => search_parts(&words, json),
+            Command::Blocks { json } => list_blocks(json),
             Command::Test {
                 paths,
                 verbose,
@@ -817,11 +827,18 @@ fn show_part(id: &str, json: bool) -> ExitCode {
     if let Some(card) = orbe_scene::card(id) {
         return print_part(&card, json);
     }
+    if let Some(block) = orbe_scene::builtin_block(id) {
+        return print_block(&block, json);
+    }
     let matches = orbe_scene::ids_with_segment(id);
-    if matches.len() == 1
-        && let Some(card) = orbe_scene::card(&matches[0])
-    {
-        return print_part(&card, json);
+    if matches.len() == 1 {
+        let only = &matches[0];
+        if let Some(card) = orbe_scene::card(only) {
+            return print_part(&card, json);
+        }
+        if let Some(block) = orbe_scene::builtin_block(only) {
+            return print_block(&block, json);
+        }
     }
     let names = if matches.len() > 1 {
         matches
@@ -836,6 +853,15 @@ fn print_part(card: &orbe_scene::Card, json: bool) -> ExitCode {
         print_json(&json!({ "ok": true, "data": card }));
     } else {
         print!("{}", part::text(card));
+    }
+    ExitCode::SUCCESS
+}
+
+fn print_block(card: &orbe_scene::BlockCard, json: bool) -> ExitCode {
+    if json {
+        print_json(&json!({ "ok": true, "data": card }));
+    } else {
+        print!("{}", part::block_text(card));
     }
     ExitCode::SUCCESS
 }
@@ -864,11 +890,23 @@ fn unknown_part(id: &str, names: &[String], json: bool) -> ExitCode {
 }
 
 fn search_parts(words: &[String], json: bool) -> ExitCode {
-    let found = orbe_scene::search(&words.join(" "));
+    let query = words.join(" ");
+    let found = orbe_scene::search(&query);
+    let blocks = orbe_scene::search_blocks(&query);
     if json {
-        print_json(&json!({ "ok": true, "data": { "parts": found } }));
+        print_json(&json!({ "ok": true, "data": { "parts": found, "blocks": blocks } }));
     } else {
-        print!("{}", part::search_text(&found));
+        print!("{}", part::search_text(&found, &blocks));
+    }
+    ExitCode::SUCCESS
+}
+
+fn list_blocks(json: bool) -> ExitCode {
+    let found = orbe_scene::builtin_blocks();
+    if json {
+        print_json(&json!({ "ok": true, "data": { "blocks": found } }));
+    } else {
+        print!("{}", part::blocks_text(&found));
     }
     ExitCode::SUCCESS
 }
