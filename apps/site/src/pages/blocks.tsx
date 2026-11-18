@@ -46,10 +46,12 @@ export interface BlockView {
   readonly readme: readonly (readonly ReadmeRun[])[];
 }
 
-function fileHref(href: string, files: readonly FileEntry[]): string {
-  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return href;
+/** Where a README link goes: a web or mail address as written, or a file of the Block. Any
+ * other target, such as a `javascript:` URL, a protocol-relative URL or a missing file, is no link. */
+function fileHref(href: string, files: readonly FileEntry[]): string | undefined {
+  if (/^(https?:\/\/|mailto:)/i.test(href)) return href;
   const file = files.find((entry) => entry.path === href);
-  return file === undefined ? href : at.file(file.sha256);
+  return file === undefined ? undefined : at.file(file.sha256);
 }
 
 function Readme({ paragraphs, files }: { paragraphs: BlockView["readme"]; files: readonly FileEntry[] }) {
@@ -67,8 +69,17 @@ function Readme({ paragraphs, files }: { paragraphs: BlockView["readme"]; files:
             if (run.kind === "link") {
               const coded = run.text.startsWith("`") && run.text.endsWith("`");
               const text = coded ? run.text.slice(1, -1) : run.text;
+              const href = fileHref(run.href, files);
+              if (href === undefined)
+                return coded ? (
+                  <code className="font-mono" key={index}>
+                    {text}
+                  </code>
+                ) : (
+                  text
+                );
               return (
-                <a className="underline hover:text-brand" href={fileHref(run.href, files)} key={index}>
+                <a className="underline hover:text-brand" href={href} key={index}>
                   {coded ? <code className="font-mono">{text}</code> : text}
                 </a>
               );
