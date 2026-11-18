@@ -222,7 +222,7 @@ impl Core {
             Core::Mcu(ref mcu) => mcu.pulled_down(),
             Core::Device(_) => &[],
             #[cfg(test)]
-            Core::Script(_) => &[],
+            Core::Script(ref core) => core.pulled_down(),
         }
     }
 

@@ -18,7 +18,10 @@ fn load(chip: &mut Esp32s3, address: u32) -> u32 {
 #[test]
 fn a_falling_pad_input_sets_status_and_raises_source_16() {
     let mut chip = Program::new(&[]).raw(&LOOP).chip_on(&[4]);
-    chip.soc.gpio.write_io_mux(0x4 + 4 * 4, 1 << 12 | 1 << 9);
+    chip.soc
+        .gpio
+        .write_io_mux(0x4 + 4 * 4, 1 << 12 | 1 << 9)
+        .unwrap();
     chip.input(Tick(0), [(4, true)]);
     chip.soc.gpio.write(PIN4 - GPIO, FALL | INT_ENA).unwrap();
     assert_eq!(load(&mut chip, SOURCES_0) & GPIO_SOURCE, 0);
@@ -83,4 +86,32 @@ fn a_reserved_interrupt_type_or_a_wakeup_is_refused_by_name() {
     }
     let mut chip = store_after_two_loads(PIN4, 5 << 7 | 1 << 2, 0).chip();
     assert_eq!(chip.run_until(c(1000)), None, "level high, open drain");
+}
+
+/// `FUN_WPD` on a pad with a net, when the part names no pull-down. The store writes nothing.
+/// GPIO5 has no net, so the same store is kept and the pad pulls down.
+#[test]
+fn a_pull_down_on_a_netted_pad_is_refused_when_the_part_names_none() {
+    const FUN_WPD: u32 = 1 << 7;
+    let program = store_after_two_loads(IO_MUX + 4 + 4 * 21, FUN_WPD, 0);
+    let mut chip = program.chip();
+    let before = chip.soc.gpio.read_io_mux(4 + 4 * 21);
+    chip.omit_pull_down();
+    assert_eq!(
+        chip.run_until(c(1000)),
+        Some(Halt::Fault(
+            c(2),
+            Fault::Refused(
+                Refused::Register("IO_MUX", "pull_down"),
+                pro(program.entry() + 6)
+            )
+        ))
+    );
+    assert_eq!(chip.soc.gpio.read_io_mux(4 + 4 * 21), before);
+    let program = store_after_two_loads(IO_MUX + 4 + 4 * 5, FUN_WPD, 0);
+    let mut chip = program.chip_on(&[21]);
+    chip.omit_pull_down();
+    assert_eq!(chip.run_until(c(1000)), None, "GPIO5 has no net");
+    assert_eq!(chip.soc.gpio.read_io_mux(4 + 4 * 5), Some(FUN_WPD));
+    assert_eq!(chip.soc.gpio.drive(5), PadDrive::PullDown);
 }

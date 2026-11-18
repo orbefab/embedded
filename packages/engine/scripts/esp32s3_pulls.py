@@ -18,20 +18,26 @@ It then prints `poll <polls> <cycles>`, the cycles of that many polls, and 16 li
 of a poll after each release before its first poll. `base` releases a pad that already reads its
 level, `fall` releases a driven high under the pull-down and polls until it reads 0, and `rise`
 a driven low under the pull-up until it reads 1, each from the release to the poll that reads.
-With `F` and `R` the mean of fall and of rise less their rep's base, each is its crossing less
-an offset the app cannot see, from the release to its first sample, to within one poll. With `q`
-the cycles of one poll and `U` that poll plus the largest base, which bounds that offset, the
-run's ratio `F / R` must lie within `U / F + U / R` of the ratio the netlist gives, relatively.
-That ratio is the RC law's: each edge starts at the level its drive and pulls hold, heads for the
-level its pull and the leakage hold, and crosses its threshold, so the capacitance and the supply
-cancel. With equal pulls and thresholds even about half the supply it is the pull-down's
-resistance over the pull-up's. The bound is wide when the edges last a few polls, as the 2 pF
-pad of the example's do, and narrows as they grow.
+
+The four static levels must match the netlist, and the board's when `board.txt` is present.
+With `F` and `R` the mean of fall and of rise less their rep's base, the ratio is the RC law's:
+each edge starts at the level its drive and pulls hold, heads for the level its pull and the
+leakage hold, and crosses its threshold, so the capacitance and the supply cancel. With equal
+pulls and thresholds even about half the supply it is the pull-down's resistance over the
+pull-up's. The ratio is compared only when both edges resolve it within `TOLERANCE`, 10 %. The
+16 reps are one sweep of the phase, not 16 independent readings of one crossing, so an edge that
+finishes inside the first poll does so at every phase and the mean does not recover it. `S` is
+the largest base less the smallest and `q` the cycles of one poll. Each mean is uncertain by
+`U = max(S, q)` cycles, and the ratio's relative uncertainty is `U / F + U / R`. Both edges must
+be longer than their base, and that uncertainty at most 10 %, which needs each edge to last at
+least `2 U / 0.10` cycles: 20 poll periods when the bases stay inside one poll, and more when
+they spread further. A resolved ratio must lie within 10 % of the netlist's. Otherwise the check
+prints that the ratio is unresolved at this pad's capacitance and does not count it as passed.
 
 When `board.txt` sits beside the netlist, it holds a board's console from `pulls ready` through
-`PULLS DONE`. The board's ratio, worked out the same way, must lie within `BOARD_TOLERANCE` plus
-the run's bound and the board's own, relatively, of the run's. With no `board.txt` that
-comparison is skipped, and the check says so.
+`PULLS DONE`. Its static levels must match the run's. Its ratio is compared only when both
+resolve, and must then lie within `TOLERANCE` plus both uncertainties, relatively, of the run's.
+With no `board.txt` that comparison is skipped, and the check says so.
 
 `traces/serial.csv` must hold those lines as `u1`'s `USB_SERIAL_JTAG`. Other lines may sit
 between them. The run must hold no error, and its `manifest.json` must list the netlist's ROM,
@@ -54,10 +60,55 @@ REPS = 16
 SETTINGS = ("up", "down", "both", "none")
 # A board pad switches near half the supply on both edges, and the ratio moves fast when it does
 # not: a pad that switched at 0.48 and 0.52 of the supply would read 12 % over the pulls' ratio.
-BOARD_TOLERANCE = 0.10
+# The same figure is how close a resolved ratio must be.
+TOLERANCE = 0.10
+BOARD_TOLERANCE = TOLERANCE
 STATIC = re.compile(r"static (up|down|both|none) ([01])")
 POLL = re.compile(r"poll (\d+) (\d+)")
 REP = re.compile(r"rep (\d+) base (\d+) fall (\d+) rise (\d+)")
+
+
+class Reading:
+    """One probe's edges. `fall` and `rise` are mean cycles past that rep's base, and may be
+    negative when the edge never cleared it. `spread` is the largest base less the smallest."""
+
+    def __init__(self, fall: float, rise: float, spread: int, per_poll: float) -> None:
+        self.fall = fall
+        self.rise = rise
+        self.spread = spread
+        self.per_poll = per_poll
+
+    def uncertainty(self) -> float | None:
+        """Cycles each mean is uncertain by, or `None` when an edge is not a time.
+
+        The reps are one phase sweep, so the spread is not divided by how many there are.
+        """
+        if self.fall <= 0 or self.rise <= 0:
+            return None
+        return float(max(self.spread, self.per_poll))
+
+    def bound(self) -> float | None:
+        """The ratio's relative uncertainty, `U / F + U / R`."""
+        uncertainty = self.uncertainty()
+        if uncertainty is None:
+            return None
+        return uncertainty / self.fall + uncertainty / self.rise
+
+    def resolved(self) -> bool:
+        """Both edges are long enough that the ratio is good to `TOLERANCE`."""
+        bound = self.bound()
+        return bound is not None and bound <= TOLERANCE
+
+    def ratio(self) -> float | None:
+        if self.fall <= 0 or self.rise <= 0:
+            return None
+        return self.fall / self.rise
+
+    def polls_needed(self) -> float:
+        """Poll periods each edge must last. `U` is `max(S, q)` even when an edge is not a time,
+        and 10 % on both edges takes `2 U / TOLERANCE` cycles."""
+        uncertainty = max(self.spread, self.per_poll)
+        return (2 * uncertainty / TOLERANCE) / self.per_poll
 
 
 def lines(serial_csv: str) -> list[str]:
@@ -106,20 +157,12 @@ class Probe:
         polls, cycles = self.poll
         return cycles / polls
 
-    def times(self) -> tuple[float, float]:
-        """The mean fall and rise, each less its rep's base, in cycles."""
+    def reading(self) -> Reading:
+        """The mean edges, the base spread and the cycles of one poll."""
         fall = sum(fall - base for base, fall, _ in self.reps) / len(self.reps)
         rise = sum(rise - base for base, _, rise in self.reps) / len(self.reps)
-        if fall <= 0 or rise <= 0:
-            raise ValueError(f"a mean edge, {fall} and {rise} cycles past base, is too short to time")
-        return fall, rise
-
-    def ratio(self) -> tuple[float, float]:
-        """The fall over the rise, and its relative bound from one poll and the largest base on
-        each."""
-        fall, rise = self.times()
-        bound = self.per_poll() + max(base for base, _, _ in self.reps)
-        return fall / rise, bound / fall + bound / rise
+        bases = [base for base, _, _ in self.reps]
+        return Reading(fall, rise, max(bases) - min(bases), self.per_poll())
 
 
 class Pad:
@@ -182,21 +225,38 @@ def check_static(probe: Probe, pad: Pad) -> None:
         raise ValueError(f"the pulls read {probe.static}, not {want}")
 
 
-def check_ratio(probe: Probe, pad: Pad) -> tuple[float, float]:
-    ratio, bound = probe.ratio()
+def check_ratio(probe: Probe, pad: Pad) -> str:
+    """The ratio clause. An unresolved ratio is reported and not failed."""
+    reading = probe.reading()
+    if not reading.resolved():
+        fall, rise = reading.fall / reading.per_poll, reading.rise / reading.per_poll
+        return (
+            "ratio unresolved at this pad's capacitance "
+            f"(fall {fall:.1f} polls, rise {rise:.1f} polls, "
+            f"base spread {reading.spread} cycles, need {reading.polls_needed():.1f} polls)"
+        )
+    ratio = reading.ratio()
     want = pad.ratio()
-    if abs(ratio - want) > bound * want:
-        raise ValueError(f"the run's fall over rise is {ratio:.4f}, not {want:.4f} within {bound:.1%}")
-    return ratio, bound
+    assert ratio is not None
+    if abs(ratio - want) > TOLERANCE * want:
+        raise ValueError(f"the run's fall over rise is {ratio:.4f}, not {want:.4f} within {TOLERANCE:.0%}")
+    return f"fall over rise {ratio:.4f} against {want:.4f} within {TOLERANCE:.0%}"
 
 
-def check_board(probe: Probe, board: Probe) -> float:
-    ratio, bound = probe.ratio()
-    theirs, their_bound = board.ratio()
-    allowed = BOARD_TOLERANCE + bound + their_bound
-    if abs(ratio - theirs) > allowed * theirs:
-        raise ValueError(f"the run's fall over rise is {ratio:.4f}, the board's {theirs:.4f}, not within {allowed:.1%}")
-    return theirs
+def check_board(probe: Probe, board: Probe) -> str:
+    """The board clause. Static levels always, the ratio only when both probes resolve it."""
+    if probe.static != board.static:
+        raise ValueError(f"the pulls read {probe.static}, the board reads {board.static}")
+    run, theirs = probe.reading(), board.reading()
+    if not run.resolved() or not theirs.resolved():
+        return "the board's static levels match, ratio not compared"
+    run_bound, their_bound = run.bound(), theirs.bound()
+    ratio, other = run.ratio(), theirs.ratio()
+    assert run_bound is not None and their_bound is not None and ratio is not None and other is not None
+    allowed = TOLERANCE + run_bound + their_bound
+    if abs(ratio - other) > allowed * other:
+        raise ValueError(f"the run's fall over rise is {ratio:.4f}, the board's {other:.4f}, not within {allowed:.1%}")
+    return f"the board's {other:.4f}"
 
 
 def check_manifest(manifest: dict, netlist: dict) -> None:
@@ -216,24 +276,22 @@ def check_diagnostics(diagnostics: list[dict]) -> None:
         raise ValueError(f"the run holds errors {errors}")
 
 
-def check(run: Path, example: Path = EXAMPLE) -> None:
+def check(run: Path, example: Path = EXAMPLE) -> str:
     netlist = json.loads((run / "netlist.json").read_text())
     probe = Probe(lines((run / "traces" / "serial.csv").read_text()))
     pad = Pad(netlist)
     check_static(probe, pad)
-    ratio, bound = check_ratio(probe, pad)
+    clause = check_ratio(probe, pad)
     check_diagnostics(json.loads((run / "diagnostics.json").read_text()))
     check_manifest(json.loads((run / "manifest.json").read_text()), netlist)
     board_txt = example / "board.txt"
     if board_txt.exists():
-        theirs = check_board(probe, Probe(board_txt.read_text().splitlines()))
-        board = f", the board's {theirs:.4f}"
+        board = ", " + check_board(probe, Probe(board_txt.read_text().splitlines()))
     else:
         board = ", no board.txt, so no board comparison"
-    print(
-        f"esp32s3-pulls: static {probe.static}, fall over rise {ratio:.4f} against {pad.ratio():.4f}"
-        f" within {bound:.0%}{board}"
-    )
+    report = f"esp32s3-pulls: static {probe.static}, {clause}{board}"
+    print(report)
+    return report
 
 
 def main() -> int:

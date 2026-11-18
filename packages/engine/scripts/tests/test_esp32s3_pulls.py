@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from esp32s3_pulls import BOARD_TOLERANCE, Pad, Probe, check, check_board, check_ratio, check_static, lines
+from esp32s3_pulls import Pad, Probe, check, check_board, check_ratio, check_static, lines
 
 R = 45000.0
 
@@ -81,42 +81,73 @@ def test_static_levels() -> None:
     assert raises(lambda: check_static(Probe(console(static=(0, 0, 0, 0))), pad))
 
 
-def test_the_ratio_within_a_poll_and_the_largest_base() -> None:
+def test_long_edges_check_the_ratio_and_a_wrong_one_fails() -> None:
     pad = Pad({"parts": [part()]})
-    # One poll is 5 cycles and the base 30, so each edge of about 1000 cycles is good to 3.5 %.
+    # One poll is 5 cycles and the bases do not spread, so U is 5. An edge of 1000 cycles is
+    # 200 polls, past the 20 a 10 % reading needs, and the ratio is compared.
+    reading = Probe(console()).reading()
+    assert reading.resolved()
+    assert reading.polls_needed() == pytest.approx(20)
     assert not raises(lambda: check_ratio(Probe(console()), pad))
-    assert not raises(lambda: check_ratio(Probe(console(fall=1090)), pad))
-    assert raises(lambda: check_ratio(Probe(console(fall=1110)), pad))
-    assert raises(lambda: check_ratio(Probe(console(rise=1110)), pad))
+    # 5 % off passes. 20 % off fails.
+    assert not raises(lambda: check_ratio(Probe(console(fall=30 + 1050)), pad))
+    assert raises(lambda: check_ratio(Probe(console(fall=30 + 1200)), pad))
+    assert raises(lambda: check_ratio(Probe(console(rise=30 + 1200)), pad))
 
 
 def test_a_pull_down_twice_the_pull_up_wants_twice_the_fall() -> None:
     pad = Pad({"parts": [part(down=2 * R)]})
     assert pad.ratio() == pytest.approx(2.0, rel=1e-3)
-    assert not raises(lambda: check_ratio(Probe(console(fall=2030)), pad))
+    assert not raises(lambda: check_ratio(Probe(console(fall=30 + 2000)), pad))
     assert raises(lambda: check_ratio(Probe(console()), pad))
 
 
-def test_edges_of_a_few_polls_widen_the_bound() -> None:
-    _, bound = Probe(console(fall=40, rise=40)).ratio()
-    assert bound > 1
+def test_short_edges_leave_the_ratio_unresolved() -> None:
+    pad = Pad({"parts": [part()]})
+    # Ten and fifty cycles past base, two and ten polls. U is one poll, so the relative
+    # uncertainty is 50 % plus 10 %, and a ratio of 0.2 against 1 is not a failure.
+    probe = Probe(console(fall=40, rise=80))
+    assert not probe.reading().resolved()
+    clause = check_ratio(probe, pad)
+    assert "unresolved" in clause
+    assert "within" not in clause
+
+
+def test_the_base_spread_lengthens_the_edge_a_reading_needs() -> None:
+    # The reps are one phase sweep, so U is the spread itself, not the spread over 16.
+    # Spread 40 against a poll of 5 makes U 40, and 10 % on both edges needs 160 polls.
+    text = console()
+    reps = [f"rep {k} base {10 if k < 8 else 50} fall {2000} rise {2000}" for k in range(16)]
+    wide = Probe(text[:7] + reps + [text[-1]]).reading()
+    assert wide.spread == 40
+    assert wide.polls_needed() == pytest.approx(160)
+    assert wide.resolved()
+    short = [f"rep {k} base {10 if k < 8 else 50} fall {200} rise {200}" for k in range(16)]
+    assert not Probe(text[:7] + short + [text[-1]]).reading().resolved()
 
 
 def test_the_board() -> None:
     run = Probe(console())
     assert not raises(lambda: check_board(run, Probe(console())))
-    # The run's bound and the board's are 7 % each, so 24 % with the tolerance.
-    near = 30 + round(1000 * (1 + BOARD_TOLERANCE + 0.10))
+    # Each edge is uncertain by one poll, 5 of 1000, so 1 % each. The allowance is 12 %.
+    near = 30 + round(1000 * 1.10)
     assert not raises(lambda: check_board(run, Probe(console(fall=near))))
     far = 30 + round(1000 * 1.5)
     assert raises(lambda: check_board(run, Probe(console(fall=far))))
+    # A short edge is not a ratio, even against a long one, and a static mismatch still fails.
+    short = Probe(console(fall=40, rise=40))
+    assert not raises(lambda: check_board(short, Probe(console(fall=3000))))
+    assert raises(lambda: check_board(short, Probe(console(fall=40, rise=40, static=(1, 1, 0, 0)))))
 
 
 def test_a_broken_console_fails() -> None:
     assert raises(lambda: Probe(console(done=False)))
     assert raises(lambda: Probe(console(reps=15)))
     assert raises(lambda: Probe(console(fall=0)))
-    assert raises(lambda: Probe(console(base=2000)).ratio())
+    # An edge that never clears its base is unresolved, not a broken console.
+    reading = Probe(console(base=2000)).reading()
+    assert reading.fall < 0
+    assert not reading.resolved()
     assert raises(lambda: Probe(console()[:2] + console()[3:]))
     swapped = console()
     swapped[8], swapped[9] = swapped[9], swapped[8]
@@ -143,11 +174,17 @@ def test_a_run_folder(tmp_path: Path) -> None:
     example = tmp_path / "example"
     example.mkdir()
     write_run(tmp_path / "good", console())
-    check(tmp_path / "good", example)
+    assert "within" in check(tmp_path / "good", example)
     (example / "board.txt").write_text("\n".join(console()) + "\n")
     check(tmp_path / "good", example)
     (example / "board.txt").write_text("\n".join(console(fall=3000)) + "\n")
     assert raises(lambda: check(tmp_path / "good", example))
+    (example / "board.txt").write_text("\n".join(console(static=(1, 1, 0, 0))) + "\n")
+    assert raises(lambda: check(tmp_path / "good", example))
+    write_run(tmp_path / "short", console(fall=40, rise=90))
+    short = check(tmp_path / "short", tmp_path / "none")
+    assert "unresolved" in short
+    assert "within" not in short
     write_run(tmp_path / "error", console(), errors=True)
     assert raises(lambda: check(tmp_path / "error", tmp_path / "none"))
 

@@ -95,7 +95,7 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
         .collect();
     signals.sort_unstable();
 
-    let chip = match &mcu.firmware {
+    let mut chip = match &mcu.firmware {
         Esp32s3Firmware::Elf(elf) => {
             let segments = elf
                 .segments()
@@ -122,6 +122,11 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
             s3::Esp32s3::boot(&gpios, boot)
         }
     };
+    // A part that names no resistor has nothing to stamp, so a netted pad's pull-down is refused
+    // at the store instead of being dropped here.
+    if mcu.pull_down_resistance.is_none() {
+        chip.omit_pull_down();
+    }
     let console = mcu.console.iter().map(|send| (send.at, send.to.as_slice()));
     let bridge = Bridge::new(chip, gpios, console);
     super::chip(part, outputs, watches, signals, Vec::new(), bridge)
@@ -165,8 +170,10 @@ mod tests {
 /// `VCC` and `GND` need nets, and every GPIO is optional. A GPIO with no net is neither stamped
 /// nor watched. One with a net drives through `output` from `VCC` and into `GND`, pulls up
 /// through `pull_up_resistance`, pulls down through `pull_down_resistance` when the part has
-/// one, pulls both ways, or is off, as the firmware sets it, leaks to `VCC` and to `GND`
-/// through `leakage_resistance`, and reads its level through `input_threshold`. `console` is
+/// one, pulls both ways, or is off, as the firmware sets it. A part that names no pull-down
+/// refuses a store that sets one on a pad with a net, and writes nothing. It leaks to `VCC`
+/// and to `GND` through `leakage_resistance`, and reads its level through `input_threshold`.
+/// `console` is
 /// what the host sends its console: each event's bytes, in order, after t = 0 and after the
 /// previous event. Only parse builds one.
 #[derive(Clone, Debug, PartialEq)]
@@ -179,8 +186,8 @@ pub struct Esp32s3 {
     pub output: OutputStage,
     /// Ohm. Every GPIO's pull-up.
     pub pull_up_resistance: Value,
-    /// Ohm. Every GPIO's pull-down. `None` in a netlist written before the field, whose pads
-    /// never pull down.
+    /// Ohm. Every GPIO's pull-down. `None` when the part names none: a store that sets `FUN_WPD`
+    /// on a pad with a net ends the run, and a pad with no net keeps the bit.
     pub pull_down_resistance: Option<Value>,
     /// Ohm. Every GPIO's to `VCC` and again to `GND`, in every drive state.
     pub leakage_resistance: Value,
