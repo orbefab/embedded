@@ -81,6 +81,12 @@ def test_periods_and_board() -> None:
     expect("a missing equal line fails", raises(lambda: rows_of(good.replace("equal 100\n", ""))))
     wide_gap = good.replace(f"above {period(80) + 500} 100\n", f"above {period(80) + 500} {period(80)}\n", 1)
     expect("an above gap of a full period fails", raises(lambda: check_console(wide_gap)))
+    tail = "rng_on 0123abcd\nrng_off fedcba98\nRNG OFF DONE\n"
+    expect("clock-off lines after TIMERS DONE pass", not raises(lambda: check_console(good + tail)))
+    other = "rng_on aaaaaaaa\nrng_off 11111111\nRNG OFF DONE\n"
+    expect("a board's clock-off words are not compared", not raises(lambda: compare(good + tail, good + other)))
+    early = good.replace("TIMERS DONE\n", tail + "TIMERS DONE\n", 1)
+    expect("clock-off lines before TIMERS DONE fail", raises(lambda: rows_of(early)))
 
     board = console(shot_overhead=500 + BOARD_TOLERANCE, reload_overhead=800 + BOARD_TOLERANCE)
     expect("a board within 4000 cycles passes", not raises(lambda: compare(good, board)))
