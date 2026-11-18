@@ -1,15 +1,16 @@
 use crate::{Drives, Duty, Levels, Pulses, Quantity, Readings, Spi, Stop, Time};
 
-/// Everything a device remembers: fixed-size plain data with no heap, so a copy of it is a
-/// checkpoint. The host keeps several copies of each part's state and runs, rewinds and commits
-/// them, so state must not point anywhere.
-pub trait State: Copy + Send + 'static {
+/// Everything a device remembers. A clone is a checkpoint. The host keeps several copies of
+/// each part's state and runs, rewinds and commits them. A move is not a checkpoint, so a
+/// memory too large for the wasm stack lives behind a `Box` and [`clone`](Clone::clone) copies
+/// its bytes. A device small enough to stay `Copy` still copies by value.
+pub trait State: Clone + Send + 'static {
     /// Becomes `source`. The host copies a state only with this, and only onto a copy made
     /// before or after it. The whole state by default. A state that holds [`Pages`](crate::Pages)
     /// copies them with [`Pages::copy_from`](crate::Pages::copy_from), which skips the pages
     /// that match, and the rest whole.
     fn copy_from(&mut self, source: &Self) {
-        *self = *source;
+        *self = source.clone();
     }
 }
 
