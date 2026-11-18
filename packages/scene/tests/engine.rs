@@ -1,5 +1,5 @@
 //! The first-target netlist runs in the engine with the button pressed from 50 ms to 150 ms,
-//! and lights the LED to the values measured on engine 0.42.0.
+//! and lights the LED to the values measured with the Nano's 5V pin one USB diode drop under 5 V.
 
 use orbe_model::Time;
 
@@ -12,9 +12,10 @@ use orbe_engine::name::{Name, Ref};
 use orbe_engine::{Input, Session, Setting, Status};
 use orbe_scene::Files;
 
-/// The values while pressed, measured on engine 0.42.0, to the digits recorded then.
-const D13_PRESSED_V: f64 = 4.6218482;
-const LED1_PRESSED_A: f64 = 0.0122465581;
+/// The values while pressed, with the Nano's 5V pin at 4.75 V behind its USB diode, to the
+/// digits recorded then.
+const D13_PRESSED_V: f64 = 4.4007135;
+const LED1_PRESSED_A: f64 = 0.0112925044;
 
 fn ms(ms: u64) -> Time {
     Time::from_ps(ms * 1_000_000_000)

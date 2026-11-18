@@ -1,8 +1,10 @@
 //! The IRF520 switching a load from a Nano. Pin D9 drives the gate directly, through 100 ohm,
 //! or through 100 ohm with 10k from the gate to GND. The drain sinks a red LED behind 220 ohm,
-//! or 100 ohm, 10 ohm or 1 ohm, from 5V. The 1 ohm load wants 5 A, more than a 5 V gate lets
-//! through, so the transistor holds the current at its own limit. `gate_hold.hex` sets D9 high
-//! in setup and keeps it there, while D7 rises at 100 ms and D8 toggles every 200 ms.
+//! or 100 ohm, 10 ohm or 1 ohm, from 5V. The 5V pin sits a Schottky drop under USB, so a heavier
+//! load pulls it lower, and D9's high, the gate, with it. The 1 ohm load wants 5 A, more than a
+//! 4.5 V gate lets through, so the transistor holds the current at its own limit, about 1.2 A.
+//! `gate_hold.hex` sets D9 high in setup and keeps it there, while D7 rises at 100 ms and D8
+//! toggles every 200 ms.
 
 mod common;
 
@@ -15,9 +17,10 @@ use orbe_scene::Files;
 
 const STOP_PS: u64 = 300_000_000_000;
 
-/// Accepted steps over the 300 ms, 1.5 times the most any shape takes. The shapes take 496 to
-/// 750.
-const MOST_STEPS: u64 = 750 * 3 / 2;
+/// Accepted steps over the 300 ms, 1.5 times the most any shape takes. The shapes take 800 to
+/// 1452. The 5V pin moves each time the sketch changes a pin's load, and D9's high and the gate
+/// move with it, so the steps resolve more edges than on a fixed rail.
+const MOST_STEPS: u64 = 1452 * 3 / 2;
 
 /// The part's values, from `parts/nmos-irf520-to220/part.jsonc`.
 const KP: f64 = 1.259;
@@ -151,10 +154,10 @@ fn switches_on(drive: Drive, load: Load) {
         "{label}: id {id} A at vgs {vgs} V and vds {vds} V, where the square law gives {law} A"
     );
     let wanted = match load {
-        Load::Led => (0.013, 0.015),
-        Load::Ohms("100") => (0.049, 0.050),
-        Load::Ohms("10") => (0.47, 0.48),
-        Load::Ohms(_) => (1.7, 2.1),
+        Load::Led => (0.0125, 0.0130),
+        Load::Ohms("100") => (0.0465, 0.0475),
+        Load::Ohms("10") => (0.43, 0.445),
+        Load::Ohms(_) => (1.1, 1.25),
     };
     assert!(
         (wanted.0..=wanted.1).contains(&id),

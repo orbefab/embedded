@@ -354,6 +354,7 @@ fn a_brown_out_holds_every_pin_off_until_vcc_returns() {
     timeline.set_brown_out(true);
     assert_eq!(timeline.drives()[PB5 as usize], PinDrive::High);
     assert_eq!(timeline.run_until(10_000).map(|halt| halt.at), Some(102));
+    assert!(timeline.held(), "held from the halt");
     for (pin, drive) in timeline.drives().iter().enumerate() {
         let expected = if pin as u32 == PC6 {
             PinDrive::PullUp
@@ -369,8 +370,12 @@ fn a_brown_out_holds_every_pin_off_until_vcc_returns() {
         5.0,
         "the host's window leaves the supply alone"
     );
+    let released = timeline.run_until(4_000_000).unwrap();
+    assert_eq!(released.at, 2_000_001, "the hold ends one cycle on");
+    assert!(!timeline.held());
+    assert_eq!(timeline.drives()[PB5 as usize], PinDrive::Off);
     let halt = timeline.run_until(4_000_000).unwrap();
-    assert!(halt.at > 2_000_000, "after the reset time-out: {halt:?}");
+    assert!(halt.at > 2_000_001, "after the reset time-out: {halt:?}");
     assert_eq!(timeline.drives()[PB5 as usize], PinDrive::Low);
 }
 
@@ -383,8 +388,15 @@ fn reset_low_on_pc6_holds_the_chip_and_high_restarts_it() {
     assert_eq!(timeline.drives()[PB5 as usize], PinDrive::Off);
     assert_eq!(timeline.drives()[PC6 as usize], PinDrive::PullUp);
     assert!(timeline.cpu().is_held_in_reset());
+    assert!(timeline.held(), "held from the halt");
     assert_eq!(timeline.run_until(2_000_000), None);
     timeline.set_pad(PC6, true);
+    assert_eq!(
+        timeline.run_until(4_000_000).map(|halt| halt.at),
+        Some(2_000_001),
+        "the hold ends one cycle on"
+    );
+    assert!(!timeline.held());
     assert!(timeline.run_until(4_000_000).is_some());
     assert_eq!(timeline.drives()[PB5 as usize], PinDrive::Low);
 }

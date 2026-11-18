@@ -2,6 +2,7 @@
 //! the project. It names the folders to write and the lock to write, or it refuses.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use crate::catalog::{Catalog, CatalogEntry, Version};
 use crate::name::did_you_mean;
@@ -957,6 +958,11 @@ fn kept_newer_line(
 }
 
 fn plan_relock(catalog: &Catalog, snapshot: &Snapshot, add: &str) -> Plan {
+    // A file that cannot be read has no version in the snapshot. The file may still
+    // have one, so report the read before calling the version missing.
+    if let Some(refusal) = unreadable_copy(snapshot) {
+        return Plan::Refuse(refusal);
+    }
     let mut lines = BTreeMap::new();
     let mut modified = Vec::new();
     let mut problems = Vec::new();
@@ -1038,6 +1044,37 @@ fn plan_relock(catalog: &Catalog, snapshot: &Snapshot, add: &str) -> Plan {
         lock,
         parts,
         modified,
+    })
+}
+
+/// Every part folder that has no version because a file in it could not be read.
+fn unreadable_copy(snapshot: &Snapshot) -> Option<Refusal> {
+    let mut messages = Vec::new();
+    let mut hints = Vec::new();
+    for (id, target) in &snapshot.targets {
+        let Target::Folder(folder) = target else {
+            continue;
+        };
+        if folder.version.is_some() || folder.unreadable.is_empty() {
+            continue;
+        }
+        for file in &folder.unreadable {
+            let rel = format!("parts/{id}/{}", file.rel);
+            messages.push(format!("cannot read {rel}: {}", file.error));
+            if file.permission {
+                hints.push(project::chmod_hint(Some(&snapshot.root), Path::new(&rel)));
+            } else {
+                hints.push("check that the path exists and is readable".into());
+            }
+        }
+    }
+    if messages.is_empty() {
+        return None;
+    }
+    Some(Refusal {
+        code: AddCode::Unreadable,
+        message: messages.join("\n"),
+        hint: hints.join("\n"),
     })
 }
 

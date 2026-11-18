@@ -107,6 +107,7 @@ pub(crate) fn chip(part: PartId, dev: &Cst816) -> Chip {
         usarts: &[],
         twi: false,
         sends: false,
+        supply: None,
         takes: crate::active::Takes::default(),
         core: Core::Device(Box::new(Native::new(
             model::Cst816::new(&Fields::NONE).expect("a cst816 takes no params"),

@@ -84,6 +84,7 @@ pub(crate) fn chip(part: PartId, panel: &St77916) -> Chip {
         usarts: &[],
         twi: false,
         sends: false,
+        supply: None,
         takes: Takes {
             spi: Some(SpiTarget {
                 cs: pins[CS],

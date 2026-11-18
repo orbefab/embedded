@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::catalog::Version;
 use crate::diagnostic::Findings;
@@ -23,6 +23,14 @@ pub(super) enum Target {
     Other(&'static str),
 }
 
+/// A file under a part folder that exists and could not be read.
+pub(super) struct Unreadable {
+    /// Path relative to the part folder, with `/` between parts.
+    pub(super) rel: String,
+    pub(super) error: String,
+    pub(super) permission: bool,
+}
+
 /// A folder's readable files, and the entries that are not plain readable files.
 pub(super) struct Folder {
     pub(super) version: Option<Version>,
@@ -30,6 +38,8 @@ pub(super) struct Folder {
     pub(super) files: BTreeMap<String, Vec<u8>>,
     /// Entries that are links, unreadable, or neither file nor folder, as message phrases.
     pub(super) odd: Vec<String>,
+    /// Files that exist and could not be read.
+    pub(super) unreadable: Vec<Unreadable>,
 }
 
 impl Folder {
@@ -45,6 +55,7 @@ impl Folder {
             hash,
             files,
             odd: Vec::new(),
+            unreadable: Vec::new(),
         }
     }
 
@@ -63,6 +74,8 @@ pub(super) struct Snapshot {
     pub(super) lock: BTreeMap<String, LockFields>,
     pub(super) lock_text: Option<String>,
     pub(super) lock_error: Option<String>,
+    /// The project folder as the user named it, from the directory `orbe` ran in.
+    pub(super) root: PathBuf,
 }
 
 impl Snapshot {
@@ -95,6 +108,7 @@ pub(super) fn load(root: &Path, ids: &BTreeSet<String>) -> Result<Snapshot, RunE
         lock,
         lock_text,
         lock_error,
+        root: root.to_path_buf(),
     })
 }
 
@@ -113,9 +127,11 @@ fn target(path: &Path) -> Target {
     }
     let mut files = BTreeMap::new();
     let mut odd = Vec::new();
-    read_tree(path, path, &mut files, &mut odd);
+    let mut unreadable = Vec::new();
+    read_tree(path, path, &mut files, &mut odd, &mut unreadable);
     let mut folder = Folder::from_files(files);
     folder.odd = odd;
+    folder.unreadable = unreadable;
     Target::Folder(folder)
 }
 
@@ -124,6 +140,7 @@ fn read_tree(
     dir: &Path,
     files: &mut BTreeMap<String, Vec<u8>>,
     odd: &mut Vec<String>,
+    unreadable: &mut Vec<Unreadable>,
 ) {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -147,16 +164,26 @@ fn read_tree(
             }
         };
         let shown = rel(root, &path);
+        if !crate::published::is_published(&shown) {
+            continue;
+        }
         match fs::symlink_metadata(&path) {
             Ok(meta) if meta.file_type().is_symlink() => {
                 odd.push(format!("`{shown}`, which is a link"));
             }
-            Ok(meta) if meta.is_dir() => read_tree(root, &path, files, odd),
+            Ok(meta) if meta.is_dir() => read_tree(root, &path, files, odd, unreadable),
             Ok(meta) if meta.is_file() => match fs::read(&path) {
                 Ok(bytes) => {
                     files.insert(shown, bytes);
                 }
-                Err(error) => odd.push(format!("`{shown}`, which cannot be read: {error}")),
+                Err(error) => {
+                    odd.push(format!("`{shown}`, which cannot be read: {error}"));
+                    unreadable.push(Unreadable {
+                        rel: shown,
+                        error: error.to_string(),
+                        permission: error.kind() == io::ErrorKind::PermissionDenied,
+                    });
+                }
             },
             Ok(_) => odd.push(format!("`{shown}`, which is not a file")),
             Err(error) => odd.push(format!("`{shown}`, which cannot be read: {error}")),
