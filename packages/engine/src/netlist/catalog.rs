@@ -2,8 +2,6 @@
 //! its resolve call and its entry in [`engine_kinds`]. An analog kind's answers are its [`Kind`]
 //! impl, in its own file. `docs/engine/add-a-kind.md` says how to add one.
 
-use std::sync::LazyLock;
-
 use serde::Deserialize;
 
 use orbe_model::Time;
@@ -102,13 +100,14 @@ pub enum Conduction {
     Other,
 }
 
-/// `unlisted` keeps a chip row out of [`engine_kinds`].
-macro_rules! listed {
-    () => {
-        true
+/// How many of a row's pins are required: `required <n>` on a chip row names the first `n`,
+/// and a row without it requires them all.
+macro_rules! required {
+    ($pins:expr) => {
+        $pins.len()
     };
-    (unlisted) => {
-        false
+    ($pins:expr, $required:expr) => {
+        $required
     };
 }
 
@@ -122,7 +121,7 @@ macro_rules! define_kinds {
         }
         chip {
             $(
-                $chip:ident $($unlisted:ident)?, $chip_name:literal, $chip_wire:ty,
+                $chip:ident $(required $required:expr)?, $chip_name:literal, $chip_wire:ty,
                 $chip_resolve:path, $chip_pins:expr;
             )*
         }
@@ -140,9 +139,9 @@ macro_rules! define_kinds {
             Chip(Chip),
         }
 
-        const KINDS: &[(&str, &[&str], bool)] = &[
-            $(($name, $pins, true),)*
-            $(($chip_name, $chip_pins, listed!($($unlisted)?)),)*
+        const KINDS: &[(&str, &[&str], usize)] = &[
+            $(($name, $pins, required!($pins)),)*
+            $(($chip_name, $chip_pins, required!($chip_pins $(, $required)?)),)*
         ];
 
         /// The wire format of one part. The variant order is the order serde lists the kinds in
@@ -370,17 +369,13 @@ macro_rules! define_kinds {
     };
 }
 
-/// Kind names whose pins are all required, in wire order, with their pin names. An `esp32s3`
-/// lets pins go unwired and is not here.
-pub fn engine_kinds() -> &'static [(&'static str, &'static [&'static str])] {
-    static LISTED: LazyLock<Vec<(&str, &[&str])>> = LazyLock::new(|| {
-        KINDS
-            .iter()
-            .filter(|(_, _, listed)| *listed)
-            .map(|&(name, pins, _)| (name, pins))
-            .collect()
-    });
-    &LISTED
+/// Every kind name, in wire order, with its pin names and how many of them are required.
+///
+/// The required pins are the first `n` of the names, and a part must give each a net. The rest
+/// may go unwired. Every kind requires all its pins but `esp32s3`, which requires `VCC` and
+/// `GND` and takes any of its GPIOs.
+pub fn engine_kinds() -> &'static [(&'static str, &'static [&'static str], usize)] {
+    KINDS
 }
 
 fn chip_pin_names(chip: &Chip) -> &[&'static str] {
@@ -498,7 +493,7 @@ define_kinds! {
         Dht22, "dht22",
             crate::device::dht22::WireDht22, crate::device::dht22::resolve_dht22,
             &crate::device::Dht22::PINS;
-        Esp32s3 unlisted, "esp32s3",
+        Esp32s3 required crate::mcu::Esp32s3::REQUIRED, "esp32s3",
             crate::mcu::esp32s3::WireEsp32s3, crate::mcu::esp32s3::resolve_esp32s3,
             &crate::mcu::Esp32s3::PINS;
         Ws2812, "ws2812",
@@ -531,24 +526,32 @@ mod tests {
     }
 
     #[test]
-    fn the_scene_lists_every_wire_kind_but_esp32s3() {
-        let listed: Vec<&str> = engine_kinds().iter().map(|(name, _)| *name).collect();
-        let wire = wire_kinds();
-        let expected: Vec<&str> = wire
-            .iter()
-            .map(String::as_str)
-            .filter(|name| *name != "esp32s3")
-            .collect();
-        assert_eq!(listed, expected);
-        assert!(wire.iter().any(|name| name == "esp32s3"));
+    fn the_scene_lists_every_wire_kind() {
+        let listed: Vec<&str> = engine_kinds().iter().map(|(name, _, _)| *name).collect();
+        assert_eq!(listed, wire_kinds());
+    }
+
+    #[test]
+    fn every_kind_but_esp32s3_requires_all_its_pins() {
+        for &(name, pins, required) in engine_kinds() {
+            if name == "esp32s3" {
+                assert_eq!(&pins[..required], ["VCC", "GND"]);
+            } else {
+                assert_eq!(required, pins.len(), "`{name}`");
+            }
+        }
     }
 
     #[test]
     fn every_kind_has_a_unique_name_and_unique_pins() {
         let mut names = BTreeSet::new();
-        for (name, pins, _) in KINDS {
+        for (name, pins, required) in KINDS {
             assert!(names.insert(name), "`{name}` is two rows");
             assert!(!pins.is_empty(), "`{name}` has no pins");
+            assert!(
+                *required <= pins.len(),
+                "`{name}` requires more pins than it has"
+            );
             let unique: BTreeSet<_> = pins.iter().collect();
             assert_eq!(unique.len(), pins.len(), "`{name}` repeats a pin");
         }

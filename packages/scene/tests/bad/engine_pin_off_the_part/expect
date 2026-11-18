@@ -1,0 +1,1 @@
+scene.unknown_pin parts/bleeder.jsonc:7:22 | engine pin `b` sits on `b`, which is not a pin of this part | map it in the model's `pins`; the part's pins: x, y

@@ -2,12 +2,13 @@
 //! is the engine's `packages/engine/tests/circuits/esp32s3-hello` as a scene: a test chip in
 //! format 2 whose scene names the app and the partition table, and whose ROM is the default of
 //! its `rom` param. No fixture commits the ROM, so each test copies it from the folder
-//! `packages/engine/scripts/blobs.sh` fills.
+//! `packages/engine/scripts/blobs.sh` fills. The same fixture shows that the reader takes the
+//! esp32s3's required pins from the engine: its GPIOs may go unwired, and `VCC` and `GND` may not.
 
 mod common;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use orbe_engine::blob::Sha256;
 use orbe_scene::{Code, Diagnostic, Files, Netlist};
@@ -16,25 +17,11 @@ use tempfile::TempDir;
 
 const ROM_SHA256: &str = "c0ce0f338d1de1bdc6efbef1591779a2a42c1ab7d759d3c6ae8ae63a7dd34cfd";
 
-/// The folder `packages/engine/scripts/blobs.sh` fills: `$ORBE_BLOBS`, else
-/// `$XDG_CACHE_HOME/orbe/blobs`, else `~/.cache/orbe/blobs`.
-fn blob_cache() -> PathBuf {
-    let set = |name| std::env::var_os(name).filter(|value| !value.is_empty());
-    set("ORBE_BLOBS").map(PathBuf::from).unwrap_or_else(|| {
-        set("XDG_CACHE_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                PathBuf::from(std::env::var_os("HOME").expect("HOME")).join(".cache")
-            })
-            .join("orbe/blobs")
-    })
-}
-
 /// A copy of the fixture with the ROM at `chip/rom.elf`.
 fn project() -> TempDir {
     let dir = tempfile::tempdir().unwrap();
     common::copy_dir(&common::fixture("esp32s3-hello"), dir.path());
-    let rom = blob_cache().join(ROM_SHA256);
+    let rom = common::blob_cache().join(ROM_SHA256);
     fs::copy(&rom, dir.path().join("chip/rom.elf")).unwrap_or_else(|_| {
         panic!(
             "the ROM blob is not at {}; run packages/engine/scripts/blobs.sh",
@@ -188,39 +175,33 @@ fn a_scene_in_format_2_needs_a_newer_orbe() {
 }
 
 /// The engine says only that the flash holds no app it would start, so the finding goes to each
-/// file the scene placed on the flash: the app and the partition table.
+/// file the scene placed on the flash, the app and the partition table, and blames the image
+/// built from both, not either file. `tests/bad/flash_image` shows the same finding.
 #[test]
-fn an_app_that_breaks_rule_image_is_an_error_at_the_scene_line_of_app() {
+fn an_app_that_breaks_rule_image_is_an_error_at_the_scene_lines_of_both_files() {
     let project = project();
     let app = project.path().join("firmware/hello_world.bin");
     let mut bytes = fs::read(&app).unwrap();
     bytes[100] ^= 0xff;
     fs::write(&app, bytes).unwrap();
     let found = errors(project.path());
-    let lines: Vec<(usize, &str)> = found
-        .iter()
-        .map(|d| (d.line, d.message.split(';').next().unwrap()))
-        .collect();
+    let lines: Vec<usize> = found.iter().map(|d| d.line).collect();
     let line = |text| line_of(project.path(), "scene.jsonc", text);
     assert_eq!(
         lines,
-        vec![
-            (
-                line("\"partition_table\":"),
-                "`u1.partition_table` is firmware/partition-table.bin"
-            ),
-            (line("\"app\":"), "`u1.app` is firmware/hello_world.bin"),
-        ],
+        vec![line("\"partition_table\":"), line("\"app\":")],
         "{found:#?}"
     );
     for finding in &found {
         assert_eq!(finding.code, Code::Param);
         assert_eq!(finding.file, "scene.jsonc");
-        assert!(
-            finding
-                .message
-                .ends_with("#u1 firmware has no app the bootloader would start: a partition table, an app partition, blank otadata, and an ESP32-S3 app image whose checksum and hash hold"),
-            "{finding}"
+        assert_eq!(
+            finding.message,
+            "the firmware image built from `u1.partition_table` (firmware/partition-table.bin) and `u1.app` (firmware/hello_world.bin) failed to read; #u1 firmware has no app the bootloader would start: a partition table, an app partition, blank otadata, and an ESP32-S3 app image whose checksum and hash hold",
+        );
+        assert_eq!(
+            finding.hint,
+            "the engine does not say which of these files breaks the image; check each, or build them again together"
         );
     }
 }
@@ -265,5 +246,69 @@ fn a_missing_app_is_firmware_missing() {
     assert_eq!(
         found[0].message,
         "`u1.app`: no file at `firmware/hello_world.bin`"
+    );
+}
+
+/// The supply pin `pin` leaves the part and the model's `pins`, so the engine pin sits on a part
+/// pin of its own name, which the part lacks. The fixture leaves every GPIO the same way, and
+/// the reader takes those: the engine says the first two pins, `VCC` and `GND`, are required.
+/// `listed` is the part's pins after the rename, in its order.
+fn without_supply_pin(pin: &str, renamed: &str, mapped: (&str, &str), listed: &str) {
+    let project = project();
+    let chip = "chip/part.jsonc";
+    edit(
+        project.path(),
+        chip,
+        &format!("\"{pin}\": ["),
+        &format!("\"{renamed}\": ["),
+    );
+    edit(project.path(), chip, mapped.0, mapped.1);
+    edit(
+        project.path(),
+        "scene.jsonc",
+        &format!("\"u1.{pin}\""),
+        &format!("\"u1.{renamed}\""),
+    );
+    let found = errors(project.path());
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].code, Code::UnknownPin, "{}", found[0]);
+    assert_eq!(found[0].file, chip);
+    assert_eq!(
+        found[0].line,
+        line_of(project.path(), chip, "\"kind\": \"esp32s3\"")
+    );
+    assert_eq!(
+        found[0].message,
+        format!("engine pin `{pin}` sits on `{pin}`, which is not a pin of this part")
+    );
+    assert_eq!(
+        found[0].hint,
+        format!("map it in the model's `pins`; the part's pins: {listed}")
+    );
+}
+
+#[test]
+fn an_esp32s3_part_that_maps_no_vcc_is_refused() {
+    without_supply_pin(
+        "VCC",
+        "3V3",
+        (
+            "\"VCC\": \"VCC\",\n      \"GND\": \"GND\"",
+            "\"GND\": \"GND\"",
+        ),
+        "3V3, GND",
+    );
+}
+
+#[test]
+fn an_esp32s3_part_that_maps_no_gnd_is_refused() {
+    without_supply_pin(
+        "GND",
+        "0V",
+        (
+            "\"VCC\": \"VCC\",\n      \"GND\": \"GND\"",
+            "\"VCC\": \"VCC\"",
+        ),
+        "VCC, 0V",
     );
 }

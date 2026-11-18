@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 
 use super::{Circuit, Head, SetBy, Setter, Written, setter_of};
 use crate::diagnostic::{Code, Reported};
+use crate::name::and_list;
 use crate::params::{dotted, within};
 use crate::source::Span;
 use crate::syntax::Node;
@@ -122,8 +123,8 @@ impl<'p> Circuit<'p> {
             && setter_of(&origin.set_by, &pointer).is_none()
         {
             // A firmware rule reads every file the instance set inside the field together, such
-            // as a flash's partition table and app, and the engine does not say which one breaks
-            // it. The finding goes to each of them.
+            // as a flash's partition table and app, as one image, and the engine does not say
+            // which file breaks it. The finding goes to each of them, and blames the image.
             let inside: Vec<&Setter> = origin
                 .set_by
                 .iter()
@@ -131,12 +132,21 @@ impl<'p> Circuit<'p> {
                 .map(|(_, s)| s)
                 .collect();
             if inside.len() > 1 {
+                let files = inside
+                    .iter()
+                    .map(|s| format!("`{}` ({})", s.site, s.shown))
+                    .collect::<Vec<_>>();
+                let files: Vec<&str> = files.iter().map(String::as_str).collect();
+                let message = format!(
+                    "the firmware image built from {} failed to read; {requirement}",
+                    and_list(&files)
+                );
                 for setter in inside {
                     self.out.push(
                         Code::Param,
                         setter.span,
-                        format!("`{}` is {}; {requirement}", setter.site, setter.shown),
-                        hint.clone(),
+                        message.clone(),
+                        "the engine does not say which of these files breaks the image; check each, or build them again together".into(),
                     );
                 }
                 return;

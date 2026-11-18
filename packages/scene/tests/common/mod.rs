@@ -114,14 +114,21 @@ pub fn project(name: &str) -> TempDir {
     dir
 }
 
-/// The `nano-button` project with a case folder from `tests/bad/` or `tests/good/` laid over
-/// it. An `edit` file changes one project file: its path, the text, and the new text.
+/// The `nano-button` project, or the fixture a `base` file names, with a case folder from
+/// `tests/bad/` or `tests/good/` laid over it. An `edit` file changes one project file: its
+/// path, the text, and the new text. A `blobs` file lists `<path> <sha256>` lines, each a blob
+/// from [`blob_cache`] copied to that project path, for a file no fixture commits, such as a
+/// ROM.
 pub fn overlaid(case: &Path) -> TempDir {
-    let project = project("nano-button");
+    let base = fs::read_to_string(case.join("base"));
+    let project = project(base.as_deref().map_or("nano-button", str::trim));
     for entry in fs::read_dir(case).unwrap() {
         let path = entry.unwrap().path();
         let name = path.file_name().unwrap();
-        if name == "expect" || name == "edit" {
+        if ["expect", "edit", "base", "blobs"]
+            .iter()
+            .any(|n| name == *n)
+        {
             continue;
         }
         let target = project.path().join(name);
@@ -144,7 +151,34 @@ pub fn overlaid(case: &Path) -> TempDir {
         );
         fs::write(&target, text.replacen(lines[1], lines[2], 1)).unwrap();
     }
+    if let Ok(blobs) = fs::read_to_string(case.join("blobs")) {
+        for line in blobs.lines() {
+            let (path, sha256) = line.split_once(' ').expect("`<path> <sha256>`");
+            let blob = blob_cache().join(sha256);
+            fs::copy(&blob, project.path().join(path)).unwrap_or_else(|_| {
+                panic!(
+                    "{}: the blob is not at {}; run packages/engine/scripts/blobs.sh",
+                    case.display(),
+                    blob.display()
+                )
+            });
+        }
+    }
     project
+}
+
+/// The folder `packages/engine/scripts/blobs.sh` fills: `$ORBE_BLOBS`, else
+/// `$XDG_CACHE_HOME/orbe/blobs`, else `~/.cache/orbe/blobs`.
+pub fn blob_cache() -> PathBuf {
+    let set = |name| std::env::var_os(name).filter(|value| !value.is_empty());
+    set("ORBE_BLOBS").map(PathBuf::from).unwrap_or_else(|| {
+        set("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(std::env::var_os("HOME").expect("HOME")).join(".cache")
+            })
+            .join("orbe/blobs")
+    })
 }
 
 /// The case folders in `tests/<kind>/`, sorted.

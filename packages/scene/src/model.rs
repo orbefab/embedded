@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use orbe_engine::mcu::Esp32s3;
 use orbe_engine::netlist::{MIN_GAP_PS, engine_kinds};
 use orbe_engine::world::Quantity;
 
@@ -28,10 +27,6 @@ pub const SCENE_FORMATS: &[u32] = &[1];
 /// The oldest part format whose file params take `"as": "blob"`.
 const BLOB_FORMAT: u32 = 2;
 const WIRE_KINDS: &[&str] = &["jumper", "trace", "contact"];
-/// Engine kinds whose pins after the first `n` may go unwired, each with all its pins and `n`.
-/// [`engine_kinds`] leaves them out, since it lists kinds whose pins are all required. An
-/// `esp32s3` needs `VCC` and `GND`, and takes any of its GPIOs.
-const OPTIONAL_PIN_KINDS: &[(&str, &[&str], usize)] = &[("esp32s3", &Esp32s3::PINS, 2)];
 /// A live session's stop, investigation 1's 2-hour cap.
 pub const STOP_PS: u64 = 7_200 * 1_000_000_000_000;
 const DEFAULT_MAX_STEP_PS: u64 = 10_000_000_000;
@@ -2099,24 +2094,15 @@ fn decode_body(name: Option<String>, node: &Node, part: &Part, out: &mut Finding
         return None;
     };
     let kinds = engine_kinds();
-    let found = kinds
-        .iter()
-        .find(|(name, _)| *name == kind)
-        .map(|(_, pins)| (*pins, pins.len()))
-        .or_else(|| {
-            OPTIONAL_PIN_KINDS
-                .iter()
-                .find(|(name, _, _)| *name == kind)
-                .map(|(_, pins, required)| (*pins, *required))
-        });
-    let Some((engine_pins, required)) = found else {
-        let named = did_you_mean(kind, kinds.iter().map(|(name, _)| *name), "");
+    // The engine says how many of a kind's pins are required: the first `required` of them.
+    let Some(&(_, engine_pins, required)) = kinds.iter().find(|(name, _, _)| *name == kind) else {
+        let named = did_you_mean(kind, kinds.iter().map(|(name, _, _)| *name), "");
         let hint = if named.is_empty() {
             format!(
                 "the kinds are {}",
                 kinds
                     .iter()
-                    .map(|(name, _)| *name)
+                    .map(|(name, _, _)| *name)
                     .collect::<Vec<_>>()
                     .join(", ")
             )
