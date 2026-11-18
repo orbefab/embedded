@@ -6,7 +6,7 @@ This text comes from the `orbe` you have installed, so it matches it. `orbe <com
 
 ## The loop
 
-1. When a Block is close to the circuit, run `orbe add <block>` in an empty folder. `orbe blocks` lists the Blocks, and `orbe search <words>` finds one. It writes a scene, firmware and a test that already work. Then run `orbe check scene.jsonc` and `orbe test`. Otherwise start at the next step.
+1. `orbe blocks` lists the Blocks, and `orbe search <words>` finds one. When a Block is close to the circuit, run `orbe add <block>` in an empty folder. It writes a scene, firmware and a test that already work. Then run `orbe check scene.jsonc` and `orbe test`. Otherwise start at the next step.
    - `nano-button-led`: a button on D2 lights a red LED on D13 of an Arduino Nano, and releasing it turns the LED off.
    - `uno-button-led`: a button on D2 lights a red LED on D13 of an Arduino Uno, and the board's own L LED with it.
    - `nano-led-fade`: an LED on D9 of an Arduino Nano fades up and down by PWM.
