@@ -14,7 +14,12 @@
 # --tarball FILE installs that file and checks FILE.sha256. It does not download.
 #
 # The release targets are Linux x86_64 and macOS arm64. Anything else is refused.
+#
+# Everything runs inside main, called on the last line, so a download cut short
+# through `curl | sh` defines main and runs nothing.
 set -eu
+
+main() {
 
 repo=https://github.com/orbefab/embedded
 
@@ -267,3 +272,6 @@ done
 if [ "$on_path" -eq 0 ]; then
   echo "install.sh: $abs is not on PATH. Add it yourself. This script does not edit your shell rc files."
 fi
+}
+
+main "$@"
