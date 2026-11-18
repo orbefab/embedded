@@ -16,7 +16,7 @@ import type { CameraMode } from "./camera-frame";
 import { createHoverStore, type HoverStore } from "./hover";
 import type { Command, FrameMessage, FrameState, Reply, SceneMessage, WorldName, WorldQuantity } from "./protocol";
 import { SceneView } from "./scene-view";
-import { applySerial, EMPTY_SERIAL, type SerialView } from "./serial";
+import { applySerial, EMPTY_SERIAL, serialShown, type SerialView } from "./serial";
 import { commandLine, errorText, type SessionSource } from "./session";
 import { formatValue, IDLE, nearest, nextThumb, parseValue, shownValue, stops, type Thumb, type ThumbEvent } from "./world";
 
@@ -72,6 +72,7 @@ function HoverLabel({ hover }: { hover: HoverStore }) {
 /** UART text the firmware printed. A Block that prints nothing shows no strip. */
 function SerialStrip({ source }: { source: SessionSource }) {
   const [view, setView] = useState<SerialView>(EMPTY_SERIAL);
+  const box = useRef<HTMLPreElement>(null);
   useEffect(
     () =>
       source.subscribe((message) => {
@@ -86,16 +87,20 @@ function SerialStrip({ source }: { source: SessionSource }) {
       }),
     [source]
   );
+  useEffect(() => {
+    const node = box.current;
+    if (node !== null) node.scrollTop = node.scrollHeight;
+  }, [view.text, view.trimmed]);
   if (view.text === "") return null;
   return (
     <pre
+      ref={box}
       data-testid="serial"
       style={{
-        position: "absolute",
-        left: 12,
-        right: 12,
-        bottom: 12,
-        maxHeight: "30%",
+        alignSelf: "stretch",
+        width: "100%",
+        flexShrink: 0,
+        maxHeight: "6.5rem",
         overflow: "auto",
         boxSizing: "border-box",
         margin: 0,
@@ -110,7 +115,7 @@ function SerialStrip({ source }: { source: SessionSource }) {
         pointerEvents: "auto",
       }}
     >
-      {view.text}
+      {serialShown(view)}
     </pre>
   );
 }
@@ -478,7 +483,6 @@ export function Viewer({ source, onCreated }: ViewerProps) {
           )}
         </Canvas>
       </ShowError>
-      {closed === null ? <SerialStrip source={source} /> : null}
       <Errors errors={[...partErrors, ...sendErrors]} />
       {closed === null ? (
         <div
@@ -486,7 +490,7 @@ export function Viewer({ source, onCreated }: ViewerProps) {
             position: "absolute",
             top: 12,
             left: 12,
-            maxWidth: "calc(100% - 24px)",
+            width: "calc(100% - 24px)",
             display: "flex",
             flexDirection: "column",
             alignItems: "flex-start",
@@ -495,6 +499,7 @@ export function Viewer({ source, onCreated }: ViewerProps) {
           }}
         >
           <Controls send={send} source={source} />
+          <SerialStrip source={source} />
           {scene?.world === undefined ? null : <WorldPanel quantities={scene.world} send={send} source={source} />}
         </div>
       ) : null}

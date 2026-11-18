@@ -52,6 +52,24 @@ test.describe("serial output", () => {
     await shot(page, `${host.name.replaceAll(" ", "-")}-serial-silent`);
   });
 
+  test("the strip is in view at 375 by 812 without scrolling", async ({ page, host }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.goto(`${host.base}/embedded/blocks/nano-light-comparator/`);
+    await waitState(page, "playing");
+    const strip = page.locator('[data-testid="serial"]');
+    await expect(strip).toContainText("light", { timeout: 30_000 });
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+    const box = await strip.boundingBox();
+    expect(box, "the strip has a box").not.toBeNull();
+    if (box === null) return;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.height).toBeGreaterThan(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(375 + 1);
+    expect(box.y + box.height).toBeLessThanOrEqual(812);
+    await shot(page, `${host.name.replaceAll(" ", "-")}-serial-375`);
+  });
+
   test("the strip stays on a phone-width screen", async ({ page, host }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${host.base}/embedded/blocks/nano-light-comparator/`);

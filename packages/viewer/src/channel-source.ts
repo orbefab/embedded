@@ -1,4 +1,5 @@
 import type { ClosedMessage, Command, FrameMessage, FromSession, Reply, SceneMessage, ToViewer } from "./protocol";
+import { applySerial, EMPTY_SERIAL, serialReplay, type SerialView } from "./serial";
 import type { SessionSource } from "./session";
 
 /** What a channel to a session tells its source. */
@@ -32,15 +33,24 @@ export function receive(inbox: Inbox, text: string, from: string): void {
   inbox.message(parsed as FromSession);
 }
 
+/** The latest frame, with the serial text this page still holds in place of that frame's own. */
+function replayFrame(frame: FrameMessage, view: SerialView): FrameMessage {
+  const serial = serialReplay(view);
+  return serial === undefined ? frame : { ...frame, serial };
+}
+
 /** A session over a channel that carries its messages: `connect` opens the channel. A new
- * listener gets the current scene, then the latest frame. Once the session closes or the
- * channel drops, every listener gets a `closed` message, commands reject, and listeners get
- * nothing more. A drop also frees the channel, as `close` does. */
+ * listener gets the current scene, then the latest frame. That frame carries the serial text
+ * already delivered, bounded to 4096 bytes, with `trimmed` when earlier bytes were dropped.
+ * Once the session closes or the channel drops, every listener gets a `closed` message,
+ * commands reject, and listeners get nothing more. A drop also frees the channel, as `close`
+ * does. */
 export function channelSource(connect: (inbox: Inbox) => Channel): SessionSource {
   const listeners = new Set<(message: ToViewer) => void>();
   const waiting = new Map<number, { resolve: (reply: Reply) => void; reject: (error: Error) => void }>();
   let scene: SceneMessage | null = null;
   let frame: FrameMessage | null = null;
+  let serialView: SerialView = EMPTY_SERIAL;
   let closed: ClosedMessage | null = null;
   let next = 1;
 
@@ -62,10 +72,12 @@ export function channelSource(connect: (inbox: Inbox) => Channel): SessionSource
         case "scene":
           scene = message;
           frame = null;
+          serialView = EMPTY_SERIAL;
           broadcast(message);
           break;
         case "frame":
           frame = message;
+          if (message.serial !== undefined) serialView = applySerial(serialView, message.serial);
           broadcast(message);
           break;
         case "reply":
@@ -88,7 +100,7 @@ export function channelSource(connect: (inbox: Inbox) => Channel): SessionSource
     subscribe(listener) {
       listeners.add(listener);
       if (scene !== null) listener(scene);
-      if (frame !== null) listener(frame);
+      if (frame !== null) listener(replayFrame(frame, serialView));
       if (closed !== null) listener(closed);
       return () => {
         listeners.delete(listener);

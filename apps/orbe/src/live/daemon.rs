@@ -106,8 +106,8 @@ impl Watchers {
         if self.viewers.is_empty() {
             return;
         }
-        let frame = self.feed.frame(sample, serial, pace);
-        self.send_all(frame.into_iter().collect());
+        let frames = self.feed.burst(sample, serial, pace);
+        self.send_all(frames);
     }
 
     /// Whether a running `step` owes the viewers a frame.
