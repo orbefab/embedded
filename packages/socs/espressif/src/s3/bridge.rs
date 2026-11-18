@@ -1,5 +1,6 @@
 //! The ESP32-S3 on the `orbe-mcu` contract. Each GPIO the host wires becomes an output and a
-//! watch around [`Esp32s3`], its console is the `USB_SERIAL_JTAG` USART, each SPI2 transfer is a
+//! watch around [`Esp32s3`], its console is the `USB_SERIAL_JTAG` USART and each UART byte is
+//! `UART0`, `UART1` or `UART2`, each SPI2 transfer is a
 //! `Spi` record, each LEDC update is a `Duty` record on each of its wired pads, each RMT
 //! transmission is a `Pulses` record on each of its wired pads, and its 480 MHz tick converts
 //! between picoseconds and its timeline.
@@ -264,7 +265,7 @@ impl Bridge {
 }
 
 impl Mcu for Bridge {
-    const USARTS: &'static [&'static str] = &["USB_SERIAL_JTAG"];
+    const USARTS: &'static [&'static str] = &["USB_SERIAL_JTAG", "UART0", "UART1", "UART2"];
     const SENDS: bool = true;
 
     #[inline]
@@ -338,6 +339,15 @@ impl Mcu for Bridge {
                 byte,
                 start: at,
                 end: at,
+            });
+        }
+        let through = tick(through);
+        while let Some(byte) = self.chip.take_uart(through) {
+            sent(Frame {
+                usart: byte.port + 1,
+                byte: byte.byte,
+                start: time(byte.start),
+                end: time(byte.end),
             });
         }
     }

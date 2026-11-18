@@ -1,7 +1,7 @@
 //! SYSTEM's peripheral clock gates and resets: `SYSTEM_PERIP_CLK_EN0_REG`,
 //! `SYSTEM_PERIP_CLK_EN1_REG`, `SYSTEM_PERIP_RST_EN0_REG` and `SYSTEM_PERIP_RST_EN1_REG`.
 //!
-//! SPI2, LEDC, I2C0, GDMA, the SHA accelerator and RMT run their gates. Each runs while its clock bit is set
+//! SPI2, LEDC, I2C0, GDMA, the SHA accelerator, RMT and the three UARTs run their gates. Each runs while its clock bit is set
 //! and its reset bits are clear. A write that leaves one of its reset bits set puts it back to
 //! its power-on state, and it stays there until they clear. The SHA accelerator is held by the
 //! digital signature and HMAC reset bits too, as IDF's `sha_ll_reset_register` says.
@@ -15,7 +15,10 @@
 //! The clock and reset bits of SYSTIMER, SPI0 and SPI1, the eFuse controller, the USB Serial/JTAG
 //! unit, and the bits IDF names `SYSTEM_TIMERS_*` and `SYSTEM_WDG_*` are kept and not run, and
 //! every write that changes one is reported.
-//! Every other bit gates or resets a peripheral the model does not keep, so it has no effect.
+//! Every other bit gates or resets a peripheral the model does not keep, so it has no effect,
+//! apart from `SYSTEM_UART_MEM_CLK_EN`, bit 24 of `CLK_EN0`. That bit stays stored here. A UART
+//! FIFO access or a frame while it is clear ends the run, as the UART model says. The write of
+//! the bit itself does not.
 //!
 //! The reset values come from IDF's `soc/esp32s3/register/soc/system_reg.h`.
 
@@ -33,16 +36,22 @@ pub(crate) enum Block {
     Sha,
     I2c0,
     Rmt,
+    Uart0,
+    Uart1,
+    Uart2,
 }
 
 impl Block {
-    pub(crate) const ALL: [Block; 6] = [
+    pub(crate) const ALL: [Block; 9] = [
         Block::Spi2,
         Block::Ledc,
         Block::Gdma,
         Block::Sha,
         Block::I2c0,
         Block::Rmt,
+        Block::Uart0,
+        Block::Uart1,
+        Block::Uart2,
     ];
 
     pub(crate) fn name(self) -> &'static str {
@@ -53,6 +62,9 @@ impl Block {
             Block::Sha => "SHA",
             Block::I2c0 => "I2C0",
             Block::Rmt => "RMT",
+            Block::Uart0 => "UART0",
+            Block::Uart1 => "UART1",
+            Block::Uart2 => "UART2",
         }
     }
 
@@ -65,6 +77,9 @@ impl Block {
             Block::Sha => (1, 1 << 2, 1 << 2 | 1 << 4 | 1 << 5),
             Block::I2c0 => (0, 1 << 7, 1 << 7),
             Block::Rmt => (0, 1 << 9, 1 << 9),
+            Block::Uart0 => (0, 1 << 2, 1 << 2),
+            Block::Uart1 => (0, 1 << 5, 1 << 5),
+            Block::Uart2 => (1, 1 << 9, 1 << 9),
         }
     }
 }
@@ -138,6 +153,11 @@ impl Gates {
         let bit = 1 << if group == 0 { 13 } else { 15 };
         (self.words[0] & bit != 0, self.words[2] & bit != 0)
     }
+
+    /// `SYSTEM_UART_MEM_CLK_EN`. One clock for the RAM of UART0, UART1 and UART2.
+    pub(crate) fn uart_mem_clock(&self) -> bool {
+        self.words[0] & (1 << 24) != 0
+    }
 }
 
 #[cfg(test)]
@@ -162,7 +182,7 @@ mod tests {
 
     #[test]
     fn a_change_of_a_kept_bit_is_reported_and_other_bits_are_not() {
-        let gates = Gates::new();
+        let mut gates = Gates::new();
         assert!(gates.reports(0x20, 1 << 29));
         assert!(gates.reports(0x18, CLOCK_RESET[0] & !(1 << 13)));
         assert!(gates.reports(0x24, RESET_RESET[1] | 1 << 10));
@@ -174,5 +194,11 @@ mod tests {
         assert!(!gates.reports(0x20, 1 << 6 | 1 << 2));
         assert!(!gates.reports(0x1c, CLOCK_RESET[1] | 1 << 2));
         assert!(!gates.reports(0x18, CLOCK_RESET[0]));
+        assert!(gates.uart_mem_clock());
+        assert!(!gates.reports(0x18, CLOCK_RESET[0] & !(1 << 24)));
+        gates
+            .write(0x18, CLOCK_RESET[0] & !(1 << 24))
+            .for_each(drop);
+        assert!(!gates.uart_mem_clock());
     }
 }
