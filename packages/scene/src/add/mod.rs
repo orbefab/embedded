@@ -180,8 +180,9 @@ impl Reply {
 
 /// Copies parts into a project and writes `parts.lock`, or installs the one Block the request
 /// names. A refusal writes nothing. `dir` is the folder `-C` named, as the user wrote it, so
-/// hints can repeat it. With none, the current folder must look like a project, unless the
-/// request installs a Block, which makes one.
+/// hints can repeat it. With none, a folder inside another project must already be one. An
+/// empty folder, and any folder with no project above it, is where a new project starts. An
+/// id the catalog does not have is reported before either of those.
 pub fn run(dir: Option<&Path>, request: &Request) -> Result<Reply, RunError> {
     run_with(dir, request, &mut |_| None)
 }
@@ -194,6 +195,9 @@ fn run_with(dir: Option<&Path>, request: &Request, fault: &mut Fault) -> Result<
     }
     if let Some(message) = plan::usage(request) {
         return Ok(Reply::Usage(message));
+    }
+    if let Some(refusal) = plan::refuse_unknown(request) {
+        return Ok(Reply::Refuse(refusal));
     }
     if let Some(refusal) = not_a_project(dir, request) {
         return Ok(Reply::Refuse(refusal));
@@ -407,8 +411,10 @@ fn pending_note(root: &Path, next: &str) -> Vec<String> {
     )]
 }
 
-/// With no `-C`, the current folder must hold `scene.jsonc` or `parts.lock`. Anywhere else,
-/// `orbe add` would make a second project, so it names the folder above that is one, if any.
+/// With no `-C`, a folder inside another project must hold `scene.jsonc` or `parts.lock`.
+/// Anywhere else, `orbe add` would make a second project, so it names the folder above that
+/// is one. A folder with no project above it is where a new project starts, including an
+/// empty one. `--relock` still needs a project, because it rebuilds a lock already there.
 /// A folder `-C` names is trusted, since `orbe check` names it for a scene of any name.
 fn not_a_project(dir: Option<&Path>, request: &Request) -> Option<Refusal> {
     if let Some(dir) = dir {
@@ -422,7 +428,11 @@ fn not_a_project(dir: Option<&Path>, request: &Request) -> Option<Refusal> {
     if is_project(here) {
         return None;
     }
-    let hint = match project_above(here) {
+    let above = project_above(here);
+    if above.is_none() && !request.relock {
+        return None;
+    }
+    let hint = match above {
         Some(dir) => format!(
             "run `{}`",
             request_command(&project::add_command(Some(&dir)), request)

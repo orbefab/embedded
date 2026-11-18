@@ -7,8 +7,8 @@
 | `/embedded/` | What orbe is, every Block live in 3D with a tab each, the Blocks and the boards. |
 | `/embedded/parts/` | Every part, and a search over the fields `orbe search` reads, in its order. `?q=` holds the query. |
 | `/embedded/parts/<id>/` | The part in 3D, its pins, params, ratings with their sources, what is not simulated, what it is built from and what uses it, every file with its size and licence as a download, its docs, where to buy it with the date each link was checked, and its versions. A part that names a maker says Orbefab is not affiliated with or endorsed by that maker. |
-| `/embedded/blocks/` | Every Block. |
-| `/embedded/blocks/<id>/` | The Block live in 3D, its parts at their versions, its scene, firmware source and tests, its licence and every file with its own licence. |
+| `/embedded/blocks/` | Every Block, with the board it runs on and how many parts its scene places. |
+| `/embedded/blocks/<id>/` | The Block live in 3D, its README, its parts at their versions, its scene, firmware source and tests, its licence and every file with its own licence. |
 | `/embedded/r/` | The registry `orbe registry build` writes, so `@orbefab`'s template is `https://orbefab.com/embedded/r/{name}.json`. |
 | `/embedded/sources/` | The AVR runtime's source archive, which every Block's `firmware/NOTICE` names. |
 
@@ -34,7 +34,7 @@ The site is a [TanStack Start](https://tanstack.com/start/latest) app, set up as
 
 ### Install lines
 
-Until the repo and the binaries are public, an install command would fail, so the site shows none. `ORBE_SITE_INSTALL=1 scripts/site.sh --first-deploy` shows them: `orbe add <id>` on each part and Block page, `cargo install`, the releases page and the repo on the landing page, the repo in the footer, and a Block's README. Without it, each of those places says the CLI is coming. The build defines the flag as a literal, `__ORBE_SITE_INSTALL__`, so a build without it holds none of that text, in its pages or in its scripts.
+Until the repo and the binaries are public, an install command would fail, so the site shows none. `ORBE_SITE_INSTALL=1 scripts/site.sh --first-deploy` shows them: `orbe add <id>` on each part and Block page, `cargo install`, the releases page and the repo on the landing page, and the repo in the footer. A Block's README shows either way. The paragraph that says `orbe add <block>` shows only with the flag, and without the flag that paragraph is left out. Without the flag, the install places say the CLI is coming. The build defines the flag as a literal, `__ORBE_SITE_INSTALL__`, so a build without it holds none of that text, in its pages or in its scripts.
 
 The flag gates the site's own text and links. The registry's files are data, served as `orbe registry build` wrote them, so a Block's `README.md` and `block.jsonc` still say `orbe add`, and its `firmware/NOTICE` names the repo. `scripts/check-site.sh` checks every file under `dist/client` except `r/`, `orbe-wasm/` and `sources/`.
 
@@ -62,7 +62,7 @@ pnpm exec wrangler dev --local            # the same build, under wrangler
 - led-5mm's page draws its model, lists its five files with their licences, serves a download whose SHA-256 is the record's, and lists DigiKey with its checked date and the not-affiliated line;
 - nano-board's page draws the board with its children. The Uno is titled as a compatible board, shows `MIT OR Apache-2.0` on its `part.jsonc`, `model.py` and GLB, and links the clone schematic it is drawn from;
 - nano-button-led's page plays, and holding `@btn1` lights `@led1`, which goes dark on release. Its files show their own licences: the image and `LICENSE-runtime` LGPL-2.1-or-later, `LICENSE-libc` BSD-3-Clause, the scene and the sketch MIT OR Apache-2.0;
-- an unknown path answers 404 with the site's page, and `/embeddedfoo` is not the site's;
+- an unknown path answers 404 with the site's page and logs no page error, and `/embeddedfoo` is not the site's;
 - a registry file answers 304 to its own ETag, a missing one answers 404 with no immutable cache, a hashed build file keeps for a year, and a record's `@` path answers 307.
 
 It prints each page's requests and bytes, uncompressed and gzipped, and the time to the first Block frame. It finds Chromium as `check-viewer-e2e.sh` does. `--renders <dir>` saves screenshots. `scripts/check.sh` does not run it.
