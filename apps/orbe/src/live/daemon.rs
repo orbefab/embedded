@@ -29,7 +29,9 @@ use super::place::{Name, Place};
 use super::viewer::{self, Models, Out, Viewer};
 use super::{Ask, Request, read_line};
 
-/// The process ends after this long with no command and no `play` tick while no viewer watches.
+/// The process ends after this long with no command, while it is not playing and no viewer
+/// watches. The hour does not run during `play`. A tick can be late when the machine is busy,
+/// and that lateness is not an idle hour.
 const IDLE: Duration = Duration::from_secs(60 * 60);
 
 /// A process with no scene open ends this long after it starts listening, however many
@@ -408,7 +410,7 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
 }
 
 /// Runs jobs, viewers' commands and `play`'s ticks in order until a `close` closes the scene,
-/// or nothing comes and nothing plays for `idle` while no viewer watches. Before the first
+/// or nothing comes for `idle` while it is not playing and no viewer watches. Before the first
 /// scene opens, every command but `open` gets `no_session` and changes nothing, and the process
 /// ends `UNOPENED` after it started. A session at its stop stays, so reads still answer there.
 /// Returns why it ended, for the viewers, and the `close` that ended it, still unanswered.
@@ -425,7 +427,10 @@ fn serve(
             held.tick();
             last = wall();
         }
-        let quiet = held.watchers.viewers.is_empty().then(|| last + idle);
+        // Armed only while paused and unwatched. A deadline taken from the last tick would
+        // already have passed when a busy machine delivers this thread late, and the session
+        // would end in the middle of `play`.
+        let quiet = (held.watchers.viewers.is_empty() && !held.live.playing()).then(|| last + idle);
         let event = match [quiet, held.next_tick()].into_iter().flatten().min() {
             Some(at) => queue.recv_timeout(at.saturating_duration_since(wall())),
             None => queue.recv().map_err(|_| RecvTimeoutError::Disconnected),
