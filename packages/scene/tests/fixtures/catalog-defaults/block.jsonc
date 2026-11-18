@@ -1,0 +1,8 @@
+// A Block whose chips take their firmware from the catalog part, not from this folder.
+{
+  "format": 1,
+  "block": "catalog-defaults",
+  "version": "0.0.0",
+  "title": "Catalog file defaults",
+  "license": "MIT"
+}

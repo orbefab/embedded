@@ -1,7 +1,7 @@
 //! One tree of instances from the files, then pins joined into nets, and netlist v0.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 
 use serde_json::{Map, Value, json};
 
@@ -12,7 +12,7 @@ use crate::diagnostic::{Code, Findings, Reported};
 use crate::model::{Body, Comp, ParamDecl, ParamKind, Part, PinDef, Ref, Scene, passed};
 use crate::name::did_you_mean;
 use crate::params::{Arg, Cover, blocked, convert, cover, dotted, set, tokens, within};
-use crate::project::{Owner, Project};
+use crate::project::{Owner, Project, Store};
 use crate::source::Span;
 use crate::syntax::Node;
 use crate::units::Unit;
@@ -319,6 +319,31 @@ fn read_far<'p>(project: &'p Project<'p>, out: &'p mut Findings) -> Circuit<'p> 
     circuit
 }
 
+/// The catalog id when `part` is the copy a Block reads, at `parts/<id>/part.jsonc`.
+/// That copy is not on disk: a default file is in the catalog. A project copy, and a part a
+/// file names by path, are read from the folder of the file that wrote the path.
+fn catalog_id(project: &Project, part: &Part) -> Option<String> {
+    if project.store != Store::Catalog {
+        return None;
+    }
+    let path = &project.sources.file(part.file).path;
+    let rel = path.strip_prefix(project.sources.root()).ok()?;
+    let names: Vec<_> = rel.components().collect();
+    let [
+        Component::Normal(folder),
+        Component::Normal(id),
+        Component::Normal(file),
+    ] = names.as_slice()
+    else {
+        return None;
+    };
+    if *folder == "parts" && *file == "part.jsonc" {
+        id.to_str().map(str::to_string)
+    } else {
+        None
+    }
+}
+
 impl<'p> Circuit<'p> {
     fn new(project: &'p Project<'p>, out: &'p mut Findings) -> Circuit<'p> {
         let root = Inst {
@@ -454,6 +479,7 @@ impl<'p> Circuit<'p> {
                         node: prop.value.clone(),
                         site,
                         dir: dir.to_path_buf(),
+                        catalog: None,
                         explicit: true,
                     },
                 );
@@ -529,6 +555,7 @@ impl<'p> Circuit<'p> {
                         node: default.clone(),
                         site,
                         dir,
+                        catalog: catalog_id(project, owner_part),
                         explicit: false,
                     },
                 );
@@ -1590,6 +1617,7 @@ impl<'p> Circuit<'p> {
                     node: default.clone(),
                     site: format!("{}.{}", self.insts[inst].dotted(), decl.name),
                     dir: dir.clone(),
+                    catalog: catalog_id(self.project, part),
                     explicit: false,
                 },
                 (None, None) => continue,

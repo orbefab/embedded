@@ -1,0 +1,37 @@
+// A test ATmega328P. Its firmware is the text file beside this part, the way the AVR chip's
+// hex param reads a file. The scene does not name it: the default does.
+{
+  "format": 1,
+  "pins": {
+    "PC6": [1], "PD0": [2], "PD1": [3], "PD2": [4], "PD3": [5], "PD4": [6],
+    "VCC": [7], "GND_8": [8], "PB6": [9], "PB7": [10], "PD5": [11], "PD6": [12],
+    "PD7": [13], "PB0": [14], "PB1": [15], "PB2": [16], "PB3": [17], "PB4": [18],
+    "PB5": [19], "AVCC": [20], "AREF": [21], "GND_22": [22], "PC0": [23], "PC1": [24],
+    "PC2": [25], "PC3": [26], "PC4": [27], "PC5": [28]
+  },
+  "params": {
+    "firmware": { "file": "hex", "as": "text", "default": "program.hex", "sets": "/firmware" }
+  },
+  "model": {
+    "kind": "atmega328p",
+    "clock_hz": { "value": 16000000, "unit": "Hz", "source": "user" },
+    "fuses": { "low": 255, "high": 223, "extended": 253 },
+    "output": {
+      "high_drop": { "value": 0.0, "unit": "V", "source": "user" },
+      "high_resistance": { "value": 25.0, "unit": "ohm", "source": "user" },
+      "low_drop": { "value": 0.0, "unit": "V", "source": "user" },
+      "low_resistance": { "value": 25.0, "unit": "ohm", "source": "user" }
+    },
+    "pull_up_resistance": { "value": 35714.0, "unit": "ohm", "source": "user" },
+    "reset_pull_up_resistance": { "value": 46296.0, "unit": "ohm", "source": "user" },
+    "leakage_resistance": { "value": 5500000.0, "unit": "ohm", "source": "user" },
+    "input_threshold": {
+      "low": { "value": 0.42, "unit": "1", "source": "user" },
+      "high": { "value": 0.52, "unit": "1", "source": "user" }
+    },
+    "reset_threshold": {
+      "low": { "value": 0.42, "unit": "1", "source": "user" },
+      "high": { "value": 0.44, "unit": "1", "source": "user" }
+    }
+  }
+}
