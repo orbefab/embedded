@@ -2,9 +2,19 @@
 # annotations whose path matches a file, the last one applies, and a file's own SPDX line wins.
 version = 1
 
-# The scene, the sketch, the tests, the README and NOTICE.
+# The files `orbe add` copies from this Block, `block.jsonc`, which stays with the Block,
+# and `parts.lock`, which `orbe add` writes. A file outside this list is not covered.
 [[annotations]]
-path = "**"
+path = [
+  "block.jsonc",
+  "README.md",
+  "REUSE.toml",
+  "scene.jsonc",
+  "firmware/NOTICE",
+  "firmware/button/button.ino",
+  "tests/button.test",
+  "parts.lock",
+]
 SPDX-License-Identifier = "MIT OR Apache-2.0"
 
 # The image links the AVR runtime, and LICENSE-runtime is that runtime's licence.
