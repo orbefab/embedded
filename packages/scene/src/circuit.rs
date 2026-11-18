@@ -93,6 +93,7 @@ type SetBy = BTreeMap<String, Setter>;
 
 /// A voltage source the parts' own wires keep on two nets: its instance, its `p` and `n` pins,
 /// and a name for each net.
+#[derive(Clone)]
 struct HeldApart {
     inst: usize,
     p: usize,
@@ -656,6 +657,8 @@ impl<'p> Circuit<'p> {
             }
         }
         let mut supplies = self.held_apart();
+        let feeders = self.rail_diodes(&supplies);
+        let earlier = supplies.clone();
         for (a, b, wire) in joins {
             self.union(a, b);
             let shorted: Vec<HeldApart> = supplies
@@ -665,6 +668,7 @@ impl<'p> Circuit<'p> {
                 self.short(supply, wire);
             }
         }
+        self.short_diodes(&earlier, &feeders);
     }
 
     /// Each voltage source whose two pins the parts' own wires keep on two nets, with a name
@@ -674,7 +678,6 @@ impl<'p> Circuit<'p> {
     /// to `n` puts the source across the diode alone.
     fn held_apart(&mut self) -> Vec<HeldApart> {
         let mut sources = Vec::new();
-        let mut diodes = Vec::new();
         for inst in 1..self.insts.len() {
             let Some(part) = self.part(inst) else {
                 continue;
@@ -683,27 +686,21 @@ impl<'p> Circuit<'p> {
                 continue;
             }
             for body in &part.bodies {
+                if body.kind != "voltage_source" {
+                    continue;
+                }
                 let pin = |name: &str| {
                     body.pins
                         .iter()
                         .find(|(engine, _)| *engine == name)
                         .map(|(_, pin)| self.keys[&(inst, pin.clone())])
                 };
-                match body.kind.as_str() {
-                    "voltage_source" => {
-                        if let (Some(p), Some(n)) = (pin("p"), pin("n")) {
-                            sources.push((inst, p, n));
-                        }
-                    }
-                    "diode" => {
-                        if let (Some(anode), Some(cathode)) = (pin("anode"), pin("cathode")) {
-                            diodes.push((anode, cathode));
-                        }
-                    }
-                    _ => {}
+                if let (Some(p), Some(n)) = (pin("p"), pin("n")) {
+                    sources.push((inst, p, n));
                 }
             }
         }
+        let diodes = self.diodes();
         let mut out = Vec::new();
         for (inst, p, n) in sources {
             if self.find(p) == self.find(n) {
@@ -713,7 +710,7 @@ impl<'p> Circuit<'p> {
             let mut more = true;
             while more {
                 more = false;
-                for &(anode, cathode) in &diodes {
+                for &(_, anode, cathode) in &diodes {
                     let fed = held.iter().any(|&net| self.find(net) == self.find(anode));
                     let known = held.iter().any(|&net| self.find(net) == self.find(cathode));
                     if fed && !known && self.find(cathode) != self.find(n) {
@@ -732,6 +729,102 @@ impl<'p> Circuit<'p> {
             }
         }
         out
+    }
+
+    /// Each simulated diode, as its instance and its anode and cathode pins.
+    fn diodes(&self) -> Vec<(usize, usize, usize)> {
+        let mut diodes = Vec::new();
+        for inst in 1..self.insts.len() {
+            let Some(part) = self.part(inst) else {
+                continue;
+            };
+            if self.insts[inst].dropped.is_some() {
+                continue;
+            }
+            for body in &part.bodies {
+                if body.kind != "diode" {
+                    continue;
+                }
+                let pin = |name: &str| {
+                    body.pins
+                        .iter()
+                        .find(|(engine, _)| *engine == name)
+                        .map(|(_, pin)| self.keys[&(inst, pin.clone())])
+                };
+                if let (Some(anode), Some(cathode)) = (pin("anode"), pin("cathode")) {
+                    diodes.push((inst, anode, cathode));
+                }
+            }
+        }
+        diodes
+    }
+
+    /// Diodes that already feed a held rail before the scene's wires join.
+    fn rail_diodes(&mut self, supplies: &[HeldApart]) -> BTreeSet<(usize, usize)> {
+        let mut out = BTreeSet::new();
+        for (diode, anode, cathode) in self.diodes() {
+            for supply in supplies {
+                if self.find(anode) == self.find(supply.p)
+                    && self.find(cathode) != self.find(supply.n)
+                {
+                    out.insert((diode, supply.inst));
+                }
+            }
+        }
+        out
+    }
+
+    /// A forward diode whose anode the wires put on a held net, and whose cathode they put on
+    /// that source's `n`, is the same short as a wire. The two pins stay on two nets, so the
+    /// check runs after every wire has joined. A chain of forward diodes is included: `held_apart`
+    /// reaches across each one, and the diode that lands on `n` is the short. A diode that already
+    /// fed the rail, and a diode whose pins the wires put on one net, are not.
+    fn short_diodes(&mut self, earlier: &[HeldApart], feeders: &BTreeSet<(usize, usize)>) {
+        let later = self.held_apart();
+        let mut hits = Vec::new();
+        let mut taken = BTreeSet::new();
+        for (diode, anode, cathode) in self.diodes() {
+            // A wire that already joined the diode's pins is the short. The diode then sits on
+            // one net, and naming it would hide that wire.
+            if self.find(anode) == self.find(cathode) {
+                continue;
+            }
+            for supply in earlier.iter().chain(&later) {
+                if feeders.contains(&(diode, supply.inst)) || taken.contains(&(diode, supply.inst))
+                {
+                    continue;
+                }
+                if self.find(anode) == self.find(supply.p)
+                    && self.find(cathode) == self.find(supply.n)
+                {
+                    taken.insert((diode, supply.inst));
+                    let n_name = earlier
+                        .iter()
+                        .find(|item| item.inst == supply.inst)
+                        .map(|item| item.names[1].clone())
+                        .unwrap_or_else(|| supply.names[1].clone());
+                    hits.push((diode, supply.inst, supply.names[0].clone(), n_name));
+                }
+            }
+        }
+        for (diode, source, p, n) in hits {
+            self.short_diode(diode, source, &p, &n);
+        }
+    }
+
+    fn short_diode(&mut self, diode: usize, source: usize, p: &str, n: &str) {
+        let name = self.insts[diode].dotted();
+        let source = self.insts[source].dotted();
+        self.out.push(
+            Code::Engine("net.short"),
+            self.insts[diode].top_span,
+            format!(
+                "the diode `{name}` joins `{p}` to `{n}`, which the supply `{source}` holds apart, so it shorts that supply"
+            ),
+            format!(
+                "remove the diode; a load from `{p}` to `{n}` needs a part that limits its current, such as a resistor"
+            ),
+        );
     }
 
     /// A name for the net `key` is on before the scene's wires join anything: the smallest pin

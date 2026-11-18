@@ -1,0 +1,8 @@
+// The Nano alone. Its USB Schottky feeds 5V from the USB supply and is not a short.
+{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+  },
+  "wires": [],
+}

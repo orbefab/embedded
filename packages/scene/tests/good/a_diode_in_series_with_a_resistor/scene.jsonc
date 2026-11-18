@@ -1,0 +1,14 @@
+// The resistor limits the diode. Forward from 5V to GND through it is a load, not a short.
+{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "d1": { "type": "diode-sod123" },
+    "r1": { "type": "resistor-axial", "resistance": "220" },
+  },
+  "wires": [
+    ["d1.anode", "nano.5V"],
+    ["d1.cathode", "r1.a"],
+    ["r1.b", "nano.GND"],
+  ],
+}

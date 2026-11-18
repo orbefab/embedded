@@ -1,0 +1,14 @@
+// An LED with its series resistor, from 5V to GND. The LED is not a diode short.
+{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "r1": { "type": "resistor-axial", "resistance": "220" },
+    "led1": { "type": "led-5mm", "color": "red" },
+  },
+  "wires": [
+    ["nano.5V", "r1.a"],
+    ["r1.b", "led1.anode"],
+    ["led1.cathode", "nano.GND"],
+  ],
+}

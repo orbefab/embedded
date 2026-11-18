@@ -1,0 +1,1 @@
+net.short scene.jsonc:7:5 | the diode `d1` joins `nano.5V` to `nano.GND`, which the supply `nano.usb` holds apart, so it shorts that supply | remove the diode; a load from `nano.5V` to `nano.GND`

@@ -293,7 +293,7 @@ The message is:
 
 `data` is `{}`.
 
-Parse checks it, so the netlist is refused and nothing solves. An ideal source across one net has a branch row of zeros, which the solve would report as `solver.singular` at the source. A wire from a board's 5V straight to its GND does this on a board whose USB source feeds 5V with nothing in between. A source of 0 V across one net is the same short.
+Parse checks it, so the netlist is refused and nothing solves. An ideal source across one net has a branch row of zeros, which the solve would report as `solver.singular` at the source. A wire from a board's 5V straight to its GND does this on a board whose USB source feeds 5V with nothing in between. A forward diode the scene wires from that net to ground is the same error, and so is a chain of forward diodes. The message names the diode. A reverse diode is not a short. A source of 0 V across one net is the same short.
 
 ## solver.singular
 

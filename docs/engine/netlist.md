@@ -183,7 +183,7 @@ A potentiometer has no `ratings` field. It has no `i`, `v`, or `p`. Both legs ar
 
 `voltage` is a value in `V`, which may be any finite number, including 0 and negative values. Or it is a waveform in `V`, described in [Source waveforms](#source-waveforms). A different unit is `netlist.unit`.
 
-`p` and `n` must be on two nets. A source with both on one net is `net.short`, an error, because no solve can hold one net apart from itself.
+`p` and `n` must be on two nets. A source with both on one net is `net.short`, an error, because no solve can hold one net apart from itself. The scene reader reports the same error when a wire, a forward diode, or a chain of forward diodes joins `n` to `p` or to a net a diode feeds from `p`. A reverse diode leaves the two nets apart.
 
 `ratings` is optional. When present it holds `current`, the most the supply delivers, which bounds `|i|`. A netlist without the object leaves the source unrated, as one written before sources had ratings does. See [Ratings](#ratings).
 

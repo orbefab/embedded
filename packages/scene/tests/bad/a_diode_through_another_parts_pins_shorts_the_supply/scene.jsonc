@@ -1,0 +1,14 @@
+// `link` joins its two pins, so the diode reaches 5V through that part rather than a wire of its own.
+{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "link": { "type": "./parts/link.jsonc" },
+    "d1": { "type": "diode-sod123" },
+  },
+  "wires": [
+    ["nano.5V", "link.a"],
+    ["link.b", "d1.anode"],
+    ["d1.cathode", "nano.GND"],
+  ],
+}

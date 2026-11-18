@@ -1,0 +1,14 @@
+// Two Schottkys in series from 5V to GND. Neither has a resistor, so the chain is a short.
+{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "d1": { "type": "diode-sod123" },
+    "d2": { "type": "diode-sod123" },
+  },
+  "wires": [
+    ["d1.anode", "nano.5V"],
+    ["d1.cathode", "d2.anode"],
+    ["d2.cathode", "nano.GND"],
+  ],
+}

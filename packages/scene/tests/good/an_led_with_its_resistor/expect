@@ -1,0 +1,4 @@
+17 engine parts
+led1 /kind "led"
+r1 /kind "resistor"
+nano__diode /kind "diode"

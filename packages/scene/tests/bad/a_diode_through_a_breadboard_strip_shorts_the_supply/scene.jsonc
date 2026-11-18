@@ -1,0 +1,15 @@
+// The diode's pins reach 5V and GND through two breadboard strips, not through wires to those pins.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-400" },
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "d1": { "type": "diode-sod123" },
+  },
+  "wires": [
+    ["nano.5V", "bb.a10"],
+    ["d1.anode", "bb.b10"],
+    ["nano.GND", "bb.a12"],
+    ["d1.cathode", "bb.b12"],
+  ],
+}

@@ -1111,6 +1111,41 @@ fn a_load_over_the_usb_supply_warns_and_a_wire_across_it_is_a_short() {
         &core,
         "A wire from the Nano's 5V straight to GND is a short: `orbe check` and `orbe open` refuse the scene with `net.short`, naming the wire.",
     );
+    says(
+        &core,
+        "A forward diode across those pins is the same short, and the message names the diode. So is a chain of forward diodes. A reverse diode is not, and neither is a diode in series with a resistor.",
+    );
+
+    add_parts(dir, &["diode-sod123"]);
+    let across = |anode: &str, cathode: &str| {
+        format!(
+            r#"{{
+  "format": 1,
+  "parts": {{
+    "nano": {{ "type": "nano-board", "firmware": "build/button.ino.hex" }},
+    "d1": {{ "type": "diode-sod123" }}
+  }},
+  "wires": [
+    ["d1.anode", "{anode}"],
+    ["d1.cathode", "{cathode}"]
+  ]
+}}
+"#
+        )
+    };
+    fs::write(dir.join("scene.jsonc"), across("nano.5V", "nano.GND")).unwrap();
+    let diode = orbe(&["check", "scene.jsonc"]);
+    assert_eq!(diode.code, 1, "{}", diode.stdout);
+    for said in [
+        "error[net.short]: the diode `d1` joins `nano.5V` to `nano.GND`, which the supply `nano.usb` holds apart, so it shorts that supply",
+        "hint: remove the diode; a load from `nano.5V` to `nano.GND` needs a part that limits its current, such as a resistor",
+    ] {
+        assert!(diode.stdout.contains(said), "{}", diode.stdout);
+    }
+    assert_eq!(orbe(&["open"]).code, 1);
+
+    fs::write(dir.join("scene.jsonc"), across("nano.GND", "nano.5V")).unwrap();
+    assert_eq!(orbe(&["check", "scene.jsonc"]).code, 0);
 }
 
 #[test]

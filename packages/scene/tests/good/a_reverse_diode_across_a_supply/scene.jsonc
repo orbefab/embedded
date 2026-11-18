@@ -1,0 +1,12 @@
+// Cathode on 5V and anode on GND. The diode is reverse across the USB supply, so it is not a short.
+{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "d1": { "type": "diode-sod123" },
+  },
+  "wires": [
+    ["d1.cathode", "nano.5V"],
+    ["d1.anode", "nano.GND"],
+  ],
+}

@@ -1,0 +1,13 @@
+// A Schottky placed forward from the Nano's 5V pin to GND. The board's USB diode already
+// feeds 5V, so this diode puts that supply across a diode with nothing else in the path.
+{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "d1": { "type": "diode-sod123" },
+  },
+  "wires": [
+    ["d1.anode", "nano.5V"],
+    ["d1.cathode", "nano.GND"],
+  ],
+}
