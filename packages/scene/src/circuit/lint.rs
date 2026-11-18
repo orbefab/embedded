@@ -127,7 +127,7 @@ impl Circuit<'_> {
             wired,
             tops,
             scene: tree,
-            engine: orbe_engine::netlist::parse(netlist.json.as_bytes())
+            engine: orbe_engine::netlist::parse_with(netlist.json.as_bytes(), &netlist.blobs)
                 .expect("the engine read this netlist when it checked"),
             ground: &netlist.ground,
         };

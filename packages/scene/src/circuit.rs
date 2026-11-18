@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value, json};
 
+use orbe_engine::blob::Blobs;
 use orbe_engine::world::Quantity;
 
 use crate::diagnostic::{Code, Findings, Reported};
@@ -93,6 +94,8 @@ struct Circuit<'p> {
     /// Only the placement of the scene's parts is read, before a scene gives them a value for
     /// each required param and a ground. See [`crate::read_placed`].
     placing: bool,
+    /// The bytes each blob param read, under their SHA-256.
+    blobs: Blobs,
 }
 
 /// What [`Circuit::args`] gives an instance, field by field of [`Inst`].
@@ -176,6 +179,8 @@ pub struct Netlist {
     pub modified: Vec<String>,
     pub refs: RefMap,
     pub view: View,
+    /// The bytes of each blob the netlist names, read from the blob params' files.
+    pub blobs: Blobs,
 }
 
 /// With `lint`, the lint rules' warnings on a circuit that checks go there. With `placing`,
@@ -238,7 +243,7 @@ impl Circuit<'_> {
                 continue;
             };
             for decl in &part.params {
-                if !matches!(decl.kind, ParamKind::File) {
+                if !matches!(decl.kind, ParamKind::File(_)) {
                     continue;
                 }
                 let (node, site) = match (inst.args.get(&decl.name), &decl.default) {
@@ -310,6 +315,7 @@ impl<'p> Circuit<'p> {
             unsimulated: BTreeMap::new(),
             seated: BTreeMap::new(),
             placing: false,
+            blobs: Blobs::new(),
         }
     }
 
@@ -1117,7 +1123,8 @@ impl<'p> Circuit<'p> {
                 .collect();
             let document = head.with(kept.iter().map(|&i| &parts[i].fields));
             let text = serde_json::to_string_pretty(&document).expect("a JSON value");
-            let Err(diagnostics) = orbe_engine::netlist::parse(text.as_bytes()) else {
+            let Err(diagnostics) = orbe_engine::netlist::parse_with(text.as_bytes(), &self.blobs)
+            else {
                 break text;
             };
             let quiet = !clean || !left_out.is_empty();
@@ -1168,6 +1175,7 @@ impl<'p> Circuit<'p> {
             modified: self.project.modified.clone(),
             refs: self.map(nets),
             view,
+            blobs: std::mem::take(&mut self.blobs),
         })
     }
 
@@ -1333,7 +1341,7 @@ impl<'p> Circuit<'p> {
                 (false, false, true) => Rank::Required,
                 (false, false, false) => Rank::Default,
             };
-            match convert(self.project.files, decl, &arg) {
+            match convert(self.project.files, decl, &arg, &mut self.blobs) {
                 Ok(sets) => {
                     let setter = Setter::new(decl, &arg);
                     let opens = decl.opens() && !arg.node.is_null();

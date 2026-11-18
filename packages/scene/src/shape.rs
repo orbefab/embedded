@@ -60,7 +60,7 @@ const PARAM_KEYS: &[(&str, Shape)] = &[
     ("unit", Shape::Str),
     ("choices", Shape::Map(&CHOICE)),
     ("file", Shape::Str),
-    ("as", Shape::Word(&["text"])),
+    ("as", Shape::Word(&["text", "blob"])),
     ("default", Shape::Any),
     ("required", Shape::Bool),
     ("min_exclusive", Shape::Num),

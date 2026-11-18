@@ -172,7 +172,7 @@ Param values:
 
 - A number with an optional SI prefix and unit, as a string or a number, such as `"10k"`, `"4.7 kohm"`, `"220"`, `220`, `"100n"`, `"1ms"`. Prefixes: p, n, u, m, k, M.
 - A choice by its name, as `"color": "red"`.
-- A file by its path, relative to the file that sets it, as `"firmware": "build/button.ino.hex"`.
+- A file by its path, relative to the file that sets it, as `"firmware": "build/button.ino.hex"`. The part reads the file as text, such as a hex, or as bytes when its file param says `"as": "blob"`, such as an app image.
 
 ## Breadboards
 
@@ -411,7 +411,7 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 | `part_outdated` | The copy matches its `parts.lock` line and is an older version than this orbe carries. The message names both versions. Run the one `orbe add` command in the hint. It names every older id, and no newer one. |
 | `part_newer` | The copy matches its `parts.lock` line and is a newer version than this orbe carries. The message names both versions. This project needs a newer orbe. The hint names no `orbe add` command. `--overwrite` leaves the copy, and says so. |
 | `part_modified` | A copied part was edited. Run `orbe add <id> --overwrite` to restore it, or copy it to a folder of your own. |
-| `part_format` | The part file's format is not one this orbe reads. An older catalog copy is written for an older orbe: run `orbe add <id> --overwrite`. A part opened by a `./` path is the user's file: update that file to the format this orbe reads, including its model, or point the scene at the catalog id if the file copies one. A newer part means this project needs a newer orbe. |
+| `part_format` | The part file's format is not one this orbe reads. An older catalog copy is written for an older orbe: run `orbe add <id> --overwrite`. A part opened by a `./` path is the user's file: update that file to the format this orbe reads, including its model, or point the scene at the catalog id if the file copies one. A newer part means this project needs a newer orbe. This orbe reads part formats 1 and 2. Format 2 is format 1 plus `"as": "blob"` on a file param, and a blob param in a format 1 file is `scene.param`, with the hint to set `"format": 2`. A scene is format 1. |
 | `no_session` | No session runs under this name. Run the `orbe open` in the hint. |
 | `session_crashed` | The session's process died. Run `orbe open` again. |
 | `unknown_ref`, `no_reading` | The ref names nothing, or nothing to read. The hint lists what exists. |

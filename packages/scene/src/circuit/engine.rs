@@ -1,5 +1,6 @@
 //! The engine's findings on the netlist the reader wrote, placed in the files that wrote it.
 
+use orbe_engine::blob::Blobs;
 use orbe_engine::diagnostic::{Diagnostic, ScheduleRule};
 use serde_json::{Map, Value};
 
@@ -117,6 +118,30 @@ impl<'p> Circuit<'p> {
             }
         };
         let pointer = fields[0].clone();
+        if let Diagnostic::NetlistFirmware { .. } = diagnostic
+            && setter_of(&origin.set_by, &pointer).is_none()
+        {
+            // A firmware rule reads every file the instance set inside the field together, such
+            // as a flash's partition table and app, and the engine does not say which one breaks
+            // it. The finding goes to each of them.
+            let inside: Vec<&Setter> = origin
+                .set_by
+                .iter()
+                .filter(|(p, s)| s.explicit && !pointer.is_empty() && within(p, &pointer))
+                .map(|(_, s)| s)
+                .collect();
+            if inside.len() > 1 {
+                for setter in inside {
+                    self.out.push(
+                        Code::Param,
+                        setter.span,
+                        format!("`{}` is {}; {requirement}", setter.site, setter.shown),
+                        hint.clone(),
+                    );
+                }
+                return;
+            }
+        }
         let setter = set_by_instance(&origin.set_by, &fields)
             .or_else(|| setter_of(&origin.set_by, &pointer))
             .or_else(|| {
@@ -164,7 +189,9 @@ impl<'p> Circuit<'p> {
         value: &Value,
     ) -> Reported {
         let detail = detail(value);
-        let at = culprit(&origin.fields, &detail, |part| refusal(head, part));
+        let at = culprit(&origin.fields, &detail, |part| {
+            refusal(head, part, &self.blobs)
+        });
         let parent = at.rsplit_once('/').map_or("", |(parent, _)| parent);
         let fields: Vec<String> = std::iter::once(at.clone())
             .chain(
@@ -348,6 +375,8 @@ fn read_fields(value: &Value) -> Vec<String> {
     };
     match value["data"]["rule"].as_str() {
         Some("bounce_room") => vec![named, "/bounce/max_bounces".into()],
+        // The engine files rule `rom` under `firmware`, though it is about the `rom` beside it.
+        Some("rom") => vec!["/rom".into()],
         _ => vec![named],
     }
 }
@@ -363,9 +392,9 @@ fn detail(value: &Value) -> String {
 }
 
 /// The schema refusal of a netlist holding only `part`, if any.
-fn refusal(head: &Head, part: &Value) -> Option<String> {
+fn refusal(head: &Head, part: &Value, blobs: &Blobs) -> Option<String> {
     let text = serde_json::to_string(&head.with([part])).expect("a JSON value");
-    let diagnostics = orbe_engine::netlist::parse(text.as_bytes()).err()?;
+    let diagnostics = orbe_engine::netlist::parse_with(text.as_bytes(), blobs).err()?;
     diagnostics
         .iter()
         .find(|d| d.code() == "netlist.syntax")

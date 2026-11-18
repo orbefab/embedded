@@ -81,21 +81,30 @@ fn an_enum_refusal_names_the_field_the_engine_does_not_read() {
     );
 }
 
-/// The newest format this binary reads. The probe scene and its ground use it, so dropping an
-/// older format does not make the probe itself a `scene.format` error.
-fn current_format() -> u32 {
-    orbe_scene::FORMATS
+/// The newest scene format this binary reads. The probe scene uses it, so dropping an older
+/// format does not make the probe itself a `scene.format` error.
+fn scene_format() -> u32 {
+    orbe_scene::SCENE_FORMATS
         .iter()
         .copied()
         .max()
-        .expect("this binary reads a format")
+        .expect("this binary reads a scene format")
+}
+
+/// The newest part format this binary reads, for the probe's ground, for the same reason.
+fn part_format() -> u32 {
+    orbe_scene::PART_FORMATS
+        .iter()
+        .copied()
+        .max()
+        .expect("this binary reads a part format")
 }
 
 /// A voltage source the test writes. A catalog part here would fail every probe when that
 /// part's fields change, and again when that part's format is no longer one this binary reads.
 fn probe_ground() -> Value {
     json!({
-        "format": current_format(),
+        "format": part_format(),
         "pins": { "pos": [1], "neg": [2] },
         "model": {
             "kind": "voltage_source",
@@ -138,14 +147,14 @@ fn released_older(id: &str, text: &str, released: &BTreeSet<String>) -> bool {
     let Some(n) = declared_format(text) else {
         return false;
     };
-    let Some(oldest) = orbe_scene::FORMATS.iter().copied().min() else {
+    let Some(oldest) = orbe_scene::PART_FORMATS.iter().copied().min() else {
         return false;
     };
     released.contains(id) && n < oldest
 }
 
 fn reads_format(text: &str) -> bool {
-    declared_format(text).is_some_and(|n| orbe_scene::FORMATS.contains(&n))
+    declared_format(text).is_some_and(|n| orbe_scene::PART_FORMATS.contains(&n))
 }
 
 fn declared_format(text: &str) -> Option<u32> {
@@ -190,7 +199,7 @@ fn scene_for(card: &orbe_scene::Card, own_ground: bool) -> String {
     let mut parts = Map::new();
     parts.insert("u1".into(), Value::Object(instance(card)));
     let mut root = Map::new();
-    root.insert("format".into(), json!(current_format()));
+    root.insert("format".into(), json!(scene_format()));
     if !own_ground {
         // The ground is a file this test writes, not a catalog part. A catalog resistor here
         // makes a resistor field change look like every part broke.
