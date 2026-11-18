@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from esp32s3_adc import (
+    EXAMPLE,
     SETS,
     Curve,
     Probe,
@@ -159,6 +160,23 @@ def test_a_board_that_reads_what_the_model_would_passes_and_one_that_does_not_fa
     off = {**raws, 3: raws[3] + 40}
     mvs = {atten: MODEL[atten].millivolts(raws[atten]) for atten in range(4)}
     assert raises(lambda: check_board(Probe(console(off, mvs)), MODEL))
+
+
+def knob_curves(changes: dict[str, int] | None = None) -> list[Curve]:
+    fields = efuse_set("knob", SETS.read_text())
+    for field, delta in (changes or {}).items():
+        fields[field] += delta
+    return [Curve(fields, 0, atten) for atten in range(4)]
+
+
+def test_the_committed_knob_set_matches_board_txt_and_each_cal_vol_off_by_one_fails() -> None:
+    board = Probe((EXAMPLE / "board.txt").read_text().splitlines())
+    assert check_board(board, knob_curves()) == (
+        "the board's 256 samples match the eFuse curve, 192 of them clipped at 4095"
+    )
+    for atten in range(4):
+        field = f"ADC1_CAL_VOL_ATTEN{atten}"
+        assert raises(lambda field=field: check_board(board, knob_curves({field: 1})))
 
 
 def test_a_whole_run(tmp_path: Path) -> None:

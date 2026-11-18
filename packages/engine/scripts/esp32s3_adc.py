@@ -27,11 +27,14 @@ Datasheet v2.2, Table 5-6: 5, 6, 10 and 50 mV). The attenuations that do not cli
 each other within the sum of their errors. One that clips must read 4095.
 
 When `board.txt` sits beside the netlist, it holds a board's console from `adc ready` through
-`ADC DONE`, from a board whose eFuse set the netlist names. Each attenuation that does not clip
-on the board implies a voltage, its median millivolts. The model's code at that voltage must lie
-within the board's raw codes at that attenuation, widened by 1 each way, and an attenuation that
-clips on the board must clip in the model at every implied voltage. With no `board.txt` that
-comparison is skipped, and the check says so.
+`ADC DONE`, from a board whose eFuse set the netlist names. For every sample, at every
+attenuation and including a clipped raw of 4095, the model's `millivolts` of that raw code must
+equal the board's printed millivolts. The board's firmware printed that column from IDF's
+`adc_cali_raw_to_voltage` with the same eFuses. The board's pin voltage is not compared, because
+`VCC_OUT` has no sourced voltage. The 3.3 V run and the board's pin are not the same input. The
+board tests the eFuse curve. The init codes are not testable from the board, because firmware
+writes the same eFuse the model checks against. With no `board.txt` that comparison is skipped,
+and the check says so.
 
 `traces/serial.csv` must hold those lines as `u1`'s `USB_SERIAL_JTAG`. A `UART0`, `UART1` or
 `UART2` row may share the file: a flash boot programs UART0, and the early log is sent there
@@ -306,26 +309,28 @@ def check_probe(probe: Probe, curves: list[Curve], volts: float) -> list[str]:
 
 
 def check_board(board: Probe, curves: list[Curve]) -> str:
-    """The board clause: the model's code at each voltage the board implies, against its raws."""
-    implied = {
-        atten: statistics.median(read for _, read in board.samples[atten])
-        for atten in ATTENS
-        if MAX not in {raw for raw, _ in board.samples[atten]}
-    }
-    if not implied:
-        raise ValueError("every attenuation clips on the board")
+    """Each printed millivolt is the model's of that raw code, clipped samples included.
+
+    The board's pin voltage is not compared with the run. `VCC_OUT` has no sourced voltage, so
+    the 3.3 V run and the board's pin are not the same input. The board tests the eFuse curve.
+    The init codes are not testable here, because firmware writes the same eFuse the model
+    checks against.
+    """
+    samples = 0
+    clipped = 0
     for atten in ATTENS:
-        raws = [raw for raw, _ in board.samples[atten]]
-        low, high = min(raws) - 1, max(raws) + 1
-        voltages = [implied[atten]] if atten in implied else list(implied.values())
-        for mv in voltages:
-            model = curves[atten].code(mv)
-            if not low <= model <= high:
-                raise ValueError(
-                    f"at attenuation {atten} the model reads {model} at the board's {mv} mV, "
-                    f"the board {min(raws)} to {max(raws)}"
-                )
-    return "the board's codes at " + ", ".join(f"{atten}: {mv} mV" for atten, mv in implied.items())
+        curve = curves[atten]
+        for raw, read in board.samples[atten]:
+            want = curve.millivolts(raw)
+            if read != want:
+                raise ValueError(f"attenuation {atten} calibrates raw {raw} to {read} mV, not {want}")
+            samples += 1
+            if raw == MAX:
+                clipped += 1
+    clause = f"the board's {samples} samples match the eFuse curve"
+    if clipped:
+        clause += f", {clipped} of them clipped at {MAX}"
+    return clause
 
 
 def check_manifest(manifest: dict, netlist: dict) -> None:
