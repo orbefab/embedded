@@ -13,9 +13,9 @@ thousands in `a - t`, the rest must lie from 100 to 700 µs, so a later change t
 fails as a misplaced byte. Each `got` packet must come at or after `a`, by at most 100 µs, and before the
 earliest the next tick can be, `t - 100 + (n + 1)·1000` µs.
 
-`traces/serial.csv` must hold those lines as `u1`'s `USB_SERIAL_JTAG`. Other lines may sit
-between them. The run must hold no error, and its `manifest.json` must list the netlist's ROM,
-then each flash region with its offset.
+`traces/serial.csv` must hold those lines as `u1`'s `USB_SERIAL_JTAG`. A `UART0`, `UART1` or `UART2` row may share
+the file. Other lines may sit between them. The run must hold no error, and its `manifest.json` must list the
+netlist's ROM, then each flash region with its offset.
 """
 
 import argparse
@@ -37,8 +37,10 @@ MS = 1000 * US
 def lines(serial_csv: str) -> list[tuple[int, str]]:
     """Each console line with the time of its first byte, in picoseconds."""
     rows = list(csv.DictReader(io.StringIO(serial_csv)))
-    if any(row["part"] != "u1" or row["usart"] != "USB_SERIAL_JTAG" for row in rows):
-        raise ValueError("serial.csv holds a byte that is not u1's USB_SERIAL_JTAG")
+    known = {"USB_SERIAL_JTAG", "UART0", "UART1", "UART2"}
+    if any(row["part"] != "u1" or row["usart"] not in known for row in rows):
+        raise ValueError("serial.csv holds a byte that is not u1's USB_SERIAL_JTAG or a UART")
+    rows = [row for row in rows if row["usart"] == "USB_SERIAL_JTAG"]
     out, line, at = [], "", 0
     for row in rows:
         if not line:

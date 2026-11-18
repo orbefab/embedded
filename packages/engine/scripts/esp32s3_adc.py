@@ -33,8 +33,10 @@ within the board's raw codes at that attenuation, widened by 1 each way, and an 
 clips on the board must clip in the model at every implied voltage. With no `board.txt` that
 comparison is skipped, and the check says so.
 
-`traces/serial.csv` must hold those lines as `u1`'s `USB_SERIAL_JTAG`. Other lines may sit
-between them. The run must hold no error, and its `manifest.json` must list the netlist's ROM,
+`traces/serial.csv` must hold those lines as `u1`'s `USB_SERIAL_JTAG`. A `UART0`, `UART1` or
+`UART2` row may share the file: a flash boot programs UART0, and the early log is sent there
+before the console moves. Other lines may sit between the console lines. The run must hold no
+error, and its `manifest.json` must list the netlist's ROM,
 then each flash region with its offset.
 """
 
@@ -193,10 +195,12 @@ class Curve:
 
 
 def lines(serial_csv: str) -> list[str]:
-    """Each console line, without its line ending."""
+    """Each console line, without its line ending. UART rows are the boot log, not the console."""
     rows = list(csv.DictReader(io.StringIO(serial_csv)))
-    if any(row["part"] != "u1" or row["usart"] != "USB_SERIAL_JTAG" for row in rows):
-        raise ValueError("serial.csv holds a byte that is not u1's USB_SERIAL_JTAG")
+    known = {"USB_SERIAL_JTAG", "UART0", "UART1", "UART2"}
+    if any(row["part"] != "u1" or row["usart"] not in known for row in rows):
+        raise ValueError("serial.csv holds a byte that is not u1's USB_SERIAL_JTAG or a UART")
+    rows = [row for row in rows if row["usart"] == "USB_SERIAL_JTAG"]
     return "".join(chr(int(row["byte"])) for row in rows).splitlines()
 
 

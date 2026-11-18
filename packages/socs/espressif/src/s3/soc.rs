@@ -34,6 +34,7 @@ use super::sha::{self, Sha};
 use super::spi1::{self, FlashRefusal, Spi1};
 use super::spi2::{self, Setting, Spi2};
 use super::timers::{Register, Systimer, Watchdogs};
+use super::uart::{self, Uarts};
 use super::usb::{self, UsbSerialJtag};
 use super::{Duty, Pc, RAM, Refused, ResetCause, Touch};
 
@@ -98,6 +99,7 @@ pub(crate) struct Soc {
     pub(crate) ledc: Ledc,
     pub(crate) i2c: I2c,
     pub(crate) rmt: Rmt,
+    pub(crate) uart: Uarts,
     /// The LEDC updates that took effect and that the chip has not taken.
     pub(crate) effects: Vec<ledc::Effect>,
     /// The `Duty` records those updates and the routes to netted pads made, in time order.
@@ -153,6 +155,9 @@ pub(crate) struct Soc {
     pub(crate) rmt_started: Option<CoreId>,
     /// `write_kept` started a transmission and has not handed the core to `rmt_started`.
     rmt_pending: bool,
+    /// A store by this core wrote a UART. The run takes that core's PC, which a frame that
+    /// meets a setting names.
+    pub(crate) uart_started: Option<CoreId>,
     /// A store ended the run, and stopped the core.
     pub(crate) ending: Option<Ending>,
     app: AppControl,
@@ -284,6 +289,9 @@ fn effect(addr: u32) -> Option<Effect> {
         (SHA, sha::INT_ENA) => Effect::Refuse(1, interrupt("SHA")),
         (LEDC, ledc::INT_ENA) => Effect::Refuse(u32::MAX, interrupt("LEDC")),
         (RMT, 0x78) => Effect::Refuse(!(1 | 1 << 8 | 1 << 12), interrupt("RMT")),
+        (uart::UART0, 0x0c) => Effect::Refuse(!uart::ENA_ALLOWED, interrupt("UART0")),
+        (uart::UART1, 0x0c) => Effect::Refuse(!uart::ENA_ALLOWED, interrupt("UART1")),
+        (uart::UART2, 0x0c) => Effect::Refuse(!uart::ENA_ALLOWED, interrupt("UART2")),
         (GDMA, _) if offset < 5 * 0xc0 => match offset % 0xc0 {
             0x10 | 0x70 => Effect::Refuse(u32::MAX, interrupt("GDMA")),
             0x00 => Effect::Refuse(gdma::MEM_TRANS_EN, dma("memory_copy")),
@@ -329,6 +337,7 @@ impl Soc {
             ledc: Ledc::new(),
             i2c: I2c::new(),
             rmt: Rmt::new(),
+            uart: Uarts::new(),
             effects: Vec::new(),
             duties: Vec::new(),
             gates: Gates::new(),
@@ -354,6 +363,7 @@ impl Soc {
             i2c_started: None,
             rmt_started: None,
             rmt_pending: false,
+            uart_started: None,
             ending: None,
             app: AppControl::default(),
             steer: None,
@@ -367,6 +377,9 @@ impl Soc {
         soc.idle_ledc();
         soc.idle_i2c();
         soc.idle_rmt();
+        for &signal in &uart::SIGNAL {
+            soc.gpio.set_signal(signal, true);
+        }
         soc
     }
 
@@ -637,6 +650,7 @@ impl Soc {
             SYSTEM if offset == app::CONTROL_1 => self.app.boot = value,
             SYSTEM if gates::OFFSETS.contains(&offset) => {
                 self.gates.write(offset, value).for_each(drop);
+                self.sync_uart_gates();
             }
             _ => {
                 self.plain.insert(addr, value);
@@ -717,6 +731,11 @@ impl Soc {
             LEDC => self.ledc.read(offset),
             RMT => self.rmt.read(now, offset),
             I2C0 => self.i2c.read(now, offset, &mut self.gpio),
+            base if uart::Uarts::index(base).is_some() => {
+                let index = uart::Uarts::index(base).expect("a uart");
+                let apb = self.clock.source.apb();
+                self.uart.read(index, now, offset, &self.gpio, apb)
+            }
             SYSTEM if gates::OFFSETS.contains(&offset) => Some(self.gates.read(offset)),
             ANALOG => self.analog.read(offset),
             EFUSE => self.efuse.read(offset),
@@ -897,6 +916,9 @@ impl Soc {
                 for block in held {
                     self.reset(block);
                 }
+                // A gated UART keeps its registers. A frame that was shifting stops, and a later
+                // FIFO write completes without leaving the port.
+                self.sync_uart_gates();
                 true
             }
             LEDC => {
@@ -915,6 +937,18 @@ impl Soc {
                     self.ending = Some(Ending::Refused(Refused::Register("I2C0", setting)));
                     true
                 }),
+            base if uart::Uarts::index(base).is_some() => {
+                let index = uart::Uarts::index(base).expect("a uart");
+                let apb = self.clock.source.apb();
+                if let Err(setting) =
+                    self.uart
+                        .write(index, now, offset, value, &mut self.gpio, apb)
+                {
+                    let refused = Refused::Register(uart::NAMES[index], setting);
+                    self.ending = Some(Ending::Refused(refused));
+                }
+                true
+            }
             RMT => {
                 let routes = if Rmt::wants_routes(offset, value) {
                     self.rmt_routes()
@@ -996,6 +1030,8 @@ impl Soc {
         let gpio = self.gpio.pending() != 0;
         let lines = self.watchdogs.lines();
         let rmt = self.rmt.line(now);
+        let apb = self.clock.source.apb();
+        self.uart.settle(now, &self.gpio, apb);
         let mut sources = self.matrix.sources(
             self.systimer.lines(),
             spi2,
@@ -1006,6 +1042,11 @@ impl Soc {
         );
         if self.usb.poll(now) {
             sources |= 1 << usb::SOURCE;
+        }
+        for index in 0..3 {
+            if self.uart.line(index) {
+                sources |= 1 << uart::SOURCES[index];
+            }
         }
         sources
     }
@@ -1098,11 +1139,37 @@ impl Soc {
                 self.rmt = Rmt::new();
                 self.idle_rmt();
             }
+            Block::Uart0 => self.reset_uart(0),
+            Block::Uart1 => self.reset_uart(1),
+            Block::Uart2 => self.reset_uart(2),
+        }
+    }
+
+    fn reset_uart(&mut self, index: usize) {
+        self.uart.reset(index);
+        self.gpio.set_signal(uart::SIGNAL[index], true);
+    }
+
+    /// A UART with its module clock off, or with a reset bit set, does not shift. The line
+    /// returns to mark. Register loads and stores still complete.
+    fn sync_uart_gates(&mut self) {
+        self.uart.set_mem_clock(self.gates.uart_mem_clock());
+        for (index, block) in [Block::Uart0, Block::Uart1, Block::Uart2]
+            .into_iter()
+            .enumerate()
+        {
+            let runs = self.gates.clocked(block) && !self.gates.held(block);
+            if !runs {
+                self.uart.halt(index);
+                self.gpio.set_signal(uart::SIGNAL[index], true);
+            }
+            self.uart.set_runs(index, runs);
         }
     }
 
     /// The block whose registers hold `addr` and why an access to them ends the run: its
-    /// clock is off, or a reset bit holds it.
+    /// clock is off, or a reset bit holds it. A UART is not one of these: with its clock off
+    /// or its reset held, a load or store still completes and the shifter stays idle.
     fn gated(&self, addr: u32) -> Option<Refused> {
         let block = match addr & !(BLOCK - 1) {
             SPI2 => Block::Spi2,
@@ -1157,10 +1224,13 @@ impl Soc {
         if source.apb() == self.clock.source.apb() {
             return Ok(());
         }
+        let uart = (0..3).find(|&index| self.uart.shifting(index) && self.uart.uses_apb(index));
         let setting = if self.rmt.sending(now) {
             ("RMT", "clock_change_while_sending")
         } else if self.ledc.counts_apb() {
             ("LEDC", "clock_change_while_running")
+        } else if let Some(index) = uart {
+            (uart::NAMES[index], "clock_change_while_sending")
         } else {
             return Ok(());
         };
@@ -1267,6 +1337,15 @@ impl Soc {
         }
         let now = self.stamp(cycle);
         let kept = self.read_kept(now, word);
+        if let Some((_at, name, setting)) = self.uart.take_refused() {
+            self.ending = Some(Ending::Refused(Refused::Register(name, setting)));
+            return Err(Exit::Stop);
+        }
+        if let Some(index) = uart::Uarts::index(word)
+            && word == uart::BASES[index]
+        {
+            self.uart.pop(index);
+        }
         if word == USB_SERIAL_JTAG {
             self.usb.take_received(now);
         }
@@ -1384,6 +1463,7 @@ impl Soc {
         }
         let base = word & !(BLOCK - 1);
         let pads = matches!(base, GPIO | IO_MUX | SPI2 | RMT)
+            || uart::Uarts::index(base).is_some()
             || (base == SYSTEM && gates::OFFSETS.contains(&(word - SYSTEM)));
         if !pads {
             let deadline = self.watchdogs.deadline();
@@ -1428,6 +1508,7 @@ impl Soc {
         self.settle_ledc(now);
         self.rmt.settle(now);
         let rmt_due = self.rmt.next_event();
+        let uart_due = self.uart.next_event(now);
         let before = self.image();
         let carried = self.ledc_pads();
         self.write_kept(now, word, value);
@@ -1442,8 +1523,11 @@ impl Soc {
         if self.image() != before {
             self.changed = Some(now);
         }
-        if self.rmt.next_event() != rmt_due {
+        if self.rmt.next_event() != rmt_due || self.uart.next_event(now) != uart_due {
             self.rearmed = true;
+        }
+        if uart::Uarts::index(word).is_some() {
+            self.uart_started = Some(step.core);
         }
         for (pad, channel, inverted) in self.ledc_pads() {
             if let Some(effect) = self.ledc.sent(usize::from(channel))
@@ -1495,11 +1579,14 @@ impl Soc {
     fn next_event(&mut self, cycle: Cycle) -> Option<Cycle> {
         let now = self.stamp(cycle);
         self.rmt.settle(now);
+        let apb = self.clock.source.apb();
+        self.uart.settle(now, &self.gpio, apb);
         let next = [
             self.systimer.next_event(now),
             self.spi2.next_event(),
             self.usb.next_event(now),
             self.rmt.next_event(),
+            self.uart.next_event(now),
         ]
         .into_iter()
         .flatten()

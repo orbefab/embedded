@@ -13,8 +13,10 @@ second through its curve-fitting calibration, so each line must be the IDF probe
 for the same circuit: the raw code within 1 of the closed form `esp32s3_adc` checks the IDF
 probe against, and the millivolts IDF's calibration of that raw code.
 
-`traces/serial.csv` must hold those lines as `u1`'s `USB_SERIAL_JTAG`. Other lines may sit
-between them. The run must hold no error, and its `manifest.json` must list the netlist's ROM,
+`traces/serial.csv` must hold those lines as `u1`'s `USB_SERIAL_JTAG`. A `UART0`, `UART1` or
+`UART2` row may share the file: a flash boot programs UART0, and the early log is sent there
+before the console moves. Other lines may sit between the console lines. The run must hold no
+error, and its `manifest.json` must list the netlist's ROM,
 then each flash region with its offset. The netlist is
 `packages/engine/tests/firmware/esp32s3/arduino/checks/adc/netlist.json`, the circuit of
 `packages/engine/tests/circuits/esp32s3-adc`.

@@ -1315,7 +1315,7 @@ The example's values are Table 5-4 of the ESP32-S3 Series Datasheet v2.2, at 3.3
 | `leakage_resistance` | 66 Mohm | `IIH` and `IIL` at most 50 nA, so 3.3 V over 50 nA. |
 | `input_threshold` | 0.25 and 0.75 | `VIL` at most 0.25 VDD and `VIH` at least 0.75 VDD. |
 
-Each GPIO with a net is a DC path to `VCC` and to `GND` in every drive state, through its leakage. An `esp32s3` has no `ratings` object and no `i`, `v`, or `p`. Its logic signals are its GPIOs with nets, each the level that pin reads, such as `#u1.logic.GPIO21`. Its console writes `traces/serial.csv` as usart `USB_SERIAL_JTAG`. Its SPI2 sends each transfer as a `Spi` record with the nets of the GPIOs the matrix routed its CS, SCLK and data lines to, as [esp32s3.md](esp32s3.md#behind-the-seam) says, so an `st77916` on those nets takes it. `traces/link.csv` holds the records, and the file is written for every `esp32s3`, as the header alone when SPI2 sent none.
+Each GPIO with a net is a DC path to `VCC` and to `GND` in every drive state, through its leakage. An `esp32s3` has no `ratings` object and no `i`, `v`, or `p`. Its logic signals are its GPIOs with nets, each the level that pin reads, such as `#u1.logic.GPIO21`. Its console writes `traces/serial.csv` as usart `USB_SERIAL_JTAG`, and each UART byte as `UART0`, `UART1` or `UART2`. Its SPI2 sends each transfer as a `Spi` record with the nets of the GPIOs the matrix routed its CS, SCLK and data lines to, as [esp32s3.md](esp32s3.md#behind-the-seam) says, so an `st77916` on those nets takes it. `traces/link.csv` holds the records, and the file is written for every `esp32s3`, as the header alone when SPI2 sent none.
 
 ### Blobs
 

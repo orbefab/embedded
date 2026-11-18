@@ -6,6 +6,8 @@
 #
 #   packages/engine/scripts/esp32s3-arduino.sh console
 #   packages/engine/scripts/esp32s3-arduino.sh --check console
+#   packages/engine/scripts/esp32s3-arduino.sh uart
+#   packages/engine/scripts/esp32s3-arduino.sh --check uart
 #   packages/engine/scripts/esp32s3-arduino.sh adc
 #   packages/engine/scripts/esp32s3-arduino.sh --check adc
 #   packages/engine/scripts/esp32s3-arduino.sh knob LVGL_DIR
@@ -23,7 +25,9 @@ if [[ ${1:-} == --check ]]; then
   shift
 fi
 if [[ $# -lt 1 ]]; then
-  echo "usage: packages/engine/scripts/esp32s3-arduino.sh [--check] console|adc" >&2
+  echo "usage: packages/engine/scripts/esp32s3-arduino.sh [--check] console" >&2
+  echo "       packages/engine/scripts/esp32s3-arduino.sh [--check] uart" >&2
+  echo "       packages/engine/scripts/esp32s3-arduino.sh [--check] adc" >&2
   echo "       packages/engine/scripts/esp32s3-arduino.sh [--check] knob LVGL_DIR" >&2
   exit 2
 fi
@@ -32,7 +36,7 @@ if [[ $name == knob && $# -ne 2 ]]; then
   echo "usage: packages/engine/scripts/esp32s3-arduino.sh [--check] knob LVGL_DIR" >&2
   exit 2
 fi
-if [[ $name != console && $name != adc && $name != knob ]]; then
+if [[ $name != console && $name != uart && $name != adc && $name != knob ]]; then
   echo "esp32s3-arduino.sh: unknown sketch $name" >&2
   exit 2
 fi
@@ -50,6 +54,7 @@ fi
 sdkconfig=$HOME/.arduino15/packages/esp32/tools/esp32s3-libs/3.3.12/qio_qspi/include/sdkconfig.h
 sdkconfig_sha=f44c8812a67ab0c3c25704efd4aac3be2389119c65fc6179349aa7475a8405fa
 console_elf_sha=143e2e2f6b5f77c152b48c5b2b516d66c9d7ce09a9671821a78dd0c1818be0b7
+uart_elf_sha=5eeadc754a1a6927e851ba825290858c4a0c519edbfaa0daa50746ec258d34fc
 adc_elf_sha=7a53bc870b2488f32ec1597eed047ef8e820c2fd66686ae1ea26575723f1b5b3
 knob_elf_sha=cadfaa8b24a34ebfbb04e4ba36ee74e4104de31ef98220a2c94ec68dd2a176b8
 lvgl_tree_sha=5734ad146cf77713982329c7712d30b765c761207b3caf5d55a431cf7ea3dc18
@@ -115,9 +120,14 @@ mkdir -p "$sketch"
 build=$work/build
 out=$work/out
 fqbn=esp32:esp32:esp32s3:CDCOnBoot=cdc,USBMode=hwcdc,FlashSize=16M,PSRAM=disabled
+if [[ $name == uart ]]; then
+  fqbn=esp32:esp32:esp32s3:CDCOnBoot=default,USBMode=hwcdc,FlashSize=16M,PSRAM=disabled
+fi
 map="-ffile-prefix-map=$work=/src -ffile-prefix-map=$build=/build -ffile-prefix-map=$HOME/.arduino15=/arduino15"
 if [[ $name == console || $name == adc ]]; then
   cp "$root/packages/engine/tests/firmware/esp32s3/arduino/$name/$name.ino" "$sketch/"
+elif [[ $name == uart ]]; then
+  cp "$root/packages/engine/tests/firmware/esp32s3/arduino/console/console.ino" "$sketch/uart.ino"
 else
   cp "$root/packages/engine/tests/firmware/esp32s3/arduino/knob/knob.ino" "$root/packages/engine/tests/firmware/esp32s3/arduino/knob/wrap.c" "$sketch/"
   mkdir -p "$work/libraries/knobpanel/src" "$work/libraries/lvgl"
@@ -156,10 +166,11 @@ echo "$name.ino.bin: $bin_sha $(wc -c < "$bin")"
 echo "$name.ino.elf: $got_elf $(wc -c < "$elf")"
 echo "$name.ino.partitions.bin: $table_sha $(wc -c < "$table")"
 elf_sha=$console_elf_sha
-if [[ $name == adc ]]; then
+if [[ $name == uart ]]; then
+  elf_sha=$uart_elf_sha
+elif [[ $name == adc ]]; then
   elf_sha=$adc_elf_sha
-fi
-if [[ $name == knob ]]; then
+elif [[ $name == knob ]]; then
   elf_sha=$knob_elf_sha
   python3 -I - "$bin" "$elf" "$HOME" "$work" <<'PY'
 import sys
@@ -215,6 +226,8 @@ if ((check)); then
   )
   if [[ $name == console ]]; then
     uv run "$root/packages/engine/scripts/esp32s3_arduino_console.py" --check "$run"
+  elif [[ $name == uart ]]; then
+    uv run "$root/packages/engine/scripts/esp32s3_arduino_uart.py" --check "$run"
   elif [[ $name == adc ]]; then
     uv run "$root/packages/engine/scripts/esp32s3_arduino_adc.py" --check "$run"
   else

@@ -16,6 +16,7 @@
 # the dualcore app and partition table of packages/engine/tests/circuits/esp32s3-dualcore,
 # the echo app and partition table of packages/engine/tests/circuits/esp32s3-echo,
 # the ring app and partition table of packages/engine/tests/circuits/esp32s3-ring,
+# the uart app and partition table of packages/engine/tests/circuits/esp32s3-uart,
 # the pulls app and partition table of packages/engine/tests/circuits/esp32s3-pulls,
 # and the adc app and partition table of packages/engine/tests/circuits/esp32s3-adc,
 # from packages/engine/tests/firmware/esp32s3/idf with ESP-IDF v5.5.5. It needs that IDF's
@@ -114,6 +115,7 @@ idf() {
   local dualcore=$work/idf/dualcore/build
   local echo=$work/idf/echo/build
   local ring=$work/idf/ring/build
+  local uart=$work/idf/uart/build
   local pulls=$work/idf/pulls/build
   local adc=$work/idf/adc/build
   cp -r "$root/packages/engine/tests/firmware/esp32s3/idf" "$work/idf"
@@ -124,6 +126,7 @@ idf() {
   idf_build dualcore
   idf_build echo
   idf_build ring
+  idf_build uart
   idf_build pulls
   idf_build adc
   file_blobs esp32s3-hello flash "$hello/partition_table/partition-table.bin" "$hello/hello_world.bin"
@@ -133,6 +136,7 @@ idf() {
   file_blobs esp32s3-dualcore flash "$dualcore/partition_table/partition-table.bin" "$dualcore/dualcore.bin"
   file_blobs esp32s3-echo flash "$echo/partition_table/partition-table.bin" "$echo/echo.bin"
   file_blobs esp32s3-ring flash "$ring/partition_table/partition-table.bin" "$ring/ring.bin"
+  file_blobs esp32s3-uart flash "$uart/partition_table/partition-table.bin" "$uart/uart.bin"
   file_blobs esp32s3-pulls flash "$pulls/partition_table/partition-table.bin" "$pulls/pulls.bin"
   file_blobs esp32s3-adc flash "$adc/partition_table/partition-table.bin" "$adc/adc.bin"
 }

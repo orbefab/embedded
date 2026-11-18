@@ -359,7 +359,7 @@ $end
 - Times are integer picoseconds. There is no `$date` and no `$version`, so the file has no clock read and no float.
 - After an error the file keeps the edges up to `end_ps`, like the rest of `traces/`.
 
-A netlist with a chip that has a USART adds `serial.csv`. An ATmega328P has one, `USART0`. An ESP32-S3's USB Serial/JTAG console counts as one, `USB_SERIAL_JTAG`. The file holds every serial frame a USART finished, one row per byte, as ASCII with `\n` line ends. `index.json` has no key for it, because its header names its columns. `packages/engine/tests/circuits/atmega-analog-serial` prints `512\r\n` three times, and its file starts:
+A netlist with a chip that has a USART adds `serial.csv`. An ATmega328P has one, `USART0`. An ESP32-S3's USB Serial/JTAG console counts as one, `USB_SERIAL_JTAG`, and its three UARTs count as `UART0`, `UART1` and `UART2`. A byte a UART sends or receives is a row under that name. The file holds every serial frame a USART finished, one row per byte, as ASCII with `\n` line ends. `index.json` has no key for it, because its header names its columns. `packages/engine/tests/circuits/atmega-analog-serial` prints `512\r\n` three times, and its file starts:
 
 ```text
 t_ps,part,usart,byte
@@ -372,7 +372,7 @@ t_ps,part,usart,byte
 ```
 
 - `t_ps` is the start-bit time in integer picoseconds. It is the first picosecond at or after the oscillator cycle the start bit began, the time the core drove `TXD` low. When `TXD` read high before the start bit and nothing else loads it, that is the fall in `logic.vcd`. [avr.md](avr.md#sent-bytes) says when there is no fall at that time.
-- On `USB_SERIAL_JTAG`, `t_ps` is the time the byte's packet went, and every byte of one packet has that time, as [esp32s3.md](esp32s3.md#what-it-models) says.
+- On `USB_SERIAL_JTAG`, `t_ps` is the time the byte's packet went, and every byte of one packet has that time, as [esp32s3.md](esp32s3.md#what-it-models) says. On `UART0`, `UART1` and `UART2`, `t_ps` is the start bit, as that page says for a UART byte.
 - `part` is the chip's part name and `usart` the USART's datasheet name. Neither needs quoting.
 - `byte` is decimal, 0 to 255.
 - Rows are in the order stop bits ended, then by part name, then by the USART's index in `usarts`, then in the order its chip sent them. Parse sorts parts by name, so that index order is the part order a parsed netlist has. On one USART that is also the order bytes started. With two USARTs at different bauds, `t_ps` can step back between rows of different USARTs.

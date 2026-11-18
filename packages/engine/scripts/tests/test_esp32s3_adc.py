@@ -14,6 +14,7 @@ from esp32s3_adc import (
     curves,
     digi,
     efuse_set,
+    lines,
     pad_volts,
 )
 
@@ -131,6 +132,18 @@ def test_a_console_without_its_lines_fails() -> None:
     assert raises(lambda: Probe([line for line in text if not line.startswith("adc 2 63 ")]))
     failed = [line.replace("cali 3 ok", "cali 3 ESP_ERR_NOT_SUPPORTED") for line in console(raws)]
     assert raises(lambda: Probe(failed))
+
+
+def test_a_uart_row_is_not_the_console() -> None:
+    body = "\r\n".join(console(model_raws(1.65))) + "\r\n"
+    rows = ["t_ps,part,usart,byte", "0,u1,UART0,73"]
+    rows += [f"{k},u1,USB_SERIAL_JTAG,{ord(c)}" for k, c in enumerate(body, start=1)]
+    rows.append(f"{len(rows)},u1,UART2,10")
+    assert lines("\n".join(rows) + "\n") == console(model_raws(1.65))
+
+
+def test_another_port_fails() -> None:
+    assert raises(lambda: lines("t_ps,part,usart,byte\n0,u1,USART0,65\n"))
 
 
 def test_a_set_without_calibration_has_no_curve() -> None:

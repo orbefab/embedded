@@ -44,6 +44,12 @@ lint_tracked() {
     exit 1
   fi
   shellcheck -x "${scripts[@]}"
+  # A download cut short through `curl | sh` must run nothing, so the installer does all its
+  # work in main and calls it on its last line.
+  [[ $(grep -v '^[[:space:]]*$' scripts/install.sh | tail -n 1) == 'main "$@"' ]] || {
+    echo "scripts/check.sh: scripts/install.sh must end with the line: main \"\$@\"" >&2
+    exit 1
+  }
   mapfile -t py < <(git ls-files '*.py')
   if [[ ${#py[@]} -eq 0 ]]; then
     echo "scripts/check.sh: no tracked Python file" >&2
@@ -97,7 +103,7 @@ full() {
   run_check st77916-replay render_st77916.py packages/engine/tests/circuits/st77916-replay/events.json
   run_check esp32s3-blink esp32s3_blink.py
   run_check esp32s3-pattern render_st77916.py --pattern packages/engine/tests/firmware/esp32s3/pattern.json
-  for name in hello screen encoder touch dualcore echo ring pulls adc; do
+  for name in hello screen encoder touch dualcore echo ring uart pulls adc; do
     run_check "esp32s3-$name" "esp32s3_$name.py"
   done
   knob_dir=$(mktemp -d "${TMPDIR:-/tmp}/knob-script.XXXXXX")
