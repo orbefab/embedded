@@ -339,6 +339,15 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
                 "{name}: {}",
                 doc["diagnostics"]
             );
+        } else if name == "esp32s3-timers" {
+            // Reads of BB+0x54, NRX+0xd4, FE+0x90, FE2+0xf0 and USB_SERIAL_JTAG+0x18, which the
+            // model does not keep, the write that sets the reset of SYSTEM_WDG at start-up, and
+            // the 6 writes that pulse the resets of SYSTIMER, TIMG0 and TIMG1 at start-up.
+            // UART0's early log is modeled, and the general timers, the RNG and the SAR ADC are
+            // modeled, so arming T0, reading `WDEV_RND_REG` and the SENS start-up add no warning.
+            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 12];
+            assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
+            assert_kept_resets(&name, &doc, 7);
         } else if name == "esp32s3-uart" {
             // Reads of BB+0x54, NRX+0xd4, FE+0x90, FE2+0xf0 and USB_SERIAL_JTAG+0x18, which the
             // model does not keep, the write that sets the reset of SYSTEM_WDG at start-up, and

@@ -26,8 +26,25 @@
 //! when the APB clock changes. The RTC watchdog counts the 136 kHz RC slow clock. The super
 //! watchdog's two registers are kept, unlocked at power-on. A write that leaves it neither
 //! feeding itself nor disabled is refused, so it never runs out.
+//!
+//! Each timer group's general timers, T0 and T1, count a 54-bit value while `EN` is set, the
+//! group's clock bit is set and its reset bit is clear. The divider is `TIMG_Tx_DIVIDER`, and a
+//! stored 0 counts as 65536. The clock is the APB clock, or the 40 MHz crystal while
+//! `TIMG_Tx_USE_XTAL` is set. The counter steps up or down, one step per divider period, the
+//! first a whole period after it is enabled, reloaded, or `TIMG_Tx_DIVCNT_RST` is written. A
+//! load copies `TIMG_Tx_LOAD` at that write. `TIMG_Tx_UPDATE` latches the count into the value
+//! registers, which read the latch. An alarm fires when the count reaches `TIMG_Tx_ALARM` while
+//! `TIMG_Tx_ALARM_EN` is set. A count that already equals the alarm, or has passed it by less
+//! than half a turn in the counting direction, fires at once, as TRM §12.2.3's Tables 12.2-1 and
+//! 12.2-2 say. The fire sets the timer's bit of `TIMG_INT_RAW_TIMERS`, clears
+//! `TIMG_Tx_ALARM_EN`, and with `TIMG_Tx_AUTORELOAD` copies the load value into the count. The
+//! interrupt source is high while that raw bit and its `TIMG_INT_ENA_TIMERS` bit are set. A full
+//! turn of the counter whose product does not fit in the tick range is not scheduled. Writes
+//! take effect at once. While the group's reset bit is set the two timers sit at their reset
+//! values, and the group's watchdog is left as it was. While the clock bit is clear they keep
+//! their count.
 
-use super::clock::{TICK_HZ, Tick};
+use super::clock::{TICK_HZ, Tick, XTAL};
 
 /// Ticks per SYSTIMER count.
 const SYSTIMER_TICKS: u64 = TICK_HZ / 16_000_000;
@@ -349,11 +366,231 @@ const WDT_KEY: u32 = 0x50d8_3aa1;
 
 /// The watchdog's bit in a timer group's `INT_ENA`, `INT_RAW`, `INT_ST` and `INT_CLR`.
 const WDT_INT: u32 = 1 << 2;
+/// T0's and T1's bits in those same words.
+const T0_INT: u32 = 1;
+const T1_INT: u32 = 1 << 1;
+
+/// The general timer's counter, 32 low bits and 22 high bits.
+const COUNT_MASK: u64 = (1 << 54) - 1;
+const COUNT_SPAN: u64 = 1 << 54;
+/// Half the counter. TRM §12.2.3 compares a count with the alarm against this boundary.
+const HALF: u64 = 1 << 53;
+const HI_MASK: u32 = (1 << 22) - 1;
+
+const GP_EN: u32 = 1 << 31;
+const GP_INCREASE: u32 = 1 << 30;
+const GP_AUTORELOAD: u32 = 1 << 29;
+/// `TIMG_Tx_DIVIDER`, bits 28:13. A field of 0 divides by 65536 and a field of 1 divides by 2.
+const GP_DIVIDER: u32 = 0xffff << 13;
+const GP_DIVCNT_RST: u32 = 1 << 12;
+const GP_ALARM_EN: u32 = 1 << 10;
+const GP_USE_XTAL: u32 = 1 << 9;
+/// Divider field 1, auto-reload, counting up. `timer_group_struct.h`'s reset value, `0x6000_2000`.
+/// The field is 1, so the counter divides by 2.
+const GP_CONFIG_RESET: u32 = (1 << 13) | GP_AUTORELOAD | GP_INCREASE;
+
+/// One general timer. `base` is the count at tick `since`. `latched` is what the value
+/// registers read. `armed` is the tick the alarm was last enabled, or the count or the alarm
+/// last changed while it was enabled. An immediate alarm fires at that tick, or at `since`
+/// when the clock turns on later.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GpTimer {
+    config: u32,
+    latched: u64,
+    base: u64,
+    since: Tick,
+    alarm: u64,
+    load: u64,
+    armed: Tick,
+    raw: bool,
+}
+
+impl GpTimer {
+    fn reset() -> GpTimer {
+        GpTimer {
+            config: GP_CONFIG_RESET,
+            latched: 0,
+            base: 0,
+            since: Tick(0),
+            alarm: 0,
+            load: 0,
+            armed: Tick(0),
+            raw: false,
+        }
+    }
+
+    /// TRM §12.2.1. A field of 0 divides by 65536 and a field of 1 divides by 2. The reset field is 1.
+    fn divider(config: u32) -> u64 {
+        match u64::from((config >> 13) & 0xffff) {
+            0 => 65536,
+            1 => 2,
+            field => field,
+        }
+    }
+
+    /// Ticks per count: the divider times the APB period, or the crystal's while `USE_XTAL` is set.
+    fn period(config: u32, apb: u64) -> u64 {
+        let source = if config & GP_USE_XTAL != 0 { XTAL } else { apb };
+        Self::divider(config) * source
+    }
+
+    fn counting(&self, clocked: bool) -> bool {
+        clocked && self.config & GP_EN != 0
+    }
+
+    /// TRM §12.2.3, the immediate rows of Table 12.2-1 and Table 12.2-2.
+    ///
+    /// Counting up, the alarm fires at the write when `0 ≤ value − alarm < 2^53`, which includes
+    /// equality, or when `alarm − value > 2^53`. Counting down is that table with the two numbers
+    /// swapped: `0 ≤ alarm − value < 2^53`, or `value − alarm > 2^53`. A difference of exactly
+    /// `2^53` is not immediate.
+    fn fires_now(config: u32, value: u64, alarm: u64) -> bool {
+        let (value, alarm) = (value & COUNT_MASK, alarm & COUNT_MASK);
+        let (left, right) = if config & GP_INCREASE != 0 {
+            (value, alarm)
+        } else {
+            (alarm, value)
+        };
+        if right > left {
+            right - left > HALF
+        } else {
+            left - right < HALF
+        }
+    }
+
+    /// Counts from `value` until the alarm. An immediate pair is 0. Every other pair is the
+    /// forward distance, at most half a turn.
+    fn steps_until(config: u32, value: u64, alarm: u64) -> u64 {
+        let (value, alarm) = (value & COUNT_MASK, alarm & COUNT_MASK);
+        if Self::fires_now(config, value, alarm) {
+            return 0;
+        }
+        let (left, right) = if config & GP_INCREASE != 0 {
+            (value, alarm)
+        } else {
+            (alarm, value)
+        };
+        if right > left {
+            right - left
+        } else {
+            COUNT_SPAN - (left - right)
+        }
+    }
+
+    fn stepped(&self, steps: u64) -> u64 {
+        let base = self.base & COUNT_MASK;
+        if self.config & GP_INCREASE != 0 {
+            base.wrapping_add(steps) & COUNT_MASK
+        } else {
+            base.wrapping_sub(steps) & COUNT_MASK
+        }
+    }
+
+    fn value_at(&self, now: Tick, apb: u64, clocked: bool) -> u64 {
+        if !self.counting(clocked) || now.0 <= self.since.0 {
+            return self.base & COUNT_MASK;
+        }
+        let steps = (now.0 - self.since.0) / Self::period(self.config, apb);
+        self.stepped(steps)
+    }
+
+    /// The tick the armed alarm fires, or `None` when that product does not fit in `u64`.
+    /// An immediate alarm fires at `armed`, or at `since` when the clock turned on later.
+    fn next_fire(&self, apb: u64, clocked: bool) -> Option<Tick> {
+        if !self.counting(clocked) || self.config & GP_ALARM_EN == 0 {
+            return None;
+        }
+        let period = Self::period(self.config, apb);
+        let k_done = if self.armed.0 <= self.since.0 {
+            0
+        } else {
+            (self.armed.0 - self.since.0) / period
+        };
+        let value = self.stepped(k_done);
+        if Self::fires_now(self.config, value, self.alarm) {
+            return Some(Tick(self.armed.0.max(self.since.0)));
+        }
+        let steps = Self::steps_until(self.config, value, self.alarm);
+        let k = k_done.checked_add(steps)?;
+        let ticks = k.checked_mul(period)?;
+        Some(Tick(self.since.0.checked_add(ticks)?))
+    }
+
+    /// Sets the raw bit and clears `ALARM_EN`. Auto-reload copies the load and counts from this
+    /// tick. A one-shot leaves the count where it is: already at the alarm when it reached it,
+    /// and short of the alarm when the fire was immediate.
+    fn fire(&mut self, at: Tick) {
+        self.raw = true;
+        self.config &= !GP_ALARM_EN;
+        if self.config & GP_AUTORELOAD != 0 {
+            self.base = self.load & COUNT_MASK;
+            self.since = at;
+        }
+    }
+
+    /// Fires every alarm due at or before `now`. Enabling the alarm clears it, so one settle
+    /// fires once.
+    fn settle(&mut self, now: Tick, apb: u64, clocked: bool) {
+        loop {
+            let Some(at) = self.next_fire(apb, clocked) else {
+                return;
+            };
+            if at.0 > now.0 {
+                return;
+            }
+            self.fire(at);
+        }
+    }
+
+    /// Holds the count at `now` and starts the prescaler there. A partial period is dropped.
+    fn rebase(&mut self, now: Tick, apb: u64, clocked: bool) {
+        self.base = self.value_at(now, apb, clocked);
+        self.since = now;
+        if self.config & GP_ALARM_EN != 0 {
+            self.armed = now;
+        }
+    }
+
+    /// A change of the divider while `EN` is set is refused before this writes anything.
+    /// TRM §12.2.1 says to disable the timer first. `DIVCNT_RST`, `INCREASE` and `USE_XTAL`
+    /// stay allowed: the warning covers the prescaler, and `USE_XTAL` selects the clock.
+    fn write_config(
+        &mut self,
+        now: Tick,
+        value: u32,
+        apb: u64,
+        clocked: bool,
+    ) -> Result<(), &'static str> {
+        let old = self.config;
+        let new = value & !GP_DIVCNT_RST;
+        if old & GP_EN != 0 && (old ^ new) & GP_DIVIDER != 0 {
+            return Err("divider");
+        }
+        self.settle(now, apb, clocked);
+        let phase = GP_EN | GP_INCREASE | GP_DIVIDER | GP_USE_XTAL;
+        let restart = (old ^ new) & phase != 0 || value & GP_DIVCNT_RST != 0;
+        if restart {
+            self.base = self.value_at(now, apb, clocked);
+            self.since = now;
+        }
+        let rose = old & GP_ALARM_EN == 0 && new & GP_ALARM_EN != 0;
+        self.config = new;
+        if (restart || rose) && new & GP_ALARM_EN != 0 {
+            self.armed = now;
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Watchdogs {
     timg: [Timer; 2],
     rtc: Timer,
+    /// T0 and T1 of each timer group.
+    gpt: [[GpTimer; 2]; 2],
+    /// Each group's clock bit and reset bit. The general timers run them. The watchdog does not.
+    clocked: [bool; 2],
+    held: [bool; 2],
     /// Each timer group's `INT_ENA`.
     int_ena: [u32; 2],
     /// `RTC_CNTL_SWD_CONF_REG` and `RTC_CNTL_SWD_WPROTECT_REG`.
@@ -579,6 +816,12 @@ impl Watchdogs {
                     slow: true,
                 },
             },
+            gpt: [
+                [GpTimer::reset(), GpTimer::reset()],
+                [GpTimer::reset(), GpTimer::reset()],
+            ],
+            clocked: [true; 2],
+            held: [false; 2],
             int_ena: [0; 2],
             swd: [SWD_CONF_RESET, SWD_KEY],
             apb,
@@ -622,18 +865,131 @@ impl Watchdogs {
         [0, 1].map(|group| self.timg[group].raised && self.int_ena[group] & WDT_INT != 0)
     }
 
-    /// The APB clock runs at `apb` ticks per cycle from `now` on.
+    /// T0 and T1 of group 0, then T0 and T1 of group 1. A line is high while its raw bit and its
+    /// enable are set.
+    pub(crate) fn timer_lines(&mut self, now: Tick) -> [bool; 4] {
+        self.settle_timers(now);
+        let on = |group: usize, index: usize, bit: u32| {
+            self.gpt[group][index].raw && self.int_ena[group] & bit != 0
+        };
+        [
+            on(0, 0, T0_INT),
+            on(0, 1, T1_INT),
+            on(1, 0, T0_INT),
+            on(1, 1, T1_INT),
+        ]
+    }
+
+    /// The next general-timer alarm strictly after `now`.
+    pub(crate) fn next_alarm(&mut self, now: Tick) -> Option<Tick> {
+        self.settle_timers(now);
+        let mut best: Option<Tick> = None;
+        for group in 0..2 {
+            if self.held[group] {
+                continue;
+            }
+            let apb = self.apb;
+            let clocked = self.clocked[group];
+            for timer in &self.gpt[group] {
+                let Some(at) = timer.next_fire(apb, clocked) else {
+                    continue;
+                };
+                if at.0 > now.0 {
+                    best = Some(match best {
+                        Some(so_far) if so_far.0 <= at.0 => so_far,
+                        _ => at,
+                    });
+                }
+            }
+        }
+        best
+    }
+
+    /// The group's clock and reset, as [`super::gates::Gates::timg`] reads them. A reset puts
+    /// the two general timers back to their reset values and leaves the watchdog and `INT_ENA`.
+    /// A clock that turns off freezes the count. A clock that turns on counts on from there.
+    pub(crate) fn apply_gates(&mut self, now: Tick, clocked: [bool; 2], held: [bool; 2]) {
+        for group in 0..2 {
+            if held[group] {
+                if !self.held[group] {
+                    self.gpt[group] = [GpTimer::reset(), GpTimer::reset()];
+                }
+            } else if !clocked[group] && self.clocked[group] {
+                let apb = self.apb;
+                for timer in &mut self.gpt[group] {
+                    timer.settle(now, apb, true);
+                    timer.rebase(now, apb, true);
+                }
+            } else if clocked[group] && !self.clocked[group] {
+                for timer in &mut self.gpt[group] {
+                    timer.since = now;
+                }
+            }
+            self.clocked[group] = clocked[group];
+            self.held[group] = held[group];
+        }
+    }
+
+    fn settle_group(&mut self, now: Tick, group: usize) {
+        if self.held[group] {
+            return;
+        }
+        let apb = self.apb;
+        let clocked = self.clocked[group];
+        for timer in &mut self.gpt[group] {
+            timer.settle(now, apb, clocked);
+        }
+    }
+
+    fn settle_timers(&mut self, now: Tick) {
+        for group in 0..2 {
+            self.settle_group(now, group);
+        }
+    }
+
+    fn raw_bits(&self, group: usize) -> u32 {
+        let mut raw = u32::from(self.timg[group].raised) * WDT_INT;
+        if self.gpt[group][0].raw {
+            raw |= T0_INT;
+        }
+        if self.gpt[group][1].raw {
+            raw |= T1_INT;
+        }
+        raw
+    }
+
+    /// The APB clock runs at `apb` ticks per cycle from `now` on. A general timer keeps the
+    /// counts it has taken and drops a partial divider period.
     pub(crate) fn reclock(&mut self, now: Tick, apb: u64) {
         for timer in &mut self.timg {
             timer.settle(now, self.apb);
         }
+        let old = self.apb;
+        for group in 0..2 {
+            if self.held[group] {
+                continue;
+            }
+            let clocked = self.clocked[group];
+            for timer in &mut self.gpt[group] {
+                timer.settle(now, old, clocked);
+                timer.rebase(now, old, clocked);
+            }
+        }
         self.apb = apb;
     }
 
-    /// A timer group's watchdog register at `offset` in the group's block.
-    pub(crate) fn read_timg(&self, group: usize, offset: u32) -> Option<u32> {
+    /// A timer group's register at `offset` in the group's block. The counter value registers
+    /// read the latch, and a read of the raw or status word settles a due alarm first.
+    pub(crate) fn read_timg(&mut self, now: Tick, group: usize, offset: u32) -> Option<u32> {
+        if offset <= 0x44 {
+            self.settle_group(now, group);
+            return Some(self.read_gpt(group, offset));
+        }
+        if matches!(offset, 0x74 | 0x78) {
+            self.settle_group(now, group);
+        }
+        let raw = self.raw_bits(group);
         let t = &self.timg[group];
-        let raw = if t.raised { WDT_INT } else { 0 };
         match offset {
             0x48..=0x5c => Some(t.config[((offset - 0x48) / 4) as usize]),
             0x60 => Some(0),
@@ -646,8 +1002,99 @@ impl Watchdogs {
         }
     }
 
-    /// Writes a timer group's watchdog register, or names the setting the write leaves that the
-    /// model does not run.
+    fn read_gpt(&self, group: usize, offset: u32) -> u32 {
+        let index = usize::from(offset >= 0x24);
+        let timer = &self.gpt[group][index];
+        match offset % 0x24 {
+            0x00 => timer.config,
+            0x04 => timer.latched as u32,
+            0x08 => (timer.latched >> 32) as u32,
+            0x0c | 0x20 => 0,
+            0x10 => timer.alarm as u32,
+            0x14 => (timer.alarm >> 32) as u32,
+            0x18 => timer.load as u32,
+            0x1c => (timer.load >> 32) as u32,
+            _ => 0,
+        }
+    }
+
+    /// Writes one general-timer register. While the group is held in reset the write does not
+    /// stick. `LO` and `HI` are ignored. An update latches the live count, and a load copies
+    /// the load registers into the counter, both at `now`.
+    fn write_gpt(
+        &mut self,
+        now: Tick,
+        group: usize,
+        offset: u32,
+        value: u32,
+    ) -> Result<bool, &'static str> {
+        if offset > 0x44 {
+            return Ok(false);
+        }
+        if self.held[group] {
+            return Ok(true);
+        }
+        let index = usize::from(offset >= 0x24);
+        let local = offset % 0x24;
+        let apb = self.apb;
+        let clocked = self.clocked[group];
+        let timer = &mut self.gpt[group][index];
+        match local {
+            0x00 => timer.write_config(now, value, apb, clocked)?,
+            0x04 | 0x08 => {}
+            0x0c => {
+                timer.settle(now, apb, clocked);
+                timer.latched = timer.value_at(now, apb, clocked);
+            }
+            0x10 => {
+                timer.settle(now, apb, clocked);
+                timer.alarm = (timer.alarm & !0xffff_ffff) | u64::from(value);
+                if timer.config & GP_ALARM_EN != 0 {
+                    timer.armed = now;
+                }
+            }
+            0x14 => {
+                timer.settle(now, apb, clocked);
+                let hi = u64::from(value & HI_MASK) << 32;
+                timer.alarm = (timer.alarm & 0xffff_ffff) | hi;
+                if timer.config & GP_ALARM_EN != 0 {
+                    timer.armed = now;
+                }
+            }
+            0x18 => timer.load = (timer.load & !0xffff_ffff) | u64::from(value),
+            0x1c => {
+                let hi = u64::from(value & HI_MASK) << 32;
+                timer.load = (timer.load & 0xffff_ffff) | hi;
+            }
+            0x20 => {
+                timer.settle(now, apb, clocked);
+                timer.base = timer.load & COUNT_MASK;
+                timer.since = now;
+                if timer.config & GP_ALARM_EN != 0 {
+                    timer.armed = now;
+                }
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    /// A write of 1 to `TIMG_INT_RAW_TIMERS_REG` or `TIMG_INT_CLR_TIMERS_REG` clears that bit.
+    /// Both names are write-to-clear, for T0, T1 and the watchdog. The status register is not.
+    fn clear_raw(&mut self, now: Tick, group: usize, value: u32) {
+        self.settle_group(now, group);
+        if value & T0_INT != 0 {
+            self.gpt[group][0].raw = false;
+        }
+        if value & T1_INT != 0 {
+            self.gpt[group][1].raw = false;
+        }
+        self.timg[group].raised &= value & WDT_INT == 0;
+    }
+
+    /// Writes a timer group's register, or names the setting the write leaves that the model
+    /// does not run. A general-timer write is kept, including while the group is held in reset,
+    /// where it does not stick.
     pub(crate) fn write_timg(
         &mut self,
         now: Tick,
@@ -655,23 +1102,28 @@ impl Watchdogs {
         offset: u32,
         value: u32,
     ) -> Result<bool, &'static str> {
-        let t = &mut self.timg[group];
+        if offset <= 0x44 {
+            return self.write_gpt(now, group, offset, value);
+        }
         let refused = match offset {
-            0x48..=0x5c => t.write(now, Some(((offset - 0x48) / 4) as usize), value, false),
-            0x60 => t.write(now, None, value, true),
+            0x48..=0x5c => {
+                let index = ((offset - 0x48) / 4) as usize;
+                self.timg[group].write(now, Some(index), value, false)
+            }
+            0x60 => self.timg[group].write(now, None, value, true),
             0x64 => {
-                t.wprotect = value;
+                self.timg[group].wprotect = value;
                 None
             }
             0x70 => {
                 self.int_ena[group] = value & 0x7;
                 None
             }
-            0x74 | 0x78 => None,
-            0x7c => {
-                t.raised &= value & WDT_INT == 0;
+            0x74 | 0x7c => {
+                self.clear_raw(now, group, value);
                 None
             }
+            0x78 => None,
             _ => return Ok(false),
         };
         refused.map_or(Ok(true), Err)
@@ -725,9 +1177,19 @@ impl Watchdogs {
     /// Sets each kept register to `value` as the boot left it. A config word restarts the
     /// count at `now`, and a feed does nothing.
     pub(crate) fn restore(&mut self, now: Tick, register: Register, value: u32) {
+        if let Register::Timg(group, offset) = register
+            && offset <= 0x44
+        {
+            let _ = self.write_gpt(now, group, offset, value);
+            return;
+        }
         match register {
             Register::Timg(group, 0x70) => self.int_ena[group] = value & 0x7,
-            Register::Timg(group, 0x74) => self.timg[group].raised = value & WDT_INT != 0,
+            Register::Timg(group, 0x74) => {
+                self.timg[group].raised = value & WDT_INT != 0;
+                self.gpt[group][0].raw = value & T0_INT != 0;
+                self.gpt[group][1].raw = value & T1_INT != 0;
+            }
             Register::Rtc(0xb4) => self.swd[0] = value,
             Register::Rtc(0xb8) => self.swd[1] = value,
             _ => {}
@@ -1077,14 +1539,14 @@ mod tests {
                 (1, Action::Reset(Reset::System), 30)
             ]
         );
-        assert_eq!(dogs.read_timg(0, 0x74), Some(WDT_INT));
+        assert_eq!(dogs.read_timg(x(10), 0, 0x74), Some(WDT_INT));
         assert_eq!(dogs.lines(), [false, false], "not enabled");
         dogs.write_timg(x(10), 0, 0x70, WDT_INT).unwrap();
         assert_eq!(dogs.lines(), [true, false]);
-        assert_eq!(dogs.read_timg(0, 0x78), Some(WDT_INT));
+        assert_eq!(dogs.read_timg(x(10), 0, 0x78), Some(WDT_INT));
         dogs.write_timg(x(10), 0, 0x7c, WDT_INT).unwrap();
         assert_eq!(dogs.lines(), [false, false]);
-        assert_eq!(dogs.read_timg(0, 0x74), Some(0));
+        assert_eq!(dogs.read_timg(x(10), 0, 0x74), Some(0));
     }
 
     #[test]
@@ -1179,5 +1641,333 @@ mod tests {
         assert_eq!(dogs.read_rtc(0xb4), Some(SWD_AUTO_FEED_EN));
         dogs.write_rtc(x(0), 0xb8, 0).unwrap();
         assert_eq!(dogs.write_rtc(x(0), 0xb4, 0), Ok(true), "locked");
+    }
+
+    /// `EN`, counting up, divider `divider`, `ALARM_EN`. Auto-reload stays clear.
+    fn arm(divider: u32) -> u32 {
+        GP_EN | GP_INCREASE | (divider << 13) | GP_ALARM_EN
+    }
+
+    #[test]
+    fn a_general_timer_fires_one_divider_period_after_each_count() {
+        let mut dogs = Watchdogs::new(XTAL);
+        dogs.write_timg(x(0), 0, 0x10, 10).unwrap();
+        dogs.write_timg(x(0), 0, 0x00, arm(2)).unwrap();
+        assert_eq!(dogs.next_alarm(x(0)), Some(x(20)));
+        assert_eq!(dogs.read_timg(x(19), 0, 0x74), Some(0), "not yet");
+        assert_eq!(dogs.read_timg(x(20), 0, 0x74), Some(T0_INT));
+        assert_eq!(dogs.read_timg(x(20), 0, 0x00).unwrap() & GP_ALARM_EN, 0);
+        assert_eq!(dogs.timer_lines(x(20)), [false; 4], "not enabled");
+        dogs.write_timg(x(20), 0, 0x70, T0_INT).unwrap();
+        assert_eq!(dogs.timer_lines(x(20)), [true, false, false, false]);
+        assert_eq!(dogs.read_timg(x(20), 0, 0x78), Some(T0_INT));
+        dogs.write_timg(x(20), 0, 0x7c, T0_INT).unwrap();
+        assert_eq!(dogs.timer_lines(x(20)), [false; 4]);
+    }
+
+    #[test]
+    fn settling_twice_matches_settling_once_and_an_equal_alarm_fires_at_the_arm() {
+        let mut early = Watchdogs::new(XTAL);
+        early.write_timg(x(0), 0, 0x10, 10).unwrap();
+        early.write_timg(x(0), 0, 0x00, arm(2)).unwrap();
+        let mut late = early.clone();
+        assert_eq!(early.read_timg(x(5), 0, 0x74), Some(0));
+        assert_eq!(early.read_timg(x(30), 0, 0x74), Some(T0_INT));
+        assert_eq!(late.read_timg(x(30), 0, 0x74), Some(T0_INT));
+        assert_eq!(early, late);
+
+        let mut same = Watchdogs::new(XTAL);
+        same.write_timg(x(0), 0, 0x10, 0).unwrap();
+        same.write_timg(x(0), 0, 0x00, arm(2)).unwrap();
+        assert_eq!(
+            same.read_timg(x(0), 0, 0x74),
+            Some(T0_INT),
+            "equal fires now"
+        );
+        assert!(same.next_alarm(x(0)).is_none(), "the fire cleared ALARM_EN");
+    }
+
+    /// Copies `count` into T0 through the load registers. The timer is stopped, so this does not fire.
+    fn load_count(dogs: &mut Watchdogs, count: u64) {
+        dogs.write_timg(x(0), 0, 0x18, count as u32).unwrap();
+        dogs.write_timg(x(0), 0, 0x1c, (count >> 32) as u32)
+            .unwrap();
+        dogs.write_timg(x(0), 0, 0x20, 1).unwrap();
+    }
+
+    #[test]
+    fn every_alarm_scenario_in_the_manual_fires_now_or_on_the_way_to_the_alarm() {
+        let half = HALF;
+        let max = COUNT_MASK;
+        // (up, value, alarm, immediate, forward steps). Tables 12.2-1 and 12.2-2.
+        let cases = [
+            (true, 0, half + 1, true, 0),
+            (true, 0, half, false, half),
+            (true, 0, 10, false, 10),
+            (true, 10, 10, true, 0),
+            (true, half - 1, 0, true, 0),
+            (true, half, 0, false, half),
+            (true, max, 0, false, 1),
+            (false, half + 1, 0, true, 0),
+            (false, half, 0, false, half),
+            (false, 20, 5, false, 15),
+            (false, 5, 5, true, 0),
+            (false, 0, half - 1, true, 0),
+            (false, 5, 20, true, 0),
+            (false, 0, half, false, half),
+            (false, 0, max, false, 1),
+        ];
+        for (up, value, alarm, now, steps) in cases {
+            let config = if up { GP_INCREASE } else { 0 };
+            assert_eq!(
+                GpTimer::fires_now(config, value, alarm),
+                now,
+                "up={up} value={value:#x} alarm={alarm:#x}"
+            );
+            assert_eq!(
+                GpTimer::steps_until(config, value, alarm),
+                if now { 0 } else { steps },
+                "up={up} value={value:#x} alarm={alarm:#x}"
+            );
+        }
+
+        // Field 2 divides by 2, so one count is two crystal cycles. An immediate pair fires at
+        // the arm. A pair half a turn away is scheduled, and the same pair at divider 65536 is not.
+        let mut ahead = Watchdogs::new(XTAL);
+        ahead.write_timg(x(0), 0, 0x10, 10).unwrap();
+        ahead.write_timg(x(0), 0, 0x00, arm(2)).unwrap();
+        assert_eq!(ahead.read_timg(x(0), 0, 0x74), Some(0));
+        assert_eq!(ahead.next_alarm(x(0)), Some(x(20)));
+
+        let mut equal = Watchdogs::new(XTAL);
+        load_count(&mut equal, 1000);
+        equal.write_timg(x(0), 0, 0x10, 1000).unwrap();
+        equal.write_timg(x(0), 0, 0x00, arm(2)).unwrap();
+        assert_eq!(equal.read_timg(x(0), 0, 0x74), Some(T0_INT));
+        equal.write_timg(x(0), 0, 0x0c, 1).unwrap();
+        assert_eq!(
+            equal.read_timg(x(0), 0, 0x04),
+            Some(1000),
+            "a one-shot stays put"
+        );
+
+        let mut behind = Watchdogs::new(XTAL);
+        load_count(&mut behind, 2000);
+        behind.write_timg(x(0), 0, 0x10, 1000).unwrap();
+        behind.write_timg(x(0), 0, 0x00, arm(2)).unwrap();
+        assert_eq!(behind.read_timg(x(0), 0, 0x74), Some(T0_INT));
+
+        let mut half_turn = Watchdogs::new(XTAL);
+        load_count(&mut half_turn, half);
+        half_turn.write_timg(x(0), 0, 0x00, arm(2)).unwrap();
+        assert_eq!(half_turn.read_timg(x(0), 0, 0x74), Some(0));
+        assert_eq!(half_turn.next_alarm(x(0)), Some(Tick(half * 2 * XTAL)));
+
+        let mut wide = Watchdogs::new(XTAL);
+        load_count(&mut wide, half);
+        wide.write_timg(x(0), 0, 0x00, arm(0)).unwrap();
+        assert_eq!(wide.read_timg(x(0), 0, 0x74), Some(0));
+        assert!(
+            wide.next_alarm(x(0)).is_none(),
+            "half a turn at divider 65536 does not fit"
+        );
+    }
+
+    #[test]
+    fn auto_reload_copies_the_load_and_a_load_above_the_alarm_fires_again() {
+        let mut dogs = Watchdogs::new(XTAL);
+        dogs.write_timg(x(0), 0, 0x18, 3).unwrap();
+        dogs.write_timg(x(0), 0, 0x10, 10).unwrap();
+        dogs.write_timg(x(0), 0, 0x00, arm(2) | GP_AUTORELOAD)
+            .unwrap();
+        assert_eq!(dogs.read_timg(x(20), 0, 0x74), Some(T0_INT));
+        dogs.write_timg(x(20), 0, 0x0c, 1).unwrap();
+        assert_eq!(dogs.read_timg(x(20), 0, 0x04), Some(3), "reloaded");
+        dogs.write_timg(x(20), 0, 0x7c, T0_INT).unwrap();
+        dogs.write_timg(x(20), 0, 0x00, arm(2) | GP_AUTORELOAD)
+            .unwrap();
+        assert_eq!(dogs.next_alarm(x(20)), Some(x(34)));
+
+        // The driver's interrupt re-enables ALARM_EN after the reload. A load above the alarm
+        // is an immediate pair, so the second fire is the re-enable itself.
+        let mut above = Watchdogs::new(XTAL);
+        above.write_timg(x(0), 0, 0x18, 50).unwrap();
+        above.write_timg(x(0), 0, 0x10, 10).unwrap();
+        above
+            .write_timg(x(0), 0, 0x00, arm(2) | GP_AUTORELOAD)
+            .unwrap();
+        assert_eq!(above.read_timg(x(20), 0, 0x74), Some(T0_INT));
+        above.write_timg(x(20), 0, 0x7c, T0_INT).unwrap();
+        above
+            .write_timg(x(20), 0, 0x00, arm(2) | GP_AUTORELOAD)
+            .unwrap();
+        assert_eq!(above.read_timg(x(20), 0, 0x74), Some(T0_INT));
+        above.write_timg(x(20), 0, 0x0c, 1).unwrap();
+        assert_eq!(above.read_timg(x(20), 0, 0x04), Some(50));
+
+        let mut down = Watchdogs::new(XTAL);
+        down.write_timg(x(0), 0, 0x18, 20).unwrap();
+        down.write_timg(x(0), 0, 0x20, 1).unwrap();
+        down.write_timg(x(0), 0, 0x10, 5).unwrap();
+        down.write_timg(x(0), 0, 0x00, GP_EN | GP_ALARM_EN | (2 << 13))
+            .unwrap();
+        assert_eq!(down.next_alarm(x(0)), Some(x(30)));
+
+        let mut zero = Watchdogs::new(XTAL);
+        zero.write_timg(x(0), 0, 0x10, 1).unwrap();
+        zero.write_timg(x(0), 0, 0x00, arm(0)).unwrap();
+        assert_eq!(zero.next_alarm(x(0)), Some(Tick(65536 * XTAL)));
+    }
+
+    #[test]
+    fn a_divider_field_of_one_divides_by_two_and_a_change_while_enabled_is_refused() {
+        let mut one = Watchdogs::new(XTAL);
+        one.write_timg(x(0), 0, 0x10, 4).unwrap();
+        one.write_timg(x(0), 0, 0x00, arm(1)).unwrap();
+        let mut two = Watchdogs::new(XTAL);
+        two.write_timg(x(0), 0, 0x10, 4).unwrap();
+        two.write_timg(x(0), 0, 0x00, arm(2)).unwrap();
+        assert_eq!(one.next_alarm(x(0)), Some(x(8)));
+        assert_eq!(two.next_alarm(x(0)), one.next_alarm(x(0)));
+        assert_eq!(one.read_timg(x(0), 0, 0x00).unwrap() & GP_DIVIDER, 1 << 13);
+
+        let mut dogs = Watchdogs::new(XTAL);
+        dogs.write_timg(x(0), 0, 0x10, 10).unwrap();
+        dogs.write_timg(x(0), 0, 0x00, arm(2)).unwrap();
+        let before = dogs.clone();
+        assert_eq!(dogs.write_timg(x(30), 0, 0x00, arm(3)), Err("divider"));
+        assert_eq!(dogs, before, "the refused store changes nothing");
+        assert_eq!(
+            dogs.write_timg(x(30), 0, 0x00, arm(2)),
+            Ok(true),
+            "the same field"
+        );
+
+        let mut stopped = Watchdogs::new(XTAL);
+        assert_eq!(
+            stopped.write_timg(x(0), 0, 0x00, GP_INCREASE | (4 << 13)),
+            Ok(true),
+            "EN is clear"
+        );
+        assert_eq!(
+            stopped.write_timg(x(0), 0, 0x00, arm(8)),
+            Ok(true),
+            "the write that sets EN may change the field"
+        );
+
+        // DIVCNT_RST drops the partial period. At three crystal cycles, field 2 has taken one
+        // count of an alarm at 4, so three counts remain and the next fire is six cycles on.
+        let mut reset = Watchdogs::new(XTAL);
+        reset.write_timg(x(0), 0, 0x10, 4).unwrap();
+        reset.write_timg(x(0), 0, 0x00, arm(2)).unwrap();
+        assert_eq!(
+            reset.write_timg(x(3), 0, 0x00, arm(2) | GP_DIVCNT_RST),
+            Ok(true)
+        );
+        assert_eq!(reset.read_timg(x(3), 0, 0x00).unwrap() & GP_DIVCNT_RST, 0);
+        assert_eq!(reset.next_alarm(x(3)), Some(x(9)));
+
+        // Turning around at count 0 puts the alarm behind the counter, so it fires at the write.
+        let mut down = Watchdogs::new(XTAL);
+        down.write_timg(x(0), 0, 0x10, 10).unwrap();
+        down.write_timg(x(0), 0, 0x00, arm(2)).unwrap();
+        assert_eq!(
+            down.write_timg(x(0), 0, 0x00, GP_EN | GP_ALARM_EN | (2 << 13)),
+            Ok(true)
+        );
+        assert_eq!(down.read_timg(x(0), 0, 0x74), Some(T0_INT));
+
+        let mut xtal = Watchdogs::new(6);
+        xtal.write_timg(Tick(0), 0, 0x10, 4).unwrap();
+        xtal.write_timg(Tick(0), 0, 0x00, arm(2)).unwrap();
+        assert_eq!(xtal.next_alarm(Tick(0)), Some(Tick(48)));
+        assert_eq!(
+            xtal.write_timg(Tick(0), 0, 0x00, arm(2) | GP_USE_XTAL),
+            Ok(true)
+        );
+        assert_eq!(xtal.next_alarm(Tick(0)), Some(Tick(8 * XTAL)));
+    }
+
+    #[test]
+    fn a_write_of_one_to_the_raw_register_clears_that_bit() {
+        let mut dogs = Watchdogs::new(XTAL);
+        dogs.write_timg(x(0), 0, 0x10, 1).unwrap();
+        dogs.write_timg(x(0), 0, 0x00, arm(2)).unwrap();
+        dogs.write_timg(x(2), 0, 0x74, 0).unwrap();
+        assert_eq!(dogs.read_timg(x(2), 0, 0x74), Some(T0_INT), "a zero stays");
+        dogs.write_timg(x(2), 0, 0x74, T1_INT).unwrap();
+        assert_eq!(dogs.read_timg(x(2), 0, 0x74), Some(T0_INT));
+        dogs.write_timg(x(2), 0, 0x78, T0_INT).unwrap();
+        assert_eq!(
+            dogs.read_timg(x(2), 0, 0x74),
+            Some(T0_INT),
+            "status is not write-to-clear"
+        );
+        dogs.write_timg(x(2), 0, 0x74, T0_INT).unwrap();
+        assert_eq!(dogs.read_timg(x(2), 0, 0x74), Some(0));
+
+        let mut both = Watchdogs::new(XTAL);
+        both.write_timg(x(0), 0, 0x10, 1).unwrap();
+        both.write_timg(x(0), 0, 0x34, 1).unwrap();
+        both.write_timg(x(0), 0, 0x00, arm(2)).unwrap();
+        both.write_timg(x(0), 0, 0x24, arm(2)).unwrap();
+        assert_eq!(both.read_timg(x(2), 0, 0x74), Some(T0_INT | T1_INT));
+        both.write_timg(x(2), 0, 0x74, T0_INT).unwrap();
+        assert_eq!(both.read_timg(x(2), 0, 0x74), Some(T1_INT));
+
+        // A clear at the fire tick settles the alarm and then clears the bit it names.
+        let mut due = Watchdogs::new(XTAL);
+        due.write_timg(x(0), 0, 0x10, 1).unwrap();
+        due.write_timg(x(0), 0, 0x00, arm(2)).unwrap();
+        due.write_timg(x(2), 0, 0x74, T0_INT).unwrap();
+        assert_eq!(due.read_timg(x(2), 0, 0x74), Some(0));
+
+        let mut wdt = group0(EN | 1 << 29 | 3 << 27);
+        wdt.run_out(wdt.deadline().unwrap());
+        assert_eq!(wdt.read_timg(x(10), 0, 0x74), Some(WDT_INT));
+        wdt.write_timg(x(10), 0, 0x74, WDT_INT).unwrap();
+        assert_eq!(wdt.read_timg(x(10), 0, 0x74), Some(0));
+    }
+
+    #[test]
+    fn the_crystal_source_ignores_the_apb_period_and_a_gate_freezes_or_resets() {
+        let mut dogs = Watchdogs::new(6);
+        dogs.write_timg(x(0), 0, 0x10, 4).unwrap();
+        dogs.write_timg(x(0), 0, 0x00, arm(2) | GP_USE_XTAL)
+            .unwrap();
+        assert_eq!(dogs.next_alarm(Tick(0)), Some(Tick(8 * XTAL)));
+
+        // One count has landed at two crystal cycles. The clock stops one cycle later.
+        dogs.apply_gates(Tick(3 * XTAL), [false, true], [false, false]);
+        assert!(dogs.next_alarm(Tick(10 * XTAL)).is_none(), "clock off");
+        dogs.write_timg(Tick(10 * XTAL), 0, 0x0c, 1).unwrap();
+        assert_eq!(dogs.read_timg(Tick(10 * XTAL), 0, 0x04), Some(1));
+        dogs.apply_gates(Tick(10 * XTAL), [true, true], [false, false]);
+        assert_eq!(
+            dogs.next_alarm(Tick(10 * XTAL)),
+            Some(Tick(10 * XTAL + 6 * XTAL))
+        );
+
+        // A count already past the alarm fires when the clock comes back, at that tick.
+        let mut late = Watchdogs::new(XTAL);
+        load_count(&mut late, 20);
+        late.write_timg(x(0), 0, 0x10, 5).unwrap();
+        late.write_timg(x(0), 0, 0x00, GP_EN | GP_INCREASE | (2 << 13))
+            .unwrap();
+        late.apply_gates(x(1), [false, true], [false, false]);
+        late.write_timg(x(2), 0, 0x00, arm(2)).unwrap();
+        assert_eq!(late.read_timg(x(2), 0, 0x74), Some(0), "frozen");
+        late.apply_gates(x(5), [true, true], [false, false]);
+        assert_eq!(late.read_timg(x(5), 0, 0x74), Some(T0_INT));
+
+        dogs.write_timg(Tick(10 * XTAL), 0, 0x70, T0_INT).unwrap();
+        dogs.apply_gates(Tick(10 * XTAL), [true, true], [true, false]);
+        assert_eq!(dogs.write_timg(Tick(10 * XTAL), 0, 0x00, arm(80)), Ok(true));
+        assert_eq!(
+            dogs.read_timg(Tick(10 * XTAL), 0, 0x00),
+            Some(GP_CONFIG_RESET),
+            "a write while held does not stick"
+        );
+        assert_eq!(dogs.read_timg(Tick(10 * XTAL), 0, 0x70), Some(T0_INT));
     }
 }

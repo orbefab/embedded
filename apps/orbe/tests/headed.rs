@@ -12,7 +12,7 @@ use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -307,11 +307,11 @@ fn the_server_refuses_a_wrong_token_host_or_origin() {
     runtime.orbe(dir.path(), &["close"]).ok();
 }
 
-/// Whether the server closed `stream` within a second, without a response.
-fn dropped(mut stream: &TcpStream) -> bool {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(1)))
-        .unwrap();
+/// Whether the server closed `stream` within `within`, without a response. The extra
+/// connection is closed from `accept`, which a busy machine can reach late. `within` is how
+/// long this test watches for that close. It is not a deadline the server has.
+fn dropped(mut stream: &TcpStream, within: Duration) -> bool {
+    stream.set_read_timeout(Some(within)).unwrap();
     matches!(stream.read(&mut [0; 64]), Ok(0))
 }
 
@@ -324,8 +324,14 @@ fn the_server_serves_32_connections_at_once_and_drops_the_rest() {
         .map(|_| TcpStream::connect(&host).unwrap())
         .collect();
     let over = TcpStream::connect(&host).unwrap();
-    assert!(dropped(&over), "a 33rd connection is closed at once");
-    assert!(!dropped(&held[31]), "the 32nd still waits for its request");
+    assert!(
+        dropped(&over, Duration::from_secs(5)),
+        "a 33rd connection is closed at once"
+    );
+    assert!(
+        !dropped(&held[31], Duration::from_secs(1)),
+        "the 32nd still waits for its request"
+    );
     drop(held);
     let get = format!("GET / HTTP/1.1\r\nHost: {host}\r\n\r\n");
     wait_until("a connection is served again", || {
@@ -334,24 +340,56 @@ fn the_server_serves_32_connections_at_once_and_drops_the_rest() {
     runtime.orbe(dir.path(), &["close"]).ok();
 }
 
+/// Whether `stream` closed within `within`.
+fn shut(stream: &mut TcpStream, within: Duration) -> bool {
+    stream.set_read_timeout(Some(within)).unwrap();
+    let read = stream.read(&mut [0; 64]);
+    matches!(&read, Ok(0))
+        || read
+            .as_ref()
+            .is_err_and(|e| e.kind() == ErrorKind::ConnectionReset)
+}
+
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the clock bounds how long a request head may take"
+)]
 fn a_request_head_has_5_s_in_all() {
     let runtime = Runtime::new();
     let (dir, _page, url) = opened(&runtime);
     let (host, _) = split(&url);
     let mut slow = TcpStream::connect(&host).unwrap();
-    for byte in b"GET " {
+    let started = Instant::now();
+    for (i, byte) in b"GET ".iter().enumerate() {
         let _ = slow.write_all(&[*byte]);
+        // The listener's 5 s starts when it accepts, which can be after this clock. A probe
+        // well before 5 s still has to see an open connection. One near the deadline would
+        // fail when accept itself was late.
+        if started.elapsed() < Duration::from_secs(3) {
+            slow.set_read_timeout(Some(Duration::from_millis(50)))
+                .unwrap();
+            let early = slow.read(&mut [0; 64]);
+            assert!(
+                early.as_ref().is_err_and(|e| {
+                    matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
+                }),
+                "still open before 5 s, after byte {i}: {early:?}"
+            );
+        }
         std::thread::sleep(Duration::from_millis(1750));
     }
-    slow.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
-    let read = slow.read(&mut [0; 64]);
+    // The bytes already span more than 5 s. The further wait is only so a late accept can
+    // still show the close. A head the listener never cuts off stays open through it.
+    let left = Duration::from_secs(10).saturating_sub(started.elapsed());
     assert!(
-        matches!(&read, Ok(0))
-            || read
-                .as_ref()
-                .is_err_and(|e| e.kind() == ErrorKind::ConnectionReset),
-        "a byte every 1.75 s is cut off 5 s after the first: {read:?}"
+        shut(&mut slow, left),
+        "a byte every 1.75 s is cut off 5 s after the first"
+    );
+    assert!(
+        started.elapsed() >= Duration::from_secs(5),
+        "the close arrived before 5 s: {:?}",
+        started.elapsed()
     );
     runtime.orbe(dir.path(), &["close"]).ok();
 }
@@ -490,10 +528,17 @@ fn a_viewer_watching_a_step_changes_no_reply() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the clock is the wall the session plays against"
+)]
 fn play_then_pause_advances_time_at_wall_speed() {
     let runtime = Runtime::new();
     let (dir, _page, url) = opened(&runtime);
     let mut viewer = Viewer::connect(&url);
+    // From before `play` answers until after `pause` returns. Simulated time starts inside
+    // that interval, when the session takes `play`, and stops when it takes `pause`.
+    let started = Instant::now();
     let played = runtime.orbe(dir.path(), &["play"]).ok();
     assert_eq!(played.stdout, "playing from t=0s\n");
     let mut seen = Vec::new();
@@ -505,12 +550,22 @@ fn play_then_pause_advances_time_at_wall_speed() {
     };
     std::thread::sleep(Duration::from_millis(300));
     let paused = runtime.orbe(dir.path(), &["pause", "--json"]).ok().json();
+    let elapsed = started.elapsed();
     assert_eq!(paused["state"], "paused");
     assert_eq!(paused["data"]["playing"], false);
     let t = paused["t_ps"].as_u64().unwrap();
+    // Slow motion is what a tick costs when the engine takes longer than the slice it
+    // simulates, so the floor is only that time moved after the first frame. The ceiling is
+    // the measured interval plus one tick. The loop applies a due tick before it reads
+    // `pause`, and that tick can have started before this clock. A second tick of slack
+    // would let a session playing at twice wall speed pass.
+    let margin = orbe_session::viewer::TICK;
+    let allowed_ps = u64::try_from(elapsed.saturating_add(margin).as_nanos())
+        .unwrap()
+        .saturating_mul(1000);
     assert!(
-        t > ticked && t <= 1_000_000_000_000,
-        "300 ms of wall time plays more, and no faster than the wall: {ticked} then {t} ps"
+        t > ticked && t <= allowed_ps,
+        "play advanced from {ticked} to {t} ps during {elapsed:?}; the margin is one tick"
     );
 
     while !seen

@@ -38,6 +38,8 @@ struct Scope<'c, 'p> {
     scene: Node,
     engine: Netlist,
     ground: &'c str,
+    /// Nets left out of `net.floating`. See [`Circuit::quiet_floating`].
+    quiet: BTreeSet<String>,
 }
 
 impl Scope<'_, '_> {
@@ -130,11 +132,71 @@ impl Circuit<'_> {
             engine: orbe_engine::netlist::parse(netlist.json.as_bytes())
                 .expect("the engine read this netlist when it checked"),
             ground: &netlist.ground,
+            quiet: netlist.refs.quiet_floating.clone(),
         };
         for rule in RULES {
             rule(&scope, out);
         }
     }
+
+    /// Net names `net.floating` leaves out. A part lists those pins in `open`. The net of one
+    /// stays out while no scene wire reaches it and every other pin on it, other than a hole,
+    /// belongs to that part or a part inside it. A hole that only seats that pin, with nothing
+    /// else in its strip, does not reach the net. A scene wire, another part's pin, or a wire
+    /// to a hole on the net still warns. The ground ref does not reach a net.
+    pub(super) fn quiet_floating(&mut self, nets: &BTreeMap<usize, String>) -> BTreeSet<String> {
+        let keys: Vec<usize> = self
+            .project
+            .scene
+            .comp
+            .wires
+            .iter()
+            .flat_map(|wire| &wire.ends)
+            .filter_map(|end| self.lookup(ROOT, end).ok().flatten())
+            .collect();
+        let root_of: Vec<usize> = (0..self.pins.len()).map(|key| self.find(key)).collect();
+        let reached: BTreeSet<usize> = keys.into_iter().map(|key| root_of[key]).collect();
+        let mut quiet = BTreeSet::new();
+        for inst in 1..self.insts.len() {
+            if self.insts[inst].dropped.is_some() {
+                continue;
+            }
+            let open = match self.part(inst) {
+                Some(part) if !part.open.is_empty() => part.open.clone(),
+                _ => continue,
+            };
+            for pin_name in open {
+                let Some(&key) = self.keys.get(&(inst, pin_name)) else {
+                    continue;
+                };
+                let root = root_of[key];
+                if reached.contains(&root) {
+                    continue;
+                }
+                let contained = (0..self.pins.len()).all(|other| {
+                    if root_of[other] != root {
+                        return true;
+                    }
+                    let pin = &self.pins[other];
+                    pin.hole
+                        || self.insts[pin.inst].dropped.is_some()
+                        || inside(self, pin.inst, inst)
+                });
+                if contained && let Some(name) = nets.get(&root) {
+                    quiet.insert(name.clone());
+                }
+            }
+        }
+        quiet
+    }
+}
+
+/// `inst` is `parent`, or a part inside it. The paths are segments, so `nano` does not
+/// contain `nano2`.
+fn inside(circuit: &Circuit, inst: usize, parent: usize) -> bool {
+    let child = circuit.insts[inst].path.as_slice();
+    let of = circuit.insts[parent].path.as_slice();
+    child.len() >= of.len() && child[..of.len()] == of[..]
 }
 
 fn unplaced(s: &Scope, out: &mut Findings) {
@@ -384,6 +446,9 @@ fn floating(s: &Scope, out: &mut Findings) {
             continue;
         };
         let net = net.as_str();
+        if s.quiet.contains(net) {
+            continue;
+        }
         let root = s.net_root(net).expect("the reader named every net");
         let first = (0..s.circuit.pins.len())
             .find(|&k| s.root[k] == root && !s.circuit.pins[k].hole)
