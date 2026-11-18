@@ -1,0 +1,23 @@
+pulls ready
+static up 1
+static down 0
+static both 0
+static none 0
+poll 1000 27043
+rep 0 base 49 fall 103 rise 100
+rep 1 base 49 fall 103 rise 100
+rep 2 base 55 fall 109 rise 106
+rep 3 base 55 fall 109 rise 106
+rep 4 base 55 fall 82 rise 106
+rep 5 base 61 fall 88 rise 112
+rep 6 base 61 fall 88 rise 112
+rep 7 base 61 fall 88 rise 112
+rep 8 base 67 fall 94 rise 118
+rep 9 base 67 fall 94 rise 118
+rep 10 base 67 fall 94 rise 118
+rep 11 base 67 fall 94 rise 118
+rep 12 base 73 fall 100 rise 124
+rep 13 base 73 fall 100 rise 124
+rep 14 base 73 fall 100 rise 124
+rep 15 base 79 fall 106 rise 103
+PULLS DONE
