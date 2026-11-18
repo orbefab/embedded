@@ -4,7 +4,7 @@
 # `orbe get` reads it, close. The second is the light divider: move the light slider, read the
 # new light on the next frame and the divider voltage with `orbe get`. Needs Node 24, pnpm, cargo
 # and a Chromium, found as check-viewer-e2e.sh finds it. It never opens a desktop browser. Pass
-# `--renders <dir>` to also save screenshots there. check.sh does not run this.
+# `--renders <dir>` to also save screenshots there. scripts/check.sh web runs this.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 scripts/need-node-deps.sh scripts/check-headed.sh

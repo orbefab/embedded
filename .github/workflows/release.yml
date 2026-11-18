@@ -82,6 +82,9 @@ jobs:
       - name: Build the release archive
         run: scripts/release-build.sh ${{ matrix.target }}
 
+      - name: Check the release archive
+        run: scripts/check-release.sh .scratch/release/*.tar.gz
+
       - name: Upload the archive
         uses: actions/upload-artifact@v4
         with:
