@@ -189,6 +189,14 @@ def test_a_run_folder(tmp_path: Path) -> None:
     assert raises(lambda: check(tmp_path / "error", tmp_path / "none"))
 
 
+def test_a_uart_row_is_not_the_console() -> None:
+    body = "\n".join(console()) + "\n"
+    rows = ["t_ps,part,usart,byte", "0,u1,UART0,73"]
+    rows += [f"{k},u1,USB_SERIAL_JTAG,{ord(c)}" for k, c in enumerate(body, start=1)]
+    rows.append(f"{len(rows)},u1,UART2,10")
+    assert lines("\n".join(rows) + "\n") == console()
+
+
 def test_another_port_fails() -> None:
     text = "t_ps,part,usart,byte\n0,u1,USART0,65\n"
     assert raises(lambda: lines(text))
