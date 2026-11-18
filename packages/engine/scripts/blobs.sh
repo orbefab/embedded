@@ -9,7 +9,7 @@
 # from Espressif's esp-rom-elfs release 20241011, the archive ESP-IDF v5.5.5 pins in
 # tools/tools.json. The catalog part parts/esp32s3-qfn56 commits that ELF. When the cache lacks
 # a good copy, this script copies the committed file. It fetches the release only when that
-# file is absent. `--from` takes the archive or the ELF itself instead, and either must hash
+# file is absent or does not hash to the pinned value. `--from` takes the archive or the ELF itself instead, and either must hash
 # to the pinned value. Nothing is fetched while the cache holds a good copy. The release URL is
 # tried first. If that request fails, the same asset is fetched from the GitHub API.
 set -euo pipefail
