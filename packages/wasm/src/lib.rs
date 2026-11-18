@@ -79,8 +79,8 @@ impl Session {
     }
 
     /// Runs one command as a viewer sends it, such as `{"id": 1, "cmd": "press", "ref":
-    /// "@btn1"}`. Its `reply`, and a `frame` when the circuit shows something new, wait in
-    /// `messages`.
+    /// "@btn1"}`. Its `reply`, and the frames for what changed, wait in `messages`. Serial text
+    /// longer than one frame is several frames.
     pub fn command(&mut self, text: &str) {
         let (reply, message) = viewer::answer(&mut self.live, text);
         self.queue([message]);
@@ -89,8 +89,8 @@ impl Session {
     }
 
     /// One `play` tick, `wall_ms` milliseconds of wall time after the last: the session advances
-    /// by that much, up to one tick, and the tick's `frame` waits in `messages`. A paused session
-    /// does not move.
+    /// by that much, up to one tick, and the tick's frames wait in `messages`. Serial text longer
+    /// than one frame is several frames. A paused session does not move.
     pub fn tick(&mut self, wall_ms: f64) {
         let wall = Duration::try_from_secs_f64(wall_ms / 1000.0).unwrap_or_default();
         let pace = self.live.tick(wall);
