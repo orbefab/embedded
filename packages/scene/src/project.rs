@@ -8,9 +8,9 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use crate::catalog::Version;
-use crate::diagnostic::{Code, Findings};
+use crate::diagnostic::{Code, Diagnostic, Findings};
 use crate::files::{Files, Kind};
-use crate::model::{Comp, Part, Scene, TypeRef, decode_part, decode_scene};
+use crate::model::{Comp, ParamKind, Part, Scene, TypeRef, decode_part, decode_scene};
 use crate::name::did_you_mean;
 use crate::source::{FileId, Sources, Span, display};
 use crate::syntax::{self, Node};
@@ -125,6 +125,91 @@ struct Loader<'a> {
     used: BTreeSet<String>,
     /// `orbe add`, run from where the scene was named, as hints print it.
     add: String,
+    /// The project folder as the user named it, when that is not the current folder.
+    /// Printed commands are relative to where `orbe` ran, and `chmod` has no `-C`.
+    hint_at: Option<PathBuf>,
+}
+
+/// Parses `file` and reads it as a part. This is the part-file reader `orbe check` runs.
+pub(crate) fn parse_part(
+    sources: &Sources,
+    file: FileId,
+    label: String,
+    out: &mut Findings,
+    add: &str,
+) -> Option<Part> {
+    syntax::parse(sources, file, out)
+        .and_then(|tree| decode_part(sources, file, label, &tree, out, add))
+}
+
+/// Parses `file` and reads it as a scene. This is the scene reader `orbe check` runs.
+pub(crate) fn parse_scene(sources: &Sources, file: FileId, out: &mut Findings) -> Option<Scene> {
+    syntax::parse(sources, file, out).and_then(|tree| decode_scene(sources, file, &tree, out))
+}
+
+/// Findings [`parse_part`] reports for the text of `parts/<id>/part.jsonc`.
+pub(crate) fn part_diagnostics(id: &str, text: &str) -> Vec<Diagnostic> {
+    reader_diagnostics(
+        &format!("parts/{id}/part.jsonc"),
+        text,
+        |sources, file, out| {
+            parse_part(sources, file, id.to_string(), out, "orbe add");
+        },
+    )
+}
+
+/// A finding at each required number param with no default in the text of
+/// `parts/<id>/part.jsonc` whose bounds hold no value a scene could set. Empty when the file does
+/// not read, since [`part_diagnostics`] reports why.
+pub(crate) fn unusable_params(id: &str, text: &str) -> Vec<Diagnostic> {
+    reader_diagnostics(
+        &format!("parts/{id}/part.jsonc"),
+        text,
+        |sources, file, out| {
+            let mut quiet = Findings::default();
+            let Some(part) = parse_part(sources, file, id.to_string(), &mut quiet, "orbe add")
+            else {
+                return;
+            };
+            for decl in part.params.iter().filter(|decl| decl.default.is_none()) {
+                let ParamKind::Number { unit, range } = decl.kind else {
+                    continue;
+                };
+                if let Some((why, hint)) = crate::params::no_value(unit, range) {
+                    out.push(
+                        Code::Param,
+                        decl.span,
+                        format!("param `{}` takes no value: {why}", decl.name),
+                        hint,
+                    );
+                }
+            }
+        },
+    )
+}
+
+/// Findings [`parse_scene`] reports for the text of `blocks/<id>/scene.jsonc`.
+pub(crate) fn scene_diagnostics(id: &str, text: &str) -> Vec<Diagnostic> {
+    reader_diagnostics(
+        &format!("blocks/{id}/scene.jsonc"),
+        text,
+        |sources, file, out| {
+            parse_scene(sources, file, out);
+        },
+    )
+}
+
+fn reader_diagnostics(
+    rel: &str,
+    text: &str,
+    decode: impl FnOnce(&Sources, FileId, &mut Findings),
+) -> Vec<Diagnostic> {
+    let root = Path::new("registry");
+    let mut sources = Sources::new(root);
+    let file = sources.add(&root.join(rel), text.to_string());
+    let mut out = Findings::default();
+    decode(&sources, file, &mut out);
+    out.into_diagnostics(&sources)
 }
 
 /// Reads the scene and everything it uses. When the scene itself does not read, the files
@@ -134,7 +219,8 @@ pub(crate) fn load<'f>(
     scene_path: &Path,
     out: &mut Findings,
 ) -> Result<Project<'f>, Sources> {
-    let add = add_command(hint_dir(files, scene_path).as_deref());
+    let hint_at = hint_dir(files, scene_path);
+    let add = add_command(hint_at.as_deref());
     let scene_path = files
         .real(scene_path)
         .unwrap_or_else(|_| scene_path.to_path_buf());
@@ -154,11 +240,11 @@ pub(crate) fn load<'f>(
         missing: Vec::new(),
         used: BTreeSet::new(),
         add,
+        hint_at,
     };
-    let scene = loader.read(&scene_path).and_then(|file| {
-        let tree = syntax::parse(&loader.sources, file, loader.out)?;
-        decode_scene(&loader.sources, file, &tree, loader.out)
-    });
+    let scene = loader
+        .read(&scene_path)
+        .and_then(|file| parse_scene(&loader.sources, file, loader.out));
     let Some(scene) = scene else {
         return Err(loader.sources);
     };
@@ -200,7 +286,7 @@ impl Loader<'_> {
                 let file = self.sources.add(path, String::new());
                 let shown = display(self.sources.root(), path);
                 let hint = if error.kind() == io::ErrorKind::PermissionDenied {
-                    format!("make it readable, such as `chmod u+r {shown}`")
+                    chmod_hint(self.hint_at.as_deref(), Path::new(&shown))
                 } else {
                     "check that the path exists and is readable".into()
                 };
@@ -425,9 +511,7 @@ impl Loader<'_> {
         };
         let part = file.and_then(|file| {
             let before = self.out.len();
-            let mut part = syntax::parse(&self.sources, file, self.out).and_then(|tree| {
-                decode_part(&self.sources, file, label, &tree, self.out, &self.add)
-            });
+            let mut part = parse_part(&self.sources, file, label, self.out, &self.add);
             if let Some(part) = &mut part {
                 part.reported = self.out.since(before);
             }
@@ -832,7 +916,7 @@ impl Loader<'_> {
             }
             None if error.kind() == io::ErrorKind::PermissionDenied => {
                 let shown = display(&root, path);
-                let hint = format!("make it readable, such as `chmod u+r {shown}`");
+                let hint = chmod_hint(self.hint_at.as_deref(), Path::new(&shown));
                 (shown, hint)
             }
             None => (
@@ -990,10 +1074,22 @@ fn version_order(held: &str, carried: &str) -> Option<std::cmp::Ordering> {
     Some(Version::parse(held)?.cmp(&Version::parse(carried)?))
 }
 
-/// The SHA-256 over a folder's files, paths included: one line `<sha256>  <path>` per file,
-/// sorted by path, with `/` between path parts. Written as `sha256:<hex>`, as in `parts.lock`.
+/// The SHA-256 over a folder's published files, paths included: one line `<sha256>  <path>`
+/// per file, sorted by path, with `/` between path parts. Written as `sha256:<hex>`, as in
+/// `parts.lock`. Build output is left out. The paths are [`crate::published::published_paths`],
+/// the same set the catalog embeds.
 pub fn folder_hash(dir: &Path) -> io::Result<String> {
-    hash_folder(&Files::disk(), dir).map_err(|(_, error)| error)
+    let paths = crate::published::published_paths(dir)?;
+    let mut found = Vec::new();
+    for path in &paths {
+        let bytes = std::fs::read(path)?;
+        found.push((display(dir, path), bytes));
+    }
+    Ok(hash_files(
+        found
+            .iter()
+            .map(|(path, bytes)| (path.as_str(), bytes.as_slice())),
+    ))
 }
 
 /// [`folder_hash`] in `files`, with the path that could not be read.
@@ -1013,6 +1109,9 @@ fn collect(
 ) -> Result<(), (PathBuf, io::Error)> {
     let at = |path: &Path, error| (path.to_path_buf(), error);
     for path in files.list(dir).map_err(|e| at(dir, e))? {
+        if !crate::published::is_published(&display(root, &path)) {
+            continue;
+        }
         if files.is_dir(&path) {
             collect(files, root, &path, found)?;
         } else {
@@ -1131,6 +1230,43 @@ fn hint_dir(files: &Files, scene: &Path) -> Option<PathBuf> {
     };
     let found = real.as_deref().unwrap_or(scene).file_name() == Some("scene.jsonc".as_ref());
     (!found || dir != Path::new(".")).then_some(dir)
+}
+
+/// The `chmod` hint for `rel`, a path from the project root. `dir` is the project folder as
+/// the user named it from where `orbe` ran, or `None` when that folder is the current one.
+/// The command has to work from that directory: `chmod` has no `-C`.
+pub(crate) fn chmod_hint(dir: Option<&Path>, rel: &Path) -> String {
+    let path = chmod_path(dir, rel);
+    format!(
+        "make it readable, such as `chmod u+r {}`",
+        quote_path(&path)
+    )
+}
+
+/// `rel` joined onto the project folder, from where `orbe` ran. A path that starts with `-`
+/// gets `./` first, so `chmod` does not read it as an option.
+fn chmod_path(dir: Option<&Path>, rel: &Path) -> PathBuf {
+    let dir = dir.filter(|dir| !dir.as_os_str().is_empty() && *dir != Path::new("."));
+    let path = match dir {
+        Some(dir) => dir.join(rel),
+        None => rel.to_path_buf(),
+    };
+    if path.to_string_lossy().starts_with('-') {
+        Path::new(".").join(path)
+    } else {
+        path
+    }
+}
+
+fn quote_path(path: &Path) -> String {
+    #[cfg(unix)]
+    {
+        shell_path(path.as_os_str())
+    }
+    #[cfg(not(unix))]
+    {
+        shell_word(&path.to_string_lossy())
+    }
 }
 
 /// `dir`, an absolute path, relative to the current folder.

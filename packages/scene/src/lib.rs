@@ -20,6 +20,7 @@ mod model;
 mod name;
 mod params;
 mod project;
+mod published;
 mod reuse;
 mod shape;
 mod source;
@@ -33,24 +34,60 @@ use std::path::Path;
 pub use add::{AddCode, Reply, Request, RunError, run as add_parts};
 pub use catalog::Version;
 pub use circuit::{
-    Amount, BoardFacts, BoardLed, EnginePart, Gap, Instance, MapPart, Netlist, PartData, PinWhy,
-    Placement, Reading, RefMap, Supply, View, Wire, board_facts, one_part,
+    Amount, BoardFacts, BoardLed, EnginePart, FilePath, Gap, Instance, MapPart, Netlist, PartData,
+    PinWhy, Placement, Reading, RefMap, Supply, View, Wire, board_facts, one_part,
 };
 pub use diagnostic::{Code, Diagnostic, Lint};
 pub use files::Files;
 pub use holes::{holes_text, strip_text};
 pub use model::{FORMATS, STOP_PS, is_id};
 pub use project::{BLOCK, REGISTRY, folder_hash, is_registry_name, part_file, shell_join};
+pub use published::is_published;
 pub use summary::{
     BlockCard, Buy, Card, CardFile, Choice, Doc, Folder, Holes, Literal, Missing, NotSimulated,
     Param, Pin, Rating, Real, Threshold, block_card, card, cards, catalog_cards, ids_with_segment,
     missing_fields, near_names, param_sentence, search, si_amount,
 };
 
+/// Findings the part-file reader reports for `parts/<id>/part.jsonc` in `files`. [`read`] uses
+/// that reader on a part a project installed. Empty when the file is missing or not UTF-8.
+pub fn part_findings(id: &str, files: &Folder) -> Vec<Diagnostic> {
+    let Some(text) = utf8_file(files, "part.jsonc") else {
+        return Vec::new();
+    };
+    project::part_diagnostics(id, &text)
+}
+
+/// A finding at each required param of `parts/<id>/part.jsonc` in `files` that has no default
+/// and whose `min_exclusive` and `max_exclusive` hold no value a scene could set: no finite
+/// number, or for a duration no whole number of picoseconds, zero or more. [`read`] refuses every
+/// value such a param is set to. Empty when the file is missing, not UTF-8, or does not read.
+pub fn unusable_params(id: &str, files: &Folder) -> Vec<Diagnostic> {
+    let Some(text) = utf8_file(files, "part.jsonc") else {
+        return Vec::new();
+    };
+    project::unusable_params(id, &text)
+}
+
+/// Findings the scene reader reports for `blocks/<id>/scene.jsonc` in `files`. [`read`] uses
+/// that reader on a scene. Empty when the file is missing or not UTF-8.
+pub fn block_findings(id: &str, files: &Folder) -> Vec<Diagnostic> {
+    let Some(text) = utf8_file(files, "scene.jsonc") else {
+        return Vec::new();
+    };
+    project::scene_diagnostics(id, &text)
+}
+
+fn utf8_file(files: &Folder, rel: &str) -> Option<String> {
+    std::str::from_utf8(files.get(rel)?)
+        .ok()
+        .map(str::to_string)
+}
+
 /// Type-checks a scene and every part file it reaches. On success, the netlist the engine
 /// opens. Otherwise every finding, sorted by file, line and column.
 pub fn read(files: &Files, scene: &Path) -> Result<Netlist, Vec<Diagnostic>> {
-    compile(files, scene, false).map(|(netlist, _)| netlist)
+    compile(files, scene, false, false, None).map(|(netlist, _)| netlist)
 }
 
 /// The catalog part ids a scene names, including ids reached through other parts.
@@ -97,13 +134,44 @@ pub fn view(files: &Files, scene: &Path) -> Result<View, Vec<Diagnostic>> {
 /// [`read`], then on a scene that reads, the lint rules' warnings, sorted by file, line and
 /// column. Otherwise `read`'s errors.
 pub fn lint(files: &Files, scene: &Path) -> Result<Vec<Diagnostic>, Vec<Diagnostic>> {
-    compile(files, scene, true).map(|(_, warnings)| warnings)
+    compile(files, scene, true, false, None).map(|(_, warnings)| warnings)
+}
+
+/// What [`read_placed`] gives: the findings, and each path a file param takes.
+#[derive(Clone, Debug, Default)]
+pub struct Placed {
+    /// Every finding, sorted as [`read`] sorts them. Empty when the scene reads.
+    pub findings: Vec<Diagnostic>,
+    /// Each path a file param takes in the scene and the part files it reaches, the way
+    /// [`read`] resolves them: the value an instance gets, or else its part's default. Empty when
+    /// the scene does not load.
+    pub file_paths: Vec<FilePath>,
+}
+
+/// [`read`], with the file paths it reads. With `placing`, only the placement of the scene's
+/// parts is read, before a scene gives them what only it can: a value for each required param
+/// with no default, and a ground. An instance the scene places may then leave such a param out.
+/// Its model is not whole, so neither it nor a part under it that the param passes to goes to
+/// the engine. A scene that names no ground, with parts that name none, is not a finding. Every
+/// other finding is `read`'s.
+pub fn read_placed(files: &Files, scene: &Path, placing: bool) -> Placed {
+    let mut file_paths = Vec::new();
+    let findings = match compile(files, scene, false, placing, Some(&mut file_paths)) {
+        Ok(_) => Vec::new(),
+        Err(found) => found,
+    };
+    Placed {
+        findings,
+        file_paths,
+    }
 }
 
 fn compile(
     files: &Files,
     scene: &Path,
     lint: bool,
+    placing: bool,
+    paths: Option<&mut Vec<FilePath>>,
 ) -> Result<(Netlist, Vec<Diagnostic>), Vec<Diagnostic>> {
     let mut findings = diagnostic::Findings::default();
     let project = match project::load(files, scene, &mut findings) {
@@ -111,7 +179,13 @@ fn compile(
         Err(sources) => return Err(findings.into_diagnostics(&sources)),
     };
     let mut warnings = diagnostic::Findings::default();
-    let netlist = circuit::compile(&project, &mut findings, lint.then_some(&mut warnings));
+    let netlist = circuit::compile(
+        &project,
+        &mut findings,
+        lint.then_some(&mut warnings),
+        placing,
+        paths,
+    );
     match netlist {
         Some(netlist) if findings.is_empty() => {
             Ok((netlist, warnings.into_diagnostics(&project.sources)))

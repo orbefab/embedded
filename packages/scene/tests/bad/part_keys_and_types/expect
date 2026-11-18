@@ -1,8 +1,9 @@
-scene.syntax parts/board.jsonc:3:3 | a part has no key `titel` | did you mean `title`?
-scene.syntax parts/board.jsonc:4:11 | `tags` takes a list, found a string | write a list
-scene.syntax parts/board.jsonc:5:31 | `real` has no key `nuber` | did you mean `number`?
-scene.syntax parts/board.jsonc:6:49 | a param declaration has no key `requird` | did you mean `required`?
-scene.wires parts/board.jsonc:11:31 | a wire's hint has no key `colr` | did you mean `color`?
-scene.layout parts/board.jsonc:12:43 | a placement has no key `rotat` | did you mean `rotate`?
-scene.syntax parts/board.jsonc:14:79 | a not_simulated entry has no key `pin` | did you mean `pins`?
-scene.syntax parts/board.jsonc:15:17 | `joins_only` takes true or false, found a string | write true or false
+scene.syntax parts/board.jsonc:3:3 | a part has no key `files` | its keys are format, $schema, part, version, title, summary, tags, license, docs, real, uses, pins, model, params, parts, wires, layout, ground, readings, controls, joints, facts, view, not_simulated, buy, joins_only, holes
+scene.syntax parts/board.jsonc:4:3 | a part has no key `titel` | did you mean `title`?
+scene.syntax parts/board.jsonc:5:11 | `tags` takes a list, found a string | write a list
+scene.syntax parts/board.jsonc:6:31 | `real` has no key `nuber` | did you mean `number`?
+scene.syntax parts/board.jsonc:7:49 | a param declaration has no key `requird` | did you mean `required`?
+scene.wires parts/board.jsonc:12:31 | a wire's hint has no key `colr` | did you mean `color`?
+scene.layout parts/board.jsonc:13:43 | a placement has no key `rotat` | did you mean `rotate`?
+scene.syntax parts/board.jsonc:15:79 | a not_simulated entry has no key `pin` | did you mean `pins`?
+scene.syntax parts/board.jsonc:16:17 | `joins_only` takes true or false, found a string | write true or false

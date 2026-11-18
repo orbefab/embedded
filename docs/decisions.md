@@ -33,7 +33,7 @@ A command does what it names and nothing in the background. Where `orbe` could g
 - A param is a number, a choice or a file. A choice picks a named set of values, such as an LED's colour, and may tint the 3D model. A param never changes pins or shape. An LED's colour is required.
 - A part with children passes a param to a child with `{ "param": "<name>" }` on the child, as a prop passes through a component. The whole value passes, with no arithmetic for now.
 - Catalog parts name the real object in `real` (maker, part number, datasheet), and every model value cites its source.
-- A part's files, such as the ESP32-S3 ROM, live in its folder. `files` maps a name to a path.
+- A part's files, such as the ESP32-S3 ROM, live in its folder. A file param's `default` names one, as a path relative to the part file.
 - A part states its readings, such as an LED's `lit` above 2 mA and `dim` above 100 uA. `brightness` is the average forward current over the last 20 ms, the time since t = 0 when the session is younger. 2 mA is the lowest current of the forward fit. 100 uA is a hundredth of the 10 mA at which the datasheet rates luminous intensity, and ten times the 10 uA reverse-current maximum.
 - `joints` say what moves, such as a button's plunger, and `controls.press` names the joint it drives. Joints between two parts come later.
 - Versions are three numbers. A patch or minor version can't change a passing test.
@@ -43,7 +43,7 @@ A command does what it names and nothing in the background. Where `orbe` could g
 - The catalog is a registry: a static index plus one archive per part version, shaped like shadcn's registry. `orbe` reads it itself.
 - `orbe add <id>…` copies catalog parts, and the parts they use, into the project's `parts/<id>/`. A project holds one version per id. `orbe add --diff` shows what a newer version changes, and `--overwrite` takes it. Crossing a major version needs the version named.
 - Only `orbe add` copies or fetches parts. `orbe open` and `orbe test` never do. A missing part is an error that gives the exact `orbe add` command. When that add would stop because a part it uses differs, the command is the one that add prints.
-- `parts.lock` records each catalog copy: its id, version, registry and hash. It is a checksum record, with no version ranges, no solver and no shared store. A fresh clone holds every part and can check them offline.
+- `parts.lock` records each catalog copy: its id, version, registry and hash. The hash covers the files the part publishes. Build output in the folder is not one of them. It is a checksum record, with no version ranges, no solver and no shared store. A fresh clone holds every part and can check them offline.
 - Catalog parts are sealed, except a part built only from other parts. A sealed copy that differs from its `parts.lock` line is `part_modified`. Restore it with `orbe add <id> --overwrite`, or copy it to a part of your own. A copy that matches its lock line and is an older version than the catalog in this `orbe` is `part_outdated`, and check, open and test stop: this `orbe` carries one version of each id, and a run reads that version. One hint names every outdated id. A copy that matches its lock line and is a newer version is `part_newer`. Its hint says the project needs a newer orbe and names no `orbe add`. `--overwrite` leaves that copy, including a child of a board the command writes, and says the project needs a newer orbe for it. A refusal says the same for each copy it left, and the `orbe add` in its hint names every id that command would write. That command always names an id. When nothing can be written, the hint names no `orbe add` and says the project needs a newer orbe. A line from another registry stays `part_modified` and names that registry. A catalog part built from other parts, such as the nano board, can be edited at the version its lock names, and checks report that edit. An older version of it is still `part_outdated`, and a newer one is `part_newer`. A part whose bytes change without a new version is refused by a registry build. A binary built from that source reports `part_modified` for a sealed copy that locked the previous bytes of the same version.
 - Parts from other registries are named `@<registry>/<id>`. The first release reads the official registry only.
 - 3D models live in plain git, in the part's folder.
@@ -83,7 +83,7 @@ A command does what it names and nothing in the background. Where `orbe` could g
 - Nested names flatten for the engine by joining with `__`, so `@nano.D13` is the net `nano__D13`. Names may not contain `__`.
 - A viewer edit goes to the file that holds what it changes. If that file is used more than once, the viewer asks first. Sealed parts refuse edits. A part with no position is placed by the viewer for drawing only, and nothing is written until a person drags it.
 - Two hashes: one over every project file read, which guards writes, and one over the netlist, which says whether the simulation is current.
-- The ESP32-S3 takes one file param per flash image, `partitions` and `app`. Its ROM comes from the chip part's files.
+- The ESP32-S3 takes one file param per flash image, `partitions` and `app`. Its ROM is a file in the chip part's folder, named by a file param's `default`.
 
 ## Checking (Nov 4 2026)
 Type checking, linting and runtime diagnostics are separate.

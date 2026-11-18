@@ -476,6 +476,68 @@ fn an_outdated_board_is_an_error_and_not_a_note() {
 }
 
 #[test]
+fn bytecode_does_not_make_orbe_add_replace_a_sealed_copy() {
+    let project = project("nano-button");
+    let led = project.path().join("parts/led-5mm");
+    fs::write(led.join("a.pyc"), b"bytecode").unwrap();
+    fs::create_dir(led.join("__pycache__")).unwrap();
+    fs::write(
+        led.join("__pycache__").join("led.cpython-312.pyc"),
+        b"cached",
+    )
+    .unwrap();
+    let before = fs::read(led.join("part.jsonc")).unwrap();
+    let reply = orbe_scene::add_parts(
+        Some(project.path()),
+        &orbe_scene::Request {
+            ids: vec!["led-5mm".into()],
+            overwrite: false,
+            diff: false,
+            relock: false,
+        },
+    )
+    .unwrap();
+    let text = reply.text();
+    assert_eq!(reply.code(), 0, "{text}");
+    assert!(text.contains("skipped parts/led-5mm 0.1.0"), "{text}");
+    assert!(text.contains("parts.lock unchanged"), "{text}");
+    assert_eq!(fs::read(led.join("part.jsonc")).unwrap(), before);
+    assert!(led.join("a.pyc").is_file());
+}
+
+#[test]
+fn bytecode_in_a_sealed_copy_is_not_part_modified_and_an_author_file_is() {
+    let project = project("nano-button");
+    let led = project.path().join("parts/led-5mm");
+    fs::write(led.join("a.pyc"), b"bytecode").unwrap();
+    fs::create_dir(led.join("__pycache__")).unwrap();
+    fs::write(
+        led.join("__pycache__").join("led.cpython-312.pyc"),
+        b"cached",
+    )
+    .unwrap();
+    assert!(
+        orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc")).is_ok(),
+        "bytecode is not part of the sealed copy"
+    );
+
+    fs::write(led.join("notes.txt"), b"an author file\n").unwrap();
+    let found = scene_errors(project.path());
+    assert!(
+        found
+            .iter()
+            .any(|d| d.code == orbe_scene::Code::PartModified && d.message.contains("notes.txt")),
+        "{found:#?}"
+    );
+    assert!(
+        found
+            .iter()
+            .all(|d| !d.message.contains(".pyc") && !d.message.contains("__pycache__")),
+        "{found:#?}"
+    );
+}
+
+#[test]
 fn the_same_version_with_different_bytes_is_part_modified() {
     let project = project("nano-button");
     edit_led_resistance(project.path());
@@ -933,8 +995,12 @@ fn unreadable(path: &std::path::Path) {
 
 #[test]
 fn an_unreadable_part_file_is_one_io_error() {
+    if common::mode_000_reads() {
+        return;
+    }
     let project = project("nano-button");
-    unreadable(&project.path().join("parts/led-5mm/part.jsonc"));
+    let file = project.path().join("parts/led-5mm/part.jsonc");
+    unreadable(&file);
     let found = scene_errors(project.path());
     assert_eq!(found.len(), 1, "{found:#?}");
     assert_eq!(found[0].code, orbe_scene::Code::Io);
@@ -946,15 +1012,14 @@ fn an_unreadable_part_file_is_one_io_error() {
         "{}",
         found[0].message
     );
-    assert!(
-        found[0].hint.contains("chmod u+r parts/led-5mm/part.jsonc"),
-        "{}",
-        found[0].hint
-    );
+    assert_chmod_names(&found[0].hint, &file);
 }
 
 #[test]
 fn an_unreadable_file_in_a_copy_is_one_io_error_that_names_it() {
+    if common::mode_000_reads() {
+        return;
+    }
     let project = project("nano-button");
     let extra = project.path().join("parts/led-5mm/datasheet.txt");
     fs::write(&extra, "kept").unwrap();
@@ -969,14 +1034,25 @@ fn an_unreadable_file_in_a_copy_is_one_io_error_that_names_it() {
         "{}",
         found[0].message
     );
-    assert!(
-        found[0]
-            .hint
-            .contains("chmod u+r parts/led-5mm/datasheet.txt"),
-        "{}",
-        found[0].hint
-    );
+    assert_chmod_names(&found[0].hint, &extra);
     assert!(!found[0].hint.contains("link"), "{}", found[0].hint);
+}
+
+/// The chmod in `hint`, run from the current directory, names `file`.
+fn assert_chmod_names(hint: &str, file: &std::path::Path) {
+    let command = hint
+        .split('`')
+        .nth(1)
+        .unwrap_or_else(|| panic!("no command in {hint}"));
+    let path = command
+        .strip_prefix("chmod u+r ")
+        .unwrap_or_else(|| panic!("not a chmod: {hint}"));
+    let resolved = std::env::current_dir().unwrap().join(path);
+    assert_eq!(
+        resolved.canonicalize().unwrap(),
+        file.canonicalize().unwrap(),
+        "{hint}"
+    );
 }
 
 fn pin_net(json: &str, part: &str, pin: &str) -> String {

@@ -1,0 +1,13 @@
+{
+  "format": 1, "part": "lesd5d5-sod523", "version": "0.1.0", "title": "LESD5D5.0CT1G TVS diode, SOD-523", "license": "MIT OR Apache-2.0",
+  "summary": "Bidirectional 5 V ESD clamp in SOD-523. It stands off 5 V and breaks down between 5.6 V and 7.8 V. The engine has no bidirectional clamp, so the pins are left open.",
+  "tags": ["tvs", "esd", "diode", "sod-523"],
+  "docs": { "Leshan LESD5D5.0CT1G Rev.O": null },
+  "real": { "maker": "Leshan Radio Company", "number": "LESD5D5.0CT1G", "datasheet": "Leshan LESD5D5.0CT1G Rev.O" },
+  "pins": { "a": [1], "b": [2] },
+  "not_simulated": [{
+    "what": "bidirectional clamp",
+    "pins": ["a", "b"],
+    "why": "The clamp is open inside the 5 V standoff. A wire would short the line to ground, and a zener is one direction only. Leshan LESD5D5.0CT1G Rev.O: VRWM 5.0 V, IR 1 uA, VBR 5.6 V to 7.8 V at 1 mA, VC 11.6 V typical at 5 A and 18.6 V max at 9.4 A, PPK 174 W, C 15 pF typical.",
+  }],
+}
