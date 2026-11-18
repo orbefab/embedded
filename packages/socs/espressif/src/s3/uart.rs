@@ -18,9 +18,13 @@
 //! average bit length and not which bits are the long ones, so the accumulator is this model's
 //! rule. It also omits the APB-to-baud synchronizer, so a start bit is not delayed past the
 //! write. Turning the baud clock off drops a frame that has not finished, and that byte is
-//! not logged. A peripheral reset returns the port to power-on. A flash boot whose capture
-//! names no UART register programs UART0 from the captured `UartDev.baut_rate` the way ROM
-//! `Uart_Init` did, and a later reset still returns the silicon divider.
+//! not logged. A peripheral reset returns the port to power-on, apart from the FIFO pointers.
+//! Neither it nor a core reset moves them, as a board capture on 2026-11-18 showed: only
+//! `txfifo_rst` and `rxfifo_rst` zero them. So after a reset that followed traffic, a TX FIFO
+//! write or an RX FIFO load before that FIFO's reset bit is refused as `fifo_pointers`. A
+//! flash boot whose capture names no UART register programs UART0 from the captured
+//! `UartDev.baut_rate` the way ROM `Uart_Init` did, and a later reset still returns the
+//! silicon divider.
 
 use std::collections::VecDeque;
 
@@ -161,6 +165,16 @@ struct Port {
     rx_r: u16,
     /// `UART_MEM_RX_STATUS_REG`'s base for this port.
     rx_base: u16,
+    /// A byte entered the TX FIFO since power-on or the last `txfifo_rst`.
+    tx_used: bool,
+    /// A byte entered the RX FIFO since power-on or the last `rxfifo_rst`.
+    rx_used: bool,
+    /// A peripheral or core reset came after TX traffic, and no `txfifo_rst` since. The reset
+    /// kept the pointers and dropped the count, so where the next write lands and what the
+    /// shifter reads are not known.
+    tx_stale: bool,
+    /// The same for the RX FIFO, cleared by `rxfifo_rst`.
+    rx_stale: bool,
     /// A frame that would run on a clock or divider the model does not shift.
     refused: Option<(&'static str, Tick)>,
     sent: VecDeque<Sent>,
@@ -212,6 +226,10 @@ impl Port {
             rx_w: RX_BASE[index],
             rx_r: RX_BASE[index],
             rx_base: RX_BASE[index],
+            tx_used: false,
+            rx_used: false,
+            tx_stale: false,
+            rx_stale: false,
             refused: None,
             sent: VecDeque::new(),
             runs: true,
@@ -324,11 +342,15 @@ impl Port {
             self.tout_at = None;
             self.rx_w = self.rx_base;
             self.rx_r = self.rx_base;
+            self.rx_used = false;
+            self.rx_stale = false;
         }
         if value & 1 << 18 != 0 {
             self.tx_fifo.clear();
             self.tx_w = 0;
             self.tx_r = 0;
+            self.tx_used = false;
+            self.tx_stale = false;
             if self.tx.is_none() {
                 self.wire = true ^ self.txd_inv();
             }
@@ -346,19 +368,19 @@ impl Port {
             self.rx = None;
             self.tout_at = None;
         }
+        // A core reset empties the FIFO and keeps its pointers, as a board capture on
+        // 2026-11-18 showed. Only `txfifo_rst` and `rxfifo_rst` zero them.
         if value & (1 << 23 | 1 << 26) != 0 {
             self.tx_fifo.clear();
-            self.tx_w = 0;
-            self.tx_r = 0;
             self.tx = None;
             self.wire = true ^ self.txd_inv();
+            self.tx_stale |= self.tx_used;
         }
         if value & (1 << 23 | 1 << 27) != 0 {
             self.rx_fifo.clear();
             self.rx = None;
             self.tout_at = None;
-            self.rx_w = self.rx_base;
-            self.rx_r = self.rx_base;
+            self.rx_stale |= self.rx_used;
         }
         self.words[slot(CLK)] = value;
     }
@@ -376,6 +398,9 @@ impl Port {
         if !self.ram_clock() {
             return Err("mem_clock");
         }
+        if self.tx_stale {
+            return Err("fifo_pointers");
+        }
         if !self.tx_clock() {
             return Err("clock_off");
         }
@@ -387,6 +412,7 @@ impl Port {
             return Ok(());
         }
         self.tx_fifo.push_back(byte);
+        self.tx_used = true;
         self.tx_w = self.bump(self.tx_w, depth, 0);
         if self.tx.is_none() {
             // The write drives the pad from `wire` after this returns.
@@ -674,6 +700,7 @@ impl Port {
             return;
         }
         self.rx_fifo.push_back(byte);
+        self.rx_used = true;
         self.rx_w = self.bump(self.rx_w, depth, self.rx_base);
     }
 
@@ -911,6 +938,10 @@ impl Uarts {
         if offset == FIFO && port.runs && !port.ram_clock() {
             port.refused = Some(("mem_clock", now));
         }
+        // After a reset that followed RX traffic, the load's slot is not known.
+        if offset == FIFO && port.runs && port.rx_stale {
+            port.refused = Some(("fifo_pointers", now));
+        }
         port.read(offset)
     }
 
@@ -991,12 +1022,20 @@ impl Uarts {
 
     pub(crate) fn reset(&mut self, index: usize) {
         // Bytes that already left the shifter stay in the trace. The reset drops only what
-        // had not finished.
-        let sent = std::mem::take(&mut self.ports[index].sent);
-        let mem_clk = self.ports[index].mem_clk;
-        self.ports[index] = Port::new(index);
-        self.ports[index].sent = sent;
-        self.ports[index].mem_clk = mem_clk;
+        // had not finished. The FIFO pointers survive it, as a board capture on 2026-11-18
+        // showed, so a reset after traffic leaves them where the model cannot source them.
+        let old = std::mem::replace(&mut self.ports[index], Port::new(index));
+        let port = &mut self.ports[index];
+        port.sent = old.sent;
+        port.mem_clk = old.mem_clk;
+        port.tx_w = old.tx_w;
+        port.tx_r = old.tx_r;
+        port.rx_w = old.rx_w;
+        port.rx_r = old.rx_r;
+        port.tx_used = old.tx_used;
+        port.rx_used = old.rx_used;
+        port.tx_stale = old.tx_stale || old.tx_used;
+        port.rx_stale = old.rx_stale || old.rx_used;
     }
 
     /// ROM `Uart_Init` programs a console port from `UartDev.baut_rate` on the 40 MHz
@@ -1249,6 +1288,121 @@ mod tests {
         assert_eq!(uarts.ports[0].sclk_div(), 1);
         uarts.apply_rom_baud(0, 0);
         assert_eq!(uarts.ports[0].clkdiv(), 694);
+    }
+
+    /// Port 0 at 1 Mbaud after one byte has shifted out, as an app's early log leaves it.
+    fn after_traffic() -> Uarts {
+        let mut uarts = Uarts::new();
+        megabaud(&mut uarts.ports[0]);
+        uarts.ports[0].write(Tick(0), FIFO, 0x55, apb()).unwrap();
+        while uarts.ports[0].take_edge().is_some() {}
+        uarts.ports[0].settle(Tick(10 * 480), apb());
+        assert_eq!(uarts.ports[0].sent.len(), 1);
+        uarts
+    }
+
+    fn pointers(port: &Port) -> (u32, u32) {
+        let word = port.read(MEM_TX).unwrap();
+        (word & 0x3ff, word >> 11 & 0x3ff)
+    }
+
+    #[test]
+    fn a_peripheral_reset_after_tx_traffic_refuses_the_next_tx_write() {
+        let mut uarts = after_traffic();
+        uarts.reset(0);
+        megabaud(&mut uarts.ports[0]);
+        let port = &mut uarts.ports[0];
+        assert_eq!(
+            port.write(Tick(10_000), FIFO, 0x00, apb()),
+            Err("fifo_pointers")
+        );
+        assert!(port.tx.is_none());
+        assert!(port.tx_fifo.is_empty());
+    }
+
+    #[test]
+    fn a_core_reset_after_tx_traffic_refuses_the_next_tx_write() {
+        let mut uarts = after_traffic();
+        let port = &mut uarts.ports[0];
+        let clk = port.words[slot(CLK)];
+        port.write(Tick(10_000), CLK, clk | 1 << 23, apb()).unwrap();
+        port.write(Tick(10_001), CLK, clk, apb()).unwrap();
+        assert_eq!(
+            port.write(Tick(10_002), FIFO, 0x00, apb()),
+            Err("fifo_pointers")
+        );
+    }
+
+    #[test]
+    fn a_fifo_reset_after_the_reset_lets_the_write_shift() {
+        let mut uarts = after_traffic();
+        uarts.reset(0);
+        megabaud(&mut uarts.ports[0]);
+        let port = &mut uarts.ports[0];
+        let conf0 = port.words[slot(CONF0)];
+        // uart_param_config's order: RXFIFO_RST, then TXFIFO_RST, each set and cleared.
+        for bit in [17, 18] {
+            port.write(Tick(10_000), CONF0, conf0 | 1 << bit, apb())
+                .unwrap();
+            port.write(Tick(10_000), CONF0, conf0, apb()).unwrap();
+        }
+        assert_eq!(pointers(port), (0, 0));
+        port.write(Tick(10_001), FIFO, 0xa5, apb()).unwrap();
+        assert_eq!(port.tx.as_ref().map(|tx| tx.byte), Some(0xa5));
+        assert_eq!(pointers(port), (1, 1));
+    }
+
+    #[test]
+    fn a_reset_with_no_traffic_since_power_on_leaves_the_write_alone() {
+        let mut uarts = Uarts::new();
+        uarts.reset(0);
+        megabaud(&mut uarts.ports[0]);
+        uarts.ports[0].write(Tick(0), FIFO, 0x55, apb()).unwrap();
+        assert!(uarts.ports[0].tx.is_some());
+    }
+
+    #[test]
+    fn fifo_pointers_survive_a_peripheral_and_a_core_reset() {
+        let mut uarts = after_traffic();
+        let port = &mut uarts.ports[0];
+        // Two more bytes: one shifting and one queued when the reset comes.
+        port.write(Tick(10_000), FIFO, 0x01, apb()).unwrap();
+        port.write(Tick(10_001), FIFO, 0x02, apb()).unwrap();
+        assert_eq!(pointers(port), (3, 2));
+        uarts.reset(0);
+        let port = &mut uarts.ports[0];
+        assert_eq!(pointers(port), (3, 2));
+        assert_eq!(port.status() >> 16 & 0x3ff, 0, "the count is dropped");
+        let clk = port.words[slot(CLK)];
+        port.write(Tick(20_000), CLK, clk | 1 << 23 | 1 << 26 | 1 << 27, apb())
+            .unwrap();
+        port.write(Tick(20_001), CLK, clk, apb()).unwrap();
+        assert_eq!(pointers(port), (3, 2));
+    }
+
+    #[test]
+    fn a_reset_after_rx_traffic_refuses_the_next_rx_load_until_rxfifo_rst() {
+        let mut uarts = Uarts::new();
+        megabaud(&mut uarts.ports[0]);
+        uarts.ports[0].push_rx(0x41);
+        let rx = uarts.ports[0].read(MEM_RX).unwrap();
+        uarts.reset(0);
+        assert_eq!(
+            uarts.ports[0].read(MEM_RX),
+            Some(rx),
+            "the RX pointers survive"
+        );
+        let gpio = Gpio::new(&[]);
+        assert_eq!(uarts.read(0, Tick(0), FIFO, &gpio, apb()), Some(0));
+        assert_eq!(uarts.ports[0].refused, Some(("fifo_pointers", Tick(0))));
+        uarts.ports[0].refused = None;
+        let conf0 = uarts.ports[0].words[slot(CONF0)];
+        uarts.ports[0]
+            .write(Tick(1), CONF0, conf0 | 1 << 17, apb())
+            .unwrap();
+        uarts.ports[0].write(Tick(1), CONF0, conf0, apb()).unwrap();
+        uarts.read(0, Tick(2), FIFO, &gpio, apb());
+        assert_eq!(uarts.ports[0].refused, None);
     }
 
     #[test]

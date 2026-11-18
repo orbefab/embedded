@@ -1244,6 +1244,98 @@ mod tests {
         );
     }
 
+    /// UART0 at 1 Mbaud sends a byte, then `SYSTEM_UART_RST` pulses. The pointers survive the
+    /// reset after traffic, so the port's next TX write is refused until `txfifo_rst`.
+    fn stale_uart0() -> Vec<(u32, u32)> {
+        vec![
+            (0x6000_0078, 1 << 20 | 1 << 22 | 1 << 24 | 1 << 25),
+            (0x6000_0014, 80),
+            (0x6000_0048, 256),
+            (0x6000_0000, 0x55),
+            (SYSTEM + 0x20, 1 << 2),
+            (SYSTEM + 0x20, 0),
+        ]
+    }
+
+    /// Every reset the model makes after UART0 went stale ends the run or holds the chip, and
+    /// none reaches a UART0 FIFO write: the model runs neither the boot ROM's PRO CPU path nor
+    /// the bootloader after a reset, so their UART0 log never follows one. A TX write after the
+    /// same prefix is refused, which shows the prefix leaves UART0 stale.
+    #[test]
+    fn every_reset_after_a_stale_uart0_ends_or_holds_without_a_uart_refusal() {
+        let last = |pairs: Vec<(u32, u32)>, store6: Option<u32>| {
+            let program = stores(&[stale_uart0(), pairs].concat());
+            let mut chip = program.chip();
+            if let Some(word) = store6 {
+                chip.soc.restore(STORE6, word);
+            }
+            let seen = halts(&mut chip, 1_000_000, 1_000_000);
+            let refused = seen.iter().any(|&(halt, _)| {
+                matches!(
+                    halt,
+                    Halt::Fault(_, Fault::Refused(Refused::Register("UART0", _), _))
+                )
+            });
+            (seen.last().map(|&(halt, _)| halt), refused, chip.restart())
+        };
+        let write = stores(&[stale_uart0(), vec![(0x6000_0000, 0x00)]].concat());
+        let (halt, refused, _) = last(vec![(0x6000_0000, 0x00)], None);
+        assert!(refused, "{halt:?}");
+        assert!(
+            matches!(
+                halt,
+                Some(Halt::Fault(_, Fault::Refused(Refused::Register("UART0", "fifo_pointers"), pc)))
+                    if pc == store_pc(&write, 6)
+            ),
+            "{halt:?}"
+        );
+
+        // esp_restart: RTC_CNTL_SW_SYS_RST or RTC_CNTL_SW_PROCPU_RST with no hint holds the chip.
+        for bit in [1 << 31, 1 << 5] {
+            let (halt, refused, restart) = last(vec![(RTC_CNTL, bit)], Some(0));
+            assert!(!refused, "{bit:#x}: {halt:?}");
+            assert!(restart.is_some(), "{bit:#x}: {halt:?}");
+        }
+        // A software reset after IDF recorded a watchdog or a panic ends the run.
+        for (word, cause) in [
+            (hint(7), ResetCause::Watchdog),
+            (hint(4), ResetCause::Panic),
+        ] {
+            let (halt, refused, _) = last(vec![(RTC_CNTL, 1 << 31)], Some(word));
+            assert!(!refused, "{halt:?}");
+            assert!(
+                matches!(halt, Some(Halt::Fault(_, Fault::FaultRestart(got, _))) if got == cause),
+                "{halt:?}"
+            );
+        }
+        // Each watchdog's system or RTC reset ends the run.
+        let watchdogs = [
+            (vec![(TIMG0 + 0x50, 1)], Watchdog::Timg0, Reset::System),
+            (
+                vec![
+                    (TIMG1 + 0x48, 0),
+                    (TIMG1 + 0x50, 1),
+                    (TIMG1 + 0x48, EN | 3 << 29),
+                ],
+                Watchdog::Timg1,
+                Reset::System,
+            ),
+            (vec![(RTC_CNTL + 0x9c, 1)], Watchdog::Rtc, Reset::Rtc),
+        ];
+        for (pairs, watchdog, reset) in watchdogs {
+            let (halt, refused, _) = last(pairs, None);
+            assert!(!refused, "{watchdog:?}: {halt:?}");
+            assert!(
+                matches!(
+                    halt,
+                    Some(Halt::Fault(_, Fault::Watchdog { watchdog: w, reset: r, .. }))
+                        if w == watchdog && r == reset
+                ),
+                "{watchdog:?}: {halt:?}"
+            );
+        }
+    }
+
     /// A reset after IDF recorded a panic or a watchdog, or with no reason the model can read,
     /// ends the run at its store.
     #[test]
