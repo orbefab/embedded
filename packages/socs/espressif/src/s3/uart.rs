@@ -1,0 +1,1156 @@
+//! UART0, UART1 and UART2.
+//!
+//! Each port shifts bytes out of its TX FIFO onto its TXD signal and samples its RXD signal
+//! into its RX FIFO. The GPIO matrix routes both. So does the UART function of GPIO43, GPIO44,
+//! GPIO17 and GPIO18 when `SIG_IN_SEL` leaves the input on IO_MUX. A bit lasts `clkdiv` source
+//! clocks, plus one more on the
+//! bits where a fractional accumulator that starts at 0 for that frame crosses 16. The source
+//! is the APB clock when `sclk_sel` is 1 and the 40 MHz crystal when it is 3, divided by
+//! `sclk_div_num` + 1.
+//!
+//! With `tx_idle_num` 0 and the shifter idle, the start bit begins on the FIFO write's tick.
+//! The next queued byte's start bit begins when the previous stop bit ends. After the FIFO
+//! empties, the next write waits `tx_idle_num` bit times of idle mark. The TRM states the
+//! average bit length and not which bits are the long ones, so the accumulator is this model's
+//! rule. It also omits the APB-to-baud synchronizer, so a start bit is not delayed past the
+//! write. Turning the baud clock off drops a frame that has not finished, and that byte is
+//! not logged. A peripheral reset returns the port to power-on.
+
+use std::collections::VecDeque;
+
+use super::clock::{Tick, XTAL};
+use super::gpio::Gpio;
+
+/// `UART_FIFO_REG` through `UART_ID_REG`.
+const LAST: u32 = 0x80;
+const WORDS: usize = (LAST as usize / 4) + 1;
+
+pub(crate) const UART0: u32 = 0x6000_0000;
+pub(crate) const UART1: u32 = 0x6001_0000;
+pub(crate) const UART2: u32 = 0x6002_e000;
+pub(crate) const BASES: [u32; 3] = [UART0, UART1, UART2];
+pub(crate) const NAMES: [&str; 3] = ["UART0", "UART1", "UART2"];
+/// `ETS_UART0_INTR_SOURCE` and the two after it.
+pub(crate) const SOURCES: [u32; 3] = [27, 28, 29];
+/// `U0TXD_OUT_IDX`, `U1TXD_OUT_IDX`, `U2TXD_OUT_IDX`. The RXD inputs use the same numbers.
+pub(crate) const SIGNAL: [u16; 3] = [12, 15, 18];
+/// RX FIFO base address in `UART_MEM_RX_STATUS_REG`: UART0, UART1, UART2.
+const RX_BASE: [u16; 3] = [0x200, 0x280, 0x300];
+
+const FULL: u32 = 1 << 0;
+const EMPTY: u32 = 1 << 1;
+const PARITY_ERR: u32 = 1 << 2;
+const FRM_ERR: u32 = 1 << 3;
+const OVF: u32 = 1 << 4;
+const BRK: u32 = 1 << 7;
+const TOUT: u32 = 1 << 8;
+const TX_DONE: u32 = 1 << 14;
+/// Level bits. A clear leaves them set while the condition holds.
+const LEVEL: u32 = FULL | EMPTY;
+/// `INT_ENA` bits the model runs. Wakeup is kept and never raised: the IDF install mask sets
+/// it, and light sleep already ends the run.
+pub(crate) const ENA_ALLOWED: u32 =
+    FULL | EMPTY | PARITY_ERR | FRM_ERR | OVF | BRK | TOUT | TX_DONE | 1 << 19;
+
+const FIFO: u32 = 0x00;
+const INT_RAW: u32 = 0x04;
+const INT_ST: u32 = 0x08;
+const INT_ENA: u32 = 0x0c;
+const INT_CLR: u32 = 0x10;
+const CLKDIV: u32 = 0x14;
+const RX_FILT: u32 = 0x18;
+const STATUS: u32 = 0x1c;
+const CONF0: u32 = 0x20;
+const CONF1: u32 = 0x24;
+const FLOW: u32 = 0x34;
+const IDLE: u32 = 0x48;
+const RS485: u32 = 0x4c;
+const MEM: u32 = 0x60;
+const MEM_TX: u32 = 0x64;
+const MEM_RX: u32 = 0x68;
+const FSM: u32 = 0x6c;
+const CLK: u32 = 0x78;
+const ID: u32 = 0x80;
+
+const CONF0_RESET: u32 = 0x1000_001c;
+const CONF1_RESET: u32 = 96 | (96 << 10);
+const IDLE_RESET: u32 = 256 | (256 << 10);
+const MEM_RESET: u32 = (1 << 1) | (1 << 4) | (10 << 17);
+const CLK_RESET: u32 = (1 << 12) | (3 << 20) | (1 << 22) | (1 << 24) | (1 << 25);
+const ID_RESET: u32 = 1280 | (1 << 30);
+
+/// A finished byte for `serial.csv`: its port, the byte, the start bit and the end of the stop bit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Sent {
+    pub port: u8,
+    pub byte: u8,
+    pub start: Tick,
+    pub end: Tick,
+}
+
+/// A TXD change still to drive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Edge {
+    pub at: Tick,
+    pub port: u8,
+    pub level: bool,
+}
+
+#[derive(Clone, Debug)]
+struct Tx {
+    byte: u8,
+    start: Tick,
+    end: Tick,
+    /// Wire levels that differ from the level already driven, in time order.
+    edges: VecDeque<(Tick, bool)>,
+}
+
+#[derive(Clone, Debug)]
+struct Rx {
+    start: Tick,
+    end: Tick,
+    /// The byte assembled so far, low bit first.
+    byte: u8,
+    /// Samples not yet taken, and the bit index of the first. 0 is the start bit.
+    samples: VecDeque<Tick>,
+    next_bit: u8,
+    data_bits: u8,
+    /// The parity sample disagreed with the data bits.
+    parity_bad: bool,
+    /// Every sample so far was low.
+    low: bool,
+}
+
+#[derive(Clone, Debug)]
+struct Port {
+    words: [u32; WORDS],
+    tx_fifo: VecDeque<u8>,
+    rx_fifo: VecDeque<u8>,
+    tx: Option<Tx>,
+    rx: Option<Rx>,
+    /// The wire level TXD drives now, before the pad's own invert.
+    wire: bool,
+    /// The last logical level sampled on RXD. Mark is true.
+    rx_line: bool,
+    /// Latched event bits. The level bits are computed.
+    latched: u32,
+    ena: u32,
+    /// The first tick a new frame may start after the FIFO went empty.
+    idle_until: Tick,
+    /// When `rxfifo_tout` sets, if a byte still sits and no frame has started.
+    tout_at: Option<Tick>,
+    tx_w: u16,
+    tx_r: u16,
+    rx_w: u16,
+    rx_r: u16,
+    /// `UART_MEM_RX_STATUS_REG`'s base for this port.
+    rx_base: u16,
+    /// A frame that would run on a clock or divider the model does not shift.
+    refused: Option<(&'static str, Tick)>,
+    sent: VecDeque<Sent>,
+    /// The module clock is on and no reset bit holds the port. While this is clear a FIFO
+    /// write completes and the byte does not enter the shifter.
+    runs: bool,
+}
+
+impl Port {
+    fn new(index: usize) -> Port {
+        let mut words = [0; WORDS];
+        words[slot(CLKDIV)] = 694;
+        words[slot(RX_FILT)] = 8;
+        words[slot(CONF0)] = CONF0_RESET;
+        words[slot(CONF1)] = CONF1_RESET;
+        words[slot(0x28)] = 4095;
+        words[slot(0x2c)] = 4095;
+        words[slot(0x38)] = 240;
+        words[slot(0x44)] = 10;
+        words[slot(IDLE)] = IDLE_RESET;
+        words[slot(MEM)] = MEM_RESET;
+        words[slot(0x70)] = 4095;
+        words[slot(0x74)] = 4095;
+        words[slot(CLK)] = CLK_RESET;
+        words[slot(0x7c)] = 33_587_824;
+        words[slot(ID)] = ID_RESET;
+        Port {
+            words,
+            tx_fifo: VecDeque::new(),
+            rx_fifo: VecDeque::new(),
+            tx: None,
+            rx: None,
+            wire: true,
+            rx_line: true,
+            latched: 0,
+            ena: 0,
+            idle_until: Tick(0),
+            tout_at: None,
+            tx_w: 0,
+            tx_r: 0,
+            rx_w: RX_BASE[index],
+            rx_r: RX_BASE[index],
+            rx_base: RX_BASE[index],
+            refused: None,
+            sent: VecDeque::new(),
+            runs: true,
+        }
+    }
+
+    fn read(&self, offset: u32) -> Option<u32> {
+        if offset > LAST || !offset.is_multiple_of(4) {
+            return None;
+        }
+        Some(match offset {
+            FIFO => self.rx_fifo.front().copied().unwrap_or(0).into(),
+            INT_RAW => self.raw(),
+            INT_ST => self.raw() & self.ena,
+            INT_ENA => self.ena,
+            INT_CLR => 0,
+            STATUS => self.status(),
+            MEM_TX => u32::from(self.tx_w) | u32::from(self.tx_r) << 11,
+            MEM_RX => u32::from(self.rx_r) | u32::from(self.rx_w) << 11,
+            FSM => u32::from(self.rx.is_some()) | u32::from(self.tx.is_some()) << 4,
+            ID => self.words[slot(ID)] & !(1 << 31),
+            _ => self.words[slot(offset)],
+        })
+    }
+
+    fn write(&mut self, now: Tick, offset: u32, value: u32, apb: u64) -> Result<(), &'static str> {
+        if offset > LAST || !offset.is_multiple_of(4) {
+            return Ok(());
+        }
+        self.settle(now, apb);
+        if let Some(reason) = self.refusal(offset, value) {
+            return Err(reason);
+        }
+        match offset {
+            FIFO => self.push_tx(now, value as u8, apb)?,
+            INT_RAW | INT_CLR => self.latched &= !value,
+            INT_ENA => self.ena = value & ENA_ALLOWED,
+            CONF0 => self.write_conf0(value),
+            CLK => self.write_clk(value),
+            ID => self.words[slot(ID)] = value & !(1 << 31),
+            STATUS | INT_ST | MEM_TX | MEM_RX | FSM | 0x28 | 0x2c | 0x30 | 0x70 | 0x74 => {}
+            _ => self.words[slot(offset)] = value,
+        }
+        Ok(())
+    }
+
+    fn refusal(&self, offset: u32, value: u32) -> Option<&'static str> {
+        let shifting = self.tx.is_some() || self.rx.is_some();
+        let format = |mask: u32, old: u32| shifting && value & mask != old & mask;
+        match offset {
+            CLKDIV if format(0xfff | 0xf << 20, self.words[slot(CLKDIV)]) => {
+                Some("baud_while_sending")
+            }
+            CONF0 if value & 1 << 8 != 0 => Some("break"),
+            CONF0 if value & (0x3f << 9 | 1 << 16) != 0 => Some("irda"),
+            CONF0 if value & 1 << 15 != 0 => Some("hw_flow"),
+            CONF0 if value & 1 << 27 != 0 => Some("autobaud"),
+            CONF0 if (value >> 4) & 3 == 0 => Some("stop_bits"),
+            CONF0
+                if (self.tx.is_some() || self.rx.is_some()) && value & (1 << 17 | 1 << 18) != 0 =>
+            {
+                Some("reset_while_sending")
+            }
+            CONF0 if format(0x3f | 1 << 14 | 1 << 19 | 1 << 22, self.words[slot(CONF0)]) => {
+                Some("baud_while_sending")
+            }
+            CONF1 if value & 1 << 22 != 0 => Some("hw_flow"),
+            CONF1
+                if format(((1 << 10) - 1) << 10 | 1 << 23, self.words[slot(CONF1)]) && shifting =>
+            {
+                Some("baud_while_sending")
+            }
+            RX_FILT if value & 1 << 8 != 0 => Some("glitch"),
+            FLOW if value & 0x3f != 0 => Some("sw_flow"),
+            IDLE if format(0x3ff << 10, self.words[slot(IDLE)]) && shifting => {
+                Some("baud_while_sending")
+            }
+            RS485 if value & 1 != 0 => Some("rs485"),
+            MEM if value & 1 << 27 != 0 => Some("power_down"),
+            CLK if value & (0x3f | 0x3f << 6) != 0 => Some("sclk_frac"),
+            CLK if {
+                let sel = (value >> 20) & 3;
+                sel != 1 && sel != 3
+            } =>
+            {
+                Some("clock")
+            }
+            CLK if shifting && value & (1 << 23 | 1 << 26 | 1 << 27) != 0 => {
+                Some("reset_while_sending")
+            }
+            CLK if format(0xff << 12 | 3 << 20, self.words[slot(CLK)]) => {
+                Some("baud_while_sending")
+            }
+            _ => None,
+        }
+    }
+
+    fn write_conf0(&mut self, value: u32) {
+        if value & 1 << 17 != 0 {
+            self.rx_fifo.clear();
+            self.rx = None;
+            self.tout_at = None;
+            self.rx_w = self.rx_base;
+            self.rx_r = self.rx_base;
+        }
+        if value & 1 << 18 != 0 {
+            self.tx_fifo.clear();
+            self.tx_w = 0;
+            self.tx_r = 0;
+            if self.tx.is_none() {
+                self.wire = true ^ self.txd_inv();
+            }
+        }
+        self.words[slot(CONF0)] = value;
+    }
+
+    fn write_clk(&mut self, value: u32) {
+        // A baud clock that drops mid-frame stops the shifter. The unfinished byte is not a sent byte.
+        if value & (1 << 22 | 1 << 24) != (1 << 22 | 1 << 24) {
+            self.tx = None;
+            self.wire = true ^ self.txd_inv();
+        }
+        if value & (1 << 22 | 1 << 25) != (1 << 22 | 1 << 25) {
+            self.rx = None;
+            self.tout_at = None;
+        }
+        if value & (1 << 23 | 1 << 26) != 0 {
+            self.tx_fifo.clear();
+            self.tx_w = 0;
+            self.tx_r = 0;
+            self.tx = None;
+            self.wire = true ^ self.txd_inv();
+        }
+        if value & (1 << 23 | 1 << 27) != 0 {
+            self.rx_fifo.clear();
+            self.rx = None;
+            self.tout_at = None;
+            self.rx_w = self.rx_base;
+            self.rx_r = self.rx_base;
+        }
+        self.words[slot(CLK)] = value;
+    }
+
+    fn push_tx(&mut self, now: Tick, byte: u8, apb: u64) -> Result<(), &'static str> {
+        // The module clock is off, or a reset holds the port. The store completes and nothing shifts.
+        if !self.runs {
+            return Ok(());
+        }
+        if self.words[slot(CONF0)] & 1 << 18 != 0
+            || self.words[slot(CLK)] & (1 << 23 | 1 << 26) != 0
+        {
+            return Ok(());
+        }
+        if !self.tx_clock() {
+            return Err("clock_off");
+        }
+        if self.clkdiv() == 0 {
+            return Err("divider");
+        }
+        let depth = self.tx_depth();
+        if depth == 0 || self.tx_fifo.len() >= depth {
+            return Ok(());
+        }
+        self.tx_fifo.push_back(byte);
+        self.tx_w = self.bump(self.tx_w, depth, 0);
+        if self.tx.is_none() {
+            self.start_tx(now, apb);
+        }
+        Ok(())
+    }
+
+    fn start_tx(&mut self, now: Tick, apb: u64) {
+        if self.tx.is_some() || now < self.idle_until {
+            return;
+        }
+        let Some(byte) = self.tx_fifo.pop_front() else {
+            return;
+        };
+        let depth = self.tx_depth();
+        self.tx_r = self.bump(self.tx_r, depth, 0);
+        let Some(period) = self.period(apb) else {
+            self.tx_fifo.push_front(byte);
+            self.refused = Some(("clock_off", now));
+            return;
+        };
+        let tx = self.schedule(now, byte, period);
+        if let Some(&(at, level)) = tx.edges.front()
+            && at == now
+        {
+            self.wire = level;
+        }
+        let mut tx = tx;
+        if tx.edges.front().is_some_and(|&(at, _)| at == now) {
+            tx.edges.pop_front();
+        }
+        self.tx = Some(tx);
+    }
+
+    fn schedule(&self, at: Tick, byte: u8, period: u64) -> Tx {
+        let mut acc = 0u32;
+        let mut t = at.0;
+        let mut wire = self.wire;
+        let mut edges = VecDeque::new();
+        let data_bits = self.data_bits();
+        let mut bits = Vec::new();
+        bits.push(false);
+        for i in 0..data_bits {
+            bits.push(byte >> i & 1 == 1);
+        }
+        if self.parity_en() {
+            let mask = (1u32 << u32::from(data_bits)) - 1;
+            let ones = (u32::from(byte) & mask).count_ones() % 2 == 1;
+            bits.push(if self.odd() { !ones } else { ones });
+        }
+        bits.push(true);
+        for logical in bits {
+            let next = logical ^ self.txd_inv();
+            if next != wire {
+                edges.push_back((Tick(t), next));
+                wire = next;
+            }
+            t += bit_len(self.clkdiv(), self.frag(), &mut acc, period);
+        }
+        match self.stop() {
+            3 => t += bit_len(self.clkdiv(), self.frag(), &mut acc, period),
+            2 => {
+                let full = bit_len(self.clkdiv(), self.frag(), &mut acc, period);
+                t += full / 2;
+            }
+            _ => {}
+        }
+        Tx {
+            byte,
+            start: at,
+            end: Tick(t),
+            edges,
+        }
+    }
+
+    /// The earliest TXD change at or before `now` that is not driven yet.
+    fn next_edge(&self, now: Tick) -> Option<Edge> {
+        let tx = self.tx.as_ref()?;
+        let &(at, level) = tx.edges.front()?;
+        (at <= now).then_some(Edge { at, port: 0, level })
+    }
+
+    fn take_edge(&mut self) -> Option<Edge> {
+        let tx = self.tx.as_mut()?;
+        let (at, level) = tx.edges.pop_front()?;
+        self.wire = level;
+        Some(Edge { at, port: 0, level })
+    }
+
+    /// Advances frames, samples and the timeout through `now`. Pin edges are applied by the
+    /// caller first, which is what [`Self::note`] saw.
+    fn settle(&mut self, now: Tick, apb: u64) {
+        self.finish_tx(now, apb);
+        self.sample(now, apb);
+        self.fire_tout(now);
+        if self.tx.is_none() && now >= self.idle_until {
+            self.start_tx(now, apb);
+            self.finish_tx(now, apb);
+        }
+    }
+
+    fn finish_tx(&mut self, now: Tick, apb: u64) {
+        loop {
+            let Some(tx) = self.tx.as_ref() else {
+                return;
+            };
+            if tx.edges.front().is_some_and(|&(at, _)| at <= now) {
+                return;
+            }
+            if tx.end > now {
+                return;
+            }
+            let tx = self.tx.take().expect("the frame");
+            self.sent.push_back(Sent {
+                port: 0,
+                byte: tx.byte,
+                start: tx.start,
+                end: tx.end,
+            });
+            self.wire = true ^ self.txd_inv();
+            if self.tx_fifo.is_empty() {
+                self.idle_until = self.idle_end(tx.end, apb);
+                self.latched |= TX_DONE;
+                return;
+            }
+            self.idle_until = tx.end;
+            self.start_tx(tx.end, apb);
+        }
+    }
+
+    fn idle_end(&self, from: Tick, apb: u64) -> Tick {
+        let Some(period) = self.period(apb) else {
+            return from;
+        };
+        let mut acc = 0;
+        let mut t = from.0;
+        for _ in 0..self.tx_idle() {
+            t += bit_len(self.clkdiv(), self.frag(), &mut acc, period);
+        }
+        Tick(t)
+    }
+
+    fn note(&mut self, at: Tick, level: Option<bool>, apb: u64) {
+        let logical = self.sensed(level);
+        if self.rx_line && !logical && self.rx.is_none() && self.rx_runs() {
+            self.start_rx(at, apb);
+        }
+        self.rx_line = logical;
+    }
+
+    fn sensed(&self, level: Option<bool>) -> bool {
+        let wire = if self.loopback() {
+            self.wire
+        } else {
+            level.unwrap_or(true)
+        };
+        wire ^ self.rxd_inv()
+    }
+
+    fn start_rx(&mut self, at: Tick, apb: u64) {
+        if !self.runs || self.words[slot(CONF0)] & 1 << 17 != 0 {
+            return;
+        }
+        if self.clkdiv() == 0 {
+            self.refused = Some(("divider", at));
+            return;
+        }
+        let Some(period) = self.period(apb) else {
+            self.refused = Some(("clock_off", at));
+            return;
+        };
+        self.tout_at = None;
+        let data_bits = self.data_bits();
+        let mut acc = 0u32;
+        let mut t = at.0;
+        let mut samples = VecDeque::new();
+        let n = 1 + data_bits + u8::from(self.parity_en()) + 1;
+        for _ in 0..n {
+            let dur = bit_len(self.clkdiv(), self.frag(), &mut acc, period);
+            samples.push_back(Tick(t + dur / 2));
+            t += dur;
+        }
+        match self.stop() {
+            3 => t += bit_len(self.clkdiv(), self.frag(), &mut acc, period),
+            2 => {
+                let full = bit_len(self.clkdiv(), self.frag(), &mut acc, period);
+                t += full / 2;
+            }
+            _ => {}
+        }
+        self.rx = Some(Rx {
+            start: at,
+            end: Tick(t),
+            byte: 0,
+            samples,
+            next_bit: 0,
+            data_bits,
+            parity_bad: false,
+            low: true,
+        });
+    }
+
+    fn sample(&mut self, now: Tick, apb: u64) {
+        loop {
+            let Some(rx) = self.rx.as_ref() else {
+                return;
+            };
+            let Some(&at) = rx.samples.front() else {
+                return;
+            };
+            if at > now {
+                return;
+            }
+            let logical = self.rx_line;
+            let parity_on = self.parity_en();
+            let odd = self.odd();
+            let mask_errors = self.words[slot(CONF0)] & 1 << 26 != 0;
+            let rx = self.rx.as_mut().expect("the frame");
+            rx.samples.pop_front();
+            let bit = rx.next_bit;
+            rx.next_bit += 1;
+            rx.low &= !logical;
+            let data_bits = rx.data_bits;
+            let start = rx.start;
+            let end = rx.end;
+            if bit == 0 {
+                if logical {
+                    self.rx = None;
+                }
+                continue;
+            }
+            if bit <= data_bits {
+                if logical {
+                    rx.byte |= 1u8 << (bit - 1);
+                }
+                continue;
+            }
+            let parity_bit = parity_on && bit == data_bits + 1;
+            if parity_bit {
+                let ones = rx.byte.count_ones() % 2 == 1;
+                let expect = if odd { !ones } else { ones };
+                if logical != expect {
+                    rx.parity_bad = true;
+                }
+                let bad = rx.parity_bad;
+                if bad {
+                    self.latched |= PARITY_ERR;
+                }
+                continue;
+            }
+            let bad_parity = rx.parity_bad;
+            let stayed_low = rx.low;
+            let byte = rx.byte;
+            let frame = !logical;
+            if frame {
+                self.latched |= FRM_ERR;
+                if stayed_low {
+                    self.latched |= BRK;
+                }
+            }
+            let keep = !mask_errors || (!frame && !bad_parity);
+            self.rx = None;
+            self.sent.push_back(Sent {
+                port: 0,
+                byte,
+                start,
+                end,
+            });
+            if keep {
+                self.push_rx(byte);
+            }
+            self.arm_tout(end, apb);
+        }
+    }
+
+    fn push_rx(&mut self, byte: u8) {
+        let depth = self.rx_depth();
+        if depth == 0 || self.rx_fifo.len() >= depth {
+            if self.words[slot(CONF1)] & 1 << 20 == 0 {
+                self.latched |= OVF;
+            }
+            return;
+        }
+        self.rx_fifo.push_back(byte);
+        self.rx_w = self.bump(self.rx_w, depth, self.rx_base);
+    }
+
+    fn arm_tout(&mut self, from: Tick, apb: u64) {
+        if !self.rx_tout_en() || self.rx_fifo.is_empty() {
+            self.tout_at = None;
+            return;
+        }
+        let Some(period) = self.period(apb) else {
+            return;
+        };
+        let mut acc = 0;
+        let mut t = from.0;
+        for _ in 0..self.rx_tout() {
+            t += bit_len(self.clkdiv(), self.frag(), &mut acc, period);
+        }
+        self.tout_at = Some(Tick(t));
+    }
+
+    fn fire_tout(&mut self, now: Tick) {
+        if self.rx.is_some() {
+            return;
+        }
+        if self.tout_at.is_some_and(|at| at <= now) && !self.rx_fifo.is_empty() {
+            self.latched |= TOUT;
+            self.tout_at = None;
+        }
+    }
+
+    fn raw(&self) -> u32 {
+        let mut raw = self.latched & !LEVEL;
+        if self.rx_fifo.len() > self.rx_full() {
+            raw |= FULL;
+        }
+        if self.tx_fifo.len() < self.tx_empty() {
+            raw |= EMPTY;
+        }
+        raw
+    }
+
+    fn status(&self) -> u32 {
+        let rx_cnt = self.rx_fifo.len() as u32;
+        let tx_cnt = self.tx_fifo.len() as u32;
+        rx_cnt
+            | 1 << 14
+            | u32::from(self.rx_line) << 15
+            | tx_cnt << 16
+            | 1 << 29
+            | 1 << 30
+            | u32::from(self.wire) << 31
+    }
+
+    fn next_event(&self, now: Tick) -> Option<Tick> {
+        let edge = self
+            .tx
+            .as_ref()
+            .and_then(|tx| tx.edges.front().map(|&(at, _)| at));
+        let end = self.tx.as_ref().map(|tx| tx.end);
+        let sample = self.rx.as_ref().and_then(|rx| rx.samples.front().copied());
+        let idle = (self.tx.is_none() && !self.tx_fifo.is_empty() && self.idle_until > now)
+            .then_some(self.idle_until);
+        [edge, end, sample, self.tout_at, idle]
+            .into_iter()
+            .flatten()
+            .filter(|&at| at > now)
+            .min()
+    }
+
+    fn period(&self, apb: u64) -> Option<u64> {
+        if !self.sclk_en() {
+            return None;
+        }
+        let src = match self.sclk_sel() {
+            1 => apb,
+            3 => XTAL,
+            _ => return None,
+        };
+        Some(src * (u64::from(self.sclk_div()) + 1))
+    }
+
+    fn tx_clock(&self) -> bool {
+        let clk = self.words[slot(CLK)];
+        clk & (1 << 22) != 0 && clk & (1 << 24) != 0
+    }
+
+    fn rx_runs(&self) -> bool {
+        let clk = self.words[slot(CLK)];
+        self.sclk_en() && clk & (1 << 25) != 0 && self.words[slot(CONF0)] & 1 << 17 == 0
+    }
+
+    fn sclk_en(&self) -> bool {
+        self.words[slot(CLK)] & 1 << 22 != 0
+    }
+
+    fn sclk_sel(&self) -> u32 {
+        (self.words[slot(CLK)] >> 20) & 3
+    }
+
+    fn sclk_div(&self) -> u32 {
+        (self.words[slot(CLK)] >> 12) & 0xff
+    }
+
+    fn clkdiv(&self) -> u32 {
+        self.words[slot(CLKDIV)] & 0xfff
+    }
+
+    fn frag(&self) -> u32 {
+        (self.words[slot(CLKDIV)] >> 20) & 0xf
+    }
+
+    fn data_bits(&self) -> u8 {
+        (((self.words[slot(CONF0)] >> 2) & 3) + 5) as u8
+    }
+
+    fn stop(&self) -> u32 {
+        (self.words[slot(CONF0)] >> 4) & 3
+    }
+
+    fn parity_en(&self) -> bool {
+        self.words[slot(CONF0)] & 1 << 1 != 0
+    }
+
+    fn odd(&self) -> bool {
+        self.words[slot(CONF0)] & 1 != 0
+    }
+
+    fn txd_inv(&self) -> bool {
+        self.words[slot(CONF0)] & 1 << 22 != 0
+    }
+
+    fn rxd_inv(&self) -> bool {
+        self.words[slot(CONF0)] & 1 << 19 != 0
+    }
+
+    fn loopback(&self) -> bool {
+        self.words[slot(CONF0)] & 1 << 14 != 0
+    }
+
+    fn tx_depth(&self) -> usize {
+        (((self.words[slot(MEM)] >> 4) & 7) as usize) * 128
+    }
+
+    fn rx_depth(&self) -> usize {
+        (((self.words[slot(MEM)] >> 1) & 7) as usize) * 128
+    }
+
+    fn rx_full(&self) -> usize {
+        (self.words[slot(CONF1)] & 0x3ff) as usize
+    }
+
+    fn tx_empty(&self) -> usize {
+        ((self.words[slot(CONF1)] >> 10) & 0x3ff) as usize
+    }
+
+    fn tx_idle(&self) -> u32 {
+        (self.words[slot(IDLE)] >> 10) & 0x3ff
+    }
+
+    fn rx_tout_en(&self) -> bool {
+        self.words[slot(CONF1)] & 1 << 23 != 0
+    }
+
+    fn rx_tout(&self) -> u32 {
+        (self.words[slot(MEM)] >> 17) & 0x3ff
+    }
+
+    fn bump(&self, addr: u16, depth: usize, base: u16) -> u16 {
+        if depth == 0 {
+            return addr;
+        }
+        let off = addr.wrapping_sub(base) as usize;
+        base + ((off + 1) % depth) as u16
+    }
+}
+
+fn slot(offset: u32) -> usize {
+    (offset / 4) as usize
+}
+
+fn bit_len(clkdiv: u32, frag: u32, acc: &mut u32, period: u64) -> u64 {
+    let mut clocks = u64::from(clkdiv);
+    *acc += frag;
+    if *acc >= 16 {
+        clocks += 1;
+        *acc -= 16;
+    }
+    clocks * period
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Uarts {
+    ports: [Port; 3],
+}
+
+impl Uarts {
+    pub(crate) fn new() -> Uarts {
+        Uarts {
+            ports: [Port::new(0), Port::new(1), Port::new(2)],
+        }
+    }
+
+    pub(crate) fn index(addr: u32) -> Option<usize> {
+        let base = addr & !0xfff;
+        BASES.iter().position(|&known| known == base)
+    }
+
+    pub(crate) fn read(
+        &mut self,
+        index: usize,
+        now: Tick,
+        offset: u32,
+        gpio: &Gpio,
+        apb: u64,
+    ) -> Option<u32> {
+        self.settle_port(index, now, gpio, apb);
+        self.ports[index].read(offset)
+    }
+
+    pub(crate) fn write(
+        &mut self,
+        index: usize,
+        now: Tick,
+        offset: u32,
+        value: u32,
+        gpio: &mut Gpio,
+        apb: u64,
+    ) -> Result<(), &'static str> {
+        self.settle_port(index, now, gpio, apb);
+        self.ports[index].write(now, offset, value, apb)?;
+        self.drive(index, gpio);
+        self.note(index, now, gpio, apb);
+        Ok(())
+    }
+
+    pub(crate) fn pop(&mut self, index: usize) {
+        let base = RX_BASE[index];
+        let port = &mut self.ports[index];
+        if port.rx_fifo.pop_front().is_some() {
+            let depth = port.rx_depth();
+            port.rx_r = port.bump(port.rx_r, depth, base);
+            if port.rx_fifo.is_empty() {
+                port.tout_at = None;
+            }
+        }
+    }
+
+    pub(crate) fn line(&self, index: usize) -> bool {
+        self.ports[index].raw() & self.ports[index].ena & !(1 << 19) != 0
+    }
+
+    pub(crate) fn next_event(&self, now: Tick) -> Option<Tick> {
+        self.ports
+            .iter()
+            .filter_map(|port| port.next_event(now))
+            .min()
+    }
+
+    pub(crate) fn set_runs(&mut self, index: usize, runs: bool) {
+        self.ports[index].runs = runs;
+    }
+
+    /// Drops a frame the peripheral clock will not finish. Bytes already shifted stay logged.
+    pub(crate) fn halt(&mut self, index: usize) {
+        let port = &mut self.ports[index];
+        port.tx = None;
+        port.rx = None;
+        port.tout_at = None;
+        port.wire = true ^ port.txd_inv();
+    }
+
+    /// A byte is in the shifter, or a received frame is still being sampled.
+    pub(crate) fn shifting(&self, index: usize) -> bool {
+        let port = &self.ports[index];
+        port.tx.is_some() || port.rx.is_some()
+    }
+
+    pub(crate) fn uses_apb(&self, index: usize) -> bool {
+        self.ports[index].sclk_sel() == 1
+    }
+
+    pub(crate) fn take_refused(&mut self) -> Option<(Tick, &'static str, &'static str)> {
+        let index = (0..3).find(|&index| self.ports[index].refused.is_some())?;
+        let (setting, at) = self.ports[index].refused.take()?;
+        Some((at, NAMES[index], setting))
+    }
+
+    pub(crate) fn reset(&mut self, index: usize) {
+        // Bytes that already left the shifter stay in the trace. The reset drops only what
+        // had not finished.
+        let sent = std::mem::take(&mut self.ports[index].sent);
+        self.ports[index] = Port::new(index);
+        self.ports[index].sent = sent;
+    }
+
+    /// The earliest undriven TXD change at or before `now`.
+    pub(crate) fn next_edge(&self, now: Tick) -> Option<Edge> {
+        self.ports
+            .iter()
+            .enumerate()
+            .filter_map(|(index, port)| {
+                port.next_edge(now).map(|mut edge| {
+                    edge.port = index as u8;
+                    edge
+                })
+            })
+            .min_by_key(|edge| (edge.at, edge.port))
+    }
+
+    pub(crate) fn take_edge(&mut self, port: usize) -> Option<Edge> {
+        let edge = self.ports[port].take_edge()?;
+        Some(Edge {
+            port: port as u8,
+            ..edge
+        })
+    }
+
+    pub(crate) fn after_edge(&mut self, index: usize, at: Tick, gpio: &Gpio, apb: u64) {
+        self.note(index, at, gpio, apb);
+    }
+
+    pub(crate) fn settle(&mut self, now: Tick, gpio: &Gpio, apb: u64) {
+        for index in 0..3 {
+            self.settle_port(index, now, gpio, apb);
+        }
+    }
+
+    pub(crate) fn take_sent(&mut self, through: Tick) -> Option<Sent> {
+        let (index, _) = self
+            .ports
+            .iter()
+            .enumerate()
+            .filter_map(|(index, port)| port.sent.front().map(|sent| (index, sent.end)))
+            .filter(|&(_, end)| end <= through)
+            .min_by_key(|&(index, end)| (end, index))?;
+        let mut sent = self.ports[index].sent.pop_front().expect("the byte");
+        sent.port = index as u8;
+        Some(sent)
+    }
+
+    fn settle_port(&mut self, index: usize, now: Tick, gpio: &Gpio, apb: u64) {
+        self.note(index, now, gpio, apb);
+        self.ports[index].settle(now, apb);
+    }
+
+    pub(crate) fn note_pins(&mut self, at: Tick, gpio: &Gpio, apb: u64) {
+        for index in 0..3 {
+            self.note(index, at, gpio, apb);
+        }
+    }
+
+    fn note(&mut self, index: usize, at: Tick, gpio: &Gpio, apb: u64) {
+        let level = gpio.input(SIGNAL[index]);
+        self.ports[index].note(at, level, apb);
+    }
+
+    fn drive(&self, index: usize, gpio: &mut Gpio) {
+        gpio.set_signal(SIGNAL[index], self.ports[index].wire);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn apb() -> u64 {
+        6
+    }
+
+    /// 1 Mbaud from an 80 MHz APB: every bit is 80 APB clocks, 480 ticks.
+    fn megabaud(port: &mut Port) {
+        port.words[slot(CLK)] = (1 << 20) | (1 << 22) | (1 << 24) | (1 << 25);
+        port.words[slot(CLKDIV)] = 80;
+        port.words[slot(IDLE)] = 256;
+        port.words[slot(CONF0)] = CONF0_RESET;
+    }
+
+    #[test]
+    fn a_bit_with_a_fraction_grows_when_the_accumulator_crosses_16() {
+        let mut acc = 0;
+        let mut lengths = Vec::new();
+        for _ in 0..16 {
+            lengths.push(bit_len(694, 7, &mut acc, 6));
+        }
+        assert_eq!(acc, 0);
+        assert_eq!(lengths.iter().filter(|&&n| n == 694 * 6).count(), 9);
+        assert_eq!(lengths.iter().filter(|&&n| n == 695 * 6).count(), 7);
+    }
+
+    #[test]
+    fn a_byte_starts_on_its_write_and_its_edges_are_the_bit_boundaries() {
+        let mut port = Port::new(0);
+        megabaud(&mut port);
+        port.write(Tick(1000), FIFO, 0x55, apb()).unwrap();
+        assert!(!port.wire, "the start bit");
+        assert_eq!(port.tx.as_ref().map(|tx| tx.start), Some(Tick(1000)));
+        let tx = port.tx.as_ref().unwrap();
+        // 0x55 is 01010101, LSB first: high, low, high, low, high, low, high, low, then stop high.
+        // Start is already driven. The remaining edges are each bit that differs, 480 ticks apart.
+        let edges: Vec<_> = tx.edges.iter().map(|&(at, level)| (at.0, level)).collect();
+        assert_eq!(
+            edges,
+            vec![
+                (1480, true),
+                (1960, false),
+                (2440, true),
+                (2920, false),
+                (3400, true),
+                (3880, false),
+                (4360, true),
+                (4840, false),
+                (5320, true),
+            ]
+        );
+        assert_eq!(tx.end, Tick(1000 + 10 * 480));
+    }
+
+    #[test]
+    fn loopback_returns_the_byte_and_times_out_after_the_stop_bit() {
+        let mut port = Port::new(0);
+        megabaud(&mut port);
+        port.words[slot(CONF0)] |= 1 << 14;
+        port.words[slot(CONF1)] |= 1 << 23;
+        port.words[slot(MEM)] = (port.words[slot(MEM)] & !(0x3ff << 17)) | (2 << 17);
+        port.write(Tick(0), FIFO, 0x00, apb()).unwrap();
+        port.note(Tick(0), None, apb());
+        for _ in 0..64 {
+            let Some(at) = port.next_event(Tick(0)) else {
+                break;
+            };
+            while let Some(edge) = port.next_edge(at) {
+                port.take_edge();
+                port.note(edge.at, None, apb());
+            }
+            port.settle(at, apb());
+            if port.raw() & TOUT != 0 {
+                break;
+            }
+        }
+        assert_eq!(port.rx_fifo.front().copied(), Some(0x00));
+        assert!(port.raw() & TOUT != 0, "two bit times after the stop bit");
+        let sent: Vec<_> = port.sent.iter().map(|sent| sent.byte).collect();
+        assert_eq!(
+            sent,
+            vec![0x00, 0x00],
+            "the received byte and the sent byte"
+        );
+        assert_eq!(
+            port.sent.iter().map(|sent| sent.start).collect::<Vec<_>>(),
+            vec![Tick(0), Tick(0)]
+        );
+    }
+
+    #[test]
+    fn even_parity_on_an_eight_bit_byte_comes_back() {
+        let mut port = Port::new(0);
+        megabaud(&mut port);
+        port.words[slot(CONF0)] |= 1 << 1 | 1 << 14;
+        port.write(Tick(0), FIFO, 0x01, apb()).unwrap();
+        port.note(Tick(0), None, apb());
+        for _ in 0..64 {
+            let Some(at) = port.next_event(Tick(0)) else {
+                break;
+            };
+            while let Some(edge) = port.next_edge(at) {
+                port.take_edge();
+                port.note(edge.at, None, apb());
+            }
+            port.settle(at, apb());
+            if port.rx.is_none() && !port.rx_fifo.is_empty() {
+                break;
+            }
+        }
+        assert_eq!(port.rx_fifo.front().copied(), Some(0x01));
+        assert_eq!(port.raw() & PARITY_ERR, 0);
+    }
+
+    #[test]
+    fn hardware_flow_and_a_baud_change_while_shifting_are_refused() {
+        let mut port = Port::new(0);
+        megabaud(&mut port);
+        port.write(Tick(0), FIFO, 0x11, apb()).unwrap();
+        assert_eq!(
+            port.write(Tick(10), CONF0, CONF0_RESET | 1 << 15, apb()),
+            Err("hw_flow")
+        );
+        assert_eq!(
+            port.write(Tick(10), CLKDIV, 40, apb()),
+            Err("baud_while_sending")
+        );
+        assert_eq!(port.write(Tick(10), FLOW, 1, apb()), Err("sw_flow"));
+        assert_eq!(port.write(Tick(10), RS485, 1, apb()), Err("rs485"));
+        let rtc = (CLK_RESET & !(3 << 20)) | (2 << 20);
+        assert_eq!(port.write(Tick(10), CLK, rtc, apb()), Err("clock"));
+    }
+
+    #[test]
+    fn clearing_the_baud_clock_while_shifting_drops_the_unfinished_byte() {
+        let mut port = Port::new(0);
+        megabaud(&mut port);
+        port.write(Tick(0), FIFO, 0x11, apb()).unwrap();
+        let off = port.words[slot(CLK)] & !(1 << 24);
+        port.write(Tick(10), CLK, off, apb()).unwrap();
+        assert!(port.tx.is_none());
+        assert!(port.sent.is_empty());
+        assert!(port.wire);
+    }
+
+    #[test]
+    fn a_fifo_write_while_the_module_is_gated_sends_nothing() {
+        let mut port = Port::new(0);
+        megabaud(&mut port);
+        port.runs = false;
+        port.write(Tick(0), FIFO, 0x55, apb()).unwrap();
+        assert!(port.tx.is_none());
+        assert!(port.tx_fifo.is_empty());
+        assert!(port.sent.is_empty());
+    }
+}

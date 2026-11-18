@@ -4,11 +4,19 @@
 //! A pad drives from the matrix when its IO_MUX function is the GPIO one: function 1 on every
 //! pad, or function 0 on a pad whose function 0 is its GPIO. The matrix's signal 256 is the
 //! pad's own `GPIO_OUT` bit, with `GPIO_ENABLE` as its output enable. A peripheral signal the
-//! SoC gives a level, as SPI2 does its idle levels and RMT does signal 81, drives that level, enabled by the peripheral
-//! unless `OEN_SEL` hands the enable to `GPIO_ENABLE`. A pad routed to any other signal, or to
-//! another IO_MUX function, drives nothing. A pad whose `GPIO_PINn` sets `PAD_DRIVER` is open
-//! drain, and drives nothing for a high level. A pad that does not drive pulls up when `FUN_WPU`
-//! is set. `FUN_WPD` is kept and not stamped, since the seam has no pull-down drive.
+//! SoC gives a level, as SPI2 does its idle levels, RMT does signal 81, and the UARTs do signals
+//! 12, 15 and 18, drives that level, enabled by the peripheral
+//! unless `OEN_SEL` hands the enable to `GPIO_ENABLE`. Two UART functions bypass the matrix.
+//! GPIO43 in function 0 drives UART0 TXD, signal 12, and GPIO17 in function 2 drives UART1 TXD,
+//! signal 15. The peripheral enables the pad. UART2 has no such pin. A pad routed to a signal
+//! with no level, or to another IO_MUX function, drives nothing. A pad whose `GPIO_PINn` sets
+//! `PAD_DRIVER` is open drain, and drives nothing for a high level. A pad that does not drive
+//! pulls up when `FUN_WPU` is set. `FUN_WPD` is kept and not stamped, since the seam has no
+//! pull-down drive.
+//!
+//! With `SIG_IN_SEL` clear, UART0 RXD reads GPIO44 in function 0 and UART1 RXD reads GPIO18 in
+//! function 2, each while `FUN_IE` is set. A clear input enable, or any other function, leaves
+//! the signal unread, which a UART takes as the idle mark. `SIG_IN_SEL` set reads the matrix.
 //!
 //! Each change that can move a level senses the pads, and latches each edge its pad's
 //! `INT_TYPE` names into `GPIO_STATUS`. A level type is pending while its level holds.
@@ -296,12 +304,13 @@ impl Gpio {
             })
     }
 
-    /// The level input `signal` reads through the matrix, or `None` when `SIG_IN_SEL` leaves it
-    /// to IO_MUX or `IN_SEL` names no pad.
+    /// The level input `signal` reads. `SIG_IN_SEL` set reads the matrix. Clear reads the UART
+    /// function of GPIO44 or GPIO18, or `None` when that pad's input is off or its function is
+    /// something else. A UART takes `None` as the idle mark.
     pub(crate) fn input(&self, signal: u16) -> Option<bool> {
         let sel = self.in_sel[usize::from(signal)];
         if sel & SIG_IN_SEL == 0 {
-            return None;
+            return self.direct_rx(signal);
         }
         let level = match sel & IN_SEL {
             IN_HIGH => true,
@@ -331,9 +340,13 @@ impl Gpio {
             .map(|pad| pad as u8)
     }
 
-    /// The peripheral signal the pad drives from the matrix, enabled, and whether `OUT_INV_SEL`
-    /// inverts it.
+    /// The peripheral signal the pad drives, enabled, and whether `OUT_INV_SEL` inverts it. A
+    /// UART function that bypasses the matrix is not inverted here.
     pub(crate) fn carries(&self, pad: usize) -> Option<(u16, bool)> {
+        if let Some(signal) = self.direct_tx(pad) {
+            let driven = self.signals[usize::from(signal)].is_some();
+            return driven.then_some((signal, false));
+        }
         let sel = self.out_sel[pad];
         let signal = (sel & OUT_SEL) as u16;
         let peripheral = usize::from(signal) < SIGNALS && self.output(pad).0;
@@ -349,8 +362,39 @@ impl Gpio {
         }
     }
 
+    /// UART TXD from the pad's IO_MUX function, not the matrix. GPIO43 function 0 is U0TXD.
+    /// GPIO17 function 2 is U1TXD. UART2 has no such pin.
+    fn direct_tx(&self, pad: usize) -> Option<u16> {
+        let func = (self.io_mux[pad] & MCU_SEL) >> MCU_SEL_SHIFT;
+        match (pad, func) {
+            (43, 0) => Some(12),
+            (17, 2) => Some(15),
+            _ => None,
+        }
+    }
+
+    /// The pad level a UART RXD signal reads when `SIG_IN_SEL` leaves it on IO_MUX.
+    fn direct_rx(&self, signal: u16) -> Option<bool> {
+        let (pad, func) = match signal {
+            12 => (44, 0),
+            15 => (18, 2),
+            _ => return None,
+        };
+        let mux = self.io_mux[pad];
+        if (mux & MCU_SEL) >> MCU_SEL_SHIFT != func || mux & FUN_IE == 0 {
+            return None;
+        }
+        Some(self.levels >> pad & 1 != 0)
+    }
+
     /// The output enable and the level the pad drives when enabled.
     fn output(&self, pad: usize) -> (bool, bool) {
+        if let Some(signal) = self.direct_tx(pad) {
+            return match self.signals[usize::from(signal)] {
+                Some(level) => (true, level),
+                None => (false, false),
+            };
+        }
         let sel = self.out_sel[pad];
         if !self.matrix_drives(pad) {
             return (false, false);
@@ -492,11 +536,7 @@ mod tests {
         let mut gpio = Gpio::new(&[]);
         gpio.write(0x30, 1 << (43 - 32)).unwrap();
         gpio.write(0x14, 1 << (43 - 32)).unwrap();
-        assert_eq!(
-            gpio.drive(43),
-            PadDrive::Off,
-            "function 0 of GPIO43 is U0TXD"
-        );
+        assert_eq!(gpio.drive(43), PadDrive::Off, "U0TXD with no signal level");
         gpio.write_io_mux(0x4 + 4 * 43, GPIO_FUNC);
         assert_eq!(gpio.drive(43), PadDrive::High);
         gpio.write(0x554 + 4 * 43, 12).unwrap();
@@ -510,6 +550,47 @@ mod tests {
         gpio.write(0x554 + 4 * 43, SIG_GPIO_OUT | OUT_INV_SEL)
             .unwrap();
         assert_eq!(gpio.drive(43), PadDrive::Low, "inverted");
+    }
+
+    #[test]
+    fn a_uart_function_drives_and_samples_without_the_matrix() {
+        let mut gpio = Gpio::new(&[43, 44, 17, 18]);
+        assert_eq!(gpio.input(12), None, "GPIO44 input disabled");
+        assert_eq!(gpio.drive(43), PadDrive::Off, "U0TXD with no level");
+        gpio.set_signal(12, true);
+        assert_eq!(gpio.drive(43), PadDrive::High, "U0TXD idle mark");
+        assert!(gpio.moves(12, false));
+        assert!(!gpio.moves(12, true));
+        gpio.set_signal(12, false);
+        assert_eq!(gpio.drive(43), PadDrive::Low);
+        assert!(gpio.write_io_mux(0x4 + 4 * 43, GPIO_FUNC));
+        assert_eq!(gpio.drive(43), PadDrive::Off, "the GPIO function");
+        assert!(!gpio.moves(12, true), "the matrix no longer carries U0TXD");
+        assert!(gpio.write_io_mux(0x4 + 4 * 43, IO_MUX_RESET));
+        assert_eq!(gpio.drive(43), PadDrive::Low, "function 0 again");
+
+        assert!(gpio.write_io_mux(0x4 + 4 * 44, IO_MUX_RESET | FUN_IE));
+        assert_eq!(gpio.input(12), Some(false), "the net starts low");
+        gpio.set_pad(44, true);
+        assert_eq!(gpio.input(12), Some(true));
+        assert!(gpio.write_io_mux(0x4 + 4 * 44, GPIO_FUNC | FUN_IE));
+        assert_eq!(gpio.input(12), None, "function 1 leaves U0RXD idle");
+        assert!(gpio.write_io_mux(0x4 + 4 * 44, IO_MUX_RESET | FUN_IE));
+        gpio.write(0x154 + 4 * 12, SIG_IN_SEL | 43).unwrap();
+        assert_eq!(gpio.input(12), Some(false), "the matrix names GPIO43");
+        gpio.write(0x154 + 4 * 12, 0).unwrap();
+        assert_eq!(gpio.input(12), Some(true), "back on GPIO44");
+
+        assert_eq!(gpio.drive(17), PadDrive::Off, "function 0 is GPIO");
+        gpio.set_signal(15, true);
+        assert!(gpio.write_io_mux(0x4 + 4 * 17, 2 << MCU_SEL_SHIFT));
+        assert_eq!(gpio.drive(17), PadDrive::High, "U1TXD");
+        assert!(gpio.moves(15, false));
+        assert!(gpio.write_io_mux(0x4 + 4 * 18, (2 << MCU_SEL_SHIFT) | FUN_IE));
+        assert_eq!(gpio.input(15), Some(false));
+        gpio.set_pad(18, true);
+        assert_eq!(gpio.input(15), Some(true));
+        assert_eq!(gpio.input(18), None, "UART2 has no direct pin");
     }
 
     #[test]
