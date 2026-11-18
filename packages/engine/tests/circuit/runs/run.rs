@@ -260,25 +260,25 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
                 doc["diagnostics"]
             );
         } else if name == "esp32s3-dualcore" {
-            // The 10 registers the app touches that the model does not keep, the write that
+            // The 8 registers the app touches that the model does not keep, the write that
             // sets the reset of SYSTEM_WDG at start-up, and the 6 writes that pulse the resets
             // of SYSTIMER, TIMG0 and TIMG1 at start-up.
-            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 17];
+            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 15];
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
             assert_kept_resets(&name, &doc, 7);
         } else if name == "esp32s3-echo" {
-            // The 9 registers the app touches that the model does not keep, the write that sets
+            // The 7 registers the app touches that the model does not keep, the write that sets
             // the reset of SYSTEM_WDG at start-up, and the 6 writes that pulse the resets of
             // SYSTIMER, TIMG0 and TIMG1 at start-up.
-            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 16];
+            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 14];
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
             assert_kept_resets(&name, &doc, 7);
         } else if name == "esp32s3-encoder" {
-            // The 10 registers the app touches that the model does not keep, among them the two
+            // The 8 registers the app touches that the model does not keep, among them the two
             // RTC IO pad words `gpio_config` reads, the write that sets the reset of SYSTEM_WDG
             // at start-up, and the 6 writes that pulse the resets of SYSTIMER, TIMG0 and TIMG1
             // at start-up.
-            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 17];
+            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 15];
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
             assert_kept_resets(&name, &doc, 7);
             // The ISR prints one `edge` line for each of the 7 closings, so it fails when the
@@ -287,32 +287,33 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
             let console: String = serial
                 .lines()
                 .skip(1)
+                .filter(|row| row.split(',').nth(2) == Some("USB_SERIAL_JTAG"))
                 .map(|row| char::from(row.rsplit(',').next().unwrap().parse::<u8>().unwrap()))
                 .collect();
             let edges = console.lines().filter(|line| line.starts_with("edge "));
             assert_eq!(edges.count(), 7, "{name}: {console}");
         } else if name == "esp32s3-hello" {
-            // The 8 registers the app touches that the model does not keep, the 9 writes whose
+            // The 6 registers the app touches that the model does not keep, the 9 writes whose
             // effect it does not run: the one that sets the reset of SYSTEM_WDG at start-up, the
             // pulses of the resets of SYSTIMER, TIMG0 and TIMG1 at start-up, and those of SPI0,
             // SPI1 and SYSTIMER at the restart, then its reset.
-            let mut want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 17];
+            let mut want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 15];
             want.push(("chip.restart".to_string(), "#u1".to_string()));
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
             assert_kept_resets(&name, &doc, 9);
         } else if name == "esp32s3-screen" {
-            // The 9 registers the app touches that the model does not keep, the write that sets
+            // The 7 registers the app touches that the model does not keep, the write that sets
             // the reset of SYSTEM_WDG at start-up, and the 6 writes that pulse the resets of
             // SYSTIMER, TIMG0 and TIMG1 at start-up.
-            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 16];
+            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 14];
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
             assert_kept_resets(&name, &doc, 7);
         } else if name == "esp32s3-touch" {
-            // The 10 registers the app touches that the model does not keep, the write of
+            // The 8 registers the app touches that the model does not keep, the write of
             // `I2C_CTR_REG` that changes bits the model keeps and does not run, the write that
             // sets the reset of SYSTEM_WDG at start-up, and the 6 writes that pulse the resets
             // of SYSTIMER, TIMG0 and TIMG1 at start-up.
-            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 18];
+            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 16];
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
             let kept: Vec<_> = doc["diagnostics"]
                 .as_array()
@@ -337,11 +338,18 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
                 "{name}: {}",
                 doc["diagnostics"]
             );
-        } else if name == "esp32s3-ring" || name == "esp32s3-pulls" {
-            // The 8 registers each app touches that the model does not keep, the write that sets
+        } else if name == "esp32s3-uart" {
+            // The 7 registers the app touches that the model does not keep, the write that sets
             // the reset of SYSTEM_WDG at start-up, and the 6 writes that pulse the resets of
             // SYSTIMER, TIMG0 and TIMG1 at start-up.
-            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 15];
+            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 14];
+            assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
+            assert_kept_resets(&name, &doc, 7);
+        } else if name == "esp32s3-ring" || name == "esp32s3-pulls" {
+            // The 6 registers each app touches that the model does not keep, the write that sets
+            // the reset of SYSTEM_WDG at start-up, and the 6 writes that pulse the resets of
+            // SYSTIMER, TIMG0 and TIMG1 at start-up.
+            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 13];
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
             assert_kept_resets(&name, &doc, 7);
         } else {

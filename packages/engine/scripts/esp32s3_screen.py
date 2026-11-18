@@ -168,8 +168,10 @@ def frame(flushes: list[dict]) -> bytes:
 
 def console_lines(serial_csv: str) -> list[str]:
     rows = list(csv.DictReader(io.StringIO(serial_csv)))
-    if any(row["part"] != "u1" or row["usart"] != "USB_SERIAL_JTAG" for row in rows):
-        raise ValueError("serial.csv holds a byte that is not u1's USB_SERIAL_JTAG")
+    known = {"USB_SERIAL_JTAG", "UART0", "UART1", "UART2"}
+    if any(row["part"] != "u1" or row["usart"] not in known for row in rows):
+        raise ValueError("serial.csv holds a byte that is not u1's USB_SERIAL_JTAG or a UART")
+    rows = [row for row in rows if row["usart"] == "USB_SERIAL_JTAG"]
     text = bytes(int(row["byte"]) for row in rows).decode("ascii")
     return [line for line in text.replace("\r\n", "\n").split("\n") if line[:2] in ("P ", "C ", "F ", "S ", "B ")]
 
