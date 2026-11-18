@@ -32,6 +32,7 @@ mod bridge;
 mod calibration;
 mod clock;
 mod cores;
+mod curve;
 mod efuse;
 mod extmem;
 mod flash;
@@ -44,6 +45,7 @@ mod matrix;
 mod rmt;
 mod rng;
 mod rom;
+mod sar;
 mod sha;
 mod soc;
 mod spi1;
@@ -66,6 +68,7 @@ use timers::{Action, Watchdogs};
 pub use boot::Segment;
 pub use bridge::{Bridge, PINS};
 pub use clock::{TICK_HZ, Tick};
+pub use efuse::EfuseSet;
 pub use gpio::PadDrive;
 pub use orbe_xtensa::CoreId;
 pub use rmt::{Flight, Train};
@@ -164,11 +167,17 @@ pub enum Refused {
 /// Where a run stopped before its limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Halt {
-    /// At `at` a pad's drive changed, a record ended, or both: an SPI2 transfer, an LEDC
-    /// update that took effect on a pad with a net, or an RMT transmission. [`Esp32s3::drive`]
-    /// gives the new drives, and [`Esp32s3::take_transfers`], [`Esp32s3::take_duties`] and
-    /// [`Esp32s3::take_trains`] the records.
-    Change { at: Tick, image: bool, record: bool },
+    /// At `at` a pad's drive changed, a record ended, an ADC conversion samples its pad, or
+    /// several of these. A record is an SPI2 transfer, an LEDC update that took effect on a pad
+    /// with a net, or an RMT transmission. [`Esp32s3::drive`] gives the new drives,
+    /// [`Esp32s3::take_transfers`], [`Esp32s3::take_duties`] and [`Esp32s3::take_trains`] the
+    /// records, and [`Esp32s3::sample`] takes the pads' voltages at `at` before the chip runs on.
+    Change {
+        at: Tick,
+        image: bool,
+        record: bool,
+        sample: bool,
+    },
     /// The LEDC updates that took effect at `at` moved a pad's drive, after the `Change` at
     /// `at` that holds their records. [`Esp32s3::drive`] gives the new drives.
     Moved(Tick),
@@ -237,6 +246,8 @@ pub struct Esp32s3 {
     shown: [PadDrive; PADS],
     /// The tick of an image change not reported yet.
     changed: Option<Tick>,
+    /// The tick an ADC conversion samples its pad at, not reported yet.
+    sampled: Option<Tick>,
     /// How many of SPI2's transfers have had their end reported and wait to be taken.
     reported: usize,
     /// The `Duty` records, from the first not taken.
@@ -325,12 +336,24 @@ impl Esp32s3 {
         self.soc.gpio.omit_pull_down();
     }
 
+    /// The chip has the eFuses `set` gives, in place of the default set.
+    pub fn use_efuse(&mut self, set: EfuseSet) {
+        self.soc.use_efuse(set);
+    }
+
+    /// Gives each ADC conversion the chip reported a `sample` halt for the code at its pad's
+    /// voltage: `volts` of a GPIO that [`adc_pad`] names, against `GND`.
+    pub fn sample(&mut self, volts: impl Fn(u8) -> f64) {
+        self.soc.sample(volts);
+    }
+
     fn with(core: Core<orbe_xtensa::Esp32s3>, soc: Soc) -> Esp32s3 {
         Esp32s3 {
             cores: Cores::new(core),
             shown: soc.image(),
             soc,
             changed: None,
+            sampled: None,
             reported: 0,
             duties: Vec::new(),
             reported_duties: 0,
@@ -407,6 +430,10 @@ impl Esp32s3 {
             if let Some(change) = self.soc.changed.take() {
                 debug_assert!(self.changed.is_none(), "a change stops the core");
                 self.changed = Some(change);
+            }
+            if let Some(at) = self.soc.sampled.take() {
+                debug_assert!(self.sampled.is_none(), "a sample stops the core");
+                self.sampled = Some(at);
             }
             self.soc.rearmed = false;
             self.soc.reclocked = false;
@@ -662,12 +689,16 @@ impl Esp32s3 {
             .map(|train| train.end)
             .filter(|&end| end <= self.now());
         let record = [transfer, duty, train].into_iter().flatten().min();
-        let change = [self.changed, record].into_iter().flatten().min();
+        let change = [self.changed, record, self.sampled]
+            .into_iter()
+            .flatten()
+            .min();
         let change = change.map(|at| {
             let halt = Halt::Change {
                 at,
                 image: self.changed == Some(at),
                 record: record == Some(at),
+                sample: self.sampled == Some(at),
             };
             (at, 0, halt)
         });
@@ -691,10 +722,18 @@ impl Esp32s3 {
 
     fn report(&mut self, halt: Halt) {
         match halt {
-            Halt::Change { at, image, record } => {
+            Halt::Change {
+                at,
+                image,
+                record,
+                sample,
+            } => {
                 if image {
                     self.shown = self.soc.image();
                     self.changed = None;
+                }
+                if sample {
+                    self.sampled = None;
                 }
                 if record {
                     if self.soc.spi2.end(self.reported) == Some(at) {
@@ -820,6 +859,12 @@ impl Esp32s3 {
     }
 }
 
+/// Whether GPIO `gpio` is an ADC channel's pad: GPIO1 to GPIO10 are ADC1's channels 0 to 9, and
+/// GPIO11 to GPIO20 ADC2's, `soc/esp32s3/include/soc/adc_channel.h`.
+pub fn adc_pad(gpio: u8) -> bool {
+    (1..=20).contains(&gpio)
+}
+
 /// Adds the mask ROM from the ROM ELF `rom`, and puts its data in SRAM.
 fn load_rom(soc: &mut Soc, rom: &[u8]) {
     let image = rom::load(rom, |addr, len| {
@@ -941,6 +986,7 @@ mod tests {
             at,
             image: true,
             record: false,
+            sample: false,
         }
     }
 
@@ -1017,6 +1063,7 @@ mod tests {
         );
     }
 
+    mod adc;
     mod dual;
     mod i2c;
     mod pads;
@@ -1837,6 +1884,7 @@ mod tests {
                     at,
                     image: false,
                     record: true,
+                    sample: false,
                 },
                 _,
                 ref sent,
@@ -2396,6 +2444,7 @@ mod tests {
             at,
             image: false,
             record: true,
+            sample: false,
         }
     }
 
@@ -2560,6 +2609,7 @@ mod tests {
                         at: c(29),
                         image: true,
                         record: true,
+                        sample: false,
                     },
                     PadDrive::High
                 ),
