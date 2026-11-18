@@ -10,8 +10,8 @@
 //! puts each pixel in the frame memory as it arrives and reports what it drew when it closes.
 
 use orbe_model::{
-    Cs, Cx, Device, Drawn, Drive, Drives, Duty, DutyTarget, Error, Lanes, Levels, Pages, Panel,
-    Params, Sha256, Shows, Spi, SpiTarget, State, Stop, Time, View,
+    Cs, Cx, Device, Drawn, Drive, Drives, Duty, DutyTarget, Error, Lanes, Levels, Panel, Params,
+    Sha256, Shows, Spi, SpiTarget, State, Stop, Time, View,
 };
 
 /// The panel's pixels across and down.
@@ -60,11 +60,54 @@ const COMMAND: &str = "command";
 const PIXEL_FORMAT: &str = "pixel_format";
 
 /// The frame memory, `HEIGHT` rows of `WIDTH` pixels of two bytes, one page per 8 rows.
-type Frame = Pages<BANDS, BAND_BYTES>;
+/// The bytes are on the heap, so moving a controller copies a pointer. A checkpoint copies
+/// the pages whose generations differ.
+#[derive(Clone, Debug)]
+struct Frame {
+    bytes: Box<[u8]>,
+    generations: [u64; BANDS],
+    newest: u64,
+}
+
+impl Frame {
+    fn new() -> Frame {
+        Frame {
+            bytes: vec![0u8; BANDS * BAND_BYTES].into_boxed_slice(),
+            generations: [0; BANDS],
+            newest: 0,
+        }
+    }
+
+    fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    fn page_mut(&mut self, page: usize) -> &mut [u8] {
+        self.newest += 1;
+        self.generations[page] = self.newest;
+        let start = page * BAND_BYTES;
+        &mut self.bytes[start..start + BAND_BYTES]
+    }
+
+    fn copy_from(&mut self, source: &Frame) -> usize {
+        let mut copied = 0;
+        for page in 0..BANDS {
+            if self.generations[page] != source.generations[page] {
+                let start = page * BAND_BYTES;
+                let end = start + BAND_BYTES;
+                self.bytes[start..end].copy_from_slice(&source.bytes[start..end]);
+                self.generations[page] = source.generations[page];
+                copied += 1;
+            }
+        }
+        self.newest = source.newest;
+        copied
+    }
+}
 
 /// The controller and its frame memory. A copy copies the controller whole and the frame memory
 /// by the page, so a commit costs the pages a write touched.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct St77916 {
     controller: Controller,
     frame: Frame,
@@ -232,7 +275,7 @@ impl Device for St77916 {
 impl St77916 {
     /// How many pages of frame memory a copy of `source` over this would copy.
     pub(crate) fn pages_to_copy(&self, source: &St77916) -> usize {
-        let mut frame = self.frame;
+        let mut frame = self.frame.clone();
         frame.copy_from(&source.frame)
     }
 }
@@ -479,4 +522,23 @@ fn advance(window: Window, (column, row): (u16, u16)) -> (u16, u16) {
     }
     let row = if row < window.y1 { row + 1 } else { window.y0 };
     (window.x0, row)
+}
+
+#[cfg(test)]
+mod size_probe {
+    use super::*;
+
+    #[test]
+    fn the_frame_bytes_are_not_inside_the_value() {
+        assert!(
+            std::mem::size_of::<St77916>() < 4 * 1024,
+            "st77916 {}",
+            std::mem::size_of::<St77916>()
+        );
+        assert!(
+            std::mem::size_of::<Frame>() < 4 * 1024,
+            "frame {}",
+            std::mem::size_of::<Frame>()
+        );
+    }
 }

@@ -64,6 +64,49 @@ describe("websocketSource", () => {
     expect(got.at(-1)).toEqual(frame(2));
   });
 
+  test("a late listener sees the serial text the session already delivered", () => {
+    const socket = new FakeSocket();
+    const source = websocketSource(() => socket as unknown as WebSocket);
+    socket.open();
+    const live: ToViewer[] = [];
+    source.subscribe((message) => live.push(message));
+    socket.receive(scene);
+    socket.receive({ ...frame(0), serial: { from: 0, text: "light 1\r\n" } });
+    socket.receive({ ...frame(1), serial: { from: "light 1\r\n".length, text: "dark 2\r\n" } });
+    socket.receive(frame(2));
+    expect(live.flatMap((message) => (message.type === "frame" ? [message.serial?.text] : []))).toEqual([
+      "light 1\r\n",
+      "dark 2\r\n",
+      undefined,
+    ]);
+    const late: ToViewer[] = [];
+    source.subscribe((message) => late.push(message));
+    const replay = late[1] as FrameMessage;
+    expect(replay.seq).toBe(2);
+    expect(replay.serial).toEqual({ from: 0, text: "light 1\r\ndark 2\r\n", replace: true });
+  });
+
+  test("a late listener sees the tail when earlier bytes were dropped", () => {
+    const socket = new FakeSocket();
+    const source = websocketSource(() => socket as unknown as WebSocket);
+    socket.open();
+    socket.receive(scene);
+    const head = "A".repeat(100);
+    const body = "B".repeat(5000);
+    socket.receive({ ...frame(0), serial: { from: 0, text: head } });
+    socket.receive({ ...frame(1), serial: { from: head.length, text: body } });
+    const late: ToViewer[] = [];
+    source.subscribe((message) => late.push(message));
+    const replay = late[1] as FrameMessage;
+    const text = replay.serial?.text ?? "";
+    expect(replay.serial?.replace).toBe(true);
+    expect(replay.serial?.trimmed).toBe(true);
+    expect(text.length).toBeLessThanOrEqual(4096);
+    expect((head + body).endsWith(text)).toBe(true);
+    expect(text.startsWith("B")).toBe(true);
+    expect((replay.serial?.from ?? -1) + new TextEncoder().encode(text).length).toBe(head.length + body.length);
+  });
+
   test("sends a command queued before the socket opened, and resolves it with its reply", async () => {
     const socket = new FakeSocket();
     const source = websocketSource(() => socket as unknown as WebSocket);

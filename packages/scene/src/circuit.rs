@@ -30,6 +30,15 @@ pub use view::{Instance, PartData, PinWhy, Placement, View, Wire};
 const ROOT: usize = 0;
 const NAME_LIMIT: usize = 64;
 const GRID_PS: u64 = 1_000_000_000;
+/// A shared hole whose strip still has room. The hole after `such as` is one an agent can
+/// write at the finding, and each hint in one check names a different hole.
+const HOLE_HINT: &str = "a hole holds one lead; move one of them to a free hole in the same strip";
+/// Every hole in the strip already holds a lead. Naming a destination would be a guess:
+/// the strip it picks can join another net, and the sentence would not be true on every board.
+const FULL_STRIP_HINT: &str = "a hole holds one lead, and every hole in this strip is taken; free one first, for example by moving one of its leads to an empty strip and wiring that strip back to the hole it left";
+/// Free holes are still empty. An earlier hint in this check named each of them, so calling
+/// the strip full would be false.
+const ALREADY_NAMED: &str = "a hole holds one lead; every free hole in this strip is already named by another hint in this check";
 
 struct Inst {
     path: Vec<String>,
@@ -112,6 +121,26 @@ struct HeldApart {
     p: usize,
     n: usize,
     names: [String; 2],
+}
+
+/// A wire end that names a breadboard hole some other lead already holds.
+struct Doubled {
+    key: usize,
+    span: Span,
+    /// The part whose file writes the wire, or the scene.
+    owner: usize,
+    lead: String,
+    other: String,
+    /// The other ends of this same wire.
+    own: Vec<usize>,
+}
+
+struct HoleEnd<'a> {
+    key: usize,
+    span: Span,
+    owner: usize,
+    lead: &'a str,
+    own: &'a [usize],
 }
 
 #[derive(Clone)]
@@ -583,25 +612,35 @@ impl<'p> Circuit<'p> {
 
     /// The pin a ref names from `inst`, walking one child per segment.
     fn resolve(&mut self, inst: usize, r: &Ref) -> Option<usize> {
+        match self.lookup(inst, r) {
+            Ok(key) => key,
+            Err((code, message, hint)) => {
+                self.out.push(code, r.span, message, hint);
+                None
+            }
+        }
+    }
+
+    /// [`resolve`] without a finding. A part wire was already resolved while the part was
+    /// joined, so claiming it later must not report that miss again.
+    fn lookup(&self, inst: usize, r: &Ref) -> Result<Option<usize>, (Code, String, String)> {
         let mut at = inst;
         for (i, seg) in r.segs.iter().enumerate() {
             if at != ROOT && self.insts[at].part.is_none() {
-                return None;
+                return Ok(None);
             }
             let prefix = r.segs[..i].join(".");
             let last = i + 1 == r.segs.len();
             if last && let Some(&key) = self.keys.get(&(at, seg.clone())) {
-                return Some(key);
+                return Ok(Some(key));
             }
             if !last && let Some(&child) = self.insts[at].children.get(seg) {
                 at = child;
                 continue;
             }
-            let (code, message, hint) = self.unresolved(at, seg, &prefix, last);
-            self.out.push(code, r.span, message, hint);
-            return None;
+            return Err(self.unresolved(at, seg, &prefix, last));
         }
-        None
+        Ok(None)
     }
 
     fn unresolved(&self, at: usize, seg: &str, prefix: &str, last: bool) -> (Code, String, String) {
@@ -707,6 +746,198 @@ impl<'p> Circuit<'p> {
         }
     }
 
+    /// The holes of the strip `key` sits in, when `key` is a hole of a board.
+    fn strip_of(&self, key: usize) -> Option<Vec<String>> {
+        let inst = self.pins[key].inst;
+        let name = self.pins[key].name.clone();
+        let holes = self.part(inst)?.holes.as_ref()?;
+        holes
+            .strips
+            .iter()
+            .find(|strip| strip.iter().any(|hole| hole == &name))
+            .cloned()
+    }
+
+    /// `board.hole` for the hole pin `key`.
+    fn hole_label(&self, key: usize) -> String {
+        let pin = &self.pins[key];
+        format!("{}.{}", self.insts[pin.inst].dotted(), pin.name)
+    }
+
+    /// The nearest hole of `key`'s strip that no lead names yet, as `board.hole`.
+    ///
+    /// `held` is only the leads that are really there, so a hole named here stays free for a
+    /// later real lead to conflict with. `reserved` is what an earlier hint in this check
+    /// already named, and the hole returned is recorded there. `own` is the other ends of the
+    /// wire being hinted, so the hint never names one of them.
+    fn free_hole(
+        &self,
+        key: usize,
+        held: &BTreeMap<usize, String>,
+        reserved: &mut BTreeSet<usize>,
+        own: &[usize],
+    ) -> Option<String> {
+        let strip = self.strip_of(key)?;
+        let inst = self.pins[key].inst;
+        let at = strip.iter().position(|hole| hole == &self.pins[key].name)?;
+        let board = self.insts[inst].dotted();
+        let mut best: Option<(usize, usize)> = None;
+        for (index, hole) in strip.iter().enumerate() {
+            let Some(&hole_key) = self.keys.get(&(inst, hole.clone())) else {
+                continue;
+            };
+            if held.contains_key(&hole_key)
+                || reserved.contains(&hole_key)
+                || own.contains(&hole_key)
+            {
+                continue;
+            }
+            let distance = index.abs_diff(at);
+            if best.is_none_or(|(nearest, chosen)| {
+                distance < nearest
+                    || (distance == nearest && hole.as_str() < strip[chosen].as_str())
+            }) {
+                best = Some((distance, index));
+            }
+        }
+        let (_, index) = best?;
+        let hole = &strip[index];
+        let hole_key = self.keys[&(inst, hole.clone())];
+        reserved.insert(hole_key);
+        Some(format!("{board}.{hole}"))
+    }
+
+    /// Holes of `key`'s strip that no lead holds yet.
+    fn open_holes(&self, key: usize, held: &BTreeMap<usize, String>) -> Vec<usize> {
+        let Some(strip) = self.strip_of(key) else {
+            return Vec::new();
+        };
+        let inst = self.pins[key].inst;
+        strip
+            .iter()
+            .filter_map(|hole| self.keys.get(&(inst, hole.clone())).copied())
+            .filter(|hole_key| !held.contains_key(hole_key))
+            .collect()
+    }
+
+    /// `full`, a `board.hole` from the scene, written the way `owner`'s file writes a ref.
+    /// A part's own wire says `bb.b1`. A scene wire to that same hole says `kit.bb.b1`.
+    fn as_written(&self, owner: usize, full: &str) -> String {
+        if owner == ROOT {
+            return full.to_string();
+        }
+        let prefix = format!("{}.", self.insts[owner].dotted());
+        full.strip_prefix(&prefix).unwrap_or(full).to_string()
+    }
+
+    /// How a finding names a wire. A part's refs are relative to that part, so the lead says
+    /// which part they belong to.
+    fn wire_lead(&self, owner: usize, ends: &[Ref; 2]) -> String {
+        let end = |r: &Ref| {
+            if owner == ROOT {
+                format!("`{}`", r.text)
+            } else {
+                format!("`{}.{}`", self.insts[owner].dotted(), r.text)
+            }
+        };
+        format!("the wire from {} to {}", end(&ends[0]), end(&ends[1]))
+    }
+
+    /// A breadboard hole holds one lead. Records a wire end that names a hole, or keeps the
+    /// conflict when a plugged leg or an earlier end already names it. The hint is written
+    /// once every lead is recorded, so two hints cannot name one hole. Two pins of one part
+    /// in one strip is a different fault, reported later as `scene.shorted`.
+    fn note_end(
+        &self,
+        end: HoleEnd<'_>,
+        held: &mut BTreeMap<usize, String>,
+        doubled: &mut Vec<Doubled>,
+    ) {
+        if self.strip_of(end.key).is_none() {
+            return;
+        }
+        let Some(other) = held.get(&end.key).cloned() else {
+            held.insert(end.key, end.lead.to_string());
+            return;
+        };
+        doubled.push(Doubled {
+            key: end.key,
+            span: end.span,
+            owner: end.owner,
+            lead: end.lead.to_string(),
+            other,
+            own: end.own.to_vec(),
+        });
+    }
+
+    /// Each part's own wires, after the legs are seated. A pin that is not a hole, such as a
+    /// header pin, is not a breadboard hole and can still take more than one wire.
+    fn note_part_wires(&self, held: &mut BTreeMap<usize, String>, doubled: &mut Vec<Doubled>) {
+        let mut wires = Vec::new();
+        for inst in 1..self.insts.len() {
+            if self.insts[inst].dropped.is_some() {
+                continue;
+            }
+            let Some(part) = self.part(inst) else {
+                continue;
+            };
+            for wire in &part.comp.wires {
+                wires.push((inst, wire.ends.clone()));
+            }
+        }
+        for (inst, ends) in wires {
+            let keys: Vec<Option<usize>> = ends
+                .iter()
+                .map(|r| self.lookup(inst, r).ok().flatten())
+                .collect();
+            let lead = self.wire_lead(inst, &ends);
+            for (i, end) in ends.iter().enumerate() {
+                let Some(key) = keys[i] else { continue };
+                let own: Vec<usize> = keys
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| *j != i)
+                    .filter_map(|(_, key)| *key)
+                    .collect();
+                self.note_end(
+                    HoleEnd {
+                        key,
+                        span: end.span,
+                        owner: inst,
+                        lead: &lead,
+                        own: &own,
+                    },
+                    held,
+                    doubled,
+                );
+            }
+        }
+    }
+
+    fn report_doubled(&mut self, held: &BTreeMap<usize, String>, doubled: Vec<Doubled>) {
+        let mut reserved = BTreeSet::new();
+        for hole in doubled {
+            let hint = match self.free_hole(hole.key, held, &mut reserved, &hole.own) {
+                Some(free) => {
+                    let free = self.as_written(hole.owner, &free);
+                    format!("{HOLE_HINT}, such as {free}")
+                }
+                None if self.open_holes(hole.key, held).is_empty() => FULL_STRIP_HINT.to_string(),
+                None => ALREADY_NAMED.to_string(),
+            };
+            let name = self.hole_label(hole.key);
+            self.out.push(
+                Code::Layout,
+                hole.span,
+                format!(
+                    "{} names {name}, which {} already holds",
+                    hole.lead, hole.other
+                ),
+                hint,
+            );
+        }
+    }
+
     /// Each scene wire end is checked against the net it reaches inside its part, before the
     /// scene's own wires join anything. Then the scene's wires join.
     fn check_scene_wires(&mut self, scene: &Scene) {
@@ -728,6 +959,14 @@ impl<'p> Circuit<'p> {
                 self.unsimulated.insert(key, reason.clone());
             }
         }
+        let mut held: BTreeMap<usize, String> = BTreeMap::new();
+        for seated in self.seated.values() {
+            for contact in &seated.contacts {
+                held.insert(contact.hole_key, format!("`{}`", contact.shown));
+            }
+        }
+        let mut doubled = Vec::new();
+        self.note_part_wires(&mut held, &mut doubled);
         let mut joins = Vec::new();
         for wire in &scene.comp.wires {
             let ends: Vec<Option<usize>> =
@@ -744,10 +983,32 @@ impl<'p> Circuit<'p> {
                     );
                 }
             }
+            let lead = self.wire_lead(ROOT, &wire.ends);
+            for (i, (r, key)) in wire.ends.iter().zip(&ends).enumerate() {
+                let Some(key) = *key else { continue };
+                let own: Vec<usize> = ends
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| *j != i)
+                    .filter_map(|(_, key)| *key)
+                    .collect();
+                self.note_end(
+                    HoleEnd {
+                        key,
+                        span: r.span,
+                        owner: ROOT,
+                        lead: &lead,
+                        own: &own,
+                    },
+                    &mut held,
+                    &mut doubled,
+                );
+            }
             if let [Some(a), Some(b)] = ends[..] {
                 joins.push((a, b, wire));
             }
         }
+        self.report_doubled(&held, doubled);
         let mut supplies = self.held_apart();
         for (a, b, wire) in joins {
             self.union(a, b);

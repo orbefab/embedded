@@ -43,10 +43,10 @@ fn frames_read_after_every_slice_change_no_reply() {
         .iter()
         .map(|line| {
             let reply = watched.run_with(&command(line), &mut |progress| {
-                sent.extend(frames.frame(progress.sample(), None));
+                sent.extend(frames.frame(progress.sample(), progress.serial(), None));
                 ControlFlow::Continue(())
             });
-            sent.extend(frames.frame(watched.sample().unwrap(), None));
+            sent.extend(frames.frame(watched.sample().unwrap(), watched.serial(), None));
             reply
         })
         .collect();
@@ -84,7 +84,7 @@ fn a_frame_inside_a_step_says_stepping() {
     let mut frames = Feed::default();
     let mut inside = Vec::new();
     let stepped = live.run_with(&command("step 5ms"), &mut |progress| {
-        inside.extend(frames.frame(progress.sample(), None));
+        inside.extend(frames.frame(progress.sample(), progress.serial(), None));
         ControlFlow::Continue(())
     });
     assert!(stepped.ok(), "{}", stepped.text());
@@ -93,7 +93,7 @@ fn a_frame_inside_a_step_says_stepping() {
         inside.iter().all(|f| f["state"] == "stepping"),
         "{inside:?}"
     );
-    let after = frames.frame(live.sample().unwrap(), None);
+    let after = frames.frame(live.sample().unwrap(), live.serial(), None);
     assert_eq!(
         after.expect("a frame once the step ends")["state"],
         "paused"
@@ -125,22 +125,34 @@ fn the_scene_message_names_each_channel() {
 fn a_frame_shows_a_press_after_it_lands_and_skips_a_repeat() {
     let mut live = opened();
     let mut frames = Feed::default();
-    let first = frames.frame(live.sample().unwrap(), None).unwrap();
+    let first = frames
+        .frame(live.sample().unwrap(), live.serial(), None)
+        .unwrap();
     assert_eq!(first["switches"], json!([0, 0]));
     assert!(
         first.get("world").is_none(),
         "a scene with no world omits world"
     );
-    assert!(frames.frame(live.sample().unwrap(), None).is_none());
+    assert!(
+        first.get("serial").is_none(),
+        "a Block that prints nothing omits serial"
+    );
+    assert!(
+        frames
+            .frame(live.sample().unwrap(), live.serial(), None)
+            .is_none()
+    );
 
     assert!(live.run(&command("press @btn1")).ok());
-    let at_landing = frames.frame(live.sample().unwrap(), None);
+    let at_landing = frames.frame(live.sample().unwrap(), live.serial(), None);
     assert!(
         at_landing.is_none(),
         "reads at t show the circuit before an input at t"
     );
     assert!(live.run(&command("step 1ms")).ok());
-    let after = frames.frame(live.sample().unwrap(), None).unwrap();
+    let after = frames
+        .frame(live.sample().unwrap(), live.serial(), None)
+        .unwrap();
     assert_eq!(after["switches"], json!([1, 0]));
 }
 
@@ -201,7 +213,9 @@ fn the_scene_message_describes_each_declared_quantity() {
 fn a_paused_set_shows_on_the_next_frame_and_moves_the_divider_once_time_runs() {
     let mut live = light_divider();
     let mut frames = Feed::default();
-    let first = frames.frame(live.sample().unwrap(), None).unwrap();
+    let first = frames
+        .frame(live.sample().unwrap(), live.serial(), None)
+        .unwrap();
     assert_eq!(first["world"], json!([300.0]));
     let before = live.run(&command("get @ldr.a"));
     assert!(
@@ -213,7 +227,7 @@ fn a_paused_set_shows_on_the_next_frame_and_moves_the_divider_once_time_runs() {
     let set = live.run(&command("set light 50"));
     assert!(set.ok(), "{}", set.text());
     let paused = frames
-        .frame(live.sample().unwrap(), None)
+        .frame(live.sample().unwrap(), live.serial(), None)
         .expect("a paused set sends a frame");
     assert_eq!(
         (paused["state"].as_str(), &paused["world"]),
@@ -222,7 +236,9 @@ fn a_paused_set_shows_on_the_next_frame_and_moves_the_divider_once_time_runs() {
 
     let stepped = live.run(&command("step 1ms"));
     assert!(stepped.ok(), "{}", stepped.text());
-    let after = frames.frame(live.sample().unwrap(), None).unwrap();
+    let after = frames
+        .frame(live.sample().unwrap(), live.serial(), None)
+        .unwrap();
     assert_eq!(after["world"], json!([50.0]));
     let got = live.run(&command("get @ldr.a"));
     assert!(
@@ -255,7 +271,12 @@ fn a_change_the_scene_schedules_shows_only_once_time_reaches_it() {
     for step in ["1ms", "500us", "1ms"] {
         assert!(live.run(&command(&format!("step {step}"))).ok());
         let mut frames = Feed::default();
-        world.push(frames.frame(live.sample().unwrap(), None).unwrap()["world"].clone());
+        world.push(
+            frames
+                .frame(live.sample().unwrap(), live.serial(), None)
+                .unwrap()["world"]
+                .clone(),
+        );
     }
     assert_eq!(world, [json!([300.0]), json!([300.0]), json!([0.0])]);
 }
@@ -399,7 +420,7 @@ fn a_joining_viewer_gets_the_scene_then_the_present() {
     let types: Vec<&str> = joined.iter().map(|m| m["type"].as_str().unwrap()).collect();
     assert_eq!(types, ["scene", "frame"]);
     assert_eq!(joined[1]["seq"], 0);
-    assert!(feed.now(&live, None).is_none(), "nothing new since");
+    assert!(feed.now(&live, None).is_empty(), "nothing new since");
     let again = feed.join(&live);
     assert_eq!(
         again.len(),
@@ -451,7 +472,7 @@ fn a_tick_runs_at_most_one_tick_of_simulated_time_and_says_its_pace() {
     assert_eq!(live.sample().unwrap().t_ps, 24_000_000_000);
     assert_eq!(pace.ratio, 1.0);
     let mut feed = Feed::default();
-    let frame = feed.now(&live, Some(pace)).unwrap();
+    let frame = feed.now(&live, Some(pace)).into_iter().next().unwrap();
     assert_eq!(
         (frame["speed"].as_f64(), frame["ratio"].as_f64()),
         (Some(1.0), Some(1.0))
@@ -504,7 +525,7 @@ fn a_faulted_session_s_frame_carries_the_fault() {
     let open = live.run(&Command::Open(PathBuf::from("scene.jsonc")));
     assert!(open.ok(), "{}", open.text());
     let snapshot = live.run(&command("snapshot")).text();
-    let frame = Feed::default().now(&live, None).unwrap();
+    let frame = Feed::default().now(&live, None).into_iter().next().unwrap();
     let fault = frame["fault"].as_str().expect("a fault in the frame");
     assert_eq!(frame["state"], "faulted");
     assert!(fault.starts_with("error["), "{fault}");
@@ -513,7 +534,11 @@ fn a_faulted_session_s_frame_carries_the_fault() {
         "{fault}\nis not a line of\n{snapshot}"
     );
 
-    let running = Feed::default().now(&opened(), None).unwrap();
+    let running = Feed::default()
+        .now(&opened(), None)
+        .into_iter()
+        .next()
+        .unwrap();
     assert_eq!(running["state"], "paused");
     assert!(running.get("fault").is_none(), "{running}");
 }
@@ -539,4 +564,149 @@ fn a_step_s_last_frame_reports_the_stop_it_reached() {
         "{states:?}"
     );
     assert_eq!(states.last(), Some(&FrameState::Stopped), "{states:?}");
+}
+
+fn comparator() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../blocks/nano-light-comparator")
+}
+
+fn parse_at(line: &str, root: &Path) -> Command {
+    Command::parse(line, root).unwrap().unwrap()
+}
+
+/// Appends a frame's serial onto `text`. `replace` starts the text over.
+fn take_serial(text: &mut String, end: &mut usize, frame: &Value) {
+    let Some(serial) = frame.get("serial") else {
+        return;
+    };
+    let from = serial["from"].as_u64().unwrap() as usize;
+    let piece = serial["text"].as_str().unwrap();
+    if serial.get("replace").is_some() {
+        assert_eq!(serial["replace"], true, "{serial}");
+        *text = piece.to_string();
+        *end = from + piece.len();
+        return;
+    }
+    assert_eq!(from, *end, "each new byte arrives once, in order: {serial}");
+    text.push_str(piece);
+    *end = from + piece.len();
+}
+
+#[test]
+fn a_comparator_s_serial_reaches_each_frame_once_and_in_order() {
+    let root = comparator();
+    let mut live = Live::new("t", Files::disk());
+    let mut feed = Feed::default();
+    let mut frames = Vec::new();
+    let opened = live.run(&parse_at("open", &root));
+    assert!(opened.ok(), "{}", opened.text());
+    frames.extend(feed.after(&live, &opened));
+
+    for line in [
+        "step 50ms",
+        "set light 10",
+        "step --until @led1 lit --timeout 100ms",
+        "step 50ms",
+        "set light 300",
+        "step --until @led1 off --timeout 100ms",
+        "step 50ms",
+    ] {
+        let reply = live.run_with(&parse_at(line, &root), &mut |progress| {
+            frames.extend(feed.burst(progress.sample(), progress.serial(), None));
+            ControlFlow::Continue(())
+        });
+        assert!(reply.ok(), "{line}: {}", reply.text());
+        frames.extend(feed.burst(live.sample().unwrap(), live.serial(), None));
+    }
+
+    let mut text = String::new();
+    let mut end = 0;
+    for frame in &frames {
+        assert!(
+            frame
+                .get("serial")
+                .and_then(|serial| serial.get("replace"))
+                .is_none(),
+            "an append-only run does not replace: {frame}"
+        );
+        take_serial(&mut text, &mut end, frame);
+    }
+    assert_eq!(text, live.serial());
+    assert_eq!(text.matches("light 1").count(), 1, "{text:?}");
+    assert_eq!(text.matches("dark 2").count(), 1, "{text:?}");
+    assert_eq!(text.matches("light 3").count(), 1, "{text:?}");
+    let light = text.find("light 1").unwrap();
+    let dark = text.find("dark 2").unwrap();
+    let again = text.find("light 3").unwrap();
+    assert!(light < dark && dark < again, "{text:?}");
+
+    let reopened = live.run(&parse_at("open", &root));
+    assert!(reopened.ok(), "{}", reopened.text());
+    let mut fresh_frames = feed.after(&live, &reopened);
+    let opening = fresh_frames
+        .iter()
+        .find(|frame| frame["type"] == "frame")
+        .unwrap();
+    assert_eq!(opening["serial"]["replace"], true, "{opening}");
+    assert!(
+        !opening["serial"]["text"].as_str().unwrap().contains("dark"),
+        "{opening}"
+    );
+
+    let stepped = live.run_with(&parse_at("step 50ms", &root), &mut |progress| {
+        fresh_frames.extend(feed.burst(progress.sample(), progress.serial(), None));
+        ControlFlow::Continue(())
+    });
+    assert!(stepped.ok(), "{}", stepped.text());
+    fresh_frames.extend(feed.burst(live.sample().unwrap(), live.serial(), None));
+
+    let mut fresh = String::new();
+    let mut at = 0;
+    for frame in &fresh_frames {
+        take_serial(&mut fresh, &mut at, frame);
+    }
+    assert_eq!(fresh, live.serial());
+    assert!(fresh.contains("light 1"), "{fresh:?}");
+    assert!(!fresh.contains("dark"), "{fresh:?}");
+}
+
+/// A viewer that joins after the log already exists, and one that joins again, both see that
+/// log. A short log is the whole text. A longer one is its tail, and says what was left out.
+#[test]
+fn a_second_viewer_joins_mid_run_and_sees_the_current_log() {
+    let root = comparator();
+    let mut live = Live::new("t", Files::disk());
+    let opened = live.run(&parse_at("open", &root));
+    assert!(opened.ok(), "{}", opened.text());
+    let stepped = live.run(&parse_at("step 80ms", &root));
+    assert!(stepped.ok(), "{}", stepped.text());
+    let log = live.serial().to_string();
+    assert!(log.contains("light"), "{log:?}");
+
+    let mut feed = Feed::default();
+    let first = feed.join(&live);
+    let second = feed.join(&live);
+    for joined in [&first, &second] {
+        let frame = joined
+            .iter()
+            .find(|message| message["type"] == "frame")
+            .expect("a joiner gets a frame");
+        let serial = &frame["serial"];
+        let text = serial["text"].as_str().unwrap();
+        assert_eq!(serial["replace"], true, "{serial}");
+        assert!(log.ends_with(text), "{serial}");
+        assert_eq!(
+            serial["from"].as_u64().unwrap() as usize + text.len(),
+            log.len(),
+            "{serial}"
+        );
+        assert!(text.contains("light"), "{serial}");
+        if log.len() <= 4096 {
+            assert_eq!(text, log);
+            assert!(serial.get("trimmed").is_none(), "{serial}");
+        } else {
+            assert_eq!(serial["trimmed"], true, "{serial}");
+            assert!(text.len() <= 4096, "{}", text.len());
+        }
+    }
 }

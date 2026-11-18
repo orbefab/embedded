@@ -138,6 +138,16 @@ pub struct Pace {
 }
 
 impl Live {
+    /// The session's serial text: every USART's bytes in the order their stop bits ended,
+    /// decoded as UTF-8, the same text `serial contains` searches. Empty when no scene is
+    /// open. The session does not record which USART a byte came from.
+    pub fn serial(&self) -> &str {
+        self.open
+            .as_ref()
+            .map(|open| open.serial.text())
+            .unwrap_or("")
+    }
+
     /// The `scene` message for the open scene.
     pub fn scene(&self) -> Option<Value> {
         let open = self.open.as_ref()?;
@@ -161,6 +171,11 @@ impl Live {
 }
 
 impl Progress<'_> {
+    /// The session's serial text, as [`Live::serial`] reads it.
+    pub fn serial(&self) -> &str {
+        self.open.serial.text()
+    }
+
     /// A sample taken inside a step. It reads `stepping` unless the slice it follows stopped or
     /// faulted the session, which it reports as is.
     pub fn sample(&self) -> Sample {

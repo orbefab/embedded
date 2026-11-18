@@ -44,7 +44,8 @@ const POLL: Duration = Duration::from_millis(5);
 pub(super) enum Out {
     /// A scene message or a command's reply, sent in order.
     Text(Arc<str>),
-    /// A frame. Of the frames waiting, only the latest is sent.
+    /// A frame. Of the frames waiting that carry no serial, only the latest is sent. A frame
+    /// that carries serial is sent, so a log split across frames arrives whole.
     Frame(Arc<str>),
     /// The last message, then the close. `done` hears once both are sent.
     Close(Arc<str>, Sender<()>),
@@ -329,11 +330,20 @@ fn relay(
     events: &Sender<Event>,
 ) -> tungstenite::Result<()> {
     loop {
-        let mut frame = None;
+        let mut frame: Option<Arc<str>> = None;
         for out in queue.try_iter() {
             match out {
                 Out::Text(text) => socket.write(Message::text(&*text))?,
-                Out::Frame(text) => frame = Some(text),
+                Out::Frame(text) => {
+                    if text.contains("\"serial\":") {
+                        if let Some(pending) = frame.take() {
+                            socket.write(Message::text(&*pending))?;
+                        }
+                        socket.write(Message::text(&*text))?;
+                    } else {
+                        frame = Some(text);
+                    }
+                }
                 Out::Close(last, done) => {
                     if let Some(frame) = frame.take() {
                         socket.write(Message::text(&*frame))?;

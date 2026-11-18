@@ -79,7 +79,7 @@ pub(crate) struct Hosting<D> {
 impl<D: Device> Clone for Hosting<D> {
     fn clone(&self) -> Self {
         Hosting {
-            device: self.device,
+            device: self.device.clone(),
             broke: self.broke,
             shown: Arc::clone(&self.shown),
             drawn: self.drawn.clone(),
@@ -337,12 +337,13 @@ impl<D: Device, P: Clone> Clone for Native<D, P> {
 
 impl<D: Device, P: Port<D>> Native<D, P> {
     /// `device` at power-on, which drives `outputs` outputs of its own.
+    /// `refresh` fills the drives after the device has moved.
     pub(crate) fn new(device: D, port: P, outputs: usize) -> Native<D, P> {
         assert!(outputs <= Drives::MAX && P::PINS + outputs <= IMAGE);
         let mut native = Native {
             dev: Hosting::new(device),
             port,
-            drives: device.drive(),
+            drives: Drives::OFF,
             image: [Drive::Off; IMAGE],
             len: P::PINS + outputs,
         };
