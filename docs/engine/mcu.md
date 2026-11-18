@@ -17,6 +17,7 @@ A chip is its state. `Mcu` needs `Clone`, and a copy is a checkpoint. The engine
 | `SENDS` | Whether it sends records, which go to `link.csv`. `false` by default. |
 | `run_until(limit)` | Runs from the last time it reached. Returns the first stop in `(reached, limit]` where its drives may change, it samples, or a record it sent ends, or `None` once it has done everything up to `limit`. A run split at any limit is the same run. |
 | `drive()` | One `Drive` per output, in the order the engine built its outputs. |
+| `pulled_down()` | Whether each output pulls down to the chip's own GND pin, in the order of `drive()`. Empty by default, which pulls none down. |
 | `held()` | Whether a reset holds it, which changes its own supply current. `false` by default. |
 | `input(at, levels)` | Its watches' levels from `at` on, in the order the engine built its watches. |
 | `sample(at, volts)` | The volts of its samples at a stop that asked for them. A chip that never asks keeps the default, which does nothing. |
@@ -27,9 +28,15 @@ A chip is its state. `Mcu` needs `Clone`, and a copy is a checkpoint. The engine
 | `notes(through)` | What it noted at or before `through`, each at its time. Empty by default. |
 | `read(output)` | When its firmware first read that output's pin as a digital input since the pin's drive last turned off, as far as it has run. A read while the drive is not off does not count. Once the drive is no longer off, it is still the read of the stretch that just ended. `None` by default, so the engine checks no input of a chip that keeps it. [diagnostics.md](diagnostics.md#chipfloating_input) says what the engine does with it. |
 
-That is three constants and eleven methods, seven of them with defaults. A clocked chip runs to cycle `floor(limit_ps * f / 1e12)` and puts a stop at cycle `c` at `ceil(c * 1e12 / f)` ps, counting from its clock domain's last frequency change, as [engine.md](engine.md#active-chips) says. The chip converts between picoseconds and its own cycles.
+That is three constants and twelve methods, eight of them with defaults. A clocked chip runs to cycle `floor(limit_ps * f / 1e12)` and puts a stop at cycle `c` at `ceil(c * 1e12 / f)` ps, counting from its clock domain's last frequency change, as [engine.md](engine.md#active-chips) says. The chip converts between picoseconds and its own cycles.
 
-Only `run_until` changes the drives and `held()`. `input` and `sample` leave them alone, and what they cause comes at least 1 ps later, at a stop. The ATmega328P stops where `RESET` low or a brown-out starts holding it and where the hold ends, so the engine stamps its reset draw from that stop, as it does a new drive. The engine checks this after each of those calls, in every build, and panics on a chip that breaks it.
+Only `run_until` changes the drives, `pulled_down()` and `held()`. `input` and `sample` leave them alone, and what they cause comes at least 1 ps later, at a stop. The ATmega328P stops where `RESET` low or a brown-out starts holding it and where the hold ends, so the engine stamps its reset draw from that stop, as it does a new drive. The engine checks this after each of those calls, in every build, and panics on a chip that breaks it.
+
+## Pull-downs
+
+A pin's pull-down sits beside its drive, not in it. `Drive` is `orbe-model`'s, and a device's `Drives` packs it in two bits, so a chip's pull-down is its own slice instead. An output pulls down only while its drive is `PullUp` or `Off`. With `Off` it pulls to GND alone. With `PullUp` it pulls to both rails, each through its own resistor, as the ESP32-S3 does with `FUN_WPU` and `FUN_WPD` both set. The engine stamps the pull-down only on an output whose part names a pull-down resistance. An ESP32-S3 part that names none refuses a store that sets `FUN_WPD` on a pad with a net, as [esp32s3.md](esp32s3.md#what-it-models) says, and writes nothing. The ATmega328P has no pull-down and keeps the default. Its outputs name none, so its stamps, and its runs, are the same as before the pull-down.
+
+The engine compares `pulled_down()` wherever it compares the drives: a change at a stop restamps, and an `input`, a `sample` or a power-on input that changes it panics. An output that pulls down is not floating for [`chip.floating_input`](diagnostics.md#chipfloating_input), and its net reaches ground through it.
 
 ## Records
 

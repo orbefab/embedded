@@ -24,8 +24,8 @@ pub use sent::{Sent, SentKind, SpiPins};
 ///   leave the state one call to `l2` does. All of a time's effects are one stop.
 /// - A clocked chip runs to cycle `floor(limit_ps * f / 1e12)` and puts a stop at cycle `c` at
 ///   `ceil(c * 1e12 / f)` ps, counting from its clock domain's last frequency change.
-/// - Only `run_until` changes the drives and [`held`](Mcu::held). What `input` and `sample`
-///   cause comes at least 1 ps later, at a stop.
+/// - Only `run_until` changes the drives, the pull-downs and [`held`](Mcu::held). What `input`
+///   and `sample` cause comes at least 1 ps later, at a stop.
 /// - `input`, `deliver` and `take_sent` read nothing but the chip and their arguments, so they
 ///   take two equal chips to two equal chips.
 pub trait Mcu: Clone + Send + std::fmt::Debug + 'static {
@@ -41,6 +41,13 @@ pub trait Mcu: Clone + Send + std::fmt::Debug + 'static {
     fn run_until(&mut self, limit: Time) -> Option<Stop>;
     /// One drive per output, in the order the engine built its outputs.
     fn drive(&self) -> &[Drive];
+    /// Whether each output pulls down to the chip's own GND pin, in the order the engine built
+    /// its outputs. Only an output whose drive is [`Drive::PullUp`] or [`Drive::Off`] pulls
+    /// down, and one with [`Drive::PullUp`] then pulls to both rails. Like the drives, it
+    /// changes only at a stop. A chip that never pulls down returns the default, which is empty.
+    fn pulled_down(&self) -> &[bool] {
+        &[]
+    }
     /// Whether a reset holds it, which changes its own supply current. Like the drives, it
     /// changes only at a stop. A chip that never says is never held.
     fn held(&self) -> bool {

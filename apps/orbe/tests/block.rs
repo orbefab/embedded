@@ -1,5 +1,5 @@
 //! `orbe add <block>` installs a Block into a project. It copies each part the scene names into
-//! `parts/` and lists them in `parts.lock`, then writes the scene, firmware and tests.
+//! `parts/` and lists them in `parts.lock`, then writes the scene, firmware, tests and README.
 
 #![cfg(unix)]
 
@@ -60,10 +60,10 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
         let block = common::repo().join("blocks").join(id);
         let installed = tree(dir);
         for (rel, bytes) in tree(&block) {
-            if rel == "block.jsonc" || rel == "README.md" {
+            if rel == "block.jsonc" {
                 assert!(
                     !installed.contains_key(&rel),
-                    "{id}: {rel} stays in the repo"
+                    "{id}: block.jsonc stays in the repo"
                 );
             } else {
                 assert_eq!(installed.get(&rel), Some(&bytes), "{id}: {rel}");

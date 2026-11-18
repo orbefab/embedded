@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use sha2::{Digest, Sha256};
 
 use orbe_scene::{
-    card, catalog_cards, folder_hash, ids_with_segment, missing_fields, near_names, param_sentence,
-    search,
+    builtin_blocks, card, catalog_cards, folder_hash, ids_with_segment, missing_fields, near_names,
+    param_sentence, search, search_blocks,
 };
 
 fn parts_dir() -> PathBuf {
@@ -310,6 +310,28 @@ fn one_id_segment_names_that_part_and_several_stay_a_list() {
         ])
     );
     assert!(ids_with_segment("not-a-part-zzzz").is_empty());
+    assert_eq!(ids_with_segment("fade"), owned(&["nano-led-fade"]));
+}
+
+#[test]
+fn search_finds_a_block_by_a_word_of_its_id() {
+    let fade = search_blocks("fade");
+    assert_eq!(fade.len(), 1);
+    assert_eq!(fade[0].name, "nano-led-fade");
+    assert_eq!(
+        near_names("nano-led-fad").first().map(String::as_str),
+        Some("nano-led-fade")
+    );
+    let names: Vec<String> = builtin_blocks().into_iter().map(|card| card.name).collect();
+    assert_eq!(
+        names,
+        [
+            "nano-button-led",
+            "nano-led-fade",
+            "nano-light-comparator",
+            "uno-button-led",
+        ]
+    );
 }
 
 #[test]

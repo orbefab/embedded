@@ -60,6 +60,7 @@ pub(crate) fn chip(part: PartId, panel: &St77916) -> Chip {
         high: stage(&panel.output.high_drop, &panel.output.high_resistance),
         low: stage(&panel.output.low_drop, &panel.output.low_resistance),
         pull_up: None,
+        pull_down: None,
         leakage: None,
     };
     // V(RST) - f * V(VCC) - (1 - f) * V(GND): RST against a fraction of the chip's supply.

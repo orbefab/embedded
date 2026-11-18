@@ -56,6 +56,9 @@ pub(crate) struct Output {
     pub(crate) low: Stage,
     /// Ohm, greater than 0. `None` on a pin whose core never drives [`Drive::PullUp`].
     pub(crate) pull_up: Option<f64>,
+    /// Ohm, greater than 0, to GND while its core pulls the pin down. `None` on a pin that never
+    /// pulls down, where a pull-down its core reports is not stamped.
+    pub(crate) pull_down: Option<f64>,
     /// Ohm, greater than 0, to VCC and again to GND in every drive state. `None` on a pin that
     /// leaks nothing.
     pub(crate) leakage: Option<f64>,
@@ -210,6 +213,23 @@ impl Core {
             #[cfg(test)]
             Core::Script(ref core) => core.drive(),
         }
+    }
+
+    /// Whether each output pulls down, in the order of its image, or empty when none does. Only a
+    /// microcontroller says so, and only at a stop.
+    pub(crate) fn pulled_down(&self) -> &[bool] {
+        match *self {
+            Core::Mcu(ref mcu) => mcu.pulled_down(),
+            Core::Device(_) => &[],
+            #[cfg(test)]
+            Core::Script(ref core) => core.pulled_down(),
+        }
+    }
+
+    /// Whether output `output`'s pin pulls down to its GND, which its `Output` stamps only when
+    /// it has a pull-down.
+    pub(crate) fn pulls_down(&self, output: usize) -> bool {
+        self.pulled_down().get(output).copied().unwrap_or(false)
     }
 
     /// Whether a reset holds it, which changes its own draw as a drive change does. Only a
@@ -374,9 +394,20 @@ pub(crate) fn stamp(chip: &Chip, core: &Core, sys: &mut System, source_scale: f6
     if let Some(supply) = chip.supply {
         sys.conductance(supply.vcc, supply.gnd, supply.conductance(core));
     }
-    for (output, drive) in chip.outputs.iter().zip(drive) {
+    let pulled_down = core.pulled_down();
+    debug_assert!(pulled_down.is_empty() || pulled_down.len() == chip.outputs.len());
+    for (n, (output, drive)) in chip.outputs.iter().zip(drive).enumerate() {
         if let Some(ohm) = output.leakage {
             sys.conductance(output.pin, output.vcc, 1.0 / ohm);
+            sys.conductance(output.pin, output.gnd, 1.0 / ohm);
+        }
+        if let Some(ohm) = output.pull_down
+            && pulled_down.get(n) == Some(&true)
+        {
+            debug_assert!(
+                matches!(drive, Drive::PullUp | Drive::Off),
+                "only a pin that does not drive pulls down"
+            );
             sys.conductance(output.pin, output.gnd, 1.0 / ohm);
         }
         match drive {
@@ -627,8 +658,8 @@ impl Ahead {
             self.rewind(world, committed, at);
             self.core.input(world, at, levels);
             assert_eq!(
-                self.core.drive(),
-                committed.drive(),
+                (self.core.drive(), self.core.pulled_down()),
+                (committed.drive(), committed.pulled_down()),
                 "an input on the held solve never changes an image"
             );
             self.commit(committed, staged);
@@ -636,8 +667,8 @@ impl Ahead {
         }
         committed.input(world, at, levels);
         assert_eq!(
-            committed.drive(),
-            self.core.drive(),
+            (committed.drive(), committed.pulled_down()),
+            (self.core.drive(), self.core.pulled_down()),
             "an input on the held solve never changes an image"
         );
         self.core.input(world, at, levels);
@@ -672,8 +703,8 @@ impl Actives {
                     levels.of(circuit.active_watches(k)),
                 );
                 assert_eq!(
-                    core.drive(),
-                    chip.core.drive(),
+                    (core.drive(), core.pulled_down()),
+                    (chip.core.drive(), chip.core.pulled_down()),
                     "the power-on input never changes an image"
                 );
                 core
@@ -942,7 +973,10 @@ impl Actives {
             // records the first pass read in place.
             ahead.rewind(world, committed, at);
             let image = ahead.core.drive().to_vec();
-            changed |= image != committed.drive() || ahead.core.held() != committed.held();
+            let pulled_down = ahead.core.pulled_down().to_vec();
+            changed |= image != committed.drive()
+                || pulled_down != committed.pulled_down()
+                || ahead.core.held() != committed.held();
             if stop.is_some_and(|stop| stop.sample) {
                 let volts: Vec<f64> = circuit.actives[k]
                     .samples
@@ -961,8 +995,8 @@ impl Actives {
                 ahead.core.event(world, at, event.event());
             }
             assert_eq!(
-                ahead.core.drive(),
-                image,
+                (ahead.core.drive(), ahead.core.pulled_down()),
+                (&image[..], &pulled_down[..]),
                 "a sample, an input, a record or an event at a landing never changes an image"
             );
             ahead.commit(committed, &mut self.staged);

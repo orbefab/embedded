@@ -6,15 +6,20 @@ This text comes from the `orbe` you have installed, so it matches it. `orbe <com
 
 ## The loop
 
-1. Make a project folder and write `scene.jsonc` in it.
-2. Build the firmware and name the built file in the scene. For an Arduino board, run `orbe skills get arduino` first.
-3. Run `orbe check scene.jsonc`. It prints every error with its file, line, column and a hint. A missing part is `part_missing`, and its hint is the `orbe add` command to run. Run it as printed, then check again.
-4. Run `orbe lint scene.jsonc`. It runs `orbe check` first, then warns of what checks but is likely wrong or unclear, such as an LED with no series resistor. Read each warning. Do what its hint says, or leave it when the scene means it. Run `orbe lint` again after every edit to the scene.
-5. Run `orbe open` in the project folder. It opens `scene.jsonc` there, or the scene you name, as `orbe open path/to/scene.jsonc`. It checks the scene, starts a session at t = 0, paused, and lists the parts.
-6. Drive it with `orbe step`, `orbe press`, `orbe release`, `orbe set`, `orbe get`, `orbe expect` and `orbe snapshot`.
-7. To fix something, edit the scene or the firmware, rebuild, run `orbe lint`, and run `orbe open` again. It restarts the session at t = 0.
-8. Run `orbe close` when the live work is done. A `no_session` error from it means nothing was open.
-9. Write what worked as `tests/<name>.test` and run `orbe test`. It leaves no session to close.
+1. When a Block is close to the circuit, run `orbe add <block>` in an empty folder. It writes a scene, firmware and a test that already work. Then run `orbe check scene.jsonc` and `orbe test`. Otherwise start at the next step.
+   - `nano-button-led`: a button on D2 lights a red LED on D13 of an Arduino Nano, and releasing it turns the LED off.
+   - `uno-button-led`: a button on D2 lights a red LED on D13 of an Arduino Uno, and the board's own L LED with it.
+   - `nano-led-fade`: an LED on D9 of an Arduino Nano fades up and down by PWM.
+   - `nano-light-comparator`: an LDR and a trimmer set a threshold. An LM358 lights a red LED in the dark, and a Nano on D2 prints dark or light.
+2. Make a project folder and write `scene.jsonc` in it.
+3. Build the firmware and name the built file in the scene. For an Arduino board, run `orbe skills get arduino` first.
+4. Run `orbe check scene.jsonc`. It prints every error with its file, line, column and a hint. A missing part is `part_missing`, and its hint is the `orbe add` command to run. Run it as printed, then check again.
+5. Run `orbe lint scene.jsonc`. It runs `orbe check` first, then warns of what checks but is likely wrong or unclear, such as an LED with no series resistor. Read each warning. Do what its hint says, or leave it when the scene means it. Run `orbe lint` again after every edit to the scene.
+6. Run `orbe open` in the project folder. It opens `scene.jsonc` there, or the scene you name, as `orbe open path/to/scene.jsonc`. It checks the scene, starts a session at t = 0, paused, and lists the parts.
+7. Drive it with `orbe step`, `orbe press`, `orbe release`, `orbe set`, `orbe get`, `orbe expect` and `orbe snapshot`.
+8. To fix something, edit the scene or the firmware, rebuild, run `orbe lint`, and run `orbe open` again. It restarts the session at t = 0.
+9. Run `orbe close` when the live work is done. A `no_session` error from it means nothing was open.
+10. Write what worked as `tests/<name>.test` and run `orbe test`. It leaves no session to close.
 
 ## Worked example
 
@@ -234,7 +239,7 @@ breadboard.jsonc: ok, 19 engine parts, 32 nets, ground nano__GND
 
 `orbe add <id>…` copies parts from the catalog built into this `orbe` into `parts/<id>/` and records them in `parts.lock`. It also copies the parts a part is built from. Commit `parts/` and `parts.lock` with the scene. Don't edit a copied part. A copy that differs, even in spacing, is a `part_modified` error. A board built from other parts, such as `nano-board`, is the exception. An edit to it checks, with a note. A copy that matches its `parts.lock` line and is an older version than the part this orbe carries is a `part_outdated` error. The message names both versions. Its hint is one `orbe add` command that names every such id. Run it as printed, then check again. A copy that matches its lock line and is a newer version than this orbe carries is a `part_newer` error. The message names the version the project holds and the version this orbe carries. The hint says this project needs a newer orbe, and that id is not in an `orbe add` command. `--overwrite` leaves the copy where it is, including when the command writes a board that is built from it, and says this project needs a newer orbe for it. When `orbe add` refuses, it says the same for each copy it left, and the `orbe add` in its hint names every id that command would write. That command always names an id. When nothing can be written, the hint names no `orbe add` and says this project needs a newer orbe. The same version with different bytes is still `part_modified` for a sealed part: a registry refuses that change and asks for a new version. A board stays the exception above. To change a part, copy it to a folder of your own and name it by its `./` path.
 
-`orbe add <block>` installs a Block, a small circuit that works. It copies the parts the scene names into `parts/` and records them in `parts.lock`, then writes the Block's `scene.jsonc`, `firmware/` and `tests/`. The Blocks are `nano-button-led`, `uno-button-led`, `nano-led-fade` and `nano-light-comparator`. A folder that already holds another `scene.jsonc` is `scene_exists`, since orbe does not merge scenes. A file already there with other bytes is `file_exists`. Either refusal writes nothing. A file already there with the Block's bytes is kept, so running the same install again finishes one that stopped part way. A new folder is only for a file whose bytes differ.
+`orbe add <block>` installs a Block, a small circuit that works. It copies the parts the scene names into `parts/` and records them in `parts.lock`, then writes the Block's `scene.jsonc`, `firmware/`, `tests/` and `README.md`. The Blocks are `nano-button-led`, `uno-button-led`, `nano-led-fade` and `nano-light-comparator`. `orbe blocks` lists them. A folder that already holds another `scene.jsonc` is `scene_exists`, since orbe does not merge scenes. A file already there with other bytes is `file_exists`. Either refusal writes nothing. A file already there with the Block's bytes is kept, so running the same install again finishes one that stopped part way. A new folder is only for a file whose bytes differ.
 
 `orbe part <id>` prints one catalog part: its title, maker and number, license, folder hash, pins, params, ratings, what is not simulated, datasheets, where to buy it, files, the parts it is built from and the parts that use it. An LED's print names `brightness`, the average `i` over 20 ms, and the `lit`, `dim` and `off` ranges. A part with no summary or tags leaves those out. A rating set to null prints as unrated. A part with no `buy` prints `none`. A name that is not an id, and is a whole word of exactly one id, prints that part. `orbe part 1n4007` prints `diode-1n4007`. When several ids share that word, the command is `unknown_part` and the hint lists those ids. `orbe search <words>` lists parts whose id, title, maker, number, summary or tags hold every word. An exact id comes first. Then a part whose every word is a whole word of its id, its title or its tags. Then the rest. Ids break ties. `orbe part <id> --json` and `orbe search <words> --json` print the same card as JSON. Any other unknown id is `unknown_part`, and the hint names close ids.
 

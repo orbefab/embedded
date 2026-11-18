@@ -47,6 +47,7 @@ pub(crate) fn chip(part: PartId, replay: &PulsesReplay) -> Chip {
         high: stage(&replay.output.high_drop, &replay.output.high_resistance),
         low: stage(&replay.output.low_drop, &replay.output.low_resistance),
         pull_up: None,
+        pull_down: None,
         leakage: None,
     };
     let records: Arc<[Record]> = (0u64..)

@@ -139,6 +139,7 @@ struct Pin {
     high: Stage,
     low: Stage,
     pull_up: Option<f64>,
+    pull_down: Option<f64>,
     leakage: Option<f64>,
 }
 
@@ -504,6 +505,7 @@ impl Pin {
             high: output.high,
             low: output.low,
             pull_up: output.pull_up,
+            pull_down: output.pull_down,
             leakage: output.leakage,
         }
     }
@@ -516,7 +518,13 @@ impl Gauge {
         let drive = core.drive();
         debug_assert_eq!(drive.len(), self.outputs.len());
         let (mut supply, mut ground) = (0.0, 0.0);
-        for ((pin, &drive), current) in self.outputs.iter().zip(drive).zip(&mut self.currents) {
+        for (n, ((pin, &drive), current)) in self
+            .outputs
+            .iter()
+            .zip(drive)
+            .zip(&mut self.currents)
+            .enumerate()
+        {
             let v = |column: usize| row[column].get();
             let (vp, vcc, gnd) = (v(pin.pin), v(pin.vcc), v(pin.gnd));
             // From VCC into the pin's node, and from the node into GND.
@@ -533,6 +541,11 @@ impl Gauge {
                         (vcc - vp) / pin.pull_up.expect("a pull-up drive on a pin that has one");
                 }
                 Drive::Off => {}
+            }
+            if let Some(ohm) = pin.pull_down
+                && core.pulls_down(n)
+            {
+                into_gnd += (vp - gnd) / ohm;
             }
             *current = from_vcc - into_gnd;
             supply += from_vcc;

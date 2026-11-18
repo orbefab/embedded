@@ -1,6 +1,6 @@
 //! `orbe add <block>` installs a Block. It copies the parts the scene names, as `orbe add <part>`
-//! does, then writes the Block's scene, firmware and tests. A part id and a Block id never match,
-//! so one word names one of them.
+//! does, then writes the Block's scene, firmware, tests and README. A part id and a Block id
+//! never match, so one word names one of them.
 //!
 //! Every check that can refuse runs before anything is written. A link where a directory would be
 //! created or entered, at the temp file, or at a destination is refused, and the writer never
@@ -20,11 +20,9 @@ use super::{AddCode, AddReply, Again, Fault, Refusal, Reply, Request, RunError, 
 use crate::files::Files;
 use crate::project::{self, BLOCK};
 
-include!(concat!(env!("OUT_DIR"), "/blocks.rs"));
-
-/// The files a Block keeps to itself: the one that makes its folder a Block, and its page.
-/// An installed project reads its own copies of the parts, so it must not be a Block.
-const KEPT: [&str; 2] = [BLOCK, "README.md"];
+/// `block.jsonc` stays behind. It is what makes a folder a Block, and an installed project
+/// reads its own part copies, so it must not be one.
+const KEPT: [&str; 1] = [BLOCK];
 
 /// A Block this binary was built with, from the repo's `blocks/`.
 pub(super) struct Block {
@@ -34,15 +32,13 @@ pub(super) struct Block {
 }
 
 pub(crate) fn ids() -> impl Iterator<Item = &'static str> {
-    FILES
-        .iter()
-        .filter_map(|(path, _)| path.strip_suffix(&format!("/{BLOCK}")))
+    crate::blocks::ids()
 }
 
 fn find(id: &str) -> Option<Block> {
     let id = ids().find(|block| *block == id)?;
     let prefix = format!("{id}/");
-    let files = FILES
+    let files = crate::blocks::FILES
         .iter()
         .filter_map(|(path, bytes)| Some((path.strip_prefix(prefix.as_str())?, *bytes)))
         .filter(|(rel, _)| !KEPT.contains(rel))
