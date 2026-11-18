@@ -1,7 +1,9 @@
+import type { ReactNode } from "react";
 import { BlockPlayer } from "../components/block-player";
 import type { BlockCard, Linked } from "../data";
 import { at } from "../paths";
-import { type BlockRecord, dependencyId, type Item, type Site } from "../records";
+import type { ReadmeRun } from "../readme";
+import { type BlockRecord, dependencyId, type FileEntry, type Item, type Site } from "../records";
 import { Files } from "./files";
 import { CliComing, Install, None, Section, Table } from "./layout";
 
@@ -41,6 +43,53 @@ export interface BlockView {
   readonly item: Item<BlockRecord>;
   readonly links: Readonly<Record<string, Linked>>;
   readonly texts: readonly { readonly path: string; readonly text: string }[];
+  readonly readme: readonly (readonly ReadmeRun[])[];
+}
+
+/** Where a README link goes: a web or mail address as written, or a file of the Block. Any
+ * other target, such as a `javascript:` URL, a protocol-relative URL or a missing file, is no link. */
+function fileHref(href: string, files: readonly FileEntry[]): string | undefined {
+  if (/^(https?:\/\/|mailto:)/i.test(href)) return href;
+  const file = files.find((entry) => entry.path === href);
+  return file === undefined ? undefined : at.file(file.sha256);
+}
+
+function Readme({ paragraphs, files }: { paragraphs: BlockView["readme"]; files: readonly FileEntry[] }) {
+  return (
+    <div className="mt-8 grid max-w-3xl gap-4 leading-relaxed" data-testid="readme">
+      {paragraphs.map((paragraph) => (
+        <p key={paragraph.map((run) => run.text).join("")}>
+          {paragraph.map((run, index): ReactNode => {
+            if (run.kind === "code")
+              return (
+                <code className="font-mono" key={index}>
+                  {run.text}
+                </code>
+              );
+            if (run.kind === "link") {
+              const coded = run.text.startsWith("`") && run.text.endsWith("`");
+              const text = coded ? run.text.slice(1, -1) : run.text;
+              const href = fileHref(run.href, files);
+              if (href === undefined)
+                return coded ? (
+                  <code className="font-mono" key={index}>
+                    {text}
+                  </code>
+                ) : (
+                  text
+                );
+              return (
+                <a className="underline hover:text-brand" href={href} key={index}>
+                  {coded ? <code className="font-mono">{text}</code> : text}
+                </a>
+              );
+            }
+            return run.text;
+          })}
+        </p>
+      ))}
+    </div>
+  );
 }
 
 export function BlockPage({ site, block }: { site: Site; block: BlockView }) {
@@ -70,6 +119,7 @@ export function BlockPage({ site, block }: { site: Site; block: BlockView }) {
         <p className="mt-3 text-muted-foreground text-sm">
           This is the real engine: orbe-wasm {site.engine.version} runs the Block's firmware in a Worker in your browser. Use the controls in the view.
         </p>
+        <Readme files={record.files} paragraphs={block.readme} />
       </div>
 
       <Section title="Install">
