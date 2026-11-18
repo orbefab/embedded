@@ -452,7 +452,7 @@ fn loose(kind: &str, parts: &str, layout: &str, wires: &str, ground: &str) -> te
 /// A column of five and the 400's 25-hole X rail, each already full, say so.
 #[test]
 fn a_full_strip_says_the_strip_is_full() {
-    let full = "a hole holds one lead; the strip is full, so move one lead to another strip";
+    let full = "a hole holds one lead; this strip is full, so wire it to a strip with a free hole and move one lead there";
     let column = loose(
         "breadboard-400",
         r#""r1": { "type": "resistor-axial", "resistance": "220" },"#,
