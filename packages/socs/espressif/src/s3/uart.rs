@@ -19,7 +19,8 @@
 //! rule. It also omits the APB-to-baud synchronizer, so a start bit is not delayed past the
 //! write. Turning the baud clock off drops a frame that has not finished, and that byte is
 //! not logged. A peripheral reset returns the port to power-on, apart from the FIFO pointers.
-//! Neither it nor a core reset moves them, as a board capture on 2026-11-18 showed: only
+//! Neither it nor a core reset moves them, as a board capture on 2026-11-18 showed for UART0's
+//! TX pointers (RX takes the same resets and is treated the same): only
 //! `txfifo_rst` and `rxfifo_rst` zero them. So after a reset that followed traffic, a TX FIFO
 //! write or an RX FIFO load before that FIFO's reset bit is refused as `fifo_pointers`. A
 //! flash boot whose capture names no UART register programs UART0 from the captured
@@ -369,7 +370,7 @@ impl Port {
             self.tout_at = None;
         }
         // A core reset empties the FIFO and keeps its pointers, as a board capture on
-        // 2026-11-18 showed. Only `txfifo_rst` and `rxfifo_rst` zero them.
+        // 2026-11-18 showed for UART0's TX side. Only `txfifo_rst` and `rxfifo_rst` zero them.
         if value & (1 << 23 | 1 << 26) != 0 {
             self.tx_fifo.clear();
             self.tx = None;
