@@ -2,6 +2,8 @@
 
 A hardware simulator for AI agents. You describe a circuit as a scene file, flash it with real firmware, and drive it from the command line with `orbe`. Today it runs Arduino Nano and Uno scenes headless, or in a 3D page in the browser. The repo is private for now, and everything goes public later.
 
+0.1 runs the Arduino Nano and Uno. The ESP32 cores are in progress.
+
 ## Folders
 
 | Folder | What it holds |
@@ -23,22 +25,42 @@ A hardware simulator for AI agents. You describe a circuit as a scene file, flas
 | [`parts/`](parts/) | The parts catalog. Each folder is one real part: `part.jsonc`, `model.py` when the model is built here, its 3D model and `asset.json`. |
 | [`blocks/`](blocks/) | Blocks: small circuits that work, each with its scene, firmware and tests. `orbe add <block>` installs one into a project. |
 | [`registry.jsonc`](registry.jsonc) | Names the official registry, `@orbefab`, that `orbe registry build .` builds from `parts/` and `blocks/`. |
-| [`scripts/`](scripts/) | The checks. `check.sh lint` is what CI runs, `check.sh fast` adds the tests and gates every change, and `check.sh full` runs every check. `scripts/model.sh` builds a part's model. Run `scripts/bless.sh` after changing a viewer message type, to rewrite the viewer's `protocol.ts`. `scripts/released.sh` rewrites `released.lock` when a release is tagged. |
+| [`scripts/`](scripts/) | The checks. `check.sh lint` is what CI runs, `check.sh fast` adds the tests and gates every change, and `check.sh full` runs every check. `scripts/release-build.sh` builds a release binary with the viewer, and `scripts/install.sh` is the install script the site serves. `scripts/model.sh` builds a part's model. Run `scripts/bless.sh` after changing a viewer message type, to rewrite the viewer's `protocol.ts`. `scripts/released.sh` rewrites `released.lock` when a release is tagged. |
 | [`skills/orbe`](skills/orbe/SKILL.md) | The stub an agent installs. |
 | [`docs/`](docs/) | Finalized docs: [`decisions.md`](docs/decisions.md), [`viewer.md`](docs/viewer.md), [`asset-step.md`](docs/asset-step.md), [`registry.md`](docs/registry.md), [`wasm.md`](docs/wasm.md), [`site.md`](docs/site.md), [`engine/`](docs/engine/README.md). |
 
-## Build and check
+## Use orbe
+
+```sh
+curl -fsSL https://orbefab.com/embedded/install.sh | sh
+```
+
+The script installs `orbe`, with the 3D viewer, for Linux x86_64 and macOS arm64. It puts the binary in `~/.local/bin`. When that directory is not on `PATH`, the script says so. It does not edit your shell rc files.
+
+### Try it
+
+```sh
+mkdir demo
+cd demo
+orbe add nano-button-led
+orbe test
+orbe open
+```
+
+`orbe add` copies the Block into the folder. `orbe test` runs its tests. `orbe open` opens the scene, paused. `orbe show` opens the 3D viewer on that session. `orbe part <id>` prints one catalog part, and `orbe search <words>` finds parts by id, title, maker, number, summary and tags.
+
+## Contribute
 
 You need Rust (pinned in `rust-toolchain.toml`), cargo-nextest at the version `.config/nextest.toml` names, uv, shellcheck, Node 24 and pnpm.
 
 ```sh
 pnpm install --frozen-lockfile
 pnpm --filter @orbe/viewer-page build
-cargo build -p orbe
+cargo install --locked --path apps/orbe
 scripts/check.sh fast
 ```
 
-An `orbe` built without the viewer page still runs every headless command, and `orbe show` then says how to build the page. `orbe part <id>` prints one catalog part, and `orbe search <words>` finds parts by id, title, maker, number, summary and tags.
+`cargo install` puts `orbe` on `PATH`. An `orbe` built without the viewer page still runs every headless command, and `orbe show` then says how to build the page.
 
 ## Skills for agents
 

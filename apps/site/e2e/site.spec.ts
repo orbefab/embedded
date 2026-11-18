@@ -4,7 +4,7 @@ import { gzipSync } from "node:zlib";
 import type { BrowserContext, Page } from "@playwright/test";
 import { collectLogs, expect, ledGlow, orbeJson, pointOn, REPO, shot, test, waitGlow, waitState } from "../../../e2e/support";
 
-const INSTALL = /orbe add|cargo install|github\.com\/orbefab\/embedded/;
+const INSTALL = /orbe add|cargo install|github\.com\/orbefab\/embedded|orbefab\.com\/embedded\/install\.sh/;
 const VIEW = { width: 1280, height: 900 };
 const QUERIES = ["led", "5 mm", "kingbright", "board", "resistor 0603", "smd", "avr usb", "nano-board", "Push", "MICROCHIP"];
 

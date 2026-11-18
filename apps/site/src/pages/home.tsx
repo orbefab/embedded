@@ -42,10 +42,11 @@ export function HomePage({ site, home }: { site: Site; home: Home }) {
       <Section title="Get orbe">
         {__ORBE_SITE_INSTALL__ ? (
           <Install
-            lines={["cargo install --locked --git https://github.com/orbefab/embedded orbe", "orbe skills get core"]}
+            lines={["curl -fsSL https://orbefab.com/embedded/install.sh | sh", "orbe skills get core"]}
             note={
               <>
-                Binaries for Linux and macOS are on the{" "}
+                The script installs a prebuilt <code className="font-mono">orbe</code> with the viewer, for Linux x86_64 and macOS arm64, into ~/.local/bin.
+                The archives are on the{" "}
                 <a className="underline hover:text-foreground" href="https://github.com/orbefab/embedded/releases">
                   releases page
                 </a>
