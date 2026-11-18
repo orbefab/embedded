@@ -79,7 +79,7 @@ pub(crate) struct Hosting<D> {
 impl<D: Device> Clone for Hosting<D> {
     fn clone(&self) -> Self {
         Hosting {
-            device: self.device,
+            device: self.device.clone(),
             broke: self.broke,
             shown: Arc::clone(&self.shown),
             drawn: self.drawn.clone(),
@@ -101,10 +101,6 @@ impl<D: Device> Clone for Hosting<D> {
 }
 
 impl<D: Device> Hosting<D> {
-    /// Moves `device` in. Inlined so a `Copy` device the size of a frame is built into this
-    /// struct instead of copied through a second frame. A separate call keeps both, and the two
-    /// frames together overrun the wasm stack.
-    #[inline(always)]
     fn new(device: D) -> Hosting<D> {
         Hosting {
             device,
@@ -341,11 +337,7 @@ impl<D: Device, P: Clone> Clone for Native<D, P> {
 
 impl<D: Device, P: Port<D>> Native<D, P> {
     /// `device` at power-on, which drives `outputs` outputs of its own.
-    ///
-    /// Inlined so a `Copy` device the size of a frame is built into the core. A call that is not
-    /// inlined keeps a copy in this frame and in the caller's, and the two together overrun the
-    /// wasm stack. `refresh` fills the drives after the device has moved.
-    #[inline(always)]
+    /// `refresh` fills the drives after the device has moved.
     pub(crate) fn new(device: D, port: P, outputs: usize) -> Native<D, P> {
         assert!(outputs <= Drives::MAX && P::PINS + outputs <= IMAGE);
         let mut native = Native {
