@@ -31,6 +31,7 @@
     {
       "name": "u1",
       "kind": "esp32s3",
+      "efuse": "knob",
       "pins": {
         "VCC": "vcc",
         "GND": "gnd",
