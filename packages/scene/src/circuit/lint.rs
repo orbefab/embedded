@@ -38,6 +38,8 @@ struct Scope<'c, 'p> {
     scene: Node,
     engine: Netlist,
     ground: &'c str,
+    /// Nets left out of `net.floating`. See [`Circuit::quiet_floating`].
+    quiet: BTreeSet<String>,
 }
 
 impl Scope<'_, '_> {
@@ -130,11 +132,70 @@ impl Circuit<'_> {
             engine: orbe_engine::netlist::parse(netlist.json.as_bytes())
                 .expect("the engine read this netlist when it checked"),
             ground: &netlist.ground,
+            quiet: netlist.refs.quiet_floating.clone(),
         };
         for rule in RULES {
             rule(&scope, out);
         }
     }
+
+    /// Net names `net.floating` leaves out. Every pin on such a net, other than a hole, belongs
+    /// to one part that holds both a source and a chip, and no scene wire reaches the net. A
+    /// hole that only seats the part's own pin does not count, and neither does the ground ref.
+    pub(super) fn quiet_floating(
+        &mut self,
+        nets: &BTreeMap<usize, String>,
+        engine: &Netlist,
+    ) -> BTreeSet<String> {
+        let keys: Vec<usize> = self
+            .project
+            .scene
+            .comp
+            .wires
+            .iter()
+            .flat_map(|wire| &wire.ends)
+            .filter_map(|end| self.lookup(ROOT, end).ok().flatten())
+            .collect();
+        let root_of: Vec<usize> = (0..self.pins.len()).map(|key| self.find(key)).collect();
+        let reached: BTreeSet<usize> = keys.into_iter().map(|key| root_of[key]).collect();
+        let mut quiet = BTreeSet::new();
+        for (&root, name) in nets {
+            if reached.contains(&root) {
+                continue;
+            }
+            let mut owners = BTreeSet::new();
+            for (key, pin) in self.pins.iter().enumerate() {
+                if root_of[key] != root || pin.hole || self.insts[pin.inst].dropped.is_some() {
+                    continue;
+                }
+                let Some(top) = self.insts[pin.inst].path.first() else {
+                    continue;
+                };
+                owners.insert(self.insts[ROOT].children[top]);
+            }
+            if owners.len() != 1 {
+                continue;
+            }
+            let owner = *owners.iter().next().expect("the set holds one owner");
+            if holds_source_and_chip(engine, &self.insts[owner].path[0]) {
+                quiet.insert(name.clone());
+            }
+        }
+        quiet
+    }
+}
+
+/// A part that holds both a supply and a chip, such as a board. The kinds are the engine's,
+/// so the check does not read a part name or a board id.
+fn holds_source_and_chip(engine: &Netlist, top: &str) -> bool {
+    let holds = |kind: fn(&Model) -> bool| {
+        engine.parts().any(|(_, part)| {
+            let name = part.name.as_str();
+            kind(&part.model) && name.split("__").next().unwrap_or(name) == top
+        })
+    };
+    holds(|model| matches!(model, Model::VoltageSource(_)))
+        && holds(|model| matches!(model, Model::Chip(_)))
 }
 
 fn unplaced(s: &Scope, out: &mut Findings) {
@@ -384,6 +445,9 @@ fn floating(s: &Scope, out: &mut Findings) {
             continue;
         };
         let net = net.as_str();
+        if s.quiet.contains(net) {
+            continue;
+        }
         let root = s.net_root(net).expect("the reader named every net");
         let first = (0..s.circuit.pins.len())
             .find(|&k| s.root[k] == root && !s.circuit.pins[k].hole)

@@ -93,16 +93,16 @@ fn lint_warns_on_the_nano_block_exits_zero_and_writes_nothing() {
 
     let scene = fs::read_to_string(block.join("scene.jsonc")).unwrap();
     let at = |text: &str| line_of(&scene, text);
-    let nano = at("\"nano\":");
-    let want: Vec<(usize, String)> = [(at("{"), "scene.ground_unnamed"), (nano, "net.floating")]
+    let want: Vec<(usize, String)> = [(at("{"), "scene.ground_unnamed")]
         .into_iter()
         .map(|(l, c)| (l, c.into()))
         .collect();
     assert_eq!(warned(&run.stdout), want, "{}", run.stdout);
     assert!(
         run.stdout
-            .ends_with("2 warnings in blocks/nano-button-led/scene.jsonc\n")
+            .ends_with("1 warning in blocks/nano-button-led/scene.jsonc\n")
     );
+    assert!(!run.stdout.contains("net.floating"), "{}", run.stdout);
     assert!(
         run.stdout
             .contains("add \"GND\": \"nano.GND\" to the scene's \"nets\"")
@@ -114,7 +114,7 @@ fn lint_warns_on_the_nano_block_exits_zero_and_writes_nothing() {
     ));
     assert_eq!(envelope["ok"], true);
     let found = envelope["data"]["diagnostics"].as_array().unwrap();
-    assert_eq!(found.len(), 2);
+    assert_eq!(found.len(), 1);
     for d in found {
         let keys: Vec<&str> = d.as_object().unwrap().keys().map(String::as_str).collect();
         assert_eq!(keys, ["code", "column", "file", "hint", "line", "message"]);
@@ -125,17 +125,55 @@ fn lint_warns_on_the_nano_block_exits_zero_and_writes_nothing() {
 }
 
 /// The Uno's parts all have a model, a reason or `joins_only`, and its L LED has its resistor,
-/// so its Block warns only of what the Nano Block also leaves as it is: the ground's name, and
-/// AREF with nothing wired to it. The breadboard's empty holes warn of nothing.
+/// so its Block warns only of what the Nano Block also leaves as it is: the ground's name.
+/// AREF stays inside the board, and the breadboard's empty holes warn of nothing.
 #[test]
 fn lint_on_the_uno_block_warns_only_as_the_nano_block_does() {
     let repo = common::repo();
     let run = orbe(&repo, &["lint", "blocks/uno-button-led/scene.jsonc"]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     let codes: Vec<String> = warned(&run.stdout).into_iter().map(|(_, c)| c).collect();
-    assert_eq!(
-        codes,
-        ["scene.ground_unnamed", "net.floating"],
+    assert_eq!(codes, ["scene.ground_unnamed"], "{}", run.stdout);
+}
+
+/// A net that stays inside a board is left out of `net.floating` when no scene wire reaches it.
+/// A wire from AREF to an open pin still warns, and so does a wire from AREF to a hole.
+#[test]
+fn a_board_net_with_no_scene_wire_is_quiet_and_a_wire_to_it_still_warns() {
+    let firmware = r#""type": "nano-board", "firmware": "build/button.ino.hex""#;
+    let bare = project(&format!(
+        "{{ \"format\": 1, \"parts\": {{ \"nano\": {{ {firmware} }} }}, \"nets\": {{ \"GND\": \"nano.GND\" }} }}\n"
+    ));
+    let run = orbe(bare.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(!run.stdout.contains("net.floating"), "{}", run.stdout);
+
+    let wired = project(&format!(
+        "{{ \"format\": 1, \"parts\": {{ \"nano\": {{ {firmware} }}, \"r\": {{ \"type\": \"resistor-axial\", \"resistance\": \"10k\" }} }}, \"nets\": {{ \"GND\": \"nano.GND\" }}, \"wires\": [[\"nano.AREF\", \"r.a\"]] }}\n"
+    ));
+    let run = orbe(wired.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout
+            .contains("warning[net.floating]: #net.nano__AREF has no DC path to ground"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout
+            .contains("warning[net.floating]: #net.r__b has no DC path to ground"),
+        "{}",
+        run.stdout
+    );
+
+    let holed = project(&format!(
+        "{{ \"format\": 1, \"parts\": {{ \"bb\": {{ \"type\": \"breadboard-400\" }}, \"nano\": {{ {firmware} }} }}, \"nets\": {{ \"GND\": \"nano.GND\" }}, \"layout\": {{ \"bb\": {{ \"at\": [0, 0, 0] }} }}, \"wires\": [[\"nano.AREF\", \"bb.a1\"]] }}\n"
+    ));
+    let run = orbe(holed.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout
+            .contains("warning[net.floating]: #net.nano__AREF has no DC path to ground"),
         "{}",
         run.stdout
     );
@@ -238,7 +276,6 @@ fn each_rule_warns_where_the_scene_goes_wrong() {
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     let at = |text: &str| line_of(scene, text);
     let want = [
-        (at("\"nano\": { \"type\""), "net.floating"),
         (at("\"led1\": { \"type\""), "scene.led_no_resistor"),
         (at("\"led2\""), "scene.unplaced"),
         (at("\"led2\""), "scene.unconnected"),
@@ -546,11 +583,7 @@ fn two_pins_of_a_part_in_one_breadboard_strip_warn_shorted() {
         let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
         assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
         let codes: Vec<String> = warned(&run.stdout).into_iter().map(|(_, c)| c).collect();
-        let want: &[&str] = if shorted {
-            &["net.floating", "scene.shorted"]
-        } else {
-            &["net.floating"]
-        };
+        let want: &[&str] = if shorted { &["scene.shorted"] } else { &[] };
         assert_eq!(codes, want, "rotate {rotate}: {}", run.stdout);
         if shorted {
             assert!(

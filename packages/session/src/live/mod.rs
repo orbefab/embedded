@@ -539,6 +539,12 @@ impl Open {
             }
         }
         found.extend(self.engine.fault().cloned());
+        found.retain(|diagnostic| match diagnostic {
+            EngineDiagnostic::NetFloating {
+                net: EngineRef::Net(name),
+            } => !self.refs.quiet_floating.contains(name.as_str()),
+            _ => true,
+        });
         orbe_engine::run_folder::sort_diagnostics(&mut found);
         found
     }

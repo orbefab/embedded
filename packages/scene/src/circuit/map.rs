@@ -1,7 +1,7 @@
 //! How the scene's dotted names reach the engine's flat ones, for a live session to resolve a
 //! ref such as `@nano.D13` without guessing at names.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::Circuit;
 use crate::diagnostic::Findings;
@@ -13,6 +13,10 @@ pub struct RefMap {
     pub parts: BTreeMap<String, MapPart>,
     /// The scene's own instances, in the scene's order.
     pub top: Vec<String>,
+    /// Nets `net.floating` leaves out of lint and of a live session. The engine still reports
+    /// them. Every pin on such a net, other than a hole, belongs to one part that holds both a
+    /// source and a chip, and no scene wire reaches the net.
+    pub quiet_floating: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Default)]
