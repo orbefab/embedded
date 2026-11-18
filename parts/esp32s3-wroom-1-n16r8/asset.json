@@ -1,0 +1,50 @@
+{
+  "part": "esp32s3-wroom-1-n16r8",
+  "source": {
+    "script": "model.py",
+    "sha256": "ea1282eb8725beb14c1c218b010b5d4435c37a1f5d0293f4da7ebe52ae045c38",
+    "bytes": 3343
+  },
+  "files": {
+    "esp32s3-wroom-1-n16r8.glb": {
+      "sha256": "49c1153b4b8152852cf41161dc0f3ccb444ccd0fbd0a80cc88c2d283110b4e49",
+      "bytes": 29080
+    },
+    "esp32s3-wroom-1-n16r8.anchors.json": {
+      "sha256": "808575ead72001f9512b737bbf2bfa386b81ce264bf038cb28aa973c8c06867e",
+      "bytes": 4831
+    }
+  },
+  "box": {
+    "min": [-9.5, -13.250001, 0],
+    "max": [9.5, 12.75, 3.1]
+  },
+  "kept_nodes": [],
+  "draw_calls": 2,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 41,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 42,
+      "primitives_out": 2
+    },
+    "composition": {
+      "children": 1,
+      "lowest_node": "body",
+      "z_mm": 0,
+      "draw_calls": 5
+    }
+  }
+}

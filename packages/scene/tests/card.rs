@@ -373,3 +373,19 @@ fn every_file_of_a_board_is_mit_or_apache() {
             .all(|file| file.license == "MIT OR Apache-2.0")
     );
 }
+
+#[test]
+fn the_esp32s3_rom_is_apache_and_the_part_names_it() {
+    let chip = card("esp32s3-qfn56").unwrap();
+    assert!(chip.license.contains("Apache-2.0"), "{}", chip.license);
+    let licence = |path: &str| {
+        chip.files
+            .iter()
+            .find(|file| file.path == path)
+            .map(|file| file.license.as_str())
+    };
+    assert_eq!(licence("esp32s3_rev0_rom.elf"), Some("Apache-2.0"));
+    assert_eq!(licence("LICENSE-rom"), Some("Apache-2.0"));
+    assert_eq!(licence("NOTICE"), Some("Apache-2.0"));
+    assert_eq!(licence("part.jsonc"), Some("MIT OR Apache-2.0"));
+}

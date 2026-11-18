@@ -37,6 +37,15 @@ fn every_part_under_parts_loads_in_a_format_this_binary_reads() {
         dir.path().join("firmware.hex"),
     )
     .unwrap();
+    // An ESP32-S3 `app` and `partitions` are one image. The AVR hex is not an app the
+    // bootloader would start, so those two params get the hello_world blobs.
+    let hello = root.join("packages/scene/tests/fixtures/esp32s3-devkitc");
+    fs::copy(hello.join("app.bin"), dir.path().join("app.bin")).unwrap();
+    fs::copy(
+        hello.join("partitions.bin"),
+        dir.path().join("partitions.bin"),
+    )
+    .unwrap();
     let released = released_ids(&root);
     let cards = catalog_cards();
     let mut loaded = 0usize;
@@ -227,7 +236,12 @@ fn param_value(param: &Param) -> Value {
         return Value::String(name.name.clone());
     }
     if param.file.is_some() {
-        return json!("firmware.hex");
+        let name = match param.name.as_str() {
+            "app" => "app.bin",
+            "partitions" => "partitions.bin",
+            _ => "firmware.hex",
+        };
+        return json!(name);
     }
     json!(number_text(param))
 }

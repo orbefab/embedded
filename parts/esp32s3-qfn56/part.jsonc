@@ -1,0 +1,70 @@
+// ESP32-S3 in QFN-56. Pin numbers are ESP32-S3 Series Datasheet v2.2 Table 2-1.
+// GPIO numbers for the function-named pins are Table 2-4. Power pins are Table 2-11:
+// pins 2, 3, 20, 46, 55 and 56 are power inputs and join VCC. Pin 29, VDD_SPI, is
+// its own pin: Table 2-11 says it is an input or an output for the flash and PSRAM,
+// and this model has one supply rail. Pin 57 is the exposed pad, GND.
+// The electrical values are Table 5-4 at 3.3 V and 25 C, the field table in
+// docs/engine/netlist.md. There is no efuse field.
+// The ROM ELF is Apache-2.0. LICENSE-rom is Espressif's licence, unchanged, and
+// NOTICE quotes the third-party notices. Our files stay MIT OR Apache-2.0.
+{
+  "format": 2,
+  "part": "esp32s3-qfn56",
+  "version": "0.1.0",
+  "title": "ESP32-S3, QFN-56",
+  "summary": "ESP32-S3 in a 7 x 7 mm QFN-56. GPIO names match the esp32s3 kind. The mask ROM is the default of rom.",
+  "tags": ["microcontroller", "esp32-s3", "qfn"],
+  "license": "(MIT OR Apache-2.0) AND Apache-2.0",
+  "docs": {
+    "ESP32-S3 Series Datasheet v2.2": "https://www.espressif.com/sites/default/files/documentation/esp32-s3_datasheet_en.pdf"
+  },
+  "real": { "maker": "Espressif", "number": "ESP32-S3", "datasheet": "ESP32-S3 Series Datasheet v2.2" },
+  "pins": {
+    "LNA_IN": [1],
+    "VCC": [2, 3, 20, 46, 55, 56],
+    "CHIP_PU": [4],
+    "GPIO0": [5], "GPIO1": [6], "GPIO2": [7], "GPIO3": [8], "GPIO4": [9], "GPIO5": [10],
+    "GPIO6": [11], "GPIO7": [12], "GPIO8": [13], "GPIO9": [14], "GPIO10": [15], "GPIO11": [16],
+    "GPIO12": [17], "GPIO13": [18], "GPIO14": [19],
+    "GPIO15": [21], "GPIO16": [22], "GPIO17": [23], "GPIO18": [24], "GPIO19": [25], "GPIO20": [26],
+    "GPIO21": [27],
+    "GPIO26": [28],
+    "VDD_SPI": [29],
+    "GPIO27": [30], "GPIO28": [31], "GPIO29": [32], "GPIO30": [33], "GPIO31": [34], "GPIO32": [35],
+    "GPIO48": [36], "GPIO47": [37],
+    "GPIO33": [38], "GPIO34": [39], "GPIO35": [40], "GPIO36": [41], "GPIO37": [42],
+    "GPIO38": [43], "GPIO39": [44], "GPIO40": [45],
+    "GPIO41": [47], "GPIO42": [48], "GPIO43": [49], "GPIO44": [50], "GPIO45": [51], "GPIO46": [52],
+    "XTAL_N": [53], "XTAL_P": [54],
+    "GND": [57]
+  },
+  "params": {
+    "app": { "file": "bin", "as": "blob", "required": true, "sets": "/firmware/flash/1" },
+    "partitions": { "file": "bin", "as": "blob", "required": true, "sets": "/firmware/flash/0" },
+    "rom": { "file": "elf", "as": "blob", "default": "esp32s3_rev0_rom.elf", "sets": "/rom" }
+  },
+  "model": {
+    "kind": "esp32s3",
+    "firmware": { "flash": [{ "offset": 32768 }, { "offset": 65536 }] },
+    "output": {
+      "high_drop": { "value": 0.0, "unit": "V", "source": { "closed_form": { "note": "the high stage as a resistance from VCC. Table 5-4 footnote 2: VOH is measured with a high-impedance load." } } },
+      "high_resistance": { "value": 16.5, "unit": "ohm", "source": { "closed_form": { "note": "Table 5-4: IOH 40 mA typical at VOH >= 2.64 V, VDD = 3.3 V and PAD_DRIVER = 3, so 0.66 V / 40 mA" } } },
+      "low_drop": { "value": 0.0, "unit": "V", "source": { "closed_form": { "note": "the low stage as a resistance into GND. Table 5-4 footnote 2: VOL is measured with a high-impedance load." } } },
+      "low_resistance": { "value": 17.68, "unit": "ohm", "source": { "closed_form": { "note": "Table 5-4: IOL 28 mA typical at VOL = 0.495 V, VDD = 3.3 V and PAD_DRIVER = 3, so 0.495 V / 28 mA" } } }
+    },
+    "pull_up_resistance": { "value": 45000.0, "unit": "ohm", "source": { "datasheet": { "doc": "ESP32-S3 Series Datasheet v2.2", "at": "Table 5-4, RPU, DC Characteristics (3.3 V, 25 C)", "basis": "typical" } } },
+    "pull_down_resistance": { "value": 45000.0, "unit": "ohm", "source": { "datasheet": { "doc": "ESP32-S3 Series Datasheet v2.2", "at": "Table 5-4, RPD, DC Characteristics (3.3 V, 25 C)", "basis": "typical" } } },
+    "leakage_resistance": { "value": 66000000.0, "unit": "ohm", "source": { "closed_form": { "note": "Table 5-4: IIH and IIL at most 50 nA, so 3.3 V / 50 nA" } } },
+    "input_threshold": {
+      "low": { "value": 0.25, "unit": "1", "source": { "datasheet": { "doc": "ESP32-S3 Series Datasheet v2.2", "at": "Table 5-4, VIL at most 0.25 x VDD", "basis": "max" } } },
+      "high": { "value": 0.75, "unit": "1", "source": { "datasheet": { "doc": "ESP32-S3 Series Datasheet v2.2", "at": "Table 5-4, VIH at least 0.75 x VDD", "basis": "min" } } }
+    }
+  },
+  "not_simulated": [
+    { "what": "LNA_IN", "pins": ["LNA_IN"], "why": "Table 2-1 pin 1 is the RF input. The esp32s3 kind has no radio." },
+    { "what": "CHIP_PU", "pins": ["CHIP_PU"], "why": "Table 2-1 pin 4 is the chip enable. Table 5-4 gives VIH_nRST and VIL_nRST. The kind has no reset pin, so this pin does not reset the model." },
+    { "what": "VDD_SPI", "pins": ["VDD_SPI"], "why": "Table 2-11: pin 29 is an input or an output for the in-package and off-package flash and PSRAM. The kind has one supply, VCC, and does not model that regulator." },
+    { "what": "GPIO33 to GPIO37", "pins": ["GPIO33", "GPIO34", "GPIO35", "GPIO36", "GPIO37"], "why": "The kind gives GPIO33 to GPIO37 to the in-package PSRAM and has no pad for them." },
+    { "what": "XTAL_P and XTAL_N", "pins": ["XTAL_P", "XTAL_N"], "why": "Table 2-1 pins 54 and 53 are the crystal. The kind's clock is a fixed 40 MHz, so these pins are not the clock." }
+  ]
+}

@@ -1,0 +1,14 @@
+// The ESP32-S3-DevKitC-1 v1.1 with the hello_world app and partition table
+// from packages/engine/tests/circuits/esp32s3-hello. The ROM is the chip
+// part's default file.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    }
+  },
+  "ground": "board.GND"
+}

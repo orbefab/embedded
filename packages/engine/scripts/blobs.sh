@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# Puts the blobs no example commits into the blob cache, and prints the cache folder.
+# Puts the ESP32-S3 ROM into the blob cache, and prints the cache folder.
 #
-#   packages/engine/scripts/blobs.sh                 fetch what the cache lacks, then print the folder
-#   packages/engine/scripts/blobs.sh --from <file>   take a blob from a local file instead of fetching it
+#   packages/engine/scripts/blobs.sh                 fill what the cache lacks, then print the folder
+#   packages/engine/scripts/blobs.sh --from <file>   take a blob from a local file instead of the committed copy
 #
 # The cache is $ORBE_BLOBS, else $XDG_CACHE_HOME/orbe/blobs, else ~/.cache/orbe/blobs.
 # Each blob is a file named by its SHA-256. The one such blob is the ESP32-S3 revision 0 ROM ELF
 # from Espressif's esp-rom-elfs release 20241011, the archive ESP-IDF v5.5.5 pins in
-# tools/tools.json. `--from` takes that archive or the ELF itself, and either must hash to the
-# pinned value. Nothing is fetched while the cache holds a good copy. The release URL is
+# tools/tools.json. The catalog part parts/esp32s3-qfn56 commits that ELF. When the cache lacks
+# a good copy, this script copies the committed file. It fetches the release only when that
+# file is absent. `--from` takes the archive or the ELF itself instead, and either must hash
+# to the pinned value. Nothing is fetched while the cache holds a good copy. The release URL is
 # tried first. If that request fails, the same asset is fetched from the GitHub API.
 set -euo pipefail
 
@@ -19,6 +21,8 @@ archive_api=https://api.github.com/repos/espressif/esp-rom-elfs/releases/assets/
 archive_sha=921f000164a421c7628fbfee55b173384aafaa51883adc65cd27bf9b0af9e9a9
 
 cache=${ORBE_BLOBS:-${XDG_CACHE_HOME:-$HOME/.cache}/orbe/blobs}
+root=$(cd "$(dirname "$0")/../../.." && pwd)
+committed=$root/parts/esp32s3-qfn56/esp32s3_rev0_rom.elf
 from=
 if [[ ${1:-} == --from ]]; then
     from=${2:?--from needs a file}
@@ -50,6 +54,8 @@ if [[ -f $cache/$rom_sha && $(sha "$cache/$rom_sha") == "$rom_sha" ]]; then
     :
 elif [[ -n $from ]]; then
     take "$from"
+elif [[ -f $committed && $(sha "$committed") == "$rom_sha" ]]; then
+    take "$committed"
 else
     work=$(mktemp -d)
     trap 'rm -rf "$work"' EXIT

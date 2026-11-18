@@ -1,0 +1,234 @@
+// ESP32-S3-DevKitC-1 v1.1, the N16R8 ordering.
+// Schematic: SCH_ESP32-S3-DevKitC-1_V1.1_20221130, sheet 02, rev V1.1.
+// Header names: ESP32-S3-DevKitC-1 v1.1 User Guide, Header Block, J1 and J3.
+// That section says the numbering matches the Board Schematic and links
+// SCH_ESP32-S3-DevKitC-1_V1.1_20220413.pdf. Related Documents names the
+// 20221130 sheet this part uses. The pin names below are the Header Block.
+// The user guide says v1.1 drives the RGB LED from GPIO38. v1.0 used GPIO48.
+//
+// J2 is the USB-UART socket. Its VBUS is the 5 V rail. The sheet puts a
+// 1N5819HW-7-F (D1) between that VBUS and VCC_5V. The catalog diode is a
+// different part, so the wire is straight and D1 is not placed. J4, the
+// module's USB socket, has the same diode (D7) onto VCC_5V. Each socket is
+// an ideal 5 V source, so J4's VBUS is not joined onto that rail.
+// R7, R8, R9, R13 and R17 are 0 ohm, 1%, and resistor-0603 cannot be 0, so
+// each is a wire. R24, the sheet's 0 ohm on the module's 3V3 feed, is the
+// wire from the regulator output to the module.
+// The sheet also shows R11 5.1k and D5, the red power LED, the rail
+// capacitors, R16 1k on the bridge RSTb, R14 10k marked NC, and R19 22.1k
+// with R18 47.5k on the bridge VBUS pin. None of those is placed. The
+// engine's other boards leave rail capacitors out, and the bridge model
+// does not read RSTb or VBUS.
+{
+  "format": 1,
+  "part": "esp32s3-devkitc-1",
+  "version": "0.1.0",
+  "title": "ESP32-S3-DevKitC-1 v1.1",
+  "summary": "ESP32-S3-DevKitC-1 v1.1 with the N16R8 module. Two 1x22 headers, USB-UART on U0RXD, and the addressable RGB LED on GPIO38.",
+  "tags": ["microcontroller", "esp32-s3", "usb"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "SCH_ESP32-S3-DevKitC-1_V1.1_20221130": "https://dl.espressif.com/dl/schematics/SCH_ESP32-S3-DevKitC-1_V1.1_20221130.pdf",
+    "ESP32-S3-DevKitC-1 v1.1 User Guide": "https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/user_guide_v1.1.html",
+    "DXF_ESP32-S3-DevKitC-1_V1.1_20220429": "https://dl.espressif.com/dl/schematics/esp_idf/DXF_ESP32-S3-DevKitC-1_V1.1_20220429.pdf"
+  },
+  "real": { "maker": "Espressif", "number": "ESP32-S3-DevKitC-1-N16R8", "datasheet": "ESP32-S3-DevKitC-1 v1.1 User Guide" },
+  "uses": {
+    "cp2102n-qfn28": "0.1.0", "esp32s3-wroom-1-n16r8": "0.1.0", "lesd5d5-sod523": "0.1.0",
+    "npn-l8050-sot23": "0.1.0", "pin-header-1x22": "0.1.0", "resistor-0603": "0.1.0",
+    "sgm2212-sot223": "0.1.0", "sk68xxmini-hs": "0.1.0", "tactile-switch-ntc013": "0.1.0",
+    "usb-micro-b": "0.1.0"
+  },
+  "params": { "app": {}, "partitions": {} },
+  "ground": "j2.GND",
+  "parts": {
+    "mod": { "type": "esp32s3-wroom-1-n16r8", "app": { "param": "app" }, "partitions": { "param": "partitions" } },
+    "ldo": { "type": "sgm2212-sot223" },
+    "bridge": { "type": "cp2102n-qfn28" },
+    "q1": { "type": "npn-l8050-sot23" },
+    "q2": { "type": "npn-l8050-sot23" },
+    "led": { "type": "sk68xxmini-hs" },
+    "sw_boot": { "type": "tactile-switch-ntc013" },
+    "sw_reset": { "type": "tactile-switch-ntc013" },
+    "j1": { "type": "pin-header-1x22" },
+    "j3": { "type": "pin-header-1x22" },
+    "j2": { "type": "usb-micro-b" },
+    "j4": { "type": "usb-micro-b" },
+    "d2": { "type": "lesd5d5-sod523" },
+    "d3": { "type": "lesd5d5-sod523" },
+    "d4": { "type": "lesd5d5-sod523" },
+    "d8": { "type": "lesd5d5-sod523" },
+    "d9": { "type": "lesd5d5-sod523" },
+    "d10": { "type": "lesd5d5-sod523" },
+    "r_en": { "type": "resistor-0603", "resistance": { "value": 10000, "unit": "ohm", "source": { "datasheet": { "doc": "SCH_ESP32-S3-DevKitC-1_V1.1_20221130", "at": "R5, 10K(1%), from ESP_3V3 to CHIP_PU", "basis": "nominal" } } } },
+    "r_dtr": { "type": "resistor-0603", "resistance": { "value": 10000, "unit": "ohm", "source": { "datasheet": { "doc": "SCH_ESP32-S3-DevKitC-1_V1.1_20221130", "at": "R10, 10K(1%), DTR to Q1 base", "basis": "nominal" } } } },
+    "r_rts": { "type": "resistor-0603", "resistance": { "value": 10000, "unit": "ohm", "source": { "datasheet": { "doc": "SCH_ESP32-S3-DevKitC-1_V1.1_20221130", "at": "R12, 10K(1%), RTS to Q2 base", "basis": "nominal" } } } }
+  },
+  "wires": [
+    ["j2.GND", "j4.GND", { "kind": "trace" }],
+    ["j2.GND", "mod.GND", { "kind": "trace" }],
+    ["j2.GND", "ldo.GND", { "kind": "trace" }],
+    ["j2.GND", "bridge.GND", { "kind": "trace" }],
+    ["j2.GND", "led.GND", { "kind": "trace" }],
+    ["j2.GND", "sw_boot.b", { "kind": "trace" }],
+    ["j2.GND", "sw_reset.b", { "kind": "trace" }],
+    ["j2.GND", "j1.22", { "kind": "trace" }],
+    ["j2.GND", "j3.1", { "kind": "trace" }],
+    ["j2.GND", "j3.21", { "kind": "trace" }],
+    ["j2.GND", "j3.22", { "kind": "trace" }],
+    ["j2.VBUS", "ldo.IN", { "kind": "trace" }],
+    ["j2.VBUS", "j1.21", { "kind": "trace" }],
+    ["ldo.OUT", "mod.3V3", { "kind": "trace" }],
+    ["ldo.OUT", "bridge.VDD", { "kind": "trace" }],
+    ["ldo.OUT", "led.VDD", { "kind": "trace" }],
+    ["ldo.OUT", "j1.1", { "kind": "trace" }],
+    ["ldo.OUT", "j1.2", { "kind": "trace" }],
+    ["ldo.OUT", "r_en.a", { "kind": "trace" }],
+    ["r_en.b", "mod.EN", { "kind": "trace" }],
+    ["mod.EN", "sw_reset.a", { "kind": "trace" }],
+    ["mod.EN", "q1.collector", { "kind": "trace" }],
+    ["bridge.DTR", "r_dtr.a", { "kind": "trace" }],
+    ["r_dtr.b", "q1.base", { "kind": "trace" }],
+    ["bridge.RTS", "q1.emitter", { "kind": "trace" }],
+    ["bridge.RTS", "r_rts.a", { "kind": "trace" }],
+    ["r_rts.b", "q2.base", { "kind": "trace" }],
+    ["bridge.DTR", "q2.emitter", { "kind": "trace" }],
+    ["q2.collector", "mod.IO0", { "kind": "trace" }],
+    ["mod.IO0", "sw_boot.a", { "kind": "trace" }],
+    ["bridge.TXD", "mod.RXD0", { "kind": "trace" }],
+    ["mod.TXD0", "bridge.RXD", { "kind": "trace" }],
+    ["j2.DM", "bridge.DM", { "kind": "trace" }],
+    ["j2.DP", "bridge.DP", { "kind": "trace" }],
+    ["j2.DM", "d2.a", { "kind": "trace" }],
+    ["d2.b", "j2.GND", { "kind": "trace" }],
+    ["j2.DP", "d3.a", { "kind": "trace" }],
+    ["d3.b", "j2.GND", { "kind": "trace" }],
+    ["j2.VBUS", "d4.a", { "kind": "trace" }],
+    ["d4.b", "j2.GND", { "kind": "trace" }],
+    ["j4.DM", "mod.IO19", { "kind": "trace" }],
+    ["j4.DP", "mod.IO20", { "kind": "trace" }],
+    ["j4.DM", "d8.a", { "kind": "trace" }],
+    ["d8.b", "j4.GND", { "kind": "trace" }],
+    ["j4.VBUS", "d9.a", { "kind": "trace" }],
+    ["d9.b", "j4.GND", { "kind": "trace" }],
+    ["j4.DP", "d10.a", { "kind": "trace" }],
+    ["d10.b", "j4.GND", { "kind": "trace" }],
+    ["mod.IO38", "led.DIN", { "kind": "trace" }],
+    ["j1.3", "mod.EN", { "kind": "trace" }],
+    ["j1.4", "mod.IO4", { "kind": "trace" }],
+    ["j1.5", "mod.IO5", { "kind": "trace" }],
+    ["j1.6", "mod.IO6", { "kind": "trace" }],
+    ["j1.7", "mod.IO7", { "kind": "trace" }],
+    ["j1.8", "mod.IO15", { "kind": "trace" }],
+    ["j1.9", "mod.IO16", { "kind": "trace" }],
+    ["j1.10", "mod.IO17", { "kind": "trace" }],
+    ["j1.11", "mod.IO18", { "kind": "trace" }],
+    ["j1.12", "mod.IO8", { "kind": "trace" }],
+    ["j1.13", "mod.IO3", { "kind": "trace" }],
+    ["j1.14", "mod.IO46", { "kind": "trace" }],
+    ["j1.15", "mod.IO9", { "kind": "trace" }],
+    ["j1.16", "mod.IO10", { "kind": "trace" }],
+    ["j1.17", "mod.IO11", { "kind": "trace" }],
+    ["j1.18", "mod.IO12", { "kind": "trace" }],
+    ["j1.19", "mod.IO13", { "kind": "trace" }],
+    ["j1.20", "mod.IO14", { "kind": "trace" }],
+    ["j3.2", "mod.TXD0", { "kind": "trace" }],
+    ["j3.3", "mod.RXD0", { "kind": "trace" }],
+    ["j3.4", "mod.IO1", { "kind": "trace" }],
+    ["j3.5", "mod.IO2", { "kind": "trace" }],
+    ["j3.6", "mod.IO42", { "kind": "trace" }],
+    ["j3.7", "mod.IO41", { "kind": "trace" }],
+    ["j3.8", "mod.IO40", { "kind": "trace" }],
+    ["j3.9", "mod.IO39", { "kind": "trace" }],
+    ["j3.10", "mod.IO38", { "kind": "trace" }],
+    ["j3.11", "mod.IO37", { "kind": "trace" }],
+    ["j3.12", "mod.IO36", { "kind": "trace" }],
+    ["j3.13", "mod.IO35", { "kind": "trace" }],
+    ["j3.14", "mod.IO0", { "kind": "trace" }],
+    ["j3.15", "mod.IO45", { "kind": "trace" }],
+    ["j3.16", "mod.IO48", { "kind": "trace" }],
+    ["j3.17", "mod.IO47", { "kind": "trace" }],
+    ["j3.18", "mod.IO21", { "kind": "trace" }],
+    ["j3.19", "mod.IO20", { "kind": "trace" }],
+    ["j3.20", "mod.IO19", { "kind": "trace" }]
+  ],
+  // Copper centres from DXF_ESP32-S3-DevKitC-1_V1.1_20220429, PADLAYER_TOP,
+  // shifted so the outline centre (12.7, 31.4325) is the origin. The outline
+  // polyline is x = 0 to 25.40 and y = 0 to 62.865. Antenna is +Y. z is the
+  // board thickness in model.py, which that drawing does not state.
+  // mod is the module body centre (12.75, 56.39): side lands at x = 4.0 and
+  // 21.5, pin 1 at y = 61.65 (7.49 from the antenna end), bottom row at
+  // y = 43.89 (0.25 inside the far end). Figure 11-1 of the module datasheet.
+  // j1 and j3 are the header lands, x = 1.27 and 24.13, y = 61.3 down to
+  // 7.96. Pin 1 is the antenna end, so each header's -X lead turns to +Y.
+  // j2 and j4 are the centres of the four shell lands, (6.0, 3.66233) and
+  // (19.4, 3.66233). The catalog micro-B marks its sizes "verify", and its
+  // pad row does not sit on this connector's five signal lands (y = 4.967,
+  // pitch 0.65). The mouth points off the board.
+  // bridge is the 3.25 exposed pad at (13.589, 20.1422). The DXF does not
+  // number those leads. Leaving it unturned puts the model's pin 1 at the
+  // +Y end of the -X edge.
+  // ldo: three 2.0 by 1.5 lands at x = 10.3378 on a 2.3 pitch, the middle
+  // one at y = 36.3728. A half turn points the tab toward the 2.0 by 3.8
+  // land at x = 16.638. That land's centre is not the model's tab centre.
+  // The copper does not mark pin 1.
+  // q1 and q2 are the midpoint of the collector land and the other pair.
+  // Q1's collector is (17.780, 30.23311) and the pair is at y = 27.93289.
+  // Q2's collector is (12.573, 30.23311). The pair lands are 1.9 apart.
+  // The part's e is 0.95.
+  // led is the centre of the four 1.0 by 1.5 lands, (7.493, 29.083). The
+  // longer pitch runs along Y, so the 3.7 mm side turns to Y. The copper
+  // does not mark pin 1. The land pitch is 1.8 by 3.3. The part's pad
+  // centres are 2.78 by 1.78.
+  // sw_boot and sw_reset are the centres of the four 1.05 by 0.65 lands,
+  // (7.5254, 13.9586) and (17.9054, 13.9586). The X pitch is 4.15, which
+  // matches the model. The Y pitch on the land is 2.15. The model's row
+  // pitch is 2.8.
+  // The diodes are the centre of each 0.40 by 0.48 pair. The length runs
+  // along Y. The copper does not mark the cathode. Left to right the pairs
+  // are D2, D3, D4 and D8, D9, D10.
+  // r_en, r_dtr and r_rts are the centres of the 0.508 squares under R5,
+  // R10 and R12, 1.016 apart. Those lands are smaller than this 0603. The
+  // sheet prints 10K(1%) and does not name the body. Length along X.
+  "layout": {
+    "mod": { "at": [0.05, 24.9575, 1.6] },
+    "j1": { "at": [-11.43, 3.1975, 1.6], "rotate": [0, 0, 270] },
+    "j3": { "at": [11.43, 3.1975, 1.6], "rotate": [0, 0, 270] },
+    "j2": { "at": [-6.7, -27.7702, 1.6], "rotate": [0, 0, 90] },
+    "j4": { "at": [6.7, -27.7702, 1.6], "rotate": [0, 0, 90] },
+    "bridge": { "at": [0.889, -11.2903, 1.6] },
+    "ldo": { "at": [-0.2372, 4.9403, 1.6], "rotate": [0, 0, 180] },
+    "q1": { "at": [5.08, -2.3495, 1.6] },
+    "q2": { "at": [-0.127, -2.3495, 1.6] },
+    "led": { "at": [-5.207, -2.3495, 1.6], "rotate": [0, 0, 90] },
+    "sw_boot": { "at": [-5.1746, -17.4739, 1.6] },
+    "sw_reset": { "at": [5.2054, -17.4739, 1.6] },
+    "d2": { "at": [-8.11, -22.4325, 1.6], "rotate": [0, 0, 90] },
+    "d3": { "at": [-6.7056, -22.4325, 1.6], "rotate": [0, 0, 90] },
+    "d4": { "at": [-5.6896, -22.4325, 1.6], "rotate": [0, 0, 90] },
+    "d8": { "at": [4.85, -22.4325, 1.6], "rotate": [0, 0, 90] },
+    "d9": { "at": [6.37, -22.4325, 1.6], "rotate": [0, 0, 90] },
+    "d10": { "at": [7.39, -22.4325, 1.6], "rotate": [0, 0, 90] },
+    "r_en": { "at": [-2.2352, 9.0043, 1.6] },
+    "r_dtr": { "at": [3.683, -5.6515, 1.6] },
+    "r_rts": { "at": [5.969, -5.6515, 1.6] }
+  },
+  "pins": {
+    "3V3": ["j1.1", "j1.2"], "RST": "j1.3",
+    "GPIO4": "j1.4", "GPIO5": "j1.5", "GPIO6": "j1.6", "GPIO7": "j1.7",
+    "GPIO15": "j1.8", "GPIO16": "j1.9", "GPIO17": "j1.10", "GPIO18": "j1.11",
+    "GPIO8": "j1.12", "GPIO3": "j1.13", "GPIO46": "j1.14", "GPIO9": "j1.15",
+    "GPIO10": "j1.16", "GPIO11": "j1.17", "GPIO12": "j1.18", "GPIO13": "j1.19", "GPIO14": "j1.20",
+    "5V": "j1.21", "GND": ["j1.22", "j3.1", "j3.21", "j3.22"],
+    "TX": "j3.2", "GPIO43": "j3.2", "RX": "j3.3", "GPIO44": "j3.3",
+    "GPIO1": "j3.4", "GPIO2": "j3.5", "GPIO42": "j3.6", "GPIO41": "j3.7", "GPIO40": "j3.8", "GPIO39": "j3.9",
+    "GPIO38": "j3.10", "GPIO37": "j3.11", "GPIO36": "j3.12", "GPIO35": "j3.13", "GPIO0": "j3.14",
+    "GPIO45": "j3.15", "GPIO48": "j3.16", "GPIO47": "j3.17", "GPIO21": "j3.18", "GPIO20": "j3.19", "GPIO19": "j3.20"
+  },
+  "not_simulated": [
+    { "what": "RST", "pins": ["RST"], "why": "J1 pin 3 is EN, the chip's CHIP_PU. The esp32s3 kind has no reset pin. The sheet's truth table for DTR and RTS still wires Q1 and Q2, and the model does not reset when EN moves." },
+    { "what": "GPIO35, GPIO36 and GPIO37", "pins": ["GPIO35", "GPIO36", "GPIO37"], "why": "The user guide says that on an octal-SPI WROOM module these three pins are used inside the module and are not available. J3 still brings them out, as the header table lists them." },
+    { "what": "the second USB 5 V", "why": "J2 and J4 are each an ideal 5 V host. The sheet diode-ORs them onto VCC_5V through 1N5819HW-7-F parts D1 and D7. That diode is not the catalog diode, so only J2's VBUS feeds the regulator and the 5V pin. J4's VBUS stays on its own net. J4 D- and D+ still go to GPIO19 and GPIO20." },
+    { "what": "parts the sheet shows and this board does not place", "why": "R11 5.1k and D5, the red power LED. C1, C2, C3, C6, C7, C8, C9, C10, C11, C12 and C15, the rail and reset capacitors, and C13 and C14 marked NC. R16 1k from the bridge RSTb to 3.3 V, R14 10k marked NC, and R19 22.1k with R18 47.5k on the bridge VBUS pin. The bridge model does not read RSTb or VBUS. R7, R8, R9, R13, R17 and R24 are 0 ohm links and are wires." }
+  ]
+}
