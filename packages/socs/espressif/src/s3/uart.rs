@@ -4,13 +4,17 @@
 //! into its RX FIFO. The GPIO matrix routes both. So does the UART function of GPIO43, GPIO44,
 //! GPIO17 and GPIO18 when `SIG_IN_SEL` leaves the input on IO_MUX. A bit lasts `clkdiv` source
 //! clocks, plus one more on the
-//! bits where a fractional accumulator that starts at 0 for that frame crosses 16. The source
-//! is the APB clock when `sclk_sel` is 1 and the 40 MHz crystal when it is 3, divided by
-//! `sclk_div_num` + 1.
+//! bits where a fractional accumulator that starts at 0 for that frame crosses 16. Stop field 2
+//! holds the line for the exact average half bit, `(clkdiv + frag/16) / 2`, on that same
+//! accumulator, not for half of one stepped bit. The source is the APB clock when `sclk_sel`
+//! is 1 and the 40 MHz crystal when it is 3, divided by `sclk_div_num` + 1. A FIFO access or a
+//! frame while `mem_clk_en` or `SYSTEM_UART_MEM_CLK_EN` is clear ends the run. The clock bit
+//! itself is stored.
 //!
 //! With `tx_idle_num` 0 and the shifter idle, the start bit begins on the FIFO write's tick.
-//! The next queued byte's start bit begins when the previous stop bit ends. After the FIFO
-//! empties, the next write waits `tx_idle_num` bit times of idle mark. The TRM states the
+//! The next queued byte's start bit begins when the previous stop bit ends, and that edge stays
+//! queued so the pad is driven at that tick. After the FIFO empties, the next write waits
+//! `tx_idle_num` bit times of idle mark. The TRM states the
 //! average bit length and not which bits are the long ones, so the accumulator is this model's
 //! rule. It also omits the APB-to-baud synchronizer, so a start bit is not delayed past the
 //! write. Turning the baud clock off drops a frame that has not finished, and that byte is
@@ -80,6 +84,16 @@ const IDLE_RESET: u32 = 256 | (256 << 10);
 const MEM_RESET: u32 = (1 << 1) | (1 << 4) | (10 << 17);
 const CLK_RESET: u32 = (1 << 12) | (3 << 20) | (1 << 22) | (1 << 24) | (1 << 25);
 const ID_RESET: u32 = 1280 | (1 << 30);
+/// `UART_SWFC_CONF0_REG`: `xoff_threshold` 224, `xoff_char` 19.
+const SWFC0_RESET: u32 = 224 | (19 << 10);
+/// `UART_SWFC_CONF1_REG`: `xon_threshold` 0, `xon_char` 17.
+const SWFC1_RESET: u32 = 17 << 10;
+/// `UART_AT_CMD_PRECNT_REG` and `UART_AT_CMD_POSTCNT_REG`.
+const AT_IDLE_RESET: u32 = 2305;
+/// `UART_AT_CMD_GAPTOUT_REG`.
+const AT_GAP_RESET: u32 = 11;
+/// `UART_AT_CMD_CHAR_REG`: char 43, `char_num` 3.
+const AT_CHAR_RESET: u32 = 43 | (3 << 8);
 
 /// A finished byte for `serial.csv`: its port, the byte, the start bit and the end of the stop bit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -153,6 +167,8 @@ struct Port {
     /// The module clock is on and no reset bit holds the port. While this is clear a FIFO
     /// write completes and the byte does not enter the shifter.
     runs: bool,
+    /// `SYSTEM_UART_MEM_CLK_EN`. `mem_clk_en` in CONF0 is the port's own RAM clock.
+    mem_clk: bool,
 }
 
 impl Port {
@@ -165,8 +181,14 @@ impl Port {
         words[slot(0x28)] = 4095;
         words[slot(0x2c)] = 4095;
         words[slot(0x38)] = 240;
+        words[slot(0x3c)] = SWFC0_RESET;
+        words[slot(0x40)] = SWFC1_RESET;
         words[slot(0x44)] = 10;
         words[slot(IDLE)] = IDLE_RESET;
+        words[slot(0x50)] = AT_IDLE_RESET;
+        words[slot(0x54)] = AT_IDLE_RESET;
+        words[slot(0x58)] = AT_GAP_RESET;
+        words[slot(0x5c)] = AT_CHAR_RESET;
         words[slot(MEM)] = MEM_RESET;
         words[slot(0x70)] = 4095;
         words[slot(0x74)] = 4095;
@@ -193,6 +215,7 @@ impl Port {
             refused: None,
             sent: VecDeque::new(),
             runs: true,
+            mem_clk: true,
         }
     }
 
@@ -244,7 +267,10 @@ impl Port {
                 Some("baud_while_sending")
             }
             CONF0 if value & 1 << 8 != 0 => Some("break"),
-            CONF0 if value & (0x3f << 9 | 1 << 16) != 0 => Some("irda"),
+            // Bits 9–13 and 16 are IrDA. Bit 14 is loopback, which the shifter runs.
+            CONF0 if value & (0x1f << 9 | 1 << 16) != 0 => Some("irda"),
+            CONF0 if value & 1 << 6 != 0 => Some("sw_rts"),
+            CONF0 if value & 1 << 7 != 0 => Some("sw_dtr"),
             CONF0 if value & 1 << 15 != 0 => Some("hw_flow"),
             CONF0 if value & 1 << 27 != 0 => Some("autobaud"),
             CONF0 if (value >> 4) & 3 == 0 => Some("stop_bits"),
@@ -268,7 +294,11 @@ impl Port {
                 Some("baud_while_sending")
             }
             RS485 if value & 1 != 0 => Some("rs485"),
+            MEM if (value >> 1) & 7 != 1 || (value >> 4) & 7 != 1 => Some("fifo_size"),
             MEM if value & 1 << 27 != 0 => Some("power_down"),
+            // A clear `high_speed` syncs the divider and the frame format only at
+            // `UART_REG_UPDATE`. The model does not run that barrier.
+            ID if value & 1 << 30 == 0 => Some("high_speed"),
             CLK if value & (0x3f | 0x3f << 6) != 0 => Some("sclk_frac"),
             CLK if {
                 let sel = (value >> 20) & 3;
@@ -343,6 +373,9 @@ impl Port {
         {
             return Ok(());
         }
+        if !self.ram_clock() {
+            return Err("mem_clock");
+        }
         if !self.tx_clock() {
             return Err("clock_off");
         }
@@ -356,18 +389,28 @@ impl Port {
         self.tx_fifo.push_back(byte);
         self.tx_w = self.bump(self.tx_w, depth, 0);
         if self.tx.is_none() {
-            self.start_tx(now, apb);
+            // The write drives the pad from `wire` after this returns.
+            self.start_tx(now, apb, true);
         }
         Ok(())
     }
 
-    fn start_tx(&mut self, now: Tick, apb: u64) {
+    /// Starts the next queued byte at `now`. `apply` is set only for a FIFO write: a start bit
+    /// that begins on `now` changes `wire` and leaves the queue, and the write drives the pad.
+    /// A byte that starts as the previous frame ends, or when the idle gap ends, leaves that
+    /// edge queued so the pad is driven at the edge's own tick.
+    fn start_tx(&mut self, now: Tick, apb: u64, apply: bool) {
         if self.tx.is_some() || now < self.idle_until {
             return;
         }
-        let Some(byte) = self.tx_fifo.pop_front() else {
+        let Some(byte) = self.tx_fifo.front().copied() else {
             return;
         };
+        if !self.ram_clock() {
+            self.refused = Some(("mem_clock", now));
+            return;
+        }
+        self.tx_fifo.pop_front().expect("the byte");
         let depth = self.tx_depth();
         self.tx_r = self.bump(self.tx_r, depth, 0);
         let Some(period) = self.period(apb) else {
@@ -375,15 +418,10 @@ impl Port {
             self.refused = Some(("clock_off", now));
             return;
         };
-        let tx = self.schedule(now, byte, period);
-        if let Some(&(at, level)) = tx.edges.front()
-            && at == now
-        {
+        let mut tx = self.schedule(now, byte, period);
+        if apply && tx.edges.front().is_some_and(|&(at, _)| at == now) {
+            let (_, level) = tx.edges.pop_front().expect("the edge");
             self.wire = level;
-        }
-        let mut tx = tx;
-        if tx.edges.front().is_some_and(|&(at, _)| at == now) {
-            tx.edges.pop_front();
         }
         self.tx = Some(tx);
     }
@@ -415,10 +453,7 @@ impl Port {
         }
         match self.stop() {
             3 => t += bit_len(self.clkdiv(), self.frag(), &mut acc, period),
-            2 => {
-                let full = bit_len(self.clkdiv(), self.frag(), &mut acc, period);
-                t += full / 2;
-            }
+            2 => t += half_bit(self.clkdiv(), self.frag(), &mut acc, period),
             _ => {}
         }
         Tx {
@@ -450,7 +485,7 @@ impl Port {
         self.sample(now, apb);
         self.fire_tout(now);
         if self.tx.is_none() && now >= self.idle_until {
-            self.start_tx(now, apb);
+            self.start_tx(now, apb, false);
             self.finish_tx(now, apb);
         }
     }
@@ -480,7 +515,7 @@ impl Port {
                 return;
             }
             self.idle_until = tx.end;
-            self.start_tx(tx.end, apb);
+            self.start_tx(tx.end, apb, false);
         }
     }
 
@@ -517,6 +552,10 @@ impl Port {
         if !self.runs || self.words[slot(CONF0)] & 1 << 17 != 0 {
             return;
         }
+        if !self.ram_clock() {
+            self.refused = Some(("mem_clock", at));
+            return;
+        }
         if self.clkdiv() == 0 {
             self.refused = Some(("divider", at));
             return;
@@ -538,10 +577,7 @@ impl Port {
         }
         match self.stop() {
             3 => t += bit_len(self.clkdiv(), self.frag(), &mut acc, period),
-            2 => {
-                let full = bit_len(self.clkdiv(), self.frag(), &mut acc, period);
-                t += full / 2;
-            }
+            2 => t += half_bit(self.clkdiv(), self.frag(), &mut acc, period),
             _ => {}
         }
         self.rx = Some(Rx {
@@ -776,6 +812,12 @@ impl Port {
         self.words[slot(CONF0)] & 1 << 14 != 0
     }
 
+    /// Both RAM clocks. CONF0 `mem_clk_en` and `SYSTEM_UART_MEM_CLK_EN` reset set, and IDF
+    /// leaves them set. A FIFO access or a new frame while either is clear is refused.
+    fn ram_clock(&self) -> bool {
+        self.mem_clk && self.words[slot(CONF0)] & (1 << 28) != 0
+    }
+
     fn tx_depth(&self) -> usize {
         (((self.words[slot(MEM)] >> 4) & 7) as usize) * 128
     }
@@ -827,6 +869,17 @@ fn bit_len(clkdiv: u32, frag: u32, acc: &mut u32, period: u64) -> u64 {
     clocks * period
 }
 
+/// Half a bit for stop field 2. The length is the exact average `(clkdiv + frag/16) / 2`
+/// source clocks, in the same sixteenths [`bit_len`] counts, not half of one stepped bit.
+/// The accumulator advances by half of `frag`.
+fn half_bit(clkdiv: u32, frag: u32, acc: &mut u32, period: u64) -> u64 {
+    *acc += frag / 2;
+    if *acc >= 16 {
+        *acc -= 16;
+    }
+    (u64::from(clkdiv) * 16 + u64::from(frag)) * period / 32
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Uarts {
     ports: [Port; 3],
@@ -853,7 +906,12 @@ impl Uarts {
         apb: u64,
     ) -> Option<u32> {
         self.settle_port(index, now, gpio, apb);
-        self.ports[index].read(offset)
+        let port = &mut self.ports[index];
+        // A FIFO load uses the RAM. The module clock being off still completes the load.
+        if offset == FIFO && port.runs && !port.ram_clock() {
+            port.refused = Some(("mem_clock", now));
+        }
+        port.read(offset)
     }
 
     pub(crate) fn write(
@@ -899,6 +957,13 @@ impl Uarts {
         self.ports[index].runs = runs;
     }
 
+    /// `SYSTEM_UART_MEM_CLK_EN`, one clock for every port's RAM.
+    pub(crate) fn set_mem_clock(&mut self, on: bool) {
+        for port in &mut self.ports {
+            port.mem_clk = on;
+        }
+    }
+
     /// Drops a frame the peripheral clock will not finish. Bytes already shifted stay logged.
     pub(crate) fn halt(&mut self, index: usize) {
         let port = &mut self.ports[index];
@@ -928,8 +993,10 @@ impl Uarts {
         // Bytes that already left the shifter stay in the trace. The reset drops only what
         // had not finished.
         let sent = std::mem::take(&mut self.ports[index].sent);
+        let mem_clk = self.ports[index].mem_clk;
         self.ports[index] = Port::new(index);
         self.ports[index].sent = sent;
+        self.ports[index].mem_clk = mem_clk;
     }
 
     /// ROM `Uart_Init` programs a console port from `UartDev.baut_rate` on the 40 MHz
@@ -1077,7 +1144,8 @@ mod tests {
     fn loopback_returns_the_byte_and_times_out_after_the_stop_bit() {
         let mut port = Port::new(0);
         megabaud(&mut port);
-        port.words[slot(CONF0)] |= 1 << 14;
+        port.write(Tick(0), CONF0, CONF0_RESET | 1 << 14, apb())
+            .unwrap();
         port.words[slot(CONF1)] |= 1 << 23;
         port.words[slot(MEM)] = (port.words[slot(MEM)] & !(0x3ff << 17)) | (2 << 17);
         port.write(Tick(0), FIFO, 0x00, apb()).unwrap();
@@ -1192,5 +1260,189 @@ mod tests {
         assert!(port.tx.is_none());
         assert!(port.tx_fifo.is_empty());
         assert!(port.sent.is_empty());
+    }
+
+    #[test]
+    fn a_fifo_size_other_than_one_block_is_refused() {
+        let mut port = Port::new(0);
+        assert_eq!(port.write(Tick(0), MEM, MEM_RESET, apb()), Ok(()));
+        let rx = (MEM_RESET & !(7 << 1)) | (2 << 1);
+        assert_eq!(port.write(Tick(0), MEM, rx, apb()), Err("fifo_size"));
+        let none = MEM_RESET & !(7 << 1);
+        assert_eq!(port.write(Tick(0), MEM, none, apb()), Err("fifo_size"));
+        let tx = (MEM_RESET & !(7 << 4)) | (2 << 4);
+        assert_eq!(port.write(Tick(0), MEM, tx, apb()), Err("fifo_size"));
+        assert_eq!(port.read(MEM), Some(MEM_RESET));
+    }
+
+    #[test]
+    fn clearing_high_speed_is_refused_and_reg_update_reads_zero() {
+        let mut port = Port::new(0);
+        assert_eq!(port.write(Tick(0), ID, ID_RESET, apb()), Ok(()));
+        assert_eq!(port.read(ID), Some(ID_RESET));
+        assert_eq!(
+            port.write(Tick(0), ID, ID_RESET & !(1 << 30), apb()),
+            Err("high_speed")
+        );
+        assert_eq!(port.read(ID), Some(ID_RESET));
+        assert_eq!(port.write(Tick(0), ID, ID_RESET | 1 << 31, apb()), Ok(()));
+        assert_eq!(port.read(ID), Some(ID_RESET));
+    }
+
+    #[test]
+    fn software_rts_and_dtr_are_refused() {
+        let mut port = Port::new(0);
+        assert_eq!(
+            port.write(Tick(0), CONF0, CONF0_RESET | 1 << 6, apb()),
+            Err("sw_rts")
+        );
+        assert_eq!(
+            port.write(Tick(0), CONF0, CONF0_RESET | 1 << 7, apb()),
+            Err("sw_dtr")
+        );
+        assert_eq!(port.read(CONF0), Some(CONF0_RESET));
+    }
+
+    #[test]
+    fn a_fifo_access_or_a_frame_with_a_ram_clock_off_is_refused() {
+        let mut port = Port::new(0);
+        megabaud(&mut port);
+        assert_eq!(
+            port.write(Tick(0), CONF0, CONF0_RESET & !(1 << 28), apb()),
+            Ok(())
+        );
+        assert_eq!(port.write(Tick(0), FIFO, 0x55, apb()), Err("mem_clock"));
+        assert!(port.tx_fifo.is_empty());
+        port.note(Tick(5), Some(false), apb());
+        assert_eq!(port.refused, Some(("mem_clock", Tick(5))));
+
+        let mut gated = Port::new(0);
+        megabaud(&mut gated);
+        gated.mem_clk = false;
+        assert_eq!(gated.write(Tick(0), FIFO, 0x55, apb()), Err("mem_clock"));
+        gated.refused = None;
+        gated.note(Tick(5), Some(false), apb());
+        assert_eq!(gated.refused, Some(("mem_clock", Tick(5))));
+
+        let mut uarts = Uarts::new();
+        let gpio = Gpio::new(&[]);
+        assert!(uarts.read(0, Tick(0), FIFO, &gpio, apb()).is_some());
+        assert!(uarts.take_refused().is_none());
+        uarts.set_mem_clock(false);
+        assert!(uarts.read(0, Tick(0), FIFO, &gpio, apb()).is_some());
+        assert_eq!(
+            uarts
+                .take_refused()
+                .map(|(_, name, setting)| (name, setting)),
+            Some(("UART0", "mem_clock"))
+        );
+    }
+
+    #[test]
+    fn a_stop_bit_and_a_half_is_the_exact_average() {
+        let mut port = Port::new(0);
+        megabaud(&mut port);
+        let conf0 = (CONF0_RESET & !(3 << 4)) | (2 << 4);
+        port.write(Tick(0), CONF0, conf0, apb()).unwrap();
+        port.write(Tick(0), CLKDIV, 80 | (8 << 20), apb()).unwrap();
+        port.write(Tick(1000), FIFO, 0x00, apb()).unwrap();
+        let mut acc = 0u32;
+        let mut full = 0u64;
+        for _ in 0..10 {
+            full += bit_len(80, 8, &mut acc, 6);
+        }
+        assert_eq!(acc, 0, "ten bits of frag 8 land on a sixteenth boundary");
+        let average = (80u64 * 16 + 8) * 6 / 32;
+        let mut stepped_acc = 0u32;
+        let stepped = bit_len(80, 8, &mut stepped_acc, 6) / 2;
+        assert_eq!(average, 241);
+        assert_ne!(average, stepped);
+        assert_eq!(
+            port.tx.as_ref().map(|tx| tx.end),
+            Some(Tick(1000 + full + average))
+        );
+
+        let mut rx = Port::new(0);
+        megabaud(&mut rx);
+        rx.write(Tick(0), CONF0, conf0, apb()).unwrap();
+        rx.write(Tick(0), CLKDIV, 80 | (8 << 20), apb()).unwrap();
+        rx.note(Tick(1000), Some(false), apb());
+        assert_eq!(
+            rx.rx.as_ref().map(|frame| frame.end),
+            Some(Tick(1000 + full + average))
+        );
+    }
+
+    #[test]
+    fn software_flow_and_at_command_registers_read_their_reset_values() {
+        let port = Port::new(1);
+        assert_eq!(port.read(0x3c), Some(224 | (19 << 10)));
+        assert_eq!(port.read(0x40), Some(17 << 10));
+        assert_eq!(port.read(0x50), Some(2305));
+        assert_eq!(port.read(0x54), Some(2305));
+        assert_eq!(port.read(0x58), Some(11));
+        assert_eq!(port.read(0x5c), Some(43 | (3 << 8)));
+    }
+
+    #[test]
+    fn a_nonzero_fraction_pins_each_edge_and_a_burst_passes_the_poll_bound() {
+        // 1 Mbaud from an 80 MHz APB is 80 source clocks, 6 ticks each. Frag 7
+        // lengthens four of every ten bits by one source clock, 6 ticks.
+        let mut port = Port::new(0);
+        megabaud(&mut port);
+        port.write(Tick(0), CLKDIV, 80 | (7 << 20), apb()).unwrap();
+        port.write(Tick(0), FIFO, 0x55, apb()).unwrap();
+        let tx = port.tx.as_ref().unwrap();
+        let edges: Vec<_> = tx.edges.iter().map(|&(at, level)| (at.0, level)).collect();
+        assert_eq!(
+            edges,
+            vec![
+                (480, true),
+                (960, false),
+                (1446, true),
+                (1926, false),
+                (2412, true),
+                (2892, false),
+                (3378, true),
+                (3858, false),
+                (4338, true),
+            ]
+        );
+        assert_eq!(tx.end, Tick(4824));
+
+        let mut burst = Port::new(0);
+        megabaud(&mut burst);
+        burst.write(Tick(0), CLKDIV, 80 | (7 << 20), apb()).unwrap();
+        for at in 0..8 {
+            burst.write(Tick(at), FIFO, 0x00, apb()).unwrap();
+        }
+        let mut starts = Vec::new();
+        if let Some(tx) = &burst.tx {
+            starts.push(tx.start.0);
+        }
+        for _ in 0..64 {
+            let Some(at) = burst.next_event(Tick(0)) else {
+                break;
+            };
+            while burst.next_edge(at).is_some() {
+                burst.take_edge();
+            }
+            burst.settle(at, apb());
+            if let Some(tx) = &burst.tx
+                && starts.last().copied() != Some(tx.start.0)
+            {
+                starts.push(tx.start.0);
+            }
+            if starts.len() == 8 {
+                break;
+            }
+        }
+        // Eight 8N1 frames. Each is 4824 ticks with frag 7 and 4800 without.
+        // Six frames of that extra are 144 ticks. One CPU cycle is 2 of these
+        // ticks, so 144 ticks is 72 CPU cycles, past `EDGE_POLL_BOUND` of 64.
+        assert_eq!(starts, (0..8).map(|n| n * 4824).collect::<Vec<_>>());
+        let without = 6 * 4800;
+        assert_eq!(starts[6] - without, 144);
+        assert!(starts[6] - without > 64 * 2);
     }
 }

@@ -1100,6 +1100,7 @@ impl Soc {
     /// A UART with its module clock off, or with a reset bit set, does not shift. The line
     /// returns to mark. Register loads and stores still complete.
     fn sync_uart_gates(&mut self) {
+        self.uart.set_mem_clock(self.gates.uart_mem_clock());
         for (index, block) in [Block::Uart0, Block::Uart1, Block::Uart2]
             .into_iter()
             .enumerate()

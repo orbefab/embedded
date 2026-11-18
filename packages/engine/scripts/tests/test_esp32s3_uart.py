@@ -9,9 +9,11 @@ from esp32s3_uart import (
     check_console,
     check_uart_rows,
     expected_edges,
+    frame_edges,
     program,
     script_rows,
     split_serial,
+    transfers,
 )
 
 SOURCE = Path(__file__).resolve().parents[2] / "tests/firmware/esp32s3/idf/uart/main/uart_main.c"
@@ -27,6 +29,45 @@ def raises(fn) -> bool:
     except ValueError:
         return True
     return False
+
+
+def test_burst_fraction_passes_the_poll_bound() -> None:
+    spec = program(SOURCE.read_text())
+    expect("the source names one burst", len(spec["bursts"]) == 1)
+    burst = spec["bursts"][0]
+    _baud, div, frag = next(item for item in spec["bauds"] if item[0] == burst["baud"])
+    expect("the burst baud carries a fraction", frag != 0)
+    with_frag = frame_edges(burst["cfg"], burst["byte"], burst["count"], div, frag, spec["apb_hz"], spec["cpu_hz"])
+    without = frame_edges(burst["cfg"], burst["byte"], burst["count"], div, 0, spec["apb_hz"], spec["cpu_hz"])
+    expect("the burst has an edge for every change", len(with_frag) == len(without) and len(with_frag) > 1)
+    late = [abs(got - want) for (got, _), (want, _) in zip(with_frag, without, strict=True)]
+    expect("a later burst edge is past the poll bound without the fraction", max(late) > spec["bound"])
+    sent = transfers(spec)
+    lines = _console(spec)
+    # The helper prints one byte at a time. The burst lines follow the 115200 cases.
+    burst_at = next(i for i, line in enumerate(lines) if line == "baud 1000000")
+    burst_lines = ["burst"]
+    for at, level in with_frag:
+        burst_lines.append(f"edge {at} {level}")
+    for _ in range(burst["count"]):
+        burst_lines.append(f"tx {burst['byte']:02x}")
+        burst_lines.append(f"rx {burst['byte']:02x}")
+    lines[burst_at:burst_at] = burst_lines
+    expect("the burst console passes", not raises(lambda: check_console(lines, sent, spec["bound"])))
+    bad = []
+    seen = False
+    replaced = 0
+    for line in lines:
+        if line == "burst":
+            seen = True
+        if seen and line.startswith("edge ") and replaced < len(without):
+            at, level = without[replaced]
+            bad.append(f"edge {at} {level}")
+            replaced += 1
+            continue
+        bad.append(line)
+    expect("every burst edge was rewritten", replaced == len(without))
+    expect("dropping the fraction fails the burst", raises(lambda: check_console(bad, sent, spec["bound"])))
 
 
 def test_divider_and_edges() -> None:

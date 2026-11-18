@@ -9,7 +9,10 @@
 //! The clock and reset bits of SYSTIMER, TIMG0, TIMG1, SPI0 and SPI1, the eFuse controller, the
 //! USB Serial/JTAG unit, and the bits IDF names `SYSTEM_TIMERS_*` and `SYSTEM_WDG_*` are kept and
 //! not run, and every write that changes one is reported.
-//! Every other bit gates or resets a peripheral the model does not keep, so it has no effect.
+//! Every other bit gates or resets a peripheral the model does not keep, so it has no effect,
+//! apart from `SYSTEM_UART_MEM_CLK_EN`, bit 24 of `CLK_EN0`. That bit stays stored here. A UART
+//! FIFO access or a frame while it is clear ends the run, as the UART model says. The write of
+//! the bit itself does not.
 //!
 //! The reset values come from IDF's `soc/esp32s3/register/soc/system_reg.h`.
 
@@ -135,6 +138,11 @@ impl Gates {
         let (k, clock, _) = block.bits();
         self.words[k] & clock != 0
     }
+
+    /// `SYSTEM_UART_MEM_CLK_EN`. One clock for the RAM of UART0, UART1 and UART2.
+    pub(crate) fn uart_mem_clock(&self) -> bool {
+        self.words[0] & (1 << 24) != 0
+    }
 }
 
 #[cfg(test)]
@@ -159,7 +167,7 @@ mod tests {
 
     #[test]
     fn a_change_of_a_kept_bit_is_reported_and_other_bits_are_not() {
-        let gates = Gates::new();
+        let mut gates = Gates::new();
         assert!(gates.reports(0x20, 1 << 29));
         assert!(gates.reports(0x18, CLOCK_RESET[0] & !(1 << 13)));
         assert!(gates.reports(0x24, RESET_RESET[1] | 1 << 10));
@@ -171,5 +179,11 @@ mod tests {
         assert!(!gates.reports(0x20, 1 << 6 | 1 << 2));
         assert!(!gates.reports(0x1c, CLOCK_RESET[1] | 1 << 2));
         assert!(!gates.reports(0x18, CLOCK_RESET[0]));
+        assert!(gates.uart_mem_clock());
+        assert!(!gates.reports(0x18, CLOCK_RESET[0] & !(1 << 24)));
+        gates
+            .write(0x18, CLOCK_RESET[0] & !(1 << 24))
+            .for_each(drop);
+        assert!(!gates.uart_mem_clock());
     }
 }

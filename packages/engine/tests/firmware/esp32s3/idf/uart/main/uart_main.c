@@ -12,6 +12,7 @@
 // checker: CASE 8N1 0x00 0x55 0xff
 // checker: CASE 8E1 0x01
 // checker: CASE 8N2 0xa5
+// checker: BURST 115200 8N1 8 0x00
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -30,6 +31,8 @@
 #define EDGE_CAP 24
 #define EDGE_POLL_BOUND 64
 #define FRAME_BOUND 40000
+#define BURST_COUNT 8
+#define BURST_BOUND (8 * 30000)
 
 static void write_all(const char *text)
 {
@@ -143,6 +146,71 @@ static int read_back(uint8_t *byte)
     return 1;
 }
 
+// Eight bytes written back to back. Edges are stamped from the first store, so
+// `clkdiv_frag` adds up past EDGE_POLL_BOUND. One byte's extra hides inside it.
+// The stores are one asm block: a C loop after the first store kept the first
+// sample outside EDGE_POLL_BOUND of that store.
+static void send_burst(const uint8_t *bytes, int count)
+{
+    char line[48];
+    uint32_t edges[EDGE_CAP][2];
+    uint32_t origin;
+    uint32_t level;
+    uint32_t now;
+    int nedges = 0;
+    int i;
+    uint8_t got = 0;
+    portDISABLE_INTERRUPTS();
+    __asm__ volatile("rsr.ccount %[o]\n"
+                     "s32i %[b0], %[f], 0\n"
+                     "s32i %[b1], %[f], 0\n"
+                     "s32i %[b2], %[f], 0\n"
+                     "s32i %[b3], %[f], 0\n"
+                     "s32i %[b4], %[f], 0\n"
+                     "s32i %[b5], %[f], 0\n"
+                     "s32i %[b6], %[f], 0\n"
+                     "s32i %[b7], %[f], 0\n"
+                     : [o] "=&r"(origin)
+                     : [b0] "r"((uint32_t)bytes[0]), [b1] "r"((uint32_t)bytes[1]),
+                       [b2] "r"((uint32_t)bytes[2]), [b3] "r"((uint32_t)bytes[3]),
+                       [b4] "r"((uint32_t)bytes[4]), [b5] "r"((uint32_t)bytes[5]),
+                       [b6] "r"((uint32_t)bytes[6]), [b7] "r"((uint32_t)bytes[7]),
+                       [f] "r"(UART_FIFO_REG(0))
+                     : "memory");
+    level = 1;
+    while (nedges < EDGE_CAP) {
+        uint32_t seen = (REG_READ(GPIO_IN1_REG) >> (TX_PAD - 32)) & 1;
+        now = ccount();
+        if (now - origin > BURST_BOUND) {
+            break;
+        }
+        if (seen == level) {
+            continue;
+        }
+        edges[nedges][0] = now - origin;
+        edges[nedges][1] = seen;
+        nedges += 1;
+        level = seen;
+    }
+    portENABLE_INTERRUPTS();
+    print_line("burst");
+    for (i = 0; i < nedges; i++) {
+        snprintf(line, sizeof line, "edge %lu %lu", (unsigned long)edges[i][0], (unsigned long)edges[i][1]);
+        print_line(line);
+    }
+    for (i = 0; i < count; i++) {
+        int have = read_back(&got);
+        snprintf(line, sizeof line, "tx %02x", bytes[i]);
+        print_line(line);
+        if (have) {
+            snprintf(line, sizeof line, "rx %02x", got);
+        } else {
+            snprintf(line, sizeof line, "rx none");
+        }
+        print_line(line);
+    }
+}
+
 static void one_byte(uint8_t byte)
 {
     char line[48];
@@ -187,10 +255,15 @@ static void one_baud(uint32_t baud, uint32_t div, uint32_t frag)
     char line[48];
     snprintf(line, sizeof line, "baud %lu", (unsigned long)baud);
     print_line(line);
+    static const uint8_t burst[BURST_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
     set_clock(div, frag);
     one_case("8N1", n1, 3);
     one_case("8E1", e1, 1);
     one_case("8N2", n2, 1);
+    if (frag != 0) {
+        set_format(conf0_of("8N1"));
+        send_burst(burst, BURST_COUNT);
+    }
 }
 
 void app_main(void)

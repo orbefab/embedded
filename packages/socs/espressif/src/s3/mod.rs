@@ -578,32 +578,40 @@ impl Esp32s3 {
 
     /// Drives each UART TXD edge due at a tick whose instructions have all run. An edge that
     /// moves a netted pad waits for its `Moved` halt, and the others change the pad at once.
-    /// A frame that meets a divider or a clock the model does not shift ends the run, naming
-    /// the PC after the last UART store.
+    /// A frame that ends here queues the next byte's start bit, and that edge is driven before
+    /// the cores run on. A frame that meets a divider or a clock the model does not shift ends
+    /// the run, naming the PC after the last UART store.
     fn settle_uart(&mut self) {
         let Some(through) = self.now().0.checked_sub(1) else {
             return;
         };
         let mut bound = Tick(through);
         let apb = self.soc.clock.source.apb();
-        while let Some(edge) = self.soc.uart.next_edge(bound) {
-            let signal = uart::SIGNAL[usize::from(edge.port)];
-            let moves = self.soc.gpio.moves(signal, edge.level);
-            self.soc.uart.take_edge(usize::from(edge.port));
-            if moves {
-                self.moves.push((edge.at, signal, edge.level));
+        loop {
+            let mut moved = false;
+            while let Some(edge) = self.soc.uart.next_edge(bound) {
+                let signal = uart::SIGNAL[usize::from(edge.port)];
+                let moves = self.soc.gpio.moves(signal, edge.level);
+                self.soc.uart.take_edge(usize::from(edge.port));
+                if moves {
+                    self.moves.push((edge.at, signal, edge.level));
+                    self.soc
+                        .uart
+                        .after_edge(usize::from(edge.port), edge.at, &self.soc.gpio, apb);
+                    bound = edge.at;
+                    moved = true;
+                    break;
+                }
+                self.soc.gpio.set_signal(signal, edge.level);
                 self.soc
                     .uart
                     .after_edge(usize::from(edge.port), edge.at, &self.soc.gpio, apb);
-                bound = edge.at;
+            }
+            self.soc.uart.settle(bound, &self.soc.gpio, apb);
+            if moved || self.soc.uart.next_edge(bound).is_none() {
                 break;
             }
-            self.soc.gpio.set_signal(signal, edge.level);
-            self.soc
-                .uart
-                .after_edge(usize::from(edge.port), edge.at, &self.soc.gpio, apb);
         }
-        self.soc.uart.settle(bound, &self.soc.gpio, apb);
         if let Some((at, name, setting)) = self.soc.uart.take_refused()
             && self.fault.is_none_or(|(fault, _)| at < fault)
         {
@@ -1089,6 +1097,85 @@ mod tests {
         assert!(seen.len() > 2, "{seen:?}");
         for step in [1, 3, 7, 40] {
             let mut split = uart_byte().chip();
+            assert_eq!(halts(&mut split, 4000, step), seen, "limits {step} apart");
+            assert_eq!(bytes(&mut split), sent, "limits {step} apart");
+            assert_eq!(split.tick(), whole.tick(), "limits {step} apart");
+        }
+    }
+
+    /// Two 0x00 bytes written back to back with `tx_idle_num` 0. GPIO21 must fall and rise
+    /// for both frames: the second start bit is queued when the first stop bit ends.
+    fn uart_queued() -> Program {
+        let mut program = Program::new(&[
+            IO_MUX + 0x58,
+            1 << 12,
+            GPIO + 0x5a8,
+            12,
+            0x6000_0078,
+            (1 << 20) | (1 << 22) | (1 << 24) | (1 << 25),
+            0x6000_0014,
+            80,
+            0x6000_0048,
+            256,
+            0x6000_0000,
+            0x00,
+        ]);
+        program
+            .l32r(2, 0)
+            .l32r(3, 1)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 2)
+            .l32r(3, 3)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 4)
+            .l32r(3, 5)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 6)
+            .l32r(3, 7)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 8)
+            .l32r(3, 9)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 10)
+            .l32r(3, 11)
+            .rri8(6, 3, 2, 0)
+            .rri8(6, 3, 2, 0)
+            .raw(&LOOP);
+        program
+    }
+
+    #[test]
+    fn a_queued_byte_drives_its_start_bit_however_the_run_splits() {
+        let bytes = |chip: &mut Esp32s3| {
+            std::iter::from_fn(|| chip.take_uart(Tick(u64::MAX)))
+                .map(|sent| (sent.port, sent.byte, sent.start, sent.end))
+                .collect::<Vec<_>>()
+        };
+        let mut whole = uart_queued().chip();
+        let seen = halts(&mut whole, 4000, 4000);
+        let drives: Vec<PadDrive> = seen.iter().map(|&(_, drive)| drive).collect();
+        let sent = bytes(&mut whole);
+        // The route idles the pad high. Each 0x00 frame then falls for its start bit and
+        // rises for its stop bit, including the byte that was queued behind the first.
+        assert_eq!(
+            drives,
+            [
+                PadDrive::High,
+                PadDrive::Low,
+                PadDrive::High,
+                PadDrive::Low,
+                PadDrive::High
+            ],
+            "{seen:?}"
+        );
+        assert_eq!(sent.len(), 2, "{sent:?}");
+        assert!(sent.iter().all(|byte| byte.0 == 0 && byte.1 == 0x00));
+        assert_eq!(
+            sent[1].2, sent[0].3,
+            "the next start bit begins as the stop bit ends"
+        );
+        for step in [1, 3, 7, 40] {
+            let mut split = uart_queued().chip();
             assert_eq!(halts(&mut split, 4000, step), seen, "limits {step} apart");
             assert_eq!(bytes(&mut split), sent, "limits {step} apart");
             assert_eq!(split.tick(), whole.tick(), "limits {step} apart");

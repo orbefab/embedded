@@ -8,9 +8,11 @@
 
 The app waits for `g`, then for 115200 and 1000000 baud sends the bytes named in
 `uart_main.c`, reads each back through the pad, and prints each edge of GPIO43 as
-`edge <offset> <level>`. The offset is the `ccount` after the `GPIO_IN1` load that
-saw the new level, minus the `ccount` read in the instruction before the FIFO store.
-A printed offset lies in `[edge, edge + EDGE_POLL_BOUND)`.
+`edge <offset> <level>`. At 115200 it then writes a back-to-back burst and prints
+that burst's edges from the first store, so `clkdiv_frag` adds up past the poll
+bound. The offset is the `ccount` after the `GPIO_IN1` load that saw the new level,
+minus the `ccount` read in the instruction before the FIFO store. A printed offset
+lies in `[edge, edge + EDGE_POLL_BOUND)`.
 
 The bytes and the bit lengths come from that file and from the divider it writes.
 `traces/serial.csv` holds the console on `USB_SERIAL_JTAG` and each UART byte, sent and
@@ -39,6 +41,7 @@ BOARD_TOLERANCE = 32
 DEFINE = re.compile(r"^#define\s+(EDGE_POLL_BOUND|FRAME_BOUND)\s+(\d+)\s*$", re.M)
 BAUD = re.compile(r"^// checker: BAUD (\d+) DIV (\d+) FRAG (\d+)\s*$", re.M)
 CASE = re.compile(r"^// checker: CASE (8N1|8E1|8N2)((?:\s+0x[0-9a-fA-F]{2})+)\s*$", re.M)
+BURST = re.compile(r"^// checker: BURST (\d+) (8N1|8E1|8N2) (\d+) 0x([0-9a-fA-F]{2})\s*$", re.M)
 CLOCK = re.compile(r"^// checker: (APB_HZ|CPU_HZ) (\d+)\s*$", re.M)
 EDGE = re.compile(r"edge (\d+) ([01])")
 TX = re.compile(r"tx ([0-9a-f]{2})")
@@ -55,8 +58,15 @@ def program(source: str) -> dict:
     cases = []
     for cfg, raw in CASE.findall(source):
         cases.append((cfg, [int(part, 16) for part in raw.split()]))
+    bursts = [
+        {"baud": int(baud), "cfg": cfg, "count": int(count), "byte": int(byte, 16)}
+        for baud, cfg, count, byte in BURST.findall(source)
+    ]
     if not bauds or not cases:
         raise ValueError("uart_main.c names no baud or no case")
+    known = {baud for baud, _, _ in bauds}
+    if any(burst["baud"] not in known for burst in bursts):
+        raise ValueError("uart_main.c names a burst at a baud it does not send")
     return {
         "bound": bounds["EDGE_POLL_BOUND"],
         "frame_bound": bounds["FRAME_BOUND"],
@@ -64,6 +74,7 @@ def program(source: str) -> dict:
         "cpu_hz": clocks["CPU_HZ"],
         "bauds": bauds,
         "cases": cases,
+        "bursts": bursts,
     }
 
 
@@ -98,16 +109,29 @@ def levels_of(cfg: str, byte: int) -> list[int]:
 
 def expected_edges(cfg: str, byte: int, div: int, frag: int, apb_hz: int, cpu_hz: int) -> list[tuple[int, int]]:
     """Each TXD change as `(cpu_cycles_from_the_start_bit, level)`."""
-    levels = levels_of(cfg, byte)
-    lengths = bit_lengths(div, frag, len(levels), apb_hz, cpu_hz)
+    return frame_edges(cfg, byte, 1, div, frag, apb_hz, cpu_hz)
+
+
+def frame_edges(
+    cfg: str, byte: int, count: int, div: int, frag: int, apb_hz: int, cpu_hz: int
+) -> list[tuple[int, int]]:
+    """Edges of `count` back-to-back frames, from the first start bit.
+
+    Each frame's fractional accumulator starts at 0, as the shifter does. The
+    extras still add, which is what puts a later edge past `EDGE_POLL_BOUND`
+    of the same edge with `frag` 0.
+    """
+    edges = []
     at = 0
     previous = 1
-    edges = []
-    for level, length in zip(levels, lengths, strict=True):
-        if level != previous:
-            edges.append((at, level))
-            previous = level
-        at += length
+    for _ in range(count):
+        levels = levels_of(cfg, byte)
+        lengths = bit_lengths(div, frag, len(levels), apb_hz, cpu_hz)
+        for level, length in zip(levels, lengths, strict=True):
+            if level != previous:
+                edges.append((at, level))
+                previous = level
+            at += length
     return edges
 
 
@@ -119,6 +143,20 @@ def transfers(spec: dict) -> list[dict]:
             for byte in values:
                 edges = expected_edges(cfg, byte, div, frag, spec["apb_hz"], spec["cpu_hz"])
                 out.append({"baud": baud, "cfg": cfg, "byte": byte, "edges": edges})
+        for burst in spec["bursts"]:
+            if burst["baud"] != baud:
+                continue
+            edges = frame_edges(burst["cfg"], burst["byte"], burst["count"], div, frag, spec["apb_hz"], spec["cpu_hz"])
+            for index in range(burst["count"]):
+                out.append(
+                    {
+                        "baud": baud,
+                        "cfg": burst["cfg"],
+                        "byte": burst["byte"],
+                        "edges": edges if index == 0 else [],
+                        "burst": True,
+                    }
+                )
     return out
 
 
@@ -163,7 +201,8 @@ def check_console(lines: list[str], sent: list[dict], bound: int) -> list[tuple[
 
     while cursor < len(lines) and not lines[cursor].startswith("baud "):
         cursor += 1
-    for baud, group in _groups(sent):
+    plain = [item for item in sent if not item.get("burst")]
+    for baud, group in _groups(plain):
         take(f"baud {baud}")
         for cfg, items in group:
             take(f"cfg {cfg}")
@@ -188,6 +227,29 @@ def check_console(lines: list[str], sent: list[dict], bound: int) -> list[tuple[
                             f"{cfg} {item['byte']:02x} edge {got_at} {level} is outside [{want_at}, {want_at + bound})"
                         )
                 printed.extend(edges)
+                found.append(item)
+        burst_items = [item for item in sent if item.get("burst") and item["baud"] == baud]
+        if burst_items:
+            take("burst")
+            edges = []
+            while cursor < len(lines) and lines[cursor].startswith("edge "):
+                match = EDGE.fullmatch(lines[cursor])
+                if not match:
+                    raise ValueError(f"bad edge line {lines[cursor]!r}")
+                edges.append((int(match.group(1)), int(match.group(2))))
+                cursor += 1
+            want = burst_items[0]["edges"]
+            if [level for _, level in edges] != [level for _, level in want] or len(edges) != len(want):
+                raise ValueError(f"burst edges {edges}, not {want}")
+            for (got_at, level), (want_at, _) in zip(edges, want, strict=True):
+                if not want_at <= got_at < want_at + bound:
+                    raise ValueError(f"burst edge {got_at} {level} is outside [{want_at}, {want_at + bound})")
+            printed.extend(edges)
+            for item in burst_items:
+                tx = take("tx ")
+                rx = take("rx ")
+                if tx != f"tx {item['byte']:02x}" or rx != f"rx {item['byte']:02x}":
+                    raise ValueError(f"burst printed {tx!r} {rx!r}")
                 found.append(item)
     if cursor >= len(lines) or lines[cursor] != "UART DONE":
         raise ValueError("the console does not end the bytes with UART DONE")
