@@ -1277,6 +1277,7 @@ A `pulses_replay` has no `ratings` object and no `i`, `v`, or `p`. It has no log
 | `pull_down_resistance` | `ohm` | optional, the resistor's |
 | `leakage_resistance` | `ohm` | the resistor's |
 | `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+| `efuse` | a name | optional, `synthetic` when absent, one of the sets in `packages/socs/espressif/src/s3/efuse.txt`, else `netlist.syntax` |
 
 A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`. `pull_down_resistance` may be absent. A store that sets `FUN_WPD` on a pad with a net, while the part names none, ends the run with `chip.unsupported_setting`, `IO_MUX` `pull_down`, and writes nothing. A pad with no net is never stamped, so that store is kept. A netlist that never turns a netted pad's pull-down on keeps the meaning it had before the field, and the version stays 0.
 
@@ -1293,6 +1294,14 @@ A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.u
 `rom` names the mask ROM's ELF, which Espressif publishes for each chip revision. The model runs one ROM, revision 0's, so `rom` must have its SHA-256 and length, `c0ce0f338d1de1bdc6efbef1591779a2a42c1ab7d759d3c6ae8ae63a7dd34cfd` and 949,552 bytes. Another value, `rom` beside `firmware.elf`, or no `rom` beside `firmware.flash` is rule `rom`. No example commits the ROM. `packages/engine/scripts/blobs.sh` fetches it from Espressif's release into a cache folder by pinned hash, and prints that folder for `--blobs`.
 
 Each GPIO with a net drives high through `output.high_resistance` from `VCC`, drives low through `output.low_resistance` into `GND`, pulls up through `pull_up_resistance` to `VCC`, pulls down through `pull_down_resistance` to `GND`, pulls both ways through both, or is off, as the firmware sets it. In each of those states it also leaks through `leakage_resistance` to `VCC` and through another to `GND`. It reads high above `input_threshold.high` times `V(VCC) - V(GND)` over `GND`, and low at or below `input_threshold.low` times it.
+
+A GPIO from `GPIO1` to `GPIO20` with a net is also an ADC input: channel n of ADC1 is `GPIO{n+1}` and channel n of ADC2 is `GPIO{n+11}`. A conversion reads `V(pin) - V(GND)` at the store that starts it and gives the code the chip's calibration maps back to that voltage, as [esp32s3.md](esp32s3.md#the-sar-adcs) says. The pad draws no current for it: it stamps only its drive, pulls and leakage. A conversion of a pad with no net ends the run with `chip.unsupported_setting`, `SENS` `pad_no_net`.
+
+`efuse` names the eFuse set the chip's read registers hold, which sets its MAC, its revision and the ADC calibration IDF reads. `packages/socs/espressif/src/s3/efuse.txt` holds the sets, one section each, and `synthetic`, the only one, is the default. Another name is `netlist.syntax`, with a message that lists the sets. A netlist without the field keeps the meaning it had before it, and the version stays 0. [esp32s3.md](esp32s3.md#the-sar-adcs) says what the synthetic set's calibration reads. A board's set is a new section in `efuse.txt`, each field as the binary on its line of `espefuse summary` gives it, read from that board. It needs no code.
+
+```json
+"efuse": "synthetic"
+```
 
 The example's values are Table 5-4 of the ESP32-S3 Series Datasheet v2.2, at 3.3 V and 25 C.
 

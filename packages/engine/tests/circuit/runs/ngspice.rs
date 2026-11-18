@@ -93,6 +93,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "current-pulse",
             "diode-led-two-caps",
             "divider",
+            "esp32s3-adc",
             "esp32s3-blink",
             "esp32s3-dualcore",
             "esp32s3-echo",

@@ -1,0 +1,18 @@
+# The eFuse sets an `esp32s3` part can name, one section each. Each line under `[name]` sets one
+# field of block 1 or block 2 to its raw unsigned value, in decimal, `0x` hex or `0b` binary, as
+# the binary in parentheses on that field's line of `espefuse summary` gives it. `MAC` takes the
+# address as `espefuse summary` prints it. A field a set does not name is 0, and so is all of
+# block 0. The field names and places are IDF v5.5.5's
+# `components/efuse/esp32s3/esp_efuse_table.csv`, and `efuse.rs` holds them.
+
+# A revision 0.2 chip with 8 MB of PSRAM in the package and no flash in it, block version 1.3,
+# the MAC 02:00:00:00:00:01 and every calibration field 0. With BLK_VERSION_MAJOR 1, IDF reads
+# the ADC calibration from eFuse and takes each field's 0 as no offset from its nominal value.
+[synthetic]
+MAC 02:00:00:00:00:01
+WAFER_VERSION_MINOR_LO 2
+BLK_VERSION_MINOR 3
+PSRAM_CAP 1
+PSRAM_TEMP 2
+PSRAM_VENDOR 1
+BLK_VERSION_MAJOR 1

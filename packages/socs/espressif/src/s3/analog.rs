@@ -40,6 +40,11 @@ impl Analog {
         None
     }
 
+    /// The byte last written to `block`'s register `reg`, 0 for one never written.
+    pub(crate) fn byte(&self, block: u8, reg: u8) -> u8 {
+        self.bytes.get(&(block, reg)).copied().unwrap_or(0)
+    }
+
     pub(crate) fn write(&mut self, offset: u32, value: u32) -> bool {
         if offset < 4 * CONTROLS {
             let key = (value as u8, (value >> 8) as u8);
