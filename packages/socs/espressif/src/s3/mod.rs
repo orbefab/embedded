@@ -2963,7 +2963,8 @@ mod tests {
     }
 
     #[test]
-    fn a_clear_rng_clock_bit_reads_zero_and_the_stream_stays_on_the_apb_index() {
+    fn a_clear_rng_clock_bit_refuses_the_read_and_the_stream_stays_on_the_apb_index() {
+        let off = Some(Ending::Refused(Refused::Register("RNG", "clock_off")));
         let mut open = Esp32s3::new(&[], BASE, [], None).soc;
         let mut gated = Esp32s3::new(&[], BASE, [], None).soc;
         assert_ne!(
@@ -2976,8 +2977,9 @@ mod tests {
         gated.restore(rng::WIFI_CLK_EN_REG, rng::WIFI_CLK_EN_RESET & !rng::RNG_EN);
         assert_eq!(
             gated.bus().load(Cycle(16), rng::WDEV_RND_REG, Width::Word),
-            Ok(0)
+            Err(Exit::Stop)
         );
+        assert_eq!(gated.ending.take(), off);
         gated.restore(rng::WIFI_CLK_EN_REG, 0xffff_dfdf);
         assert_eq!(
             gated.bus().load(Cycle(16), rng::WDEV_RND_REG, Width::Word),
@@ -3001,10 +3003,12 @@ mod tests {
             ),
             Ok(())
         );
+        assert_eq!(kept.ending, None, "clearing the bit is not refused");
         assert_eq!(
             kept.bus().load(Cycle(3), rng::WDEV_RND_REG, Width::Word),
-            Ok(0)
+            Err(Exit::Stop)
         );
+        assert_eq!(kept.ending, off);
 
         // A bare-metal chip has not kept the register. IDF's write is unmodeled there, and the
         // stream still runs, because the absence means the reset value.

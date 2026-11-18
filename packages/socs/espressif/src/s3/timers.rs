@@ -34,8 +34,9 @@
 //! first a whole period after it is enabled, reloaded, or `TIMG_Tx_DIVCNT_RST` is written. A
 //! load copies `TIMG_Tx_LOAD` at that write. `TIMG_Tx_UPDATE` latches the count into the value
 //! registers, which read the latch. An alarm fires when the count reaches `TIMG_Tx_ALARM` while
-//! `TIMG_Tx_ALARM_EN` is set, at a step after the write that set the bit, not because the count
-//! already equals it. The fire sets the timer's bit of `TIMG_INT_RAW_TIMERS`, clears
+//! `TIMG_Tx_ALARM_EN` is set. A count that already equals the alarm, or has passed it by less
+//! than half a turn in the counting direction, fires at once, as TRM §12.2.3's Tables 12.2-1 and
+//! 12.2-2 say. The fire sets the timer's bit of `TIMG_INT_RAW_TIMERS`, clears
 //! `TIMG_Tx_ALARM_EN`, and with `TIMG_Tx_AUTORELOAD` copies the load value into the count. The
 //! interrupt source is high while that raw bit and its `TIMG_INT_ENA_TIMERS` bit are set. A full
 //! turn of the counter whose product does not fit in the tick range is not scheduled. Writes

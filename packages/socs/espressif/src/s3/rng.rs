@@ -12,9 +12,11 @@
 //! chip, so a rewind replays the stream. The seed is the constant [`SEED`]. Nothing in the
 //! netlist and nothing on the host changes it. A board's register is truly random, so no capture
 //! of its words can match this stream. The model promises a deterministic, non-zero, well-mixed
-//! stream while [`RNG_EN`] is set. A read while that bit is clear returns 0. The bit lives in
-//! [`WIFI_CLK_EN_REG`]. A chip that has not kept that register treats it as [`WIFI_CLK_EN_RESET`],
-//! which has the bit set. The stream is indexed by APB cycles, including cycles the bit was clear.
+//! stream while [`RNG_EN`] is set. A read while that bit is clear ends the run as
+//! `chip.unsupported_setting`, `RNG` `clock_off`, since no source says what it returns. The bit
+//! lives in [`WIFI_CLK_EN_REG`]. A chip that has not kept that register treats it as
+//! [`WIFI_CLK_EN_RESET`], which has the bit set. The stream is indexed by APB cycles, including
+//! cycles the bit was clear.
 
 use super::clock::Tick;
 

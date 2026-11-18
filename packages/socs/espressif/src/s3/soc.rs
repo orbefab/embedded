@@ -689,23 +689,24 @@ impl Soc {
         None
     }
 
+    /// Whether the RNG's clock bit is set. A kept word gates the read. A chip that has not kept
+    /// the register, a bare-metal one, uses the reset value, whose bit is set.
+    fn rng_clock_on(&self) -> bool {
+        let gate = self
+            .plain
+            .get(&rng::WIFI_CLK_EN_REG)
+            .copied()
+            .unwrap_or(rng::WIFI_CLK_EN_RESET);
+        gate & rng::RNG_EN != 0
+    }
+
     /// The kept register's word at `addr`, a multiple of 4 in the peripherals, at `now`.
     fn read_kept(&mut self, now: Tick, addr: u32) -> Option<u32> {
         if addr == rng::WDEV_RND_REG {
-            // A kept word gates the read. A chip that has not kept the register, a bare-metal
-            // one, uses the reset value, whose RNG bit is set. Clearing the bit reads 0. The
+            // A load refuses the register while its clock bit is clear, before it gets here. The
             // shifter still counts every APB cycle, so turning the bit back on matches a chip
             // that left it set.
-            let gate = self
-                .plain
-                .get(&rng::WIFI_CLK_EN_REG)
-                .copied()
-                .unwrap_or(rng::WIFI_CLK_EN_RESET);
-            return Some(if gate & rng::RNG_EN == 0 {
-                0
-            } else {
-                self.rng.read(now)
-            });
+            return Some(self.rng.read(now));
         }
         let (base, offset) = (addr & !(BLOCK - 1), addr & (BLOCK - 1));
         let value = match base {
@@ -1312,6 +1313,12 @@ impl Soc {
         }
         if self.rmt_fifo(word) {
             self.ending = Some(Ending::Refused(Refused::Register("RMT", "fifo")));
+            return Err(Exit::Stop);
+        }
+        // No source says what the register reads with its clock off. The technical reference
+        // says only that it reads pseudo-random numbers with no entropy source.
+        if word == rng::WDEV_RND_REG && !self.rng_clock_on() {
+            self.ending = Some(Ending::Refused(Refused::Register("RNG", "clock_off")));
             return Err(Exit::Stop);
         }
         let now = self.stamp(cycle);
