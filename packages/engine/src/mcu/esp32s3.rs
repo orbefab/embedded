@@ -88,6 +88,16 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
             fall: against(pin, threshold.low.si.get()),
         })
         .collect();
+    // V(pin) - V(GND) of each ADC pad, in the order the bridge reads them.
+    let samples = pins
+        .iter()
+        .zip(&gpios)
+        .filter(|&(_, &gpio)| s3::adc_pad(gpio))
+        .map(|(&pin, _)| Signal {
+            terms: vec![(Node::from(pin), 1.0), (Node::from(gnd), -1.0)],
+            offset: 0.0,
+        })
+        .collect();
     let mut signals: Vec<(&'static str, usize)> = mcu.names[2..]
         .iter()
         .enumerate()
@@ -127,9 +137,10 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
     if mcu.pull_down_resistance.is_none() {
         chip.omit_pull_down();
     }
+    chip.use_efuse(mcu.efuse);
     let console = mcu.console.iter().map(|send| (send.at, send.to.as_slice()));
     let bridge = Bridge::new(chip, gpios, console);
-    super::chip(part, outputs, watches, signals, Vec::new(), bridge)
+    super::chip(part, outputs, watches, signals, samples, bridge)
 }
 
 #[cfg(test)]
@@ -173,6 +184,7 @@ mod tests {
 /// one, pulls both ways, or is off, as the firmware sets it. A part that names no pull-down
 /// refuses a store that sets one on a pad with a net, and writes nothing. It leaks to `VCC`
 /// and to `GND` through `leakage_resistance`, and reads its level through `input_threshold`.
+/// Its ADCs read GPIO1 to GPIO20 against `GND`, through the calibration of the eFuse set `efuse`.
 /// `console` is
 /// what the host sends its console: each event's bytes, in order, after t = 0 and after the
 /// previous event. Only parse builds one.
@@ -192,6 +204,8 @@ pub struct Esp32s3 {
     /// Ohm. Every GPIO's to `VCC` and again to `GND`, in every drive state.
     pub leakage_resistance: Value,
     pub input_threshold: Threshold,
+    /// The chip's eFuses, by the name of a set the chip crate holds.
+    pub efuse: s3::EfuseSet,
     pub console: Vec<Event<Vec<u8>>>,
 }
 
@@ -277,8 +291,31 @@ pub(crate) struct WireEsp32s3 {
     pull_down_resistance: Option<WireValue>,
     leakage_resistance: WireValue,
     input_threshold: WireThreshold,
+    #[serde(default = "default_efuse", deserialize_with = "efuse")]
+    efuse: s3::EfuseSet,
     #[serde(default)]
     console: Vec<WireSend>,
+}
+
+fn default_efuse() -> s3::EfuseSet {
+    s3::EfuseSet::default()
+}
+
+/// The eFuse set a name picks. A section that does not parse is the same `netlist.syntax`
+/// failure as an unknown name, with the parse error as the message, and it does not panic.
+fn efuse<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<s3::EfuseSet, D::Error> {
+    let name = String::deserialize(deserializer)?;
+    match s3::EfuseSet::named(&name) {
+        Ok(Some(set)) => Ok(set),
+        Ok(None) => {
+            let names: Vec<&str> = s3::EfuseSet::names().collect();
+            Err(serde::de::Error::custom(format!(
+                "`{name}` is not an eFuse set; the sets are {}",
+                names.join(", ")
+            )))
+        }
+        Err(error) => Err(serde::de::Error::custom(error.to_string())),
+    }
 }
 
 #[derive(Deserialize)]
@@ -371,6 +408,7 @@ pub(crate) fn resolve_esp32s3(ctx: ParseCtx<'_>, wire: WireEsp32s3) -> Option<Es
         pull_down_resistance: pull_down?,
         leakage_resistance: leakage?,
         input_threshold: input_threshold?,
+        efuse: wire.efuse,
         console: console?,
     })
 }
