@@ -21,8 +21,10 @@ that first callback is entered from the instructions just after the start, and e
 the period by less than 5000 cycles, and the eight one-shots of a divider must be equal. `equal` and
 `behind` must be above 0 and below 5000 cycles: each fires at the start, and a full turn of the
 counter does not. `above`'s first latency follows that one-shot rule against divider 80's period,
-and its gap is above 0 and below 5000. The run must hold no error, and `manifest.json` must list
-the ROM, then each flash region with its offset.
+and its gap is above 0 and below 5000. `traces/serial.csv` must hold those lines as `u1`'s
+`USB_SERIAL_JTAG`. A `UART0`, `UART1` or `UART2` row may share the file: a flash boot programs
+UART0, and the early log is sent there before the console moves. The run must hold no error, and
+`manifest.json` must list the ROM, then each flash region with its offset.
 
 When `board.txt` sits beside the netlist, it holds the same lines a board printed, including
 `equal`, `behind` and `above`. Each one-shot and auto-reload latency must lie within 4000 CPU
@@ -75,10 +77,15 @@ def period(divider: int) -> int:
 
 
 def lines(serial_csv: str) -> str:
-    """The console text, from `u1`'s `USB_SERIAL_JTAG` bytes."""
+    """The console text, from `u1`'s `USB_SERIAL_JTAG` bytes.
+
+    A flash boot programs UART0 and sends its early log there, so those rows may share the file.
+    """
     rows = list(csv.DictReader(io.StringIO(serial_csv)))
-    if any(row["part"] != "u1" or row["usart"] != "USB_SERIAL_JTAG" for row in rows):
-        raise ValueError("serial.csv holds a byte that is not u1's USB_SERIAL_JTAG")
+    known = {"USB_SERIAL_JTAG", "UART0", "UART1", "UART2"}
+    if any(row["part"] != "u1" or row["usart"] not in known for row in rows):
+        raise ValueError("serial.csv holds a byte that is not u1's USB_SERIAL_JTAG or a UART")
+    rows = [row for row in rows if row["usart"] == "USB_SERIAL_JTAG"]
     return "".join(chr(int(row["byte"])) for row in rows)
 
 

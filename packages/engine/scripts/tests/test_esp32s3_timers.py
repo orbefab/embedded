@@ -7,6 +7,7 @@ from esp32s3_timers import (
     check_diagnostics,
     check_manifest,
     compare,
+    lines,
     period,
     rows_of,
 )
@@ -107,3 +108,7 @@ def test_periods_and_board() -> None:
         ]
     }
     expect("the manifest passes", not raises(lambda: check_manifest(listed, {"parts": [part]})))
+    csv_text = "t_ps,part,usart,byte\n1,u1,UART0,65\n2,u1,USB_SERIAL_JTAG,66\n"
+    expect("a UART0 boot byte is not the console", lines(csv_text) == "B")
+    other = "t_ps,part,usart,byte\n1,u1,SPI2,66\n"
+    expect("another port fails", raises(lambda: lines(other)))
