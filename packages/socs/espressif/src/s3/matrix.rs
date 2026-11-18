@@ -7,9 +7,10 @@
 //! interrupts drives nothing, as the core takes no external line there. The APP CPU's map
 //! starts at 16, a core timer, as the hardware resets it. The status registers show each
 //! source's level, the same in both halves. The sources modeled here are the GPIO interrupt,
-//! SPI2's, I2C0's, RMT's, each timer group's watchdog, the three SYSTIMER alarms and the four
-//! `FROM_CPU` registers. The USB Serial/JTAG source is added by the caller. Every other source
-//! stays low. IDF v5.5.5, `components/soc/esp32s3/include/soc/interrupts.h`,
+//! SPI2's, I2C0's, RMT's, each timer group's watchdog and its two general timers, the three
+//! SYSTIMER alarms and the four `FROM_CPU` registers. The general-timer levels and the USB
+//! Serial/JTAG source are added by the caller. Every other source stays low. IDF v5.5.5,
+//! `components/soc/esp32s3/include/soc/interrupts.h`,
 //! `interrupt_core0_reg.h` and `interrupt_core1_reg.h`.
 
 use orbe_xtensa::CoreId;
@@ -25,6 +26,9 @@ const I2C_EXT0: u32 = 42;
 const RMT: u32 = 40;
 /// `ETS_TG0_WDT_LEVEL_INTR_SOURCE` and `ETS_TG1_WDT_LEVEL_INTR_SOURCE`.
 const TG_WDT: [u32; 2] = [52, 55];
+/// `ETS_TG0_T0_LEVEL_INTR_SOURCE`, `ETS_TG0_T1_LEVEL_INTR_SOURCE`,
+/// `ETS_TG1_T0_LEVEL_INTR_SOURCE` and `ETS_TG1_T1_LEVEL_INTR_SOURCE`.
+const TG_T: [u32; 4] = [50, 51, 53, 54];
 pub(crate) const SYSTIMER_TARGET0: u32 = 57;
 const FROM_CPU_INTR0: u32 = 79;
 /// `INTERRUPT_CORE0_INTR_STATUS_0_REG` to `3`.
@@ -101,7 +105,7 @@ impl Matrix {
 
     /// The source levels, bit `n` for source `n`, with `systimer` the SYSTIMER alarm lines,
     /// `spi2` SPI2's line, `watchdogs` each timer group's watchdog line, `gpio` the GPIO line,
-    /// `i2c` I2C0's and `rmt` RMT's.
+    /// `i2c` I2C0's and `rmt` RMT's. `timer_levels` adds the general timers.
     pub(crate) fn sources(
         &self,
         systimer: u32,
@@ -119,6 +123,14 @@ impl Matrix {
             | u128::from(watchdogs[0]) << TG_WDT[0]
             | u128::from(watchdogs[1]) << TG_WDT[1]
             | u128::from(self.from_cpu) << FROM_CPU_INTR0
+    }
+
+    /// T0 and T1 of group 0, then of group 1, as source-level bits.
+    pub(crate) fn timer_levels(timers: [bool; 4]) -> u128 {
+        u128::from(timers[0]) << TG_T[0]
+            | u128::from(timers[1]) << TG_T[1]
+            | u128::from(timers[2]) << TG_T[2]
+            | u128::from(timers[3]) << TG_T[3]
     }
 
     /// The CPU interrupt lines `sources` drive on `core`.
@@ -212,6 +224,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(status, 1 << (TG_WDT[0] - 32), "the second status word");
+        matrix.write(4 * TG_T[0], 3);
+        assert_eq!(
+            matrix.lines(
+                Pro,
+                matrix.sources(0, false, [false; 2], false, false, false)
+                    | Matrix::timer_levels([true, false, false, false])
+            ),
+            1 << 3
+        );
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! The ESP32-S3 as one Xtensa LX7 core on its internal SRAM and RTC memory, with GPIO, IO_MUX
-//! and the GPIO matrix, the interrupt matrix, SYSTIMER, the watchdogs, the USB Serial/JTAG
+//! and the GPIO matrix, the interrupt matrix, SYSTIMER, the watchdogs, the timer groups' general
+//! timers, the hardware RNG, the USB Serial/JTAG
 //! console, SPI2, RMT, and for a chip booted from flash the mask ROM, the flash behind SPI1 and the
 //! MMU, and the registers the boot path reads.
 //!
@@ -41,6 +42,7 @@ mod i2c;
 mod ledc;
 mod matrix;
 mod rmt;
+mod rng;
 mod rom;
 mod sha;
 mod soc;
@@ -1129,8 +1131,6 @@ mod tests {
         let out = gdma + 4 * 0xc0 + 0x60;
         let refused = [
             (SPI2 + 0x34, 1 << 10, Refused::Interrupt("SPI2")),
-            (TIMG0 + 0x70, 1, Refused::Interrupt("TIMG0")),
-            (TIMG1 + 0x70, 2, Refused::Interrupt("TIMG1")),
             (
                 USB_SERIAL_JTAG + 0x10,
                 1 << 0,
@@ -1163,6 +1163,10 @@ mod tests {
         }
         let mut chip = store_after_two_loads(TIMG0 + 0x70, 1 << 2, 0).chip();
         assert_eq!(chip.run_until(c(1000)), None, "the watchdog's interrupt");
+        let mut chip = store_after_two_loads(TIMG0 + 0x70, 1, 0).chip();
+        assert_eq!(chip.run_until(c(1000)), None, "timer 0's interrupt");
+        let mut chip = store_after_two_loads(TIMG1 + 0x70, 2, 0).chip();
+        assert_eq!(chip.run_until(c(1000)), None, "timer 1's interrupt");
     }
 
     /// `JTAG_IN_FLUSH` and SOF are not among the USB Serial/JTAG enables the model runs.
@@ -2642,5 +2646,76 @@ mod tests {
                 "limits {step} apart"
             );
         }
+    }
+
+    /// Four RNG reads, twenty-four crystal cycles apart, then TIMG0 T0 armed for ten counts at
+    /// divider 2. The core waits, and the alarm wakes it. Halting every step, every seven steps
+    /// and once at the end leaves the same fault and the same words.
+    #[test]
+    fn a_timer_alarm_and_rng_reads_split_across_halts_match() {
+        let config = (1 << 31) | (1 << 30) | (2 << 13) | (1 << 10);
+        let mut program = Program::new(&[TIMG0, 0x6003_507c, 0x3fc8_8000, config, 10]);
+        program
+            .l32r(2, 0)
+            .movi(3, 0)
+            .rri8(6, 3, 2, 0x48)
+            .l32r(4, 1)
+            .l32r(5, 2);
+        for k in 0..4u8 {
+            program.rri8(2, 6, 4, 0).rri8(6, 6, 5, k * 4);
+            if k < 3 {
+                for _ in 0..24 {
+                    program.raw(&[0xf0, 0x20, 0x00]);
+                }
+            }
+        }
+        program
+            .l32r(3, 4)
+            .rri8(6, 3, 2, 0x10)
+            .movi(3, 0)
+            .rri8(6, 3, 2, 0x14)
+            .rri8(6, 3, 2, 0x18)
+            .rri8(6, 3, 2, 0x1c)
+            .rri8(6, 3, 2, 0x20)
+            .movi(7, 2)
+            .wsr(7, INTENABLE)
+            .movi(7, 0)
+            .wsr(7, PS)
+            .l32r(3, 3)
+            .rri8(6, 3, 2, 0x00)
+            .raw(&WAITI)
+            .raw(&LOOP);
+        let make = || {
+            let mut chip = program.chip();
+            chip.soc.restore(TIMG0 + 0x70, 1);
+            chip.soc.restore(0x600c_2000 + 4 * 50, 1);
+            chip
+        };
+        let words = |chip: &mut Esp32s3| {
+            [0, 4, 8, 12].map(|offset| chip.load_word(0x3fc8_8000 + offset).unwrap())
+        };
+        let mut done = make();
+        let whole = halts(&mut done, 5000, 5000);
+        let stored = words(&mut done);
+        for step in [1, 7, 1000] {
+            let mut chip = make();
+            assert_eq!(halts(&mut chip, 5000, step), whole, "steps of {step}");
+            assert_eq!(words(&mut chip), stored, "steps of {step}");
+        }
+        assert!(stored.iter().all(|word| *word != 0), "{stored:?}");
+        assert!(
+            stored.windows(2).any(|pair| pair[0] != pair[1]),
+            "{stored:?}"
+        );
+        // The enable store is at cycle 97, the alarm 20 cycles later, and the vector entry
+        // takes 4, so the unmapped fetch is at cycle 121.
+        assert!(
+            matches!(
+                whole[..],
+                [(Halt::Fault(at, Fault::UnmappedFetch(pc)), _)]
+                    if pc == pro(0x4000_0300) && at == c(121)
+            ),
+            "{whole:?}"
+        );
     }
 }

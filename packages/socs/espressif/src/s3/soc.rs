@@ -28,6 +28,7 @@ use super::i2c::{self, I2c};
 use super::ledc::{self, Ledc};
 use super::matrix::{self, Matrix};
 use super::rmt::{self, Rmt};
+use super::rng::{self, Rng};
 use super::rom;
 use super::sha::{self, Sha};
 use super::spi1::{self, FlashRefusal, Spi1};
@@ -89,6 +90,7 @@ pub(crate) struct Soc {
     pub(crate) gpio: Gpio,
     pub(crate) systimer: Systimer,
     pub(crate) watchdogs: Watchdogs,
+    rng: Rng,
     pub(crate) usb: UsbSerialJtag,
     pub(crate) spi2: Spi2,
     gdma: Gdma,
@@ -264,8 +266,6 @@ fn effect(addr: u32) -> Option<Effect> {
         (RTC_CNTL, 0x18) => Effect::Refuse(1 << 31, Ending::Refused(Refused::Sleep)),
         (RTC_CNTL, 0x74) => Effect::Report(u32::MAX),
         (SPI2, 0x34) => Effect::Refuse(!spi2::TRANS_DONE, interrupt("SPI2")),
-        (TIMG0, 0x70) => Effect::Refuse(0b11, interrupt("TIMG0")),
-        (TIMG1, 0x70) => Effect::Refuse(0b11, interrupt("TIMG1")),
         (USB_SERIAL_JTAG, 0x10) => Effect::Refuse(!usb::ENA_ALLOWED, interrupt("USB_SERIAL_JTAG")),
         (SHA, sha::INT_ENA) => Effect::Refuse(1, interrupt("SHA")),
         (LEDC, ledc::INT_ENA) => Effect::Refuse(u32::MAX, interrupt("LEDC")),
@@ -308,6 +308,7 @@ impl Soc {
             gpio: Gpio::new(netted),
             systimer: Systimer::new(),
             watchdogs,
+            rng: Rng::new(clock.source.apb()),
             usb: UsbSerialJtag::default(),
             spi2: Spi2::new(),
             gdma: Gdma::new(),
@@ -586,7 +587,11 @@ impl Soc {
         let (base, offset) = (addr & !(BLOCK - 1), addr & (BLOCK - 1));
         let now = Tick(0);
         match base {
-            TIMG0 | TIMG1 if (0x48..=0x64).contains(&offset) || (0x70..=0x7c).contains(&offset) => {
+            TIMG0 | TIMG1
+                if offset <= 0x44
+                    || (0x48..=0x64).contains(&offset)
+                    || (0x70..=0x7c).contains(&offset) =>
+            {
                 let group = usize::from(base == TIMG1);
                 self.watchdogs
                     .restore(now, Register::Timg(group, offset), value);
@@ -611,6 +616,7 @@ impl Soc {
             SYSTEM if offset == app::CONTROL_1 => self.app.boot = value,
             SYSTEM if gates::OFFSETS.contains(&offset) => {
                 self.gates.write(offset, value).for_each(drop);
+                self.sync_timg(now);
             }
             _ => {
                 self.plain.insert(addr, value);
@@ -671,6 +677,9 @@ impl Soc {
 
     /// The kept register's word at `addr`, a multiple of 4 in the peripherals, at `now`.
     fn read_kept(&mut self, now: Tick, addr: u32) -> Option<u32> {
+        if addr == rng::WDEV_RND_REG {
+            return Some(self.rng.read(now));
+        }
         let (base, offset) = (addr & !(BLOCK - 1), addr & (BLOCK - 1));
         let value = match base {
             GPIO => self.gpio.read(offset),
@@ -679,8 +688,8 @@ impl Soc {
             TIMG0 | TIMG1 if calibration::OFFSETS.contains(&offset) => {
                 self.calibration[usize::from(base == TIMG1)].read(offset)
             }
-            TIMG0 => self.watchdogs.read_timg(0, offset),
-            TIMG1 => self.watchdogs.read_timg(1, offset),
+            TIMG0 => self.watchdogs.read_timg(now, 0, offset),
+            TIMG1 => self.watchdogs.read_timg(now, 1, offset),
             SYSTIMER => self.systimer.read(now, offset),
             USB_SERIAL_JTAG => self.usb.read(now, offset),
             SPI2 => self.spi2.read(now, offset),
@@ -838,6 +847,7 @@ impl Soc {
                 for block in held {
                     self.reset(block);
                 }
+                self.sync_timg(now);
                 true
             }
             LEDC => {
@@ -936,6 +946,7 @@ impl Soc {
         let spi2 = self.spi2.line(now);
         let gpio = self.gpio.pending() != 0;
         let lines = self.watchdogs.lines();
+        let timers = self.watchdogs.timer_lines(now);
         let rmt = self.rmt.line(now);
         let mut sources = self.matrix.sources(
             self.systimer.lines(),
@@ -944,7 +955,7 @@ impl Soc {
             gpio,
             self.i2c.line(),
             rmt,
-        );
+        ) | Matrix::timer_levels(timers);
         if self.usb.poll(now) {
             sources |= 1 << usb::SOURCE;
         }
@@ -960,10 +971,23 @@ impl Soc {
             Some(source) if source != self.clock.source => {
                 self.clock.switch(at, source);
                 self.watchdogs.reclock(tick, source.apb());
+                self.rng.reclock(tick, source.apb());
                 self.reclocked = true;
             }
             Some(_) => {}
         }
+    }
+
+    /// The general timers follow TIMG0's and TIMG1's clock and reset bits. The watchdog does not.
+    fn sync_timg(&mut self, now: Tick) {
+        let mut clocked = [false; 2];
+        let mut held = [false; 2];
+        for group in 0..2 {
+            let (clock, reset) = self.gates.timg(group);
+            clocked[group] = clock;
+            held[group] = reset;
+        }
+        self.watchdogs.apply_gates(now, clocked, held);
     }
 
     /// Lets an access to an unmodeled register through, or stops the core at the first one.
@@ -1433,6 +1457,7 @@ impl Soc {
         self.rmt.settle(now);
         let next = [
             self.systimer.next_event(now),
+            self.watchdogs.next_alarm(now),
             self.spi2.next_event(),
             self.usb.next_event(now),
             self.rmt.next_event(),

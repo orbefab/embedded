@@ -494,19 +494,19 @@ fn the_tick_after_a_fault_counts_a_waiting_core_where_it_would_have_polled() {
         program
             .movi(3, 1)
             .delay(5, 30)
-            .straddling_s32i(3, 6, 0x70)
+            .straddling_s32i(3, 6, 0x10)
             .raw(&LOOP);
     };
     for core in [CoreId::Pro, CoreId::App] {
         let (pro, app) = match core {
             CoreId::Pro => {
-                let mut app = Program::at(APP, &[TIMG0]);
+                let mut app = Program::at(APP, &[USB_SERIAL_JTAG]);
                 app.l32r(6, 0);
                 refuses(&mut app);
                 (pro_waits(&app), app)
             }
             CoreId::App => {
-                let mut pro = Program::new(&[SYSTEM, APP, TIMG0]);
+                let mut pro = Program::new(&[SYSTEM, APP, USB_SERIAL_JTAG]);
                 pro.l32r(2, 0).l32r(4, 1).release().l32r(6, 2);
                 refuses(&mut pro);
                 (pro, app_waits())
@@ -533,7 +533,7 @@ fn the_tick_after_a_fault_counts_a_waiting_core_where_it_would_have_polled() {
         assert!(
             matches!(
                 whole[0].0,
-                Halt::Fault(_, Fault::Refused(Refused::Interrupt("TIMG0"), _))
+                Halt::Fault(_, Fault::Refused(Refused::Interrupt("USB_SERIAL_JTAG"), _))
             ),
             "{core:?}: {whole:?}"
         );
