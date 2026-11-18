@@ -389,7 +389,7 @@ fn help_lists_every_command_and_each_command_prints_its_usage() {
         .take_while(|l| !l.is_empty())
         .map(|l| l.split_whitespace().next().unwrap())
         .collect();
-    let mut want = vec!["check", "lint", "add", "part", "search"];
+    let mut want = vec!["check", "lint", "add", "part", "search", "blocks"];
     want.extend(orbe_session::COMMANDS.iter().map(|s| s.name));
     want.extend(["show", "test", "skills", "registry", "help"]);
     assert_eq!(listed, want);
@@ -1373,7 +1373,7 @@ fn orbe_test_leaves_an_open_session_alone_and_none_to_close() {
     says(
         &core,
         &format!(
-            "8. Run `orbe close` when the live work is done. A `{code}` error from it means nothing was open.\n9. Write what worked as `tests/<name>.test` and run `orbe test`. It leaves no session to close."
+            "9. Run `orbe close` when the live work is done. A `{code}` error from it means nothing was open.\n10. Write what worked as `tests/<name>.test` and run `orbe test`. It leaves no session to close."
         ),
     );
     says(
@@ -1470,4 +1470,59 @@ fn the_warnings_table_lists_the_codes_lint_prints_and_open_shows_only_the_engine
         &core,
         "`orbe open` shows none of these warnings except `net.floating`.",
     );
+}
+
+/// `orbe skills get core` starts from a Block, and prints a breadboard's holes as ranges.
+#[test]
+fn the_core_skill_starts_from_a_block_and_ranges_its_holes() {
+    let core = skill("core");
+    let loop_ = core
+        .split("## The loop")
+        .nth(1)
+        .unwrap()
+        .split("\n## ")
+        .next()
+        .unwrap();
+    assert!(loop_.contains("1. When a Block is close"), "{loop_}");
+    assert!(
+        loop_.contains("`orbe add <block>` in an empty folder"),
+        "{loop_}"
+    );
+    for id in [
+        "nano-button-led",
+        "uno-button-led",
+        "nano-led-fade",
+        "nano-light-comparator",
+    ] {
+        assert!(
+            loop_.contains(&format!("- `{id}`:")),
+            "{id} is not a line of the loop"
+        );
+    }
+    for (id, rows) in [
+        (
+            "breadboard-400",
+            "rows a to j at columns 1 to 30; rows W to Z at columns 1 to 5, 7 to 11",
+        ),
+        (
+            "breadboard-830",
+            "rows a to j at columns 1 to 63; rows W to Z at columns 3 to 7, 9 to 13",
+        ),
+    ] {
+        let section = core.split(&format!("### `{id}`")).nth(1).unwrap();
+        let pins = section
+            .lines()
+            .find(|line| line.starts_with("- Pins:"))
+            .unwrap();
+        assert!(pins.contains(rows), "{pins}");
+        assert!(!pins.contains("`a1`"), "{pins}");
+        assert!(pins.len() < 400, "{id} pins line is {} bytes", pins.len());
+    }
+    let led = core.split("### `led-5mm`").nth(1).unwrap();
+    let pins = led
+        .lines()
+        .find(|line| line.starts_with("- Pins:"))
+        .unwrap();
+    assert!(pins.contains("`anode`"), "{pins}");
+    assert!(pins.contains("`cathode`"), "{pins}");
 }

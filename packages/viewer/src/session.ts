@@ -4,7 +4,8 @@ import type { Command, Reply, ReplyError, ToViewer } from "./protocol";
  * process, orbe-wasm's Worker, or a fixture. */
 export interface SessionSource {
   /** Calls `listener` with every message from now on, and returns the unsubscribe. A source
-   * sends the current scene, then the latest frame, to each new listener. */
+   * sends the current scene, then the latest frame, to each new listener. That frame carries
+   * the serial text already delivered, bounded to 4096 bytes. */
   subscribe(listener: (message: ToViewer) => void): () => void;
   /** Rejects when the command never reached the session. */
   send(command: Command): Promise<Reply>;

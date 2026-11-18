@@ -10,6 +10,7 @@
 
 #[cfg(unix)]
 mod add;
+mod blocks;
 mod buy;
 mod catalog;
 mod circuit;
@@ -45,8 +46,9 @@ pub use project::{BLOCK, REGISTRY, folder_hash, is_registry_name, part_file, she
 pub use published::is_published;
 pub use summary::{
     BlockCard, Buy, Card, CardFile, Choice, Doc, Folder, Holes, Literal, Missing, NotSimulated,
-    Param, Pin, Rating, Real, Threshold, block_card, card, cards, catalog_cards, ids_with_segment,
-    missing_fields, near_names, param_sentence, search, si_amount,
+    Param, Pin, Rating, Real, Threshold, block_card, builtin_block, builtin_blocks, card, cards,
+    catalog_cards, ids_with_segment, missing_fields, near_names, param_sentence, search,
+    search_blocks, si_amount,
 };
 
 /// Findings the part-file reader reports for `parts/<id>/part.jsonc` in `files`. [`read`] uses

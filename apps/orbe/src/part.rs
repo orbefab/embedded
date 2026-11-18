@@ -1,6 +1,6 @@
 //! Text for `orbe part` and `orbe search`.
 
-use orbe_scene::{Card, holes_text, param_sentence, si_amount, strip_text};
+use orbe_scene::{BlockCard, Card, holes_text, param_sentence, si_amount, strip_text};
 use orbe_session::BRIGHTNESS_WINDOW;
 
 pub fn text(card: &Card) -> String {
@@ -177,14 +177,49 @@ pub fn text(card: &Card) -> String {
     lines.join("\n")
 }
 
-pub fn search_text(cards: &[Card]) -> String {
-    if cards.is_empty() {
+pub fn block_text(card: &BlockCard) -> String {
+    let mut lines = vec![
+        format!("{}  {}", card.name, card.version),
+        card.title.clone(),
+    ];
+    if let Some(description) = &card.description {
+        lines.push(String::new());
+        lines.push(description.clone());
+    }
+    lines.push(String::new());
+    lines.push(format!(
+        "a Block. install it with `orbe add {}` in an empty folder",
+        card.name
+    ));
+    lines.push(String::new());
+    lines.join("\n")
+}
+
+pub fn blocks_text(cards: &[BlockCard]) -> String {
+    let mut lines = Vec::new();
+    for card in cards {
+        lines.push(format!("{}  {}", card.name, card.title));
+        if let Some(description) = &card.description {
+            lines.push(format!("  {description}"));
+        }
+    }
+    lines.push(String::new());
+    lines.join("\n")
+}
+
+pub fn search_text(cards: &[Card], blocks: &[BlockCard]) -> String {
+    if cards.is_empty() && blocks.is_empty() {
         return "no parts match\n".to_string();
     }
     let mut lines: Vec<String> = cards
         .iter()
         .map(|card| format!("{}  {}", card.name, card.title))
         .collect();
+    lines.extend(
+        blocks
+            .iter()
+            .map(|card| format!("{}  {}", card.name, card.title)),
+    );
     lines.push(String::new());
     lines.join("\n")
 }

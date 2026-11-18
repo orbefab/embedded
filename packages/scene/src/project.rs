@@ -128,6 +128,9 @@ struct Loader<'a> {
     /// The project folder as the user named it, when that is not the current folder.
     /// Printed commands are relative to where `orbe` ran, and `chmod` has no `-C`.
     hint_at: Option<PathBuf>,
+    /// `parts/` is a directory this process cannot list. Catalog ids are not reported
+    /// missing: the folder is there, and a missing-part hint would not be the repair.
+    parts_unreadable: bool,
 }
 
 /// Parses `file` and reads it as a part. This is the part-file reader `orbe check` runs.
@@ -241,6 +244,7 @@ pub(crate) fn load<'f>(
         used: BTreeSet::new(),
         add,
         hint_at,
+        parts_unreadable: false,
     };
     let scene = loader
         .read(&scene_path)
@@ -249,7 +253,10 @@ pub(crate) fn load<'f>(
         return Err(loader.sources);
     };
     match store {
-        Store::Copies => loader.read_lock(&root),
+        Store::Copies => {
+            loader.read_lock(&root);
+            loader.note_parts_dir(&root);
+        }
         Store::Catalog => loader.no_copies(&root, scene.file),
     }
     let types: Vec<_> = scene.comp.parts.iter().map(|i| i.ty.clone()).collect();
@@ -286,7 +293,7 @@ impl Loader<'_> {
                 let file = self.sources.add(path, String::new());
                 let shown = display(self.sources.root(), path);
                 let hint = if error.kind() == io::ErrorKind::PermissionDenied {
-                    chmod_hint(self.hint_at.as_deref(), Path::new(&shown))
+                    chmod_hint(self.hint_at.as_deref(), Path::new(&shown), false)
                 } else {
                     "check that the path exists and is readable".into()
                 };
@@ -299,6 +306,38 @@ impl Loader<'_> {
                 None
             }
         }
+    }
+
+    /// `parts/` exists and cannot be listed. One finding names that directory. A later
+    /// catalog id is not `part_missing`: the copy may be there, and `orbe add` cannot see it.
+    fn note_parts_dir(&mut self, root: &Path) {
+        let parts = root.join("parts");
+        if !self.files.is_dir(&parts) {
+            return;
+        }
+        if let Err(error) = self.files.list(&parts) {
+            self.parts_unreadable = true;
+            self.note_unreadable(&parts, &error);
+        }
+    }
+
+    /// A directory that could not be listed, or a file that could not be read. A directory
+    /// needs search permission as well as read, so its hint is `chmod u+rx`.
+    fn note_unreadable(&mut self, path: &Path, error: &io::Error) {
+        let file = self.sources.add(path, String::new());
+        let shown = display(self.sources.root(), path);
+        let directory = self.files.is_dir(path);
+        let hint = if error.kind() == io::ErrorKind::PermissionDenied {
+            chmod_hint(self.hint_at.as_deref(), Path::new(&shown), directory)
+        } else {
+            "check that the path exists and is readable".into()
+        };
+        self.out.push(
+            Code::Io,
+            Span::start_of(file),
+            format!("cannot read {shown}: {error}"),
+            hint,
+        );
     }
 
     /// A Block reads every id from the catalog, so a copy or a lock beside it would not be read.
@@ -392,7 +431,18 @@ impl Loader<'_> {
             let Some((ty, span)) = ty else { continue };
             let found = match ty {
                 TypeRef::Id(id) => {
-                    let path = root.join("parts").join(&id).join("part.jsonc");
+                    let folder = root.join("parts").join(&id);
+                    let path = folder.join("part.jsonc");
+                    if self.store == Store::Copies && self.parts_unreadable {
+                        continue;
+                    }
+                    if self.store == Store::Copies
+                        && self.files.is_dir(&folder)
+                        && let Err(error) = self.files.list(&folder)
+                    {
+                        self.note_unreadable(&folder, &error);
+                        continue;
+                    }
                     let path = match self.store {
                         Store::Copies
                             if self.lock.contains_key(&id) && self.files.is_file(&path) =>
@@ -719,7 +769,13 @@ impl Loader<'_> {
             let hash = match hash_folder(self.files, &folder) {
                 Ok(hash) => Some(hash),
                 Err((path, error)) => {
-                    self.unhashable(id, &folder, &path, &error, at);
+                    // A directory that could not be listed is the same read error `orbe add`
+                    // prints. A file keeps the hash message, which names the copy.
+                    if self.files.is_dir(&path) {
+                        self.note_unreadable(&path, &error);
+                    } else {
+                        self.unhashable(id, &folder, &path, &error, at);
+                    }
                     None
                 }
             };
@@ -916,7 +972,11 @@ impl Loader<'_> {
             }
             None if error.kind() == io::ErrorKind::PermissionDenied => {
                 let shown = display(&root, path);
-                let hint = chmod_hint(self.hint_at.as_deref(), Path::new(&shown));
+                let hint = chmod_hint(
+                    self.hint_at.as_deref(),
+                    Path::new(&shown),
+                    self.files.is_dir(path),
+                );
                 (shown, hint)
             }
             None => (
@@ -1235,10 +1295,13 @@ fn hint_dir(files: &Files, scene: &Path) -> Option<PathBuf> {
 /// The `chmod` hint for `rel`, a path from the project root. `dir` is the project folder as
 /// the user named it from where `orbe` ran, or `None` when that folder is the current one.
 /// The command has to work from that directory: `chmod` has no `-C`.
-pub(crate) fn chmod_hint(dir: Option<&Path>, rel: &Path) -> String {
+pub(crate) fn chmod_hint(dir: Option<&Path>, rel: &Path, directory: bool) -> String {
+    // A directory needs search permission to open what it holds. `u+r` lists nothing
+    // the next command can open, so a directory's hint is `u+rx`.
+    let mode = if directory { "u+rx" } else { "u+r" };
     let path = chmod_path(dir, rel);
     format!(
-        "make it readable, such as `chmod u+r {}`",
+        "make it readable, such as `chmod {mode} {}`",
         quote_path(&path)
     )
 }
