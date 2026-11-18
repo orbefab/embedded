@@ -317,9 +317,8 @@ impl Sar {
         now: Tick,
         context: &Context,
     ) -> Result<u8, &'static str> {
-        if self.converting(unit, now) {
-            return Err("start_while_converting");
-        }
+        // A start while the unit converts changes its `MEASn_CTRL2`, which `refused` ends first.
+        debug_assert!(!self.converting(unit, now));
         if ctrl2 & START_FORCE == 0 || ctrl2 & EN_PAD_FORCE == 0 {
             return Err("ulp_controller");
         }

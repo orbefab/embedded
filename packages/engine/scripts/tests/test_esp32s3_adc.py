@@ -100,8 +100,10 @@ def test_the_models_codes_pass_and_a_code_off_by_two_fails() -> None:
     raws = model_raws(1.65)
     assert not raises(lambda: check_probe(Probe(console(raws)), MODEL, 1.65))
     for atten in (2, 3):
-        assert not raises(lambda: check_probe(Probe(console({**raws, atten: raws[atten] + 1})), MODEL, 1.65))
-        assert raises(lambda: check_probe(Probe(console({**raws, atten: raws[atten] + 2})), MODEL, 1.65))
+        one = {**raws, atten: raws[atten] + 1}
+        two = {**raws, atten: raws[atten] + 2}
+        assert not raises(lambda codes=one: check_probe(Probe(console(codes)), MODEL, 1.65))
+        assert raises(lambda codes=two: check_probe(Probe(console(codes)), MODEL, 1.65))
 
 
 def test_a_wrong_attenuation_scale_fails() -> None:
