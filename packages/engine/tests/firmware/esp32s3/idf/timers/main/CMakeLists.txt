@@ -1,0 +1,1 @@
+idf_component_register(SRCS "timers_main.c" PRIV_REQUIRES esp_driver_gptimer esp_driver_usb_serial_jtag esp_hw_support)

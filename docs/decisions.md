@@ -89,6 +89,7 @@ A command does what it names and nothing in the background. Where `orbe` could g
 Type checking, linting and runtime diagnostics are separate.
 - `orbe check` type-checks: do the files describe a valid circuit? Every finding is an error. `orbe open` runs it first.
 - `orbe lint` runs `orbe check`, then lint rules that never block, such as an unnamed ground net, a part with no position or an unconnected pin. It includes the engine's static checks, such as a floating net.
+- A part lists the pins its design leaves open in `open`, such as `"open": ["AREF"]` on the Nano and the Uno. `net.floating` is left out for the net of one of those pins while no scene wire reaches it and every other pin on the net, other than a hole, belongs to that part or a part inside it. A hole that only seats that pin, with nothing else in its strip, does not reach the net. A scene wire, another part's pin, or a wire to a hole on the net still warns. `open` does not change the model, so the part format stays 1. A binary that does not know the key refuses the part file.
 - A part that holds both a source and a chip, such as a board, runs with nothing wired to it, so lint does not call it unconnected. The rule reads the engine model kinds, not part names.
 - Runtime diagnostics come only from `run`, `step` and `test`.
 - `orbe open` shows type errors and the engine's static warnings.
@@ -106,7 +107,7 @@ Type checking, linting and runtime diagnostics are separate.
 - The engine has no P-channel MOSFET, so Q1 is a resistor at its on resistance, always on. R15 and R1, which bias its gate from VIN, are drawn but not simulated.
 - D13 drives the L LED through 1k, as on RobotDyn's board. D13 with its pull-up on then reads low, about 1.45 V. A clone that buffers D13 through an LM358 reads high there.
 - The 16 MHz clock is an HC-49 crystal, as the clone's photo shows. The crystal is not simulated. Its load capacitors are, held at 0 V as the resonator part holds its own, so each clock pin has a DC path.
-- The capacitor on AREF starts where the circuit's DC solution puts it, with no held voltage. A 0 V hold would pull a rail wired to AREF to 0 V at t = 0. AREF with nothing wired to it is then a floating net, as on the Nano.
+- The capacitor on AREF starts where the circuit's DC solution puts it, with no held voltage. A 0 V hold would pull a rail wired to AREF to 0 V at t = 0. AREF with nothing wired to it has no DC path. The part lists `AREF` in `open`, and a hole that only seats the pin does not reach it, as [Checking](#checking-nov-4-2026) says.
 
 ## Breadboards (Nov 8 2026)
 - Two parts: `breadboard-830`, BusBoard's BB830, with 63 columns and four 50-hole rails, and `breadboard-400`, a generic half-size board with 30 columns and four 25-hole rails. Each `model.py` builds its board from `packages/cad/cad/breadboard.py`.

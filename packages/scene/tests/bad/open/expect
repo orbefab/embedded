@@ -1,0 +1,3 @@
+scene.syntax parts/empty.jsonc:5:11 | `open` is empty | leave `open` out
+scene.unknown_pin parts/listed.jsonc:5:12 | `open` lists `NOPE` | its pins: a
+scene.syntax parts/listed.jsonc:5:25 | `open` lists `a` twice | name each pin once

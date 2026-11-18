@@ -6,9 +6,15 @@
 //! its power-on state, and it stays there until they clear. The SHA accelerator is held by the
 //! digital signature and HMAC reset bits too, as IDF's `sha_ll_reset_register` says.
 //!
-//! The clock and reset bits of SYSTIMER, TIMG0, TIMG1, SPI0 and SPI1, the eFuse controller, the
-//! USB Serial/JTAG unit, and the bits IDF names `SYSTEM_TIMERS_*` and `SYSTEM_WDG_*` are kept and
-//! not run, and every write that changes one is reported.
+//! The clock and reset bits of TIMG0 and TIMG1 stay reported, and a write that changes one is
+//! still listed, because the group's watchdog does not run them. The group's general timers do:
+//! while the reset bit is set they sit at their reset values, and while the clock bit is clear
+//! they keep their count and do not advance. A load or a store of a general timer is not refused
+//! while the group is gated. The watchdog keeps counting through both.
+//!
+//! The clock and reset bits of SYSTIMER, SPI0 and SPI1, the eFuse controller, the USB Serial/JTAG
+//! unit, and the bits IDF names `SYSTEM_TIMERS_*` and `SYSTEM_WDG_*` are kept and not run, and
+//! every write that changes one is reported.
 //! Every other bit gates or resets a peripheral the model does not keep, so it has no effect,
 //! apart from `SYSTEM_UART_MEM_CLK_EN`, bit 24 of `CLK_EN0`. That bit stays stored here. A UART
 //! FIFO access or a frame while it is clear ends the run, as the UART model says. The write of
@@ -78,11 +84,13 @@ impl Block {
     }
 }
 
-/// In each word of each kind, the bits the model keeps without running: SYSTIMER, TIMG0, TIMG1,
+/// In each word of each kind, the bits a change of which is reported: SYSTIMER, TIMG0, TIMG1,
 /// SPI0 and SPI1, the eFuse controller, and `SYSTEM_TIMERS_*` and `SYSTEM_WDG_*` in the first,
-/// the USB Serial/JTAG unit in the second. IDF's headers leave the timers and watchdog bits
-/// undescribed and no IDF driver gates a block with them, so a change is reported in case they
-/// gate a timer or a watchdog the model runs.
+/// the USB Serial/JTAG unit in the second. TIMG0 and TIMG1 stay here because the group's
+/// watchdog does not run them. The general timers do, as [`Gates::timg`] reads the bits. IDF's
+/// headers leave the `SYSTEM_TIMERS_*` and `SYSTEM_WDG_*` bits undescribed and no IDF driver
+/// gates a block with them, so a change is reported in case they gate a timer or a watchdog the
+/// model runs.
 const REPORTED: [u32; 2] = [
     1 << 29 | 1 << 15 | 1 << 14 | 1 << 13 | 1 << 3 | 1 << 1 | 1 << 0,
     1 << 10,
@@ -137,6 +145,13 @@ impl Gates {
     pub(crate) fn clocked(&self, block: Block) -> bool {
         let (k, clock, _) = block.bits();
         self.words[k] & clock != 0
+    }
+
+    /// Timer group `group`'s clock bit and reset bit: bit 13 for group 0, bit 15 for group 1.
+    /// The general timers run them. The group's watchdog does not, and a change is still reported.
+    pub(crate) fn timg(&self, group: usize) -> (bool, bool) {
+        let bit = 1 << if group == 0 { 13 } else { 15 };
+        (self.words[0] & bit != 0, self.words[2] & bit != 0)
     }
 
     /// `SYSTEM_UART_MEM_CLK_EN`. One clock for the RAM of UART0, UART1 and UART2.
