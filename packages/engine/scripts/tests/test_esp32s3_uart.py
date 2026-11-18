@@ -3,11 +3,12 @@
 from pathlib import Path
 
 from esp32s3_uart import (
-    BOARD_TOLERANCE,
     bit_lengths,
+    board_tolerance,
     check_board,
     check_console,
     check_uart_rows,
+    edges_in_frame,
     expected_edges,
     frame_edges,
     program,
@@ -116,12 +117,173 @@ def test_console_window() -> None:
     expect("an offset on the bound fails", raises(lambda: check_console(late, sent, spec["bound"])))
     wrong = [line if line != "rx 00" else "rx 01" for line in lines]
     expect("the wrong byte fails", raises(lambda: check_console(wrong, sent, spec["bound"])))
+
+
+def _offsets(spec: dict, div: int, frag: int, bits: int) -> list[int]:
+    total = 0
+    out = []
+    for length in bit_lengths(div, frag, bits, spec["apb_hz"], spec["cpu_hz"]):
+        total += length
+        out.append(total)
+    return out
+
+
+def _slide(lines: list[str], baud: int, tx: int, delta: int, *, edge: int | None = None) -> list[str]:
+    """Add `delta` to one frame's edges after `tx` at `baud`. `edge` selects one of them."""
+    out = []
+    current = None
+    sent = None
+    armed = False
+    index = 0
+    hits = 0
+    for line in lines:
+        if line.startswith("baud "):
+            current = int(line.split()[1])
+            armed = False
+        elif line == "burst":
+            armed = False
+        elif line.startswith("tx "):
+            sent = int(line.split()[1], 16)
+            armed = False
+        elif line.startswith("edge ") and current == baud and sent == tx:
+            if not armed:
+                index = 0
+                armed = True
+            at, level = line.split()[1:]
+            if edge is None or index == edge:
+                at = str(int(at) + delta)
+                hits += 1
+            index += 1
+            out.append(f"edge {at} {level}")
+            continue
+        else:
+            armed = False
+        out.append(line)
+    if hits == 0:
+        raise AssertionError(f"no edge at baud {baud} tx {tx:02x}")
+    return out
+
+
+def test_board_intervals() -> None:
+    spec = program(SOURCE.read_text())
+    lines = _console(spec)
     body = "\n".join(lines) + "\n"
-    near = body.replace("edge 0 0", f"edge {BOARD_TOLERANCE} 0", 1)
-    expect("a board edge 32 cycles away passes", not raises(lambda: check_board(lines, near)))
-    far = body.replace("edge 0 0", f"edge {BOARD_TOLERANCE + 1} 0", 1)
-    expect("a board edge 33 cycles away fails", raises(lambda: check_board(lines, far)))
-    expect("a board byte that differs fails", raises(lambda: check_board(lines, body.replace("rx 00", "rx 01", 1))))
+    tolerance = board_tolerance(spec["bound"])
+
+    def same() -> None:
+        check_board(lines, body, spec, tolerance)
+
+    expect("a good board passes", not raises(same))
+    slid = _slide(lines, 115200, 0x55, 5000)
+    expect(
+        "a shifted frame start passes",
+        not raises(lambda: check_board(lines, "\n".join(slid) + "\n", spec, tolerance)),
+    )
+    near = _slide(lines, 1000000, 0x55, tolerance - 1, edge=1)
+    expect(
+        "an interval one cycle inside the allowance passes",
+        not raises(lambda: check_board(lines, "\n".join(near) + "\n", spec, tolerance)),
+    )
+    far = _slide(lines, 1000000, 0x55, tolerance, edge=1)
+    expect(
+        "an interval on the allowance fails",
+        raises(lambda: check_board(lines, "\n".join(far) + "\n", spec, tolerance)),
+    )
+    expect(
+        "a board byte that differs fails",
+        raises(lambda: check_board(lines, body.replace("rx 00", "rx 01", 1), spec, tolerance)),
+    )
+    for baud, div, frag in spec["bauds"]:
+        bit = bit_lengths(div, frag, 1, spec["apb_hz"], spec["cpu_hz"])[0]
+        moved = _slide(lines, baud, 0x55, bit, edge=1)
+        expect(
+            f"a one-bit error at {baud} fails",
+            raises(lambda moved=moved: check_board(lines, "\n".join(moved) + "\n", spec, tolerance)),
+        )
+
+
+def _with_burst(spec: dict) -> list[str]:
+    """The closed-form console with the burst inserted where the app prints it."""
+    lines = _console(spec)
+    burst = spec["bursts"][0]
+    baud, div, frag = next(item for item in spec["bauds"] if item[0] == burst["baud"])
+    edges = frame_edges(burst["cfg"], burst["byte"], burst["count"], div, frag, spec["apb_hz"], spec["cpu_hz"])
+    block = ["burst"]
+    block += [f"edge {at} {level}" for at, level in edges]
+    for _ in range(burst["count"]):
+        block.append(f"tx {burst['byte']:02x}")
+        block.append(f"rx {burst['byte']:02x}")
+    next_baud = next(item[0] for item in spec["bauds"] if item[0] != baud)
+    at = lines.index(f"baud {next_baud}")
+    lines[at:at] = block
+    return lines
+
+
+def _nudge(lines: list[str], after: str, index: int, delta: int) -> list[str]:
+    """Add `delta` to edge `index` of the group that follows the line `after`."""
+    out = []
+    arm = False
+    at = 0
+    hit = False
+    for line in lines:
+        if line == after:
+            arm = True
+            at = 0
+        elif arm and line.startswith("edge "):
+            if at == index:
+                offset, level = line.split()[1:]
+                line = f"edge {int(offset) + delta} {level}"
+                hit = True
+            at += 1
+        elif arm:
+            arm = False
+        out.append(line)
+    if not hit:
+        raise AssertionError(f"no edge {index} after {after!r}")
+    return out
+
+
+def test_poll_entry_is_not_a_uart_interval() -> None:
+    spec = program(SOURCE.read_text())
+    tolerance = board_tolerance(spec["bound"])
+    lines = _with_burst(spec)
+
+    def body(board: list[str]) -> None:
+        check_board(lines, "\n".join(board) + "\n", spec, tolerance)
+
+    expect("the burst console passes", not raises(lambda: body(lines)))
+    cold = _slide(lines, 115200, 0x00, 2082, edge=1)
+    expect("the cold frame's stop is not an interval", not raises(lambda: body(cold)))
+    entered = _nudge(lines, "burst", 1, 2082)
+    expect("the burst's first frame is the entry", not raises(lambda: body(entered)))
+    later = _nudge(lines, "burst", 3, tolerance)
+    expect("the burst's next frame is the UART", raises(lambda: body(later)))
+
+
+def test_a_bit_is_past_two_polls() -> None:
+    spec = program(SOURCE.read_text())
+    allowance = board_tolerance(spec["bound"])
+    expect("the allowance is two polls", allowance == 2 * spec["bound"])
+    slow = bit_lengths(694, 7, 1, spec["apb_hz"], spec["cpu_hz"])[0]
+    fast = bit_lengths(80, 0, 1, spec["apb_hz"], spec["cpu_hz"])[0]
+    expect("the 115200 divider's bit is 2082 cycles", slow == 2082)
+    expect("the 1 Mbaud bit is 240 cycles", fast == 240)
+    expect("both bits are past two polls", slow >= allowance and fast >= allowance)
+    base = _offsets(spec, 694, 7, 9)
+    divided = _offsets(spec, 695, 7, 9)
+    fraction = _offsets(spec, 694, 8, 9)
+    expect("a divider one high moves the ninth edge by 27", divided[-1] - base[-1] == 27)
+    expect("a fraction one high moves a 115200 edge by 3", max(b - a for a, b in zip(base, fraction, strict=True)) == 3)
+    one = bit_lengths(694, 7, 10, spec["apb_hz"], spec["cpu_hz"])
+    high = bit_lengths(695, 7, 10, spec["apb_hz"], spec["cpu_hz"])
+    frames = spec["bursts"][0]["count"]
+
+    def last(lengths: list[int]) -> int:
+        return (frames - 1) * sum(lengths) + sum(lengths[:9])
+
+    expect("the burst's last edge moves 237 from the first start", last(high) - last(one) == 237)
+    expect("one 0x00 frame is two edges", edges_in_frame("8N1", 0x00) == 2)
+    expect("one 0x55 frame is ten edges", edges_in_frame("8N1", 0x55) == 10)
 
 
 def test_uart_rows_ignore_the_boot_log() -> None:

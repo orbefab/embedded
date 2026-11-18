@@ -20,8 +20,11 @@ received, on `UART0`. The run must hold no error, and `manifest.json` must list 
 then each flash region with its offset.
 
 `packages/engine/tests/circuits/esp32s3-uart/board.txt`, when it is present, is a console
-capture of the same app. Each `edge` offset in the run must lie within `BOARD_TOLERANCE`
-CPU cycles of the capture's matching edge. A missing file skips that compare.
+capture of the same app. The bytes must match. Each later edge of a frame is compared
+by its offset from that frame's start bit, within two polls. The start bit is the CPU's
+latency from the `CCOUNT` sample, and the compare leaves it out. The first frame and
+the burst's first frame open on the entry into the poll, so their intervals are left
+out as well. A missing file skips that compare.
 """
 
 import argparse
@@ -36,7 +39,6 @@ ROOT = Path(__file__).resolve().parents[3]
 EXAMPLE = ROOT / "packages/engine/tests/circuits" / "esp32s3-uart"
 SOURCE = ROOT / "packages/engine/tests/firmware/esp32s3/idf/uart/main/uart_main.c"
 BOARD = EXAMPLE / "board.txt"
-BOARD_TOLERANCE = 32
 
 DEFINE = re.compile(r"^#define\s+(EDGE_POLL_BOUND|FRAME_BOUND)\s+(\d+)\s*$", re.M)
 BAUD = re.compile(r"^// checker: BAUD (\d+) DIV (\d+) FRAG (\d+)\s*$", re.M)
@@ -105,6 +107,36 @@ def levels_of(cfg: str, byte: int) -> list[int]:
     if cfg == "8N2":
         levels.append(1)
     return levels
+
+
+def edges_in_frame(cfg: str, byte: int) -> int:
+    """How many TXD changes one frame of `byte` makes. Idle is high."""
+    previous = 1
+    count = 0
+    for level in levels_of(cfg, byte):
+        if level != previous:
+            count += 1
+            previous = level
+    return count
+
+
+def board_tolerance(poll: int) -> int:
+    """Two polls, the allowance between the run's interval and the board's.
+
+    The poll loop loads `GPIO_IN1`, reads `CCOUNT`, and branches back while the
+    level holds. The miss path is that load, `extui`, a `call8` to `rsr.ccount`
+    (`entry`, the read, `retw.n`), the frame-bound check, and the branch back.
+    On the core's costs that pass is 24 cycles: one per instruction, two more on
+    a taken branch, and one more when a taken branch's next instruction crosses
+    a word. `poll` is `EDGE_POLL_BOUND`. The probe publishes it as the ceiling
+    on the pass, and a stamp is the `CCOUNT` after the load that saw the edge,
+    so the stamp lies in `[edge, edge + poll)`.
+
+    An interval is the difference of two such stamps. Each is late by less than
+    one poll, so one run's interval is off by less than one poll. The model and
+    the board each quantise, and the allowance is two polls.
+    """
+    return 2 * poll
 
 
 def expected_edges(cfg: str, byte: int, div: int, frag: int, apb_hz: int, cpu_hz: int) -> list[tuple[int, int]]:
@@ -309,26 +341,133 @@ def transcript(lines: list[str]) -> list[str]:
     return lines[start : end + 1]
 
 
-def check_board(sim_lines: list[str], board_text: str, tolerance: int = BOARD_TOLERANCE) -> None:
-    """The capture's bytes match. Each edge offset is within `tolerance` CPU cycles."""
+def _take_edges(lines: list[str], start: int) -> tuple[list[tuple[int, int]], int]:
+    edges = []
+    cursor = start
+    while cursor < len(lines) and lines[cursor].startswith("edge "):
+        match = EDGE.fullmatch(lines[cursor])
+        if not match:
+            raise ValueError(f"bad edge line {lines[cursor]!r}")
+        edges.append((int(match.group(1)), int(match.group(2))))
+        cursor += 1
+    return edges, cursor
+
+
+def _compare_frames(
+    sim: list[tuple[int, int]],
+    board: list[tuple[int, int]],
+    per_frame: int,
+    tolerance: int,
+    where: str,
+    entry_frames: int,
+) -> None:
+    """Later edges by their offset from the frame's start bit. The start bit is left out.
+
+    The first `entry_frames` frames open on the entry into the poll. That start bit is
+    late by the time to reach the loop, and the later edges of the frame are not, so
+    their interval is that latency rather than the UART. Those frames are checked for
+    length and level only.
+    """
+    if len(sim) != len(board):
+        raise ValueError(f"{where} has {len(sim)} edges in the run and {len(board)} on the board")
+    if per_frame <= 0 or len(sim) % per_frame != 0:
+        raise ValueError(f"{where} has {len(sim)} edges, not frames of {per_frame}")
+    for frame_index, frame_at in enumerate(range(0, len(sim), per_frame)):
+        sim_frame = sim[frame_at : frame_at + per_frame]
+        board_frame = board[frame_at : frame_at + per_frame]
+        if sim_frame[0][1] != 0 or board_frame[0][1] != 0:
+            raise ValueError(f"{where} does not open with the start bit")
+        sim_origin, board_origin = sim_frame[0][0], board_frame[0][0]
+        for index, ((sim_at, sim_level), (board_at, board_level)) in enumerate(
+            zip(sim_frame, board_frame, strict=True)
+        ):
+            if sim_level != board_level:
+                raise ValueError(f"{where} edge {index} is level {sim_level} in the run and {board_level} on the board")
+            if frame_index < entry_frames or index == 0:
+                continue
+            sim_rel, board_rel = sim_at - sim_origin, board_at - board_origin
+            if abs(sim_rel - board_rel) >= tolerance:
+                raise ValueError(
+                    f"{where} frame {frame_index} edge {index} is {sim_rel} cycles after the start"
+                    f" in the run and {board_rel} on the board, tolerance {tolerance}"
+                )
+
+
+def check_board(sim_lines: list[str], board_text: str, spec: dict, tolerance: int) -> None:
+    """The capture's bytes match. Each later edge agrees, from its frame's start bit, within `tolerance`.
+
+    The first edge of a frame is the start bit. Its offset is the time from the
+    `CCOUNT` sample before the FIFO store to the poll that sees the pin fall.
+    That is CPU latency, instruction timing and misses in the 80 MHz instruction
+    cache, which the model does not claim to the cycle. The timers check allows
+    4000 cycles for several such misses, and 4000 is wider than one bit at
+    1 Mbaud, 240 CPU cycles, so a bound of that shape would hide a missing bit.
+    A bound under 240 cannot cover the cold start on a board capture on
+    2026-11-18, 936 cycles, nor the burst's first edge, 612 cycles. The compare
+    leaves each frame's first edge out.
+
+    An interval measured from the start bit still contains that bit's latency.
+    It cancels when the later edges are late by the same poll. It does not when
+    the start is the entry into the loop and the later edges are the loop already
+    running. The first `send_byte` is that cold entry: on the same capture its
+    stop is 90 cycles after the model's, so the interval is short by 846, the
+    miss. The burst's first edge is the entry into that other poll, and that
+    frame's stop is 97 cycles after the model's, so the interval is short by 515.
+    A tolerance wide enough for either is wider than one bit at 1 Mbaud, so those
+    two frames are not interval-compared. Their bytes, edge counts and levels
+    still have to match. Later frames of the burst are later passes of the same
+    poll, and they are compared. Every other interval on that capture is within
+    40 cycles.
+
+    One bit at the 115200 divider is 2082 CPU cycles and one at 1 Mbaud is 240,
+    and `tolerance` is two polls, 128 when `EDGE_POLL_BOUND` is 64, so a missing
+    bit fails. A divider one count off adds one APB clock, 3 CPU cycles, to
+    every bit. The ninth edge of a frame moves 27 cycles, inside the allowance.
+    From the burst's first start bit the same error moves the last edge 237
+    cycles. The compare uses each frame's own start, so that sum is not what it
+    holds. A fraction one count off moves a 115200 edge by at most one APB
+    clock, 3 CPU cycles.
+    """
     board_lines = [line.strip() for line in board_text.splitlines() if line.strip()]
     sim_body = transcript(sim_lines)
     board_body = transcript(board_lines)
     if len(sim_body) != len(board_body):
         raise ValueError(f"the board capture has {len(board_body)} lines, not {len(sim_body)}")
-    for index, (sim_line, board_line) in enumerate(zip(sim_body, board_body, strict=True)):
-        sim_edge = EDGE.fullmatch(sim_line)
-        board_edge = EDGE.fullmatch(board_line)
-        if sim_edge and board_edge:
-            sim_at, sim_level = int(sim_edge.group(1)), int(sim_edge.group(2))
-            board_at, board_level = int(board_edge.group(1)), int(board_edge.group(2))
-            if sim_level != board_level or abs(sim_at - board_at) > tolerance:
-                raise ValueError(
-                    f"edge {index} is {sim_at} {sim_level} in the run and {board_at} {board_level} on the board"
-                )
+    cfg = ""
+    byte = None
+    previous = ""
+    cursor = 0
+    cold = True
+    while cursor < len(sim_body):
+        sim_line, board_line = sim_body[cursor], board_body[cursor]
+        if sim_line.startswith("edge ") or board_line.startswith("edge "):
+            sim_edges, sim_end = _take_edges(sim_body, cursor)
+            board_edges, board_end = _take_edges(board_body, cursor)
+            if sim_end != board_end:
+                raise ValueError(f"{previous or 'edges'} has edges through different lines on the board")
+            if previous == "burst":
+                burst = spec["bursts"][0]
+                per_frame = edges_in_frame(burst["cfg"], burst["byte"])
+                where = "burst"
+                entry_frames = 1
+            elif cfg and byte is not None:
+                per_frame = edges_in_frame(cfg, byte)
+                where = f"{cfg} {byte:02x}"
+                entry_frames = 1 if cold else 0
+                cold = False
+            else:
+                raise ValueError("edges come before a frame")
+            _compare_frames(sim_edges, board_edges, per_frame, tolerance, where, entry_frames)
+            cursor = sim_end
             continue
         if sim_line != board_line:
-            raise ValueError(f"line {index + 1} is {sim_line!r} in the run and {board_line!r} on the board")
+            raise ValueError(f"line {cursor + 1} is {sim_line!r} in the run and {board_line!r} on the board")
+        if sim_line.startswith("cfg "):
+            cfg = sim_line.split()[1]
+        elif sim_line.startswith("tx "):
+            byte = int(sim_line.split()[1], 16)
+        previous = sim_line.split()[0]
+        cursor += 1
 
 
 def check_manifest(manifest: dict, netlist: dict) -> None:
@@ -360,8 +499,9 @@ def check(run: Path, board: Path | None = None) -> None:
     check_manifest(json.loads((run / "manifest.json").read_text()), netlist)
     board_path = BOARD if board is None else board
     if board_path.is_file():
-        check_board(lines, board_path.read_text())
-        compared = f", edges within {BOARD_TOLERANCE} cycles of the board"
+        tolerance = board_tolerance(spec["bound"])
+        check_board(lines, board_path.read_text(), spec, tolerance)
+        compared = f", frame intervals within {tolerance} cycles of the board"
     else:
         compared = ""
     print(f"esp32s3-uart: {len(sent)} bytes, edges inside {spec['bound']} cycles{compared}")
