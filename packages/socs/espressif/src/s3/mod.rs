@@ -1,7 +1,7 @@
 //! The ESP32-S3 as one Xtensa LX7 core on its internal SRAM and RTC memory, with GPIO, IO_MUX
 //! and the GPIO matrix, the interrupt matrix, SYSTIMER, the watchdogs, the USB Serial/JTAG
-//! console, SPI2, RMT, and for a chip booted from flash the mask ROM, the flash behind SPI1 and the
-//! MMU, and the registers the boot path reads.
+//! console, UART0, UART1, UART2, SPI2, RMT, and for a chip booted from flash the mask ROM, the
+//! flash behind SPI1 and the MMU, and the registers the boot path reads.
 //!
 //! The chip starts in one of two ways. [`Esp32s3::new`] starts it as a bare-metal ELF leaves it:
 //! the segments in SRAM, the PC at the entry, the core's reset state otherwise, no ROM and no
@@ -47,6 +47,7 @@ mod soc;
 mod spi1;
 mod spi2;
 mod timers;
+mod uart;
 mod usb;
 
 use std::sync::Arc;
@@ -258,6 +259,8 @@ pub struct Esp32s3 {
     /// The PC after the store that started the last RMT transmission, which a transmission
     /// that never ends names.
     rmt_pc: Pc,
+    /// The PC after the last UART store, which a frame that meets a setting names.
+    uart_pc: Pc,
 }
 
 impl Esp32s3 {
@@ -299,6 +302,7 @@ impl Esp32s3 {
         soc.flash = Some(Flash::new(boot.flash));
         let mut core = Core::new();
         boot::apply(&state, &mut core, &mut soc);
+        boot::program_rom_uart(&state, &mut soc);
         for segment in boot.segments {
             let flash = soc.flash.as_mut().expect("attached");
             if segment.mapped() {
@@ -342,6 +346,10 @@ impl Esp32s3 {
                 core: CoreId::Pro,
                 pc: 0,
             },
+            uart_pc: Pc {
+                core: CoreId::Pro,
+                pc: 0,
+            },
         }
     }
 
@@ -352,6 +360,7 @@ impl Esp32s3 {
             self.settle_ledc();
             self.settle_i2c(limit);
             self.settle_rmt();
+            self.settle_uart();
             if let Some(halt) = self.next_halt() {
                 if halt.at() > limit {
                     return None;
@@ -368,6 +377,11 @@ impl Esp32s3 {
             let ledc = self.soc.ledc.next(self.soc.clock.source.apb());
             let i2c = self.soc.i2c.next_event();
             let rmt = self.soc.rmt.upcoming().map(|at| Tick(at.0 + 1));
+            let uart = self
+                .soc
+                .uart
+                .next_event(self.now())
+                .map(|at| Tick(at.0 + 1));
             let train = self
                 .trains
                 .get(self.reported_trains)
@@ -379,6 +393,7 @@ impl Esp32s3 {
                 ledc.map(|at| Tick(at.0 + 1)),
                 i2c.map(|at| Tick(at.0 + 1)),
                 rmt,
+                uart,
                 train,
             ]
             .into_iter()
@@ -402,6 +417,12 @@ impl Esp32s3 {
             }
             if let Some(core) = self.soc.rmt_started.take() {
                 self.rmt_pc = Pc {
+                    core,
+                    pc: self.cores.core(core).pc(),
+                };
+            }
+            if let Some(core) = self.soc.uart_started.take() {
+                self.uart_pc = Pc {
                     core,
                     pc: self.cores.core(core).pc(),
                 };
@@ -553,6 +574,50 @@ impl Esp32s3 {
             .into_iter()
             .filter(|train| fault.is_none_or(|fault| train.end < fault));
         self.trains.extend(trains);
+    }
+
+    /// Drives each UART TXD edge due at a tick whose instructions have all run. An edge that
+    /// moves a netted pad waits for its `Moved` halt, and the others change the pad at once.
+    /// A frame that ends here queues the next byte's start bit, and that edge is driven before
+    /// the cores run on. A frame that meets a divider or a clock the model does not shift ends
+    /// the run, naming the PC after the last UART store.
+    fn settle_uart(&mut self) {
+        let Some(through) = self.now().0.checked_sub(1) else {
+            return;
+        };
+        let mut bound = Tick(through);
+        let apb = self.soc.clock.source.apb();
+        loop {
+            let mut moved = false;
+            while let Some(edge) = self.soc.uart.next_edge(bound) {
+                let signal = uart::SIGNAL[usize::from(edge.port)];
+                let moves = self.soc.gpio.moves(signal, edge.level);
+                self.soc.uart.take_edge(usize::from(edge.port));
+                if moves {
+                    self.moves.push((edge.at, signal, edge.level));
+                    self.soc
+                        .uart
+                        .after_edge(usize::from(edge.port), edge.at, &self.soc.gpio, apb);
+                    bound = edge.at;
+                    moved = true;
+                    break;
+                }
+                self.soc.gpio.set_signal(signal, edge.level);
+                self.soc
+                    .uart
+                    .after_edge(usize::from(edge.port), edge.at, &self.soc.gpio, apb);
+            }
+            self.soc.uart.settle(bound, &self.soc.gpio, apb);
+            if moved || self.soc.uart.next_edge(bound).is_none() {
+                break;
+            }
+        }
+        if let Some((at, name, setting)) = self.soc.uart.take_refused()
+            && self.fault.is_none_or(|(fault, _)| at < fault)
+        {
+            let refused = Refused::Register(name, setting);
+            self.fault = Some((at, Fault::Refused(refused, self.uart_pc)));
+        }
     }
 
     /// Holds the chip in reset from `now`, after the store at `pc` reset it from `esp_restart`.
@@ -718,11 +783,18 @@ impl Esp32s3 {
             self.soc.gpio.set_pad(gpio, level);
         }
         self.soc.i2c.input(at, &self.soc.gpio);
+        let apb = self.soc.clock.source.apb();
+        self.soc.uart.note_pins(at, &self.soc.gpio, apb);
     }
 
     /// The next console byte whose packet went at or before `through`, with that tick.
     pub fn take_sent(&mut self, through: Tick) -> Option<(Tick, u8)> {
         self.soc.usb.take_sent(through)
+    }
+
+    /// The next UART byte, sent or received, whose stop bit ended at or before `through`.
+    pub(crate) fn take_uart(&mut self, through: Tick) -> Option<uart::Sent> {
+        self.soc.uart.take_sent(through)
     }
 
     /// Queues `bytes` for the console to receive from `at`, after every byte queued before.
@@ -969,6 +1041,147 @@ mod tests {
         }
     }
 
+    /// Routes GPIO21 to UART0, sends 0x55 at 1 Mbaud from the APB clock, and checks the edges
+    /// and the logged byte against a run whose limits fall inside the byte.
+    fn uart_byte() -> Program {
+        let mut program = Program::new(&[
+            IO_MUX + 0x58,
+            1 << 12,
+            GPIO + 0x5a8,
+            12,
+            0x6000_0078,
+            (1 << 20) | (1 << 22) | (1 << 24) | (1 << 25),
+            0x6000_0014,
+            80,
+            0x6000_0048,
+            256,
+            0x6000_0000,
+            0x55,
+        ]);
+        program
+            .l32r(2, 0)
+            .l32r(3, 1)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 2)
+            .l32r(3, 3)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 4)
+            .l32r(3, 5)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 6)
+            .l32r(3, 7)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 8)
+            .l32r(3, 9)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 10)
+            .l32r(3, 11)
+            .rri8(6, 3, 2, 0)
+            .raw(&LOOP);
+        program
+    }
+
+    #[test]
+    fn a_uart_byte_lands_on_the_same_edges_however_the_run_splits() {
+        let bytes = |chip: &mut Esp32s3| {
+            std::iter::from_fn(|| chip.take_uart(Tick(u64::MAX)))
+                .map(|sent| (sent.port, sent.byte, sent.start, sent.end))
+                .collect::<Vec<_>>()
+        };
+        let mut whole = uart_byte().chip();
+        let seen = halts(&mut whole, 4000, 4000);
+        let sent = bytes(&mut whole);
+        assert_eq!(sent.len(), 1, "{seen:?}");
+        assert_eq!(sent[0].0, 0);
+        assert_eq!(sent[0].1, 0x55);
+        assert!(seen.len() > 2, "{seen:?}");
+        for step in [1, 3, 7, 40] {
+            let mut split = uart_byte().chip();
+            assert_eq!(halts(&mut split, 4000, step), seen, "limits {step} apart");
+            assert_eq!(bytes(&mut split), sent, "limits {step} apart");
+            assert_eq!(split.tick(), whole.tick(), "limits {step} apart");
+        }
+    }
+
+    /// Two 0x00 bytes written back to back with `tx_idle_num` 0. GPIO21 must fall and rise
+    /// for both frames: the second start bit is queued when the first stop bit ends.
+    fn uart_queued() -> Program {
+        let mut program = Program::new(&[
+            IO_MUX + 0x58,
+            1 << 12,
+            GPIO + 0x5a8,
+            12,
+            0x6000_0078,
+            (1 << 20) | (1 << 22) | (1 << 24) | (1 << 25),
+            0x6000_0014,
+            80,
+            0x6000_0048,
+            256,
+            0x6000_0000,
+            0x00,
+        ]);
+        program
+            .l32r(2, 0)
+            .l32r(3, 1)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 2)
+            .l32r(3, 3)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 4)
+            .l32r(3, 5)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 6)
+            .l32r(3, 7)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 8)
+            .l32r(3, 9)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 10)
+            .l32r(3, 11)
+            .rri8(6, 3, 2, 0)
+            .rri8(6, 3, 2, 0)
+            .raw(&LOOP);
+        program
+    }
+
+    #[test]
+    fn a_queued_byte_drives_its_start_bit_however_the_run_splits() {
+        let bytes = |chip: &mut Esp32s3| {
+            std::iter::from_fn(|| chip.take_uart(Tick(u64::MAX)))
+                .map(|sent| (sent.port, sent.byte, sent.start, sent.end))
+                .collect::<Vec<_>>()
+        };
+        let mut whole = uart_queued().chip();
+        let seen = halts(&mut whole, 4000, 4000);
+        let drives: Vec<PadDrive> = seen.iter().map(|&(_, drive)| drive).collect();
+        let sent = bytes(&mut whole);
+        // The route idles the pad high. Each 0x00 frame then falls for its start bit and
+        // rises for its stop bit, including the byte that was queued behind the first.
+        assert_eq!(
+            drives,
+            [
+                PadDrive::High,
+                PadDrive::Low,
+                PadDrive::High,
+                PadDrive::Low,
+                PadDrive::High
+            ],
+            "{seen:?}"
+        );
+        assert_eq!(sent.len(), 2, "{sent:?}");
+        assert!(sent.iter().all(|byte| byte.0 == 0 && byte.1 == 0x00));
+        assert_eq!(
+            sent[1].2, sent[0].3,
+            "the next start bit begins as the stop bit ends"
+        );
+        for step in [1, 3, 7, 40] {
+            let mut split = uart_queued().chip();
+            assert_eq!(halts(&mut split, 4000, step), seen, "limits {step} apart");
+            assert_eq!(bytes(&mut split), sent, "limits {step} apart");
+            assert_eq!(split.tick(), whole.tick(), "limits {step} apart");
+        }
+    }
+
     /// `RTC_CNTL_STORE6_REG`, where IDF records why it resets.
     const STORE6: u32 = RTC_CNTL + 0xc8;
 
@@ -1151,12 +1364,14 @@ mod tests {
             (gdma + 0x20, 1 << 23, Refused::Register("GDMA", "restart")),
             (out + 0x20, 1 << 22, Refused::Register("GDMA", "restart")),
             (RTC_CNTL + 0x18, 1 << 31, Refused::Sleep),
+            (0x6000_000c, 1 << 5, Refused::Interrupt("UART0")),
         ];
         for (address, value, why) in refused {
             let program = store_after_two_loads(address, value, 0);
             let mut chip = program.chip();
-            chip.soc.restore(SYSTEM + 0x18, 1 << 6 | 1 << 11);
-            chip.soc.restore(SYSTEM + 0x1c, 1 << 6 | 1 << 2);
+            chip.soc
+                .restore(SYSTEM + 0x18, 1 << 6 | 1 << 11 | 1 << 2 | 1 << 5);
+            chip.soc.restore(SYSTEM + 0x1c, 1 << 6 | 1 << 2 | 1 << 9);
             chip.soc.restore(SYSTEM + 0x24, 0);
             assert_eq!(
                 chip.run_until(c(1000)),
@@ -1501,9 +1716,9 @@ mod tests {
         let image = chip.run_until(c(1000));
         assert_eq!(chip.drive(21), PadDrive::Low);
 
-        let mut probe = store_after_two_loads(0x6000_0000, 0, 0).chip();
+        let mut probe = store_after_two_loads(0x6001_7000, 0, 0).chip();
         assert_eq!(probe.run_until(c(1000)), None);
-        let (_, touch) = probe.unmodeled().next().expect("the store touched UART0");
+        let (_, touch) = probe.unmodeled().next().expect("the store touched PCNT");
         assert_eq!(image, Some(image_at(touch.at)));
     }
 
