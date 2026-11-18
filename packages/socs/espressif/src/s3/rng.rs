@@ -1,9 +1,10 @@
 //! The hardware RNG behind `WDEV_RND_REG`, `0x6003_507c`.
 //!
 //! IDF's `esp_random`, in `components/esp_hw_support/hw_random.c`, says the generator takes two
-//! bits of entropy each APB clock and that a caller must wait 16 APB cycles before the word is
-//! new. The function XORs every read it takes while it waits on `CCOUNT`, so two reads in one
-//! APB cycle have to return the same word, or those XORs cancel.
+//! bits of entropy each APB clock. On the ESP32-S3 the function waits `APB_CYCLE_WAIT_NUM` APB
+//! cycles, 1778, and XORs every read it takes while it waits on `CCOUNT`. The comment above that
+//! wait still says 16. Two reads in one APB cycle have to return the same word, or those XORs
+//! cancel. The model does not insert the wait.
 //!
 //! The model is a 32-bit shift register. Each whole APB cycle shifts two bits in at the bottom,
 //! from a splitmix of a fixed seed and the cycle index. A read in the same APB cycle returns the
@@ -11,12 +12,23 @@
 //! chip, so a rewind replays the stream. The seed is the constant [`SEED`]. Nothing in the
 //! netlist and nothing on the host changes it. A board's register is truly random, so no capture
 //! of its words can match this stream. The model promises a deterministic, non-zero, well-mixed
-//! stream, and it returns that stream whether or not `SYSTEM_WIFI_CLK_RNG_EN` is set.
+//! stream while [`RNG_EN`] is set. A read while that bit is clear returns 0. The bit lives in
+//! [`WIFI_CLK_EN_REG`]. A chip that has not kept that register treats it as [`WIFI_CLK_EN_RESET`],
+//! which has the bit set. The stream is indexed by APB cycles, including cycles the bit was clear.
 
 use super::clock::Tick;
 
 /// `WDEV_RND_REG`, from IDF v5.5.5 `components/soc/esp32s3/include/soc/wdev_reg.h`.
 pub(crate) const WDEV_RND_REG: u32 = 0x6003_507c;
+
+/// `SYSCON_WIFI_CLK_EN_REG` / `SYSTEM_WIFI_CLK_EN_REG`. IDF's `syscon_reg.h`.
+pub(crate) const WIFI_CLK_EN_REG: u32 = 0x6002_6014;
+
+/// `SYSTEM_WIFI_CLK_RNG_EN`, bit 15 of [`WIFI_CLK_EN_REG`].
+pub(crate) const RNG_EN: u32 = 1 << 15;
+
+/// Reset value of [`WIFI_CLK_EN_REG`], `32'hfffce030` in `syscon_reg.h`. Bit 15 is set.
+pub(crate) const WIFI_CLK_EN_RESET: u32 = 0xfffc_e030;
 
 /// The fixed seed. A rewind and a second run of the same netlist both start here.
 const SEED: u64 = 0xE532_5A17_C0DE_0001;
@@ -140,8 +152,9 @@ mod tests {
         let mut rng = Rng::new(12);
         assert_eq!(rng.read(Tick(36)), word_at(3));
         rng.reclock(Tick(40), 6);
-        // Four ticks of the old period were left. At 6 ticks each, the next word is one new
-        // cycle later, at tick 40 + 2.
+        // The read at tick 36 settled the word through tick 36. Four ticks of the old 12-tick
+        // period are left, so tick 40 is still that word. The new 6-tick period counts from
+        // tick 36, and the next word is at tick 42. The read at tick 46 sees it.
         assert_eq!(rng.read(Tick(40)), word_at(3));
         assert_eq!(rng.read(Tick(46)), word_at(4));
     }

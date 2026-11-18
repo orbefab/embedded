@@ -678,7 +678,20 @@ impl Soc {
     /// The kept register's word at `addr`, a multiple of 4 in the peripherals, at `now`.
     fn read_kept(&mut self, now: Tick, addr: u32) -> Option<u32> {
         if addr == rng::WDEV_RND_REG {
-            return Some(self.rng.read(now));
+            // A kept word gates the read. A chip that has not kept the register, a bare-metal
+            // one, uses the reset value, whose RNG bit is set. Clearing the bit reads 0. The
+            // shifter still counts every APB cycle, so turning the bit back on matches a chip
+            // that left it set.
+            let gate = self
+                .plain
+                .get(&rng::WIFI_CLK_EN_REG)
+                .copied()
+                .unwrap_or(rng::WIFI_CLK_EN_RESET);
+            return Some(if gate & rng::RNG_EN == 0 {
+                0
+            } else {
+                self.rng.read(now)
+            });
         }
         let (base, offset) = (addr & !(BLOCK - 1), addr & (BLOCK - 1));
         let value = match base {

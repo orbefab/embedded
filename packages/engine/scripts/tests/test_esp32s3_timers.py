@@ -33,6 +33,9 @@ def console(shot_overhead: int = 500, reload_overhead: int = 800, rng: str = "nz
             lines.append(f"div {divider} shot {index} {span + shot_overhead}\n")
         for index in range(8):
             lines.append(f"div {divider} reload {index} {span + reload_overhead + index * span}\n")
+    lines.append("equal 100\n")
+    lines.append("behind 200\n")
+    lines.append(f"above {period(80) + 500} 100\n")
     for index in range(8):
         lines.append(f"rng {index} {rng}\n")
     lines.append("TIMERS DONE\n")
@@ -72,6 +75,11 @@ def test_periods_and_board() -> None:
     zero = console(rng="z")
     expect("a zero RNG word fails", raises(lambda: rows_of(zero)))
     expect("a missing TIMERS DONE fails", raises(lambda: rows_of(good.replace("TIMERS DONE\n", ""))))
+    late_equal = good.replace("equal 100\n", "equal 5000\n", 1)
+    expect("an equal alarm at 5000 cycles fails", raises(lambda: check_console(late_equal)))
+    expect("a missing equal line fails", raises(lambda: rows_of(good.replace("equal 100\n", ""))))
+    wide_gap = good.replace(f"above {period(80) + 500} 100\n", f"above {period(80) + 500} {period(80)}\n", 1)
+    expect("an above gap of a full period fails", raises(lambda: check_console(wide_gap)))
 
     board = console(shot_overhead=500 + BOARD_TOLERANCE, reload_overhead=800 + BOARD_TOLERANCE)
     expect("a board within 4000 cycles passes", not raises(lambda: compare(good, board)))

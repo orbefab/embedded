@@ -765,6 +765,7 @@ fn load_rom(soc: &mut Soc, rom: &[u8]) {
 mod tests {
     use orbe_xtensa::{Bus, Cause, Cycle, Exit, Sr, Width};
 
+    use super::rng;
     use super::soc::{
         EFUSE, Ending, GDMA, GPIO, IO_MUX, RTC_CNTL, SPI2, SYSTEM, SYSTIMER, TIMG0, TIMG1,
         USB_SERIAL_JTAG,
@@ -2722,6 +2723,89 @@ mod tests {
                     if pc == pro(0x4000_0300) && at == c(121)
             ),
             "{whole:?}"
+        );
+    }
+
+    #[test]
+    fn a_divider_change_while_the_timer_runs_ends_the_run_at_its_store() {
+        let first = (1 << 31) | (1 << 30) | (2 << 13);
+        let second = (1 << 31) | (1 << 30) | (80 << 13);
+        let program = stores(&[(TIMG0, first), (TIMG0, second)]);
+        let mut chip = program.chip();
+        let why = Refused::Register("TIMG0", "divider");
+        assert_eq!(
+            chip.run_until(c(1000)),
+            Some(Halt::Fault(
+                c(5),
+                Fault::Refused(why, store_pc(&program, 1))
+            ))
+        );
+        assert_eq!(
+            chip.soc.bus().load(Cycle(0), TIMG0, Width::Word),
+            Ok(first),
+            "the refused store leaves the divider"
+        );
+    }
+
+    #[test]
+    fn a_clear_rng_clock_bit_reads_zero_and_the_stream_stays_on_the_apb_index() {
+        let mut open = Esp32s3::new(&[], BASE, [], None).soc;
+        let mut gated = Esp32s3::new(&[], BASE, [], None).soc;
+        assert_ne!(
+            open.bus()
+                .load(Cycle(0), rng::WDEV_RND_REG, Width::Word)
+                .unwrap(),
+            0,
+            "the reset word has the clock bit set"
+        );
+        gated.restore(rng::WIFI_CLK_EN_REG, rng::WIFI_CLK_EN_RESET & !rng::RNG_EN);
+        assert_eq!(
+            gated.bus().load(Cycle(16), rng::WDEV_RND_REG, Width::Word),
+            Ok(0)
+        );
+        gated.restore(rng::WIFI_CLK_EN_REG, 0xffff_dfdf);
+        assert_eq!(
+            gated.bus().load(Cycle(16), rng::WDEV_RND_REG, Width::Word),
+            open.bus().load(Cycle(16), rng::WDEV_RND_REG, Width::Word),
+            "cycles while the bit was clear still count"
+        );
+
+        let mut kept = Esp32s3::new(&[], BASE, [], None).soc;
+        kept.restore(rng::WIFI_CLK_EN_REG, 0xffff_dfdf);
+        assert_eq!(
+            kept.bus()
+                .store(Cycle(1), rng::WIFI_CLK_EN_REG, Width::Word, 0xffff_dfdf),
+            Ok(())
+        );
+        assert_eq!(
+            kept.bus().store(
+                Cycle(2),
+                rng::WIFI_CLK_EN_REG,
+                Width::Word,
+                rng::WIFI_CLK_EN_RESET & !rng::RNG_EN,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            kept.bus().load(Cycle(3), rng::WDEV_RND_REG, Width::Word),
+            Ok(0)
+        );
+
+        // A bare-metal chip has not kept the register. IDF's write is unmodeled there, and the
+        // stream still runs, because the absence means the reset value.
+        let program = store_after_two_loads(
+            rng::WIFI_CLK_EN_REG,
+            rng::WIFI_CLK_EN_RESET & !rng::RNG_EN,
+            0,
+        );
+        let mut bare = program.chip();
+        assert_eq!(bare.run_until(c(1000)), None);
+        assert_ne!(
+            bare.soc
+                .bus()
+                .load(Cycle(0), rng::WDEV_RND_REG, Width::Word)
+                .unwrap(),
+            0
         );
     }
 }
