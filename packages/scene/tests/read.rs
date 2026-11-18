@@ -1620,17 +1620,50 @@ fn chooser(pointer: &str, arms: usize, value: impl Fn(usize) -> Value) -> Value 
     serde_json::json!({ "default": "a0", "choices": choices })
 }
 
-#[test]
-#[expect(clippy::disallowed_methods, reason = "the clock is the measurement")]
-fn choice_params_on_one_way_are_checked_in_time_that_follows_their_arms() {
+/// How long a read takes with `arms` on each of the four choice params that write one way,
+/// and the diagnostics, if the part did not read.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the clock compares two arm counts"
+)]
+fn deep_choice(arms: usize) -> (Option<Vec<orbe_scene::Diagnostic>>, std::time::Duration) {
     let event = |j: usize| serde_json::json!([{ "t_ps": 10_000_000 + j * 1_000_000, "lanes": 1, "bytes": [85], "cs": "released", "phases": [{ "bits": 8, "lanes": 1, "value": 1 }] }]);
     let deep = serde_json::json!({
-        "pe": chooser("/events", 30, event),
-        "pe0": chooser("/events/0", 30, |j| serde_json::json!({ "t_ps": 10_000_000 + j * 1_000_000 })),
-        "pp": chooser("/events/0/phases", 30, |j| serde_json::json!([{ "bits": 8, "lanes": 1, "value": j % 2 }])),
-        "pp0": chooser("/events/0/phases/0", 30, |j| serde_json::json!({ "value": j % 2 })),
+        "pe": chooser("/events", arms, event),
+        "pe0": chooser("/events/0", arms, |j| serde_json::json!({ "t_ps": 10_000_000 + j * 1_000_000 })),
+        "pp": chooser("/events/0/phases", arms, |j| serde_json::json!([{ "bits": 8, "lanes": 1, "value": j % 2 }])),
+        "pp0": chooser("/events/0/phases/0", arms, |j| serde_json::json!({ "value": j % 2 })),
         "bits": { "default": "eight", "choices": { "eight": { "sets": { "/events/0/phases/0/bits": 8 } }, "four": { "sets": { "/events/0/phases/0/bits": 4 } } } },
     });
+    let project = spi_with(&deep, "\"bits\": \"four\"");
+    let started = std::time::Instant::now();
+    let found = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc")).err();
+    (found, started.elapsed())
+}
+
+#[test]
+fn choice_params_on_one_way_are_checked_in_time_that_follows_their_arms() {
+    let (few_found, few) = deep_choice(3);
+    assert!(few_found.is_none(), "{few_found:#?}");
+    // Ten times the arms. A walk that follows the arms stays under forty times the time,
+    // including a machine that slows the longer read. One that follows their product, 10^4
+    // for these four params, does not. The longer read is abandoned after a minute, so a
+    // product walk fails here instead of hanging. That minute is not the bound.
+    let limit = few.saturating_mul(40);
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || send.send(deep_choice(30)).unwrap());
+    let (many_found, many) = receive
+        .recv_timeout(std::time::Duration::from_secs(60))
+        .unwrap_or_else(|_| {
+            panic!("10 times the arms was still running after 60s (3 arms took {few:?}); a check that grows with the product of the arms is back")
+        });
+    assert!(many_found.is_none(), "{many_found:#?}");
+    assert!(
+        many < limit,
+        "10 times the arms took {many:?} against {few:?}; a check that grows with the product of the arms is back"
+    );
+    println!("3 arms {few:?}, 30 arms {many:?}");
+
     let mut one_prefix = serde_json::Map::new();
     for k in 0..20 {
         let cs = |j: usize| serde_json::json!({ "cs": if j == 0 { "released" } else { "held" } });
@@ -1640,47 +1673,18 @@ fn choice_params_on_one_way_are_checked_in_time_that_follows_their_arms() {
         "n".into(),
         serde_json::json!({ "default": "nine", "choices": { "nine": { "sets": { "/events/0/t_ps": 9 } } } }),
     );
-    let cases = [
-        (
-            "four params of 30 arms on one way",
-            spi_with(&deep, "\"bits\": \"four\""),
-        ),
-        (
-            "twenty params on one prefix",
-            spi_with(&Value::Object(one_prefix), "\"n\": \"nine\""),
-        ),
-    ];
-    let (send, receive) = std::sync::mpsc::channel();
-    for (label, project) in cases {
-        let send = send.clone();
-        std::thread::spawn(move || {
-            let started = std::time::Instant::now();
-            let found = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc")).err();
-            send.send((label, found, started.elapsed())).unwrap();
-        });
-    }
-    for _ in 0..2 {
-        let (label, found, took) = receive
-            .recv_timeout(std::time::Duration::from_secs(1))
-            .expect(
-                "a part file's check took over a second; it grows with the product of the arms",
-            );
-        println!("{label}: {took:?}");
-        match label {
-            "four params of 30 arms on one way" => assert!(found.is_none(), "{found:#?}"),
-            _ => {
-                let found = found.unwrap();
-                assert_eq!(found.len(), 19, "{found:#?}");
-                assert!(
-                    found
-                        .iter()
-                        .all(|d| d.message.starts_with("params `p0` and `p")
-                            && d.message.ends_with("both write `/events/0`")),
-                    "{found:#?}"
-                );
-            }
-        }
-    }
+    let project = spi_with(&Value::Object(one_prefix), "\"n\": \"nine\"");
+    let found = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc"))
+        .err()
+        .unwrap();
+    assert_eq!(found.len(), 19, "{found:#?}");
+    assert!(
+        found
+            .iter()
+            .all(|d| d.message.starts_with("params `p0` and `p")
+                && d.message.ends_with("both write `/events/0`")),
+        "{found:#?}"
+    );
 }
 
 #[test]

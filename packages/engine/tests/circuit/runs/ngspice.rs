@@ -102,6 +102,7 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "esp32s3-pulls",
             "esp32s3-ring",
             "esp32s3-screen",
+            "esp32s3-timers",
             "esp32s3-touch",
             "esp32s3-uart",
             "i-divider",
