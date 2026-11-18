@@ -70,7 +70,12 @@ impl Circuit<'_> {
                     part.pins.insert(pin.name.clone(), net);
                 }
                 if self.insts[inst].dropped.is_none() && self.built.contains_key(&inst) {
-                    for body in &file.bodies {
+                    let waiting = self.waiting_bodies(inst, file);
+                    for body in file
+                        .bodies
+                        .iter()
+                        .filter(|body| !waiting.contains(&body.name))
+                    {
                         let mut name = self.insts[inst].flat();
                         if let Some(body) = &body.name {
                             name = format!("{name}__{body}");
