@@ -112,7 +112,8 @@ fn route(chip: &mut Esp32s3) {
     for (pad, signal) in [(SCL_PAD, SIG_SCL), (SDA_PAD, SIG_SDA)] {
         chip.soc
             .gpio
-            .write_io_mux(0x4 + 4 * u32::from(pad), GPIO_FUNC | FUN_IE | FUN_WPU);
+            .write_io_mux(0x4 + 4 * u32::from(pad), GPIO_FUNC | FUN_IE | FUN_WPU)
+            .unwrap();
         chip.soc
             .gpio
             .write(0x74 + 4 * u32::from(pad), PAD_DRIVER)

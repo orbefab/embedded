@@ -824,3 +824,47 @@ fn a_chip_stop_a_switch_edge_and_a_source_jump_share_one_landing() {
     assert!(near(&src, T + NS, 2.0));
     assert!(near(&sw, T + NS, 5.0 * 1000.0 / 1010.0));
 }
+
+/// 45 kΩ to ground against 45 kΩ from 5 V sits at 2.5 V. GMIN, 1 pS, moves it by less than a
+/// microvolt.
+#[test]
+fn a_pull_down_against_an_external_pull_up_divides_the_supply() {
+    let netlist = circuit(US, &["out"], &[resistor("ru", "vcc", "out", 45_000.0)]);
+    let chip = script::pulls(
+        scripted(&netlist, "out", "gnd", &[], None),
+        None,
+        Some(45_000.0),
+    );
+    let (trace, diagnostics) = run_active(&netlist, vec![chip]);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let rows = volts(&trace, "out");
+    assert!(!rows.is_empty());
+    for &(at, volts) in &rows {
+        assert!((volts - 2.5).abs() < 1e-6, "{at} ps is {volts}");
+    }
+}
+
+/// Both pulls, 15 kΩ up and 45 kΩ down, against another 45 kΩ from 5 V. The up path is
+/// 4/45 kS and the down path 1/45 kS, so the pin sits at 4.0 V.
+#[test]
+fn both_pulls_divide_with_the_external_pull_up() {
+    let netlist = circuit(US, &["out"], &[resistor("ru", "vcc", "out", 45_000.0)]);
+    let chip = script::pulls(
+        scripted(
+            &netlist,
+            "out",
+            "gnd",
+            &[(0, Op::Drive(Drive::PullUp))],
+            None,
+        ),
+        Some(15_000.0),
+        Some(45_000.0),
+    );
+    let (trace, diagnostics) = run_active(&netlist, vec![chip]);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let rows = volts(&trace, "out");
+    assert!(!rows.is_empty());
+    for &(at, volts) in &rows {
+        assert!((volts - 4.0).abs() < 1e-6, "{at} ps is {volts}");
+    }
+}
