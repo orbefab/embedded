@@ -449,73 +449,49 @@ fn loose(kind: &str, parts: &str, layout: &str, wires: &str, ground: &str) -> te
     dir
 }
 
-/// A column of five and the 400's 25-hole X rail, each already full, name the move that
-/// frees a hole. A board with nowhere to put that move says so. The skill and the decision
-/// record quote those sentences.
+const FULL_STRIP: &str = "a hole holds one lead, and every hole in this strip is taken; free one first, for example by moving one of its leads to an empty strip and wiring that strip back to the hole it left";
+const ALREADY_NAMED: &str = "a hole holds one lead; every free hole in this strip is already named by another hint in this check";
+const FREE_HOLE: &str = "a hole holds one lead; move one of them to a free hole in the same strip";
+
+/// A full column, the 400's full X rail, and both at once name no hole. A strip filled
+/// with part legs, a board with no empty hole, and a full strip inside a part say the
+/// same sentence. The skill and the decision record quote it.
 #[test]
 fn a_full_strip_says_the_strip_is_full() {
-    let column = loose(
-        "breadboard-400",
-        r#""r1": { "type": "resistor-axial", "resistance": "220" },"#,
-        r#""r1": { "on": { "a": "bb.a30" }, "rotate": [0, 0, 90] }"#,
-        r#"["bb.b30", "bb.j1"], ["bb.c30", "bb.j2"], ["bb.d30", "bb.j3"], ["bb.a30", "bb.j4"]"#,
-        "r1.a",
-    );
-    let found = layout_of(column.path());
-    assert_eq!(found.len(), 1, "{found:#?}");
-    let column_hint = "a hole holds one lead; this strip is full, so move the lead in bb.b30 to bb.a1, move this lead to bb.b1, and wire bb.b30 to bb.c1";
-    assert_eq!(found[0].hint, column_hint);
-    assert!(found[0].message.contains("bb.a30"), "{}", found[0].message);
-
-    let columns: Vec<u32> = (1..=29).filter(|n| n % 6 != 0).collect();
-    assert_eq!(columns.len(), 25);
-    let mut wires: Vec<String> = columns
-        .iter()
-        .enumerate()
-        .map(|(i, col)| format!(r#"["bb.X{col}", "bb.a{}"]"#, i + 1))
-        .collect();
-    wires.push(r#"["bb.X1", "bb.j30"]"#.to_string());
-    let rail = loose(
-        "breadboard-400",
-        r#""r1": { "type": "resistor-axial", "resistance": "220" },"#,
-        "",
-        &wires.join(", "),
-        "r1.a",
-    );
-    let found = layout_of(rail.path());
-    assert_eq!(found.len(), 1, "{found:#?}");
-    assert_eq!(
-        found[0].hint,
-        "a hole holds one lead; this strip is full, so move the lead in bb.X2 to bb.a26, move this lead to bb.b26, and wire bb.X2 to bb.c26",
-        "{}",
-        found[0].message
-    );
-    assert!(
-        found[0].message.contains("names bb.X1"),
-        "{}",
-        found[0].message
-    );
-
-    let nowhere = no_strip_has_room();
-    let found = layout_of(nowhere.path());
-    assert_eq!(found.len(), 1, "{found:#?}");
-    let nowhere_hint = "a hole holds one lead; this strip is full, and no strip on this board can take two leads and a wire without joining another net";
-    assert_eq!(found[0].hint, nowhere_hint, "{}", found[0].message);
-    let leg = "a hole holds one lead; this strip is full, and every other lead in it is a part leg, so there is no wire end to move off first";
+    let cases = [
+        ("column", full_column(false)),
+        ("rail", full_rail(false)),
+        ("both", two_full_strips(false)),
+        ("nowhere", no_strip_has_room()),
+        ("legs", legs_fill_the_strip()),
+        ("nested", nested_full_column()),
+    ];
+    for (name, dir) in cases {
+        let found = layout_of(dir.path());
+        assert!(!found.is_empty(), "{name}: {}", scene_text(dir.path()));
+        for diag in &found {
+            assert_eq!(diag.hint, FULL_STRIP, "{name}: {}", diag.message);
+            assert!(
+                holes_named(&diag.hint).is_empty(),
+                "{name} names a hole: {}",
+                diag.hint
+            );
+        }
+    }
     let repo = common::repo();
     for path in ["apps/orbe/skills/core.md", "docs/decisions.md"] {
         let text = fs::read_to_string(repo.join(path)).unwrap();
         assert!(
-            text.contains(column_hint),
-            "{path} does not quote the column hint"
+            text.contains(FULL_STRIP),
+            "{path} does not quote the full-strip hint"
         );
         assert!(
-            text.contains(nowhere_hint),
-            "{path} does not quote the no-room hint"
+            text.contains(ALREADY_NAMED),
+            "{path} does not quote the already-named hint"
         );
         assert!(
-            text.contains(leg),
-            "{path} does not quote the part-leg hint"
+            text.contains(&format!("{FREE_HOLE}, such as bb.c1")),
+            "{path} does not quote the free-hole hint"
         );
     }
 }
@@ -589,7 +565,12 @@ fn a_breadboard_inside_a_part_holds_one_lead_per_hole() {
         "{}",
         found[0].message
     );
-    assert!(found[0].hint.contains("such as bb.b1"), "{}", found[0].hint);
+    assert_eq!(
+        found[0].hint,
+        format!("{FREE_HOLE}, such as bb.b1"),
+        "{}",
+        found[0].hint
+    );
     apply_every_hint(two.path());
 
     let shared = kit(
@@ -620,8 +601,9 @@ fn a_breadboard_inside_a_part_holds_one_lead_per_hole() {
         "{}",
         found[0].message
     );
-    assert!(
-        found[0].hint.contains("such as kit.bb.b1"),
+    assert_eq!(
+        found[0].hint,
+        format!("{FREE_HOLE}, such as kit.bb.b1"),
         "{}",
         found[0].hint
     );
@@ -652,48 +634,81 @@ fn a_breadboard_inside_a_part_holds_one_lead_per_hole() {
     read(header.path());
 }
 
-/// The two sentences a full strip used to print. Followed as they read, one takes a lead
-/// off its net and the other lands a wire on the full strip.
+/// The sentence a full strip used to print. Followed as it reads, the reported lead
+/// moves to the next column and leaves its net.
 const OLD_MOVE_ONE_LEAD: &str =
     "a hole holds one lead; the strip is full, so move one lead to another strip";
-const OLD_WIRE_THE_FULL_STRIP: &str = "a hole holds one lead; this strip is full, so wire it to a strip with a free hole and move one lead there";
 
-/// The printed hint, applied as written, leaves the scene clean and every lead on the net
-/// `read` gave it before the extra lead had anywhere illegal to sit. Each old sentence fails
-/// that, on the full column, the full X rail, and both strips at once.
+/// The printed free-hole hint, applied as written, leaves the scene clean and every lead
+/// on the net `read` gave it before the extra lead shared a hole. The old "move one lead
+/// to another strip" does not, on a column.
 #[test]
-fn following_a_full_strip_hint_keeps_each_lead_on_its_net() {
-    for make in [full_column, full_rail, two_full_strips] {
+fn following_a_free_hole_hint_keeps_each_lead_on_its_net() {
+    for make in [
+        column_with_room,
+        rail_with_room,
+        two_strips_with_room,
+        part_file_hole,
+        scene_file_hole,
+    ] {
         let intended = make(true);
         let before = pin_nets(intended.path());
         let broken = make(false);
-        follow(broken.path(), None).unwrap_or_else(|found| {
-            panic!(
-                "after the printed hint:\n{}",
-                found
-                    .iter()
-                    .map(|d| d.to_string())
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            )
-        });
+        let found = layout_of(broken.path());
+        assert!(!found.is_empty(), "{}", scene_text(broken.path()));
+        for diag in &found {
+            assert!(
+                diag.hint.starts_with(FREE_HOLE),
+                "hint reverted: {}",
+                diag.hint
+            );
+            assert!(
+                !diag.hint.contains("move one lead to another strip"),
+                "hint reverted: {}",
+                diag.hint
+            );
+            assert_eq!(holes_named(&diag.hint).len(), 1, "{}", diag.hint);
+        }
+        apply_every_hint(broken.path());
         same_nets(&before, &pin_nets(broken.path()))
             .unwrap_or_else(|why| panic!("{why}\n{}", scene_text(broken.path())));
-        for old in [OLD_MOVE_ONE_LEAD, OLD_WIRE_THE_FULL_STRIP] {
-            let dir = make(false);
-            let followed = follow(dir.path(), Some(old));
-            let kept = followed.is_ok() && same_nets(&before, &pin_nets(dir.path())).is_ok();
-            assert!(!kept, "{old} left the leads on their nets");
-        }
     }
+    for make in [column_with_room, two_strips_with_room] {
+        let intended = make(true);
+        let before = pin_nets(intended.path());
+        let broken = make(false);
+        let followed = follow_old_move(broken.path());
+        let kept = followed.is_ok() && same_nets(&before, &pin_nets(broken.path())).is_ok();
+        assert!(!kept, "{OLD_MOVE_ONE_LEAD} left the leads on their nets");
+    }
+}
+
+/// One free hole, two extra leads. The first hint names that hole. The second does not
+/// call the strip full, and it names no hole.
+#[test]
+fn a_free_hole_already_named_is_not_called_taken() {
+    let dir = loose(
+        "breadboard-400",
+        r#""r1": { "type": "resistor-axial", "resistance": "220" },
+        "r2": { "type": "resistor-axial", "resistance": "220" },
+        "r3": { "type": "resistor-axial", "resistance": "220" },"#,
+        r#""r1": { "on": { "a": "bb.a30" }, "rotate": [0, 0, 90] }"#,
+        r#"["bb.b30", "bb.j1"], ["bb.c30", "bb.j2"], ["bb.a30", "r2.a"], ["bb.a30", "r3.a"]"#,
+        "r1.a",
+    );
+    let found = layout_of(dir.path());
+    assert_eq!(found.len(), 2, "{found:#?}");
+    assert_eq!(found[0].hint, format!("{FREE_HOLE}, such as bb.d30"));
+    assert_eq!(found[1].hint, ALREADY_NAMED);
+    assert!(holes_named(&found[1].hint).is_empty(), "{}", found[1].hint);
 }
 
 fn scene_text(dir: &Path) -> String {
     fs::read_to_string(dir.join("scene.jsonc")).unwrap_or_default()
 }
 
-/// `legal` wires the extra lead to a pin or a free hole already on its net, so [`read`]
-/// can name that net. The broken scene is the one the hint is printed for.
+/// `legal` wires the extra lead to a pin already on its net, so [`read`] can name that
+/// net. The broken scene is the one the hint is printed for.
 fn full_column(legal: bool) -> tempfile::TempDir {
     let extra = if legal {
         r#"["r1.a", "r2.a"]"#
@@ -710,6 +725,23 @@ fn full_column(legal: bool) -> tempfile::TempDir {
     )
 }
 
+/// Column 30 has one free hole, `d30`.
+fn column_with_room(legal: bool) -> tempfile::TempDir {
+    let extra = if legal {
+        r#"["r1.a", "r2.a"]"#
+    } else {
+        r#"["bb.a30", "r2.a"]"#
+    };
+    loose(
+        "breadboard-400",
+        r#""r1": { "type": "resistor-axial", "resistance": "220" },
+        "r2": { "type": "resistor-axial", "resistance": "220" },"#,
+        r#""r1": { "on": { "a": "bb.a30" }, "rotate": [0, 0, 90] }"#,
+        &format!(r#"["bb.b30", "bb.j1"], ["bb.c30", "bb.j2"], {extra}"#,),
+        "r1.a",
+    )
+}
+
 fn rail_fill() -> Vec<String> {
     let columns: Vec<u32> = (1..=29).filter(|n| n % 6 != 0).collect();
     assert_eq!(columns.len(), 25);
@@ -722,6 +754,27 @@ fn rail_fill() -> Vec<String> {
 
 fn full_rail(legal: bool) -> tempfile::TempDir {
     let mut wires = rail_fill();
+    wires.push(r#"["bb.b1", "r1.a"]"#.to_string());
+    if legal {
+        wires.push(r#"["bb.d1", "bb.j30"]"#.to_string());
+    } else {
+        wires.push(r#"["bb.X1", "bb.j30"]"#.to_string());
+    }
+    wires.push(r#"["bb.i30", "r2.a"]"#.to_string());
+    loose(
+        "breadboard-400",
+        r#""r1": { "type": "resistor-axial", "resistance": "220" },
+        "r2": { "type": "resistor-axial", "resistance": "220" },"#,
+        "",
+        &wires.join(", "),
+        "r1.a",
+    )
+}
+
+/// The X rail has one free hole, `X29`.
+fn rail_with_room(legal: bool) -> tempfile::TempDir {
+    let mut wires = rail_fill();
+    wires.retain(|wire| !wire.contains("bb.X29"));
     wires.push(r#"["bb.b1", "r1.a"]"#.to_string());
     if legal {
         wires.push(r#"["bb.d1", "bb.j30"]"#.to_string());
@@ -769,6 +822,149 @@ fn two_full_strips(legal: bool) -> tempfile::TempDir {
     )
 }
 
+/// Column 30 and the X rail each have one free hole.
+fn two_strips_with_room(legal: bool) -> tempfile::TempDir {
+    let mut wires = vec![
+        r#"["bb.b30", "bb.j1"]"#.to_string(),
+        r#"["bb.c30", "bb.j2"]"#.to_string(),
+    ];
+    if legal {
+        wires.push(r#"["r1.a", "r2.a"]"#.to_string());
+    } else {
+        wires.push(r#"["bb.a30", "r2.a"]"#.to_string());
+    }
+    let mut rail = rail_fill();
+    rail.retain(|wire| !wire.contains("bb.X29"));
+    wires.extend(rail);
+    wires.push(r#"["bb.c1", "r4.a"]"#.to_string());
+    if legal {
+        wires.push(r#"["bb.d1", "r3.a"]"#.to_string());
+    } else {
+        wires.push(r#"["bb.X1", "r3.a"]"#.to_string());
+    }
+    loose(
+        "breadboard-400",
+        r#""r1": { "type": "resistor-axial", "resistance": "220" },
+        "r2": { "type": "resistor-axial", "resistance": "220" },
+        "r3": { "type": "resistor-axial", "resistance": "220" },
+        "r4": { "type": "resistor-axial", "resistance": "220" },"#,
+        r#""r1": { "on": { "a": "bb.a30" }, "rotate": [0, 0, 90] }"#,
+        &wires.join(", "),
+        "r1.a",
+    )
+}
+
+/// Five part legs fill column 30. The other leg of each sits four columns back.
+fn legs_fill_the_strip() -> tempfile::TempDir {
+    let rows = ["a", "b", "c", "d", "e"];
+    let mut parts = Vec::new();
+    let mut layout = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        let name = format!("p{}", i + 1);
+        parts.push(format!(
+            r#""{name}": {{ "type": "resistor-axial", "resistance": "220" }}"#
+        ));
+        layout.push(format!(
+            r#""{name}": {{ "on": {{ "a": "bb.{row}30" }}, "rotate": [0, 0, 180] }}"#
+        ));
+    }
+    parts.push(r#""r2": { "type": "resistor-axial", "resistance": "220" }"#.to_string());
+    loose(
+        "breadboard-400",
+        &parts.join(",\n"),
+        &layout.join(",\n"),
+        r#"["bb.a30", "r2.a"]"#,
+        "r2.b",
+    )
+}
+
+/// Column 30 is full inside a part. The scene's extra lead is the one that shares a hole.
+fn nested_full_column() -> tempfile::TempDir {
+    kit(
+        r#"{
+  "format": 1,
+  "joins_only": true,
+  "parts": { "bb": { "type": "breadboard-400" } },
+  "wires": [
+    ["bb.a30", "bb.j1"],
+    ["bb.b30", "bb.j2"],
+    ["bb.c30", "bb.j3"],
+    ["bb.d30", "bb.j4"],
+    ["bb.e30", "bb.j5"],
+  ],
+}
+"#,
+        r#"{
+  "format": 1,
+  "parts": {
+    "kit": { "type": "./parts/kit.jsonc" },
+    "r1": { "type": "resistor-axial", "resistance": "220" },
+  },
+  "wires": [["kit.bb.a30", "r1.a"]],
+  "ground": "r1.a",
+}
+"#,
+    )
+}
+
+/// The part file writes `bb.X`. `legal` already uses the free hole the hint will name.
+fn part_file_hole(legal: bool) -> tempfile::TempDir {
+    let second = if legal {
+        r#"["bb.b1", "bb.c3"]"#
+    } else {
+        r#"["bb.a1", "bb.c3"]"#
+    };
+    kit(
+        &format!(
+            r#"{{
+  "format": 1,
+  "joins_only": true,
+  "parts": {{ "bb": {{ "type": "breadboard-830" }} }},
+  "wires": [
+    ["bb.a1", "bb.b2"],
+    {second},
+  ],
+}}
+"#
+        ),
+        r#"{
+  "format": 1,
+  "parts": {
+    "kit": { "type": "./parts/kit.jsonc" },
+    "r1": { "type": "resistor-axial", "resistance": "220" },
+  },
+  "ground": "r1.a",
+}
+"#,
+    )
+}
+
+/// The scene writes `kit.bb.X`. `legal` already uses the free hole the hint will name.
+fn scene_file_hole(legal: bool) -> tempfile::TempDir {
+    let end = if legal { "kit.bb.b1" } else { "kit.bb.a1" };
+    kit(
+        r#"{
+  "format": 1,
+  "joins_only": true,
+  "parts": { "bb": { "type": "breadboard-830" } },
+  "wires": [["bb.a1", "bb.b2"]],
+}
+"#,
+        &format!(
+            r#"{{
+  "format": 1,
+  "parts": {{
+    "kit": {{ "type": "./parts/kit.jsonc" }},
+    "r1": {{ "type": "resistor-axial", "resistance": "220" }},
+  }},
+  "wires": [["{end}", "r1.a"]],
+  "ground": "r1.a",
+}}
+"#
+        ),
+    )
+}
+
 fn pin_nets(dir: &Path) -> BTreeMap<String, String> {
     let netlist = read(dir);
     let mut pins = BTreeMap::new();
@@ -782,7 +978,7 @@ fn pin_nets(dir: &Path) -> BTreeMap<String, String> {
     pins
 }
 
-/// Every pin that had a net still shares it with the same pins. Holes the hint's new wire
+/// Every pin that had a net still shares it with the same pins. A hole the hint's move
 /// reaches may join that net; none of the old pins leave it.
 fn same_nets(
     before: &BTreeMap<String, String>,
@@ -806,72 +1002,6 @@ fn same_nets(
     Ok(())
 }
 
-struct Steps {
-    span_to: String,
-    move_from: Option<(String, String)>,
-    wire: Option<(String, String)>,
-}
-
-fn procedure(hint: &str) -> Option<Steps> {
-    let rest =
-        hint.strip_prefix("a hole holds one lead; this strip is full, so move the lead in ")?;
-    let (from, rest) = rest.split_once(" to ")?;
-    let (moved, rest) = rest.split_once(", move this lead to ")?;
-    let (extra, rest) = rest.split_once(", and wire ")?;
-    let (wire_from, wire_to) = rest.split_once(" to ")?;
-    Some(Steps {
-        span_to: extra.to_string(),
-        move_from: Some((from.to_string(), moved.to_string())),
-        wire: Some((wire_from.to_string(), wire_to.to_string())),
-    })
-}
-
-fn split_hole(hole: &str) -> (&str, &str, u32) {
-    let (board, name) = hole.split_once('.').unwrap_or_else(|| panic!("{hole}"));
-    let at = name
-        .find(|c: char| c.is_ascii_digit())
-        .unwrap_or_else(|| panic!("{hole}"));
-    let (row, col) = name.split_at(at);
-    let col = col.parse().unwrap_or_else(|_| panic!("{hole}"));
-    (board, row, col)
-}
-
-/// The old "move one lead to another strip": the reported end goes to the next column.
-fn old_move(span: &str) -> Steps {
-    let (board, row, col) = split_hole(span);
-    let next = if col > 1 { col - 1 } else { col + 1 };
-    Steps {
-        span_to: format!("{board}.{row}{next}"),
-        move_from: None,
-        wire: None,
-    }
-}
-
-/// The old "wire it to a strip with a free hole and move one lead there": the new wire
-/// starts on the full hole, and the reported lead moves to that other strip.
-fn old_wire(span: &str) -> Steps {
-    let (board, _, col) = split_hole(span);
-    let dest = if col == 29 { 28 } else { 29 };
-    Steps {
-        span_to: format!("{board}.b{dest}"),
-        move_from: None,
-        wire: Some((span.to_string(), format!("{board}.a{dest}"))),
-    }
-}
-
-fn steps_of(hint: &str, span: &str) -> Steps {
-    if let Some(steps) = procedure(hint) {
-        return steps;
-    }
-    if hint == OLD_MOVE_ONE_LEAD {
-        return old_move(span);
-    }
-    if hint == OLD_WIRE_THE_FULL_STRIP {
-        return old_wire(span);
-    }
-    panic!("hint has no steps a follower can apply: {hint}");
-}
-
 fn holes_named(hint: &str) -> BTreeSet<String> {
     hint.split(|c: char| !(c.is_ascii_alphanumeric() || c == '.'))
         .filter(|token| {
@@ -880,6 +1010,7 @@ fn holes_named(hint: &str) -> BTreeSet<String> {
                     .chars()
                     .next()
                     .is_some_and(|c| c.is_ascii_alphabetic())
+                && token.chars().any(|c| c.is_ascii_digit())
         })
         .map(str::to_string)
         .collect()
@@ -899,68 +1030,43 @@ fn quoted_span(text: &str, diag: &Diagnostic) -> (usize, usize, String) {
     (offset + 1, offset + end, literal[1..end].to_string())
 }
 
-fn add_wire(text: &str, a: &str, b: &str) -> String {
-    let at = text.find("\n  \"ground\"").expect("the scene's ground");
-    let close = text[..at].rfind(']').expect("the wires array");
-    let mut out = String::new();
-    out.push_str(&text[..close]);
-    out.push_str(&format!(", [\"{a}\", \"{b}\"]"));
-    out.push_str(&text[close..]);
-    out
+/// The old "move one lead to another strip": the reported end goes to the next column.
+fn next_column(hole: &str) -> String {
+    let (prefix, name) = hole.rsplit_once('.').unwrap_or_else(|| panic!("{hole}"));
+    let at = name
+        .find(|c: char| c.is_ascii_digit())
+        .unwrap_or_else(|| panic!("{hole}"));
+    let (row, col) = name.split_at(at);
+    let col: u32 = col.parse().unwrap_or_else(|_| panic!("{hole}"));
+    let next = if col > 1 { col - 1 } else { col + 1 };
+    format!("{prefix}.{row}{next}")
 }
 
-/// Apply `forced` in place of each printed hint, or the printed hint when `forced` is none.
-/// A printed check's hints name different holes.
-fn follow(dir: &Path, forced: Option<&str>) -> Result<(), Vec<Diagnostic>> {
-    let path = dir.join("scene.jsonc");
-    let text = fs::read_to_string(&path).unwrap();
+fn follow_old_move(dir: &Path) -> Result<(), Vec<Diagnostic>> {
     let found = findings(dir);
     let layout: Vec<Diagnostic> = found
         .into_iter()
         .filter(|d| d.code == Code::Layout)
         .collect();
     assert!(!layout.is_empty(), "no shared hole in {}", scene_text(dir));
-    if forced.is_none() {
-        let mut seen = BTreeSet::new();
-        for diag in &layout {
-            for hole in holes_named(&diag.hint) {
-                assert!(seen.insert(hole.clone()), "{hole} is named by two hints");
-            }
-        }
-    }
-    let mut edits = Vec::new();
-    let mut moves = Vec::new();
-    let mut wires = Vec::new();
+    let mut edits: BTreeMap<String, Vec<(usize, usize, String)>> = BTreeMap::new();
     for diag in &layout {
-        let (_, _, span) = quoted_span(&text, diag);
-        let hint = forced.unwrap_or(diag.hint.as_str());
-        let steps = steps_of(hint, &span);
-        let (start, end, _) = quoted_span(&text, diag);
-        edits.push((start, end, steps.span_to));
-        if let Some(move_from) = steps.move_from {
-            moves.push(move_from);
+        let path = dir.join(&diag.file);
+        let text = fs::read_to_string(&path).unwrap();
+        let (start, end, span) = quoted_span(&text, diag);
+        edits
+            .entry(diag.file.clone())
+            .or_default()
+            .push((start, end, next_column(&span)));
+    }
+    for (file, mut spans) in edits {
+        spans.sort_by_key(|span| std::cmp::Reverse(span.0));
+        let path = dir.join(file);
+        let mut text = fs::read_to_string(&path).unwrap();
+        for (start, end, hole) in spans {
+            text.replace_range(start..end, &hole);
         }
-        if let Some(wire) = steps.wire {
-            wires.push(wire);
-        }
+        fs::write(path, text).unwrap();
     }
-    edits.sort_by_key(|edit| std::cmp::Reverse(edit.0));
-    let mut text = text;
-    for (start, end, hole) in edits {
-        text.replace_range(start..end, &hole);
-    }
-    for (from, to) in moves {
-        let needle = format!("\"{from}\"");
-        let count = text.matches(&needle).count();
-        assert_eq!(
-            count, 1,
-            "the lead in {from} appears {count} times:\n{text}"
-        );
-        text = text.replacen(&needle, &format!("\"{to}\""), 1);
-    }
-    for (a, b) in wires {
-        text = add_wire(&text, &a, &b);
-    }
-    fs::write(&path, text).unwrap();
-    orbe_scene::read(&Files::disk(), &path).map(|_| ())
+    orbe_scene::read(&Files::disk(), &dir.join("scene.jsonc")).map(|_| ())
 }

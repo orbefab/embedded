@@ -33,24 +33,12 @@ const GRID_PS: u64 = 1_000_000_000;
 /// A shared hole whose strip still has room. The hole after `such as` is one an agent can
 /// write at the finding, and each hint in one check names a different hole.
 const HOLE_HINT: &str = "a hole holds one lead; move one of them to a free hole in the same strip";
-/// A full strip whose other leads are part legs. Moving one would move the part.
-const NO_WIRE_TO_MOVE: &str = "a hole holds one lead; this strip is full, and every other lead in it is a part leg, so there is no wire end to move off first";
-/// No strip on this board can take the two leads and the wire back without joining another net.
-const NO_STRIP_ROOM: &str = "a hole holds one lead; this strip is full, and no strip on this board can take two leads and a wire without joining another net";
-
-fn find_in(parent: &[usize], mut key: usize) -> usize {
-    while parent[key] != key {
-        key = parent[key];
-    }
-    key
-}
-
-fn union_in(parent: &mut [usize], a: usize, b: usize) {
-    let (a, b) = (find_in(parent, a), find_in(parent, b));
-    if a != b {
-        parent[a.max(b)] = a.min(b);
-    }
-}
+/// Every hole in the strip already holds a lead. Naming a destination would be a guess:
+/// the strip it picks can join another net, and the sentence would not be true on every board.
+const FULL_STRIP_HINT: &str = "a hole holds one lead, and every hole in this strip is taken; free one first, for example by moving one of its leads to an empty strip and wiring that strip back to the hole it left";
+/// Free holes are still empty. An earlier hint in this check named each of them, so calling
+/// the strip full would be false.
+const ALREADY_NAMED: &str = "a hole holds one lead; every free hole in this strip is already named by another hint in this check";
 
 struct Inst {
     path: Vec<String>,
@@ -819,153 +807,17 @@ impl<'p> Circuit<'p> {
         Some(format!("{board}.{hole}"))
     }
 
-    /// The ends named by a held wire lead, as `the wire from `bb.b30` to `bb.j1``.
-    fn wire_ends(lead: &str) -> Option<(&str, &str)> {
-        let rest = lead.strip_prefix("the wire from `")?;
-        let (left, rest) = rest.split_once("` to `")?;
-        Some((left, rest.strip_suffix('`')?))
-    }
-
-    /// The pin `bb.b30` or `kit.bb.b30` names, when the scene has that part and pin.
-    fn key_of(&self, dotted: &str) -> Option<usize> {
-        let mut at = ROOT;
-        let mut segs = dotted.split('.');
-        let last = segs.next_back()?;
-        for seg in segs {
-            at = *self.insts[at].children.get(seg)?;
-        }
-        self.keys.get(&(at, last.to_string())).copied()
-    }
-
-    /// `parent` plus every wire that already holds a hole. The doubled lead is not one of
-    /// those wires, except where its other end was the first lead in its own hole.
-    fn with_held_wires(&self, held: &BTreeMap<usize, String>) -> Vec<usize> {
-        let mut parent = self.parent.clone();
-        let mut seen = BTreeSet::new();
-        for lead in held.values() {
-            if !seen.insert(lead) {
-                continue;
-            }
-            let Some((left, right)) = Self::wire_ends(lead) else {
-                continue;
-            };
-            let (Some(left), Some(right)) = (self.key_of(left), self.key_of(right)) else {
-                continue;
-            };
-            union_in(&mut parent, left, right);
-        }
-        parent
-    }
-
-    /// A wire end on this strip, not the lead being reported and not that wire's other end.
-    /// The doubled hole's own first lead is used only when no other hole has a wire, and the
-    /// hint names that hole after the reported lead has been moved.
-    fn wire_on_strip(
-        &self,
-        key: usize,
-        held: &BTreeMap<usize, String>,
-        own: &[usize],
-    ) -> Option<usize> {
-        let strip = self.strip_of(key)?;
-        let inst = self.pins[key].inst;
-        let mut occupant = None;
-        for hole in &strip {
-            let Some(&hole_key) = self.keys.get(&(inst, hole.clone())) else {
-                continue;
-            };
-            let Some(lead) = held.get(&hole_key) else {
-                continue;
-            };
-            if !lead.starts_with("the wire from `") {
-                continue;
-            }
-            if hole_key == key {
-                occupant = Some(hole_key);
-                continue;
-            }
-            if own.contains(&hole_key) {
-                continue;
-            }
-            return Some(hole_key);
-        }
-        occupant.filter(|hole| !own.contains(hole))
-    }
-
-    /// Three free holes on one other strip of this board: an empty strip, else a strip
-    /// already on this net. A strip on another net would join that net.
-    fn room_for_three(
-        &self,
-        key: usize,
-        held: &BTreeMap<usize, String>,
-        reserved: &BTreeSet<usize>,
-        own: &[usize],
-        linked: &[usize],
-    ) -> Option<[usize; 3]> {
-        let inst = self.pins[key].inst;
-        let holes = self.part(inst)?.holes.as_ref()?;
-        let root = find_in(linked, key);
-        let mut same_net = None;
-        for strip in &holes.strips {
-            let keys: Vec<usize> = strip
-                .iter()
-                .filter_map(|hole| self.keys.get(&(inst, hole.clone())).copied())
-                .collect();
-            let free: Vec<usize> = keys
-                .iter()
-                .copied()
-                .filter(|hole| {
-                    !held.contains_key(hole) && !reserved.contains(hole) && !own.contains(hole)
-                })
-                .collect();
-            if free.len() < 3 {
-                continue;
-            }
-            let occupied: Vec<usize> = keys
-                .iter()
-                .copied()
-                .filter(|hole| held.contains_key(hole))
-                .collect();
-            let three = [free[0], free[1], free[2]];
-            if occupied.is_empty() {
-                return Some(three);
-            }
-            if same_net.is_none() && occupied.iter().all(|hole| find_in(linked, *hole) == root) {
-                same_net = Some(three);
-            }
-        }
-        same_net
-    }
-
-    /// How to keep the net when the strip has no free hole. Move one wire off it first, so the
-    /// wire back has a hole. Name those holes. Each hole named here is reserved, so a later
-    /// hint in this check cannot name it.
-    fn full_strip_hint(
-        &self,
-        key: usize,
-        held: &BTreeMap<usize, String>,
-        reserved: &mut BTreeSet<usize>,
-        own: &[usize],
-        owner: usize,
-        linked: &[usize],
-    ) -> String {
-        let from = self.wire_on_strip(key, held, own);
-        let Some(dest) = self.room_for_three(key, held, reserved, own, linked) else {
-            return NO_STRIP_ROOM.to_string();
+    /// Holes of `key`'s strip that no lead holds yet.
+    fn open_holes(&self, key: usize, held: &BTreeMap<usize, String>) -> Vec<usize> {
+        let Some(strip) = self.strip_of(key) else {
+            return Vec::new();
         };
-        let Some(from) = from else {
-            return NO_WIRE_TO_MOVE.to_string();
-        };
-        reserved.insert(from);
-        reserved.insert(dest[0]);
-        reserved.insert(dest[1]);
-        reserved.insert(dest[2]);
-        let from = self.as_written(owner, &self.hole_label(from));
-        let moved = self.as_written(owner, &self.hole_label(dest[0]));
-        let extra = self.as_written(owner, &self.hole_label(dest[1]));
-        let back = self.as_written(owner, &self.hole_label(dest[2]));
-        format!(
-            "a hole holds one lead; this strip is full, so move the lead in {from} to {moved}, move this lead to {extra}, and wire {from} to {back}"
-        )
+        let inst = self.pins[key].inst;
+        strip
+            .iter()
+            .filter_map(|hole| self.keys.get(&(inst, hole.clone())).copied())
+            .filter(|hole_key| !held.contains_key(hole_key))
+            .collect()
     }
 
     /// `full`, a `board.hole` from the scene, written the way `owner`'s file writes a ref.
@@ -1064,21 +916,14 @@ impl<'p> Circuit<'p> {
 
     fn report_doubled(&mut self, held: &BTreeMap<usize, String>, doubled: Vec<Doubled>) {
         let mut reserved = BTreeSet::new();
-        let linked = self.with_held_wires(held);
         for hole in doubled {
             let hint = match self.free_hole(hole.key, held, &mut reserved, &hole.own) {
                 Some(free) => {
                     let free = self.as_written(hole.owner, &free);
                     format!("{HOLE_HINT}, such as {free}")
                 }
-                None => self.full_strip_hint(
-                    hole.key,
-                    held,
-                    &mut reserved,
-                    &hole.own,
-                    hole.owner,
-                    &linked,
-                ),
+                None if self.open_holes(hole.key, held).is_empty() => FULL_STRIP_HINT.to_string(),
+                None => ALREADY_NAMED.to_string(),
             };
             let name = self.hole_label(hole.key);
             self.out.push(
