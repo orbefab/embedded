@@ -46,6 +46,9 @@ export interface FrameMessage {
    * achieved it. Under 1 when the engine runs slower than real time. */
   readonly ratio?: number;
   readonly seq: number;
+  /** UART text new since the previous frame. Absent when none arrived and the session's text is
+   * still what the previous frame ended on. */
+  readonly serial?: SerialText;
   /** On a frame from a `play` tick: the speed `play` runs at, always 1 for now. */
   readonly speed?: number;
   readonly state: FrameState;
@@ -110,6 +113,21 @@ export type SceneMessage = View & {
    * Absent when the scene declares none. */
   readonly world?: readonly WorldQuantity[];
 };
+
+/** UART text that reached the session since the previous frame. The session keeps one serial
+ * text, the bytes of every USART in the order their stop bits ended, decoded as UTF-8 the way
+ * `serial contains` searches it. It does not record which USART a byte came from, so this names
+ * no port. */
+export interface SerialText {
+  /** UTF-8 byte index in the session's serial text where `text` starts. */
+  readonly from: number;
+  /** Present and true when `text` replaces what a page shows. */
+  readonly replace?: boolean;
+  /** The new text. With `replace` absent, a page that has shown `from` bytes appends it. With
+   * `replace` true, the session no longer has what the page showed past `from`, and this is the
+   * tail to show instead, at most 4096 bytes. */
+  readonly text: string;
+}
 
 /** The session's state in a reply. `closed` is a session with no scene open. */
 export type State =

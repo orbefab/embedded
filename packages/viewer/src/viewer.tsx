@@ -16,6 +16,7 @@ import type { CameraMode } from "./camera-frame";
 import { createHoverStore, type HoverStore } from "./hover";
 import type { Command, FrameMessage, FrameState, Reply, SceneMessage, WorldName, WorldQuantity } from "./protocol";
 import { SceneView } from "./scene-view";
+import { applySerial, EMPTY_SERIAL, type SerialView } from "./serial";
 import { commandLine, errorText, type SessionSource } from "./session";
 import { formatValue, IDLE, nearest, nextThumb, parseValue, shownValue, stops, type Thumb, type ThumbEvent } from "./world";
 
@@ -65,6 +66,52 @@ function HoverLabel({ hover }: { hover: HoverStore }) {
       {hovered.why === undefined ? null : <div style={{ color: "#c9ced6" }}>not simulated: {hovered.why}</div>}
       {hovered.error === undefined ? null : <div style={{ color: "#ff8a80" }}>error: {hovered.error}</div>}
     </div>
+  );
+}
+
+/** UART text the firmware printed. A Block that prints nothing shows no strip. */
+function SerialStrip({ source }: { source: SessionSource }) {
+  const [view, setView] = useState<SerialView>(EMPTY_SERIAL);
+  useEffect(
+    () =>
+      source.subscribe((message) => {
+        if (message.type === "scene") {
+          setView(EMPTY_SERIAL);
+          return;
+        }
+        if (message.type === "frame" && message.serial !== undefined) {
+          const update = message.serial;
+          setView((current) => applySerial(current, update));
+        }
+      }),
+    [source]
+  );
+  if (view.text === "") return null;
+  return (
+    <pre
+      data-testid="serial"
+      style={{
+        position: "absolute",
+        left: 12,
+        right: 12,
+        bottom: 12,
+        maxHeight: "30%",
+        overflow: "auto",
+        boxSizing: "border-box",
+        margin: 0,
+        padding: "6px 8px",
+        borderRadius: 6,
+        border: "1px solid var(--border, #3a3f47)",
+        background: "var(--background, rgba(20, 22, 26, 0.92))",
+        color: "var(--foreground, #e6ebf2)",
+        font: "12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace",
+        whiteSpace: "pre-wrap",
+        overflowWrap: "anywhere",
+        pointerEvents: "auto",
+      }}
+    >
+      {view.text}
+    </pre>
   );
 }
 
@@ -431,6 +478,7 @@ export function Viewer({ source, onCreated }: ViewerProps) {
           )}
         </Canvas>
       </ShowError>
+      {closed === null ? <SerialStrip source={source} /> : null}
       <Errors errors={[...partErrors, ...sendErrors]} />
       {closed === null ? (
         <div

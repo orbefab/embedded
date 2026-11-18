@@ -20,6 +20,9 @@ use crate::reply::{Code, Data, Envelope, Error, Reply};
 /// viewers a frame at most this often.
 pub const TICK: Duration = Duration::from_millis(16);
 
+/// The most UTF-8 bytes of serial text one frame carries. A page holds the same bound.
+const SERIAL_FRAME: usize = 4096;
+
 /// The commands a viewer sends.
 pub(crate) const SENT: [&str; 5] = ["press", "release", "play", "pause", "set"];
 
@@ -113,6 +116,28 @@ pub(crate) struct FrameMessage<'a> {
     /// `faulted`.
     #[serde(skip_serializing_if = "Option::is_none")]
     fault: Option<&'a str>,
+    /// UART text new since the previous frame. Absent when none arrived and the session's
+    /// text is still what the previous frame ended on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    serial: Option<SerialText>,
+}
+
+/// UART text that reached the session since the previous frame. The session keeps one serial
+/// text, the bytes of every USART in the order their stop bits ended, decoded as UTF-8 the way
+/// `serial contains` searches it. It does not record which USART a byte came from, so this names
+/// no port.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+pub(crate) struct SerialText {
+    /// UTF-8 byte index in the session's serial text where `text` starts.
+    from: u64,
+    /// The new text. With `replace` absent, a page that has shown `from` bytes appends it. With
+    /// `replace` true, the session no longer has what the page showed past `from`, and this is
+    /// the tail to show instead, at most 4096 bytes.
+    text: String,
+    /// Present and true when `text` replaces what a page shows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    replace: Option<bool>,
 }
 
 /// The reply to the viewer's command `id`. Only the viewer that sent the command gets it. `id`
@@ -224,11 +249,13 @@ pub fn part_scene(id: &str, parts: Vec<(String, Vec<u8>)>) -> Result<Value, Stri
 }
 
 /// The `scene` and `frame` messages a session's viewers get. It numbers the frames, and gives
-/// each LED its mean current since the frame before.
+/// each LED its mean current since the frame before. `shown` is the serial text the previous
+/// frame ended on.
 #[derive(Default)]
 pub struct Feed {
     seq: u64,
     last: Option<Sample>,
+    shown: String,
 }
 
 impl Feed {
@@ -243,7 +270,9 @@ impl Feed {
     }
 
     /// What every viewer gets after a command ran, a viewer's or a client's: the new scene when
-    /// it opened one, then a frame when the circuit shows something new.
+    /// it opened one, then a frame when the circuit shows something new or its serial text
+    /// changed. `shown` stays as it was across `open`: the new text is not a continuation, so
+    /// the frame carries `replace` and a page that missed `scene` still drops the old text.
     pub fn after(&mut self, live: &Live, reply: &Reply) -> Vec<Value> {
         let mut out = Vec::new();
         if let Data::Opened { .. } = reply.data {
@@ -256,14 +285,16 @@ impl Feed {
 
     /// A frame of `live` at `now`, when it shows something new. `pace` is a `play` tick's.
     pub fn now(&mut self, live: &Live, pace: Option<Pace>) -> Option<Value> {
-        self.frame(live.sample()?, pace)
+        self.frame(live.sample()?, live.serial(), pace)
     }
 
-    /// The `frame` message for `sample`, or `None` when it shows what the last one did. An
-    /// LED's current is its mean since the last frame, or its present current when no time
-    /// passed.
-    pub fn frame(&mut self, sample: Sample, pace: Option<Pace>) -> Option<Value> {
-        if self.last.as_ref() == Some(&sample) {
+    /// The `frame` message for `sample`, or `None` when it shows what the last one did and
+    /// `serial` is still the text the previous frame ended on. An LED's current is its mean
+    /// since the last frame, or its present current when no time passed. `serial` is the
+    /// session's serial text, and the frame carries only the part a page has not been sent.
+    pub fn frame(&mut self, sample: Sample, serial: &str, pace: Option<Pace>) -> Option<Value> {
+        let update = serial_update(&mut self.shown, serial);
+        if update.is_none() && self.last.as_ref() == Some(&sample) {
             return None;
         }
         let led_a: Vec<f64> = match &self.last {
@@ -291,6 +322,7 @@ impl Feed {
             ratio: pace.map(|pace| pace.ratio),
             diagnostics: sample.diagnostics,
             fault: sample.fault.as_deref(),
+            serial: update,
         };
         let frame = serde_json::to_value(frame).expect("a frame serializes");
         self.seq += 1;
@@ -299,9 +331,52 @@ impl Feed {
     }
 }
 
+/// The serial a frame should carry, and `shown` becomes the text that frame ends on. `None`
+/// when `current` is still `shown`. A page that has shown `from` bytes appends `text`. Anything
+/// else replaces what it shows, and a long text is cut to its last [`SERIAL_FRAME`] bytes.
+fn serial_update(shown: &mut String, current: &str) -> Option<SerialText> {
+    if let Some(extra) = current.strip_prefix(shown.as_str()) {
+        if extra.is_empty() {
+            return None;
+        }
+        if extra.len() <= SERIAL_FRAME {
+            let from = shown.len() as u64;
+            shown.push_str(extra);
+            return Some(SerialText {
+                from,
+                text: extra.to_string(),
+                replace: None,
+            });
+        }
+    }
+    let tail = serial_tail(current);
+    let from = (current.len() - tail.len()) as u64;
+    let text = tail.to_string();
+    *shown = current.to_string();
+    Some(SerialText {
+        from,
+        text,
+        replace: Some(true),
+    })
+}
+
+/// The end of `text`, at most [`SERIAL_FRAME`] bytes, on a character boundary.
+fn serial_tail(text: &str) -> &str {
+    if text.len() <= SERIAL_FRAME {
+        return text;
+    }
+    let mut from = text.len() - SERIAL_FRAME;
+    while !text.is_char_boundary(from) {
+        from += 1;
+    }
+    &text[from..]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use serde_json::json;
 
     #[test]
     fn a_viewer_s_command_parses_as_the_cli_s() {
@@ -343,6 +418,65 @@ mod tests {
         assert_eq!(
             garbled.unwrap_err().message,
             "a viewer's command is not JSON"
+        );
+    }
+
+    fn paused() -> Sample {
+        Sample {
+            t_ps: 0,
+            state: FrameState::Paused,
+            pins: vec![],
+            leds: vec![],
+            switches: vec![],
+            world: vec![],
+            diagnostics: 0,
+            fault: None,
+        }
+    }
+
+    #[test]
+    fn serial_text_arrives_once_and_a_shorter_log_replaces_it() {
+        let mut feed = Feed::default();
+        let sample = paused();
+        let bare = feed.frame(sample.clone(), "", None).unwrap();
+        assert!(bare.get("serial").is_none(), "{bare}");
+
+        let first = feed.frame(sample.clone(), "ab", None).unwrap();
+        assert_eq!(first["serial"], json!({ "from": 0, "text": "ab" }));
+        assert!(feed.frame(sample.clone(), "ab", None).is_none());
+
+        let next = feed.frame(sample.clone(), "abcd", None).unwrap();
+        assert_eq!(next["serial"], json!({ "from": 2, "text": "cd" }));
+        assert_eq!(next["seq"], first["seq"].as_u64().unwrap() + 1);
+
+        let shrunk = feed.frame(sample.clone(), "ab", None).unwrap();
+        assert_eq!(
+            shrunk["serial"],
+            json!({ "from": 0, "text": "ab", "replace": true })
+        );
+
+        let mut long = "é".repeat(3000);
+        long.push('z');
+        let bounded = feed.frame(sample.clone(), &long, None).unwrap();
+        let text = bounded["serial"]["text"].as_str().unwrap();
+        assert_eq!(bounded["serial"]["replace"], true);
+        assert!(text.len() <= SERIAL_FRAME, "{}", text.len());
+        assert!(long.ends_with(text), "{text}");
+        let from = bounded["serial"]["from"].as_u64().unwrap() as usize;
+        assert_eq!(from + text.len(), long.len());
+
+        let more = feed
+            .frame(sample.clone(), &format!("{long}!"), None)
+            .unwrap();
+        assert_eq!(
+            more["serial"],
+            json!({ "from": long.len() as u64, "text": "!" })
+        );
+
+        let cleared = feed.frame(sample, "", None).unwrap();
+        assert_eq!(
+            cleared["serial"],
+            json!({ "from": 0, "text": "", "replace": true })
         );
     }
 }

@@ -92,7 +92,7 @@ const suites: Record<string, PlaywrightTestConfig> = {
   site: {
     ...shared,
     testDir: "apps/site/e2e",
-    testMatch: "site.spec.ts",
+    testMatch: "*.spec.ts",
     use: { ...shared.use, viewport: { width: 1280, height: 900 } },
     webServer: [
       {

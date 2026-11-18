@@ -100,12 +100,13 @@ impl Watchers {
         }
     }
 
-    /// Sends a frame of `sample` when it shows something new.
-    fn frame(&mut self, sample: Sample, pace: Option<Pace>) {
+    /// Sends a frame of `sample` when it shows something new, including serial text since the
+    /// previous frame.
+    fn frame(&mut self, sample: Sample, serial: &str, pace: Option<Pace>) {
         if self.viewers.is_empty() {
             return;
         }
-        let frame = self.feed.frame(sample, pace);
+        let frame = self.feed.frame(sample, serial, pace);
         self.send_all(frame.into_iter().collect());
     }
 
@@ -159,7 +160,7 @@ impl Held {
         let watchers = &mut self.watchers;
         let mut reply = self.live.run_with(command, &mut |progress| {
             if watchers.due() {
-                watchers.frame(progress.sample(), None);
+                watchers.frame(progress.sample(), progress.serial(), None);
             }
             if job.hung_up.load(Ordering::Relaxed) {
                 ControlFlow::Break(())
@@ -232,8 +233,9 @@ impl Held {
     }
 
     fn frame(&mut self, pace: Option<Pace>) {
-        if let Some(sample) = self.live.sample() {
-            self.watchers.frame(sample, pace);
+        let Held { live, watchers, .. } = self;
+        if let Some(sample) = live.sample() {
+            watchers.frame(sample, live.serial(), pace);
         }
     }
 
