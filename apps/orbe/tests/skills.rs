@@ -1483,7 +1483,10 @@ fn the_core_skill_starts_from_a_block_and_ranges_its_holes() {
         .split("\n## ")
         .next()
         .unwrap();
-    assert!(loop_.contains("1. When a Block is close"), "{loop_}");
+    assert!(
+        loop_.contains("1. `orbe blocks` lists the Blocks, and `orbe search <words>` finds one. When a Block is close"),
+        "{loop_}"
+    );
     assert!(
         loop_.contains("`orbe add <block>` in an empty folder"),
         "{loop_}"
